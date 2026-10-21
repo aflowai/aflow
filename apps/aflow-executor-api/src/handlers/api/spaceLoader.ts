@@ -179,10 +179,6 @@ async function loadSpaceData(
 
   const parsedWritePolicy =
     writePolicyRaw != null ? SpaceWriteApprovalPolicySchema.safeParse(writePolicyRaw) : null;
-  stores.spaceWritePolicyStore.set(
-    spaceScopeKey(tenantId, spaceId),
-    parsedWritePolicy?.success ? parsedWritePolicy.data : null,
-  );
 
   // Per-row safeParse + skip-with-warn. Without this, one malformed row
   // (e.g. left behind from an earlier schema iteration) throws and takes
@@ -280,5 +276,9 @@ async function loadSpaceData(
   stores.bindingStore.set(sliceKey, parsedBindings);
   stores.credentialStore.set(sliceKey, sliceCreds);
   stores.catalogGrantStore.set(sliceKey, grantMap);
+  stores.spaceWritePolicyStore.set(
+    sliceKey,
+    parsedWritePolicy?.success ? parsedWritePolicy.data : null,
+  );
   stores.loadedAtMs.set(sliceKey, Date.now());
 }
