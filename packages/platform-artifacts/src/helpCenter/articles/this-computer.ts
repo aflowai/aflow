@@ -78,6 +78,10 @@ The pull requests the loop opens are yours to merge, unless the folder's merge p
 
 The Local PR Shepherd fixes a red check only so many times on one pull request — three unless you set its attempt budget. When CI fails again after that, it stops: its comment on the pull request says why, and one item in the Action Center asks you to take the pull request over. Answering the item changes nothing; push to the branch to have the shepherd read the new head, or label the pull request \`hands-off\` to have it left alone.
 
+## A stream that continues itself
+
+Work kept in the space's plan can carry on without you starting each round. Ask the Helmsman to continue a stream on a schedule, naming the stream and how often; both are yours to choose and to change on the schedule. Each time it fires, the Helmsman reads where the stream stands before it acts. While a commission or publication of the stream's current step is running or waiting on you, or its pull request is open, it waits and changes nothing. Once that pull request merges, it records the merge on the step and starts the next one. A pull request closed without merging, a push you declined, or a step whose commission failed more often than its attempts allow — two unless you name another number — stops the stream there: the step is marked blocked with the reason in its note, and nothing after it starts until you move it on. A schedule fires at most 50 times; ask again to renew it.
+
 ## While it runs
 
 The machine is kept awake on power while a run is in flight. Work dispatched while it sleeps waits up to ten minutes for it to wake.`,
@@ -93,6 +97,7 @@ The machine is kept awake on power while a run is in flight. Work dispatched whi
       'code change',
       'merge',
       'pr shepherd',
+      'plan stream',
     ],
   },
   {

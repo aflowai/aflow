@@ -3,6 +3,7 @@ import {
   PLAN_NODE_GET_OPERATION_ID,
   PLAN_NODE_LINK_OPERATION_ID,
   PLAN_NODE_LIST_OPERATION_ID,
+  PLAN_NODE_NEXT_OPERATION_ID,
   PLAN_NODE_UPDATE_OPERATION_ID,
 } from '@aflow/schemas';
 import { getOrchestratorLogger } from '../../../../../lib/orchestratorLogger.js';
@@ -10,6 +11,7 @@ import type { InlineHandlerArgs } from '../types.js';
 import { emitStepError } from '../helpers.js';
 import { handlePlanNodeCreate, handlePlanNodeLink, handlePlanNodeUpdate } from './write.js';
 import { handlePlanNodeGet, handlePlanNodeList } from './read.js';
+import { handlePlanNodeNext } from './stream.js';
 
 /** `plan.node.*` — the Helmsman's plan, through the one engine in `@aflow/cybernetic-runtime`. */
 export async function handlePlanNodeInline(args: InlineHandlerArgs): Promise<void> {
@@ -31,6 +33,9 @@ export async function handlePlanNodeInline(args: InlineHandlerArgs): Promise<voi
         break;
       case PLAN_NODE_LINK_OPERATION_ID:
         await handlePlanNodeLink(args, startTime);
+        break;
+      case PLAN_NODE_NEXT_OPERATION_ID:
+        await handlePlanNodeNext(args, startTime);
         break;
       default:
         await emitStepError(
