@@ -5,10 +5,13 @@
  * surface. Every write bumps the space's attention generation, so the next
  * turn of any session in the space reads the tree as it now stands.
  */
+import { randomUUID } from 'node:crypto';
 import type { Redis } from 'ioredis';
 import {
   isClosedPlanNodeStatus,
   PLAN_NODE_CHILDREN_LIMIT,
+  PLAN_NODE_DEPENDENCIES_LIMIT,
+  PLAN_NODE_LEARNINGS_LIMIT,
   PLAN_NODE_LINKS_LIMIT,
   PLAN_NODE_LIST_DEFAULT_LIMIT,
   PLAN_NODE_RUNS_LIMIT,
@@ -17,8 +20,13 @@ import {
   PLAN_TREE_DEPTH_LIMIT,
   PLAN_TREE_WALK_NODE_LIMIT,
   OPEN_PLAN_NODE_STATUSES,
+  type CoachLearning,
   type PlanNode,
   type PlanNodeCreateInput,
+  type PlanNodeDependency,
+  type PlanNodeDependInput,
+  type PlanNodeLearnInput,
+  type PlanNodeLearning,
   type PlanNodeDetailOutput,
   type PlanNodeDetailQuery,
   type PlanNodeGetOutput,
@@ -57,7 +65,10 @@ export type PlanOpErrorCode =
   | 'PLAN_NODE_UNCHANGED'
   | 'PLAN_NODE_NOTE_TOO_LONG'
   | 'PLAN_NODE_LINK_EXISTS'
-  | 'PLAN_LINK_CURSOR_INVALID';
+  | 'PLAN_LINK_CURSOR_INVALID'
+  | 'PLAN_NODE_DEPENDENCY_CYCLE'
+  | 'PLAN_NODE_DEPENDENCY_WALK_LIMIT'
+  | 'PLAN_LEARNING_NOT_FOUND';
 
 export interface PlanOpError {
   ok: false;
@@ -80,7 +91,10 @@ export interface PlanWriteContext extends PlanReadContext {
   createdBy?: string;
 }
 
-function notFound(nodeId: string, role: 'node' | 'parent' | 'root' = 'node'): PlanOpError {
+function notFound(
+  nodeId: string,
+  role: 'node' | 'parent' | 'root' | 'dependency' = 'node',
+): PlanOpError {
   return {
     ok: false,
     code: 'PLAN_NODE_NOT_FOUND',
@@ -372,7 +386,8 @@ export async function getPlanNode(
   if (!node) return notFound(nodeId);
   // Every status: a run in flight for a node closed under it is still in flight.
   const subtree = await ctx.store.walk(ctx.spaceId, { rootId: nodeId, ...PLAN_TREE_WALK_BOUNDS });
-  const [children, links, runs] = await Promise.all([
+  const lineage = await lineageOf(ctx, node);
+  const [children, links, runs, dependencies, dependents, learnings] = await Promise.all([
     ctx.store.listChildren(ctx.spaceId, nodeId, PLAN_NODE_CHILDREN_LIMIT),
     ctx.store.listLinks(ctx.spaceId, nodeId, PLAN_NODE_LINKS_LIMIT),
     ctx.store.listRunsServing(
@@ -380,6 +395,9 @@ export async function getPlanNode(
       subtree.nodes.map((n) => n.nodeId),
       PLAN_NODE_RUNS_LIMIT,
     ),
+    ctx.store.listDependencies(ctx.spaceId, nodeId, PLAN_NODE_DEPENDENCIES_LIMIT),
+    ctx.store.listDependents(ctx.spaceId, nodeId, PLAN_NODE_DEPENDENCIES_LIMIT),
+    ctx.store.listLearningsOf(ctx.spaceId, lineage, PLAN_NODE_LEARNINGS_LIMIT),
   ]);
   return {
     ok: true,
@@ -390,6 +408,42 @@ export async function getPlanNode(
     linksTotal: links.total,
     runs: runs.runs,
     runsTotal: runs.total,
+    dependencies: dependencies.dependencies,
+    dependenciesTotal: dependencies.total,
+    dependents: dependents.dependents,
+    dependentsTotal: dependents.total,
+    learnings: learnings.learnings.map(planNodeLearning),
+    learningsTotal: learnings.total,
+  };
+}
+
+/**
+ * The node and every node above it, nearest first: a learning written on a
+ * stream's root is about every node under it.
+ */
+async function lineageOf(ctx: PlanReadContext, node: PlanNode): Promise<string[]> {
+  const lineage = [node.nodeId];
+  let parentId = node.parentId;
+  for (let depth = 0; parentId !== null && depth < PLAN_TREE_DEPTH_LIMIT; depth++) {
+    lineage.push(parentId);
+    const parents = await ctx.store.parentsOf(ctx.spaceId, [parentId]);
+    parentId = parents.get(parentId) ?? null;
+  }
+  return lineage;
+}
+
+/** A plan-scope learning as a node's read shows it. */
+function planNodeLearning(learning: CoachLearning): PlanNodeLearning {
+  if (learning.scope.kind !== 'plan')
+    throw new Error('a node read met a learning of another scope');
+  return {
+    learningId: learning.learningId,
+    nodeId: learning.scope.planNodeId,
+    kind: learning.kind,
+    statement: learning.statement,
+    confidence: learning.confidence,
+    runIds: [...new Set(learning.evidence.citations.map((c) => c.runId))],
+    createdAt: learning.createdAt,
   };
 }
 
@@ -623,6 +677,175 @@ export async function linkEndedRun(ctx: PlanWriteContext, run: EndedPlanRun): Pr
     wrote ||= inserted.outcome === 'inserted';
   }
   if (wrote) await bumpAttentionGeneration(ctx.redis, ctx.tenantId, ctx.spaceId);
+}
+
+// ============================================================================
+// plan.node.depend — compare-and-set on the waiting node's revision (Plan 322 P2)
+// ============================================================================
+
+function dependencyRefusalDetails(current: PlanNode): Record<string, unknown> {
+  const details: PlanNodeRefusalDetails = {
+    nodeId: current.nodeId,
+    revision: current.revision,
+    status: current.status,
+    updatedAt: current.updatedAt,
+    differingFields: [],
+  };
+  return details;
+}
+
+function dependencyStale(current: PlanNode, input: PlanNodeDependInput): PlanOpError {
+  return {
+    ok: false,
+    code: 'PLAN_NODE_STALE',
+    message:
+      `Plan node "${current.title}" is at revision ${String(current.revision)}; this change to what it waits on was ` +
+      `decided against revision ${String(input.expectedRevision)}, so nothing was written. Read the node with ` +
+      `plan.node.get — its dependencies are there — and write again against revision ${String(current.revision)}.`,
+    details: dependencyRefusalDetails(current),
+  };
+}
+
+function dependencyUnchanged(
+  current: PlanNode,
+  input: PlanNodeDependInput,
+  held: PlanNodeDependency | null,
+): PlanOpError {
+  const stands =
+    held === null
+      ? `does not wait on "${input.dependsOnId}"`
+      : `already waits on "${input.dependsOnId}" being ${held.condition}`;
+  return {
+    ok: false,
+    code: 'PLAN_NODE_UNCHANGED',
+    message:
+      `Plan node "${current.title}" ${stands}, so nothing was written and it stays at revision ` +
+      `${String(current.revision)}. plan.node.get lists what it waits on.`,
+    details: dependencyRefusalDetails(current),
+  };
+}
+
+function dependencyCycle(input: PlanNodeDependInput, path: readonly string[]): PlanOpError {
+  const loop = path.map((id) => `"${id}"`).join(' waits on ');
+  return {
+    ok: false,
+    code: 'PLAN_NODE_DEPENDENCY_CYCLE',
+    message:
+      `Plan node "${input.nodeId}" cannot wait on "${input.dependsOnId}": ${loop}, so none of them could ever ` +
+      'start. Nothing was written. Remove one edge of that loop with plan.node.depend and `remove: true`, or ' +
+      'wait on another node.',
+    details: { nodeId: input.nodeId, dependsOnId: input.dependsOnId, path: [...path] },
+  };
+}
+
+/**
+ * Sets, changes or removes one edge: `input.nodeId` waits on
+ * `input.dependsOnId`. It is a write of the waiting node — compare-and-set on
+ * its revision, which moves on — so a session that decided on what a node
+ * waits on cannot lose another's change to it. An edge that would close a loop
+ * is refused in the transaction that would write it.
+ */
+export async function dependPlanNode(
+  ctx: PlanWriteContext,
+  input: PlanNodeDependInput,
+): Promise<PlanOpResult<{ node: PlanNode; dependency?: PlanNodeDependency }>> {
+  const current = await ctx.store.find(ctx.spaceId, input.nodeId);
+  if (!current) return notFound(input.nodeId);
+  if (current.revision !== input.expectedRevision) return dependencyStale(current, input);
+  if (!(await ctx.store.find(ctx.spaceId, input.dependsOnId))) {
+    return notFound(input.dependsOnId, 'dependency');
+  }
+  const condition = input.condition ?? null;
+  const held = await ctx.store.findDependency(ctx.spaceId, input.nodeId, input.dependsOnId);
+  if (condition === null ? held === null : held?.condition === condition) {
+    return dependencyUnchanged(current, input, held);
+  }
+  const write = await ctx.store.setDependencyAtRevision(
+    ctx.spaceId,
+    input.nodeId,
+    input.expectedRevision,
+    input.dependsOnId,
+    condition,
+  );
+  switch (write.outcome) {
+    case 'written':
+      return nodeWritten(ctx, {
+        ok: true as const,
+        node: write.node,
+        ...(write.dependency !== undefined ? { dependency: write.dependency } : {}),
+      });
+    case 'stale': {
+      // Another session wrote the node between the read and this write.
+      const now = await ctx.store.find(ctx.spaceId, input.nodeId);
+      return now ? dependencyStale(now, input) : notFound(input.nodeId);
+    }
+    case 'cycle':
+      return dependencyCycle(input, write.path);
+    case 'not_found':
+      return notFound(input.dependsOnId, 'dependency');
+    case 'walk_limit':
+      return {
+        ok: false,
+        code: 'PLAN_NODE_DEPENDENCY_WALK_LIMIT',
+        message:
+          `More than ${String(write.maxNodes)} nodes are reached by following what "${input.dependsOnId}" waits on, ` +
+          'so whether this edge closes a loop was not read, and nothing was written. Remove edges that no longer ' +
+          'hold before adding more.',
+        details: { nodeId: input.nodeId, dependsOnId: input.dependsOnId, maxNodes: write.maxNodes },
+      };
+  }
+}
+
+// ============================================================================
+// plan.node.learn — a learning scoped to a node (Plan 322 D8)
+// ============================================================================
+
+/**
+ * Records what working a node taught, scoped to it: every later read of the
+ * node or of one under it returns it (`getPlanNode`), whichever session reads.
+ * It is recorded as read at once — a plan learning reaches no run, so there is
+ * nothing for an operator to ratify before it counts.
+ */
+export async function learnOnPlanNode(
+  ctx: PlanWriteContext,
+  input: PlanNodeLearnInput,
+  writer: { sessionId: string },
+): Promise<PlanOpResult<{ learning: PlanNodeLearning; superseded: string[] }>> {
+  const supersedes = [...new Set(input.supersedes ?? [])];
+  const learning: CoachLearning = {
+    learningId: randomUUID(),
+    coachSessionId: writer.sessionId,
+    scope: { kind: 'plan', planNodeId: input.nodeId },
+    kind: input.kind,
+    statement: input.statement,
+    evidence: { citations: input.evidence.citations },
+    confidence: input.confidence,
+    supersedes,
+    authorityLevel: 'auto_record',
+    status: 'auto_recorded',
+    createdAt: new Date().toISOString(),
+  };
+  const inserted = await ctx.store.insertLearning(ctx.spaceId, learning);
+  switch (inserted.outcome) {
+    case 'node_not_found':
+      return notFound(input.nodeId);
+    case 'supersedes_unknown':
+      return {
+        ok: false,
+        code: 'PLAN_LEARNING_NOT_FOUND',
+        message:
+          `No learning still read on plan node "${input.nodeId}" has the id ${inserted.learningIds.map((id) => `"${id}"`).join(', ')}, ` +
+          'so nothing was written. `supersedes` names learnings written on this same node — plan.node.get lists them ' +
+          'with the node each was written on.',
+        details: { nodeId: input.nodeId, learningIds: inserted.learningIds },
+      };
+    case 'inserted':
+      return written(ctx, {
+        ok: true as const,
+        learning: planNodeLearning(inserted.learning),
+        superseded: supersedes,
+      });
+  }
 }
 
 /** The root each node sits under, a root being its own; a node not in the space is absent. */

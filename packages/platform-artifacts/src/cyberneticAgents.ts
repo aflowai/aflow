@@ -53,6 +53,9 @@ import {
 export const HELMSMAN_DISCOVERY_PRESET: readonly string[] = [
   // A stream's scheduled firing asks it first (Plan 322 P2b); no other turn does.
   'plan.node.next',
+  // Occasional plan writes (Plan 322 P2): what a node taught, and what it waits on.
+  'plan.node.learn',
+  'plan.node.depend',
   'memory.store.put',
   'memory.store.patch',
   'memory.context.remember',

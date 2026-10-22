@@ -14,6 +14,7 @@ import {
   materializeSkillTasks,
   projectTaskOutput,
   readOutputPath,
+  validateSkillPlanSeparation,
 } from '@aflow/cybernetic-runtime';
 import {
   AgentDefinitionSchema,
@@ -72,8 +73,12 @@ const MERGED_FROM = 'e'.repeat(40);
 const FAILING_CHECK = '555';
 const BRANCH = 'aflow/fix-flaky-test';
 
+const PULL_REQUEST_URL = 'https://github.com/aflowai/aflow/pull/94';
+const PLAN_NODE = '9e000000-0000-4000-8000-000000000322';
+
 const PULL_REQUEST: LoopPullRequest = {
   number: 94,
+  url: PULL_REQUEST_URL,
   state: 'open',
   title: 'Planted failing test',
   body: 'A test that fails.',
@@ -155,6 +160,22 @@ interface Scenario {
   leaseTakenOver?: boolean;
   publicationInFlight?: boolean;
   commissionInFlight?: boolean;
+  /**
+   * The pull request's plan node, read through the run ledger: no node holds
+   * it (the default), one does with nothing in flight, one does with a run in
+   * flight, one does whose only run in flight is this pass's own, one does
+   * with this pass's run and another's (listed first, or second), the plan under it passed one read's bounds, or the
+   * read failed.
+   */
+  planNode?:
+    | 'none'
+    | 'idle'
+    | 'in-flight'
+    | 'own-run'
+    | 'own-and-in-flight'
+    | 'in-flight-and-own'
+    | 'incomplete'
+    | 'fails';
   remedy?: { value: Remedy | null; decided: boolean } | 'unavailable';
   failingJobs?: number;
   /** What the commission returned: a patch, only the merge, or nothing. */
@@ -580,6 +601,36 @@ function answer(taskId: string, input: Record<string, unknown>, s: Scenario): An
           ? [{ id: 'other-run', status: 'paused', startedAt: '2026-10-18T07:00:00Z', own: false }]
           : [],
         hasMore: false,
+      });
+    }
+    case 'read-in-flight-node': {
+      const query = WorkflowRunListInputSchema.parse(input);
+      const node = s.planNode ?? 'none';
+      if (node === 'fails') return { ok: false };
+      // A node holds the pull request only by its URL, as Local Publish linked it.
+      const held = node !== 'none' && query.servingNodeOfPullRequest === PULL_REQUEST_URL;
+      // The read lists every run serving the node, this pass's own among them.
+      const other = {
+        id: 'node-run',
+        status: 'running',
+        startedAt: '2026-10-18T07:30:00Z',
+        own: false,
+      };
+      const self = { id: RUN_ID, status: 'running', startedAt: '2026-10-18T07:20:00Z', own: true };
+      const listed = {
+        none: [],
+        idle: [],
+        'in-flight': [other],
+        'own-run': [self],
+        'own-and-in-flight': [self, other],
+        'in-flight-and-own': [other, self],
+        incomplete: [],
+      }[node];
+      return ok({
+        runs: held ? listed : [],
+        hasMore: false,
+        planNodeIds: held ? [PLAN_NODE] : [],
+        complete: node !== 'incomplete',
       });
     }
     case 'aim':
@@ -1282,6 +1333,82 @@ describe('Local PR Shepherd — it yields to people', () => {
       slug: COMMISSION_CHANGE.bundle.workflow.slug,
       input: { field: 'base', equals: BRANCH },
     });
+  });
+});
+
+describe('Local PR Shepherd — the branch’s work is read from its plan node (Plan 322 P2)', () => {
+  it('reads the runs serving the pull request’s plan node by its URL, through the run ledger', () => {
+    const read = pass();
+    expect(read.ran).toContain('read-in-flight-node');
+    expect(WorkflowRunListInputSchema.parse(read.inputs.get('read-in-flight-node'))).toEqual({
+      servingNodeOfPullRequest: PULL_REQUEST_URL,
+      status: ['running', 'paused'],
+      limit: 25,
+    });
+    // The node is read, never written, and no pull-request comment carries what is in flight.
+    const task = taskById.get('read-in-flight-node');
+    expect(task?.operation).toBe('workflow.run.list');
+    expect(JSON.stringify(task?.inputTemplate)).not.toMatch(/IssueComment|github/);
+  });
+
+  it('reaches the plan through no plan.* operation: a run may serve a node, never rewrite it (322 D3)', () => {
+    expect(validateSkillPlanSeparation(tasks)).toBeNull();
+    expect(tasks.filter((task) => String(task.operation).startsWith('plan.'))).toEqual([]);
+  });
+
+  it('decides from the node read: the rule waits while a run serves the node, whoever started it', () => {
+    const decide = taskById.get('decide');
+    expect(decide?.inputBindings?.['planNode']).toEqual({
+      kind: 'task_output',
+      taskId: 'read-in-flight-node',
+    });
+    // Ordered before the read it decides on, as every binding is.
+    expect(decide?.dependsOn).toContain('read-in-flight-node');
+  });
+
+  it.each([
+    ['a run serving the pull request’s plan node, though none is on the branch', 'in-flight'],
+    ['another run serving the node, listed after this pass’s own', 'own-and-in-flight'],
+    ['another run serving the node, listed before this pass’s own', 'in-flight-and-own'],
+    ['a node whose plan is larger than one read, so its work is unknown', 'incomplete'],
+    ['a node read that failed, so its work is unknown', 'fails'],
+  ] as const)('waits on %s, and acts on nothing', (_case, planNode) => {
+    const yielded = pass({ planNode });
+    expect(yielded.decision).toBe('wait');
+    for (const action of ACTIONS) expect(yielded.ran).not.toContain(action);
+  });
+
+  it('says why it waited: the node’s work is under way', () => {
+    const yielded = pass({ planNode: 'in-flight' });
+    expect(yielded.outputs.get('decide')?.['reason']).toMatch(/plan node.*in flight/);
+  });
+
+  it('holds back a merge as it holds back a fix while the node’s work is in flight', () => {
+    const merging = {
+      mergePosture: 'when-green',
+      checks: GREEN,
+      checkConclusions: { Test: 'success' },
+    } as const;
+    expect(pass(merging).decision).toBe('merge');
+    const held = pass({ ...merging, planNode: 'in-flight' });
+    expect(held.decision).toBe('wait');
+    expect(held.ran).not.toContain('merge');
+  });
+
+  it.each([
+    ['no node holds the pull request', 'none'],
+    ['its node has nothing in flight', 'idle'],
+  ] as const)('acts as before where %s', (_case, planNode) => {
+    expect(pass({ planNode }).decision).toBe('fix');
+  });
+
+  it('does not wait on its own run: a pass serving the node, the only run on it, acts', () => {
+    const decide = taskById.get('decide');
+    expect(decide?.inputBindings?.['runId']).toEqual({ kind: 'run_id' });
+    const acted = pass({ planNode: 'own-run' });
+    expect(acted.decision).toBe('fix');
+    expect(acted.outputs.get('decide')?.['reason']).not.toMatch(/plan node/);
+    expect(acted.ran).toContain('fix');
   });
 });
 

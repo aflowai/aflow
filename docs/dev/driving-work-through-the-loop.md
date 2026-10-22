@@ -55,7 +55,16 @@ plan sees every run in it on that line until it starts one; `plan.node.get` on i
 where it finds its stream's work in flight. When the round ends, `plan.node.update` records where the node now stands in
 its note, against the revision the conversation read: a node another conversation wrote
 meanwhile is refused with its current state rather than overwritten, and a node is marked
-`done` only with the outcome that met its criteria. The operator reads the same tree on the
+`done` only with the outcome that met its criteria. What a round taught that the next round
+should start knowing — a failure's real cause, a check that needs setup — is recorded with
+`plan.node.learn` on the node (or on the stream's root, for the whole stream), citing the
+runs it came from; `plan.node.get` returns it to every later conversation that opens that
+node or one under it, and `supersedes` replaces one that turned out wrong. A step that
+cannot start until another lands waits on it with `plan.node.depend` (`done`, `dropped` or
+`closed`), against the waiting node's revision; an edge that would close a loop is refused,
+and `plan.node.get` shows each dependency with whether it is met. The Local PR Shepherd reads
+its pull request's node too: a run in flight serving it, whoever started it, holds a pass at
+`wait`, as a publication or commission on the branch does. The operator reads the same tree on the
 space's **Plan** page, a board with a tab per plan (`GET /v1/spaces/:spaceId/plan`: every
 node with its counts, review rounds and newest pull request, done nodes by day), and opens a
 node in the side rail (`GET …/plan/nodes/:nodeId`, its links paged) for its goal, outcome,

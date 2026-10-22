@@ -154,6 +154,8 @@ export async function selectActiveLearningSet(
 
   const budgeted: ActiveLearning[] = [];
   for (const l of durable) {
+    // A plan learning reaches no run (Plan 322 D8); the durable read selects none.
+    if (l.scope.kind === 'plan') continue;
     budgeted.push({
       kind: 'durable',
       learningId: l.learningId,

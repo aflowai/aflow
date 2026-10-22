@@ -1,13 +1,19 @@
 import {
   PlanNodeCreateInputSchema,
+  PlanNodeDependInputSchema,
+  PlanNodeLearnInputSchema,
   PlanNodeLinkInputSchema,
   PlanNodeUpdateInputSchema,
   type PlanNodeCreateOutput,
+  type PlanNodeDependOutput,
+  type PlanNodeLearnOutput,
   type PlanNodeLinkOutput,
   type PlanNodeUpdateOutput,
 } from '@aflow/schemas';
 import {
   createPlanNode,
+  dependPlanNode,
+  learnOnPlanNode,
   linkPlanNode,
   updatePlanNode,
   type PlanWriteContext,
@@ -56,6 +62,41 @@ export async function handlePlanNodeUpdate(
     return;
   }
   const output: PlanNodeUpdateOutput = { node: result.node };
+  await emitStepSuccess(args, output as unknown as Record<string, unknown>, startTime);
+}
+
+export async function handlePlanNodeDepend(
+  args: InlineHandlerArgs,
+  startTime: number,
+): Promise<void> {
+  const input = await parsePlanInput(args, PlanNodeDependInputSchema, startTime);
+  if (!input) return;
+  const result = await dependPlanNode(planWriteContext(args), input);
+  if (!result.ok) {
+    await emitPlanError(args, result, startTime);
+    return;
+  }
+  const output: PlanNodeDependOutput = {
+    node: result.node,
+    ...(result.dependency !== undefined ? { dependency: result.dependency } : {}),
+  };
+  await emitStepSuccess(args, output as unknown as Record<string, unknown>, startTime);
+}
+
+export async function handlePlanNodeLearn(
+  args: InlineHandlerArgs,
+  startTime: number,
+): Promise<void> {
+  const input = await parsePlanInput(args, PlanNodeLearnInputSchema, startTime);
+  if (!input) return;
+  const result = await learnOnPlanNode(planWriteContext(args), input, {
+    sessionId: args.context.runId,
+  });
+  if (!result.ok) {
+    await emitPlanError(args, result, startTime);
+    return;
+  }
+  const output: PlanNodeLearnOutput = { learning: result.learning, superseded: result.superseded };
   await emitStepSuccess(args, output as unknown as Record<string, unknown>, startTime);
 }
 

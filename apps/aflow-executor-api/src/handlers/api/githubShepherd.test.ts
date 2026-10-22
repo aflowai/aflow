@@ -147,6 +147,14 @@ describe('loop_pull — one pull request', () => {
     expect(loopPullRequest(fromFork, 'aflow/').ours).toBe(false);
   });
 
+  it('carries GitHub’s html_url, the ref a plan node’s pull_request link holds', () => {
+    const url = 'https://github.com/aflowai/aflow/pull/7';
+    expect(
+      LoopPullRequestSchema.parse(loopPullRequest(pr(7, { html_url: url }), 'aflow/')).url,
+    ).toBe(url);
+    expect(loopPullRequest(pr(7), 'aflow/')).not.toHaveProperty('url');
+  });
+
   it('counts the pages of its conversation, the last the newest', () => {
     expect(loopPullRequest(pr(7, { comments: 0 }), 'aflow/').commentPages).toBe(1);
     expect(loopPullRequest(pr(7, { comments: 100 }), 'aflow/').commentPages).toBe(1);

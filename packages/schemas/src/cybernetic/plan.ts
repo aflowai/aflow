@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { CoachLearningKindSchema, CoachLearningSchema } from './coachLearning.js';
 
 // ============================================================================
 // Plan 322 — a space's plan is a tree of nodes the Helmsman works through.
@@ -291,6 +292,69 @@ export const PlanNodeLinkSchema = z
   })
   .strict();
 export type PlanNodeLink = z.infer<typeof PlanNodeLinkSchema>;
+
+// ============================================================================
+// Dependencies (Plan 322 P2) — a node waits on another's outcome
+// ============================================================================
+
+/**
+ * What the dependency's outcome must be for the edge to be met: `done` — it
+ * met its criteria; `dropped` — it was let go (work that goes ahead only
+ * where another approach was abandoned); `closed` — either.
+ */
+export const PlanNodeDependencyConditionSchema = z.enum(['done', 'dropped', 'closed']);
+export type PlanNodeDependencyCondition = z.infer<typeof PlanNodeDependencyConditionSchema>;
+
+/** Whether a dependency standing at `status` meets `condition`. */
+export function planDependencyMet(
+  condition: PlanNodeDependencyCondition,
+  status: PlanNodeStatus,
+): boolean {
+  return condition === 'closed' ? isClosedPlanNodeStatus(status) : status === condition;
+}
+
+/** An edge as stored: `nodeId` waits on `dependsOnId`. */
+export const PlanNodeDependencySchema = z
+  .object({
+    nodeId: z.string().uuid(),
+    dependsOnId: z.string().uuid(),
+    condition: PlanNodeDependencyConditionSchema,
+    createdAt: z.string().datetime(),
+  })
+  .strict();
+export type PlanNodeDependency = z.infer<typeof PlanNodeDependencySchema>;
+
+/** One end of an edge as `plan.node.get` shows it: the other node, and whether the edge is met. */
+export const PlanNodeDependencyViewSchema = z
+  .object({
+    nodeId: z.string().uuid().describe('The node at the other end of the edge.'),
+    title: z.string(),
+    status: PlanNodeStatusSchema,
+    condition: PlanNodeDependencyConditionSchema,
+    met: z.boolean().describe('The dependency’s status meets the condition: `planDependencyMet`.'),
+  })
+  .strict();
+export type PlanNodeDependencyView = z.infer<typeof PlanNodeDependencyViewSchema>;
+
+// ============================================================================
+// Learnings on a node (Plan 322 D8, P2)
+// ============================================================================
+
+/** A plan-scope learning as `plan.node.get` shows it. */
+export const PlanNodeLearningSchema = z
+  .object({
+    learningId: z.string().uuid(),
+    /** The node it was written on: the one opened, or one above it. */
+    nodeId: z.string().uuid(),
+    kind: CoachLearningKindSchema,
+    statement: z.string(),
+    confidence: CoachLearningSchema.shape.confidence,
+    /** The runs it was learned from. */
+    runIds: z.array(z.string().uuid()),
+    createdAt: z.string().datetime(),
+  })
+  .strict();
+export type PlanNodeLearning = z.infer<typeof PlanNodeLearningSchema>;
 
 /** A run in flight for a node or one under it, as `plan.node.get` shows it. */
 export const PlanNodeRunSchema = z

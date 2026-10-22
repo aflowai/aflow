@@ -11,6 +11,7 @@ import {
   campaigns,
   planNodes,
   planNodeLinks,
+  planNodeDependencies,
   coachCandidateLearnings,
   coachLearnings,
   repoBindings,
@@ -54,6 +55,7 @@ describeDb(
       await withTenantSchema(db, tenantCtx, async (tx) => {
         await tx.delete(campaigns).where(eq(campaigns.spaceId, SPACE_ID));
         await tx.delete(planNodeLinks).where(eq(planNodeLinks.spaceId, SPACE_ID));
+        await tx.delete(planNodeDependencies).where(eq(planNodeDependencies.spaceId, SPACE_ID));
         await tx.delete(planNodes).where(eq(planNodes.spaceId, SPACE_ID));
         await tx
           .delete(coachCandidateLearnings)
@@ -79,7 +81,7 @@ describeDb(
       const rows = await sql<{ ok: boolean }[]>`
         SELECT EXISTS (
           SELECT 1 FROM information_schema.tables
-          WHERE table_schema = ${TENANT_SCHEMA} AND table_name = 'plan_node_links'
+          WHERE table_schema = ${TENANT_SCHEMA} AND table_name = 'plan_node_dependencies'
         ) AS ok`;
       schemaReady = rows[0]?.ok === true;
       if (!schemaReady) return;
@@ -119,6 +121,13 @@ describeDb(
           spaceId: SPACE_ID,
           kind: 'pull_request',
           ref: 'https://example.invalid/sentinel/pull/1',
+        });
+        // A self-edge the engine refuses, so plan_nodes keeps its one sentinel row.
+        await tx.insert(planNodeDependencies).values({
+          nodeId: node!.id,
+          dependsOnId: node!.id,
+          spaceId: SPACE_ID,
+          condition: 'done',
         });
         await tx.insert(coachCandidateLearnings).values({
           spaceId: SPACE_ID,
@@ -260,6 +269,7 @@ describeDb(
       const newTables = [
         'campaigns',
         'plan_node_links',
+        'plan_node_dependencies',
         'plan_nodes',
         'coach_candidate_learnings',
         'coach_learnings',

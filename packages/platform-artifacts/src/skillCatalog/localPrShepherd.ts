@@ -135,7 +135,7 @@ function withBindingDependencies<T extends ShepherdTask>(tasks: T[]): T[] {
 
 const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
   catalogId: 'local-pr-shepherd',
-  version: 11,
+  version: 12,
   name: 'Local PR Shepherd',
   tagline:
     "Tend the pull requests the loop opened: read their CI, fix and publish a red check through Local Publish, and merge a green one where the folder's merge posture allows — never approving or closing.",
@@ -149,7 +149,7 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
 
 **On a schedule**: passes overlap safely. Two on one pull request meet at its branch's lease, and the second acts on nothing.
 
-**What it never does**: approve or close a pull request, merge one where the posture is \`never\` or without the operator's approval, or push other than through Local Publish under the folder's push approval. A pull request a person opened, or one labelled \`${SHEPHERD_HANDS_OFF_LABEL}\`, is left untouched; a branch with a publication or a commission in flight, whoever started it, is \`wait\`; the same check run is acted on once.
+**What it never does**: approve or close a pull request, merge one where the posture is \`never\` or without the operator's approval, or push other than through Local Publish under the folder's push approval. A pull request a person opened, or one labelled \`${SHEPHERD_HANDS_OFF_LABEL}\`, is left untouched; a branch with a publication or a commission in flight, or whose pull request's plan node has any run in flight serving it, whoever started it, is \`wait\`; the same check run is acted on once.
 
 **With the result**: report the decision and its reason; for a fix, the publication's run — its pull request, and whether it pushed or is waiting at its approval; for a merge, whether it merged, waits at its approval, or was declined or refused.`,
   tags: ['coding', 'github', 'pull-requests', 'ci', 'local', 'developer-tools'],
@@ -418,6 +418,26 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
           },
         },
 
+        // Plan 322 P2: the branch's work as the plan holds it — every run
+        // serving the pull request's node, whatever its workflow or input. A
+        // skill never reads the plan through plan.* (322 D3); the run ledger
+        // joins it.
+        {
+          taskId: 'read-in-flight-node',
+          name: "Read the work in flight on the pull request's plan node",
+          goal: 'List the runs still in flight — running, or paused — serving the plan node the pull request is linked to, or any node under it, whatever their workflow and whoever started them.',
+          type: 'operation' as const,
+          operation: 'workflow.run.list',
+          when: OURS,
+          // A read that failed binds as absent, which the rules decide as
+          // `wait`: the node's work is then unknown, not none.
+          optional: true,
+          retryability: 'safe' as const,
+          inputBindings: { url: out('read-pr', 'data.url') },
+          context: ctx('workflow.run.list'),
+          inputTemplate: { servingNodeOfPullRequest: bind('url') },
+        },
+
         {
           taskId: 'decide',
           name: 'Decide by rules',
@@ -439,6 +459,8 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
             staleBefore: { kind: 'clock' as const, offsetMs: -SHEPHERD_LEASE_STALE_AFTER_MS },
             publications: out('read-in-flight-publications'),
             commissions: out('read-in-flight-commissions'),
+            planNode: out('read-in-flight-node'),
+            runId: { kind: 'run_id' as const },
             budget: runInput('attemptBudget'),
             requiredRules: out('read-required-rules'),
             requiredProtection: out(REQUIRED_CHECKS_TASK),
@@ -465,6 +487,8 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
               staleBefore: bind('staleBefore'),
               publications: bind('publications'),
               commissions: bind('commissions'),
+              planNode: bind('planNode'),
+              runId: bind('runId'),
               budget: { $firstOf: [bind('budget'), SHEPHERD_ATTEMPT_BUDGET_DEFAULT] },
             },
             rules: SHEPHERD_RULES,

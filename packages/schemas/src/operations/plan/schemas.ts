@@ -1,9 +1,18 @@
 import { z } from 'zod';
 import { buildOperationId } from '../../catalog/operationId.js';
 import {
+  COACH_LEARNING_SUPERSEDES_MAX,
+  CoachLearningKindSchema,
+  CoachLearningSchema,
+} from '../../cybernetic/coachLearning.js';
+import {
   OPEN_PLAN_NODE_STATUSES,
   PlanNodeCloseSchema,
   PlanNodeCreateSchema,
+  PlanNodeDependencyConditionSchema,
+  PlanNodeDependencySchema,
+  PlanNodeDependencyViewSchema,
+  PlanNodeLearningSchema,
   PlanNodeLinkCreateSchema,
   PlanNodeLinkKindSchema,
   PlanNodeLinkSchema,
@@ -23,6 +32,8 @@ export const PLAN_NODE_UPDATE_OPERATION_ID = buildOperationId('plan', 'node', 'u
 export const PLAN_NODE_GET_OPERATION_ID = buildOperationId('plan', 'node', 'get');
 export const PLAN_NODE_LIST_OPERATION_ID = buildOperationId('plan', 'node', 'list');
 export const PLAN_NODE_LINK_OPERATION_ID = buildOperationId('plan', 'node', 'link');
+export const PLAN_NODE_LEARN_OPERATION_ID = buildOperationId('plan', 'node', 'learn');
+export const PLAN_NODE_DEPEND_OPERATION_ID = buildOperationId('plan', 'node', 'depend');
 
 export const PLAN_NODE_LIST_DEFAULT_LIMIT = 50;
 export const PLAN_NODE_LIST_MAX_LIMIT = 200;
@@ -34,6 +45,10 @@ export const PLAN_NODE_LINKS_LIMIT = 100;
 export const PLAN_NODE_RUNS_LIMIT = 50;
 /** The most nodes one walk of the tree reads, whatever `limit` then returns of them. */
 export const PLAN_TREE_WALK_NODE_LIMIT = 2000;
+/** Each of a node's dependencies and dependents `plan.node.get` returns. */
+export const PLAN_NODE_DEPENDENCIES_LIMIT = 100;
+/** Learnings `plan.node.get` returns from the node and those above it, newest first. */
+export const PLAN_NODE_LEARNINGS_LIMIT = 50;
 
 // ============================================================================
 // plan.node.create / plan.node.update
@@ -90,6 +105,24 @@ export const PlanNodeGetOutputSchema = z.object({
       'The runs in flight for this node and every node under it, newest first — the work this stream has under way.',
     ),
   runsTotal: z.number().int().min(0),
+  dependencies: z
+    .array(PlanNodeDependencyViewSchema)
+    .describe(
+      'The nodes this one waits on, each with the outcome it waits for and whether that is met.',
+    ),
+  dependenciesTotal: z.number().int().min(0),
+  dependents: z
+    .array(PlanNodeDependencyViewSchema)
+    .describe(
+      'The nodes that wait on this one, and whether its outcome meets what each waits for.',
+    ),
+  dependentsTotal: z.number().int().min(0),
+  learnings: z
+    .array(PlanNodeLearningSchema)
+    .describe(
+      'What earlier sessions learned working this node and the nodes above it, newest first — read them before briefing a round.',
+    ),
+  learningsTotal: z.number().int().min(0),
 });
 export type PlanNodeGetOutput = z.infer<typeof PlanNodeGetOutputSchema>;
 
@@ -379,6 +412,79 @@ export type PlanNodeLinkInput = z.infer<typeof PlanNodeLinkInputSchema>;
 
 export const PlanNodeLinkOutputSchema = z.object({ link: PlanNodeLinkSchema });
 export type PlanNodeLinkOutput = z.infer<typeof PlanNodeLinkOutputSchema>;
+
+// ============================================================================
+// plan.node.learn — a learning scoped to a node (Plan 322 D8, P2)
+// ============================================================================
+
+export const PlanNodeLearnInputSchema = z
+  .object({
+    nodeId: z.string().uuid().describe('The node the learning is about.'),
+    kind: CoachLearningKindSchema,
+    statement: CoachLearningSchema.shape.statement.describe(
+      'The claim, standing on its own: the next session reads it without this conversation.',
+    ),
+    evidence: z
+      .object({
+        citations: CoachLearningSchema.shape.evidence.shape.citations.describe(
+          'The runs it was learned from.',
+        ),
+      })
+      .strict(),
+    confidence: CoachLearningSchema.shape.confidence,
+    supersedes: z
+      .array(z.string().uuid())
+      .max(COACH_LEARNING_SUPERSEDES_MAX)
+      .optional()
+      .describe(
+        'Learnings written on this same node that this one replaces; they are no longer read.',
+      ),
+  })
+  .strict();
+export type PlanNodeLearnInput = z.infer<typeof PlanNodeLearnInputSchema>;
+
+export const PlanNodeLearnOutputSchema = z.object({
+  learning: PlanNodeLearningSchema,
+  superseded: z.array(z.string().uuid()),
+});
+export type PlanNodeLearnOutput = z.infer<typeof PlanNodeLearnOutputSchema>;
+
+// ============================================================================
+// plan.node.depend — a node waits on another's outcome (Plan 322 P2)
+// ============================================================================
+
+export const PLAN_NODE_DEPEND_ONE_OF_MESSAGE =
+  'Name exactly one of `condition` (set the edge, or change what it waits for) and `remove: true` (take it away).';
+
+export const PlanNodeDependInputSchema = z
+  .object({
+    nodeId: z.string().uuid().describe('The node that waits.'),
+    expectedRevision: z
+      .number()
+      .int()
+      .min(1)
+      .describe('The revision of `nodeId` the change was decided against.'),
+    dependsOnId: z.string().uuid().describe('The node it waits on.'),
+    condition: PlanNodeDependencyConditionSchema.optional().describe(
+      'The outcome it waits for: `done`, `dropped`, or `closed` (either).',
+    ),
+    remove: z.literal(true).optional().describe('Take the edge away.'),
+  })
+  .strict()
+  .superRefine((input, ctx) => {
+    if ((input.condition === undefined) === (input.remove === undefined)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: PLAN_NODE_DEPEND_ONE_OF_MESSAGE });
+    }
+  });
+export type PlanNodeDependInput = z.infer<typeof PlanNodeDependInputSchema>;
+
+export const PlanNodeDependOutputSchema = z.object({
+  node: PlanNodeSchema.describe('The waiting node at its new revision.'),
+  dependency: PlanNodeDependencySchema.optional().describe(
+    'The edge as it now stands; absent once removed.',
+  ),
+});
+export type PlanNodeDependOutput = z.infer<typeof PlanNodeDependOutputSchema>;
 
 // ============================================================================
 // plan.node.next — a stream continues on a schedule (Plan 322 P2b)

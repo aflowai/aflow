@@ -104,6 +104,9 @@ export const MERGE_RULES: readonly WorkflowRunDecideRule[] = [
   },
 ];
 
+const NODE_IN_FLIGHT_REASON =
+  "A run serving this pull request's plan node, or a node under it, is in flight — running, or paused — whoever started it: the node's work is under way.";
+
 /**
  * Read in order; the first that holds decides. A rule a missing read must not
  * pass is written `!= <expected>`, since a path through a read that did not
@@ -232,6 +235,30 @@ export const SHEPHERD_RULES: readonly WorkflowRunDecideRule[] = [
     when: { expression: 'state.commissions.runs[0] != null' },
     decision: 'wait',
     reason: 'A commission based on this branch is in flight, whoever started it.',
+  },
+  // The branch's work as the plan holds it (Plan 322 P2). A pull request no
+  // node holds reads whole and empty; a read that failed, or stopped at its
+  // bounds, leaves the node's work unknown, which is not none.
+  {
+    when: { expression: 'state.planNode.complete != true' },
+    decision: 'wait',
+    reason:
+      "The runs serving this pull request's plan node could not all be read — the read failed, or the plan under the node is larger than one read — so whether its work is in flight is unknown.",
+  },
+  // A pass started on the node serves it itself, and is never work beside
+  // itself: it waits only on a run other than its own. The ids are distinct,
+  // so a second run listed is always another's.
+  {
+    when: {
+      allOf: ['state.planNode.runs[0] != null', 'state.planNode.runs[0].id != state.runId'],
+    },
+    decision: 'wait',
+    reason: NODE_IN_FLIGHT_REASON,
+  },
+  {
+    when: { expression: 'state.planNode.runs[1] != null' },
+    decision: 'wait',
+    reason: NODE_IN_FLIGHT_REASON,
   },
   ...MERGE_RULES,
   // Every later pass reads the same one page, so a wait here would never end.

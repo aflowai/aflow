@@ -127,6 +127,36 @@ describe('workflow.run.list', () => {
       error: { code: 'WORKFLOW_RUN_LIST_INPUT_INVALID' },
     });
   });
+
+  it('reads the runs serving a pull request’s plan node, saying which nodes and whether the read was whole', async () => {
+    const url = 'https://github.com/aflowai/aflow/pull/94';
+    const page = {
+      runs: [{ id: 'r2', status: 'running', startedAt: '2026-10-18T07:30:00.000Z', own: false }],
+      hasMore: false,
+      planNodeIds: ['9e000000-0000-4000-8000-000000000322'],
+      complete: true,
+    };
+    mockListRunsByInput.mockResolvedValueOnce(page);
+    await handleWorkflowCrudInline(args('workflow.run.list', { servingNodeOfPullRequest: url }));
+    expect(mockListRunsByInput).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: { servingNodeOfPullRequest: url, status: ['running', 'paused'], limit: 25 },
+      }),
+    );
+    expect(result()).toEqual({ status: 'SUCCEEDED', output: page });
+  });
+
+  it('refuses a read naming both selectors without reading', async () => {
+    await handleWorkflowCrudInline(
+      args('workflow.run.list', {
+        slug: 'publish-local-changes',
+        input: { field: 'branch', equals: 'aflow/x' },
+        servingNodeOfPullRequest: 'https://github.com/aflowai/aflow/pull/94',
+      }),
+    );
+    expect(mockListRunsByInput).not.toHaveBeenCalled();
+    expect(result()).toMatchObject({ status: 'FAILED' });
+  });
 });
 
 describe('workflow.run.decide', () => {

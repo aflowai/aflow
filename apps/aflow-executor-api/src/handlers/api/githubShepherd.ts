@@ -198,8 +198,10 @@ export function loopPullRequest(body: unknown, arg: string | undefined): LoopPul
   const fields = pullRequestFields(pr);
   const raw = typeof fields.body === 'string' ? fields.body : '';
   const mergeableState = pr['mergeable_state'];
+  const url = pr['html_url'];
   return {
     number: fields.number,
+    ...(typeof url === 'string' ? { url } : {}),
     state: text(pr['state'], 'its state'),
     title: fields.title,
     body: raw

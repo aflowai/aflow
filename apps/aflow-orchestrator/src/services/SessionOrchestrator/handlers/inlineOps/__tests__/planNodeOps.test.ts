@@ -29,10 +29,14 @@ const mockGetPlanNode = vi.fn();
 const mockListPlanNodes = vi.fn();
 const mockLinkPlanNode = vi.fn();
 const mockNextInPlanStream = vi.fn();
+const mockLearnOnPlanNode = vi.fn();
+const mockDependPlanNode = vi.fn();
 const STORE = { kind: 'store' };
 const READS = { kind: 'reads' };
 vi.mock('@aflow/cybernetic-runtime', () => ({
   createPlanNodeStore: () => STORE,
+  learnOnPlanNode: (...a: unknown[]) => mockLearnOnPlanNode(...a),
+  dependPlanNode: (...a: unknown[]) => mockDependPlanNode(...a),
   createPlanNode: (...a: unknown[]) => mockCreatePlanNode(...a),
   updatePlanNode: (...a: unknown[]) => mockUpdatePlanNode(...a),
   getPlanNode: (...a: unknown[]) => mockGetPlanNode(...a),
@@ -310,6 +314,130 @@ describe('plan.node.link', () => {
       makeArgs('plan.node.link', { nodeId: NODE_ID, kind: 'pull_request', ref: '#80' }),
     );
     expect(mockLinkPlanNode).not.toHaveBeenCalled();
+    expect(emitted()['error']).toMatchObject({ code: 'PLAN_NODE_INVALID_INPUT' });
+  });
+});
+
+describe('plan.node.learn (Plan 322 P2)', () => {
+  const LEARNING = {
+    nodeId: NODE_ID,
+    kind: 'constraint',
+    statement: 'The integration suite needs a migrated database.',
+    evidence: { citations: [{ runId: '00000000-0000-4000-8000-0000000000a1' }] },
+    confidence: 'medium',
+  };
+
+  it('records the learning through the engine as written by this session', async () => {
+    const learning = {
+      learningId: '00000000-0000-4000-8000-0000000000b1',
+      nodeId: NODE_ID,
+      kind: 'constraint',
+      statement: LEARNING.statement,
+      confidence: 'medium',
+      runIds: [LEARNING.evidence.citations[0]!.runId],
+      createdAt: '2026-10-23T09:00:00.000Z',
+    };
+    mockLearnOnPlanNode.mockResolvedValue({ ok: true, learning, superseded: [] });
+    await handlePlanNodeInline(makeArgs('plan.node.learn', LEARNING));
+    expect(mockLearnOnPlanNode).toHaveBeenCalledWith(
+      { store: STORE, spaceId: SPACE, redis: { kind: 'redis' }, tenantId: TENANT },
+      LEARNING,
+      { sessionId: SESSION },
+    );
+    expect(emitted()['status']).toBe('SUCCEEDED');
+    expect(emittedOutput()).toEqual({ learning, superseded: [] });
+  });
+
+  it('refuses a learning that cites no run before the engine is reached', async () => {
+    await handlePlanNodeInline(
+      makeArgs('plan.node.learn', { ...LEARNING, evidence: { citations: [] } }),
+    );
+    expect(mockLearnOnPlanNode).not.toHaveBeenCalled();
+    expect(emitted()['error']).toMatchObject({ code: 'PLAN_NODE_INVALID_INPUT' });
+  });
+
+  it('a later session opening the node is handed its learnings and dependencies', async () => {
+    const read = {
+      ok: true,
+      node: NODE,
+      children: [],
+      childrenTotal: 0,
+      links: [],
+      linksTotal: 0,
+      runs: [],
+      runsTotal: 0,
+      dependencies: [
+        { nodeId: NODE_ID, title: 'Land the read', status: 'done', condition: 'done', met: true },
+      ],
+      dependenciesTotal: 1,
+      dependents: [],
+      dependentsTotal: 0,
+      learnings: [{ learningId: 'l', nodeId: NODE_ID, statement: LEARNING.statement }],
+      learningsTotal: 1,
+    };
+    mockGetPlanNode.mockResolvedValue(read);
+    await handlePlanNodeInline({
+      ...makeArgs('plan.node.get', { nodeId: NODE_ID }),
+      context: { tenantId: TENANT, runId: 'session-helmsman-3', spaceId: SPACE } as never,
+    });
+    expect(emittedOutput()).toMatchObject({
+      dependencies: read.dependencies,
+      dependenciesTotal: 1,
+      learnings: read.learnings,
+      learningsTotal: 1,
+    });
+  });
+});
+
+describe('plan.node.depend (Plan 322 P2)', () => {
+  const OTHER = '00000000-0000-4000-8000-0000000003a3';
+
+  it('writes the edge through the engine, compare-and-set on the waiting node', async () => {
+    const dependency = {
+      nodeId: NODE_ID,
+      dependsOnId: OTHER,
+      condition: 'done',
+      createdAt: '2026-10-23T09:00:00.000Z',
+    };
+    mockDependPlanNode.mockResolvedValue({
+      ok: true,
+      node: { ...NODE, revision: 3 },
+      dependency,
+    });
+    const input = { nodeId: NODE_ID, expectedRevision: 2, dependsOnId: OTHER, condition: 'done' };
+    await handlePlanNodeInline(makeArgs('plan.node.depend', input));
+    expect(mockDependPlanNode.mock.calls[0]![1]).toEqual(input);
+    expect(emittedOutput()).toEqual({ node: { ...NODE, revision: 3 }, dependency });
+  });
+
+  it('surfaces a cycle as a validation error naming the loop', async () => {
+    mockDependPlanNode.mockResolvedValue({
+      ok: false,
+      code: 'PLAN_NODE_DEPENDENCY_CYCLE',
+      message: 'cannot wait on it: it closes a loop.',
+      details: { nodeId: NODE_ID, dependsOnId: OTHER, path: [NODE_ID, OTHER, NODE_ID] },
+    });
+    await handlePlanNodeInline(
+      makeArgs('plan.node.depend', {
+        nodeId: NODE_ID,
+        expectedRevision: 2,
+        dependsOnId: OTHER,
+        condition: 'closed',
+      }),
+    );
+    expect(emitted()['error']).toMatchObject({
+      code: 'PLAN_NODE_DEPENDENCY_CYCLE',
+      classification: 'validation',
+      retryable: false,
+      details: { path: [NODE_ID, OTHER, NODE_ID] },
+    });
+  });
+
+  it('refuses a write naming neither a condition nor a removal before the engine is reached', async () => {
+    await handlePlanNodeInline(
+      makeArgs('plan.node.depend', { nodeId: NODE_ID, expectedRevision: 2, dependsOnId: OTHER }),
+    );
+    expect(mockDependPlanNode).not.toHaveBeenCalled();
     expect(emitted()['error']).toMatchObject({ code: 'PLAN_NODE_INVALID_INPUT' });
   });
 });

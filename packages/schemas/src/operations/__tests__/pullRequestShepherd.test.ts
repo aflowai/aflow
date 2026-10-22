@@ -21,6 +21,7 @@ import {
   SHEPHERD_MERGE_OUTCOMES,
   SkillBundleSchema,
   WORKFLOW_RUN_LIST_LIMIT_MAX,
+  WORKFLOW_RUN_LIST_SELECTOR_MESSAGE,
   WorkflowRunDecideInputSchema,
   WorkflowRunListInputSchema,
 } from '../../index.js';
@@ -158,6 +159,25 @@ describe('workflow.run.list', () => {
         .success,
     ).toBe(false);
     expect(WorkflowRunListInputSchema.safeParse({ slug: 'x' }).success).toBe(false);
+  });
+
+  it('selects by a pull request’s plan node alone, or by slug and input — never both, never neither', () => {
+    const byNode = { servingNodeOfPullRequest: 'https://github.com/aflowai/aflow/pull/94' };
+    expect(WorkflowRunListInputSchema.parse(byNode)).toEqual({
+      ...byNode,
+      status: ['running', 'paused'],
+      limit: 25,
+    });
+    for (const refused of [{}, { ...query, ...byNode }, { ...byNode, slug: 'x' }]) {
+      const parsed = WorkflowRunListInputSchema.safeParse(refused);
+      expect(parsed.success).toBe(false);
+      expect(parsed.error?.issues.map((i) => i.message)).toContain(
+        WORKFLOW_RUN_LIST_SELECTOR_MESSAGE,
+      );
+    }
+    expect(
+      WorkflowRunListInputSchema.safeParse({ servingNodeOfPullRequest: 'aflow/x' }).success,
+    ).toBe(false);
   });
 });
 

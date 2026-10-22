@@ -11,7 +11,10 @@ import {
   PLAN_NODE_PROSE_MAX_CHARS,
   PLAN_NODE_TITLE_ONE_LINE_MESSAGE,
   PLAN_NODE_UPDATE_EMPTY_MESSAGE,
+  CoachLearningScopeSchema,
+  planDependencyMet,
   PlanNodeCreateInputSchema,
+  PlanNodeLearnInputSchema,
   PlanNodeLinkInputSchema,
   PlanNodeListInputSchema,
   PlanNodeUpdateInputSchema,
@@ -27,10 +30,12 @@ const PLAN_OPERATIONS = {
   list: 'read',
   link: 'write',
   next: 'read',
+  learn: 'write',
+  depend: 'write',
 } as const;
 
 describe('plan.node operations (Plan 322)', () => {
-  it('registers exactly the four P0 operations, P1’s link and P2b’s next, read or write as the verb says', () => {
+  it('registers exactly the four P0 operations, P1’s link, P2’s learn and depend and P2b’s next, read or write as the verb says', () => {
     const registered = [...getOperationsByStepType('plan').keys()].sort();
     expect(registered).toEqual(
       Object.keys(PLAN_OPERATIONS)
@@ -273,5 +278,48 @@ describe('PlanNodeListInputSchema', () => {
     const parsed = PlanNodeListInputSchema.parse({});
     expect(parsed.status).toEqual(['active', 'waiting', 'blocked']);
     expect(parsed.limit).toBeGreaterThan(0);
+  });
+});
+
+describe('Plan 322 P2 — learnings scoped to a node, dependencies between nodes', () => {
+  it('a coach learning may be scoped to a plan node, by its id', () => {
+    expect(CoachLearningScopeSchema.parse({ kind: 'plan', planNodeId: NODE_ID })).toEqual({
+      kind: 'plan',
+      planNodeId: NODE_ID,
+    });
+    expect(CoachLearningScopeSchema.safeParse({ kind: 'plan' }).success).toBe(false);
+    expect(
+      CoachLearningScopeSchema.safeParse({ kind: 'plan', planNodeId: NODE_ID, skillSlug: 'x' })
+        .success,
+    ).toBe(false);
+  });
+
+  it('learn requires the runs a learning was drawn from', () => {
+    const learning = {
+      nodeId: NODE_ID,
+      kind: 'heuristic',
+      statement: 'Rerun a timeout once before fixing it.',
+      confidence: 'low',
+    };
+    expect(PlanNodeLearnInputSchema.safeParse(learning).success).toBe(false);
+    expect(
+      PlanNodeLearnInputSchema.safeParse({
+        ...learning,
+        evidence: { citations: [{ runId: NODE_ID }] },
+      }).success,
+    ).toBe(true);
+  });
+
+  it.each([
+    ['done', 'done', true],
+    ['done', 'dropped', false],
+    ['dropped', 'dropped', true],
+    ['dropped', 'done', false],
+    ['closed', 'done', true],
+    ['closed', 'dropped', true],
+    ['closed', 'active', false],
+    ['done', 'blocked', false],
+  ] as const)('a dependency waiting for %s is met by a node %s: %s', (condition, status, met) => {
+    expect(planDependencyMet(condition, status)).toBe(met);
   });
 });
