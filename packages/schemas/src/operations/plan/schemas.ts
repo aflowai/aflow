@@ -11,6 +11,9 @@ import {
   PlanNodeSummarySchema,
   PlanNodeUpdateFieldSchema,
   PlanNodeUpdateSchema,
+  type PlanNodeLink,
+  type PlanNodeRun,
+  type PlanNodeSummary,
 } from '../../cybernetic/plan.js';
 
 export const PLAN_NODE_CREATE_OPERATION_ID = buildOperationId('plan', 'node', 'create');
@@ -137,6 +140,54 @@ export const PlanNodeListOutputSchema = z.object({
   ),
 });
 export type PlanNodeListOutput = z.infer<typeof PlanNodeListOutputSchema>;
+
+// ============================================================================
+// The space's plan as the operator reads it (Plan 322 P3)
+// ============================================================================
+
+/** Links each node of the operator's tree carries, newest first; `linksTotal` counts the rest. */
+export const PLAN_TREE_NODE_LINKS_LIMIT = 20;
+/** Runs in flight the operator's tree places, newest first, across every node; `runsTotal` counts the rest. */
+export const PLAN_TREE_RUNS_LIMIT = 200;
+
+/** A node with what was done for it, and the nodes under it. */
+export interface PlanTreeNode extends PlanNodeSummary {
+  outcome?: string;
+  closedAt?: string;
+  links: PlanNodeLink[];
+  linksTotal: number;
+  runs: PlanNodeRun[];
+  children: PlanTreeNode[];
+}
+
+export const PlanTreeNodeSchema = z.lazy(() =>
+  PlanNodeSummarySchema.extend({
+    outcome: PlanNodeSchema.shape.outcome,
+    closedAt: PlanNodeSchema.shape.closedAt,
+    links: z.array(PlanNodeLinkSchema),
+    linksTotal: z.number().int().min(0),
+    /** The runs in flight serving this node itself; a run serving a node under it sits there. */
+    runs: z.array(PlanNodeRunSchema),
+    /** Siblings by position, then id. */
+    children: z.array(PlanTreeNodeSchema),
+  }).strict(),
+) as z.ZodType<PlanTreeNode>;
+
+export const PlanTreeOutputSchema = z.object({
+  /** Every status, open and closed; roots by position, then id. */
+  roots: z.array(PlanTreeNodeSchema),
+  runsTotal: z
+    .number()
+    .int()
+    .min(0)
+    .describe(
+      `The space's runs in flight for any node read; at most ${String(PLAN_TREE_RUNS_LIMIT)} are placed.`,
+    ),
+  truncated: PlanNodeListTruncationSchema.optional().describe(
+    'Absent when every node of the space is here; otherwise the walk bound (`depth` or `nodes`) that cut it short.',
+  ),
+});
+export type PlanTreeOutput = z.infer<typeof PlanTreeOutputSchema>;
 
 // ============================================================================
 // plan.node.link

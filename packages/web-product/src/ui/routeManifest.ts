@@ -44,6 +44,7 @@ export const ROUTE_MANIFEST: readonly RouteEntry[] = [
   { route: 's/[space]/settings/rules', screen: 'SpaceRulesPage', editions: BOTH },
   { route: 's/[space]/settings/danger', screen: 'DangerZonePage', editions: BOTH },
   { route: 's/[space]/triggers', screen: 'TriggersPage', editions: BOTH },
+  { route: 's/[space]/plan', screen: 'SpacePlanPage', editions: BOTH },
   { route: 's/[space]/chat', screen: 'ChatPage', editions: BOTH },
   { route: 's/[space]/skills', screen: 'SkillsPage', editions: BOTH },
   { route: 's/[space]/integrations', screen: 'SpaceIntegrationsPage', editions: BOTH },

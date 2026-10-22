@@ -55,7 +55,9 @@ plan sees every run in it on that line until it starts one; `plan.node.get` on i
 where it finds its stream's work in flight. When the round ends, `plan.node.update` records where the node now stands in
 its note, against the revision the conversation read: a node another conversation wrote
 meanwhile is refused with its current state rather than overwritten, and a node is marked
-`done` only with the outcome that met its criteria.
+`done` only with the outcome that met its criteria. The operator reads the same tree on the
+space's **Plan** page (`GET /v1/spaces/:spaceId/plan`): every node, its outcome, its links and
+the runs in flight for it, with no Helmsman turn needed to ask.
 
 1. **Brief Helmsman**, one message, numbered. Part 1 is the commission: a run of the
    catalog's Commission Change started with `wait: 'none'` and the node's `planNodeId`, so

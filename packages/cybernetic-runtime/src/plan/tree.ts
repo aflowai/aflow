@@ -204,3 +204,23 @@ export function orderPlanTree(
   }
   return placed;
 }
+
+/**
+ * Nest nodes placed by `orderPlanTree` under their parents, building each with
+ * `build`. Reading order puts every parent before its children and siblings in
+ * order, so appending keeps that order at every level.
+ */
+export function nestPlanTree<T extends { children: T[] }>(
+  placed: readonly PlacedPlanNode[],
+  build: (node: PlanNodeSummary) => T,
+): T[] {
+  const roots: T[] = [];
+  const built = new Map<string, T>();
+  for (const { node, depth } of placed) {
+    const tree = build(node);
+    built.set(node.nodeId, tree);
+    const parent = depth === 0 || node.parentId === null ? undefined : built.get(node.parentId);
+    (parent?.children ?? roots).push(tree);
+  }
+  return roots;
+}
