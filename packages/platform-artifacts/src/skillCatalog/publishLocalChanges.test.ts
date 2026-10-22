@@ -391,6 +391,23 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     );
   });
 
+  it("briefs a fix round from the branch's head, by its name, never from the earlier baseSha", () => {
+    const description = PUBLISH_LOCAL_CHANGES.description;
+    expect(description).toContain(
+      "commission the fix with `base` the branch's name — never the earlier commission's `baseSha` or `origin/main`",
+    );
+    expect(description).toContain('then publish again with its `patchRef` and `baseSha`');
+    expect(description).toContain("the commission's `baseSha` — the branch's head — as `baseSha`");
+    expect(wf.output?.guidance).toContain(
+      'commission the fix with base the branch’s name, never the earlier baseSha',
+    );
+    const afterReview = wf.stateVariables.find((v) => v.variableId === 'afterReview');
+    expect(afterReview?.description).toContain("takes `base` the branch's name");
+    // The commit still refuses a patch made against anything but the branch's head.
+    const baseSha = (wf.runInputs ?? []).find((i) => i.id === 'baseSha');
+    expect(baseSha?.description).toContain("it must be that branch's head");
+  });
+
   it('carries the commit a commission merged in, only when the caller passed one', () => {
     const commit = taskOrThrow('commit');
     const template = commit.inputTemplate;

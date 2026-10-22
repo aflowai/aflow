@@ -353,6 +353,32 @@ describe('a run started from a ref on a remote', () => {
     await expect(resolveBase(repo, 'main')).resolves.toBe(known);
   });
 
+  it("resolves a fix round's base, the branch's name, to the round-1 commit it holds unpushed", async () => {
+    const roundOneBase = (await git(repo, 'rev-parse', 'HEAD')).trim();
+    // Round 1's publication committed onto the branch and kept it local.
+    await git(repo, 'checkout', '-q', '-b', 'aflow/slice');
+    await writeFile(join(repo, 'app.txt'), 'round one\n');
+    await git(repo, 'commit', '-qam', 'round one');
+    const roundOneSha = (await git(repo, 'rev-parse', 'HEAD')).trim();
+    await git(repo, 'checkout', '-q', 'main');
+    await git(repo, 'remote', 'set-url', 'origin', join(upstream, 'gone'));
+
+    const base = await resolveBase(repo, 'aflow/slice');
+    expect(base).toBe(roundOneSha);
+    expect(base).not.toBe(roundOneBase);
+
+    const fix = await prepareWorktree(repo, scratch, 'round-2', { at: base });
+    expect(fix.baseSha).toBe(roundOneSha);
+    expect(await readFile(join(fix.path, 'app.txt'), 'utf8')).toBe('round one\n');
+    await writeFile(join(fix.path, 'fix.txt'), 'the fix\n');
+    const { patch } = await collectChanges(fix);
+    await removeWorktree(fix.path);
+
+    expect(patch).toContain('fix.txt');
+    expect(patch).not.toContain('round one');
+    expect((await checkApplies(repo, patch, roundOneSha)).state).toBe('clean');
+  });
+
   it('fetches origin main for a merged sha the folder has not seen, then resolves it', async () => {
     const merged = await remoteMovesOn();
     const short = merged.slice(0, 8);
