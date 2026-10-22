@@ -32,10 +32,13 @@ import {
 
 import { AGENT_SCRATCH_DIR } from '../executorScratch.js';
 import type { SandboxedRunInput, SandboxedRunResult } from '../sandboxedRun.js';
-import { CONFINEMENT_LISTENERS, requires } from './fixtures/capabilities.js';
+import { CONFINEMENT_LISTENERS, LOOPBACK_LISTENER, requires } from './fixtures/capabilities.js';
 
 const run = promisify(execFile);
 const confinable = requires(...CONFINEMENT_LISTENERS);
+// The self-test holds a listener of its own on the machine's loopback, outside
+// any sandbox, for its loopback probe to reach for.
+const selfTestListens = requires(LOOPBACK_LISTENER);
 
 const sandboxed: SandboxedRunInput[] = [];
 let sandboxMissing = false;
@@ -693,49 +696,57 @@ describe.each([
 });
 
 describe('the boot self-test of the `open` posture', { tags: ['listener'] }, () => {
-  it('runs each probe in a folder of its own, under `open`, writing only its checkout', async () => {
-    const outcomes = await runOpenPostureSelfTest();
-    expect(outcomes.map((outcome) => outcome.name)).toEqual([
-      'a shell command exits 0',
-      '`yarn --version` runs',
-      "a listener on the machine's loopback is out of reach",
-    ]);
-    expect(outcomes.every((outcome) => outcome.passed)).toBe(true);
-    expect(sandboxed.map((input) => input.posture)).toEqual(['open', 'open', 'open']);
-    for (const input of sandboxed) {
-      expect(input.widening).toMatchObject({
-        writableRoot: input.cwd,
-        withholdBindingWrite: true,
-      });
-    }
-    expect(sandboxed[0]?.argv[0]).toBe('/bin/sh');
-    expect(sandboxed[0]?.argv[2]).toContain('"$TMPDIR/$1"');
-    expect(sandboxed[1]?.argv).toEqual(['yarn', '--version']);
-    expect(sandboxed[2]?.argv.slice(0, 3)).toEqual([
-      process.execPath,
-      '-e',
-      MACHINE_LOOPBACK_REACH,
-    ]);
-    expect(Number(sandboxed[2]?.argv[3])).toBeGreaterThan(0);
-  });
+  it.skipIf(selfTestListens.skip)(
+    selfTestListens.title(
+      'runs each probe in a folder of its own, under `open`, writing only its checkout',
+    ),
+    async () => {
+      const outcomes = await runOpenPostureSelfTest();
+      expect(outcomes.map((outcome) => outcome.name)).toEqual([
+        'a shell command exits 0',
+        '`yarn --version` runs',
+        "a listener on the machine's loopback is out of reach",
+      ]);
+      expect(outcomes.every((outcome) => outcome.passed)).toBe(true);
+      expect(sandboxed.map((input) => input.posture)).toEqual(['open', 'open', 'open']);
+      for (const input of sandboxed) {
+        expect(input.widening).toMatchObject({
+          writableRoot: input.cwd,
+          withholdBindingWrite: true,
+        });
+      }
+      expect(sandboxed[0]?.argv[0]).toBe('/bin/sh');
+      expect(sandboxed[0]?.argv[2]).toContain('"$TMPDIR/$1"');
+      expect(sandboxed[1]?.argv).toEqual(['yarn', '--version']);
+      expect(sandboxed[2]?.argv.slice(0, 3)).toEqual([
+        process.execPath,
+        '-e',
+        MACHINE_LOOPBACK_REACH,
+      ]);
+      expect(Number(sandboxed[2]?.argv[3])).toBeGreaterThan(0);
+    },
+  );
 
-  it('names a probe that failed and what it said', async () => {
-    const outcomes = await runOpenPostureSelfTest((input) =>
-      Promise.resolve({
-        ...finished('st_probe'),
-        ...(input.argv[0] === 'yarn'
-          ? { exitCode: 1, stdout: '', stderr: 'Corepack could not fetch Yarn' }
-          : {}),
-      }),
-    );
-    expect(outcomes.filter((outcome) => !outcome.passed)).toEqual([
-      {
-        name: '`yarn --version` runs',
-        passed: false,
-        detail: 'exited 1: Corepack could not fetch Yarn',
-      },
-    ]);
-  });
+  it.skipIf(selfTestListens.skip)(
+    selfTestListens.title('names a probe that failed and what it said'),
+    async () => {
+      const outcomes = await runOpenPostureSelfTest((input) =>
+        Promise.resolve({
+          ...finished('st_probe'),
+          ...(input.argv[0] === 'yarn'
+            ? { exitCode: 1, stdout: '', stderr: 'Corepack could not fetch Yarn' }
+            : {}),
+        }),
+      );
+      expect(outcomes.filter((outcome) => !outcome.passed)).toEqual([
+        {
+          name: '`yarn --version` runs',
+          passed: false,
+          detail: 'exited 1: Corepack could not fetch Yarn',
+        },
+      ]);
+    },
+  );
 
   it.skipIf(!CAN_CONFINE)(
     confinable.title(

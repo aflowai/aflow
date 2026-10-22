@@ -417,7 +417,7 @@ export type BundleArtifactSeed = z.infer<typeof BundleArtifactSeedSchema>;
 // ============================================================================
 
 /**
- * An agent a bundle installs beside a skill: one operation step,
+ * An agent a bundle installs beside a skill: operation steps only,
  * `workflow.run.start` of that skill with its inputs fixed when the agent is
  * written, and no model turn (Plan 321 D1). A schedule starts an agent, never
  * a skill, and its template carries no live value — so the agent decides
@@ -425,9 +425,9 @@ export type BundleArtifactSeed = z.infer<typeof BundleArtifactSeedSchema>;
  * every time.
  *
  * The connected folder is the one input it cannot carry as catalog text: it
- * is the space's. The install writes the space's one folder that allows
- * pushes as a literal into the step, and writes no agent where there is not
- * exactly one, saying why.
+ * is the space's. The install writes each of the space's folders that allow
+ * pushes as a literal into a step of its own — one start of the skill per
+ * folder on every run — and writes no agent where there is none, saying why.
  */
 export const BundledSkillStarterAgentSchema = z
   .object({
@@ -442,21 +442,99 @@ export const BundledSkillStarterAgentSchema = z
   .strict();
 export type BundledSkillStarterAgent = z.infer<typeof BundledSkillStarterAgentSchema>;
 
-/** The one step of a skill-starter agent. */
+/** The first step of a skill-starter agent; a further start is `start-skill-2`, `-3`, … */
 export const SKILL_STARTER_STEP_ID = 'start-skill';
 
+/** The step a skill-starter agent ends on when one of several starts failed. */
+export const SKILL_STARTER_FAILED_STEP_ID = 'a-start-failed';
+
+const afterFailureStepId = (stepId: string): string => `${stepId}-after-failure`;
+
+const edgeTo = (stepId: string | undefined): { next: Array<{ stepId: string }> } => ({
+  next: stepId === undefined ? [] : [{ stepId }],
+});
+
 /**
- * The definition a skill-starter agent is written with: `workflow.run.start`
- * of the skill, its inputs literal, and `wait: 'none'` — the agent's run ends
- * once the skill's has started, and the skill's run is no conversation's.
+ * The definition a skill-starter agent is written with: one
+ * `workflow.run.start` of the skill per entry of `runs`, each with its inputs
+ * literal and `wait: 'none'` — the agent's run ends once the skills' have
+ * started, and no skill run is a conversation's.
+ *
+ * Each start's input is its config alone (`inputPassthrough: false`): a step
+ * is otherwise handed the run's input or the previous start's output, whose
+ * keys the strict `workflow.run.start` input refuses.
+ *
+ * The starts run in order, and every one runs whatever an earlier one did —
+ * one folder's refusal must not stop the others' passes. The run fails when
+ * any start failed, wherever it stood: the first failure moves the run onto a
+ * second path holding the remaining starts, which ends on
+ * `workflow.run.fail`, so whether the run failed never depends on which start
+ * was last.
  */
 export function skillStarterAgentDefinition(params: {
   slug: string;
   catalogId: string;
   name: string;
   description: string;
-  inputs: Record<string, string>;
+  runs: ReadonlyArray<Record<string, string>>;
 }): Record<string, unknown> {
+  const count = params.runs.length;
+  if (count === 0) {
+    throw new Error(`A skill-starter agent for "${params.slug}" needs at least one run to start.`);
+  }
+  const stepIds = params.runs.map((_, index) =>
+    index === 0 ? SKILL_STARTER_STEP_ID : `${SKILL_STARTER_STEP_ID}-${String(index + 1)}`,
+  );
+  const start = (index: number, afterFailure: boolean) => {
+    const of = count === 1 ? '' : ` (${String(index + 1)} of ${String(count)})`;
+    return {
+      stepId: afterFailure ? afterFailureStepId(stepIds[index] ?? '') : stepIds[index],
+      stepType: 'workflow',
+      operation: 'workflow.run.start',
+      name: `Start ${params.name}${of}${afterFailure ? ', after a start failed' : ''}`,
+      config: {
+        slug: params.slug,
+        catalogId: params.catalogId,
+        inputs: params.runs[index],
+        wait: 'none',
+      },
+      inputPassthrough: false,
+    };
+  };
+  const last = count - 1;
+  const steps: Array<Record<string, unknown>> = params.runs.map((_, index) => {
+    const next = stepIds[index + 1];
+    return {
+      ...start(index, false),
+      onSuccess: edgeTo(next),
+      onFailure: edgeTo(next === undefined ? undefined : afterFailureStepId(next)),
+    };
+  });
+  for (let index = 1; index <= last; index += 1) {
+    const next = stepIds[index + 1];
+    const onward = next === undefined ? undefined : afterFailureStepId(next);
+    steps.push({
+      ...start(index, true),
+      onSuccess: edgeTo(index === last ? SKILL_STARTER_FAILED_STEP_ID : onward),
+      onFailure: edgeTo(onward),
+    });
+  }
+  if (count > 1) {
+    steps.push({
+      stepId: SKILL_STARTER_FAILED_STEP_ID,
+      stepType: 'workflow',
+      operation: 'workflow.run.fail',
+      name: `Fail: a start of ${params.name} failed`,
+      config: {
+        reason:
+          `A start of ${params.name} failed, and every start after it was still made. ` +
+          'The failed start is the step of this run that failed, and its inputs name the folder.',
+      },
+      inputPassthrough: false,
+      onSuccess: edgeTo(undefined),
+      onFailure: edgeTo(undefined),
+    });
+  }
   return {
     schemaVersion: 1,
     flowId: params.slug,
@@ -468,24 +546,10 @@ export function skillStarterAgentDefinition(params: {
     },
     systemRole: null,
     stateVariables: [],
-    steps: [
-      {
-        stepId: SKILL_STARTER_STEP_ID,
-        stepType: 'workflow',
-        operation: 'workflow.run.start',
-        name: `Start ${params.name}`,
-        config: {
-          slug: params.slug,
-          catalogId: params.catalogId,
-          inputs: params.inputs,
-          wait: 'none',
-        },
-        onSuccess: { next: [] },
-        onFailure: { next: [] },
-      },
-    ],
+    steps,
     startStepId: SKILL_STARTER_STEP_ID,
-    allowedOperations: ['workflow.run.start'],
+    allowedOperations:
+      count === 1 ? ['workflow.run.start'] : ['workflow.run.start', 'workflow.run.fail'],
     supportedModes: ['api'],
     status: 'published',
   };

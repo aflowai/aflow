@@ -117,7 +117,7 @@ export async function resolveStepInput(
   // graph tools rename op fields to those binding names (buildToolInputSchema),
   // so letting them pass through would leak tool-arg names into the operation
   // input, which strict op schemas reject.
-  const passthroughInput = { ...rawInput };
+  const passthroughInput = stepDef.inputPassthrough === false ? {} : { ...rawInput };
   for (const key of collectBoundInputKeys(stepDef.config)) {
     delete passthroughInput[key];
   }

@@ -224,6 +224,17 @@ export const StepDefinitionSchema = z.object({
   config: z.record(z.unknown()).default({}),
 
   /**
+   * Whether what reached the step is laid under its config (the default), or
+   * the step's input is its config alone (`false`). What reaches a step is the
+   * run's input for the first, then the previous step's output — or, after a
+   * routed failure, its failure summary. Under a strict operation input those
+   * keys are unknown and refuse the step, so a step whose config already says
+   * everything it needs, following steps whose outputs mean nothing to it,
+   * sets `false`.
+   */
+  inputPassthrough: z.boolean().optional(),
+
+  /**
    * Override the tool input schema exposed to the LLM when this step appears
    * as a graph tool (i.e. in an agent turn's onSuccess edges). When set, the
    * agent sees this schema instead of the one derived from the operation catalog.
