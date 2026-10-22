@@ -5,6 +5,7 @@ import {
   PlanNodeCloseSchema,
   PlanNodeCreateSchema,
   PlanNodeLinkCreateSchema,
+  PlanNodeLinkKindSchema,
   PlanNodeLinkSchema,
   PlanNodeRunSchema,
   PlanNodeSchema,
@@ -12,8 +13,8 @@ import {
   PlanNodeSummarySchema,
   PlanNodeUpdateFieldSchema,
   PlanNodeUpdateSchema,
-  type PlanNodeLink,
-  type PlanNodeRun,
+  type PlanNodeKind,
+  type PlanNodeStatus,
   type PlanNodeSummary,
 } from '../../cybernetic/plan.js';
 
@@ -146,49 +147,210 @@ export type PlanNodeListOutput = z.infer<typeof PlanNodeListOutputSchema>;
 // The space's plan as the operator reads it (Plan 322 P3)
 // ============================================================================
 
-/** Links each node of the operator's tree carries, newest first; `linksTotal` counts the rest. */
-export const PLAN_TREE_NODE_LINKS_LIMIT = 20;
-/** Runs in flight the operator's tree places, newest first, across every node; `runsTotal` counts the rest. */
-export const PLAN_TREE_RUNS_LIMIT = 200;
+/** How much of the goal a tree node carries; the node detail reads the rest. */
+export const PLAN_NODE_GOAL_HEAD_MAX_CHARS = 160;
 
-/** A node with what was done for it, and the nodes under it. */
+/**
+ * The workflows whose runs are a node's review rounds, as a run link names
+ * them (`<slug> <status>`, `linkEndedRun`). A review started under a
+ * publication inherits the publication's node, so it is linked there too.
+ */
+export const PLAN_REVIEW_WORKFLOW_SLUGS = ['review-local-changes', 'review-pull-request'] as const;
+
+/** What a node's links and runs add up to, without the links themselves. */
+export const PlanNodeCountsSchema = z
+  .object({
+    runs: z.number().int().min(0).describe('Run links: runs that served the node and ended.'),
+    pullRequests: z.number().int().min(0),
+    findings: z.number().int().min(0),
+    documents: z.number().int().min(0),
+    inFlightRuns: z
+      .number()
+      .int()
+      .min(0)
+      .describe('Runs serving the node itself now, running or paused.'),
+  })
+  .strict();
+export type PlanNodeCounts = z.infer<typeof PlanNodeCountsSchema>;
+
+/**
+ * Who a node waits on. `operator`: it is active and no run has served it or
+ * serves it now, so nothing in the loop is moving it.
+ */
+export const PlanNodeOwnerSchema = z.enum(['loop', 'operator']);
+export type PlanNodeOwner = z.infer<typeof PlanNodeOwnerSchema>;
+
+/** The node's newest pull request, and whether a merge of it was recorded. */
+export const PlanNodePullRequestSchema = z
+  .object({
+    url: z.string(),
+    merged: z.boolean().describe('The node holds a `merge` link to this pull request.'),
+    mergeSha: z.string().optional().describe('The merge commit, where the merge link names it.'),
+  })
+  .strict();
+export type PlanNodePullRequest = z.infer<typeof PlanNodePullRequestSchema>;
+
+/** A node as a board card shows it, and the nodes under it: no links, no prose past the goal's head. */
 export interface PlanTreeNode extends PlanNodeSummary {
-  outcome?: string;
+  createdAt: string;
   closedAt?: string;
-  links: PlanNodeLink[];
-  linksTotal: number;
-  runs: PlanNodeRun[];
+  goalHead: string;
+  counts: PlanNodeCounts;
+  rounds: number;
+  ownedBy: PlanNodeOwner;
+  pullRequest?: PlanNodePullRequest;
+  progress?: { done: number; total: number };
   children: PlanTreeNode[];
 }
 
 export const PlanTreeNodeSchema = z.lazy(() =>
   PlanNodeSummarySchema.extend({
-    outcome: PlanNodeSchema.shape.outcome,
-    closedAt: PlanNodeSchema.shape.closedAt,
-    links: z.array(PlanNodeLinkSchema),
-    linksTotal: z.number().int().min(0),
-    /** The runs in flight serving this node itself; a run serving a node under it sits there. */
-    runs: z.array(PlanNodeRunSchema),
+    createdAt: z.string().datetime(),
+    closedAt: z.string().datetime().optional(),
+    goalHead: z.string().max(PLAN_NODE_GOAL_HEAD_MAX_CHARS),
+    counts: PlanNodeCountsSchema,
+    rounds: z
+      .number()
+      .int()
+      .min(0)
+      .describe('Review rounds: run links of a `PLAN_REVIEW_WORKFLOW_SLUGS` workflow.'),
+    ownedBy: PlanNodeOwnerSchema,
+    pullRequest: PlanNodePullRequestSchema.optional(),
+    progress: z
+      .object({ done: z.number().int().min(0), total: z.number().int().min(0) })
+      .strict()
+      .optional()
+      .describe('A parent only: its children done, of those not dropped.'),
     /** Siblings by position, then id. */
     children: z.array(PlanTreeNodeSchema),
   }).strict(),
 ) as z.ZodType<PlanTreeNode>;
 
+/** A calendar day in the reader's time zone, `YYYY-MM-DD`. */
+export const PlanDaySchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+
+export const PlanDoneDaySchema = z
+  .object({ day: PlanDaySchema, count: z.number().int().min(1) })
+  .strict();
+export type PlanDoneDay = z.infer<typeof PlanDoneDaySchema>;
+
+/**
+ * One plan as its tab and header show it, counted over every node under the
+ * root — whatever `closedSince` left out of the tree.
+ */
+export const PlanRootTallySchema = z
+  .object({
+    rootId: z.string().uuid(),
+    steps: z.number().int().min(0).describe('Nodes under the root.'),
+    done: z.number().int().min(0),
+    active: z.number().int().min(0).describe('Nodes in the board’s In progress column.'),
+    decide: z.number().int().min(0).describe('Nodes in the board’s Needs you column.'),
+    dropped: z.number().int().min(0),
+    doneByDay: z
+      .array(PlanDoneDaySchema)
+      .describe('Done nodes by the day they closed, newest first, one entry per day with any.'),
+  })
+  .strict();
+export type PlanRootTally = z.infer<typeof PlanRootTallySchema>;
+
+function isTimeZone(tz: string): boolean {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export const PlanTreeQuerySchema = z
+  .object({
+    closedSince: z
+      .string()
+      .datetime({ offset: true })
+      .optional()
+      .describe(
+        'Leave out done nodes closed before this instant, unless a node kept sits under one.',
+      ),
+    tz: z
+      .string()
+      .min(1)
+      .max(64)
+      .refine(isTimeZone, { message: 'tz is an IANA time zone, e.g. Europe/Paris.' })
+      .optional()
+      .describe('The time zone `doneByDay` counts days in; UTC when absent.'),
+  })
+  .strict();
+export type PlanTreeQuery = z.infer<typeof PlanTreeQuerySchema>;
+
 export const PlanTreeOutputSchema = z.object({
-  /** Every status, open and closed; roots by position, then id. */
+  /** Roots by position, then id; every root, whatever its status or `closedSince`. */
   roots: z.array(PlanTreeNodeSchema),
-  runsTotal: z
-    .number()
-    .int()
-    .min(0)
-    .describe(
-      `The space's runs in flight for any node read; at most ${String(PLAN_TREE_RUNS_LIMIT)} are placed.`,
-    ),
+  /** One per root, in the roots' order. */
+  tallies: z.array(PlanRootTallySchema),
   truncated: PlanNodeListTruncationSchema.optional().describe(
     'Absent when every node of the space is here; otherwise the walk bound (`depth` or `nodes`) that cut it short.',
   ),
 });
 export type PlanTreeOutput = z.infer<typeof PlanTreeOutputSchema>;
+
+/** Which board column a node stands in. */
+export type PlanBoardColumn = 'next' | 'progress' | 'decide' | 'done' | 'dropped';
+
+/**
+ * The board's one rule for a node's column, read by the tallies and the page
+ * alike. An open `decide` node, and a node `blocked` on a person, need the operator.
+ */
+export function planBoardColumn(node: {
+  kind: PlanNodeKind;
+  status: PlanNodeStatus;
+}): PlanBoardColumn {
+  if (node.status === 'done') return 'done';
+  if (node.status === 'dropped') return 'dropped';
+  if (node.kind === 'decide' || node.status === 'blocked') return 'decide';
+  return node.status === 'waiting' ? 'next' : 'progress';
+}
+
+// ============================================================================
+// One node for the board's rail, its links paged (Plan 322 P3.3)
+// ============================================================================
+
+export const PLAN_NODE_DETAIL_LINKS_DEFAULT_LIMIT = 50;
+export const PLAN_NODE_DETAIL_LINKS_MAX_LIMIT = 200;
+
+export const PlanNodeDetailQuerySchema = z
+  .object({
+    linkKind: PlanNodeLinkKindSchema.optional().describe('Only links of this kind.'),
+    cursor: z
+      .string()
+      .min(1)
+      .max(4096)
+      .optional()
+      .describe('`nextCursor` of the page before; absent for the newest page.'),
+    limit: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(PLAN_NODE_DETAIL_LINKS_MAX_LIMIT)
+      .default(PLAN_NODE_DETAIL_LINKS_DEFAULT_LIMIT),
+  })
+  .strict();
+export type PlanNodeDetailQuery = z.infer<typeof PlanNodeDetailQuerySchema>;
+
+export const PlanNodeDetailOutputSchema = z.object({
+  node: PlanNodeSchema,
+  /** Ordered by position, at most `PLAN_NODE_CHILDREN_LIMIT`. */
+  children: z.array(PlanNodeSummarySchema),
+  childrenTotal: z.number().int().min(0),
+  /** One page of links, newest first, of `linkKind` where one was named. */
+  links: z.array(PlanNodeLinkSchema),
+  /** Every link of `linkKind` — or of any kind — the node holds. */
+  linksTotal: z.number().int().min(0),
+  nextCursor: z.string().optional().describe('Absent on the last page.'),
+  /** The runs in flight for this node and every node under it, newest first. */
+  runs: z.array(PlanNodeRunSchema),
+  runsTotal: z.number().int().min(0),
+});
+export type PlanNodeDetailOutput = z.infer<typeof PlanNodeDetailOutputSchema>;
 
 // ============================================================================
 // The operator's writes (Plan 322 P3.2)

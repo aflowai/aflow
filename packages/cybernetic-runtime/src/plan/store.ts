@@ -1,19 +1,10 @@
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import { and, asc, desc, eq, gt, inArray, isNull, lt, or, sql, type SQL } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 import {
-  and,
-  asc,
-  desc,
-  eq,
-  inArray,
-  isNotNull,
-  isNull,
-  lte,
-  or,
-  sql,
-  type SQL,
-} from 'drizzle-orm';
-import {
+  PLAN_NODE_GOAL_HEAD_MAX_CHARS,
   PLAN_NODE_POSITION_MAX,
+  PLAN_REVIEW_WORKFLOW_SLUGS,
   PLAN_TREE_DEPTH_LIMIT,
   type PlanNode,
   type PlanNodeKind,
@@ -103,10 +94,43 @@ export interface NewPlanNodeLink {
   label: string | null;
 }
 
-/** What a summary leaves out of a closed node: how it ended, and when. */
-export interface PlanNodeClosing {
-  outcome?: string;
+/** What a board card carries of a node past its summary, read from its own row. */
+export interface PlanNodeBoardFacts {
+  createdAt: string;
   closedAt?: string;
+  /** The goal's first `PLAN_NODE_GOAL_HEAD_MAX_CHARS` characters. */
+  goalHead: string;
+}
+
+/** A node's links counted by kind, and its review rounds among its run links. */
+export interface PlanNodeLinkTally {
+  runs: number;
+  pullRequests: number;
+  findings: number;
+  documents: number;
+  rounds: number;
+}
+
+/** A node's newest pull request link, and the `merge` link to the same pull request if it holds one. */
+export interface PlanNodeNewestPullRequest {
+  ref: string;
+  merge: PlanNodeLink | null;
+}
+
+/** Where a page of links ends: the last link's key, its time at the database's own precision. */
+export interface PlanLinkPageKey {
+  at: string;
+  kind: PlanNodeLinkKind;
+  ref: string;
+}
+
+export interface PlanLinkPage {
+  /** Newest first; ties by kind, then ref. */
+  links: PlanNodeLink[];
+  /** Every link of the kind asked for (or of any kind) the node holds. */
+  total: number;
+  /** Absent on the last page. */
+  next?: PlanLinkPageKey;
 }
 
 export type PlanNodeLinkInsert =
@@ -179,17 +203,32 @@ export interface PlanNodeStore {
     kind: PlanNodeLinkKind,
     ref: string,
   ): Promise<PlanNodeLink | null>;
-  /** The outcome and closing time of each of `nodeIds` holding either; a node with neither is absent. */
-  closingsOf(spaceId: string, nodeIds: readonly string[]): Promise<Map<string, PlanNodeClosing>>;
   /**
-   * Each of `nodeIds`'s newest `limit` links, newest first, and how many it
-   * holds; a node with none is absent.
+   * One page of the node's links, newest first, of `kind` where one is named,
+   * after `after` — the `next` of the page before.
    */
-  listLinksOfEach(
+  pageLinks(
+    spaceId: string,
+    nodeId: string,
+    page: { kind?: PlanNodeLinkKind; after?: PlanLinkPageKey; limit: number },
+  ): Promise<PlanLinkPage>;
+  /** Each of `nodeIds`'s creation, closing and goal head; a node not in the space is absent. */
+  boardFactsOf(
     spaceId: string,
     nodeIds: readonly string[],
-    limit: number,
-  ): Promise<Map<string, { links: PlanNodeLink[]; total: number }>>;
+  ): Promise<Map<string, PlanNodeBoardFacts>>;
+  /** Each of `nodeIds`'s links counted, in one aggregate; a node with none is absent. */
+  linkTalliesOf(
+    spaceId: string,
+    nodeIds: readonly string[],
+  ): Promise<Map<string, PlanNodeLinkTally>>;
+  /** Each of `nodeIds`'s newest pull request link; a node with none is absent. */
+  newestPullRequestsOf(
+    spaceId: string,
+    nodeIds: readonly string[],
+  ): Promise<Map<string, PlanNodeNewestPullRequest>>;
+  /** How many runs, running or paused, serve each of `nodeIds` itself; eval trials never. */
+  inFlightRunCountsOf(spaceId: string, nodeIds: readonly string[]): Promise<Map<string, number>>;
   /** The running and paused runs serving any of `nodeIds`, newest first; eval trials never. */
   listRunsServing(
     spaceId: string,
@@ -590,72 +629,186 @@ export function createPlanNodeStore(db: PostgresJsDatabase, tenantId: string): P
         return row ? rowToPlanNodeLink(row) : null;
       }),
 
-    closingsOf: (spaceId, nodeIds) =>
+    pageLinks: (spaceId, nodeId, page) =>
       inTenant(async (tx) => {
-        const closings = new Map<string, PlanNodeClosing>();
-        if (nodeIds.length === 0) return closings;
+        const ofNode = and(
+          eq(planNodeLinks.spaceId, spaceId),
+          eq(planNodeLinks.nodeId, nodeId),
+          page.kind !== undefined ? eq(planNodeLinks.kind, page.kind) : undefined,
+        );
+        const after = page.after;
+        // The key's time is the column's own text, so a tie at the microsecond
+        // compares equal rather than falling either side of a millisecond.
+        const afterKey =
+          after === undefined
+            ? undefined
+            : or(
+                lt(planNodeLinks.createdAt, sql`${after.at}::timestamptz`),
+                and(
+                  eq(planNodeLinks.createdAt, sql`${after.at}::timestamptz`),
+                  or(
+                    gt(planNodeLinks.kind, after.kind),
+                    and(eq(planNodeLinks.kind, after.kind), gt(planNodeLinks.ref, after.ref)),
+                  ),
+                ),
+              );
         const rows = await tx
-          .select({ id: planNodes.id, outcome: planNodes.outcome, closedAt: planNodes.closedAt })
-          .from(planNodes)
-          .where(
-            and(
-              eq(planNodes.spaceId, spaceId),
-              inArray(planNodes.id, [...nodeIds]),
-              or(isNotNull(planNodes.outcome), isNotNull(planNodes.closedAt)),
-            ),
-          );
-        for (const row of rows) {
-          closings.set(row.id, {
-            ...(row.outcome != null ? { outcome: row.outcome } : {}),
-            ...(row.closedAt != null ? { closedAt: new Date(row.closedAt).toISOString() } : {}),
-          });
-        }
-        return closings;
-      }),
-
-    listLinksOfEach: (spaceId, nodeIds, limit) =>
-      inTenant(async (tx) => {
-        const byNode = new Map<string, { links: PlanNodeLink[]; total: number }>();
-        if (nodeIds.length === 0) return byNode;
-        const ranked = tx
           .select({
             nodeId: planNodeLinks.nodeId,
+            spaceId: planNodeLinks.spaceId,
             kind: planNodeLinks.kind,
             ref: planNodeLinks.ref,
             label: planNodeLinks.label,
             createdAt: planNodeLinks.createdAt,
-            rank: sql<number>`(row_number() over (partition by ${planNodeLinks.nodeId} order by ${planNodeLinks.createdAt} desc, ${planNodeLinks.kind}, ${planNodeLinks.ref}))::int`.as(
-              'rank',
-            ),
-            total: sql<number>`(count(*) over (partition by ${planNodeLinks.nodeId}))::int`.as(
-              'total',
-            ),
+            at: sql<string>`${planNodeLinks.createdAt}::text`,
+          })
+          .from(planNodeLinks)
+          .where(and(ofNode, afterKey))
+          .orderBy(desc(planNodeLinks.createdAt), asc(planNodeLinks.kind), asc(planNodeLinks.ref))
+          .limit(page.limit + 1);
+        const [count] = await tx
+          .select({ total: sql<number>`count(*)::int` })
+          .from(planNodeLinks)
+          .where(ofNode);
+        const shown = rows.slice(0, page.limit);
+        const last = shown.at(-1);
+        return {
+          links: shown.map(({ at: _at, ...row }) =>
+            rowToPlanNodeLink({ ...row, createdAt: new Date(row.createdAt) }),
+          ),
+          total: count?.total ?? 0,
+          ...(rows.length > page.limit && last !== undefined
+            ? { next: { at: last.at, kind: last.kind as PlanNodeLinkKind, ref: last.ref } }
+            : {}),
+        };
+      }),
+
+    boardFactsOf: (spaceId, nodeIds) =>
+      inTenant(async (tx) => {
+        const facts = new Map<string, PlanNodeBoardFacts>();
+        if (nodeIds.length === 0) return facts;
+        const rows = await tx
+          .select({
+            id: planNodes.id,
+            createdAt: planNodes.createdAt,
+            closedAt: planNodes.closedAt,
+            // The head only: a board must not carry every goal in the space.
+            goalHead: sql<string>`left(${planNodes.goal}, ${PLAN_NODE_GOAL_HEAD_MAX_CHARS})`,
+          })
+          .from(planNodes)
+          .where(and(eq(planNodes.spaceId, spaceId), inArray(planNodes.id, [...nodeIds])));
+        for (const row of rows) {
+          facts.set(row.id, {
+            createdAt: new Date(row.createdAt).toISOString(),
+            ...(row.closedAt != null ? { closedAt: new Date(row.closedAt).toISOString() } : {}),
+            goalHead: row.goalHead,
+          });
+        }
+        return facts;
+      }),
+
+    linkTalliesOf: (spaceId, nodeIds) =>
+      inTenant(async (tx) => {
+        const tallies = new Map<string, PlanNodeLinkTally>();
+        if (nodeIds.length === 0) return tallies;
+        const ofKind = (kind: PlanNodeLinkKind) =>
+          sql<number>`(count(*) filter (where ${planNodeLinks.kind} = ${kind}))::int`;
+        const reviewSlugs = sql.join(
+          PLAN_REVIEW_WORKFLOW_SLUGS.map((slug) => sql`${slug}`),
+          sql`, `,
+        );
+        const rows = await tx
+          .select({
+            nodeId: planNodeLinks.nodeId,
+            runs: ofKind('run'),
+            pullRequests: ofKind('pull_request'),
+            findings: ofKind('finding'),
+            documents: ofKind('document'),
+            rounds: sql<number>`(count(*) filter (where ${planNodeLinks.kind} = 'run' and split_part(${planNodeLinks.label}, ' ', 1) in (${reviewSlugs})))::int`,
           })
           .from(planNodeLinks)
           .where(
             and(eq(planNodeLinks.spaceId, spaceId), inArray(planNodeLinks.nodeId, [...nodeIds])),
           )
-          .as('ranked');
+          .groupBy(planNodeLinks.nodeId);
+        for (const { nodeId, ...tally } of rows) tallies.set(nodeId, tally);
+        return tallies;
+      }),
+
+    newestPullRequestsOf: (spaceId, nodeIds) =>
+      inTenant(async (tx) => {
+        const newest = new Map<string, PlanNodeNewestPullRequest>();
+        if (nodeIds.length === 0) return newest;
+        const merges = alias(planNodeLinks, 'merges');
         const rows = await tx
-          .select()
-          .from(ranked)
-          .where(lte(ranked.rank, limit))
-          .orderBy(asc(ranked.nodeId), asc(ranked.rank));
-        for (const row of rows) {
-          const held = byNode.get(row.nodeId) ?? { links: [], total: row.total };
-          held.links.push(
-            rowToPlanNodeLink({
-              nodeId: row.nodeId,
-              spaceId,
-              kind: row.kind,
-              ref: row.ref,
-              label: row.label,
-              createdAt: new Date(row.createdAt),
-            }),
+          .selectDistinctOn([planNodeLinks.nodeId], {
+            nodeId: planNodeLinks.nodeId,
+            ref: planNodeLinks.ref,
+            merge: {
+              kind: merges.kind,
+              ref: merges.ref,
+              label: merges.label,
+              createdAt: merges.createdAt,
+            },
+          })
+          .from(planNodeLinks)
+          .leftJoin(
+            merges,
+            and(
+              eq(merges.nodeId, planNodeLinks.nodeId),
+              eq(merges.kind, 'merge'),
+              eq(merges.ref, planNodeLinks.ref),
+            ),
+          )
+          .where(
+            and(
+              eq(planNodeLinks.spaceId, spaceId),
+              eq(planNodeLinks.kind, 'pull_request'),
+              inArray(planNodeLinks.nodeId, [...nodeIds]),
+            ),
+          )
+          .orderBy(
+            asc(planNodeLinks.nodeId),
+            desc(planNodeLinks.createdAt),
+            asc(planNodeLinks.ref),
           );
-          byNode.set(row.nodeId, held);
+        for (const row of rows) {
+          newest.set(row.nodeId, {
+            ref: row.ref,
+            merge:
+              row.merge === null
+                ? null
+                : rowToPlanNodeLink({
+                    nodeId: row.nodeId,
+                    spaceId,
+                    kind: row.merge.kind,
+                    ref: row.merge.ref,
+                    label: row.merge.label,
+                    createdAt: new Date(row.merge.createdAt),
+                  }),
+          });
         }
-        return byNode;
+        return newest;
+      }),
+
+    inFlightRunCountsOf: (spaceId, nodeIds) =>
+      inTenant(async (tx) => {
+        const counts = new Map<string, number>();
+        if (nodeIds.length === 0) return counts;
+        const rows = await tx
+          .select({ nodeId: workflowRuns.planNodeId, total: sql<number>`count(*)::int` })
+          .from(workflowRuns)
+          .where(
+            and(
+              eq(workflowRuns.spaceId, spaceId),
+              inArray(workflowRuns.planNodeId, [...nodeIds]),
+              inArray(workflowRuns.status, [...PLAN_NODE_RUN_STATUSES]),
+              isNull(workflowRuns.evalBatchId),
+            ),
+          )
+          .groupBy(workflowRuns.planNodeId);
+        for (const row of rows) if (row.nodeId !== null) counts.set(row.nodeId, row.total);
+        return counts;
       }),
 
     listRunsServing: (spaceId, nodeIds, limit) =>

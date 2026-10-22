@@ -226,6 +226,18 @@ export function mergeNoteHead(url: string, mergeCommitSha?: string | null): stri
   return `Merged ${url}${mergeCommitSha ? ` at ${mergeCommitSha}` : ''}`;
 }
 
+/**
+ * A `merge` link's label: when the pull request merged and, where GitHub named
+ * it, as which commit. `mergeShaOf` reads the commit back for the board.
+ */
+export function mergeLinkLabel(mergedAt: string, mergeCommitSha?: string | null): string {
+  return `merged ${mergeCommitSha ? `as ${mergeCommitSha} ` : ''}at ${mergedAt}`;
+}
+
+export function mergeShaOf(label: string | undefined): string | undefined {
+  return /^merged as (\S+) at /.exec(label ?? '')?.[1];
+}
+
 function wait(
   cause: PlanStreamWaitCause,
   reason: string,
@@ -465,7 +477,7 @@ export function decideStreamFiring(facts: PlanStreamFacts): PlanNodeNextOutput {
             nodeId: node.nodeId,
             kind: 'merge',
             ref: link.ref,
-            label: `merged ${answer.mergeCommitSha ? `as ${answer.mergeCommitSha} ` : ''}at ${mergedAt}`,
+            label: mergeLinkLabel(mergedAt, answer.mergeCommitSha),
           },
         };
       }

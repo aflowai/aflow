@@ -56,11 +56,13 @@ where it finds its stream's work in flight. When the round ends, `plan.node.upda
 its note, against the revision the conversation read: a node another conversation wrote
 meanwhile is refused with its current state rather than overwritten, and a node is marked
 `done` only with the outcome that met its criteria. The operator reads the same tree on the
-space's **Plan** page (`GET /v1/spaces/:spaceId/plan`): every node, its outcome, its links and
-the runs in flight for it, with no Helmsman turn needed to ask. The operator writes it there
-too (`PATCH /v1/spaces/:spaceId/plan/nodes/:nodeId`): **Mark done** with an outcome, or
+space's **Plan** page, a board with a tab per plan (`GET /v1/spaces/:spaceId/plan`: every
+node with its counts, review rounds and newest pull request, done nodes by day), and opens a
+node in the side rail (`GET …/plan/nodes/:nodeId`, its links paged) for its goal, outcome,
+runs and findings, with no Helmsman turn needed to ask. The operator writes it from the rail
+(`PATCH /v1/spaces/:spaceId/plan/nodes/:nodeId`): **Mark done** with an outcome, or
 **Drop** a node and the branch under it, through the same engine and against the revision of the
-node the form read and shows — its goal and criteria above the field — so a conversation and
+node the rail read and shows — its goal and criteria above the field — so a conversation and
 the page cannot overwrite each other. Only a person signed in writes there or answers a
 decision; an API key, the MCP server's included, is refused. A node of kind
 `decide` is the operator's: it raises a **Decide** item in the Action Center, the answer is

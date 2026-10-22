@@ -1,5 +1,6 @@
 export * from './store.js';
 export * from './tree.js';
+export * from './board.js';
 export * from './operations.js';
 export * from './attention.js';
 export * from './stream.js';

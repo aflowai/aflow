@@ -1,11 +1,10 @@
 /**
- * The plan store's reads behind the operator's plan page, against a real
- * database: `listLinksOfEach` ranks each node's links by a window over
- * `plan_node_links`, selected from a subquery, and `closingsOf` reads how
- * closed nodes ended. The in-memory store answers both by other means, so
- * only Postgres shows the SQL does what the engine relies on: each node cut
- * to its own newest links with its own total, and a node's closing read only
- * where it has one. Gated on DATABASE_URL like every pg test.
+ * The plan store's reads behind the operator's board (Plan 322 P3.3), against
+ * a real database: `pageLinks` pages a node's links by a keyset whose time is
+ * the column's own text, the board reads count links in one aggregate and
+ * read each node's newest pull request with its merge by DISTINCT ON. The
+ * in-memory store answers them by other means, so only Postgres shows the
+ * SQL does what the engine relies on. Gated on DATABASE_URL like every pg test.
  */
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -113,137 +112,123 @@ describeDb('plan store reads for the operator’s plan (real DB)', () => {
     await handle.close();
   });
 
-  describe('listLinksOfEach', () => {
-    it('cuts each node to its own newest links, newest first, with its own total', async () => {
+  describe('pageLinks', () => {
+    it('pages a node’s links newest first, ties by kind then ref, each page after the last key', async () => {
       const busy = await node('busy');
-      const quiet = await node('quiet');
-      const bare = await node('bare');
-      for (let i = 0; i < 5; i++) {
-        await linkAt(busy.nodeId, 'finding', `F${String(i)}`, `2026-10-05T0${String(i)}:00:00Z`);
-      }
-      await linkAt(quiet.nodeId, 'finding', 'Q0', '2026-10-05T09:00:00Z');
+      const at = '2026-10-05T12:00:00.123456Z';
+      await linkAt(busy.nodeId, 'run', randomUUID(), '2026-10-05T11:00:00Z');
+      await linkAt(busy.nodeId, 'pull_request', PR_URL, at);
+      await linkAt(busy.nodeId, 'finding', 'F-b', at);
+      await linkAt(busy.nodeId, 'finding', 'F-a', at);
 
-      const byNode = await store.listLinksOfEach(
-        SPACE_ID,
-        [busy.nodeId, quiet.nodeId, bare.nodeId],
-        3,
-      );
-
-      expect(byNode.get(busy.nodeId)?.total).toBe(5);
-      expect(byNode.get(busy.nodeId)?.links.map((l) => l.ref)).toEqual(['F4', 'F3', 'F2']);
-      // The limit is per node: the busy node's links do not use up the quiet one's.
-      expect(byNode.get(quiet.nodeId)).toEqual({
-        links: [
-          {
-            nodeId: quiet.nodeId,
-            kind: 'finding',
-            ref: 'Q0',
-            createdAt: '2026-10-05T09:00:00.000Z',
-          },
-        ],
-        total: 1,
+      const first = await store.pageLinks(SPACE_ID, busy.nodeId, { limit: 2 });
+      const second = await store.pageLinks(SPACE_ID, busy.nodeId, {
+        limit: 2,
+        ...(first.next !== undefined ? { after: first.next } : {}),
       });
-      expect(byNode.has(bare.nodeId)).toBe(false);
-    });
 
-    it('orders links written at one instant by kind and then ref, as one read does every time', async () => {
-      const tied = await node('tied');
-      const at = '2026-10-05T12:00:00Z';
-      await linkAt(tied.nodeId, 'run', randomUUID(), '2026-10-05T11:00:00Z');
-      await linkAt(tied.nodeId, 'pull_request', PR_URL, at);
-      await linkAt(tied.nodeId, 'finding', 'F-b', at);
-      await linkAt(tied.nodeId, 'finding', 'F-a', at);
-
-      const byNode = await store.listLinksOfEach(SPACE_ID, [tied.nodeId], 3);
-
-      expect(byNode.get(tied.nodeId)?.links.map((l) => [l.kind, l.ref])).toEqual([
+      expect(first.links.map((l) => [l.kind, l.ref])).toEqual([
         ['finding', 'F-a'],
         ['finding', 'F-b'],
-        ['pull_request', PR_URL],
       ]);
-      expect(byNode.get(tied.nodeId)?.total).toBe(4);
+      expect(first.total).toBe(4);
+      // The key keeps the microseconds the column holds, so the tie is not split by them.
+      expect(first.next?.at).toContain('.123456');
+      expect(second.links.map((l) => l.kind)).toEqual(['pull_request', 'run']);
+      expect(second.next).toBeUndefined();
     });
 
-    it('reads what the per-node read does, label included, for every node at once', async () => {
+    it('reads one kind with that kind’s total, label included, and only the space asked about', async () => {
       const a = await node('a');
-      const b = await node('b');
+      const elsewhere = await node('elsewhere', OTHER_SPACE_ID);
       await link(a.nodeId, 'A1', SPACE_ID, 'first finding');
       await link(a.nodeId, 'A2');
-      await link(b.nodeId, 'B1');
-
-      const byNode = await store.listLinksOfEach(SPACE_ID, [a.nodeId, b.nodeId], 10);
-
-      for (const held of [a, b]) {
-        expect(byNode.get(held.nodeId)).toEqual(await store.listLinks(SPACE_ID, held.nodeId, 10));
-      }
-      expect(byNode.get(a.nodeId)?.links.find((l) => l.ref === 'A1')?.label).toBe('first finding');
-    });
-
-    it('reads only the space asked about, and only the nodes named', async () => {
-      const here = await node('here');
-      const unnamed = await node('unnamed');
-      const elsewhere = await node('elsewhere', OTHER_SPACE_ID);
-      await link(here.nodeId, 'H1');
-      await link(unnamed.nodeId, 'U1');
+      await linkAt(a.nodeId, 'document', '/notes.md', '2026-10-05T09:00:00Z');
       await link(elsewhere.nodeId, 'E1', OTHER_SPACE_ID);
 
-      const byNode = await store.listLinksOfEach(SPACE_ID, [here.nodeId, elsewhere.nodeId], 10);
+      const findings = await store.pageLinks(SPACE_ID, a.nodeId, { kind: 'finding', limit: 10 });
 
-      expect([...byNode.keys()]).toEqual([here.nodeId]);
-      expect(await store.listLinksOfEach(SPACE_ID, [], 10)).toEqual(new Map());
+      expect(findings.total).toBe(2);
+      expect(findings.links.find((l) => l.ref === 'A1')?.label).toBe('first finding');
+      expect((await store.pageLinks(SPACE_ID, elsewhere.nodeId, { limit: 10 })).total).toBe(0);
     });
   });
 
-  describe('closingsOf', () => {
-    it('reads how a done and a dropped node ended, and when', async () => {
+  describe('boardFactsOf', () => {
+    it('reads when each node was made and closed and the head of its goal, for the nodes named', async () => {
       const done = await close(await node('done'), 'done', `Merged ${PR_URL}.`);
-      const dropped = await close(await node('dropped'), 'dropped', 'Superseded by P3.2.');
-
-      const closings = await store.closingsOf(SPACE_ID, [done.nodeId, dropped.nodeId]);
-
-      expect(closings.get(done.nodeId)).toEqual({
-        outcome: `Merged ${PR_URL}.`,
-        closedAt: done.closedAt,
-      });
-      expect(closings.get(dropped.nodeId)).toEqual({
-        outcome: 'Superseded by P3.2.',
-        closedAt: dropped.closedAt,
-      });
-      expect(Number.isNaN(Date.parse(closings.get(done.nodeId)?.closedAt ?? ''))).toBe(false);
-    });
-
-    it('leaves out a node that is open, or was reopened, since it holds neither', async () => {
       const open = await node('open');
-      const closed = await close(await node('reopened'), 'done', 'Met, then not.');
-      const reopened = await updatePlanNode(ctx(), {
-        nodeId: closed.nodeId,
-        expectedRevision: closed.revision,
-        status: 'active',
-      });
-      if (!reopened.ok) throw new Error(reopened.message);
-
-      const closings = await store.closingsOf(SPACE_ID, [open.nodeId, closed.nodeId]);
-
-      expect(closings.size).toBe(0);
-    });
-
-    it('reads only the space asked about, and only the nodes named', async () => {
-      const named = await close(await node('named'), 'done', 'Named.');
-      const unnamed = await close(await node('unnamed'), 'done', 'Not named.');
       const elsewhere = await node('elsewhere', OTHER_SPACE_ID);
-      const elsewhereClosed = await updatePlanNode(ctx(OTHER_SPACE_ID), {
-        nodeId: elsewhere.nodeId,
-        expectedRevision: elsewhere.revision,
-        status: 'done',
-        outcome: 'In another space.',
+
+      const facts = await store.boardFactsOf(SPACE_ID, [
+        done.nodeId,
+        open.nodeId,
+        elsewhere.nodeId,
+      ]);
+
+      expect(facts.get(done.nodeId)).toEqual({
+        createdAt: done.createdAt,
+        closedAt: done.closedAt,
+        goalHead: 'Be read back as written.',
       });
-      if (!elsewhereClosed.ok) throw new Error(elsewhereClosed.message);
+      expect(facts.get(open.nodeId)).not.toHaveProperty('closedAt');
+      expect(facts.has(elsewhere.nodeId)).toBe(false);
+      expect(await store.boardFactsOf(SPACE_ID, [])).toEqual(new Map());
+    });
+  });
 
-      const closings = await store.closingsOf(SPACE_ID, [named.nodeId, elsewhere.nodeId]);
+  describe('linkTalliesOf', () => {
+    it('counts each node’s links by kind and its review rounds in one aggregate', async () => {
+      const busy = await node('busy');
+      const bare = await node('bare');
+      await linkAt(busy.nodeId, 'finding', 'F1', '2026-10-05T09:00:00Z');
+      await linkAt(busy.nodeId, 'document', '/d.md', '2026-10-05T09:00:00Z');
+      await linkAt(busy.nodeId, 'pull_request', PR_URL, '2026-10-05T09:00:00Z');
+      for (const label of [
+        'commission-change completed',
+        'review-local-changes completed',
+        'review-pull-request failed',
+      ]) {
+        const result = await linkPlanNode(ctx(), {
+          nodeId: busy.nodeId,
+          kind: 'run',
+          ref: randomUUID(),
+          label,
+        });
+        if (!result.ok) throw new Error(result.message);
+      }
 
-      expect([...closings.keys()]).toEqual([named.nodeId]);
-      expect(closings.has(unnamed.nodeId)).toBe(false);
-      expect(await store.closingsOf(SPACE_ID, [])).toEqual(new Map());
+      const tallies = await store.linkTalliesOf(SPACE_ID, [busy.nodeId, bare.nodeId]);
+
+      expect(tallies.get(busy.nodeId)).toEqual({
+        runs: 3,
+        pullRequests: 1,
+        findings: 1,
+        documents: 1,
+        rounds: 2,
+      });
+      expect(tallies.has(bare.nodeId)).toBe(false);
+    });
+  });
+
+  describe('newestPullRequestsOf', () => {
+    it('reads each node’s newest pull request with the merge of that pull request, if linked', async () => {
+      const merged = await node('merged');
+      const open = await node('open');
+      const older = 'https://github.com/aflowai/aflow/pull/170';
+      await linkAt(merged.nodeId, 'pull_request', older, '2026-10-05T08:00:00Z');
+      await linkAt(merged.nodeId, 'pull_request', PR_URL, '2026-10-05T09:00:00Z');
+      await linkAt(merged.nodeId, 'merge', PR_URL, '2026-10-05T10:00:00Z');
+      await linkAt(open.nodeId, 'pull_request', PR_URL, '2026-10-05T09:00:00Z');
+      await linkAt(open.nodeId, 'merge', older, '2026-10-05T10:00:00Z');
+
+      const newest = await store.newestPullRequestsOf(SPACE_ID, [merged.nodeId, open.nodeId]);
+
+      expect(newest.get(merged.nodeId)).toMatchObject({
+        ref: PR_URL,
+        merge: { kind: 'merge', ref: PR_URL },
+      });
+      expect(newest.get(open.nodeId)).toEqual({ ref: PR_URL, merge: null });
     });
   });
 });

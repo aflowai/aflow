@@ -1,60 +1,155 @@
 'use client';
 
 /**
- * The space's plan (Plan 322 P3): the trees the Helmsman works through, with
- * what is done, what is in flight and what each node's work left behind.
- *
- * Until this page the plan was visible only to the Helmsman, in its attention
- * block, and to whoever asked it. It reads the one authority the Helmsman's
- * operations write, so the operator and the agent see the same tree — and
- * writes through it: the operator marks a node done or drops a branch without
- * a Helmsman turn, against the revision the page read (P3.2).
+ * The space's plan (Plan 322 P3.3): a board. A tab per plan, five columns in
+ * which the column is the status, a card per step carrying labels only, and
+ * a side rail that reads a step on demand and holds the operator's own
+ * controls — mark done, decide, drop (P3.2). The tree it reads carries counts
+ * rather than links, and done steps only for the Done folds open.
  */
+import { useEffect, useState } from 'react';
 import {
-  Card,
-  CardBody,
+  Badge,
+  Button,
   Column,
+  Dialog,
   Heading,
-  HelperText,
   PageContainer,
+  Row,
+  Tab,
+  TabList,
+  Tabs,
   Text,
+  useMediaQuery,
 } from '@aflow/design-system';
 import type { PlanNodeUpdateOutput, PlanTreeNode, PlanTreeOutput } from '@aflow/schemas';
 import { useSpaceFromRoute } from '../components/providers.js';
 import { useApiMutation, useApiQuery } from '../hooks/useApiQuery.js';
+import { PlanBoard } from '../components/plan/PlanBoard.js';
+import { PlanRail, RAIL_WIDTH } from '../components/plan/PlanRail.js';
+import type {
+  PlanNodeCloseAnswer,
+  PlanNodeCloseRequest,
+} from '../components/plan/PlanNodeCloseControl.js';
 import {
-  PlanTree,
-  type PlanNodeCloseAnswer,
-  type PlanNodeCloseRequest,
-} from '../components/plan/PlanTree.js';
-
-function placedRuns(nodes: readonly PlanTreeNode[]): number {
-  return nodes.reduce((sum, node) => sum + node.runs.length + placedRuns(node.children), 0);
-}
+  doneCardsSince,
+  localDay,
+  phaseLabel,
+  planCards,
+  planDoneGroups,
+  readerTimeZone,
+  startOfDay,
+  type PlanCard,
+  type PlanDoneGroup,
+  type PlanDoneWindow,
+  type PlanOwnerFilter,
+} from '../lib/plan-board.js';
 
 const TRUNCATION_LINE: Record<'limit' | 'depth' | 'nodes', (value: number) => string> = {
-  limit: (value) => `Only the first ${String(value)} nodes are shown.`,
-  depth: (value) => `Nodes more than ${String(value)} levels below their root are not shown.`,
-  nodes: (value) => `This plan holds more than ${String(value)} nodes; the rest are not shown.`,
+  limit: (value) => `First ${String(value)} steps`,
+  depth: (value) => `Steps deeper than ${String(value)} levels not shown`,
+  nodes: (value) => `First ${String(value)} steps`,
 };
+
+const OWNER_OPTIONS: ReadonlyArray<{ id: PlanOwnerFilter; label: string }> = [
+  { id: 'all', label: 'All' },
+  { id: 'loop', label: 'Loop' },
+  { id: 'operator', label: 'Operator' },
+];
+
+const WINDOW_OPTIONS: ReadonlyArray<{ id: PlanDoneWindow; label: string }> = [
+  { id: 'today', label: 'Today' },
+  { id: 'week', label: '7 days' },
+  { id: 'all', label: 'All' },
+];
+
+function Segmented<T extends string>({
+  label,
+  options,
+  value,
+  onChange,
+}: {
+  label: string;
+  options: ReadonlyArray<{ id: T; label: string }>;
+  value: T;
+  onChange: (value: T) => void;
+}) {
+  return (
+    <Row gap="xs" align="center" role="group" aria-label={label} data-plan-filter={label}>
+      <Text size="xs" variant="muted">
+        {label}
+      </Text>
+      {options.map((option) => (
+        <Button
+          key={option.id}
+          size="sm"
+          variant={option.id === value ? 'secondary' : 'ghost'}
+          aria-pressed={option.id === value}
+          onClick={() => {
+            onChange(option.id);
+          }}
+        >
+          {option.label}
+        </Button>
+      ))}
+    </Row>
+  );
+}
+
+const ALL_PHASES = '';
 
 export function SpacePlanPage(): React.ReactNode {
   const routeSpace = useSpaceFromRoute();
   const spaceId = routeSpace?.id ?? '';
   const spaceSlug = routeSpace?.slugFromRoute ?? '';
+  const narrow = useMediaQuery('(max-width: 899px)');
+
+  const [chosenRootId, setChosenRootId] = useState<string | undefined>(undefined);
+  const [phaseId, setPhaseId] = useState<string>(ALL_PHASES);
+  const [owner, setOwner] = useState<PlanOwnerFilter>('all');
+  const [doneWindow, setDoneWindow] = useState<PlanDoneWindow>('all');
+  /** The Done folds open; null until the operator toggles one: the first fold alone. */
+  const [expanded, setExpanded] = useState<ReadonlySet<string> | null>(null);
+  const [selected, setSelected] = useState<{
+    nodeId: string;
+    choosing: 'done' | 'dropped' | null;
+  } | null>(null);
+
+  const today = localDay(new Date());
+  const tz = readerTimeZone();
+  // The last board read: what the done folds are decided from before the
+  // next read, and what stays on screen while a wider done window is read.
+  const [held, setHeld] = useState<{ spaceId: string; data: PlanTreeOutput } | null>(null);
+  const last = held?.spaceId === spaceId ? held.data : undefined;
+
+  const rootOf = (tree: PlanTreeOutput | undefined) =>
+    tree?.roots.find((r) => r.nodeId === chosenRootId) ?? tree?.roots[0];
+  const foldsOf = (tree: PlanTreeOutput | undefined) => {
+    const tally = tree?.tallies.find((t) => t.rootId === rootOf(tree)?.nodeId);
+    return tally ? planDoneGroups(tally.doneByDay, today, doneWindow) : [];
+  };
+  const firstFoldOnly = (groups: readonly PlanDoneGroup[]) =>
+    new Set(groups[0] ? [groups[0].id] : []);
+  const lastGroups = foldsOf(last);
+  const since = doneCardsSince(lastGroups, expanded ?? firstFoldOnly(lastGroups), today);
 
   const { data, isLoading, error, refetch } = useApiQuery<PlanTreeOutput>({
-    key: ['space', spaceId, 'plan'],
-    path: `/spaces/${spaceId}/plan`,
+    key: ['space', spaceId, 'plan', 'board', since, tz],
+    path: `/spaces/${spaceId}/plan?closedSince=${encodeURIComponent(startOfDay(since))}&tz=${encodeURIComponent(tz)}`,
     enabled: spaceId.length > 0,
   });
+  useEffect(() => {
+    if (data !== undefined) setHeld({ spaceId, data });
+  }, [data, spaceId]);
+  const board = data ?? last;
+  const openFolds = expanded ?? firstFoldOnly(foldsOf(board));
 
   const closeNode = useApiMutation<PlanNodeCloseRequest, PlanNodeUpdateOutput>({
     path: ({ nodeId }) => `/spaces/${spaceId}/plan/nodes/${nodeId}`,
     method: 'PATCH',
     serialize: ({ nodeId: _nodeId, ...body }) => JSON.stringify(body),
     invalidate: [['space', spaceId, 'plan']],
-    // The node's own form says why; a toast would say it twice.
+    // The rail's own form says why; a toast would say it twice.
     onError: () => undefined,
   });
 
@@ -63,25 +158,16 @@ export function SpacePlanPage(): React.ReactNode {
       await closeNode.mutateAsync(request);
       return { ok: true };
     } catch (err) {
-      // A refusal on the revision means the tree on screen is stale: read it
+      // A refusal on the revision means the board on screen is stale: read it
       // again so the operator chooses against the node as it now stands.
       if ((err as { status?: unknown }).status === 409) void refetch();
       return { ok: false, message: err instanceof Error ? err.message : String(err) };
     }
   };
 
-  const header = (
-    <Column gap="xs">
-      <Heading level={2}>Plan</Heading>
-      <Text variant="muted">
-        What the Helmsman is working through here: each goal broken into steps, what is done and
-        how, and the work under way for each. Mark a step done or drop it here, and the Helmsman
-        reads the change on its next turn.
-      </Text>
-    </Column>
-  );
+  const header = <Heading level={2}>Plan</Heading>;
 
-  if (isLoading || spaceId.length === 0) {
+  if (board === undefined && (isLoading || spaceId.length === 0)) {
     return (
       <PageContainer>
         <Column gap="lg">
@@ -92,50 +178,177 @@ export function SpacePlanPage(): React.ReactNode {
     );
   }
 
-  if (error) {
+  if (board === undefined) {
     return (
       <PageContainer>
         <Column gap="lg">
           {header}
-          <Text tone="danger">{`The plan could not be read: ${error.message}`}</Text>
+          <Text tone="danger">{`The plan could not be read: ${error?.message ?? 'no answer'}`}</Text>
         </Column>
       </PageContainer>
     );
   }
 
-  const roots = data?.roots ?? [];
-  const unplacedRuns = (data?.runsTotal ?? 0) - placedRuns(roots);
+  const root = rootOf(board);
+  const tally = board.tallies.find((t) => t.rootId === root?.nodeId);
+  if (root === undefined || tally === undefined) {
+    return (
+      <PageContainer>
+        <Column gap="lg">
+          {header}
+          <Text variant="muted">No plan yet</Text>
+        </Column>
+      </PageContainer>
+    );
+  }
+
+  const cards = planCards(root);
+  const selectedCard: PlanCard | undefined = cards.find((c) => c.node.nodeId === selected?.nodeId);
+  const phases = root.children.filter((child: PlanTreeNode) => child.children.length > 0);
+  const phaseFilter = phases.some((p) => p.nodeId === phaseId) ? phaseId : ALL_PHASES;
+
+  const chooseRoot = (rootId: string) => {
+    setChosenRootId(rootId);
+    setPhaseId(ALL_PHASES);
+    setExpanded(null);
+    setSelected(null);
+  };
+  const toggleGroup = (groupId: string) => {
+    const next = new Set(openFolds);
+    if (next.has(groupId)) next.delete(groupId);
+    else next.add(groupId);
+    setExpanded(next);
+  };
+
+  const rail =
+    selectedCard !== undefined && selected !== null ? (
+      <PlanRail
+        key={selectedCard.node.nodeId}
+        node={selectedCard.node}
+        column={selectedCard.column}
+        phase={selectedCard.phase}
+        spaceId={spaceId}
+        spaceSlug={spaceSlug}
+        onClose={onClose}
+        choosing={selected.choosing}
+        onChoose={(choosing) => {
+          setSelected({ nodeId: selectedCard.node.nodeId, choosing });
+        }}
+        onDismiss={() => {
+          setSelected(null);
+        }}
+      />
+    ) : null;
 
   return (
-    <PageContainer>
-      <Column gap="lg">
+    <PageContainer maxWidth="none">
+      <Column gap="md">
         {header}
-        {roots.length === 0 ? (
-          <Card>
-            <CardBody>
-              <Column gap="xs">
-                <Text variant="muted">This space has no plan yet.</Text>
-                <HelperText>
-                  Ask the Helmsman in chat to plan a piece of work, and its steps appear here as it
-                  records them.
-                </HelperText>
-              </Column>
-            </CardBody>
-          </Card>
-        ) : (
-          <Card>
-            <CardBody>
-              <PlanTree roots={roots} spaceSlug={spaceSlug} spaceId={spaceId} onClose={onClose} />
-            </CardBody>
-          </Card>
+        <Row gap="md" align="center" justify="between" wrap>
+          <Tabs value={root.nodeId} onChange={chooseRoot}>
+            <TabList style={{ marginBottom: 0 }}>
+              {board.roots.map((r) => (
+                <Tab
+                  key={r.nodeId}
+                  id={r.nodeId}
+                  count={board.tallies.find((t) => t.rootId === r.nodeId)?.steps ?? 0}
+                >
+                  {r.title}
+                </Tab>
+              ))}
+            </TabList>
+          </Tabs>
+          <Row gap="md" align="center" wrap>
+            {phases.length > 0 && (
+              <Segmented
+                label="Phase"
+                options={[
+                  { id: ALL_PHASES, label: 'All' },
+                  ...phases.map((p) => ({ id: p.nodeId, label: phaseLabel(p.title) })),
+                ]}
+                value={phaseFilter}
+                onChange={setPhaseId}
+              />
+            )}
+            <Segmented label="Owner" options={OWNER_OPTIONS} value={owner} onChange={setOwner} />
+            <Segmented
+              label="Done"
+              options={WINDOW_OPTIONS}
+              value={doneWindow}
+              onChange={(next) => {
+                setDoneWindow(next);
+                setExpanded(null);
+              }}
+            />
+          </Row>
+        </Row>
+        <Column gap="xs">
+          <Text weight="semibold">{root.title}</Text>
+          <Row gap="xs" align="center" wrap data-plan-tally={root.nodeId}>
+            <Badge variant="success">{`${String(tally.done)} done`}</Badge>
+            <Badge variant="running">{`${String(tally.active)} active`}</Badge>
+            <Badge variant="warning">{`${String(tally.decide)} decide`}</Badge>
+            <Badge variant="danger">{`${String(tally.dropped)} dropped`}</Badge>
+          </Row>
+        </Column>
+        {error && (
+          <Text size="sm" tone="danger">{`The plan could not be read: ${error.message}`}</Text>
         )}
-        {data?.truncated !== undefined && (
-          <HelperText>{TRUNCATION_LINE[data.truncated.bound](data.truncated.value)}</HelperText>
+        <Row gap="md" align="start">
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <PlanBoard
+              root={root}
+              tally={tally}
+              filters={{
+                ...(phaseFilter !== ALL_PHASES ? { phaseId: phaseFilter } : {}),
+                owner,
+              }}
+              doneWindow={doneWindow}
+              today={today}
+              expanded={openFolds}
+              onToggleGroup={toggleGroup}
+              selectedId={selectedCard?.node.nodeId}
+              onSelect={(card) => {
+                setSelected({ nodeId: card.node.nodeId, choosing: null });
+              }}
+              onDecide={(card) => {
+                setSelected({ nodeId: card.node.nodeId, choosing: 'done' });
+              }}
+              narrow={narrow}
+            />
+          </div>
+          {rail !== null && !narrow && (
+            <aside
+              aria-label="Step"
+              style={{
+                width: RAIL_WIDTH,
+                flexShrink: 0,
+                position: 'sticky',
+                top: 0,
+                maxHeight: '100vh',
+                overflowY: 'auto',
+                borderLeft: '1px solid var(--color-border-subtle)',
+                paddingLeft: 'var(--space-3)',
+              }}
+            >
+              {rail}
+            </aside>
+          )}
+        </Row>
+        {narrow && (
+          <Dialog
+            open={rail !== null}
+            onClose={() => {
+              setSelected(null);
+            }}
+          >
+            {rail}
+          </Dialog>
         )}
-        {unplacedRuns > 0 && (
-          <HelperText>
-            {`${String(unplacedRuns)} more run${unplacedRuns === 1 ? '' : 's'} in flight for this plan ${unplacedRuns === 1 ? 'is' : 'are'} not shown.`}
-          </HelperText>
+        {board.truncated !== undefined && (
+          <Text size="xs" variant="muted">
+            {TRUNCATION_LINE[board.truncated.bound](board.truncated.value)}
+          </Text>
         )}
       </Column>
     </PageContainer>
