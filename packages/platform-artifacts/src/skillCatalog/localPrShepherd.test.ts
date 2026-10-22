@@ -52,7 +52,12 @@ import { getSkillBundleEntry } from '../skillBundleCatalog.js';
 import { COMMISSION_CHANGE } from './commissionChange.js';
 import { LOCAL_PR_SHEPHERD } from './localPrShepherd.js';
 import { MERGE_ASKED } from './localPrShepherdMerge.js';
-import { SHEPHERD_RULES } from './localPrShepherdRules.js';
+import {
+  BASE_MOVED_MESSAGE,
+  MERGE_REFUSAL_OTHERWISE,
+  MERGE_REFUSAL_RULES,
+  SHEPHERD_RULES,
+} from './localPrShepherdRules.js';
 import { REMEDY_QUESTION, REMEDY_ROUTES, type Remedy } from './localPrShepherdDecisions.js';
 import { BUMP_BRIEF, FIX_BRIEF, MERGE_BRIEF } from './localPrShepherdRemedies.js';
 import { PUBLISH_LOCAL_CHANGES } from './publishLocalChanges.js';
@@ -163,8 +168,16 @@ interface Scenario {
   reviews?: PullRequestReviews;
   /** The newest finished publication of the branch: the verdict its review returned, for the commit it reviewed. */
   publication?: { verdict: string | null; at: string } | 'none';
-  /** How GitHub, or the operator, answers the merge. */
-  merge?: 'merged' | 'refused' | 'declined';
+  /**
+   * How GitHub, or the operator, answers the merge: `refused` is GitHub's 409
+   * on a head that moved, `base-moved` its 405 on a base that moved, and
+   * `not-mergeable` its 405 on a pull request that does not merge.
+   */
+  merge?: 'merged' | 'refused' | 'declined' | 'base-moved' | 'not-mergeable';
+  /** How GitHub answers the merge sent again after a base-moved refusal. */
+  mergeAgain?: 'merged' | 'base-moved';
+  /** The pull request as read again after a refused merge: its head, or the status GitHub answered. */
+  reread?: { headSha?: string; status?: number };
   /**
    * The space's memory of merge outcomes, by path, shared by passes that
    * overlap: what one pass records under the lease, the next one reads.
@@ -369,10 +382,40 @@ function answer(taskId: string, input: Record<string, unknown>, s: Scenario): An
       const merge = s.merge ?? 'merged';
       // A declined approval fails the task as a permission error, so it binds as absent.
       if (merge === 'declined') return { ok: false };
-      return merge === 'refused'
-        ? github({ message: 'Head branch was modified. Review and try the merge again.' }, 409)
-        : github({ sha: MERGE_COMMIT, merged: true, message: 'Pull Request successfully merged' });
+      if (merge === 'refused') {
+        return github(
+          { message: 'Head branch was modified. Review and try the merge again.' },
+          409,
+        );
+      }
+      if (merge === 'base-moved') return github({ message: BASE_MOVED_MESSAGE }, 405);
+      if (merge === 'not-mergeable') {
+        return github({ message: 'Pull Request is not mergeable' }, 405);
+      }
+      return github({
+        sha: MERGE_COMMIT,
+        merged: true,
+        message: 'Pull Request successfully merged',
+      });
     }
+    case 'reread-pr-after-refusal': {
+      if (s.reread?.status !== undefined) {
+        return github({ message: 'Server Error' }, s.reread.status);
+      }
+      return github(
+        LoopPullRequestSchema.parse({
+          ...PULL_REQUEST,
+          ...s.pullRequest,
+          ...(s.reread?.headSha !== undefined ? { headSha: s.reread.headSha } : {}),
+          mergeableState: 'unknown',
+        }),
+      );
+    }
+    case 'merge-again':
+      return (s.mergeAgain ?? 'merged') === 'merged'
+        ? github({ sha: MERGE_COMMIT, merged: true, message: 'Pull Request successfully merged' })
+        : github({ message: BASE_MOVED_MESSAGE }, 405);
+    case 'judge-merge-refusal':
     case 'record-merge':
       return ok({ ...decideByRules(WorkflowRunDecideInputSchema.parse(input)) });
     case 'claim-merge': {
@@ -380,8 +423,18 @@ function answer(taskId: string, input: Record<string, unknown>, s: Scenario): An
       const put = MemoryPutInputSchema.parse(input);
       expect(put.writeMode).toBe('create');
       if (s.claimFails === true || s.mergeOutcomes?.has(put.path) === true) return { ok: false };
-      s.mergeOutcomes?.set(put.path, put.content.inlineJson as Record<string, unknown>);
-      return ok({ id: 'doc-3', path: put.path, version: 1 });
+      const claim = put.content.inlineJson as Record<string, unknown>;
+      s.mergeOutcomes?.set(put.path, claim);
+      return ok({ id: 'doc-3', path: put.path, version: 1, contentHash: hashOf(claim) });
+    }
+    case 'release-merge-claim': {
+      // The delete holds only while the claim is as this pass wrote it.
+      const del = MemoryDeleteInputSchema.parse(input);
+      const path = String(del.target.path);
+      const there = s.mergeOutcomes?.get(path);
+      if (there !== undefined && del.expectedHash !== hashOf(there)) return { ok: false };
+      s.mergeOutcomes?.delete(path);
+      return ok({ id: 'doc-3', path, deleted: true, entryType: 'document' });
     }
     case 'remember-merge-outcome': {
       const put = MemoryPutInputSchema.parse(input);
@@ -1238,17 +1291,25 @@ describe('Local PR Shepherd — it approves nothing', () => {
         (task.inputTemplate as { endpointId?: unknown } | undefined)?.endpointId ===
         'mergePullRequest',
     );
-    expect(merging.map((task) => task.taskId)).toEqual(['merge']);
+    expect(merging.map((task) => task.taskId)).toEqual(['merge', 'merge-again']);
+    const claimed = [
+      "tasks.decide.output.decision == 'merge'",
+      "tasks.claim-merge.status == 'succeeded'",
+    ];
     // On a merge decision, and only where this pass claimed the head under
     // the lease — nothing being recorded for it.
-    expect(merging[0]!.when).toMatchObject({
-      allOf: ["tasks.decide.output.decision == 'merge'", "tasks.claim-merge.status == 'succeeded'"],
+    expect(merging[0]!.when).toMatchObject({ allOf: claimed });
+    // The second only where the first was refused because the base alone moved.
+    expect(merging[1]!.when).toMatchObject({
+      allOf: [...claimed, "tasks.judge-merge-refusal.output.decision == 'base_moved'"],
     });
-    // Squash, pinned to the head read; never retried into a second approval.
-    expect(merging[0]!.inputTemplate).toMatchObject({
-      params: { body: { merge_method: 'squash', sha: { $bind: 'headSha' } } },
-    });
-    expect(merging[0]!.maxAttempts).toBe(1);
+    for (const task of merging) {
+      // Squash, pinned to the head read; never retried into a second approval.
+      expect(task.inputTemplate).toMatchObject({
+        params: { body: { merge_method: 'squash', sha: { $bind: 'headSha' } } },
+      });
+      expect(task.maxAttempts).toBe(1);
+    }
 
     // The one rule that decides `merge` is the last of the merge rules, and
     // the first of them leaves every pull request of a folder not `when-green`.
@@ -1547,10 +1608,119 @@ describe('Local PR Shepherd — it merges what the posture allows', () => {
       (refused.inputs.get('handoff-edit')!['params'] as { body: { body: string } }).body.body,
     );
     expect(body).toMatch(/GitHub answered 409: Head branch was modified/);
+    // A head-invalid refusal is attempted once, and judged so.
+    expect(refused.outputs.get('judge-merge-refusal')?.['decision']).toBe('head_invalid');
+    expect(refused.statuses.get('merge-again')).toBe('skipped');
     const again = green({ handoff: readBack(refused) });
     expect(again.decision).toBe('leave');
     expect(again.outputs.get('decide')?.['reason']).toMatch(/GitHub refused to merge this head/);
     expect(again.ran).not.toContain('merge');
+  });
+});
+
+describe('Local PR Shepherd — a merge refused only because the base moved is benign', () => {
+  const path = `/shepherd/aflowai/aflow/pulls/94/merges/${HEAD}.json`;
+
+  it('reads the pull request again and merges the same head on the re-attempt', () => {
+    const store = new Map<string, Record<string, unknown>>();
+    const raced = green({ merge: 'base-moved', mergeOutcomes: store });
+    expect(raced.decision).toBe('merge');
+    expect(raced.ran.indexOf('reread-pr-after-refusal')).toBeGreaterThan(
+      raced.ran.indexOf('merge'),
+    );
+    expect(raced.outputs.get('judge-merge-refusal')?.['decision']).toBe('base_moved');
+    expect(raced.ran.indexOf('merge-again')).toBeGreaterThan(
+      raced.ran.indexOf('reread-pr-after-refusal'),
+    );
+    // The same request, pinned to the same head: the approval already granted covers it.
+    expect(raced.inputs.get('merge-again')).toEqual(raced.inputs.get('merge'));
+    expect(raced.outputs.get('record-merge')?.['decision']).toBe('merged');
+    expect(raced.handoff).toMatchObject({ decision: 'merge', mergeCommitSha: MERGE_COMMIT });
+    expect(raced.handoff?.mergeRefusedSha).toBeUndefined();
+    expect(store.get(path)).toMatchObject({ outcome: 'merged', mergeCommit: MERGE_COMMIT });
+    expect(raced.ran.indexOf('release')).toBeGreaterThan(raced.ran.indexOf('merge-again'));
+  });
+
+  it('hands back merge, not leave, where the re-attempt is refused again, and the next pass merges', () => {
+    const store = new Map<string, Record<string, unknown>>();
+    const raced = green({ merge: 'base-moved', mergeAgain: 'base-moved', mergeOutcomes: store });
+    expect(raced.decision).toBe('merge');
+    expect(raced.ran).toContain('merge-again');
+    const record = raced.outputs.get('record-merge');
+    expect(record?.['decision']).toBe('merge');
+    expect(String(record?.['reason'])).toMatch(/head is intact/);
+    expect(String(record?.['reason'])).toMatch(/base branch moved/);
+    // Nothing recorded against the head: no refusal in the handoff, and the claim is gone.
+    expect(raced.handoff).toMatchObject({ decision: 'merge' });
+    expect(raced.handoff?.mergeRefusedSha).toBeUndefined();
+    expect(raced.handoff?.mergeDeclinedSha).toBeUndefined();
+    expect(raced.handoff?.mergeCommitSha).toBeUndefined();
+    expect(raced.statuses.get('remember-merge-outcome')).toBe('skipped');
+    expect(raced.statuses.get('release-merge-claim')).toBe('succeeded');
+    expect(store.has(path)).toBe(false);
+    expect(raced.ran.indexOf('release')).toBeGreaterThan(raced.ran.indexOf('release-merge-claim'));
+    const body = String(
+      (raced.inputs.get('handoff-edit')!['params'] as { body: { body: string } }).body.body,
+    );
+    expect(body).toMatch(/GitHub answered 405: Base branch was modified/);
+    expect(body).toMatch(/Attempted again, GitHub answered 405: Base branch was modified/);
+
+    const next = green({ handoff: readBack(raced), mergeOutcomes: store });
+    expect(next.decision).toBe('merge');
+    expect(next.statuses.get('claim-merge')).toBe('succeeded');
+    expect(next.ran).toContain('merge');
+    expect(next.handoff).toMatchObject({ mergeCommitSha: MERGE_COMMIT });
+  });
+
+  it.each([
+    ['the head moved since the pass read it', { headSha: 'a'.repeat(40) }],
+    ['the pull request could not be read again', { status: 502 }],
+  ])('records a base-moved refusal against the head, as before, where %s', (_why, reread) => {
+    const store = new Map<string, Record<string, unknown>>();
+    const refused = green({ merge: 'base-moved', reread, mergeOutcomes: store });
+    expect(refused.outputs.get('judge-merge-refusal')?.['decision']).toBe('head_invalid');
+    expect(refused.statuses.get('merge-again')).toBe('skipped');
+    expect(refused.handoff).toMatchObject({ mergeRefusedSha: HEAD });
+    expect(store.get(path)).toMatchObject({ outcome: 'merge_refused' });
+    expect(green({ handoff: readBack(refused) }).decision).toBe('leave');
+  });
+
+  it('records any other 405 against the head, as before, and leaves it on the next pass', () => {
+    const refused = green({ merge: 'not-mergeable' });
+    expect(refused.ran).toContain('reread-pr-after-refusal');
+    expect(refused.outputs.get('judge-merge-refusal')?.['decision']).toBe('head_invalid');
+    expect(refused.statuses.get('merge-again')).toBe('skipped');
+    expect(refused.handoff).toMatchObject({ mergeRefusedSha: HEAD });
+    const again = green({ handoff: readBack(refused) });
+    expect(again.decision).toBe('leave');
+    expect(again.ran).not.toContain('merge');
+  });
+
+  it('judges a base-moved refusal benign only under a head still pinned and green', () => {
+    const benign = {
+      merge: { statusCode: 405, data: { message: BASE_MOVED_MESSAGE } },
+      pr: { statusCode: 200, data: { headSha: HEAD } },
+      pinnedHead: HEAD,
+      checks: { statusCode: 200, data: { state: 'passing', required: { state: 'passed' } } },
+    };
+    const judge = (state: Record<string, unknown>) =>
+      decideByRules(
+        WorkflowRunDecideInputSchema.parse({
+          state,
+          rules: MERGE_REFUSAL_RULES,
+          otherwise: MERGE_REFUSAL_OTHERWISE,
+        }),
+      ).decision;
+    expect(judge(benign)).toBe('base_moved');
+    for (const unlike of [
+      { checks: { statusCode: 200, data: { state: 'failing', required: { state: 'passed' } } } },
+      { checks: { statusCode: 200, data: { state: 'passing', required: { state: 'unmet' } } } },
+      { checks: undefined },
+      { pr: { statusCode: 200, data: { headSha: 'a'.repeat(40) } } },
+      { merge: { statusCode: 409, data: { message: BASE_MOVED_MESSAGE } } },
+    ]) {
+      expect(judge({ ...benign, ...unlike })).toBe('head_invalid');
+    }
   });
 });
 

@@ -5,7 +5,14 @@ import {
   SHEPHERD_MERGE_OUTCOME_DOCS,
   SHEPHERD_RESPONSE_PRESETS,
 } from '@aflow/schemas';
-import { MERGE_OUTCOME_OTHERWISE, MERGE_OUTCOME_RULES } from './localPrShepherdRules.js';
+import {
+  MERGE_HANDED_BACK,
+  MERGE_OUTCOME_OTHERWISE,
+  MERGE_OUTCOME_RULES,
+  MERGE_REFUSAL_BASE_MOVED,
+  MERGE_REFUSAL_OTHERWISE,
+  MERGE_REFUSAL_RULES,
+} from './localPrShepherdRules.js';
 import {
   BASE_REF,
   bind,
@@ -182,6 +189,19 @@ const CLAIMED_HEAD = {
   onMissingRef: SKIP,
 };
 
+const MERGE_REQUEST_BINDINGS = {
+  ...REPOSITORY,
+  ...NUMBER,
+  headSha: out('read-pr', 'data.headSha'),
+};
+
+const MERGE_REQUEST = github('mergePullRequest', {
+  owner: bind('owner'),
+  repo: bind('repo'),
+  pull_number: bind('number'),
+  body: { merge_method: 'squash', sha: bind('headSha') },
+});
+
 export const MERGE_TASKS = [
   {
     taskId: 'claim-merge',
@@ -224,33 +244,112 @@ export const MERGE_TASKS = [
     // A second attempt asks a second approval.
     retryability: 'unsafe' as const,
     maxAttempts: 1,
-    inputBindings: { ...REPOSITORY, ...NUMBER, headSha: out('read-pr', 'data.headSha') },
+    inputBindings: MERGE_REQUEST_BINDINGS,
     context: ctx('api.http.call'),
-    inputTemplate: github('mergePullRequest', {
-      owner: bind('owner'),
-      repo: bind('repo'),
-      pull_number: bind('number'),
-      body: { merge_method: 'squash', sha: bind('headSha') },
-    }),
+    inputTemplate: MERGE_REQUEST,
+  },
+
+  // GitHub computes a pull request's mergeability again when it is read, so
+  // this read comes before any re-attempt as well as showing whether the head moved.
+  {
+    taskId: 'reread-pr-after-refusal',
+    name: 'Read the pull request again after a refused merge',
+    goal: 'Where GitHub refused the merge with 405, read the pull request again — its head, and whether it merges into its base as the base now stands — to tell a base that moved under an unchanged head from a head that is no longer the one pinned.',
+    type: 'operation' as const,
+    operation: 'api.http.call',
+    when: {
+      allOf: [...CLAIMED_HEAD.allOf, 'tasks.merge.output.statusCode == 405'],
+      onMissingRef: SKIP,
+    },
+    optional: true,
+    retryability: 'safe' as const,
+    inputBindings: {
+      ...REPOSITORY,
+      ...NUMBER,
+      prefix: out('read-folder', 'branchPolicy.branchPrefix'),
+    },
+    context: ctx('api.http.call'),
+    inputTemplate: github(
+      'getPullRequest',
+      { owner: bind('owner'), repo: bind('repo'), pull_number: bind('number') },
+      { $concat: [`${SHEPHERD_RESPONSE_PRESETS.pullRequest}:`, bind('prefix')] },
+    ),
+  },
+
+  {
+    taskId: 'judge-merge-refusal',
+    name: 'Judge the kind of refusal',
+    goal: 'Name the kind of refusal GitHub gave the merge: `base_moved` where only the base branch moved and the head, read again, is still the one pinned with its required checks passed — attempted again, and never left — or `head_invalid` for anything else, recorded against the head as before.',
+    type: 'operation' as const,
+    operation: 'workflow.run.decide',
+    when: {
+      allOf: [...CLAIMED_HEAD.allOf, 'tasks.merge.output.statusCode != 200'],
+      onMissingRef: SKIP,
+    },
+    retryability: 'safe' as const,
+    inputBindings: {
+      merge: out('merge'),
+      pr: out('reread-pr-after-refusal'),
+      pinnedHead: out('read-pr', 'data.headSha'),
+      checks: out('read-pr-checks'),
+    },
+    context: ctx('workflow.run.decide'),
+    inputTemplate: {
+      state: {
+        merge: bind('merge'),
+        pr: bind('pr'),
+        pinnedHead: bind('pinnedHead'),
+        checks: bind('checks'),
+      },
+      rules: MERGE_REFUSAL_RULES,
+      otherwise: MERGE_REFUSAL_OTHERWISE,
+    },
+  },
+
+  {
+    taskId: 'merge-again',
+    name: 'Merge the pull request again',
+    goal: 'Where the merge was refused only because the base branch moved, under a head still as pinned and green, send the same merge once more: by squash, pinned to the same head.',
+    type: 'operation' as const,
+    operation: 'api.http.call',
+    when: {
+      allOf: [
+        ...CLAIMED_HEAD.allOf,
+        `tasks.judge-merge-refusal.output.decision == '${MERGE_REFUSAL_BASE_MOVED}'`,
+      ],
+      onMissingRef: SKIP,
+    },
+    // The same request the operator approved, in the same run: the grant
+    // already minted covers it, so no second card is raised.
+    optional: true,
+    retryability: 'unsafe' as const,
+    maxAttempts: 1,
+    inputBindings: MERGE_REQUEST_BINDINGS,
+    context: ctx('api.http.call'),
+    inputTemplate: MERGE_REQUEST,
   },
 
   {
     taskId: 'record-merge',
     name: 'Record how the merge ended',
-    goal: 'Name how the merge ended — merged, refused by GitHub on the pinned head, or not made because the operator declined it — as the field the handoff records it under.',
+    goal: 'Name how the merge ended — merged, refused by GitHub on the pinned head, or not made because the operator declined it — as the field the handoff records it under; or, where only the base moved and the re-attempt did not merge either, hand back `merge` and record nothing against the head.',
     type: 'operation' as const,
     operation: 'workflow.run.decide',
-    dependsOn: ['merge'],
+    dependsOn: ['merge', 'merge-again'],
     // Only a merge that was asked for — answered, refused or denied — has an outcome to name.
     when: {
       allOf: [...CLAIMED_HEAD.allOf, "tasks.merge.status != 'skipped'"],
       onMissingRef: SKIP,
     },
     retryability: 'safe' as const,
-    inputBindings: { merge: out('merge') },
+    inputBindings: {
+      merge: out('merge'),
+      refusal: out('judge-merge-refusal', 'decision'),
+      mergeAgain: out('merge-again'),
+    },
     context: ctx('workflow.run.decide'),
     inputTemplate: {
-      state: { merge: bind('merge') },
+      state: { merge: bind('merge'), refusal: bind('refusal'), mergeAgain: bind('mergeAgain') },
       rules: MERGE_OUTCOME_RULES,
       otherwise: MERGE_OUTCOME_OTHERWISE,
     },
@@ -262,7 +361,13 @@ export const MERGE_TASKS = [
     goal: 'Replace the claim on this head, before the lease is released, with how its merge ended and the commit it names.',
     type: 'operation' as const,
     operation: 'memory.store.put',
-    when: { expression: "tasks.record-merge.status == 'succeeded'", onMissingRef: SKIP },
+    when: {
+      allOf: [
+        "tasks.record-merge.status == 'succeeded'",
+        `tasks.record-merge.output.decision != '${MERGE_HANDED_BACK}'`,
+      ],
+      onMissingRef: SKIP,
+    },
     // The release waits for it. One that could not be written leaves the
     // claim, which stops a second ask for this head as well; the handoff
     // records the outcome.
@@ -273,6 +378,7 @@ export const MERGE_TASKS = [
       ...MERGE_OUTCOME_BINDINGS,
       outcome: out('record-merge', 'decision'),
       mergeCommit: out('merge', 'data.sha'),
+      mergeAgainCommit: out('merge-again', 'data.sha'),
       runId: { kind: 'run_id' as const },
     },
     context: ctx('memory.store.put'),
@@ -287,10 +393,30 @@ export const MERGE_TASKS = [
         inlineJson: {
           headSha: bind('headSha'),
           outcome: bind('outcome'),
-          mergeCommit: bind('mergeCommit'),
+          mergeCommit: { $firstOf: [bind('mergeCommit'), bind('mergeAgainCommit')] },
           runId: bind('runId'),
         },
       },
     },
+  },
+
+  {
+    taskId: 'release-merge-claim',
+    name: 'Release the claim on this head',
+    goal: "Where the merge was handed back because only the base moved, delete this pass's claim on the head before the lease is released — only as this pass wrote it — so the next pass may ask to merge the same head again.",
+    type: 'operation' as const,
+    operation: 'memory.store.delete',
+    when: {
+      expression: `tasks.record-merge.output.decision == '${MERGE_HANDED_BACK}'`,
+      onMissingRef: SKIP,
+    },
+    // One that could not be deleted leaves the claim, which holds the head as
+    // a recorded outcome would: its merge is then the operator's.
+    optional: true,
+    retryability: 'safe' as const,
+    maxAttempts: 3,
+    inputBindings: { ...MERGE_OUTCOME_BINDINGS, claimHash: out('claim-merge', 'contentHash') },
+    context: ctx('memory.store.delete'),
+    inputTemplate: { target: { path: MERGE_OUTCOME_PATH }, expectedHash: bind('claimHash') },
   },
 ];

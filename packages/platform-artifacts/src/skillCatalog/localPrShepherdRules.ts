@@ -303,10 +303,62 @@ export const REMEDY_TAKEN_RULES: readonly WorkflowRunDecideRule[] = [
 ];
 
 /**
- * How the merge this pass asked for ended, as one of `SHEPHERD_MERGE_OUTCOMES`.
- * A merge task that failed binds as absent: under the write approval that is
- * the operator's denial, which fails the task as a permission error. One
- * GitHub answered other than 200 refused the request pinned to the head.
+ * GitHub's answer, with 405, to a merge whose base branch moved between the
+ * pull request's read and the merge — another pull request merged first. The
+ * wording is matched exactly: a 405 can also mean a conflict or a rule the
+ * base requires, which no re-attempt clears, and wording GitHub changes falls
+ * back to the ordinary refusal rather than a re-attempt that repeats forever.
+ */
+export const BASE_MOVED_MESSAGE = 'Base branch was modified. Review and try the merge again.';
+
+/** The refusal kind under which the merge is attempted again and handed back, never left. */
+export const MERGE_REFUSAL_BASE_MOVED = 'base_moved';
+
+/**
+ * Which kind of refusal GitHub gave the merge pinned to the head. Only one is
+ * benign: the base moved, while the head — read again after the refusal — is
+ * still the one pinned and its checks, the base's required ones among them,
+ * passed. Anything else, a re-read that failed included, is `head_invalid`
+ * and recorded against the head as before.
+ */
+export const MERGE_REFUSAL_RULES: readonly WorkflowRunDecideRule[] = [
+  {
+    when: {
+      anyOf: [
+        'state.merge.statusCode != 405',
+        `state.merge.data.message != '${BASE_MOVED_MESSAGE}'`,
+        'state.pr.statusCode != 200',
+        'state.pr.data.headSha != state.pinnedHead',
+        "state.checks.data.state != 'passing'",
+        "state.checks.data.required.state != 'passed'",
+      ],
+    },
+    decision: 'head_invalid',
+    reason:
+      'GitHub refused the merge for something other than a base that moved under an unchanged, green head.',
+  },
+];
+
+export const MERGE_REFUSAL_OTHERWISE = {
+  decision: MERGE_REFUSAL_BASE_MOVED,
+  reason:
+    'GitHub refused the merge only because the base branch moved after the pass read it; the head is still the one pinned, and its required checks passed.',
+};
+
+/**
+ * What `record-merge` decides where the base moved and the re-attempt did not
+ * merge either: the pass's own decision, handed back. It is no
+ * `ShepherdMergeOutcome`, so the handoff records nothing against the head and
+ * the claim on it is deleted, and the next pass asks to merge it again.
+ */
+export const MERGE_HANDED_BACK = 'merge';
+
+/**
+ * How the merge this pass asked for ended, as one of `SHEPHERD_MERGE_OUTCOMES`
+ * or {@link MERGE_HANDED_BACK}. A merge task that failed binds as absent:
+ * under the write approval that is the operator's denial, which fails the
+ * task as a permission error. A refusal of the head-invalid kind is recorded
+ * against the head; one of the base-moved kind was attempted again.
  */
 export const MERGE_OUTCOME_RULES: readonly WorkflowRunDecideRule[] = [
   {
@@ -316,16 +368,28 @@ export const MERGE_OUTCOME_RULES: readonly WorkflowRunDecideRule[] = [
       'The merge was not made: the operator declined it, or the request could not be sent. No merge of this head is asked for again.',
   },
   {
-    when: { expression: 'state.merge.statusCode != 200' },
+    when: { expression: 'state.merge.statusCode == 200' },
+    decision: 'merged' satisfies ShepherdMergeOutcome,
+    reason: 'GitHub merged the pull request by squash, on the head the pass read.',
+  },
+  {
+    when: { expression: `state.refusal != '${MERGE_REFUSAL_BASE_MOVED}'` },
     decision: 'merge_refused' satisfies ShepherdMergeOutcome,
     reason:
       'GitHub refused the merge pinned to this head. No merge of this head is asked for again.',
   },
+  {
+    when: { expression: 'state.mergeAgain.statusCode == 200' },
+    decision: 'merged' satisfies ShepherdMergeOutcome,
+    reason:
+      'GitHub refused the first request because the base branch moved after the pass read it, and merged the pull request by squash on the re-attempt, on the same head.',
+  },
 ];
 
 export const MERGE_OUTCOME_OTHERWISE = {
-  decision: 'merged' satisfies ShepherdMergeOutcome,
-  reason: 'GitHub merged the pull request by squash, on the head the pass read.',
+  decision: MERGE_HANDED_BACK,
+  reason:
+    'GitHub refused the merge because the base branch moved after the pass read it — another pull request merged — and the one re-attempt was not merged either. The head is intact, still the one pinned, and its required checks passed, so nothing is recorded against it: the decision stays `merge`, and the next pass asks to merge it again.',
 };
 
 export const REMEDY_TAKEN_OTHERWISE = {

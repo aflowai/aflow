@@ -50,9 +50,13 @@ const LEASED_WORK = [
   // The claim on a head is written before any merge is asked for.
   'claim-merge',
   'merge',
+  'reread-pr-after-refusal',
+  'judge-merge-refusal',
+  'merge-again',
   'record-merge',
   // A merge's outcome is recorded before the lease goes, so the next holder reads it.
   'remember-merge-outcome',
+  'release-merge-claim',
 ];
 
 /**
