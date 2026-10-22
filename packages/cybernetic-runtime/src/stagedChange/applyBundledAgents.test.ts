@@ -57,7 +57,7 @@ async function install(params: { folders: string[]; takenSlugs?: string[] }) {
   });
 }
 
-/** The folders the agent's starts name, in order; a folder's start can stand on two paths. */
+/** The folders the agent's starts name, in order; a folder's start and its fail step name one. */
 function startedFolders(definition: unknown): unknown[] {
   const folders = AgentDefinitionSchema.parse(definition)
     .steps.filter((step) => step.operation === 'workflow.run.start')
@@ -94,6 +94,14 @@ describe('the Local PR Shepherd agent a bundle install writes', () => {
     });
     expect(created).toHaveLength(1);
     expect(startedFolders(created[0]?.definition)).toEqual(['hb_aflow', 'hb_docs']);
+  });
+
+  it('is written for a space of many folders that allow pushes, two steps a folder', async () => {
+    const folders = Array.from({ length: 16 }, (_, i) => `hb_${String(i + 1).padStart(2, '0')}`);
+    const result = await install({ folders });
+    expect(result.installedAgentSlugs).toEqual(['local-pr-shepherd']);
+    expect(startedFolders(created[0]?.definition)).toEqual(folders);
+    expect(AgentDefinitionSchema.parse(created[0]?.definition).steps).toHaveLength(32);
   });
 
   it('is not written where the space has no folder that allows pushes, and the warning says what writes it', async () => {

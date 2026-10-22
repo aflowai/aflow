@@ -30,6 +30,13 @@ function greenAnd(expression: string, reason: string): WorkflowRunDecideRule {
  * posture is `never`, or it failed — holds it back.
  */
 export const MERGE_RULES: readonly WorkflowRunDecideRule[] = [
+  // Before anything that can decide `merge`: the merge claims the head once
+  // for good, and GitHub refuses a draft, so a head claimed while a draft
+  // would never be asked about once marked ready.
+  greenAnd(
+    'state.pr.data.draft != false',
+    'CI passes on the head, but the pull request is a draft: no merge is asked for until it is marked ready for review.',
+  ),
   greenAnd(
     "state.folder.branchPolicy.mergePosture != 'when-green'",
     "CI passes on the head. The folder's merge posture is `never`: the merge is the operator's.",

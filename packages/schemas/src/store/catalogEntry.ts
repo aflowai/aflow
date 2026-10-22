@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { isHostSafeEgressEntry } from '../models/repoBinding.js';
-import { SkillBundleSchema } from '../cybernetic/skillBundle.js';
+import { SkillBundleSchema, STORE_DESCRIPTION_MAX_CHARS } from '../cybernetic/skillBundle.js';
 import {
   ConnectorCatalogEntrySchema,
   ConnectorHonestyLabelSchema,
@@ -99,7 +99,7 @@ export const CatalogEntryEnvelopeSchema = z.object({
   status: CatalogListingStatusSchema.default('published'),
   name: z.string().min(1).max(200),
   tagline: z.string().min(1).max(300),
-  description: z.string().min(1).max(5000),
+  description: z.string().min(1).max(STORE_DESCRIPTION_MAX_CHARS),
   tags: z.array(z.string().min(1).max(64)).max(20).default([]),
   category: z.string().min(1).max(64).optional(),
   vendor: z.string().min(1).max(128).optional(),

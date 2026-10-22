@@ -677,6 +677,9 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
               owner: bind('owner'),
               repo: bind('repo'),
               base: bind('baseRef'),
+              // The pull request it publishes onto was opened by an earlier
+              // publication, so a fix is a fix round under the rounds rule.
+              round: 2,
             },
             wait: 'until_complete',
           },
