@@ -137,7 +137,7 @@ const MERGE_OUTCOME = optionalPart(
   `\n${SHEPHERD_MERGE_OUTCOME_LINE}: `,
   bind('mergeOutcome'),
   ' ',
-  { $firstOf: [text('mergeCommit'), leaseText('leaseHeadSha')] },
+  { $firstOf: [text('mergeCommit'), text('mergeAgainCommit'), leaseText('leaseHeadSha')] },
 );
 
 const HANDOFF_BODY = {
@@ -167,6 +167,12 @@ const HANDOFF_BODY = {
     optionalPart('\n\nRequired checks not passed on the head: ', text('requiredUnmet'), '.'),
     optionalPart('\n\nThe merge: ', bind('mergeReason')),
     optionalPart(' GitHub answered ', text('mergeStatus'), ': ', text('mergeMessage')),
+    optionalPart(
+      ' Attempted again, GitHub answered ',
+      text('mergeAgainStatus'),
+      ': ',
+      text('mergeAgainMessage'),
+    ),
     '\n\nFailures acted on: ',
     ATTEMPTS,
     '. Last acted on check run `',
@@ -198,6 +204,9 @@ const HANDOFF_BINDINGS = {
   mergeCommit: out('merge', 'data.sha'),
   mergeStatus: out('merge', 'statusCode'),
   mergeMessage: out('merge', 'data.message'),
+  mergeAgainCommit: out('merge-again', 'data.sha'),
+  mergeAgainStatus: out('merge-again', 'statusCode'),
+  mergeAgainMessage: out('merge-again', 'data.message'),
   ...leaseBindings('leaseCheckRun', 'lease.inlineJson.checkRunId'),
   ...leaseBindings('leaseHeadSha', 'lease.inlineJson.headSha'),
   ...handoffBindings('priorAttempt', 'data.attemptCount'),

@@ -16,12 +16,13 @@ import { WorkflowTaskSchema } from './task.js';
  * task is one operation, so a skill that reads five things, decides, and acts
  * one of four ways is twenty tasks before it records anything — the Local PR
  * Shepherd, which also merges, takes turns over its pull requests and hands a
- * spent one to a person, is forty-eight — the whole ceiling. It bounds every shape a
- * workflow's tasks take: the stored workflow, workflow.manage.put's input, and
- * the compose-skill draft (ComposedWorkflowSchema), so a draft holds as many
- * as a stored workflow.
+ * spent one to a person, and sends a merge again when only its base moved, is
+ * fifty-two — the whole ceiling. It bounds every shape a workflow's tasks
+ * take: the stored workflow, workflow.manage.put's input, and the
+ * compose-skill draft (ComposedWorkflowSchema), so a draft holds as many as a
+ * stored workflow.
  */
-export const WORKFLOW_TASKS_MAX = 48;
+export const WORKFLOW_TASKS_MAX = 52;
 
 export const IterationPolicySchema = z.object({
   auto: z.boolean().default(false),
