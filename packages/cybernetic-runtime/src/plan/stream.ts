@@ -14,10 +14,12 @@ import {
   isClosedPlanNodeStatus,
   OPEN_PLAN_NODE_STATUSES,
   PLAN_NODE_PROSE_MAX_CHARS,
+  PLAN_NODE_RUNS_LIMIT,
   PLAN_STREAM_COMMISSION_SLUG,
   PLAN_STREAM_PUBLICATION_SLUG,
   type PlanNode,
   type PlanNodeLink,
+  type PlanNodeListTruncation,
   type PlanNodeNextInput,
   type PlanNodeNextOutput,
   type PlanNodeRun,
@@ -165,6 +167,8 @@ export interface PlanStreamFacts {
   node: PlanNode;
   /** Runs in flight for the node and every node under it, whoever drove them. */
   inFlight: readonly PlanNodeRun[];
+  /** The bound that stopped the read of the nodes under it, where one did: `inFlight` may miss runs below it. */
+  inFlightUnread?: PlanNodeListTruncation;
   /** Pending pauses in the space's attention items about runs serving those nodes. */
   pausedItems: number;
   /** The node's newest `pull_request` link. */
@@ -369,7 +373,8 @@ function latestRoundSinceWrite(
 /**
  * The firing's decision on the active node, the first rule that holds
  * deciding: a blocked node is the person's, whatever its pull request says;
- * `wait` while its own work is in flight; a merge of its newest pull request
+ * `wait` while its own work is in flight, or the read of the nodes under it
+ * stopped at a bound before it could show none is; a merge of its newest pull request
  * nobody has acted on is recorded next; then `wait` while that pull request
  * is open or a read failed; `stop` where its pull request was closed unmerged, its push was
  * declined or its attempts are spent; `continue` where its next step is the
@@ -392,6 +397,14 @@ export function decideStreamFiring(facts: PlanStreamFacts): PlanNodeNextOutput {
         ? runs.join(', ')
         : `${String(facts.pausedItems)} paused run(s) in the space's attention items`;
     return wait('in_flight', `Work for "${node.title}" is in flight: ${named}.`, node);
+  }
+  if (facts.inFlightUnread) {
+    const { bound, value } = facts.inFlightUnread;
+    return wait(
+      'read_failed',
+      `The read of the nodes under "${node.title}" stopped at its ${bound} bound of ${String(value)}, so work in flight below it cannot be ruled out.`,
+      node,
+    );
   }
 
   const link = facts.pullRequestLink;
@@ -541,16 +554,18 @@ export async function nextInPlanStream(
     );
   }
 
+  // Every status: a run serving a node closed under the active one is still in
+  // flight. Where the walk's bounds cut it short, the runs below are unread, and
+  // the decision is told so rather than shown fewer runs.
   const subtree = await ctx.store.walk(ctx.spaceId, {
     rootId: active.nodeId,
     ...PLAN_TREE_WALK_BOUNDS,
   });
-  const [rounds, pausedItems] = await Promise.all([
+  const servedNodeIds = subtree.nodes.map((n) => n.nodeId);
+  const [rounds, inFlight, pausedItems] = await Promise.all([
     ctx.reads.roundsOf(ctx.spaceId, active.nodeId, PLAN_STREAM_ROUNDS_LIMIT),
-    ctx.reads.pausedItemsServing(
-      ctx.spaceId,
-      subtree.nodes.map((n) => n.nodeId),
-    ),
+    ctx.store.listRunsServing(ctx.spaceId, servedNodeIds, PLAN_NODE_RUNS_LIMIT),
+    ctx.reads.pausedItemsServing(ctx.spaceId, servedNodeIds),
   ]);
   const latest = latestRoundSinceWrite(rounds, opened.node.updatedAt);
   const publication =
@@ -568,7 +583,8 @@ export async function nextInPlanStream(
   const decision = decideStreamFiring({
     node: opened.node,
     mergeJudged,
-    inFlight: opened.runs,
+    inFlight: inFlight.runs,
+    ...(subtree.truncated ? { inFlightUnread: subtree.truncated } : {}),
     pausedItems,
     ...(pullRequestLink ? { pullRequestLink } : {}),
     ...(input.pullRequest ? { pullRequest: input.pullRequest } : {}),
