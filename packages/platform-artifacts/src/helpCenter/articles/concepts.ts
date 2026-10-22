@@ -6,7 +6,7 @@ export const CONCEPTS_ARTICLES: readonly HelpArticleInput[] = [
     theme: 'concepts',
     question: 'What is a space, and when should I create another one?',
     summary:
-      'A space (called a workspace on some screens) is a self-contained place where agents work. Each space has its own chat, skills, integrations, memory, triggers and settings, and its Helmsman sees only what belongs to that space. Create a separate space when a body of work needs its own connections, its own memory or its own rules; use the space selector at the top of the sidebar and choose Create new workspace. A space you no longer need can be archived from Settings → Danger zone, which hides it and pauses its schedules and webhooks, and can be undone.',
+      'A space (called a workspace on some screens) is a self-contained place where agents work. Each space has its own chat, skills, integrations, memory, plan, triggers and settings, and its Helmsman sees only what belongs to that space. Create a separate space when a body of work needs its own connections, its own memory or its own rules; use the space selector at the top of the sidebar and choose Create new workspace. A space you no longer need can be archived from Settings → Danger zone, which hides it and pauses its schedules and webhooks, and can be undone.',
     body: `## Where
 
 The space selector at the top of the sidebar lists your spaces. **Create new workspace** at the bottom of that list starts a new one, and **Workspace Settings** opens the current space's settings.
@@ -19,6 +19,7 @@ Everything in the sidebar belongs to the space you are in:
 - **Skills** — the procedures agents run here.
 - **Integrations** — the APIs and MCP servers this space can call.
 - **Memory** — the space's documents and folders.
+- **Plan** — the work the Helmsman is carrying out here, as goals broken into steps: each step's status, how a finished one was met, its pull requests and runs, and the runs under way for it.
 - **Triggers** — schedules and webhooks that start work here.
 - **Settings** — the space's name and default agent (**General**), the Helmsman's mandate and models (**Agent**), **Rules**, **Compute**, **Write Policy**, **Credentials** and **Danger zone**.
 
@@ -40,6 +41,7 @@ When you create a space and no model provider key is available for it, the dialo
         'spaces/archived',
         's/[space]/settings/general',
         's/[space]/settings/danger',
+        's/[space]/plan',
       ],
       operations: [],
     },

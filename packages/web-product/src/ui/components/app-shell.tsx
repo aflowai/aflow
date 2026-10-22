@@ -295,6 +295,17 @@ function Sidebar() {
               icon: memoryItem.icon,
             });
 
+            // Plan — the trees the Helmsman works through. Every edition: the
+            // plan is the Helmsman's, and the Helmsman runs wherever a space does.
+            const planHref = spaceRoute(slug, '/plan');
+            entries.push({
+              key: 'plan',
+              label: 'Plan',
+              href: planHref,
+              active: isPrimaryNavActive(pathname, '/plan', planHref),
+              icon: 'flag',
+            });
+
             // Triggers — everything armed to start work here on its own. A clock
             // and an inbound event are one thing from the operator's side, so
             // they share a page; split by source they read as two features.

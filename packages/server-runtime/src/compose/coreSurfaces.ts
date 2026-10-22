@@ -59,6 +59,7 @@ import { coachHealthRoutes } from '../routes/cybernetic/coachHealth.js';
 import { causalInspectorRoutes } from '../routes/cybernetic/causalInspector.js';
 import { coachActivityRoutes } from '../routes/cybernetic/coachActivity.js';
 import { skillLifecycleRoutes } from '../routes/cybernetic/skillLifecycle.js';
+import { planRoutes } from '../routes/plan.js';
 import { storeListingRoutes, storeInstallRoutes } from '../routes/store.js';
 import { helpRoutes } from '../routes/help.js';
 import type {
@@ -280,6 +281,10 @@ function v1Surfaces({ actionCenterAggregator }: V1SurfaceDeps): ServerSurface[] 
     {
       name: 'skill-lifecycle',
       register: (s) => s.register(skillLifecycleRoutes, { prefix: '/spaces' }),
+    },
+    {
+      name: 'plan',
+      register: (s) => s.register(planRoutes, { prefix: '/spaces' }),
     },
     {
       name: 'store-listings',

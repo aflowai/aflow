@@ -1,5 +1,17 @@
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { and, asc, desc, eq, inArray, isNull, sql, type SQL } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  inArray,
+  isNotNull,
+  isNull,
+  lte,
+  or,
+  sql,
+  type SQL,
+} from 'drizzle-orm';
 import {
   PLAN_NODE_POSITION_MAX,
   PLAN_TREE_DEPTH_LIMIT,
@@ -91,6 +103,12 @@ export interface NewPlanNodeLink {
   label: string | null;
 }
 
+/** What a summary leaves out of a closed node: how it ended, and when. */
+export interface PlanNodeClosing {
+  outcome?: string;
+  closedAt?: string;
+}
+
 export type PlanNodeLinkInsert =
   | { outcome: 'inserted'; link: PlanNodeLink }
   /** The node already holds a link of this kind to this ref; `link` is that one. */
@@ -161,6 +179,17 @@ export interface PlanNodeStore {
     kind: PlanNodeLinkKind,
     ref: string,
   ): Promise<PlanNodeLink | null>;
+  /** The outcome and closing time of each of `nodeIds` holding either; a node with neither is absent. */
+  closingsOf(spaceId: string, nodeIds: readonly string[]): Promise<Map<string, PlanNodeClosing>>;
+  /**
+   * Each of `nodeIds`'s newest `limit` links, newest first, and how many it
+   * holds; a node with none is absent.
+   */
+  listLinksOfEach(
+    spaceId: string,
+    nodeIds: readonly string[],
+    limit: number,
+  ): Promise<Map<string, { links: PlanNodeLink[]; total: number }>>;
   /** The running and paused runs serving any of `nodeIds`, newest first; eval trials never. */
   listRunsServing(
     spaceId: string,
@@ -559,6 +588,74 @@ export function createPlanNodeStore(db: PostgresJsDatabase, tenantId: string): P
           )
           .limit(1);
         return row ? rowToPlanNodeLink(row) : null;
+      }),
+
+    closingsOf: (spaceId, nodeIds) =>
+      inTenant(async (tx) => {
+        const closings = new Map<string, PlanNodeClosing>();
+        if (nodeIds.length === 0) return closings;
+        const rows = await tx
+          .select({ id: planNodes.id, outcome: planNodes.outcome, closedAt: planNodes.closedAt })
+          .from(planNodes)
+          .where(
+            and(
+              eq(planNodes.spaceId, spaceId),
+              inArray(planNodes.id, [...nodeIds]),
+              or(isNotNull(planNodes.outcome), isNotNull(planNodes.closedAt)),
+            ),
+          );
+        for (const row of rows) {
+          closings.set(row.id, {
+            ...(row.outcome != null ? { outcome: row.outcome } : {}),
+            ...(row.closedAt != null ? { closedAt: new Date(row.closedAt).toISOString() } : {}),
+          });
+        }
+        return closings;
+      }),
+
+    listLinksOfEach: (spaceId, nodeIds, limit) =>
+      inTenant(async (tx) => {
+        const byNode = new Map<string, { links: PlanNodeLink[]; total: number }>();
+        if (nodeIds.length === 0) return byNode;
+        const ranked = tx
+          .select({
+            nodeId: planNodeLinks.nodeId,
+            kind: planNodeLinks.kind,
+            ref: planNodeLinks.ref,
+            label: planNodeLinks.label,
+            createdAt: planNodeLinks.createdAt,
+            rank: sql<number>`(row_number() over (partition by ${planNodeLinks.nodeId} order by ${planNodeLinks.createdAt} desc, ${planNodeLinks.kind}, ${planNodeLinks.ref}))::int`.as(
+              'rank',
+            ),
+            total: sql<number>`(count(*) over (partition by ${planNodeLinks.nodeId}))::int`.as(
+              'total',
+            ),
+          })
+          .from(planNodeLinks)
+          .where(
+            and(eq(planNodeLinks.spaceId, spaceId), inArray(planNodeLinks.nodeId, [...nodeIds])),
+          )
+          .as('ranked');
+        const rows = await tx
+          .select()
+          .from(ranked)
+          .where(lte(ranked.rank, limit))
+          .orderBy(asc(ranked.nodeId), asc(ranked.rank));
+        for (const row of rows) {
+          const held = byNode.get(row.nodeId) ?? { links: [], total: row.total };
+          held.links.push(
+            rowToPlanNodeLink({
+              nodeId: row.nodeId,
+              spaceId,
+              kind: row.kind,
+              ref: row.ref,
+              label: row.label,
+              createdAt: new Date(row.createdAt),
+            }),
+          );
+          byNode.set(row.nodeId, held);
+        }
+        return byNode;
       }),
 
     listRunsServing: (spaceId, nodeIds, limit) =>

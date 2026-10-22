@@ -10,6 +10,7 @@ import {
 import {
   PLAN_NODE_RUN_STATUSES,
   planNoteHead,
+  type PlanNodeClosing,
   type PlanNodeInsert,
   type PlanNodeMove,
   type PlanNodePatch,
@@ -309,6 +310,28 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
         this.nodes.get(l.nodeId)?.spaceId === spaceId,
     );
     return Promise.resolve(link ? structuredClone(link) : null);
+  };
+
+  closingsOf: PlanNodeStore['closingsOf'] = (spaceId, nodeIds) => {
+    const closings = new Map<string, PlanNodeClosing>();
+    for (const node of this.inSpace(spaceId)) {
+      if (!nodeIds.includes(node.nodeId)) continue;
+      if (node.outcome === undefined && node.closedAt === undefined) continue;
+      closings.set(node.nodeId, {
+        ...(node.outcome !== undefined ? { outcome: node.outcome } : {}),
+        ...(node.closedAt !== undefined ? { closedAt: node.closedAt } : {}),
+      });
+    }
+    return Promise.resolve(closings);
+  };
+
+  listLinksOfEach: PlanNodeStore['listLinksOfEach'] = async (spaceId, nodeIds, limit) => {
+    const byNode = new Map<string, { links: PlanNodeLink[]; total: number }>();
+    for (const nodeId of nodeIds) {
+      const held = await this.listLinks(spaceId, nodeId, limit);
+      if (held.total > 0) byNode.set(nodeId, held);
+    }
+    return byNode;
   };
 
   listRunsServing: PlanNodeStore['listRunsServing'] = (spaceId, nodeIds, limit) => {

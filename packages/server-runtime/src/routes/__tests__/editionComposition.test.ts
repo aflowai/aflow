@@ -110,6 +110,19 @@ describe('composed core application', () => {
     }
   }, 60_000);
 
+  // The route tree prints nested, so a path under `:spaceId` is asked for by name.
+  it('serves the space routes the shared pages read', async () => {
+    process.env['PHOENIX_EDITION'] = 'community-local';
+    process.env['PHOENIX_INSTANCE_SECRET'] = 'x'.repeat(48);
+    for (const key of ENTERPRISE_ONLY_VARS) delete process.env[key];
+    const { buildApp } = await import('../../app.js');
+    const app = await buildApp(coreComposition, { logger: false });
+    await app.ready();
+    // The plan page (Plan 322 P3).
+    expect(app.hasRoute({ method: 'GET', url: '/v1/spaces/:spaceId/plan' })).toBe(true);
+    await app.close();
+  }, 60_000);
+
   // The appliance's only credential is the generated instance secret, so
   // booting without one would leave the API reachable with none at all.
   it('refuses to boot the local edition without an instance secret', async () => {

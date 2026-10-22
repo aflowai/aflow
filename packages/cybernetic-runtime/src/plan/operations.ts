@@ -16,6 +16,8 @@ import {
   PLAN_NODE_UPDATE_FIELDS,
   PLAN_TREE_DEPTH_LIMIT,
   PLAN_TREE_WALK_NODE_LIMIT,
+  PLAN_TREE_NODE_LINKS_LIMIT,
+  PLAN_TREE_RUNS_LIMIT,
   OPEN_PLAN_NODE_STATUSES,
   type PlanNode,
   type PlanNodeCreateInput,
@@ -25,11 +27,14 @@ import {
   type PlanNodeListInput,
   type PlanNodeListOutput,
   type PlanNodeRefusalDetails,
+  type PlanNodeRun,
   type PlanNodeStatus,
   type PlanNodeUpdateInput,
+  type PlanTreeNode,
+  type PlanTreeOutput,
 } from '@aflow/schemas';
 import { bumpAttentionGeneration } from '../attentionCache.js';
-import { findPlanRoots, orderPlanTree, type PlanTreeWalkBounds } from './tree.js';
+import { findPlanRoots, nestPlanTree, orderPlanTree, type PlanTreeWalkBounds } from './tree.js';
 import type { PlanNodePatch, PlanNodeStore, PlanPlacementRefusal } from './store.js';
 
 /** How far any read of a space's plan walks the tree. */
@@ -401,6 +406,44 @@ export async function listPlanNodes(
     ok: true,
     nodes: matching.slice(0, limit),
     ...(truncated !== undefined ? { truncated } : {}),
+  };
+}
+
+// ============================================================================
+// The space's plan as the operator reads it (Plan 322 P3)
+// ============================================================================
+
+/**
+ * Every tree of the space, every status, each node nested under its parent
+ * with its outcome, its newest links and the runs in flight serving it. The
+ * walk is the one every read of the plan takes, so a space past its bounds
+ * reads short and says which bound stopped it.
+ */
+export async function readPlanTrees(ctx: PlanReadContext): Promise<PlanTreeOutput> {
+  const walk = await ctx.store.walk(ctx.spaceId, PLAN_TREE_WALK_BOUNDS);
+  const placed = orderPlanTree(walk.nodes);
+  const nodeIds = placed.map((p) => p.node.nodeId);
+  const [closings, links, runs] = await Promise.all([
+    ctx.store.closingsOf(ctx.spaceId, nodeIds),
+    ctx.store.listLinksOfEach(ctx.spaceId, nodeIds, PLAN_TREE_NODE_LINKS_LIMIT),
+    ctx.store.listRunsServing(ctx.spaceId, nodeIds, PLAN_TREE_RUNS_LIMIT),
+  ]);
+  const runsByNode = new Map<string, PlanNodeRun[]>();
+  for (const run of runs.runs) {
+    runsByNode.set(run.nodeId, [...(runsByNode.get(run.nodeId) ?? []), run]);
+  }
+  const roots = nestPlanTree(placed, (node): PlanTreeNode => ({
+    ...node,
+    ...closings.get(node.nodeId),
+    links: links.get(node.nodeId)?.links ?? [],
+    linksTotal: links.get(node.nodeId)?.total ?? 0,
+    runs: runsByNode.get(node.nodeId) ?? [],
+    children: [],
+  }));
+  return {
+    roots,
+    runsTotal: runs.total,
+    ...(walk.truncated !== undefined ? { truncated: walk.truncated } : {}),
   };
 }
 
