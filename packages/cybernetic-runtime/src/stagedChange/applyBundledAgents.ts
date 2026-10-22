@@ -83,7 +83,8 @@ export async function applyBundledAgents(params: {
           catalogId: skill.catalogId,
           name: agent.name,
           description: agent.description,
-          runs: folders.map((folder) => ({ [agent.folderInput]: folder })),
+          folderInput: agent.folderInput,
+          folders,
         }) as unknown as Parameters<typeof repo.create>[0]['initialVersion']['definition'],
       },
     });

@@ -427,7 +427,7 @@ export type BundleArtifactSeed = z.infer<typeof BundleArtifactSeedSchema>;
  * The connected folder is the one input it cannot carry as catalog text: it
  * is the space's. The install writes each of the space's folders that allow
  * pushes as a literal into a step of its own — one start of the skill per
- * folder on every run — and writes no agent where there is none, saying why.
+ * folder, in order — and writes no agent where there is none, saying why.
  */
 export const BundledSkillStarterAgentSchema = z
   .object({
@@ -445,93 +445,90 @@ export type BundledSkillStarterAgent = z.infer<typeof BundledSkillStarterAgentSc
 /** The first step of a skill-starter agent; a further start is `start-skill-2`, `-3`, … */
 export const SKILL_STARTER_STEP_ID = 'start-skill';
 
-/** The step a skill-starter agent ends on when one of several starts failed. */
-export const SKILL_STARTER_FAILED_STEP_ID = 'a-start-failed';
-
-const afterFailureStepId = (stepId: string): string => `${stepId}-after-failure`;
-
 const edgeTo = (stepId: string | undefined): { next: Array<{ stepId: string }> } => ({
   next: stepId === undefined ? [] : [{ stepId }],
 });
 
 /**
  * The definition a skill-starter agent is written with: one
- * `workflow.run.start` of the skill per entry of `runs`, each with its inputs
- * literal and `wait: 'none'` — the agent's run ends once the skills' have
- * started, and no skill run is a conversation's.
+ * `workflow.run.start` of the skill per folder, the folder given as
+ * `folderInput`, each literal and `wait: 'none'` — the agent's run ends once
+ * the skills' have started, and no skill run is a conversation's.
  *
  * Each start's input is its config alone (`inputPassthrough: false`): a step
  * is otherwise handed the run's input or the previous start's output, whose
  * keys the strict `workflow.run.start` input refuses.
  *
- * The starts run in order, and every one runs whatever an earlier one did —
- * one folder's refusal must not stop the others' passes. The run fails when
- * any start failed, wherever it stood: the first failure moves the run onto a
- * second path holding the remaining starts, which ends on
- * `workflow.run.fail`, so whether the run failed never depends on which start
- * was last.
+ * The starts run in order. Where there are several, each has one fail step,
+ * `<start>-again`: the same start made once more, named for its folder. A
+ * start that goes through the second time carries the run on to the next
+ * folder; one that fails again fails the run on that step. That is what lets a
+ * retry recover: a retry re-runs the step the run failed on, so it starts that
+ * folder again and goes on to the folders after it, where a run ending on
+ * `workflow.run.fail` would only fail again.
+ *
+ * The gate stands right after its start because the engine evaluates no edge
+ * condition: the path is the run's only memory, and remembering which folder
+ * failed across the starts after it takes a step per folder per failure. So a
+ * folder refused twice holds the folders after it until the run is retried or
+ * the agent next runs — the price of steps that grow with the folders, not
+ * with their failures.
  */
 export function skillStarterAgentDefinition(params: {
   slug: string;
   catalogId: string;
   name: string;
   description: string;
-  runs: ReadonlyArray<Record<string, string>>;
+  /** The run input of the skill each folder is given as. */
+  folderInput: string;
+  folders: readonly string[];
 }): Record<string, unknown> {
-  const count = params.runs.length;
+  const { folders } = params;
+  const count = folders.length;
   if (count === 0) {
-    throw new Error(`A skill-starter agent for "${params.slug}" needs at least one run to start.`);
+    throw new Error(
+      `A skill-starter agent for "${params.slug}" needs at least one folder to start.`,
+    );
   }
-  const stepIds = params.runs.map((_, index) =>
-    index === 0 ? SKILL_STARTER_STEP_ID : `${SKILL_STARTER_STEP_ID}-${String(index + 1)}`,
-  );
-  const start = (index: number, afterFailure: boolean) => {
-    const of = count === 1 ? '' : ` (${String(index + 1)} of ${String(count)})`;
-    return {
-      stepId: afterFailure ? afterFailureStepId(stepIds[index] ?? '') : stepIds[index],
-      stepType: 'workflow',
-      operation: 'workflow.run.start',
-      name: `Start ${params.name}${of}${afterFailure ? ', after a start failed' : ''}`,
-      config: {
-        slug: params.slug,
-        catalogId: params.catalogId,
-        inputs: params.runs[index],
-        wait: 'none',
-      },
-      inputPassthrough: false,
-    };
-  };
-  const last = count - 1;
-  const steps: Array<Record<string, unknown>> = params.runs.map((_, index) => {
-    const next = stepIds[index + 1];
-    return {
-      ...start(index, false),
-      onSuccess: edgeTo(next),
-      onFailure: edgeTo(next === undefined ? undefined : afterFailureStepId(next)),
-    };
+  const startId = (index: number) =>
+    index === 0 ? SKILL_STARTER_STEP_ID : `${SKILL_STARTER_STEP_ID}-${String(index + 1)}`;
+  const startOn = (index: number) => ({
+    stepType: 'workflow',
+    operation: 'workflow.run.start',
+    config: {
+      slug: params.slug,
+      catalogId: params.catalogId,
+      inputs: { [params.folderInput]: folders[index] ?? '' },
+      wait: 'none',
+    },
+    inputPassthrough: false,
   });
-  for (let index = 1; index <= last; index += 1) {
-    const next = stepIds[index + 1];
-    const onward = next === undefined ? undefined : afterFailureStepId(next);
+
+  const steps: Array<Record<string, unknown>> = [];
+  // A single folder's start is its run's only step: a retry makes it again.
+  const gated = count > 1;
+  for (let index = 0; index < count; index += 1) {
+    const folder = folders[index] ?? '';
+    const of = gated ? ` (${String(index + 1)} of ${String(count)})` : '';
+    const next = edgeTo(index + 1 < count ? startId(index + 1) : undefined);
+    const again = `${startId(index)}-again`;
     steps.push({
-      ...start(index, true),
-      onSuccess: edgeTo(index === last ? SKILL_STARTER_FAILED_STEP_ID : onward),
-      onFailure: edgeTo(onward),
+      stepId: startId(index),
+      ...startOn(index),
+      name: `Start ${params.name} on ${folder}${of}`,
+      onSuccess: next,
+      onFailure: edgeTo(gated ? again : undefined),
     });
-  }
-  if (count > 1) {
+    if (!gated) continue;
     steps.push({
-      stepId: SKILL_STARTER_FAILED_STEP_ID,
-      stepType: 'workflow',
-      operation: 'workflow.run.fail',
-      name: `Fail: a start of ${params.name} failed`,
-      config: {
-        reason:
-          `A start of ${params.name} failed, and every start after it was still made. ` +
-          'The failed start is the step of this run that failed, and its inputs name the folder.',
-      },
-      inputPassthrough: false,
-      onSuccess: edgeTo(undefined),
+      stepId: again,
+      ...startOn(index),
+      name: `Start ${params.name} on ${folder} again`,
+      description:
+        `The start of ${params.name} on ${folder} failed and is made once more. The run fails ` +
+        'here if it fails again; retrying the run starts the folder again from this step, then ' +
+        'the folders after it.',
+      onSuccess: next,
       onFailure: edgeTo(undefined),
     });
   }
@@ -548,8 +545,7 @@ export function skillStarterAgentDefinition(params: {
     stateVariables: [],
     steps,
     startStepId: SKILL_STARTER_STEP_ID,
-    allowedOperations:
-      count === 1 ? ['workflow.run.start'] : ['workflow.run.start', 'workflow.run.fail'],
+    allowedOperations: ['workflow.run.start'],
     supportedModes: ['api'],
     status: 'published',
   };
@@ -657,6 +653,13 @@ export type PostInstallTask = z.infer<typeof PostInstallTaskSchema>;
 // SkillBundle — a curated installable bundle
 // ============================================================================
 
+/**
+ * The room a Store listing's description has. It is the account an operator
+ * and the Helmsman read of what a bundle installs and when it asks, so it is a
+ * ceiling, not a style limit — the same as a catalog skill's description.
+ */
+export const STORE_DESCRIPTION_MAX_CHARS = 20_000;
+
 export const SkillBundleSchema = z
   .object({
     /** Unique catalog identifier for this bundle. */
@@ -668,7 +671,7 @@ export const SkillBundleSchema = z
     /** One-line summary shown on the card. */
     tagline: z.string().min(1).max(300),
     /** Multi-paragraph description shown in the detail view. */
-    description: z.string().min(1).max(5000),
+    description: z.string().min(1).max(STORE_DESCRIPTION_MAX_CHARS),
     /** Domain tags for filtering/search (e.g., 'trading', 'portfolio'). */
     tags: z.array(z.string().min(1).max(50)).max(10).default([]),
     /**

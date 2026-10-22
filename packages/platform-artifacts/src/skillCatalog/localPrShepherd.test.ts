@@ -804,7 +804,24 @@ describe('Local PR Shepherd — it fixes what CI failed', () => {
       owner: 'aflowai',
       repo: 'aflow',
       base: 'main',
+      round: 2,
     });
+  });
+
+  it('publishes every commission as round 2, a fix round on the pull request it tends', () => {
+    const remedies = [
+      pass(),
+      pass({ remedy: { value: 'base_conflict', decided: true }, commission: 'merge-only' }),
+    ];
+    for (const remedied of remedies) {
+      expect(remedied.ran).toContain('publish');
+      const start = WorkflowRunStartInputSchema.parse(remedied.inputs.get('publish'));
+      expect(start.inputs['round']).toBe(2);
+    }
+    const round = PUBLISH_LOCAL_CHANGES.bundle.workflow.runInputs.find(
+      (input) => input.id === 'round',
+    );
+    expect(round?.schema).toMatchObject({ type: 'integer', minimum: 1 });
   });
 
   it('releases the lease it took and records the attempt in the handoff', () => {
@@ -1415,6 +1432,29 @@ describe('Local PR Shepherd — it merges what the posture allows', () => {
     expect(merged.handoff?.mergeDeclinedSha).toBeUndefined();
   });
 
+  it('asks no merge of a draft and claims no head, then merges the same head once it is marked ready', () => {
+    const store = new Map<string, Record<string, unknown>>();
+    const draft = green({ pullRequest: { draft: true }, mergeOutcomes: store });
+    expect(draft.decision).toBe('leave');
+    expect(draft.outputs.get('decide')?.['reason']).toMatch(/is a draft/);
+    for (const task of ['lease', 'lease-takeover', 'claim-merge', 'merge']) {
+      expect(draft.statuses.get(task)).not.toBe('succeeded');
+    }
+    expect(store.size).toBe(0);
+    // The draft rule is read before every rule that can decide `merge`.
+    const draftRule = SHEPHERD_RULES.findIndex((rule) =>
+      JSON.stringify(rule.when).includes('state.pr.data.draft'),
+    );
+    const mergeRule = SHEPHERD_RULES.findIndex((rule) => rule.decision === 'merge');
+    expect(draftRule).toBeGreaterThanOrEqual(0);
+    expect(draftRule).toBeLessThan(mergeRule);
+
+    const ready = green({ mergeOutcomes: store });
+    expect(ready.decision).toBe('merge');
+    expect(ready.statuses.get('claim-merge')).toBe('succeeded');
+    expect(ready.statuses.get('merge')).toBe('succeeded');
+  });
+
   it('reads the required checks from the rulesets and the classic protection together, and judges each on the head', () => {
     const merged = green({ required: { rules: ['Test'], protection: ['Lint'] } });
     expect(presetOf(merged.inputs.get('read-required-protection')!)).toBe(
@@ -1995,6 +2035,20 @@ describe('Local PR Shepherd — it stops', () => {
       },
     );
 
+    it('keeps a live claim where its pass cannot be read, and raises no second item', () => {
+      const claims = new Map<string, Record<string, unknown>>();
+      expect(spent(claims).statuses.get('hand-over')).toBe('succeeded');
+      const [path, live] = [...claims.entries()][0]!;
+      const unread = spent(claims, { abandonOwner: 'gone' });
+      expect(unread.statuses.get('read-abandon-owner')).toBe('failed');
+      expect(unread.outputs.get('judge-abandon-claim')?.['decision']).toBe('live');
+      for (const claim of ['claim-abandon', 'claim-abandon-takeover']) {
+        expect(unread.statuses.get(claim)).toBe('skipped');
+      }
+      expect(unread.statuses.get('hand-over')).toBe('skipped');
+      expect(claims).toEqual(new Map([[path, live]]));
+    });
+
     it('raises one item of two overlapping passes that both read no claim: the second create is refused', () => {
       const claims = new Map<string, Record<string, unknown>>();
       const unread = new Map(claims);
@@ -2041,7 +2095,6 @@ describe('Local PR Shepherd — it stops', () => {
       it.each([
         ['its pass failed', { status: 'failed' }],
         ['its pass was cancelled', { status: 'cancelled' }],
-        ['its pass cannot be read', 'gone'],
       ] as const)('takes it over where %s', (_case, abandonOwner) => {
         const claims = new Map<string, Record<string, unknown>>();
         spent(claims, { claimUnreported: true });
@@ -2296,7 +2349,8 @@ describe('Local PR Shepherd bundle', () => {
         catalogId: LOCAL_PR_SHEPHERD.catalogId,
         name: 'Local PR Shepherd',
         description: 'Starts a pass.',
-        runs: [{ bindingId: 'hb_aflow' }],
+        folderInput: 'bindingId',
+        folders: ['hb_aflow'],
       }),
     );
     expect(definition.flowId).toBe('local-pr-shepherd');
@@ -2314,81 +2368,175 @@ describe('Local PR Shepherd bundle', () => {
 
   describe('on several folders', () => {
     const folders = ['hb_aflow', 'hb_docs', 'hb_site'];
-    const starter = (count: number) =>
-      AgentDefinitionSchema.parse(
-        skillStarterAgentDefinition({
-          slug: wf.slug,
-          catalogId: LOCAL_PR_SHEPHERD.catalogId,
-          name: 'Local PR Shepherd',
-          description: 'Starts a pass.',
-          runs: folders.slice(0, count).map((bindingId) => ({ bindingId })),
-        }),
-      );
+    const raw = (count: number) =>
+      skillStarterAgentDefinition({
+        slug: wf.slug,
+        catalogId: LOCAL_PR_SHEPHERD.catalogId,
+        name: 'Local PR Shepherd',
+        description: 'Starts a pass.',
+        folderInput: 'bindingId',
+        folders: folders.slice(0, count),
+      });
+    const starter = (count: number) => AgentDefinitionSchema.parse(raw(count));
+    type Starter = ReturnType<typeof starter>;
+    const folderOf = (step: Starter['steps'][number]) =>
+      (step.config as { inputs: { bindingId: string } }).inputs.bindingId;
 
     /**
-     * The run the orchestrator makes of the graph: a step that succeeds takes
-     * its first success edge, one that fails its first failure edge, and the
-     * step with nowhere to go ends the run as it ended — completed on success,
-     * failed on failure. A start fails where its folder is in `refused`.
+     * The run the orchestrator makes of the graph from `from`: a step that
+     * succeeds takes its first success edge, one that fails its first failure
+     * edge, and the step with nowhere to go ends the run as it ended. A run
+     * retried starts from the step it failed on, as `retryRun` reschedules it.
+     * A start fails where `refuses` says so of its folder.
      */
-    function walk(definition: ReturnType<typeof starter>, refused: ReadonlySet<string>) {
+    function walk(definition: Starter, refuses: (folder: string) => boolean, from?: string) {
       const byId = new Map(definition.steps.map((step) => [step.stepId, step]));
       const started: string[] = [];
-      let stepId: string | undefined = definition.startStepId;
+      let stepId = from ?? definition.startStepId;
       for (let guard = 0; guard < 50; guard += 1) {
-        const step = byId.get(stepId ?? '');
-        if (step === undefined) throw new Error(`no step ${String(stepId)}`);
-        let succeeded: boolean;
-        if (step.operation === 'workflow.run.start') {
-          const folder = (step.config as { inputs: { bindingId: string } }).inputs.bindingId;
-          started.push(folder);
-          succeeded = !refused.has(folder);
-        } else {
-          expect(step.operation).toBe('workflow.run.fail');
-          succeeded = false;
-        }
+        const step = byId.get(stepId);
+        if (step === undefined) throw new Error(`no step ${stepId}`);
+        expect(step.operation).toBe('workflow.run.start');
+        const folder = folderOf(step);
+        started.push(folder);
+        const succeeded = !refuses(folder);
         const next = (succeeded ? step.onSuccess : step.onFailure).next[0]?.stepId ?? undefined;
-        if (next === undefined) return { started, status: succeeded ? 'COMPLETED' : 'FAILED' };
+        if (next === undefined) {
+          return succeeded
+            ? { started, status: 'COMPLETED' as const }
+            : { started, status: 'FAILED' as const, failedOn: step };
+        }
         stepId = next;
       }
       throw new Error('the graph does not end');
     }
 
-    it('is a valid agent of operation steps only, every one taking its config alone', () => {
+    /** Every set of refused folders of the first `count`. */
+    function* refusals(count: number) {
+      const own = folders.slice(0, count);
+      for (let mask = 0; mask < 1 << count; mask += 1) {
+        yield { own, refused: own.filter((_, index) => (mask & (1 << index)) !== 0) };
+      }
+    }
+
+    it('is a valid agent of start steps only, every one taking its config alone', () => {
       for (const count of [2, 3]) {
-        const raw = skillStarterAgentDefinition({
-          slug: wf.slug,
-          catalogId: LOCAL_PR_SHEPHERD.catalogId,
-          name: 'Local PR Shepherd',
-          description: 'Starts a pass.',
-          runs: folders.slice(0, count).map((bindingId) => ({ bindingId })),
-        });
-        expect(validateAgentDefinition(raw).issues.filter((i) => i.level === 'error')).toEqual([]);
-        const definition = AgentDefinitionSchema.parse(raw);
+        expect(
+          validateAgentDefinition(raw(count)).issues.filter((i) => i.level === 'error'),
+        ).toEqual([]);
+        const definition = starter(count);
         expect(definition.startStepId).toBe('start-skill');
         expect(definition.steps.every((step) => step.inputPassthrough === false)).toBe(true);
         expect(new Set(definition.steps.map((step) => step.operation))).toEqual(
-          new Set(['workflow.run.start', 'workflow.run.fail']),
+          new Set(['workflow.run.start']),
         );
-        expect(definition.allowedOperations).toEqual(['workflow.run.start', 'workflow.run.fail']);
+        expect(definition.allowedOperations).toEqual(['workflow.run.start']);
+        expect(new Set(definition.steps.map((step) => step.stepId)).size).toBe(
+          definition.steps.length,
+        );
         expect(JSON.stringify(definition)).not.toMatch(/ai\.|\$\{|\$memoryRef/);
       }
     });
 
-    it('starts every folder once, and fails the run exactly when any start failed, wherever it stood', () => {
+    it('grows by one start and one fail step per folder, so a space of many folders still installs', () => {
+      for (let count = 2; count <= 12; count += 1) {
+        const many = Array.from({ length: count }, (_, i) => `hb_folder_${String(i + 1)}`);
+        const definition = skillStarterAgentDefinition({
+          slug: wf.slug,
+          catalogId: LOCAL_PR_SHEPHERD.catalogId,
+          name: 'Local PR Shepherd',
+          description: 'Starts a pass.',
+          folderInput: 'bindingId',
+          folders: many,
+        });
+        expect(
+          validateAgentDefinition(definition).issues.filter((i) => i.level === 'error'),
+        ).toEqual([]);
+        const steps = AgentDefinitionSchema.parse(definition).steps;
+        expect({ count, steps: steps.length }).toEqual({ count, steps: 2 * count });
+        for (const [index, folder] of many.entries()) {
+          const own = steps.filter((step) => folderOf(step) === folder);
+          expect(own.map((step) => step.stepId)).toEqual([
+            index === 0 ? 'start-skill' : `start-skill-${String(index + 1)}`,
+            index === 0 ? 'start-skill-again' : `start-skill-${String(index + 1)}-again`,
+          ]);
+        }
+      }
+    });
+
+    it('fails the run exactly when a folder’s start fails twice, on that folder’s fail step', () => {
       for (const count of [2, 3]) {
         const definition = starter(count);
-        const own = folders.slice(0, count);
-        for (let mask = 0; mask < 1 << count; mask += 1) {
-          const refused = new Set(own.filter((_, index) => (mask & (1 << index)) !== 0));
-          expect({ count, refused: [...refused], ...walk(definition, refused) }).toEqual({
-            count,
-            refused: [...refused],
-            started: own,
-            status: refused.size === 0 ? 'COMPLETED' : 'FAILED',
+        for (const { own, refused } of refusals(count)) {
+          const run = walk(definition, (folder) => refused.includes(folder));
+          const at = { count, refused };
+          expect({ ...at, status: run.status }).toEqual({
+            ...at,
+            status: refused.length === 0 ? 'COMPLETED' : 'FAILED',
+          });
+          if (run.status === 'COMPLETED') {
+            expect(run.started).toEqual(own);
+            continue;
+          }
+          // The first refused folder: started, made again, and failed on there.
+          const folder = refused[0]!;
+          expect({ ...at, failedOn: run.failedOn.stepId }).toEqual({
+            ...at,
+            failedOn: `${definition.steps.find((s) => folderOf(s) === folder)!.stepId}-again`,
+          });
+          expect(folderOf(run.failedOn)).toBe(folder);
+          expect(run.failedOn.name).toBe(`Start Local PR Shepherd on ${folder} again`);
+          const before = own.slice(0, own.indexOf(folder));
+          expect({ ...at, started: run.started }).toEqual({
+            ...at,
+            started: [...before, folder, folder],
           });
         }
       }
+    });
+
+    it('a retry after a failed start step proceeds: it starts the refused folder and those after it, and completes', () => {
+      for (const count of [2, 3]) {
+        const definition = starter(count);
+        for (const { own, refused } of refusals(count)) {
+          if (refused.length === 0) continue;
+          const failed = walk(definition, (folder) => refused.includes(folder));
+          if (failed.status !== 'FAILED') throw new Error('a refused start fails the run');
+          // The cause has cleared: the retry re-runs the step the run failed on.
+          const retried = walk(definition, () => false, failed.failedOn.stepId);
+          const at = { count, refused, failedOn: failed.failedOn.stepId };
+          expect({ ...at, status: retried.status }).toEqual({ ...at, status: 'COMPLETED' });
+          // What the run still owed, and never a folder whose start went through.
+          expect({ ...at, started: retried.started }).toEqual({
+            ...at,
+            started: own.slice(own.indexOf(folderOf(failed.failedOn))),
+          });
+        }
+      }
+    });
+
+    it('fails a retry on the step of the folder still refused, and the next retry completes', () => {
+      const definition = starter(3);
+      const first = walk(definition, (folder) => folder !== 'hb_aflow');
+      if (first.status !== 'FAILED') throw new Error('two refused starts fail the run');
+      expect(first.failedOn.stepId).toBe('start-skill-2-again');
+      expect(first.failedOn.name).toBe('Start Local PR Shepherd on hb_docs again');
+      // hb_docs now starts; hb_site is still refused, and the retry fails on its step.
+      const second = walk(definition, (folder) => folder === 'hb_site', first.failedOn.stepId);
+      if (second.status !== 'FAILED') throw new Error('a refused start fails the retry');
+      expect(second.started).toEqual(['hb_docs', 'hb_site', 'hb_site']);
+      expect(second.failedOn.stepId).toBe('start-skill-3-again');
+      expect(walk(definition, () => false, second.failedOn.stepId)).toEqual({
+        started: ['hb_site'],
+        status: 'COMPLETED',
+      });
+    });
+
+    it('goes on to the next folder where a refused start goes through when it is made again', () => {
+      const definition = starter(2);
+      let attempts = 0;
+      const run = walk(definition, (folder) => folder === 'hb_aflow' && (attempts += 1) === 1);
+      expect(run).toEqual({ started: ['hb_aflow', 'hb_aflow', 'hb_docs'], status: 'COMPLETED' });
     });
   });
 
@@ -2399,9 +2547,10 @@ describe('Local PR Shepherd bundle', () => {
         catalogId: LOCAL_PR_SHEPHERD.catalogId,
         name: 'Local PR Shepherd',
         description: 'Starts a pass.',
-        runs: [],
+        folderInput: 'bindingId',
+        folders: [],
       }),
-    ).toThrow(/at least one run/);
+    ).toThrow(/at least one folder/);
   });
 
   // D2: a schedule starts the agent, never the skill, with a static template

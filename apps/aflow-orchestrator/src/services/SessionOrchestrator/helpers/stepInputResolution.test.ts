@@ -384,7 +384,8 @@ describe('resolveStepInput: a skill-starter agent on several folders', () => {
         catalogId: 'local-pr-shepherd',
         name: 'Local PR Shepherd',
         description: 'Starts a pass.',
-        runs: folders.slice(0, count).map((bindingId) => ({ bindingId })),
+        folderInput: 'bindingId',
+        folders: folders.slice(0, count),
       }),
     ).steps;
   }

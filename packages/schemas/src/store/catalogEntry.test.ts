@@ -6,6 +6,7 @@ import {
   HostManifestSchema,
 } from './catalogEntry.js';
 import { IconRefSchema } from './iconRef.js';
+import { STORE_DESCRIPTION_MAX_CHARS } from '../cybernetic/skillBundle.js';
 
 function validBundleEntry() {
   return {
@@ -104,6 +105,25 @@ describe('CatalogEntrySchema — variant round-trips', () => {
     const parsed = CatalogEntrySchema.parse(validBundleEntry());
     expect(parsed.kind).toBe('bundle');
     if (parsed.kind === 'bundle') expect(parsed.payload.skillCatalogIds).toHaveLength(2);
+  });
+
+  it('lists a bundle whose description runs well past 5000 characters, in the listing and its payload', () => {
+    const description = 'What the bundle installs and when it asks. '.repeat(250);
+    expect(description.length).toBeGreaterThan(10_000);
+    const base = validBundleEntry();
+    const parsed = CatalogEntrySchema.parse({
+      ...base,
+      description,
+      payload: { ...base.payload, description },
+    });
+    expect(parsed.description).toBe(description);
+    if (parsed.kind === 'bundle') expect(parsed.payload.description).toBe(description);
+    expect(
+      CatalogEntrySchema.safeParse({
+        ...base,
+        description: 'x'.repeat(STORE_DESCRIPTION_MAX_CHARS + 1),
+      }).success,
+    ).toBe(false);
   });
 
   it('parses an api connector entry', () => {

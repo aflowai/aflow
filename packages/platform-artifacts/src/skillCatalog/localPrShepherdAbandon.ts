@@ -47,8 +47,10 @@ export const HAND_OVER_TASK = 'hand-over';
  * `create` where none was read — a read that failed included, since a create
  * is refused wherever one exists — and `overwrite` where the claim is dead.
  * A claim is live while its pass is paused at the item, still running within
- * the lease's bound, or ended with the item answered. Any other — its pass
- * ended without an answer, cannot be read, or has run past the bound — left
+ * the lease's bound, or ended with the item answered — and while its pass
+ * cannot be read, since a failed read says nothing about the item, and taking
+ * the claim over on one would raise a second item beside a live one. Any
+ * other — its pass ended without an answer, or has run past the bound — left
  * no item a person can answer: its claim may have been written by a task that
  * never reported it, which then raised nothing, and it is taken over.
  */
@@ -57,6 +59,12 @@ export const ABANDON_CLAIM_RULES: readonly WorkflowRunDecideRule[] = [
     when: { anyOf: ['state.claim == null', 'state.claim.found == false'] },
     decision: 'create',
     reason: 'No hand-over of this head is recorded: this pass claims it and raises the item.',
+  },
+  {
+    when: { allOf: ['state.claim.dataJson.runId != null', 'state.owner == null'] },
+    decision: 'live',
+    reason:
+      'The pass that claimed this head could not be read, so nothing shows its item is gone: the claim is kept, and a later pass reads it again.',
   },
   {
     when: { expression: 'state.owner.taskOutput.taskId != null' },
@@ -84,7 +92,7 @@ export const ABANDON_CLAIM_RULES: readonly WorkflowRunDecideRule[] = [
 export const ABANDON_CLAIM_OTHERWISE = {
   decision: 'overwrite',
   reason:
-    'The pass that claimed this head ended without an answered item, cannot be read, or has run past the bound: no item stands for the head, and this pass takes the claim over.',
+    'The pass that claimed this head ended without an answered item, or has run past the bound: no item stands for the head, and this pass takes the claim over.',
 };
 
 /** A claim is written as the rules judged it: created, or a dead one taken over. */
@@ -175,7 +183,7 @@ export const ABANDON_TASKS = [
       expression: 'tasks.read-abandon-claim.output.dataJson.runId != null',
       onMissingRef: SKIP,
     },
-    // Unreadable, the claim is dead by rule.
+    // Unreadable, the claim stands by rule.
     optional: true,
     retryability: 'safe' as const,
     maxAttempts: 1,
