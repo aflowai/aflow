@@ -76,7 +76,7 @@ const COMMISSION_CHANGE: SkillCatalogEntry = {
           id: 'base',
           required: false,
           description:
-            "Where the checkout starts — a branch, tag or commit. `origin/main` for new work, fetched first so it is `main` as of now; the branch's name for a fix appended to it. Absent, the checkout starts at the folder's last commit.",
+            "Where the checkout starts — a branch, tag or commit. `origin/main` for new work, fetched first so it is `main` as of now; the branch's name for a fix appended to it. A commit the folder has not fetched yet, such as one just merged, is fetched with `origin`'s default branch. Absent, the checkout starts at the folder's last commit.",
           schema: { type: 'string', minLength: 1, maxLength: HOST_BRANCH_NAME_MAX_LENGTH },
         },
         {

@@ -107,6 +107,7 @@ import {
 } from '../harnessSessions.js';
 import { createChatterStripper } from '../egressRefusals.js';
 import { createHarnessEventReader } from '../harnessEvents.js';
+import { isRealDirectory } from '../checkoutDependencies.js';
 import {
   borrowedReads,
   checkApplies,
@@ -115,13 +116,12 @@ import {
   collectChanges,
   currentHead,
   DIFF_CEILING_BYTES,
-  fetchRemoteBase,
   folderPrefix,
   INLINE_DIFF_CAP_BYTES,
-  isRealDirectory,
   NO_REPLACE_OBJECTS_ENV,
   prepareWorktree,
   removeWorktree,
+  resolveBase,
   resolveCommit,
   RUN_SCRATCH_DIR,
   utf8Prefix,
@@ -740,9 +740,8 @@ async function runHarness(
     const mergeFrom = continuesAttempt ? undefined : input.mergeFrom;
     // Resolved before any checkout is touched, so an unknown ref is refused
     // with the session's checkout still intact.
-    if (namedRef !== undefined) await fetchRemoteBase(binding.root, namedRef);
     const namedBase =
-      namedRef === undefined ? undefined : await resolveCommit(binding.root, namedRef);
+      namedRef === undefined ? undefined : await resolveBase(binding.root, namedRef);
     const mergeIdentity =
       mergeFrom === undefined ? undefined : await mergeIdentityArgs(binding.root);
     const mergeSource =

@@ -32,7 +32,8 @@ import { mergeIntoCheckout } from '../baseMerge.js';
 import { HostBindingSchema } from '../bindings.js';
 import { makeAgentScratch, makeScratch } from '../executorScratch.js';
 import { runSandboxed, sandboxAvailable } from '../sandboxedRun.js';
-import { collectChanges, isRealDirectory, prepareWorktree } from '../worktree.js';
+import { isRealDirectory } from '../checkoutDependencies.js';
+import { collectChanges, prepareWorktree } from '../worktree.js';
 import { CONFINEMENT_LISTENERS, requires } from './fixtures/capabilities.js';
 
 const confined = requires(...CONFINEMENT_LISTENERS);

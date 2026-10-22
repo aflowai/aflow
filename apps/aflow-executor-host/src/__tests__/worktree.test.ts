@@ -36,6 +36,7 @@ import {
   isGitRepository,
   prepareWorktree,
   removeWorktree,
+  resolveBase,
   resolveCommit,
   WorktreeError,
 } from '../worktree.js';
@@ -341,6 +342,83 @@ describe('a run started from a ref on a remote', () => {
   it('leaves a local branch with a slash in its name alone', async () => {
     await git(repo, 'branch', 'feat/fix');
     await expect(fetchRemoteBase(repo, 'feat/fix')).resolves.toBeUndefined();
+  });
+
+  it('resolves a base the folder already knows without fetching', async () => {
+    const known = (await git(repo, 'rev-parse', 'HEAD')).trim();
+    // Unreachable, so any fetch would refuse.
+    await git(repo, 'remote', 'set-url', 'origin', join(upstream, 'gone'));
+    await expect(resolveBase(repo, known)).resolves.toBe(known);
+    await expect(resolveBase(repo, known.slice(0, 8))).resolves.toBe(known);
+    await expect(resolveBase(repo, 'main')).resolves.toBe(known);
+  });
+
+  it('fetches origin main for a merged sha the folder has not seen, then resolves it', async () => {
+    const merged = await remoteMovesOn();
+    const short = merged.slice(0, 8);
+    await expect(resolveCommit(repo, short)).rejects.toThrow(WorktreeError);
+
+    await expect(resolveBase(repo, short)).resolves.toBe(merged);
+    const wt = await prepareWorktree(repo, scratch, 'work', { at: merged });
+    expect(await readFile(join(wt.path, 'app.txt'), 'utf8')).toBe('the remote moved on\n');
+    await removeWorktree(wt.path);
+  });
+
+  it('looks on the default branch origin names, whatever it is called', async () => {
+    await git(repo, 'push', '-q', 'origin', 'main:master');
+    await git(upstream, 'symbolic-ref', 'HEAD', 'refs/heads/master');
+    // Unrecorded, so the remote is asked which branch its HEAD names.
+    await git(repo, 'update-ref', '--no-deref', '-d', 'refs/remotes/origin/HEAD');
+    await git(elsewhere, 'clone', '-q', upstream, '.');
+    await git(elsewhere, 'config', 'user.email', 'other@example.com');
+    await git(elsewhere, 'config', 'user.name', 'Other');
+    await writeFile(join(elsewhere, 'app.txt'), 'merged on master\n');
+    await git(elsewhere, 'commit', '-qam', 'merged on master');
+    await git(elsewhere, 'push', '-q', 'origin', 'master');
+    const merged = (await git(elsewhere, 'rev-parse', 'HEAD')).trim();
+
+    await expect(resolveBase(repo, merged.slice(0, 8))).resolves.toBe(merged);
+  });
+
+  it('refuses a base it could not fetch, naming the base and the fetch error', async () => {
+    const merged = (await remoteMovesOn()).slice(0, 8);
+    // Recorded as a clone records it, so the default branch is read without the remote.
+    await git(repo, 'remote', 'set-head', 'origin', 'main');
+    await git(repo, 'remote', 'set-url', 'origin', join(upstream, 'gone'));
+    const refusal = resolveBase(repo, merged);
+    await expect(refusal).rejects.toMatchObject({ kind: 'fetch_failed' });
+    await expect(refusal).rejects.toThrow(`\`${merged}\` names no commit in ${repo}`);
+    await expect(refusal).rejects.toThrow(
+      /`main` was fetched from `origin` to look for it, and the fetch failed: .*does not appear to be a git repository/,
+    );
+  });
+
+  it('refuses a commit id when origin cannot be asked for its default branch', async () => {
+    await git(repo, 'update-ref', '--no-deref', '-d', 'refs/remotes/origin/HEAD');
+    await git(repo, 'remote', 'set-url', 'origin', join(upstream, 'gone'));
+    const refusal = resolveBase(repo, 'deadbeefdeadbeef');
+    await expect(refusal).rejects.toMatchObject({ kind: 'fetch_failed' });
+    await expect(refusal).rejects.toThrow(
+      /`origin` could not be asked for its default branch to look for it there: .*does not appear to be a git repository/,
+    );
+  });
+
+  it('refuses a branch name the folder does not know without reaching the remote', async () => {
+    const tracking = (await git(repo, 'rev-parse', 'origin/main')).trim();
+    await remoteMovesOn();
+    const refusal = resolveBase(repo, 'feat/tyop');
+    await expect(refusal).rejects.toMatchObject({ kind: 'unknown_ref' });
+    await expect(refusal).rejects.toThrow(`\`feat/tyop\` names no commit in ${repo}.`);
+    // A fetch would have moved it to the commit the remote moved on to.
+    expect((await git(repo, 'rev-parse', 'origin/main')).trim()).toBe(tracking);
+  });
+
+  it('refuses a base origin main does not hold either, saying both were tried', async () => {
+    const refusal = resolveBase(repo, 'deadbeefdeadbeef');
+    await expect(refusal).rejects.toMatchObject({ kind: 'unknown_ref' });
+    await expect(refusal).rejects.toThrow(
+      `\`deadbeefdeadbeef\` names no commit in ${repo}, nor after fetching \`main\` from \`origin\``,
+    );
   });
 
   it('never fetches a refspec into one of the folder’s branches', async () => {

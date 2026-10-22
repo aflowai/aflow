@@ -22,23 +22,12 @@
  *
  * It carries only what the repository tracks, so the operator's installed
  * dependencies are linked into it: without them a harness asked to run the
- * tests reaches for a package registry the boundary denies.
+ * tests reaches for a package registry the boundary denies
+ * (`checkoutDependencies.ts`).
  */
 import { execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import type { Dirent } from 'node:fs';
-import {
-  lstat,
-  mkdir,
-  mkdtemp,
-  readdir,
-  realpath,
-  rm,
-  rmdir,
-  symlink,
-  unlink,
-  writeFile,
-} from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import {
   basename,
@@ -50,6 +39,13 @@ import {
 } from 'node:path';
 import { promisify } from 'node:util';
 
+import {
+  dependencyDirs,
+  isRealDirectory,
+  linkDependencies,
+  repositoryInstallations,
+  unlinkDependencies,
+} from './checkoutDependencies.js';
 import { appendAlternateStores } from './objectAlternates.js';
 
 const run = promisify(execFile);
@@ -444,276 +440,6 @@ export async function countCommits(root: string, base: string, head: string): Pr
   return Number((await git(root, ['rev-list', '--count', `${base}..${head}`])).trim());
 }
 
-/**
- * The directory a checkout inherits rather than fetches again.
- *
- * A checkout is created at a commit, so it carries what the repository tracks
- * and nothing else — and installed dependencies are, correctly, not tracked. A
- * harness asked to run the tests or the typecheck therefore reaches for the
- * package registry, which the boundary denies, and reports a network failure
- * for work the operator's own machine could already do. Linking the folder's
- * installation in is what makes the checkout runnable.
- *
- * By directory name, with no ecosystem named anywhere: which manifest put it
- * there, and whether it is one package or a workspace, is none of this lane's
- * business.
- */
-const DEPENDENCY_DIR = 'node_modules';
-
-/**
- * How far down the folder is searched. A workspace keeps one installation at
- * the root and one per package, which is this depth; going further would walk
- * trees whose size belongs to the operator rather than to this run, on every
- * run and every collection.
- */
-const DEPENDENCY_SCAN_DEPTH = 3;
-
-/**
- * Every `node_modules` within reach, as paths relative to `base`.
- *
- * A link counts. A folder whose installation lives elsewhere on disk still has
- * one, and asking only for a real directory left such a folder with nothing
- * carried into the checkout at all.
- *
- * Never descends into one: the inside of an installation is the largest tree on
- * the machine, and what this lane wants from it is its entries, not its depth.
- */
-async function dependencyDirs(base: string): Promise<string[]> {
-  const found: string[] = [];
-  const walk = async (relative: string, depth: number): Promise<void> => {
-    if (depth > DEPENDENCY_SCAN_DEPTH) return;
-    let entries: Dirent[];
-    try {
-      entries = await readdir(join(base, relative), { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      const child = relative === '' ? entry.name : join(relative, entry.name);
-      if (entry.name === DEPENDENCY_DIR) {
-        if (entry.isDirectory() || entry.isSymbolicLink()) found.push(child);
-        continue;
-      }
-      if (entry.name === '.git' || entry.isSymbolicLink() || !entry.isDirectory()) continue;
-      await walk(child, depth + 1);
-    }
-  };
-  await walk('', 1);
-  return found;
-}
-
-/**
- * The installations of the repository at `top` that a checkout of its folder at
- * `prefix` carries, as paths from the top level: the union of every one the
- * scan from the top level reaches and every one on the walk from the folder up
- * to the top level, the folder's own included. The scan stops at
- * `DEPENDENCY_SCAN_DEPTH`; the walk does not, so a folder three directories
- * down or more still has its own installation and each above it.
- */
-async function repositoryInstallations(top: string, prefix: string): Promise<string[]> {
-  const installations = new Set(await dependencyDirs(top));
-  const steps = prefix === '' ? [] : prefix.split(sep);
-  for (let depth = steps.length; depth >= 0; depth -= 1) {
-    const relative = join(...steps.slice(0, depth), DEPENDENCY_DIR);
-    if (installations.has(relative)) continue;
-    const info = await lstat(join(top, relative)).catch(() => undefined);
-    if (info?.isDirectory() === true || info?.isSymbolicLink() === true) {
-      installations.add(relative);
-    }
-  }
-  return [...installations];
-}
-
-interface MirrorContext {
-  /**
-   * The repository's top level, resolved, so containment is decided on real
-   * paths: a workspace link from a connected package may lead to a sibling
-   * package, which the clone carries as much as the folder itself.
-   */
-  readonly rootReal: string;
-  /** The clone's top level, where a path inside the repository lands. */
-  readonly worktreePath: string;
-}
-
-/**
- * Where one entry of the operator's installation should point from inside the
- * checkout.
- *
- * A workspace package manager puts links in `node_modules` that lead back into
- * the repository — `@scope/pkg -> ../../packages/pkg`. Reached through a link
- * to the operator's installation, every one of those resolves into the folder
- * the operator is editing, so a harness typechecking the checkout read source
- * that was never committed and the promise that a run sees committed work only
- * was false on any workspace.
- *
- * So an entry that resolves to a path the repository itself carries — under
- * its root and outside any installation — is a workspace package. Its link is
- * computed from that real path, relative from the mirrored entry to the same
- * path in the checkout, so from wherever the checkout is reached it resolves
- * to the committed version. An entry that resolves anywhere else —
- * a real dependency, or a link landing within an installation — is pointed at
- * the operator's, which is the tree this lane will not duplicate.
- */
-async function mirrorTarget(
-  entryPath: string,
-  mirroredPath: string,
-  context: MirrorContext,
-): Promise<string> {
-  let resolved: string;
-  try {
-    resolved = await realpath(entryPath);
-  } catch {
-    return entryPath;
-  }
-  if (!resolved.startsWith(context.rootReal + sep)) return entryPath;
-  const inside = resolved.slice(context.rootReal.length + 1);
-  if (inside.split(sep).includes(DEPENDENCY_DIR)) return entryPath;
-  return relativePath(dirname(mirroredPath), join(context.worktreePath, inside));
-}
-
-/**
- * Recreate an installation's surface in the checkout, one link per entry.
- *
- * The directory is real and its entries are links: nothing is copied, and a
- * scope is opened one level further because `@scope` names a shelf of packages
- * rather than a package.
- *
- * Best effort per entry. A checkout missing one is still a checkout.
- */
-async function mirrorInstallation(
-  source: string,
-  destination: string,
-  context: MirrorContext,
-  expandScopes: boolean,
-): Promise<void> {
-  let entries: Dirent[];
-  try {
-    entries = await readdir(source, { withFileTypes: true });
-  } catch {
-    return;
-  }
-  try {
-    await mkdir(destination, { recursive: true });
-  } catch {
-    return;
-  }
-  for (const entry of entries) {
-    const from = join(source, entry.name);
-    const to = join(destination, entry.name);
-    if (expandScopes && entry.name.startsWith('@')) {
-      await mirrorInstallation(from, to, context, false);
-      continue;
-    }
-    await symlink(await mirrorTarget(from, to, context), to).catch(() => {});
-  }
-}
-
-/**
- * Point the checkout at the operator's installed dependencies.
- *
- * Links rather than copies: an installation is gigabytes and is identical to
- * the one already on disk. What they reach is readable and not writable — the
- * sandbox grants writes to the worktree by path, and a write through a link
- * lands on the folder's own directory, which the harness's policy withholds. So
- * a harness can run the tests and cannot corrupt what the operator installed.
- *
- * Every installation `repositoryInstallations` names is linked, at the same
- * place in the clone, whichever folder of the repository is connected and
- * however deep it lies: the folder's own and each on its way up to the top
- * level, since resolution walks up from the folder into the top level's
- * installation, where a workspace hoists most of what a package needs; and
- * every other the scan from the top level reaches, since a workspace link leads
- * into a sibling package, whose own installation holds what was not hoisted.
- */
-async function linkDependencies(top: string, checkout: Checkout): Promise<void> {
-  let rootReal: string;
-  try {
-    rootReal = await realpath(top);
-  } catch {
-    rootReal = top;
-  }
-  const context: MirrorContext = { rootReal, worktreePath: checkout.path };
-  const prefix = relativePath(checkout.path, checkout.workDir);
-  for (const relative of await repositoryInstallations(top, prefix)) {
-    const destination = join(checkout.path, relative);
-    try {
-      // Only where the checkout has the same place to put it, and has nothing
-      // there already — a tracked directory of that name is the repository's.
-      if (!(await lstat(dirname(destination))).isDirectory()) continue;
-    } catch {
-      continue;
-    }
-    try {
-      await lstat(destination);
-      continue;
-    } catch {
-      // Absent, which is the case this fills.
-    }
-    await mirrorInstallation(join(top, relative), destination, context, true);
-  }
-}
-
-/**
- * Take a mirrored installation away without following any part of it.
- *
- * Every removal acts on the link itself, and a directory goes only if emptying
- * it left it empty. That is the property the whole arrangement rests on: a
- * removal that reached through a link would take the operator's installed
- * dependencies, or the repository's own package, with the checkout.
- */
-async function removeMirror(directory: string): Promise<void> {
-  let info;
-  try {
-    info = await lstat(directory);
-  } catch {
-    return;
-  }
-  if (info.isSymbolicLink()) {
-    await unlink(directory).catch(() => {});
-    return;
-  }
-  if (!info.isDirectory()) return;
-
-  let entries: Dirent[];
-  try {
-    entries = await readdir(directory, { withFileTypes: true });
-  } catch {
-    return;
-  }
-  for (const entry of entries) {
-    const child = join(directory, entry.name);
-    if (entry.isSymbolicLink()) {
-      await unlink(child).catch(() => {});
-      continue;
-    }
-    // A real directory here is a mirrored scope, whose entries are links.
-    if (!entry.isDirectory()) continue;
-    const scope = await readdir(child, { withFileTypes: true }).catch(() => [] as Dirent[]);
-    for (const inner of scope) {
-      if (inner.isSymbolicLink()) await unlink(join(child, inner.name)).catch(() => {});
-    }
-    await rmdir(child).catch(() => {});
-  }
-  await rmdir(directory).catch(() => {});
-}
-
-/** Whether `path` is itself a directory, never one a link leads to. */
-export async function isRealDirectory(path: string): Promise<boolean> {
-  return (await lstat(path).catch(() => undefined))?.isDirectory() === true;
-}
-
-/**
- * Take the mirrors out of the checkout at `worktreePath`, and out of nothing
- * else: a checkout path that is a link is not walked, since what it leads to is
- * someone's real `node_modules` and its links are their installation.
- */
-async function unlinkDependencies(worktreePath: string): Promise<void> {
-  if (!(await isRealDirectory(worktreePath))) return;
-  for (const relative of await dependencyDirs(worktreePath)) {
-    await removeMirror(join(worktreePath, relative));
-  }
-}
-
 export interface PreparedWorktree extends Checkout {
   /** Commit the run started from, so the diff has a stated base. */
   readonly baseSha: string;
@@ -912,31 +638,161 @@ export async function fetchFromRemote(
   otherwise = 'name a local branch, tag or commit',
 ): Promise<void> {
   const base = `${remote}/${ref}`;
-  try {
-    await run('git', ['-C', root, ...GIT_SAFETY_ARGS, 'fetch', '--end-of-options', remote, ref], {
-      timeout: GIT_TIMEOUT_MS,
-      maxBuffer: 1024 * 1024,
-      env: transportEnv(),
-    });
-  } catch (error) {
-    const stderr =
-      typeof error === 'object' && error !== null && 'stderr' in error
-        ? String((error as { stderr: unknown }).stderr)
-        : '';
-    const reason =
-      stderr
-        .split('\n')
-        .map((line) => line.trim())
-        .find((line) => line !== '') ??
-      (error instanceof Error && 'killed' in error && error.killed === true
-        ? `no answer within ${String(GIT_TIMEOUT_MS / 1000)} seconds`
-        : 'git fetch failed');
+  const reason = await fetchRef(root, remote, ref);
+  if (reason !== undefined) {
     throw new WorktreeError(
       `\`${base}\` names the remote \`${remote}\`, and \`${ref}\` could not be fetched from it: ` +
         `${reason}. The folder must reach \`${remote}\` the way the operator's own git does; ` +
         `otherwise ${otherwise}.`,
       'fetch_failed',
     );
+  }
+}
+
+/**
+ * `git fetch <remote> <ref>` with the operator's transport: nothing when it
+ * fetched, git's first line of complaint when it did not.
+ */
+async function fetchRef(root: string, remote: string, ref: string): Promise<string | undefined> {
+  try {
+    await run('git', ['-C', root, ...GIT_SAFETY_ARGS, 'fetch', '--end-of-options', remote, ref], {
+      timeout: GIT_TIMEOUT_MS,
+      maxBuffer: 1024 * 1024,
+      env: transportEnv(),
+    });
+    return undefined;
+  } catch (error) {
+    return remoteFailure(error, 'git fetch failed');
+  }
+}
+
+/** Git's first line of complaint about reaching a remote, or why it gave none. */
+function remoteFailure(error: unknown, otherwise: string): string {
+  const stderr =
+    typeof error === 'object' && error !== null && 'stderr' in error
+      ? String((error as { stderr: unknown }).stderr)
+      : '';
+  return (
+    stderr
+      .split('\n')
+      .map((line) => line.trim())
+      .find((line) => line !== '') ??
+    (error instanceof Error && 'killed' in error && error.killed === true
+      ? `no answer within ${String(GIT_TIMEOUT_MS / 1000)} seconds`
+      : otherwise)
+  );
+}
+
+/** Where a commission's base is looked for when the folder does not know it. */
+const BASE_REMOTE = 'origin';
+
+/** A base shaped like a commit id, full or abbreviated, rather than a ref name. */
+const COMMIT_ID = /^[0-9a-f]{4,64}$/i;
+
+/**
+ * The commit a commission's `base` names, fetched for where the folder cannot
+ * name it yet.
+ *
+ * A `<remote>/<ref>` base is fetched first, as `fetchRemoteBase` does. Any other
+ * base is resolved in the folder, and only a commit id the folder does not have
+ * — typically the sha of a pull request merged since it last fetched — reaches
+ * the network: it is looked for again after fetching `origin`'s default branch,
+ * which is where a merged commit lands. A branch or tag name the folder does not
+ * know is refused without asking the remote, since fetching the default branch
+ * cannot bring it. The fetch runs here, in the host lane with the operator's
+ * transport, because the harness's confined git cannot reach the remote at all.
+ * It moves `origin`'s remote-tracking branch as the operator's own fetch would,
+ * which keeps the fetched commit referenced while the run starts from it.
+ */
+export async function resolveBase(root: string, base: string): Promise<string> {
+  await fetchRemoteBase(root, base);
+  const known = await commitNamed(root, base);
+  if (known !== undefined) return known;
+  if (!COMMIT_ID.test(base)) return resolveCommit(root, base);
+
+  const unknown = `\`${base}\` names no commit in ${root}`;
+  if (!(await remoteNames(root)).includes(BASE_REMOTE)) {
+    throw new WorktreeError(
+      `${unknown}, and the folder has no \`${BASE_REMOTE}\` remote to fetch its default ` +
+        'branch from and look again. Name a branch, a tag or a commit the folder has.',
+      'unknown_ref',
+    );
+  }
+  const branch = await remoteDefaultBranch(root, BASE_REMOTE, unknown);
+  const reason = await fetchRef(root, BASE_REMOTE, branch);
+  if (reason !== undefined) {
+    throw new WorktreeError(
+      `${unknown}, so \`${branch}\` was fetched from \`${BASE_REMOTE}\` to look for it, ` +
+        `and the fetch failed: ${reason}. The folder must reach \`${BASE_REMOTE}\` the way the ` +
+        "operator's own git does; otherwise name a branch, a tag or a commit the folder has.",
+      'fetch_failed',
+    );
+  }
+  const found = await commitNamed(root, base);
+  if (found !== undefined) return found;
+  throw new WorktreeError(
+    `${unknown}, nor after fetching \`${branch}\` from \`${BASE_REMOTE}\`. ` +
+      `Name a branch, a tag or a commit the folder or \`${BASE_REMOTE}/${branch}\` has.`,
+    'unknown_ref',
+  );
+}
+
+/**
+ * The branch `remote`'s HEAD names: from the folder's `refs/remotes/<remote>/HEAD`
+ * where a clone recorded it, otherwise asked of the remote. `unknown` opens the
+ * refusal when the remote cannot say.
+ */
+async function remoteDefaultBranch(root: string, remote: string, unknown: string): Promise<string> {
+  const tracked = `refs/remotes/${remote}/`;
+  const recorded = (
+    await git(root, ['symbolic-ref', '--quiet', `${tracked}HEAD`]).catch(() => '')
+  ).trim();
+  let branch = recorded.startsWith(tracked) ? recorded.slice(tracked.length) : '';
+  if (branch === '') {
+    let listed: string;
+    try {
+      ({ stdout: listed } = await run(
+        'git',
+        [
+          '-C',
+          root,
+          ...GIT_SAFETY_ARGS,
+          'ls-remote',
+          '--symref',
+          '--end-of-options',
+          remote,
+          'HEAD',
+        ],
+        { timeout: GIT_TIMEOUT_MS, maxBuffer: 64 * 1024, env: transportEnv() },
+      ));
+    } catch (error) {
+      throw new WorktreeError(
+        `${unknown}, and \`${remote}\` could not be asked for its default branch to look for it ` +
+          `there: ${remoteFailure(error, 'git ls-remote failed')}. The folder must reach ` +
+          `\`${remote}\` the way the operator's own git does; otherwise name a branch, a tag or ` +
+          'a commit the folder has.',
+        'fetch_failed',
+      );
+    }
+    branch = /^ref: refs\/heads\/(\S+)\tHEAD$/m.exec(listed)?.[1] ?? '';
+  }
+  if (branch === '' || !(await isPlainRefName(root, branch))) {
+    throw new WorktreeError(
+      `${unknown}, and \`${remote}\` names no default branch to look for it on. ` +
+        'Name a branch, a tag or a commit the folder has.',
+      'unknown_ref',
+    );
+  }
+  return branch;
+}
+
+/** The commit `ref` names in the folder, or nothing where it names none. */
+async function commitNamed(root: string, ref: string): Promise<string | undefined> {
+  try {
+    return await resolveCommit(root, ref);
+  } catch (error) {
+    if (error instanceof WorktreeError && error.kind === 'unknown_ref') return undefined;
+    throw error;
   }
 }
 
