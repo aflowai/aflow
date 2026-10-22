@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   PLAN_NODE_POSITION_MAX,
+  PLAN_REVIEW_WORKFLOW_SLUGS,
   PLAN_TREE_DEPTH_LIMIT,
   type PlanNode,
   type PlanNodeLink,
@@ -9,9 +10,11 @@ import {
 } from '@aflow/schemas';
 import {
   PLAN_NODE_RUN_STATUSES,
+  planGoalHead,
   planNoteHead,
-  type PlanNodeClosing,
   type PlanNodeInsert,
+  type PlanNodeLinkTally,
+  type PlanNodeNewestPullRequest,
   type PlanNodeMove,
   type PlanNodePatch,
   type PlanNodeStore,
@@ -312,26 +315,106 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
     return Promise.resolve(link ? structuredClone(link) : null);
   };
 
-  closingsOf: PlanNodeStore['closingsOf'] = (spaceId, nodeIds) => {
-    const closings = new Map<string, PlanNodeClosing>();
-    for (const node of this.inSpace(spaceId)) {
-      if (!nodeIds.includes(node.nodeId)) continue;
-      if (node.outcome === undefined && node.closedAt === undefined) continue;
-      closings.set(node.nodeId, {
-        ...(node.outcome !== undefined ? { outcome: node.outcome } : {}),
-        ...(node.closedAt !== undefined ? { closedAt: node.closedAt } : {}),
-      });
-    }
-    return Promise.resolve(closings);
+  private linksOf(spaceId: string, nodeId: string): PlanNodeLink[] {
+    return this.links.filter(
+      (l) => l.nodeId === nodeId && this.nodes.get(l.nodeId)?.spaceId === spaceId,
+    );
+  }
+
+  pageLinks: PlanNodeStore['pageLinks'] = (spaceId, nodeId, page) => {
+    // The SQL's order: newest first, then kind, then ref.
+    const key = (l: PlanNodeLink): [number, string, string] => [
+      -Date.parse(l.createdAt),
+      l.kind,
+      l.ref,
+    ];
+    const compare = (a: [number, string, string], b: [number, string, string]): number => {
+      for (let i = 0; i < 3; i++) {
+        if (a[i]! < b[i]!) return -1;
+        if (a[i]! > b[i]!) return 1;
+      }
+      return 0;
+    };
+    const ofKind = this.linksOf(spaceId, nodeId)
+      .filter((l) => page.kind === undefined || l.kind === page.kind)
+      .sort((a, b) => compare(key(a), key(b)));
+    const after = page.after;
+    const rest =
+      after === undefined
+        ? ofKind
+        : ofKind.filter((l) => compare(key(l), [-Date.parse(after.at), after.kind, after.ref]) > 0);
+    const shown = rest.slice(0, page.limit);
+    const last = shown.at(-1);
+    return Promise.resolve({
+      links: structuredClone(shown),
+      total: ofKind.length,
+      ...(rest.length > page.limit && last !== undefined
+        ? { next: { at: last.createdAt, kind: last.kind, ref: last.ref } }
+        : {}),
+    });
   };
 
-  listLinksOfEach: PlanNodeStore['listLinksOfEach'] = async (spaceId, nodeIds, limit) => {
-    const byNode = new Map<string, { links: PlanNodeLink[]; total: number }>();
+  boardFactsOf: PlanNodeStore['boardFactsOf'] = (spaceId, nodeIds) =>
+    Promise.resolve(
+      new Map(
+        this.inSpace(spaceId)
+          .filter((n) => nodeIds.includes(n.nodeId))
+          .map((n) => [
+            n.nodeId,
+            {
+              createdAt: n.createdAt,
+              ...(n.closedAt !== undefined ? { closedAt: n.closedAt } : {}),
+              goalHead: planGoalHead(n.goal),
+            },
+          ]),
+      ),
+    );
+
+  linkTalliesOf: PlanNodeStore['linkTalliesOf'] = (spaceId, nodeIds) => {
+    const tallies = new Map<string, PlanNodeLinkTally>();
     for (const nodeId of nodeIds) {
-      const held = await this.listLinks(spaceId, nodeId, limit);
-      if (held.total > 0) byNode.set(nodeId, held);
+      const links = this.linksOf(spaceId, nodeId);
+      if (links.length === 0) continue;
+      const ofKind = (kind: PlanNodeLink['kind']) => links.filter((l) => l.kind === kind).length;
+      tallies.set(nodeId, {
+        runs: ofKind('run'),
+        pullRequests: ofKind('pull_request'),
+        findings: ofKind('finding'),
+        documents: ofKind('document'),
+        rounds: links.filter(
+          (l) =>
+            l.kind === 'run' &&
+            (PLAN_REVIEW_WORKFLOW_SLUGS as readonly string[]).includes(
+              (l.label ?? '').split(' ', 1)[0] ?? '',
+            ),
+        ).length,
+      });
     }
-    return byNode;
+    return Promise.resolve(tallies);
+  };
+
+  newestPullRequestsOf: PlanNodeStore['newestPullRequestsOf'] = (spaceId, nodeIds) => {
+    const newest = new Map<string, PlanNodeNewestPullRequest>();
+    for (const nodeId of nodeIds) {
+      const links = this.linksOf(spaceId, nodeId);
+      const [pr] = links
+        .filter((l) => l.kind === 'pull_request')
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.ref.localeCompare(b.ref));
+      if (!pr) continue;
+      const merge = links.find((l) => l.kind === 'merge' && l.ref === pr.ref);
+      newest.set(nodeId, { ref: pr.ref, merge: merge ? structuredClone(merge) : null });
+    }
+    return Promise.resolve(newest);
+  };
+
+  inFlightRunCountsOf: PlanNodeStore['inFlightRunCountsOf'] = (spaceId, nodeIds) => {
+    const counts = new Map<string, number>();
+    for (const run of this.runs) {
+      if (run.spaceId !== spaceId || !nodeIds.includes(run.nodeId)) continue;
+      if (!(PLAN_NODE_RUN_STATUSES as readonly string[]).includes(run.status)) continue;
+      counts.set(run.nodeId, (counts.get(run.nodeId) ?? 0) + 1);
+    }
+    return Promise.resolve(counts);
   };
 
   listRunsServing: PlanNodeStore['listRunsServing'] = (spaceId, nodeIds, limit) => {

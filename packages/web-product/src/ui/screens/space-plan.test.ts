@@ -2,21 +2,40 @@
  * @vitest-environment jsdom
  */
 /**
- * The plan page as the operator sees it (Plan 322 P3): the trees nested by
- * parent in the order the endpoint gives them, a closed node with how it
- * ended, and each node's links and runs in flight as references that open
- * what they name — rendered through the screen itself, the design system's
- * primitives as plain elements and the query recorded.
+ * The plan page as the operator sees it (Plan 322 P3.3): a board — a tab per
+ * plan with its step count, five columns in which the column is the status,
+ * cards carrying labels only, Done folded by day from the plan's own counts —
+ * and a side rail that reads a step on demand and holds the operator's own
+ * controls (P3.2). Rendered through the screen itself, the design system's
+ * primitives as plain elements and every query recorded.
  */
-import { act, createElement, type ReactNode } from 'react';
+import { act, createContext, createElement, useContext, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { PlanNode, PlanTreeNode, PlanTreeOutput } from '@aflow/schemas';
+import type {
+  PlanNode,
+  PlanNodeDetailOutput,
+  PlanNodeLink,
+  PlanTreeNode,
+  PlanTreeOutput,
+} from '@aflow/schemas';
+
+interface Answer {
+  data?: unknown;
+  error?: Error | null;
+}
 
 const recorded = vi.hoisted(() => ({
-  query: undefined as unknown,
-  result: {} as { data?: unknown; isLoading?: boolean; error?: Error | null },
+  boardQueries: [] as Array<{ key: unknown[]; path: string }>,
+  board: {} as { data?: unknown; isLoading?: boolean; error?: Error | null },
   refetch: vi.fn(),
+  /** The rail's read of each node, by id; absent reads as still loading. */
+  details: {} as Record<string, Answer>,
+  detailQueries: [] as Array<{ key: unknown[]; path: string; staleTime?: number }>,
+  detailRefetch: vi.fn(),
+  findings: {} as Record<string, Answer>,
+  runPages: {} as Record<string, Answer>,
+  linkQueries: [] as Array<{ key: unknown[]; path: string }>,
   mutation: undefined as
     | {
         path: (input: { nodeId: string }) => string;
@@ -26,54 +45,72 @@ const recorded = vi.hoisted(() => ({
       }
     | undefined,
   mutateAsync: vi.fn(),
-  /** Each node as the close form's read answers it, by id; absent reads as still loading. */
-  nodes: {} as Record<string, { data?: { node: unknown }; error?: Error }>,
-  nodeQueries: [] as Array<{ key: unknown[]; path: string; enabled?: boolean }>,
-  nodeRefetch: vi.fn(),
+  narrow: false,
 }));
 
 vi.mock('@aflow/design-system', () => {
+  const passed = (props: Record<string, unknown>) =>
+    Object.fromEntries(
+      Object.entries(props).filter(
+        ([key]) =>
+          key.startsWith('data-') ||
+          key.startsWith('aria-') ||
+          ['role', 'title', 'onClick', 'onKeyDown', 'tabIndex', 'style'].includes(key),
+      ),
+    );
   const block =
     (tag: string) =>
-    ({
-      children,
-      title,
-      role,
-      ...rest
-    }: {
-      children?: ReactNode;
-      title?: string;
-      role?: string;
-      [key: string]: unknown;
-    }) =>
-      createElement(
-        tag,
-        {
-          ...(title !== undefined ? { title } : {}),
-          ...(role !== undefined ? { role } : {}),
-          ...Object.fromEntries(Object.entries(rest).filter(([key]) => key.startsWith('data-'))),
-        },
-        children,
-      );
+    ({ children, ...rest }: { children?: ReactNode; [key: string]: unknown }) =>
+      createElement(tag, passed(rest), children);
+  const TabsContext = createContext<(id: string) => void>(() => undefined);
   return {
-    Badge: block('span'),
+    Badge: ({ children, variant }: { children?: ReactNode; variant?: string }) =>
+      createElement('span', { 'data-badge': variant ?? 'neutral' }, children),
     Card: block('div'),
     CardBody: block('div'),
     Column: block('div'),
-    Heading: block('h2'),
-    HelperText: block('p'),
-    PageContainer: block('main'),
     Row: block('div'),
+    Heading: block('h2'),
+    PageContainer: block('main'),
     Text: block('span'),
+    Tabs: ({ children, onChange }: { children?: ReactNode; onChange: (id: string) => void }) =>
+      createElement(TabsContext.Provider, { value: onChange }, children),
+    TabList: block('div'),
+    Tab: function Tab({
+      id,
+      children,
+      count,
+    }: {
+      id: string;
+      children?: ReactNode;
+      count?: number;
+    }) {
+      const onChange = useContext(TabsContext);
+      return createElement(
+        'button',
+        { type: 'button', role: 'tab', 'data-tab': id, onClick: () => onChange(id) },
+        children,
+        count !== undefined ? createElement('span', { 'data-count': '' }, String(count)) : null,
+      );
+    },
+    Dialog: ({ open, children }: { open: boolean; children?: ReactNode }) =>
+      open ? createElement('div', { role: 'dialog' }, children) : null,
     Button: ({
       children,
       onClick,
       disabled,
+      ...rest
     }: {
       children?: ReactNode;
-      onClick?: () => void;
+      onClick?: (event: { stopPropagation: () => void }) => void;
       disabled?: boolean;
-    }) => createElement('button', { type: 'button', onClick, disabled }, children),
+      [key: string]: unknown;
+    }) =>
+      createElement(
+        'button',
+        { ...passed(rest), type: 'button', onClick, disabled, role: undefined },
+        children,
+      ),
     Textarea: (props: Record<string, unknown>) =>
       createElement('textarea', {
         'aria-label': props['aria-label'],
@@ -81,6 +118,7 @@ vi.mock('@aflow/design-system', () => {
         onChange: props['onChange'],
         disabled: props['disabled'],
       }),
+    useMediaQuery: () => recorded.narrow,
   };
 });
 
@@ -94,24 +132,33 @@ vi.mock('../components/providers.js', () => ({
 }));
 
 vi.mock('../hooks/useApiQuery.js', () => ({
-  useApiQuery: (options: { key: unknown[]; path: string; enabled?: boolean }) => {
-    if (options.key[3] === 'node') {
-      recorded.nodeQueries.push(options);
-      const answer = options.enabled === true ? recorded.nodes[String(options.key[4])] : undefined;
+  useApiQuery: (options: { key: unknown[]; path: string; staleTime?: number }) => {
+    const [, , , kind, nodeId, sub, linkKind, cursor] = options.key as string[];
+    if (kind === 'board') {
+      recorded.boardQueries.push(options);
       return {
-        data: answer?.data,
-        error: answer?.error ?? null,
-        isLoading: options.enabled === true && answer === undefined,
-        refetch: recorded.nodeRefetch,
+        data: undefined,
+        isLoading: false,
+        error: null,
+        refetch: recorded.refetch,
+        ...recorded.board,
       };
     }
-    recorded.query = options;
+    if (sub === 'links') {
+      recorded.linkQueries.push(options);
+      const answer =
+        linkKind === 'finding'
+          ? recorded.findings[nodeId!]
+          : recorded.runPages[`${nodeId!}:${cursor ?? ''}`];
+      return { data: answer?.data, error: answer?.error ?? null, refetch: vi.fn() };
+    }
+    recorded.detailQueries.push(options);
+    const answer = recorded.details[nodeId!];
     return {
-      data: undefined,
-      isLoading: false,
-      error: null,
-      refetch: recorded.refetch,
-      ...recorded.result,
+      data: answer?.data,
+      error: answer?.error ?? null,
+      isLoading: answer === undefined,
+      refetch: recorded.detailRefetch,
     };
   },
   useApiMutation: (options: typeof recorded.mutation) => {
@@ -121,13 +168,28 @@ vi.mock('../hooks/useApiQuery.js', () => ({
 }));
 
 const SPACE_ID = '00000000-0000-4000-8000-000000000002';
-const ROOT = '00000000-0000-4000-8000-0000000000a1';
-const FIRST = '00000000-0000-4000-8000-0000000000a2';
-const SECOND = '00000000-0000-4000-8000-0000000000a3';
-const UNDER_FIRST = '00000000-0000-4000-8000-0000000000a4';
+const R322 = '00000000-0000-4000-8000-0000000000a1';
+const P3 = '00000000-0000-4000-8000-0000000000a2';
+const NEXT = '00000000-0000-4000-8000-0000000000a3';
+const BOARD = '00000000-0000-4000-8000-0000000000a4';
+const DECISION = '00000000-0000-4000-8000-0000000000a5';
+const LANDED = '00000000-0000-4000-8000-0000000000a6';
+const SKETCH = '00000000-0000-4000-8000-0000000000a7';
+const ARTICLE = '00000000-0000-4000-8000-0000000000a8';
+const API_STEP = '00000000-0000-4000-8000-0000000000c1';
+const PAGE_STEP = '00000000-0000-4000-8000-0000000000c2';
+const R315 = '00000000-0000-4000-8000-0000000000b1';
+const STEP_315 = '00000000-0000-4000-8000-0000000000b2';
 const RUN_ID = '00000000-0000-4000-8000-0000000000f1';
 const ENDED_RUN_ID = '00000000-0000-4000-8000-0000000000f2';
 const PR = 'https://github.com/aflowai/aflow/pull/181';
+const MERGED_PR = 'https://github.com/aflowai/aflow/pull/176';
+const PLAN_315_TAB = 'Plan 315 · the loop runs itself53';
+
+/** Local times, so the reader's day is the test's to set. */
+const at = (month: number, day: number, hour = 9) =>
+  new Date(2026, month - 1, day, hour).toISOString();
+const NOW = new Date(2026, 9, 22, 15, 0);
 
 const { SpacePlanPage } = await import('./space-plan.js');
 
@@ -147,10 +209,12 @@ function treeNode(
     status: 'active',
     revision: 1,
     position: 0,
-    updatedAt: '2026-10-05T08:00:00.000Z',
-    links: [],
-    linksTotal: 0,
-    runs: [],
+    updatedAt: at(10, 5),
+    createdAt: at(10, 5),
+    goalHead: `Goal of ${title}.`,
+    counts: { runs: 1, pullRequests: 0, findings: 0, documents: 0, inFlightRuns: 0 },
+    rounds: 0,
+    ownedBy: 'loop',
     children: [],
     ...extra,
   };
@@ -158,227 +222,154 @@ function treeNode(
 
 const PLAN: PlanTreeOutput = {
   roots: [
-    treeNode(ROOT, null, 'Plan 322 · plans are platform records', {
-      noteHead: 'next: P3.2 operator writes',
+    treeNode(R322, null, 'Plan 322 · plans are platform records', {
+      progress: { done: 0, total: 2 },
       children: [
-        treeNode(FIRST, ROOT, 'P3.1 the plan page', {
-          position: 0,
-          runs: [
-            {
-              runId: RUN_ID,
-              slug: 'commission-change',
-              status: 'running',
-              nodeId: FIRST,
-              startedAt: '2026-10-05T09:00:00.000Z',
-            },
+        treeNode(P3, R322, 'P3 — Seen by the operator', {
+          progress: { done: 1, total: 4 },
+          children: [
+            treeNode(NEXT, P3, 'P3.4 live exit', { status: 'waiting' }),
+            treeNode(BOARD, P3, 'P3.3 the board', {
+              counts: { runs: 8, pullRequests: 1, findings: 2, documents: 0, inFlightRuns: 1 },
+              rounds: 2,
+              pullRequest: { url: PR, merged: false },
+              progress: { done: 2, total: 2 },
+              children: [
+                treeNode(API_STEP, BOARD, 'API', { status: 'done', closedAt: at(9, 20) }),
+                treeNode(PAGE_STEP, BOARD, 'Page', { status: 'done', closedAt: at(9, 20) }),
+              ],
+            }),
+            treeNode(DECISION, P3, 'Where the decide answer is recorded', {
+              kind: 'decide',
+              revision: 3,
+            }),
+            treeNode(LANDED, P3, 'P3.2 operator writes', {
+              status: 'done',
+              closedAt: at(10, 22),
+              pullRequest: { url: MERGED_PR, merged: true, mergeSha: '93ce25659c0c' },
+            }),
+            treeNode(SKETCH, P3, 'P3.0 a sketch', { status: 'dropped', closedAt: at(10, 6) }),
           ],
-          links: [
-            {
-              nodeId: FIRST,
-              kind: 'run',
-              ref: ENDED_RUN_ID,
-              label: 'commission-change completed',
-              createdAt: '2026-10-05T09:30:00.000Z',
-            },
-          ],
-          linksTotal: 1,
-          children: [treeNode(UNDER_FIRST, FIRST, 'route and its test')],
         }),
-        treeNode(SECOND, ROOT, 'P2b the stream wakes itself', {
-          position: 1,
-          status: 'done',
-          outcome: `Merged as ${PR}; both firings observed.`,
-          closedAt: '2026-10-05T10:00:00.000Z',
-          noteHead: 'a stale working line',
-          links: [
-            {
-              nodeId: SECOND,
-              kind: 'pull_request',
-              ref: PR,
-              label: `from publish-local-changes run ${ENDED_RUN_ID}`,
-              createdAt: '2026-10-05T10:00:00.000Z',
-            },
-            { nodeId: SECOND, kind: 'finding', ref: 'F121', createdAt: '2026-10-05T09:00:00.000Z' },
-          ],
-          linksTotal: 5,
+        treeNode(ARTICLE, R322, 'Write the help article', {
+          ownedBy: 'operator',
+          counts: { runs: 0, pullRequests: 0, findings: 0, documents: 0, inFlightRuns: 0 },
         }),
       ],
     }),
+    treeNode(R315, null, 'Plan 315 · the loop runs itself', {
+      position: 1,
+      status: 'done',
+      closedAt: at(10, 22),
+      children: [
+        treeNode(STEP_315, R315, 'F116 crash restarts', { status: 'done', closedAt: at(10, 22) }),
+      ],
+    }),
   ],
-  runsTotal: 1,
+  tallies: [
+    {
+      rootId: R322,
+      steps: 10,
+      done: 3,
+      active: 3,
+      decide: 1,
+      dropped: 1,
+      doneByDay: [
+        { day: '2026-10-22', count: 1 },
+        { day: '2026-09-20', count: 2 },
+      ],
+    },
+    {
+      rootId: R315,
+      steps: 53,
+      done: 53,
+      active: 0,
+      decide: 0,
+      dropped: 0,
+      doneByDay: [
+        { day: '2026-10-22', count: 1 },
+        { day: '2026-10-21', count: 2 },
+        { day: '2026-10-20', count: 30 },
+        { day: '2026-10-05', count: 20 },
+      ],
+    },
+  ],
 };
 
-/** A node as the close form reads it in full. */
+/** A node as the rail reads it in full. */
 function fullNode(nodeId: string, title: string, extra: Partial<PlanNode> = {}): PlanNode {
   return {
     nodeId,
     spaceId: SPACE_ID,
-    parentId: null,
+    parentId: P3,
     kind: 'execute',
     title,
-    goal: `Goal of ${title}.`,
+    goal: `The whole goal of ${title}.`,
     criteria: `Criteria of ${title}.`,
     status: 'active',
     revision: 1,
     position: 0,
-    createdAt: '2026-10-05T08:00:00.000Z',
-    updatedAt: '2026-10-05T08:00:00.000Z',
+    createdAt: at(10, 5),
+    updatedAt: at(10, 5),
     ...extra,
   };
+}
+
+function detail(node: PlanNode, extra: Partial<PlanNodeDetailOutput> = {}): Answer {
+  const data: PlanNodeDetailOutput = {
+    node,
+    children: [],
+    childrenTotal: 0,
+    links: [],
+    linksTotal: 0,
+    runs: [],
+    runsTotal: 0,
+    ...extra,
+  };
+  return { data };
+}
+
+function runLink(ref: string, label: string, createdAt: string): PlanNodeLink {
+  return { nodeId: BOARD, kind: 'run', ref, label, createdAt };
 }
 
 let container: HTMLDivElement;
 let root: Root;
 
-async function render(result: typeof recorded.result): Promise<void> {
-  recorded.result = result;
+async function render(board: typeof recorded.board = { data: PLAN }): Promise<void> {
+  recorded.board = board;
   await act(async () => {
     root.render(createElement(SpacePlanPage));
   });
 }
 
-function nodeItem(nodeId: string): Element {
-  const found = container.querySelector(`li[data-plan-node="${nodeId}"]`);
-  if (!found) throw new Error(`no node ${nodeId}`);
+function column(id: string): Element {
+  const found = container.querySelector(`[data-plan-column="${id}"]`);
+  if (!found) throw new Error(`no column ${id}`);
   return found;
 }
 
-function anchor(scope: Element, text: string): HTMLAnchorElement {
-  const found = [...scope.querySelectorAll('a')].find((a) => a.textContent === text);
-  if (!found) throw new Error(`no link reading ${text}`);
+function cardIds(scope: Element): string[] {
+  return [...scope.querySelectorAll('[data-plan-card]')].map(
+    (c) => c.getAttribute('data-plan-card') ?? '',
+  );
+}
+
+function card(nodeId: string): HTMLElement {
+  const found = container.querySelector<HTMLElement>(`[data-plan-card="${nodeId}"]`);
+  if (!found) throw new Error(`no card ${nodeId}`);
   return found;
 }
 
-beforeEach(() => {
-  recorded.nodes = {};
-  recorded.nodeQueries = [];
-  recorded.nodeRefetch.mockReset();
-  for (const [nodeId, title, kind] of [
-    [UNDER_FIRST, 'route and its test', 'execute'],
-    [FIRST, 'P3.1 the plan page', 'execute'],
-  ] as const) {
-    recorded.nodes[nodeId] = { data: { node: fullNode(nodeId, title, { kind }) } };
-  }
-  recorded.query = undefined;
-  recorded.result = {};
-  recorded.mutation = undefined;
-  recorded.refetch.mockReset();
-  recorded.mutateAsync.mockReset();
-  container = document.createElement('div');
-  document.body.append(container);
-  root = createRoot(container);
-});
+function rail(): Element {
+  const found = container.querySelector('[data-plan-rail]');
+  if (!found) throw new Error('no rail');
+  return found;
+}
 
-afterEach(() => {
-  act(() => {
-    root.unmount();
-  });
-  container.remove();
-});
-
-describe('SpacePlanPage', () => {
-  it('reads the space’s plan from its endpoint, under the space’s query key', async () => {
-    await render({ data: PLAN });
-
-    expect(recorded.query).toMatchObject({
-      key: ['space', SPACE_ID, 'plan'],
-      path: `/spaces/${SPACE_ID}/plan`,
-    });
-  });
-
-  it('nests each node under its parent, in the order the endpoint gives them', async () => {
-    await render({ data: PLAN });
-
-    const top = container.querySelector('ul');
-    const roots = [...(top?.children ?? [])].map((li) => li.getAttribute('data-plan-node'));
-    expect(roots).toEqual([ROOT]);
-
-    const rootItem = nodeItem(ROOT);
-    const childList = rootItem.querySelector(':scope > ul')!;
-    expect([...childList.children].map((li) => li.getAttribute('data-plan-node'))).toEqual([
-      FIRST,
-      SECOND,
-    ]);
-    const firstItem = childList.querySelector(`li[data-plan-node="${FIRST}"]`)!;
-    expect(firstItem.querySelector(`:scope > ul > li[data-plan-node="${UNDER_FIRST}"]`)).not.toBe(
-      null,
-    );
-  });
-
-  it('shows a done node with its outcome, and an open node with its working line', async () => {
-    await render({ data: PLAN });
-
-    const done = nodeItem(SECOND);
-    expect(done.getAttribute('data-status')).toBe('done');
-    expect(done.textContent).toContain(`Outcome: Merged as ${PR}; both firings observed.`);
-    expect(done.textContent).not.toContain('a stale working line');
-
-    const open = nodeItem(ROOT);
-    expect(open.textContent).toContain('next: P3.2 operator writes');
-    expect(open.querySelector(':scope > div')?.textContent).not.toContain('Outcome:');
-  });
-
-  it('renders a node’s links as references that open what they name', async () => {
-    await render({ data: PLAN });
-
-    const done = nodeItem(SECOND);
-    const pr = anchor(done, 'aflow#181');
-    expect(pr.getAttribute('href')).toBe(PR);
-    expect(pr.getAttribute('target')).toBe('_blank');
-    expect(pr.getAttribute('rel')).toContain('noopener');
-    // A finding is named by its own text and has no page to open.
-    expect(done.textContent).toContain('F121');
-    expect([...done.querySelectorAll('a')].some((a) => a.textContent === 'F121')).toBe(false);
-    expect(done.textContent).toContain('3 older links not shown');
-
-    const first = nodeItem(FIRST);
-    expect(anchor(first, 'commission-change completed').getAttribute('href')).toBe(
-      `/s/work/runs/${ENDED_RUN_ID}`,
-    );
-  });
-
-  it('lists the runs in flight under the node they serve, each opening its run', async () => {
-    await render({ data: PLAN });
-
-    const first = nodeItem(FIRST);
-    const runs = first.querySelector(':scope > div > ul[aria-label="Runs in flight"]')!;
-    expect(runs.textContent).toContain('running');
-    expect(anchor(runs, 'commission-change').getAttribute('href')).toBe(`/s/work/runs/${RUN_ID}`);
-    expect(
-      container.querySelector(
-        `li[data-plan-node="${ROOT}"] > div > ul[aria-label="Runs in flight"]`,
-      ),
-    ).toBe(null);
-  });
-
-  it('says when the plan is empty', async () => {
-    await render({ data: { roots: [], runsTotal: 0 } });
-
-    expect(container.textContent).toContain('This space has no plan yet.');
-    expect(container.querySelector('li')).toBe(null);
-  });
-
-  it('says what a bound left out: nodes past the walk, and runs past those placed', async () => {
-    await render({
-      data: { ...PLAN, runsTotal: 3, truncated: { bound: 'nodes', value: 2000 } },
-    });
-
-    expect(container.textContent).toContain('more than 2000 nodes');
-    expect(container.textContent).toContain('2 more runs in flight for this plan are not shown.');
-  });
-
-  it('says the plan could not be read rather than showing an empty one', async () => {
-    await render({ error: new Error('Permission denied') });
-
-    expect(container.textContent).toContain('The plan could not be read: Permission denied');
-    expect(container.textContent).not.toContain('no plan yet');
-  });
-});
-
-/** The node's own controls, not those of the nodes nested under it. */
-function ownControls(nodeId: string): Element {
-  const found = nodeItem(nodeId).querySelector(':scope > div');
-  if (!found) throw new Error(`no body for ${nodeId}`);
+function filter(name: string): Element {
+  const found = container.querySelector(`[data-plan-filter="${name}"]`);
+  if (!found) throw new Error(`no filter ${name}`);
   return found;
 }
 
@@ -388,7 +379,7 @@ function button(scope: Element, text: string): HTMLButtonElement {
   return found;
 }
 
-async function click(target: HTMLButtonElement): Promise<void> {
+async function click(target: HTMLElement): Promise<void> {
   await act(async () => {
     target.click();
   });
@@ -404,144 +395,356 @@ async function type(scope: Element, text: string): Promise<void> {
   });
 }
 
-describe('SpacePlanPage — the operator’s writes', () => {
-  it('offers an open node done or dropped, a node with open steps under it as a branch, and a closed node nothing', async () => {
-    await render({ data: PLAN });
+function lastBoardQuery() {
+  const query = recorded.boardQueries.at(-1);
+  if (!query) throw new Error('no board query');
+  return { query, url: new URL(query.path, 'http://x') };
+}
 
-    expect(
-      [...ownControls(UNDER_FIRST).querySelectorAll('button')].map((b) => b.textContent),
-    ).toEqual(['Mark done', 'Drop']);
-    expect(button(ownControls(FIRST), 'Drop branch')).toBeTruthy();
-    expect(ownControls(SECOND).querySelectorAll('button')).toHaveLength(0);
+function folds(): string[][] {
+  return [...column('done').querySelectorAll('[data-plan-done-group] > button')].map((b) => [
+    b.textContent ?? '',
+    b.getAttribute('aria-expanded') ?? '',
+  ]);
+}
+
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(NOW);
+  recorded.boardQueries = [];
+  recorded.board = {};
+  recorded.refetch.mockReset();
+  recorded.details = {
+    [BOARD]: detail(fullNode(BOARD, 'P3.3 the board')),
+    [NEXT]: detail(fullNode(NEXT, 'P3.4 live exit', { status: 'waiting' })),
+  };
+  recorded.detailQueries = [];
+  recorded.detailRefetch.mockReset();
+  recorded.findings = {};
+  recorded.runPages = {};
+  recorded.linkQueries = [];
+  recorded.mutation = undefined;
+  recorded.mutateAsync.mockReset();
+  recorded.narrow = false;
+  container = document.createElement('div');
+  document.body.append(container);
+  root = createRoot(container);
+});
+
+afterEach(() => {
+  act(() => {
+    root.unmount();
+  });
+  container.remove();
+  vi.useRealTimers();
+});
+
+describe('SpacePlanPage — the board', () => {
+  it('reads the board under the space’s plan key, done steps from today, in the reader’s time zone', async () => {
+    await render();
+
+    const { query, url } = lastBoardQuery();
+    expect(query.key.slice(0, 4)).toEqual(['space', SPACE_ID, 'plan', 'board']);
+    expect(url.pathname).toBe(`/spaces/${SPACE_ID}/plan`);
+    expect(url.searchParams.get('closedSince')).toBe(new Date(2026, 9, 22).toISOString());
+    expect(url.searchParams.get('tz')).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
   });
 
-  it('marks a node done with how its criteria were met, against the revision the page read', async () => {
-    recorded.mutateAsync.mockResolvedValue({ node: {} });
-    await render({ data: PLAN });
+  it('shows a tab per plan with its step count, and the selected plan’s title and tallies', async () => {
+    await render();
 
-    await click(button(ownControls(UNDER_FIRST), 'Mark done'));
-    const confirm = button(ownControls(UNDER_FIRST), 'Mark done');
-    expect(confirm.disabled).toBe(true);
-    await type(ownControls(UNDER_FIRST), '  The route and its test landed.  ');
-    expect(confirm.disabled).toBe(false);
-    await click(confirm);
-
-    expect(recorded.mutateAsync).toHaveBeenCalledWith({
-      nodeId: UNDER_FIRST,
-      expectedRevision: 1,
-      status: 'done',
-      outcome: 'The route and its test landed.',
-    });
-    // The form closes once written; the tree re-reads through the invalidated query.
-    expect(ownControls(UNDER_FIRST).querySelector('textarea')).toBe(null);
-  });
-
-  it('writes through the plan route: PATCH on the node, the body without its id, the plan re-read', async () => {
-    await render({ data: PLAN });
-
-    const mutation = recorded.mutation!;
-    expect(mutation.method).toBe('PATCH');
-    expect(mutation.path({ nodeId: FIRST })).toBe(`/spaces/${SPACE_ID}/plan/nodes/${FIRST}`);
-    expect(
-      JSON.parse(mutation.serialize({ nodeId: FIRST, expectedRevision: 2, status: 'dropped' })),
-    ).toEqual({ expectedRevision: 2, status: 'dropped' });
-    expect(mutation.invalidate).toEqual([['space', SPACE_ID, 'plan']]);
-  });
-
-  it('drops a branch with no reason needed, saying the steps under it go with it', async () => {
-    recorded.mutateAsync.mockResolvedValue({ node: {} });
-    await render({ data: PLAN });
-
-    await click(button(ownControls(FIRST), 'Drop branch'));
-    expect(ownControls(FIRST).textContent).toContain(
-      'The open steps under it leave the plan with it.',
+    const tabs = [...container.querySelectorAll('[role="tab"]')].map((t) => t.textContent);
+    expect(tabs).toEqual(['Plan 322 · plans are platform records10', PLAN_315_TAB]);
+    expect(container.querySelector(`[data-plan-tally="${R322}"]`)?.textContent).toBe(
+      '3 done3 active1 decide1 dropped',
     );
-    await click(button(ownControls(FIRST), 'Drop branch'));
 
-    expect(recorded.mutateAsync).toHaveBeenCalledWith({
-      nodeId: FIRST,
-      expectedRevision: 1,
-      status: 'dropped',
-    });
+    await click(button(container, PLAN_315_TAB));
+    expect(container.querySelector(`[data-plan-tally="${R315}"]`)?.textContent).toBe(
+      '53 done0 active0 decide0 dropped',
+    );
   });
 
-  it('shows a refusal in place, and on a stale revision reads the plan again', async () => {
-    recorded.mutateAsync.mockRejectedValue(
-      Object.assign(new Error('This step changed since the plan was read: it is at revision 2.'), {
-        status: 409,
+  it('places each step in the column of its status, a dash in an empty one', async () => {
+    await render();
+
+    expect(cardIds(column('next'))).toEqual([NEXT]);
+    expect(cardIds(column('progress'))).toEqual([P3, BOARD, ARTICLE]);
+    expect(cardIds(column('decide'))).toEqual([DECISION]);
+    expect(cardIds(column('dropped'))).toEqual([SKETCH]);
+    expect(column('next').querySelector('[data-plan-column-header]')?.textContent).toBe('Up next1');
+
+    await click(button(filter('Owner'), 'Operator'));
+    expect(cardIds(column('next'))).toEqual([]);
+    expect(column('next').textContent).toContain('–');
+  });
+
+  it('carries labels only on a card: phase, operator, runs in flight, pull request, rounds, subtasks', async () => {
+    await render();
+
+    const board = card(BOARD);
+    const badges = [...board.querySelectorAll('[data-badge]')].map((b) => [
+      b.getAttribute('data-badge'),
+      b.textContent,
+    ]);
+    expect(badges).toEqual([
+      ['neutral', 'P3'],
+      ['running', 'Running 1'],
+      ['info', '#181'],
+      ['neutral', 'Rounds 2'],
+    ]);
+    expect(board.querySelector('[data-plan-progress]')?.textContent).toBe('2/2');
+    expect(board.textContent).not.toContain('Goal of');
+
+    expect(card(ARTICLE).textContent).toContain('Operator');
+    expect(card(ARTICLE).querySelector('[data-badge="neutral"]')).toBe(null);
+    expect(card(LANDED).querySelector('[data-badge="success"]')?.textContent).toBe('#176');
+    expect(card(SKETCH).querySelector('span')?.style.textDecoration).toBe('line-through');
+    expect(card(DECISION).style.borderLeft).toContain('var(--color-warning-default)');
+    expect(button(card(DECISION), 'Decide')).toBeTruthy();
+  });
+
+  it('folds Done by day from the plan’s counts, only the first fold open', async () => {
+    await render();
+    await click(button(container, PLAN_315_TAB));
+
+    expect(folds()).toEqual([
+      ['Today · 1', 'true'],
+      ['Yesterday · 2', 'false'],
+      ['Oct 5 – 20 · 50', 'false'],
+    ]);
+    // Every one of the 53 is a fold away; only today's is a card.
+    expect(cardIds(column('done'))).toEqual([STEP_315]);
+    expect(column('done').querySelector('[data-plan-column-header]')?.textContent).toBe('Done53');
+  });
+
+  it('reads an earlier fold’s steps when it is opened, from the first day it covers', async () => {
+    await render();
+    await click(button(container, PLAN_315_TAB));
+
+    await click(button(column('done'), 'Oct 5 – 20 · 50'));
+
+    expect(lastBoardQuery().url.searchParams.get('closedSince')).toBe(
+      new Date(2026, 9, 5).toISOString(),
+    );
+    expect(folds()[2]).toEqual(['Oct 5 – 20 · 50', 'true']);
+  });
+
+  it('opens the first fold, and reads its steps, where nothing closed today', async () => {
+    const quiet: PlanTreeOutput = {
+      ...PLAN,
+      tallies: PLAN.tallies.map((t) =>
+        t.rootId === R322 ? { ...t, doneByDay: [{ day: '2026-09-20', count: 2 }] } : t,
+      ),
+    };
+    await render({ data: quiet });
+
+    expect(lastBoardQuery().url.searchParams.get('closedSince')).toBe(
+      new Date(2026, 8, 20).toISOString(),
+    );
+    expect(folds()).toEqual([['Sep 20 · 2', 'true']]);
+    expect(cardIds(column('done'))).toEqual([API_STEP, PAGE_STEP]);
+  });
+
+  it('narrows the Done column to the window chosen', async () => {
+    await render();
+    await click(button(container, PLAN_315_TAB));
+
+    await click(button(filter('Done'), 'Today'));
+
+    expect(folds().map(([label]) => label)).toEqual(['Today · 1']);
+  });
+
+  it('filters by phase and by owner', async () => {
+    await render();
+
+    await click(button(filter('Phase'), 'P3'));
+    expect(cardIds(column('progress'))).toEqual([P3, BOARD]);
+
+    await click(button(filter('Phase'), 'All'));
+    await click(button(filter('Owner'), 'Operator'));
+    expect(cardIds(column('progress'))).toEqual([ARTICLE]);
+  });
+
+  it('says when the space has no plan, and when the plan could not be read', async () => {
+    await render({ data: { roots: [], tallies: [] } });
+    expect(container.textContent).toContain('No plan yet');
+
+    root.unmount();
+    root = createRoot(container);
+    await render({ error: new Error('Permission denied') });
+    expect(container.textContent).toContain('The plan could not be read: Permission denied');
+  });
+
+  it('stacks the columns below 900px and opens the rail as a dialog', async () => {
+    recorded.narrow = true;
+    await render();
+
+    expect(container.querySelector('[data-plan-board]')?.getAttribute('data-layout')).toBe(
+      'stacked',
+    );
+    await click(card(BOARD));
+    expect(container.querySelector('[role="dialog"] [data-plan-rail]')).not.toBe(null);
+  });
+});
+
+describe('SpacePlanPage — the rail', () => {
+  it('reads the step on demand when its card is opened, and shows its text there', async () => {
+    recorded.details[BOARD] = detail(fullNode(BOARD, 'P3.3 the board'), {
+      links: [
+        runLink(ENDED_RUN_ID, 'review-local-changes completed', at(10, 21, 14)),
+        runLink('00000000-0000-4000-8000-0000000000f3', 'commission-change failed', at(10, 21)),
+      ],
+      linksTotal: 8,
+      runs: [
+        {
+          runId: RUN_ID,
+          slug: 'commission-change',
+          status: 'running',
+          nodeId: BOARD,
+          startedAt: at(10, 22, 10),
+        },
+      ],
+      runsTotal: 1,
+    });
+    recorded.findings[BOARD] = detail(fullNode(BOARD, 'P3.3 the board'), {
+      links: [{ nodeId: BOARD, kind: 'finding', ref: 'F121', createdAt: at(10, 21) }],
+      linksTotal: 1,
+    });
+    await render();
+    expect(recorded.detailQueries).toHaveLength(0);
+
+    await click(card(BOARD));
+
+    expect(recorded.detailQueries.at(-1)).toMatchObject({
+      key: ['space', SPACE_ID, 'plan', 'node', BOARD],
+      path: `/spaces/${SPACE_ID}/plan/nodes/${BOARD}?linkKind=run&limit=5`,
+      staleTime: 0,
+    });
+    expect(recorded.linkQueries.map((q) => q.path)).toContain(
+      `/spaces/${SPACE_ID}/plan/nodes/${BOARD}?linkKind=finding&limit=50`,
+    );
+    const shown = rail();
+    expect(shown.textContent).toContain('The whole goal of P3.3 the board.');
+    expect(shown.textContent).toContain('Done whenCriteria of P3.3 the board.');
+    expect(shown.textContent).toContain('Rounds 2');
+    expect(
+      shown.querySelector('[data-plan-rail-section="Carried forward"]')?.textContent,
+    ).toContain('F121');
+    const runs = shown.querySelector('[data-plan-rail-section="Runs"]')!;
+    expect(
+      [...runs.querySelectorAll('a')].map((a) => [a.textContent, a.getAttribute('href')]),
+    ).toEqual([
+      ['Commission', `/s/work/runs/${RUN_ID}`],
+      ['Review', `/s/work/runs/${ENDED_RUN_ID}`],
+      ['Commission', '/s/work/runs/00000000-0000-4000-8000-0000000000f3'],
+    ]);
+    expect(runs.textContent).toContain('failed');
+    expect(button(runs, 'All runs · 8')).toBeTruthy();
+  });
+
+  it('pages every run of the step under All runs', async () => {
+    recorded.details[BOARD] = detail(fullNode(BOARD, 'P3.3 the board'), {
+      links: [runLink(ENDED_RUN_ID, 'commission-change completed', at(10, 21))],
+      linksTotal: 3,
+    });
+    recorded.runPages[`${BOARD}:`] = detail(fullNode(BOARD, 'P3.3 the board'), {
+      links: [
+        runLink(ENDED_RUN_ID, 'commission-change completed', at(10, 21)),
+        runLink(
+          '00000000-0000-4000-8000-0000000000f4',
+          'publish-local-changes completed',
+          at(10, 20),
+        ),
+      ],
+      linksTotal: 3,
+      nextCursor: 'page-2',
+    });
+    recorded.runPages[`${BOARD}:page-2`] = detail(fullNode(BOARD, 'P3.3 the board'), {
+      links: [
+        runLink(
+          '00000000-0000-4000-8000-0000000000f5',
+          'review-local-changes completed',
+          at(10, 19),
+        ),
+      ],
+      linksTotal: 3,
+    });
+    await render();
+    await click(card(BOARD));
+
+    await click(button(rail(), 'All runs · 3'));
+    await click(button(rail(), 'More'));
+
+    expect(recorded.linkQueries.map((q) => q.path)).toContain(
+      `/spaces/${SPACE_ID}/plan/nodes/${BOARD}?linkKind=run&limit=50&cursor=page-2`,
+    );
+    const all = rail().querySelector('[data-plan-all-runs]')!;
+    expect([...all.querySelectorAll('a')].map((a) => a.textContent)).toEqual([
+      'Commission',
+      'Publish',
+      'Review',
+    ]);
+    expect([...all.querySelectorAll('button')].map((b) => b.textContent)).not.toContain('More');
+  });
+
+  it('shows a closed step’s outcome boxed, its merge and when it closed, and no controls', async () => {
+    recorded.details[LANDED] = detail(
+      fullNode(LANDED, 'P3.2 operator writes', {
+        status: 'done',
+        outcome: 'Merged as #176; the controls work.',
+        closedAt: at(10, 22),
       }),
     );
-    await render({ data: PLAN });
+    await render();
 
-    await click(button(ownControls(UNDER_FIRST), 'Drop'));
-    await click(button(ownControls(UNDER_FIRST), 'Drop'));
+    await click(card(LANDED));
 
-    expect(ownControls(UNDER_FIRST).querySelector('[role="alert"]')?.textContent).toContain(
-      'it is at revision 2',
+    const shown = rail();
+    expect(shown.querySelector('[data-plan-outcome]')?.textContent).toBe(
+      'Merged as #176; the controls work.',
     );
-    expect(recorded.refetch).toHaveBeenCalledTimes(1);
+    expect(shown.textContent).toContain('93ce256');
+    expect(shown.textContent).toContain('Closed ');
+    expect([...shown.querySelectorAll('button')].map((b) => b.textContent)).toEqual(['Close']);
   });
 
-  it('does not re-read the plan for a refusal that is not about the revision', async () => {
-    recorded.mutateAsync.mockRejectedValue(
-      Object.assign(new Error('Permission denied'), { status: 403 }),
-    );
-    await render({ data: PLAN });
+  it('collapses Dropped to a strip while the rail is open', async () => {
+    await render();
+    expect(column('dropped').getAttribute('data-collapsed')).toBe(null);
 
-    await click(button(ownControls(UNDER_FIRST), 'Drop'));
-    await click(button(ownControls(UNDER_FIRST), 'Drop'));
+    await click(card(BOARD));
+    expect(column('dropped').getAttribute('data-collapsed')).toBe('true');
 
-    expect(ownControls(UNDER_FIRST).textContent).toContain('Permission denied');
-    expect(recorded.refetch).not.toHaveBeenCalled();
+    await click(button(rail(), 'Close'));
+    expect(container.querySelector('[data-plan-rail]')).toBe(null);
+    expect(cardIds(column('dropped'))).toEqual([SKETCH]);
   });
+});
 
-  it('asks a decision for the operator’s choice, and records it as the outcome', async () => {
-    const DECISION = '00000000-0000-4000-8000-0000000000a5';
-    const ORPHAN = '00000000-0000-4000-8000-0000000000a6';
+describe('SpacePlanPage — the operator’s writes from the rail', () => {
+  it('opens a decision from its card’s Decide, and records the choice as its outcome', async () => {
     recorded.mutateAsync.mockResolvedValue({ node: {} });
-    recorded.nodes[DECISION] = {
-      data: {
-        node: fullNode(DECISION, 'Where the decide answer is recorded', {
-          kind: 'decide',
-          revision: 3,
-          goal: 'In the node’s outcome, or as a link to the item?',
-          criteria: 'One is chosen and stated in the decision record.',
-        }),
-      },
-    };
-    await render({
-      data: {
-        roots: [
-          treeNode(DECISION, null, 'Where the decide answer is recorded', {
-            kind: 'decide',
-            revision: 3,
-          }),
-          treeNode(SECOND, null, 'A dropped branch', {
-            status: 'dropped',
-            position: 1,
-            children: [treeNode(ORPHAN, SECOND, 'A choice left behind', { kind: 'decide' })],
-          }),
-        ],
-        runsTotal: 0,
-      },
-    });
+    recorded.details[DECISION] = detail(
+      fullNode(DECISION, 'Where the decide answer is recorded', {
+        kind: 'decide',
+        revision: 3,
+        goal: 'In the node’s outcome, or as a link to the item?',
+        criteria: 'One is chosen and stated in the decision record.',
+      }),
+    );
+    await render();
 
-    expect(ownControls(DECISION).textContent).toContain('Waiting on your decision');
-    expect(ownControls(ORPHAN).textContent).not.toContain('Waiting on your decision');
+    await click(button(card(DECISION), 'Decide'));
 
-    await click(button(ownControls(DECISION), 'Decide'));
-    const statement = ownControls(DECISION).querySelector(`[data-plan-statement="${DECISION}"]`);
-    expect(statement?.textContent).toContain(
-      'Goal: In the node’s outcome, or as a link to the item?',
+    const shown = rail();
+    expect(shown.getAttribute('data-plan-rail')).toBe(DECISION);
+    expect(shown.textContent).toContain(
+      'Decided whenOne is chosen and stated in the decision record.',
     );
-    expect(statement?.textContent).toContain(
-      'Decided when: One is chosen and stated in the decision record.',
-    );
-    expect(ownControls(DECISION).querySelector('textarea')?.getAttribute('aria-label')).toContain(
-      'Your decision',
-    );
-    await type(ownControls(DECISION), 'In the node’s outcome.');
-    await click(button(ownControls(DECISION), 'Record decision'));
+    expect(shown.querySelector('textarea')?.getAttribute('aria-label')).toContain('Your decision');
+    await type(shown, 'In the node’s outcome.');
+    await click(button(rail(), 'Record decision'));
 
     expect(recorded.mutateAsync).toHaveBeenCalledWith({
       nodeId: DECISION,
@@ -551,79 +754,104 @@ describe('SpacePlanPage — the operator’s writes', () => {
     });
   });
 
-  it('shows the node’s goal and criteria in the form, read from the node in full', async () => {
-    await render({ data: PLAN });
-
-    expect(recorded.nodeQueries.some((q) => q.enabled === true)).toBe(false);
-    await click(button(ownControls(UNDER_FIRST), 'Mark done'));
-
-    expect(recorded.nodeQueries.at(-1)).toMatchObject({
-      key: ['space', SPACE_ID, 'plan', 'node', UNDER_FIRST],
-      path: `/spaces/${SPACE_ID}/plan/nodes/${UNDER_FIRST}`,
-      enabled: true,
-    });
-    const form = ownControls(UNDER_FIRST);
-    expect(form.textContent).toContain('Goal: Goal of route and its test.');
-    expect(form.textContent).toContain('Done when: Criteria of route and its test.');
-  });
-
-  it('writes against the revision the form showed, and says when that is newer than the tree', async () => {
+  it('marks a step done with how its criteria were met, against the revision the rail read', async () => {
     recorded.mutateAsync.mockResolvedValue({ node: {} });
-    recorded.nodes[UNDER_FIRST] = {
-      data: {
-        node: fullNode(UNDER_FIRST, 'route and its test', {
-          revision: 5,
-          criteria: 'Criteria as rewritten.',
-        }),
-      },
-    };
-    await render({ data: PLAN });
+    recorded.details[BOARD] = detail(fullNode(BOARD, 'P3.3 the board', { revision: 5 }));
+    await render();
+    await click(card(BOARD));
 
-    await click(button(ownControls(UNDER_FIRST), 'Mark done'));
-    expect(ownControls(UNDER_FIRST).textContent).toContain(
-      'This step changed since the plan was read',
-    );
-    expect(ownControls(UNDER_FIRST).textContent).toContain('Criteria as rewritten.');
-    await type(ownControls(UNDER_FIRST), 'Met as rewritten.');
-    await click(button(ownControls(UNDER_FIRST), 'Mark done'));
+    await click(button(rail(), 'Mark done'));
+    expect(rail().textContent).toContain('This step changed since the plan was read');
+    expect(button(rail(), 'Mark done').disabled).toBe(true);
+    await type(rail(), '  The board renders.  ');
+    expect(button(rail(), 'Mark done').disabled).toBe(false);
+    await click(button(rail(), 'Mark done'));
 
     expect(recorded.mutateAsync).toHaveBeenCalledWith({
-      nodeId: UNDER_FIRST,
+      nodeId: BOARD,
       expectedRevision: 5,
       status: 'done',
-      outcome: 'Met as rewritten.',
+      outcome: 'The board renders.',
+    });
+    expect(rail().querySelector('textarea')).toBe(null);
+  });
+
+  it('writes through the plan route: PATCH on the node, the body without its id, the plan re-read', async () => {
+    await render();
+
+    const mutation = recorded.mutation!;
+    expect(mutation.method).toBe('PATCH');
+    expect(mutation.path({ nodeId: BOARD })).toBe(`/spaces/${SPACE_ID}/plan/nodes/${BOARD}`);
+    expect(
+      JSON.parse(mutation.serialize({ nodeId: BOARD, expectedRevision: 2, status: 'dropped' })),
+    ).toEqual({ expectedRevision: 2, status: 'dropped' });
+    expect(mutation.invalidate).toEqual([['space', SPACE_ID, 'plan']]);
+  });
+
+  it('drops a branch with no reason needed, saying the open steps under it go with it', async () => {
+    recorded.mutateAsync.mockResolvedValue({ node: {} });
+    recorded.details[P3] = detail(fullNode(P3, 'P3 — Seen by the operator'));
+    await render();
+    await click(card(P3));
+
+    await click(button(rail(), 'Drop branch'));
+    expect(rail().textContent).toContain('The open steps under it leave the plan with it.');
+    await click(button(rail(), 'Drop branch'));
+
+    expect(recorded.mutateAsync).toHaveBeenCalledWith({
+      nodeId: P3,
+      expectedRevision: 1,
+      status: 'dropped',
     });
   });
 
-  it('holds the write until the node is read, and refuses one the read finds closed', async () => {
-    delete recorded.nodes[UNDER_FIRST];
-    await render({ data: PLAN });
-
-    await click(button(ownControls(UNDER_FIRST), 'Drop'));
-    expect(ownControls(UNDER_FIRST).textContent).toContain('Reading the step…');
-    expect(button(ownControls(UNDER_FIRST), 'Drop').disabled).toBe(true);
-
-    await click(button(ownControls(UNDER_FIRST), 'Cancel'));
-    recorded.nodes[UNDER_FIRST] = {
-      data: { node: fullNode(UNDER_FIRST, 'route and its test', { status: 'done', revision: 2 }) },
-    };
-    await click(button(ownControls(UNDER_FIRST), 'Drop'));
-    expect(ownControls(UNDER_FIRST).querySelector('[role="alert"]')?.textContent).toContain(
-      'This step is done now',
+  it('shows a refusal in place, reads the step again, and on a stale revision the board too', async () => {
+    recorded.mutateAsync.mockRejectedValue(
+      Object.assign(new Error('This step changed since the plan was read: it is at revision 2.'), {
+        status: 409,
+      }),
     );
-    expect(button(ownControls(UNDER_FIRST), 'Drop').disabled).toBe(true);
-    expect(recorded.mutateAsync).not.toHaveBeenCalled();
+    await render();
+    await click(card(NEXT));
+
+    await click(button(rail(), 'Drop'));
+    await click(button(rail(), 'Drop'));
+
+    expect(rail().querySelector('[role="alert"]')?.textContent).toContain('it is at revision 2');
+    expect(recorded.detailRefetch).toHaveBeenCalledTimes(1);
+    expect(recorded.refetch).toHaveBeenCalledTimes(1);
   });
 
-  it('reads the node again after a refusal, so a retry is decided against it as it stands', async () => {
+  it('does not re-read the board for a refusal that is not about the revision', async () => {
     recorded.mutateAsync.mockRejectedValue(
-      Object.assign(new Error('This step changed since the plan was read.'), { status: 409 }),
+      Object.assign(new Error('Permission denied'), { status: 403 }),
     );
-    await render({ data: PLAN });
+    await render();
+    await click(card(NEXT));
 
-    await click(button(ownControls(UNDER_FIRST), 'Drop'));
-    await click(button(ownControls(UNDER_FIRST), 'Drop'));
+    await click(button(rail(), 'Drop'));
+    await click(button(rail(), 'Drop'));
 
-    expect(recorded.nodeRefetch).toHaveBeenCalledTimes(1);
+    expect(rail().textContent).toContain('Permission denied');
+    expect(recorded.refetch).not.toHaveBeenCalled();
+  });
+
+  it('holds the write until the step is read, and offers none on a step the read finds closed', async () => {
+    delete recorded.details[NEXT];
+    await render();
+    await click(card(NEXT));
+
+    await click(button(rail(), 'Drop'));
+    expect(rail().textContent).toContain('Reading the step…');
+    expect(button(rail(), 'Drop').disabled).toBe(true);
+
+    await click(button(rail(), 'Cancel'));
+    recorded.details[NEXT] = detail(
+      fullNode(NEXT, 'P3.4 live exit', { status: 'done', revision: 2, outcome: 'Done elsewhere.' }),
+    );
+    await render();
+    expect(container.querySelector('[data-plan-close]')).toBe(null);
+    expect(rail().querySelector('[data-plan-outcome]')?.textContent).toBe('Done elsewhere.');
+    expect(recorded.mutateAsync).not.toHaveBeenCalled();
   });
 });

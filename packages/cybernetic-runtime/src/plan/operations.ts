@@ -16,26 +16,30 @@ import {
   PLAN_NODE_UPDATE_FIELDS,
   PLAN_TREE_DEPTH_LIMIT,
   PLAN_TREE_WALK_NODE_LIMIT,
-  PLAN_TREE_NODE_LINKS_LIMIT,
-  PLAN_TREE_RUNS_LIMIT,
   OPEN_PLAN_NODE_STATUSES,
   type PlanNode,
   type PlanNodeCreateInput,
+  type PlanNodeDetailOutput,
+  type PlanNodeDetailQuery,
   type PlanNodeGetOutput,
   type PlanNodeLink,
   type PlanNodeLinkInput,
   type PlanNodeListInput,
   type PlanNodeListOutput,
   type PlanNodeRefusalDetails,
-  type PlanNodeRun,
   type PlanNodeStatus,
   type PlanNodeUpdateInput,
-  type PlanTreeNode,
   type PlanTreeOutput,
 } from '@aflow/schemas';
 import { publishActionCenterWake } from '@aflow/redis';
 import { bumpAttentionGeneration } from '../attentionCache.js';
-import { findPlanRoots, nestPlanTree, orderPlanTree, type PlanTreeWalkBounds } from './tree.js';
+import { findPlanRoots, orderPlanTree, type PlanTreeWalkBounds } from './tree.js';
+import {
+  buildPlanBoard,
+  decodePlanLinkCursor,
+  encodePlanLinkCursor,
+  type PlanBoardOptions,
+} from './board.js';
 import type { PlanNodePatch, PlanNodeStore, PlanPlacementRefusal } from './store.js';
 
 /** How far any read of a space's plan walks the tree. */
@@ -52,7 +56,8 @@ export type PlanOpErrorCode =
   | 'PLAN_NODE_OPEN_HAS_NO_OUTCOME'
   | 'PLAN_NODE_UNCHANGED'
   | 'PLAN_NODE_NOTE_TOO_LONG'
-  | 'PLAN_NODE_LINK_EXISTS';
+  | 'PLAN_NODE_LINK_EXISTS'
+  | 'PLAN_LINK_CURSOR_INVALID';
 
 export interface PlanOpError {
   ok: false;
@@ -429,36 +434,78 @@ export async function listPlanNodes(
 // ============================================================================
 
 /**
- * Every tree of the space, every status, each node nested under its parent
- * with its outcome, its newest links and the runs in flight serving it. The
- * walk is the one every read of the plan takes, so a space past its bounds
- * reads short and says which bound stopped it.
+ * Every tree of the space, every status, as the operator's board reads it
+ * (P3.3): each node with its card's facts — counts, rounds, owner, newest pull
+ * request, a parent's progress — and no links or prose, which the node detail
+ * reads on demand; each root's tallies; done nodes closed before
+ * `closedSince` left out. The walk is the one every read of the plan takes,
+ * so a space past its bounds reads short and says which bound stopped it.
  */
-export async function readPlanTrees(ctx: PlanReadContext): Promise<PlanTreeOutput> {
+export async function readPlanTrees(
+  ctx: PlanReadContext,
+  opts: PlanBoardOptions = {},
+): Promise<PlanTreeOutput> {
   const walk = await ctx.store.walk(ctx.spaceId, PLAN_TREE_WALK_BOUNDS);
   const placed = orderPlanTree(walk.nodes);
   const nodeIds = placed.map((p) => p.node.nodeId);
-  const [closings, links, runs] = await Promise.all([
-    ctx.store.closingsOf(ctx.spaceId, nodeIds),
-    ctx.store.listLinksOfEach(ctx.spaceId, nodeIds, PLAN_TREE_NODE_LINKS_LIMIT),
-    ctx.store.listRunsServing(ctx.spaceId, nodeIds, PLAN_TREE_RUNS_LIMIT),
+  const [facts, tallies, pullRequests, inFlight] = await Promise.all([
+    ctx.store.boardFactsOf(ctx.spaceId, nodeIds),
+    ctx.store.linkTalliesOf(ctx.spaceId, nodeIds),
+    ctx.store.newestPullRequestsOf(ctx.spaceId, nodeIds),
+    ctx.store.inFlightRunCountsOf(ctx.spaceId, nodeIds),
   ]);
-  const runsByNode = new Map<string, PlanNodeRun[]>();
-  for (const run of runs.runs) {
-    runsByNode.set(run.nodeId, [...(runsByNode.get(run.nodeId) ?? []), run]);
-  }
-  const roots = nestPlanTree(placed, (node): PlanTreeNode => ({
-    ...node,
-    ...closings.get(node.nodeId),
-    links: links.get(node.nodeId)?.links ?? [],
-    linksTotal: links.get(node.nodeId)?.total ?? 0,
-    runs: runsByNode.get(node.nodeId) ?? [],
-    children: [],
-  }));
   return {
-    roots,
-    runsTotal: runs.total,
+    ...buildPlanBoard(placed, { facts, tallies, pullRequests, inFlight }, opts),
     ...(walk.truncated !== undefined ? { truncated: walk.truncated } : {}),
+  };
+}
+
+/**
+ * One node for the board's rail: in full, its children, a page of its links
+ * — of one kind where `linkKind` names it — and the runs in flight for it and
+ * every node under it.
+ */
+export async function readPlanNodeDetail(
+  ctx: PlanReadContext,
+  nodeId: string,
+  page: PlanNodeDetailQuery,
+): Promise<PlanOpResult<PlanNodeDetailOutput>> {
+  const after = page.cursor !== undefined ? decodePlanLinkCursor(page.cursor) : undefined;
+  if (after === null) {
+    return {
+      ok: false,
+      code: 'PLAN_LINK_CURSOR_INVALID',
+      message:
+        'This cursor was not issued by this read: pass the `nextCursor` of the page before, or none for the newest page.',
+    };
+  }
+  const node = await ctx.store.find(ctx.spaceId, nodeId);
+  if (!node) return notFound(nodeId);
+  // Every status: a run in flight for a node closed under it is still in flight.
+  const subtree = await ctx.store.walk(ctx.spaceId, { rootId: nodeId, ...PLAN_TREE_WALK_BOUNDS });
+  const [children, links, runs] = await Promise.all([
+    ctx.store.listChildren(ctx.spaceId, nodeId, PLAN_NODE_CHILDREN_LIMIT),
+    ctx.store.pageLinks(ctx.spaceId, nodeId, {
+      ...(page.linkKind !== undefined ? { kind: page.linkKind } : {}),
+      ...(after !== undefined ? { after } : {}),
+      limit: page.limit,
+    }),
+    ctx.store.listRunsServing(
+      ctx.spaceId,
+      subtree.nodes.map((n) => n.nodeId),
+      PLAN_NODE_RUNS_LIMIT,
+    ),
+  ]);
+  return {
+    ok: true,
+    node,
+    children: children.children,
+    childrenTotal: children.total,
+    links: links.links,
+    linksTotal: links.total,
+    ...(links.next !== undefined ? { nextCursor: encodePlanLinkCursor(links.next) } : {}),
+    runs: runs.runs,
+    runsTotal: runs.total,
   };
 }
 

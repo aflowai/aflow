@@ -22,7 +22,6 @@ import {
 import {
   PLAN_NODE_POSITION_MAX,
   PLAN_TREE_DEPTH_LIMIT,
-  PLAN_TREE_NODE_LINKS_LIMIT,
   PlanTreeOutputSchema,
   type PlanNode,
 } from '@aflow/schemas';
@@ -34,6 +33,7 @@ import {
   updatePlanNode,
 } from '../plan/operations.js';
 import { createPlanNodeStore } from '../plan/store.js';
+import { mergeLinkLabel } from '../plan/stream.js';
 
 const DATABASE_URL = process.env['DATABASE_URL'];
 const TENANT_ID = 'a0000000-0000-0000-0000-000000000001';
@@ -174,14 +174,26 @@ describeDb('moveAtRevision — two crossing moves never close a loop (real DB)',
     });
   });
 
-  it('reads the whole plan: each node’s newest links by a window over them, and how closed ones ended', async () => {
+  it('reads the whole plan as a board: counts, rounds, newest pull request and progress, no links', async () => {
     const root = await node('tree root');
     const busy = await node('busy', root.nodeId);
     const done = await node('done', root.nodeId);
-    for (let i = 0; i < PLAN_TREE_NODE_LINKS_LIMIT + 1; i++) {
+    for (let i = 0; i < 3; i++) {
       await linkPlanNode(ctx, { nodeId: busy.nodeId, kind: 'finding', ref: `F${String(i)}` });
     }
+    await linkPlanNode(ctx, {
+      nodeId: busy.nodeId,
+      kind: 'run',
+      ref: randomUUID(),
+      label: 'review-local-changes completed',
+    });
     await linkPlanNode(ctx, { nodeId: done.nodeId, kind: 'pull_request', ref: PR_URL });
+    await linkPlanNode(ctx, {
+      nodeId: done.nodeId,
+      kind: 'merge',
+      ref: PR_URL,
+      label: mergeLinkLabel('2026-10-05T10:00:00.000Z', 'abc1234'),
+    });
     await updatePlanNode(ctx, {
       nodeId: done.nodeId,
       expectedRevision: 1,
@@ -192,16 +204,23 @@ describeDb('moveAtRevision — two crossing moves never close a loop (real DB)',
     const trees = PlanTreeOutputSchema.parse(await readPlanTrees({ store, spaceId: SPACE_ID }));
     const tree = trees.roots.find((r) => r.nodeId === root.nodeId);
 
-    expect(tree).not.toHaveProperty('outcome');
-    expect(tree?.children.map((c) => [c.title, c.linksTotal, c.links.length])).toEqual([
-      ['busy', PLAN_TREE_NODE_LINKS_LIMIT + 1, PLAN_TREE_NODE_LINKS_LIMIT],
-      ['done', 1, 1],
+    expect(tree?.progress).toEqual({ done: 1, total: 2 });
+    expect(
+      tree?.children.map((c) => [c.title, c.counts.findings, c.counts.runs, c.rounds]),
+    ).toEqual([
+      ['busy', 3, 1, 1],
+      ['done', 0, 0, 0],
     ]);
     expect(tree?.children[1]).toMatchObject({
       status: 'done',
-      outcome: `Merged ${PR_URL}.`,
-      links: [{ kind: 'pull_request', ref: PR_URL }],
+      goalHead: 'Hold its place in the tree.',
+      pullRequest: { url: PR_URL, merged: true, mergeSha: 'abc1234' },
     });
+    expect(tree?.children[1]).not.toHaveProperty('outcome');
     expect(tree?.children[1]?.closedAt).toEqual(expect.any(String));
+    expect(trees.tallies.find((t) => t.rootId === root.nodeId)).toMatchObject({
+      steps: 2,
+      done: 1,
+    });
   });
 });

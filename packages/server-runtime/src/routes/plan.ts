@@ -11,16 +11,18 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import {
   PlanNodeCloseInputSchema,
-  PlanNodeGetOutputSchema,
+  PlanNodeDetailOutputSchema,
+  PlanNodeDetailQuerySchema,
   PlanNodeRefusalDetailsSchema,
   PlanNodeUpdateOutputSchema,
   PlanNodeWriteRefusalSchema,
   PlanTreeOutputSchema,
+  PlanTreeQuerySchema,
   type PlanNodeWriteRefusal,
 } from '@aflow/schemas';
 import {
   createPlanNodeStore,
-  getPlanNode,
+  readPlanNodeDetail,
   readPlanTrees,
   updatePlanNode,
   type PlanOpError,
@@ -78,8 +80,9 @@ export const planRoutes: FastifyPluginAsync = async (fastify) => {
       schema: {
         tags: ['Spaces'],
         summary:
-          "The space's plan: every tree, each node nested under its parent with its outcome, links and runs in flight",
+          "The space's plan as a board: every tree, each node nested under its parent with its counts, rounds, owner and newest pull request, and each plan's tallies with its done nodes by day",
         params: z.object({ spaceId: z.string().uuid() }),
+        querystring: PlanTreeQuerySchema,
         response: { 200: PlanTreeOutputSchema },
       },
     },
@@ -90,12 +93,20 @@ export const planRoutes: FastifyPluginAsync = async (fastify) => {
         fastify.appContext.db as PostgresJsDatabase,
         tenant.tenantId,
       );
-      return readPlanTrees({ store, spaceId });
+      const { closedSince, tz } = request.query;
+      return readPlanTrees(
+        { store, spaceId },
+        {
+          ...(closedSince !== undefined ? { closedSince } : {}),
+          ...(tz !== undefined ? { tz } : {}),
+        },
+      );
     },
   );
 
-  // One node in full, as `plan.node.get` reads it: what the operator reads
-  // before closing it — its goal and criteria, at the revision they write against.
+  // One node in full for the board's rail: what the operator reads before
+  // closing it — its goal and criteria, at the revision they write against —
+  // and a page of its links, which the tree no longer carries.
   app.get(
     '/:spaceId/plan/nodes/:nodeId',
     {
@@ -110,10 +121,12 @@ export const planRoutes: FastifyPluginAsync = async (fastify) => {
       schema: {
         tags: ['Spaces'],
         summary:
-          'One plan node in full — its goal, criteria, note and revision — with its children, links and runs in flight',
+          'One plan node in full — its goal, criteria, note and revision — with its children, runs in flight and a page of its links',
         params: z.object({ spaceId: z.string().uuid(), nodeId: z.string().uuid() }),
+        querystring: PlanNodeDetailQuerySchema,
         response: {
-          200: PlanNodeGetOutputSchema,
+          200: PlanNodeDetailOutputSchema,
+          400: PlanNodeWriteRefusalSchema,
           404: PlanNodeWriteRefusalSchema,
         },
       },
@@ -125,8 +138,11 @@ export const planRoutes: FastifyPluginAsync = async (fastify) => {
         fastify.appContext.db as PostgresJsDatabase,
         tenant.tenantId,
       );
-      const result = await getPlanNode({ store, spaceId }, nodeId);
+      const result = await readPlanNodeDetail({ store, spaceId }, nodeId, request.query);
       if (!result.ok) {
+        if (result.code === 'PLAN_LINK_CURSOR_INVALID') {
+          return reply.status(400).send({ error: result.code, message: result.message });
+        }
         return reply.status(404).send({
           error: result.code,
           message: 'This step is not in the space’s plan any more.',

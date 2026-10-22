@@ -13,13 +13,13 @@ import type { PlanNode, PlanTreeNode, PlanTreeOutput } from '@aflow/schemas';
 
 const mockReadPlanTrees = vi.fn();
 const mockUpdatePlanNode = vi.fn();
-const mockGetPlanNode = vi.fn();
+const mockReadPlanNodeDetail = vi.fn();
 const mockCreatePlanNodeStore = vi.fn((..._args: unknown[]) => ({ store: 'tenant-store' }));
 
 vi.mock('@aflow/cybernetic-runtime', () => ({
   readPlanTrees: (...a: unknown[]) => mockReadPlanTrees(...a),
   updatePlanNode: (...a: unknown[]) => mockUpdatePlanNode(...a),
-  getPlanNode: (...a: unknown[]) => mockGetPlanNode(...a),
+  readPlanNodeDetail: (...a: unknown[]) => mockReadPlanNodeDetail(...a),
   createPlanNodeStore: (...a: unknown[]) => mockCreatePlanNodeStore(...a),
 }));
 
@@ -49,9 +49,11 @@ function treeNode(
     revision: 1,
     position: 0,
     updatedAt: '2026-10-05T08:00:00.000Z',
-    links: [],
-    linksTotal: 0,
-    runs: [],
+    createdAt: '2026-10-05T07:00:00.000Z',
+    goalHead: 'Ship the board.',
+    counts: { runs: 0, pullRequests: 0, findings: 0, documents: 0, inFlightRuns: 0 },
+    rounds: 0,
+    ownedBy: 'loop',
     children: [],
     ...extra,
   };
@@ -61,37 +63,32 @@ const TREES: PlanTreeOutput = {
   roots: [
     treeNode(ROOT_ID, null, {
       noteHead: 'next: the plan page',
-      runs: [
-        {
-          runId: RUN_ID,
-          slug: 'commission-change',
-          status: 'running',
-          nodeId: ROOT_ID,
-          startedAt: '2026-10-05T09:00:00.000Z',
-        },
-      ],
+      counts: { runs: 0, pullRequests: 0, findings: 0, documents: 0, inFlightRuns: 1 },
+      progress: { done: 1, total: 1 },
       children: [
         treeNode(CHILD_ID, ROOT_ID, {
           status: 'done',
-          outcome: `Merged ${PR}.`,
           closedAt: '2026-10-05T10:00:00.000Z',
-          links: [
-            {
-              nodeId: CHILD_ID,
-              kind: 'pull_request',
-              ref: PR,
-              createdAt: '2026-10-05T10:00:00.000Z',
-            },
-          ],
-          linksTotal: 3,
-          children: [
-            treeNode(GRANDCHILD_ID, CHILD_ID, { status: 'dropped', outcome: 'Superseded.' }),
-          ],
+          counts: { runs: 2, pullRequests: 1, findings: 3, documents: 0, inFlightRuns: 0 },
+          rounds: 1,
+          pullRequest: { url: PR, merged: true, mergeSha: 'abc1234' },
+          progress: { done: 0, total: 0 },
+          children: [treeNode(GRANDCHILD_ID, CHILD_ID, { status: 'dropped' })],
         }),
       ],
     }),
   ],
-  runsTotal: 1,
+  tallies: [
+    {
+      rootId: ROOT_ID,
+      steps: 2,
+      done: 1,
+      active: 0,
+      decide: 0,
+      dropped: 1,
+      doneByDay: [{ day: '2026-10-05', count: 1 }],
+    },
+  ],
 };
 
 /** Who is asking, which spaces they may read and write, and whether they are an agent. */
@@ -176,7 +173,7 @@ afterEach(async () => {
 });
 
 describe('GET /v1/spaces/:spaceId/plan', () => {
-  it('returns whole trees, every node nested with its status, position, outcome, links and runs', async () => {
+  it('returns the board: every node nested with its counts, rounds, owner, pull request and progress, and each plan’s tallies', async () => {
     const res = await app.inject({ method: 'GET', url: `/v1/spaces/${SPACE_ID}/plan` });
 
     expect(res.statusCode).toBe(200);
@@ -187,19 +184,42 @@ describe('GET /v1/spaces/:spaceId/plan', () => {
     await app.inject({ method: 'GET', url: `/v1/spaces/${SPACE_ID}/plan` });
 
     expect(mockCreatePlanNodeStore).toHaveBeenCalledWith(DB, TENANT_ID);
-    expect(mockReadPlanTrees).toHaveBeenCalledWith({
-      store: { store: 'tenant-store' },
-      spaceId: SPACE_ID,
+    expect(mockReadPlanTrees).toHaveBeenCalledWith(
+      { store: { store: 'tenant-store' }, spaceId: SPACE_ID },
+      {},
+    );
+  });
+
+  it('hands the done window and the reader’s time zone to the engine', async () => {
+    const closedSince = '2026-10-22T00:00:00.000+02:00';
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/v1/spaces/${SPACE_ID}/plan?closedSince=${encodeURIComponent(closedSince)}&tz=Europe%2FParis`,
     });
+
+    expect(res.statusCode).toBe(200);
+    expect(mockReadPlanTrees).toHaveBeenCalledWith(
+      { store: { store: 'tenant-store' }, spaceId: SPACE_ID },
+      { closedSince, tz: 'Europe/Paris' },
+    );
+  });
+
+  it('refuses a done window that is not an instant, and a time zone that is not one', async () => {
+    for (const query of ['closedSince=yesterday', 'tz=Mars%2FOlympus', 'links=all']) {
+      const res = await app.inject({ method: 'GET', url: `/v1/spaces/${SPACE_ID}/plan?${query}` });
+      expect(res.statusCode).toBe(400);
+    }
+    expect(mockReadPlanTrees).not.toHaveBeenCalled();
   });
 
   it('answers an empty plan with no roots', async () => {
-    mockReadPlanTrees.mockResolvedValue({ roots: [], runsTotal: 0 });
+    mockReadPlanTrees.mockResolvedValue({ roots: [], tallies: [] });
 
     const res = await app.inject({ method: 'GET', url: `/v1/spaces/${SPACE_ID}/plan` });
 
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ roots: [], runsTotal: 0 });
+    expect(res.json()).toEqual({ roots: [], tallies: [] });
   });
 
   it('names the bound that cut a large plan short', async () => {
@@ -438,21 +458,74 @@ describe('GET /v1/spaces/:spaceId/plan/nodes/:nodeId', () => {
     runsTotal: 0,
   };
 
-  it('reads one node in full through the engine, its goal, criteria and revision', async () => {
-    mockGetPlanNode.mockResolvedValue({ ok: true, ...read });
+  it('reads one node in full through the engine, the newest 50 links by default', async () => {
+    mockReadPlanNodeDetail.mockResolvedValue({ ok: true, ...read });
 
     const res = await app.inject({ method: 'GET', url });
 
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual(read);
-    expect(mockGetPlanNode).toHaveBeenCalledWith(
+    expect(mockReadPlanNodeDetail).toHaveBeenCalledWith(
       { store: { store: 'tenant-store' }, spaceId: SPACE_ID },
       CHILD_ID,
+      { limit: 50 },
     );
   });
 
+  it('pages the links by kind, cursor and limit, and hands on the next cursor', async () => {
+    const page = {
+      ...read,
+      links: [
+        {
+          nodeId: CHILD_ID,
+          kind: 'run',
+          ref: RUN_ID,
+          label: 'commission-change completed',
+          createdAt: '2026-10-05T10:00:00.000Z',
+        },
+      ],
+      linksTotal: 7,
+      nextCursor: 'next-page',
+    };
+    mockReadPlanNodeDetail.mockResolvedValue({ ok: true, ...page });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `${url}?linkKind=run&cursor=this-page&limit=1`,
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual(page);
+    expect(mockReadPlanNodeDetail).toHaveBeenCalledWith(expect.anything(), CHILD_ID, {
+      linkKind: 'run',
+      cursor: 'this-page',
+      limit: 1,
+    });
+  });
+
+  it('refuses a link kind it does not know and a limit past the ceiling, before the engine', async () => {
+    for (const query of ['linkKind=email', 'limit=0', 'limit=201', 'page=2']) {
+      const res = await app.inject({ method: 'GET', url: `${url}?${query}` });
+      expect(res.statusCode).toBe(400);
+    }
+    expect(mockReadPlanNodeDetail).not.toHaveBeenCalled();
+  });
+
+  it('answers a cursor the engine did not issue with 400', async () => {
+    mockReadPlanNodeDetail.mockResolvedValue({
+      ok: false,
+      code: 'PLAN_LINK_CURSOR_INVALID',
+      message: 'This cursor was not issued by this read.',
+    });
+
+    const res = await app.inject({ method: 'GET', url: `${url}?cursor=forged` });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ error: 'PLAN_LINK_CURSOR_INVALID' });
+  });
+
   it('answers a node not in the space with 404', async () => {
-    mockGetPlanNode.mockResolvedValue({
+    mockReadPlanNodeDetail.mockResolvedValue({
       ok: false,
       code: 'PLAN_NODE_NOT_FOUND',
       message: 'No plan node.',
@@ -470,6 +543,6 @@ describe('GET /v1/spaces/:spaceId/plan/nodes/:nodeId', () => {
     const res = await app.inject({ method: 'GET', url });
 
     expect(res.statusCode).toBe(403);
-    expect(mockGetPlanNode).not.toHaveBeenCalled();
+    expect(mockReadPlanNodeDetail).not.toHaveBeenCalled();
   });
 });
