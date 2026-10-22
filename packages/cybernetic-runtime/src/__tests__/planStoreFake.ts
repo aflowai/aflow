@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import {
-  PLAN_NODE_GOAL_HEAD_MAX_CHARS,
   PLAN_NODE_POSITION_MAX,
   PLAN_REVIEW_WORKFLOW_SLUGS,
   PLAN_TREE_DEPTH_LIMIT,
@@ -11,6 +10,7 @@ import {
 } from '@aflow/schemas';
 import {
   PLAN_NODE_RUN_STATUSES,
+  planGoalHead,
   planNoteHead,
   type PlanNodeInsert,
   type PlanNodeLinkTally,
@@ -364,7 +364,7 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
             {
               createdAt: n.createdAt,
               ...(n.closedAt !== undefined ? { closedAt: n.closedAt } : {}),
-              goalHead: n.goal.slice(0, PLAN_NODE_GOAL_HEAD_MAX_CHARS),
+              goalHead: planGoalHead(n.goal),
             },
           ]),
       ),

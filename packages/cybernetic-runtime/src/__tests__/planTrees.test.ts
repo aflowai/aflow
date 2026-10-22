@@ -33,6 +33,7 @@ import {
   planDayOf,
   type PlanBoardOptions,
 } from '../plan/board.js';
+import { planGoalHead } from '../plan/store.js';
 import { mergeLinkLabel } from '../plan/stream.js';
 import { InMemoryPlanNodeStore } from './planStoreFake.js';
 
@@ -147,6 +148,22 @@ describe('readPlanTrees — the board', () => {
     expect(tree?.goalHead).toBe(long.slice(0, PLAN_NODE_GOAL_HEAD_MAX_CHARS));
     expect(tree?.createdAt).toBe(done.createdAt);
     expect(tree?.closedAt).toEqual(expect.any(String));
+  });
+
+  it('cuts a goal’s head by code points within the schema’s limit when an astral pair straddles it', async () => {
+    // The first 160 UTF-16 units end inside the emoji's surrogate pair.
+    const goal = `${'a'.repeat(PLAN_NODE_GOAL_HEAD_MAX_CHARS - 1)}😀${'b'.repeat(40)}`;
+    await node('astral', { goal });
+
+    const [tree] = (await read()).roots;
+
+    expect(tree?.goalHead).toBe('a'.repeat(PLAN_NODE_GOAL_HEAD_MAX_CHARS - 1));
+    // What Postgres's left(goal, 160) hands back — 160 code points, 161 units — is cut the same way.
+    const left = [...goal].slice(0, PLAN_NODE_GOAL_HEAD_MAX_CHARS).join('');
+    expect(left.length).toBeGreaterThan(PLAN_NODE_GOAL_HEAD_MAX_CHARS);
+    expect(planGoalHead(left)).toBe('a'.repeat(PLAN_NODE_GOAL_HEAD_MAX_CHARS - 1));
+    const emojis = '😀'.repeat(PLAN_NODE_GOAL_HEAD_MAX_CHARS);
+    expect(planGoalHead(emojis)).toBe('😀'.repeat(PLAN_NODE_GOAL_HEAD_MAX_CHARS / 2));
   });
 
   it('counts each node’s links by kind, its runs in flight, and its review rounds among its run links', async () => {

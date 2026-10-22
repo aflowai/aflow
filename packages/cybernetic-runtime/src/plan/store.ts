@@ -98,7 +98,7 @@ export interface NewPlanNodeLink {
 export interface PlanNodeBoardFacts {
   createdAt: string;
   closedAt?: string;
-  /** The goal's first `PLAN_NODE_GOAL_HEAD_MAX_CHARS` characters. */
+  /** The goal's head, by `planGoalHead`. */
   goalHead: string;
 }
 
@@ -293,6 +293,22 @@ export function rowToPlanNodeLink(row: PlanNodeLinkRow): PlanNodeLink {
     ...(row.label != null ? { label: row.label } : {}),
     createdAt: row.createdAt.toISOString(),
   };
+}
+
+/**
+ * The goal's head as the board carries it: whole code points, at most
+ * `PLAN_NODE_GOAL_HEAD_MAX_CHARS` UTF-16 units — the unit the schema counts.
+ * Postgres's `left()` counts code points, so an astral character in its cut
+ * would carry the head past the schema's limit; and a cut by units alone could
+ * split a surrogate pair.
+ */
+export function planGoalHead(goal: string): string {
+  let head = '';
+  for (const codePoint of goal) {
+    if (head.length + codePoint.length > PLAN_NODE_GOAL_HEAD_MAX_CHARS) break;
+    head += codePoint;
+  }
+  return head;
 }
 
 /** The note's first line, bounded — what a list or the attention block shows of it. */
@@ -701,7 +717,7 @@ export function createPlanNodeStore(db: PostgresJsDatabase, tenantId: string): P
           facts.set(row.id, {
             createdAt: new Date(row.createdAt).toISOString(),
             ...(row.closedAt != null ? { closedAt: new Date(row.closedAt).toISOString() } : {}),
-            goalHead: row.goalHead,
+            goalHead: planGoalHead(row.goalHead),
           });
         }
         return facts;
