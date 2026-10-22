@@ -47,6 +47,7 @@ import {
 } from '@aflow/schemas';
 import { PUBLISH_LOCAL_CHANGES } from './publishLocalChanges.js';
 import { PUSH_GATE_OTHERWISE, PUSH_GATE_RULES } from './publishLocalChangesGate.js';
+import { PUBLISH_AS_IT_STANDS } from './publishLocalChangesProse.js';
 import { AFTER_REVIEW_QUESTION, AFTER_REVIEW_ROUTES } from './publishLocalChangesDecisions.js';
 import { SKILL_CATALOG } from './index.js';
 import { LOCAL_PR_SHEPHERD } from './localPrShepherd.js';
@@ -2201,6 +2202,56 @@ describe("Publish Local Changes — the push checks origin's base and URL in its
       'A refused push leaves the commit on its branch: report its message and the remedy the run names.',
     );
   });
+
+  it('names, for a refusal the commit survives, the publication as it stands and the exact inputs it takes', () => {
+    const failure = taskOrThrow('push').failureInstruction ?? '';
+    // A check receipt lost to an executor restart is one such refusal.
+    expect(failure).toContain('the executor restarted since the checks');
+    expect(failure).toContain(PUBLISH_AS_IT_STANDS);
+    expect(failure).toContain("Never publish the commission's patch again");
+
+    const declared = new Set((wf.runInputs ?? []).map((input) => input.id));
+    const carried = ['bindingId', 'owner', 'repo', 'base', 'round', 'findings'];
+    const left = ['patchRef', 'patch', 'mergeFrom', 'commitMessage'];
+    for (const id of [...carried, ...left, 'branch', 'baseSha']) {
+      expect(declared.has(id), id).toBe(true);
+      expect(PUBLISH_AS_IT_STANDS, id).toContain(`\`${id}\``);
+    }
+    expect(PUBLISH_AS_IT_STANDS).toContain(
+      "`baseSha` the `commit.sha` this run's commit task reported",
+    );
+    expect(PUBLISH_AS_IT_STANDS).toContain(
+      'no `patchRef`, `patch`, `mergeFrom` or `commitMessage`',
+    );
+
+    // The path exists: a run whose push was refused, followed by the run the text names.
+    const refused = publish({
+      pushApproval: 'unless-unreviewed',
+      review: 'approve',
+      decision: 'approved',
+      baseMoved: 'conflicting',
+    });
+    expect(refused.pushed).toBe(false);
+    const madeSha = readOutput(refused.outputs, 'commit', 'commit.sha');
+    expect(madeSha).toBe(HEAD);
+    // The same folder, repository and base as the refused run, which the scenario carries.
+    const again = publish({
+      pushApproval: 'unless-unreviewed',
+      review: 'approve',
+      decision: 'approved',
+      asItStands: true,
+      inputs: { branch: 'aflow/x', baseSha: madeSha },
+    });
+    expect((again.inputs.get('commit') ?? {})['commit']).toEqual({
+      branch: 'aflow/x',
+      baseSha: HEAD,
+      pushBase: 'main',
+    });
+    for (const task of ['check-commit', 'scan-commit', 'review-commit', 'push']) {
+      expect(again.statuses.get(task), task).toBe('succeeded');
+    }
+    expect(again.pushed).toBe(true);
+  });
 });
 
 describe('Publish Local Changes — a branch is published as it stands', () => {
@@ -2262,6 +2313,48 @@ describe('Publish Local Changes — a branch is published as it stands', () => {
     expect(outcome.inputs.get('describe-pr')).toMatchObject({
       range: `${ORIGIN_BASE}..${STRANDED}`,
     });
+  });
+
+  it('publishes a committed branch that moved on from `baseSha` at its head, as it stands, with no new commit', () => {
+    // The base a refused publication's patch was made against: the branch
+    // has since gained that publication's commit, which is what goes.
+    const outcome = publish({
+      pushApproval: 'unless-unreviewed',
+      review: 'approve',
+      decision: 'approved',
+      asItStands: true,
+      inputs: { baseSha: HEAD },
+    });
+    expect(outcome.pushed).toBe(true);
+    for (const task of ['commit', 'check-commit', 'scan-commit', 'review-commit', 'push']) {
+      expect(outcome.statuses.get(task), task).toBe('succeeded');
+    }
+
+    // Asked with no change and no message, which the operation reads as nothing to make.
+    const asked = outcome.inputs.get('commit') ?? {};
+    expect(asked['commit']).toEqual({ branch: 'aflow/x', baseSha: HEAD, pushBase: 'main' });
+    expect(asked).not.toHaveProperty('patchRef');
+    expect(asked).not.toHaveProperty('patch');
+    expect(HostFilePatchInputSchema.safeParse(asked).success).toBe(true);
+    expect(outcome.outputs.get('commit')).toMatchObject({
+      filesChanged: 0,
+      commit: { sha: STRANDED, asItStands: true },
+    });
+    expect(
+      wf.tasks.filter((task) => task.operation === 'host.file.patch').map((t) => t.taskId),
+    ).toEqual(['commit']);
+
+    // Every later task reads the head the branch stands at, not the sha it was named by.
+    expect(outcome.inputs.get('check-commit')).toMatchObject({ sha: STRANDED, base: ORIGIN_BASE });
+    expect(outcome.inputs.get('scan-commit')).toMatchObject({
+      range: `${ORIGIN_BASE}..${STRANDED}`,
+    });
+    expect(outcome.inputs.get('review-commit')).toMatchObject({
+      inputs: { from: ORIGIN_BASE, at: STRANDED },
+    });
+    expect((outcome.inputs.get('push')?.['command'] as string[] | undefined)?.at(-1)).toBe(
+      `${STRANDED}:refs/heads/aflow/x`,
+    );
   });
 
   it('is refused at the commit with a message, but no change, as two readings of one request', () => {

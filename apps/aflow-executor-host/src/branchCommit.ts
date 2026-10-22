@@ -23,6 +23,7 @@ import {
   commitIdentityArgs,
   commitNamedBySha,
   git,
+  isAncestor,
   noIdentityMessage,
   prepareWorktree,
   removeWorktree,
@@ -410,8 +411,14 @@ async function fetchFromClone(root: string, clone: Checkout, sha: string): Promi
  * commit a publication checks, scans, reviews and pushes, with nothing made
  * and no ref moved. A commit the publication machinery already made — whose
  * push was refused, or never ran — is published this way rather than
- * stranded. The head must be the commit `baseSha` names, so a branch that moved
- * since the caller read it is not published in its place.
+ * stranded.
+ *
+ * `baseSha` is where the caller last knew the branch, and a branch that moved
+ * on from it is published at its head: whatever it gained is in the range the
+ * publication checks, scans and reviews before anything leaves, so a caller
+ * that knew only the commission's base still publishes the commit made on it
+ * after a refused push. A head that does not hold `baseSha`
+ * — the branch rewound or replaced — is not the branch the caller named.
  */
 export async function branchAsItStands(
   root: string,
@@ -433,10 +440,11 @@ export async function branchAsItStands(
     );
   }
   const head = await resolveCommit(root, `refs/heads/${branch}`);
-  if ((await resolveSha(root, baseSha)) !== head) {
+  if (!(await isAncestor(root, await resolveSha(root, baseSha), head))) {
     throw new WorktreeError(
-      `\`${branch}\` is at \`${head}\`, not \`${baseSha}\`: it moved since that commit was ` +
-        `named. Read what \`${branch}\` holds now before publishing it as it stands.`,
+      `\`${branch}\` is at \`${head}\`, which does not hold \`${baseSha}\`: the branch was ` +
+        'rewound or replaced since that commit was named. Read what it holds now, and publish ' +
+        'it as it stands with its head as `baseSha`.',
       'stale_base',
     );
   }
