@@ -183,7 +183,7 @@ export const HostOperationRegistrations: OperationRegistration[] = [
         'Preparing a publication: with `commit`, the diff lands as a commit on a new branch and the working tree is left alone',
         'A patch made from a commission that started at a branch lands on that branch when `commit.branch` names it and `commit.baseSha` is the `baseSha` the commission reported; a fresh branch is created at that `baseSha`, so a commission started from a remote publishes without the folder pulling first',
         'A fix to a branch its base has moved past is commissioned with `mergeFrom: origin/<base>` and published with the sha the commission reported in `merge.from` as `commit.mergeFrom`; the branch then carries one merge commit holding the fix',
-        'Publishing a branch as it stands — a commit already made whose push did not land: `commit` with the branch, `commit.baseSha` naming its head and no diff, `mergeFrom` or `message`; nothing is made, and the head is reported as the commit',
+        'Publishing a branch as it stands — a commit already made whose push did not land: `commit` with the branch, `commit.baseSha` naming its head, or a commit under it, and no diff, `mergeFrom` or `message`; nothing is made, and the head is reported as the commit',
       ],
       whenNotToUse: [
         'Authoring a change here; a diff is something a harness produced and someone read, never something written for this call',

@@ -252,7 +252,8 @@ folder's posture as it pushes, so a commit checked before the posture changed is
   conflicts with the commit, it is refused naming the merge round. Checks do not survive a
   restart, so `hb_aflow`'s push after one is refused for its check receipt. A refused push
   leaves its reviewed commit on the branch, and Local Publish publishes it as it stands:
-  the branch, its head as `baseSha`, and no patch, `mergeFrom` or `commitMessage`.
+  the branch, its head as `baseSha`, and no patch, `mergeFrom` or `commitMessage` — never
+  the patch again, which the branch already holds and its commit refuses.
 - **Commissions can overlap**; each runs in its own detached checkout. The machine runs
   two coding agents at once unless `aflow harness concurrency <n>` says otherwise, and a
   review is a coding agent too; a commission or review past that waits for one to end,

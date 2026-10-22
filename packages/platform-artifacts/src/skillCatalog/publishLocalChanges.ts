@@ -20,6 +20,7 @@ import {
   CHECK_FAILED,
   CHECKS_COULD_NOT_RUN,
   CHECKS_STOPPED,
+  PUBLISH_AS_IT_STANDS,
   PUBLISH_DESCRIPTION,
 } from './publishLocalChangesProse.js';
 import { REVIEW_FINDING_SCHEMA, REVIEW_LOCAL_CHANGES } from './reviewLocalChanges.js';
@@ -209,7 +210,7 @@ const CHECK_INPUT_TEMPLATE = {
 
 const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'publish-local-changes',
-  version: 40,
+  version: 41,
   name: 'Publish Local Changes',
   tagline:
     'Commit a patch onto a branch of a connected repository, then push it and open the pull request — asking the operator first unless the folder says otherwise.',
@@ -282,7 +283,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           id: 'baseSha',
           required: false,
           description:
-            "The commit the patch was made against, as the commission reported it in `baseSha`. Required to append to an existing branch, and it must be that branch's head. A new branch is created at it, even where the folder's last commit is behind or ahead of it — a commission started from a remote fetched it into the folder; without it, a new branch starts at the folder's last commit. For a branch published as it stands, the head to publish — the commit an earlier publication reported in `commit.sha`.",
+            "The commit the patch was made against, as the commission reported it in `baseSha`. Required to append to an existing branch, and it must be that branch's head. A new branch is created at it, even where the folder's last commit is behind or ahead of it — a commission started from a remote fetched it into the folder; without it, a new branch starts at the folder's last commit. As it stands: an earlier publication's `commit.sha`; the branch goes at its head, if that holds it.",
           schema: BASE_SHA_SCHEMA,
         },
         {
@@ -1046,8 +1047,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           taskId: 'push',
           name: 'Push the commit',
           goal: 'Push the commit this run made to its branch on origin through the connected folder’s shell, with the argv pinned by the skill — carrying the commits of `pushRange` under it that origin does not have, and no tag or submodule commit. It carries the base branch, the receipt the scan issued for `pushRange` and, where the folder declares checks, the receipt the check issued for the commit; the executor refuses a push without them, and one whose checks did not pass on exactly this commit against that base. In the same step, just before git runs, the executor confirms the push goes where `origin` fetches from and reads where `origin`’s base branch is now; where that is not where the receipt’s range starts, or the executor restarted since the scan, it scans the range from there to the commit itself and pushes on that scan. Where the scan did not clear the range, or the folder’s push approval is `always`, the executor pushes only on the operator’s approval of this push in this run. A remote that refuses the update fails the push with git’s own message.',
-          failureInstruction:
-            "Nothing was pushed, and the commit is still on its branch in the folder. Where the message above says the commit no longer merges cleanly into `origin`'s base branch, which moved on since the scan, the remedy is the merge round it names: commission the fix from this branch with `mergeFrom: origin/<base>`, and publish it onto this branch with the sha the commission reports in `merge.from` as `mergeFrom`. Where it says the push scanned the range it sends and found what looks like a secret, the commits `origin`'s base gained are not the cause: the secret is in this branch, and is handled as a finding of the scan is. Where it says the receipt's range starts at a commit `origin`'s base branch no longer holds — the base was rewound — or that `origin` pushes somewhere other than where it fetches from, put that right — for a push URL, the folder has to push where it fetches — and publish this branch as it stands: `branch` and `baseSha` its head, with no patch, `mergeFrom` or `commitMessage`. Where it says the push carries no check receipt the executor issued, one more than a day old, or one for checks the folder no longer declares, the checks have to run again on the commit: publish this branch as it stands. Where it says no approval of this push is on record, nothing was pushed: the operator's approval in this run is what lets a range the scan did not clear leave the machine, and any push at all from a folder whose push approval is `always`. Otherwise git's own message says why the remote refused the update.",
+          failureInstruction: `Nothing was pushed, and the commit is still on its branch in the folder. Where the message above says the commit no longer merges cleanly into \`origin\`'s base branch, which moved on since the scan, the remedy is the merge round it names: commission the fix from this branch with \`mergeFrom: origin/<base>\`, and publish it onto this branch with the sha the commission reports in \`merge.from\` as \`mergeFrom\`. Where it says the push scanned the range it sends and found what looks like a secret, the commits \`origin\`'s base gained are not the cause: the secret is in this branch, and is handled as a finding of the scan is. Where it says the receipt's range starts at a commit \`origin\`'s base branch no longer holds — the base was rewound — or that \`origin\` pushes somewhere other than where it fetches from, put that right — for a push URL, the folder has to push where it fetches — and publish this branch as it stands. Where it says the push carries no check receipt the executor issued — the executor restarted since the checks — one more than a day old, or one for checks the folder no longer declares, the checks have to run again on the commit: publish this branch as it stands. ${PUBLISH_AS_IT_STANDS} Never publish the commission's patch again: the branch already holds it, and a patch is appended only to the commit it was made against. Where it says no approval of this push is on record, nothing was pushed: the operator's approval in this run is what lets a range the scan did not clear leave the machine, and any push at all from a folder whose push approval is \`always\`. Otherwise git's own message says why the remote refused the update.`,
           type: 'operation' as const,
           operation: 'host.process.exec',
           // The scan and the check as well as the approval: where the gate

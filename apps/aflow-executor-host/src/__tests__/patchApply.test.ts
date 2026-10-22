@@ -1141,16 +1141,63 @@ describe('measuring what a push of the commit would add', () => {
       expect(await pushedBranch()).toBe(sha);
     }, 30_000);
 
-    it('refuses to publish as it stands a branch that is missing or has moved, making nothing', async () => {
+    it('publishes at its head a branch that moved on from `baseSha` — the commit a refused push left — making nothing', async () => {
+      // A first publication committed the patch on the branch, and its push
+      // never landed: the branch is one commit past the base the patch was made against.
+      const { sha } = await measured();
+      const madeAgainst = (await git(root, 'rev-parse', `${sha}^`)).trim();
+      const pushedBase = (await git(origin, 'rev-parse', 'main')).trim();
+
+      // The patch cannot go again: the branch already holds it, past its base.
+      const again = await publish({ pushBase: 'main', baseSha: madeAgainst });
+      expect(again.result.status).toBe('FAILED');
+      expect(again.result.error?.message).toContain(
+        `The patch was made against \`${madeAgainst}\` but \`aflow/x\` is at \`${sha}\``,
+      );
+
+      // With no change, the same base publishes the branch at its head.
+      const { result, output } = await asItStands(madeAgainst);
+      expect(result.status).toBe('SUCCEEDED');
+      expect(output).toMatchObject({ state: 'applied', filesChanged: 0, files: [] });
+      const commit = output?.['commit'] as Record<string, unknown>;
+      expect(commit).toMatchObject({
+        branch: 'aflow/x',
+        sha,
+        baseSha: madeAgainst,
+        asItStands: true,
+        pushRange: `${pushedBase}..${sha}`,
+        pushRefspec: `${sha}:refs/heads/aflow/x`,
+      });
+      expect((await git(root, 'rev-parse', 'aflow/x')).trim()).toBe(sha);
+      expect((await git(root, 'rev-list', '--count', `${madeAgainst}..aflow/x`)).trim()).toBe('1');
+
+      const checked: Captured = {};
+      const check = await createHostCommitCheckHandler(policyPath).execute({
+        ...(contextFor({ bindingId: 'hb_push', sha, base: pushedBase }, checked) as object),
+        operationId: 'host.commit.check',
+      } as never);
+      expect(check.status).toBe('SUCCEEDED');
+      expect(checked.output?.['clearedSha']).toBe(sha);
+
+      const range = String(commit['pushRange']);
+      const pushed = await push(range, 'origin', await scanned(range));
+      expect(pushed.result.status).toBe('SUCCEEDED');
+      expect(await pushedBranch()).toBe(sha);
+    }, 30_000);
+
+    it('refuses to publish as it stands a branch that is missing, or whose head does not hold `baseSha`, making nothing', async () => {
       const { sha } = await measured();
       const missing = await asItStands(sha, 'aflow/none');
       expect(missing.result.status).toBe('FAILED');
       expect(missing.message).toContain('no branch `aflow/none` to publish as it stands');
 
-      const parent = (await git(root, 'rev-parse', `${sha}^`)).trim();
-      const moved = await asItStands(parent);
-      expect(moved.result.status).toBe('FAILED');
-      expect(moved.message).toContain(`\`aflow/x\` is at \`${sha}\`, not \`${parent}\``);
+      // A commit beside the branch rather than under it: the branch named is not this one.
+      const beside = await commitLocally('beside.txt');
+      const replaced = await asItStands(beside);
+      expect(replaced.result.status).toBe('FAILED');
+      expect(replaced.message).toContain(
+        `\`aflow/x\` is at \`${sha}\`, which does not hold \`${beside}\``,
+      );
       expect((await git(root, 'rev-parse', 'aflow/x')).trim()).toBe(sha);
     }, 30_000);
 

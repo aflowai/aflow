@@ -684,7 +684,10 @@ export const HostFilePatchInputSchema = z
             'started from a remote fetched its base into the folder). Required when `branch` ' +
             "exists, and it must be that branch's head; a base that does not match is refused, " +
             'never merged. A new branch is created at this commit, wherever it stands against ' +
-            "the folder's HEAD; omitted, the new branch starts at the folder's HEAD.",
+            "the folder's HEAD; omitted, the new branch starts at the folder's HEAD. For a " +
+            'branch published as it stands, where the caller last knew it: the branch is ' +
+            'published at its head wherever that head holds this commit, and refused where ' +
+            'it does not.',
         ),
         pushBase: HostBranchNameSchema.optional().describe(
           'The branch on `origin` a push of this commit is measured against — `main`, by ' +
@@ -720,7 +723,8 @@ export const HostFilePatchInputSchema = z
           "the branch's head for an existing one — committed there, and the branch ref is " +
           'created or advanced by that one commit. That commit is what a publication pushes. ' +
           'With no diff, `mergeFrom` or `message`, the existing branch is published as it ' +
-          'stands: nothing is made, and its head, named by `baseSha`, is the commit.',
+          'stands: nothing is made, and its head — `baseSha` or a commit built on it — is the ' +
+          'commit.',
       ),
   })
   .superRefine((input, ctx) => {
@@ -736,7 +740,8 @@ export const HostFilePatchInputSchema = z
           'Name the diff to apply: `patchRef` for the change a commission reported, or ' +
           '`patch` for a diff handed over as text. Only a publication with ' +
           '`commit.mergeFrom` goes without one, the merge being its whole change — or one ' +
-          'of a branch as it stands, with `commit.baseSha` naming its head and no ' +
+          'of a branch as it stands, with `commit.baseSha` naming its head, or a commit under ' +
+          'it, and no ' +
           '`commit.message`, since the head carries its own.',
       });
     }
