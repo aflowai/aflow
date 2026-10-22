@@ -964,8 +964,11 @@ const HostHarnessRunInputObjectSchema = z.object({
       'branch names that branch here and its patch lands on it. A ref of the form ' +
       '`<remote>/<ref>`, where `<remote>` is a remote of the folder, is fetched from that ' +
       "remote first, so `origin/main` is the remote's `main` as of now rather than as of the " +
-      "folder's last fetch; a remote that cannot be reached is refused, naming it. An unknown " +
-      'ref is refused.',
+      "folder's last fetch; a remote that cannot be reached is refused, naming it. A commit id " +
+      'the folder does not have — such as the sha of a pull request merged since its last ' +
+      "fetch — is looked for again after fetching `origin`'s default branch, and refused only " +
+      'when that fetch fails or does not bring it, saying which. Any other unknown ref is ' +
+      'refused without reaching the remote.',
   ),
   mergeFrom: HostBaseRefSchema.optional().describe(
     "A branch on one of the folder's remotes, `<remote>/<branch>` such as `origin/main`, merged " +
