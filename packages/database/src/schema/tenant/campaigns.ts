@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import { pgTable, uuid, text, timestamp, jsonb, index, uniqueIndex } from 'drizzle-orm/pg-core';
 
 // ============================================================================
@@ -105,10 +106,12 @@ export const coachLearnings = pgTable(
     coachSessionId: uuid('coach_session_id').notNull(),
     runId: uuid('run_id'),
     spaceId: uuid('space_id').notNull(),
-    /** 'campaign' | 'skill' | 'space' */
+    /** 'campaign' | 'skill' | 'space' | 'plan' */
     scopeKind: text('scope_kind').notNull(),
     campaignId: uuid('campaign_id'),
     skillSlug: text('skill_slug'),
+    /** The plan node a `plan`-scope learning was written on (Plan 322 D8); no FK, as `campaign_id`. */
+    planNodeId: uuid('plan_node_id'),
     kind: text('kind').notNull(),
     appliesTo: jsonb('applies_to'),
     statement: text('statement').notNull(),
@@ -138,6 +141,9 @@ export const coachLearnings = pgTable(
       table.status,
       table.createdAt,
     ),
+    index('coach_learnings_space_plan_node_idx')
+      .on(table.spaceId, table.planNodeId)
+      .where(sql`${table.planNodeId} IS NOT NULL`),
   ],
 );
 

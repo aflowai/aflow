@@ -25,6 +25,12 @@ export async function handlePlanNodeGet(args: InlineHandlerArgs, startTime: numb
     linksTotal: result.linksTotal,
     runs: result.runs,
     runsTotal: result.runsTotal,
+    dependencies: result.dependencies,
+    dependenciesTotal: result.dependenciesTotal,
+    dependents: result.dependents,
+    dependentsTotal: result.dependentsTotal,
+    learnings: result.learnings,
+    learningsTotal: result.learningsTotal,
   };
   await emitStepSuccess(args, output as unknown as Record<string, unknown>, startTime);
 }

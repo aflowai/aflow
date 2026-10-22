@@ -6,7 +6,13 @@ import {
   PLAN_NODE_POSITION_MAX,
   PLAN_REVIEW_WORKFLOW_SLUGS,
   PLAN_TREE_DEPTH_LIMIT,
+  PLAN_TREE_WALK_NODE_LIMIT,
+  planDependencyMet,
+  type CoachLearning,
   type PlanNode,
+  type PlanNodeDependency,
+  type PlanNodeDependencyCondition,
+  type PlanNodeDependencyView,
   type PlanNodeKind,
   type PlanNodeLink,
   type PlanNodeLinkKind,
@@ -16,13 +22,17 @@ import {
   type TenantId,
 } from '@aflow/schemas';
 import {
+  coachLearnings,
   createTenantContext,
+  planNodeDependencies,
   planNodeLinks,
   planNodes,
   withTenantSchema,
   workflowRuns,
 } from '@aflow/database';
-import type { PlanNodeLinkRow, PlanNodeRow } from '@aflow/database';
+import type { PlanNodeDependencyRow, PlanNodeLinkRow, PlanNodeRow } from '@aflow/database';
+import { coachLearningToRow, rowToCoachLearning } from '../coachLearningsStore.js';
+import { checkDependency, type DependencyCheck, type DependencyReads } from './dependencies.js';
 import {
   checkPlacement,
   PLAN_SIBLING_ORDER,
@@ -139,6 +149,25 @@ export type PlanNodeLinkInsert =
   | { outcome: 'exists'; link: PlanNodeLink }
   | { outcome: 'node_not_found' };
 
+export type PlanDependencyWrite =
+  /** `dependency` is the edge as it now stands; absent where it was removed. */
+  | { outcome: 'written'; node: PlanNode; dependency?: PlanNodeDependency }
+  /** The waiting node is not at the expected revision, or gone. */
+  | { outcome: 'stale' }
+  | Exclude<DependencyCheck, { outcome: 'clear' }>;
+
+export type PlanLearningInsert =
+  | { outcome: 'inserted'; learning: CoachLearning }
+  | { outcome: 'node_not_found' }
+  /** Ids in `supersedes` that are not this node's learnings still read. */
+  | { outcome: 'supersedes_unknown'; learningIds: string[] };
+
+/** The learnings a node's read returns: plan-scope, still read (auto-recorded or ratified). */
+export const PLAN_LEARNING_READ_STATUSES: ReadonlyArray<CoachLearning['status']> = [
+  'auto_recorded',
+  'ratified',
+];
+
 /**
  * Every read and write of `plan_nodes`, scoped to one space. The engine in
  * `./operations.ts` is the only caller; it holds the rules, this holds the SQL.
@@ -235,6 +264,51 @@ export interface PlanNodeStore {
     nodeIds: readonly string[],
     limit: number,
   ): Promise<{ runs: PlanNodeRun[]; total: number }>;
+  /**
+   * Makes `nodeId` wait on `dependsOnId` for `condition` — or, with null,
+   * takes that edge away — while `nodeId` is still at `expectedRevision`, and
+   * moves its revision on. Setting an edge is checked by `checkDependency` in
+   * the same transaction, which holds `nodeId`'s row and every row it walks
+   * before reading that node's edges, so two writes that would close a loop
+   * between them cannot both pass.
+   */
+  setDependencyAtRevision(
+    spaceId: string,
+    nodeId: string,
+    expectedRevision: number,
+    dependsOnId: string,
+    condition: PlanNodeDependencyCondition | null,
+  ): Promise<PlanDependencyWrite>;
+  /** The edge from `nodeId` to `dependsOnId`; null where there is none. */
+  findDependency(
+    spaceId: string,
+    nodeId: string,
+    dependsOnId: string,
+  ): Promise<PlanNodeDependency | null>;
+  /** What `nodeId` waits on, each with that node's title and status; by title. */
+  listDependencies(
+    spaceId: string,
+    nodeId: string,
+    limit: number,
+  ): Promise<{ dependencies: PlanNodeDependencyView[]; total: number }>;
+  /** What waits on `nodeId`, each with the waiting node's title and status; by title. */
+  listDependents(
+    spaceId: string,
+    nodeId: string,
+    limit: number,
+  ): Promise<{ dependents: PlanNodeDependencyView[]; total: number }>;
+  /**
+   * Writes a `plan`-scope learning on the node its scope names, and marks the
+   * learnings it supersedes as superseded — each must be that node's and still
+   * read — in one transaction.
+   */
+  insertLearning(spaceId: string, learning: CoachLearning): Promise<PlanLearningInsert>;
+  /** The `plan`-scope learnings still read written on any of `nodeIds`, newest first. */
+  listLearningsOf(
+    spaceId: string,
+    nodeIds: readonly string[],
+    limit: number,
+  ): Promise<{ learnings: CoachLearning[]; total: number }>;
 }
 
 /**
@@ -292,6 +366,33 @@ export function rowToPlanNodeLink(row: PlanNodeLinkRow): PlanNodeLink {
     ref: row.ref,
     ...(row.label != null ? { label: row.label } : {}),
     createdAt: row.createdAt.toISOString(),
+  };
+}
+
+export function rowToPlanNodeDependency(row: PlanNodeDependencyRow): PlanNodeDependency {
+  return {
+    nodeId: row.nodeId,
+    dependsOnId: row.dependsOnId,
+    condition: row.condition as PlanNodeDependencyCondition,
+    createdAt: row.createdAt.toISOString(),
+  };
+}
+
+/**
+ * One end of an edge as a node's read shows it. `met` is the dependency's
+ * status against the condition, whichever end `other` is.
+ */
+export function planDependencyView(
+  other: { nodeId: string; title: string; status: PlanNodeStatus },
+  condition: PlanNodeDependencyCondition,
+  dependencyStatus: PlanNodeStatus,
+): PlanNodeDependencyView {
+  return {
+    nodeId: other.nodeId,
+    title: other.title,
+    status: other.status,
+    condition,
+    met: planDependencyMet(condition, dependencyStatus),
   };
 }
 
@@ -425,6 +526,33 @@ function placementReads(tx: PostgresJsDatabase, spaceId: string): PlacementReads
         SELECT coalesce(max(height), 0)::int AS height FROM below
       `);
       return Number((rows as Array<Record<string, unknown>>)[0]?.['height'] ?? 0);
+    },
+  };
+}
+
+/**
+ * What a dependency check reads inside a write's transaction: each node's row
+ * locked before its edges are read. Every edge write holds its waiting node's
+ * row, so an edge out of a node the walk has passed cannot appear before the
+ * write commits — and two writes that would close a loop each hold a row the
+ * other's walk needs, so Postgres ends one as a deadlock.
+ */
+function dependencyReads(tx: PostgresJsDatabase, spaceId: string): DependencyReads {
+  return {
+    dependenciesOf: async (nodeId) => {
+      const [held] = await tx
+        .select({ id: planNodes.id })
+        .from(planNodes)
+        .where(and(eq(planNodes.spaceId, spaceId), eq(planNodes.id, nodeId)))
+        .for('update');
+      if (!held) return undefined;
+      const rows = await tx
+        .select({ dependsOnId: planNodeDependencies.dependsOnId })
+        .from(planNodeDependencies)
+        .where(
+          and(eq(planNodeDependencies.spaceId, spaceId), eq(planNodeDependencies.nodeId, nodeId)),
+        );
+      return rows.map((row) => row.dependsOnId);
     },
   };
 }
@@ -862,6 +990,206 @@ export function createPlanNodeStore(db: PostgresJsDatabase, tenantId: string): P
           })),
           total: count?.total ?? 0,
         };
+      }),
+
+    setDependencyAtRevision: (spaceId, nodeId, expectedRevision, dependsOnId, condition) =>
+      retryingDeadlocks(() =>
+        inTenant(async (tx): Promise<PlanDependencyWrite> => {
+          const [held] = await tx
+            .select({ revision: planNodes.revision })
+            .from(planNodes)
+            .where(and(eq(planNodes.spaceId, spaceId), eq(planNodes.id, nodeId)))
+            .for('update');
+          if (held?.revision !== expectedRevision) return { outcome: 'stale' };
+          const edge = and(
+            eq(planNodeDependencies.nodeId, nodeId),
+            eq(planNodeDependencies.dependsOnId, dependsOnId),
+          );
+          if (condition === null) {
+            await tx.delete(planNodeDependencies).where(edge);
+            const node = await writeAtRevision(tx, spaceId, nodeId, expectedRevision, {});
+            return node ? { outcome: 'written', node } : { outcome: 'stale' };
+          }
+          const check = await checkDependency(
+            nodeId,
+            dependsOnId,
+            dependencyReads(tx, spaceId),
+            PLAN_TREE_WALK_NODE_LIMIT,
+          );
+          if (check.outcome !== 'clear') return check;
+          const [row] = await tx
+            .insert(planNodeDependencies)
+            .values({ nodeId, dependsOnId, spaceId, condition })
+            .onConflictDoUpdate({
+              target: [planNodeDependencies.nodeId, planNodeDependencies.dependsOnId],
+              set: { condition },
+            })
+            .returning();
+          if (!row) throw new Error('plan_node_dependencies upsert returned no row');
+          const node = await writeAtRevision(tx, spaceId, nodeId, expectedRevision, {});
+          return node
+            ? { outcome: 'written', node, dependency: rowToPlanNodeDependency(row) }
+            : { outcome: 'stale' };
+        }),
+      ),
+
+    findDependency: (spaceId, nodeId, dependsOnId) =>
+      inTenant(async (tx) => {
+        const [row] = await tx
+          .select()
+          .from(planNodeDependencies)
+          .where(
+            and(
+              eq(planNodeDependencies.spaceId, spaceId),
+              eq(planNodeDependencies.nodeId, nodeId),
+              eq(planNodeDependencies.dependsOnId, dependsOnId),
+            ),
+          )
+          .limit(1);
+        return row ? rowToPlanNodeDependency(row) : null;
+      }),
+
+    listDependencies: (spaceId, nodeId, limit) =>
+      inTenant(async (tx) => {
+        const where = and(
+          eq(planNodeDependencies.spaceId, spaceId),
+          eq(planNodeDependencies.nodeId, nodeId),
+        );
+        const rows = await tx
+          .select({
+            nodeId: planNodes.id,
+            title: planNodes.title,
+            status: planNodes.status,
+            condition: planNodeDependencies.condition,
+          })
+          .from(planNodeDependencies)
+          .innerJoin(planNodes, eq(planNodes.id, planNodeDependencies.dependsOnId))
+          .where(where)
+          .orderBy(asc(planNodes.title), asc(planNodes.id))
+          .limit(limit);
+        const [count] = await tx
+          .select({ total: sql<number>`count(*)::int` })
+          .from(planNodeDependencies)
+          .where(where);
+        return {
+          dependencies: rows.map((row) => {
+            const status = row.status as PlanNodeStatus;
+            return planDependencyView(
+              { nodeId: row.nodeId, title: row.title, status },
+              row.condition as PlanNodeDependencyCondition,
+              status,
+            );
+          }),
+          total: count?.total ?? 0,
+        };
+      }),
+
+    listDependents: (spaceId, nodeId, limit) =>
+      inTenant(async (tx) => {
+        const [self] = await tx
+          .select({ status: planNodes.status })
+          .from(planNodes)
+          .where(and(eq(planNodes.spaceId, spaceId), eq(planNodes.id, nodeId)))
+          .limit(1);
+        if (!self) return { dependents: [], total: 0 };
+        const where = and(
+          eq(planNodeDependencies.spaceId, spaceId),
+          eq(planNodeDependencies.dependsOnId, nodeId),
+        );
+        const rows = await tx
+          .select({
+            nodeId: planNodes.id,
+            title: planNodes.title,
+            status: planNodes.status,
+            condition: planNodeDependencies.condition,
+          })
+          .from(planNodeDependencies)
+          .innerJoin(planNodes, eq(planNodes.id, planNodeDependencies.nodeId))
+          .where(where)
+          .orderBy(asc(planNodes.title), asc(planNodes.id))
+          .limit(limit);
+        const [count] = await tx
+          .select({ total: sql<number>`count(*)::int` })
+          .from(planNodeDependencies)
+          .where(where);
+        return {
+          dependents: rows.map((row) =>
+            planDependencyView(
+              { nodeId: row.nodeId, title: row.title, status: row.status as PlanNodeStatus },
+              row.condition as PlanNodeDependencyCondition,
+              self.status as PlanNodeStatus,
+            ),
+          ),
+          total: count?.total ?? 0,
+        };
+      }),
+
+    insertLearning: (spaceId, learning) =>
+      inTenant(async (tx): Promise<PlanLearningInsert> => {
+        if (learning.scope.kind !== 'plan') {
+          throw new Error('the plan store writes plan-scope learnings only');
+        }
+        const nodeId = learning.scope.planNodeId;
+        const [node] = await tx
+          .select({ id: planNodes.id })
+          .from(planNodes)
+          .where(and(eq(planNodes.spaceId, spaceId), eq(planNodes.id, nodeId)))
+          .limit(1);
+        if (!node) return { outcome: 'node_not_found' };
+        const ofNode = and(
+          eq(coachLearnings.spaceId, spaceId),
+          eq(coachLearnings.scopeKind, 'plan'),
+          eq(coachLearnings.planNodeId, nodeId),
+          inArray(coachLearnings.status, [...PLAN_LEARNING_READ_STATUSES]),
+        );
+        if (learning.supersedes.length > 0) {
+          const held = await tx
+            .select({ id: coachLearnings.id })
+            .from(coachLearnings)
+            .where(and(ofNode, inArray(coachLearnings.id, learning.supersedes)))
+            .for('update');
+          const found = new Set(held.map((row) => row.id));
+          const missing = learning.supersedes.filter((id) => !found.has(id));
+          if (missing.length > 0) return { outcome: 'supersedes_unknown', learningIds: missing };
+        }
+        const [row] = await tx
+          .insert(coachLearnings)
+          .values(coachLearningToRow(spaceId, learning))
+          .returning();
+        if (!row) throw new Error('coach_learnings insert returned no row');
+        if (learning.supersedes.length > 0) {
+          await tx
+            .update(coachLearnings)
+            .set({
+              status: 'superseded',
+              resolvedAt: new Date(),
+              resolvedBy: learning.coachSessionId,
+            })
+            .where(and(ofNode, inArray(coachLearnings.id, learning.supersedes)));
+        }
+        return { outcome: 'inserted', learning: rowToCoachLearning(row) };
+      }),
+
+    listLearningsOf: (spaceId, nodeIds, limit) =>
+      inTenant(async (tx) => {
+        if (nodeIds.length === 0) return { learnings: [], total: 0 };
+        const where = and(
+          eq(coachLearnings.spaceId, spaceId),
+          eq(coachLearnings.scopeKind, 'plan'),
+          inArray(coachLearnings.planNodeId, [...nodeIds]),
+          inArray(coachLearnings.status, [...PLAN_LEARNING_READ_STATUSES]),
+        );
+        const rows = await tx
+          .select()
+          .from(coachLearnings)
+          .where(where)
+          .orderBy(desc(coachLearnings.createdAt), desc(coachLearnings.id))
+          .limit(limit);
+        const [count] = await tx
+          .select({ total: sql<number>`count(*)::int` })
+          .from(coachLearnings)
+          .where(where);
+        return { learnings: rows.map(rowToCoachLearning), total: count?.total ?? 0 };
       }),
   };
 }

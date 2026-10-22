@@ -2,7 +2,11 @@ import type { OperationRegistration } from '../../catalog/operationCatalog.js';
 import {
   PlanNodeCreateInputSchema,
   PlanNodeCreateOutputSchema,
+  PlanNodeDependInputSchema,
+  PlanNodeDependOutputSchema,
   PlanNodeGetInputSchema,
+  PlanNodeLearnInputSchema,
+  PlanNodeLearnOutputSchema,
   PlanNodeGetOutputSchema,
   PlanNodeLinkInputSchema,
   PlanNodeLinkOutputSchema,
@@ -93,13 +97,13 @@ export const PlanOperationRegistrations: OperationRegistration[] = [
     name: 'Get Plan Node',
     actionLabel: 'Opening the plan node…',
     semanticDescription:
-      'Open a plan node: goal, criteria, status, note, outcome and revision, with its children in order, what is linked to it, and the runs in flight for it and the nodes under it.',
+      'Open a plan node: goal, criteria, status, note, outcome and revision, with its children in order, what is linked to it, the runs in flight for it and the nodes under it, what it waits on and what waits on it, and what earlier sessions learned on it and the nodes above it.',
     tags: ['plan', 'node', 'read'],
     idempotency: 'idempotent',
     mutates: false,
     usage: {
       oneLine:
-        'Open a plan node with its goal, criteria, note, children, links and runs in flight.',
+        'Open a plan node with its goal, criteria, note, children, links, runs in flight, dependencies and learnings.',
       whenToUse: [
         'Before briefing a round of work on a node — the attention block shows only its title and the note’s first line',
         'A stream continues in a new conversation: open the node it names — its runs in flight are the work under way for it',
@@ -169,6 +173,79 @@ export const PlanOperationRegistrations: OperationRegistration[] = [
     accessMode: 'write',
     inputZod: PlanNodeLinkInputSchema,
     outputZod: PlanNodeLinkOutputSchema,
+  },
+  {
+    stepType: 'plan',
+    group: 'node',
+    verb: 'learn',
+    name: 'Record a Learning on a Plan Node',
+    actionLabel: 'Recording what the plan learned…',
+    semanticDescription:
+      'Record on a plan node what working it taught — a heuristic, a constraint, an observation or a parameter range, with the runs it was learned from. Every later session that opens the node, or a node under it, reads it in plan.node.get.',
+    tags: ['plan', 'node', 'learning'],
+    idempotency: 'non_idempotent',
+    mutates: true,
+    usage: {
+      oneLine: 'Record what working a node taught, for the next session that opens it.',
+      whenToUse: [
+        'A round of a node failed or surprised you, and the next round should start knowing why',
+        'Something true of a whole stream was found — record it on the stream’s root, and every node under it reads it',
+      ],
+      whenNotToUse: [
+        'Where the node stands and its next step — that is the note, through plan.node.update',
+        'A claim about a skill rather than this work — that is the Coach’s, from the run’s review',
+      ],
+      pitfalls: [
+        'The statement is read by a session that never saw this conversation: say what to do or avoid, and why',
+        'A learning that turned out wrong is replaced, not left: record the corrected one with `supersedes` naming it',
+      ],
+      minimalExampleInput: {
+        nodeId: EXAMPLE_NODE_ID,
+        kind: 'constraint',
+        statement:
+          'The integration suite needs a migrated database: a commission that runs it without one fails on setup, not on the change.',
+        evidence: { citations: [{ runId: EXAMPLE_NODE_ID }] },
+        confidence: 'medium',
+      },
+    },
+    accessMode: 'write',
+    inputZod: PlanNodeLearnInputSchema,
+    outputZod: PlanNodeLearnOutputSchema,
+  },
+  {
+    stepType: 'plan',
+    group: 'node',
+    verb: 'depend',
+    name: 'Set a Plan Node Dependency',
+    actionLabel: 'Ordering the plan…',
+    semanticDescription:
+      'Make one plan node wait on another’s outcome — done, dropped, or either — or take that edge away, compare-and-set on the waiting node’s revision. An edge that would close a loop of nodes waiting on each other is refused.',
+    tags: ['plan', 'node', 'dependency'],
+    idempotency: 'non_idempotent',
+    mutates: true,
+    usage: {
+      oneLine: 'Make a node wait on another’s outcome, or remove that edge.',
+      whenToUse: [
+        'A step cannot start until another lands — its change builds on the other’s',
+        'A step goes ahead only where another approach was dropped',
+      ],
+      whenNotToUse: [
+        'Breaking a node down — children are plan.node.create with parentId; a parent is done against its own criteria, not its children',
+      ],
+      pitfalls: [
+        'Pass the revision of the waiting node (`nodeId`), not of the node it waits on — the write moves that revision on',
+        'plan.node.get shows each dependency with `met`; nothing starts or stops a node on its own because of one',
+      ],
+      minimalExampleInput: {
+        nodeId: EXAMPLE_NODE_ID,
+        expectedRevision: 1,
+        dependsOnId: '00000000-0000-0000-0000-000000000001',
+        condition: 'done',
+      },
+    },
+    accessMode: 'write',
+    inputZod: PlanNodeDependInputSchema,
+    outputZod: PlanNodeDependOutputSchema,
   },
   {
     stepType: 'plan',

@@ -3,15 +3,23 @@ import {
   PLAN_NODE_POSITION_MAX,
   PLAN_REVIEW_WORKFLOW_SLUGS,
   PLAN_TREE_DEPTH_LIMIT,
+  PLAN_TREE_WALK_NODE_LIMIT,
+  type CoachLearning,
   type PlanNode,
+  type PlanNodeDependency,
+  type PlanNodeDependencyView,
   type PlanNodeLink,
   type PlanNodeRun,
   type PlanNodeSummary,
 } from '@aflow/schemas';
+import { checkDependency } from '../plan/dependencies.js';
 import {
+  PLAN_LEARNING_READ_STATUSES,
   PLAN_NODE_RUN_STATUSES,
+  planDependencyView,
   planGoalHead,
   planNoteHead,
+  type PlanDependencyWrite,
   type PlanNodeInsert,
   type PlanNodeLinkTally,
   type PlanNodeNewestPullRequest,
@@ -38,6 +46,9 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
   readonly links: PlanNodeLink[] = [];
   /** Runs as `workflow_runs` holds them, for the reads that join a node to its runs. */
   readonly runs: Array<Omit<PlanNodeRun, 'status'> & { spaceId: string; status: string }> = [];
+  readonly dependencies: PlanNodeDependency[] = [];
+  /** `coach_learnings` rows of `plan` scope, with the space each was written in. */
+  readonly learnings: Array<{ spaceId: string; learning: CoachLearning }> = [];
   private clock = Date.parse('2026-10-04T09:00:00.000Z');
   private placements: Promise<unknown> = Promise.resolve();
 
@@ -428,5 +439,136 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
       .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
       .map(({ spaceId: _spaceId, ...run }) => run as PlanNodeRun);
     return Promise.resolve({ runs: runs.slice(0, limit), total: runs.length });
+  };
+
+  setDependencyAtRevision: PlanNodeStore['setDependencyAtRevision'] = (
+    spaceId,
+    nodeId,
+    expectedRevision,
+    dependsOnId,
+    condition,
+  ) =>
+    this.oneAtATime(async (): Promise<PlanDependencyWrite> => {
+      const node = this.nodes.get(nodeId);
+      if (node?.spaceId !== spaceId || node.revision !== expectedRevision) {
+        return { outcome: 'stale' };
+      }
+      const at = this.dependencies.findIndex(
+        (d) => d.nodeId === nodeId && d.dependsOnId === dependsOnId,
+      );
+      if (condition === null) {
+        if (at !== -1) this.dependencies.splice(at, 1);
+        const written = this.write(spaceId, nodeId, expectedRevision, {});
+        return written ? { outcome: 'written', node: written } : { outcome: 'stale' };
+      }
+      const check = await checkDependency(
+        nodeId,
+        dependsOnId,
+        {
+          dependenciesOf: (id) =>
+            Promise.resolve(
+              this.nodes.get(id)?.spaceId === spaceId
+                ? this.dependencies.filter((d) => d.nodeId === id).map((d) => d.dependsOnId)
+                : undefined,
+            ),
+        },
+        PLAN_TREE_WALK_NODE_LIMIT,
+      );
+      if (check.outcome !== 'clear') return check;
+      const dependency: PlanNodeDependency =
+        at !== -1
+          ? { ...this.dependencies[at]!, condition }
+          : { nodeId, dependsOnId, condition, createdAt: this.tick() };
+      if (at !== -1) this.dependencies[at] = dependency;
+      else this.dependencies.push(dependency);
+      const written = this.write(spaceId, nodeId, expectedRevision, {});
+      return written
+        ? { outcome: 'written', node: written, dependency: structuredClone(dependency) }
+        : { outcome: 'stale' };
+    });
+
+  findDependency: PlanNodeStore['findDependency'] = (spaceId, nodeId, dependsOnId) => {
+    const held = this.dependencies.find(
+      (d) =>
+        d.nodeId === nodeId &&
+        d.dependsOnId === dependsOnId &&
+        this.nodes.get(nodeId)?.spaceId === spaceId,
+    );
+    return Promise.resolve(held ? structuredClone(held) : null);
+  };
+
+  private dependencyEnds(
+    spaceId: string,
+    nodeId: string,
+    end: 'nodeId' | 'dependsOnId',
+  ): PlanNodeDependencyView[] {
+    const other = end === 'nodeId' ? 'dependsOnId' : 'nodeId';
+    return this.dependencies
+      .filter((d) => d[end] === nodeId && this.nodes.get(nodeId)?.spaceId === spaceId)
+      .flatMap((d) => {
+        const shown = this.nodes.get(d[other]);
+        const dependency = this.nodes.get(d.dependsOnId);
+        return shown && dependency
+          ? [planDependencyView(shown, d.condition, dependency.status)]
+          : [];
+      })
+      .sort((a, b) => a.title.localeCompare(b.title) || a.nodeId.localeCompare(b.nodeId));
+  }
+
+  listDependencies: PlanNodeStore['listDependencies'] = (spaceId, nodeId, limit) => {
+    const dependencies = this.dependencyEnds(spaceId, nodeId, 'nodeId');
+    return Promise.resolve({
+      dependencies: dependencies.slice(0, limit),
+      total: dependencies.length,
+    });
+  };
+
+  listDependents: PlanNodeStore['listDependents'] = (spaceId, nodeId, limit) => {
+    const dependents = this.dependencyEnds(spaceId, nodeId, 'dependsOnId');
+    return Promise.resolve({ dependents: dependents.slice(0, limit), total: dependents.length });
+  };
+
+  private learningsReadOn(spaceId: string, nodeIds: readonly string[]): CoachLearning[] {
+    return this.learnings
+      .filter(
+        (l) =>
+          l.spaceId === spaceId &&
+          l.learning.scope.kind === 'plan' &&
+          nodeIds.includes(l.learning.scope.planNodeId) &&
+          PLAN_LEARNING_READ_STATUSES.includes(l.learning.status),
+      )
+      .map((l) => l.learning);
+  }
+
+  insertLearning: PlanNodeStore['insertLearning'] = (spaceId, learning) => {
+    if (learning.scope.kind !== 'plan') throw new Error('plan-scope learnings only');
+    const nodeId = learning.scope.planNodeId;
+    if (this.nodes.get(nodeId)?.spaceId !== spaceId) {
+      return Promise.resolve({ outcome: 'node_not_found' });
+    }
+    const readable = new Set(this.learningsReadOn(spaceId, [nodeId]).map((l) => l.learningId));
+    const missing = learning.supersedes.filter((id) => !readable.has(id));
+    if (missing.length > 0) {
+      return Promise.resolve({ outcome: 'supersedes_unknown', learningIds: missing });
+    }
+    for (const held of this.learnings) {
+      if (learning.supersedes.includes(held.learning.learningId)) {
+        held.learning = { ...held.learning, status: 'superseded' };
+      }
+    }
+    // The store's clock, so newest-first holds between writes of one test.
+    const stored = { ...structuredClone(learning), createdAt: this.tick() };
+    this.learnings.push({ spaceId, learning: stored });
+    return Promise.resolve({ outcome: 'inserted', learning: structuredClone(stored) });
+  };
+
+  listLearningsOf: PlanNodeStore['listLearningsOf'] = (spaceId, nodeIds, limit) => {
+    const learnings = this.learningsReadOn(spaceId, nodeIds).sort(
+      (a, b) => b.createdAt.localeCompare(a.createdAt) || b.learningId.localeCompare(a.learningId),
+    );
+    return Promise.resolve({
+      learnings: structuredClone(learnings.slice(0, limit)),
+      total: learnings.length,
+    });
   };
 }

@@ -45,6 +45,7 @@ const DIRECT_SPACE_ID_TABLES = [
   'campaigns',
   // Before plan_nodes, whose delete would take these with it uncounted.
   'plan_node_links',
+  'plan_node_dependencies',
   'plan_nodes',
   'coach_candidate_learnings',
   'coach_learnings',

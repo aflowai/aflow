@@ -18,48 +18,72 @@ export const WorkflowRunListStatusSchema = WorkflowRunStatusSchema.extract([
 ]);
 export type WorkflowRunListStatus = z.infer<typeof WorkflowRunListStatusSchema>;
 
-export const WorkflowRunListInputSchema = z.object({
-  slug: z
-    .string()
-    .min(1)
-    .max(128)
-    .describe('The workflow whose runs are listed, by slug — `publish-local-changes`.'),
-  input: z
-    .object({
-      field: z
-        .string()
-        .min(1)
-        .max(64)
-        .regex(/^[A-Za-z_][A-Za-z0-9_]*$/, {
-          message: 'An input field is a run input id: letters, digits and underscores.',
-        })
-        .describe('A run input of that workflow, by id — `branch`.'),
-      equals: z
-        .union([z.string().max(512), z.number(), z.boolean()])
-        .describe('The value that input must have been started with.'),
-    })
-    .strict()
-    .describe(
-      'The one run input a listed run was started with, and the value it must equal. A run started without that input is not listed.',
-    ),
-  status: z
-    .array(WorkflowRunListStatusSchema)
-    .min(1)
-    .max(5)
-    .default([...WORKFLOW_RUN_NON_TERMINAL_STATUSES])
-    .describe(
-      'The statuses listed. Absent, the runs still in flight — `running` and `paused`: a paused run resumes, so it is as much in flight as a running one.',
-    ),
-  limit: z
-    .number()
-    .int()
-    .min(1)
-    .max(WORKFLOW_RUN_LIST_LIMIT_MAX)
-    .default(WORKFLOW_RUN_LIST_LIMIT_DEFAULT)
-    .describe(
-      `How many runs at most, newest first. Default ${String(WORKFLOW_RUN_LIST_LIMIT_DEFAULT)}, max ${String(WORKFLOW_RUN_LIST_LIMIT_MAX)}; one page, and no cursor past it.`,
-    ),
-});
+export const WORKFLOW_RUN_LIST_SELECTOR_MESSAGE =
+  'Name what the runs are selected by: `slug` with `input` — one workflow’s runs started with that input — or `servingNodeOfPullRequest` alone — the runs serving the plan node that pull request is linked to.';
+
+export const WorkflowRunListInputSchema = z
+  .object({
+    slug: z
+      .string()
+      .min(1)
+      .max(128)
+      .optional()
+      .describe(
+        'The workflow whose runs are listed, by slug — `publish-local-changes`. Named with `input`.',
+      ),
+    servingNodeOfPullRequest: z
+      .string()
+      .url()
+      .max(2000)
+      .optional()
+      .describe(
+        'A pull request’s URL, as GitHub’s `html_url` gives it. Lists the runs of any workflow serving the plan node that pull request is linked to, or any node under it — named instead of `slug` and `input`.',
+      ),
+    input: z
+      .object({
+        field: z
+          .string()
+          .min(1)
+          .max(64)
+          .regex(/^[A-Za-z_][A-Za-z0-9_]*$/, {
+            message: 'An input field is a run input id: letters, digits and underscores.',
+          })
+          .describe('A run input of that workflow, by id — `branch`.'),
+        equals: z
+          .union([z.string().max(512), z.number(), z.boolean()])
+          .describe('The value that input must have been started with.'),
+      })
+      .strict()
+      .optional()
+      .describe(
+        'The one run input a listed run was started with, and the value it must equal. A run started without that input is not listed. Named with `slug`.',
+      ),
+    status: z
+      .array(WorkflowRunListStatusSchema)
+      .min(1)
+      .max(5)
+      .default([...WORKFLOW_RUN_NON_TERMINAL_STATUSES])
+      .describe(
+        'The statuses listed. Absent, the runs still in flight — `running` and `paused`: a paused run resumes, so it is as much in flight as a running one.',
+      ),
+    limit: z
+      .number()
+      .int()
+      .min(1)
+      .max(WORKFLOW_RUN_LIST_LIMIT_MAX)
+      .default(WORKFLOW_RUN_LIST_LIMIT_DEFAULT)
+      .describe(
+        `How many runs at most, newest first. Default ${String(WORKFLOW_RUN_LIST_LIMIT_DEFAULT)}, max ${String(WORKFLOW_RUN_LIST_LIMIT_MAX)}; one page, and no cursor past it.`,
+      ),
+  })
+  .superRefine((query, ctx) => {
+    const byInput = query.slug !== undefined && query.input !== undefined;
+    const byNode = query.servingNodeOfPullRequest !== undefined;
+    const partial = (query.slug === undefined) !== (query.input === undefined);
+    if (byInput === byNode || partial) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: WORKFLOW_RUN_LIST_SELECTOR_MESSAGE });
+    }
+  });
 export type WorkflowRunListInput = z.infer<typeof WorkflowRunListInputSchema>;
 
 export const WorkflowRunListItemSchema = z.object({
@@ -81,5 +105,17 @@ export const WorkflowRunListOutputSchema = z.object({
   hasMore: z
     .boolean()
     .describe('More runs match than the page holds. The read is one page by design.'),
+  planNodeIds: z
+    .array(z.string().uuid())
+    .optional()
+    .describe(
+      'With `servingNodeOfPullRequest`: the plan nodes that pull request is linked to — none where no node holds it.',
+    ),
+  complete: z
+    .boolean()
+    .optional()
+    .describe(
+      'With `servingNodeOfPullRequest`: every node under those nodes was read. `false` means the plan below them passed the bounds of one read, so runs serving the nodes past them are not listed — treat the work as unknown, not as none.',
+    ),
 });
 export type WorkflowRunListOutput = z.infer<typeof WorkflowRunListOutputSchema>;

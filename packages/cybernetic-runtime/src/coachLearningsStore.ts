@@ -3,17 +3,25 @@ import { eq, and, or, desc, inArray, isNull, sql } from 'drizzle-orm';
 import type { CoachLearning, LearnerConsolidationAction, TenantId } from '@aflow/schemas';
 import { COACH_LEARNING_SUPERSEDES_MAX } from '@aflow/schemas';
 import { createTenantContext, withTenantSchema, coachLearnings } from '@aflow/database';
-import type { CoachLearningRow } from '@aflow/database';
+import type { CoachLearningRow, NewCoachLearningRow } from '@aflow/database';
 
 const DURABLE_STATUSES: ReadonlyArray<CoachLearning['status']> = ['auto_recorded', 'ratified'];
 
-function rowToCoachLearning(row: CoachLearningRow): CoachLearning {
-  const scope: CoachLearning['scope'] =
-    row.scopeKind === 'campaign'
-      ? { kind: 'campaign', campaignId: row.campaignId ?? '', skillSlug: row.skillSlug ?? '' }
-      : row.scopeKind === 'skill'
-        ? { kind: 'skill', skillSlug: row.skillSlug ?? '' }
-        : { kind: 'space', spaceId: row.spaceId };
+function scopeOf(row: CoachLearningRow): CoachLearning['scope'] {
+  switch (row.scopeKind) {
+    case 'campaign':
+      return { kind: 'campaign', campaignId: row.campaignId ?? '', skillSlug: row.skillSlug ?? '' };
+    case 'skill':
+      return { kind: 'skill', skillSlug: row.skillSlug ?? '' };
+    case 'plan':
+      return { kind: 'plan', planNodeId: row.planNodeId ?? '' };
+    default:
+      return { kind: 'space', spaceId: row.spaceId };
+  }
+}
+
+export function rowToCoachLearning(row: CoachLearningRow): CoachLearning {
+  const scope = scopeOf(row);
   return {
     learningId: row.id,
     coachSessionId: row.coachSessionId,
@@ -40,37 +48,43 @@ function rowToCoachLearning(row: CoachLearningRow): CoachLearning {
   };
 }
 
+/** The row a learning is stored as: its scope flattened onto `scope_kind` and the id columns. */
+export function coachLearningToRow(spaceId: string, learning: CoachLearning): NewCoachLearningRow {
+  const { scope } = learning;
+  return {
+    id: learning.learningId,
+    coachSessionId: learning.coachSessionId,
+    runId: learning.runId ?? null,
+    spaceId,
+    scopeKind: scope.kind,
+    campaignId: scope.kind === 'campaign' ? scope.campaignId : null,
+    skillSlug: scope.kind === 'campaign' || scope.kind === 'skill' ? scope.skillSlug : null,
+    planNodeId: scope.kind === 'plan' ? scope.planNodeId : null,
+    kind: learning.kind,
+    appliesTo: learning.appliesTo ?? null,
+    statement: learning.statement,
+    detailRef: learning.detailRef ?? null,
+    evidence: learning.evidence,
+    confidence: learning.confidence,
+    supersedes: learning.supersedes,
+    authorityLevel: learning.authorityLevel,
+    status: learning.status,
+    resolvedAt: learning.resolvedAt ? new Date(learning.resolvedAt) : null,
+    resolvedBy: learning.resolvedBy ?? null,
+    resolutionNote: learning.resolutionNote ?? null,
+    promotedFrom: learning.promotedFrom ?? null,
+    createdAt: new Date(learning.createdAt),
+  };
+}
+
 export async function insertCoachLearning(
   db: PostgresJsDatabase,
   tenantId: string,
   params: { spaceId: string; learning: CoachLearning },
 ): Promise<void> {
-  const { spaceId, learning } = params;
   const tenantCtx = createTenantContext(tenantId as TenantId);
   await withTenantSchema(db, tenantCtx, async (tx) => {
-    await tx.insert(coachLearnings).values({
-      id: learning.learningId,
-      coachSessionId: learning.coachSessionId,
-      runId: learning.runId ?? null,
-      spaceId,
-      scopeKind: learning.scope.kind,
-      campaignId: learning.scope.kind === 'campaign' ? learning.scope.campaignId : null,
-      skillSlug: learning.scope.kind !== 'space' ? learning.scope.skillSlug : null,
-      kind: learning.kind,
-      appliesTo: learning.appliesTo ?? null,
-      statement: learning.statement,
-      detailRef: learning.detailRef ?? null,
-      evidence: learning.evidence,
-      confidence: learning.confidence,
-      supersedes: learning.supersedes,
-      authorityLevel: learning.authorityLevel,
-      status: learning.status,
-      resolvedAt: learning.resolvedAt ? new Date(learning.resolvedAt) : null,
-      resolvedBy: learning.resolvedBy ?? null,
-      resolutionNote: learning.resolutionNote ?? null,
-      promotedFrom: learning.promotedFrom ?? null,
-      createdAt: new Date(learning.createdAt),
-    });
+    await tx.insert(coachLearnings).values(coachLearningToRow(params.spaceId, params.learning));
   });
 }
 

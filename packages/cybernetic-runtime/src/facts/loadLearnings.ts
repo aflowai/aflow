@@ -54,7 +54,9 @@ export function formatLearningLine(l: CoachLearning): string {
       ? 'space'
       : l.scope.kind === 'skill'
         ? `skill:${l.scope.skillSlug}`
-        : `campaign:${l.scope.campaignId.slice(0, 8)}`;
+        : l.scope.kind === 'plan'
+          ? `plan:${l.scope.planNodeId.slice(0, 8)}`
+          : `campaign:${l.scope.campaignId.slice(0, 8)}`;
   const pendingMarker = l.status === 'proposed' ? ' [pending ratification]' : '';
   return `- ${l.learningId} [${l.kind}, ${scopeLabel}, ${l.confidence}]${pendingMarker} ${l.statement}`;
 }

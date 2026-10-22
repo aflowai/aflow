@@ -24,6 +24,14 @@ export const CoachLearningScopeSchema = z.discriminatedUnion('kind', [
       spaceId: z.string().uuid(),
     })
     .strict(),
+  // Plan 322 D8: written on a plan node by `plan.node.learn`, read by every
+  // session that opens that node or one under it — never injected into a run.
+  z
+    .object({
+      kind: z.literal('plan'),
+      planNodeId: z.string().uuid(),
+    })
+    .strict(),
 ]);
 export type CoachLearningScope = z.infer<typeof CoachLearningScopeSchema>;
 
@@ -116,9 +124,9 @@ export const CoachLearningSchema = z
     supersedes: z.array(z.string().uuid()).max(COACH_LEARNING_SUPERSEDES_MAX).default([]),
 
     /**
-     * Authority level — campaign-scope learnings can `auto_record` because
-     * they don't mutate durable skill structure; skill- and space-scope
-     * learnings `stage_for_review` like proposals do.
+     * Authority level — campaign- and plan-scope learnings can `auto_record`
+     * because they don't mutate durable skill structure and reach no run;
+     * skill- and space-scope learnings `stage_for_review` like proposals do.
      */
     authorityLevel: z.enum(['auto_record', 'stage_for_review']).default('auto_record'),
 

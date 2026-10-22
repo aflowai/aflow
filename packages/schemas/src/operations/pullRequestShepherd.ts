@@ -285,6 +285,12 @@ export type LoopPullRequests = z.infer<typeof LoopPullRequestsSchema>;
 /** `getPullRequest` as the shepherd reads it. */
 export const LoopPullRequestSchema = z.object({
   number: z.number().int().positive(),
+  url: z
+    .string()
+    .optional()
+    .describe(
+      'GitHub’s `html_url` — the ref a plan node’s `pull_request` link holds, as Local Publish records it.',
+    ),
   state: z.string(),
   title: z.string(),
   body: z.string().describe('The body without the marker, cut to a brief’s length.'),

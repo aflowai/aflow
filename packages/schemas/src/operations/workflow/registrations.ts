@@ -652,7 +652,7 @@ export function createWorkflowOperationRegistrations(
       semanticDescription:
         "List one workflow's runs across the whole space whose start named one run input with a " +
         'given value — the publications of a branch, the commissions based on it — by status, ' +
-        "in flight by default with `paused` among them, newest first. Each run says whether it is the reading conversation's (`own`). " +
+        "in flight by default with `paused` among them, newest first — or, with `servingNodeOfPullRequest`, every workflow's runs serving the plan node a pull request is linked to and the nodes under it. Each run says whether it is the reading conversation's (`own`). " +
         'One bounded page: the question it answers is whether any such run is in flight, not every run there was.',
       tags: ['workflow', 'run', 'observe'],
       idempotency: 'idempotent',
@@ -663,6 +663,7 @@ export function createWorkflowOperationRegistrations(
         whenToUse: [
           'Asking whether work on a branch is in flight before starting more on it — a publication whose `branch` is the branch, a commission whose `base` is',
           'Finding runs another conversation started on the same thing, whoever started them',
+          'Asking whether a pull request’s plan node has work in flight — `servingNodeOfPullRequest`, read through the run ledger, since a skill never reads the plan through plan.*',
         ],
         whenNotToUse: [
           'Reading what one run did — workflow.run.detail',

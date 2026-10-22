@@ -233,6 +233,21 @@ export const SHEPHERD_RULES: readonly WorkflowRunDecideRule[] = [
     decision: 'wait',
     reason: 'A commission based on this branch is in flight, whoever started it.',
   },
+  // The branch's work as the plan holds it (Plan 322 P2). A pull request no
+  // node holds reads whole and empty; a read that failed, or stopped at its
+  // bounds, leaves the node's work unknown, which is not none.
+  {
+    when: { expression: 'state.planNode.complete != true' },
+    decision: 'wait',
+    reason:
+      "The runs serving this pull request's plan node could not all be read — the read failed, or the plan under the node is larger than one read — so whether its work is in flight is unknown.",
+  },
+  {
+    when: { expression: 'state.planNode.runs[0] != null' },
+    decision: 'wait',
+    reason:
+      "A run serving this pull request's plan node, or a node under it, is in flight — running, or paused — whoever started it: the node's work is under way.",
+  },
   ...MERGE_RULES,
   // Every later pass reads the same one page, so a wait here would never end.
   {

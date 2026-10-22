@@ -78,3 +78,32 @@ export const planNodeLinks = pgTable(
 
 export type PlanNodeLinkRow = typeof planNodeLinks.$inferSelect;
 export type NewPlanNodeLinkRow = typeof planNodeLinks.$inferInsert;
+
+/**
+ * `node_id` waits on `depends_on_id` reaching the outcome `condition` names
+ * (Plan 322 P2). Keyed by the pair, so a node waits on another once; the
+ * engine refuses an edge that would close a loop, in the transaction that
+ * writes it.
+ */
+export const planNodeDependencies = pgTable(
+  'plan_node_dependencies',
+  {
+    nodeId: uuid('node_id')
+      .notNull()
+      .references(() => planNodes.id, { onDelete: 'cascade' }),
+    dependsOnId: uuid('depends_on_id')
+      .notNull()
+      .references(() => planNodes.id, { onDelete: 'cascade' }),
+    spaceId: uuid('space_id').notNull(),
+    /** PlanNodeDependencyCondition */
+    condition: text('condition').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.nodeId, table.dependsOnId] }),
+    index('plan_node_dependencies_space_depends_on_idx').on(table.spaceId, table.dependsOnId),
+  ],
+);
+
+export type PlanNodeDependencyRow = typeof planNodeDependencies.$inferSelect;
+export type NewPlanNodeDependencyRow = typeof planNodeDependencies.$inferInsert;
