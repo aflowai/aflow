@@ -46,12 +46,11 @@ export const MERGE_RULES: readonly WorkflowRunDecideRule[] = [
     'state.handoff.data.mergeRefusedSha == state.pr.data.headSha',
     'GitHub refused to merge this head. No merge is asked for again until a push moves it; a refusal resolved without a push leaves this head to the operator.',
   ),
-  // A record read with no pinned author cannot show a declined or refused
-  // merge, so the pass that writes the first pin does not merge; the next does.
-  greenAnd(
-    "state.handoff.data.trust != 'verified'",
-    "The shepherd's own record on this pull request is not pinned yet, so an earlier declined or refused merge could not be seen. This pass pins it; the next one may merge.",
-  ),
+  // No rule asks for a pinned record. The two above only spare a lease: a
+  // head already asked about is held by `claim-merge`, a create under the
+  // lease that fails where anything is recorded for it. A record read with no
+  // pin shows nothing, and the handoff that pass posts carries nothing either,
+  // so holding it back would cost a pass and see nothing more.
   greenAnd(
     'state.requiredRules.statusCode != 200',
     "GitHub did not return the rulesets of the base branch, so which checks it requires is unknown: the merge is the operator's.",

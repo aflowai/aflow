@@ -1567,13 +1567,6 @@ describe('Local PR Shepherd — it merges what the posture allows', () => {
     });
   });
 
-  it('does not merge on a record read with no pinned author, which could not show a declined merge; the next pass does', () => {
-    const first = green({ pinned: undefined, handoff: undefined });
-    expect(first.decision).toBe('leave');
-    expect(first.ran).toContain('remember-handoff');
-    expect(green({ handoff: readBack(first) }).decision).toBe('merge');
-  });
-
   it('records a declined merge against the head, asks no more on that head, and asks again after a push', () => {
     const declined = green({ merge: 'declined' });
     expect(declined.statuses.get('merge')).toBe('failed');
@@ -1819,6 +1812,101 @@ describe('Local PR Shepherd — the merge claims its head under the lease before
     expect(unclaimed.statuses.get('claim-merge')).toBe('failed');
     expect(unclaimed.ran).not.toContain('merge');
     expect(unclaimed.ran).toContain('release');
+  });
+});
+
+describe('Local PR Shepherd — a green pull request costs one pass', () => {
+  const path = `/shepherd/aflowai/aflow/pulls/94/merges/${HEAD}.json`;
+  /** The first pass on a pull request: nothing pinned for it yet. */
+  const UNPINNED = { pinned: undefined, handoff: undefined } as const;
+
+  it('merges on the pass that finds no pin, and pins its record after the merge in that same pass', () => {
+    const store = new Map<string, Record<string, unknown>>();
+    const first = green({ ...UNPINNED, mergeOutcomes: store });
+    // The record was read with no pinned author: nothing was trusted from it.
+    expect(first.outputs.get('read-pr-handoff')).toMatchObject({
+      data: { found: false, trust: 'undecided' },
+    });
+    expect(first.decision).toBe('merge');
+    expect(first.statuses.get('merge')).toBe('succeeded');
+    expect(store.get(path)).toMatchObject({ outcome: 'merged', mergeCommit: MERGE_COMMIT });
+    // pin → decide → merge is one pass: the handoff is posted and pinned after the merge.
+    const order = [
+      'decide',
+      'lease',
+      'claim-merge',
+      'merge',
+      'record-merge',
+      'release',
+      'handoff',
+      'remember-handoff',
+    ];
+    for (const [earlier, later] of order.slice(1).map((task, i) => [order[i]!, task] as const)) {
+      expect(first.ran.indexOf(later)).toBeGreaterThan(first.ran.indexOf(earlier));
+    }
+    expect(first.statuses.get('remember-handoff')).toBe('succeeded');
+    expect(
+      MemoryPutInputSchema.parse(first.inputs.get('remember-handoff')).content.inlineJson,
+    ).toMatchObject({ commentId: 9, author: LOOP_LOGIN });
+    expect(first.handoff).toMatchObject({ decision: 'merge', mergeCommitSha: MERGE_COMMIT });
+  });
+
+  // What the pinned record once guarded is the claim's: with no pin to show a
+  // decline, the head an earlier pass asked about is still never asked again.
+  it.each([
+    ['declined', 'merge_declined'],
+    ['refused', 'merge_refused'],
+    ['asked about', MERGE_ASKED],
+  ])(
+    'on the pass that finds no pin, asks nothing for a head an earlier pass %s',
+    (_how, outcome) => {
+      const store = new Map<string, Record<string, unknown>>([[path, { headSha: HEAD, outcome }]]);
+      const first = green({ ...UNPINNED, mergeOutcomes: store });
+      expect(first.decision).toBe('merge');
+      expect(first.statuses.get('claim-merge')).toBe('failed');
+      expect(first.ran).not.toContain('merge');
+      expect(store.get(path)).toMatchObject({ outcome });
+      expect(first.ran).toContain('release');
+      expect(first.statuses.get('remember-handoff')).toBe('succeeded');
+    },
+  );
+
+  // A pass that a real blocker holds back still ends there, and the next one
+  // merges: only those cost a second pass.
+  it.each<[string, Scenario, (first: Pass) => Scenario]>([
+    [
+      'CI is still running on the head',
+      { checks: { state: 'pending', total: 2, failing: [] } },
+      (first) => ({ handoff: readBack(first) }),
+    ],
+    [
+      'another pass holds a live lease on the branch',
+      { lease: { owner: 'running', ageMs: 60_000, decision: 'merge' } },
+      (first) => ({ handoff: readBack(first) }),
+    ],
+    [
+      'a publication of the branch is in flight',
+      { publicationInFlight: true },
+      (first) => ({ handoff: readBack(first) }),
+    ],
+    ['the pin could not be read', { pinRead: 'fails' }, () => ({ ...UNPINNED })],
+  ])('takes two passes where %s', (_why, blocker, next) => {
+    const store = new Map<string, Record<string, unknown>>();
+    const first = green({ ...UNPINNED, ...blocker, mergeOutcomes: store });
+    expect(first.decision).toBe('wait');
+    for (const task of ['lease', 'lease-takeover', 'claim-merge', 'merge']) {
+      expect(first.statuses.get(task)).not.toBe('succeeded');
+    }
+    expect(store.has(path)).toBe(false);
+
+    const second = green({ ...next(first), mergeOutcomes: store });
+    expect(second.decision).toBe('merge');
+    expect(second.statuses.get('merge')).toBe('succeeded');
+    expect(store.get(path)).toMatchObject({ outcome: 'merged' });
+  });
+
+  it('no rule reads whether the record is pinned', () => {
+    expect(JSON.stringify(SHEPHERD_RULES)).not.toMatch(/trust/);
   });
 });
 
