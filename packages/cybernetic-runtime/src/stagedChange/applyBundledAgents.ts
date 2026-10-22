@@ -27,11 +27,12 @@ async function publishingFolders(tx: PostgresJsDatabase, spaceId: string): Promi
 }
 
 /**
- * Write each bundled agent that starts a skill, its folder input the space's
- * one folder that allows pushes. A slug already taken keeps what it holds; a
- * space with no such folder, or several, gets no agent and a warning naming
- * why, since guessing which folder would start the skill on the wrong one.
- * Runs inside the install's transaction.
+ * Write each bundled agent that starts a skill, with one start per folder of
+ * the space that allows pushes, each its folder input. A space with several
+ * gets one agent starting the skill on every one rather than a guess at which
+ * is meant, so a single schedule tends them all. A slug already taken keeps
+ * what it holds; a space with no such folder gets no agent and a warning
+ * naming what writes it. Runs inside the install's transaction.
  */
 export async function applyBundledAgents(params: {
   agents: readonly BundledSkillStarterAgent[];
@@ -63,13 +64,10 @@ export async function applyBundledAgents(params: {
       result.skippedAgentSlugs.push(slug);
       continue;
     }
-    const [folder] = folders;
-    if (folder === undefined || folders.length > 1) {
+    if (folders.length === 0) {
       result.warnings.push(
-        `The "${agent.name}" agent was not written: it starts ${skill.name} on the space's one connected folder that allows pushes, and the space has ${folders.length === 0 ? 'none' : `${String(folders.length)} (${folders.join(', ')})`}. ` +
-          (folders.length === 0
-            ? 'Connect the folder with a publish prefix, then update this bundle from the Store to write the agent.'
-            : `Start ${skill.name} with the folder's bindingId instead.`),
+        `The "${agent.name}" agent was not written: it starts ${skill.name} on each connected folder that allows pushes, and the space has none. ` +
+          'Connect the folder with a publish prefix, then update this bundle from the Store to write the agent.',
       );
       continue;
     }
@@ -85,7 +83,7 @@ export async function applyBundledAgents(params: {
           catalogId: skill.catalogId,
           name: agent.name,
           description: agent.description,
-          inputs: { [agent.folderInput]: folder },
+          runs: folders.map((folder) => ({ [agent.folderInput]: folder })),
         }) as unknown as Parameters<typeof repo.create>[0]['initialVersion']['definition'],
       },
     });

@@ -43,6 +43,7 @@ import {
   ShepherdHandoffReadSchema,
   skillStarterAgentDefinition,
   substituteTemplateBinds,
+  validateAgentDefinition,
   type WorkflowTask,
   WorkflowRunDecideInputSchema,
   WorkflowRunListInputSchema,
@@ -2295,7 +2296,7 @@ describe('Local PR Shepherd bundle', () => {
         catalogId: LOCAL_PR_SHEPHERD.catalogId,
         name: 'Local PR Shepherd',
         description: 'Starts a pass.',
-        inputs: { bindingId: 'hb_aflow' },
+        runs: [{ bindingId: 'hb_aflow' }],
       }),
     );
     expect(definition.flowId).toBe('local-pr-shepherd');
@@ -2309,6 +2310,98 @@ describe('Local PR Shepherd bundle', () => {
       wait: 'none',
     });
     expect(JSON.stringify(definition)).not.toMatch(/ai\.|\$\{|\$memoryRef/);
+  });
+
+  describe('on several folders', () => {
+    const folders = ['hb_aflow', 'hb_docs', 'hb_site'];
+    const starter = (count: number) =>
+      AgentDefinitionSchema.parse(
+        skillStarterAgentDefinition({
+          slug: wf.slug,
+          catalogId: LOCAL_PR_SHEPHERD.catalogId,
+          name: 'Local PR Shepherd',
+          description: 'Starts a pass.',
+          runs: folders.slice(0, count).map((bindingId) => ({ bindingId })),
+        }),
+      );
+
+    /**
+     * The run the orchestrator makes of the graph: a step that succeeds takes
+     * its first success edge, one that fails its first failure edge, and the
+     * step with nowhere to go ends the run as it ended — completed on success,
+     * failed on failure. A start fails where its folder is in `refused`.
+     */
+    function walk(definition: ReturnType<typeof starter>, refused: ReadonlySet<string>) {
+      const byId = new Map(definition.steps.map((step) => [step.stepId, step]));
+      const started: string[] = [];
+      let stepId: string | undefined = definition.startStepId;
+      for (let guard = 0; guard < 50; guard += 1) {
+        const step = byId.get(stepId ?? '');
+        if (step === undefined) throw new Error(`no step ${String(stepId)}`);
+        let succeeded: boolean;
+        if (step.operation === 'workflow.run.start') {
+          const folder = (step.config as { inputs: { bindingId: string } }).inputs.bindingId;
+          started.push(folder);
+          succeeded = !refused.has(folder);
+        } else {
+          expect(step.operation).toBe('workflow.run.fail');
+          succeeded = false;
+        }
+        const next = (succeeded ? step.onSuccess : step.onFailure).next[0]?.stepId ?? undefined;
+        if (next === undefined) return { started, status: succeeded ? 'COMPLETED' : 'FAILED' };
+        stepId = next;
+      }
+      throw new Error('the graph does not end');
+    }
+
+    it('is a valid agent of operation steps only, every one taking its config alone', () => {
+      for (const count of [2, 3]) {
+        const raw = skillStarterAgentDefinition({
+          slug: wf.slug,
+          catalogId: LOCAL_PR_SHEPHERD.catalogId,
+          name: 'Local PR Shepherd',
+          description: 'Starts a pass.',
+          runs: folders.slice(0, count).map((bindingId) => ({ bindingId })),
+        });
+        expect(validateAgentDefinition(raw).issues.filter((i) => i.level === 'error')).toEqual([]);
+        const definition = AgentDefinitionSchema.parse(raw);
+        expect(definition.startStepId).toBe('start-skill');
+        expect(definition.steps.every((step) => step.inputPassthrough === false)).toBe(true);
+        expect(new Set(definition.steps.map((step) => step.operation))).toEqual(
+          new Set(['workflow.run.start', 'workflow.run.fail']),
+        );
+        expect(definition.allowedOperations).toEqual(['workflow.run.start', 'workflow.run.fail']);
+        expect(JSON.stringify(definition)).not.toMatch(/ai\.|\$\{|\$memoryRef/);
+      }
+    });
+
+    it('starts every folder once, and fails the run exactly when any start failed, wherever it stood', () => {
+      for (const count of [2, 3]) {
+        const definition = starter(count);
+        const own = folders.slice(0, count);
+        for (let mask = 0; mask < 1 << count; mask += 1) {
+          const refused = new Set(own.filter((_, index) => (mask & (1 << index)) !== 0));
+          expect({ count, refused: [...refused], ...walk(definition, refused) }).toEqual({
+            count,
+            refused: [...refused],
+            started: own,
+            status: refused.size === 0 ? 'COMPLETED' : 'FAILED',
+          });
+        }
+      }
+    });
+  });
+
+  it('refuses to write a starter that starts nothing', () => {
+    expect(() =>
+      skillStarterAgentDefinition({
+        slug: wf.slug,
+        catalogId: LOCAL_PR_SHEPHERD.catalogId,
+        name: 'Local PR Shepherd',
+        description: 'Starts a pass.',
+        runs: [],
+      }),
+    ).toThrow(/at least one run/);
   });
 
   // D2: a schedule starts the agent, never the skill, with a static template

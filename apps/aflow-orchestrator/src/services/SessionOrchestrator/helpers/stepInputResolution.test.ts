@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { resolveStepInput, StepInputValidationError } from './stepInputResolution.js';
 import { validateAgentOutput } from '../handlers/inlineOps/agentOutputValidator.js';
+import { AgentDefinitionSchema, skillStarterAgentDefinition } from '@aflow/schemas';
 import type { StepDefinition } from '@aflow/schemas';
 import { createMemoryPayloadStore, type PayloadStore } from '@aflow/payload-store';
 import { randomUUID } from 'node:crypto';
@@ -356,5 +357,71 @@ describe('resolveStepInput: a reference to a prior output in workflow.run.start 
     await expect(
       resolveStepInput(storeFor(rawInput), runStart, 'inline:raw', runtimeState),
     ).rejects.toThrow(/inputs: Expected object, received string/);
+  });
+});
+describe('resolveStepInput: a skill-starter agent on several folders', () => {
+  const folders = ['hb_aflow', 'hb_docs', 'hb_site'];
+  /** What can reach a step: the run's input, a start's output, a routed failure's summary. */
+  const arrivals: Record<string, Record<string, unknown>> = {
+    'the run input a schedule sends': { input: 'pass' },
+    'the previous start’s output': {
+      status: 'started',
+      runId: '00000000-0000-4000-8000-000000000001',
+      slug: 'local-pr-shepherd',
+    },
+    'a failed start’s summary': {
+      failedStepId: 'start-skill',
+      failedOperation: 'workflow.run.start',
+      errorCode: 'STEP_FAILED',
+      errorMessage: 'refused',
+    },
+  };
+
+  function starter(count: number): StepDefinition[] {
+    return AgentDefinitionSchema.parse(
+      skillStarterAgentDefinition({
+        slug: 'local-pr-shepherd',
+        catalogId: 'local-pr-shepherd',
+        name: 'Local PR Shepherd',
+        description: 'Starts a pass.',
+        runs: folders.slice(0, count).map((bindingId) => ({ bindingId })),
+      }),
+    ).steps;
+  }
+
+  it('gives every start its folder’s input and nothing else, whatever reached it', async () => {
+    for (const count of [2, 3]) {
+      for (const step of starter(count)) {
+        for (const [arrival, rawInput] of Object.entries(arrivals)) {
+          const ref = await resolveStepInput(makePayloadStore(rawInput), step, 'inline:raw');
+          expect({ count, step: step.stepId, arrival, input: decodeInlineRef(ref) }).toEqual({
+            count,
+            step: step.stepId,
+            arrival,
+            input:
+              step.operation === 'workflow.run.start'
+                ? expect.objectContaining({ ...step.config, concurrency: 'fail_if_active' })
+                : step.config,
+          });
+          const resolved = decodeInlineRef(ref);
+          for (const key of Object.keys(rawInput)) {
+            if (!(key in step.config)) expect(resolved).not.toHaveProperty(key);
+          }
+        }
+      }
+    }
+  });
+
+  it('would refuse a later start handed the previous start’s output, were it passed through', async () => {
+    const [, second] = starter(2);
+    if (second === undefined) throw new Error('a two-folder starter has a second step');
+    const { inputPassthrough: _ignored, ...passingThrough } = second;
+    await expect(
+      resolveStepInput(
+        makePayloadStore(arrivals['the previous start’s output'] ?? {}),
+        passingThrough as StepDefinition,
+        'inline:raw',
+      ),
+    ).rejects.toBeInstanceOf(StepInputValidationError);
   });
 });
