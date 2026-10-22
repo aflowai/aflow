@@ -146,6 +146,16 @@ describe('Commission Change — a brief to the machine’s coding agent', () => 
     expect(wf.output?.guidance).toContain('sessionRef');
   });
 
+  it("starts a fix round at the branch's head, named as `base`, pushed or kept local", () => {
+    expect(COMMISSION_CHANGE.description).toContain(
+      "the branch's name for a fix appended to a branch — a fix round included, whose branch holds the earlier round's commit pushed or kept local — so the patch is made against the branch's head and never against the earlier commission's `baseSha`",
+    );
+    const base = (wf.runInputs ?? []).find((i) => i.id === 'base');
+    expect(base?.description).toContain(
+      'the checkout starts at its head, and the patch appends to its commit',
+    );
+  });
+
   it('says what a commission is, how it starts, how many run, and whose checks the brief names', () => {
     const description = COMMISSION_CHANGE.description;
     expect(description).toContain("`wait: 'none'`");

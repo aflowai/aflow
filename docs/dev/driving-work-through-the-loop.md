@@ -61,9 +61,10 @@ meanwhile is refused with its current state rather than overwritten, and a node 
    catalog's Commission Change started with `wait: 'none'` and the node's `planNodeId`, so
    the conversation stays free and the commission's end wakes it with `patchRef`,
    `baseSha`, `merge` and `sessionRef`.
-   Its inputs are the binding, the model, `base` (`origin/main` for new work, the branch's
-   name for a fix appended to an open pull request, with `mergeFrom: origin/main` where
-   `main` has moved past it), and `task`: the findings or the slice to build, each with
+   Its inputs are the binding, the model, `base` (`origin/main` for new work; the branch's
+   name for a fix appended to a branch — the local branch holding the earlier round's
+   commit, whether that commit was pushed or kept local on `fix_before_merge` — with
+   `mergeFrom: origin/main` where `main` has moved past it), and `task`: the findings or the slice to build, each with
    the file, the line where it is known, what is wrong and what right looks like, and the
    tests to add. `harness` is named only to choose a coding agent other than the
    machine's default (`aflow harness default <id>`). Its two hours, and the operation's several hundred turns on an agent that
@@ -114,10 +115,17 @@ meanwhile is refused with its current state rather than overwritten, and a node 
 
    An override it cannot verify fails the run with nothing pushed. The fix
    round is the conversation's: on `fix_before_merge`,
-   once the publication has ended, commission the fix on the branch (`base: <branch>`),
-   briefed from every finding of the review run the publication names as `reviewRunId`,
-   whole, with its evidence. Then publish the branch again, passing the run's `findings`,
-   with those the fix closed marked `closed`. That list is for the pull request's record
+   once the publication has ended, commission the fix on the branch (`base: <branch>`, the
+   branch's name), briefed from every finding of the review run the publication names as
+   `reviewRunId`, whole, with its evidence. The branch already holds the earlier round's
+   commit — on `fix_before_merge` only in the folder, unpushed — so its name resolves to
+   that commit, the commission starts there, and its `baseSha` is the branch's head and its
+   patch only the fix. Never brief a fix round from the earlier commission's `baseSha` or
+   from `origin/main`: that patch is the whole diff again, made against a commit the branch
+   has moved past, and the publication's commit refuses it on the branch's position. Then
+   publish the branch again — `patchRef` and `baseSha` the fix commission's, so the patch
+   lands on the branch's head as one more commit and nothing is reset — passing the run's
+   `findings`, with those the fix closed marked `closed`. That list is for the pull request's record
    only: the latest review's open findings, bounded to fit the next publication's inputs,
    with `findingsLeftOut` counting what the bound left out. A publication never starts a
    commission or another publication.

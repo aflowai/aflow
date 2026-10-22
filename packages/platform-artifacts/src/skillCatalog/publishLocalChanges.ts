@@ -210,7 +210,7 @@ const CHECK_INPUT_TEMPLATE = {
 
 const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'publish-local-changes',
-  version: 41,
+  version: 42,
   name: 'Publish Local Changes',
   tagline:
     'Commit a patch onto a branch of a connected repository, then push it and open the pull request — asking the operator first unless the folder says otherwise.',
@@ -1321,7 +1321,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           variableId: 'afterReview',
           name: 'After the review',
           description:
-            "What the rounds rule decided about the review's findings, as the pull request records it, and what the push gate followed: fix_before_merge — nothing pushed, the branch kept local — for a verdict short of approve, or a minor or worse in round 1; publish_as_is — pushed, asking only over a blocker or a major — for nits alone, or after round 1. Null where the review did not finish. On fix_before_merge the fix round is the conversation's, or the shepherd's.",
+            "What the rounds rule decided about the review's findings, as the pull request records it, and what the push gate followed: fix_before_merge — nothing pushed, the branch kept local — for a verdict short of approve, or a minor or worse in round 1; publish_as_is — pushed, asking only over a blocker or a major — for nits alone, or after round 1. Null where the review did not finish. On fix_before_merge the fix round, the conversation's or the shepherd's, takes `base` the branch's name.",
           required: false,
           sensitive: false,
           immutable: false,
@@ -1400,7 +1400,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
       output: {
         primary: 'prUrl',
         guidance:
-          'prUrl and prNumber are the branch’s pull request, opened or already open: report the link. pushDecision and pushReason say whether the push went, asked or kept the branch local. Follow afterReview: on fix_before_merge nothing was pushed — brief the fix from the reviewRunId run, publish again with findings and the next round; set it aside only by a verified override. Absent prUrl otherwise, the branch stayed local, or the run failed at the checks, the scan or the override, whose account says why.',
+          'prUrl and prNumber are the branch’s pull request: report the link. pushDecision and pushReason say whether the push went, asked or stayed local. Follow afterReview: on fix_before_merge nothing was pushed — commission the fix with base the branch’s name, never the earlier baseSha, from the reviewRunId run, then publish its patchRef and baseSha with findings and the next round; only a verified override sets it aside. Absent prUrl otherwise, the run kept local or failed: its account says why.',
       },
       iteration: { auto: false, maxConsecutiveRuns: 1, stopOnOutcomesMet: true, cooldownMs: 0 },
     },
