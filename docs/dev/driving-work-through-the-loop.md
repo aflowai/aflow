@@ -189,8 +189,10 @@ the decision asks the firing to read (`read_pull_request`) and pass back:
   asks again, and the stream moves on. A write refused on the revision ends the firing as
   `wait`.
 - `wait` — the node is `blocked`; another firing claimed the same state for a `continue`
-  (`claimed`); a run of it is in flight, or paused in the attention items;
-  its pull request is open; a read failed; or its state is one no rule names.
+  (`claimed`); a run of it or of any node under it is in flight, or paused in the attention
+  items; its pull request is open; a read failed — including a read of the nodes under it
+  that stopped at its bound, which cannot show nothing runs below; or its state is one no
+  rule names.
 - `stop` — its pull request was closed unmerged after its last write, its push was declined,
   or more of its commissions ended without a pull request since its last write than
   `attempts` allows. The decision carries the `plan.node.update` that marks it `blocked` with

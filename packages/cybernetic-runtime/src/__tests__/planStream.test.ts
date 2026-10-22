@@ -6,6 +6,8 @@ import {
   PLAN_STREAM_ATTEMPTS_DEFAULT,
   PLAN_STREAM_COMMISSION_SLUG,
   PLAN_STREAM_PUBLICATION_SLUG,
+  PLAN_TREE_DEPTH_LIMIT,
+  PLAN_TREE_WALK_NODE_LIMIT,
   PlanNodeNextInputSchema,
   PlanNodeNextOutputSchema,
   type PlanNode,
@@ -282,6 +284,59 @@ describe('plan.node.next — wait', () => {
       node: { nodeId: first.nodeId },
     });
     expect(decided.reason).toContain(commission);
+  });
+
+  it('waits while a run serving a node closed under the active one is in flight', async () => {
+    const { root, first } = await stream();
+    const step = await created({ parentId: first.nodeId, title: 'P2b.a' });
+    const descendant = await run(step, PLAN_STREAM_COMMISSION_SLUG, 'running');
+    await write(step.nodeId, { status: 'done', outcome: 'Met.' });
+    const decided = await fire(root.nodeId);
+    expect(decided).toMatchObject({
+      decision: 'wait',
+      cause: 'in_flight',
+      node: { nodeId: first.nodeId },
+    });
+    expect(decided.reason).toContain(descendant);
+  });
+
+  it('a run still in flight below the walk’s depth bound holds the firing at wait, not continue', async () => {
+    const { root, first } = await stream();
+    let parent = first;
+    for (let depth = 1; depth <= PLAN_TREE_DEPTH_LIMIT + 1; depth++) {
+      parent = store.seed(SPACE, {
+        parentId: parent.nodeId,
+        title: `closed step ${String(depth)}`,
+        status: 'done',
+        outcome: 'Met.',
+      });
+    }
+    await run(parent, PLAN_STREAM_COMMISSION_SLUG, 'running');
+    expect(await fire(root.nodeId)).toMatchObject({
+      decision: 'wait',
+      cause: 'read_failed',
+      node: { nodeId: first.nodeId },
+    });
+  });
+
+  it('a run still in flight past the walk’s node bound holds the firing at wait, not continue', async () => {
+    const { root, first } = await stream();
+    let last = first;
+    for (let i = 0; i <= PLAN_TREE_WALK_NODE_LIMIT; i++) {
+      last = store.seed(SPACE, {
+        parentId: first.nodeId,
+        title: `closed step ${String(i)}`,
+        status: 'done',
+        outcome: 'Met.',
+        position: i,
+      });
+    }
+    await run(last, PLAN_STREAM_COMMISSION_SLUG, 'running');
+    expect(await fire(root.nodeId)).toMatchObject({
+      decision: 'wait',
+      cause: 'read_failed',
+      node: { nodeId: first.nodeId },
+    });
   });
 
   it('waits while a publication is paused at its push approval, read from the attention items too', async () => {
