@@ -149,6 +149,13 @@ interface ActionCenterSourceCommon {
     ctx: ActionCenterContext,
     item: ActionCenterSourceItem,
     resolution: ActionCenterResolution,
+    /**
+     * The origin the caller observed when it chose — the CAS token it read.
+     * `item` is re-read for this call, so a source whose token can move
+     * between the route's comparison and its write must write against this,
+     * never against `item.origin`. Absent where the caller named none.
+     */
+    observed?: ActionCenterItemOrigin,
   ): Promise<ActionCenterResolveOutcome>;
 }
 

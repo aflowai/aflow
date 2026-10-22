@@ -211,7 +211,7 @@ export const actionCenterRoutes: FastifyPluginAsync<ActionCenterRoutesOptions> =
       }
 
       try {
-        const result = await aggregator.resolve(ctx, itemId, body.resolution);
+        const result = await aggregator.resolve(ctx, itemId, body.resolution, body.origin);
         if (appCtx.redis) {
           // One wake for every resolution and assignment taken here, so the
           // other viewers of the item see it settle without waiting for the

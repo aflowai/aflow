@@ -11,6 +11,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import {
   PlanNodeCloseInputSchema,
+  PlanNodeGetOutputSchema,
   PlanNodeRefusalDetailsSchema,
   PlanNodeUpdateOutputSchema,
   PlanNodeWriteRefusalSchema,
@@ -19,14 +20,13 @@ import {
 } from '@aflow/schemas';
 import {
   createPlanNodeStore,
+  getPlanNode,
   readPlanTrees,
   updatePlanNode,
   type PlanOpError,
 } from '@aflow/cybernetic-runtime';
-import { requireOperatorPrincipal } from '../lib/operatorPrincipal.js';
-
-const OPERATOR_ONLY_PLAN_WRITE =
-  'The plan page writes as the person signed in. An agent writes the plan through plan.node.update, and only the Helmsman holds it; a run never rewrites the plan it serves.';
+import { isInteractiveUser } from '../utils/interactiveUser.js';
+import { PLAN_WRITE_OPERATOR_ONLY } from '../lib/planWriteAuthority.js';
 
 /**
  * An engine refusal in the operator's words. A stale or unchanged write
@@ -94,6 +94,49 @@ export const planRoutes: FastifyPluginAsync = async (fastify) => {
     },
   );
 
+  // One node in full, as `plan.node.get` reads it: what the operator reads
+  // before closing it — its goal and criteria, at the revision they write against.
+  app.get(
+    '/:spaceId/plan/nodes/:nodeId',
+    {
+      config: {
+        authz: {
+          resource: 'space',
+          action: 'read',
+          resourceIdFrom: 'param',
+          resourceIdParam: 'spaceId',
+        },
+      },
+      schema: {
+        tags: ['Spaces'],
+        summary:
+          'One plan node in full — its goal, criteria, note and revision — with its children, links and runs in flight',
+        params: z.object({ spaceId: z.string().uuid(), nodeId: z.string().uuid() }),
+        response: {
+          200: PlanNodeGetOutputSchema,
+          404: PlanNodeWriteRefusalSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const tenant = await request.requireTenant();
+      const { spaceId, nodeId } = request.params;
+      const store = createPlanNodeStore(
+        fastify.appContext.db as PostgresJsDatabase,
+        tenant.tenantId,
+      );
+      const result = await getPlanNode({ store, spaceId }, nodeId);
+      if (!result.ok) {
+        return reply.status(404).send({
+          error: result.code,
+          message: 'This step is not in the space’s plan any more.',
+        });
+      }
+      const { ok: _ok, ...read } = result;
+      return read;
+    },
+  );
+
   app.patch(
     '/:spaceId/plan/nodes/:nodeId',
     {
@@ -122,8 +165,13 @@ export const planRoutes: FastifyPluginAsync = async (fastify) => {
       },
     },
     async (request, reply) => {
-      const operator = requireOperatorPrincipal(request, reply, OPERATOR_ONLY_PLAN_WRITE);
-      if (!operator) return reply;
+      const authUser = request.authUser;
+      if (!authUser || !isInteractiveUser(authUser)) {
+        return reply
+          .status(403)
+          .send({ error: 'operator_only', message: PLAN_WRITE_OPERATOR_ONLY });
+      }
+      const operator = { userId: authUser.userId };
       const redis = fastify.appContext.redis;
       if (!redis) {
         return reply.status(503).send({
@@ -163,7 +211,7 @@ export const planRoutes: FastifyPluginAsync = async (fastify) => {
           actor: {
             userId: operator.userId,
             kind: 'human',
-            authMethod: request.authUser?.authMethod ?? 'unknown',
+            authMethod: authUser.authMethod,
             tenantId: tenant.tenantId,
           },
           category: 'resource',

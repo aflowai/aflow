@@ -125,7 +125,7 @@ export function SpacePlanPage(): React.ReactNode {
         ) : (
           <Card>
             <CardBody>
-              <PlanTree roots={roots} spaceSlug={spaceSlug} onClose={onClose} />
+              <PlanTree roots={roots} spaceSlug={spaceSlug} spaceId={spaceId} onClose={onClose} />
             </CardBody>
           </Card>
         )}

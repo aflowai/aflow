@@ -73,15 +73,20 @@ function decision(extra: Partial<PlanNode> = {}): PlanNode {
   };
 }
 
-function ctx(role: 'admin' | 'editor' | 'viewer' = 'editor') {
+function ctx(role: 'admin' | 'editor' | 'viewer' = 'editor', interactive = true) {
   return {
     tenantId: TENANT_ID as never,
     spaceId: SPACE_ID,
     actorUserId: ACTOR_ID,
     actorSpaceRole: role,
     actorIsTenantAdmin: false,
+    actorIsInteractiveUser: interactive,
   };
 }
+
+const ITEM_ID = `plan-decision:${NODE_ID}`;
+/** The origin the operator read the decision at, as the resolve route passes it on. */
+const SHOWN = { type: 'plan_decision' as const, nodeId: NODE_ID, revision: 3 };
 
 const source = () =>
   createPlanDecisionSource({ db: DB as never, redis: REDIS as never, payloadStore: {} as never });
@@ -173,10 +178,12 @@ describe('planDecisionSource — the answer', () => {
       node: decision({ status: 'done', outcome: 'In the outcome.', revision: 4 }),
     });
 
-    const result = await aggregator().resolve(ctx(), `plan-decision:${NODE_ID}`, {
-      kind: 'submit',
-      payload: '  In the outcome.  ',
-    });
+    const result = await aggregator().resolve(
+      ctx(),
+      ITEM_ID,
+      { kind: 'submit', payload: '  In the outcome.  ' },
+      SHOWN,
+    );
 
     expect(mockUpdatePlanNode).toHaveBeenCalledWith(
       {
@@ -207,7 +214,7 @@ describe('planDecisionSource — the answer', () => {
   it('refuses an answer that is not words, before writing anything', async () => {
     for (const payload of [undefined, '   ', 42, { choice: 'a' }]) {
       await expect(
-        aggregator().resolve(ctx(), `plan-decision:${NODE_ID}`, { kind: 'submit', payload }),
+        aggregator().resolve(ctx(), ITEM_ID, { kind: 'submit', payload }, SHOWN),
       ).rejects.toMatchObject({ code: 'INVALID_RESOLUTION' });
     }
     expect(mockUpdatePlanNode).not.toHaveBeenCalled();
@@ -215,7 +222,7 @@ describe('planDecisionSource — the answer', () => {
 
   it('refuses an approval: a decision is answered, not approved', async () => {
     await expect(
-      aggregator().resolve(ctx(), `plan-decision:${NODE_ID}`, { kind: 'approve' }),
+      aggregator().resolve(ctx(), ITEM_ID, { kind: 'approve' }, SHOWN),
     ).rejects.toBeInstanceOf(ActionCenterAuthzError);
     expect(mockUpdatePlanNode).not.toHaveBeenCalled();
   });
@@ -232,7 +239,7 @@ describe('planDecisionSource — the answer', () => {
       .mockResolvedValueOnce(decision({ revision: 4, goal: 'Rewritten question?' }));
 
     const failure = await aggregator()
-      .resolve(ctx(), `plan-decision:${NODE_ID}`, { kind: 'submit', payload: 'The first.' })
+      .resolve(ctx(), ITEM_ID, { kind: 'submit', payload: 'The first.' }, SHOWN)
       .catch((err: unknown) => err);
 
     expect(failure).toBeInstanceOf(ActionCenterResolveError);
@@ -240,6 +247,73 @@ describe('planDecisionSource — the answer', () => {
       code: 'STALE_ACTION_CENTER_ITEM',
       latestItem: { origin: { revision: 4 }, summary: expect.stringContaining('Rewritten') },
     });
+    expect((failure as Error).message).toContain('revision 4');
+    expect((failure as Error).message).toContain('revision 3');
+  });
+
+  it('writes against the revision the operator read, not the one re-read for the call', async () => {
+    // The Helmsman rewrote the question between the route's comparison and
+    // this write: the re-read item is at 4, the operator answered 3.
+    mockFindOpenDecision
+      .mockResolvedValueOnce(decision({ revision: 4, goal: 'Rewritten question?' }))
+      .mockResolvedValueOnce(decision({ revision: 4, goal: 'Rewritten question?' }));
+    mockUpdatePlanNode.mockResolvedValue({
+      ok: false,
+      code: 'PLAN_NODE_STALE',
+      message: 'stale',
+      details: { nodeId: NODE_ID, revision: 4 },
+    });
+
+    await expect(
+      aggregator().resolve(ctx(), ITEM_ID, { kind: 'submit', payload: 'The first.' }, SHOWN),
+    ).rejects.toMatchObject({
+      code: 'STALE_ACTION_CENTER_ITEM',
+      latestItem: { origin: { revision: 4 } },
+    });
+    expect(mockUpdatePlanNode.mock.calls[0]?.[1]).toMatchObject({ expectedRevision: 3 });
+  });
+
+  it('refuses an answer that names no observed revision, or another node’s, and writes nothing', async () => {
+    for (const observed of [
+      undefined,
+      { ...SHOWN, nodeId: '00000000-0000-4000-8000-0000000000d9' },
+      {
+        type: 'trigger_armed' as const,
+        scheduleId: NODE_ID,
+        createdAt: '2026-10-22T09:00:00.000Z',
+      },
+    ]) {
+      await expect(
+        aggregator().resolve(ctx(), ITEM_ID, { kind: 'submit', payload: 'A.' }, observed),
+      ).rejects.toMatchObject({ code: 'INVALID_RESOLUTION' });
+    }
+    expect(mockUpdatePlanNode).not.toHaveBeenCalled();
+  });
+
+  it('refuses an answer from a credential that is not a person signed in, whatever its role', async () => {
+    for (const role of ['editor', 'admin'] as const) {
+      const failure = await aggregator()
+        .resolve(ctx(role, false), ITEM_ID, { kind: 'submit', payload: 'A.' }, SHOWN)
+        .catch((err: unknown) => err);
+      expect(failure).toBeInstanceOf(ActionCenterResolveError);
+      expect(failure).toMatchObject({ code: 'FORBIDDEN' });
+    }
+    const { actorIsInteractiveUser: _absent, ...unattributed } = ctx();
+    await expect(
+      aggregator().resolve(unattributed, ITEM_ID, { kind: 'submit', payload: 'A.' }, SHOWN),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockUpdatePlanNode).not.toHaveBeenCalled();
+    expect(auditRows).toEqual([]);
+  });
+
+  it('lets a non-interactive caller route the decision to a person, which writes nothing to the plan', async () => {
+    const result = await buildAggregator({
+      db: {} as never,
+      decisionPlane: inMemoryDecisionPlane([ACTOR_ID]).store,
+      sources: [source()],
+    }).resolve(ctx('editor', false), ITEM_ID, { kind: 'reassign', assigneeUserId: ACTOR_ID });
+    expect(result.item.assignee).toBe(ACTOR_ID);
+    expect(mockUpdatePlanNode).not.toHaveBeenCalled();
   });
 
   it('says a decision closed since it was shown took no answer', async () => {
@@ -247,7 +321,7 @@ describe('planDecisionSource — the answer', () => {
     mockFindOpenDecision.mockResolvedValueOnce(decision()).mockResolvedValueOnce(null);
 
     await expect(
-      aggregator().resolve(ctx(), `plan-decision:${NODE_ID}`, { kind: 'submit', payload: 'A.' }),
+      aggregator().resolve(ctx(), ITEM_ID, { kind: 'submit', payload: 'A.' }, SHOWN),
     ).rejects.toMatchObject({ code: 'STALE_ACTION_CENTER_ITEM', latestItem: undefined });
   });
 });

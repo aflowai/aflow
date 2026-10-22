@@ -11,7 +11,7 @@
 import { act, createElement, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { PlanTreeNode, PlanTreeOutput } from '@aflow/schemas';
+import type { PlanNode, PlanTreeNode, PlanTreeOutput } from '@aflow/schemas';
 
 const recorded = vi.hoisted(() => ({
   query: undefined as unknown,
@@ -26,6 +26,10 @@ const recorded = vi.hoisted(() => ({
       }
     | undefined,
   mutateAsync: vi.fn(),
+  /** Each node as the close form's read answers it, by id; absent reads as still loading. */
+  nodes: {} as Record<string, { data?: { node: unknown }; error?: Error }>,
+  nodeQueries: [] as Array<{ key: unknown[]; path: string; enabled?: boolean }>,
+  nodeRefetch: vi.fn(),
 }));
 
 vi.mock('@aflow/design-system', () => {
@@ -90,7 +94,17 @@ vi.mock('../components/providers.js', () => ({
 }));
 
 vi.mock('../hooks/useApiQuery.js', () => ({
-  useApiQuery: (options: unknown) => {
+  useApiQuery: (options: { key: unknown[]; path: string; enabled?: boolean }) => {
+    if (options.key[3] === 'node') {
+      recorded.nodeQueries.push(options);
+      const answer = options.enabled === true ? recorded.nodes[String(options.key[4])] : undefined;
+      return {
+        data: answer?.data,
+        error: answer?.error ?? null,
+        isLoading: options.enabled === true && answer === undefined,
+        refetch: recorded.nodeRefetch,
+      };
+    }
     recorded.query = options;
     return {
       data: undefined,
@@ -194,6 +208,25 @@ const PLAN: PlanTreeOutput = {
   runsTotal: 1,
 };
 
+/** A node as the close form reads it in full. */
+function fullNode(nodeId: string, title: string, extra: Partial<PlanNode> = {}): PlanNode {
+  return {
+    nodeId,
+    spaceId: SPACE_ID,
+    parentId: null,
+    kind: 'execute',
+    title,
+    goal: `Goal of ${title}.`,
+    criteria: `Criteria of ${title}.`,
+    status: 'active',
+    revision: 1,
+    position: 0,
+    createdAt: '2026-10-05T08:00:00.000Z',
+    updatedAt: '2026-10-05T08:00:00.000Z',
+    ...extra,
+  };
+}
+
 let container: HTMLDivElement;
 let root: Root;
 
@@ -217,6 +250,15 @@ function anchor(scope: Element, text: string): HTMLAnchorElement {
 }
 
 beforeEach(() => {
+  recorded.nodes = {};
+  recorded.nodeQueries = [];
+  recorded.nodeRefetch.mockReset();
+  for (const [nodeId, title, kind] of [
+    [UNDER_FIRST, 'route and its test', 'execute'],
+    [FIRST, 'P3.1 the plan page', 'execute'],
+  ] as const) {
+    recorded.nodes[nodeId] = { data: { node: fullNode(nodeId, title, { kind }) } };
+  }
   recorded.query = undefined;
   recorded.result = {};
   recorded.mutation = undefined;
@@ -457,6 +499,16 @@ describe('SpacePlanPage — the operator’s writes', () => {
     const DECISION = '00000000-0000-4000-8000-0000000000a5';
     const ORPHAN = '00000000-0000-4000-8000-0000000000a6';
     recorded.mutateAsync.mockResolvedValue({ node: {} });
+    recorded.nodes[DECISION] = {
+      data: {
+        node: fullNode(DECISION, 'Where the decide answer is recorded', {
+          kind: 'decide',
+          revision: 3,
+          goal: 'In the node’s outcome, or as a link to the item?',
+          criteria: 'One is chosen and stated in the decision record.',
+        }),
+      },
+    };
     await render({
       data: {
         roots: [
@@ -478,6 +530,13 @@ describe('SpacePlanPage — the operator’s writes', () => {
     expect(ownControls(ORPHAN).textContent).not.toContain('Waiting on your decision');
 
     await click(button(ownControls(DECISION), 'Decide'));
+    const statement = ownControls(DECISION).querySelector(`[data-plan-statement="${DECISION}"]`);
+    expect(statement?.textContent).toContain(
+      'Goal: In the node’s outcome, or as a link to the item?',
+    );
+    expect(statement?.textContent).toContain(
+      'Decided when: One is chosen and stated in the decision record.',
+    );
     expect(ownControls(DECISION).querySelector('textarea')?.getAttribute('aria-label')).toContain(
       'Your decision',
     );
@@ -490,5 +549,81 @@ describe('SpacePlanPage — the operator’s writes', () => {
       status: 'done',
       outcome: 'In the node’s outcome.',
     });
+  });
+
+  it('shows the node’s goal and criteria in the form, read from the node in full', async () => {
+    await render({ data: PLAN });
+
+    expect(recorded.nodeQueries.some((q) => q.enabled === true)).toBe(false);
+    await click(button(ownControls(UNDER_FIRST), 'Mark done'));
+
+    expect(recorded.nodeQueries.at(-1)).toMatchObject({
+      key: ['space', SPACE_ID, 'plan', 'node', UNDER_FIRST],
+      path: `/spaces/${SPACE_ID}/plan/nodes/${UNDER_FIRST}`,
+      enabled: true,
+    });
+    const form = ownControls(UNDER_FIRST);
+    expect(form.textContent).toContain('Goal: Goal of route and its test.');
+    expect(form.textContent).toContain('Done when: Criteria of route and its test.');
+  });
+
+  it('writes against the revision the form showed, and says when that is newer than the tree', async () => {
+    recorded.mutateAsync.mockResolvedValue({ node: {} });
+    recorded.nodes[UNDER_FIRST] = {
+      data: {
+        node: fullNode(UNDER_FIRST, 'route and its test', {
+          revision: 5,
+          criteria: 'Criteria as rewritten.',
+        }),
+      },
+    };
+    await render({ data: PLAN });
+
+    await click(button(ownControls(UNDER_FIRST), 'Mark done'));
+    expect(ownControls(UNDER_FIRST).textContent).toContain(
+      'This step changed since the plan was read',
+    );
+    expect(ownControls(UNDER_FIRST).textContent).toContain('Criteria as rewritten.');
+    await type(ownControls(UNDER_FIRST), 'Met as rewritten.');
+    await click(button(ownControls(UNDER_FIRST), 'Mark done'));
+
+    expect(recorded.mutateAsync).toHaveBeenCalledWith({
+      nodeId: UNDER_FIRST,
+      expectedRevision: 5,
+      status: 'done',
+      outcome: 'Met as rewritten.',
+    });
+  });
+
+  it('holds the write until the node is read, and refuses one the read finds closed', async () => {
+    delete recorded.nodes[UNDER_FIRST];
+    await render({ data: PLAN });
+
+    await click(button(ownControls(UNDER_FIRST), 'Drop'));
+    expect(ownControls(UNDER_FIRST).textContent).toContain('Reading the step…');
+    expect(button(ownControls(UNDER_FIRST), 'Drop').disabled).toBe(true);
+
+    await click(button(ownControls(UNDER_FIRST), 'Cancel'));
+    recorded.nodes[UNDER_FIRST] = {
+      data: { node: fullNode(UNDER_FIRST, 'route and its test', { status: 'done', revision: 2 }) },
+    };
+    await click(button(ownControls(UNDER_FIRST), 'Drop'));
+    expect(ownControls(UNDER_FIRST).querySelector('[role="alert"]')?.textContent).toContain(
+      'This step is done now',
+    );
+    expect(button(ownControls(UNDER_FIRST), 'Drop').disabled).toBe(true);
+    expect(recorded.mutateAsync).not.toHaveBeenCalled();
+  });
+
+  it('reads the node again after a refusal, so a retry is decided against it as it stands', async () => {
+    recorded.mutateAsync.mockRejectedValue(
+      Object.assign(new Error('This step changed since the plan was read.'), { status: 409 }),
+    );
+    await render({ data: PLAN });
+
+    await click(button(ownControls(UNDER_FIRST), 'Drop'));
+    await click(button(ownControls(UNDER_FIRST), 'Drop'));
+
+    expect(recorded.nodeRefetch).toHaveBeenCalledTimes(1);
   });
 });

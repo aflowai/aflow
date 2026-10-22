@@ -59,8 +59,10 @@ meanwhile is refused with its current state rather than overwritten, and a node 
 space's **Plan** page (`GET /v1/spaces/:spaceId/plan`): every node, its outcome, its links and
 the runs in flight for it, with no Helmsman turn needed to ask. The operator writes it there
 too (`PATCH /v1/spaces/:spaceId/plan/nodes/:nodeId`): **Mark done** with an outcome, or
-**Drop** a node and the branch under it, through the same engine and against the revision the
-page read, so a conversation and the page cannot overwrite each other. A node of kind
+**Drop** a node and the branch under it, through the same engine and against the revision of the
+node the form read and shows — its goal and criteria above the field — so a conversation and
+the page cannot overwrite each other. Only a person signed in writes there or answers a
+decision; an API key, the MCP server's included, is refused. A node of kind
 `decide` is the operator's: it raises a **Decide** item in the Action Center, the answer is
 its outcome as it is marked done, and no firing commissions it (`wait`, `awaiting_decision`).
 

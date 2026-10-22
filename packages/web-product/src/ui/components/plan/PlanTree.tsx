@@ -7,9 +7,11 @@
  *
  * Given `onClose`, an open node also offers the operator's own writes (P3.2):
  * mark it done with how its criteria were met — for a `decide` node, the
- * choice — or drop it, and the branch under it with it. The component only
- * asks; the page writes through the plan engine, against the revision this
- * tree was read at, and a node changed since is refused rather than overwritten.
+ * choice — or drop it, and the branch under it with it. The form reads the
+ * node as it now stands and shows its goal and criteria, so the operator
+ * decides against what the node says; the page writes through the plan engine
+ * against the revision the form showed, and a node changed since is refused
+ * rather than overwritten.
  */
 import { useState } from 'react';
 import Link from 'next/link';
@@ -23,12 +25,15 @@ import {
   type BadgeVariant,
 } from '@aflow/design-system';
 import type {
+  PlanNode,
+  PlanNodeGetOutput,
   PlanNodeKind,
   PlanNodeLink,
   PlanNodeRun,
   PlanNodeStatus,
   PlanTreeNode,
 } from '@aflow/schemas';
+import { useApiQuery } from '../../hooks/useApiQuery.js';
 import { spaceRoute } from '../../lib/space-routes.js';
 import { PLAN_LINK_KIND_LABEL, planLinkTarget, planLinkText } from '../../lib/plan-links.js';
 
@@ -136,11 +141,55 @@ const CLOSING_COPY: Record<
   dropped: { open: 'Drop', field: 'Why it is dropped (optional)', confirm: 'Drop' },
 };
 
-function PlanNodeCloseControl({ node, onClose }: { node: PlanTreeNode; onClose: PlanNodeCloser }) {
+/** What the node says, as the form read it: what the operator closes it against. */
+function PlanNodeStatement({ shown, read }: { shown: PlanNode; read: PlanTreeNode }) {
+  return (
+    <Column gap="xs" data-plan-statement={shown.nodeId}>
+      {shown.revision !== read.revision && (
+        <Text size="xs" variant="muted">
+          This step changed since the plan was read; this is how it stands now.
+        </Text>
+      )}
+      <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>
+        <Text as="span" size="sm" weight="medium">
+          {'Goal: '}
+        </Text>
+        {shown.goal}
+      </Text>
+      <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>
+        <Text as="span" size="sm" weight="medium">
+          {shown.kind === 'decide' ? 'Decided when: ' : 'Done when: '}
+        </Text>
+        {shown.criteria}
+      </Text>
+    </Column>
+  );
+}
+
+function PlanNodeCloseControl({
+  node,
+  spaceId,
+  onClose,
+}: {
+  node: PlanTreeNode;
+  spaceId: string;
+  onClose: PlanNodeCloser;
+}) {
   const [choosing, setChoosing] = useState<'done' | 'dropped' | null>(null);
   const [text, setText] = useState('');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Read when the form opens, never from the tree's summary: the goal and
+  // criteria are what the operator decides against, and the revision the
+  // write is pinned to is the one they were read at.
+  const read = useApiQuery<PlanNodeGetOutput>({
+    key: ['space', spaceId, 'plan', 'node', node.nodeId],
+    path: `/spaces/${spaceId}/plan/nodes/${node.nodeId}`,
+    enabled: choosing !== null,
+    staleTime: 0,
+  });
+  const shown = choosing !== null ? read.data?.node : undefined;
+  const shownClosed = shown !== undefined && isClosed(shown.status);
   const openUnder = node.children.some((child) => !isClosed(child.status));
 
   const copyFor = (status: 'done' | 'dropped') =>
@@ -174,11 +223,12 @@ function PlanNodeCloseControl({ node, onClose }: { node: PlanTreeNode; onClose: 
   const copy = copyFor(choosing);
   const outcome = text.trim();
   const submit = async () => {
+    if (!shown) return;
     setPending(true);
     setError(null);
     const answer = await onClose({
       nodeId: node.nodeId,
-      expectedRevision: node.revision,
+      expectedRevision: shown.revision,
       status: choosing,
       ...(outcome.length > 0 ? { outcome } : {}),
     });
@@ -188,11 +238,29 @@ function PlanNodeCloseControl({ node, onClose }: { node: PlanTreeNode; onClose: 
       setText('');
     } else {
       setError(answer.message);
+      // Show the node as it now stands, so a retry is decided against that.
+      void read.refetch();
     }
   };
 
   return (
     <Column gap="xs" data-plan-close={choosing}>
+      {shown !== undefined ? (
+        <PlanNodeStatement shown={shown} read={node} />
+      ) : read.error ? (
+        <Text size="sm" tone="danger" role="alert">
+          {`This step could not be read: ${read.error.message}`}
+        </Text>
+      ) : (
+        <Text size="sm" variant="muted">
+          Reading the step…
+        </Text>
+      )}
+      {shownClosed && (
+        <Text size="sm" tone="danger" role="alert">
+          {`This step is ${shown.status} now; reload the plan to see it.`}
+        </Text>
+      )}
       <Textarea
         aria-label={copy.field}
         placeholder={copy.field}
@@ -218,7 +286,12 @@ function PlanNodeCloseControl({ node, onClose }: { node: PlanTreeNode; onClose: 
           size="sm"
           variant={choosing === 'dropped' ? 'danger' : 'primary'}
           loading={pending}
-          disabled={pending || (choosing === 'done' && outcome.length === 0)}
+          disabled={
+            pending ||
+            shown === undefined ||
+            shownClosed ||
+            (choosing === 'done' && outcome.length === 0)
+          }
           onClick={() => {
             void submit();
           }}
@@ -245,11 +318,13 @@ function PlanNodeCloseControl({ node, onClose }: { node: PlanTreeNode; onClose: 
 function PlanNodeItem({
   node,
   spaceSlug,
+  spaceId,
   onClose,
   underClosed,
 }: {
   node: PlanTreeNode;
   spaceSlug: string;
+  spaceId: string;
   onClose: PlanNodeCloser | undefined;
   /** Some node above it is closed: it left the plan with that branch. */
   underClosed: boolean;
@@ -307,12 +382,15 @@ function PlanNodeItem({
             Waiting on your decision — here or in the Action Center.
           </Text>
         )}
-        {!closed && onClose !== undefined && <PlanNodeCloseControl node={node} onClose={onClose} />}
+        {!closed && onClose !== undefined && (
+          <PlanNodeCloseControl node={node} spaceId={spaceId} onClose={onClose} />
+        )}
       </Column>
       {node.children.length > 0 && (
         <PlanNodeList
           nodes={node.children}
           spaceSlug={spaceSlug}
+          spaceId={spaceId}
           onClose={onClose}
           underClosed={underClosed || closed}
           nested
@@ -325,12 +403,14 @@ function PlanNodeItem({
 function PlanNodeList({
   nodes,
   spaceSlug,
+  spaceId,
   onClose,
   underClosed,
   nested = false,
 }: {
   nodes: readonly PlanTreeNode[];
   spaceSlug: string;
+  spaceId: string;
   onClose: PlanNodeCloser | undefined;
   underClosed: boolean;
   nested?: boolean;
@@ -354,6 +434,7 @@ function PlanNodeList({
           key={node.nodeId}
           node={node}
           spaceSlug={spaceSlug}
+          spaceId={spaceId}
           onClose={onClose}
           underClosed={underClosed}
         />
@@ -367,10 +448,20 @@ export interface PlanTreeProps {
   roots: readonly PlanTreeNode[];
   /** The space's slug, which internal links are built under. */
   spaceSlug: string;
+  /** The space's id, which the close form reads its node under. */
+  spaceId: string;
   /** Writes the operator's close of a node; without it the tree is read-only. */
   onClose?: PlanNodeCloser;
 }
 
-export function PlanTree({ roots, spaceSlug, onClose }: PlanTreeProps) {
-  return <PlanNodeList nodes={roots} spaceSlug={spaceSlug} onClose={onClose} underClosed={false} />;
+export function PlanTree({ roots, spaceSlug, spaceId, onClose }: PlanTreeProps) {
+  return (
+    <PlanNodeList
+      nodes={roots}
+      spaceSlug={spaceSlug}
+      spaceId={spaceId}
+      onClose={onClose}
+      underClosed={false}
+    />
+  );
 }

@@ -13,11 +13,13 @@ import type { PlanNode, PlanTreeNode, PlanTreeOutput } from '@aflow/schemas';
 
 const mockReadPlanTrees = vi.fn();
 const mockUpdatePlanNode = vi.fn();
+const mockGetPlanNode = vi.fn();
 const mockCreatePlanNodeStore = vi.fn((..._args: unknown[]) => ({ store: 'tenant-store' }));
 
 vi.mock('@aflow/cybernetic-runtime', () => ({
   readPlanTrees: (...a: unknown[]) => mockReadPlanTrees(...a),
   updatePlanNode: (...a: unknown[]) => mockUpdatePlanNode(...a),
+  getPlanNode: (...a: unknown[]) => mockGetPlanNode(...a),
   createPlanNodeStore: (...a: unknown[]) => mockCreatePlanNodeStore(...a),
 }));
 
@@ -98,6 +100,8 @@ const caller = {
   readable: new Set<string>([SPACE_ID]),
   writable: new Set<string>([SPACE_ID]),
   servicePrincipal: false,
+  /** How the credential authenticated; an API key is never a person signed in. */
+  authMethod: 'session',
 };
 const OPERATOR_ID = 'u0000000-0000-4000-8000-0000000000e1';
 const REDIS = { redis: 'shared' };
@@ -122,7 +126,7 @@ async function buildApp(): Promise<FastifyInstance> {
     (request as unknown as { authUser: unknown }).authUser = caller.authenticated
       ? {
           userId: OPERATOR_ID,
-          authMethod: caller.servicePrincipal ? 'api_key' : 'session',
+          authMethod: caller.authMethod,
           isServicePrincipal: caller.servicePrincipal,
         }
       : undefined;
@@ -161,6 +165,7 @@ beforeEach(async () => {
   caller.readable = new Set([SPACE_ID]);
   caller.writable = new Set([SPACE_ID]);
   caller.servicePrincipal = false;
+  caller.authMethod = 'session';
   appContext.redis = REDIS;
   mockReadPlanTrees.mockResolvedValue(TREES);
   app = await buildApp();
@@ -369,6 +374,17 @@ describe('PATCH /v1/spaces/:spaceId/plan/nodes/:nodeId', () => {
 
   it('refuses an agent’s credential, whatever its grants: the plan page is a person’s', async () => {
     caller.servicePrincipal = true;
+    caller.authMethod = 'api_key';
+
+    const res = await patch({ expectedRevision: 3, status: 'dropped' });
+
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({ error: 'operator_only' });
+    expect(mockUpdatePlanNode).not.toHaveBeenCalled();
+  });
+
+  it('refuses a person’s own API key: an MCP server or a script is not the operator at the page', async () => {
+    caller.authMethod = 'api_key';
 
     const res = await patch({ expectedRevision: 3, status: 'dropped' });
 
@@ -393,5 +409,67 @@ describe('PATCH /v1/spaces/:spaceId/plan/nodes/:nodeId', () => {
 
     expect(res.statusCode).toBe(503);
     expect(mockUpdatePlanNode).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /v1/spaces/:spaceId/plan/nodes/:nodeId', () => {
+  const url = `/v1/spaces/${SPACE_ID}/plan/nodes/${CHILD_ID}`;
+  const node: PlanNode = {
+    nodeId: CHILD_ID,
+    spaceId: SPACE_ID,
+    parentId: ROOT_ID,
+    kind: 'decide',
+    title: 'Where the decide answer is recorded',
+    goal: 'In the outcome, or as a link?',
+    criteria: 'One is chosen.',
+    status: 'active',
+    revision: 6,
+    position: 0,
+    createdAt: '2026-10-05T08:00:00.000Z',
+    updatedAt: '2026-10-05T11:00:00.000Z',
+  };
+  const read = {
+    node,
+    children: [],
+    childrenTotal: 0,
+    links: [],
+    linksTotal: 0,
+    runs: [],
+    runsTotal: 0,
+  };
+
+  it('reads one node in full through the engine, its goal, criteria and revision', async () => {
+    mockGetPlanNode.mockResolvedValue({ ok: true, ...read });
+
+    const res = await app.inject({ method: 'GET', url });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual(read);
+    expect(mockGetPlanNode).toHaveBeenCalledWith(
+      { store: { store: 'tenant-store' }, spaceId: SPACE_ID },
+      CHILD_ID,
+    );
+  });
+
+  it('answers a node not in the space with 404', async () => {
+    mockGetPlanNode.mockResolvedValue({
+      ok: false,
+      code: 'PLAN_NODE_NOT_FOUND',
+      message: 'No plan node.',
+    });
+
+    const res = await app.inject({ method: 'GET', url });
+
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toMatchObject({ error: 'PLAN_NODE_NOT_FOUND' });
+  });
+
+  it('refuses a space the caller may not read, and reads nothing', async () => {
+    caller.readable = new Set();
+
+    const res = await app.inject({ method: 'GET', url });
+
+    expect(res.statusCode).toBe(403);
+    expect(mockGetPlanNode).not.toHaveBeenCalled();
   });
 });

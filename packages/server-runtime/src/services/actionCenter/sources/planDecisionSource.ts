@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
   PLAN_NODE_PROSE_MAX_CHARS,
   PLAN_NODE_UPDATE_OPERATION_ID,
+  type ActionCenterItemOrigin,
   type PlanNode,
   type TenantId,
 } from '@aflow/schemas';
@@ -22,6 +23,7 @@ import {
   type ActionCenterSourceDeps,
   type ActionCenterSourceItem,
 } from '../types.js';
+import { PLAN_WRITE_OPERATOR_ONLY } from '../../../lib/planWriteAuthority.js';
 
 const ITEM_ID_PREFIX = 'plan-decision:';
 const TITLE_MAX_CHARS = 256;
@@ -83,11 +85,25 @@ export function createPlanDecisionSource(deps: ActionCenterSourceDeps): ActionCe
       ctx: ActionCenterContext,
       item: ActionCenterSourceItem,
       resolution,
+      observed?: ActionCenterItemOrigin,
     ): Promise<ActionCenterResolveOutcome> {
       if (item.origin.type !== 'plan_decision') {
         throw new ActionCenterResolveError(
           'INVALID_RESOLUTION',
           `The plan decision source cannot resolve a ${item.origin.type} item.`,
+        );
+      }
+      // The answer is a write to the plan, so it is taken from the operator
+      // alone — the rule the plan page's write reads (planWriteAuthority).
+      if (ctx.actorIsInteractiveUser !== true) {
+        throw new ActionCenterResolveError('FORBIDDEN', PLAN_WRITE_OPERATOR_ONLY);
+      }
+      // `item` was re-read for this call; the revision the operator answered
+      // is the one they observed, and the write is compare-and-set on it.
+      if (observed?.type !== 'plan_decision' || observed.nodeId !== item.origin.nodeId) {
+        throw new ActionCenterResolveError(
+          'INVALID_RESOLUTION',
+          'A decision is answered against the revision it was shown at: send the item’s origin as it was read.',
         );
       }
       const answer = resolution.kind === 'submit' ? resolution.payload : undefined;
@@ -105,7 +121,7 @@ export function createPlanDecisionSource(deps: ActionCenterSourceDeps): ActionCe
       }
 
       const store = storeFor(ctx.tenantId);
-      const { nodeId, revision } = item.origin;
+      const { nodeId, revision } = observed;
       const result = await updatePlanNode(
         {
           store,
@@ -127,7 +143,7 @@ export function createPlanDecisionSource(deps: ActionCenterSourceDeps): ActionCe
         throw new ActionCenterResolveError(
           'STALE_ACTION_CENTER_ITEM',
           now
-            ? 'This decision was changed since it was shown; read it again before answering.'
+            ? `This decision is at revision ${String(now.revision)}; the answer was given to revision ${String(revision)}, so nothing was written. Read it again before answering.`
             : 'This decision has been closed since it was shown, so the answer was not recorded.',
           'stale_target',
           undefined,

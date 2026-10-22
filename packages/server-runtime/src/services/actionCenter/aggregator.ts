@@ -2,7 +2,12 @@ import { randomUUID } from 'crypto';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { createTenantContext, hitlActionAudit, withTenantSchema } from '@aflow/database';
 import { recordActionCenterResolved, recordHitlGateLatency } from '@aflow/observability';
-import type { ActionCenterItem, ActionCenterResolution, PostInstallTask } from '@aflow/schemas';
+import type {
+  ActionCenterItem,
+  ActionCenterItemOrigin,
+  ActionCenterResolution,
+  PostInstallTask,
+} from '@aflow/schemas';
 import type { DecisionPlaneStore } from './decisionPlane.js';
 import {
   type ActionCenterContext,
@@ -28,10 +33,12 @@ export interface ActionCenterAggregator {
   /** The items whose row set is this reader's own — invitations, today. */
   listActorScoped(ctx: ActionCenterContext): Promise<ActionCenterPooledItem[]>;
   get(ctx: ActionCenterContext, itemId: string): Promise<ActionCenterItem | null>;
+  /** `observed` is the origin the caller read when it chose; it reaches the source's write. */
   resolve(
     ctx: ActionCenterContext,
     itemId: string,
     resolution: ActionCenterResolution,
+    observed?: ActionCenterItemOrigin,
   ): Promise<ResolveResult>;
 }
 
@@ -153,7 +160,7 @@ export function buildAggregator(opts: BuildAggregatorOptions): ActionCenterAggre
       return projectActionCenterItem(ctx, pooled!);
     },
 
-    async resolve(ctx, itemId, resolution) {
+    async resolve(ctx, itemId, resolution, observed) {
       const hit = await findItem(ctx, itemId);
       if (!hit) {
         throw new ActionCenterResolveError(
@@ -216,7 +223,7 @@ export function buildAggregator(opts: BuildAggregatorOptions): ActionCenterAggre
 
       let outcome;
       try {
-        outcome = await source.resolve(ctx, item, resolution);
+        outcome = await source.resolve(ctx, item, resolution, observed);
       } catch (err) {
         // Propagate structured errors; the route maps codes to HTTP statuses.
         if (err instanceof ActionCenterResolveError) throw err;
