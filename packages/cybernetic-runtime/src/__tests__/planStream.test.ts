@@ -397,6 +397,51 @@ describe('plan.node.next — wait', () => {
     });
   });
 
+  it('waits on a decision for the operator, commissions nothing, and passes it once it is answered', async () => {
+    const root = await created({ title: 'Plan 322' });
+    const decision = await created({
+      parentId: root.nodeId,
+      kind: 'decide',
+      title: 'Where the decide answer is recorded',
+    });
+    const after = await created({ parentId: root.nodeId, title: 'P3.3' });
+    const revisions = [...store.nodes.values()].map((n) => n.revision);
+
+    expect(await fire(root.nodeId)).toMatchObject({
+      decision: 'wait',
+      cause: 'awaiting_decision',
+      node: { nodeId: decision.nodeId },
+    });
+    expect([...store.nodes.values()].map((n) => n.revision)).toEqual(revisions);
+
+    await write(decision.nodeId, { status: 'done', outcome: 'In the node’s outcome.' });
+    expect(await fire(root.nodeId)).toMatchObject({
+      decision: 'continue',
+      node: { nodeId: after.nodeId },
+    });
+  });
+
+  it('works through the open steps under a decision first, then waits on the decision', async () => {
+    const root = await created({ title: 'Plan 322' });
+    const decision = await created({ parentId: root.nodeId, kind: 'decide', title: 'Choose' });
+    const inquiry = await created({
+      parentId: decision.nodeId,
+      kind: 'investigate',
+      title: 'What each choice costs',
+    });
+
+    expect(await fire(root.nodeId)).toMatchObject({
+      decision: 'continue',
+      node: { nodeId: inquiry.nodeId },
+    });
+    await write(inquiry.nodeId, { status: 'done', outcome: 'Costs compared.' });
+    expect(await fire(root.nodeId)).toMatchObject({
+      decision: 'wait',
+      cause: 'awaiting_decision',
+      node: { nodeId: decision.nodeId },
+    });
+  });
+
   it('refuses a root that is not in the space', async () => {
     const result = await nextInPlanStream(
       streamContext(),

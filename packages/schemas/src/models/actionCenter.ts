@@ -158,6 +158,21 @@ export const BrowserHandoffOriginSchema = z.object({
 });
 export type BrowserHandoffOrigin = z.infer<typeof BrowserHandoffOriginSchema>;
 
+/**
+ * A `decide` node in the space's plan (Plan 322 P3.2): its outcome is the
+ * operator's choice, so it asks for one here rather than starting a run.
+ * Derived from the node at read time — nothing is stored for the item. The CAS
+ * token is the node's revision, the same one `plan.node.update` compares, so
+ * an answer given to a question the Helmsman has since rewritten is refused.
+ * The answer is the node's `outcome`, written as it is marked done.
+ */
+export const PlanDecisionOriginSchema = z.object({
+  type: z.literal('plan_decision'),
+  nodeId: z.string().uuid(),
+  revision: z.number().int().min(1),
+});
+export type PlanDecisionOrigin = z.infer<typeof PlanDecisionOriginSchema>;
+
 export const ActionCenterItemOriginSchema = z.discriminatedUnion('type', [
   StepOriginSchema,
   ProposalOriginSchema,
@@ -168,6 +183,7 @@ export const ActionCenterItemOriginSchema = z.discriminatedUnion('type', [
   WorkflowTaskOriginSchema,
   SessionInvitationOriginSchema,
   BrowserHandoffOriginSchema,
+  PlanDecisionOriginSchema,
 ]);
 export type ActionCenterItemOrigin = z.infer<typeof ActionCenterItemOriginSchema>;
 

@@ -19,7 +19,7 @@ Everything in the sidebar belongs to the space you are in:
 - **Skills** — the procedures agents run here.
 - **Integrations** — the APIs and MCP servers this space can call.
 - **Memory** — the space's documents and folders.
-- **Plan** — the work the Helmsman is carrying out here, as goals broken into steps: each step's status, how a finished one was met, its pull requests and runs, and the runs under way for it.
+- **Plan** — the work the Helmsman is carrying out here, as goals broken into steps: each step's status, how a finished one was met, its pull requests and runs, and the runs under way for it. An open step has **Mark done**, which shows the step's goal and what it is done when, as the step now stands, and asks how that was met, and **Drop** — **Drop branch** when steps under it are still open, which leave the plan with it. A **decide** step is yours to answer: **Decide** here or in the Workbench, and your choice is its outcome. If the step changed since the page loaded, nothing is written and the page reloads the plan to choose again.
 - **Triggers** — schedules and webhooks that start work here.
 - **Settings** — the space's name and default agent (**General**), the Helmsman's mandate and models (**Agent**), **Rules**, **Compute**, **Write Policy**, **Credentials** and **Danger zone**.
 

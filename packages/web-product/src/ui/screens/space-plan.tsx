@@ -6,7 +6,9 @@
  *
  * Until this page the plan was visible only to the Helmsman, in its attention
  * block, and to whoever asked it. It reads the one authority the Helmsman's
- * operations write, so the operator and the agent see the same tree.
+ * operations write, so the operator and the agent see the same tree — and
+ * writes through it: the operator marks a node done or drops a branch without
+ * a Helmsman turn, against the revision the page read (P3.2).
  */
 import {
   Card,
@@ -17,10 +19,14 @@ import {
   PageContainer,
   Text,
 } from '@aflow/design-system';
-import type { PlanTreeNode, PlanTreeOutput } from '@aflow/schemas';
+import type { PlanNodeUpdateOutput, PlanTreeNode, PlanTreeOutput } from '@aflow/schemas';
 import { useSpaceFromRoute } from '../components/providers.js';
-import { useApiQuery } from '../hooks/useApiQuery.js';
-import { PlanTree } from '../components/plan/PlanTree.js';
+import { useApiMutation, useApiQuery } from '../hooks/useApiQuery.js';
+import {
+  PlanTree,
+  type PlanNodeCloseAnswer,
+  type PlanNodeCloseRequest,
+} from '../components/plan/PlanTree.js';
 
 function placedRuns(nodes: readonly PlanTreeNode[]): number {
   return nodes.reduce((sum, node) => sum + node.runs.length + placedRuns(node.children), 0);
@@ -37,18 +43,40 @@ export function SpacePlanPage(): React.ReactNode {
   const spaceId = routeSpace?.id ?? '';
   const spaceSlug = routeSpace?.slugFromRoute ?? '';
 
-  const { data, isLoading, error } = useApiQuery<PlanTreeOutput>({
+  const { data, isLoading, error, refetch } = useApiQuery<PlanTreeOutput>({
     key: ['space', spaceId, 'plan'],
     path: `/spaces/${spaceId}/plan`,
     enabled: spaceId.length > 0,
   });
+
+  const closeNode = useApiMutation<PlanNodeCloseRequest, PlanNodeUpdateOutput>({
+    path: ({ nodeId }) => `/spaces/${spaceId}/plan/nodes/${nodeId}`,
+    method: 'PATCH',
+    serialize: ({ nodeId: _nodeId, ...body }) => JSON.stringify(body),
+    invalidate: [['space', spaceId, 'plan']],
+    // The node's own form says why; a toast would say it twice.
+    onError: () => undefined,
+  });
+
+  const onClose = async (request: PlanNodeCloseRequest): Promise<PlanNodeCloseAnswer> => {
+    try {
+      await closeNode.mutateAsync(request);
+      return { ok: true };
+    } catch (err) {
+      // A refusal on the revision means the tree on screen is stale: read it
+      // again so the operator chooses against the node as it now stands.
+      if ((err as { status?: unknown }).status === 409) void refetch();
+      return { ok: false, message: err instanceof Error ? err.message : String(err) };
+    }
+  };
 
   const header = (
     <Column gap="xs">
       <Heading level={2}>Plan</Heading>
       <Text variant="muted">
         What the Helmsman is working through here: each goal broken into steps, what is done and
-        how, and the work under way for each.
+        how, and the work under way for each. Mark a step done or drop it here, and the Helmsman
+        reads the change on its next turn.
       </Text>
     </Column>
   );
@@ -97,7 +125,7 @@ export function SpacePlanPage(): React.ReactNode {
         ) : (
           <Card>
             <CardBody>
-              <PlanTree roots={roots} spaceSlug={spaceSlug} />
+              <PlanTree roots={roots} spaceSlug={spaceSlug} spaceId={spaceId} onClose={onClose} />
             </CardBody>
           </Card>
         )}

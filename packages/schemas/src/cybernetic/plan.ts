@@ -186,6 +186,36 @@ export const PlanNodeUpdateSchema = z
   });
 export type PlanNodeUpdate = z.infer<typeof PlanNodeUpdateSchema>;
 
+/**
+ * The operator's write from the plan page (Plan 322 P3.2): close a node, done
+ * or dropped, against the revision the page showed. It is a `plan.node.update`
+ * the engine judges by the same rules — a stale revision is refused with the
+ * current one — narrowed to what the page offers.
+ */
+export const PlanNodeCloseSchema = z
+  .object({
+    expectedRevision: z
+      .number()
+      .int()
+      .min(1)
+      .describe('The revision the page showed when the operator chose.'),
+    status: z.enum(['done', 'dropped']),
+    outcome: PlanNodeProseSchema.optional().describe(
+      'How the criteria were met, or why the node was dropped.',
+    ),
+  })
+  .strict()
+  .superRefine((close, ctx) => {
+    if (close.status === 'done' && close.outcome === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['outcome'],
+        message: PLAN_NODE_DONE_NEEDS_OUTCOME_MESSAGE,
+      });
+    }
+  });
+export type PlanNodeClose = z.infer<typeof PlanNodeCloseSchema>;
+
 // ============================================================================
 // Links (Plan 322 P1) — what did or holds a node's work
 // ============================================================================

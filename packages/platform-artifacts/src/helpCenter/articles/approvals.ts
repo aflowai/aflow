@@ -6,7 +6,7 @@ export const APPROVALS_ARTICLES: readonly HelpArticleInput[] = [
     theme: 'approvals',
     question: 'Where do I find approvals and other things waiting for me?',
     summary:
-      "Everything in a space that needs a person collects in the Workbench beside the chat: approvals for writes and other actions, questions a run is waiting on, account sign-ins an integration needs, and proposals from the Coach. While anything is pending, a yellow indicator appears in the header of the space's other pages; choosing it opens Chat with the Workbench. The Helmsman can also bring an approval into the chat so you answer it where you are talking. Work that waits on an item stays paused until it is answered.",
+      "Everything in a space that needs a person collects in the Workbench beside the chat: approvals for writes and other actions, questions a run is waiting on, decisions the space's plan leaves to you, account sign-ins an integration needs, and proposals from the Coach. While anything is pending, a yellow indicator appears in the header of the space's other pages; choosing it opens Chat with the Workbench. The Helmsman can also bring an approval into the chat so you answer it where you are talking. Work that waits on an item stays paused until it is answered.",
     body: `## Where
 
 - **Chat** — the **Workbench** sits beside the conversation. On a phone, switch between **Chat** and **Workbench** at the top; the Workbench shows how many items need you.
@@ -18,7 +18,7 @@ export const APPROVALS_ARTICLES: readonly HelpArticleInput[] = [
 **Needs attention** holds items that are blocking work now:
 
 - **Approvals**: a write the agent wants to make, an approval a skill asks for as one of its steps, or another action that asks first. A write approval card has **Approve**, **Deny** and an optional reason.
-- **Inputs**: a question a run is waiting for you to answer.
+- **Inputs**: a question a run is waiting for you to answer, and a decision the space's plan leaves to you — a step of kind **decide**, titled **Decide: …**. Write your choice and choose **Decide**; it is recorded as the step's outcome and the step is marked done, as it would be on the **Plan** page. If the Helmsman changed the question after you opened it, your answer is refused and the card shows the question as it now stands.
 - **Connections**: a **Connect** or **Reconnect** card when an integration needs you to sign in with an account, or a sign-in has expired.
 
 The **Coach** section holds proposals: changes the Coach, or the Helmsman, wants to make to skills, evaluations or integrations. These do not block a run; they wait for you to **Ratify**, **Reject** or **Dismiss** them.

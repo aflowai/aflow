@@ -68,6 +68,22 @@ describe('partitionLanes — Plan 156 §7A.2 Coach lane split', () => {
     expect(lanes.coachProposals).toHaveLength(0);
   });
 
+  it('routes a plan decision to inputs, where Needs attention answers it (Plan 322 P3.2)', () => {
+    const lanes = partitionLanes([
+      item('human_input', {
+        id: 'plan-decision:00000000-0000-4000-8000-0000000000d1',
+        origin: {
+          type: 'plan_decision',
+          nodeId: '00000000-0000-4000-8000-0000000000d1',
+          revision: 3,
+        },
+        allowedActions: ['submit', 'reassign'],
+      }),
+    ]);
+    expect(lanes.inputs.map((it) => it.origin.type)).toEqual(['plan_decision']);
+    expect(lanes.notices).toEqual([]);
+  });
+
   it('routes a browser hand-off to inputs: a person is needed at the window', () => {
     const lanes = partitionLanes([item('browser_handoff', { id: 'browser_handoff:abc' })]);
     expect(lanes.inputs.map((it) => it.id)).toEqual(['browser_handoff:abc']);
