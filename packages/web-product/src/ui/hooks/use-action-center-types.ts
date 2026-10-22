@@ -103,6 +103,11 @@ export type ActionCenterItemOrigin =
       message: string;
       startedAt: string;
       waiting: Array<{ runId: string; stepExecutionId: string; sessionId?: string }>;
+    }
+  | {
+      type: 'plan_decision';
+      nodeId: string;
+      revision: number;
     };
 
 export interface CoachProposalExtension {

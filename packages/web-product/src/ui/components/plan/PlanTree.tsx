@@ -5,12 +5,23 @@
  * under its parent in position order, a closed node with how it ended, and
  * what was done for each — its links and the runs in flight serving it.
  *
- * Read-only on purpose. The plan is written by the Helmsman's `plan.node.*`
- * operations; an operator's own writes are the next slice and arrive through
- * the same engine, not through this component.
+ * Given `onClose`, an open node also offers the operator's own writes (P3.2):
+ * mark it done with how its criteria were met — for a `decide` node, the
+ * choice — or drop it, and the branch under it with it. The component only
+ * asks; the page writes through the plan engine, against the revision this
+ * tree was read at, and a node changed since is refused rather than overwritten.
  */
+import { useState } from 'react';
 import Link from 'next/link';
-import { Badge, Column, Row, Text, type BadgeVariant } from '@aflow/design-system';
+import {
+  Badge,
+  Button,
+  Column,
+  Row,
+  Text,
+  Textarea,
+  type BadgeVariant,
+} from '@aflow/design-system';
 import type {
   PlanNodeKind,
   PlanNodeLink,
@@ -96,8 +107,154 @@ function PlanRunItem({ run, spaceSlug }: { run: PlanNodeRun; spaceSlug: string }
   );
 }
 
-function PlanNodeItem({ node, spaceSlug }: { node: PlanTreeNode; spaceSlug: string }) {
-  const closed = node.status === 'done' || node.status === 'dropped';
+/** What the operator asks of one node: close it, against the revision they read. */
+export interface PlanNodeCloseRequest {
+  nodeId: string;
+  expectedRevision: number;
+  status: 'done' | 'dropped';
+  outcome?: string;
+}
+
+export type PlanNodeCloseAnswer = { ok: true } | { ok: false; message: string };
+
+export type PlanNodeCloser = (request: PlanNodeCloseRequest) => Promise<PlanNodeCloseAnswer>;
+
+function isClosed(status: PlanNodeStatus): boolean {
+  return status === 'done' || status === 'dropped';
+}
+
+const CLOSING_COPY: Record<
+  'done' | 'decide' | 'dropped',
+  { open: string; field: string; confirm: string }
+> = {
+  done: { open: 'Mark done', field: 'How its criteria were met', confirm: 'Mark done' },
+  decide: {
+    open: 'Decide',
+    field: 'Your decision — recorded as its outcome',
+    confirm: 'Record decision',
+  },
+  dropped: { open: 'Drop', field: 'Why it is dropped (optional)', confirm: 'Drop' },
+};
+
+function PlanNodeCloseControl({ node, onClose }: { node: PlanTreeNode; onClose: PlanNodeCloser }) {
+  const [choosing, setChoosing] = useState<'done' | 'dropped' | null>(null);
+  const [text, setText] = useState('');
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const openUnder = node.children.some((child) => !isClosed(child.status));
+
+  const copyFor = (status: 'done' | 'dropped') =>
+    CLOSING_COPY[status === 'done' && node.kind === 'decide' ? 'decide' : status];
+
+  if (choosing === null) {
+    return (
+      <Row gap="xs" align="center">
+        <Button
+          size="sm"
+          variant="secondary"
+          onClick={() => {
+            setChoosing('done');
+          }}
+        >
+          {copyFor('done').open}
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => {
+            setChoosing('dropped');
+          }}
+        >
+          {openUnder ? 'Drop branch' : copyFor('dropped').open}
+        </Button>
+      </Row>
+    );
+  }
+
+  const copy = copyFor(choosing);
+  const outcome = text.trim();
+  const submit = async () => {
+    setPending(true);
+    setError(null);
+    const answer = await onClose({
+      nodeId: node.nodeId,
+      expectedRevision: node.revision,
+      status: choosing,
+      ...(outcome.length > 0 ? { outcome } : {}),
+    });
+    setPending(false);
+    if (answer.ok) {
+      setChoosing(null);
+      setText('');
+    } else {
+      setError(answer.message);
+    }
+  };
+
+  return (
+    <Column gap="xs" data-plan-close={choosing}>
+      <Textarea
+        aria-label={copy.field}
+        placeholder={copy.field}
+        value={text}
+        rows={3}
+        disabled={pending}
+        onChange={(event) => {
+          setText(event.target.value);
+        }}
+      />
+      {choosing === 'dropped' && openUnder && (
+        <Text size="xs" variant="muted">
+          The open steps under it leave the plan with it.
+        </Text>
+      )}
+      {error !== null && (
+        <Text size="sm" tone="danger" role="alert">
+          {error}
+        </Text>
+      )}
+      <Row gap="xs" align="center">
+        <Button
+          size="sm"
+          variant={choosing === 'dropped' ? 'danger' : 'primary'}
+          loading={pending}
+          disabled={pending || (choosing === 'done' && outcome.length === 0)}
+          onClick={() => {
+            void submit();
+          }}
+        >
+          {choosing === 'dropped' && openUnder ? 'Drop branch' : copy.confirm}
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={pending}
+          onClick={() => {
+            setChoosing(null);
+            setText('');
+            setError(null);
+          }}
+        >
+          Cancel
+        </Button>
+      </Row>
+    </Column>
+  );
+}
+
+function PlanNodeItem({
+  node,
+  spaceSlug,
+  onClose,
+  underClosed,
+}: {
+  node: PlanTreeNode;
+  spaceSlug: string;
+  onClose: PlanNodeCloser | undefined;
+  /** Some node above it is closed: it left the plan with that branch. */
+  underClosed: boolean;
+}) {
+  const closed = isClosed(node.status);
   const moreLinks = node.linksTotal - node.links.length;
   return (
     <li data-plan-node={node.nodeId} data-status={node.status}>
@@ -145,9 +302,21 @@ function PlanNodeItem({ node, spaceSlug }: { node: PlanTreeNode; spaceSlug: stri
             {`${String(moreLinks)} older link${moreLinks === 1 ? '' : 's'} not shown`}
           </Text>
         )}
+        {!closed && !underClosed && node.kind === 'decide' && (
+          <Text size="sm" variant="muted">
+            Waiting on your decision — here or in the Action Center.
+          </Text>
+        )}
+        {!closed && onClose !== undefined && <PlanNodeCloseControl node={node} onClose={onClose} />}
       </Column>
       {node.children.length > 0 && (
-        <PlanNodeList nodes={node.children} spaceSlug={spaceSlug} nested />
+        <PlanNodeList
+          nodes={node.children}
+          spaceSlug={spaceSlug}
+          onClose={onClose}
+          underClosed={underClosed || closed}
+          nested
+        />
       )}
     </li>
   );
@@ -156,10 +325,14 @@ function PlanNodeItem({ node, spaceSlug }: { node: PlanTreeNode; spaceSlug: stri
 function PlanNodeList({
   nodes,
   spaceSlug,
+  onClose,
+  underClosed,
   nested = false,
 }: {
   nodes: readonly PlanTreeNode[];
   spaceSlug: string;
+  onClose: PlanNodeCloser | undefined;
+  underClosed: boolean;
   nested?: boolean;
 }) {
   return (
@@ -177,7 +350,13 @@ function PlanNodeList({
       }}
     >
       {nodes.map((node) => (
-        <PlanNodeItem key={node.nodeId} node={node} spaceSlug={spaceSlug} />
+        <PlanNodeItem
+          key={node.nodeId}
+          node={node}
+          spaceSlug={spaceSlug}
+          onClose={onClose}
+          underClosed={underClosed}
+        />
       ))}
     </ul>
   );
@@ -188,8 +367,10 @@ export interface PlanTreeProps {
   roots: readonly PlanTreeNode[];
   /** The space's slug, which internal links are built under. */
   spaceSlug: string;
+  /** Writes the operator's close of a node; without it the tree is read-only. */
+  onClose?: PlanNodeCloser;
 }
 
-export function PlanTree({ roots, spaceSlug }: PlanTreeProps) {
-  return <PlanNodeList nodes={roots} spaceSlug={spaceSlug} />;
+export function PlanTree({ roots, spaceSlug, onClose }: PlanTreeProps) {
+  return <PlanNodeList nodes={roots} spaceSlug={spaceSlug} onClose={onClose} underClosed={false} />;
 }

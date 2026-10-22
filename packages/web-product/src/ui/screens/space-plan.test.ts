@@ -16,13 +16,41 @@ import type { PlanTreeNode, PlanTreeOutput } from '@aflow/schemas';
 const recorded = vi.hoisted(() => ({
   query: undefined as unknown,
   result: {} as { data?: unknown; isLoading?: boolean; error?: Error | null },
+  refetch: vi.fn(),
+  mutation: undefined as
+    | {
+        path: (input: { nodeId: string }) => string;
+        method: string;
+        serialize: (input: Record<string, unknown>) => string;
+        invalidate: unknown[];
+      }
+    | undefined,
+  mutateAsync: vi.fn(),
 }));
 
 vi.mock('@aflow/design-system', () => {
   const block =
     (tag: string) =>
-    ({ children, title }: { children?: ReactNode; title?: string }) =>
-      createElement(tag, title !== undefined ? { title } : null, children);
+    ({
+      children,
+      title,
+      role,
+      ...rest
+    }: {
+      children?: ReactNode;
+      title?: string;
+      role?: string;
+      [key: string]: unknown;
+    }) =>
+      createElement(
+        tag,
+        {
+          ...(title !== undefined ? { title } : {}),
+          ...(role !== undefined ? { role } : {}),
+          ...Object.fromEntries(Object.entries(rest).filter(([key]) => key.startsWith('data-'))),
+        },
+        children,
+      );
   return {
     Badge: block('span'),
     Card: block('div'),
@@ -33,6 +61,22 @@ vi.mock('@aflow/design-system', () => {
     PageContainer: block('main'),
     Row: block('div'),
     Text: block('span'),
+    Button: ({
+      children,
+      onClick,
+      disabled,
+    }: {
+      children?: ReactNode;
+      onClick?: () => void;
+      disabled?: boolean;
+    }) => createElement('button', { type: 'button', onClick, disabled }, children),
+    Textarea: (props: Record<string, unknown>) =>
+      createElement('textarea', {
+        'aria-label': props['aria-label'],
+        value: props['value'],
+        onChange: props['onChange'],
+        disabled: props['disabled'],
+      }),
   };
 });
 
@@ -48,7 +92,17 @@ vi.mock('../components/providers.js', () => ({
 vi.mock('../hooks/useApiQuery.js', () => ({
   useApiQuery: (options: unknown) => {
     recorded.query = options;
-    return { data: undefined, isLoading: false, error: null, ...recorded.result };
+    return {
+      data: undefined,
+      isLoading: false,
+      error: null,
+      refetch: recorded.refetch,
+      ...recorded.result,
+    };
+  },
+  useApiMutation: (options: typeof recorded.mutation) => {
+    recorded.mutation = options;
+    return { mutateAsync: recorded.mutateAsync };
   },
 }));
 
@@ -165,6 +219,9 @@ function anchor(scope: Element, text: string): HTMLAnchorElement {
 beforeEach(() => {
   recorded.query = undefined;
   recorded.result = {};
+  recorded.mutation = undefined;
+  recorded.refetch.mockReset();
+  recorded.mutateAsync.mockReset();
   container = document.createElement('div');
   document.body.append(container);
   root = createRoot(container);
@@ -273,5 +330,165 @@ describe('SpacePlanPage', () => {
 
     expect(container.textContent).toContain('The plan could not be read: Permission denied');
     expect(container.textContent).not.toContain('no plan yet');
+  });
+});
+
+/** The node's own controls, not those of the nodes nested under it. */
+function ownControls(nodeId: string): Element {
+  const found = nodeItem(nodeId).querySelector(':scope > div');
+  if (!found) throw new Error(`no body for ${nodeId}`);
+  return found;
+}
+
+function button(scope: Element, text: string): HTMLButtonElement {
+  const found = [...scope.querySelectorAll('button')].find((b) => b.textContent === text);
+  if (!found) throw new Error(`no button reading ${text}`);
+  return found;
+}
+
+async function click(target: HTMLButtonElement): Promise<void> {
+  await act(async () => {
+    target.click();
+  });
+}
+
+async function type(scope: Element, text: string): Promise<void> {
+  const field = scope.querySelector('textarea');
+  if (!field) throw new Error('no text field');
+  const setValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!;
+  await act(async () => {
+    setValue.call(field, text);
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+}
+
+describe('SpacePlanPage — the operator’s writes', () => {
+  it('offers an open node done or dropped, a node with open steps under it as a branch, and a closed node nothing', async () => {
+    await render({ data: PLAN });
+
+    expect(
+      [...ownControls(UNDER_FIRST).querySelectorAll('button')].map((b) => b.textContent),
+    ).toEqual(['Mark done', 'Drop']);
+    expect(button(ownControls(FIRST), 'Drop branch')).toBeTruthy();
+    expect(ownControls(SECOND).querySelectorAll('button')).toHaveLength(0);
+  });
+
+  it('marks a node done with how its criteria were met, against the revision the page read', async () => {
+    recorded.mutateAsync.mockResolvedValue({ node: {} });
+    await render({ data: PLAN });
+
+    await click(button(ownControls(UNDER_FIRST), 'Mark done'));
+    const confirm = button(ownControls(UNDER_FIRST), 'Mark done');
+    expect(confirm.disabled).toBe(true);
+    await type(ownControls(UNDER_FIRST), '  The route and its test landed.  ');
+    expect(confirm.disabled).toBe(false);
+    await click(confirm);
+
+    expect(recorded.mutateAsync).toHaveBeenCalledWith({
+      nodeId: UNDER_FIRST,
+      expectedRevision: 1,
+      status: 'done',
+      outcome: 'The route and its test landed.',
+    });
+    // The form closes once written; the tree re-reads through the invalidated query.
+    expect(ownControls(UNDER_FIRST).querySelector('textarea')).toBe(null);
+  });
+
+  it('writes through the plan route: PATCH on the node, the body without its id, the plan re-read', async () => {
+    await render({ data: PLAN });
+
+    const mutation = recorded.mutation!;
+    expect(mutation.method).toBe('PATCH');
+    expect(mutation.path({ nodeId: FIRST })).toBe(`/spaces/${SPACE_ID}/plan/nodes/${FIRST}`);
+    expect(
+      JSON.parse(mutation.serialize({ nodeId: FIRST, expectedRevision: 2, status: 'dropped' })),
+    ).toEqual({ expectedRevision: 2, status: 'dropped' });
+    expect(mutation.invalidate).toEqual([['space', SPACE_ID, 'plan']]);
+  });
+
+  it('drops a branch with no reason needed, saying the steps under it go with it', async () => {
+    recorded.mutateAsync.mockResolvedValue({ node: {} });
+    await render({ data: PLAN });
+
+    await click(button(ownControls(FIRST), 'Drop branch'));
+    expect(ownControls(FIRST).textContent).toContain(
+      'The open steps under it leave the plan with it.',
+    );
+    await click(button(ownControls(FIRST), 'Drop branch'));
+
+    expect(recorded.mutateAsync).toHaveBeenCalledWith({
+      nodeId: FIRST,
+      expectedRevision: 1,
+      status: 'dropped',
+    });
+  });
+
+  it('shows a refusal in place, and on a stale revision reads the plan again', async () => {
+    recorded.mutateAsync.mockRejectedValue(
+      Object.assign(new Error('This step changed since the plan was read: it is at revision 2.'), {
+        status: 409,
+      }),
+    );
+    await render({ data: PLAN });
+
+    await click(button(ownControls(UNDER_FIRST), 'Drop'));
+    await click(button(ownControls(UNDER_FIRST), 'Drop'));
+
+    expect(ownControls(UNDER_FIRST).querySelector('[role="alert"]')?.textContent).toContain(
+      'it is at revision 2',
+    );
+    expect(recorded.refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not re-read the plan for a refusal that is not about the revision', async () => {
+    recorded.mutateAsync.mockRejectedValue(
+      Object.assign(new Error('Permission denied'), { status: 403 }),
+    );
+    await render({ data: PLAN });
+
+    await click(button(ownControls(UNDER_FIRST), 'Drop'));
+    await click(button(ownControls(UNDER_FIRST), 'Drop'));
+
+    expect(ownControls(UNDER_FIRST).textContent).toContain('Permission denied');
+    expect(recorded.refetch).not.toHaveBeenCalled();
+  });
+
+  it('asks a decision for the operator’s choice, and records it as the outcome', async () => {
+    const DECISION = '00000000-0000-4000-8000-0000000000a5';
+    const ORPHAN = '00000000-0000-4000-8000-0000000000a6';
+    recorded.mutateAsync.mockResolvedValue({ node: {} });
+    await render({
+      data: {
+        roots: [
+          treeNode(DECISION, null, 'Where the decide answer is recorded', {
+            kind: 'decide',
+            revision: 3,
+          }),
+          treeNode(SECOND, null, 'A dropped branch', {
+            status: 'dropped',
+            position: 1,
+            children: [treeNode(ORPHAN, SECOND, 'A choice left behind', { kind: 'decide' })],
+          }),
+        ],
+        runsTotal: 0,
+      },
+    });
+
+    expect(ownControls(DECISION).textContent).toContain('Waiting on your decision');
+    expect(ownControls(ORPHAN).textContent).not.toContain('Waiting on your decision');
+
+    await click(button(ownControls(DECISION), 'Decide'));
+    expect(ownControls(DECISION).querySelector('textarea')?.getAttribute('aria-label')).toContain(
+      'Your decision',
+    );
+    await type(ownControls(DECISION), 'In the node’s outcome.');
+    await click(button(ownControls(DECISION), 'Record decision'));
+
+    expect(recorded.mutateAsync).toHaveBeenCalledWith({
+      nodeId: DECISION,
+      expectedRevision: 3,
+      status: 'done',
+      outcome: 'In the node’s outcome.',
+    });
   });
 });

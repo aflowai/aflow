@@ -16,6 +16,7 @@ import { createWorkflowOAuthConsentSource } from './sources/workflowOAuthConsent
 import { createWorkflowWriteApprovalSource } from './sources/workflowWriteApprovalSource.js';
 import { createSessionInvitationSource } from './sources/sessionInvitationSource.js';
 import { createBrowserHandoffSource } from './sources/browserHandoffSource.js';
+import { createPlanDecisionSource } from './sources/planDecisionSource.js';
 
 export interface BuildSpaceActionCenterAggregatorDeps {
   db: PostgresJsDatabase;
@@ -49,6 +50,7 @@ export function buildSpaceActionCenterAggregator(
       createWorkflowWriteApprovalSource(sourceDeps),
       createSessionInvitationSource(sourceDeps),
       createBrowserHandoffSource(sourceDeps),
+      createPlanDecisionSource(sourceDeps),
     ],
   });
 }

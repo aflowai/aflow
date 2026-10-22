@@ -57,7 +57,12 @@ its note, against the revision the conversation read: a node another conversatio
 meanwhile is refused with its current state rather than overwritten, and a node is marked
 `done` only with the outcome that met its criteria. The operator reads the same tree on the
 space's **Plan** page (`GET /v1/spaces/:spaceId/plan`): every node, its outcome, its links and
-the runs in flight for it, with no Helmsman turn needed to ask.
+the runs in flight for it, with no Helmsman turn needed to ask. The operator writes it there
+too (`PATCH /v1/spaces/:spaceId/plan/nodes/:nodeId`): **Mark done** with an outcome, or
+**Drop** a node and the branch under it, through the same engine and against the revision the
+page read, so a conversation and the page cannot overwrite each other. A node of kind
+`decide` is the operator's: it raises a **Decide** item in the Action Center, the answer is
+its outcome as it is marked done, and no firing commissions it (`wait`, `awaiting_decision`).
 
 1. **Brief Helmsman**, one message, numbered. Part 1 is the commission: a run of the
    catalog's Commission Change started with `wait: 'none'` and the node's `planNodeId`, so
@@ -198,7 +203,8 @@ the decision asks the firing to read (`read_pull_request`) and pass back:
   writes the decision's `link` with `plan.node.link`, the record that the merge was judged, and
   asks again, and the stream moves on. A write refused on the revision ends the firing as
   `wait`.
-- `wait` — the node is `blocked`; another firing claimed the same state for a `continue`
+- `wait` — the node is `blocked`; it is a `decide` node, whose answer is the operator's
+  (`awaiting_decision`); another firing claimed the same state for a `continue`
   (`claimed`); a run of it or of any node under it is in flight, or paused in the attention
   items; its pull request is open; a read failed — including a read of the nodes under it
   that stopped at its bound, which cannot show nothing runs below; or its state is one no

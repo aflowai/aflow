@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { buildOperationId } from '../../catalog/operationId.js';
 import {
   OPEN_PLAN_NODE_STATUSES,
+  PlanNodeCloseSchema,
   PlanNodeCreateSchema,
   PlanNodeLinkCreateSchema,
   PlanNodeLinkSchema,
@@ -190,6 +191,24 @@ export const PlanTreeOutputSchema = z.object({
 export type PlanTreeOutput = z.infer<typeof PlanTreeOutputSchema>;
 
 // ============================================================================
+// The operator's writes (Plan 322 P3.2)
+// ============================================================================
+
+/** `PATCH /v1/spaces/:spaceId/plan/nodes/:nodeId` — the operator closes a node. */
+export const PlanNodeCloseInputSchema = PlanNodeCloseSchema;
+export type PlanNodeCloseInput = z.infer<typeof PlanNodeCloseInputSchema>;
+
+/** An operator's write the engine refused, with what a retry needs. */
+export const PlanNodeWriteRefusalSchema = z.object({
+  error: z.string().describe('The engine’s code, e.g. `PLAN_NODE_STALE`.'),
+  message: z.string(),
+  current: PlanNodeRefusalDetailsSchema.optional().describe(
+    'For a stale or unchanged write: the node as it now stands — write again against `current.revision`.',
+  ),
+});
+export type PlanNodeWriteRefusal = z.infer<typeof PlanNodeWriteRefusalSchema>;
+
+// ============================================================================
 // plan.node.link
 // ============================================================================
 
@@ -316,6 +335,7 @@ export type PlanStreamBriefNode = z.infer<typeof PlanStreamBriefNodeSchema>;
 export const PlanStreamWaitCauseSchema = z.enum([
   'stream_closed',
   'blocked',
+  'awaiting_decision',
   'in_flight',
   'claimed',
   'pull_request_open',

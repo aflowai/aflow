@@ -33,6 +33,7 @@ import {
   type PlanTreeNode,
   type PlanTreeOutput,
 } from '@aflow/schemas';
+import { publishActionCenterWake } from '@aflow/redis';
 import { bumpAttentionGeneration } from '../attentionCache.js';
 import { findPlanRoots, nestPlanTree, orderPlanTree, type PlanTreeWalkBounds } from './tree.js';
 import type { PlanNodePatch, PlanNodeStore, PlanPlacementRefusal } from './store.js';
@@ -242,6 +243,20 @@ async function written<T>(ctx: PlanWriteContext, value: T): Promise<T> {
   return value;
 }
 
+/**
+ * A `decide` node's Action Center item is read from the nodes themselves, so
+ * any node write — a decision created, rewritten or closed, or a branch above
+ * one closed — can change what the space's Action Center shows.
+ */
+async function nodeWritten<T>(ctx: PlanWriteContext, value: T): Promise<T> {
+  publishActionCenterWake(ctx.redis, {
+    source: 'plan_node_write',
+    tenantId: ctx.tenantId,
+    spaceId: ctx.spaceId,
+  });
+  return written(ctx, value);
+}
+
 // ============================================================================
 // plan.node.create
 // ============================================================================
@@ -263,7 +278,7 @@ export async function createPlanNode(
     createdBy: ctx.createdBy ?? null,
   });
   if (inserted.outcome === 'inserted') {
-    return written(ctx, { ok: true as const, node: inserted.node });
+    return nodeWritten(ctx, { ok: true as const, node: inserted.node });
   }
   if (parentId === null) throw new Error('the plan store refused a place to a root');
   return placementRefusal(inserted, null, parentId);
@@ -337,7 +352,7 @@ export async function updatePlanNode(
     const now = await ctx.store.find(ctx.spaceId, input.nodeId);
     return now ? stale(now, input) : notFound(input.nodeId);
   }
-  return written(ctx, { ok: true as const, node });
+  return nodeWritten(ctx, { ok: true as const, node });
 }
 
 // ============================================================================
@@ -445,6 +460,54 @@ export async function readPlanTrees(ctx: PlanReadContext): Promise<PlanTreeOutpu
     runsTotal: runs.total,
     ...(walk.truncated !== undefined ? { truncated: walk.truncated } : {}),
   };
+}
+
+// ============================================================================
+// The decisions the plan asks of the operator (Plan 322 P3.2)
+// ============================================================================
+
+/** The most open `decide` nodes the space's Action Center lists at once. */
+export const PLAN_OPEN_DECISIONS_LIMIT = 50;
+
+/**
+ * The space's open `decide` nodes, in tree order, whose every ancestor is open
+ * too: a decision under a closed branch left the plan with it. Read through
+ * the walk every read of the plan takes, so its bounds hold here as well.
+ */
+export async function listOpenDecisions(ctx: PlanReadContext): Promise<PlanNode[]> {
+  const walk = await ctx.store.walk(ctx.spaceId, {
+    statuses: OPEN_PLAN_NODE_STATUSES,
+    ...PLAN_TREE_WALK_BOUNDS,
+  });
+  const decisions = orderPlanTree(walk.nodes)
+    .map((placed) => placed.node)
+    .filter((node) => node.kind === 'decide')
+    .slice(0, PLAN_OPEN_DECISIONS_LIMIT);
+  const nodes = await Promise.all(decisions.map((d) => ctx.store.find(ctx.spaceId, d.nodeId)));
+  // Re-judged on the full read: a node closed between the walk and here is not asked.
+  return nodes.filter(
+    (node): node is PlanNode =>
+      node !== null && node.kind === 'decide' && !isClosedPlanNodeStatus(node.status),
+  );
+}
+
+/**
+ * One open `decide` node by id, by the rule `listOpenDecisions` lists by;
+ * null for any other node, a closed one, or one under a closed branch.
+ */
+export async function findOpenDecision(
+  ctx: PlanReadContext,
+  nodeId: string,
+): Promise<PlanNode | null> {
+  const node = await ctx.store.find(ctx.spaceId, nodeId);
+  if (node?.kind !== 'decide' || isClosedPlanNodeStatus(node.status)) return null;
+  let parentId = node.parentId;
+  for (let depth = 0; parentId !== null && depth < PLAN_TREE_DEPTH_LIMIT; depth++) {
+    const parent = await ctx.store.find(ctx.spaceId, parentId);
+    if (!parent || isClosedPlanNodeStatus(parent.status)) return null;
+    parentId = parent.parentId;
+  }
+  return parentId === null ? node : null;
 }
 
 // ============================================================================

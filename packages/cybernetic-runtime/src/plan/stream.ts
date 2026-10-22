@@ -372,7 +372,8 @@ function latestRoundSinceWrite(
 
 /**
  * The firing's decision on the active node, the first rule that holds
- * deciding: a blocked node is the person's, whatever its pull request says;
+ * deciding: a blocked node is the person's, whatever its pull request says,
+ * and a `decide` node is the operator's to answer;
  * `wait` while its own work is in flight, or the read of the nodes under it
  * stopped at a bound before it could show none is; a merge of its newest pull request
  * nobody has acted on is recorded next; then `wait` while that pull request
@@ -384,6 +385,15 @@ export function decideStreamFiring(facts: PlanStreamFacts): PlanNodeNextOutput {
   const { node } = facts;
   if (node.status === 'blocked') {
     return wait('blocked', `"${node.title}" is blocked, waiting on a person.`, node);
+  }
+  // A decision is the operator's choice, not a run's work (D2): its Action
+  // Center item asks for it, and the walk passes it once the answer closes it.
+  if (node.kind === 'decide') {
+    return wait(
+      'awaiting_decision',
+      `"${node.title}" is a decision, the operator's to make in the Action Center or on the plan page; the stream holds until it is answered.`,
+      node,
+    );
   }
 
   // The node's own work settles before any merge is judged: a merge read while a

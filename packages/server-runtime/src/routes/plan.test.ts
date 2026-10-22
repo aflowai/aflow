@@ -1,18 +1,23 @@
 /**
- * GET /v1/spaces/:spaceId/plan — the operator's read of the space's plan
- * (Plan 322 P3): whole trees as the plan engine reads them, for a caller who
- * may read the space named in the URL, and for no other.
+ * The operator's plan routes (Plan 322 P3). GET /v1/spaces/:spaceId/plan reads
+ * whole trees as the plan engine reads them, for a caller who may read the
+ * space named in the URL, and for no other. PATCH …/plan/nodes/:nodeId closes
+ * a node through the engine's update — compare-and-set on the revision the
+ * operator read, a stale one refused with the node's current revision — for a
+ * person who may write the space, stamped with who they are.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
-import type { PlanTreeNode, PlanTreeOutput } from '@aflow/schemas';
+import type { PlanNode, PlanTreeNode, PlanTreeOutput } from '@aflow/schemas';
 
 const mockReadPlanTrees = vi.fn();
+const mockUpdatePlanNode = vi.fn();
 const mockCreatePlanNodeStore = vi.fn((..._args: unknown[]) => ({ store: 'tenant-store' }));
 
 vi.mock('@aflow/cybernetic-runtime', () => ({
   readPlanTrees: (...a: unknown[]) => mockReadPlanTrees(...a),
+  updatePlanNode: (...a: unknown[]) => mockUpdatePlanNode(...a),
   createPlanNodeStore: (...a: unknown[]) => mockCreatePlanNodeStore(...a),
 }));
 
@@ -87,14 +92,24 @@ const TREES: PlanTreeOutput = {
   runsTotal: 1,
 };
 
-/** Who is asking, and which spaces they may read. */
-const caller = { authenticated: true, readable: new Set<string>([SPACE_ID]) };
+/** Who is asking, which spaces they may read and write, and whether they are an agent. */
+const caller = {
+  authenticated: true,
+  readable: new Set<string>([SPACE_ID]),
+  writable: new Set<string>([SPACE_ID]),
+  servicePrincipal: false,
+};
+const OPERATOR_ID = 'u0000000-0000-4000-8000-0000000000e1';
+const REDIS = { redis: 'shared' };
+const appContext: { db: unknown; redis: unknown } = { db: DB, redis: REDIS };
+const audit = { record: vi.fn() };
 
 async function buildApp(): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
-  (app as unknown as { appContext: unknown }).appContext = { db: DB };
+  (app as unknown as { appContext: unknown }).appContext = appContext;
+  app.decorate('audit', audit);
   app.decorate('authenticate', async (_request: FastifyRequest, reply: FastifyReply) => {
     if (!caller.authenticated) {
       await reply.status(401).send({ error: 'Unauthorized', message: 'Sign in.' });
@@ -104,6 +119,13 @@ async function buildApp(): Promise<FastifyInstance> {
     (request as unknown as { requireTenant: () => Promise<unknown> }).requireTenant = async () => ({
       tenantId: TENANT_ID,
     });
+    (request as unknown as { authUser: unknown }).authUser = caller.authenticated
+      ? {
+          userId: OPERATOR_ID,
+          authMethod: caller.servicePrincipal ? 'api_key' : 'session',
+          isServicePrincipal: caller.servicePrincipal,
+        }
+      : undefined;
   });
   // The central authz preHandler, as it reads a route's declaration: the
   // resource and action, and the param naming the space it is checked on.
@@ -115,12 +137,13 @@ async function buildApp(): Promise<FastifyInstance> {
     }
     const params = request.params as Record<string, string>;
     const spaceId = params[authz.resourceIdParam ?? 'spaceId'];
+    const granted = authz.action === 'write' ? caller.writable : caller.readable;
     const allowed =
       authz.resource === 'space' &&
-      authz.action === 'read' &&
+      (authz.action === 'read' || authz.action === 'write') &&
       authz.resourceIdFrom === 'param' &&
       spaceId !== undefined &&
-      caller.readable.has(spaceId);
+      granted.has(spaceId);
     if (!allowed) {
       await reply.status(403).send({ error: 'Forbidden', message: 'Permission denied' });
     }
@@ -136,6 +159,9 @@ beforeEach(async () => {
   vi.clearAllMocks();
   caller.authenticated = true;
   caller.readable = new Set([SPACE_ID]);
+  caller.writable = new Set([SPACE_ID]);
+  caller.servicePrincipal = false;
+  appContext.redis = REDIS;
   mockReadPlanTrees.mockResolvedValue(TREES);
   app = await buildApp();
 });
@@ -202,5 +228,170 @@ describe('GET /v1/spaces/:spaceId/plan', () => {
 
     expect(res.statusCode).toBe(400);
     expect(mockReadPlanTrees).not.toHaveBeenCalled();
+  });
+});
+
+describe('PATCH /v1/spaces/:spaceId/plan/nodes/:nodeId', () => {
+  const url = `/v1/spaces/${SPACE_ID}/plan/nodes/${CHILD_ID}`;
+
+  function closedNode(extra: Partial<PlanNode> = {}): PlanNode {
+    return {
+      nodeId: CHILD_ID,
+      spaceId: SPACE_ID,
+      parentId: ROOT_ID,
+      kind: 'execute',
+      title: 'P3.2 operator writes',
+      goal: 'The operator acts on the plan.',
+      criteria: 'A node marked done from the page.',
+      status: 'done',
+      outcome: 'Merged.',
+      revision: 4,
+      position: 0,
+      createdAt: '2026-10-05T08:00:00.000Z',
+      updatedAt: '2026-10-05T11:00:00.000Z',
+      closedAt: '2026-10-05T11:00:00.000Z',
+      ...extra,
+    };
+  }
+
+  function patch(body: unknown) {
+    return app.inject({ method: 'PATCH', url, payload: body as Record<string, unknown> });
+  }
+
+  it('marks a node done through the engine, against the revision the operator read, stamped with who they are', async () => {
+    mockUpdatePlanNode.mockResolvedValue({ ok: true, node: closedNode() });
+
+    const res = await patch({ expectedRevision: 3, status: 'done', outcome: 'Merged.' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ node: closedNode() });
+    expect(mockCreatePlanNodeStore).toHaveBeenCalledWith(DB, TENANT_ID);
+    expect(mockUpdatePlanNode).toHaveBeenCalledWith(
+      {
+        store: { store: 'tenant-store' },
+        spaceId: SPACE_ID,
+        redis: REDIS,
+        tenantId: TENANT_ID,
+        createdBy: OPERATOR_ID,
+      },
+      { nodeId: CHILD_ID, expectedRevision: 3, status: 'done', outcome: 'Merged.' },
+    );
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actor: expect.objectContaining({ userId: OPERATOR_ID, kind: 'human' }),
+        action: 'plan.node.close',
+        target: expect.objectContaining({ resourceType: 'plan_node', resourceId: CHILD_ID }),
+        details: { status: 'done', revision: 4 },
+      }),
+    );
+  });
+
+  it('drops a node, with or without a reason', async () => {
+    mockUpdatePlanNode.mockResolvedValue({
+      ok: true,
+      node: closedNode({ status: 'dropped', outcome: undefined }),
+    });
+
+    const res = await patch({ expectedRevision: 3, status: 'dropped' });
+
+    expect(res.statusCode).toBe(200);
+    expect(mockUpdatePlanNode.mock.calls[0]?.[1]).toEqual({
+      nodeId: CHILD_ID,
+      expectedRevision: 3,
+      status: 'dropped',
+    });
+  });
+
+  it('refuses a stale revision with the node’s current one, and writes nothing more', async () => {
+    const current = {
+      nodeId: CHILD_ID,
+      revision: 5,
+      status: 'blocked',
+      updatedAt: '2026-10-05T10:30:00.000Z',
+      differingFields: ['status', 'outcome'],
+    };
+    mockUpdatePlanNode.mockResolvedValue({
+      ok: false,
+      code: 'PLAN_NODE_STALE',
+      message: 'engine words for the Helmsman',
+      details: current,
+    });
+
+    const res = await patch({ expectedRevision: 3, status: 'done', outcome: 'Merged.' });
+
+    expect(res.statusCode).toBe(409);
+    const body = res.json();
+    expect(body).toMatchObject({ error: 'PLAN_NODE_STALE', current });
+    expect(body.message).toContain('revision 5');
+    expect(body.message).toContain('revision 3');
+    expect(body.message).not.toContain('plan.node.get');
+    expect(audit.record).not.toHaveBeenCalled();
+  });
+
+  it('answers a node not in the space with 404, and an unchanged write with 422', async () => {
+    mockUpdatePlanNode.mockResolvedValueOnce({
+      ok: false,
+      code: 'PLAN_NODE_NOT_FOUND',
+      message: 'No plan node.',
+      details: { nodeId: CHILD_ID },
+    });
+    expect((await patch({ expectedRevision: 3, status: 'dropped' })).statusCode).toBe(404);
+
+    mockUpdatePlanNode.mockResolvedValueOnce({
+      ok: false,
+      code: 'PLAN_NODE_UNCHANGED',
+      message: 'Already so.',
+      details: {
+        nodeId: CHILD_ID,
+        revision: 3,
+        status: 'dropped',
+        updatedAt: '2026-10-05T10:30:00.000Z',
+        differingFields: [],
+      },
+    });
+    const unchanged = await patch({ expectedRevision: 3, status: 'dropped' });
+    expect(unchanged.statusCode).toBe(422);
+    expect(unchanged.json()).toMatchObject({
+      error: 'PLAN_NODE_UNCHANGED',
+      current: { revision: 3 },
+    });
+  });
+
+  it('refuses done without an outcome, and anything but done or dropped, before the engine', async () => {
+    expect((await patch({ expectedRevision: 3, status: 'done' })).statusCode).toBe(400);
+    expect((await patch({ expectedRevision: 3, status: 'active' })).statusCode).toBe(400);
+    expect((await patch({ status: 'dropped' })).statusCode).toBe(400);
+    expect(
+      (await patch({ expectedRevision: 3, status: 'dropped', title: 'renamed' })).statusCode,
+    ).toBe(400);
+    expect(mockUpdatePlanNode).not.toHaveBeenCalled();
+  });
+
+  it('refuses an agent’s credential, whatever its grants: the plan page is a person’s', async () => {
+    caller.servicePrincipal = true;
+
+    const res = await patch({ expectedRevision: 3, status: 'dropped' });
+
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({ error: 'operator_only' });
+    expect(mockUpdatePlanNode).not.toHaveBeenCalled();
+  });
+
+  it('refuses a caller who may read the space but not write it', async () => {
+    caller.writable = new Set();
+
+    const res = await patch({ expectedRevision: 3, status: 'dropped' });
+
+    expect(res.statusCode).toBe(403);
+    expect(mockUpdatePlanNode).not.toHaveBeenCalled();
+  });
+
+  it('says so rather than writing where the server runs without Redis', async () => {
+    appContext.redis = null;
+
+    const res = await patch({ expectedRevision: 3, status: 'dropped' });
+
+    expect(res.statusCode).toBe(503);
+    expect(mockUpdatePlanNode).not.toHaveBeenCalled();
   });
 });

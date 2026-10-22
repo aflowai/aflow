@@ -368,5 +368,11 @@ function originMatches(current: ActionCenterItemOrigin, claimed: ActionCenterIte
         current.site === claimed.site &&
         current.startedAt === claimed.startedAt
       );
+    case 'plan_decision':
+      return (
+        claimed.type === 'plan_decision' &&
+        current.nodeId === claimed.nodeId &&
+        current.revision === claimed.revision
+      );
   }
 }
