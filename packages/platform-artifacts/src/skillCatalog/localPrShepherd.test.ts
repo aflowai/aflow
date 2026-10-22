@@ -163,9 +163,19 @@ interface Scenario {
   /**
    * The pull request's plan node, read through the run ledger: no node holds
    * it (the default), one does with nothing in flight, one does with a run in
-   * flight, the plan under it passed one read's bounds, or the read failed.
+   * flight, one does whose only run in flight is this pass's own, one does
+   * with this pass's run and another's (listed first, or second), the plan under it passed one read's bounds, or the
+   * read failed.
    */
-  planNode?: 'none' | 'idle' | 'in-flight' | 'incomplete' | 'fails';
+  planNode?:
+    | 'none'
+    | 'idle'
+    | 'in-flight'
+    | 'own-run'
+    | 'own-and-in-flight'
+    | 'in-flight-and-own'
+    | 'incomplete'
+    | 'fails';
   remedy?: { value: Remedy | null; decided: boolean } | 'unavailable';
   failingJobs?: number;
   /** What the commission returned: a patch, only the merge, or nothing. */
@@ -599,11 +609,25 @@ function answer(taskId: string, input: Record<string, unknown>, s: Scenario): An
       if (node === 'fails') return { ok: false };
       // A node holds the pull request only by its URL, as Local Publish linked it.
       const held = node !== 'none' && query.servingNodeOfPullRequest === PULL_REQUEST_URL;
+      // The read lists every run serving the node, this pass's own among them.
+      const other = {
+        id: 'node-run',
+        status: 'running',
+        startedAt: '2026-10-18T07:30:00Z',
+        own: false,
+      };
+      const self = { id: RUN_ID, status: 'running', startedAt: '2026-10-18T07:20:00Z', own: true };
+      const listed = {
+        none: [],
+        idle: [],
+        'in-flight': [other],
+        'own-run': [self],
+        'own-and-in-flight': [self, other],
+        'in-flight-and-own': [other, self],
+        incomplete: [],
+      }[node];
       return ok({
-        runs:
-          held && node === 'in-flight'
-            ? [{ id: 'node-run', status: 'running', startedAt: '2026-10-18T07:30:00Z', own: false }]
-            : [],
+        runs: held ? listed : [],
         hasMore: false,
         planNodeIds: held ? [PLAN_NODE] : [],
         complete: node !== 'incomplete',
@@ -1344,6 +1368,8 @@ describe('Local PR Shepherd — the branch’s work is read from its plan node (
 
   it.each([
     ['a run serving the pull request’s plan node, though none is on the branch', 'in-flight'],
+    ['another run serving the node, listed after this pass’s own', 'own-and-in-flight'],
+    ['another run serving the node, listed before this pass’s own', 'in-flight-and-own'],
     ['a node whose plan is larger than one read, so its work is unknown', 'incomplete'],
     ['a node read that failed, so its work is unknown', 'fails'],
   ] as const)('waits on %s, and acts on nothing', (_case, planNode) => {
@@ -1374,6 +1400,15 @@ describe('Local PR Shepherd — the branch’s work is read from its plan node (
     ['its node has nothing in flight', 'idle'],
   ] as const)('acts as before where %s', (_case, planNode) => {
     expect(pass({ planNode }).decision).toBe('fix');
+  });
+
+  it('does not wait on its own run: a pass serving the node, the only run on it, acts', () => {
+    const decide = taskById.get('decide');
+    expect(decide?.inputBindings?.['runId']).toEqual({ kind: 'run_id' });
+    const acted = pass({ planNode: 'own-run' });
+    expect(acted.decision).toBe('fix');
+    expect(acted.outputs.get('decide')?.['reason']).not.toMatch(/plan node/);
+    expect(acted.ran).toContain('fix');
   });
 });
 
