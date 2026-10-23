@@ -1,3 +1,5 @@
+import { SURFACE_GENERATION_EMPTY_ERROR_CODE } from '@aflow/schemas';
+
 import type {
   InlineAppletItem,
   InlineArtifactItem,
@@ -13,11 +15,61 @@ import {
   toISOTimestamp,
   extractSessionSurfaceMutations,
   decodeInlineOutput,
+  extractErrorMessage,
   placeAppletCard,
   isInternalVariable,
 } from '../helpers.js';
 
 import type { SseEventContext } from './sessionLifecycle.js';
+
+/**
+ * A surface step that generated nothing still gets its card, saying why —
+ * an empty card or none at all reads as "the chart is somewhere else". Any
+ * stray streamed mutations (no `createSurface`) cannot paint, so their
+ * `surface-{id}` bubble is dropped with it.
+ */
+function mountFailedSurfaceCard(
+  state: RunViewState,
+  event: SessionEvent,
+  stepExecutionId: string,
+  eventTimestampMs: number,
+): RunViewState {
+  const details = decodeInlineErrorDetails(event.data.errorRef);
+  const surfaceId = typeof details?.surfaceId === 'string' ? details.surfaceId : null;
+  const inlineId = `session:${stepExecutionId}`;
+  const inlineItem: InlineSurfaceItem = {
+    kind: 'inline_surface',
+    itemId: inlineId,
+    anchorStepExecutionId: stepExecutionId,
+    surfaceId: surfaceId ?? 'unknown',
+    isStreaming: false,
+    mutations: [],
+    error: extractErrorMessage(event) ?? 'Surface generation produced no surface.',
+    createdAtMs: eventTimestampMs,
+  };
+  const messages =
+    surfaceId === null
+      ? state.messages
+      : state.messages.filter((m) => m.id !== `surface-${surfaceId}`);
+  return {
+    ...state,
+    messages,
+    inlineItems: { ...state.inlineItems, [inlineId]: inlineItem },
+  };
+}
+
+function decodeInlineErrorDetails(errorRef: unknown): Record<string, unknown> | null {
+  if (typeof errorRef !== 'string') return null;
+  const ref = errorRef.startsWith('inline:error:')
+    ? `inline:${errorRef.slice('inline:error:'.length)}`
+    : errorRef;
+  const decoded = decodeInlineOutput(ref);
+  if (decoded === null || typeof decoded !== 'object') return null;
+  const details = (decoded as Record<string, unknown>).details;
+  return details !== null && typeof details === 'object' && !Array.isArray(details)
+    ? (details as Record<string, unknown>)
+    : null;
+}
 
 export function applyStepEvents(
   state: RunViewState,
@@ -259,6 +311,15 @@ export function applyStepEvents(
         next = { ...next, messages: [...next.messages, interimMsg] };
       }
     }
+  }
+
+  if (
+    event.eventType === 'StepFailed' &&
+    event.metadata?.errorCode === SURFACE_GENERATION_EMPTY_ERROR_CODE &&
+    event.metadata.willRetry !== true &&
+    event.stepExecutionId !== undefined
+  ) {
+    next = mountFailedSurfaceCard(next, event, event.stepExecutionId, eventTimestampMs);
   }
 
   // Step output with runtime state patch → assistant message

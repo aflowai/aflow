@@ -824,6 +824,37 @@ describe('buildToolResultSummary', () => {
       expect(parsed.surfaceId).toBe('sfc-abc');
     });
 
+    it('never claims a surface rendered when it emitted no mutations', () => {
+      const output = {
+        surfaceId: 'surface-d5fc3bc7',
+        snapshot: { rootIds: [], components: {} },
+        mutations: [],
+        mutationCount: 0,
+        componentCount: 0,
+        generationDiagnostics: { errors: ['Invalid JSON'] },
+        presentation: {
+          mode: 'rendered_inline',
+          substrate: 'surface',
+          surfaceId: 'surface-d5fc3bc7',
+        },
+      };
+      const { text, meta } = buildToolResultSummaryWithMeta(output, 'surface-call-empty');
+      expect(meta.kind).not.toBe('rendered_inline');
+      expect(text).not.toContain('"rendered":true');
+      expect(text).not.toContain('already rendered');
+    });
+
+    it('treats a surface output without mutationCount by its mutations array', () => {
+      const output = {
+        surfaceId: 'sfc-empty',
+        mutations: [],
+        presentation: { mode: 'rendered_inline', substrate: 'surface', surfaceId: 'sfc-empty' },
+      };
+      expect(buildToolResultSummary(output, 'surface-call-empty-2')).not.toContain(
+        '"rendered":true',
+      );
+    });
+
     it('applet stub keeps the projection — the get IS the agent read — and carries the no-restate note', () => {
       const output = {
         instance: { instanceId: '00000000-0000-0000-0000-000000000003', appletKey: 'chess' },

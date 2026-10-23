@@ -101,6 +101,8 @@ export interface InlineSurfaceCardItem {
   surfaceId: string;
   isStreaming: boolean;
   mutations: Array<Record<string, unknown>>;
+  /** Set when generation produced no surface; shown instead of a render. */
+  error?: string;
 }
 
 /**
@@ -124,6 +126,15 @@ export function InlineSurfaceCard({ item }: { item: InlineSurfaceCardItem }) {
   // mutations as opaque records (cross-package dep avoidance). Cast at
   // render time — the producer side already validated.
   const mutations = item.mutations as unknown as SurfaceMutation[];
+  if (item.error !== undefined) {
+    return (
+      <Row gap="2" style={{ padding: 'var(--space-3) var(--space-5)' }}>
+        <Text size="sm" tone="danger">
+          {item.error}
+        </Text>
+      </Row>
+    );
+  }
   if (mutations.length === 0) {
     return (
       <Row gap="2" style={{ padding: 'var(--space-3) var(--space-5)' }}>

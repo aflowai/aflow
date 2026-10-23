@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { SURFACE_GENERATION_EMPTY_ERROR_CODE } from '@aflow/schemas';
 
 import { runViewReducer, initialRunViewState } from './reducer.js';
 import type { RunViewState } from './reducer.js';
@@ -2257,6 +2258,77 @@ describe('Plan 158 §4.5.5 — session-scoped inline mount', () => {
     // The surface- message must be dropped so the chat doesn't render
     // the surface twice (once as a bubble, once as an inline card).
     expect(next.messages.some((m) => m.id === 'surface-sfc-1')).toBe(false);
+  });
+
+  const EMPTY_SURFACE_MESSAGE =
+    'Surface sfc-empty was not rendered: no valid createSurface mutation ' +
+    '(1 generation error(s): Invalid JSON).';
+
+  function emptySurfaceFailure(metadata: Record<string, unknown> = {}): SessionEvent {
+    const error = {
+      code: SURFACE_GENERATION_EMPTY_ERROR_CODE,
+      message: EMPTY_SURFACE_MESSAGE,
+      classification: 'validation',
+      retryable: false,
+      details: {
+        surfaceId: 'sfc-empty',
+        mutationCount: 0,
+        errorCount: 1,
+        errors: ['Invalid JSON'],
+      },
+    };
+    return makeEvent(
+      'StepFailed',
+      { errorRef: `inline:${btoa(JSON.stringify(error))}` },
+      {
+        stepExecutionId: STEP_EXEC_ID,
+        metadata: {
+          operationId: 'ui.surface.visualize',
+          errorCode: SURFACE_GENERATION_EMPTY_ERROR_CODE,
+          errorMessage: EMPTY_SURFACE_MESSAGE,
+          ...metadata,
+        },
+      },
+    );
+  }
+
+  it('mounts an inline_surface carrying the error when generation produced no surface', () => {
+    const next = apply(initialRunViewState, emptySurfaceFailure());
+    const item = next.inlineItems[`session:${STEP_EXEC_ID}`];
+    expect(item?.kind).toBe('inline_surface');
+    if (item?.kind === 'inline_surface') {
+      expect(item.surfaceId).toBe('sfc-empty');
+      expect(item.error).toBe(EMPTY_SURFACE_MESSAGE);
+      expect(item.mutations).toEqual([]);
+      expect(item.isStreaming).toBe(false);
+    }
+  });
+
+  it('drops stray streamed mutations that never had a createSurface', () => {
+    const stray = {
+      eventId: crypto.randomUUID(),
+      eventType: 'SurfaceUpdate',
+      sessionId: SESSION_ID,
+      timestamp: '2026-05-22T10:00:00.000Z',
+      sequenceNumber: 0,
+      eventVersion: 1,
+      data: {},
+      surfaceId: 'sfc-empty',
+      surfaceMutations: [{ type: 'completeSurface', surfaceId: 'sfc-empty' }],
+    } as SessionEvent;
+    const next = apply(initialRunViewState, stray, emptySurfaceFailure());
+    expect(next.messages.some((m) => m.id === 'surface-sfc-empty')).toBe(false);
+    const item = next.inlineItems[`session:${STEP_EXEC_ID}`];
+    expect(item?.kind === 'inline_surface' ? item.error : undefined).toBe(EMPTY_SURFACE_MESSAGE);
+  });
+
+  it('does not mount a card for an attempt that will be retried, or other failures', () => {
+    expect(
+      apply(initialRunViewState, emptySurfaceFailure({ willRetry: true })).inlineItems,
+    ).toEqual({});
+    expect(
+      apply(initialRunViewState, emptySurfaceFailure({ errorCode: 'INTERNAL_ERROR' })).inlineItems,
+    ).toEqual({});
   });
 });
 

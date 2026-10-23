@@ -25,12 +25,14 @@ import {
   internalError,
 } from '@aflow/executor-runtime';
 import type {
+  AflowError,
+  SurfaceGenerationEmptyDetails,
   SurfaceMutation,
   UiSurfaceVisualizeInput,
   UiSurfaceVisualizeOutput,
   StepUsageBreakdown,
 } from '@aflow/schemas';
-import { UiSurfaceVisualizeInputSchema } from '@aflow/schemas';
+import { SURFACE_GENERATION_EMPTY_ERROR_CODE, UiSurfaceVisualizeInputSchema } from '@aflow/schemas';
 import {
   SurfaceStore,
   MessageAssembler,
@@ -73,6 +75,51 @@ function getCatalogVersion(): string {
     cachedCatalogVersion = `v${new Date().toISOString().slice(0, 10)}`;
     return cachedCatalogVersion;
   }
+}
+
+// =============================================================================
+// Empty-generation failure
+// =============================================================================
+
+const MAX_REPORTED_ERRORS = 20;
+const MAX_REPORTED_ERROR_CHARS = 500;
+const AFLOW_ERROR_MESSAGE_MAX_CHARS = 1000;
+
+function clip(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+/**
+ * A generation with no `createSurface` rendered nothing. Reported as a
+ * success, the agent is told the surface is on screen and the tool-failure
+ * accounting never counts it — so it is a failure carrying the diagnostics.
+ */
+export function surfaceGenerationEmptyError(details: SurfaceGenerationEmptyDetails): AflowError {
+  const reported = details.errors
+    .slice(0, MAX_REPORTED_ERRORS)
+    .map((e) => clip(e, MAX_REPORTED_ERROR_CHARS));
+  const cause =
+    details.errorCount > 0
+      ? `${String(details.errorCount)} generation error(s): ${reported.join('; ')}`
+      : 'the model emitted no surface mutations';
+  const discarded =
+    details.mutationCount > 0
+      ? ` ${String(details.mutationCount)} mutation(s) without a createSurface were not rendered.`
+      : '';
+  const truncated =
+    details.finishReason === 'length' ? ' The model output hit its token limit.' : '';
+  return {
+    code: SURFACE_GENERATION_EMPTY_ERROR_CODE,
+    message: clip(
+      `Surface ${details.surfaceId} was not rendered: no valid createSurface mutation ` +
+        `(${cause}).${discarded}${truncated}`,
+      AFLOW_ERROR_MESSAGE_MAX_CHARS,
+    ),
+    classification: 'validation',
+    retryable: false,
+    timestamp: new Date().toISOString(),
+    details: { ...details, errors: reported },
+  };
 }
 
 // =============================================================================
@@ -250,6 +297,7 @@ export class SurfaceHandler implements StepHandler {
 
     // Call AI with streaming
     let usage: StepUsageBreakdown | undefined;
+    let finishReason: string | undefined;
     let rawOutput = ''; // Capture full model output for diagnostics
     try {
       const model = await resolveGenerationModel(ctx, [
@@ -292,6 +340,7 @@ export class SurfaceHandler implements StepHandler {
       await flushPending();
 
       const finalResponse = await response;
+      finishReason = finalResponse.finishReason;
 
       // Log diagnostics for debugging surface generation issues
       ctx.log.info('Surface AI response', {
@@ -325,6 +374,25 @@ export class SurfaceHandler implements StepHandler {
         rawOutputPreview: rawOutput.slice(0, 500),
       });
       return failureWithError(ctx, internalError(`Surface generation failed: ${message}`));
+    }
+
+    if (!mutations.some((m) => m.type === 'createSurface')) {
+      ctx.log.warn('Surface generation produced no surface', {
+        surfaceId,
+        mutationCount: mutations.length,
+        errorCount: errors.length,
+        finishReason,
+      });
+      return failureWithError(
+        ctx,
+        surfaceGenerationEmptyError({
+          surfaceId,
+          mutationCount: mutations.length,
+          errorCount: errors.length,
+          errors,
+          ...(finishReason !== undefined ? { finishReason } : {}),
+        }),
+      );
     }
 
     const durationMs = Date.now() - startTime;
