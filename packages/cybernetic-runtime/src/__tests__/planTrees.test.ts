@@ -30,7 +30,7 @@ import {
 import {
   decodePlanLinkCursor,
   encodePlanLinkCursor,
-  planDayOf,
+  planDayReader,
   type PlanBoardOptions,
 } from '../plan/board.js';
 import { planGoalHead } from '../plan/store.js';
@@ -74,6 +74,26 @@ async function close(at: PlanNode, status: 'done' | 'dropped'): Promise<void> {
     outcome: `${status} ${at.title}.`,
   });
   if (!result.ok) throw new Error(result.message);
+}
+
+/** Counts the `Intl.DateTimeFormat`s built until `restore`. */
+function countDayFormatters(): { readonly count: number; restore: () => void } {
+  const real = Intl.DateTimeFormat;
+  let count = 0;
+  Intl.DateTimeFormat = new Proxy(real, {
+    construct(target, args: ConstructorParameters<typeof Intl.DateTimeFormat>) {
+      count++;
+      return new target(...args);
+    },
+  });
+  return {
+    get count() {
+      return count;
+    },
+    restore: () => {
+      Intl.DateTimeFormat = real;
+    },
+  };
 }
 
 async function read(opts: PlanBoardOptions = {}) {
@@ -237,6 +257,116 @@ describe('readPlanTrees — the board', () => {
     expect(find(roots, served.nodeId)?.ownedBy).toBe('loop');
     expect(find(roots, running.nodeId)?.ownedBy).toBe('loop');
     expect(find(roots, waiting.nodeId)?.ownedBy).toBe('loop');
+  });
+
+  it('names a parent with no run of its own the loop’s where the loop holds any child, through every level', async () => {
+    const root = await node('root');
+    const phase = await node('P1 — phase', { parentId: root.nodeId });
+    const step = await node('served step', { parentId: phase.nodeId });
+    await node('bare step', { parentId: phase.nodeId });
+    const idle = await node('idle phase', { parentId: root.nodeId });
+    await node('bare under idle', { parentId: idle.nodeId });
+    const idleRoot = await node('idle root');
+    await node('bare under idle root', { parentId: idleRoot.nodeId });
+    await linkPlanNode(ctx(), {
+      nodeId: step.nodeId,
+      kind: 'run',
+      ref: '00000000-0000-4000-8000-0000000000c2',
+    });
+
+    const roots = (await read()).roots;
+
+    expect(find(roots, phase.nodeId)?.ownedBy).toBe('loop');
+    expect(find(roots, root.nodeId)?.ownedBy).toBe('loop');
+    expect(find(roots, idle.nodeId)?.ownedBy).toBe('operator');
+    expect(find(roots, idleRoot.nodeId)?.ownedBy).toBe('operator');
+  });
+
+  it('counts only active children toward a parent’s owner, through every level', async () => {
+    const root = await node('root');
+    const settled = await node('settled phase', { parentId: root.nodeId });
+    const done = await node('done step', { parentId: settled.nodeId });
+    await linkPlanNode(ctx(), {
+      nodeId: done.nodeId,
+      kind: 'run',
+      ref: '00000000-0000-4000-8000-0000000000c3',
+    });
+    await close(done, 'done');
+    await close(await node('dropped step', { parentId: settled.nodeId }), 'dropped');
+    store.seed(SPACE, { parentId: settled.nodeId, title: 'blocked step', status: 'blocked' });
+    store.seed(SPACE, { parentId: settled.nodeId, title: 'waiting step', status: 'waiting' });
+    const moving = await node('moving phase', { parentId: root.nodeId });
+    const active = await node('active step', { parentId: moving.nodeId });
+    store.seed(SPACE, { parentId: moving.nodeId, title: 'waiting beside', status: 'waiting' });
+    store.runs.push(inFlightRun('r3', active.nodeId, 'running'));
+    const settledRoot = await node('settled root');
+    store.seed(SPACE, { parentId: settledRoot.nodeId, title: 'waiting only', status: 'waiting' });
+
+    const roots = (await read()).roots;
+
+    expect(find(roots, done.nodeId)?.ownedBy).toBe('loop');
+    expect(find(roots, settled.nodeId)?.ownedBy).toBe('operator');
+    expect(find(roots, settledRoot.nodeId)?.ownedBy).toBe('operator');
+    expect(find(roots, moving.nodeId)?.ownedBy).toBe('loop');
+    expect(find(roots, root.nodeId)?.ownedBy).toBe('loop');
+
+    store.runs.length = 0;
+    const idle = (await read()).roots;
+    expect(find(idle, moving.nodeId)?.ownedBy).toBe('operator');
+    expect(find(idle, root.nodeId)?.ownedBy).toBe('operator');
+  });
+
+  it('names a parent with no run and no active child the loop holds the operator’s only while it is active', async () => {
+    const root = await node('root');
+    const parents = new Map<string, string>();
+    for (const status of ['active', 'done', 'dropped', 'blocked', 'waiting'] as const) {
+      const parent = store.seed(SPACE, { parentId: root.nodeId, title: `${status} phase`, status });
+      await node(`bare under ${status}`, { parentId: parent.nodeId });
+      store.seed(SPACE, {
+        parentId: parent.nodeId,
+        title: `waiting under ${status}`,
+        status: 'waiting',
+      });
+      parents.set(status, parent.nodeId);
+    }
+    const doneRoot = store.seed(SPACE, { title: 'done root', status: 'done' });
+    store.seed(SPACE, { parentId: doneRoot.nodeId, title: 'done under root', status: 'done' });
+
+    const roots = (await read()).roots;
+    const ownerOf = (status: string) => find(roots, parents.get(status)!)?.ownedBy;
+
+    expect(ownerOf('active')).toBe('operator');
+    expect(ownerOf('done')).toBe('loop');
+    expect(ownerOf('dropped')).toBe('loop');
+    expect(ownerOf('blocked')).toBe('loop');
+    expect(ownerOf('waiting')).toBe('loop');
+    expect(find(roots, doneRoot.nodeId)?.ownedBy).toBe('loop');
+    expect(find(roots, root.nodeId)?.ownedBy).toBe('operator');
+  });
+
+  it('keeps a parent the loop’s where a run serves it, whatever its children', async () => {
+    const root = await node('root');
+    await node('bare', { parentId: root.nodeId });
+    store.runs.push(inFlightRun('r2', root.nodeId, 'running'));
+
+    expect(find((await read()).roots, root.nodeId)?.ownedBy).toBe('loop');
+  });
+
+  it('builds one day formatter for every done node of every plan', async () => {
+    for (const title of ['one', 'two']) {
+      const root = await node(title);
+      for (const n of [1, 2, 3])
+        await close(await node(`${title} ${String(n)}`, { parentId: root.nodeId }), 'done');
+    }
+    const built = countDayFormatters();
+    try {
+      const trees = await read({ tz: 'Europe/Paris' });
+
+      expect(trees.tallies.map((t) => t.done)).toEqual([3, 3]);
+      expect(built.count).toBe(1);
+    } finally {
+      built.restore();
+    }
   });
 
   it('surfaces the newest pull request, merged where a merge of it is linked, with the merge commit', async () => {
@@ -408,11 +538,24 @@ describe('readPlanTrees — the board', () => {
   });
 });
 
-describe('planDayOf', () => {
+describe('planDayReader', () => {
   it('names the calendar day an instant falls on in a time zone', () => {
-    expect(planDayOf('2026-10-22T23:30:00.000Z')).toBe('2026-10-22');
-    expect(planDayOf('2026-10-22T23:30:00.000Z', 'Europe/Paris')).toBe('2026-10-23');
-    expect(planDayOf('2026-10-22T03:00:00.000Z', 'America/Los_Angeles')).toBe('2026-10-21');
+    expect(planDayReader()('2026-10-22T23:30:00.000Z')).toBe('2026-10-22');
+    expect(planDayReader('Europe/Paris')('2026-10-22T23:30:00.000Z')).toBe('2026-10-23');
+    expect(planDayReader('America/Los_Angeles')('2026-10-22T03:00:00.000Z')).toBe('2026-10-21');
+  });
+
+  it('builds its formatter once and reads every instant with it', () => {
+    const built = countDayFormatters();
+    try {
+      const dayOf = planDayReader('Europe/Paris');
+      const days = ['2026-10-20T10:00:00.000Z', '2026-10-21T23:30:00.000Z'].map(dayOf);
+
+      expect(days).toEqual(['2026-10-20', '2026-10-22']);
+      expect(built.count).toBe(1);
+    } finally {
+      built.restore();
+    }
   });
 });
 

@@ -9,8 +9,10 @@ import {
   doneCardsSince,
   doneGroupOf,
   phaseLabel,
+  planBoardFiltered,
   planCardMatches,
   planCards,
+  planDoneFolds,
   planDoneGroups,
   pullRequestLabel,
   runKindLabel,
@@ -126,6 +128,63 @@ describe('the Done column folded by day', () => {
     expect(doneCardsSince(groups, new Set(['today']), today)).toBe(today);
     expect(doneCardsSince(groups, new Set(['today', '2026-10']), today)).toBe('2026-10-05');
     expect(doneCardsSince(groups, new Set(), today)).toBe(today);
+  });
+
+  it('reads every fold’s done cards under a filter, open or not', () => {
+    const groups = planDoneGroups(doneByDay, today, 'all');
+
+    expect(doneCardsSince(groups, new Set(['today']), today, true)).toBe('2026-09-03');
+    expect(doneCardsSince(groups, new Set(), today, true)).toBe('2026-09-03');
+    expect(doneCardsSince(planDoneGroups([], today, 'all'), new Set(), today, true)).toBe(today);
+  });
+
+  describe('a fold’s count', () => {
+    const groups = planDoneGroups(doneByDay, today, 'all');
+    const closed = (id: string, at: Date, ownedBy: 'loop' | 'operator') => ({
+      node: node(id, { status: 'done', closedAt: at.toISOString(), ownedBy }),
+      column: 'done' as const,
+    });
+    const cards = [
+      closed('a', new Date(2026, 9, 22, 9), 'loop'),
+      closed('b', new Date(2026, 9, 22, 10), 'operator'),
+      closed('c', new Date(2026, 9, 12, 10), 'loop'),
+      closed('d', new Date(2026, 9, 6, 10), 'loop'),
+      closed('e', new Date(2026, 8, 28, 10), 'operator'),
+    ];
+    const loopOnly = cards.filter((c) => planCardMatches(c, { owner: 'loop' }));
+    const shown = (folds: ReturnType<typeof planDoneFolds>) =>
+      folds.map((f) => [f.id, f.shown, f.cards.map((c) => c.node.nodeId)]);
+
+    it('is the plan’s own count unfiltered, whatever the tree holds', () => {
+      expect(shown(planDoneFolds(groups, [], false, today))).toEqual([
+        ['today', 2, []],
+        ['yesterday', 1, []],
+        ['2026-10', 50, []],
+        ['2026-09', 4, []],
+      ]);
+    });
+
+    it('counts the matching cards under a filter, not the unfiltered count and not zero', () => {
+      expect(planBoardFiltered({ owner: 'loop' })).toBe(true);
+      expect(planBoardFiltered({ owner: 'all' })).toBe(false);
+      expect(planBoardFiltered({ phaseId: 'p', owner: 'all' })).toBe(true);
+
+      expect(shown(planDoneFolds(groups, loopOnly, true, '2026-09-03'))).toEqual([
+        ['today', 1, ['a']],
+        ['yesterday', 0, []],
+        ['2026-10', 2, ['c', 'd']],
+        ['2026-09', 0, []],
+      ]);
+    });
+
+    it('shows no count for a fold the tree on screen was not read far enough to hold', () => {
+      const folds = planDoneFolds(groups, loopOnly, true, today);
+
+      expect(folds.map((f) => f.shown)).toEqual([1, undefined, undefined, undefined]);
+      expect(
+        planDoneFolds(groups, loopOnly, true, undefined).every((f) => f.shown === undefined),
+      ).toBe(true);
+    });
   });
 
   it('places a done card in the fold of the reader’s day it closed', () => {

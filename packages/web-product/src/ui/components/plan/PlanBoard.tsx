@@ -11,10 +11,11 @@ import { Badge, Button, Card, CardBody, Column, Row, Text } from '@aflow/design-
 import type { PlanBoardColumn, PlanRootTally, PlanTreeNode } from '@aflow/schemas';
 import {
   PLAN_BOARD_COLUMNS,
-  doneGroupOf,
   phaseLabel,
+  planBoardFiltered,
   planCardMatches,
   planCards,
+  planDoneFolds,
   planDoneGroups,
   pullRequestLabel,
   type PlanBoardFilters,
@@ -135,7 +136,16 @@ function PlanCardView({
   );
 }
 
-function ColumnHeader({ label, color, count }: { label: string; color: string; count: number }) {
+function ColumnHeader({
+  label,
+  color,
+  count,
+}: {
+  label: string;
+  color: string;
+  /** Undefined while what it counts is still being read. */
+  count: number | undefined;
+}) {
   return (
     <Row gap="xs" align="center" data-plan-column-header={label}>
       <span
@@ -152,7 +162,7 @@ function ColumnHeader({ label, color, count }: { label: string; color: string; c
         {label}
       </Text>
       <Text size="xs" variant="muted">
-        {String(count)}
+        {count === undefined ? '…' : String(count)}
       </Text>
     </Row>
   );
@@ -171,6 +181,8 @@ export interface PlanBoardProps {
   tally: PlanRootTally;
   filters: PlanBoardFilters;
   doneWindow: PlanDoneWindow;
+  /** The first day of done cards the tree on screen holds, `YYYY-MM-DD`; undefined before any read. */
+  doneReadSince: string | undefined;
   /** The reader's today, `YYYY-MM-DD`. */
   today: string;
   /** The Done folds open, by id. */
@@ -188,6 +200,7 @@ export function PlanBoard({
   tally,
   filters,
   doneWindow,
+  doneReadSince,
   today,
   expanded,
   onToggleGroup,
@@ -200,8 +213,10 @@ export function PlanBoard({
   const cards = planCards(root).filter((card) => planCardMatches(card, filters));
   const inColumn = (column: PlanBoardColumn) => cards.filter((card) => card.column === column);
   const groups = planDoneGroups(tally.doneByDay, today, doneWindow);
-  const filtered = filters.phaseId !== undefined || filters.owner !== 'all';
-  const doneCards = inColumn('done');
+  const folds = planDoneFolds(groups, inColumn('done'), planBoardFiltered(filters), doneReadSince);
+  const doneCount = folds.some((fold) => fold.shown === undefined)
+    ? undefined
+    : folds.reduce((sum, fold) => sum + (fold.shown ?? 0), 0);
   const railOpen = selectedId !== undefined;
   const droppedStrip = railOpen && !narrow && !droppedOpen;
 
@@ -218,10 +233,9 @@ export function PlanBoard({
     list.length === 0 ? <Dash /> : list.map(renderCard);
 
   const doneBody = (): ReactNode => {
-    if (groups.length === 0) return <Dash />;
-    return groups.map((group) => {
+    if (folds.length === 0) return <Dash />;
+    return folds.map((group) => {
       const open = expanded.has(group.id);
-      const inGroup = doneCards.filter((card) => doneGroupOf(card, groups)?.id === group.id);
       return (
         <Column key={group.id} gap="xs" data-plan-done-group={group.id}>
           <Button
@@ -233,9 +247,9 @@ export function PlanBoard({
             }}
             style={{ justifyContent: 'flex-start' }}
           >
-            {`${group.label} · ${String(filtered ? inGroup.length : group.count)}`}
+            {`${group.label} · ${group.shown === undefined ? '…' : String(group.shown)}`}
           </Button>
-          {open && inGroup.map(renderCard)}
+          {open && group.cards.map(renderCard)}
         </Column>
       );
     });
@@ -243,10 +257,7 @@ export function PlanBoard({
 
   const columns = PLAN_BOARD_COLUMNS.map((column) => {
     const list = inColumn(column.id);
-    const count =
-      column.id === 'done' && !filtered
-        ? groups.reduce((sum, group) => sum + group.count, 0)
-        : list.length;
+    const count = column.id === 'done' ? doneCount : list.length;
     if (column.id === 'dropped' && droppedStrip) {
       return (
         <button
@@ -254,7 +265,7 @@ export function PlanBoard({
           type="button"
           data-plan-column={column.id}
           data-collapsed="true"
-          aria-label={`${column.label} ${String(count)}`}
+          aria-label={`${column.label} ${count === undefined ? '…' : String(count)}`}
           onClick={() => {
             setDroppedOpen(true);
           }}

@@ -119,8 +119,13 @@ export function SpacePlanPage(): React.ReactNode {
   const tz = readerTimeZone();
   // The last board read: what the done folds are decided from before the
   // next read, and what stays on screen while a wider done window is read.
-  const [held, setHeld] = useState<{ spaceId: string; data: PlanTreeOutput } | null>(null);
+  const [held, setHeld] = useState<{
+    spaceId: string;
+    since: string;
+    data: PlanTreeOutput;
+  } | null>(null);
   const last = held?.spaceId === spaceId ? held.data : undefined;
+  const filtered = phaseId !== ALL_PHASES || owner !== 'all';
 
   const rootOf = (tree: PlanTreeOutput | undefined) =>
     tree?.roots.find((r) => r.nodeId === chosenRootId) ?? tree?.roots[0];
@@ -131,7 +136,7 @@ export function SpacePlanPage(): React.ReactNode {
   const firstFoldOnly = (groups: readonly PlanDoneGroup[]) =>
     new Set(groups[0] ? [groups[0].id] : []);
   const lastGroups = foldsOf(last);
-  const since = doneCardsSince(lastGroups, expanded ?? firstFoldOnly(lastGroups), today);
+  const since = doneCardsSince(lastGroups, expanded ?? firstFoldOnly(lastGroups), today, filtered);
 
   const { data, isLoading, error, refetch } = useApiQuery<PlanTreeOutput>({
     key: ['space', spaceId, 'plan', 'board', since, tz],
@@ -139,9 +144,11 @@ export function SpacePlanPage(): React.ReactNode {
     enabled: spaceId.length > 0,
   });
   useEffect(() => {
-    if (data !== undefined) setHeld({ spaceId, data });
-  }, [data, spaceId]);
+    if (data !== undefined) setHeld({ spaceId, since, data });
+  }, [data, spaceId, since]);
   const board = data ?? last;
+  const boardSince =
+    data !== undefined ? since : held?.spaceId === spaceId ? held.since : undefined;
   const openFolds = expanded ?? firstFoldOnly(foldsOf(board));
 
   const closeNode = useApiMutation<PlanNodeCloseRequest, PlanNodeUpdateOutput>({
@@ -304,6 +311,7 @@ export function SpacePlanPage(): React.ReactNode {
                 owner,
               }}
               doneWindow={doneWindow}
+              doneReadSince={boardSince}
               today={today}
               expanded={openFolds}
               onToggleGroup={toggleGroup}

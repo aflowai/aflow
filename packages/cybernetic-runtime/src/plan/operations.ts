@@ -382,32 +382,21 @@ export async function getPlanNode(
   ctx: PlanReadContext,
   nodeId: string,
 ): Promise<PlanOpResult<PlanNodeGetOutput>> {
-  const node = await ctx.store.find(ctx.spaceId, nodeId);
-  if (!node) return notFound(nodeId);
-  // Every status: a run in flight for a node closed under it is still in flight.
-  const subtree = await ctx.store.walk(ctx.spaceId, { rootId: nodeId, ...PLAN_TREE_WALK_BOUNDS });
-  const lineage = await lineageOf(ctx, node);
-  const [children, links, runs, dependencies, dependents, learnings] = await Promise.all([
-    ctx.store.listChildren(ctx.spaceId, nodeId, PLAN_NODE_CHILDREN_LIMIT),
-    ctx.store.listLinks(ctx.spaceId, nodeId, PLAN_NODE_LINKS_LIMIT),
-    ctx.store.listRunsServing(
-      ctx.spaceId,
-      subtree.nodes.map((n) => n.nodeId),
-      PLAN_NODE_RUNS_LIMIT,
-    ),
+  // The rail's read, its first page of every link kind, and what a session
+  // needs beyond it: what the node waits on and what was learned above it.
+  const detail = await readPlanNodeDetail(ctx, nodeId, { limit: PLAN_NODE_LINKS_LIMIT });
+  if (!detail.ok) return detail;
+  const { nextCursor: _nextCursor, ok: _ok, ...read } = detail;
+  const [dependencies, dependents, learnings] = await Promise.all([
     ctx.store.listDependencies(ctx.spaceId, nodeId, PLAN_NODE_DEPENDENCIES_LIMIT),
     ctx.store.listDependents(ctx.spaceId, nodeId, PLAN_NODE_DEPENDENCIES_LIMIT),
-    ctx.store.listLearningsOf(ctx.spaceId, lineage, PLAN_NODE_LEARNINGS_LIMIT),
+    lineageOf(ctx, read.node).then((lineage) =>
+      ctx.store.listLearningsOf(ctx.spaceId, lineage, PLAN_NODE_LEARNINGS_LIMIT),
+    ),
   ]);
   return {
     ok: true,
-    node,
-    children: children.children,
-    childrenTotal: children.total,
-    links: links.links,
-    linksTotal: links.total,
-    runs: runs.runs,
-    runsTotal: runs.total,
+    ...read,
     dependencies: dependencies.dependencies,
     dependenciesTotal: dependencies.total,
     dependents: dependents.dependents,

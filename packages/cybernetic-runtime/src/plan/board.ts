@@ -45,16 +45,24 @@ const NO_TALLY: PlanNodeLinkTally = {
   rounds: 0,
 };
 
-/** The calendar day an instant falls on in `tz`, as `YYYY-MM-DD`. */
-export function planDayOf(iso: string, tz = 'UTC'): string {
-  const parts = new Intl.DateTimeFormat('en-US', {
+/**
+ * Reads the calendar day an instant falls on in `tz`, as `YYYY-MM-DD`. One
+ * formatter serves every instant it is asked about: building one is the
+ * costly part, and a board reads a day for every done node.
+ */
+export function planDayReader(tz = 'UTC'): (iso: string) => string {
+  const format = new Intl.DateTimeFormat('en-US', {
     timeZone: tz,
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
-  }).formatToParts(new Date(iso));
-  const part = (type: 'year' | 'month' | 'day') => parts.find((p) => p.type === type)?.value ?? '';
-  return `${part('year')}-${part('month')}-${part('day')}`;
+  });
+  return (iso) => {
+    const parts = format.formatToParts(new Date(iso));
+    const part = (type: 'year' | 'month' | 'day') =>
+      parts.find((p) => p.type === type)?.value ?? '';
+    return `${part('year')}-${part('month')}-${part('day')}`;
+  };
 }
 
 function boardNode(node: PlanNodeSummary, reads: PlanBoardReads): PlanTreeNode {
@@ -87,14 +95,28 @@ function boardNode(node: PlanNodeSummary, reads: PlanBoardReads): PlanTreeNode {
   };
 }
 
-/** A parent's progress is its children's: those done, of those not dropped. */
-function withProgress(node: PlanTreeNode): PlanTreeNode {
-  const children = node.children.map(withProgress);
+/**
+ * A parent's progress and owner are its children's: progress, those done of
+ * those not dropped; owner, the loop's where a run serves it or the loop holds
+ * an active child — runs serve the steps under a root or phase, rarely the
+ * parent itself. A child done, dropped, blocked or waiting is no work the loop
+ * is moving, though its own card reads the loop's. Only an active parent can be
+ * the operator's, as only an active node is: one not active stays the loop's.
+ */
+function withChildren(node: PlanTreeNode): PlanTreeNode {
+  const children = node.children.map(withChildren);
   if (children.length === 0) return { ...node, children };
   const counted = children.filter((child) => child.status !== 'dropped');
+  const served = node.counts.runs > 0 || node.counts.inFlightRuns > 0;
   return {
     ...node,
     children,
+    ownedBy:
+      node.status === 'active' &&
+      !served &&
+      !children.some((child) => child.status === 'active' && child.ownedBy === 'loop')
+        ? 'operator'
+        : 'loop',
     progress: {
       done: counted.filter((child) => child.status === 'done').length,
       total: counted.length,
@@ -102,7 +124,7 @@ function withProgress(node: PlanTreeNode): PlanTreeNode {
   };
 }
 
-function tallyOf(root: PlanTreeNode, tz: string | undefined): PlanRootTally {
+function tallyOf(root: PlanTreeNode, dayOf: (iso: string) => string): PlanRootTally {
   const tally: PlanRootTally = {
     rootId: root.nodeId,
     steps: 0,
@@ -124,7 +146,7 @@ function tallyOf(root: PlanTreeNode, tz: string | undefined): PlanRootTally {
     else if (column === 'decide') tally.decide++;
     else if (column === 'dropped') tally.dropped++;
     if (column === 'done' && node.closedAt !== undefined) {
-      const day = planDayOf(node.closedAt, tz);
+      const day = dayOf(node.closedAt);
       byDay.set(day, (byDay.get(day) ?? 0) + 1);
     }
   }
@@ -148,7 +170,7 @@ function prune(nodes: readonly PlanTreeNode[], since: number): PlanTreeNode[] {
 
 /**
  * The board from nodes placed in reading order: nested, each with its card's
- * facts and a parent with its progress; each root's tallies over every node
+ * facts and a parent with its progress and owner; each root's tallies over every node
  * under it; then the done window applied below the roots, which always stay —
  * each is a tab.
  */
@@ -157,8 +179,9 @@ export function buildPlanBoard(
   reads: PlanBoardReads,
   opts: PlanBoardOptions = {},
 ): Omit<PlanTreeOutput, 'truncated'> {
-  const full = nestPlanTree(placed, (node) => boardNode(node, reads)).map(withProgress);
-  const tallies = full.map((root) => tallyOf(root, opts.tz));
+  const full = nestPlanTree(placed, (node) => boardNode(node, reads)).map(withChildren);
+  const dayOf = planDayReader(opts.tz);
+  const tallies = full.map((root) => tallyOf(root, dayOf));
   const since = opts.closedSince !== undefined ? Date.parse(opts.closedSince) : undefined;
   const roots =
     since === undefined
