@@ -35,7 +35,7 @@ export const PLAN_NODE_LINK_OPERATION_ID = buildOperationId('plan', 'node', 'lin
 export const PLAN_NODE_LEARN_OPERATION_ID = buildOperationId('plan', 'node', 'learn');
 export const PLAN_NODE_DEPEND_OPERATION_ID = buildOperationId('plan', 'node', 'depend');
 
-export const PLAN_NODE_LIST_DEFAULT_LIMIT = 50;
+export const PLAN_NODE_LIST_DEFAULT_LIMIT = 100;
 export const PLAN_NODE_LIST_MAX_LIMIT = 200;
 /** Children `plan.node.get` returns; `plan.node.list` with `rootId` reaches the rest. */
 export const PLAN_NODE_CHILDREN_LIMIT = 100;
@@ -148,6 +148,14 @@ export const PlanNodeListInputSchema = z
       .min(1)
       .max(PLAN_NODE_LIST_MAX_LIMIT)
       .default(PLAN_NODE_LIST_DEFAULT_LIMIT),
+    offset: z
+      .number()
+      .int()
+      .min(0)
+      .default(0)
+      .describe(
+        'Matching nodes to skip, in the list’s order. A truncated list names the offset its next page starts at.',
+      ),
   })
   .strict();
 export type PlanNodeListInput = z.infer<typeof PlanNodeListInputSchema>;
@@ -167,11 +175,32 @@ export const PlanNodeListTruncationSchema = z
   .strict();
 export type PlanNodeListTruncation = z.infer<typeof PlanNodeListTruncationSchema>;
 
+/** A list cut short: the bound, how many nodes it found, and where the next page starts. */
+export const PlanNodeListPageTruncationSchema = PlanNodeListTruncationSchema.extend({
+  matched: z
+    .number()
+    .int()
+    .min(0)
+    .describe(
+      'Nodes the read found that match `status`, across every page. Exact for `limit`; for ' +
+        '`depth` or `nodes` at least this many, since the read stopped before the rest.',
+    ),
+  next: z
+    .object({ offset: z.number().int().min(0) })
+    .strict()
+    .optional()
+    .describe(
+      'Present while matching nodes remain past this page: list again with the same input and this `offset`.',
+    ),
+}).strict();
+export type PlanNodeListPageTruncation = z.infer<typeof PlanNodeListPageTruncationSchema>;
+
 export const PlanNodeListOutputSchema = z.object({
   /** Parents before their children, siblings by position. */
   nodes: z.array(PlanNodeSummarySchema),
-  truncated: PlanNodeListTruncationSchema.optional().describe(
-    'Absent when every matching node is here; otherwise the bound that cut the list short.',
+  truncated: PlanNodeListPageTruncationSchema.optional().describe(
+    'Absent when every matching node is here. Present, `nodes` is one page of the plan, not all ' +
+      'of it: count from `matched`, and read the rest from `next`.',
   ),
 });
 export type PlanNodeListOutput = z.infer<typeof PlanNodeListOutputSchema>;
@@ -228,8 +257,6 @@ export type PlanNodePullRequest = z.infer<typeof PlanNodePullRequestSchema>;
 
 /** A node as a board card shows it, and the nodes under it: no links, no prose past the goal's head. */
 export interface PlanTreeNode extends PlanNodeSummary {
-  createdAt: string;
-  closedAt?: string;
   goalHead: string;
   counts: PlanNodeCounts;
   rounds: number;
@@ -241,8 +268,6 @@ export interface PlanTreeNode extends PlanNodeSummary {
 
 export const PlanTreeNodeSchema = z.lazy(() =>
   PlanNodeSummarySchema.extend({
-    createdAt: z.string().datetime(),
-    closedAt: z.string().datetime().optional(),
     goalHead: z.string().max(PLAN_NODE_GOAL_HEAD_MAX_CHARS),
     counts: PlanNodeCountsSchema,
     rounds: z

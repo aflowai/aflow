@@ -135,7 +135,9 @@ export const PlanOperationRegistrations: OperationRegistration[] = [
       oneLine: 'List plan nodes by status or under one root.',
       whenToUse: ['Looking past what the attention block shows: closed nodes, or a deep subtree'],
       whenNotToUse: ['Reading one node in full — use plan.node.get'],
-      pitfalls: [],
+      pitfalls: [
+        'A result with `truncated` is one page: count nodes from `truncated.matched`, never from the page, and read the rest by listing again with `truncated.next.offset`',
+      ],
       minimalExampleInput: { status: ['done'] },
     },
     accessMode: 'read',

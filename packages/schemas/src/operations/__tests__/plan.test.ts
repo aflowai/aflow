@@ -17,7 +17,11 @@ import {
   PlanNodeLearnInputSchema,
   PlanNodeLinkInputSchema,
   PlanNodeListInputSchema,
+  PlanNodeListOutputSchema,
+  PlanNodeSummarySchema,
   PlanNodeUpdateInputSchema,
+  PLAN_NODE_LIST_DEFAULT_LIMIT,
+  PLAN_NODE_LIST_MAX_LIMIT,
   WorkflowRunStartInputSchema,
 } from '../../index.js';
 
@@ -278,6 +282,54 @@ describe('PlanNodeListInputSchema', () => {
     const parsed = PlanNodeListInputSchema.parse({});
     expect(parsed.status).toEqual(['active', 'waiting', 'blocked']);
     expect(parsed.limit).toBeGreaterThan(0);
+    expect(parsed.offset).toBe(0);
+  });
+
+  it('lists a 65-node plan in one page by default', () => {
+    expect(PlanNodeListInputSchema.parse({}).limit).toBeGreaterThanOrEqual(65);
+    expect(PLAN_NODE_LIST_DEFAULT_LIMIT).toBeLessThanOrEqual(PLAN_NODE_LIST_MAX_LIMIT);
+  });
+
+  it('refuses a negative or fractional offset', () => {
+    expect(PlanNodeListInputSchema.safeParse({ offset: -1 }).success).toBe(false);
+    expect(PlanNodeListInputSchema.safeParse({ offset: 1.5 }).success).toBe(false);
+  });
+});
+
+describe('PlanNodeListOutputSchema', () => {
+  const SUMMARY = {
+    nodeId: NODE_ID,
+    parentId: null,
+    kind: 'execute',
+    title: 'Plan 322',
+    status: 'done',
+    revision: 2,
+    position: 0,
+    createdAt: '2026-10-20T09:00:00.000Z',
+    updatedAt: '2026-10-21T09:00:00.000Z',
+    closedAt: '2026-10-21T09:00:00.000Z',
+  };
+
+  it('carries when each node was created, and when a closed one closed', () => {
+    expect(PlanNodeSummarySchema.parse(SUMMARY)).toEqual(SUMMARY);
+    const { closedAt: _closedAt, ...open } = { ...SUMMARY, status: 'active' };
+    expect(PlanNodeSummarySchema.parse(open)).toEqual(open);
+    const { createdAt: _createdAt, ...undated } = SUMMARY;
+    expect(PlanNodeSummarySchema.safeParse(undated).success).toBe(false);
+  });
+
+  it('a truncated list says how many nodes match and where the next page starts', () => {
+    const page = {
+      nodes: [SUMMARY],
+      truncated: { bound: 'limit', value: 1, matched: 65, next: { offset: 1 } },
+    };
+    expect(PlanNodeListOutputSchema.parse(page)).toEqual(page);
+    expect(
+      PlanNodeListOutputSchema.safeParse({
+        nodes: [SUMMARY],
+        truncated: { bound: 'limit', value: 1 },
+      }).success,
+    ).toBe(false);
   });
 });
 

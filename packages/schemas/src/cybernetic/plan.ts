@@ -100,7 +100,10 @@ export const PlanNodeSummarySchema = z
     position: z.number().int().min(0),
     /** The note's first line. */
     noteHead: z.string().optional(),
+    createdAt: z.string().datetime(),
     updatedAt: z.string().datetime(),
+    /** When it was marked done or dropped; absent while it is open. */
+    closedAt: z.string().datetime().optional(),
   })
   .strict();
 export type PlanNodeSummary = z.infer<typeof PlanNodeSummarySchema>;

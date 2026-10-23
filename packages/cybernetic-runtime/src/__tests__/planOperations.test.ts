@@ -2,6 +2,7 @@ import { describe, expect, it, beforeEach } from 'vitest';
 import Redis from 'ioredis-mock';
 import type { Redis as RedisType } from 'ioredis';
 import {
+  PLAN_NODE_LIST_DEFAULT_LIMIT,
   PLAN_NODE_LIST_MAX_LIMIT,
   PLAN_NODE_POSITION_MAX,
   PLAN_NODE_PROSE_MAX_CHARS,
@@ -776,6 +777,81 @@ describe('getPlanNode / listPlanNodes', () => {
     expect(open).not.toHaveProperty('truncated');
   });
 
+  it('lists each node with when it was created and, once closed, when it closed', async () => {
+    const open = await created({ title: 'open' });
+    const shut = await created({ title: 'shut' });
+    const closing = await updatePlanNode(session('session-a'), {
+      nodeId: shut.nodeId,
+      expectedRevision: 1,
+      status: 'done',
+      outcome: 'Met.',
+    });
+    if (!closing.ok) throw new Error(closing.message);
+
+    const listed = await listPlanNodes({ store, spaceId: SPACE }, { status: ['active', 'done'] });
+    expect(listed.ok && listed.nodes).toEqual([
+      expect.objectContaining({ nodeId: open.nodeId, createdAt: open.createdAt }),
+      expect.objectContaining({
+        nodeId: shut.nodeId,
+        createdAt: shut.createdAt,
+        closedAt: closing.node.closedAt,
+      }),
+    ]);
+    expect(closing.node.closedAt).toBeDefined();
+    expect(listed.ok && listed.nodes[0]).not.toHaveProperty('closedAt');
+  });
+
+  it('lists a 65-node plan in one page by default', async () => {
+    const root = store.seed(SPACE, { title: 'root', status: 'done' });
+    const statuses = [
+      ...Array<'done'>(55).fill('done'),
+      ...Array<'active'>(8).fill('active'),
+      'dropped' as const,
+    ];
+    statuses.forEach((status, i) => {
+      store.seed(SPACE, { parentId: root.nodeId, title: `step ${String(i)}`, status, position: i });
+    });
+
+    const listed = await listPlanNodes(
+      { store, spaceId: SPACE },
+      { status: ['active', 'done', 'dropped'] },
+    );
+    expect(listed).not.toHaveProperty('truncated');
+    const nodes = listed.ok ? listed.nodes : [];
+    expect(nodes).toHaveLength(65);
+    expect(nodes.filter((n) => n.status === 'done')).toHaveLength(56);
+    expect(nodes.filter((n) => n.status === 'active')).toHaveLength(8);
+    expect(nodes.filter((n) => n.status === 'dropped')).toHaveLength(1);
+  });
+
+  it('says how many nodes match past a page, and pages through them by offset', async () => {
+    const root = await created({ title: 'root' });
+    for (let i = 0; i < 6; i++) {
+      await created({ parentId: root.nodeId, title: `step ${String(i)}` });
+    }
+    const ctx = { store, spaceId: SPACE };
+
+    const first = await listPlanNodes(ctx, { limit: 3 });
+    expect(first).toMatchObject({
+      ok: true,
+      truncated: { bound: 'limit', value: 3, matched: 7, next: { offset: 3 } },
+    });
+
+    const seen = first.ok ? first.nodes.map((n) => n.title) : [];
+    let next = first.ok ? first.truncated?.next : undefined;
+    let last = first;
+    while (next !== undefined) {
+      last = await listPlanNodes(ctx, { limit: 3, offset: next.offset });
+      seen.push(...(last.ok ? last.nodes.map((n) => n.title) : []));
+      next = last.ok ? last.truncated?.next : undefined;
+    }
+    expect(seen).toEqual(['root', ...[0, 1, 2, 3, 4, 5].map((i) => `step ${String(i)}`)]);
+    expect(last).not.toHaveProperty('truncated');
+
+    const past = await listPlanNodes(ctx, { offset: 7 });
+    expect(past).toEqual({ ok: true, nodes: [] });
+  });
+
   it('finds a root by its key past the most nodes a walk reads, and names that bound', async () => {
     for (let i = 0; i < PLAN_TREE_WALK_NODE_LIMIT; i++) {
       await store.insert(SPACE, {
@@ -795,7 +871,12 @@ describe('getPlanNode / listPlanNodes', () => {
     const whole = await listPlanNodes({ store, spaceId: SPACE }, {});
     expect(whole).toMatchObject({
       ok: true,
-      truncated: { bound: 'nodes', value: PLAN_TREE_WALK_NODE_LIMIT },
+      truncated: {
+        bound: 'nodes',
+        value: PLAN_TREE_WALK_NODE_LIMIT,
+        matched: PLAN_TREE_WALK_NODE_LIMIT,
+        next: { offset: PLAN_NODE_LIST_DEFAULT_LIMIT },
+      },
     });
 
     const subtree = await listPlanNodes({ store, spaceId: SPACE }, { rootId: last.nodeId });

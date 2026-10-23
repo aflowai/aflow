@@ -442,6 +442,7 @@ export async function listPlanNodes(
 ): Promise<PlanOpResult<PlanNodeListOutput>> {
   const statuses = new Set(input.status ?? OPEN_PLAN_NODE_STATUSES);
   const limit = input.limit ?? PLAN_NODE_LIST_DEFAULT_LIMIT;
+  const offset = input.offset ?? 0;
 
   const start = input.rootId !== undefined ? { rootId: input.rootId } : {};
   if (start.rootId !== undefined && !(await ctx.store.find(ctx.spaceId, start.rootId))) {
@@ -461,14 +462,22 @@ export async function listPlanNodes(
     .map((placed) => placed.node)
     .filter((node) => statuses.has(node.status));
 
+  const end = offset + limit;
+  const pageCut = matching.length > end;
   // A bound the walk met hides nodes whatever `limit` is, so it is the one to name.
-  const truncated =
-    walk.truncated ??
-    (matching.length > limit ? { bound: 'limit' as const, value: limit } : undefined);
+  const bound = walk.truncated ?? (pageCut ? { bound: 'limit' as const, value: limit } : undefined);
   return {
     ok: true,
-    nodes: matching.slice(0, limit),
-    ...(truncated !== undefined ? { truncated } : {}),
+    nodes: matching.slice(offset, end),
+    ...(bound !== undefined
+      ? {
+          truncated: {
+            ...bound,
+            matched: matching.length,
+            ...(pageCut ? { next: { offset: end } } : {}),
+          },
+        }
+      : {}),
   };
 }
 

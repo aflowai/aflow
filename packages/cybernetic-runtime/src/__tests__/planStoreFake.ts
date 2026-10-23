@@ -68,7 +68,9 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
       revision: node.revision,
       position: node.position,
       ...(noteHead !== undefined ? { noteHead } : {}),
+      createdAt: node.createdAt,
       updatedAt: node.updatedAt,
+      ...(node.closedAt !== undefined ? { closedAt: node.closedAt } : {}),
     };
   }
 

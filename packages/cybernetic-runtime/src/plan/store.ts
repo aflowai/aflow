@@ -424,7 +424,9 @@ const summaryColumns = () => ({
   position: planNodes.position,
   // The first line only: a summary must not carry every note in the space.
   noteFirstLine: sql<string | null>`split_part(${planNodes.note}, chr(10), 1)`,
+  createdAt: planNodes.createdAt,
   updatedAt: planNodes.updatedAt,
+  closedAt: planNodes.closedAt,
 });
 
 interface SummaryRow {
@@ -436,7 +438,9 @@ interface SummaryRow {
   revision: number;
   position: number;
   noteFirstLine: string | null;
+  createdAt: Date;
   updatedAt: Date;
+  closedAt: Date | null;
 }
 
 function summaryRowToSummary(row: SummaryRow): PlanNodeSummary {
@@ -450,7 +454,9 @@ function summaryRowToSummary(row: SummaryRow): PlanNodeSummary {
     revision: row.revision,
     position: row.position,
     ...(noteHead !== undefined ? { noteHead } : {}),
+    createdAt: new Date(row.createdAt).toISOString(),
     updatedAt: new Date(row.updatedAt).toISOString(),
+    ...(row.closedAt != null ? { closedAt: new Date(row.closedAt).toISOString() } : {}),
   };
 }
 
