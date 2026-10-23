@@ -217,12 +217,6 @@ export interface PlanNodeStore {
   parentsOf(spaceId: string, nodeIds: readonly string[]): Promise<Map<string, string | null>>;
   /** Writes the link unless its node is not in the space or already holds it. */
   insertLink(spaceId: string, link: NewPlanNodeLink): Promise<PlanNodeLinkInsert>;
-  /** Newest first. */
-  listLinks(
-    spaceId: string,
-    nodeId: string,
-    limit: number,
-  ): Promise<{ links: PlanNodeLink[]; total: number }>;
   /** The node's newest link of `kind`, read by kind rather than from a page of every link. */
   newestLink(spaceId: string, nodeId: string, kind: PlanNodeLinkKind): Promise<PlanNodeLink | null>;
   /** The node's link of `kind` to `ref`, by its key; null where there is none. */
@@ -721,22 +715,6 @@ export function createPlanNodeStore(db: PostgresJsDatabase, tenantId: string): P
           .limit(1);
         if (!held) throw new Error('plan_node_links conflicted on a link it does not hold');
         return { outcome: 'exists', link: rowToPlanNodeLink(held) };
-      }),
-
-    listLinks: (spaceId, nodeId, limit) =>
-      inTenant(async (tx) => {
-        const where = and(eq(planNodeLinks.spaceId, spaceId), eq(planNodeLinks.nodeId, nodeId));
-        const rows = await tx
-          .select()
-          .from(planNodeLinks)
-          .where(where)
-          .orderBy(desc(planNodeLinks.createdAt))
-          .limit(limit);
-        const [count] = await tx
-          .select({ total: sql<number>`count(*)::int` })
-          .from(planNodeLinks)
-          .where(where);
-        return { links: rows.map(rowToPlanNodeLink), total: count?.total ?? 0 };
       }),
 
     newestLink: (spaceId, nodeId, kind) =>

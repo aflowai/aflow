@@ -30,7 +30,7 @@ import {
 import {
   decodePlanLinkCursor,
   encodePlanLinkCursor,
-  planDayOf,
+  planDayReader,
   type PlanBoardOptions,
 } from '../plan/board.js';
 import { planGoalHead } from '../plan/store.js';
@@ -74,6 +74,26 @@ async function close(at: PlanNode, status: 'done' | 'dropped'): Promise<void> {
     outcome: `${status} ${at.title}.`,
   });
   if (!result.ok) throw new Error(result.message);
+}
+
+/** Counts the `Intl.DateTimeFormat`s built until `restore`. */
+function countDayFormatters(): { readonly count: number; restore: () => void } {
+  const real = Intl.DateTimeFormat;
+  let count = 0;
+  Intl.DateTimeFormat = new Proxy(real, {
+    construct(target, args: ConstructorParameters<typeof Intl.DateTimeFormat>) {
+      count++;
+      return new target(...args);
+    },
+  });
+  return {
+    get count() {
+      return count;
+    },
+    restore: () => {
+      Intl.DateTimeFormat = real;
+    },
+  };
 }
 
 async function read(opts: PlanBoardOptions = {}) {
@@ -237,6 +257,54 @@ describe('readPlanTrees — the board', () => {
     expect(find(roots, served.nodeId)?.ownedBy).toBe('loop');
     expect(find(roots, running.nodeId)?.ownedBy).toBe('loop');
     expect(find(roots, waiting.nodeId)?.ownedBy).toBe('loop');
+  });
+
+  it('names a parent with no run of its own the loop’s where the loop holds any child, through every level', async () => {
+    const root = await node('root');
+    const phase = await node('P1 — phase', { parentId: root.nodeId });
+    const step = await node('served step', { parentId: phase.nodeId });
+    await node('bare step', { parentId: phase.nodeId });
+    const idle = await node('idle phase', { parentId: root.nodeId });
+    await node('bare under idle', { parentId: idle.nodeId });
+    const idleRoot = await node('idle root');
+    await node('bare under idle root', { parentId: idleRoot.nodeId });
+    await linkPlanNode(ctx(), {
+      nodeId: step.nodeId,
+      kind: 'run',
+      ref: '00000000-0000-4000-8000-0000000000c2',
+    });
+
+    const roots = (await read()).roots;
+
+    expect(find(roots, phase.nodeId)?.ownedBy).toBe('loop');
+    expect(find(roots, root.nodeId)?.ownedBy).toBe('loop');
+    expect(find(roots, idle.nodeId)?.ownedBy).toBe('operator');
+    expect(find(roots, idleRoot.nodeId)?.ownedBy).toBe('operator');
+  });
+
+  it('keeps a parent the loop’s where a run serves it, whatever its children', async () => {
+    const root = await node('root');
+    await node('bare', { parentId: root.nodeId });
+    store.runs.push(inFlightRun('r2', root.nodeId, 'running'));
+
+    expect(find((await read()).roots, root.nodeId)?.ownedBy).toBe('loop');
+  });
+
+  it('builds one day formatter for every done node of every plan', async () => {
+    for (const title of ['one', 'two']) {
+      const root = await node(title);
+      for (const n of [1, 2, 3])
+        await close(await node(`${title} ${String(n)}`, { parentId: root.nodeId }), 'done');
+    }
+    const built = countDayFormatters();
+    try {
+      const trees = await read({ tz: 'Europe/Paris' });
+
+      expect(trees.tallies.map((t) => t.done)).toEqual([3, 3]);
+      expect(built.count).toBe(1);
+    } finally {
+      built.restore();
+    }
   });
 
   it('surfaces the newest pull request, merged where a merge of it is linked, with the merge commit', async () => {
@@ -408,11 +476,24 @@ describe('readPlanTrees — the board', () => {
   });
 });
 
-describe('planDayOf', () => {
+describe('planDayReader', () => {
   it('names the calendar day an instant falls on in a time zone', () => {
-    expect(planDayOf('2026-10-22T23:30:00.000Z')).toBe('2026-10-22');
-    expect(planDayOf('2026-10-22T23:30:00.000Z', 'Europe/Paris')).toBe('2026-10-23');
-    expect(planDayOf('2026-10-22T03:00:00.000Z', 'America/Los_Angeles')).toBe('2026-10-21');
+    expect(planDayReader()('2026-10-22T23:30:00.000Z')).toBe('2026-10-22');
+    expect(planDayReader('Europe/Paris')('2026-10-22T23:30:00.000Z')).toBe('2026-10-23');
+    expect(planDayReader('America/Los_Angeles')('2026-10-22T03:00:00.000Z')).toBe('2026-10-21');
+  });
+
+  it('builds its formatter once and reads every instant with it', () => {
+    const built = countDayFormatters();
+    try {
+      const dayOf = planDayReader('Europe/Paris');
+      const days = ['2026-10-20T10:00:00.000Z', '2026-10-21T23:30:00.000Z'].map(dayOf);
+
+      expect(days).toEqual(['2026-10-20', '2026-10-22']);
+      expect(built.count).toBe(1);
+    } finally {
+      built.restore();
+    }
   });
 });
 

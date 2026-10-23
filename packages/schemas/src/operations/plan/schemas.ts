@@ -208,7 +208,8 @@ export type PlanNodeCounts = z.infer<typeof PlanNodeCountsSchema>;
 
 /**
  * Who a node waits on. `operator`: it is active and no run has served it or
- * serves it now, so nothing in the loop is moving it.
+ * serves it now, so nothing in the loop is moving it. A parent — a root, a
+ * phase — is the loop's too where the loop holds any of its children.
  */
 export const PlanNodeOwnerSchema = z.enum(['loop', 'operator']);
 export type PlanNodeOwner = z.infer<typeof PlanNodeOwnerSchema>;

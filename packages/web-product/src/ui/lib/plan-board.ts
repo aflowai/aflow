@@ -64,6 +64,10 @@ export interface PlanBoardFilters {
   owner: PlanOwnerFilter;
 }
 
+export function planBoardFiltered(filters: PlanBoardFilters): boolean {
+  return filters.phaseId !== undefined || filters.owner !== 'all';
+}
+
 export function planCardMatches(card: PlanCard, filters: PlanBoardFilters): boolean {
   if (filters.phaseId !== undefined) {
     const inPhase = card.node.nodeId === filters.phaseId || card.phase?.nodeId === filters.phaseId;
@@ -177,15 +181,42 @@ export function doneGroupOf(
 
 /**
  * What the tree must hold for the folds open: done nodes from the first day
- * of the oldest open fold. With none open, today's — the cheapest read.
+ * of the oldest open fold. With none open, today's — the cheapest read. Under
+ * a filter every fold is counted from its cards, so every fold is read.
  */
 export function doneCardsSince(
   groups: readonly PlanDoneGroup[],
   expanded: ReadonlySet<string>,
   today: string,
+  filtered = false,
 ): string {
-  const open = groups.filter((group) => expanded.has(group.id)).map((group) => group.from);
-  return open.reduce((oldest, day) => (day < oldest ? day : oldest), today);
+  const read = groups.filter((group) => filtered || expanded.has(group.id)).map((g) => g.from);
+  return read.reduce((oldest, day) => (day < oldest ? day : oldest), today);
+}
+
+/** A fold as the board shows it; `shown` is undefined while its cards are still being read. */
+export interface PlanDoneFold extends PlanDoneGroup {
+  shown: number | undefined;
+  cards: PlanCard[];
+}
+
+/**
+ * Each fold with the count it shows. Unfiltered, the plan's own count for its
+ * days. Filtered, the matching cards in it — which only a tree read from the
+ * fold's first day holds, so a fold the read on screen does not reach shows
+ * no count rather than a short one.
+ */
+export function planDoneFolds(
+  groups: readonly PlanDoneGroup[],
+  doneCards: readonly PlanCard[],
+  filtered: boolean,
+  readSince: string | undefined,
+): PlanDoneFold[] {
+  return groups.map((group) => {
+    const cards = doneCards.filter((card) => doneGroupOf(card, groups)?.id === group.id);
+    const held = readSince !== undefined && readSince <= group.from;
+    return { ...group, cards, shown: !filtered ? group.count : held ? cards.length : undefined };
+  });
 }
 
 // ============================================================================
