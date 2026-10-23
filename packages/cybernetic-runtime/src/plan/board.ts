@@ -97,18 +97,21 @@ function boardNode(node: PlanNodeSummary, reads: PlanBoardReads): PlanTreeNode {
 
 /**
  * A parent's progress and owner are its children's: progress, those done of
- * those not dropped; owner, the loop's where the loop holds any child — runs
- * serve the steps under a root or phase, rarely the parent itself.
+ * those not dropped; owner, the loop's where a run serves it or the loop holds
+ * an active child — runs serve the steps under a root or phase, rarely the
+ * parent itself. A child done, dropped, blocked or waiting is no work the loop
+ * is moving, though its own card reads the loop's.
  */
 function withChildren(node: PlanTreeNode): PlanTreeNode {
   const children = node.children.map(withChildren);
   if (children.length === 0) return { ...node, children };
   const counted = children.filter((child) => child.status !== 'dropped');
+  const served = node.counts.runs > 0 || node.counts.inFlightRuns > 0;
   return {
     ...node,
     children,
     ownedBy:
-      node.ownedBy === 'loop' || children.some((child) => child.ownedBy === 'loop')
+      served || children.some((child) => child.status === 'active' && child.ownedBy === 'loop')
         ? 'loop'
         : 'operator',
     progress: {

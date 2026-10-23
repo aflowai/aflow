@@ -282,6 +282,40 @@ describe('readPlanTrees — the board', () => {
     expect(find(roots, idleRoot.nodeId)?.ownedBy).toBe('operator');
   });
 
+  it('counts only active children toward a parent’s owner, through every level', async () => {
+    const root = await node('root');
+    const settled = await node('settled phase', { parentId: root.nodeId });
+    const done = await node('done step', { parentId: settled.nodeId });
+    await linkPlanNode(ctx(), {
+      nodeId: done.nodeId,
+      kind: 'run',
+      ref: '00000000-0000-4000-8000-0000000000c3',
+    });
+    await close(done, 'done');
+    await close(await node('dropped step', { parentId: settled.nodeId }), 'dropped');
+    store.seed(SPACE, { parentId: settled.nodeId, title: 'blocked step', status: 'blocked' });
+    store.seed(SPACE, { parentId: settled.nodeId, title: 'waiting step', status: 'waiting' });
+    const moving = await node('moving phase', { parentId: root.nodeId });
+    const active = await node('active step', { parentId: moving.nodeId });
+    store.seed(SPACE, { parentId: moving.nodeId, title: 'waiting beside', status: 'waiting' });
+    store.runs.push(inFlightRun('r3', active.nodeId, 'running'));
+    const settledRoot = await node('settled root');
+    store.seed(SPACE, { parentId: settledRoot.nodeId, title: 'waiting only', status: 'waiting' });
+
+    const roots = (await read()).roots;
+
+    expect(find(roots, done.nodeId)?.ownedBy).toBe('loop');
+    expect(find(roots, settled.nodeId)?.ownedBy).toBe('operator');
+    expect(find(roots, settledRoot.nodeId)?.ownedBy).toBe('operator');
+    expect(find(roots, moving.nodeId)?.ownedBy).toBe('loop');
+    expect(find(roots, root.nodeId)?.ownedBy).toBe('loop');
+
+    store.runs.length = 0;
+    const idle = (await read()).roots;
+    expect(find(idle, moving.nodeId)?.ownedBy).toBe('operator');
+    expect(find(idle, root.nodeId)?.ownedBy).toBe('operator');
+  });
+
   it('keeps a parent the loop’s where a run serves it, whatever its children', async () => {
     const root = await node('root');
     await node('bare', { parentId: root.nodeId });
