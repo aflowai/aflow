@@ -89,7 +89,10 @@ its outcome as it is marked done, and no firing commissions it (`wait`, `awaitin
    tests to add. `harness` is named only to choose a coding agent other than the
    machine's default (`aflow harness default <id>`). Its two hours, and the operation's several hundred turns on an agent that
    takes a turn budget, are sized for a slice; name `timeoutMs` or `maxTurns` only to
-   change them. Several commissions may run at once, within the machine's limit (below).
+   change them. A slice that touches a page of the web UI also takes
+   `browser: { profile: 'ephemeral' }`, and the brief names the dev-server URL the agent
+   opens and what it should see working there; any other slice leaves it out.
+   Several commissions may run at once, within the machine's limit (below).
    The checks the agent must run are named in the brief, because the folder's checks
    only run once the commission is published: `yarn test:file` on touched and added tests, `npx tsc -p` per touched
    workspace, the two guards `scripts/verify-commit.mjs` runs

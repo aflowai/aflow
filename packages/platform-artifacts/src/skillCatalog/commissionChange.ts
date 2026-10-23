@@ -5,7 +5,9 @@ import {
   HOST_HARNESS_TASK_MAX_LENGTH,
   HOST_HARNESS_TIMEOUT_MAX_MS,
   HOST_HARNESS_TIMEOUT_MIN_MS,
+  HostHarnessBrowserSchema,
   MAX_PARENT_INPUTS_SERIALIZED_BYTES,
+  toJsonSchemaSync,
   type SkillCatalogEntry,
 } from '@aflow/schemas';
 
@@ -22,15 +24,22 @@ const RUN_INPUTS_KB = MAX_PARENT_INPUTS_SERIALIZED_BYTES / 1024;
 
 const MINUTES = 60_000;
 
+/**
+ * The operation's own `browser`, descriptions included. A run input's own
+ * description holds 500 characters, which the operation's description alone
+ * nearly fills, so it says when to set the input and the schema says what it is.
+ */
+const BROWSER_SCHEMA = { ...toJsonSchemaSync(HostHarnessBrowserSchema) };
+
 const COMMISSION_CHANGE: SkillCatalogEntry = {
   catalogId: 'commission-change',
-  version: 7,
+  version: 8,
   name: 'Commission Change',
   tagline:
     "Have the machine's own coding agent make a change in a connected repository, and get the change back as a patch.",
   description: `Fits a request to make a change in a repository on the operator's machine — "build this slice", "fix these findings", "now fix the test that broke". A commission hands a brief to the coding agent installed on that machine, which works in an isolated checkout of the connected folder and leaves the folder itself untouched; what it changed comes back as a stored patch. Nothing is committed, pushed or published: publishing the patch is Publish Local Changes, and reviewing it once published is Review Local Changes.
 
-**What it needs**: the connected folder and the brief — the task text, everything the coding agent needs and nothing it has to guess: the files and the lines where they are known, what is wrong and what right looks like, the tests to add, the checks to run and what its result reports. \`base\` is where the checkout starts: \`origin/main\` for new work, the branch's name for a fix appended to a branch — a fix round included, whose branch holds the earlier round's commit pushed or kept local — so the patch is made against the branch's head and never against the earlier commission's \`baseSha\`. A fix to a branch \`main\` has moved past also takes \`mergeFrom: origin/<base>\`, so the checkout merges it first and the agent resolves what conflicts. A further turn on the same work takes \`continueFrom\`, the \`sessionRef\` the earlier run reported, from the conversation that started that run: a session belongs to that conversation, and a commission from any other is refused it. \`harness\`, \`model\`, \`maxTurns\` and \`timeoutMs\` are optional. \`harness\` is named only to require a coding agent other than the space's preferred one; absent, the machine runs the space's preference, else its own default, each where installed, and the result says which ran. The budgets are sized for a slice already — ${String(COMMISSION_TIMEOUT_DEFAULT_MS / MINUTES)} minutes, and ${String(HOST_HARNESS_MAX_TURNS_DEFAULT)} turns on a coding agent that takes a turn budget — and are named only to change them.
+**What it needs**: the connected folder and the brief — the task text, everything the coding agent needs and nothing it has to guess: the files and the lines where they are known, what is wrong and what right looks like, the tests to add, the checks to run and what its result reports. \`base\` is where the checkout starts: \`origin/main\` for new work, the branch's name for a fix appended to a branch — a fix round included, whose branch holds the earlier round's commit pushed or kept local — so the patch is made against the branch's head and never against the earlier commission's \`baseSha\`. A fix to a branch \`main\` has moved past also takes \`mergeFrom: origin/<base>\`, so the checkout merges it first and the agent resolves what conflicts. A further turn on the same work takes \`continueFrom\`, the \`sessionRef\` the earlier run reported, from the conversation that started that run: a session belongs to that conversation, and a commission from any other is refused it. \`harness\`, \`model\`, \`maxTurns\`, \`timeoutMs\` and \`browser\` are optional. A change that touches a page of the repository's web UI takes \`browser: { profile: 'ephemeral' }\`, and its brief names the dev-server URL the coding agent opens and what it should see working there; absent, the coding agent has no browser. \`harness\` is named only to require a coding agent other than the space's preferred one; absent, the machine runs the space's preference, else its own default, each where installed, and the result says which ran. The budgets are sized for a slice already — ${String(COMMISSION_TIMEOUT_DEFAULT_MS / MINUTES)} minutes, and ${String(HOST_HARNESS_MAX_TURNS_DEFAULT)} turns on a coding agent that takes a turn budget — and are named only to change them.
 
 **Start it with \`wait: 'none'\`.** A commission runs for tens of minutes. Started that way it returns the run id at once, the conversation stays free, and the commission's end wakes it with the result. Several commissions may run at once on one machine, each in its own checkout. The machine runs only so many coding agents at once — ${String(HOST_HARNESS_CONCURRENCY_DEFAULT)} unless its operator chose another number — and a commission past that waits for one to end rather than being refused; its time counts from when it starts.
 
@@ -124,6 +133,13 @@ const COMMISSION_CHANGE: SkillCatalogEntry = {
             default: COMMISSION_TIMEOUT_DEFAULT_MS,
           },
         },
+        {
+          id: 'browser',
+          required: false,
+          description:
+            "A browser for the coding agent: the operation's own `browser`, as its schema describes it. A change that touches a page of the repository's web UI gets `{ profile: 'ephemeral' }`, and the brief then names the dev-server URL the coding agent opens and what it should see working there. Absent, the coding agent has no browser — leave it out of a change no page shows.",
+          schema: BROWSER_SCHEMA,
+        },
       ],
       tasks: [
         {
@@ -144,6 +160,7 @@ const COMMISSION_CHANGE: SkillCatalogEntry = {
             model: { kind: 'run_input' as const, path: 'model' },
             maxTurns: { kind: 'run_input' as const, path: 'maxTurns' },
             timeoutMs: { kind: 'run_input' as const, path: 'timeoutMs' },
+            browser: { kind: 'run_input' as const, path: 'browser' },
           },
           context: {
             strategy: 'scoped' as const,
@@ -167,6 +184,7 @@ const COMMISSION_CHANGE: SkillCatalogEntry = {
             model: { $bind: 'model' },
             maxTurns: { $bind: 'maxTurns' },
             timeoutMs: { $firstOf: [{ $bind: 'timeoutMs' }, COMMISSION_TIMEOUT_DEFAULT_MS] },
+            browser: { $bind: 'browser' },
           },
           promoteOutputs: [
             { kind: 'output_path' as const, path: 'patchRef', toState: 'patchRef' },
@@ -286,7 +304,7 @@ const COMMISSION_CHANGE: SkillCatalogEntry = {
       priority: 50,
     },
     rationale:
-      "One operation task on host.harness.run with every input a brief names as a run input: the description steers the Helmsman (what a brief carries, wait: 'none', what to do with the result) and the brief itself instructs the coding agent. No outputSchema: what the brief asks the agent to report is the brief's, and the change is the operation's own patchRef, which the run promotes with baseSha and merge so a publication takes them as they stand. The time defaults in the template, because a run input's default is never applied; the turn budget is the operation's own, because only the machine knows whether its coding agent can take one. How many run at once is the machine's, which holds a commission past its limit until a coding agent ends.",
+      "One operation task on host.harness.run with every input a brief names as a run input: the description steers the Helmsman (what a brief carries, wait: 'none', what to do with the result) and the brief itself instructs the coding agent. No outputSchema: what the brief asks the agent to report is the brief's, and the change is the operation's own patchRef, which the run promotes with baseSha and merge so a publication takes them as they stand. The browser is the operation's own input with its own schema, bound through and absent unless the brief asks for one. The time defaults in the template, because a run input's default is never applied; the turn budget is the operation's own, because only the machine knows whether its coding agent can take one. How many run at once is the machine's, which holds a commission past its limit until a coding agent ends.",
   },
 };
 
