@@ -71,12 +71,16 @@ function boardNode(node: PlanNodeSummary, reads: PlanBoardReads): PlanTreeNode {
   const inFlightRuns = reads.inFlight.get(node.nodeId) ?? 0;
   const pullRequest = reads.pullRequests.get(node.nodeId);
   const mergeSha = mergeShaOf(pullRequest?.merge?.label);
+  // The node's own row, read after the walk, is the newer word on both times:
+  // a node reopened between the reads has no `closedAt`, whatever the summary
+  // carried. A node the walk read and its row did not was deleted between
+  // them, and only its summary's times are left.
+  const { closedAt: summaryClosedAt, ...summary } = node;
+  const closedAt = facts !== undefined ? facts.closedAt : summaryClosedAt;
   return {
-    ...node,
-    // A node the walk read and its own row did not is one deleted between
-    // the two reads; its summary's time stands in for both.
-    createdAt: facts?.createdAt ?? node.updatedAt,
-    ...(facts?.closedAt !== undefined ? { closedAt: facts.closedAt } : {}),
+    ...summary,
+    createdAt: facts?.createdAt ?? node.createdAt,
+    ...(closedAt !== undefined ? { closedAt } : {}),
     goalHead: facts?.goalHead ?? '',
     counts: { ...links, inFlightRuns },
     rounds,

@@ -148,13 +148,12 @@ export const PlanNodeListInputSchema = z
       .min(1)
       .max(PLAN_NODE_LIST_MAX_LIMIT)
       .default(PLAN_NODE_LIST_DEFAULT_LIMIT),
-    offset: z
-      .number()
-      .int()
-      .min(0)
-      .default(0)
+    cursor: z
+      .string()
+      .min(1)
+      .optional()
       .describe(
-        'Matching nodes to skip, in the list’s order. A truncated list names the offset its next page starts at.',
+        'Absent for the first page. Otherwise `truncated.next.cursor` of the page before, with the same `status` and `rootId`.',
       ),
   })
   .strict();
@@ -186,11 +185,13 @@ export const PlanNodeListPageTruncationSchema = PlanNodeListTruncationSchema.ext
         '`depth` or `nodes` at least this many, since the read stopped before the rest.',
     ),
   next: z
-    .object({ offset: z.number().int().min(0) })
+    .object({ cursor: z.string().min(1) })
     .strict()
     .optional()
     .describe(
-      'Present while matching nodes remain past this page: list again with the same input and this `offset`.',
+      'Present while nodes the read found remain past this page: list again with the same input and this ' +
+        '`cursor`. It holds the plan as this page read it, so if a node is created, closed, reopened or ' +
+        'moved before the next page, that page is refused, not shifted. Then list again without `cursor`.',
     ),
 }).strict();
 export type PlanNodeListPageTruncation = z.infer<typeof PlanNodeListPageTruncationSchema>;
@@ -199,8 +200,10 @@ export const PlanNodeListOutputSchema = z.object({
   /** Parents before their children, siblings by position. */
   nodes: z.array(PlanNodeSummarySchema),
   truncated: PlanNodeListPageTruncationSchema.optional().describe(
-    'Absent when every matching node is here. Present, `nodes` is one page of the plan, not all ' +
-      'of it: count from `matched`, and read the rest from `next`.',
+    'Absent when every matching node is here. Present, `nodes` is one page, not the whole plan: ' +
+      'count from `matched`, and page with `next` while it is present. Under `depth` or `nodes` ' +
+      'the read stopped before the end of the plan. Once `next` is absent, paging has nothing ' +
+      'more to give, and the rest is reached with `rootId`, as `bound` says.',
   ),
 });
 export type PlanNodeListOutput = z.infer<typeof PlanNodeListOutputSchema>;

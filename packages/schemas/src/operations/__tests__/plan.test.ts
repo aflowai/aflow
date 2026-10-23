@@ -282,7 +282,7 @@ describe('PlanNodeListInputSchema', () => {
     const parsed = PlanNodeListInputSchema.parse({});
     expect(parsed.status).toEqual(['active', 'waiting', 'blocked']);
     expect(parsed.limit).toBeGreaterThan(0);
-    expect(parsed.offset).toBe(0);
+    expect(parsed).not.toHaveProperty('cursor');
   });
 
   it('lists a 65-node plan in one page by default', () => {
@@ -290,9 +290,9 @@ describe('PlanNodeListInputSchema', () => {
     expect(PLAN_NODE_LIST_DEFAULT_LIMIT).toBeLessThanOrEqual(PLAN_NODE_LIST_MAX_LIMIT);
   });
 
-  it('refuses a negative or fractional offset', () => {
-    expect(PlanNodeListInputSchema.safeParse({ offset: -1 }).success).toBe(false);
-    expect(PlanNodeListInputSchema.safeParse({ offset: 1.5 }).success).toBe(false);
+  it('refuses an empty cursor, and an offset', () => {
+    expect(PlanNodeListInputSchema.safeParse({ cursor: '' }).success).toBe(false);
+    expect(PlanNodeListInputSchema.safeParse({ offset: 3 }).success).toBe(false);
   });
 });
 
@@ -321,7 +321,7 @@ describe('PlanNodeListOutputSchema', () => {
   it('a truncated list says how many nodes match and where the next page starts', () => {
     const page = {
       nodes: [SUMMARY],
-      truncated: { bound: 'limit', value: 1, matched: 65, next: { offset: 1 } },
+      truncated: { bound: 'limit', value: 1, matched: 65, next: { cursor: 'WzEsImFiYyJd' } },
     };
     expect(PlanNodeListOutputSchema.parse(page)).toEqual(page);
     expect(
@@ -330,6 +330,14 @@ describe('PlanNodeListOutputSchema', () => {
         truncated: { bound: 'limit', value: 1 },
       }).success,
     ).toBe(false);
+  });
+
+  it('a read cut short by depth or nodes may end with no next page, and says how to reach the rest', () => {
+    const last = { nodes: [SUMMARY], truncated: { bound: 'depth', value: 64, matched: 1 } };
+    expect(PlanNodeListOutputSchema.parse(last)).toEqual(last);
+    const said = PlanNodeListOutputSchema.shape.truncated.description ?? '';
+    expect(said).toContain('Once `next` is absent');
+    expect(said).toContain('`rootId`');
   });
 });
 

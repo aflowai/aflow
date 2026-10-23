@@ -136,7 +136,9 @@ export const PlanOperationRegistrations: OperationRegistration[] = [
       whenToUse: ['Looking past what the attention block shows: closed nodes, or a deep subtree'],
       whenNotToUse: ['Reading one node in full — use plan.node.get'],
       pitfalls: [
-        'A result with `truncated` is one page: count nodes from `truncated.matched`, never from the page, and read the rest by listing again with `truncated.next.offset`',
+        'A result with `truncated` is one page: count nodes from `truncated.matched`, never from the page, and read the next page by listing again with `truncated.next.cursor`',
+        'A cursor refused as stale means the plan changed between pages; list again without `cursor` rather than retrying it',
+        'Under `truncated.bound` `depth` or `nodes`, the last page still leaves nodes unread: reach them with `rootId` nearer them',
       ],
       minimalExampleInput: { status: ['done'] },
     },

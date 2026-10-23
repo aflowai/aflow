@@ -5,7 +5,7 @@
  * surface. Every write bumps the space's attention generation, so the next
  * turn of any session in the space reads the tree as it now stands.
  */
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { Redis } from 'ioredis';
 import {
   isClosedPlanNodeStatus,
@@ -36,6 +36,7 @@ import {
   type PlanNodeListOutput,
   type PlanNodeRefusalDetails,
   type PlanNodeStatus,
+  type PlanNodeSummary,
   type PlanNodeUpdateInput,
   type PlanTreeOutput,
 } from '@aflow/schemas';
@@ -66,6 +67,8 @@ export type PlanOpErrorCode =
   | 'PLAN_NODE_NOTE_TOO_LONG'
   | 'PLAN_NODE_LINK_EXISTS'
   | 'PLAN_LINK_CURSOR_INVALID'
+  | 'PLAN_LIST_CURSOR_INVALID'
+  | 'PLAN_LIST_CURSOR_STALE'
   | 'PLAN_NODE_DEPENDENCY_CYCLE'
   | 'PLAN_NODE_DEPENDENCY_WALK_LIMIT'
   | 'PLAN_LEARNING_NOT_FOUND';
@@ -436,13 +439,64 @@ function planNodeLearning(learning: CoachLearning): PlanNodeLearning {
   };
 }
 
+/**
+ * What a page of `plan.node.list` read, as a digest: the input's filter and
+ * every matching node in order with what places it. Every page re-walks the
+ * tree, so a later page is the earlier one's continuation only while this is
+ * unchanged — a node created, closed, reopened or moved in between shifts
+ * every position after it.
+ */
+function planListView(
+  statuses: ReadonlySet<PlanNodeStatus>,
+  rootId: string | undefined,
+  matching: readonly PlanNodeSummary[],
+): string {
+  const hash = createHash('sha256');
+  hash.update(JSON.stringify([[...statuses].sort(), rootId ?? null]));
+  for (const node of matching) {
+    hash.update(
+      `\n${node.nodeId}|${String(node.revision)}|${node.status}|${node.parentId ?? ''}|${String(node.position)}`,
+    );
+  }
+  return hash.digest('base64url').slice(0, 22);
+}
+
+interface PlanListCursor {
+  offset: number;
+  view: string;
+}
+
+function encodePlanListCursor(cursor: PlanListCursor): string {
+  return Buffer.from(JSON.stringify([cursor.offset, cursor.view]), 'utf8').toString('base64url');
+}
+
+function decodePlanListCursor(cursor: string): PlanListCursor | null {
+  try {
+    const parsed: unknown = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
+    if (!Array.isArray(parsed) || parsed.length !== 2) return null;
+    const [offset, view] = parsed as unknown[];
+    if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 1) return null;
+    return typeof view === 'string' && view.length > 0 ? { offset, view } : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function listPlanNodes(
   ctx: PlanReadContext,
   input: Partial<PlanNodeListInput>,
 ): Promise<PlanOpResult<PlanNodeListOutput>> {
   const statuses = new Set(input.status ?? OPEN_PLAN_NODE_STATUSES);
   const limit = input.limit ?? PLAN_NODE_LIST_DEFAULT_LIMIT;
-  const offset = input.offset ?? 0;
+  const cursor = input.cursor !== undefined ? decodePlanListCursor(input.cursor) : undefined;
+  if (cursor === null) {
+    return {
+      ok: false,
+      code: 'PLAN_LIST_CURSOR_INVALID',
+      message:
+        'This cursor was not issued by plan.node.list: pass the `truncated.next.cursor` of the page before, or none for the first page.',
+    };
+  }
 
   const start = input.rootId !== undefined ? { rootId: input.rootId } : {};
   if (start.rootId !== undefined && !(await ctx.store.find(ctx.spaceId, start.rootId))) {
@@ -462,6 +516,18 @@ export async function listPlanNodes(
     .map((placed) => placed.node)
     .filter((node) => statuses.has(node.status));
 
+  const view = planListView(statuses, input.rootId, matching);
+  if (cursor !== undefined && cursor.view !== view) {
+    return {
+      ok: false,
+      code: 'PLAN_LIST_CURSOR_STALE',
+      message:
+        'The plan changed since the page this cursor came from: a node was created, closed, reopened or moved, ' +
+        'or this list names another `status` or `rootId`. Its next page would skip or repeat nodes, so none was ' +
+        'returned. List again without `cursor` to read the plan as it now stands.',
+    };
+  }
+  const offset = cursor?.offset ?? 0;
   const end = offset + limit;
   const pageCut = matching.length > end;
   // A bound the walk met hides nodes whatever `limit` is, so it is the one to name.
@@ -474,7 +540,7 @@ export async function listPlanNodes(
           truncated: {
             ...bound,
             matched: matching.length,
-            ...(pageCut ? { next: { offset: end } } : {}),
+            ...(pageCut ? { next: { cursor: encodePlanListCursor({ offset: end, view }) } } : {}),
           },
         }
       : {}),

@@ -17,6 +17,7 @@ import {
   PlanTreeOutputSchema,
   type PlanNode,
   type PlanNodeCreateInput,
+  type PlanNodeSummary,
   type PlanTreeNode,
 } from '@aflow/schemas';
 import {
@@ -28,6 +29,7 @@ import {
   type PlanWriteContext,
 } from '../plan/operations.js';
 import {
+  buildPlanBoard,
   decodePlanLinkCursor,
   encodePlanLinkCursor,
   planDayReader,
@@ -535,6 +537,53 @@ describe('readPlanTrees — the board', () => {
     let depth = 0;
     for (let at = trees.roots[0]; at?.children[0] !== undefined; at = at.children[0]) depth++;
     expect(depth).toBe(PLAN_TREE_DEPTH_LIMIT);
+  });
+});
+
+describe('buildPlanBoard — a node written between the walk and its row', () => {
+  const summary: PlanNodeSummary = {
+    nodeId: '0d000000-0000-4000-8000-000000000322',
+    parentId: null,
+    kind: 'execute',
+    title: 'reopened',
+    status: 'done',
+    revision: 2,
+    position: 0,
+    createdAt: '2026-10-20T09:00:00.000Z',
+    updatedAt: '2026-10-21T09:00:00.000Z',
+    closedAt: '2026-10-21T09:00:00.000Z',
+  };
+  const board = (facts: Map<string, { createdAt: string; closedAt?: string; goalHead: string }>) =>
+    buildPlanBoard([{ node: summary, depth: 0 }], {
+      facts,
+      tallies: new Map(),
+      pullRequests: new Map(),
+      inFlight: new Map(),
+    }).roots[0];
+
+  it('drops the closedAt the walk read once the row says the node is open again', () => {
+    const card = board(
+      new Map([[summary.nodeId, { createdAt: summary.createdAt, goalHead: 'Ship it.' }]]),
+    );
+
+    expect(card).not.toHaveProperty('closedAt');
+    expect(card?.createdAt).toBe(summary.createdAt);
+  });
+
+  it('takes the row’s closedAt over the walk’s', () => {
+    const closedAt = '2026-10-22T09:00:00.000Z';
+    const card = board(
+      new Map([[summary.nodeId, { createdAt: summary.createdAt, closedAt, goalHead: '' }]]),
+    );
+
+    expect(card?.closedAt).toBe(closedAt);
+  });
+
+  it('keeps the summary’s own createdAt and closedAt for a node whose row is gone', () => {
+    const card = board(new Map());
+
+    expect(card?.createdAt).toBe(summary.createdAt);
+    expect(card?.closedAt).toBe(summary.closedAt);
   });
 });
 
