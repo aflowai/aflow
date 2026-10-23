@@ -5,9 +5,11 @@ import {
   HOST_HARNESS_MAX_TURNS_DEFAULT,
   HOST_HARNESS_TIMEOUT_DEFAULT_MS,
   HOST_HARNESS_TIMEOUT_MAX_MS,
+  HostHarnessBrowserSchema,
   HostHarnessRunInputSchema,
   isEvalPlaneOperation,
   substituteTemplateBinds,
+  toJsonSchemaSync,
 } from '@aflow/schemas';
 import { getSkillBundleEntry } from '../skillBundleCatalog.js';
 import { COMMISSION_CHANGE } from './commissionChange.js';
@@ -64,6 +66,7 @@ describe('Commission Change — a brief to the machine’s coding agent', () => 
       'model',
       'maxTurns',
       'timeoutMs',
+      'browser',
     ]);
     expect(inputs.filter((i) => i.required).map((i) => i.id)).toEqual(['bindingId', 'task']);
     for (const input of inputs) {
@@ -122,10 +125,48 @@ describe('Commission Change — a brief to the machine’s coding agent', () => 
       model: 'claude-opus-5-5',
       maxTurns: 40,
       timeoutMs: 600_000,
+      browser: { profile: 'ephemeral' },
     };
     const op = substituteTemplateBinds(template, named, declared);
     expect(op).toEqual(named);
     expect(HostHarnessRunInputSchema.safeParse(op).success).toBe(true);
+  });
+
+  it('gives the coding agent no browser when the brief asks for none', () => {
+    const op = substituteTemplateBinds(template, { bindingId: 'hb_repo', task: BRIEF }, declared);
+    expect('browser' in op).toBe(false);
+    const parsed = HostHarnessRunInputSchema.safeParse(op);
+    expect(parsed.success).toBe(true);
+    expect(parsed.data?.browser).toBeUndefined();
+  });
+
+  it('hands the operation the browser the brief names, unchanged', () => {
+    for (const browser of [{ profile: 'ephemeral' }, { profile: 'work-chrome' }]) {
+      const op = substituteTemplateBinds(
+        template,
+        { bindingId: 'hb_repo', task: BRIEF, browser },
+        declared,
+      );
+      expect(op['browser']).toEqual(browser);
+      const parsed = HostHarnessRunInputSchema.safeParse(op);
+      expect(parsed.success).toBe(true);
+      expect(parsed.data?.browser).toEqual(browser);
+    }
+  });
+
+  it("takes the operation's browser schema, and says to ask for one for a page of the web UI", () => {
+    const input = (wf.runInputs ?? []).find((i) => i.id === 'browser');
+    expect(input?.required).toBe(false);
+    expect(input?.schema).toEqual(toJsonSchemaSync(HostHarnessBrowserSchema));
+    expect(input?.schema?.['description']).toBe(HostHarnessBrowserSchema.description);
+    expect(input?.description).toContain(
+      "A change that touches a page of the repository's web UI gets `{ profile: 'ephemeral' }`",
+    );
+    expect(input?.description).toContain(
+      'names the dev-server URL the coding agent opens and what it should see working there',
+    );
+    expect(input?.description?.length ?? 0).toBeLessThanOrEqual(500);
+    expect(COMMISSION_CHANGE.description).toContain("`browser: { profile: 'ephemeral' }`");
   });
 
   it('promotes the change and what a publication and a further turn take, patchRef primary', () => {
