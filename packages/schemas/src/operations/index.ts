@@ -36,6 +36,7 @@ export * from './platform.js';
 export * from './guardrailOps.js';
 export * from './ui.js';
 export * from './uiArtifactView.js';
+export * from './uiSurfaceGeneration.js';
 export * from './designSystem.js';
 export * from './mcp.js';
 export * from './workflow.js';

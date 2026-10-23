@@ -87,6 +87,7 @@ export type RenderItem =
       surfaceId: string;
       isStreaming: boolean;
       mutations: Array<Record<string, unknown>>;
+      error?: string;
       workflowRunId?: string;
     }
   | {
@@ -166,6 +167,7 @@ export function groupConversationItems(items: ConversationItem[]): RenderItem[] 
         surfaceId: item.surfaceId,
         isStreaming: item.isStreaming,
         mutations: item.mutations,
+        ...(item.error !== undefined ? { error: item.error } : {}),
         ...(item.workflowRunId ? { workflowRunId: item.workflowRunId } : {}),
       });
     } else if (item.kind === 'inline_applet') {

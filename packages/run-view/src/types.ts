@@ -188,6 +188,9 @@ export interface InlineSurfaceItem {
    *  op's completion event. */
   isStreaming: boolean;
   mutations: Array<Record<string, unknown>>;
+  /** Why generation produced no surface — set when the step failed with
+   *  `SURFACE_GENERATION_EMPTY`; the card shows it in place of a render. */
+  error?: string;
   lastSurfaceSequence?: number;
   lastSurfaceStepExecutionId?: string;
   /** Set when sourced from a skill workflow task. */

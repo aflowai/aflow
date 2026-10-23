@@ -598,6 +598,11 @@ function buildRenderedInlineStub(output: unknown): string | null {
   if (p['mode'] !== 'rendered_inline') return null;
   const substrate = p['substrate'];
   if (substrate !== 'artifact' && substrate !== 'surface' && substrate !== 'applet') return null;
+  // A surface with no mutations painted nothing; telling the agent it
+  // rendered would be false.
+  if (substrate === 'surface' && surfaceMutationCount(output as Record<string, unknown>) === 0) {
+    return null;
+  }
 
   const stub: Record<string, unknown> = {
     rendered: true,
@@ -656,6 +661,13 @@ function buildRenderedInlineStub(output: unknown): string | null {
     }
   }
   return text;
+}
+
+function surfaceMutationCount(output: Record<string, unknown>): number {
+  const count = output['mutationCount'];
+  if (typeof count === 'number') return count;
+  const mutations = output['mutations'];
+  return Array.isArray(mutations) ? mutations.length : 0;
 }
 
 /** Margin under the 16000-char turn-input cap on newToolResults summaries. */
