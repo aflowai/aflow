@@ -316,6 +316,34 @@ describe('readPlanTrees — the board', () => {
     expect(find(idle, root.nodeId)?.ownedBy).toBe('operator');
   });
 
+  it('names a parent with no run and no active child the loop holds the operator’s only while it is active', async () => {
+    const root = await node('root');
+    const parents = new Map<string, string>();
+    for (const status of ['active', 'done', 'dropped', 'blocked', 'waiting'] as const) {
+      const parent = store.seed(SPACE, { parentId: root.nodeId, title: `${status} phase`, status });
+      await node(`bare under ${status}`, { parentId: parent.nodeId });
+      store.seed(SPACE, {
+        parentId: parent.nodeId,
+        title: `waiting under ${status}`,
+        status: 'waiting',
+      });
+      parents.set(status, parent.nodeId);
+    }
+    const doneRoot = store.seed(SPACE, { title: 'done root', status: 'done' });
+    store.seed(SPACE, { parentId: doneRoot.nodeId, title: 'done under root', status: 'done' });
+
+    const roots = (await read()).roots;
+    const ownerOf = (status: string) => find(roots, parents.get(status)!)?.ownedBy;
+
+    expect(ownerOf('active')).toBe('operator');
+    expect(ownerOf('done')).toBe('loop');
+    expect(ownerOf('dropped')).toBe('loop');
+    expect(ownerOf('blocked')).toBe('loop');
+    expect(ownerOf('waiting')).toBe('loop');
+    expect(find(roots, doneRoot.nodeId)?.ownedBy).toBe('loop');
+    expect(find(roots, root.nodeId)?.ownedBy).toBe('operator');
+  });
+
   it('keeps a parent the loop’s where a run serves it, whatever its children', async () => {
     const root = await node('root');
     await node('bare', { parentId: root.nodeId });

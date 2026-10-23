@@ -100,7 +100,8 @@ function boardNode(node: PlanNodeSummary, reads: PlanBoardReads): PlanTreeNode {
  * those not dropped; owner, the loop's where a run serves it or the loop holds
  * an active child — runs serve the steps under a root or phase, rarely the
  * parent itself. A child done, dropped, blocked or waiting is no work the loop
- * is moving, though its own card reads the loop's.
+ * is moving, though its own card reads the loop's. Only an active parent can be
+ * the operator's, as only an active node is: one not active stays the loop's.
  */
 function withChildren(node: PlanTreeNode): PlanTreeNode {
   const children = node.children.map(withChildren);
@@ -111,9 +112,11 @@ function withChildren(node: PlanTreeNode): PlanTreeNode {
     ...node,
     children,
     ownedBy:
-      served || children.some((child) => child.status === 'active' && child.ownedBy === 'loop')
-        ? 'loop'
-        : 'operator',
+      node.status === 'active' &&
+      !served &&
+      !children.some((child) => child.status === 'active' && child.ownedBy === 'loop')
+        ? 'operator'
+        : 'loop',
     progress: {
       done: counted.filter((child) => child.status === 'done').length,
       total: counted.length,
