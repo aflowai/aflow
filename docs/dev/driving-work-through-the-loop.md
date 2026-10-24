@@ -261,6 +261,25 @@ Choose on the machine with `aflow harness sandbox <folder> open|confined`; `hb_a
 none, so it takes the default, `open`. A push takes a check receipt only from checks run under the
 folder's posture as it pushes, so a commit checked before the posture changed is checked again.
 
+**Arriving with Plan 320 P6, not yet in force: how a folder is shown.** A person declares,
+once per connected folder, how its change is seen working:
+`aflow folder preview <bindingId> --command … [--port …] [--ready …] [--ui …]` on the
+machine, or the folder's preview on the machine page — the command that serves it, run in
+the checkout (`yarn dev --port {port}`, or whatever that folder's project runs), the port
+if it must be fixed, the path that answers once it is up, and the files that count as its
+UI. No operation sets it, and a port this stack serves on is refused. From then on the
+loop is standardized: a commission or a review whose range touches those files takes the
+ephemeral browser and the preview without being asked, the executor starts the preview
+from that run's checkout and stops it at the run's end, and the agent opens it and sees
+the change working before it reports. A folder with no declaration is not skipped in
+silence: the review reports a `needs_setup` finding naming the command, the commission's
+result says the same and the pull request's body lists it; a harness that takes no
+browser says so the same way. None of these holds back a push. The same step takes `3001`
+off the Claude Code harness's browser ports on this machine, which today are `5173` and
+`3001`: `aflow harness browser-ports claude 5173` sets the list to what stays. 3001 is this
+stack's web app serving `main`, so a coding agent sent there looks at the wrong code, and
+once P6 lands such a port is refused.
+
 ## Sharing the machine
 
 - **One stack.** The dev stack belongs to the stream that started it. No other stream runs
