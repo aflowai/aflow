@@ -51,6 +51,7 @@ the wrong shape, change the plan rather than quietly diverging from it.
 | 327                                                                         | Reserved by branch `plan/326-operator-channels` until it merges |
 | [328](328-a-harness-is-a-runner-with-a-coding-agent.md)                     | A harness is a Runner with a coding agent                       |
 | 329                                                                         | Reserved — planning as a tested function                        |
+| [330](330-default-spaces-quick-start.md)                                    | Default spaces: a quick start installs with the product         |
 
 ## What a plan is not
 
