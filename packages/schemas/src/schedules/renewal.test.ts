@@ -78,6 +78,19 @@ describe('agent.schedule.create — renews', () => {
     }
   });
 
+  it('a renewal that names a cap or a timezone is refused, not silently given the copied ones', () => {
+    for (const extra of [{ maxFirings: 10 }, { timezone: 'Europe/Berlin' }]) {
+      const parsed = FlowScheduleCreateInputSchema.safeParse({ renews: SCHEDULE_ID, ...extra });
+      expect(parsed.success).toBe(false);
+      if (!parsed.success) {
+        expect(parsed.error.issues.map((issue) => issue.path.join('.'))).toEqual(
+          Object.keys(extra),
+        );
+        expect(parsed.error.issues[0]?.message).toContain('Pass renews alone');
+      }
+    }
+  });
+
   it('a new schedule still needs its name, action and input', () => {
     const parsed = FlowScheduleCreateInputSchema.safeParse({ cron: '*/5 * * * *' });
     expect(parsed.success).toBe(false);

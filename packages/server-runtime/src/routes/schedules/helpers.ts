@@ -53,6 +53,7 @@ export function rowToResponse(row: AgentScheduleRow): Record<string, unknown> {
     createdBy: row.createdBy ?? null,
     createdByRunId: row.createdBySessionId ?? null,
     metadata: row.metadata ?? {},
+    renewsScheduleId: row.renewsScheduleId ?? null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };

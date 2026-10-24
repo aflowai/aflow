@@ -30,7 +30,7 @@ export interface ScheduleRenewalStore {
   /** Reads a schedule of the space and holds it until the transaction ends. */
   lock(scheduleId: string, spaceId: string): Promise<AgentScheduleRow | undefined>;
   find(scheduleId: string): Promise<AgentScheduleRow | undefined>;
-  /** Inserts the row unless its id exists; returns it only where this call inserted it. */
+  /** Inserts the row unless its id or its predecessor's successor exists; returns it only where this call inserted it. */
   insertIfAbsent(row: NewAgentScheduleRow & { id: string }): Promise<AgentScheduleRow | undefined>;
   expireIfActive(scheduleId: string): Promise<void>;
 }
@@ -58,7 +58,7 @@ export function tenantScheduleRenewalStore(tx: PostgresJsDatabase): ScheduleRene
       const [inserted] = await tx
         .insert(agentSchedules)
         .values(row)
-        .onConflictDoNothing({ target: agentSchedules.id })
+        .onConflictDoNothing()
         .returning();
       return inserted;
     },
@@ -88,8 +88,11 @@ export type ScheduleRenewalOutcome =
   | { kind: 'renewed'; successor: AgentScheduleRow; created: boolean };
 
 /**
- * Hand a recurring schedule near its firing cap over to a successor, as the
- * grant's user. The predecessor is locked for the whole decision, so an
+ * Hand a recurring schedule near its firing cap over to a successor. Only the
+ * schedule's creator may renew it, and the successor carries the
+ * predecessor's provenance — its creator, and the session that armed it or
+ * none — because it is the same trigger continuing, not a new one armed by the
+ * renewing run. The predecessor is locked for the whole decision, so an
  * owner's pause that commits first is seen, and expired with the successor's
  * insert, so the two never fire side by side. A schedule that already has its
  * successor returns it, whatever the predecessor's state since.
@@ -100,11 +103,10 @@ export async function renewSchedule(
     spaceId: string;
     predecessorId: string;
     grant: RunAccessGrant;
-    sessionId: string;
   },
   now: Date = new Date(),
 ): Promise<ScheduleRenewalOutcome> {
-  const { spaceId, predecessorId, grant, sessionId } = params;
+  const { spaceId, predecessorId, grant } = params;
   const predecessor = await store.lock(predecessorId, spaceId);
   if (!predecessor) return { kind: 'not_found' };
   if (predecessor.creatorUserId !== grant.grantedToUserId) return { kind: 'not_owner' };
@@ -148,11 +150,12 @@ export async function renewSchedule(
     expiresAt: predecessor.expiresAt,
     lastError: null,
     createdBy: predecessor.createdBy,
-    createdBySessionId: sessionId,
+    createdBySessionId: predecessor.createdBySessionId,
     metadata: predecessor.metadata,
-    creatorUserId: grant.grantedToUserId,
-    creatorTenantRole: grant.tenantRole,
-    creatorSpaceRole: grant.spaceRole,
+    creatorUserId: predecessor.creatorUserId,
+    creatorTenantRole: predecessor.creatorTenantRole,
+    creatorSpaceRole: predecessor.creatorSpaceRole,
+    renewsScheduleId: predecessorId,
   });
   await store.expireIfActive(predecessorId);
 

@@ -17,6 +17,7 @@ import {
   type TraceId,
 } from '@aflow/schemas';
 import type { PayloadStore } from '@aflow/payload-store';
+import { ENTITY_EVENTS_STREAM_KEY } from '@aflow/redis';
 import type { InlineHandlerArgs } from '../types.js';
 import type { FlowExecutionContext } from '../../../types.js';
 import type { ScheduleRenewalStore } from '../scheduleRenewal.js';
@@ -84,9 +85,10 @@ function shepherdSchedule(overrides: Partial<AgentScheduleRow> = {}): AgentSched
     createdBy: null,
     createdBySessionId: null,
     metadata: {},
+    renewsScheduleId: null,
     creatorUserId: OWNER,
-    creatorTenantRole: 'admin',
-    creatorSpaceRole: 'admin',
+    creatorTenantRole: 'member',
+    creatorSpaceRole: 'editor',
     createdAt,
     updatedAt: createdAt,
     ...overrides,
@@ -186,7 +188,6 @@ const renewal = (grant: RunAccessGrant = grantFor(OWNER)) => ({
   spaceId: SPACE,
   predecessorId: PREDECESSOR,
   grant,
-  sessionId: ANCHOR_SESSION,
 });
 
 describe('renewSchedule: a schedule near its cap is handed to exactly one successor', () => {
@@ -208,11 +209,29 @@ describe('renewSchedule: a schedule near its cap is handed to exactly one succes
       targetAgentId: AGENT,
       inputTemplate: { input: 'tend', config: { scheduleId: { $schedule: 'id' } } },
       expiresAt: new Date('2099-11-23T08:00:00Z'),
-      creatorUserId: OWNER,
-      createdBySessionId: ANCHOR_SESSION,
+      renewsScheduleId: PREDECESSOR,
     });
     expect(successor.nextFireAt).toBeInstanceOf(Date);
     expect(table.get(PREDECESSOR)?.status).toBe('expired');
+  });
+
+  it('a successor carries how its predecessor was created, not the run that renewed it', async () => {
+    for (const armedBy of [null, 'a0000000-0000-4000-8000-0000000000c1']) {
+      const { table, store } = memoryTable([
+        shepherdSchedule({ firingCount: nearCap, createdBySessionId: armedBy, createdBy: 'api' }),
+      ]);
+
+      await renewSchedule(store, renewal());
+
+      expect(table.get(scheduleSuccessorId(PREDECESSOR))).toMatchObject({
+        createdBySessionId: armedBy,
+        createdBy: 'api',
+        creatorUserId: OWNER,
+        creatorTenantRole: 'member',
+        creatorSpaceRole: 'editor',
+        renewsScheduleId: PREDECESSOR,
+      });
+    }
   });
 
   it('with headroom, creates none and leaves the schedule firing', async () => {
@@ -361,6 +380,18 @@ describe('agent.schedule.create renews as a workflow task, with the run’s gran
     });
     expect(table.size).toBe(2);
     expect(table.get(scheduleSuccessorId(PREDECESSOR))?.creatorUserId).toBe(OWNER);
+  });
+
+  it('a renewal announces no newly armed trigger', async () => {
+    const { store } = memoryTable([
+      shepherdSchedule({ firingCount: nearCap, createdBySessionId: ANCHOR_SESSION }),
+    ]);
+    harness.store = store;
+
+    await handleScheduleCrudInline(taskArgs(redis, 'renew-schedule'));
+
+    expect((await stepResults(redis)).map((result) => result.status)).toEqual(['SUCCEEDED']);
+    expect(await redis.xlen(ENTITY_EVENTS_STREAM_KEY(TENANT, SPACE))).toBe(0);
   });
 
   it('a pass with headroom creates none', async () => {

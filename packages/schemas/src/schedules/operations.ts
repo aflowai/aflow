@@ -102,9 +102,31 @@ const RENEWAL_EXCLUDED_FIELDS = [
   'input',
   'expiresAt',
   'metadata',
+  'maxFirings',
+  'timezone',
 ] as const;
 
-export const FlowScheduleCreateInputSchema = z
+/**
+ * A renewal is `renews` alone. Checked on the input as sent, before defaults
+ * fill `maxFirings` and `timezone`: after them, a value the caller sent and
+ * one the schema supplied look the same.
+ */
+function refuseRenewalExtras(raw: unknown, ctx: z.RefinementCtx): unknown {
+  if (typeof raw !== 'object' || raw === null || !('renews' in raw)) return raw;
+  const sent = raw as Record<string, unknown>;
+  for (const field of RENEWAL_EXCLUDED_FIELDS) {
+    if (sent[field] !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `${field} is not used with renews: the successor copies the schedule it renews, its ${field} included. Pass renews alone.`,
+        path: [field],
+      });
+    }
+  }
+  return raw;
+}
+
+const FlowScheduleCreateFieldsSchema = z
   .object({
     renews: z
       .string()
@@ -197,18 +219,7 @@ export const FlowScheduleCreateInputSchema = z
     metadata: z.record(z.unknown()).optional(),
   })
   .superRefine((data, ctx) => {
-    if (data.renews !== undefined) {
-      for (const field of RENEWAL_EXCLUDED_FIELDS) {
-        if (data[field] !== undefined) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message: `${field} is not used with renews: the successor copies the schedule it renews. Pass renews alone.`,
-            path: [field],
-          });
-        }
-      }
-      return;
-    }
+    if (data.renews !== undefined) return;
     if (data.name === undefined) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -287,6 +298,11 @@ export const FlowScheduleCreateInputSchema = z
       });
     }
   });
+
+export const FlowScheduleCreateInputSchema = z.preprocess(
+  refuseRenewalExtras,
+  FlowScheduleCreateFieldsSchema,
+);
 export type FlowScheduleCreateInput = z.infer<typeof FlowScheduleCreateInputSchema>;
 
 export const FlowScheduleCreateOutputSchema = z.object({

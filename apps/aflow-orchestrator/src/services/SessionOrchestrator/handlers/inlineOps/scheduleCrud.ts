@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import { eq, and, desc, sql } from 'drizzle-orm';
 import {
   getDatabase,
@@ -29,7 +31,7 @@ import { emitStepSuccess, emitStepError } from './helpers.js';
 import { requireSpaceId } from './spaceScope.js';
 import { getOrchestratorLogger } from '../../../../lib/orchestratorLogger.js';
 import { definitionCreatedBy, requireScheduleAuthority } from './scheduleAuthority.js';
-import { announceScheduleArmed, handleRenew } from './scheduleRenewHandler.js';
+import { handleRenew } from './scheduleRenewHandler.js';
 
 /** Max schedules an agent can create in a single run (safety guardrail) */
 const MAX_SCHEDULE_CREATES_PER_RUN = 10;
@@ -549,6 +551,46 @@ async function handleCreate(
   );
 }
 
+/**
+ * The Action Center reads schedules from the database, so a connected client
+ * learns about a new one only when something wakes its topic. Nothing else on
+ * this path does, and an operator who is already looking at the space is
+ * exactly the person the notice is for — without this it arrives on the next
+ * reconnect, which reads as the platform having kept it quiet.
+ */
+async function announceScheduleArmed(
+  args: InlineHandlerArgs,
+  spaceId: string,
+  row: { id: string; name: string; kind: string },
+): Promise<void> {
+  const { context } = args;
+  try {
+    const { appendEntityEvent } = await import('@aflow/redis');
+    await appendEntityEvent(args.redis, {
+      tenantId: context.tenantId,
+      spaceId,
+      event: {
+        eventId: randomUUID(),
+        eventType: 'entity.schedule.armed',
+        spaceId,
+        tenantId: context.tenantId,
+        timestamp: Date.now(),
+        causedBySessionId: context.runId,
+        causedByStepExecutionId: args.stepExecutionId,
+        payload: { scheduleId: row.id, kind: row.kind },
+        summary: `Scheduled "${row.name}"`,
+      },
+    });
+  } catch (err) {
+    // A schedule that exists and was not announced is recoverable on the next
+    // wake; failing the step that created it is not.
+    getOrchestratorLogger().warn('[scheduleCrud] armed-event publish failed', {
+      err,
+      scheduleId: row.id,
+    });
+  }
+}
+
 // ============================================================================
 // agent.schedule.get
 // ============================================================================
@@ -915,6 +957,7 @@ function rowToSchedule(row: Record<string, unknown>): Record<string, unknown> {
     createdBy: row['createdBy'] ?? null,
     createdByRunId: row['createdByRunId'] ?? null,
     metadata: row['metadata'] ?? {},
+    renewsScheduleId: row['renewsScheduleId'] ?? null,
     createdAt: row['createdAt'] ? (row['createdAt'] as Date).toISOString() : null,
     updatedAt: row['updatedAt'] ? (row['updatedAt'] as Date).toISOString() : null,
   };

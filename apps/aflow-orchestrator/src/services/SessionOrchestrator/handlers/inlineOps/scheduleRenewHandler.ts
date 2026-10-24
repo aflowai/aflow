@@ -1,12 +1,9 @@
-import { randomUUID } from 'node:crypto';
-
 import { createTenantContext, getDatabase, withTenantSchema } from '@aflow/database';
 import { SCHEDULE_RENEWAL_WINDOW, scheduleFiringsLeft } from '@aflow/schemas';
 import type { InlineHandlerArgs } from './types.js';
 import { emitStepError, emitStepSuccess } from './helpers.js';
 import { requireScheduleAuthority } from './scheduleAuthority.js';
 import { renewSchedule, tenantScheduleRenewalStore } from './scheduleRenewal.js';
-import { getOrchestratorLogger } from '../../../../lib/orchestratorLogger.js';
 
 export async function handleRenew(
   args: InlineHandlerArgs,
@@ -25,7 +22,6 @@ export async function handleRenew(
         spaceId,
         predecessorId,
         grant: authority.grant,
-        sessionId: authority.sessionId,
       }),
   );
 
@@ -65,7 +61,6 @@ export async function handleRenew(
   }
 
   const { successor } = outcome;
-  if (outcome.created) await announceScheduleArmed(args, spaceId, successor);
   await emitStepSuccess(
     args,
     {
@@ -80,44 +75,4 @@ export async function handleRenew(
     },
     startTime,
   );
-}
-
-/**
- * The Action Center reads schedules from the database, so a connected client
- * learns about a new one only when something wakes its topic. Nothing else on
- * this path does, and an operator who is already looking at the space is
- * exactly the person the notice is for — without this it arrives on the next
- * reconnect, which reads as the platform having kept it quiet.
- */
-export async function announceScheduleArmed(
-  args: InlineHandlerArgs,
-  spaceId: string,
-  row: { id: string; name: string; kind: string },
-): Promise<void> {
-  const { context } = args;
-  try {
-    const { appendEntityEvent } = await import('@aflow/redis');
-    await appendEntityEvent(args.redis, {
-      tenantId: context.tenantId,
-      spaceId,
-      event: {
-        eventId: randomUUID(),
-        eventType: 'entity.schedule.armed',
-        spaceId,
-        tenantId: context.tenantId,
-        timestamp: Date.now(),
-        causedBySessionId: context.runId,
-        causedByStepExecutionId: args.stepExecutionId,
-        payload: { scheduleId: row.id, kind: row.kind },
-        summary: `Scheduled "${row.name}"`,
-      },
-    });
-  } catch (err) {
-    // A schedule that exists and was not announced is recoverable on the next
-    // wake; failing the step that created it is not.
-    getOrchestratorLogger().warn('[scheduleCrud] armed-event publish failed', {
-      err,
-      scheduleId: row.id,
-    });
-  }
 }

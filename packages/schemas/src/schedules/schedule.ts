@@ -105,6 +105,8 @@ export const FlowScheduleSchema = z.object({
   createdBy: z.string().nullish(),
   createdByRunId: z.string().uuid().nullish(),
   metadata: z.record(z.unknown()).nullish(),
+  /** The schedule this one renews; null where it was created rather than renewed. */
+  renewsScheduleId: z.string().uuid().nullish(),
 
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
