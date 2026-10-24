@@ -21,6 +21,8 @@ export type MemoryResolver = (
  * Resolution context for input template processing.
  */
 export interface InputResolutionContext {
+  /** The schedule that is firing. */
+  schedule?: { id: string };
   sourceRun?: SourceRunContext;
   resolveMemory?: MemoryResolver;
   now?: Date;
@@ -62,6 +64,15 @@ function isNowRef(value: unknown): value is { $now: string } {
   );
 }
 
+function isScheduleRef(value: unknown): value is { $schedule: string } {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    '$schedule' in value &&
+    typeof (value as Record<string, unknown>)['$schedule'] === 'string'
+  );
+}
+
 /**
  * Resolve a single template value.
  */
@@ -80,6 +91,16 @@ async function resolveValue(value: unknown, ctx: InputResolutionContext): Promis
       default:
         return now.toISOString();
     }
+  }
+
+  if (isScheduleRef(value)) {
+    if (!ctx.schedule) {
+      throw new Error('$schedule used but no firing schedule is in context');
+    }
+    if (value.$schedule !== 'id') {
+      throw new Error(`Unknown $schedule field: ${value.$schedule}`);
+    }
+    return ctx.schedule.id;
   }
 
   if (isSourceRef(value)) {
@@ -130,7 +151,7 @@ async function resolveValue(value: unknown, ctx: InputResolutionContext): Promis
 
 /**
  * Resolve an input template, replacing all $memoryRef, $sourceRef,
- * and $now references with their resolved values.
+ * $schedule and $now references with their resolved values.
  *
  * @param template - Input template from the schedule record
  * @param ctx - Resolution context with memory resolver and source run

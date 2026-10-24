@@ -20,7 +20,7 @@ export type ScheduleAction = z.infer<typeof ScheduleActionSchema>;
 export const ScheduleStatusSchema = z.enum([
   'active', // Will fire when conditions are met
   'paused', // Temporarily disabled (manual or programmatic)
-  'expired', // One-shot that has fired, or past its expiresAt
+  'expired', // One-shot that has fired, past its expiresAt or its maxFirings, or renewed by a successor
   'deleted', // Soft-deleted
 ]);
 export type ScheduleStatus = z.infer<typeof ScheduleStatusSchema>;
@@ -50,6 +50,14 @@ export const SourceRefSchema = z.object({
 
 export const NowRefSchema = z.object({
   $now: z.enum(['iso', 'date', 'epoch']),
+});
+
+/**
+ * The schedule that is firing. A renewal copies the template, so the same
+ * reference names the successor once it fires.
+ */
+export const ScheduleRefSchema = z.object({
+  $schedule: z.enum(['id']),
 });
 
 // ============================================================================
@@ -84,6 +92,10 @@ export const FlowScheduleSchema = z.object({
   overlapPolicy: OverlapPolicySchema,
   maxFirings: z.number().int().positive().nullish(),
   firingCount: z.number().int().nonnegative(),
+  /** maxFirings less firingCount; null where nothing caps the firings. */
+  firingsLeft: z.number().int().nonnegative().nullable(),
+  /** Whether `agent.schedule.create` with `renews` would take this schedule over now. */
+  renewalDue: z.boolean(),
   lastFiredAt: z.string().datetime().nullish(),
   lastRunId: z.string().uuid().nullish(),
   nextFireAt: z.string().datetime().nullish(),
@@ -93,6 +105,8 @@ export const FlowScheduleSchema = z.object({
   createdBy: z.string().nullish(),
   createdByRunId: z.string().uuid().nullish(),
   metadata: z.record(z.unknown()).nullish(),
+  /** The schedule this one renews; null where it was created rather than renewed. */
+  renewsScheduleId: z.string().uuid().nullish(),
 
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),

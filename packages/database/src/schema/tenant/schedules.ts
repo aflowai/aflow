@@ -53,6 +53,8 @@ export const agentSchedules = pgTable('agent_schedules', {
   createdBy: text('created_by'),
   createdBySessionId: uuid('created_by_session_id'),
   metadata: jsonb('metadata').default({}),
+  /** The schedule this one renews: the same trigger continuing, not a new one armed. */
+  renewsScheduleId: uuid('renews_schedule_id'),
 
   creatorUserId: uuid('creator_user_id'),
   creatorTenantRole: text('creator_tenant_role'),

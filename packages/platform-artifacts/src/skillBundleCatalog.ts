@@ -1,12 +1,15 @@
 import {
   MAX_FIRINGS_CAP,
+  SCHEDULE_RENEWAL_WINDOW,
   SHEPHERD_SCHEDULE_CRON_DEFAULT,
+  SKILL_STARTER_SCHEDULE_VARIABLE,
   SkillBundleSchema,
   type SkillBundle,
   type SkillBundleId,
   type SkillBundleInput,
 } from '@aflow/schemas';
 import { getSkillCatalogEntry } from './skillCatalog.js';
+import { SCHEDULE_INPUT } from './skillCatalog/localPrShepherdRenewal.js';
 import { TEST_TWO_SKILL_BUNDLE, TEST_SETUP_BUNDLE } from './skillBundleCatalog/testFixtures.js';
 import { ALPACA_THESIS_TRADING } from './skillBundleCatalog/alpacaThesisTrading.js';
 import { TICKER_DIGEST } from './skillBundleCatalog/tickerDigest.js';
@@ -303,7 +306,7 @@ const LOCAL_PUBLISH_BUNDLE: AuthoredSkillBundle = {
 
 const LOCAL_PR_SHEPHERD_BUNDLE: AuthoredSkillBundle = {
   bundleId: 'local-shepherd' as SkillBundleId,
-  revision: 3,
+  revision: 4,
   name: 'Local PR Shepherd',
   tagline:
     "Fix what CI fails on the pull requests the loop opened, through Local Publish, and merge a green one where the folder's merge posture allows — never approving or closing.",
@@ -311,7 +314,7 @@ const LOCAL_PR_SHEPHERD_BUNDLE: AuthoredSkillBundle = {
 
 **What it installs**:
 - The **Local PR Shepherd** skill — one pass over the pull requests Local Publish opened from a connected folder: it reads their CI, its own handoff comment and the work in flight on each branch, decides by rules — fix, merge, wait, abandon or leave — and for a red check commissions the fix on the branch and publishes it through Local Publish, which asks the operator exactly where it would when started by hand. A check run is acted on once — again only where the base branch moved after its remedy, when the base is merged into the branch and published, within the same budget — and a pull request labelled \`hands-off\` is left untouched. Once its attempt budget is spent and CI fails again, it stops: the handoff comment says why, and one Action Center item per head asks a person to take the pull request. Where the folder's merge posture is \`when-green\` — \`aflow harness merge-posture <folder> when-green\`, beside the push approval \`unless-unreviewed\` — a green pull request whose required checks passed on its head, whose head the review of the publication that pushed it approved and on which no person requests changes is merged by squash, on the operator's approval of that merge.
-- The **Local PR Shepherd** agent, under the skill's own slug — one step per connected folder that allows pushes, each starting the skill on its folder, and no model turn. It is what a schedule starts: every five minutes by default, each firing tending the next of the loop's pull requests in turn on every such folder. It is written where the space has at least one folder that allows pushes; otherwise the install says so, and updating the bundle once the folder is connected writes it. Its folders are the ones connected when it is written, and a folder connected later is not added to it: start the skill with that folder's \`bindingId\`.
+- The **Local PR Shepherd** agent, under the skill's own slug — one step per connected folder that allows pushes, each starting the skill on its folder, and no model turn. It is what a schedule starts: every five minutes by default, each firing tending the next of the loop's pull requests in turn on every such folder. The schedule renews itself: the agent hands each pass the schedule that started it, and a pass that finds it near its last firing creates its successor, so it runs until its expiry without being created again. It is written where the space has at least one folder that allows pushes; otherwise the install says so, and updating the bundle once the folder is connected writes it. Its folders are the ones connected when it is written, and a folder connected later is not added to it: start the skill with that folder's \`bindingId\`.
 
 **After install**: connect the repository as a folder with a publish prefix, bind the GitHub connector with a token that reads checks, branches and Actions and writes comments — and merges pull requests, where the folder merges; the binding needs no host but api.github.com — a job's log, served from a signed URL on Azure blob storage, is followed without the token. Then run the agent, or start the skill with the folder's \`bindingId\`, and \`pullNumber\` to aim the pass at one pull request.`,
   tags: ['coding', 'github', 'ci', 'local', 'developer-tools'],
@@ -329,11 +332,13 @@ const LOCAL_PR_SHEPHERD_BUNDLE: AuthoredSkillBundle = {
       description:
         "Starts one pass of the Local PR Shepherd on each of the space's connected folders that allow pushes. It decides nothing: the skill reads, decides and acts.",
       folderInput: 'bindingId',
+      scheduleInput: SCHEDULE_INPUT,
     },
   ],
   helmsmanHints: [
     'A pass is one run of the skill over a folder: start the Local PR Shepherd agent, which starts one on each folder it was written with, or workflow.run.start local-pr-shepherd with one folder’s bindingId — and pullNumber to aim it at one pull request. Its decision and reason are in its result and in the handoff comment on the pull request.',
-    `To run it on a schedule: agent.schedule.create, action start_run, target { kind: 'custom-agent', agentId } of the Local PR Shepherd agent, cron '${SHEPHERD_SCHEDULE_CRON_DEFAULT}' unless the operator names another, and any non-empty input — the agent reads none. Each firing tends the next pull request in turn; firings that overlap meet at the branch's lease. It fires at most ${String(MAX_FIRINGS_CAP)} times and nothing renews it yet: create it again once it has expired.`,
+    `To run it on a schedule: agent.schedule.create, action start_run, target { kind: 'custom-agent', agentId } of the Local PR Shepherd agent, cron '${SHEPHERD_SCHEDULE_CRON_DEFAULT}' unless the operator names another, and input { input: 'tend', config: { ${SKILL_STARTER_SCHEDULE_VARIABLE}: { $schedule: 'id' } } }, which hands each pass the schedule that started it. Each firing tends the next pull request in turn; firings that overlap meet at the branch's lease.`,
+    `The shepherd's schedule renews itself: it fires at most ${String(MAX_FIRINGS_CAP)} times, and a pass within ${String(SCHEDULE_RENEWAL_WINDOW)} firings of that creates its successor, which takes over. Create it once; it runs until its expiresAt (30 days unless set) or until the operator pauses it. A Local PR Shepherd agent written before this refuses the ${SKILL_STARTER_SCHEDULE_VARIABLE} config: delete it, then update the bundle from the Store to write it again.`,
     'The shepherd never approves or closes. A fix it publishes waits at Local Publish’s approval where the folder’s posture asks; a merge, only under the folder’s merge posture when-green (mergePosture in the machine block), waits at the merge’s own write approval. Both approvals are the operator’s, in the Action Center.',
     'A space with the GitHub definition from an earlier Local Publish needs Local Publish updated from the Store for the endpoints the shepherd reads — the jobs of a run, the end of a job’s log, a branch and its rules, and the merge pinned to a head.',
   ],

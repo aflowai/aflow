@@ -1,7 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
 import { resolveStepInput, StepInputValidationError } from './stepInputResolution.js';
 import { validateAgentOutput } from '../handlers/inlineOps/agentOutputValidator.js';
-import { AgentDefinitionSchema, skillStarterAgentDefinition } from '@aflow/schemas';
+import {
+  AgentDefinitionSchema,
+  processFlowInput,
+  skillStarterAgentDefinition,
+} from '@aflow/schemas';
+import { initializeRuntimeState } from './runtimeState.js';
 import type { StepDefinition } from '@aflow/schemas';
 import { createMemoryPayloadStore, type PayloadStore } from '@aflow/payload-store';
 import { randomUUID } from 'node:crypto';
@@ -424,5 +429,57 @@ describe('resolveStepInput: a skill-starter agent on several folders', () => {
         'inline:raw',
       ),
     ).rejects.toBeInstanceOf(StepInputValidationError);
+  });
+});
+
+describe('resolveStepInput: a skill-starter agent hands each start the schedule that fired it', () => {
+  const scheduleId = '5247eee7-0000-4000-8000-000000000001';
+  const definition = AgentDefinitionSchema.parse(
+    skillStarterAgentDefinition({
+      slug: 'local-pr-shepherd',
+      catalogId: 'local-pr-shepherd',
+      name: 'Local PR Shepherd',
+      description: 'Starts a pass.',
+      folderInput: 'bindingId',
+      scheduleInput: 'scheduleId',
+      folders: ['hb_aflow', 'hb_docs'],
+    }),
+  );
+
+  async function startsFor(runInput: unknown): Promise<Array<Record<string, unknown>>> {
+    const processed = processFlowInput(runInput, definition);
+    if (!processed.ok) throw new Error(processed.message);
+    const runtimeState = await initializeRuntimeState(
+      definition,
+      undefined,
+      0,
+      processed.normalized,
+    );
+    const inputs: Array<Record<string, unknown>> = [];
+    for (const step of definition.steps) {
+      const ref = await resolveStepInput(
+        makePayloadStore({ input: 'tend' }),
+        step,
+        'inline:raw',
+        runtimeState,
+      );
+      inputs.push(decodeInlineRef(ref)['inputs'] as Record<string, unknown>);
+    }
+    return inputs;
+  }
+
+  it('a firing that names its schedule hands it to every start', async () => {
+    const inputs = await startsFor({ input: 'tend', config: { scheduleId } });
+    expect(inputs.length).toBeGreaterThan(0);
+    for (const input of inputs) expect(input['scheduleId']).toBe(scheduleId);
+  });
+
+  it('a run by hand starts every folder with no schedule to renew', async () => {
+    const inputs = await startsFor({ input: 'tend' });
+    expect(inputs.length).toBeGreaterThan(0);
+    for (const input of inputs) {
+      expect(input).not.toHaveProperty('scheduleId');
+      expect(typeof input['bindingId']).toBe('string');
+    }
   });
 });
