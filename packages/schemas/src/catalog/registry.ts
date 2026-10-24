@@ -303,7 +303,7 @@ export function getOperation(operationId: string): OperationDescriptor | undefin
  * Get all distinct groups as { groupId, stepType, group, operationCount }
  * sorted by (stepType, group).
  */
-export function getAvailableGroups(): Array<{
+export function getAvailableGroups(options: { excludeOpTaskOnly?: boolean } = {}): Array<{
   groupId: string;
   stepType: string;
   group: string | null;
@@ -313,6 +313,7 @@ export function getAvailableGroups(): Array<{
 
   for (const desc of getRegistry().values()) {
     if (desc.internal) continue; // Skip internal ops — not visible to agents
+    if (options.excludeOpTaskOnly && desc.opTaskOnly) continue;
     const gid = buildGroupId(desc.stepType, desc.group);
     const existing = groupMap.get(gid);
     if (existing) {
@@ -338,6 +339,16 @@ export function getAvailableGroups(): Array<{
 export function isPrivilegedOperation(operationId: string): boolean {
   const desc = getRegistry().get(operationId);
   return desc?.privileged === true;
+}
+
+/**
+ * An operation that runs only as a workflow operation task. The grant refuses
+ * it for an agent caller, so no agent-facing surface — pinned, graph-edge,
+ * promoted, searched, listed or promotable — may offer it: one that did would
+ * hand the model a tool whose every call fails.
+ */
+export function isOpTaskOnlyOperation(operationId: string): boolean {
+  return getRegistry().get(operationId)?.opTaskOnly === true;
 }
 
 /**

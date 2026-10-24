@@ -58,7 +58,11 @@ const _cachedIndexes = new Map<boolean, BM25Index>();
 
 function isSearchable(op: OperationDescriptor, workflowSteps: boolean): boolean {
   if (op.internal) return false;
-  return op.agentTool || workflowSteps;
+  return isAgentHoldable(op) || workflowSteps;
+}
+
+function isAgentHoldable(op: OperationDescriptor): boolean {
+  return op.agentTool && !op.opTaskOnly;
 }
 
 function buildIndex(workflowSteps: boolean): BM25Index {
@@ -385,7 +389,7 @@ function buildResultEntry(op: OperationDescriptor): CatalogSearchResult {
     matchReason: 'structural filter',
     score: 0,
     ...(caution ? { caution } : {}),
-    ...(op.agentTool ? {} : { stepOnly: true }),
+    ...(isAgentHoldable(op) ? {} : { stepOnly: true }),
   };
 }
 

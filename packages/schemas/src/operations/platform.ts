@@ -803,6 +803,11 @@ export const PlatformGetSchemaInputSchema = z.object({
   excludeGroupIds: z.array(z.string()).optional(),
   /** Which tool sources to include. Omit for all. Use ['api'] to discover only API endpoints. */
   sources: z.array(ToolSourceSchema).optional(),
+  workflowSteps: z
+    .optional(z.boolean())
+    .describe(
+      'Set when authoring or patching a workflow: also returns platform operations that run only as workflow operation tasks. Those come back with opTaskOnly: true — author them as an operation task in the workflow; they cannot be promoted or called as tools.',
+    ),
 });
 export type PlatformGetSchemaInput = z.infer<typeof PlatformGetSchemaInputSchema>;
 
@@ -828,6 +833,7 @@ export const AgentOperationDescriptorSchema = z.object({
       pitfalls: z.array(z.string()).optional(),
     })
     .optional(),
+  opTaskOnly: z.boolean().optional(),
 });
 export type AgentOperationDescriptor = z.infer<typeof AgentOperationDescriptorSchema>;
 
@@ -887,6 +893,7 @@ const CatalogListCompactOutputSchema = z.object({
       requiredParams: z.array(z.string()),
       optionalParams: z.array(z.string()),
       caution: z.string().optional(),
+      opTaskOnly: z.boolean().optional(),
     }),
   ),
   count: z.number(),
@@ -894,7 +901,9 @@ const CatalogListCompactOutputSchema = z.object({
 
 const CatalogListDetailOutputSchema = z.object({
   mode: z.literal('detail'),
+  guidance: z.string().optional(),
   operations: z.array(AgentOperationDescriptorSchema),
+  withheldOpTaskOnly: z.array(z.string()).optional(),
   integrationTools: z
     .array(
       z.object({
@@ -1236,12 +1245,7 @@ export const PlatformOperationRegistrations: OperationRegistration[] = [
       maxResults: z.number().int().min(1).max(10).optional(),
       /** Which tool sources to search. Omit for all. Use ['api'] to discover only API endpoints. */
       sources: z.array(ToolSourceSchema).optional(),
-      workflowSteps: z
-        .boolean()
-        .optional()
-        .describe(
-          'Set when authoring or patching a workflow: also returns platform operations that run only as workflow operation tasks. Those come back with opTaskOnly: true — author them as an operation task in the workflow; they cannot be promoted or called as tools.',
-        ),
+      workflowSteps: PlatformGetSchemaInputSchema.shape.workflowSteps,
     }),
     outputZod: z.discriminatedUnion('mode', [
       z.object({
