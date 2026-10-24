@@ -153,6 +153,7 @@ export async function dispatchTask(deps: HarnessDeps, args: DispatchTaskArgs): P
       tenantIdStr,
       run.spaceId,
       runId,
+      { attempt, stepExecutionId: workerSessionId },
       deps.payloadStore,
     );
 

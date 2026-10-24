@@ -208,6 +208,8 @@ Production-build heap and mount time for a long conversation with the Workbench 
 
 ## 6. Findings the phases answer
 
+Task input payloads (node `3ae81ba3`): operation and human task inputs ask the payload store whether to externalize the resolved value. Oversized inputs use content-addressed storage; inline encoding enforces the schema's 64 KiB ceiling even without a store. A present workflow input ref that cannot be retrieved fails the task with the store's reason, while an absent ref still permits empty list input. Regression tests pass a 70 KB decision through the writer and workflow handler, refuse oversized inline output from the writer, and preserve retrieval errors. Local PR Shepherd version 14 binds required rules, protection and reviews through their response data with separate status scalars, and publication review through its task output, keeping headers and unrelated run details out of the decision state without weakening merge guards.
+
 The findings table lives in [`315-findings.md`](./315-findings.md), beside this plan; each `F`-number in the phases above is a row there.
 
 ## 7. Migration and breaking changes

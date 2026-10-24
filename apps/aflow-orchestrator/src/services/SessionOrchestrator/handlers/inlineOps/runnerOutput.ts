@@ -16,6 +16,7 @@ import {
 import { normalizeMangledRef } from '@aflow/input-resolution';
 import type { InlineHandlerArgs } from './types.js';
 import { emitStepSuccess, emitStepError } from './helpers.js';
+import { readInlineInput } from './readInlineInput.js';
 import { decodeStringifiedCompletionResult } from '../completionResultContract.js';
 import { getOrchestratorLogger } from '../../../../lib/orchestratorLogger.js';
 
@@ -180,28 +181,17 @@ function draftProgressPrefix(revision: number, unmet: number): string {
 }
 
 export async function handleSubmitOutputInline(args: InlineHandlerArgs): Promise<void> {
-  const { redis, payloadStore, context } = args;
+  const { redis, context } = args;
   const startTime = Date.now();
   const logger = getOrchestratorLogger();
 
   try {
     // 1. Read the agent's output from the resolved input
-    let input: Record<string, unknown> = {};
-    try {
-      const data = await payloadStore.retrieve(args.resolvedInputRef);
-      if (typeof data === 'object' && data !== null) {
-        input = data as Record<string, unknown>;
-      }
-    } catch {
-      await emitStepError(
-        args,
-        'SUBMIT_OUTPUT_INVALID_INPUT',
-        'Could not read submit_output input payload.',
-        startTime,
-        'validation',
-      );
-      return;
-    }
+    const input = await readInlineInput(args, startTime, {
+      code: 'SUBMIT_OUTPUT_INVALID_INPUT',
+      message: 'Could not read submit_output input payload.',
+    });
+    if (!input) return;
 
     // There is no literal to take. Whatever the draft holds is what gets
     // validated and emitted, so an agent cannot route around accumulation by
@@ -492,28 +482,17 @@ export async function handleSubmitOutputInline(args: InlineHandlerArgs): Promise
 // ============================================================================
 
 export async function handleSignalBlockedInline(args: InlineHandlerArgs): Promise<void> {
-  const { redis, payloadStore, context, stepDef, stepExecutionId } = args;
+  const { redis, context, stepDef, stepExecutionId } = args;
   const startTime = Date.now();
   const logger = getOrchestratorLogger();
 
   try {
     // 1. Read the blocking reason from resolved input
-    let input: Record<string, unknown> = {};
-    try {
-      const data = await payloadStore.retrieve(args.resolvedInputRef);
-      if (typeof data === 'object' && data !== null) {
-        input = data as Record<string, unknown>;
-      }
-    } catch {
-      await emitStepError(
-        args,
-        'SIGNAL_BLOCKED_INVALID_INPUT',
-        'Could not read signal_blocked input payload.',
-        startTime,
-        'validation',
-      );
-      return;
-    }
+    const input = await readInlineInput(args, startTime, {
+      code: 'SIGNAL_BLOCKED_INVALID_INPUT',
+      message: 'Could not read signal_blocked input payload.',
+    });
+    if (!input) return;
 
     const reason = typeof input['reason'] === 'string' ? input['reason'] : 'Agent is blocked';
     const category = typeof input['category'] === 'string' ? input['category'] : 'other';

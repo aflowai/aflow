@@ -1,16 +1,13 @@
 import { SnoozeInputSchema, clampSnoozeDurationMs } from '@aflow/schemas';
 import type { InlineHandlerArgs } from './types.js';
 import { emitStepSuccess, emitStepError } from './helpers.js';
+import { readInlineInput } from './readInlineInput.js';
 
 export async function handleScheduleSnoozeInline(args: InlineHandlerArgs): Promise<void> {
   const startTime = Date.now();
   try {
-    let input: unknown = {};
-    try {
-      input = await args.payloadStore.retrieve(args.resolvedInputRef);
-    } catch {
-      /* empty input — fails validation below */
-    }
+    const input = await readInlineInput(args, startTime);
+    if (!input) return;
 
     const parsed = SnoozeInputSchema.safeParse(input);
     if (!parsed.success) {

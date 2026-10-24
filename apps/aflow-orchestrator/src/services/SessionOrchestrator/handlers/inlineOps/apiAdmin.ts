@@ -36,6 +36,7 @@ import {
 } from '@aflow/database';
 import type { InlineHandlerArgs } from './types.js';
 import { requireSpaceId } from './spaceScope.js';
+import { readInlineInput } from './readInlineInput.js';
 
 export async function handleApiAdminOpInline(args: InlineHandlerArgs): Promise<void> {
   const {
@@ -54,15 +55,8 @@ export async function handleApiAdminOpInline(args: InlineHandlerArgs): Promise<v
   const spaceId = requireSpaceId(context);
 
   try {
-    let input: Record<string, unknown> = {};
-    try {
-      const data = await payloadStore.retrieve(resolvedInputRef);
-      if (typeof data === 'object' && data !== null) {
-        input = data as Record<string, unknown>;
-      }
-    } catch {
-      /* empty input */
-    }
+    const input = await readInlineInput(args, startTime);
+    if (!input) return;
 
     const db = getDatabase();
     const tenantCtx = createTenantContext(context.tenantId);

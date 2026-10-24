@@ -22,6 +22,7 @@ import { loadCoachReviewContext } from '@aflow/cybernetic-runtime';
 import type { InlineHandlerArgs } from './types.js';
 import { emitStepError, emitStepSuccess } from './helpers.js';
 import { requireSpaceId } from './spaceScope.js';
+import { readInlineInput } from './readInlineInput.js';
 
 // ============================================================================
 // Router
@@ -32,15 +33,8 @@ export async function handleArtifactInspectInline(args: InlineHandlerArgs): Prom
   const startTime = Date.now();
 
   try {
-    let input: Record<string, unknown> = {};
-    try {
-      const data = await args.payloadStore.retrieve(args.resolvedInputRef);
-      if (typeof data === 'object' && data !== null) {
-        input = data as Record<string, unknown>;
-      }
-    } catch {
-      /* empty input falls through to schema validation */
-    }
+    const input = await readInlineInput(args, startTime);
+    if (!input) return;
 
     switch (operationId) {
       case 'artifact.inspect.list':

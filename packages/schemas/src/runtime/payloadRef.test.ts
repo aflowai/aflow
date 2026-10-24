@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parsePayloadRef, MAX_INLINE_PAYLOAD_BYTES } from './payloadRef.js';
+import { isRunScopedPayloadRef, parsePayloadRef, MAX_INLINE_PAYLOAD_BYTES } from './payloadRef.js';
 
 const TENANT = 'a0000000-0000-0000-0000-000000000001';
 const RUN = 'b0000000-0000-0000-0000-000000000002';
@@ -213,5 +213,15 @@ describe('parsePayloadRef — inline canonicality', () => {
 
     const overByOne = Buffer.alloc(MAX_INLINE_PAYLOAD_BYTES + 1, 0x61).toString('base64');
     expect(parsePayloadRef(`inline:${overByOne}`)).toBeNull();
+  });
+});
+
+describe('isRunScopedPayloadRef', () => {
+  it('accepts a run-scoped ref and refuses content-addressed, inline and unparsed ones', () => {
+    expect(isRunScopedPayloadRef(parsePayloadRef(CANONICAL))).toBe(true);
+    const content = `gs://bucket/tenants/${TENANT}/content/${'a'.repeat(64)}/input.json`;
+    expect(isRunScopedPayloadRef(parsePayloadRef(content))).toBe(false);
+    expect(isRunScopedPayloadRef(parsePayloadRef('inline:e30='))).toBe(false);
+    expect(isRunScopedPayloadRef(null)).toBe(false);
   });
 });

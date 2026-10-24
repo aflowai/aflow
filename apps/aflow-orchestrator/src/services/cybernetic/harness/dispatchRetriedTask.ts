@@ -97,6 +97,7 @@ export async function dispatchRetriedTask(
       tenantIdStr,
       run.spaceId,
       runId,
+      { attempt, stepExecutionId: workerSessionId },
       deps.payloadStore,
       systemFeedback,
     );

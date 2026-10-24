@@ -22,6 +22,7 @@ import type { FlowExecutionContext } from '../../types.js';
 import { getOrchestratorLogger } from '../../../../lib/orchestratorLogger.js';
 import { requireSpaceId } from './spaceScope.js';
 import { DISCOVERY_SCOPE_VAR, type DiscoveryScope } from '../../helpers/agentTurn.js';
+import { inlineArgsFromPositional, readInlineInput } from './readInlineInput.js';
 
 interface BindingCandidate {
   bindingId: string;
@@ -48,18 +49,24 @@ export async function handleMcpToolDiscoverInline(
   parentStepExecutionId?: StepExecutionId,
 ): Promise<void> {
   const startTime = Date.now();
+  const inlineArgs = inlineArgsFromPositional(
+    redis,
+    payloadStore,
+    context,
+    stepDef,
+    stepExecutionId,
+    idempotencyKey,
+    resolvedInputRef,
+    attempt,
+    _scheduledAtMs,
+    parentStepExecutionId,
+  );
   try {
     // Parse input
-    let serverId: string | undefined;
-    try {
-      const data = await payloadStore.retrieve(resolvedInputRef);
-      if (data && typeof data === 'object' && 'serverId' in data) {
-        const sid = (data as { serverId?: unknown }).serverId;
-        if (typeof sid === 'string' && sid.length > 0) serverId = sid;
-      }
-    } catch {
-      /* fall through to validation error */
-    }
+    const data = await readInlineInput(inlineArgs, startTime);
+    if (!data) return;
+    const sid = data['serverId'];
+    const serverId = typeof sid === 'string' && sid.length > 0 ? sid : undefined;
     if (!serverId) {
       await emitFailure(
         redis,

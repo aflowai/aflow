@@ -22,6 +22,7 @@ import { eq } from 'drizzle-orm';
 import type { FlowExecutionContext } from '../../types.js';
 import { extractCredentialKeys } from '@aflow/schemas';
 import { requireSpaceId } from './spaceScope.js';
+import { inlineArgsFromPositional, readInlineInput } from './readInlineInput.js';
 
 interface DiscoveryDefinition {
   apiId: string;
@@ -155,16 +156,21 @@ export async function handleListApiDefinitionsInline(
   parentStepExecutionId?: StepExecutionId,
 ): Promise<void> {
   const startTime = Date.now();
+  const inlineArgs = inlineArgsFromPositional(
+    redis,
+    payloadStore,
+    context,
+    stepDef,
+    stepExecutionId,
+    idempotencyKey,
+    resolvedInputRef,
+    attempt,
+    _scheduledAtMs,
+    parentStepExecutionId,
+  );
   try {
-    let input: Record<string, unknown> = {};
-    try {
-      const data = await payloadStore.retrieve(resolvedInputRef);
-      if (typeof data === 'object' && data !== null) {
-        input = data as Record<string, unknown>;
-      }
-    } catch {
-      /* empty input — return all definitions */
-    }
+    const input = await readInlineInput(inlineArgs, startTime);
+    if (!input) return;
 
     const filterApiIds = input['apiIds'] as string[] | undefined;
     const filterTags = input['tags'] as string[] | undefined;

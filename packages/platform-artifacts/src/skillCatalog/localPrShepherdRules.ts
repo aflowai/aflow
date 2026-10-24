@@ -59,11 +59,11 @@ export const MERGE_RULES: readonly WorkflowRunDecideRule[] = [
   // pin shows nothing, and the handoff that pass posts carries nothing either,
   // so holding it back would cost a pass and see nothing more.
   greenAnd(
-    'state.requiredRules.statusCode != 200',
+    'state.requiredRulesStatus != 200',
     "GitHub did not return the rulesets of the base branch, so which checks it requires is unknown: the merge is the operator's.",
   ),
   greenAnd(
-    'state.requiredProtection.statusCode != 200',
+    'state.requiredProtectionStatus != 200',
     "GitHub did not return the base branch's protection, so which checks it requires is unknown: the merge is the operator's.",
   ),
   greenAnd(
@@ -75,25 +75,25 @@ export const MERGE_RULES: readonly WorkflowRunDecideRule[] = [
     "A check the base branch requires has not passed on the head — it failed, is still running, was skipped, or has no check run on it, as a context reported only as a commit status has none. The handoff names each: the merge is the operator's.",
   ),
   greenAnd(
-    'state.reviews.statusCode != 200',
+    'state.reviewsStatus != 200',
     "GitHub did not return the pull request's reviews, so whether a person requests changes is unknown.",
   ),
   greenAnd(
-    'state.reviews.data.complete != true',
+    'state.reviews.complete != true',
     'The pull request has more reviews than one page holds, so a change request past it would not be seen: the merge is the operator’s.',
   ),
   greenAnd(
-    'state.reviews.data.changesRequestedBy[0] != null',
+    'state.reviews.changesRequestedBy[0] != null',
     'A person’s review on the pull request requests changes, and has been neither dismissed nor followed by their approval: the merge waits on them.',
   ),
   // Read from the publication's run, never the pull request's body, which any
   // collaborator can edit.
   greenAnd(
-    'state.publicationReview.taskOutput.output.reviewed.at != state.pr.data.headSha',
+    'state.publicationReview.reviewed.at != state.pr.data.headSha',
     "No publication's Local Code Review is on record for this head — no publication of the branch pushed it, which another hand did, or the publication that pushed it ran no review of it: the merge is the operator's.",
   ),
   greenAnd(
-    "state.publicationReview.taskOutput.output.verdict != 'approve'",
+    "state.publicationReview.verdict != 'approve'",
     "The Local Code Review of the publication that pushed this head did not return `approve`: the merge is the operator's.",
   ),
   {
