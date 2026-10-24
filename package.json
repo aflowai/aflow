@@ -163,7 +163,9 @@
     "js-yaml@npm:^4.1.1": "4.3.2",
     "proxy-addr@npm:^2.0.7": "2.0.8",
     "seroval@npm:~1.5.4": "1.6.8",
-    "source-map-js@npm:^1.2.1": "1.2.2"
+    "source-map-js@npm:^1.2.1": "1.2.2",
+    "body-parser@npm:^2.2.1": "2.4.0",
+    "zod@npm:^3.25 || ^4.0": "4.6.6"
   },
   "dependencies": {
     "croner": "^10.0.1"
