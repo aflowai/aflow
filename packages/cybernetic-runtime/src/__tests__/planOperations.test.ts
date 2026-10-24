@@ -2,6 +2,7 @@ import { describe, expect, it, beforeEach } from 'vitest';
 import Redis from 'ioredis-mock';
 import type { Redis as RedisType } from 'ioredis';
 import {
+  PLAN_NODE_LIST_DEFAULT_LIMIT,
   PLAN_NODE_LIST_MAX_LIMIT,
   PLAN_NODE_POSITION_MAX,
   PLAN_NODE_PROSE_MAX_CHARS,
@@ -776,6 +777,151 @@ describe('getPlanNode / listPlanNodes', () => {
     expect(open).not.toHaveProperty('truncated');
   });
 
+  it('lists each node with when it was created and, once closed, when it closed', async () => {
+    const open = await created({ title: 'open' });
+    const shut = await created({ title: 'shut' });
+    const closing = await updatePlanNode(session('session-a'), {
+      nodeId: shut.nodeId,
+      expectedRevision: 1,
+      status: 'done',
+      outcome: 'Met.',
+    });
+    if (!closing.ok) throw new Error(closing.message);
+
+    const listed = await listPlanNodes({ store, spaceId: SPACE }, { status: ['active', 'done'] });
+    expect(listed.ok && listed.nodes).toEqual([
+      expect.objectContaining({ nodeId: open.nodeId, createdAt: open.createdAt }),
+      expect.objectContaining({
+        nodeId: shut.nodeId,
+        createdAt: shut.createdAt,
+        closedAt: closing.node.closedAt,
+      }),
+    ]);
+    expect(closing.node.closedAt).toBeDefined();
+    expect(listed.ok && listed.nodes[0]).not.toHaveProperty('closedAt');
+  });
+
+  it('lists a 65-node plan in one page by default', async () => {
+    const root = store.seed(SPACE, { title: 'root', status: 'done' });
+    const statuses = [
+      ...Array<'done'>(55).fill('done'),
+      ...Array<'active'>(8).fill('active'),
+      'dropped' as const,
+    ];
+    statuses.forEach((status, i) => {
+      store.seed(SPACE, { parentId: root.nodeId, title: `step ${String(i)}`, status, position: i });
+    });
+
+    const listed = await listPlanNodes(
+      { store, spaceId: SPACE },
+      { status: ['active', 'done', 'dropped'] },
+    );
+    expect(listed).not.toHaveProperty('truncated');
+    const nodes = listed.ok ? listed.nodes : [];
+    expect(nodes).toHaveLength(65);
+    expect(nodes.filter((n) => n.status === 'done')).toHaveLength(56);
+    expect(nodes.filter((n) => n.status === 'active')).toHaveLength(8);
+    expect(nodes.filter((n) => n.status === 'dropped')).toHaveLength(1);
+  });
+
+  async function sevenSteps(): Promise<{ root: PlanNode; steps: PlanNode[] }> {
+    const root = await created({ title: 'root' });
+    const steps: PlanNode[] = [];
+    for (let i = 0; i < 6; i++) {
+      steps.push(await created({ parentId: root.nodeId, title: `step ${String(i)}` }));
+    }
+    return { root, steps };
+  }
+
+  it('says how many nodes match past a page, and pages through them by cursor', async () => {
+    await sevenSteps();
+    const ctx = { store, spaceId: SPACE };
+
+    const first = await listPlanNodes(ctx, { limit: 3 });
+    expect(first).toMatchObject({
+      ok: true,
+      truncated: { bound: 'limit', value: 3, matched: 7, next: { cursor: expect.any(String) } },
+    });
+
+    const seen = first.ok ? first.nodes.map((n) => n.title) : [];
+    let next = first.ok ? first.truncated?.next : undefined;
+    let last = first;
+    while (next !== undefined) {
+      last = await listPlanNodes(ctx, { limit: 3, cursor: next.cursor });
+      seen.push(...(last.ok ? last.nodes.map((n) => n.title) : []));
+      next = last.ok ? last.truncated?.next : undefined;
+    }
+    expect(seen).toEqual(['root', ...[0, 1, 2, 3, 4, 5].map((i) => `step ${String(i)}`)]);
+    expect(last).toMatchObject({ ok: true });
+    expect(last).not.toHaveProperty('truncated');
+  });
+
+  it.each([
+    [
+      'closed',
+      async (steps: PlanNode[]) =>
+        updatePlanNode(session('session-b'), {
+          nodeId: steps[0]!.nodeId,
+          expectedRevision: 1,
+          status: 'done',
+          outcome: 'Met.',
+        }),
+    ],
+    [
+      'created',
+      async (steps: PlanNode[]) =>
+        created({ parentId: steps[0]!.parentId!, title: 'step new', position: 0 }),
+    ],
+    [
+      'moved',
+      async (steps: PlanNode[]) =>
+        updatePlanNode(session('session-b'), {
+          nodeId: steps[5]!.nodeId,
+          expectedRevision: 1,
+          position: 0,
+        }),
+    ],
+  ])(
+    'refuses the next page once a node is %s between pages, rather than skipping or repeating one',
+    async (_change, change) => {
+      const { steps } = await sevenSteps();
+      const ctx = { store, spaceId: SPACE };
+      const first = await listPlanNodes(ctx, { limit: 3 });
+      const cursor = first.ok ? first.truncated?.next?.cursor : undefined;
+      expect(cursor).toBeDefined();
+
+      await change(steps);
+
+      expect(await listPlanNodes(ctx, { limit: 3, cursor: cursor! })).toMatchObject({
+        ok: false,
+        code: 'PLAN_LIST_CURSOR_STALE',
+        message: expect.stringContaining('without `cursor`'),
+      });
+      const fresh = await listPlanNodes(ctx, { limit: 3 });
+      expect(fresh).toMatchObject({
+        ok: true,
+        truncated: { next: { cursor: expect.any(String) } },
+      });
+    },
+  );
+
+  it('refuses a cursor read with another status, and one it did not issue', async () => {
+    await sevenSteps();
+    const ctx = { store, spaceId: SPACE };
+    const first = await listPlanNodes(ctx, { limit: 3 });
+    const cursor = first.ok ? first.truncated?.next?.cursor : undefined;
+
+    expect(
+      await listPlanNodes(ctx, { limit: 3, status: ['active', 'done'], cursor: cursor! }),
+    ).toMatchObject({ ok: false, code: 'PLAN_LIST_CURSOR_STALE' });
+    for (const forged of ['not-a-cursor', Buffer.from('[0,"x"]').toString('base64url')]) {
+      expect(await listPlanNodes(ctx, { cursor: forged })).toMatchObject({
+        ok: false,
+        code: 'PLAN_LIST_CURSOR_INVALID',
+      });
+    }
+  });
+
   it('finds a root by its key past the most nodes a walk reads, and names that bound', async () => {
     for (let i = 0; i < PLAN_TREE_WALK_NODE_LIMIT; i++) {
       await store.insert(SPACE, {
@@ -795,8 +941,14 @@ describe('getPlanNode / listPlanNodes', () => {
     const whole = await listPlanNodes({ store, spaceId: SPACE }, {});
     expect(whole).toMatchObject({
       ok: true,
-      truncated: { bound: 'nodes', value: PLAN_TREE_WALK_NODE_LIMIT },
+      truncated: {
+        bound: 'nodes',
+        value: PLAN_TREE_WALK_NODE_LIMIT,
+        matched: PLAN_TREE_WALK_NODE_LIMIT,
+        next: { cursor: expect.any(String) },
+      },
     });
+    expect(whole.ok && whole.nodes).toHaveLength(PLAN_NODE_LIST_DEFAULT_LIMIT);
 
     const subtree = await listPlanNodes({ store, spaceId: SPACE }, { rootId: last.nodeId });
     expect(subtree.ok && subtree.nodes.map((n) => n.title)).toEqual(['last', 'last.a']);
@@ -815,11 +967,26 @@ describe('getPlanNode / listPlanNodes', () => {
       { store, spaceId: SPACE },
       { rootId: root.nodeId, limit: PLAN_NODE_LIST_MAX_LIMIT },
     );
-    expect(result).toMatchObject({
+    // Every node the walk found is on this page, so there is no next page to
+    // read; the levels past the bound are reached with `rootId`, not paging.
+    expect(result).toEqual({
       ok: true,
-      truncated: { bound: 'depth', value: PLAN_TREE_DEPTH_LIMIT },
+      nodes: expect.any(Array),
+      truncated: {
+        bound: 'depth',
+        value: PLAN_TREE_DEPTH_LIMIT,
+        matched: PLAN_TREE_DEPTH_LIMIT + 1,
+      },
     });
-    expect(result.ok && result.nodes).toHaveLength(PLAN_TREE_DEPTH_LIMIT + 1);
+    const found = result.ok ? result.nodes : [];
+    expect(found).toHaveLength(PLAN_TREE_DEPTH_LIMIT + 1);
+
+    const nearer = await listPlanNodes({ store, spaceId: SPACE }, { rootId: found.at(-1)!.nodeId });
+    expect(nearer.ok && nearer.nodes.map((n) => n.title)).toEqual([
+      `level ${String(PLAN_TREE_DEPTH_LIMIT)}`,
+      `level ${String(PLAN_TREE_DEPTH_LIMIT + 1)}`,
+    ]);
+    expect(nearer).not.toHaveProperty('truncated');
   });
 
   it('lists every open node past more closed ones than a walk reads, and reaches closed ones by status', async () => {

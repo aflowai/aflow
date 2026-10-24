@@ -35,7 +35,7 @@ export const PLAN_NODE_LINK_OPERATION_ID = buildOperationId('plan', 'node', 'lin
 export const PLAN_NODE_LEARN_OPERATION_ID = buildOperationId('plan', 'node', 'learn');
 export const PLAN_NODE_DEPEND_OPERATION_ID = buildOperationId('plan', 'node', 'depend');
 
-export const PLAN_NODE_LIST_DEFAULT_LIMIT = 50;
+export const PLAN_NODE_LIST_DEFAULT_LIMIT = 100;
 export const PLAN_NODE_LIST_MAX_LIMIT = 200;
 /** Children `plan.node.get` returns; `plan.node.list` with `rootId` reaches the rest. */
 export const PLAN_NODE_CHILDREN_LIMIT = 100;
@@ -148,6 +148,13 @@ export const PlanNodeListInputSchema = z
       .min(1)
       .max(PLAN_NODE_LIST_MAX_LIMIT)
       .default(PLAN_NODE_LIST_DEFAULT_LIMIT),
+    cursor: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        'Absent for the first page. Otherwise `truncated.next.cursor` of the page before, with the same `status` and `rootId`.',
+      ),
   })
   .strict();
 export type PlanNodeListInput = z.infer<typeof PlanNodeListInputSchema>;
@@ -167,11 +174,36 @@ export const PlanNodeListTruncationSchema = z
   .strict();
 export type PlanNodeListTruncation = z.infer<typeof PlanNodeListTruncationSchema>;
 
+/** A list cut short: the bound, how many nodes it found, and where the next page starts. */
+export const PlanNodeListPageTruncationSchema = PlanNodeListTruncationSchema.extend({
+  matched: z
+    .number()
+    .int()
+    .min(0)
+    .describe(
+      'Nodes the read found that match `status`, across every page. Exact for `limit`; for ' +
+        '`depth` or `nodes` at least this many, since the read stopped before the rest.',
+    ),
+  next: z
+    .object({ cursor: z.string().min(1) })
+    .strict()
+    .optional()
+    .describe(
+      'Present while nodes the read found remain past this page: list again with the same input and this ' +
+        '`cursor`. It holds the plan as this page read it, so if a node is created, closed, reopened or ' +
+        'moved before the next page, that page is refused, not shifted. Then list again without `cursor`.',
+    ),
+}).strict();
+export type PlanNodeListPageTruncation = z.infer<typeof PlanNodeListPageTruncationSchema>;
+
 export const PlanNodeListOutputSchema = z.object({
   /** Parents before their children, siblings by position. */
   nodes: z.array(PlanNodeSummarySchema),
-  truncated: PlanNodeListTruncationSchema.optional().describe(
-    'Absent when every matching node is here; otherwise the bound that cut the list short.',
+  truncated: PlanNodeListPageTruncationSchema.optional().describe(
+    'Absent when every matching node is here. Present, `nodes` is one page, not the whole plan: ' +
+      'count from `matched`, and page with `next` while it is present. Under `depth` or `nodes` ' +
+      'the read stopped before the end of the plan. Once `next` is absent, paging has nothing ' +
+      'more to give, and the rest is reached with `rootId`, as `bound` says.',
   ),
 });
 export type PlanNodeListOutput = z.infer<typeof PlanNodeListOutputSchema>;
@@ -228,8 +260,6 @@ export type PlanNodePullRequest = z.infer<typeof PlanNodePullRequestSchema>;
 
 /** A node as a board card shows it, and the nodes under it: no links, no prose past the goal's head. */
 export interface PlanTreeNode extends PlanNodeSummary {
-  createdAt: string;
-  closedAt?: string;
   goalHead: string;
   counts: PlanNodeCounts;
   rounds: number;
@@ -241,8 +271,6 @@ export interface PlanTreeNode extends PlanNodeSummary {
 
 export const PlanTreeNodeSchema = z.lazy(() =>
   PlanNodeSummarySchema.extend({
-    createdAt: z.string().datetime(),
-    closedAt: z.string().datetime().optional(),
     goalHead: z.string().max(PLAN_NODE_GOAL_HEAD_MAX_CHARS),
     counts: PlanNodeCountsSchema,
     rounds: z
