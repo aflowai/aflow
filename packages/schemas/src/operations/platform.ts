@@ -903,7 +903,7 @@ const CatalogListDetailOutputSchema = z.object({
   mode: z.literal('detail'),
   guidance: z.string().optional(),
   operations: z.array(AgentOperationDescriptorSchema),
-  withheldStepOnly: z.array(z.string()).optional(),
+  withheldOpTaskOnly: z.array(z.string()).optional(),
   integrationTools: z
     .array(
       z.object({

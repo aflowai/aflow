@@ -25,7 +25,6 @@ export {
   getActionLabels,
   isPrivilegedOperation,
   isOpTaskOnlyOperation,
-  isStepOnlyOperation,
   isEvalPlaneOperation,
   isPlanOperation,
   isLocalModelOperation,

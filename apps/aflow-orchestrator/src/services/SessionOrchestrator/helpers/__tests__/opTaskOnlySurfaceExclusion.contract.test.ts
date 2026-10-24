@@ -4,6 +4,10 @@
  * listed, or the promotable ceiling. The grant refuses an agent caller, so an
  * offered one is a tool whose every call fails GRANT_DENIED.
  *
+ * The other direction holds too: the gate keys on `opTaskOnly`, not on
+ * `agentTool: false`, so a step-only operation stays listed, and a system caller
+ * (the MCP `catalog` tool) still receives both kinds.
+ *
  * Enumerated from the registry, so a newly marked operation is covered without
  * touching this file. Every surface is exercised with a null grant: that is the
  * case grant filtering cannot hide, so exclusion has to hold on its own.
@@ -57,12 +61,41 @@ const OP_TASK_ONLY = ALL_OPERATIONS.filter((op) => op.opTaskOnly).map((op) => op
 const OP_TASK_ONLY_SET = new Set(OP_TASK_ONLY);
 const LANES = processEditionDescriptor();
 const COMPOSED_OP_TASK_ONLY = OP_TASK_ONLY.filter((id) => isOperationComposed(id, LANES));
-/** D6's step-only rule, written out so the shared predicate is checked rather than reused. */
+/** The ones a catalog listing would carry at all: `internal` hides an operation from every listing. */
+const LISTED_OP_TASK_ONLY = ALL_OPERATIONS.filter(
+  (op) => op.opTaskOnly && !op.internal && isOperationComposed(op.operationId, LANES),
+).map((op) => op.operationId);
+/**
+ * Placed as workflow steps and never held as an agent tool (`agentTool: false`),
+ * but not op-task-only: system callers still see these, and nothing withholds them.
+ */
 const COMPOSED_STEP_ONLY = ALL_OPERATIONS.filter(
   (op) =>
-    !op.internal && (!op.agentTool || op.opTaskOnly) && isOperationComposed(op.operationId, LANES),
+    !op.internal && !op.agentTool && !op.opTaskOnly && isOperationComposed(op.operationId, LANES),
 ).map((op) => op.operationId);
 const COMPOSED_STEP_ONLY_SET = new Set(COMPOSED_STEP_ONLY);
+
+/** What the MCP `catalog` tool sends `catalog.tool.list` (pinned by its own `catalog.test.ts`). */
+const MCP_CATALOG_OVERVIEW = { summaryOnly: true, workflowSteps: true };
+const mcpCatalogDetail = (stepTypes: string[]) => ({
+  stepTypes,
+  includeUsageHints: true,
+  workflowSteps: true,
+});
+
+function listedIds(out: Record<string, unknown>): string[] {
+  return ((out['operations'] ?? []) as Array<Record<string, unknown>>).map(
+    (op) => op['operationId'] as string,
+  );
+}
+
+function markedOpTaskOnly(out: Record<string, unknown>): string[] {
+  return ((out['operations'] ?? []) as Array<Record<string, unknown>>)
+    .filter((op) => op['opTaskOnly'] === true)
+    .map((op) => op['operationId'] as string);
+}
+
+const stepTypesOf = (ids: readonly string[]) => [...new Set(ids.map((id) => id.split('.')[0]!))];
 
 /** The widest scope an agent can hold: every step type and every operation. */
 const WIDEST_SCOPE = {
@@ -335,59 +368,79 @@ describe('opTaskOnly operations are excluded from every agent-facing surface', (
     for (const op of operations) expect(op['opTaskOnly'], String(op['operationId'])).toBe(true);
   });
 
-  it('gates and marks every step-only operation in catalog.tool.list as search does', async () => {
-    expect(COMPOSED_STEP_ONLY.some((id) => !OP_TASK_ONLY_SET.has(id))).toBe(true);
-    const stepTypes = [...new Set(COMPOSED_STEP_ONLY.map((id) => id.split('.')[0]!))];
-    for (const input of [{ stepTypes }, { operationIds: COMPOSED_STEP_ONLY }]) {
-      const hidden = await runHandler(handleGetSchemaInline, 'catalog.tool.list', input);
-      const hiddenIds = ((hidden['operations'] ?? []) as Array<Record<string, unknown>>).map(
-        (op) => op['operationId'] as string,
-      );
+  it('withholds only op-task-only operations from catalog.tool.list — agentTool:false steps stay listed, unmarked', async () => {
+    expect(COMPOSED_STEP_ONLY.length).toBeGreaterThan(0);
+    const both = [...COMPOSED_STEP_ONLY, ...LISTED_OP_TASK_ONLY];
+    for (const input of [{ stepTypes: stepTypesOf(both) }, { operationIds: both }]) {
+      const out = await runHandler(handleGetSchemaInline, 'catalog.tool.list', input);
+      const ids = new Set(listedIds(out));
       expect(
-        hiddenIds.filter((id) => COMPOSED_STEP_ONLY_SET.has(id)),
+        COMPOSED_STEP_ONLY.filter((id) => !ids.has(id)),
         JSON.stringify(input),
       ).toEqual([]);
-
-      const shown = await runHandler(handleGetSchemaInline, 'catalog.tool.list', {
-        ...input,
-        workflowSteps: true,
-      });
-      const shownOps = (shown['operations'] ?? []) as Array<Record<string, unknown>>;
-      const marked = shownOps
-        .filter((op) => op['opTaskOnly'] === true)
-        .map((op) => op['operationId']);
-      expect(marked.sort(), JSON.stringify(input)).toEqual([...COMPOSED_STEP_ONLY].sort());
+      expect(
+        [...ids].filter((id) => OP_TASK_ONLY_SET.has(id)),
+        JSON.stringify(input),
+      ).toEqual([]);
+      expect(markedOpTaskOnly(out), JSON.stringify(input)).toEqual([]);
     }
+  });
 
+  it('gives the MCP catalog tool every step-only and op-task-only operation, marking only the latter', async () => {
+    const both = [...COMPOSED_STEP_ONLY, ...LISTED_OP_TASK_ONLY];
+    const detail = await runHandler(
+      handleGetSchemaInline,
+      'catalog.tool.list',
+      mcpCatalogDetail(stepTypesOf(both)),
+    );
+    const ids = new Set(listedIds(detail));
+    expect(both.filter((id) => !ids.has(id))).toEqual([]);
+    expect(markedOpTaskOnly(detail).sort()).toEqual([...LISTED_OP_TASK_ONLY].sort());
+
+    const overview = await runHandler(
+      handleGetSchemaInline,
+      'catalog.tool.list',
+      MCP_CATALOG_OVERVIEW,
+    );
+    const entries = overview['stepTypes'] as Array<{ stepType: string; operationCount: number }>;
+    for (const stepType of stepTypesOf(both)) {
+      const expected = ALL_OPERATIONS.filter(
+        (op) => !op.internal && op.stepType === stepType,
+      ).length;
+      expect(entries.find((e) => e.stepType === stepType)?.operationCount, stepType).toBe(expected);
+    }
+  });
+
+  it('keeps search marking every non-tool operation for an author, as before', async () => {
     const searched = await runHandler(handleCatalogSearchInline, 'catalog.tool.search', {
-      operationIds: COMPOSED_STEP_ONLY,
+      operationIds: [...COMPOSED_STEP_ONLY, ...LISTED_OP_TASK_ONLY],
       maxResults: 10,
       sources: ['platform'],
       workflowSteps: true,
     });
     for (const d of (searched['discovered'] ?? []) as Array<Record<string, unknown>>) {
       const id = d['operationId'] as string;
-      expect(d['opTaskOnly'] === true, id).toBe(COMPOSED_STEP_ONLY_SET.has(id));
+      expect(d['opTaskOnly'] === true, id).toBe(
+        COMPOSED_STEP_ONLY_SET.has(id) || OP_TASK_ONLY_SET.has(id),
+      );
     }
   });
 
-  it('explains a step-only operation asked for by id without workflowSteps instead of an empty result', async () => {
+  it('explains an op-task-only operation asked for by id without workflowSteps instead of an empty result', async () => {
     const out = await runHandler(handleGetSchemaInline, 'catalog.tool.list', {
-      operationIds: [...COMPOSED_STEP_ONLY, 'memory.store.get'],
+      operationIds: [...LISTED_OP_TASK_ONLY, ...COMPOSED_STEP_ONLY, 'memory.store.get'],
     });
     expect(out['mode']).toBe('detail');
-    expect(((out['withheldStepOnly'] ?? []) as string[]).sort()).toEqual(
-      [...COMPOSED_STEP_ONLY].sort(),
+    expect(((out['withheldOpTaskOnly'] ?? []) as string[]).sort()).toEqual(
+      [...LISTED_OP_TASK_ONLY].sort(),
     );
     expect(out['guidance']).toMatch(/workflowSteps: true/);
-    expect(
-      ((out['operations'] ?? []) as Array<Record<string, unknown>>).map((op) => op['operationId']),
-    ).toEqual(['memory.store.get']);
+    expect(listedIds(out).sort()).toEqual([...COMPOSED_STEP_ONLY, 'memory.store.get'].sort());
 
     const plain = await runHandler(handleGetSchemaInline, 'catalog.tool.list', {
-      operationIds: ['memory.store.get'],
+      operationIds: [...COMPOSED_STEP_ONLY, 'memory.store.get'],
     });
-    expect(plain['withheldStepOnly']).toBeUndefined();
+    expect(plain['withheldOpTaskOnly']).toBeUndefined();
     expect(plain['guidance']).toBeUndefined();
   });
 

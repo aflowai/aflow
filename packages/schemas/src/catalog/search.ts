@@ -1,5 +1,5 @@
 import type { OperationDescriptor } from './operationCatalog.js';
-import { getAllOperations, isStepOnlyOperation } from './registry.js';
+import { getAllOperations } from './registry.js';
 import { toJsonSchemaSync } from '../utils/jsonSchema.js';
 import { COMMON_OP_VERBS, computeSegmentCoverage, tokenizeIdentifier } from './reranking.js';
 import { QUERY_STOPWORDS, scoreFieldWeightedBM25, tokenize, tokenizeQuery } from './bm25.js';
@@ -58,7 +58,11 @@ const _cachedIndexes = new Map<boolean, BM25Index>();
 
 function isSearchable(op: OperationDescriptor, workflowSteps: boolean): boolean {
   if (op.internal) return false;
-  return !isStepOnlyOperation(op.operationId) || workflowSteps;
+  return isAgentHoldable(op) || workflowSteps;
+}
+
+function isAgentHoldable(op: OperationDescriptor): boolean {
+  return op.agentTool && !op.opTaskOnly;
 }
 
 function buildIndex(workflowSteps: boolean): BM25Index {
@@ -385,7 +389,7 @@ function buildResultEntry(op: OperationDescriptor): CatalogSearchResult {
     matchReason: 'structural filter',
     score: 0,
     ...(caution ? { caution } : {}),
-    ...(isStepOnlyOperation(op.operationId) ? { stepOnly: true } : {}),
+    ...(isAgentHoldable(op) ? {} : { stepOnly: true }),
   };
 }
 

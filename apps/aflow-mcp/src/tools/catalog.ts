@@ -99,9 +99,11 @@ export function registerCatalogTool(
           step_types: input.step_types,
         });
 
+        // This caller is the operator's coding agent, not a run's agent: it authors
+        // workflows too, so op-task-only operations stay in its directory, marked.
         const operationInput: Record<string, unknown> = isPhase2
-          ? { stepTypes: input.step_types, includeUsageHints: true }
-          : { summaryOnly: true };
+          ? { stepTypes: input.step_types, includeUsageHints: true, workflowSteps: true }
+          : { summaryOnly: true, workflowSteps: true };
 
         const startTime = Date.now();
 
