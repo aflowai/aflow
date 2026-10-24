@@ -23,6 +23,7 @@ import {
   type DiscoveryScope,
 } from '../../helpers/agentTurn.js';
 import { checkPlatformOpScope } from './catalogToolPromote.js';
+import { inlineArgsFromPositional, readInlineInput } from './readInlineInput.js';
 
 /**
  * Handle agent.control.run_step inline: read the requested stepType/operation/inputs,
@@ -45,17 +46,22 @@ export async function handleRunStepInline(
   parentStepExecutionId?: StepExecutionId,
 ): Promise<void> {
   const startTime = Date.now();
+  const inlineArgs = inlineArgsFromPositional(
+    redis,
+    payloadStore,
+    context,
+    runStepDef,
+    stepExecutionId,
+    idempotencyKey,
+    resolvedInputRef,
+    attempt,
+    _scheduledAtMs,
+    parentStepExecutionId,
+  );
   try {
     // Read the resolved input to get the dynamic step parameters
-    let input: Record<string, unknown> = {};
-    try {
-      const data = await payloadStore.retrieve(resolvedInputRef);
-      if (typeof data === 'object' && data !== null) {
-        input = data as Record<string, unknown>;
-      }
-    } catch {
-      throw new Error('Failed to read run_step input payload');
-    }
+    const input = await readInlineInput(inlineArgs, startTime);
+    if (!input) return;
 
     const rawOperationId = input['operationId'] as string | undefined;
     // Agents sometimes pass "parameters" instead of "inputs" — accept both

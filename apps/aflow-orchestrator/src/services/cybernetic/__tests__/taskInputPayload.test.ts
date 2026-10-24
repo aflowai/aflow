@@ -1,6 +1,7 @@
 import { Buffer } from 'node:buffer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMemoryPayloadStore } from '@aflow/payload-store';
+import { isRunScopedPayloadRef, parsePayloadRef } from '@aflow/schemas';
 import type { Workflow, WorkflowTask } from '@aflow/schemas';
 import type { InlineHandlerArgs } from '../../SessionOrchestrator/handlers/inlineOps/types.js';
 
@@ -34,6 +35,24 @@ const workflow = { tasks: [task] } as Workflow;
 
 beforeEach(() => vi.clearAllMocks());
 
+/**
+ * The run surface's Input pane reads a task input through /payloads, whose
+ * authorizer checks the run named in the ref and 404s a content-addressed one
+ * (`isRunScopedPayloadRef`). A spilled input is readable there only if it is
+ * stored run-scoped, under the run that owns the task.
+ */
+function expectReadableFromRunSurface(ref: string, runId: string): void {
+  expect(ref).not.toContain('/content/');
+  const parsed = parsePayloadRef(ref);
+  expect(isRunScopedPayloadRef(parsed)).toBe(true);
+  expect(parsed).toMatchObject({ layout: 'run', runId, payloadKind: 'input' });
+}
+
+it('the payloads route check refuses a content-addressed input ref', () => {
+  const contentRef = `gs://bucket/tenants/tenant/content/${'a'.repeat(64)}/input.json`;
+  expect(isRunScopedPayloadRef(parsePayloadRef(contentRef))).toBe(false);
+});
+
 describe('workflow task input payloads', () => {
   it('stores a 70 KB decide input and decides from the resolved payload', async () => {
     const payloadStore = createMemoryPayloadStore();
@@ -41,6 +60,7 @@ describe('workflow task input payloads', () => {
     const ref = await buildTaskInputRef(task, workflow, 'tenant', 'space', 'run', payloadStore);
     expect(shouldStore).toHaveBeenCalledWith(input);
     expect(ref).not.toMatch(/^inline:/);
+    expectReadableFromRunSurface(ref, 'run');
     expect(await payloadStore.retrieve(ref)).toEqual(input);
     const args = {
       payloadStore,
@@ -67,6 +87,7 @@ describe('workflow task input payloads', () => {
     const human = { ...task, type: 'human', pauseInstruction: 'x'.repeat(70_000) } as WorkflowTask;
     const ref = await buildTaskInputRef(human, workflow, 'tenant', 'space', 'run', payloadStore);
     expect(ref).not.toMatch(/^inline:/);
+    expectReadableFromRunSurface(ref, 'run');
     expect(await payloadStore.retrieve(ref)).toEqual({ prompt: human.pauseInstruction });
     const small = { ...task, inputs: { value: 1 } };
     const inline = await buildTaskInputRef(small, workflow, 'tenant', 'space', 'run', payloadStore);

@@ -32,6 +32,7 @@ import { readIntegrations } from '../../helpers/integrationReader.js';
 import { buildIntegrationScopeFilter } from '../../helpers/integrationScope.js';
 import { getOrchestratorLogger } from '../../../../lib/orchestratorLogger.js';
 import { requireSpaceId } from './spaceScope.js';
+import { inlineArgsFromPositional, readInlineInput } from './readInlineInput.js';
 
 // ============================================================================
 
@@ -186,16 +187,21 @@ export async function handleCatalogSearchInline(
   parentStepExecutionId?: StepExecutionId,
 ): Promise<void> {
   const startTime = Date.now();
+  const inlineArgs = inlineArgsFromPositional(
+    redis,
+    payloadStore,
+    context,
+    stepDef,
+    stepExecutionId,
+    idempotencyKey,
+    resolvedInputRef,
+    attempt,
+    _scheduledAtMs,
+    parentStepExecutionId,
+  );
   try {
-    let input: Record<string, unknown> = {};
-    try {
-      const data = await payloadStore.retrieve(resolvedInputRef);
-      if (typeof data === 'object' && data !== null) {
-        input = data as Record<string, unknown>;
-      }
-    } catch {
-      /* empty input */
-    }
+    const input = await readInlineInput(inlineArgs, startTime);
+    if (!input) return;
 
     // Parse sources filter: which tool sources to include (default: all)
     const rawSources = input['sources'] as string[] | undefined;

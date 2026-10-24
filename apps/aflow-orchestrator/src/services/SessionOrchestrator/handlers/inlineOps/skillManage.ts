@@ -10,6 +10,7 @@ import {
 import type { InlineHandlerArgs } from './types.js';
 import { emitStepSuccess, emitStepError } from './helpers.js';
 import { requireSpaceId } from './spaceScope.js';
+import { readInlineInput } from './readInlineInput.js';
 
 /**
  * Map a typed lifecycle error to an HTTP-style classification + retryability
@@ -34,20 +35,13 @@ function classifyLifecycleError(code: SkillLifecycleErrorCode): {
 }
 
 export async function handleSkillManageInline(args: InlineHandlerArgs): Promise<void> {
-  const { context, stepDef, payloadStore, resolvedInputRef } = args;
+  const { context, stepDef } = args;
   const startTime = Date.now();
   const operationId = stepDef.operation;
 
   try {
-    let input: Record<string, unknown> = {};
-    try {
-      const data = await payloadStore.retrieve(resolvedInputRef);
-      if (typeof data === 'object' && data !== null) {
-        input = data as Record<string, unknown>;
-      }
-    } catch {
-      /* empty input */
-    }
+    const input = await readInlineInput(args, startTime);
+    if (!input) return;
 
     const skillId = typeof input['skillId'] === 'string' ? input['skillId'] : undefined;
     if (!skillId) {

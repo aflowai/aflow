@@ -87,6 +87,7 @@ import {
   detectInferredCauseDowngrade,
   EntityDirectivesSchema,
 } from '@aflow/schemas';
+import { readInlineInput } from './readInlineInput.js';
 
 // ============================================================================
 
@@ -132,15 +133,8 @@ export async function handleCoachCrudInline(args: InlineHandlerArgs): Promise<vo
   const startTime = Date.now();
 
   try {
-    let input: Record<string, unknown> = {};
-    try {
-      const data = await args.payloadStore.retrieve(args.resolvedInputRef);
-      if (typeof data === 'object' && data !== null) {
-        input = data as Record<string, unknown>;
-      }
-    } catch {
-      /* missing payload — each handler surfaces its own validation error */
-    }
+    const input = await readInlineInput(args, startTime);
+    if (!input) return;
 
     switch (operationId) {
       case 'learner.propose.workflow_change':

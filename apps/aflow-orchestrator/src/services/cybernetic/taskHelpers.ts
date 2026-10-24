@@ -1,5 +1,8 @@
+import { randomUUID } from 'node:crypto';
 import { getDatabase } from '@aflow/database';
 import type {
+  SessionId,
+  StepExecutionId,
   TenantId,
   ContractError,
   StoredParentInstructions,
@@ -13,11 +16,7 @@ import {
   StoredParentInstructionsSchema,
   StoredParentTaskInputsSchema,
 } from '@aflow/schemas';
-import {
-  contentAddressForJson,
-  encodeInlinePayloadRef,
-  type PayloadStore,
-} from '@aflow/payload-store';
+import { encodeInlinePayloadRef, type PayloadStore } from '@aflow/payload-store';
 import {
   buildRunnerDelegationContext,
   entryRunInputSlots,
@@ -167,9 +166,16 @@ export async function buildTaskInputRef(
   const taskType = inferTaskType(task);
   const inputRef = async (data: unknown): Promise<string> =>
     payloadStore?.shouldStore(data)
-      ? payloadStore.storeContentAddressed({
+      ? // Run-scoped, never content-addressed: the run surface reads a task's
+        // input through /payloads, which authorizes by the run named in the
+        // ref and refuses a content ref because it names none. The input is
+        // built before the worker's step id exists, so the key segment is a
+        // fresh id.
+        payloadStore.store({
           tenantId: tenantId as TenantId,
-          contentHash: contentAddressForJson(data),
+          runId: runId as SessionId,
+          stepExecutionId: randomUUID() as StepExecutionId,
+          attempt: 1,
           kind: 'input',
           data,
         })

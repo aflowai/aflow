@@ -9,6 +9,7 @@ import {
 import { addStepResult } from '@aflow/redis';
 import type { InlineHandlerArgs } from './types.js';
 import { encodeInlineOpOutputRef } from './helpers.js';
+import { readInlineInput } from './readInlineInput.js';
 
 // ============================================================================
 // platform.catalog.export — Catalog Export
@@ -30,15 +31,8 @@ export async function handleCatalogExportInline(args: InlineHandlerArgs): Promis
   const operationId = stepDef.operation;
 
   try {
-    let input: Record<string, unknown> = {};
-    try {
-      const data = await payloadStore.retrieve(resolvedInputRef);
-      if (typeof data === 'object' && data !== null) {
-        input = data as Record<string, unknown>;
-      }
-    } catch {
-      /* empty input */
-    }
+    const input = await readInlineInput(args, startTime);
+    if (!input) return;
 
     const format = (input['format'] as string | undefined) ?? 'operation_catalog_json';
     const stepTypes = input['stepTypes'] as string[] | undefined;

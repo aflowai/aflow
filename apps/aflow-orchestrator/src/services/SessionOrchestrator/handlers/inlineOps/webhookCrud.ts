@@ -19,6 +19,7 @@ import type { InlineHandlerArgs } from './types.js';
 import { emitStepSuccess, emitStepError } from './helpers.js';
 import { requireSpaceId } from './spaceScope.js';
 import { getOrchestratorLogger } from '../../../../lib/orchestratorLogger.js';
+import { readInlineInput } from './readInlineInput.js';
 
 /** Max webhooks an agent can create in a single run */
 const MAX_WEBHOOK_CREATES_PER_RUN = 10;
@@ -67,15 +68,8 @@ export async function handleWebhookCrudInline(args: InlineHandlerArgs): Promise<
   const startTime = Date.now();
 
   try {
-    let input: Record<string, unknown> = {};
-    try {
-      const data = await args.payloadStore.retrieve(args.resolvedInputRef);
-      if (typeof data === 'object' && data !== null) {
-        input = data as Record<string, unknown>;
-      }
-    } catch {
-      /* empty input */
-    }
+    const input = await readInlineInput(args, startTime);
+    if (!input) return;
 
     switch (operationId) {
       case 'api.webhook.upsert':

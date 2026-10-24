@@ -11,11 +11,11 @@ import {
 } from '@aflow/redis';
 import type { InlineHandlerArgs } from './types.js';
 import { attendedAsActingRun } from './actingRun.js';
+import { readInlineInput } from './readInlineInput.js';
 
 export async function handleResumeInline(args: InlineHandlerArgs): Promise<void> {
   const {
     redis,
-    payloadStore,
     context,
     stepDef,
     stepExecutionId,
@@ -28,15 +28,8 @@ export async function handleResumeInline(args: InlineHandlerArgs): Promise<void>
 
   try {
     // Read resolved input
-    let input: Record<string, unknown> = {};
-    try {
-      const data = await payloadStore.retrieve(resolvedInputRef);
-      if (typeof data === 'object' && data !== null) {
-        input = data as Record<string, unknown>;
-      }
-    } catch {
-      /* empty input */
-    }
+    const input = await readInlineInput(args, startTime);
+    if (!input) return;
 
     // Parse via the schema so defaults (`wait: 'until_pause'`) and the
     // 'true'/'false' string preprocessor fire consistently. Reading raw input

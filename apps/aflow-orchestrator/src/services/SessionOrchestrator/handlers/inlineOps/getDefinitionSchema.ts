@@ -12,6 +12,7 @@ import { addStepResult } from '@aflow/redis';
 import type { PayloadStore } from '@aflow/payload-store';
 import type { FlowExecutionContext } from '../../types.js';
 import { encodeInlineOpOutputRef } from './helpers.js';
+import { inlineArgsFromPositional, readInlineInput } from './readInlineInput.js';
 
 export async function handleGetDefinitionSchemaInline(
   redis: Redis,
@@ -26,17 +27,22 @@ export async function handleGetDefinitionSchemaInline(
   parentStepExecutionId?: StepExecutionId,
 ): Promise<void> {
   const startTime = Date.now();
+  const inlineArgs = inlineArgsFromPositional(
+    redis,
+    payloadStore,
+    context,
+    stepDef,
+    stepExecutionId,
+    idempotencyKey,
+    resolvedInputRef,
+    attempt,
+    _scheduledAtMs,
+    parentStepExecutionId,
+  );
   try {
     // Read resolved input
-    let input: Record<string, unknown> = {};
-    try {
-      const data = await payloadStore.retrieve(resolvedInputRef);
-      if (typeof data === 'object' && data !== null) {
-        input = data as Record<string, unknown>;
-      }
-    } catch {
-      /* empty input */
-    }
+    const input = await readInlineInput(inlineArgs, startTime);
+    if (!input) return;
 
     const definitionType = input['definitionType'] as string | undefined;
     if (!definitionType || !isDefinitionType(definitionType)) {

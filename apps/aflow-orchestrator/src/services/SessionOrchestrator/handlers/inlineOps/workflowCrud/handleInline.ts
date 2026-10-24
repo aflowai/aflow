@@ -23,6 +23,7 @@ import { WorkflowArchivedError } from '@aflow/cybernetic-runtime';
 import { getOrchestratorLogger } from '../../../../../lib/orchestratorLogger.js';
 import type { InlineHandlerArgs } from '../types.js';
 import { emitStepError } from '../helpers.js';
+import { readInlineInput } from '../readInlineInput.js';
 import { handleWorkflowPut } from './create.js';
 import { handleWorkflowPatch } from './update.js';
 import { handleWorkflowGet, handleWorkflowList } from './read.js';
@@ -47,25 +48,8 @@ export async function handleWorkflowCrudInline(args: InlineHandlerArgs): Promise
   const startTime = Date.now();
 
   try {
-    let input: Record<string, unknown> = {};
-    if (args.resolvedInputRef) {
-      let data: unknown;
-      try {
-        data = await args.payloadStore.retrieve(args.resolvedInputRef);
-      } catch (err) {
-        await emitStepError(
-          args,
-          'WORKFLOW_INPUT_READ_FAILED',
-          err instanceof Error ? err.message : String(err),
-          startTime,
-          'internal',
-        );
-        return;
-      }
-      if (typeof data === 'object' && data !== null) {
-        input = data as Record<string, unknown>;
-      }
-    }
+    const input = await readInlineInput(args, startTime);
+    if (!input) return;
 
     switch (operationId) {
       case 'workflow.manage.put':

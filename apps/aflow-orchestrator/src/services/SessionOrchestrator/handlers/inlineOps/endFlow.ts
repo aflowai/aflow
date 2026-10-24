@@ -11,6 +11,7 @@ import { addStepResult } from '@aflow/redis';
 import type { PayloadStore } from '@aflow/payload-store';
 import { encodeInlineOpOutputRef } from './helpers.js';
 import type { FlowExecutionContext } from '../../types.js';
+import { inlineArgsFromPositional, readInlineInput } from './readInlineInput.js';
 
 /**
  * Handle agent.control.end inline: emit a synthetic SUCCESS result so
@@ -29,17 +30,22 @@ export async function handleEndFlowInline(
   parentStepExecutionId?: StepExecutionId,
 ): Promise<void> {
   const startTime = Date.now();
+  const inlineArgs = inlineArgsFromPositional(
+    redis,
+    payloadStore,
+    context,
+    stepDef,
+    stepExecutionId,
+    idempotencyKey,
+    resolvedInputRef,
+    attempt,
+    _scheduledAtMs,
+    parentStepExecutionId,
+  );
   try {
     // Read resolved input to extract reason/result
-    let input: Record<string, unknown> = {};
-    try {
-      const data = await payloadStore.retrieve(resolvedInputRef);
-      if (typeof data === 'object' && data !== null) {
-        input = data as Record<string, unknown>;
-      }
-    } catch {
-      /* empty input — end with no result */
-    }
+    const input = await readInlineInput(inlineArgs, startTime);
+    if (!input) return;
 
     const outputData = {
       ended: true as const,
