@@ -781,12 +781,6 @@ export type PlatformListApiDefinitionsOutput = z.infer<
 /** Which tool sources to include in catalog results. Omit for all. */
 export const ToolSourceSchema = z.enum(['platform', 'agent', 'api', 'mcp']);
 export type ToolSource = z.infer<typeof ToolSourceSchema>;
-const WorkflowStepsFlagSchema = z
-  .boolean()
-  .optional()
-  .describe(
-    'Set when authoring or patching a workflow: also returns platform operations that run only as workflow operation tasks. Those come back with opTaskOnly: true — author them as an operation task in the workflow; they cannot be promoted or called as tools.',
-  );
 
 // ============================================================================
 // Get Schema - Query operation schemas for agent tool discovery
@@ -809,7 +803,11 @@ export const PlatformGetSchemaInputSchema = z.object({
   excludeGroupIds: z.array(z.string()).optional(),
   /** Which tool sources to include. Omit for all. Use ['api'] to discover only API endpoints. */
   sources: z.array(ToolSourceSchema).optional(),
-  workflowSteps: WorkflowStepsFlagSchema,
+  workflowSteps: z
+    .optional(z.boolean())
+    .describe(
+      'Set when authoring or patching a workflow: also returns platform operations that run only as workflow operation tasks. Those come back with opTaskOnly: true — author them as an operation task in the workflow; they cannot be promoted or called as tools.',
+    ),
 });
 export type PlatformGetSchemaInput = z.infer<typeof PlatformGetSchemaInputSchema>;
 
@@ -905,7 +903,6 @@ const CatalogListDetailOutputSchema = z.object({
   mode: z.literal('detail'),
   guidance: z.string().optional(),
   operations: z.array(AgentOperationDescriptorSchema),
-  /** Requested operationIds left out because they are step-only and workflowSteps was not set. */
   withheldStepOnly: z.array(z.string()).optional(),
   integrationTools: z
     .array(
@@ -1248,7 +1245,7 @@ export const PlatformOperationRegistrations: OperationRegistration[] = [
       maxResults: z.number().int().min(1).max(10).optional(),
       /** Which tool sources to search. Omit for all. Use ['api'] to discover only API endpoints. */
       sources: z.array(ToolSourceSchema).optional(),
-      workflowSteps: WorkflowStepsFlagSchema,
+      workflowSteps: PlatformGetSchemaInputSchema.shape.workflowSteps,
     }),
     outputZod: z.discriminatedUnion('mode', [
       z.object({
