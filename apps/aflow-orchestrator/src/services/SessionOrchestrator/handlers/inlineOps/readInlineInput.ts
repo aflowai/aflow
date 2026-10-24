@@ -15,8 +15,14 @@ export const INLINE_INPUT_READ_FAILED = 'WORKFLOW_INPUT_READ_FAILED';
  * and list ops keep their defaults. A PRESENT ref that cannot be read is a
  * different thing: running the op on `{}` would answer with defaults (a list
  * of everything, a validation error naming fields the caller did send) while
- * the real input sits unread. So it fails the step with the store's message
- * and answers `null`; the caller returns without emitting anything else.
+ * the real input sits unread. So it fails the step and answers `null`; the
+ * caller returns without emitting anything else.
+ *
+ * The failure is `validation`, not `internal`: `emitStepError` replaces an
+ * internal message with a generic one, and the store's message is the only
+ * thing that tells the operator and the agent why the input could not be read.
+ * A handler whose agent-facing contract names its own code and text passes
+ * `unreadable` to keep them.
  *
  * A guard test (`readInlineInput.guard.test.ts`) fails on any handler that
  * calls `payloadStore.retrieve` on its resolved input ref itself.
@@ -24,6 +30,7 @@ export const INLINE_INPUT_READ_FAILED = 'WORKFLOW_INPUT_READ_FAILED';
 export async function readInlineInput(
   args: InlineHandlerArgs,
   startTime: number,
+  unreadable?: { code: string; message: string },
 ): Promise<Record<string, unknown> | null> {
   if (!args.resolvedInputRef) return {};
   let data: unknown;
@@ -32,10 +39,10 @@ export async function readInlineInput(
   } catch (err) {
     await emitStepError(
       args,
-      INLINE_INPUT_READ_FAILED,
-      err instanceof Error ? err.message : String(err),
+      unreadable?.code ?? INLINE_INPUT_READ_FAILED,
+      unreadable?.message ?? (err instanceof Error ? err.message : String(err)),
       startTime,
-      'internal',
+      'validation',
     );
     return null;
   }

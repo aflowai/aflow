@@ -187,7 +187,10 @@ export async function handleSubmitOutputInline(args: InlineHandlerArgs): Promise
 
   try {
     // 1. Read the agent's output from the resolved input
-    const input = await readInlineInput(args, startTime);
+    const input = await readInlineInput(args, startTime, {
+      code: 'SUBMIT_OUTPUT_INVALID_INPUT',
+      message: 'Could not read submit_output input payload.',
+    });
     if (!input) return;
 
     // There is no literal to take. Whatever the draft holds is what gets
@@ -485,7 +488,10 @@ export async function handleSignalBlockedInline(args: InlineHandlerArgs): Promis
 
   try {
     // 1. Read the blocking reason from resolved input
-    const input = await readInlineInput(args, startTime);
+    const input = await readInlineInput(args, startTime, {
+      code: 'SIGNAL_BLOCKED_INVALID_INPUT',
+      message: 'Could not read signal_blocked input payload.',
+    });
     if (!input) return;
 
     const reason = typeof input['reason'] === 'string' ? input['reason'] : 'Agent is blocked';

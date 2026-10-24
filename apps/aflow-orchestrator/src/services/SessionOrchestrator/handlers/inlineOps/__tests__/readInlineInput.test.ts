@@ -22,6 +22,7 @@ import { handleCatalogAgentInline } from '../catalogAgent.js';
 import { handleCatalogExportInline } from '../catalogExport.js';
 import { handleArtifactInspectInline } from '../artifactInspect.js';
 import { handleWorkflowCrudInline } from '../workflowCrud/handleInline.js';
+import { handleSignalBlockedInline, handleSubmitOutputInline } from '../runnerOutput.js';
 
 const STORE_REASON = 'Payload object is unavailable';
 const PRESENT_REF = 'gs://bucket/tenants/t/runs/r/steps/s/attempt/1/input.json';
@@ -63,7 +64,26 @@ describe('readInlineInput', () => {
       INLINE_INPUT_READ_FAILED,
       STORE_REASON,
       0,
-      'internal',
+      'validation',
+    );
+  });
+
+  it('persists the store reason as a non-retryable validation error', async () => {
+    const actual = await vi.importActual<typeof import('../helpers.js')>('../helpers.js');
+    mocks.emitStepError.mockImplementationOnce(actual.emitStepError);
+    const args = makeArgs('agent.manage.list', PRESENT_REF);
+    expect(await readInlineInput(args, 0)).toBeNull();
+    expect(mocks.addStepResult).toHaveBeenCalledWith(
+      args.redis,
+      expect.objectContaining({
+        status: 'FAILED',
+        error: expect.objectContaining({
+          code: INLINE_INPUT_READ_FAILED,
+          message: STORE_REASON,
+          classification: 'validation',
+          retryable: false,
+        }),
+      }),
     );
   });
 
@@ -118,7 +138,36 @@ describe.each(handlers)('%s', (_name, operation, handle) => {
       INLINE_INPUT_READ_FAILED,
       STORE_REASON,
       expect.any(Number),
-      'internal',
+      'validation',
+    );
+    expect(mocks.addStepResult).not.toHaveBeenCalled();
+  });
+});
+
+describe.each([
+  [
+    'submit_output',
+    handleSubmitOutputInline,
+    'SUBMIT_OUTPUT_INVALID_INPUT',
+    'Could not read submit_output input payload.',
+  ],
+  [
+    'signal_blocked',
+    handleSignalBlockedInline,
+    'SIGNAL_BLOCKED_INVALID_INPUT',
+    'Could not read signal_blocked input payload.',
+  ],
+] as const)('%s', (name, handle, code, message) => {
+  it('keeps its own code and message when its present input ref cannot be read', async () => {
+    const args = makeArgs(`agent.control.${name}`, PRESENT_REF);
+    await handle(args);
+    expect(mocks.emitStepError).toHaveBeenCalledTimes(1);
+    expect(mocks.emitStepError).toHaveBeenCalledWith(
+      args,
+      code,
+      message,
+      expect.any(Number),
+      'validation',
     );
     expect(mocks.addStepResult).not.toHaveBeenCalled();
   });

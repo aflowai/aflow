@@ -15,7 +15,7 @@ vi.mock('../../SessionOrchestrator/handlers/inlineOps/workflowCrud/read.js', () 
   handleWorkflowGet: vi.fn(),
 }));
 
-import { buildTaskInputRef } from '../taskHelpers.js';
+import { buildTaskInputRef, taskInputStepExecutionId } from '../taskHelpers.js';
 import { handleWorkflowCrudInline } from '../../SessionOrchestrator/handlers/inlineOps/workflowCrud/handleInline.js';
 
 const input = {
@@ -32,6 +32,7 @@ const task = {
   inputs: input,
 } as WorkflowTask;
 const workflow = { tasks: [task] } as Workflow;
+const dispatch = { attempt: 1 };
 
 beforeEach(() => vi.clearAllMocks());
 
@@ -57,7 +58,15 @@ describe('workflow task input payloads', () => {
   it('stores a 70 KB decide input and decides from the resolved payload', async () => {
     const payloadStore = createMemoryPayloadStore();
     const shouldStore = vi.spyOn(payloadStore, 'shouldStore');
-    const ref = await buildTaskInputRef(task, workflow, 'tenant', 'space', 'run', payloadStore);
+    const ref = await buildTaskInputRef(
+      task,
+      workflow,
+      'tenant',
+      'space',
+      'run',
+      dispatch,
+      payloadStore,
+    );
     expect(shouldStore).toHaveBeenCalledWith(input);
     expect(ref).not.toMatch(/^inline:/);
     expectReadableFromRunSurface(ref, 'run');
@@ -76,21 +85,70 @@ describe('workflow task input payloads', () => {
     );
   });
 
-  it('refuses to produce an oversized inline ref without a payload store', async () => {
-    await expect(buildTaskInputRef(task, workflow, 'tenant', 'space', 'run')).rejects.toThrow(
-      'cap. Store it and pass the resulting ref.',
+  it("stores a spilled input under the dispatch's own step and attempt", async () => {
+    const payloadStore = createMemoryPayloadStore();
+    const stepExecutionId = '0b8e2f0c-3d6a-4c1e-9a57-6f2d8b4e1c90';
+    const ref = await buildTaskInputRef(
+      task,
+      workflow,
+      'tenant',
+      'space',
+      'run',
+      { attempt: 3, stepExecutionId },
+      payloadStore,
     );
+    expect(parsePayloadRef(ref)).toMatchObject({ runId: 'run', stepExecutionId, attempt: 3 });
+  });
+
+  it('derives the step segment from run, task and attempt when the dispatch has no step id', async () => {
+    const payloadStore = createMemoryPayloadStore();
+    const build = (t: WorkflowTask, runId: string, attempt: number) =>
+      buildTaskInputRef(t, workflow, 'tenant', 'space', runId, { attempt }, payloadStore);
+    const ref = await build(task, 'run', 1);
+    expect(await build(task, 'run', 1)).toBe(ref);
+    expect(await build({ ...task, taskId: 'decide-again' }, 'run', 1)).not.toBe(ref);
+    expect(await build(task, 'run', 2)).not.toBe(ref);
+    expect(await build(task, 'other-run', 1)).not.toBe(ref);
+    expect(parsePayloadRef(ref)).toMatchObject({
+      stepExecutionId: taskInputStepExecutionId('run', 'decide', 1),
+      attempt: 1,
+    });
+    expect(taskInputStepExecutionId('run', 'decide', 1)).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+  });
+
+  it('refuses to produce an oversized inline ref without a payload store', async () => {
+    await expect(
+      buildTaskInputRef(task, workflow, 'tenant', 'space', 'run', dispatch),
+    ).rejects.toThrow('cap. Store it and pass the resulting ref.');
   });
 
   it('stores oversized human input and keeps small operation input readable inline', async () => {
     const payloadStore = createMemoryPayloadStore();
     const human = { ...task, type: 'human', pauseInstruction: 'x'.repeat(70_000) } as WorkflowTask;
-    const ref = await buildTaskInputRef(human, workflow, 'tenant', 'space', 'run', payloadStore);
+    const ref = await buildTaskInputRef(
+      human,
+      workflow,
+      'tenant',
+      'space',
+      'run',
+      dispatch,
+      payloadStore,
+    );
     expect(ref).not.toMatch(/^inline:/);
     expectReadableFromRunSurface(ref, 'run');
     expect(await payloadStore.retrieve(ref)).toEqual({ prompt: human.pauseInstruction });
     const small = { ...task, inputs: { value: 1 } };
-    const inline = await buildTaskInputRef(small, workflow, 'tenant', 'space', 'run', payloadStore);
+    const inline = await buildTaskInputRef(
+      small,
+      workflow,
+      'tenant',
+      'space',
+      'run',
+      dispatch,
+      payloadStore,
+    );
     expect(inline).toMatch(/^inline:/);
     expect(await payloadStore.retrieve(inline)).toEqual({ value: 1 });
   });
@@ -114,7 +172,7 @@ describe('workflow task input payloads', () => {
         'WORKFLOW_INPUT_READ_FAILED',
         reason,
         expect.any(Number),
-        'internal',
+        'validation',
       );
     },
   );
@@ -135,7 +193,7 @@ describe('workflow task input payloads', () => {
       'WORKFLOW_INPUT_READ_FAILED',
       'Payload object is unavailable',
       expect.any(Number),
-      'internal',
+      'validation',
     );
     expect(emitted.success).not.toHaveBeenCalled();
   });
