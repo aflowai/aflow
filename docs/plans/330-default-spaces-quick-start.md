@@ -48,8 +48,8 @@ _Rejected:_ a seed migration. It writes into every tenant at deploy time, and th
 
 The checklist is green when every required item is `done`. The items for Coding with GitHub, each with where its state is read:
 
-1. **Pair this machine.** Read from the space's host binding and the executor's presence in the host inventory. A paired machine whose executor is gone is `broken`. Changed at This Computer → Get a code.
-2. **Connect the folder of the repository, with a branch prefix and a merge posture.** Read from the binding's folder, push policy, `branchPrefix` and `mergePosture`. A folder that does not allow pushes is `needs_setup`. The item shows the prefix and posture in force, and the command that changes them: `aflow connect <folder> --branch-prefix <p> --merge-posture <never|when-green>`. It also reports when the shepherd agent was written before this folder was connected, because that agent's folders are fixed when it is written (§7 F4).
+1. **Pair this machine.** The machine reading of `pair_machine`. Read from the space's host binding and the executor's presence in the host inventory. A paired machine whose executor is gone is `broken`. Changed at This Computer → Get a code.
+2. **Connect the folder of the repository, with a branch prefix and a merge posture.** The folder reading of `pair_machine`, because connecting the folder is part of the host lane's grant. Read from the binding's folder, push policy, `branchPrefix` and `mergePosture`. A folder that does not allow pushes is `needs_setup`. The item shows the prefix and posture in force, and the command that changes them: `aflow connect <folder> --branch-prefix <p> --merge-posture <never|when-green>`. It also reports when the shepherd agent was written before this folder was connected, because that agent's folders are fixed when it is written (§7 F4).
 3. **Bind a GitHub credential to the github connector, with the scopes publish and shepherd need.** Read from the binding, and from GitHub's own answer for that credential. A credential GitHub refuses is `broken`. One that lacks a scope is `needs_setup`, and names the missing scope. Changed on the credentials page.
 4. **Choose the coding harness.** Read from the space's preferred harness (`/spaces/:id/preferred-harness`, Plan 326 D12) and the host inventory's `harnesses[].installed`. No choice is `needs_setup`. A choice that is not installed on the machine is `broken`. The options are Claude Code and Codex, as installed on the machine.
 5. **Arm the shepherd schedule.** Read from the schedule's status and the firings it has left. Absent is `needs_setup`. Expired is `broken`, with the one action that recreates it from its stored input (D3).
@@ -59,8 +59,8 @@ An item the edition cannot meet reports `broken`, with the edition's own refusal
 
 The readiness function is the derived post-install manifest grown, not a sibling of it. `generatePostInstallManifest` takes the template's items as well. An item whose question a task kind already answers extends that kind rather than adding one beside it:
 
-- item 1 is `pair_machine`, which gains the state and the `broken` reading of a paired machine whose executor is gone;
-- item 2 is `designate_repo`, which gains the folder, push policy, prefix and posture, and the shepherd agent's report.
+- Items 1 and 2 are `pair_machine`. The host lane's grant is a paired machine and a connected folder, and today `pair_machine` is one row listed while that grant is unmet. It becomes two stateful readings of the same grant. The machine reading covers pairing, and it is `broken` when the paired machine's executor is gone. The folder reading covers the connected folder's push policy, `branchPrefix` and `mergePosture`, and the shepherd agent's report.
+- `designate_repo` stays what it is: the cloud designation of a `code_repo`. The template's skills run on the host lane and never require `code_repo`, so `designate_repo` never appears for Coding with GitHub. Its meaning for the cloud `coding-pr-loop` bundle does not change.
 
 Items 3 to 6 have no kind today and are new ones. Three surfaces read the function:
 
@@ -95,10 +95,10 @@ _Rejected:_ exporting Full Circle's directives as the template. They name `aflow
 
 ## 3. What it affects
 
-- `packages/schemas` — the `space` member of `CatalogEntrySchema` and its template payload; `space` in `StoreInstallKindSchema`; in `PostInstallTaskSchema`, the state and the page or command on the variants readiness reads, `pair_machine` and `designate_repo` grown for items 1 and 2, and new variants for items 3 to 6. Every variant pins `required: z.literal(true)` today, and the required ones keep it. The optional preview item is a variant of its own pinning `required: z.literal(false)`, so no kind can be both. The existing test that rejects `designate_repo` with `required: false` therefore stands, and a test beside it rejects the preview variant with `required: true`.
+- `packages/schemas` — the `space` member of `CatalogEntrySchema` and its template payload. `space` in `CatalogEntryKindSchema` (`store/listingCore.ts`), a separate enum that the entry's `kind` and every schema reading a listing's kind take from: the Store search filter (`StoreListingSearchInputSchema`), the `store_install` staged change's listing snapshot (`cybernetic/stagedChange.ts`) and the registry lookup's catalog candidate. `space` in `StoreInstallKindSchema`. In `PostInstallTaskSchema`, the state and the page or command on the variants readiness reads; `pair_machine` grown into the machine and folder readings of items 1 and 2; new variants for items 3 to 6. `designate_repo` is unchanged. Every variant pins `required: z.literal(true)` today, and the required ones keep it. The optional preview item is a variant of its own pinning `required: z.literal(false)`, so no kind can be both. The existing test that rejects `designate_repo` with `required: false` therefore stands, and a test beside it rejects the preview variant with `required: true`.
 - `packages/platform-artifacts` — the template catalog beside `skillBundleCatalog.ts`; the Coding with GitHub template; its help article under `helpCenter/articles/`; the Store catalog listing and its hashes.
 - `packages/cybernetic-runtime` — `generatePostInstallManifest` takes template items, with their readers over host inventory, bindings, credentials, the preferred harness and schedules.
-- `packages/server-runtime` — the Store install route for `space`, which creates the space, applies bundles and writes artifacts in one install; the first-run offer's read.
+- `packages/server-runtime` — the Store listing route's `kind` query, which reads `CatalogEntryKindSchema`; the Store install route for `space`, which creates the space, applies bundles and writes artifacts in one install; the first-run offer's read.
 - `packages/web-product` — "Start from a quick start" in the space switcher; the first-run offer; `SetupChecklist` on the Store page and on the space's help surface.
 - Stored data: one install row per space made from a template. No new table.
 
@@ -116,7 +116,7 @@ _Exit:_ the document is merged and `docs/plans/README.md` lists it.
 
 _Exit:_ from a fresh install, the first-run offer shows the test template beside the empty space. Choosing it creates a new space. The space holds the bundle with its install rows and the directive, and Personal is unchanged. Applying the template to an existing space is refused. The contract test fails if the install skips the bundle path, and the guard fails on a template carrying a planted absolute path.
 
-**P2 — Coding with GitHub and the readiness function with its three surfaces.** The template (D3); the six readiness items (D4) in `generatePostInstallManifest`, items 1 and 2 as the grown `pair_machine` and `designate_repo`; the `PostInstallTaskSchema` changes in §3, with the preview's own `required: false` variant; the three surfaces. Depends on node `5f573124`'s single coding-loop entry.
+**P2 — Coding with GitHub and the readiness function with its three surfaces.** The template (D3); the six readiness items (D4) in `generatePostInstallManifest`, items 1 and 2 as the machine and folder readings of the grown `pair_machine`, and `designate_repo` left as the cloud repository designation; the `PostInstallTaskSchema` changes in §3, with the preview's own `required: false` variant; the three surfaces. Depends on node `5f573124`'s single coding-loop entry.
 
 - _Remaining._ All of it. Before building item 3, measure how a credential's scopes are read for each kind of GitHub token the connector accepts, and record the result here.
 
