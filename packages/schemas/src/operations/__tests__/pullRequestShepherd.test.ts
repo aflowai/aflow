@@ -22,6 +22,7 @@ import {
   SkillBundleSchema,
   WORKFLOW_RUN_LIST_LIMIT_MAX,
   WORKFLOW_RUN_LIST_SELECTOR_MESSAGE,
+  WORKFLOW_RUN_LIST_SUCCEEDED_MAX,
   WorkflowRunDecideInputSchema,
   WorkflowRunListInputSchema,
 } from '../../index.js';
@@ -178,6 +179,30 @@ describe('workflow.run.list', () => {
     expect(
       WorkflowRunListInputSchema.safeParse({ servingNodeOfPullRequest: 'aflow/x' }).success,
     ).toBe(false);
+  });
+
+  it('narrows a slug and input by the tasks a run succeeded in and what they recorded — never a plan node read', () => {
+    const succeeded = [
+      { taskId: 'push' },
+      { taskId: 'commit', output: { path: 'commit.sha', equals: 'c'.repeat(40) } },
+    ];
+    expect(WorkflowRunListInputSchema.parse({ ...query, succeeded }).succeeded).toEqual(succeeded);
+    const byNode = { servingNodeOfPullRequest: 'https://github.com/aflowai/aflow/pull/94' };
+    expect(
+      WorkflowRunListInputSchema.safeParse({ ...byNode, succeeded }).error?.issues.map(
+        (i) => i.message,
+      ),
+    ).toContain(WORKFLOW_RUN_LIST_SELECTOR_MESSAGE);
+    for (const refused of [
+      [],
+      [{ taskId: 'commit', output: { path: 'commit..sha', equals: 'x' } }],
+      [{ taskId: 'commit', output: { path: 'commit.sha' } }],
+      Array.from({ length: WORKFLOW_RUN_LIST_SUCCEEDED_MAX + 1 }, () => ({ taskId: 'push' })),
+    ]) {
+      expect(WorkflowRunListInputSchema.safeParse({ ...query, succeeded: refused }).success).toBe(
+        false,
+      );
+    }
   });
 });
 

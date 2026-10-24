@@ -19,7 +19,44 @@ export const WorkflowRunListStatusSchema = WorkflowRunStatusSchema.extract([
 export type WorkflowRunListStatus = z.infer<typeof WorkflowRunListStatusSchema>;
 
 export const WORKFLOW_RUN_LIST_SELECTOR_MESSAGE =
-  'Name what the runs are selected by: `slug` with `input` — one workflow’s runs started with that input — or `servingNodeOfPullRequest` alone — the runs serving the plan node that pull request is linked to.';
+  'Name what the runs are selected by: `slug` with `input` — one workflow’s runs started with that input, narrowed by `succeeded` where it is named — or `servingNodeOfPullRequest` alone — the runs serving the plan node that pull request is linked to.';
+
+/** The most tasks one read names in `succeeded`. */
+export const WORKFLOW_RUN_LIST_SUCCEEDED_MAX = 4;
+
+const RunListOutputPathSchema = z
+  .string()
+  .min(1)
+  .max(256)
+  .regex(/^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*|\[\d+\])*$/, {
+    message: 'An output path is dotted keys and indexes: `commit.sha`, `jobs[0].id`.',
+  });
+
+export const WorkflowRunListSucceededTaskSchema = z
+  .object({
+    taskId: z
+      .string()
+      .min(1)
+      .max(128)
+      .regex(/^[A-Za-z0-9_-]+$/, { message: 'A task id is letters, digits, `-` and `_`.' })
+      .describe('A task of that workflow, by id — `push`.'),
+    output: z
+      .object({
+        path: RunListOutputPathSchema.describe(
+          'A path into the output the task recorded — `commit.sha`.',
+        ),
+        equals: z
+          .union([z.string().max(512), z.number(), z.boolean()])
+          .describe('The value the output must hold there.'),
+      })
+      .strict()
+      .optional()
+      .describe(
+        'What the task must have recorded as well. Absent, its success alone is asked for.',
+      ),
+  })
+  .strict();
+export type WorkflowRunListSucceededTask = z.infer<typeof WorkflowRunListSucceededTaskSchema>;
 
 export const WorkflowRunListInputSchema = z
   .object({
@@ -58,6 +95,14 @@ export const WorkflowRunListInputSchema = z
       .describe(
         'The one run input a listed run was started with, and the value it must equal. A run started without that input is not listed. Named with `slug`.',
       ),
+    succeeded: z
+      .array(WorkflowRunListSucceededTaskSchema)
+      .min(1)
+      .max(WORKFLOW_RUN_LIST_SUCCEEDED_MAX)
+      .optional()
+      .describe(
+        `Tasks every listed run succeeded in — and, where \`output\` is named, recorded that value at that path: a publication that pushed one commit is \`[{ taskId: 'push' }, { taskId: 'commit', output: { path: 'commit.sha', equals: <sha> } }]\`. Where any names \`output\`, the newest ${String(WORKFLOW_RUN_LIST_LIMIT_MAX)} runs that succeeded in every named task are read for it, and \`hasMore\` says where more were not. Named with \`slug\` and \`input\`.`,
+      ),
     status: z
       .array(WorkflowRunListStatusSchema)
       .min(1)
@@ -80,7 +125,7 @@ export const WorkflowRunListInputSchema = z
     const byInput = query.slug !== undefined && query.input !== undefined;
     const byNode = query.servingNodeOfPullRequest !== undefined;
     const partial = (query.slug === undefined) !== (query.input === undefined);
-    if (byInput === byNode || partial) {
+    if (byInput === byNode || partial || (byNode && query.succeeded !== undefined)) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: WORKFLOW_RUN_LIST_SELECTOR_MESSAGE });
     }
   });

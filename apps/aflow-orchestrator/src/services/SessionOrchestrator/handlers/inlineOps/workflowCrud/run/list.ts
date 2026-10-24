@@ -28,6 +28,7 @@ export async function handleWorkflowRunList(
     spaceId,
     sessionId: args.context.runId,
     query: parsed.data,
+    payloadStore: args.payloadStore,
   });
   await emitStepSuccess(args, output as unknown as Record<string, unknown>, startTime);
 }

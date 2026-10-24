@@ -1,5 +1,6 @@
 import { SHEPHERD_LEASE_DOCUMENT, SHEPHERD_LEASE_ROOT } from '@aflow/schemas';
 import { COMMISSIONS } from './localPrShepherdRemedies.js';
+import { RERUN_AFTER_BASE_MOVED } from './localPrShepherdRules.js';
 import {
   bind,
   ctx,
@@ -45,6 +46,7 @@ const LEASED_WORK = [
   'read-failure-log-3',
   'classify-failure',
   'rerun-jobs',
+  RERUN_AFTER_BASE_MOVED,
   ...COMMISSIONS,
   'publish',
   // The claim on a head is written before any merge is asked for.

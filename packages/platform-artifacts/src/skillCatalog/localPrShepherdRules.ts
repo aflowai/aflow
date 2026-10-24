@@ -90,19 +90,43 @@ export const MERGE_RULES: readonly WorkflowRunDecideRule[] = [
   // collaborator can edit.
   greenAnd(
     'state.publicationReview.taskOutput.output.reviewed.at != state.pr.data.headSha',
-    "No publication's Local Code Review is on record for this head — the newest publication of the branch reviewed another commit, ran no review, or another hand pushed the head: the merge is the operator's.",
+    "No publication's Local Code Review is on record for this head — no publication of the branch pushed it, which another hand did, or the publication that pushed it ran no review of it: the merge is the operator's.",
   ),
   greenAnd(
     "state.publicationReview.taskOutput.output.verdict != 'approve'",
-    "The publication's Local Code Review of this head did not return `approve`: the merge is the operator's.",
+    "The Local Code Review of the publication that pushed this head did not return `approve`: the merge is the operator's.",
   ),
   {
     when: { expression: GREEN },
     decision: 'merge',
     reason:
-      "Every check the base branch requires passed on the head, the publication's Local Code Review approved this head, and no person's review requests changes: the shepherd asks to merge it by squash, pinned to this head, on the operator's approval — unless a merge of this head was already asked for, which is never asked for twice.",
+      "Every check the base branch requires passed on the head, the Local Code Review of the publication that pushed it approved this head, and no person's review requests changes: the shepherd asks to merge it by squash, pinned to this head, on the operator's approval — unless a merge of this head was already asked for, which is never asked for twice.",
   },
 ];
+
+/**
+ * GitHub never runs a pull request's checks again when its base branch moves,
+ * so a failure a remedy was recorded for can stay red over a base that has
+ * since cleared it. The pin keeps the base each remedy was taken against, and
+ * a remedy follows the start of the check run it answered, so a base that
+ * moved after the remedy moved after that run started too.
+ */
+const BASE_MOVED_AFTER_REMEDY: WorkflowRunDecideRule = {
+  when: {
+    allOf: [
+      'state.checks.data.firstFailing.id == state.handoff.data.checkRunId',
+      'state.pin.dataJson.checkRunId == state.checks.data.firstFailing.id',
+      'state.pin.dataJson.remedyBaseSha != null',
+      "state.pin.dataJson.remedyBaseSha != ''",
+      'state.base.sha != null',
+      'state.base.sha != state.pin.dataJson.remedyBaseSha',
+      'state.handoff.data.attemptCount < state.budget',
+    ],
+  },
+  decision: 'fix',
+  reason:
+    "This check run's failure was acted on already, and the base branch has moved since: GitHub does not run a pull request's checks again when its base moves, so the failure may be one the base has since cleared. The failed jobs are run again; where GitHub refuses that, the base is merged into the branch and published.",
+};
 
 const NODE_IN_FLIGHT_REASON =
   "A run serving this pull request's plan node, or a node under it, is in flight — running, or paused — whoever started it: the node's work is under way.";
@@ -110,8 +134,10 @@ const NODE_IN_FLIGHT_REASON =
 /**
  * Read in order; the first that holds decides. A rule a missing read must not
  * pass is written `!= <expected>`, since a path through a read that did not
- * happen reads as null. Every way to `fix` runs through the last two: CI
- * failed on a check run the shepherd has not acted on, within the budget.
+ * happen reads as null. Every way to `fix` but one runs through the last two:
+ * CI failed on a check run the shepherd has not acted on, within the budget.
+ * The one is {@link BASE_MOVED_AFTER_REMEDY}: a check run acted on, whose base
+ * has moved since its remedy.
  */
 export const SHEPHERD_RULES: readonly WorkflowRunDecideRule[] = [
   {
@@ -274,6 +300,7 @@ export const SHEPHERD_RULES: readonly WorkflowRunDecideRule[] = [
     reason:
       'CI has not failed on the head: its checks are still running, stopped short, or not there yet.',
   },
+  BASE_MOVED_AFTER_REMEDY,
   {
     when: { expression: 'state.checks.data.firstFailing.id == state.handoff.data.checkRunId' },
     decision: 'wait',
@@ -287,6 +314,21 @@ export const SHEPHERD_RULES: readonly WorkflowRunDecideRule[] = [
       'The shepherd has acted on as many failures of this pull request as its budget allows, and CI fails again. It acts on nothing here and leaves the pull request to a person, with one Action Center item for this head; a push that moves the head is read again, and handed over the same way if CI fails on it.',
   },
 ];
+
+/**
+ * The decision step's `rule` where the base moved after the remedy: the pass
+ * re-runs the failed jobs, or merges the base, and asks the remedy question nothing.
+ */
+const BASE_MOVED_RULE = String(SHEPHERD_RULES.indexOf(BASE_MOVED_AFTER_REMEDY));
+export const DECIDED_BASE_MOVED = `tasks.decide.output.rule == ${BASE_MOVED_RULE}`;
+export const DECIDED_OTHER_THAN_BASE_MOVED = `tasks.decide.output.rule != ${BASE_MOVED_RULE}`;
+
+/** The re-run the pass sends where the base moved, and the commission it falls back to where GitHub refuses it. */
+export const RERUN_AFTER_BASE_MOVED = 'rerun-after-base-moved';
+export const MERGE_ROUND_AFTER_BASE_MOVED = 'merge-round-after-base-moved';
+
+/** GitHub's answer to a re-run of failed jobs it accepted. */
+export const RERUN_ACCEPTED = 201;
 
 /** Whether a pass was aimed at one pull request: `aimed`, read by its number, or `discover`, listed. */
 export const AIM_RULES: readonly WorkflowRunDecideRule[] = [
@@ -316,6 +358,22 @@ export const SHEPHERD_OTHERWISE = {
  * answers.
  */
 export const REMEDY_TAKEN_RULES: readonly WorkflowRunDecideRule[] = [
+  {
+    when: {
+      allOf: [
+        `state.rule == ${BASE_MOVED_RULE}`,
+        `state.rerun.statusCode == ${String(RERUN_ACCEPTED)}`,
+      ],
+    },
+    decision: 'rerun_failed_jobs',
+    reason: 'The base branch moved after the last remedy, and the failed jobs were run again.',
+  },
+  {
+    when: { expression: `state.rule == ${BASE_MOVED_RULE}` },
+    decision: 'merge_round',
+    reason:
+      'The base branch moved after the last remedy, and GitHub did not run the failed jobs again: the base was merged into the branch.',
+  },
   {
     when: { expression: 'state.answer == null' },
     decision: 'none',

@@ -108,8 +108,8 @@
     "contentHash": "a90be6755535fe71c6045eae7b1417e219a97b25bdbba4089b3b8a529b5963d3"
   },
   "local-shepherd": {
-    "version": 14,
-    "contentHash": "551aed4f67686a67e2538d9edd503ce4eb461883ae0144f3fd58169bd6ced802"
+    "version": 15,
+    "contentHash": "954c90020731e82f50e3e9fd4fa5f2c51b89d42ff6512c45953cb8b594891e3a"
   },
   "newsapi": {
     "version": 1,

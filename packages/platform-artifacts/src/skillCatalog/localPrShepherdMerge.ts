@@ -44,6 +44,15 @@ export const REQUIRED_CHECKS_TASK = 'read-required-protection';
 /** The publication's task whose verdict, and the head it reviewed, the merge reads. */
 const REVIEW_TASK = 'review-commit';
 
+/**
+ * The publication's tasks that say which commit it pushed: `commit`'s output
+ * names the commit whose refspec `push` sent, so a run that succeeded in both
+ * pushed exactly that sha.
+ */
+export const PUBLICATION_PUSH_TASK = 'push';
+export const PUBLICATION_COMMIT_TASK = 'commit';
+export const PUBLICATION_PUSHED_SHA_PATH = 'commit.sha';
+
 export const MERGE_READ_TASKS = [
   {
     taskId: 'read-required-rules',
@@ -114,18 +123,25 @@ export const MERGE_READ_TASKS = [
 
   {
     taskId: 'read-publication',
-    name: "Find the branch's newest publication",
-    goal: "Find the space's newest finished publication of the pull request's branch, whose Local Code Review is the loop's own word on the head it pushed.",
+    name: 'Find the publication that pushed the head',
+    goal: "Find the space's finished publication of the pull request's branch that pushed its head — its push succeeded, sending the commit that is the head — whose Local Code Review is the loop's own word on that head. A newer publication that reviewed a commit it never pushed is not it.",
     type: 'operation' as const,
     operation: 'workflow.run.list',
     when: OURS_WHEN_GREEN,
     optional: true,
     retryability: 'safe' as const,
-    inputBindings: { ...HEAD_REF },
+    inputBindings: { ...HEAD_REF, headSha: out('read-pr', 'data.headSha') },
     context: ctx('workflow.run.list'),
     inputTemplate: {
       slug: PUBLISH_LOCAL_CHANGES.bundle.workflow.slug,
       input: { field: 'branch', equals: bind('headRef') },
+      succeeded: [
+        { taskId: PUBLICATION_PUSH_TASK },
+        {
+          taskId: PUBLICATION_COMMIT_TASK,
+          output: { path: PUBLICATION_PUSHED_SHA_PATH, equals: bind('headSha') },
+        },
+      ],
       status: ['completed', 'failed', 'cancelled'],
       limit: 1,
     },
@@ -134,7 +150,7 @@ export const MERGE_READ_TASKS = [
   {
     taskId: 'read-publication-review',
     name: "Read the publication's review verdict",
-    goal: "Read the verdict the newest publication's Local Code Review returned, and the commit it reviewed — trusted only from the run, never from the pull request's body, which any collaborator can edit.",
+    goal: "Read the verdict the Local Code Review of the publication that pushed the head returned, and the commit it reviewed — trusted only from the run, never from the pull request's body, which any collaborator can edit.",
     type: 'operation' as const,
     operation: 'workflow.run.detail',
     when: { expression: 'tasks.read-publication.output.runs[0].id != null', onMissingRef: SKIP },
