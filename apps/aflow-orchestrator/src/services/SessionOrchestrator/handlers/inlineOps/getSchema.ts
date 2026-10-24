@@ -13,6 +13,7 @@ import {
   getAvailableGroups,
   getOperation,
   isOperationComposed,
+  isOpTaskOnlyOperation,
   isStepTypeComposed,
   parseIntegrationToolId,
   processEditionDescriptor,
@@ -126,6 +127,7 @@ export async function handleGetSchemaInline(
     const excludeOperationIds = input['excludeOperationIds'] as string[] | undefined;
     const excludeGroupIds = input['excludeGroupIds'] as string[] | undefined;
     const includeOutputSchema = input['includeOutputSchema'] === true;
+    const workflowSteps = input['workflowSteps'] === true;
     const rawSources = input['sources'] as string[] | undefined;
     const sourcesSet = rawSources && rawSources.length > 0 ? new Set(rawSources) : null;
     const includePlatform = !sourcesSet || sourcesSet.has('platform');
@@ -260,6 +262,7 @@ export async function handleGetSchemaInline(
         ...rawCatalog,
         operations: rawCatalog.operations.filter((op) => {
           if (!isOperationComposed(op.operationId, composedLanes)) return false;
+          if (!workflowSteps && isOpTaskOnlyOperation(op.operationId)) return false;
           if (excludeOpSet?.has(op.operationId)) return false;
           if (excludeGrpSet?.has(op.groupId)) return false;
           return true;
@@ -285,6 +288,7 @@ export async function handleGetSchemaInline(
           requiredParams,
           optionalParams,
           ...(caution ? { caution } : {}),
+          ...(isOpTaskOnlyOperation(op.operationId) ? { opTaskOnly: true } : {}),
         };
       });
 
@@ -323,6 +327,7 @@ export async function handleGetSchemaInline(
         ...rawCatalog,
         operations: rawCatalog.operations.filter((op) => {
           if (!isOperationComposed(op.operationId, composedLanes)) return false;
+          if (!workflowSteps && isOpTaskOnlyOperation(op.operationId)) return false;
           if (excludeOpSet?.has(op.operationId)) return false;
           if (excludeGrpSet?.has(op.groupId)) return false;
           return true;
@@ -369,6 +374,7 @@ export async function handleGetSchemaInline(
         if (includeOutputSchema && op.outputSchema) {
           descriptor['outputSchema'] = pruneSchemaForAgent(op.outputSchema);
         }
+        if (isOpTaskOnlyOperation(op.operationId)) descriptor['opTaskOnly'] = true;
         return descriptor;
       });
 

@@ -56,9 +56,14 @@ interface BM25Index {
  */
 const _cachedIndexes = new Map<boolean, BM25Index>();
 
+/** Runs only as a workflow operation task: never offered or promoted as a tool. */
+function isStepOnly(op: OperationDescriptor): boolean {
+  return !op.agentTool || op.opTaskOnly;
+}
+
 function isSearchable(op: OperationDescriptor, workflowSteps: boolean): boolean {
   if (op.internal) return false;
-  return op.agentTool || workflowSteps;
+  return !isStepOnly(op) || workflowSteps;
 }
 
 function buildIndex(workflowSteps: boolean): BM25Index {
@@ -385,7 +390,7 @@ function buildResultEntry(op: OperationDescriptor): CatalogSearchResult {
     matchReason: 'structural filter',
     score: 0,
     ...(caution ? { caution } : {}),
-    ...(op.agentTool ? {} : { stepOnly: true }),
+    ...(isStepOnly(op) ? { stepOnly: true } : {}),
   };
 }
 

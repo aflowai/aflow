@@ -5,6 +5,7 @@ import {
   bundlesForSurface,
   estimateToolSchemaTokens,
   isOperationComposed,
+  isOpTaskOnlyOperation,
   withGuaranteedReadOps,
   type ComposedLanes,
   type DirectiveCapabilityDiscovery,
@@ -29,11 +30,15 @@ export function resolveHelmsmanBaseSurface(
     },
     lanes,
   );
+  // An operator's ceiling replaces the preset wholesale and may name anything;
+  // an op-task-only operation on it would be offered and then refused on call.
   return {
-    coreOperations: [...new Set(composed.coreOperations)],
+    coreOperations: [...new Set(composed.coreOperations)].filter(
+      (id) => !isOpTaskOnlyOperation(id),
+    ),
     promotableOperations: [
       ...new Set(discovery?.helmsmanOperations ?? composed.promotableOperations),
-    ].filter((id) => isOperationComposed(id, lanes)),
+    ].filter((id) => isOperationComposed(id, lanes) && !isOpTaskOnlyOperation(id)),
   };
 }
 

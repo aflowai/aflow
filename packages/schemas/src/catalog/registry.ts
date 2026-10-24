@@ -341,6 +341,16 @@ export function isPrivilegedOperation(operationId: string): boolean {
 }
 
 /**
+ * An operation that runs only as a workflow operation task. The grant refuses
+ * it for an agent caller, so no agent-facing surface — pinned, graph-edge,
+ * promoted, searched, listed or promotable — may offer it: one that did would
+ * hand the model a tool whose every call fails.
+ */
+export function isOpTaskOnlyOperation(operationId: string): boolean {
+  return getRegistry().get(operationId)?.opTaskOnly === true;
+}
+
+/**
  * Operations on the eval plane that a skill may still call, because they only
  * ever produce a proposal a human ratifies.
  *

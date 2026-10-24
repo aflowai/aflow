@@ -620,6 +620,11 @@ export function checkPlatformOpScope(
 ): string | null {
   const op = getOperation(opId);
   if (!op) return `unknown_operation: "${opId}"`;
+  // No scope or ceiling widens this: the grant refuses an agent caller, so a
+  // promotion would only offer a tool whose every call fails.
+  if (op.opTaskOnly) {
+    return `op_task_only: "${opId}" runs only as an operation task in a workflow — author it there; it cannot be promoted or called as a tool`;
+  }
   // Fail closed: no discovery scope means discovery is not enabled for this
   // agent, so nothing is promotable. Every agent that legitimately discovers
   // (Helmsman, the goal-compiled builder agents) writes an explicit

@@ -34,6 +34,7 @@ import {
   buildCoreToolSpec,
   projectSpaceContextForModel,
   getOperation,
+  isOpTaskOnlyOperation,
   toJsonSchemaSync,
   resolveAgentPoliciesFromConfig,
   getOperationCatalog,
@@ -211,6 +212,9 @@ export function buildAvailableTools(
     if (toolStep.operation === 'ai.agent.turn') continue;
     if (toolStep.operation === 'agent.control.run_step') continue;
     if (toolStep.operation === 'api.http.call') continue;
+    // The edge is the agent calling it, which the grant refuses outright; the
+    // grant alone cannot hide it while the run has none yet.
+    if (isOpTaskOnlyOperation(toolStep.operation)) continue;
 
     // Description priority: step definition → catalog semanticDescription → generic fallback
     let description = toolStep.description;

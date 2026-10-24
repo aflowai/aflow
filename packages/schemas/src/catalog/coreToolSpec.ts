@@ -15,12 +15,12 @@ import type { AgentToolSpec } from '../runtime/agentTurn.js';
  * from the emitted one — which is the single failure the scanner exists to
  * prevent.
  *
- * Returns `undefined` for an operation that is unknown, internal, or not
- * exposed as an agent tool; callers skip those.
+ * Returns `undefined` for an operation that is unknown, internal, not exposed
+ * as an agent tool, or op-task-only; callers skip those.
  */
 export function buildCoreToolSpec(operationId: string): AgentToolSpec | undefined {
   const op = getOperation(operationId);
-  if (!op || op.internal || !op.agentTool) return undefined;
+  if (!op || op.internal || !op.agentTool || op.opTaskOnly) return undefined;
 
   const fullSchema = toJsonSchemaSync(op.inputZod) as Record<string, unknown>;
 
