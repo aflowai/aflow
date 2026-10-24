@@ -1,6 +1,6 @@
-import { Buffer } from 'node:buffer';
 import { getDatabase } from '@aflow/database';
 import type {
+  TenantId,
   ContractError,
   StoredParentInstructions,
   StoredParentTaskInputs,
@@ -13,7 +13,11 @@ import {
   StoredParentInstructionsSchema,
   StoredParentTaskInputsSchema,
 } from '@aflow/schemas';
-import type { PayloadStore } from '@aflow/payload-store';
+import {
+  contentAddressForJson,
+  encodeInlinePayloadRef,
+  type PayloadStore,
+} from '@aflow/payload-store';
 import {
   buildRunnerDelegationContext,
   entryRunInputSlots,
@@ -161,12 +165,21 @@ export async function buildTaskInputRef(
   systemFeedback?: ContractError,
 ): Promise<string> {
   const taskType = inferTaskType(task);
+  const inputRef = async (data: unknown): Promise<string> =>
+    payloadStore?.shouldStore(data)
+      ? payloadStore.storeContentAddressed({
+          tenantId: tenantId as TenantId,
+          contentHash: contentAddressForJson(data),
+          kind: 'input',
+          data,
+        })
+      : encodeInlinePayloadRef(data);
 
   if (taskType === 'human') {
     const humanInput = {
       prompt: task.pauseInstruction ?? `Please provide input for: ${task.name}`,
     };
-    return `inline:${Buffer.from(JSON.stringify(humanInput)).toString('base64')}`;
+    return inputRef(humanInput);
   }
 
   if (taskType === 'operation') {
@@ -179,7 +192,7 @@ export async function buildTaskInputRef(
       payloadStore,
       systemFeedback,
     );
-    return `inline:${Buffer.from(JSON.stringify(opInput)).toString('base64')}`;
+    return inputRef(opInput);
   }
 
   throw new Error(

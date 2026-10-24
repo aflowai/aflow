@@ -48,13 +48,23 @@ export async function handleWorkflowCrudInline(args: InlineHandlerArgs): Promise
 
   try {
     let input: Record<string, unknown> = {};
-    try {
-      const data = await args.payloadStore.retrieve(args.resolvedInputRef);
+    if (args.resolvedInputRef) {
+      let data: unknown;
+      try {
+        data = await args.payloadStore.retrieve(args.resolvedInputRef);
+      } catch (err) {
+        await emitStepError(
+          args,
+          'WORKFLOW_INPUT_READ_FAILED',
+          err instanceof Error ? err.message : String(err),
+          startTime,
+          'internal',
+        );
+        return;
+      }
       if (typeof data === 'object' && data !== null) {
         input = data as Record<string, unknown>;
       }
-    } catch {
-      /* empty input is valid for list ops */
     }
 
     switch (operationId) {

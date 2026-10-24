@@ -35,7 +35,7 @@ vi.mock('../helpers.js', () => ({
   emitTaskUpdate: () => Promise.resolve(),
 }));
 
-vi.mock('../taskHelpers.js', () => ({
+vi.mock('../../taskHelpers.js', () => ({
   buildTaskInputRef: () => Promise.resolve('inline:e30='),
   buildDelegateTaskInput: () => Promise.reject(new Error('an operation task builds no delegate')),
 }));
