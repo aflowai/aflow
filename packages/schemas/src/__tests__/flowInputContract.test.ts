@@ -125,6 +125,23 @@ describe('deriveFlowInputContract', () => {
     expect(contract.configVariables).toHaveLength(0);
   });
 
+  it('never infers a variable declared config as primary, so a caller’s input cannot land in it', () => {
+    const flow = makeFlow([
+      makeVar({
+        variableId: 'scheduleId',
+        inputRole: 'config',
+        required: true,
+        lifecycle: { isInput: true, isOutput: false, persistOnPause: true, updateCount: 0 },
+      }),
+    ]);
+    const contract = deriveFlowInputContract(flow);
+    expect(contract.primaryInput).toBeUndefined();
+    expect(contract.configVariables.map((v) => v.variableId)).toEqual(['scheduleId']);
+    expect(coerceFlowInput({ input: 'tend', config: { scheduleId: 's-1' } }, contract)).toEqual(
+      expect.objectContaining({ normalized: { scheduleId: 's-1' } }),
+    );
+  });
+
   it('does not infer primary when multiple non-required variables exist', () => {
     const flow = makeFlow([
       makeVar({

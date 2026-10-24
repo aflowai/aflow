@@ -424,6 +424,12 @@ export type BundleArtifactSeed = z.infer<typeof BundleArtifactSeedSchema>;
  * nothing, reads nothing at fire time, and starts the skill the same way
  * every time.
  *
+ * The one live value it carries is the schedule that started it, where the
+ * skill takes one (`scheduleInput`): the schedule's template sets the
+ * agent's `scheduleId` config to `{ $schedule: 'id' }`, and each start hands
+ * it to the skill, which can then renew that schedule. Run by hand, the agent
+ * has none, and the skill is started without it.
+ *
  * The connected folder is the one input it cannot carry as catalog text: it
  * is the space's. The install writes each of the space's folders that allow
  * pushes as a literal into a step of its own — one start of the skill per
@@ -438,12 +444,17 @@ export const BundledSkillStarterAgentSchema = z
     description: z.string().min(1).max(2000),
     /** The run input of the skill the connected folder's binding id is given as. */
     folderInput: z.string().min(1).max(64),
+    /** The run input of the skill the id of the schedule that started the agent is given as. */
+    scheduleInput: z.string().min(1).max(64).optional(),
   })
   .strict();
 export type BundledSkillStarterAgent = z.infer<typeof BundledSkillStarterAgentSchema>;
 
 /** The first step of a skill-starter agent; a further start is `start-skill-2`, `-3`, … */
 export const SKILL_STARTER_STEP_ID = 'start-skill';
+
+/** The config key a schedule hands a skill-starter agent its own id under. */
+export const SKILL_STARTER_SCHEDULE_VARIABLE = 'scheduleId';
 
 const edgeTo = (stepId: string | undefined): { next: Array<{ stepId: string }> } => ({
   next: stepId === undefined ? [] : [{ stepId }],
@@ -481,6 +492,8 @@ export function skillStarterAgentDefinition(params: {
   description: string;
   /** The run input of the skill each folder is given as. */
   folderInput: string;
+  /** The run input of the skill the starting schedule's id is given as, where it takes one. */
+  scheduleInput?: string;
   folders: readonly string[];
 }): Record<string, unknown> {
   const { folders } = params;
@@ -498,7 +511,12 @@ export function skillStarterAgentDefinition(params: {
     config: {
       slug: params.slug,
       catalogId: params.catalogId,
-      inputs: { [params.folderInput]: folders[index] ?? '' },
+      inputs: {
+        [params.folderInput]: folders[index] ?? '',
+        ...(params.scheduleInput !== undefined
+          ? { [params.scheduleInput]: `\${state.${SKILL_STARTER_SCHEDULE_VARIABLE}}` }
+          : {}),
+      },
       wait: 'none',
     },
     inputPassthrough: false,
@@ -542,7 +560,21 @@ export function skillStarterAgentDefinition(params: {
       tags: ['skill-starter'],
     },
     systemRole: null,
-    stateVariables: [],
+    stateVariables:
+      params.scheduleInput === undefined
+        ? []
+        : [
+            {
+              variableId: SKILL_STARTER_SCHEDULE_VARIABLE,
+              name: 'Schedule',
+              description:
+                'The schedule that started this run, for the skill to renew. Absent when the agent is run by hand.',
+              typeSchema: { type: 'string', format: 'uuid' },
+              semanticType: 'text',
+              lifecycle: { isInput: true },
+              inputRole: 'config',
+            },
+          ],
     steps,
     startStepId: SKILL_STARTER_STEP_ID,
     allowedOperations: ['workflow.run.start'],

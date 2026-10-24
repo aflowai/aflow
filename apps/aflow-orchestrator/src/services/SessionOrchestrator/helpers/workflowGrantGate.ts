@@ -1,6 +1,6 @@
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { Redis } from 'ioredis';
-import type { TenantId, Workflow } from '@aflow/schemas';
+import type { RunAccessGrant, TenantId, Workflow } from '@aflow/schemas';
 import { getRunAccessGrant, getSessionState } from '@aflow/redis';
 import {
   GrantRenewalRefused,
@@ -18,6 +18,65 @@ export type WorkflowGrantGateOutcome =
   | { kind: 'ungranted'; ungrantedOperations: UngrantedWorkflowOperation[] }
   | { kind: 'authority_revoked'; detail: string }
   | { kind: 'authority_unavailable'; detail: string };
+
+export type EstablishedRunGrant =
+  | { kind: 'granted'; grant: RunAccessGrant }
+  | { kind: 'ungoverned' }
+  | { kind: 'authority_revoked'; detail: string }
+  | { kind: 'authority_unavailable'; detail: string };
+
+/**
+ * The access grant a session's work executes under, recompiled against
+ * current policy. The stored copy can be up to its TTL stale in both
+ * directions, so an operator who just performed the remediation a pause named
+ * is not held to the old compile. A session started without any actor context
+ * (system runs) has no authority to establish: `ungoverned`.
+ */
+export async function establishRunAccessGrant(args: {
+  db: PostgresJsDatabase;
+  redis: Redis;
+  tenantId: TenantId;
+  sessionId: string;
+}): Promise<EstablishedRunGrant> {
+  const { db, redis, tenantId, sessionId } = args;
+  const stored = await getRunAccessGrant(redis, tenantId, sessionId);
+
+  if (stored) {
+    try {
+      const grant = await renewRunAccessGrant(db, redis, {
+        tenantId,
+        runId: sessionId,
+        source: grantPrincipalSource(stored),
+      });
+      return { kind: 'granted', grant };
+    } catch (err: unknown) {
+      if (err instanceof GrantRenewalRefused) {
+        return { kind: 'authority_revoked', detail: err.message };
+      }
+      // Judging against the stored copy would be fail-open here: op tasks face
+      // no later gate, so a snapshot taken before the profile or ceiling was
+      // narrowed would authorize a direct dispatch. A failed renewal means
+      // current authority is unknown, which is not the same as unchanged.
+      return {
+        kind: 'authority_unavailable',
+        detail: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
+
+  const runState = await getSessionState(redis, tenantId, sessionId);
+  const source = resolveGrantRenewalSource(null, runState);
+  if (!source) return { kind: 'ungoverned' };
+  try {
+    const grant = await renewRunAccessGrant(db, redis, { tenantId, runId: sessionId, source });
+    return { kind: 'granted', grant };
+  } catch (err: unknown) {
+    return {
+      kind: 'authority_unavailable',
+      detail: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
 
 /**
  * Establish the authority a workflow run will execute under, then judge its
@@ -49,47 +108,12 @@ export async function gateWorkflowOperationGrants(args: {
   sessionId: string;
   workflow: Workflow;
 }): Promise<WorkflowGrantGateOutcome> {
-  const { db, redis, tenantId, sessionId, workflow } = args;
-  const stored = await getRunAccessGrant(redis, tenantId, sessionId);
-  let grant = stored;
-
-  if (stored) {
-    // The stored copy can be up to its TTL stale in both directions, so an
-    // operator who just performed the remediation a pause named is not held to
-    // the old compile.
-    try {
-      grant = await renewRunAccessGrant(db, redis, {
-        tenantId,
-        runId: sessionId,
-        source: grantPrincipalSource(stored),
-      });
-    } catch (err: unknown) {
-      if (err instanceof GrantRenewalRefused) {
-        return { kind: 'authority_revoked', detail: err.message };
-      }
-      // Judging against the stored copy would be fail-open here: op tasks face
-      // no later gate, so a snapshot taken before the profile or ceiling was
-      // narrowed would authorize a direct dispatch. A failed renewal means
-      // current authority is unknown, which is not the same as unchanged.
-      return {
-        kind: 'authority_unavailable',
-        detail: err instanceof Error ? err.message : String(err),
-      };
-    }
-  } else {
-    const runState = await getSessionState(redis, tenantId, sessionId);
-    const source = resolveGrantRenewalSource(null, runState);
-    if (source) {
-      try {
-        grant = await renewRunAccessGrant(db, redis, { tenantId, runId: sessionId, source });
-      } catch (err: unknown) {
-        return {
-          kind: 'authority_unavailable',
-          detail: err instanceof Error ? err.message : String(err),
-        };
-      }
-    }
+  const { workflow, ...session } = args;
+  const established = await establishRunAccessGrant(session);
+  if (established.kind === 'authority_revoked' || established.kind === 'authority_unavailable') {
+    return established;
   }
+  const grant = established.kind === 'granted' ? established.grant : null;
 
   const result = checkWorkflowOperationGrantPreflight(grant, workflow);
   return result.ok

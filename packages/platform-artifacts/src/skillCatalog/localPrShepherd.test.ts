@@ -19,7 +19,13 @@ import {
 import {
   AgentDefinitionSchema,
   FlowScheduleCreateInputSchema,
+  FlowScheduleGetInputSchema,
+  isScheduleRenewalDue,
+  MAX_FIRINGS_CAP,
+  SCHEDULE_RENEWAL_WINDOW,
+  scheduleFiringsLeft,
   SHEPHERD_SCHEDULE_CRON_DEFAULT,
+  SKILL_STARTER_SCHEDULE_VARIABLE,
   validateCronExpression,
   WORKFLOW_TASKS_MAX,
   type CheckRunsSummary,
@@ -236,6 +242,10 @@ interface Scenario {
   abandonOwner?:
     | { status: 'running' | 'paused' | 'completed' | 'failed' | 'cancelled'; answered?: boolean }
     | 'gone';
+  /** The schedule that started the pass, as agent.schedule.get reads it; `unread` where the read fails. */
+  schedule?: { firingCount: number; status?: 'active' | 'paused' } | 'unread';
+  /** The renewal is refused, however due the schedule is. */
+  renewalFails?: true;
 }
 
 /** One publication of the branch: its run, its review's verdict and the commit it reviewed, and the commit its push sent, if it pushed. */
@@ -680,6 +690,29 @@ function answer(taskId: string, input: Record<string, unknown>, s: Scenario): An
         complete: node !== 'incomplete',
       });
     }
+    case 'read-schedule': {
+      const { scheduleId } = FlowScheduleGetInputSchema.parse(input);
+      if (s.schedule === undefined || s.schedule === 'unread') return { ok: false };
+      const facts = {
+        kind: 'cron' as const,
+        status: s.schedule.status ?? 'active',
+        maxFirings: MAX_FIRINGS_CAP,
+        firingCount: s.schedule.firingCount,
+        expiresAt: null,
+      };
+      return ok({
+        id: scheduleId,
+        ...facts,
+        firingsLeft: scheduleFiringsLeft(facts),
+        renewalDue: isScheduleRenewalDue(facts),
+      });
+    }
+    case 'renew-schedule': {
+      const { renews } = FlowScheduleCreateInputSchema.parse(input);
+      if (s.renewalFails) return { ok: false };
+      return ok({ scheduleId: `successor-of-${String(renews)}`, kind: 'cron', status: 'active' });
+    }
+    case 'read-firing':
     case 'aim':
     case 'decide':
     case 'record-remedy':
@@ -2692,6 +2725,68 @@ describe('Local PR Shepherd — what it tends', () => {
   });
 });
 
+describe('Local PR Shepherd — the schedule renews itself', () => {
+  const SCHEDULE = '5247eee7-0000-4000-8000-000000000001';
+  const nearCap = { firingCount: MAX_FIRINGS_CAP - SCHEDULE_RENEWAL_WINDOW };
+  const withHeadroom = { firingCount: MAX_FIRINGS_CAP - SCHEDULE_RENEWAL_WINDOW - 1 };
+  const scheduled = (schedule: Scenario['schedule'], s: Scenario = {}) =>
+    pass({ ...s, inputs: { ...s.inputs, scheduleId: SCHEDULE }, schedule });
+
+  it(`a pass whose schedule is within ${String(SCHEDULE_RENEWAL_WINDOW)} firings of its cap creates its successor`, () => {
+    const p = scheduled(nearCap);
+    expect(p.statuses.get('renew-schedule')).toBe('succeeded');
+    expect(p.inputs.get('renew-schedule')).toEqual({ renews: SCHEDULE });
+  });
+
+  it('a pass whose schedule has headroom creates none', () => {
+    const p = scheduled(withHeadroom);
+    expect(p.statuses.get('read-schedule')).toBe('succeeded');
+    expect(p.statuses.get('renew-schedule')).toBe('skipped');
+    expect(p.ran).not.toContain('renew-schedule');
+  });
+
+  it('two overlapping passes near the cap renew the one schedule, which keeps one successor', () => {
+    const renewals = [scheduled(nearCap), scheduled(nearCap)].map((p) =>
+      p.inputs.get('renew-schedule'),
+    );
+    expect(renewals).toEqual([{ renews: SCHEDULE }, { renews: SCHEDULE }]);
+  });
+
+  it('a schedule its owner paused is not renewed', () => {
+    const p = scheduled({ ...nearCap, status: 'paused' });
+    expect(p.statuses.get('renew-schedule')).toBe('skipped');
+  });
+
+  it('a pass not started by a schedule reads none and renews nothing', () => {
+    const p = pass();
+    expect(p.outputs.get('read-firing')?.['decision']).toBe('unscheduled');
+    expect(p.ran).not.toContain('read-schedule');
+    expect(p.ran).not.toContain('renew-schedule');
+  });
+
+  it('a schedule that cannot be read or renewed leaves the pass deciding as it would', () => {
+    const unscheduled = pass({ checks: FAILING, handoff: NO_HANDOFF });
+    const unread = scheduled('unread', { checks: FAILING, handoff: NO_HANDOFF });
+    const refused = scheduled(nearCap, {
+      checks: FAILING,
+      handoff: NO_HANDOFF,
+      renewalFails: true,
+    });
+    expect(unread.decision).toBe(unscheduled.decision);
+    expect(refused.decision).toBe(unscheduled.decision);
+    expect(refused.statuses.get('renew-schedule')).toBe('failed');
+  });
+
+  it('the skill and the bundle say the schedule renews itself, and the agent hands it on', () => {
+    const bundle = getSkillBundleEntry('local-shepherd');
+    expect(LOCAL_PR_SHEPHERD.description).toContain('The schedule renews itself');
+    expect(bundle?.description).toContain('The schedule renews itself');
+    const [agent] = bundle?.agents ?? [];
+    expect(agent?.scheduleInput).toBe('scheduleId');
+    expect(wf.runInputs.find((input) => input.id === agent?.scheduleInput)?.required).toBe(false);
+  });
+});
+
 describe('Local PR Shepherd bundle', () => {
   const bundle = getSkillBundleEntry('local-shepherd');
 
@@ -2919,21 +3014,20 @@ describe('Local PR Shepherd bundle', () => {
     ).toThrow(/at least one folder/);
   });
 
-  // D2: a schedule starts the agent, never the skill, with a static template
-  // the agent reads none of.
-  it('is started on a schedule: the default cron, the agent as its target, a static input', () => {
+  // D2: a schedule starts the agent, never the skill; the one live value its
+  // template carries is its own id, which the agent hands each pass.
+  it('is started on a schedule: the default cron, the agent as its target, its own id as config', () => {
     expect(validateCronExpression(SHEPHERD_SCHEDULE_CRON_DEFAULT)).toBeNull();
     const schedule = FlowScheduleCreateInputSchema.parse({
       name: 'Local PR Shepherd',
       action: 'start_run',
       target: { kind: 'custom-agent', agentId: '00000000-0000-4000-8000-000000000001' },
       cron: SHEPHERD_SCHEDULE_CRON_DEFAULT,
-      input: { input: 'pass' },
+      input: { input: 'tend', config: { [SKILL_STARTER_SCHEDULE_VARIABLE]: { $schedule: 'id' } } },
     });
     expect(schedule.cron).toBe('*/5 * * * *');
-    expect(
-      bundle?.helmsmanHints.some((hint) => hint.includes(SHEPHERD_SCHEDULE_CRON_DEFAULT)),
-    ).toBe(true);
+    const hint = bundle?.helmsmanHints.find((h) => h.includes(SHEPHERD_SCHEDULE_CRON_DEFAULT));
+    expect(hint).toContain(`${SKILL_STARTER_SCHEDULE_VARIABLE}: { $schedule: 'id' }`);
   });
 
   it('fits the workflow task ceiling', () => {
