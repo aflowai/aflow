@@ -57,6 +57,12 @@ const OP_TASK_ONLY = ALL_OPERATIONS.filter((op) => op.opTaskOnly).map((op) => op
 const OP_TASK_ONLY_SET = new Set(OP_TASK_ONLY);
 const LANES = processEditionDescriptor();
 const COMPOSED_OP_TASK_ONLY = OP_TASK_ONLY.filter((id) => isOperationComposed(id, LANES));
+/** D6's step-only rule, written out so the shared predicate is checked rather than reused. */
+const COMPOSED_STEP_ONLY = ALL_OPERATIONS.filter(
+  (op) =>
+    !op.internal && (!op.agentTool || op.opTaskOnly) && isOperationComposed(op.operationId, LANES),
+).map((op) => op.operationId);
+const COMPOSED_STEP_ONLY_SET = new Set(COMPOSED_STEP_ONLY);
 
 /** The widest scope an agent can hold: every step type and every operation. */
 const WIDEST_SCOPE = {
@@ -327,6 +333,82 @@ describe('opTaskOnly operations are excluded from every agent-facing surface', (
         .sort(),
     );
     for (const op of operations) expect(op['opTaskOnly'], String(op['operationId'])).toBe(true);
+  });
+
+  it('gates and marks every step-only operation in catalog.tool.list as search does', async () => {
+    expect(COMPOSED_STEP_ONLY.some((id) => !OP_TASK_ONLY_SET.has(id))).toBe(true);
+    const stepTypes = [...new Set(COMPOSED_STEP_ONLY.map((id) => id.split('.')[0]!))];
+    for (const input of [{ stepTypes }, { operationIds: COMPOSED_STEP_ONLY }]) {
+      const hidden = await runHandler(handleGetSchemaInline, 'catalog.tool.list', input);
+      const hiddenIds = ((hidden['operations'] ?? []) as Array<Record<string, unknown>>).map(
+        (op) => op['operationId'] as string,
+      );
+      expect(
+        hiddenIds.filter((id) => COMPOSED_STEP_ONLY_SET.has(id)),
+        JSON.stringify(input),
+      ).toEqual([]);
+
+      const shown = await runHandler(handleGetSchemaInline, 'catalog.tool.list', {
+        ...input,
+        workflowSteps: true,
+      });
+      const shownOps = (shown['operations'] ?? []) as Array<Record<string, unknown>>;
+      const marked = shownOps
+        .filter((op) => op['opTaskOnly'] === true)
+        .map((op) => op['operationId']);
+      expect(marked.sort(), JSON.stringify(input)).toEqual([...COMPOSED_STEP_ONLY].sort());
+    }
+
+    const searched = await runHandler(handleCatalogSearchInline, 'catalog.tool.search', {
+      operationIds: COMPOSED_STEP_ONLY,
+      maxResults: 10,
+      sources: ['platform'],
+      workflowSteps: true,
+    });
+    for (const d of (searched['discovered'] ?? []) as Array<Record<string, unknown>>) {
+      const id = d['operationId'] as string;
+      expect(d['opTaskOnly'] === true, id).toBe(COMPOSED_STEP_ONLY_SET.has(id));
+    }
+  });
+
+  it('explains a step-only operation asked for by id without workflowSteps instead of an empty result', async () => {
+    const out = await runHandler(handleGetSchemaInline, 'catalog.tool.list', {
+      operationIds: [...COMPOSED_STEP_ONLY, 'memory.store.get'],
+    });
+    expect(out['mode']).toBe('detail');
+    expect(((out['withheldStepOnly'] ?? []) as string[]).sort()).toEqual(
+      [...COMPOSED_STEP_ONLY].sort(),
+    );
+    expect(out['guidance']).toMatch(/workflowSteps: true/);
+    expect(
+      ((out['operations'] ?? []) as Array<Record<string, unknown>>).map((op) => op['operationId']),
+    ).toEqual(['memory.store.get']);
+
+    const plain = await runHandler(handleGetSchemaInline, 'catalog.tool.list', {
+      operationIds: ['memory.store.get'],
+    });
+    expect(plain['withheldStepOnly']).toBeUndefined();
+    expect(plain['guidance']).toBeUndefined();
+  });
+
+  it('counts the same operations per step type in directory and compact mode', async () => {
+    for (const flag of [{}, { workflowSteps: true }]) {
+      const directory = await runHandler(handleGetSchemaInline, 'catalog.tool.list', {
+        sources: ['platform'],
+        ...flag,
+      });
+      const entries = directory['stepTypes'] as Array<{ stepType: string; operationCount: number }>;
+      let total = 0;
+      for (const { stepType, operationCount } of entries) {
+        const compact = await runHandler(handleGetSchemaInline, 'catalog.tool.list', {
+          stepTypes: [stepType],
+          ...flag,
+        });
+        expect(operationCount, `${stepType} ${JSON.stringify(flag)}`).toBe(compact['count']);
+        total += operationCount;
+      }
+      expect(directory['totalOperations']).toBe(total);
+    }
   });
 
   it('stays callable as an operation task', () => {

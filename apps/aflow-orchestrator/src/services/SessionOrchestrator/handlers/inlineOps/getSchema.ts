@@ -13,7 +13,7 @@ import {
   getAvailableGroups,
   getOperation,
   isOperationComposed,
-  isOpTaskOnlyOperation,
+  isStepOnlyOperation,
   isStepTypeComposed,
   parseIntegrationToolId,
   processEditionDescriptor,
@@ -170,7 +170,7 @@ export async function handleGetSchemaInline(
       };
     } else if (!hasScopeFilters && !hasOperationIds) {
       // ── Tier 1: Directory mode ──────────────────────────────────────────
-      const groups = getAvailableGroups().filter((g) =>
+      const groups = getAvailableGroups({ excludeStepOnly: !workflowSteps }).filter((g) =>
         isStepTypeComposed(g.stepType, composedLanes),
       );
       const stepTypeMap = new Map<
@@ -262,7 +262,7 @@ export async function handleGetSchemaInline(
         ...rawCatalog,
         operations: rawCatalog.operations.filter((op) => {
           if (!isOperationComposed(op.operationId, composedLanes)) return false;
-          if (!workflowSteps && isOpTaskOnlyOperation(op.operationId)) return false;
+          if (!workflowSteps && isStepOnlyOperation(op.operationId)) return false;
           if (excludeOpSet?.has(op.operationId)) return false;
           if (excludeGrpSet?.has(op.groupId)) return false;
           return true;
@@ -288,7 +288,7 @@ export async function handleGetSchemaInline(
           requiredParams,
           optionalParams,
           ...(caution ? { caution } : {}),
-          ...(isOpTaskOnlyOperation(op.operationId) ? { opTaskOnly: true } : {}),
+          ...(isStepOnlyOperation(op.operationId) ? { opTaskOnly: true } : {}),
         };
       });
 
@@ -323,13 +323,17 @@ export async function handleGetSchemaInline(
       const excludeGrpSet =
         excludeGroupIds && excludeGroupIds.length > 0 ? new Set(excludeGroupIds) : undefined;
 
+      const withheldStepOnly: string[] = [];
       const catalog = {
         ...rawCatalog,
         operations: rawCatalog.operations.filter((op) => {
           if (!isOperationComposed(op.operationId, composedLanes)) return false;
-          if (!workflowSteps && isOpTaskOnlyOperation(op.operationId)) return false;
           if (excludeOpSet?.has(op.operationId)) return false;
           if (excludeGrpSet?.has(op.groupId)) return false;
+          if (!workflowSteps && isStepOnlyOperation(op.operationId)) {
+            withheldStepOnly.push(op.operationId);
+            return false;
+          }
           return true;
         }),
       };
@@ -374,12 +378,22 @@ export async function handleGetSchemaInline(
         if (includeOutputSchema && op.outputSchema) {
           descriptor['outputSchema'] = pruneSchemaForAgent(op.outputSchema);
         }
-        if (isOpTaskOnlyOperation(op.operationId)) descriptor['opTaskOnly'] = true;
+        if (isStepOnlyOperation(op.operationId)) descriptor['opTaskOnly'] = true;
         return descriptor;
       });
 
+      // The author who asks for these by id is usually about to place one as an
+      // operation task; an unexplained empty result reads as "does not exist".
       outputData = {
         mode: 'detail',
+        ...(withheldStepOnly.length > 0
+          ? {
+              guidance:
+                `${withheldStepOnly.map((id) => `"${id}"`).join(', ')} run only as operation tasks in a workflow, so they are left out of this tool list. ` +
+                'To get their input schemas for authoring a workflow, call catalog.tool.list again with the same operationIds and workflowSteps: true. They cannot be promoted or called as tools.',
+              withheldStepOnly,
+            }
+          : {}),
         operations,
         count: operations.length,
       };

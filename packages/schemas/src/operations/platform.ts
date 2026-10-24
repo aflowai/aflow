@@ -903,7 +903,10 @@ const CatalogListCompactOutputSchema = z.object({
 
 const CatalogListDetailOutputSchema = z.object({
   mode: z.literal('detail'),
+  guidance: z.string().optional(),
   operations: z.array(AgentOperationDescriptorSchema),
+  /** Requested operationIds left out because they are step-only and workflowSteps was not set. */
+  withheldStepOnly: z.array(z.string()).optional(),
   integrationTools: z
     .array(
       z.object({

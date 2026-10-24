@@ -303,7 +303,7 @@ export function getOperation(operationId: string): OperationDescriptor | undefin
  * Get all distinct groups as { groupId, stepType, group, operationCount }
  * sorted by (stepType, group).
  */
-export function getAvailableGroups(): Array<{
+export function getAvailableGroups(options: { excludeStepOnly?: boolean } = {}): Array<{
   groupId: string;
   stepType: string;
   group: string | null;
@@ -313,6 +313,7 @@ export function getAvailableGroups(): Array<{
 
   for (const desc of getRegistry().values()) {
     if (desc.internal) continue; // Skip internal ops — not visible to agents
+    if (options.excludeStepOnly && isStepOnlyOperation(desc.operationId)) continue;
     const gid = buildGroupId(desc.stepType, desc.group);
     const existing = groupMap.get(gid);
     if (existing) {
@@ -348,6 +349,16 @@ export function isPrivilegedOperation(operationId: string): boolean {
  */
 export function isOpTaskOnlyOperation(operationId: string): boolean {
   return getRegistry().get(operationId)?.opTaskOnly === true;
+}
+
+/**
+ * An operation an author places as a workflow step and an agent never holds as
+ * a tool: `agentTool: false` or op-task-only. The catalog tools list these only
+ * when asked with `workflowSteps: true`, and mark them `opTaskOnly`.
+ */
+export function isStepOnlyOperation(operationId: string): boolean {
+  const op = getRegistry().get(operationId);
+  return op !== undefined && (!op.agentTool || op.opTaskOnly);
 }
 
 /**
