@@ -32,6 +32,24 @@ Keep it honest as it lands. A plan that says a phase is built when it is not is
 worse than no plan, because the next reader trusts it. If a phase turns out to be
 the wrong shape, change the plan rather than quietly diverging from it.
 
+## Index
+
+| Plan                                                                   | What it achieves                                        |
+| ---------------------------------------------------------------------- | ------------------------------------------------------- |
+| [315](315-local-first-run-ergonomics.md) ([findings](315-findings.md)) | The local edition's first run                           |
+| [316](316-workflows-decide-without-a-language-model.md)                | Workflows decide without a language model               |
+| [317](317-agents-propose-workflow-changes-operators-approve.md)        | Agents propose workflow changes; operators approve them |
+| [318](318-a-fork-is-stored-where-it-is-decided.md)                     | A fork is stored where it is decided                    |
+| [319](319-a-second-decision-model-openai-decisions.md)                 | A second decision model                                 |
+| [320](320-agents-use-a-browser.md)                                     | Agents use a browser                                    |
+| [321](321-the-loop-recovers-from-ci.md)                                | The loop recovers from CI                               |
+| [322](322-plans-are-platform-records.md)                               | Plans are platform records                              |
+| [323](323-models-that-run-on-this-computer.md)                         | Models that run on this computer                        |
+| [324](324-helmsman-finds-capabilities-without-carrying-them.md)        | Helmsman finds capabilities without carrying them       |
+| [325](325-the-product-answers-questions-about-itself.md)               | The product answers questions about itself              |
+| [326](326-codex-runs-on-this-computer.md)                              | Codex runs on this computer                             |
+| [328](328-a-harness-is-a-runner-with-a-coding-agent.md)                | A harness is a Runner with a coding agent               |
+
 ## What a plan is not
 
 Not a log. Not a record of review conversations, dates, or who said what. Not a
