@@ -1,11 +1,19 @@
 import { sql, type SQL } from 'drizzle-orm';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { createTenantContext, withTenantSchema } from '@aflow/database';
-import type { TenantId, WorkflowRunListInput, WorkflowRunListOutput } from '@aflow/schemas';
+import type { PayloadStore } from '@aflow/payload-store';
+import {
+  WORKFLOW_RUN_LIST_LIMIT_MAX,
+  type TenantId,
+  type WorkflowRunListInput,
+  type WorkflowRunListOutput,
+  type WorkflowRunListSucceededTask,
+} from '@aflow/schemas';
 import { drivenByLiveConversationSql, isReadersWork } from './conversationOwnership.js';
 import { PLAN_TREE_WALK_BOUNDS } from './plan/operations.js';
 import { loadConversationPlanRoots, placeInPlan } from './plan/attention.js';
 import { createPlanNodeStore } from './plan/store.js';
+import { readOutputPath } from './scheduling/outputPath.js';
 
 interface RunsQueryParams {
   db: PostgresJsDatabase;
@@ -14,6 +22,8 @@ interface RunsQueryParams {
   /** The reading session, which `own` is measured against. */
   sessionId: string;
   query: WorkflowRunListInput;
+  /** Reads the outputs `succeeded` compares; only a query naming an output needs it. */
+  payloadStore?: Pick<PayloadStore, 'retrieve'>;
 }
 
 /**
@@ -25,7 +35,10 @@ interface RunsQueryParams {
  *   equal to a value. The value is read from the inputs the start validated
  *   and recorded on the run (`metadata.parentTaskInputs.inputs`), so a run
  *   started without the input is not one of them. The status filter and the
- *   slug bound the rows read before the input comparison.
+ *   slug bound the rows read before the input comparison. `succeeded`
+ *   narrows them to runs that succeeded in each named task; an output it
+ *   names is read from the payload that task recorded, newest run first,
+ *   through at most {@link WORKFLOW_RUN_LIST_LIMIT_MAX} candidates.
  * - `servingNodeOfPullRequest`: the runs of any workflow serving the plan
  *   nodes that hold a `pull_request` link to that URL, or any node under them
  *   (Plan 322 P2). It reads the plan as the run ledger joins it — a skill
@@ -42,12 +55,52 @@ export async function listRunsByInput(params: RunsQueryParams): Promise<Workflow
   if (query.slug === undefined || query.input === undefined) {
     throw new Error('workflow.run.list names a slug with an input, or a pull request');
   }
-  const { slug, input } = query;
+  const { slug, input, succeeded = [] } = query;
   return listRunsWhere(
     params,
     sql`r.workflow_slug = ${slug}
-        AND (r.metadata -> 'parentTaskInputs' -> 'inputs' -> ${input.field}) = ${JSON.stringify(input.equals)}::jsonb`,
+        AND (r.metadata -> 'parentTaskInputs' -> 'inputs' -> ${input.field}) = ${JSON.stringify(input.equals)}::jsonb
+        ${sql.join(
+          succeeded.map((task) => sql` AND EXISTS (${succeededTaskRow(task, sql`1`)})`),
+          sql``,
+        )}`,
+    succeeded.filter((task) => task.output !== undefined),
   );
+}
+
+function succeededTaskRow(task: WorkflowRunListSucceededTask, column: SQL): SQL {
+  return sql`SELECT ${column} FROM workflow_run_tasks t
+    WHERE t.run_id = r.run_id AND t.task_id = ${task.taskId} AND t.status = 'succeeded'
+    ORDER BY t.attempt DESC LIMIT 1`;
+}
+
+async function recordedOutputsHold(
+  payloadStore: Pick<PayloadStore, 'retrieve'> | undefined,
+  row: Record<string, unknown>,
+  outputs: readonly WorkflowRunListSucceededTask[],
+): Promise<boolean> {
+  if (payloadStore === undefined) {
+    throw new Error('workflow.run.list compares a recorded output only with a payload store');
+  }
+  for (const [index, task] of outputs.entries()) {
+    const ref = row[outputRefColumn(index)];
+    if (typeof ref !== 'string' || task.output === undefined) return false;
+    // A payload that can no longer be read — expired, or its store refusing —
+    // shows this run's output to no one: it is not the run asked for, and the
+    // runs after it are still read.
+    let recorded: unknown;
+    try {
+      recorded = await payloadStore.retrieve(ref);
+    } catch {
+      return false;
+    }
+    if (readOutputPath(recorded, task.output.path) !== task.output.equals) return false;
+  }
+  return true;
+}
+
+function outputRefColumn(index: number): string {
+  return `output_ref_${String(index)}`;
 }
 
 async function listRunsServingPullRequestNode(
@@ -88,10 +141,14 @@ async function listRunsServingPullRequestNode(
 async function listRunsWhere(
   params: RunsQueryParams,
   selects: SQL,
+  outputs: readonly WorkflowRunListSucceededTask[] = [],
 ): Promise<WorkflowRunListOutput> {
-  const { db, tenantId, spaceId, sessionId, query } = params;
+  const { db, tenantId, spaceId, sessionId, query, payloadStore } = params;
   // Statuses come from the schema's enum, so the literal holds only those words.
   const statuses = `{${query.status.join(',')}}`;
+  // An output is compared after the rows are read, so they are read to the
+  // scan's bound rather than the page's.
+  const rowLimit = outputs.length > 0 ? WORKFLOW_RUN_LIST_LIMIT_MAX : query.limit;
   const rows = await withTenantSchema(db, createTenantContext(tenantId as TenantId), (tx) =>
     tx.execute(sql`
       SELECT
@@ -100,6 +157,13 @@ async function listRunsWhere(
         r.started_at,
         r.session_id,
         r.plan_node_id,
+        ${sql.join(
+          outputs.map(
+            (task, index) =>
+              sql`(${succeededTaskRow(task, sql`t.output_ref`)}) AS ${sql.raw(outputRefColumn(index))},`,
+          ),
+          sql``,
+        )}
         ${drivenByLiveConversationSql(sql`r.session_id`)} AS driven_by_live_conversation
       FROM workflow_runs r
       LEFT JOIN sessions ON sessions.session_id = r.session_id
@@ -108,10 +172,28 @@ async function listRunsWhere(
         AND r.status = ANY(${statuses}::text[])
         AND r.eval_batch_id IS NULL
       ORDER BY r.started_at DESC
-      LIMIT ${query.limit + 1}
+      LIMIT ${rowLimit + 1}
     `),
   );
-  const listed = (rows as Array<Record<string, unknown>>).slice(0, query.limit);
+  const read = rows as Array<Record<string, unknown>>;
+  const candidates = read.slice(0, rowLimit);
+  let listed: Array<Record<string, unknown>>;
+  let hasMore: boolean;
+  if (outputs.length === 0) {
+    listed = candidates;
+    hasMore = read.length > rowLimit;
+  } else {
+    // Each candidate costs a payload read, so the scan stops at the page:
+    // `hasMore` then says candidates were left unread, not that they match.
+    listed = [];
+    let scanned = 0;
+    for (const row of candidates) {
+      if (listed.length === query.limit) break;
+      scanned += 1;
+      if (await recordedOutputsHold(payloadStore, row, outputs)) listed.push(row);
+    }
+    hasMore = scanned < candidates.length || read.length > rowLimit;
+  }
   const reader = {
     sessionId,
     planRootIds: new Set(await loadConversationPlanRoots({ db, tenantId, spaceId, sessionId })),
@@ -140,6 +222,6 @@ async function listRunsWhere(
         ),
       };
     }),
-    hasMore: rows.length > query.limit,
+    hasMore,
   };
 }

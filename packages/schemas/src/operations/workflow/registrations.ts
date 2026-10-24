@@ -653,7 +653,8 @@ export function createWorkflowOperationRegistrations(
         "List one workflow's runs across the whole space whose start named one run input with a " +
         'given value — the publications of a branch, the commissions based on it — by status, ' +
         "in flight by default with `paused` among them, newest first — or, with `servingNodeOfPullRequest`, every workflow's runs serving the plan node a pull request is linked to and the nodes under it. Each run says whether it is the reading conversation's (`own`). " +
-        'One bounded page: the question it answers is whether any such run is in flight, not every run there was.',
+        'With `succeeded`, only the runs that succeeded in named tasks and recorded a value there — the publication that pushed one commit. ' +
+        'One bounded page: the question it answers is whether any such run is in flight, or which one did a thing, not every run there was.',
       tags: ['workflow', 'run', 'observe'],
       idempotency: 'idempotent',
       mutates: false,
@@ -664,6 +665,7 @@ export function createWorkflowOperationRegistrations(
           'Asking whether work on a branch is in flight before starting more on it — a publication whose `branch` is the branch, a commission whose `base` is',
           'Finding runs another conversation started on the same thing, whoever started them',
           'Asking whether a pull request’s plan node has work in flight — `servingNodeOfPullRequest`, read through the run ledger, since a skill never reads the plan through plan.*',
+          'Finding the run that did one thing — the publication that pushed a commit: `succeeded` names the task that pushed and the task whose output names the commit',
         ],
         whenNotToUse: [
           'Reading what one run did — workflow.run.detail',
@@ -674,6 +676,7 @@ export function createWorkflowOperationRegistrations(
           'The value is compared as the run was started with it: a branch given as `refs/heads/x` is not `x`.',
           "A run marked `own: false` is another conversation's. It is in flight all the same; leave it to that conversation.",
           'One page at most: `hasMore` says more match, and there is no cursor — narrow the status instead.',
+          'An output named in `succeeded` is compared as it was recorded, with no conversion: a number is not its text.',
         ],
         minimalExampleInput: {
           slug: 'publish-local-changes',

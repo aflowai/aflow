@@ -8,7 +8,7 @@ import {
   SHEPHERD_MERGE_OUTCOME_LINE,
   SHEPHERD_RESPONSE_PRESETS,
 } from '@aflow/schemas';
-import { REMEDY } from './localPrShepherdRemedies.js';
+import { fromCommission, REMEDY } from './localPrShepherdRemedies.js';
 import {
   bind,
   ctx,
@@ -220,13 +220,33 @@ const HANDOFF_BINDINGS = {
   publicationRunId: out('publish', 'runId'),
 };
 
-/** What {@link ATTEMPTS} and {@link CHECK_RUN} read, for the pin that keeps them. */
+const REMEDY_MERGED_FROM = fromCommission('merge.from');
+
+/**
+ * The base the remedy for {@link CHECK_RUN} was taken against: the base a
+ * commission merged in, else where the base stood when this pass took its
+ * remedy, else the one the pin kept. `record-remedy` runs only on a remedy,
+ * so a pass that waits carries the earlier base rather than recording its own.
+ */
+const REMEDY_BASE = firstText(
+  [
+    { $firstOf: Object.keys(REMEDY_MERGED_FROM).map((name) => text(name)) },
+    { $firstOf: [text('remedyBase')] },
+    { $firstOf: [text('priorRemedyBase')] },
+  ],
+  '',
+);
+
+/** What {@link ATTEMPTS}, {@link CHECK_RUN} and {@link REMEDY_BASE} read, for the pin that keeps them. */
 const ATTEMPT_STATE_BINDINGS = {
   ...REPOSITORY,
   fixAttempt: HANDOFF_BINDINGS.fixAttempt,
   ...leaseBindings('leaseCheckRun', 'lease.inlineJson.checkRunId'),
   ...handoffBindings('priorAttempt', 'data.attemptCount'),
   ...handoffBindings('priorCheckRun', 'data.checkRunId'),
+  ...REMEDY_MERGED_FROM,
+  remedyBase: out('record-remedy', 'round.baseSha'),
+  priorRemedyBase: out('read-handoff-pin', 'dataJson.remedyBaseSha'),
 };
 
 /**
@@ -425,6 +445,7 @@ export const HANDOFF_WRITE_TASKS = [
           // As the comment records them, as text: read back into the handoff preset.
           attemptCount: ATTEMPTS,
           checkRunId: CHECK_RUN,
+          remedyBaseSha: REMEDY_BASE,
         },
       },
     },

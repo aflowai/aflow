@@ -53,15 +53,21 @@ import {
 import { getSkillBundleEntry } from '../skillBundleCatalog.js';
 import { COMMISSION_CHANGE } from './commissionChange.js';
 import { LOCAL_PR_SHEPHERD } from './localPrShepherd.js';
-import { MERGE_ASKED } from './localPrShepherdMerge.js';
+import {
+  MERGE_ASKED,
+  PUBLICATION_COMMIT_TASK,
+  PUBLICATION_PUSH_TASK,
+  PUBLICATION_PUSHED_SHA_PATH,
+} from './localPrShepherdMerge.js';
 import {
   BASE_MOVED_MESSAGE,
   MERGE_REFUSAL_OTHERWISE,
   MERGE_REFUSAL_RULES,
+  MERGE_ROUND_AFTER_BASE_MOVED,
   SHEPHERD_RULES,
 } from './localPrShepherdRules.js';
 import { REMEDY_QUESTION, REMEDY_ROUTES, type Remedy } from './localPrShepherdDecisions.js';
-import { BUMP_BRIEF, FIX_BRIEF, MERGE_BRIEF } from './localPrShepherdRemedies.js';
+import { BASE_MOVED_BRIEF, BUMP_BRIEF, FIX_BRIEF, MERGE_BRIEF } from './localPrShepherdRemedies.js';
 import { PUBLISH_LOCAL_CHANGES } from './publishLocalChanges.js';
 
 const wf = LOCAL_PR_SHEPHERD.bundle.workflow;
@@ -188,8 +194,12 @@ interface Scenario {
   /** How each check run on the head concluded, by name, where a required check is judged on it. */
   checkConclusions?: Record<string, string>;
   reviews?: PullRequestReviews;
-  /** The newest finished publication of the branch: the verdict its review returned, for the commit it reviewed. */
+  /** The one finished publication of the branch: the verdict its review returned, for the commit it reviewed and pushed. */
   publication?: { verdict: string | null; at: string } | 'none';
+  /** The branch's finished publications, newest first, where there are several; over `publication`. */
+  publications?: PublicationRecord[];
+  /** Where the base branch stands now; `unread` where its read failed. */
+  baseSha?: string;
   /**
    * How GitHub, or the operator, answers the merge: `refused` is GitHub's 409
    * on a head that moved, `base-moved` its 405 on a base that moved, and
@@ -210,7 +220,7 @@ interface Scenario {
   /** The outcome's write after the merge fails, leaving the claim as the record. */
   outcomeWriteFails?: true;
   /** The attempt state the pin kept beside the comment's id, as the pin write stored it: text. */
-  pinState?: { attemptCount: string; checkRunId: string };
+  pinState?: { attemptCount: string; checkRunId: string; remedyBaseSha?: string };
   /** The pull request the last pass aimed at none tended; `fails` where its read failed. */
   turn?: number | 'fails';
   /**
@@ -226,6 +236,37 @@ interface Scenario {
   abandonOwner?:
     | { status: 'running' | 'paused' | 'completed' | 'failed' | 'cancelled'; answered?: boolean }
     | 'gone';
+}
+
+/** One publication of the branch: its run, its review's verdict and the commit it reviewed, and the commit its push sent, if it pushed. */
+interface PublicationRecord {
+  id: string;
+  verdict: string | null;
+  reviewed: string;
+  pushed: string | null;
+}
+
+function publicationsOf(s: Scenario): PublicationRecord[] {
+  if (s.publications !== undefined) return s.publications;
+  const publication = s.publication ?? { verdict: 'approve', at: HEAD };
+  return publication === 'none'
+    ? []
+    : [
+        {
+          id: PUBLICATION_RUN,
+          verdict: publication.verdict,
+          reviewed: publication.at,
+          pushed: publication.at,
+        },
+      ];
+}
+
+/** What a publication's tasks recorded, as the ledger keeps them: only a task that succeeded has a record. */
+function publicationTaskOutputs(publication: PublicationRecord): Record<string, unknown> {
+  return {
+    commit: { commit: { sha: publication.pushed ?? publication.reviewed } },
+    ...(publication.pushed !== null ? { push: { exitCode: 0 } } : {}),
+  };
 }
 
 /** A stored claim's content hash, as the store answers it: one per content. */
@@ -364,27 +405,33 @@ function answer(taskId: string, input: Record<string, unknown>, s: Scenario): An
     case 'read-pr-reviews':
       return github(PullRequestReviewsSchema.parse(s.reviews ?? NO_REVIEWS));
     case 'read-publication': {
-      WorkflowRunListInputSchema.parse(input);
+      // As the ledger selects: newest first, only runs that succeeded in every
+      // named task with the value recorded where one is named.
+      const query = WorkflowRunListInputSchema.parse(input);
+      const selected = publicationsOf(s).filter((publication) => {
+        const recorded = publicationTaskOutputs(publication);
+        return (query.succeeded ?? []).every(
+          (task) =>
+            recorded[task.taskId] !== undefined &&
+            (task.output === undefined ||
+              readOutputPath(recorded[task.taskId], task.output.path) === task.output.equals),
+        );
+      });
       return ok({
-        runs:
-          s.publication === 'none'
-            ? []
-            : [
-                {
-                  id: PUBLICATION_RUN,
-                  status: 'completed',
-                  startedAt: '2026-10-18T07:00:00Z',
-                  own: false,
-                },
-              ],
-        hasMore: false,
+        runs: selected.slice(0, query.limit).map((publication) => ({
+          id: publication.id,
+          status: 'completed',
+          startedAt: '2026-10-18T07:00:00Z',
+          own: false,
+        })),
+        hasMore: selected.length > query.limit,
       });
     }
     case 'read-publication-review': {
-      const publication = s.publication ?? { verdict: 'approve', at: HEAD };
-      if (publication === 'none') return { ok: false };
+      const publication = publicationsOf(s).find((p) => p.id === input['runId']);
+      if (publication === undefined) return { ok: false };
       return ok({
-        run: { runId: PUBLICATION_RUN, status: 'completed' },
+        run: { runId: publication.id, status: 'completed' },
         tasks: [],
         activeWaiters: [],
         taskOutput: {
@@ -395,7 +442,7 @@ function answer(taskId: string, input: Record<string, unknown>, s: Scenario): An
             findings: [],
             outcome: 'completed',
             reviewRunId: 'review-run',
-            reviewed: { bindingId: 'hb_aflow', from: 'b'.repeat(40), at: publication.at },
+            reviewed: { bindingId: 'hb_aflow', from: 'b'.repeat(40), at: publication.reviewed },
           },
         },
       });
@@ -683,18 +730,28 @@ function answer(taskId: string, input: Record<string, unknown>, s: Scenario): An
     }
     case 'rerun-jobs':
       return github({}, 201);
+    case 'read-base':
+      if (s.baseSha === 'unread') return { ok: false };
+      return github({
+        name: 'main',
+        commit: { sha: s.baseSha ?? MERGED_FROM, commit: { message: 'Merge main' } },
+        protected: true,
+      });
     case 'fix':
     case 'bump-dependency':
-    case 'merge-round': {
+    case 'merge-round':
+    case MERGE_ROUND_AFTER_BASE_MOVED: {
       HostHarnessRunInputSchema.parse(input);
       const commission = s.commission ?? 'patch';
       if (commission === 'failed') return { ok: false };
+      // The commission merges `origin/<base>` as it stands now.
+      const baseNow = s.baseSha === undefined || s.baseSha === 'unread' ? MERGED_FROM : s.baseSha;
       return ok({
         runId: 'hp_1',
         harness: { id: 'claude', selectedBy: 'default' },
         continued: false,
         baseSha: HEAD,
-        merge: { from: MERGED_FROM, conflicts: [] },
+        merge: { from: baseNow, conflicts: [] },
         ...(commission === 'patch' ? { patchRef: 'gs://bucket/patch-1', filesChanged: 1 } : {}),
         filesChanged: commission === 'patch' ? 1 : 0,
         result: { commitMessage: 'Fix the clock test\n\nIt read the wall clock.', gaps: [] },
@@ -807,7 +864,7 @@ function readBack(previous: Pass): ShepherdHandoffRead {
   };
 }
 
-const COMMISSIONS = ['fix', 'bump-dependency', 'merge-round'];
+const COMMISSIONS = ['fix', 'bump-dependency', 'merge-round', MERGE_ROUND_AFTER_BASE_MOVED];
 const ACTIONS = ['lease', 'lease-takeover', 'rerun-jobs', ...COMMISSIONS, 'publish'];
 
 describe('Local PR Shepherd — it fixes what CI failed', () => {
@@ -927,6 +984,128 @@ describe('Local PR Shepherd — once per failure', () => {
     const next = pass({ pinned: 'found', handoff: readBack(pass()), checks: rerun });
     expect(next.decision).toBe('fix');
     expect(next.handoff).toMatchObject({ attemptCount: 2, checkRunId: '556' });
+  });
+});
+
+describe('Local PR Shepherd — a failure acted on is acted on again once the base moves past its remedy', () => {
+  const AUDIT_CHECK = '901';
+  const AUDIT_RUN = 37460219901;
+  const AUDIT_FAILING: CheckRunsSummary = {
+    state: 'failing',
+    total: 12,
+    failing: [
+      { id: AUDIT_CHECK, name: 'Dependency audit', conclusion: 'failure', runId: AUDIT_RUN },
+    ],
+    firstFailing: {
+      id: AUDIT_CHECK,
+      name: 'Dependency audit',
+      conclusion: 'failure',
+      runId: AUDIT_RUN,
+    },
+  };
+  const BASE_WITH_AUDIT_FIX = '1'.repeat(40);
+  const REMEDIED: ShepherdHandoffRead = {
+    found: true,
+    trust: 'verified',
+    commentId: 9,
+    attemptCount: 1,
+    nextAttemptCount: 2,
+    checkRunId: AUDIT_CHECK,
+    headSha: HEAD,
+    decision: 'fix',
+    classification: 'dependency_advisory',
+    remedy: 'dependency_bump',
+    publicationRunId: 'pub-run-1',
+  };
+  const REMEDY_PIN = { attemptCount: '1', checkRunId: AUDIT_CHECK, remedyBaseSha: MERGED_FROM };
+
+  function afterRemedy(s: Scenario = {}): Pass {
+    return pass({
+      checks: AUDIT_FAILING,
+      pinned: 'found',
+      handoff: REMEDIED,
+      pinState: REMEDY_PIN,
+      baseSha: BASE_WITH_AUDIT_FIX,
+      ...s,
+    });
+  }
+
+  function pinned(p: Pass): Record<string, unknown> {
+    return MemoryPutInputSchema.parse(p.inputs.get('remember-handoff')).content
+      .inlineJson as Record<string, unknown>;
+  }
+
+  it('merges the moved base into the branch and publishes it where the base moved after the remedy, rather than waiting', () => {
+    const merged = afterRemedy({ commission: 'merge-only' });
+    expect(merged.decision).toBe('fix');
+    expect(merged.ran).toEqual(expect.arrayContaining([MERGE_ROUND_AFTER_BASE_MOVED, 'publish']));
+    const commissioned = merged.inputs.get(MERGE_ROUND_AFTER_BASE_MOVED)!;
+    expect(commissioned['task']).toBe(BASE_MOVED_BRIEF);
+    expect(commissioned['base']).toBe(BRANCH);
+    expect(commissioned['mergeFrom']).toBe('origin/main');
+    const start = WorkflowRunStartInputSchema.parse(merged.inputs.get('publish'));
+    expect(start.inputs['mergeFrom']).toBe(BASE_WITH_AUDIT_FIX);
+    expect(start.inputs['patchRef']).toBeUndefined();
+    expect(merged.handoff).toMatchObject({
+      attemptCount: 2,
+      checkRunId: AUDIT_CHECK,
+      decision: 'fix',
+      remedy: 'merge_round',
+    });
+    expect(pinned(merged)).toMatchObject({
+      checkRunId: AUDIT_CHECK,
+      remedyBaseSha: BASE_WITH_AUDIT_FIX,
+    });
+  });
+
+  it('spends no re-run on a base that moved: a re-run runs on the old base', () => {
+    const merged = afterRemedy();
+    for (const unasked of ['classify-failure', 'rerun-jobs']) {
+      expect(merged.ran).not.toContain(unasked);
+    }
+    expect(
+      tasks
+        .filter(
+          (task) =>
+            (task.inputTemplate as { endpointId?: string } | undefined)?.endpointId ===
+            'reRunFailedJobs',
+        )
+        .map((task) => task.taskId),
+    ).toEqual(['rerun-jobs']);
+  });
+
+  it('waits where the base stands where the remedy was taken', () => {
+    const waited = afterRemedy({ baseSha: MERGED_FROM });
+    expect(waited.decision).toBe('wait');
+    for (const action of ACTIONS) expect(waited.ran).not.toContain(action);
+    expect(pinned(waited)['remedyBaseSha']).toBe(MERGED_FROM);
+  });
+
+  it('waits where no base is on record for the remedy, or the base could not be read', () => {
+    const unrecorded = afterRemedy({ pinState: { attemptCount: '1', checkRunId: AUDIT_CHECK } });
+    expect(unrecorded.decision).toBe('wait');
+    const emptied = afterRemedy({ pinState: { ...REMEDY_PIN, remedyBaseSha: '' } });
+    expect(emptied.decision).toBe('wait');
+    const unread = afterRemedy({ baseSha: 'unread' });
+    expect(unread.statuses.get('read-base')).toBe('failed');
+    expect(unread.decision).toBe('wait');
+  });
+
+  it('waits where the base moved but the budget is spent on this pull request', () => {
+    const spent = afterRemedy({
+      handoff: { ...REMEDIED, attemptCount: 3, nextAttemptCount: 4 },
+    });
+    expect(spent.decision).toBe('wait');
+    expect(spent.ran).not.toContain(MERGE_ROUND_AFTER_BASE_MOVED);
+  });
+
+  it('records the base each remedy was taken against, and a pass that does not act keeps it', () => {
+    const first = pass({ baseSha: MERGED_FROM });
+    expect(pinned(first)['remedyBaseSha']).toBe(MERGED_FROM);
+    const running = afterRemedy({ checks: { state: 'pending', total: 12, failing: [] } });
+    expect(running.decision).toBe('wait');
+    expect(running.statuses.get('read-base')).toBe('skipped');
+    expect(pinned(running)['remedyBaseSha']).toBe(MERGED_FROM);
   });
 });
 
@@ -1282,7 +1461,13 @@ describe('Local PR Shepherd — only a deleted pinned comment sends the pass to 
     const first = pass();
     expect(
       MemoryPutInputSchema.parse(first.inputs.get('remember-handoff')).content.inlineJson,
-    ).toEqual({ commentId: 9, author: LOOP_LOGIN, attemptCount: '1', checkRunId: FAILING_CHECK });
+    ).toEqual({
+      commentId: 9,
+      author: LOOP_LOGIN,
+      attemptCount: '1',
+      checkRunId: FAILING_CHECK,
+      remedyBaseSha: MERGED_FROM,
+    });
     // Where the pinned comment is there, the newest page is not read, and so
     // the kept state is not what the record is read from.
     const pinned = pass({
@@ -1720,11 +1905,18 @@ describe('Local PR Shepherd — it merges what the posture allows', () => {
     },
   );
 
-  it('reads the verdict from the newest finished publication of the branch, never from the pull request', () => {
+  it('reads the verdict from the finished publication of the branch that pushed the head, never from the pull request', () => {
     const merged = green();
     expect(WorkflowRunListInputSchema.parse(merged.inputs.get('read-publication'))).toMatchObject({
       slug: PUBLISH_LOCAL_CHANGES.bundle.workflow.slug,
       input: { field: 'branch', equals: BRANCH },
+      succeeded: [
+        { taskId: PUBLICATION_PUSH_TASK },
+        {
+          taskId: PUBLICATION_COMMIT_TASK,
+          output: { path: PUBLICATION_PUSHED_SHA_PATH, equals: HEAD },
+        },
+      ],
       status: ['completed', 'failed', 'cancelled'],
       limit: 1,
     });
@@ -1732,6 +1924,53 @@ describe('Local PR Shepherd — it merges what the posture allows', () => {
       runId: PUBLICATION_RUN,
       compact: true,
       taskOutput: 'review-commit',
+    });
+  });
+
+  it('names the tasks of Local Publish that push a commit, and the output naming the commit pushed', () => {
+    const published = new Map(
+      PUBLISH_LOCAL_CHANGES.bundle.workflow.tasks.map((task) => [task.taskId, task]),
+    );
+    const push = published.get(PUBLICATION_PUSH_TASK);
+    expect(push?.inputBindings).toMatchObject({
+      refspec: { kind: 'task_output', taskId: PUBLICATION_COMMIT_TASK, path: 'commit.pushRefspec' },
+    });
+    const bindings = PUBLISH_LOCAL_CHANGES.bundle.workflow.tasks.flatMap((task) =>
+      Object.values((task.inputBindings ?? {}) as Record<string, unknown>),
+    );
+    expect(bindings).toContainEqual({
+      kind: 'task_output',
+      taskId: PUBLICATION_COMMIT_TASK,
+      path: PUBLICATION_PUSHED_SHA_PATH,
+    });
+  });
+
+  describe('a head pushed by an older publication than the newest', () => {
+    const PUSHED_HEAD = 'da3e7cb1-0000-4000-8000-000000000185';
+    const unpushed = [3, 2, 1].map((n) => ({
+      id: `da3e7cb${String(n + 1)}-0000-4000-8000-000000000185`,
+      verdict: 'request_changes',
+      reviewed: String(n).repeat(40),
+      pushed: null,
+    }));
+    const pushedHead = { id: PUSHED_HEAD, verdict: 'approve', reviewed: HEAD, pushed: HEAD };
+
+    it('merges a green head on the review of the publication that pushed it, past newer ones that pushed nothing', () => {
+      const merged = green({ publications: [...unpushed, pushedHead] });
+      expect(merged.decision).toBe('merge');
+      expect(merged.inputs.get('read-publication-review')).toMatchObject({ runId: PUSHED_HEAD });
+      expect(merged.ran).toContain('merge');
+    });
+
+    it('leaves it, no review on record, only where no publication pushed the head', () => {
+      const left = green({
+        publications: [...unpushed, { ...pushedHead, pushed: null }],
+      });
+      expect(left.decision).toBe('leave');
+      expect(left.statuses.get('read-publication-review')).toBe('skipped');
+      expect(left.outputs.get('decide')?.['reason']).toMatch(
+        /no publication of the branch pushed it/,
+      );
     });
   });
 

@@ -113,6 +113,29 @@ describe('workflow.run.list', () => {
     expect(result()).toEqual({ status: 'SUCCEEDED', output: page });
   });
 
+  it('reads the runs that succeeded in named tasks with the payload store their outputs are recorded in', async () => {
+    mockListRunsByInput.mockResolvedValueOnce({ runs: [], hasMore: false });
+    const succeeded = [
+      { taskId: 'push' },
+      { taskId: 'commit', output: { path: 'commit.sha', equals: 'c'.repeat(40) } },
+    ];
+    const call = args('workflow.run.list', {
+      slug: 'publish-local-changes',
+      input: { field: 'branch', equals: 'aflow/x' },
+      succeeded,
+      status: ['completed'],
+      limit: 1,
+    });
+    await handleWorkflowCrudInline(call);
+    expect(mockListRunsByInput).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloadStore: call.payloadStore,
+        query: expect.objectContaining({ succeeded, status: ['completed'], limit: 1 }),
+      }),
+    );
+    expect(result()).toMatchObject({ status: 'SUCCEEDED' });
+  });
+
   it('refuses a page past 100 without reading', async () => {
     await handleWorkflowCrudInline(
       args('workflow.run.list', {
