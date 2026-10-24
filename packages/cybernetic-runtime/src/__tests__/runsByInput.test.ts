@@ -89,6 +89,10 @@ describe('workflow.run.list — the runs that succeeded in named tasks', () => {
 
     expect(listed.runs.map((r) => r.id)).toEqual(['00000000-0000-4000-8000-000000000002']);
     expect(listed.hasMore).toBe(true);
+    expect(retrieve.mock.calls.map(([ref]) => ref)).toEqual([
+      'inline:newest',
+      'inline:pushed-head',
+    ]);
     const index = queries.findIndex((query) => query.includes('FROM workflow_runs r'));
     const statement = queries[index]!;
     expect(statement.match(/FROM workflow_run_tasks t/g)).toHaveLength(3);
@@ -97,6 +101,30 @@ describe('workflow.run.list — the runs that succeeded in named tasks', () => {
     expect(parameters[index]).toEqual(
       expect.arrayContaining(['push', 'commit', WORKFLOW_RUN_LIST_LIMIT_MAX + 1]),
     );
+  });
+
+  it('passes over a run whose recorded output can no longer be read, and lists the next that holds the value', async () => {
+    const retrieve = vi.fn((ref: string) =>
+      ref === 'inline:expired'
+        ? Promise.reject(new Error('payload expired'))
+        : Promise.resolve({ commit: { sha: HEAD } }),
+    );
+    const { db } = fakeDb([
+      run('00000000-0000-4000-8000-000000000002', 'inline:expired'),
+      run('00000000-0000-4000-8000-000000000001', 'inline:pushed-head'),
+    ]);
+
+    const listed = await listRunsByInput({
+      db,
+      tenantId: TENANT_ID,
+      spaceId: SPACE_ID,
+      sessionId: SESSION_ID,
+      query: WorkflowRunListInputSchema.parse(PUSHED_HEAD),
+      payloadStore: { retrieve } as never,
+    });
+
+    expect(listed.runs.map((r) => r.id)).toEqual(['00000000-0000-4000-8000-000000000001']);
+    expect(listed.hasMore).toBe(false);
   });
 
   it('reads no payload and lists one page where no output is named', async () => {

@@ -64,7 +64,6 @@ import {
   MERGE_REFUSAL_OTHERWISE,
   MERGE_REFUSAL_RULES,
   MERGE_ROUND_AFTER_BASE_MOVED,
-  RERUN_AFTER_BASE_MOVED,
   SHEPHERD_RULES,
 } from './localPrShepherdRules.js';
 import { REMEDY_QUESTION, REMEDY_ROUTES, type Remedy } from './localPrShepherdDecisions.js';
@@ -201,8 +200,6 @@ interface Scenario {
   publications?: PublicationRecord[];
   /** Where the base branch stands now; `unread` where its read failed. */
   baseSha?: string;
-  /** How GitHub answers the re-run of failed jobs sent because the base moved after the remedy. */
-  rerunAfterBaseMoved?: 'accepted' | 'refused';
   /**
    * How GitHub, or the operator, answers the merge: `refused` is GitHub's 409
    * on a head that moved, `base-moved` its 405 on a base that moved, and
@@ -733,10 +730,6 @@ function answer(taskId: string, input: Record<string, unknown>, s: Scenario): An
     }
     case 'rerun-jobs':
       return github({}, 201);
-    case RERUN_AFTER_BASE_MOVED:
-      return s.rerunAfterBaseMoved === 'refused'
-        ? github({ message: 'This workflow run cannot be retried' }, 403)
-        : github({}, 201);
     case 'read-base':
       if (s.baseSha === 'unread') return { ok: false };
       return github({
@@ -751,12 +744,14 @@ function answer(taskId: string, input: Record<string, unknown>, s: Scenario): An
       HostHarnessRunInputSchema.parse(input);
       const commission = s.commission ?? 'patch';
       if (commission === 'failed') return { ok: false };
+      // The commission merges `origin/<base>` as it stands now.
+      const baseNow = s.baseSha === undefined || s.baseSha === 'unread' ? MERGED_FROM : s.baseSha;
       return ok({
         runId: 'hp_1',
         harness: { id: 'claude', selectedBy: 'default' },
         continued: false,
         baseSha: HEAD,
-        merge: { from: MERGED_FROM, conflicts: [] },
+        merge: { from: baseNow, conflicts: [] },
         ...(commission === 'patch' ? { patchRef: 'gs://bucket/patch-1', filesChanged: 1 } : {}),
         filesChanged: commission === 'patch' ? 1 : 0,
         result: { commitMessage: 'Fix the clock test\n\nIt read the wall clock.', gaps: [] },
@@ -870,14 +865,7 @@ function readBack(previous: Pass): ShepherdHandoffRead {
 }
 
 const COMMISSIONS = ['fix', 'bump-dependency', 'merge-round', MERGE_ROUND_AFTER_BASE_MOVED];
-const ACTIONS = [
-  'lease',
-  'lease-takeover',
-  'rerun-jobs',
-  RERUN_AFTER_BASE_MOVED,
-  ...COMMISSIONS,
-  'publish',
-];
+const ACTIONS = ['lease', 'lease-takeover', 'rerun-jobs', ...COMMISSIONS, 'publish'];
 
 describe('Local PR Shepherd — it fixes what CI failed', () => {
   const first = pass();
@@ -1047,48 +1035,43 @@ describe('Local PR Shepherd — a failure acted on is acted on again once the ba
       .inlineJson as Record<string, unknown>;
   }
 
-  it('re-runs the failed audit jobs where the base moved after the remedy, rather than waiting', () => {
-    const acted = afterRemedy();
-    expect(acted.decision).toBe('fix');
-    expect(acted.ran).toContain(RERUN_AFTER_BASE_MOVED);
-    expect(acted.inputs.get(RERUN_AFTER_BASE_MOVED)).toMatchObject({
-      endpointId: 'reRunFailedJobs',
-      params: { owner: 'aflowai', repo: 'aflow', run_id: AUDIT_RUN },
-    });
-    for (const asked of [
-      'classify-failure',
-      'rerun-jobs',
-      MERGE_ROUND_AFTER_BASE_MOVED,
-      'publish',
-    ]) {
-      expect(acted.ran).not.toContain(asked);
-    }
-    expect(acted.handoff).toMatchObject({
-      attemptCount: 2,
-      checkRunId: AUDIT_CHECK,
-      decision: 'fix',
-      remedy: 'rerun_failed_jobs',
-    });
-    expect(pinned(acted)).toMatchObject({
-      checkRunId: AUDIT_CHECK,
-      remedyBaseSha: BASE_WITH_AUDIT_FIX,
-    });
-  });
-
-  it('merges the moved base into the branch and publishes it where GitHub refuses the re-run', () => {
-    const merged = afterRemedy({ rerunAfterBaseMoved: 'refused', commission: 'merge-only' });
+  it('merges the moved base into the branch and publishes it where the base moved after the remedy, rather than waiting', () => {
+    const merged = afterRemedy({ commission: 'merge-only' });
     expect(merged.decision).toBe('fix');
-    expect(merged.ran).toEqual(
-      expect.arrayContaining([RERUN_AFTER_BASE_MOVED, MERGE_ROUND_AFTER_BASE_MOVED, 'publish']),
-    );
+    expect(merged.ran).toEqual(expect.arrayContaining([MERGE_ROUND_AFTER_BASE_MOVED, 'publish']));
     const commissioned = merged.inputs.get(MERGE_ROUND_AFTER_BASE_MOVED)!;
     expect(commissioned['task']).toBe(BASE_MOVED_BRIEF);
     expect(commissioned['base']).toBe(BRANCH);
     expect(commissioned['mergeFrom']).toBe('origin/main');
     const start = WorkflowRunStartInputSchema.parse(merged.inputs.get('publish'));
-    expect(start.inputs['mergeFrom']).toBe(MERGED_FROM);
+    expect(start.inputs['mergeFrom']).toBe(BASE_WITH_AUDIT_FIX);
     expect(start.inputs['patchRef']).toBeUndefined();
-    expect(merged.handoff).toMatchObject({ attemptCount: 2, remedy: 'merge_round' });
+    expect(merged.handoff).toMatchObject({
+      attemptCount: 2,
+      checkRunId: AUDIT_CHECK,
+      decision: 'fix',
+      remedy: 'merge_round',
+    });
+    expect(pinned(merged)).toMatchObject({
+      checkRunId: AUDIT_CHECK,
+      remedyBaseSha: BASE_WITH_AUDIT_FIX,
+    });
+  });
+
+  it('spends no re-run on a base that moved: a re-run runs on the old base', () => {
+    const merged = afterRemedy();
+    for (const unasked of ['classify-failure', 'rerun-jobs']) {
+      expect(merged.ran).not.toContain(unasked);
+    }
+    expect(
+      tasks
+        .filter(
+          (task) =>
+            (task.inputTemplate as { endpointId?: string } | undefined)?.endpointId ===
+            'reRunFailedJobs',
+        )
+        .map((task) => task.taskId),
+    ).toEqual(['rerun-jobs']);
   });
 
   it('waits where the base stands where the remedy was taken', () => {
@@ -1113,7 +1096,7 @@ describe('Local PR Shepherd — a failure acted on is acted on again once the ba
       handoff: { ...REMEDIED, attemptCount: 3, nextAttemptCount: 4 },
     });
     expect(spent.decision).toBe('wait');
-    expect(spent.ran).not.toContain(RERUN_AFTER_BASE_MOVED);
+    expect(spent.ran).not.toContain(MERGE_ROUND_AFTER_BASE_MOVED);
   });
 
   it('records the base each remedy was taken against, and a pass that does not act keeps it', () => {

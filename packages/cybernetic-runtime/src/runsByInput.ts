@@ -85,7 +85,15 @@ async function recordedOutputsHold(
   for (const [index, task] of outputs.entries()) {
     const ref = row[outputRefColumn(index)];
     if (typeof ref !== 'string' || task.output === undefined) return false;
-    const recorded = await payloadStore.retrieve(ref);
+    // A payload that can no longer be read — expired, or its store refusing —
+    // shows this run's output to no one: it is not the run asked for, and the
+    // runs after it are still read.
+    let recorded: unknown;
+    try {
+      recorded = await payloadStore.retrieve(ref);
+    } catch {
+      return false;
+    }
     if (readOutputPath(recorded, task.output.path) !== task.output.equals) return false;
   }
   return true;
@@ -168,14 +176,24 @@ async function listRunsWhere(
     `),
   );
   const read = rows as Array<Record<string, unknown>>;
-  const matching: Array<Record<string, unknown>> = [];
-  for (const row of read.slice(0, rowLimit)) {
-    if (matching.length > query.limit) break;
-    if (outputs.length === 0 || (await recordedOutputsHold(payloadStore, row, outputs))) {
-      matching.push(row);
+  const candidates = read.slice(0, rowLimit);
+  let listed: Array<Record<string, unknown>>;
+  let hasMore: boolean;
+  if (outputs.length === 0) {
+    listed = candidates;
+    hasMore = read.length > rowLimit;
+  } else {
+    // Each candidate costs a payload read, so the scan stops at the page:
+    // `hasMore` then says candidates were left unread, not that they match.
+    listed = [];
+    let scanned = 0;
+    for (const row of candidates) {
+      if (listed.length === query.limit) break;
+      scanned += 1;
+      if (await recordedOutputsHold(payloadStore, row, outputs)) listed.push(row);
     }
+    hasMore = scanned < candidates.length || read.length > rowLimit;
   }
-  const listed = matching.slice(0, query.limit);
   const reader = {
     sessionId,
     planRootIds: new Set(await loadConversationPlanRoots({ db, tenantId, spaceId, sessionId })),
@@ -204,6 +222,6 @@ async function listRunsWhere(
         ),
       };
     }),
-    hasMore: matching.length > query.limit || read.length > rowLimit,
+    hasMore,
   };
 }

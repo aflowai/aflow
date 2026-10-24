@@ -63,7 +63,7 @@ Resolve every conflict so both sides' intent stands, and nothing else: no fix to
 
 ${STANDING_RULES}`;
 
-export const BASE_MOVED_BRIEF = `CI failed on this pull request's branch, the failure was acted on, and the base branch has moved since. GitHub does not run a pull request's checks again when its base moves, and it refused to run the failed jobs again, so the base is merged in to have CI run on it. This checkout is that branch with its base merged in.
+export const BASE_MOVED_BRIEF = `CI failed on this pull request's branch, the failure was acted on, and the base branch has moved since. GitHub does not run a pull request's checks again when its base moves, and a re-run of the failed jobs would run on the old base, so the base is merged in to have CI run on it. This checkout is that branch with its base merged in.
 
 Where the merge left conflicts, resolve them so both sides' intent stands; where it left none, change nothing. Fix nothing the merge did not touch: whether the base already clears the failure is for CI to say. The inputs name the pull request, the failing checks and the end of each failing job's log.
 

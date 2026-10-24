@@ -31,8 +31,6 @@ import {
   MERGE_ROUND_AFTER_BASE_MOVED,
   REMEDY_TAKEN_OTHERWISE,
   REMEDY_TAKEN_RULES,
-  RERUN_ACCEPTED,
-  RERUN_AFTER_BASE_MOVED,
   SHEPHERD_OTHERWISE,
   SHEPHERD_RULES,
 } from './localPrShepherdRules.js';
@@ -155,7 +153,7 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
 
 **On a schedule**: passes overlap safely. Two on one pull request meet at its branch's lease, and the second acts on nothing.
 
-**What it never does**: approve or close a pull request, merge one where the posture is \`never\` or without the operator's approval, or push other than through Local Publish under the folder's push approval. A pull request a person opened, or one labelled \`${SHEPHERD_HANDS_OFF_LABEL}\`, is left untouched; a branch with a publication or a commission in flight, or whose pull request's plan node has any run in flight serving it, whoever started it, is \`wait\`; the same check run is acted on once, unless the base branch moved after its remedy — GitHub runs no check again for that, so the failed jobs are re-run, or the base merged in where GitHub refuses.
+**What it never does**: approve or close a pull request, merge one where the posture is \`never\` or without the operator's approval, or push other than through Local Publish under the folder's push approval. A pull request a person opened, or one labelled \`${SHEPHERD_HANDS_OFF_LABEL}\`, is left untouched; a branch with a publication or a commission in flight, or whose pull request's plan node has any run in flight serving it, whoever started it, is \`wait\`; the same check run is acted on once, unless the base branch moved after its remedy — GitHub runs no check again for that, and a re-run would read the old base, so the base is merged in and published.
 
 **With the result**: report the decision and its reason; for a fix, the publication's run — its pull request, and whether it pushed or is waiting at its approval; for a merge, whether it merged, waits at its approval, or was declined or refused.`,
   tags: ['coding', 'github', 'pull-requests', 'ci', 'local', 'developer-tools'],
@@ -633,7 +631,7 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
         {
           taskId: 'record-remedy',
           name: 'Record which remedy was taken',
-          goal: 'Name the remedy taken — the one the routes took from the remedy question’s answer: re-run, fix, bump, merge round, or a wait on CI; or, where the base moved after the last remedy, the re-run, or the merge round where GitHub refused it — with the base it was taken against, for the handoff and its pin to record, so the next round is briefed with it.',
+          goal: 'Name the remedy taken — the one the routes took from the remedy question’s answer: re-run, fix, bump, merge round, or a wait on CI; or, where the base moved after the last remedy, the merge round — with the base it was taken against, for the handoff and its pin to record, so the next round is briefed with it.',
           type: 'operation' as const,
           operation: 'workflow.run.decide',
           when: DECIDED_FIX,
@@ -642,7 +640,6 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
           inputBindings: {
             answer: out('classify-failure', REMEDY),
             rule: out('decide', 'rule'),
-            rerun: out(RERUN_AFTER_BASE_MOVED),
             baseSha: out('read-base', 'sha'),
             ...handoffBindings('attempt', 'data.nextAttemptCount'),
           },
@@ -651,7 +648,6 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
             state: {
               answer: bind('answer'),
               rule: bind('rule'),
-              rerun: bind('rerun'),
               // Empty where the base was not read: the pin then records no
               // base known, which no later pass reads as a base that moved.
               baseSha: { $firstOf: [bind('baseSha'), ''] },
@@ -688,27 +684,6 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
           }),
         },
 
-        {
-          taskId: RERUN_AFTER_BASE_MOVED,
-          name: 'Re-run the failed jobs over the moved base',
-          goal: "Where the base branch moved after the remedy recorded for the failing check run, re-run that run's failed jobs: GitHub runs a pull request's checks again on no move of its base, and the base may since have cleared the failure.",
-          type: 'operation' as const,
-          operation: 'api.http.call',
-          dependsOn: [...LEASE_TAKERS],
-          when: { expression: DECIDED_BASE_MOVED, onMissingRef: SKIP },
-          // A refusal falls back to the merge round.
-          optional: true,
-          retryability: 'unsafe' as const,
-          maxAttempts: 1,
-          inputBindings: { ...REPOSITORY, runId: out('read-pr-checks', 'data.firstFailing.runId') },
-          context: ctx('api.http.call'),
-          inputTemplate: github('reRunFailedJobs', {
-            owner: bind('owner'),
-            repo: bind('repo'),
-            run_id: bind('runId'),
-          }),
-        },
-
         commission(
           'fix',
           'Commission the fix',
@@ -731,16 +706,10 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
           ...commission(
             MERGE_ROUND_AFTER_BASE_MOVED,
             'Commission the merge round over the moved base',
-            "Where GitHub refused to re-run the failed jobs over a base that moved after the remedy, have the machine's coding agent merge the base into the pull request's branch, resolving only what conflicts, so its publication has CI run over the base.",
+            "Where the base branch moved after the remedy recorded for the failing check run, have the machine's coding agent merge the base into the pull request's branch, resolving only what conflicts, so its publication has CI run over the moved base — which no re-run of the failed jobs reads.",
             BASE_MOVED_BRIEF,
           ),
-          when: {
-            anyOf: [
-              `tasks.${RERUN_AFTER_BASE_MOVED}.status == 'failed'`,
-              `tasks.${RERUN_AFTER_BASE_MOVED}.output.statusCode != ${String(RERUN_ACCEPTED)}`,
-            ],
-            onMissingRef: SKIP,
-          },
+          when: { expression: DECIDED_BASE_MOVED, onMissingRef: SKIP },
         },
 
         {
@@ -874,7 +843,7 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
       priority: 50,
     },
     rationale:
-      'Plan 321 P1, P2, P2b. Typed reads — folder, turn, pull requests, checks, handoff, lease, in-flight runs, and under when-green the required checks, reviews and the head publication verdict — then workflow.run.decide: first rule that holds decides, else fix; a refused read is wait, more check runs than a page is leave, merge follows every wait. Fix and merge take the lease. Fix reads failing jobs and logs; the remedy question routes to re-run, fix, bump or merge round, unsure to fix, published through Local Publish. Merge is squash pinned to the head behind its write approval; a base-moved refusal is sent once more, then handed back. The lease is released after leased work. Abandon claims its head after the handoff, or takes over a claim whose pass ended unanswered, and raises one item only on its claim. The pin keeps the attempt state and each remedy base: a deleted handoff restarts nothing; a base moved since a remedy re-runs, else merges. No step approves or closes; only merge merges.',
+      'Plan 321 P1, P2, P2b. Typed reads — folder, turn, pull requests, checks, handoff, lease, in-flight runs, and under when-green the required checks, reviews and the head publication verdict — then workflow.run.decide: first rule that holds decides, else fix; a refused read is wait, more check runs than a page is leave, merge follows every wait. Fix and merge take the lease. Fix reads failing jobs and logs; the remedy question routes to re-run, fix, bump or merge round, unsure to fix, published through Local Publish. Merge is squash pinned to the head behind its write approval; a base-moved refusal is sent once more, then handed back. The lease is released after leased work. Abandon claims its head after the handoff, or takes over a claim whose pass ended unanswered, and raises one item only on its claim. The pin keeps the attempt state and each remedy base: a deleted handoff restarts nothing; a base moved since a remedy is merged in. No step approves or closes; only merge merges.',
   },
 };
 

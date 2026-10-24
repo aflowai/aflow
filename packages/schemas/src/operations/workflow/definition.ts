@@ -18,13 +18,13 @@ import { WorkflowTaskSchema } from './task.js';
  * Shepherd, which also merges, takes turns over its pull requests and hands a
  * spent one to a person, sends a merge again when only its base moved, and
  * reads its pull request's plan node, and acts again on a failure whose base
- * moved after its remedy, is fifty-six — the whole ceiling. It
+ * moved after its remedy, is fifty-four — the whole ceiling. It
  * bounds every shape a workflow's tasks
  * take: the stored workflow, workflow.manage.put's input, and the
  * compose-skill draft (ComposedWorkflowSchema), so a draft holds as many as a
  * stored workflow.
  */
-export const WORKFLOW_TASKS_MAX = 56;
+export const WORKFLOW_TASKS_MAX = 54;
 
 export const IterationPolicySchema = z.object({
   auto: z.boolean().default(false),
