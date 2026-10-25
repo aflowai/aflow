@@ -98,12 +98,44 @@ describe('HumanChatAskInputSchema — arguments stay out of the text a person re
       messages({
         kind: 'approval',
         title: 'Swap the model?',
-        description: 'Swap to luna. {"reviewData": {"from": "glm-pro"}}',
+        description: 'Swap to luna.","reviewData":{"from":"glm-pro"}}',
       }),
     ).toEqual([
       'description: `description` contains serialized tool arguments ("reviewData": …), which the person would read as text. ' +
         'Put only the text in `description`; structured data goes in `reviewData`, and every other argument in its own field of this call.',
     ]);
+  });
+
+  it('refuses the whole argument object written into the text', () => {
+    expect(
+      messages({
+        kind: 'input',
+        prompt:
+          'Which model? {"kind":"input","prompt":"Which model?","options":["glm-pro","luna"]}',
+      }),
+    ).toEqual([
+      'prompt: `prompt` contains serialized tool arguments ("options": …), which the person would read as text. ' +
+        'Put only the question in `prompt`; choices go in `options`, and every other argument in its own field of this call.',
+    ]);
+  });
+
+  it('admits a preview of a record whose own keys share the argument names', () => {
+    expect(
+      messages({
+        kind: 'approval',
+        title: 'Publish this page?',
+        description:
+          'The record as it will be stored:\n\n```json\n' +
+          '{"title": "Q3 plan", "description": "Roadmap for Q3", "kind": "page", "tags": ["plan"]}\n```',
+        reviewData: { id: 'page-7' },
+      }),
+    ).toEqual([]);
+    expect(
+      messages({
+        kind: 'input',
+        prompt: 'Keep `{"title": "Q3", "description": "Roadmap"}` as the heading?',
+      }),
+    ).toEqual([]);
   });
 
   it('admits JSON in the text that is not this call’s arguments', () => {

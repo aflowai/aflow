@@ -96,14 +96,71 @@ export function humanChatAskLeakedArgumentsMessage(
   );
 }
 
+const ARGUMENT_KEYS = new Set(Object.keys(HumanChatAskArgumentsSchema.shape));
+
+/** End index of the `{…}` opening at `start`, reading JSON strings as strings; -1 when unbalanced. */
+function matchingBrace(text: string, start: number): number {
+  let depth = 0;
+  let inString = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (ch === '\\') i++;
+      else if (ch === '"') inString = false;
+    } else if (ch === '"') inString = true;
+    else if (ch === '{') depth++;
+    else if (ch === '}' && --depth === 0) return i;
+  }
+  return -1;
+}
+
+/** An object that is this call's arguments, not a record that happens to share a key name. */
+function isSerializedArguments(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const obj = value as Record<string, unknown>;
+  if (!Object.keys(obj).every((key) => ARGUMENT_KEYS.has(key))) return false;
+  return obj['kind'] === 'input' || obj['kind'] === 'approval' || Array.isArray(obj['options']);
+}
+
+/**
+ * The argument key this text carries as the call's own serialized arguments,
+ * or null. Two shapes leak: the whole argument object written into the text,
+ * and the tail of one — the field's string closed early and the next argument
+ * (`","options":[…]`) written after it. A balanced `{…}` that is not the
+ * call's arguments is a preview of some record and is read past, so a record
+ * using `title`, `description` or `kind` as its own keys is not a leak.
+ */
+function leakedArgumentKey(text: string): string | null {
+  let outside = '';
+  let i = 0;
+  while (i < text.length) {
+    const end = text[i] === '{' ? matchingBrace(text, i) : -1;
+    if (end === -1) {
+      outside += text[i];
+      i++;
+      continue;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text.slice(i, end + 1));
+    } catch {
+      parsed = undefined;
+    }
+    if (isSerializedArguments(parsed)) return 'options' in parsed ? 'options' : 'kind';
+    outside += ' ';
+    i = end + 1;
+  }
+  return ARGUMENT_KEY_PATTERN.exec(outside)?.[1] ?? null;
+}
+
 export const HumanChatAskInputSchema = HumanChatAskArgumentsSchema.superRefine((value, ctx) => {
   for (const field of ['prompt', 'description'] as const) {
     const text = value[field];
-    const leaked = text === undefined ? null : ARGUMENT_KEY_PATTERN.exec(text);
-    if (leaked?.[1] !== undefined) {
+    const leaked = text === undefined ? null : leakedArgumentKey(text);
+    if (leaked !== null) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: humanChatAskLeakedArgumentsMessage(field, leaked[1]),
+        message: humanChatAskLeakedArgumentsMessage(field, leaked),
         path: [field],
       });
     }

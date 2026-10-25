@@ -18,7 +18,8 @@ describe('memory read jsonPath grammar', () => {
     expect(refusal({ jsonPath: '0:21' })).toEqual([
       `jsonPath '0:21' is a slice, and jsonPath does not take slices. ${GRAMMAR}. ` +
         'For a range of items, leave jsonPath out (the document itself is the array) and ' +
-        'itemRange: { start: 0, count: 21 } (count at most 200).',
+        'itemRange: { start: 0, count: 21 } (count at most 200). ' +
+        `If '0:21' is an object key rather than a range, quote it in brackets: ["0:21"].`,
     ]);
   });
 
@@ -26,11 +27,19 @@ describe('memory read jsonPath grammar', () => {
     expect(refusal({ jsonPath: 'ledger.entries[5:25]' })).toEqual([
       `jsonPath 'ledger.entries[5:25]' is a slice, and jsonPath does not take slices. ${GRAMMAR}. ` +
         'For a range of items, set jsonPath to the array ("ledger.entries") and ' +
-        'itemRange: { start: 5, count: 20 } (count at most 200).',
+        'itemRange: { start: 5, count: 20 } (count at most 200). ' +
+        `If '5:25' is an object key rather than a range, quote it in brackets: ledger.entries["5:25"].`,
     ]);
     expect(refusal({ jsonPath: 'entries.:10' })[0]).toContain(
       'set jsonPath to the array ("entries") and itemRange: { start: 0, count: 10 }',
     );
+  });
+
+  it('teaches the quoted-bracket escape for a key that reads like a slice', () => {
+    expect(refusal({ jsonPath: 'schedule.10:30' })[0]).toContain(
+      `If '10:30' is an object key rather than a range, quote it in brackets: schedule["10:30"].`,
+    );
+    expect(refusal({ jsonPath: 'schedule["10:30"]' })).toEqual([]);
   });
 
   it('refuses wildcards, filters and unclosed brackets with the grammar', () => {
