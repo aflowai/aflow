@@ -805,6 +805,30 @@ function appendRunInputReachabilityDiagnostics(
 
   const reachable = new Set(slots.map((s) => s.path.split('.')[0] ?? s.path));
 
+  // A condition naming an input no caller can pass never holds, or never
+  // lifts, so the start check enforces something other than what it says.
+  const declared = new Set(runInputs.map((r) => r.id));
+  for (const slot of runInputs) {
+    const condition = slot.requiredWhen;
+    if (condition === undefined) continue;
+    const named = [...condition.anyGiven, ...condition.noneGiven];
+    const unknown = named.filter((id) => !declared.has(id) || !reachable.has(id));
+    if (!slot.required && unknown.length === 0) continue;
+    out.push({
+      code: 'run_input_condition_incoherent',
+      dimension: 'graph',
+      severity: 'error',
+      taskId: entry.taskId,
+      detail: slot.required
+        ? `Run input '${slot.id}' is required and also declares \`requiredWhen\`, which only an optional input can carry.`
+        : `Run input '${slot.id}' is required when [${named.join(', ')}] are given or not, and [${unknown.join(', ')}] ` +
+          `${unknown.length === 1 ? 'is' : 'are'} not a run input a caller can pass to entry task '${entry.taskId}'.`,
+      fixHint: slot.required
+        ? `Declare '${slot.id}' with required: false, or drop its requiredWhen.`
+        : 'Name only run inputs the entry task declares in requiredWhen.',
+    });
+  }
+
   for (const slot of runInputs) {
     if (reachable.has(slot.id)) continue;
     out.push({

@@ -855,6 +855,28 @@ describe('Plan 301 — a declared run input a caller cannot pass', () => {
     expect(err?.detail).toContain('simulationId');
   });
 
+  it('refuses a requiredWhen that names an input no caller can pass, or sits on a required one', () => {
+    const condition = { anyGiven: ['seed'], noneGiven: ['ghost'], reason: 'r' };
+    const { validity } = materializeAndValidateSkillConfig(
+      skill([{ id: 'seed', required: false, requiredWhen: condition }] as never as {
+        id: string;
+        required: boolean;
+      }[]),
+    );
+    expect(validity.status).toBe('invalid');
+    const err = validity.diagnostics.find((d) => d.code === 'run_input_condition_incoherent');
+    expect(err?.detail).toContain('[ghost] is not a run input a caller can pass');
+
+    const onRequired = materializeAndValidateSkillConfig(
+      skill([
+        { id: 'seed', required: true, requiredWhen: { ...condition, noneGiven: [] } },
+      ] as never as { id: string; required: boolean }[]),
+    ).validity;
+    expect(
+      onRequired.diagnostics.find((d) => d.code === 'run_input_condition_incoherent')?.detail,
+    ).toContain('only an optional input can carry');
+  });
+
   it('only advises when the slot is optional — the skill still runs without it', () => {
     const { validity } = materializeAndValidateSkillConfig(
       skill([

@@ -179,6 +179,15 @@ export const WorkflowRunTaskOutputSchema = z.object({
     .nonnegative()
     .optional()
     .describe('Byte length of the whole output. Present only when it was truncated.'),
+  fromRun: z
+    .object({ runId: z.string(), status: z.literal('completed') })
+    .optional()
+    .describe(
+      'Present where the task waited on a run that failed and was retried in place, and ' +
+        'that run has completed since: `output` is then the task’s output as that run ' +
+        'stands now — its final attempt — rather than as it first ended, exactly as a ' +
+        'first pass that completed would have recorded it.',
+    ),
 });
 export type WorkflowRunTaskOutput = z.infer<typeof WorkflowRunTaskOutputSchema>;
 

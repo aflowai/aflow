@@ -150,7 +150,7 @@ export const MERGE_READ_TASKS = [
   {
     taskId: 'read-publication-review',
     name: "Read the publication's review verdict",
-    goal: "Read the verdict the Local Code Review of the publication that pushed the head returned, and the commit it reviewed — trusted only from the run, never from the pull request's body, which any collaborator can edit.",
+    goal: "Read the verdict the Local Code Review of the publication that pushed the head returned, and the commit it reviewed — trusted only from the run, never from the pull request's body, which any collaborator can edit. The read takes the verdict from the review run as it stands, so a review retried in place counts by its final attempt.",
     type: 'operation' as const,
     operation: 'workflow.run.detail',
     when: { expression: 'tasks.read-publication.output.runs[0].id != null', onMissingRef: SKIP },

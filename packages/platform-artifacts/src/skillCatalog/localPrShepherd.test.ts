@@ -70,6 +70,7 @@ import {
   MERGE_REFUSAL_OTHERWISE,
   MERGE_REFUSAL_RULES,
   MERGE_ROUND_AFTER_BASE_MOVED,
+  MERGE_RULES,
   SHEPHERD_RULES,
 } from './localPrShepherdRules.js';
 import { REMEDY_QUESTION, REMEDY_ROUTES, type Remedy } from './localPrShepherdDecisions.js';
@@ -201,7 +202,7 @@ interface Scenario {
   checkConclusions?: Record<string, string>;
   reviews?: PullRequestReviews;
   /** The one finished publication of the branch: the verdict its review returned, for the commit it reviewed and pushed. */
-  publication?: { verdict: string | null; at: string } | 'none';
+  publication?: { verdict: string | null; at: string; retriedInPlace?: boolean } | 'none';
   /** The branch's finished publications, newest first, where there are several; over `publication`. */
   publications?: PublicationRecord[];
   /** Where the base branch stands now; `unread` where its read failed. */
@@ -254,6 +255,8 @@ interface PublicationRecord {
   verdict: string | null;
   reviewed: string;
   pushed: string | null;
+  /** Its review failed and was retried in place: the read carries the review run's final attempt. */
+  retriedInPlace?: boolean;
 }
 
 function publicationsOf(s: Scenario): PublicationRecord[] {
@@ -267,6 +270,7 @@ function publicationsOf(s: Scenario): PublicationRecord[] {
           verdict: publication.verdict,
           reviewed: publication.at,
           pushed: publication.at,
+          ...(publication.retriedInPlace === true ? { retriedInPlace: true } : {}),
         },
       ];
 }
@@ -444,6 +448,9 @@ function answer(taskId: string, input: Record<string, unknown>, s: Scenario): An
         run: { runId: publication.id, status: 'completed' },
         tasks: [],
         activeWaiters: [],
+        // As `workflow.run.detail` reads a task that waited on a run: where
+        // the review failed and its retry in place completed, from the
+        // review run's final attempt, marked `fromRun`.
         taskOutput: {
           taskId: 'review-commit',
           output: {
@@ -454,6 +461,9 @@ function answer(taskId: string, input: Record<string, unknown>, s: Scenario): An
             reviewRunId: 'review-run',
             reviewed: { bindingId: 'hb_aflow', from: 'b'.repeat(40), at: publication.reviewed },
           },
+          ...(publication.retriedInPlace === true
+            ? { fromRun: { runId: 'review-run', status: 'completed' } }
+            : {}),
         },
       });
     }
@@ -1937,6 +1947,20 @@ describe('Local PR Shepherd — it merges what the posture allows', () => {
       expect(left.ran).not.toContain('merge');
     },
   );
+
+  it('merges on the approve of a review retried in place, as on a first pass that approved', () => {
+    const merged = green({ publication: { verdict: 'approve', at: HEAD, retriedInPlace: true } });
+    expect(merged.decision).toBe('merge');
+    // The one read of the verdict is the publication's review task through
+    // `workflow.run.detail`, which reads it by the review run's final attempt.
+    expect(merged.inputs.get('read-publication-review')).toMatchObject({
+      taskOutput: 'review-commit',
+    });
+    const verdictRule = MERGE_RULES.find((rule) =>
+      JSON.stringify(rule.when).includes('publicationReview.taskOutput.output.verdict'),
+    );
+    expect(verdictRule?.reason).toContain('its final attempt where it was retried in place');
+  });
 
   it('reads the verdict from the finished publication of the branch that pushed the head, never from the pull request', () => {
     const merged = green();

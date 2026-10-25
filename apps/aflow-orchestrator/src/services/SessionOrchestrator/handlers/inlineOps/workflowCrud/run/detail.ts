@@ -1,29 +1,86 @@
-import { getDatabase } from '@aflow/database';
+import { getDatabase, resolveWorkflowForRunRevision } from '@aflow/database';
 import type { PayloadStore } from '@aflow/payload-store';
 import { MAX_INLINE_PAYLOAD_BYTES } from '@aflow/schemas';
-import type { PayloadRef, WorkflowRunDetailInput, WorkflowRunTaskOutput } from '@aflow/schemas';
+import type {
+  WorkflowRunDetailInput,
+  WorkflowRunDetailOutput,
+  WorkflowRunTaskOutput,
+} from '@aflow/schemas';
 import type { InlineHandlerArgs } from '../../types.js';
 import { emitStepSuccess, emitStepError } from '../../helpers.js';
 import { requireSpaceId } from '../../spaceScope.js';
 
+async function retrievePayload(payloadStore: PayloadStore, ref: string): Promise<unknown> {
+  try {
+    return await payloadStore.retrieve(ref);
+  } catch {
+    return undefined;
+  }
+}
+
 /**
- * Read one task's recorded output, bounded to what an agent turn can hold.
+ * A task that waited on a run it started, where that run failed and was
+ * retried in place to completion: its output as the run stands now, through
+ * the task's own projection — what a first pass that completed would have
+ * recorded. Undefined for any other task, which reads as it was recorded.
+ */
+async function readFromFinalAttempt(
+  args: InlineHandlerArgs,
+  spaceId: string,
+  run: WorkflowRunDetailOutput['run'],
+  taskId: string,
+  recorded: unknown,
+  inputRef: string | null,
+): Promise<WorkflowRunTaskOutput | undefined> {
+  const db = getDatabase();
+  const tenantIdStr = args.context.tenantId as string;
+  const { buildWorkflowRunDetail, failedChildRunOf, taskOutputFromCompletedRun } =
+    await import('@aflow/cybernetic-runtime');
+  let task;
+  try {
+    const { workflow } = await resolveWorkflowForRunRevision(
+      db,
+      args.context.tenantId,
+      spaceId,
+      run.workflowSlug,
+      run.workflowRevision,
+    );
+    task = workflow.tasks.find((t) => t.taskId === taskId);
+  } catch {
+    return undefined;
+  }
+  if (task === undefined) return undefined;
+  const childRunId = failedChildRunOf(task, recorded);
+  if (childRunId === undefined) return undefined;
+  const child = await buildWorkflowRunDetail(
+    db,
+    args.payloadStore,
+    tenantIdStr,
+    spaceId,
+    childRunId,
+  );
+  if (child?.run.status !== 'completed') return undefined;
+  const input = inputRef === null ? null : await retrievePayload(args.payloadStore, inputRef);
+  const output = taskOutputFromCompletedRun(
+    task,
+    recorded as Record<string, unknown>,
+    { runId: childRunId, result: child.result },
+    input !== null && typeof input === 'object' && !Array.isArray(input)
+      ? (input as Record<string, unknown>)
+      : null,
+  );
+  const bounded = output === undefined ? undefined : boundTaskOutput(taskId, output);
+  return bounded && { ...bounded, fromRun: { runId: childRunId, status: 'completed' } };
+}
+
+/**
+ * One task's output, bounded to what an agent turn can hold.
  *
  * The whole payload is fetched because the JSON lane has no ranged read —
  * `openByteStream` refuses a JSON ref — so the bound is on what is returned,
  * and an oversized output says so rather than arriving silently clipped.
  */
-async function readBoundedTaskOutput(
-  payloadStore: PayloadStore,
-  taskId: string,
-  outputRef: PayloadRef,
-): Promise<WorkflowRunTaskOutput | undefined> {
-  let value: unknown;
-  try {
-    value = await payloadStore.retrieve(outputRef);
-  } catch {
-    return undefined;
-  }
+function boundTaskOutput(taskId: string, value: unknown): WorkflowRunTaskOutput | undefined {
   if (value === null || value === undefined) return undefined;
 
   const text: string | undefined = typeof value === 'string' ? value : JSON.stringify(value);
@@ -82,11 +139,16 @@ export async function handleWorkflowRunDetail(
     // projection drops exactly the large inline refs this read is for.
     const row = await getTaskRow(db, tenantIdStr, input.runId, input.taskOutput);
     if (row?.outputRef) {
-      const taskOutput = await readBoundedTaskOutput(
-        args.payloadStore,
-        input.taskOutput,
-        row.outputRef,
-      );
+      const recorded = await retrievePayload(args.payloadStore, row.outputRef);
+      const taskOutput =
+        (await readFromFinalAttempt(
+          args,
+          spaceId,
+          output.run,
+          input.taskOutput,
+          recorded,
+          row.inputRef,
+        )) ?? boundTaskOutput(input.taskOutput, recorded);
       if (taskOutput) output.taskOutput = taskOutput;
     }
   }

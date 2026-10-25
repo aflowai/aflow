@@ -231,6 +231,7 @@ const LOCAL_COMMISSION_BUNDLE: AuthoredSkillBundle = {
   memorySeed: [],
   helmsmanHints: [
     "A brief names the checks the coding agent runs before it returns, and they are the folder's own — its tests, type check, linter and formatter, and the guards its own check runs (in Aflow's repository, the large-files and context-budget guards). What fails is fixed in the same session: the folder's declared checks run only once the patch is published.",
+    "Every commission reports a `summary` — a title line under 72 characters and one paragraph — whatever its brief asks for, and a publication naming the commission's run commits the change under it, so the brief need not ask for a commit message.",
   ],
 };
 
@@ -295,7 +296,8 @@ const LOCAL_PUBLISH_BUNDLE: AuthoredSkillBundle = {
     'A folder connected without a publish prefix can be committed to but not pushed from — the push is refused where it runs. Ask for the folder to be reconnected allowing pushes under a prefix before starting a publication.',
     "Whether the run waits at the approval is the folder's push approval, shown in the machine block. Under `unless-unreviewed`, the default, the run reviews everything its push would add before it gets there, so no review needs starting alongside it. A file the scan could not read or a line marked `aflow-scan: allow` makes it ask under every posture.",
     "The folder's checks, where it declares them — `checks` in the machine block — run on the commit before anything else, so no build or test needs running beside a publication. A failed check fails the run with the end of what it printed, and nothing has left the machine; one that failed only on tests running out of time is run once more by the publication itself first, so it needs no retry from the conversation.",
-    "A publication's push follows its `afterReview`, and so do you. On `fix_before_merge` the fix round is yours: commission it with `base` the branch's name, never the earlier `baseSha`, briefed from every finding of the `reviewRunId` run, then publish its `patchRef` and `baseSha` with the run's `findings`, fixed ones closed, and the next `round`. Publish over it only on an act the publication verifies — the operator's word, the `hands-off` label — passing `override`; never skip the round silently.",
+    "A publication's push follows its `afterReview`, and so do you. On `fix_before_merge` the fix round is yours: commission it with the run's `fixRound.commissionInputs` as they stand — never `base: origin/main`, which cannot reach a branch kept local and returns no files — briefed from the `fixRound.reviewRunId` run; then publish its `patchRef`, `baseSha` and run id with `fixRound.findings`, fixed ones closed, and the next `round`. Override only on an act the run verifies.",
+    "A commission's change is committed under the commission's own `summary` when the publication names its run id as `commission`, or passes its `patchRef`: pass `commitMessage` only to say it otherwise. A diff the operator hands over as `patch`, or a merge alone, has no summary, and the start refuses it without `commitMessage`.",
     "A commission's change is published by its `patchRef`, never its `patch` text: that copy is cut short on a large change, and a run's inputs are capped at 32 KB together. `patch` is for a small diff the operator hands over.",
   ],
 };

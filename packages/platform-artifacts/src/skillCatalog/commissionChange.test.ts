@@ -12,7 +12,11 @@ import {
   toJsonSchemaSync,
 } from '@aflow/schemas';
 import { getSkillBundleEntry } from '../skillBundleCatalog.js';
-import { COMMISSION_CHANGE } from './commissionChange.js';
+import {
+  COMMISSION_CHANGE,
+  COMMISSION_RESULT_SCHEMA,
+  COMMIT_TITLE_MAX_CHARS,
+} from './commissionChange.js';
 
 const wf = COMMISSION_CHANGE.bundle.workflow;
 const task = wf.tasks[0];
@@ -81,6 +85,7 @@ describe('Commission Change — a brief to the machine’s coding agent', () => 
       bindingId: 'hb_repo',
       task: BRIEF,
       timeoutMs: HOST_HARNESS_TIMEOUT_MAX_MS,
+      outputSchema: COMMISSION_RESULT_SCHEMA,
     });
     expect('maxTurns' in op).toBe(false);
     expect(op['timeoutMs']).toBeGreaterThan(HOST_HARNESS_TIMEOUT_DEFAULT_MS);
@@ -128,7 +133,7 @@ describe('Commission Change — a brief to the machine’s coding agent', () => 
       browser: { profile: 'ephemeral' },
     };
     const op = substituteTemplateBinds(template, named, declared);
-    expect(op).toEqual(named);
+    expect(op).toEqual({ ...named, outputSchema: COMMISSION_RESULT_SCHEMA });
     expect(HostHarnessRunInputSchema.safeParse(op).success).toBe(true);
   });
 
@@ -172,6 +177,7 @@ describe('Commission Change — a brief to the machine’s coding agent', () => 
   it('promotes the change and what a publication and a further turn take, patchRef primary', () => {
     const promoted = (task?.promoteOutputs ?? []).map((p) => ('toState' in p ? p.toState : ''));
     const expected = [
+      'summary',
       'patchRef',
       'baseSha',
       'merge',
@@ -184,7 +190,27 @@ describe('Commission Change — a brief to the machine’s coding agent', () => 
     expect((wf.stateVariables ?? []).map((v) => v.variableId)).toEqual(expected);
     expect(wf.output?.primary).toBe('patchRef');
     expect(wf.output?.guidance).toContain('patchRef, baseSha and merge.from as they stand');
+    expect(wf.output?.guidance).toContain('commits under summary unless given a commitMessage');
     expect(wf.output?.guidance).toContain('sessionRef');
+  });
+
+  it('has the coding agent report a summary — a title under 72 characters and one paragraph — beside what the brief asks', () => {
+    expect(template['outputSchema']).toBe(COMMISSION_RESULT_SCHEMA);
+    expect(task?.promoteOutputs).toContainEqual({
+      kind: 'output_path',
+      path: 'result.summary',
+      toState: 'summary',
+    });
+    const summary = COMMISSION_RESULT_SCHEMA.properties.summary;
+    expect(summary.required).toEqual(['title', 'paragraph']);
+    expect(summary.properties.title.maxLength).toBe(COMMIT_TITLE_MAX_CHARS);
+    expect(COMMIT_TITLE_MAX_CHARS).toBeLessThan(72);
+    // The rest of the result is the brief's to ask for.
+    expect(COMMISSION_RESULT_SCHEMA).not.toHaveProperty('additionalProperties');
+    expect(COMMISSION_CHANGE.description).toContain(
+      'The coding agent writes the `summary` whatever the brief asks: a title line under 72 characters and one paragraph',
+    );
+    expect(COMMISSION_CHANGE.description).toContain('its run id as `commission`');
   });
 
   it("starts a fix round at the branch's head, named as `base`, pushed or kept local", () => {

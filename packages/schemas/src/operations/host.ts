@@ -836,6 +836,14 @@ export const HostFilePatchOutputSchema = z.object({
           "of `pushRange`, and present exactly when it is. What a publication's checks are " +
           'measured against.',
       ),
+      baseMoved: z
+        .boolean()
+        .optional()
+        .describe(
+          'True where `origin/<pushBase>` holds commits this one does not: the base moved on ' +
+            'since the branch was cut from it or last merged it, so a further round on the ' +
+            'branch merges it in first. Present exactly when `pushBaseSha` is.',
+        ),
       pushRefspec: z
         .string()
         .min(1)

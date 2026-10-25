@@ -183,6 +183,7 @@ export * from './workflowResume.js';
 export * from './pauseContractStorage.js';
 
 export * from './workflowRunDetail.js';
+export * from './childRunTaskOutput.js';
 export * from './humanTaskHydration.js';
 export * from './workflowHumanTaskHydration.js';
 export * from './workflowRunResumeModes.js';
