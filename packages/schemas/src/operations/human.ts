@@ -136,7 +136,7 @@ function leakedArgumentKey(text: string): string | null {
   while (i < text.length) {
     const end = text[i] === '{' ? matchingBrace(text, i) : -1;
     if (end === -1) {
-      outside += text[i];
+      outside += text.charAt(i);
       i++;
       continue;
     }
