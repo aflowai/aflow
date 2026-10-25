@@ -57,7 +57,7 @@ const SPACE = '55ed0000-0000-4000-8000-0000000009f2';
 const CREATOR = '11110000-0000-4000-8000-0000000009f2';
 const CYCLE_BUDGET = resolveBackgroundTaskRuntime('orchestrator.schedule_evaluator').maxBatch;
 
-let handle: { sql: postgres.Sql; close: () => Promise<void> } | undefined;
+let handle: ReturnType<typeof createDatabase> | undefined;
 
 /**
  * A `postgres.Sql` that runs `hook.run()` once, immediately after the first
@@ -172,7 +172,12 @@ describe.skipIf(!READY)('schedule fire-once', () => {
   }
 
   function evaluator(): ScheduleEvaluator {
-    return new ScheduleEvaluator({ redis, sqlClient: sql(), instanceId: randomUUID() });
+    return new ScheduleEvaluator({
+      redis,
+      sqlClient: sql(),
+      db: handle!.db,
+      instanceId: randomUUID(),
+    });
   }
 
   async function insertSchedule(
@@ -450,6 +455,7 @@ describe.skipIf(!READY)('schedule fire-once', () => {
       const winner = evaluator();
       const loser = new ScheduleEvaluator({
         redis,
+        db: handle!.db,
         sqlClient: interleavingSql(sql(), {
           match: DUE_SELECT,
           run: async () => {
@@ -475,6 +481,7 @@ describe.skipIf(!READY)('schedule fire-once', () => {
       const id = await insertSchedule();
       const paused = new ScheduleEvaluator({
         redis,
+        db: handle!.db,
         sqlClient: interleavingSql(sql(), {
           match: DUE_SELECT,
           run: async () => {
@@ -677,6 +684,7 @@ describe.skipIf(!READY)('schedule fire-once', () => {
 
       const broken = new ScheduleEvaluator({
         redis,
+        db: handle!.db,
         sqlClient: failingOutboxSql(sql()),
         instanceId: randomUUID(),
       });
@@ -757,6 +765,7 @@ describe.skipIf(!READY)('schedule fire-once', () => {
 
       const disabled = new ScheduleEvaluator({
         redis,
+        db: handle!.db,
         sqlClient: sql(),
         instanceId: randomUUID(),
         mode: 'disabled',

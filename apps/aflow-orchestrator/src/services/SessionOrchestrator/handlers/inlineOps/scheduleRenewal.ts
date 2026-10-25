@@ -9,6 +9,7 @@ import {
   type FlowSchedule,
   type RunAccessGrant,
 } from '@aflow/schemas';
+import { scheduleTargetConfig, type ScheduleTargetConfig } from './scheduleTargetConfig.js';
 
 const SCHEDULE_SUCCESSOR_NAMESPACE = 'aflow:schedule-successor';
 
@@ -85,6 +86,7 @@ export type ScheduleRenewalOutcome =
   | { kind: 'not_found' }
   | { kind: 'not_owner' }
   | { kind: 'not_due'; predecessor: AgentScheduleRow }
+  | { kind: 'config_refused'; message: string }
   | { kind: 'renewed'; successor: AgentScheduleRow; created: boolean };
 
 /**
@@ -103,10 +105,12 @@ export async function renewSchedule(
     spaceId: string;
     predecessorId: string;
     grant: RunAccessGrant;
+    /** The check a created schedule passes, which its successor passes too. */
+    configProblem: (schedule: ScheduleTargetConfig) => Promise<string | null>;
   },
   now: Date = new Date(),
 ): Promise<ScheduleRenewalOutcome> {
-  const { spaceId, predecessorId, grant } = params;
+  const { spaceId, predecessorId, grant, configProblem } = params;
   const predecessor = await store.lock(predecessorId, spaceId);
   if (!predecessor) return { kind: 'not_found' };
   if (predecessor.creatorUserId !== grant.grantedToUserId) return { kind: 'not_owner' };
@@ -117,6 +121,9 @@ export async function renewSchedule(
   if (!isScheduleRenewalDue(scheduleRenewalFacts(predecessor), now)) {
     return { kind: 'not_due', predecessor };
   }
+
+  const problem = await configProblem(scheduleTargetConfig(predecessor));
+  if (problem !== null) return { kind: 'config_refused', message: problem };
 
   const next =
     predecessor.cronExpression !== null
