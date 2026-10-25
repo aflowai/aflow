@@ -72,12 +72,14 @@ export async function handleHumanChatAskInline(
     const childOperationId: 'user.interaction.ask' | 'user.interaction.approve' =
       input.kind === 'input' ? 'user.interaction.ask' : 'user.interaction.approve';
 
+    const inputSchema = input.options ? { type: 'string', enum: input.options } : input.inputSchema;
+    const uiHints = input.options ? { ...input.uiHints, mode: 'choices' as const } : input.uiHints;
     const childPayload =
       input.kind === 'input'
         ? {
             prompt: input.prompt!,
-            ...(input.inputSchema ? { inputSchema: input.inputSchema } : {}),
-            ...(input.uiHints ? { uiHints: input.uiHints } : {}),
+            ...(inputSchema ? { inputSchema } : {}),
+            ...(uiHints ? { uiHints } : {}),
             ...(input.timeoutSeconds ? { timeoutSeconds: input.timeoutSeconds } : {}),
             placement: 'chat_inline' as const,
           }

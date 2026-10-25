@@ -72,6 +72,75 @@ describe('HumanChatAskInputSchema discriminator', () => {
   });
 });
 
+describe('HumanChatAskInputSchema — arguments stay out of the text a person reads', () => {
+  function messages(input: unknown): string[] {
+    const result = HumanChatAskInputSchema.safeParse(input);
+    return result.success
+      ? []
+      : result.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`);
+  }
+
+  it('refuses a prompt carrying serialized `options`, naming the field and where options go', () => {
+    expect(
+      messages({
+        kind: 'input',
+        prompt:
+          'Which model should run the Helmsman?","options":[{"value":"glm-pro"},{"value":"luna"}]',
+      }),
+    ).toEqual([
+      'prompt: `prompt` contains serialized tool arguments ("options": …), which the person would read as text. ' +
+        'Put only the question in `prompt`; choices go in `options`, and every other argument in its own field of this call.',
+    ]);
+  });
+
+  it('refuses a description carrying serialized arguments', () => {
+    expect(
+      messages({
+        kind: 'approval',
+        title: 'Swap the model?',
+        description: 'Swap to luna. {"reviewData": {"from": "glm-pro"}}',
+      }),
+    ).toEqual([
+      'description: `description` contains serialized tool arguments ("reviewData": …), which the person would read as text. ' +
+        'Put only the text in `description`; structured data goes in `reviewData`, and every other argument in its own field of this call.',
+    ]);
+  });
+
+  it('admits JSON in the text that is not this call’s arguments', () => {
+    expect(
+      messages({
+        kind: 'input',
+        prompt: 'Keep `{"model": "luna", "effort": "high"}` as the config?',
+      }),
+    ).toEqual([]);
+  });
+
+  it('accepts options as the choices of an input question', () => {
+    const parsed = HumanChatAskInputSchema.parse({
+      kind: 'input',
+      prompt: 'Which model?',
+      options: ['glm-pro', 'luna'],
+    });
+    expect(parsed.options).toEqual(['glm-pro', 'luna']);
+  });
+
+  it('refuses options on an approval, and options beside an inputSchema', () => {
+    expect(
+      messages({ kind: 'approval', title: 'Swap?', description: 'Swap.', options: ['a', 'b'] }),
+    ).toEqual([
+      'options: `options` belongs to kind="input"; an approval offers approve and reject.',
+    ]);
+    expect(
+      messages({
+        kind: 'input',
+        prompt: 'Pick',
+        options: ['a', 'b'],
+        inputSchema: { type: 'string', enum: ['a', 'b'] },
+      }),
+    ).toHaveLength(1);
+  });
+});
+
 describe('HumanActionCenterFocusInputSchema', () => {
   it('accepts a minimal {itemId} call (Plan 166 §HITL — placement removed)', () => {
     const parsed = HumanActionCenterFocusInputSchema.parse({ itemId: 'proposal:abc' });

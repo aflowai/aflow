@@ -275,4 +275,70 @@ describe('handleHumanChatAskInline — Plan 156 §5.6.1', () => {
     expect(result.error.code).toBe('HUMAN_CHAT_ASK_FAILED');
     expect(result.error.message).toMatch(/prompt.*required/i);
   });
+
+  it('turns `options` into a pick-one input schema on the child', async () => {
+    const askStepDef = makeAskStepDef();
+    const ctx = makeCtx(makeAgentDef([askStepDef]));
+    const askInput = {
+      kind: 'input' as const,
+      prompt: 'Which model should run the Helmsman?',
+      options: ['glm-pro', 'luna'],
+      uiHints: { submitLabel: 'Use this model' },
+    };
+    (mockPayloadStore.retrieve as ReturnType<typeof vi.fn>).mockResolvedValueOnce(askInput);
+
+    await handleHumanChatAskInline(
+      mockRedis,
+      mockPayloadStore,
+      ctx as never,
+      askStepDef,
+      'exec-7' as StepExecutionId,
+      'idem-7' as IdempotencyKey,
+      inlineRef(askInput),
+      0,
+      Date.now(),
+    );
+
+    const result = mockAddStepResult.mock.calls[0]![1] as { status: string; outputRef: string };
+    expect(result.status).toBe('SUCCEEDED');
+    const decoded = decodeInline(result.outputRef) as Record<string, unknown>;
+    expect(decoded.prompt).toBe('Which model should run the Helmsman?');
+    expect(decoded.inputSchema).toEqual({ type: 'string', enum: ['glm-pro', 'luna'] });
+    expect(decoded.uiHints).toEqual({ submitLabel: 'Use this model', mode: 'choices' });
+    expect(decoded).not.toHaveProperty('options');
+  });
+
+  it('refuses a prompt carrying the serialized arguments, and spawns no question', async () => {
+    const askStepDef = makeAskStepDef();
+    const agentDef = makeAgentDef([askStepDef]);
+    const ctx = makeCtx(agentDef);
+    const askInput = {
+      kind: 'input',
+      prompt: 'Which model should run the Helmsman?", "options":["glm-pro","luna"]',
+    };
+    (mockPayloadStore.retrieve as ReturnType<typeof vi.fn>).mockResolvedValueOnce(askInput);
+
+    await handleHumanChatAskInline(
+      mockRedis,
+      mockPayloadStore,
+      ctx as never,
+      askStepDef,
+      'exec-8' as StepExecutionId,
+      'idem-8' as IdempotencyKey,
+      inlineRef(askInput),
+      0,
+      Date.now(),
+    );
+
+    expect(agentDef.steps).toHaveLength(1);
+    const result = mockAddStepResult.mock.calls[0]![1] as {
+      status: string;
+      error: { message: string };
+    };
+    expect(result.status).toBe('FAILED');
+    expect(result.error.message).toContain(
+      '`prompt` contains serialized tool arguments ("options": …), which the person would read as text. ' +
+        'Put only the question in `prompt`; choices go in `options`, and every other argument in its own field of this call.',
+    );
+  });
 });

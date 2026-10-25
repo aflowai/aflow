@@ -32,6 +32,10 @@ export function applyLiveDelta(state: RunViewState, action: LiveDeltaAction): Ru
 
   const mapping = CHANNEL_MESSAGE[channel];
   if (mapping === undefined) return state;
+  // Live frames travel apart from the durable stream and can land after the
+  // step's terminal event — folding one would turn the step's settled message
+  // back into a streaming one, or mount a thinking box under a finished turn.
+  if (state.endedSteps[stepExecutionId] === true) return state;
   const { idPrefix, semanticType } = mapping;
   const messageId = `${idPrefix}${stepExecutionId}`;
   const existingIdx = state.messages.findIndex((m) => m.id === messageId);

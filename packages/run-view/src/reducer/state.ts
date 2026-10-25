@@ -61,9 +61,10 @@ export interface RunViewState {
    */
   harnessActivity: Record<string, HarnessActivityState>;
   /**
-   * Steps whose terminal event folded while no feed was held for them. A
-   * snapshot is folded without feeds, so this is how it tells hydration that a
-   * feed the client is still holding belongs to a step that has ended.
+   * Steps whose terminal event has folded. A snapshot is folded without feeds,
+   * so this is how it tells hydration that a feed the client is still holding
+   * belongs to a step that has ended — and how a live frame arriving after its
+   * step's terminal event is known to be stale.
    */
   endedSteps: Record<string, true>;
   workflowRuns: Record<string, WorkflowRunSurfaceState>;

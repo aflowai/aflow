@@ -13,82 +13,142 @@ import { UserApprovalResumePayloadSchema, UserInputResumePayloadSchema } from '.
  * reviewData). The handler validates that the right field group is set
  * for the chosen kind and rejects otherwise.
  */
-export const HumanChatAskInputSchema = z
-  .object({
-    kind: z.enum(['input', 'approval']).describe('Which child HITL primitive to schedule.'),
+const HumanChatAskArgumentsSchema = z.object({
+  kind: z.enum(['input', 'approval']).describe('Which child HITL primitive to schedule.'),
 
-    // ----- input-kind fields (user.interaction.ask payload) -----
-    prompt: z
-      .string()
-      .max(10_000)
-      .describe('Question shown to the user. Required when kind="input".')
-      .optional(),
-    inputSchema: z
-      .record(z.unknown())
-      .describe('JSON Schema for the expected response shape (input kind).')
-      .optional(),
+  // ----- input-kind fields (user.interaction.ask payload) -----
+  prompt: z
+    .string()
+    .max(10_000)
+    .describe('Question shown to the user. Required when kind="input".')
+    .optional(),
+  options: z
+    .array(z.string().min(1).max(500))
+    .min(2)
+    .max(50)
+    .describe(
+      'Choices the user picks from, one string each (input kind). Rendered as buttons; ' +
+        'the chosen string is the response. Use instead of `inputSchema`.',
+    )
+    .optional(),
+  inputSchema: z
+    .record(z.unknown())
+    .describe('JSON Schema for the expected response shape (input kind).')
+    .optional(),
 
-    // ----- approval-kind fields (user.interaction.approve payload) -----
-    title: z
-      .string()
-      .min(1)
-      .max(256)
-      .describe('One-line approval title. Required when kind="approval".')
-      .optional(),
-    description: z
-      .string()
-      .min(1)
-      .max(10_000)
-      .describe('What needs approval (Markdown allowed). Required when kind="approval".')
-      .optional(),
-    reviewData: z
-      .unknown()
-      .describe('Structured data shown for review under the description.')
-      .optional(),
+  // ----- approval-kind fields (user.interaction.approve payload) -----
+  title: z
+    .string()
+    .min(1)
+    .max(256)
+    .describe('One-line approval title. Required when kind="approval".')
+    .optional(),
+  description: z
+    .string()
+    .min(1)
+    .max(10_000)
+    .describe('What needs approval (Markdown allowed). Required when kind="approval".')
+    .optional(),
+  reviewData: z
+    .unknown()
+    .describe('Structured data shown for review under the description.')
+    .optional(),
 
-    // ----- shared UI hints / timeout -----
-    uiHints: z
-      .object({
-        mode: z.enum(['text', 'textarea', 'form', 'chat', 'choices', 'diff']).optional(),
-        submitLabel: z.string().max(100).optional(),
-        approveLabel: z.string().max(100).optional(),
-        rejectLabel: z.string().max(100).optional(),
-        placeholder: z.string().max(500).optional(),
-      })
-      .optional(),
-    timeoutSeconds: z
-      .number()
-      .int()
-      .positive()
-      .max(86400 * 7)
-      .describe('Time limit before the child step auto-fails (max 7 days).')
-      .optional(),
-  })
-  .superRefine((value, ctx) => {
-    if (value.kind === 'input' && !value.prompt) {
+  // ----- shared UI hints / timeout -----
+  uiHints: z
+    .object({
+      mode: z.enum(['text', 'textarea', 'form', 'chat', 'choices', 'diff']).optional(),
+      submitLabel: z.string().max(100).optional(),
+      approveLabel: z.string().max(100).optional(),
+      rejectLabel: z.string().max(100).optional(),
+      placeholder: z.string().max(500).optional(),
+    })
+    .optional(),
+  timeoutSeconds: z
+    .number()
+    .int()
+    .positive()
+    .max(86400 * 7)
+    .describe('Time limit before the child step auto-fails (max 7 days).')
+    .optional(),
+});
+
+const ARGUMENT_KEY_PATTERN = new RegExp(
+  `"(${Object.keys(HumanChatAskArgumentsSchema.shape).join('|')})"\\s*:`,
+);
+
+/**
+ * The text a person reads must not carry this call's own arguments as JSON:
+ * a `"options": [...]` serialised into `prompt` shows the person the JSON and
+ * offers them nothing to pick.
+ */
+export function humanChatAskLeakedArgumentsMessage(
+  field: 'prompt' | 'description',
+  key: string,
+): string {
+  const remedy =
+    field === 'prompt'
+      ? 'Put only the question in `prompt`; choices go in `options`'
+      : 'Put only the text in `description`; structured data goes in `reviewData`';
+  return (
+    `\`${field}\` contains serialized tool arguments ("${key}": …), which the person would read as text. ` +
+    `${remedy}, and every other argument in its own field of this call.`
+  );
+}
+
+export const HumanChatAskInputSchema = HumanChatAskArgumentsSchema.superRefine((value, ctx) => {
+  for (const field of ['prompt', 'description'] as const) {
+    const text = value[field];
+    const leaked = text === undefined ? null : ARGUMENT_KEY_PATTERN.exec(text);
+    if (leaked?.[1] !== undefined) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: '`prompt` is required when kind="input".',
-        path: ['prompt'],
+        message: humanChatAskLeakedArgumentsMessage(field, leaked[1]),
+        path: [field],
       });
     }
-    if (value.kind === 'approval') {
-      if (!value.title) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: '`title` is required when kind="approval".',
-          path: ['title'],
-        });
-      }
-      if (!value.description) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: '`description` is required when kind="approval".',
-          path: ['description'],
-        });
-      }
+  }
+  if (value.options !== undefined) {
+    if (value.kind !== 'input') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: '`options` belongs to kind="input"; an approval offers approve and reject.',
+        path: ['options'],
+      });
     }
-  });
+    if (value.inputSchema !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          'Set `options` or `inputSchema`, not both: `options` is the response schema of a pick-one question.',
+        path: ['options'],
+      });
+    }
+  }
+  if (value.kind === 'input' && !value.prompt) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: '`prompt` is required when kind="input".',
+      path: ['prompt'],
+    });
+  }
+  if (value.kind === 'approval') {
+    if (!value.title) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: '`title` is required when kind="approval".',
+        path: ['title'],
+      });
+    }
+    if (!value.description) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: '`description` is required when kind="approval".',
+        path: ['description'],
+      });
+    }
+  }
+});
 export type HumanChatAskInput = z.infer<typeof HumanChatAskInputSchema>;
 
 /**
@@ -203,12 +263,13 @@ export const HumanOperationRegistrations: OperationRegistration[] = [
       pitfalls: [
         'Step stays PAUSED until resume — set `timeoutSeconds` if unattended',
         'kind="approval" requires title+description; kind="input" requires prompt',
+        'Choices go in `options`, never written into `prompt` — `prompt` is shown as text',
       ],
       minimalExampleInput: {
         kind: 'input',
         prompt: 'Which dataset should I analyse?',
-        inputSchema: { type: 'string', enum: ['sales', 'returns', 'inventory'] },
-        uiHints: { mode: 'choices', submitLabel: 'Use this dataset' },
+        options: ['sales', 'returns', 'inventory'],
+        uiHints: { submitLabel: 'Use this dataset' },
       },
     },
     accessMode: 'write',
