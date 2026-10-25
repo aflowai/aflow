@@ -13,6 +13,7 @@ import {
   bind,
   ctx,
   github,
+  GITHUB_READ_PROJECTION,
   HANDOFF_READS,
   handoffBindings,
   handoffText,
@@ -173,6 +174,11 @@ const HANDOFF_BODY = {
       ': ',
       text('mergeAgainMessage'),
     ),
+    optionalPart(
+      '\n\nThis pass handed the case to the Helmsman: a conversation of its own starts on it (schedule `',
+      text('handOverSchedule'),
+      '`), with what the pass read and decided.',
+    ),
     '\n\nFailures acted on: ',
     ATTEMPTS,
     '. Last acted on check run `',
@@ -207,6 +213,7 @@ const HANDOFF_BINDINGS = {
   mergeAgainCommit: out('merge-again', 'data.sha'),
   mergeAgainStatus: out('merge-again', 'statusCode'),
   mergeAgainMessage: out('merge-again', 'data.message'),
+  handOverSchedule: out('hand-over-to-agent', 'scheduleId'),
   ...leaseBindings('leaseCheckRun', 'lease.inlineJson.checkRunId'),
   ...leaseBindings('leaseHeadSha', 'lease.inlineJson.headSha'),
   ...handoffBindings('priorAttempt', 'data.attemptCount'),
@@ -362,6 +369,7 @@ export const HANDOFF_READ_TASKS = [
       },
       HANDOFF_PRESET_CARRIED,
     ),
+    outputProjection: GITHUB_READ_PROJECTION,
   },
 ];
 

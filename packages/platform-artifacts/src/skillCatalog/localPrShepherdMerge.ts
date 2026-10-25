@@ -19,6 +19,7 @@ import {
   ctx,
   DECIDED_MERGE,
   github,
+  GITHUB_READ_PROJECTION,
   HEAD_REF,
   LEASE_TAKERS,
   NUMBER,
@@ -70,6 +71,7 @@ export const MERGE_READ_TASKS = [
       { owner: bind('owner'), repo: bind('repo'), branch: bind('baseRef'), per_page: 100 },
       SHEPHERD_RESPONSE_PRESETS.requiredRules,
     ),
+    outputProjection: GITHUB_READ_PROJECTION,
   },
 
   {
@@ -95,6 +97,7 @@ export const MERGE_READ_TASKS = [
       { owner: bind('owner'), repo: bind('repo'), branch: bind('baseRef') },
       { $concat: [`${SHEPHERD_RESPONSE_PRESETS.requiredProtection}:`, bind('ruleset')] },
     ),
+    outputProjection: GITHUB_READ_PROJECTION,
   },
 
   {
@@ -119,6 +122,7 @@ export const MERGE_READ_TASKS = [
       },
       SHEPHERD_RESPONSE_PRESETS.reviews,
     ),
+    outputProjection: GITHUB_READ_PROJECTION,
   },
 
   {
@@ -290,6 +294,7 @@ export const MERGE_TASKS = [
       { owner: bind('owner'), repo: bind('repo'), pull_number: bind('number') },
       { $concat: [`${SHEPHERD_RESPONSE_PRESETS.pullRequest}:`, bind('prefix')] },
     ),
+    outputProjection: GITHUB_READ_PROJECTION,
   },
 
   {
