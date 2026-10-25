@@ -3,6 +3,7 @@ import {
   SHEPHERD_HANDS_OFF_LABEL,
   SHEPHERD_LEASE_STALE_AFTER_MS,
   SHEPHERD_RESPONSE_PRESETS,
+  SCHEDULE_RENEWAL_WINDOW,
   type SkillCatalogEntry,
 } from '@aflow/schemas';
 import { COMMISSION_CHANGE } from './commissionChange.js';
@@ -52,6 +53,7 @@ import {
   SKIP,
   text,
 } from './localPrShepherdWiring.js';
+import { RENEWAL_TASKS, SCHEDULE_ID_SCHEMA, SCHEDULE_INPUT } from './localPrShepherdRenewal.js';
 import { LAST_TENDED, READ_TURN_TASK, REMEMBER_TURN_TASK } from './localPrShepherdTurn.js';
 import { PUBLISH_LOCAL_CHANGES } from './publishLocalChanges.js';
 
@@ -139,7 +141,7 @@ function withBindingDependencies<T extends ShepherdTask>(tasks: T[]): T[] {
 
 const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
   catalogId: 'local-pr-shepherd',
-  version: 13,
+  version: 14,
   name: 'Local PR Shepherd',
   tagline:
     "Tend the pull requests the loop opened: read their CI, fix and publish a red check through Local Publish, and merge a green one where the folder's merge posture allows — never approving or closing.",
@@ -151,7 +153,7 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
 
 **When it stops**: a pull request whose budget is spent and whose CI fails again is \`abandon\`: the handoff comment says why, and one Action Center item asks a person to take it — one per head, however many passes find it so. A push that moves the head is read again.
 
-**On a schedule**: passes overlap safely. Two on one pull request meet at its branch's lease, and the second acts on nothing.
+**On a schedule**: passes overlap safely. Two on one pull request meet at its branch's lease, and the second acts on nothing. The schedule renews itself: a pass handed \`${SCHEDULE_INPUT}\` — the Local PR Shepherd agent hands it the schedule that started it — reads that schedule, and where it is active and within ${String(SCHEDULE_RENEWAL_WINDOW)} firings of its cap creates its successor, the same agent, cron, input and expiry, which takes over from it. A schedule has one successor however many passes find it due, one its owner paused is not renewed, and the chain ends at the schedule's expiry.
 
 **What it never does**: approve or close a pull request, merge one where the posture is \`never\` or without the operator's approval, or push other than through Local Publish under the folder's push approval. A pull request a person opened, or one labelled \`${SHEPHERD_HANDS_OFF_LABEL}\`, is left untouched; a branch with a publication or a commission in flight, or whose pull request's plan node has any run in flight serving it, whoever started it, is \`wait\`; the same check run is acted on once, unless the base branch moved after its remedy — GitHub runs no check again for that, and a re-run would read the old base, so the base is merged in and published.
 
@@ -188,7 +190,7 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
       slug: 'local-pr-shepherd',
       name: 'Local PR Shepherd',
       description:
-        "One pass over the loop's open pull requests from a connected folder: read the folder, the pull request, its checks, its handoff and the work in flight on its branch — and, where the folder merges, the base branch's required checks, the people's reviews and the publication's verdict; decide by rules; for a red check, take the lease, read the failing jobs' logs, ask which remedy they want, re-run the jobs or commission the fix on the branch and publish it through Local Publish; for a green one the posture allows, take the lease and merge it by squash on the operator's approval; release the lease and write the handoff.",
+        "One pass over the loop's open pull requests from a connected folder: read the folder, the pull request, its checks, its handoff and the work in flight on its branch — and, where the folder merges, the base branch's required checks, the people's reviews and the publication's verdict; decide by rules; for a red check, take the lease, read the failing jobs' logs, ask which remedy they want, re-run the jobs or commission the fix on the branch and publish it through Local Publish; for a green one the posture allows, take the lease and merge it by squash on the operator's approval; release the lease and write the handoff; and renew the schedule that started the pass before its firings run out.",
       goal: "Keep the loop's pull requests moving through CI without a hand: a red check is fixed and pushed through Local Publish under the folder's posture, acted on once — again only where the base moved after its remedy, by merging the base in — within a budget, and never where a person or other work holds the branch; a green one is merged only where the folder's merge posture allows and the operator approves — with every pass recorded on the pull request.",
       mode: 'process' as const,
       outcomes: [
@@ -223,6 +225,13 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
           description: `How many failures of one pull request the shepherd acts on before it leaves the pull request to a person. Absent, ${String(SHEPHERD_ATTEMPT_BUDGET_DEFAULT)}.`,
           schema: ATTEMPT_BUDGET_SCHEMA,
         },
+        {
+          id: SCHEDULE_INPUT,
+          required: false,
+          description:
+            'The schedule that started the pass, handed on by the Local PR Shepherd agent: the pass renews it as its firings run out. Absent, the pass renews nothing.',
+          schema: SCHEDULE_ID_SCHEMA,
+        },
       ],
       tasks: withBindingDependencies([
         {
@@ -255,6 +264,12 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
                 path: 'attemptBudget',
                 schema: ATTEMPT_BUDGET_SCHEMA,
               },
+              [SCHEDULE_INPUT]: {
+                kind: 'run_input' as const,
+                bindAs: SCHEDULE_INPUT,
+                path: SCHEDULE_INPUT,
+                schema: SCHEDULE_ID_SCHEMA,
+              },
             },
           },
           context: ctx('host.binding.inspect'),
@@ -285,6 +300,8 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
             otherwise: AIM_OTHERWISE,
           },
         },
+
+        ...RENEWAL_TASKS,
 
         READ_TURN_TASK,
 
@@ -843,7 +860,7 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
       priority: 50,
     },
     rationale:
-      'Plan 321 P1, P2, P2b. Typed reads — folder, turn, pull requests, checks, handoff, lease, in-flight runs, and under when-green the required checks, reviews and the head publication verdict — then workflow.run.decide: first rule that holds decides, else fix; a refused read is wait, more check runs than a page is leave, merge follows every wait. Fix and merge take the lease. Fix reads failing jobs and logs; the remedy question routes to re-run, fix, bump or merge round, unsure to fix, published through Local Publish. Merge is squash pinned to the head behind its write approval; a base-moved refusal is sent once more, then handed back. The lease is released after leased work. Abandon claims its head after the handoff, or takes over a claim whose pass ended unanswered, and raises one item only on its claim. The pin keeps the attempt state and each remedy base: a deleted handoff restarts nothing; a base moved since a remedy is merged in. No step approves or closes; only merge merges.',
+      'Plan 321 P1, P2, P2b. Typed reads — folder, turn, pull requests, checks, handoff, lease, in-flight runs, and under when-green required checks, reviews and the head publication verdict — then workflow.run.decide: first rule that holds decides, else fix; a refused read is wait, over a page of check runs is leave, merge follows every wait. Fix and merge take the lease. Fix reads failing jobs and logs; the remedy question routes to re-run, fix, bump or merge round (unsure: fix), published via Local Publish. Merge is squash pinned to the head behind its write approval; a base-moved refusal is resent once, then handed back. Leased work releases the lease. Abandon claims its head after the handoff, or takes over an unanswered claim, and raises one item only on its claim. The pin keeps attempt state and each remedy base: a deleted handoff restarts nothing; a base moved since a remedy is merged in. Nothing approves or closes; only merge merges. A scheduled pass renews its schedule near the cap.',
   },
 };
 

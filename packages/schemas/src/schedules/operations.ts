@@ -7,6 +7,7 @@ import {
   ScheduleStatusSchema,
   FlowScheduleSchema,
 } from './schedule.js';
+import { SCHEDULE_RENEWAL_WINDOW } from './renewal.js';
 
 // ============================================================================
 // Guardrail constants
@@ -89,18 +90,62 @@ export function resolveSnoozeDelayMs(input: unknown): number {
 // agent.schedule.create
 // ============================================================================
 
-export const FlowScheduleCreateInputSchema = z
+const RENEWAL_EXCLUDED_FIELDS = [
+  'name',
+  'description',
+  'action',
+  'target',
+  'targetRunId',
+  'scheduledAt',
+  'cron',
+  'onFlowComplete',
+  'input',
+  'expiresAt',
+  'metadata',
+  'maxFirings',
+  'timezone',
+] as const;
+
+/**
+ * A renewal is `renews` alone. Checked on the input as sent, before defaults
+ * fill `maxFirings` and `timezone`: after them, a value the caller sent and
+ * one the schema supplied look the same.
+ */
+function refuseRenewalExtras(raw: unknown, ctx: z.RefinementCtx): unknown {
+  if (typeof raw !== 'object' || raw === null || !('renews' in raw)) return raw;
+  const sent = raw as Record<string, unknown>;
+  for (const field of RENEWAL_EXCLUDED_FIELDS) {
+    if (sent[field] !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `${field} is not used with renews: the successor copies the schedule it renews, its ${field} included. Pass renews alone.`,
+        path: [field],
+      });
+    }
+  }
+  return raw;
+}
+
+const FlowScheduleCreateFieldsSchema = z
   .object({
-    /** Human-readable name */
-    name: z.string().min(1).max(200),
+    renews: z
+      .string()
+      .uuid()
+      .optional()
+      .describe(
+        `Renew this recurring schedule instead of describing a new one: the successor copies its target, cron, timezone, input, maxFirings and expiresAt, and the schedule it renews expires as the successor takes over. Allowed only within ${String(SCHEDULE_RENEWAL_WINDOW)} firings of its maxFirings while it is active — agent.schedule.get reports renewalDue — and only for the schedule's own creator. A schedule has one successor: renewing it again returns that successor.`,
+      ),
+
+    /** Human-readable name (required unless renewing) */
+    name: z.string().min(1).max(200).optional(),
 
     /** Why this schedule exists */
     description: z.string().max(2000).optional(),
 
     // --- Intent ---
 
-    /** What to do: "start_run" (start a new flow run) or "resume_run" (resume a paused run). */
-    action: ScheduleActionSchema,
+    /** What to do: "start_run" (start a new flow run) or "resume_run" (resume a paused run). Required unless renewing. */
+    action: ScheduleActionSchema.optional(),
 
     target: z
       .union([
@@ -146,12 +191,16 @@ export const FlowScheduleCreateInputSchema = z
      * Run input for the scheduled flow. Standard format:
      *   { input: <primary value>, config?: { key: value } }
      * For agent flows, just set input to a string prompt.
-     * Supports template expressions: { $now: 'iso' }, { $sourceRef: 'output' }.
+     * Supports template expressions: { $now: 'iso' }, { $sourceRef: 'output' },
+     * { $schedule: 'id' } (the firing schedule's own id).
+     * Required unless renewing.
      */
-    input: z.object({
-      input: z.unknown().optional().describe('Primary input value (string prompt, object, etc.)'),
-      config: z.record(z.unknown()).optional().describe('Config overrides keyed by variable ID'),
-    }),
+    input: z
+      .object({
+        input: z.unknown().optional().describe('Primary input value (string prompt, object, etc.)'),
+        config: z.record(z.unknown()).optional().describe('Config overrides keyed by variable ID'),
+      })
+      .optional(),
 
     maxFirings: z
       .number()
@@ -170,6 +219,31 @@ export const FlowScheduleCreateInputSchema = z
     metadata: z.record(z.unknown()).optional(),
   })
   .superRefine((data, ctx) => {
+    if (data.renews !== undefined) return;
+    if (data.name === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'name is required, unless renews names a schedule to renew.',
+        path: ['name'],
+      });
+    }
+    if (data.action === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          'action is required: "start_run" or "resume_run" — unless renews names a schedule to renew.',
+        path: ['action'],
+      });
+    }
+    if (data.input === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "input is required — it becomes the scheduled run's input — unless renews names a schedule to renew.",
+        path: ['input'],
+      });
+    }
+
     // --- Action → target consistency ---
     if (data.action === 'start_run') {
       if (!data.target) {
@@ -224,6 +298,11 @@ export const FlowScheduleCreateInputSchema = z
       });
     }
   });
+
+export const FlowScheduleCreateInputSchema = z.preprocess(
+  refuseRenewalExtras,
+  FlowScheduleCreateFieldsSchema,
+);
 export type FlowScheduleCreateInput = z.infer<typeof FlowScheduleCreateInputSchema>;
 
 export const FlowScheduleCreateOutputSchema = z.object({
@@ -375,7 +454,8 @@ export const ScheduleOperationRegistrations: OperationRegistration[] = [
     semanticDescription:
       'Schedule an agent to run at a specific time, on a cron, or when another agent completes. ' +
       'Choose action: "start_run" (requires target — PersistentAgentTarget or "self") or "resume_run" (requires targetRunId, "self" = current run). ' +
-      "The input object is passed as the scheduled run's input.",
+      "The input object is passed as the scheduled run's input. " +
+      'A recurring schedule near its maxFirings is renewed with renews: <scheduleId> alone — one successor per schedule.',
     tags: ['schedule', 'flow', 'automation'],
     idempotency: 'non_idempotent',
     mutates: true,
@@ -387,6 +467,7 @@ export const ScheduleOperationRegistrations: OperationRegistration[] = [
         'Setting up recurring work (cron — provide cron expression)',
         'Reacting to another flow completing (provide onFlowComplete)',
         'Snoozing: pause current run, schedule resume later (targetRunId:"self")',
+        `Renewing a recurring schedule within ${String(SCHEDULE_RENEWAL_WINDOW)} firings of its maxFirings, so it keeps firing (renews: <scheduleId>, nothing else)`,
       ],
       whenNotToUse: [
         'Running a flow right now — use agent.control.delegate or agent.control.run_step',
@@ -394,7 +475,8 @@ export const ScheduleOperationRegistrations: OperationRegistration[] = [
       pitfalls: [
         'input is required — use { input: <value>, config?: {...} } format',
         'For agent flows, input.input is a string prompt',
-        'maxFirings is required for cron schedules (max 50)',
+        `maxFirings is at most ${String(MAX_FIRINGS_CAP)} and defaults to it; a recurring schedule that must outlast it is renewed with renews, which keeps its expiresAt`,
+        "A run that renews the schedule which started it needs that schedule's id: put { $schedule: 'id' } in the schedule's input",
       ],
       minimalExampleInput: {
         name: 'Check tax reports',

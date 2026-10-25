@@ -84,6 +84,7 @@ export async function applyBundledAgents(params: {
           name: agent.name,
           description: agent.description,
           folderInput: agent.folderInput,
+          ...(agent.scheduleInput !== undefined ? { scheduleInput: agent.scheduleInput } : {}),
           folders,
         }) as unknown as Parameters<typeof repo.create>[0]['initialVersion']['definition'],
       },

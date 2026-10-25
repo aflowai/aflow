@@ -1,4 +1,5 @@
 import type { AgentScheduleRow } from '@aflow/database';
+import { isScheduleRenewalDue, scheduleFiringsLeft, type FlowSchedule } from '@aflow/schemas';
 
 // ============================================================================
 // Helpers
@@ -14,6 +15,14 @@ export function rowToResponse(row: AgentScheduleRow): Record<string, unknown> {
     target = { kind: 'custom-agent', agentId: row.targetAgentId };
     flowIdLegacy = row.targetAgentId;
   }
+  const expiresAt = row.expiresAt ? row.expiresAt.toISOString() : null;
+  const facts = {
+    kind: row.kind as FlowSchedule['kind'],
+    status: row.status as FlowSchedule['status'],
+    maxFirings: row.maxFirings,
+    firingCount: row.firingCount,
+    expiresAt,
+  };
   return {
     id: row.id,
     spaceId: row.spaceId,
@@ -34,14 +43,17 @@ export function rowToResponse(row: AgentScheduleRow): Record<string, unknown> {
     status: row.status,
     maxFirings: row.maxFirings ?? null,
     firingCount: row.firingCount,
+    firingsLeft: scheduleFiringsLeft(facts),
+    renewalDue: isScheduleRenewalDue(facts),
     lastFiredAt: row.lastFiredAt ? row.lastFiredAt.toISOString() : null,
     lastRunId: row.lastSessionId ?? null,
     nextFireAt: row.nextFireAt ? row.nextFireAt.toISOString() : null,
-    expiresAt: row.expiresAt ? row.expiresAt.toISOString() : null,
+    expiresAt,
     lastError: row.lastError ?? null,
     createdBy: row.createdBy ?? null,
     createdByRunId: row.createdBySessionId ?? null,
     metadata: row.metadata ?? {},
+    renewsScheduleId: row.renewsScheduleId ?? null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };

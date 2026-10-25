@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, isNotNull, ne } from 'drizzle-orm';
+import { and, desc, eq, gte, isNotNull, isNull, ne } from 'drizzle-orm';
 import { agentSchedules, createTenantContext, withTenantSchema } from '@aflow/database';
 
 import {
@@ -23,6 +23,18 @@ const LIST_LIMIT = 20;
  * moment it appeared.
  */
 const NEWS_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Whether a schedule is news of an arming: armed by an agent in conversation,
+ * and not a renewal — a renewal is the trigger already announced, continuing,
+ * and announcing it again at every renewal is the dismissable noise the
+ * operator-created exclusion avoids.
+ */
+export function announcesArming(
+  row: Pick<typeof agentSchedules.$inferSelect, 'createdBySessionId' | 'renewsScheduleId'>,
+): boolean {
+  return row.createdBySessionId !== null && row.renewsScheduleId === null;
+}
 
 /**
  * A trigger an agent armed, surfaced once so the operator learns it exists.
@@ -59,6 +71,7 @@ export function createTriggerArmedSource(deps: ActionCenterSourceDeps): ActionCe
                 // A session id is the record that an agent armed it in
                 // conversation; an operator acting through the API leaves none.
                 isNotNull(agentSchedules.createdBySessionId),
+                isNull(agentSchedules.renewsScheduleId),
                 ne(agentSchedules.status, 'deleted'),
                 gte(agentSchedules.createdAt, new Date(Date.now() - NEWS_WINDOW_MS)),
               ),
@@ -66,7 +79,7 @@ export function createTriggerArmedSource(deps: ActionCenterSourceDeps): ActionCe
             .orderBy(desc(agentSchedules.createdAt))
             .limit(LIST_LIMIT),
       );
-      return rows.map((row) => toItem(row));
+      return rows.filter(announcesArming).map((row) => toItem(row));
     },
 
     async getById(
@@ -83,7 +96,7 @@ export function createTriggerArmedSource(deps: ActionCenterSourceDeps): ActionCe
           .limit(1),
       );
       const row = rows[0];
-      if (row?.createdBySessionId == null) return null;
+      if (row === undefined || !announcesArming(row)) return null;
       return toItem(row);
     },
 
