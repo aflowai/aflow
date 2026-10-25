@@ -25,6 +25,12 @@ import {
 } from './publishLocalChangesMessage.js';
 import { overrideTasks } from './publishLocalChangesOverride.js';
 import {
+  BASE,
+  REPOSITORY,
+  REPOSITORY_TASK_IDS,
+  repositoryTasks,
+} from './publishLocalChangesRepository.js';
+import {
   CHECK_FAILED,
   CHECKS_COULD_NOT_RUN,
   CHECKS_STOPPED,
@@ -332,7 +338,7 @@ const ENTRY_INPUT_CONTRACT = {
 
 const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'publish-local-changes',
-  version: 44,
+  version: 45,
   name: 'Publish Local Changes',
   tagline:
     'Commit a patch onto a branch of a connected repository, then push it and open the pull request — asking the operator first unless the folder says otherwise.',
@@ -483,27 +489,29 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
         },
         {
           id: 'owner',
-          required: true,
+          required: false,
           description:
-            "The repository owner — the account or organisation in the folder's `origin` remote — by name alone, not a URL or `owner/repo`.",
+            "The repository owner by name alone, not a URL or `owner/repo` — only to publish somewhere other than the folder's `origin`, whose owner the run reads from the folder when this is left out.",
           schema: OWNER_SCHEMA,
         },
         {
           id: 'repo',
-          required: true,
+          required: false,
           description:
-            "The repository name alone, from the folder's `origin` remote — not a URL or `owner/repo`.",
+            "The repository name alone, not a URL or `owner/repo` — only to publish somewhere other than the folder's `origin`, whose name the run reads from the folder when this is left out.",
           schema: REPO_SCHEMA,
         },
         {
           id: 'base',
-          required: true,
-          description: 'The branch the pull request targets.',
-          schema: { type: 'string', minLength: 1, maxLength: 200, default: 'main' },
+          required: false,
+          description:
+            "The branch the pull request targets, by name alone — only to target another than the repository's default branch, which the run reads from the folder (the branch `origin`'s HEAD names) when this is left out.",
+          schema: { type: 'string', minLength: 1, maxLength: 200 },
         },
       ],
       tasks: [
         ...commitMessageTasks(ENTRY_INPUT_CONTRACT),
+        ...repositoryTasks('message-from'),
 
         {
           taskId: 'commit',
@@ -511,7 +519,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           goal: "Apply the patch in a detached worktree and commit it, under the caller's message or the commission's summary — on a new branch at the commit the patch was made against (the connected folder's last commit when none is given), or on top of the existing branch it was made on — after fetching the base branch from `origin`, so the commit reports everything a push of it would add. With no change given, commit nothing and report the branch's head as it stands. The operator's working tree is not touched, and nothing leaves the machine.",
           type: 'operation' as const,
           operation: 'host.file.patch',
-          dependsOn: ['message-from', 'find-commission', 'read-commission'],
+          dependsOn: ['message-from', 'find-commission', 'read-commission', ...REPOSITORY_TASK_IDS],
           retryability: 'unsafe' as const,
           inputBindings: {
             bindingId: { kind: 'run_input' as const, path: 'bindingId' },
@@ -521,7 +529,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             baseSha: { kind: 'run_input' as const, path: 'baseSha' },
             mergeFrom: { kind: 'run_input' as const, path: 'mergeFrom' },
             ...COMMIT_MESSAGE_BINDINGS,
-            base: { kind: 'run_input' as const, path: 'base' },
+            base: BASE,
           },
           context: {
             strategy: 'scoped' as const,
@@ -715,8 +723,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           retryability: 'safe' as const,
           maxAttempts: 1,
           inputBindings: {
-            owner: { kind: 'run_input' as const, path: 'owner' },
-            repo: { kind: 'run_input' as const, path: 'repo' },
+            ...REPOSITORY,
           },
           context: {
             strategy: 'scoped' as const,
@@ -1093,7 +1100,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           inputBindings: {
             bindingId: { kind: 'run_input' as const, path: 'bindingId' },
             refspec: { kind: 'task_output' as const, taskId: 'commit', path: 'commit.pushRefspec' },
-            base: { kind: 'run_input' as const, path: 'base' },
+            base: BASE,
             receipt: { kind: 'task_output' as const, taskId: 'scan-commit', path: 'receipt' },
             checkReceipt: {
               kind: 'task_output' as const,
@@ -1148,10 +1155,9 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           retryability: 'safe' as const,
           maxAttempts: 2,
           inputBindings: {
-            owner: { kind: 'run_input' as const, path: 'owner' },
-            repo: { kind: 'run_input' as const, path: 'repo' },
+            ...REPOSITORY,
             branch: { kind: 'run_input' as const, path: 'branch' },
-            base: { kind: 'run_input' as const, path: 'base' },
+            base: BASE,
           },
           context: {
             strategy: 'scoped' as const,
@@ -1221,8 +1227,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           // The title only where a person passed one: a title edited on
           // GitHub since is theirs, and the slice's would overwrite it.
           inputBindings: {
-            owner: { kind: 'run_input' as const, path: 'owner' },
-            repo: { kind: 'run_input' as const, path: 'repo' },
+            ...REPOSITORY,
             prNumber: { kind: 'task_output' as const, taskId: 'find-pr', path: 'prNumber' },
             title: { kind: 'run_input' as const, path: 'title' },
             body: { kind: 'task_output' as const, taskId: 'describe-pr', path: 'body' },
@@ -1269,10 +1274,9 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           retryability: 'unsafe' as const,
           maxAttempts: 2,
           inputBindings: {
-            owner: { kind: 'run_input' as const, path: 'owner' },
-            repo: { kind: 'run_input' as const, path: 'repo' },
+            ...REPOSITORY,
             branch: { kind: 'run_input' as const, path: 'branch' },
-            base: { kind: 'run_input' as const, path: 'base' },
+            base: BASE,
             title: { kind: 'task_output' as const, taskId: 'describe-pr', path: 'title' },
             body: { kind: 'task_output' as const, taskId: 'describe-pr', path: 'body' },
           },
@@ -1487,7 +1491,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
       priority: 50,
     },
     rationale:
-      "Twenty-eight tasks, the approval between local and published. The message is the caller's, or the commission's summary read from its run. The commit lands in a detached worktree; checks run, test timeouts alone rerun; the scan reads all a push adds, a finding fails the run. Under unless-unreviewed a Local Code Review runs; the rounds rule decides: not approve is fix_before_merge; approve is publish_as_is over nits or past round 1, else fix_before_merge. An override is verified on GitHub or at the approval, or fails the run. decide-push gates the push by rules: uncleared scan or always asks, never pushes; fix_before_merge keeps the branch local and hands fixRound its commission inputs; publish_as_is pushes, asking over a blocker, major or the operator's word. The verdict is reread from the review run. No task starts a publication. Push argv pinned bar the refspec; the executor re-measures origin/<base> and needs the check receipt; an open PR is PATCHed.",
+      "The approval between local and published. Repo and base default to the folder's. The message is the caller's, or the commission's summary read from its run. The commit lands in a detached worktree; checks run, test timeouts alone rerun; the scan reads all a push adds, a finding fails the run. Under unless-unreviewed a Local Code Review runs; the rounds rule decides: not approve is fix_before_merge; approve is publish_as_is over nits or past round 1, else fix_before_merge. An override is verified on GitHub or at the approval, or fails the run. decide-push gates the push by rules: uncleared scan or always asks, never pushes; fix_before_merge keeps the branch local and hands fixRound its commission inputs; publish_as_is pushes, asking over a blocker, major or the operator's word. The verdict is reread from the review run. No task starts a publication. Push argv pinned bar the refspec; the executor re-measures origin/<base> and needs the check receipt; an open PR is PATCHed.",
   },
 };
 

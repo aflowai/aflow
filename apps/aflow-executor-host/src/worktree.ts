@@ -737,12 +737,39 @@ export async function resolveBase(root: string, base: string): Promise<string> {
   );
 }
 
+/** What `remote` says its default branch is: the branch, why it could not be asked, or nothing. */
+export type RemoteDefaultBranch =
+  { readonly branch: string } | { readonly unreachable: string } | { readonly unnamed: true };
+
+/** The branch `remote`'s HEAD names, refused under `unknown` where the remote cannot say. */
+async function remoteDefaultBranch(root: string, remote: string, unknown: string): Promise<string> {
+  const head = await readRemoteDefaultBranch(root, remote);
+  if ('branch' in head) return head.branch;
+  if ('unreachable' in head) {
+    throw new WorktreeError(
+      `${unknown}, and \`${remote}\` could not be asked for its default branch to look for it ` +
+        `there: ${head.unreachable}. The folder must reach ` +
+        `\`${remote}\` the way the operator's own git does; otherwise name a branch, a tag or ` +
+        'a commit the folder has.',
+      'fetch_failed',
+    );
+  }
+  throw new WorktreeError(
+    `${unknown}, and \`${remote}\` names no default branch to look for it on. ` +
+      'Name a branch, a tag or a commit the folder has.',
+    'unknown_ref',
+  );
+}
+
 /**
  * The branch `remote`'s HEAD names: from the folder's `refs/remotes/<remote>/HEAD`
- * where a clone recorded it, otherwise asked of the remote. `unknown` opens the
- * refusal when the remote cannot say.
+ * where a clone recorded it, otherwise asked of the remote with
+ * `git ls-remote --symref` through the operator's own transport.
  */
-async function remoteDefaultBranch(root: string, remote: string, unknown: string): Promise<string> {
+export async function readRemoteDefaultBranch(
+  root: string,
+  remote: string,
+): Promise<RemoteDefaultBranch> {
   const tracked = `refs/remotes/${remote}/`;
   const recorded = (
     await git(root, ['symbolic-ref', '--quiet', `${tracked}HEAD`]).catch(() => '')
@@ -766,24 +793,12 @@ async function remoteDefaultBranch(root: string, remote: string, unknown: string
         { timeout: GIT_TIMEOUT_MS, maxBuffer: 64 * 1024, env: transportEnv() },
       ));
     } catch (error) {
-      throw new WorktreeError(
-        `${unknown}, and \`${remote}\` could not be asked for its default branch to look for it ` +
-          `there: ${remoteFailure(error, 'git ls-remote failed')}. The folder must reach ` +
-          `\`${remote}\` the way the operator's own git does; otherwise name a branch, a tag or ` +
-          'a commit the folder has.',
-        'fetch_failed',
-      );
+      return { unreachable: remoteFailure(error, 'git ls-remote failed') };
     }
     branch = /^ref: refs\/heads\/(\S+)\tHEAD$/m.exec(listed)?.[1] ?? '';
   }
-  if (branch === '' || !(await isPlainRefName(root, branch))) {
-    throw new WorktreeError(
-      `${unknown}, and \`${remote}\` names no default branch to look for it on. ` +
-        'Name a branch, a tag or a commit the folder has.',
-      'unknown_ref',
-    );
-  }
-  return branch;
+  if (branch === '' || !(await isPlainRefName(root, branch))) return { unnamed: true };
+  return { branch };
 }
 
 /** The commit `ref` names in the folder, or nothing where it names none. */

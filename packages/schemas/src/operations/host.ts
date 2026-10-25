@@ -1360,11 +1360,26 @@ export function parseGitHubRemote(url: string): HostGitHubOrigin | undefined {
   return parsed.success ? parsed.data : undefined;
 }
 
+export const HostFolderOriginSchema = HostGitHubOriginSchema.extend({
+  defaultBranch: z
+    .string()
+    .min(1)
+    .max(200)
+    .optional()
+    .describe(
+      "The repository's default branch, by name alone — the branch `origin`'s HEAD names, read " +
+        "from the folder's `refs/remotes/origin/HEAD`, else asked of `origin` itself. Absent " +
+        'where neither can say.',
+    ),
+});
+export type HostFolderOrigin = z.infer<typeof HostFolderOriginSchema>;
+
 export const HostBindingInspectOutputSchema = z.object({
   id: z.string(),
-  origin: HostGitHubOriginSchema.optional().describe(
+  origin: HostFolderOriginSchema.optional().describe(
     "The GitHub repository the folder's `origin` remote fetches from, as the operator's own git " +
-      'resolves its URL. Absent where the folder has no `origin`, or it is not on github.com.',
+      'resolves its URL, and its default branch. Absent where the folder has no `origin`, or it ' +
+      'is not on github.com.',
   ),
   branchPolicy: HostResolvedBranchPolicySchema.optional().describe(
     'Which branches a push from this folder may move, when a publication asks the operator ' +

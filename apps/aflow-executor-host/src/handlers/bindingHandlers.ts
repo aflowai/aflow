@@ -2,7 +2,8 @@
  * A connected folder's push posture, checks and sandbox posture, how many
  * coding agents its machine runs at once and whether it holds itself awake
  * while they run, read from the policy file on this machine — and the GitHub
- * repository its `origin` fetches from, read from its git config.
+ * repository its `origin` fetches from, read from its git config, with the
+ * branch its HEAD names.
  *
  * Read here rather than from the workspace's copy because both are only ever
  * declared here. Nothing in the folder is written, so a file-only binding
@@ -19,6 +20,7 @@ import {
 import {
   HostBindingInspectInputSchema,
   type HostBindingInspectOutputSchema,
+  type HostFolderOrigin,
   type HostGitHubOrigin,
   parseGitHubRemote,
   resolveBranchPolicy,
@@ -33,23 +35,34 @@ import {
   requireSpace,
 } from '../bindings.js';
 import { sandboxPostureOf } from '../sandboxPosture.js';
-import { isGitRepository, remoteFetchUrl, remoteNames } from '../worktree.js';
+import {
+  isGitRepository,
+  readRemoteDefaultBranch,
+  remoteFetchUrl,
+  remoteNames,
+} from '../worktree.js';
 
 type HostBindingInspectOutput = z.infer<typeof HostBindingInspectOutputSchema>;
 
 /**
- * The GitHub repository `origin` fetches from, where it is one. A folder that
- * is no repository, has no `origin`, or fetches from elsewhere has none, and
- * says nothing more: the read is for a skill that has GitHub to call.
+ * The GitHub repository `origin` fetches from, where it is one, and the branch
+ * its HEAD names. A folder that is no repository, has no `origin`, or fetches
+ * from elsewhere has none, and says nothing more: the read is for a skill that
+ * has GitHub to call. A default branch `origin` cannot be asked for is left
+ * out rather than guessed, so a caller names it instead.
  */
-async function githubOrigin(binding: HostBinding): Promise<HostGitHubOrigin | undefined> {
+async function githubOrigin(binding: HostBinding): Promise<HostFolderOrigin | undefined> {
   if (binding.singleFile || !(await isGitRepository(binding.root))) return undefined;
   if (!(await remoteNames(binding.root)).includes('origin')) return undefined;
+  let repository: HostGitHubOrigin | undefined;
   try {
-    return parseGitHubRemote(await remoteFetchUrl(binding.root, 'origin'));
+    repository = parseGitHubRemote(await remoteFetchUrl(binding.root, 'origin'));
   } catch {
     return undefined;
   }
+  if (repository === undefined) return undefined;
+  const head = await readRemoteDefaultBranch(binding.root, 'origin');
+  return 'branch' in head ? { ...repository, defaultBranch: head.branch } : repository;
 }
 
 async function inspect(ctx: ExecutorContext, policyPath: string): Promise<StepResult> {

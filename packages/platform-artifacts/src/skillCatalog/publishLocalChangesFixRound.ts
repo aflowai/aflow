@@ -1,5 +1,6 @@
 import type { WorkflowRunDecideRule } from '@aflow/schemas';
-import { bind, ctx, out, runInput, SKIP } from './localPrShepherdWiring.js';
+import { bind, ctx, out, SKIP } from './localPrShepherdWiring.js';
+import { BASE } from './publishLocalChangesRepository.js';
 
 /**
  * What a publication that decided `fix_before_merge` hands the round after it
@@ -58,7 +59,7 @@ function fixRoundTask(baseMoved: boolean) {
       baseMoved: out('commit', 'commit.baseMoved'),
       reviewRunId: out('review-commit', 'reviewRunId'),
       findings: out('describe-pr', 'findings'),
-      ...(baseMoved ? { base: runInput('base') } : {}),
+      ...(baseMoved ? { base: BASE } : {}),
     },
     context: ctx('workflow.run.decide'),
     inputTemplate: {

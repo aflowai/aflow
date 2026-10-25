@@ -11,6 +11,7 @@ import {
 } from './publishLocalChangesAfterReview.js';
 import { SHEPHERD_BUDGET_SPENT } from './localPrShepherdRules.js';
 import { bind, ctx, github, out, runInput, SKIP } from './localPrShepherdWiring.js';
+import { BASE, REPOSITORY } from './publishLocalChangesRepository.js';
 
 /**
  * An override sets the decision on the review's findings aside only on an
@@ -130,7 +131,6 @@ export const OVERRIDE_REFUSED = `An override is taken only on an authority the p
 
 const claimed = (authority: string) => `tasks.claim-override.output.decision == '${authority}'`;
 
-const REPOSITORY = { owner: runInput('owner'), repo: runInput('repo') };
 const NUMBER = { number: out('read-override-pr', 'data.pullRequests[0].number') };
 
 /**
@@ -190,7 +190,7 @@ export function overrideTasks(checksCleared: { anyOf: string[]; onMissingRef: ty
       inputBindings: {
         ...REPOSITORY,
         branch: runInput('branch'),
-        base: runInput('base'),
+        base: BASE,
         prefix: out('read-push-approval', 'branchPolicy.branchPrefix'),
       },
       context: ctx('api.http.call'),

@@ -58,6 +58,7 @@ import { COMMISSION_CHANGE, COMMISSION_RESULT_SCHEMA } from './commissionChange.
 import { PUBLISH_LOCAL_CHANGES } from './publishLocalChanges.js';
 import { PUSH_GATE_OTHERWISE, PUSH_GATE_RULES } from './publishLocalChangesGate.js';
 import { PUBLISH_AS_IT_STANDS } from './publishLocalChangesProse.js';
+import { REPOSITORY_UNKNOWN_FAILURE } from './publishLocalChangesRepository.js';
 import { AFTER_REVIEW_QUESTION, AFTER_REVIEW_ROUTES } from './publishLocalChangesDecisions.js';
 import { SKILL_CATALOG } from './index.js';
 import { LOCAL_PR_SHEPHERD } from './localPrShepherd.js';
@@ -103,6 +104,15 @@ const COMMIT = {
 const STRANDED = 'd'.repeat(40);
 
 /** The run of the review a publication starts. */
+/** The repository and base as every task after the folder read binds them. */
+const SETTLED_OWNER = {
+  kind: 'task_output',
+  taskId: 'resolve-repository',
+  path: 'repository.owner',
+};
+const SETTLED_REPO = { kind: 'task_output', taskId: 'resolve-repository', path: 'repository.repo' };
+const SETTLED_BASE = { kind: 'task_output', taskId: 'resolve-repository', path: 'repository.base' };
+
 const REVIEW_RUN_ID = '0a0b0c0d-1111-4222-8333-444455556666';
 
 /** The branch's head as `host.file.patch` reports it when published as it stands. */
@@ -175,13 +185,16 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     expect(validity.status).toBe('valid');
   });
 
-  it('is thirty tasks — where the commit message comes from, the commission found, a named one checked against it and the stop on one that differs, its summary read, commit, check, the stop on a failed check, scan, what decides the approval, the review, its findings decided by the rounds rule, the check of an override and the stop on its refusal, the pull request composed, the push gate, the fix round handed its branch, approve, push, the pull request found, rewritten or opened, and the review read back', () => {
+  it('is thirty-three tasks — where the commit message comes from, the commission found, a named one checked against it and the stop on one that differs, its summary read, the folder read, the repository settled and the stop where none is, commit, check, the stop on a failed check, scan, what decides the approval, the review, its findings decided by the rounds rule, the check of an override and the stop on its refusal, the pull request composed, the push gate, the fix round handed its branch, approve, push, the pull request found, rewritten or opened, and the review read back', () => {
     expect(wf.tasks.map((t) => t.taskId)).toEqual([
       'message-from',
       'find-commission',
       'check-commission',
       'commission-refused',
       'read-commission',
+      'read-folder',
+      'resolve-repository',
+      'repository-unknown',
       'commit',
       'check-commit',
       'checks-failed',
@@ -222,7 +235,16 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
         'check-commission',
         'commission-refused',
       ],
-      commit: ['message-from', 'find-commission', 'read-commission'],
+      'read-folder': ['message-from'],
+      'resolve-repository': ['read-folder'],
+      'repository-unknown': ['resolve-repository'],
+      commit: [
+        'message-from',
+        'find-commission',
+        'read-commission',
+        'resolve-repository',
+        'repository-unknown',
+      ],
       'check-commit': ['commit'],
       'checks-failed': ['check-commit'],
       'recheck-commit': ['commit', 'check-commit'],
@@ -281,6 +303,9 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       'check-commission': 'workflow.run.decide',
       'commission-refused': 'workflow.run.fail',
       'read-commission': 'workflow.run.detail',
+      'read-folder': 'host.binding.inspect',
+      'resolve-repository': 'workflow.run.decide',
+      'repository-unknown': 'workflow.run.fail',
       commit: 'host.file.patch',
       'check-commit': 'host.commit.check',
       'checks-failed': 'workflow.run.fail',
@@ -322,8 +347,8 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     expect(openPrParams['owner']).toEqual({ $bind: 'owner' });
     expect(openPrParams['repo']).toEqual({ $bind: 'repo' });
     expect(read.inputBindings).toEqual({
-      owner: { kind: 'run_input', path: 'owner' },
-      repo: { kind: 'run_input', path: 'repo' },
+      owner: SETTLED_OWNER,
+      repo: SETTLED_REPO,
     });
     const kinds = Object.values(read.inputBindings ?? {}).map((b) => b.kind);
     expect(kinds).not.toContain('connection_binding');
@@ -386,7 +411,7 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
         pushBase: { $bind: 'base' },
       },
     });
-    expect(commit.inputBindings?.['base']).toEqual({ kind: 'run_input', path: 'base' });
+    expect(commit.inputBindings?.['base']).toEqual(SETTLED_BASE);
     // A commit is not replayable — after the first attempt the branch exists
     // or has moved, and the operation refuses what no longer matches.
     expect(commit.retryability).toBe('unsafe');
@@ -650,7 +675,7 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     expect(push.inputBindings).toEqual({
       bindingId: { kind: 'run_input', path: 'bindingId' },
       refspec: { kind: 'task_output', taskId: 'commit', path: 'commit.pushRefspec' },
-      base: { kind: 'run_input', path: 'base' },
+      base: SETTLED_BASE,
       receipt: { kind: 'task_output', taskId: 'scan-commit', path: 'receipt' },
       checkReceipt: { kind: 'task_output', taskId: 'check-commit', path: 'receipt' },
       recheckReceipt: { kind: 'task_output', taskId: 'recheck-commit', path: 'receipt' },
@@ -806,7 +831,7 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     const template = findPr.inputTemplate;
     if (template === undefined) throw new Error('find-pr must carry a template');
     const declared = new Set(Object.keys(findPr.inputBindings ?? {}));
-    expect(findPr.inputBindings?.['base']).toEqual({ kind: 'run_input', path: 'base' });
+    expect(findPr.inputBindings?.['base']).toEqual(SETTLED_BASE);
     expect(
       substituteTemplateBinds(
         template,
@@ -878,7 +903,8 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     const required = (wf.runInputs ?? []).filter((i) => i.required).map((i) => i.id);
     // The commit message is a change's: a branch published as it stands keeps its head's.
     // The pull request's title is the slice's unless a person gives their own.
-    expect(required).toEqual(['bindingId', 'branch', 'owner', 'repo', 'base']);
+    // The repository and the base are the folder's, unless the caller overrides them.
+    expect(required).toEqual(['bindingId', 'branch']);
   });
 
   it('references no eval-plane operation', () => {
@@ -1081,6 +1107,11 @@ function checkResult(check: Check): Record<string, unknown> {
 
 interface Scenario {
   pushApproval: HostPushApproval | 'no-prefix';
+  /**
+   * The `origin` the folder's inspection reports; absent is `FOLDER_ORIGIN`, and
+   * null a folder whose `origin` is not on GitHub.
+   */
+  folderOrigin?: Record<string, unknown> | null;
   review: Review;
   decision: Decision;
   committed?: boolean;
@@ -1269,6 +1300,16 @@ function rawOutput(
       return checkResult(scenario.recheck ?? 'passed');
     case 'scan-commit':
       return scanResult(scenario.scan ?? 'clean');
+    case 'read-folder':
+      return HostBindingInspectOutputSchema.parse({
+        id: 'hb_app',
+        sandbox: HOST_SANDBOX_POSTURE_DEFAULT,
+        maxConcurrentHarnessRuns: HOST_HARNESS_CONCURRENCY_DEFAULT,
+        keepAwake: HOST_KEEP_AWAKE_DEFAULT,
+        ...(scenario.folderOrigin === null
+          ? {}
+          : { origin: scenario.folderOrigin ?? FOLDER_ORIGIN }),
+      });
     case 'read-repository':
       return { statusCode: 200, data: { full_name: 'aflowai/aflow' } };
     case 'read-push-approval':
@@ -1309,6 +1350,7 @@ function rawOutput(
       return scenario.describeRefused === true ? {} : describedPullRequest(input);
     // The rules each decision is handed, decided as the orchestrator decides them.
     case 'message-from':
+    case 'resolve-repository':
     case 'check-commission':
     case 'settle-after-review':
     case 'claim-override':
@@ -1397,11 +1439,13 @@ function readOutput(
   return value;
 }
 
-/** The run's own inputs, as a publication is started with them. */
+/** The repository the folder's `origin` fetches from, and the branch its HEAD names. */
+const FOLDER_ORIGIN = { owner: 'aflowai', repo: 'aflow', defaultBranch: 'main' };
+
+/** The run's own inputs, as a publication is started with them: the repository and base are the folder's. */
 const RUN_INPUTS: Readonly<Record<string, unknown>> = {
   bindingId: 'folder-1',
   branch: 'aflow/x',
-  base: 'main',
 };
 
 /** A publication of the branch as it stands: its head named, and no change, merge or message. */
@@ -1799,7 +1843,7 @@ describe('Publish Local Changes — the folder decides whether the push asks', (
     expect(outcome).toMatchObject({
       asked: false,
       pushed: false,
-      ran: ['message-from', 'commit'],
+      ran: ['message-from', 'read-folder', 'resolve-repository', 'commit'],
       state: {},
     });
   });
@@ -2421,6 +2465,8 @@ describe('Publish Local Changes — a branch is published as it stands', () => {
     });
     expect(outcome.ran).toEqual([
       'message-from',
+      'read-folder',
+      'resolve-repository',
       'commit',
       'check-commit',
       'scan-commit',
@@ -4146,5 +4192,116 @@ describe('Publish Local Changes — a review retried in place records its final 
       reviewRunId: REVIEW_RUN_ID,
       reviewed: { at: HEAD },
     });
+  });
+});
+
+describe("Publish Local Changes — the repository and base are the folder's unless the caller names them", () => {
+  /** A start naming only what the folder cannot say. */
+  const MINIMAL = {
+    bindingId: 'hb_aflow',
+    patchRef: 'gs://file-store/x/patch.json',
+    branch: 'aflow/x',
+    baseSha: BASE,
+    commitMessage: 'Fix the thing\n\nWhy it was broken.',
+  };
+  const TRUNK = { owner: 'aflowai', repo: 'aflow', defaultBranch: 'trunk' };
+
+  function opened(inputs: Record<string, unknown>, folderOrigin?: Record<string, unknown> | null) {
+    return publish({
+      pushApproval: 'never',
+      review: 'approve',
+      decision: 'approved',
+      inputs,
+      ...(folderOrigin !== undefined ? { folderOrigin } : {}),
+    });
+  }
+
+  /** Where each task that names the repository or the base pointed. */
+  function targets(outcome: Outcome) {
+    const params = (taskId: string) =>
+      (outcome.inputs.get(taskId)?.['params'] ?? {}) as Record<string, unknown>;
+    const commit = outcome.inputs.get('commit')?.['commit'] as Record<string, unknown> | undefined;
+    return {
+      commitBase: commit?.['pushBase'],
+      pushBase: outcome.inputs.get('push')?.['pushBase'],
+      readRepository: params('read-repository'),
+      findPr: params('find-pr'),
+      openPr: params('open-pr'),
+    };
+  }
+
+  it('starts with only the folder, the change, the branch, its base sha and the message', () => {
+    const entry = taskOrThrow('message-from');
+    const result = validateParentTaskInputs(entry, MINIMAL, wf.runInputs);
+    expect(result.ok).toBe(true);
+    for (const id of ['owner', 'repo', 'base']) {
+      expect(runInputOrThrow(id).required, id).toBe(false);
+      // A default would stand in for the folder's own branch, which is the guess this removes.
+      expect((runInputOrThrow(id).schema as { default?: unknown }).default, id).toBeUndefined();
+    }
+  });
+
+  it("opens the pull request in the folder's repository, against its default branch", () => {
+    const outcome = opened(MINIMAL, TRUNK);
+    expect(outcome.pushed).toBe(true);
+    expect(outcome.ran).not.toContain('repository-unknown');
+    expect(targets(outcome)).toEqual({
+      commitBase: 'trunk',
+      pushBase: 'trunk',
+      readRepository: { owner: 'aflowai', repo: 'aflow' },
+      findPr: {
+        owner: 'aflowai',
+        repo: 'aflow',
+        head: 'aflowai:aflow/x',
+        base: 'trunk',
+        state: 'open',
+      },
+      openPr: expect.objectContaining({
+        owner: 'aflowai',
+        repo: 'aflow',
+        body: expect.objectContaining({ head: 'aflow/x', base: 'trunk' }),
+      }),
+    });
+    expect(outcome.state['prUrl']).toBe('https://github.com/aflowai/aflow/pull/7');
+  });
+
+  it("takes each of `owner`, `repo` and `base` the caller passes over the folder's", () => {
+    const overridden = targets(
+      opened({ ...MINIMAL, owner: 'fork-owner', repo: 'fork', base: 'release' }, TRUNK),
+    );
+    expect(overridden.commitBase).toBe('release');
+    expect(overridden.pushBase).toBe('release');
+    expect(overridden.readRepository).toEqual({ owner: 'fork-owner', repo: 'fork' });
+    expect(overridden.openPr).toMatchObject({
+      owner: 'fork-owner',
+      repo: 'fork',
+      body: { head: 'aflow/x', base: 'release' },
+    });
+
+    // One override alone leaves the other two the folder's.
+    const baseOnly = targets(opened({ ...MINIMAL, base: 'release' }, TRUNK));
+    expect(baseOnly.readRepository).toEqual({ owner: 'aflowai', repo: 'aflow' });
+    expect(baseOnly.openPr).toMatchObject({ body: { base: 'release' } });
+  });
+
+  it('stops before committing where neither the caller nor the folder names them, saying what to pass', () => {
+    for (const folderOrigin of [null, { owner: 'aflowai', repo: 'aflow' }]) {
+      const outcome = opened(MINIMAL, folderOrigin);
+      expect(outcome.ran, JSON.stringify(folderOrigin)).toContain('repository-unknown');
+      expect(outcome.statuses.get('repository-unknown')).toBe('failed');
+      expect(outcome.ran).not.toContain('commit');
+      expect(outcome.pushed).toBe(false);
+    }
+    expect(taskOrThrow('repository-unknown').inputTemplate).toEqual({
+      reason: REPOSITORY_UNKNOWN_FAILURE,
+    });
+    expect(REPOSITORY_UNKNOWN_FAILURE).toContain('Nothing was committed');
+    expect(REPOSITORY_UNKNOWN_FAILURE).toContain('`owner` and `repo`');
+    expect(REPOSITORY_UNKNOWN_FAILURE).toContain('`base` for the branch');
+
+    // A folder off GitHub publishes once the caller names all three.
+    const named = opened({ ...MINIMAL, owner: 'aflowai', repo: 'aflow', base: 'main' }, null);
+    expect(named.ran).not.toContain('repository-unknown');
+    expect(named.pushed).toBe(true);
   });
 });

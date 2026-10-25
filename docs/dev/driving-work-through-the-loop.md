@@ -106,8 +106,9 @@ its outcome as it is marked done, and no firing commissions it (`wait`, `awaitin
    `.aflow/` but the result file, and the agent starts or stops no process. Part 2 is the
    publication, started once the commission's end has woken the conversation: by
    `patchRef`, `baseSha` the commission's, `mergeFrom` its `merge.from` where it merged,
-   the commission's run id as `commission`, `base: main`, the branch, owner
-   and repository, the findings of the review rounds before it as `findings` — each as the
+   the commission's run id as `commission`, the branch — the repository and the base
+   branch are the folder's own `origin` and default branch, so `owner`, `repo` and `base`
+   are passed only to publish elsewhere — the findings of the review rounds before it as `findings` — each as the
    review named it, marked `closed` or `open` — and what the commissions reported they left
    undone or could not verify as `gaps`, started with `wait: 'none'` and the same
    `planNodeId`, and the run id reported back. The pull request's title and body are
