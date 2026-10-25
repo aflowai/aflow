@@ -8,6 +8,7 @@ import {
 import { skillPlacement } from '@aflow/schemas';
 import type { InlineHandlerArgs } from './types.js';
 import { emitStepSuccess, emitStepError } from './helpers.js';
+import { readInlineInput } from './readInlineInput.js';
 import { requireSpaceId } from './spaceScope.js';
 
 export function isHelmsmanSkillCaller(context: {
@@ -20,9 +21,9 @@ export function isHelmsmanSkillCaller(context: {
 export async function handleSkillSearch(args: InlineHandlerArgs): Promise<void> {
   const start = Date.now();
   try {
-    const input = SkillSearchInputSchema.parse(
-      await args.payloadStore.retrieve(args.resolvedInputRef),
-    );
+    const raw = await readInlineInput(args, start);
+    if (!raw) return;
+    const input = SkillSearchInputSchema.parse(raw);
     const result = await searchInstalledSkills(
       { db: getDatabase(), tenantId: args.context.tenantId, spaceId: requireSpaceId(args.context) },
       input,

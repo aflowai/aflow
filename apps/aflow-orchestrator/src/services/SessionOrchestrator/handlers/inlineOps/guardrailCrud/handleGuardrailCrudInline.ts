@@ -15,6 +15,7 @@ import { requireSpaceId } from '../spaceScope.js';
 import { classifyInlineCrudCatch } from '../classifyInlineCatch.js';
 import { getOrchestratorLogger } from '../../../../../lib/orchestratorLogger.js';
 import { publishGuardrailCacheInvalidation } from './cache.js';
+import { readInlineInput } from '../readInlineInput.js';
 
 // ============================================================================
 // guardrail.policy.* / guardrail.violation.* — Guardrail CRUD
@@ -23,12 +24,10 @@ import { publishGuardrailCacheInvalidation } from './cache.js';
 export async function handleGuardrailCrudInline(args: InlineHandlerArgs): Promise<void> {
   const {
     redis,
-    payloadStore,
     context,
     stepDef,
     stepExecutionId: _stepExecutionId,
     idempotencyKey: _idempotencyKey,
-    resolvedInputRef,
     attempt: _attempt,
     parentStepExecutionId: _parentStepExecutionId,
   } = args;
@@ -37,15 +36,8 @@ export async function handleGuardrailCrudInline(args: InlineHandlerArgs): Promis
   const spaceId = requireSpaceId(context);
 
   try {
-    let input: Record<string, unknown> = {};
-    try {
-      const data = await payloadStore.retrieve(resolvedInputRef);
-      if (typeof data === 'object' && data !== null) {
-        input = data as Record<string, unknown>;
-      }
-    } catch {
-      /* empty input */
-    }
+    const input = await readInlineInput(args, startTime);
+    if (!input) return;
 
     const db = getDatabase();
     const tenantCtx = createTenantContext(context.tenantId);

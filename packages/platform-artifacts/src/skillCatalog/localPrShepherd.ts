@@ -141,7 +141,7 @@ function withBindingDependencies<T extends ShepherdTask>(tasks: T[]): T[] {
 
 const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
   catalogId: 'local-pr-shepherd',
-  version: 15,
+  version: 16,
   name: 'Local PR Shepherd',
   tagline:
     "Tend the pull requests the loop opened: read their CI, fix and publish a red check through Local Publish, and merge a green one where the folder's merge posture allows — never approving or closing.",
@@ -510,17 +510,23 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
             planNode: out('read-in-flight-node'),
             runId: { kind: 'run_id' as const },
             budget: runInput('attemptBudget'),
-            requiredRules: out('read-required-rules'),
-            requiredProtection: out(REQUIRED_CHECKS_TASK),
-            reviews: out('read-pr-reviews'),
-            publicationReview: out('read-publication-review'),
+            requiredRules: out('read-required-rules', 'data'),
+            requiredRulesStatus: out('read-required-rules', 'statusCode'),
+            requiredProtection: out(REQUIRED_CHECKS_TASK, 'data'),
+            requiredProtectionStatus: out(REQUIRED_CHECKS_TASK, 'statusCode'),
+            reviews: out('read-pr-reviews', 'data'),
+            reviewsStatus: out('read-pr-reviews', 'statusCode'),
+            publicationReview: out('read-publication-review', 'taskOutput.output'),
           },
           context: ctx('workflow.run.decide'),
           inputTemplate: {
             state: {
               requiredRules: bind('requiredRules'),
+              requiredRulesStatus: bind('requiredRulesStatus'),
               requiredProtection: bind('requiredProtection'),
+              requiredProtectionStatus: bind('requiredProtectionStatus'),
               reviews: bind('reviews'),
+              reviewsStatus: bind('reviewsStatus'),
               publicationReview: bind('publicationReview'),
               folder: bind('folder'),
               aim: bind('aim'),

@@ -14,12 +14,13 @@ import {
 } from '@aflow/platform-artifacts';
 import type { InlineHandlerArgs } from './types.js';
 import { emitStepError, emitStepSuccess } from './helpers.js';
+import { readInlineInput } from './readInlineInput.js';
 
 export async function handleHelpSearch(args: InlineHandlerArgs): Promise<void> {
   const start = Date.now();
-  const parsed = HelpSearchInputSchema.safeParse(
-    await args.payloadStore.retrieve(args.resolvedInputRef),
-  );
+  const raw = await readInlineInput(args, start);
+  if (!raw) return;
+  const parsed = HelpSearchInputSchema.safeParse(raw);
   if (!parsed.success) {
     await emitStepError(args, 'INVALID_INPUT', parsed.error.message, start, 'validation');
     return;
@@ -37,9 +38,9 @@ export async function handleHelpSearch(args: InlineHandlerArgs): Promise<void> {
 
 export async function handleHelpGet(args: InlineHandlerArgs): Promise<void> {
   const start = Date.now();
-  const parsed = HelpGetInputSchema.safeParse(
-    await args.payloadStore.retrieve(args.resolvedInputRef),
-  );
+  const raw = await readInlineInput(args, start);
+  if (!raw) return;
+  const parsed = HelpGetInputSchema.safeParse(raw);
   if (!parsed.success) {
     await emitStepError(args, 'INVALID_INPUT', parsed.error.message, start, 'validation');
     return;

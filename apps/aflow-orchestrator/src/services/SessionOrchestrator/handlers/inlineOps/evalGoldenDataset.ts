@@ -41,6 +41,7 @@ import {
 } from '@aflow/cybernetic-runtime';
 import type { InlineHandlerArgs } from './types.js';
 import { emitStepSuccess, emitStepError } from './helpers.js';
+import { readInlineInput } from './readInlineInput.js';
 import { requireSpaceId } from './spaceScope.js';
 import { getOrchestratorLogger } from '../../../../lib/orchestratorLogger.js';
 
@@ -78,30 +79,15 @@ async function durableRef(
   });
 }
 
-function decodeInlineRef(ref: string): unknown {
-  if (!ref.startsWith('inline:')) return null;
-  try {
-    return JSON.parse(Buffer.from(ref.slice('inline:'.length), 'base64').toString('utf8'));
-  } catch {
-    return null;
-  }
-}
-
 export async function parseEvalOpInput<Output>(
   args: InlineHandlerArgs,
   schema: z.ZodType<Output, z.ZodTypeDef, unknown>,
   errorCode: string,
   startTime: number,
 ): Promise<Output | null> {
-  let raw: unknown = decodeInlineRef(args.resolvedInputRef);
-  if (raw === null && !args.resolvedInputRef.startsWith('inline:')) {
-    try {
-      raw = await args.payloadStore.retrieve(args.resolvedInputRef);
-    } catch {
-      raw = null;
-    }
-  }
-  const parsed = schema.safeParse(raw ?? {});
+  const raw = await readInlineInput(args, startTime);
+  if (!raw) return null;
+  const parsed = schema.safeParse(raw);
   if (!parsed.success) {
     const issues = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
     await emitStepError(

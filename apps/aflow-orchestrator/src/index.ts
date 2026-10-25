@@ -338,6 +338,7 @@ async function main(): Promise<void> {
   const scheduleEvaluator = new ScheduleEvaluator({
     redis,
     sqlClient,
+    db,
     instanceId: CONSUMER_NAME,
   });
 

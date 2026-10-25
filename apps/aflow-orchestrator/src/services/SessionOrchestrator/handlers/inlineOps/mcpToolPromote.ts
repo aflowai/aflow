@@ -33,6 +33,7 @@ import {
   type VirtualToolEntry,
 } from '../../helpers/agentTurn.js';
 import { readInlineVar, writeInlineVar } from '../../helpers/runtimeState.js';
+import { inlineArgsFromPositional, readInlineInput } from './readInlineInput.js';
 
 interface BindingCandidate {
   bindingId: string;
@@ -57,22 +58,29 @@ export async function handleMcpToolPromoteInline(
   parentStepExecutionId?: StepExecutionId,
 ): Promise<void> {
   const startTime = Date.now();
+  const inlineArgs = inlineArgsFromPositional(
+    redis,
+    payloadStore,
+    context,
+    stepDef,
+    stepExecutionId,
+    idempotencyKey,
+    resolvedInputRef,
+    attempt,
+    _scheduledAtMs,
+    parentStepExecutionId,
+  );
   try {
     // Parse input
+    const data = await readInlineInput(inlineArgs, startTime);
+    if (!data) return;
     let serverId: string | undefined;
     let toolNames: string[] = [];
-    try {
-      const data = await payloadStore.retrieve(resolvedInputRef);
-      if (data && typeof data === 'object') {
-        const sid = (data as { serverId?: unknown }).serverId;
-        const names = (data as { toolNames?: unknown }).toolNames;
-        if (typeof sid === 'string' && sid.length > 0) serverId = sid;
-        if (Array.isArray(names)) {
-          toolNames = names.filter((n): n is string => typeof n === 'string' && n.length > 0);
-        }
-      }
-    } catch {
-      /* fall through */
+    const sid = data['serverId'];
+    const names = data['toolNames'];
+    if (typeof sid === 'string' && sid.length > 0) serverId = sid;
+    if (Array.isArray(names)) {
+      toolNames = names.filter((n): n is string => typeof n === 'string' && n.length > 0);
     }
     if (!serverId || toolNames.length === 0) {
       await emitFailure(

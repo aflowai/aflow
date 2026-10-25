@@ -4,6 +4,7 @@ import type { InlineHandlerArgs } from './types.js';
 import { emitStepError, emitStepSuccess } from './helpers.js';
 import { requireScheduleAuthority } from './scheduleAuthority.js';
 import { renewSchedule, tenantScheduleRenewalStore } from './scheduleRenewal.js';
+import { scheduleConfigProblem } from './scheduleTargetConfig.js';
 
 export async function handleRenew(
   args: InlineHandlerArgs,
@@ -14,15 +15,14 @@ export async function handleRenew(
   const authority = await requireScheduleAuthority(args, spaceId, startTime);
   if (!authority) return;
 
-  const outcome = await withTenantSchema(
-    getDatabase(),
-    createTenantContext(args.context.tenantId),
-    (tx) =>
-      renewSchedule(tenantScheduleRenewalStore(tx), {
-        spaceId,
-        predecessorId,
-        grant: authority.grant,
-      }),
+  const db = getDatabase();
+  const outcome = await withTenantSchema(db, createTenantContext(args.context.tenantId), (tx) =>
+    renewSchedule(tenantScheduleRenewalStore(tx), {
+      spaceId,
+      predecessorId,
+      grant: authority.grant,
+      configProblem: (schedule) => scheduleConfigProblem(db, args.context.tenantId, schedule),
+    }),
   );
 
   switch (outcome.kind) {
@@ -56,6 +56,15 @@ export async function handleRenew(
       );
       return;
     }
+    case 'config_refused':
+      await emitStepError(
+        args,
+        'SCHEDULE_CONFIG_NOT_DECLARED',
+        `Schedule ${predecessorId} was not renewed: ${outcome.message}`,
+        startTime,
+        'validation',
+      );
+      return;
     case 'renewed':
       break;
   }

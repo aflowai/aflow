@@ -1,6 +1,9 @@
-import { Buffer } from 'node:buffer';
+import { createHash } from 'node:crypto';
 import { getDatabase } from '@aflow/database';
 import type {
+  SessionId,
+  StepExecutionId,
+  TenantId,
   ContractError,
   StoredParentInstructions,
   StoredParentTaskInputs,
@@ -13,7 +16,7 @@ import {
   StoredParentInstructionsSchema,
   StoredParentTaskInputsSchema,
 } from '@aflow/schemas';
-import type { PayloadStore } from '@aflow/payload-store';
+import { encodeInlinePayloadRef, type PayloadStore } from '@aflow/payload-store';
 import {
   buildRunnerDelegationContext,
   entryRunInputSlots,
@@ -150,23 +153,68 @@ async function loadCampaignConfigForTask(
   return campaign.config ?? {};
 }
 
+/** The dispatch of a task that its input is built for. */
+export interface TaskInputDispatch {
+  attempt: number;
+  /** The worker step the input feeds, when the dispatch has already minted it. */
+  stepExecutionId?: string;
+}
+
+/**
+ * The step segment a spilled task input is stored under when its dispatch has
+ * no step id yet. Derived from run, task and attempt so a redispatch of the
+ * same attempt overwrites the one object instead of orphaning another; shaped
+ * as a UUID (RFC 9562 version 8) because a StepExecutionId is one.
+ */
+export function taskInputStepExecutionId(
+  runId: string,
+  taskId: string,
+  attempt: number,
+): StepExecutionId {
+  const bytes = createHash('sha256')
+    .update(`task-input:${runId}:${taskId}:${String(attempt)}`)
+    .digest()
+    .subarray(0, 16);
+  bytes[6] = (bytes[6]! & 0x0f) | 0x80;
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  const hex = bytes.toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}` as StepExecutionId;
+}
+
 export async function buildTaskInputRef(
   task: WorkflowTask,
   workflow: Workflow,
   tenantId: string,
   spaceId: string,
   runId: string,
+  dispatch: TaskInputDispatch,
   payloadStore?: PayloadStore,
   /** Typed ContractError injected into the `system_feedback` binding on a producer rerun. */
   systemFeedback?: ContractError,
 ): Promise<string> {
   const taskType = inferTaskType(task);
+  const inputRef = async (data: unknown): Promise<string> =>
+    payloadStore?.shouldStore(data)
+      ? // Run-scoped, never content-addressed: the run surface reads a task's
+        // input through /payloads, which authorizes by the run named in the
+        // ref and refuses a content ref because it names none.
+        payloadStore.store({
+          tenantId: tenantId as TenantId,
+          runId: runId as SessionId,
+          stepExecutionId:
+            (dispatch.stepExecutionId as StepExecutionId | undefined) ??
+            taskInputStepExecutionId(runId, task.taskId, dispatch.attempt),
+          attempt: dispatch.attempt,
+          kind: 'input',
+          data,
+        })
+      : encodeInlinePayloadRef(data);
 
   if (taskType === 'human') {
     const humanInput = {
       prompt: task.pauseInstruction ?? `Please provide input for: ${task.name}`,
     };
-    return `inline:${Buffer.from(JSON.stringify(humanInput)).toString('base64')}`;
+    return inputRef(humanInput);
   }
 
   if (taskType === 'operation') {
@@ -179,7 +227,7 @@ export async function buildTaskInputRef(
       payloadStore,
       systemFeedback,
     );
-    return `inline:${Buffer.from(JSON.stringify(opInput)).toString('base64')}`;
+    return inputRef(opInput);
   }
 
   throw new Error(

@@ -51,6 +51,7 @@ import {
   type SpacePolicyState,
 } from '../../helpers/spacePolicyCapabilities.js';
 import { readIntegrations } from '../../helpers/integrationReader.js';
+import { inlineArgsFromPositional, readInlineInput } from './readInlineInput.js';
 
 interface PromoteRejection {
   toolId: string;
@@ -70,18 +71,23 @@ export async function handleCatalogToolPromoteInline(
   parentStepExecutionId?: StepExecutionId,
 ): Promise<void> {
   const startTime = Date.now();
+  const inlineArgs = inlineArgsFromPositional(
+    redis,
+    payloadStore,
+    context,
+    stepDef,
+    stepExecutionId,
+    idempotencyKey,
+    resolvedInputRef,
+    attempt,
+    _scheduledAtMs,
+    parentStepExecutionId,
+  );
   const logger = getOrchestratorLogger();
 
   try {
-    let input: Record<string, unknown> = {};
-    try {
-      const data = await payloadStore.retrieve(resolvedInputRef);
-      if (typeof data === 'object' && data !== null) {
-        input = data as Record<string, unknown>;
-      }
-    } catch {
-      /* empty input → caught by the validation below */
-    }
+    const input = await readInlineInput(inlineArgs, startTime);
+    if (!input) return;
 
     const rawToolIds = input['toolIds'];
     if (!Array.isArray(rawToolIds) || rawToolIds.length === 0) {

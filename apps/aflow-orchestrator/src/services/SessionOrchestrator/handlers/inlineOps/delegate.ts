@@ -40,6 +40,7 @@ import {
 } from '@aflow/schemas';
 import type { InlineHandlerArgs } from './types.js';
 import { requireSpaceId } from './spaceScope.js';
+import { readInlineInput } from './readInlineInput.js';
 
 /**
  * Every operation a delegation config would put in reach of the Runner that
@@ -90,15 +91,8 @@ export async function handleDelegateInline(args: InlineHandlerArgs): Promise<voi
 
   try {
     // Read resolved input
-    let input: Record<string, unknown> = {};
-    try {
-      const data = await payloadStore.retrieve(resolvedInputRef);
-      if (typeof data === 'object' && data !== null) {
-        input = data as Record<string, unknown>;
-      }
-    } catch {
-      /* empty input */
-    }
+    const input = await readInlineInput(args, startTime);
+    if (!input) return;
 
     const rawTarget = input['target'] ?? stepDef.config['target'];
     if (rawTarget === undefined || rawTarget === null) {

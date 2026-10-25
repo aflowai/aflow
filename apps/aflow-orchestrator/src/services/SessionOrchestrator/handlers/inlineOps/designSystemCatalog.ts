@@ -11,6 +11,7 @@ import { errorContextFromUnknown } from '@aflow/schemas';
 import type { InlineHandlerArgs } from './types.js';
 import { emitStepSuccess, emitStepError } from './helpers.js';
 import { getOrchestratorLogger } from '../../../../lib/orchestratorLogger.js';
+import { readInlineInput } from './readInlineInput.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -126,15 +127,8 @@ export async function handleDesignSystemCatalogGetInline(args: InlineHandlerArgs
   try {
     loadBundles();
 
-    let input: Record<string, unknown> = {};
-    try {
-      const data = await args.payloadStore.retrieve(args.resolvedInputRef);
-      if (typeof data === 'object' && data !== null) {
-        input = data as Record<string, unknown>;
-      }
-    } catch {
-      /* empty input — return full catalog */
-    }
+    const input = await readInlineInput(args, startTime);
+    if (!input) return;
 
     const mode = (input['mode'] as string | undefined) ?? 'artifact';
     const categories = input['categories'] as string[] | undefined;

@@ -20,6 +20,7 @@ import {
 } from '@aflow/database';
 import { encodeInlineOpOutputRef } from './helpers.js';
 import type { InlineHandlerArgs } from './types.js';
+import { readInlineInput } from './readInlineInput.js';
 
 /**
  * Look up a space row by spaceId input (UUID or slug).
@@ -59,15 +60,8 @@ export async function handleSpaceCrudInline(args: InlineHandlerArgs): Promise<vo
   const operationId = stepDef.operation;
 
   try {
-    let input: Record<string, unknown> = {};
-    try {
-      const data = await payloadStore.retrieve(resolvedInputRef);
-      if (typeof data === 'object' && data !== null) {
-        input = data as Record<string, unknown>;
-      }
-    } catch {
-      /* empty input */
-    }
+    const input = await readInlineInput(args, startTime);
+    if (!input) return;
 
     const db = getDatabase();
     const tenantCtx = createTenantContext(context.tenantId);

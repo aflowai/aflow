@@ -1957,7 +1957,7 @@ describe('Local PR Shepherd — it merges what the posture allows', () => {
       taskOutput: 'review-commit',
     });
     const verdictRule = MERGE_RULES.find((rule) =>
-      JSON.stringify(rule.when).includes('publicationReview.taskOutput.output.verdict'),
+      JSON.stringify(rule.when).includes('publicationReview.verdict'),
     );
     expect(verdictRule?.reason).toContain('its final attempt where it was retried in place');
   });
@@ -1982,6 +1982,21 @@ describe('Local PR Shepherd — it merges what the posture allows', () => {
       compact: true,
       taskOutput: 'review-commit',
     });
+  });
+
+  it('decides from response data and status scalars without carrying HTTP headers or the publication run envelope', () => {
+    const merged = green();
+    const state = merged.inputs.get('decide')?.['state'] as Record<string, unknown>;
+    for (const name of ['requiredRules', 'requiredProtection', 'reviews']) {
+      expect(state[name]).toBeDefined();
+      expect(state[name]).not.toHaveProperty('headers');
+      expect(state[name]).not.toHaveProperty('statusCode');
+      expect(state[`${name}Status`]).toBe(200);
+    }
+    expect(state['publicationReview']).toMatchObject({ verdict: 'approve' });
+    expect(state['publicationReview']).not.toHaveProperty('run');
+    expect(state['publicationReview']).not.toHaveProperty('tasks');
+    expect(merged.decision).toBe('merge');
   });
 
   it('names the tasks of Local Publish that push a commit, and the output naming the commit pushed', () => {

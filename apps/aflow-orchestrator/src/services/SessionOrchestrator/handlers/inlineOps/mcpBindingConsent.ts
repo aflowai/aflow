@@ -21,6 +21,7 @@ import {
 } from '@aflow/oauth';
 import type { InlineHandlerArgs } from './types.js';
 import { emitStepSuccess, emitStepError } from './helpers.js';
+import { readInlineInput } from './readInlineInput.js';
 import { requireSpaceId } from './spaceScope.js';
 import { getOrchestratorLogger } from '../../../../lib/orchestratorLogger.js';
 
@@ -28,15 +29,9 @@ export async function handleMcpBindingConsentInline(args: InlineHandlerArgs): Pr
   const startTime = Date.now();
   const log = getOrchestratorLogger();
 
-  let input: { bindingId?: unknown } = {};
-  try {
-    const data = await args.payloadStore.retrieve(args.resolvedInputRef);
-    if (data && typeof data === 'object') {
-      input = data as { bindingId?: unknown };
-    }
-  } catch {
-    /* empty input — handled by validation below */
-  }
+  const data = await readInlineInput(args, startTime);
+  if (!data) return;
+  const input: { bindingId?: unknown } = data;
 
   if (typeof input.bindingId !== 'string' || input.bindingId.length === 0) {
     await emitStepError(

@@ -39,7 +39,8 @@ import {
 } from '@aflow/database';
 import { getOrchestratorLogger } from '../../../../lib/orchestratorLogger.js';
 import type { InlineHandlerArgs } from './types.js';
-import { emitStepError, emitStepSuccess, readInlineOpInputRecord } from './helpers.js';
+import { emitStepError, emitStepSuccess } from './helpers.js';
+import { readInlineInput } from './readInlineInput.js';
 import { requireSpaceId } from './spaceScope.js';
 import { handleSimulationWorldOp } from './simulationWorld.js';
 import {
@@ -355,7 +356,8 @@ export async function handleSimulationOpInline(args: InlineHandlerArgs): Promise
       tenantId: args.context.tenantId,
       spaceId: requireSpaceId(args.context),
     };
-    const input = (await readInlineOpInputRecord(args)) ?? {};
+    const input = await readInlineInput(args, startTime);
+    if (!input) return;
 
     let output: Record<string, unknown>;
     let mutated = false;
