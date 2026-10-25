@@ -442,6 +442,16 @@ describe('resolveTaskInputs — run_id and clock bindings', () => {
       { at: 50_000, before: 49_000 },
     );
   });
+
+  it('writes the dispatch time as an ISO datetime where the input takes one', async () => {
+    const task = {
+      ...baseOpTask,
+      inputBindings: { at: { kind: 'clock', format: 'iso' } },
+    } as WorkflowTask;
+    await expect(
+      resolveTaskInputs(task, { run: makeRun([]), now: () => Date.UTC(2026, 9, 25, 12) }),
+    ).resolves.toEqual({ at: '2026-10-25T12:00:00.000Z' });
+  });
 });
 
 describe('resolveTaskInputs — no bindings short-circuit', () => {

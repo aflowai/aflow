@@ -22,6 +22,25 @@ function greenAnd(expression: string, reason: string): WorkflowRunDecideRule {
 }
 
 /**
+ * The rules that end a pass on a case they cannot act on — GitHub refused or
+ * could not be read, or the head is in a state no remedy of the shepherd's
+ * answers — and that no later pass would act on either. Their case is handed
+ * to the agent (`localPrShepherdHandOver.ts`), which decides and acts with the
+ * skills it has. A rule holding back on a person's or the folder's own choice
+ * — the posture, a draft, a declined merge, a review requesting changes — is
+ * no such case, and stays with them.
+ */
+const HAND_OVER = new Set<WorkflowRunDecideRule>();
+
+function handedOver(rule: WorkflowRunDecideRule): WorkflowRunDecideRule {
+  HAND_OVER.add(rule);
+  return rule;
+}
+
+const HANDED_OVER_HEAD =
+  ' The case is handed to the Helmsman, once for this head, with what the pass read, decided and tried.';
+
+/**
  * Where the head is green, what the merge posture allows (D6): each condition
  * that does not hold leaves the pull request, saying which, and only where
  * every one holds is the decision `merge`. They follow every rule that decides
@@ -49,22 +68,28 @@ export const MERGE_RULES: readonly WorkflowRunDecideRule[] = [
     'state.handoff.data.mergeDeclinedSha == state.pr.data.headSha',
     'The operator declined to merge this head. No merge is asked for again until a push moves it.',
   ),
-  greenAnd(
-    'state.handoff.data.mergeRefusedSha == state.pr.data.headSha',
-    'GitHub refused to merge this head. No merge is asked for again until a push moves it; a refusal resolved without a push leaves this head to the operator.',
+  handedOver(
+    greenAnd(
+      'state.handoff.data.mergeRefusedSha == state.pr.data.headSha',
+      `GitHub refused to merge this head. No merge is asked for again until a push moves it.${HANDED_OVER_HEAD}`,
+    ),
   ),
   // No rule asks for a pinned record. The two above only spare a lease: a
   // head already asked about is held by `claim-merge`, a create under the
   // lease that fails where anything is recorded for it. A record read with no
   // pin shows nothing, and the handoff that pass posts carries nothing either,
   // so holding it back would cost a pass and see nothing more.
-  greenAnd(
-    'state.requiredRulesStatus != 200',
-    "GitHub did not return the rulesets of the base branch, so which checks it requires is unknown: the merge is the operator's.",
+  handedOver(
+    greenAnd(
+      'state.requiredRulesStatus != 200',
+      `GitHub did not return the rulesets of the base branch, so which checks it requires is unknown: nothing is merged.${HANDED_OVER_HEAD}`,
+    ),
   ),
-  greenAnd(
-    'state.requiredProtectionStatus != 200',
-    "GitHub did not return the base branch's protection, so which checks it requires is unknown: the merge is the operator's.",
+  handedOver(
+    greenAnd(
+      'state.requiredProtectionStatus != 200',
+      `GitHub did not return the base branch's protection, so which checks it requires is unknown: nothing is merged.${HANDED_OVER_HEAD}`,
+    ),
   ),
   greenAnd(
     "state.checks.data.required.state == 'none'",
@@ -74,13 +99,17 @@ export const MERGE_RULES: readonly WorkflowRunDecideRule[] = [
     "state.checks.data.required.state != 'passed'",
     "A check the base branch requires has not passed on the head — it failed, is still running, was skipped, or has no check run on it, as a context reported only as a commit status has none. The handoff names each: the merge is the operator's.",
   ),
-  greenAnd(
-    'state.reviewsStatus != 200',
-    "GitHub did not return the pull request's reviews, so whether a person requests changes is unknown.",
+  handedOver(
+    greenAnd(
+      'state.reviewsStatus != 200',
+      `GitHub did not return the pull request's reviews, so whether a person requests changes is unknown: nothing is merged.${HANDED_OVER_HEAD}`,
+    ),
   ),
-  greenAnd(
-    'state.reviews.complete != true',
-    'The pull request has more reviews than one page holds, so a change request past it would not be seen: the merge is the operator’s.',
+  handedOver(
+    greenAnd(
+      'state.reviews.complete != true',
+      `The pull request has more reviews than one page holds, so a change request past it would not be seen: nothing is merged.${HANDED_OVER_HEAD}`,
+    ),
   ),
   greenAnd(
     'state.reviews.changesRequestedBy[0] != null',
@@ -98,11 +127,21 @@ export const MERGE_RULES: readonly WorkflowRunDecideRule[] = [
     "state.publicationReview.verdict != 'approve'",
     "The Local Code Review of the publication that pushed this head did not return `approve` — read from the review run itself, its final attempt where it was retried in place: the merge is the operator's.",
   ),
+  // GitHub computes whether a head merges after it is asked, and answers null
+  // until it has: a merge asked for on null is a guess GitHub may refuse. The
+  // read asked, so the next pass has the answer. A head that does not merge
+  // is the conflict rule's, which comes before every merge rule.
+  {
+    when: { allOf: [GREEN, 'state.pr.data.mergeable != true'] },
+    decision: 'wait',
+    reason:
+      'Every condition to merge holds, but GitHub has not yet said whether the head merges into its base as the base stands now: no merge is asked for on a guess. The pull request is read again next pass.',
+  },
   {
     when: { expression: GREEN },
     decision: 'merge',
     reason:
-      "Every check the base branch requires passed on the head, the Local Code Review of the publication that pushed it approved this head, and no person's review requests changes: the shepherd asks to merge it by squash, pinned to this head, on the operator's approval — unless a merge of this head was already asked for, which is never asked for twice.",
+      "Every check the base branch requires passed on the head, the Local Code Review of the publication that pushed it approved this head, no person's review requests changes, and GitHub says the head merges into its base: the shepherd asks to merge it by squash, pinned to this head, on the operator's approval — unless a merge of this head was already asked for, which is never asked for twice.",
   },
 ];
 
@@ -158,14 +197,14 @@ export const SHEPHERD_RULES: readonly WorkflowRunDecideRule[] = [
       "The folder's `origin` is not a repository on GitHub, so there is no pull request to read.",
   },
   // A pass aimed at a number reads its pull request directly and lists none.
-  {
+  handedOver({
     when: {
       allOf: ["state.aim.decision == 'discover'", 'state.candidates.statusCode != 200'],
     },
     decision: 'wait',
     reason:
-      "GitHub did not list the repository's open pull requests, so nothing was read to act on. The GitHub connection's access to the repository is the thing to check.",
-  },
+      "GitHub did not list the repository's open pull requests, so nothing was read to act on — the GitHub connection's access to the repository is the likely cause. The case is handed to the Helmsman, once until a pass tends a pull request again, with GitHub's answer.",
+  }),
   {
     when: {
       allOf: ["state.aim.decision == 'discover'", 'state.candidates.data.count == 0'],
@@ -291,14 +330,23 @@ export const SHEPHERD_RULES: readonly WorkflowRunDecideRule[] = [
     decision: 'wait',
     reason: NODE_IN_FLIGHT_REASON,
   },
+  // A red head's fix is commissioned with its base merged in, conflicts and
+  // all; any other head GitHub says does not merge has nothing a remedy
+  // answers, and GitHub refuses its merge.
+  handedOver({
+    when: {
+      allOf: ['state.pr.data.mergeable == false', "state.checks.data.state != 'failing'"],
+    },
+    decision: 'leave',
+    reason: `GitHub says the head does not merge into its base as the base stands now, and CI has not failed on it: no fix answers that, and GitHub refuses the merge.${HANDED_OVER_HEAD}`,
+  }),
   ...MERGE_RULES,
   // Every later pass reads the same one page, so a wait here would never end.
-  {
+  handedOver({
     when: { expression: "state.checks.data.state == 'unknown'" },
     decision: 'leave',
-    reason:
-      "GitHub holds more check runs on the head than the one page of a hundred a pass reads, and none on that page failed or is still running: whether CI failed on the head is unknown, so the shepherd neither fixes nor merges it. The pull request is the operator's.",
-  },
+    reason: `GitHub holds more check runs on the head than the one page of a hundred a pass reads, and none on that page failed or is still running: whether CI failed on the head is unknown, so the shepherd neither fixes nor merges it.${HANDED_OVER_HEAD}`,
+  }),
   {
     when: { expression: "state.checks.data.state != 'failing'" },
     decision: 'wait',
@@ -319,6 +367,16 @@ export const SHEPHERD_RULES: readonly WorkflowRunDecideRule[] = [
       'The shepherd has acted on as many failures of this pull request as its budget allows, and CI fails again. It acts on nothing here and leaves the pull request to a person, with one Action Center item for this head; a push that moves the head is read again, and handed over the same way if CI fails on it.',
   },
 ];
+
+/** The rules whose case the pass hands to the agent, in the order they are read. */
+export const HAND_OVER_RULES: readonly WorkflowRunDecideRule[] = SHEPHERD_RULES.filter((rule) =>
+  HAND_OVER.has(rule),
+);
+
+/** The decision step ended on a rule whose case is handed to the agent, one comparison each. */
+export const DECIDED_HAND_OVER: readonly string[] = HAND_OVER_RULES.map(
+  (rule) => `tasks.decide.output.rule == ${String(SHEPHERD_RULES.indexOf(rule))}`,
+);
 
 /**
  * The decision step's `rule` where the base moved after the remedy: the pass
@@ -457,8 +515,7 @@ export const MERGE_OUTCOME_RULES: readonly WorkflowRunDecideRule[] = [
   {
     when: { expression: `state.refusal != '${MERGE_REFUSAL_BASE_MOVED}'` },
     decision: 'merge_refused' satisfies ShepherdMergeOutcome,
-    reason:
-      'GitHub refused the merge pinned to this head. No merge of this head is asked for again.',
+    reason: `GitHub refused the merge pinned to this head. No merge of this head is asked for again.${HANDED_OVER_HEAD}`,
   },
   {
     when: { expression: 'state.mergeAgain.statusCode == 200' },

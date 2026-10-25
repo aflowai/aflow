@@ -129,6 +129,57 @@ export function leaseValue(name: string) {
   return { $firstOf: LEASE_TAKERS.map((taskId) => bind(`${name}_${taskId.replace(/-/g, '_')}`)) };
 }
 
+/**
+ * A GitHub read's output as everything after it reads it: GitHub's status and
+ * the body its preset shaped. The call's headers, timings and refs are not
+ * kept, so no task binding the whole output carries them on.
+ */
+export const GITHUB_READ_PROJECTION = {
+  statusCode: { path: 'statusCode', onMissing: 'error' as const },
+  data: { path: 'data', onMissing: 'null' as const },
+};
+
+const INDEXED_SEGMENT = /^([A-Za-z0-9_]+)\[(\d+)\]$/;
+
+/**
+ * Fields of one task's output, each bound on its own and set back in the
+ * shape the rules read them in — `paths` under `name`, read from the output at
+ * `from` — so a rule step's state holds what its rules compare and nothing the
+ * read returned beside it: a pull request's body, the list it was the first
+ * of, a run's tasks. A field the read did not return is absent, as it would be
+ * read through the whole output.
+ */
+export function outputFields(
+  name: string,
+  taskId: string,
+  paths: readonly string[],
+  from?: string,
+): { bindings: Record<string, ReturnType<typeof out>>; value: Record<string, unknown> } {
+  const bindings: Record<string, ReturnType<typeof out>> = {};
+  const value: Record<string, unknown> = {};
+  for (const path of paths) {
+    const bindAs = `${name}_${path.replace(/[^A-Za-z0-9]/g, '_')}`;
+    bindings[bindAs] = out(taskId, from === undefined ? path : `${from}.${path}`);
+    const segments = path.split('.');
+    let node: Record<string, unknown> | unknown[] = value;
+    segments.forEach((segment, i) => {
+      const indexed = INDEXED_SEGMENT.exec(segment);
+      const leaf = i === segments.length - 1;
+      const container = node as Record<string, unknown>;
+      if (indexed === null) {
+        if (leaf) container[segment] = bind(bindAs);
+        else node = (container[segment] ??= {}) as Record<string, unknown>;
+        return;
+      }
+      const list = (container[indexed[1]!] ??= []) as unknown[];
+      const index = Number(indexed[2]);
+      if (leaf) list[index] = bind(bindAs);
+      else node = (list[index] ??= {}) as Record<string, unknown>;
+    });
+  }
+  return { bindings, value };
+}
+
 export function github(
   endpointId: string,
   params: Record<string, unknown>,

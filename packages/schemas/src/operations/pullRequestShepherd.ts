@@ -58,6 +58,24 @@ export const SHEPHERD_MERGE_OUTCOME_DOCS = 'merges';
 export const SHEPHERD_ABANDON_DOCS = 'abandons';
 
 /**
+ * Where a case handed to the agent is claimed, one document per case,
+ * created and never overwritten, so a case is handed over once however many
+ * passes find it. A pull request's case is its head —
+ * `<root>/<owner>/<repo>/pulls/<number>/handovers/<headSha>.json`, beside its
+ * pinned handoff — so a push that moves the head is a new case. A case of the
+ * repository itself, read before any pull request is, is the turn —
+ * `<root>/<owner>/<repo>/handovers/<turn's content hash>.json` — so it stays
+ * one case until a pass tends a pull request again.
+ */
+export const SHEPHERD_HAND_OVER_DOCS = 'handovers';
+
+/** The agent a case the shepherd's rules cannot act on is handed to: the space's Helmsman. */
+export const SHEPHERD_HAND_OVER_TARGET = {
+  kind: 'platform-role',
+  systemRole: 'cybernetic-helmsman',
+} as const;
+
+/**
  * `<root>/<owner>/<repo>/turn.json`: the pull request the last pass aimed at
  * none tended. The next such pass tends the one after it, so passes on a
  * schedule take the loop's pull requests in turn, whatever GitHub's
@@ -304,6 +322,12 @@ export const LoopPullRequestSchema = z.object({
     ),
   handsOff: z.boolean(),
   draft: z.boolean(),
+  mergeable: z
+    .boolean()
+    .nullable()
+    .describe(
+      'GitHub’s `mergeable`: whether the head merges into its base as the base stands. `null` while GitHub has not computed it yet — the read asks it to, and a later read has the answer — so null is unknown, never yes.',
+    ),
   mergeableState: z
     .string()
     .optional()

@@ -46,7 +46,7 @@ export const READ_TURN_TASK = {
 export const REMEMBER_TURN_TASK = {
   taskId: 'remember-turn',
   name: 'Record whose turn it was',
-  goal: 'With the pass aimed at none, record the pull request it tends, so the next such pass tends the one after it. A pass aimed at one pull request takes no turn and records none.',
+  goal: 'With the pass aimed at none, record the pull request it tends, and the run that tended it, so the next such pass tends the one after it. A pass aimed at one pull request takes no turn and records none.',
   type: 'operation' as const,
   operation: 'memory.store.put',
   when: {
@@ -56,7 +56,7 @@ export const REMEMBER_TURN_TASK = {
   optional: true,
   retryability: 'safe' as const,
   maxAttempts: 2,
-  inputBindings: { ...REPOSITORY, ...NUMBER },
+  inputBindings: { ...REPOSITORY, ...NUMBER, runId: { kind: 'run_id' as const } },
   context: ctx('memory.store.put'),
   inputTemplate: {
     path: TURN_PATH,
@@ -65,6 +65,9 @@ export const REMEMBER_TURN_TASK = {
     mimeType: 'application/json',
     indexing: 'disabled',
     summary: "The pull request the Local PR Shepherd's last pass over this repository tended.",
-    content: { inlineJson: { pullNumber: bind('number') } },
+    // The run makes each turn's content its own: a repository's hand-over is
+    // keyed by the turn's hash, so a pass that tends a pull request ends the
+    // case its listing was handed over as, even the same pull request again.
+    content: { inlineJson: { pullNumber: bind('number'), runId: bind('runId') } },
   },
 };
