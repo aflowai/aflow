@@ -155,6 +155,14 @@ describe('loop_pull — one pull request', () => {
     expect(loopPullRequest(pr(7), 'aflow/')).not.toHaveProperty('url');
   });
 
+  it('carries whether the head merges, and a mergeability GitHub has not computed as unknown', () => {
+    expect(loopPullRequest(pr(7, { mergeable: true }), 'aflow/').mergeable).toBe(true);
+    expect(loopPullRequest(pr(7, { mergeable: false }), 'aflow/').mergeable).toBe(false);
+    // GitHub answers null while it computes; a read that carries nothing is no more known.
+    expect(loopPullRequest(pr(7, { mergeable: null }), 'aflow/').mergeable).toBeNull();
+    expect(LoopPullRequestSchema.parse(loopPullRequest(pr(7), 'aflow/')).mergeable).toBeNull();
+  });
+
   it('counts the pages of its conversation, the last the newest', () => {
     expect(loopPullRequest(pr(7, { comments: 0 }), 'aflow/').commentPages).toBe(1);
     expect(loopPullRequest(pr(7, { comments: 100 }), 'aflow/').commentPages).toBe(1);

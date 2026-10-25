@@ -253,8 +253,10 @@ async function resolveOneBinding(
     case 'run_id':
       return ctx.run.runId;
 
-    case 'clock':
-      return (ctx.now ?? Date.now)() + (binding.offsetMs ?? 0);
+    case 'clock': {
+      const at = (ctx.now ?? Date.now)() + (binding.offsetMs ?? 0);
+      return binding.format === 'iso' ? new Date(at).toISOString() : at;
+    }
 
     case 'learning_set': {
       if (!ctx.resolveLearningSet) {

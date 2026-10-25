@@ -61,9 +61,12 @@ export const WorkflowTaskInputBindingSchema = z.discriminatedUnion('kind', [
   z.object({
     /** Resolves to the time the task is dispatched, as epoch milliseconds,
      *  shifted by `offsetMs` — a cut-off to compare a stored time against
-     *  is `offsetMs` below zero. Platform-resolved at dispatch. */
+     *  is `offsetMs` below zero. `format: 'iso'` gives the same instant as
+     *  an ISO 8601 string, for an input that takes a datetime. Platform-resolved
+     *  at dispatch. */
     kind: z.literal('clock'),
     offsetMs: z.number().int().optional(),
+    format: z.enum(['epoch_ms', 'iso']).optional(),
   }),
   z.object({
     kind: z.literal('artifact_binding'),

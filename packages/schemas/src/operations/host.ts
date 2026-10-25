@@ -1317,6 +1317,14 @@ export const HostProcessStopOutputSchema = z.object({
 
 export const HostBindingInspectInputSchema = z.object({
   bindingId: HostBindingRef,
+  defaultBranch: z
+    .boolean()
+    .optional()
+    .describe(
+      "Also read the default branch of the folder's `origin` (`origin.defaultBranch`). A folder " +
+        'that never recorded `refs/remotes/origin/HEAD` asks `origin` over the network for it, ' +
+        'so pass `true` only where the branch is needed; otherwise it is left out.',
+    ),
 });
 
 /** GitHub's rule for an owner: letters, digits and single hyphens between them, at most 39. */
@@ -1368,7 +1376,8 @@ export const HostFolderOriginSchema = HostGitHubOriginSchema.extend({
     .optional()
     .describe(
       "The repository's default branch, by name alone — the branch `origin`'s HEAD names, read " +
-        "from the folder's `refs/remotes/origin/HEAD`, else asked of `origin` itself. Absent " +
+        "from the folder's `refs/remotes/origin/HEAD`, else asked of `origin` itself. Read " +
+        'only where the input asks for it with `defaultBranch: true`; absent otherwise and ' +
         'where neither can say.',
     ),
 });

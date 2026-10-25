@@ -297,6 +297,16 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       'open-pr': ['find-pr', 'describe-pr'],
       'read-review': ['review-commit', 'push'],
     });
+    // Only the repository read asks for the default branch, which may ask
+    // `origin` over the network; the posture read stays a local one.
+    expect(
+      wf.tasks
+        .filter((t) => t.operation === 'host.binding.inspect')
+        .map((t) => [t.taskId, (t.inputTemplate as { defaultBranch?: unknown }).defaultBranch]),
+    ).toEqual([
+      ['read-folder', true],
+      ['read-push-approval', undefined],
+    ]);
     expect(Object.fromEntries(wf.tasks.map((t) => [t.taskId, t.operation]))).toEqual({
       'message-from': 'workflow.run.decide',
       'find-commission': 'workflow.run.list',

@@ -1,14 +1,15 @@
 /**
  * Contract: a connected folder's inspection names the GitHub repository its
- * `origin` fetches from, as the operator's own git resolves the URL, and the
- * branch `origin`'s HEAD names — recorded in the folder, else asked of
- * `origin` — so a skill calls GitHub for the repository the folder pushes to,
+ * `origin` fetches from, as the operator's own git resolves the URL, and, for a
+ * caller that asks, the branch `origin`'s HEAD names — recorded in the folder,
+ * else asked of `origin` — so a skill calls GitHub for the repository the folder pushes to,
  * and targets its default branch, without being told either; a folder whose
  * `origin` is elsewhere, or which has none, names none, and a default branch
  * nothing can say is left out rather than guessed.
  */
 import { execFile } from 'node:child_process';
-import { chmod, mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -59,20 +60,50 @@ async function fakeSsh(base: string, name: string, upstream?: string): Promise<s
     upstream === undefined
       ? 'echo "ssh: connect to host github.com: Connection refused" >&2\nexit 255\n'
       : `exec git upload-pack '${upstream}'\n`;
-  await writeFile(path, `#!/bin/sh\ncase "$1" in -G) exit 1;; esac\n${body}`);
+  await writeFile(
+    path,
+    `#!/bin/sh\ncase "$1" in -G) exit 1;; esac\necho "$@" >> '${path}.calls'\n${body}`,
+  );
   await chmod(path, 0o755);
   return path;
 }
+
+/**
+ * The executor reaches a remote with the operator's global git config, where
+ * an `insteadOf` rewriting GitHub's ssh URLs to https would take the fake ssh
+ * out of the path and reach the real github.com. The global config is an
+ * empty file for the suite and `XDG_CONFIG_HOME` is dropped. The system
+ * config cannot be replaced from here — the executor withholds
+ * `GIT_CONFIG_SYSTEM` — so every proxy variable names a closed local port:
+ * a rewrite there to https fails on this machine rather than leaving it.
+ */
+const CLOSED_PROXY = 'http://127.0.0.1:9';
+const PROXY_ENV = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy'];
+const ISOLATED_ENV = [
+  'GIT_SSH_COMMAND',
+  'GIT_CONFIG_GLOBAL',
+  'XDG_CONFIG_HOME',
+  'NO_PROXY',
+  'no_proxy',
+  ...PROXY_ENV,
+];
 
 describe('host.binding.inspect — the folder’s GitHub origin', () => {
   let policyPath: string;
   let unreachable: string;
   let serving: string;
-  const priorSsh = process.env['GIT_SSH_COMMAND'];
+  const prior = new Map(ISOLATED_ENV.map((name) => [name, process.env[name]]));
 
   beforeAll(async () => {
     const base = await mkdtemp(join(tmpdir(), 'binding-origin-'));
     policyPath = join(base, 'host-policy.json');
+    const emptyConfig = join(base, 'gitconfig');
+    await writeFile(emptyConfig, '');
+    process.env['GIT_CONFIG_GLOBAL'] = emptyConfig;
+    delete process.env['XDG_CONFIG_HOME'];
+    delete process.env['NO_PROXY'];
+    delete process.env['no_proxy'];
+    for (const name of PROXY_ENV) process.env[name] = CLOSED_PROXY;
 
     // The repository on `origin`, whose HEAD names `trunk`.
     const upstream = join(base, 'upstream.git');
@@ -109,11 +140,13 @@ describe('host.binding.inspect — the folder’s GitHub origin', () => {
   });
 
   afterAll(() => {
-    if (priorSsh === undefined) delete process.env['GIT_SSH_COMMAND'];
-    else process.env['GIT_SSH_COMMAND'] = priorSsh;
+    for (const [name, value] of prior) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
   });
 
-  async function inspect(bindingId: string): Promise<unknown> {
+  async function inspect(bindingId: string, defaultBranch?: boolean): Promise<unknown> {
     let output: unknown;
     const result = await createHostHandler(policyPath, noPushApprovals).execute({
       operationId: 'host.binding.inspect',
@@ -123,7 +156,8 @@ describe('host.binding.inspect — the folder’s GitHub origin', () => {
       job: { inputRef: 'inline:x' },
       signal: new AbortController().signal,
       log: { error: () => undefined, warn: () => undefined, info: () => undefined },
-      readPayload: () => Promise.resolve({ bindingId }),
+      readPayload: () =>
+        Promise.resolve(defaultBranch === undefined ? { bindingId } : { bindingId, defaultBranch }),
       writePayload: (_kind: string, data: unknown) => {
         output = data;
         return Promise.resolve('inline:out');
@@ -141,7 +175,7 @@ describe('host.binding.inspect — the folder’s GitHub origin', () => {
 
   it("names the default branch the folder recorded for `origin`'s HEAD, without asking `origin`", async () => {
     // `origin` is unreachable here, so the branch can only come from the folder.
-    expect(await inspect('hb_recorded')).toMatchObject({
+    expect(await inspect('hb_recorded', true)).toMatchObject({
       origin: { owner: 'aflowai', repo: 'aflow', defaultBranch: 'develop' },
     });
   });
@@ -149,7 +183,7 @@ describe('host.binding.inspect — the folder’s GitHub origin', () => {
   it('asks `origin` which branch its HEAD names where the folder recorded none', async () => {
     process.env['GIT_SSH_COMMAND'] = serving;
     try {
-      expect(await inspect('hb_github')).toMatchObject({
+      expect(await inspect('hb_github', true)).toMatchObject({
         origin: { owner: 'aflowai', repo: 'aflow', defaultBranch: 'trunk' },
       });
     } finally {
@@ -158,8 +192,26 @@ describe('host.binding.inspect — the folder’s GitHub origin', () => {
   });
 
   it('leaves the default branch out where `origin` cannot be asked, and never guesses one', async () => {
-    const inspected = (await inspect('hb_github')) as { origin?: Record<string, unknown> };
+    const inspected = (await inspect('hb_github', true)) as { origin?: Record<string, unknown> };
     expect(inspected.origin).toEqual({ owner: 'aflowai', repo: 'aflow' });
+  });
+
+  it('reads no default branch, and asks `origin` nothing, for a caller that does not ask for it', async () => {
+    await rm(`${serving}.calls`, { force: true });
+    process.env['GIT_SSH_COMMAND'] = serving;
+    try {
+      for (const bindingId of ['hb_github', 'hb_recorded']) {
+        for (const asked of [undefined, false]) {
+          const inspected = (await inspect(bindingId, asked)) as {
+            origin?: Record<string, unknown>;
+          };
+          expect(inspected.origin).toEqual({ owner: 'aflowai', repo: 'aflow' });
+        }
+      }
+      expect(existsSync(`${serving}.calls`)).toBe(false);
+    } finally {
+      process.env['GIT_SSH_COMMAND'] = unreachable;
+    }
   });
 
   it.each(['hb_gitlab', 'hb_none'])('names none for %s', async (bindingId) => {

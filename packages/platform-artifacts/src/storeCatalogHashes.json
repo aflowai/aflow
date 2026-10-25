@@ -104,11 +104,11 @@
     "contentHash": "96d47c0e053dca5d45b10cc86024002f75906b4ddffc45a6917fda149977944a"
   },
   "local-publish": {
-    "version": 47,
+    "version": 48,
     "contentHash": "8dd7a34d5b1ecdf14f07523d40e5f32b7e8edb0c94ee8fa2c01919110ae8c19d"
   },
   "local-shepherd": {
-    "version": 20,
+    "version": 21,
     "contentHash": "f4e82ac0f0d1a5b51c8f1e4c2385420c4ef14831a36a261e21f8ed57ad47a0c1"
   },
   "newsapi": {

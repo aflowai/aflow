@@ -58,6 +58,25 @@ export const SHEPHERD_MERGE_OUTCOME_DOCS = 'merges';
 export const SHEPHERD_ABANDON_DOCS = 'abandons';
 
 /**
+ * Where a case handed to the agent is claimed, one document per case,
+ * created and never overwritten, so a case is handed over once however many
+ * passes find it. A pull request's case is its head and what the pass ended
+ * on — `<root>/<owner>/<repo>/pulls/<number>/handovers/<headSha>/<case>.json`,
+ * beside its pinned handoff — so a push that moves the head is a new case, and
+ * so is another case on the same head. A case of the repository itself, read
+ * before any pull request is, is the turn —
+ * `<root>/<owner>/<repo>/handovers/<turn's content hash>/<case>.json` — so it
+ * stays one case until a pass lists the repository's pull requests again.
+ */
+export const SHEPHERD_HAND_OVER_DOCS = 'handovers';
+
+/** The agent a case the shepherd's rules cannot act on is handed to: the space's Helmsman. */
+export const SHEPHERD_HAND_OVER_TARGET = {
+  kind: 'platform-role',
+  systemRole: 'cybernetic-helmsman',
+} as const;
+
+/**
  * `<root>/<owner>/<repo>/turn.json`: the pull request the last pass aimed at
  * none tended. The next such pass tends the one after it, so passes on a
  * schedule take the loop's pull requests in turn, whatever GitHub's
@@ -78,6 +97,15 @@ export const SHEPHERD_SCHEDULE_CRON_DEFAULT = '*/5 * * * *';
  * approval besides — has stopped, and the next pass takes the lease over.
  */
 export const SHEPHERD_LEASE_STALE_AFTER_MS = 12 * 60 * 60 * 1000;
+
+/**
+ * How long GitHub must have refused to list a repository's open pull requests,
+ * on every pass since the first that could not, before the case is handed to
+ * the agent: three passes at the default interval. One failed listing is read
+ * again by the next pass, and a conversation started on it would be one that
+ * pass made unnecessary.
+ */
+export const SHEPHERD_UNLISTED_PERSISTS_AFTER_MS = 15 * 60 * 1000;
 
 /**
  * The handoff comment opens with this and carries its record as `key: value`
@@ -304,6 +332,12 @@ export const LoopPullRequestSchema = z.object({
     ),
   handsOff: z.boolean(),
   draft: z.boolean(),
+  mergeable: z
+    .boolean()
+    .nullable()
+    .describe(
+      'GitHub’s `mergeable`: whether the head merges into its base as the base stands. `null` while GitHub has not computed it yet — the read asks it to, and a later read has the answer — so null is unknown, never yes.',
+    ),
   mergeableState: z
     .string()
     .optional()

@@ -58,7 +58,7 @@ export function repositoryTasks(after: string) {
       retryability: 'safe' as const,
       inputBindings: { bindingId: runInput('bindingId') },
       context: ctx('host.binding.inspect'),
-      inputTemplate: { bindingId: bind('bindingId') },
+      inputTemplate: { bindingId: bind('bindingId'), defaultBranch: true },
     },
 
     {

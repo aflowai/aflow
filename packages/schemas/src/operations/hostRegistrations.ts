@@ -476,8 +476,8 @@ export const HostOperationRegistrations: OperationRegistration[] = [
       'Read, from the policy file on the machine that holds a connected folder, which branches ' +
       'it may push, when a publication from it asks before pushing, the checks a ' +
       'publication runs first and for how long, how many coding agents that machine ' +
-      "runs at once, and the GitHub repository the folder's `origin` fetches from, with its " +
-      'default branch. Writes nothing in the folder itself.',
+      "runs at once, and the GitHub repository the folder's `origin` fetches from — with its " +
+      'default branch where asked. Writes nothing in the folder itself.',
     tags: ['host', 'binding', 'local'],
     idempotency: 'idempotent',
     accessMode: 'read',
@@ -496,6 +496,7 @@ export const HostOperationRegistrations: OperationRegistration[] = [
       ],
       pitfalls: [
         'The machine holding the folder answers it, so it completes only while that machine runs its executor.',
+        'origin.defaultBranch is read only with defaultBranch: true, which may ask origin over the network; leave it out where the branch is not needed.',
       ],
     },
     inputZod: HostBindingInspectInputSchema,
