@@ -188,6 +188,10 @@ export const HELMSMAN_DISCOVERY_PRESET: readonly string[] = [
   'ai.media.video',
   'ai.media.animate',
   'ai.media.edit_image',
+  // Measuring a catalog model's reasoning ladder with the space's stored
+  // provider key, so adding a model never waits on a key in someone's shell.
+  // Spends tokens: promoted when a model change asks for it, never pinned.
+  'ai.model.probe_reasoning',
   'ui.artifact.generate',
   'ui.artifact.get',
   'ui.artifact.list',
