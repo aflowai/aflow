@@ -73,6 +73,10 @@ export const WORKFLOW_TASK_SAFE_INLINE_OPERATIONS: ReadonlySet<string> = new Set
   // Pure: picks a decision from the rules and the state it is handed
   'workflow.run.decide',
   'agent.schedule.snooze',
+  // Reads one schedule of the space
+  'agent.schedule.get',
+  // Writes as the creator of the grant the task's run executes under, never the task's synthetic session
+  'agent.schedule.create',
 ]);
 
 export function isWorkflowTaskSafeInlineOperation(operationId: string): boolean {

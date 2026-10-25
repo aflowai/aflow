@@ -97,26 +97,32 @@ export interface FlowInputValidationResult {
  * Resolution order:
  *   1. Explicit `inputRole: 'primary'`
  *   2. First `required` input variable with text-like type
- *   3. First input variable
- *   4. None
+ *   3. First `required` input variable
+ *   4. The only input variable
+ *   5. None
+ *
+ * Steps 2–4 never infer a variable declared `inputRole: 'config'`: it is
+ * supplied by key, so a caller's `input` must not land in it.
  */
 function findPrimaryVariable(inputVars: StateVariable[]): StateVariable | undefined {
   // 1. Explicit
   const explicit = inputVars.find((v) => v.inputRole === 'primary');
   if (explicit) return explicit;
 
+  const candidates = inputVars.filter((v) => v.inputRole !== 'config');
+
   // 2. First required text-like input
-  const requiredText = inputVars.find(
+  const requiredText = candidates.find(
     (v) => v.required && (v.semanticType === 'text' || v.semanticType === 'markdown'),
   );
   if (requiredText) return requiredText;
 
   // 3. First required input
-  const requiredAny = inputVars.find((v) => v.required);
+  const requiredAny = candidates.find((v) => v.required);
   if (requiredAny) return requiredAny;
 
   // 4. First input variable (only if there's exactly one)
-  if (inputVars.length === 1) return inputVars[0];
+  if (inputVars.length === 1) return candidates[0];
 
   return undefined;
 }

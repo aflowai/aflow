@@ -11,6 +11,8 @@ import {
   validateCronExpression,
   getNextCronFireTime,
   isValidTimezone,
+  isScheduleRenewalDue,
+  scheduleFiringsLeft,
   MAX_FIRINGS_CAP,
   ONE_SHOT_MAX_HORIZON_DAYS,
   MIN_CRON_INTERVAL_SECONDS,
@@ -19,16 +21,18 @@ import {
   targetToColumns,
   PersistentAgentTargetSchema,
   type AflowError,
+  type FlowSchedule,
   type PersistentAgentTarget,
 } from '@aflow/schemas';
 import { getSessionState } from '@aflow/redis';
 import { Cron } from 'croner';
-import { getRunAccessGrant } from '@aflow/redis';
 import type { InlineHandlerArgs } from './types.js';
 import { emitStepSuccess, emitStepError } from './helpers.js';
 import { requireSpaceId } from './spaceScope.js';
 import { getOrchestratorLogger } from '../../../../lib/orchestratorLogger.js';
 import { readInlineInput } from './readInlineInput.js';
+import { definitionCreatedBy, requireScheduleAuthority } from './scheduleAuthority.js';
+import { handleRenew } from './scheduleRenewHandler.js';
 
 /** Max schedules an agent can create in a single run (safety guardrail) */
 const MAX_SCHEDULE_CREATES_PER_RUN = 10;
@@ -141,6 +145,11 @@ async function handleCreate(
     return;
   }
   runScheduleCreateCounts.set(runId, currentCount + 1);
+
+  if (typeof input['renews'] === 'string') {
+    await handleRenew(args, spaceId, input['renews'], startTime);
+    return;
+  }
 
   // --- Validate input is provided ---
   const scheduleInput = input['input'] as Record<string, unknown> | undefined;
@@ -436,19 +445,9 @@ async function handleCreate(
     expiresAt.setDate(expiresAt.getDate() + DEFAULT_RECURRING_EXPIRY_DAYS);
   }
 
-  const grant = await getRunAccessGrant(args.redis, context.tenantId, context.runId);
-  if (!grant) {
-    await emitStepError(
-      args,
-      'SCHEDULE_NO_CREDENTIAL_OWNER',
-      'Schedules run as their creator, and this session has no user identity to inherit — ' +
-        'a run started by this schedule would fail as soon as it needs credentials. ' +
-        'Create the schedule from a session started by a user.',
-      startTime,
-      'validation',
-    );
-    return;
-  }
+  const authority = await requireScheduleAuthority(args, spaceId, startTime);
+  if (!authority) return;
+  const { grant } = authority;
 
   // --- Insert ---
   const db = getDatabase();
@@ -497,11 +496,8 @@ async function handleCreate(
         nextFireAt,
         expiresAt,
         lastError: null,
-        createdBy:
-          typeof context.agentDefinition.metadata.custom['createdBy'] === 'string'
-            ? context.agentDefinition.metadata.custom['createdBy']
-            : null,
-        createdBySessionId: context.runId as string,
+        createdBy: definitionCreatedBy(context),
+        createdBySessionId: authority.sessionId,
         metadata: (input['metadata'] ?? {}) as Record<string, unknown>,
         creatorUserId: grant.grantedToUserId,
         creatorTenantRole: grant.tenantRole,
@@ -531,11 +527,37 @@ async function handleCreate(
     return;
   }
 
-  // The Action Center reads schedules from the database, so a connected client
-  // learns about this one only when something wakes its topic. Nothing else on
-  // this path does, and an operator who is already looking at the space is
-  // exactly the person the notice is for — without this it arrives on the next
-  // reconnect, which reads as the platform having kept it quiet.
+  await announceScheduleArmed(args, spaceId, row);
+
+  await emitStepSuccess(
+    args,
+    {
+      scheduleId: row.id,
+      name: row.name,
+      kind: row.kind,
+      status: row.status,
+      maxFirings: row.maxFirings,
+      nextFireAt: row.nextFireAt ? row.nextFireAt.toISOString() : null,
+      expiresAt: row.expiresAt ? row.expiresAt.toISOString() : null,
+      createdAt: row.createdAt.toISOString(),
+    },
+    startTime,
+  );
+}
+
+/**
+ * The Action Center reads schedules from the database, so a connected client
+ * learns about a new one only when something wakes its topic. Nothing else on
+ * this path does, and an operator who is already looking at the space is
+ * exactly the person the notice is for — without this it arrives on the next
+ * reconnect, which reads as the platform having kept it quiet.
+ */
+async function announceScheduleArmed(
+  args: InlineHandlerArgs,
+  spaceId: string,
+  row: { id: string; name: string; kind: string },
+): Promise<void> {
+  const { context } = args;
   try {
     const { appendEntityEvent } = await import('@aflow/redis');
     await appendEntityEvent(args.redis, {
@@ -561,21 +583,6 @@ async function handleCreate(
       scheduleId: row.id,
     });
   }
-
-  await emitStepSuccess(
-    args,
-    {
-      scheduleId: row.id,
-      name: row.name,
-      kind: row.kind,
-      status: row.status,
-      maxFirings: row.maxFirings,
-      nextFireAt: row.nextFireAt ? row.nextFireAt.toISOString() : null,
-      expiresAt: row.expiresAt ? row.expiresAt.toISOString() : null,
-      createdAt: row.createdAt.toISOString(),
-    },
-    startTime,
-  );
 }
 
 // ============================================================================
@@ -907,6 +914,14 @@ function getCronMinIntervalSeconds(expression: string, timezone: string): number
 }
 
 function rowToSchedule(row: Record<string, unknown>): Record<string, unknown> {
+  const expiresAt = row['expiresAt'] ? (row['expiresAt'] as Date).toISOString() : null;
+  const facts = {
+    kind: row['kind'] as FlowSchedule['kind'],
+    status: row['status'] as FlowSchedule['status'],
+    maxFirings: (row['maxFirings'] as number | null | undefined) ?? null,
+    firingCount: row['firingCount'] as number,
+    expiresAt,
+  };
   return {
     id: row['id'],
     spaceId: row['spaceId'],
@@ -926,14 +941,17 @@ function rowToSchedule(row: Record<string, unknown>): Record<string, unknown> {
     status: row['status'],
     maxFirings: row['maxFirings'] ?? null,
     firingCount: row['firingCount'],
+    firingsLeft: scheduleFiringsLeft(facts),
+    renewalDue: isScheduleRenewalDue(facts),
     lastFiredAt: row['lastFiredAt'] ? (row['lastFiredAt'] as Date).toISOString() : null,
     lastRunId: row['lastRunId'] ?? null,
     nextFireAt: row['nextFireAt'] ? (row['nextFireAt'] as Date).toISOString() : null,
-    expiresAt: row['expiresAt'] ? (row['expiresAt'] as Date).toISOString() : null,
+    expiresAt,
     lastError: row['lastError'] ?? null,
     createdBy: row['createdBy'] ?? null,
     createdByRunId: row['createdByRunId'] ?? null,
     metadata: row['metadata'] ?? {},
+    renewsScheduleId: row['renewsScheduleId'] ?? null,
     createdAt: row['createdAt'] ? (row['createdAt'] as Date).toISOString() : null,
     updatedAt: row['updatedAt'] ? (row['updatedAt'] as Date).toISOString() : null,
   };

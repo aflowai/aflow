@@ -509,7 +509,7 @@ export class ScheduleEvaluator {
 
     let resolvedInput: Record<string, unknown>;
     try {
-      const ctx: InputResolutionContext = { now: new Date() };
+      const ctx: InputResolutionContext = { schedule: { id: schedule.id }, now: new Date() };
       resolvedInput = await resolveInputTemplate(schedule.input_template, ctx);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -934,7 +934,11 @@ export class ScheduleEvaluator {
           tenant_id: run.tenantId,
         };
         try {
-          const ctx: InputResolutionContext = { sourceRun, now: new Date() };
+          const ctx: InputResolutionContext = {
+            schedule: { id: schedule.id },
+            sourceRun,
+            now: new Date(),
+          };
           resolved.push({
             schedule,
             input: await resolveInputTemplate(schedule.input_template, ctx),
