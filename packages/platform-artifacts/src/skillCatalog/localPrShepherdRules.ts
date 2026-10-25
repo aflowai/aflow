@@ -1,6 +1,7 @@
 import {
   HOST_MERGE_POSTURE_REVIEWED_PUSH,
   SHEPHERD_HANDS_OFF_LABEL,
+  SHEPHERD_UNLISTED_PERSISTS_AFTER_MS,
   type ShepherdMergeOutcome,
   type WorkflowRunDecideRule,
 } from '@aflow/schemas';
@@ -21,28 +22,49 @@ function greenAnd(expression: string, reason: string): WorkflowRunDecideRule {
   return { when: { allOf: [GREEN, expression] }, decision: 'leave', reason };
 }
 
-/**
- * The rules that end a pass on a case they cannot act on — GitHub refused or
- * could not be read, or the head is in a state no remedy of the shepherd's
- * answers — and that no later pass would act on either. Their case is handed
- * to the agent (`localPrShepherdHandOver.ts`), which decides and acts with the
- * skills it has. A rule holding back on a person's or the folder's own choice
- * — the posture, a draft, a declined merge, a review requesting changes — is
- * no such case, and stays with them.
- */
-const HAND_OVER = new Set<WorkflowRunDecideRule>();
+function greenWait(expression: string, reason: string): WorkflowRunDecideRule {
+  return { when: { allOf: [GREEN, expression] }, decision: 'wait', reason };
+}
 
-function handedOver(rule: WorkflowRunDecideRule): WorkflowRunDecideRule {
-  HAND_OVER.add(rule);
+/**
+ * The rules that end a pass on a case they cannot act on — GitHub refused,
+ * or could not be read on every pass for as long as
+ * `SHEPHERD_UNLISTED_PERSISTS_AFTER_MS`, or the head is in a state no remedy
+ * of the shepherd's answers — and that no later pass would act on either.
+ * Their case is handed to the agent (`localPrShepherdHandOver.ts`), which
+ * decides and acts with the skills it has. A single read that failed is no
+ * such case: the next pass reads it again. Nor is a rule holding back on a
+ * person's or the folder's own choice — the posture, a draft, a declined
+ * merge, a review requesting changes — which stays with them.
+ *
+ * Each is claimed under the name of its case, so a head handed over for one
+ * is still handed over for another.
+ */
+const HAND_OVER = new Map<WorkflowRunDecideRule, string>();
+
+function handedOver(handOverCase: string, rule: WorkflowRunDecideRule): WorkflowRunDecideRule {
+  HAND_OVER.set(rule, handOverCase);
   return rule;
 }
 
+/**
+ * The case of a merge GitHub refused other than for a moved base: named so
+ * by `record-merge` in the pass it is refused, and by the rule that ends every
+ * later pass on the refused head, so the two are one case.
+ */
+export const HAND_OVER_MERGE_REFUSED = 'merge_refused' satisfies ShepherdMergeOutcome;
+
+// Said of the case, not of this pass: the claim decides which pass hands it
+// over, and the handoff says where this one did.
 const HANDED_OVER_HEAD =
-  ' The case is handed to the Helmsman, once for this head, with what the pass read, decided and tried.';
+  ' The case is the Helmsman’s: it is handed to the Helmsman once for this head, by the first pass that ends on it, with what that pass read, decided and tried.';
+
+const READ_AGAIN = ' Nothing is merged on this pass; the next pass reads it again.';
 
 /**
  * Where the head is green, what the merge posture allows (D6): each condition
- * that does not hold leaves the pull request, saying which, and only where
+ * that does not hold leaves the pull request, saying which — or waits, where
+ * a read it needs failed, for the next pass to read again — and only where
  * every one holds is the decision `merge`. They follow every rule that decides
  * `wait`, so a pull request with a push on its way is never merged. Each
  * condition is written `!= <expected>`, so a read that did not happen — the
@@ -69,6 +91,7 @@ export const MERGE_RULES: readonly WorkflowRunDecideRule[] = [
     'The operator declined to merge this head. No merge is asked for again until a push moves it.',
   ),
   handedOver(
+    HAND_OVER_MERGE_REFUSED,
     greenAnd(
       'state.handoff.data.mergeRefusedSha == state.pr.data.headSha',
       `GitHub refused to merge this head. No merge is asked for again until a push moves it.${HANDED_OVER_HEAD}`,
@@ -79,17 +102,13 @@ export const MERGE_RULES: readonly WorkflowRunDecideRule[] = [
   // lease that fails where anything is recorded for it. A record read with no
   // pin shows nothing, and the handoff that pass posts carries nothing either,
   // so holding it back would cost a pass and see nothing more.
-  handedOver(
-    greenAnd(
-      'state.requiredRulesStatus != 200',
-      `GitHub did not return the rulesets of the base branch, so which checks it requires is unknown: nothing is merged.${HANDED_OVER_HEAD}`,
-    ),
+  greenWait(
+    'state.requiredRulesStatus != 200',
+    `GitHub did not return the rulesets of the base branch, so which checks it requires is unknown.${READ_AGAIN}`,
   ),
-  handedOver(
-    greenAnd(
-      'state.requiredProtectionStatus != 200',
-      `GitHub did not return the base branch's protection, so which checks it requires is unknown: nothing is merged.${HANDED_OVER_HEAD}`,
-    ),
+  greenWait(
+    'state.requiredProtectionStatus != 200',
+    `GitHub did not return the base branch's protection, so which checks it requires is unknown.${READ_AGAIN}`,
   ),
   greenAnd(
     "state.checks.data.required.state == 'none'",
@@ -99,13 +118,12 @@ export const MERGE_RULES: readonly WorkflowRunDecideRule[] = [
     "state.checks.data.required.state != 'passed'",
     "A check the base branch requires has not passed on the head — it failed, is still running, was skipped, or has no check run on it, as a context reported only as a commit status has none. The handoff names each: the merge is the operator's.",
   ),
-  handedOver(
-    greenAnd(
-      'state.reviewsStatus != 200',
-      `GitHub did not return the pull request's reviews, so whether a person requests changes is unknown: nothing is merged.${HANDED_OVER_HEAD}`,
-    ),
+  greenWait(
+    'state.reviewsStatus != 200',
+    `GitHub did not return the pull request's reviews, so whether a person requests changes is unknown.${READ_AGAIN}`,
   ),
   handedOver(
+    'reviews_past_page',
     greenAnd(
       'state.reviews.complete != true',
       `The pull request has more reviews than one page holds, so a change request past it would not be seen: nothing is merged.${HANDED_OVER_HEAD}`,
@@ -172,6 +190,16 @@ const BASE_MOVED_AFTER_REMEDY: WorkflowRunDecideRule = {
     "This check run's failure was acted on already, and the base branch has moved since: GitHub does not run a pull request's checks again when its base moves, so the failure may be one the base has since cleared. A re-run of the failed jobs would run on the old base again, so the base is merged into the branch and published, and CI runs over it.",
 };
 
+const UNLISTED = ["state.aim.decision == 'discover'", 'state.candidates.statusCode != 200'];
+
+/** A listing that failed where no earlier failure is noted: this pass notes it, and waits. */
+const UNLISTED_FIRST: WorkflowRunDecideRule = {
+  when: { allOf: UNLISTED },
+  decision: 'wait',
+  reason:
+    "GitHub did not list the repository's open pull requests, so nothing was read to act on. The next pass reads them again; only a listing GitHub goes on refusing is handed to the Helmsman.",
+};
+
 const NODE_IN_FLIGHT_REASON =
   "A run serving this pull request's plan node, or a node under it, is in flight — running, or paused — whoever started it: the node's work is under way.";
 
@@ -197,14 +225,27 @@ export const SHEPHERD_RULES: readonly WorkflowRunDecideRule[] = [
       "The folder's `origin` is not a repository on GitHub, so there is no pull request to read.",
   },
   // A pass aimed at a number reads its pull request directly and lists none.
-  handedOver({
+  // The turn notes when a listing first failed (`note-unlisted`), and a pass
+  // that lists them clears it, so only a listing that failed on every pass for
+  // the whole bound is handed over.
+  handedOver('unlisted', {
     when: {
-      allOf: ["state.aim.decision == 'discover'", 'state.candidates.statusCode != 200'],
+      allOf: [
+        ...UNLISTED,
+        'state.turn.dataJson.unlistedAtMs != null',
+        'state.turn.dataJson.unlistedAtMs <= state.unlistedBefore',
+      ],
     },
     decision: 'wait',
-    reason:
-      "GitHub did not list the repository's open pull requests, so nothing was read to act on — the GitHub connection's access to the repository is the likely cause. The case is handed to the Helmsman, once until a pass tends a pull request again, with GitHub's answer.",
+    reason: `GitHub has not listed the repository's open pull requests on any pass for ${String(SHEPHERD_UNLISTED_PERSISTS_AFTER_MS / 60_000)} minutes or more, so nothing was read to act on — the GitHub connection's access to the repository is the likely cause. The case is the Helmsman’s: it is handed to the Helmsman once, by the first pass that ends on it, with GitHub's answer, and again only after a pass lists them.`,
   }),
+  {
+    when: { allOf: [...UNLISTED, 'state.turn.dataJson.unlistedAtMs != null'] },
+    decision: 'wait',
+    reason:
+      "GitHub did not list the repository's open pull requests on this pass, nor on an earlier one since a pass last listed them, so nothing was read to act on. The next pass reads them again; should GitHub go on refusing, the case is handed to the Helmsman.",
+  },
+  UNLISTED_FIRST,
   {
     when: {
       allOf: ["state.aim.decision == 'discover'", 'state.candidates.data.count == 0'],
@@ -332,17 +373,27 @@ export const SHEPHERD_RULES: readonly WorkflowRunDecideRule[] = [
   },
   // A red head's fix is commissioned with its base merged in, conflicts and
   // all; any other head GitHub says does not merge has nothing a remedy
-  // answers, and GitHub refuses its merge.
-  handedOver({
+  // answers, and GitHub refuses its merge. A draft, or a folder whose merge
+  // the operator keeps, is held by its person whatever it merges into, so the
+  // rule holds only where the shepherd would merge: those fall through to
+  // their own rule. Written `== <expected>`, so a read that did not happen
+  // hands nothing over.
+  handedOver('does_not_merge', {
     when: {
-      allOf: ['state.pr.data.mergeable == false', "state.checks.data.state != 'failing'"],
+      allOf: [
+        'state.pr.data.mergeable == false',
+        "state.checks.data.state != 'failing'",
+        'state.pr.data.draft == false',
+        "state.folder.branchPolicy.mergePosture == 'when-green'",
+        `state.folder.branchPolicy.pushApproval == '${HOST_MERGE_POSTURE_REVIEWED_PUSH}'`,
+      ],
     },
     decision: 'leave',
     reason: `GitHub says the head does not merge into its base as the base stands now, and CI has not failed on it: no fix answers that, and GitHub refuses the merge.${HANDED_OVER_HEAD}`,
   }),
   ...MERGE_RULES,
   // Every later pass reads the same one page, so a wait here would never end.
-  handedOver({
+  handedOver('checks_past_page', {
     when: { expression: "state.checks.data.state == 'unknown'" },
     decision: 'leave',
     reason: `GitHub holds more check runs on the head than the one page of a hundred a pass reads, and none on that page failed or is still running: whether CI failed on the head is unknown, so the shepherd neither fixes nor merges it.${HANDED_OVER_HEAD}`,
@@ -377,6 +428,33 @@ export const HAND_OVER_RULES: readonly WorkflowRunDecideRule[] = SHEPHERD_RULES.
 export const DECIDED_HAND_OVER: readonly string[] = HAND_OVER_RULES.map(
   (rule) => `tasks.decide.output.rule == ${String(SHEPHERD_RULES.indexOf(rule))}`,
 );
+
+/** The decision step ended on the first refusal to list the pull requests since they were last listed. */
+export const DECIDED_UNLISTED_FIRST = `tasks.decide.output.rule == ${String(SHEPHERD_RULES.indexOf(UNLISTED_FIRST))}`;
+
+/**
+ * The name of the case a pass hands over, which its claim is keyed by: the
+ * merge refused in this pass, or the rule the pass ended on. A name, not a
+ * rule's index, so the refusal and the rule that ends later passes on the
+ * refused head are one case.
+ */
+export const HAND_OVER_CASE_RULES: readonly WorkflowRunDecideRule[] = [
+  {
+    when: { expression: `state.mergeOutcome == '${HAND_OVER_MERGE_REFUSED}'` },
+    decision: HAND_OVER_MERGE_REFUSED,
+    reason: 'GitHub refused the merge this pass asked for.',
+  },
+  ...HAND_OVER_RULES.map((rule) => ({
+    when: { expression: `state.rule == ${String(SHEPHERD_RULES.indexOf(rule))}` },
+    decision: HAND_OVER.get(rule)!,
+    reason: `The pass ended on the rule that hands its case over as \`${HAND_OVER.get(rule)!}\`.`,
+  })),
+];
+
+export const HAND_OVER_CASE_OTHERWISE = {
+  decision: 'unnamed',
+  reason: 'The pass ended on no case it hands over.',
+};
 
 /**
  * The decision step's `rule` where the base moved after the remedy: the pass

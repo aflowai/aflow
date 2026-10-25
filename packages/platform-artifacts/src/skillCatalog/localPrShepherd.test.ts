@@ -47,6 +47,7 @@ import {
   RequiredCheckNamesSchema,
   SHEPHERD_HAND_OVER_TARGET,
   SHEPHERD_LEASE_STALE_AFTER_MS,
+  SHEPHERD_UNLISTED_PERSISTS_AFTER_MS,
   type ShepherdHandoffRead,
   ShepherdHandoffReadSchema,
   skillStarterAgentDefinition,
@@ -70,6 +71,8 @@ import {
 import {
   BASE_MOVED_MESSAGE,
   DECIDED_HAND_OVER,
+  HAND_OVER_CASE_OTHERWISE,
+  HAND_OVER_CASE_RULES,
   HAND_OVER_RULES,
   MERGE_REFUSAL_OTHERWISE,
   MERGE_REFUSAL_RULES,
@@ -269,6 +272,8 @@ interface Scenario {
   pinState?: { attemptCount: string; checkRunId: string; remedyBaseSha?: string };
   /** The pull request the last pass aimed at none tended; `fails` where its read failed. */
   turn?: number | 'fails';
+  /** How long ago the turn notes GitHub first refused to list the pull requests, where it notes it. */
+  unlistedForMs?: number;
   /**
    * The space's memory of heads handed to a person, by path, shared by passes
    * that overlap or follow one another.
@@ -647,9 +652,12 @@ function answer(taskId: string, input: Record<string, unknown>, s: Scenario): An
     case 'read-turn': {
       MemoryGetInputSchema.parse(input);
       if (s.turn === 'fails') return { ok: false };
-      const turn = { pullNumber: s.turn };
+      const turn = {
+        pullNumber: s.turn,
+        ...(s.unlistedForMs !== undefined ? { unlistedAtMs: NOW - s.unlistedForMs } : {}),
+      };
       return ok(
-        s.turn === undefined
+        s.turn === undefined && s.unlistedForMs === undefined
           ? { found: false }
           : { stat: { path: 'turn', contentHash: hashOf(turn) }, dataJson: turn },
       );
@@ -676,6 +684,7 @@ function answer(taskId: string, input: Record<string, unknown>, s: Scenario): An
       });
     }
     case 'remember-turn':
+    case 'note-unlisted':
       MemoryPutInputSchema.parse(input);
       return ok({ id: 'doc-4', path: input['path'], version: 1 });
     case 'read-abandon-claim': {
@@ -808,6 +817,7 @@ function answer(taskId: string, input: Record<string, unknown>, s: Scenario): An
       return ok({ scheduleId: `successor-of-${String(renews)}`, kind: 'cron', status: 'active' });
     }
     case 'read-firing':
+    case 'name-hand-over-case':
     case 'aim':
     case 'decide':
     case 'record-remedy':
@@ -1782,16 +1792,18 @@ describe('Local PR Shepherd — it approves nothing', () => {
     expect(SHEPHERD_RULES.indexOf(merges[0]!)).toBeGreaterThan(first);
     // Every wait that can hold on a green head — hands-off, a live lease, a
     // publication or commission in flight, a read that failed — is read first.
-    // The waits after them hold only where CI is not passing — but one: a
-    // head GitHub has not yet said merges, read again next pass, which is the
-    // last rule before the merge.
+    // The waits after them hold only where CI is not passing — but a read a
+    // merge needs that GitHub did not answer, read again next pass, and a
+    // head GitHub has not yet said merges, the last rule before the merge.
     const mergeIndex = SHEPHERD_RULES.indexOf(merges[0]!);
     expect(SHEPHERD_RULES[mergeIndex - 1]).toMatchObject({
       decision: 'wait',
       when: { allOf: expect.arrayContaining(['state.pr.data.mergeable != true']) },
     });
+    const failedRead = /state\.(requiredRulesStatus|requiredProtectionStatus|reviewsStatus) != 200/;
     for (const [index, rule] of SHEPHERD_RULES.entries()) {
       if (rule.decision !== 'wait' || index < first || index === mergeIndex - 1) continue;
+      if (failedRead.test(JSON.stringify(rule.when))) continue;
       expect(JSON.stringify(rule.when)).toMatch(
         /state\.checks\.data\.(state != 'failing'|firstFailing)/,
       );
@@ -1994,11 +2006,13 @@ describe('Local PR Shepherd — it merges what the posture allows', () => {
     expect(left.outputs.get('decide')?.['reason']).toMatch(/requires no check/);
   });
 
-  it('leaves where the rulesets could not be read, reading no protection', () => {
-    const left = green({ required: { rulesStatus: 403 } });
-    expect(left.decision).toBe('leave');
-    expect(left.statuses.get('read-required-protection')).toBe('skipped');
-    expect(presetOf(left.inputs.get('read-pr-checks')!)).toBe('loop_checks');
+  it('waits where the rulesets could not be read, reading no protection, and hands nothing over', () => {
+    const unread = green({ required: { rulesStatus: 403 } });
+    expect(unread.decision).toBe('wait');
+    expect(unread.outputs.get('decide')?.['reason']).toMatch(/next pass reads it again/);
+    expect(unread.statuses.get('read-required-protection')).toBe('skipped');
+    expect(presetOf(unread.inputs.get('read-pr-checks')!)).toBe('loop_checks');
+    expect(unread.statuses.get('claim-hand-over')).toBe('skipped');
   });
 
   // The second planted refusal: a person requesting changes holds the merge
@@ -2492,8 +2506,10 @@ describe('Local PR Shepherd — a green pull request costs one pass', () => {
 });
 
 describe('Local PR Shepherd — what its rules cannot act on goes to the agent', () => {
-  const PR_CASE = `/shepherd/aflowai/aflow/pulls/94/handovers/${HEAD}.json`;
+  const PR_CASES = `/shepherd/aflowai/aflow/pulls/94/handovers/${HEAD}`;
+  const PR_CASE = `${PR_CASES}/does_not_merge.json`;
   const CONFLICTING: Scenario = {
+    mergePosture: 'when-green',
     checks: GREEN,
     pullRequest: { mergeable: false, mergeableState: 'dirty' },
     pinned: 'found',
@@ -2552,7 +2568,11 @@ describe('Local PR Shepherd — what its rules cannot act on goes to the agent',
       expect(brief).toContain(fact);
     }
     // The claim is the head's, beside its pinned handoff; the handoff names the conversation.
-    expect(handOvers.get(PR_CASE)).toMatchObject({ headSha: HEAD, runId: RUN_ID });
+    expect(handOvers.get(PR_CASE)).toMatchObject({
+      headSha: HEAD,
+      case: 'does_not_merge',
+      runId: RUN_ID,
+    });
     expect(conflicting.ran.indexOf('handoff-edit')).toBeGreaterThan(
       conflicting.ran.indexOf('hand-over-to-agent'),
     );
@@ -2570,6 +2590,10 @@ describe('Local PR Shepherd — what its rules cannot act on goes to the agent',
     expect(again.statuses.get('claim-hand-over')).toBe('failed');
     expect(again.statuses.get('hand-over-to-agent')).toBe('skipped');
     expect(handoffBodyOf(again)).not.toContain('handed the case to the Helmsman');
+    // The reason speaks of the case, not of this pass, so it holds on a refused claim too.
+    expect(String(again.outputs.get('decide')?.['reason'])).toMatch(
+      /handed to the Helmsman once for this head, by the first pass that ends on it/,
+    );
 
     const pushed = 'a'.repeat(40);
     const moved = pass({
@@ -2579,7 +2603,30 @@ describe('Local PR Shepherd — what its rules cannot act on goes to the agent',
       pullRequest: { mergeable: false, mergeableState: 'dirty', headSha: pushed },
     });
     expect(moved.statuses.get('hand-over-to-agent')).toBe('succeeded');
-    expect(handOvers.has(`/shepherd/aflowai/aflow/pulls/94/handovers/${pushed}.json`)).toBe(true);
+    expect(
+      handOvers.has(`/shepherd/aflowai/aflow/pulls/94/handovers/${pushed}/does_not_merge.json`),
+    ).toBe(true);
+  });
+
+  it('hands over another case on a head already handed over, and that case once', () => {
+    const handOvers = new Map<string, Record<string, unknown>>();
+    const conflicting = pass({ ...CONFLICTING, handOvers });
+    expect(conflicting.statuses.get('hand-over-to-agent')).toBe('succeeded');
+
+    // The base moved and the head merges again, unpushed: GitHub refuses its
+    // merge for another reason, a case of its own on the same head.
+    const refused = green({ merge: 'not-mergeable', handoff: readBack(conflicting), handOvers });
+    expect(refused.outputs.get('name-hand-over-case')?.['decision']).toBe('merge_refused');
+    expect(refused.statuses.get('claim-hand-over')).toBe('succeeded');
+    expect(refused.statuses.get('hand-over-to-agent')).toBe('succeeded');
+    expect([...handOvers.keys()].sort()).toEqual([PR_CASE, `${PR_CASES}/merge_refused.json`]);
+
+    // The pass after it ends on the refused head: the same case, not handed over again.
+    const after = green({ handoff: readBack(refused), handOvers });
+    expect(after.outputs.get('name-hand-over-case')?.['decision']).toBe('merge_refused');
+    expect(after.statuses.get('claim-hand-over')).toBe('failed');
+    expect(after.statuses.get('hand-over-to-agent')).toBe('skipped');
+    expect(handOvers.size).toBe(2);
   });
 
   it('commissions the fix of a red head that conflicts, as before: its commission merges the base in', () => {
@@ -2596,6 +2643,7 @@ describe('Local PR Shepherd — what its rules cannot act on goes to the agent',
     expect(refused.statuses.get('hand-over-to-agent')).toBe('succeeded');
     expect(briefOf(refused)).toContain('GitHub answered 405: Pull Request is not mergeable');
     expect(briefOf(refused)).toContain('What the pass decided: `merge`');
+    expect(handOvers.has(`${PR_CASES}/merge_refused.json`)).toBe(true);
 
     // The pass after it ends on the refused head, and hands nothing over twice.
     const after = green({ handoff: readBack(refused), handOvers });
@@ -2613,39 +2661,109 @@ describe('Local PR Shepherd — what its rules cannot act on goes to the agent',
     expect(handedBack.statuses.get('claim-hand-over')).toBe('skipped');
   });
 
-  it('hands over a repository it cannot list once, not every pass, until a pass tends a pull request again', () => {
-    const handOvers = new Map<string, Record<string, unknown>>();
-    const turnCase = (pullNumber: number) =>
-      `/shepherd/aflowai/aflow/handovers/${hashOf({ pullNumber })}.json`;
-    const first = pass({ listStatus: 401, turn: 94, handOvers });
-    expect(first.decision).toBe('wait');
-    expect(first.statuses.get('hand-over-to-agent')).toBe('succeeded');
-    expect(handOvers.has(turnCase(94))).toBe(true);
-    const brief = briefOf(first);
-    expect(brief).toContain('open pull requests: 401 — Bad credentials');
-    expect(brief).not.toContain('The pull request: #');
-    expect(scheduleOf(first).name).toBe('Local PR Shepherd hands over aflowai/aflow');
+  describe('a repository it cannot list', () => {
+    const PERSISTS = SHEPHERD_UNLISTED_PERSISTS_AFTER_MS;
+    const noteOf = (p: Pass) =>
+      MemoryPutInputSchema.parse(p.inputs.get('note-unlisted')).content.inlineJson;
+    const turnCase = (unlistedForMs: number) =>
+      `/shepherd/aflowai/aflow/handovers/${hashOf({ pullNumber: 94, unlistedAtMs: NOW - unlistedForMs })}/unlisted.json`;
 
-    for (let next = 0; next < 3; next += 1) {
-      const again = pass({ listStatus: 401, turn: 94, handOvers });
-      expect(again.decision).toBe('wait');
-      expect(again.statuses.get('claim-hand-over')).toBe('failed');
-      expect(again.statuses.get('hand-over-to-agent')).toBe('skipped');
-    }
+    it('waits on a single failed listing, hands nothing over, and notes on the turn when it failed', () => {
+      const handOvers = new Map<string, Record<string, unknown>>();
+      const first = pass({ listStatus: 401, turn: 94, handOvers });
+      expect(first.decision).toBe('wait');
+      expect(String(first.outputs.get('decide')?.['reason'])).toMatch(/next pass reads them again/);
+      expect(first.statuses.get('claim-hand-over')).toBe('skipped');
+      expect(first.ran).not.toContain('hand-over-to-agent');
+      expect(handOvers.size).toBe(0);
+      expect(MemoryPutInputSchema.parse(first.inputs.get('note-unlisted')).path).toBe(
+        '/shepherd/aflowai/aflow/turn.json',
+      );
+      // Whose turn it is stands: the next pass that lists them tends the one after 94.
+      expect(noteOf(first)).toEqual({ pullNumber: 94, runId: RUN_ID, unlistedAtMs: NOW });
+    });
 
-    // A pass that tends a pull request records a turn of its own, whatever
-    // the number — so the listing failing after it is a new case.
-    const tended = pass({ turn: 94 });
-    expect(
-      MemoryPutInputSchema.parse(tended.inputs.get('remember-turn')).content.inlineJson,
-    ).toEqual({ pullNumber: 94, runId: RUN_ID });
-    const later = pass({ listStatus: 401, turn: 93, handOvers });
-    expect(later.statuses.get('hand-over-to-agent')).toBe('succeeded');
+    it('waits while the refusal has not lasted, and keeps the time it first failed', () => {
+      const handOvers = new Map<string, Record<string, unknown>>();
+      for (const ageMs of [5 * 60_000, PERSISTS - 1]) {
+        const within = pass({ listStatus: 401, turn: 94, unlistedForMs: ageMs, handOvers });
+        expect(within.decision).toBe('wait');
+        expect(String(within.outputs.get('decide')?.['reason'])).toMatch(/nor on an earlier one/);
+        expect(within.statuses.get('note-unlisted')).toBe('skipped');
+        expect(within.statuses.get('claim-hand-over')).toBe('skipped');
+      }
+      expect(handOvers.size).toBe(0);
+    });
+
+    it('hands over a listing refused on every pass for the whole bound, once, until a pass lists them again', () => {
+      const handOvers = new Map<string, Record<string, unknown>>();
+      const persisted = pass({ listStatus: 401, turn: 94, unlistedForMs: PERSISTS, handOvers });
+      expect(persisted.decision).toBe('wait');
+      expect(persisted.outputs.get('name-hand-over-case')?.['decision']).toBe('unlisted');
+      expect(persisted.statuses.get('hand-over-to-agent')).toBe('succeeded');
+      expect(persisted.statuses.get('note-unlisted')).toBe('skipped');
+      expect([...handOvers.keys()]).toEqual([turnCase(PERSISTS)]);
+      const brief = briefOf(persisted);
+      expect(brief).toContain('open pull requests: 401 — Bad credentials');
+      expect(brief).not.toContain('The pull request: #');
+      expect(scheduleOf(persisted).name).toBe('Local PR Shepherd hands over aflowai/aflow');
+
+      for (let next = 0; next < 3; next += 1) {
+        const again = pass({ listStatus: 401, turn: 94, unlistedForMs: PERSISTS, handOvers });
+        expect(again.decision).toBe('wait');
+        expect(again.statuses.get('claim-hand-over')).toBe('failed');
+        expect(again.statuses.get('hand-over-to-agent')).toBe('skipped');
+      }
+
+      // A pass that lists them records the turn without the note — whether
+      // it tends a pull request or finds none of the loop's — so a refusal
+      // after it is a first one again, waited on before it is handed over.
+      for (const listed of [
+        pass({ turn: 94, unlistedForMs: PERSISTS }),
+        pass({ buried: true, turn: 94, unlistedForMs: PERSISTS }),
+      ]) {
+        expect(
+          MemoryPutInputSchema.parse(listed.inputs.get('remember-turn')).content.inlineJson,
+        ).toEqual({ pullNumber: 94, runId: RUN_ID });
+      }
+      const later = pass({ listStatus: 401, turn: 94, handOvers });
+      expect(later.statuses.get('claim-hand-over')).toBe('skipped');
+      expect(later.statuses.get('note-unlisted')).toBe('succeeded');
+    });
+
+    it('notes nothing over a turn it could not read, and hands nothing over', () => {
+      const unread = pass({ listStatus: 401, turn: 'fails' });
+      expect(unread.decision).toBe('wait');
+      expect(unread.statuses.get('note-unlisted')).toBe('skipped');
+      expect(unread.statuses.get('claim-hand-over')).toBe('skipped');
+    });
   });
 
   it.each<[string, () => Pass]>([
     ['the merge posture is `never`', () => green({ mergePosture: 'never' })],
     ['the pull request is a draft', () => green({ pullRequest: { draft: true } })],
+    [
+      'a draft does not merge into its base',
+      () => pass({ ...CONFLICTING, pullRequest: { ...CONFLICTING.pullRequest, draft: true } }),
+    ],
+    [
+      'a draft does not merge into its base and CI is still running',
+      () =>
+        pass({
+          ...CONFLICTING,
+          checks: { state: 'pending', total: 2, failing: [] },
+          pullRequest: { ...CONFLICTING.pullRequest, draft: true },
+        }),
+    ],
+    [
+      'the head does not merge under the merge posture `never`',
+      () => pass({ ...CONFLICTING, mergePosture: 'never' }),
+    ],
+    [
+      'the head does not merge where the push posture runs no review',
+      () => pass({ ...CONFLICTING, pushApproval: 'always' }),
+    ],
+    ['GitHub did not return the rulesets once', () => green({ required: { rulesStatus: 500 } })],
     [
       'a person’s review requests changes',
       () =>
@@ -2691,6 +2809,28 @@ describe('Local PR Shepherd — what its rules cannot act on goes to the agent',
     expect(taskById.get('claim-hand-over')?.when).toMatchObject({
       anyOf: expect.arrayContaining([...DECIDED_HAND_OVER]),
     });
+  });
+
+  it('names every case it hands over, one name per case — the refused merge and its refused head one', () => {
+    const name = (state: Record<string, unknown>) =>
+      decideByRules({
+        state,
+        rules: [...HAND_OVER_CASE_RULES],
+        otherwise: HAND_OVER_CASE_OTHERWISE,
+      }).decision;
+    const names = HAND_OVER_RULES.map((rule) => name({ rule: SHEPHERD_RULES.indexOf(rule) }));
+    expect(names).not.toContain(HAND_OVER_CASE_OTHERWISE.decision);
+    expect(new Set(names).size).toBe(names.length);
+    expect(names).toContain('merge_refused');
+    expect(name({ rule: SHEPHERD_RULES.length - 1, mergeOutcome: 'merge_refused' })).toBe(
+      'merge_refused',
+    );
+    // A read that failed once is no case: the next pass reads it again.
+    for (const rule of HAND_OVER_RULES) {
+      expect(JSON.stringify(rule.when)).not.toMatch(
+        /requiredRulesStatus|requiredProtectionStatus|reviewsStatus/,
+      );
+    }
   });
 });
 

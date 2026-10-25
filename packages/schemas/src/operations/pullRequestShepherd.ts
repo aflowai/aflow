@@ -60,12 +60,13 @@ export const SHEPHERD_ABANDON_DOCS = 'abandons';
 /**
  * Where a case handed to the agent is claimed, one document per case,
  * created and never overwritten, so a case is handed over once however many
- * passes find it. A pull request's case is its head —
- * `<root>/<owner>/<repo>/pulls/<number>/handovers/<headSha>.json`, beside its
- * pinned handoff — so a push that moves the head is a new case. A case of the
- * repository itself, read before any pull request is, is the turn —
- * `<root>/<owner>/<repo>/handovers/<turn's content hash>.json` — so it stays
- * one case until a pass tends a pull request again.
+ * passes find it. A pull request's case is its head and what the pass ended
+ * on — `<root>/<owner>/<repo>/pulls/<number>/handovers/<headSha>/<case>.json`,
+ * beside its pinned handoff — so a push that moves the head is a new case, and
+ * so is another case on the same head. A case of the repository itself, read
+ * before any pull request is, is the turn —
+ * `<root>/<owner>/<repo>/handovers/<turn's content hash>/<case>.json` — so it
+ * stays one case until a pass lists the repository's pull requests again.
  */
 export const SHEPHERD_HAND_OVER_DOCS = 'handovers';
 
@@ -96,6 +97,15 @@ export const SHEPHERD_SCHEDULE_CRON_DEFAULT = '*/5 * * * *';
  * approval besides — has stopped, and the next pass takes the lease over.
  */
 export const SHEPHERD_LEASE_STALE_AFTER_MS = 12 * 60 * 60 * 1000;
+
+/**
+ * How long GitHub must have refused to list a repository's open pull requests,
+ * on every pass since the first that could not, before the case is handed to
+ * the agent: three passes at the default interval. One failed listing is read
+ * again by the next pass, and a conversation started on it would be one that
+ * pass made unnecessary.
+ */
+export const SHEPHERD_UNLISTED_PERSISTS_AFTER_MS = 15 * 60 * 1000;
 
 /**
  * The handoff comment opens with this and carries its record as `key: value`

@@ -3,10 +3,14 @@ import {
   SHEPHERD_HAND_OVER_TARGET,
   SHEPHERD_HANDOFF_PINS,
   SHEPHERD_LEASE_ROOT,
-  type ShepherdMergeOutcome,
 } from '@aflow/schemas';
 import { COMMISSION_CHANGE } from './commissionChange.js';
-import { DECIDED_HAND_OVER } from './localPrShepherdRules.js';
+import {
+  DECIDED_HAND_OVER,
+  HAND_OVER_CASE_OTHERWISE,
+  HAND_OVER_CASE_RULES,
+  HAND_OVER_MERGE_REFUSED,
+} from './localPrShepherdRules.js';
 import {
   bind,
   ctx,
@@ -33,18 +37,20 @@ import { PUBLISH_LOCAL_CHANGES } from './publishLocalChanges.js';
  * workflow task: `agent.schedule.create`, one firing, now, the Helmsman its
  * target — as a plan stream's schedule starts it (Plan 322 P2b). A claim
  * created once per case comes first, so a case is handed over once however
- * many passes find it: a pull request's case is its head, and a push that
- * moves the head is a new one.
+ * many passes find it: a pull request's case is its head and what the pass
+ * ended on, so a push that moves the head is a new one, and so is another
+ * case on the same head.
  */
 
-const MERGE_REFUSED = `tasks.record-merge.output.decision == '${'merge_refused' satisfies ShepherdMergeOutcome}'`;
+const MERGE_REFUSED = `tasks.record-merge.output.decision == '${HAND_OVER_MERGE_REFUSED}'`;
 
 /**
- * `shepherd/<owner>/<repo>/pulls/<number>/handovers/<headSha>.json` where the
- * pass read a pull request, and else — a repository it could not list —
- * `shepherd/<owner>/<repo>/handovers/<turn>.json`, keyed by the content hash
- * of the turn the last pass that tended a pull request recorded, `none` where
- * no turn was read: one case until a pass tends a pull request again.
+ * `shepherd/<owner>/<repo>/pulls/<number>/handovers/<headSha>/<case>.json`
+ * where the pass read a pull request, and else — a repository it could not
+ * list — `shepherd/<owner>/<repo>/handovers/<turn>/<case>.json`, keyed by the
+ * content hash of the turn as the pass read it, `none` where no turn was
+ * read: one case until a pass lists the pull requests again. `<case>` is
+ * the name `name-hand-over-case` gives it.
  */
 const HAND_OVER_PATH = {
   $concat: [
@@ -68,12 +74,17 @@ const HAND_OVER_PATH = {
         },
       ],
     },
+    '/',
+    bind('handOverCase'),
     '.json',
   ],
 };
 
+export const NAME_HAND_OVER_CASE_TASK = 'name-hand-over-case';
 export const CLAIM_HAND_OVER_TASK = 'claim-hand-over';
 export const HAND_OVER_TO_AGENT_TASK = 'hand-over-to-agent';
+
+const ENDED_ON_HAND_OVER = { anyOf: [...DECIDED_HAND_OVER, MERGE_REFUSED], onMissingRef: SKIP };
 
 /**
  * What the pass read, decided and tried, as the Helmsman reads it: one line
@@ -158,12 +169,32 @@ const BRIEF = {
 
 export const HAND_OVER_TASKS = [
   {
+    taskId: NAME_HAND_OVER_CASE_TASK,
+    name: 'Name the case handed over',
+    goal: 'Where the pass ended on a case its rules cannot act on, name it — the merge GitHub refused, or the rule the pass ended on — so its claim is kept per case: a head handed over for one case is still handed over for another.',
+    type: 'operation' as const,
+    operation: 'workflow.run.decide',
+    when: ENDED_ON_HAND_OVER,
+    retryability: 'safe' as const,
+    inputBindings: {
+      rule: out('decide', 'rule'),
+      mergeOutcome: out('record-merge', 'decision'),
+    },
+    context: ctx('workflow.run.decide'),
+    inputTemplate: {
+      state: { rule: bind('rule'), mergeOutcome: bind('mergeOutcome') },
+      rules: HAND_OVER_CASE_RULES,
+      otherwise: HAND_OVER_CASE_OTHERWISE,
+    },
+  },
+
+  {
     taskId: CLAIM_HAND_OVER_TASK,
     name: 'Claim the hand-over of this case',
-    goal: 'Where the pass ended on a case its rules cannot act on — a rule that hands its case over, or a merge GitHub refused on the head — record that the case is handed to the agent: created only where nothing is recorded for it, so a case is handed over once however many passes find it. A pull request’s case is its head, so a push that moves it is a new case.',
+    goal: 'Where the pass ended on a case its rules cannot act on — a rule that hands its case over, or a merge GitHub refused on the head — record that the case is handed to the agent: created only where nothing is recorded for it, so a case is handed over once however many passes find it. A pull request’s case is its head and the case’s name, so a push that moves the head is a new case, and so is another case on the same head.',
     type: 'operation' as const,
     operation: 'memory.store.put',
-    when: { anyOf: [...DECIDED_HAND_OVER, MERGE_REFUSED], onMissingRef: SKIP },
+    when: ENDED_ON_HAND_OVER,
     // Refused where the case was handed over already — the claim doing its
     // job — or where the store could not answer: nothing is handed over twice.
     optional: true,
@@ -174,6 +205,7 @@ export const HAND_OVER_TASKS = [
       number: out('read-pr', 'data.number'),
       headSha: out('read-pr', 'data.headSha'),
       turnHash: out('read-turn', 'stat.contentHash'),
+      handOverCase: out(NAME_HAND_OVER_CASE_TASK, 'decision'),
       rule: out('decide', 'rule'),
       decision: out('decide', 'decision'),
       mergeOutcome: out('record-merge', 'decision'),
@@ -191,6 +223,7 @@ export const HAND_OVER_TASKS = [
       content: {
         inlineJson: {
           headSha: bind('headSha'),
+          case: bind('handOverCase'),
           rule: bind('rule'),
           decision: bind('decision'),
           mergeOutcome: bind('mergeOutcome'),

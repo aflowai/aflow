@@ -3,6 +3,7 @@ import {
   SHEPHERD_HANDS_OFF_LABEL,
   SHEPHERD_LEASE_STALE_AFTER_MS,
   SHEPHERD_RESPONSE_PRESETS,
+  SHEPHERD_UNLISTED_PERSISTS_AFTER_MS,
   SCHEDULE_RENEWAL_WINDOW,
   type SkillCatalogEntry,
 } from '@aflow/schemas';
@@ -57,7 +58,12 @@ import {
   text,
 } from './localPrShepherdWiring.js';
 import { RENEWAL_TASKS, SCHEDULE_ID_SCHEMA, SCHEDULE_INPUT } from './localPrShepherdRenewal.js';
-import { LAST_TENDED, READ_TURN_TASK, REMEMBER_TURN_TASK } from './localPrShepherdTurn.js';
+import {
+  LAST_TENDED,
+  NOTE_UNLISTED_TASK,
+  READ_TURN_TASK,
+  REMEMBER_TURN_TASK,
+} from './localPrShepherdTurn.js';
 import { PUBLISH_LOCAL_CHANGES } from './publishLocalChanges.js';
 
 /**
@@ -158,6 +164,7 @@ const DECIDE_STATE = {
   ]),
   aim: outputFields('aim', 'aim', ['decision']),
   candidates: outputFields('candidates', 'list-prs', ['statusCode', 'data.count']),
+  turn: outputFields('turn', 'read-turn', ['dataJson.unlistedAtMs']),
   pr: outputFields('pr', 'read-pr', [
     'statusCode',
     'data.ours',
@@ -212,7 +219,7 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
 
 **When it stops**: a pull request whose budget is spent and whose CI fails again is \`abandon\`: the handoff comment says why, and one Action Center item asks a person to take it — one per head, however many passes find it so. A push that moves the head is read again.
 
-**What it hands to the agent**: a pass that ends on a case its rules cannot act on — GitHub refused the merge for anything but a base that moved, the head does not merge into its base and CI has not failed on it, a read of what a merge needs or of the head's checks GitHub did not answer in full, or a repository whose open pull requests the connection cannot list — starts a Helmsman conversation on it, carrying what the pass read, what it decided and why, and what the handoff records as tried, for the Helmsman to decide and act on with the skills it has. A case is handed over once: a pull request's once per head, so a push that moves it is a new case; a repository's once until a pass tends a pull request again.
+**What it hands to the agent**: a pass that ends on a case its rules cannot act on — GitHub refused the merge for anything but a base that moved, the head does not merge into its base while CI has not failed on it and the shepherd would merge it, reviews or check runs past the one page a pass reads, or a repository whose open pull requests the connection has refused to list on every pass for ${String(SHEPHERD_UNLISTED_PERSISTS_AFTER_MS / 60_000)} minutes — starts a Helmsman conversation on it, carrying what the pass read, what it decided and why, and what the handoff records as tried, for the Helmsman to decide and act on with the skills it has. A read that failed once is read again by the next pass, and a draft, or a folder whose merge is the operator's, stays with them. A case is handed over once: a pull request's once per head and case, so a push that moves the head is a new case, and so is another case on the same head; a repository's once until a pass lists its pull requests again.
 
 **On a schedule**: passes overlap safely. Two on one pull request meet at its branch's lease, and the second acts on nothing. The schedule renews itself: a pass handed \`${SCHEDULE_INPUT}\` — the Local PR Shepherd agent hands it the schedule that started it — reads that schedule, and where it is active and within ${String(SCHEDULE_RENEWAL_WINDOW)} firings of its cap creates its successor, the same agent, cron, input and expiry, which takes over from it. A schedule has one successor however many passes find it due, one its owner paused is not renewed, and the chain ends at the schedule's expiry.
 
@@ -566,6 +573,10 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
             pin: out('read-handoff-pin'),
             ...handoffBindings('handoff'),
             staleBefore: { kind: 'clock' as const, offsetMs: -SHEPHERD_LEASE_STALE_AFTER_MS },
+            unlistedBefore: {
+              kind: 'clock' as const,
+              offsetMs: -SHEPHERD_UNLISTED_PERSISTS_AFTER_MS,
+            },
             runId: { kind: 'run_id' as const },
             budget: runInput('attemptBudget'),
             requiredRulesStatus: out('read-required-rules', 'statusCode'),
@@ -585,6 +596,7 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
               // The handoff record is the shepherd's own, a few short fields.
               handoff: handoffValue('handoff'),
               staleBefore: bind('staleBefore'),
+              unlistedBefore: bind('unlistedBefore'),
               runId: bind('runId'),
               budget: { $firstOf: [bind('budget'), SHEPHERD_ATTEMPT_BUDGET_DEFAULT] },
             },
@@ -833,6 +845,8 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
 
         ...MERGE_TASKS,
 
+        NOTE_UNLISTED_TASK,
+
         ...HAND_OVER_TASKS,
 
         RELEASE_TASK,
@@ -919,7 +933,7 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
       priority: 50,
     },
     rationale:
-      'Plan 321 P1, P2, P2b; Plan 315. Typed reads, projected to the fields the rules read, then workflow.run.decide: first rule that holds decides, else fix; merge follows every wait and needs GitHub to say the head merges. Fix and merge take the lease. Fix reads failing jobs and logs; the remedy question routes to re-run, fix, bump or merge round (unsure: fix), published via Local Publish. Merge is squash pinned to the head behind its write approval; a base-moved refusal is resent once, then handed back. Abandon raises one Action Center item per head. A case the rules cannot act on — another refusal, a conflict, a read GitHub refused — is claimed once per head (or per turn, for an unlisted repository) and handed to the Helmsman by a one-firing schedule with what the pass read, decided and tried. The pin keeps attempt state and each remedy base. Nothing approves or closes; only merge merges. A scheduled pass renews its schedule near the cap.',
+      'Plan 321 P1, P2, P2b; Plan 315. Typed reads, projected to the fields the rules read, then workflow.run.decide: first rule that holds decides, else fix; merge follows every wait and needs GitHub to say the head merges. Fix and merge take the lease. Fix reads failing jobs and logs; the remedy question routes to re-run, fix, bump or merge round (unsure: fix), published via Local Publish. Merge is squash pinned to the head behind its write approval; a base-moved refusal is resent once, then handed back. Abandon raises one Action Center item per head. A case the rules cannot act on is claimed once per head and case (per turn, for a repository long unlisted) and handed to the Helmsman by a one-firing schedule; a failed read waits. The pin keeps attempt state and each remedy base. Nothing approves or closes; only merge merges. A scheduled pass renews its schedule near the cap.',
   },
 };
 
