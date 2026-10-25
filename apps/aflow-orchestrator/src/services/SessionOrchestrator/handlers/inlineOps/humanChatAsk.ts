@@ -15,6 +15,7 @@ import { addStepResult, updateSessionState, getSessionState } from '@aflow/redis
 import type { PayloadStore } from '@aflow/payload-store';
 import { encodeInlineOpOutputRef } from './helpers.js';
 import type { FlowExecutionContext } from '../../types.js';
+import { inlineArgsFromPositional, readInlineInput } from './readInlineInput.js';
 
 export const HITL_INLINE_PLACEMENT_TAG = '_hitlPlacement:chat_inline' as const;
 
@@ -38,16 +39,24 @@ export async function handleHumanChatAskInline(
   parentStepExecutionId?: StepExecutionId,
 ): Promise<void> {
   const startTime = Date.now();
+  const inlineArgs = inlineArgsFromPositional(
+    redis,
+    payloadStore,
+    context,
+    askStepDef,
+    stepExecutionId,
+    idempotencyKey,
+    resolvedInputRef,
+    attempt,
+    _scheduledAtMs,
+    parentStepExecutionId,
+  );
   try {
     // 1. Read + validate input. Schema enforced again at the handler
     //    boundary because `applyAgentDecision` ships raw tool-call args
     //    through; the Zod parse also normalises the discriminator.
-    let raw: unknown = {};
-    try {
-      raw = await payloadStore.retrieve(resolvedInputRef);
-    } catch {
-      throw new Error('human.chat.ask: failed to read input payload.');
-    }
+    const raw = await readInlineInput(inlineArgs, startTime);
+    if (!raw) return;
     const parsed = HumanChatAskInputSchema.safeParse(raw);
     if (!parsed.success) {
       const issues = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');

@@ -175,6 +175,27 @@ describe('payload ref tenant binding', () => {
     await app.close();
   });
 
+  it('serves a run-scoped task input ref and refuses the content-addressed one', async () => {
+    const app = await buildTestApp();
+    const runScoped = `gs://bucket/tenants/${TENANT}/runs/${SESSION}/steps/${SESSION}/attempt/1/input.json`;
+    const contentAddressed = `gs://bucket/tenants/${TENANT}/content/${'b'.repeat(64)}/input.json`;
+
+    const served = await app.inject({
+      method: 'GET',
+      url: `/v1/payloads?ref=${encodeURIComponent(runScoped)}`,
+    });
+    const refused = await app.inject({
+      method: 'GET',
+      url: `/v1/payloads?ref=${encodeURIComponent(contentAddressed)}`,
+    });
+
+    expect(served.statusCode).toBe(200);
+    expect(refused.statusCode).toBe(404);
+    expect(mocks.retrieve).toHaveBeenCalledTimes(1);
+    expect(mocks.retrieve).toHaveBeenCalledWith(runScoped);
+    await app.close();
+  });
+
   it('denies when the session cannot be resolved in this tenant', async () => {
     mocks.getSessionStateSafe.mockResolvedValue({ ok: false, kind: 'missing' });
     const app = await buildTestApp();

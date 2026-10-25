@@ -1960,6 +1960,21 @@ describe('Local PR Shepherd — it merges what the posture allows', () => {
     });
   });
 
+  it('decides from response data and status scalars without carrying HTTP headers or the publication run envelope', () => {
+    const merged = green();
+    const state = merged.inputs.get('decide')?.['state'] as Record<string, unknown>;
+    for (const name of ['requiredRules', 'requiredProtection', 'reviews']) {
+      expect(state[name]).toBeDefined();
+      expect(state[name]).not.toHaveProperty('headers');
+      expect(state[name]).not.toHaveProperty('statusCode');
+      expect(state[`${name}Status`]).toBe(200);
+    }
+    expect(state['publicationReview']).toMatchObject({ verdict: 'approve' });
+    expect(state['publicationReview']).not.toHaveProperty('run');
+    expect(state['publicationReview']).not.toHaveProperty('tasks');
+    expect(merged.decision).toBe('merge');
+  });
+
   it('names the tasks of Local Publish that push a commit, and the output naming the commit pushed', () => {
     const published = new Map(
       PUBLISH_LOCAL_CHANGES.bundle.workflow.tasks.map((task) => [task.taskId, task]),

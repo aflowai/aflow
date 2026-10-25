@@ -12,6 +12,7 @@ import { addStepResult, publishActionCenterFocus } from '@aflow/redis';
 import type { PayloadStore } from '@aflow/payload-store';
 import { encodeInlineOpOutputRef } from './helpers.js';
 import type { FlowExecutionContext } from '../../types.js';
+import { inlineArgsFromPositional, readInlineInput } from './readInlineInput.js';
 
 export async function handleHumanActionCenterFocusInline(
   redis: Redis,
@@ -26,13 +27,21 @@ export async function handleHumanActionCenterFocusInline(
   parentStepExecutionId?: StepExecutionId,
 ): Promise<void> {
   const startTime = Date.now();
+  const inlineArgs = inlineArgsFromPositional(
+    redis,
+    payloadStore,
+    context,
+    focusStepDef,
+    stepExecutionId,
+    idempotencyKey,
+    resolvedInputRef,
+    attempt,
+    _scheduledAtMs,
+    parentStepExecutionId,
+  );
   try {
-    let raw: unknown = {};
-    try {
-      raw = await payloadStore.retrieve(resolvedInputRef);
-    } catch {
-      throw new Error('human.action_center.focus: failed to read input payload.');
-    }
+    const raw = await readInlineInput(inlineArgs, startTime);
+    if (!raw) return;
     const parsed = HumanActionCenterFocusInputSchema.safeParse(raw);
     if (!parsed.success) {
       // Translate Zod path → operator-readable diagnostic. The most

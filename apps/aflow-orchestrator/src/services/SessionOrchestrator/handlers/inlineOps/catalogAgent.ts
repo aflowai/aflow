@@ -13,6 +13,7 @@ import { eq } from 'drizzle-orm';
 import type { PersistentAgentTarget, SystemRole, AgentId } from '@aflow/schemas';
 import type { InlineHandlerArgs } from './types.js';
 import { requireSpaceId } from './spaceScope.js';
+import { readInlineInput } from './readInlineInput.js';
 
 export async function handleCatalogAgentInline(args: InlineHandlerArgs): Promise<void> {
   const {
@@ -31,15 +32,8 @@ export async function handleCatalogAgentInline(args: InlineHandlerArgs): Promise
 
   try {
     // Read input
-    let input: Record<string, unknown> = {};
-    try {
-      const data = await payloadStore.retrieve(resolvedInputRef);
-      if (typeof data === 'object' && data !== null) {
-        input = data as Record<string, unknown>;
-      }
-    } catch {
-      /* empty input */
-    }
+    const input = await readInlineInput(args, startTime);
+    if (!input) return;
 
     const db = getDatabase();
     const spaceId = requireSpaceId(context);

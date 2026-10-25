@@ -4,6 +4,7 @@ import { PROPOSAL_DIRS, tryParseStagedChangeDoc } from '@aflow/cybernetic-runtim
 import type { InlineHandlerArgs } from './types.js';
 import { emitStepSuccess, emitStepError } from './helpers.js';
 import { requireSpaceId } from './spaceScope.js';
+import { readInlineInput } from './readInlineInput.js';
 
 // ============================================================================
 // Router
@@ -14,15 +15,8 @@ export async function handleProposalCrudInline(args: InlineHandlerArgs): Promise
   const startTime = Date.now();
 
   try {
-    let input: Record<string, unknown> = {};
-    try {
-      const data = await args.payloadStore.retrieve(args.resolvedInputRef);
-      if (typeof data === 'object' && data !== null) {
-        input = data as Record<string, unknown>;
-      }
-    } catch {
-      /* empty input is valid for proposal.list with all defaults */
-    }
+    const input = await readInlineInput(args, startTime);
+    if (!input) return;
 
     if (
       operationId === 'proposal.ratify' ||

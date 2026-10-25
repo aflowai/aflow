@@ -23,6 +23,7 @@ import { WorkflowArchivedError } from '@aflow/cybernetic-runtime';
 import { getOrchestratorLogger } from '../../../../../lib/orchestratorLogger.js';
 import type { InlineHandlerArgs } from '../types.js';
 import { emitStepError } from '../helpers.js';
+import { readInlineInput } from '../readInlineInput.js';
 import { handleWorkflowPut } from './create.js';
 import { handleWorkflowPatch } from './update.js';
 import { handleWorkflowGet, handleWorkflowList } from './read.js';
@@ -47,15 +48,8 @@ export async function handleWorkflowCrudInline(args: InlineHandlerArgs): Promise
   const startTime = Date.now();
 
   try {
-    let input: Record<string, unknown> = {};
-    try {
-      const data = await args.payloadStore.retrieve(args.resolvedInputRef);
-      if (typeof data === 'object' && data !== null) {
-        input = data as Record<string, unknown>;
-      }
-    } catch {
-      /* empty input is valid for list ops */
-    }
+    const input = await readInlineInput(args, startTime);
+    if (!input) return;
 
     switch (operationId) {
       case 'workflow.manage.put':

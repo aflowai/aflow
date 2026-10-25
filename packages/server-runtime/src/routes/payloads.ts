@@ -13,6 +13,7 @@ import type { SessionId, StepExecutionId } from '@aflow/schemas';
 import {
   DURABLE_PAYLOAD_KINDS,
   PayloadKindSchema as SharedPayloadKindSchema,
+  isRunScopedPayloadRef,
   parsePayloadRef,
 } from '@aflow/schemas';
 import { assertSessionSpaceAccess } from '../lib/sessionSpaceAccess.js';
@@ -157,7 +158,7 @@ export const payloadRoutes: FastifyPluginAsync = async (fastify) => {
     // bytes lives on the row that references it (a memory doc), not on the
     // path. This endpoint authorizes by run, so it has nothing to check against
     // — the owning surface serves those bytes under its own space check.
-    if (parsed.layout === 'content') {
+    if (!isRunScopedPayloadRef(parsed)) {
       reply.status(404).send({ error: 'NotFound', message: 'Payload not found' });
       return false;
     }

@@ -29,6 +29,7 @@ import type { InlineHandlerArgs } from './types.js';
 import { emitStepSuccess, emitStepError } from './helpers.js';
 import { requireSpaceId } from './spaceScope.js';
 import { getOrchestratorLogger } from '../../../../lib/orchestratorLogger.js';
+import { readInlineInput } from './readInlineInput.js';
 import { definitionCreatedBy, requireScheduleAuthority } from './scheduleAuthority.js';
 import { handleRenew } from './scheduleRenewHandler.js';
 import { scheduleConfigProblem } from './scheduleTargetConfig.js';
@@ -53,15 +54,8 @@ export async function handleScheduleCrudInline(args: InlineHandlerArgs): Promise
   const startTime = Date.now();
 
   try {
-    let input: Record<string, unknown> = {};
-    try {
-      const data = await args.payloadStore.retrieve(args.resolvedInputRef);
-      if (typeof data === 'object' && data !== null) {
-        input = data as Record<string, unknown>;
-      }
-    } catch {
-      /* empty input */
-    }
+    const input = await readInlineInput(args, startTime);
+    if (!input) return;
 
     switch (operationId) {
       case 'agent.schedule.create':

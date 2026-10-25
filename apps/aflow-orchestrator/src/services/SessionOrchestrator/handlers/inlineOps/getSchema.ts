@@ -29,6 +29,7 @@ import { readIntegrations } from '../../helpers/integrationReader.js';
 import { buildIntegrationScopeFilter } from '../../helpers/integrationScope.js';
 import { DISCOVERY_SCOPE_VAR, type DiscoveryScope } from '../../helpers/agentTurn.js';
 import { requireSpaceId } from './spaceScope.js';
+import { inlineArgsFromPositional, readInlineInput } from './readInlineInput.js';
 
 // ============================================================================
 // Helpers
@@ -104,17 +105,22 @@ export async function handleGetSchemaInline(
   parentStepExecutionId?: StepExecutionId,
 ): Promise<void> {
   const startTime = Date.now();
+  const inlineArgs = inlineArgsFromPositional(
+    redis,
+    payloadStore,
+    context,
+    stepDef,
+    stepExecutionId,
+    idempotencyKey,
+    resolvedInputRef,
+    attempt,
+    _scheduledAtMs,
+    parentStepExecutionId,
+  );
   try {
     // Read the resolved input to get filter params
-    let input: Record<string, unknown> = {};
-    try {
-      const data = await payloadStore.retrieve(resolvedInputRef);
-      if (typeof data === 'object' && data !== null) {
-        input = data as Record<string, unknown>;
-      }
-    } catch {
-      /* empty input — return directory */
-    }
+    const input = await readInlineInput(inlineArgs, startTime);
+    if (!input) return;
 
     const filterStepTypes = input['stepTypes'] as string[] | undefined;
     // A lane the edition does not compose is not listed: an operation that can

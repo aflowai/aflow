@@ -221,6 +221,20 @@ export type ParsedPayloadRef =
    */
   | (ParsedObjectRefBase & { layout: 'content'; contentHash: string });
 
+export type RunScopedPayloadRef = Extract<ParsedPayloadRef, { layout: 'run' }>;
+
+/**
+ * Whether a stored ref names the run an authorizer that checks by run can
+ * check it against. A content-addressed ref names none, so the payloads route
+ * refuses it — which is why a payload the run surface must read back is stored
+ * run-scoped.
+ */
+export function isRunScopedPayloadRef(
+  parsed: ParsedPayloadRef | null,
+): parsed is RunScopedPayloadRef {
+  return parsed?.form === 'object' && parsed.layout === 'run';
+}
+
 function parseFilename(
   filename: string,
 ): Pick<ParsedObjectRefBase, 'payloadKind' | 'extension'> | null {
