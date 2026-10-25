@@ -57,7 +57,7 @@ const ACTIVITY_OPTIONS: ReadonlyArray<{ id: PlanActivityFilter; label: string }>
   { id: 'idle', label: 'Idle' },
 ];
 
-/** What moves a step between the two, and that neither asks anything of the reader. */
+/** What moves a step between the two, and which idle steps wait on the reader. */
 const ACTIVITY_LINES: ReadonlyArray<{ label: string; line: string }> = [
   {
     label: 'In flight',
@@ -65,7 +65,7 @@ const ACTIVITY_LINES: ReadonlyArray<{ label: string; line: string }> = [
   },
   {
     label: 'Idle',
-    line: 'no run is on it now; it goes in flight when the loop starts one. Neither asks anything of you.',
+    line: 'no run is on it now; it goes in flight when the loop starts one. Only the idle steps under Needs you — decisions and blocked steps — wait on you.',
   },
 ];
 

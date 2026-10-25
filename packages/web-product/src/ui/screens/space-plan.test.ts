@@ -575,7 +575,7 @@ describe('SpacePlanPage — the board', () => {
     expect(cardIds(column('decide'))).toEqual([DECISION]);
   });
 
-  it('explains In flight and Idle where the filter is, and asks nothing of the reader', async () => {
+  it('explains In flight and Idle where the filter is, and which idle steps wait on the reader', async () => {
     await render();
 
     const help = container.querySelector('[data-plan-activity-help]');
@@ -583,7 +583,10 @@ describe('SpacePlanPage — the board', () => {
     const text = help?.textContent ?? '';
     expect(text).toContain('In flight — a run is working on the step or one under it');
     expect(text).toContain('Idle — no run is on it now');
-    expect(text).toContain('Neither asks anything of you.');
+    expect(text).toContain(
+      'Only the idle steps under Needs you — decisions and blocked steps — wait on you.',
+    );
+    expect(text).not.toContain('Neither asks anything of you');
   });
 
   it('says when the space has no plan, and when the plan could not be read', async () => {
