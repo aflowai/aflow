@@ -214,7 +214,7 @@ function treeNode(
     goalHead: `Goal of ${title}.`,
     counts: { runs: 1, pullRequests: 0, findings: 0, documents: 0, inFlightRuns: 0 },
     rounds: 0,
-    ownedBy: 'loop',
+    activity: 'idle',
     children: [],
     ...extra,
   };
@@ -223,13 +223,16 @@ function treeNode(
 const PLAN: PlanTreeOutput = {
   roots: [
     treeNode(R322, null, 'Plan 322 · plans are platform records', {
+      activity: 'in_flight',
       progress: { done: 0, total: 2 },
       children: [
         treeNode(P3, R322, 'P3 — Seen by the operator', {
+          activity: 'in_flight',
           progress: { done: 1, total: 4 },
           children: [
             treeNode(NEXT, P3, 'P3.4 live exit', { status: 'waiting' }),
             treeNode(BOARD, P3, 'P3.3 the board', {
+              activity: 'in_flight',
               counts: { runs: 8, pullRequests: 1, findings: 2, documents: 0, inFlightRuns: 1 },
               rounds: 2,
               pullRequest: { url: PR, merged: false },
@@ -252,7 +255,6 @@ const PLAN: PlanTreeOutput = {
           ],
         }),
         treeNode(ARTICLE, R322, 'Write the help article', {
-          ownedBy: 'operator',
           counts: { runs: 0, pullRequests: 0, findings: 0, documents: 0, inFlightRuns: 0 },
         }),
       ],
@@ -474,12 +476,12 @@ describe('SpacePlanPage — the board', () => {
     expect(cardIds(column('dropped'))).toEqual([SKETCH]);
     expect(column('next').querySelector('[data-plan-column-header]')?.textContent).toBe('Up next1');
 
-    await click(button(filter('Owner'), 'Operator'));
+    await click(button(filter('Activity'), 'In flight'));
     expect(cardIds(column('next'))).toEqual([]);
     expect(column('next').textContent).toContain('–');
   });
 
-  it('carries labels only on a card: phase, operator, runs in flight, pull request, rounds, subtasks', async () => {
+  it('carries labels only on a card: phase, runs in flight, pull request, rounds, subtasks', async () => {
     await render();
 
     const board = card(BOARD);
@@ -496,8 +498,10 @@ describe('SpacePlanPage — the board', () => {
     expect(board.querySelector('[data-plan-progress]')?.textContent).toBe('2/2');
     expect(board.textContent).not.toContain('Goal of');
 
-    expect(card(ARTICLE).textContent).toContain('Operator');
-    expect(card(ARTICLE).querySelector('[data-badge="neutral"]')).toBe(null);
+    expect(card(ARTICLE).querySelector('[data-badge]')).toBe(null);
+    for (const id of [P3, NEXT, BOARD, ARTICLE]) {
+      expect(card(id).textContent).not.toContain('Operator');
+    }
     expect(card(LANDED).querySelector('[data-badge="success"]')?.textContent).toBe('#176');
     expect(card(SKETCH).querySelector('span')?.style.textDecoration).toBe('line-through');
     expect(card(DECISION).style.borderLeft).toContain('var(--color-warning-default)');
@@ -555,15 +559,34 @@ describe('SpacePlanPage — the board', () => {
     expect(folds().map(([label]) => label)).toEqual(['Today · 1']);
   });
 
-  it('filters by phase and by owner', async () => {
+  it('filters by phase and by activity', async () => {
     await render();
 
     await click(button(filter('Phase'), 'P3'));
     expect(cardIds(column('progress'))).toEqual([P3, BOARD]);
 
     await click(button(filter('Phase'), 'All'));
-    await click(button(filter('Owner'), 'Operator'));
+    await click(button(filter('Activity'), 'In flight'));
+    expect(cardIds(column('progress'))).toEqual([P3, BOARD]);
+    expect(cardIds(column('decide'))).toEqual([]);
+
+    await click(button(filter('Activity'), 'Idle'));
     expect(cardIds(column('progress'))).toEqual([ARTICLE]);
+    expect(cardIds(column('decide'))).toEqual([DECISION]);
+  });
+
+  it('explains In flight and Idle where the filter is, and which idle steps wait on the reader', async () => {
+    await render();
+
+    const help = container.querySelector('[data-plan-activity-help]');
+    expect(help?.contains(filter('Activity'))).toBe(true);
+    const text = help?.textContent ?? '';
+    expect(text).toContain('In flight — a run is working on the step or one under it');
+    expect(text).toContain('Idle — no run is on it now');
+    expect(text).toContain(
+      'Only the idle steps under Needs you — decisions and blocked steps — wait on you.',
+    );
+    expect(text).not.toContain('Neither asks anything of you');
   });
 
   it('says when the space has no plan, and when the plan could not be read', async () => {

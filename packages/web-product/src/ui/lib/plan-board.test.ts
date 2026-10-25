@@ -34,7 +34,7 @@ function node(nodeId: string, extra: Partial<PlanTreeNode> = {}): PlanTreeNode {
     goalHead: '',
     counts: { runs: 1, pullRequests: 0, findings: 0, documents: 0, inFlightRuns: 0 },
     rounds: 0,
-    ownedBy: 'loop',
+    activity: 'idle',
     children: [],
     ...extra,
   };
@@ -52,7 +52,7 @@ describe('planCards', () => {
           node('dropped', { status: 'dropped' }),
         ],
       }),
-      node('loose', { ownedBy: 'operator' }),
+      node('loose', { activity: 'in_flight' }),
     ],
   });
 
@@ -70,15 +70,15 @@ describe('planCards', () => {
     ]);
   });
 
-  it('filters by phase — the phase and what sits under it — and by owner', () => {
+  it('filters by phase — the phase and what sits under it — and by activity', () => {
     const cards = planCards(root);
     const ids = (filters: Parameters<typeof planCardMatches>[1]) =>
       cards.filter((c) => planCardMatches(c, filters)).map((c) => c.node.nodeId);
 
-    expect(ids({ phaseId: 'P3 — board', owner: 'all' })).not.toContain('loose');
-    expect(ids({ phaseId: 'P3 — board', owner: 'all' })).toContain('P3 — board');
-    expect(ids({ owner: 'operator' })).toEqual(['loose']);
-    expect(ids({ owner: 'loop' })).not.toContain('loose');
+    expect(ids({ phaseId: 'P3 — board', activity: 'all' })).not.toContain('loose');
+    expect(ids({ phaseId: 'P3 — board', activity: 'all' })).toContain('P3 — board');
+    expect(ids({ activity: 'in_flight' })).toEqual(['loose']);
+    expect(ids({ activity: 'idle' })).not.toContain('loose');
   });
 });
 
@@ -140,18 +140,18 @@ describe('the Done column folded by day', () => {
 
   describe('a fold’s count', () => {
     const groups = planDoneGroups(doneByDay, today, 'all');
-    const closed = (id: string, at: Date, ownedBy: 'loop' | 'operator') => ({
-      node: node(id, { status: 'done', closedAt: at.toISOString(), ownedBy }),
+    const closed = (id: string, at: Date, activity: 'in_flight' | 'idle') => ({
+      node: node(id, { status: 'done', closedAt: at.toISOString(), activity }),
       column: 'done' as const,
     });
     const cards = [
-      closed('a', new Date(2026, 9, 22, 9), 'loop'),
-      closed('b', new Date(2026, 9, 22, 10), 'operator'),
-      closed('c', new Date(2026, 9, 12, 10), 'loop'),
-      closed('d', new Date(2026, 9, 6, 10), 'loop'),
-      closed('e', new Date(2026, 8, 28, 10), 'operator'),
+      closed('a', new Date(2026, 9, 22, 9), 'idle'),
+      closed('b', new Date(2026, 9, 22, 10), 'in_flight'),
+      closed('c', new Date(2026, 9, 12, 10), 'idle'),
+      closed('d', new Date(2026, 9, 6, 10), 'idle'),
+      closed('e', new Date(2026, 8, 28, 10), 'in_flight'),
     ];
-    const loopOnly = cards.filter((c) => planCardMatches(c, { owner: 'loop' }));
+    const idleOnly = cards.filter((c) => planCardMatches(c, { activity: 'idle' }));
     const shown = (folds: ReturnType<typeof planDoneFolds>) =>
       folds.map((f) => [f.id, f.shown, f.cards.map((c) => c.node.nodeId)]);
 
@@ -165,11 +165,11 @@ describe('the Done column folded by day', () => {
     });
 
     it('counts the matching cards under a filter, not the unfiltered count and not zero', () => {
-      expect(planBoardFiltered({ owner: 'loop' })).toBe(true);
-      expect(planBoardFiltered({ owner: 'all' })).toBe(false);
-      expect(planBoardFiltered({ phaseId: 'p', owner: 'all' })).toBe(true);
+      expect(planBoardFiltered({ activity: 'idle' })).toBe(true);
+      expect(planBoardFiltered({ activity: 'all' })).toBe(false);
+      expect(planBoardFiltered({ phaseId: 'p', activity: 'all' })).toBe(true);
 
-      expect(shown(planDoneFolds(groups, loopOnly, true, '2026-09-03'))).toEqual([
+      expect(shown(planDoneFolds(groups, idleOnly, true, '2026-09-03'))).toEqual([
         ['today', 1, ['a']],
         ['yesterday', 0, []],
         ['2026-10', 2, ['c', 'd']],
@@ -178,11 +178,11 @@ describe('the Done column folded by day', () => {
     });
 
     it('shows no count for a fold the tree on screen was not read far enough to hold', () => {
-      const folds = planDoneFolds(groups, loopOnly, true, today);
+      const folds = planDoneFolds(groups, idleOnly, true, today);
 
       expect(folds.map((f) => f.shown)).toEqual([1, undefined, undefined, undefined]);
       expect(
-        planDoneFolds(groups, loopOnly, true, undefined).every((f) => f.shown === undefined),
+        planDoneFolds(groups, idleOnly, true, undefined).every((f) => f.shown === undefined),
       ).toBe(true);
     });
   });

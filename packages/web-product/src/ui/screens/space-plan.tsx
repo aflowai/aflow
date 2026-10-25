@@ -42,7 +42,7 @@ import {
   type PlanCard,
   type PlanDoneGroup,
   type PlanDoneWindow,
-  type PlanOwnerFilter,
+  type PlanActivityFilter,
 } from '../lib/plan-board.js';
 
 const TRUNCATION_LINE: Record<'limit' | 'depth' | 'nodes', (value: number) => string> = {
@@ -51,10 +51,22 @@ const TRUNCATION_LINE: Record<'limit' | 'depth' | 'nodes', (value: number) => st
   nodes: (value) => `First ${String(value)} steps`,
 };
 
-const OWNER_OPTIONS: ReadonlyArray<{ id: PlanOwnerFilter; label: string }> = [
+const ACTIVITY_OPTIONS: ReadonlyArray<{ id: PlanActivityFilter; label: string }> = [
   { id: 'all', label: 'All' },
-  { id: 'loop', label: 'Loop' },
-  { id: 'operator', label: 'Operator' },
+  { id: 'in_flight', label: 'In flight' },
+  { id: 'idle', label: 'Idle' },
+];
+
+/** What moves a step between the two, and which idle steps wait on the reader. */
+const ACTIVITY_LINES: ReadonlyArray<{ label: string; line: string }> = [
+  {
+    label: 'In flight',
+    line: 'a run is working on the step or one under it; it goes idle when that run ends.',
+  },
+  {
+    label: 'Idle',
+    line: 'no run is on it now; it goes in flight when the loop starts one. Only the idle steps under Needs you — decisions and blocked steps — wait on you.',
+  },
 ];
 
 const WINDOW_OPTIONS: ReadonlyArray<{ id: PlanDoneWindow; label: string }> = [
@@ -106,7 +118,7 @@ export function SpacePlanPage(): React.ReactNode {
 
   const [chosenRootId, setChosenRootId] = useState<string | undefined>(undefined);
   const [phaseId, setPhaseId] = useState<string>(ALL_PHASES);
-  const [owner, setOwner] = useState<PlanOwnerFilter>('all');
+  const [activity, setActivity] = useState<PlanActivityFilter>('all');
   const [doneWindow, setDoneWindow] = useState<PlanDoneWindow>('all');
   /** The Done folds open; null until the operator toggles one: the first fold alone. */
   const [expanded, setExpanded] = useState<ReadonlySet<string> | null>(null);
@@ -125,7 +137,7 @@ export function SpacePlanPage(): React.ReactNode {
     data: PlanTreeOutput;
   } | null>(null);
   const last = held?.spaceId === spaceId ? held.data : undefined;
-  const filtered = phaseId !== ALL_PHASES || owner !== 'all';
+  const filtered = phaseId !== ALL_PHASES || activity !== 'all';
 
   const rootOf = (tree: PlanTreeOutput | undefined) =>
     tree?.roots.find((r) => r.nodeId === chosenRootId) ?? tree?.roots[0];
@@ -277,7 +289,20 @@ export function SpacePlanPage(): React.ReactNode {
                 onChange={setPhaseId}
               />
             )}
-            <Segmented label="Owner" options={OWNER_OPTIONS} value={owner} onChange={setOwner} />
+            <Column gap="none" data-plan-activity-help>
+              <Segmented
+                label="Activity"
+                options={ACTIVITY_OPTIONS}
+                value={activity}
+                onChange={setActivity}
+              />
+              {ACTIVITY_LINES.map(({ label, line }) => (
+                <Text key={label} size="xs" variant="muted">
+                  <strong>{label}</strong>
+                  {` — ${line}`}
+                </Text>
+              ))}
+            </Column>
             <Segmented
               label="Done"
               options={WINDOW_OPTIONS}
@@ -308,7 +333,7 @@ export function SpacePlanPage(): React.ReactNode {
               tally={tally}
               filters={{
                 ...(phaseFilter !== ALL_PHASES ? { phaseId: phaseFilter } : {}),
-                owner,
+                activity,
               }}
               doneWindow={doneWindow}
               doneReadSince={boardSince}
