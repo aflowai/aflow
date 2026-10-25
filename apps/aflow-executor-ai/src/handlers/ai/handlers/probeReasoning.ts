@@ -26,42 +26,78 @@ import { buildUsageBreakdown } from '../helpers.js';
 import type { HandlerDeps } from './types.js';
 
 type InconclusiveRung = Extract<ReasoningProbeRung, { outcome: 'inconclusive' }>;
+type InconclusiveReason = InconclusiveRung['reason'];
 
-const CLASSIFICATION_FOR_REASON: Record<InconclusiveRung['reason'], AflowError['classification']> =
-  {
-    credential: 'configuration',
-    transient: 'transient',
-    model_unavailable: 'configuration',
-    content_filter: 'content_policy',
-  };
+const CLASSIFICATION_FOR_REASON: Record<InconclusiveReason, AflowError['classification']> = {
+  credential: 'configuration',
+  transient: 'transient',
+  model_unavailable: 'configuration',
+  content_filter: 'content_policy',
+};
 
 /**
- * A probe where no rung gave evidence measured nothing, and reporting it as a
- * success would read as a measurement. It fails, naming why, so the caller's
- * failure accounting sees it.
+ * When the efforts failed for different reasons, the one a retry cannot clear
+ * names the failure: a refused credential or an unserved model id outlasts a
+ * filtered answer, which outlasts a moment of provider unavailability.
+ */
+const REASON_PRECEDENCE: readonly InconclusiveReason[] = [
+  'credential',
+  'model_unavailable',
+  'content_filter',
+  'transient',
+];
+
+const PROVIDER_MESSAGE_LIMIT = 500;
+
+function explain(reason: InconclusiveReason, result: ReasoningProbeResult): string {
+  switch (reason) {
+    case 'credential':
+      return `The provider refused the credential this space stores for ${result.provider}; update it in Settings → Credentials.`;
+    case 'model_unavailable':
+      return `The provider does not serve "${result.providerModelId}"; the catalog entry's provider model id may be wrong.`;
+    case 'transient':
+      return 'The provider was unavailable; measure again later.';
+    case 'content_filter':
+      return 'The provider filtered the answer.';
+  }
+}
+
+/**
+ * A probe where no effort gave evidence measured nothing, and reporting it as
+ * a success would read as a measurement. It fails, naming every reason the
+ * efforts gave, so the caller's failure accounting sees it. It is retryable
+ * only when every effort was merely transient.
  */
 function nothingMeasured(result: ReasoningProbeResult): AflowError | null {
   const inconclusive = result.rungs.filter(
     (r): r is InconclusiveRung => r.outcome === 'inconclusive',
   );
-  if (inconclusive.length !== result.rungs.length) return null;
-  const first = inconclusive[0];
-  if (!first) return null;
-  const why =
-    first.reason === 'credential'
-      ? `The provider refused the credential this space stores for ${result.provider}; update it in Settings → Credentials.`
-      : first.reason === 'model_unavailable'
-        ? `The provider does not serve "${result.providerModelId}"; the catalog entry's provider model id may be wrong.`
-        : first.reason === 'transient'
-          ? 'The provider was unavailable for every rung; measure again later.'
-          : 'The provider filtered every answer.';
+  if (inconclusive.length === 0 || inconclusive.length !== result.rungs.length) return null;
+
+  const byReason = new Map<InconclusiveReason, InconclusiveRung[]>();
+  for (const rung of inconclusive) {
+    byReason.set(rung.reason, [...(byReason.get(rung.reason) ?? []), rung]);
+  }
+  const reasons = REASON_PRECEDENCE.filter((r) => byReason.has(r));
+  const lead = reasons[0];
+  if (lead === undefined) return null;
+
+  const explanation = reasons
+    .map((reason) => {
+      const rungs = byReason.get(reason) ?? [];
+      const said = [...new Set(rungs.map((r) => r.error.message.slice(0, PROVIDER_MESSAGE_LIMIT)))];
+      const scope = reasons.length > 1 ? `[${rungs.map((r) => r.effort).join(', ')}] ` : '';
+      return `${scope}${explain(reason, result)} Provider said: ${said.join(' | ')}`;
+    })
+    .join(' ');
+
   return {
     code: 'REASONING_PROBE_NOTHING_MEASURED',
-    message: `No rung of ${result.modelId}'s reasoning ladder gave evidence. ${why} Provider said: ${first.error.message}`,
-    classification: CLASSIFICATION_FOR_REASON[first.reason],
-    retryable: first.reason === 'transient',
+    message: `No effort of ${result.modelId}'s reasoning ladder gave evidence. ${explanation}`,
+    classification: CLASSIFICATION_FOR_REASON[lead],
+    retryable: reasons.every((r) => r === 'transient'),
     timestamp: new Date().toISOString(),
-    details: { modelId: result.modelId, provider: result.provider, rungs: result.rungs },
+    details: { modelId: result.modelId, provider: result.provider, reasons, rungs: result.rungs },
   };
 }
 
@@ -89,9 +125,6 @@ export async function handleProbeReasoning(
       },
     });
 
-    const refusal = nothingMeasured(result);
-    if (refusal) return await failureWithError(ctx, refusal);
-
     const usage = reasoningProbeUsage(result);
     const costJson = usage
       ? buildUsageBreakdown({
@@ -101,9 +134,12 @@ export async function handleProbeReasoning(
           cost: client.modelCatalog.calculateCost(model.id, usage),
         })
       : undefined;
-    return costJson
-      ? await successWithData(ctx, result, { costJson })
-      : await successWithData(ctx, result);
+    const spend = costJson ? { costJson } : undefined;
+
+    const refusal = nothingMeasured(result);
+    if (refusal) return await failureWithError(ctx, refusal, spend);
+
+    return await successWithData(ctx, result, spend);
   } catch (error) {
     return await deps.handleError(ctx, 'Reasoning ladder probe failed', error);
   }

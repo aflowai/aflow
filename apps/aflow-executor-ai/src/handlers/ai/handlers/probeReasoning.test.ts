@@ -49,7 +49,10 @@ const deps = {
   validateToolArgs: () => null,
 } satisfies HandlerDeps;
 
-function adapterAnswering(fail: (effort: string) => Error | null): AIProviderAdapter {
+function adapterAnswering(
+  fail: (effort: string) => Error | null,
+  finishReason: 'tool_calls' | 'content_filter' = 'tool_calls',
+): AIProviderAdapter {
   return {
     generateTextStream(request) {
       const error = fail(request.reasoning?.effort ?? '');
@@ -63,7 +66,7 @@ function adapterAnswering(fail: (effort: string) => Error | null): AIProviderAda
           ? Promise.reject(error)
           : Promise.resolve({
               content: null,
-              finishReason: 'tool_calls' as const,
+              finishReason,
               usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 },
               model: request.model,
               provider: reasoningModel.provider,
@@ -137,6 +140,56 @@ describe('ai.model.probe_reasoning', () => {
     expect(result.error.code).toBe('REASONING_PROBE_NOTHING_MEASURED');
     expect(result.error.classification).toBe('configuration');
     expect(result.error.message).toMatch(/Settings → Credentials/);
+  });
+
+  it('names every reason when the efforts gave none for different reasons, led by the one a retry cannot clear', async () => {
+    const adapter = adapterAnswering((effort) =>
+      effort === 'off' || effort === 'low'
+        ? new AIClientError('Resource exhausted', 'rate_limit', 'google', true)
+        : new AIClientError('models/x is not found', 'model_not_found', 'google', false),
+    );
+    vi.mocked(getAIClientForContext).mockResolvedValue(clientWith(adapter));
+    const { ctx } = fakeCtx();
+
+    const result = (await handleProbeReasoning(ctx, { model: reasoningModel.id }, deps)) as {
+      status: string;
+      error: AflowError;
+    };
+    expect(result.status).toBe('FAILED');
+    expect(result.error.code).toBe('REASONING_PROBE_NOTHING_MEASURED');
+    expect(result.error.classification).toBe('configuration');
+    expect(result.error.retryable).toBe(false);
+    expect(result.error.message).toMatch(/\[medium, high\] The provider does not serve/);
+    expect(result.error.message).toMatch(/\[off, low\] The provider was unavailable/);
+    expect(result.error.details).toMatchObject({ reasons: ['model_unavailable', 'transient'] });
+  });
+
+  it('is retryable only when every effort was merely transient', async () => {
+    const busy = new AIClientError('Resource exhausted', 'rate_limit', 'google', true);
+    vi.mocked(getAIClientForContext).mockResolvedValue(clientWith(adapterAnswering(() => busy)));
+    const { ctx } = fakeCtx();
+
+    const result = (await handleProbeReasoning(ctx, { model: reasoningModel.id }, deps)) as {
+      status: string;
+      error: AflowError;
+    };
+    expect(result.error.classification).toBe('transient');
+    expect(result.error.retryable).toBe(true);
+  });
+
+  it('attaches the billed spend to a probe that measured nothing', async () => {
+    const adapter = adapterAnswering(() => null, 'content_filter');
+    vi.mocked(getAIClientForContext).mockResolvedValue(clientWith(adapter));
+    const { ctx } = fakeCtx();
+
+    const result = (await handleProbeReasoning(ctx, { model: reasoningModel.id }, deps)) as {
+      status: string;
+      error: AflowError;
+      costJson?: Record<string, unknown>;
+    };
+    expect(result.status).toBe('FAILED');
+    expect(result.error.classification).toBe('content_policy');
+    expect(result.costJson).toMatchObject({ model: reasoningModel.id, totalTokens: 120 });
   });
 
   it('hands a missing stored credential to the shared error path', async () => {

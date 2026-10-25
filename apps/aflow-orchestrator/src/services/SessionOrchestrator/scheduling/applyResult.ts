@@ -533,6 +533,7 @@ export function createApplyResult(bindings: SessionOrchestratorBindings) {
             },
             {
               ...(result.errorRef ? { errorRef: result.errorRef } : {}),
+              ...(result.usage ? { usage: result.usage } : {}),
               ...(retryErr.classification != null
                 ? { classification: retryErr.classification as AflowError['classification'] }
                 : {}),
@@ -754,6 +755,7 @@ export function createApplyResult(bindings: SessionOrchestratorBindings) {
 
           await stepServiceFailStep({ redis, payloadStore }, failStepCtx, failError, {
             ...(result.errorRef ? { errorRef: result.errorRef } : {}),
+            ...(result.usage ? { usage: result.usage } : {}),
             // Carry the typed error class through to the step event — without
             // it, buildUserError falls back to "System Error / try again",
             // mislabeling deterministic validation rejects as transient
@@ -934,6 +936,7 @@ export function createApplyResult(bindings: SessionOrchestratorBindings) {
 
         await stepServiceFailStep({ redis, payloadStore }, failStepCtx, failError, {
           ...(result.errorRef ? { errorRef: result.errorRef } : {}),
+          ...(result.usage ? { usage: result.usage } : {}),
           ...(classification != null ? { classification } : {}),
           runStateUpdates: {
             status: 'FAILED' as const,

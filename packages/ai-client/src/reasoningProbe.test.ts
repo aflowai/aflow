@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { ReasoningDriftReportSchema, ReasoningProbeResultSchema } from '@aflow/schemas';
 import { createDefaultModelCatalog } from './catalog.js';
-import { AIClientError } from './errors.js';
+import { AIClientError, normalizeAnthropicError, normalizeOpenAIError } from './errors.js';
+import { normalizeGoogleError } from './providers/googleShared.js';
 import {
   buildReasoningDriftReport,
   probeReasoningLadder,
@@ -19,7 +20,14 @@ import type {
   TextStreamChunk,
 } from './types.js';
 
-type RungBehaviour = 'accept' | 'truncate' | Error;
+type RungBehaviour = 'accept' | 'truncate' | 'filtered' | 'errored' | Error;
+
+const FINISH_REASON = {
+  accept: 'tool_calls',
+  truncate: 'length',
+  filtered: 'content_filter',
+  errored: 'error',
+} as const;
 
 const attribution = {
   tenantId: 'tenant-probe',
@@ -62,7 +70,7 @@ function fakeProvider(behaviour: Record<ReasoningEffort, RungBehaviour>) {
           : Promise.resolve({
               content: null,
               toolCalls: [],
-              finishReason: outcome === 'truncate' ? 'length' : 'tool_calls',
+              finishReason: FINISH_REASON[outcome],
               usage: {
                 promptTokens: 20,
                 completionTokens: 30,
@@ -183,6 +191,90 @@ describe('probeReasoningLadder', () => {
     expect(result.drift.verdict).toBe('inconclusive');
     expect(result.drift.inconclusive).toEqual(['medium', 'high']);
     expect(result.drift.suggestedProfile).toBeUndefined();
+  });
+
+  it.each([
+    [
+      'openai',
+      () =>
+        normalizeOpenAIError(
+          Object.assign(new Error('The model `gpt-x` does not exist or you do not have access.'), {
+            status: 404,
+            code: 'model_not_found',
+          }),
+        ),
+    ],
+    [
+      'anthropic',
+      () =>
+        normalizeAnthropicError(
+          Object.assign(
+            new Error(
+              '404 {"type":"error","error":{"type":"not_found_error","message":"model: claude-x"}}',
+            ),
+            { status: 404 },
+          ),
+        ),
+    ],
+    [
+      'google',
+      () =>
+        normalizeGoogleError(
+          Object.assign(
+            new Error(
+              '{"error":{"code":404,"message":"models/gemini-x is not found for API version v1beta","status":"NOT_FOUND"}}',
+            ),
+            { status: 404 },
+          ),
+        ),
+    ],
+  ])(
+    'reads a model id %s does not serve as model_unavailable, never as a rejection',
+    async (_provider, unserved) => {
+      const error = unserved();
+      const { adapter } = fakeProvider({ off: error, low: error, medium: error, high: error });
+      const result = await probeReasoningLadder({
+        model: MODEL,
+        getAdapter: () => Promise.resolve(adapter),
+        attribution,
+      });
+
+      expect(result.rejected).toEqual([]);
+      expect(
+        result.rungs.every((r) => r.outcome === 'inconclusive' && r.reason === 'model_unavailable'),
+      ).toBe(true);
+      expect(result.drift.verdict).toBe('inconclusive');
+      expect(result.drift.suggestedProfile).toBeUndefined();
+    },
+  );
+
+  it('counts the spend of answers that ended filtered or in error, which the provider billed', async () => {
+    const { adapter } = fakeProvider({
+      off: 'filtered',
+      low: 'errored',
+      medium: 'filtered',
+      high: 'errored',
+    });
+    const result = await probeReasoningLadder({
+      model: MODEL,
+      getAdapter: () => Promise.resolve(adapter),
+      attribution,
+    });
+
+    expect(ReasoningProbeResultSchema.parse(result)).toEqual(result);
+    expect(result.rungs.map((r) => r.outcome === 'inconclusive' && r.reason)).toEqual([
+      'content_filter',
+      'transient',
+      'content_filter',
+      'transient',
+    ]);
+    expect(result.rungs[0]).toMatchObject({ usage: { totalTokens: 50 } });
+    expect(reasoningProbeUsage(result)).toMatchObject({
+      promptTokens: 80,
+      completionTokens: 120,
+      totalTokens: 200,
+      reasoningTokens: 40,
+    });
   });
 
   it('reads a provider with no usable key as a credential failure on every rung', async () => {

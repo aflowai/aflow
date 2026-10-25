@@ -3,6 +3,7 @@ import {
   SHEPHERD_HANDS_OFF_LABEL,
   SHEPHERD_LEASE_STALE_AFTER_MS,
   SHEPHERD_RESPONSE_PRESETS,
+  SHEPHERD_UNLISTED_PERSISTS_AFTER_MS,
   SCHEDULE_RENEWAL_WINDOW,
   type SkillCatalogEntry,
 } from '@aflow/schemas';
@@ -10,6 +11,7 @@ import { COMMISSION_CHANGE } from './commissionChange.js';
 import { ABANDON_TASKS } from './localPrShepherdAbandon.js';
 import { REMEDY_QUESTION, REMEDY_QUESTION_NAME } from './localPrShepherdDecisions.js';
 import { HANDOFF_READ_TASKS, HANDOFF_WRITE_TASKS } from './localPrShepherdHandoff.js';
+import { HAND_OVER_TASKS } from './localPrShepherdHandOver.js';
 import { LEASE_READ_TASKS, leaseTask, RELEASE_TASK } from './localPrShepherdLease.js';
 import { MERGE_READ_TASKS, MERGE_TASKS, REQUIRED_CHECKS_TASK } from './localPrShepherdMerge.js';
 import {
@@ -41,6 +43,7 @@ import {
   ctx,
   DECIDED_FIX,
   github,
+  GITHUB_READ_PROJECTION,
   HEAD_REF,
   handoffBindings,
   handoffValue,
@@ -48,13 +51,19 @@ import {
   OURS,
   optionalPart,
   out,
+  outputFields,
   REPOSITORY,
   runInput,
   SKIP,
   text,
 } from './localPrShepherdWiring.js';
 import { RENEWAL_TASKS, SCHEDULE_ID_SCHEMA, SCHEDULE_INPUT } from './localPrShepherdRenewal.js';
-import { LAST_TENDED, READ_TURN_TASK, REMEMBER_TURN_TASK } from './localPrShepherdTurn.js';
+import {
+  LAST_TENDED,
+  NOTE_UNLISTED_TASK,
+  READ_TURN_TASK,
+  REMEMBER_TURN_TASK,
+} from './localPrShepherdTurn.js';
 import { PUBLISH_LOCAL_CHANGES } from './publishLocalChanges.js';
 
 /**
@@ -139,19 +148,78 @@ function withBindingDependencies<T extends ShepherdTask>(tasks: T[]): T[] {
   });
 }
 
+/**
+ * What the rules read, field by field (`SHEPHERD_RULES`): the decision's state
+ * holds those and nothing a read returned beside them — no response headers,
+ * no pull request body, no list past its count, no run's tasks — so its size
+ * is bounded by the rules, not by what GitHub or the ledger answered. A test
+ * holds every `state.` path the rules read to one bound here.
+ */
+const DECIDE_STATE = {
+  folder: outputFields('folder', 'read-folder', [
+    'origin',
+    'branchPolicy.branchPrefix',
+    'branchPolicy.pushApproval',
+    'branchPolicy.mergePosture',
+  ]),
+  aim: outputFields('aim', 'aim', ['decision']),
+  candidates: outputFields('candidates', 'list-prs', ['statusCode', 'data.count']),
+  turn: outputFields('turn', 'read-turn', ['dataJson.unlistedAtMs']),
+  pr: outputFields('pr', 'read-pr', [
+    'statusCode',
+    'data.ours',
+    'data.state',
+    'data.handsOff',
+    'data.draft',
+    'data.headSha',
+    'data.mergeable',
+  ]),
+  checks: outputFields('checks', 'read-pr-checks', [
+    'statusCode',
+    'data.state',
+    'data.firstFailing.id',
+    'data.required.state',
+  ]),
+  base: outputFields('base', 'read-base', ['sha']),
+  pinned: outputFields('pinned', 'read-pr-handoff-pinned', ['statusCode']),
+  lease: outputFields('lease', 'read-in-flight-lease', [
+    'dataJson.runId',
+    'dataJson.takenAtMs',
+    'dataJson.decision',
+  ]),
+  leaseOwner: outputFields('leaseOwner', 'read-lease-owner', ['run.status']),
+  publications: outputFields('publications', 'read-in-flight-publications', ['runs[0]']),
+  commissions: outputFields('commissions', 'read-in-flight-commissions', ['runs[0]']),
+  planNode: outputFields('planNode', 'read-in-flight-node', ['complete', 'runs[0]', 'runs[1]']),
+  reviews: outputFields(
+    'reviews',
+    'read-pr-reviews',
+    ['complete', 'changesRequestedBy[0]'],
+    'data',
+  ),
+  publicationReview: outputFields(
+    'publicationReview',
+    'read-publication-review',
+    ['verdict', 'reviewed.at'],
+    'taskOutput.output',
+  ),
+};
+
 const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
   catalogId: 'local-pr-shepherd',
-  version: 16,
+  version: 17,
   name: 'Local PR Shepherd',
   tagline:
     "Tend the pull requests the loop opened: read their CI, fix and publish a red check through Local Publish, and merge a green one where the folder's merge posture allows — never approving or closing.",
   description: `One pass over the pull requests Local Publish opened from a connected folder. It reads the folder, the loop's open pull requests under its publish prefix, the head's check runs, its own handoff comment and the space's work in flight on the branch, and decides by rules — \`fix\`, \`merge\`, \`wait\`, \`abandon\` or \`leave\`, with the reason. A red check no rule holds back is fixed: the remedy question reads the failing jobs' logs and picks re-running the jobs, a fix commission, a dependency bump or a merge round, and anything it is not sure of is the fix commission. The fix is commissioned on the branch with its base merged in and published through Local Publish, which asks the operator exactly where it would when started by hand. Every pass leaves its record in the handoff comment.
 
-**When it merges**: only where the folder's merge posture, \`mergePosture\` beside the push approval, is \`when-green\` — \`never\` is the default, and leaves every merge to the operator. Then a green pull request is merged by squash, pinned to the head it read, when every check the base branch requires — by its rulesets or its classic protection — passed on that head, the Local Code Review of the publication that pushed that head returned \`approve\` for it, and no person's standing review requests changes. Each condition that does not hold leaves it, saying which. The merge asks the operator's approval of exactly that request, as every merge does; a declined or refused merge of a head is not asked for again until a push moves it. One refusal is not of the head: GitHub answering 405 \`Base branch was modified\` because another pull request merged first, while the head, read again, is still the one pinned and green. That merge is sent once more in the same pass, and if GitHub refuses it again the pass hands back \`merge\` with nothing recorded against the head, so the next pass asks again.
+**When it merges**: only where the folder's merge posture, \`mergePosture\` beside the push approval, is \`when-green\` — \`never\` is the default, and leaves every merge to the operator. Then a green pull request is merged by squash, pinned to the head it read, when every check the base branch requires — by its rulesets or its classic protection — passed on that head, the Local Code Review of the publication that pushed that head returned \`approve\` for it, no person's standing review requests changes, and GitHub says the head merges into its base. Each condition that does not hold leaves it, saying which; a mergeability GitHub has not computed yet is read again next pass, never merged on. The merge asks the operator's approval of exactly that request, as every merge does; a declined or refused merge of a head is not asked for again until a push moves it. One refusal is not of the head: GitHub answering 405 \`Base branch was modified\` because another pull request merged first, while the head, read again, is still the one pinned and green. That merge is sent once more in the same pass, and if GitHub refuses it again the pass hands back \`merge\` with nothing recorded against the head, so the next pass asks again.
 
 **What it needs**: the connected folder, \`bindingId\`, connected with a publish prefix and an \`origin\` on GitHub, and the GitHub connection for the space. \`pullNumber\` aims a pass at one pull request, which must still be one the loop opened; without it a pass tends the one after the pull request the last such pass tended, so passes on a schedule take them in turn. \`attemptBudget\` is how many failures of one pull request it acts on before it stops — ${String(SHEPHERD_ATTEMPT_BUDGET_DEFAULT)} unless named.
 
 **When it stops**: a pull request whose budget is spent and whose CI fails again is \`abandon\`: the handoff comment says why, and one Action Center item asks a person to take it — one per head, however many passes find it so. A push that moves the head is read again.
+
+**What it hands to the agent**: a pass that ends on a case its rules cannot act on — GitHub refused the merge for anything but a base that moved, the head does not merge into its base while CI has not failed on it and the shepherd would merge it, reviews or check runs past the one page a pass reads, or a repository whose open pull requests the connection has refused to list on every pass for ${String(SHEPHERD_UNLISTED_PERSISTS_AFTER_MS / 60_000)} minutes — starts a Helmsman conversation on it, carrying what the pass read, what it decided and why, and what the handoff records as tried, for the Helmsman to decide and act on with the skills it has. A read that failed once is read again by the next pass, and a draft, or a folder whose merge is the operator's, stays with them. A case is handed over once: a pull request's once per head and case, so a push that moves the head is a new case, and so is another case on the same head; a repository's once until a pass lists its pull requests again.
 
 **On a schedule**: passes overlap safely. Two on one pull request meet at its branch's lease, and the second acts on nothing. The schedule renews itself: a pass handed \`${SCHEDULE_INPUT}\` — the Local PR Shepherd agent hands it the schedule that started it — reads that schedule, and where it is active and within ${String(SCHEDULE_RENEWAL_WINDOW)} firings of its cap creates its successor, the same agent, cron, input and expiry, which takes over from it. A schedule has one successor however many passes find it due, one its owner paused is not renewed, and the chain ends at the schedule's expiry.
 
@@ -190,7 +258,7 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
       slug: 'local-pr-shepherd',
       name: 'Local PR Shepherd',
       description:
-        "One pass over the loop's open pull requests from a connected folder: read the folder, the pull request, its checks, its handoff and the work in flight on its branch — and, where the folder merges, the base branch's required checks, the people's reviews and the publication's verdict; decide by rules; for a red check, take the lease, read the failing jobs' logs, ask which remedy they want, re-run the jobs or commission the fix on the branch and publish it through Local Publish; for a green one the posture allows, take the lease and merge it by squash on the operator's approval; release the lease and write the handoff; and renew the schedule that started the pass before its firings run out.",
+        "One pass over the loop's open pull requests from a connected folder: read the folder, the pull request, its checks, its handoff and the work in flight on its branch — and, where the folder merges, the base branch's required checks, the people's reviews and the publication's verdict; decide by rules; for a red check, take the lease, read the failing jobs' logs, ask which remedy they want, re-run the jobs or commission the fix on the branch and publish it through Local Publish; for a green one the posture allows, take the lease and merge it by squash on the operator's approval; hand a case its rules cannot act on to the Helmsman, once, with what the pass read; release the lease and write the handoff; and renew the schedule that started the pass before its firings run out.",
       goal: "Keep the loop's pull requests moving through CI without a hand: a red check is fixed and pushed through Local Publish under the folder's posture, acted on once — again only where the base moved after its remedy, by merging the base in — within a budget, and never where a person or other work holds the branch; a green one is merged only where the folder's merge posture allows and the operator approves — with every pass recorded on the pull request.",
       mode: 'process' as const,
       outcomes: [
@@ -338,6 +406,7 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
               ],
             },
           ),
+          outputProjection: GITHUB_READ_PROJECTION,
         },
 
         {
@@ -369,6 +438,7 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
             },
             { $concat: [`${SHEPHERD_RESPONSE_PRESETS.pullRequest}:`, bind('prefix')] },
           ),
+          outputProjection: GITHUB_READ_PROJECTION,
         },
 
         REMEMBER_TURN_TASK,
@@ -401,6 +471,7 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
               ],
             },
           ),
+          outputProjection: GITHUB_READ_PROJECTION,
         },
 
         {
@@ -493,56 +564,39 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
           operation: 'workflow.run.decide',
           retryability: 'safe' as const,
           inputBindings: {
-            folder: out('read-folder'),
-            aim: out('aim'),
-            candidates: out('list-prs'),
-            pr: out('read-pr'),
-            checks: out('read-pr-checks'),
-            base: out('read-base'),
+            ...Object.fromEntries(
+              Object.values(DECIDE_STATE).flatMap((view) => Object.entries(view.bindings)),
+            ),
+            // The pin is held whole: a read that failed leaves no pin, which
+            // a rule tells from one that found none. It is the shepherd's own
+            // small record.
             pin: out('read-handoff-pin'),
-            pinned: out('read-pr-handoff-pinned'),
             ...handoffBindings('handoff'),
-            lease: out('read-in-flight-lease'),
-            leaseOwner: out('read-lease-owner'),
             staleBefore: { kind: 'clock' as const, offsetMs: -SHEPHERD_LEASE_STALE_AFTER_MS },
-            publications: out('read-in-flight-publications'),
-            commissions: out('read-in-flight-commissions'),
-            planNode: out('read-in-flight-node'),
+            unlistedBefore: {
+              kind: 'clock' as const,
+              offsetMs: -SHEPHERD_UNLISTED_PERSISTS_AFTER_MS,
+            },
             runId: { kind: 'run_id' as const },
             budget: runInput('attemptBudget'),
-            requiredRules: out('read-required-rules', 'data'),
             requiredRulesStatus: out('read-required-rules', 'statusCode'),
-            requiredProtection: out(REQUIRED_CHECKS_TASK, 'data'),
             requiredProtectionStatus: out(REQUIRED_CHECKS_TASK, 'statusCode'),
-            reviews: out('read-pr-reviews', 'data'),
             reviewsStatus: out('read-pr-reviews', 'statusCode'),
-            publicationReview: out('read-publication-review', 'taskOutput.output'),
           },
           context: ctx('workflow.run.decide'),
           inputTemplate: {
             state: {
-              requiredRules: bind('requiredRules'),
+              ...Object.fromEntries(
+                Object.entries(DECIDE_STATE).map(([name, view]) => [name, view.value]),
+              ),
               requiredRulesStatus: bind('requiredRulesStatus'),
-              requiredProtection: bind('requiredProtection'),
               requiredProtectionStatus: bind('requiredProtectionStatus'),
-              reviews: bind('reviews'),
               reviewsStatus: bind('reviewsStatus'),
-              publicationReview: bind('publicationReview'),
-              folder: bind('folder'),
-              aim: bind('aim'),
-              candidates: bind('candidates'),
-              pr: bind('pr'),
-              checks: bind('checks'),
-              base: bind('base'),
               pin: bind('pin'),
-              pinned: bind('pinned'),
+              // The handoff record is the shepherd's own, a few short fields.
               handoff: handoffValue('handoff'),
-              lease: bind('lease'),
-              leaseOwner: bind('leaseOwner'),
               staleBefore: bind('staleBefore'),
-              publications: bind('publications'),
-              commissions: bind('commissions'),
-              planNode: bind('planNode'),
+              unlistedBefore: bind('unlistedBefore'),
               runId: bind('runId'),
               budget: { $firstOf: [bind('budget'), SHEPHERD_ATTEMPT_BUDGET_DEFAULT] },
             },
@@ -791,6 +845,10 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
 
         ...MERGE_TASKS,
 
+        NOTE_UNLISTED_TASK,
+
+        ...HAND_OVER_TASKS,
+
         RELEASE_TASK,
 
         ...HANDOFF_WRITE_TASKS,
@@ -822,11 +880,20 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
           sensitive: false,
           immutable: false,
         },
+        {
+          variableId: 'handOverScheduleId',
+          name: 'Hand-over',
+          description:
+            'The schedule that starts the Helmsman conversation this pass handed its case to, where it handed one over.',
+          required: false,
+          sensitive: false,
+          immutable: false,
+        },
       ],
       output: {
         primary: 'decision',
         guidance:
-          'Report the decision and its reason. Where publicationRunId is set, the fix went through Local Publish: report its pull request and whether it pushed, waits at its approval, or kept the branch local on fix_before_merge — its afterReview and reviewRunId, from which the fix round is commissioned. On merge, report whether it merged, waits at the merge approval, which is the operator’s, or was declined or refused.',
+          'Report the decision and its reason. With publicationRunId, the fix went through Local Publish: report its pull request and whether it pushed, waits at its approval, or kept the branch local on fix_before_merge — its afterReview and reviewRunId. On merge, report whether it merged, waits at the operator’s approval, or was declined or refused. With handOverScheduleId, the case was handed to the Helmsman: say so.',
       },
       iteration: { auto: false, maxConsecutiveRuns: 1, stopOnOutcomesMet: true, cooldownMs: 0 },
     },
@@ -866,7 +933,7 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
       priority: 50,
     },
     rationale:
-      'Plan 321 P1, P2, P2b. Typed reads — folder, turn, pull requests, checks, handoff, lease, in-flight runs, and under when-green required checks, reviews and the head publication verdict — then workflow.run.decide: first rule that holds decides, else fix; a refused read is wait, over a page of check runs is leave, merge follows every wait. Fix and merge take the lease. Fix reads failing jobs and logs; the remedy question routes to re-run, fix, bump or merge round (unsure: fix), published via Local Publish. Merge is squash pinned to the head behind its write approval; a base-moved refusal is resent once, then handed back. Leased work releases the lease. Abandon claims its head after the handoff, or takes over an unanswered claim, and raises one item only on its claim. The pin keeps attempt state and each remedy base: a deleted handoff restarts nothing; a base moved since a remedy is merged in. Nothing approves or closes; only merge merges. A scheduled pass renews its schedule near the cap.',
+      'Plan 321 P1, P2, P2b; Plan 315. Typed reads, projected to the fields the rules read, then workflow.run.decide: first rule that holds decides, else fix; merge follows every wait and needs GitHub to say the head merges. Fix and merge take the lease. Fix reads failing jobs and logs; the remedy question routes to re-run, fix, bump or merge round (unsure: fix), published via Local Publish. Merge is squash pinned to the head behind its write approval; a base-moved refusal is resent once, then handed back. Abandon raises one Action Center item per head. A case the rules cannot act on is claimed once per head and case (per turn, for a repository long unlisted) and handed to the Helmsman by a one-firing schedule; a failed read waits. The pin keeps attempt state and each remedy base. Nothing approves or closes; only merge merges. A scheduled pass renews its schedule near the cap.',
   },
 };
 

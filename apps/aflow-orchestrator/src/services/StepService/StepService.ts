@@ -451,6 +451,8 @@ export async function failStep(
     runStateUpdates?: Partial<SessionHotState>;
     additionalEvents?: SessionEvent[];
     eventMeta?: Record<string, unknown>;
+    /** What the step spent before it failed; it is billed, so it counts toward the run. */
+    usage?: StepUsageBreakdown;
   },
 ): Promise<void> {
   const now = Date.now();
@@ -466,6 +468,11 @@ export async function failStep(
     sessionId: ctx.runId,
     ...opts?.runStateUpdates,
   };
+  if (opts?.usage) {
+    const { accumulateUsageSummary } =
+      await import('../SessionOrchestrator/helpers/runtimeState.js');
+    runUpdates.usageSummary = accumulateUsageSummary(ctx.runState.usageSummary, opts.usage);
+  }
 
   const userError = buildUserError(error, opts?.classification, opts?.retryable, {
     runId: ctx.runId,
@@ -483,12 +490,14 @@ export async function failStep(
     stepType: ctx.stepDef.stepType,
     attempt: ctx.attempt,
     ...(opts?.errorRef ? { errorRef: opts.errorRef } : {}),
+    ...(opts?.usage ? { usage: opts.usage } : {}),
     metadata: {
       stepName: ctx.stepDef.name ?? ctx.stepDef.stepId,
       operationId: ctx.stepDef.operation,
       errorCode: error.code,
       errorMessage: error.message,
       userError,
+      ...(opts?.usage ? { costJson: opts.usage } : {}),
       ...(opts?.willRetry ? { willRetry: true, nextAttempt: opts.nextAttempt } : {}),
       ...opts?.eventMeta,
     },

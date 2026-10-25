@@ -100,6 +100,8 @@ export const ReasoningProbeRungSchema = z.discriminatedUnion('outcome', [
     request: ReasoningProbeRequestSchema,
     reason: ReasoningProbeInconclusiveReasonSchema,
     error: ReasoningProbeErrorSchema,
+    /** Set when the provider answered and billed the request, then ended it filtered or in error. */
+    usage: ReasoningProbeUsageSchema.optional(),
   }),
 ]);
 export type ReasoningProbeRung = z.infer<typeof ReasoningProbeRungSchema>;

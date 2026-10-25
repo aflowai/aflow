@@ -202,6 +202,9 @@ type RungClassification =
 export function classifyReasoningProbeFailure(err: unknown): RungClassification {
   const error = probeError(err);
   if (error.code === 'output_truncated') return { kind: 'accepted_truncated' };
+  if (error.code === 'model_not_found') {
+    return { kind: 'inconclusive', reason: 'model_unavailable', error };
+  }
   if (error.code === 'auth' || CREDENTIAL_FAILURE.test(error.message)) {
     return { kind: 'inconclusive', reason: 'credential', error };
   }
@@ -213,9 +216,6 @@ export function classifyReasoningProbeFailure(err: unknown): RungClassification 
   }
   if (error.code === 'content_filter') {
     return { kind: 'inconclusive', reason: 'content_filter', error };
-  }
-  if (error.code === 'model_not_found') {
-    return { kind: 'inconclusive', reason: 'model_unavailable', error };
   }
   return { kind: 'rejected', error };
 }
@@ -279,6 +279,7 @@ async function probeRung(
           message: `The provider ended the response with finish reason "${finishReason}".`,
           retryable: finishReason === 'error',
         },
+        usage: probeUsage(usage),
       };
     }
     return {
@@ -430,10 +431,13 @@ export async function probeReasoningLadder(
   };
 }
 
-/** What the probe spent, summed over the rungs the provider answered. */
+/**
+ * What the probe spent, summed over every rung the provider answered with
+ * usage — an answer that ended filtered or in error was billed all the same.
+ */
 export function reasoningProbeUsage(result: ReasoningProbeResult): TokenUsage | undefined {
   const answered = result.rungs.flatMap((r) =>
-    r.outcome === 'accepted' && r.usage ? [r.usage] : [],
+    r.outcome !== 'rejected' && r.usage ? [r.usage] : [],
   );
   if (answered.length === 0) return undefined;
   return answered.reduce<TokenUsage>(

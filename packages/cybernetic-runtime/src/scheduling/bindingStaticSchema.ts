@@ -130,7 +130,9 @@ export function bindingStaticSchema(
     case 'run_id':
       return { schema: { type: 'string', minLength: 1 }, status: 'known' };
     case 'clock':
-      return { schema: { type: 'integer' }, status: 'known' };
+      return binding.format === 'iso'
+        ? { schema: { type: 'string', format: 'date-time' }, status: 'known' }
+        : { schema: { type: 'integer' }, status: 'known' };
     case 'task_output':
       return resolveTaskOutputSchema(binding, producer);
   }

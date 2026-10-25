@@ -214,6 +214,7 @@ export function loopPullRequest(body: unknown, arg: string | undefined): LoopPul
     ours: carriesMarker(raw) && fields.fromBaseRepository && fields.headRef.startsWith(prefix),
     handsOff: fields.handsOff,
     draft: pr['draft'] === true,
+    mergeable: typeof pr['mergeable'] === 'boolean' ? pr['mergeable'] : null,
     commentPages: Math.max(1, Math.ceil(nonNegative(pr['comments']) / COMMENTS_PER_PAGE)),
     ...(typeof mergeableState === 'string' ? { mergeableState } : {}),
   };
