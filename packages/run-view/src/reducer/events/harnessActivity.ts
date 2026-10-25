@@ -129,12 +129,26 @@ export function settleHarnessActivity(state: RunViewState, event: SessionEvent):
 }
 
 /**
+ * Note a step this session runs itself. A step event on the session's own
+ * stream names one; a workflow task or a child session reports through other
+ * event types (`WorkflowTaskUpdate`, `SubflowEventForwarded`), never these.
+ */
+export function recordSessionStep(state: RunViewState, event: SessionEvent): RunViewState {
+  const stepExecutionId = event.stepExecutionId;
+  if (stepExecutionId === undefined || !event.eventType.startsWith('Step')) return state;
+  if (state.sessionSteps[stepExecutionId] === true) return state;
+  return { ...state, sessionSteps: { ...state.sessionSteps, [stepExecutionId]: true } };
+}
+
+/**
  * The run has come to rest — paused for a person, or finished — so nothing in
- * it is working any more, whatever the live frames last said. Every feed is
- * settled, a thinking placeholder (ephemeral, never persisted) is dropped, and
- * text still marked as streaming is kept as what the step said.
+ * it is working any more, whatever the live frames last said. The feeds of its
+ * own steps are settled, a thinking placeholder (ephemeral, never persisted)
+ * is dropped, and text still marked as streaming is kept as what the step said.
  *
- * Waiting on a child is not rest: the child is the one working.
+ * Only its own steps: a workflow run it started keeps running while it waits,
+ * and that run's task feeds stream into this view too. Waiting on a child is
+ * not rest at all: the child is the one working.
  */
 export function settleOnRest(state: RunViewState, event: SessionEvent): RunViewState {
   if (!RESTING_EVENT_TYPES.has(event.eventType)) return state;
@@ -157,12 +171,14 @@ export function settleOnRest(state: RunViewState, event: SessionEvent): RunViewS
     });
   }
 
+  const stops = (id: string, feed: HarnessActivityState) =>
+    !feed.settled && state.sessionSteps[id] === true;
   let harnessActivity = state.harnessActivity;
-  if (Object.values(harnessActivity).some((feed) => !feed.settled)) {
+  if (Object.entries(harnessActivity).some(([id, feed]) => stops(id, feed))) {
     harnessActivity = Object.fromEntries(
       Object.entries(harnessActivity).map(([id, feed]) => [
         id,
-        feed.settled ? feed : { ...feed, settled: true },
+        stops(id, feed) ? { ...feed, settled: true } : feed,
       ]),
     );
   }

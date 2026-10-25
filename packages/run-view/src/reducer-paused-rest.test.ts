@@ -135,6 +135,40 @@ describe('a session paused on a chat question', () => {
     expect(unsettledHarnessSteps(state.harnessActivity, state.messages)).toEqual([]);
   });
 
+  it('leaves a workflow task’s running feed alone when the session pauses or finishes', () => {
+    const WORKFLOW_TASK = '44444444-4444-4444-4444-444444444444';
+    const taskFrame = (text: string, offset: number) =>
+      live(
+        WORKFLOW_TASK,
+        'activity',
+        `${JSON.stringify({ kind: 'output', at: offset, text })}\n`,
+        offset,
+      );
+    const first = taskFrame('building', 0);
+    const second = taskFrame('testing', Buffer.byteLength(first.delta));
+
+    const paused = fold([
+      evt('SessionStarted', undefined),
+      evt('StepStarted', COMMAND, { operationId: 'host.command.run' }),
+      live(COMMAND, 'activity', `${JSON.stringify(OUTPUT_LINE)}\n`),
+      // The workflow run's task streams its feed into this view; its steps
+      // report through workflow events, never as this session's own steps.
+      first,
+      ...askedAndPaused.slice(1),
+    ]);
+    expect(paused.status).toBe('PAUSED');
+    expect(paused.harnessActivity[COMMAND]?.settled).toBe(true);
+    expect(paused.harnessActivity[WORKFLOW_TASK]?.settled).toBe(false);
+    expect(unsettledHarnessSteps(paused.harnessActivity, paused.messages)).toEqual([WORKFLOW_TASK]);
+
+    const stillRunning = fold([second, evt('SessionSucceeded', undefined)], paused);
+    expect(stillRunning.harnessActivity[WORKFLOW_TASK]).toMatchObject({ settled: false });
+    expect(stillRunning.harnessActivity[WORKFLOW_TASK]?.lines.map((l) => l.text)).toEqual([
+      'building',
+      'testing',
+    ]);
+  });
+
   it('keeps work under a pause that waits on a child — the child is working', () => {
     const state = fold([
       evt('SessionStarted', undefined),

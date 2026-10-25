@@ -73,8 +73,10 @@ const HumanChatAskArgumentsSchema = z.object({
     .optional(),
 });
 
-const ARGUMENT_KEY_PATTERN = new RegExp(
-  `"(${Object.keys(HumanChatAskArgumentsSchema.shape).join('|')})"\\s*:`,
+/** A closing quote, a comma, then one of this call's argument keys — `","options":`. */
+const ARGUMENT_TAIL_PATTERN = new RegExp(
+  `"\\s*,\\s*"(${Object.keys(HumanChatAskArgumentsSchema.shape).join('|')})"\\s*:`,
+  'g',
 );
 
 /**
@@ -150,7 +152,23 @@ function leakedArgumentKey(text: string): string | null {
     outside += ' ';
     i = end + 1;
   }
-  return ARGUMENT_KEY_PATTERN.exec(outside)?.[1] ?? null;
+  return argumentTailKey(outside);
+}
+
+/**
+ * The key of a serialized-arguments tail, or null. The tail starts at the quote
+ * that ended the field's own JSON string: read as prose, that quote has no
+ * partner before it, because every quote earlier in the text is paired. A
+ * quoted fragment of some record (`"title": "Q3", "description": …`) reaches
+ * the same `", "key":` shape only on a quote that closes a pair, so it reads
+ * as the prose it is.
+ */
+function argumentTailKey(text: string): string | null {
+  for (const match of text.matchAll(ARGUMENT_TAIL_PATTERN)) {
+    const quotesBefore = text.slice(0, match.index).split('"').length - 1;
+    if (quotesBefore % 2 === 0) return match[1] ?? null;
+  }
+  return null;
 }
 
 export const HumanChatAskInputSchema = HumanChatAskArgumentsSchema.superRefine((value, ctx) => {

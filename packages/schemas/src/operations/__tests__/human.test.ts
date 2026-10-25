@@ -138,6 +138,37 @@ describe('HumanChatAskInputSchema — arguments stay out of the text a person re
     ).toEqual([]);
   });
 
+  it('admits partial JSON and a JSON diff quoted in prose with the common keys', () => {
+    expect(
+      messages({
+        kind: 'approval',
+        title: 'Rename the page?',
+        description:
+          'This changes two fields:\n\n```diff\n- "title": "Q2 plan",\n+ "title": "Q3 plan",\n' +
+          '  "description": "Roadmap", "kind": "page",\n```\n' +
+          'The "kind": field stays as it is.',
+      }),
+    ).toEqual([]);
+    expect(
+      messages({
+        kind: 'input',
+        prompt: 'Should "title": "Q3", "description": "Roadmap" replace the heading?',
+      }),
+    ).toEqual([]);
+  });
+
+  it('still refuses a tail that follows quoted words in the question', () => {
+    expect(
+      messages({
+        kind: 'input',
+        prompt: 'Run it "fast" or "safe"?", "options": ["fast", "safe"]',
+      }),
+    ).toEqual([
+      'prompt: `prompt` contains serialized tool arguments ("options": …), which the person would read as text. ' +
+        'Put only the question in `prompt`; choices go in `options`, and every other argument in its own field of this call.',
+    ]);
+  });
+
   it('admits JSON in the text that is not this call’s arguments', () => {
     expect(
       messages({

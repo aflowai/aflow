@@ -67,6 +67,13 @@ export interface RunViewState {
    * step's terminal event is known to be stale.
    */
   endedSteps: Record<string, true>;
+  /**
+   * Steps this session ran itself — named by a step event on its own stream,
+   * not a workflow task or a child session reporting through it. When the
+   * session comes to rest, these are the feeds that stop; any other feed
+   * belongs to work still running elsewhere.
+   */
+  sessionSteps: Record<string, true>;
   workflowRuns: Record<string, WorkflowRunSurfaceState>;
   workflowSurfaceItems: WorkflowSurfaceItemEntry[];
   _stepDetailCache: Record<string, string>;
@@ -160,6 +167,7 @@ export const INITIAL_STATE: RunViewState = {
   streamingStepExecutionId: null,
   harnessActivity: {},
   endedSteps: {},
+  sessionSteps: {},
   workflowRuns: {},
   workflowSurfaceItems: [],
   _stepDetailCache: {},
