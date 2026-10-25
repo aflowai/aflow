@@ -100,12 +100,12 @@
     "contentHash": "40c522523b46d0b00c9be79d07a41203374f742402df6be7c818ae74e0dfa1f2"
   },
   "local-commission": {
-    "version": 9,
+    "version": 10,
     "contentHash": "96d47c0e053dca5d45b10cc86024002f75906b4ddffc45a6917fda149977944a"
   },
   "local-publish": {
-    "version": 45,
-    "contentHash": "a84b3a2a2a8858ba791a4063eb4592488a083baa05167db35d58e1aa0ec0bd87"
+    "version": 46,
+    "contentHash": "8dd7a34d5b1ecdf14f07523d40e5f32b7e8edb0c94ee8fa2c01919110ae8c19d"
   },
   "local-shepherd": {
     "version": 19,

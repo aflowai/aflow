@@ -22,7 +22,9 @@ async function retrievePayload(payloadStore: PayloadStore, ref: string): Promise
  * A task that waited on a run it started, where that run failed and was
  * retried in place to completion: its output as the run stands now, through
  * the task's own projection — what a first pass that completed would have
- * recorded. Undefined for any other task, which reads as it was recorded.
+ * recorded. Undefined for any other task, which reads as it was recorded —
+ * and where anything on the way fails, since the recorded output is still a
+ * true account of how the task ended.
  */
 async function readFromFinalAttempt(
   args: InlineHandlerArgs,
@@ -32,34 +34,44 @@ async function readFromFinalAttempt(
   recorded: unknown,
   inputRef: string | null,
 ): Promise<WorkflowRunTaskOutput | undefined> {
-  const db = getDatabase();
-  const tenantIdStr = args.context.tenantId as string;
-  const { buildWorkflowRunDetail, failedChildRunOf, taskOutputFromCompletedRun } =
-    await import('@aflow/cybernetic-runtime');
-  let task;
   try {
-    const { workflow } = await resolveWorkflowForRunRevision(
-      db,
-      args.context.tenantId,
-      spaceId,
-      run.workflowSlug,
-      run.workflowRevision,
-    );
-    task = workflow.tasks.find((t) => t.taskId === taskId);
+    return await projectFromFinalAttempt(args, spaceId, run, taskId, recorded, inputRef);
   } catch {
     return undefined;
   }
+}
+
+async function projectFromFinalAttempt(
+  args: InlineHandlerArgs,
+  spaceId: string,
+  run: WorkflowRunDetailOutput['run'],
+  taskId: string,
+  recorded: unknown,
+  inputRef: string | null,
+): Promise<WorkflowRunTaskOutput | undefined> {
+  const db = getDatabase();
+  const tenantIdStr = args.context.tenantId as string;
+  const { completedRunResult, failedChildRunOf, taskOutputFromCompletedRun } =
+    await import('@aflow/cybernetic-runtime');
+  const { workflow } = await resolveWorkflowForRunRevision(
+    db,
+    args.context.tenantId,
+    spaceId,
+    run.workflowSlug,
+    run.workflowRevision,
+  );
+  const task = workflow.tasks.find((t) => t.taskId === taskId);
   if (task === undefined) return undefined;
   const childRunId = failedChildRunOf(task, recorded);
   if (childRunId === undefined) return undefined;
-  const child = await buildWorkflowRunDetail(
-    db,
-    args.payloadStore,
+  // Only the result is re-projected, so only the run and its result are read.
+  const child = await completedRunResult(
+    { db, payloadStore: args.payloadStore },
     tenantIdStr,
     spaceId,
     childRunId,
   );
-  if (child?.run.status !== 'completed') return undefined;
+  if (child === undefined) return undefined;
   const input = inputRef === null ? null : await retrievePayload(args.payloadStore, inputRef);
   const output = taskOutputFromCompletedRun(
     task,

@@ -20,6 +20,22 @@ const mockListActiveRunsForWorkflow = vi.fn();
 const mockResolveWorkflowForStart = vi.fn();
 const mockGetTaskRow = vi.fn();
 
+const mockCompletedRunResult = vi.fn();
+
+/** A completed run's result, as `completedRunResult` reads it: the run row and nothing more. */
+async function completedRunResultOf(
+  _deps: unknown,
+  tenantId: string,
+  spaceId: string,
+  runId: string,
+): Promise<{ result: unknown } | undefined> {
+  const run = (await mockLoadRunById(undefined, tenantId, spaceId, runId)) as {
+    status: string;
+    result?: unknown;
+  } | null;
+  return run?.status === 'completed' ? { result: run.result } : undefined;
+}
+
 async function mockBuildWorkflowRunDetail(
   _db: unknown,
   _payloadStore: unknown,
@@ -119,6 +135,7 @@ vi.mock('@aflow/cybernetic-runtime', async () => {
       mockSurfaceWorkflowResumeContract(...args),
     buildWorkflowRunDetail: (...args: Parameters<typeof mockBuildWorkflowRunDetail>) =>
       mockBuildWorkflowRunDetail(...args),
+    completedRunResult: (...args: unknown[]) => mockCompletedRunResult(...args),
     cancelNonTerminalTasksForRun: (...args: unknown[]) => mockCancelNonTerminalTasksForRun(...args),
     listCompletionPendingForRun: (...args: unknown[]) => mockListCompletionPendingForRun(...args),
     clearAllCompletionPendingForRun: (...args: unknown[]) =>
@@ -970,6 +987,7 @@ describe('workflow.run.detail — a task that waited on a run reads it by its fi
       Promise.resolve(runId === REVIEW_RUN_ID ? review : publicationRun()),
     );
     mockLoadPendingWaiters.mockResolvedValue([]);
+    mockCompletedRunResult.mockImplementation(completedRunResultOf);
     vi.mocked(resolveWorkflowForRunRevision).mockResolvedValue({
       workflow: publication as never,
       source: 'platform',
@@ -1016,6 +1034,21 @@ describe('workflow.run.detail — a task that waited on a run reads it by its fi
       const taskOutput = await readReviewTask(reviewRun(status));
       expect(taskOutput, status).toEqual({ taskId: 'review-commit', output: firstEnding });
     }
+  });
+
+  it('reads only the result of the run it waited on, never that run’s whole detail', async () => {
+    mockCompletedRunResult.mockClear();
+    await readReviewTask(reviewRun('completed', { output: { verdict: 'approve' } }));
+    expect(mockCompletedRunResult).toHaveBeenCalledTimes(1);
+    expect(mockCompletedRunResult.mock.calls[0]?.[3]).toBe(REVIEW_RUN_ID);
+  });
+
+  it('keeps what the task recorded, and the read succeeds, where reading the run it waited on fails', async () => {
+    mockCompletedRunResult.mockRejectedValueOnce(new Error('connection reset'));
+    const taskOutput = await readReviewTask(
+      reviewRun('completed', { output: { verdict: 'approve' } }),
+    );
+    expect(taskOutput).toEqual({ taskId: 'review-commit', output: firstEnding });
   });
 });
 

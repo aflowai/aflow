@@ -86,6 +86,7 @@ describe('Commission Change — a brief to the machine’s coding agent', () => 
       task: BRIEF,
       timeoutMs: HOST_HARNESS_TIMEOUT_MAX_MS,
       outputSchema: COMMISSION_RESULT_SCHEMA,
+      resultRequired: false,
     });
     expect('maxTurns' in op).toBe(false);
     expect(op['timeoutMs']).toBeGreaterThan(HOST_HARNESS_TIMEOUT_DEFAULT_MS);
@@ -133,7 +134,7 @@ describe('Commission Change — a brief to the machine’s coding agent', () => 
       browser: { profile: 'ephemeral' },
     };
     const op = substituteTemplateBinds(template, named, declared);
-    expect(op).toEqual({ ...named, outputSchema: COMMISSION_RESULT_SCHEMA });
+    expect(op).toEqual({ ...named, outputSchema: COMMISSION_RESULT_SCHEMA, resultRequired: false });
     expect(HostHarnessRunInputSchema.safeParse(op).success).toBe(true);
   });
 
@@ -211,6 +212,18 @@ describe('Commission Change — a brief to the machine’s coding agent', () => 
       'The coding agent writes the `summary` whatever the brief asks: a title line under 72 characters and one paragraph',
     );
     expect(COMMISSION_CHANGE.description).toContain('its run id as `commission`');
+  });
+
+  it('keeps the change when the coding agent writes no valid summary', () => {
+    // The patch is the product: a missing or invalid result costs the summary
+    // only, and the publication then asks for a commit message.
+    expect(template['resultRequired']).toBe(false);
+    expect(COMMISSION_CHANGE.description).toContain(
+      'A commission whose coding agent wrote no valid summary still returns its change',
+    );
+    const op = substituteTemplateBinds(template, { bindingId: 'hb_repo', task: BRIEF }, declared);
+    const parsed = HostHarnessRunInputSchema.parse(op);
+    expect(parsed.resultRequired).toBe(false);
   });
 
   it("starts a fix round at the branch's head, named as `base`, pushed or kept local", () => {

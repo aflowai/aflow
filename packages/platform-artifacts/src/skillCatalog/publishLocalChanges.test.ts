@@ -175,10 +175,12 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     expect(validity.status).toBe('valid');
   });
 
-  it('is twenty-eight tasks — where the commit message comes from, the commission found and its summary read, commit, check, the stop on a failed check, scan, what decides the approval, the review, its findings decided by the rounds rule, the check of an override and the stop on its refusal, the pull request composed, the push gate, the fix round handed its branch, approve, push, the pull request found, rewritten or opened, and the review read back', () => {
+  it('is thirty tasks — where the commit message comes from, the commission found, a named one checked against it and the stop on one that differs, its summary read, commit, check, the stop on a failed check, scan, what decides the approval, the review, its findings decided by the rounds rule, the check of an override and the stop on its refusal, the pull request composed, the push gate, the fix round handed its branch, approve, push, the pull request found, rewritten or opened, and the review read back', () => {
     expect(wf.tasks.map((t) => t.taskId)).toEqual([
       'message-from',
       'find-commission',
+      'check-commission',
+      'commission-refused',
       'read-commission',
       'commit',
       'check-commit',
@@ -212,7 +214,14 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     expect(Object.fromEntries(wf.tasks.map((t) => [t.taskId, t.dependsOn ?? []]))).toEqual({
       'message-from': [],
       'find-commission': ['message-from'],
-      'read-commission': ['message-from', 'find-commission'],
+      'check-commission': ['message-from', 'find-commission'],
+      'commission-refused': ['check-commission'],
+      'read-commission': [
+        'message-from',
+        'find-commission',
+        'check-commission',
+        'commission-refused',
+      ],
       commit: ['message-from', 'find-commission', 'read-commission'],
       'check-commit': ['commit'],
       'checks-failed': ['check-commit'],
@@ -269,6 +278,8 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     expect(Object.fromEntries(wf.tasks.map((t) => [t.taskId, t.operation]))).toEqual({
       'message-from': 'workflow.run.decide',
       'find-commission': 'workflow.run.list',
+      'check-commission': 'workflow.run.decide',
+      'commission-refused': 'workflow.run.fail',
       'read-commission': 'workflow.run.detail',
       commit: 'host.file.patch',
       'check-commit': 'host.commit.check',
@@ -1108,7 +1119,7 @@ interface Scenario {
   /** What an override's checks read of the branch's pull request; absent is an unlabelled one with no shepherd record. */
   onGitHub?: OnGitHub;
   /** The Commission Change that made the change, as its run holds it; absent is none to be found. */
-  commission?: { runId: string; patchRef: string; summary: unknown };
+  commission?: { runId: string; patchRef: string; summary: unknown; bindingId?: string };
   /**
    * How the review run stands when the publication reads it back, where not as
    * it first ended — a review that failed and was retried in place.
@@ -1298,6 +1309,7 @@ function rawOutput(
       return scenario.describeRefused === true ? {} : describedPullRequest(input);
     // The rules each decision is handed, decided as the orchestrator decides them.
     case 'message-from':
+    case 'check-commission':
     case 'settle-after-review':
     case 'claim-override':
     case 'verify-override':
@@ -1308,7 +1320,10 @@ function rawOutput(
     case 'find-commission': {
       const query = WorkflowRunListInputSchema.parse(input);
       const recorded = query.succeeded?.[0]?.output?.equals;
-      const found = scenario.commission !== undefined && recorded === scenario.commission.patchRef;
+      const found =
+        scenario.commission !== undefined &&
+        recorded === scenario.commission.patchRef &&
+        query.input?.equals === (scenario.commission.bindingId ?? RUN_INPUTS['bindingId']);
       return WorkflowRunListOutputSchema.parse({
         runs: found
           ? [
@@ -3846,8 +3861,69 @@ describe("Publish Local Changes — the commit is made under the commission's su
     });
     expect(outcome.statuses.get('find-commission')).toBe('failed');
     expect(outcome.ran).not.toContain('commit');
-    expect(taskOrThrow('find-commission').failureInstruction).toContain('`commission`');
+    expect(taskOrThrow('find-commission').failureInstruction).toContain('`commitMessage`');
     expect(taskOrThrow('read-commission').failureInstruction).toContain('`commitMessage`');
+  });
+
+  it('refuses a named run that is not the commission which reported the patchRef, naming the one that did', () => {
+    const OTHER_RUN_ID = '9b2f1c3a-1d2e-4f5a-8b6c-7d8e9f0a1b2c';
+    const outcome = publish({
+      pushApproval: 'never',
+      review: 'approve',
+      decision: 'approved',
+      commission,
+      inputs: { owner: 'aflowai', repo: 'aflow', patchRef: PATCH_REF, commission: OTHER_RUN_ID },
+    });
+    expect(outcome.outputs.get('check-commission')?.['decision']).toBe('refused');
+    expect(outcome.statuses.get('commission-refused')).toBe('failed');
+    expect(outcome.ran).not.toContain('read-commission');
+    expect(outcome.ran).not.toContain('commit');
+    const reason = String(outcome.inputs.get('commission-refused')?.['reason']);
+    expect(reason).toContain(OTHER_RUN_ID);
+    expect(reason).toContain(COMMISSION_RUN_ID);
+    expect(reason).toContain('nothing was committed');
+  });
+
+  it('reads the summary of the run that reported the patchRef once the named one is found to be it', () => {
+    const outcome = publish({
+      pushApproval: 'never',
+      review: 'approve',
+      decision: 'approved',
+      commission,
+      inputs: {
+        owner: 'aflowai',
+        repo: 'aflow',
+        patchRef: PATCH_REF,
+        commission: COMMISSION_RUN_ID,
+      },
+    });
+    expect(outcome.outputs.get('check-commission')?.['decision']).toBe('confirmed');
+    expect(outcome.statuses.get('commission-refused')).toBe('skipped');
+    expect(outcome.inputs.get('read-commission')).toEqual({
+      runId: COMMISSION_RUN_ID,
+      compact: true,
+    });
+  });
+
+  it('finds no commission for a patchRef reported on another folder, named or not', () => {
+    for (const named of [{}, { commission: COMMISSION_RUN_ID }]) {
+      const outcome = publish({
+        pushApproval: 'never',
+        review: 'approve',
+        decision: 'approved',
+        commission: { ...commission, bindingId: 'folder-2' },
+        inputs: { owner: 'aflowai', repo: 'aflow', patchRef: PATCH_REF, ...named },
+      });
+      expect(outcome.statuses.get('find-commission'), JSON.stringify(named)).toBe('failed');
+      expect(outcome.ran).not.toContain('commit');
+    }
+    // This folder's runs of the Commission Change that reported this patchRef.
+    expect(taskOrThrow('find-commission').inputTemplate).toMatchObject({
+      slug: COMMISSION_CHANGE.bundle.workflow.slug,
+      input: { field: 'bindingId' },
+      succeeded: [{ taskId: 'commission', output: { path: 'patchRef' } }],
+      status: ['completed'],
+    });
   });
 
   it("holds the commission's summary to a title under 72 characters and one paragraph", () => {
@@ -3881,6 +3957,13 @@ describe('Publish Local Changes — a change with no message and no commission i
     for (const change of [
       { patch: 'diff --git a/a b/a' },
       { baseSha: 'a'.repeat(40), mergeFrom: 'b'.repeat(40) },
+      // A run id beside no `patchRef` has nothing its summary can be checked against.
+      { patch: 'diff --git a/a b/a', commission: '7c9e6679-7425-40de-944b-e07fc1f90ae7' },
+      {
+        baseSha: 'a'.repeat(40),
+        mergeFrom: 'b'.repeat(40),
+        commission: '7c9e6679-7425-40de-944b-e07fc1f90ae7',
+      },
     ]) {
       const result = validateParentTaskInputs(entry, { ...base, ...change }, wf.runInputs);
       expect(result.ok, JSON.stringify(change)).toBe(false);
@@ -3895,20 +3978,19 @@ describe('Publish Local Changes — a change with no message and no commission i
       );
       expect(message).toContain('Cannot start');
       expect(message).toContain('`commitMessage`');
-      expect(message).toContain('`commission`');
+      expect(message).toContain('`patchRef`');
     }
   });
 
-  it('starts with a message, with a commission to take one from, or with nothing to commit', () => {
+  it("starts with a message, with a commission's patchRef to take one from, or with nothing to commit", () => {
     for (const inputs of [
       { patch: 'diff --git a/a b/a', commitMessage: 'Fix\n\nWhy.' },
-      { patch: 'diff --git a/a b/a', commission: '7c9e6679-7425-40de-944b-e07fc1f90ae7' },
       { patchRef: 'gs://file-store/x/patch.json' },
       {
-        baseSha: 'a'.repeat(40),
-        mergeFrom: 'b'.repeat(40),
+        patchRef: 'gs://file-store/x/patch.json',
         commission: '7c9e6679-7425-40de-944b-e07fc1f90ae7',
       },
+      { patchRef: 'gs://file-store/x/patch.json', mergeFrom: 'b'.repeat(40) },
       { baseSha: 'a'.repeat(40) },
     ]) {
       expect(
@@ -3927,7 +4009,7 @@ describe('Publish Local Changes — a change with no message and no commission i
     expect(runInputOrThrow('commitMessage').required).toBe(false);
     expect(runInputOrThrow('commitMessage').requiredWhen).toMatchObject({
       anyGiven: ['patch', 'mergeFrom'],
-      noneGiven: ['commission', 'patchRef'],
+      noneGiven: ['patchRef'],
     });
   });
 });

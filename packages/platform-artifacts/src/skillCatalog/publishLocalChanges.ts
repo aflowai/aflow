@@ -332,7 +332,7 @@ const ENTRY_INPUT_CONTRACT = {
 
 const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'publish-local-changes',
-  version: 43,
+  version: 44,
   name: 'Publish Local Changes',
   tagline:
     'Commit a patch onto a branch of a connected repository, then push it and open the pull request — asking the operator first unless the folder says otherwise.',
@@ -419,7 +419,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           id: 'commission',
           required: false,
           description:
-            "The run id of the Commission Change that made the change. Its `summary` — a title line and one paragraph — is the commit's message unless `commitMessage` is passed; with `patchRef` alone, the commission that reported it is found by it. Left out for a diff the operator hands over, which takes `commitMessage`.",
+            'The run id of the Commission Change that made the change, beside its `patchRef`. The commit carries the `summary` — a title line and one paragraph — of the commission on this folder that reported the `patchRef`, found by it with or without this id; a run id naming any other run is refused, and nothing is committed. Left out for a diff the operator hands over, which takes `commitMessage`.',
           schema: COMMISSION_RUN_ID_SCHEMA,
         },
         {
@@ -429,7 +429,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           // message from, so the start refuses it without one.
           requiredWhen: COMMIT_MESSAGE_REQUIRED_WHEN,
           description:
-            "The commit message, only to say it otherwise than the commission's `summary`, which a change named by `commission` or `patchRef` is committed under: a title line under 72 characters, a blank line, then what it does and why. Required for a `patch` or a merge alone. The pull request's body carries it, and a new branch's first subject is its title. Left out for a branch as it stands.",
+            "The commit message, only to say it otherwise than the commission's `summary`, which a change published by its `patchRef` is committed under: a title line under 72 characters, a blank line, then what it does and why. Required for a `patch` or a merge alone. The pull request's body carries it, and a new branch's first subject is its title. Left out for a branch as it stands.",
           schema: { type: 'string', minLength: 1, maxLength: 20_000 },
         },
         {

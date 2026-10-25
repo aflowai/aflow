@@ -343,6 +343,9 @@ export async function commitPatchOnBranch(
     const recorded = await recordedMessage(worktree, sha);
     const body = messageBody(recorded);
     await fetchFromClone(root, worktree, sha);
+    // Measured before the branch is set: once the ref has moved, a git failure
+    // here would fail a task whose branch already holds the commit.
+    const measure = await pushMeasure(root, pushBaseSha, sha);
     try {
       // Compare-and-swap on the old head: a branch that moved between the check
       // above and this line is refused here rather than overwritten.
@@ -371,7 +374,7 @@ export async function commitPatchOnBranch(
         appended: target.appended,
         ...(merge !== undefined ? { merged: merge.from } : {}),
         range: `${worktree.baseSha}..${sha}`,
-        ...(await pushMeasure(root, pushBaseSha, sha)),
+        ...measure,
         pushRefspec: `${sha}:refs/heads/${branch}`,
       },
     };

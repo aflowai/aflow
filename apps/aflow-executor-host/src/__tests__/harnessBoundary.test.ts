@@ -101,9 +101,10 @@ describe('a harness widening stays a widening', () => {
     // Pinned exactly, so a new field has to be argued for here: each of these
     // names something the machine already permits rather than adding to it.
     // `continueFrom` names a session this run already owns, and ownership is
-    // checked before it resolves to anything. `outputSchema` and
-    // `resultRetries` shape what the run must hand back and how many turns it
-    // gets to hand it back correctly; neither reaches the boundary. `inputs`
+    // checked before it resolves to anything. `outputSchema`, `resultRetries`
+    // and `resultRequired` shape what the run must hand back, how many turns it
+    // gets to hand it back correctly and whether failing to fails the run; none
+    // reaches the boundary. `inputs`
     // are the values the task's prose names, appended to it as text: more of
     // the same argument, never a path, a tool or a host. `maxTurns` bounds the
     // harness further — the flag comes from the profile, and a harness with no
@@ -128,6 +129,7 @@ describe('a harness widening stays a widening', () => {
       'inputs',
       'outputSchema',
       'resultRetries',
+      'resultRequired',
       'base',
       'mergeFrom',
       'continueFrom',

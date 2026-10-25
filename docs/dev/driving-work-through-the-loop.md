@@ -116,10 +116,13 @@ its outcome as it is marked done, and no firing commissions it (`wait`, `awaitin
    the check's results and the gaps; a fix appended to the branch rewrites the body. A
    `title` or `summary` is passed only to say it in the operator's own words. The commit is
    made under the commission's `summary` — its title, a blank line, its paragraph — read
-   from the commission's run, named by `commission` or found by its `patchRef`; pass
+   from the run of the commission on that folder that reported the `patchRef`; a
+   `commission` naming any other run is refused before anything is committed. Pass
    `commitMessage` only to say it otherwise. A `patch` handed over, or a merge alone, has
    no commission to take one from, and `workflow.run.start` refuses it without
-   `commitMessage` before the run exists.
+   `commitMessage` before the run exists. A commission whose coding agent wrote no valid
+   `summary` still returns its change, with `resultProblem` saying why; its publication
+   then takes `commitMessage`.
    For a branch that already has a pull request, name its number for the 422.
 2. **Read the review**: `workflow.run.detail` on the child review run gives the verdict and
    every finding with file and line. A review that failed and was retried in place counts by

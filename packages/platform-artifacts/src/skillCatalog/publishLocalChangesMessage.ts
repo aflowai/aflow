@@ -6,10 +6,13 @@ import { bind, ctx, out, runInput, SKIP } from './localPrShepherdWiring.js';
  * Where a publication's commit message comes from. A caller who passes
  * `commitMessage` says it themselves; otherwise a change a commission made is
  * committed under the commission's own `summary` — a title line under 72
- * characters and one paragraph — read from the commission's run, named by its
- * id as `commission` or found by the `patchRef` it reported. A change with
- * neither — a diff the operator hands over, or a merge alone — is refused at
- * the start, before the run exists, rather than at its commit.
+ * characters and one paragraph — read from the completed Commission Change on
+ * this folder that reported the `patchRef` being published. A run id named as
+ * `commission` is held to that run: one naming any other is refused before
+ * anything is committed, rather than committing the change under another
+ * change's title. A change with no `patchRef` — a diff the operator hands
+ * over, or a merge alone — has no summary that can be checked against it, and
+ * is refused at the start without `commitMessage`.
  */
 
 /** The commission's task, whose recorded `patchRef` finds its run. */
@@ -24,9 +27,9 @@ export const COMMISSION_RUN_ID_SCHEMA = {
 
 export const COMMIT_MESSAGE_REQUIRED_WHEN: WorkflowRunInputRequiredWhen = {
   anyGiven: ['patch', 'mergeFrom'],
-  noneGiven: ['commission', 'patchRef'],
+  noneGiven: ['patchRef'],
   reason:
-    "every commit needs a message, and only a commission's `summary` stands in for one. Pass `commitMessage` — a title line under 72 characters, a blank line, then what the change does and why — or name the commission that made the change, its run id as `commission`.",
+    "every commit needs a message, and only the `summary` of the commission that reported the `patchRef` being published stands in for one. Pass `commitMessage` — a title line under 72 characters, a blank line, then what the change does and why — or publish the commission's change as its `patchRef`.",
 };
 
 export const MESSAGE_FROM_RULES: readonly WorkflowRunDecideRule[] = [
@@ -44,10 +47,10 @@ export const MESSAGE_FROM_RULES: readonly WorkflowRunDecideRule[] = [
       'Nothing is committed: the branch is published as it stands, and its head keeps its own message.',
   },
   {
-    when: { expression: 'state.commission != null' },
+    when: { allOf: ['state.commission != null', 'state.patchRef != null'] },
     decision: 'from_commission',
     reason:
-      'The commit carries the summary of the commission the caller named: its title, a blank line, then its paragraph.',
+      'The commit carries the summary of the commission the caller named, once it is found to be the one on this folder that reported this `patchRef`: its title, a blank line, then its paragraph.',
   },
   {
     when: { expression: 'state.patchRef != null' },
@@ -63,7 +66,7 @@ export const MESSAGE_FROM_OTHERWISE = {
     'No commit message and no commission to take one from: the start refuses such a change, so the commit is made without one only where nothing is committed.',
 };
 
-const READS_COMMISSION = {
+const FINDS_COMMISSION = {
   anyOf: [
     "tasks.message-from.output.decision == 'from_commission'",
     "tasks.message-from.output.decision == 'find_commission'",
@@ -71,9 +74,34 @@ const READS_COMMISSION = {
   onMissingRef: SKIP,
 };
 
+export const COMMISSION_CHECK_RULES: readonly WorkflowRunDecideRule[] = [
+  {
+    when: { expression: 'state.found == state.commission' },
+    decision: 'confirmed',
+    reason:
+      'The commission the caller named is the completed Commission Change on this folder that reported this `patchRef`.',
+  },
+];
+
+export const COMMISSION_CHECK_OTHERWISE = {
+  decision: 'refused',
+  reason:
+    'The commission the caller named is not the completed Commission Change on this folder that reported this `patchRef`.',
+};
+
+/** The commission whose summary is read: the one the `patchRef` found, named or not. */
+const READS_COMMISSION = {
+  anyOf: [
+    "tasks.message-from.output.decision == 'find_commission'",
+    "tasks.check-commission.output.decision == 'confirmed'",
+  ],
+  onMissingRef: SKIP,
+};
+
 /**
  * The publication's first tasks: which way the message comes, the commission
- * found by its `patchRef` where no run id was named, and its summary read.
+ * found by its `patchRef`, a named run id checked against it and the stop on
+ * one that differs, and the found commission's summary read.
  * `entryContract` is the run's whole input surface, which the entry task
  * carries for the start to check the caller's inputs against.
  */
@@ -82,7 +110,7 @@ export function commitMessageTasks<Contract extends { bindings: object }>(entryC
     {
       taskId: 'message-from',
       name: 'Decide where the commit message comes from',
-      goal: "Decide, by rules over the run's inputs, where the commit's message comes from: the `commitMessage` the caller passed; none, where the branch is published as it stands; or the `summary` of the commission that made the change — the one named as `commission`, or the one that reported this `patchRef`.",
+      goal: "Decide, by rules over the run's inputs, where the commit's message comes from: the `commitMessage` the caller passed; none, where the branch is published as it stands; or the `summary` of the commission that made the change — the one on this folder that reported this `patchRef`, which a commission named as `commission` has to be.",
       type: 'operation' as const,
       operation: 'workflow.run.decide',
       retryability: 'safe' as const,
@@ -120,16 +148,13 @@ export function commitMessageTasks<Contract extends { bindings: object }>(entryC
     {
       taskId: 'find-commission',
       name: 'Find the commission that made the change',
-      goal: "Find the completed Commission Change on this folder whose change is this run's `patchRef`, so the commit carries that commission's summary.",
+      goal: "Find the completed Commission Change on this folder whose change is this run's `patchRef`, so the commit carries that commission's summary — and a commission the caller named is held to it.",
       failureInstruction:
-        "No completed Commission Change on this folder reported this `patchRef`, so there is no summary to commit it under, and nothing was committed. Start the publication again with the commission's run id as `commission`, or with `commitMessage` — a title line under 72 characters, a blank line, then what the change does and why.",
+        'No completed Commission Change on this folder reported this `patchRef`, so there is no summary to commit it under, and nothing was committed. Start the publication again with `commitMessage` — a title line under 72 characters, a blank line, then what the change does and why.',
       type: 'operation' as const,
       operation: 'workflow.run.list',
       dependsOn: ['message-from'],
-      when: {
-        expression: "tasks.message-from.output.decision == 'find_commission'",
-        onMissingRef: SKIP,
-      },
+      when: FINDS_COMMISSION,
       // One attempt and no output contract: a commission that cannot be found
       // fails the run here, with nothing committed.
       retryability: 'safe' as const,
@@ -154,24 +179,87 @@ export function commitMessageTasks<Contract extends { bindings: object }>(entryC
     },
 
     {
-      taskId: 'read-commission',
-      name: "Read the commission's summary",
-      goal: "Read the summary the commission's coding agent wrote of its change — a title line and one paragraph — from the commission's run, for the commit to carry.",
-      failureInstruction:
-        "The commission's run holds no summary to commit the change under — it is not a completed Commission Change, or it ran before commissions reported one — and nothing was committed. Start the publication again with `commitMessage`: a title line under 72 characters, a blank line, then what the change does and why.",
+      taskId: 'check-commission',
+      name: 'Check the named commission',
+      goal: 'Decide whether the commission the caller named is the one found to have reported this `patchRef` on this folder, so the change is never committed under the summary of another.',
       type: 'operation' as const,
-      operation: 'workflow.run.detail',
+      operation: 'workflow.run.decide',
       dependsOn: ['message-from', 'find-commission'],
-      when: READS_COMMISSION,
+      when: {
+        expression: "tasks.message-from.output.decision == 'from_commission'",
+        onMissingRef: SKIP,
+      },
       retryability: 'safe' as const,
       maxAttempts: 1,
       inputBindings: {
         commission: runInput('commission'),
+        found: out('find-commission', 'commissionRunId'),
+      },
+      context: ctx('workflow.run.decide'),
+      inputTemplate: {
+        state: { commission: bind('commission'), found: bind('found') },
+        rules: COMMISSION_CHECK_RULES,
+        otherwise: COMMISSION_CHECK_OTHERWISE,
+      },
+      outputProjection: {
+        decision: { path: 'decision', onMissing: 'error' as const },
+        reason: { path: 'reason', onMissing: 'error' as const },
+      },
+    },
+
+    {
+      taskId: 'commission-refused',
+      name: 'Stop on the wrong commission',
+      goal: "Fail the publication where the commission the caller named is not the one that reported this `patchRef` on this folder, naming the one that did, so nothing is committed under another change's summary.",
+      type: 'operation' as const,
+      operation: 'workflow.run.fail',
+      dependsOn: ['check-commission'],
+      when: {
+        expression: "tasks.check-commission.output.decision == 'refused'",
+        onMissingRef: SKIP,
+      },
+      retryability: 'safe' as const,
+      maxAttempts: 1,
+      inputBindings: {
+        commission: runInput('commission'),
+        found: out('find-commission', 'commissionRunId'),
+      },
+      context: ctx('workflow.run.fail'),
+      inputTemplate: {
+        reason: {
+          $concat: [
+            '`commission` names the run `',
+            bind('commission'),
+            '`, but the completed Commission Change on this folder that reported this `patchRef` is the run `',
+            bind('found'),
+            "`, so the change would have been committed under another change's summary, and nothing was committed. Start the publication again with `",
+            bind('found'),
+            '` as `commission`, or with `commitMessage`.',
+          ],
+        },
+      },
+    },
+
+    {
+      taskId: 'read-commission',
+      name: "Read the commission's summary",
+      goal: "Read the summary the commission's coding agent wrote of its change — a title line and one paragraph — from the run of the commission that reported this `patchRef`, for the commit to carry.",
+      failureInstruction:
+        "The commission's run holds no summary to commit the change under — its coding agent wrote no valid one, which its `resultProblem` says, or it ran before commissions reported one — and nothing was committed. Start the publication again with `commitMessage`: a title line under 72 characters, a blank line, then what the change does and why.",
+      type: 'operation' as const,
+      operation: 'workflow.run.detail',
+      // After the stop on a wrong commission: a dependency that failed holds
+      // this task, and with it the commit, from running at all.
+      dependsOn: ['message-from', 'find-commission', 'check-commission', 'commission-refused'],
+      when: READS_COMMISSION,
+      retryability: 'safe' as const,
+      maxAttempts: 1,
+      inputBindings: {
         foundRunId: out('find-commission', 'commissionRunId'),
       },
       context: ctx('workflow.run.detail'),
       inputTemplate: {
-        runId: { $firstOf: [bind('commission'), bind('foundRunId')] },
+        runId: bind('foundRunId'),
         compact: true,
       },
       outputProjection: {

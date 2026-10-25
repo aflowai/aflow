@@ -811,9 +811,21 @@ function appendRunInputReachabilityDiagnostics(
   for (const slot of runInputs) {
     const condition = slot.requiredWhen;
     if (condition === undefined) continue;
-    const named = [...condition.anyGiven, ...condition.noneGiven];
-    const unknown = named.filter((id) => !declared.has(id) || !reachable.has(id));
-    if (!slot.required && unknown.length === 0) continue;
+    const passable = (id: string): boolean => declared.has(id) && reachable.has(id);
+    const wrongParts = (['anyGiven', 'noneGiven'] as const)
+      .map((part) => ({ part, unknown: condition[part].filter((id) => !passable(id)) }))
+      .filter(({ unknown }) => unknown.length > 0);
+    if (!slot.required && wrongParts.length === 0) continue;
+    const holds =
+      `required when any of [${condition.anyGiven.join(', ')}] is given` +
+      (condition.noneGiven.length > 0 ? ` and none of [${condition.noneGiven.join(', ')}] is` : '');
+    const wrong = wrongParts
+      .map(
+        ({ part, unknown }) =>
+          `its \`${part}\` names [${unknown.join(', ')}], which ` +
+          `${unknown.length === 1 ? 'is not a run input' : 'are not run inputs'} a caller can pass`,
+      )
+      .join(', and ');
     out.push({
       code: 'run_input_condition_incoherent',
       dimension: 'graph',
@@ -821,11 +833,10 @@ function appendRunInputReachabilityDiagnostics(
       taskId: entry.taskId,
       detail: slot.required
         ? `Run input '${slot.id}' is required and also declares \`requiredWhen\`, which only an optional input can carry.`
-        : `Run input '${slot.id}' is required when [${named.join(', ')}] are given or not, and [${unknown.join(', ')}] ` +
-          `${unknown.length === 1 ? 'is' : 'are'} not a run input a caller can pass to entry task '${entry.taskId}'.`,
+        : `Run input '${slot.id}' is ${holds}, but ${wrong} to entry task '${entry.taskId}'.`,
       fixHint: slot.required
         ? `Declare '${slot.id}' with required: false, or drop its requiredWhen.`
-        : 'Name only run inputs the entry task declares in requiredWhen.',
+        : `Name in ${wrongParts.map(({ part }) => `\`${part}\``).join(' and ')} only run inputs the entry task declares.`,
     });
   }
 

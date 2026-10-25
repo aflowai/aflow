@@ -396,6 +396,45 @@ describe.runIf(sandboxReadiness().ready)('a check that rejects an answer keeps t
       });
     },
   );
+
+  it.skipIf(confined.skip)(
+    confined.title('succeeds with the diff and the problem when the result is not required'),
+    { tags: ['listener'], timeout: 120_000 },
+    async () => {
+      const written: Record<string, unknown> = {};
+      const ctx = {
+        operationId: 'host.harness.run',
+        spaceId: 'space-test',
+        runId: 'run-test',
+        job: { inputRef: 'inline:x' },
+        signal: new AbortController().signal,
+        log: { error: () => undefined, warn: () => undefined, info: () => undefined },
+        readPayload: () =>
+          Promise.resolve({
+            bindingId: 'hb',
+            harness: 'fake',
+            task: 'Assess the repository.',
+            outputSchema: schema,
+            resultRetries: 0,
+            resultRequired: false,
+            timeoutMs: 60_000,
+          }),
+        emitLiveDelta: () => Promise.resolve(),
+        writePayload: (kind: string, data: unknown) => {
+          written[kind] = data;
+          return Promise.resolve(`inline:${kind}`);
+        },
+      } as never;
+
+      const outcome = await createHostHarnessHandler(policyPath).execute(ctx);
+      expect(outcome.status).toBe('SUCCEEDED');
+      const output = written['output'] as Record<string, unknown>;
+      expect(output['filesChanged']).toBe(1);
+      expect(output['patchRef']).toBe('inline:patch');
+      expect(output).not.toHaveProperty('result');
+      expect(String(output['resultProblem'])).toContain('.aflow/result.json');
+    },
+  );
 });
 
 describe.runIf(sandboxReadiness().ready)('a commission starts from a named ref', () => {

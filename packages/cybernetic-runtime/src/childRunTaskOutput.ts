@@ -1,4 +1,8 @@
+import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { PayloadStore } from '@aflow/payload-store';
 import type { WorkflowRunResult, WorkflowTask } from '@aflow/schemas';
+import { loadRunById } from './ledger.js';
+import { buildWorkflowRunResult } from './runResult.js';
 import { projectTaskOutput } from './scheduling/outputProjection.js';
 
 /**
@@ -39,6 +43,22 @@ export function failedChildRunOf(task: WorkflowTask, recorded: unknown): string 
   if (runField === undefined || outcomeField === undefined) return undefined;
   const runId = output[runField];
   return typeof runId === 'string' && output[outcomeField] === 'failed' ? runId : undefined;
+}
+
+/**
+ * The result of a run that has completed, and nothing else of it: its row and
+ * task rows, and the result built from them as a terminal run's detail builds
+ * it. Undefined for a run that is missing or has not completed.
+ */
+export async function completedRunResult(
+  deps: { db: PostgresJsDatabase; payloadStore: PayloadStore },
+  tenantId: string,
+  spaceId: string,
+  runId: string,
+): Promise<{ result: WorkflowRunResult | undefined } | undefined> {
+  const run = await loadRunById(deps.db, tenantId, spaceId, runId);
+  if (run?.status !== 'completed') return undefined;
+  return { result: await buildWorkflowRunResult(deps, { tenantId, run, scope: 'full' }) };
 }
 
 /**
