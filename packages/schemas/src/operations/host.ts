@@ -1317,6 +1317,14 @@ export const HostProcessStopOutputSchema = z.object({
 
 export const HostBindingInspectInputSchema = z.object({
   bindingId: HostBindingRef,
+  defaultBranch: z
+    .boolean()
+    .optional()
+    .describe(
+      "Also read the default branch of the folder's `origin` (`origin.defaultBranch`). A folder " +
+        'that never recorded `refs/remotes/origin/HEAD` asks `origin` over the network for it, ' +
+        'so pass `true` only where the branch is needed; otherwise it is left out.',
+    ),
 });
 
 /** GitHub's rule for an owner: letters, digits and single hyphens between them, at most 39. */
@@ -1360,11 +1368,27 @@ export function parseGitHubRemote(url: string): HostGitHubOrigin | undefined {
   return parsed.success ? parsed.data : undefined;
 }
 
+export const HostFolderOriginSchema = HostGitHubOriginSchema.extend({
+  defaultBranch: z
+    .string()
+    .min(1)
+    .max(200)
+    .optional()
+    .describe(
+      "The repository's default branch, by name alone — the branch `origin`'s HEAD names, read " +
+        "from the folder's `refs/remotes/origin/HEAD`, else asked of `origin` itself. Read " +
+        'only where the input asks for it with `defaultBranch: true`; absent otherwise and ' +
+        'where neither can say.',
+    ),
+});
+export type HostFolderOrigin = z.infer<typeof HostFolderOriginSchema>;
+
 export const HostBindingInspectOutputSchema = z.object({
   id: z.string(),
-  origin: HostGitHubOriginSchema.optional().describe(
+  origin: HostFolderOriginSchema.optional().describe(
     "The GitHub repository the folder's `origin` remote fetches from, as the operator's own git " +
-      'resolves its URL. Absent where the folder has no `origin`, or it is not on github.com.',
+      'resolves its URL, and its default branch. Absent where the folder has no `origin`, or it ' +
+      'is not on github.com.',
   ),
   branchPolicy: HostResolvedBranchPolicySchema.optional().describe(
     'Which branches a push from this folder may move, when a publication asks the operator ' +
