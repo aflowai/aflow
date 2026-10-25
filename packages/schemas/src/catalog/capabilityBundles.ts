@@ -241,6 +241,13 @@ export const CAPABILITY_BUNDLES: readonly CapabilityBundle[] = [
     capabilityGroupIds: ['model.runtime'],
   },
   {
+    id: 'model_measurement',
+    label: 'Model measurement',
+    hint: 'Measure which reasoning efforts a catalog model accepts, against its provider with the key this space stores. Spends tokens on every call.',
+    tier: 'on_demand',
+    capabilityGroupIds: ['ai.model'],
+  },
+  {
     id: 'http',
     label: 'Direct HTTP',
     hint: 'Call a bound endpoint raw. The connection is the normal path.',

@@ -265,7 +265,8 @@ export interface ReasoningConfig {
  * A rung belongs here when the provider accepts it for this model, and nowhere
  * else — omitting one the provider does accept caps quality with no error
  * anywhere, which is why these sets are measured by
- * `yarn models:verify-reasoning` rather than written from documentation.
+ * `ai.model.probe_reasoning` / `yarn models:verify-reasoning` (one probe,
+ * `reasoningProbe.ts`) rather than written from documentation.
  */
 export interface ModelReasoningProfile {
   /**

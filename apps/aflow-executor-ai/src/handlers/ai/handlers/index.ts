@@ -11,4 +11,5 @@ export { handleImageGenerate } from './imageGenerate.js';
 export { handleImageEdit } from './imageEdit.js';
 export { handleVideoGenerate } from './videoGenerate.js';
 export { handleVideoFromImage } from './videoFromImage.js';
+export { handleProbeReasoning } from './probeReasoning.js';
 export type { HandlerDeps } from './types.js';

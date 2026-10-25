@@ -75,6 +75,10 @@ export function normalizeGoogleError(error: unknown): AIClientError {
       return new AIClientError(msg, 'auth', 'google', false);
     }
 
+    if (errorAny['status'] === 404 || msg.includes('NOT_FOUND')) {
+      return new AIClientError(msg, 'model_not_found', 'google', false);
+    }
+
     // Safety filter
     if (msg.includes('SAFETY')) {
       return new AIClientError(msg, 'content_filter', 'google', false);

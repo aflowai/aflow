@@ -34,7 +34,7 @@ export async function emitResult(
       );
       break;
     case 'FAILED':
-      await emitFailure(deps, job, result.error, durationMs, simulatedFulfillment);
+      await emitFailure(deps, job, result.error, durationMs, simulatedFulfillment, result.costJson);
       break;
     case 'PAUSED':
       await emitPaused(deps, job, result.requestedInputRef, durationMs, simulatedFulfillment);
@@ -78,6 +78,7 @@ export async function emitFailure(
   error: AflowError,
   durationMs: number,
   simulatedFulfillment?: SimulatedFulfillmentReport,
+  costJson?: Record<string, unknown>,
 ): Promise<void> {
   const errorRef = await deps.payloadStore.store({
     tenantId: job.tenantId as TenantId,
@@ -103,6 +104,7 @@ export async function emitFailure(
     error,
     durationMs,
     simulatedFulfillment,
+    usage: costJson,
     finishedAtMs: Date.now(),
   });
 

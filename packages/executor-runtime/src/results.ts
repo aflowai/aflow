@@ -66,15 +66,23 @@ export function failure(error: AflowError, errorRef: PayloadRef, durationMs = 0)
 export async function failureWithError(
   ctx: ExecutorContext,
   error: AflowError,
+  options?: {
+    /** What the step spent before it failed — requests the provider billed. */
+    costJson?: Record<string, unknown>;
+  },
 ): Promise<FailureResult> {
   const startTime = Date.now();
   const errorRef = await ctx.writePayload('error', error);
-  return {
+  const result: FailureResult = {
     status: 'FAILED',
     error,
     errorRef,
     durationMs: Date.now() - startTime,
   };
+  if (options?.costJson !== undefined) {
+    return { ...result, costJson: options.costJson };
+  }
+  return result;
 }
 
 /**

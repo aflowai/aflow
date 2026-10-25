@@ -69,6 +69,14 @@ describe('normalizeAnthropicError', () => {
     expect(normalizeAnthropicError(new Error('Request timeout')).retryable).toBe(true);
   });
 
+  it('classifies a 404 as a model the provider does not serve', () => {
+    const err = new Error('404 {"type":"error","error":{"type":"not_found_error"}}');
+    (err as unknown as Record<string, unknown>)['status'] = 404;
+    const normalized = normalizeAnthropicError(err);
+    expect(normalized.code).toBe('model_not_found');
+    expect(normalized.retryable).toBe(false);
+  });
+
   it('classifies SDK APIUserAbortError as retryable timeout', () => {
     const normalized = normalizeAnthropicError(new Anthropic.APIUserAbortError());
     expect(normalized.code).toBe('timeout');
@@ -113,6 +121,15 @@ describe('normalizeOpenAIError', () => {
       (err as unknown as Record<string, unknown>)['status'] = status;
       expect(normalizeOpenAIError(err).retryable).toBe(false);
     }
+  });
+
+  it('classifies a 404 as a model the provider does not serve', () => {
+    const err = new Error('The model `gpt-x` does not exist or you do not have access to it.');
+    Object.assign(err, { status: 404, code: 'model_not_found' });
+    const normalized = normalizeOpenAIError(err);
+    expect(normalized.code).toBe('model_not_found');
+    expect(normalized.providerErrorCode).toBe('model_not_found');
+    expect(normalized.retryable).toBe(false);
   });
 
   it('keeps auth classification for 401s whose message mentions abort', () => {

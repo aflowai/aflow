@@ -123,6 +123,23 @@ export {
   VERIFIABLE_PROVIDERS,
 } from './verifyCredential.js';
 
+// Reasoning-ladder probe (one implementation for the operation and the script)
+export type {
+  ReasoningProbeAdapter,
+  ReasoningProbeOptions,
+  ReasoningProbeTarget,
+} from './reasoningProbe.js';
+export {
+  REASONING_PROBE_MAX_TOKENS,
+  buildReasoningDriftReport,
+  classifyReasoningProbeFailure,
+  isReasoningProbeable,
+  probeReasoningLadder,
+  reasoningProbeLackedCredentials,
+  reasoningProbeUsage,
+  resolveReasoningProbeTarget,
+} from './reasoningProbe.js';
+
 // Usage tracking
 export type { UsageRecorder, UsageSummary, BudgetConfig, BudgetCheckResult } from './usage.js';
 export {

@@ -15,6 +15,7 @@ import type { OperationRegistration } from '../catalog/operationCatalog.js';
 import { TokenUsageSchema } from './aiUsage.js';
 import { MediaSourceRefSchema, SOURCE_REF_HINT } from './mediaSourceRef.js';
 import { AiDecideInputSchema, AiDecideOutputSchema } from './aiDecision.js';
+import { AiModelProbeReasoningRegistration } from './aiReasoningProbe.js';
 
 // Import enum constants and helper (defined in a separate file to avoid circular deps)
 import {
@@ -842,4 +843,5 @@ export const AiOperationRegistrations: OperationRegistration[] = [
     inputZod: AiVideoFromImageInputSchema,
     outputZod: AiMediaOutputSchema,
   },
+  AiModelProbeReasoningRegistration,
 ];

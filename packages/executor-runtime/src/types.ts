@@ -44,6 +44,7 @@ export interface FailureResult {
   readonly status: 'FAILED';
   readonly error: AflowError;
   readonly errorRef: PayloadRef;
+  readonly costJson?: Record<string, unknown>;
   readonly durationMs: number;
 }
 

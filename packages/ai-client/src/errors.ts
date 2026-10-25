@@ -222,6 +222,21 @@ export function normalizeOpenAIError(error: unknown, requestId?: string): AIClie
       );
     }
 
+    if (errorAny['status'] === 404 || errorAny['code'] === 'model_not_found') {
+      return new AIClientError(
+        error.message,
+        'model_not_found',
+        'openai',
+        false,
+        buildErrorOptions(
+          safeStringify(errorAny['code'], 'model_not_found'),
+          requestId,
+          undefined,
+          error,
+        ),
+      );
+    }
+
     // Context length
     if (
       error.message.includes('context_length') ||
@@ -373,6 +388,16 @@ export function normalizeAnthropicError(error: unknown, requestId?: string): AIC
         'anthropic',
         false,
         buildErrorOptions('auth_error', requestId, undefined, error),
+      );
+    }
+
+    if (errorAny['status'] === 404) {
+      return new AIClientError(
+        error.message,
+        'model_not_found',
+        'anthropic',
+        false,
+        buildErrorOptions('not_found_error', requestId, undefined, error),
       );
     }
 

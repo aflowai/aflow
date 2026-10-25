@@ -18,6 +18,7 @@ import {
   AiVideoGenerateInputSchema,
   AiVideoFromImageInputSchema,
   AiDecideInputSchema,
+  AiModelProbeReasoningInputSchema,
   type AflowError,
   type TenantId,
   type ValidationErrorDetail,
@@ -26,6 +27,7 @@ import {
   type AiVideoGenerateInput,
   type AiVideoFromImageInput,
   type AiDecideInput,
+  type AiModelProbeReasoningInput,
 } from '@aflow/schemas';
 import { AIClientError } from '@aflow/ai-client';
 import { positiveMsEnv } from '@aflow/lib';
@@ -63,6 +65,7 @@ import {
   handleImageEdit,
   handleVideoGenerate,
   handleVideoFromImage,
+  handleProbeReasoning,
   type HandlerDeps,
 } from './handlers/index.js';
 
@@ -264,6 +267,11 @@ export class AiHandler implements StepHandler {
         schema: AiVideoFromImageInputSchema,
         handler: (ctx, input) =>
           handleVideoFromImage(ctx, input as AiVideoFromImageInput, depsForHandlers),
+      },
+      'ai.model.probe_reasoning': {
+        schema: AiModelProbeReasoningInputSchema,
+        handler: (ctx, input) =>
+          handleProbeReasoning(ctx, input as AiModelProbeReasoningInput, depsForHandlers),
       },
     };
   }

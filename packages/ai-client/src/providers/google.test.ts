@@ -561,6 +561,16 @@ describe('normalizeGoogleError', () => {
     expect(normalized.retryable).toBe(false);
   });
 
+  it('classifies a 404 as a model the provider does not serve', () => {
+    const err = new Error(
+      '{"error":{"code":404,"message":"models/gemini-x is not found for API version v1beta","status":"NOT_FOUND"}}',
+    );
+    (err as unknown as Record<string, unknown>)['status'] = 404;
+    const normalized = normalizeGoogleError(err);
+    expect(normalized.code).toBe('model_not_found');
+    expect(normalized.retryable).toBe(false);
+  });
+
   it('keeps status-based classification for HTTP errors that mention abort', () => {
     const err = new Error(
       '{"error":{"code":409,"message":"The operation was aborted","status":"ABORTED"}}',

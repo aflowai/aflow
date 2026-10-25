@@ -17,6 +17,7 @@ export const ACTION_LABELS: Record<string, string> = {
   'ai.media.edit_image': 'Editing image…',
   'ai.media.video': 'Generating video…',
   'ai.media.animate': 'Generating video…',
+  'ai.model.probe_reasoning': 'Measuring the model’s reasoning ladder…',
   // Memory
   'memory.store.query': 'Searching memory…',
   'memory.store.get': 'Reading memory…',
