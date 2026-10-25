@@ -61,11 +61,19 @@ export interface RunViewState {
    */
   harnessActivity: Record<string, HarnessActivityState>;
   /**
-   * Steps whose terminal event folded while no feed was held for them. A
-   * snapshot is folded without feeds, so this is how it tells hydration that a
-   * feed the client is still holding belongs to a step that has ended.
+   * Steps whose terminal event has folded. A snapshot is folded without feeds,
+   * so this is how it tells hydration that a feed the client is still holding
+   * belongs to a step that has ended — and how a live frame arriving after its
+   * step's terminal event is known to be stale.
    */
   endedSteps: Record<string, true>;
+  /**
+   * Steps this session ran itself — named by a step event on its own stream,
+   * not a workflow task or a child session reporting through it. When the
+   * session comes to rest, these are the feeds that stop; any other feed
+   * belongs to work still running elsewhere.
+   */
+  sessionSteps: Record<string, true>;
   workflowRuns: Record<string, WorkflowRunSurfaceState>;
   workflowSurfaceItems: WorkflowSurfaceItemEntry[];
   _stepDetailCache: Record<string, string>;
@@ -159,6 +167,7 @@ export const INITIAL_STATE: RunViewState = {
   streamingStepExecutionId: null,
   harnessActivity: {},
   endedSteps: {},
+  sessionSteps: {},
   workflowRuns: {},
   workflowSurfaceItems: [],
   _stepDetailCache: {},

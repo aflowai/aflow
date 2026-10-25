@@ -15,6 +15,7 @@
 import { z } from 'zod';
 import type { OperationRegistration } from '../catalog/operationCatalog.js';
 import { ActiveMemoryKindSchema, ActiveMemoryStatusSchema } from '../cybernetic/activeMemory.js';
+import { jsonPathRefusal, MAX_ITEM_RANGE_COUNT } from './memoryJsonPath.js';
 
 const MEMORY_VIRTUAL_PREFIX = '/run/';
 
@@ -436,11 +437,18 @@ const memoryReadOptionsShape = {
       endLine: z.number().int().positive(),
     })
     .optional(),
-  jsonPath: z.string().max(512).optional(),
+  jsonPath: z
+    .string()
+    .max(512)
+    .superRefine((path, ctx) => {
+      const refusal = jsonPathRefusal(path);
+      if (refusal !== null) ctx.addIssue({ code: z.ZodIssueCode.custom, message: refusal });
+    })
+    .optional(),
   itemRange: z
     .object({
       start: z.number().int().nonnegative(),
-      count: z.number().int().positive().max(200),
+      count: z.number().int().positive().max(MAX_ITEM_RANGE_COUNT),
     })
     .optional(),
 } as const;

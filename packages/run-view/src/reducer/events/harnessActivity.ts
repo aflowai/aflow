@@ -105,21 +105,104 @@ export function applyActivityDelta(state: RunViewState, action: LiveDeltaAction)
 export function settleHarnessActivity(state: RunViewState, event: SessionEvent): RunViewState {
   const stepExecutionId = event.stepExecutionId;
   if (stepExecutionId === undefined) return state;
+  if (
+    (event.eventType === 'StepScheduled' || event.eventType === 'StepStarted') &&
+    state.endedSteps[stepExecutionId] === true
+  ) {
+    const { [stepExecutionId]: _restarted, ...endedSteps } = state.endedSteps;
+    return { ...state, endedSteps };
+  }
   const ends =
     event.eventType === 'StepSucceeded' ||
     (event.eventType === 'StepFailed' && event.metadata?.willRetry !== true);
   if (!ends) return state;
-  const held = state.harnessActivity[stepExecutionId];
-  if (held === undefined) {
-    if (state.endedSteps[stepExecutionId] === true) return state;
-    return { ...state, endedSteps: { ...state.endedSteps, [stepExecutionId]: true } };
+  let next = state;
+  if (state.endedSteps[stepExecutionId] !== true) {
+    next = { ...next, endedSteps: { ...next.endedSteps, [stepExecutionId]: true } };
   }
-  if (held.settled) return state;
+  const held = next.harnessActivity[stepExecutionId];
+  if (held === undefined || held.settled) return next;
   return {
-    ...state,
-    harnessActivity: { ...state.harnessActivity, [stepExecutionId]: { ...held, settled: true } },
+    ...next,
+    harnessActivity: { ...next.harnessActivity, [stepExecutionId]: { ...held, settled: true } },
   };
 }
+
+/**
+ * Note a step this session runs itself. A step event on the session's own
+ * stream names one; a workflow task or a child session reports through other
+ * event types (`WorkflowTaskUpdate`, `SubflowEventForwarded`), never these.
+ */
+export function recordSessionStep(state: RunViewState, event: SessionEvent): RunViewState {
+  const stepExecutionId = event.stepExecutionId;
+  if (stepExecutionId === undefined || !event.eventType.startsWith('Step')) return state;
+  if (state.sessionSteps[stepExecutionId] === true) return state;
+  return { ...state, sessionSteps: { ...state.sessionSteps, [stepExecutionId]: true } };
+}
+
+/**
+ * The run has come to rest — paused for a person, or finished — so nothing in
+ * it is working any more, whatever the live frames last said. The feeds of its
+ * own steps are settled, a thinking placeholder (ephemeral, never persisted)
+ * is dropped, and text still marked as streaming is kept as what the step said.
+ *
+ * Only its own steps: a workflow run it started keeps running while it waits,
+ * and that run's task feeds stream into this view too. Waiting on a child is
+ * not rest at all: the child is the one working.
+ */
+export function settleOnRest(state: RunViewState, event: SessionEvent): RunViewState {
+  if (!RESTING_EVENT_TYPES.has(event.eventType)) return state;
+  if (
+    event.eventType === 'SessionPaused' &&
+    (event.metadata?.subflowWaiting === true || event.data.subflowWaiting === true)
+  ) {
+    return state;
+  }
+
+  let messages = state.messages;
+  if (messages.some((m) => m.semanticType !== undefined && IN_FLIGHT_TYPES.has(m.semanticType))) {
+    messages = messages.flatMap((m): Message[] => {
+      if (m.semanticType === 'streaming_thinking') return [];
+      if (m.semanticType === 'streaming_text') {
+        const { semanticType: _streaming, ...kept } = m;
+        return [kept];
+      }
+      return [m];
+    });
+  }
+
+  const stops = (id: string, feed: HarnessActivityState) =>
+    !feed.settled && state.sessionSteps[id] === true;
+  let harnessActivity = state.harnessActivity;
+  if (Object.entries(harnessActivity).some(([id, feed]) => stops(id, feed))) {
+    harnessActivity = Object.fromEntries(
+      Object.entries(harnessActivity).map(([id, feed]) => [
+        id,
+        stops(id, feed) ? { ...feed, settled: true } : feed,
+      ]),
+    );
+  }
+
+  if (
+    messages === state.messages &&
+    harnessActivity === state.harnessActivity &&
+    state.streamingStepExecutionId === null
+  ) {
+    return state;
+  }
+  return { ...state, messages, harnessActivity, streamingStepExecutionId: null };
+}
+
+const RESTING_EVENT_TYPES = new Set([
+  'SessionPaused',
+  'SessionSucceeded',
+  'SessionCompleted',
+  'SessionFailed',
+  'SessionCancelled',
+  'SessionStalled',
+]);
+
+const IN_FLIGHT_TYPES = new Set(['streaming_text', 'streaming_thinking']);
 
 /**
  * The feeds after hydrating over `snapshot`. Deltas are not durable, so a

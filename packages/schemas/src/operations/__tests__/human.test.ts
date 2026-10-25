@@ -72,6 +72,138 @@ describe('HumanChatAskInputSchema discriminator', () => {
   });
 });
 
+describe('HumanChatAskInputSchema — arguments stay out of the text a person reads', () => {
+  function messages(input: unknown): string[] {
+    const result = HumanChatAskInputSchema.safeParse(input);
+    return result.success
+      ? []
+      : result.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`);
+  }
+
+  it('refuses a prompt carrying serialized `options`, naming the field and where options go', () => {
+    expect(
+      messages({
+        kind: 'input',
+        prompt:
+          'Which model should run the Helmsman?","options":[{"value":"glm-pro"},{"value":"luna"}]',
+      }),
+    ).toEqual([
+      'prompt: `prompt` contains serialized tool arguments ("options": …), which the person would read as text. ' +
+        'Put only the question in `prompt`; choices go in `options`, and every other argument in its own field of this call.',
+    ]);
+  });
+
+  it('refuses a description carrying serialized arguments', () => {
+    expect(
+      messages({
+        kind: 'approval',
+        title: 'Swap the model?',
+        description: 'Swap to luna.","reviewData":{"from":"glm-pro"}}',
+      }),
+    ).toEqual([
+      'description: `description` contains serialized tool arguments ("reviewData": …), which the person would read as text. ' +
+        'Put only the text in `description`; structured data goes in `reviewData`, and every other argument in its own field of this call.',
+    ]);
+  });
+
+  it('refuses the whole argument object written into the text', () => {
+    expect(
+      messages({
+        kind: 'input',
+        prompt:
+          'Which model? {"kind":"input","prompt":"Which model?","options":["glm-pro","luna"]}',
+      }),
+    ).toEqual([
+      'prompt: `prompt` contains serialized tool arguments ("options": …), which the person would read as text. ' +
+        'Put only the question in `prompt`; choices go in `options`, and every other argument in its own field of this call.',
+    ]);
+  });
+
+  it('admits a preview of a record whose own keys share the argument names', () => {
+    expect(
+      messages({
+        kind: 'approval',
+        title: 'Publish this page?',
+        description:
+          'The record as it will be stored:\n\n```json\n' +
+          '{"title": "Q3 plan", "description": "Roadmap for Q3", "kind": "page", "tags": ["plan"]}\n```',
+        reviewData: { id: 'page-7' },
+      }),
+    ).toEqual([]);
+    expect(
+      messages({
+        kind: 'input',
+        prompt: 'Keep `{"title": "Q3", "description": "Roadmap"}` as the heading?',
+      }),
+    ).toEqual([]);
+  });
+
+  it('admits partial JSON and a JSON diff quoted in prose with the common keys', () => {
+    expect(
+      messages({
+        kind: 'approval',
+        title: 'Rename the page?',
+        description:
+          'This changes two fields:\n\n```diff\n- "title": "Q2 plan",\n+ "title": "Q3 plan",\n' +
+          '  "description": "Roadmap", "kind": "page",\n```\n' +
+          'The "kind": field stays as it is.',
+      }),
+    ).toEqual([]);
+    expect(
+      messages({
+        kind: 'input',
+        prompt: 'Should "title": "Q3", "description": "Roadmap" replace the heading?',
+      }),
+    ).toEqual([]);
+  });
+
+  it('still refuses a tail that follows quoted words in the question', () => {
+    expect(
+      messages({
+        kind: 'input',
+        prompt: 'Run it "fast" or "safe"?", "options": ["fast", "safe"]',
+      }),
+    ).toEqual([
+      'prompt: `prompt` contains serialized tool arguments ("options": …), which the person would read as text. ' +
+        'Put only the question in `prompt`; choices go in `options`, and every other argument in its own field of this call.',
+    ]);
+  });
+
+  it('admits JSON in the text that is not this call’s arguments', () => {
+    expect(
+      messages({
+        kind: 'input',
+        prompt: 'Keep `{"model": "luna", "effort": "high"}` as the config?',
+      }),
+    ).toEqual([]);
+  });
+
+  it('accepts options as the choices of an input question', () => {
+    const parsed = HumanChatAskInputSchema.parse({
+      kind: 'input',
+      prompt: 'Which model?',
+      options: ['glm-pro', 'luna'],
+    });
+    expect(parsed.options).toEqual(['glm-pro', 'luna']);
+  });
+
+  it('refuses options on an approval, and options beside an inputSchema', () => {
+    expect(
+      messages({ kind: 'approval', title: 'Swap?', description: 'Swap.', options: ['a', 'b'] }),
+    ).toEqual([
+      'options: `options` belongs to kind="input"; an approval offers approve and reject.',
+    ]);
+    expect(
+      messages({
+        kind: 'input',
+        prompt: 'Pick',
+        options: ['a', 'b'],
+        inputSchema: { type: 'string', enum: ['a', 'b'] },
+      }),
+    ).toHaveLength(1);
+  });
+});
+
 describe('HumanActionCenterFocusInputSchema', () => {
   it('accepts a minimal {itemId} call (Plan 166 §HITL — placement removed)', () => {
     const parsed = HumanActionCenterFocusInputSchema.parse({ itemId: 'proposal:abc' });
