@@ -55,17 +55,17 @@ export function phaseLabel(title: string): string {
     : `${trimmed.slice(0, PHASE_LABEL_MAX - 1).trimEnd()}…`;
 }
 
-export type PlanOwnerFilter = 'all' | 'loop' | 'operator';
+export type PlanActivityFilter = 'all' | 'in_flight' | 'idle';
 export type PlanDoneWindow = 'today' | 'week' | 'all';
 
 export interface PlanBoardFilters {
   /** A phase's node id, or undefined for every phase. */
   phaseId?: string;
-  owner: PlanOwnerFilter;
+  activity: PlanActivityFilter;
 }
 
 export function planBoardFiltered(filters: PlanBoardFilters): boolean {
-  return filters.phaseId !== undefined || filters.owner !== 'all';
+  return filters.phaseId !== undefined || filters.activity !== 'all';
 }
 
 export function planCardMatches(card: PlanCard, filters: PlanBoardFilters): boolean {
@@ -73,7 +73,7 @@ export function planCardMatches(card: PlanCard, filters: PlanBoardFilters): bool
     const inPhase = card.node.nodeId === filters.phaseId || card.phase?.nodeId === filters.phaseId;
     if (!inPhase) return false;
   }
-  return filters.owner === 'all' || card.node.ownedBy === filters.owner;
+  return filters.activity === 'all' || card.node.activity === filters.activity;
 }
 
 // ============================================================================

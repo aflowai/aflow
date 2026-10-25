@@ -1,7 +1,7 @@
 /**
  * The space's plan as the operator's board reads it (Plan 322 P3.3): every
  * tree, every status, each node nested under its parent in sibling order with
- * its card's facts — counts in place of links, rounds, owner, newest pull
+ * its card's facts — counts in place of links, rounds, activity, newest pull
  * request, a parent's progress — each plan's tallies and done nodes by day,
  * and a done window applied on the server. And one node for the rail, its
  * links paged by an opaque cursor.
@@ -15,6 +15,7 @@ import {
   PlanNodeDetailOutputSchema,
   PlanNodeDetailQuerySchema,
   PlanTreeOutputSchema,
+  planBoardColumn,
   type PlanNode,
   type PlanNodeCreateInput,
   type PlanNodeSummary,
@@ -236,7 +237,7 @@ describe('readPlanTrees — the board', () => {
     expect(find(roots, root.nodeId)?.rounds).toBe(0);
   });
 
-  it('names an active node with no run linked or in flight the operator’s, and every other the loop’s', async () => {
+  it('reads a node in flight only while a run in flight serves it, and idle otherwise', async () => {
     const root = await node('root');
     const bare = await node('bare', { parentId: root.nodeId });
     const served = await node('served', { parentId: root.nodeId });
@@ -255,36 +256,47 @@ describe('readPlanTrees — the board', () => {
 
     const roots = (await read()).roots;
 
-    expect(find(roots, bare.nodeId)?.ownedBy).toBe('operator');
-    expect(find(roots, served.nodeId)?.ownedBy).toBe('loop');
-    expect(find(roots, running.nodeId)?.ownedBy).toBe('loop');
-    expect(find(roots, waiting.nodeId)?.ownedBy).toBe('loop');
+    expect(find(roots, bare.nodeId)?.activity).toBe('idle');
+    expect(find(roots, served.nodeId)?.activity).toBe('idle');
+    expect(find(roots, running.nodeId)?.activity).toBe('in_flight');
+    expect(find(roots, waiting.nodeId)?.activity).toBe('idle');
   });
 
-  it('names a parent with no run of its own the loop’s where the loop holds any child, through every level', async () => {
+  it('reads a parent with no run of its own in flight where a run serves an active node under it, through every level', async () => {
     const root = await node('root');
     const phase = await node('P1 — phase', { parentId: root.nodeId });
-    const step = await node('served step', { parentId: phase.nodeId });
+    const step = await node('running step', { parentId: phase.nodeId });
     await node('bare step', { parentId: phase.nodeId });
     const idle = await node('idle phase', { parentId: root.nodeId });
-    await node('bare under idle', { parentId: idle.nodeId });
+    const linked = await node('served before', { parentId: idle.nodeId });
     const idleRoot = await node('idle root');
     await node('bare under idle root', { parentId: idleRoot.nodeId });
+    store.runs.push(inFlightRun('r4', step.nodeId, 'running'));
     await linkPlanNode(ctx(), {
-      nodeId: step.nodeId,
+      nodeId: linked.nodeId,
       kind: 'run',
       ref: '00000000-0000-4000-8000-0000000000c2',
     });
 
     const roots = (await read()).roots;
 
-    expect(find(roots, phase.nodeId)?.ownedBy).toBe('loop');
-    expect(find(roots, root.nodeId)?.ownedBy).toBe('loop');
-    expect(find(roots, idle.nodeId)?.ownedBy).toBe('operator');
-    expect(find(roots, idleRoot.nodeId)?.ownedBy).toBe('operator');
+    expect(find(roots, phase.nodeId)?.activity).toBe('in_flight');
+    expect(find(roots, root.nodeId)?.activity).toBe('in_flight');
+    expect(find(roots, idle.nodeId)?.activity).toBe('idle');
+    expect(find(roots, idleRoot.nodeId)?.activity).toBe('idle');
   });
 
-  it('counts only active children toward a parent’s owner, through every level', async () => {
+  it('reads a decide node idle like any other, its column still Needs you', async () => {
+    const root = await node('root');
+    const decide = await node('choose', { parentId: root.nodeId, kind: 'decide' });
+
+    const roots = (await read()).roots;
+
+    expect(find(roots, decide.nodeId)?.activity).toBe('idle');
+    expect(planBoardColumn(find(roots, decide.nodeId)!)).toBe('decide');
+  });
+
+  it('counts only active descendants toward a parent’s activity, through every level', async () => {
     const root = await node('root');
     const settled = await node('settled phase', { parentId: root.nodeId });
     const done = await node('done step', { parentId: settled.nodeId });
@@ -306,52 +318,49 @@ describe('readPlanTrees — the board', () => {
 
     const roots = (await read()).roots;
 
-    expect(find(roots, done.nodeId)?.ownedBy).toBe('loop');
-    expect(find(roots, settled.nodeId)?.ownedBy).toBe('operator');
-    expect(find(roots, settledRoot.nodeId)?.ownedBy).toBe('operator');
-    expect(find(roots, moving.nodeId)?.ownedBy).toBe('loop');
-    expect(find(roots, root.nodeId)?.ownedBy).toBe('loop');
+    expect(find(roots, done.nodeId)?.activity).toBe('idle');
+    expect(find(roots, settled.nodeId)?.activity).toBe('idle');
+    expect(find(roots, settledRoot.nodeId)?.activity).toBe('idle');
+    expect(find(roots, moving.nodeId)?.activity).toBe('in_flight');
+    expect(find(roots, root.nodeId)?.activity).toBe('in_flight');
 
     store.runs.length = 0;
     const idle = (await read()).roots;
-    expect(find(idle, moving.nodeId)?.ownedBy).toBe('operator');
-    expect(find(idle, root.nodeId)?.ownedBy).toBe('operator');
+    expect(find(idle, moving.nodeId)?.activity).toBe('idle');
+    expect(find(idle, root.nodeId)?.activity).toBe('idle');
   });
 
-  it('names a parent with no run and no active child the loop holds the operator’s only while it is active', async () => {
+  it('leaves a parent idle where the only run under it serves a node no longer active', async () => {
     const root = await node('root');
-    const parents = new Map<string, string>();
-    for (const status of ['active', 'done', 'dropped', 'blocked', 'waiting'] as const) {
-      const parent = store.seed(SPACE, { parentId: root.nodeId, title: `${status} phase`, status });
-      await node(`bare under ${status}`, { parentId: parent.nodeId });
-      store.seed(SPACE, {
-        parentId: parent.nodeId,
-        title: `waiting under ${status}`,
-        status: 'waiting',
-      });
-      parents.set(status, parent.nodeId);
-    }
-    const doneRoot = store.seed(SPACE, { title: 'done root', status: 'done' });
-    store.seed(SPACE, { parentId: doneRoot.nodeId, title: 'done under root', status: 'done' });
+    const phase = await node('phase', { parentId: root.nodeId });
+    const done = await node('done step', { parentId: phase.nodeId });
+    const blocked = store.seed(SPACE, {
+      parentId: phase.nodeId,
+      title: 'blocked step',
+      status: 'blocked',
+    });
+    const under = await node('active under blocked', { parentId: blocked.nodeId });
+    await close(done, 'done');
+    store.runs.push(inFlightRun('r5', done.nodeId, 'running'));
 
     const roots = (await read()).roots;
-    const ownerOf = (status: string) => find(roots, parents.get(status)!)?.ownedBy;
+    expect(find(roots, done.nodeId)?.activity).toBe('in_flight');
+    expect(find(roots, phase.nodeId)?.activity).toBe('idle');
+    expect(find(roots, root.nodeId)?.activity).toBe('idle');
 
-    expect(ownerOf('active')).toBe('operator');
-    expect(ownerOf('done')).toBe('loop');
-    expect(ownerOf('dropped')).toBe('loop');
-    expect(ownerOf('blocked')).toBe('loop');
-    expect(ownerOf('waiting')).toBe('loop');
-    expect(find(roots, doneRoot.nodeId)?.ownedBy).toBe('loop');
-    expect(find(roots, root.nodeId)?.ownedBy).toBe('operator');
+    store.runs.push(inFlightRun('r6', under.nodeId, 'running'));
+    const deeper = (await read()).roots;
+    expect(find(deeper, blocked.nodeId)?.activity).toBe('in_flight');
+    expect(find(deeper, phase.nodeId)?.activity).toBe('in_flight');
+    expect(find(deeper, root.nodeId)?.activity).toBe('in_flight');
   });
 
-  it('keeps a parent the loop’s where a run serves it, whatever its children', async () => {
+  it('reads a parent in flight where a run serves it, whatever its children', async () => {
     const root = await node('root');
     await node('bare', { parentId: root.nodeId });
     store.runs.push(inFlightRun('r2', root.nodeId, 'running'));
 
-    expect(find((await read()).roots, root.nodeId)?.ownedBy).toBe('loop');
+    expect(find((await read()).roots, root.nodeId)?.activity).toBe('in_flight');
   });
 
   it('builds one day formatter for every done node of every plan', async () => {

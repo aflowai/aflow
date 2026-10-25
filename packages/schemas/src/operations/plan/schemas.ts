@@ -239,14 +239,17 @@ export const PlanNodeCountsSchema = z
 export type PlanNodeCounts = z.infer<typeof PlanNodeCountsSchema>;
 
 /**
- * Who a node waits on. `operator`: it is active and no run has served it or
- * serves it now, so nothing in the loop is moving it. A parent — a root, a
- * phase — is the loop's too where the loop holds any of its active children,
- * and a parent not active with no run serving it is the loop's, as any node
- * not active is.
+ * Whether the loop is moving a node now. `in_flight`: a run in flight serves
+ * the node or one of its active descendants — runs serve the steps under a
+ * root or phase, rarely the parent itself. `idle`: none does, and nothing is
+ * asked of the operator by it — the loop picks it up when it reaches it. A
+ * run starting moves a node to `in_flight`; its last run ending moves it back.
+ * Who a node waits on is not read from here: a `decide` node is the
+ * operator's by its kind, whatever its activity, and the board's column rule
+ * (`planBoardColumn`) places it under Needs you.
  */
-export const PlanNodeOwnerSchema = z.enum(['loop', 'operator']);
-export type PlanNodeOwner = z.infer<typeof PlanNodeOwnerSchema>;
+export const PlanNodeActivitySchema = z.enum(['in_flight', 'idle']);
+export type PlanNodeActivity = z.infer<typeof PlanNodeActivitySchema>;
 
 /** The node's newest pull request, and whether a merge of it was recorded. */
 export const PlanNodePullRequestSchema = z
@@ -263,7 +266,7 @@ export interface PlanTreeNode extends PlanNodeSummary {
   goalHead: string;
   counts: PlanNodeCounts;
   rounds: number;
-  ownedBy: PlanNodeOwner;
+  activity: PlanNodeActivity;
   pullRequest?: PlanNodePullRequest;
   progress?: { done: number; total: number };
   children: PlanTreeNode[];
@@ -278,7 +281,7 @@ export const PlanTreeNodeSchema = z.lazy(() =>
       .int()
       .min(0)
       .describe('Review rounds: run links of a `PLAN_REVIEW_WORKFLOW_SLUGS` workflow.'),
-    ownedBy: PlanNodeOwnerSchema,
+    activity: PlanNodeActivitySchema,
     pullRequest: PlanNodePullRequestSchema.optional(),
     progress: z
       .object({ done: z.number().int().min(0), total: z.number().int().min(0) })

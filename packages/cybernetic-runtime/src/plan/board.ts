@@ -84,8 +84,7 @@ function boardNode(node: PlanNodeSummary, reads: PlanBoardReads): PlanTreeNode {
     goalHead: facts?.goalHead ?? '',
     counts: { ...links, inFlightRuns },
     rounds,
-    ownedBy:
-      node.status === 'active' && links.runs === 0 && inFlightRuns === 0 ? 'operator' : 'loop',
+    activity: inFlightRuns > 0 ? 'in_flight' : 'idle',
     ...(pullRequest !== undefined
       ? {
           pullRequest: {
@@ -99,28 +98,29 @@ function boardNode(node: PlanNodeSummary, reads: PlanBoardReads): PlanTreeNode {
   };
 }
 
+/** A run in flight serves an active node at or under `node`. */
+function servesActiveBelow(node: PlanTreeNode): boolean {
+  if (node.status === 'active' && node.counts.inFlightRuns > 0) return true;
+  return node.children.some(servesActiveBelow);
+}
+
 /**
- * A parent's progress and owner are its children's: progress, those done of
- * those not dropped; owner, the loop's where a run serves it or the loop holds
- * an active child — runs serve the steps under a root or phase, rarely the
- * parent itself. A child done, dropped, blocked or waiting is no work the loop
- * is moving, though its own card reads the loop's. Only an active parent can be
- * the operator's, as only an active node is: one not active stays the loop's.
+ * A parent's progress and activity are its children's: progress, those done
+ * of those not dropped; activity, in flight where a run serves the parent or
+ * any active node under it — runs serve the steps under a root or phase,
+ * rarely the parent itself. A run still serving a done or dropped child moves
+ * no work the parent waits on, so it leaves the parent idle, though that
+ * child's own card reads in flight.
  */
 function withChildren(node: PlanTreeNode): PlanTreeNode {
   const children = node.children.map(withChildren);
   if (children.length === 0) return { ...node, children };
   const counted = children.filter((child) => child.status !== 'dropped');
-  const served = node.counts.runs > 0 || node.counts.inFlightRuns > 0;
   return {
     ...node,
     children,
-    ownedBy:
-      node.status === 'active' &&
-      !served &&
-      !children.some((child) => child.status === 'active' && child.ownedBy === 'loop')
-        ? 'operator'
-        : 'loop',
+    activity:
+      node.counts.inFlightRuns > 0 || children.some(servesActiveBelow) ? 'in_flight' : 'idle',
     progress: {
       done: counted.filter((child) => child.status === 'done').length,
       total: counted.length,
@@ -174,9 +174,9 @@ function prune(nodes: readonly PlanTreeNode[], since: number): PlanTreeNode[] {
 
 /**
  * The board from nodes placed in reading order: nested, each with its card's
- * facts and a parent with its progress and owner; each root's tallies over every node
- * under it; then the done window applied below the roots, which always stay —
- * each is a tab.
+ * facts and a parent with its progress and activity; each root's tallies over
+ * every node under it; then the done window applied below the roots, which
+ * always stay — each is a tab.
  */
 export function buildPlanBoard(
   placed: readonly PlacedPlanNode[],

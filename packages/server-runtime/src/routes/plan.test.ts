@@ -53,7 +53,7 @@ function treeNode(
     goalHead: 'Ship the board.',
     counts: { runs: 0, pullRequests: 0, findings: 0, documents: 0, inFlightRuns: 0 },
     rounds: 0,
-    ownedBy: 'loop',
+    activity: 'idle',
     children: [],
     ...extra,
   };

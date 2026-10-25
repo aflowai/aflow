@@ -102,7 +102,6 @@ function PlanCardView({
           </Text>
           <Row gap="xs" align="center" wrap>
             {phase !== undefined && <Badge variant="neutral">{phaseLabel(phase.title)}</Badge>}
-            {node.ownedBy === 'operator' && <Badge variant="accent">Operator</Badge>}
             {node.counts.inFlightRuns > 0 && (
               <Badge variant="running">{`Running ${String(node.counts.inFlightRuns)}`}</Badge>
             )}
