@@ -200,6 +200,21 @@ const UNLISTED_FIRST: WorkflowRunDecideRule = {
     "GitHub did not list the repository's open pull requests, so nothing was read to act on. The next pass reads them again; only a listing GitHub goes on refusing is handed to the Helmsman.",
 };
 
+const CI_NOT_FAILED_REASON =
+  'CI has not failed on the head: its checks are still running, stopped short, or not there yet.';
+
+const CI_RUNNING: WorkflowRunDecideRule = {
+  when: { expression: "state.checks.data.state == 'pending'" },
+  decision: 'wait',
+  reason: CI_NOT_FAILED_REASON,
+};
+
+const CI_NOT_FAILED: WorkflowRunDecideRule = {
+  when: { expression: "state.checks.data.state != 'failing'" },
+  decision: 'wait',
+  reason: CI_NOT_FAILED_REASON,
+};
+
 const NODE_IN_FLIGHT_REASON =
   "A run serving this pull request's plan node, or a node under it, is in flight — running, or paused — whoever started it: the node's work is under way.";
 
@@ -371,10 +386,19 @@ export const SHEPHERD_RULES: readonly WorkflowRunDecideRule[] = [
     decision: 'wait',
     reason: NODE_IN_FLIGHT_REASON,
   },
+  // The conflict rule's own condition, read apart because that rule holds
+  // the most comparisons one rule may: a head whose CI is still running may
+  // yet turn red, and its fix would then act on the head beside the Helmsman,
+  // so it is not handed over but read again. Past the conflict rule, every
+  // rule before `CI_NOT_FAILED` holds only on a head that is green or whose
+  // check runs fill more than a page, so the pass ends as it would there.
+  CI_RUNNING,
   // A red head's fix is commissioned with its base merged in, conflicts and
   // all; any other head GitHub says does not merge has nothing a remedy
-  // answers, and GitHub refuses its merge. A draft, or a folder whose merge
-  // the operator keeps, is held by its person whatever it merges into, so the
+  // answers, and GitHub refuses its merge. A draft, a folder whose merge the
+  // operator keeps, a merge the operator declined on this head, a person's
+  // review requesting changes, and a publication review that did not approve
+  // this head are held by their person whatever the head merges into, so the
   // rule holds only where the shepherd would merge: those fall through to
   // their own rule. Written `== <expected>`, so a read that did not happen
   // hands nothing over.
@@ -386,10 +410,15 @@ export const SHEPHERD_RULES: readonly WorkflowRunDecideRule[] = [
         'state.pr.data.draft == false',
         "state.folder.branchPolicy.mergePosture == 'when-green'",
         `state.folder.branchPolicy.pushApproval == '${HOST_MERGE_POSTURE_REVIEWED_PUSH}'`,
+        'state.handoff.data.mergeDeclinedSha != state.pr.data.headSha',
+        'state.reviews.complete == true',
+        'state.reviews.changesRequestedBy[0] == null',
+        'state.publicationReview.reviewed.at == state.pr.data.headSha',
+        "state.publicationReview.verdict == 'approve'",
       ],
     },
     decision: 'leave',
-    reason: `GitHub says the head does not merge into its base as the base stands now, and CI has not failed on it: no fix answers that, and GitHub refuses the merge.${HANDED_OVER_HEAD}`,
+    reason: `GitHub says the head does not merge into its base as the base stands now, and CI concluded on it without failing: no fix answers that, and GitHub refuses the merge.${HANDED_OVER_HEAD}`,
   }),
   ...MERGE_RULES,
   // Every later pass reads the same one page, so a wait here would never end.
@@ -398,12 +427,7 @@ export const SHEPHERD_RULES: readonly WorkflowRunDecideRule[] = [
     decision: 'leave',
     reason: `GitHub holds more check runs on the head than the one page of a hundred a pass reads, and none on that page failed or is still running: whether CI failed on the head is unknown, so the shepherd neither fixes nor merges it.${HANDED_OVER_HEAD}`,
   }),
-  {
-    when: { expression: "state.checks.data.state != 'failing'" },
-    decision: 'wait',
-    reason:
-      'CI has not failed on the head: its checks are still running, stopped short, or not there yet.',
-  },
+  CI_NOT_FAILED,
   BASE_MOVED_AFTER_REMEDY,
   {
     when: { expression: 'state.checks.data.firstFailing.id == state.handoff.data.checkRunId' },

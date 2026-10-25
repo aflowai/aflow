@@ -2601,6 +2601,7 @@ describe('Local PR Shepherd — what its rules cannot act on goes to the agent',
       handoff: readBack(first),
       handOvers,
       pullRequest: { mergeable: false, mergeableState: 'dirty', headSha: pushed },
+      publication: { verdict: 'approve', at: pushed },
     });
     expect(moved.statuses.get('hand-over-to-agent')).toBe('succeeded');
     expect(
@@ -2634,6 +2635,69 @@ describe('Local PR Shepherd — what its rules cannot act on goes to the agent',
     expect(red.decision).toBe('fix');
     expect(red.ran).toContain('fix');
     expect(red.statuses.get('claim-hand-over')).toBe('skipped');
+  });
+
+  it.each<[string, Scenario, RegExp]>([
+    [
+      'the operator declined to merge it',
+      { handoff: { ...EARLIER_ROUND, mergeDeclinedSha: HEAD } },
+      /declined to merge this head/,
+    ],
+    [
+      'a person’s review requests changes',
+      {
+        reviews: { changesRequestedBy: ['octo'], approvedBy: [], count: 1, complete: true },
+      },
+      /requests changes/,
+    ],
+    [
+      'the publication’s review did not approve it',
+      { publication: { verdict: 'request_changes', at: HEAD } },
+      /did not return `approve`/,
+    ],
+    [
+      'no publication’s review is on record for it',
+      { publication: { verdict: 'approve', at: 'd'.repeat(40) } },
+      /No publication's Local Code Review is on record for this head/,
+    ],
+  ])(
+    'leaves a head that does not merge with its person, handing nothing over, where %s',
+    (_why, hold, reason) => {
+      const handOvers = new Map<string, Record<string, unknown>>();
+      // Every check the base requires passed, so the person's own rule is the one that decides.
+      const held = pass({
+        ...CONFLICTING,
+        checkConclusions: { Test: 'success', Lint: 'success' },
+        ...hold,
+        handOvers,
+      });
+      expect(held.decision).toBe('leave');
+      expect(String(held.outputs.get('decide')?.['reason'])).toMatch(reason);
+      expect(held.statuses.get('claim-hand-over')).toBe('skipped');
+      expect(held.ran).not.toContain('hand-over-to-agent');
+      expect(handOvers.size).toBe(0);
+    },
+  );
+
+  it('waits on a head that does not merge while its CI runs, then fixes it if CI fails, handing nothing over', () => {
+    const handOvers = new Map<string, Record<string, unknown>>();
+    const running = pass({
+      ...CONFLICTING,
+      checks: { state: 'pending', total: 2, failing: [] },
+      handOvers,
+    });
+    expect(running.decision).toBe('wait');
+    expect(String(running.outputs.get('decide')?.['reason'])).toMatch(/CI has not failed/);
+    expect(running.statuses.get('claim-hand-over')).toBe('skipped');
+    expect(running.ran).not.toContain('hand-over-to-agent');
+
+    const red = pass({ ...CONFLICTING, checks: FAILING });
+    expect(red.decision).toBe('fix');
+    expect(red.statuses.get('claim-hand-over')).toBe('skipped');
+
+    const concluded = pass({ ...CONFLICTING, handOvers });
+    expect(concluded.statuses.get('hand-over-to-agent')).toBe('succeeded');
+    expect(handOvers.has(PR_CASE)).toBe(true);
   });
 
   it('hands over a merge GitHub refused for anything but a moved base, in the pass it was refused, with GitHub’s answer', () => {
@@ -2769,6 +2833,24 @@ describe('Local PR Shepherd — what its rules cannot act on goes to the agent',
       () =>
         green({
           reviews: { changesRequestedBy: ['octo'], approvedBy: [], count: 1, complete: true },
+        }),
+    ],
+    [
+      'a person’s review requests changes on a head that does not merge and has no check run',
+      () =>
+        pass({
+          ...CONFLICTING,
+          checks: { state: 'none', total: 0, failing: [] },
+          reviews: { changesRequestedBy: ['octo'], approvedBy: [], count: 1, complete: true },
+        }),
+    ],
+    [
+      'the publication’s review did not approve a head that does not merge and has no check run',
+      () =>
+        pass({
+          ...CONFLICTING,
+          checks: { state: 'none', total: 0, failing: [] },
+          publication: { verdict: 'request_changes', at: HEAD },
         }),
     ],
     ['the operator declined the merge', () => green({ merge: 'declined' })],
