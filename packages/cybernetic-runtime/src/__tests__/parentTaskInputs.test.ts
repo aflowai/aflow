@@ -403,6 +403,71 @@ describe('optional run inputs (runInputs[].required === false)', () => {
   });
 });
 
+describe('an optional run input the other inputs make required (runInputs[].requiredWhen)', () => {
+  const slot = (id: string) => ({
+    kind: 'run_input',
+    bindAs: id,
+    path: id,
+    schema: { type: 'string' },
+  });
+  const rootTask = {
+    taskId: 'commit',
+    name: 'commit',
+    goal: 'g',
+    type: 'operation',
+    inputContract: {
+      bindings: Object.fromEntries(
+        ['branch', 'patch', 'patchRef', 'source', 'message'].map((id) => [id, slot(id)]),
+      ),
+    },
+  } as never as WorkflowTask;
+  const runInputs = [
+    { id: 'branch', required: true },
+    { id: 'patch', required: false },
+    { id: 'patchRef', required: false },
+    { id: 'source', required: false },
+    {
+      id: 'message',
+      required: false,
+      requiredWhen: {
+        anyGiven: ['patch'],
+        noneGiven: ['patchRef', 'source'],
+        reason: 'a change needs a message, and only a source can derive one.',
+      },
+    },
+  ] as Workflow['runInputs'];
+
+  it('refuses the start where a triggering input is given and no input lifts it', () => {
+    const r = validateParentTaskInputs(rootTask, { branch: 'b', patch: 'diff' }, runInputs);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.issues).toEqual([
+      {
+        bindAs: 'message',
+        code: 'MISSING_BINDAS',
+        detail:
+          '"message" is required on task "commit" when [patch] is given and none of [patchRef, source]: a change needs a message, and only a source can derive one.',
+      },
+    ]);
+  });
+
+  it('accepts it given, or lifted by any input that derives it', () => {
+    for (const inputs of [
+      { branch: 'b', patch: 'diff', message: 'm' },
+      { branch: 'b', patch: 'diff', source: 'run-1' },
+      { branch: 'b', patchRef: 'gs://x' },
+    ]) {
+      expect(validateParentTaskInputs(rootTask, inputs, runInputs).ok, JSON.stringify(inputs)).toBe(
+        true,
+      );
+    }
+  });
+
+  it('asks nothing where no triggering input is given', () => {
+    expect(validateParentTaskInputs(rootTask, { branch: 'b' }, runInputs).ok).toBe(true);
+  });
+});
+
 describe('inputBindings-only entry task (no hand-authored inputContract)', () => {
   // The literature-scan shape: the entry task declares its run inputs via
   // `inputBindings` (kind run_input) and the workflow declares `runInputs`

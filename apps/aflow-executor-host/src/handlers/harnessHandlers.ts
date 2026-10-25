@@ -1080,15 +1080,15 @@ async function runHarness(
     const scrubbed = extractEgressRefusals(result.stderr);
     // A refused host stopped the run only if the run reached nothing. Asked of
     // the exit code and of what came back — the validated result where one was
-    // asked for, otherwise a diff or an answer — because the same refusals on a
+    // required, otherwise a valid result, a diff or an answer — because the same refusals on a
     // finished run are a note about its edges, and the blocking wording beside a
     // complete result tells the reader the outcome did not happen.
     const reached =
       result.exitCode === 0 &&
       !result.timedOut &&
-      (check === undefined
-        ? changes.filesChanged > 0 || (spoken ?? result.stdout) !== ''
-        : check.ok);
+      (check?.ok === true ||
+        ((check === undefined || !input.resultRequired) &&
+          (changes.filesChanged > 0 || (spoken ?? result.stdout) !== '')));
     const refusalNote = describeRefusals(
       scrubbed.refusals,
       reached ? 'reached_result' : 'produced_nothing',
@@ -1199,7 +1199,7 @@ async function runHarness(
       return details;
     };
 
-    if (check !== undefined && !check.ok) {
+    if (check !== undefined && !check.ok && input.resultRequired) {
       // The step fails, and the work still comes back: a check that rejects an
       // answer has said nothing about the files the harness edited, and an
       // operator who cannot see them has to pay for the run again to get them.
@@ -1221,7 +1221,11 @@ async function runHarness(
 
     return await successWithData(ctx, {
       ...work,
-      ...(check?.ok === true ? { result: check.value } : {}),
+      ...(check === undefined
+        ? {}
+        : check.ok
+          ? { result: check.value }
+          : { resultProblem: scrubSecrets(check.problem, secrets) }),
     });
   } catch (error) {
     return await failure(ctx, error, secrets);

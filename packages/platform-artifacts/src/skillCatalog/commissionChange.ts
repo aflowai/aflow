@@ -31,9 +31,53 @@ const MINUTES = 60_000;
  */
 const BROWSER_SCHEMA = { ...toJsonSchemaSync(HostHarnessBrowserSchema) };
 
+/**
+ * The longest subject line a commit carries whole: under 72 characters, the
+ * width git's own tools and a pull request's title show without cutting it.
+ */
+export const COMMIT_TITLE_MAX_CHARS = 71;
+
+/**
+ * What every commission reports, beside whatever its brief asks for: an
+ * account of the change in the shape of a commit message, which a publication
+ * commits it under when the caller passes none. The title holds one line and
+ * the paragraph no blank line, so the message the two compose is always a
+ * subject, a blank line and one paragraph.
+ */
+export const COMMISSION_RESULT_SCHEMA = {
+  type: 'object',
+  required: ['summary'],
+  properties: {
+    summary: {
+      type: 'object',
+      required: ['title', 'paragraph'],
+      additionalProperties: false,
+      description:
+        "What the patch changes, as its commit message says it: a publication that names this commission commits the change under this title, a blank line, then this paragraph. It covers everything the patch holds — a continued session's earlier turns included.",
+      properties: {
+        title: {
+          type: 'string',
+          minLength: 1,
+          maxLength: COMMIT_TITLE_MAX_CHARS,
+          pattern: '^\\S[^\\r\\n]*$',
+          description: `One line of at most ${String(COMMIT_TITLE_MAX_CHARS)} characters saying what the change does, in the imperative — "Derive the commit message from the commission's summary". No trailing period.`,
+        },
+        paragraph: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 8_000,
+          pattern: '^(?![\\s\\S]*\\S[ \\t]*\\r?\\n[ \\t]*\\r?\\n[ \\t]*\\S)[\\s\\S]*\\S[\\s\\S]*$',
+          description:
+            'One paragraph — no blank line inside it — saying what changed and why, as a reviewer reads it in the history: the behaviour before and after, and anything the change deliberately leaves alone.',
+        },
+      },
+    },
+  },
+};
+
 const COMMISSION_CHANGE: SkillCatalogEntry = {
   catalogId: 'commission-change',
-  version: 8,
+  version: 10,
   name: 'Commission Change',
   tagline:
     "Have the machine's own coding agent make a change in a connected repository, and get the change back as a patch.",
@@ -47,7 +91,7 @@ const COMMISSION_CHANGE: SkillCatalogEntry = {
 
 **The checks a brief asks for are the folder's own** — its test runner on the touched tests, its type check, its linter, its formatter, and the guards its own pre-publication check runs over the whole tree; in Aflow's repository those are \`node --import tsx scripts/large-files/cli.ts check\` and \`node --conditions=ts-source --import tsx scripts/context-budget/cli.ts check\`, the two \`scripts/verify-commit.mjs\` runs, the second under the \`ts-source\` condition it runs it with so it reads the checkout's own source. The brief has the coding agent run every one of them in the commission's checkout before it returns, fix what fails in the same session, and put their output in the result the brief asks for. Nothing else runs them before publication, where the folder's declared checks run again on the commit, and a failure found there costs that publication and a further round.
 
-**With the result**: report what changed — \`filesChanged\` and whether the patch \`applies\` where it would be published. To publish, start Publish Local Changes with the commission's \`patchRef\`, \`baseSha\` and, where it merged, \`merge.from\`, as they stand — never the \`patch\` text, a copy for reading that is cut short on a large change. To ask for more on the same work, start another commission with \`continueFrom\` set to its \`sessionRef\`.`,
+**With the result**: report what changed — its \`summary\`, \`filesChanged\` and whether the patch \`applies\` where it would be published. The coding agent writes the \`summary\` whatever the brief asks: a title line under 72 characters and one paragraph, the commit message the change is published under. A commission whose coding agent wrote no valid summary still returns its change, saying why in \`resultProblem\`; its publication then takes \`commitMessage\`. To publish, start Publish Local Changes with the commission's \`patchRef\`, \`baseSha\` and, where it merged, \`merge.from\`, as they stand, and its run id as \`commission\` — never the \`patch\` text, a copy for reading that is cut short on a large change. The publication commits under the \`summary\`; pass \`commitMessage\` only to say it otherwise. To ask for more on the same work, start another commission with \`continueFrom\` set to its \`sessionRef\`.`,
   tags: ['coding', 'commission', 'local', 'developer-tools'],
   bundle: {
     workflow: {
@@ -185,8 +229,14 @@ const COMMISSION_CHANGE: SkillCatalogEntry = {
             maxTurns: { $bind: 'maxTurns' },
             timeoutMs: { $firstOf: [{ $bind: 'timeoutMs' }, COMMISSION_TIMEOUT_DEFAULT_MS] },
             browser: { $bind: 'browser' },
+            outputSchema: COMMISSION_RESULT_SCHEMA,
+            // The patch is the commission's product and the summary only
+            // accompanies it: a run without a valid one still returns its
+            // change, and its publication then asks for a `commitMessage`.
+            resultRequired: false,
           },
           promoteOutputs: [
+            { kind: 'output_path' as const, path: 'result.summary', toState: 'summary' },
             { kind: 'output_path' as const, path: 'patchRef', toState: 'patchRef' },
             { kind: 'output_path' as const, path: 'baseSha', toState: 'baseSha' },
             { kind: 'output_path' as const, path: 'merge', toState: 'merge' },
@@ -198,6 +248,15 @@ const COMMISSION_CHANGE: SkillCatalogEntry = {
         },
       ],
       stateVariables: [
+        {
+          variableId: 'summary',
+          name: 'Summary',
+          description:
+            'What the patch changes, as the coding agent wrote it: `title`, one line under 72 characters, and `paragraph`, one paragraph. A publication naming this run commits the change under them unless it is given a `commitMessage`.',
+          required: false,
+          sensitive: false,
+          immutable: false,
+        },
         {
           variableId: 'patchRef',
           name: 'Patch',
@@ -263,7 +322,7 @@ const COMMISSION_CHANGE: SkillCatalogEntry = {
       output: {
         primary: 'patchRef',
         guidance:
-          'patchRef is the change. A publication takes patchRef, baseSha and merge.from as they stand — never the patch text — and a further turn on the same work takes sessionRef as continueFrom. Report filesChanged and applies; a conflict means the base moved under the change.',
+          'patchRef is the change. A publication takes patchRef, baseSha and merge.from as they stand — never the patch text — and this run id as commission, and commits under summary unless given a commitMessage. A further turn takes sessionRef as continueFrom. Report summary, filesChanged and applies; a conflict means the base moved under the change.',
       },
       iteration: { auto: false, maxConsecutiveRuns: 1, stopOnOutcomesMet: true, cooldownMs: 0 },
     },
@@ -304,7 +363,7 @@ const COMMISSION_CHANGE: SkillCatalogEntry = {
       priority: 50,
     },
     rationale:
-      "One operation task on host.harness.run with every input a brief names as a run input: the description steers the Helmsman (what a brief carries, wait: 'none', what to do with the result) and the brief itself instructs the coding agent. No outputSchema: what the brief asks the agent to report is the brief's, and the change is the operation's own patchRef, which the run promotes with baseSha and merge so a publication takes them as they stand. The browser is the operation's own input with its own schema, bound through and absent unless the brief asks for one. The time defaults in the template, because a run input's default is never applied; the turn budget is the operation's own, because only the machine knows whether its coding agent can take one. How many run at once is the machine's, which holds a commission past its limit until a coding agent ends.",
+      "One operation task on host.harness.run with every input a brief names as a run input: the description steers the Helmsman (what a brief carries, wait: 'none', what to do with the result) and the brief itself instructs the coding agent. The outputSchema asks only for summary and leaves the rest of the result to the brief; it is not required, since the patch is the product and a missing summary costs only the commit message. The change is the operation's own patchRef, promoted with baseSha, merge and summary so a publication commits it as it stands. The browser is the operation's own input with its own schema, bound through and absent unless the brief asks for one. The time defaults in the template, because a run input's default is never applied; the turn budget is the operation's own, because only the machine knows whether its coding agent can take one. How many run at once is the machine's, which holds a commission past its limit until a coding agent ends.",
   },
 };
 

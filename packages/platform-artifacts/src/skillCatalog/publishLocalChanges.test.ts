@@ -1,11 +1,17 @@
+import AjvModule from 'ajv';
 import { describe, it, expect } from 'vitest';
 import {
   computeReadyTasksWithWhen,
+  failedChildRunOf,
   decideByRules,
   computeRejectedApprovalSkipSet,
   materializeAndValidateSkillConfig,
   projectTaskOutput,
+  renderParentInputsValidationFailure,
   resolvePromotedRunMetrics,
+  selectFirstTaskForParentInputs,
+  taskOutputFromCompletedRun,
+  validateParentTaskInputs,
 } from '@aflow/cybernetic-runtime';
 import {
   AfterReviewOverrideSchema,
@@ -25,6 +31,9 @@ import {
   type HostPushApproval,
   type WorkflowTask,
   WorkflowRunDecideInputSchema,
+  WorkflowRunDetailInputSchema,
+  WorkflowRunListInputSchema,
+  WorkflowRunListOutputSchema,
   WorkflowRunStartInputSchema,
   WorkflowRunWakeupEnvelopeSchema,
   HostCommitDescribeInputSchema,
@@ -45,6 +54,7 @@ import {
   substituteTemplateBinds,
   toJsonSchemaSync,
 } from '@aflow/schemas';
+import { COMMISSION_CHANGE, COMMISSION_RESULT_SCHEMA } from './commissionChange.js';
 import { PUBLISH_LOCAL_CHANGES } from './publishLocalChanges.js';
 import { PUSH_GATE_OTHERWISE, PUSH_GATE_RULES } from './publishLocalChangesGate.js';
 import { PUBLISH_AS_IT_STANDS } from './publishLocalChangesProse.js';
@@ -65,6 +75,8 @@ import {
   REVIEW_LOCAL_CHANGES,
   REVIEW_SEVERITIES,
 } from './reviewLocalChanges.js';
+
+const AjvCtor = (AjvModule as unknown as { default: typeof AjvModule }).default ?? AjvModule;
 
 const wf = PUBLISH_LOCAL_CHANGES.bundle.workflow;
 const taskById = new Map(wf.tasks.map((task) => [task.taskId, task]));
@@ -89,6 +101,9 @@ const COMMIT = {
 
 /** A commit an earlier publication made on `aflow/x` and never pushed. */
 const STRANDED = 'd'.repeat(40);
+
+/** The run of the review a publication starts. */
+const REVIEW_RUN_ID = '0a0b0c0d-1111-4222-8333-444455556666';
 
 /** The branch's head as `host.file.patch` reports it when published as it stands. */
 const AS_IT_STANDS = {
@@ -160,8 +175,13 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     expect(validity.status).toBe('valid');
   });
 
-  it('is twenty-two tasks — commit, check, the stop on a failed check, scan, what decides the approval, the review, its findings decided by the rounds rule, the check of an override and the stop on its refusal, the pull request composed, the push gate, approve, push, and the pull request found, rewritten or opened', () => {
+  it('is thirty tasks — where the commit message comes from, the commission found, a named one checked against it and the stop on one that differs, its summary read, commit, check, the stop on a failed check, scan, what decides the approval, the review, its findings decided by the rounds rule, the check of an override and the stop on its refusal, the pull request composed, the push gate, the fix round handed its branch, approve, push, the pull request found, rewritten or opened, and the review read back', () => {
     expect(wf.tasks.map((t) => t.taskId)).toEqual([
+      'message-from',
+      'find-commission',
+      'check-commission',
+      'commission-refused',
+      'read-commission',
       'commit',
       'check-commit',
       'checks-failed',
@@ -179,17 +199,30 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       'override-refused',
       'describe-pr',
       'decide-push',
+      'hand-fix-round',
+      'hand-fix-round-merging',
       'approve-push',
       'push',
       'find-pr',
       'update-pr',
       'open-pr',
+      'read-review',
     ]);
     expect(wf.tasks.filter((t) => t.type !== 'operation').map((t) => t.taskId)).toEqual([
       'approve-push',
     ]);
     expect(Object.fromEntries(wf.tasks.map((t) => [t.taskId, t.dependsOn ?? []]))).toEqual({
-      commit: [],
+      'message-from': [],
+      'find-commission': ['message-from'],
+      'check-commission': ['message-from', 'find-commission'],
+      'commission-refused': ['check-commission'],
+      'read-commission': [
+        'message-from',
+        'find-commission',
+        'check-commission',
+        'commission-refused',
+      ],
+      commit: ['message-from', 'find-commission', 'read-commission'],
       'check-commit': ['commit'],
       'checks-failed': ['check-commit'],
       'recheck-commit': ['commit', 'check-commit'],
@@ -226,6 +259,8 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
         'verify-override',
         'describe-pr',
       ],
+      'hand-fix-round': ['commit', 'review-commit', 'describe-pr', 'decide-push'],
+      'hand-fix-round-merging': ['commit', 'review-commit', 'describe-pr', 'decide-push'],
       'approve-push': ['read-repository', 'scan-commit', 'decide-push'],
       push: [
         'approve-push',
@@ -238,8 +273,14 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       'find-pr': ['push', 'decide-push'],
       'update-pr': ['find-pr', 'describe-pr'],
       'open-pr': ['find-pr', 'describe-pr'],
+      'read-review': ['review-commit', 'push'],
     });
     expect(Object.fromEntries(wf.tasks.map((t) => [t.taskId, t.operation]))).toEqual({
+      'message-from': 'workflow.run.decide',
+      'find-commission': 'workflow.run.list',
+      'check-commission': 'workflow.run.decide',
+      'commission-refused': 'workflow.run.fail',
+      'read-commission': 'workflow.run.detail',
       commit: 'host.file.patch',
       'check-commit': 'host.commit.check',
       'checks-failed': 'workflow.run.fail',
@@ -257,11 +298,14 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       'override-refused': 'workflow.run.fail',
       'describe-pr': 'host.commit.describe',
       'decide-push': 'workflow.run.decide',
+      'hand-fix-round': 'workflow.run.decide',
+      'hand-fix-round-merging': 'workflow.run.decide',
       'approve-push': undefined,
       push: 'host.process.exec',
       'find-pr': 'api.http.call',
       'update-pr': 'api.http.call',
       'open-pr': 'api.http.call',
+      'read-review': 'workflow.run.detail',
     });
   });
 
@@ -331,7 +375,12 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       mode: 'clean',
       commit: {
         branch: { $bind: 'branch' },
-        message: { $bind: 'commitMessage' },
+        message: {
+          $firstOf: [
+            { $bind: 'commitMessage' },
+            { $concat: [{ $bind: 'summaryTitle' }, '\n\n', { $bind: 'summaryParagraph' }] },
+          ],
+        },
         baseSha: { $bind: 'baseSha' },
         mergeFrom: { $bind: 'mergeFrom' },
         pushBase: { $bind: 'base' },
@@ -383,7 +432,7 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
         commit: { ...(appended['commit'] as object), baseSha: 'feat/x' },
       }).success,
     ).toBe(false);
-    expect(taskOrThrow('commit').inputContract?.bindings['baseSha']?.schema).toEqual(
+    expect(taskOrThrow('message-from').inputContract?.bindings['baseSha']?.schema).toEqual(
       baseSha?.schema,
     );
     expect(PUBLISH_LOCAL_CHANGES.description).toContain(
@@ -394,15 +443,27 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
   it("briefs a fix round from the branch's head, by its name, never from the earlier baseSha", () => {
     const description = PUBLISH_LOCAL_CHANGES.description;
     expect(description).toContain(
-      "commission the fix with `base` the branch's name — never the earlier commission's `baseSha` or `origin/main`",
+      "`commissionInputs` — `base` the branch's name, and `mergeFrom: origin/<base>` where the base moved",
     );
-    expect(description).toContain('then publish again with its `patchRef` and `baseSha`');
+    expect(description).toContain(
+      "never `base: origin/main` or the earlier commission's `baseSha`: the branch was never pushed, so a checkout of `origin/main` cannot reach it and the fix comes back with no files changed",
+    );
+    expect(description).toContain('then publish again with its `patchRef`, `baseSha`');
     expect(description).toContain("the commission's `baseSha` — the branch's head — as `baseSha`");
     expect(wf.output?.guidance).toContain(
-      'commission the fix with base the branch’s name, never the earlier baseSha',
+      'start Commission Change with fixRound.commissionInputs as they stand — never base origin/main',
     );
     const afterReview = wf.stateVariables.find((v) => v.variableId === 'afterReview');
-    expect(afterReview?.description).toContain("takes `base` the branch's name");
+    expect(afterReview?.description).toContain('takes `fixRound`');
+    const fixRound = wf.stateVariables.find((v) => v.variableId === 'fixRound');
+    expect(fixRound?.description).toContain('Never base it on `origin/main`');
+    expect(
+      PUSH_GATE_RULES.find(
+        (rule) =>
+          'expression' in rule.when &&
+          rule.when.expression === "state.afterReview == 'fix_before_merge'",
+      )?.reason,
+    ).toContain("`base` the branch's name, never `origin/main`");
     // The commit still refuses a patch made against anything but the branch's head.
     const baseSha = (wf.runInputs ?? []).find((i) => i.id === 'baseSha');
     expect(baseSha?.description).toContain("it must be that branch's head");
@@ -444,7 +505,9 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     const shaPattern = new RegExp((mergeFrom?.schema as { pattern: string }).pattern);
     expect(shaPattern.test('b'.repeat(40))).toBe(true);
     expect(shaPattern.test('origin/main')).toBe(false);
-    expect(commit.inputContract?.bindings['mergeFrom']?.schema).toEqual(mergeFrom?.schema);
+    expect(taskOrThrow('message-from').inputContract?.bindings['mergeFrom']?.schema).toEqual(
+      mergeFrom?.schema,
+    );
     expect(PUBLISH_LOCAL_CHANGES.description).toContain(
       'is commissioned with `mergeFrom: origin/<base>` as well',
     );
@@ -499,7 +562,9 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     expect(runInput('patchRef')?.required).toBe(false);
     expect(runInput('patch')?.required).toBe(false);
     for (const id of ['patchRef', 'patch']) {
-      expect(commit.inputContract?.bindings[id]?.schema, id).toEqual(runInput(id)?.schema);
+      expect(taskOrThrow('message-from').inputContract?.bindings[id]?.schema, id).toEqual(
+        runInput(id)?.schema,
+      );
     }
     // A stored ref only: an inline one is the diff's bytes in the run input again.
     const refPattern = new RegExp((runInput('patchRef')?.schema as { pattern: string }).pattern);
@@ -521,7 +586,7 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
   });
 
   it('takes the owner and the repository as names, never a URL or `owner/repo`', () => {
-    const entry = taskOrThrow('commit').inputContract?.bindings ?? {};
+    const entry = taskOrThrow('message-from').inputContract?.bindings ?? {};
     for (const id of ['owner', 'repo']) {
       const declared = (wf.runInputs ?? []).find((i) => i.id === id);
       const schema = declared?.schema as { pattern?: string; description?: string } | undefined;
@@ -846,7 +911,7 @@ function reviewEnding(
 ): Record<string, unknown> {
   const completed = review !== 'failed' && review !== 'cancelled' && review !== 'paused';
   return WorkflowRunWakeupEnvelopeSchema.parse({
-    runId: 'review-run',
+    runId: REVIEW_RUN_ID,
     outcome: completed ? 'completed' : review,
     waiterId: 'waiter-1',
     ...(completed
@@ -1053,6 +1118,13 @@ interface Scenario {
   findings?: readonly Finding[];
   /** What an override's checks read of the branch's pull request; absent is an unlabelled one with no shepherd record. */
   onGitHub?: OnGitHub;
+  /** The Commission Change that made the change, as its run holds it; absent is none to be found. */
+  commission?: { runId: string; patchRef: string; summary: unknown; bindingId?: string };
+  /**
+   * How the review run stands when the publication reads it back, where not as
+   * it first ended — a review that failed and was retried in place.
+   */
+  reviewNow?: Review;
 }
 
 /**
@@ -1236,11 +1308,54 @@ function rawOutput(
     case 'describe-pr':
       return scenario.describeRefused === true ? {} : describedPullRequest(input);
     // The rules each decision is handed, decided as the orchestrator decides them.
+    case 'message-from':
+    case 'check-commission':
     case 'settle-after-review':
     case 'claim-override':
     case 'verify-override':
     case 'decide-push':
+    case 'hand-fix-round':
+    case 'hand-fix-round-merging':
       return { ...decideByRules(WorkflowRunDecideInputSchema.parse(input)) };
+    case 'find-commission': {
+      const query = WorkflowRunListInputSchema.parse(input);
+      const recorded = query.succeeded?.[0]?.output?.equals;
+      const found =
+        scenario.commission !== undefined &&
+        recorded === scenario.commission.patchRef &&
+        query.input?.equals === (scenario.commission.bindingId ?? RUN_INPUTS['bindingId']);
+      return WorkflowRunListOutputSchema.parse({
+        runs: found
+          ? [
+              {
+                id: scenario.commission?.runId,
+                status: 'completed',
+                startedAt: '2026-10-25T09:00:00.000Z',
+                own: true,
+              },
+            ]
+          : [],
+        hasMore: false,
+      });
+    }
+    case 'read-commission': {
+      const { runId } = WorkflowRunDetailInputSchema.parse(input);
+      const named = scenario.commission !== undefined && runId === scenario.commission.runId;
+      return {
+        run: { runId, workflowSlug: 'commission-change', status: 'completed' },
+        ...(named ? { result: { output: { summary: scenario.commission?.summary } } } : {}),
+      };
+    }
+    // The review run as it stands when the publication reads it back.
+    case 'read-review': {
+      const { runId } = WorkflowRunDetailInputSchema.parse(input);
+      const now = scenario.reviewNow ?? scenario.review;
+      const completed = now === 'approve' || now === 'request_changes' || now === 'comment';
+      return {
+        run: { runId, workflowSlug: REVIEW_LOCAL_CHANGES.bundle.workflow.slug, status: now },
+        ...(completed ? { result: { output: { verdict: now } } } : {}),
+      };
+    }
     case 'read-override-pr':
       return overridePullRequest(scenario.onGitHub);
     case 'read-override-pin':
@@ -1623,7 +1738,7 @@ describe('Publish Local Changes — the folder decides whether the push asks', (
           reviewSummary: null,
           findings: null,
           outcome,
-          reviewRunId: 'review-run',
+          reviewRunId: REVIEW_RUN_ID,
           reviewed,
         },
       });
@@ -1636,7 +1751,7 @@ describe('Publish Local Changes — the folder decides whether the push asks', (
         reviewSummary: 'Read.',
         findings: [],
         outcome: 'completed',
-        reviewRunId: 'review-run',
+        reviewRunId: REVIEW_RUN_ID,
         reviewed,
       },
     });
@@ -1681,7 +1796,12 @@ describe('Publish Local Changes — the folder decides whether the push asks', (
       decision: 'approved',
       committed: false,
     });
-    expect(outcome).toMatchObject({ asked: false, pushed: false, ran: ['commit'], state: {} });
+    expect(outcome).toMatchObject({
+      asked: false,
+      pushed: false,
+      ran: ['message-from', 'commit'],
+      state: {},
+    });
   });
 
   it('pushes nothing from a folder that declares no push at all', () => {
@@ -1805,7 +1925,7 @@ describe('Publish Local Changes — the folder decides whether the push asks', (
       (i) => i.id === 'harness',
     );
     expect(runInput?.schema).toEqual(reviewHarness?.schema);
-    expect(taskOrThrow('commit').inputContract?.bindings['reviewHarness']?.schema).toEqual(
+    expect(taskOrThrow('message-from').inputContract?.bindings['reviewHarness']?.schema).toEqual(
       runInput?.schema,
     );
     expect(runInput?.description).toContain('passed to the review as its `harness`');
@@ -2172,7 +2292,12 @@ describe("Publish Local Changes — the push checks origin's base and URL in its
     expect(wf.tasks.some((task) => task.operation === 'host.commit.check_base')).toBe(false);
     for (const pushApproval of ['always', 'never', 'unless-unreviewed'] as const) {
       const { ran } = publish({ pushApproval, review: 'approve', decision: 'approved' });
-      expect(ran.slice(-3)).toEqual(['push', 'find-pr', 'open-pr']);
+      // The review read back follows the push, where a review ran, and gates nothing.
+      expect(ran.filter((id) => id !== 'read-review').slice(-3)).toEqual([
+        'push',
+        'find-pr',
+        'open-pr',
+      ]);
     }
   });
 
@@ -2184,7 +2309,11 @@ describe("Publish Local Changes — the push checks origin's base and URL in its
         decision: 'approved',
         baseMoved: 'cleanly',
       });
-      expect(outcome.ran.slice(-3)).toEqual(['push', 'find-pr', 'open-pr']);
+      expect(outcome.ran.filter((id) => id !== 'read-review').slice(-3)).toEqual([
+        'push',
+        'find-pr',
+        'open-pr',
+      ]);
       expect(outcome.pushed).toBe(true);
       // One more scan, in the push's own step: no second scan task, and no round.
       expect(outcome.ran.filter((id) => id === 'scan-commit')).toHaveLength(1);
@@ -2291,6 +2420,7 @@ describe('Publish Local Changes — a branch is published as it stands', () => {
       asItStands: true,
     });
     expect(outcome.ran).toEqual([
+      'message-from',
       'commit',
       'check-commit',
       'scan-commit',
@@ -2304,10 +2434,13 @@ describe('Publish Local Changes — a branch is published as it stands', () => {
       'decide-push',
       'push',
       'find-pr',
+      'read-review',
       'open-pr',
     ]);
     expect(outcome.pushed).toBe(true);
     expect(outcome.asked).toBe(false);
+    // Nothing is committed, so no message is derived: the head keeps its own.
+    expect(outcome.outputs.get('message-from')?.['decision']).toBe('as_it_stands');
 
     // The commit is asked for the head as it stands, and the operation takes it so.
     const commit = outcome.inputs.get('commit') ?? {};
@@ -3106,7 +3239,7 @@ describe("Publish Local Changes — the rounds rule decides a review's findings,
     endedCompleted(outcome);
     expect(outcome.state, label).toMatchObject({
       pushDecision: 'keep_local',
-      reviewRunId: 'review-run',
+      reviewRunId: REVIEW_RUN_ID,
     });
     expect(outcome.state['pushReason'], label).toContain('`fix_before_merge`');
     expect(outcome.state['prUrl'], label).toBeUndefined();
@@ -3253,7 +3386,9 @@ describe("Publish Local Changes — the rounds rule decides a review's findings,
       const round = runInputOrThrow('round');
       expect(round.required).toBe(false);
       expect(round.schema).toEqual({ type: 'integer', minimum: 1, maximum: 1000, default: 1 });
-      expect(taskOrThrow('commit').inputContract?.bindings['round']?.schema).toEqual(round.schema);
+      expect(taskOrThrow('message-from').inputContract?.bindings['round']?.schema).toEqual(
+        round.schema,
+      );
       expect(round.description).toContain('1, the default');
       expect(PUBLISH_LOCAL_CHANGES.description).toContain('`round`');
     });
@@ -3581,7 +3716,7 @@ describe("Publish Local Changes — the rounds rule decides a review's findings,
 
   it('names its review run, whose findings a fix round is briefed from, every one whole', () => {
     const outcome = reviewedWith({});
-    expect(outcome.state['reviewRunId']).toBe('review-run');
+    expect(outcome.state['reviewRunId']).toBe(REVIEW_RUN_ID);
     expect(outcome.outputs.get('review-commit')?.['findings']).toEqual(FINDINGS);
   });
 
@@ -3643,5 +3778,373 @@ describe("Publish Local Changes — the rounds rule decides a review's findings,
     for (const gate of ['read-push-approval', 'scan-commit']) {
       expect(reads(taskOrThrow(gate) as WorkflowTask), gate).not.toMatch(/decide-|describe-pr/);
     }
+  });
+});
+
+// ── What a publication hands the next round ────────────────────────────────
+
+describe("Publish Local Changes — the commit is made under the commission's summary when no message is passed", () => {
+  const PATCH_REF = 'gs://file-store/tenants/t_1/runs/r_1/steps/s_1/attempt/1/patch.json';
+  const COMMISSION_RUN_ID = '7c9e6679-7425-40de-944b-e07fc1f90ae7';
+  const SUMMARY = {
+    title: "Derive a publication's commit message from its commission",
+    paragraph:
+      "A publication with no commitMessage now commits under the summary its commission's coding agent wrote, read from the commission's run, instead of failing at its commit task.",
+  };
+  const commission = { runId: COMMISSION_RUN_ID, patchRef: PATCH_REF, summary: SUMMARY };
+
+  function committedMessage(outcome: Outcome): string {
+    const commit = outcome.inputs.get('commit')?.['commit'] as { message?: unknown } | undefined;
+    if (typeof commit?.message !== 'string') throw new Error('the commit carried no message');
+    return commit.message;
+  }
+
+  function expectWellFormed(message: string): void {
+    const lines = message.split('\n');
+    expect(lines).toHaveLength(3);
+    const [title = '', blank, paragraph = ''] = lines;
+    expect(title.length).toBeLessThan(72);
+    expect(title.trim()).toBe(title);
+    expect(blank).toBe('');
+    expect(paragraph.length).toBeGreaterThan(0);
+  }
+
+  for (const [how, inputs] of [
+    ['names the commission run', { patchRef: PATCH_REF, commission: COMMISSION_RUN_ID }],
+    ['passes only its patchRef', { patchRef: PATCH_REF }],
+  ] as const) {
+    it(`commits with a well-formed message derived from the summary when the caller ${how}`, () => {
+      const outcome = publish({
+        pushApproval: 'never',
+        review: 'approve',
+        decision: 'approved',
+        commission,
+        inputs: { owner: 'aflowai', repo: 'aflow', ...inputs },
+      });
+      expect(outcome.statuses.get('commit')).toBe('succeeded');
+      expect(outcome.pushed).toBe(true);
+      const message = committedMessage(outcome);
+      expect(message).toBe(`${SUMMARY.title}\n\n${SUMMARY.paragraph}`);
+      expectWellFormed(message);
+      // The operation takes it as a commit message like any other.
+      expect(
+        HostFilePatchInputSchema.safeParse(outcome.inputs.get('commit')).success,
+        'host.file.patch input',
+      ).toBe(true);
+    });
+  }
+
+  it('commits under the message the caller passed, and reads no commission for it', () => {
+    const outcome = publish({
+      pushApproval: 'never',
+      review: 'approve',
+      decision: 'approved',
+      commission,
+      inputs: {
+        owner: 'aflowai',
+        repo: 'aflow',
+        patchRef: PATCH_REF,
+        commitMessage: 'Mine\n\nWhy.',
+      },
+    });
+    expect(committedMessage(outcome)).toBe('Mine\n\nWhy.');
+    expect(outcome.ran).not.toContain('find-commission');
+    expect(outcome.ran).not.toContain('read-commission');
+  });
+
+  it('fails before anything is committed where no commission reported the patchRef, saying what to pass', () => {
+    const outcome = publish({
+      pushApproval: 'never',
+      review: 'approve',
+      decision: 'approved',
+      inputs: { owner: 'aflowai', repo: 'aflow', patchRef: PATCH_REF },
+    });
+    expect(outcome.statuses.get('find-commission')).toBe('failed');
+    expect(outcome.ran).not.toContain('commit');
+    expect(taskOrThrow('find-commission').failureInstruction).toContain('`commitMessage`');
+    expect(taskOrThrow('read-commission').failureInstruction).toContain('`commitMessage`');
+  });
+
+  it('refuses a named run that is not the commission which reported the patchRef, naming the one that did', () => {
+    const OTHER_RUN_ID = '9b2f1c3a-1d2e-4f5a-8b6c-7d8e9f0a1b2c';
+    const outcome = publish({
+      pushApproval: 'never',
+      review: 'approve',
+      decision: 'approved',
+      commission,
+      inputs: { owner: 'aflowai', repo: 'aflow', patchRef: PATCH_REF, commission: OTHER_RUN_ID },
+    });
+    expect(outcome.outputs.get('check-commission')?.['decision']).toBe('refused');
+    expect(outcome.statuses.get('commission-refused')).toBe('failed');
+    expect(outcome.ran).not.toContain('read-commission');
+    expect(outcome.ran).not.toContain('commit');
+    const reason = String(outcome.inputs.get('commission-refused')?.['reason']);
+    expect(reason).toContain(OTHER_RUN_ID);
+    expect(reason).toContain(COMMISSION_RUN_ID);
+    expect(reason).toContain('nothing was committed');
+  });
+
+  it('reads the summary of the run that reported the patchRef once the named one is found to be it', () => {
+    const outcome = publish({
+      pushApproval: 'never',
+      review: 'approve',
+      decision: 'approved',
+      commission,
+      inputs: {
+        owner: 'aflowai',
+        repo: 'aflow',
+        patchRef: PATCH_REF,
+        commission: COMMISSION_RUN_ID,
+      },
+    });
+    expect(outcome.outputs.get('check-commission')?.['decision']).toBe('confirmed');
+    expect(outcome.statuses.get('commission-refused')).toBe('skipped');
+    expect(outcome.inputs.get('read-commission')).toEqual({
+      runId: COMMISSION_RUN_ID,
+      compact: true,
+    });
+  });
+
+  it('finds no commission for a patchRef reported on another folder, named or not', () => {
+    for (const named of [{}, { commission: COMMISSION_RUN_ID }]) {
+      const outcome = publish({
+        pushApproval: 'never',
+        review: 'approve',
+        decision: 'approved',
+        commission: { ...commission, bindingId: 'folder-2' },
+        inputs: { owner: 'aflowai', repo: 'aflow', patchRef: PATCH_REF, ...named },
+      });
+      expect(outcome.statuses.get('find-commission'), JSON.stringify(named)).toBe('failed');
+      expect(outcome.ran).not.toContain('commit');
+    }
+    // This folder's runs of the Commission Change that reported this patchRef.
+    expect(taskOrThrow('find-commission').inputTemplate).toMatchObject({
+      slug: COMMISSION_CHANGE.bundle.workflow.slug,
+      input: { field: 'bindingId' },
+      succeeded: [{ taskId: 'commission', output: { path: 'patchRef' } }],
+      status: ['completed'],
+    });
+  });
+
+  it("holds the commission's summary to a title under 72 characters and one paragraph", () => {
+    const validate = new AjvCtor({ allErrors: true, strict: false }).compile(
+      COMMISSION_RESULT_SCHEMA,
+    );
+    expect(validate({ summary: SUMMARY, checks: 'the brief’s own report' })).toBe(true);
+    for (const summary of [
+      { ...SUMMARY, title: 'x'.repeat(72) },
+      { ...SUMMARY, title: 'Two\nlines' },
+      { ...SUMMARY, paragraph: 'One paragraph.\n\nAnd a second.' },
+      { title: SUMMARY.title },
+    ]) {
+      expect(validate({ summary }), JSON.stringify(summary)).toBe(false);
+    }
+    expect(validate({})).toBe(false);
+  });
+});
+
+describe('Publish Local Changes — a change with no message and no commission is refused at the start', () => {
+  const entry = taskOrThrow('message-from');
+  const base = {
+    bindingId: 'folder-1',
+    branch: 'aflow/x',
+    owner: 'aflowai',
+    repo: 'aflow',
+    base: 'main',
+  };
+
+  it('is refused at input validation, before the run exists, naming what to pass', () => {
+    for (const change of [
+      { patch: 'diff --git a/a b/a' },
+      { baseSha: 'a'.repeat(40), mergeFrom: 'b'.repeat(40) },
+      // A run id beside no `patchRef` has nothing its summary can be checked against.
+      { patch: 'diff --git a/a b/a', commission: '7c9e6679-7425-40de-944b-e07fc1f90ae7' },
+      {
+        baseSha: 'a'.repeat(40),
+        mergeFrom: 'b'.repeat(40),
+        commission: '7c9e6679-7425-40de-944b-e07fc1f90ae7',
+      },
+    ]) {
+      const result = validateParentTaskInputs(entry, { ...base, ...change }, wf.runInputs);
+      expect(result.ok, JSON.stringify(change)).toBe(false);
+      if (result.ok) continue;
+      expect(result.issues).toEqual([
+        expect.objectContaining({ bindAs: 'commitMessage', code: 'MISSING_BINDAS' }),
+      ]);
+      const message = renderParentInputsValidationFailure(
+        entry.taskId,
+        result.issues,
+        result.populatableBindAs,
+      );
+      expect(message).toContain('Cannot start');
+      expect(message).toContain('`commitMessage`');
+      expect(message).toContain('`patchRef`');
+    }
+  });
+
+  it("starts with a message, with a commission's patchRef to take one from, or with nothing to commit", () => {
+    for (const inputs of [
+      { patch: 'diff --git a/a b/a', commitMessage: 'Fix\n\nWhy.' },
+      { patchRef: 'gs://file-store/x/patch.json' },
+      {
+        patchRef: 'gs://file-store/x/patch.json',
+        commission: '7c9e6679-7425-40de-944b-e07fc1f90ae7',
+      },
+      { patchRef: 'gs://file-store/x/patch.json', mergeFrom: 'b'.repeat(40) },
+      { baseSha: 'a'.repeat(40) },
+    ]) {
+      expect(
+        validateParentTaskInputs(entry, { ...base, ...inputs }, wf.runInputs).ok,
+        JSON.stringify(inputs),
+      ).toBe(true);
+    }
+  });
+
+  it('is the entry task, so the start checks every input against it', () => {
+    expect(
+      selectFirstTaskForParentInputs(wf).ok && selectFirstTaskForParentInputs(wf),
+    ).toMatchObject({
+      task: { taskId: 'message-from' },
+    });
+    expect(runInputOrThrow('commitMessage').required).toBe(false);
+    expect(runInputOrThrow('commitMessage').requiredWhen).toMatchObject({
+      anyGiven: ['patch', 'mergeFrom'],
+      noneGiven: ['patchRef'],
+    });
+  });
+});
+
+describe('Publish Local Changes — fix_before_merge hands the fix round its branch and base', () => {
+  const MINOR: Finding = {
+    severity: 'minor',
+    file: 'src/a.ts',
+    line: 3,
+    claim: 'An edge is unhandled.',
+    evidence: 'a.ts:3',
+  };
+
+  function keptLocal(commit: Record<string, unknown>): Outcome {
+    return publish({
+      pushApproval: 'unless-unreviewed',
+      review: 'request_changes',
+      decision: 'approved',
+      findings: [MINOR],
+      commit,
+      inputs: { owner: 'aflowai', repo: 'aflow', base: 'main' },
+    });
+  }
+
+  it('carries fixRound with the exact Commission Change inputs — base the branch — where the base has not moved', () => {
+    const outcome = keptLocal({ ...COMMIT, baseMoved: false });
+    expect(outcome.state['afterReview']).toBe('fix_before_merge');
+    expect(outcome.state['pushDecision']).toBe('keep_local');
+    expect(outcome.pushed).toBe(false);
+    expect(outcome.state['fixRound']).toEqual({
+      branch: COMMIT.branch,
+      headSha: COMMIT.sha,
+      baseMovedSince: false,
+      reviewRunId: REVIEW_RUN_ID,
+      findings: outcome.state['findings'],
+      commissionInputs: { base: COMMIT.branch },
+    });
+    expect(outcome.ran).not.toContain('hand-fix-round-merging');
+  });
+
+  it('adds mergeFrom: origin/<base> to the Commission Change inputs where the base moved', () => {
+    const outcome = keptLocal({ ...COMMIT, baseMoved: true });
+    expect(outcome.state['fixRound']).toMatchObject({
+      branch: COMMIT.branch,
+      headSha: COMMIT.sha,
+      baseMovedSince: true,
+      reviewRunId: REVIEW_RUN_ID,
+      commissionInputs: { base: COMMIT.branch, mergeFrom: 'origin/main' },
+    });
+    expect(outcome.ran).not.toContain('hand-fix-round');
+  });
+
+  it('hands Commission Change exactly the inputs its own base and mergeFrom take', () => {
+    const commission = COMMISSION_CHANGE.bundle.workflow;
+    for (const moved of [false, true]) {
+      const { commissionInputs } = keptLocal({ ...COMMIT, baseMoved: moved }).state['fixRound'] as {
+        commissionInputs: Record<string, unknown>;
+      };
+      for (const [id, value] of Object.entries(commissionInputs)) {
+        const declared = commission.runInputs?.find((input) => input.id === id);
+        expect(declared, id).toBeDefined();
+        const validate = new AjvCtor({ strict: false }).compile(declared?.schema ?? {});
+        expect(validate(value), `${id}=${String(value)}`).toBe(true);
+      }
+    }
+  });
+
+  it('records no fixRound where the branch was published', () => {
+    const outcome = publish({
+      pushApproval: 'unless-unreviewed',
+      review: 'approve',
+      decision: 'approved',
+      commit: { ...COMMIT, baseMoved: true },
+    });
+    expect(outcome.pushed).toBe(true);
+    expect(outcome.state['fixRound']).toBeUndefined();
+  });
+});
+
+describe('Publish Local Changes — a review retried in place records its final verdict', () => {
+  it('records approve where the review failed once and its retry in place approved', () => {
+    const outcome = publish({
+      pushApproval: 'unless-unreviewed',
+      review: 'failed',
+      reviewNow: 'approve',
+      decision: 'approved',
+    });
+    // The publication heard the first ending — no verdict — and asked.
+    expect(outcome.outputs.get('review-commit')?.['verdict']).toBeNull();
+    expect(outcome.asked).toBe(true);
+    // Its output carries the review run's verdict as the run stands: its final attempt.
+    expect(outcome.state['verdict']).toBe('approve');
+    expect(outcome.inputs.get('read-review')).toEqual({ runId: REVIEW_RUN_ID, compact: true });
+  });
+
+  it('records the verdict a first pass returned exactly as a retry that returned it', () => {
+    const first = publish({
+      pushApproval: 'unless-unreviewed',
+      review: 'approve',
+      decision: 'approved',
+    });
+    expect(first.state['verdict']).toBe('approve');
+  });
+
+  it('records no verdict where the review run has not completed', () => {
+    const outcome = publish({
+      pushApproval: 'unless-unreviewed',
+      review: 'failed',
+      decision: 'approved',
+    });
+    expect(outcome.state['verdict']).toBeNull();
+  });
+
+  it("reads the shepherd's verdict from the same task, which the run read re-projects from the review run", () => {
+    const review = taskOrThrow('review-commit');
+    // A retried review, read back through the publication's own projection.
+    const firstEnding = projectTaskOutput(review.outputProjection ?? {}, reviewEnding('failed'), {
+      inputs: { at: HEAD, from: ORIGIN_BASE },
+    });
+    expect(firstEnding.ok && firstEnding.value['outcome']).toBe('failed');
+    expect(failedChildRunOf(review, firstEnding.ok ? firstEnding.value : null)).toBe(REVIEW_RUN_ID);
+    const finalAttempt = taskOutputFromCompletedRun(
+      review,
+      firstEnding.ok ? firstEnding.value : {},
+      {
+        runId: REVIEW_RUN_ID,
+        result: { output: { verdict: 'approve', reviewSummary: 'Read.', findings: [] } } as never,
+      },
+      { inputs: { at: HEAD, from: ORIGIN_BASE } },
+    );
+    expect(finalAttempt).toMatchObject({
+      verdict: 'approve',
+      outcome: 'completed',
+      reviewRunId: REVIEW_RUN_ID,
+      reviewed: { at: HEAD },
+    });
   });
 });

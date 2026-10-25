@@ -88,6 +88,8 @@ export interface PatchCommit {
   readonly pushRange?: string;
   /** Where `origin/<pushBase>` stood: the first sha of `pushRange`, present exactly when it is. */
   readonly pushBaseSha?: string;
+  /** Whether `pushBaseSha` holds commits the commit does not; present exactly when it is. */
+  readonly baseMoved?: boolean;
   /** `<sha>:refs/heads/<branch>`: what a push of this commit sends. */
   readonly pushRefspec: string;
 }
@@ -341,6 +343,9 @@ export async function commitPatchOnBranch(
     const recorded = await recordedMessage(worktree, sha);
     const body = messageBody(recorded);
     await fetchFromClone(root, worktree, sha);
+    // Measured before the branch is set: once the ref has moved, a git failure
+    // here would fail a task whose branch already holds the commit.
+    const measure = await pushMeasure(root, pushBaseSha, sha);
     try {
       // Compare-and-swap on the old head: a branch that moved between the check
       // above and this line is refused here rather than overwritten.
@@ -369,7 +374,7 @@ export async function commitPatchOnBranch(
         appended: target.appended,
         ...(merge !== undefined ? { merged: merge.from } : {}),
         range: `${worktree.baseSha}..${sha}`,
-        ...(pushBaseSha !== undefined ? { pushRange: `${pushBaseSha}..${sha}`, pushBaseSha } : {}),
+        ...measure,
         pushRefspec: `${sha}:refs/heads/${branch}`,
       },
     };
@@ -377,6 +382,24 @@ export async function commitPatchOnBranch(
     if (worktree !== undefined) await removeWorktree(worktree.path);
     await rm(scratch, { recursive: true, force: true });
   }
+}
+
+/**
+ * What a push of `sha` adds over `origin/<pushBase>`, and whether that base
+ * moved past it — read in the folder, which holds both once the commit is in
+ * its object store.
+ */
+async function pushMeasure(
+  root: string,
+  pushBaseSha: string | undefined,
+  sha: string,
+): Promise<Pick<PatchCommit, 'pushRange' | 'pushBaseSha' | 'baseMoved'>> {
+  if (pushBaseSha === undefined) return {};
+  return {
+    pushRange: `${pushBaseSha}..${sha}`,
+    pushBaseSha,
+    baseMoved: !(await isAncestor(root, pushBaseSha, sha)),
+  };
 }
 
 /**
@@ -466,7 +489,7 @@ export async function branchAsItStands(
     appended: false,
     asItStands: true,
     range: `${parent}..${head}`,
-    ...(pushBaseSha !== undefined ? { pushRange: `${pushBaseSha}..${head}`, pushBaseSha } : {}),
+    ...(await pushMeasure(root, pushBaseSha, head)),
     pushRefspec: `${head}:refs/heads/${branch}`,
   };
 }

@@ -80,7 +80,8 @@ its outcome as it is marked done, and no firing commissions it (`wait`, `awaitin
 1. **Brief Helmsman**, one message, numbered. Part 1 is the commission: a run of the
    catalog's Commission Change started with `wait: 'none'` and the node's `planNodeId`, so
    the conversation stays free and the commission's end wakes it with `patchRef`,
-   `baseSha`, `merge` and `sessionRef`.
+   `baseSha`, `merge`, `sessionRef` and `summary` — a title line under 72 characters and
+   one paragraph the coding agent writes of its change, whatever the brief asks.
    Its inputs are the binding, the model, `base` (`origin/main` for new work; the branch's
    name for a fix appended to a branch — the local branch holding the earlier round's
    commit, whether that commit was pushed or kept local on `fix_before_merge` — with
@@ -104,7 +105,8 @@ its outcome as it is marked done, and no firing commissions it (`wait`, `awaitin
    only for non-obvious whys, copy in the system's voice, no shims, nothing written under
    `.aflow/` but the result file, and the agent starts or stops no process. Part 2 is the
    publication, started once the commission's end has woken the conversation: by
-   `patchRef`, `baseSha` the commission's, `mergeFrom` its `merge.from` where it merged, `base: main`, the branch, owner
+   `patchRef`, `baseSha` the commission's, `mergeFrom` its `merge.from` where it merged,
+   the commission's run id as `commission`, `base: main`, the branch, owner
    and repository, the findings of the review rounds before it as `findings` — each as the
    review named it, marked `closed` or `open` — and what the commissions reported they left
    undone or could not verify as `gaps`, started with `wait: 'none'` and the same
@@ -112,10 +114,21 @@ its outcome as it is marked done, and no firing commissions it (`wait`, `awaitin
    composed from the branch as a whole: the slice's title, the subject of its first commit,
    and a body of every commit's message, those findings with the publication's own review,
    the check's results and the gaps; a fix appended to the branch rewrites the body. A
-   `title` or `summary` is passed only to say it in the operator's own words.
+   `title` or `summary` is passed only to say it in the operator's own words. The commit is
+   made under the commission's `summary` — its title, a blank line, its paragraph — read
+   from the run of the commission on that folder that reported the `patchRef`; a
+   `commission` naming any other run is refused before anything is committed. Pass
+   `commitMessage` only to say it otherwise. A `patch` handed over, or a merge alone, has
+   no commission to take one from, and `workflow.run.start` refuses it without
+   `commitMessage` before the run exists. A commission whose coding agent wrote no valid
+   `summary` still returns its change, with `resultProblem` saying why; its publication
+   then takes `commitMessage`.
    For a branch that already has a pull request, name its number for the 422.
 2. **Read the review**: `workflow.run.detail` on the child review run gives the verdict and
-   every finding with file and line. Whether the findings want a fix round the publication
+   every finding with file and line. A review that failed and was retried in place counts by
+   its final attempt: the publication records the review run's verdict as it stands once the
+   push went or the branch stayed local, as `verdict`, and a `workflow.run.detail` read of the
+   publication's `review-commit` task re-reads it from the review run, marked `fromRun`. Whether the findings want a fix round the publication
    decides by the rounds rule, records, and gates its push on (Plan 315 D22).
    `settle-after-review` decides it by rules, with no model asked: a verdict short of
    `approve` is `fix_before_merge`; an `approve` over nits alone, or none, is
@@ -138,14 +151,18 @@ its outcome as it is marked done, and no firing commissions it (`wait`, `awaitin
 
    An override it cannot verify fails the run with nothing pushed. The fix
    round is the conversation's: on `fix_before_merge`,
-   once the publication has ended, commission the fix on the branch (`base: <branch>`, the
-   branch's name), briefed from every finding of the review run the publication names as
-   `reviewRunId`, whole, with its evidence. The branch already holds the earlier round's
+   once the publication has ended, its output names the round as `fixRound` — `branch`,
+   `headSha`, `baseMovedSince`, `reviewRunId`, `findings` and `commissionInputs`, the exact
+   Commission Change inputs: `base` the branch's name, plus `mergeFrom: origin/<base>` where
+   the base moved past it. Commission the fix with those, briefed from every finding of the
+   review run, whole, with its evidence. The branch already holds the earlier round's
    commit — on `fix_before_merge` only in the folder, unpushed — so its name resolves to
    that commit, the commission starts there, and its `baseSha` is the branch's head and its
    patch only the fix. Never brief a fix round from the earlier commission's `baseSha` or
-   from `origin/main`: that patch is the whole diff again, made against a commit the branch
-   has moved past, and the publication's commit refuses it on the branch's position. Then
+   from `origin/main`: a branch kept local is not on `origin`, so a checkout of `main`
+   cannot reach it and the commission comes back with no files changed; and a patch made
+   there is the whole diff again, which the publication's commit refuses on the branch's
+   position. Then
    publish the branch again — `patchRef` and `baseSha` the fix commission's, so the patch
    lands on the branch's head as one more commit and nothing is reset — passing the run's
    `findings`, with those the fix closed marked `closed`. That list is for the pull request's record

@@ -855,6 +855,50 @@ describe('Plan 301 — a declared run input a caller cannot pass', () => {
     expect(err?.detail).toContain('simulationId');
   });
 
+  it('refuses a requiredWhen that names an input no caller can pass, or sits on a required one', () => {
+    const condition = { anyGiven: ['seed'], noneGiven: ['ghost'], reason: 'r' };
+    const { validity } = materializeAndValidateSkillConfig(
+      skill([{ id: 'seed', required: false, requiredWhen: condition }] as never as {
+        id: string;
+        required: boolean;
+      }[]),
+    );
+    expect(validity.status).toBe('invalid');
+    const err = validity.diagnostics.find((d) => d.code === 'run_input_condition_incoherent');
+    // The detail names the part of the condition that is wrong, not one merged list.
+    expect(err?.detail).toBe(
+      "Run input 'seed' is required when any of [seed] is given and none of [ghost] is, but its " +
+        "`noneGiven` names [ghost], which is not a run input a caller can pass to entry task 'entry'.",
+    );
+    expect(err?.fixHint).toBe('Name in `noneGiven` only run inputs the entry task declares.');
+
+    const bothWrong = materializeAndValidateSkillConfig(
+      skill([
+        {
+          id: 'seed',
+          required: false,
+          requiredWhen: { anyGiven: ['phantom'], noneGiven: ['ghost', 'spectre'], reason: 'r' },
+        },
+      ] as never as { id: string; required: boolean }[]),
+    ).validity.diagnostics.find((d) => d.code === 'run_input_condition_incoherent');
+    expect(bothWrong?.detail).toContain(
+      'its `anyGiven` names [phantom], which is not a run input a caller can pass, and its ' +
+        '`noneGiven` names [ghost, spectre], which are not run inputs a caller can pass',
+    );
+    expect(bothWrong?.fixHint).toBe(
+      'Name in `anyGiven` and `noneGiven` only run inputs the entry task declares.',
+    );
+
+    const onRequired = materializeAndValidateSkillConfig(
+      skill([
+        { id: 'seed', required: true, requiredWhen: { ...condition, noneGiven: [] } },
+      ] as never as { id: string; required: boolean }[]),
+    ).validity;
+    expect(
+      onRequired.diagnostics.find((d) => d.code === 'run_input_condition_incoherent')?.detail,
+    ).toContain('only an optional input can carry');
+  });
+
   it('only advises when the slot is optional — the skill still runs without it', () => {
     const { validity } = materializeAndValidateSkillConfig(
       skill([

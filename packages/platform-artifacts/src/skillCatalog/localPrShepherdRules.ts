@@ -92,9 +92,11 @@ export const MERGE_RULES: readonly WorkflowRunDecideRule[] = [
     'state.publicationReview.reviewed.at != state.pr.data.headSha',
     "No publication's Local Code Review is on record for this head — no publication of the branch pushed it, which another hand did, or the publication that pushed it ran no review of it: the merge is the operator's.",
   ),
+  // `workflow.run.detail` reads a task that waited on a run from that run as
+  // it stands, so a review retried in place counts by its final attempt.
   greenAnd(
     "state.publicationReview.verdict != 'approve'",
-    "The Local Code Review of the publication that pushed this head did not return `approve`: the merge is the operator's.",
+    "The Local Code Review of the publication that pushed this head did not return `approve` — read from the review run itself, its final attempt where it was retried in place: the merge is the operator's.",
   ),
   {
     when: { expression: GREEN },

@@ -805,6 +805,41 @@ function appendRunInputReachabilityDiagnostics(
 
   const reachable = new Set(slots.map((s) => s.path.split('.')[0] ?? s.path));
 
+  // A condition naming an input no caller can pass never holds, or never
+  // lifts, so the start check enforces something other than what it says.
+  const declared = new Set(runInputs.map((r) => r.id));
+  for (const slot of runInputs) {
+    const condition = slot.requiredWhen;
+    if (condition === undefined) continue;
+    const passable = (id: string): boolean => declared.has(id) && reachable.has(id);
+    const wrongParts = (['anyGiven', 'noneGiven'] as const)
+      .map((part) => ({ part, unknown: condition[part].filter((id) => !passable(id)) }))
+      .filter(({ unknown }) => unknown.length > 0);
+    if (!slot.required && wrongParts.length === 0) continue;
+    const holds =
+      `required when any of [${condition.anyGiven.join(', ')}] is given` +
+      (condition.noneGiven.length > 0 ? ` and none of [${condition.noneGiven.join(', ')}] is` : '');
+    const wrong = wrongParts
+      .map(
+        ({ part, unknown }) =>
+          `its \`${part}\` names [${unknown.join(', ')}], which ` +
+          `${unknown.length === 1 ? 'is not a run input' : 'are not run inputs'} a caller can pass`,
+      )
+      .join(', and ');
+    out.push({
+      code: 'run_input_condition_incoherent',
+      dimension: 'graph',
+      severity: 'error',
+      taskId: entry.taskId,
+      detail: slot.required
+        ? `Run input '${slot.id}' is required and also declares \`requiredWhen\`, which only an optional input can carry.`
+        : `Run input '${slot.id}' is ${holds}, but ${wrong} to entry task '${entry.taskId}'.`,
+      fixHint: slot.required
+        ? `Declare '${slot.id}' with required: false, or drop its requiredWhen.`
+        : `Name in ${wrongParts.map(({ part }) => `\`${part}\``).join(' and ')} only run inputs the entry task declares.`,
+    });
+  }
+
   for (const slot of runInputs) {
     if (reachable.has(slot.id)) continue;
     out.push({

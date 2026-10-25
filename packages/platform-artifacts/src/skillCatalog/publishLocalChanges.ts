@@ -14,7 +14,15 @@ import {
   AFTER_REVIEW_VALUE,
   SETTLE_AFTER_REVIEW_TASK,
 } from './publishLocalChangesAfterReview.js';
+import { FIX_ROUND_TASKS, READ_REVIEW_TASK } from './publishLocalChangesFixRound.js';
 import { decidePushTask } from './publishLocalChangesGate.js';
+import {
+  COMMISSION_RUN_ID_SCHEMA,
+  COMMIT_MESSAGE_BINDINGS,
+  COMMIT_MESSAGE_REQUIRED_WHEN,
+  COMMIT_MESSAGE_VALUE,
+  commitMessageTasks,
+} from './publishLocalChangesMessage.js';
 import { overrideTasks } from './publishLocalChangesOverride.js';
 import {
   CHECK_FAILED,
@@ -208,9 +216,123 @@ const CHECK_INPUT_TEMPLATE = {
   base: { $bind: 'pushBaseSha' },
 };
 
+/** The run's whole input surface, which the entry task carries for the start to check against. */
+const ENTRY_INPUT_CONTRACT = {
+  bindings: {
+    bindingId: {
+      kind: 'run_input' as const,
+      bindAs: 'bindingId',
+      path: 'bindingId',
+      schema: { type: 'string', minLength: 1, maxLength: 128 },
+    },
+    patchRef: {
+      kind: 'run_input' as const,
+      bindAs: 'patchRef',
+      path: 'patchRef',
+      schema: PATCH_REF_SCHEMA,
+    },
+    commission: {
+      kind: 'run_input' as const,
+      bindAs: 'commission',
+      path: 'commission',
+      schema: COMMISSION_RUN_ID_SCHEMA,
+    },
+    patch: {
+      kind: 'run_input' as const,
+      bindAs: 'patch',
+      path: 'patch',
+      schema: PATCH_SCHEMA,
+    },
+    branch: {
+      kind: 'run_input' as const,
+      bindAs: 'branch',
+      path: 'branch',
+      schema: { type: 'string', minLength: 1, maxLength: 200 },
+    },
+    baseSha: {
+      kind: 'run_input' as const,
+      bindAs: 'baseSha',
+      path: 'baseSha',
+      schema: BASE_SHA_SCHEMA,
+    },
+    mergeFrom: {
+      kind: 'run_input' as const,
+      bindAs: 'mergeFrom',
+      path: 'mergeFrom',
+      schema: MERGE_FROM_SCHEMA,
+    },
+    commitMessage: {
+      kind: 'run_input' as const,
+      bindAs: 'commitMessage',
+      path: 'commitMessage',
+      schema: { type: 'string', minLength: 1, maxLength: 20_000 },
+    },
+    title: {
+      kind: 'run_input' as const,
+      bindAs: 'title',
+      path: 'title',
+      schema: TITLE_SCHEMA,
+    },
+    summary: {
+      kind: 'run_input' as const,
+      bindAs: 'summary',
+      path: 'summary',
+      schema: SUMMARY_SCHEMA,
+    },
+    findings: {
+      kind: 'run_input' as const,
+      bindAs: 'findings',
+      path: 'findings',
+      schema: FINDINGS_SCHEMA,
+    },
+    round: {
+      kind: 'run_input' as const,
+      bindAs: 'round',
+      path: 'round',
+      schema: ROUND_SCHEMA,
+    },
+    gaps: {
+      kind: 'run_input' as const,
+      bindAs: 'gaps',
+      path: 'gaps',
+      schema: GAPS_SCHEMA,
+    },
+    override: {
+      kind: 'run_input' as const,
+      bindAs: 'override',
+      path: 'override',
+      schema: OVERRIDE_SCHEMA,
+    },
+    reviewHarness: {
+      kind: 'run_input' as const,
+      bindAs: 'reviewHarness',
+      path: 'reviewHarness',
+      schema: REVIEW_HARNESS_SCHEMA,
+    },
+    owner: {
+      kind: 'run_input' as const,
+      bindAs: 'owner',
+      path: 'owner',
+      schema: OWNER_SCHEMA,
+    },
+    repo: {
+      kind: 'run_input' as const,
+      bindAs: 'repo',
+      path: 'repo',
+      schema: REPO_SCHEMA,
+    },
+    base: {
+      kind: 'run_input' as const,
+      bindAs: 'base',
+      path: 'base',
+      schema: { type: 'string', minLength: 1, maxLength: 200 },
+    },
+  },
+};
+
 const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'publish-local-changes',
-  version: 42,
+  version: 44,
   name: 'Publish Local Changes',
   tagline:
     'Commit a patch onto a branch of a connected repository, then push it and open the pull request — asking the operator first unless the folder says otherwise.',
@@ -294,12 +416,20 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           schema: MERGE_FROM_SCHEMA,
         },
         {
-          id: 'commitMessage',
-          // Absent only for a branch published as it stands, whose head
-          // carries its own; the commit refuses any other change without one.
+          id: 'commission',
           required: false,
           description:
-            "The commit message, required with every change: a subject line saying what this round changes, then a blank line and what it does and why — the commission's own account of the change. The pull request's body carries it beside every other commit's on the branch, and the subject of a new branch's first commit is the pull request's title. Left out for a branch published as it stands, whose head keeps its own.",
+            'The run id of the Commission Change that made the change, beside its `patchRef`. The commit carries the `summary` — a title line and one paragraph — of the commission on this folder that reported the `patchRef`, found by it with or without this id; a run id naming any other run is refused, and nothing is committed. Left out for a diff the operator hands over, which takes `commitMessage`.',
+          schema: COMMISSION_RUN_ID_SCHEMA,
+        },
+        {
+          id: 'commitMessage',
+          required: false,
+          // A diff handed over or a merge alone has no commission to take a
+          // message from, so the start refuses it without one.
+          requiredWhen: COMMIT_MESSAGE_REQUIRED_WHEN,
+          description:
+            "The commit message, only to say it otherwise than the commission's `summary`, which a change published by its `patchRef` is committed under: a title line under 72 characters, a blank line, then what it does and why. Required for a `patch` or a merge alone. The pull request's body carries it, and a new branch's first subject is its title. Left out for a branch as it stands.",
           schema: { type: 'string', minLength: 1, maxLength: 20_000 },
         },
         {
@@ -373,12 +503,15 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
         },
       ],
       tasks: [
+        ...commitMessageTasks(ENTRY_INPUT_CONTRACT),
+
         {
           taskId: 'commit',
           name: 'Commit the patch on its branch',
-          goal: "Apply the patch in a detached worktree and commit it — on a new branch at the commit the patch was made against (the connected folder's last commit when none is given), or on top of the existing branch it was made on — after fetching the base branch from `origin`, so the commit reports everything a push of it would add. With no change given, commit nothing and report the branch's head as it stands. The operator's working tree is not touched, and nothing leaves the machine.",
+          goal: "Apply the patch in a detached worktree and commit it, under the caller's message or the commission's summary — on a new branch at the commit the patch was made against (the connected folder's last commit when none is given), or on top of the existing branch it was made on — after fetching the base branch from `origin`, so the commit reports everything a push of it would add. With no change given, commit nothing and report the branch's head as it stands. The operator's working tree is not touched, and nothing leaves the machine.",
           type: 'operation' as const,
           operation: 'host.file.patch',
+          dependsOn: ['message-from', 'find-commission', 'read-commission'],
           retryability: 'unsafe' as const,
           inputBindings: {
             bindingId: { kind: 'run_input' as const, path: 'bindingId' },
@@ -387,118 +520,8 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             branch: { kind: 'run_input' as const, path: 'branch' },
             baseSha: { kind: 'run_input' as const, path: 'baseSha' },
             mergeFrom: { kind: 'run_input' as const, path: 'mergeFrom' },
-            commitMessage: { kind: 'run_input' as const, path: 'commitMessage' },
+            ...COMMIT_MESSAGE_BINDINGS,
             base: { kind: 'run_input' as const, path: 'base' },
-          },
-          // Every run input is declared here, including the ones only the
-          // later tasks read: start-time validation checks the caller's inputs
-          // against the ENTRY task's surface, and a slot missing from it is
-          // refused rather than passed on.
-          inputContract: {
-            bindings: {
-              bindingId: {
-                kind: 'run_input' as const,
-                bindAs: 'bindingId',
-                path: 'bindingId',
-                schema: { type: 'string', minLength: 1, maxLength: 128 },
-              },
-              patchRef: {
-                kind: 'run_input' as const,
-                bindAs: 'patchRef',
-                path: 'patchRef',
-                schema: PATCH_REF_SCHEMA,
-              },
-              patch: {
-                kind: 'run_input' as const,
-                bindAs: 'patch',
-                path: 'patch',
-                schema: PATCH_SCHEMA,
-              },
-              branch: {
-                kind: 'run_input' as const,
-                bindAs: 'branch',
-                path: 'branch',
-                schema: { type: 'string', minLength: 1, maxLength: 200 },
-              },
-              baseSha: {
-                kind: 'run_input' as const,
-                bindAs: 'baseSha',
-                path: 'baseSha',
-                schema: BASE_SHA_SCHEMA,
-              },
-              mergeFrom: {
-                kind: 'run_input' as const,
-                bindAs: 'mergeFrom',
-                path: 'mergeFrom',
-                schema: MERGE_FROM_SCHEMA,
-              },
-              commitMessage: {
-                kind: 'run_input' as const,
-                bindAs: 'commitMessage',
-                path: 'commitMessage',
-                schema: { type: 'string', minLength: 1, maxLength: 20_000 },
-              },
-              title: {
-                kind: 'run_input' as const,
-                bindAs: 'title',
-                path: 'title',
-                schema: TITLE_SCHEMA,
-              },
-              summary: {
-                kind: 'run_input' as const,
-                bindAs: 'summary',
-                path: 'summary',
-                schema: SUMMARY_SCHEMA,
-              },
-              findings: {
-                kind: 'run_input' as const,
-                bindAs: 'findings',
-                path: 'findings',
-                schema: FINDINGS_SCHEMA,
-              },
-              round: {
-                kind: 'run_input' as const,
-                bindAs: 'round',
-                path: 'round',
-                schema: ROUND_SCHEMA,
-              },
-              gaps: {
-                kind: 'run_input' as const,
-                bindAs: 'gaps',
-                path: 'gaps',
-                schema: GAPS_SCHEMA,
-              },
-              override: {
-                kind: 'run_input' as const,
-                bindAs: 'override',
-                path: 'override',
-                schema: OVERRIDE_SCHEMA,
-              },
-              reviewHarness: {
-                kind: 'run_input' as const,
-                bindAs: 'reviewHarness',
-                path: 'reviewHarness',
-                schema: REVIEW_HARNESS_SCHEMA,
-              },
-              owner: {
-                kind: 'run_input' as const,
-                bindAs: 'owner',
-                path: 'owner',
-                schema: OWNER_SCHEMA,
-              },
-              repo: {
-                kind: 'run_input' as const,
-                bindAs: 'repo',
-                path: 'repo',
-                schema: REPO_SCHEMA,
-              },
-              base: {
-                kind: 'run_input' as const,
-                bindAs: 'base',
-                path: 'base',
-                schema: { type: 'string', minLength: 1, maxLength: 200 },
-              },
-            },
           },
           context: {
             strategy: 'scoped' as const,
@@ -516,7 +539,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             mode: 'clean',
             commit: {
               branch: { $bind: 'branch' },
-              message: { $bind: 'commitMessage' },
+              message: COMMIT_MESSAGE_VALUE,
               baseSha: { $bind: 'baseSha' },
               mergeFrom: { $bind: 'mergeFrom' },
               // The push sends every ancestor `origin` lacks, not this commit
@@ -873,7 +896,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
                   description:
                     'How the review run ended: completed, failed or cancelled — or paused, when it stopped for something only an operator can supply and was cancelled.',
                 },
-                reviewRunId: { type: 'string', minLength: 1 },
+                reviewRunId: { type: 'string', format: 'uuid' },
               },
             },
           },
@@ -974,6 +997,8 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
         },
 
         decidePushTask(CHECKS_CLEARED),
+
+        ...FIX_ROUND_TASKS,
 
         {
           taskId: 'approve-push',
@@ -1296,6 +1321,8 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             { kind: 'output_path' as const, path: 'prNumber', toState: 'prNumber' },
           ],
         },
+
+        READ_REVIEW_TASK,
       ],
       stateVariables: [
         {
@@ -1321,7 +1348,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           variableId: 'afterReview',
           name: 'After the review',
           description:
-            "What the rounds rule decided about the review's findings, as the pull request records it, and what the push gate followed: fix_before_merge — nothing pushed, the branch kept local — for a verdict short of approve, or a minor or worse in round 1; publish_as_is — pushed, asking only over a blocker or a major — for nits alone, or after round 1. Null where the review did not finish. On fix_before_merge the fix round, the conversation's or the shepherd's, takes `base` the branch's name.",
+            "What the rounds rule decided about the review's findings, as the pull request records it, and what the push gate followed: fix_before_merge — nothing pushed, the branch kept local — for a verdict short of approve, or a minor or worse in round 1; publish_as_is — pushed, asking only over a blocker or a major — for nits alone, or after round 1. Null where the review did not finish. On fix_before_merge the fix round, the conversation's or the shepherd's, takes `fixRound`.",
           required: false,
           sensitive: false,
           immutable: false,
@@ -1396,11 +1423,30 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           sensitive: false,
           immutable: false,
         },
+        {
+          variableId: 'verdict',
+          name: 'Review verdict',
+          description:
+            "What this publication's review returned — approve, request_changes or comment — read from the review run as it stands once the push went or the branch stayed local, so a review retried in place counts by its final attempt. Null where the review did not complete.",
+          required: false,
+          sensitive: false,
+          immutable: false,
+        },
+        {
+          variableId: 'fixRound',
+          name: 'Fix round',
+          description:
+            "On fix_before_merge, what the fix round takes: `branch`, kept on the machine; `headSha`, its head; `baseMovedSince`, whether `origin`'s base moved past it; `reviewRunId`, the run the round is briefed from; `findings`, the open ones; and `commissionInputs`, the exact Commission Change inputs — `base` the branch, with `mergeFrom: origin/<base>` where the base moved. Never base it on `origin/main`: the branch is not there.",
+          required: false,
+          sensitive: false,
+          immutable: false,
+          writers: 'alternatives' as const,
+        },
       ],
       output: {
         primary: 'prUrl',
         guidance:
-          'prUrl and prNumber are the branch’s pull request: report the link. pushDecision and pushReason say whether the push went, asked or stayed local. Follow afterReview: on fix_before_merge nothing was pushed — commission the fix with base the branch’s name, never the earlier baseSha, from the reviewRunId run, then publish its patchRef and baseSha with findings and the next round; only a verified override sets it aside. Absent prUrl otherwise, the run kept local or failed: its account says why.',
+          'prUrl and prNumber are the branch’s pull request: report the link, pushReason and verdict. On afterReview fix_before_merge nothing was pushed: start Commission Change with fixRound.commissionInputs as they stand — never base origin/main, which lacks the branch — briefed from the fixRound.reviewRunId run, then publish its patchRef, baseSha and run id with fixRound.findings and the next round. Absent prUrl otherwise, the run kept local or failed: its account says why.',
       },
       iteration: { auto: false, maxConsecutiveRuns: 1, stopOnOutcomesMet: true, cooldownMs: 0 },
     },
@@ -1441,7 +1487,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
       priority: 50,
     },
     rationale:
-      "Twenty-two tasks, the approval between local and published. The commit lands in a detached worktree; host.commit.check runs checks; test timeouts alone rerun, other failures workflow.run.fail. host.commit.scan reads all a push adds; a finding fails the run. Under unless-unreviewed a Local Code Review runs; the rounds rule decides: not approve is fix_before_merge; approve is publish_as_is over nits or past round 1, else fix_before_merge. An override is verified — label and shepherd record on GitHub, the operator's word at the approval — or fails the run. decide-push, by rules, gates the push: uncleared scan or always asks, never pushes; fix_before_merge keeps the branch local; publish_as_is pushes, asking over a blocker, major or the operator's word. No task starts a publication. Push argv pinned bar the refspec; the executor re-measures origin/<base>, needs a passed check receipt and sends an uncleared range only on this run's grant; an open PR is PATCHed.",
+      "Twenty-eight tasks, the approval between local and published. The message is the caller's, or the commission's summary read from its run. The commit lands in a detached worktree; checks run, test timeouts alone rerun; the scan reads all a push adds, a finding fails the run. Under unless-unreviewed a Local Code Review runs; the rounds rule decides: not approve is fix_before_merge; approve is publish_as_is over nits or past round 1, else fix_before_merge. An override is verified on GitHub or at the approval, or fails the run. decide-push gates the push by rules: uncleared scan or always asks, never pushes; fix_before_merge keeps the branch local and hands fixRound its commission inputs; publish_as_is pushes, asking over a blocker, major or the operator's word. The verdict is reread from the review run. No task starts a publication. Push argv pinned bar the refspec; the executor re-measures origin/<base> and needs the check receipt; an open PR is PATCHed.",
   },
 };
 

@@ -20,6 +20,22 @@ const mockListActiveRunsForWorkflow = vi.fn();
 const mockResolveWorkflowForStart = vi.fn();
 const mockGetTaskRow = vi.fn();
 
+const mockCompletedRunResult = vi.fn();
+
+/** A completed run's result, as `completedRunResult` reads it: the run row and nothing more. */
+async function completedRunResultOf(
+  _deps: unknown,
+  tenantId: string,
+  spaceId: string,
+  runId: string,
+): Promise<{ result: unknown } | undefined> {
+  const run = (await mockLoadRunById(undefined, tenantId, spaceId, runId)) as {
+    status: string;
+    result?: unknown;
+  } | null;
+  return run?.status === 'completed' ? { result: run.result } : undefined;
+}
+
 async function mockBuildWorkflowRunDetail(
   _db: unknown,
   _payloadStore: unknown,
@@ -98,72 +114,84 @@ async function mockBuildWorkflowRunDetail(
     )) as { contract: unknown } | null;
     if (surfaced) output.resumeContract = surfaced.contract;
   }
+  // The run's result as `buildWorkflowRunResult` derives it from its task rows.
+  if (run['result'] !== undefined) output.result = run['result'];
   return output;
 }
 
-vi.mock('@aflow/cybernetic-runtime', () => ({
-  loadRunById: (...args: unknown[]) => mockLoadRunById(...args),
-  loadPendingWaiters: (...args: unknown[]) => mockLoadPendingWaiters(...args),
-  listAttentionForConversation: (...args: unknown[]) => mockListAttentionForConversation(...args),
-  deriveSuggestedNextCallForPausedRun: () => Promise.resolve(null),
-  surfaceWorkflowResumeContract: (...args: unknown[]) => mockSurfaceWorkflowResumeContract(...args),
-  buildWorkflowRunDetail: (...args: Parameters<typeof mockBuildWorkflowRunDetail>) =>
-    mockBuildWorkflowRunDetail(...args),
-  cancelNonTerminalTasksForRun: (...args: unknown[]) => mockCancelNonTerminalTasksForRun(...args),
-  listCompletionPendingForRun: (...args: unknown[]) => mockListCompletionPendingForRun(...args),
-  clearAllCompletionPendingForRun: (...args: unknown[]) =>
-    mockClearAllCompletionPendingForRun(...args),
-  // No task of the cancelled run started one of its own.
-  loadParkedStepWaitersForSession: vi.fn().mockResolvedValue([]),
-  completeRun: (...args: unknown[]) => mockCompleteRun(...args),
-  addAttentionItem: (...args: unknown[]) => mockAddAttentionItem(...args),
-  // Other exports used at module load — return safe defaults.
-  pauseRun: vi.fn(),
-  resumeRun: vi.fn(),
-  recoverStalledRun: vi.fn(),
-  recordTaskResult: vi.fn(),
-  updateRunMetadata: vi.fn(),
-  recordRunStart: vi.fn(),
-  WorkflowArchivedError: class extends Error {},
-  isCyberneticSpace: vi.fn(),
-  cyberneticHookSafe: vi.fn(),
-  triggerCoachReview: vi.fn(),
-  runEvaluation: vi.fn(),
-  listActiveRuns: vi.fn(),
-  listActiveRunsForWorkflow: (...args: unknown[]) => mockListActiveRunsForWorkflow(...args),
-  listActiveRunsForWorkflowWithLiveness: vi.fn().mockResolvedValue([]),
-  deriveRunLivenessFromCounts: () => 'idle',
-  listRecentRuns: (...args: unknown[]) => mockListRecentRuns(...args),
-  listTaskRows: vi.fn(),
-  getTaskRow: (...args: unknown[]) => mockGetTaskRow(...args),
-  getRunStatistics: (...args: unknown[]) => mockGetRunStatistics(...args),
-  selectActiveLearningSetForSkill: (...args: unknown[]) =>
-    mockSelectActiveLearningSetForSkill(...args),
-  ensureCurrentSkillValidity: vi.fn(() => ({ status: 'valid', diagnostics: [] })),
-  deriveFirstTaskInputContract: vi.fn(() => null),
-  resolveSkillForWorkflow: vi.fn(async () => null),
-  deriveCampaignContractJsonSchema: vi.fn(),
-  resolveBestScoreForWorkflow: vi.fn(),
-  onSkillRunCompleted: vi.fn(),
-  validateWorkflowGraph: vi.fn(),
-  patchTouchesGraph: vi.fn(),
-  deriveRunLiveness: vi.fn(),
-  claimResumeLease: vi.fn(),
-  releaseResumeClaim: vi.fn(),
-  resumeRunWithClaim: vi.fn(),
-  bumpResumeAttemptCount: vi.fn(),
-  commitReplaceOutputAndResume: vi.fn(),
-  addWaiter: vi.fn(),
-  markWaiterNotified: vi.fn(),
-  computeReadyTasksWithWhen: vi.fn(),
-  claimAndSchedule: vi.fn(),
-  claimHumanTask: vi.fn(),
-  casCompleteTask: vi.fn(),
-  clearCompletionPending: vi.fn(),
-  recordTaskSkipped: vi.fn(),
-  blockDescendantTasks: vi.fn(),
-  computeDescendants: vi.fn(),
-}));
+vi.mock('@aflow/cybernetic-runtime', async () => {
+  const actual = await vi.importActual<typeof import('@aflow/cybernetic-runtime')>(
+    '@aflow/cybernetic-runtime',
+  );
+  return {
+    // Pure: how a task that waited on a run reads that run as it stands.
+    failedChildRunOf: actual.failedChildRunOf,
+    taskOutputFromCompletedRun: actual.taskOutputFromCompletedRun,
+    loadRunById: (...args: unknown[]) => mockLoadRunById(...args),
+    loadPendingWaiters: (...args: unknown[]) => mockLoadPendingWaiters(...args),
+    listAttentionForConversation: (...args: unknown[]) => mockListAttentionForConversation(...args),
+    deriveSuggestedNextCallForPausedRun: () => Promise.resolve(null),
+    surfaceWorkflowResumeContract: (...args: unknown[]) =>
+      mockSurfaceWorkflowResumeContract(...args),
+    buildWorkflowRunDetail: (...args: Parameters<typeof mockBuildWorkflowRunDetail>) =>
+      mockBuildWorkflowRunDetail(...args),
+    completedRunResult: (...args: unknown[]) => mockCompletedRunResult(...args),
+    cancelNonTerminalTasksForRun: (...args: unknown[]) => mockCancelNonTerminalTasksForRun(...args),
+    listCompletionPendingForRun: (...args: unknown[]) => mockListCompletionPendingForRun(...args),
+    clearAllCompletionPendingForRun: (...args: unknown[]) =>
+      mockClearAllCompletionPendingForRun(...args),
+    // No task of the cancelled run started one of its own.
+    loadParkedStepWaitersForSession: vi.fn().mockResolvedValue([]),
+    completeRun: (...args: unknown[]) => mockCompleteRun(...args),
+    addAttentionItem: (...args: unknown[]) => mockAddAttentionItem(...args),
+    // Other exports used at module load — return safe defaults.
+    pauseRun: vi.fn(),
+    resumeRun: vi.fn(),
+    recoverStalledRun: vi.fn(),
+    recordTaskResult: vi.fn(),
+    updateRunMetadata: vi.fn(),
+    recordRunStart: vi.fn(),
+    WorkflowArchivedError: class extends Error {},
+    isCyberneticSpace: vi.fn(),
+    cyberneticHookSafe: vi.fn(),
+    triggerCoachReview: vi.fn(),
+    runEvaluation: vi.fn(),
+    listActiveRuns: vi.fn(),
+    listActiveRunsForWorkflow: (...args: unknown[]) => mockListActiveRunsForWorkflow(...args),
+    listActiveRunsForWorkflowWithLiveness: vi.fn().mockResolvedValue([]),
+    deriveRunLivenessFromCounts: () => 'idle',
+    listRecentRuns: (...args: unknown[]) => mockListRecentRuns(...args),
+    listTaskRows: vi.fn(),
+    getTaskRow: (...args: unknown[]) => mockGetTaskRow(...args),
+    getRunStatistics: (...args: unknown[]) => mockGetRunStatistics(...args),
+    selectActiveLearningSetForSkill: (...args: unknown[]) =>
+      mockSelectActiveLearningSetForSkill(...args),
+    ensureCurrentSkillValidity: vi.fn(() => ({ status: 'valid', diagnostics: [] })),
+    deriveFirstTaskInputContract: vi.fn(() => null),
+    resolveSkillForWorkflow: vi.fn(async () => null),
+    deriveCampaignContractJsonSchema: vi.fn(),
+    resolveBestScoreForWorkflow: vi.fn(),
+    onSkillRunCompleted: vi.fn(),
+    validateWorkflowGraph: vi.fn(),
+    patchTouchesGraph: vi.fn(),
+    deriveRunLiveness: vi.fn(),
+    claimResumeLease: vi.fn(),
+    releaseResumeClaim: vi.fn(),
+    resumeRunWithClaim: vi.fn(),
+    bumpResumeAttemptCount: vi.fn(),
+    commitReplaceOutputAndResume: vi.fn(),
+    addWaiter: vi.fn(),
+    markWaiterNotified: vi.fn(),
+    computeReadyTasksWithWhen: vi.fn(),
+    claimAndSchedule: vi.fn(),
+    claimHumanTask: vi.fn(),
+    casCompleteTask: vi.fn(),
+    clearCompletionPending: vi.fn(),
+    recordTaskSkipped: vi.fn(),
+    blockDescendantTasks: vi.fn(),
+    computeDescendants: vi.fn(),
+  };
+});
 
 vi.mock('@aflow/database', async () => {
   const actual = await vi.importActual<typeof import('@aflow/database')>('@aflow/database');
@@ -226,6 +254,8 @@ vi.mock('../../../../lib/orchestratorLogger.js', () => ({
 }));
 
 // Has to import AFTER the mocks above.
+import { resolveWorkflowForRunRevision } from '@aflow/database';
+import { getSkillCatalogEntry } from '@aflow/platform-artifacts';
 import { handleWorkflowCrudInline } from '../workflowCrud.js';
 
 const TENANT = 'a0000000-0000-0000-0000-000000000001';
@@ -909,6 +939,116 @@ describe('workflow.run.detail — one task’s output on request (Plan 313 gap 1
 
     expect(mockGetTaskRow).not.toHaveBeenCalled();
     expect(output.taskOutput).toBeUndefined();
+  });
+});
+
+describe('workflow.run.detail — a task that waited on a run reads it by its final attempt', () => {
+  const publication = getSkillCatalogEntry('publish-local-changes')!.bundle.workflow;
+  const REVIEW_RUN_ID = '22222222-3333-4444-5555-666666666666';
+  const OUTPUT_REF = 'gs://bucket/review-commit-output.json';
+  const INPUT_REF = 'gs://bucket/review-commit-input.json';
+  const HEAD = 'c'.repeat(40);
+  const ORIGIN_BASE = 'e'.repeat(40);
+  const reviewed = { bindingId: 'folder-1', from: ORIGIN_BASE, at: HEAD, depth: 'standard' };
+  /** What the publication's review task recorded when its review run first ended: failed. */
+  const firstEnding = {
+    verdict: null,
+    reviewSummary: null,
+    findings: null,
+    outcome: 'failed',
+    reviewRunId: REVIEW_RUN_ID,
+    reviewed,
+  };
+  const payloads = {
+    [OUTPUT_REF]: firstEnding,
+    [INPUT_REF]: { slug: 'review-local-changes', inputs: reviewed, wait: 'until_complete' },
+  };
+
+  function publicationRun() {
+    return makeRun({
+      workflowSlug: publication.slug,
+      status: 'completed',
+      tasks: [makeTaskRow({ taskId: 'review-commit', status: 'succeeded' })],
+    });
+  }
+
+  function reviewRun(status: string, result?: Record<string, unknown>) {
+    return makeRun({
+      runId: REVIEW_RUN_ID,
+      workflowSlug: 'review-local-changes',
+      status,
+      tasks: [makeTaskRow({ runId: REVIEW_RUN_ID, taskId: 'review', status, attempt: 2 })],
+      ...(result !== undefined ? { result } : {}),
+    });
+  }
+
+  async function readReviewTask(review: ReturnType<typeof makeRun>) {
+    mockLoadRunById.mockImplementation((_db: unknown, _t: string, _s: string, runId: string) =>
+      Promise.resolve(runId === REVIEW_RUN_ID ? review : publicationRun()),
+    );
+    mockLoadPendingWaiters.mockResolvedValue([]);
+    mockCompletedRunResult.mockImplementation(completedRunResultOf);
+    vi.mocked(resolveWorkflowForRunRevision).mockResolvedValue({
+      workflow: publication as never,
+      source: 'platform',
+    });
+    mockGetTaskRow.mockResolvedValueOnce(
+      makeTaskRow({ taskId: 'review-commit', outputRef: OUTPUT_REF, inputRef: INPUT_REF }),
+    );
+    await handleWorkflowCrudInline(
+      makeArgs('workflow.run.detail', { runId: RUN_ID, taskOutput: 'review-commit' }, payloads),
+    );
+    const result = mockAddStepResult.mock.calls[0]![1] as { status: string; outputRef: string };
+    expect(result.status).toBe('SUCCEEDED');
+    return (
+      JSON.parse(
+        Buffer.from(result.outputRef.slice('inline:'.length), 'base64').toString('utf8'),
+      ) as { taskOutput: Record<string, unknown> }
+    ).taskOutput;
+  }
+
+  it('reads the approve a review retried in place returned, as a first pass that approved records it', async () => {
+    const taskOutput = await readReviewTask(
+      reviewRun('completed', {
+        output: { verdict: 'approve', reviewSummary: 'Read the range.', findings: [] },
+      }),
+    );
+
+    expect(taskOutput).toEqual({
+      taskId: 'review-commit',
+      output: {
+        verdict: 'approve',
+        reviewSummary: 'Read the range.',
+        findings: [],
+        outcome: 'completed',
+        reviewRunId: REVIEW_RUN_ID,
+        reviewed,
+      },
+      fromRun: { runId: REVIEW_RUN_ID, status: 'completed' },
+    });
+  });
+
+  it('keeps what the task recorded while the run has not completed since', async () => {
+    for (const status of ['failed', 'running']) {
+      mockAddStepResult.mockClear();
+      const taskOutput = await readReviewTask(reviewRun(status));
+      expect(taskOutput, status).toEqual({ taskId: 'review-commit', output: firstEnding });
+    }
+  });
+
+  it('reads only the result of the run it waited on, never that run’s whole detail', async () => {
+    mockCompletedRunResult.mockClear();
+    await readReviewTask(reviewRun('completed', { output: { verdict: 'approve' } }));
+    expect(mockCompletedRunResult).toHaveBeenCalledTimes(1);
+    expect(mockCompletedRunResult.mock.calls[0]?.[3]).toBe(REVIEW_RUN_ID);
+  });
+
+  it('keeps what the task recorded, and the read succeeds, where reading the run it waited on fails', async () => {
+    mockCompletedRunResult.mockRejectedValueOnce(new Error('connection reset'));
+    const taskOutput = await readReviewTask(
+      reviewRun('completed', { output: { verdict: 'approve' } }),
+    );
+    expect(taskOutput).toEqual({ taskId: 'review-commit', output: firstEnding });
   });
 });
 

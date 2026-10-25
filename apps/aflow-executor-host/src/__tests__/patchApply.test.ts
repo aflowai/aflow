@@ -797,6 +797,8 @@ describe('measuring what a push of the commit would add', () => {
     expect(commit?.['range']).toBe(`${unpushed}..${sha}`);
     expect(commit?.['pushRange']).toBe(`${pushed}..${sha}`);
     expect(commit?.['pushBaseSha']).toBe(pushed);
+    // `origin` holds nothing the commit does not: the base has not moved past it.
+    expect(commit?.['baseMoved']).toBe(false);
     const carried = (await git(root, 'rev-list', String(commit?.['pushRange'])))
       .split('\n')
       .filter((line) => line !== '');
@@ -834,6 +836,8 @@ describe('measuring what a push of the commit would add', () => {
     const { result, commit } = await publish({ pushBase: 'main' });
     expect(result.status).toBe('SUCCEEDED');
     expect(commit?.['pushRange']).toBe(`${now}..${String(commit?.['sha'])}`);
+    // The commit was cut before `origin` gained `now`: the base moved past it.
+    expect(commit?.['baseMoved']).toBe(true);
   }, 30_000);
 
   it("reads the fetch's own result where the remote's refspec does not map the base", async () => {
@@ -871,6 +875,7 @@ describe('measuring what a push of the commit would add', () => {
     expect(result.status).toBe('SUCCEEDED');
     expect(commit?.['pushRange']).toBeUndefined();
     expect(commit?.['pushBaseSha']).toBeUndefined();
+    expect(commit).not.toHaveProperty('baseMoved');
   }, 30_000);
 
   describe('a branch of the same name on another remote', () => {
@@ -1122,6 +1127,7 @@ describe('measuring what a push of the commit would add', () => {
         appended: false,
         pushBaseSha: pushedBase,
         pushRange: `${pushedBase}..${sha}`,
+        baseMoved: false,
         pushRefspec: `${sha}:refs/heads/aflow/x`,
       });
       // Nothing was made: the branch is where it was.

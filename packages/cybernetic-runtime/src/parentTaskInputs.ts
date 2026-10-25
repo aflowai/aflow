@@ -268,6 +268,30 @@ export function validateParentTaskInputs(
     }
   }
 
+  // Pass 1b — an optional slot the inputs given make required after all
+  // (`runInputs[].requiredWhen`), refused here for the same reason as pass 1.
+  const givenRunInputIds = new Set(
+    slots
+      .filter((slot) => Object.prototype.hasOwnProperty.call(inputs, slot.bindAs))
+      .map((slot) => runInputIdOf(slot.path)),
+  );
+  for (const slot of slots) {
+    if (slot.required || Object.prototype.hasOwnProperty.call(inputs, slot.bindAs)) continue;
+    const condition = (runInputs ?? []).find((r) => r.id === runInputIdOf(slot.path))?.requiredWhen;
+    if (condition === undefined) continue;
+    const given = condition.anyGiven.filter((id) => givenRunInputIds.has(id));
+    if (given.length === 0 || condition.noneGiven.some((id) => givenRunInputIds.has(id))) continue;
+    issues.push({
+      bindAs: slot.bindAs,
+      code: 'MISSING_BINDAS',
+      detail:
+        `"${slot.bindAs}" is required on task "${firstTask.taskId}" when [${given.join(', ')}] ` +
+        `${given.length === 1 ? 'is' : 'are'} given` +
+        (condition.noneGiven.length > 0 ? ` and none of [${condition.noneGiven.join(', ')}]` : '') +
+        `: ${condition.reason}`,
+    });
+  }
+
   // Pass 2 — validate the keys the parent did provide. Unknown/wrong-kind checks
   // require a declared binding surface to blame against; the `inputBindings`-only
   // path validates against its own run-input slots (any extra key is unknown).
@@ -337,9 +361,13 @@ export function validateParentTaskInputs(
  * `prNumber`) without forcing every caller to supply it in the common path.
  */
 function isRunInputRequired(runInputs: Workflow['runInputs'] | undefined, path: string): boolean {
-  const id = path.split('.')[0] ?? path;
+  const id = runInputIdOf(path);
   const decl = (runInputs ?? []).find((r) => r.id === id);
   return decl ? decl.required : true;
+}
+
+function runInputIdOf(path: string): string {
+  return path.split('.')[0] ?? path;
 }
 
 export function deriveFirstTaskInputContract(
