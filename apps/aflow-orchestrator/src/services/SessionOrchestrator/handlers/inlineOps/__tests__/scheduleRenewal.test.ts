@@ -4,10 +4,14 @@ import RedisMock from 'ioredis-mock';
 import type { Redis } from 'ioredis';
 import type { AgentScheduleRow, NewAgentScheduleRow } from '@aflow/database';
 import {
+  AgentDefinitionSchema,
   MAX_FIRINGS_CAP,
   SCHEDULE_RENEWAL_WINDOW,
   StepResultMessageSchema,
+  skillStarterAgentDefinition,
+  type AgentDefinition,
   type IdempotencyKey,
+  type PersistentAgentTarget,
   type RunAccessGrant,
   type SessionId,
   type StepDefinition,
@@ -144,6 +148,8 @@ function memoryTable(rows: AgentScheduleRow[]) {
 const harness = vi.hoisted(() => ({
   store: undefined as ScheduleRenewalStore | undefined,
   anchorGrant: undefined as RunAccessGrant | undefined,
+  /** The agent's published versions, oldest first. */
+  versions: new Map<string, AgentDefinition>(),
 }));
 
 vi.mock('@aflow/database', async (importOriginal) => {
@@ -153,6 +159,20 @@ vi.mock('@aflow/database', async (importOriginal) => {
     getDatabase: () => ({}),
     withTenantSchema: (_db: unknown, _ctx: unknown, fn: (tx: unknown) => Promise<unknown>) =>
       fn({}),
+    loadAgentTargetDefinition: (
+      _db: unknown,
+      _tenantId: string,
+      target: PersistentAgentTarget,
+      requested = 'latest',
+    ) => {
+      if (target.kind !== 'custom-agent') throw new Error('only the shepherd is published here');
+      const version = requested === 'latest' ? [...harness.versions.keys()].at(-1) : requested;
+      const definition = version === undefined ? undefined : harness.versions.get(version);
+      if (version === undefined || !definition) {
+        throw new actual.VersionNotFoundError(target.agentId, requested);
+      }
+      return Promise.resolve({ target, definition, version, isPlatform: false });
+    },
   };
 });
 
@@ -183,11 +203,33 @@ vi.mock('../scheduleRenewal.js', async (importOriginal) => {
 
 const { renewSchedule, scheduleSuccessorId } = await import('../scheduleRenewal.js');
 const { handleScheduleCrudInline } = await import('../scheduleCrud.js');
+const { scheduleConfigProblem } = await import('../scheduleTargetConfig.js');
+
+/** Version 1 of the shepherd agent predates the scheduleId config; version 2 declares it. */
+function shepherdAgentVersion(scheduleInput: string | undefined): AgentDefinition {
+  return AgentDefinitionSchema.parse(
+    skillStarterAgentDefinition({
+      slug: 'local-pr-shepherd',
+      catalogId: 'local-pr-shepherd',
+      name: 'Local PR Shepherd',
+      description: 'Starts a pass.',
+      folderInput: 'bindingId',
+      ...(scheduleInput !== undefined ? { scheduleInput } : {}),
+      folders: ['hb_aflow'],
+    }),
+  );
+}
+harness.versions = new Map([
+  ['1', shepherdAgentVersion(undefined)],
+  ['2', shepherdAgentVersion('scheduleId')],
+]);
 
 const renewal = (grant: RunAccessGrant = grantFor(OWNER)) => ({
   spaceId: SPACE,
   predecessorId: PREDECESSOR,
   grant,
+  configProblem: (schedule: Parameters<typeof scheduleConfigProblem>[2]) =>
+    scheduleConfigProblem({} as never, TENANT, schedule),
 });
 
 describe('renewSchedule: a schedule near its cap is handed to exactly one successor', () => {
@@ -290,6 +332,28 @@ describe('renewSchedule: a schedule near its cap is handed to exactly one succes
     expect((await renewSchedule(store, renewal(grantFor(STRANGER)))).kind).toBe('not_owner');
     expect(table.size).toBe(1);
     expect(table.get(PREDECESSOR)?.status).toBe('active');
+  });
+
+  it('a schedule pinned to a version without its config is not renewed, and keeps firing', async () => {
+    const { table, store } = memoryTable([
+      shepherdSchedule({ firingCount: nearCap, agentVersion: '1' }),
+    ]);
+
+    const outcome = await renewSchedule(store, renewal());
+
+    expect(outcome.kind).toBe('config_refused');
+    expect(outcome.kind === 'config_refused' && outcome.message).toContain('config.scheduleId');
+    expect(table.size).toBe(1);
+    expect(table.get(PREDECESSOR)?.status).toBe('active');
+  });
+
+  it('a schedule pinned to a version that declares its config is renewed with the pin', async () => {
+    const { table, store } = memoryTable([
+      shepherdSchedule({ firingCount: nearCap, agentVersion: '2' }),
+    ]);
+
+    expect((await renewSchedule(store, renewal())).kind).toBe('renewed');
+    expect(table.get(scheduleSuccessorId(PREDECESSOR))?.agentVersion).toBe('2');
   });
 });
 
@@ -418,6 +482,22 @@ describe('agent.schedule.create renews as a workflow task, with the run’s gran
     const results = await stepResults(redis);
     expect(results.map((result) => result.status)).toEqual(['SUCCEEDED', 'SUCCEEDED']);
     expect(table.size).toBe(2);
+  });
+
+  it('a pass whose schedule pins a version without its config is told which, and renews nothing', async () => {
+    const { table, store } = memoryTable([
+      shepherdSchedule({ firingCount: nearCap, agentVersion: '1' }),
+    ]);
+    harness.store = store;
+
+    await handleScheduleCrudInline(taskArgs(redis, 'renew-schedule'));
+
+    const [result] = await stepResults(redis);
+    expect(result?.status).toBe('FAILED');
+    expect(result?.error?.code).toBe('SCHEDULE_CONFIG_NOT_DECLARED');
+    expect(result?.error?.message).toContain('config.scheduleId');
+    expect(result?.error?.message).toContain('version "1"');
+    expect(table.size).toBe(1);
   });
 
   it('a run with no user behind it renews nothing', async () => {

@@ -19,6 +19,7 @@
 import type { Redis } from 'ioredis';
 import { getOrchestratorLogger, logOrchestratorError } from '../lib/orchestratorLogger.js';
 import type postgres from 'postgres';
+import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { createHash, randomUUID } from 'node:crypto';
 import type {
   TenantId,
@@ -53,6 +54,9 @@ import {
   claimScheduleDispatches,
   deleteScheduleDispatch,
   insertScheduleDispatch,
+  loadAgentTargetDefinition,
+  ArchivedAgentError,
+  UnknownCustomAgentError,
   releaseScheduleDispatch,
   releaseTenantDueClaim,
   settleTenantDue,
@@ -90,6 +94,8 @@ const OWNERLESS_SCHEDULE_ERROR =
 export interface ScheduleEvaluatorConfig {
   redis: Redis;
   sqlClient: postgres.Sql;
+  /** Resolves the agent version an unpinned schedule starts. */
+  db: PostgresJsDatabase;
   instanceId?: string;
   /** Override the registry's mode, for tests. Production resolves it. */
   mode?: BackgroundTaskMode;
@@ -207,6 +213,7 @@ function nextFireState(
 export class ScheduleEvaluator {
   private readonly redis: Redis;
   private readonly sqlClient: postgres.Sql;
+  private readonly db: PostgresJsDatabase;
   private readonly instanceId: string;
   private readonly due: BackgroundTaskRunner;
   private readonly dispatch: BackgroundTaskRunner;
@@ -218,6 +225,7 @@ export class ScheduleEvaluator {
   constructor(config: ScheduleEvaluatorConfig) {
     this.redis = config.redis;
     this.sqlClient = config.sqlClient;
+    this.db = config.db;
     this.instanceId = config.instanceId ?? randomUUID();
 
     const dueRuntime = backgroundTaskControlPlane().resolve(DUE_TASK_ID);
@@ -718,6 +726,17 @@ export class ScheduleEvaluator {
       };
     }
 
+    const version = await this.agentVersionToStart(item, target);
+    if (version.kind === 'unworkable') {
+      return {
+        kind: 'unworkable',
+        disposition: async () => {
+          await this.setScheduleError(item.schemaName, item.scheduleId, version.error);
+          return true;
+        },
+      };
+    }
+
     const runId = occurrenceRunId(item.idempotencyKey);
     // The drain is at-least-once: it can die between the XADD and the delete.
     // The claim is what makes a redelivery harmless — the loser learns which run
@@ -740,7 +759,7 @@ export class ScheduleEvaluator {
         tenantId: item.tenantId as TenantId,
         runId,
         target,
-        agentVersion: item.agentVersion ?? '1',
+        agentVersion: version.agentVersion,
         inputRef: encodeInput(item.resolvedInput),
         traceId: `sched-${item.scheduleId.slice(0, 8)}-${runId.slice(0, 8)}` as TraceId,
         idempotencyKey: item.idempotencyKey as IdempotencyKey,
@@ -771,6 +790,33 @@ export class ScheduleEvaluator {
       `[ScheduleEvaluator] Fired schedule "${item.scheduleName}" → run ${runId} (target: ${agentTargetKey(target)})`,
     );
     return { kind: 'completed' };
+  }
+
+  /**
+   * A schedule that pins no version starts the agent's latest published one,
+   * resolved at each firing as a run started by hand resolves it — so a
+   * republished agent reaches the schedules already starting it.
+   */
+  private async agentVersionToStart(
+    item: DispatchItem,
+    target: PersistentAgentTarget,
+  ): Promise<{ kind: 'resolved'; agentVersion: string } | { kind: 'unworkable'; error: string }> {
+    if (item.agentVersion) return { kind: 'resolved', agentVersion: item.agentVersion };
+    if (target.kind === 'platform-role') return { kind: 'resolved', agentVersion: '1' };
+    try {
+      const resolved = await loadAgentTargetDefinition(
+        this.db,
+        item.tenantId as TenantId,
+        target,
+        'latest',
+      );
+      return { kind: 'resolved', agentVersion: resolved.version };
+    } catch (err) {
+      if (err instanceof UnknownCustomAgentError || err instanceof ArchivedAgentError) {
+        return { kind: 'unworkable', error: `${err.message}; schedule fire skipped.` };
+      }
+      throw err;
+    }
   }
 
   private async emitResumeRun(item: DispatchItem): Promise<LeasedWorkResult> {

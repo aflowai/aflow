@@ -203,6 +203,7 @@ async function scheduleFiresResume(): Promise<unknown> {
   const evaluator = new ScheduleEvaluator({
     redis,
     sqlClient: { unsafe: () => Promise.resolve([]) } as unknown as postgres.Sql,
+    db: {} as never,
     mode: 'observe',
   });
   const dispatchOne = (

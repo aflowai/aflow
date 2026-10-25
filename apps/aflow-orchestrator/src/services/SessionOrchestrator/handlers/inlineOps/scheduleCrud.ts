@@ -32,6 +32,7 @@ import { requireSpaceId } from './spaceScope.js';
 import { getOrchestratorLogger } from '../../../../lib/orchestratorLogger.js';
 import { definitionCreatedBy, requireScheduleAuthority } from './scheduleAuthority.js';
 import { handleRenew } from './scheduleRenewHandler.js';
+import { scheduleConfigProblem } from './scheduleTargetConfig.js';
 
 /** Max schedules an agent can create in a single run (safety guardrail) */
 const MAX_SCHEDULE_CREATES_PER_RUN = 10;
@@ -443,6 +444,25 @@ async function handleCreate(
     }
   }
 
+  const agentVersion = (input['flowVersion'] as string | undefined) ?? null;
+  if (action === 'start_run') {
+    const configProblem = await scheduleConfigProblem(getDatabase(), context.tenantId, {
+      target: target ?? null,
+      agentVersion,
+      inputTemplate: scheduleInput,
+    });
+    if (configProblem) {
+      await emitStepError(
+        args,
+        'SCHEDULE_CONFIG_NOT_DECLARED',
+        configProblem,
+        startTime,
+        'validation',
+      );
+      return;
+    }
+  }
+
   // --- Auto-compute expiresAt for recurring schedules ---
   const scheduledAt = hasScheduledAt ? new Date(input['scheduledAt'] as string) : null;
   let expiresAt = input['expiresAt'] ? new Date(input['expiresAt'] as string) : null;
@@ -480,7 +500,7 @@ async function handleCreate(
         targetKind: targetCols.targetKind,
         targetSystemRole: targetCols.targetSystemRole,
         targetAgentId: targetCols.targetAgentId,
-        agentVersion: (input['flowVersion'] as string | undefined) ?? null,
+        agentVersion,
         targetSessionId: targetRunId ?? null,
         targetStepExecutionId: null,
         kind,
