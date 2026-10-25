@@ -18,6 +18,10 @@
  */
 import type { Redis } from 'ioredis';
 import { getOrchestratorLogger, logOrchestratorError } from '../lib/orchestratorLogger.js';
+import {
+  undeclaredConfigProblem,
+  unloadableTargetProblem,
+} from './SessionOrchestrator/handlers/inlineOps/scheduleTargetConfig.js';
 import type postgres from 'postgres';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { createHash, randomUUID } from 'node:crypto';
@@ -55,8 +59,6 @@ import {
   deleteScheduleDispatch,
   insertScheduleDispatch,
   loadAgentTargetDefinition,
-  ArchivedAgentError,
-  UnknownCustomAgentError,
   releaseScheduleDispatch,
   releaseTenantDueClaim,
   settleTenantDue,
@@ -796,27 +798,44 @@ export class ScheduleEvaluator {
    * A schedule that pins no version starts the agent's latest published one,
    * resolved at each firing as a run started by hand resolves it — so a
    * republished agent reaches the schedules already starting it.
+   *
+   * The config was checked against the version that was latest when the
+   * schedule was written; a republish can drop a variable it hands, and the
+   * run would then refuse or silently drop it. So it is checked again against
+   * the version this firing starts, and a firing that would carry an
+   * undeclared key starts nothing and says why on the schedule.
    */
   private async agentVersionToStart(
     item: DispatchItem,
     target: PersistentAgentTarget,
   ): Promise<{ kind: 'resolved'; agentVersion: string } | { kind: 'unworkable'; error: string }> {
-    if (item.agentVersion) return { kind: 'resolved', agentVersion: item.agentVersion };
-    if (target.kind === 'platform-role') return { kind: 'resolved', agentVersion: '1' };
+    if (target.kind === 'platform-role') {
+      return { kind: 'resolved', agentVersion: item.agentVersion ?? '1' };
+    }
+    let resolved;
     try {
-      const resolved = await loadAgentTargetDefinition(
+      resolved = await loadAgentTargetDefinition(
         this.db,
         item.tenantId as TenantId,
         target,
-        'latest',
+        item.agentVersion ?? 'latest',
       );
-      return { kind: 'resolved', agentVersion: resolved.version };
     } catch (err) {
-      if (err instanceof UnknownCustomAgentError || err instanceof ArchivedAgentError) {
-        return { kind: 'unworkable', error: `${err.message}; schedule fire skipped.` };
-      }
-      throw err;
+      const problem = unloadableTargetProblem(err, target);
+      if (problem === null) throw err;
+      return { kind: 'unworkable', error: `${problem} This firing was skipped.` };
     }
+    const problem = undeclaredConfigProblem({
+      target,
+      definition: resolved.definition,
+      version: resolved.version,
+      pinned: item.agentVersion !== null,
+      inputTemplate: item.resolvedInput,
+    });
+    if (problem !== null) {
+      return { kind: 'unworkable', error: `${problem} This firing was skipped.` };
+    }
+    return { kind: 'resolved', agentVersion: resolved.version };
   }
 
   private async emitResumeRun(item: DispatchItem): Promise<LeasedWorkResult> {

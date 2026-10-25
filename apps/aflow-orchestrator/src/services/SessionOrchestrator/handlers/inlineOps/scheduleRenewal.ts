@@ -6,12 +6,10 @@ import { agentSchedules, type AgentScheduleRow, type NewAgentScheduleRow } from 
 import {
   getNextCronFireTime,
   isScheduleRenewalDue,
-  projectTargetColumns,
   type FlowSchedule,
-  type PersistentAgentTarget,
   type RunAccessGrant,
 } from '@aflow/schemas';
-import type { ScheduleTargetConfig } from './scheduleTargetConfig.js';
+import { scheduleTargetConfig, type ScheduleTargetConfig } from './scheduleTargetConfig.js';
 
 const SCHEDULE_SUCCESSOR_NAMESPACE = 'aflow:schedule-successor';
 
@@ -81,18 +79,6 @@ export function scheduleRenewalFacts(row: AgentScheduleRow) {
     maxFirings: row.maxFirings,
     firingCount: row.firingCount,
     expiresAt: row.expiresAt ? row.expiresAt.toISOString() : null,
-  };
-}
-
-/** What a successor copying this row would hand the agent it starts. */
-export function scheduleTargetConfig(row: AgentScheduleRow): ScheduleTargetConfig {
-  return {
-    target:
-      row.action === 'start_run' && row.targetKind !== null
-        ? (projectTargetColumns(row, 'persistent') as PersistentAgentTarget)
-        : null,
-    agentVersion: row.agentVersion,
-    inputTemplate: row.inputTemplate,
   };
 }
 

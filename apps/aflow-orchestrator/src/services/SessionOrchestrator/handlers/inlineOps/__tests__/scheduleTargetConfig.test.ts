@@ -1,7 +1,9 @@
 /**
- * agent.schedule.create refuses config the agent version it will start does
- * not declare — checked against the pinned version, or the latest published
- * one — instead of arming a schedule whose every firing drops it.
+ * agent.schedule.create and agent.schedule.update refuse config the agent
+ * version the schedule will start does not declare — its pin, or the latest
+ * published version — instead of arming a schedule whose every firing drops
+ * it. Renewal passes the same check (scheduleRenewal.test.ts), and so does
+ * each firing (scheduleDispatchVersion.test.ts).
  */
 import { randomUUID } from 'node:crypto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -33,6 +35,9 @@ const CREATOR = '1eab6e64-861a-4b99-b396-74f35b111dbb';
 
 const harness = vi.hoisted(() => ({
   inserts: [] as Record<string, unknown>[],
+  updates: [] as Record<string, unknown>[],
+  /** The schedule row an update reads, in the shape drizzle returns it. */
+  stored: undefined as Record<string, unknown> | undefined,
   /** The agent's published versions, oldest first. */
   versions: new Map<string, AgentDefinition>(),
 }));
@@ -40,6 +45,34 @@ const harness = vi.hoisted(() => ({
 vi.mock('@aflow/database', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@aflow/database')>();
   const tx = {
+    select: () => ({
+      from: () => ({
+        where: () => ({
+          limit: () => Promise.resolve(harness.stored ? [harness.stored] : []),
+        }),
+      }),
+    }),
+    update: () => ({
+      set: (values: Record<string, unknown>) => ({
+        where: () => ({
+          returning: () => {
+            harness.updates.push(values);
+            return Promise.resolve(
+              harness.stored
+                ? [
+                    {
+                      id: harness.stored['id'],
+                      status: harness.stored['status'],
+                      nextFireAt: null,
+                      updatedAt: new Date(),
+                    },
+                  ]
+                : [],
+            );
+          },
+        }),
+      }),
+    }),
     insert: () => ({
       values: (values: Record<string, unknown>) => {
         harness.inserts.push(values);
@@ -100,18 +133,44 @@ function shepherdAgentVersion(scheduleInput: string | undefined): AgentDefinitio
 const withoutScheduleId = shepherdAgentVersion(undefined);
 const withScheduleId = shepherdAgentVersion('scheduleId');
 
-function shepherdSchedule(flowVersion?: string): Record<string, unknown> {
+const SCHEDULE_ID = '5247eee7-0000-4000-8000-000000000001';
+const handsScheduleId = { input: 'tend', config: { scheduleId: { $schedule: 'id' } } };
+
+function shepherdSchedule(): Record<string, unknown> {
   return {
     name: 'Local PR Shepherd',
     action: 'start_run',
     target: { kind: 'custom-agent', agentId: AGENT },
     cron: '*/5 * * * *',
-    input: { input: 'tend', config: { scheduleId: { $schedule: 'id' } } },
-    ...(flowVersion !== undefined ? { flowVersion } : {}),
+    input: handsScheduleId,
   };
 }
 
-async function create(redis: Redis, input: Record<string, unknown>): Promise<StepResultMessage> {
+/** A stored shepherd schedule. A pin arrives only through the REST API. */
+function storedSchedule(agentVersion: string | null): Record<string, unknown> {
+  return {
+    id: SCHEDULE_ID,
+    spaceId: SPACE,
+    action: 'start_run',
+    targetKind: 'custom-agent',
+    targetSystemRole: null,
+    targetAgentId: AGENT,
+    agentVersion,
+    status: 'active',
+    inputTemplate: { input: 'tend' },
+  };
+}
+
+const create = (redis: Redis, input: Record<string, unknown>) =>
+  runScheduleOp(redis, 'agent.schedule.create', input);
+const update = (redis: Redis, input: Record<string, unknown>) =>
+  runScheduleOp(redis, 'agent.schedule.update', { scheduleId: SCHEDULE_ID, ...input });
+
+async function runScheduleOp(
+  redis: Redis,
+  operation: string,
+  input: Record<string, unknown>,
+): Promise<StepResultMessage> {
   const runId = randomUUID() as SessionId;
   await setRunAccessGrant(redis, TENANT, runId, {
     spaceId: SPACE,
@@ -145,9 +204,9 @@ async function create(redis: Redis, input: Record<string, unknown>): Promise<Ste
     } as unknown as PayloadStore,
     context,
     stepDef: {
-      stepId: 'create-schedule',
+      stepId: 'schedule-op',
       stepType: 'agent',
-      operation: 'agent.schedule.create',
+      operation,
       config: {},
     } as unknown as StepDefinition,
     stepExecutionId: randomUUID() as StepExecutionId,
@@ -186,6 +245,8 @@ beforeEach(async () => {
   redis = new RedisMock() as unknown as Redis;
   await redis.flushall();
   harness.inserts.length = 0;
+  harness.updates.length = 0;
+  harness.stored = undefined;
   harness.versions = new Map([
     ['1', withoutScheduleId],
     ['2', withScheduleId],
@@ -193,7 +254,7 @@ beforeEach(async () => {
 });
 
 describe('agent.schedule.create checks config against the version the schedule starts', () => {
-  it('unpinned, the latest published version declares scheduleId: the schedule is created', async () => {
+  it('the latest published version declares scheduleId: the schedule is created', async () => {
     const result = await create(redis, shepherdSchedule());
 
     expect(result.status).toBe('SUCCEEDED');
@@ -201,7 +262,7 @@ describe('agent.schedule.create checks config against the version the schedule s
     expect(harness.inserts[0]?.['agentVersion']).toBeNull();
   });
 
-  it('unpinned, the latest published version lacks scheduleId: refused, naming both', async () => {
+  it('the latest published version lacks scheduleId: refused, naming both', async () => {
     harness.versions = new Map([['1', withoutScheduleId]]);
 
     const result = await create(redis, shepherdSchedule());
@@ -209,33 +270,20 @@ describe('agent.schedule.create checks config against the version the schedule s
     expect(result.status).toBe('FAILED');
     expect(result.error?.code).toBe('SCHEDULE_CONFIG_NOT_DECLARED');
     expect(result.error?.message).toContain('config.scheduleId');
-    expect(result.error?.message).toContain('version "1"');
-    expect(result.error?.message).toContain('latest published version');
+    expect(result.error?.message).toContain('version "1", its latest published version');
     expect(harness.inserts).toHaveLength(0);
   });
 
-  it('pinned to a version that lacks scheduleId: refused, though a later version has it', async () => {
-    const result = await create(redis, shepherdSchedule('1'));
+  it('the refusal offers only remedies agent.schedule.create can take — never a pin', async () => {
+    harness.versions = new Map([['1', withoutScheduleId]]);
 
-    expect(result.error?.code).toBe('SCHEDULE_CONFIG_NOT_DECLARED');
-    expect(result.error?.message).toContain('config.scheduleId');
-    expect(result.error?.message).toContain('version "1", which flowVersion pins');
-    expect(harness.inserts).toHaveLength(0);
-  });
+    const result = await create(redis, shepherdSchedule());
 
-  it('pinned to a version that declares scheduleId: created with the pin', async () => {
-    const result = await create(redis, shepherdSchedule('2'));
-
-    expect(result.status).toBe('SUCCEEDED');
-    expect(harness.inserts[0]?.['agentVersion']).toBe('2');
-  });
-
-  it('pinned to a version the agent does not have: refused', async () => {
-    const result = await create(redis, shepherdSchedule('3'));
-
-    expect(result.error?.code).toBe('SCHEDULE_CONFIG_NOT_DECLARED');
-    expect(result.error?.message).toContain('no version "3"');
-    expect(harness.inserts).toHaveLength(0);
+    expect(result.error?.message).toContain(
+      'Publish a version of the agent that declares scheduleId',
+    );
+    expect(result.error?.message).toContain("remove it from the schedule's input.config");
+    expect(result.error?.message).not.toMatch(/flowVersion|pin flow|pin a version/i);
   });
 
   it('a schedule that hands no config is not checked against any version', async () => {
@@ -244,5 +292,78 @@ describe('agent.schedule.create checks config against the version the schedule s
     const result = await create(redis, { ...shepherdSchedule(), input: { input: 'tend' } });
 
     expect(result.status).toBe('SUCCEEDED');
+  });
+});
+
+describe('agent.schedule.update checks a new input against the version the schedule starts', () => {
+  it('unpinned, the latest declares the config: the input is written', async () => {
+    harness.stored = storedSchedule(null);
+
+    const result = await update(redis, { input: handsScheduleId });
+
+    expect(result.status).toBe('SUCCEEDED');
+    expect(harness.updates[0]?.['inputTemplate']).toEqual(handsScheduleId);
+  });
+
+  it('unpinned, the latest lacks the config: refused, naming the variable and the version', async () => {
+    harness.stored = storedSchedule(null);
+    harness.versions = new Map([['1', withoutScheduleId]]);
+
+    const result = await update(redis, { input: handsScheduleId });
+
+    expect(result.status).toBe('FAILED');
+    expect(result.error?.code).toBe('SCHEDULE_CONFIG_NOT_DECLARED');
+    expect(result.error?.message).toContain(`Schedule ${SCHEDULE_ID} was not updated`);
+    expect(result.error?.message).toContain('config.scheduleId');
+    expect(result.error?.message).toContain('version "1", its latest published version');
+    expect(harness.updates).toHaveLength(0);
+  });
+
+  it('pinned to a version that lacks the config: refused, though a later version has it', async () => {
+    harness.stored = storedSchedule('1');
+
+    const result = await update(redis, { input: handsScheduleId });
+
+    expect(result.error?.code).toBe('SCHEDULE_CONFIG_NOT_DECLARED');
+    expect(result.error?.message).toContain('version "1", which this schedule pins');
+    expect(result.error?.message).toContain('agent.schedule.create');
+    expect(result.error?.message).not.toContain('flowVersion');
+    expect(harness.updates).toHaveLength(0);
+  });
+
+  it('pinned to a version that declares the config: the input is written', async () => {
+    harness.stored = storedSchedule('2');
+
+    const result = await update(redis, { input: handsScheduleId });
+
+    expect(result.status).toBe('SUCCEEDED');
+    expect(harness.updates).toHaveLength(1);
+  });
+
+  it('pinned to a version the agent no longer has: refused', async () => {
+    harness.stored = storedSchedule('3');
+
+    const result = await update(redis, { input: handsScheduleId });
+
+    expect(result.error?.code).toBe('SCHEDULE_CONFIG_NOT_DECLARED');
+    expect(result.error?.message).toContain('no version "3"');
+    expect(harness.updates).toHaveLength(0);
+  });
+
+  it('an update that leaves the input alone reads no version', async () => {
+    harness.stored = storedSchedule(null);
+    harness.versions = new Map();
+
+    const result = await update(redis, { name: 'Shepherd' });
+
+    expect(result.status).toBe('SUCCEEDED');
+    expect(harness.updates[0]?.['name']).toBe('Shepherd');
+  });
+
+  it('a schedule not in this space: not found, nothing written', async () => {
+    const result = await update(redis, { input: handsScheduleId });
+
+    expect(result.error?.code).toBe('SCHEDULE_NOT_FOUND');
+    expect(harness.updates).toHaveLength(0);
   });
 });
