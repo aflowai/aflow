@@ -75,23 +75,22 @@ export const COMMISSION_RESULT_SCHEMA = {
   },
 };
 
+/** What the Helmsman needs once it has chosen the skill: carried as the skill's usage pitfalls. */
+const COMMISSION_PITFALLS: string[] = [
+  `What it needs: the connected folder and the brief — the task text, everything the coding agent needs and nothing it has to guess: the files and the lines where they are known, what is wrong and what right looks like, the tests to add, the checks to run and what its result reports. \`base\` is where the checkout starts: \`origin/main\` for new work, the branch's name for a fix appended to a branch — a fix round included, whose branch holds the earlier round's commit pushed or kept local — so the patch is made against the branch's head and never against the earlier commission's \`baseSha\`. A fix to a branch \`main\` has moved past also takes \`mergeFrom: origin/<base>\`, so the checkout merges it first and the agent resolves what conflicts. A further turn on the same work takes \`continueFrom\`, the \`sessionRef\` the earlier run reported, from the conversation that started that run: a session belongs to that conversation, and a commission from any other is refused it. \`harness\`, \`model\`, \`maxTurns\`, \`timeoutMs\` and \`browser\` are optional. A change that touches a page of the repository's web UI takes \`browser: { profile: 'ephemeral' }\`, and its brief names the dev-server URL the coding agent opens and what it should see working there; absent, the coding agent has no browser. \`harness\` is named only to require a coding agent other than the space's preferred one; absent, the machine runs the space's preference, else its own default, each where installed, and the result says which ran. The budgets are sized for a slice already — ${String(COMMISSION_TIMEOUT_DEFAULT_MS / MINUTES)} minutes, and ${String(HOST_HARNESS_MAX_TURNS_DEFAULT)} turns on a coding agent that takes a turn budget — and are named only to change them.`,
+  `Start it with \`wait: 'none'\`. A commission runs for tens of minutes. Started that way it returns the run id at once, the conversation stays free, and the commission's end wakes it with the result. Several commissions may run at once on one machine, each in its own checkout. The machine runs only so many coding agents at once — ${String(HOST_HARNESS_CONCURRENCY_DEFAULT)} unless its operator chose another number — and a commission past that waits for one to end rather than being refused; its time counts from when it starts.`,
+  `For a plan node: a commission for work in the space's plan is started with \`planNodeId\`, beside its inputs rather than among them, naming the node the round serves — the node opened with \`plan.node.get\` before the brief was written. It then shows under that node in the attention block of the conversation that started it, and when it ends the node holds a link to it. Its publication takes the same \`planNodeId\`.`,
+  `The checks a brief asks for are the folder's own — its test runner on the touched tests, its type check, its linter, its formatter, and the guards its own pre-publication check runs over the whole tree; in Aflow's repository those are \`node --import tsx scripts/large-files/cli.ts check\` and \`node --conditions=ts-source --import tsx scripts/context-budget/cli.ts check\`, the two \`scripts/verify-commit.mjs\` runs, the second under the \`ts-source\` condition it runs it with so it reads the checkout's own source. The brief has the coding agent run every one of them in the commission's checkout before it returns, fix what fails in the same session, and put their output in the result the brief asks for. Nothing else runs them before publication, where the folder's declared checks run again on the commit, and a failure found there costs that publication and a further round.`,
+  `With the result: report what changed — its \`summary\`, \`filesChanged\` and whether the patch \`applies\` where it would be published. The coding agent writes the \`summary\` whatever the brief asks: a title line under 72 characters and one paragraph, the commit message the change is published under. A commission whose coding agent wrote no valid summary still returns its change, saying why in \`resultProblem\`; its publication then takes \`commitMessage\`. To publish, start Publish Local Changes with the commission's \`patchRef\`, \`baseSha\` and, where it merged, \`merge.from\`, as they stand, and its run id as \`commission\` — never the \`patch\` text, a copy for reading that is cut short on a large change. The publication commits under the \`summary\`; pass \`commitMessage\` only to say it otherwise. To ask for more on the same work, start another commission with \`continueFrom\` set to its \`sessionRef\`.`,
+];
+
 const COMMISSION_CHANGE: SkillCatalogEntry = {
   catalogId: 'commission-change',
-  version: 10,
+  version: 11,
   name: 'Commission Change',
   tagline:
     "Have the machine's own coding agent make a change in a connected repository, and get the change back as a patch.",
-  description: `Fits a request to make a change in a repository on the operator's machine — "build this slice", "fix these findings", "now fix the test that broke". A commission hands a brief to the coding agent installed on that machine, which works in an isolated checkout of the connected folder and leaves the folder itself untouched; what it changed comes back as a stored patch. Nothing is committed, pushed or published: publishing the patch is Publish Local Changes, and reviewing it once published is Review Local Changes.
-
-**What it needs**: the connected folder and the brief — the task text, everything the coding agent needs and nothing it has to guess: the files and the lines where they are known, what is wrong and what right looks like, the tests to add, the checks to run and what its result reports. \`base\` is where the checkout starts: \`origin/main\` for new work, the branch's name for a fix appended to a branch — a fix round included, whose branch holds the earlier round's commit pushed or kept local — so the patch is made against the branch's head and never against the earlier commission's \`baseSha\`. A fix to a branch \`main\` has moved past also takes \`mergeFrom: origin/<base>\`, so the checkout merges it first and the agent resolves what conflicts. A further turn on the same work takes \`continueFrom\`, the \`sessionRef\` the earlier run reported, from the conversation that started that run: a session belongs to that conversation, and a commission from any other is refused it. \`harness\`, \`model\`, \`maxTurns\`, \`timeoutMs\` and \`browser\` are optional. A change that touches a page of the repository's web UI takes \`browser: { profile: 'ephemeral' }\`, and its brief names the dev-server URL the coding agent opens and what it should see working there; absent, the coding agent has no browser. \`harness\` is named only to require a coding agent other than the space's preferred one; absent, the machine runs the space's preference, else its own default, each where installed, and the result says which ran. The budgets are sized for a slice already — ${String(COMMISSION_TIMEOUT_DEFAULT_MS / MINUTES)} minutes, and ${String(HOST_HARNESS_MAX_TURNS_DEFAULT)} turns on a coding agent that takes a turn budget — and are named only to change them.
-
-**Start it with \`wait: 'none'\`.** A commission runs for tens of minutes. Started that way it returns the run id at once, the conversation stays free, and the commission's end wakes it with the result. Several commissions may run at once on one machine, each in its own checkout. The machine runs only so many coding agents at once — ${String(HOST_HARNESS_CONCURRENCY_DEFAULT)} unless its operator chose another number — and a commission past that waits for one to end rather than being refused; its time counts from when it starts.
-
-**For a plan node**: a commission for work in the space's plan is started with \`planNodeId\`, beside its inputs rather than among them, naming the node the round serves — the node opened with \`plan.node.get\` before the brief was written. It then shows under that node in the attention block of the conversation that started it, and when it ends the node holds a link to it. Its publication takes the same \`planNodeId\`.
-
-**The checks a brief asks for are the folder's own** — its test runner on the touched tests, its type check, its linter, its formatter, and the guards its own pre-publication check runs over the whole tree; in Aflow's repository those are \`node --import tsx scripts/large-files/cli.ts check\` and \`node --conditions=ts-source --import tsx scripts/context-budget/cli.ts check\`, the two \`scripts/verify-commit.mjs\` runs, the second under the \`ts-source\` condition it runs it with so it reads the checkout's own source. The brief has the coding agent run every one of them in the commission's checkout before it returns, fix what fails in the same session, and put their output in the result the brief asks for. Nothing else runs them before publication, where the folder's declared checks run again on the commit, and a failure found there costs that publication and a further round.
-
-**With the result**: report what changed — its \`summary\`, \`filesChanged\` and whether the patch \`applies\` where it would be published. The coding agent writes the \`summary\` whatever the brief asks: a title line under 72 characters and one paragraph, the commit message the change is published under. A commission whose coding agent wrote no valid summary still returns its change, saying why in \`resultProblem\`; its publication then takes \`commitMessage\`. To publish, start Publish Local Changes with the commission's \`patchRef\`, \`baseSha\` and, where it merged, \`merge.from\`, as they stand, and its run id as \`commission\` — never the \`patch\` text, a copy for reading that is cut short on a large change. The publication commits under the \`summary\`; pass \`commitMessage\` only to say it otherwise. To ask for more on the same work, start another commission with \`continueFrom\` set to its \`sessionRef\`.`,
+  description: `Fits a request to make a change in a repository on the operator's machine — "build this slice", "fix these findings", "now fix the test that broke". A commission hands a brief to the coding agent installed on that machine, which works in an isolated checkout of the connected folder and leaves the folder itself untouched; what it changed comes back as a stored patch. Nothing is committed, pushed or published: publishing the patch is Publish Local Changes, and reviewing it once published is Review Local Changes.`,
   tags: ['coding', 'commission', 'local', 'developer-tools'],
   bundle: {
     workflow: {
@@ -99,6 +98,25 @@ const COMMISSION_CHANGE: SkillCatalogEntry = {
       name: 'Commission Change',
       description:
         "Hand a brief to the coding agent installed on the operator's machine: it works in an isolated checkout of a repository connected as a host folder, starting at the base the brief names, and its change comes back as a stored patch with the base it was made against. One task; nothing is committed, pushed or published.",
+      usage: {
+        whenToUse: [
+          'Fixing a bug or making any change meant to land in a repository connected as a folder — "fix a bug in the repo", "build this slice", "fix these findings", "now fix the test that broke": the machine\'s coding agent carries out a brief in an isolated checkout and returns the change as a stored patch',
+          "A fix round on a branch a publication pushed or kept local: `base` the branch's name, with the publication's `fixRound.commissionInputs` as they stand",
+          'A further turn on the same work: `continueFrom` the `sessionRef` an earlier commission from this conversation reported',
+        ],
+        whenNotToUse: [
+          "Committing, pushing or opening a pull request — that is Publish Local Changes, which takes this run's `patchRef`",
+          'Reviewing committed work — that is Review Local Changes',
+          'Only reading or answering a question about the folder, with nothing to land — host.harness.run with an `outputSchema`',
+        ],
+        next: [
+          {
+            skill: 'publish-local-changes',
+            when: "Once the commission returns a patch: start it with this run's `patchRef`, `baseSha` and, where it merged, `merge.from`, as they stand, and this run id as `commission` — it commits under the commission's `summary`.",
+          },
+        ],
+        pitfalls: COMMISSION_PITFALLS,
+      },
       goal: 'Return the change the brief asked for as a stored patch, with the base it was made against, the merge it carries, whether it applies, and the session a further turn continues.',
       mode: 'process' as const,
       outcomes: [
@@ -358,7 +376,7 @@ const COMMISSION_CHANGE: SkillCatalogEntry = {
         'make this change in the repository',
       ],
       activationHint:
-        "Run to have the machine's own coding agent make a change in a repository connected as a folder, from a brief: it works in an isolated checkout and returns the change as a stored patch. Start it with wait: 'none'. Nothing is committed or pushed — publishing the patch is Publish Local Changes.",
+        "Run to have the machine's own coding agent make a change in a repository connected as a folder, from a brief; the change returns as a stored patch. Its usage says how to brief and start it.",
       prerequisites: [],
       priority: 50,
     },

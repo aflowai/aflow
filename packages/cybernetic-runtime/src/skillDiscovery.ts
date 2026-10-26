@@ -16,12 +16,14 @@ import {
   skillPlacement,
   skillAwarenessEntry,
   skillAwarenessTokens,
+  skillUsageSummary,
   estimateStringTokens,
   SKILL_AWARENESS_TOKEN_BUDGET,
   SKILL_SEARCH_TOKEN_BUDGET,
   type TenantId,
   type SkillSearchInput,
   type SkillDiscoveryEntry,
+  type SkillUsageSummary,
 } from '@aflow/schemas';
 
 export interface SkillDiscoveryContext {
@@ -63,7 +65,7 @@ export async function searchInstalledSkills(
   const cursorFor = (offset: number) =>
     Buffer.from(JSON.stringify({ offset, queryHash })).toString('base64url');
   const guidance =
-    'Inspect a selected skill with the suggested invocation call to check its current validity, readiness and input contracts, then use workflow.run.start. No tool promotion is needed. Search again by purpose if no match fits.';
+    'Pick by each skill’s usage — whenToUse, whenNotToUse, and next for what follows it. Inspect the selected skill with the suggested invocation call for its current validity, readiness, input contracts and pitfalls, then use workflow.run.start. No tool promotion is needed. Search again by purpose if no match fits.';
   let offset = 0;
   if (input.cursor) {
     const cursor = JSON.parse(Buffer.from(input.cursor, 'base64url').toString()) as {
@@ -85,7 +87,9 @@ export async function searchInstalledSkills(
     excludedSlugs,
   });
   const skills: Array<
-    SkillDiscoveryEntry & {
+    Omit<SkillDiscoveryEntry, 'usage'> & {
+      usage?: SkillUsageSummary;
+      usageOmitted?: boolean;
       descriptionOmitted?: boolean;
       readiness?: {
         canRun: boolean;
@@ -120,8 +124,11 @@ export async function searchInstalledSkills(
           skill?.projection?.status,
         )
       : undefined;
+    const { usage: fullUsage, ...listed } = entry;
+    const usage = skillUsageSummary(fullUsage);
     let result: (typeof skills)[number] = {
-      ...entry,
+      ...listed,
+      ...(usage ? { usage } : {}),
       ...(readiness
         ? {
             readiness: {
@@ -155,6 +162,16 @@ export async function searchInstalledSkills(
             }
           : {}),
       };
+    }
+    // Past the description, what to pick the skill by is the last thing
+    // given up: its whenToUse survives on its own before the usage goes.
+    if (responseTokens(result) > SKILL_SEARCH_TOKEN_BUDGET && skills.length === 0 && result.usage) {
+      const { usage: wide, ...rest } = result;
+      result = wide.whenToUse ? { ...rest, usage: { whenToUse: wide.whenToUse } } : rest;
+      if (responseTokens(result) > SKILL_SEARCH_TOKEN_BUDGET) {
+        const { usage: _dropped, ...bare } = result;
+        result = { ...bare, usageOmitted: true };
+      }
     }
     if (responseTokens(result) > SKILL_SEARCH_TOKEN_BUDGET) {
       if (skills.length) break;

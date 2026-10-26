@@ -184,6 +184,8 @@ describe('platform-artifacts cybernetic ensemble — runtime source of truth', (
       'ai.media.image',
       'proposal.list',
       'memory.store.delete',
+      // A space agent is scheduled by its id, which its definition holds.
+      'agent.manage.get',
     ]) {
       expect(allowed).toContain(op);
     }
@@ -193,7 +195,7 @@ describe('platform-artifacts cybernetic ensemble — runtime source of truth', (
     // human.action_center.focus; the operator decides — Plan 156):
     for (const op of [
       'agent.manage.create',
-      'agent.manage.get',
+      'agent.manage.update',
       'catalog.agent.list',
       'guardrail.policy.get',
       'learner.learning.record',

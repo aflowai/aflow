@@ -7,6 +7,7 @@
 import { z } from 'zod';
 import { HelpCenterOperationRegistrations } from './helpCenter.js';
 import { SkillDiscoveryOperationRegistration } from './skillDiscovery.js';
+import { CatalogToolSearchOutputSchema } from './catalogToolSearch.js';
 import { StepTypeSchema } from '../artifact/operationDefinition.js';
 import type { OperationRegistration } from '../catalog/operationCatalog.js';
 import { OperationIdSchema, SpaceSlugSchema } from '../runtime/ids.js';
@@ -1247,50 +1248,7 @@ export const PlatformOperationRegistrations: OperationRegistration[] = [
       sources: z.array(ToolSourceSchema).optional(),
       workflowSteps: PlatformGetSchemaInputSchema.shape.workflowSteps,
     }),
-    outputZod: z.discriminatedUnion('mode', [
-      z.object({
-        mode: z.literal('directory'),
-        guidance: z.string(),
-        stepTypes: z.array(
-          z.object({
-            stepType: z.string(),
-            operationCount: z.number(),
-            groups: z.array(z.object({ groupId: z.string(), count: z.number() })),
-          }),
-        ),
-        totalOperations: z.number(),
-      }),
-      z.object({
-        mode: z.literal('search'),
-        discovered: z.array(
-          z.object({
-            operationId: z.string().optional(),
-            agentId: z.string().optional(),
-            toolId: z.string().optional(),
-            callName: z.string().optional(),
-            type: z.enum(['platform', 'agent', 'api', 'mcp']),
-            name: z.string().optional(),
-            description: z.string(),
-            matchReason: z.string(),
-            apiId: z.string().optional(),
-            serverId: z.string().optional(),
-            opTaskOnly: z.boolean().optional(),
-            caution: z.string().optional(),
-          }),
-        ),
-        count: z.number(),
-        query: z.string().optional(),
-        promotion: z.string(),
-        suggestedPromoteCall: z
-          .object({
-            operation: z.literal('catalog.tool.promote'),
-            input: z.object({
-              toolIds: z.array(z.string()),
-            }),
-          })
-          .optional(),
-      }),
-    ]),
+    outputZod: CatalogToolSearchOutputSchema,
   },
 
   // ---------------------------------------------------------------------------
@@ -1310,7 +1268,7 @@ export const PlatformOperationRegistrations: OperationRegistration[] = [
     usage: {
       oneLine: 'Add selected toolIds to the active toolbox. Use after catalog.tool.search / list.',
       whenToUse: [
-        'After discovering a tool via catalog.tool.search and you intend to call it',
+        'Loading a tool catalog.tool.search found, to call it next turn',
         'When you need an API endpoint or MCP tool that is not in your core toolbelt',
       ],
       whenNotToUse: [

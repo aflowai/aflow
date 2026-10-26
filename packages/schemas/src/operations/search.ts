@@ -258,7 +258,7 @@ export const SearchOperationRegistrations: OperationRegistration[] = [
     usage: {
       oneLine: 'Fetch the readable content of a web page as clean markdown.',
       whenToUse: [
-        'Reading the full content of a page found via search.web.search',
+        'Reading a whole page search.web.search found',
         'Extracting article text, documentation, or blog post content from a URL',
         'Getting structured content from a known web page for analysis',
       ],

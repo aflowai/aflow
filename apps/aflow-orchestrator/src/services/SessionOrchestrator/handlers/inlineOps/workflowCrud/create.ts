@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { getDatabase, workflowDocPath } from '@aflow/database';
+import { SkillUsageSchema } from '@aflow/schemas';
 import type { Workflow, WorkflowPutInput } from '@aflow/schemas';
 import {
   materializeAndValidateSkillConfig,
@@ -20,6 +21,26 @@ export async function handleWorkflowPut(
   const { docRepo, dirRepo } = getRepos(args.context.tenantId);
 
   const slug = input.slug;
+
+  // The step's input arrives through JSON Schema, which cannot carry the
+  // exactly-one-of rule on `next` nor fill the defaulted lists.
+  let usage: Workflow['usage'];
+  if (input.usage !== undefined) {
+    const parsed = SkillUsageSchema.safeParse(input.usage);
+    if (!parsed.success) {
+      await emitStepError(
+        args,
+        'WORKFLOW_USAGE_INVALID',
+        parsed.error.issues
+          .map((i) => `usage.${i.path.join('.') || '<root>'}: ${i.message}`)
+          .join('; '),
+        startTime,
+        'validation',
+      );
+      return;
+    }
+    usage = parsed.data;
+  }
 
   const existing = await readJsonDoc<Workflow>(docRepo, workflowDocPath(slug), spaceId);
   if (existing) {
@@ -78,6 +99,7 @@ export async function handleWorkflowPut(
     slug,
     name: input.name,
     description: input.description ?? '',
+    ...(usage !== undefined ? { usage } : {}),
     outcomes: input.outcomes,
     mode: input.mode,
     tasks,

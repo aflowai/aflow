@@ -1,8 +1,4 @@
 import {
-  MAX_FIRINGS_CAP,
-  SCHEDULE_RENEWAL_WINDOW,
-  SHEPHERD_SCHEDULE_CRON_DEFAULT,
-  SKILL_STARTER_SCHEDULE_VARIABLE,
   SkillBundleSchema,
   type SkillBundle,
   type SkillBundleId,
@@ -229,10 +225,9 @@ const LOCAL_COMMISSION_BUNDLE: AuthoredSkillBundle = {
   apiDefinitions: [],
   apiBindingTemplates: [],
   memorySeed: [],
-  helmsmanHints: [
-    "A brief names the checks the coding agent runs before it returns, and they are the folder's own — its tests, type check, linter and formatter, and the guards its own check runs (in Aflow's repository, the large-files and context-budget guards). What fails is fixed in the same session: the folder's declared checks run only once the patch is published.",
-    "Every commission reports a `summary` — a title line under 72 characters and one paragraph — whatever its brief asks for, and a publication naming the commission's run commits the change under it, so the brief need not ask for a commit message.",
-  ],
+  // How the skill is run is its usage block, which skill search and the
+  // invocation view return.
+  helmsmanHints: [],
 };
 
 // ============================================================================
@@ -256,9 +251,9 @@ const LOCAL_CODE_REVIEW_BUNDLE: AuthoredSkillBundle = {
   apiDefinitions: [],
   apiBindingTemplates: [],
   memorySeed: [],
-  helmsmanHints: [
-    "The review reads the connected folder's commits, checked out at the commit the range ends at, so uncommitted work is invisible to it — ask for the work in progress to be committed, on a branch, before reviewing it.",
-  ],
+  // How the skill is run is its usage block, which skill search and the
+  // invocation view return.
+  helmsmanHints: [],
 };
 
 // ============================================================================
@@ -292,14 +287,9 @@ const LOCAL_PUBLISH_BUNDLE: AuthoredSkillBundle = {
   apiDefinitions: [GITHUB_API_DEFINITION],
   apiBindingTemplates: [],
   memorySeed: [],
-  helmsmanHints: [
-    'A folder connected without a publish prefix can be committed to but not pushed from — the push is refused where it runs. Ask for the folder to be reconnected allowing pushes under a prefix before starting a publication.',
-    "Whether the run waits at the approval is the folder's push approval, shown in the machine block. Under `unless-unreviewed`, the default, the run reviews everything its push would add before it gets there, so no review needs starting alongside it. A file the scan could not read or a line marked `aflow-scan: allow` makes it ask under every posture.",
-    "The folder's checks, where it declares them — `checks` in the machine block — run on the commit before anything else, so no build or test needs running beside a publication. A failed check fails the run with the end of what it printed, and nothing has left the machine; one that failed only on tests running out of time is run once more by the publication itself first, so it needs no retry from the conversation.",
-    "A publication's push follows its `afterReview`, and so do you. On `fix_before_merge` the fix round is yours: commission it with the run's `fixRound.commissionInputs` as they stand — never `base: origin/main`, which cannot reach a branch kept local and returns no files — briefed from the `fixRound.reviewRunId` run; then publish its `patchRef`, `baseSha` and run id with `fixRound.findings`, fixed ones closed, and the next `round`. Override only on an act the run verifies.",
-    "A commission's change is committed under the commission's own `summary` when the publication passes its `patchRef`, with its run id as `commission`: pass `commitMessage` only to say it otherwise. A run id that is not the commission which reported that `patchRef` on the folder is refused before anything is committed. A diff the operator hands over as `patch`, or a merge alone, has no summary, and the start refuses it without `commitMessage`.",
-    "A commission's change is published by its `patchRef`, never its `patch` text: that copy is cut short on a large change, and a run's inputs are capped at 32 KB together. `patch` is for a small diff the operator hands over.",
-  ],
+  // How the skill is run is its usage block, which skill search and the
+  // invocation view return.
+  helmsmanHints: [],
 };
 
 // ============================================================================
@@ -337,13 +327,9 @@ const LOCAL_PR_SHEPHERD_BUNDLE: AuthoredSkillBundle = {
       scheduleInput: SCHEDULE_INPUT,
     },
   ],
-  helmsmanHints: [
-    'A pass is one run of the skill over a folder: start the Local PR Shepherd agent, which starts one on each folder it was written with, or workflow.run.start local-pr-shepherd with one folder’s bindingId — and pullNumber to aim it at one pull request. Its decision and reason are in its result and in the handoff comment on the pull request.',
-    `To run it on a schedule: agent.schedule.create, action start_run, target { kind: 'custom-agent', agentId } of the Local PR Shepherd agent, cron '${SHEPHERD_SCHEDULE_CRON_DEFAULT}' unless the operator names another, and input { input: 'tend', config: { ${SKILL_STARTER_SCHEDULE_VARIABLE}: { $schedule: 'id' } } }, which hands each pass the schedule that started it. Each firing tends the next pull request in turn; firings that overlap meet at the branch's lease.`,
-    `The shepherd's schedule renews itself: it fires at most ${String(MAX_FIRINGS_CAP)} times, and a pass within ${String(SCHEDULE_RENEWAL_WINDOW)} firings of that creates its successor, which takes over. Create it once; it runs until its expiresAt (30 days unless set) or until the operator pauses it. A Local PR Shepherd agent written before this refuses the ${SKILL_STARTER_SCHEDULE_VARIABLE} config: delete it, then update the bundle from the Store to write it again.`,
-    'The shepherd never approves or closes. A fix it publishes waits at Local Publish’s approval where the folder’s posture asks; a merge, only under the folder’s merge posture when-green (mergePosture in the machine block), waits at the merge’s own write approval. Both approvals are the operator’s, in the Action Center.',
-    'A space with the GitHub definition from an earlier Local Publish needs Local Publish updated from the Store for the endpoints the shepherd reads — the jobs of a run, the end of a job’s log, a branch and its rules, and the merge pinned to a head.',
-  ],
+  // How the skill is run is its usage block, which skill search and the
+  // invocation view return.
+  helmsmanHints: [],
 };
 
 // ============================================================================

@@ -109,7 +109,7 @@ export const PlanOperationRegistrations: OperationRegistration[] = [
       oneLine:
         'Open a plan node with its goal, criteria, note, children, links, runs in flight, dependencies and learnings.',
       whenToUse: [
-        'Before briefing a round of work on a node — the attention block shows only its title and the note’s first line',
+        'Before briefing a round on a node — the attention block shows only its title and first note line',
         'A stream continues in a new conversation: open the node it names — its runs in flight are the work under way for it',
       ],
       whenNotToUse: [
@@ -163,9 +163,7 @@ export const PlanOperationRegistrations: OperationRegistration[] = [
     mutates: true,
     usage: {
       oneLine: 'Link a run, session, pull request, document, finding or campaign to a plan node.',
-      whenToUse: [
-        'Work for a node was done outside a run started with its planNodeId — a pull request opened by hand, a document written, a finding named',
-      ],
+      whenToUse: ['Work for a node was done outside a run started with its planNodeId'],
       whenNotToUse: [
         'A run started with planNodeId — it links itself and its pull request when it ends',
       ],

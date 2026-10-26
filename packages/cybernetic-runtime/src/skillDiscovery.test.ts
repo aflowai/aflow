@@ -21,16 +21,61 @@ const ctx = {
   tenantId: 'a0000000-0000-0000-0000-000000000001',
   spaceId: 'space',
 };
-const entry = (slug: string, description = 'Review changes') => ({
+const NO_USAGE = { whenToUse: [], whenNotToUse: [], next: [], pitfalls: [] };
+const USAGE = {
+  whenToUse: ['Fixing a bug in the repository'],
+  whenNotToUse: ['Publishing the patch — that is Publish Local Changes'],
+  next: [{ skill: 'publish-local-changes', when: 'Once the patch is back' }],
+  pitfalls: ['Start it with wait: none', 'Never pass the patch text'],
+};
+const entry = (slug: string, description = 'Review changes', usage = NO_USAGE) => ({
   slug,
   name: slug,
   description,
+  usage,
   mode: 'process' as const,
   status: 'approved',
   origin: 'space' as const,
   revision: 1,
 });
 describe('bounded skill discovery', () => {
+  it('returns when to use a skill, when not and what follows it, and counts its pitfalls', async () => {
+    query.mockResolvedValue({
+      skills: [entry('commission-change', 'Make a change', USAGE)],
+      total: 1,
+    });
+    const result = await searchInstalledSkills(ctx, { query: 'fix a bug in the repo', limit: 5 });
+    expect(result.skills[0]?.usage).toEqual({
+      whenToUse: USAGE.whenToUse,
+      whenNotToUse: USAGE.whenNotToUse,
+      next: USAGE.next,
+      pitfallCount: 2,
+    });
+    expect(JSON.stringify(result)).not.toContain('Never pass the patch text');
+    expect(result.guidance).toContain('whenToUse');
+  });
+  it('keeps a skill’s whenToUse when its first result has to shed its description', async () => {
+    query.mockResolvedValue({
+      skills: [entry('pinned', 'x'.repeat(10000), { ...USAGE, whenNotToUse: ['y'.repeat(9000)] })],
+      total: 1,
+    });
+    const result = await searchInstalledSkills(ctx, { query: 'review', limit: 5 }, true);
+    expect(result.skills[0]?.descriptionOmitted).toBe(true);
+    expect(result.skills[0]?.usage).toEqual({ whenToUse: USAGE.whenToUse });
+  });
+  it('carries a pinned skill’s usage summary into the space context', async () => {
+    query.mockImplementation((_db, _tenant, _space, options: { onlySlugs?: string[] }) =>
+      Promise.resolve(
+        options.onlySlugs
+          ? { skills: [entry('pinned', 'Make a change', USAGE)], total: 1 }
+          : { skills: [], total: 3 },
+      ),
+    );
+    const context = await buildInstalledSkillAwareness(ctx, directives.skillPlacements);
+    expect(context.pinned[0]?.usage?.whenToUse).toEqual(USAGE.whenToUse);
+    expect(context.pinned[0]?.usage?.next?.[0]?.skill).toBe('publish-local-changes');
+    expect(context.pinned[0]?.usage?.pitfallCount).toBe(2);
+  });
   it('reports a malformed workflow as unavailable without losing the search page', async () => {
     query.mockResolvedValue({ skills: [entry('broken'), entry('healthy')], total: 2 });
     resolve.mockResolvedValueOnce({ status: 'approved' });

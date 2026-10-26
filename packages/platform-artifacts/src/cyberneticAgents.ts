@@ -32,7 +32,8 @@ import {
  * `directives.capabilityDiscovery.helmsmanOperations` but the platform default
  * is off):
  * - **Agent management and delegation** — the concept doesn't exist in the
- *   fixed Helmsman/Runner/Coach + skills topology: all `agent.manage.*`, the
+ *   fixed Helmsman/Runner/Coach + skills topology: every `agent.manage.*`
+ *   write (`agent.manage.get` is in: a space agent is scheduled by its id), the
  *   agent catalog `catalog.agent.*`, and all of `agent.control.*`. Non-trivial
  *   work goes through a skill; `agent.control.delegate` was a second, weaker
  *   path to the same place and its own prompt spent three passages arguing
@@ -202,6 +203,9 @@ export const HELMSMAN_DISCOVERY_PRESET: readonly string[] = [
   'ui.applet.instantiate',
   'ui.applet.get',
   'ui.applet.list',
+  // A space agent's definition, read by the id or slug catalog agent search
+  // returns: scheduling one starts from it. Writes stay out.
+  'agent.manage.get',
   // scheduling — recurring skill runs.
   'agent.schedule.get',
   'agent.schedule.list',

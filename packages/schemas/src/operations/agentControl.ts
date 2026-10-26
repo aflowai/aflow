@@ -480,19 +480,23 @@ export const AgentOperationRegistrations: OperationRegistration[] = [
     verb: 'get',
     name: 'Get Agent',
     actionLabel: 'Reading agent…',
-    semanticDescription: 'Retrieve an agent definition by ID and optional version',
+    semanticDescription:
+      'Retrieve an agent definition by its agentId or its slug in the space, with an optional version.',
     tags: ['crud', 'agent'],
     crudView: { entityType: 'agent', action: 'read' },
     idempotency: 'idempotent',
     mutates: false,
     usage: {
-      oneLine: 'Retrieve an agent definition by ID.',
+      oneLine: 'Retrieve an agent definition by agentId or slug.',
       whenToUse: [
-        'Inspecting an agent definition before running or editing it',
+        'Inspecting an agent definition before scheduling, running or editing it',
+        'Resolving the agentId of an agent the space knows by its slug',
         'Fetching a specific version of an agent',
       ],
-      whenNotToUse: ['Listing multiple agents — use agent.manage.list'],
-      minimalExampleInput: { flowId: 'my-flow' },
+      whenNotToUse: [
+        'Finding an agent by purpose — use catalog.tool.search with sources ["agent"]',
+      ],
+      minimalExampleInput: { agentSlug: 'local-pr-shepherd' },
     },
     accessMode: 'read',
     inputZod: PlatformFlowReadInputSchema,

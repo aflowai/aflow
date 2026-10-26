@@ -174,6 +174,105 @@ export function scoreIntegrationTools(
   return out;
 }
 
+export interface AgentSearchCandidate {
+  target: PersistentAgentTarget;
+  /** The agent's handle: a custom agent's slug, a platform role's name. */
+  displayKey: string;
+  name: string;
+  description: string;
+}
+
+export interface AgentSearchResult {
+  target: PersistentAgentTarget;
+  type: 'agent';
+  slug?: string;
+  name: string;
+  description: string;
+  matchReason: string;
+}
+
+/** An agent result as catalog.tool.search returns it in `discovered`. */
+export function agentDiscoveredItem(a: AgentSearchResult): Record<string, unknown> {
+  return {
+    target: a.target,
+    type: 'agent' as const,
+    ...(a.slug ? { slug: a.slug } : {}),
+    name: a.name,
+    description: a.description,
+    matchReason: a.matchReason,
+  };
+}
+
+const AGENT_SEARCH_LIMIT = 3;
+
+/**
+ * Rank agents against a query by handle, name and description. A handle or
+ * name the query names exactly comes first, so a space's agent asked for by
+ * its slug is never crowded out by platform roles sharing one of its words.
+ */
+export function matchAgentCandidates(
+  candidates: readonly AgentSearchCandidate[],
+  query: string,
+): AgentSearchResult[] {
+  const lower = query.trim().toLowerCase();
+  const normalise = (text: string): string => tokenizeForSearch(text).join(' ');
+  const wanted = normalise(lower);
+  const terms = tokenizeForSearch(lower);
+  const scored: Array<{ result: AgentSearchResult; score: number }> = [];
+  for (const c of candidates) {
+    const key = c.displayKey.toLowerCase();
+    const name = c.name.toLowerCase();
+    const description = c.description.toLowerCase();
+    const matchParts: string[] = [];
+    let score = 0;
+    if (key === lower || normalise(key) === wanted) {
+      matchParts.push('is the handle');
+      score += 8;
+    } else if (key.includes(lower)) {
+      matchParts.push('matches handle');
+      score += 4;
+    }
+    if (normalise(name) === wanted) {
+      matchParts.push('is the name');
+      score += 6;
+    } else if (name.includes(lower)) {
+      matchParts.push('matches name');
+      score += 3;
+    }
+    if (description.includes(lower)) {
+      matchParts.push('matches description');
+      score += 1;
+    }
+    if (matchParts.length === 0 && terms.some((t) => `${key} ${name} ${description}`.includes(t))) {
+      matchParts.push('matches query terms');
+      score += 0.5;
+    }
+    if (score === 0) continue;
+    scored.push({
+      result: {
+        target: c.target,
+        type: 'agent',
+        ...(c.target.kind === 'custom-agent' ? { slug: c.displayKey } : {}),
+        name: c.name,
+        description: c.description,
+        matchReason: matchParts.join('; '),
+      },
+      score,
+    });
+  }
+  return scored
+    .sort((a, b) => b.score - a.score)
+    .slice(0, AGENT_SEARCH_LIMIT)
+    .map((s) => s.result);
+}
+
+/**
+ * What a found agent is for when the agent searching may not delegate to it:
+ * its id, to schedule or read it, rather than a tool to promote.
+ */
+export const AGENT_REFERENCE_GUIDANCE =
+  "Agents found here are the space's own, listed for their id: schedule one with agent.schedule.create, target { kind: 'custom-agent', agentId } as given, and read its definition with agent.manage.get { agentId }. They are not promotable tools for this agent.";
+
 export async function handleCatalogSearchInline(
   redis: Redis,
   payloadStore: PayloadStore,
@@ -352,18 +451,15 @@ export async function handleCatalogSearchInline(
         results = [];
       }
 
-      let agentResults: Array<{
-        target: PersistentAgentTarget;
-        name: string;
-        description: string;
-        matchReason: string;
-        type: 'agent';
-      }> = [];
+      let agentResults: AgentSearchResult[] = [];
       const queryStr = input['query'] as string | undefined;
-      // Absent scope fails closed — same contract as ops and integrations.
-      const agentDiscoveryAllowed =
-        includeAgents && discoveryScope !== undefined && discoveryScope.allowedAgents !== false;
-      if (queryStr && agentDiscoveryAllowed) {
+      // Absent scope fails closed — same contract as ops and integrations. An
+      // agent that may not delegate (allowedAgents=false) still finds the
+      // space's own agents, for their id: scheduling or reading one is not
+      // delegating to it, and without the id it cannot be scheduled at all.
+      const agentSearchAllowed = includeAgents && discoveryScope !== undefined;
+      const mayDelegate = discoveryScope?.allowedAgents !== false;
+      if (queryStr && agentSearchAllowed) {
         try {
           const { getDatabase, listCustomAgentsInSpace, listPlatformRoles } =
             await import('@aflow/database');
@@ -371,20 +467,11 @@ export async function handleCatalogSearchInline(
           const spaceId = requireSpaceId(context);
 
           const [platformRoles, customRows] = await Promise.all([
-            Promise.resolve(listPlatformRoles()),
+            Promise.resolve(mayDelegate ? listPlatformRoles() : []),
             listCustomAgentsInSpace(db, context.tenantId, spaceId),
           ]);
 
-          const lower = queryStr.toLowerCase();
-
-          // Pre-shape into a uniform list with the tagged target.
-          const candidates: Array<{
-            target: PersistentAgentTarget;
-            displayKey: string;
-            name: string;
-            description: string;
-            isSystem: boolean;
-          }> = [];
+          const candidates: AgentSearchCandidate[] = [];
           for (const entry of platformRoles) {
             const def = entry.definition as unknown as Record<string, unknown>;
             const meta = (def['metadata'] ?? {}) as Record<string, unknown>;
@@ -395,7 +482,6 @@ export async function handleCatalogSearchInline(
               displayKey: entry.systemRole,
               name: typeof nameRaw === 'string' && nameRaw.length > 0 ? nameRaw : entry.systemRole,
               description: typeof descRaw === 'string' ? descRaw : '',
-              isSystem: true,
             });
           }
           for (const row of customRows) {
@@ -404,40 +490,9 @@ export async function handleCatalogSearchInline(
               displayKey: row.slug,
               name: row.name,
               description: row.description ?? '',
-              isSystem: false,
             });
           }
-
-          for (const c of candidates) {
-            const matchParts: string[] = [];
-            if (c.displayKey.toLowerCase().includes(lower)) matchParts.push('matches handle');
-            if (c.name.toLowerCase().includes(lower)) matchParts.push('matches name');
-            if (c.description.toLowerCase().includes(lower)) matchParts.push('matches description');
-            if (matchParts.length === 0) {
-              const tokens = lower.split(/\s+/).filter((t) => t.length > 1);
-              for (const token of tokens) {
-                if (
-                  c.name.toLowerCase().includes(token) ||
-                  c.description.toLowerCase().includes(token) ||
-                  c.displayKey.toLowerCase().includes(token)
-                ) {
-                  matchParts.push('matches query terms');
-                  break;
-                }
-              }
-            }
-            if (matchParts.length > 0) {
-              agentResults.push({
-                target: c.target,
-                name: c.name,
-                description: c.description,
-                matchReason: matchParts.join('; '),
-                type: 'agent',
-              });
-            }
-          }
-          // Limit agent results
-          agentResults = agentResults.slice(0, 3);
+          agentResults = matchAgentCandidates(candidates, queryStr);
         } catch {
           // Best-effort — agent search failure doesn't block operation search
         }
@@ -578,22 +633,6 @@ export async function handleCatalogSearchInline(
         });
       }
 
-      for (let i = 0; i < agentResults.length; i++) {
-        const a = agentResults[i]!;
-        allDiscovered.push({
-          item: {
-            target: a.target,
-            type: 'agent' as const,
-            name: a.name,
-            description: a.description,
-            matchReason: a.matchReason,
-          },
-          // Agent results have no BM25 score — use position-based estimate
-          // that interleaves with mid-range platform scores
-          score: 5.0 / (i + 1),
-        });
-      }
-
       for (const ar of apiEndpointResults) {
         allDiscovered.push({
           item: {
@@ -627,6 +666,20 @@ export async function handleCatalogSearchInline(
         });
       }
 
+      // Agent results have no BM25 score. One the query names by its handle or
+      // name ranks first — it is what was asked for, and the tail pruning below
+      // must not drop it under a strong operation match; the rest take a
+      // position-based estimate that interleaves with mid-range platform scores.
+      const topScore = allDiscovered.reduce((best, d) => Math.max(best, d.score), 5);
+      for (let i = 0; i < agentResults.length; i++) {
+        const a = agentResults[i]!;
+        const named = /is the (handle|name)/.test(a.matchReason);
+        allDiscovered.push({
+          item: agentDiscoveredItem(a),
+          score: named ? topScore + 1 : 5.0 / (i + 1),
+        });
+      }
+
       allDiscovered.sort((a, b) => b.score - a.score);
 
       // Tail pruning: drop results below 30% of the best score.
@@ -646,8 +699,12 @@ export async function handleCatalogSearchInline(
           continue;
         } else if (t === 'platform' && typeof item['operationId'] === 'string') {
           promotionToolIds.push(item['operationId']);
-        } else if (t === 'agent' && typeof item['agentId'] === 'string') {
-          promotionToolIds.push(`agent:${item['agentId']}`);
+        } else if (t === 'agent') {
+          // Promotion takes an agent by its handle; an agent that may not
+          // delegate is shown the space's agents for their id alone.
+          const target = item['target'] as PersistentAgentTarget;
+          const handle = target.kind === 'platform-role' ? target.systemRole : item['slug'];
+          if (mayDelegate && typeof handle === 'string') promotionToolIds.push(`agent:${handle}`);
         } else if ((t === 'api' || t === 'mcp') && typeof item['toolId'] === 'string') {
           promotionToolIds.push(item['toolId']);
         }
@@ -665,6 +722,9 @@ export async function handleCatalogSearchInline(
           parts.push(
             'Results marked opTaskOnly run only as operation tasks in a workflow: author them there. They are not in suggestedPromoteCall and cannot be called as tools.',
           );
+        }
+        if (!mayDelegate && pruned.some((d) => d.item['type'] === 'agent')) {
+          parts.push(AGENT_REFERENCE_GUIDANCE);
         }
         if (apiTools.length > 0) {
           const example = apiTools[0]!.item as Record<string, string>;

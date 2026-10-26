@@ -60,7 +60,7 @@ export const HostOperationRegistrations: OperationRegistration[] = [
       oneLine: 'List files in a connected folder on the operator machine.',
       minimalExampleInput: { bindingId: 'hb_project', path: 'src' },
       whenToUse: [
-        'Discovering what is in a folder the operator connected before reading specific files',
+        'Seeing what a connected folder holds before reading files',
         'Checking whether a file the workflow expects to exist is present',
       ],
       whenNotToUse: [
@@ -331,6 +331,7 @@ export const HostOperationRegistrations: OperationRegistration[] = [
         task: 'Add a test covering the empty-input case in the parser.',
       },
       whenToUse: [
+        'Reading, assessing or answering over a connected folder; a change meant to land goes through the Commission Change skill, which runs this and returns what a publication needs',
         "Any change that needs the folder's facts, however small — the harness holds them and the caller does not",
         'Any task over the files in a connected folder — assessing a codebase, revising a document set, reconciling a ledger, making a code change',
         'Answering a question about a folder that needs the files read and reasoned over, with `outputSchema` naming the shape of the answer',

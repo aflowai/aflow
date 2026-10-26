@@ -41,6 +41,35 @@ export const WorkflowBudgetSchema = z.object({
   maxDurationMs: z.number().int().positive().optional(),
 });
 
+const SKILL_SLUG_PATTERN = /^[a-z0-9][a-z0-9-]*[a-z0-9]$/;
+
+/** What follows a skill: another skill by its slug, or an operation by its id. */
+export const SkillUsageNextSchema = z
+  .object({
+    skill: z.string().regex(SKILL_SLUG_PATTERN).min(3).max(64).optional(),
+    operation: z.string().min(1).max(128).optional(),
+    when: z.string().min(1).max(2000).describe('When it follows, and what of this run it takes'),
+  })
+  .refine((next) => (next.skill === undefined) !== (next.operation === undefined), {
+    message: 'A next step names exactly one of `skill` or `operation`.',
+  });
+export type SkillUsageNext = z.infer<typeof SkillUsageNextSchema>;
+
+/**
+ * How a skill is chosen and run, beside its description: the account the
+ * Helmsman reads in skill search, its pinned summary and the invocation view,
+ * so what it needs to pick and start the skill reaches the conversation
+ * rather than living only in Store text and install-time hints. The room is a
+ * ceiling for prose a model reads, not a style limit.
+ */
+export const SkillUsageSchema = z.object({
+  whenToUse: z.array(z.string().min(1).max(2000)).max(10).default([]),
+  whenNotToUse: z.array(z.string().min(1).max(2000)).max(10).default([]),
+  next: z.array(SkillUsageNextSchema).max(5).default([]),
+  pitfalls: z.array(z.string().min(1).max(4000)).max(16).default([]),
+});
+export type SkillUsage = z.infer<typeof SkillUsageSchema>;
+
 export const WorkflowSchema = z.object({
   id: z.string().uuid(),
   slug: z
@@ -50,6 +79,7 @@ export const WorkflowSchema = z.object({
     .max(64),
   name: z.string().min(1).max(120),
   description: z.string().max(2000).default(''),
+  usage: SkillUsageSchema.optional(),
 
   goal: z.string().min(1).max(1000).optional(),
 
