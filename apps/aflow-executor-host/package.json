@@ -27,12 +27,12 @@
     "@aflow/payload-store": "workspace:*",
     "@aflow/redis": "workspace:*",
     "@aflow/schemas": "workspace:*",
-    "@anthropic-ai/sandbox-runtime": "0.0.79",
+    "@anthropic-ai/sandbox-runtime": "0.0.81",
     "@modelcontextprotocol/sdk": "^1.32.1",
     "ajv": "^8.20.0",
     "ioredis": "^5.11.1",
     "playwright-core": "1.64.1",
-    "tldts": "^7.4.18",
+    "tldts": "^7.4.19",
     "zod": "^3.24.0"
   },
   "devDependencies": {

@@ -88,7 +88,7 @@ __metadata:
     "@aflow/payload-store": "workspace:*"
     "@aflow/redis": "workspace:*"
     "@aflow/schemas": "workspace:*"
-    "@anthropic-ai/sandbox-runtime": "npm:0.0.79"
+    "@anthropic-ai/sandbox-runtime": "npm:0.0.81"
     "@modelcontextprotocol/sdk": "npm:^1.32.1"
     "@types/ioredis-mock": "npm:^8"
     "@types/node": "npm:^22.20.5"
@@ -96,7 +96,7 @@ __metadata:
     ioredis: "npm:^5.11.1"
     ioredis-mock: "npm:^8.13.1"
     playwright-core: "npm:1.64.1"
-    tldts: "npm:^7.4.18"
+    tldts: "npm:^7.4.19"
     tsx: "npm:^4.23.15"
     typescript: "npm:^5.8.3"
     vitest: "npm:^4.1.12"
@@ -208,7 +208,7 @@ __metadata:
     "@types/sanitize-html": "npm:^2.16.2"
     html-to-text: "npm:^9.0.5"
     marked: "npm:^17.0.6"
-    nodemailer: "npm:^10.1.1"
+    nodemailer: "npm:^10.2.1"
     sanitize-html: "npm:^2.18.1"
     tsx: "npm:^4.23.15"
     typescript: "npm:^5.8.3"
@@ -265,8 +265,8 @@ __metadata:
     "@aflow/network-safety": "workspace:*"
     "@aflow/payload-store": "workspace:*"
     "@aflow/schemas": "workspace:*"
-    "@anthropic-ai/sdk": "npm:^0.135.0"
-    "@google/genai": "npm:2.30.0"
+    "@anthropic-ai/sdk": "npm:^0.137.0"
+    "@google/genai": "npm:2.31.0"
     "@types/node": "npm:^22.20.5"
     openai: "npm:^6.49.0"
     tsup: "npm:^8.5.0"
@@ -597,7 +597,7 @@ __metadata:
     "@aflow/ui-artifact-compiler": "workspace:*"
     "@fastify/cors": "npm:^10.0.3"
     "@fastify/helmet": "npm:^13.2.0"
-    "@fastify/jwt": "npm:^10.2.4"
+    "@fastify/jwt": "npm:^10.2.5"
     "@fastify/rate-limit": "npm:^10.2.0"
     "@fastify/sensible": "npm:^6.0.7"
     "@fastify/swagger": "npm:^9.9.2"
@@ -669,7 +669,7 @@ __metadata:
   dependencies:
     "@aflow/design-system": "workspace:*"
     "@aflow/web-product": "workspace:*"
-    "@tanstack/react-query": "npm:^5.104.3"
+    "@tanstack/react-query": "npm:^5.104.5"
     "@types/node": "npm:^22.20.5"
     "@types/react": "npm:^19.3.0"
     next: "npm:^16.4.2"
@@ -690,8 +690,8 @@ __metadata:
     "@aflow/run-view": "workspace:*"
     "@aflow/schemas": "workspace:*"
     "@aflow/surface-engine": "workspace:*"
-    "@tanstack/react-query": "npm:^5.104.3"
-    "@tanstack/react-query-devtools": "npm:^5.104.3"
+    "@tanstack/react-query": "npm:^5.104.5"
+    "@tanstack/react-query-devtools": "npm:^5.104.5"
     "@types/react": "npm:^19.3.0"
     "@types/react-dom": "npm:^19.3.0"
     "@xyflow/react": "npm:^12.12.0"
@@ -699,7 +699,7 @@ __metadata:
     elkjs: "npm:^0.12.0"
     esbuild: "npm:^0.28.2"
     jsdom: "npm:^30.1.3"
-    livekit-client: "npm:^2.22.4"
+    livekit-client: "npm:^2.23.0"
     next: "npm:^16.4.2"
     react: "npm:^19.3.1"
     react-dom: "npm:^19.3.1"
@@ -708,8 +708,8 @@ __metadata:
     typescript: "npm:^5.9.3"
     vitest: "npm:^4.1.12"
   peerDependencies:
-    "@tanstack/react-query": ^5.104.3
-    "@tanstack/react-query-devtools": ^5.104.3
+    "@tanstack/react-query": ^5.104.5
+    "@tanstack/react-query-devtools": ^5.104.5
     next: ^16.4.2
     react: ^19.3.1
     react-dom: ^19.3.1
@@ -719,9 +719,9 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@anthropic-ai/sandbox-runtime@npm:0.0.79":
-  version: 0.0.79
-  resolution: "@anthropic-ai/sandbox-runtime@npm:0.0.79"
+"@anthropic-ai/sandbox-runtime@npm:0.0.81":
+  version: 0.0.81
+  resolution: "@anthropic-ai/sandbox-runtime@npm:0.0.81"
   dependencies:
     "@pondwader/socks5-server": "npm:^1.0.10"
     commander: "npm:^12.1.0"
@@ -729,13 +729,13 @@ __metadata:
     zod: "npm:^3.25.0"
   bin:
     srt: dist/cli.js
-  checksum: 10c0/bd5c50e1aa351c7bd322856104d78e5091d8d83c823b59cf2a1543e2fbe74f48806992d47d799fd65ed221bbdd06979c75236585a303d4c5795de74145eb4897
+  checksum: 10c0/08719d1e6dae61f4bdab2229378a7b82df84369a3ca478d7d147f52f3979112484980d9b3a32bb37157a51aaa63a5c9ee5a25cc448fc7d1f89eb66cfb0e2bfb4
   languageName: node
   linkType: hard
 
-"@anthropic-ai/sdk@npm:^0.135.0":
-  version: 0.135.0
-  resolution: "@anthropic-ai/sdk@npm:0.135.0"
+"@anthropic-ai/sdk@npm:^0.137.0":
+  version: 0.137.0
+  resolution: "@anthropic-ai/sdk@npm:0.137.0"
   dependencies:
     "@opentelemetry/api": "npm:^1.4.1"
     json-schema-to-ts: "npm:^3.1.1"
@@ -747,7 +747,7 @@ __metadata:
       optional: true
   bin:
     anthropic-ai-sdk: bin/cli
-  checksum: 10c0/82def0d9e9eb69deb47bdbfcc5c57b31fa5ecf8ae36f1546fd3ade65836e18155b2f8b364153069d26d4e5aa04b91ff20239c807369922cda6df9f6e8eb48c6e
+  checksum: 10c0/334d74cd8d8b096ddd2be9089a10a0f8dd1c446bb8f3b702fc1aa4194ff6aef9fd29b50e11be772d88c08559a7154a899ee90c48821f9209d6541416d2ca8099
   languageName: node
   linkType: hard
 
@@ -1632,16 +1632,16 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@fastify/jwt@npm:^10.2.4":
-  version: 10.2.4
-  resolution: "@fastify/jwt@npm:10.2.4"
+"@fastify/jwt@npm:^10.2.5":
+  version: 10.2.5
+  resolution: "@fastify/jwt@npm:10.2.5"
   dependencies:
     "@fastify/error": "npm:^4.2.0"
     "@lukeed/ms": "npm:^2.0.2"
-    fast-jwt: "npm:^6.2.4"
+    fast-jwt: "npm:^6.3.4"
     fastify-plugin: "npm:^6.0.0"
     steed: "npm:^1.1.3"
-  checksum: 10c0/c7f5decfc4adf1ca532675dec2860d435ee9d094e266e4bafe84b38730ff9c2dd7da323d13f8ae9565ebd74a5adc703ffc5be7a1fb3b71233b65f0f021bed4bd
+  checksum: 10c0/852c9462eb7e3cd7c75484f5e74e7e62b91b95b33f79584e99fb5eaf0f2406c9a4b13f2a69e5295492e60a30034153c59e60093e1fa7915128c20c4bd64dc2c3
   languageName: node
   linkType: hard
 
@@ -1836,9 +1836,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@google/genai@npm:2.30.0":
-  version: 2.30.0
-  resolution: "@google/genai@npm:2.30.0"
+"@google/genai@npm:2.31.0":
+  version: 2.31.0
+  resolution: "@google/genai@npm:2.31.0"
   dependencies:
     google-auth-library: "npm:^10.3.0"
     p-retry: "npm:^4.6.2"
@@ -1849,7 +1849,7 @@ __metadata:
   peerDependenciesMeta:
     "@modelcontextprotocol/sdk":
       optional: true
-  checksum: 10c0/1239f058d9f2fd46402735e857bd11e3a57c2dbfbe71aa1f341a796ae54378b51ca4d120a1dfbb37612bfa1314e8ccb856f3dae45263c157d605ba8c630d2c80
+  checksum: 10c0/81de7f1d6b6b9acba28aa3d25e03e50ddfaef6646c1afc589f5b19d756ec55dfe69441be0df495f6d1d55b15cf2f1995b417a2e3406b64e4091a50fc8f1ff695
   languageName: node
   linkType: hard
 
@@ -3176,53 +3176,60 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@tanstack/query-core@npm:5.104.3":
-  version: 5.104.3
-  resolution: "@tanstack/query-core@npm:5.104.3"
-  checksum: 10c0/2d21f625818069d907d5d7a09555a0687a445bdf929891214a804636987dd8c4fb7b35468cecb0d9c353c9012fca431a105314bd0ada726537c1188711376e83
+"@tanstack/query-core@npm:5.104.5":
+  version: 5.104.5
+  resolution: "@tanstack/query-core@npm:5.104.5"
+  checksum: 10c0/bc2f0626e33ccb1c881343e2b351168d6c07df01f42ed0b4f679d4ecc753af5864678f3e09f57bef500a02de5fc52cfef13aa7c3f2d3be6b62297bac024acaed
   languageName: node
   linkType: hard
 
-"@tanstack/query-devtools@npm:5.104.3":
-  version: 5.104.3
-  resolution: "@tanstack/query-devtools@npm:5.104.3"
+"@tanstack/query-devtools@npm:5.104.5":
+  version: 5.104.5
+  resolution: "@tanstack/query-devtools@npm:5.104.5"
   dependencies:
     "@kobalte/core": "npm:^0.13.14"
     "@solid-primitives/keyed": "npm:^1.5.3"
     "@solid-primitives/resize-observer": "npm:^2.2.0"
     "@solid-primitives/storage": "npm:^1.3.11"
     "@tanstack/match-sorter-utils": "npm:^9.1.2"
-    "@tanstack/query-core": "npm:5.104.3"
+    "@tanstack/query-core": "npm:5.104.5"
     clsx: "npm:^2.1.1"
     goober: "npm:^2.1.19"
     solid-js: "npm:^1.9.15"
     solid-transition-group: "npm:^0.2.3"
     superjson: "npm:^2.2.6"
-  checksum: 10c0/3637e7866282b514901978c65a09bb35343e8d9a03906de5fe8df7dedf48e407b3b56a5c8f7d649933fc8d3570078a4ffc99e77d6028d33dd379863ba38a3194
+  checksum: 10c0/72954ee784ed7557cf9a85b6be3d5bba83f40c963ac6da92786e3551432c3d482509bf645694df286037bd8c950e4126716c483402e2bbc7f94370d5c56ee7b3
   languageName: node
   linkType: hard
 
-"@tanstack/react-query-devtools@npm:^5.104.3":
-  version: 5.104.3
-  resolution: "@tanstack/react-query-devtools@npm:5.104.3"
+"@tanstack/react-query-devtools@npm:^5.104.5":
+  version: 5.104.5
+  resolution: "@tanstack/react-query-devtools@npm:5.104.5"
   dependencies:
-    "@tanstack/query-devtools": "npm:5.104.3"
+    "@tanstack/query-devtools": "npm:5.104.5"
   peerDependencies:
-    "@tanstack/react-query": ^5.104.3
+    "@tanstack/react-query": ^5.104.5
     "@types/react": ^18 || ^19
     react: ^18 || ^19
-  checksum: 10c0/d909cfafc42149308577de3f6f2beffd5845163e6c5ddb586f8f8132bc61fd2bb011cc390001c8d860b5bb5f2d471e22904e2f7697cc54ef79a02876be368b9d
+  peerDependenciesMeta:
+    "@types/react":
+      optional: true
+  checksum: 10c0/4a0cea1ddfb9ec8b74e9f41b37fe3bfdba55a22978d90830ef270851e50f91c49db52624ab590145d1a0f45217807a655d81dc5888d3745e27c3330578e2a69e
   languageName: node
   linkType: hard
 
-"@tanstack/react-query@npm:^5.104.3":
-  version: 5.104.3
-  resolution: "@tanstack/react-query@npm:5.104.3"
+"@tanstack/react-query@npm:^5.104.5":
+  version: 5.104.5
+  resolution: "@tanstack/react-query@npm:5.104.5"
   dependencies:
-    "@tanstack/query-core": "npm:5.104.3"
+    "@tanstack/query-core": "npm:5.104.5"
   peerDependencies:
+    "@types/react": ^18 || ^19
     react: ^18 || ^19
-  checksum: 10c0/ff797cfb3d4c6cbe49c3bfae9475df50985fbe2064e470325c287d3b86d019d8be7f25291a9c02ccc319fcf8df968181088278472cf72b9cb68a4f6786263721
+  peerDependenciesMeta:
+    "@types/react":
+      optional: true
+  checksum: 10c0/eaff9dd4cec0cc43cf835d780efeaf0a2603b792cc2f5f5800a73b4f62b4562cce54b88885f74be72ea0fa7fc721636884ec4bae152b24aea9ce49544fb4c5d1
   languageName: node
   linkType: hard
 
@@ -7095,9 +7102,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"livekit-client@npm:^2.22.4":
-  version: 2.22.4
-  resolution: "livekit-client@npm:2.22.4"
+"livekit-client@npm:^2.23.0":
+  version: 2.23.0
+  resolution: "livekit-client@npm:2.23.0"
   dependencies:
     "@livekit/mutex": "npm:1.1.1"
     "@livekit/protocol": "npm:1.52.1"
@@ -7111,7 +7118,7 @@ __metadata:
     webrtc-adapter: "npm:9.0.6"
   peerDependencies:
     "@types/dom-mediacapture-record": ^1
-  checksum: 10c0/73f4a0c8d958ec095d1852acefc4ee96dc5397b4ed8ae463ca8a2ce95a6e5c111497c51ad4fbbc08a47862ff7392b98e556fa1f7112da557ffbd9df8e26f015b
+  checksum: 10c0/3479c1e8cb97757eff8ce2f64d348584fff4855b610192803c832cc03744c81aa57358cfe5b9e98575cadf54251d999c44b5b7d9463a9b694987dcd2ad01c29d
   languageName: node
   linkType: hard
 
@@ -8196,10 +8203,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"nodemailer@npm:^10.1.1":
-  version: 10.1.1
-  resolution: "nodemailer@npm:10.1.1"
-  checksum: 10c0/1906b51e3f40f97acc7b5990b721a54581541e543117d3ff22255a173c4b7cc4a77212195b56ae2f69ecc021885d30714c5f7a2f05396b66e2ae4a7b864a87ae
+"nodemailer@npm:^10.2.1":
+  version: 10.2.1
+  resolution: "nodemailer@npm:10.2.1"
+  checksum: 10c0/c5268903736b8070e8b421142ff8f18229018e7c80da76f5593a796398537d3badd3091484303a084431cfd147b7315f2570b9087f26f63b966972cdff86c9d0
   languageName: node
   linkType: hard
 
@@ -10141,10 +10148,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"tldts-core@npm:^7.4.18":
-  version: 7.4.18
-  resolution: "tldts-core@npm:7.4.18"
-  checksum: 10c0/474fa18404d313b16b8fa339406607b3d295561d20d48d734b0faaf45abf77aede26ed680f62a7c777bb2a35ae25da4b2ca0cefce676b4c09ea8408a23ac7e3c
+"tldts-core@npm:^7.4.19":
+  version: 7.4.19
+  resolution: "tldts-core@npm:7.4.19"
+  checksum: 10c0/fd43d3d590e9a04c57035dc25aea992a5b33e593f4b0d80a08f57cbbb7964f9b7b4b7db212d0408142671a7715f49e8a6eed27ab5b28343ecec8e0383b6e9d98
   languageName: node
   linkType: hard
 
@@ -10159,14 +10166,14 @@ __metadata:
   languageName: node
   linkType: hard
 
-"tldts@npm:^7.4.18":
-  version: 7.4.18
-  resolution: "tldts@npm:7.4.18"
+"tldts@npm:^7.4.19":
+  version: 7.4.19
+  resolution: "tldts@npm:7.4.19"
   dependencies:
-    tldts-core: "npm:^7.4.18"
+    tldts-core: "npm:^7.4.19"
   bin:
     tldts: bin/cli.js
-  checksum: 10c0/3e51339815c8679293ae8e84289ed5f96241075187573e84f37b2450315a7860bbcaf8125fba684f298b969bc6a8ae93c0e125be7feab7d1449d326e7cf815ec
+  checksum: 10c0/86a35f5508cd8a1d4e6516d54f0aa375efa643efd4a5d61c84f844f26c07fdea9a29320c341398127fa0d67877697820177f5362108cbcbf6ea06c1ed0795854
   languageName: node
   linkType: hard
 
