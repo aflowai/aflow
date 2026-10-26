@@ -1267,6 +1267,12 @@ export const PlatformOperationRegistrations: OperationRegistration[] = [
           z.object({
             operationId: z.string().optional(),
             target: PersistentAgentTargetSchema.optional(),
+            slug: z
+              .string()
+              .optional()
+              .describe(
+                "A custom agent's handle, which catalog.tool.promote takes as agent:<slug>",
+              ),
             toolId: z.string().optional(),
             callName: z.string().optional(),
             type: z.enum(['platform', 'agent', 'api', 'mcp']),

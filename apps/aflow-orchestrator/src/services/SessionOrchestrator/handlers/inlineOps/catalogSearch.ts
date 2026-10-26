@@ -191,6 +191,18 @@ export interface AgentSearchResult {
   matchReason: string;
 }
 
+/** An agent result as catalog.tool.search returns it in `discovered`. */
+export function agentDiscoveredItem(a: AgentSearchResult): Record<string, unknown> {
+  return {
+    target: a.target,
+    type: 'agent' as const,
+    ...(a.slug ? { slug: a.slug } : {}),
+    name: a.name,
+    description: a.description,
+    matchReason: a.matchReason,
+  };
+}
+
 const AGENT_SEARCH_LIMIT = 3;
 
 /**
@@ -663,14 +675,7 @@ export async function handleCatalogSearchInline(
         const a = agentResults[i]!;
         const named = /is the (handle|name)/.test(a.matchReason);
         allDiscovered.push({
-          item: {
-            target: a.target,
-            type: 'agent' as const,
-            ...(a.slug ? { slug: a.slug } : {}),
-            name: a.name,
-            description: a.description,
-            matchReason: a.matchReason,
-          },
+          item: agentDiscoveredItem(a),
           score: named ? topScore + 1 : 5.0 / (i + 1),
         });
       }

@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { matchAgentCandidates, scoreIntegrationTools } from './catalogSearch.js';
+import {
+  agentDiscoveredItem,
+  matchAgentCandidates,
+  scoreIntegrationTools,
+} from './catalogSearch.js';
+import { getOperation } from '@aflow/schemas';
 import type { AgentId, SystemRole } from '@aflow/schemas';
 import type { IntegrationToolDescriptor } from '@aflow/schemas';
 
@@ -144,6 +149,23 @@ describe('matchAgentCandidates', () => {
     expect(results[0]?.target).toEqual(shepherd.target);
     expect(results[0]?.matchReason).toContain('is the name');
     expect(results.length).toBeLessThanOrEqual(3);
+  });
+
+  it('returns agent results the declared catalog.tool.search output keeps whole', () => {
+    const outputZod = getOperation('catalog.tool.search')?.outputZod;
+    expect(outputZod).toBeDefined();
+    const discovered = [
+      ...matchAgentCandidates([shepherd], 'local-pr-shepherd'),
+      ...matchAgentCandidates(roles, 'coach'),
+    ].map(agentDiscoveredItem);
+    expect(discovered[0]).toHaveProperty('slug', 'local-pr-shepherd');
+    const output = {
+      mode: 'search',
+      discovered,
+      count: discovered.length,
+      promotion: 'found',
+    };
+    expect(outputZod!.parse(output)).toEqual(output);
   });
 
   it('gives a platform role no slug, and drops what matches nothing', () => {
