@@ -7,6 +7,7 @@ import {
   substituteTemplateBinds,
 } from '@aflow/schemas';
 import { REVIEW_LOCAL_CHANGES } from './reviewLocalChanges.js';
+import { skillGuidance } from '../__tests__/skillGuidance.js';
 
 const AjvCtor = (AjvModule as unknown as { default: typeof AjvModule }).default ?? AjvModule;
 
@@ -131,7 +132,7 @@ describe('Review Local Changes — the first harness inside a skill', () => {
     // The skill says so, to the harness and to the Helmsman that fills `at`.
     expect(template?.task).toContain('detached at the commit the range ends at');
     expect(template?.task).toContain('names only where the diff starts');
-    expect(REVIEW_LOCAL_CHANGES.description).toContain('detached at `at`');
+    expect(skillGuidance(REVIEW_LOCAL_CHANGES)).toContain('detached at `at`');
     const at = (wf.runInputs ?? []).find((i) => i.id === 'at');
     expect(at?.description).toContain('"HEAD" for "main..HEAD"');
   });
@@ -144,7 +145,7 @@ describe('Review Local Changes — the first harness inside a skill', () => {
     expect(template?.task).not.toMatch(/git diff <base>\.\.<sha>/);
     const from = (wf.runInputs ?? []).find((i) => i.id === 'from');
     expect(from?.description).toContain('`<from>...<at>`');
-    expect(REVIEW_LOCAL_CHANGES.description).toContain('`main...HEAD`');
+    expect(skillGuidance(REVIEW_LOCAL_CHANGES)).toContain('`main...HEAD`');
   });
 
   it('makes brief a rung of its own, budgeted in coding-agent turns rather than asked for in prose', () => {
@@ -166,8 +167,10 @@ describe('Review Local Changes — the first harness inside a skill', () => {
     expect(template?.task).toContain('At `brief`');
     // What tells the Helmsman that a request for something quick is this rung
     // and not a sentence in `focus`.
-    expect(REVIEW_LOCAL_CHANGES.description).toContain('smoke test');
-    expect(REVIEW_LOCAL_CHANGES.description).toContain('not something to ask the coding agent for');
+    expect(skillGuidance(REVIEW_LOCAL_CHANGES)).toContain('smoke test');
+    expect(skillGuidance(REVIEW_LOCAL_CHANGES)).toContain(
+      'not something to ask the coding agent for',
+    );
   });
 
   it('promotes the verdict, the summary a person reads, and the findings a publication decides on one at a time', () => {

@@ -20,6 +20,7 @@ import {
   RISK_MODIFIERS,
   buildVirtualToolSpec,
   getOperation,
+  bundleForOperation,
   bundlesForSurface,
   applyBundlePlacements,
   estimateToolSchemaTokens,
@@ -778,9 +779,17 @@ describe('capability bundles — what the Helmsman is offered', () => {
     const offered = bundlesForSurface(helmsmanSurface).map((b) => b.id);
     // The registry is total over the catalog, so it names capability no single
     // agent holds. None of these belong in a Helmsman control.
-    for (const absent of ['guardrails', 'agents', 'delegation', 'http']) {
+    for (const absent of ['guardrails', 'delegation', 'http']) {
       expect(offered).not.toContain(absent);
     }
+  });
+
+  it('offers Agents for reading a space agent, and nothing else of it', () => {
+    // A space agent is scheduled by its id, which its definition holds; agent
+    // writes and the agent catalog stay out of the Helmsman's reach.
+    expect(helmsmanSurface.filter((id) => bundleForOperation(id)?.id === 'agents')).toEqual([
+      'agent.manage.get',
+    ]);
   });
 
   it('offers the bundles it does reach', () => {

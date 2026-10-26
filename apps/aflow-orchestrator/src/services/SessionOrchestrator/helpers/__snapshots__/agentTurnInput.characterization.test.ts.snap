@@ -35,7 +35,7 @@ exports[`buildAgentTurnInput — baseline shape > assembles a minimal turn 1`] =
     "scope": {
       "pinnedMax": 50,
       "pinnedUsed": 1,
-      "schemaTokensUsed": 386,
+      "schemaTokensUsed": 414,
       "virtualMax": 20,
       "virtualUsed": 0,
     },
@@ -246,7 +246,7 @@ exports[`buildAgentTurnInput — tool surface assembly > caps discovered virtual
   "scope": {
     "pinnedMax": 50,
     "pinnedUsed": 2,
-    "schemaTokensUsed": 1460,
+    "schemaTokensUsed": 1507,
     "virtualMax": 20,
     "virtualUsed": 20,
   },

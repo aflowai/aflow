@@ -17,6 +17,7 @@ import {
   COMMISSION_RESULT_SCHEMA,
   COMMIT_TITLE_MAX_CHARS,
 } from './commissionChange.js';
+import { skillGuidance } from '../__tests__/skillGuidance.js';
 
 const wf = COMMISSION_CHANGE.bundle.workflow;
 const task = wf.tasks[0];
@@ -172,7 +173,7 @@ describe('Commission Change — a brief to the machine’s coding agent', () => 
       'names the dev-server URL the coding agent opens and what it should see working there',
     );
     expect(input?.description?.length ?? 0).toBeLessThanOrEqual(500);
-    expect(COMMISSION_CHANGE.description).toContain("`browser: { profile: 'ephemeral' }`");
+    expect(skillGuidance(COMMISSION_CHANGE)).toContain("`browser: { profile: 'ephemeral' }`");
   });
 
   it('promotes the change and what a publication and a further turn take, patchRef primary', () => {
@@ -208,17 +209,17 @@ describe('Commission Change — a brief to the machine’s coding agent', () => 
     expect(COMMIT_TITLE_MAX_CHARS).toBeLessThan(72);
     // The rest of the result is the brief's to ask for.
     expect(COMMISSION_RESULT_SCHEMA).not.toHaveProperty('additionalProperties');
-    expect(COMMISSION_CHANGE.description).toContain(
+    expect(skillGuidance(COMMISSION_CHANGE)).toContain(
       'The coding agent writes the `summary` whatever the brief asks: a title line under 72 characters and one paragraph',
     );
-    expect(COMMISSION_CHANGE.description).toContain('its run id as `commission`');
+    expect(skillGuidance(COMMISSION_CHANGE)).toContain('its run id as `commission`');
   });
 
   it('keeps the change when the coding agent writes no valid summary', () => {
     // The patch is the product: a missing or invalid result costs the summary
     // only, and the publication then asks for a commit message.
     expect(template['resultRequired']).toBe(false);
-    expect(COMMISSION_CHANGE.description).toContain(
+    expect(skillGuidance(COMMISSION_CHANGE)).toContain(
       'A commission whose coding agent wrote no valid summary still returns its change',
     );
     const op = substituteTemplateBinds(template, { bindingId: 'hb_repo', task: BRIEF }, declared);
@@ -227,7 +228,7 @@ describe('Commission Change — a brief to the machine’s coding agent', () => 
   });
 
   it("starts a fix round at the branch's head, named as `base`, pushed or kept local", () => {
-    expect(COMMISSION_CHANGE.description).toContain(
+    expect(skillGuidance(COMMISSION_CHANGE)).toContain(
       "the branch's name for a fix appended to a branch — a fix round included, whose branch holds the earlier round's commit pushed or kept local — so the patch is made against the branch's head and never against the earlier commission's `baseSha`",
     );
     const base = (wf.runInputs ?? []).find((i) => i.id === 'base');
@@ -237,7 +238,7 @@ describe('Commission Change — a brief to the machine’s coding agent', () => 
   });
 
   it('says what a commission is, how it starts, how many run, and whose checks the brief names', () => {
-    const description = COMMISSION_CHANGE.description;
+    const description = skillGuidance(COMMISSION_CHANGE);
     expect(description).toContain("`wait: 'none'`");
     expect(description).toContain('wakes it');
     expect(description).toContain(
@@ -248,7 +249,7 @@ describe('Commission Change — a brief to the machine’s coding agent', () => 
   });
 
   it("has the brief run the repository's guards before the commission returns, and fix what fails there", () => {
-    const description = COMMISSION_CHANGE.description;
+    const description = skillGuidance(COMMISSION_CHANGE);
     expect(description).toContain('`node --import tsx scripts/large-files/cli.ts check`');
     expect(description).toContain(
       '`node --conditions=ts-source --import tsx scripts/context-budget/cli.ts check`',
@@ -256,9 +257,7 @@ describe('Commission Change — a brief to the machine’s coding agent', () => 
     expect(description).toContain('before it returns, fix what fails in the same session');
     const taskInput = wf.runInputs?.find((i) => i.id === 'task');
     expect(taskInput?.description).toContain('checks and guards to run before it returns');
-    expect(getSkillBundleEntry('local-commission')?.helmsmanHints?.join('\n')).toContain(
-      'large-files and context-budget guards',
-    );
+    expect(getSkillBundleEntry('local-commission')?.helmsmanHints).toEqual([]);
   });
 
   it('runs beside any number of other commissions, one task each', () => {
@@ -280,8 +279,10 @@ describe('Commission Change — a brief to the machine’s coding agent', () => 
   });
 
   it('is started for its plan node by the start’s planNodeId, never by a run input of its own', () => {
-    expect(COMMISSION_CHANGE.description).toContain('started with `planNodeId`, beside its inputs');
-    expect(COMMISSION_CHANGE.description).toContain('plan.node.get');
+    expect(skillGuidance(COMMISSION_CHANGE)).toContain(
+      'started with `planNodeId`, beside its inputs',
+    );
+    expect(skillGuidance(COMMISSION_CHANGE)).toContain('plan.node.get');
     expect(wf.runInputs?.map((input) => input.id)).not.toContain('planNodeId');
   });
 });

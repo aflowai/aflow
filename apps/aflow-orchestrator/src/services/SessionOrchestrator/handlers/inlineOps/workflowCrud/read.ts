@@ -87,6 +87,7 @@ export async function handleWorkflowGet(
           slug: workflow.slug,
           name: workflow.name,
           description: workflow.description,
+          ...(workflow.usage ? { usage: workflow.usage } : {}),
           mode: workflow.mode,
           status: workflow.status,
           revision: workflow.revision,
@@ -95,7 +96,7 @@ export async function handleWorkflowGet(
         ...(firstTaskInputContract ? { firstTaskInputContract } : {}),
         ...(result['campaignContract'] ? { campaignContract: result['campaignContract'] } : {}),
         guidance:
-          'workflow.run.start performs the authoritative approval, validity and binding checks. Use the input contracts above; no workflow graph or run history is required to invoke this skill.',
+          'workflow.run.start performs the authoritative approval, validity and binding checks. Use the input contracts above, and the skill’s usage — its pitfalls and what follows it — when briefing and starting it; no workflow graph or run history is required to invoke this skill.',
       },
       startTime,
     );

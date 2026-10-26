@@ -76,6 +76,7 @@ import {
   REVIEW_LOCAL_CHANGES,
   REVIEW_SEVERITIES,
 } from './reviewLocalChanges.js';
+import { skillGuidance } from '../__tests__/skillGuidance.js';
 
 const AjvCtor = (AjvModule as unknown as { default: typeof AjvModule }).default ?? AjvModule;
 
@@ -393,7 +394,7 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     expect(failure).toContain('Nothing has been pushed');
     expect(read.goal).not.toContain('credential');
     for (const prose of [
-      PUBLISH_LOCAL_CHANGES.description,
+      skillGuidance(PUBLISH_LOCAL_CHANGES),
       taskOrThrow('approve-push').pauseInstruction ?? '',
       wf.output?.guidance ?? '',
     ]) {
@@ -470,13 +471,13 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     expect(taskOrThrow('message-from').inputContract?.bindings['baseSha']?.schema).toEqual(
       baseSha?.schema,
     );
-    expect(PUBLISH_LOCAL_CHANGES.description).toContain(
+    expect(skillGuidance(PUBLISH_LOCAL_CHANGES)).toContain(
       'a branch is reused only that way, and a fresh change takes a fresh branch',
     );
   });
 
   it("briefs a fix round from the branch's head, by its name, never from the earlier baseSha", () => {
-    const description = PUBLISH_LOCAL_CHANGES.description;
+    const description = skillGuidance(PUBLISH_LOCAL_CHANGES);
     expect(description).toContain(
       "`commissionInputs` — `base` the branch's name, and `mergeFrom: origin/<base>` where the base moved",
     );
@@ -543,10 +544,10 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     expect(taskOrThrow('message-from').inputContract?.bindings['mergeFrom']?.schema).toEqual(
       mergeFrom?.schema,
     );
-    expect(PUBLISH_LOCAL_CHANGES.description).toContain(
+    expect(skillGuidance(PUBLISH_LOCAL_CHANGES)).toContain(
       'is commissioned with `mergeFrom: origin/<base>` as well',
     );
-    expect(PUBLISH_LOCAL_CHANGES.description).toContain(
+    expect(skillGuidance(PUBLISH_LOCAL_CHANGES)).toContain(
       'published with the sha the commission reported in `merge.from` as `mergeFrom`: the branch then carries one merge commit holding the fix',
     );
   });
@@ -589,7 +590,7 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     expect(mergeOnly).not.toHaveProperty('patchRef');
     expect(mergeOnly).not.toHaveProperty('patch');
     expect(HostFilePatchInputSchema.safeParse(mergeOnly).success).toBe(true);
-    expect(PUBLISH_LOCAL_CHANGES.description).toContain(
+    expect(skillGuidance(PUBLISH_LOCAL_CHANGES)).toContain(
       'it is published with `mergeFrom` and neither `patchRef` nor `patch`',
     );
 
@@ -617,7 +618,9 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     expect(patchSchema.maxLength).toBe(MAX_PARENT_INPUTS_SERIALIZED_BYTES);
     expect(patchSchema.description).toContain("32 KB a run's inputs carry together");
     expect(patchSchema.description).toContain('`patchRef`');
-    expect(PUBLISH_LOCAL_CHANGES.description).toContain("Never pass a commission's `patch` text.");
+    expect(skillGuidance(PUBLISH_LOCAL_CHANGES)).toContain(
+      "Never pass a commission's `patch` text.",
+    );
   });
 
   it('takes the owner and the repository as names, never a URL or `owner/repo`', () => {
@@ -1754,7 +1757,7 @@ describe('Publish Local Changes — the folder decides whether the push asks', (
         prNumber: 7,
       });
     }
-    expect(PUBLISH_LOCAL_CHANGES.description).toContain(
+    expect(skillGuidance(PUBLISH_LOCAL_CHANGES)).toContain(
       'A branch that already has an open pull request into the base gets no second one: the run reports that one.',
     );
   });
@@ -2032,12 +2035,12 @@ describe('Publish Local Changes — the folder decides whether the push asks', (
       '`unless-unreviewed`',
       'is `unless-unreviewed`, the default',
     ]) {
-      expect(PUBLISH_LOCAL_CHANGES.description).toContain(phrase);
+      expect(skillGuidance(PUBLISH_LOCAL_CHANGES)).toContain(phrase);
     }
-    expect(PUBLISH_LOCAL_CHANGES.description).toContain(
+    expect(skillGuidance(PUBLISH_LOCAL_CHANGES)).toContain(
       "Whatever the posture, the run scans every line the push would add, the headers and message of every commit it carries, and the pull request's title and summary for secrets before any of this, and a finding stops it with nothing pushed — which is what lets a review stand in for the operator.",
     );
-    expect(PUBLISH_LOCAL_CHANGES.description).toContain(
+    expect(skillGuidance(PUBLISH_LOCAL_CHANGES)).toContain(
       "Once the run asks, the operator's answer decides: a declined push pushes nothing, whatever the posture.",
     );
   });
@@ -2256,7 +2259,7 @@ describe('Publish Local Changes — the commit is scanned for secrets before any
   });
 
   it('reports a finding by file, line and rule, and never asks for the value', () => {
-    expect(PUBLISH_LOCAL_CHANGES.description).toContain(
+    expect(skillGuidance(PUBLISH_LOCAL_CHANGES)).toContain(
       'report each place and rule it names — never ask for or repeat the value',
     );
   });
@@ -2398,7 +2401,7 @@ describe("Publish Local Changes — the push checks origin's base and URL in its
     expect(failure).toContain('publish this branch as it stands');
     expect(failure).toContain('no approval of this push is on record');
     expect(failure).not.toContain('fresh branch');
-    expect(PUBLISH_LOCAL_CHANGES.description).toContain(
+    expect(skillGuidance(PUBLISH_LOCAL_CHANGES)).toContain(
       'A refused push leaves the commit on its branch: report its message and the remedy the run names.',
     );
   });
@@ -2463,7 +2466,7 @@ describe('Publish Local Changes — a branch is published as it stands', () => {
     expect(runInput('patchRef')?.description).toContain(
       'Omit both, `mergeFrom` and `commitMessage` to publish `branch` as it stands',
     );
-    expect(PUBLISH_LOCAL_CHANGES.description).toContain('**A branch as it stands**');
+    expect(skillGuidance(PUBLISH_LOCAL_CHANGES)).toContain('A branch as it stands:');
   });
 
   it('runs check, scan, review and push on the branch head, with no patch input', () => {
@@ -2796,15 +2799,17 @@ describe("Publish Local Changes — the folder's checks run before anything leav
   });
 
   it("says in its description that the folder's checks run first, and that the pull request's remain the proof", () => {
-    expect(PUBLISH_LOCAL_CHANGES.description).toContain(
+    expect(skillGuidance(PUBLISH_LOCAL_CHANGES)).toContain(
       'run in a checkout of the commit before the scan, and nothing is scanned, reviewed or pushed until they pass',
     );
-    expect(PUBLISH_LOCAL_CHANGES.description).toContain(
+    expect(skillGuidance(PUBLISH_LOCAL_CHANGES)).toContain(
       'any other failure stops the run with the end of what they printed.',
     );
-    expect(PUBLISH_LOCAL_CHANGES.description).toContain('the push needs their passing receipt.');
-    expect(PUBLISH_LOCAL_CHANGES.description).toContain('A folder that declares none runs none.');
-    expect(PUBLISH_LOCAL_CHANGES.description).toContain(
+    expect(skillGuidance(PUBLISH_LOCAL_CHANGES)).toContain('the push needs their passing receipt.');
+    expect(skillGuidance(PUBLISH_LOCAL_CHANGES)).toContain(
+      'A folder that declares none runs none.',
+    );
+    expect(skillGuidance(PUBLISH_LOCAL_CHANGES)).toContain(
       "The pull request's own checks remain the proof.",
     );
   });
@@ -3446,7 +3451,7 @@ describe("Publish Local Changes — the rounds rule decides a review's findings,
         round.schema,
       );
       expect(round.description).toContain('1, the default');
-      expect(PUBLISH_LOCAL_CHANGES.description).toContain('`round`');
+      expect(skillGuidance(PUBLISH_LOCAL_CHANGES)).toContain('`round`');
     });
 
     it('reaches the rule from the run input alone, beside the verdict and the findings', () => {

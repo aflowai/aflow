@@ -36,6 +36,7 @@ import {
   CHECKS_STOPPED,
   PUBLISH_AS_IT_STANDS,
   PUBLISH_DESCRIPTION,
+  PUBLISH_USAGE,
 } from './publishLocalChangesProse.js';
 import { REVIEW_FINDING_SCHEMA, REVIEW_LOCAL_CHANGES } from './reviewLocalChanges.js';
 
@@ -338,7 +339,7 @@ const ENTRY_INPUT_CONTRACT = {
 
 const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'publish-local-changes',
-  version: 46,
+  version: 47,
   name: 'Publish Local Changes',
   tagline:
     'Commit a patch onto a branch of a connected repository, then push it and open the pull request — asking the operator first unless the folder says otherwise.',
@@ -367,6 +368,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
       name: 'Publish Local Changes',
       description:
         "Take a patch to a pull request on a repository connected as a host folder: the patch is committed in a detached worktree — onto a new branch at the commit the patch was made against, or appended to the branch it was made on — the folder's declared checks run on it, everything the push would add is scanned for secrets, the push is cleared, by the operator's approval or by the folder's push approval, and the branch is then pushed and opened as a pull request. The operator's working tree is never touched.",
+      usage: PUBLISH_USAGE,
       goal: "Turn a patch into a commit on a branch of a connected repository and, once the push is cleared, a pushed branch and an open pull request — with nothing leaving the machine before the operator approves, unless the folder's push approval says it need not ask.",
       mode: 'process' as const,
       outcomes: [
@@ -1485,8 +1487,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
         'commit and push this',
         'turn this patch into a pull request',
       ],
-      activationHint:
-        "Run to publish a patch that already exists — a commission's, passed as its `patchRef`, or a small diff from the operator — onto a branch of a connected repository and into a pull request, or a branch whose commit is already made, as it stands. The commit is local and reversible, and everything the push would add is scanned for secrets before it; the push waits for an approval unless the folder's push approval says it need not ask. The folder must allow pushes under a branch prefix.",
+      activationHint: 'Run to publish an existing patch onto a branch and into a pull request.',
       prerequisites: [],
       priority: 50,
     },

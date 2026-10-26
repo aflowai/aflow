@@ -11,6 +11,7 @@ import {
   WorkflowOutputDeclarationSchema,
   WorkflowStateVariableSchema,
   WorkflowRunInputSchema,
+  SkillUsageSchema,
   WORKFLOW_TASKS_MAX,
 } from '../operations/workflow.js';
 import {
@@ -37,6 +38,8 @@ export const ComposedWorkflowSchema = z.object({
     .max(64),
   name: z.string().min(1).max(120),
   description: z.string().max(2000).optional(),
+  /** When to pick the skill, when not, what follows it and its pitfalls. */
+  usage: SkillUsageSchema.optional(),
   goal: z.string().min(1).max(2000).optional(),
   outcomes: z.array(OutcomeSchema).min(1).max(10),
   mode: WorkflowModeSchema,

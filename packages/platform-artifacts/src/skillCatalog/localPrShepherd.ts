@@ -1,6 +1,9 @@
 import {
+  MAX_FIRINGS_CAP,
   SHEPHERD_ATTEMPT_BUDGET_DEFAULT,
   SHEPHERD_HANDS_OFF_LABEL,
+  SHEPHERD_SCHEDULE_CRON_DEFAULT,
+  SKILL_STARTER_SCHEDULE_VARIABLE,
   SHEPHERD_LEASE_STALE_AFTER_MS,
   SHEPHERD_RESPONSE_PRESETS,
   SHEPHERD_UNLISTED_PERSISTS_AFTER_MS,
@@ -205,27 +208,29 @@ const DECIDE_STATE = {
   ),
 };
 
+/** What the Helmsman needs once it has chosen the skill: carried as the skill's usage pitfalls. */
+const SHEPHERD_PITFALLS: string[] = [
+  `When it merges: only where the folder's merge posture, \`mergePosture\` beside the push approval, is \`when-green\` — \`never\` is the default, and leaves every merge to the operator. Then a green pull request is merged by squash, pinned to the head it read, when every check the base branch requires — by its rulesets or its classic protection — passed on that head, the Local Code Review of the publication that pushed that head returned \`approve\` for it, no person's standing review requests changes, and GitHub says the head merges into its base. Each condition that does not hold leaves it, saying which; a mergeability GitHub has not computed yet is read again next pass, never merged on. The merge asks the operator's approval of exactly that request, as every merge does; a declined or refused merge of a head is not asked for again until a push moves it. One refusal is not of the head: GitHub answering 405 \`Base branch was modified\` because another pull request merged first, while the head, read again, is still the one pinned and green. That merge is sent once more in the same pass, and if GitHub refuses it again the pass hands back \`merge\` with nothing recorded against the head, so the next pass asks again.`,
+  `What it needs: the connected folder, \`bindingId\`, connected with a publish prefix and an \`origin\` on GitHub, and the GitHub connection for the space. \`pullNumber\` aims a pass at one pull request, which must still be one the loop opened; without it a pass tends the one after the pull request the last such pass tended, so passes on a schedule take them in turn. \`attemptBudget\` is how many failures of one pull request it acts on before it stops — ${String(SHEPHERD_ATTEMPT_BUDGET_DEFAULT)} unless named.`,
+  `When it stops: a pull request whose budget is spent and whose CI fails again is \`abandon\`: the handoff comment says why, and one Action Center item asks a person to take it — one per head, however many passes find it so. A push that moves the head is read again.`,
+  `What it hands to the agent: a pass that ends on a case its rules cannot act on — GitHub refused the merge for anything but a base that moved, the head does not merge into its base while CI has not failed on it and the shepherd would merge it, reviews or check runs past the one page a pass reads, or a repository whose open pull requests the connection has refused to list on every pass for ${String(SHEPHERD_UNLISTED_PERSISTS_AFTER_MS / 60_000)} minutes — starts a Helmsman conversation on it, carrying what the pass read, what it decided and why, and what the handoff records as tried, for the Helmsman to decide and act on with the skills it has. A read that failed once is read again by the next pass, and a draft, or a folder whose merge is the operator's, stays with them. A case is handed over once: a pull request's once per head and case, so a push that moves the head is a new case, and so is another case on the same head; a repository's once until a pass lists its pull requests again.`,
+  `On a schedule: passes overlap safely. Two on one pull request meet at its branch's lease, and the second acts on nothing. The schedule renews itself: a pass handed \`${SCHEDULE_INPUT}\` — the Local PR Shepherd agent hands it the schedule that started it — reads that schedule, and where it is active and within ${String(SCHEDULE_RENEWAL_WINDOW)} firings of its cap creates its successor, the same agent, cron, input and expiry, which takes over from it. A schedule has one successor however many passes find it due, one its owner paused is not renewed, and the chain ends at the schedule's expiry.`,
+  `What it never does: approve or close a pull request, merge one where the posture is \`never\` or without the operator's approval, or push other than through Local Publish under the folder's push approval. A pull request a person opened, or one labelled \`${SHEPHERD_HANDS_OFF_LABEL}\`, is left untouched; a branch with a publication or a commission in flight, or whose pull request's plan node has any run in flight serving it, whoever started it, is \`wait\`; the same check run is acted on once, unless the base branch moved after its remedy — GitHub runs no check again for that, and a re-run would read the old base, so the base is merged in and published.`,
+  `With the result: report the decision and its reason; for a fix, the publication's run — its pull request, and whether it pushed or is waiting at its approval; for a merge, whether it merged, waits at its approval, or was declined or refused.`,
+  `A pass is one run of the skill over a folder: start the Local PR Shepherd agent, which starts one on each folder it was written with, or workflow.run.start local-pr-shepherd with one folder’s bindingId — and pullNumber to aim it at one pull request. Its decision and reason are in its result and in the handoff comment on the pull request.`,
+  `To run it on a schedule: agent.schedule.create, action start_run, target { kind: 'custom-agent', agentId } of the Local PR Shepherd agent — catalog.tool.search with query 'local-pr-shepherd' and sources ['agent'] returns that target, and agent.manage.get { agentSlug: 'local-pr-shepherd' } reads it — cron '${SHEPHERD_SCHEDULE_CRON_DEFAULT}' unless the operator names another, and input { input: 'tend', config: { ${SKILL_STARTER_SCHEDULE_VARIABLE}: { $schedule: 'id' } } }, which hands each pass the schedule that started it. Each firing tends the next pull request in turn; firings that overlap meet at the branch's lease.`,
+  `The shepherd’s schedule renews itself: it fires at most ${String(MAX_FIRINGS_CAP)} times, and a pass within ${String(SCHEDULE_RENEWAL_WINDOW)} firings of that creates its successor, which takes over. Create it once; it runs until its expiresAt (30 days unless set) or until the operator pauses it. A Local PR Shepherd agent written before this refuses the ${SKILL_STARTER_SCHEDULE_VARIABLE} config: delete it, then update the bundle from the Store to write it again.`,
+  `The shepherd never approves or closes. A fix it publishes waits at Local Publish’s approval where the folder’s posture asks; a merge, only under the folder’s merge posture when-green (mergePosture in the machine block), waits at the merge’s own write approval. Both approvals are the operator’s, in the Action Center.`,
+  `A space with the GitHub definition from an earlier Local Publish needs Local Publish updated from the Store for the endpoints the shepherd reads — the jobs of a run, the end of a job’s log, a branch and its rules, and the merge pinned to a head.`,
+];
+
 const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
   catalogId: 'local-pr-shepherd',
-  version: 17,
+  version: 18,
   name: 'Local PR Shepherd',
   tagline:
     "Tend the pull requests the loop opened: read their CI, fix and publish a red check through Local Publish, and merge a green one where the folder's merge posture allows — never approving or closing.",
-  description: `One pass over the pull requests Local Publish opened from a connected folder. It reads the folder, the loop's open pull requests under its publish prefix, the head's check runs, its own handoff comment and the space's work in flight on the branch, and decides by rules — \`fix\`, \`merge\`, \`wait\`, \`abandon\` or \`leave\`, with the reason. A red check no rule holds back is fixed: the remedy question reads the failing jobs' logs and picks re-running the jobs, a fix commission, a dependency bump or a merge round, and anything it is not sure of is the fix commission. The fix is commissioned on the branch with its base merged in and published through Local Publish, which asks the operator exactly where it would when started by hand. Every pass leaves its record in the handoff comment.
-
-**When it merges**: only where the folder's merge posture, \`mergePosture\` beside the push approval, is \`when-green\` — \`never\` is the default, and leaves every merge to the operator. Then a green pull request is merged by squash, pinned to the head it read, when every check the base branch requires — by its rulesets or its classic protection — passed on that head, the Local Code Review of the publication that pushed that head returned \`approve\` for it, no person's standing review requests changes, and GitHub says the head merges into its base. Each condition that does not hold leaves it, saying which; a mergeability GitHub has not computed yet is read again next pass, never merged on. The merge asks the operator's approval of exactly that request, as every merge does; a declined or refused merge of a head is not asked for again until a push moves it. One refusal is not of the head: GitHub answering 405 \`Base branch was modified\` because another pull request merged first, while the head, read again, is still the one pinned and green. That merge is sent once more in the same pass, and if GitHub refuses it again the pass hands back \`merge\` with nothing recorded against the head, so the next pass asks again.
-
-**What it needs**: the connected folder, \`bindingId\`, connected with a publish prefix and an \`origin\` on GitHub, and the GitHub connection for the space. \`pullNumber\` aims a pass at one pull request, which must still be one the loop opened; without it a pass tends the one after the pull request the last such pass tended, so passes on a schedule take them in turn. \`attemptBudget\` is how many failures of one pull request it acts on before it stops — ${String(SHEPHERD_ATTEMPT_BUDGET_DEFAULT)} unless named.
-
-**When it stops**: a pull request whose budget is spent and whose CI fails again is \`abandon\`: the handoff comment says why, and one Action Center item asks a person to take it — one per head, however many passes find it so. A push that moves the head is read again.
-
-**What it hands to the agent**: a pass that ends on a case its rules cannot act on — GitHub refused the merge for anything but a base that moved, the head does not merge into its base while CI has not failed on it and the shepherd would merge it, reviews or check runs past the one page a pass reads, or a repository whose open pull requests the connection has refused to list on every pass for ${String(SHEPHERD_UNLISTED_PERSISTS_AFTER_MS / 60_000)} minutes — starts a Helmsman conversation on it, carrying what the pass read, what it decided and why, and what the handoff records as tried, for the Helmsman to decide and act on with the skills it has. A read that failed once is read again by the next pass, and a draft, or a folder whose merge is the operator's, stays with them. A case is handed over once: a pull request's once per head and case, so a push that moves the head is a new case, and so is another case on the same head; a repository's once until a pass lists its pull requests again.
-
-**On a schedule**: passes overlap safely. Two on one pull request meet at its branch's lease, and the second acts on nothing. The schedule renews itself: a pass handed \`${SCHEDULE_INPUT}\` — the Local PR Shepherd agent hands it the schedule that started it — reads that schedule, and where it is active and within ${String(SCHEDULE_RENEWAL_WINDOW)} firings of its cap creates its successor, the same agent, cron, input and expiry, which takes over from it. A schedule has one successor however many passes find it due, one its owner paused is not renewed, and the chain ends at the schedule's expiry.
-
-**What it never does**: approve or close a pull request, merge one where the posture is \`never\` or without the operator's approval, or push other than through Local Publish under the folder's push approval. A pull request a person opened, or one labelled \`${SHEPHERD_HANDS_OFF_LABEL}\`, is left untouched; a branch with a publication or a commission in flight, or whose pull request's plan node has any run in flight serving it, whoever started it, is \`wait\`; the same check run is acted on once, unless the base branch moved after its remedy — GitHub runs no check again for that, and a re-run would read the old base, so the base is merged in and published.
-
-**With the result**: report the decision and its reason; for a fix, the publication's run — its pull request, and whether it pushed or is waiting at its approval; for a merge, whether it merged, waits at its approval, or was declined or refused.`,
+  description: `One pass over the pull requests Local Publish opened from a connected folder. It reads the folder, the loop's open pull requests under its publish prefix, the head's check runs, its own handoff comment and the space's work in flight on the branch, and decides by rules — \`fix\`, \`merge\`, \`wait\`, \`abandon\` or \`leave\`, with the reason. A red check no rule holds back is fixed: the remedy question reads the failing jobs' logs and picks re-running the jobs, a fix commission, a dependency bump or a merge round, and anything it is not sure of is the fix commission. The fix is commissioned on the branch with its base merged in and published through Local Publish, which asks the operator exactly where it would when started by hand. Every pass leaves its record in the handoff comment.`,
   tags: ['coding', 'github', 'pull-requests', 'ci', 'local', 'developer-tools'],
   capabilityHints: [
     {
@@ -259,6 +264,24 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
       name: 'Local PR Shepherd',
       description:
         "One pass over the loop's open pull requests from a connected folder: read the folder, the pull request, its checks, its handoff and the work in flight on its branch — and, where the folder merges, the base branch's required checks, the people's reviews and the publication's verdict; decide by rules; for a red check, take the lease, read the failing jobs' logs, ask which remedy they want, re-run the jobs or commission the fix on the branch and publish it through Local Publish; for a green one the posture allows, take the lease and merge it by squash on the operator's approval; hand a case its rules cannot act on to the Helmsman, once, with what the pass read; release the lease and write the handoff; and renew the schedule that started the pass before its firings run out.",
+      usage: {
+        whenToUse: [
+          'Tending the pull requests Local Publish opened from a connected folder — "shepherd the pull requests", "fix the red CI on the loop\'s pull requests": it reads their CI, fixes a red check through Local Publish, and merges a green one where the folder\'s merge posture allows',
+          'Keeping those pull requests moving without a hand: schedule the Local PR Shepherd agent, which starts a pass on every folder it was written with',
+        ],
+        whenNotToUse: [
+          `A pull request a person opened, or one labelled \`${SHEPHERD_HANDS_OFF_LABEL}\` — it is left untouched`,
+          'Approving or closing a pull request — it never does either',
+          'A change not yet published — that is Commission Change, then Publish Local Changes',
+        ],
+        next: [
+          {
+            operation: 'agent.schedule.create',
+            when: "To tend on a schedule: target { kind: 'custom-agent', agentId } of the Local PR Shepherd agent, which catalog.tool.search with sources ['agent'] finds by its slug local-pr-shepherd — its pitfalls give the cron and input.",
+          },
+        ],
+        pitfalls: SHEPHERD_PITFALLS,
+      },
       goal: "Keep the loop's pull requests moving through CI without a hand: a red check is fixed and pushed through Local Publish under the folder's posture, acted on once — again only where the base moved after its remedy, by merging the base in — within a budget, and never where a person or other work holds the branch; a green one is merged only where the folder's merge posture allows and the operator approves — with every pass recorded on the pull request.",
       mode: 'process' as const,
       outcomes: [
@@ -928,7 +951,7 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
         'run the pr shepherd',
       ],
       activationHint:
-        "Run one pass of the Local PR Shepherd over a connected folder's pull requests: it reads CI, decides by rules, and fixes a red check through Local Publish. Start it with the folder's bindingId — and pullNumber to aim it at one pull request.",
+        "Run one pass of the Local PR Shepherd over a connected folder's pull requests: it reads CI, decides by rules, and fixes a red check through Local Publish. Its usage says how to start and schedule it.",
       prerequisites: [],
       priority: 50,
     },

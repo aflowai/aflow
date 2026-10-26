@@ -107,7 +107,11 @@ export {
   buildSummaryCatalog,
   buildCompactAwareness,
 } from './compactFormat.js';
-export { buildCoreToolSpec, estimateToolSchemaTokens } from './coreToolSpec.js';
+export {
+  buildCoreToolSpec,
+  compactToolDescription,
+  estimateToolSchemaTokens,
+} from './coreToolSpec.js';
 export {
   searchCatalog,
   resetSearchIndex,

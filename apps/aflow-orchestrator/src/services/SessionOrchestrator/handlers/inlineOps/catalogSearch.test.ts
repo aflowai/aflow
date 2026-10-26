@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { scoreIntegrationTools } from './catalogSearch.js';
+import { matchAgentCandidates, scoreIntegrationTools } from './catalogSearch.js';
+import type { AgentId, SystemRole } from '@aflow/schemas';
 import type { IntegrationToolDescriptor } from '@aflow/schemas';
 
 const apiTool = (
@@ -110,5 +111,43 @@ describe('scoreIntegrationTools', () => {
     const out = scoreIntegrationTools(tools, names, ['alpaca'], 3);
     expect(out).toHaveLength(1);
     expect(out[0]?.matchReason).toMatch(/Alpaca/);
+  });
+});
+
+describe('matchAgentCandidates', () => {
+  const shepherd = {
+    target: {
+      kind: 'custom-agent' as const,
+      agentId: 'a0000000-0000-4000-8000-000000000001' as AgentId,
+    },
+    displayKey: 'local-pr-shepherd',
+    name: 'Local PR Shepherd',
+    description:
+      'Starts one pass of the Local PR Shepherd on each connected folder that allows pushes.',
+  };
+  const roles = ['helmsman', 'coach', 'runner', 'local-reviewer'].map((role) => ({
+    target: { kind: 'platform-role' as const, systemRole: role as SystemRole },
+    displayKey: role,
+    name: `${role} local pass`,
+    description: 'A platform role',
+  }));
+
+  it('finds a space agent by its slug, with the target that carries its id', () => {
+    const [first] = matchAgentCandidates([...roles, shepherd], 'local-pr-shepherd');
+    expect(first?.target).toEqual(shepherd.target);
+    expect(first?.slug).toBe('local-pr-shepherd');
+    expect(first?.matchReason).toContain('is the handle');
+  });
+
+  it('finds it by its name, ahead of agents that share only a word of it', () => {
+    const results = matchAgentCandidates([...roles, shepherd], 'Local PR Shepherd');
+    expect(results[0]?.target).toEqual(shepherd.target);
+    expect(results[0]?.matchReason).toContain('is the name');
+    expect(results.length).toBeLessThanOrEqual(3);
+  });
+
+  it('gives a platform role no slug, and drops what matches nothing', () => {
+    expect(matchAgentCandidates(roles, 'coach')[0]?.slug).toBeUndefined();
+    expect(matchAgentCandidates([shepherd], 'kaggle')).toEqual([]);
   });
 });

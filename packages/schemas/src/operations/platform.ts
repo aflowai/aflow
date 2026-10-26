@@ -10,6 +10,7 @@ import { SkillDiscoveryOperationRegistration } from './skillDiscovery.js';
 import { StepTypeSchema } from '../artifact/operationDefinition.js';
 import type { OperationRegistration } from '../catalog/operationCatalog.js';
 import { OperationIdSchema, SpaceSlugSchema } from '../runtime/ids.js';
+import { PersistentAgentTargetSchema } from '../runtime/agentTarget.js';
 import { ApiVariableValuesSchema } from '../models/apiVariableValues.js';
 import { BindingFulfillmentSchema } from '../models/bindingFulfillment.js';
 import { IntegrationCredentialStatusSchema } from '../integrations/credentialStatus.js';
@@ -1265,7 +1266,7 @@ export const PlatformOperationRegistrations: OperationRegistration[] = [
         discovered: z.array(
           z.object({
             operationId: z.string().optional(),
-            agentId: z.string().optional(),
+            target: PersistentAgentTargetSchema.optional(),
             toolId: z.string().optional(),
             callName: z.string().optional(),
             type: z.enum(['platform', 'agent', 'api', 'mcp']),
@@ -1310,7 +1311,7 @@ export const PlatformOperationRegistrations: OperationRegistration[] = [
     usage: {
       oneLine: 'Add selected toolIds to the active toolbox. Use after catalog.tool.search / list.',
       whenToUse: [
-        'After discovering a tool via catalog.tool.search and you intend to call it',
+        'Loading a tool catalog.tool.search found, to call it next turn',
         'When you need an API endpoint or MCP tool that is not in your core toolbelt',
       ],
       whenNotToUse: [

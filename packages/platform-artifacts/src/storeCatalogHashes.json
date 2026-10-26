@@ -96,20 +96,20 @@
     "contentHash": "5f9151872e93be3bb7ad3b154b9a539677892df0361ad01c2579f227a27b6856"
   },
   "local-code-review": {
-    "version": 10,
-    "contentHash": "40c522523b46d0b00c9be79d07a41203374f742402df6be7c818ae74e0dfa1f2"
+    "version": 11,
+    "contentHash": "9967cfd8ecf43b2540adfc24fe216cf58f62e0a6ea5a8aca25b51390c6c0cd04"
   },
   "local-commission": {
-    "version": 10,
-    "contentHash": "96d47c0e053dca5d45b10cc86024002f75906b4ddffc45a6917fda149977944a"
+    "version": 11,
+    "contentHash": "087550116c8a38b7e2c401dd34a5e8002568a3db0ab8dd8d22ecb2a0e6d83d75"
   },
   "local-publish": {
-    "version": 48,
-    "contentHash": "8dd7a34d5b1ecdf14f07523d40e5f32b7e8edb0c94ee8fa2c01919110ae8c19d"
+    "version": 49,
+    "contentHash": "b378e3f77066759c92f16a7b6fef320beb4cac0d85387bdff14ede5fd76b02e2"
   },
   "local-shepherd": {
-    "version": 21,
-    "contentHash": "f4e82ac0f0d1a5b51c8f1e4c2385420c4ef14831a36a261e21f8ed57ad47a0c1"
+    "version": 22,
+    "contentHash": "dee02ddc49749c4338480562cfa1496b23abaf6d59379ccc8b9c130d905e1eef"
   },
   "newsapi": {
     "version": 1,

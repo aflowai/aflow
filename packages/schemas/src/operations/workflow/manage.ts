@@ -10,6 +10,7 @@ import { assertAuthoredTask } from './taskContract.js';
 import { WorkflowTaskSchema } from './task.js';
 import {
   IterationPolicySchema,
+  SkillUsageSchema,
   WORKFLOW_TASKS_MAX,
   WorkflowBudgetSchema,
   WorkflowSchema,
@@ -51,6 +52,7 @@ export const WorkflowPutInputSchema = z
         .max(64),
       name: z.string().min(1).max(120),
       description: z.string().max(2000).optional(),
+      usage: SkillUsageSchema.optional(),
       outcomes: z.array(OutcomeSchema).min(1).max(10),
       mode: WorkflowModeSchema,
       tasks: z.array(WorkflowTaskSchema).min(1).max(WORKFLOW_TASKS_MAX),
@@ -228,6 +230,7 @@ export const WorkflowGetOutputSchema = z.union([
       slug: true,
       name: true,
       description: true,
+      usage: true,
       mode: true,
       status: true,
       revision: true,

@@ -29,7 +29,7 @@ export const ModelOperationRegistrations: OperationRegistration[] = [
     usage: {
       oneLine: 'Why the model on this computer is slow or not answering, and what fixes it.',
       whenToUse: [
-        'The operator asks why responses are slow, or why the model is not answering',
+        'The operator asks why the model is slow or not answering',
         'Before proposing a change to the runtime, to propose the remedy an issue states',
       ],
       whenNotToUse: ['A model a hosted provider serves — this reads only the one on this computer'],

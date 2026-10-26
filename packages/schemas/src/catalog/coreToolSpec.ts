@@ -69,10 +69,25 @@ export function buildCoreToolSpec(operationId: string): AgentToolSpec | undefine
     operationId,
     stepType: op.stepType,
     name: op.name,
-    description: op.semanticDescription,
+    description: compactToolDescription(op.semanticDescription, op.usage.whenToUse),
     inputSchema: pruneSchemaForAgent(fullSchema),
     source: 'core',
   });
+}
+
+/**
+ * The emitted description: the semantic description, then the operation's
+ * first `whenToUse` on one line. Only the first, because declarations are paid
+ * on every turn and some operations list nine; the rest stay in
+ * `catalog.tool.list`. An operation's first `whenToUse` is therefore written to
+ * stand alone as the reason to pick it.
+ */
+export function compactToolDescription(
+  semanticDescription: string,
+  whenToUse: readonly string[] | undefined,
+): string {
+  const first = whenToUse?.[0]?.trim();
+  return first ? `${semanticDescription}\nUse when: ${first}` : semanticDescription;
 }
 
 export function estimateToolSchemaTokens(spec: AgentToolSpec): number {

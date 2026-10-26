@@ -355,7 +355,7 @@ export const BrowserPageActionRegistrations: OperationRegistration[] = [
     usage: {
       oneLine: 'Open a web page in a real browser and get an outline of what is on it.',
       whenToUse: [
-        'A page that renders in JavaScript, sits behind a sign-in, or has to be clicked through',
+        'A page that renders in JavaScript, needs a sign-in or is clicked through',
         'After a bound API or MCP tool, and search.web.fetch, cannot reach what the task needs',
       ],
       whenNotToUse: [

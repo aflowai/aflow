@@ -83,6 +83,7 @@ import {
 import { REMEDY_QUESTION, REMEDY_ROUTES, type Remedy } from './localPrShepherdDecisions.js';
 import { BASE_MOVED_BRIEF, BUMP_BRIEF, FIX_BRIEF, MERGE_BRIEF } from './localPrShepherdRemedies.js';
 import { PUBLISH_LOCAL_CHANGES } from './publishLocalChanges.js';
+import { skillGuidance } from '../__tests__/skillGuidance.js';
 
 const wf = LOCAL_PR_SHEPHERD.bundle.workflow;
 const tasks = materializeSkillTasks(wf.tasks as unknown as WorkflowTask[]);
@@ -3421,7 +3422,7 @@ describe('Local PR Shepherd — the schedule renews itself', () => {
 
   it('the skill and the bundle say the schedule renews itself, and the agent hands it on', () => {
     const bundle = getSkillBundleEntry('local-shepherd');
-    expect(LOCAL_PR_SHEPHERD.description).toContain('The schedule renews itself');
+    expect(skillGuidance(LOCAL_PR_SHEPHERD)).toContain('The schedule renews itself');
     expect(bundle?.description).toContain('The schedule renews itself');
     const [agent] = bundle?.agents ?? [];
     expect(agent?.scheduleInput).toBe('scheduleId');
@@ -3668,8 +3669,11 @@ describe('Local PR Shepherd bundle', () => {
       input: { input: 'tend', config: { [SKILL_STARTER_SCHEDULE_VARIABLE]: { $schedule: 'id' } } },
     });
     expect(schedule.cron).toBe('*/5 * * * *');
-    const hint = bundle?.helmsmanHints.find((h) => h.includes(SHEPHERD_SCHEDULE_CRON_DEFAULT));
-    expect(hint).toContain(`${SKILL_STARTER_SCHEDULE_VARIABLE}: { $schedule: 'id' }`);
+    const pitfall = wf.usage?.pitfalls.find((p) => p.includes(SHEPHERD_SCHEDULE_CRON_DEFAULT));
+    expect(pitfall).toContain(`${SKILL_STARTER_SCHEDULE_VARIABLE}: { $schedule: 'id' }`);
+    // The agent is scheduled by its id, which agent search returns for its slug.
+    expect(pitfall).toContain("sources ['agent']");
+    expect(wf.usage?.next[0]?.operation).toBe('agent.schedule.create');
   });
 
   it('fits the workflow task ceiling', () => {

@@ -328,9 +328,7 @@ export const HumanOperationRegistrations: OperationRegistration[] = [
     mutates: true,
     usage: {
       oneLine: 'Author a fresh question (input or approval) and pause until the operator responds.',
-      whenToUse: [
-        "No matching Action Center item exists, and you're authoring the question yourself",
-      ],
+      whenToUse: ['Asking the operator something no Action Center item already asks'],
       whenNotToUse: [
         'A Coach proposal / paused gate / record already covers it → human.action_center.focus',
         'Workflow-authored HITL belongs inside the workflow on a user.interaction.* step, not here',
@@ -364,9 +362,7 @@ export const HumanOperationRegistrations: OperationRegistration[] = [
     mutates: false,
     usage: {
       oneLine: 'Point the chat at an existing Action Center item — id MUST come from a listing op.',
-      whenToUse: [
-        'You already have an itemId from a real listing (proposal.list returned it, a paused gate exposed it)',
-      ],
+      whenToUse: ['You hold an itemId a listing or a paused gate returned'],
       whenNotToUse: [
         "You don't have an id from a listing — DO NOT invent one. Use human.chat.ask",
         'The thing you want is a workflow run resume — that flows through the workflow.run.resume path',

@@ -21,13 +21,18 @@ export async function querySkillDiscovery(
   const platform = listPlatformSkillBundles().map((bundle) => bundle.workflow);
   const platformValues = platform.map(
     (w) => sql`(${w.slug}::text, ${w.name}::text, ${w.description}::text,
+    ${JSON.stringify(w.usage ?? {})}::jsonb,
     ${w.mode}::text, ${w.status}::text, ${w.revision}::integer, 'platform'::text)`,
   );
   const platformCte = platformValues.length
     ? sql`VALUES ${sql.join(platformValues, sql`, `)}`
-    : sql`SELECT NULL::text, NULL::text, NULL::text, NULL::text, NULL::text, NULL::integer, NULL::text WHERE false`;
+    : sql`SELECT NULL::text, NULL::text, NULL::text, NULL::jsonb, NULL::text, NULL::text, NULL::integer, NULL::text WHERE false`;
   const terms = tokenizeQuery(options.query ?? '');
-  const searchable = sql`lower(slug || ' ' || name || ' ' || description)`;
+  // A skill's whenToUse is written in the words a request arrives in, so it
+  // is searched and weighs nearly as much as its name. whenNotToUse is not
+  // searched: a skill must not be found by what it is not for.
+  const whenToUse = sql`lower(COALESCE(usage->>'whenToUse', ''))`;
+  const searchable = sql`lower(slug || ' ' || name || ' ' || description) || ' ' || ${whenToUse}`;
   const escapeLike = (value: string): string => value.replace(/[\\%_]/g, '\\$&');
   const conditions = [sql`status NOT IN ('abandoned', 'archived')`];
   const matches = terms.map((term) => sql`${searchable} LIKE ${`%${escapeLike(term)}%`}`);
@@ -36,7 +41,7 @@ export async function querySkillDiscovery(
     ? sql.join(
         terms.map(
           (term) =>
-            sql`(CASE WHEN lower(name) LIKE ${`%${escapeLike(term)}%`} THEN 5 ELSE 0 END + CASE WHEN lower(slug) LIKE ${`%${escapeLike(term)}%`} THEN 3 ELSE 0 END + CASE WHEN lower(description) LIKE ${`%${escapeLike(term)}%`} THEN 1 ELSE 0 END)`,
+            sql`(CASE WHEN lower(name) LIKE ${`%${escapeLike(term)}%`} THEN 5 ELSE 0 END + CASE WHEN lower(slug) LIKE ${`%${escapeLike(term)}%`} THEN 3 ELSE 0 END + CASE WHEN lower(description) LIKE ${`%${escapeLike(term)}%`} THEN 1 ELSE 0 END + CASE WHEN ${whenToUse} LIKE ${`%${escapeLike(term)}%`} THEN 4 ELSE 0 END)`,
         ),
         sql` + `,
       )
@@ -64,8 +69,8 @@ export async function querySkillDiscovery(
     );
   const filter = sql.join(conditions, sql` AND `);
   return withTenantSchema(db, createTenantContext(tenantId), async (tx) => {
-    const cte = sql`WITH platform(slug, name, description, mode, status, revision, origin) AS (${platformCte}),
-      library AS (SELECT * FROM platform UNION ALL SELECT slug, name, description, mode, status, revision, 'space' AS origin
+    const cte = sql`WITH platform(slug, name, description, usage, mode, status, revision, origin) AS (${platformCte}),
+      library AS (SELECT * FROM platform UNION ALL SELECT slug, name, description, usage, mode, status, revision, 'space' AS origin
         FROM skill_discovery WHERE space_id = ${spaceId} AND slug NOT IN (SELECT slug FROM platform))`;
     const countRows = await tx.execute(
       sql`${cte} SELECT count(*)::integer AS total FROM library WHERE ${filter}`,

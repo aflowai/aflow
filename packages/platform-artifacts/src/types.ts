@@ -1,4 +1,4 @@
-import type { SkillGoal } from '@aflow/schemas';
+import type { SkillGoal, SkillUsage } from '@aflow/schemas';
 
 // ============================================================================
 // Agent entry
@@ -63,6 +63,8 @@ export interface PlatformWorkflowDef {
   slug: string;
   name: string;
   description: string;
+  /** When to pick the skill, when not, what follows it and its pitfalls. */
+  usage?: SkillUsage;
   goal?: string;
   mode: string;
   status: string;

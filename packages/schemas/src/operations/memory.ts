@@ -1406,7 +1406,7 @@ export const MemoryOperationRegistrations: OperationRegistration[] = [
     usage: {
       oneLine: 'See all your standing notes and their ids.',
       whenToUse: [
-        'You want to forget a note — list first to get its entryId (injected notes carry no id)',
+        'Forgetting a note — list it first for its entryId',
         'Checking whether a candidate you proposed is still pending or was promoted',
         'Reviewing everything you currently hold before adding more',
       ],

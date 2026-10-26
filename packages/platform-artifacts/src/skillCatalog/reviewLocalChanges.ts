@@ -163,21 +163,21 @@ const RESULT_SCHEMA = {
  */
 const BRIEF_MAX_TURNS = 8;
 
+/** What the Helmsman needs once it has chosen the skill: carried as the skill's usage pitfalls. */
+const REVIEW_PITFALLS: string[] = [
+  `What it needs: the connected folder holding the repository, and the range to review as its two ends — \`at\`, the commit it ends at, and \`from\`, where it starts. Ask for whichever is missing — \`main..HEAD\` is \`from\` \`main\` and \`at\` \`HEAD\`, \`HEAD~3..HEAD\` is \`from\` \`HEAD~3\` and \`at\` \`HEAD\`, and a single commit is \`at\` alone. The range is made from the two, so the commit it ends at and the commit the review stands on are one value and cannot disagree. The review lists a range's commits as given and reads its diff from where the two ends meet, \`main...HEAD\`, so a branch \`main\` has moved past reads as what it adds and not as undoing what \`main\` took since. A focus is optional and worth asking for when the request names a worry: security, an API surface, the blast radius of a refactor.`,
+  `Depth is a first-class choice, not something to ask the coding agent for in \`focus\`. \`brief\` is the smoke test — a first look, a check that the mechanics work: a handful of tool calls, one paragraph, and a verdict of \`comment\` unless something is plainly a blocker. An operator asking for something quick, a glance or a sanity check means \`brief\`, and it is budgeted in coding-agent turns (\`maxTurns\`: ${String(BRIEF_MAX_TURNS)}) so that it stays brief. \`standard\` reads the range with the repository around it. \`deep\` also runs the project's own checks over the touched files, and costs the most.`,
+  `The review stands on the commit it judges. It runs over an isolated copy of the repository detached at \`at\`, so the files it reads whole and the checks it runs at \`deep\` are the change's own; the range's base names only where the diff starts. Only committed work is reviewed: anything still uncommitted in the working tree is invisible to it. When the request is about work in progress, say so and ask for it to be committed first — a branch is fine — then review the range those commits make.`,
+  `With the result: report the verdict and the summary. The summary is the review — it names every finding with its severity and its file and line, blockers first, and the checks that ran — so it needs nothing added to it. The evidence behind each finding and the fix it suggests stay on the run, to be opened when someone wants them. Nothing was changed, so a finding is a proposal until someone acts on it: offer to commission the fix as its own piece of work, and never edit the files while reporting. Run the review again once a fix lands as a new commit, over the range that includes it — a verdict covers the commits it read and nothing later.`,
+];
+
 const REVIEW_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'review-local-changes',
-  version: 10,
+  version: 11,
   name: 'Review Local Changes',
   tagline:
     "Review committed changes in a connected repository with the machine's own coding agent.",
-  description: `Fits a request to review changes that already exist in a repository on the operator's machine — "review what I just did on this branch", "look over these commits before they go anywhere". It reads a range of commits and returns a verdict with findings, and it changes nothing. Reviewing an open pull request is a different skill (review-pull-request); making a change is not this skill at all.
-
-**What it needs**: the connected folder holding the repository, and the range to review as its two ends — \`at\`, the commit it ends at, and \`from\`, where it starts. Ask for whichever is missing — \`main..HEAD\` is \`from\` \`main\` and \`at\` \`HEAD\`, \`HEAD~3..HEAD\` is \`from\` \`HEAD~3\` and \`at\` \`HEAD\`, and a single commit is \`at\` alone. The range is made from the two, so the commit it ends at and the commit the review stands on are one value and cannot disagree. The review lists a range's commits as given and reads its diff from where the two ends meet, \`main...HEAD\`, so a branch \`main\` has moved past reads as what it adds and not as undoing what \`main\` took since. A focus is optional and worth asking for when the request names a worry: security, an API surface, the blast radius of a refactor.
-
-**Depth is a first-class choice, not something to ask the coding agent for in \`focus\`.** \`brief\` is the smoke test — a first look, a check that the mechanics work: a handful of tool calls, one paragraph, and a verdict of \`comment\` unless something is plainly a blocker. An operator asking for something quick, a glance or a sanity check means \`brief\`, and it is budgeted in coding-agent turns (\`maxTurns\`: ${String(BRIEF_MAX_TURNS)}) so that it stays brief. \`standard\` reads the range with the repository around it. \`deep\` also runs the project's own checks over the touched files, and costs the most.
-
-**The review stands on the commit it judges.** It runs over an isolated copy of the repository detached at \`at\`, so the files it reads whole and the checks it runs at \`deep\` are the change's own; the range's base names only where the diff starts. **Only committed work is reviewed**: anything still uncommitted in the working tree is invisible to it. When the request is about work in progress, say so and ask for it to be committed first — a branch is fine — then review the range those commits make.
-
-**With the result**: report the verdict and the summary. The summary is the review — it names every finding with its severity and its file and line, blockers first, and the checks that ran — so it needs nothing added to it. The evidence behind each finding and the fix it suggests stay on the run, to be opened when someone wants them. Nothing was changed, so a finding is a proposal until someone acts on it: offer to commission the fix as its own piece of work, and never edit the files while reporting. Run the review again once a fix lands as a new commit, over the range that includes it — a verdict covers the commits it read and nothing later.`,
+  description: `Fits a request to review changes that already exist in a repository on the operator's machine — "review what I just did on this branch", "look over these commits before they go anywhere". It reads a range of commits and returns a verdict with findings, and it changes nothing. Reviewing an open pull request is a different skill (review-pull-request); making a change is not this skill at all.`,
   tags: ['coding', 'review', 'local', 'developer-tools'],
   bundle: {
     workflow: {
@@ -185,6 +185,29 @@ const REVIEW_LOCAL_CHANGES: SkillCatalogEntry = {
       name: 'Review Local Changes',
       description:
         "Review a revision range of a repository connected as a host folder: the operator's installed coding agent reads the range in an isolated checkout detached at the commit the range ends at and returns a verdict with grounded findings. Read-only — one task, no write, no publication.",
+      usage: {
+        whenToUse: [
+          'Reviewing changes already committed in a repository connected as a folder — "review what I just did on this branch", "look over these commits before they go anywhere": a verdict with findings that name their file and line, and nothing changed',
+          "A quick look or a sanity check over a range, at depth `brief`; the project's own checks over the touched files, at depth `deep`",
+        ],
+        whenNotToUse: [
+          'An open pull request — that is review-pull-request',
+          'Making or fixing a change — that is Commission Change',
+          'A change about to be published from a folder whose push approval is `unless-unreviewed` — Publish Local Changes reviews everything its push would add itself, so no review needs starting beside it',
+          'Uncommitted work — it is invisible to the review; ask for it to be committed, on a branch, first',
+        ],
+        next: [
+          {
+            skill: 'commission-change',
+            when: 'A finding is to be fixed: commission it as its own piece of work, briefed from the findings, with `base` the branch the range ends on.',
+          },
+          {
+            skill: 'publish-local-changes',
+            when: 'The range is ready to land: publish it — under `unless-unreviewed` the publication runs this review again on what its push adds and follows the decision on its findings.',
+          },
+        ],
+        pitfalls: REVIEW_PITFALLS,
+      },
       goal: 'Return a structured verdict on a revision range — approve, request changes, or comment — with findings that name their file, line and evidence, and the outcome of the project’s own checks when the review ran them.',
       mode: 'process' as const,
       outcomes: [
@@ -376,7 +399,7 @@ const REVIEW_LOCAL_CHANGES: SkillCatalogEntry = {
         'review the local changes',
       ],
       activationHint:
-        "Run to review committed changes in a repository connected as a folder — a range of commits read by the machine's own harness, returning a verdict with grounded findings. Read-only: it never edits, commits or publishes. Uncommitted work is invisible to it, and an open pull request belongs to review-pull-request.",
+        "Run to review committed changes in a repository connected as a folder — a range of commits read by the machine's own harness, returning a verdict with grounded findings. Read-only. Its usage says what it needs and what follows it.",
       prerequisites: [],
       priority: 50,
     },

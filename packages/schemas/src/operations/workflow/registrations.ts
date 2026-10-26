@@ -380,6 +380,7 @@ export function createWorkflowOperationRegistrations(
       usage: {
         oneLine: 'Start a workflow run — the harness owns task dispatch and lifecycle.',
         whenToUse: [
+          'Starting a skill the operator asked for or catalog.skill.search found, after inspecting it',
           'Beginning the next optimization iteration',
           'Starting a process run with new input',
           'Launching a project workflow',

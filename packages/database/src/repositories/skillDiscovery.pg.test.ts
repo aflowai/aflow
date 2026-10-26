@@ -9,6 +9,8 @@ import { createDatabase } from '../connection.js';
 import { tenantIdToSchemaName } from '../tenant/context.js';
 import { applyMigration221 } from '../tenant/migrations/migration221.js';
 import { applyMigration222 } from '../tenant/migrations/migration222.js';
+import { applyMigration229 } from '../tenant/migrations/migration229.js';
+import { listSkillCatalog } from '@aflow/platform-artifacts';
 import { querySkillDiscovery } from './skillDiscovery.js';
 
 const connectionString = process.env['DATABASE_URL'];
@@ -16,6 +18,7 @@ const tenantId = randomUUID() as TenantId;
 const schema = tenantIdToSchemaName(tenantId);
 const spaceId = randomUUID();
 const otherSpace = randomUUID();
+const storeSpace = randomUUID();
 
 describe.skipIf(!connectionString)('skill discovery metadata (isolated Postgres schema)', () => {
   const handle = createDatabase({ connectionString: connectionString ?? '' });
@@ -50,6 +53,24 @@ describe.skipIf(!connectionString)('skill discovery metadata (isolated Postgres 
     );
     await applyMigration221(client, schema);
     await applyMigration222(client, schema);
+    // A skill stored before the usage column existed is projected with it.
+    await client.unsafe(`INSERT INTO "${schema}".spaces VALUES ($1, '{}'::jsonb)`, [storeSpace]);
+    await client.unsafe(
+      `INSERT INTO "${schema}".memory_docs (space_id, path, inline_content, deleted_at)
+      VALUES ($1, '/workflows/early-skill/workflow.json', $2, NULL)`,
+      [
+        storeSpace,
+        JSON.stringify({
+          name: 'Early skill',
+          description: 'Stored before usage was projected',
+          usage: { whenToUse: ['Reconciling a ledger'] },
+          status: 'approved',
+          mode: 'process',
+          revision: 1,
+        }),
+      ],
+    );
+    await applyMigration229(client, schema);
     await client.unsafe(
       `INSERT INTO "${schema}".memory_docs (space_id, path, inline_content, deleted_at)
       SELECT $1::uuid, '/workflows/skill-' || lpad(i::text, 4, '0') || '/workflow.json',
@@ -69,11 +90,41 @@ describe.skipIf(!connectionString)('skill discovery metadata (isolated Postgres 
       await client.end();
     }
   });
+  it('projects a skill’s usage, including one stored before the column existed', async () => {
+    const found = await querySkillDiscovery(handle.db, tenantId, storeSpace, {
+      query: 'reconciling ledger',
+    });
+    expect(found.skills[0]).toMatchObject({
+      slug: 'early-skill',
+      usage: { whenToUse: ['Reconciling a ledger'] },
+    });
+  });
+  it('ranks the installed store skills by their whenToUse: a bug fix finds Commission Change first', async () => {
+    for (const entry of listSkillCatalog()) {
+      const doc = {
+        ...entry.bundle.workflow,
+        ...(entry.bundle.activation ? { activation: entry.bundle.activation } : {}),
+        status: 'approved',
+        revision: entry.version,
+      };
+      await client.unsafe(
+        `INSERT INTO "${schema}".memory_docs (space_id, path, inline_content, deleted_at) VALUES ($1, $2, $3, NULL)`,
+        [storeSpace, `/workflows/${entry.bundle.workflow.slug}/workflow.json`, JSON.stringify(doc)],
+      );
+    }
+    const found = await querySkillDiscovery(handle.db, tenantId, storeSpace, {
+      query: 'fix a bug in the repo',
+      limit: 5,
+    });
+    expect(found.skills[0]?.slug).toBe('commission-change');
+    expect(found.skills[0]?.usage.whenToUse.length).toBeGreaterThan(0);
+    expect(found.skills[0]?.usage.next[0]?.skill).toBe('publish-local-changes');
+  });
   it('applies both the embedding and skill-discovery migrations in order', async () => {
     const versions = await client.unsafe(
       `SELECT version FROM "${schema}".schema_migrations ORDER BY version`,
     );
-    expect(versions.map((row) => row['version'])).toEqual([221, 222]);
+    expect(versions.map((row) => row['version'])).toEqual([221, 222, 229]);
     const columns = await client.unsafe(
       `SELECT memory_embedding_model FROM "${schema}".spaces WHERE id = $1`,
       [spaceId],
