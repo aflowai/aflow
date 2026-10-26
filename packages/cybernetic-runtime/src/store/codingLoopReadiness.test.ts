@@ -1,9 +1,28 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { codingLoopReadiness } from './codingLoopReadiness.js';
 
 const ready = { machine: true, folder: true, github: true, schedule: true };
 
 describe('coding loop readiness', () => {
+  it('sends every setup action to a route declared for the local edition', () => {
+    const manifest = readFileSync(
+      new URL('../../../web-product/src/ui/routeManifest.ts', import.meta.url),
+      'utf8',
+    );
+    const result = codingLoopReadiness({
+      machine: false,
+      folder: false,
+      github: false,
+      schedule: false,
+      preview: false,
+    });
+    for (const task of result.tasks) {
+      if (task.kind !== 'coding_loop_setup') continue;
+      expect(manifest).toContain('s/[space]' + task.path);
+    }
+  });
+
   it('names each required setup action before anything fails', () => {
     const result = codingLoopReadiness({
       machine: false,

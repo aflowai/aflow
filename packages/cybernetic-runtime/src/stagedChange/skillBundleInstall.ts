@@ -1,5 +1,5 @@
 import type { Redis } from 'ioredis';
-import type { PostInstallTask, SkillBundle } from '@aflow/schemas';
+import type { MemoryDocEmbedJob, PostInstallTask, SkillBundle } from '@aflow/schemas';
 import { getSkillBundleEntry, getSkillCatalogEntry } from '@aflow/platform-artifacts';
 import { createMemoryDocRepository, createTenantContext, withTenantSchema } from '@aflow/database';
 import type { TenantId } from '@aflow/schemas';
@@ -68,6 +68,8 @@ export interface SetupSkillIntent {
 }
 
 export interface InstallSkillBundleResult {
+  /** Publish after the outermost writing transaction commits when redis is omitted. */
+  pendingEmbedJobs: MemoryDocEmbedJob[];
   bundleId: string;
   /** Skill catalog ids freshly installed in this call. */
   installedSkillCatalogIds: string[];
@@ -186,7 +188,7 @@ export class BundleInstallValidationError extends Error {
 export async function installSkillBundle(
   ctx: ApplyContext,
   bundle: SkillBundle,
-  opts?: { redis?: Redis },
+  opts?: { redis?: Redis; readinessRedis?: Redis },
 ): Promise<InstallSkillBundleResult> {
   const tenantCtx = createTenantContext(ctx.tenantId as TenantId);
 
@@ -269,7 +271,7 @@ export async function installSkillBundle(
     });
 
     const postInstallManifest = await generatePostInstallManifest({
-      redis: opts?.redis,
+      redis: opts?.readinessRedis ?? opts?.redis,
       bundle,
       tenantId: ctx.tenantId,
       spaceId: ctx.spaceId,
@@ -347,6 +349,7 @@ export async function installSkillBundle(
   }
 
   return {
+    pendingEmbedJobs: txOutcome.memorySeedResult.pendingEmbedJobs,
     bundleId: bundle.bundleId,
     installedSkillCatalogIds: txOutcome.loopResult.installedSkillCatalogIds,
     skippedSkillCatalogIds: txOutcome.loopResult.skippedSkillCatalogIds,
@@ -381,7 +384,8 @@ export async function installSkillBundle(
  * Catalog-cache invalidations for the api/mcp artifacts a bundle install
  * wrote. Must fire only after the writing transaction commits — a caller that
  * wraps the install in an outer transaction passes no redis to
- * `installSkillBundle` and calls this itself post-commit.
+ * `installSkillBundle` (readinessRedis may still read live setup state), then
+ * publishes these invalidations and the returned pendingEmbedJobs post-commit.
  */
 export function publishBundleInstallInvalidations(
   redis: Redis,

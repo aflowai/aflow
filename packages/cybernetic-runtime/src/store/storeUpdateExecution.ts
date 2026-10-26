@@ -85,8 +85,9 @@ import {
   listStoreInstallClaimsByClaimant,
   restampStoreInstallArtifactHash,
   setStoreInstallSkippedVersion,
+  upsertStoreInstall,
 } from './storeInstallProvenance.js';
-import { writeProvenance, runStoreInstall } from './storeInstallExecution.js';
+import { writeProvenance } from './storeInstallExecution.js';
 import { readCodingLoopParts } from './codingLoopAdoption.js';
 import {
   deriveInstalledState,
@@ -694,6 +695,29 @@ interface UpdateTxOutcome {
   pendingEmbedJobs: MemoryDocEmbedJob[];
 }
 
+async function mergeCodingLoopPartsDivergence(
+  tx: PostgresJsDatabase,
+  ids: { tenantId: TenantId; spaceId: string; payloadStore?: PayloadStore | undefined },
+  entry: CatalogEntry,
+  divergence: StoreInstallDivergence,
+): Promise<void> {
+  const registryContents = deriveRegistryArtifactContents(entry);
+  for (const id of CODING_LOOP_PART_IDS) {
+    const part = await computeInstallDivergence(tx, ids, id, { registryContents });
+    divergence.customized ||= part.customized;
+    for (const artifact of part.artifacts) {
+      if (
+        !divergence.artifacts.some(
+          (existing) =>
+            existing.artifactType === artifact.artifactType &&
+            existing.artifactKey === artifact.artifactKey,
+        )
+      )
+        divergence.artifacts.push(artifact);
+    }
+  }
+}
+
 async function runStoreUpdate(
   tx: PostgresJsDatabase,
   entry: CatalogEntry,
@@ -715,30 +739,11 @@ async function runStoreUpdate(
   }
 
   const now = new Date().toISOString();
-  const existing = await getStoreInstall(tx, ids.spaceId, entry.catalogId);
+  const ownInstall = await getStoreInstall(tx, ids.spaceId, entry.catalogId);
+  const existing =
+    ownInstall ??
+    (entry.catalogId === 'coding-loop' ? await readCodingLoopParts(tx, ids.spaceId) : null);
   if (!existing) {
-    const parts =
-      entry.catalogId === 'coding-loop' ? await readCodingLoopParts(tx, ids.spaceId) : null;
-    if (parts && opts.mode !== 'keep') {
-      const adopted = await runStoreInstall(tx, entry, ids, { offShelf: opts.offShelf });
-      return {
-        response: {
-          catalogId: entry.catalogId,
-          mode: opts.mode,
-          fromVersion: parts.installedVersion,
-          toVersion: entry.version,
-          updatedArtifacts: [],
-          keptUserDataArtifacts: [],
-          orphanedArtifacts: [],
-          credentialsReset: false,
-          missingVariables: [],
-          setupChecklist: adopted.response.setupChecklist,
-          install: adopted.response.install,
-        },
-        entryKind: entry.kind,
-        pendingEmbedJobs: [],
-      };
-    }
     throw new StoreUpdateError(404, notInstalledBody(entry.catalogId, opts.offShelf));
   }
   if (existing.state === 'removing') {
@@ -760,6 +765,7 @@ async function runStoreUpdate(
   }
 
   if (opts.mode === 'keep') {
+    if (!ownInstall) await upsertStoreInstall(tx, existing, { onConflict: 'keep' });
     await setStoreInstallSkippedVersion(tx, ids.spaceId, entry.catalogId, entry.version, {
       updatedAt: now,
       updatedBy: ids.actorUserId,
@@ -790,6 +796,9 @@ async function runStoreUpdate(
     entry.catalogId,
     { registryContents: deriveRegistryArtifactContents(entry) },
   );
+  if (entry.catalogId === 'coding-loop') {
+    await mergeCodingLoopPartsDivergence(tx, ids, entry, divergence);
+  }
   if (divergence.customized && opts.mode !== 'replace_customized') {
     throw new StoreUpdateError(409, {
       error:
@@ -1085,26 +1094,13 @@ export async function executeStoreUpdatePreview(
       entry.catalogId,
       { registryContents },
     );
-    if (!ownInstall && entry.catalogId === 'coding-loop') {
-      for (const id of CODING_LOOP_PART_IDS) {
-        const part = await computeInstallDivergence(
-          tx,
-          { tenantId, spaceId, payloadStore: params.payloadStore },
-          id,
-          { registryContents },
-        );
-        divergence.customized ||= part.customized;
-        for (const artifact of part.artifacts) {
-          if (
-            !divergence.artifacts.some(
-              (existing) =>
-                existing.artifactType === artifact.artifactType &&
-                existing.artifactKey === artifact.artifactKey,
-            )
-          )
-            divergence.artifacts.push(artifact);
-        }
-      }
+    if (entry.catalogId === 'coding-loop') {
+      await mergeCodingLoopPartsDivergence(
+        tx,
+        { tenantId, spaceId, payloadStore: params.payloadStore },
+        entry,
+        divergence,
+      );
     }
     return { install, divergence };
   });

@@ -73,6 +73,7 @@ import {
   type StoreProvenancePlan,
   type StoreProvenanceSkips,
 } from './storeDerivations.js';
+import { publishMemorySeedEmbedJobs } from '../stagedChange/bundleInstallContent.js';
 import { dispatchAppletInstall } from './appletInstall.js';
 
 // ============================================================================
@@ -229,7 +230,7 @@ async function dispatchBundleInstall(
   const result = await installSkillBundle(
     { tenantId: ids.tenantId, spaceId: ids.spaceId, db: tx, payloadStore: ids.payloadStore },
     entry.payload,
-    ids.redis ? { redis: ids.redis } : {},
+    ids.redis ? { readinessRedis: ids.redis } : {},
   );
   return {
     result: mapBundleResult(result),
@@ -772,6 +773,9 @@ export async function executeStoreInstall(
 
   if (redis && outcome.invalidations) {
     publishInvalidations(redis, tenantId, spaceId, outcome.invalidations);
+    if (outcome.invalidations.kind === 'bundle') {
+      await publishMemorySeedEmbedJobs(redis, outcome.invalidations.result.pendingEmbedJobs);
+    }
   }
   if (redis) {
     await redis.set(

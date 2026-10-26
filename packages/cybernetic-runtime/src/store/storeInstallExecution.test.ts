@@ -31,6 +31,8 @@ const store = vi.hoisted(() => ({
   artifacts: [] as Array<Record<string, string>>,
   claims: [] as Array<{ catalog_id: string; space_id: string; claimed_by: string }>,
   lockAcquired: true,
+  failProvenance: false,
+  transactionDepth: 0,
   apiBindingAuthJsonByBindingId: new Map<string, Record<string, unknown>>(),
   presentCredentialKeys: new Set<string>(),
   spaceDirectives: { purpose: 'test' } as Record<string, unknown> | null,
@@ -48,6 +50,7 @@ function applyExecute(query: SQL): unknown[] {
     return [{ acquired: store.lockAcquired }];
   }
   if (text.includes('INSERT INTO store_installs')) {
+    if (store.failProvenance) throw new Error('provenance failed');
     const [
       catalogId,
       spaceId,
@@ -186,14 +189,30 @@ vi.mock('@aflow/database', async (importOriginal) => {
   return {
     ...orig,
     createTenantContext: (tenantId: string) => ({ tenantId, schemaName: `tenant_${tenantId}` }),
-    withTenantSchema: async (_db: unknown, _ctx: unknown, fn: (tx: unknown) => Promise<unknown>) =>
-      fn(fakeTx),
+    withTenantSchema: async (
+      _db: unknown,
+      _ctx: unknown,
+      fn: (tx: unknown) => Promise<unknown>,
+    ) => {
+      store.transactionDepth++;
+      try {
+        return await fn(fakeTx);
+      } finally {
+        store.transactionDepth--;
+      }
+    },
     getTenantStoreShelfPolicy: async () => ({
       defaultAvailability: store.shelf.defaultAvailability,
       overrides: new Map(store.shelf.overrides),
     }),
   };
 });
+
+const publishMemorySeedEmbedJobs = vi.hoisted(() => vi.fn());
+vi.mock('../stagedChange/bundleInstallContent.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  publishMemorySeedEmbedJobs,
+}));
 
 const installSkillBundle = vi.hoisted(() => vi.fn());
 const publishBundleInstallInvalidations = vi.hoisted(() => vi.fn());
@@ -309,6 +328,8 @@ beforeEach(() => {
   store.artifacts = [];
   store.claims = [];
   store.lockAcquired = true;
+  store.failProvenance = false;
+  store.transactionDepth = 0;
   store.apiBindingAuthJsonByBindingId = new Map();
   store.presentCredentialKeys = new Set();
   store.spaceDirectives = { purpose: 'test' };
@@ -416,6 +437,54 @@ describe('executeStoreInstall', () => {
     expect(result.statusCode).toBe(400);
     expect(installSkillBundle).not.toHaveBeenCalled();
   });
+
+  it.each([false, true])(
+    'publishes bundle effects only after successful provenance (failure: %s)',
+    async (failProvenance) => {
+      store.failProvenance = failProvenance;
+      const pendingEmbedJobs = [{ docId: 'seed-doc' }];
+      installSkillBundle.mockResolvedValueOnce({
+        installedSkillCatalogIds: [],
+        skippedSkillCatalogIds: [],
+        repairedProjectionSkillCatalogIds: [],
+        installedApiDefinitionIds: [],
+        skippedApiDefinitionIds: [],
+        installedBindingIds: [],
+        skippedBindingIds: [],
+        installedMcpDefinitionIds: [],
+        skippedMcpDefinitionIds: [],
+        installedMcpBindingIds: [],
+        skippedMcpBindingIds: [],
+        installedMemoryDocPaths: [],
+        skippedMemoryDocPaths: [],
+        installedArtifactBindings: [],
+        skippedArtifactBindings: [],
+        installedAgentSlugs: [],
+        skippedAgentSlugs: [],
+        postInstallManifest: [],
+        warnings: [],
+        pendingEmbedJobs,
+      });
+      publishBundleInstallInvalidations.mockImplementation(() =>
+        expect(store.transactionDepth).toBe(0),
+      );
+      publishMemorySeedEmbedJobs.mockImplementation(() => expect(store.transactionDepth).toBe(0));
+      const redis = createFakeRedis();
+      const installing = install({ catalogId: 'test-two-skill-bundle' }, redis);
+      if (failProvenance) {
+        await expect(installing).rejects.toThrow('provenance failed');
+        expect(publishBundleInstallInvalidations).not.toHaveBeenCalled();
+        expect(publishMemorySeedEmbedJobs).not.toHaveBeenCalled();
+      } else {
+        expect((await installing).ok).toBe(true);
+        expect(publishBundleInstallInvalidations).toHaveBeenCalledOnce();
+        expect(publishMemorySeedEmbedJobs).toHaveBeenCalledWith(redis, pendingEmbedJobs);
+      }
+      expect(installSkillBundle).toHaveBeenCalledWith(expect.anything(), expect.anything(), {
+        readinessRedis: redis,
+      });
+    },
+  );
 
   it('installs a bundle: member install rows + bundle claims + post-commit invalidations', async () => {
     const bundleEntry = getCatalogEntry('test-two-skill-bundle');

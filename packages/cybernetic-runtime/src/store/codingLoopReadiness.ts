@@ -29,13 +29,13 @@ export function codingLoopReadiness(state: CodingLoopSetupState): {
     add(
       'machine',
       'Pair the machine under This Computer and keep its coding agent signed in.',
-      '/this-computer',
+      '/computer',
     );
   if (!state.folder)
     add(
       'folder',
       'Connect a repository folder under This Computer allowing commands and pushes with a branch prefix. Choose its merge posture on the machine: aflow harness merge-posture <folder> <never|when-green>. Then install Coding Loop again to create the shepherd agent.',
-      '/this-computer',
+      '/computer',
     );
   if (!state.github)
     add(
@@ -54,7 +54,7 @@ export function codingLoopReadiness(state: CodingLoopSetupState): {
     add(
       'preview',
       'Declare the connected folder’s preview command and URL on the machine under This Computer.',
-      '/this-computer',
+      '/computer',
     );
   return { status: state.failure ? 'broken' : tasks.length > 0 ? 'needs_setup' : 'ready', tasks };
 }
