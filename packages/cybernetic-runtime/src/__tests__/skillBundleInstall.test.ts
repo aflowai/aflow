@@ -72,6 +72,13 @@ vi.mock('../skill.js', () => ({
 }));
 
 vi.mock('../skillProjectionReconciler.js', () => ({
+  loadAvailableCapabilities: async () => ({
+    available: new Set(['host', 'api', 'agent', 'workflow', 'memory', 'human']),
+    codeLane: 'present',
+    withheldByProfile: new Map(),
+    withheldByCeiling: new Map(),
+    withheldByProfileAlone: new Map(),
+  }),
   rebuildSkillProjection: async (_ctx: unknown, skillId: string) => {
     projectionRebuilds.push(skillId);
     mockDocs.set(`/skills/${skillId}/projection.json`, JSON.stringify({ skillId }));
@@ -198,6 +205,32 @@ describe('installSkillBundle (Plan 137 Phase 2)', () => {
   });
 
   describe('idempotent-reinstall', () => {
+    it('adopts customized loop skills from separate installs without rewriting them', async () => {
+      const loop = getSkillBundleEntry('coding-loop');
+      if (!loop) throw new Error('coding-loop missing');
+      const skillsOnly = {
+        ...loop,
+        agents: [],
+        apiDefinitions: [],
+        bundleId: 'test-adoption' as SkillBundleId,
+      };
+      for (const id of skillsOnly.skillCatalogIds.slice(0, 2)) {
+        await installSkillBundle(ctx, { ...skillsOnly, skillCatalogIds: [id] });
+      }
+      const first = getSkillCatalogEntry(skillsOnly.skillCatalogIds[0] ?? '');
+      if (!first) throw new Error('commission missing');
+      const path = workflowDocPath(first.bundle.workflow.slug);
+      const customized = JSON.stringify({
+        ...JSON.parse(mockDocs.get(path) ?? '{}'),
+        name: 'My commission',
+      });
+      mockDocs.set(path, customized);
+      const result = await installSkillBundle(ctx, skillsOnly);
+      expect(result.skippedSkillCatalogIds).toEqual(skillsOnly.skillCatalogIds.slice(0, 2));
+      expect(result.installedSkillCatalogIds).toEqual(skillsOnly.skillCatalogIds.slice(2));
+      expect(mockDocs.get(path)).toBe(customized);
+    });
+
     it('skips fully-installed skills on re-install (no duplicate writes)', async () => {
       const bundle = getTestTwoSkillBundle();
 

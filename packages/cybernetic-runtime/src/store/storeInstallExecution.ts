@@ -219,12 +219,17 @@ export async function isCyberneticSpaceById(
 async function dispatchBundleInstall(
   tx: PostgresJsDatabase,
   entry: CatalogBundleEntry,
-  ids: { tenantId: TenantId; spaceId: string; payloadStore?: PayloadStore | undefined },
+  ids: {
+    tenantId: TenantId;
+    spaceId: string;
+    payloadStore?: PayloadStore | undefined;
+    redis?: Redis | null | undefined;
+  },
 ): Promise<InstallDispatchOutcome> {
   const result = await installSkillBundle(
     { tenantId: ids.tenantId, spaceId: ids.spaceId, db: tx, payloadStore: ids.payloadStore },
     entry.payload,
-    {},
+    ids.redis ? { redis: ids.redis } : {},
   );
   return {
     result: mapBundleResult(result),
@@ -237,7 +242,12 @@ async function dispatchBundleInstall(
 async function dispatchConnectorInstall(
   tx: PostgresJsDatabase,
   entry: CatalogConnectorEntry,
-  ids: { tenantId: TenantId; spaceId: string; payloadStore?: PayloadStore | undefined },
+  ids: {
+    tenantId: TenantId;
+    spaceId: string;
+    payloadStore?: PayloadStore | undefined;
+    redis?: Redis | null | undefined;
+  },
 ): Promise<InstallDispatchOutcome> {
   const context = {
     db: tx,
@@ -305,7 +315,12 @@ async function dispatchConnectorInstall(
 async function dispatchInstall(
   tx: PostgresJsDatabase,
   entry: CatalogEntry,
-  ids: { tenantId: TenantId; spaceId: string; payloadStore?: PayloadStore | undefined },
+  ids: {
+    tenantId: TenantId;
+    spaceId: string;
+    payloadStore?: PayloadStore | undefined;
+    redis?: Redis | null | undefined;
+  },
 ): Promise<InstallDispatchOutcome> {
   switch (entry.kind) {
     case 'bundle':
@@ -326,7 +341,12 @@ async function dispatchInstall(
 async function buildNoOpDispatch(
   tx: PostgresJsDatabase,
   entry: CatalogEntry,
-  ids: { tenantId: TenantId; spaceId: string; payloadStore?: PayloadStore | undefined },
+  ids: {
+    tenantId: TenantId;
+    spaceId: string;
+    payloadStore?: PayloadStore | undefined;
+    redis?: Redis | null | undefined;
+  },
 ): Promise<InstallDispatchOutcome> {
   switch (entry.kind) {
     case 'bundle':
@@ -411,7 +431,7 @@ async function buildConnectorNoOpDispatch(
 // The install transaction
 // ============================================================================
 
-async function runStoreInstall(
+export async function runStoreInstall(
   tx: PostgresJsDatabase,
   entry: CatalogEntry,
   ids: {
@@ -419,6 +439,7 @@ async function runStoreInstall(
     spaceId: string;
     actorUserId: string;
     payloadStore?: PayloadStore | undefined;
+    redis?: Redis | null | undefined;
   },
   opts: { offShelf: boolean },
 ): Promise<InstallTxOutcome> {
@@ -701,7 +722,12 @@ export async function executeStoreInstall(
   let outcome: InstallTxOutcome;
   try {
     outcome = await withTenantSchema(db, tenantCtx, async (tx) =>
-      runStoreInstall(tx, entry, { tenantId, spaceId, actorUserId, payloadStore }, { offShelf }),
+      runStoreInstall(
+        tx,
+        entry,
+        { tenantId, spaceId, actorUserId, payloadStore, redis },
+        { offShelf },
+      ),
     );
   } catch (err) {
     if (redis) await redis.del(idempotencyRedisKey);

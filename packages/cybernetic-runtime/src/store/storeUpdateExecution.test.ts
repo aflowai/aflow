@@ -332,7 +332,7 @@ vi.mock('@aflow/redis', async (importOriginal) => {
   return { ...orig, publishApiCatalogInvalidation, publishMcpCatalogInvalidation };
 });
 
-const { executeStoreUpdate } = await import('./storeUpdateExecution.js');
+const { executeStoreUpdate, executeStoreUpdatePreview } = await import('./storeUpdateExecution.js');
 const { deriveInstalledState } = await import('./storeDerivations.js');
 const { jsonContentHash } = await import('./artifactContent.js');
 
@@ -429,6 +429,88 @@ beforeEach(() => {
     missingCredentialKeys: [],
     credentialsReset: false,
     setupChecklist: [],
+  });
+});
+
+describe('Coding Loop adoption preview', () => {
+  it('adopts the parts through update using the preserving bundle installer', async () => {
+    store.installs.push(installedRow('local-publish', 49, 'bundle'));
+    const entry = getCatalogEntry('coding-loop');
+    if (!entry || entry.kind !== 'bundle') throw new Error('loop missing');
+    const installer = await import('../stagedChange/skillBundleInstall.js');
+    const spy = vi.spyOn(installer, 'installSkillBundle').mockResolvedValueOnce({
+      installedSkillCatalogIds: entry.payload.skillCatalogIds.filter(
+        (id) => id !== 'publish-local-changes',
+      ),
+      skippedSkillCatalogIds: ['publish-local-changes'],
+      repairedProjectionSkillCatalogIds: [],
+      installedApiDefinitionIds: ['github'],
+      skippedApiDefinitionIds: [],
+      installedBindingIds: [],
+      skippedBindingIds: [],
+      installedMcpDefinitionIds: [],
+      skippedMcpDefinitionIds: [],
+      installedMcpBindingIds: [],
+      skippedMcpBindingIds: [],
+      installedMemoryDocPaths: [],
+      skippedMemoryDocPaths: [],
+      installedArtifactBindings: [],
+      skippedArtifactBindings: [],
+      installedAgentSlugs: [],
+      skippedAgentSlugs: [],
+      postInstallManifest: [],
+      helmsmanHints: [],
+      warnings: [],
+      stateChanged: true,
+    });
+    try {
+      const result = await update(
+        {
+          catalogId: 'coding-loop',
+          expectedVersion: entry.version,
+          entryResolver: getCatalogEntry,
+        },
+        null,
+      );
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error('adoption failed');
+      expect(result.response.fromVersion).toBe(49);
+      expect(result.response.toVersion).toBe(entry.version);
+      expect(spy).toHaveBeenCalledWith(expect.anything(), entry.payload, {});
+      expect(
+        store.installs.find((row) => row.catalog_id === 'local-publish')?.installed_version,
+      ).toBe(49);
+      expect(
+        store.installs.find((row) => row.catalog_id === 'coding-loop')?.installed_version,
+      ).toBe(entry.version);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('offers the separate 11/11/49/22 parts as one version without writing them', async () => {
+    for (const [id, version] of [
+      ['local-commission', 11],
+      ['local-code-review', 11],
+      ['local-publish', 49],
+      ['local-shepherd', 22],
+    ] as const) {
+      store.installs.push(installedRow(id, version, 'bundle'));
+    }
+    const before = structuredClone(store.installs);
+    const result = await executeStoreUpdatePreview({
+      db: fakeTx as never,
+      tenantId: TENANT_ID,
+      spaceId: SPACE_ID,
+      catalogId: 'coding-loop',
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('preview failed');
+    expect(result.response.catalogId).toBe('coding-loop');
+    expect(result.response.currentVersion).toBe(93);
+    expect(result.response.catalogVersion).toBe(getCatalogEntry('coding-loop')?.version);
+    expect(result.response.updateAvailable).toBe(true);
+    expect(store.installs).toEqual(before);
   });
 });
 

@@ -20,6 +20,7 @@ import {
   CatalogEntryKindSchema,
   IntegrationSourceKindSchema,
   ListingRequirementsSchema,
+  PostInstallTaskSchema,
   StoreCatalogChangedErrorSchema,
   StoreCustomizedErrorSchema,
   StoreInstallErrorBodySchema,
@@ -53,6 +54,9 @@ import {
   checkMissingCapabilities,
   connectorDefaultBindingId,
   deriveInstalledState,
+  readCodingLoopReadiness,
+  codingLoopInstallFromParts,
+  readCodingLoopParts,
   deriveListingRequirements,
   derivePlannedArtifacts,
   deriveRequiredCapabilities,
@@ -136,6 +140,8 @@ export const storeListingRoutes: FastifyPluginAsync = async (fastify) => {
         getTenantStoreShelfPolicy(db, tenant.tenantId),
       ]);
       const installByCatalogId = new Map(installs.map((install) => [install.catalogId, install]));
+      const codingLoopInstall = codingLoopInstallFromParts(installs);
+      if (codingLoopInstall) installByCatalogId.set('coding-loop', codingLoopInstall);
       const installedCatalogIds = new Set(installByCatalogId.keys());
 
       const base = listCatalog({
@@ -180,6 +186,12 @@ export const storeListingRoutes: FastifyPluginAsync = async (fastify) => {
             entry: ListingDetailEntrySchema,
             installedState: ListingInstalledStateSchema,
             requirements: ListingRequirementsSchema,
+            readiness: z
+              .object({
+                status: z.enum(['ready', 'needs_setup', 'broken']),
+                tasks: z.array(PostInstallTaskSchema),
+              })
+              .optional(),
           }),
           404: z.object({ error: z.string() }),
         },
@@ -194,8 +206,12 @@ export const storeListingRoutes: FastifyPluginAsync = async (fastify) => {
       const tenant = await request.requireTenant();
       const space = await request.requireSpace();
       const [install, shelf] = await Promise.all([
-        withTenantSchema(db, createTenantContext(tenant.tenantId), async (tx) =>
-          getStoreInstall(tx, space.spaceId, catalogId),
+        withTenantSchema(
+          db,
+          createTenantContext(tenant.tenantId),
+          async (tx) =>
+            (await getStoreInstall(tx, space.spaceId, catalogId)) ??
+            (catalogId === 'coding-loop' ? await readCodingLoopParts(tx, space.spaceId) : null),
         ),
         getTenantStoreShelfPolicy(db, tenant.tenantId),
       ]);
@@ -206,6 +222,15 @@ export const storeListingRoutes: FastifyPluginAsync = async (fastify) => {
         entry,
         installedState: deriveInstalledState(entry, install),
         requirements: deriveListingRequirements(entry),
+        ...(catalogId === 'coding-loop'
+          ? {
+              readiness: await withTenantSchema(
+                db,
+                createTenantContext(tenant.tenantId),
+                async (tx) => readCodingLoopReadiness(tx, space.spaceId, getRedis(fastify)),
+              ),
+            }
+          : {}),
       };
     },
   );
@@ -285,12 +310,19 @@ export const storeInstallRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(404).send({ error: `Store listing '${catalogId}' not found` });
       }
 
+      const readiness =
+        catalogId === 'coding-loop'
+          ? await withTenantSchema(db, tenantCtx, async (tx) =>
+              readCodingLoopReadiness(tx, spaceId, getRedis(fastify)),
+            )
+          : undefined;
       return {
         catalogId: entry.catalogId,
         catalogVersion: entry.version,
         creates,
         conflicts,
         missingCapabilities,
+        ...(readiness ? { setupChecklist: readiness.tasks, readiness: readiness.status } : {}),
       };
     },
   );

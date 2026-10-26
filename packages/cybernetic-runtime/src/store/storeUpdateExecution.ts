@@ -35,7 +35,11 @@ import {
   type MemoryDocEmbedJob,
   type TenantId,
 } from '@aflow/schemas';
-import { getCatalogEntry, getSkillCatalogEntry } from '@aflow/platform-artifacts';
+import {
+  CODING_LOOP_PART_IDS,
+  getCatalogEntry,
+  getSkillCatalogEntry,
+} from '@aflow/platform-artifacts';
 import type { ApplyContext } from '../stagedChange/applyRatifiedOps.js';
 import { tryAcquireStoreMutationLock } from '../stagedChange/storeMutationLock.js';
 import { updateSkillCatalogEntry } from '../stagedChange/skillCatalogUpdate.js';
@@ -82,7 +86,8 @@ import {
   restampStoreInstallArtifactHash,
   setStoreInstallSkippedVersion,
 } from './storeInstallProvenance.js';
-import { writeProvenance } from './storeInstallExecution.js';
+import { writeProvenance, runStoreInstall } from './storeInstallExecution.js';
+import { readCodingLoopParts } from './codingLoopAdoption.js';
 import {
   deriveInstalledState,
   deriveInstallProvenance,
@@ -220,7 +225,12 @@ export interface UpdateDispatchOutcome {
 async function dispatchConnectorUpdate(
   tx: PostgresJsDatabase,
   entry: CatalogConnectorEntry,
-  ids: { tenantId: TenantId; spaceId: string; payloadStore?: PayloadStore | undefined },
+  ids: {
+    tenantId: TenantId;
+    spaceId: string;
+    payloadStore?: PayloadStore | undefined;
+    redis?: Redis | null | undefined;
+  },
 ): Promise<UpdateDispatchOutcome> {
   const context = {
     db: tx,
@@ -314,7 +324,12 @@ async function mergeTemplateBindingAuth(
 async function dispatchBundleUpdate(
   tx: PostgresJsDatabase,
   entry: CatalogBundleEntry,
-  ids: { tenantId: TenantId; spaceId: string; payloadStore?: PayloadStore | undefined },
+  ids: {
+    tenantId: TenantId;
+    spaceId: string;
+    payloadStore?: PayloadStore | undefined;
+    redis?: Redis | null | undefined;
+  },
 ): Promise<UpdateDispatchOutcome> {
   const bundle = entry.payload;
   const ctx: ApplyContext = {
@@ -613,6 +628,7 @@ async function dispatchBundleUpdate(
 
   const setupChecklist = await generatePostInstallManifest({
     bundle,
+    redis: ids.redis,
     tenantId: ids.tenantId as string,
     spaceId: ids.spaceId,
     tx,
@@ -648,7 +664,12 @@ async function uiArtifactExists(
 async function dispatchUpdate(
   tx: PostgresJsDatabase,
   entry: CatalogEntry,
-  ids: { tenantId: TenantId; spaceId: string; payloadStore?: PayloadStore | undefined },
+  ids: {
+    tenantId: TenantId;
+    spaceId: string;
+    payloadStore?: PayloadStore | undefined;
+    redis?: Redis | null | undefined;
+  },
 ): Promise<UpdateDispatchOutcome> {
   switch (entry.kind) {
     case 'bundle':
@@ -681,6 +702,7 @@ async function runStoreUpdate(
     spaceId: string;
     actorUserId: string;
     payloadStore?: PayloadStore | undefined;
+    redis?: Redis | null | undefined;
   },
   opts: { mode: StoreUpdateMode; offShelf: boolean },
 ): Promise<UpdateTxOutcome> {
@@ -695,6 +717,28 @@ async function runStoreUpdate(
   const now = new Date().toISOString();
   const existing = await getStoreInstall(tx, ids.spaceId, entry.catalogId);
   if (!existing) {
+    const parts =
+      entry.catalogId === 'coding-loop' ? await readCodingLoopParts(tx, ids.spaceId) : null;
+    if (parts && opts.mode !== 'keep') {
+      const adopted = await runStoreInstall(tx, entry, ids, { offShelf: opts.offShelf });
+      return {
+        response: {
+          catalogId: entry.catalogId,
+          mode: opts.mode,
+          fromVersion: parts.installedVersion,
+          toVersion: entry.version,
+          updatedArtifacts: [],
+          keptUserDataArtifacts: [],
+          orphanedArtifacts: [],
+          credentialsReset: false,
+          missingVariables: [],
+          setupChecklist: adopted.response.setupChecklist,
+          install: adopted.response.install,
+        },
+        entryKind: entry.kind,
+        pendingEmbedJobs: [],
+      };
+    }
     throw new StoreUpdateError(404, notInstalledBody(entry.catalogId, opts.offShelf));
   }
   if (existing.state === 'removing') {
@@ -989,7 +1033,7 @@ export async function executeStoreUpdate(
       runStoreUpdate(
         tx,
         entry,
-        { tenantId, spaceId, actorUserId, payloadStore },
+        { tenantId, spaceId, actorUserId, payloadStore, redis },
         { mode, offShelf },
       ),
     );
@@ -1030,7 +1074,10 @@ export async function executeStoreUpdatePreview(
 
   const registryContents = deriveRegistryArtifactContents(entry);
   const result = await withTenantSchema(db, createTenantContext(tenantId), async (tx) => {
-    const install = await getStoreInstall(tx, spaceId, entry.catalogId);
+    const ownInstall = await getStoreInstall(tx, spaceId, entry.catalogId);
+    const install =
+      ownInstall ??
+      (entry.catalogId === 'coding-loop' ? await readCodingLoopParts(tx, spaceId) : null);
     if (!install) return null;
     const divergence = await computeInstallDivergence(
       tx,
@@ -1038,6 +1085,27 @@ export async function executeStoreUpdatePreview(
       entry.catalogId,
       { registryContents },
     );
+    if (!ownInstall && entry.catalogId === 'coding-loop') {
+      for (const id of CODING_LOOP_PART_IDS) {
+        const part = await computeInstallDivergence(
+          tx,
+          { tenantId, spaceId, payloadStore: params.payloadStore },
+          id,
+          { registryContents },
+        );
+        divergence.customized ||= part.customized;
+        for (const artifact of part.artifacts) {
+          if (
+            !divergence.artifacts.some(
+              (existing) =>
+                existing.artifactType === artifact.artifactType &&
+                existing.artifactKey === artifact.artifactKey,
+            )
+          )
+            divergence.artifacts.push(artifact);
+        }
+      }
+    }
     return { install, divergence };
   });
   if (!result) {

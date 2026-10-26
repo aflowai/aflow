@@ -269,6 +269,7 @@ export async function installSkillBundle(
     });
 
     const postInstallManifest = await generatePostInstallManifest({
+      redis: opts?.redis,
       bundle,
       tenantId: ctx.tenantId,
       spaceId: ctx.spaceId,

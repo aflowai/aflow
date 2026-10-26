@@ -612,6 +612,13 @@ export function skillStarterAgentDefinition(params: {
  */
 export const PostInstallTaskSchema = z.discriminatedUnion('kind', [
   z.object({
+    kind: z.literal('coding_loop_setup'),
+    step: z.enum(['machine', 'folder', 'github', 'schedule', 'preview']),
+    description: z.string().min(1),
+    path: z.string().min(1),
+    required: z.literal(true),
+  }),
+  z.object({
     kind: z.literal('fill_credentials'),
     bindingId: z.string().min(1).max(128),
     // A `fill_credentials` entry is generated only for bindings with at

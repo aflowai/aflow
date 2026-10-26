@@ -5,6 +5,7 @@ import type {
   CatalogEntryEnvelope,
   IntegrationSourceKind,
   ListingRequirements,
+  PostInstallTask,
   StoreInstallDivergence,
   StoreInstallPreviewResponse,
   StoreInstallResponse,
@@ -33,6 +34,7 @@ export type StoreListingSummary = CatalogEntryEnvelope & {
 };
 
 export interface StoreListingDetail {
+  readiness?: { status: 'ready' | 'needs_setup' | 'broken'; tasks: PostInstallTask[] };
   entry: CatalogEntryEnvelope & { sourceKind?: IntegrationSourceKind; payload: unknown };
   installedState: ListingInstalledState;
   requirements: ListingRequirements;

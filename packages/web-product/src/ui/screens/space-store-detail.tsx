@@ -588,6 +588,10 @@ function StoreListingPageInner() {
                 <Badge variant="neutral">{KIND_LABELS[entry.kind]}</Badge>
                 {display === 'installed' && <Badge variant="success">Installed</Badge>}
                 {display === 'update_available' && <Badge variant="info">Update available</Badge>}
+                {detail.readiness?.status === 'needs_setup' && (
+                  <Badge variant="warning">Needs setup</Badge>
+                )}
+                {detail.readiness?.status === 'broken' && <Badge variant="danger">Broken</Badge>}
               </Row>
               <Row gap="xs" align="center" wrap>
                 {entry.vendor && (
@@ -603,6 +607,13 @@ function StoreListingPageInner() {
               <Text size="sm" variant="muted">
                 {entry.tagline}
               </Text>
+              {detail.readiness && (
+                <SetupChecklist
+                  tasks={detail.readiness.tasks}
+                  spaceSlug={spaceSlug}
+                  onNavigate={push}
+                />
+              )}
               {entry.tags.length > 0 && (
                 <Row gap="xs" wrap>
                   {entry.tags.map((tag) => (
@@ -889,7 +900,19 @@ function StoreListingPageInner() {
       >
         {flow.phase === 'checkup' && (
           <Column gap="md">
-            {flow.preview.missingCapabilities.length === 0 ? (
+            {flow.preview.readiness === 'broken' && (
+              <Text size="sm">
+                Broken — the shepherd schedule reports a failure. Open Triggers to inspect it.
+              </Text>
+            )}
+            <SetupChecklist
+              tasks={flow.preview.setupChecklist ?? []}
+              spaceSlug={spaceSlug}
+              onNavigate={push}
+            />
+            {flow.preview.missingCapabilities.length === 0 &&
+            (flow.preview.setupChecklist?.length ?? 0) === 0 &&
+            flow.preview.readiness !== 'broken' ? (
               <Row gap="sm" align="center">
                 <Icon name="check-circle" size="sm" />
                 <Text size="sm">Everything this needs is set up in this space.</Text>

@@ -1,4 +1,5 @@
 import { sql } from 'drizzle-orm';
+import type { Redis } from 'ioredis';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { MemoryDocRepository } from '@aflow/database';
 import {
@@ -13,6 +14,7 @@ import { getSkillCatalogEntry } from '@aflow/platform-artifacts';
 import { deriveRequiredCapabilities } from './skillComposeApply.js';
 import { foldMissingCapabilitiesForAbsentCodeLane } from '@aflow/schemas';
 import { loadAvailableCapabilities } from '../skillProjectionReconciler.js';
+import { readCodingLoopReadiness } from '../store/codingLoopReadiness.js';
 
 // ============================================================================
 // Public generator
@@ -29,6 +31,7 @@ import { loadAvailableCapabilities } from '../skillProjectionReconciler.js';
  * (the UI's Re-check) regenerates against current state.
  */
 export async function generatePostInstallManifest(opts: {
+  redis?: Redis | null | undefined;
   bundle: SkillBundle;
   tenantId: string;
   spaceId: string;
@@ -40,7 +43,11 @@ export async function generatePostInstallManifest(opts: {
   const api = await generateFillCredentialsEntries(opts);
   const mcp = await generateMcpEntries(opts);
   const capability = await generateUnmetCapabilityEntries(opts);
-  return [...api, ...mcp, ...capability];
+  const loop =
+    opts.bundle.bundleId === 'coding-loop'
+      ? (await readCodingLoopReadiness(opts.tx, opts.spaceId, opts.redis)).tasks
+      : [];
+  return [...api, ...mcp, ...capability, ...loop];
 }
 
 // ============================================================================

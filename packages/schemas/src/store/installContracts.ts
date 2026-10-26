@@ -42,6 +42,8 @@ export const StoreInstallConflictSchema = z.object({
 export type StoreInstallConflict = z.infer<typeof StoreInstallConflictSchema>;
 
 export const StoreInstallPreviewResponseSchema = z.object({
+  setupChecklist: z.array(PostInstallTaskSchema).optional(),
+  readiness: z.enum(['ready', 'needs_setup', 'broken']).optional(),
   catalogId: CatalogIdSchema,
   catalogVersion: z.number().int().min(1).describe('Echo as expectedVersion when installing'),
   creates: z.array(StorePlannedArtifactSchema),
