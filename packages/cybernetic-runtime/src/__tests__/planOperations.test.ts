@@ -18,6 +18,7 @@ import {
   linkEndedRun,
   linkPlanNode,
   listPlanNodes,
+  readPlanTrees,
   updatePlanNode,
   type PlanWriteContext,
 } from '../plan/operations.js';
@@ -225,6 +226,66 @@ describe('updatePlanNode — no lost update (Plan 322 D6)', () => {
       note: 'x',
     });
     expect(result).toMatchObject({ ok: false, code: 'PLAN_NODE_NOT_FOUND' });
+  });
+});
+
+describe('updatePlanNode — the goal', () => {
+  const AMENDED = 'A new operator reaches a working space, and a second one, without help.';
+
+  it('rewrites the goal at the next revision, and the node and the board read it back', async () => {
+    const node = await created();
+    const result = await updatePlanNode(session('session-a'), {
+      nodeId: node.nodeId,
+      expectedRevision: 1,
+      goal: AMENDED,
+    });
+
+    expect(result).toMatchObject({ ok: true, node: { goal: AMENDED, revision: 2 } });
+    expect(await getPlanNode(session('session-a'), node.nodeId)).toMatchObject({
+      ok: true,
+      node: { goal: AMENDED },
+    });
+    const board = await readPlanTrees(session('session-a'));
+    expect(board.roots.find((r) => r.nodeId === node.nodeId)?.goalHead).toBe(AMENDED);
+  });
+
+  it('refuses a goal decided on a stale revision with the current one, and keeps the goal', async () => {
+    const node = await created();
+    const moved = await updatePlanNode(session('session-a'), {
+      nodeId: node.nodeId,
+      expectedRevision: 1,
+      note: 'next: F114',
+    });
+    if (!moved.ok) throw new Error(moved.message);
+
+    const refused = await updatePlanNode(session('session-b'), {
+      nodeId: node.nodeId,
+      expectedRevision: 1,
+      goal: AMENDED,
+    });
+
+    expect(refused).toMatchObject({
+      ok: false,
+      code: 'PLAN_NODE_STALE',
+      details: { nodeId: node.nodeId, revision: 2, differingFields: ['goal'] },
+    });
+    expect(store.nodes.get(node.nodeId)).toMatchObject({ revision: 2, goal: NODE.goal });
+  });
+
+  it('refuses the goal the node already has as unchanged, at its revision', async () => {
+    const node = await created();
+    const refused = await updatePlanNode(session('session-a'), {
+      nodeId: node.nodeId,
+      expectedRevision: 1,
+      goal: NODE.goal,
+    });
+
+    expect(refused).toMatchObject({
+      ok: false,
+      code: 'PLAN_NODE_UNCHANGED',
+      details: { revision: 1, differingFields: [] },
+    });
+    expect(store.nodes.get(node.nodeId)).toMatchObject({ revision: 1, goal: NODE.goal });
   });
 });
 

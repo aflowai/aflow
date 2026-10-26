@@ -223,4 +223,39 @@ describeDb('moveAtRevision — two crossing moves never close a loop (real DB)',
       done: 1,
     });
   });
+
+  it('writes a goal on the row at its revision, refuses it stale or unchanged, and the board reads it', async () => {
+    const amended = 'Hold its place in the tree, under its amended goal.';
+    const target = await node('goal target');
+
+    const written = await updatePlanNode(ctx, {
+      nodeId: target.nodeId,
+      expectedRevision: 1,
+      goal: amended,
+    });
+    expect(written).toMatchObject({ ok: true, node: { goal: amended, revision: 2 } });
+    expect(await store.find(SPACE_ID, target.nodeId)).toMatchObject({ goal: amended, revision: 2 });
+
+    const stale = await updatePlanNode(ctx, {
+      nodeId: target.nodeId,
+      expectedRevision: 1,
+      goal: 'Decided against the first revision.',
+    });
+    expect(stale).toMatchObject({
+      ok: false,
+      code: 'PLAN_NODE_STALE',
+      details: { revision: 2, differingFields: ['goal'] },
+    });
+
+    const same = await updatePlanNode(ctx, {
+      nodeId: target.nodeId,
+      expectedRevision: 2,
+      goal: amended,
+    });
+    expect(same).toMatchObject({ ok: false, code: 'PLAN_NODE_UNCHANGED' });
+    expect(await store.find(SPACE_ID, target.nodeId)).toMatchObject({ goal: amended, revision: 2 });
+
+    const trees = PlanTreeOutputSchema.parse(await readPlanTrees({ store, spaceId: SPACE_ID }));
+    expect(trees.roots.find((r) => r.nodeId === target.nodeId)?.goalHead).toBe(amended);
+  });
 });

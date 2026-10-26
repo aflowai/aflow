@@ -135,6 +135,24 @@ describe('PlanNodeUpdateInputSchema', () => {
     ]);
   });
 
+  it('takes a goal alone, held to the same ceiling as a created node’s', () => {
+    const update = { nodeId: NODE_ID, expectedRevision: 2 };
+    expect(PlanNodeUpdateInputSchema.safeParse({ ...update, goal: 'Amended.' }).success).toBe(true);
+    expect(
+      PlanNodeUpdateInputSchema.safeParse({
+        ...update,
+        goal: 'x'.repeat(PLAN_NODE_PROSE_MAX_CHARS + 1),
+      }).success,
+    ).toBe(false);
+    expect(PlanNodeUpdateInputSchema.safeParse({ ...update, goal: 7 }).success).toBe(false);
+  });
+
+  it('names goal among the fields its registration says it changes', () => {
+    const update = getOperation(buildOperationId('plan', 'node', 'update'));
+    expect(update?.usage.oneLine).toMatch(/\bgoal\b/);
+    expect(PLAN_NODE_UPDATE_EMPTY_MESSAGE).toMatch(/\bgoal\b/);
+  });
+
   it('refuses an update that changes nothing', () => {
     const result = PlanNodeUpdateInputSchema.safeParse({ nodeId: NODE_ID, expectedRevision: 3 });
     expect(result.error?.issues.map((i) => i.message)).toEqual([PLAN_NODE_UPDATE_EMPTY_MESSAGE]);

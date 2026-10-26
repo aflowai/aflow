@@ -40,15 +40,15 @@ The earlier plans in this area (88, 99, 215, 234, 299) were design exercises; pa
 
 ### 3.2 Operations
 
-| Operation          | Phase | Does                                                                                                            |
-| ------------------ | ----- | --------------------------------------------------------------------------------------------------------------- |
-| `plan.node.create` | P0    | a node under a parent (or a root), with kind, title, goal, criteria                                             |
-| `plan.node.update` | P0    | status, note, criteria, title, parent, position — compare-and-set on `expectedRevision`; `done` needs `outcome` |
-| `plan.node.get`    | P0    | one node with its children and, from P1, its links and in-flight runs                                           |
-| `plan.node.list`   | P0    | the space's tree, filtered by status or root, bounded                                                           |
-| `plan.node.link`   | P1    | a typed reference from a node to a run, session, pull request, document, finding or campaign                    |
-| `plan.node.learn`  | P2    | a learning scoped to a node, read by every later `get` of it or of a node under it                              |
-| `plan.node.depend` | P2    | a node waits on another's outcome (`done`, `dropped`, `closed`) — compare-and-set; a loop is refused            |
+| Operation          | Phase | Does                                                                                                                  |
+| ------------------ | ----- | --------------------------------------------------------------------------------------------------------------------- |
+| `plan.node.create` | P0    | a node under a parent (or a root), with kind, title, goal, criteria                                                   |
+| `plan.node.update` | P0    | status, note, goal, criteria, title, parent, position — compare-and-set on `expectedRevision`; `done` needs `outcome` |
+| `plan.node.get`    | P0    | one node with its children and, from P1, its links and in-flight runs                                                 |
+| `plan.node.list`   | P0    | the space's tree, filtered by status or root, bounded                                                                 |
+| `plan.node.link`   | P1    | a typed reference from a node to a run, session, pull request, document, finding or campaign                          |
+| `plan.node.learn`  | P2    | a learning scoped to a node, read by every later `get` of it or of a node under it                                    |
+| `plan.node.depend` | P2    | a node waits on another's outcome (`done`, `dropped`, `closed`) — compare-and-set; a loop is refused                  |
 
 Engine functions in `packages/cybernetic-runtime/src/plan/`, called by the inline handlers under `handlers/inlineOps/plan/`. Registered in `packages/schemas/src/catalog/registry.ts` with `usage.whenToUse` carrying what the schema cannot (open the node before briefing a round; a round's brief is the node's goal and criteria), pinned for the Helmsman in `catalog.coreOperations`.
 

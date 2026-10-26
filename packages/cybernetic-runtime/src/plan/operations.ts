@@ -326,6 +326,7 @@ export async function updatePlanNode(
 
   const patch: PlanNodePatch = {};
   if (input.title !== undefined) patch.title = input.title;
+  if (input.goal !== undefined) patch.goal = input.goal;
   if (input.criteria !== undefined) patch.criteria = input.criteria;
   if (input.note !== undefined) patch.note = input.note === '' ? null : input.note;
   if (input.outcome !== undefined) patch.outcome = input.outcome;
