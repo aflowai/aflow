@@ -75,7 +75,7 @@ Install **Coding Loop** from the Store once for Commission Change, Review Local 
 The install and **Check setup again** name what this space still needs:
 
 - Pair the machine under **This Computer**.
-- Connect a repository folder allowing commands and pushes with a branch prefix. Choose its merge posture on the machine with \`aflow harness merge-posture <folder> <never|when-green>\`.
+- Connect a repository folder allowing commands and pushes with a branch prefix. Choose its merge posture on the machine using the coding agent commands in the Aflow Local operator guide.
 - Bind a credential to the **github** connector in **Integrations**. Fine-grained permissions: Metadata and Contents read, Checks and Actions read, Pull requests and Issues write; Contents write for merges. Classic tokens need repo (public_repo for public repositories).
 - Create an active repeating schedule for the **Local PR Shepherd** agent, normally every five minutes, with inputTemplate \`{ "scheduleId": { "$schedule": "id" } }\`. That input lets the shepherd renew the schedule before its firing cap. Connect the folder before installing, or install again to write the agent.
 

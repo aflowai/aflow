@@ -46,8 +46,11 @@ describe('a bundle’s published version', () => {
     const after = await publishedVersions();
 
     expect(after.get('local-publish')).toBe((before.get('local-publish') ?? 0) + 1);
+    expect(after.get('coding-loop')).toBe((before.get('coding-loop') ?? 0) + 1);
     for (const [bundleId, version] of after) {
-      if (bundleId !== 'local-publish') expect(version, bundleId).toBe(before.get(bundleId));
+      if (bundleId !== 'local-publish' && bundleId !== 'coding-loop') {
+        expect(version, bundleId).toBe(before.get(bundleId));
+      }
     }
   });
 
@@ -67,8 +70,10 @@ describe('a bundle’s published version', () => {
     const after = await publishedVersions();
 
     const recorded = committed['local-publish']?.version ?? Number.NaN;
+    const codingLoopRecorded = committed['coding-loop']?.version ?? Number.NaN;
     expect(bundlesBelowSnapshot(after, committed)).toEqual([
       { bundleId: 'local-publish', version: recorded - 1, recorded },
+      { bundleId: 'coding-loop', version: codingLoopRecorded - 1, recorded: codingLoopRecorded },
     ]);
   });
 
