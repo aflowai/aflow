@@ -68,6 +68,7 @@ export interface NewPlanNode {
 export interface PlanNodePatch {
   status?: PlanNodeStatus;
   note?: string | null;
+  goal?: string;
   criteria?: string;
   title?: string;
   position?: number;

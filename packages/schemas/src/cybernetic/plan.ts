@@ -132,11 +132,12 @@ export const PLAN_NODE_OPEN_HAS_NO_OUTCOME_MESSAGE =
   'An open node has no outcome: pass `outcome` with status "done" or "dropped", or leave it out. Reopening a node moves its outcome into the note.';
 
 export const PLAN_NODE_UPDATE_EMPTY_MESSAGE =
-  'This update changes nothing. Name at least one of status, note, criteria, title, parentId, position or outcome.';
+  'This update changes nothing. Name at least one of status, note, goal, criteria, title, parentId, position or outcome.';
 
 export const PLAN_NODE_UPDATE_FIELDS = [
   'status',
   'note',
+  'goal',
   'criteria',
   'title',
   'parentId',
@@ -156,6 +157,7 @@ export const PlanNodeUpdateSchema = z
       .describe('The revision the change was decided against.'),
     status: PlanNodeStatusSchema.optional(),
     note: PlanNodeNoteSchema.optional(),
+    goal: PlanNodeProseSchema.optional(),
     criteria: PlanNodeProseSchema.optional(),
     title: PlanNodeTitleSchema.optional(),
     parentId: z.string().uuid().nullable().optional().describe('null makes it a root.'),

@@ -73,13 +73,17 @@ export const PlanOperationRegistrations: OperationRegistration[] = [
     idempotency: 'non_idempotent',
     mutates: true,
     usage: {
-      oneLine: 'Move a node on: status, note, criteria — compare-and-set on its revision.',
+      oneLine:
+        'Move a node on: status, note, goal, criteria, title — compare-and-set on its revision.',
       whenToUse: [
         'A round ends: record where the node stands and what comes next in the note',
         'The node’s criteria are met (done, with the outcome) or it is let go (dropped)',
+        'The node’s goal or criteria no longer say what it is for — correct them here',
       ],
       whenNotToUse: ['Adding a step under a node — use plan.node.create with parentId'],
-      pitfalls: [],
+      pitfalls: [
+        'An amended goal belongs in `goal`, not the note — every session is briefed from the goal',
+      ],
       minimalExampleInput: {
         nodeId: EXAMPLE_NODE_ID,
         expectedRevision: 1,
