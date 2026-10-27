@@ -365,6 +365,72 @@ describe('PostInstallTaskSchema — discriminated union', () => {
     ).toThrow();
   });
 
+  it('rejects the folder preview with required: true (the one optional kind)', () => {
+    expect(() =>
+      PostInstallTaskSchema.parse({
+        kind: 'folder_preview',
+        state: 'needs_setup',
+        page: '/computer',
+        command: 'aflow folder preview',
+        description: 'Declare how the folder’s change is seen working.',
+        required: true,
+      }),
+    ).toThrow();
+    expect(
+      PostInstallTaskSchema.parse({
+        kind: 'folder_preview',
+        state: 'needs_setup',
+        page: '/computer',
+        command: 'aflow folder preview',
+        description: 'Declare how the folder’s change is seen working.',
+        required: false,
+      }),
+    ).toMatchObject({ kind: 'folder_preview', required: false });
+  });
+
+  it('pins every other kind required, the readiness kinds included', () => {
+    const optional = PostInstallTaskSchema.options
+      .filter((option) => option.shape.required.value === false)
+      .map((option) => option.shape.kind.value);
+    expect(optional).toEqual(['folder_preview']);
+    expect(() =>
+      PostInstallTaskSchema.parse({
+        kind: 'coding_harness',
+        state: 'needs_setup',
+        page: '/computer',
+        chosen: null,
+        options: [],
+        description: 'Choose the coding agent.',
+        required: false,
+      }),
+    ).toThrow();
+  });
+
+  it('reads pair_machine as two stateful readings of one grant', () => {
+    const machine = {
+      kind: 'pair_machine',
+      reading: 'machine',
+      state: 'broken',
+      page: '/computer',
+      description: 'The executor is gone.',
+      required: true,
+    };
+    expect(PostInstallTaskSchema.parse(machine)).toMatchObject({ reading: 'machine' });
+    expect(
+      PostInstallTaskSchema.parse({
+        ...machine,
+        reading: 'folder',
+        state: 'done',
+        command: 'aflow connect <code> --branch-prefix <prefix>',
+        folder: { label: 'app', allowsPush: true, branchPrefix: 'aflow/', mergePosture: 'never' },
+      }),
+    ).toMatchObject({ folder: { mergePosture: 'never' } });
+    const { reading: _reading, ...withoutReading } = machine;
+    expect(() => PostInstallTaskSchema.parse(withoutReading)).toThrow();
+    const { state: _state, ...withoutState } = machine;
+    expect(() => PostInstallTaskSchema.parse(withoutState)).toThrow();
+  });
+
   it('rejects an unknown kind', () => {
     expect(() =>
       PostInstallTaskSchema.parse({

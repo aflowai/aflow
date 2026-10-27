@@ -69,7 +69,7 @@ describe('StoreInstallPreviewResponseSchema', () => {
     expect(result.success).toBe(true);
   });
 
-  it('parses a space preview naming the new space, its bundles and its readiness list', () => {
+  it('parses a space preview naming the new space, its bundles and its readiness list as it reads', () => {
     const result = StoreInstallPreviewResponseSchema.safeParse({
       kind: 'space',
       catalogId: 'a-quick-start',
@@ -80,7 +80,15 @@ describe('StoreInstallPreviewResponseSchema', () => {
       space: {
         spaceName: 'Code Review',
         bundles: [{ catalogId: 'local-code-review', catalogVersion: 4 }],
-        readiness: [{ key: 'pair-machine', title: 'Pair', required: true, page: '/computer' }],
+        readiness: [
+          {
+            key: 'pair-machine',
+            title: 'Pair',
+            required: true,
+            state: 'needs_setup',
+            page: '/computer',
+          },
+        ],
       },
     });
     expect(result.success).toBe(true);

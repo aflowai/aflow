@@ -7,6 +7,7 @@ import type {
   IntegrationSourceKind,
   ListingRequirements,
   PostInstallTask,
+  SpaceReadinessEntry,
   StoreInstallDivergence,
   StoreInstallPreviewResponse,
   StoreInstallResponse,
@@ -34,8 +35,16 @@ export type StoreListingSummary = CatalogEntryEnvelope & {
   requirements: ListingRequirements;
 };
 
+/** A readiness list as every surface reads it (Plan 330 D4). */
+export interface SpaceReadinessView {
+  status: 'ready' | 'needs_setup' | 'broken';
+  tasks: PostInstallTask[];
+  /** A quick start's items, each in the state the tasks read. */
+  readiness?: SpaceReadinessEntry[];
+}
+
 export interface StoreListingDetail {
-  readiness?: { status: 'ready' | 'needs_setup' | 'broken'; tasks: PostInstallTask[] };
+  readiness?: SpaceReadinessView;
   entry: CatalogEntryEnvelope & { sourceKind?: IntegrationSourceKind; payload: unknown };
   installedState: ListingInstalledState;
   requirements: ListingRequirements;
@@ -207,4 +216,22 @@ export function storeErrorDivergence(error: ApiError): StoreInstallDivergence | 
     if (parsed.success) return parsed.data;
   }
   return null;
+}
+
+export interface SpaceTemplateReadiness extends SpaceReadinessView {
+  catalogId: string;
+  name: string;
+  help: string[];
+}
+
+/** The space's help surface: the readiness of each quick start the space was made from. */
+export function useSpaceReadiness(
+  spaceId: string,
+): UseQueryResult<{ templates: SpaceTemplateReadiness[] }, ApiError> {
+  return useApiQuery<{ templates: SpaceTemplateReadiness[] }>({
+    key: ['space', spaceId, 'store', 'readiness'],
+    path: '/store/space-readiness',
+    ...(spaceId ? { spaceId } : {}),
+    enabled: !!spaceId,
+  });
 }

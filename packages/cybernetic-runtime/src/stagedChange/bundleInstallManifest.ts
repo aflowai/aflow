@@ -8,20 +8,68 @@ import {
   getPlatformOperationPrefixes,
   DECISION_MODEL_CAPABILITY_ID,
   laneProvidersForToken,
+  processEditionDescriptor,
 } from '@aflow/schemas';
-import type { CredentialSlot, McpAuthType, PostInstallTask, SkillBundle } from '@aflow/schemas';
+import type {
+  ComposedLanes,
+  CredentialSlot,
+  McpAuthType,
+  PostInstallTask,
+  SkillBundle,
+  SpaceTemplateReadinessItem,
+} from '@aflow/schemas';
 import { getSkillCatalogEntry } from '@aflow/platform-artifacts';
 import { deriveRequiredCapabilities } from './skillComposeApply.js';
 import { foldMissingCapabilitiesForAbsentCodeLane } from '@aflow/schemas';
 import { loadAvailableCapabilities } from '../skillProjectionReconciler.js';
-import { readCodingLoopReadiness } from '../store/codingLoopReadiness.js';
+import {
+  CODING_LOOP_READINGS,
+  readReadinessFacts,
+  readinessTasks,
+  type GithubAnswers,
+  type ReadinessReading,
+} from '../store/readinessReaders.js';
 
 // ============================================================================
 // Public generator
 // ============================================================================
 
 /**
- * Build the `postInstallManifest[]` from current DB state.
+ * The bundle whose readiness is the coding loop's: every reading, listed in
+ * whatever state it reads, whether or not a capability is unmet.
+ */
+const CODING_LOOP_BUNDLE_ID = 'coding-loop';
+
+/** The readings a space template's items ask for (Plan 330 D4). */
+export function readingsForItems(
+  items: ReadonlyArray<Pick<SpaceTemplateReadinessItem, 'answeredBy' | 'reading'>>,
+): Set<ReadinessReading> {
+  const readings = new Set<ReadinessReading>();
+  for (const item of items) {
+    if (item.answeredBy === 'pair_machine') {
+      // An item naming the folder reading asks for the folder the loop
+      // publishes from; one naming neither asks for the host lane's grant as
+      // a skill that only reads and runs there needs it — any connected folder.
+      if (item.reading !== 'folder') readings.add('machine');
+      if (item.reading === 'folder') readings.add('publishing_folder');
+      if (item.reading === undefined) readings.add('folder');
+    } else if (
+      item.answeredBy === 'github_credential' ||
+      item.answeredBy === 'coding_harness' ||
+      item.answeredBy === 'shepherd_schedule'
+    ) {
+      readings.add(item.answeredBy);
+    }
+    // `folder_preview` reads a declaration Plan 320 P6(a) has not built
+    // (§7 F3), so nothing lists it yet.
+  }
+  return readings;
+}
+
+/**
+ * Build the `postInstallManifest[]` from current DB state — the one readiness
+ * function the bundle install, the Store page and the space's help surface
+ * read (Plan 330 D4).
  *
  * Invoked INSIDE the install transaction (`skillBundleInstall.ts`), AFTER
  * the bundle's writes (skills, bindings, seeds) have landed in the tx —
@@ -29,6 +77,11 @@ import { readCodingLoopReadiness } from '../store/codingLoopReadiness.js';
  * just-written state. Manifest entries reflect what's still outstanding
  * after this install, not what it attempted to fix; an idempotent re-call
  * (the UI's Re-check) regenerates against current state.
+ *
+ * `readiness` is a space template's items: each reading they ask for is
+ * listed in the state it reads, beside the bundle's own tasks. The coding
+ * loop's bundle asks for its five readings itself, and an unmet host lane asks
+ * for the machine and a connected folder.
  */
 export async function generatePostInstallManifest(opts: {
   redis?: Redis | null | undefined;
@@ -38,16 +91,35 @@ export async function generatePostInstallManifest(opts: {
   tx: PostgresJsDatabase;
   // Kept on the signature so callers can pass a repo handle without coupling
   // call sites to the current set of generators. Unused today.
-  repo: MemoryDocRepository;
+  repo?: MemoryDocRepository;
+  readiness?: readonly SpaceTemplateReadinessItem[] | undefined;
+  lanes?: Pick<ComposedLanes, 'hostLane'> | undefined;
+  /** GitHub's answers, asked before the transaction (`askGithubForSpace`). */
+  githubAnswers?: GithubAnswers | undefined;
 }): Promise<PostInstallTask[]> {
   const api = await generateFillCredentialsEntries(opts);
   const mcp = await generateMcpEntries(opts);
   const capability = await generateUnmetCapabilityEntries(opts);
-  const loop =
-    opts.bundle.bundleId === 'coding-loop'
-      ? (await readCodingLoopReadiness(opts.tx, opts.spaceId, opts.redis)).tasks
-      : [];
-  return [...api, ...mcp, ...capability, ...loop];
+  const readings = readingsForItems(opts.readiness ?? []);
+  if (opts.bundle.bundleId === CODING_LOOP_BUNDLE_ID) {
+    for (const reading of CODING_LOOP_READINGS) readings.add(reading);
+  }
+  if (capability.hostUnmet) {
+    readings.add('machine');
+    readings.add('folder');
+  }
+  const stateful =
+    readings.size === 0
+      ? []
+      : readinessTasks(
+          await readReadinessFacts(opts.tx, opts.spaceId, readings, {
+            redis: opts.redis,
+            hostLane: (opts.lanes ?? processEditionDescriptor()).hostLane,
+            githubAnswers: opts.githubAnswers,
+          }),
+          readings,
+        );
+  return [...api, ...mcp, ...capability.entries, ...stateful];
 }
 
 // ============================================================================
@@ -299,7 +371,7 @@ async function generateUnmetCapabilityEntries(opts: {
   tenantId: string;
   spaceId: string;
   tx: PostgresJsDatabase;
-}): Promise<PostInstallTask[]> {
+}): Promise<{ entries: PostInstallTask[]; hostUnmet: boolean }> {
   const { bundle, tenantId, spaceId, tx } = opts;
 
   const requiredAcrossBundle = new Set<string>();
@@ -310,11 +382,11 @@ async function generateUnmetCapabilityEntries(opts: {
       requiredAcrossBundle.add(cap);
     }
   }
-  if (requiredAcrossBundle.size === 0) return [];
+  if (requiredAcrossBundle.size === 0) return { entries: [], hostUnmet: false };
 
   const platformPrefixes = getPlatformOperationPrefixes();
   const external = [...requiredAcrossBundle].filter((p) => !platformPrefixes.has(p));
-  if (external.length === 0) return [];
+  if (external.length === 0) return { entries: [], hostUnmet: false };
 
   const { available, codeLane, withheldByProfile, withheldByCeiling, withheldByProfileAlone } =
     await loadAvailableCapabilities({
@@ -331,6 +403,7 @@ async function generateUnmetCapabilityEntries(opts: {
     ),
   );
   const entries: PostInstallTask[] = [];
+  let hostUnmet = false;
   for (const token of unmet) {
     if (!SPACE_POLICY_OPERATION_PREFIXES.has(token)) continue;
     const missingGroups = withheldByProfile.get(token);
@@ -380,14 +453,9 @@ async function generateUnmetCapabilityEntries(opts: {
     }
     // The host lane's grant is a paired machine and a connected folder, not a
     // space policy, so pointing the operator at space settings names a setting
-    // that does not exist there.
+    // that does not exist there: the two `pair_machine` readings answer it.
     if (token === 'host') {
-      entries.push({
-        kind: 'pair_machine',
-        description:
-          'Pair this machine and connect the folder these skills work in, under This Computer.',
-        required: true,
-      });
+      hostUnmet = true;
       continue;
     }
     entries.push({
@@ -423,5 +491,5 @@ async function generateUnmetCapabilityEntries(opts: {
       required: true,
     });
   }
-  return entries;
+  return { entries, hostUnmet };
 }

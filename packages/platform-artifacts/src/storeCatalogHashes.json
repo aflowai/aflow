@@ -28,12 +28,16 @@
     "contentHash": "814ea9d7d423194beaa22fd9e22a10053bd5426d3d352de9df4cfbbc044296df"
   },
   "coding-loop": {
-    "version": 96,
-    "contentHash": "0cd25e576599ae0bdf9c73fc29f8e9d1ea7b47198b6ebebf8cb91da27448b16e"
+    "version": 97,
+    "contentHash": "48f397a1a4c29daa1c17a0233bce1757c4cdf5fd7a873cb6dc863bd24510dfcf"
   },
   "coding-pr-loop": {
     "version": 7,
     "contentHash": "38d06d06b9224aaab6966af28418d500d4af117a5200fec87bedda3aaccb9a21"
+  },
+  "coding-with-github": {
+    "version": 1,
+    "contentHash": "b471b5070ea8ee325a8845725bf2840b0017e7a2158f8b8ad17ce8b8725132e9"
   },
   "etoro-account": {
     "version": 1,

@@ -26,10 +26,7 @@ import {
   type CatalogSpaceEntry,
   type ComposedLanes,
   type EntityDirectives,
-  type PostInstallTask,
-  type SpaceReadinessEntry,
   type SpaceTemplate,
-  type SpaceTemplateReadinessItem,
   type StoreBundleInstallResult,
   type StoreCatalogChangedError,
   type StoreInstallResponse,
@@ -40,6 +37,7 @@ import { applyApiDefinitions } from '../stagedChange/bundleInstallContent.js';
 import { applyBundledAgents } from '../stagedChange/applyBundledAgents.js';
 import { deriveInstallProvenance, isListingOnTenantShelf } from './storeDerivations.js';
 import { listStoreInstalls } from './storeInstallProvenance.js';
+import { readTemplateReadiness } from './spaceReadiness.js';
 import {
   StoreInstallError,
   mapStoreInstallFailure,
@@ -61,26 +59,6 @@ export function spaceTemplateDirectives(template: SpaceTemplate): EntityDirectiv
   };
 }
 
-/**
- * Each readiness item as it stands for one space. An item is unmet while the
- * bundles' derived post-install manifest — read from live state at the moment
- * it is asked — still carries the task kind that answers it.
- */
-export function readSpaceTemplateReadiness(
-  items: readonly SpaceTemplateReadinessItem[],
-  manifest: readonly PostInstallTask[],
-): SpaceReadinessEntry[] {
-  const unmet = new Set(manifest.map((task) => task.kind));
-  return items.map((item) => ({
-    key: item.key,
-    title: item.title,
-    required: item.required,
-    state: unmet.has(item.answeredBy as PostInstallTask['kind']) ? 'needs_setup' : 'done',
-    ...(item.page !== undefined ? { page: item.page } : {}),
-    ...(item.command !== undefined ? { command: item.command } : {}),
-  }));
-}
-
 export interface CreatedSpace {
   spaceId: string;
   spaceSlug: string;
@@ -98,16 +76,6 @@ export interface SpaceTemplateTxOutcome {
   invalidations: InstallInvalidations[];
 }
 
-function dedupeTasks(tasks: readonly PostInstallTask[]): PostInstallTask[] {
-  const seen = new Set<string>();
-  return tasks.filter((task) => {
-    const key = JSON.stringify(task);
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
 export async function runSpaceTemplateInstall(
   tx: PostgresJsDatabase,
   entry: CatalogSpaceEntry,
@@ -116,6 +84,7 @@ export async function runSpaceTemplateInstall(
     actorUserId: string;
     payloadStore?: PayloadStore | undefined;
     redis?: Redis | null | undefined;
+    lanes?: Pick<ComposedLanes, 'hostLane'> | undefined;
   },
   opts: {
     createSpace: CreateTemplateSpace;
@@ -135,7 +104,6 @@ export async function runSpaceTemplateInstall(
 
   const bundles: Array<{ catalogId: string; result: StoreBundleInstallResult }> = [];
   const invalidations: InstallInvalidations[] = [];
-  const manifest: PostInstallTask[] = [];
   for (const bundleId of template.bundleIds) {
     const bundleEntry = resolveEntry(bundleId);
     if (bundleEntry?.kind !== 'bundle') {
@@ -153,7 +121,6 @@ export async function runSpaceTemplateInstall(
       );
     }
     bundles.push({ catalogId: bundleId, result: outcome.response.result });
-    manifest.push(...outcome.response.setupChecklist);
     if (outcome.invalidations) invalidations.push(outcome.invalidations);
   }
 
@@ -181,7 +148,14 @@ export async function runSpaceTemplateInstall(
   });
   await writeProvenance(tx, plan, { entryRow: 'replace' });
 
-  const setupChecklist = dedupeTasks(manifest);
+  // Read once everything is written, with the template's items: the same
+  // function the Store page and the space's help surface read.
+  const readiness = await readTemplateReadiness(tx, template, {
+    tenantId: ids.tenantId,
+    spaceId: space.spaceId,
+    redis: ids.redis,
+    lanes: ids.lanes,
+  });
   return {
     space,
     invalidations,
@@ -194,9 +168,9 @@ export async function runSpaceTemplateInstall(
         bundles,
         installedAgentSlugs: agents.installedAgentSlugs,
         installedApiDefinitionIds: apiDefinitions.installedApiDefinitionIds,
-        readiness: readSpaceTemplateReadiness(template.readiness, setupChecklist),
+        readiness: readiness.readiness,
       },
-      setupChecklist,
+      setupChecklist: readiness.tasks,
       install: plan.install,
     },
   };
@@ -333,6 +307,7 @@ export async function executeSpaceTemplateInstall(
           actorUserId: params.actorUserId,
           payloadStore: params.payloadStore,
           redis,
+          lanes: params.lanes ?? processEditionDescriptor(),
         },
         { createSpace: params.createSpace, shelf, resolveEntry },
       ),

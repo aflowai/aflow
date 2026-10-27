@@ -96,7 +96,8 @@ export const StoreInstallPreviewResponseSchema = z.object({
       bundles: z.array(
         z.object({ catalogId: CatalogIdSchema, catalogVersion: z.number().int().min(1) }),
       ),
-      readiness: z.array(SpaceReadinessEntrySchema.omit({ state: true })),
+      /** Read against the space the install would make, so the list stands before install as after. */
+      readiness: z.array(SpaceReadinessEntrySchema),
     })
     .optional(),
 });
