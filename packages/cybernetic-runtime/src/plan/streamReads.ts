@@ -249,7 +249,7 @@ export function createPlanStreamReads(
                 ),
               )
               .groupBy(wakeOf);
-          const nodesOf = new Map(reach.map((row) => [row.sessionId, Number(row.nodes)]));
+          const nodesOf = new Map(reach.map((row) => [row.sessionId, row.nodes]));
           wakeCents = wakeShareCents(
             costs.map((row) => ({
               cents: Number(row.cents ?? 0),
