@@ -67,7 +67,7 @@ export async function applyBundledAgents(params: {
     if (folders.length === 0) {
       result.warnings.push(
         `The "${agent.name}" agent was not written: it starts ${skill.name} on each connected folder that allows pushes, and the space has none. ` +
-          'Connect the folder with a publish prefix, then update this bundle from the Store to write the agent.',
+          'Connect the folder with a publish prefix, then choose Repair installation on this bundle in the Store to write the agent.',
       );
       continue;
     }

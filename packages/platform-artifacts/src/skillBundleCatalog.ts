@@ -349,7 +349,7 @@ const LOCAL_LOOP_PARTS = [
 const CODING_LOOP_BUNDLE: AuthoredSkillBundle = {
   ...LOCAL_PR_SHEPHERD_BUNDLE,
   bundleId: 'coding-loop' as SkillBundleId,
-  revision: 7,
+  revision: 8,
   name: 'Coding Loop',
   tagline: 'Commission, review, publish and shepherd changes on your own machine.',
   description: `Installs **Commission Change**, **Review Local Changes**, **Publish Local Changes**, the **Local PR Shepherd** skill and agent, and the **GitHub** API definition as one versioned bundle. Existing parts and customizations are kept.
@@ -358,7 +358,7 @@ const CODING_LOOP_BUNDLE: AuthoredSkillBundle = {
 1. Pair the machine under **This Computer**.
 2. Connect a repository folder allowing commands and pushes with a branch prefix; choose its merge posture on the machine.
 3. Bind a GitHub credential to the **github** connector under **Integrations**. A fine-grained token needs Metadata and Contents read, Checks and Actions read, Pull requests and Issues write; Contents write is needed for merges. A classic token needs repo (public_repo for public repositories).
-4. Create a repeating schedule for the **Local PR Shepherd** agent, normally every five minutes, with input { "scheduleId": { "$schedule": "id" } } so it renews before its firing cap. Connect the folder before installing, or install again to write the agent.
+4. Create a repeating schedule for the **Local PR Shepherd** agent, normally every five minutes, with input { "scheduleId": { "$schedule": "id" } } so it renews before its firing cap. If installed before connecting the folder, return to the Coding Loop listing and choose **Repair installation**, then confirm the install to create the missing agent. Existing parts and customizations are kept.
 
 The install and **Check setup again** list the setup this space still needs. Missing setup is **Needs setup**; a failing execution is **Broken**. Each skill retains its own usage guidance.`,
   skillCatalogIds: LOCAL_LOOP_PARTS.flatMap((part) => part.skillCatalogIds),

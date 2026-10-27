@@ -109,8 +109,20 @@ describe('the Local PR Shepherd agent a bundle install writes', () => {
     expect(result.installedAgentSlugs).toEqual([]);
     expect(created).toEqual([]);
     expect(result.warnings).toEqual([
-      expect.stringMatching(/has none\. Connect the folder with a publish prefix, then update/),
+      expect.stringMatching(
+        /has none\. Connect the folder with a publish prefix, then choose Repair installation/,
+      ),
     ]);
+  });
+
+  it('repairs an install made before a folder was connected and preserves the agent on retry', async () => {
+    expect((await install({ folders: [] })).installedAgentSlugs).toEqual([]);
+    expect((await install({ folders: ['hb_aflow'] })).installedAgentSlugs).toEqual([
+      'local-pr-shepherd',
+    ]);
+    expect(startedFolders(created[0]?.definition)).toEqual(['hb_aflow']);
+    await install({ folders: ['hb_aflow'], takenSlugs: ['local-pr-shepherd'] });
+    expect(created).toHaveLength(1);
   });
 
   it('leaves an agent already under the slug as it is', async () => {

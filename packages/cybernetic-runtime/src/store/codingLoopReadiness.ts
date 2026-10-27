@@ -9,6 +9,7 @@ export interface CodingLoopSetupState {
   folder: boolean;
   github: boolean;
   schedule: boolean;
+  agent: boolean;
   preview?: boolean;
   failure?: string;
 }
@@ -19,7 +20,7 @@ export function codingLoopReadiness(state: CodingLoopSetupState): {
 } {
   const tasks: PostInstallTask[] = [];
   const add = (
-    step: 'machine' | 'folder' | 'github' | 'schedule' | 'preview',
+    step: Extract<PostInstallTask, { kind: 'coding_loop_setup' }>['step'],
     description: string,
     path: string,
   ): void => {
@@ -34,8 +35,14 @@ export function codingLoopReadiness(state: CodingLoopSetupState): {
   if (!state.folder)
     add(
       'folder',
-      'Connect a repository folder under This Computer allowing commands and pushes with a branch prefix. Choose its merge posture on the machine: aflow harness merge-posture <folder> <never|when-green>. Then install Coding Loop again to create the shepherd agent.',
+      'Connect a repository folder under This Computer allowing commands and pushes with a branch prefix. Choose its merge posture on the machine: aflow harness merge-posture <folder> <never|when-green>.',
       '/computer',
+    );
+  if (!state.agent)
+    add(
+      'agent',
+      'After connecting a publishing folder, install Coding Loop or choose Repair installation on its Store listing if already installed to create the missing Local PR Shepherd agent.',
+      '/store/coding-loop',
     );
   if (!state.github)
     add(
@@ -69,11 +76,14 @@ export async function readCodingLoopReadiness(
     folder_ids: string[];
     github: boolean;
     schedule: boolean;
+    agent: boolean;
     failure: string | null;
   }>(sql`
     SELECT
       ARRAY(SELECT host_binding_id FROM host_bindings WHERE space_id = ${spaceId}::uuid
         AND allows_execution AND branch_prefix IS NOT NULL AND branch_prefix <> '') AS folder_ids,
+      EXISTS (SELECT 1 FROM agents WHERE space_id = ${spaceId}::uuid
+        AND slug = 'local-pr-shepherd') AS agent,
       EXISTS (SELECT 1 FROM api_bindings b JOIN api_credentials c
         ON c.space_id = b.space_id AND c.credential_key = b.auth_json->>'credentialKey'
         WHERE b.space_id = ${spaceId}::uuid AND b.api_id = 'github' AND b.enabled = 1) AS github,
@@ -103,6 +113,7 @@ export async function readCodingLoopReadiness(
         (folder) => folder.spaceId === spaceId && (state?.folder_ids ?? []).includes(folder.id),
       ),
     ),
+    agent: state?.agent ?? false,
     github: state?.github ?? false,
     schedule: state?.schedule ?? false,
     ...(state?.failure ? { failure: state.failure } : {}),

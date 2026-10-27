@@ -79,6 +79,12 @@ describe.skipIf(!databaseUrl)('coding loop database readiness', () => {
       });
       await tx.execute(sql`UPDATE api_bindings SET enabled = 1`);
       expect(await read()).toEqual({ status: 'ready', tasks: [] });
+
+      await tx.execute(sql`DELETE FROM agents`);
+      expect((await read()).tasks).toMatchObject([
+        { step: 'agent', path: '/store/coding-loop' },
+        { step: 'schedule' },
+      ]);
     });
   });
 });

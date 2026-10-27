@@ -613,7 +613,7 @@ export function skillStarterAgentDefinition(params: {
 export const PostInstallTaskSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('coding_loop_setup'),
-    step: z.enum(['machine', 'folder', 'github', 'schedule', 'preview']),
+    step: z.enum(['machine', 'folder', 'agent', 'github', 'schedule', 'preview']),
     description: z.string().min(1),
     path: z.string().min(1),
     required: z.literal(true),

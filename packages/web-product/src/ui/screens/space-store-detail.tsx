@@ -663,6 +663,14 @@ function StoreListingPageInner() {
                     Open
                   </Button>
                 )}
+                {display === 'installed' &&
+                  entry.kind === 'bundle' &&
+                  canManage &&
+                  entry.status !== 'deprecated' && (
+                    <Button variant="secondary" loading={busy} onClick={() => void beginInstall()}>
+                      Repair installation
+                    </Button>
+                  )}
                 {display === 'installed' && canManage && (
                   <Button variant="secondary" loading={busy} onClick={() => void checkSetup()}>
                     Check setup again
