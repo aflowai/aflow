@@ -112,6 +112,37 @@ describe('SpaceTemplateReadinessItemSchema', () => {
     ).toBe(true);
   });
 
+  it('is required exactly where the kind answering it is', () => {
+    expect(SpaceTemplateReadinessItemSchema.safeParse({ ...item, required: false }).success).toBe(
+      false,
+    );
+    const preview = {
+      key: 'folder-preview',
+      title: 'Declare the folder’s preview',
+      answeredBy: 'folder_preview',
+      page: '/computer',
+    };
+    expect(
+      SpaceTemplateReadinessItemSchema.safeParse({ ...preview, required: false }).success,
+    ).toBe(true);
+    expect(SpaceTemplateReadinessItemSchema.safeParse({ ...preview, required: true }).success).toBe(
+      false,
+    );
+  });
+
+  it('names a pair_machine reading only for that kind', () => {
+    expect(SpaceTemplateReadinessItemSchema.safeParse({ ...item, reading: 'folder' }).success).toBe(
+      true,
+    );
+    expect(
+      SpaceTemplateReadinessItemSchema.safeParse({
+        ...item,
+        answeredBy: 'coding_harness',
+        reading: 'machine',
+      }).success,
+    ).toBe(false);
+  });
+
   it('carries no state of its own: state is read, never authored', () => {
     expect(SpaceTemplateReadinessItemSchema.safeParse({ ...item, state: 'done' }).success).toBe(
       false,

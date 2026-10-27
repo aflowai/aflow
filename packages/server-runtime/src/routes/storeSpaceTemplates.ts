@@ -42,8 +42,10 @@ import {
   executeSpaceTemplateInstall,
   isListingOnTenantShelf,
   previewBundleInstall,
+  readTemplateReadiness,
   selectListableEntries,
   spaceTemplateDirectives,
+  type TemplateReadiness,
 } from '@aflow/cybernetic-runtime';
 import {
   insertSpaceRecord,
@@ -214,7 +216,7 @@ export const storeSpaceTemplateRoutes: FastifyPluginAsync = async (fastify) => {
         chosenModelRoles: new Set(),
       });
       const missingCapabilities = new Set<string>();
-      await readAgainstProspectiveSpace(
+      const readiness = await readAgainstProspectiveSpace<TemplateReadiness>(
         {
           db,
           tenant,
@@ -238,10 +240,20 @@ export const storeSpaceTemplateRoutes: FastifyPluginAsync = async (fastify) => {
             }
             installedFirst.add(bundle.catalogId);
           }
+          // Listed before install as after it, an item the edition cannot meet
+          // already reading `broken` with its refusal (Plan 330 §7 F7).
+          return readTemplateReadiness(tx, entry.payload, {
+            tenantId: tenant.tenantId,
+            spaceId,
+            redis: getRedis(fastify),
+            lanes: fastify.edition,
+          });
         },
       );
       return {
         kind: entry.kind,
+        setupChecklist: readiness.tasks,
+        readiness: readiness.status,
         catalogId: entry.catalogId,
         catalogVersion: entry.version,
         creates,
@@ -253,13 +265,7 @@ export const storeSpaceTemplateRoutes: FastifyPluginAsync = async (fastify) => {
             catalogId: bundle.catalogId,
             catalogVersion: bundle.version,
           })),
-          readiness: entry.payload.readiness.map((item) => ({
-            key: item.key,
-            title: item.title,
-            required: item.required,
-            ...(item.page !== undefined ? { page: item.page } : {}),
-            ...(item.command !== undefined ? { command: item.command } : {}),
-          })),
+          readiness: readiness.readiness,
         },
       };
     },

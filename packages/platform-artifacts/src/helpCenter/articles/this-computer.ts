@@ -72,14 +72,15 @@ The work happens in a private clone of the repository, so your uncommitted work 
 
 Install **Coding Loop** from the Store once for Commission Change, Review Local Changes, Publish Local Changes, the Local PR Shepherd skill and agent, and the GitHub connector definition. They install and update as one version. Uninstall removes the combined installation, including separately installed loop parts; skills claimed by other installations stay installed. Installing the bundle keeps existing parts and customizations. When updating separate parts to Coding Loop, **Keep mine** leaves their content and records the offered version as skipped; **Replace with Store version** replaces customized workflows with the Store versions.
 
-The install and **Check setup again** name what this space still needs:
+The install, the Coding Loop listing, **Check setup again** and — in a space made from **Coding with GitHub** — the help page list the same items, each with its state and where it changes:
 
-- Pair the machine under **This Computer**.
-- Connect a repository folder allowing commands and pushes with a branch prefix. Choose its merge posture on the machine using the coding agent commands in the Aflow Local operator guide.
-- Enable the **github** connection and bind a credential in **Integrations**. Fine-grained permissions: Metadata and Contents read, Checks and Actions read, Pull requests and Issues write; Contents write for merges. Classic tokens need repo (public_repo for public repositories).
-- Create an active repeating schedule for the **Local PR Shepherd** agent, normally every five minutes, with inputTemplate \`{ "input": "tend", "config": { "scheduleId": { "$schedule": "id" } } }\`. That input lets the shepherd renew the schedule before its firing cap. If installed before connecting the folder, return to the Coding Loop listing and choose **Repair installation**, then confirm the install to create the missing agent. Existing parts and customizations are kept, including an older version retained with **Keep mine**. An archived Local PR Shepherd does not satisfy readiness; restore it before enabling its schedule.
+- **Pair this machine** under **This Computer**. **Broken** when the machine holding the space's folders is no longer running its executor.
+- **Connect the repository's folder** allowing commands and pushes under a branch prefix, with a merge posture: \`aflow connect <code> --write --run --branch-prefix <prefix> --merge-posture <never|when-green>\`, run in the folder. The item shows the prefix and posture in force. If Coding Loop was installed before the folder was connected, return to its listing and choose **Repair installation**, then confirm the install to create the missing agent; existing parts and customizations are kept, including an older version retained with **Keep mine**. A Local PR Shepherd written before the folder was connected does not tend it, and the item says so.
+- **Bind a GitHub credential** to the **github** connection in **Integrations**. Fine-grained permissions: Metadata and Contents read, Checks and Actions read, Pull requests and Issues write; Contents write for merges. Classic tokens need repo (public_repo for public repositories). GitHub is asked about the credential: one it refuses is **Broken**, and a classic token without repo names it.
+- **Choose the coding agent** the space runs under **This Computer** — Claude Code or Codex, as installed on the machine. **Broken** when the one chosen is not installed.
+- **Arm the shepherd schedule.** The item offers the schedule: every five minutes unless you name another cron, at most 50 firings, with inputTemplate \`{ "input": "tend", "config": { "scheduleId": { "$schedule": "id" } } }\`, which lets the shepherd renew it before its firing cap. Nothing is scheduled until you arm it. Once it has expired, the item is **Broken** and recreates it from what it stored. An archived Local PR Shepherd does not satisfy readiness; restore it before arming its schedule.
 
-**Needs setup** means a prerequisite is missing, including a disabled GitHub connection. **Broken** means the shepherd schedule reports a dispatch error or its latest execution failed; inspect it under **Triggers**. A later successful execution clears the execution failure once its outcome is stored. Completing setup and repairing a failure are separate actions.
+**Needs setup** means a prerequisite is missing, including a disabled GitHub connection. **Broken** means something that was set up stopped working: besides the cases above, the shepherd schedule reports a dispatch error or its latest execution failed; inspect it under **Triggers**. A later successful execution clears the execution failure once its outcome is stored. Completing setup and repairing a failure are separate actions.
 
 A change reaches a branch under the folder's prefix, \`aflow/\` by default, and the folder's setting under **Connected folders** says whether a push asks you first.
 
@@ -111,6 +112,66 @@ The machine is kept awake on power while a run is in flight. Work dispatched whi
       'merge',
       'pr shepherd',
       'plan stream',
+    ],
+  },
+  {
+    id: 'driving-work-through-the-loop',
+    theme: 'this-computer',
+    question: 'How do I drive changes to my repository through the coding loop?',
+    summary:
+      'Keep one Helmsman conversation per stream of work, each stream on a node of the space’s plan. A round commissions the coding agent on the connected folder, reviews what it made, and publishes it as a pull request through the github connection; the Local PR Shepherd then tends the pull request until it merges or a person takes it over. The folder’s merge posture decides who merges, and a pull request labelled hands-off is left alone.',
+    body: `**Where:** a space made from **Coding with GitHub**, or any space with **Coding Loop** installed — the chat for the Helmsman, **Plan** in the sidebar for the board
+
+A change to your repository can be built by the space itself: the Helmsman commissions the coding agent on your machine, **Review Local Changes** reads what it made, and **Publish Local Changes** commits, scans, pushes and opens the pull request. This is the protocol that keeps several streams of work from taking each other's work down.
+
+## Before the first round
+
+The space lists what it still needs on its Store listing and on this help page, each item with its state and where it changes: a paired machine, the repository's folder connected with a branch prefix and a merge posture, a GitHub credential on the github connection, the coding agent the space runs, and the shepherd's schedule. Work through it until every item reads done.
+
+## One conversation per stream
+
+Each stream of work is one Helmsman conversation, kept on a node of the space's plan. A second stream starts a conversation of its own in the same space; it never posts into another stream's conversation and never cancels another stream's runs. **Plan** in the sidebar shows every stream as a board: which step is done, which waits on you, and the runs under way for each.
+
+A conversation told only which stream to continue reads its node first — its goal and criteria, what is linked to it, and what is in flight under it — and briefs the round from there. When the round ends, it records where the node stands, and marks the node done only with the outcome that met its criteria. What a round taught that the next one should know is recorded on the node too.
+
+## A round
+
+1. **Commission.** The Helmsman starts **Commission Change** on the connected folder without waiting on it, briefed with each finding: the file, the line where it is known, what is wrong, what right looks like, and the tests to add. The coding agent works in a private checkout, so your uncommitted work is untouched, and returns a change with a title and a paragraph describing it.
+2. **Review.** Publishing reviews the commit first: **Review Local Changes** reads the range and names every finding with its file and line.
+3. **Publish.** **Publish Local Changes** commits the change under the commission's summary, runs the folder's own checks where it declares them, scans for secrets, and decides by rule: a review short of approval, or one that approved over a real finding on the slice's first round, is a fix round on the same branch, pushed nothing; otherwise it pushes and opens or updates the pull request. A fix round commissions the fix onto the branch and publishes the branch again.
+4. **Merge.** Under the folder's merge posture **never**, the default, you merge. Under **when-green** the Local PR Shepherd merges by squash once the checks the base branch requires pass on the head, the review approved that head and no person requests changes — each merge on your approval in the Action Center.
+
+Approve a push only once the review is in: an approval given early pushes a commit the review may still send back.
+
+## The shepherd
+
+On its schedule, the **Local PR Shepherd** tends the pull requests the loop opened, one per pass. It fixes a red check by commissioning the fix on the branch and publishing it, within an attempt budget; when CI fails again after that, it stops, says why on the pull request, and asks you to take it over in the Action Center. It waits, touching nothing, while a publication or commission of the branch is under way. The schedule renews itself before its firing cap; once it has expired, the space's checklist recreates it from what it stored.
+
+## Hands off
+
+Label a pull request **hands-off** to have the shepherd leave it alone — while you work on it yourself, or have a fix in hand. Nothing is pushed to an open pull request outside the loop without your word, and a fix to a pull request is one more round on its branch rather than a new pull request.`,
+    editions: ['community-local'],
+    anchors: {
+      routes: ['s/[space]/plan', 's/[space]/computer'],
+      operations: [
+        'plan.node.get',
+        'plan.node.update',
+        'workflow.run.start',
+        'workflow.run.detail',
+      ],
+    },
+    related: ['coding-agent-on-this-computer', 'pair-this-computer'],
+    keywords: [
+      'coding loop',
+      'commission',
+      'review',
+      'publish',
+      'pull request',
+      'shepherd',
+      'hands-off',
+      'plan',
+      'stream',
+      'github',
     ],
   },
   {

@@ -31,6 +31,7 @@ import type {
 import {
   CODE_LANE_ABSENT_CAPABILITY_ID,
   CODE_REPO_CAPABILITY_ID,
+  openPostInstallTasks,
   parseStoreInstallClaimant,
 } from '@aflow/schemas';
 import { setupCapabilityRemediation } from './storeSetupCheck.js';
@@ -615,6 +616,7 @@ function StoreListingPageInner() {
                 <SetupChecklist
                   tasks={detail.readiness.tasks}
                   spaceSlug={spaceSlug}
+                  spaceId={spaceId}
                   onNavigate={push}
                 />
               )}
@@ -943,16 +945,18 @@ function StoreListingPageInner() {
           <Column gap="md">
             {flow.preview.readiness === 'broken' && (
               <Text size="sm">
-                Broken — the shepherd schedule reports a failure. Open Triggers to inspect it.
+                Broken — something that was set up stopped working. The item marked Broken says what
+                changes it.
               </Text>
             )}
             <SetupChecklist
               tasks={flow.preview.setupChecklist ?? []}
               spaceSlug={spaceSlug}
+              spaceId={spaceId}
               onNavigate={push}
             />
             {flow.preview.missingCapabilities.length === 0 &&
-            (flow.preview.setupChecklist?.length ?? 0) === 0 &&
+            openPostInstallTasks(flow.preview.setupChecklist ?? []).length === 0 &&
             flow.preview.readiness !== 'broken' ? (
               <Row gap="sm" align="center">
                 <Icon name="check-circle" size="sm" />
@@ -1189,7 +1193,7 @@ function InstallSuccessView({
   const needsAccountConnect =
     result.kind === 'connector' && result.status === 'needs_oauth_consent';
   const consentPath = result.kind === 'connector' ? result.consentPath : undefined;
-  const allDone = setupChecklist.length === 0 && !needsAccountConnect;
+  const allDone = openPostInstallTasks(setupChecklist).length === 0 && !needsAccountConnect;
 
   const queryClient = useQueryClient();
   const { launch } = useOAuthConsentPopup();
@@ -1236,6 +1240,7 @@ function InstallSuccessView({
               <SetupChecklist
                 tasks={setupChecklist}
                 spaceSlug={spaceSlug}
+                spaceId={spaceId}
                 onNavigate={onNavigate}
               />
             </Column>

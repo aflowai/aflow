@@ -1,5 +1,5 @@
 /**
- * The host lane's post-install row opens This Computer, a surface only the
+ * The host lane's post-install rows open This Computer, a surface only the
  * local edition composes. `useHasSurface('host-bindings')` answers a different
  * question — that route is registered `core` and exists in both editions,
  * declining at runtime instead — so the gate has to be the edition itself.
@@ -18,21 +18,6 @@ import { pairMachineLine } from './setup-checklist.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SRC = readFileSync(resolve(__dirname, 'setup-checklist.tsx'), 'utf8');
 
-/** The braced expression starting at `marker`, matched by depth. */
-function blockFrom(src: string, marker: string): string {
-  const start = src.indexOf(marker);
-  expect(start, `marker not found: ${marker}`).toBeGreaterThan(-1);
-  let depth = 0;
-  for (let i = start; i < src.length; i++) {
-    if (src[i] === '{') depth++;
-    else if (src[i] === '}') {
-      depth--;
-      if (depth === 0) return src.slice(start, i + 1);
-    }
-  }
-  throw new Error(`unbalanced braces from marker: ${marker}`);
-}
-
 /** One top-level function declaration's source, up to the next one. */
 function declarationOf(src: string, name: string): string {
   const start = src.indexOf(`function ${name}(`);
@@ -45,16 +30,18 @@ function countOf(src: string, needle: string): number {
   return src.split(needle).length - 1;
 }
 
-describe('pair_machine row — setup checklist', () => {
-  it('renders a row of its own for the pair_machine task kind', () => {
+describe('host lane rows — setup checklist', () => {
+  it('renders the pair_machine readings, the coding agent and the preview in a row of their own', () => {
     expect(SRC).toContain("task.kind === 'pair_machine'");
-    expect(SRC).toContain('function PairMachineRow');
+    expect(SRC).toContain("task.kind === 'coding_harness'");
+    expect(SRC).toContain('function HostLaneRow');
   });
 
   it('gates the This Computer link on the local edition, not on a surface name', () => {
     expect(SRC).toContain('useEdition()');
     expect(SRC).not.toContain('useHasSurface');
-    const gate = blockFrom(SRC, "{edition.id === 'community-local' &&");
+    const row = declarationOf(SRC, 'HostLaneRow');
+    const gate = row.slice(row.indexOf("edition.id === 'community-local' &&"));
     expect(gate).toContain("'/computer'");
     expect(
       countOf(SRC, "'/computer'"),
@@ -85,7 +72,7 @@ describe('pair_machine row — setup checklist', () => {
   });
 
   it('withholds the button until the edition is known', () => {
-    const row = declarationOf(SRC, 'PairMachineRow');
+    const row = declarationOf(SRC, 'HostLaneRow');
     // The gate is an equality on the local edition, so the unresolved `null`
     // fails it without a case of its own.
     expect(row).toContain("edition.id === 'community-local' &&");

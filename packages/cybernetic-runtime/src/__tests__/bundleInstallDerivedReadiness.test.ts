@@ -33,7 +33,8 @@ const { generatePostInstallManifest } = await import('../stagedChange/bundleInst
 
 const SPACE = '00000000-0000-0000-0000-000000000001';
 const TENANT = '11111111-1111-1111-1111-111111111111';
-const fakeTx = {} as PostgresJsDatabase;
+// The readiness facts a fresh space reads: no folder, no harness, no shepherd.
+const fakeTx = { execute: async () => [{}] } as unknown as PostgresJsDatabase;
 const fakeRepo = {} as MemoryDocRepository;
 
 function codingBundle() {
@@ -279,11 +280,15 @@ describe('Plan 313 — pair_machine post-install task', () => {
       spaceId: SPACE,
       tx: fakeTx,
       repo: fakeRepo,
+      lanes: { hostLane: 'present' },
     });
 
+    // The grant is a paired machine and a connected folder: two readings of it.
     const pair = manifest.filter((t) => t.kind === 'pair_machine');
-    expect(pair).toHaveLength(1);
-    expect(pair[0]).toMatchObject({ required: true });
+    expect(pair).toMatchObject([
+      { reading: 'machine', state: 'needs_setup', page: '/computer', required: true },
+      { reading: 'folder', state: 'needs_setup', page: '/computer', required: true },
+    ]);
     expect((pair[0] as { description: string }).description).toContain('This Computer');
     // The host lane has no space policy behind it, so the row that points at
     // space settings must never be the one emitted for it.

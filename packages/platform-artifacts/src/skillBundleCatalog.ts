@@ -349,18 +349,19 @@ const LOCAL_LOOP_PARTS = [
 const CODING_LOOP_BUNDLE: AuthoredSkillBundle = {
   ...LOCAL_PR_SHEPHERD_BUNDLE,
   bundleId: 'coding-loop' as SkillBundleId,
-  revision: 9,
+  revision: 10,
   name: 'Coding Loop',
   tagline: 'Commission, review, publish and shepherd changes on your own machine.',
   description: `Installs **Commission Change**, **Review Local Changes**, **Publish Local Changes**, the **Local PR Shepherd** skill and agent, and the **GitHub** API definition as one versioned bundle. Existing parts and customizations are kept.
 
 **Setup readiness**:
 1. Pair the machine under **This Computer**.
-2. Connect a repository folder allowing commands and pushes with a branch prefix; choose its merge posture on the machine.
-3. Bind a GitHub credential to the **github** connector under **Integrations**. A fine-grained token needs Metadata and Contents read, Checks and Actions read, Pull requests and Issues write; Contents write is needed for merges. A classic token needs repo (public_repo for public repositories).
-4. Create a repeating schedule for the **Local PR Shepherd** agent, normally every five minutes, with input { "input": "tend", "config": { "scheduleId": { "$schedule": "id" } } } so it renews before its firing cap. If installed before connecting the folder, return to the Coding Loop listing and choose **Repair installation**, then confirm the install to create the missing agent. Existing parts and customizations are kept.
+2. Connect a repository folder allowing commands and pushes with a branch prefix, and choose its merge posture: \`aflow connect <code> --write --run --branch-prefix <prefix> --merge-posture <never|when-green>\`. If installed before connecting the folder, return to the Coding Loop listing and choose **Repair installation**, then confirm the install to create the missing agent. Existing parts and customizations are kept.
+3. Bind a GitHub credential to the **github** connector under **Integrations**. A fine-grained token needs Metadata and Contents read, Checks and Actions read, Pull requests and Issues write; Contents write is needed for merges. A classic token needs repo (public_repo for public repositories). GitHub's answer for the credential is read: a token it refuses is **Broken**, and a classic token missing repo names it.
+4. Choose the coding agent this space runs under **This Computer** — Claude Code or Codex, as installed on the machine.
+5. Arm the schedule for the **Local PR Shepherd** agent: every five minutes unless you name another cron, with input { "input": "tend", "config": { "scheduleId": { "$schedule": "id" } } } so it renews before its firing cap. Once it has expired, the checklist recreates it from what it stored.
 
-The install and **Check setup again** list the setup this space still needs. Missing setup is **Needs setup**; a failing execution is **Broken**. Each skill retains its own usage guidance.`,
+The install and **Check setup again** list each item with its state. Missing setup is **Needs setup**; an executor that stopped, a credential GitHub refuses, a coding agent not installed, a failing execution or an expired schedule is **Broken**. Each skill retains its own usage guidance.`,
   skillCatalogIds: LOCAL_LOOP_PARTS.flatMap((part) => part.skillCatalogIds),
   prerequisiteBundleIds: [],
 };

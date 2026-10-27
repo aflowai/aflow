@@ -107,6 +107,7 @@ const executeStoreUninstallPreview = vi.hoisted(() => vi.fn());
 const checkMissingCapabilities = vi.hoisted(() => vi.fn(async () => [] as string[]));
 
 const loopReadiness = vi.hoisted(() => vi.fn());
+const helpReadiness = vi.hoisted(() => vi.fn());
 vi.mock('@aflow/cybernetic-runtime', async (importOriginal) => {
   const orig = (await importOriginal()) as Record<string, unknown>;
   return {
@@ -117,7 +118,8 @@ vi.mock('@aflow/cybernetic-runtime', async (importOriginal) => {
     executeStoreUninstall,
     executeStoreUninstallPreview,
     checkMissingCapabilities,
-    readCodingLoopReadiness: loopReadiness,
+    readListingReadiness: loopReadiness,
+    readSpaceHelpReadiness: helpReadiness,
   };
 });
 
@@ -276,7 +278,9 @@ function successResponse() {
 }
 
 beforeEach(() => {
-  loopReadiness.mockResolvedValue({ status: 'ready', tasks: [] });
+  loopReadiness.mockImplementation(async (_tx: unknown, entry: { catalogId: string }) =>
+    entry.catalogId === 'coding-loop' ? { status: 'ready', tasks: [] } : null,
+  );
   store.installs = [];
   store.apiDefinitionIds = new Set();
   store.apiBindingIds = new Set();
@@ -495,11 +499,10 @@ describe('the edition’s composed lanes', () => {
     async (status) => {
       const tasks = [
         {
-          kind: 'coding_loop_setup',
-          step: 'schedule',
-          description:
-            'Create a repeating shepherd schedule with config: { scheduleId: { $schedule: "id" } }.',
-          path: '/triggers',
+          kind: 'shepherd_schedule',
+          state: status,
+          page: '/triggers',
+          description: 'Arm the shepherd schedule.',
           required: true,
         },
       ];
@@ -511,6 +514,59 @@ describe('the edition’s composed lanes', () => {
       await app.close();
     },
   );
+
+  it('serves the space’s help surface the readiness the Store page reads', async () => {
+    const tasks = [
+      {
+        kind: 'coding_harness',
+        state: 'needs_setup',
+        page: '/computer',
+        chosen: null,
+        options: [{ id: 'codex', label: 'Codex' }],
+        description: 'Choose the coding agent.',
+        required: true,
+      },
+    ];
+    const readiness = [
+      {
+        key: 'coding-harness',
+        title: 'Choose the coding agent',
+        required: true,
+        state: 'needs_setup',
+        page: '/computer',
+      },
+    ];
+    helpReadiness.mockResolvedValue([
+      {
+        catalogId: 'coding-with-github',
+        name: 'Coding with GitHub',
+        help: ['driving-work-through-the-loop'],
+        status: 'needs_setup',
+        tasks,
+        readiness,
+      },
+    ]);
+    const { app } = await buildTestApp({ user: { userId: USER_ID, role: 'member' } });
+    const response = await app.inject({ method: 'GET', url: '/v1/store/space-readiness' });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      templates: [
+        {
+          catalogId: 'coding-with-github',
+          name: 'Coding with GitHub',
+          help: ['driving-work-through-the-loop'],
+          status: 'needs_setup',
+          tasks,
+          readiness,
+        },
+      ],
+    });
+    expect(helpReadiness).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ spaceId: expect.any(String) }),
+    );
+    await app.close();
+  });
 
   it('browse omits a host-lane listing where no host lane is composed', async () => {
     const withheld = await buildTestApp({
