@@ -46,6 +46,11 @@ describe('appendRoomMessage', () => {
     SESSION = crypto.randomUUID();
   });
 
+  async function roomMessageCount(): Promise<number> {
+    const entries = await redis.xrange(StreamKeys.sessionEventsStream(TENANT, SESSION), '-', '+');
+    return entries.filter(([, fields]) => fields.includes('RoomMessage')).length;
+  }
+
   it('hands out increasing positions from the first message', async () => {
     await setSessionState(redis, hotState());
 
@@ -88,7 +93,7 @@ describe('appendRoomMessage', () => {
     expect(third).toMatchObject({ ok: true, messageSeq: 2 });
   });
 
-  it('a post that failed before its event landed holds no guard: the redelivery posts it', async () => {
+  it('a post whose XADD the server refused holds no guard: the redelivery posts it', async () => {
     await setSessionState(redis, hotState());
     const eventId = crypto.randomUUID();
     const post = () =>
@@ -98,16 +103,44 @@ describe('appendRoomMessage', () => {
         eventId,
       });
 
+    const realMulti = redis.multi.bind(redis);
     vi.spyOn(redis, 'multi').mockImplementationOnce(() => {
-      throw new Error('connection reset');
+      const tx = realMulti();
+      tx.exec = async () => [[new Error('WRONGTYPE'), null]];
+      return tx;
     });
-    await expect(post()).rejects.toThrow('connection reset');
+    await expect(post()).rejects.toThrow('WRONGTYPE');
 
     const redelivered = await post();
     expect(redelivered).toMatchObject({ ok: true, eventId });
-    const entries = await redis.xrange(StreamKeys.sessionEventsStream(TENANT, SESSION), '-', '+');
-    expect(entries.filter(([, fields]) => fields.includes('RoomMessage'))).toHaveLength(1);
+    expect(await roomMessageCount()).toBe(1);
     expect(await post()).toEqual({ ok: false, reason: 'duplicate_event' });
+  });
+
+  it('a post lost to a connection failure after EXEC keeps its guard: no second message', async () => {
+    await setSessionState(redis, hotState());
+    const eventId = crypto.randomUUID();
+    const post = () =>
+      appendRoomMessage(redis, TENANT, SESSION, {
+        actorUserId: SARA,
+        body: 'still there?',
+        eventId,
+      });
+
+    const realMulti = redis.multi.bind(redis);
+    vi.spyOn(redis, 'multi').mockImplementationOnce(() => {
+      const tx = realMulti();
+      const realExec = tx.exec.bind(tx);
+      tx.exec = async () => {
+        await realExec();
+        throw new Error('Connection is closed.');
+      };
+      return tx;
+    });
+    await expect(post()).rejects.toThrow('Connection is closed.');
+
+    expect(await post()).toEqual({ ok: false, reason: 'duplicate_event' });
+    expect(await roomMessageCount()).toBe(1);
   });
 
   it('gives concurrent posters distinct positions', async () => {

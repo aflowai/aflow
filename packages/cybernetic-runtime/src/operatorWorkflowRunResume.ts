@@ -156,6 +156,24 @@ export async function executeOperatorWorkflowRunResume(
     };
   }
 
+  // A credentials or capability pause passes the guard above, but a second
+  // task can be paused beside it — a HITL gate surfaces as the Action Center
+  // focus — and acknowledging would resume the run past that task.
+  if (
+    args.input.resolution.mode === 'acknowledge' &&
+    (surfaced.contract.suggestedResumeCall?.op === 'human.action_center.focus' ||
+      run.tasks.some(
+        (task) => task.status === 'paused' && task.taskId !== surfaced.contract.failedTaskId,
+      ))
+  ) {
+    return {
+      ok: false,
+      code: 'ACKNOWLEDGE_NOT_ALLOWED_ON_HITL',
+      message:
+        'Another task in this run is paused; acknowledge would resume past it. Resolve that task with replace_output or fail first.',
+    };
+  }
+
   if (args.input.resolution.mode === 'retry_failed_task') {
     return {
       ok: false,

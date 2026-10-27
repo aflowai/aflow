@@ -284,6 +284,42 @@ describe('executeOperatorWorkflowRunResume — a credentials or capability pause
     expect(mockResumeRunWithClaim).not.toHaveBeenCalled();
     expect(mockReleaseResumeClaim).toHaveBeenCalled();
   });
+
+  it.each([
+    { suggestedResumeCall: { op: 'human.action_center.focus', args: { itemId: 'gate:step-1' } } },
+    { suggestedResumeCall: { op: 'workflow.run.resume', args: {} } },
+  ])(
+    'refuses to acknowledge a credentials pause while a second task is paused ($suggestedResumeCall.op)',
+    async ({ suggestedResumeCall }) => {
+      mockLoadRunById.mockResolvedValue({
+        ...pausedOnTask(),
+        tasks: [
+          { taskId: TASK_ID, status: 'paused', attempt: 2 },
+          { taskId: 'approve-push', status: 'paused', attempt: 1 },
+        ],
+      });
+      mockSurfaceContract.mockResolvedValue({
+        pauseVersion: 1,
+        contract: {
+          pauseCause: 'needs_credentials',
+          failedTaskId: TASK_ID,
+          allowedResumeModes: ['acknowledge'],
+          suggestedResumeCall,
+        },
+      });
+
+      const result = await executeOperatorWorkflowRunResume(
+        deps,
+        { tenantId: TENANT, spaceId: SPACE_ID, userId: 'user-1', input: ackInput() },
+        hooks,
+      );
+
+      expect(result).toMatchObject({ ok: false, code: 'ACKNOWLEDGE_NOT_ALLOWED_ON_HITL' });
+      expect(mockClaimResumeLease).not.toHaveBeenCalled();
+      expect(mockCommitReExecute).not.toHaveBeenCalled();
+      expect(mockResumeRunWithClaim).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe('executeOperatorWorkflowRunResume — acknowledge emits WorkflowRunUpdate(running)', () => {

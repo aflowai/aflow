@@ -877,6 +877,48 @@ describe('workflow.run.resume — Plan 130 Phase 1 cross-boundary loop', () => {
     expect(errorPayload['code']).toBe('WORKFLOW_PRECHECK_CAPABILITY_MISSING');
   });
 
+  it.each([
+    { op: 'human.action_center.focus', args: { itemId: 'gate:step-1' } },
+    { op: 'workflow.run.resume', args: {} },
+  ])(
+    'refuses to acknowledge a credentials pause while a second task is paused ($op)',
+    async (suggestedResumeCall) => {
+      mockLoadRunById.mockResolvedValueOnce(
+        makePausedRun({
+          pausedReason: 'needs_credentials',
+          tasks: [
+            { taskId: 'call-github', status: 'paused', attempt: 1 },
+            { taskId: 'approve-push', status: 'paused', attempt: 1 },
+          ],
+        }),
+      );
+      mockSurfaceWorkflowResumeContract.mockResolvedValue({
+        contract: {
+          ...makeContract({
+            pauseCause: 'needs_credentials',
+            allowedResumeModes: ['acknowledge', 'fail'],
+            failedTaskId: 'call-github',
+            replaceOutputSchema: undefined,
+            expectedTaskOutputSchema: undefined,
+          }),
+          suggestedResumeCall,
+        },
+        pauseVersion: 1,
+        pausedReason: 'needs_credentials',
+        resumeAttemptCount: 0,
+      });
+
+      await handleWorkflowCrudInline(
+        makeArgs({ runId: RUN_ID, pauseVersion: 1, resolution: { mode: 'acknowledge' } }),
+      );
+
+      expect(mockClaimResumeLease).not.toHaveBeenCalled();
+      expect(mockResumeRunWithClaim).not.toHaveBeenCalled();
+      const result = mockAddStepResult.mock.calls[0]![1] as { error: { code: string } };
+      expect(result.error.code).toBe('ACKNOWLEDGE_NOT_ALLOWED_ON_HITL');
+    },
+  );
+
   it('refuses to resume when an operation the run dispatches is still ungranted', async () => {
     // Operation tasks never pass step gating, so acknowledging the pause that
     // named the gap would run the operation on the authority that refused it.

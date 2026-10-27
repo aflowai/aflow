@@ -1,6 +1,6 @@
 import type { Redis } from 'ioredis';
 import { StreamKeys, type RoomMessageMetadata } from '@aflow/schemas';
-import { appendSessionEvent } from './events.js';
+import { appendSessionEvent, SessionEventNotAppendedError } from './events.js';
 import { markProjectionCandidate } from './projectionCandidates.js';
 import { sessionCandidateMember } from './candidateMember.js';
 import { syncSessionMetadataCandidate } from './sessionMetadataCandidates.js';
@@ -87,14 +87,21 @@ export async function appendRoomMessage(
   let messageSeq: number;
   try {
     messageSeq = await allocateMessageSeq(redis, tenantId, sessionId);
-    const metadata: RoomMessageMetadata = {
-      messageSeq,
-      actorUserId: input.actorUserId,
-      body: input.body,
-      wakeHelmsman: input.wakeHelmsman === true,
-      ...(input.actorDisplayName ? { actorDisplayName: input.actorDisplayName } : {}),
-      ...(input.clientMessageId ? { clientMessageId: input.clientMessageId } : {}),
-    };
+  } catch (err) {
+    // Nothing was posted, so a guard held here would answer the redelivery
+    // `duplicate_event` for a message no one can read.
+    if (guardKey) await redis.del(guardKey).catch(() => undefined);
+    throw err;
+  }
+  const metadata: RoomMessageMetadata = {
+    messageSeq,
+    actorUserId: input.actorUserId,
+    body: input.body,
+    wakeHelmsman: input.wakeHelmsman === true,
+    ...(input.actorDisplayName ? { actorDisplayName: input.actorDisplayName } : {}),
+    ...(input.clientMessageId ? { clientMessageId: input.clientMessageId } : {}),
+  };
+  try {
     await appendSessionEvent(redis, tenantId, sessionId, {
       eventId,
       eventType: 'RoomMessage',
@@ -103,10 +110,12 @@ export async function appendRoomMessage(
       metadata,
     });
   } catch (err) {
-    // The guard says "posted": held over a post that failed before the event
-    // landed, it would answer a redelivery `duplicate_event` for a message no
-    // one can read. Released, the redelivery posts it.
-    if (guardKey) await redis.del(guardKey).catch(() => undefined);
+    // Released only where the event provably did not land. A connection lost
+    // around EXEC can follow a committed append, and a message that may be in
+    // the room must not be posted twice — so there the guard stays.
+    if (guardKey && err instanceof SessionEventNotAppendedError) {
+      await redis.del(guardKey).catch(() => undefined);
+    }
     throw err;
   }
 
