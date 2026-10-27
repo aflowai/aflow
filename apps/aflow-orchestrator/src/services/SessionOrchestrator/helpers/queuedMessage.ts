@@ -8,9 +8,14 @@
  */
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { Redis } from 'ioredis';
-import { createTenantContext, eventLog, withTenantSchema } from '@aflow/database';
+import {
+  createTenantContext,
+  deterministicRoomMessageEventId,
+  persistRoomMessageEvent,
+  withTenantSchema,
+} from '@aflow/database';
 import { appendRoomMessage, markSeenThroughMessage } from '@aflow/redis';
-import type { RoomMessageMetadata, TenantId } from '@aflow/schemas';
+import type { TenantId } from '@aflow/schemas';
 
 const CHAT_INPUT_PREFIX = 'ai.agent.chatInput.';
 
@@ -31,11 +36,21 @@ export function messageOfResumeInput(input: unknown): string | undefined {
   return chatKeys.length === 1 ? text(record[chatKeys[0]!]) : undefined;
 }
 
+export type QueuedMessage =
+  | { eventId: string; messageSeq: number }
+  /** This delivery was posted already; the first post stands. */
+  | { eventId: string; duplicate: true };
+
 /**
  * Post the message into the room — on the live stream for the people in it,
  * and in the durable log the turn builder reads, since the stream is
  * projected only once the conversation next rests. Undefined where the
  * session's hot state is gone, so nothing was posted.
+ *
+ * The event id is derived from the resume's idempotency key rather than its
+ * clientMessageId: the key is always present and is what a redelivered
+ * resume carries unchanged, so the same delivery posts once — the stream
+ * append's guard refuses the second, and the durable row is keyed by it too.
  */
 export async function queueMessageForNextTurn(
   db: PostgresJsDatabase,
@@ -43,20 +58,28 @@ export async function queueMessageForNextTurn(
   args: {
     tenantId: TenantId;
     sessionId: string;
+    /** The resume's idempotency key — what identifies this delivery. */
+    deliveryKey: string;
     actorUserId: string;
     actorDisplayName?: string;
     body: string;
     clientMessageId?: string;
   },
-): Promise<{ eventId: string; messageSeq: number } | undefined> {
+): Promise<QueuedMessage | undefined> {
+  const eventId = deterministicRoomMessageEventId(
+    `queued-resume:${args.sessionId}:${args.deliveryKey}`,
+  );
   const appended = await appendRoomMessage(redis, args.tenantId, args.sessionId, {
     actorUserId: args.actorUserId,
     body: args.body,
     wakeHelmsman: true,
+    eventId,
     ...(args.actorDisplayName ? { actorDisplayName: args.actorDisplayName } : {}),
     ...(args.clientMessageId ? { clientMessageId: args.clientMessageId } : {}),
   });
-  if (!appended.ok) return undefined;
+  if (!appended.ok) {
+    return appended.reason === 'duplicate_event' ? { eventId, duplicate: true } : undefined;
+  }
   await markSeenThroughMessage(
     redis,
     args.tenantId,
@@ -65,35 +88,22 @@ export async function queueMessageForNextTurn(
     appended.messageSeq,
   );
 
-  const metadata: RoomMessageMetadata = {
-    messageSeq: appended.messageSeq,
-    actorUserId: args.actorUserId,
-    body: args.body,
-    wakeHelmsman: true,
-    ...(args.actorDisplayName ? { actorDisplayName: args.actorDisplayName } : {}),
-    ...(args.clientMessageId ? { clientMessageId: args.clientMessageId } : {}),
-  };
-  const postedAt = new Date();
-  // Keyed by the stream event's id, so the projection that later flushes the
-  // stream finds the row already written rather than adding a second.
-  await withTenantSchema(db, createTenantContext(args.tenantId), async (tx) => {
-    await tx
-      .insert(eventLog)
-      .values({
-        eventId: appended.eventId,
-        eventType: 'RoomMessage',
-        sessionId: args.sessionId,
-        timestamp: postedAt,
-        idempotencyKey: `${appended.eventId}:posted`,
-        envelope: {
-          eventId: appended.eventId,
-          eventType: 'RoomMessage',
-          timestamp: postedAt.getTime(),
-          sessionId: args.sessionId,
-          metadata,
-        },
-      })
-      .onConflictDoNothing();
-  });
+  // The API's room post writes through this same @aflow/database writer —
+  // extracted there rather than imported from server-runtime, which the
+  // orchestrator sits below. Keyed by the stream event's id, so the projection
+  // that later flushes the stream finds the row already written.
+  await withTenantSchema(db, createTenantContext(args.tenantId), (tx) =>
+    persistRoomMessageEvent(tx, {
+      eventId: appended.eventId,
+      sessionId: args.sessionId,
+      messageSeq: appended.messageSeq,
+      actorUserId: args.actorUserId,
+      body: args.body,
+      wakeHelmsman: true,
+      postedAt: new Date(),
+      ...(args.actorDisplayName ? { actorDisplayName: args.actorDisplayName } : {}),
+      ...(args.clientMessageId ? { clientMessageId: args.clientMessageId } : {}),
+    }),
+  );
   return { eventId: appended.eventId, messageSeq: appended.messageSeq };
 }

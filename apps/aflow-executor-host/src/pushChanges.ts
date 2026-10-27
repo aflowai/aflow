@@ -5,6 +5,8 @@
  * names the areas, so what counts as which kind of change is its policy, and
  * this counts only.
  */
+import { HOST_BINARY_FILE_LINES } from '@aflow/schemas';
+
 import { APPLY_OUTPUT_CAP_BYTES, git } from './worktree.js';
 
 export interface ChangeCount {
@@ -36,14 +38,19 @@ export function globMatcher(glob: string): RegExp {
   return new RegExp(`^${source}$`);
 }
 
-/** One `--numstat -z` record per file; renames are off, so each names one path. */
-function parseNumstat(output: string): Array<{ path: string; lines: number }> {
+/**
+ * One `--numstat -z` record per file; renames are off, so each names one path.
+ * Git writes `-` for both counts of a binary file, which is counted at
+ * `HOST_BINARY_FILE_LINES` rather than as no change at all.
+ */
+export function parseNumstat(output: string): Array<{ path: string; lines: number }> {
   const files: Array<{ path: string; lines: number }> = [];
   for (const record of output.split('\0')) {
     const match = /^(-|\d+)\t(-|\d+)\t(.+)$/s.exec(record);
     if (!match) continue;
     const [, added, removed, path] = match;
-    const lines = (added === '-' ? 0 : Number(added)) + (removed === '-' ? 0 : Number(removed));
+    const lines =
+      added === '-' || removed === '-' ? HOST_BINARY_FILE_LINES : Number(added) + Number(removed);
     files.push({ path: path!, lines });
   }
   return files;

@@ -643,13 +643,24 @@ export const HostPushAreasSchema = z
       'files and lines within, area by area. Read only where `pushBase` is given.',
   );
 
+/**
+ * The lines a binary file counts as in `pushChanges`. A diff gives a binary
+ * file no line count, and counting it as none would read a push of images or
+ * archives as a small change; at this floor one binary file is never small by
+ * the publication's review-depth rule, whose threshold is pinned at or below
+ * it by that rule's tests.
+ */
+export const HOST_BINARY_FILE_LINES = 30;
+
 const HostChangeCountSchema = z.object({
   files: z.number().int().nonnegative(),
   lines: z
     .number()
     .int()
     .nonnegative()
-    .describe('Lines added and removed together; a binary file counts none.'),
+    .describe(
+      `Lines added and removed together; a binary file, which has none to count, counts as ${String(HOST_BINARY_FILE_LINES)}.`,
+    ),
 });
 
 export const HostPushChangesSchema = HostChangeCountSchema.extend({

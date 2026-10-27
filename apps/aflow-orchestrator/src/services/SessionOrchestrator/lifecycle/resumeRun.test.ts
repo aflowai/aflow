@@ -158,6 +158,7 @@ describe('resumeRun on a conversation waiting on a paused workflow run', () => {
       expect.objectContaining({
         tenantId: TENANT,
         sessionId: SESSION,
+        deliveryKey: 'idem-1',
         actorUserId: '0f0e0d0c-1111-4222-8333-444455556666',
         actorDisplayName: 'Ada',
         body: 'Also bump the version while you are there.',

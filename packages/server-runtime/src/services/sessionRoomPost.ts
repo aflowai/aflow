@@ -6,8 +6,8 @@
  */
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { Redis } from 'ioredis';
-import type { RoomMessageMetadata, SessionId, TenantId } from '@aflow/schemas';
-import { eventLog, withTenantSchema, createTenantContext } from '@aflow/database';
+import type { SessionId, TenantId } from '@aflow/schemas';
+import { createTenantContext, persistRoomMessageEvent, withTenantSchema } from '@aflow/database';
 import { appendRoomMessage, getSessionStateSafe, markSeenThroughMessage } from '@aflow/redis';
 import { rehydratePausedRun } from '@aflow/cybernetic-runtime';
 
@@ -39,50 +39,27 @@ export interface DirectRoomMessageInput {
   wakeHelmsman?: boolean;
 }
 
-/**
- * Write a room message straight to the durable log.
- *
- * Keyed by the event id the stream append already used, so the flush worker —
- * which skips events it finds already written — treats this as the same event
- * rather than a second copy.
- */
-async function persistRoomMessageEvent(
+/** Write a room message straight to the durable log, by the shared writer. */
+async function persistRoomMessage(
   db: PostgresJsDatabase,
   input: DirectRoomMessageInput,
   appended: { messageSeq: number; eventId: string },
   postedAt: Date,
 ): Promise<void> {
-  const metadata: RoomMessageMetadata = {
-    messageSeq: appended.messageSeq,
-    actorUserId: input.actorUserId,
-    body: input.body,
-    wakeHelmsman: input.wakeHelmsman === true,
-    ...(input.actorDisplayName ? { actorDisplayName: input.actorDisplayName } : {}),
-    ...(input.clientMessageId ? { clientMessageId: input.clientMessageId } : {}),
-  };
-
-  const envelope = {
-    eventId: appended.eventId,
-    eventType: 'RoomMessage',
-    timestamp: postedAt.getTime(),
-    sessionId: input.sessionId,
-    metadata,
-  };
-
   try {
-    await withTenantSchema(db, createTenantContext(input.tenantId), async (tx) => {
-      await tx
-        .insert(eventLog)
-        .values({
-          eventId: appended.eventId,
-          eventType: 'RoomMessage',
-          sessionId: input.sessionId,
-          timestamp: postedAt,
-          idempotencyKey: `${appended.eventId}:posted`,
-          envelope,
-        })
-        .onConflictDoNothing();
-    });
+    await withTenantSchema(db, createTenantContext(input.tenantId), (tx) =>
+      persistRoomMessageEvent(tx, {
+        eventId: appended.eventId,
+        sessionId: input.sessionId,
+        messageSeq: appended.messageSeq,
+        actorUserId: input.actorUserId,
+        body: input.body,
+        postedAt,
+        ...(input.wakeHelmsman ? { wakeHelmsman: true } : {}),
+        ...(input.actorDisplayName ? { actorDisplayName: input.actorDisplayName } : {}),
+        ...(input.clientMessageId ? { clientMessageId: input.clientMessageId } : {}),
+      }),
+    );
   } catch (err) {
     // The message is already live on the stream and will still be flushed with
     // the session; losing the durable head start is worse than failing the post.
@@ -158,7 +135,7 @@ export async function postRoomMessageDirect(
   // Postgres now rather than waiting for a flush that may arrive too late.
   // The flush worker skips events already written, so this does not
   // duplicate.
-  await persistRoomMessageEvent(db, input, result, postedAt);
+  await persistRoomMessage(db, input, result, postedAt);
 
   return {
     messageSeq: result.messageSeq,

@@ -125,6 +125,7 @@ export function createResumeRun(bindings: SessionOrchestratorBindings) {
     return await queueMessageForNextTurn(db, redis, {
       tenantId: params.tenantId,
       sessionId: params.runId,
+      deliveryKey: params.idempotencyKey,
       actorUserId: params.actorContext.userId,
       ...(params.actorContext.displayName
         ? { actorDisplayName: params.actorContext.displayName }

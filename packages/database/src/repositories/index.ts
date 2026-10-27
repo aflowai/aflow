@@ -30,6 +30,7 @@ export * from './appletLifecycle.js';
 export * from './installedApplets.js';
 export * from './sessionParticipants.js';
 export * from './sessionMetadata.js';
+export * from './roomMessageEvents.js';
 export * from './asyncJobs.js';
 export * from './simulationBaseline.js';
 export * from './simulationJournal.js';

@@ -63,7 +63,11 @@ export const REVIEW_DEPTH_AREAS = {
   light: ['docs/**', '**/*.md', '**/__tests__/**', '**/*.test.*', '**/*.spec.*'],
 };
 
-/** Fewer changed lines than this, added and removed together, is a small change. */
+/**
+ * Fewer changed lines than this, added and removed together, is a small change.
+ * The commit task counts a binary file at `HOST_BINARY_FILE_LINES`; this stays
+ * at or below that floor, so a push of binaries alone is never small.
+ */
 export const SMALL_CHANGE_LINES = 30;
 
 export const UNMEASURED_REASON =

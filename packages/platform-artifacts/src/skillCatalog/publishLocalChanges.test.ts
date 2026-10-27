@@ -41,6 +41,7 @@ import {
   HostFilePatchInputSchema,
   HostFilePatchOutputSchema,
   HostPushAreasSchema,
+  HOST_BINARY_FILE_LINES,
   isEvalPlaneOperation,
   LoopPullRequestsSchema,
   ShepherdHandoffReadSchema,
@@ -4286,6 +4287,12 @@ describe("Publish Local Changes — the review reads as deep as the commit's sha
       value: BRIEF_MAX_TURNS,
     });
     expect(decideDepth(changesOf({ files: 2, lines: 30 })).decision).toBe('standard');
+  });
+
+  it('standard: one binary file outside the sensitive paths, counted at its floor, is not a small change', () => {
+    expect(decideDepth(changesOf({ files: 1, lines: HOST_BINARY_FILE_LINES })).decision).toBe(
+      'standard',
+    );
   });
 
   it('standard otherwise — code outside the sensitive paths, in 30 lines or more — with no turn budget', () => {

@@ -1,11 +1,14 @@
 /**
  * Contract: what a push changes is counted by the caller's own areas — globs
  * over repository-relative paths, `*` within one directory and `**` across
- * any number — and a binary file is a file with no lines.
+ * any number — and a binary file, which a diff gives no lines, counts at a
+ * floor so a push of binaries alone never reads as small.
  */
 import { describe, expect, it } from 'vitest';
 
-import { countChanges, globMatcher } from '../pushChanges.js';
+import { HOST_BINARY_FILE_LINES } from '@aflow/schemas';
+
+import { countChanges, globMatcher, parseNumstat } from '../pushChanges.js';
 
 describe('globMatcher', () => {
   it('reads `**` across directories, zero included, and `*` within one', () => {
@@ -30,13 +33,24 @@ describe('globMatcher', () => {
   });
 });
 
+describe('parseNumstat', () => {
+  it('counts a text file by its lines and a binary file at the floor', () => {
+    const output = ['3\t2\tsrc/a.ts', '-\t-\tassets/logo.png', '0\t0\tempty.txt', ''].join('\0');
+    expect(parseNumstat(output)).toEqual([
+      { path: 'src/a.ts', lines: 5 },
+      { path: 'assets/logo.png', lines: HOST_BINARY_FILE_LINES },
+      { path: 'empty.txt', lines: 0 },
+    ]);
+  });
+});
+
 describe('countChanges', () => {
   it('counts files and lines in all and within each area, a file in two areas counted in both', () => {
     const changes = countChanges(
       [
         { path: 'packages/schemas/src/a.test.ts', lines: 4 },
         { path: 'docs/plans/x.md', lines: 20 },
-        { path: 'apps/web/logo.png', lines: 0 },
+        { path: 'apps/web/logo.png', lines: HOST_BINARY_FILE_LINES },
       ],
       {
         deep: ['packages/schemas/**'],
@@ -46,7 +60,7 @@ describe('countChanges', () => {
     );
     expect(changes).toEqual({
       files: 3,
-      lines: 24,
+      lines: 24 + HOST_BINARY_FILE_LINES,
       areas: {
         deep: { files: 1, lines: 4 },
         light: { files: 2, lines: 24 },
