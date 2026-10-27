@@ -308,6 +308,10 @@ yarn typecheck                         # Verify no type errors
 15. **MCP `registerTool` inputSchema** — in `apps/aflow-mcp/src/tools/*.ts`, always use `inputSchema: SomeSchema.shape as any`, never the full schema. MCP SDK 1.27+ Zod v3/v4 compat triggers deep type recursion → TS2589 + OOM. Runtime validation is unchanged (`.parse()` in handler). Do not "clean up" by removing the cast.
 16. **Committing lint errors** — the pre-commit hook (`lint-staged`) blocks committing files with lint errors. Fix them or use `git commit --no-verify` (strongly discouraged — only for genuine emergencies). The rule: every file you commit must pass lint. You are not responsible for pre-existing debt in files you don't touch, but never make a file worse.
 
+17. **Publishing inside a nested transaction** — a savepoint returning does not commit the outer transaction. Store bundle callers pass Redis only for readiness reads, return pending embedding jobs, and publish jobs and invalidations after provenance commits.
+
+18. **Using hidden fixtures for retired Store listings** — hidden bundles are removed from production. Use unlisted entries for installed identities that must remain resolvable. Repair after Keep mine must preserve the installed/skipped versions and kept content; readiness queries must exclude archived agents from both agent existence and schedule eligibility.
+
 ## Keeping Documentation in Sync
 
 Documentation is NOT optional. Every change that affects behavior, schemas, or architecture

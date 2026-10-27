@@ -51,6 +51,8 @@ The posture's cost is one approval per merge. `mergePullRequest` is a `medium` w
 
 ## 3. Design
 
+Coding Loop readiness requires an enabled GitHub binding with a stored credential. Disabled connections remain setup work and direct the operator to enable them in Integrations. Broken readiness includes dispatch errors and failed sessions or workflow runs belonging to an active shepherd schedule's latest session. A later successful execution recovers readiness without retaining older execution failures; terminal session outcomes become visible after their Postgres projection is stored.
+
 ### 3.1 Tasks
 
 | Task             | Operation                                                                | Reads / does                                                                                     |
@@ -160,3 +162,5 @@ Deferred, not planned here: the webhook trigger for the hosted edition; a shephe
 
 - Whether the lease belongs in the memory store or on the pull request itself, as a label the shepherd sets and clears; the store is private to the space, the label is visible to a person on GitHub.
 - Whether a person's `request_changes` review on the pull request should feed the same `fix` path, with the review comments as the brief's data. The hosted `pr-shepherd` says yes; this plan starts with CI alone.
+
+Coding Loop installed before a publishing folder is connected retains a missing-agent setup task. After connecting the folder, the operator chooses **Repair installation** on the Store listing and confirms the existing idempotent install flow. It creates the missing shepherd while preserving existing agents and customizations, and refreshes Store readiness before schedule setup.

@@ -7,6 +7,9 @@ import { getSkillBundleEntry, getSkillCatalogEntry } from '@aflow/platform-artif
 // Mock state
 // ============================================================================
 
+const applyBundledAgents = vi.hoisted(() => vi.fn());
+vi.mock('../stagedChange/applyBundledAgents.js', () => ({ applyBundledAgents }));
+
 const mockDocs = new Map<string, string>();
 const capturedManifests: SkillManifest[] = [];
 const projectionRebuilds: string[] = [];
@@ -72,6 +75,13 @@ vi.mock('../skill.js', () => ({
 }));
 
 vi.mock('../skillProjectionReconciler.js', () => ({
+  loadAvailableCapabilities: async () => ({
+    available: new Set(['host', 'api', 'agent', 'workflow', 'memory', 'human']),
+    codeLane: 'present',
+    withheldByProfile: new Map(),
+    withheldByCeiling: new Map(),
+    withheldByProfileAlone: new Map(),
+  }),
   rebuildSkillProjection: async (_ctx: unknown, skillId: string) => {
     projectionRebuilds.push(skillId);
     mockDocs.set(`/skills/${skillId}/projection.json`, JSON.stringify({ skillId }));
@@ -148,8 +158,87 @@ function projectionDocPath(skillId: string): string {
 // Tests
 // ============================================================================
 
+describe('repair preserving existing content', () => {
+  beforeEach(() => {
+    mockDocs.clear();
+    capturedManifests.length = 0;
+    projectionRebuilds.length = 0;
+    applyBundledAgents.mockResolvedValue({
+      installedAgentSlugs: [],
+      skippedAgentSlugs: [],
+      warnings: [],
+    });
+  });
+
+  it('installs missing loop workflows before agents after adopting only local-publish', async () => {
+    await installSkillBundle(ctx, {
+      ...getSkillBundleEntry('local-publish')!,
+      prerequisiteBundleIds: [],
+    });
+    const publishPath = workflowDocPath(
+      getSkillCatalogEntry(getSkillBundleEntry('local-publish')!.skillCatalogIds[0]!)!.bundle
+        .workflow.slug,
+    );
+    mockDocs.set(publishPath, 'customized publish workflow');
+    const kept = new Map(mockDocs);
+    applyBundledAgents.mockImplementationOnce(async () => {
+      expect(mockDocs.has(workflowDocPath('local-pr-shepherd'))).toBe(true);
+      expect(capturedManifests.some((manifest) => manifest.skillId === 'local-pr-shepherd')).toBe(
+        true,
+      );
+      return { installedAgentSlugs: ['local-pr-shepherd'], skippedAgentSlugs: [], warnings: [] };
+    });
+    const result = await installSkillBundle(ctx, getSkillBundleEntry('coding-loop')!, {
+      preserveExistingContent: true,
+    });
+    expect(result.installedSkillCatalogIds).toContain('local-pr-shepherd');
+    expect(
+      capturedManifests.find((manifest) => manifest.skillId === 'local-pr-shepherd'),
+    ).toMatchObject({
+      origin: 'cloned',
+      sourceCatalogId: 'local-pr-shepherd',
+    });
+    expect(JSON.parse(mockDocs.get(workflowDocPath('local-pr-shepherd'))!)).toMatchObject({
+      slug: 'local-pr-shepherd',
+      status: 'approved',
+    });
+    for (const [path, content] of kept) expect(mockDocs.get(path)).toBe(content);
+  });
+
+  it('creates missing agents without applying or projecting kept skills', async () => {
+    const bundle = {
+      ...getTestTwoSkillBundle(),
+      agents: getSkillBundleEntry('coding-loop')!.agents,
+    };
+    await installSkillBundle(ctx, getTestTwoSkillBundle());
+    capturedManifests.length = 0;
+    projectionRebuilds.length = 0;
+    mockDocs.set('/custom-content', 'kept');
+    const before = new Map(mockDocs);
+    applyBundledAgents.mockResolvedValueOnce({
+      installedAgentSlugs: ['local-pr-shepherd'],
+      skippedAgentSlugs: [],
+      warnings: [],
+    });
+    const result = await installSkillBundle(ctx, bundle, { preserveExistingContent: true });
+    expect(result.installedAgentSlugs).toEqual(['local-pr-shepherd']);
+    expect(mockDocs).toEqual(before);
+    expect(capturedManifests).toEqual([]);
+    expect(projectionRebuilds).toEqual([]);
+    expect(result.installedSkillCatalogIds).toEqual([]);
+    expect(applyBundledAgents).toHaveBeenCalledWith(
+      expect.objectContaining({ agents: bundle.agents }),
+    );
+  });
+});
+
 describe('installSkillBundle (Plan 137 Phase 2)', () => {
   beforeEach(() => {
+    applyBundledAgents.mockResolvedValue({
+      installedAgentSlugs: [],
+      skippedAgentSlugs: [],
+      warnings: [],
+    });
     mockDocs.clear();
     capturedManifests.length = 0;
     projectionRebuilds.length = 0;
@@ -198,6 +287,32 @@ describe('installSkillBundle (Plan 137 Phase 2)', () => {
   });
 
   describe('idempotent-reinstall', () => {
+    it('adopts customized loop skills from separate installs without rewriting them', async () => {
+      const loop = getSkillBundleEntry('coding-loop');
+      if (!loop) throw new Error('coding-loop missing');
+      const skillsOnly = {
+        ...loop,
+        agents: [],
+        apiDefinitions: [],
+        bundleId: 'test-adoption' as SkillBundleId,
+      };
+      for (const id of skillsOnly.skillCatalogIds.slice(0, 2)) {
+        await installSkillBundle(ctx, { ...skillsOnly, skillCatalogIds: [id] });
+      }
+      const first = getSkillCatalogEntry(skillsOnly.skillCatalogIds[0] ?? '');
+      if (!first) throw new Error('commission missing');
+      const path = workflowDocPath(first.bundle.workflow.slug);
+      const customized = JSON.stringify({
+        ...JSON.parse(mockDocs.get(path) ?? '{}'),
+        name: 'My commission',
+      });
+      mockDocs.set(path, customized);
+      const result = await installSkillBundle(ctx, skillsOnly);
+      expect(result.skippedSkillCatalogIds).toEqual(skillsOnly.skillCatalogIds.slice(0, 2));
+      expect(result.installedSkillCatalogIds).toEqual(skillsOnly.skillCatalogIds.slice(2));
+      expect(mockDocs.get(path)).toBe(customized);
+    });
+
     it('skips fully-installed skills on re-install (no duplicate writes)', async () => {
       const bundle = getTestTwoSkillBundle();
 

@@ -106,6 +106,7 @@ const executeStoreUninstall = vi.hoisted(() => vi.fn());
 const executeStoreUninstallPreview = vi.hoisted(() => vi.fn());
 const checkMissingCapabilities = vi.hoisted(() => vi.fn(async () => [] as string[]));
 
+const loopReadiness = vi.hoisted(() => vi.fn());
 vi.mock('@aflow/cybernetic-runtime', async (importOriginal) => {
   const orig = (await importOriginal()) as Record<string, unknown>;
   return {
@@ -116,6 +117,7 @@ vi.mock('@aflow/cybernetic-runtime', async (importOriginal) => {
     executeStoreUninstall,
     executeStoreUninstallPreview,
     checkMissingCapabilities,
+    readCodingLoopReadiness: loopReadiness,
   };
 });
 
@@ -274,6 +276,7 @@ function successResponse() {
 }
 
 beforeEach(() => {
+  loopReadiness.mockResolvedValue({ status: 'ready', tasks: [] });
   store.installs = [];
   store.apiDefinitionIds = new Set();
   store.apiBindingIds = new Set();
@@ -487,6 +490,27 @@ const LOCAL_WITH_MACHINE: ComposedLanes = {
 };
 
 describe('the edition’s composed lanes', () => {
+  it.each(['needs_setup', 'broken'] as const)(
+    'shows %s separately on the Coding Loop Store detail',
+    async (status) => {
+      const tasks = [
+        {
+          kind: 'coding_loop_setup',
+          step: 'schedule',
+          description: 'Create a repeating shepherd schedule with scheduleId: { $schedule: "id" }.',
+          path: '/triggers',
+          required: true,
+        },
+      ];
+      loopReadiness.mockResolvedValue({ status, tasks });
+      const { app } = await buildTestApp({ user: { userId: USER_ID, role: 'member' } });
+      const response = await app.inject({ method: 'GET', url: '/v1/store/listings/coding-loop' });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({ readiness: { status, tasks } });
+      await app.close();
+    },
+  );
+
   it('browse omits a host-lane listing where no host lane is composed', async () => {
     const withheld = await buildTestApp({
       user: { userId: USER_ID, role: 'member' },
@@ -496,7 +520,7 @@ describe('the edition’s composed lanes', () => {
     const hostedIds = (hosted.json() as { listings: Array<{ catalogId: string }> }).listings.map(
       (listing) => listing.catalogId,
     );
-    expect(hostedIds).not.toContain('local-code-review');
+    expect(hostedIds).not.toContain('coding-loop');
     await withheld.app.close();
 
     const composed = await buildTestApp({
@@ -507,7 +531,7 @@ describe('the edition’s composed lanes', () => {
     const localIds = (local.json() as { listings: Array<{ catalogId: string }> }).listings.map(
       (listing) => listing.catalogId,
     );
-    expect(localIds).toContain('local-code-review');
+    expect(localIds).toContain('coding-loop');
     await composed.app.close();
   });
 
@@ -520,7 +544,7 @@ describe('the edition’s composed lanes', () => {
     const ids = (res.json() as { listings: Array<{ catalogId: string }> }).listings.map(
       (listing) => listing.catalogId,
     );
-    expect(ids).not.toContain('local-code-review');
+    expect(ids).not.toContain('coding-loop');
     await app.close();
   });
 

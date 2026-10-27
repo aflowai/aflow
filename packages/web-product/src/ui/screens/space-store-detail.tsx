@@ -33,6 +33,7 @@ import {
   CODE_REPO_CAPABILITY_ID,
   parseStoreInstallClaimant,
 } from '@aflow/schemas';
+import { setupCapabilityRemediation } from './storeSetupCheck.js';
 import { AppPageHeader } from '../components/app-page-header.js';
 import { MarkdownRenderer } from '../components/markdown-renderer.js';
 import { SetupChecklist } from '../components/setup-checklist.js';
@@ -588,6 +589,10 @@ function StoreListingPageInner() {
                 <Badge variant="neutral">{KIND_LABELS[entry.kind]}</Badge>
                 {display === 'installed' && <Badge variant="success">Installed</Badge>}
                 {display === 'update_available' && <Badge variant="info">Update available</Badge>}
+                {detail.readiness?.status === 'needs_setup' && (
+                  <Badge variant="warning">Needs setup</Badge>
+                )}
+                {detail.readiness?.status === 'broken' && <Badge variant="danger">Broken</Badge>}
               </Row>
               <Row gap="xs" align="center" wrap>
                 {entry.vendor && (
@@ -603,6 +608,13 @@ function StoreListingPageInner() {
               <Text size="sm" variant="muted">
                 {entry.tagline}
               </Text>
+              {detail.readiness && (
+                <SetupChecklist
+                  tasks={detail.readiness.tasks}
+                  spaceSlug={spaceSlug}
+                  onNavigate={push}
+                />
+              )}
               {entry.tags.length > 0 && (
                 <Row gap="xs" wrap>
                   {entry.tags.map((tag) => (
@@ -651,6 +663,14 @@ function StoreListingPageInner() {
                     Open
                   </Button>
                 )}
+                {display === 'installed' &&
+                  entry.kind === 'bundle' &&
+                  canManage &&
+                  entry.status !== 'deprecated' && (
+                    <Button variant="secondary" loading={busy} onClick={() => void beginInstall()}>
+                      Repair installation
+                    </Button>
+                  )}
                 {display === 'installed' && canManage && (
                   <Button variant="secondary" loading={busy} onClick={() => void checkSetup()}>
                     Check setup again
@@ -889,7 +909,19 @@ function StoreListingPageInner() {
       >
         {flow.phase === 'checkup' && (
           <Column gap="md">
-            {flow.preview.missingCapabilities.length === 0 ? (
+            {flow.preview.readiness === 'broken' && (
+              <Text size="sm">
+                Broken — the shepherd schedule reports a failure. Open Triggers to inspect it.
+              </Text>
+            )}
+            <SetupChecklist
+              tasks={flow.preview.setupChecklist ?? []}
+              spaceSlug={spaceSlug}
+              onNavigate={push}
+            />
+            {flow.preview.missingCapabilities.length === 0 &&
+            (flow.preview.setupChecklist?.length ?? 0) === 0 &&
+            flow.preview.readiness !== 'broken' ? (
               <Row gap="sm" align="center">
                 <Icon name="check-circle" size="sm" />
                 <Text size="sm">Everything this needs is set up in this space.</Text>
@@ -905,9 +937,7 @@ function StoreListingPageInner() {
                     <Text size="xs">{labelCapability(capability)}</Text>
                   </Row>
                 ))}
-                {flow.preview.missingCapabilities.some(
-                  (capability) => capability !== CODE_LANE_ABSENT_CAPABILITY_ID,
-                ) ? (
+                {setupCapabilityRemediation(flow.preview.missingCapabilities).openIntegrations ? (
                   <Button
                     variant="secondary"
                     size="sm"
@@ -917,7 +947,9 @@ function StoreListingPageInner() {
                   >
                     Open Integrations
                   </Button>
-                ) : (
+                ) : null}
+                {setupCapabilityRemediation(flow.preview.missingCapabilities)
+                  .editionUnavailable && (
                   <Text size="xs" variant="muted">
                     Not available in this edition; no setup in this space can supply it.
                   </Text>

@@ -10,6 +10,7 @@
  * keep by default, deletable only when explicitly unchecked AND pristine.
  */
 import { sql } from 'drizzle-orm';
+import { CODING_LOOP_PART_IDS } from '@aflow/platform-artifacts';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { countActiveAppletInstancesForArtifact } from '@aflow/database';
 import {
@@ -34,6 +35,7 @@ import {
   listStoreInstallClaimsByClaimant,
 } from './storeInstallProvenance.js';
 import { provenanceArtifactKey } from './storeDerivations.js';
+import { readCodingLoopParts } from './codingLoopAdoption.js';
 
 export interface StoreUninstallPlanContext {
   tenantId: TenantId;
@@ -252,7 +254,9 @@ export async function buildStoreUninstallPlan(
   catalogId: string,
   opts: StoreUninstallPlanOptions,
 ): Promise<StoreUninstallExecutionPlan | null> {
-  const install = await getStoreInstall(tx, ctx.spaceId, catalogId);
+  const install =
+    (await getStoreInstall(tx, ctx.spaceId, catalogId)) ??
+    (catalogId === 'coding-loop' ? await readCodingLoopParts(tx, ctx.spaceId) : null);
   if (!install) return null;
 
   const claims = await listStoreInstallClaims(tx, ctx.spaceId, catalogId);
@@ -271,27 +275,68 @@ export async function buildStoreUninstallPlan(
   if (action === 'remove') {
     removedEntries.push(catalogId);
     if (install.kind === 'bundle') {
-      const claimant = buildBundleClaimant(catalogId);
-      const memberClaims = await listStoreInstallClaimsByClaimant(tx, ctx.spaceId, claimant);
+      const roots = [catalogId];
+      if (catalogId === 'coding-loop') {
+        for (const partId of CODING_LOOP_PART_IDS) {
+          if (await getStoreInstall(tx, ctx.spaceId, partId)) {
+            const partClaims = await listStoreInstallClaims(tx, ctx.spaceId, partId);
+            const externalClaims = partClaims.filter(
+              (claim) =>
+                claim.claimedBy !== 'direct' && claim.claimedBy !== buildBundleClaimant(catalogId),
+            );
+            if (externalClaims.length > 0) {
+              releasedMemberClaims.push(
+                { catalogId: partId, claimedBy: 'direct' },
+                { catalogId: partId, claimedBy: buildBundleClaimant(catalogId) },
+              );
+              members.push({
+                catalogId: partId,
+                action: 'stays',
+                remainingClaims: externalClaims.map((claim) => claim.claimedBy).sort(),
+              });
+            } else {
+              roots.push(partId);
+              removedEntries.push(partId);
+            }
+          }
+        }
+      }
+      const ownedClaimants = new Set(roots.map(buildBundleClaimant));
+      const memberClaims = [];
+      for (const root of roots) {
+        memberClaims.push(
+          ...(await listStoreInstallClaimsByClaimant(tx, ctx.spaceId, buildBundleClaimant(root))),
+        );
+      }
+      const seenMembers = new Set<string>();
       for (const memberClaim of memberClaims) {
         const memberId = memberClaim.catalogId;
-        if (memberId === catalogId) continue;
+        if (
+          roots.includes(memberId) ||
+          members.some((member) => member.catalogId === memberId) ||
+          seenMembers.has(memberId)
+        )
+          continue;
+        seenMembers.add(memberId);
         const memberInstall = await getStoreInstall(tx, ctx.spaceId, memberId);
         if (!memberInstall) {
-          releasedMemberClaims.push({ catalogId: memberId, claimedBy: claimant });
+          for (const claimedBy of ownedClaimants)
+            releasedMemberClaims.push({ catalogId: memberId, claimedBy });
           continue;
         }
         const memberAllClaims = await listStoreInstallClaims(tx, ctx.spaceId, memberId);
         const memberRemaining = memberAllClaims
           .map((claim) => claim.claimedBy)
-          .filter((claimedBy) => claimedBy !== claimant)
+          .filter((claimedBy) => !ownedClaimants.has(claimedBy))
           .sort();
         if (memberRemaining.length === 0) {
           members.push({ catalogId: memberId, action: 'remove', remainingClaims: [] });
           removedEntries.push(memberId);
         } else {
           members.push({ catalogId: memberId, action: 'stays', remainingClaims: memberRemaining });
-          releasedMemberClaims.push({ catalogId: memberId, claimedBy: claimant });
+          for (const ownedClaimant of ownedClaimants) {
+            releasedMemberClaims.push({ catalogId: memberId, claimedBy: ownedClaimant });
+          }
         }
       }
     }

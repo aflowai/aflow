@@ -70,6 +70,17 @@ The work happens in a private clone of the repository, so your uncommitted work 
 
 ## Publishing
 
+Install **Coding Loop** from the Store once for Commission Change, Review Local Changes, Publish Local Changes, the Local PR Shepherd skill and agent, and the GitHub connector definition. They install and update as one version. Uninstall removes the combined installation, including separately installed loop parts; skills claimed by other installations stay installed. Installing the bundle keeps existing parts and customizations. When updating separate parts to Coding Loop, **Keep mine** leaves their content and records the offered version as skipped; **Replace with Store version** replaces customized workflows with the Store versions.
+
+The install and **Check setup again** name what this space still needs:
+
+- Pair the machine under **This Computer**.
+- Connect a repository folder allowing commands and pushes with a branch prefix. Choose its merge posture on the machine using the coding agent commands in the Aflow Local operator guide.
+- Enable the **github** connection and bind a credential in **Integrations**. Fine-grained permissions: Metadata and Contents read, Checks and Actions read, Pull requests and Issues write; Contents write for merges. Classic tokens need repo (public_repo for public repositories).
+- Create an active repeating schedule for the **Local PR Shepherd** agent, normally every five minutes, with inputTemplate \`{ "scheduleId": { "$schedule": "id" } }\`. That input lets the shepherd renew the schedule before its firing cap. If installed before connecting the folder, return to the Coding Loop listing and choose **Repair installation**, then confirm the install to create the missing agent. Existing parts and customizations are kept, including an older version retained with **Keep mine**. An archived Local PR Shepherd does not satisfy readiness; restore it before enabling its schedule.
+
+**Needs setup** means a prerequisite is missing, including a disabled GitHub connection. **Broken** means the shepherd schedule reports a dispatch error or its latest execution failed; inspect it under **Triggers**. A later successful execution clears the execution failure once its outcome is stored. Completing setup and repairing a failure are separate actions.
+
 A change reaches a branch under the folder's prefix, \`aflow/\` by default, and the folder's setting under **Connected folders** says whether a push asks you first.
 
 ## Merging

@@ -27,6 +27,10 @@
     "version": 1,
     "contentHash": "814ea9d7d423194beaa22fd9e22a10053bd5426d3d352de9df4cfbbc044296df"
   },
+  "coding-loop": {
+    "version": 95,
+    "contentHash": "3a1f446883af1ccd9be46067785578549a5e7cc140eddda0f94029fe75d44629"
+  },
   "coding-pr-loop": {
     "version": 7,
     "contentHash": "38d06d06b9224aaab6966af28418d500d4af117a5200fec87bedda3aaccb9a21"

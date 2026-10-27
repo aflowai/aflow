@@ -65,13 +65,13 @@ function listingStatus(hidden: boolean | undefined): CatalogListingStatus {
 }
 
 function wrapBundle(bundle: SkillBundle): CatalogEntry {
-  const { hidden, ...payload } = bundle;
+  const { hidden, unlisted, ...payload } = bundle;
   return parseListing(
     {
       catalogId: bundle.bundleId,
       kind: 'bundle',
       version: bundle.version,
-      status: listingStatus(hidden),
+      status: listingStatus(hidden || unlisted),
       name: bundle.name,
       tagline: bundle.tagline,
       description: bundle.description,

@@ -103,6 +103,8 @@ function applyExecute(query: SQL): unknown[] {
     return [];
   }
   if (text.includes('FROM store_installs')) {
+    if (!text.includes('catalog_id ='))
+      return store.installs.filter((row) => row.space_id === params[0]);
     const [catalogId, spaceId] = params as [string, string];
     return store.installs.filter((row) => row.catalog_id === catalogId && row.space_id === spaceId);
   }
@@ -417,6 +419,49 @@ describe('executeStoreUninstall — guards', () => {
 // ============================================================================
 
 describe('executeStoreUninstall — claims', () => {
+  it.each([false, true])(
+    'removes old Coding Loop ownership with aggregate record %s',
+    async (adopted) => {
+      const { codingLoopInstallFromParts } = await import('./codingLoopAdoption.js');
+      for (const id of ['local-commission', 'local-publish']) {
+        store.installs.push(installRow(id, 'bundle'));
+        store.claims.push(claimRow(id, 'direct'), claimRow('shared-skill', 'bundle:' + id));
+      }
+      if (adopted) {
+        store.installs.push(installRow('coding-loop', 'bundle'));
+        store.claims.push(
+          claimRow('coding-loop', 'direct'),
+          claimRow('shared-skill', 'bundle:coding-loop'),
+        );
+      }
+      store.installs.push(installRow('shared-skill', 'skill'));
+      store.artifacts.push(artifactRow('shared-skill', 'skill', 'shared-wf'));
+      workflowDoc('shared-wf', 'Shared');
+      expect((await preview('coding-loop')).ok).toBe(true);
+      expect((await uninstall({ catalogId: 'coding-loop' })).ok).toBe(true);
+      expect(archiveSkill).toHaveBeenCalled();
+      expect(store.installs).toEqual([]);
+      expect(store.claims).toEqual([]);
+      const { listStoreInstalls } = await import('./storeInstallProvenance.js');
+      expect(
+        codingLoopInstallFromParts(await listStoreInstalls(fakeTx as never, SPACE_ID)),
+      ).toBeNull();
+      expect((await preview('coding-loop')).ok).toBe(false);
+    },
+  );
+
+  it('releases all loop claims while preserving a directly installed shared skill', async () => {
+    seedDirectSkill('shared-skill', 'shared-wf');
+    for (const id of ['local-publish', 'local-code-review']) {
+      store.installs.push(installRow(id, 'bundle'));
+      store.claims.push(claimRow(id, 'direct'), claimRow('shared-skill', 'bundle:' + id));
+    }
+    expect((await uninstall({ catalogId: 'coding-loop' })).ok).toBe(true);
+    expect(store.installs.map((row) => row.catalog_id)).toEqual(['shared-skill']);
+    expect(store.claims).toEqual([claimRow('shared-skill', 'direct')]);
+    expect(archiveSkill).not.toHaveBeenCalled();
+  });
+
   it('direct-only: archives the skill (never purges) and removes all provenance', async () => {
     seedDirectSkill();
     const result = await uninstall();

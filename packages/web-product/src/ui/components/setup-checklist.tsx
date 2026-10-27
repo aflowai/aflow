@@ -38,6 +38,29 @@ export function SetupChecklist({
   return (
     <Column gap="sm">
       {tasks.map((task, i) => {
+        if (task.kind === 'coding_loop_setup') {
+          return (
+            <Card key={`loop-${task.step}`}>
+              <CardBody>
+                <Column gap="sm">
+                  <Text size="sm" weight="medium">
+                    Needs setup
+                  </Text>
+                  <Text size="sm">{task.description}</Text>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => {
+                      onNavigate(spaceRoute(spaceSlug, task.path));
+                    }}
+                  >
+                    Open setup
+                  </Button>
+                </Column>
+              </CardBody>
+            </Card>
+          );
+        }
         if (task.kind === 'run_mcp_binding_test') {
           return (
             <RunMcpBindingTestRow

@@ -237,7 +237,14 @@ function applyExecute(query: SQL): unknown[] {
   throw new Error(`storeUpdateExecution.test: unhandled SQL: ${text}`);
 }
 
-const fakeTx = { execute: async (query: SQL) => applyExecute(query) };
+const fakeTx = {
+  execute: async (query: SQL) => applyExecute(query),
+  select: () => ({
+    from: () => ({
+      where: () => Object.assign(Promise.resolve([]), { limit: async () => [] }),
+    }),
+  }),
+};
 
 vi.mock('@aflow/database', async (importOriginal) => {
   const orig = (await importOriginal()) as Record<string, unknown>;
@@ -332,7 +339,7 @@ vi.mock('@aflow/redis', async (importOriginal) => {
   return { ...orig, publishApiCatalogInvalidation, publishMcpCatalogInvalidation };
 });
 
-const { executeStoreUpdate } = await import('./storeUpdateExecution.js');
+const { executeStoreUpdate, executeStoreUpdatePreview } = await import('./storeUpdateExecution.js');
 const { deriveInstalledState } = await import('./storeDerivations.js');
 const { jsonContentHash } = await import('./artifactContent.js');
 
@@ -429,6 +436,105 @@ beforeEach(() => {
     missingCredentialKeys: [],
     credentialsReset: false,
     setupChecklist: [],
+  });
+});
+
+describe('Coding Loop adoption preview', () => {
+  it('keeps customized parts and records the skipped bundle version', async () => {
+    computeInstallDivergence.mockResolvedValue({ customized: true, artifacts: [] });
+    store.installs.push(installedRow('local-publish', 49, 'bundle'));
+    const entry = getCatalogEntry('coding-loop');
+    if (!entry) throw new Error('loop missing');
+    const result = await update(
+      {
+        catalogId: entry.catalogId,
+        expectedVersion: entry.version,
+        entryResolver: getCatalogEntry,
+        mode: 'keep',
+      },
+      null,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('keep failed');
+    expect(result.response.install.installedVersion).toBe(49);
+    expect(result.response.install.skippedVersion).toBe(entry.version);
+    expect(updateSkillCatalogEntry).not.toHaveBeenCalled();
+    expect(installSkillCatalogEntry).not.toHaveBeenCalled();
+    const preview = await executeStoreUpdatePreview({
+      db: {} as never,
+      tenantId: TENANT_ID,
+      spaceId: SPACE_ID,
+      catalogId: entry.catalogId,
+      entryResolver: getCatalogEntry,
+    });
+    expect(preview.ok && preview.response.updateAvailable).toBe(false);
+    expect(preview.ok && preview.response.divergence.customized).toBe(true);
+  });
+
+  it('replaces customized parts through the update handlers before stamping adoption', async () => {
+    const manifest = await import('../stagedChange/bundleInstallManifest.js');
+    vi.spyOn(manifest, 'generatePostInstallManifest').mockResolvedValueOnce([]);
+
+    store.installs.push(installedRow('local-publish', 49, 'bundle'));
+    const entry = getCatalogEntry('coding-loop');
+    if (!entry || entry.kind !== 'bundle') throw new Error('loop missing');
+    store.artifacts.push({
+      catalog_id: 'local-publish',
+      space_id: SPACE_ID,
+      artifact_type: 'skill',
+      artifact_key: 'publish-local-changes',
+    });
+    computeInstallDivergence.mockResolvedValue({ customized: true, artifacts: [] });
+    const result = await update(
+      {
+        catalogId: entry.catalogId,
+        expectedVersion: entry.version,
+        entryResolver: getCatalogEntry,
+        mode: 'replace_customized',
+      },
+      null,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('replacement failed');
+    expect(result.response.fromVersion).toBe(49);
+    expect(result.response.toVersion).toBe(entry.version);
+    expect(updateSkillCatalogEntry).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ sourceCatalogId: 'publish-local-changes' }),
+    );
+    expect(result.response.updatedArtifacts).toContainEqual({
+      artifactType: 'skill',
+      artifactKey: 'publish-local-changes',
+      action: 'replaced',
+    });
+    expect(store.installs.find((row) => row.catalog_id === 'coding-loop')?.installed_version).toBe(
+      entry.version,
+    );
+  });
+
+  it('offers the separate 11/11/49/22 parts as one version without writing them', async () => {
+    for (const [id, version] of [
+      ['local-commission', 11],
+      ['local-code-review', 11],
+      ['local-publish', 49],
+      ['local-shepherd', 22],
+    ] as const) {
+      store.installs.push(installedRow(id, version, 'bundle'));
+    }
+    const before = structuredClone(store.installs);
+    const result = await executeStoreUpdatePreview({
+      db: fakeTx as never,
+      tenantId: TENANT_ID,
+      spaceId: SPACE_ID,
+      catalogId: 'coding-loop',
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('preview failed');
+    expect(result.response.catalogId).toBe('coding-loop');
+    expect(result.response.currentVersion).toBe(93);
+    expect(result.response.catalogVersion).toBe(getCatalogEntry('coding-loop')?.version);
+    expect(result.response.updateAvailable).toBe(true);
+    expect(store.installs).toEqual(before);
   });
 });
 

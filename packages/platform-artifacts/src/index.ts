@@ -67,6 +67,7 @@ export {
 
 export {
   SKILL_BUNDLE_CATALOG,
+  CODING_LOOP_PART_IDS,
   getSkillBundleEntry,
   listSkillBundles,
   findUnresolvedSkillCatalogIds,

@@ -73,6 +73,7 @@ import {
   type StoreProvenancePlan,
   type StoreProvenanceSkips,
 } from './storeDerivations.js';
+import { publishMemorySeedEmbedJobs } from '../stagedChange/bundleInstallContent.js';
 import { dispatchAppletInstall } from './appletInstall.js';
 
 // ============================================================================
@@ -219,12 +220,21 @@ export async function isCyberneticSpaceById(
 async function dispatchBundleInstall(
   tx: PostgresJsDatabase,
   entry: CatalogBundleEntry,
-  ids: { tenantId: TenantId; spaceId: string; payloadStore?: PayloadStore | undefined },
+  ids: {
+    tenantId: TenantId;
+    spaceId: string;
+    payloadStore?: PayloadStore | undefined;
+    redis?: Redis | null | undefined;
+  },
+  preserveExistingContent = false,
 ): Promise<InstallDispatchOutcome> {
   const result = await installSkillBundle(
     { tenantId: ids.tenantId, spaceId: ids.spaceId, db: tx, payloadStore: ids.payloadStore },
     entry.payload,
-    {},
+    {
+      ...(ids.redis ? { readinessRedis: ids.redis } : {}),
+      ...(preserveExistingContent ? { preserveExistingContent: true } : {}),
+    },
   );
   return {
     result: mapBundleResult(result),
@@ -237,7 +247,12 @@ async function dispatchBundleInstall(
 async function dispatchConnectorInstall(
   tx: PostgresJsDatabase,
   entry: CatalogConnectorEntry,
-  ids: { tenantId: TenantId; spaceId: string; payloadStore?: PayloadStore | undefined },
+  ids: {
+    tenantId: TenantId;
+    spaceId: string;
+    payloadStore?: PayloadStore | undefined;
+    redis?: Redis | null | undefined;
+  },
 ): Promise<InstallDispatchOutcome> {
   const context = {
     db: tx,
@@ -305,7 +320,12 @@ async function dispatchConnectorInstall(
 async function dispatchInstall(
   tx: PostgresJsDatabase,
   entry: CatalogEntry,
-  ids: { tenantId: TenantId; spaceId: string; payloadStore?: PayloadStore | undefined },
+  ids: {
+    tenantId: TenantId;
+    spaceId: string;
+    payloadStore?: PayloadStore | undefined;
+    redis?: Redis | null | undefined;
+  },
 ): Promise<InstallDispatchOutcome> {
   switch (entry.kind) {
     case 'bundle':
@@ -326,7 +346,12 @@ async function dispatchInstall(
 async function buildNoOpDispatch(
   tx: PostgresJsDatabase,
   entry: CatalogEntry,
-  ids: { tenantId: TenantId; spaceId: string; payloadStore?: PayloadStore | undefined },
+  ids: {
+    tenantId: TenantId;
+    spaceId: string;
+    payloadStore?: PayloadStore | undefined;
+    redis?: Redis | null | undefined;
+  },
 ): Promise<InstallDispatchOutcome> {
   switch (entry.kind) {
     case 'bundle':
@@ -411,7 +436,7 @@ async function buildConnectorNoOpDispatch(
 // The install transaction
 // ============================================================================
 
-async function runStoreInstall(
+export async function runStoreInstall(
   tx: PostgresJsDatabase,
   entry: CatalogEntry,
   ids: {
@@ -419,6 +444,7 @@ async function runStoreInstall(
     spaceId: string;
     actorUserId: string;
     payloadStore?: PayloadStore | undefined;
+    redis?: Redis | null | undefined;
   },
   opts: { offShelf: boolean },
 ): Promise<InstallTxOutcome> {
@@ -459,6 +485,49 @@ async function runStoreInstall(
       entryRow: 'keep',
       ...(dispatch.provenanceSkips !== undefined ? { skips: dispatch.provenanceSkips } : {}),
     });
+    return {
+      response: {
+        result: dispatch.result,
+        setupChecklist: dispatch.setupChecklist,
+        install: existing,
+      },
+      invalidations: dispatch.invalidations,
+    };
+  }
+
+  if (existing && entry.kind === 'bundle' && existing.skippedVersion === entry.version) {
+    const dispatch = await dispatchBundleInstall(tx, entry, ids, true);
+    if (dispatch.invalidations?.kind === 'bundle') {
+      const installedAgents = new Set(dispatch.invalidations.result.installedAgentSlugs);
+      const installedSkills = new Set(dispatch.invalidations.result.installedSkillCatalogIds);
+      const plan = deriveInstallProvenance(entry, {
+        spaceId: ids.spaceId,
+        actorUserId: ids.actorUserId,
+        now,
+      });
+      for (const member of plan.memberInstalls) {
+        if (installedSkills.has(member.catalogId)) {
+          await upsertStoreInstall(tx, member, { onConflict: 'keep' });
+        }
+      }
+      for (const claim of plan.claims) {
+        if (installedSkills.has(claim.catalogId)) await upsertStoreInstallClaim(tx, claim);
+      }
+      const installedSkillKeys = new Set(
+        plan.artifacts
+          .filter((artifact) => installedSkills.has(artifact.catalogId))
+          .map((artifact) => artifact.artifactKey),
+      );
+      for (const artifact of plan.artifacts) {
+        if (
+          installedSkills.has(artifact.catalogId) ||
+          (artifact.artifactType === 'skill' && installedSkillKeys.has(artifact.artifactKey)) ||
+          (artifact.artifactType === 'agent' && installedAgents.has(artifact.artifactKey))
+        ) {
+          await upsertStoreInstallArtifact(tx, artifact, { onConflict: 'keep' });
+        }
+      }
+    }
     return {
       response: {
         result: dispatch.result,
@@ -701,7 +770,12 @@ export async function executeStoreInstall(
   let outcome: InstallTxOutcome;
   try {
     outcome = await withTenantSchema(db, tenantCtx, async (tx) =>
-      runStoreInstall(tx, entry, { tenantId, spaceId, actorUserId, payloadStore }, { offShelf }),
+      runStoreInstall(
+        tx,
+        entry,
+        { tenantId, spaceId, actorUserId, payloadStore, redis },
+        { offShelf },
+      ),
     );
   } catch (err) {
     if (redis) await redis.del(idempotencyRedisKey);
@@ -746,6 +820,9 @@ export async function executeStoreInstall(
 
   if (redis && outcome.invalidations) {
     publishInvalidations(redis, tenantId, spaceId, outcome.invalidations);
+    if (outcome.invalidations.kind === 'bundle') {
+      await publishMemorySeedEmbedJobs(redis, outcome.invalidations.result.pendingEmbedJobs);
+    }
   }
   if (redis) {
     await redis.set(

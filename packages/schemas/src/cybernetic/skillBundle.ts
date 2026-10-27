@@ -612,6 +612,13 @@ export function skillStarterAgentDefinition(params: {
  */
 export const PostInstallTaskSchema = z.discriminatedUnion('kind', [
   z.object({
+    kind: z.literal('coding_loop_setup'),
+    step: z.enum(['machine', 'folder', 'agent', 'github', 'schedule', 'preview']),
+    description: z.string().min(1),
+    path: z.string().min(1),
+    required: z.literal(true),
+  }),
+  z.object({
     kind: z.literal('fill_credentials'),
     bindingId: z.string().min(1).max(128),
     // A `fill_credentials` entry is generated only for bindings with at
@@ -716,6 +723,8 @@ export const SkillBundleSchema = z
     prerequisiteBundleIds: z.array(SkillBundleIdSchema).max(10).default([]),
     /** If true, hidden from the Store UI. Used for test fixtures. */
     hidden: z.boolean().optional(),
+    /** Direct-link listings remain resolvable in production, unlike hidden test fixtures. */
+    unlisted: z.boolean().optional(),
 
     /** API definition drafts the install op lowers + writes per-space. */
     apiDefinitions: z.array(BundledApiDefinitionSchema).max(20).default([]),
