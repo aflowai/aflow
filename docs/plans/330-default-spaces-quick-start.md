@@ -1,5 +1,7 @@
 # Plan 330 — Default spaces: a quick start installs with the product
 
+Space listings install a space and have no uninstall; both uninstall preview and execution refuse them with that explanation. Store readiness derives the GitHub-dependent bundle identity through the shared bundle predicate. A renewing schedule reads only `config.scheduleId`; sibling configuration keys do not change that verdict.
+
 **Status:** 🔨 P1 and P2 built and tested without a live stack; P1's live exit and P3 open. **Builds on:** Plan 106 (platform artifacts resolve from the registry), Plan 315 node `5f573124` (the coding loop as one Store entry, ready or not at install), Plan 321 (the shepherd and its schedule), Plan 322 (plans as platform records, and their board), Plan 325 (the product's help articles), Plan 326 D12 (a space prefers a coding agent), Plan 320 P6 (a connected folder's preview). **Leaves alone:** Plan 227 (hosted onboarding).
 
 ## 1. Problem

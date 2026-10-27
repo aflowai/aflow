@@ -72,6 +72,19 @@ describe.skipIf(!STACK_REDIS.available)('active-run membership', () => {
     expect((await getSystemLoad(redis)).totalActiveRuns).toBe(before + 1);
   });
 
+  it('releases a schedule-create budget in the terminal membership call', async () => {
+    const runId = RUNS[0]!;
+    const key = StreamKeys.scheduleCreateCountKey(TENANT, runId);
+    await markRunActive(redis, TENANT, runId);
+    await redis.set(key, '2');
+    const del = vi.spyOn(redis, 'del');
+    await markRunInactive(redis, TENANT, runId);
+    expect(await redis.get(key)).toBeNull();
+    expect(del).not.toHaveBeenCalled();
+    await markRunInactive(redis, TENANT, runId);
+    expect(await redis.get(key)).toBeNull();
+  });
+
   it('does not go negative when a terminal transition is delivered twice', async () => {
     const before = (await getSystemLoad(redis)).totalActiveRuns;
     await markRunActive(redis, TENANT, RUNS[0]!);

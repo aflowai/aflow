@@ -49,11 +49,14 @@ const REVIEW_RUNS = [
 /**
  * The areas the commit task counts what the push changes within. `deep`
  * covers the contracts every service reads, the orchestrator, the executor
- * that runs on the operator's machine, and the database's migrations;
+ * that runs on the operator's machine, the database's migrations, and agent
+ * instruction files at any depth;
  * `light` is documentation and tests.
  */
 export const REVIEW_DEPTH_AREAS = {
   deep: [
+    '**/CLAUDE.md',
+    '**/AGENTS.md',
     'packages/schemas/**',
     'apps/aflow-orchestrator/**',
     'apps/aflow-executor-host/**',
@@ -73,7 +76,7 @@ export const SMALL_CHANGE_LINES = 30;
 export const UNMEASURED_REASON =
   'The commit task did not report what the push changes, so the review reads at `standard`, the depth it read at before its shape was measured.';
 export const DEEP_REASON =
-  "The push changes a file under the schemas, the orchestrator, the host executor or a database migration: the review reads at `deep`, running the project's own checks over what it touches.";
+  "The push changes agent instructions, a schema, the orchestrator, the host executor or a database migration: the review reads at `deep`, running the project's own checks over what it touches.";
 export const DOCS_TESTS_REASON =
   'The push changes documentation and tests alone: the review reads at `brief`.';
 export const SMALL_CHANGE_REASON = `The push changes fewer than ${String(SMALL_CHANGE_LINES)} lines, none of them under the schemas, the orchestrator, the host executor or a database migration: the review reads at \`brief\`.`;
