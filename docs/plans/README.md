@@ -50,7 +50,7 @@ the wrong shape, change the plan rather than quietly diverging from it.
 | [326](326-codex-runs-on-this-computer.md)                                   | Codex runs on this computer                                     |
 | 327                                                                         | Reserved by branch `plan/326-operator-channels` until it merges |
 | [328](328-a-harness-is-a-runner-with-a-coding-agent.md)                     | A harness is a Runner with a coding agent                       |
-| 329                                                                         | Reserved — planning as a tested function                        |
+| [329](329-planning-is-a-skill.md)                                           | Planning is a skill                                             |
 | [330](330-default-spaces-quick-start.md)                                    | Default spaces: a quick start installs with the product         |
 | [331](331-the-always-on-helmsman.md)                                        | The always-on Helmsman                                          |
 
