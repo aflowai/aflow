@@ -165,11 +165,13 @@ describe('resolveOperationTaskInputs', () => {
           operation: 'whatever.do.it',
           inputBindings: { v: { kind: 'task_output', taskId: 'missing' } },
         } as never,
+        WORKFLOW,
         TENANT,
         SPACE,
         RUN,
       ),
     ).rejects.toThrow(/does not exist in run/);
+    expect(mockLoadRunById).toHaveBeenCalledWith({}, TENANT, SPACE, RUN);
   });
 
   it('throws when the upstream task has no usable output', async () => {
@@ -186,11 +188,13 @@ describe('resolveOperationTaskInputs', () => {
           operation: 'whatever.do.it',
           inputBindings: { v: { kind: 'task_output', taskId: 'upstream' } },
         } as never,
+        WORKFLOW,
         TENANT,
         SPACE,
         RUN,
       ),
     ).rejects.toThrow(/output is unavailable/);
+    expect(mockLoadRunById).toHaveBeenCalledWith({}, TENANT, SPACE, RUN);
   });
 
   it('resolves run_input bindings from the run-level pool on a non-first task', async () => {
@@ -331,11 +335,13 @@ describe('resolveOperationTaskInputs', () => {
             bindingId: { $bind: 'githubConnection' },
           },
         } as never,
+        WORKFLOW,
         TENANT,
         SPACE,
         RUN,
       ),
     ).rejects.toThrow(/no connection is pinned/);
+    expect(mockLoadRunById).toHaveBeenCalledWith({}, TENANT, SPACE, RUN);
   });
 
   it('threads the run identity and the consuming task id into the learning_set selector, rendering with the shared formatter', async () => {
@@ -430,11 +436,13 @@ describe('resolveOperationTaskInputs', () => {
           operation: 'whatever.do.it',
           inputBindings: { threshold: { kind: 'campaign_input', path: 'threshold' } },
         } as never,
+        WORKFLOW,
         TENANT,
         SPACE,
         RUN,
       ),
     ).rejects.toThrow(/campaign config has no value/);
+    expect(mockLoadRunById).toHaveBeenCalledWith({}, TENANT, SPACE, RUN);
     expect(mockGetCampaignById).not.toHaveBeenCalled();
   });
 

@@ -21,7 +21,11 @@ import {
   type SpaceTemplate,
   type SpaceTemplateReadinessItem,
 } from '@aflow/schemas';
-import { generatePostInstallManifest } from '../stagedChange/bundleInstallManifest.js';
+import {
+  bundleReadsGithub,
+  generatePostInstallManifest,
+  readingsForItems,
+} from '../stagedChange/bundleInstallManifest.js';
 import type { GithubAnswers } from './readinessReaders.js';
 import { listStoreInstalls } from './storeInstallProvenance.js';
 
@@ -150,6 +154,31 @@ export interface SpaceHelpReadiness extends TemplateReadiness {
   catalogId: string;
   name: string;
   help: HelpArticleId[];
+}
+
+/**
+ * Whether a quick start's readiness reads the space's github credential — an
+ * item answered by it, or the coding loop's bundle, which reads it itself — so
+ * a caller asks GitHub before the readiness read only where an answer is read.
+ */
+export function templateReadsGithub(template: SpaceTemplate): boolean {
+  return (
+    template.bundleIds.some(bundleReadsGithub) ||
+    readingsForItems(template.readiness).has('github_credential')
+  );
+}
+
+/** Whether any quick start the space was made from reads its github credential. */
+export async function spaceHelpReadsGithub(
+  tx: PostgresJsDatabase,
+  spaceId: string,
+): Promise<boolean> {
+  for (const install of await listStoreInstalls(tx, spaceId)) {
+    if (install.kind !== 'space') continue;
+    const entry = getCatalogEntry(install.catalogId);
+    if (entry?.kind === 'space' && templateReadsGithub(entry.payload)) return true;
+  }
+  return false;
 }
 
 /** The space's help surface: the readiness of each quick start the space was made from. */

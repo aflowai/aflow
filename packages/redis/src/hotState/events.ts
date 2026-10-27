@@ -34,6 +34,18 @@ export function sessionWakePayload(
 // ============================================================================
 
 /**
+ * The server refused the XADD inside a transaction that ran, so the event is
+ * known not to be in the stream. Any other failure — a rejected exec above all
+ * — can follow a transaction that committed, and proves nothing either way.
+ */
+export class SessionEventNotAppendedError extends Error {
+  constructor(cause: Error) {
+    super(cause.message, { cause });
+    this.name = 'SessionEventNotAppendedError';
+  }
+}
+
+/**
  * Append an event to the run's event stream, and wake its subscribers.
  *
  * The append, the TTL extension, the projection arming and the wake travel as
@@ -69,7 +81,7 @@ export async function appendSessionEvent(
   const results = await pipeline.exec();
 
   const [xaddError, messageId] = results?.[0] ?? [null, null];
-  if (xaddError) throw xaddError;
+  if (xaddError) throw new SessionEventNotAppendedError(xaddError);
   if (typeof messageId !== 'string' || messageId.length === 0) {
     throw new Error('Failed to append run event to stream');
   }

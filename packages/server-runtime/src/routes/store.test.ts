@@ -533,18 +533,45 @@ describe('the edition’s composed lanes', () => {
     const { app } = await buildTestApp({ user: { userId: USER_ID, role: 'member' } });
     const elsewhere = await app.inject({
       method: 'GET',
-      url: '/v1/store/listings/local-review-quick-start',
+      url: '/v1/store/listings/coding-with-github',
     });
     expect(elsewhere.statusCode).toBe(200);
     expect(askGithub).not.toHaveBeenCalled();
 
-    store.installs.push({ ...installedRow('local-review-quick-start', 1), kind: 'space' });
+    store.installs.push({ ...installedRow('coding-with-github', 1), kind: 'space' });
     const madeFromIt = await app.inject({
       method: 'GET',
-      url: '/v1/store/listings/local-review-quick-start',
+      url: '/v1/store/listings/coding-with-github',
     });
     expect(madeFromIt.statusCode).toBe(200);
     expect(askGithub).toHaveBeenCalledTimes(1);
+    await app.close();
+  });
+
+  it('asks GitHub for no quick start whose readiness reads no github credential', async () => {
+    store.installs.push({ ...installedRow('local-review-quick-start', 1), kind: 'space' });
+    helpReadiness.mockResolvedValue([]);
+    const { app } = await buildTestApp({ user: { userId: USER_ID, role: 'member' } });
+    const listing = await app.inject({
+      method: 'GET',
+      url: '/v1/store/listings/local-review-quick-start',
+    });
+    expect(listing.statusCode).toBe(200);
+    const help = await app.inject({ method: 'GET', url: '/v1/store/space-readiness' });
+    expect(help.statusCode).toBe(200);
+    expect(askGithub).not.toHaveBeenCalled();
+    expect(helpReadiness).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ githubAnswers: undefined }),
+    );
+
+    store.installs.push({ ...installedRow('coding-with-github', 1), kind: 'space' });
+    await app.inject({ method: 'GET', url: '/v1/store/space-readiness' });
+    expect(askGithub).toHaveBeenCalledTimes(1);
+    expect(helpReadiness).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ githubAnswers: expect.any(Map) }),
+    );
     await app.close();
   });
 

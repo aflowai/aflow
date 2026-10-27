@@ -203,8 +203,7 @@ export type RefusalOutcome = 'reached_result' | 'produced_nothing';
 
 /** The command, run on the operator's machine, that lets the harness reach `hosts`. */
 function allowCommand(hosts: readonly string[], harnessId: string | undefined): string {
-  const flags = hosts.map((host) => `--domain ${host}`).join(' ');
-  return `  yarn workspace @aflow/aflow-executor-host harness add ${harnessId ?? '<harness>'} ${flags}\n`;
+  return `  yarn workspace @aflow/aflow-executor-host harness allow ${harnessId ?? '<harness>'} ${hosts.join(' ')}\n`;
 }
 
 /**

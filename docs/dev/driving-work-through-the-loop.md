@@ -143,7 +143,9 @@ its outcome as it is marked done, and no firing commissions it (`wait`, `awaitin
    round. The run's `afterReview` and its pull request record the decision, and
    `decide-push` follows it — `fix_before_merge` pushes nothing and completes the run,
    `publish_as_is` pushes on its own over minor findings and nits but pauses at
-   `approve-push` over a blocker or a major. Follow the decision; set it aside
+   `approve-push` over a blocker or a major, over a review that found nothing and did
+   not approve (only an override makes that `publish_as_is`), and where the review and
+   its one retry both ended without a result. Follow the decision; set it aside
    only on one of three authorities, passing `override` with its `by` and a reason to the
    next publication, which verifies it from what it reads itself:
    - `operator`, the operator's recorded word — taken only from the operator, as their

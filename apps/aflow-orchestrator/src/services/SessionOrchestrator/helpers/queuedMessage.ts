@@ -196,13 +196,21 @@ export async function queueMessageForNextTurn(
       `[queuedMessage] Could not record room message ${row.eventId} as owed: ${errorText(err)}`,
     );
   }
-  await markSeenThroughMessage(
-    redis,
-    args.tenantId,
-    args.sessionId,
-    args.actorUserId,
-    appended.messageSeq,
-  );
+  try {
+    await markSeenThroughMessage(
+      redis,
+      args.tenantId,
+      args.sessionId,
+      args.actorUserId,
+      appended.messageSeq,
+    );
+  } catch (err) {
+    // The sender reading their own message as unread is cosmetic; failing a
+    // resume whose message is posted would have it sent again.
+    getOrchestratorLogger().warn(
+      `[queuedMessage] Could not mark room message ${row.eventId} seen by its sender: ${errorText(err)}`,
+    );
+  }
 
   try {
     await writeDurableRow(db, args.tenantId, row);

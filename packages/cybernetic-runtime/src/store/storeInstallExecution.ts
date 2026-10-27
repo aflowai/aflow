@@ -75,6 +75,8 @@ import {
 } from './storeDerivations.js';
 import { publishMemorySeedEmbedJobs } from '../stagedChange/bundleInstallContent.js';
 import { dispatchAppletInstall } from './appletInstall.js';
+import { askGithubForSpace, type GithubAnswers } from './readinessReaders.js';
+import { bundleReadsGithub } from '../stagedChange/bundleInstallManifest.js';
 
 // ============================================================================
 // Result contract
@@ -241,6 +243,7 @@ async function dispatchBundleInstall(
     spaceId: string;
     payloadStore?: PayloadStore | undefined;
     redis?: Redis | null | undefined;
+    githubAnswers?: GithubAnswers | undefined;
   },
   preserveExistingContent = false,
 ): Promise<InstallDispatchOutcome> {
@@ -249,6 +252,7 @@ async function dispatchBundleInstall(
     entry.payload,
     {
       ...(ids.redis ? { readinessRedis: ids.redis } : {}),
+      ...(ids.githubAnswers ? { githubAnswers: ids.githubAnswers } : {}),
       ...(preserveExistingContent ? { preserveExistingContent: true } : {}),
     },
   );
@@ -341,6 +345,7 @@ async function dispatchInstall(
     spaceId: string;
     payloadStore?: PayloadStore | undefined;
     redis?: Redis | null | undefined;
+    githubAnswers?: GithubAnswers | undefined;
   },
 ): Promise<InstallDispatchOutcome> {
   switch (entry.kind) {
@@ -369,6 +374,7 @@ async function buildNoOpDispatch(
     spaceId: string;
     payloadStore?: PayloadStore | undefined;
     redis?: Redis | null | undefined;
+    githubAnswers?: GithubAnswers | undefined;
   },
 ): Promise<InstallDispatchOutcome> {
   switch (entry.kind) {
@@ -465,6 +471,7 @@ export async function runStoreInstall(
     actorUserId: string;
     payloadStore?: PayloadStore | undefined;
     redis?: Redis | null | undefined;
+    githubAnswers?: GithubAnswers | undefined;
   },
   opts: { offShelf: boolean },
 ): Promise<InstallTxOutcome> {
@@ -520,6 +527,9 @@ export async function runStoreInstall(
     if (dispatch.invalidations?.kind === 'bundle') {
       const installedAgents = new Set(dispatch.invalidations.result.installedAgentSlugs);
       const installedSkills = new Set(dispatch.invalidations.result.installedSkillCatalogIds);
+      const installedApiDefinitions = new Set(
+        dispatch.invalidations.result.installedApiDefinitionIds,
+      );
       const plan = deriveInstallProvenance(entry, {
         spaceId: ids.spaceId,
         actorUserId: ids.actorUserId,
@@ -542,7 +552,9 @@ export async function runStoreInstall(
         if (
           installedSkills.has(artifact.catalogId) ||
           (artifact.artifactType === 'skill' && installedSkillKeys.has(artifact.artifactKey)) ||
-          (artifact.artifactType === 'agent' && installedAgents.has(artifact.artifactKey))
+          (artifact.artifactType === 'agent' && installedAgents.has(artifact.artifactKey)) ||
+          (artifact.artifactType === 'api_definition' &&
+            installedApiDefinitions.has(artifact.artifactKey))
         ) {
           await upsertStoreInstallArtifact(tx, artifact, { onConflict: 'keep' });
         }
@@ -850,11 +862,17 @@ export async function executeStoreInstall(
 
   let outcome: InstallTxOutcome;
   try {
+    // Asked before the transaction, as every readiness surface asks it, so the
+    // install's checklist reads the credential as the Store page does.
+    const githubAnswers =
+      entry.kind === 'bundle' && bundleReadsGithub(entry.catalogId)
+        ? await askGithubForSpace(db, tenantId, spaceId, { redis })
+        : undefined;
     outcome = await withTenantSchema(db, tenantCtx, async (tx) =>
       runStoreInstall(
         tx,
         entry,
-        { tenantId, spaceId, actorUserId, payloadStore, redis },
+        { tenantId, spaceId, actorUserId, payloadStore, redis, githubAnswers },
         { offShelf },
       ),
     );

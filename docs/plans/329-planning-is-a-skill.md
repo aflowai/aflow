@@ -1,0 +1,86 @@
+# Plan 329 — Planning is a skill
+
+**Status:** 🌱 design. Nothing built. **Builds on:** Plan 322 (the plan tree and its operations; the stream that wakes itself, `plan.node.next`; D3 — `plan.node.*` are the Helmsman's, never a skill's and never a Runner's), Plan 328 (a harness is a Runner with a coding agent; §5 P3 — this plan's planning skill uses the harness as its investigator). **Feeds:** the planning skill, the board, and Plan 331 D6, whose wake answers `recalibrate` with this skill.
+
+## 1. Problem
+
+Aflow turns an idea into a plan, then executes it, reflects on it and recalibrates it until the goal is met. The executing half is built: a node's goal and criteria are a commission's brief, a run carries the node it serves, and a schedule continues a stream without a person (Plan 322 P1, P2b). The planning half is not. It is the Helmsman calling `plan.node.create` by hand.
+
+- **A plan is as good as one session's judgement.** A conversation told "start on <idea>" writes as much of a tree as that session thinks of, in whatever shape it chooses. No schema says what a plan must hold — phases, exits, criteria, risks — and nothing refuses one that lacks them.
+- **Nothing reviews a plan before its first node is commissioned.** A tree is written and the stream takes its first active node. Infeasible steps, missing steps and unstated risks are found by running them.
+- **Nothing recalibrates.** A node's criteria may be provisional and are revised "with the reason in the note" (Plan 322 D2), by whoever notices. Plan 322's P1 exit shows the cost: a node's criteria were written when the tree was created, before two of its four items had landed, so the commission was briefed to build work already merged. When a phase closes, nothing re-reads the steps after it against what the phase learned. When a node's work fails past its budget, `plan.node.next` answers `stop`, marks the node `blocked` and holds the stream there until a person moves it (Plan 322 P2b); it does not say what would change.
+- **A plan is only as informed as its session's reading.** A planning conversation reads what it thinks to read. An investigator that reads a repository and the platform's records together does not exist; Plan 328 §1 names it as what its relay makes buildable.
+- **Whether a plan is any good cannot be tested.** Nothing exists between "start on X" and the nodes, so two plans for one idea cannot be compared, a change to how planning is done cannot be evaluated, and a fresh conversation cannot be handed "start on X" without a person writing the brief that makes it plan well.
+
+## 2. Decisions
+
+**D1 — One `PlanProposalSchema` in `@aflow/schemas`.** A proposal carries the root's goal; phases, each with its exit and criteria; steps, each with a goal, criteria and an estimate; risks, each with its mitigation; open questions; and the investigator's evidence refs, so a step can be traced to what was read to justify it. The field length caps are generous — thousands of characters, never hundreds. A cap is a storage ceiling for model-authored prose a person reads, the rule Plan 322 §3.1 states for the node fields a proposal becomes (goal, criteria, outcome and note hold 8,000). A proposal is validated where it is produced, so a tight cap would turn a useful paragraph into a refused output and a retry. _Rejected:_ a free-form markdown proposal — nothing can validate it, so nothing refuses a plan with no exits, and nothing can diff it against the tree it becomes or against a recalibration of it. _Rejected:_ reusing the plan-node schema — a node is a record of work, with a status, a revision and an outcome; a proposal is a pre-acceptance artifact that is reviewed, revised and diffed, and it holds what a node does not (risks, open questions, evidence).
+
+**D2 — The planning skill is a platform skill, archetype `plan`, with four tasks.** It is identical for every tenant and lives with the other platform-owned skills (Plan 106).
+
+1. **investigate** — reads what the plan must rest on and returns findings with evidence refs. The investigator is pluggable: a Runner agent task by default; for a repository, a `host.harness.run` task — the investigator Plan 328 §5 P3 builds for, a coding agent that reads the checkout and, through the `aflow` relay, the platform's records (Plan 328 D1–D5). The relay works under every posture, so the task declares no `posture` and runs with Plan 328 D6's default ceiling, `open`. Neither investigator reads the plan: `plan.*` is Runner-excluded, and Plan 328 §6 refuses `plan.node.get` through the relay. What the investigation needs from the tree is in the skill's input.
+2. **propose** — an `ai` step whose output is a `PlanProposal`, validated against D1's schema.
+3. **review** — a second model red-teams the proposal: feasibility, risks, missing steps, efficiency. Its output is a verdict, `approve | revise`, with findings. A `revise` returns the proposal to **propose** with the findings, once. The round is bounded at one because the review's value is in its first findings, and a loop between two models has no fixed point of its own.
+4. **hand-off** — the task's output is the proposal, with the review's verdict and findings. It writes nothing.
+
+A skill fits here where Plan 322 D3 said planning does not, because what this skill does is the validatable part — a proposal against a schema, a review against a checklist, an output a test can compare. Deciding what the plan becomes stays the Helmsman's (D3). `validateSkillPlanSeparation` applies to this skill unchanged: it references no `plan.*` operation, and a variant that did would be refused when saved. _Rejected:_ the skill writing the nodes itself — that is the exclusion Plan 322 D3 exists to keep, which keeps `plan.node.*` out of every skill and every Runner: a run may serve a node and may never rewrite the plan it serves.
+
+**D3 — The Helmsman writes the accepted proposal as nodes, and links the proposal on the root.** The Helmsman turns an accepted proposal into a root, its phases and their steps with `plan.node.create`, and links the proposal to the root as a `proposal` link — a new kind beside `run | session | pull_request | document | finding | campaign | merge` in `plan.node.link` (`PlanNodeLinkKindSchema`, `packages/schemas/src/cybernetic/plan.ts`). The plan stays the Helmsman's (Plan 322 D3), and nothing else gains a write path to it. The link is what makes the proposal auditable against the tree it became: a reader of the root opens what was proposed and what the review found, and compares them with what was written and with what later recalibrations changed. _Rejected:_ the proposal copied into the root's note — the note is a bounded working note that later writes replace (Plan 322 D1), and prose in it cannot be diffed against the tree. _Rejected:_ no record of the proposal — the tree would be the only evidence of the plan, and a plan executed badly could not be told apart from a plan proposed badly.
+
+**D4 — Reflection recalibrates.** `plan.node.next` answers `wait | stop | continue` (Plan 322 P2b). It gains `recalibrate`, decided when a phase closes or a node is blocked twice — the two points at which a plan's assumptions have been tested: a phase's exit has been judged, or a step has failed in a way the stream could not get past. The firing starts the planning skill with the tree, the nodes' outcomes and the learnings on them (`plan.node.learn`, Plan 322 P2) as input, and expects a proposal diff: steps added, dropped or reordered, criteria rewritten. The Helmsman applies the diff with `plan.node.*`, compare-and-set on each node's revision like any write (Plan 322 D6), and links the diff's proposal on the root as D3 links the first. `plan.node.next` stays a read: it decides, and the firing acts.
+
+`stop` becomes decide-with-options. A firing that would stop proposes instead what would change — the options a recalibration offers for the node it would have stopped on — for the operator to choose from. The stream holds at that node until the choice is made, as it holds at a `blocked` node today. _Rejected:_ recalibrating on every firing — most firings decide `wait` or `continue` on a plan nothing has tested, and each recalibration is a planning run. _Rejected:_ the bare `stop` — it tells the operator that the stream halted and why, and leaves them to work out what the plan should become, which is the brief this plan exists to stop requiring.
+
+**D5 — The same skill serves non-code domains.** A domain differs in two things only: the investigator and the review's checklist. The schema, the propose step, the hand-off and the Helmsman's write are the same. Three examples:
+
+- **A Kaggle competition.** The investigator reads the competition's data, its metric and its leaderboard. The checklist asks what the others do not: whether a feature leaks the target, and whether the validation split predicts the leaderboard.
+- **An investment portfolio with eToro or Alpaca.** The investigator reads positions and market data through the brokers. The checklist asks about risk exposure, and whether the trade frequency the plan implies is one the account's costs bear.
+- **A web app from scratch.** The investigator has nothing existing to read and returns the idea's constraints. The checklist asks about scope, and which first slice lands and is usable on its own.
+
+In each, the output is a `PlanProposal` and the tree is the Helmsman's to write, so the board, the stream and recalibration treat a competition's root and a repository's alike. _Rejected:_ a planning skill per domain — separate schemas and hand-offs would drift, and every reader of a proposal would need to know which kind it holds. The differences are task configuration, not separate skills.
+
+**D6 — The board drops the derived owner in favour of activity.** The board's derived `ownedBy` label (`operator | loop`) gives way to in-flight or idle. This decision is recorded here and already delivered: Plan 322's P3.3 follow-up "Activity, not owner" replaced `ownedBy` with `activity` (`PlanNodeActivitySchema`, `in_flight | idle`), and no `ownedBy` is left. Who a node waits on is read from its kind and its column, not its activity — a `decide` node is under Needs you whatever its activity — which is where D4's decide-with-options puts a node that waits on the operator. _Rejected:_ the derived owner itself — it named every active node no run had served the operator's, so queued loop work read as a person's.
+
+### What the decisions affect
+
+- `packages/schemas` — `PlanProposalSchema`, the proposal diff, the review's verdict and findings (D1, D2, D4); `proposal` in `PlanNodeLinkKindSchema` (D3); `recalibrate` and a stop's options in `plan.node.next`'s output (`operations/plan/schemas.ts`, D4).
+- `packages/platform-artifacts` — the planning skill in the skill catalog: its four tasks, the pluggable investigate task, the review checklist (D2, D5); from P4, the harness investigate task's `context.capabilities` (Plan 328 D4).
+- `packages/cybernetic-runtime` — `decideStreamFiring` (`plan/stream.ts`) decides `recalibrate` and a stop's options (D4). `validateSkillPlanSeparation` is unchanged and applies to the new skill.
+- `packages/database` — `plan_node_links.kind` is `TEXT NOT NULL` with no check constraint (migration 219); whether `proposal` needs a migration is §5's question.
+- The help articles (Plan 325) — the board's Needs you, once a stop arrives with options.
+- Plan 331 — its P2 answers `recalibrate` with this skill, and depends on this plan's P1 and P3.
+
+## 3. Phases
+
+**P0 — Measure.** What the Helmsman writes today when a fresh conversation is told to start on something: the tree's shape, whether it has phases and exits, its criteria, and what the conversation read before writing. Then two planning runs over a known plan, each compared with that plan's actual tree. _Exit:_ the measurements are recorded here, with what each was measured against, before P1 starts.
+
+**P1 — Schema, skill, review.** D1's schema in `@aflow/schemas`; D2's four tasks, with the review's verdict and its one revise round; D5's investigator and checklist as the skill's only domain-specific configuration. _Exit, without a live stack:_ the schema refuses a proposal with a phase that has no exit or a step with no criteria, and accepts a field of several thousand characters; a review that answers `revise` every time yields exactly two proposals and one hand-off; the skill is contract-valid (Plan 190), and a variant referencing `plan.node.create` is refused by `validateSkillPlanSeparation`; the three D5 examples are configurations that differ only in the investigate task and the checklist. _Exit, on the live stack:_ one planning run, given an idea, returns a reviewed proposal whose evidence refs name what the investigator read, compared with P0's runs over the same plan.
+
+**P2 — The Helmsman writes it, and the stream commissions the first node.** D3: the `proposal` link kind, and the Helmsman starting the skill and writing what it returns. _Exit:_ a fresh conversation told "start on <idea>" produces a reviewed plan tree with a root, phases and exits, the proposal linked on the root, without a hand-written brief, and the stream commissions its first node, the node's id in the commission's inputs.
+
+**P3 — Recalibrate.** D4: `recalibrate` in `plan.node.next` on a phase's close and a node blocked twice; the proposal diff and its application by the Helmsman; the stop that offers options. _Exit:_ a phase closing triggers a recalibration proposal recorded on the root, on the live stack. In tests, a node blocked twice decides `recalibrate`, and a firing that would have stopped offers options instead.
+
+**P4 — The coding investigator over Plan 328.** The investigate task becomes a `host.harness.run` task for a repository, once Plan 328 P1–P3 have built the relay and its surface. _Exit:_ the planning skill's investigation step returns findings that cite both code and records — Plan 328 §5 P3's exit.
+
+## 4. How it is proven
+
+The root's criteria are the proof, and each fails if the change is wrong:
+
+- **A fresh conversation plans.** Told only "start on <idea>", it produces a reviewed tree — root, phases, exits, the proposal linked on the root — with no brief a person wrote. It fails if the Helmsman writes nodes from its own judgement, if the review is skipped, or if the proposal is not linked.
+- **The stream takes the first node.** The stream commissions the tree's first node, its id in the commission's inputs. It fails if the written tree is not one the P2b walk can follow.
+- **A phase close recalibrates.** Closing a phase yields a recalibration proposal on the root. It fails if `recalibrate` is never decided, or if its diff is applied with no record.
+- **The plan stays the Helmsman's.** A planning skill referencing `plan.node.create` is refused when saved; the guard fails the day the exclusion admits it.
+- **Better than by hand.** P1's planning run is read against P0's measurements of the same plan. A skill that plans no better than a conversation has not met the goal, whatever its tests say.
+
+## 5. Open questions
+
+- **Which model reviews.** A second model — from the proposing model's provider or a different one — and what the review sees: the proposal alone, or the investigator's findings and evidence too.
+- **The `proposal` link's storage.** Whether it needs a migration or rides an existing kind. `plan_node_links.kind` is unconstrained text and the kinds are a Zod enum, which bears on the answer. So does what the ref names: a proposal is a run's output, not a record of its own — the planning run, or a document holding the proposal.
+- **A diff over runs in flight.** How a recalibration diff is applied to a tree with runs in flight: whether a step being worked can be dropped or rewritten, and what becomes of its run.
+- **What P0 is measured against.** The known plan's tree as first written, as it stands after its recalibrations by hand, or its outcome; and what a "planning run" is before P1 builds the skill.
+- **What accepts a proposal.** Whether the review's `approve` is enough for the Helmsman to write the tree, or the operator accepts it too — Plan 331 D6 writes a recalibration's nodes `blocked` until approved. And what the hand-off carries when the review still answers `revise` after its one round.
+- **"Blocked twice."** Over what span the two blocks are counted: the node's lifetime, or since its last write, as Plan 322 P2b counts attempts.
+- **How a stop's options reach the operator.** As a `decide` node, whose answer is its outcome (Plan 322 D2, D9), or as an Action Center item of their own.
+- **Where the archetype is declared.** As a value of an existing skill field — `iterationModel` (`optimization | process | project`) is the nearest — or as a field of its own.
+- **A competition's metric.** Whether a Kaggle root's metric is a campaign the root links to — the question Plan 322 §7 leaves to the Kaggle skill.
+- **The investigator's surface.** Which operations the harness investigate task's `context.capabilities` names. Plan 328 D7's default, the Runner's surface, is declared for Commission Change and Review Local Changes; this task may want the reads alone.
