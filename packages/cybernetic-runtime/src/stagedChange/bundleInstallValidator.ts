@@ -23,6 +23,13 @@ export interface ValidateBundleInstallOpts {
   /** Resolve a prereq bundle by ID. Returns `null` for unknown ids. */
   resolveBundle: (bundleId: string) => SkillBundle | null;
   checkSkillInstalled: (catalogId: string) => Promise<boolean>;
+  /**
+   * Prerequisite bundles the caller installs earlier in the same transaction —
+   * a quick start's bundles, in order, into the space it creates. Their
+   * presence in the space is not checked; their declarations still resolve
+   * this bundle's references.
+   */
+  prerequisitesInstalledFirst?: ReadonlySet<string>;
   resolveSkill?: (catalogId: string) => { manifest: SkillManifest; workflow: Workflow } | null;
 }
 
@@ -73,9 +80,11 @@ export async function validateBundleInstallPreconditions(
     }
     resolvedPrereqs.push(prereq);
   }
+  const installedFirst = opts.prerequisitesInstalledFirst ?? new Set<string>();
+  const presentPrereqs = resolvedPrereqs.filter((prereq) => !installedFirst.has(prereq.bundleId));
 
   // (a) Every prereq's skills must be complete in the target space.
-  for (const prereq of resolvedPrereqs) {
+  for (const prereq of presentPrereqs) {
     for (const skillId of prereq.skillCatalogIds) {
       const installed = await checkSkillInstalled(skillId);
       if (!installed) {
@@ -88,7 +97,7 @@ export async function validateBundleInstallPreconditions(
 
   // (b) Every prereq's apiDefinitions must have a row at (apiId, spaceId).
   // (c) Every prereq's apiBindingTemplates must have a row at (bindingId, spaceId).
-  for (const prereq of resolvedPrereqs) {
+  for (const prereq of presentPrereqs) {
     const prereqApiDefs = prereq.apiDefinitions ?? [];
     const prereqBindings = prereq.apiBindingTemplates ?? [];
     if (prereqApiDefs.length > 0) {
@@ -167,7 +176,7 @@ export async function validateBundleInstallPreconditions(
     }
   }
 
-  for (const prereq of resolvedPrereqs) {
+  for (const prereq of presentPrereqs) {
     const prereqMcpDefs = prereq.mcpDefinitions ?? [];
     const prereqMcpBindings = prereq.mcpBindingTemplates ?? [];
 

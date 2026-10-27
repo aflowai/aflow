@@ -22,6 +22,7 @@ const state = vi.hoisted(() => ({
   defaultSpaceId: null as string | null,
   liveSpaces: [] as Array<{ id: string; slug: string; name: string }>,
   holds: false,
+  hidden: new Set<string>(),
 }));
 
 vi.mock('@aflow/database', async (importOriginal) => {
@@ -45,7 +46,7 @@ vi.mock('@aflow/database', async (importOriginal) => {
       fn(tx),
     getTenantStoreShelfPolicy: async () => ({
       defaultAvailability: 'available',
-      overrides: new Map(),
+      overrides: new Map([...state.hidden].map((catalogId) => [catalogId, 'hidden'])),
     }),
     __fakeDb: { select: () => chain(() => []) },
   };
@@ -55,6 +56,8 @@ const provisioning = vi.hoisted(() => ({
   validateSpaceCreation: vi.fn(),
   insertSpaceRecord: vi.fn(),
   provisionCreatedSpace: vi.fn(),
+  newSpaceDirectives: vi.fn(),
+  readAgainstProspectiveSpace: vi.fn(),
 }));
 vi.mock('../services/spaceProvisioning.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -62,9 +65,11 @@ vi.mock('../services/spaceProvisioning.js', async (importOriginal) => ({
 }));
 
 const executeSpaceTemplateInstall = vi.hoisted(() => vi.fn());
+const previewBundleInstall = vi.hoisted(() => vi.fn());
 vi.mock('@aflow/cybernetic-runtime', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   executeSpaceTemplateInstall,
+  previewBundleInstall,
 }));
 
 const database = (await import('@aflow/database')) as unknown as { __fakeDb: unknown };
@@ -109,7 +114,88 @@ beforeEach(() => {
   state.defaultSpaceId = FIRST_SPACE.id;
   state.liveSpaces = [FIRST_SPACE];
   state.holds = false;
+  state.hidden = new Set();
   vi.clearAllMocks();
+});
+
+const TEMPLATE = getCatalogEntry(TEMPLATE_ID);
+const TEMPLATE_BUNDLE_IDS = TEMPLATE?.kind === 'space' ? TEMPLATE.payload.bundleIds : [];
+
+describe('a quick start whose bundle is off the tenant shelf', () => {
+  it('is not offered, so neither the Quick starts tab nor the switcher entry shows', async () => {
+    state.hidden = new Set([TEMPLATE_BUNDLE_IDS[0] ?? '']);
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: '/v1/store/quick-start-offer' });
+    expect(res.json()).toEqual({ applies: false, templates: [] });
+    await app.close();
+  });
+
+  it('is not previewed as installable', async () => {
+    state.hidden = new Set([TEMPLATE_BUNDLE_IDS[0] ?? '']);
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/store/space-install-preview',
+      payload: { catalogId: TEMPLATE_ID },
+    });
+    expect(res.statusCode).toBe(404);
+    expect(provisioning.readAgainstProspectiveSpace).not.toHaveBeenCalled();
+    await app.close();
+  });
+});
+
+describe('POST /v1/store/space-install-preview', () => {
+  it('reads every bundle against the space the install would make, in install order', async () => {
+    const directives = { version: 1, responsibility: 'Review.' };
+    provisioning.newSpaceDirectives.mockResolvedValue({ directives, allowedModels: { ids: [] } });
+    provisioning.readAgainstProspectiveSpace.mockImplementation(
+      async (_params: unknown, read: (tx: unknown, spaceId: string) => Promise<unknown>) =>
+        read({}, NEW_SPACE_ID),
+    );
+    const installedFirstAtCall: string[][] = [];
+    previewBundleInstall.mockImplementation(
+      async (
+        _tx: unknown,
+        _bundle: unknown,
+        _ids: unknown,
+        opts: { prerequisitesInstalledFirst: ReadonlySet<string> },
+      ) => {
+        installedFirstAtCall.push([...opts.prerequisitesInstalledFirst]);
+        return {
+          conflicts: [{ artifactType: 'skill', artifactKey: 'b', reason: 'in the way' }],
+          missingCapabilities: ['host', 'api:github'],
+        };
+      },
+    );
+    const app = await buildApp('member');
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/store/space-install-preview',
+      payload: { catalogId: TEMPLATE_ID },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(provisioning.readAgainstProspectiveSpace).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: USER_ID,
+        directives,
+        tenant: expect.objectContaining({ tenantId: 'tenant-1', tenantRole: 'member' }),
+      }),
+      expect.any(Function),
+    );
+    expect(
+      previewBundleInstall.mock.calls.map((call) => (call[1] as { catalogId: string }).catalogId),
+    ).toEqual([...TEMPLATE_BUNDLE_IDS]);
+    for (const call of previewBundleInstall.mock.calls) {
+      expect(call[2]).toEqual({ tenantId: 'tenant-1', spaceId: NEW_SPACE_ID });
+    }
+    expect(installedFirstAtCall).toEqual(
+      TEMPLATE_BUNDLE_IDS.map((_, index) => TEMPLATE_BUNDLE_IDS.slice(0, index)),
+    );
+    const body = res.json() as { conflicts: unknown[]; missingCapabilities: string[] };
+    expect(body.conflicts).toHaveLength(TEMPLATE_BUNDLE_IDS.length);
+    expect(body.missingCapabilities).toEqual(['api:github', 'host']);
+    await app.close();
+  });
 });
 
 describe('GET /v1/store/quick-start-offer', () => {

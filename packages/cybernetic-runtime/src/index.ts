@@ -88,6 +88,7 @@ export * from './store/codingLoopAdoption.js';
 export * from './store/storeDivergence.js';
 export * from './store/catalogSkillProjection.js';
 export * from './store/storeInstallExecution.js';
+export * from './store/bundleInstallPreview.js';
 export * from './store/spaceTemplateInstall.js';
 export * from './store/storeUpdateExecution.js';
 export * from './store/connectorUninstall.js';

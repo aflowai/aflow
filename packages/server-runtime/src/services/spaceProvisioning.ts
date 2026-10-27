@@ -6,13 +6,16 @@
  * quota, model, capability-profile, membership and bootstrap rules as any
  * other.
  */
+import { randomUUID } from 'node:crypto';
 import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { Redis } from 'ioredis';
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import {
+  cascadeDeleteSpace,
   createTenantContext,
   findDefaultCapabilityProfileId,
+  type getConnection,
   getTenantProvisioningPolicy,
   spaceCapabilityAssignments,
   spaceMemberships,
@@ -43,6 +46,7 @@ import type { TenantContext } from '../plugins/tenant.js';
 import { bootstrapCyberneticEntity } from './entityBootstrap.js';
 
 type Edition = FastifyInstance['edition'];
+export type RawSql = ReturnType<typeof getConnection>;
 
 export interface SpaceCreationRefusal {
   ok: false;
@@ -56,6 +60,30 @@ export interface ValidatedSpaceCreation {
   ok: true;
   directives: EntityDirectives;
   provisioning: ProvisioningPolicy;
+}
+
+/** The directives a new space starts with: the caller's, or the defaults, held to the tenant's models. */
+export async function newSpaceDirectives(params: {
+  db: PostgresJsDatabase;
+  tenant: TenantContext;
+  edition: Edition;
+  directives: EntityDirectives | undefined;
+  chosenModelRoles: ReadonlySet<string>;
+}): Promise<{
+  directives: EntityDirectives;
+  allowedModels: Awaited<ReturnType<typeof allowedAgentModelRefs>>;
+}> {
+  const allowedModels = await allowedAgentModelRefs(
+    params.db,
+    params.tenant.tenantId,
+    params.edition.edition,
+  );
+  const directives = withTenantDefaultModels(
+    params.directives ?? defaultSpaceDirectives(),
+    allowedModels.ids,
+    params.chosenModelRoles,
+  );
+  return { directives, allowedModels };
 }
 
 /**
@@ -98,12 +126,13 @@ export async function validateSpaceCreation(params: {
     };
   }
 
-  const allowedModels = await allowedAgentModelRefs(db, tenant.tenantId, params.edition.edition);
-  const directives = withTenantDefaultModels(
-    params.directives ?? defaultSpaceDirectives(),
-    allowedModels.ids,
-    params.chosenModelRoles,
-  );
+  const { directives, allowedModels } = await newSpaceDirectives({
+    db,
+    tenant,
+    edition: params.edition,
+    directives: params.directives,
+    chosenModelRoles: params.chosenModelRoles,
+  });
   const offListModels = offListAgentModelRefs(directives, allowedModels);
   if (offListModels.length > 0) {
     return {
@@ -167,11 +196,43 @@ export async function insertSpaceRecord(
     }
   }
 
+  const rows = await tx
+    .insert(spaces)
+    .values(
+      spaceRowValues({
+        userId,
+        name: params.name,
+        slug,
+        description: params.description,
+        directives: params.directives,
+        computePolicy: params.computePolicy,
+        codePolicy: params.codePolicy,
+      }),
+    )
+    .returning();
+
+  const spaceRow = rows[0];
+  if (!spaceRow) return null;
+  const spaceId = (spaceRow as Record<string, unknown>)['id'] as string;
+  await assignDefaultCapabilityProfile(tx, { tenant, edition: params.edition, userId, spaceId });
+
+  return spaceRow as Record<string, unknown>;
+}
+
+function spaceRowValues(params: {
+  userId: string;
+  name: string;
+  slug: string;
+  description?: string | undefined;
+  directives: EntityDirectives;
+  computePolicy?: SpaceComputePolicy | undefined;
+  codePolicy?: SpaceCodePolicy | undefined;
+}): typeof spaces.$inferInsert {
   const vals: Record<string, unknown> = {
     name: params.name,
-    slug,
-    createdBy: userId,
-    ownerId: userId,
+    slug: params.slug,
+    createdBy: params.userId,
+    ownerId: params.userId,
   };
   if (params.description !== undefined) vals['description'] = params.description;
   vals['directives'] = params.directives;
@@ -179,20 +240,17 @@ export async function insertSpaceRecord(
   // the platform default unless the creator specifies one.
   vals['computePolicy'] = params.computePolicy ?? DEFAULT_SPACE_COMPUTE_POLICY;
   vals['codePolicy'] = params.codePolicy ?? DEFAULT_SPACE_CODE_POLICY;
+  return vals as typeof spaces.$inferInsert;
+}
 
-  const rows = await tx
-    .insert(spaces)
-    .values(vals as typeof spaces.$inferInsert)
-    .returning();
-
-  const spaceRow = rows[0];
-  if (!spaceRow) return null;
-  const spaceId = (spaceRow as Record<string, unknown>)['id'] as string;
-
+async function assignDefaultCapabilityProfile(
+  tx: PostgresJsDatabase,
+  params: { tenant: TenantContext; edition: Edition; userId: string; spaceId: string },
+): Promise<void> {
   // The tenant capability ceiling still ANDs over whichever profile
   // ends up assigned.
   const memberSafeDefault = defaultsToSafeProfile({
-    isTenantAdmin: tenant.isAdmin,
+    isTenantAdmin: params.tenant.isAdmin,
     edition: params.edition,
   });
   const profileId = await findDefaultCapabilityProfileId(tx, { memberSafeDefault });
@@ -202,12 +260,65 @@ export async function insertSpaceRecord(
     );
   }
   await tx.insert(spaceCapabilityAssignments).values({
-    spaceId,
+    spaceId: params.spaceId,
     profileId,
-    assignedBy: userId,
+    assignedBy: params.userId,
   });
+}
 
-  return spaceRow as Record<string, unknown>;
+/** Carries a prospective read out of the transaction it rolls back. */
+class ProspectiveSpaceRollback<T> extends Error {
+  constructor(readonly value: T) {
+    super('prospective space read; rolled back');
+    this.name = 'ProspectiveSpaceRollback';
+  }
+}
+
+/**
+ * Run `read` against the space a creation would make — the same row, owner,
+ * directives, policies and capability profile — inside a transaction that is
+ * always rolled back, so a preview can ask what the new space would lack
+ * without the space existing. The slug and quota rules are not applied: no
+ * space is made.
+ */
+export async function readAgainstProspectiveSpace<T>(
+  params: {
+    db: PostgresJsDatabase;
+    tenant: TenantContext;
+    edition: Edition;
+    userId: string;
+    name: string;
+    directives: EntityDirectives;
+  },
+  read: (tx: PostgresJsDatabase, spaceId: string) => Promise<T>,
+): Promise<T> {
+  try {
+    await withTenantSchema(params.db, createTenantContext(params.tenant.tenantId), async (tx) => {
+      const [row] = await tx
+        .insert(spaces)
+        .values(
+          spaceRowValues({
+            userId: params.userId,
+            name: params.name,
+            slug: `prospective-${randomUUID()}`,
+            directives: params.directives,
+          }),
+        )
+        .returning({ id: spaces.id });
+      if (!row) throw new Error('Failed to stage the prospective space');
+      await assignDefaultCapabilityProfile(tx, {
+        tenant: params.tenant,
+        edition: params.edition,
+        userId: params.userId,
+        spaceId: row.id,
+      });
+      throw new ProspectiveSpaceRollback(await read(tx, row.id));
+    });
+  } catch (err) {
+    if (err instanceof ProspectiveSpaceRollback) return err.value as T;
+    throw err;
+  }
+  throw new Error('The prospective space transaction committed');
 }
 
 /** The response for a refusal `insertSpaceRecord` threw, or null when the error is not one. */
@@ -247,10 +358,13 @@ export function spaceCreationFailure(err: unknown, slug: string): SpaceCreationR
 
 /**
  * Membership and bootstrap, once the space's transaction has committed. If
- * either fails the space is deleted, so a retry does not meet its own slug.
+ * either fails the space is deleted with everything in it, so a retry does
+ * not meet its own slug.
  */
 export async function provisionCreatedSpace(params: {
   db: PostgresJsDatabase;
+  /** The raw client behind `db`; the space's cascade delete is raw SQL. */
+  sql: RawSql;
   redis: Redis | null | undefined;
   tenant: TenantContext;
   userId: string;
@@ -289,13 +403,15 @@ export async function provisionCreatedSpace(params: {
     );
     return { helmsmanResolved: Boolean(bootstrapResult.resolvedAgents.helmsman) };
   } catch (provisionErr) {
-    // Clean up: delete the space so the user can retry without slug conflict
-    log.error({ err: provisionErr, spaceId }, 'Space provisioning failed — cleaning up space row');
+    // Everything the space's transaction committed goes with it — a template
+    // install's rows and bundle content, bootstrap's partial writes, the
+    // membership — so a retry meets neither its slug nor rows under a dead id.
+    log.error({ err: provisionErr, spaceId }, 'Space provisioning failed — deleting the space');
     try {
-      await withTenantSchema(db, createTenantContext(tenant.tenantId), async (tx: unknown) => {
-        await (tx as PostgresJsDatabase).execute(sql`DELETE FROM spaces WHERE id = ${spaceId}`);
+      const { schemaName } = createTenantContext(tenant.tenantId);
+      await params.sql.begin(async (tx) => {
+        await cascadeDeleteSpace(tx as unknown as RawSql, schemaName, spaceId);
       });
-      await db.delete(spaceMemberships).where(eq(spaceMemberships.spaceId, spaceId));
     } catch (cleanupErr) {
       log.error({ err: cleanupErr, spaceId }, 'Space cleanup also failed');
     }

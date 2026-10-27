@@ -221,8 +221,12 @@ export interface ExecuteSpaceTemplateInstallParams {
   createSpace: CreateTemplateSpace;
   /**
    * Runs once the install has committed and before the outcome is recorded for
-   * replay — the space's membership and bootstrap. A throw here leaves nothing
-   * recorded, so the caller's cleanup and a retry see the same state.
+   * replay — the space's membership and bootstrap. Everything the install
+   * wrote is committed by then, under the new space's id. A throw here records
+   * no outcome and releases the idempotency claim, so this callback owns the
+   * undo: it must delete the space with everything in it before rethrowing
+   * (`provisionCreatedSpace` does), or a retry makes a second space beside
+   * the first one's rows.
    */
   afterCommit?: (space: CreatedSpace) => Promise<void>;
   payloadStore?: PayloadStore | undefined;

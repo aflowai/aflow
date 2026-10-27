@@ -31,7 +31,9 @@ import {
   StoreInstallResponseSchema,
   StoreCatalogChangedErrorSchema,
   StoreSpaceInstallRequestSchema,
+  type CatalogBundleEntry,
   type CatalogSpaceEntry,
+  type StoreInstallConflict,
   type StorePlannedArtifact,
 } from '@aflow/schemas';
 import { getCatalogEntry, listCatalog, uncomposedListingReason } from '@aflow/platform-artifacts';
@@ -39,14 +41,18 @@ import {
   derivePlannedArtifacts,
   executeSpaceTemplateInstall,
   isListingOnTenantShelf,
+  previewBundleInstall,
   selectListableEntries,
   spaceTemplateDirectives,
 } from '@aflow/cybernetic-runtime';
 import {
   insertSpaceRecord,
+  newSpaceDirectives,
   provisionCreatedSpace,
+  readAgainstProspectiveSpace,
   spaceCreationFailure,
   validateSpaceCreation,
+  type RawSql,
 } from '../services/spaceProvisioning.js';
 import { getRedis } from './integrations/shared.js';
 
@@ -156,6 +162,7 @@ export const storeSpaceTemplateRoutes: FastifyPluginAsync = async (fastify) => {
         response: {
           200: StoreInstallPreviewResponseSchema,
           400: z.object({ error: z.string() }),
+          401: z.object({ error: z.string() }),
           404: z.object({ error: z.string() }),
         },
       },
@@ -175,26 +182,77 @@ export const storeSpaceTemplateRoutes: FastifyPluginAsync = async (fastify) => {
       }
       const laneRefusal = uncomposedListingReason(entry, fastify.edition);
       if (laneRefusal !== null) return reply.code(400).send({ error: laneRefusal });
+      const userId = request.authUser?.userId;
+      if (!userId) return reply.code(401).send({ error: 'Unauthenticated' });
 
       const creates: StorePlannedArtifact[] = [];
-      const bundles: Array<{ catalogId: string; catalogVersion: number }> = [];
+      const conflicts: StoreInstallConflict[] = [];
+      const bundles: CatalogBundleEntry[] = [];
       for (const bundleId of entry.payload.bundleIds) {
         const bundle = getCatalogEntry(bundleId);
-        if (!bundle) continue;
-        bundles.push({ catalogId: bundle.catalogId, catalogVersion: bundle.version });
+        if (bundle?.kind !== 'bundle') {
+          conflicts.push({
+            artifactType: 'skill',
+            artifactKey: bundleId,
+            reason: `'${entry.catalogId}' names '${bundleId}', which is no bundle in the Store.`,
+          });
+          continue;
+        }
+        bundles.push(bundle);
         creates.push(...derivePlannedArtifacts(bundle));
       }
       creates.push(...derivePlannedArtifacts(entry));
+
+      // Read against the space the install would make, with the profile and
+      // directives it would get, and each bundle after the ones the install
+      // applies before it.
+      const { directives } = await newSpaceDirectives({
+        db,
+        tenant,
+        edition: fastify.edition,
+        directives: spaceTemplateDirectives(entry.payload),
+        chosenModelRoles: new Set(),
+      });
+      const missingCapabilities = new Set<string>();
+      await readAgainstProspectiveSpace(
+        {
+          db,
+          tenant,
+          edition: fastify.edition,
+          userId,
+          name: entry.payload.spaceName,
+          directives,
+        },
+        async (tx, spaceId) => {
+          const installedFirst = new Set<string>();
+          for (const bundle of bundles) {
+            const preview = await previewBundleInstall(
+              tx,
+              bundle,
+              { tenantId: tenant.tenantId, spaceId },
+              { prerequisitesInstalledFirst: installedFirst },
+            );
+            conflicts.push(...preview.conflicts);
+            for (const capability of preview.missingCapabilities) {
+              missingCapabilities.add(capability);
+            }
+            installedFirst.add(bundle.catalogId);
+          }
+        },
+      );
       return {
         kind: entry.kind,
         catalogId: entry.catalogId,
         catalogVersion: entry.version,
         creates,
-        conflicts: [],
-        missingCapabilities: [],
+        conflicts,
+        missingCapabilities: [...missingCapabilities].sort(),
         space: {
           spaceName: entry.payload.spaceName,
-          bundles,
+          bundles: bundles.map((bundle) => ({
+            catalogId: bundle.catalogId,
+            catalogVersion: bundle.version,
+          })),
           readiness: entry.payload.readiness.map((item) => ({
             key: item.key,
             title: item.title,
@@ -290,6 +348,7 @@ export const storeSpaceTemplateRoutes: FastifyPluginAsync = async (fastify) => {
               redis: fastify.appContext.redis,
               tenant,
               userId: actorUserId,
+              sql: fastify.appContext.sql as RawSql,
               spaceId: space.spaceId,
               directives: validated.directives,
               log: fastify.log,

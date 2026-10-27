@@ -497,7 +497,8 @@ describe('the edition’s composed lanes', () => {
         {
           kind: 'coding_loop_setup',
           step: 'schedule',
-          description: 'Create a repeating shepherd schedule with scheduleId: { $schedule: "id" }.',
+          description:
+            'Create a repeating shepherd schedule with config: { scheduleId: { $schedule: "id" } }.',
           path: '/triggers',
           required: true,
         },

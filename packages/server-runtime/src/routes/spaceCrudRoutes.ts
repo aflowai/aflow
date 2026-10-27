@@ -41,6 +41,7 @@ import {
   provisionCreatedSpace,
   spaceCreationFailure,
   validateSpaceCreation,
+  type RawSql,
 } from '../services/spaceProvisioning.js';
 import { diffDirectiveKeys } from '../services/directiveDiff.js';
 
@@ -140,6 +141,7 @@ export const spaceCrudRoutes: FastifyPluginAsync = async (fastify) => {
       const spaceId = row['id'] as string;
       const provisioned = await provisionCreatedSpace({
         db,
+        sql: fastify.appContext.sql as RawSql,
         redis: fastify.appContext.redis,
         tenant,
         userId: authUser.userId,

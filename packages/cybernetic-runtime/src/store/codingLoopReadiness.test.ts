@@ -46,7 +46,9 @@ describe('coding loop readiness', () => {
     expect(result.tasks[1]?.description).toContain('merge-posture');
     expect(result.tasks[3]?.description).toContain('Checks and Actions read');
     expect(result.tasks[3]?.description).toContain('Enable the github connection');
-    expect(result.tasks[4]?.description).toContain('"$schedule": "id"');
+    expect(result.tasks[4]?.description).toContain(
+      '{ "input": "tend", "config": { "scheduleId": { "$schedule": "id" } } }',
+    );
   });
 
   it('removes completed setup and distinguishes failure from missing setup', () => {

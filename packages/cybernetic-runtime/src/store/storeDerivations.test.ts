@@ -244,6 +244,24 @@ describe('isListingOnTenantShelf', () => {
     const shelf: TenantStoreShelfPolicy = { defaultAvailability: 'hidden', overrides: new Map() };
     expect(isListingOnTenantShelf(github, new Set(['github']), shelf)).toBe(true);
   });
+
+  it('a quick start is off the shelf while a bundle it installs is', () => {
+    const template = entry('local-review-quick-start');
+    expect(template.kind).toBe('space');
+    const bundleId = template.kind === 'space' ? template.payload.bundleIds[0] : undefined;
+    expect(bundleId).toBeDefined();
+    const shelf: TenantStoreShelfPolicy = {
+      defaultAvailability: 'available',
+      overrides: new Map([[bundleId ?? '', 'hidden']]),
+    };
+    expect(isListingOnTenantShelf(template, new Set(), shelf)).toBe(false);
+    expect(
+      isListingOnTenantShelf(template, new Set(), {
+        defaultAvailability: 'available',
+        overrides: new Map(),
+      }),
+    ).toBe(true);
+  });
 });
 
 // ============================================================================

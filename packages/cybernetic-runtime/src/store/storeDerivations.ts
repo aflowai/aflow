@@ -96,14 +96,21 @@ export function toStoreListingInstalledState(
  * exist for the tenant — except where already installed, which keeps it
  * visible/manageable exactly like a deprecated listing (new installs only
  * are blocked).
+ *
+ * A quick start installs each of its bundles fresh into the space it makes,
+ * so it is on the shelf only while every one of them is too; otherwise it is
+ * offered and previewed as installable and its install refuses the bundle.
  */
 export function isListingOnTenantShelf(
-  entry: Pick<CatalogEntry, 'catalogId'>,
+  entry: CatalogEntry,
   installedCatalogIds: ReadonlySet<string>,
   shelf: TenantStoreShelfPolicy,
 ): boolean {
-  const availability = shelf.overrides.get(entry.catalogId) ?? shelf.defaultAvailability;
-  return availability === 'available' || installedCatalogIds.has(entry.catalogId);
+  if (installedCatalogIds.has(entry.catalogId)) return true;
+  const available = (catalogId: string) =>
+    (shelf.overrides.get(catalogId) ?? shelf.defaultAvailability) === 'available';
+  if (!available(entry.catalogId)) return false;
+  return entry.kind !== 'space' || entry.payload.bundleIds.every(available);
 }
 
 /**
