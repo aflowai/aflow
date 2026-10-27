@@ -66,10 +66,13 @@ export const CODING_LOOP_READINGS: readonly ReadinessReading[] = [
 
 const SHEPHERD_SLUG = 'local-pr-shepherd';
 
+/** What a schedule's template resolves to its own id at each firing. */
+const SCHEDULE_OWN_ID = { $schedule: 'id' } as const;
+
 /** The input a shepherd schedule renews from: its own id under the agent's config. */
 export const SHEPHERD_RENEWAL_INPUT: Record<string, unknown> = {
   input: 'tend',
-  config: { [SKILL_STARTER_SCHEDULE_VARIABLE]: { $schedule: 'id' } },
+  config: { [SKILL_STARTER_SCHEDULE_VARIABLE]: SCHEDULE_OWN_ID },
 };
 
 const GITHUB_PERMISSIONS =
@@ -339,7 +342,8 @@ export async function readReadinessFacts(
           'status', s.status, 'cronExpression', s.cron_expression, 'maxFirings', s.max_firings,
           'firingCount', s.firing_count, 'expiresAt', s.expires_at,
           'inputTemplate', s.input_template,
-          'renews', COALESCE(s.input_template -> 'config' -> 'scheduleId' = '{"$schedule":"id"}'::jsonb, false),
+          'renews', COALESCE(s.input_template -> 'config' -> ${SKILL_STARTER_SCHEDULE_VARIABLE}::text
+            = ${JSON.stringify(SCHEDULE_OWN_ID)}::jsonb, false),
           'failure', CASE
             WHEN s.last_error IS NOT NULL THEN s.last_error
             WHEN EXISTS (SELECT 1 FROM sessions e WHERE e.session_id = s.last_session_id

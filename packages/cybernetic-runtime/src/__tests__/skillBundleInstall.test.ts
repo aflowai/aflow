@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { SkillManifest, SkillBundleId } from '@aflow/schemas';
 import type { SkillBundle } from '@aflow/schemas';
+import type { SQL } from 'drizzle-orm';
+import { PgDialect } from 'drizzle-orm/pg-core';
 import { getSkillBundleEntry, getSkillCatalogEntry } from '@aflow/platform-artifacts';
 
 // ============================================================================
@@ -17,6 +19,8 @@ const projectionRebuilds: string[] = [];
 let advisoryLockOutcome: boolean = true;
 let failOnApplyNumber: number | null = null;
 let applyCallCount = 0;
+/** Every statement the install's transaction ran, as SQL text. */
+const executedSql: string[] = [];
 
 // ============================================================================
 // Mocks
@@ -47,8 +51,9 @@ vi.mock('@aflow/database', async (importOriginal) => {
       const manifestSnapshot = capturedManifests.slice();
       const projectionSnapshot = projectionRebuilds.slice();
       const mockTx = {
-        execute: async (_query: unknown) => {
-          // Only the advisory-lock SQL flows through here in Phase 2B.
+        execute: async (query: SQL) => {
+          executedSql.push(new PgDialect().sqlToQuery(query).sql);
+          // The advisory lock reads `acquired`; an insert reads its one returned row.
           return [{ acquired: advisoryLockOutcome }];
         },
       };
@@ -203,6 +208,30 @@ describe('repair preserving existing content', () => {
       status: 'approved',
     });
     for (const [path, content] of kept) expect(mockDocs.get(path)).toBe(content);
+  });
+
+  it('writes a bundled API definition that is absent, and never replaces one that is present', async () => {
+    const bundle = getSkillBundleEntry('coding-loop')!;
+    expect(bundle.apiDefinitions.length).toBeGreaterThan(0);
+    executedSql.length = 0;
+    const result = await installSkillBundle(
+      ctx,
+      {
+        ...bundle,
+        apiDefinitions: bundle.apiDefinitions.map((d) => ({
+          ...d,
+          conflictPolicy: 'overwrite' as const,
+        })),
+      },
+      { preserveExistingContent: true },
+    );
+    expect(result.installedApiDefinitionIds).toEqual(bundle.apiDefinitions.map((d) => d.apiId));
+    const writes = executedSql.filter((text) => text.includes('INSERT INTO api_definitions'));
+    expect(writes).toHaveLength(bundle.apiDefinitions.length);
+    for (const text of writes) {
+      expect(text).toContain('ON CONFLICT (api_id, space_id) DO NOTHING');
+      expect(text).not.toContain('DO UPDATE');
+    }
   });
 
   it('creates missing agents without applying or projecting kept skills', async () => {

@@ -235,6 +235,27 @@ export async function handleWorkflowRunResume(
     );
     return;
   }
+  // A credentials or capability pause passes the guard above, but a second
+  // task can be paused beside it — a HITL gate surfaces as the Action Center
+  // focus — and acknowledging would resume the run past that task.
+  if (
+    input.resolution.mode === 'acknowledge' &&
+    (surfaced.contract.suggestedResumeCall?.op === 'human.action_center.focus' ||
+      run.tasks.some(
+        (task) => task.status === 'paused' && task.taskId !== surfaced.contract.failedTaskId,
+      ))
+  ) {
+    await emitStepError(
+      args,
+      'ACKNOWLEDGE_NOT_ALLOWED_ON_HITL',
+      'Another task in this run is paused; acknowledge would resume the run past it. ' +
+        'Resolve that task first — workflow.run.resume with mode replace_output (approve/collect) ' +
+        'or mode fail (reject) — then acknowledge this pause.',
+      startTime,
+      'validation',
+    );
+    return;
+  }
   const advertisedModes = surfaced.contract.allowedResumeModes ?? null;
   if (advertisedModes && !advertisedModes.includes(input.resolution.mode)) {
     await emitStepError(
@@ -250,19 +271,6 @@ export async function handleWorkflowRunResume(
   }
 
   if (input.resolution.mode === 'acknowledge') {
-    const suggested = surfaced.contract.suggestedResumeCall;
-    if (suggested?.op === 'human.action_center.focus') {
-      await emitStepError(
-        args,
-        'ACKNOWLEDGE_NOT_ALLOWED_ON_HITL',
-        'This pause requires operator action on the workflow run surface — acknowledge would no-op past a HITL gate. ' +
-          'Use workflow.run.resume with mode replace_output (approve/collect) or mode fail (reject) instead.',
-        startTime,
-        'validation',
-      );
-      return;
-    }
-
     if (pauseCause === 'needs_credentials') {
       // Re-run on the raw workflow with the run's persisted connection pin so a
       // grant deferred to the run's connection (`binding.kind === 'connection'`)

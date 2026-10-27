@@ -71,7 +71,7 @@ describe('egress refusals', () => {
     // either reports a dead end or invents a remedy.
     const note = describeRefusals([{ host: 'pypi.org', port: 443 }], 'produced_nothing', 'claude');
     expect(note).toContain('Only the operator');
-    expect(note).toContain('harness add claude --domain pypi.org');
+    expect(note).toContain('harness allow claude pypi.org');
     // And it must not invite a retry: a refusal is a decision, so retrying is
     // the one thing guaranteed not to help.
     expect(note).toMatch(/do not retry/i);
@@ -90,7 +90,7 @@ describe('egress refusals', () => {
     expect(note).not.toContain('ask again');
     // The remedy is still the operator's and still one command, for the case
     // where the result IS missing something.
-    expect(note).toContain('harness add claude --domain pypi.org');
+    expect(note).toContain('harness allow claude pypi.org');
   });
 
   it('does not mistake a harness line that merely mentions the phrase', () => {
@@ -228,7 +228,21 @@ describe('hosts a task requires', () => {
     expect(message).toContain('could not reach registry.npmjs.org');
     expect(message).toContain('is not a result');
     expect(message).toContain(
-      'yarn workspace @aflow/aflow-executor-host harness add claude --domain registry.npmjs.org',
+      'yarn workspace @aflow/aflow-executor-host harness allow claude registry.npmjs.org',
     );
+  });
+
+  it('names every refused host in the one `harness allow` command the CLI takes', () => {
+    const note = describeRefusals(
+      [
+        { host: 'pypi.org', port: 443 },
+        { host: 'files.pythonhosted.org', port: 443 },
+      ],
+      'produced_nothing',
+      'claude',
+    );
+    expect(note).toContain('harness allow claude pypi.org files.pythonhosted.org\n');
+    expect(note).not.toContain('--domain');
+    expect(note).not.toContain('harness add');
   });
 });

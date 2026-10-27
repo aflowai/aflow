@@ -237,6 +237,13 @@ vi.mock('./connectorInstall.js', async (importOriginal) => {
   return { ...orig, installApiConnectorEntry, installMcpConnectorEntry };
 });
 
+const githubAnswers = vi.hoisted(() => new Map([['fingerprint', { state: 'ok' }]]));
+const askGithubForSpace = vi.hoisted(() => vi.fn(async () => githubAnswers));
+vi.mock('./readinessReaders.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  askGithubForSpace,
+}));
+
 const publishApiCatalogInvalidation = vi.hoisted(() => vi.fn());
 const publishMcpCatalogInvalidation = vi.hoisted(() => vi.fn());
 vi.mock('@aflow/redis', async (importOriginal) => {
@@ -389,10 +396,12 @@ describe('executeStoreInstall', () => {
       lanes: { edition: 'local', codeLane: 'present', hostLane: 'present', browserLane: 'present' },
     });
     expect(result.ok).toBe(true);
+    // GitHub is asked before the transaction, and the checklist reads its answers.
+    expect(askGithubForSpace).toHaveBeenCalledTimes(1);
     expect(installSkillBundle).toHaveBeenCalledWith(
       expect.anything(),
       expect.anything(),
-      expect.objectContaining({ preserveExistingContent: true }),
+      expect.objectContaining({ preserveExistingContent: true, githubAnswers }),
     );
     expect(store.installs).toContainEqual(kept);
     expect(store.installs).toContainEqual(keptMember);
@@ -418,6 +427,53 @@ describe('executeStoreInstall', () => {
     if (!result.ok) throw new Error('expected success');
     expect(result.response.install.installedVersion).toBe(version - 2);
     expect(result.response.install.skippedVersion).toBe(version);
+  });
+
+  it('records the API definition a Keep-mine repair wrote, and none it left as it was', async () => {
+    const catalogId = 'coding-loop';
+    const version = getCatalogEntry(catalogId)!.version;
+    store.installs.push({
+      ...installedRow(catalogId, version - 2, 'bundle'),
+      skipped_version: version,
+    });
+    installSkillBundle.mockResolvedValueOnce({
+      bundleId: 'coding-loop',
+      installedSkillCatalogIds: [],
+      skippedSkillCatalogIds: [],
+      repairedProjectionSkillCatalogIds: [],
+      installedApiDefinitionIds: ['github'],
+      skippedApiDefinitionIds: [],
+      installedBindingIds: [],
+      skippedBindingIds: [],
+      installedMcpDefinitionIds: [],
+      skippedMcpDefinitionIds: [],
+      installedMcpBindingIds: [],
+      skippedMcpBindingIds: [],
+      installedMemoryDocPaths: [],
+      skippedMemoryDocPaths: [],
+      installedArtifactBindings: [],
+      skippedArtifactBindings: [],
+      installedAgentSlugs: [],
+      skippedAgentSlugs: [],
+      postInstallManifest: [],
+      helmsmanHints: [],
+      warnings: [],
+      stateChanged: true,
+    });
+    const result = await install({
+      catalogId,
+      lanes: { edition: 'local', codeLane: 'present', hostLane: 'present', browserLane: 'present' },
+    });
+    expect(result.ok).toBe(true);
+    expect(store.artifacts).toEqual([
+      expect.objectContaining({
+        artifact_type: 'api_definition',
+        artifact_key: 'github',
+        catalog_id: catalogId,
+      }),
+    ]);
+    if (!result.ok) throw new Error('expected success');
+    expect(result.response.install.installedVersion).toBe(version - 2);
   });
 
   it('fails with CATALOG_CHANGED on an expectedVersion mismatch', async () => {
@@ -600,6 +656,8 @@ describe('executeStoreInstall', () => {
     expect((result.response.result as { warnings: string[] }).warnings).toEqual(['a warning']);
 
     expect(installSkillBundle).toHaveBeenCalledTimes(1);
+    // A bundle whose readiness reads no github credential asks GitHub nothing.
+    expect(askGithubForSpace).not.toHaveBeenCalled();
     expect(store.installs.map((row) => row.catalog_id).sort()).toEqual([
       '_test-skill-a',
       '_test-skill-b',

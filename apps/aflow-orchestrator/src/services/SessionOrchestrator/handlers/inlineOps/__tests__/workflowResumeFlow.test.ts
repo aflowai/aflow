@@ -740,7 +740,7 @@ describe('workflow.run.resume — Plan 130 Phase 1 cross-boundary loop', () => {
     expect(errorPayload['code']).toBe('RESUME_TASK_ROW_NOT_PAUSED');
   });
 
-  it('rejects mode not in contract.allowedResumeModes (P0/1: no advertised stranded modes)', async () => {
+  it('refuses acknowledge on a task-backed pause as task-backed, before reading its advertised modes', async () => {
     mockLoadRunById.mockResolvedValueOnce(makePausedRun());
     // Contract only advertises replace_output for this pause cause.
     mockSurfaceWorkflowResumeContract.mockResolvedValue({
@@ -764,7 +764,7 @@ describe('workflow.run.resume — Plan 130 Phase 1 cross-boundary loop', () => {
     expect(errorPayload['code']).toBe('ACKNOWLEDGE_TASK_BACKED_NOT_SUPPORTED');
   });
 
-  it('Plan 167 — rejects acknowledge on HITL pause (human.action_center.focus)', async () => {
+  it('refuses acknowledge on a HITL pause as task-backed: its paused human task is what the guard reads', async () => {
     mockLoadRunById.mockResolvedValueOnce(makePausedRun({ pausedReason: 'needs_decision' }));
     mockSurfaceWorkflowResumeContract.mockResolvedValue({
       contract: {
@@ -876,6 +876,48 @@ describe('workflow.run.resume — Plan 130 Phase 1 cross-boundary loop', () => {
     const errorPayload = result['error'] as Record<string, unknown>;
     expect(errorPayload['code']).toBe('WORKFLOW_PRECHECK_CAPABILITY_MISSING');
   });
+
+  it.each([
+    { op: 'human.action_center.focus', args: { itemId: 'gate:step-1' } },
+    { op: 'workflow.run.resume', args: {} },
+  ])(
+    'refuses to acknowledge a credentials pause while a second task is paused ($op)',
+    async (suggestedResumeCall) => {
+      mockLoadRunById.mockResolvedValueOnce(
+        makePausedRun({
+          pausedReason: 'needs_credentials',
+          tasks: [
+            { taskId: 'call-github', status: 'paused', attempt: 1 },
+            { taskId: 'approve-push', status: 'paused', attempt: 1 },
+          ],
+        }),
+      );
+      mockSurfaceWorkflowResumeContract.mockResolvedValue({
+        contract: {
+          ...makeContract({
+            pauseCause: 'needs_credentials',
+            allowedResumeModes: ['acknowledge', 'fail'],
+            failedTaskId: 'call-github',
+            replaceOutputSchema: undefined,
+            expectedTaskOutputSchema: undefined,
+          }),
+          suggestedResumeCall,
+        },
+        pauseVersion: 1,
+        pausedReason: 'needs_credentials',
+        resumeAttemptCount: 0,
+      });
+
+      await handleWorkflowCrudInline(
+        makeArgs({ runId: RUN_ID, pauseVersion: 1, resolution: { mode: 'acknowledge' } }),
+      );
+
+      expect(mockClaimResumeLease).not.toHaveBeenCalled();
+      expect(mockResumeRunWithClaim).not.toHaveBeenCalled();
+      const result = mockAddStepResult.mock.calls[0]![1] as { error: { code: string } };
+      expect(result.error.code).toBe('ACKNOWLEDGE_NOT_ALLOWED_ON_HITL');
+    },
+  );
 
   it('refuses to resume when an operation the run dispatches is still ungranted', async () => {
     // Operation tasks never pass step gating, so acknowledging the pause that

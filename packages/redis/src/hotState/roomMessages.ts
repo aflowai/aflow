@@ -1,6 +1,6 @@
 import type { Redis } from 'ioredis';
 import { StreamKeys, type RoomMessageMetadata } from '@aflow/schemas';
-import { appendSessionEvent } from './events.js';
+import { appendSessionEvent, SessionEventNotAppendedError } from './events.js';
 import { markProjectionCandidate } from './projectionCandidates.js';
 import { sessionCandidateMember } from './candidateMember.js';
 import { syncSessionMetadataCandidate } from './sessionMetadataCandidates.js';
@@ -74,16 +74,25 @@ export async function appendRoomMessage(
   // check-then-act, so two racing relay drains (or a crash inside the post)
   // would double-append and double-increment lastMessageSeq — phantom unread
   // for everyone else in the room. NX on the eventId closes both windows.
-  if (input.eventId) {
-    const guardKey = `${stateKey}:msg:${input.eventId}`;
+  const guardKey = input.eventId ? `${stateKey}:msg:${input.eventId}` : undefined;
+  if (guardKey) {
     const claimed = await redis.set(guardKey, '1', 'EX', HOT_STATE_TTL_SECONDS, 'NX');
     if (claimed === null) {
       return { ok: false, reason: 'duplicate_event' };
     }
   }
 
-  const messageSeq = await allocateMessageSeq(redis, tenantId, sessionId);
-
+  const eventId = input.eventId ?? crypto.randomUUID();
+  const now = Date.now();
+  let messageSeq: number;
+  try {
+    messageSeq = await allocateMessageSeq(redis, tenantId, sessionId);
+  } catch (err) {
+    // Nothing was posted, so a guard held here would answer the redelivery
+    // `duplicate_event` for a message no one can read.
+    if (guardKey) await redis.del(guardKey).catch(() => undefined);
+    throw err;
+  }
   const metadata: RoomMessageMetadata = {
     messageSeq,
     actorUserId: input.actorUserId,
@@ -92,16 +101,23 @@ export async function appendRoomMessage(
     ...(input.actorDisplayName ? { actorDisplayName: input.actorDisplayName } : {}),
     ...(input.clientMessageId ? { clientMessageId: input.clientMessageId } : {}),
   };
-
-  const eventId = input.eventId ?? crypto.randomUUID();
-  const now = Date.now();
-  await appendSessionEvent(redis, tenantId, sessionId, {
-    eventId,
-    eventType: 'RoomMessage',
-    timestamp: now,
-    sessionId,
-    metadata,
-  });
+  try {
+    await appendSessionEvent(redis, tenantId, sessionId, {
+      eventId,
+      eventType: 'RoomMessage',
+      timestamp: now,
+      sessionId,
+      metadata,
+    });
+  } catch (err) {
+    // Released only where the event provably did not land. A connection lost
+    // around EXEC can follow a committed append, and a message that may be in
+    // the room must not be posted twice — so there the guard stays.
+    if (guardKey && err instanceof SessionEventNotAppendedError) {
+      await redis.del(guardKey).catch(() => undefined);
+    }
+    throw err;
+  }
 
   // Speaking in the room is activity in the conversation whether or not it
   // wakes the agent — two people working something out between themselves is

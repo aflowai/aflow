@@ -271,6 +271,18 @@ describe('findActiveStreamNode', () => {
     const walked = await store.walk(SPACE, { rootId: root.nodeId, maxDepth: 64, maxNodes: 2000 });
     expect(findActiveStreamNode(walked.nodes, root.nodeId)?.nodeId).toBe(first.nodeId);
   });
+
+  it('stops at a waiting node too, and the firing decides it by the rules an active one takes', async () => {
+    const { root, first } = await stream();
+    await created({ parentId: first.nodeId, title: 'P2b.a' });
+    await write(first.nodeId, { status: 'waiting' });
+    const walked = await store.walk(SPACE, { rootId: root.nodeId, maxDepth: 64, maxNodes: 2000 });
+    expect(findActiveStreamNode(walked.nodes, root.nodeId)?.nodeId).toBe(first.nodeId);
+    expect(await fire(root.nodeId)).toMatchObject({
+      decision: 'continue',
+      node: { nodeId: first.nodeId },
+    });
+  });
 });
 
 describe('plan.node.next — wait', () => {
@@ -614,6 +626,20 @@ describe('plan.node.next — stop', () => {
 });
 
 describe('plan.node.next — a merge', () => {
+  it('a blocked node waits on its merged pull request and records nothing: blocked is read before the merge', async () => {
+    const { root, first } = await stream();
+    const mergedAt = await publishedRound(first);
+    await write(first.nodeId, { status: 'blocked', note: 'held by the operator' });
+    const before = await current(first.nodeId);
+    expect(await fire(root.nodeId, (url) => merged(url, mergedAt))).toMatchObject({
+      decision: 'wait',
+      cause: 'blocked',
+      node: { nodeId: first.nodeId },
+    });
+    expect((await current(first.nodeId)).revision).toBe(before.revision);
+    expect(store.links.filter((l) => l.kind === 'merge')).toHaveLength(0);
+  });
+
   it('waits on a merged pull request while the node’s own commission or publication is in flight', async () => {
     for (const slug of [PLAN_STREAM_COMMISSION_SLUG, PLAN_STREAM_PUBLICATION_SLUG]) {
       store = new InMemoryPlanNodeStore();

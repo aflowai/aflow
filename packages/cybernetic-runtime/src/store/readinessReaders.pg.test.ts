@@ -116,7 +116,7 @@ describe.skipIf(!databaseUrl)('readiness facts in the database', () => {
 
       for (const template of [
         '{"input":"tend"}',
-        '{"input":"tend","config":{"lane":"a"}}',
+        '{"input":"tend","config":{}}',
         '{"scheduleId":{"$schedule":"id"}}',
         '{"input":"tend","scheduleId":{"$schedule":"id"}}',
       ]) {
@@ -130,7 +130,7 @@ describe.skipIf(!databaseUrl)('readiness facts in the database', () => {
         expect(reading).not.toHaveProperty('schedule');
       }
       await tx.execute(sql`UPDATE agent_schedules SET input_template =
-        '{"input":"shepherd","note":"x","config":{"scheduleId":{"$schedule":"id"},"lane":"a"}}'::jsonb`);
+        '{"input":"shepherd","note":"x","config":{"scheduleId":{"$schedule":"id"}}}'::jsonb`);
       expect((await read())[4]).toMatchObject({ state: 'done' });
       await tx.execute(sql`UPDATE agent_schedules SET input_template = ${RENEWAL_TEMPLATE}::jsonb`);
 

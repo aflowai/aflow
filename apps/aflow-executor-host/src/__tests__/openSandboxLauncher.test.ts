@@ -131,6 +131,9 @@ describe('the macOS profile an `open` job runs under', () => {
 });
 
 const PYTHON3_ABSENT = 'python3 not on PATH';
+const NO_EXECUTE_BIT =
+  'Windows has no execute bit: a shell script named python3 is no python3 there';
+const NO_FCNTL = 'the probe reads O_NONBLOCK through fcntl, which Windows does not have';
 
 /** Why the stdout probe cannot run on this PATH, or null when python3 is on it. */
 function python3Absence(pathEnv: string | undefined): string | null {
@@ -180,18 +183,16 @@ describe('the stdout probe’s python3 gate', () => {
     expect(reasons).toEqual([PYTHON3_ABSENT, PYTHON3_ABSENT]);
   });
 
-  it.skipIf(process.platform === 'win32')(
-    'does not skip on a PATH that holds an executable python3',
-    async () => {
-      const binDir = join(dir, 'bin');
-      await mkdir(binDir, { recursive: true });
-      await writeFile(join(binDir, 'python3'), '#!/bin/sh\n');
-      await chmod(join(binDir, 'python3'), 0o755);
-      const { skip, reasons } = recordingSkip();
-      skipWithoutPython3(skip, [dir, binDir].join(delimiter));
-      expect(reasons).toEqual([]);
-    },
-  );
+  it('does not skip on a PATH that holds an executable python3', async (context) => {
+    if (process.platform === 'win32') context.skip(NO_EXECUTE_BIT);
+    const binDir = join(dir, 'bin');
+    await mkdir(binDir, { recursive: true });
+    await writeFile(join(binDir, 'python3'), '#!/bin/sh\n');
+    await chmod(join(binDir, 'python3'), 0o755);
+    const { skip, reasons } = recordingSkip();
+    skipWithoutPython3(skip, [dir, binDir].join(delimiter));
+    expect(reasons).toEqual([]);
+  });
 });
 
 describe('the workload’s standard output under the `open` launcher', () => {
@@ -234,44 +235,43 @@ describe('the workload’s standard output under the `open` launcher', () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  it.skipIf(process.platform === 'win32')(
-    'stays blocking after the launcher touches its own, and carries 4 MB whole',
-    async ({ skip }) => {
-      skipWithoutPython3(skip, process.env['PATH']);
-      const probePath = join(dir, 'probe.py');
-      const driverPath = join(dir, 'driver.mjs');
-      await writeFile(probePath, PROBE);
-      await writeFile(
-        driverPath,
-        driver(new URL('../openSandboxLauncher.mjs', import.meta.url).href, probePath),
-      );
+  it('stays blocking after the launcher touches its own, and carries 4 MB whole', async ({
+    skip,
+  }) => {
+    if (process.platform === 'win32') skip(NO_FCNTL);
+    skipWithoutPython3(skip, process.env['PATH']);
+    const probePath = join(dir, 'probe.py');
+    const driverPath = join(dir, 'driver.mjs');
+    await writeFile(probePath, PROBE);
+    await writeFile(
+      driverPath,
+      driver(new URL('../openSandboxLauncher.mjs', import.meta.url).href, probePath),
+    );
 
-      // Piped on every side, as the executor spawns the launcher.
-      const launcherProcess = spawn(process.execPath, [driverPath], {
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
-      const out: Buffer[] = [];
-      let err = '';
-      launcherProcess.stdout.on('data', (chunk: Buffer) => out.push(chunk));
-      launcherProcess.stderr.on('data', (chunk: Buffer) => {
-        err += chunk.toString();
-        if (err.includes('touched\n') && launcherProcess.stdin.writable) {
-          launcherProcess.stdin.end('go\n');
-        }
-      });
-      const code = await new Promise<number | null>((resolve) => {
-        launcherProcess.on('close', resolve);
-      });
+    // Piped on every side, as the executor spawns the launcher.
+    const launcherProcess = spawn(process.execPath, [driverPath], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    const out: Buffer[] = [];
+    let err = '';
+    launcherProcess.stdout.on('data', (chunk: Buffer) => out.push(chunk));
+    launcherProcess.stderr.on('data', (chunk: Buffer) => {
+      err += chunk.toString();
+      if (err.includes('touched\n') && launcherProcess.stdin.writable) {
+        launcherProcess.stdin.end('go\n');
+      }
+    });
+    const code = await new Promise<number | null>((resolve) => {
+      launcherProcess.on('close', resolve);
+    });
 
-      const output = Buffer.concat(out).toString('latin1');
-      const newline = output.indexOf('\n');
-      expect(err).not.toContain('EAGAIN');
-      expect(output.slice(0, newline)).toBe('nonblock=clear');
-      const payload = output.slice(newline + 1);
-      expect(payload.length).toBe(PAYLOAD_BYTES);
-      expect(/^x*$/.test(payload)).toBe(true);
-      expect(code).toBe(0);
-    },
-    30_000,
-  );
+    const output = Buffer.concat(out).toString('latin1');
+    const newline = output.indexOf('\n');
+    expect(err).not.toContain('EAGAIN');
+    expect(output.slice(0, newline)).toBe('nonblock=clear');
+    const payload = output.slice(newline + 1);
+    expect(payload.length).toBe(PAYLOAD_BYTES);
+    expect(/^x*$/.test(payload)).toBe(true);
+    expect(code).toBe(0);
+  }, 30_000);
 });

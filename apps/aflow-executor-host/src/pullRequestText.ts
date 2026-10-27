@@ -83,6 +83,15 @@ const CHANGES_CUT_NOTE =
 /** The least of the account of the commits a body keeps: its heading, and the note saying it stops. */
 const CHANGES_LEAST = `## What changes${CHANGES_CUT_NOTE}`;
 
+/**
+ * The most of a person's summary, and of the account of the commits, a body
+ * keeps before the findings are listed: each is kept whole up to this, so no
+ * length of findings cuts either to its heading, and either grows past it
+ * into whatever room the findings leave.
+ */
+export const SUMMARY_KEPT_BESIDE_FINDINGS = 4_000;
+export const CHANGES_KEPT_BESIDE_FINDINGS = 8_000;
+
 /** What closes a person's summary where the rest of the body leaves it too little room. */
 const SUMMARY_CUT_NOTE =
   "\n\nThe summary stops here, at the room GitHub's limit leaves it beside the rest of the description.";
@@ -308,11 +317,12 @@ function gapsSection(gaps: readonly string[] | undefined): string {
  * body is always composed, and a summary a person gave heads it, never
  * replaces it: what the publication records — the decision on the findings,
  * an override, the checks, the gaps, the findings it leaves open — is under
- * it whatever they wrote. The findings come last and are listed only as far
- * as the room the rest leaves them, the remainder counted; where the body
- * would still pass GitHub's limit, the account of the commits gives way
- * first, then the summary: the rest is what a reader acts on, and the
- * commits are on the branch whole.
+ * it whatever they wrote. The findings come last and are listed in their
+ * order only as far as the room the rest leaves them — the summary and the
+ * account of the commits each kept readable beside them — the remainder
+ * counted; where the body would still pass GitHub's limit, the account of the
+ * commits gives way first, then the summary: the rest is what a reader acts
+ * on, and the commits are on the branch whole.
  */
 export function composePullRequest(
   input: HostCommitDescribeInput,
@@ -325,24 +335,33 @@ export function composePullRequest(
     verificationSection(input),
     gapsSection(input.gaps),
   ].join(SECTION_BREAK);
-  // The least a summary keeps: itself where shorter than the note cutting it, else the note.
-  const summaryLeast =
+  const account = changesSection(commits);
+  // What the findings leave the summary and the account at the least: each
+  // whole up to what it keeps beside them, and never less than its cut note.
+  const summaryKept =
     input.summary === undefined
       ? 0
-      : Math.min(input.summary.length, SUMMARY_CUT_NOTE.length) + SECTION_BREAK.length;
+      : Math.min(
+          input.summary.length,
+          Math.max(SUMMARY_KEPT_BESIDE_FINDINGS, SUMMARY_CUT_NOTE.length),
+        ) + SECTION_BREAK.length;
+  const changesKept = Math.max(
+    Math.min(account.length, CHANGES_KEPT_BESIDE_FINDINGS),
+    CHANGES_LEAST.length,
+  );
   const findings = findingsSection(
     input,
     record,
-    BODY_ROOM - recorded.length - 2 * SECTION_BREAK.length - CHANGES_LEAST.length - summaryLeast,
+    BODY_ROOM - recorded.length - 2 * SECTION_BREAK.length - changesKept - summaryKept,
   );
   const rest = findings === '' ? recorded : `${recorded}${SECTION_BREAK}${findings}`;
-  const summaryRoom = BODY_ROOM - rest.length - 2 * SECTION_BREAK.length - CHANGES_LEAST.length;
+  const summaryRoom = BODY_ROOM - rest.length - 2 * SECTION_BREAK.length - changesKept;
   const head =
     input.summary === undefined
       ? ''
       : `${fit(input.summary, summaryRoom, SUMMARY_CUT_NOTE)}${SECTION_BREAK}`;
   const changes = fit(
-    changesSection(commits),
+    account,
     BODY_ROOM - head.length - rest.length - SECTION_BREAK.length,
     CHANGES_CUT_NOTE,
   );
