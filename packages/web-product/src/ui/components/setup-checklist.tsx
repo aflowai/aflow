@@ -3,6 +3,8 @@
 import type { ReactNode } from 'react';
 import { Badge, Button, Card, CardBody, Column, Icon, Row, Text } from '@aflow/design-system';
 import {
+  HOST_LANE_FOLDER_REFUSAL,
+  HOST_LANE_HARNESS_REFUSAL,
   HOST_LANE_PAIRING_REFUSAL,
   type PostInstallTask,
   type PostInstallTaskState,
@@ -21,7 +23,7 @@ type IntegrationTask = Extract<
 type StatefulTask = Extract<PostInstallTask, { state: PostInstallTaskState }>;
 
 /** The ones that need a paired machine, so only the local edition can change them. */
-type HostLaneTask = Extract<
+export type HostLaneTask = Extract<
   StatefulTask,
   { kind: 'pair_machine' | 'coding_harness' | 'folder_preview' }
 >;
@@ -83,12 +85,15 @@ export function SetupChecklist({
   spaceSlug,
   spaceId,
   onNavigate,
+  onChanged,
 }: {
   tasks: PostInstallTask[];
   spaceSlug: string;
   /** The space the checklist reads; arming the shepherd schedule needs it. */
   spaceId?: string;
   onNavigate: (path: string) => void;
+  /** A row changed the space — the schedule was armed — so a list read before it is stale. */
+  onChanged?: () => void;
 }) {
   if (tasks.length === 0) return null;
   return (
@@ -129,6 +134,7 @@ export function SetupChecklist({
                       schedule={task.schedule}
                       spaceId={spaceId}
                       recreate={task.state === 'broken'}
+                      {...(onChanged !== undefined ? { onArmed: onChanged } : {})}
                     />
                   )}
                   <OpenPageButton task={task} spaceSlug={spaceSlug} onNavigate={onNavigate} />
@@ -230,17 +236,24 @@ function ConnectProviderRow({
 }
 
 /**
- * What the row says under its title, which is a different sentence per edition.
+ * What the row says under its title, which is a different sentence per edition:
+ * where no machine can be paired, the item's own refusal — pairing, connecting
+ * a folder, or preferring a coding agent.
  *
  * `null` is the edition nobody has answered for yet, and neither branch is true
  * of it: the hosted line is a claim and the local description promises a button
  * this row withholds until the answer arrives. So it says what it is waiting
  * for — a row with a title and nothing under it reads as a defect.
  */
-export function pairMachineLine(editionId: Edition['id'], description: string): string {
+export function hostLaneLine(editionId: Edition['id'], task: HostLaneTask): string {
   if (editionId === null) return 'Checking which edition this is…';
-  if (editionId === 'enterprise') return HOST_LANE_PAIRING_REFUSAL;
-  return description;
+  if (editionId === 'enterprise') {
+    if (task.kind === 'coding_harness') return HOST_LANE_HARNESS_REFUSAL;
+    return task.kind === 'pair_machine' && task.reading === 'machine'
+      ? HOST_LANE_PAIRING_REFUSAL
+      : HOST_LANE_FOLDER_REFUSAL;
+  }
+  return task.description;
 }
 
 /** One readiness item: its title, its state, what it reads and what changes it. */
@@ -346,10 +359,12 @@ function ArmScheduleButton({
   schedule,
   spaceId,
   recreate,
+  onArmed,
 }: {
   schedule: ShepherdScheduleInput;
   spaceId: string;
   recreate: boolean;
+  onArmed?: () => void;
 }) {
   const arm = useApiMutation<ShepherdScheduleInput>({
     path: '/schedules',
@@ -366,12 +381,25 @@ function ArmScheduleButton({
         ...(input.maxFirings !== null ? { maxFirings: input.maxFirings } : {}),
       }),
     invalidate: [['space', spaceId]],
+    onSuccess: () => {
+      onArmed?.();
+    },
   });
+  // Once armed, the button stays spent until the list reads the schedule:
+  // another press would create a second schedule beside the first.
+  if (arm.isSuccess) {
+    return (
+      <Button variant="secondary" size="sm" disabled>
+        Schedule armed
+      </Button>
+    );
+  }
   return (
     <Button
       variant="primary"
       size="sm"
       loading={arm.isPending}
+      disabled={arm.isPending}
       onClick={() => {
         arm.mutate(schedule);
       }}
@@ -400,7 +428,7 @@ function HostLaneRow({
   return (
     <ReadinessCard
       task={task}
-      line={pairMachineLine(edition.id, task.description)}
+      line={hostLaneLine(edition.id, task)}
       actions={
         edition.id === 'community-local' && (
           <Button

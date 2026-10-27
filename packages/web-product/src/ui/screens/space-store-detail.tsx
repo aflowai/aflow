@@ -21,6 +21,7 @@ import {
 import type {
   ConnectorCatalogEntry,
   McpConnectorCatalogEntry,
+  PostInstallTask,
   SkillBundle,
   StoreInstallPreviewResponse,
   StoreInstallResponse,
@@ -734,6 +735,7 @@ function StoreListingPageInner() {
           {flow.phase === 'done' && (
             <InstallSuccessView
               response={flow.response}
+              liveTasks={detail.readiness?.tasks}
               spaceId={spaceId}
               spaceSlug={spaceSlug}
               openPath={openPath}
@@ -1178,18 +1180,25 @@ function StoreListingPageInner() {
 
 function InstallSuccessView({
   response,
+  liveTasks,
   spaceId,
   spaceSlug,
   openPath,
   onNavigate,
 }: {
   response: StoreInstallResponse;
+  /** The listing's readiness as it reads now, shown once a row has changed the space. */
+  liveTasks: PostInstallTask[] | undefined;
   spaceId: string;
   spaceSlug: string;
   openPath: string;
   onNavigate: (path: string) => void;
 }) {
-  const { result, setupChecklist } = response;
+  const { result } = response;
+  // The install's answer is a snapshot; once a row changes the space (arming
+  // the shepherd schedule), the listing's live readiness replaces it.
+  const [changed, setChanged] = useState(false);
+  const setupChecklist = changed && liveTasks ? liveTasks : response.setupChecklist;
   const needsAccountConnect =
     result.kind === 'connector' && result.status === 'needs_oauth_consent';
   const consentPath = result.kind === 'connector' ? result.consentPath : undefined;
@@ -1242,6 +1251,9 @@ function InstallSuccessView({
                 spaceSlug={spaceSlug}
                 spaceId={spaceId}
                 onNavigate={onNavigate}
+                onChanged={() => {
+                  setChanged(true);
+                }}
               />
             </Column>
           )}

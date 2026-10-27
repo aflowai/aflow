@@ -23,10 +23,10 @@ import { deriveRequiredCapabilities } from './skillComposeApply.js';
 import { foldMissingCapabilitiesForAbsentCodeLane } from '@aflow/schemas';
 import { loadAvailableCapabilities } from '../skillProjectionReconciler.js';
 import {
-  READINESS_READINGS,
+  CODING_LOOP_READINGS,
   readReadinessFacts,
   readinessTasks,
-  type GithubCredentialProbe,
+  type GithubAnswers,
   type ReadinessReading,
 } from '../store/readinessReaders.js';
 
@@ -47,8 +47,12 @@ export function readingsForItems(
   const readings = new Set<ReadinessReading>();
   for (const item of items) {
     if (item.answeredBy === 'pair_machine') {
+      // An item naming the folder reading asks for the folder the loop
+      // publishes from; one naming neither asks for the host lane's grant as
+      // a skill that only reads and runs there needs it — any connected folder.
       if (item.reading !== 'folder') readings.add('machine');
-      if (item.reading !== 'machine') readings.add('folder');
+      if (item.reading === 'folder') readings.add('publishing_folder');
+      if (item.reading === undefined) readings.add('folder');
     } else if (
       item.answeredBy === 'github_credential' ||
       item.answeredBy === 'coding_harness' ||
@@ -76,8 +80,8 @@ export function readingsForItems(
  *
  * `readiness` is a space template's items: each reading they ask for is
  * listed in the state it reads, beside the bundle's own tasks. The coding
- * loop's bundle asks for every reading itself, and an unmet host lane asks for
- * both `pair_machine` readings.
+ * loop's bundle asks for its five readings itself, and an unmet host lane asks
+ * for the machine and a connected folder.
  */
 export async function generatePostInstallManifest(opts: {
   redis?: Redis | null | undefined;
@@ -90,14 +94,15 @@ export async function generatePostInstallManifest(opts: {
   repo?: MemoryDocRepository;
   readiness?: readonly SpaceTemplateReadinessItem[] | undefined;
   lanes?: Pick<ComposedLanes, 'hostLane'> | undefined;
-  githubProbe?: GithubCredentialProbe | undefined;
+  /** GitHub's answers, asked before the transaction (`askGithubForSpace`). */
+  githubAnswers?: GithubAnswers | undefined;
 }): Promise<PostInstallTask[]> {
   const api = await generateFillCredentialsEntries(opts);
   const mcp = await generateMcpEntries(opts);
   const capability = await generateUnmetCapabilityEntries(opts);
   const readings = readingsForItems(opts.readiness ?? []);
   if (opts.bundle.bundleId === CODING_LOOP_BUNDLE_ID) {
-    for (const reading of READINESS_READINGS) readings.add(reading);
+    for (const reading of CODING_LOOP_READINGS) readings.add(reading);
   }
   if (capability.hostUnmet) {
     readings.add('machine');
@@ -110,7 +115,7 @@ export async function generatePostInstallManifest(opts: {
           await readReadinessFacts(opts.tx, opts.spaceId, readings, {
             redis: opts.redis,
             hostLane: (opts.lanes ?? processEditionDescriptor()).hostLane,
-            githubProbe: opts.githubProbe,
+            githubAnswers: opts.githubAnswers,
           }),
           readings,
         );

@@ -12,7 +12,7 @@ import { createHash } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { Redis } from 'ioredis';
-import { decryptCredentialAsync } from '@aflow/database';
+import { createTenantContext, decryptCredentialAsync, withTenantSchema } from '@aflow/database';
 import { readLiveHostInventories, type HostInventory } from '@aflow/redis';
 import {
   CODING_HARNESS_OPTIONS,
@@ -26,16 +26,38 @@ import {
   type HostMergePosture,
   type PostInstallTask,
   type ShepherdScheduleInput,
+  type TenantId,
 } from '@aflow/schemas';
 
-/** One stateful reading: a `pair_machine` reading, or one of the other readiness kinds. */
+/**
+ * One stateful reading: a `pair_machine` reading, or one of the other readiness
+ * kinds. The host lane's folder is read two ways: `folder` asks only that one
+ * is connected, which is all a skill that reads and runs there needs, and
+ * `publishing_folder` asks for the folder the coding loop publishes from — one
+ * that pushes under a branch prefix, with a merge posture.
+ */
 export type ReadinessReading =
-  'machine' | 'folder' | 'github_credential' | 'coding_harness' | 'shepherd_schedule';
+  | 'machine'
+  | 'folder'
+  | 'publishing_folder'
+  | 'github_credential'
+  | 'coding_harness'
+  | 'shepherd_schedule';
 
 /** The order the readings are listed in, which is the order the operator meets them. */
 export const READINESS_READINGS: readonly ReadinessReading[] = [
   'machine',
   'folder',
+  'publishing_folder',
+  'github_credential',
+  'coding_harness',
+  'shepherd_schedule',
+];
+
+/** The coding loop's readings: Coding with GitHub's five items. */
+export const CODING_LOOP_READINGS: readonly ReadinessReading[] = [
+  'machine',
+  'publishing_folder',
   'github_credential',
   'coding_harness',
   'shepherd_schedule',
@@ -78,6 +100,7 @@ export type GithubCredentialProbe = (token: string) => Promise<GithubCredentialA
 const GITHUB_PROBE_URL = 'https://api.github.com/rate_limit';
 const GITHUB_PROBE_TIMEOUT_MS = 10_000;
 const GITHUB_ANSWER_TTL_SECONDS = 300;
+const GITHUB_UNREACHABLE_TTL_SECONDS = 60;
 
 export const askGithubAboutCredential: GithubCredentialProbe = async (token) => {
   let response: Response;
@@ -117,28 +140,98 @@ export const askGithubAboutCredential: GithubCredentialProbe = async (token) => 
   };
 };
 
+/** GitHub's answers, by the fingerprint of the stored credential they were given for. */
+export type GithubAnswers = ReadonlyMap<string, GithubCredentialAnswer>;
+
 /**
- * GitHub's answer, kept a few minutes under a hash of the token so every
- * surface reading the checklist does not ask again, and a new token is asked
- * about at once. An unreachable GitHub is not kept.
+ * A stored credential's fingerprint: a hash of its sealed value, which changes
+ * whenever the credential does, so an answer is never read for another one.
  */
-async function githubAnswer(
-  token: string,
-  probe: GithubCredentialProbe,
+export function githubCredentialFingerprint(sealed: string): string {
+  return createHash('sha256').update(sealed).digest('hex');
+}
+
+function githubAnswerKey(fingerprint: string): string {
+  return `aflow:readiness:github-answer:${fingerprint}`;
+}
+
+/** What the readers find kept for a credential — read inside a transaction, never asked. */
+async function keptGithubAnswer(
+  fingerprint: string,
   redis: Redis | null | undefined,
+): Promise<GithubCredentialAnswer | null> {
+  if (!redis) return null;
+  const kept = await redis.get(githubAnswerKey(fingerprint)).catch(() => null);
+  return kept ? (JSON.parse(kept) as GithubCredentialAnswer) : null;
+}
+
+/**
+ * GitHub's answer for one stored credential, asked only where nothing is kept
+ * and then kept, a failure as well as an answer, so a refused or unreachable
+ * credential is not asked about again on every read. An unreachable GitHub is
+ * kept for less time than an answer.
+ */
+export async function askGithubOnce(
+  sealed: string,
+  opts: {
+    redis?: Redis | null | undefined;
+    probe?: GithubCredentialProbe | undefined;
+    open?: (sealed: string) => Promise<string>;
+  },
 ): Promise<GithubCredentialAnswer> {
-  const key = `aflow:readiness:github-answer:${createHash('sha256').update(token).digest('hex')}`;
-  if (redis) {
-    const kept = await redis.get(key).catch(() => null);
-    if (kept) return JSON.parse(kept) as GithubCredentialAnswer;
+  const fingerprint = githubCredentialFingerprint(sealed);
+  const kept = await keptGithubAnswer(fingerprint, opts.redis);
+  if (kept) return kept;
+  let answer: GithubCredentialAnswer;
+  try {
+    const token = await (opts.open ?? decryptCredentialAsync)(sealed);
+    answer = await (opts.probe ?? askGithubAboutCredential)(token);
+  } catch (err) {
+    answer = {
+      kind: 'unreachable',
+      message: `the stored credential could not be read (${err instanceof Error ? err.message : String(err)})`,
+    };
   }
-  const answer = await probe(token);
-  if (redis && answer.kind !== 'unreachable') {
-    await redis
-      .set(key, JSON.stringify(answer), 'EX', GITHUB_ANSWER_TTL_SECONDS)
+  if (opts.redis) {
+    const ttl =
+      answer.kind === 'unreachable' ? GITHUB_UNREACHABLE_TTL_SECONDS : GITHUB_ANSWER_TTL_SECONDS;
+    await opts.redis
+      .set(githubAnswerKey(fingerprint), JSON.stringify(answer), 'EX', ttl)
       .catch(() => undefined);
   }
   return answer;
+}
+
+/**
+ * Asks GitHub about the space's github credential before a readiness read,
+ * outside any transaction: the credential is read in a short one of its own,
+ * which has closed before the request leaves. The answers go to the readers
+ * as `githubAnswers`.
+ */
+export async function askGithubForSpace(
+  db: PostgresJsDatabase,
+  tenantId: string,
+  spaceId: string,
+  opts: { redis?: Redis | null | undefined; probe?: GithubCredentialProbe | undefined },
+): Promise<GithubAnswers> {
+  const sealed = await withTenantSchema(
+    db,
+    createTenantContext(tenantId as TenantId),
+    async (tx) => {
+      const rows = await tx.execute<{ encrypted: string }>(sql`
+      SELECT c.encrypted_value AS encrypted
+        FROM api_bindings b JOIN api_credentials c
+          ON c.space_id = b.space_id AND c.credential_key = b.auth_json->>'credentialKey'
+        WHERE b.space_id = ${spaceId}::uuid AND b.api_id = 'github' AND b.enabled = 1
+    `);
+      return rows.map((row) => row.encrypted);
+    },
+  );
+  const answers = new Map<string, GithubCredentialAnswer>();
+  for (const value of new Set(sealed)) {
+    answers.set(githubCredentialFingerprint(value), await askGithubOnce(value, opts));
+  }
+  return answers;
 }
 
 // ============================================================================
@@ -187,8 +280,12 @@ export interface ReadinessFacts {
 export interface ReadinessReadOptions {
   redis?: Redis | null | undefined;
   hostLane: 'present' | 'absent';
-  /** Asks GitHub about the github binding's credential; defaults to a live request. */
-  githubProbe?: GithubCredentialProbe | undefined;
+  /**
+   * GitHub's answers asked before the transaction (`askGithubForSpace`). The
+   * readers never ask GitHub themselves: they run inside the caller's
+   * transaction, and read only these and what Redis keeps.
+   */
+  githubAnswers?: GithubAnswers | undefined;
   now?: number;
 }
 
@@ -247,15 +344,9 @@ export async function readReadinessFacts(
   const encrypted = github?.encrypted ?? null;
   let answer: GithubCredentialAnswer | null = null;
   if (readings.has('github_credential') && github?.enabled && encrypted !== null) {
-    try {
-      const token = await decryptCredentialAsync(encrypted);
-      answer = await githubAnswer(token, opts.githubProbe ?? askGithubAboutCredential, opts.redis);
-    } catch (err) {
-      answer = {
-        kind: 'unreachable',
-        message: `the stored credential could not be read (${err instanceof Error ? err.message : String(err)})`,
-      };
-    }
+    const fingerprint = githubCredentialFingerprint(encrypted);
+    answer =
+      opts.githubAnswers?.get(fingerprint) ?? (await keptGithubAnswer(fingerprint, opts.redis));
   }
   return {
     spaceId,
@@ -325,26 +416,37 @@ function offeredFolders(facts: ReadinessFacts): Map<string, HostMergePosture> {
 }
 
 /**
- * Item 2: the folder reading of the same grant — the connected folder, whether
- * it pushes, under which prefix and merge posture, and, where the shepherd is
- * part of the space's loop, whether its agent was written before the folder
- * was connected (§7 F4).
+ * Item 2: the folder reading of the same grant. Where the folder is the one the
+ * loop publishes from (`pushes`), it reads whether it pushes, under which
+ * prefix and merge posture, and, where the shepherd is part of the space's
+ * loop, whether its agent was written before the folder was connected (§7 F4).
+ * Otherwise a connected folder is enough: a skill that only reads and runs
+ * there needs no push.
  */
 export function readFolder(
   facts: ReadinessFacts,
-  opts: { shepherd: boolean },
+  opts: { pushes: boolean; shepherd: boolean },
 ): Task<'pair_machine'> {
   const base = {
     kind: 'pair_machine',
     reading: 'folder',
     page: '/computer',
-    command: HOST_FOLDER_CONNECT_COMMAND,
+    ...(opts.pushes ? { command: HOST_FOLDER_CONNECT_COMMAND } : {}),
     required: true,
   } as const;
   if (facts.hostLane !== 'present') {
     return { ...base, state: 'broken', description: HOST_LANE_FOLDER_REFUSAL };
   }
   const [first] = facts.folders;
+  if (first === undefined && !opts.pushes) {
+    return {
+      ...base,
+      state: 'needs_setup',
+      description:
+        'Connect the folder these skills work in from the machine that holds it, under This ' +
+        'Computer → Get a code.',
+    };
+  }
   if (first === undefined) {
     return {
       ...base,
@@ -366,6 +468,14 @@ export function readFolder(
     branchPrefix: chosen.branchPrefix,
     mergePosture: offered.get(chosen.id) ?? null,
   };
+  if (!opts.pushes) {
+    return {
+      ...base,
+      folder,
+      state: 'done',
+      description: `${chosen.label} is connected.`,
+    };
+  }
   if (!folder.allowsPush) {
     return {
       ...base,
@@ -449,7 +559,7 @@ export function readGithubCredential(facts: ReadinessFacts): Task<'github_creden
       description: 'Enable the github connection under Integrations.',
     };
   }
-  if (!github.credentialPresent || github.answer === null) {
+  if (!github.credentialPresent) {
     return {
       ...base,
       state: 'needs_setup',
@@ -457,6 +567,15 @@ export function readGithubCredential(facts: ReadinessFacts): Task<'github_creden
     };
   }
   const answer = github.answer;
+  if (answer === null) {
+    return {
+      ...base,
+      state: 'needs_setup',
+      description:
+        'GitHub has not been asked about this credential yet. Check setup again, or open the ' +
+        'Coding Loop listing, to ask it.',
+    };
+  }
   if (answer.kind === 'refused') {
     return {
       ...base,
@@ -659,11 +778,17 @@ export function readinessTasks(
   readings: ReadonlySet<ReadinessReading>,
 ): PostInstallTask[] {
   const shepherd = readings.has('shepherd_schedule');
+  const publishing = readings.has('publishing_folder');
   const tasks: PostInstallTask[] = [];
   for (const reading of READINESS_READINGS) {
     if (!readings.has(reading)) continue;
+    // The publishing folder is a connected folder too, so it answers for both.
+    if (reading === 'folder' && publishing) continue;
     if (reading === 'machine') tasks.push(readMachine(facts));
-    else if (reading === 'folder') tasks.push(readFolder(facts, { shepherd }));
+    else if (reading === 'folder')
+      tasks.push(readFolder(facts, { pushes: false, shepherd: false }));
+    else if (reading === 'publishing_folder')
+      tasks.push(readFolder(facts, { pushes: true, shepherd }));
     else if (reading === 'github_credential') tasks.push(readGithubCredential(facts));
     else if (reading === 'coding_harness') tasks.push(readCodingHarness(facts));
     else tasks.push(readShepherdSchedule(facts));

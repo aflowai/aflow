@@ -7,10 +7,10 @@ import { sql } from 'drizzle-orm';
 import { createDatabase } from '@aflow/database';
 import type { Redis } from 'ioredis';
 import {
-  READINESS_READINGS,
+  CODING_LOOP_READINGS,
   readReadinessFacts,
   readinessTasks,
-  type GithubCredentialProbe,
+  githubCredentialFingerprint,
 } from './readinessReaders.js';
 
 vi.mock('@aflow/redis', () => ({
@@ -31,18 +31,16 @@ vi.mock('@aflow/redis', () => ({
   ]),
 }));
 
-vi.mock('@aflow/database', async (importOriginal) => ({
-  ...(await importOriginal<Record<string, unknown>>()),
-  decryptCredentialAsync: async () => 'ghp_token',
-}));
-
 const databaseUrl = process.env['DATABASE_URL'];
 const space = '00000000-0000-4000-8000-000000000001';
 const agent = '00000000-0000-4000-8000-0000000000a1';
 /** The template the shepherd's schedule renews from: its own id under the agent's config. */
 const RENEWAL_TEMPLATE = '{"input":"tend","config":{"scheduleId":{"$schedule":"id"}}}';
-const githubProbe: GithubCredentialProbe = async () => ({ kind: 'accepted', scopes: ['repo'] });
-const ALL = new Set(READINESS_READINGS);
+/** GitHub's answer for the sealed credential below, asked before the transaction. */
+const githubAnswers = new Map([
+  [githubCredentialFingerprint('sealed'), { kind: 'accepted' as const, scopes: ['repo'] }],
+]);
+const ALL = new Set(CODING_LOOP_READINGS);
 
 describe.skipIf(!databaseUrl)('readiness facts in the database', () => {
   const handle = createDatabase({ connectionString: databaseUrl ?? '' });
@@ -79,7 +77,7 @@ describe.skipIf(!databaseUrl)('readiness facts in the database', () => {
           await readReadinessFacts(tx, space, ALL, {
             redis: {} as Redis,
             hostLane: 'present',
-            githubProbe,
+            githubAnswers,
           }),
           ALL,
         );

@@ -13,7 +13,21 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
-import { pairMachineLine } from './setup-checklist.js';
+import {
+  HOST_LANE_FOLDER_REFUSAL,
+  HOST_LANE_HARNESS_REFUSAL,
+  HOST_LANE_PAIRING_REFUSAL,
+} from '@aflow/schemas';
+import { hostLaneLine, type HostLaneTask } from './setup-checklist.js';
+
+const MACHINE: HostLaneTask = {
+  kind: 'pair_machine',
+  reading: 'machine',
+  state: 'needs_setup',
+  page: '/computer',
+  description: 'Pair a machine to run this skill.',
+  required: true,
+};
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SRC = readFileSync(resolve(__dirname, 'setup-checklist.tsx'), 'utf8');
@@ -50,15 +64,31 @@ describe('host lane rows — setup checklist', () => {
   });
 
   it('tells a hosted operator what is missing instead of offering the link', () => {
-    const line = pairMachineLine('enterprise', 'Pair a machine to run this skill.');
+    const line = hostLaneLine('enterprise', MACHINE);
+    expect(line).toBe(HOST_LANE_PAIRING_REFUSAL);
     expect(line).toContain('Aflow Local');
     expect(line).not.toContain('Pair a machine to run this skill.');
   });
 
-  it('carries the description the task itself carries on the local edition', () => {
-    expect(pairMachineLine('community-local', 'Pair a machine to run this skill.')).toBe(
-      'Pair a machine to run this skill.',
+  it('gives each host-lane item its own edition refusal', () => {
+    expect(hostLaneLine('enterprise', { ...MACHINE, reading: 'folder' })).toBe(
+      HOST_LANE_FOLDER_REFUSAL,
     );
+    expect(
+      hostLaneLine('enterprise', {
+        kind: 'coding_harness',
+        state: 'broken',
+        page: '/computer',
+        chosen: null,
+        options: [],
+        description: 'Choose the coding agent.',
+        required: true,
+      }),
+    ).toBe(HOST_LANE_HARNESS_REFUSAL);
+  });
+
+  it('carries the description the task itself carries on the local edition', () => {
+    expect(hostLaneLine('community-local', MACHINE)).toBe('Pair a machine to run this skill.');
   });
 
   /**
@@ -66,9 +96,7 @@ describe('host lane rows — setup checklist', () => {
    * the edition was unresolved — a promise of a control that was not there.
    */
   it('says it is still establishing the edition rather than standing empty', () => {
-    expect(pairMachineLine(null, 'Pair a machine to run this skill.')).toBe(
-      'Checking which edition this is…',
-    );
+    expect(hostLaneLine(null, MACHINE)).toBe('Checking which edition this is…');
   });
 
   it('withholds the button until the edition is known', () => {

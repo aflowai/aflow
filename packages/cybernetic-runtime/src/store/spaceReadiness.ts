@@ -22,7 +22,7 @@ import {
   type SpaceTemplateReadinessItem,
 } from '@aflow/schemas';
 import { generatePostInstallManifest } from '../stagedChange/bundleInstallManifest.js';
-import type { GithubCredentialProbe } from './readinessReaders.js';
+import type { GithubAnswers } from './readinessReaders.js';
 import { listStoreInstalls } from './storeInstallProvenance.js';
 
 export interface ReadinessContext {
@@ -30,7 +30,8 @@ export interface ReadinessContext {
   spaceId: string;
   redis?: Redis | null | undefined;
   lanes?: Pick<ComposedLanes, 'hostLane'> | undefined;
-  githubProbe?: GithubCredentialProbe | undefined;
+  /** GitHub's answers, asked before the caller's transaction (`askGithubForSpace`). */
+  githubAnswers?: GithubAnswers | undefined;
 }
 
 export interface SpaceReadiness {

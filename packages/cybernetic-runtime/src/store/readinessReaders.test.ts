@@ -5,15 +5,17 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HOST_LANE_PAIRING_REFUSAL, PostInstallTaskSchema } from '@aflow/schemas';
+import { readingsForItems } from '../stagedChange/bundleInstallManifest.js';
 import {
   askGithubAboutCredential,
+  askGithubOnce,
   readCodingHarness,
   readFolder,
   readGithubCredential,
   readMachine,
   readShepherdSchedule,
   readinessTasks,
-  READINESS_READINGS,
+  CODING_LOOP_READINGS,
   type ReadinessFacts,
   type ReadinessSchedule,
 } from './readinessReaders.js';
@@ -82,15 +84,20 @@ describe('item 1 — the machine reading', () => {
 
 describe('item 2 — the folder reading', () => {
   it('needs a folder, then one that pushes, then one a running machine offers', () => {
-    expect(readFolder(facts(), { shepherd: false }).state).toBe('needs_setup');
+    expect(readFolder(facts(), { pushes: true, shepherd: false }).state).toBe('needs_setup');
     expect(
-      readFolder(facts({ folders: [{ ...PUSHING, branchPrefix: null }] }), { shepherd: false }),
+      readFolder(facts({ folders: [{ ...PUSHING, branchPrefix: null }] }), {
+        pushes: true,
+        shepherd: false,
+      }),
     ).toMatchObject({
       state: 'needs_setup',
       folder: { allowsPush: false },
       description: expect.stringContaining('does not allow pushes'),
     });
-    expect(readFolder(facts({ folders: [PUSHING] }), { shepherd: false })).toMatchObject({
+    expect(
+      readFolder(facts({ folders: [PUSHING] }), { pushes: true, shepherd: false }),
+    ).toMatchObject({
       state: 'needs_setup',
       folder: { allowsPush: true, mergePosture: null },
     });
@@ -102,7 +109,7 @@ describe('item 2 — the folder reading', () => {
         folders: [PUSHING],
         inventories: [machine([{ id: 'app', mergePosture: 'when-green' }])],
       }),
-      { shepherd: false },
+      { pushes: true, shepherd: false },
     );
     expect(reading).toMatchObject({
       state: 'done',
@@ -116,7 +123,7 @@ describe('item 2 — the folder reading', () => {
       folders: [PUSHING],
       inventories: [machine([{ id: 'app' }])],
     };
-    expect(readFolder(facts(connected), { shepherd: true })).toMatchObject({
+    expect(readFolder(facts(connected), { pushes: true, shepherd: true })).toMatchObject({
       state: 'needs_setup',
       page: '/store/coding-loop',
       description: expect.stringContaining('Repair installation'),
@@ -127,7 +134,7 @@ describe('item 2 — the folder reading', () => {
           ...connected,
           shepherd: { id: SHEPHERD, archived: false, writtenAt: '2026-10-01T00:00:00Z' },
         }),
-        { shepherd: true },
+        { pushes: true, shepherd: true },
       ),
     ).toMatchObject({ state: 'needs_setup', shepherdBeforeFolder: true, page: '/agents' });
     expect(
@@ -136,9 +143,35 @@ describe('item 2 — the folder reading', () => {
           ...connected,
           shepherd: { id: SHEPHERD, archived: false, writtenAt: '2026-10-21T00:00:00Z' },
         }),
-        { shepherd: true },
+        { pushes: true, shepherd: true },
       ).state,
     ).toBe('done');
+  });
+});
+
+describe('a connected folder, for skills that only read and run there', () => {
+  it('is done with a read-only folder, and asks for no push', () => {
+    const readOnly = { ...PUSHING, allowsExecution: false, branchPrefix: null };
+    expect(readFolder(facts(), { pushes: false, shepherd: false })).toMatchObject({
+      state: 'needs_setup',
+    });
+    const reading = readFolder(facts({ folders: [readOnly] }), {
+      pushes: false,
+      shepherd: false,
+    });
+    expect(reading).toMatchObject({ state: 'done', folder: { allowsPush: false } });
+    expect(reading).not.toHaveProperty('command');
+    expect(reading.description).not.toContain('push');
+  });
+
+  it('is what an item naming no reading asks for; naming the folder asks for the publishing one', () => {
+    expect([...readingsForItems([{ answeredBy: 'pair_machine' }])]).toEqual(['machine', 'folder']);
+    expect([...readingsForItems([{ answeredBy: 'pair_machine', reading: 'folder' }])]).toEqual([
+      'publishing_folder',
+    ]);
+    const tasks = readinessTasks(facts(), new Set(['folder', 'publishing_folder'] as const));
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]).toMatchObject({ reading: 'folder', command: expect.any(String) });
   });
 });
 
@@ -158,6 +191,13 @@ describe('item 3 — the GitHub credential', () => {
         facts({ github: { enabled: true, credentialPresent: false, answer: null } }),
       ).state,
     ).toBe('needs_setup');
+  });
+
+  it('waits on GitHub’s answer where it was not asked before the read', () => {
+    expect(readGithubCredential(bound(null))).toMatchObject({
+      state: 'needs_setup',
+      description: expect.stringContaining('not been asked'),
+    });
   });
 
   it('is broken where GitHub refuses the credential', () => {
@@ -210,6 +250,35 @@ describe('asking GitHub about a credential', () => {
       kind: 'accepted',
       scopes: null,
     });
+  });
+
+  it('asks once per stored credential, keeping a refusal and an unreachable GitHub too', async () => {
+    const kept = new Map<string, { value: string; ttl: number }>();
+    const redis = {
+      get: async (key: string) => kept.get(key)?.value ?? null,
+      set: async (key: string, value: string, _ex: string, ttl: number) => {
+        kept.set(key, { value, ttl });
+        return 'OK';
+      },
+    } as never;
+    const probe = vi.fn(async () => ({
+      kind: 'refused' as const,
+      status: 401,
+      message: 'Bad credentials',
+    }));
+    const open = async (sealed: string) => `token-of-${sealed}`;
+    for (let read = 0; read < 3; read += 1) {
+      expect(await askGithubOnce('sealed-a', { redis, probe, open })).toMatchObject({
+        kind: 'refused',
+      });
+    }
+    expect(probe).toHaveBeenCalledTimes(1);
+    const unreachable = vi.fn(async () => ({ kind: 'unreachable' as const, message: 'timeout' }));
+    await askGithubOnce('sealed-b', { redis, probe: unreachable, open });
+    await askGithubOnce('sealed-b', { redis, probe: unreachable, open });
+    expect(unreachable).toHaveBeenCalledTimes(1);
+    const ttls = [...kept.values()].map((entry) => entry.ttl);
+    expect(ttls[1]).toBeLessThan(ttls[0] ?? 0);
   });
 
   it('reports a refusal in GitHub’s words', async () => {
@@ -317,7 +386,7 @@ describe('item 5 — the shepherd schedule', () => {
 });
 
 describe('every reading', () => {
-  const all = new Set(READINESS_READINGS);
+  const all = new Set(CODING_LOOP_READINGS);
   const variety: ReadinessFacts[] = [
     facts(),
     facts({ hostLane: 'absent' }),

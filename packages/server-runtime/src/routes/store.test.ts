@@ -108,6 +108,7 @@ const checkMissingCapabilities = vi.hoisted(() => vi.fn(async () => [] as string
 
 const loopReadiness = vi.hoisted(() => vi.fn());
 const helpReadiness = vi.hoisted(() => vi.fn());
+const askGithub = vi.hoisted(() => vi.fn(async () => new Map()));
 vi.mock('@aflow/cybernetic-runtime', async (importOriginal) => {
   const orig = (await importOriginal()) as Record<string, unknown>;
   return {
@@ -120,6 +121,7 @@ vi.mock('@aflow/cybernetic-runtime', async (importOriginal) => {
     checkMissingCapabilities,
     readListingReadiness: loopReadiness,
     readSpaceHelpReadiness: helpReadiness,
+    askGithubForSpace: askGithub,
   };
 });
 
@@ -511,6 +513,18 @@ describe('the edition’s composed lanes', () => {
       const response = await app.inject({ method: 'GET', url: '/v1/store/listings/coding-loop' });
       expect(response.statusCode).toBe(200);
       expect(response.json()).toMatchObject({ readiness: { status, tasks } });
+      // GitHub is asked before the readiness transaction, and its answers handed in.
+      expect(askGithub).toHaveBeenCalledWith(
+        expect.anything(),
+        'tenant-1',
+        expect.any(String),
+        expect.any(Object),
+      );
+      expect(loopReadiness).toHaveBeenLastCalledWith(
+        expect.anything(),
+        expect.objectContaining({ catalogId: 'coding-loop' }),
+        expect.objectContaining({ githubAnswers: expect.any(Map) }),
+      );
       await app.close();
     },
   );

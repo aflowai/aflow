@@ -513,6 +513,40 @@ function taskOf(tasks: readonly PostInstallTask[], kind: PostInstallTask['kind']
   return tasks.find((task) => task.kind === kind);
 }
 
+describe('Code Review on This Computer', () => {
+  it('reads done with a read-only folder on a running machine: review needs no push', async () => {
+    const template = getSpaceTemplate('local-review-quick-start');
+    const entry = getCatalogEntry('local-review-quick-start');
+    if (template === null || !entry) throw new Error('the quick start is not in the catalog');
+    const spaceId = freshSpaceId();
+    expect((await installTemplate(template, spaceId)).ok).toBe(true);
+    store.facts = {
+      folders: [
+        {
+          id: 'app',
+          label: 'app',
+          allowsExecution: false,
+          branchPrefix: null,
+          connectedAt: '2026-10-20T00:00:00Z',
+        },
+      ],
+    };
+    const readiness = await readListingReadiness(fakeTx as never, entry, {
+      tenantId: TENANT_ID,
+      spaceId,
+      redis: machineRedis([]),
+      lanes: LOCAL,
+    });
+    expect(readiness && 'readiness' in readiness ? readiness.readiness : null).toEqual([
+      expect.objectContaining({ key: 'pair-machine', state: 'done' }),
+    ]);
+    expect(readiness?.tasks.map((task) => ('command' in task ? task.command : null))).toEqual([
+      null,
+      null,
+    ]);
+  });
+});
+
 describe('Coding with GitHub', () => {
   it('brings the coding-loop entry, its directives and its help, with five items needing setup and no preview', async () => {
     const template = codingWithGithub();
