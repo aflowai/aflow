@@ -639,6 +639,24 @@ const ReadinessActionShape = {
 };
 
 /**
+ * Room for a readiness task's description: prose an operator reads, the item's
+ * own wording around a schedule's error or GitHub's refusal. The cap is a
+ * storage ceiling set generously, never a style limit — a description past it
+ * fails the response on every surface.
+ */
+export const READINESS_DESCRIPTION_MAX = 8000;
+
+/**
+ * The most of an unbounded outside body — a schedule's last error, GitHub's
+ * answer, a request or decryption failure — a description embeds, so the
+ * description stays under its ceiling however long that body is.
+ */
+export const READINESS_EXTERNAL_TEXT_MAX = 2000;
+
+/** Room for the folder reading's label and branch prefix, above what their writers accept. */
+export const READINESS_FOLDER_FIELD_MAX = 1000;
+
+/**
  * What a shepherd schedule is created from, and recreated from once it expires
  * (Plan 330 D3): the agent it starts, the cron, the operator's firings choice
  * and the input its renewal reads. `POST /v1/schedules` takes it as it stands.
@@ -739,15 +757,15 @@ export const PostInstallTaskSchema = z.discriminatedUnion('kind', [
     /** The folder reading's connected folder and the push policy in force on it. */
     folder: z
       .object({
-        label: z.string().min(1).max(200),
+        label: z.string().min(1).max(READINESS_FOLDER_FIELD_MAX),
         allowsPush: z.boolean(),
-        branchPrefix: z.string().max(200).nullable(),
+        branchPrefix: z.string().max(READINESS_FOLDER_FIELD_MAX).nullable(),
         mergePosture: HostMergePostureSchema.nullable(),
       })
       .optional(),
     /** The shepherd agent was written before this folder was connected, so it does not tend it (§7 F4). */
     shepherdBeforeFolder: z.boolean().optional(),
-    description: z.string().min(1).max(1000),
+    description: z.string().min(1).max(READINESS_DESCRIPTION_MAX),
     required: z.literal(true),
   }),
   z.object({
@@ -755,7 +773,7 @@ export const PostInstallTaskSchema = z.discriminatedUnion('kind', [
     ...ReadinessActionShape,
     /** The scopes GitHub's answer shows the credential lacks. */
     missingScopes: z.array(z.string().min(1).max(64)).default([]),
-    description: z.string().min(1).max(1000),
+    description: z.string().min(1).max(READINESS_DESCRIPTION_MAX),
     required: z.literal(true),
   }),
   z.object({
@@ -764,7 +782,7 @@ export const PostInstallTaskSchema = z.discriminatedUnion('kind', [
     chosen: z.string().min(1).max(64).nullable(),
     /** The harnesses offered, as the machine has them installed. */
     options: z.array(z.object({ id: z.string().min(1).max(64), label: z.string().max(200) })),
-    description: z.string().min(1).max(1000),
+    description: z.string().min(1).max(READINESS_DESCRIPTION_MAX),
     required: z.literal(true),
   }),
   z.object({
@@ -773,13 +791,13 @@ export const PostInstallTaskSchema = z.discriminatedUnion('kind', [
     firingsLeft: z.number().int().min(0).nullable().optional(),
     /** What creates the schedule on the operator's word, or recreates it once expired. */
     schedule: ShepherdScheduleInputSchema.optional(),
-    description: z.string().min(1).max(1000),
+    description: z.string().min(1).max(READINESS_DESCRIPTION_MAX),
     required: z.literal(true),
   }),
   z.object({
     kind: z.literal('folder_preview'),
     ...ReadinessActionShape,
-    description: z.string().min(1).max(1000),
+    description: z.string().min(1).max(READINESS_DESCRIPTION_MAX),
     required: z.literal(false),
   }),
   z.object({

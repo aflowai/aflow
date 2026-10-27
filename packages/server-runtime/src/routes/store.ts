@@ -94,12 +94,13 @@ const ReadinessSchema = z.object({
 });
 
 /**
- * Whether a listing's readiness reads the space's github credential, and so
- * asks GitHub about it first, outside the readiness transaction: the coding
- * loop's bundle, and a quick start, which installs it.
+ * Whether a listing read reads the space's github credential, and so asks
+ * GitHub about it first, outside the readiness transaction: the coding loop's
+ * bundle, and a quick start only in the space made from it — the one place its
+ * readiness is read.
  */
-function readinessAsksGithub(entry: CatalogEntry): boolean {
-  return entry.catalogId === 'coding-loop' || entry.kind === 'space';
+function readinessAsksGithub(entry: CatalogEntry, spaceMadeFromIt: boolean): boolean {
+  return entry.catalogId === 'coding-loop' || (entry.kind === 'space' && spaceMadeFromIt);
 }
 
 const InstallConflictBodySchema = z.union([
@@ -224,7 +225,7 @@ export const storeListingRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(404).send({ error: `Store listing '${catalogId}' not found` });
       }
       const redis = getRedis(fastify);
-      const githubAnswers = readinessAsksGithub(entry)
+      const githubAnswers = readinessAsksGithub(entry, install !== null)
         ? await askGithubForSpace(db, tenant.tenantId, space.spaceId, { redis })
         : undefined;
       const readiness = await withTenantSchema(db, createTenantContext(tenant.tenantId), (tx) =>
@@ -367,7 +368,8 @@ export const storeInstallRoutes: FastifyPluginAsync = async (fastify) => {
       }
 
       const redis = getRedis(fastify);
-      const githubAnswers = readinessAsksGithub(entry)
+      // A quick start is refused above: this preview installs into a space that exists.
+      const githubAnswers = readinessAsksGithub(entry, false)
         ? await askGithubForSpace(db, tenantId, spaceId, { redis })
         : undefined;
       const readiness = await withTenantSchema(db, tenantCtx, (tx) =>

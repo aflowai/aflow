@@ -4,7 +4,13 @@
  */
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { HOST_LANE_PAIRING_REFUSAL, PostInstallTaskSchema } from '@aflow/schemas';
+import {
+  HOST_LANE_PAIRING_REFUSAL,
+  PostInstallTaskSchema,
+  READINESS_DESCRIPTION_MAX,
+  READINESS_EXTERNAL_TEXT_MAX,
+  READINESS_FOLDER_FIELD_MAX,
+} from '@aflow/schemas';
 import { readingsForItems } from '../stagedChange/bundleInstallManifest.js';
 import {
   askGithubAboutCredential,
@@ -346,10 +352,32 @@ describe('item 5 — the shepherd schedule', () => {
       state: 'done',
       firingsLeft: 40,
     });
-    // A schedule whose input carries no renewal id is not the shepherd's (#204).
+    // A live schedule whose input carries no renewal id still counts: offering
+    // to arm another would start a second beside it.
+    const unrenewed = readShepherdSchedule(
+      facts({ shepherd, schedules: [{ ...active, renews: false }] }),
+    );
+    expect(unrenewed).toMatchObject({
+      state: 'done',
+      description: expect.stringContaining('without renewing itself'),
+    });
+    expect(unrenewed).not.toHaveProperty('schedule');
+  });
+
+  it('recreates an expired schedule that did not renew with the input that does', () => {
     expect(
-      readShepherdSchedule(facts({ shepherd, schedules: [{ ...active, renews: false }] })).state,
-    ).toBe('needs_setup');
+      readShepherdSchedule(
+        facts({
+          shepherd,
+          schedules: [
+            { ...active, renews: false, inputTemplate: { input: 'tend' }, status: 'expired' },
+          ],
+        }),
+      ),
+    ).toMatchObject({
+      state: 'broken',
+      schedule: { inputTemplate: { input: 'tend', config: { scheduleId: { $schedule: 'id' } } } },
+    });
   });
 
   it('is broken once expired, offering to recreate it from what it stored', () => {
@@ -382,6 +410,79 @@ describe('item 5 — the shepherd schedule', () => {
       state: 'needs_setup',
       page: '/agents',
     });
+  });
+});
+
+describe('an outside body in a description', () => {
+  const body = 'x'.repeat(20_000);
+  const shepherd = { id: SHEPHERD, archived: false, writtenAt: '2026-10-01T00:00:00Z' };
+  const bound = (answer: NonNullable<ReadinessFacts['github']>['answer']) =>
+    facts({ github: { enabled: true, credentialPresent: true, answer } });
+  const failing: ReadinessSchedule = {
+    status: 'active',
+    cronExpression: '*/5 * * * *',
+    maxFirings: 50,
+    firingCount: 1,
+    expiresAt: null,
+    inputTemplate: {},
+    renews: true,
+    failure: body,
+  };
+
+  it('caps a readiness description generously, as a storage ceiling', () => {
+    expect(READINESS_DESCRIPTION_MAX).toBeGreaterThanOrEqual(8000);
+    expect(READINESS_EXTERNAL_TEXT_MAX).toBeGreaterThanOrEqual(2000);
+    expect(READINESS_FOLDER_FIELD_MAX).toBeGreaterThanOrEqual(1000);
+    const long = 'd'.repeat(READINESS_DESCRIPTION_MAX);
+    expect(
+      PostInstallTaskSchema.safeParse({ ...readShepherdSchedule(facts()), description: long })
+        .success,
+    ).toBe(true);
+    expect(
+      PostInstallTaskSchema.safeParse({
+        ...readShepherdSchedule(facts()),
+        description: `${long}d`,
+      }).success,
+    ).toBe(false);
+  });
+
+  it('keeps a long reason whole up to its own bound, then says how much was left out', () => {
+    const reason = 'r'.repeat(1500);
+    expect(
+      readShepherdSchedule(facts({ shepherd, schedules: [{ ...failing, failure: reason }] }))
+        .description,
+    ).toContain(reason);
+    const tasks = [
+      readShepherdSchedule(facts({ shepherd, schedules: [failing] })),
+      readGithubCredential(bound({ kind: 'refused', status: 401, message: body })),
+      readGithubCredential(bound({ kind: 'unreachable', message: body })),
+      readGithubCredential(bound({ kind: 'accepted', scopes: [body] })),
+      readMachine(facts({ inventories: [{ ...machine(), hostname: body }] })),
+    ];
+    // The failing schedule and the refused credential still read broken, with their reason.
+    expect(tasks.slice(0, 2).map((task) => task.state)).toEqual(['broken', 'broken']);
+    for (const task of tasks) {
+      expect(task.description).toContain('x'.repeat(READINESS_EXTERNAL_TEXT_MAX));
+      expect(task.description).toContain(
+        `(${String(body.length - READINESS_EXTERNAL_TEXT_MAX)} more characters)`,
+      );
+      expect(task.description.length).toBeLessThanOrEqual(READINESS_DESCRIPTION_MAX);
+      expect(() => PostInstallTaskSchema.parse(task)).not.toThrow();
+    }
+  });
+
+  it('leaves a folder’s label and prefix whole: their writers bound them under the field’s room', () => {
+    const label = 'l'.repeat(120);
+    const prefix = `${'p'.repeat(99)}/`;
+    const reading = readFolder(
+      facts({
+        folders: [{ ...PUSHING, label, branchPrefix: prefix }],
+        inventories: [machine([{ id: 'app' }])],
+      }),
+      { pushes: true, shepherd: false },
+    );
+    expect(reading).toMatchObject({ folder: { label, branchPrefix: prefix } });
+    expect(() => PostInstallTaskSchema.parse(reading)).not.toThrow();
   });
 });
 

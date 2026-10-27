@@ -121,7 +121,13 @@ describe.skipIf(!databaseUrl)('readiness facts in the database', () => {
         '{"input":"tend","scheduleId":{"$schedule":"id"}}',
       ]) {
         await tx.execute(sql`UPDATE agent_schedules SET input_template = ${template}::jsonb`);
-        expect((await read())[4]).toMatchObject({ state: 'needs_setup' });
+        // Live, so it counts and nothing offers a second one; it says it will not renew.
+        const reading = (await read())[4];
+        expect(reading).toMatchObject({
+          state: 'done',
+          description: expect.stringContaining('without renewing itself'),
+        });
+        expect(reading).not.toHaveProperty('schedule');
       }
       await tx.execute(sql`UPDATE agent_schedules SET input_template =
         '{"input":"shepherd","note":"x","config":{"scheduleId":{"$schedule":"id"},"lane":"a"}}'::jsonb`);

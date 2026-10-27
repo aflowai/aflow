@@ -529,6 +529,25 @@ describe('the edition’s composed lanes', () => {
     },
   );
 
+  it('asks GitHub on a quick start listing only in the space made from it', async () => {
+    const { app } = await buildTestApp({ user: { userId: USER_ID, role: 'member' } });
+    const elsewhere = await app.inject({
+      method: 'GET',
+      url: '/v1/store/listings/local-review-quick-start',
+    });
+    expect(elsewhere.statusCode).toBe(200);
+    expect(askGithub).not.toHaveBeenCalled();
+
+    store.installs.push({ ...installedRow('local-review-quick-start', 1), kind: 'space' });
+    const madeFromIt = await app.inject({
+      method: 'GET',
+      url: '/v1/store/listings/local-review-quick-start',
+    });
+    expect(madeFromIt.statusCode).toBe(200);
+    expect(askGithub).toHaveBeenCalledTimes(1);
+    await app.close();
+  });
+
   it('serves the space’s help surface the readiness the Store page reads', async () => {
     const tasks = [
       {

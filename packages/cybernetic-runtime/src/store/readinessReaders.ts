@@ -21,6 +21,7 @@ import {
   HOST_LANE_HARNESS_REFUSAL,
   HOST_LANE_PAIRING_REFUSAL,
   MAX_FIRINGS_CAP,
+  READINESS_EXTERNAL_TEXT_MAX,
   SHEPHERD_SCHEDULE_CRON_DEFAULT,
   SKILL_STARTER_SCHEDULE_VARIABLE,
   type HostMergePosture,
@@ -75,6 +76,17 @@ const GITHUB_PERMISSIONS =
   'Fine-grained permissions: Metadata and Contents read, Checks and Actions read, Pull requests ' +
   'and Issues write, plus Contents write for merges. Classic tokens need repo (public_repo for ' +
   'public repositories).';
+
+/**
+ * An outside body as a description embeds it — a schedule's error, GitHub's
+ * answer, a request or decryption failure — bounded at its own generous
+ * ceiling, so the item reads broken with its reason however long the body is,
+ * rather than the description outgrowing its cap and failing the response.
+ */
+function externalText(text: string): string {
+  if (text.length <= READINESS_EXTERNAL_TEXT_MAX) return text;
+  return `${text.slice(0, READINESS_EXTERNAL_TEXT_MAX)}… (${String(text.length - READINESS_EXTERNAL_TEXT_MAX)} more characters)`;
+}
 
 /** Classic token scopes, either of which lets publish and the shepherd reach a repository. */
 const CLASSIC_REPOSITORY_SCOPES = ['repo', 'public_repo'];
@@ -382,7 +394,7 @@ export function readMachine(facts: ReadinessFacts): Task<'pair_machine'> {
     return { ...base, state: 'broken', description: HOST_LANE_PAIRING_REFUSAL };
   }
   if (facts.inventories.length > 0) {
-    const names = facts.inventories.map((inventory) => inventory.hostname).join(', ');
+    const names = externalText(facts.inventories.map((inventory) => inventory.hostname).join(', '));
     return { ...base, state: 'done', description: `Paired: ${names} is running its executor.` };
   }
   if (facts.folders.length > 0) {
@@ -580,14 +592,14 @@ export function readGithubCredential(facts: ReadinessFacts): Task<'github_creden
     return {
       ...base,
       state: 'broken',
-      description: `GitHub refuses this credential (${String(answer.status)}: ${answer.message}). Bind a working token under Integrations.`,
+      description: `GitHub refuses this credential (${String(answer.status)}: ${externalText(answer.message)}). Bind a working token under Integrations.`,
     };
   }
   if (answer.kind === 'unreachable') {
     return {
       ...base,
       state: 'needs_setup',
-      description: `GitHub could not be asked about this credential: ${answer.message}. Check setup again once it answers.`,
+      description: `GitHub could not be asked about this credential: ${externalText(answer.message)}. Check setup again once it answers.`,
     };
   }
   if (answer.scopes === null) {
@@ -605,7 +617,7 @@ export function readGithubCredential(facts: ReadinessFacts): Task<'github_creden
       missingScopes: ['repo'],
       state: 'needs_setup',
       description:
-        `GitHub reports this classic token's scopes as ${answer.scopes.join(', ') || 'none'}; ` +
+        `GitHub reports this classic token's scopes as ${externalText(answer.scopes.join(', ')) || 'none'}; ` +
         'publish and the shepherd need repo (public_repo for public repositories). Bind a ' +
         'token with it under Integrations.',
     };
@@ -613,7 +625,7 @@ export function readGithubCredential(facts: ReadinessFacts): Task<'github_creden
   return {
     ...base,
     state: 'done',
-    description: `GitHub accepts this credential with the scopes ${answer.scopes.join(', ')}.`,
+    description: `GitHub accepts this credential with the scopes ${externalText(answer.scopes.join(', '))}.`,
   };
 }
 
@@ -717,8 +729,9 @@ export function readShepherdSchedule(facts: ReadinessFacts): Task<'shepherd_sche
     maxFirings: from === undefined ? MAX_FIRINGS_CAP : from.maxFirings,
     inputTemplate: from?.renews ? from.inputTemplate : SHEPHERD_RENEWAL_INPUT,
   });
-  const renewing = facts.schedules.filter((schedule) => schedule.renews);
-  const live = renewing.find(
+  // Any live schedule of the shepherd counts, whether or not its input renews
+  // it: offering to arm another would start a second one beside it.
+  const live = facts.schedules.find(
     (schedule) => schedule.status === 'active' && !scheduleExpired(schedule, facts.now),
   );
   if (live !== undefined) {
@@ -727,20 +740,25 @@ export function readShepherdSchedule(facts: ReadinessFacts): Task<'shepherd_sche
         ...base,
         firingsLeft: firingsLeft(live),
         state: 'broken',
-        description: `The shepherd schedule is armed but failing: ${live.failure} Inspect it under Triggers.`,
+        description: `The shepherd schedule is armed but failing: ${externalText(live.failure)} Inspect it under Triggers.`,
       };
     }
     const left = firingsLeft(live);
+    const cron = live.cronExpression ?? SHEPHERD_SCHEDULE_CRON_DEFAULT;
     return {
       ...base,
       firingsLeft: left,
       state: 'done',
-      description:
-        `Armed on ${live.cronExpression ?? SHEPHERD_SCHEDULE_CRON_DEFAULT}` +
-        (left === null ? '.' : `, ${String(left)} firings left before it renews itself.`),
+      description: live.renews
+        ? `Armed on ${cron}` +
+          (left === null ? '.' : `, ${String(left)} firings left before it renews itself.`)
+        : `Armed on ${cron}` +
+          (left === null ? '' : `, ${String(left)} firings left`) +
+          '. Its input does not hand a pass the schedule, so it ends without renewing itself; ' +
+          'once it has, the checklist recreates it with the input that renews.',
     };
   }
-  const [latest] = renewing;
+  const [latest] = facts.schedules;
   if (latest?.status === 'paused') {
     return {
       ...base,
