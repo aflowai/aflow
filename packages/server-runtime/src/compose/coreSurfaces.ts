@@ -61,6 +61,7 @@ import { coachActivityRoutes } from '../routes/cybernetic/coachActivity.js';
 import { skillLifecycleRoutes } from '../routes/cybernetic/skillLifecycle.js';
 import { planRoutes } from '../routes/plan.js';
 import { storeListingRoutes, storeInstallRoutes } from '../routes/store.js';
+import { storeSpaceTemplateRoutes } from '../routes/storeSpaceTemplates.js';
 import { helpRoutes } from '../routes/help.js';
 import type {
   ServerComposition,
@@ -289,6 +290,10 @@ function v1Surfaces({ actionCenterAggregator }: V1SurfaceDeps): ServerSurface[] 
     {
       name: 'store-listings',
       register: (s) => s.register(storeListingRoutes, { prefix: '/store' }),
+    },
+    {
+      name: 'store-space-templates',
+      register: (s) => s.register(storeSpaceTemplateRoutes, { prefix: '/store' }),
     },
     {
       name: 'store-installs',

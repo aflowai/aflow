@@ -37,6 +37,7 @@ import { setupCapabilityRemediation } from './storeSetupCheck.js';
 import { AppPageHeader } from '../components/app-page-header.js';
 import { MarkdownRenderer } from '../components/markdown-renderer.js';
 import { SetupChecklist } from '../components/setup-checklist.js';
+import { QuickStartDialog } from '../components/quick-start-picker.js';
 import { useSpaceFromRoute } from '../components/providers.js';
 import { useNavigation } from '../components/navigation-provider.js';
 import { spaceRoute } from '../lib/space-routes.js';
@@ -77,10 +78,11 @@ import {
 // Copy helpers
 // ---------------------------------------------------------------------------
 
-const KIND_LABELS: Record<'bundle' | 'connector' | 'applet', string> = {
+const KIND_LABELS: Record<'bundle' | 'connector' | 'applet' | 'space', string> = {
   bundle: 'SKILL',
   connector: 'INTEGRATION',
   applet: 'APPLET',
+  space: 'QUICK START',
 };
 
 function capabilityLabel(capability: string, names: ReadonlyMap<string, string>): string {
@@ -169,6 +171,7 @@ function StoreListingPageInner() {
   const [updateFlow, setUpdateFlow] = useState<UpdateFlow>({ phase: 'idle' });
   const [uninstallFlow, setUninstallFlow] = useState<UninstallFlow>({ phase: 'idle' });
   const [pageNotice, setPageNotice] = useState<string | null>(null);
+  const [quickStartOpen, setQuickStartOpen] = useState(false);
 
   const capabilityNames = useMemo(() => {
     const names = new Map<string, string>();
@@ -638,8 +641,37 @@ function StoreListingPageInner() {
             </Card>
           )}
 
+          {/* A quick start makes a new space; it is never installed into this one. */}
+          {entry.kind === 'space' && (
+            <Row gap="sm" align="center" wrap>
+              {display !== 'not_installed' && (
+                <Text size="sm" variant="muted">
+                  This space was made from this quick start.
+                </Text>
+              )}
+              {entry.status !== 'deprecated' && (
+                <Button
+                  variant="primary"
+                  onClick={() => {
+                    setQuickStartOpen(true);
+                  }}
+                >
+                  Start a new space from it
+                </Button>
+              )}
+            </Row>
+          )}
+          <QuickStartDialog
+            open={quickStartOpen}
+            initialCatalogId={entry.catalogId}
+            onClose={() => {
+              setQuickStartOpen(false);
+            }}
+          />
+
           {/* Primary action */}
-          {flow.phase !== 'done' &&
+          {entry.kind !== 'space' &&
+            flow.phase !== 'done' &&
             updateFlow.phase !== 'done' &&
             uninstallFlow.phase !== 'done' && (
               <Row gap="sm" align="center" wrap>

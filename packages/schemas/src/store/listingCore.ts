@@ -19,10 +19,12 @@ export type CatalogId = z.infer<typeof CatalogIdSchema>;
  * pack: 1..n skills + their integrations + seeds); `connector` is the
  * user-facing "Integration"; `applet` is a curated stateful applet (view +
  * definition installed as one ui_artifact, instantiated in the space).
- * Skills are never standalone listings — the skill registry is the member
- * source bundles resolve through.
+ * `space` is a template that creates a new space and applies named bundles,
+ * directives, agents and api_definitions to it (Plan 330 D1). Skills are never
+ * standalone listings — the skill registry is the member source bundles resolve
+ * through.
  */
-export const CatalogEntryKindSchema = z.enum(['bundle', 'connector', 'applet']);
+export const CatalogEntryKindSchema = z.enum(['bundle', 'connector', 'applet', 'space']);
 export type CatalogEntryKind = z.infer<typeof CatalogEntryKindSchema>;
 
 /**

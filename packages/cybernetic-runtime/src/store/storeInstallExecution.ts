@@ -86,7 +86,7 @@ export type ExecuteStoreInstallResult =
   | { ok: true; response: StoreInstallResponse }
   | { ok: false; statusCode: StoreInstallFailureStatus; body: StoreInstallErrorBody };
 
-class StoreInstallError extends Error {
+export class StoreInstallError extends Error {
   constructor(
     readonly statusCode: StoreInstallFailureStatus,
     readonly body: StoreInstallErrorBody,
@@ -109,6 +109,22 @@ class StoreArtifactConflictError extends StoreInstallError {
     super(409, body);
     this.name = 'StoreArtifactConflictError';
   }
+}
+
+/**
+ * A template writes directives, and replacing a space's directives is not a
+ * quick start, so a template is only ever applied to the space its own install
+ * creates (Plan 330 D1). Every install into an existing space — the route and a
+ * ratified proposal alike — reaches this refusal.
+ */
+export function spaceTemplateRefusal(catalogId: string): StoreInstallErrorBody {
+  return {
+    error:
+      `'${catalogId}' is a quick start: it creates a new space and cannot be applied to an ` +
+      'existing one. Start a new space from it instead.',
+    code: 'SPACE_TEMPLATE_NEEDS_NEW_SPACE',
+    catalogId,
+  };
 }
 
 export interface ExecuteStoreInstallParams {
@@ -160,12 +176,12 @@ export interface InstallDispatchOutcome {
   provenanceSkips?: StoreProvenanceSkips;
 }
 
-type InstallInvalidations =
+export type InstallInvalidations =
   | { kind: 'bundle'; bundle: SkillBundle; result: InstallSkillBundleResult }
   | { kind: 'api'; apiId: string }
   | { kind: 'mcp'; serverId: string; bindingId: string };
 
-interface InstallTxOutcome {
+export interface InstallTxOutcome {
   response: StoreInstallResponse;
   invalidations: InstallInvalidations | null;
 }
@@ -334,6 +350,8 @@ async function dispatchInstall(
       return dispatchConnectorInstall(tx, entry, ids);
     case 'applet':
       return dispatchAppletInstall(tx, entry, ids);
+    case 'space':
+      throw new StoreInstallError(400, spaceTemplateRefusal(entry.catalogId));
   }
 }
 
@@ -363,6 +381,8 @@ async function buildNoOpDispatch(
     case 'applet':
       // Idempotent like the bundle path — unchanged content short-circuits.
       return dispatchAppletInstall(tx, entry, ids);
+    case 'space':
+      throw new StoreInstallError(400, spaceTemplateRefusal(entry.catalogId));
   }
 }
 
@@ -617,6 +637,62 @@ export async function writeProvenance(
   }
 }
 
+/** Post-commit side effects of one install: catalog invalidations and memory-seed embed jobs. */
+export async function publishStoreInstallInvalidations(
+  redis: Redis,
+  tenantId: string,
+  spaceId: string,
+  invalidations: InstallInvalidations,
+): Promise<void> {
+  publishInvalidations(redis, tenantId, spaceId, invalidations);
+  if (invalidations.kind === 'bundle') {
+    await publishMemorySeedEmbedJobs(redis, invalidations.result.pendingEmbedJobs);
+  }
+}
+
+/** The typed failure an install surface reports for an error its transaction threw, if it is one. */
+export function mapStoreInstallFailure(
+  err: unknown,
+): Extract<ExecuteStoreInstallResult, { ok: false }> | null {
+  if (err instanceof StoreInstallError) {
+    return { ok: false, statusCode: err.statusCode, body: err.body };
+  }
+  if (err instanceof BundleInstallInProgressError) {
+    return {
+      ok: false,
+      statusCode: 409,
+      body: { error: err.message, code: err.code, bundleId: err.bundleId },
+    };
+  }
+  if (err instanceof BundlePartiallyInstalledError) {
+    return {
+      ok: false,
+      statusCode: 409,
+      body: {
+        error: err.message,
+        code: err.code,
+        bundleId: err.bundleId,
+        skillCatalogId: err.skillCatalogId,
+        presentArtifacts: [...err.presentArtifacts],
+        missingArtifacts: [...err.missingArtifacts],
+      },
+    };
+  }
+  if (err instanceof BundleInstallValidationError) {
+    return {
+      ok: false,
+      statusCode: 422,
+      body: {
+        error: err.message,
+        code: err.code,
+        bundleId: err.bundleId,
+        errors: [...err.errors],
+      },
+    };
+  }
+  return null;
+}
+
 function publishInvalidations(
   redis: Redis,
   tenantId: string,
@@ -699,6 +775,11 @@ export async function executeStoreInstall(
   const tenantCtx = createTenantContext(tenantId);
   const shelf = await getTenantStoreShelfPolicy(db, tenantId);
   const offShelf = !isListingOnTenantShelf(entry, new Set(), shelf);
+  if (entry.kind === 'space') {
+    return offShelf
+      ? { ok: false, statusCode: 404, body: { error: `Store listing '${catalogId}' not found` } }
+      : { ok: false, statusCode: 400, body: spaceTemplateRefusal(entry.catalogId) };
+  }
   // An off-shelf listing the space never installed must fail exactly like an
   // unknown id — any later check (version, space) would disclose its existence.
   if (offShelf) {
@@ -779,50 +860,13 @@ export async function executeStoreInstall(
     );
   } catch (err) {
     if (redis) await redis.del(idempotencyRedisKey);
-    if (err instanceof StoreInstallError) {
-      return { ok: false, statusCode: err.statusCode, body: err.body };
-    }
-    if (err instanceof BundleInstallInProgressError) {
-      return {
-        ok: false,
-        statusCode: 409,
-        body: { error: err.message, code: err.code, bundleId: err.bundleId },
-      };
-    }
-    if (err instanceof BundlePartiallyInstalledError) {
-      return {
-        ok: false,
-        statusCode: 409,
-        body: {
-          error: err.message,
-          code: err.code,
-          bundleId: err.bundleId,
-          skillCatalogId: err.skillCatalogId,
-          presentArtifacts: [...err.presentArtifacts],
-          missingArtifacts: [...err.missingArtifacts],
-        },
-      };
-    }
-    if (err instanceof BundleInstallValidationError) {
-      return {
-        ok: false,
-        statusCode: 422,
-        body: {
-          error: err.message,
-          code: err.code,
-          bundleId: err.bundleId,
-          errors: [...err.errors],
-        },
-      };
-    }
+    const failure = mapStoreInstallFailure(err);
+    if (failure) return failure;
     throw err;
   }
 
   if (redis && outcome.invalidations) {
-    publishInvalidations(redis, tenantId, spaceId, outcome.invalidations);
-    if (outcome.invalidations.kind === 'bundle') {
-      await publishMemorySeedEmbedJobs(redis, outcome.invalidations.result.pendingEmbedJobs);
-    }
+    await publishStoreInstallInvalidations(redis, tenantId, spaceId, outcome.invalidations);
   }
   if (redis) {
     await redis.set(

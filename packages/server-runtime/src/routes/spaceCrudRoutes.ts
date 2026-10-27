@@ -13,24 +13,16 @@ import {
   withTenantSchema,
   spaces,
   spaceDirectivesUpdateGuard,
-  spaceCapabilityAssignments,
-  findDefaultCapabilityProfileId,
-  getTenantProvisioningPolicy,
   spaceMemberships,
 } from '@aflow/database';
 import { bumpSpaceContextGen } from '@aflow/redis';
 import {
   SpaceRulesSchema,
   SpaceComputePolicySchema,
-  DEFAULT_SPACE_COMPUTE_POLICY,
   SpaceCodePolicySchema,
-  DEFAULT_SPACE_CODE_POLICY,
   SpaceWriteApprovalPolicySchema,
   EntityDirectivesSchema,
-  defaultSpaceDirectives,
-  defaultsToSafeProfile,
 } from '@aflow/schemas';
-import { withTenantDefaultModels } from '../lib/agentModelPolicy.js';
 import { databaseErrorText } from '../lib/databaseErrors.js';
 import {
   ErrorSchema,
@@ -43,8 +35,13 @@ import {
   introducedOffListModels,
   chosenModelRoles,
 } from './spacesShared.js';
-import { canCreateSpace } from '@aflow/authz';
 import { bootstrapCyberneticEntity } from '../services/entityBootstrap.js';
+import {
+  insertSpaceRecord,
+  provisionCreatedSpace,
+  spaceCreationFailure,
+  validateSpaceCreation,
+} from '../services/spaceProvisioning.js';
 import { diffDirectiveKeys } from '../services/directiveDiff.js';
 
 // eslint-disable-next-line @typescript-eslint/require-await -- Fastify plugin; route handlers use await
@@ -97,168 +94,43 @@ export const spaceCrudRoutes: FastifyPluginAsync = async (fastify) => {
           .status(401)
           .send({ error: 'Unauthorized', message: 'Authentication required' });
       }
-      // Any tenant member (or above) can create spaces
-      const memberRoles = ['owner', 'admin', 'member'];
-      if (!memberRoles.includes(tenant.tenantRole)) {
-        return reply.status(403).send({ error: 'Forbidden', message: 'Member access required' });
-      }
       const db = fastify.appContext.db as PostgresJsDatabase;
       const tenantCtx = createTenantContext(tenant.tenantId);
       const { name, slug, description, directives, computePolicy, codePolicy } = request.body;
 
-      const provisioning = await getTenantProvisioningPolicy(db, tenant.tenantId);
-      if (!canCreateSpace(tenant.tenantRole)) {
-        return reply.status(403).send({
-          error: 'Forbidden',
-          message: 'Member access required to create spaces',
-        });
-      }
-
-      const { validateSpaceSlug } = await import('@aflow/schemas');
-      const slugValidation = validateSpaceSlug(slug);
-      if (!slugValidation.ok) {
-        return reply.status(400).send({
-          error: slugValidation.code,
-          message: slugValidation.message,
-        });
-      }
-
-      let resolvedDirectives: z.infer<typeof EntityDirectivesSchema> =
-        directives ?? defaultSpaceDirectives();
-
-      const allowedModels = await allowedAgentModelRefs(
+      const validated = await validateSpaceCreation({
         db,
-        tenantCtx.tenantId,
-        fastify.edition.edition,
-      );
-      if (resolvedDirectives) {
-        resolvedDirectives = withTenantDefaultModels(
-          resolvedDirectives,
-          allowedModels.ids,
-          chosenModelRoles.get(request) ?? new Set(),
-        );
-      }
-      const offListModels = offListAgentModelRefs(resolvedDirectives, allowedModels);
-      if (offListModels.length > 0) {
-        return reply.status(400).send(offListAgentModelError(offListModels, allowedModels.ids));
-      }
+        tenant,
+        edition: fastify.edition,
+        slug,
+        directives,
+        chosenModelRoles: chosenModelRoles.get(request) ?? new Set(),
+      });
+      if (!validated.ok) return reply.status(validated.status).send(validated.body);
+      const resolvedDirectives = validated.directives;
 
-      const placementError = await validateAgentCapabilitySettings(
-        { db, tenantId: tenant.tenantId },
-        resolvedDirectives.capabilityDiscovery,
-      );
-      if (placementError) return reply.status(400).send(placementError);
-
-      let result: unknown;
+      let row: Record<string, unknown> | null;
       try {
-        result = await withTenantSchema(
-          db,
-          tenantCtx,
-          async (
-            tx: Parameters<typeof withTenantSchema> extends [unknown, unknown, infer F]
-              ? F extends (tx: infer T) => unknown
-                ? T
-                : unknown
-              : unknown,
-          ) => {
-            const { spaceSlugHistory } = await import('@aflow/database');
-            const [retired] = await tx
-              .select({ id: spaceSlugHistory.id })
-              .from(spaceSlugHistory)
-              .where(eq(spaceSlugHistory.oldSlug, slug))
-              .limit(1);
-            if (retired) {
-              throw new Error(`SLUG_RETIRED:${slug}`);
-            }
-
-            // Quota counts active owned spaces regardless of sharing state —
-            // sharing a space must not free a quota slot. Tenant admins are
-            // exempt (they administer the quota itself).
-            const maxSpaces = provisioning.quotas.maxSpacesPerUser;
-            if (!tenant.isAdmin && maxSpaces !== undefined) {
-              // Serialize concurrent count-then-insert per owner; released at
-              // transaction end.
-              await tx.execute(
-                sql`SELECT pg_advisory_xact_lock(hashtext(${`space-quota:${authUser.userId}`}))`,
-              );
-              const owned = await tx
-                .select({ id: spaces.id })
-                .from(spaces)
-                .where(and(eq(spaces.ownerId, authUser.userId), isNull(spaces.archivedAt)));
-              if (owned.length >= maxSpaces) {
-                throw new Error(`SPACE_QUOTA_REACHED:${String(maxSpaces)}`);
-              }
-            }
-
-            const vals: Record<string, unknown> = {
-              name,
-              slug,
-              createdBy: authUser.userId,
-              ownerId: authUser.userId,
-            };
-            if (description !== undefined) vals['description'] = description;
-            if (resolvedDirectives) vals['directives'] = resolvedDirectives;
-            // Clients no longer hardcode compute policy — a space starts with
-            // the platform default unless the creator specifies one.
-            vals['computePolicy'] = computePolicy ?? DEFAULT_SPACE_COMPUTE_POLICY;
-            vals['codePolicy'] = codePolicy ?? DEFAULT_SPACE_CODE_POLICY;
-
-            const rows = await tx
-              .insert(spaces)
-              .values(vals as typeof spaces.$inferInsert)
-              .returning();
-
-            const spaceRow = rows[0];
-            if (!spaceRow) return null;
-            const spaceId = (spaceRow as Record<string, unknown>)['id'] as string;
-
-            // The tenant capability ceiling still ANDs over whichever profile
-            // ends up assigned.
-            const memberSafeDefault = defaultsToSafeProfile({
-              isTenantAdmin: tenant.isAdmin,
-              edition: fastify.edition,
-            });
-            const profileId = await findDefaultCapabilityProfileId(tx, { memberSafeDefault });
-            if (!profileId) {
-              throw new Error(
-                `${memberSafeDefault ? 'Personal Safe' : 'Full Access'} capability profile not found — cannot provision space`,
-              );
-            }
-            await tx.insert(spaceCapabilityAssignments).values({
-              spaceId,
-              profileId,
-              assignedBy: authUser.userId,
-            });
-
-            return spaceRow;
-          },
+        row = await withTenantSchema(db, tenantCtx, async (tx) =>
+          insertSpaceRecord(tx, {
+            tenant,
+            edition: fastify.edition,
+            userId: authUser.userId,
+            provisioning: validated.provisioning,
+            name,
+            slug,
+            description,
+            directives: resolvedDirectives,
+            computePolicy,
+            codePolicy,
+          }),
         );
       } catch (err: unknown) {
-        const msg = databaseErrorText(err);
-        if (msg.startsWith('SLUG_RETIRED:')) {
-          return reply.status(409).send({
-            error: 'SLUG_RETIRED',
-            message: `"${slug}" is a retired slug from an existing space; reuse is blocked while history exists`,
-          });
-        }
-        if (msg.startsWith('SPACE_QUOTA_REACHED:')) {
-          const limit = msg.slice('SPACE_QUOTA_REACHED:'.length);
-          return reply.status(403).send({
-            error: 'QuotaExceeded',
-            message: `You have reached the limit of ${limit} spaces. Archive one you no longer use, or ask an administrator to raise the limit.`,
-          });
-        }
-        // Detect unique constraint violation on slug
-        if (msg.includes('unique constraint') && msg.includes('slug')) {
-          return reply.status(409).send({
-            error: 'Conflict',
-            message: `A workspace with slug "${slug}" already exists`,
-          });
-        }
+        const failure = spaceCreationFailure(err, slug);
+        if (failure) return reply.status(failure.status).send(failure.body);
         throw err;
       }
 
-      const row = result as Record<string, unknown> | null;
       if (!row) {
         return reply
           .status(500)
@@ -266,62 +138,20 @@ export const spaceCrudRoutes: FastifyPluginAsync = async (fastify) => {
       }
 
       const spaceId = row['id'] as string;
-
-      // Membership + bootstrap: if either fails, clean up the space so retry doesn't hit slug conflict
-      try {
-        await db.insert(spaceMemberships).values({
-          spaceId,
-          tenantId: tenant.tenantId,
-          userId: authUser.userId,
-          role: 'admin',
-        });
-
-        if (resolvedDirectives) {
-          const bootstrapResult = await bootstrapCyberneticEntity({
-            tenantId: tenant.tenantId,
-            spaceId,
-            directives: resolvedDirectives,
-            db,
-            redis: fastify.appContext.redis,
-            isFirstActivation: true,
-            changedDirectiveKeys: [],
-            operatorUserId: authUser.userId,
-          });
-          fastify.log.info(
-            {
-              spaceId,
-              created: bootstrapResult.created,
-              resolvedAgents: bootstrapResult.resolvedAgents,
-              firstActivation: true,
-              durationMs: bootstrapResult.durationMs,
-            },
-            'Cybernetic entity bootstrapped during space creation',
-          );
-          if (bootstrapResult.resolvedAgents.helmsman) {
-            row['defaultTargetKind'] = 'platform-role';
-            row['default_target_kind'] = 'platform-role';
-            row['defaultTargetSystemRole'] = 'cybernetic-helmsman';
-            row['default_target_system_role'] = 'cybernetic-helmsman';
-          }
-        }
-      } catch (provisionErr) {
-        // Clean up: delete the space so the user can retry without slug conflict
-        fastify.log.error(
-          { err: provisionErr, spaceId },
-          'Space provisioning failed — cleaning up space row',
-        );
-        try {
-          await withTenantSchema(db, tenantCtx, async (tx: unknown) => {
-            const { sql: sqlTag } = await import('drizzle-orm');
-            await (tx as PostgresJsDatabase).execute(
-              sqlTag`DELETE FROM spaces WHERE id = ${spaceId}`,
-            );
-          });
-          await db.delete(spaceMemberships).where(eq(spaceMemberships.spaceId, spaceId));
-        } catch (cleanupErr) {
-          fastify.log.error({ err: cleanupErr, spaceId }, 'Space cleanup also failed');
-        }
-        throw provisionErr;
+      const provisioned = await provisionCreatedSpace({
+        db,
+        redis: fastify.appContext.redis,
+        tenant,
+        userId: authUser.userId,
+        spaceId,
+        directives: resolvedDirectives,
+        log: fastify.log,
+      });
+      if (provisioned.helmsmanResolved) {
+        row['defaultTargetKind'] = 'platform-role';
+        row['default_target_kind'] = 'platform-role';
+        row['defaultTargetSystemRole'] = 'cybernetic-helmsman';
+        row['default_target_system_role'] = 'cybernetic-helmsman';
       }
 
       row['memberCount'] = 1;

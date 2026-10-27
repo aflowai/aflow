@@ -22,6 +22,7 @@ import {
   type SkillBundle,
   type SkillCatalogEntry,
   type SkillComposeBundle,
+  type SpaceTemplate,
   type StoreInstall,
   type StoreInstallArtifact,
   type StoreInstallClaim,
@@ -29,6 +30,7 @@ import {
   type StorePlannedArtifact,
 } from '@aflow/schemas';
 import {
+  getSkillBundleEntry,
   getSkillCatalogEntry,
   catalogEntryContentHash,
   searchListings,
@@ -63,12 +65,15 @@ export const ListingInstalledStateSchema = z.object({
 export type ListingInstalledState = z.infer<typeof ListingInstalledStateSchema>;
 
 export function deriveInstalledState(
-  entry: Pick<CatalogEntry, 'version'>,
+  entry: Pick<CatalogEntry, 'version'> & { kind?: CatalogEntry['kind'] },
   install: StoreInstall | null,
 ): ListingInstalledState {
   if (!install) return { installed: false, updateAvailable: false };
+  // A template offers its space nothing once the space is made (Plan 330 D1).
   const updateAvailable =
-    entry.version > install.installedVersion && install.skippedVersion !== entry.version;
+    entry.kind !== 'space' &&
+    entry.version > install.installedVersion &&
+    install.skippedVersion !== entry.version;
   return {
     installed: true,
     installedVersion: install.installedVersion,
@@ -218,7 +223,32 @@ export function deriveListingRequirements(entry: CatalogEntry): ListingRequireme
     // no OAuth, no repo, no model key.
     case 'applet':
       return { credentialKeys: [], oauthIssuers: [], needsRepo: false, needsModelKey: false };
+    case 'space':
+      return spaceTemplateRequirements(entry.payload.bundleIds);
   }
+}
+
+/** What a template needs is what the bundles it applies need; its own writes carry no credential. */
+function spaceTemplateRequirements(bundleIds: readonly string[]): ListingRequirements {
+  const credentialKeys = new Set<string>();
+  const oauthIssuers = new Set<string>();
+  let needsRepo = false;
+  let needsModelKey = false;
+  for (const bundleId of bundleIds) {
+    const bundle = getSkillBundleEntry(bundleId);
+    if (!bundle) continue;
+    const requirements = bundleRequirements(bundle);
+    for (const key of requirements.credentialKeys) credentialKeys.add(key);
+    for (const issuer of requirements.oauthIssuers) oauthIssuers.add(issuer);
+    needsRepo = needsRepo || requirements.needsRepo;
+    needsModelKey = needsModelKey || requirements.needsModelKey;
+  }
+  return {
+    credentialKeys: [...credentialKeys].sort(),
+    oauthIssuers: [...oauthIssuers].sort(),
+    needsRepo,
+    needsModelKey,
+  };
 }
 
 // ============================================================================
@@ -407,6 +437,15 @@ export function deriveRegistryArtifactContents(entry: CatalogEntry): Map<string,
       put('ui_artifact', seed.bundleArtifactKey, renderContractContent(seed));
       break;
     }
+    case 'space':
+      for (const definition of entry.payload.apiDefinitions) {
+        put(
+          'api_definition',
+          definition.apiId,
+          buildDefinitionJsonForDraft(definition.apiId, definition.definition),
+        );
+      }
+      break;
   }
   return contents;
 }
@@ -537,6 +576,47 @@ function bundleFragmentArtifacts(
   return artifacts;
 }
 
+/**
+ * What a template writes beyond its bundles becomes the new space's own data
+ * (Plan 330 D1), so every row is `user_data_keep`: the inventory says what the
+ * template wrote, and nothing a later template version carries replaces it.
+ * The bundles' artifacts are inventoried under the bundles' own install rows.
+ */
+function spaceTemplateArtifacts(
+  template: SpaceTemplate,
+  spaceId: string,
+  catalogId: string,
+  contents: ReadonlyMap<string, unknown>,
+): StoreInstallArtifact[] {
+  const artifacts: StoreInstallArtifact[] = template.apiDefinitions.map((definition) => ({
+    spaceId,
+    catalogId,
+    artifactType: 'api_definition',
+    artifactKey: definition.apiId,
+    artifactId: definition.apiId,
+    installedContentHash: registryContentHash(
+      contents,
+      provenanceArtifactKey({ artifactType: 'api_definition', artifactKey: definition.apiId }),
+    ),
+    preservation: 'user_data_keep',
+  }));
+  for (const agent of template.agents) {
+    const skill = getSkillCatalogEntry(agent.skillCatalogId);
+    if (!skill) continue;
+    const slug = skill.bundle.workflow.slug;
+    artifacts.push({
+      spaceId,
+      catalogId,
+      artifactType: 'agent',
+      artifactKey: slug,
+      artifactId: slug,
+      installedContentHash: jsonContentHash(agent),
+      preservation: 'user_data_keep',
+    });
+  }
+  return artifacts;
+}
+
 function entryArtifacts(entry: CatalogEntry, spaceId: string): StoreInstallArtifact[] {
   const contents = deriveRegistryArtifactContents(entry);
   const artifacts: StoreInstallArtifact[] = [];
@@ -618,6 +698,9 @@ function entryArtifacts(entry: CatalogEntry, spaceId: string): StoreInstallArtif
       });
       break;
     }
+    case 'space':
+      artifacts.push(...spaceTemplateArtifacts(entry.payload, spaceId, entry.catalogId, contents));
+      break;
   }
   return artifacts;
 }

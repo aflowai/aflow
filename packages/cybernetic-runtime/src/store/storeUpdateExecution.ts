@@ -117,6 +117,21 @@ class StoreUpdateError extends Error {
   }
 }
 
+/**
+ * The directives and agents a template wrote are the space's own once written,
+ * and its bundles update on their own listings, so a space made from a template
+ * has nothing a newer template version could update (Plan 330 D1).
+ */
+function spaceTemplateUpdateRefusal(catalogId: string): StoreUpdateErrorBody {
+  return {
+    error:
+      `'${catalogId}' made this space and is not updated from the Store: what it wrote is the ` +
+      "space's own, and its skills update on their own listings.",
+    code: 'SPACE_TEMPLATE_NOT_UPDATABLE',
+    catalogId,
+  };
+}
+
 export interface ExecuteStoreUpdateParams {
   db: PostgresJsDatabase;
   redis: Redis | null;
@@ -681,6 +696,8 @@ async function dispatchUpdate(
       // A new version on the installed head — instances stay pinned and move
       // only through the lifecycle upgrade surface, never on store update.
       return dispatchAppletUpdate(tx, entry, ids);
+    case 'space':
+      throw new StoreUpdateError(400, spaceTemplateUpdateRefusal(entry.catalogId));
   }
 }
 
@@ -950,6 +967,8 @@ function publishUpdateInvalidations(
     // cache; instances resolve the pinned version by id, uncached.
     case 'applet':
       return;
+    case 'space':
+      return;
   }
 }
 
@@ -979,6 +998,9 @@ export async function executeStoreUpdate(
   const { entry, offShelf } = resolved;
 
   const tenantCtx = createTenantContext(tenantId);
+  if (entry.kind === 'space' && !offShelf) {
+    return { ok: false, statusCode: 400, body: spaceTemplateUpdateRefusal(entry.catalogId) };
+  }
   // An off-shelf listing the space never installed must fail exactly like an
   // unknown id — any later check (version) would disclose its existence.
   if (offShelf) {

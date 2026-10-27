@@ -6,6 +6,7 @@ import { SKILL_CATALOG } from '../skillCatalog/index.js';
 import { SKILL_BUNDLE_CATALOG } from '../skillBundleCatalog.js';
 import { CONNECTOR_CATALOG } from '../connectorCatalog/index.js';
 import { APPLET_CATALOG } from '../appletCatalog/index.js';
+import { SPACE_TEMPLATE_CATALOG } from '../spaceTemplateCatalog.js';
 
 // Lane composition is what `listCatalog` filters by, so a facade assertion
 // about the registries names the lanes it reads them under; the withholding
@@ -20,7 +21,10 @@ const EVERY_LANE: ComposedLanes = {
 describe('store catalog facade', () => {
   it('wraps every entry from the contributing registries', () => {
     expect(STORE_CATALOG.length).toBe(
-      SKILL_BUNDLE_CATALOG.length + CONNECTOR_CATALOG.length + APPLET_CATALOG.length,
+      SKILL_BUNDLE_CATALOG.length +
+        CONNECTOR_CATALOG.length +
+        APPLET_CATALOG.length +
+        SPACE_TEMPLATE_CATALOG.length,
     );
     expect(listCatalog({ kind: 'bundle', lanes: EVERY_LANE }).length).toBe(
       SKILL_BUNDLE_CATALOG.length,
@@ -29,6 +33,9 @@ describe('store catalog facade', () => {
       CONNECTOR_CATALOG.length,
     );
     expect(listCatalog({ kind: 'applet', lanes: EVERY_LANE }).length).toBe(APPLET_CATALOG.length);
+    expect(listCatalog({ kind: 'space', lanes: EVERY_LANE }).length).toBe(
+      SPACE_TEMPLATE_CATALOG.length,
+    );
   });
 
   it('never lists a skill as a standalone listing', () => {

@@ -72,6 +72,7 @@ import {
   readAppletArtifactHead,
   searchListableEntries,
   selectListableEntries,
+  spaceTemplateRefusal,
   validateBundleInstallPreconditions,
   ListingInstalledStateSchema,
 } from '@aflow/cybernetic-runtime';
@@ -288,6 +289,9 @@ export const storeInstallRoutes: FastifyPluginAsync = async (fastify) => {
       if (laneRefusal !== null) {
         return reply.code(400).send({ error: laneRefusal });
       }
+      if (entry.kind === 'space') {
+        return reply.code(400).send({ error: spaceTemplateRefusal(entry.catalogId).error });
+      }
       if (entry.kind === 'bundle' && !(await isCyberneticSpaceById(db, tenantId, spaceId))) {
         return reply.code(400).send({ error: 'Space is not cybernetic (no directives set)' });
       }
@@ -317,6 +321,7 @@ export const storeInstallRoutes: FastifyPluginAsync = async (fastify) => {
             )
           : undefined;
       return {
+        kind: entry.kind,
         catalogId: entry.catalogId,
         catalogVersion: entry.version,
         creates,
@@ -454,6 +459,9 @@ export const storeInstallRoutes: FastifyPluginAsync = async (fastify) => {
         }
         return { conflicts, missingCapabilities: [] };
       }
+      // Refused before the preview reads anything: a template makes its own space.
+      case 'space':
+        return { conflicts: [], missingCapabilities: [] };
     }
   }
 

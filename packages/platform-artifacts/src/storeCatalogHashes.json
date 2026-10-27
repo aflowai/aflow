@@ -111,6 +111,10 @@
     "version": 49,
     "contentHash": "b378e3f77066759c92f16a7b6fef320beb4cac0d85387bdff14ede5fd76b02e2"
   },
+  "local-review-quick-start": {
+    "version": 1,
+    "contentHash": "3f4d1d30ba290aa0c1375e96fabac69bbdc916d1de5f4148b464fa6d9b1ebf78"
+  },
   "local-shepherd": {
     "version": 22,
     "contentHash": "dee02ddc49749c4338480562cfa1496b23abaf6d59379ccc8b9c130d905e1eef"

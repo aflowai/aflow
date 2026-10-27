@@ -35,6 +35,7 @@ const KIND_LABELS: Record<StoreCatalogListing['kind'], string> = {
   bundle: 'Skill',
   connector: 'Integration',
   applet: 'Applet',
+  space: 'Quick start',
 };
 
 export function TenantStorePolicyPage() {

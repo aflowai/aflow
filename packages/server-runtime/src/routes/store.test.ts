@@ -623,6 +623,7 @@ describe('POST /v1/spaces/:spaceId/store/install-preview', () => {
     });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({
+      kind: 'bundle',
       catalogId: 'test-two-skill-bundle',
       catalogVersion: 1,
       creates: [
@@ -632,6 +633,18 @@ describe('POST /v1/spaces/:spaceId/store/install-preview', () => {
       conflicts: [],
       missingCapabilities: [],
     });
+    await app.close();
+  });
+
+  it('refuses a quick start: a template is never applied to a space that exists', async () => {
+    const { app } = await buildTestApp({ user: { userId: USER_ID, role: 'admin' } });
+    const res = await app.inject({
+      method: 'POST',
+      url: `/v1/spaces/${SPACE_ID}/store/install-preview`,
+      payload: { catalogId: 'local-review-quick-start' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect((res.json() as { error: string }).error).toContain('creates a new space');
     await app.close();
   });
 
