@@ -120,7 +120,9 @@ describe('a harness widening stays a widening', () => {
     // profile the machine declares and this space may use, or a throwaway one;
     // the harness reaches it through pipes in the scratch it could already
     // write, and its compiled policy is byte-identical to a run without one
-    // (harnessBrowserRun.test.ts).
+    // (harnessBrowserRun.test.ts). `requiredHosts` names hosts the task cannot
+    // do without, compared after the run with the hosts the boundary refused;
+    // it can only fail a run, never admit a host.
     const fields = [...harnessInput.matchAll(/^ {2}(\w+):/gm)].map((m) => m[1]);
     expect(fields).toEqual([
       'bindingId',
@@ -137,6 +139,7 @@ describe('a harness widening stays a widening', () => {
       'model',
       'timeoutMs',
       'browser',
+      'requiredHosts',
     ]);
   });
 

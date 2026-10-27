@@ -437,6 +437,116 @@ describe.runIf(sandboxReadiness().ready)('a check that rejects an answer keeps t
   );
 });
 
+describe.runIf(sandboxReadiness().ready)('a run kept from a host its task requires', () => {
+  let policyPath: string;
+
+  beforeAll(async () => {
+    const base = await mkdtemp(join(tmpdir(), 'host-harness-reach-'));
+    const repo = join(base, 'project');
+    await mkdir(repo, { recursive: true });
+    const vcs = async (...args: string[]): Promise<void> => {
+      await promisify(execFile)('git', args, { cwd: repo });
+    };
+    await vcs('init', '-b', 'main');
+    await vcs('config', 'user.email', 'test@example.com');
+    await vcs('config', 'user.name', 'Test');
+    await writeFile(join(repo, 'README.md'), '# project\n', 'utf8');
+    await vcs('add', '-A');
+    await vcs('commit', '-m', 'initial');
+    policyPath = join(base, 'host-policy.json');
+    await writeFile(
+      policyPath,
+      JSON.stringify({
+        version: 1,
+        bindings: [
+          {
+            id: 'hb',
+            root: repo,
+            mode: 'readwrite',
+            allowsExecution: true,
+            singleFile: false,
+            spaceId: 'space-test',
+          },
+        ],
+        // A dependency bump whose install the boundary refused the registry:
+        // the proxy's refusal on stderr, nothing changed, and a valid result
+        // saying it finished.
+        harnesses: [
+          {
+            id: 'bump',
+            executable: '/bin/sh',
+            args: [
+              '-c',
+              "printf '[SandboxDebug] No matching config rule, denying: registry.npmjs.org:443\\n' >&2; " +
+                'mkdir -p .aflow && printf \'{"verdict":"bumped"}\' > .aflow/result.json',
+            ],
+          },
+        ],
+      }),
+    );
+  });
+
+  async function bump(requiredHosts?: string[]) {
+    const written: Record<string, unknown> = {};
+    const ctx = {
+      operationId: 'host.harness.run',
+      spaceId: 'space-test',
+      runId: 'run-test',
+      job: { inputRef: 'inline:x' },
+      signal: new AbortController().signal,
+      log: { error: () => undefined, warn: () => undefined, info: () => undefined },
+      readPayload: () =>
+        Promise.resolve({
+          bindingId: 'hb',
+          harness: 'bump',
+          task: 'Bump the flagged dependency.',
+          outputSchema: schema,
+          resultRetries: 0,
+          timeoutMs: 60_000,
+          ...(requiredHosts !== undefined ? { requiredHosts } : {}),
+        }),
+      emitLiveDelta: () => Promise.resolve(),
+      writePayload: (kind: string, data: unknown) => {
+        written[kind] = data;
+        return Promise.resolve(`inline:${kind}`);
+      },
+    } as never;
+    const outcome = await createHostHarnessHandler(policyPath).execute(ctx);
+    return { outcome, written };
+  }
+
+  it.skipIf(confined.skip)(
+    confined.title('fails a dependency bump with no registry reach, naming the host'),
+    { tags: ['listener'], timeout: 120_000 },
+    async () => {
+      const { outcome, written } = await bump(['registry.yarnpkg.com', 'registry.npmjs.org']);
+      expect(outcome.status).toBe('FAILED');
+      const error = written['error'] as {
+        code: string;
+        message: string;
+        details: Record<string, unknown>;
+      };
+      expect(error.code).toBe('PERMISSION_DENIED');
+      expect(error.message).toContain('could not reach registry.npmjs.org');
+      expect(error.details['unreachedHosts']).toEqual(['registry.npmjs.org']);
+      expect(error.details['filesChanged']).toBe(0);
+      expect(error.details['blockedDomains']).toEqual(['registry.npmjs.org']);
+    },
+  );
+
+  it.skipIf(confined.skip)(
+    confined.title('leaves a run that requires no host succeeding, the refusal a note'),
+    { tags: ['listener'], timeout: 120_000 },
+    async () => {
+      const { outcome, written } = await bump();
+      expect(outcome.status).toBe('SUCCEEDED');
+      const output = written['output'] as Record<string, unknown>;
+      expect(output['filesChanged']).toBe(0);
+      expect(output['blockedDomains']).toEqual(['registry.npmjs.org']);
+    },
+  );
+});
+
 describe.runIf(sandboxReadiness().ready)('a commission starts from a named ref', () => {
   let policyPath: string;
   let repo: string;

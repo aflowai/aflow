@@ -253,6 +253,28 @@ export async function getSessionState(
   return null;
 }
 
+/**
+ * The workflow task a session works for, read from that one field: absent for a
+ * session that serves none, or whose state is gone. A read of the whole state
+ * would quarantine a hash that does not parse whole; this one judges nothing
+ * but the field it reads.
+ */
+export async function getSessionWorkflowExecution(
+  redis: Redis,
+  tenantId: string,
+  sessionId: string,
+): Promise<SessionHotState['workflowExecution']> {
+  const raw = await redis.hget(
+    StreamKeys.sessionStateKey(tenantId, sessionId),
+    'workflowExecution',
+  );
+  if (raw === null) return undefined;
+  const parsed = SessionHotStateSchema.shape.workflowExecution.safeParse(
+    deserializeFromHash({ workflowExecution: raw })['workflowExecution'],
+  );
+  return parsed.success ? parsed.data : undefined;
+}
+
 export async function updateSessionState(
   redis: Redis,
   tenantId: string,

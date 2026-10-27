@@ -75,7 +75,12 @@ import {
   sandboxReadiness,
   type SandboxedRunResult,
 } from '../sandboxedRun.js';
-import { describeRefusals, extractEgressRefusals } from '../egressRefusals.js';
+import {
+  describeRefusals,
+  describeUnreachedRequiredHosts,
+  extractEgressRefusals,
+  refusedRequiredHosts,
+} from '../egressRefusals.js';
 import {
   assertTakesMcpConfig,
   buildHarnessArgv,
@@ -1198,6 +1203,17 @@ async function runHarness(
       }
       return details;
     };
+
+    const unreached = refusedRequiredHosts(input.requiredHosts ?? [], scrubbed.refusals);
+    if (unreached.length > 0) {
+      return await failureWithError(
+        ctx,
+        permissionError(
+          scrubSecrets(describeUnreachedRequiredHosts(unreached, profile.id), secrets),
+          { ...failureDetails(), unreachedHosts: unreached },
+        ),
+      );
+    }
 
     if (check !== undefined && !check.ok && input.resultRequired) {
       // The step fails, and the work still comes back: a check that rejects an

@@ -82,6 +82,7 @@ export {
   salvageCorruptStateFields,
   clearQuarantineMark,
   getSessionState,
+  getSessionWorkflowExecution,
   updateSessionState,
   casUpdateSessionRuntimeState,
   readSpaceContextGen,

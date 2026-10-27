@@ -20,7 +20,6 @@ import { MERGE_READ_TASKS, MERGE_TASKS, REQUIRED_CHECKS_TASK } from './localPrSh
 import {
   BASE_MOVED_BRIEF,
   BUMP_BRIEF,
-  COMMISSIONS,
   commission,
   confident,
   FIX_BRIEF,
@@ -28,6 +27,9 @@ import {
   fromCommission,
   MERGE_BRIEF,
   REMEDY,
+  REGISTRY_HOSTS,
+  REMEDY_CHANGE_JUDGE,
+  REMEDY_CHANGE_TASK,
 } from './localPrShepherdRemedies.js';
 import {
   AIM_OTHERWISE,
@@ -226,7 +228,7 @@ const SHEPHERD_PITFALLS: string[] = [
 
 const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
   catalogId: 'local-pr-shepherd',
-  version: 18,
+  version: 19,
   name: 'Local PR Shepherd',
   tagline:
     "Tend the pull requests the loop opened: read their CI, fix and publish a red check through Local Publish, and merge a green one where the folder's merge posture allows — never approving or closing.",
@@ -793,8 +795,9 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
         commission(
           'bump-dependency',
           'Commission the dependency bump',
-          "Have the machine's coding agent bump the package a dependency audit flagged to its fixed version — through `resolutions` where it is transitive — on the pull request's branch with its base merged in.",
+          "Have the machine's coding agent bump the package a dependency audit flagged to its fixed version — through `resolutions` where it is transitive — on the pull request's branch with its base merged in. A run the boundary kept from the package registry fails, naming the host.",
           BUMP_BRIEF,
+          REGISTRY_HOSTS,
         ),
         commission(
           'merge-round',
@@ -812,17 +815,17 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
           when: { expression: DECIDED_BASE_MOVED, onMissingRef: SKIP },
         },
 
+        REMEDY_CHANGE_JUDGE,
+
         {
           taskId: 'publish',
-          name: 'Publish the fix through Local Publish',
-          goal: "Publish the commission's change onto the pull request's branch through Local Publish and wait for it to end: its checks, its scan, its review, the decision on the review's findings and its approval as the folder's posture has them — it asks the operator exactly where it would when started by hand, and follows the decision.",
+          name: 'Publish the remedy through Local Publish',
+          goal: "Publish the change of whichever remedy commission ran — the fix, the dependency bump, the merge round or the merge round over a moved base — onto the pull request's branch through Local Publish and wait for it to end: its checks, its scan, its review, the decision on the review's findings and its approval as the folder's posture has them — it asks the operator exactly where it would when started by hand, and follows the decision.",
           type: 'operation' as const,
           operation: 'workflow.run.start',
+          dependsOn: [REMEDY_CHANGE_TASK],
           when: {
-            anyOf: COMMISSIONS.flatMap((taskId) => [
-              `tasks.${taskId}.output.patchRef != null`,
-              `tasks.${taskId}.output.merge.from != null`,
-            ]),
+            expression: `tasks.${REMEDY_CHANGE_TASK}.output.decision == 'fix'`,
             onMissingRef: SKIP,
           },
           optional: true,
@@ -896,9 +899,27 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
           immutable: false,
         },
         {
+          variableId: 'remedyDecision',
+          name: 'Remedy outcome',
+          description:
+            'What came of the remedy commission that ran: fix where it left a change for Local Publish, wait where it failed or left nothing to publish — the pass then waited, whatever it decided.',
+          required: false,
+          sensitive: false,
+          immutable: false,
+        },
+        {
+          variableId: 'remedyReason',
+          name: 'Remedy reason',
+          description: 'Why, as the judgement of the remedy says it.',
+          required: false,
+          sensitive: false,
+          immutable: false,
+        },
+        {
           variableId: 'publicationRunId',
           name: 'Publication',
-          description: 'The Local Publish run that published the fix, where this pass made one.',
+          description:
+            'The Local Publish run that published the remedy — fix, bump or merge round — where this pass made one.',
           required: false,
           sensitive: false,
           immutable: false,
@@ -916,7 +937,7 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
       output: {
         primary: 'decision',
         guidance:
-          'Report the decision and its reason. With publicationRunId, the fix went through Local Publish: report its pull request and whether it pushed, waits at its approval, or kept the branch local on fix_before_merge — its afterReview and reviewRunId. On merge, report whether it merged, waits at the operator’s approval, or was declined or refused. With handOverScheduleId, the case was handed to the Helmsman: say so.',
+          'Report the decision and its reason; where remedyDecision is wait, the remedy published nothing and remedyReason says why. With publicationRunId, the remedy went through Local Publish: its pull request, and whether it pushed, waits at its approval, or kept the branch local on fix_before_merge (afterReview, reviewRunId). On merge: merged, waiting at the operator’s approval, declined or refused. With handOverScheduleId, the case went to the Helmsman.',
       },
       iteration: { auto: false, maxConsecutiveRuns: 1, stopOnOutcomesMet: true, cooldownMs: 0 },
     },
