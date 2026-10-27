@@ -28,7 +28,7 @@
     "contentHash": "814ea9d7d423194beaa22fd9e22a10053bd5426d3d352de9df4cfbbc044296df"
   },
   "coding-loop": {
-    "version": 98,
+    "version": 99,
     "contentHash": "48f397a1a4c29daa1c17a0233bce1757c4cdf5fd7a873cb6dc863bd24510dfcf"
   },
   "coding-pr-loop": {
@@ -120,7 +120,7 @@
     "contentHash": "3f4d1d30ba290aa0c1375e96fabac69bbdc916d1de5f4148b464fa6d9b1ebf78"
   },
   "local-shepherd": {
-    "version": 22,
+    "version": 23,
     "contentHash": "dee02ddc49749c4338480562cfa1496b23abaf6d59379ccc8b9c130d905e1eef"
   },
   "newsapi": {

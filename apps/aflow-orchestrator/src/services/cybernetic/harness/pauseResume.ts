@@ -28,6 +28,7 @@ import {
   writeAttentionItem,
 } from './helpers.js';
 import { notifyWaiters } from './waiters.js';
+import { releaseScheduleCreates } from '../../SessionOrchestrator/handlers/inlineOps/scheduleCreateBudget.js';
 import { linkEndedRunToPlanNode } from './planLinks.js';
 import type { HarnessDeps } from './types.js';
 
@@ -325,6 +326,8 @@ export async function completeRun(
     );
     return false;
   }
+
+  await releaseScheduleCreates(deps.redis, tenantIdStr, runId);
 
   await emitRunUpdated(deps.redis, {
     tenantId: tenantIdStr,

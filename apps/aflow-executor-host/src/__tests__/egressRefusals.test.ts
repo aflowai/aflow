@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 import {
   createChatterStripper,
   describeRefusals,
+  describeUnreachedRequiredHosts,
   extractEgressRefusals,
+  refusedRequiredHosts,
   stripSandboxChatter,
 } from '../egressRefusals.js';
 
@@ -204,5 +206,29 @@ describe('a stream does not arrive in lines', () => {
     const held = stripper.push('Created reverse_string.py. Connection pooling is unchanged.');
     expect(held).toBe('');
     expect(stripper.flush()).toBe('Created reverse_string.py. Connection pooling is unchanged.');
+  });
+});
+
+describe('hosts a task requires', () => {
+  it('names each required host the boundary refused, and no other', () => {
+    const { refusals } = extractEgressRefusals(
+      [
+        '[SandboxDebug] No matching config rule, denying: registry.npmjs.org:443',
+        '[SandboxDebug] Connection blocked to telemetry.example.com:443',
+      ].join('\n'),
+    );
+    expect(refusedRequiredHosts(['registry.yarnpkg.com', 'Registry.NPMJS.org'], refusals)).toEqual([
+      'registry.npmjs.org',
+    ]);
+    expect(refusedRequiredHosts([], refusals)).toEqual([]);
+  });
+
+  it('says the run is no result, names the host, and gives the command that admits it', () => {
+    const message = describeUnreachedRequiredHosts(['registry.npmjs.org'], 'claude');
+    expect(message).toContain('could not reach registry.npmjs.org');
+    expect(message).toContain('is not a result');
+    expect(message).toContain(
+      'yarn workspace @aflow/aflow-executor-host harness add claude --domain registry.npmjs.org',
+    );
   });
 });

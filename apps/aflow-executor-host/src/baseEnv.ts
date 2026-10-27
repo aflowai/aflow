@@ -69,7 +69,7 @@ const TOOLCHAIN_NAMES = [
   'VOLTA_HOME',
 ] as const;
 
-import { mkdir } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 export const INHERITED_ENV_NAMES: readonly string[] = [...SHELL_NAMES, ...TOOLCHAIN_NAMES];
@@ -97,11 +97,29 @@ export function workloadTemp(scratchDir: string): string {
  */
 export const WORKLOAD_TEMP_ENV_NAMES = ['TMPDIR', 'TMP', 'TEMP', 'CLAUDE_CODE_TMPDIR'] as const;
 
+/**
+ * Yarn's configuration in the workload's home: its proxies are the sandbox's.
+ *
+ * The boundary has no resolver of its own — a name is resolved by the proxy
+ * the adapter names in `HTTP_PROXY` and `HTTPS_PROXY`, outside it — and Yarn
+ * 2 and later read neither variable, only their own `httpProxy` and
+ * `httpsProxy`. So `yarn install` resolved the registry itself and failed
+ * with `ENOTFOUND registry.yarnpkg.com` on a host the run was allowed. Read
+ * from the home, beneath any the repository sets, and interpolated when Yarn
+ * starts: under no proxy the values are empty and Yarn connects directly.
+ */
+export const WORKLOAD_YARNRC = [
+  "httpProxy: '${HTTP_PROXY:-}'",
+  "httpsProxy: '${HTTPS_PROXY:-}'",
+  '',
+].join('\n');
+
 /** The home and the temporary directory {@link buildBaseEnv} names, made before the spawn. */
 export async function createWorkloadDirs(scratchDir: string): Promise<void> {
   for (const dir of [workloadHome(scratchDir), workloadTemp(scratchDir)]) {
     await mkdir(dir, { recursive: true });
   }
+  await writeFile(join(workloadHome(scratchDir), '.yarnrc.yml'), WORKLOAD_YARNRC);
 }
 
 export function buildBaseEnv(

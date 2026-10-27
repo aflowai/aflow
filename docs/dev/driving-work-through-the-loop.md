@@ -263,7 +263,9 @@ A commission, a review and the folder's checks run inside the machine's sandbox 
 folder's sandbox posture (Plan 315 D19), which `host.binding.inspect` shows. The posture is
 what the network is. `open`, the default, is the sandbox the operator's own coding tool runs
 under with every domain allowed — Claude Code's: every host but this machine, so the agent's
-own search and fetch, Corepack, `yarn` and the registry work. `confined` is the
+own search and fetch, Corepack, `yarn` and the registry work — Yarn through the sandbox's
+proxy, which a `.yarnrc.yml` in each job's home names for it, since Yarn reads no
+`HTTP_PROXY`. `confined` is the
 workspace-write default of the other — Codex CLI's: the network off, a coding agent reaching
 only the hosts it was allowed (`aflow harness allow`) and the checks none. Loopback to the
 machine is never a job's under either: no list of ports could keep the stack's Redis, its MCP

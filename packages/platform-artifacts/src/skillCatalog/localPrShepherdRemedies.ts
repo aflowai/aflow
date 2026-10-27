@@ -2,6 +2,7 @@ import {
   HOST_HARNESS_TIMEOUT_MAX_MS,
   PullRequestGapsSchema,
   toJsonSchemaSync,
+  type WorkflowRunDecideRule,
 } from '@aflow/schemas';
 import { REMEDY_QUESTION_NAME } from './localPrShepherdDecisions.js';
 import { MERGE_ROUND_AFTER_BASE_MOVED } from './localPrShepherdRules.js';
@@ -13,6 +14,7 @@ import {
   LEASE_TAKERS,
   out,
   runInput,
+  SKIP,
 } from './localPrShepherdWiring.js';
 
 // --- The remedies ----------------------------------------------------------
@@ -53,7 +55,7 @@ ${STANDING_RULES}`;
 
 export const BUMP_BRIEF = `A dependency audit failed on this pull request's branch: an advisory against a package the repository resolves, which arrived since the branch was last green. This checkout is that branch with its base merged in. Clear the advisory.
 
-The inputs name the failing jobs and the end of each one's log, where the advisory, the package and the fixed version are. Bump the package to the first version the advisory names as fixed: a direct dependency in its manifest, a transitive one through the root \`resolutions\` field. Install so the lockfile records it, and change nothing else.
+The inputs name the failing jobs and the end of each one's log, where the advisory, the package and the fixed version are. Bump the package to the first version the advisory names as fixed: a direct dependency in its manifest, a transitive one through the root \`resolutions\` field. Install so the lockfile records it, and change nothing else. Where the install cannot reach the registry, write no lockfile by hand: leave the tree as it is and name the host in the gaps.
 
 ${STANDING_RULES}`;
 
@@ -83,7 +85,20 @@ const COMMISSION_BINDINGS = {
   ...handoffBindings('earlierRounds', 'data'),
 };
 
-export function commission(taskId: string, name: string, goal: string, brief: string) {
+/**
+ * The registries a dependency bump installs and audits from: Yarn reads through
+ * its own, and `yarn npm audit` and npm read npm's. A bump the boundary kept
+ * from either fails naming it, since its lockfile cannot record the bump.
+ */
+export const REGISTRY_HOSTS = ['registry.yarnpkg.com', 'registry.npmjs.org'] as const;
+
+export function commission(
+  taskId: string,
+  name: string,
+  goal: string,
+  brief: string,
+  requiredHosts: readonly string[] = [],
+) {
   return {
     taskId,
     name,
@@ -113,6 +128,7 @@ export function commission(taskId: string, name: string, goal: string, brief: st
       mergeFrom: { $concat: ['origin/', bind('baseRef')] },
       outputSchema: COMMISSION_RESULT_SCHEMA,
       timeoutMs: HOST_HARNESS_TIMEOUT_MAX_MS,
+      ...(requiredHosts.length > 0 ? { requiredHosts: [...requiredHosts] } : {}),
     },
   };
 }
@@ -138,6 +154,74 @@ export function fromCommission(path: string) {
 export function firstOfCommissions(path: string) {
   return { $firstOf: COMMISSIONS.map((taskId) => bind(commissionBinding(taskId, path))) };
 }
+
+// --- What the remedy left to publish ---------------------------------------
+
+export const REMEDY_CHANGE_TASK = 'judge-remedy-change';
+
+/** The check run stays recorded as acted on, so what moves it on is what moves any acted-on failure on. */
+const ACTED_ON_STILL =
+  'The failure counts as acted on: a later pass acts again on a new check run, or once the base branch moves past this remedy.';
+
+/**
+ * A remedy that ran and published nothing is a `wait` with its reason, not a
+ * publication skipped in silence beside a `fix` the handoff would record.
+ * `filesChanged` is in every result a commission returns, so its absence is a
+ * commission that failed.
+ */
+export const REMEDY_CHANGE_RULES: readonly WorkflowRunDecideRule[] = [
+  {
+    when: { expression: 'state.filesChanged == null' },
+    decision: 'wait',
+    reason: `The remedy commission failed, so nothing went through Local Publish: the error on its task in this run says why, and names any host the boundary kept it from. ${ACTED_ON_STILL}`,
+  },
+  {
+    when: { allOf: ['state.patchRef == null', 'state.mergeFrom == null'] },
+    decision: 'wait',
+    reason: `The remedy commission ran and left nothing to publish — no change on the branch and no base merged in — so nothing went through Local Publish; the gaps its result reports say why. ${ACTED_ON_STILL}`,
+  },
+];
+
+export const REMEDY_CHANGE_OTHERWISE = {
+  decision: 'fix',
+  reason:
+    'The remedy left a change on the branch, or merged its base in, and Local Publish publishes it.',
+};
+
+/** Whichever commission ran has ended, whether or not it returned anything. */
+const A_COMMISSION_RAN = COMMISSIONS.flatMap((taskId) => [
+  `tasks.${taskId}.status == 'succeeded'`,
+  `tasks.${taskId}.status == 'failed'`,
+]);
+
+export const REMEDY_CHANGE_JUDGE = {
+  taskId: REMEDY_CHANGE_TASK,
+  name: 'Judge what the remedy left to publish',
+  goal: 'Say whether the remedy commission that ran — the fix, the dependency bump, the merge round or the merge round over a moved base — left Local Publish anything to take: a change on the branch, or its base merged in. Where it failed or left nothing, the pass is a wait, with the reason, and nothing is published.',
+  type: 'operation' as const,
+  operation: 'workflow.run.decide',
+  when: { anyOf: A_COMMISSION_RAN, onMissingRef: SKIP },
+  retryability: 'safe' as const,
+  inputBindings: {
+    ...fromCommission('filesChanged'),
+    ...fromCommission('patchRef'),
+    ...fromCommission('merge.from'),
+  },
+  context: ctx('workflow.run.decide'),
+  inputTemplate: {
+    state: {
+      filesChanged: firstOfCommissions('filesChanged'),
+      patchRef: firstOfCommissions('patchRef'),
+      mergeFrom: firstOfCommissions('merge.from'),
+    },
+    rules: REMEDY_CHANGE_RULES,
+    otherwise: REMEDY_CHANGE_OTHERWISE,
+  },
+  promoteOutputs: [
+    { kind: 'output_path' as const, path: 'decision', toState: 'remedyDecision' },
+    { kind: 'output_path' as const, path: 'reason', toState: 'remedyReason' },
+  ],
+};
 
 export const REMEDY = `answers.${REMEDY_QUESTION_NAME}`;
 

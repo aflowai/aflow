@@ -1090,6 +1090,21 @@ const HostHarnessRunInputObjectSchema = z.object({
     .default(HOST_HARNESS_TIMEOUT_DEFAULT_MS)
     .describe('Kill the harness and its descendants after this long.'),
   browser: HostHarnessBrowserSchema.optional(),
+  requiredHosts: z
+    .array(
+      z
+        .string()
+        .min(1)
+        .max(253)
+        .regex(/^[a-z0-9.-]+$/i, { message: 'A host name, such as `registry.npmjs.org`.' }),
+    )
+    .max(20)
+    .optional()
+    .describe(
+      'Hosts the task cannot be done without, such as the package registry a dependency ' +
+        'bump installs from. A run the boundary refused one of fails, naming the host and how ' +
+        'to allow it, rather than returning whatever it managed without it.',
+    ),
 });
 
 export const HostHarnessRunInputSchema = HostHarnessRunInputObjectSchema.superRefine(

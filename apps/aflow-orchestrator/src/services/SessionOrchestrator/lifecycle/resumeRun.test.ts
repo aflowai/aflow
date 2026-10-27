@@ -55,7 +55,13 @@ const resumeRun = createResumeRun({
   deps: {
     db: {},
     redis: {},
-    payloadStore: { retrieve: vi.fn(async (ref: string) => payloads.get(ref)) },
+    payloadStore: {
+      retrieve: vi.fn(async (ref: string) => {
+        const payload = payloads.get(ref);
+        if (payload instanceof Error) throw payload;
+        return payload;
+      }),
+    },
   },
   scheduleStep,
 } as never);
@@ -184,17 +190,49 @@ describe('resumeRun on a conversation waiting on a paused workflow run', () => {
     ]);
   });
 
-  it('still refuses a resume carrying no message, or no one to attribute it to', async () => {
+  it('stays paused, not failed, when the message is live but its durable row is owed', async () => {
+    mockGetSessionStateSafe.mockResolvedValue({ ok: true, state: parked });
+    mockQueueMessage.mockResolvedValue({ eventId: 'event-1', durableOwed: true });
+
+    // ControlConsumer fails a run only on a throw; this resolves.
+    await expect(resume('Go on.', { actorContext: PERSON })).resolves.toEqual({
+      status: 'PAUSED',
+    });
+    expect(mockAtomicCompleteStep).not.toHaveBeenCalled();
+  });
+
+  it('refuses a resume carrying no message, saying it carried none', async () => {
     mockGetSessionStateSafe.mockResolvedValue({ ok: true, state: parked });
     for (const attempt of [
       resume({}, { actorContext: PERSON }),
       resume({ unrelated: true }, { actorContext: PERSON }),
-      resume('A message from nobody.'),
+      resume({}, { actorContext: PERSON, inputRef: undefined }),
     ]) {
-      const refusal = await attempt.catch((err: unknown) => err);
-      expect((refusal as ControlConflictError).conflictCode).toBe('run_waiting_on_workflow_run');
+      const refusal = (await attempt.catch((err: unknown) => err)) as ControlConflictError;
+      expect(refusal.conflictCode).toBe('run_waiting_on_workflow_run');
+      expect(refusal.message).toContain('this resume carried none');
     }
     expect(mockQueueMessage).not.toHaveBeenCalled();
+  });
+
+  it('refuses a resume that did carry text by naming what failed, not "carried none"', async () => {
+    mockGetSessionStateSafe.mockResolvedValue({ ok: true, state: parked });
+    mockQueueMessage.mockResolvedValue(undefined);
+    const cases: Array<[Promise<unknown>, RegExp]> = [
+      [resume('A message from nobody.'), /no person to attribute it to/],
+      [
+        resume(new Error('bucket unreachable'), { actorContext: PERSON }),
+        /could not be read from the payload store \(bucket unreachable\)/,
+      ],
+      [resume('Hello?', { actorContext: PERSON }), /live state is gone/],
+    ];
+    for (const [attempt, reason] of cases) {
+      const refusal = (await attempt.catch((err: unknown) => err)) as ControlConflictError;
+      expect(refusal.conflictCode).toBe('run_waiting_on_workflow_run');
+      expect(refusal.message).toMatch(reason);
+      expect(refusal.message).not.toContain('carried none');
+    }
+    expect(mockQueueMessage).toHaveBeenCalledOnce();
   });
 });
 

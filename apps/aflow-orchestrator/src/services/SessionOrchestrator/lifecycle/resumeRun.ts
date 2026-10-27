@@ -42,7 +42,11 @@ import {
   agentChatInputVarId,
   ensureAgentChatInputOverlay,
 } from '../helpers/inputPause.js';
-import { messageOfResumeInput, queueMessageForNextTurn } from '../helpers/queuedMessage.js';
+import {
+  messageOfResumeInput,
+  queueMessageForNextTurn,
+  type QueuedMessage,
+} from '../helpers/queuedMessage.js';
 import { buildRunStatusChangedRecoveryEvent } from '../helpers/recoveryEmitter.js';
 import { AuthorityLostError, ControlConflictError } from '../../../lib/controlConflict.js';
 import {
@@ -110,19 +114,30 @@ export function createResumeRun(bindings: SessionOrchestratorBindings) {
 
   /**
    * Queue a message carried by a resume of a conversation parked on a
-   * workflow run, where it carries one and someone it can be attributed to;
-   * undefined otherwise, and the resume is refused as before.
+   * workflow run, where it carries one and someone it can be attributed to.
+   * Otherwise says why it could not be queued, in words the refusal ends on.
    */
-  async function queueWhileWaiting(params: ResumeParams) {
-    if (!params.actorContext || !params.inputRef) return undefined;
+  async function queueWhileWaiting(
+    params: ResumeParams,
+  ): Promise<{ queued: QueuedMessage } | { refused: string }> {
+    if (!params.inputRef) return { refused: 'this resume carried none' };
     let body: string | undefined;
     try {
       body = messageOfResumeInput(await payloadStore.retrieve(params.inputRef));
-    } catch {
-      return undefined;
+    } catch (err) {
+      return {
+        refused:
+          `this resume's input could not be read from the payload store ` +
+          `(${err instanceof Error ? err.message : String(err)}), so it was not queued`,
+      };
     }
-    if (body === undefined) return undefined;
-    return await queueMessageForNextTurn(db, redis, {
+    if (body === undefined) return { refused: 'this resume carried none' };
+    if (!params.actorContext) {
+      return {
+        refused: 'this resume carried text but no person to attribute it to, so it was not queued',
+      };
+    }
+    const queued = await queueMessageForNextTurn(db, redis, {
       tenantId: params.tenantId,
       sessionId: params.runId,
       deliveryKey: params.idempotencyKey,
@@ -133,6 +148,13 @@ export function createResumeRun(bindings: SessionOrchestratorBindings) {
       body,
       ...(params.clientMessageId ? { clientMessageId: params.clientMessageId } : {}),
     });
+    return queued
+      ? { queued }
+      : {
+          refused:
+            "this resume carried text, but the conversation's live state is gone, so it " +
+            'could not be posted into its room',
+        };
   }
 
   return async function resumeRun(params: ResumeParams) {
@@ -260,11 +282,15 @@ export function createResumeRun(bindings: SessionOrchestratorBindings) {
     // the run's ending wakes, and the conversation goes on waiting.
     if (runState.pauseType === 'external_dependency' && runState.waitingOnWorkflowRunId) {
       const waitedRunId = runState.waitingOnWorkflowRunId;
-      const queued = await queueWhileWaiting(params);
-      if (queued) {
+      const outcome = await queueWhileWaiting(params);
+      if ('queued' in outcome) {
+        // A durable row still owed is not a failure of this conversation: the
+        // message is live, and the row is written by a redelivery of this
+        // resume or by the turn the run's ending wakes, before it reads the room.
+        const owed = 'durableOwed' in outcome.queued ? ' (its durable row is still owed)' : '';
         getOrchestratorLogger().info(
           `[resumeRun] Run ${params.runId} is waiting on workflow run ${waitedRunId}; ` +
-            `queued the message ${queued.eventId} to its next turn.`,
+            `queued the message ${outcome.queued.eventId} to its next turn${owed}.`,
         );
         return { status: 'PAUSED' as SessionStatus };
       }
@@ -272,7 +298,7 @@ export function createResumeRun(bindings: SessionOrchestratorBindings) {
         'run_waiting_on_workflow_run',
         `This conversation is waiting on workflow run ${waitedRunId}, not on an answer, and ` +
           `resumes by itself when that run pauses or ends. A message sent as text, by a ` +
-          `person, is queued to the turn that follows; this resume carried none. ` +
+          `person, is queued to the turn that follows; ${outcome.refused}. ` +
           `To stop waiting, cancel the run ` +
           `(workflow.run.cancel with runId ${waitedRunId}) or interrupt this conversation ` +
           `(interruptRun).`,

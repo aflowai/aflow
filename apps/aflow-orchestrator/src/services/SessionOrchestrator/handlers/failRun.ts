@@ -23,6 +23,7 @@ import {
   enqueuePendingAndReconcile,
   isDelegationUpsertFailure,
 } from './enqueueDelegationCompletion.js';
+import { releaseScheduleCreates } from './inlineOps/scheduleCreateBudget.js';
 
 export async function failRun(
   redis: Redis,
@@ -61,6 +62,7 @@ export async function failRun(
   // sites is how four of them came to omit it — an over-count that admission
   // control turns into a 429 against real traffic.
   await markRunInactive(redis, tenantId, runId).catch(() => {});
+  await releaseScheduleCreates(redis, tenantId, runId);
 
   const aflowError = classification
     ? {

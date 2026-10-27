@@ -201,6 +201,12 @@ export function extractEgressRefusals(stderr: string): ScrubbedOutput {
  */
 export type RefusalOutcome = 'reached_result' | 'produced_nothing';
 
+/** The command, run on the operator's machine, that lets the harness reach `hosts`. */
+function allowCommand(hosts: readonly string[], harnessId: string | undefined): string {
+  const flags = hosts.map((host) => `--domain ${host}`).join(' ');
+  return `  yarn workspace @aflow/aflow-executor-host harness add ${harnessId ?? '<harness>'} ${flags}\n`;
+}
+
 /**
  * What was refused, who can change it, and the words that change it.
  *
@@ -228,8 +234,7 @@ export function describeRefusals(
   if (refusals.length === 0) return undefined;
   const hosts = [...new Set(refusals.map((r) => r.host))];
   const plural = hosts.length > 1;
-  const flags = hosts.map((host) => `--domain ${host}`).join(' ');
-  const command = `  yarn workspace @aflow/aflow-executor-host harness add ${harnessId ?? '<harness>'} ${flags}\n`;
+  const command = allowCommand(hosts, harnessId);
   const refused =
     `The boundary refused ${plural ? 'connections' : 'a connection'} to ${hosts.join(', ')}, ` +
     `so anything needing ${plural ? 'them' : 'it'} did not happen. `;
@@ -246,5 +251,36 @@ export function describeRefusals(
     `${refused}${widening} — ask them to run there:\n${command}` +
     'Then ask again. Do not retry until they say it is done: the refusal is a decision, not a ' +
     'failure, and it will not change on its own.'
+  );
+}
+
+/** The hosts a task named as required that the boundary refused during its run. */
+export function refusedRequiredHosts(
+  required: readonly string[],
+  refusals: readonly EgressRefusal[],
+): string[] {
+  const refused = new Set(refusals.map((r) => r.host.toLowerCase()));
+  return [...new Set(required.map((host) => host.toLowerCase()))].filter((host) =>
+    refused.has(host),
+  );
+}
+
+/**
+ * Why a run that could not reach a host its task requires failed. Whatever it
+ * returned was made without that host — a dependency bump with no registry
+ * leaves the lockfile as it was — so it is no result, and saying so names the
+ * host and the command that admits it.
+ */
+export function describeUnreachedRequiredHosts(
+  hosts: readonly string[],
+  harnessId: string | undefined,
+): string {
+  const plural = hosts.length > 1;
+  return (
+    `The run could not reach ${hosts.join(', ')}, which this task requires: the boundary ` +
+    `refused ${plural ? 'them' : 'it'}, so what the harness returned was made without ` +
+    `${plural ? 'them' : 'it'} and is not a result. Only the operator can widen a harness's ` +
+    `allowed domains, on their own machine:\n${allowCommand(hosts, harnessId)}` +
+    'Then run the task again; until then it fails the same way.'
   );
 }

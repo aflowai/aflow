@@ -176,6 +176,7 @@ export {
   type GetSessionStateSafeResult,
   setSessionState,
   getSessionState,
+  getSessionWorkflowExecution,
   updateSessionState,
   casUpdateSessionRuntimeState,
   readSpaceContextGen,
