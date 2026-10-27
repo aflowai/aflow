@@ -19,7 +19,11 @@ vi.mock('@aflow/redis', async (importOriginal) => ({
 }));
 
 const { ScheduleEvaluator } = await import('../ScheduleEvaluator.js');
-const { scheduleStartingKey } = await import('@aflow/cybernetic-runtime');
+const { requestResidentWake, residentPendingKey, scheduleStartingKey } = await import(
+  '@aflow/cybernetic-runtime'
+);
+type ResidentSchedule = import('@aflow/cybernetic-runtime').ResidentSchedule;
+type ScheduleDispatchItem = import('@aflow/database').ScheduleDispatchItem;
 
 const TENANT = 'a0000000-0000-4000-8000-000000000331';
 const SPACE = 'b0000000-0000-4000-8000-000000000331';
@@ -123,5 +127,99 @@ describe('an occurrence while the previous run is in flight (Plan 331 D1)', () =
     statements = [];
     expect(await occur()).toBe(false);
     expect(statements[0]!.query).toContain("'{overlap}'");
+  });
+});
+
+describe('heartbeats and event wakes share one guard (Plan 331 D4)', () => {
+  let enqueued: ScheduleDispatchItem[];
+
+  function resident(): ResidentSchedule {
+    const row = residentRow();
+    return {
+      id: row.id,
+      spaceId: row.space_id,
+      name: row.name,
+      action: row.action,
+      targetKind: row.target_kind,
+      targetSystemRole: row.target_system_role,
+      targetAgentId: null,
+      agentVersion: null,
+      targetSessionId: null,
+      targetStepExecutionId: null,
+      inputTemplate: row.input_template,
+      firingCount: row.firing_count,
+      lastSessionId: row.last_session_id,
+      creatorUserId: row.creator_user_id,
+      creatorTenantRole: row.creator_tenant_role,
+      creatorSpaceRole: row.creator_space_role,
+    };
+  }
+
+  function event() {
+    return requestResidentWake(
+      {
+        redis,
+        schedules: {
+          find: () => Promise.resolve(resident()),
+          enqueue: (item: ScheduleDispatchItem) => {
+            enqueued.push(item);
+            return Promise.resolve();
+          },
+        },
+      },
+      { tenantId: TENANT, spaceId: SPACE, cause: 'run_ended' },
+    );
+  }
+
+  const fired = () => statements.filter((s) => s.query.includes('schedule_dispatch_outbox')).length;
+  const skipped = () => statements.filter((s) => s.query.includes("'{overlap}'")).length;
+
+  beforeEach(() => {
+    enqueued = [];
+    sessions.set(PREVIOUS_RUN, { status: 'SUCCEEDED' });
+  });
+
+  it('a heartbeat and an event arriving while an event’s wake is in flight: one wake, the heartbeat skipped, the event pending', async () => {
+    expect(await event()).toBe('started');
+    expect(await occur()).toBe(false);
+    expect(await event()).toBe('pending');
+
+    expect(enqueued).toHaveLength(1);
+    expect(fired()).toBe(0);
+    expect(skipped()).toBe(1);
+    expect(await redis.get(residentPendingKey(TENANT, SPACE))).not.toBeNull();
+  });
+
+  it('an event arriving while a heartbeat’s wake is in flight is marked pending, not started beside it', async () => {
+    expect(await occur()).toBe(true);
+    expect(await event()).toBe('pending');
+    expect(await occur()).toBe(false);
+
+    expect(fired()).toBe(1);
+    expect(enqueued).toEqual([]);
+    expect(skipped()).toBe(1);
+    expect(await redis.get(residentPendingKey(TENANT, SPACE))).not.toBeNull();
+  });
+
+  it('a heartbeat and an event arriving at once start exactly one wake', async () => {
+    const [heartbeat, woke] = await Promise.all([occur(), event()]);
+    expect(Number(heartbeat) + Number(woke === 'started')).toBe(1);
+    expect(fired() + enqueued.length).toBe(1);
+  });
+
+  it('a heartbeat whose advance loses to another instance gives the guard back', async () => {
+    const lost = new ScheduleEvaluator({
+      redis,
+      sqlClient: {
+        unsafe: () => Promise.resolve([]),
+        begin: (fn: (tx: { unsafe: () => Promise<unknown[]> }) => Promise<unknown>) =>
+          fn({ unsafe: () => Promise.resolve([]) }),
+      } as unknown as postgres.Sql,
+      db: {} as never,
+      mode: 'observe',
+    }) as unknown as { recordOccurrence(row: unknown): Promise<boolean> };
+    expect(await lost.recordOccurrence(residentRow())).toBe(false);
+    expect(await redis.get(scheduleStartingKey(TENANT, SCHEDULE))).toBeNull();
+    expect(await event()).toBe('started');
   });
 });

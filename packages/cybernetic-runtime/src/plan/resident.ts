@@ -2,9 +2,10 @@
  * The space's resident (Plan 331 D1, D4): one schedule wakes the Helmsman on
  * a heartbeat, and the events that change what a wake would decide — a run a
  * wake started ending, a person writing a node — wake it too. A wake never
- * overlaps another: a heartbeat that arrives while one is in flight is
- * dropped, and an event sets the space's pending mark instead, which the wake
- * in flight answers with one more wake when it ends. That wake reads the
+ * overlaps another: heartbeats and events take one atomic guard
+ * (`claimScheduleRun`); a heartbeat that arrives while a wake is in flight is
+ * recorded as skipped, and an event sets the space's pending mark instead,
+ * which the wake in flight answers with one more wake when it ends. That wake reads the
  * board, so it sees every event the mark stood for, and none is dropped.
  *
  * A wake is an occurrence of the resident schedule written to the dispatch
@@ -65,21 +66,6 @@ export function residentPendingKey(tenantId: string, spaceId: string): string {
   return `plan:resident:pending:${tenantId}:${spaceId}`;
 }
 
-/** Record that an occurrence of the schedule is starting `runId`, before its state exists. */
-export async function markScheduleRunStarting(
-  redis: Redis,
-  tenantId: string,
-  scheduleId: string,
-  runId: string,
-): Promise<void> {
-  await redis.set(
-    scheduleStartingKey(tenantId, scheduleId),
-    runId,
-    'PX',
-    SCHEDULE_RUN_STARTING_TTL_MS,
-  );
-}
-
 /**
  * Whether the schedule's previous run has not ended (Plan 331 D1): an
  * occurrence recorded and not yet started, or its last run still going.
@@ -89,12 +75,78 @@ export async function isScheduleRunInFlight(
   tenantId: string,
   schedule: { id: string; lastSessionId: string | null },
 ): Promise<boolean> {
+  return (await readScheduleRunGuard(redis, tenantId, schedule)).inFlight;
+}
+
+async function readScheduleRunGuard(
+  redis: Redis,
+  tenantId: string,
+  schedule: { id: string; lastSessionId: string | null },
+): Promise<{ inFlight: boolean; starting: string | null }> {
   const starting = await redis.get(scheduleStartingKey(tenantId, schedule.id));
-  if (starting !== null && starting !== schedule.lastSessionId) return true;
-  if (schedule.lastSessionId === null) return false;
+  if (starting !== null && starting !== schedule.lastSessionId) return { inFlight: true, starting };
+  if (schedule.lastSessionId === null) return { inFlight: false, starting };
   const state = await getSessionState(redis, tenantId, schedule.lastSessionId);
-  if (!state) return starting === schedule.lastSessionId;
-  return IN_FLIGHT_STATUSES.has(state.status);
+  const inFlight = state
+    ? IN_FLIGHT_STATUSES.has(state.status)
+    : starting === schedule.lastSessionId;
+  return { inFlight, starting };
+}
+
+// Takes the guard only if it still holds what the caller judged ended: empty,
+// or the mark of the run that ended. Two claimers that read the same state
+// race here, and exactly one wins.
+const CLAIM_SCHEDULE_RUN_LUA = `
+local current = redis.call('GET', KEYS[1])
+if (current == false and ARGV[3] == '') or current == ARGV[3] then
+  redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2])
+  return 1
+end
+return 0
+`;
+
+const RELEASE_SCHEDULE_RUN_LUA = `
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+  return redis.call('DEL', KEYS[1])
+end
+return 0
+`;
+
+/**
+ * The one guard every start of a schedule's run takes (Plan 331 D1, D4): a
+ * cron occurrence and an event-driven resident wake alike. Refused while the
+ * previous run is in flight, and otherwise taken atomically, so at most one
+ * run of the schedule is starting or going at a time. The holder's `runId`
+ * stands until that run's own state exists; a heartbeat refused the guard is
+ * recorded as skipped, and an event refused it sets the space's pending mark.
+ */
+export async function claimScheduleRun(
+  redis: Redis,
+  tenantId: string,
+  schedule: { id: string; lastSessionId: string | null },
+  runId: string,
+): Promise<boolean> {
+  const { inFlight, starting } = await readScheduleRunGuard(redis, tenantId, schedule);
+  if (inFlight) return false;
+  const taken = await redis.eval(
+    CLAIM_SCHEDULE_RUN_LUA,
+    1,
+    scheduleStartingKey(tenantId, schedule.id),
+    runId,
+    String(SCHEDULE_RUN_STARTING_TTL_MS),
+    starting ?? '',
+  );
+  return Number(taken) === 1;
+}
+
+/** Give the guard back where `runId` still holds it: its start was abandoned, or it ended. */
+export async function releaseScheduleRun(
+  redis: Redis,
+  tenantId: string,
+  scheduleId: string,
+  runId: string,
+): Promise<void> {
+  await redis.eval(RELEASE_SCHEDULE_RUN_LUA, 1, scheduleStartingKey(tenantId, scheduleId), runId);
 }
 
 /** The facts of the resident schedule a wake reads. */
@@ -170,53 +222,56 @@ export type ResidentWakeOutcome = 'no_resident' | 'pending' | 'started';
 /** A wake ended: whether it was the resident's, and what its end started. */
 export type ResidentWakeEnd = ResidentWakeOutcome | 'not_resident' | 'idle';
 
-/** Write one occurrence of the resident schedule to the dispatch outbox. */
-async function startWake(
+type ResidentWithCreator = ResidentSchedule & { creatorUserId: string };
+
+function hasCreator(schedule: ResidentSchedule): schedule is ResidentWithCreator {
+  return schedule.creatorUserId !== null;
+}
+
+function newWake(schedule: ResidentSchedule): { idempotencyKey: string; runId: string } {
+  const idempotencyKey = `schedule:${schedule.id}:wake:${randomUUID()}`;
+  return { idempotencyKey, runId: scheduleOccurrenceRunId(idempotencyKey) };
+}
+
+/** Write one occurrence of the resident schedule to the dispatch outbox; the caller holds the guard. */
+async function enqueueWake(
   deps: ResidentWakeDeps,
   tenantId: string,
-  schedule: ResidentSchedule,
+  schedule: ResidentWithCreator,
+  wake: { idempotencyKey: string; runId: string },
 ): Promise<ResidentWakeOutcome> {
-  if (schedule.creatorUserId === null) return 'no_resident';
-  const idempotencyKey = `schedule:${schedule.id}:wake:${randomUUID()}`;
-  const runId = scheduleOccurrenceRunId(idempotencyKey);
-  const taken = await deps.redis.set(
-    scheduleStartingKey(tenantId, schedule.id),
-    runId,
-    'PX',
-    SCHEDULE_RUN_STARTING_TTL_MS,
-    'NX',
-  );
-  if (taken !== 'OK') {
-    await setPending(deps.redis, tenantId, schedule.spaceId);
-    return 'pending';
+  try {
+    const resolvedInput = await resolveInputTemplate(
+      (schedule.inputTemplate ?? {}) as Record<string, unknown>,
+      { schedule: { id: schedule.id }, now: new Date() },
+    );
+    const tenantCtx = createTenantContext(tenantId as TenantId);
+    const dispatch: ScheduleDispatchItem = {
+      tenantId,
+      scheduleId: schedule.id,
+      scheduleName: schedule.name,
+      schemaName: tenantCtx.schemaName,
+      spaceId: schedule.spaceId,
+      action: schedule.action,
+      targetKind: schedule.targetKind,
+      targetSystemRole: schedule.targetSystemRole,
+      targetAgentId: schedule.targetAgentId,
+      agentVersion: schedule.agentVersion,
+      targetSessionId: schedule.targetSessionId,
+      targetStepExecutionId: schedule.targetStepExecutionId,
+      resolvedInput,
+      firingCount: schedule.firingCount,
+      idempotencyKey: wake.idempotencyKey,
+      creatorUserId: schedule.creatorUserId,
+      creatorTenantRole: schedule.creatorTenantRole,
+      creatorSpaceRole: schedule.creatorSpaceRole,
+    };
+    await deps.schedules.enqueue(dispatch);
+    return 'started';
+  } catch (err) {
+    await releaseScheduleRun(deps.redis, tenantId, schedule.id, wake.runId);
+    throw err;
   }
-  const resolvedInput = await resolveInputTemplate(
-    (schedule.inputTemplate ?? {}) as Record<string, unknown>,
-    { schedule: { id: schedule.id }, now: new Date() },
-  );
-  const tenantCtx = createTenantContext(tenantId as TenantId);
-  const dispatch: ScheduleDispatchItem = {
-    tenantId,
-    scheduleId: schedule.id,
-    scheduleName: schedule.name,
-    schemaName: tenantCtx.schemaName,
-    spaceId: schedule.spaceId,
-    action: schedule.action,
-    targetKind: schedule.targetKind,
-    targetSystemRole: schedule.targetSystemRole,
-    targetAgentId: schedule.targetAgentId,
-    agentVersion: schedule.agentVersion,
-    targetSessionId: schedule.targetSessionId,
-    targetStepExecutionId: schedule.targetStepExecutionId,
-    resolvedInput,
-    firingCount: schedule.firingCount,
-    idempotencyKey,
-    creatorUserId: schedule.creatorUserId,
-    creatorTenantRole: schedule.creatorTenantRole,
-    creatorSpaceRole: schedule.creatorSpaceRole,
-  };
-  await deps.schedules.enqueue(dispatch);
-  return 'started';
 }
 
 async function setPending(redis: Redis, tenantId: string, spaceId: string): Promise<void> {
@@ -225,9 +280,11 @@ async function setPending(redis: Redis, tenantId: string, spaceId: string): Prom
 
 /**
  * An event the resident should act on (Plan 331 D4): wake it now, or — while
- * a wake is in flight — set the space's pending mark for that wake to answer.
- * Never dropped: a wake that ended between the read and the mark finds no
- * one to answer it, so the mark is taken back and a wake started here.
+ * a wake is in flight, a heartbeat's or an event's — set the space's pending
+ * mark for that wake to answer. Both take the one guard, `claimScheduleRun`.
+ * Never dropped: a wake that ended between the refusal and the mark finds no
+ * one to answer it, so the guard is tried once more, and whoever wins it
+ * takes the mark back and starts the wake that answers it.
  */
 export async function requestResidentWake(
   deps: ResidentWakeDeps,
@@ -235,15 +292,22 @@ export async function requestResidentWake(
 ): Promise<ResidentWakeOutcome> {
   const { tenantId, spaceId } = params;
   const schedule = await deps.schedules.find(tenantId, spaceId);
-  if (!schedule) return 'no_resident';
-  if (!(await isScheduleRunInFlight(deps.redis, tenantId, schedule))) {
-    return startWake(deps, tenantId, schedule);
+  if (!schedule || !hasCreator(schedule)) return 'no_resident';
+  const wake = newWake(schedule);
+  if (await claimScheduleRun(deps.redis, tenantId, schedule, wake.runId)) {
+    return enqueueWake(deps, tenantId, schedule, wake);
   }
   await setPending(deps.redis, tenantId, spaceId);
   const now = await deps.schedules.find(tenantId, spaceId);
-  if (!now || (await isScheduleRunInFlight(deps.redis, tenantId, now))) return 'pending';
+  if (!now || !hasCreator(now)) return 'pending';
+  const retry = newWake(now);
+  if (!(await claimScheduleRun(deps.redis, tenantId, now, retry.runId))) return 'pending';
   const mark = await deps.redis.getdel(residentPendingKey(tenantId, spaceId));
-  return mark === null ? 'pending' : startWake(deps, tenantId, now);
+  if (mark === null) {
+    await releaseScheduleRun(deps.redis, tenantId, now.id, retry.runId);
+    return 'pending';
+  }
+  return enqueueWake(deps, tenantId, now, retry);
 }
 
 /**
@@ -257,8 +321,7 @@ export async function residentWakeEnded(
   const { tenantId, spaceId, sessionId } = params;
   const schedule = await deps.schedules.find(tenantId, spaceId);
   if (schedule?.lastSessionId !== sessionId) return 'not_resident';
-  const startingKey = scheduleStartingKey(tenantId, schedule.id);
-  if ((await deps.redis.get(startingKey)) === sessionId) await deps.redis.del(startingKey);
+  await releaseScheduleRun(deps.redis, tenantId, schedule.id, sessionId);
   const mark = await deps.redis.getdel(residentPendingKey(tenantId, spaceId));
   if (mark === null) return 'idle';
   return requestResidentWake(deps, { tenantId, spaceId, cause: 'pending' });

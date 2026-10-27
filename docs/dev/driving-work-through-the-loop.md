@@ -227,8 +227,9 @@ operator creates its schedule once, in one action: `agent.schedule.create` with 
 'start_run'`, target `{ kind: 'platform-role', systemRole: 'cybernetic-helmsman' }`, cron
 `*/15 * * * *` unless they name another, and `input` `planResidentScheduleInput()` from
 `@aflow/schemas` — the wake message, naming no root, and `config.scheduleId` set to `{
-$schedule: 'id' }`, so each wake knows its schedule. Nothing creates it for a space by
-itself. A wake's first call is `plan.node.next` with no `rootNodeId`: every open root in
+$schedule: 'id' }`, so each wake knows its schedule. That config is what marks the
+schedule as the space's resident; the message may be worded any way. Nothing creates it for
+a space by itself. A wake's first call is `plan.node.next` with no `rootNodeId`: every open root in
 the board's order — the operator's priority, so moving a plan up the board reprioritises the
 resident — each decided as the stream below decides one, and the decisions that are not
 `wait` answered finish-first (a merge to record, a commission to publish, a pull request to
@@ -242,7 +243,8 @@ wakes below alike — leaving runs in flight to finish. Pause it with `PATCH
 /v1/schedules/:id` `{ status: 'paused', why }`, which stamps who and why on it.
 
 An occurrence whose previous wake has not ended is skipped and recorded on the schedule
-(`metadata.overlap`), with no catch-up. A run a wake started for a node ending, and a
+(`metadata.overlap`), with no catch-up. Heartbeats and the event wakes below take one
+atomic guard, so only one wake per space is ever starting or running. A run a wake started for a node ending, and a
 person's write to a node from the plan page, wake the resident at once; while a wake is in
 flight they set the space's pending mark instead, and that wake starts exactly one more
 when it ends, which reads the board and so sees every event the mark stood for. A node is

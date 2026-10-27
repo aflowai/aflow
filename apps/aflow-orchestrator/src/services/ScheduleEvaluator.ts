@@ -48,9 +48,9 @@ import {
 } from '@aflow/schemas';
 import { createLeasedWorkConsumer, type LeasedWorkResult } from '@aflow/lib';
 import {
+  claimScheduleRun,
   createResidentScheduleStore,
-  isScheduleRunInFlight,
-  markScheduleRunStarting,
+  releaseScheduleRun,
   residentWakeEnded,
 } from '@aflow/cybernetic-runtime';
 import {
@@ -506,18 +506,37 @@ export class ScheduleEvaluator {
       return false;
     }
 
-    if (
-      schedule.action === 'start_run' &&
-      schedule.kind === 'cron' &&
-      (await isScheduleRunInFlight(this.redis, schedule.tenant_id, {
-        id: schedule.id,
-        lastSessionId: schedule.last_session_id,
-      }))
-    ) {
-      await this.skipOccurrence(schedule);
-      return false;
+    // The guard an event-driven resident wake takes too (Plan 331 D4), so a
+    // heartbeat and an event can never start two runs of one schedule. The
+    // advance's own guard fixes the occurrence's count, and so its run id.
+    let claimedRunId: string | null = null;
+    if (schedule.action === 'start_run' && schedule.kind === 'cron') {
+      const runId = scheduleOccurrenceRunId(occurrenceKey(schedule.id, newFiringCount));
+      const claimed = await claimScheduleRun(
+        this.redis,
+        schedule.tenant_id,
+        { id: schedule.id, lastSessionId: schedule.last_session_id },
+        runId,
+      );
+      if (!claimed) {
+        await this.skipOccurrence(schedule);
+        return false;
+      }
+      claimedRunId = runId;
     }
 
+    let fired = false;
+    try {
+      fired = await this.fireOccurrence(schedule, newFiringCount);
+      return fired;
+    } finally {
+      if (!fired && claimedRunId !== null) {
+        await releaseScheduleRun(this.redis, schedule.tenant_id, schedule.id, claimedRunId);
+      }
+    }
+  }
+
+  private async fireOccurrence(schedule: DueScheduleRow, newFiringCount: number): Promise<boolean> {
     let resolvedInput: Record<string, unknown>;
     try {
       const ctx: InputResolutionContext = { schedule: { id: schedule.id }, now: new Date() };
@@ -535,32 +554,23 @@ export class ScheduleEvaluator {
 
     const { nextFireAt, status } = nextFireState(schedule, newFiringCount);
 
-    const key = await this.sqlClient.begin(async (tx) => {
+    return this.sqlClient.begin(async (tx) => {
       const firedCount = await advanceScheduleInTx(
         tx,
         schedule,
         { nextFireAt, status },
         dueGuard(schedule),
       );
-      if (firedCount === null) return null;
-      const occurrence = occurrenceKey(schedule.id, firedCount);
+      if (firedCount === null) return false;
+      const key = occurrenceKey(schedule.id, firedCount);
       await insertScheduleDispatch(tx, {
-        idempotencyKey: occurrence,
+        idempotencyKey: key,
         tenantId: schedule.tenant_id,
         scheduleId: schedule.id,
-        dispatch: buildDispatchItem(schedule, firedCount, occurrence, resolvedInput),
+        dispatch: buildDispatchItem(schedule, firedCount, key, resolvedInput),
       });
-      return occurrence;
+      return true;
     });
-    if (key === null) return false;
-    // Held until the run's own state exists, so the next occurrence sees it in flight.
-    await markScheduleRunStarting(
-      this.redis,
-      schedule.tenant_id,
-      schedule.id,
-      scheduleOccurrenceRunId(key),
-    );
-    return true;
   }
 
   /**

@@ -80,7 +80,10 @@ export interface PlanNodeSpendRead {
   cents: number;
   /** The runs serving the node in that span, newest first. */
   runIds: string[];
-  /** The scheduled Helmsman sessions that started them, whose cost `cents` includes. */
+  /**
+   * The scheduled Helmsman sessions that started them. `cents` includes each
+   * one's share: its cost divided across the nodes it started runs for.
+   */
   wakeSessionIds: string[];
 }
 

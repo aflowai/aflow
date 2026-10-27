@@ -269,7 +269,7 @@ export const PlanOperationRegistrations: OperationRegistration[] = [
         'The plan’s next moves — record, publish, stop, continue or wait — decided from its records.',
       whenToUse: [
         'A message tells you to wake as the space’s resident, or to continue a plan stream, by calling plan.node.next — a scheduled wake: call it before anything else and do only what its decisions say',
-        `The space’s resident, created once by the operator: agent.schedule.create with action "start_run", target {"kind":"platform-role","systemRole":"cybernetic-helmsman"}, cron "${PLAN_RESIDENT_SCHEDULE_CRON}" unless the operator names another, and input {"input":"<the wake message>","config":{"scheduleId":{"$schedule":"id"}}} (planResidentScheduleInput). It renews itself; pausing it pauses the resident`,
+        `The space’s resident, created once by the operator: agent.schedule.create with action "start_run", target {"kind":"platform-role","systemRole":"cybernetic-helmsman"}, cron "${PLAN_RESIDENT_SCHEDULE_CRON}" unless the operator names another, and input {"input":"<the wake message>","config":{"scheduleId":{"$schedule":"id"}}} (planResidentScheduleInput) — the config is what marks it the resident, whatever the message says. It renews itself; pausing it pauses the resident`,
       ],
       whenNotToUse: [
         'A conversation the operator is driving — plan.node.get on the node, and the operator decides',

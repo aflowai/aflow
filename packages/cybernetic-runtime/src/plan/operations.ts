@@ -247,15 +247,18 @@ function reopenedNote(
   return rest === null ? kept : `${kept}\n${rest}`;
 }
 
+/** The columns a write is judged by; `openedAt` is stamped after, never compared. */
+type ComparedPatch = Omit<PlanNodePatch, 'openedAt'>;
+
 function changesNothing(
   current: PlanNode,
-  patch: PlanNodePatch,
+  patch: ComparedPatch,
   parentId: string | null | undefined,
 ): boolean {
   return (
     (parentId === undefined || parentId === current.parentId) &&
     Object.entries(patch).every(([column, value]) =>
-      sameColumn(value, current[column as keyof PlanNodePatch]),
+      sameColumn(value, current[column as keyof ComparedPatch]),
     )
   );
 }
@@ -310,9 +313,17 @@ export async function createPlanNode(
 // plan.node.update — compare-and-set on the node's revision (Plan 322 D6)
 // ============================================================================
 
-export async function updatePlanNode(
+export function updatePlanNode(
   ctx: PlanWriteContext,
   input: PlanNodeUpdateInput,
+): Promise<PlanOpResult<{ node: PlanNode }>> {
+  return writePlanNode(ctx, input, {});
+}
+
+async function writePlanNode(
+  ctx: PlanWriteContext,
+  input: PlanNodeUpdateInput,
+  stamp: Pick<PlanNodePatch, 'openedAt'>,
 ): Promise<PlanOpResult<{ node: PlanNode }>> {
   const current = await ctx.store.find(ctx.spaceId, input.nodeId);
   if (!current) return notFound(input.nodeId);
@@ -349,6 +360,7 @@ export async function updatePlanNode(
 
   const parentId = input.parentId;
   if (changesNothing(current, patch, parentId)) return unchanged(current, input);
+  Object.assign(patch, stamp);
   let node: PlanNode | null;
   if (parentId !== undefined && parentId !== current.parentId) {
     const move = await ctx.store.moveAtRevision(
@@ -422,7 +434,8 @@ export async function openPlanNode(
         ? approvedNote(current.note, input.why)
         : `Reopened: ${input.why}`;
   }
-  const written = await updatePlanNode(ctx, update);
+  // Stamped in the write's own statement, so the spend resets with the open itself.
+  const written = await writePlanNode(ctx, update, { openedAt: new Date() });
   if (!written.ok) return written;
   return { ok: true, node: written.node, left: current.status };
 }

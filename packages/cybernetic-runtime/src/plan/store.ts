@@ -74,6 +74,8 @@ export interface PlanNodePatch {
   position?: number;
   outcome?: string | null;
   closedAt?: Date | null;
+  /** Written only by a person's open (Plan 331 D5): the node's spend counts from it. */
+  openedAt?: Date;
 }
 
 /** Why a node may not go where a write puts it. */

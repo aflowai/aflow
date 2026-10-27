@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import Redis from 'ioredis-mock';
 import type { Redis as RedisType } from 'ioredis';
 import {
@@ -85,8 +85,10 @@ function reads(): PlanStreamReads {
           .map((r) => ({ runId: r.runId, slug: r.slug, status: r.status, startedAt: r.startedAt })),
       ),
     spendOf: (_spaceId, nodeId) => {
+      // The window opens where the open write stamped the node, as plan_nodes.opened_at does.
+      const since = store.openedAt.get(nodeId)?.getTime();
       const served = store.runs
-        .filter((r) => r.nodeId === nodeId)
+        .filter((r) => r.nodeId === nodeId && (since === undefined || Date.parse(r.startedAt) > since))
         .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
       return Promise.resolve({
         cents: served.reduce((sum, r) => sum + (costs.get(r.runId) ?? 0), 0),
@@ -1031,6 +1033,44 @@ describe('the node spend stop (Plan 331 D4)', () => {
     expect(board.decisions).toEqual([]);
     expect(board.waits).toEqual([{ cause: 'blocked', roots: 1 }]);
     expect((await current(second.nodeId)).revision).toBe(second.revision);
+  });
+
+  it('starts the spend afresh at the open the write itself stamps on the node, no audit row awaited', async () => {
+    const { root, first } = await stream();
+    await run(first, PLAN_STREAM_COMMISSION_SLUG, 'failed', { cents: 600, failure: 'x' });
+    const stopped = await next(root.nodeId, { attempts: 10, spendCents: 500 });
+    if (stopped.decision !== 'stop') throw new Error('expected a stop');
+    expect(stopped.cause).toBe('spend_spent');
+    await updatePlanNode(session(), stopped.update);
+
+    const openedAt = new Date(stamp());
+    vi.setSystemTime(openedAt);
+    try {
+      const blocked = await current(first.nodeId);
+      const opened = await openPlanNode(session(), {
+        nodeId: first.nodeId,
+        expectedRevision: blocked.revision,
+        why: 'Raise the ceiling; the failure was the folder.',
+      });
+      expect(opened.ok).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+    // Written with the open itself: the next read sees it, with nothing else recorded.
+    expect(store.openedAt.get(first.nodeId)).toEqual(openedAt);
+    expect(await next(root.nodeId, { attempts: 10, spendCents: 500 })).not.toMatchObject({
+      cause: 'spend_spent',
+    });
+
+    const after = await run(first, PLAN_STREAM_COMMISSION_SLUG, 'failed', {
+      cents: 600,
+      failure: 'y',
+    });
+    expect(await next(root.nodeId, { attempts: 10, spendCents: 500 })).toMatchObject({
+      decision: 'stop',
+      cause: 'spend_spent',
+      spend: { cents: 600, runIds: [after] },
+    });
   });
 
   it('records a merge on a node at its ceiling: recording costs nothing', async () => {

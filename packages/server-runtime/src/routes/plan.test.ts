@@ -498,6 +498,20 @@ describe('PATCH /v1/spaces/:spaceId/plan/nodes/:nodeId/open (Plan 332 D6, Plan 3
     );
   });
 
+  it('takes a why of any length the note it lands in can hold', async () => {
+    mockOpenPlanNode.mockResolvedValue({ ok: true, node: openedNode(), left: 'blocked' });
+    const why = 'The review read the wrong base; the fix is on main now. '.repeat(40);
+
+    const res = await open({ expectedRevision: 4, why });
+
+    expect(res.statusCode).toBe(200);
+    expect(mockOpenPlanNode).toHaveBeenCalledWith(expect.anything(), {
+      nodeId: CHILD_ID,
+      expectedRevision: 4,
+      why: why.trim(),
+    });
+  });
+
   it('wakes the space’s resident after the write, as any person’s write to a node does', async () => {
     mockOpenPlanNode.mockResolvedValue({ ok: true, node: openedNode(), left: 'blocked' });
 
@@ -512,7 +526,7 @@ describe('PATCH /v1/spaces/:spaceId/plan/nodes/:nodeId/open (Plan 332 D6, Plan 3
   it('is not the close: a body naming a status is refused, and the close route refuses active', async () => {
     expect((await open({ expectedRevision: 4, status: 'active' })).statusCode).toBe(400);
     expect((await open({ why: 'go' })).statusCode).toBe(400);
-    expect((await open({ expectedRevision: 4, why: 'x'.repeat(501) })).statusCode).toBe(400);
+    expect((await open({ expectedRevision: 4, why: 'x'.repeat(64_001) })).statusCode).toBe(400);
     const close = await app.inject({
       method: 'PATCH',
       url: `/v1/spaces/${SPACE_ID}/plan/nodes/${CHILD_ID}`,

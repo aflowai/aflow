@@ -7,6 +7,7 @@ import {
 } from '../../cybernetic/coachLearning.js';
 import {
   OPEN_PLAN_NODE_STATUSES,
+  PLAN_NODE_PROSE_MAX_CHARS,
   PlanNodeCloseSchema,
   PlanNodeCreateSchema,
   PlanNodeDependencyConditionSchema,
@@ -427,9 +428,6 @@ export type PlanNodeDetailOutput = z.infer<typeof PlanNodeDetailOutputSchema>;
 export const PlanNodeCloseInputSchema = PlanNodeCloseSchema;
 export type PlanNodeCloseInput = z.infer<typeof PlanNodeCloseInputSchema>;
 
-/** How long the reason a person gives for opening a node may be. */
-export const PLAN_NODE_OPEN_WHY_MAX_CHARS = 500;
-
 /**
  * `PATCH /v1/spaces/:spaceId/plan/nodes/:nodeId/open` — a person moves a node
  * to `active` (Plan 332 D6, Plan 331 D5): a `blocked` node is approved, or a
@@ -446,7 +444,8 @@ export const PlanNodeOpenSchema = z
       .string()
       .trim()
       .min(1)
-      .max(PLAN_NODE_OPEN_WHY_MAX_CHARS)
+      // The note it is written into is the only ceiling.
+      .max(PLAN_NODE_PROSE_MAX_CHARS)
       .optional()
       .describe(
         'Why, in the operator’s words: on a blocked node the note’s first line becomes `Approved: <why>`; on a closed one `Reopened: <why>` follows the engine’s reopened line.',
@@ -760,7 +759,9 @@ export const PlanStreamSpendSchema = z
     runIds: z.array(z.string()).describe('The runs serving the node, newest first.'),
     wakeSessionIds: z
       .array(z.string())
-      .describe('The scheduled Helmsman sessions that started them, counted in `cents` too.'),
+      .describe(
+        'The scheduled Helmsman sessions that started them. `cents` counts each one’s share: its cost divided across the nodes it started runs for.',
+      ),
   })
   .strict();
 export type PlanStreamSpend = z.infer<typeof PlanStreamSpendSchema>;
@@ -953,9 +954,11 @@ export function planResidentScheduleInput(): {
 }
 
 /**
- * Whether a schedule is a space's resident: it starts the Helmsman with the
- * wake message and hands it its own id. A stream's schedule names a root and
- * hands nothing, so it is not one.
+ * Whether a schedule is a space's resident: it starts the Helmsman and hands
+ * each wake its own id — `config.scheduleId` is `{ $schedule: 'id' }`, the
+ * static input `planResidentScheduleInput` writes. The message is the
+ * caller's and is not read: an operator or a Helmsman may word it their own
+ * way. A stream's schedule names a root and hands nothing, so it is not one.
  */
 export function isPlanResidentSchedule(schedule: {
   targetKind: string | null;
@@ -968,12 +971,15 @@ export function isPlanResidentSchedule(schedule: {
   ) {
     return false;
   }
-  const template = schedule.inputTemplate as
-    { input?: unknown; config?: Record<string, unknown> } | null | undefined;
-  return (
-    template?.input === planResidentWakeMessage() &&
-    template.config?.[PLAN_RESIDENT_SCHEDULE_VARIABLE] !== undefined
-  );
+  const template = asRecord(schedule.inputTemplate);
+  const handed = asRecord(asRecord(template?.['config'])?.[PLAN_RESIDENT_SCHEDULE_VARIABLE]);
+  return handed !== null && Object.keys(handed).length === 1 && handed['$schedule'] === 'id';
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
 }
 
 // ============================================================================

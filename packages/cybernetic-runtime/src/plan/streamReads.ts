@@ -5,7 +5,7 @@
  * node's spend, and the space's pending pauses in `attention_items`.
  */
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { and, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
 import type { PayloadStore } from '@aflow/payload-store';
 import {
   PLAN_STREAM_COMMISSION_SLUG,
@@ -16,6 +16,7 @@ import {
 import {
   attentionItems,
   createTenantContext,
+  planNodes,
   sessions,
   withTenantSchema,
   workflowRuns,
@@ -57,21 +58,30 @@ function text(value: unknown): string | undefined {
 
 /**
  * When a person last opened the node — approved, resumed or reopened it — as
- * the plan page's `plan.node.open` write records it. The spend counts from
- * there, so a lifted stop starts afresh, as a person's write does for attempts.
+ * the open write stamps it on the node in the same statement. The spend counts
+ * from there, so a lifted stop starts afresh, as a person's write does for
+ * attempts; the `plan.node.open` audit row is buffered, and only evidence.
  */
 async function lastOpenedAt(
   tx: PostgresJsDatabase,
-  tenantId: string,
+  spaceId: string,
   nodeId: string,
 ): Promise<Date | null> {
-  const rows = await tx.execute<{ at: string | Date | null }>(
-    sql`SELECT max(timestamp) AS at FROM public.platform_audit_log
-         WHERE tenant_id = ${tenantId}::uuid AND action = 'plan.node.open'
-           AND resource_id = ${nodeId} AND outcome = 'success'`,
-  );
-  const at = (rows as unknown as Array<{ at: string | Date | null }>)[0]?.at ?? null;
-  return at === null ? null : new Date(at);
+  const [row] = await tx
+    .select({ at: planNodes.openedAt })
+    .from(planNodes)
+    .where(and(eq(planNodes.spaceId, spaceId), eq(planNodes.id, nodeId)))
+    .limit(1);
+  return row?.at ?? null;
+}
+
+/**
+ * A node's share of the wakes that started its runs: each wake's cost divided
+ * across the nodes it started runs for, so a wake that commissioned three
+ * nodes is charged once across them, not once to each.
+ */
+export function wakeShareCents(wakes: ReadonlyArray<{ cents: number; nodes: number }>): number {
+  return wakes.reduce((sum, wake) => sum + wake.cents / Math.max(1, wake.nodes), 0);
 }
 
 export function createPlanStreamReads(
@@ -191,7 +201,7 @@ export function createPlanStreamReads(
 
     spendOf: (spaceId, nodeId) =>
       inTenant(async (tx) => {
-        const since = await lastOpenedAt(tx, tenantId, nodeId);
+        const since = await lastOpenedAt(tx, spaceId, nodeId);
         const runs = await tx
           .select({
             runId: workflowRuns.runId,
@@ -217,16 +227,39 @@ export function createPlanStreamReads(
               .filter((id): id is string => id !== undefined),
           ),
         ];
-        const [wakes] =
-          wakeSessionIds.length > 0
-            ? await tx
-                .select({ cents: sql<string>`coalesce(sum(${sessions.totalCostCents}), 0)::text` })
-                .from(sessions)
-                .where(inArray(sessions.sessionId, wakeSessionIds))
-            : [{ cents: '0' }];
+        let wakeCents = 0;
+        if (wakeSessionIds.length > 0) {
+          const wakeOf = sql<string>`${workflowRuns.metadata} ->> ${RUN_WAKE_SESSION_METADATA_KEY}`;
+          const costs = await tx
+            .select({ sessionId: sessions.sessionId, cents: sessions.totalCostCents })
+            .from(sessions)
+            .where(inArray(sessions.sessionId, wakeSessionIds));
+          const reach = await tx
+              .select({
+                sessionId: wakeOf,
+                nodes: sql<number>`count(DISTINCT ${workflowRuns.planNodeId})::int`,
+              })
+              .from(workflowRuns)
+              .where(
+                and(
+                  eq(workflowRuns.spaceId, spaceId),
+                  isNotNull(workflowRuns.planNodeId),
+                  isNull(workflowRuns.evalBatchId),
+                  inArray(wakeOf, wakeSessionIds),
+                ),
+              )
+              .groupBy(wakeOf);
+          const nodesOf = new Map(reach.map((row) => [row.sessionId, Number(row.nodes)]));
+          wakeCents = wakeShareCents(
+            costs.map((row) => ({
+              cents: Number(row.cents ?? 0),
+              nodes: nodesOf.get(row.sessionId) ?? 1,
+            })),
+          );
+        }
         const runCents = runs.reduce((sum, run) => sum + (run.cents ?? 0), 0);
         return {
-          cents: Math.round(runCents + Number(wakes?.cents ?? 0)),
+          cents: Math.round(runCents + wakeCents),
           runIds: runs.slice(0, SPEND_RUNS_LIMIT).map((run) => run.runId),
           wakeSessionIds,
         };

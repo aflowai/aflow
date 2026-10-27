@@ -97,6 +97,32 @@ describe('the resident schedule (Plan 331 D1)', () => {
     ).toBe(true);
   });
 
+  it('is found as the resident when created as documented, whatever message the creator wrote', () => {
+    const schedule = FlowScheduleCreateInputSchema.safeParse({
+      name: 'Resident',
+      action: 'start_run',
+      target: PLAN_STREAM_SCHEDULE_TARGET,
+      cron: PLAN_RESIDENT_SCHEDULE_CRON,
+      input: { ...planResidentScheduleInput(), input: 'Take the next approved node.' },
+    });
+    expect(schedule.success).toBe(true);
+    if (!schedule.success) return;
+    expect(
+      isPlanResidentSchedule({
+        targetKind: PLAN_STREAM_SCHEDULE_TARGET.kind,
+        targetSystemRole: PLAN_STREAM_SCHEDULE_TARGET.systemRole,
+        inputTemplate: schedule.data.input,
+      }),
+    ).toBe(true);
+    expect(
+      isPlanResidentSchedule({
+        targetKind: PLAN_STREAM_SCHEDULE_TARGET.kind,
+        targetSystemRole: PLAN_STREAM_SCHEDULE_TARGET.systemRole,
+        inputTemplate: { input: 'Take the next approved node.' },
+      }),
+    ).toBe(false);
+  });
+
   it('hands each wake its own schedule, a config the Helmsman declares, so the wake renews it', async () => {
     const resolved = await resolveInputTemplate(planResidentScheduleInput(), {
       schedule: { id: 'sched-1' },
