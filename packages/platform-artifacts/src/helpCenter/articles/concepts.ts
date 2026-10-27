@@ -33,6 +33,8 @@ When you create a space and no model provider key is available for it, the dialo
 
 ## Starting from a quick start
 
+A quick start installs a space and has no uninstall. Archive the space from **Settings → Danger zone** when you no longer need it.
+
 **Start from a quick start** in the space selector makes a new space that already holds the skills and the Helmsman directive a kind of work needs. Choose a quick start, name the space and choose **Create the space**. Its skills are installed the way the Store installs them anywhere, so they show as installed on that space's Store page and update from their own listings; the directive becomes the space's own, and you change it like any other. Nothing in your other spaces changes. Quick starts are also on the Store page, under **Quick starts**, with **Start a new space from it** — a quick start always makes a new space and is never applied to the one you are in.
 
 In Aflow Local, while your only space is the one the instance started with and nothing has been made or installed in it, the quick starts are offered beside it when you open Aflow. Choosing the empty space keeps it as it is, and the offer is not shown again in that browser.
