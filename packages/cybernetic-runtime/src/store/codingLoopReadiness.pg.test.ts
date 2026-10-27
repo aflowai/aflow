@@ -12,6 +12,8 @@ vi.mock('@aflow/redis', () => ({
 
 const databaseUrl = process.env['DATABASE_URL'];
 const space = '00000000-0000-4000-8000-000000000001';
+/** The template the shepherd's schedule renews from: its own id under the agent's config. */
+const RENEWAL_TEMPLATE = '{"input":"tend","config":{"scheduleId":{"$schedule":"id"}}}';
 
 describe.skipIf(!databaseUrl)('coding loop database readiness', () => {
   const handle = createDatabase({ connectionString: databaseUrl ?? '' });
@@ -47,11 +49,29 @@ describe.skipIf(!databaseUrl)('coding loop database readiness', () => {
       );
       await tx.execute(sql`INSERT INTO agent_schedules VALUES
         (${space}::uuid, ${space}::uuid, 'active', 'cron', NULL, NULL, 1,
-         '{"scheduleId":{"$schedule":"id"}}', NULL, ${space}::uuid, now())`);
+         ${RENEWAL_TEMPLATE}::jsonb, NULL, ${space}::uuid, now())`);
       await tx.execute(
         sql`INSERT INTO sessions VALUES (${space}::uuid, ${space}::uuid, 'RUNNING')`,
       );
       const read = () => readCodingLoopReadiness(tx, space, {} as Redis);
+      expect(await read()).toEqual({ status: 'ready', tasks: [] });
+
+      for (const template of [
+        '{"input":"tend"}',
+        '{"input":"tend","config":{"lane":"a"}}',
+        '{"scheduleId":{"$schedule":"id"}}',
+        '{"input":"tend","scheduleId":{"$schedule":"id"}}',
+      ]) {
+        await tx.execute(sql`UPDATE agent_schedules SET input_template = ${template}::jsonb`);
+        expect(await read()).toMatchObject({
+          status: 'needs_setup',
+          tasks: [{ step: 'schedule' }],
+        });
+      }
+      await tx.execute(sql`UPDATE agent_schedules SET input_template =
+        '{"input":"shepherd","note":"x","config":{"scheduleId":{"$schedule":"id"},"lane":"a"}}'::jsonb`);
+      expect(await read()).toEqual({ status: 'ready', tasks: [] });
+      await tx.execute(sql`UPDATE agent_schedules SET input_template = ${RENEWAL_TEMPLATE}::jsonb`);
       expect(await read()).toEqual({ status: 'ready', tasks: [] });
 
       await tx.execute(sql`UPDATE sessions SET status = 'FAILED'`);
