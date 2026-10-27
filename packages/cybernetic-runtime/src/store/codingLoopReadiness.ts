@@ -40,7 +40,7 @@ export function codingLoopReadiness(state: CodingLoopSetupState): {
   if (!state.github)
     add(
       'github',
-      'Bind a GitHub credential to the github connector in Integrations. Fine-grained permissions: Metadata and Contents read, Checks and Actions read, Pull requests and Issues write, plus Contents write for merges. Classic tokens need repo (public_repo for public repositories).',
+      'Enable the github connection in Integrations and bind a GitHub credential to it. Fine-grained permissions: Metadata and Contents read, Checks and Actions read, Pull requests and Issues write, plus Contents write for merges. Classic tokens need repo (public_repo for public repositories).',
       '/integrations',
     );
   if (!state.schedule)
@@ -76,16 +76,24 @@ export async function readCodingLoopReadiness(
         AND allows_execution AND branch_prefix IS NOT NULL AND branch_prefix <> '') AS folder_ids,
       EXISTS (SELECT 1 FROM api_bindings b JOIN api_credentials c
         ON c.space_id = b.space_id AND c.credential_key = b.auth_json->>'credentialKey'
-        WHERE b.space_id = ${spaceId}::uuid AND b.api_id = 'github') AS github,
+        WHERE b.space_id = ${spaceId}::uuid AND b.api_id = 'github' AND b.enabled = 1) AS github,
       EXISTS (SELECT 1 FROM agent_schedules s JOIN agents a ON a.id = s.target_agent_id
         AND a.space_id = s.space_id WHERE s.space_id = ${spaceId}::uuid
         AND a.slug = 'local-pr-shepherd' AND s.status = 'active' AND s.kind = 'cron'
         AND (s.expires_at IS NULL OR s.expires_at > now())
         AND (s.max_firings IS NULL OR s.firing_count < s.max_firings)
         AND s.input_template->'scheduleId' = '{"$schedule":"id"}'::jsonb) AS schedule,
-      (SELECT s.last_error FROM agent_schedules s JOIN agents a ON a.id = s.target_agent_id
-        AND a.space_id = s.space_id WHERE s.space_id = ${spaceId}::uuid
-        AND a.slug = 'local-pr-shepherd' AND s.status = 'active' AND s.last_error IS NOT NULL
+      (SELECT COALESCE(s.last_error, 'The latest shepherd execution failed.')
+        FROM agent_schedules s JOIN agents a ON a.id = s.target_agent_id
+        AND a.space_id = s.space_id
+        LEFT JOIN sessions execution ON execution.session_id = s.last_session_id
+          AND execution.space_id = s.space_id
+        WHERE s.space_id = ${spaceId}::uuid
+        AND a.slug = 'local-pr-shepherd' AND s.status = 'active'
+        AND (s.last_error IS NOT NULL OR execution.status = 'FAILED'
+          OR EXISTS (SELECT 1 FROM workflow_runs run
+            WHERE run.session_id = s.last_session_id AND run.space_id = s.space_id
+              AND run.status = 'failed'))
         ORDER BY s.updated_at DESC LIMIT 1) AS failure
   `);
   return codingLoopReadiness({

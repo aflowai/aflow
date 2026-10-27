@@ -51,6 +51,8 @@ The posture's cost is one approval per merge. `mergePullRequest` is a `medium` w
 
 ## 3. Design
 
+Coding Loop readiness requires an enabled GitHub binding with a stored credential. Disabled connections remain setup work and direct the operator to enable them in Integrations. Broken readiness includes dispatch errors and failed sessions or workflow runs belonging to an active shepherd schedule's latest session. A later successful execution recovers readiness without retaining older execution failures; terminal session outcomes become visible after their Postgres projection is stored.
+
 ### 3.1 Tasks
 
 | Task             | Operation                                                                | Reads / does                                                                                     |

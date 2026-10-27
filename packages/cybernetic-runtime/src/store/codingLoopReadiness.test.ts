@@ -40,6 +40,7 @@ describe('coding loop readiness', () => {
     expect(result.tasks[1]?.description).toContain('branch prefix');
     expect(result.tasks[1]?.description).toContain('merge-posture');
     expect(result.tasks[2]?.description).toContain('Checks and Actions read');
+    expect(result.tasks[2]?.description).toContain('Enable the github connection');
     expect(result.tasks[3]?.description).toContain('"$schedule": "id"');
   });
 

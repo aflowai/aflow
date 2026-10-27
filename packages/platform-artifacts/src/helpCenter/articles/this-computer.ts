@@ -76,10 +76,10 @@ The install and **Check setup again** name what this space still needs:
 
 - Pair the machine under **This Computer**.
 - Connect a repository folder allowing commands and pushes with a branch prefix. Choose its merge posture on the machine using the coding agent commands in the Aflow Local operator guide.
-- Bind a credential to the **github** connector in **Integrations**. Fine-grained permissions: Metadata and Contents read, Checks and Actions read, Pull requests and Issues write; Contents write for merges. Classic tokens need repo (public_repo for public repositories).
+- Enable the **github** connection and bind a credential in **Integrations**. Fine-grained permissions: Metadata and Contents read, Checks and Actions read, Pull requests and Issues write; Contents write for merges. Classic tokens need repo (public_repo for public repositories).
 - Create an active repeating schedule for the **Local PR Shepherd** agent, normally every five minutes, with inputTemplate \`{ "scheduleId": { "$schedule": "id" } }\`. That input lets the shepherd renew the schedule before its firing cap. Connect the folder before installing, or install again to write the agent.
 
-**Needs setup** means a prerequisite is missing. **Broken** means the shepherd schedule reports an execution failure; inspect it under **Triggers**. Completing setup and repairing a failure are separate actions.
+**Needs setup** means a prerequisite is missing, including a disabled GitHub connection. **Broken** means the shepherd schedule reports a dispatch error or its latest execution failed; inspect it under **Triggers**. A later successful execution clears the execution failure once its outcome is stored. Completing setup and repairing a failure are separate actions.
 
 A change reaches a branch under the folder's prefix, \`aflow/\` by default, and the folder's setting under **Connected folders** says whether a push asks you first.
 
