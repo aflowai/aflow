@@ -13,9 +13,12 @@ export type StoreInstallState = z.infer<typeof StoreInstallStateSchema>;
 /**
  * Wider than the listing kinds: bundle member skills carry their own install
  * rows (`kind: 'skill'`) so claims can tell what a bundle owns from what it
- * shares, even though skills are never standalone listings.
+ * shares, even though skills are never standalone listings. A `space` row is
+ * the one install a space made from a template carries: it belongs to that new
+ * space, and its `installedVersion` is the template version the space was made
+ * from (Plan 330 D1). The bundles the template applied carry rows of their own.
  */
-export const StoreInstallKindSchema = z.enum(['skill', 'bundle', 'connector', 'applet']);
+export const StoreInstallKindSchema = z.enum(['skill', 'bundle', 'connector', 'applet', 'space']);
 export type StoreInstallKind = z.infer<typeof StoreInstallKindSchema>;
 
 /** One active installation of a catalog entry in a space. */

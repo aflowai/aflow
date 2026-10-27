@@ -9,6 +9,7 @@ import {
 } from '../integrations/index.js';
 import { IconRefSchema } from './iconRef.js';
 import { CatalogAppletPayloadSchema } from './appletListing.js';
+import { SpaceTemplateSchema } from './spaceTemplate.js';
 import { CatalogEntryKindSchema, CatalogIdSchema } from './listingCore.js';
 
 export {
@@ -156,6 +157,12 @@ export const CatalogAppletEntrySchema = CatalogEntryEnvelopeSchema.extend({
 });
 export type CatalogAppletEntry = z.infer<typeof CatalogAppletEntrySchema>;
 
+export const CatalogSpaceEntrySchema = CatalogEntryEnvelopeSchema.extend({
+  kind: z.literal('space'),
+  payload: SpaceTemplateSchema,
+});
+export type CatalogSpaceEntry = z.infer<typeof CatalogSpaceEntrySchema>;
+
 // discriminatedUnion members must be plain objects, so the kind-level connector
 // member accepts either payload shape; the sourceKind↔payload pairing is
 // enforced by the union's superRefine through CatalogConnectorEntrySchema.
@@ -176,6 +183,7 @@ export const CatalogEntrySchema = z
     CatalogBundleEntrySchema,
     CatalogConnectorEntryMemberSchema,
     CatalogAppletEntrySchema,
+    CatalogSpaceEntrySchema,
   ])
   .superRefine((entry, ctx) => {
     if (entry.kind === 'connector') {
@@ -200,8 +208,14 @@ export const CatalogEntrySchema = z
       }
       return;
     }
-    const payloadIdField = entry.kind === 'bundle' ? 'bundleId' : 'catalogId';
-    const payloadId = entry.kind === 'bundle' ? entry.payload.bundleId : entry.payload.catalogId;
+    const payloadIdField =
+      entry.kind === 'bundle' ? 'bundleId' : entry.kind === 'space' ? 'templateId' : 'catalogId';
+    const payloadId =
+      entry.kind === 'bundle'
+        ? entry.payload.bundleId
+        : entry.kind === 'space'
+          ? entry.payload.templateId
+          : entry.payload.catalogId;
     if (payloadId !== entry.catalogId) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -236,4 +250,5 @@ export const CatalogEntrySchema = z
   // sourceKind — a correlation the plain-object member cannot express — so the
   // output narrows to the per-sourceKind union.
   .transform((entry) => entry as CatalogEntry);
-export type CatalogEntry = CatalogBundleEntry | CatalogConnectorEntry | CatalogAppletEntry;
+export type CatalogEntry =
+  CatalogBundleEntry | CatalogConnectorEntry | CatalogAppletEntry | CatalogSpaceEntry;

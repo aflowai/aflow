@@ -29,32 +29,37 @@ import {
   useStoreListings,
   type StoreListingSummary,
 } from '../hooks/use-store.js';
+import { useQuickStartOffer } from '../hooks/use-quick-starts.js';
 
 const KIND_TABS = [
   { id: 'all', label: 'All' },
   { id: 'skill', label: 'Skills' },
   { id: 'integration', label: 'Integrations' },
   { id: 'applet', label: 'Applets' },
+  { id: 'quick-start', label: 'Quick starts' },
 ] as const;
 
-type ListingKind = 'bundle' | 'connector' | 'applet';
+type ListingKind = 'bundle' | 'connector' | 'applet' | 'space';
 
 const KIND_LABELS: Record<ListingKind, string> = {
   bundle: 'SKILL',
   connector: 'INTEGRATION',
   applet: 'APPLET',
+  space: 'QUICK START',
 };
 
-// URL vocabulary is 'skill'/'integration'/'applet'; the API kinds stay
-// 'bundle'/'connector'/'applet'.
+// URL vocabulary is 'skill'/'integration'/'applet'/'quick-start'; the API
+// kinds stay 'bundle'/'connector'/'applet'/'space'.
 function parseKind(value: string | null): ListingKind | undefined {
   if (value === 'integration' || value === 'connector') return 'connector';
   if (value === 'applet') return 'applet';
+  if (value === 'quick-start' || value === 'space') return 'space';
   return value === 'skill' || value === 'bundle' ? 'bundle' : undefined;
 }
 
 function kindParam(kind: ListingKind): string {
   if (kind === 'applet') return 'applet';
+  if (kind === 'space') return 'quick-start';
   return kind === 'connector' ? 'integration' : 'skill';
 }
 
@@ -76,6 +81,8 @@ function StorePageInner() {
 
   const kind = parseKind(searchParams.get('kind'));
   const q = searchParams.get('q') ?? '';
+  // Withheld where the edition composes no quick start, rather than an empty tab.
+  const hasQuickStarts = (useQuickStartOffer().data?.templates.length ?? 0) > 0;
   const category = searchParams.get('category');
 
   const [searchInput, setSearchInput] = useState(q);
@@ -157,11 +164,13 @@ function StorePageInner() {
               }}
             >
               <TabList style={{ borderBottom: 'none', marginBottom: 0 }}>
-                {KIND_TABS.map((tab) => (
-                  <Tab key={tab.id} id={tab.id}>
-                    {tab.label}
-                  </Tab>
-                ))}
+                {KIND_TABS.filter((tab) => tab.id !== 'quick-start' || hasQuickStarts).map(
+                  (tab) => (
+                    <Tab key={tab.id} id={tab.id}>
+                      {tab.label}
+                    </Tab>
+                  ),
+                )}
               </TabList>
             </Tabs>
             <SearchField

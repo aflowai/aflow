@@ -1,4 +1,9 @@
-import { getOAuthIssuer, type ConnectorCatalogEntry, type SkillBundle } from '@aflow/schemas';
+import {
+  getOAuthIssuer,
+  type ConnectorCatalogEntry,
+  type SkillBundle,
+  type SpaceTemplate,
+} from '@aflow/schemas';
 
 type BundledApiDraft = SkillBundle['apiDefinitions'][number]['definition'];
 
@@ -98,5 +103,19 @@ export function deriveBundleHostManifest(bundle: SkillBundle): DerivedHostManife
     apiHosts: sortedUnique(apiHosts),
     oauthHosts: sortedUnique(oauthHosts),
     mcpHosts: sortedUnique(mcpHosts),
+  };
+}
+
+/**
+ * A template declares the hosts of the api_definitions it writes itself. Each
+ * bundle it applies captures its own manifest on its own install row.
+ */
+export function deriveSpaceTemplateHostManifest(template: SpaceTemplate): DerivedHostManifest {
+  return {
+    apiHosts: sortedUnique(
+      template.apiDefinitions.flatMap((bundled) => apiDraftHosts(bundled.definition)),
+    ),
+    oauthHosts: [],
+    mcpHosts: [],
   };
 }

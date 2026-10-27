@@ -60,6 +60,16 @@ describe('store listings against the edition’s composed lanes', () => {
     expect(catalogIds(LOCAL_WITHOUT_MACHINE)).not.toContain('local-code-review');
   });
 
+  it('withholds a space template wherever a bundle it applies is withheld', () => {
+    const template = entryOrThrow('local-review-quick-start');
+    expect(listingRequiredOperations(template)).toEqual(
+      listingRequiredOperations(entryOrThrow('local-code-review')),
+    );
+    expect(catalogIds(LOCAL_WITH_MACHINE)).toContain('local-review-quick-start');
+    expect(catalogIds(HOSTED)).not.toContain('local-review-quick-start');
+    expect(uncomposedListingReason(template, HOSTED)).not.toBeNull();
+  });
+
   it('keeps a host-lane bundle out of search, exact id included', () => {
     const withhold = listCatalog({ lanes: HOSTED });
     expect(

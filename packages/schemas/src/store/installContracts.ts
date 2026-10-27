@@ -2,7 +2,8 @@ import { z } from 'zod';
 import { IdempotencyKeySchema } from '../runtime/ids.js';
 import { PostInstallTaskSchema } from '../cybernetic/skillBundle.js';
 import { IntegrationSourceKindSchema } from '../integrations/index.js';
-import { CatalogIdSchema } from './catalogEntry.js';
+import { CatalogEntryKindSchema, CatalogIdSchema } from './catalogEntry.js';
+import { SpaceReadinessEntrySchema } from './spaceTemplate.js';
 import { StoreArtifactTypeSchema, StoreInstallSchema } from './provenance.js';
 
 export const StoreInstallRequestSchema = z.object({
@@ -21,6 +22,40 @@ export const StoreInstallRequestSchema = z.object({
     .describe('Makes retried and double-submitted installs no-ops'),
 });
 export type StoreInstallRequest = z.infer<typeof StoreInstallRequestSchema>;
+
+/**
+ * Installing a `space` listing creates the space it applies to, so the
+ * request names that space rather than an existing one (Plan 330 D1). It is
+ * tenant-scoped and needs the authority to create a space; a template is never
+ * applied to a space that already exists.
+ */
+export const StoreSpaceInstallRequestSchema = StoreInstallRequestSchema.extend({
+  name: z.string().min(1).max(255),
+  slug: z.string().min(1).max(128),
+});
+export type StoreSpaceInstallRequest = z.infer<typeof StoreSpaceInstallRequestSchema>;
+
+/**
+ * The first-run offer (Plan 330 D1): it applies while the operator holds only
+ * the bootstrap's space and that space holds nothing, and it shows each
+ * template beside that empty space.
+ */
+export const QuickStartOfferSchema = z.object({
+  applies: z.boolean(),
+  emptySpace: z
+    .object({ id: z.string().uuid(), slug: z.string().min(1), name: z.string().min(1) })
+    .optional(),
+  templates: z.array(
+    z.object({
+      catalogId: CatalogIdSchema,
+      version: z.number().int().min(1),
+      name: z.string().min(1),
+      tagline: z.string().min(1),
+      spaceName: z.string().min(1),
+    }),
+  ),
+});
+export type QuickStartOffer = z.infer<typeof QuickStartOfferSchema>;
 
 export const StoreInstallPreviewRequestSchema = z.object({
   catalogId: CatalogIdSchema,
@@ -42,6 +77,7 @@ export const StoreInstallConflictSchema = z.object({
 export type StoreInstallConflict = z.infer<typeof StoreInstallConflictSchema>;
 
 export const StoreInstallPreviewResponseSchema = z.object({
+  kind: CatalogEntryKindSchema,
   setupChecklist: z.array(PostInstallTaskSchema).optional(),
   readiness: z.enum(['ready', 'needs_setup', 'broken']).optional(),
   catalogId: CatalogIdSchema,
@@ -49,28 +85,45 @@ export const StoreInstallPreviewResponseSchema = z.object({
   creates: z.array(StorePlannedArtifactSchema),
   conflicts: z.array(StoreInstallConflictSchema),
   missingCapabilities: z.array(z.string().min(1).max(256)),
+  /**
+   * Present for a `space` listing: the new space it creates and the bundles
+   * it applies there. `creates`, `conflicts` and `missingCapabilities` then
+   * span every bundle, read against a space that does not exist yet.
+   */
+  space: z
+    .object({
+      spaceName: z.string().min(1).max(255),
+      bundles: z.array(
+        z.object({ catalogId: CatalogIdSchema, catalogVersion: z.number().int().min(1) }),
+      ),
+      readiness: z.array(SpaceReadinessEntrySchema.omit({ state: true })),
+    })
+    .optional(),
 });
 export type StoreInstallPreviewResponse = z.infer<typeof StoreInstallPreviewResponseSchema>;
 
+export const StoreBundleInstallResultSchema = z.object({
+  kind: z.literal('bundle'),
+  installedSkillCatalogIds: z.array(z.string()),
+  skippedSkillCatalogIds: z.array(z.string()),
+  installedApiDefinitionIds: z.array(z.string()),
+  skippedApiDefinitionIds: z.array(z.string()),
+  installedBindingIds: z.array(z.string()),
+  skippedBindingIds: z.array(z.string()),
+  installedMcpDefinitionIds: z.array(z.string()),
+  skippedMcpDefinitionIds: z.array(z.string()),
+  installedMcpBindingIds: z.array(z.string()),
+  skippedMcpBindingIds: z.array(z.string()),
+  installedMemoryDocPaths: z.array(z.string()),
+  skippedMemoryDocPaths: z.array(z.string()),
+  installedArtifactBindings: z.array(z.string()),
+  skippedArtifactBindings: z.array(z.string()),
+  warnings: z.array(z.string()),
+});
+export type StoreBundleInstallResult = z.infer<typeof StoreBundleInstallResultSchema>;
+
 export const StoreInstallResultSchema = z.discriminatedUnion('kind', [
-  z.object({
-    kind: z.literal('bundle'),
-    installedSkillCatalogIds: z.array(z.string()),
-    skippedSkillCatalogIds: z.array(z.string()),
-    installedApiDefinitionIds: z.array(z.string()),
-    skippedApiDefinitionIds: z.array(z.string()),
-    installedBindingIds: z.array(z.string()),
-    skippedBindingIds: z.array(z.string()),
-    installedMcpDefinitionIds: z.array(z.string()),
-    skippedMcpDefinitionIds: z.array(z.string()),
-    installedMcpBindingIds: z.array(z.string()),
-    skippedMcpBindingIds: z.array(z.string()),
-    installedMemoryDocPaths: z.array(z.string()),
-    skippedMemoryDocPaths: z.array(z.string()),
-    installedArtifactBindings: z.array(z.string()),
-    skippedArtifactBindings: z.array(z.string()),
-    warnings: z.array(z.string()),
-  }),
+  StoreBundleInstallResultSchema,
   z.object({
     kind: z.literal('connector'),
     sourceKind: IntegrationSourceKindSchema,
@@ -91,6 +144,19 @@ export const StoreInstallResultSchema = z.discriminatedUnion('kind', [
     artifactVersion: z.number().int().min(1),
     bundleArtifactKey: z.string().min(1).max(256),
     outcome: z.enum(['inserted_new', 'inserted_new_version', 'skipped_unchanged']),
+  }),
+  z.object({
+    kind: z.literal('space'),
+    spaceId: z.string().uuid().describe('The space the template created; it owns the install row'),
+    spaceSlug: z.string().min(1).max(128),
+    templateVersion: z.number().int().min(1),
+    /** Each bundle the template named, as the bundle install path reported it. */
+    bundles: z.array(
+      z.object({ catalogId: CatalogIdSchema, result: StoreBundleInstallResultSchema }),
+    ),
+    installedAgentSlugs: z.array(z.string()),
+    installedApiDefinitionIds: z.array(z.string()),
+    readiness: z.array(SpaceReadinessEntrySchema),
   }),
 ]);
 export type StoreInstallResult = z.infer<typeof StoreInstallResultSchema>;

@@ -3,6 +3,7 @@
 import { type CSSProperties, type ComponentType, type HTMLAttributes } from 'react';
 import * as PhosphorIcons from '@phosphor-icons/react';
 import { AppWindowIcon } from '@phosphor-icons/react/dist/csr/AppWindow';
+import { BuildingsIcon } from '@phosphor-icons/react/dist/csr/Buildings';
 import { GitBranchIcon } from '@phosphor-icons/react/dist/csr/GitBranch';
 import { PlugIcon } from '@phosphor-icons/react/dist/csr/Plug';
 import { RobotIcon } from '@phosphor-icons/react/dist/csr/Robot';
@@ -25,7 +26,8 @@ export type ListingAvatarSize = 'sm' | 'md' | 'lg' | 'xl';
  * surface, and an agent must not read as a skill: one is invoked, the other is
  * talked to.
  */
-export type ListingAvatarKind = 'skill' | 'bundle' | 'connector' | 'applet' | 'repo' | 'agent';
+export type ListingAvatarKind =
+  'skill' | 'bundle' | 'connector' | 'applet' | 'space' | 'repo' | 'agent';
 
 export interface ListingAvatarProps extends HTMLAttributes<HTMLDivElement> {
   /** Listing icon; absent renders the deterministic identicon fallback */
@@ -64,6 +66,8 @@ const KIND_GLYPHS: Record<ListingAvatarKind, ComponentType<PhosphorIconProps>> =
   connector: PlugIcon,
   // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- CSR imports have error types in eslint
   applet: AppWindowIcon,
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- CSR imports have error types in eslint
+  space: BuildingsIcon,
   // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- CSR imports have error types in eslint
   repo: GitBranchIcon,
   // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- CSR imports have error types in eslint

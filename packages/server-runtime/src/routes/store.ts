@@ -9,12 +9,7 @@ import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { sql } from 'drizzle-orm';
-import {
-  createTenantContext,
-  createMemoryDocRepository,
-  getTenantStoreShelfPolicy,
-  withTenantSchema,
-} from '@aflow/database';
+import { createTenantContext, getTenantStoreShelfPolicy, withTenantSchema } from '@aflow/database';
 import {
   CatalogEntryEnvelopeSchema,
   CatalogEntryKindSchema,
@@ -42,16 +37,9 @@ import {
   type StoreInstallConflict,
   type TenantId,
 } from '@aflow/schemas';
-import {
-  getCatalogEntry,
-  getSkillBundleEntry,
-  getSkillCatalogEntry,
-  listCatalog,
-  uncomposedListingReason,
-} from '@aflow/platform-artifacts';
+import { getCatalogEntry, listCatalog, uncomposedListingReason } from '@aflow/platform-artifacts';
 import {
   appletArtifactKey,
-  checkMissingCapabilities,
   connectorDefaultBindingId,
   deriveInstalledState,
   readCodingLoopReadiness,
@@ -59,7 +47,6 @@ import {
   readCodingLoopParts,
   deriveListingRequirements,
   derivePlannedArtifacts,
-  deriveRequiredCapabilities,
   executeStoreInstall,
   executeStoreUninstall,
   executeStoreUninstallPreview,
@@ -72,7 +59,8 @@ import {
   readAppletArtifactHead,
   searchListableEntries,
   selectListableEntries,
-  validateBundleInstallPreconditions,
+  spaceTemplateRefusal,
+  previewBundleInstall,
   ListingInstalledStateSchema,
 } from '@aflow/cybernetic-runtime';
 import { getRedis } from './integrations/shared.js';
@@ -288,6 +276,9 @@ export const storeInstallRoutes: FastifyPluginAsync = async (fastify) => {
       if (laneRefusal !== null) {
         return reply.code(400).send({ error: laneRefusal });
       }
+      if (entry.kind === 'space') {
+        return reply.code(400).send({ error: spaceTemplateRefusal(entry.catalogId).error });
+      }
       if (entry.kind === 'bundle' && !(await isCyberneticSpaceById(db, tenantId, spaceId))) {
         return reply.code(400).send({ error: 'Space is not cybernetic (no directives set)' });
       }
@@ -317,6 +308,7 @@ export const storeInstallRoutes: FastifyPluginAsync = async (fastify) => {
             )
           : undefined;
       return {
+        kind: entry.kind,
         catalogId: entry.catalogId,
         catalogVersion: entry.version,
         creates,
@@ -334,48 +326,8 @@ export const storeInstallRoutes: FastifyPluginAsync = async (fastify) => {
   ): Promise<{ conflicts: StoreInstallConflict[]; missingCapabilities: string[] }> {
     const conflicts: StoreInstallConflict[] = [];
     switch (entry.kind) {
-      case 'bundle': {
-        const repo = createMemoryDocRepository(tx, createTenantContext(ids.tenantId), {
-          inTransaction: true,
-        });
-        const validation = await validateBundleInstallPreconditions({
-          bundle: entry.payload,
-          spaceId: ids.spaceId,
-          tx,
-          resolveBundle: (bundleId) => getSkillBundleEntry(bundleId) ?? null,
-          checkSkillInstalled: async (skillCatalogId) => {
-            const member = getSkillCatalogEntry(skillCatalogId);
-            if (!member) return false;
-            const doc = await repo.getByPath(
-              `/workflows/${member.bundle.workflow.slug}/workflow.json`,
-              ids.spaceId,
-            );
-            return doc !== null;
-          },
-        });
-        if (!validation.ok) {
-          for (const reason of validation.errors) {
-            conflicts.push({
-              artifactType: 'skill',
-              artifactKey: entry.catalogId,
-              reason: reason.slice(0, 500),
-            });
-          }
-        }
-        const requiredCapabilities = new Set<string>();
-        for (const memberId of entry.payload.skillCatalogIds) {
-          const member = getSkillCatalogEntry(memberId);
-          if (!member) continue;
-          for (const capability of deriveRequiredCapabilities(member.bundle)) {
-            requiredCapabilities.add(capability);
-          }
-        }
-        const missingCapabilities = await checkMissingCapabilities(
-          { db: tx, tenantId: ids.tenantId, spaceId: ids.spaceId, inTransaction: true },
-          [...requiredCapabilities],
-        );
-        return { conflicts, missingCapabilities };
-      }
+      case 'bundle':
+        return previewBundleInstall(tx, entry, ids);
       case 'connector': {
         if (entry.sourceKind === 'api') {
           const apiId = entry.payload.definition.apiId;
@@ -454,6 +406,9 @@ export const storeInstallRoutes: FastifyPluginAsync = async (fastify) => {
         }
         return { conflicts, missingCapabilities: [] };
       }
+      // Refused before the preview reads anything: a template makes its own space.
+      case 'space':
+        return { conflicts: [], missingCapabilities: [] };
     }
   }
 

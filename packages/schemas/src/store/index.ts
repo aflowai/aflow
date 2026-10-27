@@ -1,6 +1,7 @@
 export * from './iconRef.js';
 export * from './appletListing.js';
 export * from './catalogEntry.js';
+export * from './spaceTemplate.js';
 export * from './canonicalContent.js';
 export * from './provenance.js';
 export * from './installContracts.js';

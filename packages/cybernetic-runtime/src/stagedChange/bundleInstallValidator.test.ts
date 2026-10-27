@@ -250,6 +250,34 @@ describe('validateBundleInstallPreconditions — cross-bundle apiId resolution',
     expect(result.ok).toBe(true);
   });
 
+  it('does not look for a prereq the same transaction installs first, and still resolves its apiIds', async () => {
+    const prereq = mkBundle({
+      bundleId: 'prereq' as SkillBundleId,
+      skillCatalogIds: ['needed-skill'],
+      apiDefinitions: [mkApiDef('alpaca-account-read')],
+      apiBindingTemplates: [mkBindingTpl('prereq-default', 'alpaca-account-read')],
+    });
+    let selects = 0;
+    const result = await validateBundleInstallPreconditions({
+      bundle: mkBundle({
+        prerequisiteBundleIds: ['prereq' as SkillBundleId],
+        apiBindingTemplates: [mkBindingTpl('alpaca-account-read-default', 'alpaca-account-read')],
+      }),
+      spaceId: SPACE,
+      tx: {
+        execute: async () => {
+          selects += 1;
+          return [];
+        },
+      } as unknown as ValidateBundleInstallOpts['tx'],
+      resolveBundle: (id) => (id === 'prereq' ? prereq : null),
+      checkSkillInstalled: async () => false,
+      prerequisitesInstalledFirst: new Set(['prereq']),
+    });
+    expect(result.ok).toBe(true);
+    expect(selects).toBe(0);
+  });
+
   it('errors when binding template references an apiId neither local nor in any prereq', async () => {
     const result = await validateBundleInstallPreconditions({
       bundle: mkBundle({

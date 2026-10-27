@@ -13,7 +13,12 @@ import {
 import { SKILL_BUNDLE_CATALOG } from '../skillBundleCatalog.js';
 import { CONNECTOR_CATALOG } from '../connectorCatalog/index.js';
 import { APPLET_CATALOG, type AppletCatalogListing } from '../appletCatalog/index.js';
-import { deriveApiConnectorHostManifest, deriveBundleHostManifest } from './hostManifest.js';
+import {
+  deriveApiConnectorHostManifest,
+  deriveBundleHostManifest,
+  deriveSpaceTemplateHostManifest,
+} from './hostManifest.js';
+import { SPACE_TEMPLATE_CATALOG, type SpaceTemplateListing } from '../spaceTemplateCatalog.js';
 import { isListingComposed } from './composedLanes.js';
 import { catalogEntryContentHash } from './contentHash.js';
 
@@ -129,6 +134,25 @@ function wrapApplet(listing: AppletCatalogListing): CatalogEntry {
   );
 }
 
+function wrapSpaceTemplate(listing: SpaceTemplateListing): CatalogEntry {
+  return parseListing(
+    {
+      catalogId: listing.template.templateId,
+      kind: 'space',
+      version: listing.template.version,
+      status: 'published',
+      name: listing.name,
+      tagline: listing.tagline,
+      description: listing.description,
+      tags: listing.tags,
+      honestyLabel: 'curated',
+      hostManifest: deriveSpaceTemplateHostManifest(listing.template),
+      payload: listing.template,
+    },
+    listing.template.templateId,
+  );
+}
+
 interface ContributedListing {
   entry: CatalogEntry;
   hidden: boolean;
@@ -149,6 +173,10 @@ const CONTRIBUTED_LISTINGS: readonly ContributedListing[] = [
   ...APPLET_CATALOG.map((listing) => ({
     entry: wrapApplet(listing),
     hidden: listing.hidden === true,
+  })),
+  ...SPACE_TEMPLATE_CATALOG.map((listing) => ({
+    entry: wrapSpaceTemplate(listing),
+    hidden: false,
   })),
 ];
 

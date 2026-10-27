@@ -73,6 +73,13 @@ export {
   findUnresolvedSkillCatalogIds,
 } from './skillBundleCatalog.js';
 
+export { SPACE_TEMPLATE_CATALOG, getSpaceTemplate } from './spaceTemplateCatalog.js';
+export type { SpaceTemplateListing } from './spaceTemplateCatalog.js';
+export {
+  findSpaceTemplateLocalReferences,
+  findSpaceTemplateUnresolvedReferences,
+} from './spaceTemplateGuard.js';
+
 export {
   STORE_CATALOG,
   listCatalog,

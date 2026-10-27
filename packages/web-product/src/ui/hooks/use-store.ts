@@ -2,6 +2,7 @@
 
 import type { UseMutationResult, UseQueryResult } from '@tanstack/react-query';
 import type {
+  CatalogEntryKind,
   CatalogEntryEnvelope,
   IntegrationSourceKind,
   ListingRequirements,
@@ -48,7 +49,7 @@ export function listingDisplayState(state: ListingInstalledState): ListingDispla
 }
 
 export interface StoreListingFilters {
-  kind?: 'bundle' | 'connector' | 'applet';
+  kind?: CatalogEntryKind;
   q?: string;
 }
 

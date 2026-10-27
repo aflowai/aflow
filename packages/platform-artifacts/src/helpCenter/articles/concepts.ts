@@ -6,7 +6,7 @@ export const CONCEPTS_ARTICLES: readonly HelpArticleInput[] = [
     theme: 'concepts',
     question: 'What is a space, and when should I create another one?',
     summary:
-      'A space (called a workspace on some screens) is a self-contained place where agents work. Each space has its own chat, skills, integrations, memory, plan, triggers and settings, and its Helmsman sees only what belongs to that space. Create a separate space when a body of work needs its own connections, its own memory or its own rules; use the space selector at the top of the sidebar and choose Create new workspace. A space you no longer need can be archived from Settings → Danger zone, which hides it and pauses its schedules and webhooks, and can be undone.',
+      'A space (called a workspace on some screens) is a self-contained place where agents work. Each space has its own chat, skills, integrations, memory, plan, triggers and settings, and its Helmsman sees only what belongs to that space. Create a separate space when a body of work needs its own connections, its own memory or its own rules; use the space selector at the top of the sidebar and choose Create new workspace, or Start from a quick start for a space that comes with its skills. A space you no longer need can be archived from Settings → Danger zone, which hides it and pauses its schedules and webhooks, and can be undone.',
     body: `## Where
 
 The space selector at the top of the sidebar lists your spaces. **Create new workspace** at the bottom of that list starts a new one, and **Workspace Settings** opens the current space's settings.
@@ -31,6 +31,12 @@ Separate spaces keep work apart. A skill installed in one space, a connection bo
 
 When you create a space and no model provider key is available for it, the dialog says so and offers **Add a provider key** or **Continue to chat**.
 
+## Starting from a quick start
+
+**Start from a quick start** in the space selector makes a new space that already holds the skills and the Helmsman directive a kind of work needs. Choose a quick start, name the space and choose **Create the space**. Its skills are installed the way the Store installs them anywhere, so they show as installed on that space's Store page and update from their own listings; the directive becomes the space's own, and you change it like any other. Nothing in your other spaces changes. Quick starts are also on the Store page, under **Quick starts**, with **Start a new space from it** — a quick start always makes a new space and is never applied to the one you are in.
+
+In Aflow Local, while your only space is the one the instance started with and nothing has been made or installed in it, the quick starts are offered beside it when you open Aflow. Choosing the empty space keeps it as it is, and the offer is not shown again in that browser.
+
 ## Archiving a space
 
 **Settings → Danger zone → Archive space** hides the space and pauses its schedules and webhooks. Run history is kept. Restore it from the **Archived spaces** list; schedules and webhooks paused by the archive stay paused until you turn them back on. Permanent deletion is offered only after a space is archived. The General space cannot be archived.`,
@@ -42,6 +48,7 @@ When you create a space and no model provider key is available for it, the dialo
         's/[space]/settings/general',
         's/[space]/settings/danger',
         's/[space]/plan',
+        's/[space]/store',
       ],
       operations: [],
     },
@@ -53,6 +60,8 @@ When you create a space and no model provider key is available for it, the dialo
       'archive',
       'delete space',
       'project',
+      'quick start',
+      'template',
     ],
   },
   {

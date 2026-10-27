@@ -17,6 +17,7 @@ import {
   type ComposedLanes,
 } from '@aflow/schemas';
 
+import { getSkillBundleEntry } from '../skillBundleCatalog.js';
 import { getSkillCatalogEntry } from '../skillCatalog.js';
 
 /**
@@ -28,9 +29,27 @@ import { getSkillCatalogEntry } from '../skillCatalog.js';
  * from discovery — costing the task one option it never had, not the run.
  */
 export function listingRequiredOperations(entry: CatalogEntry): string[] {
+  if (entry.kind === 'space') return spaceTemplateRequiredOperations(entry.payload.bundleIds);
   if (entry.kind !== 'bundle') return [];
+  return bundleRequiredOperations(entry.payload.skillCatalogIds);
+}
+
+/** A template runs what its bundles run, so it is withheld wherever one of them would be. */
+function spaceTemplateRequiredOperations(bundleIds: readonly string[]): string[] {
   const operations = new Set<string>();
-  for (const skillCatalogId of entry.payload.skillCatalogIds) {
+  for (const bundleId of bundleIds) {
+    const bundle = getSkillBundleEntry(bundleId);
+    if (!bundle) continue;
+    for (const operationId of bundleRequiredOperations(bundle.skillCatalogIds)) {
+      operations.add(operationId);
+    }
+  }
+  return [...operations].sort();
+}
+
+function bundleRequiredOperations(skillCatalogIds: readonly string[]): string[] {
+  const operations = new Set<string>();
+  for (const skillCatalogId of skillCatalogIds) {
     const skill = getSkillCatalogEntry(skillCatalogId);
     if (!skill) continue;
     for (const task of skill.bundle.workflow.tasks) {
