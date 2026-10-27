@@ -33,6 +33,7 @@ import {
   CODE_REPO_CAPABILITY_ID,
   parseStoreInstallClaimant,
 } from '@aflow/schemas';
+import { setupCapabilityRemediation } from './storeSetupCheck.js';
 import { AppPageHeader } from '../components/app-page-header.js';
 import { MarkdownRenderer } from '../components/markdown-renderer.js';
 import { SetupChecklist } from '../components/setup-checklist.js';
@@ -928,9 +929,7 @@ function StoreListingPageInner() {
                     <Text size="xs">{labelCapability(capability)}</Text>
                   </Row>
                 ))}
-                {flow.preview.missingCapabilities.some(
-                  (capability) => capability !== CODE_LANE_ABSENT_CAPABILITY_ID,
-                ) ? (
+                {setupCapabilityRemediation(flow.preview.missingCapabilities).openIntegrations ? (
                   <Button
                     variant="secondary"
                     size="sm"
@@ -940,7 +939,9 @@ function StoreListingPageInner() {
                   >
                     Open Integrations
                   </Button>
-                ) : (
+                ) : null}
+                {setupCapabilityRemediation(flow.preview.missingCapabilities)
+                  .editionUnavailable && (
                   <Text size="xs" variant="muted">
                     Not available in this edition; no setup in this space can supply it.
                   </Text>

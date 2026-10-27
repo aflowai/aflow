@@ -70,7 +70,7 @@ The work happens in a private clone of the repository, so your uncommitted work 
 
 ## Publishing
 
-Install **Coding Loop** from the Store once for Commission Change, Review Local Changes, Publish Local Changes, the Local PR Shepherd skill and agent, and the GitHub connector definition. They install and update as one version. Installing the bundle keeps existing parts and customizations. When updating separate parts to Coding Loop, **Keep mine** leaves their content and records the offered version as skipped; **Replace with Store version** replaces customized workflows with the Store versions.
+Install **Coding Loop** from the Store once for Commission Change, Review Local Changes, Publish Local Changes, the Local PR Shepherd skill and agent, and the GitHub connector definition. They install and update as one version. Uninstall removes the combined installation, including separately installed loop parts; skills claimed by other installations stay installed. Installing the bundle keeps existing parts and customizations. When updating separate parts to Coding Loop, **Keep mine** leaves their content and records the offered version as skipped; **Replace with Store version** replaces customized workflows with the Store versions.
 
 The install and **Check setup again** name what this space still needs:
 
