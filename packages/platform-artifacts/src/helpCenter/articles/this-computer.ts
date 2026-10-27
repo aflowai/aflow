@@ -29,6 +29,8 @@ The code lasts a few minutes, works once, and can connect folders to this worksp
 
 Each folder under **Connected folders** shows its grants: **read only** or **read and write**, **commands** when commands may run, and the branch prefix a repository publishes under. A git repository whose commands may run publishes only to branches under \`aflow/\`, never forced, and asks you before every push unless the command said otherwise.
 
+A folder whose commands may run can also declare its preview — how its project is served, so a change to its UI can be seen working; see the article on declaring a folder's preview. Its card shows the preview, or **Preview not declared** where the folder holds a web app and declares none.
+
 A path outside a connected folder is refused. A folder is reachable only where the machine and the workspace both agree, so a workspace cannot reach a folder the machine never offered.
 
 ## Removing one
@@ -43,7 +45,12 @@ Files, commands and local MCP servers are separate capabilities — **Files on t
       routes: ['s/[space]/computer'],
       operations: ['host.file.get', 'host.file.put', 'host.process.exec', 'host.binding.inspect'],
     },
-    related: ['coding-agent-on-this-computer', 'agent-browser', 'local-edition-limits'],
+    related: [
+      'coding-agent-on-this-computer',
+      'agent-browser',
+      'folder-preview',
+      'local-edition-limits',
+    ],
     keywords: ['host', 'pairing', 'folder', 'binding', 'connect code', 'local files', 'repository'],
   },
   {
@@ -173,6 +180,49 @@ Label a pull request **hands-off** to have the shepherd leave it alone — while
       'stream',
       'github',
     ],
+  },
+  {
+    id: 'folder-preview',
+    theme: 'this-computer',
+    question: 'How do I tell Aflow how my project is served, so a UI change can be seen working?',
+    summary:
+      'Declare the folder’s preview once, under This Computer → Connected folders with Declare preview, or on the machine with aflow folder <bindingId> preview --command "<command>". It records the command that serves the project from a checkout, with {port} where its port goes; a fixed port if the project cannot be told one; the path that answers once it is up, / by default; and the files that make up its UI, by default every tsx, jsx, vue, svelte, astro, html, css, scss and less file and everything under each web app directory you name. A port Aflow itself serves on is refused. Only a person can declare it, and declaring it starts nothing. Where the folder has a web app and declares no preview, its card says Preview not declared.',
+    body: `**Where:** **This Computer** in the sidebar → **Connected folders** → a folder's **Declare preview** or **Change preview**; or the \`folder\` command on the machine
+
+A connected folder can be any project, so Aflow does not guess how it is served: you say so once, per folder. The declaration lives in the machine's own policy, beside the folder's other settings.
+
+## What you declare
+
+- **Command** — what serves the project, run from the root of a checkout: \`yarn dev --port {port}\`, \`npm run dev -- --port {port}\`, or whatever your project runs. \`{port}\` is replaced with the port it is to listen on.
+- **Port** — leave it empty and each run takes a free port, passed to the command as \`{port}\`; without one the command must contain \`{port}\`. Fix a port only for a project that cannot be told one: a fixed port serves one run at a time. A port Aflow itself serves on — the API, the web app, the MCP server, Redis, Postgres — is refused, because a page from it could approve the agent's own requests.
+- **Ready path** — the path that answers once the project is up. \`/\` by default.
+- **UI paths** — globs naming the files that make up the UI, one per line; a change touching one is a UI change. Empty, every file ending in \`tsx\`, \`jsx\`, \`vue\`, \`svelte\`, \`astro\`, \`html\`, \`css\`, \`scss\` or \`less\`, and everything under each web app directory. Given, they replace that default whole.
+- **Web app directories** — directories of the folder, such as \`apps/web\`, whose every file counts as UI in the default.
+
+Defaults are read each time, never written in, so a folder that left one empty follows the default as it changes. **Saving replaces the declaration before; Clear preview removes it.** Declaring a preview starts nothing: Aflow does not yet start it for a run.
+
+## On the machine
+
+\`\`\`bash
+yarn workspace @aflow/aflow-executor-host folder <bindingId> preview --command "yarn dev --port {port}"
+yarn workspace @aflow/aflow-executor-host folder <bindingId> preview --port 4321 --command "yarn dev" --ready /health --ui "src/**/*.tsx" --web-app apps/web
+yarn workspace @aflow/aflow-executor-host folder <bindingId> preview          # print it
+yarn workspace @aflow/aflow-executor-host folder <bindingId> preview --clear
+\`\`\`
+
+\`--ui\` and \`--web-app\` repeat, one glob or directory each. The folder must allow commands, since a preview is one.
+
+## Preview not declared
+
+Where a folder declares no preview, the machine looks for a web app in it: a \`package.json\` at its root, or one level under \`apps/\` or \`packages/\`, that depends on Next.js, Vite, Svelte, SvelteKit, Astro, Vue, Nuxt, React or Angular, or an \`index.html\` at its root. When it finds one, the folder's card says **Preview not declared** and where it looked. The finding only decides that line: nothing is run from it, and it does not fill in web app directories for you.
+
+## Who can declare it
+
+Only a person: no agent operation declares a preview, and API keys and MCP sessions are refused.`,
+    editions: ['community-local'],
+    anchors: { routes: ['s/[space]/computer'] },
+    related: ['pair-this-computer', 'driving-work-through-the-loop', 'agent-browser'],
+    keywords: ['preview', 'dev server', 'ui change', 'port', 'web app', 'ui paths', 'ready path'],
   },
   {
     id: 'agent-browser',

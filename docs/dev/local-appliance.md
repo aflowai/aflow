@@ -561,6 +561,23 @@ browser load it — the web app presents the instance secret to whoever loads it
 the harness could approve its own requests. The command warns before it writes
 such a port.
 
+A connected folder declares how its project is served, so a change to its UI can
+be seen working (Plan 320 D18): the command, run from the root of a checkout with
+`{port}` where its port goes, a fixed port only where the project cannot be told
+one, the path that answers once it is up (`/` by default), and the files that are
+its UI (by default every `tsx jsx vue svelte astro html css scss less` file and
+everything under each `--web-app` directory). The same declaration is under each
+folder on **This Computer**, which says **Preview not declared** where the folder
+holds a web app and declares none. Only a person declares it, a port this stack
+serves on is refused, and declaring it starts nothing:
+
+```bash
+yarn workspace @aflow/aflow-executor-host folder hb_site preview --command "yarn dev --port {port}"
+yarn workspace @aflow/aflow-executor-host folder hb_site preview --command "yarn dev" --port 4321 --ready /health --ui "src/**/*.tsx" --web-app apps/web
+yarn workspace @aflow/aflow-executor-host folder hb_site preview
+yarn workspace @aflow/aflow-executor-host folder hb_site preview --clear
+```
+
 A harness run needs `allowsExecution` on the binding, like any command, and the
 **Coding agents on this computer** capability, which no profile carries by
 default.

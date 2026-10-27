@@ -34,13 +34,19 @@ function plantedDirective(responsibility: string): SpaceTemplate {
 
 // ----------------------------------------------------------------------------
 // The host CLI, read from its own sources: `aflow <command>` is a package
-// script that runs `src/<command>.ts`, and `aflow harness <sub>` is a branch
-// of the harness CLI's dispatch.
+// script that runs `src/<command>.ts`, `aflow harness <sub>` is a branch
+// of the harness CLI's dispatch, and `aflow folder <bindingId> <sub>` one of
+// the folder CLI's — the folder named before the verb, as the operator ruled.
 // ----------------------------------------------------------------------------
 
 const HOST_APP = new URL('../../../../apps/aflow-executor-host/', import.meta.url);
 
-function hostCliCommands(): { top: Set<string>; harness: Set<string> } {
+function dispatchedVerbs(source: string): Set<string> {
+  const text = readFileSync(new URL(source, HOST_APP), 'utf8');
+  return new Set([...text.matchAll(/command === '([a-z-]+)'/g)].map((match) => match[1] as string));
+}
+
+function hostCliCommands(): { top: Set<string>; harness: Set<string>; folder: Set<string> } {
   const manifest = JSON.parse(readFileSync(new URL('package.json', HOST_APP), 'utf8')) as {
     scripts: Record<string, string>;
   };
@@ -52,21 +58,25 @@ function hostCliCommands(): { top: Set<string>; harness: Set<string> } {
       )
       .map(([name]) => name),
   );
-  const harnessSource = readFileSync(new URL('src/harness-cli.ts', HOST_APP), 'utf8');
-  const harness = new Set(
-    [...harnessSource.matchAll(/command === '([a-z-]+)'/g)].map((match) => match[1] as string),
-  );
-  return { top, harness };
+  return {
+    top,
+    harness: dispatchedVerbs('src/harness-cli.ts'),
+    folder: dispatchedVerbs('src/folder-cli.ts'),
+  };
 }
 
 const CLI = hostCliCommands();
 
 function unacceptedCommand(command: string): string | null {
-  const [program, sub, harnessSub] = command.trim().split(/\s+/);
+  const [program, sub, third, fourth] = command.trim().split(/\s+/);
   if (program !== 'aflow') return `'${command}' is not an aflow command`;
   if (sub === undefined || !CLI.top.has(sub)) return `'aflow ${sub ?? ''}' is no host CLI command`;
-  if (sub === 'harness' && (harnessSub === undefined || !CLI.harness.has(harnessSub))) {
-    return `'aflow harness ${harnessSub ?? ''}' is no harness subcommand`;
+  if (sub === 'harness' && (third === undefined || !CLI.harness.has(third))) {
+    return `'aflow harness ${third ?? ''}' is no harness subcommand`;
+  }
+  // `aflow folder <bindingId> <verb>`: the folder first, then what is said about it.
+  if (sub === 'folder' && (fourth === undefined || !CLI.folder.has(fourth))) {
+    return `'aflow folder ${third ?? ''} ${fourth ?? ''}' is no folder subcommand`;
   }
   return null;
 }
@@ -202,11 +212,18 @@ describe('space templates resolve what they name (D5)', () => {
   });
 
   it('reads the host CLI it checks commands against', () => {
-    expect(CLI.top).toEqual(new Set(['pair', 'connect', 'harness', 'browser', 'service']));
+    expect(CLI.top).toEqual(
+      new Set(['pair', 'connect', 'harness', 'browser', 'folder', 'service']),
+    );
+    expect(CLI.folder).toEqual(new Set(['preview']));
     expect(CLI.harness.has('merge-posture')).toBe(true);
     expect(unacceptedCommand('aflow harness merge-posture <folder> when-green')).toBeNull();
     expect(unacceptedCommand('aflow connect <folder> --branch-prefix <p>')).toBeNull();
-    expect(unacceptedCommand('aflow folder preview')).not.toBeNull();
+    expect(unacceptedCommand('aflow folder <bindingId> preview --command <command>')).toBeNull();
+    expect(unacceptedCommand('aflow folder <bindingId> preview --clear')).toBeNull();
+    // The verb follows the folder: the spelling the plan first wrote is not one.
+    expect(unacceptedCommand('aflow folder preview <bindingId>')).not.toBeNull();
+    expect(unacceptedCommand('aflow folder <bindingId>')).not.toBeNull();
     expect(unacceptedCommand('aflow harness merge <folder>')).not.toBeNull();
     expect(unacceptedCommand('yarn start')).not.toBeNull();
   });
