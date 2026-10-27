@@ -53,6 +53,7 @@ the wrong shape, change the plan rather than quietly diverging from it.
 | [329](329-planning-is-a-skill.md)                                           | Planning is a skill                                             |
 | [330](330-default-spaces-quick-start.md)                                    | Default spaces: a quick start installs with the product         |
 | [331](331-the-always-on-helmsman.md)                                        | The always-on Helmsman                                          |
+| [332](332-the-plan-page-serves-the-operators-jobs.md)                       | The plan page serves the operator's jobs                        |
 
 ## What a plan is not
 
