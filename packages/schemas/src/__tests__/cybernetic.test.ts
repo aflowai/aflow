@@ -215,7 +215,7 @@ describe('EntityEventEnvelopeSchema', () => {
     expect(result.traceId).toBe('abc123def456');
   });
 
-  it('accepts all 51 event types (includes 102h + 104b + 104c + 104e + 104g + 111 + 163 + 170 + 183a/183b follow-up events, the conversation descriptor and its status, and the plan write)', () => {
+  it('accepts all 52 event types (includes 102h + 104b + 104c + 104e + 104g + 111 + 163 + 170 + 183a/183b follow-up events, the conversation descriptor and its status, and the plan write)', () => {
     const types = EntityEventTypeSchema.options;
     expect(types.length).toBe(52);
     expect(types).toContain('entity.plan.updated');

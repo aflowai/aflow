@@ -27,6 +27,7 @@ export type PlanNodeCloser = (request: PlanNodeCloseRequest) => Promise<PlanNode
 
 /** The rail's read of the node in full: what the form decides against. */
 export interface PlanNodeRead {
+  /** Absent until the rail's own read, made when it opened, has answered. */
   node: PlanNode | undefined;
   error: Error | null;
   /** Read the node again; answers with the node as it now stands. */

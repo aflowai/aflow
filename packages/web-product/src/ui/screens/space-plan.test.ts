@@ -24,6 +24,8 @@ import type {
 interface Answer {
   data?: unknown;
   error?: Error | null;
+  /** False for a detail cached from an earlier opening, before the rail's own read answers. */
+  fetchedAfterMount?: boolean;
 }
 
 const recorded = vi.hoisted(() => ({
@@ -168,6 +170,7 @@ vi.mock('../hooks/useApiQuery.js', () => ({
       data: answer?.data,
       error: answer?.error ?? null,
       isLoading: answer === undefined,
+      isFetchedAfterMount: answer !== undefined && answer.fetchedAfterMount !== false,
       refetch: recorded.detailRefetch,
     };
   },
@@ -985,6 +988,36 @@ describe('SpacePlanPage — the operator’s writes from the rail', () => {
     expect(recorded.mutateAsync).toHaveBeenCalledWith({
       nodeId: BOARD,
       expectedRevision: 1,
+      status: 'done',
+      outcome: 'The board renders.',
+    });
+  });
+
+  it('pins a reopened card to the rail’s fresh read, not the detail cached from its last opening', async () => {
+    recorded.mutateAsync.mockResolvedValue({ node: {} });
+    await render();
+    await click(card(BOARD));
+    await click(button(rail(), 'Close'));
+
+    // Reopened: the cache still holds revision 1 while the rail reads the step again.
+    recorded.details[BOARD] = {
+      ...detail(fullNode(BOARD, 'P3.3 the board')),
+      fetchedAfterMount: false,
+    };
+    await click(card(BOARD));
+    await click(button(rail(), 'Mark done'));
+    expect(rail().textContent).toContain('Reading the step…');
+    expect(button(rail(), 'Mark done').disabled).toBe(true);
+
+    recorded.details[BOARD] = detail(fullNode(BOARD, 'P3.3 the board', { revision: 3 }));
+    await render();
+    await type(rail(), 'The board renders.');
+    await click(button(rail(), 'Mark done'));
+
+    expect(recorded.mutateAsync).toHaveBeenCalledTimes(1);
+    expect(recorded.mutateAsync).toHaveBeenCalledWith({
+      nodeId: BOARD,
+      expectedRevision: 3,
       status: 'done',
       outcome: 'The board renders.',
     });

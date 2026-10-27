@@ -415,7 +415,10 @@ export function PlanRail({
         <PlanNodeCloseControl
           node={node}
           read={{
-            node: full,
+            // Only the read this rail made on opening, never a detail cached
+            // from an earlier opening of the card: the open form pins the
+            // first node it is given, and a stale one would be refused.
+            node: detail.isFetchedAfterMount && detail.error === null ? full : undefined,
             error: detail.error,
             refetch: async () => (await detail.refetch()).data?.node,
           }}
