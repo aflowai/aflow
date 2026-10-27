@@ -7,6 +7,9 @@ import { getSkillBundleEntry, getSkillCatalogEntry } from '@aflow/platform-artif
 // Mock state
 // ============================================================================
 
+const applyBundledAgents = vi.hoisted(() => vi.fn());
+vi.mock('../stagedChange/applyBundledAgents.js', () => ({ applyBundledAgents }));
+
 const mockDocs = new Map<string, string>();
 const capturedManifests: SkillManifest[] = [];
 const projectionRebuilds: string[] = [];
@@ -155,8 +158,38 @@ function projectionDocPath(skillId: string): string {
 // Tests
 // ============================================================================
 
+describe('agent-only repair', () => {
+  it('creates missing agents without applying or projecting kept skills', async () => {
+    const bundle = {
+      ...getTestTwoSkillBundle(),
+      agents: getSkillBundleEntry('coding-loop')!.agents,
+    };
+    mockDocs.set('/custom-content', 'kept');
+    const before = new Map(mockDocs);
+    applyBundledAgents.mockResolvedValueOnce({
+      installedAgentSlugs: ['local-pr-shepherd'],
+      skippedAgentSlugs: [],
+      warnings: [],
+    });
+    const result = await installSkillBundle(ctx, bundle, { agentsOnly: true });
+    expect(result.installedAgentSlugs).toEqual(['local-pr-shepherd']);
+    expect(mockDocs).toEqual(before);
+    expect(capturedManifests).toEqual([]);
+    expect(projectionRebuilds).toEqual([]);
+    expect(result.installedSkillCatalogIds).toEqual([]);
+    expect(applyBundledAgents).toHaveBeenCalledWith(
+      expect.objectContaining({ agents: bundle.agents }),
+    );
+  });
+});
+
 describe('installSkillBundle (Plan 137 Phase 2)', () => {
   beforeEach(() => {
+    applyBundledAgents.mockResolvedValue({
+      installedAgentSlugs: [],
+      skippedAgentSlugs: [],
+      warnings: [],
+    });
     mockDocs.clear();
     capturedManifests.length = 0;
     projectionRebuilds.length = 0;

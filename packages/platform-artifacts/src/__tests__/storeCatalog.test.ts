@@ -111,10 +111,20 @@ describe('store catalog facade', () => {
       const prod = await import('../storeCatalog/index.js');
       expect(prod.getCatalogEntry('test-setup-bundle')).toBeNull();
       expect(prod.getCatalogEntry('test-two-skill-bundle')).toBeNull();
-      expect(prod.listCatalog({ status: 'unlisted' })).toEqual([]);
+      const retired = ['local-commission', 'local-code-review', 'local-publish', 'local-shepherd'];
+      for (const id of retired) expect(prod.getCatalogEntry(id)?.status).toBe('unlisted');
+      const browse = prod.listCatalog({ status: 'published', lanes: EVERY_LANE });
+      expect(browse.some((entry) => entry.catalogId === 'coding-loop')).toBe(true);
+      expect(browse.some((entry) => retired.includes(entry.catalogId))).toBe(false);
       expect(prod.getCatalogEntry('github')).not.toBeNull();
       expect(prod.STORE_CATALOG.length).toBe(
-        STORE_CATALOG.filter((entry) => entry.status !== 'unlisted').length,
+        STORE_CATALOG.filter(
+          (entry) =>
+            entry.status !== 'unlisted' ||
+            SKILL_BUNDLE_CATALOG.some(
+              (bundle) => bundle.bundleId === entry.catalogId && bundle.unlisted,
+            ),
+        ).length,
       );
     } finally {
       vi.unstubAllEnvs();

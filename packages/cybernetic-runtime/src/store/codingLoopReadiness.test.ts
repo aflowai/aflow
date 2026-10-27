@@ -71,6 +71,26 @@ describe('coding loop readiness', () => {
     ]);
   });
 
+  it('directs an archived shepherd to restoration rather than reinstall', () => {
+    const result = codingLoopReadiness({
+      ...ready,
+      agent: false,
+      archivedAgent: true,
+      schedule: false,
+    });
+    expect(result).toMatchObject({
+      status: 'needs_setup',
+      tasks: [
+        {
+          step: 'agent',
+          path: '/agents',
+          description: expect.stringContaining('Restore the archived'),
+        },
+        { step: 'schedule' },
+      ],
+    });
+  });
+
   it('withholds preview until its declaration lands', () => {
     expect(codingLoopReadiness(ready).tasks).toEqual([]);
     expect(codingLoopReadiness({ ...ready, preview: false }).tasks).toMatchObject([

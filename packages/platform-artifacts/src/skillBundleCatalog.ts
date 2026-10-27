@@ -384,7 +384,7 @@ const RAW_BUNDLES: readonly AuthoredSkillBundle[] = [
   ALPACA_THESIS_TRADING,
   KAGGLE_COMPETITION_BUNDLE,
   CODING_PR_LOOP_BUNDLE,
-  ...LOCAL_LOOP_PARTS.map((part) => ({ ...part, hidden: true })),
+  ...LOCAL_LOOP_PARTS.map((part) => ({ ...part, unlisted: true })),
   CODING_LOOP_BUNDLE,
   TICKER_DIGEST,
   WEB_RESEARCH_BRIEF,
@@ -440,7 +440,7 @@ export function getSkillBundleEntry(bundleId: string): SkillBundle | null {
  */
 export function listSkillBundles(opts?: { includeHidden?: boolean }): readonly SkillBundle[] {
   if (opts?.includeHidden) return SKILL_BUNDLE_CATALOG;
-  return SKILL_BUNDLE_CATALOG.filter((b) => !b.hidden);
+  return SKILL_BUNDLE_CATALOG.filter((b) => !b.hidden && !b.unlisted);
 }
 
 /**

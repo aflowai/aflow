@@ -10,6 +10,7 @@ export interface CodingLoopSetupState {
   github: boolean;
   schedule: boolean;
   agent: boolean;
+  archivedAgent?: boolean;
   preview?: boolean;
   failure?: string;
 }
@@ -41,8 +42,10 @@ export function codingLoopReadiness(state: CodingLoopSetupState): {
   if (!state.agent)
     add(
       'agent',
-      'After connecting a publishing folder, install Coding Loop or choose Repair installation on its Store listing if already installed to create the missing Local PR Shepherd agent.',
-      '/store/coding-loop',
+      state.archivedAgent
+        ? 'Restore the archived Local PR Shepherd agent before enabling its repeating schedule.'
+        : 'After connecting a publishing folder, install Coding Loop or choose Repair installation on its Store listing if already installed to create the missing Local PR Shepherd agent.',
+      state.archivedAgent ? '/agents' : '/store/coding-loop',
     );
   if (!state.github)
     add(
@@ -77,19 +80,22 @@ export async function readCodingLoopReadiness(
     github: boolean;
     schedule: boolean;
     agent: boolean;
+    archived_agent: boolean;
     failure: string | null;
   }>(sql`
     SELECT
       ARRAY(SELECT host_binding_id FROM host_bindings WHERE space_id = ${spaceId}::uuid
         AND allows_execution AND branch_prefix IS NOT NULL AND branch_prefix <> '') AS folder_ids,
       EXISTS (SELECT 1 FROM agents WHERE space_id = ${spaceId}::uuid
-        AND slug = 'local-pr-shepherd') AS agent,
+        AND slug = 'local-pr-shepherd' AND archived_at IS NULL) AS agent,
+      EXISTS (SELECT 1 FROM agents WHERE space_id = ${spaceId}::uuid
+        AND slug = 'local-pr-shepherd' AND archived_at IS NOT NULL) AS archived_agent,
       EXISTS (SELECT 1 FROM api_bindings b JOIN api_credentials c
         ON c.space_id = b.space_id AND c.credential_key = b.auth_json->>'credentialKey'
         WHERE b.space_id = ${spaceId}::uuid AND b.api_id = 'github' AND b.enabled = 1) AS github,
       EXISTS (SELECT 1 FROM agent_schedules s JOIN agents a ON a.id = s.target_agent_id
         AND a.space_id = s.space_id WHERE s.space_id = ${spaceId}::uuid
-        AND a.slug = 'local-pr-shepherd' AND s.status = 'active' AND s.kind = 'cron'
+        AND a.archived_at IS NULL AND a.slug = 'local-pr-shepherd' AND s.status = 'active' AND s.kind = 'cron'
         AND (s.expires_at IS NULL OR s.expires_at > now())
         AND (s.max_firings IS NULL OR s.firing_count < s.max_firings)
         AND s.input_template->'scheduleId' = '{"$schedule":"id"}'::jsonb) AS schedule,
@@ -99,7 +105,7 @@ export async function readCodingLoopReadiness(
         LEFT JOIN sessions execution ON execution.session_id = s.last_session_id
           AND execution.space_id = s.space_id
         WHERE s.space_id = ${spaceId}::uuid
-        AND a.slug = 'local-pr-shepherd' AND s.status = 'active'
+        AND a.archived_at IS NULL AND a.slug = 'local-pr-shepherd' AND s.status = 'active'
         AND (s.last_error IS NOT NULL OR execution.status = 'FAILED'
           OR EXISTS (SELECT 1 FROM workflow_runs run
             WHERE run.session_id = s.last_session_id AND run.space_id = s.space_id
@@ -114,6 +120,7 @@ export async function readCodingLoopReadiness(
       ),
     ),
     agent: state?.agent ?? false,
+    archivedAgent: state?.archived_agent ?? false,
     github: state?.github ?? false,
     schedule: state?.schedule ?? false,
     ...(state?.failure ? { failure: state.failure } : {}),

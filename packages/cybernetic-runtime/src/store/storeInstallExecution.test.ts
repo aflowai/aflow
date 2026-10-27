@@ -342,6 +342,57 @@ beforeEach(() => {
 // ============================================================================
 
 describe('executeStoreInstall', () => {
+  it('repairs missing agents after Keep mine without restamping older content', async () => {
+    const catalogId = 'coding-loop';
+    const version = getCatalogEntry(catalogId)!.version;
+    const kept = { ...installedRow(catalogId, version - 2, 'bundle'), skipped_version: version };
+    store.installs.push(kept);
+    const bundleResult = {
+      bundleId: 'coding-loop',
+      installedSkillCatalogIds: [],
+      skippedSkillCatalogIds: [],
+      repairedProjectionSkillCatalogIds: [],
+      installedApiDefinitionIds: [],
+      skippedApiDefinitionIds: [],
+      installedBindingIds: [],
+      skippedBindingIds: [],
+      installedMcpDefinitionIds: [],
+      skippedMcpDefinitionIds: [],
+      installedMcpBindingIds: [],
+      skippedMcpBindingIds: [],
+      installedMemoryDocPaths: [],
+      skippedMemoryDocPaths: [],
+      installedArtifactBindings: [],
+      skippedArtifactBindings: [],
+      installedAgentSlugs: ['local-pr-shepherd'],
+      skippedAgentSlugs: [],
+      postInstallManifest: [],
+      helmsmanHints: [],
+      warnings: ['a warning'],
+      stateChanged: true,
+    };
+
+    installSkillBundle.mockResolvedValueOnce(bundleResult);
+    const result = await install({
+      catalogId,
+      lanes: { edition: 'local', codeLane: 'present', hostLane: 'present', browserLane: 'present' },
+    });
+    expect(result.ok).toBe(true);
+    expect(installSkillBundle).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ agentsOnly: true }),
+    );
+    expect(store.installs).toEqual([kept]);
+    expect(store.artifacts).toMatchObject([
+      { artifact_type: 'agent', artifact_key: 'local-pr-shepherd', catalog_id: catalogId },
+    ]);
+    expect(store.artifacts).toHaveLength(1);
+    if (!result.ok) throw new Error('expected success');
+    expect(result.response.install.installedVersion).toBe(version - 2);
+    expect(result.response.install.skippedVersion).toBe(version);
+  });
+
   it('fails with CATALOG_CHANGED on an expectedVersion mismatch', async () => {
     const result = await install({ expectedVersion: GITHUB_VERSION + 1 });
     expect(result.ok).toBe(false);

@@ -723,6 +723,8 @@ export const SkillBundleSchema = z
     prerequisiteBundleIds: z.array(SkillBundleIdSchema).max(10).default([]),
     /** If true, hidden from the Store UI. Used for test fixtures. */
     hidden: z.boolean().optional(),
+    /** Direct-link listings remain resolvable in production, unlike hidden test fixtures. */
+    unlisted: z.boolean().optional(),
 
     /** API definition drafts the install op lowers + writes per-space. */
     apiDefinitions: z.array(BundledApiDefinitionSchema).max(20).default([]),

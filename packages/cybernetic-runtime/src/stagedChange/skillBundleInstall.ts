@@ -188,7 +188,7 @@ export class BundleInstallValidationError extends Error {
 export async function installSkillBundle(
   ctx: ApplyContext,
   bundle: SkillBundle,
-  opts?: { redis?: Redis; readinessRedis?: Redis },
+  opts?: { redis?: Redis; readinessRedis?: Redis; agentsOnly?: boolean },
 ): Promise<InstallSkillBundleResult> {
   const tenantCtx = createTenantContext(ctx.tenantId as TenantId);
 
@@ -225,38 +225,56 @@ export async function installSkillBundle(
     }
 
     // Skill loop first — keeps the existing semantics + error contracts.
-    const loopResult = await runInstallLoop(txCtx, txRepo, bundle);
+    const content = opts?.agentsOnly
+      ? {
+          ...bundle,
+          apiDefinitions: [],
+          apiBindingTemplates: [],
+          mcpDefinitions: [],
+          mcpBindingTemplates: [],
+          memorySeed: [],
+          artifactSeed: [],
+        }
+      : bundle;
+    const loopResult = opts?.agentsOnly
+      ? {
+          installedSkillCatalogIds: [],
+          skippedSkillCatalogIds: bundle.skillCatalogIds,
+          repairedProjectionSkillCatalogIds: [],
+          warnings: [],
+        }
+      : await runInstallLoop(txCtx, txRepo, bundle);
 
     const apiDefResult = await applyApiDefinitions({
-      apiDefinitions: bundle.apiDefinitions ?? [],
+      apiDefinitions: content.apiDefinitions ?? [],
       spaceId: ctx.spaceId,
       tx,
     });
     const bindingResult = await applyApiBindingTemplates({
-      apiBindingTemplates: bundle.apiBindingTemplates ?? [],
+      apiBindingTemplates: content.apiBindingTemplates ?? [],
       tenantId: ctx.tenantId,
       spaceId: ctx.spaceId,
       tx,
     });
     const mcpDefResult = await applyMcpDefinitions({
-      mcpDefinitions: bundle.mcpDefinitions ?? [],
+      mcpDefinitions: content.mcpDefinitions ?? [],
       spaceId: ctx.spaceId,
       tx,
     });
     const mcpBindingResult = await applyMcpBindingTemplates({
-      mcpBindingTemplates: bundle.mcpBindingTemplates ?? [],
+      mcpBindingTemplates: content.mcpBindingTemplates ?? [],
       tenantId: ctx.tenantId,
       spaceId: ctx.spaceId,
       tx,
     });
     const memorySeedResult = await applyMemorySeeds({
-      memorySeed: bundle.memorySeed ?? [],
+      memorySeed: content.memorySeed ?? [],
       spaceId: ctx.spaceId,
       tenantId: ctx.tenantId as TenantId,
       repo: txRepo,
     });
     const artifactSeedResult = await applyArtifactSeeds({
-      bundle: { bundleId: bundle.bundleId, artifactSeed: bundle.artifactSeed ?? [] },
+      bundle: { bundleId: bundle.bundleId, artifactSeed: content.artifactSeed ?? [] },
       tenantId: ctx.tenantId,
       spaceId: ctx.spaceId,
       tx,

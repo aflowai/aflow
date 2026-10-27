@@ -83,3 +83,5 @@ Larger changes start with a plan in `docs/plans/` (see `docs/plans/README.md`).
 3. Update `scripts/README.md` if you added test flows or seed data
 
 See `docs/dev/CONTRIBUTING.md` for the full documentation checklist.
+
+Store catalog visibility: hidden bundles are test fixtures removed from production; retired identities use unlisted so installed provenance and updates still resolve. Repair after Keep mine creates missing agents without upgrading kept content or restamping installed/skipped versions. Coding Loop readiness requires unarchived agents for both agent existence and schedule eligibility.

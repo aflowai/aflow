@@ -81,7 +81,7 @@ Install one from the **Store**, describe one to the Helmsman, start one with **N
 
 ## After installing
 
-The skill is a copy in your space, and you can change it like any other. The listing then shows **Installed**, with **Check setup again**, **Repair installation** to create missing bundled agents while keeping existing parts and customizations, **Update** when a newer version exists, and **Uninstall**.
+The skill is a copy in your space, and you can change it like any other. The listing then shows **Installed**, with **Check setup again**, **Repair installation** to create missing bundled agents while keeping existing parts and customizations, including an older version retained with Keep mine, **Update** when a newer version exists, and **Uninstall**.
 
 **Update** shows what changes. When you have changed the skill since installing it, the dialog lists what you changed and offers **Replace with Store version**, which discards your changes, or **Keep mine**, which leaves everything as it is until the next version.
 

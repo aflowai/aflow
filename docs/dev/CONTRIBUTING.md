@@ -310,6 +310,8 @@ yarn typecheck                         # Verify no type errors
 
 17. **Publishing inside a nested transaction** — a savepoint returning does not commit the outer transaction. Store bundle callers pass Redis only for readiness reads, return pending embedding jobs, and publish jobs and invalidations after provenance commits.
 
+18. **Using hidden fixtures for retired Store listings** — hidden bundles are removed from production. Use unlisted entries for installed identities that must remain resolvable. Repair after Keep mine must preserve the installed/skipped versions and kept content; readiness queries must exclude archived agents from both agent existence and schedule eligibility.
+
 ## Keeping Documentation in Sync
 
 Documentation is NOT optional. Every change that affects behavior, schemas, or architecture

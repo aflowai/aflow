@@ -27,7 +27,7 @@ describe.skipIf(!databaseUrl)('coding loop database readiness', () => {
       await tx.execute(sql`CREATE TEMP TABLE api_credentials
         (space_id uuid, credential_key text) ON COMMIT DROP`);
       await tx.execute(sql`CREATE TEMP TABLE agents
-        (id uuid, space_id uuid, slug text) ON COMMIT DROP`);
+        (id uuid, space_id uuid, slug text, archived_at timestamptz) ON COMMIT DROP`);
       await tx.execute(sql`CREATE TEMP TABLE agent_schedules
         (target_agent_id uuid, space_id uuid, status text, kind text, expires_at timestamptz,
          max_firings integer, firing_count integer, input_template jsonb, last_error text,
@@ -43,7 +43,7 @@ describe.skipIf(!databaseUrl)('coding loop database readiness', () => {
         (${space}::uuid, 'github', '{"credentialKey":"github"}', 1)`);
       await tx.execute(sql`INSERT INTO api_credentials VALUES (${space}::uuid, 'github')`);
       await tx.execute(
-        sql`INSERT INTO agents VALUES (${space}::uuid, ${space}::uuid, 'local-pr-shepherd')`,
+        sql`INSERT INTO agents VALUES (${space}::uuid, ${space}::uuid, 'local-pr-shepherd', NULL)`,
       );
       await tx.execute(sql`INSERT INTO agent_schedules VALUES
         (${space}::uuid, ${space}::uuid, 'active', 'cron', NULL, NULL, 1,
@@ -80,6 +80,24 @@ describe.skipIf(!databaseUrl)('coding loop database readiness', () => {
       await tx.execute(sql`UPDATE api_bindings SET enabled = 1`);
       expect(await read()).toEqual({ status: 'ready', tasks: [] });
 
+      await tx.execute(sql`UPDATE agents SET archived_at = now()`);
+      expect(await read()).toMatchObject({
+        status: 'needs_setup',
+        tasks: [
+          {
+            step: 'agent',
+            description: expect.stringContaining('Restore the archived Local PR Shepherd'),
+            path: '/agents',
+          },
+          { step: 'schedule' },
+        ],
+      });
+      await tx.execute(sql`DELETE FROM agent_schedules`);
+      expect(
+        (await read()).tasks.some(
+          (task) => task.kind === 'coding_loop_setup' && task.step === 'agent',
+        ),
+      ).toBe(true);
       await tx.execute(sql`DELETE FROM agents`);
       expect((await read()).tasks).toMatchObject([
         { step: 'agent', path: '/store/coding-loop' },

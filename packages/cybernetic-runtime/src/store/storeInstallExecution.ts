@@ -226,11 +226,15 @@ async function dispatchBundleInstall(
     payloadStore?: PayloadStore | undefined;
     redis?: Redis | null | undefined;
   },
+  agentsOnly = false,
 ): Promise<InstallDispatchOutcome> {
   const result = await installSkillBundle(
     { tenantId: ids.tenantId, spaceId: ids.spaceId, db: tx, payloadStore: ids.payloadStore },
     entry.payload,
-    ids.redis ? { readinessRedis: ids.redis } : {},
+    {
+      ...(ids.redis ? { readinessRedis: ids.redis } : {}),
+      ...(agentsOnly ? { agentsOnly: true } : {}),
+    },
   );
   return {
     result: mapBundleResult(result),
@@ -481,6 +485,31 @@ export async function runStoreInstall(
       entryRow: 'keep',
       ...(dispatch.provenanceSkips !== undefined ? { skips: dispatch.provenanceSkips } : {}),
     });
+    return {
+      response: {
+        result: dispatch.result,
+        setupChecklist: dispatch.setupChecklist,
+        install: existing,
+      },
+      invalidations: dispatch.invalidations,
+    };
+  }
+
+  if (existing && entry.kind === 'bundle' && existing.skippedVersion === entry.version) {
+    const dispatch = await dispatchBundleInstall(tx, entry, ids, true);
+    if (dispatch.invalidations?.kind === 'bundle') {
+      const installedAgents = new Set(dispatch.invalidations.result.installedAgentSlugs);
+      const plan = deriveInstallProvenance(entry, {
+        spaceId: ids.spaceId,
+        actorUserId: ids.actorUserId,
+        now,
+      });
+      for (const artifact of plan.artifacts) {
+        if (artifact.artifactType === 'agent' && installedAgents.has(artifact.artifactKey)) {
+          await upsertStoreInstallArtifact(tx, artifact, { onConflict: 'keep' });
+        }
+      }
+    }
     return {
       response: {
         result: dispatch.result,
