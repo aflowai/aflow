@@ -10,11 +10,16 @@
  * idempotent on actionId (the room-message event id derives from it, the wake
  * idempotency key embeds it), so re-driving is always safe.
  */
-import { createHash } from 'node:crypto';
 import type { Redis } from 'ioredis';
 import { eq } from 'drizzle-orm';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { createTenantContext, eventLog, users, withTenantSchema } from '@aflow/database';
+import {
+  createTenantContext,
+  deterministicRoomMessageEventId,
+  eventLog,
+  users,
+  withTenantSchema,
+} from '@aflow/database';
 import type { AppletPersistence } from '@aflow/applet-runtime';
 import { APPLET_EFFECT_MAX_ATTEMPTS } from '@aflow/schemas';
 import {
@@ -284,12 +289,7 @@ function narrationBody(receipt: AppletActionReceipt): string {
  * as a no-op.
  */
 export function appletRoomMessageEventId(instanceId: string, actionId: string): string {
-  const digest = createHash('sha256').update(`applet-room:${instanceId}:${actionId}`).digest();
-  const bytes = Buffer.from(digest.subarray(0, 16));
-  bytes.writeUInt8((bytes.readUInt8(6) & 0x0f) | 0x40, 6);
-  bytes.writeUInt8((bytes.readUInt8(8) & 0x3f) | 0x80, 8);
-  const hex = bytes.toString('hex');
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  return deterministicRoomMessageEventId(`applet-room:${instanceId}:${actionId}`);
 }
 
 /**

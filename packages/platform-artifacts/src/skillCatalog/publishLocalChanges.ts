@@ -1,6 +1,5 @@
 import {
   AfterReviewOverrideSchema,
-  type HostPushApproval,
   MAX_PARENT_INPUTS_SERIALIZED_BYTES,
   PULL_REQUEST_TITLE_MAX_CHARS,
   PullRequestFindingsSchema,
@@ -38,7 +37,15 @@ import {
   PUBLISH_DESCRIPTION,
   PUBLISH_USAGE,
 } from './publishLocalChangesProse.js';
-import { REVIEW_FINDING_SCHEMA, REVIEW_LOCAL_CHANGES } from './reviewLocalChanges.js';
+import {
+  DECIDE_REVIEW_DEPTH_TASK,
+  RETRY_REVIEW_TASK_ID,
+  REVIEW_DEPTH_AREAS,
+  REVIEW_TASK_ID,
+  REVIEW_TASKS,
+  reviewBindings,
+  reviewValue,
+} from './publishLocalChangesReview.js';
 
 /**
  * The push argv, pinned by the skill rather than bound as a whole. Only the
@@ -85,17 +92,6 @@ const PUSH_CLEARED = {
 const NOT_KEPT_LOCAL = "tasks.decide-push.output.decision != 'keep_local'";
 
 /**
- * The skill whose verdict on the commit, or the decision on whose findings,
- * can stand in for the operator's approval — named by its catalog entry, so
- * only that skill as the Store installed it may skip the approval, never
- * whatever holds its slug.
- */
-const REVIEW_SKILL = {
-  catalogId: REVIEW_LOCAL_CHANGES.catalogId,
-  slug: REVIEW_LOCAL_CHANGES.bundle.workflow.slug,
-};
-
-/**
  * Where the push may follow the checks: they passed on the first run, or on
  * the second, where the first lost only tests to their time. Read by every
  * task that only runs on a commit the checks cleared.
@@ -104,9 +100,6 @@ const CHECKS_CLEARED = {
   anyOf: ['tasks.check-commit.output.passed == true', 'tasks.recheck-commit.output.passed == true'],
   onMissingRef: 'skip' as const,
 };
-
-/** The one posture under which the publication reviews its commit to decide whether to ask. */
-const REVIEW_GATED_POSTURE: HostPushApproval = 'unless-unreviewed';
 
 /** The run's inputs together, and so the most a diff passed as text can be. */
 const RUN_INPUTS_KB = MAX_PARENT_INPUTS_SERIALIZED_BYTES / 1024;
@@ -339,7 +332,7 @@ const ENTRY_INPUT_CONTRACT = {
 
 const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'publish-local-changes',
-  version: 47,
+  version: 48,
   name: 'Publish Local Changes',
   tagline:
     'Commit a patch onto a branch of a connected repository, then push it and open the pull request — asking the operator first unless the folder says otherwise.',
@@ -556,6 +549,8 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
               // alone, so the scan and the review read the range measured
               // against the base as `origin` holds it now.
               pushBase: { $bind: 'base' },
+              // What the review's depth is decided from.
+              pushAreas: REVIEW_DEPTH_AREAS,
             },
           },
         },
@@ -784,132 +779,8 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           },
         },
 
-        {
-          taskId: 'review-commit',
-          name: 'Review the commit',
-          goal: "Run a Local Code Review of everything the push would add — this run's commit and every commit under it that `origin`'s base branch does not hold — as a run of its own, and wait for it to finish with its verdict.",
-          type: 'operation' as const,
-          operation: 'workflow.run.start',
-          // After the scan as well: a commit carrying a secret is never handed
-          // to a coding agent, whose provider would read it.
-          dependsOn: ['read-push-approval', 'scan-commit'],
-          // Only the posture that depends on a review starts one, so a verdict
-          // here always belongs to a run whose approval it decides — and only
-          // over a range the scan cleared, since an unread file or a line
-          // marked allowed may hold what the coding agent's provider must not
-          // see, and the approval is asked for such a range whatever a review
-          // says.
-          when: {
-            allOf: [
-              `tasks.read-push-approval.output.branchPolicy.pushApproval == '${REVIEW_GATED_POSTURE}'`,
-              'tasks.scan-commit.output.clean == true',
-            ],
-            onMissingRef: 'skip' as const,
-          },
-          // A review that could not run is no verdict, not a failed
-          // publication: the approval reads its status and asks.
-          optional: true,
-          // A second attempt starts a second review.
-          retryability: 'unsafe' as const,
-          maxAttempts: 1,
-          inputBindings: {
-            bindingId: { kind: 'run_input' as const, path: 'bindingId' },
-            // `pushRange`'s two ends: the review builds the range from them, so
-            // it reads exactly what the scan read. The tip is where its checkout
-            // stands — not the folder's own HEAD, which is where the commission
-            // started, since the commit lands on a branch nothing has checked out.
-            from: { kind: 'task_output' as const, taskId: 'commit', path: 'commit.pushBaseSha' },
-            at: { kind: 'task_output' as const, taskId: 'commit', path: 'commit.sha' },
-            reviewHarness: { kind: 'run_input' as const, path: 'reviewHarness' },
-          },
-          context: {
-            strategy: 'scoped' as const,
-            contextPolicy: 'auto-optimize' as const,
-            learnings: 'none' as const,
-            capabilities: {
-              operations: ['workflow.run.start'],
-              integrations: [],
-            },
-          },
-          inputTemplate: {
-            slug: REVIEW_SKILL.slug,
-            catalogId: REVIEW_SKILL.catalogId,
-            inputs: {
-              bindingId: { $bind: 'bindingId' },
-              from: { $bind: 'from' },
-              at: { $bind: 'at' },
-              depth: 'standard',
-              // Unset, the key is dropped and the review runs on its own default harness.
-              harness: { $bind: 'reviewHarness' },
-            },
-            wait: 'until_complete',
-          },
-          // A review that failed, was cancelled or paused carries no promoted
-          // output, so its verdict reads null and the approval is asked for.
-          outputProjection: {
-            verdict: { path: 'result.output.verdict', onMissing: 'null' as const },
-            reviewSummary: { path: 'result.output.reviewSummary', onMissing: 'null' as const },
-            findings: { path: 'result.output.findings', onMissing: 'null' as const },
-            outcome: { path: 'outcome', onMissing: 'error' as const },
-            reviewRunId: { path: 'runId', onMissing: 'error' as const },
-            // The Local PR Shepherd trusts a verdict only for the head it reads
-            // (Plan 321 D6): `reviewed.at` is the commit this push carries.
-            reviewed: { fromInput: 'inputs' },
-          },
-          // The review run holds every finding whole, which is what a fix
-          // round is briefed from; the run names it so whoever starts one can read it.
-          promoteOutputs: [
-            { kind: 'output_path' as const, path: 'reviewRunId', toState: 'reviewRunId' },
-          ],
-          outputContract: {
-            schema: {
-              type: 'object',
-              required: [
-                'verdict',
-                'reviewSummary',
-                'findings',
-                'outcome',
-                'reviewRunId',
-                'reviewed',
-              ],
-              additionalProperties: false,
-              properties: {
-                reviewed: {
-                  type: 'object',
-                  required: ['from', 'at'],
-                  properties: {
-                    from: { type: 'string', minLength: 1 },
-                    at: { type: 'string', minLength: 1 },
-                  },
-                  description:
-                    'What the review was started on: `from..at`, where `at` is the commit this run pushes — the sha `verdict` is for.',
-                },
-                verdict: {
-                  type: ['string', 'null'],
-                  description:
-                    'What the review of this commit returned: approve, request_changes or comment; null when it did not complete.',
-                },
-                reviewSummary: {
-                  type: ['string', 'null'],
-                  description:
-                    "The review's own account — every finding by severity and `file:line`, and the checks it ran — which the pull request carries; null when it did not complete.",
-                },
-                findings: {
-                  type: ['array', 'null'],
-                  items: REVIEW_FINDING_SCHEMA,
-                  description:
-                    'Every finding as the review returned it — severity, file, line, claim, evidence, suggestion — which the decision after the review weighs and the pull request records; null when the review did not complete.',
-                },
-                outcome: {
-                  type: 'string',
-                  description:
-                    'How the review run ended: completed, failed or cancelled — or paused, when it stopped for something only an operator can supply and was cancelled.',
-                },
-                reviewRunId: { type: 'string', format: 'uuid' },
-              },
-            },
-          },
-        },
+        DECIDE_REVIEW_DEPTH_TASK,
+        ...REVIEW_TASKS,
 
         SETTLE_AFTER_REVIEW_TASK,
 
@@ -928,7 +799,8 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             'check-commit',
             'recheck-commit',
             'scan-commit',
-            'review-commit',
+            REVIEW_TASK_ID,
+            RETRY_REVIEW_TASK_ID,
             SETTLE_AFTER_REVIEW_TASK.taskId,
             'verify-override',
           ],
@@ -954,7 +826,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             findings: { kind: 'run_input' as const, path: 'findings' },
             gaps: { kind: 'run_input' as const, path: 'gaps' },
             override: { kind: 'run_input' as const, path: 'override' },
-            review: { kind: 'task_output' as const, taskId: 'review-commit' },
+            ...reviewBindings('review'),
             check: { kind: 'task_output' as const, taskId: 'check-commit' },
             recheck: { kind: 'task_output' as const, taskId: 'recheck-commit' },
           },
@@ -973,7 +845,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             title: { $bind: 'title' },
             summary: { $bind: 'summary' },
             findings: { $bind: 'findings' },
-            review: { $bind: 'review' },
+            review: reviewValue('review'),
             check: { $bind: 'check' },
             recheck: { $bind: 'recheck' },
             gaps: { $bind: 'gaps' },
@@ -1012,7 +884,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
         {
           taskId: 'approve-push',
           name: 'Approve the push',
-          goal: "Operator approval before anything leaves the machine, asked exactly where the gate decided to ask: the folder asks before every push; the scan marked a line allowed or could not read a file, whatever the posture; or, unless reviewed, a blocker or a major is among this run's review findings, the operator's word set the decision aside, or the review found nothing and did not approve. Approving pushes the commit to its branch on origin and opens the pull request; declining leaves the branch on the machine, whatever the posture.",
+          goal: "Operator approval before anything leaves the machine, asked exactly where the gate decided to ask: the folder asks before every push; the scan marked a line allowed or could not read a file, whatever the posture; or, unless reviewed, a blocker or a major is among this run's review findings, the operator's word set the decision aside, the review found nothing and did not approve, or it ended without a result and so did its one retry. Approving pushes the commit to its branch on origin and opens the pull request; declining leaves the branch on the machine, whatever the posture.",
           type: 'human' as const,
           intent: 'approve' as const,
           failureMode: 'isolate' as const,
@@ -1026,7 +898,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           // carry, so each case is one line and the verdict and the decision
           // are named where the run shows them; the gate's reason is on its task.
           pauseInstruction:
-            'The change is committed on its branch in the connected folder, and nothing has left the machine. The push would add every commit of `pushRange` — this commit, and any of the folder\'s own under it that `origin` does not have yet. The scan read them for secrets and found none outside the lines and files listed below, where there are any. Asked for one of these, shown with the commit:\n- `always`: the folder\'s push approval asks before every push, and no review ran.\n- `unless-unreviewed`, a blocker or a major among the findings: a decision stands in for an approving verdict only over minor findings and nits, so whatever was decided — by the rounds rule on the "Decide by the rounds rule whether the findings are fixed before merging" task, or by an override — the operator decides whether the push goes; the findings are on the "Review the commit" task.\n- `unless-unreviewed`, the decision set aside on the operator\'s word: the override and its reason are on the run as `afterReviewOverride`. Approving is that word on record; declining pushes nothing and the decision stands.\n- `unless-unreviewed`, no findings: this run\'s Local Code Review of `pushRange` did not return `approve` — its verdict is on the "Review the commit" task, null where the review did not finish, and that task failed where the review could not start.\n- Lines marked allowed, whatever the posture: `allowed` names each by file, line and rule — a line that looks like a secret and ends in an `aflow-scan: allow` comment, which whoever wrote the change could have written as easily as the line — and no review ran. Read each of those lines before approving: approving pushes them.\n- Files, messages or texts the scan could not read whole, whatever the posture: `unscanned` names each and why — binary, a NUL byte in a line it adds, more than the scan reads of one file in one commit, a line too long to read, or a Git LFS pointer, whose content the push uploads without the scan having read it — and no review ran. Nothing unread there was checked for secrets; read it before approving.\nApproving pushes that commit to its branch on `origin`, with every commit of `pushRange` under it, and then opens a pull request against the base branch. Declining leaves the branch local whatever the folder\'s push approval says: nothing is pushed and no pull request is opened.',
+            'The change is committed on its branch in the connected folder, and nothing has left the machine. The push would add every commit of `pushRange` — this commit, and any of the folder\'s own under it that `origin` does not have yet. The scan read them for secrets and found none outside the lines and files listed below, where there are any. Asked for one of these, shown with the commit:\n- `always`: the folder\'s push approval asks before every push, and no review ran.\n- `unless-unreviewed`, a blocker or a major among the findings: a decision stands in for an approving verdict only over minor findings and nits, so whatever was decided — by the rounds rule on the "Decide by the rounds rule whether the findings are fixed before merging" task, or by an override — the operator decides whether the push goes; the findings are on the "Review the commit" task.\n- `unless-unreviewed`, the decision set aside on the operator\'s word: the override and its reason are on the run as `afterReviewOverride`. Approving is that word on record; declining pushes nothing and the decision stands.\n- `unless-unreviewed`, no findings: this run\'s Local Code Review of `pushRange` did not return `approve` — its verdict is on the "Review the commit" task, or on the "Review the commit again, once" task where the review was retried, and that task failed where the review could not start.\n- `unless-unreviewed`, no result twice: the review ended without a result — its run failed, or its harness exited without writing one — so it was retried once in place, as the "Review the commit again, once" task, and the retry ended without a result as well. Nothing was decided on findings, so nothing stands in for the operator; each review\'s run says how it ended.\n- Lines marked allowed, whatever the posture: `allowed` names each by file, line and rule — a line that looks like a secret and ends in an `aflow-scan: allow` comment, which whoever wrote the change could have written as easily as the line — and no review ran. Read each of those lines before approving: approving pushes them.\n- Files, messages or texts the scan could not read whole, whatever the posture: `unscanned` names each and why — binary, a NUL byte in a line it adds, more than the scan reads of one file in one commit, a line too long to read, or a Git LFS pointer, whose content the push uploads without the scan having read it — and no review ran. Nothing unread there was checked for secrets; read it before approving.\nApproving pushes that commit to its branch on `origin`, with every commit of `pushRange` under it, and then opens a pull request against the base branch. Declining leaves the branch local whatever the folder\'s push approval says: nothing is pushed and no pull request is opened.',
           // Every binding reads a task that succeeded whenever this asks: an
           // unresolved one refuses the approval itself, so nothing binds the
           // posture, which is not read over a range the scan did not clear.
@@ -1424,10 +1296,11 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           variableId: 'reviewRunId',
           name: 'Review run',
           description:
-            "The run of this publication's own review, where one started: its output holds every finding whole, with its evidence and suggestion — what a fix round is briefed from.",
+            "The run of this publication's own review, where one started — its retry's, where the first ended without a result and it was run once more: its output holds every finding whole, with its evidence and suggestion — what a fix round is briefed from.",
           required: false,
           sensitive: false,
           immutable: false,
+          writers: 'alternatives' as const,
         },
         {
           variableId: 'verdict',

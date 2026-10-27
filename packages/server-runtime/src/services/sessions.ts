@@ -1189,10 +1189,16 @@ function createRealSessionService(ctx: AppContext): SessionService {
       });
 
       // When the resume is rerouted to a child (child_input), the orchestrator
-      // will transition the parent back to WAITING_ON_CHILD, not RUNNING.
-      // Return the expected status so the UI doesn't briefly show RUNNING.
+      // will transition the parent back to WAITING_ON_CHILD, not RUNNING; a
+      // session parked on a workflow run queues the message to its next turn
+      // and stays PAUSED. Return the expected status so the UI doesn't
+      // briefly show RUNNING.
       const expectedStatus: SessionStatus =
-        state.delegationPauseSource === 'child_input' ? 'WAITING_ON_CHILD' : 'RUNNING';
+        state.delegationPauseSource === 'child_input'
+          ? 'WAITING_ON_CHILD'
+          : state.waitingOnWorkflowRunId
+            ? 'PAUSED'
+            : 'RUNNING';
 
       return {
         status: expectedStatus,

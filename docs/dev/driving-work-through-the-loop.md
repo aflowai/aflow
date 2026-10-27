@@ -129,7 +129,11 @@ its outcome as it is marked done, and no firing commissions it (`wait`, `awaitin
    every finding with file and line. A review that failed and was retried in place counts by
    its final attempt: the publication records the review run's verdict as it stands once the
    push went or the branch stayed local, as `verdict`, and a `workflow.run.detail` read of the
-   publication's `review-commit` task re-reads it from the review run, marked `fromRun`. Whether the findings want a fix round the publication
+   publication's `review-commit` task re-reads it from the review run, marked `fromRun`. A
+   review that ended without a result — its run failed, or its harness wrote none — the
+   publication runs once more itself, as its `retry-review` task, and follows that verdict;
+   its `reviewRunId` names whichever review counts. The depth is `decide-review-depth`'s,
+   by rules over what the commit changes. Whether the findings want a fix round the publication
    decides by the rounds rule, records, and gates its push on (Plan 315 D22).
    `settle-after-review` decides it by rules, with no model asked: a verdict short of
    `approve` is `fix_before_merge`; an `approve` over nits alone, or none, is

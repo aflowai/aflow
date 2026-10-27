@@ -773,7 +773,7 @@ describe('measuring what a push of the commit would add', () => {
     return (await git(root, 'rev-parse', 'HEAD')).trim();
   }
 
-  async function publish(commit: Record<string, string>) {
+  async function publish(commit: Record<string, unknown>) {
     const patch = await diffFor(async (d) => {
       await writeFile(join(d, 'a.txt'), 'one\nFIXED\nthree\n');
     });
@@ -803,6 +803,25 @@ describe('measuring what a push of the commit would add', () => {
       .split('\n')
       .filter((line) => line !== '');
     expect(carried).toEqual([sha, unpushed]);
+  }, 30_000);
+
+  it('counts what the push changes, in all and within each area the caller names', async () => {
+    await commitLocally('notes.md');
+    const { result, commit } = await publish({
+      pushBase: 'main',
+      pushAreas: { docs: ['**/*.md'], code: ['**/*.txt'], none: ['nothing/**'] },
+    });
+    expect(result.status).toBe('SUCCEEDED');
+    // `notes.md` gains one line; the fix replaces one line of `a.txt`.
+    expect(commit?.['pushChanges']).toEqual({
+      files: 2,
+      lines: 3,
+      areas: {
+        docs: { files: 1, lines: 1 },
+        code: { files: 1, lines: 2 },
+        none: { files: 0, lines: 0 },
+      },
+    });
   }, 30_000);
 
   /** Move `origin`'s `main` on from another clone, as a colleague's push does; its new sha. */

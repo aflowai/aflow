@@ -137,6 +137,7 @@ async function applyHostPatch(ctx: ExecutorContext, policyPath: string): Promise
         input.commit.pushBase === undefined
           ? undefined
           : await resolvePushBase(binding.root, input.commit.pushBase),
+        input.commit.pushAreas,
       );
       return await successWithData(ctx, {
         state: 'applied',
@@ -182,6 +183,7 @@ async function applyHostPatch(ctx: ExecutorContext, policyPath: string): Promise
         {
           ...(input.commit.baseSha !== undefined ? { baseSha: input.commit.baseSha } : {}),
           ...(pushBaseSha !== undefined ? { pushBaseSha } : {}),
+          ...(input.commit.pushAreas !== undefined ? { pushAreas: input.commit.pushAreas } : {}),
           ...(input.commit.mergeFrom !== undefined ? { mergeFrom: input.commit.mergeFrom } : {}),
         },
       );

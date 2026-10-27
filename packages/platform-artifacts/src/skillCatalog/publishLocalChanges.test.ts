@@ -40,6 +40,8 @@ import {
   HostCommitDescribeOutputSchema,
   HostFilePatchInputSchema,
   HostFilePatchOutputSchema,
+  HostPushAreasSchema,
+  HOST_BINARY_FILE_LINES,
   isEvalPlaneOperation,
   LoopPullRequestsSchema,
   ShepherdHandoffReadSchema,
@@ -56,7 +58,21 @@ import {
 } from '@aflow/schemas';
 import { COMMISSION_CHANGE, COMMISSION_RESULT_SCHEMA } from './commissionChange.js';
 import { PUBLISH_LOCAL_CHANGES } from './publishLocalChanges.js';
-import { PUSH_GATE_OTHERWISE, PUSH_GATE_RULES } from './publishLocalChangesGate.js';
+import {
+  PUSH_GATE_OTHERWISE,
+  PUSH_GATE_RULES,
+  REVIEW_RETRIED_REASON,
+} from './publishLocalChangesGate.js';
+import {
+  DEEP_REASON,
+  DOCS_TESTS_REASON,
+  REVIEW_DEPTH_AREAS,
+  REVIEW_DEPTH_OTHERWISE,
+  REVIEW_DEPTH_RULES,
+  SMALL_CHANGE_REASON,
+  STANDARD_REASON,
+  UNMEASURED_REASON,
+} from './publishLocalChangesReview.js';
 import { PUBLISH_AS_IT_STANDS } from './publishLocalChangesProse.js';
 import { REPOSITORY_UNKNOWN_FAILURE } from './publishLocalChangesRepository.js';
 import { AFTER_REVIEW_QUESTION, AFTER_REVIEW_ROUTES } from './publishLocalChangesDecisions.js';
@@ -72,6 +88,7 @@ import {
   NOT_APPROVED_REASON,
 } from './publishLocalChangesAfterReview.js';
 import {
+  BRIEF_MAX_TURNS,
   REVIEW_FINDINGS_MAX,
   REVIEW_LOCAL_CHANGES,
   REVIEW_SEVERITIES,
@@ -115,6 +132,8 @@ const SETTLED_REPO = { kind: 'task_output', taskId: 'resolve-repository', path: 
 const SETTLED_BASE = { kind: 'task_output', taskId: 'resolve-repository', path: 'repository.base' };
 
 const REVIEW_RUN_ID = '0a0b0c0d-1111-4222-8333-444455556666';
+/** The run of the review's one retry, where the first ended without a result. */
+const RETRY_RUN_ID = '0a0b0c0d-1111-4222-8333-777788889999';
 
 /** The branch's head as `host.file.patch` reports it when published as it stands. */
 const AS_IT_STANDS = {
@@ -186,7 +205,7 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     expect(validity.status).toBe('valid');
   });
 
-  it('is thirty-three tasks — where the commit message comes from, the commission found, a named one checked against it and the stop on one that differs, its summary read, the folder read, the repository settled and the stop where none is, commit, check, the stop on a failed check, scan, what decides the approval, the review, its findings decided by the rounds rule, the check of an override and the stop on its refusal, the pull request composed, the push gate, the fix round handed its branch, approve, push, the pull request found, rewritten or opened, and the review read back', () => {
+  it("is thirty-five tasks — where the commit message comes from, the commission found, a named one checked against it and the stop on one that differs, its summary read, the folder read, the repository settled and the stop where none is, commit, check, the stop on a failed check, scan, what decides the approval, the review's depth, the review and its one retry, its findings decided by the rounds rule, the check of an override and the stop on its refusal, the pull request composed, the push gate, the fix round handed its branch, approve, push, the pull request found, rewritten or opened, and the review read back", () => {
     expect(wf.tasks.map((t) => t.taskId)).toEqual([
       'message-from',
       'find-commission',
@@ -203,7 +222,9 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       'scan-commit',
       'read-repository',
       'read-push-approval',
+      'decide-review-depth',
       'review-commit',
+      'retry-review',
       'settle-after-review',
       'claim-override',
       'read-override-pr',
@@ -252,9 +273,11 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       'scan-commit': ['commit', 'check-commit', 'recheck-commit'],
       'read-repository': ['commit', 'check-commit', 'recheck-commit'],
       'read-push-approval': ['commit', 'scan-commit'],
-      'review-commit': ['read-push-approval', 'scan-commit'],
-      'settle-after-review': ['review-commit'],
-      'claim-override': ['review-commit', 'settle-after-review'],
+      'decide-review-depth': ['commit', 'read-push-approval', 'scan-commit'],
+      'review-commit': ['read-push-approval', 'scan-commit', 'decide-review-depth'],
+      'retry-review': ['review-commit', 'decide-review-depth'],
+      'settle-after-review': ['review-commit', 'retry-review'],
+      'claim-override': ['review-commit', 'retry-review', 'settle-after-review'],
       'read-override-pr': ['claim-override', 'read-push-approval'],
       'read-override-pin': ['read-override-pr'],
       'read-override-handoff': ['read-override-pr', 'read-override-pin'],
@@ -271,6 +294,7 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
         'recheck-commit',
         'scan-commit',
         'review-commit',
+        'retry-review',
         'settle-after-review',
         'verify-override',
       ],
@@ -279,11 +303,18 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
         'scan-commit',
         'read-push-approval',
         'review-commit',
+        'retry-review',
         'verify-override',
         'describe-pr',
       ],
-      'hand-fix-round': ['commit', 'review-commit', 'describe-pr', 'decide-push'],
-      'hand-fix-round-merging': ['commit', 'review-commit', 'describe-pr', 'decide-push'],
+      'hand-fix-round': ['commit', 'review-commit', 'retry-review', 'describe-pr', 'decide-push'],
+      'hand-fix-round-merging': [
+        'commit',
+        'review-commit',
+        'retry-review',
+        'describe-pr',
+        'decide-push',
+      ],
       'approve-push': ['read-repository', 'scan-commit', 'decide-push'],
       push: [
         'approve-push',
@@ -296,7 +327,7 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       'find-pr': ['push', 'decide-push'],
       'update-pr': ['find-pr', 'describe-pr'],
       'open-pr': ['find-pr', 'describe-pr'],
-      'read-review': ['review-commit', 'push'],
+      'read-review': ['review-commit', 'retry-review', 'push'],
     });
     // Only the repository read asks for the default branch, which may ask
     // `origin` over the network; the posture read stays a local one.
@@ -324,7 +355,9 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       'scan-commit': 'host.commit.scan',
       'read-repository': 'api.http.call',
       'read-push-approval': 'host.binding.inspect',
+      'decide-review-depth': 'workflow.run.decide',
       'review-commit': 'workflow.run.start',
+      'retry-review': 'workflow.run.start',
       'settle-after-review': 'workflow.run.decide',
       'claim-override': 'workflow.run.decide',
       'read-override-pr': 'api.http.call',
@@ -420,6 +453,7 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
         baseSha: { $bind: 'baseSha' },
         mergeFrom: { $bind: 'mergeFrom' },
         pushBase: { $bind: 'base' },
+        pushAreas: REVIEW_DEPTH_AREAS,
       },
     });
     expect(commit.inputBindings?.['base']).toEqual(SETTLED_BASE);
@@ -441,7 +475,12 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       base: 'main',
     };
     const fresh = substituteTemplateBinds(template, inputs, declared);
-    expect(fresh['commit']).toEqual({ branch: 'feat/x', message: 'm', pushBase: 'main' });
+    expect(fresh['commit']).toEqual({
+      branch: 'feat/x',
+      message: 'm',
+      pushBase: 'main',
+      pushAreas: REVIEW_DEPTH_AREAS,
+    });
     const appended = substituteTemplateBinds(
       template,
       { ...inputs, baseSha: 'a'.repeat(40) },
@@ -452,6 +491,7 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       message: 'm',
       baseSha: 'a'.repeat(40),
       pushBase: 'main',
+      pushAreas: REVIEW_DEPTH_AREAS,
     });
     expect(HostFilePatchInputSchema.safeParse({ ...appended, mode: 'clean' }).success).toBe(true);
 
@@ -533,6 +573,7 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       baseSha: 'a'.repeat(40),
       mergeFrom: 'b'.repeat(40),
       pushBase: 'main',
+      pushAreas: REVIEW_DEPTH_AREAS,
     });
     expect(HostFilePatchInputSchema.safeParse({ ...merged, mode: 'clean' }).success).toBe(true);
 
@@ -1126,6 +1167,8 @@ interface Scenario {
    */
   folderOrigin?: Record<string, unknown> | null;
   review: Review;
+  /** How the one retry of a review that ended without a result ends; absent, as the first did. */
+  retryReview?: Review;
   decision: Decision;
   committed?: boolean;
   /** How the folder's checks ended on the commit; absent is passed. */
@@ -1346,6 +1389,11 @@ function rawOutput(
       if (scenario.review === 'not-started')
         throw new Error('a review that did not start has no output');
       return reviewEnding(scenario.review, scenario.findings);
+    case 'retry-review': {
+      const retried = scenario.retryReview ?? scenario.review;
+      if (retried === 'not-started') throw new Error('a review that did not start has no output');
+      return { ...reviewEnding(retried, scenario.findings), runId: RETRY_RUN_ID };
+    }
     case 'push':
       return { exitCode: 0 };
     case 'find-pr': {
@@ -1365,6 +1413,7 @@ function rawOutput(
     case 'message-from':
     case 'resolve-repository':
     case 'check-commission':
+    case 'decide-review-depth':
     case 'settle-after-review':
     case 'claim-override':
     case 'verify-override':
@@ -1572,7 +1621,11 @@ function publish(scenario: Scenario): Outcome {
         statuses.set(task.taskId, 'failed');
         continue;
       }
-      if (task.taskId === 'review-commit' && scenario.review === 'not-started') {
+      if (
+        (task.taskId === 'review-commit' && scenario.review === 'not-started') ||
+        (task.taskId === 'retry-review' &&
+          (scenario.retryReview ?? scenario.review) === 'not-started')
+      ) {
         statuses.set(task.taskId, 'failed');
         if (task.optional === true) failedOptional.add(task.taskId);
         continue;
@@ -1901,7 +1954,12 @@ describe('Publish Local Changes — the folder decides whether the push asks', (
       from: { kind: 'task_output', taskId: 'commit', path: 'commit.pushBaseSha' },
       at: { kind: 'task_output', taskId: 'commit', path: 'commit.sha' },
       reviewHarness: { kind: 'run_input', path: 'reviewHarness' },
+      depth: { kind: 'task_output', taskId: 'decide-review-depth', path: 'decision' },
+      maxTurns: { kind: 'task_output', taskId: 'decide-review-depth', path: 'value' },
     });
+    // The retry is handed exactly what the first review was.
+    expect(taskOrThrow('retry-review').inputBindings).toEqual(review.inputBindings);
+    expect(taskOrThrow('retry-review').inputTemplate).toEqual(template);
     // The scan reads `pushRange`; the review is handed its two ends.
     expect(taskOrThrow('scan-commit').inputBindings?.['range']).toEqual({
       kind: 'task_output',
@@ -1912,7 +1970,7 @@ describe('Publish Local Changes — the folder decides whether the push asks', (
     const declared = new Set(Object.keys(review.inputBindings ?? {}));
     const start = substituteTemplateBinds(
       template,
-      { bindingId: 'folder-1', from: COMMIT.pushBaseSha, at: COMMIT.sha },
+      { bindingId: 'folder-1', from: COMMIT.pushBaseSha, at: COMMIT.sha, depth: 'standard' },
       declared,
     );
     // Named by its catalog entry, so a space workflow merely holding the slug
@@ -1955,7 +2013,12 @@ describe('Publish Local Changes — the folder decides whether the push asks', (
     const template = review.inputTemplate;
     if (template === undefined) throw new Error('the review must carry a template');
     const declared = new Set(Object.keys(review.inputBindings ?? {}));
-    const ends = { bindingId: 'folder-1', from: COMMIT.pushBaseSha, at: COMMIT.sha };
+    const ends = {
+      bindingId: 'folder-1',
+      from: COMMIT.pushBaseSha,
+      at: COMMIT.sha,
+      depth: 'standard',
+    };
 
     const named = WorkflowRunStartInputSchema.parse(
       substituteTemplateBinds(template, { ...ends, reviewHarness: 'codex' }, declared),
@@ -2449,6 +2512,7 @@ describe("Publish Local Changes — the push checks origin's base and URL in its
       branch: 'aflow/x',
       baseSha: HEAD,
       pushBase: 'main',
+      pushAreas: REVIEW_DEPTH_AREAS,
     });
     for (const task of ['check-commit', 'scan-commit', 'review-commit', 'push']) {
       expect(again.statuses.get(task), task).toBe('succeeded');
@@ -2485,6 +2549,7 @@ describe('Publish Local Changes — a branch is published as it stands', () => {
       'scan-commit',
       'read-repository',
       'read-push-approval',
+      'decide-review-depth',
       'review-commit',
       'settle-after-review',
       'claim-override',
@@ -2505,7 +2570,12 @@ describe('Publish Local Changes — a branch is published as it stands', () => {
     const commit = outcome.inputs.get('commit') ?? {};
     expect(commit).not.toHaveProperty('patchRef');
     expect(commit).not.toHaveProperty('patch');
-    expect(commit['commit']).toEqual({ branch: 'aflow/x', baseSha: STRANDED, pushBase: 'main' });
+    expect(commit['commit']).toEqual({
+      branch: 'aflow/x',
+      baseSha: STRANDED,
+      pushBase: 'main',
+      pushAreas: REVIEW_DEPTH_AREAS,
+    });
     expect(HostFilePatchInputSchema.safeParse(commit).success).toBe(true);
 
     // Everything after it reads that head, measured against where `origin`'s base is.
@@ -2541,7 +2611,12 @@ describe('Publish Local Changes — a branch is published as it stands', () => {
 
     // Asked with no change and no message, which the operation reads as nothing to make.
     const asked = outcome.inputs.get('commit') ?? {};
-    expect(asked['commit']).toEqual({ branch: 'aflow/x', baseSha: HEAD, pushBase: 'main' });
+    expect(asked['commit']).toEqual({
+      branch: 'aflow/x',
+      baseSha: HEAD,
+      pushBase: 'main',
+      pushAreas: REVIEW_DEPTH_AREAS,
+    });
     expect(asked).not.toHaveProperty('patchRef');
     expect(asked).not.toHaveProperty('patch');
     expect(HostFilePatchInputSchema.safeParse(asked).success).toBe(true);
@@ -3156,12 +3231,15 @@ describe('Publish Local Changes — no publication starts a publication', () => 
     return String(template?.catalogId ?? template?.slug);
   };
 
-  it('starts one run of its own, the review of its commit, and no other skill', () => {
+  it('starts the review of its commit — and that review once more, where it ended without a result — and no other skill', () => {
     const started = wf.tasks.flatMap((task) => {
       const skill = startedBy(task as WorkflowTask);
       return skill === undefined ? [] : [[task.taskId, skill]];
     });
-    expect(started).toEqual([['review-commit', REVIEW_LOCAL_CHANGES.catalogId]]);
+    expect(started).toEqual([
+      ['review-commit', REVIEW_LOCAL_CHANGES.catalogId],
+      ['retry-review', REVIEW_LOCAL_CHANGES.catalogId],
+    ]);
   });
 
   // Plan 321: the shepherd publishes its fixes through Local Publish, and the
@@ -3457,7 +3535,9 @@ describe("Publish Local Changes — the rounds rule decides a review's findings,
     it('reaches the rule from the run input alone, beside the verdict and the findings', () => {
       expect(taskOrThrow('settle-after-review').inputBindings).toEqual({
         verdict: { kind: 'task_output', taskId: 'review-commit', path: 'verdict' },
+        retriedVerdict: { kind: 'task_output', taskId: 'retry-review', path: 'verdict' },
         findings: { kind: 'task_output', taskId: 'review-commit', path: 'findings' },
+        retriedFindings: { kind: 'task_output', taskId: 'retry-review', path: 'findings' },
         round: { kind: 'run_input', path: 'round' },
       });
       const outcome = reviewedWith({ review: 'approve', findings: MINORS, round: 2 });
@@ -4150,6 +4230,244 @@ describe('Publish Local Changes — fix_before_merge hands the fix round its bra
   });
 });
 
+// ── How deep the review reads, by the commit's shape ────────────────────────
+
+/** What `host.file.patch` counts of a push's changes, area by area. */
+function changesOf(
+  total: { files: number; lines: number },
+  deep: { files: number; lines: number } = { files: 0, lines: 0 },
+  light: { files: number; lines: number } = { files: 0, lines: 0 },
+) {
+  return { ...total, areas: { deep, light } };
+}
+
+describe("Publish Local Changes — the review reads as deep as the commit's shape asks", () => {
+  const decideDepth = (changes: unknown) =>
+    decideByRules(
+      WorkflowRunDecideInputSchema.parse({
+        state: changes === undefined ? {} : { changes },
+        rules: REVIEW_DEPTH_RULES,
+        otherwise: REVIEW_DEPTH_OTHERWISE,
+      }),
+    );
+
+  it('deep: any file under the schemas, the orchestrator, the host executor or a migration — however small the change', () => {
+    const oneLine = decideDepth(changesOf({ files: 1, lines: 1 }, { files: 1, lines: 1 }));
+    expect(oneLine).toMatchObject({ decision: 'deep', reason: DEEP_REASON });
+    // No turn budget: a deep review reads the range through.
+    expect(oneLine).not.toHaveProperty('value');
+    // A test under a sensitive path is both light and deep, and deep wins.
+    expect(
+      decideDepth(changesOf({ files: 1, lines: 4 }, { files: 1, lines: 4 }, { files: 1, lines: 4 }))
+        .decision,
+    ).toBe('deep');
+    // Large changes there are deep as well.
+    expect(
+      decideDepth(changesOf({ files: 40, lines: 4000 }, { files: 1, lines: 10 })).decision,
+    ).toBe('deep');
+  });
+
+  it('brief: documentation and tests alone, whatever their size, budgeted in turns', () => {
+    const docsOnly = decideDepth(
+      changesOf({ files: 3, lines: 900 }, undefined, { files: 3, lines: 900 }),
+    );
+    expect(docsOnly).toEqual({
+      decision: 'brief',
+      reason: DOCS_TESTS_REASON,
+      rule: 2,
+      value: BRIEF_MAX_TURNS,
+    });
+  });
+
+  it('brief: fewer than 30 changed lines outside the sensitive paths — and 30 is standard', () => {
+    expect(decideDepth(changesOf({ files: 2, lines: 29 }))).toEqual({
+      decision: 'brief',
+      reason: SMALL_CHANGE_REASON,
+      rule: 3,
+      value: BRIEF_MAX_TURNS,
+    });
+    expect(decideDepth(changesOf({ files: 2, lines: 30 })).decision).toBe('standard');
+  });
+
+  it('standard: one binary file outside the sensitive paths, counted at its floor, is not a small change', () => {
+    expect(decideDepth(changesOf({ files: 1, lines: HOST_BINARY_FILE_LINES })).decision).toBe(
+      'standard',
+    );
+  });
+
+  it('standard otherwise — code outside the sensitive paths, in 30 lines or more — with no turn budget', () => {
+    const standard = decideDepth(
+      changesOf({ files: 4, lines: 200 }, undefined, { files: 1, lines: 20 }),
+    );
+    expect(standard).toEqual({ decision: 'standard', reason: STANDARD_REASON, rule: null });
+  });
+
+  it('standard where the commit task reported no shape: an unmeasured change is never read as a small one', () => {
+    expect(decideDepth(undefined)).toMatchObject({
+      decision: 'standard',
+      reason: UNMEASURED_REASON,
+    });
+  });
+
+  it('names the sensitive paths and the documentation and tests as areas the commit task takes', () => {
+    expect(HostPushAreasSchema.safeParse(REVIEW_DEPTH_AREAS).success).toBe(true);
+    expect(REVIEW_DEPTH_AREAS.deep).toEqual([
+      'packages/schemas/**',
+      'apps/aflow-orchestrator/**',
+      'apps/aflow-executor-host/**',
+      'packages/database/src/migrations/**',
+      'packages/database/src/tenant/migrations/**',
+    ]);
+    // The decision reads the shape the commit task already reported.
+    expect(taskOrThrow('decide-review-depth').inputBindings).toEqual({
+      changes: { kind: 'task_output', taskId: 'commit', path: 'commit.pushChanges' },
+    });
+    expect(HostFilePatchOutputSchema.shape.commit.unwrap().shape).toHaveProperty('pushChanges');
+  });
+
+  for (const [label, changes, depth, maxTurns] of [
+    [
+      'a one-line schema change',
+      changesOf({ files: 1, lines: 1 }, { files: 1, lines: 1 }),
+      'deep',
+      undefined,
+    ],
+    [
+      'a docs-only change',
+      changesOf({ files: 2, lines: 300 }, undefined, { files: 2, lines: 300 }),
+      'brief',
+      BRIEF_MAX_TURNS,
+    ],
+    ['a small code change', changesOf({ files: 1, lines: 12 }), 'brief', BRIEF_MAX_TURNS],
+    ['a larger code change', changesOf({ files: 6, lines: 240 }), 'standard', undefined],
+  ] as const) {
+    it(`${label}: the review is started at \`${depth}\`${maxTurns === undefined ? ' with no turn budget' : ` with ${String(maxTurns)} turns`}, and its retry the same`, () => {
+      const outcome = publish({
+        pushApproval: 'unless-unreviewed',
+        review: 'failed',
+        retryReview: 'approve',
+        decision: 'approved',
+        commit: { ...COMMIT, pushChanges: changes },
+      });
+      for (const taskId of ['review-commit', 'retry-review']) {
+        const start = WorkflowRunStartInputSchema.parse(outcome.inputs.get(taskId));
+        const inputs = start.inputs ?? {};
+        expect(inputs['depth'], taskId).toBe(depth);
+        if (maxTurns === undefined) expect(inputs, taskId).not.toHaveProperty('maxTurns');
+        else expect(inputs['maxTurns'], taskId).toBe(maxTurns);
+        // Every value is one the review's own inputs accept.
+        for (const input of REVIEW_LOCAL_CHANGES.bundle.workflow.runInputs ?? []) {
+          if (inputs[input.id] === undefined) continue;
+          const validate = new AjvCtor({ strict: false }).compile(input.schema ?? {});
+          expect(validate(inputs[input.id]), `${taskId} ${input.id}`).toBe(true);
+        }
+      }
+    });
+  }
+});
+
+// ── A review that ended without a result is retried once ────────────────────
+
+describe('Publish Local Changes — a review that ended without a result is retried once before asking', () => {
+  it('runs the retry where the first review returned no verdict, as a task of its own with the same inputs', () => {
+    const outcome = publish({
+      pushApproval: 'unless-unreviewed',
+      review: 'failed',
+      retryReview: 'approve',
+      decision: 'approved',
+    });
+    expect(outcome.ran.indexOf('review-commit')).toBeLessThan(outcome.ran.indexOf('retry-review'));
+    expect(outcome.statuses.get('retry-review')).toBe('succeeded');
+    expect(outcome.inputs.get('retry-review')).toEqual(outcome.inputs.get('review-commit'));
+    const retry = taskOrThrow('retry-review');
+    expect(retry.maxAttempts).toBe(1);
+    expect(retry.retryability).toBe('unsafe');
+    expect(retry.optional).toBe(true);
+  });
+
+  it('decides on the verdict the retry returned: an approving retry pushes without asking', () => {
+    const outcome = publish({
+      pushApproval: 'unless-unreviewed',
+      review: 'failed',
+      retryReview: 'approve',
+      decision: 'approved',
+    });
+    expect(outcome.inputs.get('decide-push')).toMatchObject({ state: { verdict: 'approve' } });
+    expect(outcome.outputs.get('settle-after-review')?.['decision']).toBe('publish_as_is');
+    expect(outcome.asked).toBe(false);
+    expect(outcome.pushed).toBe(true);
+    // The run names the review that counts, whose findings a fix round would be briefed from.
+    expect(outcome.state['reviewRunId']).toBe(RETRY_RUN_ID);
+    expect(outcome.inputs.get('read-review')).toEqual({ runId: RETRY_RUN_ID, compact: true });
+  });
+
+  it('decides on a retry that requested changes as on a first review that did: the branch stays local', () => {
+    const outcome = publish({
+      pushApproval: 'unless-unreviewed',
+      review: 'failed',
+      retryReview: 'request_changes',
+      findings: [{ severity: 'major', file: 'a.ts', line: 3, claim: 'Wrong.', evidence: 'Here.' }],
+      decision: 'approved',
+      commit: { ...COMMIT, baseMoved: false },
+    });
+    expect(outcome.outputs.get('settle-after-review')?.['decision']).toBe('fix_before_merge');
+    expect(outcome.state['fixRound']).toMatchObject({ reviewRunId: RETRY_RUN_ID });
+    expect(outcome.pushed).toBe(false);
+  });
+
+  it('asks only where the retry ended without a result as well, saying the review was retried and failed again', () => {
+    const outcome = publish({
+      pushApproval: 'unless-unreviewed',
+      review: 'failed',
+      retryReview: 'failed',
+      decision: 'approved',
+    });
+    expect(outcome.ran).toContain('retry-review');
+    expect(outcome.outputs.get('decide-push')).toMatchObject({
+      decision: 'ask',
+      reason: REVIEW_RETRIED_REASON,
+    });
+    expect(outcome.state['pushReason']).toBe(REVIEW_RETRIED_REASON);
+    expect(REVIEW_RETRIED_REASON).toContain('retried once in place');
+    expect(outcome.asked).toBe(true);
+    // What the operator reads on the approval names the retry and its failing again.
+    const prompt = taskOrThrow('approve-push').pauseInstruction ?? '';
+    expect(prompt).toContain(
+      '- `unless-unreviewed`, no result twice: the review ended without a result',
+    );
+    expect(prompt).toContain(
+      'so it was retried once in place, as the "Review the commit again, once" task, and the retry ended without a result as well',
+    );
+    expect(taskOrThrow('retry-review').name).toBe('Review the commit again, once');
+  });
+
+  it('runs no retry after a verdict, after a cancelled review, or where no review ran', () => {
+    for (const review of ['approve', 'request_changes', 'comment'] as const) {
+      expect(
+        publish({ pushApproval: 'unless-unreviewed', review, decision: 'approved' }).ran,
+        review,
+      ).not.toContain('retry-review');
+    }
+    // A person cancelling the review answered it.
+    expect(
+      publish({ pushApproval: 'unless-unreviewed', review: 'cancelled', decision: 'approved' }).ran,
+    ).not.toContain('retry-review');
+    // A review that could not start at all is no ending to retry; the gate asks as before.
+    const notStarted = publish({
+      pushApproval: 'unless-unreviewed',
+      review: 'not-started',
+      decision: 'approved',
+    });
+    expect(notStarted.ran).not.toContain('retry-review');
+    expect(notStarted.outputs.get('decide-push')).toMatchObject(PUSH_GATE_OTHERWISE);
+    for (const pushApproval of ['always', 'never'] as const) {
+      expect(publish({ pushApproval, review: 'failed', decision: 'approved' }).ran).not.toContain(
+        'retry-review',
+      );
+    }
+  });
+});
+
 describe('Publish Local Changes — a review retried in place records its final verdict', () => {
   it('records approve where the review failed once and its retry in place approved', () => {
     const outcome = publish({
@@ -4158,12 +4476,15 @@ describe('Publish Local Changes — a review retried in place records its final 
       reviewNow: 'approve',
       decision: 'approved',
     });
-    // The publication heard the first ending — no verdict — and asked.
+    // The publication heard the first ending — no verdict — and its one
+    // retry's, no verdict either, and asked.
     expect(outcome.outputs.get('review-commit')?.['verdict']).toBeNull();
+    expect(outcome.outputs.get('retry-review')?.['verdict']).toBeNull();
     expect(outcome.asked).toBe(true);
-    // Its output carries the review run's verdict as the run stands: its final attempt.
+    // Its output carries the verdict of the review that counts — the retry's
+    // run — as that run stands: its final attempt.
     expect(outcome.state['verdict']).toBe('approve');
-    expect(outcome.inputs.get('read-review')).toEqual({ runId: REVIEW_RUN_ID, compact: true });
+    expect(outcome.inputs.get('read-review')).toEqual({ runId: RETRY_RUN_ID, compact: true });
   });
 
   it('records the verdict a first pass returned exactly as a retry that returned it', () => {

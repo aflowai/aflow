@@ -28,11 +28,20 @@ const DecisionLabelSchema = z
 /** Room for a sentence a person reads on the pull request, not a style limit. */
 const DecisionReasonSchema = z.string().min(1).max(4000);
 
+/**
+ * A value the decision hands on beside its label — a number or a text a label
+ * cannot be. A task template substitutes whole nodes and cannot pick a value
+ * per decision, so a value that follows the decision is named on the rule and
+ * a later task binds it from the output, absent where the rule names none.
+ */
+const DecisionValueSchema = z.union([z.string().max(4000), z.number(), z.boolean()]);
+
 export const WorkflowRunDecideRuleSchema = z
   .object({
     when: WorkflowRunDecideRuleWhenSchema,
     decision: DecisionLabelSchema,
     reason: DecisionReasonSchema,
+    value: DecisionValueSchema.optional(),
   })
   .strict();
 export type WorkflowRunDecideRule = z.infer<typeof WorkflowRunDecideRuleSchema>;
@@ -49,7 +58,11 @@ export const WorkflowRunDecideInputSchema = z.object({
     .max(50)
     .describe('Read in order; the first whose `when` holds decides.'),
   otherwise: z
-    .object({ decision: DecisionLabelSchema, reason: DecisionReasonSchema })
+    .object({
+      decision: DecisionLabelSchema,
+      reason: DecisionReasonSchema,
+      value: DecisionValueSchema.optional(),
+    })
     .strict()
     .describe('The decision when no rule holds.'),
 });
@@ -64,5 +77,8 @@ export const WorkflowRunDecideOutputSchema = z.object({
     .min(0)
     .nullable()
     .describe('The index of the rule that held; null where none did and `otherwise` decided.'),
+  value: DecisionValueSchema.optional().describe(
+    'The value the rule that held names beside its decision; absent where it names none.',
+  ),
 });
 export type WorkflowRunDecideOutput = z.infer<typeof WorkflowRunDecideOutputSchema>;

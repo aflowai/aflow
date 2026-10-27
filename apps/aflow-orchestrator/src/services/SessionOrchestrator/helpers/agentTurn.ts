@@ -1356,7 +1356,24 @@ export async function buildAgentTurnInput(
   let currentSpeaker: RoomSpeaker | undefined;
   try {
     const { getDatabase } = await import('@aflow/database');
+    const { getRedisConnection } = await import('@aflow/redis');
     const { readRoomExchange } = await import('./roomExchange.js');
+    const { settleOwedRoomMessages } = await import('./queuedMessage.js');
+    // A message queued while the conversation waited on a run may still owe
+    // the durable row this read is made from. Settling never throws; only a
+    // missing connection can, and that leaves the read as it was.
+    try {
+      await settleOwedRoomMessages(
+        getDatabase(),
+        getRedisConnection(),
+        tenantId as TenantId,
+        runId,
+      );
+    } catch (err) {
+      getOrchestratorLogger().warn(
+        `agentTurn: could not settle owed room rows for ${runId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
     const room = await readRoomExchange(getDatabase(), tenantId as TenantId, runId);
     newRoomMessages = room.entries;
     currentSpeaker = room.latestSpeaker;

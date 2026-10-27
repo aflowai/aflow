@@ -18,6 +18,11 @@ export const ControlConflictCodeSchema = z.enum([
   'run_not_found',
   /** Resume arrived for a session parked on a workflow run it started, not on a person. */
   'run_waiting_on_workflow_run',
+  /**
+   * Resume carried input that maps to none of the variables the pause takes:
+   * refused, naming the shape it expects, rather than delivered as an empty turn.
+   */
+  'resume_input_unmapped',
 ]);
 export type ControlConflictCode = z.infer<typeof ControlConflictCodeSchema>;
 
