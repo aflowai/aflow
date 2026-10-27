@@ -47,6 +47,8 @@ const recorded = vi.hoisted(() => ({
     | undefined,
   mutateAsync: vi.fn(),
   narrow: false,
+  /** The space each render subscribed the page's live refresh for. */
+  liveRefresh: [] as Array<string | null>,
 }));
 
 vi.mock('@aflow/design-system', () => {
@@ -130,6 +132,13 @@ vi.mock('next/link', () => ({
 
 vi.mock('../components/providers.js', () => ({
   useSpaceFromRoute: () => ({ id: SPACE_ID, slug: 'work', slugFromRoute: 'work' }),
+}));
+
+vi.mock('../hooks/use-plan-live-refresh.js', () => ({
+  spacePlanKey: (spaceId: string) => ['space', spaceId, 'plan'],
+  usePlanLiveRefresh: (spaceId: string | null) => {
+    recorded.liveRefresh.push(spaceId);
+  },
 }));
 
 vi.mock('../hooks/useApiQuery.js', () => ({
@@ -426,6 +435,8 @@ beforeEach(() => {
   };
   recorded.detailQueries = [];
   recorded.detailRefetch.mockReset();
+  recorded.detailRefetch.mockResolvedValue({ data: undefined });
+  recorded.liveRefresh = [];
   recorded.findings = {};
   recorded.runPages = {};
   recorded.linkQueries = [];
@@ -454,6 +465,12 @@ describe('SpacePlanPage — the board', () => {
     expect(url.pathname).toBe(`/spaces/${SPACE_ID}/plan`);
     expect(url.searchParams.get('closedSince')).toBe(new Date(2026, 9, 22).toISOString());
     expect(url.searchParams.get('tz')).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
+  });
+
+  it('keeps itself live on the space’s events, for the space it shows', async () => {
+    await render();
+    expect(recorded.liveRefresh.length).toBeGreaterThan(0);
+    expect(new Set(recorded.liveRefresh)).toEqual(new Set([SPACE_ID]));
   });
 
   it('shows a tab per plan with its step count, and the selected plan’s title and header', async () => {
@@ -943,6 +960,59 @@ describe('SpacePlanPage — the operator’s writes from the rail', () => {
     expect(rail().querySelector('[role="alert"]')?.textContent).toContain('it is at revision 2');
     expect(recorded.detailRefetch).toHaveBeenCalledTimes(1);
     expect(recorded.refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the revision an open form showed when the plan is read again under it', async () => {
+    recorded.mutateAsync.mockResolvedValue({ node: {} });
+    await render();
+    await click(card(BOARD));
+    await click(button(rail(), 'Mark done'));
+    await type(rail(), 'The board renders.');
+
+    // A write elsewhere: the page reads a new tree and the rail a new node.
+    recorded.details[BOARD] = detail(
+      fullNode(BOARD, 'P3.3 the board', { revision: 2, note: 'Proposed: live.' }),
+    );
+    const moved = structuredClone(PLAN);
+    const board = moved.roots[0]!.children[0]!.children.find((n) => n.nodeId === BOARD)!;
+    board.revision = 2;
+    await render({ data: moved });
+
+    expect(rail().querySelector('textarea')?.value).toBe('The board renders.');
+    expect(rail().querySelector('[data-plan-close-moved]')).not.toBe(null);
+    await click(button(rail(), 'Mark done'));
+
+    expect(recorded.mutateAsync).toHaveBeenCalledWith({
+      nodeId: BOARD,
+      expectedRevision: 1,
+      status: 'done',
+      outcome: 'The board renders.',
+    });
+  });
+
+  it('decides a retry after a refusal against the step as the refusal read it', async () => {
+    recorded.mutateAsync.mockRejectedValueOnce(
+      Object.assign(new Error('This step changed since the plan was read.'), { status: 409 }),
+    );
+    recorded.mutateAsync.mockResolvedValueOnce({ node: {} });
+    const now = fullNode(NEXT, 'P3.4 live exit', { status: 'waiting', revision: 4 });
+    recorded.detailRefetch.mockImplementation(() => {
+      recorded.details[NEXT] = detail(now);
+      return Promise.resolve({ data: { node: now } });
+    });
+    await render();
+    await click(card(NEXT));
+
+    await click(button(rail(), 'Drop'));
+    await click(button(rail(), 'Drop'));
+    await render();
+    await click(button(rail(), 'Drop'));
+
+    expect(
+      recorded.mutateAsync.mock.calls.map(
+        ([r]) => (r as { expectedRevision: number }).expectedRevision,
+      ),
+    ).toEqual([1, 4]);
   });
 
   it('does not re-read the board for a refusal that is not about the revision', async () => {

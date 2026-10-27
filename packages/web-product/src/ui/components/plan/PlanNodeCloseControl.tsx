@@ -4,9 +4,10 @@
  * The operator's own writes on an open plan node (Plan 322 P3.2), held in the
  * board's rail: mark it done with how its criteria were met — for a `decide`
  * node, the choice — or drop it, and the branch under it with it. The form
- * shows the node as the rail read it, on demand, and writes against the
- * revision that read showed; a node changed since is refused rather than
- * overwritten, and a refusal reads it again.
+ * shows the node as the rail read it when the form opened, and writes against
+ * the revision that read showed, whatever the page has read since; a node
+ * changed since is refused rather than overwritten, and a refusal reads it
+ * again.
  */
 import { useState } from 'react';
 import { Button, Column, Row, Text, Textarea } from '@aflow/design-system';
@@ -28,7 +29,8 @@ export type PlanNodeCloser = (request: PlanNodeCloseRequest) => Promise<PlanNode
 export interface PlanNodeRead {
   node: PlanNode | undefined;
   error: Error | null;
-  refetch: () => unknown;
+  /** Read the node again; answers with the node as it now stands. */
+  refetch: () => Promise<PlanNode | undefined>;
 }
 
 export function isClosedStatus(status: PlanNodeStatus): boolean {
@@ -66,8 +68,20 @@ export function PlanNodeCloseControl({
   const [text, setText] = useState('');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const shown = read.node;
-  const shownClosed = shown !== undefined && isClosedStatus(shown.status);
+  // The node as the open form first read it. The page re-reads the plan on
+  // every write and run change (Plan 332 D9), so the live read can move under
+  // an open form; the write stays pinned to the revision the operator saw.
+  const [pinned, setPinned] = useState<PlanNode | undefined>(undefined);
+  if (choosing === null) {
+    if (pinned !== undefined) setPinned(undefined);
+  } else if (pinned === undefined && read.node !== undefined) {
+    setPinned(read.node);
+  }
+  const shown = choosing === null ? read.node : (pinned ?? read.node);
+  const movedSinceOpened =
+    shown !== undefined && read.node !== undefined && read.node.revision !== shown.revision;
+  const closedNow =
+    read.node !== undefined && isClosedStatus(read.node.status) ? read.node.status : undefined;
   const openUnder = node.children.some((child) => !isClosedStatus(child.status));
 
   const copyFor = (status: 'done' | 'dropped') =>
@@ -121,7 +135,7 @@ export function PlanNodeCloseControl({
     } else {
       setError(answer.message);
       // Show the node as it now stands, so a retry is decided against that.
-      void read.refetch();
+      setPinned(await read.refetch());
     }
   };
 
@@ -132,14 +146,22 @@ export function PlanNodeCloseControl({
           Reading the step…
         </Text>
       )}
-      {shown !== undefined && shown.revision !== node.revision && (
-        <Text size="xs" variant="muted">
-          This step changed since the plan was read; this is how it stands now.
+      {movedSinceOpened ? (
+        <Text size="xs" variant="muted" data-plan-close-moved>
+          This step changed since this form opened; a write now is refused and shows it as it
+          stands.
         </Text>
+      ) : (
+        shown !== undefined &&
+        shown.revision !== node.revision && (
+          <Text size="xs" variant="muted">
+            This step changed since the plan was read; this is how it stands now.
+          </Text>
+        )
       )}
-      {shownClosed && (
+      {closedNow !== undefined && (
         <Text size="sm" tone="danger" role="alert">
-          {`This step is ${shown.status} now; reload the plan to see it.`}
+          {`This step is ${closedNow} now.`}
         </Text>
       )}
       <Textarea
@@ -170,7 +192,7 @@ export function PlanNodeCloseControl({
           disabled={
             pending ||
             shown === undefined ||
-            shownClosed ||
+            closedNow !== undefined ||
             (choosing === 'done' && outcome.length === 0)
           }
           onClick={() => {

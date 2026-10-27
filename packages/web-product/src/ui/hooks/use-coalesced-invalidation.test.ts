@@ -46,6 +46,8 @@ vi.mock('./useApiQuery.js', () => ({
 const { ENTITY_EVENT_REFETCH_WINDOW_MS } = await import('./use-coalesced-invalidation.js');
 const { useSpaceWorkflowRuns, spaceWorkflowRunsKey } = await import('./use-space-workflow-runs.js');
 const { useSessionListRefresh } = await import('./use-session-metadata.js');
+const { PLAN_REFRESH_WINDOW_MS, spacePlanKey, usePlanLiveRefresh } =
+  await import('./use-plan-live-refresh.js');
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -55,6 +57,11 @@ const BURST = 100;
 function Workbench(): null {
   useSpaceWorkflowRuns(SPACE_ID);
   useSessionListRefresh(SPACE_ID);
+  return null;
+}
+
+function PlanPage(): null {
+  usePlanLiveRefresh(SPACE_ID);
   return null;
 }
 
@@ -90,7 +97,12 @@ beforeEach(async () => {
   root = createRoot(container);
   await act(async () => {
     root.render(
-      createElement(QueryClientProvider, { client: queryClient }, createElement(Workbench)),
+      createElement(
+        QueryClientProvider,
+        { client: queryClient },
+        createElement(Workbench),
+        createElement(PlanPage),
+      ),
     );
   });
 });
@@ -172,5 +184,46 @@ describe('refreshing on the space channel', () => {
     });
 
     expect(invalidationsOf(spaceWorkflowRunsKey(SPACE_ID))).toBe(2);
+  });
+});
+
+describe('the plan page refreshing on the space channel (Plan 332 D9)', () => {
+  it('re-reads the whole plan once for a burst of plan writes and run changes', async () => {
+    deliver([
+      ...Array.from({ length: BURST }, () => event('entity.plan.updated')),
+      ...Array.from({ length: BURST }, () => event('entity.run.updated')),
+    ]);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(PLAN_REFRESH_WINDOW_MS - 1);
+    });
+    expect(invalidationsOf(spacePlanKey(SPACE_ID))).toBe(0);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(invalidationsOf(spacePlanKey(SPACE_ID))).toBe(1);
+    expect(spacePlanKey(SPACE_ID)).toEqual(['space', SPACE_ID, 'plan']);
+  });
+
+  it('refetches at most once a second while events keep arriving', async () => {
+    for (let tick = 0; tick < 30; tick++) {
+      deliver([event(tick % 2 === 0 ? 'entity.plan.updated' : 'entity.run.updated')]);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(100);
+      });
+    }
+
+    expect(invalidationsOf(spacePlanKey(SPACE_ID))).toBe(3);
+  });
+
+  it('ignores the space’s other events', async () => {
+    deliver([event('entity.session.described'), event('entity.coach.proposal')]);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(PLAN_REFRESH_WINDOW_MS);
+    });
+
+    expect(invalidationsOf(spacePlanKey(SPACE_ID))).toBe(0);
   });
 });

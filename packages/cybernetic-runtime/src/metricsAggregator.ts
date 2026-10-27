@@ -266,6 +266,7 @@ export async function aggregateMetricsBucket(
       case 'entity.task.dispatched':
       case 'entity.task.completed':
       case 'entity.run.updated':
+      case 'entity.plan.updated':
       case 'entity.session.described':
       case 'entity.session.status':
         break;

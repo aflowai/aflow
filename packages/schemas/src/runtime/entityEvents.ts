@@ -67,6 +67,11 @@ export const EntityEventTypeSchema = z.enum([
   // narrated (no console map entry); payload carries { runId, status }.
   'entity.run.updated',
 
+  // A plan node was written — created, rewritten or linked (Plan 332 D9).
+  // Space-level so the plan page refreshes without a reload. Not narrated;
+  // payload carries { nodeId, revision }.
+  'entity.plan.updated',
+
   // Skill authoring (naming convention; payload carries stage + via)
   'entity.skill.authored',
 

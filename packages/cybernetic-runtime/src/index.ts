@@ -199,6 +199,7 @@ export * from './workflowHarnessAdvance.js';
 
 export * from './workflowRunProgress.js';
 export * from './runEvents.js';
+export * from './entityEvents.js';
 
 // Phase 3 — attention cache
 export * from './attentionCache.js';

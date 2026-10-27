@@ -414,7 +414,11 @@ export function PlanRail({
       {open && (
         <PlanNodeCloseControl
           node={node}
-          read={{ node: full, error: detail.error, refetch: detail.refetch }}
+          read={{
+            node: full,
+            error: detail.error,
+            refetch: async () => (await detail.refetch()).data?.node,
+          }}
           onClose={onClose}
           choosing={choosing}
           onChoose={onChoose}
