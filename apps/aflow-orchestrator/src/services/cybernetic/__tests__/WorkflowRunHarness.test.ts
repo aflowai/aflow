@@ -3170,6 +3170,31 @@ describe('Phase 3 — pause/resume scenarios', () => {
   });
 });
 
+describe('completeRun releases what the run held', () => {
+  it('leaves no schedule-create count for a run that reached a terminal state', async () => {
+    const { claimScheduleCreate, scheduleCreatesCounted } =
+      await import('../../SessionOrchestrator/handlers/inlineOps/scheduleCreateBudget.js');
+    claimScheduleCreate(RUN_ID);
+    claimScheduleCreate(RUN_ID);
+    expect(scheduleCreatesCounted(RUN_ID)).toBe(2);
+
+    mockLoadRunById.mockResolvedValue(buildRunDetail([], 'running'));
+    mockListCompletionPendingForRun.mockResolvedValueOnce([]);
+    mockCancelNonTerminalTasksForRun.mockResolvedValueOnce({
+      cancelledTaskIds: [],
+      interruptedSessions: [],
+    });
+    mockClearAllCompletionPendingForRun.mockResolvedValueOnce(undefined);
+    mockLedgerCompleteRun.mockResolvedValueOnce(true);
+    mockLoadPendingWaiters.mockResolvedValue([]);
+
+    await cancelRun(deps, TENANT, RUN_ID);
+
+    expect(mockLedgerCompleteRun).toHaveBeenCalledOnce();
+    expect(scheduleCreatesCounted(RUN_ID)).toBeUndefined();
+  });
+});
+
 // ─── Phase 4 — workflow.run.cancel ──────────────────────────────────────────
 
 describe('cancelRun — Plan 132v2 §Phase 4 (4.5c replay-safe)', () => {

@@ -9,6 +9,7 @@ import {
 import { buildInterruptedSessionPatch } from '../helpers/interruptedSessionPatch.js';
 import { getClearedDelegationStatePatch } from '../helpers/delegationState.js';
 import { generateEventId } from '../helpers/ids.js';
+import { releaseScheduleCreates } from '../handlers/inlineOps/scheduleCreateBudget.js';
 import { buildRunStatusChangedRecoveryEvent } from '../helpers/recoveryEmitter.js';
 import { getOrchestratorLogger } from '../../../lib/orchestratorLogger.js';
 import type { SessionOrchestratorFactoryDeps } from './context.js';
@@ -156,6 +157,7 @@ export function createForceCompleteInFlightStep(deps: SessionOrchestratorFactory
 
     if (!isInterrupt) {
       await markRunInactive(redis, tenantId, runId).catch(() => {});
+      releaseScheduleCreates(runId);
     }
 
     manifestService?.updateStatus(runId, tenantId, isInterrupt ? 'PAUSED' : 'CANCELLED');

@@ -63,6 +63,7 @@ import { resolveMatchedToolCallIdForToolFailure } from '../helpers/resolveToolCa
 import { simulatedFulfillmentEventMeta } from '../../simulatedStepMarking.js';
 import { resolveOAuthConsentBlockedOn } from './oauthConsentPause.js';
 import { resolveWriteApprovalBlockedOn } from './writeApprovalPause.js';
+import { releaseScheduleCreates } from '../handlers/inlineOps/scheduleCreateBudget.js';
 
 export function createApplyResult(bindings: SessionOrchestratorBindings) {
   const { deps, harnessDeps, failRunWithCleanup } = bindings;
@@ -951,6 +952,7 @@ export function createApplyResult(bindings: SessionOrchestratorBindings) {
         });
 
         await markRunInactive(redis, result.tenantId, result.sessionId).catch(() => {});
+        releaseScheduleCreates(result.sessionId);
         manifestService?.updateStatus(result.sessionId, result.tenantId, 'FAILED');
 
         if (runState.workflowExecution !== undefined) {

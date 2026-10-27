@@ -8,7 +8,7 @@ import {
   SHEPHERD_MERGE_OUTCOME_LINE,
   SHEPHERD_RESPONSE_PRESETS,
 } from '@aflow/schemas';
-import { fromCommission, REMEDY } from './localPrShepherdRemedies.js';
+import { fromCommission, REMEDY, REMEDY_CHANGE_TASK } from './localPrShepherdRemedies.js';
 import {
   bind,
   ctx,
@@ -141,6 +141,16 @@ const MERGE_OUTCOME = optionalPart(
   { $firstOf: [text('mergeCommit'), text('mergeAgainCommit'), leaseText('leaseHeadSha')] },
 );
 
+/**
+ * This pass's decision: the rule step's, unless the remedy it took ran and
+ * published nothing, which makes the pass a wait. The reason keeps the rule
+ * step's words and adds what came of the remedy.
+ */
+const DECISION = { $firstOf: [bind('remedyDecision'), bind('decision')] };
+const REASON = {
+  $firstOf: [{ $concat: [bind('reason'), ' ', bind('remedyReason')] }, bind('reason')],
+};
+
 const HANDOFF_BODY = {
   $concat: [
     `${SHEPHERD_HANDOFF_OPEN}\n`,
@@ -151,7 +161,7 @@ const HANDOFF_BODY = {
     '\nheadSha: ',
     HEAD_SHA,
     '\ndecision: ',
-    bind('decision'),
+    DECISION,
     '\nclassification: ',
     CLASSIFICATION,
     '\nremedy: ',
@@ -162,9 +172,9 @@ const HANDOFF_BODY = {
     MERGE_OUTCOME,
     `\n${SHEPHERD_HANDOFF_CLOSE}\n`,
     '**Local PR Shepherd** — this pass: `',
-    bind('decision'),
+    DECISION,
     '`. ',
-    bind('reason'),
+    REASON,
     optionalPart('\n\nRequired checks not passed on the head: ', text('requiredUnmet'), '.'),
     optionalPart('\n\nThe merge: ', bind('mergeReason')),
     optionalPart(' GitHub answered ', text('mergeStatus'), ': ', text('mergeMessage')),
@@ -198,6 +208,8 @@ const HANDOFF_BINDINGS = {
   ...REPOSITORY,
   decision: out('decide', 'decision'),
   reason: out('decide', 'reason'),
+  remedyDecision: out(REMEDY_CHANGE_TASK, 'decision'),
+  remedyReason: out(REMEDY_CHANGE_TASK, 'reason'),
   fixAttempt: out('record-remedy', 'round.attempt'),
   ...Object.fromEntries(
     SHEPHERD_MERGE_OUTCOME_FIELDS.flatMap((field) =>

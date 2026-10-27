@@ -35,15 +35,14 @@ import { handleRenew } from './scheduleRenewHandler.js';
 import { scheduleConfigProblem } from './scheduleTargetConfig.js';
 import { getCronMinIntervalSeconds } from './scheduleCron.js';
 import { handleUpdate } from './scheduleUpdateHandler.js';
-
-/** Max schedules an agent can create in a single run (safety guardrail) */
-const MAX_SCHEDULE_CREATES_PER_RUN = 10;
+import {
+  claimScheduleCreate,
+  MAX_SCHEDULE_CREATES_PER_RUN,
+  scheduleBudgetRunId,
+} from './scheduleCreateBudget.js';
 
 /** Default expiresAt for recurring schedules: 30 days */
 const DEFAULT_RECURRING_EXPIRY_DAYS = 30;
-
-/** Per-run counters to enforce rate limit. Map<runId, count>. */
-const runScheduleCreateCounts = new Map<string, number>();
 
 // ============================================================================
 // agent.schedule.* Router
@@ -133,9 +132,7 @@ async function handleCreate(
   const spaceId = requireSpaceId(context);
 
   // --- Rate limit: max creates per run ---
-  const runId = context.runId as string;
-  const currentCount = runScheduleCreateCounts.get(runId) ?? 0;
-  if (currentCount >= MAX_SCHEDULE_CREATES_PER_RUN) {
+  if (!claimScheduleCreate(await scheduleBudgetRunId(args))) {
     await emitStepError(
       args,
       'SCHEDULE_RATE_LIMIT',
@@ -146,7 +143,6 @@ async function handleCreate(
     );
     return;
   }
-  runScheduleCreateCounts.set(runId, currentCount + 1);
 
   if (typeof input['renews'] === 'string') {
     await handleRenew(args, spaceId, input['renews'], startTime);

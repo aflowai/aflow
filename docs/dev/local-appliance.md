@@ -444,6 +444,15 @@ package registry, an MCP endpoint and a telemetry sink. Run it once, read
 yarn workspace @aflow/aflow-executor-host harness allow claude api.anthropic.com
 ```
 
+A coding agent that installs packages needs the registries beside the model API:
+`registry.yarnpkg.com`, through which Yarn installs and audits, and `registry.npmjs.org`,
+npm's. Nothing inside the boundary resolves a name, so a tool reaches a host only through
+the sandbox's proxy, which it names in `HTTP_PROXY` and `HTTPS_PROXY`; Yarn 2 and later
+read neither, so each run's home holds a `.yarnrc.yml` setting Yarn's `httpProxy` and
+`httpsProxy` to them. A task that names hosts it cannot do without — the Local PR
+Shepherd's dependency bump names both registries — fails naming the host the boundary
+refused, rather than returning an unchanged tree.
+
 **Its credential.** A harness that keeps its token in a file needs only its
 config directory, which `harness add` already suggests. On macOS a signed-in
 coding agent typically keeps it in the **Keychain**, which a confined process

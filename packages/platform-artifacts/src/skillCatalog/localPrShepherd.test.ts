@@ -179,6 +179,11 @@ const GREEN: CheckRunsSummary = { state: 'passing', total: 2, failing: [] };
 const OWN_LEASE_HASH = 'own-lease-hash';
 const HAND_OVER_SCHEDULE = '0f000000-0000-4000-8000-0000000000a1';
 
+/** The patch each commission stores: the fix's as a first pass has it, every other its own. */
+function patchOf(taskId: string): string {
+  return taskId === 'fix' ? 'gs://bucket/patch-1' : `gs://bucket/${taskId}.patch`;
+}
+
 function presetOf(input: Record<string, unknown>): string {
   return String((input['response'] as { transformPresetId?: string }).transformPresetId);
 }
@@ -234,8 +239,12 @@ interface Scenario {
     | 'fails';
   remedy?: { value: Remedy | null; decided: boolean } | 'unavailable';
   failingJobs?: number;
-  /** What the commission returned: a patch, only the merge, or nothing. */
-  commission?: 'patch' | 'merge-only' | 'failed';
+  /**
+   * What the commission returned: a patch, only the merge, no change at all —
+   * its checkout already held the base, and it changed nothing — or nothing,
+   * failing.
+   */
+  commission?: 'patch' | 'merge-only' | 'unchanged' | 'failed';
   /** The folder's merge posture, and its push approval: `when-green` merges only beside `unless-unreviewed`. */
   mergePosture?: 'never' | 'when-green';
   pushApproval?: 'always' | 'never' | 'unless-unreviewed';
@@ -818,6 +827,7 @@ function answer(taskId: string, input: Record<string, unknown>, s: Scenario): An
       return ok({ scheduleId: `successor-of-${String(renews)}`, kind: 'cron', status: 'active' });
     }
     case 'read-firing':
+    case 'judge-remedy-change':
     case 'name-hand-over-case':
     case 'aim':
     case 'decide':
@@ -890,8 +900,8 @@ function answer(taskId: string, input: Record<string, unknown>, s: Scenario): An
         harness: { id: 'claude', selectedBy: 'default' },
         continued: false,
         baseSha: HEAD,
-        merge: { from: baseNow, conflicts: [] },
-        ...(commission === 'patch' ? { patchRef: 'gs://bucket/patch-1', filesChanged: 1 } : {}),
+        ...(commission === 'unchanged' ? {} : { merge: { from: baseNow, conflicts: [] } }),
+        ...(commission === 'patch' ? { patchRef: patchOf(taskId), filesChanged: 1 } : {}),
         filesChanged: commission === 'patch' ? 1 : 0,
         result: { commitMessage: 'Fix the clock test\n\nIt read the wall clock.', gaps: [] },
         patchTruncated: false,
@@ -1100,6 +1110,88 @@ describe('Local PR Shepherd — it fixes what CI failed', () => {
   });
 });
 
+describe('Local PR Shepherd — it publishes whichever remedy ran', () => {
+  const BUMP = { remedy: { value: 'dependency_advisory', decided: true } } as const;
+
+  it("publishes the dependency bump's patch on a pass whose remedy is the bump", () => {
+    const bumped = pass(BUMP);
+    expect(bumped.outputs.get('record-remedy')?.['decision']).toBe('dependency_bump');
+    expect(bumped.ran).toEqual(expect.arrayContaining(['bump-dependency', 'publish']));
+    expect(bumped.ran).not.toContain('fix');
+    // A bump the boundary keeps from the registry fails, naming the host, rather
+    // than returning an unchanged tree as done.
+    expect(bumped.inputs.get('bump-dependency')!['requiredHosts']).toEqual([
+      'registry.yarnpkg.com',
+      'registry.npmjs.org',
+    ]);
+    expect(bumped.inputs.get('bump-dependency')!['task']).toBe(BUMP_BRIEF);
+    expect(pass().inputs.get('fix')).not.toHaveProperty('requiredHosts');
+    const start = WorkflowRunStartInputSchema.parse(bumped.inputs.get('publish'));
+    expect(start.inputs).toMatchObject({
+      patchRef: 'gs://bucket/bump-dependency.patch',
+      mergeFrom: MERGED_FROM,
+      baseSha: HEAD,
+      branch: BRANCH,
+    });
+    expect(bumped.handoff).toMatchObject({
+      decision: 'fix',
+      remedy: 'dependency_bump',
+      publicationRunId: 'pub-run-1',
+    });
+  });
+
+  it('decides wait, saying why, where the remedy ran and left nothing to publish', () => {
+    const unchanged = pass({ ...BUMP, commission: 'unchanged' });
+    expect(unchanged.statuses.get('bump-dependency')).toBe('succeeded');
+    expect(unchanged.statuses.get('publish')).toBe('skipped');
+    const judged = unchanged.outputs.get('judge-remedy-change');
+    expect(judged).toMatchObject({ decision: 'wait' });
+    expect(String(judged?.['reason'])).toContain('left nothing to publish');
+    expect(unchanged.handoff).toMatchObject({ decision: 'wait', remedy: 'dependency_bump' });
+    expect(unchanged.handoff?.publicationRunId).toBeUndefined();
+    const body = String(
+      (unchanged.inputs.get('handoff')!['params'] as { body: { body: string } }).body.body,
+    );
+    expect(body).toContain('this pass: `wait`');
+    expect(body).toContain(String(judged?.['reason']));
+  });
+
+  it('decides wait, saying why, where the remedy commission failed — a bump kept from the registry', () => {
+    const failed = pass({ ...BUMP, commission: 'failed' });
+    expect(failed.statuses.get('bump-dependency')).toBe('failed');
+    expect(failed.statuses.get('publish')).toBe('skipped');
+    const judged = failed.outputs.get('judge-remedy-change');
+    expect(judged).toMatchObject({ decision: 'wait' });
+    expect(String(judged?.['reason'])).toContain('commission failed');
+    expect(failed.handoff).toMatchObject({ decision: 'wait', remedy: 'dependency_bump' });
+  });
+
+  it('judges nothing where no commission ran', () => {
+    const rerun = pass({ remedy: { value: 'flaky_or_timeout', decided: true } });
+    expect(rerun.statuses.get('judge-remedy-change')).toBe('skipped');
+    expect(rerun.handoff).toMatchObject({ decision: 'fix', remedy: 'rerun_failed_jobs' });
+  });
+
+  it('records the publication in the handoff for every remedy it publishes', () => {
+    const published = [
+      pass(),
+      pass(BUMP),
+      pass({ remedy: { value: 'base_conflict', decided: true }, commission: 'merge-only' }),
+      pass({ remedy: { value: 'code_defect', decided: false } }),
+    ];
+    for (const remedied of published) {
+      expect(remedied.ran).toContain('publish');
+      expect(remedied.handoff).toMatchObject({ decision: 'fix', publicationRunId: 'pub-run-1' });
+    }
+    expect(published.map((remedied) => remedied.handoff?.remedy)).toEqual([
+      'fix_commission',
+      'dependency_bump',
+      'merge_round',
+      'fix_commission',
+    ]);
+  });
+});
+
 describe('Local PR Shepherd — once per failure', () => {
   it('waits on a second pass over the same check run, and its handoff still shows one attempt', () => {
     const second = pass({ pinned: 'found', handoff: readBack(pass()) });
@@ -1190,6 +1282,7 @@ describe('Local PR Shepherd — a failure acted on is acted on again once the ba
       checkRunId: AUDIT_CHECK,
       decision: 'fix',
       remedy: 'merge_round',
+      publicationRunId: 'pub-run-1',
     });
     expect(pinned(merged)).toMatchObject({
       checkRunId: AUDIT_CHECK,
