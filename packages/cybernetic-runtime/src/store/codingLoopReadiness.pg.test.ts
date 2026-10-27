@@ -58,6 +58,7 @@ describe.skipIf(!databaseUrl)('coding loop database readiness', () => {
 
       for (const template of [
         '{"input":"tend"}',
+        '{"input":"tend","config":{"lane":"a"}}',
         '{"scheduleId":{"$schedule":"id"}}',
         '{"input":"tend","scheduleId":{"$schedule":"id"}}',
       ]) {
@@ -67,6 +68,9 @@ describe.skipIf(!databaseUrl)('coding loop database readiness', () => {
           tasks: [{ step: 'schedule' }],
         });
       }
+      await tx.execute(sql`UPDATE agent_schedules SET input_template =
+        '{"input":"shepherd","note":"x","config":{"scheduleId":{"$schedule":"id"},"lane":"a"}}'::jsonb`);
+      expect(await read()).toEqual({ status: 'ready', tasks: [] });
       await tx.execute(sql`UPDATE agent_schedules SET input_template = ${RENEWAL_TEMPLATE}::jsonb`);
       expect(await read()).toEqual({ status: 'ready', tasks: [] });
 
