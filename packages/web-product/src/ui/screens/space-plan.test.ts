@@ -2,11 +2,12 @@
  * @vitest-environment jsdom
  */
 /**
- * The plan page as the operator sees it (Plan 322 P3.3): a board — a tab per
- * plan with its step count, five columns in which the column is the status,
- * cards carrying labels only, Done folded by day from the plan's own counts —
- * and a side rail that reads a step on demand and holds the operator's own
- * controls (P3.2). Rendered through the screen itself, the design system's
+ * The plan page as the operator sees it (Plan 322 P3.3, Plan 332 P1): a board
+ * — a tab per plan with its step count, the plan's header, five columns saying
+ * what the loop is doing with each step, Next on the walk's step, cards
+ * carrying labels only, Done folded by day from the plan's own counts, no
+ * Activity filter and no Done window — and a side rail that reads a step on
+ * demand and holds the operator's own controls (P3.2). Rendered through the screen itself, the design system's
  * primitives as plain elements and every query recorded.
  */
 import { act, createContext, createElement, useContext, type ReactNode } from 'react';
@@ -272,21 +273,24 @@ const PLAN: PlanTreeOutput = {
     {
       rootId: R322,
       steps: 10,
+      needsYou: 1,
+      inFlight: 3,
+      upNext: 2,
       done: 3,
-      active: 3,
-      decide: 1,
       dropped: 1,
       doneByDay: [
         { day: '2026-10-22', count: 1 },
         { day: '2026-09-20', count: 2 },
       ],
+      nextNodeId: NEXT,
     },
     {
       rootId: R315,
       steps: 53,
+      needsYou: 0,
+      inFlight: 0,
+      upNext: 0,
       done: 53,
-      active: 0,
-      decide: 0,
       dropped: 0,
       doneByDay: [
         { day: '2026-10-22', count: 1 },
@@ -452,33 +456,87 @@ describe('SpacePlanPage — the board', () => {
     expect(url.searchParams.get('tz')).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
   });
 
-  it('shows a tab per plan with its step count, and the selected plan’s title and tallies', async () => {
+  it('shows a tab per plan with its step count, and the selected plan’s title and header', async () => {
     await render();
 
     const tabs = [...container.querySelectorAll('[role="tab"]')].map((t) => t.textContent);
     expect(tabs).toEqual(['Plan 322 · plans are platform records10', PLAN_315_TAB]);
     expect(container.querySelector(`[data-plan-tally="${R322}"]`)?.textContent).toBe(
-      '3 done3 active1 decide1 dropped',
+      '4 of 10 closed1 needs you3 in flight2 up next3 done1 dropped',
     );
 
     await click(button(container, PLAN_315_TAB));
     expect(container.querySelector(`[data-plan-tally="${R315}"]`)?.textContent).toBe(
-      '53 done0 active0 decide0 dropped',
+      '53 of 53 closed53 done',
     );
   });
 
-  it('places each step in the column of its status, a dash in an empty one', async () => {
+  it('places each step in the column of what the loop is doing with it, Needs you first', async () => {
     await render();
 
-    expect(cardIds(column('next'))).toEqual([NEXT]);
-    expect(cardIds(column('progress'))).toEqual([P3, BOARD, ARTICLE]);
-    expect(cardIds(column('decide'))).toEqual([DECISION]);
+    const order = [...container.querySelectorAll('[data-plan-column]')].map((c) =>
+      c.getAttribute('data-plan-column'),
+    );
+    expect(order).toEqual(['needs_you', 'in_flight', 'up_next', 'done', 'dropped']);
+    expect(cardIds(column('needs_you'))).toEqual([DECISION]);
+    expect(cardIds(column('in_flight'))).toEqual([P3, NEXT, BOARD]);
+    expect(cardIds(column('up_next'))).toEqual([ARTICLE]);
     expect(cardIds(column('dropped'))).toEqual([SKETCH]);
-    expect(column('next').querySelector('[data-plan-column-header]')?.textContent).toBe('Up next1');
+    expect(column('up_next').querySelector('[data-plan-column-header]')?.textContent).toBe(
+      'Up next1',
+    );
+  });
 
-    await click(button(filter('Activity'), 'In flight'));
-    expect(cardIds(column('next'))).toEqual([]);
-    expect(column('next').textContent).toContain('–');
+  it('marks Next on the step the tally names, and says what holds a waiting step', async () => {
+    await render();
+
+    expect(
+      [...container.querySelectorAll('[data-plan-next]')].map((c) =>
+        c.getAttribute('data-plan-card'),
+      ),
+    ).toEqual([NEXT]);
+    expect(card(NEXT).textContent).toContain('Next');
+    expect(card(NEXT).querySelector('[data-plan-waiting]')?.textContent).toBe(
+      'Its run ended; the loop advances it when it returns',
+    );
+    expect(card(ARTICLE).textContent).not.toContain('Next');
+  });
+
+  it('shows why a step needs the reader, a step under a closed one included', async () => {
+    const STRANDED = '00000000-0000-4000-8000-0000000000b3';
+    const stranded: PlanTreeOutput = {
+      ...PLAN,
+      roots: PLAN.roots.map((r) =>
+        r.nodeId === R315
+          ? {
+              ...r,
+              children: [
+                ...r.children,
+                treeNode(STRANDED, R315, 'P6.a left open', { position: 1 }),
+              ],
+            }
+          : r,
+      ),
+    };
+    await render({ data: stranded });
+    expect(card(DECISION).getAttribute('data-reason')).toBe('decide');
+    expect(card(DECISION).textContent).toContain('Decision');
+
+    await click(button(container, PLAN_315_TAB));
+    expect(cardIds(column('needs_you'))).toEqual([STRANDED]);
+    expect(card(STRANDED).getAttribute('data-reason')).toBe('stranded');
+    expect(card(STRANDED).textContent).toContain('Under a closed step');
+  });
+
+  it('renders no Activity filter, no explanation of it and no Done window', async () => {
+    await render();
+    await click(button(container, PLAN_315_TAB));
+
+    expect(container.querySelector('[data-plan-filter="Activity"]')).toBe(null);
+    expect(container.querySelector('[data-plan-filter="Done"]')).toBe(null);
+    expect(container.querySelector('[data-plan-activity-help]')).toBe(null);
+    expect(container.textContent).not.toContain('7 days');
+    expect(container.textContent).not.toContain('Idle');
   });
 
   it('carries labels only on a card: phase, runs in flight, pull request, rounds, subtasks', async () => {
@@ -550,43 +608,35 @@ describe('SpacePlanPage — the board', () => {
     expect(cardIds(column('done'))).toEqual([API_STEP, PAGE_STEP]);
   });
 
-  it('narrows the Done column to the window chosen', async () => {
+  it('filters by phase only where the plan has two or more phases', async () => {
     await render();
-    await click(button(container, PLAN_315_TAB));
+    expect(container.querySelector('[data-plan-filter="Phase"]')).toBe(null);
 
-    await click(button(filter('Done'), 'Today'));
-
-    expect(folds().map(([label]) => label)).toEqual(['Today · 1']);
-  });
-
-  it('filters by phase and by activity', async () => {
-    await render();
+    const ARTICLE_DRAFT = '00000000-0000-4000-8000-0000000000a9';
+    const twoPhases: PlanTreeOutput = {
+      ...PLAN,
+      roots: PLAN.roots.map((r) =>
+        r.nodeId === R322
+          ? {
+              ...r,
+              children: r.children.map((c) =>
+                c.nodeId === ARTICLE
+                  ? { ...c, children: [treeNode(ARTICLE_DRAFT, ARTICLE, 'Draft it')] }
+                  : c,
+              ),
+            }
+          : r,
+      ),
+    };
+    await render({ data: twoPhases });
 
     await click(button(filter('Phase'), 'P3'));
-    expect(cardIds(column('progress'))).toEqual([P3, BOARD]);
+    expect(cardIds(column('in_flight'))).toEqual([P3, NEXT, BOARD]);
+    expect(cardIds(column('up_next'))).toEqual([]);
 
-    await click(button(filter('Phase'), 'All'));
-    await click(button(filter('Activity'), 'In flight'));
-    expect(cardIds(column('progress'))).toEqual([P3, BOARD]);
-    expect(cardIds(column('decide'))).toEqual([]);
-
-    await click(button(filter('Activity'), 'Idle'));
-    expect(cardIds(column('progress'))).toEqual([ARTICLE]);
-    expect(cardIds(column('decide'))).toEqual([DECISION]);
-  });
-
-  it('explains In flight and Idle where the filter is, and which idle steps wait on the reader', async () => {
-    await render();
-
-    const help = container.querySelector('[data-plan-activity-help]');
-    expect(help?.contains(filter('Activity'))).toBe(true);
-    const text = help?.textContent ?? '';
-    expect(text).toContain('In flight — a run is working on the step or one under it');
-    expect(text).toContain('Idle — no run is on it now');
-    expect(text).toContain(
-      'Only the idle steps under Needs you — decisions and blocked steps — wait on you.',
-    );
-    expect(text).not.toContain('Neither asks anything of you');
+    await click(button(filter('Phase'), 'Write the hel…'));
+    expect(cardIds(column('up_next'))).toEqual([ARTICLE, ARTICLE_DRAFT]);
+    expect(cardIds(column('needs_you'))).toEqual([]);
   });
 
   it('says when the space has no plan, and when the plan could not be read', async () => {
@@ -664,6 +714,56 @@ describe('SpacePlanPage — the rail', () => {
     ]);
     expect(runs.textContent).toContain('failed');
     expect(button(runs, 'All runs · 8')).toBeTruthy();
+  });
+
+  it('shows the note’s first line under Now above the goal, and the whole note folded under Working note', async () => {
+    const withNote: PlanTreeOutput = {
+      ...PLAN,
+      roots: PLAN.roots.map((r) => ({
+        ...r,
+        children: r.children.map((c) =>
+          c.nodeId === ARTICLE ? { ...c, noteHead: 'Proposed: write it after P3 lands.' } : c,
+        ),
+      })),
+    };
+    recorded.details[ARTICLE] = detail(
+      fullNode(ARTICLE, 'Write the help article', {
+        parentId: R322,
+        note: 'Proposed: write it after P3 lands.\nThe board is still moving.',
+      }),
+    );
+    await render({ data: withNote });
+
+    await click(card(ARTICLE));
+
+    const sections = [...rail().querySelectorAll('[data-plan-rail-section]')].map((s) =>
+      s.getAttribute('data-plan-rail-section'),
+    );
+    expect(sections.slice(0, 2)).toEqual(['Now', 'Goal']);
+    expect(rail().querySelector('[data-plan-rail-section="Now"]')?.textContent).toBe(
+      'NowProposed: write it after P3 lands.',
+    );
+    const note = rail().querySelector('[data-plan-rail-section="Working note"]')!;
+    expect(note.querySelector('[data-plan-note]')).toBe(null);
+
+    await click(button(note, 'Show note'));
+    expect(note.querySelector('[data-plan-note]')?.textContent).toBe(
+      'Proposed: write it after P3 lands.\nThe board is still moving.',
+    );
+  });
+
+  it('carries the step’s reason and Next on the rail', async () => {
+    await render();
+
+    await click(card(NEXT));
+    expect(
+      [...rail().querySelectorAll('[data-badge]')].map((b) => b.textContent).slice(0, 2),
+    ).toEqual(['In flight', 'Next']);
+
+    await click(card(DECISION));
+    expect(
+      [...rail().querySelectorAll('[data-badge]')].map((b) => b.textContent).slice(0, 2),
+    ).toEqual(['Needs you', 'Decision']);
   });
 
   it('pages every run of the step under All runs', async () => {

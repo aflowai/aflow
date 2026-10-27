@@ -1,15 +1,18 @@
 'use client';
 
 /**
- * One plan as a board (Plan 322 P3.3): five columns, the column is the
- * status, a card per node carrying labels only — its text lives in the rail.
- * Done folds by day from the plan's own counts, so a fold shows how many it
- * holds before its cards are read.
+ * One plan as a board (Plan 322 P3.3): five columns saying what the loop is
+ * doing with each step (Plan 332 D4) — Needs you with its reason, In flight,
+ * Up next in the walk's order with Next on the step the walk takes — and a
+ * card per node carrying labels only; its text lives in the rail. Done folds
+ * by day from the plan's own counts, so a fold shows how many it holds before
+ * its cards are read.
  */
 import { useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react';
 import { Badge, Button, Card, CardBody, Column, Row, Text } from '@aflow/design-system';
 import type { PlanBoardColumn, PlanRootTally, PlanTreeNode } from '@aflow/schemas';
 import {
+  NEEDS_YOU_REASON_LABEL,
   PLAN_BOARD_COLUMNS,
   phaseLabel,
   planBoardFiltered,
@@ -18,9 +21,9 @@ import {
   planDoneFolds,
   planDoneGroups,
   pullRequestLabel,
+  waitingLine,
   type PlanBoardFilters,
   type PlanCard,
-  type PlanDoneWindow,
 } from '../../lib/plan-board.js';
 
 const STRIP_WIDTH = '32px';
@@ -53,19 +56,23 @@ function SubtaskBar({ done, total }: { done: number; total: number }) {
 
 function PlanCardView({
   card,
+  next,
   selected,
   onSelect,
   onDecide,
 }: {
   card: PlanCard;
+  /** The step the stream walk takes next for this plan. */
+  next: boolean;
   selected: boolean;
   onSelect: (card: PlanCard) => void;
   onDecide: (card: PlanCard) => void;
 }) {
   const { node, column, phase } = card;
+  const waiting = waitingLine(node);
   const style: CSSProperties = {
     cursor: 'pointer',
-    ...(column === 'decide' ? { borderLeft: '3px solid var(--color-warning-default)' } : {}),
+    ...(column === 'needs_you' ? { borderLeft: '3px solid var(--color-warning-default)' } : {}),
     ...(selected
       ? { outline: '2px solid var(--color-accent-default)', outlineOffset: '-1px' }
       : {}),
@@ -81,6 +88,8 @@ function PlanCardView({
       aria-pressed={selected}
       data-plan-card={node.nodeId}
       data-column={column}
+      {...(card.reason !== undefined ? { 'data-reason': card.reason } : {})}
+      {...(next ? { 'data-plan-next': 'true' } : {})}
       style={style}
       onClick={open}
       onKeyDown={(event: KeyboardEvent) => {
@@ -101,6 +110,10 @@ function PlanCardView({
             {node.title}
           </Text>
           <Row gap="xs" align="center" wrap>
+            {card.reason !== undefined && (
+              <Badge variant="warning">{NEEDS_YOU_REASON_LABEL[card.reason]}</Badge>
+            )}
+            {next && <Badge variant="accent">Next</Badge>}
             {phase !== undefined && <Badge variant="neutral">{phaseLabel(phase.title)}</Badge>}
             {node.counts.inFlightRuns > 0 && (
               <Badge variant="running">{`Running ${String(node.counts.inFlightRuns)}`}</Badge>
@@ -115,7 +128,12 @@ function PlanCardView({
               <SubtaskBar done={node.progress.done} total={node.progress.total} />
             )}
           </Row>
-          {column === 'decide' && node.kind === 'decide' && (
+          {waiting !== undefined && (
+            <Text size="xs" variant="muted" data-plan-waiting>
+              {waiting}
+            </Text>
+          )}
+          {card.reason === 'decide' && (
             <Row>
               <Button
                 size="sm"
@@ -179,7 +197,6 @@ export interface PlanBoardProps {
   root: PlanTreeNode;
   tally: PlanRootTally;
   filters: PlanBoardFilters;
-  doneWindow: PlanDoneWindow;
   /** The first day of done cards the tree on screen holds, `YYYY-MM-DD`; undefined before any read. */
   doneReadSince: string | undefined;
   /** The reader's today, `YYYY-MM-DD`. */
@@ -198,7 +215,6 @@ export function PlanBoard({
   root,
   tally,
   filters,
-  doneWindow,
   doneReadSince,
   today,
   expanded,
@@ -211,7 +227,7 @@ export function PlanBoard({
   const [droppedOpen, setDroppedOpen] = useState(false);
   const cards = planCards(root).filter((card) => planCardMatches(card, filters));
   const inColumn = (column: PlanBoardColumn) => cards.filter((card) => card.column === column);
-  const groups = planDoneGroups(tally.doneByDay, today, doneWindow);
+  const groups = planDoneGroups(tally.doneByDay, today);
   const folds = planDoneFolds(groups, inColumn('done'), planBoardFiltered(filters), doneReadSince);
   const doneCount = folds.some((fold) => fold.shown === undefined)
     ? undefined
@@ -223,6 +239,7 @@ export function PlanBoard({
     <PlanCardView
       key={card.node.nodeId}
       card={card}
+      next={card.node.nodeId === tally.nextNodeId}
       selected={card.node.nodeId === selectedId}
       onSelect={onSelect}
       onDecide={onDecide}

@@ -17,6 +17,7 @@ import {
   PLAN_LEARNING_READ_STATUSES,
   PLAN_NODE_RUN_STATUSES,
   planDependencyView,
+  planBoardNoteHead,
   planGoalHead,
   planNoteHead,
   type PlanDependencyWrite,
@@ -365,14 +366,18 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
       new Map(
         this.inSpace(spaceId)
           .filter((n) => nodeIds.includes(n.nodeId))
-          .map((n) => [
-            n.nodeId,
-            {
-              createdAt: n.createdAt,
-              ...(n.closedAt !== undefined ? { closedAt: n.closedAt } : {}),
-              goalHead: planGoalHead(n.goal),
-            },
-          ]),
+          .map((n) => {
+            const noteHead = planBoardNoteHead(n.note);
+            return [
+              n.nodeId,
+              {
+                createdAt: n.createdAt,
+                ...(n.closedAt !== undefined ? { closedAt: n.closedAt } : {}),
+                goalHead: planGoalHead(n.goal),
+                ...(noteHead !== undefined ? { noteHead } : {}),
+              },
+            ];
+          }),
       ),
     );
 

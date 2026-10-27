@@ -6,7 +6,7 @@
  */
 import {
   PlanNodeLinkKindSchema,
-  planBoardColumn,
+  planBoardCards,
   type PlanDoneDay,
   type PlanNodeSummary,
   type PlanRootTally,
@@ -14,12 +14,13 @@ import {
   type PlanTreeOutput,
 } from '@aflow/schemas';
 import { nestPlanTree, type PlacedPlanNode } from './tree.js';
-import { mergeShaOf } from './stream.js';
-import type {
-  PlanLinkPageKey,
-  PlanNodeBoardFacts,
-  PlanNodeLinkTally,
-  PlanNodeNewestPullRequest,
+import { findActiveStreamNode, mergeShaOf } from './stream.js';
+import {
+  planBoardNoteHead,
+  type PlanLinkPageKey,
+  type PlanNodeBoardFacts,
+  type PlanNodeLinkTally,
+  type PlanNodeNewestPullRequest,
 } from './store.js';
 
 /** What the store read for the walked nodes, each map keyed by node id. */
@@ -75,13 +76,15 @@ function boardNode(node: PlanNodeSummary, reads: PlanBoardReads): PlanTreeNode {
   // a node reopened between the reads has no `closedAt`, whatever the summary
   // carried. A node the walk read and its row did not was deleted between
   // them, and only its summary's times are left.
-  const { closedAt: summaryClosedAt, ...summary } = node;
+  const { closedAt: summaryClosedAt, noteHead: summaryNoteHead, ...summary } = node;
   const closedAt = facts !== undefined ? facts.closedAt : summaryClosedAt;
+  const noteHead = facts !== undefined ? facts.noteHead : planBoardNoteHead(summaryNoteHead);
   return {
     ...summary,
     createdAt: facts?.createdAt ?? node.createdAt,
     ...(closedAt !== undefined ? { closedAt } : {}),
     goalHead: facts?.goalHead ?? '',
+    ...(noteHead !== undefined ? { noteHead } : {}),
     counts: { ...links, inFlightRuns },
     rounds,
     activity: inFlightRuns > 0 ? 'in_flight' : 'idle',
@@ -128,36 +131,48 @@ function withChildren(node: PlanTreeNode): PlanTreeNode {
   };
 }
 
-function tallyOf(root: PlanTreeNode, dayOf: (iso: string) => string): PlanRootTally {
-  const tally: PlanRootTally = {
-    rootId: root.nodeId,
-    steps: 0,
-    done: 0,
-    active: 0,
-    decide: 0,
-    dropped: 0,
-    doneByDay: [],
-  };
-  const byDay = new Map<string, number>();
-  const stack = [...root.children];
+/**
+ * The step under `root` the stream walk takes next, read over the same tree
+ * the board places: the walk passes over closed nodes itself, so the whole
+ * tree is its input. The root is no step, so a walk that stops there names none.
+ */
+function nextNodeIdOf(root: PlanTreeNode): string | undefined {
+  const nodes: PlanTreeNode[] = [];
+  const stack = [root];
   while (stack.length > 0) {
     const node = stack.pop()!;
+    nodes.push(node);
     stack.push(...node.children);
-    tally.steps++;
-    const column = planBoardColumn(node);
-    if (column === 'done') tally.done++;
-    else if (column === 'progress') tally.active++;
-    else if (column === 'decide') tally.decide++;
-    else if (column === 'dropped') tally.dropped++;
+  }
+  const next = findActiveStreamNode(nodes, root.nodeId);
+  return next !== null && next.nodeId !== root.nodeId ? next.nodeId : undefined;
+}
+
+function tallyOf(root: PlanTreeNode, dayOf: (iso: string) => string): PlanRootTally {
+  const counts = { needs_you: 0, in_flight: 0, up_next: 0, done: 0, dropped: 0 };
+  const byDay = new Map<string, number>();
+  const cards = planBoardCards(root);
+  for (const { node, column } of cards) {
+    counts[column]++;
     if (column === 'done' && node.closedAt !== undefined) {
       const day = dayOf(node.closedAt);
       byDay.set(day, (byDay.get(day) ?? 0) + 1);
     }
   }
-  tally.doneByDay = [...byDay]
-    .map(([day, count]): PlanDoneDay => ({ day, count }))
-    .sort((a, b) => (a.day < b.day ? 1 : a.day > b.day ? -1 : 0));
-  return tally;
+  const nextNodeId = nextNodeIdOf(root);
+  return {
+    rootId: root.nodeId,
+    steps: cards.length,
+    needsYou: counts.needs_you,
+    inFlight: counts.in_flight,
+    upNext: counts.up_next,
+    done: counts.done,
+    dropped: counts.dropped,
+    doneByDay: [...byDay]
+      .map(([day, count]): PlanDoneDay => ({ day, count }))
+      .sort((a, b) => (a.day < b.day ? 1 : a.day > b.day ? -1 : 0)),
+    ...(nextNodeId !== undefined ? { nextNodeId } : {}),
+  };
 }
 
 /** A done node closed before `since` leaves, unless a node kept sits under it. */
