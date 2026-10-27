@@ -1,13 +1,17 @@
 /**
- * What the plan board (Plan 322 P3.3) derives from the tree it reads: the
- * cards under one plan with their phase, which column each stands in, the
- * filters, and how the Done column folds by day. Pure, so it is tested
+ * What the plan board (Plan 322 P3.3, its columns Plan 332 D4's) derives from
+ * the tree it reads: the cards under one plan with their phase, which column
+ * each stands in and why where it needs the operator, the plan's header, the
+ * Phase filter, and how the Done column folds by day. Pure, so it is tested
  * without rendering.
  */
 import {
-  planBoardColumn,
+  planBoardCards,
+  type PlanBoardCard,
   type PlanBoardColumn,
   type PlanDoneDay,
+  type PlanNeedsYouReason,
+  type PlanRootTally,
   type PlanTreeNode,
 } from '@aflow/schemas';
 
@@ -17,29 +21,30 @@ export const PLAN_BOARD_COLUMNS: ReadonlyArray<{
   /** A token from tokens.css. */
   color: string;
 }> = [
-  { id: 'next', label: 'Up next', color: 'var(--color-accent-default)' },
-  { id: 'progress', label: 'In progress', color: 'var(--color-status-running)' },
-  { id: 'decide', label: 'Needs you', color: 'var(--color-warning-default)' },
+  { id: 'needs_you', label: 'Needs you', color: 'var(--color-warning-default)' },
+  { id: 'in_flight', label: 'In flight', color: 'var(--color-status-running)' },
+  { id: 'up_next', label: 'Up next', color: 'var(--color-accent-default)' },
   { id: 'done', label: 'Done', color: 'var(--color-success-default)' },
   { id: 'dropped', label: 'Dropped', color: 'var(--color-danger-default)' },
 ];
 
-/** A node as the board places it: the phase is the node's ancestor directly under the root. */
-export interface PlanCard {
-  node: PlanTreeNode;
-  column: PlanBoardColumn;
-  phase?: PlanTreeNode;
-}
+/** Why a step stands under Needs you, as its card and the rail say it. */
+export const NEEDS_YOU_REASON_LABEL: Record<PlanNeedsYouReason, string> = {
+  decide: 'Decision',
+  blocked: 'Blocked',
+  stranded: 'Under a closed step',
+};
 
-/** Every node under `root`, parents before children, each with its column and phase. */
+/** A node as the board places it: its column, why where it needs the operator, and its phase. */
+export type PlanCard = PlanBoardCard;
+
+/**
+ * Every node under `root` in the walk's order — parents before children,
+ * siblings by position — so each column, Up next included, lists its cards in
+ * the order the loop reaches them.
+ */
 export function planCards(root: PlanTreeNode): PlanCard[] {
-  const cards: PlanCard[] = [];
-  const visit = (node: PlanTreeNode, phase: PlanTreeNode | undefined) => {
-    cards.push({ node, column: planBoardColumn(node), ...(phase ? { phase } : {}) });
-    for (const child of node.children) visit(child, phase ?? node);
-  };
-  for (const child of root.children) visit(child, undefined);
-  return cards;
+  return planBoardCards(root);
 }
 
 const PHASE_CODE = /^([A-Z]{1,3}\d+[a-z]?(?:\.\d+)*)\b/;
@@ -55,25 +60,62 @@ export function phaseLabel(title: string): string {
     : `${trimmed.slice(0, PHASE_LABEL_MAX - 1).trimEnd()}…`;
 }
 
-export type PlanActivityFilter = 'all' | 'in_flight' | 'idle';
-export type PlanDoneWindow = 'today' | 'week' | 'all';
+/** The plan's header: its steps closed of all, and the non-zero count of each column. */
+export function planHeader(tally: PlanRootTally): {
+  progress: string;
+  counts: Array<{ column: PlanBoardColumn; label: string }>;
+} {
+  const counts: Array<{ column: PlanBoardColumn; count: number; noun: string }> = [
+    { column: 'needs_you', count: tally.needsYou, noun: 'need you' },
+    { column: 'in_flight', count: tally.inFlight, noun: 'in flight' },
+    { column: 'up_next', count: tally.upNext, noun: 'up next' },
+    { column: 'done', count: tally.done, noun: 'done' },
+    { column: 'dropped', count: tally.dropped, noun: 'dropped' },
+  ];
+  return {
+    progress: `${String(tally.done + tally.dropped)} of ${String(tally.steps)} closed`,
+    counts: counts
+      .filter((c) => c.count > 0)
+      .map((c) => ({
+        column: c.column,
+        label: `${String(c.count)} ${c.column === 'needs_you' && c.count === 1 ? 'needs you' : c.noun}`,
+      })),
+  };
+}
+
+/**
+ * What holds a `waiting` step, which is the loop's on a run: the run still
+ * going, or ended with the loop yet to advance the step. Undefined otherwise.
+ */
+export function waitingLine(node: PlanTreeNode): string | undefined {
+  if (node.status !== 'waiting') return undefined;
+  const running = node.counts.inFlightRuns;
+  if (running === 0) return 'Its run ended; the loop advances it next';
+  return running === 1 ? 'A run is on it' : `${String(running)} runs are on it`;
+}
+
+/** The root's children with steps of their own: what the Phase filter offers. */
+export function planPhases(root: PlanTreeNode): PlanTreeNode[] {
+  return root.children.filter((child) => child.children.length > 0);
+}
+
+/** One phase is no choice: the filter shows only where there are two or more. */
+export function showsPhaseFilter(phases: readonly PlanTreeNode[]): boolean {
+  return phases.length >= 2;
+}
 
 export interface PlanBoardFilters {
   /** A phase's node id, or undefined for every phase. */
   phaseId?: string;
-  activity: PlanActivityFilter;
 }
 
 export function planBoardFiltered(filters: PlanBoardFilters): boolean {
-  return filters.phaseId !== undefined || filters.activity !== 'all';
+  return filters.phaseId !== undefined;
 }
 
 export function planCardMatches(card: PlanCard, filters: PlanBoardFilters): boolean {
-  if (filters.phaseId !== undefined) {
-    const inPhase = card.node.nodeId === filters.phaseId || card.phase?.nodeId === filters.phaseId;
-    if (!inPhase) return false;
-  }
-  return filters.activity === 'all' || card.node.activity === filters.activity;
+  if (filters.phaseId === undefined) return true;
+  return card.node.nodeId === filters.phaseId || card.phase?.nodeId === filters.phaseId;
 }
 
 // ============================================================================
@@ -125,28 +167,14 @@ export interface PlanDoneGroup {
   to: string;
 }
 
-/** The first day the window shows, or undefined for every day. */
-export function doneWindowStart(window: PlanDoneWindow, today: string): string | undefined {
-  if (window === 'today') return today;
-  if (window === 'week') return addDays(today, -6);
-  return undefined;
-}
-
 /**
  * The Done column's folds from the plan's done days — "Today", "Yesterday",
- * then one per earlier month ("Oct 5 – 20") — counting only days the window shows.
+ * then one per earlier month ("Oct 5 – 20").
  */
-export function planDoneGroups(
-  doneByDay: readonly PlanDoneDay[],
-  today: string,
-  window: PlanDoneWindow,
-): PlanDoneGroup[] {
-  const start = doneWindowStart(window, today);
+export function planDoneGroups(doneByDay: readonly PlanDoneDay[], today: string): PlanDoneGroup[] {
   const yesterday = addDays(today, -1);
   const groups = new Map<string, PlanDoneGroup>();
-  const days = doneByDay
-    .filter((d) => start === undefined || d.day >= start)
-    .sort((a, b) => (a.day < b.day ? 1 : -1));
+  const days = [...doneByDay].sort((a, b) => (a.day < b.day ? 1 : -1));
   for (const { day, count } of days) {
     const id = day === today ? 'today' : day === yesterday ? 'yesterday' : day.slice(0, 7);
     const held = groups.get(id);

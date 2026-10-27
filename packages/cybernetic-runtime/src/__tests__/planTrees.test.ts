@@ -11,10 +11,12 @@ import Redis from 'ioredis-mock';
 import type { Redis as RedisType } from 'ioredis';
 import {
   PLAN_NODE_GOAL_HEAD_MAX_CHARS,
+  PLAN_NODE_NOTE_HEAD_MAX_CHARS,
   PLAN_TREE_DEPTH_LIMIT,
   PlanNodeDetailOutputSchema,
   PlanNodeDetailQuerySchema,
   PlanTreeOutputSchema,
+  planBoardCards,
   planBoardColumn,
   type PlanNode,
   type PlanNodeCreateInput,
@@ -25,6 +27,7 @@ import {
   createPlanNode,
   linkPlanNode,
   readPlanNodeDetail,
+  PLAN_TREE_WALK_BOUNDS,
   readPlanTrees,
   updatePlanNode,
   type PlanWriteContext,
@@ -37,7 +40,8 @@ import {
   type PlanBoardOptions,
 } from '../plan/board.js';
 import { planGoalHead } from '../plan/store.js';
-import { mergeLinkLabel } from '../plan/stream.js';
+import { findActiveStreamNode, mergeLinkLabel } from '../plan/stream.js';
+import { orderPlanTree } from '../plan/tree.js';
 import { InMemoryPlanNodeStore } from './planStoreFake.js';
 
 const TENANT = 'a0000000-0000-4000-8000-000000000322';
@@ -293,7 +297,10 @@ describe('readPlanTrees — the board', () => {
     const roots = (await read()).roots;
 
     expect(find(roots, decide.nodeId)?.activity).toBe('idle');
-    expect(planBoardColumn(find(roots, decide.nodeId)!)).toBe('decide');
+    expect(planBoardColumn(find(roots, decide.nodeId)!, { closedAncestor: false })).toEqual({
+      column: 'needs_you',
+      reason: 'decide',
+    });
   });
 
   it('counts only active descendants toward a parent’s activity, through every level', async () => {
@@ -443,24 +450,104 @@ describe('readPlanTrees — the board', () => {
 
     const { tallies } = await read();
 
-    // P3 and building are in progress; choose and on a person need the operator.
+    // P3 and building are up next, queued in flight; choose and on a person need the operator.
     expect(tallies[0]).toMatchObject({
       rootId: root.nodeId,
       steps: 7,
+      needsYou: 2,
+      inFlight: 1,
+      upNext: 2,
       done: 1,
-      active: 2,
-      decide: 2,
       dropped: 1,
     });
     expect(tallies[1]).toEqual({
       rootId: other.nodeId,
       steps: 0,
+      needsYou: 0,
+      inFlight: 0,
+      upNext: 0,
       done: 0,
-      active: 0,
-      decide: 0,
       dropped: 0,
       doneByDay: [],
     });
+  });
+
+  it('tallies a step running and an open step under a closed one by where they stand', async () => {
+    const root = await node('Plan 320');
+    const p6 = await node('P6', { parentId: root.nodeId });
+    const under = await node('P6.a', { parentId: p6.nodeId });
+    store.seed(SPACE, { parentId: under.nodeId, title: 'P6.a.1', status: 'blocked' });
+    const running = await node('running', { parentId: root.nodeId, position: 5 });
+    store.runs.push(inFlightRun('r7', running.nodeId, 'running'));
+    await close(p6, 'done');
+
+    const { tallies } = await read();
+
+    expect(tallies[0]).toMatchObject({ steps: 4, needsYou: 2, inFlight: 1, upNext: 0, done: 1 });
+  });
+
+  it('marks Next on the step the stream walk takes, and lists Up next in the walk’s order', async () => {
+    const root = await node('Plan 315', { position: 0 });
+    const p1 = await node('P1', { parentId: root.nodeId, position: 0 });
+    await close(await node('P1.1', { parentId: p1.nodeId, position: 0 }), 'done');
+    const p1b = await node('P1.2', { parentId: p1.nodeId, position: 1 });
+    await node('P1.2.a', { parentId: p1b.nodeId, position: 1 });
+    const first = await node('P1.2.b', { parentId: p1b.nodeId, position: 0 });
+    await node('P1.3', { parentId: p1.nodeId, position: 2 });
+    const p2 = await node('P2', { parentId: root.nodeId, position: 1 });
+    await node('P2.1', { parentId: p2.nodeId });
+    store.seed(SPACE, { parentId: p2.nodeId, title: 'P2.2', status: 'blocked', position: 1 });
+    const running = await node('P2.3', { parentId: p2.nodeId, position: 2 });
+    store.runs.push(inFlightRun('r8', running.nodeId, 'running'));
+    const blockedRoot = await node('Plan 331', { position: 1 });
+    const stop = store.seed(SPACE, {
+      parentId: blockedRoot.nodeId,
+      title: 'the stop',
+      status: 'blocked',
+    });
+    await node('after the stop', { parentId: blockedRoot.nodeId, position: 3 });
+    const bareRoot = await node('Plan 329', { position: 2 });
+
+    const board = await read();
+    const walked = await store.walk(SPACE, PLAN_TREE_WALK_BOUNDS);
+    const walkOrder = orderPlanTree(walked.nodes).map((p) => p.node.nodeId);
+
+    for (const tree of board.roots) {
+      const tally = board.tallies.find((t) => t.rootId === tree.nodeId);
+      const taken = findActiveStreamNode(walked.nodes, tree.nodeId);
+      const expected = taken !== null && taken.nodeId !== tree.nodeId ? taken.nodeId : undefined;
+      expect(tally?.nextNodeId).toBe(expected);
+      const upNext = planBoardCards(tree)
+        .filter((card) => card.column === 'up_next')
+        .map((card) => card.node.nodeId);
+      expect(upNext).toEqual(walkOrder.filter((id) => upNext.includes(id)));
+    }
+    const tallyOf = (rootId: string) => board.tallies.find((t) => t.rootId === rootId);
+    expect(tallyOf(root.nodeId)?.nextNodeId).toBe(first.nodeId);
+    expect(
+      planBoardCards(board.roots[0]!)
+        .filter((card) => card.column === 'up_next')
+        .map((card) => card.node.title),
+    ).toEqual(['P1', 'P1.2', 'P1.2.b', 'P1.2.a', 'P1.3', 'P2.1']);
+    expect(tallyOf(blockedRoot.nodeId)?.nextNodeId).toBe(stop.nodeId);
+    expect(tallyOf(bareRoot.nodeId)).not.toHaveProperty('nextNodeId');
+  });
+
+  it('carries the note’s first line on each node, cut as the goal’s head is', async () => {
+    const root = await node('root', {
+      note: `  ${'n'.repeat(PLAN_NODE_NOTE_HEAD_MAX_CHARS + 20)}\nThe rest of the note.`,
+    });
+    const step = await node('step', {
+      parentId: root.nodeId,
+      note: 'Proposed: wire the board.\nMore.',
+    });
+    const bare = await node('bare', { parentId: root.nodeId });
+
+    const roots = (await read()).roots;
+
+    expect(find(roots, root.nodeId)?.noteHead).toBe('n'.repeat(PLAN_NODE_NOTE_HEAD_MAX_CHARS));
+    expect(find(roots, step.nodeId)?.noteHead).toBe('Proposed: wire the board.');
+    expect(find(roots, bare.nodeId)).not.toHaveProperty('noteHead');
   });
 
   it('counts done nodes by the day they closed in the reader’s time zone, newest first', async () => {
