@@ -226,14 +226,14 @@ async function dispatchBundleInstall(
     payloadStore?: PayloadStore | undefined;
     redis?: Redis | null | undefined;
   },
-  agentsOnly = false,
+  preserveExistingContent = false,
 ): Promise<InstallDispatchOutcome> {
   const result = await installSkillBundle(
     { tenantId: ids.tenantId, spaceId: ids.spaceId, db: tx, payloadStore: ids.payloadStore },
     entry.payload,
     {
       ...(ids.redis ? { readinessRedis: ids.redis } : {}),
-      ...(agentsOnly ? { agentsOnly: true } : {}),
+      ...(preserveExistingContent ? { preserveExistingContent: true } : {}),
     },
   );
   return {
@@ -499,13 +499,31 @@ export async function runStoreInstall(
     const dispatch = await dispatchBundleInstall(tx, entry, ids, true);
     if (dispatch.invalidations?.kind === 'bundle') {
       const installedAgents = new Set(dispatch.invalidations.result.installedAgentSlugs);
+      const installedSkills = new Set(dispatch.invalidations.result.installedSkillCatalogIds);
       const plan = deriveInstallProvenance(entry, {
         spaceId: ids.spaceId,
         actorUserId: ids.actorUserId,
         now,
       });
+      for (const member of plan.memberInstalls) {
+        if (installedSkills.has(member.catalogId)) {
+          await upsertStoreInstall(tx, member, { onConflict: 'keep' });
+        }
+      }
+      for (const claim of plan.claims) {
+        if (installedSkills.has(claim.catalogId)) await upsertStoreInstallClaim(tx, claim);
+      }
+      const installedSkillKeys = new Set(
+        plan.artifacts
+          .filter((artifact) => installedSkills.has(artifact.catalogId))
+          .map((artifact) => artifact.artifactKey),
+      );
       for (const artifact of plan.artifacts) {
-        if (artifact.artifactType === 'agent' && installedAgents.has(artifact.artifactKey)) {
+        if (
+          installedSkills.has(artifact.catalogId) ||
+          (artifact.artifactType === 'skill' && installedSkillKeys.has(artifact.artifactKey)) ||
+          (artifact.artifactType === 'agent' && installedAgents.has(artifact.artifactKey))
+        ) {
           await upsertStoreInstallArtifact(tx, artifact, { onConflict: 'keep' });
         }
       }

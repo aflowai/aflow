@@ -158,12 +158,61 @@ function projectionDocPath(skillId: string): string {
 // Tests
 // ============================================================================
 
-describe('agent-only repair', () => {
+describe('repair preserving existing content', () => {
+  beforeEach(() => {
+    mockDocs.clear();
+    capturedManifests.length = 0;
+    projectionRebuilds.length = 0;
+    applyBundledAgents.mockResolvedValue({
+      installedAgentSlugs: [],
+      skippedAgentSlugs: [],
+      warnings: [],
+    });
+  });
+
+  it('installs missing loop workflows before agents after adopting only local-publish', async () => {
+    await installSkillBundle(ctx, {
+      ...getSkillBundleEntry('local-publish')!,
+      prerequisiteBundleIds: [],
+    });
+    const publishPath = workflowDocPath(
+      getSkillCatalogEntry(getSkillBundleEntry('local-publish')!.skillCatalogIds[0]!)!.bundle
+        .workflow.slug,
+    );
+    mockDocs.set(publishPath, 'customized publish workflow');
+    const kept = new Map(mockDocs);
+    applyBundledAgents.mockImplementationOnce(async () => {
+      expect(mockDocs.has(workflowDocPath('local-pr-shepherd'))).toBe(true);
+      expect(capturedManifests.some((manifest) => manifest.skillId === 'local-pr-shepherd')).toBe(
+        true,
+      );
+      return { installedAgentSlugs: ['local-pr-shepherd'], skippedAgentSlugs: [], warnings: [] };
+    });
+    const result = await installSkillBundle(ctx, getSkillBundleEntry('coding-loop')!, {
+      preserveExistingContent: true,
+    });
+    expect(result.installedSkillCatalogIds).toContain('local-pr-shepherd');
+    expect(
+      capturedManifests.find((manifest) => manifest.skillId === 'local-pr-shepherd'),
+    ).toMatchObject({
+      origin: 'cloned',
+      sourceCatalogId: 'local-pr-shepherd',
+    });
+    expect(JSON.parse(mockDocs.get(workflowDocPath('local-pr-shepherd'))!)).toMatchObject({
+      slug: 'local-pr-shepherd',
+      status: 'approved',
+    });
+    for (const [path, content] of kept) expect(mockDocs.get(path)).toBe(content);
+  });
+
   it('creates missing agents without applying or projecting kept skills', async () => {
     const bundle = {
       ...getTestTwoSkillBundle(),
       agents: getSkillBundleEntry('coding-loop')!.agents,
     };
+    await installSkillBundle(ctx, getTestTwoSkillBundle());
+    capturedManifests.length = 0;
+    projectionRebuilds.length = 0;
     mockDocs.set('/custom-content', 'kept');
     const before = new Map(mockDocs);
     applyBundledAgents.mockResolvedValueOnce({
@@ -171,7 +220,7 @@ describe('agent-only repair', () => {
       skippedAgentSlugs: [],
       warnings: [],
     });
-    const result = await installSkillBundle(ctx, bundle, { agentsOnly: true });
+    const result = await installSkillBundle(ctx, bundle, { preserveExistingContent: true });
     expect(result.installedAgentSlugs).toEqual(['local-pr-shepherd']);
     expect(mockDocs).toEqual(before);
     expect(capturedManifests).toEqual([]);

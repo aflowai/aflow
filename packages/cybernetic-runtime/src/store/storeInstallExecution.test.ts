@@ -346,10 +346,21 @@ describe('executeStoreInstall', () => {
     const catalogId = 'coding-loop';
     const version = getCatalogEntry(catalogId)!.version;
     const kept = { ...installedRow(catalogId, version - 2, 'bundle'), skipped_version: version };
-    store.installs.push(kept);
+    const keptMember = installedRow('publish-local-changes', 1, 'skill');
+    const keptArtifact = {
+      catalog_id: 'publish-local-changes',
+      space_id: SPACE_ID,
+      artifact_type: 'skill',
+      artifact_key: 'publish-local-changes',
+      artifact_id: 'publish-local-changes',
+      installed_content_hash: 'custom-publish-hash',
+      preservation: 'replace_on_update',
+    };
+    store.installs.push(kept, keptMember);
+    store.artifacts.push(keptArtifact);
     const bundleResult = {
       bundleId: 'coding-loop',
-      installedSkillCatalogIds: [],
+      installedSkillCatalogIds: ['local-pr-shepherd'],
       skippedSkillCatalogIds: [],
       repairedProjectionSkillCatalogIds: [],
       installedApiDefinitionIds: [],
@@ -381,13 +392,29 @@ describe('executeStoreInstall', () => {
     expect(installSkillBundle).toHaveBeenCalledWith(
       expect.anything(),
       expect.anything(),
-      expect.objectContaining({ agentsOnly: true }),
+      expect.objectContaining({ preserveExistingContent: true }),
     );
-    expect(store.installs).toEqual([kept]);
-    expect(store.artifacts).toMatchObject([
-      { artifact_type: 'agent', artifact_key: 'local-pr-shepherd', catalog_id: catalogId },
-    ]);
-    expect(store.artifacts).toHaveLength(1);
+    expect(store.installs).toContainEqual(kept);
+    expect(store.installs).toContainEqual(keptMember);
+    expect(store.artifacts).toContainEqual(keptArtifact);
+    expect(store.installs).toContainEqual(
+      expect.objectContaining({ catalog_id: 'local-pr-shepherd', kind: 'skill' }),
+    );
+    expect(store.artifacts).toContainEqual(
+      expect.objectContaining({
+        artifact_type: 'agent',
+        artifact_key: 'local-pr-shepherd',
+        catalog_id: catalogId,
+      }),
+    );
+    expect(store.artifacts).toContainEqual(
+      expect.objectContaining({ artifact_type: 'skill', catalog_id: 'local-pr-shepherd' }),
+    );
+    expect(store.claims).toContainEqual({
+      catalog_id: 'local-pr-shepherd',
+      space_id: SPACE_ID,
+      claimed_by: 'bundle:coding-loop',
+    });
     if (!result.ok) throw new Error('expected success');
     expect(result.response.install.installedVersion).toBe(version - 2);
     expect(result.response.install.skippedVersion).toBe(version);

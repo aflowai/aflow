@@ -188,7 +188,7 @@ export class BundleInstallValidationError extends Error {
 export async function installSkillBundle(
   ctx: ApplyContext,
   bundle: SkillBundle,
-  opts?: { redis?: Redis; readinessRedis?: Redis; agentsOnly?: boolean },
+  opts?: { redis?: Redis; readinessRedis?: Redis; preserveExistingContent?: boolean },
 ): Promise<InstallSkillBundleResult> {
   const tenantCtx = createTenantContext(ctx.tenantId as TenantId);
 
@@ -225,7 +225,7 @@ export async function installSkillBundle(
     }
 
     // Skill loop first — keeps the existing semantics + error contracts.
-    const content = opts?.agentsOnly
+    const content = opts?.preserveExistingContent
       ? {
           ...bundle,
           apiDefinitions: [],
@@ -236,14 +236,7 @@ export async function installSkillBundle(
           artifactSeed: [],
         }
       : bundle;
-    const loopResult = opts?.agentsOnly
-      ? {
-          installedSkillCatalogIds: [],
-          skippedSkillCatalogIds: bundle.skillCatalogIds,
-          repairedProjectionSkillCatalogIds: [],
-          warnings: [],
-        }
-      : await runInstallLoop(txCtx, txRepo, bundle);
+    const loopResult = await runInstallLoop(txCtx, txRepo, bundle);
 
     const apiDefResult = await applyApiDefinitions({
       apiDefinitions: content.apiDefinitions ?? [],
