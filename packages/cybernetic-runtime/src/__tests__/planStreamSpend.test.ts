@@ -17,9 +17,8 @@ vi.mock('@aflow/database', async (importOriginal) => ({
 }));
 
 const { planNodes, sessions, workflowRuns } = await import('@aflow/database');
-const { createPlanStreamReads, wakeShareCents, RUN_WAKE_SESSION_METADATA_KEY } = await import(
-  '../plan/streamReads.js'
-);
+const { createPlanStreamReads, wakeShareCents, RUN_WAKE_SESSION_METADATA_KEY } =
+  await import('../plan/streamReads.js');
 
 const TENANT = 'a0000000-0000-4000-8000-000000000331';
 const SPACE = '5e1d0000-0000-4000-8000-000000000331';
@@ -98,7 +97,12 @@ beforeEach(() => {
 describe('a wake’s cost is charged once (Plan 331 D4)', () => {
   it('divides each wake across the nodes it started runs for', () => {
     expect(wakeShareCents([{ cents: 3000, nodes: 3 }])).toBe(1000);
-    expect(wakeShareCents([{ cents: 3000, nodes: 3 }, { cents: 500, nodes: 1 }])).toBe(1500);
+    expect(
+      wakeShareCents([
+        { cents: 3000, nodes: 3 },
+        { cents: 500, nodes: 1 },
+      ]),
+    ).toBe(1500);
     expect(wakeShareCents([{ cents: 700, nodes: 0 }])).toBe(700);
   });
 

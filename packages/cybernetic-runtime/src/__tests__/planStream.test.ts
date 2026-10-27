@@ -88,7 +88,9 @@ function reads(): PlanStreamReads {
       // The window opens where the open write stamped the node, as plan_nodes.opened_at does.
       const since = store.openedAt.get(nodeId)?.getTime();
       const served = store.runs
-        .filter((r) => r.nodeId === nodeId && (since === undefined || Date.parse(r.startedAt) > since))
+        .filter(
+          (r) => r.nodeId === nodeId && (since === undefined || Date.parse(r.startedAt) > since),
+        )
         .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
       return Promise.resolve({
         cents: served.reduce((sum, r) => sum + (costs.get(r.runId) ?? 0), 0),

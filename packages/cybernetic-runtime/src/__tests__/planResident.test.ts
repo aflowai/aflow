@@ -117,10 +117,16 @@ describe('the resident schedule (Plan 331 D1)', () => {
 
   it('is not a stream’s schedule, a schedule handing no id, nor another agent’s', () => {
     const notResident = [
-      { ...resident(), inputTemplate: planStreamScheduleInput('00000000-0000-4000-8000-000000000001') },
+      {
+        ...resident(),
+        inputTemplate: planStreamScheduleInput('00000000-0000-4000-8000-000000000001'),
+      },
       { ...resident(), inputTemplate: { input: planResidentScheduleInput().input } },
       { ...resident(), inputTemplate: { input: 'x', config: { scheduleId: SCHEDULE } } },
-      { ...resident(), inputTemplate: { input: 'x', config: { scheduleId: { $schedule: 'name' } } } },
+      {
+        ...resident(),
+        inputTemplate: { input: 'x', config: { scheduleId: { $schedule: 'name' } } },
+      },
       { ...resident(), inputTemplate: null },
       { ...resident(), targetKind: 'custom-agent', targetSystemRole: null },
     ];
@@ -139,9 +145,9 @@ describe('the resident schedule (Plan 331 D1)', () => {
   });
 
   it('counts an occurrence recorded but not yet started as in flight', async () => {
-    expect(await claimScheduleRun(redis, TENANT, { id: SCHEDULE, lastSessionId: null }, 'run-2')).toBe(
-      true,
-    );
+    expect(
+      await claimScheduleRun(redis, TENANT, { id: SCHEDULE, lastSessionId: null }, 'run-2'),
+    ).toBe(true);
     expect(
       await isScheduleRunInFlight(redis, TENANT, { id: SCHEDULE, lastSessionId: 'run-1' }),
     ).toBe(true);

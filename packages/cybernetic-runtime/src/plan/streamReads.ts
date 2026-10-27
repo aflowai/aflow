@@ -235,20 +235,20 @@ export function createPlanStreamReads(
             .from(sessions)
             .where(inArray(sessions.sessionId, wakeSessionIds));
           const reach = await tx
-              .select({
-                sessionId: wakeOf,
-                nodes: sql<number>`count(DISTINCT ${workflowRuns.planNodeId})::int`,
-              })
-              .from(workflowRuns)
-              .where(
-                and(
-                  eq(workflowRuns.spaceId, spaceId),
-                  isNotNull(workflowRuns.planNodeId),
-                  isNull(workflowRuns.evalBatchId),
-                  inArray(wakeOf, wakeSessionIds),
-                ),
-              )
-              .groupBy(wakeOf);
+            .select({
+              sessionId: wakeOf,
+              nodes: sql<number>`count(DISTINCT ${workflowRuns.planNodeId})::int`,
+            })
+            .from(workflowRuns)
+            .where(
+              and(
+                eq(workflowRuns.spaceId, spaceId),
+                isNotNull(workflowRuns.planNodeId),
+                isNull(workflowRuns.evalBatchId),
+                inArray(wakeOf, wakeSessionIds),
+              ),
+            )
+            .groupBy(wakeOf);
           const nodesOf = new Map(reach.map((row) => [row.sessionId, row.nodes]));
           wakeCents = wakeShareCents(
             costs.map((row) => ({

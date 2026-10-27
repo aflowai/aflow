@@ -19,9 +19,8 @@ vi.mock('@aflow/redis', async (importOriginal) => ({
 }));
 
 const { ScheduleEvaluator } = await import('../ScheduleEvaluator.js');
-const { requestResidentWake, residentPendingKey, scheduleStartingKey } = await import(
-  '@aflow/cybernetic-runtime'
-);
+const { requestResidentWake, residentPendingKey, scheduleStartingKey } =
+  await import('@aflow/cybernetic-runtime');
 type ResidentSchedule = import('@aflow/cybernetic-runtime').ResidentSchedule;
 type ScheduleDispatchItem = import('@aflow/database').ScheduleDispatchItem;
 
