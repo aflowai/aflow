@@ -56,7 +56,7 @@ export function codingLoopReadiness(state: CodingLoopSetupState): {
   if (!state.schedule)
     add(
       'schedule',
-      'Create an active repeating schedule for the Local PR Shepherd agent (normally */5 * * * *), with inputTemplate { "scheduleId": { "$schedule": "id" } } so each pass can renew it before its firing cap.',
+      'Create an active repeating schedule for the Local PR Shepherd agent (normally */5 * * * *), with inputTemplate { "input": "tend", "config": { "scheduleId": { "$schedule": "id" } } } so each pass can renew it before its firing cap.',
       '/triggers',
     );
   // Undefined until Plan 320 P6 supplies the folder preview declaration.
@@ -98,7 +98,7 @@ export async function readCodingLoopReadiness(
         AND a.archived_at IS NULL AND a.slug = 'local-pr-shepherd' AND s.status = 'active' AND s.kind = 'cron'
         AND (s.expires_at IS NULL OR s.expires_at > now())
         AND (s.max_firings IS NULL OR s.firing_count < s.max_firings)
-        AND s.input_template->'scheduleId' = '{"$schedule":"id"}'::jsonb) AS schedule,
+        AND s.input_template = '{"input":"tend","config":{"scheduleId":{"$schedule":"id"}}}'::jsonb) AS schedule,
       (SELECT COALESCE(s.last_error, 'The latest shepherd execution failed.')
         FROM agent_schedules s JOIN agents a ON a.id = s.target_agent_id
         AND a.space_id = s.space_id
