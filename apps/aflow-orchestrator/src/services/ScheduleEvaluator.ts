@@ -24,7 +24,7 @@ import {
 } from './SessionOrchestrator/handlers/inlineOps/scheduleTargetConfig.js';
 import type postgres from 'postgres';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import type {
   TenantId,
   SessionId,
@@ -48,6 +48,12 @@ import {
 } from '@aflow/schemas';
 import { createLeasedWorkConsumer, type LeasedWorkResult } from '@aflow/lib';
 import {
+  createResidentScheduleStore,
+  isScheduleRunInFlight,
+  markScheduleRunStarting,
+  residentWakeEnded,
+} from '@aflow/cybernetic-runtime';
+import {
   addControlMessage,
   claimControlDispatchIdempotency,
   releaseControlDispatchIdempotency,
@@ -61,8 +67,10 @@ import {
   loadAgentTargetDefinition,
   releaseScheduleDispatch,
   releaseTenantDueClaim,
+  scheduleOccurrenceRunId,
   settleTenantDue,
   SCHEDULE_DUE_POINTER,
+  type ScheduleDispatchItem,
   type ScheduleDispatchRow,
 } from '@aflow/database';
 import {
@@ -161,26 +169,7 @@ interface DueScheduleRow {
   creator_space_role: string | null;
 }
 
-interface DispatchItem extends Record<string, unknown> {
-  tenantId: string;
-  scheduleId: string;
-  scheduleName: string;
-  schemaName: string;
-  spaceId: string;
-  action: string;
-  targetKind: string | null;
-  targetSystemRole: string | null;
-  targetAgentId: string | null;
-  agentVersion: string | null;
-  targetSessionId: string | null;
-  targetStepExecutionId: string | null;
-  resolvedInput: Record<string, unknown>;
-  firingCount: number;
-  idempotencyKey: string;
-  creatorUserId: string | null;
-  creatorTenantRole: string | null;
-  creatorSpaceRole: string | null;
-}
+type DispatchItem = ScheduleDispatchItem;
 
 const SCHEDULE_COLUMNS = `
   id, space_id, name, action,
@@ -517,6 +506,18 @@ export class ScheduleEvaluator {
       return false;
     }
 
+    if (
+      schedule.action === 'start_run' &&
+      schedule.kind === 'cron' &&
+      (await isScheduleRunInFlight(this.redis, schedule.tenant_id, {
+        id: schedule.id,
+        lastSessionId: schedule.last_session_id,
+      }))
+    ) {
+      await this.skipOccurrence(schedule);
+      return false;
+    }
+
     let resolvedInput: Record<string, unknown>;
     try {
       const ctx: InputResolutionContext = { schedule: { id: schedule.id }, now: new Date() };
@@ -534,23 +535,75 @@ export class ScheduleEvaluator {
 
     const { nextFireAt, status } = nextFireState(schedule, newFiringCount);
 
-    return this.sqlClient.begin(async (tx) => {
+    const key = await this.sqlClient.begin(async (tx) => {
       const firedCount = await advanceScheduleInTx(
         tx,
         schedule,
         { nextFireAt, status },
         dueGuard(schedule),
       );
-      if (firedCount === null) return false;
-      const key = occurrenceKey(schedule.id, firedCount);
+      if (firedCount === null) return null;
+      const occurrence = occurrenceKey(schedule.id, firedCount);
       await insertScheduleDispatch(tx, {
-        idempotencyKey: key,
+        idempotencyKey: occurrence,
         tenantId: schedule.tenant_id,
         scheduleId: schedule.id,
-        dispatch: buildDispatchItem(schedule, firedCount, key, resolvedInput),
+        dispatch: buildDispatchItem(schedule, firedCount, occurrence, resolvedInput),
       });
-      return true;
+      return occurrence;
     });
+    if (key === null) return false;
+    // Held until the run's own state exists, so the next occurrence sees it in flight.
+    await markScheduleRunStarting(
+      this.redis,
+      schedule.tenant_id,
+      schedule.id,
+      scheduleOccurrenceRunId(key),
+    );
+    return true;
+  }
+
+  /**
+   * An occurrence whose schedule's previous run has not ended (Plan 331 D1):
+   * recorded as skipped and not dispatched, and the schedule moves to its next
+   * time from now, so nothing queues behind the run and nothing catches up
+   * after it. A skip is not a firing and spends none of the schedule's cap.
+   */
+  private async skipOccurrence(schedule: DueScheduleRow): Promise<void> {
+    const nextFireAt =
+      schedule.cron_expression !== null
+        ? getNextCronFireTime(schedule.cron_expression, schedule.timezone)
+        : null;
+    await this.sqlClient.unsafe(
+      `UPDATE "${schedule.tenant_schema}".agent_schedules
+          SET next_fire_at = $1::timestamptz,
+              metadata = jsonb_set(
+                coalesce(metadata, '{}'::jsonb),
+                '{overlap}',
+                jsonb_build_object(
+                  'skipped', coalesce((metadata -> 'overlap' ->> 'skipped')::int, 0) + 1,
+                  'lastSkippedAt', to_jsonb(NOW()),
+                  'inFlightSessionId', to_jsonb($2::text)
+                )
+              ),
+              updated_at = NOW()
+        WHERE id = $3::uuid
+          AND firing_count = $4::int
+          AND status = $5
+          AND next_fire_at IS NOT DISTINCT FROM $6::timestamptz`,
+      [
+        nextFireAt,
+        schedule.last_session_id,
+        schedule.id,
+        schedule.firing_count,
+        schedule.status,
+        schedule.next_fire_at_text,
+      ],
+    );
+    getOrchestratorLogger().info(
+      `[ScheduleEvaluator] Skipped an occurrence of "${schedule.name}": its previous run ${String(schedule.last_session_id)} has not ended`,
+      { scheduleId: schedule.id, tenantId: schedule.tenant_id },
+    );
   }
 
   /** Advance past an occurrence that will never be dispatched, recording why. */
@@ -739,7 +792,7 @@ export class ScheduleEvaluator {
       };
     }
 
-    const runId = occurrenceRunId(item.idempotencyKey);
+    const runId = scheduleOccurrenceRunId(item.idempotencyKey) as SessionId;
     // The drain is at-least-once: it can die between the XADD and the delete.
     // The claim is what makes a redelivery harmless — the loser learns which run
     // the winner started and retires the occurrence instead of starting another.
@@ -974,7 +1027,7 @@ export class ScheduleEvaluator {
         RETURNING session_id::text AS session_id`,
         [run.runId, run.status],
       );
-      if (claimed.length === 0) return 0;
+      if (claimed.length === 0) return null;
 
       const rows = await tx.unsafe<DueScheduleRow[]>(
         `SELECT ${SCHEDULE_COLUMNS}
@@ -1050,8 +1103,10 @@ export class ScheduleEvaluator {
 
       return count;
     });
+    if (recorded === null) return 0;
 
-    if (recorded > 0) {
+    const woke = await this.answerResidentWakeEnd(run);
+    if (recorded > 0 || woke) {
       // A nudge, not a wait. The occurrences are already durable and the drain
       // has its own cadence, so this only trims latency — and awaiting it here
       // would couple applying one run's terminal state to draining the whole
@@ -1069,6 +1124,32 @@ export class ScheduleEvaluator {
       });
     }
     return recorded;
+  }
+
+  /**
+   * A run that ended may be the space's resident wake (Plan 331 D4): its end
+   * gives the schedule back, and where an event set the space's pending mark
+   * while it ran, starts the one wake that answers it. Best effort, after the
+   * completion occurrences are durable: a mark left unanswered is answered by
+   * the next heartbeat, which reads the same board.
+   */
+  private async answerResidentWakeEnd(run: TerminalRunFacts): Promise<boolean> {
+    if (run.target.kind !== 'platform-role' || run.target.systemRole !== 'cybernetic-helmsman') {
+      return false;
+    }
+    try {
+      const ended = await residentWakeEnded(
+        { redis: this.redis, schedules: createResidentScheduleStore(this.db) },
+        { tenantId: run.tenantId, spaceId: run.spaceId, sessionId: run.runId },
+      );
+      return ended === 'started';
+    } catch (err) {
+      logOrchestratorError('[ScheduleEvaluator] answering the resident wake end failed', err, {
+        tenantId: run.tenantId,
+        runId: run.runId,
+      });
+      return false;
+    }
   }
 
   // ============================================================================
@@ -1198,25 +1279,6 @@ function buildDispatchItem(
     creatorSpaceRole: schedule.creator_space_role,
   };
 }
-
-/**
- * The run id for one occurrence, derived from the occurrence itself.
- *
- * A retry after an ambiguous emit must present the same id or it cannot be
- * deduplicated: `addControlMessage` is a single XADD, and a failover that drops
- * the reply after the server applied it looks exactly like a failure. Minting a
- * fresh id per attempt turns that ambiguity into two runs for one occurrence —
- * `startRun` deduplicates on the run id and has nothing else to go on.
- */
-function occurrenceRunId(idempotencyKey: string): SessionId {
-  const h = createHash('sha1').update(SCHEDULE_RUN_NAMESPACE).update(idempotencyKey).digest();
-  h[6] = (h[6]! & 0x0f) | 0x50;
-  h[8] = (h[8]! & 0x3f) | 0x80;
-  const hex = h.subarray(0, 16).toString('hex');
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}` as SessionId;
-}
-
-const SCHEDULE_RUN_NAMESPACE = 'aflow:schedule-occurrence';
 
 /** Names one firing of one schedule. The count comes from the advance itself. */
 function occurrenceKey(scheduleId: string, firedCount: number): string {

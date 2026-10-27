@@ -20,6 +20,13 @@ import type {
   PlanTreeOutput,
 } from '@aflow/schemas';
 
+interface Mutation {
+  path: (input: { nodeId: string }) => string;
+  method: string;
+  serialize: (input: Record<string, unknown>) => string;
+  invalidate: unknown[];
+}
+
 interface Answer {
   data?: unknown;
   error?: Error | null;
@@ -36,14 +43,9 @@ const recorded = vi.hoisted(() => ({
   findings: {} as Record<string, Answer>,
   runPages: {} as Record<string, Answer>,
   linkQueries: [] as Array<{ key: unknown[]; path: string }>,
-  mutation: undefined as
-    | {
-        path: (input: { nodeId: string }) => string;
-        method: string;
-        serialize: (input: Record<string, unknown>) => string;
-        invalidate: unknown[];
-      }
-    | undefined,
+  mutation: undefined as Mutation | undefined,
+  /** The open write's mutation: Approve and Resume (Plan 332 D6). */
+  openMutation: undefined as Mutation | undefined,
   mutateAsync: vi.fn(),
   narrow: false,
 }));
@@ -161,8 +163,9 @@ vi.mock('../hooks/useApiQuery.js', () => ({
       refetch: recorded.detailRefetch,
     };
   },
-  useApiMutation: (options: typeof recorded.mutation) => {
-    recorded.mutation = options;
+  useApiMutation: (options: Mutation) => {
+    if (options.path({ nodeId: 'probe' }).endsWith('/open')) recorded.openMutation = options;
+    else recorded.mutation = options;
     return { mutateAsync: recorded.mutateAsync };
   },
 }));
@@ -298,6 +301,16 @@ const PLAN: PlanTreeOutput = {
   ],
 };
 
+/** The board with one step's status changed. */
+function withStatus(nodeId: string, status: PlanTreeNode['status']): PlanTreeOutput {
+  const restatus = (node: PlanTreeNode): PlanTreeNode => ({
+    ...node,
+    ...(node.nodeId === nodeId ? { status } : {}),
+    children: node.children.map(restatus),
+  });
+  return { ...PLAN, roots: PLAN.roots.map(restatus) };
+}
+
 /** A node as the rail reads it in full. */
 function fullNode(nodeId: string, title: string, extra: Partial<PlanNode> = {}): PlanNode {
   return {
@@ -426,6 +439,7 @@ beforeEach(() => {
   recorded.runPages = {};
   recorded.linkQueries = [];
   recorded.mutation = undefined;
+  recorded.openMutation = undefined;
   recorded.mutateAsync.mockReset();
   recorded.narrow = false;
   container = document.createElement('div');
@@ -857,6 +871,55 @@ describe('SpacePlanPage — the operator’s writes from the rail', () => {
 
     expect(rail().textContent).toContain('Permission denied');
     expect(recorded.refetch).not.toHaveBeenCalled();
+  });
+
+  it('approves a blocked step through the open write, the operator’s reason its note’s first line', async () => {
+    recorded.mutateAsync.mockResolvedValue({ node: {} });
+    recorded.details[ARTICLE] = detail(
+      fullNode(ARTICLE, 'Write the help article', {
+        parentId: R322,
+        status: 'blocked',
+        revision: 4,
+        note: 'Proposed from the merged plan document; awaits the operator’s approval.',
+      }),
+    );
+    await render({ data: withStatus(ARTICLE, 'blocked') });
+    await click(card(ARTICLE));
+
+    await click(button(rail(), 'Approve'));
+    await type(rail(), '  Go ahead.  ');
+    await click(button(rail(), 'Approve'));
+
+    expect(recorded.mutateAsync).toHaveBeenCalledWith({
+      nodeId: ARTICLE,
+      expectedRevision: 4,
+      why: 'Go ahead.',
+    });
+    const open = recorded.openMutation!;
+    expect(open.method).toBe('PATCH');
+    expect(open.path({ nodeId: ARTICLE })).toBe(`/spaces/${SPACE_ID}/plan/nodes/${ARTICLE}/open`);
+    expect(
+      JSON.parse(open.serialize({ nodeId: ARTICLE, expectedRevision: 4, why: 'Go ahead.' })),
+    ).toEqual({ expectedRevision: 4, why: 'Go ahead.' });
+    expect(open.invalidate).toEqual([['space', SPACE_ID, 'plan']]);
+  });
+
+  it('calls it Resume on a step the stream stopped, and offers neither on an open one', async () => {
+    recorded.details[ARTICLE] = detail(
+      fullNode(ARTICLE, 'Write the help article', {
+        parentId: R322,
+        status: 'blocked',
+        note: 'Blocked: 3 rounds ended without a pull request.',
+      }),
+    );
+    await render({ data: withStatus(ARTICLE, 'blocked') });
+    await click(card(ARTICLE));
+    expect(button(rail(), 'Resume')).toBeTruthy();
+
+    await click(card(BOARD));
+    expect([...rail().querySelectorAll('button')].map((b) => b.textContent)).not.toContain(
+      'Approve',
+    );
   });
 
   it('holds the write until the step is read, and offers none on a step the read finds closed', async () => {

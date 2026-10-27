@@ -48,6 +48,7 @@ import {
   emitRunUpdated,
   resolveEffectiveConcurrencyPolicy,
   createPlanNodeStore,
+  RUN_WAKE_SESSION_METADATA_KEY,
 } from '@aflow/cybernetic-runtime';
 import { getOrchestratorLogger } from '../../../../../../lib/orchestratorLogger.js';
 import type { InlineHandlerArgs } from '../../types.js';
@@ -640,17 +641,24 @@ export async function handleWorkflowRunStart(
   const now = new Date();
   // 104d Phase 3: populate initiatedByUserId from session's createdBy.
   let initiatedByUserId: string | undefined;
+  let startedByWake = false;
   try {
     const { getSessionState: getState } = await import('@aflow/redis');
     const sessionState = await getState(args.redis, args.context.tenantId, drivingSessionId);
     if (sessionState?.createdBy) {
       initiatedByUserId = sessionState.createdBy;
     }
+    startedByWake = sessionState?.trigger === 'schedule';
   } catch {
     // Best effort — NULL is acceptable for system-initiated runs
   }
 
   const initialMetadata: Record<string, unknown> = {};
+  // A run a scheduled wake started for a node wakes the resident when it ends,
+  // and counts toward the node's spend with that wake (Plan 331 D4).
+  if (startedByWake && planNodeId !== undefined) {
+    initialMetadata[RUN_WAKE_SESSION_METADATA_KEY] = drivingSessionId;
+  }
   initialMetadata['contractValidity'] = {
     status: validity.status,
     artifactHash: contractArtifactHash,

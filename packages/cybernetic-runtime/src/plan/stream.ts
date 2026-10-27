@@ -1,13 +1,15 @@
 /**
- * A stream continues on a schedule (Plan 322 P2b). A firing is a Helmsman run
- * told only to continue the stream under a root; `plan.node.next` is what it
- * asks first, and this is the one authority over the answer. The decision is
- * read from records — the active node, its runs, its links, the space's
- * attention items and its pull request as GitHub answers — by rules, so no
- * firing decides by how its prompt reads. It writes nothing to the plan and
- * starts nothing — the firing acts on the decision — except that a `continue`
- * claims the state it was decided on, so two firings that read alike cannot
- * both commission.
+ * A stream continues on a schedule (Plan 322 P2b), and the space's resident
+ * takes the whole board (Plan 331 D2). A wake is a Helmsman run whose first
+ * call is `plan.node.next`, and this is the one authority over the answer:
+ * with a root, that stream's decision; with none, every open root in position
+ * order, each decided as one stream is, the decisions ranked finish before
+ * start across the board (D3). The decision is read from records — the
+ * active node, its runs, its links, its spend, the space's attention items
+ * and its pull request as GitHub answers — by rules, so no wake decides by
+ * how its prompt reads. It writes nothing to the plan and starts nothing —
+ * the wake acts on the decision — except that a `continue` claims the state
+ * it was decided on, so two wakes that read alike cannot both commission.
  */
 import type { Redis } from 'ioredis';
 import {
@@ -17,17 +19,21 @@ import {
   PLAN_NODE_RUNS_LIMIT,
   PLAN_STREAM_COMMISSION_SLUG,
   PLAN_STREAM_PUBLICATION_SLUG,
+  type PlanBoardDecision,
+  type PlanBoardNext,
   type PlanNode,
   type PlanNodeLink,
   type PlanNodeListTruncation,
   type PlanNodeNextInput,
-  type PlanNodeNextOutput,
   type PlanNodeRun,
   type PlanNodeSummary,
+  type PlanStreamAnswer,
   type PlanStreamBriefNode,
+  type PlanStreamCommission,
   type PlanStreamNode,
   type PlanStreamPullRequestAnswer,
   type PlanStreamRetry,
+  type PlanStreamSpend,
   type PlanStreamStopCause,
   type PlanStreamWaitCause,
 } from '@aflow/schemas';
@@ -61,12 +67,35 @@ export interface PlanPublicationOutcome {
   reviewRunId?: string;
 }
 
+/** What a completed commission made, as its publication takes it. */
+export interface PlanCommissionOutcome {
+  patchRef?: string;
+  baseSha?: string;
+  mergeFrom?: string;
+  bindingId?: string;
+}
+
+/** What the runs serving a node cost since a person last opened it (Plan 331 D4). */
+export interface PlanNodeSpendRead {
+  cents: number;
+  /** The runs serving the node in that span, newest first. */
+  runIds: string[];
+  /** The scheduled Helmsman sessions that started them, whose cost `cents` includes. */
+  wakeSessionIds: string[];
+}
+
 /** The reads a firing makes past the plan's own tables. */
 export interface PlanStreamReads {
   /** The node's own commissions and publications, newest first, at most `limit`. */
   roundsOf(spaceId: string, nodeId: string, limit: number): Promise<PlanStreamRun[]>;
   /** What a completed publication promoted; null where it cannot be read. */
   publicationOutcome(spaceId: string, runId: string): Promise<PlanPublicationOutcome | null>;
+  /** What a completed commission made; null where it cannot be read. */
+  commissionOutcome(spaceId: string, runId: string): Promise<PlanCommissionOutcome | null>;
+  /** The publications that name this commission run as their `commission`, whatever they serve. */
+  publicationsOf(spaceId: string, commissionRunId: string): Promise<PlanStreamRun[]>;
+  /** The spend of the runs serving the node since a person last opened it. */
+  spendOf(spaceId: string, nodeId: string): Promise<PlanNodeSpendRead>;
   /** The space's pending `workflow_run_paused` attention items about runs serving these nodes. */
   pausedItemsServing(spaceId: string, nodeIds: readonly string[]): Promise<number>;
 }
@@ -181,7 +210,14 @@ export interface PlanStreamFacts {
   rounds: readonly PlanStreamRun[];
   /** What the newest round since the node's last write promoted, where it is a completed publication. */
   publication?: PlanPublicationOutcome | null;
+  /** What the newest round since the node's last write made, where it is a completed commission. */
+  commission?: PlanCommissionOutcome | null;
+  /** The publications naming that commission, whatever node they serve. */
+  commissionPublications?: readonly PlanStreamRun[];
   attempts: number;
+  /** What the node spent since a person last opened it, where it was read. */
+  spend?: PlanNodeSpendRead;
+  spendCents: number;
 }
 
 const ENDED = new Set(['completed', 'failed', 'cancelled']);
@@ -242,7 +278,7 @@ function wait(
   cause: PlanStreamWaitCause,
   reason: string,
   node?: PlanNode | PlanNodeSummary,
-): PlanNodeNextOutput {
+): PlanStreamAnswer {
   return { decision: 'wait', cause, reason, ...(node ? { node: streamNode(node) } : {}) };
 }
 
@@ -252,7 +288,12 @@ function blockedNote(node: PlanNode, why: string): string {
   return note.slice(0, PLAN_NODE_PROSE_MAX_CHARS);
 }
 
-function stop(node: PlanNode, cause: PlanStreamStopCause, why: string): PlanNodeNextOutput {
+function stop(
+  node: PlanNode,
+  cause: PlanStreamStopCause,
+  why: string,
+  spend?: PlanStreamSpend,
+): PlanStreamAnswer {
   return {
     decision: 'stop',
     cause,
@@ -263,6 +304,90 @@ function stop(node: PlanNode, cause: PlanStreamStopCause, why: string): PlanNode
       expectedRevision: node.revision,
       status: 'blocked',
       note: blockedNote(node, why),
+    },
+    ...(spend ? { spend } : {}),
+  };
+}
+
+/** How many runs a stop's note names; the decision's `spend` carries them all. */
+const NAMED_RUNS = 5;
+
+function namedRuns(runIds: readonly string[]): string {
+  const named = runIds.slice(0, NAMED_RUNS).join(', ');
+  const more = runIds.length - NAMED_RUNS;
+  return more > 0 ? `${named} and ${String(more)} more` : named;
+}
+
+function cents(value: number): string {
+  return `$${(value / 100).toFixed(2)}`;
+}
+
+/** The node's runs cost its ceiling or more since a person last opened it (Plan 331 D4). */
+function spendStop(facts: PlanStreamFacts): PlanStreamAnswer | null {
+  const { spend } = facts;
+  if (!spend || spend.cents < facts.spendCents) return null;
+  return stop(
+    facts.node,
+    'spend_spent',
+    `Its runs cost ${cents(spend.cents)} since a person last opened it, at or past its ${cents(facts.spendCents)} ceiling: ${namedRuns(spend.runIds)}${spend.wakeSessionIds.length > 0 ? `, started by wake ${namedRuns(spend.wakeSessionIds)}` : ''}.`,
+    {
+      cents: spend.cents,
+      ceilingCents: facts.spendCents,
+      runIds: spend.runIds,
+      wakeSessionIds: spend.wakeSessionIds,
+    },
+  );
+}
+
+/**
+ * A completed commission is published by the wake that reads it (Plan 331
+ * D3.1): the run that started it has ended by the time it completes.
+ */
+function answerCompletedCommission(facts: PlanStreamFacts, latest: PlanStreamRun): RoundAnswer {
+  const { node } = facts;
+  const ran = `${latest.slug} run ${latest.runId}`;
+  const outcome = facts.commission;
+  if (outcome === null || outcome === undefined) {
+    return {
+      kind: 'decided',
+      output: wait('read_failed', `What the ${ran} made could not be read.`, node),
+    };
+  }
+  const elsewhere = facts.commissionPublications?.[0];
+  if (elsewhere) {
+    return {
+      kind: 'decided',
+      output: wait(
+        'unknown_state',
+        `The ${ran} was published by ${elsewhere.slug} run ${elsewhere.runId}, which does not serve this node; a person links its pull request to the node.`,
+        node,
+      ),
+    };
+  }
+  if (outcome.patchRef === undefined) {
+    return {
+      kind: 'decided',
+      output: stop(
+        node,
+        'commission_unchanged',
+        `The ${ran} completed with no change to publish; a person reads it and says what the node needs.`,
+      ),
+    };
+  }
+  const commission: PlanStreamCommission = {
+    commission: latest.runId,
+    patchRef: outcome.patchRef,
+    ...(outcome.baseSha !== undefined ? { baseSha: outcome.baseSha } : {}),
+    ...(outcome.mergeFrom !== undefined ? { mergeFrom: outcome.mergeFrom } : {}),
+    ...(outcome.bindingId !== undefined ? { bindingId: outcome.bindingId } : {}),
+  };
+  return {
+    kind: 'decided',
+    output: {
+      decision: 'publish',
+      reason: `The ${ran} completed with a change and no publication of it has started; publish it under its summary.`,
+      node: briefNode(node),
+      commission,
     },
   };
 }
@@ -290,7 +415,7 @@ function attemptsUsed(facts: PlanStreamFacts): number {
 type RoundAnswer =
   | { kind: 'fresh' }
   | { kind: 'retry'; retry: PlanStreamRetry }
-  | { kind: 'decided'; output: PlanNodeNextOutput };
+  | { kind: 'decided'; output: PlanStreamAnswer };
 
 function answerLatestRound(facts: PlanStreamFacts): RoundAnswer {
   const { node } = facts;
@@ -311,14 +436,7 @@ function answerLatestRound(facts: PlanStreamFacts): RoundAnswer {
           retry: { cause: 'commission_cancelled', runId: latest.runId, slug: latest.slug },
         };
       case 'completed':
-        return {
-          kind: 'decided',
-          output: wait(
-            'awaiting_publication',
-            `The ${ran} completed and no publication of it has started; the conversation that started it publishes it.`,
-            node,
-          ),
-        };
+        return answerCompletedCommission(facts, latest);
     }
   } else {
     switch (latest.status) {
@@ -389,11 +507,13 @@ function latestRoundSinceWrite(
  * `wait` while its own work is in flight, or the read of the nodes under it
  * stopped at a bound before it could show none is; a merge of its newest pull request
  * nobody has acted on is recorded next; then `wait` while that pull request
- * is open or a read failed; `stop` where its pull request was closed unmerged, its push was
- * declined or its attempts are spent; `continue` where its next step is the
- * work or its last round failed within the budget. Anything else is `wait`.
+ * is open or a read failed; `stop` where its pull request was closed unmerged, its spend
+ * reached its ceiling, its push was declined, a commission made no change or its attempts
+ * are spent; `publish` where its last commission completed with a change nothing published;
+ * `continue` where its next step is the work or its last round failed within the budget.
+ * Anything else is `wait`.
  */
-export function decideStreamFiring(facts: PlanStreamFacts): PlanNodeNextOutput {
+export function decideStreamFiring(facts: PlanStreamFacts): PlanStreamAnswer {
   const { node } = facts;
   if (node.status === 'blocked') {
     return wait('blocked', `"${node.title}" is blocked, waiting on a person.`, node);
@@ -498,6 +618,10 @@ export function decideStreamFiring(facts: PlanStreamFacts): PlanNodeNextOutput {
     }
   }
 
+  // Recording a merge costs nothing and finishes work; anything after it spends.
+  const spent = spendStop(facts);
+  if (spent) return spent;
+
   const round = answerLatestRound(facts);
   if (round.kind === 'decided') return round.output;
   const used = attemptsUsed(facts);
@@ -513,7 +637,7 @@ export function decideStreamFiring(facts: PlanStreamFacts): PlanNodeNextOutput {
     reason:
       round.kind === 'retry'
         ? `The ${round.retry.slug} run ${round.retry.runId} ended at ${round.retry.cause}; commission the node again, briefed from that run.`
-        : `No commission of "${node.title}" has started since it was last written; its next step is the work.`,
+        : `No commission of "${node.title}" has started since it was last written; its next step is the work, based on origin/<base> — never on the connected folder.`,
     node: briefNode(node),
     ...(round.kind === 'retry' ? { retry: round.retry } : {}),
     attemptsUsed: used,
@@ -525,21 +649,21 @@ export function decideStreamFiring(facts: PlanStreamFacts): PlanNodeNextOutput {
 // plan.node.next
 // ============================================================================
 
-/** Read what the decision turns on, and decide. */
-export async function nextInPlanStream(
+type StreamRoot = Pick<PlanNodeSummary, 'nodeId' | 'title' | 'status'>;
+
+/** A stream's decision, and for a `continue` the claim it would take. */
+interface RootDecision {
+  answer: PlanStreamAnswer;
+  claim?: { key: string; node: PlanNode };
+}
+
+/** Read what one stream's decision turns on, and decide; nothing is claimed here. */
+async function decideRoot(
   ctx: PlanStreamContext,
+  root: StreamRoot,
   input: PlanNodeNextInput,
-): Promise<PlanOpResult<{ output: PlanNodeNextOutput }>> {
-  const root = await ctx.store.find(ctx.spaceId, input.rootNodeId);
-  if (!root) {
-    return {
-      ok: false,
-      code: 'PLAN_NODE_NOT_FOUND',
-      message: `No plan node "${input.rootNodeId}" in this space to continue as a stream. The schedule names a node that is gone: the operator removes or changes it.`,
-      details: { nodeId: input.rootNodeId },
-    };
-  }
-  const decided = (output: PlanNodeNextOutput) => ({ ok: true as const, output });
+): Promise<PlanOpResult<RootDecision>> {
+  const decided = (answer: PlanStreamAnswer) => ({ ok: true as const, answer });
   if (isClosedPlanNodeStatus(root.status)) {
     return decided(
       wait(
@@ -575,6 +699,20 @@ export async function nextInPlanStream(
       ),
     );
   }
+  // Nothing past this line is read for a node no rule would act on.
+  if (opened.node.status === 'blocked' || opened.node.kind === 'decide') {
+    return decided(
+      decideStreamFiring({
+        node: opened.node,
+        inFlight: [],
+        pausedItems: 0,
+        mergeJudged: false,
+        rounds: [],
+        attempts: input.attempts,
+        spendCents: input.spendCents,
+      }),
+    );
+  }
 
   // Every status: a run serving a node closed under the active one is still in
   // flight. Where the walk's bounds cut it short, the runs below are unread, and
@@ -584,16 +722,25 @@ export async function nextInPlanStream(
     ...PLAN_TREE_WALK_BOUNDS,
   });
   const servedNodeIds = subtree.nodes.map((n) => n.nodeId);
-  const [rounds, inFlight, pausedItems] = await Promise.all([
+  const [rounds, inFlight, pausedItems, spend] = await Promise.all([
     ctx.reads.roundsOf(ctx.spaceId, active.nodeId, PLAN_STREAM_ROUNDS_LIMIT),
     ctx.store.listRunsServing(ctx.spaceId, servedNodeIds, PLAN_NODE_RUNS_LIMIT),
     ctx.reads.pausedItemsServing(ctx.spaceId, servedNodeIds),
+    ctx.reads.spendOf(ctx.spaceId, active.nodeId),
   ]);
   const latest = latestRoundSinceWrite(rounds, opened.node.updatedAt);
+  const completed = latest?.status === 'completed' ? latest : undefined;
   const publication =
-    latest?.slug === PLAN_STREAM_PUBLICATION_SLUG && latest.status === 'completed'
-      ? await ctx.reads.publicationOutcome(ctx.spaceId, latest.runId)
+    completed?.slug === PLAN_STREAM_PUBLICATION_SLUG
+      ? await ctx.reads.publicationOutcome(ctx.spaceId, completed.runId)
       : undefined;
+  const [commission, commissionPublications] =
+    completed?.slug === PLAN_STREAM_COMMISSION_SLUG
+      ? await Promise.all([
+          ctx.reads.commissionOutcome(ctx.spaceId, completed.runId),
+          ctx.reads.publicationsOf(ctx.spaceId, completed.runId),
+        ])
+      : [undefined, undefined];
   // Read by kind and by key, never from `opened.links`, a page that a node with
   // many links would carry these records past.
   const pullRequestLink =
@@ -602,7 +749,7 @@ export async function nextInPlanStream(
     pullRequestLink !== undefined &&
     (await ctx.store.findLink(ctx.spaceId, active.nodeId, 'merge', pullRequestLink.ref)) !== null;
 
-  const decision = decideStreamFiring({
+  const answer = decideStreamFiring({
     node: opened.node,
     mergeJudged,
     inFlight: inFlight.runs,
@@ -612,16 +759,130 @@ export async function nextInPlanStream(
     ...(input.pullRequest ? { pullRequest: input.pullRequest } : {}),
     rounds,
     ...(publication !== undefined ? { publication } : {}),
+    ...(commission !== undefined ? { commission } : {}),
+    ...(commissionPublications !== undefined ? { commissionPublications } : {}),
     attempts: input.attempts,
+    spend,
+    spendCents: input.spendCents,
   });
-  if (decision.decision !== 'continue') return decided(decision);
-  const claim = streamClaimKey(ctx, opened.node, rounds, pullRequestLink);
-  if (await claimStreamState(ctx, claim)) return decided(decision);
-  return decided(
-    wait(
-      'claimed',
-      `Another firing decided to continue "${opened.node.title}" on the state this one read, and is commissioning it.`,
-      opened.node,
-    ),
+  if (answer.decision !== 'continue') return decided(answer);
+  return {
+    ok: true,
+    answer,
+    claim: { key: streamClaimKey(ctx, opened.node, rounds, pullRequestLink), node: opened.node },
+  };
+}
+
+function claimedWait(node: PlanNode): PlanStreamAnswer {
+  return wait(
+    'claimed',
+    `Another firing decided to continue "${node.title}" on the state this one read, and is commissioning it.`,
+    node,
   );
+}
+
+/** One stream: read what its decision turns on, and decide. */
+export async function nextInPlanStream(
+  ctx: PlanStreamContext,
+  rootNodeId: string,
+  input: PlanNodeNextInput,
+): Promise<PlanOpResult<{ output: PlanStreamAnswer }>> {
+  const root = await ctx.store.find(ctx.spaceId, rootNodeId);
+  if (!root) {
+    return {
+      ok: false,
+      code: 'PLAN_NODE_NOT_FOUND',
+      message: `No plan node "${rootNodeId}" in this space to continue as a stream. The schedule names a node that is gone: the operator removes or changes it.`,
+      details: { nodeId: rootNodeId },
+    };
+  }
+  const decided = await decideRoot(ctx, root, input);
+  if (!decided.ok) return decided;
+  if (!decided.claim) return { ok: true, output: decided.answer };
+  const claimed = await claimStreamState(ctx, decided.claim.key);
+  return { ok: true, output: claimed ? decided.answer : claimedWait(decided.claim.node) };
+}
+
+/**
+ * Where a decision stands in the wake's order (Plan 331 D3): finish before
+ * start — a merge recorded, a commission published, a pull request read, a
+ * stop written, a failed round re-commissioned — and only then new work.
+ */
+export function boardRank(answer: PlanStreamAnswer): number {
+  switch (answer.decision) {
+    case 'record_merge':
+      return 0;
+    case 'publish':
+      return 1;
+    case 'read_pull_request':
+      return 2;
+    case 'stop':
+      return 3;
+    case 'continue':
+      return answer.retry ? 4 : 5;
+    case 'wait':
+      return 6;
+  }
+}
+
+/**
+ * The whole board (Plan 331 D2): every open root in position order — the
+ * operator's priority — decided as one stream is. The decisions that are not
+ * `wait` come back ranked finish-first, the root order breaking ties, at most
+ * `input.decisions` of them; a `continue` is claimed only once it is among
+ * those, so a decision left to the next wake holds nothing back.
+ */
+export async function nextOnPlanBoard(
+  ctx: PlanStreamContext,
+  input: PlanNodeNextInput,
+): Promise<PlanOpResult<{ output: PlanBoardNext }>> {
+  const open = await ctx.store.walk(ctx.spaceId, {
+    statuses: OPEN_PLAN_NODE_STATUSES,
+    ...PLAN_TREE_WALK_BOUNDS,
+  });
+  const roots = open.nodes.filter((node) => node.parentId === null).sort(bySiblingOrder);
+
+  const candidates: Array<RootDecision & { root: PlanBoardDecision['root']; order: number }> = [];
+  const waits = new Map<PlanStreamWaitCause, number>();
+  const waited = (cause: PlanStreamWaitCause) => waits.set(cause, (waits.get(cause) ?? 0) + 1);
+  for (const [order, root] of roots.entries()) {
+    const decided = await decideRoot(ctx, root, input);
+    if (!decided.ok) return decided;
+    if (decided.answer.decision === 'wait') {
+      waited(decided.answer.cause);
+      continue;
+    }
+    candidates.push({
+      ...decided,
+      root: { nodeId: root.nodeId, title: root.title, position: root.position },
+      order,
+    });
+  }
+  candidates.sort((a, b) => boardRank(a.answer) - boardRank(b.answer) || a.order - b.order);
+
+  const decisions: PlanBoardDecision[] = [];
+  let deferred = 0;
+  for (const candidate of candidates) {
+    if (decisions.length >= input.decisions) {
+      deferred += 1;
+      continue;
+    }
+    if (candidate.claim && !(await claimStreamState(ctx, candidate.claim.key))) {
+      waited('claimed');
+      continue;
+    }
+    decisions.push({ root: candidate.root, answer: candidate.answer });
+  }
+
+  return {
+    ok: true,
+    output: {
+      scope: 'board',
+      decisions,
+      deferred,
+      waits: [...waits].map(([cause, count]) => ({ cause, roots: count })),
+      roots: roots.length,
+      ...(open.truncated !== undefined ? { truncated: open.truncated } : {}),
+    },
+  };
 }

@@ -28,7 +28,9 @@ import {
 import {
   PlanNodeCloseControl,
   isClosedStatus,
+  type PlanNodeChoosing,
   type PlanNodeCloser,
+  type PlanNodeOpener,
 } from './PlanNodeCloseControl.js';
 
 /** Run links the rail lists before "All runs". */
@@ -200,9 +202,10 @@ export interface PlanRailProps {
   spaceId: string;
   spaceSlug: string;
   onClose: PlanNodeCloser;
-  /** The close form open, if any; a card's Decide opens the rail with it open. */
-  choosing: 'done' | 'dropped' | null;
-  onChoose: (choosing: 'done' | 'dropped' | null) => void;
+  onOpen: PlanNodeOpener;
+  /** The form open, if any; a card's Decide opens the rail with it open. */
+  choosing: PlanNodeChoosing;
+  onChoose: (choosing: PlanNodeChoosing) => void;
   onDismiss: () => void;
 }
 
@@ -213,6 +216,7 @@ export function PlanRail({
   spaceId,
   spaceSlug,
   onClose,
+  onOpen,
   choosing,
   onChoose,
   onDismiss,
@@ -375,6 +379,7 @@ export function PlanRail({
           node={node}
           read={{ node: full, error: detail.error, refetch: detail.refetch }}
           onClose={onClose}
+          onOpen={onOpen}
           choosing={choosing}
           onChoose={onChoose}
         />

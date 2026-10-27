@@ -28,8 +28,10 @@ import { useApiMutation, useApiQuery } from '../hooks/useApiQuery.js';
 import { PlanBoard } from '../components/plan/PlanBoard.js';
 import { PlanRail, RAIL_WIDTH } from '../components/plan/PlanRail.js';
 import type {
+  PlanNodeChoosing,
   PlanNodeCloseAnswer,
   PlanNodeCloseRequest,
+  PlanNodeOpenRequest,
 } from '../components/plan/PlanNodeCloseControl.js';
 import {
   doneCardsSince,
@@ -124,7 +126,7 @@ export function SpacePlanPage(): React.ReactNode {
   const [expanded, setExpanded] = useState<ReadonlySet<string> | null>(null);
   const [selected, setSelected] = useState<{
     nodeId: string;
-    choosing: 'done' | 'dropped' | null;
+    choosing: PlanNodeChoosing;
   } | null>(null);
 
   const today = localDay(new Date());
@@ -172,9 +174,18 @@ export function SpacePlanPage(): React.ReactNode {
     onError: () => undefined,
   });
 
-  const onClose = async (request: PlanNodeCloseRequest): Promise<PlanNodeCloseAnswer> => {
+  // Approve and Resume are the open write of their own (Plan 332 D6), never the close.
+  const openNode = useApiMutation<PlanNodeOpenRequest, PlanNodeUpdateOutput>({
+    path: ({ nodeId }) => `/spaces/${spaceId}/plan/nodes/${nodeId}/open`,
+    method: 'PATCH',
+    serialize: ({ nodeId: _nodeId, ...body }) => JSON.stringify(body),
+    invalidate: [['space', spaceId, 'plan']],
+    onError: () => undefined,
+  });
+
+  const answered = async (write: () => Promise<unknown>): Promise<PlanNodeCloseAnswer> => {
     try {
-      await closeNode.mutateAsync(request);
+      await write();
       return { ok: true };
     } catch (err) {
       // A refusal on the revision means the board on screen is stale: read it
@@ -183,6 +194,8 @@ export function SpacePlanPage(): React.ReactNode {
       return { ok: false, message: err instanceof Error ? err.message : String(err) };
     }
   };
+  const onClose = (request: PlanNodeCloseRequest) => answered(() => closeNode.mutateAsync(request));
+  const onOpen = (request: PlanNodeOpenRequest) => answered(() => openNode.mutateAsync(request));
 
   const header = <Heading level={2}>Plan</Heading>;
 
@@ -249,6 +262,7 @@ export function SpacePlanPage(): React.ReactNode {
         spaceId={spaceId}
         spaceSlug={spaceSlug}
         onClose={onClose}
+        onOpen={onOpen}
         choosing={selected.choosing}
         onChoose={(choosing) => {
           setSelected({ nodeId: selectedCard.node.nodeId, choosing });

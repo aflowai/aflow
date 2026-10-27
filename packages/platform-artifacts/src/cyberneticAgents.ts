@@ -3,6 +3,7 @@ import {
   DEFAULT_CYBERNETIC_MODEL,
   renderStagedChangeOpHints,
   COACH_REVIEW_OUTCOME_JSON_SCHEMA,
+  PLAN_RESIDENT_SCHEDULE_VARIABLE,
 } from '@aflow/schemas';
 
 /**
@@ -688,6 +689,16 @@ function buildCyberneticHelmsman(): CapabilityFlowDefinition {
         typeSchema: { type: 'string' },
         semanticType: 'text',
         defaultValue: 'cybernetic-coach',
+        lifecycle: { isInput: true, isOutput: false, persistOnPause: true },
+      },
+      {
+        // Plan 331 D1: the resident's schedule hands each wake its own id, so
+        // the wake renews it before its firing cap.
+        variableId: PLAN_RESIDENT_SCHEDULE_VARIABLE,
+        name: 'Resident Schedule',
+        typeSchema: { type: 'string', format: 'uuid' },
+        semanticType: 'text',
+        inputRole: 'config',
         lifecycle: { isInput: true, isOutput: false, persistOnPause: true },
       },
     ],

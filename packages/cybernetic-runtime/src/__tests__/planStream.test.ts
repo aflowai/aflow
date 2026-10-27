@@ -12,7 +12,8 @@ import {
   PlanNodeNextOutputSchema,
   type PlanNode,
   type PlanNodeCreateInput,
-  type PlanNodeNextOutput,
+  type PlanBoardNext,
+  type PlanStreamAnswer,
   type PlanStreamPullRequestAnswer,
 } from '@aflow/schemas';
 import {
@@ -20,6 +21,7 @@ import {
   getPlanNode,
   linkEndedRun,
   linkPlanNode,
+  openPlanNode,
   updatePlanNode,
   type PlanWriteContext,
 } from '../plan/operations.js';
@@ -27,6 +29,8 @@ import {
   findActiveStreamNode,
   mergeNoteHead,
   nextInPlanStream,
+  nextOnPlanBoard,
+  type PlanCommissionOutcome,
   type PlanPublicationOutcome,
   type PlanStreamReads,
 } from '../plan/stream.js';
@@ -40,6 +44,11 @@ const MERGE_SHA = '9f8e7d6c5b4a39281706f5e4d3c2b1a098765432';
 let store: InMemoryPlanNodeStore;
 let redis: RedisType;
 let outcomes: Map<string, PlanPublicationOutcome | null>;
+let commissions: Map<string, PlanCommissionOutcome | null>;
+/** A publication run → the commission run it names as `commission`. */
+let publishes: Map<string, string>;
+/** A run → what it cost, in cents. */
+let costs: Map<string, number>;
 let failures: Map<string, string>;
 let pausedItemRuns: string[];
 let lastStamp: number;
@@ -68,6 +77,23 @@ function reads(): PlanStreamReads {
           })),
       ),
     publicationOutcome: (_spaceId, runId) => Promise.resolve(outcomes.get(runId) ?? null),
+    commissionOutcome: (_spaceId, runId) => Promise.resolve(commissions.get(runId) ?? null),
+    publicationsOf: (_spaceId, commissionRunId) =>
+      Promise.resolve(
+        store.runs
+          .filter((r) => publishes.get(r.runId) === commissionRunId)
+          .map((r) => ({ runId: r.runId, slug: r.slug, status: r.status, startedAt: r.startedAt })),
+      ),
+    spendOf: (_spaceId, nodeId) => {
+      const served = store.runs
+        .filter((r) => r.nodeId === nodeId)
+        .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+      return Promise.resolve({
+        cents: served.reduce((sum, r) => sum + (costs.get(r.runId) ?? 0), 0),
+        runIds: served.map((r) => r.runId),
+        wakeSessionIds: [],
+      });
+    },
     pausedItemsServing: (_spaceId, nodeIds) =>
       Promise.resolve(
         pausedItemRuns.filter((runId) =>
@@ -125,13 +151,27 @@ async function run(
   node: PlanNode,
   slug: string,
   status: string,
-  opts: { failure?: string; outcome?: PlanPublicationOutcome | null } = {},
+  opts: {
+    failure?: string;
+    outcome?: PlanPublicationOutcome | null;
+    commission?: PlanCommissionOutcome | null;
+    cents?: number;
+  } = {},
 ): Promise<string> {
   runSeq += 1;
   const runId = `${slug}-${String(runSeq)}`;
   store.runs.push({ runId, slug, status, nodeId: node.nodeId, spaceId: SPACE, startedAt: stamp() });
   if (opts.failure !== undefined) failures.set(runId, opts.failure);
   if (opts.outcome !== undefined) outcomes.set(runId, opts.outcome);
+  if (opts.cents !== undefined) costs.set(runId, opts.cents);
+  if (slug === PLAN_STREAM_COMMISSION_SLUG) {
+    commissions.set(
+      runId,
+      opts.commission !== undefined
+        ? opts.commission
+        : { patchRef: `payload:patch-${runId}`, baseSha: 'abc1234', bindingId: 'hb_aflow' },
+    );
+  }
   if (status === 'completed' || status === 'failed' || status === 'cancelled') {
     await linkEndedRun(session(), {
       nodeId: node.nodeId,
@@ -157,11 +197,11 @@ function streamContext(holder = 'firing-a') {
 
 async function next(
   rootNodeId: string,
-  extra: { attempts?: number; pullRequest?: PlanStreamPullRequestAnswer } = {},
+  extra: { attempts?: number; spendCents?: number; pullRequest?: PlanStreamPullRequestAnswer } = {},
   holder?: string,
-): Promise<PlanNodeNextOutput> {
+): Promise<PlanStreamAnswer> {
   const input = PlanNodeNextInputSchema.parse({ rootNodeId, ...extra });
-  const result = await nextInPlanStream(streamContext(holder), input);
+  const result = await nextInPlanStream(streamContext(holder), rootNodeId, input);
   if (!result.ok) throw new Error(result.message);
   expect(PlanNodeNextOutputSchema.safeParse(result.output).success).toBe(true);
   return result.output;
@@ -172,7 +212,7 @@ async function fire(
   rootNodeId: string,
   github?: (url: string) => PlanStreamPullRequestAnswer,
   attempts?: number,
-): Promise<PlanNodeNextOutput> {
+): Promise<PlanStreamAnswer> {
   const first = await next(rootNodeId, attempts !== undefined ? { attempts } : {});
   if (first.decision !== 'read_pull_request') return first;
   if (!github) throw new Error(`the firing asked to read ${first.pullRequest.url}`);
@@ -224,6 +264,9 @@ beforeEach(async () => {
   redis = new Redis() as unknown as RedisType;
   await redis.flushall();
   outcomes = new Map();
+  commissions = new Map();
+  publishes = new Map();
+  costs = new Map();
   failures = new Map();
   pausedItemRuns = [];
   lastStamp = 0;
@@ -400,13 +443,10 @@ describe('plan.node.next — wait', () => {
     expect([...store.nodes.values()].map((n) => n.revision)).toEqual(revisions);
   });
 
-  it('waits on a commission that completed with no publication yet', async () => {
+  it('waits where what a completed commission made cannot be read', async () => {
     const { root, first } = await stream();
-    await run(first, PLAN_STREAM_COMMISSION_SLUG, 'completed');
-    expect(await fire(root.nodeId)).toMatchObject({
-      decision: 'wait',
-      cause: 'awaiting_publication',
-    });
+    await run(first, PLAN_STREAM_COMMISSION_SLUG, 'completed', { commission: null });
+    expect(await fire(root.nodeId)).toMatchObject({ decision: 'wait', cause: 'read_failed' });
   });
 
   it('waits on a decision for the operator, commissions nothing, and passes it once it is answered', async () => {
@@ -455,9 +495,11 @@ describe('plan.node.next — wait', () => {
   });
 
   it('refuses a root that is not in the space', async () => {
+    const missing = '5e1d0000-0000-4000-8000-00000000dead';
     const result = await nextInPlanStream(
       streamContext(),
-      PlanNodeNextInputSchema.parse({ rootNodeId: '5e1d0000-0000-4000-8000-00000000dead' }),
+      missing,
+      PlanNodeNextInputSchema.parse({ rootNodeId: missing }),
     );
     expect(result).toMatchObject({ ok: false, code: 'PLAN_NODE_NOT_FOUND' });
   });
@@ -779,5 +821,306 @@ describe('plan.node.next — a merge', () => {
     expect(written.filter((w) => w.ok)).toHaveLength(1);
     expect(written.find((w) => !w.ok)).toMatchObject({ ok: false, code: 'PLAN_NODE_STALE' });
     expect((await current(first.nodeId)).revision).toBe(first.revision + 1);
+  });
+});
+
+// ============================================================================
+// Plan 331 P1 — the resident takes the board
+// ============================================================================
+
+/** A wake across the board, as the resident's first call makes it. */
+async function wake(
+  extra: { decisions?: number; spendCents?: number; attempts?: number } = {},
+  holder = 'wake-a',
+): Promise<PlanBoardNext> {
+  const result = await nextOnPlanBoard(streamContext(holder), PlanNodeNextInputSchema.parse(extra));
+  if (!result.ok) throw new Error(result.message);
+  expect(PlanNodeNextOutputSchema.safeParse(result.output).success).toBe(true);
+  return result.output;
+}
+
+function revisions(): number[] {
+  return [...store.nodes.values()].map((n) => n.revision);
+}
+
+describe('plan.node.next across the board (Plan 331 D2)', () => {
+  it('commissions the first root by position, and the other once the operator swaps them', async () => {
+    const a = await created({ title: 'Plan 330' });
+    const aStep = await created({ parentId: a.nodeId, title: '330 P1' });
+    const b = await created({ title: 'Plan 331' });
+    const bStep = await created({ parentId: b.nodeId, title: '331 P1' });
+
+    const first = await wake({ decisions: 1 }, 'wake-1');
+    expect(first.decisions).toHaveLength(1);
+    expect(first.decisions[0]).toMatchObject({
+      root: { nodeId: a.nodeId },
+      answer: { decision: 'continue', node: { nodeId: aStep.nodeId } },
+    });
+    expect(first.deferred).toBe(1);
+
+    await write(a.nodeId, { position: 5 });
+    await write(b.nodeId, { position: 0 });
+    const next = await wake({ decisions: 1 }, 'wake-2');
+    expect(next.decisions[0]).toMatchObject({
+      root: { nodeId: b.nodeId },
+      answer: { decision: 'continue', node: { nodeId: bStep.nodeId } },
+    });
+  });
+
+  it('finishes before it starts: a publication ranks ahead of new work in an earlier root', async () => {
+    const early = await created({ title: 'Plan 330' });
+    await created({ parentId: early.nodeId, title: '330 P1' });
+    const late = await created({ title: 'Plan 331' });
+    const lateStep = await created({ parentId: late.nodeId, title: '331 P1' });
+    const commission = await run(lateStep, PLAN_STREAM_COMMISSION_SLUG, 'completed');
+
+    const board = await wake();
+    expect(board.decisions.map((d) => d.answer.decision)).toEqual(['publish', 'continue']);
+    expect(board.decisions[0]).toMatchObject({
+      root: { nodeId: late.nodeId },
+      answer: { commission: { commission } },
+    });
+  });
+
+  it('is silent where every root waits: no decision, no node written, the waits counted by cause', async () => {
+    const running = await created({ title: 'Plan 330' });
+    const step = await created({ parentId: running.nodeId, title: '330 P1' });
+    await run(step, PLAN_STREAM_COMMISSION_SLUG, 'running');
+    const held = await created({ title: 'Plan 331' });
+    await created({ parentId: held.nodeId, title: 'proposed', note: 'Proposed: …' });
+    const proposed = [...store.nodes.values()].find((n) => n.title === 'proposed')!;
+    await write(proposed.nodeId, { status: 'blocked' });
+    const before = revisions();
+
+    const board = await wake();
+    expect(board.decisions).toEqual([]);
+    expect(board.deferred).toBe(0);
+    expect(board.waits).toEqual(
+      expect.arrayContaining([
+        { cause: 'in_flight', roots: 1 },
+        { cause: 'blocked', roots: 1 },
+      ]),
+    );
+    expect(revisions()).toEqual(before);
+  });
+
+  it('never commissions a blocked node, whatever its rounds, and holds its stream there', async () => {
+    const root = await created({ title: 'Plan 331' });
+    const blocked = await created({ parentId: root.nodeId, title: 'P2 — proposed' });
+    const after = await created({ parentId: root.nodeId, title: 'P3' });
+    await run(blocked, PLAN_STREAM_COMMISSION_SLUG, 'failed', { failure: 'boom' });
+    await write(blocked.nodeId, { status: 'blocked', note: 'Proposed: carry the findings.' });
+
+    const board = await wake();
+    expect(board.decisions).toEqual([]);
+    expect(board.waits).toEqual([{ cause: 'blocked', roots: 1 }]);
+    expect(
+      board.decisions.some(
+        (d) => d.answer.decision === 'continue' && d.answer.node.nodeId === after.nodeId,
+      ),
+    ).toBe(false);
+  });
+
+  it('acts on every root an event touched in one wake, up to its cap, and defers the rest', async () => {
+    const roots: PlanNode[] = [];
+    for (const n of [1, 2, 3, 4]) {
+      const root = await created({ title: `Plan ${String(n)}` });
+      const step = await created({ parentId: root.nodeId, title: `step ${String(n)}` });
+      await run(step, PLAN_STREAM_COMMISSION_SLUG, 'completed');
+      roots.push(root);
+    }
+    const board = await wake({ decisions: 3 });
+    expect(board.decisions.map((d) => d.root.nodeId)).toEqual(
+      roots.slice(0, 3).map((r) => r.nodeId),
+    );
+    expect(board.decisions.every((d) => d.answer.decision === 'publish')).toBe(true);
+    expect(board.deferred).toBe(1);
+  });
+
+  it('claims only the continues it answers, so a deferred one is free for the next wake', async () => {
+    for (const n of [1, 2]) {
+      const root = await created({ title: `Plan ${String(n)}` });
+      await created({ parentId: root.nodeId, title: `step ${String(n)}` });
+    }
+    const first = await wake({ decisions: 1 }, 'wake-1');
+    const second = await wake({ decisions: 2 }, 'wake-2');
+    expect(first.decisions).toHaveLength(1);
+    expect(second.decisions).toHaveLength(1);
+    expect(second.decisions[0]!.root.nodeId).not.toBe(first.decisions[0]!.root.nodeId);
+    expect(second.waits).toEqual([{ cause: 'claimed', roots: 1 }]);
+  });
+});
+
+describe('publish — a completed commission is published by the next wake (Plan 331 D3.1)', () => {
+  it('answers publish with the commission’s run id and what Local Publish takes', async () => {
+    const { root, first } = await stream();
+    const commission = await run(first, PLAN_STREAM_COMMISSION_SLUG, 'completed', {
+      commission: {
+        patchRef: 'payload:patch-1',
+        baseSha: 'abc1234',
+        mergeFrom: 'def5678',
+        bindingId: 'hb_aflow',
+      },
+    });
+    expect(await fire(root.nodeId)).toMatchObject({
+      decision: 'publish',
+      node: { nodeId: first.nodeId, goal: first.goal, criteria: first.criteria },
+      commission: {
+        commission,
+        patchRef: 'payload:patch-1',
+        baseSha: 'abc1234',
+        mergeFrom: 'def5678',
+        bindingId: 'hb_aflow',
+      },
+    });
+  });
+
+  it('waits once the publication is under way', async () => {
+    const { root, first } = await stream();
+    await run(first, PLAN_STREAM_COMMISSION_SLUG, 'completed');
+    await run(first, PLAN_STREAM_PUBLICATION_SLUG, 'running');
+    expect(await fire(root.nodeId)).toMatchObject({ decision: 'wait', cause: 'in_flight' });
+  });
+
+  it('stops on a commission that made no change, for a person to read', async () => {
+    const { root, first } = await stream();
+    const commission = await run(first, PLAN_STREAM_COMMISSION_SLUG, 'completed', {
+      commission: { baseSha: 'abc1234' },
+    });
+    const decided = await fire(root.nodeId);
+    expect(decided).toMatchObject({
+      decision: 'stop',
+      cause: 'commission_unchanged',
+      update: { nodeId: first.nodeId, status: 'blocked' },
+    });
+    expect(decided.reason).toContain(commission);
+  });
+
+  it('does not publish twice: a publication naming the commission elsewhere holds it', async () => {
+    const { root, first } = await stream();
+    const other = await created({ title: 'elsewhere' });
+    const commission = await run(first, PLAN_STREAM_COMMISSION_SLUG, 'completed');
+    const elsewhere = await run(other, PLAN_STREAM_PUBLICATION_SLUG, 'completed');
+    publishes.set(elsewhere, commission);
+    const decided = await fire(root.nodeId);
+    expect(decided).toMatchObject({ decision: 'wait', cause: 'unknown_state' });
+    expect(decided.reason).toContain(elsewhere);
+  });
+});
+
+describe('the node spend stop (Plan 331 D4)', () => {
+  it('stops a node whose runs cost its ceiling, naming the spend and the runs, and holds its later siblings', async () => {
+    const { root, first, second } = await stream();
+    const a = await run(first, PLAN_STREAM_COMMISSION_SLUG, 'failed', { cents: 300, failure: 'x' });
+    const b = await run(first, PLAN_STREAM_COMMISSION_SLUG, 'failed', { cents: 250, failure: 'y' });
+    const decided = await next(root.nodeId, { attempts: 10, spendCents: 500 });
+    expect(decided).toMatchObject({
+      decision: 'stop',
+      cause: 'spend_spent',
+      node: { nodeId: first.nodeId },
+      spend: { cents: 550, ceilingCents: 500, runIds: [b, a] },
+      update: { nodeId: first.nodeId, status: 'blocked' },
+    });
+    if (decided.decision !== 'stop') throw new Error('expected a stop');
+    expect(decided.update.note).toMatch(/^Blocked: Its runs cost \$5\.50/);
+    expect(decided.update.note).toContain(a);
+    expect(decided.update.note).toContain(b);
+
+    await updatePlanNode(session(), decided.update);
+    const board = await wake({ spendCents: 500, attempts: 10 });
+    expect(board.decisions).toEqual([]);
+    expect(board.waits).toEqual([{ cause: 'blocked', roots: 1 }]);
+    expect((await current(second.nodeId)).revision).toBe(second.revision);
+  });
+
+  it('records a merge on a node at its ceiling: recording costs nothing', async () => {
+    const { root, first } = await stream();
+    await run(first, PLAN_STREAM_COMMISSION_SLUG, 'completed', { cents: 900 });
+    await run(first, PLAN_STREAM_PUBLICATION_SLUG, 'completed', {
+      outcome: { prUrl: PR, afterReview: 'publish_as_is', pushDecision: 'push' },
+    });
+    const mergedAt = stamp();
+    const first1 = await next(root.nodeId, { spendCents: 500 });
+    expect(first1.decision).toBe('read_pull_request');
+    expect(
+      await next(root.nodeId, { spendCents: 500, pullRequest: merged(PR, mergedAt) }),
+    ).toMatchObject({ decision: 'record_merge' });
+  });
+});
+
+describe('the open write (Plan 332 D6, Plan 331 D5)', () => {
+  it('moves a blocked node to active, the operator’s reason the note’s first line', async () => {
+    const { first } = await stream();
+    const blocked = await write(first.nodeId, {
+      status: 'blocked',
+      note: 'Blocked: attempts spent.',
+    });
+    const opened = await openPlanNode(session(), {
+      nodeId: first.nodeId,
+      expectedRevision: blocked.revision,
+      why: 'Try once more with the fixture.',
+    });
+    expect(opened).toMatchObject({ ok: true, left: 'blocked', node: { status: 'active' } });
+    if (!opened.ok) throw new Error('expected the open');
+    expect(opened.node.note).toBe(
+      'Approved: Try once more with the fixture.\nBlocked: attempts spent.',
+    );
+  });
+
+  it('refuses an open node that waits on no person, and a stale revision, writing nothing', async () => {
+    const { first } = await stream();
+    expect(
+      await openPlanNode(session(), { nodeId: first.nodeId, expectedRevision: first.revision }),
+    ).toMatchObject({ ok: false, code: 'PLAN_NODE_UNCHANGED' });
+    const blocked = await write(first.nodeId, { status: 'blocked' });
+    expect(
+      await openPlanNode(session(), { nodeId: first.nodeId, expectedRevision: first.revision }),
+    ).toMatchObject({ ok: false, code: 'PLAN_NODE_STALE' });
+    expect((await current(first.nodeId)).revision).toBe(blocked.revision);
+  });
+
+  it('reopens a closed node under the engine’s reopened line, the reason after it', async () => {
+    const { first } = await stream();
+    const done = await write(first.nodeId, { status: 'done', outcome: 'Met by #200.' });
+    const opened = await openPlanNode(session(), {
+      nodeId: first.nodeId,
+      expectedRevision: done.revision,
+      why: 'The fix did not hold.',
+    });
+    if (!opened.ok) throw new Error(opened.message);
+    expect(opened.left).toBe('done');
+    expect(opened.node.note).toBe(
+      'Reopened; it was done: Met by #200.\nReopened: The fix did not hold.',
+    );
+  });
+
+  it('the person’s write wins: a wake writing the same revision is refused, and nothing is lost', async () => {
+    const { root, first } = await stream();
+    const blocked = await write(first.nodeId, { status: 'blocked', note: 'Blocked: spend.' });
+    const [approve, wakeWrite] = await Promise.all([
+      openPlanNode(session(), {
+        nodeId: first.nodeId,
+        expectedRevision: blocked.revision,
+        why: 'Raised the ceiling.',
+      }),
+      updatePlanNode(session(), {
+        nodeId: first.nodeId,
+        expectedRevision: blocked.revision,
+        note: 'Blocked: spend.\nwake: asked once.',
+      }),
+    ]);
+    const outcomes = [approve, wakeWrite];
+    expect(outcomes.filter((o) => o.ok)).toHaveLength(1);
+    expect(outcomes.find((o) => !o.ok)).toMatchObject({ code: 'PLAN_NODE_STALE' });
+    const now = await current(first.nodeId);
+    expect(now.revision).toBe(blocked.revision + 1);
+    if (approve.ok) {
+      expect(now).toMatchObject({ status: 'active' });
+      expect(now.note?.split('\n')[0]).toBe('Approved: Raised the ceiling.');
+      expect(await fire(root.nodeId)).toMatchObject({
+        decision: 'continue',
+        node: { nodeId: first.nodeId },
+      });
+    }
   });
 });

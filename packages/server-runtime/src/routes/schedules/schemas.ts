@@ -42,8 +42,20 @@ export const CreateScheduleBodySchema = z.object({
   metadata: z.record(z.unknown()).optional(),
 });
 
+/** How long the reason given for pausing or resuming a schedule may be. */
+export const SCHEDULE_STATUS_WHY_MAX_CHARS = 500;
+
 export const UpdateScheduleBodySchema = z.object({
   status: z.enum(['active', 'paused']).optional(),
+  why: z
+    .string()
+    .trim()
+    .min(1)
+    .max(SCHEDULE_STATUS_WHY_MAX_CHARS)
+    .optional()
+    .describe(
+      'Why the schedule is paused or resumed, stamped on it with who did it — pausing the resident schedule pauses the resident.',
+    ),
   name: z.string().max(200).optional(),
   description: z.string().max(2000).nullable().optional(),
   cronExpression: z.string().max(100).optional(),

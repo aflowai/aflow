@@ -3,10 +3,12 @@
 /**
  * The operator's own writes on an open plan node (Plan 322 P3.2), held in the
  * board's rail: mark it done with how its criteria were met — for a `decide`
- * node, the choice — or drop it, and the branch under it with it. The form
- * shows the node as the rail read it, on demand, and writes against the
- * revision that read showed; a node changed since is refused rather than
- * overwritten, and a refusal reads it again.
+ * node, the choice — or drop it, and the branch under it with it; and on a
+ * `blocked` node, **Approve** it — **Resume** where a stop blocked it — which
+ * moves it to `active` through the open write, never the close (Plan 331 D5,
+ * Plan 332 D6). The form shows the node as the rail read it, on demand, and
+ * writes against the revision that read showed; a node changed since is
+ * refused rather than overwritten, and a refusal reads it again.
  */
 import { useState } from 'react';
 import { Button, Column, Row, Text, Textarea } from '@aflow/design-system';
@@ -23,6 +25,27 @@ export interface PlanNodeCloseRequest {
 export type PlanNodeCloseAnswer = { ok: true } | { ok: false; message: string };
 
 export type PlanNodeCloser = (request: PlanNodeCloseRequest) => Promise<PlanNodeCloseAnswer>;
+
+/** What the operator asks of a blocked node: open it, against the revision they read. */
+export interface PlanNodeOpenRequest {
+  nodeId: string;
+  expectedRevision: number;
+  why?: string;
+}
+
+export type PlanNodeOpener = (request: PlanNodeOpenRequest) => Promise<PlanNodeCloseAnswer>;
+
+/** Which form of the rail is open. */
+export type PlanNodeChoosing = 'done' | 'dropped' | 'open' | null;
+
+/**
+ * The open write's name on a blocked node: **Resume** where the stream's stop
+ * blocked it — its note begins `Blocked: ` — and **Approve** otherwise, a
+ * proposal or a node a person blocked. The same write either way.
+ */
+export function openControlLabel(note: string | undefined): 'Approve' | 'Resume' {
+  return note?.startsWith('Blocked: ') === true ? 'Resume' : 'Approve';
+}
 
 /** The rail's read of the node in full: what the form decides against. */
 export interface PlanNodeRead {
@@ -52,6 +75,7 @@ export function PlanNodeCloseControl({
   node,
   read,
   onClose,
+  onOpen,
   choosing,
   onChoose,
 }: {
@@ -59,9 +83,10 @@ export function PlanNodeCloseControl({
   node: PlanTreeNode;
   read: PlanNodeRead;
   onClose: PlanNodeCloser;
+  onOpen: PlanNodeOpener;
   /** Which form is open, held by the rail so a card's Decide opens it directly. */
-  choosing: 'done' | 'dropped' | null;
-  onChoose: (choosing: 'done' | 'dropped' | null) => void;
+  choosing: PlanNodeChoosing;
+  onChoose: (choosing: PlanNodeChoosing) => void;
 }) {
   const [text, setText] = useState('');
   const [pending, setPending] = useState(false);
@@ -73,9 +98,22 @@ export function PlanNodeCloseControl({
   const copyFor = (status: 'done' | 'dropped') =>
     CLOSING_COPY[status === 'done' && node.kind === 'decide' ? 'decide' : status];
 
+  const openLabel = openControlLabel(shown?.note);
+
   if (choosing === null) {
     return (
       <Row gap="xs" align="center">
+        {node.status === 'blocked' && (
+          <Button
+            size="sm"
+            variant="primary"
+            onClick={() => {
+              onChoose('open');
+            }}
+          >
+            {openLabel}
+          </Button>
+        )}
         <Button
           size="sm"
           variant="secondary"
@@ -98,13 +136,88 @@ export function PlanNodeCloseControl({
     );
   }
 
-  const copy = copyFor(choosing);
   const outcome = text.trim();
   const reset = () => {
     onChoose(null);
     setText('');
     setError(null);
   };
+
+  if (choosing === 'open') {
+    const shownOpen = shown !== undefined && shown.status !== 'blocked';
+    const submitOpen = async () => {
+      if (!shown) return;
+      setPending(true);
+      setError(null);
+      const answer = await onOpen({
+        nodeId: node.nodeId,
+        expectedRevision: shown.revision,
+        ...(outcome.length > 0 ? { why: outcome } : {}),
+      });
+      setPending(false);
+      if (answer.ok) {
+        reset();
+      } else {
+        setError(answer.message);
+        void read.refetch();
+      }
+    };
+    return (
+      <Column gap="xs" data-plan-open={openLabel}>
+        {shown === undefined && read.error === null && (
+          <Text size="sm" variant="muted">
+            Reading the step…
+          </Text>
+        )}
+        {shown !== undefined && shown.revision !== node.revision && (
+          <Text size="xs" variant="muted">
+            This step changed since the plan was read; this is how it stands now.
+          </Text>
+        )}
+        {shownOpen && (
+          <Text size="sm" tone="danger" role="alert">
+            {`This step is ${shown.status} now; reload the plan to see it.`}
+          </Text>
+        )}
+        <Textarea
+          aria-label="Why (optional)"
+          placeholder="Why (optional) — the note's first line"
+          value={text}
+          rows={2}
+          disabled={pending}
+          onChange={(event) => {
+            setText(event.target.value);
+          }}
+        />
+        <Text size="xs" variant="muted">
+          The resident takes it from here, in its place on the plan.
+        </Text>
+        {error !== null && (
+          <Text size="sm" tone="danger" role="alert">
+            {error}
+          </Text>
+        )}
+        <Row gap="xs" align="center">
+          <Button
+            size="sm"
+            variant="primary"
+            loading={pending}
+            disabled={pending || shown === undefined || shownOpen}
+            onClick={() => {
+              void submitOpen();
+            }}
+          >
+            {openLabel}
+          </Button>
+          <Button size="sm" variant="ghost" disabled={pending} onClick={reset}>
+            Cancel
+          </Button>
+        </Row>
+      </Column>
+    );
+  }
+
+  const copy = copyFor(choosing);
   const submit = async () => {
     if (!shown) return;
     setPending(true);

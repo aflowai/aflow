@@ -379,6 +379,55 @@ export async function updatePlanNode(
 }
 
 // ============================================================================
+// The operator's open (Plan 332 D6, Plan 331 D5) — a person moves a node to active
+// ============================================================================
+
+/** The note an approved node carries: the person's reason first, the note as it stood under it. */
+export function approvedNote(note: string | undefined, why: string): string {
+  const head = `Approved: ${why}`;
+  return (note !== undefined ? `${head}\n${note}` : head).slice(0, PLAN_NODE_PROSE_MAX_CHARS);
+}
+
+/**
+ * Move a node to `active`, against the revision the person read: a `blocked`
+ * node is approved or its stop lifted, its `why` heading the note; a closed
+ * node is reopened, the engine's reopened line first and a `Reopened: <why>`
+ * after it in place of the closed work's note. An open node that is not
+ * blocked already stands where this would put it. Who may call it is the
+ * route's to decide (`planWriteAuthority.ts`), never this engine's.
+ */
+export async function openPlanNode(
+  ctx: PlanWriteContext,
+  input: { nodeId: string; expectedRevision: number; why?: string },
+): Promise<PlanOpResult<{ node: PlanNode; left: PlanNodeStatus }>> {
+  const current = await ctx.store.find(ctx.spaceId, input.nodeId);
+  if (!current) return notFound(input.nodeId);
+  const update: PlanNodeUpdateInput = {
+    nodeId: input.nodeId,
+    expectedRevision: input.expectedRevision,
+    status: 'active',
+  };
+  if (current.revision !== input.expectedRevision) return stale(current, update);
+  if (current.status === 'active' || current.status === 'waiting') {
+    return {
+      ok: false,
+      code: 'PLAN_NODE_UNCHANGED',
+      message: `Plan node "${current.title}" is ${current.status}, already open and not waiting on a person, so nothing was written and it stays at revision ${String(current.revision)}.`,
+      details: refusalDetails(current, update),
+    };
+  }
+  if (input.why !== undefined) {
+    update.note =
+      current.status === 'blocked'
+        ? approvedNote(current.note, input.why)
+        : `Reopened: ${input.why}`;
+  }
+  const written = await updatePlanNode(ctx, update);
+  if (!written.ok) return written;
+  return { ok: true, node: written.node, left: current.status };
+}
+
+// ============================================================================
 // plan.node.get / plan.node.list
 // ============================================================================
 

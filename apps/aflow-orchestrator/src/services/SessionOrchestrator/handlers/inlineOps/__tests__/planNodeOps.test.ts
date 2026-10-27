@@ -6,7 +6,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   PLAN_NODE_DONE_NEEDS_OUTCOME_MESSAGE,
+  PLAN_BOARD_DECISIONS_DEFAULT,
   PLAN_STREAM_ATTEMPTS_DEFAULT,
+  PLAN_STREAM_SPEND_CENTS_DEFAULT,
   PlanNodeRefusalDetailsSchema,
   type IdempotencyKey,
   type StepDefinition,
@@ -15,10 +17,12 @@ import {
 
 const mockAddStepResult = vi.fn();
 const mockGetSessionStateSafe = vi.fn();
+const mockGetSessionState = vi.fn();
 vi.mock('@aflow/redis', () => ({
   addStepResult: (...args: unknown[]) => mockAddStepResult(...args),
   getSessionStateSafe: (...args: unknown[]) => mockGetSessionStateSafe(...args),
-  getSessionState: vi.fn(),
+  getSessionState: (...args: unknown[]) => mockGetSessionState(...args),
+  getRunAccessGrant: vi.fn(() => Promise.resolve(null)),
   updateSessionState: vi.fn(),
   atomicCompleteStep: vi.fn(),
 }));
@@ -29,6 +33,7 @@ const mockGetPlanNode = vi.fn();
 const mockListPlanNodes = vi.fn();
 const mockLinkPlanNode = vi.fn();
 const mockNextInPlanStream = vi.fn();
+const mockNextOnPlanBoard = vi.fn();
 const mockLearnOnPlanNode = vi.fn();
 const mockDependPlanNode = vi.fn();
 const STORE = { kind: 'store' };
@@ -44,6 +49,7 @@ vi.mock('@aflow/cybernetic-runtime', () => ({
   linkPlanNode: (...a: unknown[]) => mockLinkPlanNode(...a),
   createPlanStreamReads: () => READS,
   nextInPlanStream: (...a: unknown[]) => mockNextInPlanStream(...a),
+  nextOnPlanBoard: (...a: unknown[]) => mockNextOnPlanBoard(...a),
 }));
 vi.mock('@aflow/database', () => ({ getDatabase: () => ({}) }));
 const mockReadDurableSessionCreatedBy = vi.fn();
@@ -460,10 +466,42 @@ describe('plan.node.next', () => {
         tenantId: TENANT,
         holder: SESSION,
       },
-      { rootNodeId: NODE_ID, attempts: PLAN_STREAM_ATTEMPTS_DEFAULT },
+      NODE_ID,
+      {
+        rootNodeId: NODE_ID,
+        attempts: PLAN_STREAM_ATTEMPTS_DEFAULT,
+        spendCents: PLAN_STREAM_SPEND_CENTS_DEFAULT,
+        decisions: PLAN_BOARD_DECISIONS_DEFAULT,
+      },
     );
+    expect(mockNextOnPlanBoard).not.toHaveBeenCalled();
     expect(emitted()['status']).toBe('SUCCEEDED');
     expect(emittedOutput()).toEqual(decision);
+  });
+
+  it('with no root, decides the whole board — the resident’s wake', async () => {
+    const board = { scope: 'board', decisions: [], deferred: 0, waits: [], roots: 2 };
+    mockNextOnPlanBoard.mockResolvedValue({ ok: true, output: board });
+    mockGetSessionState.mockResolvedValue(null);
+    await handlePlanNodeInline(makeArgs('plan.node.next', {}));
+    expect(mockNextOnPlanBoard).toHaveBeenCalledWith(
+      expect.objectContaining({ spaceId: SPACE, holder: SESSION }),
+      {
+        attempts: PLAN_STREAM_ATTEMPTS_DEFAULT,
+        spendCents: PLAN_STREAM_SPEND_CENTS_DEFAULT,
+        decisions: PLAN_BOARD_DECISIONS_DEFAULT,
+      },
+    );
+    expect(mockNextInPlanStream).not.toHaveBeenCalled();
+    expect(emittedOutput()).toEqual(board);
+  });
+
+  it('refuses a pull request answer with no root to answer it for', async () => {
+    await handlePlanNodeInline(
+      makeArgs('plan.node.next', { pullRequest: { url: LINK.ref, read: 'failed' } }),
+    );
+    expect(mockNextOnPlanBoard).not.toHaveBeenCalled();
+    expect(emitted()['error']).toMatchObject({ code: 'PLAN_NODE_INVALID_INPUT' });
   });
 
   it('refuses a pull request answer that omits what a merge needs before the engine is reached', async () => {
