@@ -17,6 +17,7 @@ import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import {
+  HOST_LANE_FOLDER_REFUSAL,
   HostBranchPrefixSchema,
   HostMergePostureSchema,
   HostPushApprovalSchema,
@@ -49,10 +50,7 @@ function hostLaneAvailable(edition: EditionDescriptor): boolean {
 
 const HOST_LANE_UNAVAILABLE = {
   error: 'HostLaneUnavailable',
-  message:
-    'This deployment has no host lane, so a folder connected here could never be reached. ' +
-    'Host execution belongs to the local edition, where the machine and the instance are ' +
-    'the same operator.',
+  message: HOST_LANE_FOLDER_REFUSAL,
 } as const;
 
 const LocalMcpToolSchema = z.object({

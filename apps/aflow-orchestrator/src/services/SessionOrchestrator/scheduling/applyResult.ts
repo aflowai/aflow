@@ -952,7 +952,7 @@ export function createApplyResult(bindings: SessionOrchestratorBindings) {
         });
 
         await markRunInactive(redis, result.tenantId, result.sessionId).catch(() => {});
-        releaseScheduleCreates(result.sessionId);
+        await releaseScheduleCreates(redis, result.tenantId, result.sessionId);
         manifestService?.updateStatus(result.sessionId, result.tenantId, 'FAILED');
 
         if (runState.workflowExecution !== undefined) {

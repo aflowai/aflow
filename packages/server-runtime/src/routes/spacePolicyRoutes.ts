@@ -14,6 +14,7 @@ import { createTenantContext, withTenantSchema, spaces } from '@aflow/database';
 import { bumpSpaceContextGen } from '@aflow/redis';
 import {
   ComputeAvailabilitySchema,
+  HOST_LANE_HARNESS_REFUSAL,
   SpaceRulesSchema,
   SpaceComputePolicySchema,
   SpaceCodePolicySchema,
@@ -246,10 +247,7 @@ export const spacePolicyRoutes: FastifyPluginAsync = async (fastify) => {
     // read: coding agents run only in the local edition, on the operator's
     // own machine.
     guard: (value, edition) =>
-      value !== null && edition.hostLane !== 'present'
-        ? 'This deployment has no host lane, so no coding agent runs here. A preferred ' +
-          'coding agent belongs to the local edition, where the machine runs it.'
-        : null,
+      value !== null && edition.hostLane !== 'present' ? HOST_LANE_HARNESS_REFUSAL : null,
     inSpaceContext: true,
     select: (tx, spaceId) =>
       tx

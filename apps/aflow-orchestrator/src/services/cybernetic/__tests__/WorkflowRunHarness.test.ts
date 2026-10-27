@@ -3174,9 +3174,12 @@ describe('completeRun releases what the run held', () => {
   it('leaves no schedule-create count for a run that reached a terminal state', async () => {
     const { claimScheduleCreate, scheduleCreatesCounted } =
       await import('../../SessionOrchestrator/handlers/inlineOps/scheduleCreateBudget.js');
-    claimScheduleCreate(RUN_ID);
-    claimScheduleCreate(RUN_ID);
-    expect(scheduleCreatesCounted(RUN_ID)).toBe(2);
+    const { default: RedisMock } = await import('ioredis-mock');
+    const redis = new RedisMock() as unknown as HarnessDeps['redis'];
+    await redis.flushall();
+    await claimScheduleCreate(redis, TENANT, RUN_ID);
+    await claimScheduleCreate(redis, TENANT, RUN_ID);
+    expect(await scheduleCreatesCounted(redis, TENANT, RUN_ID)).toBe(2);
 
     mockLoadRunById.mockResolvedValue(buildRunDetail([], 'running'));
     mockListCompletionPendingForRun.mockResolvedValueOnce([]);
@@ -3188,10 +3191,10 @@ describe('completeRun releases what the run held', () => {
     mockLedgerCompleteRun.mockResolvedValueOnce(true);
     mockLoadPendingWaiters.mockResolvedValue([]);
 
-    await cancelRun(deps, TENANT, RUN_ID);
+    await cancelRun({ ...deps, redis }, TENANT, RUN_ID);
 
     expect(mockLedgerCompleteRun).toHaveBeenCalledOnce();
-    expect(scheduleCreatesCounted(RUN_ID)).toBeUndefined();
+    expect(await scheduleCreatesCounted(redis, TENANT, RUN_ID)).toBeUndefined();
   });
 });
 

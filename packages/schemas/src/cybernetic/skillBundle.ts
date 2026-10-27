@@ -4,6 +4,7 @@ import { AppletDefinitionSchema } from '../applet/definition.js';
 import { EgressPolicySchema } from '../models/apiDefinition.js';
 import { ApiDefinitionDraftSchema } from './stagedChange.js';
 import { MemoryDocTypeSchema } from '../operations/memory.js';
+import { HostMergePostureSchema } from '../operations/host.js';
 
 import {
   McpServerDefinitionSchema,
@@ -584,6 +585,91 @@ export function skillStarterAgentDefinition(params: {
 }
 
 /**
+ * Where a readiness item stands, read from live state when it is asked for
+ * (Plan 330 D4): `done`, `needs_setup` (something is missing) or `broken`
+ * (something set up stopped working, or the edition cannot meet it).
+ */
+export const PostInstallTaskStateSchema = z.enum(['done', 'needs_setup', 'broken']);
+export type PostInstallTaskState = z.infer<typeof PostInstallTaskStateSchema>;
+
+/**
+ * What an edition with no host lane says to a request to pair a machine. A
+ * readiness item that needs one reports `broken` with these words there,
+ * before an install as after it, and the checklist row shows the same.
+ */
+export const HOST_LANE_PAIRING_REFUSAL =
+  'These skills run on the machine that holds the work. This deployment runs in the cloud, ' +
+  'so there is no computer here to pair with. Available in Aflow Local, which runs on your ' +
+  'own machine.';
+
+/** What an edition with no host lane says to a request to connect a folder. */
+export const HOST_LANE_FOLDER_REFUSAL =
+  'This deployment has no host lane, so a folder connected here could never be reached. ' +
+  'Host execution belongs to the local edition, where the machine and the instance are ' +
+  'the same operator.';
+
+/** What an edition with no host lane says to a request to prefer a coding agent. */
+export const HOST_LANE_HARNESS_REFUSAL =
+  'This deployment has no host lane, so no coding agent runs here. A preferred ' +
+  'coding agent belongs to the local edition, where the machine runs it.';
+
+/**
+ * The host CLI command that connects a folder with what the coding loop
+ * needs of it: writes, commands, pushes under a branch prefix, and a merge
+ * posture. Run in the folder, with the code This Computer gives.
+ */
+export const HOST_FOLDER_CONNECT_COMMAND =
+  'aflow connect <code> --write --run --branch-prefix <prefix> --merge-posture <never|when-green>';
+
+/** The harnesses the coding-harness item offers, as the machine has them installed. */
+export const CODING_HARNESS_OPTIONS: ReadonlyArray<{ id: string; label: string }> = [
+  { id: 'claude', label: 'Claude Code' },
+  { id: 'codex', label: 'Codex' },
+];
+
+/**
+ * The state of a stateful task and what changes it: the space-relative page
+ * (`/computer`), and the host CLI command where the change is made on the
+ * machine instead.
+ */
+const ReadinessActionShape = {
+  state: PostInstallTaskStateSchema,
+  page: z.string().min(2).max(200),
+  command: z.string().min(1).max(500).optional(),
+};
+
+/**
+ * Room for a readiness task's description: prose an operator reads, the item's
+ * own wording around a schedule's error or GitHub's refusal. The cap is a
+ * storage ceiling set generously, never a style limit — a description past it
+ * fails the response on every surface.
+ */
+export const READINESS_DESCRIPTION_MAX = 8000;
+
+/**
+ * The most of an unbounded outside body — a schedule's last error, GitHub's
+ * answer, a request or decryption failure — a description embeds, so the
+ * description stays under its ceiling however long that body is.
+ */
+export const READINESS_EXTERNAL_TEXT_MAX = 2000;
+
+/** Room for the folder reading's label and branch prefix, above what their writers accept. */
+export const READINESS_FOLDER_FIELD_MAX = 1000;
+
+/**
+ * What a shepherd schedule is created from, and recreated from once it expires
+ * (Plan 330 D3): the agent it starts, the cron, the operator's firings choice
+ * and the input its renewal reads. `POST /v1/schedules` takes it as it stands.
+ */
+export const ShepherdScheduleInputSchema = z.object({
+  agentId: z.string().uuid(),
+  cronExpression: z.string().min(1).max(100),
+  maxFirings: z.number().int().positive().nullable(),
+  inputTemplate: z.record(z.unknown()),
+});
+export type ShepherdScheduleInput = z.infer<typeof ShepherdScheduleInputSchema>;
+
+/**
  * Discriminated union of post-install completion tasks. Kinds:
  *
  *  - `fill_credentials` / `fill_mcp_credentials` / `run_mcp_binding_test` —
@@ -594,6 +680,7 @@ export function skillStarterAgentDefinition(params: {
  *    installed skills' unmet capability state: emitted when the bundle's
  *    skills require a coding repo (`code_repo`) and the space has no `ready`
  *    repo designated yet. The UI deep-links to the Integrations page (Add repository).
+ *    The cloud designation only: no host-lane skill requires `code_repo`.
  *  - `enable_space_policy` — the bundle's skills use a policy-gated lane
  *    (`SPACE_POLICY_OPERATION_PREFIXES`) this space has switched off. No
  *    binding or credential resolves it; only a space admin's toggle does.
@@ -601,9 +688,23 @@ export function skillStarterAgentDefinition(params: {
  *    assigned capability profile withholds the lane's write capability
  *    groups. No space setting resolves it; only a tenant admin's profile
  *    assignment (or a per-user capability grant) does.
- *  - `pair_machine` — the bundle's skills run on the host lane, whose grant is
- *    a paired machine and a connected folder rather than a space policy. The
- *    UI opens This Computer; an edition with no machine to pair says so.
+ *
+ * Those are listed only while unmet. The readiness kinds (Plan 330 D4) carry
+ * their `state` and the page or command that changes it, and are listed in
+ * whatever state they read:
+ *
+ *  - `pair_machine` — the host lane's grant, a paired machine and a connected
+ *    folder, as two readings of it: `machine` (the space's host bindings and
+ *    whether their executor is in the host inventory) and `folder` (the
+ *    binding's push policy, `branchPrefix` and `mergePosture`, and whether the
+ *    shepherd agent was written before the folder was connected). An edition
+ *    with no machine to pair reports both `broken`.
+ *  - `github_credential` — the github binding's credential, as GitHub answers for it.
+ *  - `coding_harness` — the space's preferred harness against the machine's installed ones.
+ *  - `shepherd_schedule` — the Local PR Shepherd's schedule, with the input
+ *    that creates it or recreates it once expired.
+ *  - `folder_preview` — the connected folder's preview declaration: optional,
+ *    and the one kind pinned `required: false`.
  *
  * Variants are AUTO-GENERATED by the install op at response time — bundle
  * authors do not author this list directly. The contract lives in this file
@@ -611,13 +712,6 @@ export function skillStarterAgentDefinition(params: {
  * of truth. The discriminator stays open for future kinds.
  */
 export const PostInstallTaskSchema = z.discriminatedUnion('kind', [
-  z.object({
-    kind: z.literal('coding_loop_setup'),
-    step: z.enum(['machine', 'folder', 'agent', 'github', 'schedule', 'preview']),
-    description: z.string().min(1),
-    path: z.string().min(1),
-    required: z.literal(true),
-  }),
   z.object({
     kind: z.literal('fill_credentials'),
     bindingId: z.string().min(1).max(128),
@@ -658,8 +752,53 @@ export const PostInstallTaskSchema = z.discriminatedUnion('kind', [
   }),
   z.object({
     kind: z.literal('pair_machine'),
-    description: z.string().min(1).max(500),
+    reading: z.enum(['machine', 'folder']),
+    ...ReadinessActionShape,
+    /** The folder reading's connected folder and the push policy in force on it. */
+    folder: z
+      .object({
+        label: z.string().min(1).max(READINESS_FOLDER_FIELD_MAX),
+        allowsPush: z.boolean(),
+        branchPrefix: z.string().max(READINESS_FOLDER_FIELD_MAX).nullable(),
+        mergePosture: HostMergePostureSchema.nullable(),
+      })
+      .optional(),
+    /** The shepherd agent was written before this folder was connected, so it does not tend it (§7 F4). */
+    shepherdBeforeFolder: z.boolean().optional(),
+    description: z.string().min(1).max(READINESS_DESCRIPTION_MAX),
     required: z.literal(true),
+  }),
+  z.object({
+    kind: z.literal('github_credential'),
+    ...ReadinessActionShape,
+    /** The scopes GitHub's answer shows the credential lacks. */
+    missingScopes: z.array(z.string().min(1).max(64)).default([]),
+    description: z.string().min(1).max(READINESS_DESCRIPTION_MAX),
+    required: z.literal(true),
+  }),
+  z.object({
+    kind: z.literal('coding_harness'),
+    ...ReadinessActionShape,
+    chosen: z.string().min(1).max(64).nullable(),
+    /** The harnesses offered, as the machine has them installed. */
+    options: z.array(z.object({ id: z.string().min(1).max(64), label: z.string().max(200) })),
+    description: z.string().min(1).max(READINESS_DESCRIPTION_MAX),
+    required: z.literal(true),
+  }),
+  z.object({
+    kind: z.literal('shepherd_schedule'),
+    ...ReadinessActionShape,
+    firingsLeft: z.number().int().min(0).nullable().optional(),
+    /** What creates the schedule on the operator's word, or recreates it once expired. */
+    schedule: ShepherdScheduleInputSchema.optional(),
+    description: z.string().min(1).max(READINESS_DESCRIPTION_MAX),
+    required: z.literal(true),
+  }),
+  z.object({
+    kind: z.literal('folder_preview'),
+    ...ReadinessActionShape,
+    description: z.string().min(1).max(READINESS_DESCRIPTION_MAX),
+    required: z.literal(false),
   }),
   z.object({
     kind: z.literal('enable_space_policy'),
@@ -687,6 +826,25 @@ export const PostInstallTaskSchema = z.discriminatedUnion('kind', [
   }),
 ]);
 export type PostInstallTask = z.infer<typeof PostInstallTaskSchema>;
+
+/** A task listed only while unmet reads `needs_setup`; a stateful one reads its own state. */
+export function postInstallTaskState(task: PostInstallTask): PostInstallTaskState {
+  return 'state' in task ? task.state : 'needs_setup';
+}
+
+/** The tasks that still ask something of the operator. */
+export function openPostInstallTasks(tasks: readonly PostInstallTask[]): PostInstallTask[] {
+  return tasks.filter((task) => postInstallTaskState(task) !== 'done');
+}
+
+/** The checklist's verdict: green once every required task is `done`. */
+export function postInstallReadiness(
+  tasks: readonly PostInstallTask[],
+): 'ready' | 'needs_setup' | 'broken' {
+  const required = tasks.filter((task) => task.required).map(postInstallTaskState);
+  if (required.includes('broken')) return 'broken';
+  return required.includes('needs_setup') ? 'needs_setup' : 'ready';
+}
 
 // ============================================================================
 // SkillBundle — a curated installable bundle

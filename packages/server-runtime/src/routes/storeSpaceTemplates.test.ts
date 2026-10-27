@@ -66,10 +66,12 @@ vi.mock('../services/spaceProvisioning.js', async (importOriginal) => ({
 
 const executeSpaceTemplateInstall = vi.hoisted(() => vi.fn());
 const previewBundleInstall = vi.hoisted(() => vi.fn());
+const readTemplateReadiness = vi.hoisted(() => vi.fn());
 vi.mock('@aflow/cybernetic-runtime', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   executeSpaceTemplateInstall,
   previewBundleInstall,
+  readTemplateReadiness,
 }));
 
 const database = (await import('@aflow/database')) as unknown as { __fakeDb: unknown };
@@ -126,7 +128,8 @@ describe('a quick start whose bundle is off the tenant shelf', () => {
     state.hidden = new Set([TEMPLATE_BUNDLE_IDS[0] ?? '']);
     const app = await buildApp();
     const res = await app.inject({ method: 'GET', url: '/v1/store/quick-start-offer' });
-    expect(res.json()).toEqual({ applies: false, templates: [] });
+    const offer = res.json() as { templates: Array<{ catalogId: string }> };
+    expect(offer.templates.map((template) => template.catalogId)).not.toContain(TEMPLATE_ID);
     await app.close();
   });
 
@@ -144,8 +147,32 @@ describe('a quick start whose bundle is off the tenant shelf', () => {
   });
 });
 
+const PROSPECTIVE_READINESS = {
+  status: 'needs_setup',
+  tasks: [
+    {
+      kind: 'pair_machine',
+      reading: 'machine',
+      state: 'needs_setup',
+      page: '/computer',
+      description: 'Pair this machine.',
+      required: true,
+    },
+  ],
+  readiness: [
+    {
+      key: 'pair-machine',
+      title: 'Pair this machine',
+      required: true,
+      state: 'needs_setup',
+      page: '/computer',
+    },
+  ],
+};
+
 describe('POST /v1/store/space-install-preview', () => {
   it('reads every bundle against the space the install would make, in install order', async () => {
+    readTemplateReadiness.mockResolvedValue(PROSPECTIVE_READINESS);
     const directives = { version: 1, responsibility: 'Review.' };
     provisioning.newSpaceDirectives.mockResolvedValue({ directives, allowedModels: { ids: [] } });
     provisioning.readAgainstProspectiveSpace.mockImplementation(
@@ -191,9 +218,24 @@ describe('POST /v1/store/space-install-preview', () => {
     expect(installedFirstAtCall).toEqual(
       TEMPLATE_BUNDLE_IDS.map((_, index) => TEMPLATE_BUNDLE_IDS.slice(0, index)),
     );
-    const body = res.json() as { conflicts: unknown[]; missingCapabilities: string[] };
+    const body = res.json() as {
+      conflicts: unknown[];
+      missingCapabilities: string[];
+      readiness: string;
+      setupChecklist: unknown[];
+      space: { readiness: unknown[] };
+    };
     expect(body.conflicts).toHaveLength(TEMPLATE_BUNDLE_IDS.length);
     expect(body.missingCapabilities).toEqual(['api:github', 'host']);
+    // Listed before install as after it, read against the space the install would make.
+    expect(readTemplateReadiness).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({ templateId: TEMPLATE_ID }),
+      expect.objectContaining({ tenantId: 'tenant-1', spaceId: NEW_SPACE_ID }),
+    );
+    expect(body.readiness).toBe('needs_setup');
+    expect(body.setupChecklist).toEqual(PROSPECTIVE_READINESS.tasks);
+    expect(body.space.readiness).toEqual(PROSPECTIVE_READINESS.readiness);
     await app.close();
   });
 });
@@ -206,7 +248,9 @@ describe('GET /v1/store/quick-start-offer', () => {
     expect(res.json()).toMatchObject({
       applies: true,
       emptySpace: FIRST_SPACE,
-      templates: [expect.objectContaining({ catalogId: TEMPLATE_ID, spaceName: 'Code Review' })],
+      templates: expect.arrayContaining([
+        expect.objectContaining({ catalogId: TEMPLATE_ID, spaceName: 'Code Review' }),
+      ]),
     });
     await app.close();
   });

@@ -53,7 +53,11 @@ vi.mock('@aflow/database', async (importOriginal) => {
 
 import { handleScheduleCrudInline } from '../scheduleCrud.js';
 import { failRun } from '../../failRun.js';
-import { MAX_SCHEDULE_CREATES_PER_RUN, scheduleCreatesCounted } from '../scheduleCreateBudget.js';
+import {
+  MAX_SCHEDULE_CREATES_PER_RUN,
+  SCHEDULE_CREATE_COUNT_TTL_SECONDS,
+  scheduleCreatesCounted,
+} from '../scheduleCreateBudget.js';
 
 const TENANT = 'a0000000-0000-4000-8000-000000000001' as TenantId;
 const SPACE = 'b0000000-0000-4000-8000-000000000002';
@@ -176,8 +180,10 @@ describe('agent.schedule.create — the per-run limit', () => {
     for (let task = 0; task < MAX_SCHEDULE_CREATES_PER_RUN; task += 1) {
       expect(await create(redis, sessionId(100 + task))).not.toBe('SCHEDULE_RATE_LIMIT');
     }
-    expect(scheduleCreatesCounted(WORKFLOW_RUN)).toBe(MAX_SCHEDULE_CREATES_PER_RUN);
-    expect(scheduleCreatesCounted(sessionId(100))).toBeUndefined();
+    expect(await scheduleCreatesCounted(redis, TENANT, WORKFLOW_RUN)).toBe(
+      MAX_SCHEDULE_CREATES_PER_RUN,
+    );
+    expect(await scheduleCreatesCounted(redis, TENANT, sessionId(100))).toBeUndefined();
 
     // A further task of the same workflow run finds the run's budget spent.
     expect(await create(redis, sessionId(100 + MAX_SCHEDULE_CREATES_PER_RUN))).toBe(
@@ -186,7 +192,7 @@ describe('agent.schedule.create — the per-run limit', () => {
 
     // A direct run counts against itself, untouched by the workflow run's count.
     expect(await create(redis, sessionId(200))).not.toBe('SCHEDULE_RATE_LIMIT');
-    expect(scheduleCreatesCounted(sessionId(200))).toBe(1);
+    expect(await scheduleCreatesCounted(redis, TENANT, sessionId(200))).toBe(1);
   });
 
   it('leaves no count behind for a direct run that reached a terminal state', async () => {
@@ -197,6 +203,42 @@ describe('agent.schedule.create — the per-run limit', () => {
 
     await failRun(redis, TENANT, run, 'TEST_FAILED', 'The run failed.');
 
-    expect(scheduleCreatesCounted(run)).toBeUndefined();
+    expect(await scheduleCreatesCounted(redis, TENANT, run)).toBeUndefined();
+  });
+
+  // Two orchestrator processes are two clients of one Redis; ioredis-mock
+  // instances share one keyspace, as they would.
+  it("shares a workflow run's count between the processes serving its tasks", async () => {
+    const first = await freshRedis();
+    const second = new RedisMock() as unknown as Redis;
+    for (let task = 0; task <= MAX_SCHEDULE_CREATES_PER_RUN; task += 1) {
+      await serves(first, sessionId(400 + task), WORKFLOW_RUN, `task-${String(task)}`);
+    }
+    for (let task = 0; task < MAX_SCHEDULE_CREATES_PER_RUN; task += 1) {
+      const process = task % 2 === 0 ? first : second;
+      expect(await create(process, sessionId(400 + task))).not.toBe('SCHEDULE_RATE_LIMIT');
+    }
+    expect(await create(second, sessionId(400 + MAX_SCHEDULE_CREATES_PER_RUN))).toBe(
+      'SCHEDULE_RATE_LIMIT',
+    );
+  });
+
+  it('is released by whichever process ends the run, for every process', async () => {
+    const first = await freshRedis();
+    const second = new RedisMock() as unknown as Redis;
+    const run = sessionId(500);
+    for (let n = 0; n < MAX_SCHEDULE_CREATES_PER_RUN; n += 1) await create(first, run);
+
+    await failRun(second, TENANT, run, 'TEST_FAILED', 'The run failed.');
+
+    expect(await scheduleCreatesCounted(first, TENANT, run)).toBeUndefined();
+  });
+
+  it('lets a count whose release was lost expire rather than stay', async () => {
+    const redis = await freshRedis();
+    await create(redis, sessionId(600));
+    const ttl = await redis.ttl(StreamKeys.scheduleCreateCountKey(TENANT, sessionId(600)));
+    expect(ttl).toBeGreaterThan(0);
+    expect(ttl).toBeLessThanOrEqual(SCHEDULE_CREATE_COUNT_TTL_SECONDS);
   });
 });

@@ -1,14 +1,64 @@
 'use client';
 
+import type { ReactNode } from 'react';
 import { Badge, Button, Card, CardBody, Column, Icon, Row, Text } from '@aflow/design-system';
-import type { PostInstallTask } from '@aflow/schemas';
+import {
+  HOST_LANE_FOLDER_REFUSAL,
+  HOST_LANE_HARNESS_REFUSAL,
+  HOST_LANE_PAIRING_REFUSAL,
+  type PostInstallTask,
+  type PostInstallTaskState,
+  type ShepherdScheduleInput,
+} from '@aflow/schemas';
 import { useEdition, type Edition } from '../hooks/useEdition.js';
+import { useApiMutation } from '../hooks/useApiQuery.js';
 import { spaceRoute } from '../lib/space-routes.js';
 
 type IntegrationTask = Extract<
   PostInstallTask,
   { kind: 'fill_credentials' | 'fill_mcp_credentials' | 'run_mcp_binding_test' }
 >;
+
+/** The readiness kinds (Plan 330 D4): listed with the state they read, done included. */
+type StatefulTask = Extract<PostInstallTask, { state: PostInstallTaskState }>;
+
+/** The ones that need a paired machine, so only the local edition can change them. */
+export type HostLaneTask = Extract<
+  StatefulTask,
+  { kind: 'pair_machine' | 'coding_harness' | 'folder_preview' }
+>;
+
+const STATE_BADGE: Record<
+  PostInstallTaskState,
+  { label: string; variant: 'success' | 'warning' | 'danger' }
+> = {
+  done: { label: 'Done', variant: 'success' },
+  needs_setup: { label: 'Needs setup', variant: 'warning' },
+  broken: { label: 'Broken', variant: 'danger' },
+};
+
+function readinessTitle(task: StatefulTask): string {
+  switch (task.kind) {
+    case 'pair_machine':
+      return task.reading === 'machine' ? 'Pair this machine' : 'Connect the repository’s folder';
+    case 'github_credential':
+      return 'Bind a GitHub credential';
+    case 'coding_harness':
+      return 'Choose the coding agent';
+    case 'shepherd_schedule':
+      return 'Arm the shepherd schedule';
+    case 'folder_preview':
+      return 'Declare the folder’s preview';
+  }
+}
+
+/** What the button that opens a task's page says; the host lane's own page is named in its row. */
+const PAGE_LABELS: Record<string, string | undefined> = {
+  '/integrations': 'Open Integrations',
+  '/triggers': 'Open Triggers',
+  '/agents': 'Open Agents',
+  '/store/coding-loop': 'Open Coding Loop',
+};
 
 /** Settings page owning each policy-gated lane, keyed by its operation prefix. */
 const POLICY_SETTINGS_PATH: Record<string, string | undefined> = {
@@ -25,40 +75,72 @@ function integrationDisplayName(task: IntegrationTask): string {
     .join(' ');
 }
 
+/**
+ * The setup checklist — the derived post-install manifest as one list, the
+ * same component on the bundle install, the Store page and the space's help
+ * surface, so a state reads the same on each.
+ */
 export function SetupChecklist({
   tasks,
   spaceSlug,
+  spaceId,
   onNavigate,
+  onChanged,
 }: {
   tasks: PostInstallTask[];
   spaceSlug: string;
+  /** The space the checklist reads; arming the shepherd schedule needs it. */
+  spaceId?: string;
   onNavigate: (path: string) => void;
+  /** A row changed the space — the schedule was armed — so a list read before it is stale. */
+  onChanged?: () => void;
 }) {
   if (tasks.length === 0) return null;
   return (
     <Column gap="sm">
       {tasks.map((task, i) => {
-        if (task.kind === 'coding_loop_setup') {
+        if (
+          task.kind === 'pair_machine' ||
+          task.kind === 'coding_harness' ||
+          task.kind === 'folder_preview'
+        ) {
           return (
-            <Card key={`loop-${task.step}`}>
-              <CardBody>
-                <Column gap="sm">
-                  <Text size="sm" weight="medium">
-                    Needs setup
-                  </Text>
-                  <Text size="sm">{task.description}</Text>
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    onClick={() => {
-                      onNavigate(spaceRoute(spaceSlug, task.path));
-                    }}
-                  >
-                    Open setup
-                  </Button>
-                </Column>
-              </CardBody>
-            </Card>
+            <HostLaneRow
+              key={`host-${task.kind}-${String(i)}`}
+              task={task}
+              spaceSlug={spaceSlug}
+              onNavigate={onNavigate}
+            />
+          );
+        }
+        if (task.kind === 'github_credential') {
+          return (
+            <ReadinessCard
+              key={`gh-${String(i)}`}
+              task={task}
+              actions={<OpenPageButton task={task} spaceSlug={spaceSlug} onNavigate={onNavigate} />}
+            />
+          );
+        }
+        if (task.kind === 'shepherd_schedule') {
+          return (
+            <ReadinessCard
+              key={`sched-${String(i)}`}
+              task={task}
+              actions={
+                <>
+                  {task.schedule !== undefined && spaceId !== undefined && (
+                    <ArmScheduleButton
+                      schedule={task.schedule}
+                      spaceId={spaceId}
+                      recreate={task.state === 'broken'}
+                      {...(onChanged !== undefined ? { onArmed: onChanged } : {})}
+                    />
+                  )}
+                  <OpenPageButton task={task} spaceSlug={spaceSlug} onNavigate={onNavigate} />
+                </>
+              }
+            />
           );
         }
         if (task.kind === 'run_mcp_binding_test') {
@@ -83,16 +165,6 @@ export function SetupChecklist({
         }
         if (task.kind === 'connect_provider') {
           return <ConnectProviderRow key={`cp-${String(i)}`} task={task} onNavigate={onNavigate} />;
-        }
-        if (task.kind === 'pair_machine') {
-          return (
-            <PairMachineRow
-              key={`pm-${String(i)}`}
-              task={task}
-              spaceSlug={spaceSlug}
-              onNavigate={onNavigate}
-            />
-          );
         }
         if (task.kind === 'enable_space_policy') {
           return (
@@ -164,68 +236,215 @@ function ConnectProviderRow({
 }
 
 /**
- * What the row says under its title, which is a different sentence per edition.
+ * What the row says under its title, which is a different sentence per edition:
+ * where no machine can be paired, the item's own refusal — pairing, connecting
+ * a folder, or preferring a coding agent.
  *
  * `null` is the edition nobody has answered for yet, and neither branch is true
  * of it: the hosted line is a claim and the local description promises a button
  * this row withholds until the answer arrives. So it says what it is waiting
  * for — a row with a title and nothing under it reads as a defect.
  */
-export function pairMachineLine(editionId: Edition['id'], description: string): string {
+export function hostLaneLine(editionId: Edition['id'], task: HostLaneTask): string {
   if (editionId === null) return 'Checking which edition this is…';
   if (editionId === 'enterprise') {
-    return (
-      'These skills run on the machine that holds the work. This deployment runs in ' +
-      'the cloud, so there is no computer here to pair with. Available in Aflow Local, ' +
-      'which runs on your own machine.'
-    );
+    if (task.kind === 'coding_harness') return HOST_LANE_HARNESS_REFUSAL;
+    return task.kind === 'pair_machine' && task.reading === 'machine'
+      ? HOST_LANE_PAIRING_REFUSAL
+      : HOST_LANE_FOLDER_REFUSAL;
   }
-  return description;
+  return task.description;
 }
 
-/**
- * The host lane is a paired machine, not a lane a setting switches on, so this
- * row opens This Computer — a surface only the local edition serves. A hosted
- * deployment has no machine to pair, and says that instead of offering a
- * button that deterministically 404s.
- */
-function PairMachineRow({
+/** One readiness item: its title, its state, what it reads and what changes it. */
+function ReadinessCard({
   task,
-  spaceSlug,
-  onNavigate,
+  line,
+  actions,
 }: {
-  task: Extract<PostInstallTask, { kind: 'pair_machine' }>;
-  spaceSlug: string;
-  onNavigate: (path: string) => void;
+  task: StatefulTask;
+  line?: string;
+  actions?: ReactNode;
 }) {
-  const edition = useEdition();
+  const badge = STATE_BADGE[task.state];
   return (
     <Card>
       <CardBody>
         <Column gap="xs">
           <Row gap="sm" align="center" wrap>
-            <Icon name="folder" size="sm" />
+            <Icon name={task.state === 'done' ? 'check-circle' : 'wrench'} size="sm" />
             <Text size="sm" weight="medium">
-              Pair this machine
+              {readinessTitle(task)}
             </Text>
+            <Badge variant={badge.variant}>{badge.label}</Badge>
+            {!task.required && <Badge variant="neutral">Optional</Badge>}
           </Row>
           <Text size="xs" variant="muted">
-            {pairMachineLine(edition.id, task.description)}
+            {line ?? task.description}
           </Text>
-          {edition.id === 'community-local' && (
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => {
-                onNavigate(spaceRoute(spaceSlug, '/computer'));
-              }}
-            >
-              Open This Computer
-            </Button>
+          {task.kind === 'pair_machine' && task.folder !== undefined && (
+            <Row gap="xs" wrap>
+              <Badge variant="neutral">{task.folder.label}</Badge>
+              <Badge variant="neutral">
+                {task.folder.branchPrefix === null
+                  ? 'no branch prefix'
+                  : `prefix ${task.folder.branchPrefix}`}
+              </Badge>
+              {task.folder.mergePosture !== null && (
+                <Badge variant="neutral">merge posture {task.folder.mergePosture}</Badge>
+              )}
+            </Row>
+          )}
+          {task.kind === 'github_credential' && task.missingScopes.length > 0 && (
+            <Row gap="xs" wrap>
+              {task.missingScopes.map((scope) => (
+                <Badge key={scope} variant="warning">
+                  missing {scope}
+                </Badge>
+              ))}
+            </Row>
+          )}
+          {task.kind === 'coding_harness' && task.options.length > 0 && (
+            <Row gap="xs" wrap>
+              {task.options.map((option) => (
+                <Badge key={option.id} variant={option.id === task.chosen ? 'success' : 'neutral'}>
+                  {option.label}
+                </Badge>
+              ))}
+            </Row>
+          )}
+          {task.command !== undefined && task.state !== 'done' && (
+            <Text size="xs" style={{ fontFamily: 'monospace' }}>
+              {task.command}
+            </Text>
+          )}
+          {task.state !== 'done' && actions !== undefined && (
+            <Row gap="sm" wrap>
+              {actions}
+            </Row>
           )}
         </Column>
       </CardBody>
     </Card>
+  );
+}
+
+function OpenPageButton({
+  task,
+  spaceSlug,
+  onNavigate,
+}: {
+  task: StatefulTask;
+  spaceSlug: string;
+  onNavigate: (path: string) => void;
+}) {
+  return (
+    <Button
+      variant="secondary"
+      size="sm"
+      onClick={() => {
+        onNavigate(spaceRoute(spaceSlug, task.page));
+      }}
+    >
+      {PAGE_LABELS[task.page] ?? 'Open setup'}
+    </Button>
+  );
+}
+
+/**
+ * The operator's word that creates the shepherd schedule, or recreates it from
+ * what the expired one stored (Plan 330 D3). Nothing schedules it at install.
+ */
+function ArmScheduleButton({
+  schedule,
+  spaceId,
+  recreate,
+  onArmed,
+}: {
+  schedule: ShepherdScheduleInput;
+  spaceId: string;
+  recreate: boolean;
+  onArmed?: () => void;
+}) {
+  const arm = useApiMutation<ShepherdScheduleInput>({
+    path: '/schedules',
+    method: 'POST',
+    spaceId,
+    serialize: (input) =>
+      JSON.stringify({
+        name: 'Local PR Shepherd',
+        action: 'start_run',
+        flowId: input.agentId,
+        kind: 'cron',
+        cronExpression: input.cronExpression,
+        inputTemplate: input.inputTemplate,
+        ...(input.maxFirings !== null ? { maxFirings: input.maxFirings } : {}),
+      }),
+    invalidate: [['space', spaceId]],
+    onSuccess: () => {
+      onArmed?.();
+    },
+  });
+  // Once armed, the button stays spent until the list reads the schedule:
+  // another press would create a second schedule beside the first.
+  if (arm.isSuccess) {
+    return (
+      <Button variant="secondary" size="sm" disabled>
+        Schedule armed
+      </Button>
+    );
+  }
+  return (
+    <Button
+      variant="primary"
+      size="sm"
+      loading={arm.isPending}
+      disabled={arm.isPending}
+      onClick={() => {
+        arm.mutate(schedule);
+      }}
+    >
+      {recreate ? 'Recreate the schedule' : 'Arm the schedule'}
+    </Button>
+  );
+}
+
+/**
+ * The host lane's items — the paired machine, the connected folder, the coding
+ * agent and the folder's preview — are changed on This Computer, a surface only
+ * the local edition serves. A hosted deployment has no machine to pair, and
+ * says that instead of offering a button that deterministically 404s.
+ */
+function HostLaneRow({
+  task,
+  spaceSlug,
+  onNavigate,
+}: {
+  task: HostLaneTask;
+  spaceSlug: string;
+  onNavigate: (path: string) => void;
+}) {
+  const edition = useEdition();
+  return (
+    <ReadinessCard
+      task={task}
+      line={hostLaneLine(edition.id, task)}
+      actions={
+        edition.id === 'community-local' && (
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => {
+              onNavigate(spaceRoute(spaceSlug, task.page));
+            }}
+          >
+            {task.page === '/computer'
+              ? 'Open This Computer'
+              : (PAGE_LABELS[task.page] ?? 'Open setup')}
+          </Button>
+        )
+      }
+    />
   );
 }
 

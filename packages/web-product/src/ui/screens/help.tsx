@@ -31,6 +31,7 @@ import type {
 } from '@aflow/schemas';
 import { AppPageHeader } from '../components/app-page-header.js';
 import { MarkdownRenderer } from '../components/markdown-renderer.js';
+import { SpaceSetupHelp } from '../components/space-setup-help.js';
 import { useSpace } from '../components/providers.js';
 import { useApiQuery } from '../hooks/useApiQuery.js';
 import { useSpaceLlmReadiness } from '../hooks/useSpaceLlmReadiness.js';
@@ -140,13 +141,16 @@ function HelpCenter({ routeArticleId }: { routeArticleId?: string }): ReactEleme
     content = <EmptyState title="No help articles" description="Nothing is published yet." />;
   } else {
     content = (
-      <HelpThemeView
-        key={selectedTheme}
-        theme={selectedTheme}
-        articles={articles.filter((article) => article.theme === selectedTheme)}
-        selectedArticleId={selectedArticle?.id}
-        onSelect={select}
-      />
+      <>
+        <SpaceSetupHelp />
+        <HelpThemeView
+          key={selectedTheme}
+          theme={selectedTheme}
+          articles={articles.filter((article) => article.theme === selectedTheme)}
+          selectedArticleId={selectedArticle?.id}
+          onSelect={select}
+        />
+      </>
     );
   }
 

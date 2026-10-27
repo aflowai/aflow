@@ -9,6 +9,7 @@ import {
   BundledApiDefinitionSchema,
   BundledSkillStarterAgentSchema,
   PostInstallTaskSchema,
+  PostInstallTaskStateSchema,
 } from '../cybernetic/skillBundle.js';
 import { EntityDirectivesSchema } from '../cybernetic/directives.js';
 import { HelpArticleIdSchema } from '../help/article.js';
@@ -19,15 +20,27 @@ export const POST_INSTALL_TASK_KINDS: readonly string[] = PostInstallTaskSchema.
   (option) => option.shape.kind.value,
 );
 
-export const SpaceReadinessStateSchema = z.enum(['done', 'needs_setup', 'broken']);
+/** Whether each kind is required, as its variant pins it: an item cannot say otherwise. */
+const REQUIRED_BY_KIND: ReadonlyMap<string, boolean> = new Map(
+  PostInstallTaskSchema.options.map((option) => [
+    option.shape.kind.value,
+    option.shape.required.value,
+  ]),
+);
+
+export const SpaceReadinessStateSchema = PostInstallTaskStateSchema;
 export type SpaceReadinessState = z.infer<typeof SpaceReadinessStateSchema>;
 
 /**
  * One thing the space needs before it works (Plan 330 D4). Its state is never
  * authored: it is read from live state when the readiness list is asked for.
- * `answeredBy` names the post-install task kind whose presence in the
- * bundles' derived manifest means the item is unmet, so the template's list
- * reads the same function the bundle install does rather than a second one.
+ * `answeredBy` names the post-install task kind that answers it, and
+ * `reading` which of `pair_machine`'s two readings does — both, worst first,
+ * where it names neither.
+ * The template's items are handed to `generatePostInstallManifest`, so the
+ * template's list is read by the function the bundle install reads, not a
+ * second one: a stateful task's state is the item's, and a kind listed only
+ * while unmet makes the item `needs_setup` while it is listed.
  */
 export const SpaceTemplateReadinessItemSchema = z
   .object({
@@ -41,6 +54,7 @@ export const SpaceTemplateReadinessItemSchema = z
     answeredBy: z.string().refine((kind) => POST_INSTALL_TASK_KINDS.includes(kind), {
       message: 'answeredBy must name a post-install task kind',
     }),
+    reading: z.enum(['machine', 'folder']).optional(),
     page: z
       .string()
       .min(2)
@@ -58,6 +72,14 @@ export const SpaceTemplateReadinessItemSchema = z
   .strict()
   .refine((item) => item.page !== undefined || item.command !== undefined, {
     message: 'A readiness item names the page or the command that changes it',
+  })
+  .refine((item) => item.reading === undefined || item.answeredBy === 'pair_machine', {
+    message: 'reading names a pair_machine reading, and only that kind has two',
+    path: ['reading'],
+  })
+  .refine((item) => REQUIRED_BY_KIND.get(item.answeredBy) === item.required, {
+    message: 'required follows the kind that answers the item',
+    path: ['required'],
   });
 export type SpaceTemplateReadinessItem = z.infer<typeof SpaceTemplateReadinessItemSchema>;
 

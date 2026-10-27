@@ -754,7 +754,7 @@ export async function applyStepSucceeded(params: ApplyStepSucceededParams): Prom
     );
 
     await markRunInactive(redis, result.tenantId, result.sessionId).catch(() => {});
-    releaseScheduleCreates(result.sessionId);
+    await releaseScheduleCreates(redis, result.tenantId, result.sessionId);
 
     try {
       const { forwardEventToParent } = await import('./forwardChildEvent.js');

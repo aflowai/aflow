@@ -17,11 +17,14 @@ import { PgDialect } from 'drizzle-orm/pg-core';
 import {
   SPACE_TEMPLATE_CATALOG,
   getCatalogEntry,
+  getHelpArticle,
   getSkillBundleEntry,
+  getSpaceTemplate,
 } from '@aflow/platform-artifacts';
 import type {
   ComposedLanes,
   EntityDirectives,
+  PostInstallTask,
   SkillBundle,
   SpaceReadinessEntry,
   SpaceTemplate,
@@ -33,6 +36,8 @@ interface Row {
 }
 
 const store = vi.hoisted(() => ({
+  /** What the readiness facts query reads in the space; a fresh space reads nothing. */
+  facts: {} as Row,
   installs: [] as Row[],
   artifacts: [] as Row[],
   claims: [] as Row[],
@@ -45,6 +50,7 @@ const dialect = new PgDialect();
 function applyExecute(query: SQL): unknown[] {
   const { sql: text, params } = dialect.sqlToQuery(query);
   if (text.includes('pg_try_advisory_xact_lock')) return [{ acquired: true }];
+  if (text.includes('AS preferred_harness')) return [store.facts];
   if (text.includes('INSERT INTO store_installs')) {
     const [catalogId, spaceId, kind, version, hash, state] = params as [
       string,
@@ -151,6 +157,7 @@ vi.mock('../stagedChange/skillBundleInstall.js', async (importOriginal) => ({
 }));
 
 const { executeSpaceTemplateInstall } = await import('./spaceTemplateInstall.js');
+const { readListingReadiness, readSpaceHelpReadiness } = await import('./spaceReadiness.js');
 const { executeStoreInstall } = await import('./storeInstallExecution.js');
 
 const TENANT_ID = 'tenant-1' as TenantId;
@@ -176,6 +183,47 @@ const FRESH_SPACE_READINESS: Record<string, SpaceReadinessEntry[]> = {
       required: true,
       state: 'needs_setup',
       page: '/computer',
+    },
+  ],
+  // Five items, all needing setup; the folder's preview is not listed until
+  // Plan 320 P6(a) builds the declaration it reads (Plan 330 §7 F3).
+  'coding-with-github': [
+    {
+      key: 'pair-machine',
+      title: 'Pair this machine',
+      required: true,
+      state: 'needs_setup',
+      page: '/computer',
+    },
+    {
+      key: 'connect-folder',
+      title: "Connect the repository's folder with a branch prefix and a merge posture",
+      required: true,
+      state: 'needs_setup',
+      page: '/computer',
+      command:
+        'aflow connect <code> --write --run --branch-prefix <prefix> --merge-posture <never|when-green>',
+    },
+    {
+      key: 'github-credential',
+      title: 'Bind a GitHub credential with the scopes publish and the shepherd need',
+      required: true,
+      state: 'needs_setup',
+      page: '/integrations',
+    },
+    {
+      key: 'coding-harness',
+      title: 'Choose the coding agent',
+      required: true,
+      state: 'needs_setup',
+      page: '/computer',
+    },
+    {
+      key: 'shepherd-schedule',
+      title: 'Arm the shepherd schedule',
+      required: true,
+      state: 'needs_setup',
+      page: '/triggers',
     },
   ],
 };
@@ -243,6 +291,7 @@ function installTemplate(template: SpaceTemplate, spaceId: string) {
 }
 
 beforeEach(() => {
+  store.facts = {};
   store.installs = [];
   store.artifacts = [];
   store.claims = [];
@@ -407,5 +456,227 @@ describe('a template is never applied to a space that exists', () => {
       body: { code: 'SPACE_TEMPLATE_NEEDS_NEW_SPACE' },
     });
     expect(installSkillBundle).not.toHaveBeenCalled();
+  });
+});
+
+// ----------------------------------------------------------------------------
+// Coding with GitHub (Plan 330 P2)
+// ----------------------------------------------------------------------------
+
+const SHEPHERD_ID = '30000000-0000-4000-8000-000000000001';
+
+/** A Redis carrying one running machine's inventory, with the harnesses it reports. */
+function machineRedis(harnesses: Array<{ id: string; installed: boolean }>): never {
+  const inventory = {
+    hostname: 'machine',
+    observedAt: new Date().toISOString(),
+    runtimes: [],
+    harnesses,
+    maxConcurrentHarnessRuns: 2,
+    folders: [],
+    browsers: [],
+  };
+  return {
+    zrangebyscore: async () => ['machine'],
+    get: async (key: string) => (key.endsWith(':machine') ? JSON.stringify(inventory) : null),
+    set: async () => 'OK',
+  } as never;
+}
+
+function codingWithGithub(): SpaceTemplate {
+  const template = getSpaceTemplate('coding-with-github');
+  if (template === null) throw new Error('Coding with GitHub is not in the catalog');
+  return template;
+}
+
+/**
+ * The three surfaces of Plan 330 D4, each as it reads the space: the bundle
+ * install's manifest (what `installSkillBundle` returns, and Repair installation
+ * and Check setup again read), the Store page's listing readiness and the
+ * space's help surface.
+ */
+async function readSurfaces(spaceId: string, redis: never) {
+  const ctx = { tenantId: TENANT_ID, spaceId, redis, lanes: LOCAL };
+  const bundle = getSkillBundleEntry('coding-loop');
+  const listingEntry = getCatalogEntry('coding-with-github');
+  if (bundle === null || !listingEntry) throw new Error('catalog entries missing');
+  const install = await generatePostInstallManifest({ ...ctx, bundle, tx: fakeTx as never });
+  const listing = await readListingReadiness(fakeTx as never, listingEntry, ctx);
+  const [help] = await readSpaceHelpReadiness(fakeTx as never, ctx);
+  if (!listing || !('readiness' in listing) || help === undefined) {
+    throw new Error('the space made from the template reads no readiness');
+  }
+  return { install, listing, help };
+}
+
+function taskOf(tasks: readonly PostInstallTask[], kind: PostInstallTask['kind']) {
+  return tasks.find((task) => task.kind === kind);
+}
+
+describe('Code Review on This Computer', () => {
+  it('reads done with a read-only folder on a running machine: review needs no push', async () => {
+    const template = getSpaceTemplate('local-review-quick-start');
+    const entry = getCatalogEntry('local-review-quick-start');
+    if (template === null || !entry) throw new Error('the quick start is not in the catalog');
+    const spaceId = freshSpaceId();
+    expect((await installTemplate(template, spaceId)).ok).toBe(true);
+    store.facts = {
+      folders: [
+        {
+          id: 'app',
+          label: 'app',
+          allowsExecution: false,
+          branchPrefix: null,
+          connectedAt: '2026-10-20T00:00:00Z',
+        },
+      ],
+    };
+    const readiness = await readListingReadiness(fakeTx as never, entry, {
+      tenantId: TENANT_ID,
+      spaceId,
+      redis: machineRedis([]),
+      lanes: LOCAL,
+    });
+    expect(readiness && 'readiness' in readiness ? readiness.readiness : null).toEqual([
+      expect.objectContaining({ key: 'pair-machine', state: 'done' }),
+    ]);
+    expect(readiness?.tasks.map((task) => ('command' in task ? task.command : null))).toEqual([
+      null,
+      null,
+    ]);
+  });
+});
+
+describe('Coding with GitHub', () => {
+  it('brings the coding-loop entry, its directives and its help, with five items needing setup and no preview', async () => {
+    const template = codingWithGithub();
+    expect(template.bundleIds).toEqual(['coding-loop']);
+    const spaceId = freshSpaceId();
+    const result = await installTemplate(template, spaceId);
+    if (!result.ok) throw new Error(`install failed: ${JSON.stringify(result.body)}`);
+    if (result.response.result.kind !== 'space') throw new Error('expected a space result');
+
+    expect(store.installs).toContainEqual(
+      expect.objectContaining({ catalog_id: 'coding-loop', space_id: spaceId, kind: 'bundle' }),
+    );
+    const directives = store.spaces.find((space) => space.id === spaceId)?.directives;
+    expect(directives?.responsibility).toContain("the space's connected folder");
+    expect(directives?.priorities.join(' ')).toContain("the space's github binding");
+
+    const [help] = await readSpaceHelpReadiness(fakeTx as never, {
+      tenantId: TENANT_ID,
+      spaceId,
+      lanes: LOCAL,
+    });
+    expect(help?.help).toContain('driving-work-through-the-loop');
+    for (const articleId of help?.help ?? []) {
+      expect(getHelpArticle(articleId, 'community-local')?.id).toBe(articleId);
+    }
+
+    const { readiness } = result.response.result;
+    expect(readiness).toHaveLength(5);
+    expect(readiness.every((item) => item.state === 'needs_setup' && item.required)).toBe(true);
+    const kinds = result.response.setupChecklist.map((task) => task.kind);
+    expect(kinds).not.toContain('folder_preview');
+    expect(kinds).not.toContain('designate_repo');
+  });
+
+  it('reports pairing broken with the edition’s refusal where no machine can be paired', async () => {
+    const spaceId = freshSpaceId();
+    expect((await installTemplate(codingWithGithub(), spaceId)).ok).toBe(true);
+    const entry = getCatalogEntry('coding-with-github');
+    if (!entry) throw new Error('no listing');
+    const hosted = await readListingReadiness(fakeTx as never, entry, {
+      tenantId: TENANT_ID,
+      spaceId,
+      lanes: { hostLane: 'absent' },
+    });
+    expect(hosted && 'readiness' in hosted ? hosted.readiness[0] : null).toMatchObject({
+      key: 'pair-machine',
+      state: 'broken',
+    });
+    expect(taskOf(hosted?.tasks ?? [], 'pair_machine')).toMatchObject({
+      state: 'broken',
+      description: expect.stringContaining('no computer here to pair with'),
+    });
+  });
+
+  it('changes the coding agent item as its live state changes, the same on all three surfaces', async () => {
+    const spaceId = freshSpaceId();
+    const result = await installTemplate(codingWithGithub(), spaceId);
+    expect(result.ok).toBe(true);
+
+    const states: string[] = [];
+    for (const [preferred, harnesses] of [
+      [null, [{ id: 'codex', installed: true }]],
+      ['codex', [{ id: 'codex', installed: true }]],
+      ['codex', [{ id: 'codex', installed: false }]],
+    ] as const) {
+      store.facts = { preferred_harness: preferred };
+      const { install, listing, help } = await readSurfaces(spaceId, machineRedis([...harnesses]));
+      const task = taskOf(install, 'coding_harness');
+      expect(taskOf(listing.tasks, 'coding_harness')).toEqual(task);
+      expect(taskOf(help.tasks, 'coding_harness')).toEqual(task);
+      const item = listing.readiness.find((entry) => entry.key === 'coding-harness');
+      expect(help.readiness.find((entry) => entry.key === 'coding-harness')).toEqual(item);
+      expect(item?.state).toBe(task && 'state' in task ? task.state : undefined);
+      states.push(item?.state ?? 'missing');
+    }
+    expect(states).toEqual(['needs_setup', 'done', 'broken']);
+  });
+
+  it('changes the shepherd schedule item when a schedule appears and when it expires, the same on all three surfaces', async () => {
+    const spaceId = freshSpaceId();
+    const result = await installTemplate(codingWithGithub(), spaceId);
+    expect(result.ok).toBe(true);
+    const renewal = { input: 'tend', config: { scheduleId: { $schedule: 'id' } } };
+    const schedule = {
+      status: 'active',
+      cronExpression: '*/10 * * * *',
+      maxFirings: 50,
+      firingCount: 12,
+      expiresAt: null,
+      inputTemplate: renewal,
+      renews: true,
+      failure: null,
+    };
+    const shepherd = { id: SHEPHERD_ID, archived: false, writtenAt: '2026-10-01T00:00:00Z' };
+
+    const read = async () => {
+      const surfaces = await readSurfaces(spaceId, machineRedis([]));
+      const task = taskOf(surfaces.install, 'shepherd_schedule');
+      expect(taskOf(surfaces.listing.tasks, 'shepherd_schedule')).toEqual(task);
+      expect(taskOf(surfaces.help.tasks, 'shepherd_schedule')).toEqual(task);
+      const item = surfaces.help.readiness.find((entry) => entry.key === 'shepherd-schedule');
+      expect(surfaces.listing.readiness.find((entry) => entry.key === 'shepherd-schedule')).toEqual(
+        item,
+      );
+      return { task, item };
+    };
+
+    store.facts = { shepherd, schedules: [] };
+    const absent = await read();
+    expect(absent.item?.state).toBe('needs_setup');
+    expect(absent.task).toMatchObject({
+      schedule: { agentId: SHEPHERD_ID, cronExpression: '*/5 * * * *', maxFirings: 50 },
+    });
+
+    store.facts = { shepherd, schedules: [schedule] };
+    const armed = await read();
+    expect(armed.item?.state).toBe('done');
+    expect(armed.task).toMatchObject({ firingsLeft: 38 });
+
+    store.facts = { shepherd, schedules: [{ ...schedule, status: 'expired', firingCount: 50 }] };
+    const expired = await read();
+    expect(expired.item?.state).toBe('broken');
+    // Recreated from what it stored: its own cron, not the default.
+    expect(expired.task).toMatchObject({
+      schedule: {
+        agentId: SHEPHERD_ID,
+        cronExpression: '*/10 * * * *',
+        maxFirings: 50,
+        inputTemplate: renewal,
+      },
+    });
   });
 });

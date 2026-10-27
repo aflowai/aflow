@@ -157,7 +157,7 @@ export function createForceCompleteInFlightStep(deps: SessionOrchestratorFactory
 
     if (!isInterrupt) {
       await markRunInactive(redis, tenantId, runId).catch(() => {});
-      releaseScheduleCreates(runId);
+      await releaseScheduleCreates(redis, tenantId, runId);
     }
 
     manifestService?.updateStatus(runId, tenantId, isInterrupt ? 'PAUSED' : 'CANCELLED');

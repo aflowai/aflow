@@ -327,7 +327,7 @@ export async function completeRun(
     return false;
   }
 
-  releaseScheduleCreates(runId);
+  await releaseScheduleCreates(deps.redis, tenantIdStr, runId);
 
   await emitRunUpdated(deps.redis, {
     tenantId: tenantIdStr,

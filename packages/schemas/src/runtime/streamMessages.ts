@@ -161,6 +161,14 @@ export const StreamKeys = {
   spaceContextGenKey: (tenantId: string, spaceId: string) =>
     `aflow:space:${tenantId}:${spaceId}:ctxgen` as const,
 
+  /**
+   * Schedules created so far by a run — a direct session, or every task of a
+   * workflow run — against `MAX_SCHEDULE_CREATES_PER_RUN`. Shared by every
+   * orchestrator process, deleted where the run ends, with a TTL as backstop.
+   */
+  scheduleCreateCountKey: (tenantId: string, runId: string) =>
+    `aflow:run:${tenantId}:${runId}:schedule-creates` as const,
+
   sessionCorruptMarkerKey: (tenantId: string, sessionId: string) =>
     `aflow:session:${tenantId}:${sessionId}:corrupt` as const,
 

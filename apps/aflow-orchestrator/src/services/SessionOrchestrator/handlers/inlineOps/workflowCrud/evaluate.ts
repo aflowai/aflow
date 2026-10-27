@@ -17,6 +17,7 @@ import type { InlineHandlerArgs } from '../types.js';
 import { emitStepSuccess, emitStepError } from '../helpers.js';
 import { requireSpaceId } from '../spaceScope.js';
 import { getRepos, readJsonDoc, writeJsonDoc } from './shared.js';
+import { releaseScheduleCreates } from '../scheduleCreateBudget.js';
 
 export async function handleWorkflowEvaluate(
   args: InlineHandlerArgs,
@@ -155,6 +156,9 @@ export async function handleWorkflowEvaluate(
           status: 'completed',
           completedAt: new Date(),
         });
+        if (completedRunHere) {
+          await releaseScheduleCreates(args.redis, tenantIdStr, run.runId);
+        }
       }
     }
   }

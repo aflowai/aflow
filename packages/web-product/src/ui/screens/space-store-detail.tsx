@@ -21,6 +21,7 @@ import {
 import type {
   ConnectorCatalogEntry,
   McpConnectorCatalogEntry,
+  PostInstallTask,
   SkillBundle,
   StoreInstallPreviewResponse,
   StoreInstallResponse,
@@ -31,6 +32,7 @@ import type {
 import {
   CODE_LANE_ABSENT_CAPABILITY_ID,
   CODE_REPO_CAPABILITY_ID,
+  openPostInstallTasks,
   parseStoreInstallClaimant,
 } from '@aflow/schemas';
 import { setupCapabilityRemediation } from './storeSetupCheck.js';
@@ -615,6 +617,7 @@ function StoreListingPageInner() {
                 <SetupChecklist
                   tasks={detail.readiness.tasks}
                   spaceSlug={spaceSlug}
+                  spaceId={spaceId}
                   onNavigate={push}
                 />
               )}
@@ -732,6 +735,7 @@ function StoreListingPageInner() {
           {flow.phase === 'done' && (
             <InstallSuccessView
               response={flow.response}
+              liveTasks={detail.readiness?.tasks}
               spaceId={spaceId}
               spaceSlug={spaceSlug}
               openPath={openPath}
@@ -943,16 +947,18 @@ function StoreListingPageInner() {
           <Column gap="md">
             {flow.preview.readiness === 'broken' && (
               <Text size="sm">
-                Broken — the shepherd schedule reports a failure. Open Triggers to inspect it.
+                Broken — something that was set up stopped working. The item marked Broken says what
+                changes it.
               </Text>
             )}
             <SetupChecklist
               tasks={flow.preview.setupChecklist ?? []}
               spaceSlug={spaceSlug}
+              spaceId={spaceId}
               onNavigate={push}
             />
             {flow.preview.missingCapabilities.length === 0 &&
-            (flow.preview.setupChecklist?.length ?? 0) === 0 &&
+            openPostInstallTasks(flow.preview.setupChecklist ?? []).length === 0 &&
             flow.preview.readiness !== 'broken' ? (
               <Row gap="sm" align="center">
                 <Icon name="check-circle" size="sm" />
@@ -1174,22 +1180,29 @@ function StoreListingPageInner() {
 
 function InstallSuccessView({
   response,
+  liveTasks,
   spaceId,
   spaceSlug,
   openPath,
   onNavigate,
 }: {
   response: StoreInstallResponse;
+  /** The listing's readiness as it reads now, shown once a row has changed the space. */
+  liveTasks: PostInstallTask[] | undefined;
   spaceId: string;
   spaceSlug: string;
   openPath: string;
   onNavigate: (path: string) => void;
 }) {
-  const { result, setupChecklist } = response;
+  const { result } = response;
+  // The install's answer is a snapshot; once a row changes the space (arming
+  // the shepherd schedule), the listing's live readiness replaces it.
+  const [changed, setChanged] = useState(false);
+  const setupChecklist = changed && liveTasks ? liveTasks : response.setupChecklist;
   const needsAccountConnect =
     result.kind === 'connector' && result.status === 'needs_oauth_consent';
   const consentPath = result.kind === 'connector' ? result.consentPath : undefined;
-  const allDone = setupChecklist.length === 0 && !needsAccountConnect;
+  const allDone = openPostInstallTasks(setupChecklist).length === 0 && !needsAccountConnect;
 
   const queryClient = useQueryClient();
   const { launch } = useOAuthConsentPopup();
@@ -1236,7 +1249,11 @@ function InstallSuccessView({
               <SetupChecklist
                 tasks={setupChecklist}
                 spaceSlug={spaceSlug}
+                spaceId={spaceId}
                 onNavigate={onNavigate}
+                onChanged={() => {
+                  setChanged(true);
+                }}
               />
             </Column>
           )}

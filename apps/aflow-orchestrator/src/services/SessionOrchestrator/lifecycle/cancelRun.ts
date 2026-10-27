@@ -74,7 +74,7 @@ export function createCancelRun(bindings: SessionOrchestratorBindings) {
       );
 
       await markRunInactive(redis, params.tenantId, params.runId).catch(() => {});
-      releaseScheduleCreates(params.runId);
+      await releaseScheduleCreates(redis, params.tenantId, params.runId);
 
       manifestService?.updateStatus(params.runId, params.tenantId, 'CANCELLED');
     }

@@ -132,7 +132,7 @@ async function handleCreate(
   const spaceId = requireSpaceId(context);
 
   // --- Rate limit: max creates per run ---
-  if (!claimScheduleCreate(await scheduleBudgetRunId(args))) {
+  if (!(await claimScheduleCreate(args.redis, context.tenantId, await scheduleBudgetRunId(args)))) {
     await emitStepError(
       args,
       'SCHEDULE_RATE_LIMIT',
