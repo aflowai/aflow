@@ -3,14 +3,17 @@
 /**
  * The board's side rail (Plan 322 P3.3): where a node's text lives. It reads
  * the node on demand when a card is opened — in full, the runs in flight, its
- * newest run links and its findings, each a page of the node detail — and,
- * for an open node, holds the operator's own controls (P3.2).
+ * newest run links and its findings, each a page of the node detail — with
+ * **Now**, the note's first line, above the goal and the whole note folded
+ * under **Working note** (Plan 332 D5), and, for an open node, holds the
+ * operator's own controls (P3.2).
  */
 import { useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import { Badge, Button, Column, Row, Text, type BadgeVariant } from '@aflow/design-system';
 import type {
   PlanBoardColumn,
+  PlanNeedsYouReason,
   PlanNodeDetailOutput,
   PlanNodeLink,
   PlanTreeNode,
@@ -18,6 +21,7 @@ import type {
 import { useApiQuery } from '../../hooks/useApiQuery.js';
 import { spaceRoute } from '../../lib/space-routes.js';
 import {
+  NEEDS_YOU_REASON_LABEL,
   PLAN_BOARD_COLUMNS,
   phaseLabel,
   pullRequestLabel,
@@ -40,9 +44,9 @@ const ALL_RUNS_PAGE = 50;
 export const RAIL_WIDTH = '360px';
 
 const COLUMN_BADGE: Record<PlanBoardColumn, BadgeVariant> = {
-  next: 'accent',
-  progress: 'running',
-  decide: 'warning',
+  needs_you: 'warning',
+  in_flight: 'running',
+  up_next: 'accent',
   done: 'success',
   dropped: 'danger',
 };
@@ -196,6 +200,10 @@ function AllRunsMore({
 export interface PlanRailProps {
   node: PlanTreeNode;
   column: PlanBoardColumn;
+  /** Why the step needs the operator, where it stands under Needs you. */
+  reason: PlanNeedsYouReason | undefined;
+  /** The step the stream walk takes next for its plan. */
+  next: boolean;
   phase: PlanTreeNode | undefined;
   spaceId: string;
   spaceSlug: string;
@@ -209,6 +217,8 @@ export interface PlanRailProps {
 export function PlanRail({
   node,
   column,
+  reason,
+  next,
   phase,
   spaceId,
   spaceSlug,
@@ -218,6 +228,7 @@ export function PlanRail({
   onDismiss,
 }: PlanRailProps) {
   const [allRuns, setAllRuns] = useState(false);
+  const [noteOpen, setNoteOpen] = useState(false);
   // Read when the card is opened and again whenever it is, never from the
   // tree: the goal and criteria are what the operator closes it against, and
   // the revision a write is pinned to is the one they were read at.
@@ -246,6 +257,10 @@ export function PlanRail({
       <Row gap="xs" align="center" justify="between">
         <Row gap="xs" align="center" wrap>
           <Badge variant={COLUMN_BADGE[column]}>{columnLabel}</Badge>
+          {reason !== undefined && (
+            <Badge variant="warning">{NEEDS_YOU_REASON_LABEL[reason]}</Badge>
+          )}
+          {next && <Badge variant="accent">Next</Badge>}
           {phase !== undefined && <Badge variant="neutral">{phaseLabel(phase.title)}</Badge>}
         </Row>
         <Button size="sm" variant="ghost" onClick={onDismiss}>
@@ -282,6 +297,11 @@ export function PlanRail({
           {`This step could not be read: ${detail.error.message}`}
         </Text>
       )}
+      {node.noteHead !== undefined && (
+        <Section label="Now">
+          <Text size="sm">{node.noteHead}</Text>
+        </Section>
+      )}
       <Section label="Goal">
         <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>
           {full?.goal ?? node.goalHead}
@@ -292,6 +312,27 @@ export function PlanRail({
           <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>
             {full.criteria}
           </Text>
+        </Section>
+      )}
+      {full?.note !== undefined && (
+        <Section label="Working note">
+          <Row>
+            <Button
+              size="sm"
+              variant="ghost"
+              aria-expanded={noteOpen}
+              onClick={() => {
+                setNoteOpen((held) => !held);
+              }}
+            >
+              {noteOpen ? 'Hide note' : 'Show note'}
+            </Button>
+          </Row>
+          {noteOpen && (
+            <Text size="sm" style={{ whiteSpace: 'pre-wrap' }} data-plan-note>
+              {full.note}
+            </Text>
+          )}
         </Section>
       )}
       {full?.outcome !== undefined && (

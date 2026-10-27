@@ -17,7 +17,7 @@ import {
   withTenantSchema,
   type TenantContext,
 } from '@aflow/database';
-import type { PlanNode } from '@aflow/schemas';
+import { PLAN_NODE_NOTE_HEAD_MAX_CHARS, type PlanNode } from '@aflow/schemas';
 import { createPlanNode, linkPlanNode, updatePlanNode } from '../plan/operations.js';
 import { createPlanNodeStore } from '../plan/store.js';
 
@@ -158,6 +158,12 @@ describeDb('plan store reads for the operator’s plan (real DB)', () => {
     it('reads when each node was made and closed and the head of its goal, for the nodes named', async () => {
       const done = await close(await node('done'), 'done', `Merged ${PR_URL}.`);
       const open = await node('open');
+      const noted = await updatePlanNode(ctx(), {
+        nodeId: open.nodeId,
+        expectedRevision: open.revision,
+        note: `  Proposed: ${'p'.repeat(PLAN_NODE_NOTE_HEAD_MAX_CHARS)}\nThe rest of the note.`,
+      });
+      if (!noted.ok) throw new Error(noted.message);
       const elsewhere = await node('elsewhere', OTHER_SPACE_ID);
 
       const facts = await store.boardFactsOf(SPACE_ID, [
@@ -172,6 +178,13 @@ describeDb('plan store reads for the operator’s plan (real DB)', () => {
         goalHead: 'Be read back as written.',
       });
       expect(facts.get(open.nodeId)).not.toHaveProperty('closedAt');
+      // The note's first line, trimmed and cut as the goal's head is.
+      expect(facts.get(open.nodeId)?.noteHead).toBe(
+        `Proposed: ${'p'.repeat(PLAN_NODE_NOTE_HEAD_MAX_CHARS)}`.slice(
+          0,
+          PLAN_NODE_NOTE_HEAD_MAX_CHARS,
+        ),
+      );
       expect(facts.has(elsewhere.nodeId)).toBe(false);
       expect(await store.boardFactsOf(SPACE_ID, [])).toEqual(new Map());
     });
