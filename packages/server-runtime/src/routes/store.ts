@@ -63,6 +63,8 @@ import {
   searchListableEntries,
   selectListableEntries,
   spaceTemplateRefusal,
+  spaceHelpReadsGithub,
+  templateReadsGithub,
   previewBundleInstall,
   ListingInstalledStateSchema,
 } from '@aflow/cybernetic-runtime';
@@ -96,11 +98,12 @@ const ReadinessSchema = z.object({
 /**
  * Whether a listing read reads the space's github credential, and so asks
  * GitHub about it first, outside the readiness transaction: the coding loop's
- * bundle, and a quick start only in the space made from it — the one place its
- * readiness is read.
+ * bundle, and a quick start whose readiness reads the credential, only in the
+ * space made from it — the one place its readiness is read.
  */
 function readinessAsksGithub(entry: CatalogEntry, spaceMadeFromIt: boolean): boolean {
-  return entry.catalogId === 'coding-loop' || (entry.kind === 'space' && spaceMadeFromIt);
+  if (entry.catalogId === 'coding-loop') return true;
+  return entry.kind === 'space' && spaceMadeFromIt && templateReadsGithub(entry.payload);
 }
 
 const InstallConflictBodySchema = z.union([
@@ -275,7 +278,12 @@ export const storeListingRoutes: FastifyPluginAsync = async (fastify) => {
       const tenant = await request.requireTenant();
       const space = await request.requireSpace();
       const redis = getRedis(fastify);
-      const githubAnswers = await askGithubForSpace(db, tenant.tenantId, space.spaceId, { redis });
+      const readsGithub = await withTenantSchema(db, createTenantContext(tenant.tenantId), (tx) =>
+        spaceHelpReadsGithub(tx, space.spaceId),
+      );
+      const githubAnswers = readsGithub
+        ? await askGithubForSpace(db, tenant.tenantId, space.spaceId, { redis })
+        : undefined;
       const templates = await withTenantSchema(db, createTenantContext(tenant.tenantId), (tx) =>
         readSpaceHelpReadiness(tx, {
           tenantId: tenant.tenantId,

@@ -131,23 +131,28 @@ export async function executeOperatorWorkflowRunResume(
     runId,
   );
 
+  if (!surfaced) {
+    return {
+      ok: false,
+      code: 'RESUME_CONTRACT_UNAVAILABLE',
+      message: `Run ${runId} paused on "${run.pausedReason ?? 'unknown'}" but no resume contract surfaced (payload retrieval or schema validation failed). Cannot resolve mode "${args.input.resolution.mode}" without a valid contract.`,
+    };
+  }
+
+  // As the Helmsman's route: acknowledging a credentials or capability pause
+  // is how it is resolved — its paused task re-executed, not stranded.
+  const pauseCause = surfaced.contract.pauseCause;
   if (
     args.input.resolution.mode === 'acknowledge' &&
-    (run.tasks.some((task) => task.status === 'paused') || surfaced?.contract.failedTaskId)
+    pauseCause !== 'needs_credentials' &&
+    pauseCause !== 'needs_capability' &&
+    (run.tasks.some((task) => task.status === 'paused') || surfaced.contract.failedTaskId)
   ) {
     return {
       ok: false,
       code: 'ACKNOWLEDGE_TASK_BACKED_NOT_SUPPORTED',
       message:
         'This pause is task-backed; acknowledge would strand the paused task. Use a task resolution through workflow.run.resume.',
-    };
-  }
-
-  if (!surfaced) {
-    return {
-      ok: false,
-      code: 'RESUME_CONTRACT_UNAVAILABLE',
-      message: `Run ${runId} paused on "${run.pausedReason ?? 'unknown'}" but no resume contract surfaced (payload retrieval or schema validation failed). Cannot resolve mode "${args.input.resolution.mode}" without a valid contract.`,
     };
   }
 
@@ -165,17 +170,6 @@ export async function executeOperatorWorkflowRunResume(
       ok: false,
       code: 'RESOLUTION_MODE_NOT_ALLOWED',
       message: `Mode "${args.input.resolution.mode}" not allowed. Allowed: [${advertisedModes.join(', ')}].`,
-    };
-  }
-
-  if (
-    args.input.resolution.mode === 'acknowledge' &&
-    surfaced.contract.suggestedResumeCall?.op === 'human.action_center.focus'
-  ) {
-    return {
-      ok: false,
-      code: 'ACKNOWLEDGE_NOT_ALLOWED_ON_HITL',
-      message: 'Use replace_output or fail for this HITL pause.',
     };
   }
 
@@ -200,6 +194,53 @@ export async function executeOperatorWorkflowRunResume(
     const resolution = args.input.resolution;
     let committedFailTaskId: string | null = null;
     let reExecutedTaskId: string | null = null;
+
+    // The paused task re-executed and the run resumed with it — `null` where
+    // the task finished first, which leaves the run to resume as it stands.
+    // A refusal releases the claim and is handed back to return.
+    const reExecutePausedTask = async (
+      taskId: string,
+      attempt: number,
+      remediation: { remediationNote?: string; parentInstructionsPatch?: Record<string, unknown> },
+    ): Promise<{ refused: OperatorWorkflowRunResumeResult } | { reExecuted: string | null }> => {
+      const descendantTaskIds = [
+        ...computeBlockedDescendantsToClearForRetry(resolved.workflow.tasks, run.tasks, taskId),
+      ];
+      const commitResult = await commitReExecutePausedTaskAndResume(deps.db, tenantIdStr, {
+        runId,
+        claimToken,
+        taskId,
+        expectedAttempt: attempt,
+        descendantTaskIds,
+        ...remediation,
+      });
+      if (commitResult === 'claim_lost') {
+        await releaseResumeClaim(deps.db, tenantIdStr, runId, claimToken);
+        return {
+          refused: {
+            ok: false,
+            code: 'RESUME_COMMIT_LOST',
+            message: 'Resume lease lost at commit.',
+          },
+        };
+      }
+      if (commitResult === 'at_parallel_limit') {
+        // Must not fall through: acknowledge-continue would resume the run and
+        // report success for a task that was never re-executed.
+        await releaseResumeClaim(deps.db, tenantIdStr, runId, claimToken);
+        return {
+          refused: {
+            ok: false,
+            code: 'RESUME_AT_PARALLEL_LIMIT',
+            message:
+              `Run ${runId} is at its parallel-task limit, so re-executing "${taskId}" would ` +
+              'put it over. Wait for an in-flight task to finish and resume again — nothing changed.',
+          },
+        };
+      }
+      // 'task_row_not_paused' resumes the run as it stands.
+      return { reExecuted: commitResult === 'committed' ? taskId : null };
+    };
 
     if (resolution.mode === 'replace_output') {
       // The ledger stores `pausedReason: 'task_paused'`
@@ -444,16 +485,16 @@ export async function executeOperatorWorkflowRunResume(
         },
       );
     } else if (resolution.mode === 'acknowledge') {
-      // A startup preflight pause is raised before any task exists, so it
-      // carries no paused task and the task-backed guard does not catch it.
-      // Acknowledging a capability pause here would release the run without
+      // A capability pause — at startup, before any task exists, or on a task —
+      // passes the task-backed guard, as on the Helmsman's route, and is refused
+      // here instead. Acknowledging it here would release the run without
       // re-asking the question that paused it, and operation tasks dispatch
       // directly without passing step gating — nothing downstream would catch
       // an authority that is still missing. Only the Helmsman resume path
       // re-runs that check. Scoped to `needs_capability`: a credentials pause
       // resolves at the call itself, which refuses on its own, so refusing it
       // here would withdraw a route operators already use.
-      if (surfaced.contract.pauseCause === 'needs_capability') {
+      if (pauseCause === 'needs_capability') {
         await releaseResumeClaim(deps.db, tenantIdStr, runId, claimToken);
         return {
           ok: false,
@@ -465,14 +506,25 @@ export async function executeOperatorWorkflowRunResume(
             'check and only releases the run once the capability is actually in place.',
         };
       }
-      const committed = await resumeRunWithClaim(deps.db, tenantIdStr, runId, claimToken);
-      if (!committed) {
-        await releaseResumeClaim(deps.db, tenantIdStr, runId, claimToken);
-        return {
-          ok: false,
-          code: 'RESUME_COMMIT_LOST',
-          message: 'Acknowledge commit lost a claim/version race; reload and retry.',
-        };
+      // A credentials pause on a task re-executes that task, whose call
+      // re-checks the credential, as the Helmsman's acknowledge does.
+      const ackTaskId = surfaced.contract.failedTaskId;
+      const ackRow = ackTaskId ? run.tasks.find((t) => t.taskId === ackTaskId) : undefined;
+      if (pauseCause === 'needs_credentials' && ackTaskId && ackRow?.status === 'paused') {
+        const outcome = await reExecutePausedTask(ackTaskId, ackRow.attempt, {});
+        if ('refused' in outcome) return outcome.refused;
+        reExecutedTaskId = outcome.reExecuted;
+      }
+      if (reExecutedTaskId === null) {
+        const committed = await resumeRunWithClaim(deps.db, tenantIdStr, runId, claimToken);
+        if (!committed) {
+          await releaseResumeClaim(deps.db, tenantIdStr, runId, claimToken);
+          return {
+            ok: false,
+            code: 'RESUME_COMMIT_LOST',
+            message: 'Acknowledge commit lost a claim/version race; reload and retry.',
+          };
+        }
       }
 
       await emitRunResumedRunning(deps, tenantIdStr, runId, run);
@@ -520,42 +572,12 @@ export async function executeOperatorWorkflowRunResume(
             : Array.isArray(instructions)
               ? instructions.find((e) => e.taskId === failedTaskId)?.text
               : undefined;
-        const descendantTaskIds = [
-          ...computeBlockedDescendantsToClearForRetry(
-            resolved.workflow.tasks,
-            run.tasks,
-            failedTaskId,
-          ),
-        ];
-        const commitResult = await commitReExecutePausedTaskAndResume(deps.db, tenantIdStr, {
-          runId,
-          claimToken,
-          taskId: failedTaskId,
-          expectedAttempt: failedRow.attempt,
-          descendantTaskIds,
+        const outcome = await reExecutePausedTask(failedTaskId, failedRow.attempt, {
           ...(remediationNote ? { remediationNote } : {}),
           ...(parentInstructionsPatch ? { parentInstructionsPatch } : {}),
         });
-        if (commitResult === 'claim_lost') {
-          await releaseResumeClaim(deps.db, tenantIdStr, runId, claimToken);
-          return { ok: false, code: 'RESUME_COMMIT_LOST', message: 'Resume lease lost at commit.' };
-        }
-        if (commitResult === 'at_parallel_limit') {
-          // Must not fall through: acknowledge-continue would resume the run and
-          // report success for a task that was never re-executed.
-          await releaseResumeClaim(deps.db, tenantIdStr, runId, claimToken);
-          return {
-            ok: false,
-            code: 'RESUME_AT_PARALLEL_LIMIT',
-            message:
-              `Run ${runId} is at its parallel-task limit, so re-executing "${failedTaskId}" would ` +
-              'put it over. Wait for an in-flight task to finish and resume again — nothing changed.',
-          };
-        }
-        if (commitResult === 'committed') {
-          reExecutedTaskId = failedTaskId;
-        }
-        // 'task_row_not_paused' falls through to the acknowledge-continue below.
+        if ('refused' in outcome) return outcome.refused;
+        reExecutedTaskId = outcome.reExecuted;
       }
       if (reExecutedTaskId === null) {
         // Either the task already finished, or the commit lost a task-row race.

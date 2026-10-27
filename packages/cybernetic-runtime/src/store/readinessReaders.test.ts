@@ -10,7 +10,10 @@ import {
   READINESS_DESCRIPTION_MAX,
   READINESS_EXTERNAL_TEXT_MAX,
   READINESS_FOLDER_FIELD_MAX,
+  SKILL_STARTER_SCHEDULE_VARIABLE,
 } from '@aflow/schemas';
+import type { SQL } from 'drizzle-orm';
+import { PgDialect } from 'drizzle-orm/pg-core';
 import { readingsForItems } from '../stagedChange/bundleInstallManifest.js';
 import {
   askGithubAboutCredential,
@@ -19,8 +22,10 @@ import {
   readFolder,
   readGithubCredential,
   readMachine,
+  readReadinessFacts,
   readShepherdSchedule,
   readinessTasks,
+  SHEPHERD_RENEWAL_INPUT,
   CODING_LOOP_READINGS,
   type ReadinessFacts,
   type ReadinessSchedule,
@@ -536,5 +541,25 @@ describe('every reading', () => {
       const route = page === '/store/coding-loop' ? '/store/[catalogId]' : page;
       expect(manifest, page).toContain(`'s/[space]${route}'`);
     }
+  });
+});
+
+describe('the renewal the schedule read counts', () => {
+  it('is the renewal input the checklist offers, read under the key the agent hands on', async () => {
+    const queries: Array<{ sql: string; params: unknown[] }> = [];
+    const tx = {
+      execute: (query: SQL) => {
+        queries.push(new PgDialect().sqlToQuery(query));
+        return Promise.resolve([{}]);
+      },
+    };
+    await readReadinessFacts(tx as never, SPACE, new Set(['shepherd_schedule']), {
+      hostLane: 'present',
+    });
+    const [query] = queries;
+    const config = SHEPHERD_RENEWAL_INPUT['config'] as Record<string, unknown>;
+    expect(query?.sql).not.toContain("'scheduleId'");
+    expect(query?.params).toContain(SKILL_STARTER_SCHEDULE_VARIABLE);
+    expect(query?.params).toContain(JSON.stringify(config[SKILL_STARTER_SCHEDULE_VARIABLE]));
   });
 });

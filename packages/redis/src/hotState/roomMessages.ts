@@ -74,34 +74,41 @@ export async function appendRoomMessage(
   // check-then-act, so two racing relay drains (or a crash inside the post)
   // would double-append and double-increment lastMessageSeq — phantom unread
   // for everyone else in the room. NX on the eventId closes both windows.
-  if (input.eventId) {
-    const guardKey = `${stateKey}:msg:${input.eventId}`;
+  const guardKey = input.eventId ? `${stateKey}:msg:${input.eventId}` : undefined;
+  if (guardKey) {
     const claimed = await redis.set(guardKey, '1', 'EX', HOT_STATE_TTL_SECONDS, 'NX');
     if (claimed === null) {
       return { ok: false, reason: 'duplicate_event' };
     }
   }
 
-  const messageSeq = await allocateMessageSeq(redis, tenantId, sessionId);
-
-  const metadata: RoomMessageMetadata = {
-    messageSeq,
-    actorUserId: input.actorUserId,
-    body: input.body,
-    wakeHelmsman: input.wakeHelmsman === true,
-    ...(input.actorDisplayName ? { actorDisplayName: input.actorDisplayName } : {}),
-    ...(input.clientMessageId ? { clientMessageId: input.clientMessageId } : {}),
-  };
-
   const eventId = input.eventId ?? crypto.randomUUID();
   const now = Date.now();
-  await appendSessionEvent(redis, tenantId, sessionId, {
-    eventId,
-    eventType: 'RoomMessage',
-    timestamp: now,
-    sessionId,
-    metadata,
-  });
+  let messageSeq: number;
+  try {
+    messageSeq = await allocateMessageSeq(redis, tenantId, sessionId);
+    const metadata: RoomMessageMetadata = {
+      messageSeq,
+      actorUserId: input.actorUserId,
+      body: input.body,
+      wakeHelmsman: input.wakeHelmsman === true,
+      ...(input.actorDisplayName ? { actorDisplayName: input.actorDisplayName } : {}),
+      ...(input.clientMessageId ? { clientMessageId: input.clientMessageId } : {}),
+    };
+    await appendSessionEvent(redis, tenantId, sessionId, {
+      eventId,
+      eventType: 'RoomMessage',
+      timestamp: now,
+      sessionId,
+      metadata,
+    });
+  } catch (err) {
+    // The guard says "posted": held over a post that failed before the event
+    // landed, it would answer a redelivery `duplicate_event` for a message no
+    // one can read. Released, the redelivery posts it.
+    if (guardKey) await redis.del(guardKey).catch(() => undefined);
+    throw err;
+  }
 
   // Speaking in the room is activity in the conversation whether or not it
   // wakes the agent — two people working something out between themselves is

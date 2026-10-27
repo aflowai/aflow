@@ -339,6 +339,13 @@ vi.mock('@aflow/redis', async (importOriginal) => {
   return { ...orig, publishApiCatalogInvalidation, publishMcpCatalogInvalidation };
 });
 
+const githubAnswers = vi.hoisted(() => new Map([['fingerprint', { state: 'ok' }]]));
+const askGithubForSpace = vi.hoisted(() => vi.fn(async () => githubAnswers));
+vi.mock('./readinessReaders.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  askGithubForSpace,
+}));
+
 const { executeStoreUpdate, executeStoreUpdatePreview } = await import('./storeUpdateExecution.js');
 const { deriveInstalledState } = await import('./storeDerivations.js');
 const { jsonContentHash } = await import('./artifactContent.js');
@@ -460,6 +467,8 @@ describe('Coding Loop adoption preview', () => {
     expect(result.response.install.skippedVersion).toBe(entry.version);
     expect(updateSkillCatalogEntry).not.toHaveBeenCalled();
     expect(installSkillCatalogEntry).not.toHaveBeenCalled();
+    // Keeping derives no checklist, so GitHub is not asked.
+    expect(askGithubForSpace).not.toHaveBeenCalled();
     const preview = await executeStoreUpdatePreview({
       db: {} as never,
       tenantId: TENANT_ID,
@@ -473,7 +482,7 @@ describe('Coding Loop adoption preview', () => {
 
   it('replaces customized parts through the update handlers before stamping adoption', async () => {
     const manifest = await import('../stagedChange/bundleInstallManifest.js');
-    vi.spyOn(manifest, 'generatePostInstallManifest').mockResolvedValueOnce([]);
+    const checklist = vi.spyOn(manifest, 'generatePostInstallManifest').mockResolvedValueOnce([]);
 
     store.installs.push(installedRow('local-publish', 49, 'bundle'));
     const entry = getCatalogEntry('coding-loop');
@@ -509,7 +518,8 @@ describe('Coding Loop adoption preview', () => {
     });
     expect(store.installs.find((row) => row.catalog_id === 'coding-loop')?.installed_version).toBe(
       entry.version,
-    );
+    ); // GitHub is asked before the transaction, and the checklist reads its answers.
+    expect(checklist).toHaveBeenCalledWith(expect.objectContaining({ githubAnswers }));
   });
 
   it('offers the separate 11/11/49/22 parts as one version without writing them', async () => {

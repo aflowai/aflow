@@ -18,6 +18,7 @@ import {
 import { applyArtifactSeeds } from './applyArtifactSeeds.js';
 import { applyBundledAgents } from './applyBundledAgents.js';
 import { generatePostInstallManifest } from './bundleInstallManifest.js';
+import type { GithubAnswers } from '../store/readinessReaders.js';
 import { validateBundleInstallPreconditions } from './bundleInstallValidator.js';
 import { tryAcquireStoreMutationLock } from './storeMutationLock.js';
 
@@ -188,7 +189,13 @@ export class BundleInstallValidationError extends Error {
 export async function installSkillBundle(
   ctx: ApplyContext,
   bundle: SkillBundle,
-  opts?: { redis?: Redis; readinessRedis?: Redis; preserveExistingContent?: boolean },
+  opts?: {
+    redis?: Redis;
+    readinessRedis?: Redis;
+    preserveExistingContent?: boolean;
+    /** GitHub's answers, asked before the caller's transaction (`askGithubForSpace`). */
+    githubAnswers?: GithubAnswers;
+  },
 ): Promise<InstallSkillBundleResult> {
   const tenantCtx = createTenantContext(ctx.tenantId as TenantId);
 
@@ -225,10 +232,15 @@ export async function installSkillBundle(
     }
 
     // Skill loop first — keeps the existing semantics + error contracts.
+    // Keeping the operator's content still writes a definition that is absent
+    // — the bundle's skills call it — but never replaces one that is present.
     const content = opts?.preserveExistingContent
       ? {
           ...bundle,
-          apiDefinitions: [],
+          apiDefinitions: bundle.apiDefinitions.map((definition) => ({
+            ...definition,
+            conflictPolicy: 'skip' as const,
+          })),
           apiBindingTemplates: [],
           mcpDefinitions: [],
           mcpBindingTemplates: [],
@@ -283,6 +295,7 @@ export async function installSkillBundle(
 
     const postInstallManifest = await generatePostInstallManifest({
       redis: opts?.readinessRedis ?? opts?.redis,
+      githubAnswers: opts?.githubAnswers,
       bundle,
       tenantId: ctx.tenantId,
       spaceId: ctx.spaceId,

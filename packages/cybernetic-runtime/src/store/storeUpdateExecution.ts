@@ -58,7 +58,11 @@ import {
   writePlaceholderMcpBinding,
   McpBundleWriteConflictError,
 } from '../stagedChange/mcpWriteHelpers.js';
-import { generatePostInstallManifest } from '../stagedChange/bundleInstallManifest.js';
+import {
+  bundleReadsGithub,
+  generatePostInstallManifest,
+} from '../stagedChange/bundleInstallManifest.js';
+import { askGithubForSpace, type GithubAnswers } from './readinessReaders.js';
 import {
   applyMemorySeeds,
   publishMemorySeedEmbedJobs,
@@ -345,6 +349,7 @@ async function dispatchBundleUpdate(
     spaceId: string;
     payloadStore?: PayloadStore | undefined;
     redis?: Redis | null | undefined;
+    githubAnswers?: GithubAnswers | undefined;
   },
 ): Promise<UpdateDispatchOutcome> {
   const bundle = entry.payload;
@@ -645,6 +650,7 @@ async function dispatchBundleUpdate(
   const setupChecklist = await generatePostInstallManifest({
     bundle,
     redis: ids.redis,
+    githubAnswers: ids.githubAnswers,
     tenantId: ids.tenantId as string,
     spaceId: ids.spaceId,
     tx,
@@ -685,6 +691,7 @@ async function dispatchUpdate(
     spaceId: string;
     payloadStore?: PayloadStore | undefined;
     redis?: Redis | null | undefined;
+    githubAnswers?: GithubAnswers | undefined;
   },
 ): Promise<UpdateDispatchOutcome> {
   switch (entry.kind) {
@@ -744,6 +751,7 @@ async function runStoreUpdate(
     actorUserId: string;
     payloadStore?: PayloadStore | undefined;
     redis?: Redis | null | undefined;
+    githubAnswers?: GithubAnswers | undefined;
   },
   opts: { mode: StoreUpdateMode; offShelf: boolean },
 ): Promise<UpdateTxOutcome> {
@@ -1060,11 +1068,15 @@ export async function executeStoreUpdate(
 
   let outcome: UpdateTxOutcome;
   try {
+    const githubAnswers =
+      mode !== 'keep' && entry.kind === 'bundle' && bundleReadsGithub(entry.catalogId)
+        ? await askGithubForSpace(db, tenantId, spaceId, { redis })
+        : undefined;
     outcome = await withTenantSchema(db, tenantCtx, async (tx) =>
       runStoreUpdate(
         tx,
         entry,
-        { tenantId, spaceId, actorUserId, payloadStore, redis },
+        { tenantId, spaceId, actorUserId, payloadStore, redis, githubAnswers },
         { mode, offShelf },
       ),
     );

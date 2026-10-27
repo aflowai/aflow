@@ -40,6 +40,11 @@ import {
  */
 const CODING_LOOP_BUNDLE_ID = 'coding-loop';
 
+/** Whether a bundle's own readiness reads the space's github credential. */
+export function bundleReadsGithub(bundleId: string): boolean {
+  return bundleId === CODING_LOOP_BUNDLE_ID;
+}
+
 /** The readings a space template's items ask for (Plan 330 D4). */
 export function readingsForItems(
   items: ReadonlyArray<Pick<SpaceTemplateReadinessItem, 'answeredBy' | 'reading'>>,

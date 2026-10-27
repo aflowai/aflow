@@ -7,7 +7,7 @@
  * session that is not there would otherwise create one — a hash holding
  * nothing but a counter, which reads downstream as a live session.
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import Redis from 'ioredis-mock';
 import type { Redis as RedisType } from 'ioredis';
 import {
@@ -16,6 +16,7 @@ import {
   getSessionState,
   type SessionHotState,
 } from '../index.js';
+import { StreamKeys } from '@aflow/schemas';
 
 const TENANT = '00000000-0000-4000-8000-000000000001';
 const SARA = '00000000-0000-4000-8000-00000000e5a1';
@@ -85,6 +86,28 @@ describe('appendRoomMessage', () => {
       body: 'nice',
     });
     expect(third).toMatchObject({ ok: true, messageSeq: 2 });
+  });
+
+  it('a post that failed before its event landed holds no guard: the redelivery posts it', async () => {
+    await setSessionState(redis, hotState());
+    const eventId = crypto.randomUUID();
+    const post = () =>
+      appendRoomMessage(redis, TENANT, SESSION, {
+        actorUserId: SARA,
+        body: 'still there?',
+        eventId,
+      });
+
+    vi.spyOn(redis, 'multi').mockImplementationOnce(() => {
+      throw new Error('connection reset');
+    });
+    await expect(post()).rejects.toThrow('connection reset');
+
+    const redelivered = await post();
+    expect(redelivered).toMatchObject({ ok: true, eventId });
+    const entries = await redis.xrange(StreamKeys.sessionEventsStream(TENANT, SESSION), '-', '+');
+    expect(entries.filter(([, fields]) => fields.includes('RoomMessage'))).toHaveLength(1);
+    expect(await post()).toEqual({ ok: false, reason: 'duplicate_event' });
   });
 
   it('gives concurrent posters distinct positions', async () => {

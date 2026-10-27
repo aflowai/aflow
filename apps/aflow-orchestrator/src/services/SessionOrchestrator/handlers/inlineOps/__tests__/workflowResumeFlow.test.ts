@@ -740,7 +740,7 @@ describe('workflow.run.resume — Plan 130 Phase 1 cross-boundary loop', () => {
     expect(errorPayload['code']).toBe('RESUME_TASK_ROW_NOT_PAUSED');
   });
 
-  it('rejects mode not in contract.allowedResumeModes (P0/1: no advertised stranded modes)', async () => {
+  it('refuses acknowledge on a task-backed pause as task-backed, before reading its advertised modes', async () => {
     mockLoadRunById.mockResolvedValueOnce(makePausedRun());
     // Contract only advertises replace_output for this pause cause.
     mockSurfaceWorkflowResumeContract.mockResolvedValue({
@@ -764,7 +764,7 @@ describe('workflow.run.resume — Plan 130 Phase 1 cross-boundary loop', () => {
     expect(errorPayload['code']).toBe('ACKNOWLEDGE_TASK_BACKED_NOT_SUPPORTED');
   });
 
-  it('Plan 167 — rejects acknowledge on HITL pause (human.action_center.focus)', async () => {
+  it('refuses acknowledge on a HITL pause as task-backed: its paused human task is what the guard reads', async () => {
     mockLoadRunById.mockResolvedValueOnce(makePausedRun({ pausedReason: 'needs_decision' }));
     mockSurfaceWorkflowResumeContract.mockResolvedValue({
       contract: {

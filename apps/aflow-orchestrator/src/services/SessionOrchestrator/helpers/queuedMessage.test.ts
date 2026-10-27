@@ -130,6 +130,22 @@ describe('queueMessageForNextTurn', () => {
     ]);
   });
 
+  it('does not throw once the message is posted, though marking it seen fails', async () => {
+    appendRoomMessage.mockResolvedValue({ ok: true, messageSeq: 5, eventId: EVENT_ID });
+    markSeenThroughMessage.mockRejectedValueOnce(new Error('connection reset'));
+
+    const queued = await queueMessageForNextTurn({} as never, new RedisMock() as unknown as Redis, {
+      tenantId: 'tenant-1' as never,
+      sessionId: 'session-1',
+      deliveryKey: 'idem-1',
+      actorUserId: PERSON,
+      body: 'Also bump the version.',
+    });
+
+    expect(queued).toEqual({ eventId: EVENT_ID, messageSeq: 5 });
+    expect(await roomBodies()).toEqual(['Also bump the version.']);
+  });
+
   it('posts nothing where the session is gone from the hot store', async () => {
     appendRoomMessage.mockResolvedValue({ ok: false, reason: 'session_not_hot' });
     await expect(

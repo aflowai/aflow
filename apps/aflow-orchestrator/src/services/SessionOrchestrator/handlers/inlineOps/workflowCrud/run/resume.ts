@@ -250,19 +250,6 @@ export async function handleWorkflowRunResume(
   }
 
   if (input.resolution.mode === 'acknowledge') {
-    const suggested = surfaced.contract.suggestedResumeCall;
-    if (suggested?.op === 'human.action_center.focus') {
-      await emitStepError(
-        args,
-        'ACKNOWLEDGE_NOT_ALLOWED_ON_HITL',
-        'This pause requires operator action on the workflow run surface — acknowledge would no-op past a HITL gate. ' +
-          'Use workflow.run.resume with mode replace_output (approve/collect) or mode fail (reject) instead.',
-        startTime,
-        'validation',
-      );
-      return;
-    }
-
     if (pauseCause === 'needs_credentials') {
       // Re-run on the raw workflow with the run's persisted connection pin so a
       // grant deferred to the run's connection (`binding.kind === 'connection'`)

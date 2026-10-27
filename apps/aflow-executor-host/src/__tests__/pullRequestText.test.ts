@@ -26,7 +26,11 @@ import {
 } from '@aflow/schemas';
 
 import { createHostHandler } from '../handlers/hostHandler.js';
-import { composePullRequest } from '../pullRequestText.js';
+import {
+  CHANGES_KEPT_BESIDE_FINDINGS,
+  composePullRequest,
+  SUMMARY_KEPT_BESIDE_FINDINGS,
+} from '../pullRequestText.js';
 import { noPushApprovals } from './fixtures/pushApprovals.js';
 
 const run = promisify(execFile);
@@ -734,5 +738,86 @@ describe('composePullRequest', () => {
     expect(body).toContain('## Known gaps');
     expect(body).toContain(`- ${GAPS[0] ?? ''}`);
     expect(body).toContain('### Left open');
+  });
+
+  describe('beside findings longer than the body', () => {
+    const many = Array.from({ length: 40 }, (_, index) => ({
+      ...MINOR_FINDING,
+      line: index + 1,
+      claim: `Finding ${String(index)}: ${'the cache is never invalidated after a write. '.repeat(80)}`,
+    }));
+    const earlier = Array.from({ length: 20 }, (_, index) => ({
+      severity: 'minor' as const,
+      file: 'src/earlier.ts',
+      line: index + 1,
+      claim: `Earlier ${String(index)}: ${'a round before this one found it. '.repeat(40)}`,
+      state: index % 2 === 0 ? ('closed' as const) : ('open' as const),
+    }));
+    const compose = (summary: string, withCommits = commits) =>
+      composePullRequest(
+        HostCommitDescribeInputSchema.parse({
+          bindingId: 'hb_app',
+          range,
+          summary,
+          findings: earlier,
+          review: { verdict: 'approve', outcome: 'completed', findings: many },
+          afterReview: 'publish_as_is',
+          gaps: GAPS,
+        }),
+        withCommits,
+      ).body;
+    const section = (body: string, heading: string, next: string) =>
+      body.slice(body.indexOf(heading), body.indexOf(next));
+
+    it('keeps a summary of the most it keeps whole, and at least that much of a far longer one', () => {
+      const atBoundary = 's'.repeat(SUMMARY_KEPT_BESIDE_FINDINGS);
+      const whole = compose(atBoundary);
+      expect(whole.length).toBeLessThanOrEqual(PULL_REQUEST_BODY_MAX_CHARS);
+      expect(whole.startsWith(`${atBoundary}\n\n## What changes`)).toBe(true);
+      expect(whole).not.toContain('The summary stops here');
+      // The findings gave way to it: they are still cut, and counted.
+      expect(whole).toMatch(/…and \d+ more/);
+
+      const past = compose(atBoundary.repeat(3));
+      expect(past.length).toBeLessThanOrEqual(PULL_REQUEST_BODY_MAX_CHARS);
+      expect(past).toContain('The summary stops here');
+      const kept = past.slice(0, past.indexOf('\n\nThe summary stops here'));
+      expect(kept.length).toBeGreaterThanOrEqual(SUMMARY_KEPT_BESIDE_FINDINGS - 200);
+    });
+
+    it('keeps the account of the commits whole within what it keeps, and readable past it', () => {
+      const whole = compose('Their account.');
+      for (const round of ROUNDS) {
+        expect(whole).toContain(`### ${round.subject}\n\n${round.body}`);
+      }
+
+      const longCommits = commits.map((c) => ({ ...c, body: `${'x'.repeat(99)}\n`.repeat(400) }));
+      const cut = compose('Their account.', longCommits);
+      expect(cut.length).toBeLessThanOrEqual(PULL_REQUEST_BODY_MAX_CHARS);
+      const account = section(cut, '## What changes', '## Review');
+      expect(account).toContain(`### ${ROUNDS[0]?.subject ?? ''}`);
+      expect(account).toContain("every commit's whole message is on the branch.");
+      expect(account.length).toBeGreaterThanOrEqual(CHANGES_KEPT_BESIDE_FINDINGS - 200);
+    });
+
+    it('lists the findings in their order — this review’s, then closed, then left open — and counts the rest', () => {
+      const body = compose('s'.repeat(SUMMARY_KEPT_BESIDE_FINDINGS + 1));
+      const order = [
+        ...many.map((f) => `\`src/cache.ts:${String(f.line)}\``),
+        ...earlier
+          .filter((f) => f.state === 'closed')
+          .map((f) => `\`src/earlier.ts:${String(f.line)}\``),
+        ...earlier
+          .filter((f) => f.state === 'open')
+          .map((f) => `\`src/earlier.ts:${String(f.line)}\``),
+      ];
+      const listed = order.filter((where) => body.includes(where));
+      expect(listed.length).toBeGreaterThan(0);
+      expect(listed).toEqual(order.slice(0, listed.length));
+      const positions = listed.map((where) => body.indexOf(where));
+      expect(positions).toEqual([...positions].sort((a, b) => a - b));
+      expect(body).toContain(`…and ${String(order.length - listed.length)} more`);
+      expect(body).not.toContain('The description stops here');
+    });
   });
 });
