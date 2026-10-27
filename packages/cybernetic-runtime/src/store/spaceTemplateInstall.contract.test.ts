@@ -474,6 +474,7 @@ function machineRedis(harnesses: Array<{ id: string; installed: boolean }>): nev
     harnesses,
     maxConcurrentHarnessRuns: 2,
     folders: [],
+    previews: [],
     browsers: [],
   };
   return {

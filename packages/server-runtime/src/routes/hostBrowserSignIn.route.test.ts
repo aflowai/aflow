@@ -51,6 +51,7 @@ function inventory(windowOpen = false, hostname = 'laptop'): string {
     harnesses: [],
     maxConcurrentHarnessRuns: HOST_HARNESS_CONCURRENCY_DEFAULT,
     folders: [],
+    previews: [],
     browsers: [
       {
         id: 'default',

@@ -328,19 +328,16 @@ export const HostInventorySchema = z.object({
    * machine page can say the preview is not declared; empty where it found
    * none. Detection is a hint for that line alone: nothing is run from it and
    * no default is taken from it. Apart from `folders`, which lists only the
-   * folders that push, and defaulted so an inventory from an executor that
-   * predates it still reads.
+   * folders that push.
    */
-  previews: z
-    .array(
-      z.object({
-        id: z.string(),
-        spaceId: z.string(),
-        preview: HostFolderPreviewSchema.optional(),
-        detectedWebApps: z.array(z.string()).default([]),
-      }),
-    )
-    .default([]),
+  previews: z.array(
+    z.object({
+      id: z.string(),
+      spaceId: z.string(),
+      preview: HostFolderPreviewSchema.optional(),
+      detectedWebApps: z.array(z.string()).default([]),
+    }),
+  ),
   /**
    * The browser profiles this machine offers, from its policy file, and
    * whether each one's browser is running now. Sites are the hosts a running

@@ -141,6 +141,12 @@ describe('a folder’s preview in the policy', () => {
     expect(refused({ command: 'yarn dev --port {port}', webAppDirs: ['../elsewhere'] })).toContain(
       'never climbing out',
     );
+    for (const glob of ['/etc/**', '../elsewhere/**/*.tsx', 'src/../../**', '.git/**']) {
+      expect(refused({ command: 'yarn dev --port {port}', uiPaths: [glob] }), glob).toContain(
+        'A UI glob names files inside the folder',
+      );
+    }
+    expect(refused({ command: 'yarn dev --port {port}', uiPaths: ['src/**/*.tsx'] })).toBe('');
     expect(refused({ command: '   ' })).not.toBe('');
   });
 
@@ -328,6 +334,41 @@ describe('a preview asked for from the machine page', () => {
     expect(
       await answerFolderPreview({ ...request, spaceId: 'space-a', preview: null }, path, STACK),
     ).toEqual({ kind: 'changed', preview: null });
+  });
+
+  it('refuses a folder the machine does not offer as it refuses another workspace’s, naming no difference', async () => {
+    const path = await policyFile({
+      version: 1,
+      bindings: [RUNNING, { ...RUNNING, id: 'hb_unrecorded', spaceId: undefined }],
+    });
+    const ask = async (bindingId: string, spaceId: string) =>
+      await answerFolderPreview(
+        {
+          kind: 'preview',
+          hostname: 'laptop',
+          answerId: 'a'.repeat(16),
+          spaceId,
+          bindingId,
+          preview: { command: 'yarn dev --port {port}' },
+        },
+        path,
+        STACK,
+      );
+    const elsewhere = await ask('hb_site', 'space-b');
+    const unrecorded = await ask('hb_unrecorded', 'space-b');
+    const missing = await ask('hb_missing', 'space-b');
+    expect(elsewhere).toEqual({
+      kind: 'refused',
+      message: 'Binding `hb_site` was not connected for this workspace.',
+    });
+    expect(unrecorded).toEqual({
+      kind: 'refused',
+      message: 'Binding `hb_unrecorded` was not connected for this workspace.',
+    });
+    expect(missing).toEqual({
+      kind: 'refused',
+      message: 'Binding `hb_missing` was not connected for this workspace.',
+    });
   });
 });
 

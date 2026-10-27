@@ -22,6 +22,7 @@ import {
   PlanNodeSummarySchema,
   PlanNodeUpdateFieldSchema,
   PlanNodeUpdateSchema,
+  isClosedPlanNodeStatus,
   type PlanNodeKind,
   type PlanNodeStatus,
   type PlanNodeSummary,
@@ -215,6 +216,9 @@ export type PlanNodeListOutput = z.infer<typeof PlanNodeListOutputSchema>;
 /** How much of the goal a tree node carries; the node detail reads the rest. */
 export const PLAN_NODE_GOAL_HEAD_MAX_CHARS = 160;
 
+/** How much of the note's first line a tree node carries, as much as of the goal. */
+export const PLAN_NODE_NOTE_HEAD_MAX_CHARS = PLAN_NODE_GOAL_HEAD_MAX_CHARS;
+
 /**
  * The workflows whose runs are a node's review rounds, as a run link names
  * them (`<slug> <status>`, `linkEndedRun`). A review started under a
@@ -261,7 +265,10 @@ export const PlanNodePullRequestSchema = z
   .strict();
 export type PlanNodePullRequest = z.infer<typeof PlanNodePullRequestSchema>;
 
-/** A node as a board card shows it, and the nodes under it: no links, no prose past the goal's head. */
+/**
+ * A node as a board card shows it, and the nodes under it: no links, no prose
+ * past the goal's head and the note's first line.
+ */
 export interface PlanTreeNode extends PlanNodeSummary {
   goalHead: string;
   counts: PlanNodeCounts;
@@ -275,6 +282,11 @@ export interface PlanTreeNode extends PlanNodeSummary {
 export const PlanTreeNodeSchema = z.lazy(() =>
   PlanNodeSummarySchema.extend({
     goalHead: z.string().max(PLAN_NODE_GOAL_HEAD_MAX_CHARS),
+    noteHead: z
+      .string()
+      .max(PLAN_NODE_NOTE_HEAD_MAX_CHARS)
+      .optional()
+      .describe('The note’s first line; absent where the node has no note.'),
     counts: PlanNodeCountsSchema,
     rounds: z
       .number()
@@ -303,19 +315,27 @@ export type PlanDoneDay = z.infer<typeof PlanDoneDaySchema>;
 
 /**
  * One plan as its tab and header show it, counted over every node under the
- * root — whatever `closedSince` left out of the tree.
+ * root by the board's column rule — whatever `closedSince` left out of the tree.
  */
 export const PlanRootTallySchema = z
   .object({
     rootId: z.string().uuid(),
     steps: z.number().int().min(0).describe('Nodes under the root.'),
+    needsYou: z.number().int().min(0).describe('Nodes in the board’s Needs you column.'),
+    inFlight: z.number().int().min(0).describe('Nodes in the board’s In flight column.'),
+    upNext: z.number().int().min(0).describe('Nodes in the board’s Up next column.'),
     done: z.number().int().min(0),
-    active: z.number().int().min(0).describe('Nodes in the board’s In progress column.'),
-    decide: z.number().int().min(0).describe('Nodes in the board’s Needs you column.'),
     dropped: z.number().int().min(0),
     doneByDay: z
       .array(PlanDoneDaySchema)
       .describe('Done nodes by the day they closed, newest first, one entry per day with any.'),
+    nextNodeId: z
+      .string()
+      .uuid()
+      .optional()
+      .describe(
+        'The step under the root the stream walk (`findActiveStreamNode`) takes next; absent where it takes none.',
+      ),
   })
   .strict();
 export type PlanRootTally = z.infer<typeof PlanRootTallySchema>;
@@ -361,20 +381,61 @@ export const PlanTreeOutputSchema = z.object({
 export type PlanTreeOutput = z.infer<typeof PlanTreeOutputSchema>;
 
 /** Which board column a node stands in. */
-export type PlanBoardColumn = 'next' | 'progress' | 'decide' | 'done' | 'dropped';
+export type PlanBoardColumn = 'needs_you' | 'in_flight' | 'up_next' | 'done' | 'dropped';
 
 /**
- * The board's one rule for a node's column, read by the tallies and the page
- * alike. An open `decide` node, and a node `blocked` on a person, need the operator.
+ * Why a node stands under Needs you: an open `decide` node, a node `blocked`
+ * on a person, or an open node under a closed ancestor — which the stream
+ * walk never reaches until the ancestor is reopened or the step dropped.
  */
-export function planBoardColumn(node: {
-  kind: PlanNodeKind;
-  status: PlanNodeStatus;
-}): PlanBoardColumn {
-  if (node.status === 'done') return 'done';
-  if (node.status === 'dropped') return 'dropped';
-  if (node.kind === 'decide' || node.status === 'blocked') return 'decide';
-  return node.status === 'waiting' ? 'next' : 'progress';
+export const PlanNeedsYouReasonSchema = z.enum(['decide', 'blocked', 'stranded']);
+export type PlanNeedsYouReason = z.infer<typeof PlanNeedsYouReasonSchema>;
+
+/** A node's column, and for Needs you why. */
+export type PlanBoardPlacement =
+  | { column: 'needs_you'; reason: PlanNeedsYouReason }
+  | { column: Exclude<PlanBoardColumn, 'needs_you'>; reason?: never };
+
+/**
+ * The board's one rule for a node's column (Plan 332 D4), read by the tallies
+ * and the page alike; the first match decides. The node alone cannot know
+ * whether a closed node lies above it, so the walk that reached it says.
+ */
+export function planBoardColumn(
+  node: { kind: PlanNodeKind; status: PlanNodeStatus; activity: PlanNodeActivity },
+  under: { closedAncestor: boolean },
+): PlanBoardPlacement {
+  if (node.status === 'done') return { column: 'done' };
+  if (node.status === 'dropped') return { column: 'dropped' };
+  if (under.closedAncestor) return { column: 'needs_you', reason: 'stranded' };
+  if (node.kind === 'decide') return { column: 'needs_you', reason: 'decide' };
+  if (node.status === 'blocked') return { column: 'needs_you', reason: 'blocked' };
+  if (node.status === 'waiting' || node.activity === 'in_flight') return { column: 'in_flight' };
+  return { column: 'up_next' };
+}
+
+/** A node under a root as the board places it; its phase is its ancestor directly under the root. */
+export type PlanBoardCard = PlanBoardPlacement & { node: PlanTreeNode; phase?: PlanTreeNode };
+
+/**
+ * Every node under `root`, never the root, in the walk's order — parents
+ * before children, siblings as the tree holds them — each placed by
+ * `planBoardColumn` with whether a closed node, the root included, lies above it.
+ */
+export function planBoardCards(root: PlanTreeNode): PlanBoardCard[] {
+  const cards: PlanBoardCard[] = [];
+  const visit = (node: PlanTreeNode, phase: PlanTreeNode | undefined, closedAncestor: boolean) => {
+    cards.push({
+      ...planBoardColumn(node, { closedAncestor }),
+      node,
+      ...(phase !== undefined ? { phase } : {}),
+    });
+    const closedBelow = closedAncestor || isClosedPlanNodeStatus(node.status);
+    for (const child of node.children) visit(child, phase ?? node, closedBelow);
+  };
+  const rootClosed = isClosedPlanNodeStatus(root.status);
+  for (const child of root.children) visit(child, undefined, rootClosed);
+  return cards;
 }
 
 // ============================================================================

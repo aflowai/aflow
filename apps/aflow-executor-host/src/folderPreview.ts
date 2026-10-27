@@ -131,7 +131,9 @@ export function folderPreviewLines(bindingId: string, preview: HostFolderPreview
  * Reads, changes and writes the policy under its lock: the one writer the
  * command and the executor share. Given a workspace, the folder must have been
  * connected for it — an admin of one workspace does not reach another's folder
- * by naming its id.
+ * by naming its id. Asked from a workspace, a folder the machine does not
+ * offer is refused in the same words as another workspace's, so the answer
+ * does not say which ids exist here.
  */
 export async function changeFolderPreview(
   policyPath: string,
@@ -141,9 +143,15 @@ export async function changeFolderPreview(
 ): Promise<HostFolderPreview | undefined> {
   const updated = await editPolicy(policyPath, (current) => {
     const policy = HostPolicySchema.parse(current ?? EMPTY_POLICY);
-    const binding = policy.bindings.find((b) => b.id === bindingId);
-    if (options.spaceId !== undefined && binding !== undefined) {
-      requireSpace(binding, options.spaceId);
+    if (options.spaceId !== undefined) {
+      const notConnected = `Binding \`${bindingId}\` was not connected for this workspace.`;
+      const binding = policy.bindings.find((b) => b.id === bindingId);
+      if (binding === undefined) throw new Error(notConnected);
+      try {
+        requireSpace(binding, options.spaceId);
+      } catch {
+        throw new Error(notConnected);
+      }
     }
     return withFolderPreview(policy, bindingId, requested, options.stackOwn);
   });

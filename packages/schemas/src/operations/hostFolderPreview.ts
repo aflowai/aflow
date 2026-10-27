@@ -47,20 +47,31 @@ export const FOLDER_WEB_APP_DEPENDENCIES = [
   '@angular/core',
 ] as const;
 
+function isInsideFolder(path: string): boolean {
+  return (
+    !path.startsWith('/') &&
+    !path.includes('\\') &&
+    path.split('/').every((segment) => segment !== '..' && segment !== '.git')
+  );
+}
+
 const FolderRelativeDirSchema = z
   .string()
   .min(1)
   .max(FOLDER_PREVIEW_PATH_MAX_LENGTH)
-  .refine(
-    (dir) =>
-      !dir.startsWith('/') &&
-      !dir.includes('\\') &&
-      dir.split('/').every((segment) => segment !== '..' && segment !== '.git'),
-    {
-      message:
-        'A web app directory is a path inside the folder, relative to its root — `apps/web` or `.` for the root itself — never absolute, never climbing out with `..`, never inside `.git`.',
-    },
-  );
+  .refine(isInsideFolder, {
+    message:
+      'A web app directory is a path inside the folder, relative to its root — `apps/web` or `.` for the root itself — never absolute, never climbing out with `..`, never inside `.git`.',
+  });
+
+const FolderRelativeGlobSchema = z
+  .string()
+  .min(1)
+  .max(FOLDER_PREVIEW_PATH_MAX_LENGTH)
+  .refine(isInsideFolder, {
+    message:
+      'A UI glob names files inside the folder, relative to its root — `src/**/*.tsx` — never absolute, never climbing out with `..`, never inside `.git`.',
+  });
 
 /**
  * How a connected folder is shown working (Plan 320 D18). Generic on purpose:
@@ -101,7 +112,7 @@ export const HostFolderPreviewSchema = z
         'The path that answers once the preview is up. Absent, `FOLDER_PREVIEW_READY_PATH_DEFAULT`.',
       ),
     uiPaths: z
-      .array(z.string().min(1).max(FOLDER_PREVIEW_PATH_MAX_LENGTH))
+      .array(FolderRelativeGlobSchema)
       .min(1)
       .max(FOLDER_PREVIEW_MAX_GLOBS)
       .optional()

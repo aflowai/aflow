@@ -107,16 +107,18 @@ export function HostFolderPreview({
   };
   const hostname = listing?.hostname ?? '';
   const serialize = ({ preview }: PreviewChange): string =>
-    JSON.stringify(preview === null ? { hostname, spaceId } : { hostname, spaceId, preview });
+    JSON.stringify(preview === null ? { hostname } : { hostname, preview });
   const declare = useApiMutation<PreviewChange>({
     path: () => `/host/folders/${bindingId}/preview`,
     method: 'PUT',
+    spaceId,
     serialize,
     ...settled,
   });
   const clear = useApiMutation<PreviewChange>({
     path: () => `/host/folders/${bindingId}/preview`,
     method: 'DELETE',
+    spaceId,
     serialize,
     ...settled,
   });

@@ -57,11 +57,13 @@ const NOT_A_PERSON = {
     'key, a service principal or an MCP session — cannot declare it.',
 } as const;
 
+const NOT_SPACE_ADMIN = {
+  error: 'Forbidden',
+  message: 'A folder’s preview is declared by an admin of the workspace it was connected for.',
+} as const;
+
 const Params = z.object({ bindingId: z.string().min(1).max(64) });
-const Target = z.object({
-  hostname: z.string().min(1).max(256),
-  spaceId: z.string().uuid(),
-});
+const Target = z.object({ hostname: z.string().min(1).max(256) });
 
 async function relay(request: HostFolderRequest): Promise<HostExchange<HostFolderAnswer>> {
   return await askHost(hostExchangeConnections('host-folder-answer'), {
@@ -81,6 +83,13 @@ async function change(
 ): Promise<FastifyReply> {
   if (!isInteractiveUser(request.authUser)) {
     return await reply.status(403).send(NOT_A_PERSON);
+  }
+  // The workspace relayed is the one resolved here — in this tenant, with the
+  // caller's role in it — never one the caller names in the body: the
+  // machine's own check only compares the folder's workspace with this one.
+  const space = await request.requireSpace();
+  if (!space.isSpaceAdmin) {
+    return await reply.status(403).send(NOT_SPACE_ADMIN);
   }
   // The machine refuses the ports its own environment names; this process
   // knows where it and the services configured beside it listen, which the
@@ -103,7 +112,7 @@ async function change(
     kind: 'preview',
     hostname: target.hostname,
     answerId: newHostAnswerId(),
-    spaceId: target.spaceId,
+    spaceId: space.spaceId,
     bindingId: target.bindingId,
     preview,
   });
@@ -128,9 +137,12 @@ async function change(
 
 export const hostFolderPreviewRoutes: FastifyPluginAsync = async (fastify) => {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
-  // Tenant admin as the rest of the machine's routes are; the person check is
-  // in `change`, because a permission is held by an API key as well.
-  const config = { authz: { resource: 'tenant', action: 'admin' } } as const;
+  // An admin of the workspace, named as a space-scoped request names it
+  // (X-Space-ID); the person check is in `change`, because a permission is
+  // held by an API key as well.
+  const config = {
+    authz: { resource: 'space', action: 'admin', spaceIdFrom: 'requireSpace' },
+  } as const;
 
   app.put(
     '/folders/:bindingId/preview',
@@ -140,7 +152,8 @@ export const hostFolderPreviewRoutes: FastifyPluginAsync = async (fastify) => {
         tags: ['Host'],
         summary: "Declare a connected folder's preview on the machine holding it",
         description:
-          'A person’s request only. The machine’s executor writes it as ' +
+          'A person’s request only, from an admin of the workspace `X-Space-ID` names; the ' +
+          'machine refuses a folder connected for any other. Its executor writes it as ' +
           '`aflow folder <bindingId> preview` does, replacing the declaration before, and ' +
           'answers with it. A port this stack serves on is refused, here and by the machine.',
         params: Params,
@@ -176,7 +189,6 @@ export const hostFolderPreviewRoutes: FastifyPluginAsync = async (fastify) => {
         reply,
         {
           hostname: request.body.hostname,
-          spaceId: request.body.spaceId,
           bindingId: request.params.bindingId,
         },
         null,

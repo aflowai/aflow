@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 interface MutationOptions {
   path: (input: unknown) => string;
   method?: string;
+  spaceId?: string;
   serialize?: (input: unknown) => string;
   invalidate?: unknown[];
 }
@@ -170,11 +171,13 @@ describe('a folder’s preview on the machine page', () => {
     });
     expect(lastRequest('DELETE')).toEqual({
       path: '/host/folders/hb_site/preview',
-      body: { hostname: 'laptop', spaceId: SPACE },
+      body: { hostname: 'laptop' },
     });
     expect((recorded.options.get('DELETE') as MutationOptions).invalidate).toEqual([
       ['space', SPACE, 'hostBindings'],
     ]);
+    expect((recorded.options.get('DELETE') as MutationOptions).spaceId).toBe(SPACE);
+    expect((recorded.options.get('PUT') as MutationOptions).spaceId).toBe(SPACE);
   });
 
   it('shows a fixed port and the folder’s own ready path and UI paths as declared', async () => {
@@ -210,7 +213,6 @@ describe('a folder’s preview on the machine page', () => {
       path: '/host/folders/hb_site/preview',
       body: {
         hostname: 'laptop',
-        spaceId: SPACE,
         preview: {
           command: 'yarn dev --port {port}',
           readyPath: '/health',
@@ -247,7 +249,6 @@ describe('a folder’s preview on the machine page', () => {
     });
     expect(lastRequest('PUT')?.body).toEqual({
       hostname: 'laptop',
-      spaceId: SPACE,
       preview: { command: 'yarn dev', port: 5173 },
     });
   });

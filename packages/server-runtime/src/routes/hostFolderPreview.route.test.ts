@@ -2,8 +2,9 @@
  * A folder's preview from the machine page (Plan 320 D18): a person's request
  * is relayed to the executor of the machine holding the folder on its folder
  * channel and answered with the declaration as it now is, or with the
- * executor's refusal; any other credential is refused, and so is a port this
- * stack serves on, before anything is relayed.
+ * executor’s refusal; any other credential is refused, and so are a
+ * workspace the caller does not administer and a port this stack serves on,
+ * before anything is relayed.
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
@@ -13,7 +14,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 
-import { HOST_HARNESS_CONCURRENCY_DEFAULT } from '@aflow/schemas';
+import { HOST_HARNESS_CONCURRENCY_DEFAULT, type SpaceId } from '@aflow/schemas';
 
 type Listener = (channel: string, message: string) => void;
 
@@ -64,13 +65,49 @@ async function buildApp(credential: Credential): Promise<FastifyInstance> {
       ...credential,
     };
   });
+  // As the space plugin resolves it: the space `X-Space-ID` names, in this
+  // tenant, with the caller's role in it — refused where the caller has none.
+  app.decorateRequest('requireSpace', function (this: FastifyRequest) {
+    const spaceId = this.headers['x-space-id'];
+    const refuse = (statusCode: number, message: string) =>
+      Promise.reject(Object.assign(new Error(message), { statusCode }));
+    if (typeof spaceId !== 'string') return refuse(400, 'Missing space context.');
+    if (!(spaceId in TENANT_SPACES)) {
+      return refuse(404, `Space ${spaceId} not found in this tenant.`);
+    }
+    const spaceRole = TENANT_SPACES[spaceId];
+    if (spaceRole === null || spaceRole === undefined) {
+      return refuse(403, 'You do not have access to this space.');
+    }
+    return Promise.resolve({
+      spaceId: spaceId as SpaceId,
+      spaceRole,
+      canWrite: spaceRole !== 'viewer',
+      isSpaceAdmin: spaceRole === 'admin',
+      ownerId: null,
+      memberCount: 2,
+    });
+  });
   await app.register(hostFolderPreviewRoutes, { prefix: '/host' });
   await app.ready();
   return app;
 }
 
 const PERSON: Credential = { authMethod: 'local' };
+/** The caller administers this workspace. */
 const SPACE = '6f1d2c3b-4a5e-4f60-9a7b-8c9d0e1f2a3b';
+/** Another workspace of the tenant, which the caller edits but does not administer. */
+const EDITED = '1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d';
+/** Another workspace of the tenant, which the caller is no member of. */
+const FOREIGN = '9e8d7c6b-5a4f-4e3d-8c2b-1a0f9e8d7c6b';
+/** A workspace of another tenant, which this tenant does not hold. */
+const ELSEWHERE = '0f1e2d3c-4b5a-4968-8776-655443322110';
+const TENANT_SPACES: Record<string, 'admin' | 'editor' | 'viewer' | null> = {
+  [SPACE]: 'admin',
+  [EDITED]: 'editor',
+  [FOREIGN]: null,
+};
+const IN_SPACE = { 'x-space-id': SPACE };
 
 const INVENTORY = JSON.stringify({
   hostname: 'laptop',
@@ -79,6 +116,7 @@ const INVENTORY = JSON.stringify({
   harnesses: [],
   maxConcurrentHarnessRuns: HOST_HARNESS_CONCURRENCY_DEFAULT,
   folders: [],
+  previews: [],
   browsers: [],
 });
 
@@ -110,10 +148,10 @@ beforeEach(() => {
 const CONTROLS = [
   {
     method: 'PUT',
-    payload: { hostname: 'laptop', spaceId: SPACE, preview: PREVIEW },
+    payload: { hostname: 'laptop', preview: PREVIEW },
     preview: PREVIEW,
   },
-  { method: 'DELETE', payload: { hostname: 'laptop', spaceId: SPACE }, preview: null },
+  { method: 'DELETE', payload: { hostname: 'laptop' }, preview: null },
 ] as const;
 
 const URL = '/host/folders/hb_site/preview';
@@ -131,6 +169,7 @@ describe('declaring a folder’s preview from the machine page', () => {
         const response = await app.inject({
           method: control.method,
           url: URL,
+          headers: IN_SPACE,
           payload: control.payload,
         });
         expect(response.statusCode, `${credential.authMethod} ${control.method}`).toBe(403);
@@ -150,6 +189,7 @@ describe('declaring a folder’s preview from the machine page', () => {
       const response = await app.inject({
         method: control.method,
         url: URL,
+        headers: IN_SPACE,
         payload: control.payload,
       });
       expect(response.statusCode, control.method).toBe(200);
@@ -169,13 +209,47 @@ describe('declaring a folder’s preview from the machine page', () => {
     }
   });
 
+  it('refuses a workspace the caller does not administer, relaying nothing', async () => {
+    const app = await buildApp(PERSON);
+    for (const [space, status] of [
+      [EDITED, 403],
+      [FOREIGN, 403],
+      [ELSEWHERE, 404],
+    ] as const) {
+      for (const control of CONTROLS) {
+        const response = await app.inject({
+          method: control.method,
+          url: URL,
+          headers: { 'x-space-id': space },
+          payload: control.payload,
+        });
+        expect(response.statusCode, `${space} ${control.method}`).toBe(status);
+      }
+    }
+    expect(mocks.publish).not.toHaveBeenCalled();
+  });
+
+  it('relays the workspace it resolved, never one the body names', async () => {
+    const app = await buildApp(PERSON);
+    const response = await app.inject({
+      method: 'PUT',
+      url: URL,
+      headers: IN_SPACE,
+      payload: { ...CONTROLS[0].payload, spaceId: FOREIGN },
+    });
+    expect(response.statusCode).toBe(200);
+    const [, message] = mocks.publish.mock.calls[0] ?? [];
+    expect(JSON.parse(message ?? '{}')).toMatchObject({ spaceId: SPACE });
+  });
+
   it('refuses a port this stack serves on, saying why, and relays nothing', async () => {
     const app = await buildApp(PERSON);
     for (const port of [3000, 3001, 3100, 6379, 5433, 8080]) {
       const response = await app.inject({
         method: 'PUT',
         url: URL,
-        payload: { hostname: 'laptop', spaceId: SPACE, preview: { command: 'yarn dev', port } },
+        headers: IN_SPACE,
+        payload: { hostname: 'laptop', preview: { command: 'yarn dev', port } },
       });
       expect(response.statusCode, String(port)).toBe(422);
       const body = response.json<{ error: string; message: string }>();
@@ -191,7 +265,8 @@ describe('declaring a folder’s preview from the machine page', () => {
     const response = await app.inject({
       method: 'PUT',
       url: URL,
-      payload: { hostname: 'laptop', spaceId: SPACE, preview: { command: 'yarn dev' } },
+      headers: IN_SPACE,
+      payload: { hostname: 'laptop', preview: { command: 'yarn dev' } },
     });
     expect(response.statusCode).toBe(400);
     expect(mocks.publish).not.toHaveBeenCalled();
@@ -201,7 +276,12 @@ describe('declaring a folder’s preview from the machine page', () => {
     const refusal = 'Binding `hb_site` was not connected for this workspace.';
     answer = () => ({ kind: 'refused', message: refusal });
     const app = await buildApp(PERSON);
-    const response = await app.inject({ method: 'PUT', url: URL, payload: CONTROLS[0].payload });
+    const response = await app.inject({
+      method: 'PUT',
+      url: URL,
+      headers: IN_SPACE,
+      payload: CONTROLS[0].payload,
+    });
     expect(response.statusCode).toBe(422);
     expect(response.json()).toEqual({ error: 'FolderPreviewRefused', message: refusal });
   });
@@ -211,13 +291,19 @@ describe('declaring a folder’s preview from the machine page', () => {
     const elsewhere = await app.inject({
       method: 'PUT',
       url: URL,
+      headers: IN_SPACE,
       payload: { ...CONTROLS[0].payload, hostname: 'desktop' },
     });
     expect(elsewhere.statusCode).toBe(404);
     expect(mocks.publish).not.toHaveBeenCalled();
 
     mocks.publish.mockResolvedValue(0);
-    const unheard = await app.inject({ method: 'PUT', url: URL, payload: CONTROLS[0].payload });
+    const unheard = await app.inject({
+      method: 'PUT',
+      url: URL,
+      headers: IN_SPACE,
+      payload: CONTROLS[0].payload,
+    });
     expect(unheard.statusCode).toBe(503);
     expect(unheard.json<{ message: string }>().message).toContain('Nothing was changed');
   });
