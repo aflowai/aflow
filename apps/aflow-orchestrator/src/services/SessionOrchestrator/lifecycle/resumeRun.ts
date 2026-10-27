@@ -42,6 +42,7 @@ import {
   agentChatInputVarId,
   ensureAgentChatInputOverlay,
 } from '../helpers/inputPause.js';
+import { messageOfResumeInput, queueMessageForNextTurn } from '../helpers/queuedMessage.js';
 import { buildRunStatusChangedRecoveryEvent } from '../helpers/recoveryEmitter.js';
 import { AuthorityLostError, ControlConflictError } from '../../../lib/controlConflict.js';
 import {
@@ -50,11 +51,90 @@ import {
   revalidateAuthority,
 } from '../helpers/executionAuthority.js';
 
+type ResumeParams = Parameters<SessionOrchestrator['resumeRun']>[0];
+
+/** Paused steps whose resume input is stored as their output, as it stands. */
+const INPUT_IS_STEP_OUTPUT: ReadonlySet<string> = new Set([
+  'user.input.request',
+  'user.interaction.ask',
+  'user.interaction.approve',
+  'agent.control.signal_blocked',
+]);
+
+/** A plain object with no keys is what a resume carrying nothing sends. */
+function carriesInput(input: unknown): boolean {
+  if (input === null || input === undefined) return false;
+  if (typeof input === 'object' && !Array.isArray(input)) return Object.keys(input).length > 0;
+  return true;
+}
+
+/**
+ * A primary input bound for an agent's chat input that is not text: the turn
+ * reads only text there, so it would run as if nothing had been said.
+ */
+function unreadableChatInput(
+  mapping: { variables: Record<string, unknown> },
+  contract: ResumeInputContract,
+): boolean {
+  const target = contract.targetVariableId;
+  return (
+    contract.mode === 'primary' &&
+    target !== undefined &&
+    target.startsWith('ai.agent.chatInput.') &&
+    typeof mapping.variables[target] !== 'string'
+  );
+}
+
+/** What a pause with a resume contract takes, as a caller writes it. */
+function expectedContractShape(contract: ResumeInputContract): string {
+  if (contract.mode === 'primary') {
+    const target = contract.targetVariableId ?? '(none declared)';
+    return target.startsWith('ai.agent.chatInput.')
+      ? `This pause takes one message as text: \`{ "input": "<message>" }\`, mapped to \`${target}\`.`
+      : `This pause takes one value: \`{ "input": <value> }\`, mapped to \`${target}\`.`;
+  }
+  const fields = contract.requiredFields.map((field) => `"${field.variableId}": <value>`);
+  return `This pause takes these fields: \`{ "input": { ${fields.join(', ')} } }\`.`;
+}
+
+/** What a pause without a resume contract takes: an object keyed by its input variables. */
+function expectedVariablesShape(variableIds: readonly string[]): string {
+  return variableIds.length === 0
+    ? 'This pause declares no input variables, so it takes no input: resume it with none.'
+    : `This pause takes an object keyed by its input variables: ${variableIds.map((id) => `\`${id}\``).join(', ')}.`;
+}
+
 export function createResumeRun(bindings: SessionOrchestratorBindings) {
   const { deps } = bindings;
   const { db, redis, payloadStore, guardrailGate, manifestService } = deps;
 
-  return async function resumeRun(params: Parameters<SessionOrchestrator['resumeRun']>[0]) {
+  /**
+   * Queue a message carried by a resume of a conversation parked on a
+   * workflow run, where it carries one and someone it can be attributed to;
+   * undefined otherwise, and the resume is refused as before.
+   */
+  async function queueWhileWaiting(params: ResumeParams) {
+    if (!params.actorContext || !params.inputRef) return undefined;
+    let body: string | undefined;
+    try {
+      body = messageOfResumeInput(await payloadStore.retrieve(params.inputRef));
+    } catch {
+      return undefined;
+    }
+    if (body === undefined) return undefined;
+    return await queueMessageForNextTurn(db, redis, {
+      tenantId: params.tenantId,
+      sessionId: params.runId,
+      actorUserId: params.actorContext.userId,
+      ...(params.actorContext.displayName
+        ? { actorDisplayName: params.actorContext.displayName }
+        : {}),
+      body,
+      ...(params.clientMessageId ? { clientMessageId: params.clientMessageId } : {}),
+    });
+  }
+
+  return async function resumeRun(params: ResumeParams) {
     const now = Date.now();
 
     if (await isSessionCorrupt(redis, params.tenantId, params.runId)) {
@@ -175,13 +255,24 @@ export function createResumeRun(bindings: SessionOrchestratorBindings) {
     // A step parked on a workflow run is woken by that run's waiter with the
     // run's outcome; a resume would complete it with an operator's empty
     // answer instead, and the run's own result would arrive for a step that
-    // has moved on.
+    // has moved on. A message is not lost to that: it is queued to the turn
+    // the run's ending wakes, and the conversation goes on waiting.
     if (runState.pauseType === 'external_dependency' && runState.waitingOnWorkflowRunId) {
       const waitedRunId = runState.waitingOnWorkflowRunId;
+      const queued = await queueWhileWaiting(params);
+      if (queued) {
+        getOrchestratorLogger().info(
+          `[resumeRun] Run ${params.runId} is waiting on workflow run ${waitedRunId}; ` +
+            `queued the message ${queued.eventId} to its next turn.`,
+        );
+        return { status: 'PAUSED' as SessionStatus };
+      }
       throw new ControlConflictError(
         'run_waiting_on_workflow_run',
         `This conversation is waiting on workflow run ${waitedRunId}, not on an answer, and ` +
-          `resumes by itself when that run pauses or ends. To stop waiting, cancel the run ` +
+          `resumes by itself when that run pauses or ends. A message sent as text, by a ` +
+          `person, is queued to the turn that follows; this resume carried none. ` +
+          `To stop waiting, cancel the run ` +
           `(workflow.run.cancel with runId ${waitedRunId}) or interrupt this conversation ` +
           `(interruptRun).`,
         { observedStatus: runState.status, currentStepExecutionId: params.stepExecutionId },
@@ -279,6 +370,8 @@ export function createResumeRun(bindings: SessionOrchestratorBindings) {
 
     let runtimeState = runState.runtimeState;
     let userMessageText: string | undefined;
+    // What the pause takes, where the input carried maps to none of it.
+    let unmappedInput: string | undefined;
     if (params.inputRef && runtimeState) {
       try {
         const userInput = await payloadStore.retrieve(params.inputRef);
@@ -317,8 +410,12 @@ export function createResumeRun(bindings: SessionOrchestratorBindings) {
 
         if (resumeContract) {
           const mapping = mapResumeInput(userInput, resumeContract);
-          if ('error' in mapping) {
-            console.warn(`[resumeRun] Resume input mapping failed: ${mapping.error}`);
+          if ('error' in mapping || unreadableChatInput(mapping, resumeContract)) {
+            if (carriesInput(userInput)) {
+              unmappedInput = expectedContractShape(resumeContract);
+            } else if ('error' in mapping) {
+              console.warn(`[resumeRun] Resume input mapping failed: ${mapping.error}`);
+            }
           } else {
             for (const [varId, value] of Object.entries(mapping.variables)) {
               newVariables[varId] = {
@@ -364,9 +461,11 @@ export function createResumeRun(bindings: SessionOrchestratorBindings) {
               ? (userInput as Record<string, unknown>)
               : {};
 
+          let mappedAny = false;
           for (const [key, value] of Object.entries(inputObj)) {
             const varDef = effectiveVars.find((v: { variableId: string }) => v.variableId === key);
             if (varDef) {
+              mappedAny = true;
               newVariables[key] = {
                 ref: { kind: 'inline' as const, value },
                 updatedAtMs: now,
@@ -384,6 +483,18 @@ export function createResumeRun(bindings: SessionOrchestratorBindings) {
           }
 
           userMessageText = extractUserMessageFromInput(inputObj, agentDef, runState);
+          // Only a turn reads the input as what was said; a paused tool step
+          // resumes on its own input whatever this one carries.
+          if (
+            !mappedAny &&
+            userMessageText === undefined &&
+            carriesInput(userInput) &&
+            targetStepDef?.operation === 'ai.agent.turn'
+          ) {
+            unmappedInput = expectedVariablesShape(
+              effectiveVars.filter((v) => v.lifecycle.isInput).map((v) => v.variableId),
+            );
+          }
         }
 
         if (variablesChanged) {
@@ -401,6 +512,24 @@ export function createResumeRun(bindings: SessionOrchestratorBindings) {
           runId: params.runId,
         });
       }
+    }
+
+    // An input that maps to nothing would run the turn as if nothing had been
+    // said — and the agent takes that silence as the word. Refused before the
+    // PAUSED → RUNNING transition, so the pause stays open for the input it
+    // takes. A resume carrying no input at all is not this, nor one whose
+    // input is the paused step's answer itself, nor an approval the grant decides.
+    const answersStepDirectly = INPUT_IS_STEP_OUTPUT.has(
+      agentDef.steps.find((s) => s.stepId === targetStepId)?.operation ?? '',
+    );
+    if (unmappedInput !== undefined && !answersStepDirectly && approval === null) {
+      throw new ControlConflictError(
+        'resume_input_unmapped',
+        `The input this resume carries maps to none of the variables the pause takes, so it ` +
+          `was refused rather than delivered as an empty turn; the run is still paused. ` +
+          unmappedInput,
+        { observedStatus: runState.status, currentStepExecutionId: params.stepExecutionId },
+      );
     }
 
     if (runtimeState) {
@@ -577,13 +706,7 @@ export function createResumeRun(bindings: SessionOrchestratorBindings) {
     manifestService?.updateStatus(params.runId, params.tenantId, 'RUNNING');
 
     const targetStepDef = agentDef.steps.find((s) => s.stepId === targetStepId);
-    if (
-      targetStepDef &&
-      (targetStepDef.operation === 'user.input.request' ||
-        targetStepDef.operation === 'user.interaction.ask' ||
-        targetStepDef.operation === 'user.interaction.approve' ||
-        targetStepDef.operation === 'agent.control.signal_blocked')
-    ) {
+    if (targetStepDef && INPUT_IS_STEP_OUTPUT.has(targetStepDef.operation)) {
       // Store the user's input as the step output
       const outputRef = params.inputRef || '';
 

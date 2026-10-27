@@ -161,7 +161,7 @@ const RESULT_SCHEMA = {
  * small enough that the answer arrives in a minute or two, large enough for the
  * log, the diff and the one file a finding rests on.
  */
-const BRIEF_MAX_TURNS = 8;
+export const BRIEF_MAX_TURNS = 8;
 
 /** What the Helmsman needs once it has chosen the skill: carried as the skill's usage pitfalls. */
 const REVIEW_PITFALLS: string[] = [

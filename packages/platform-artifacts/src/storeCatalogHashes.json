@@ -28,7 +28,7 @@
     "contentHash": "814ea9d7d423194beaa22fd9e22a10053bd5426d3d352de9df4cfbbc044296df"
   },
   "coding-loop": {
-    "version": 97,
+    "version": 98,
     "contentHash": "48f397a1a4c29daa1c17a0233bce1757c4cdf5fd7a873cb6dc863bd24510dfcf"
   },
   "coding-pr-loop": {
@@ -112,7 +112,7 @@
     "contentHash": "087550116c8a38b7e2c401dd34a5e8002568a3db0ab8dd8d22ecb2a0e6d83d75"
   },
   "local-publish": {
-    "version": 49,
+    "version": 50,
     "contentHash": "b378e3f77066759c92f16a7b6fef320beb4cac0d85387bdff14ede5fd76b02e2"
   },
   "local-review-quick-start": {

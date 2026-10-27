@@ -1,5 +1,11 @@
 import type { WorkflowRunDecideRule } from '@aflow/schemas';
-import type { SKIP } from './localPrShepherdWiring.js';
+import { out, type SKIP } from './localPrShepherdWiring.js';
+import {
+  RETRY_REVIEW_TASK_ID,
+  REVIEW_TASK_IDS,
+  reviewBindings,
+  reviewValue,
+} from './publishLocalChangesReview.js';
 
 /**
  * Publish Local Changes' push gate, as ordered rules over what the run read
@@ -22,12 +28,18 @@ import type { SKIP } from './localPrShepherdWiring.js';
  * findings recorded, over no findings as over any. A `publish_as_is` over no
  * findings from a review that did not approve — only an override makes one —
  * asks: that review could not judge the range, so nothing cleared the push.
+ * A review that ended without a result is retried once before anything
+ * asks (`publishLocalChangesReview.ts`); where the retry ended without one
+ * too, the gate asks and says so.
  * An override pushes only on
  * an authority the run verified (`publishLocalChangesOverride.ts`), and the
  * operator's word only through the operator's own approval. A path through a
  * read that did not happen reads as null, which is why every rule that clears
  * a push compares equal to what clears it.
  */
+export const REVIEW_RETRIED_REASON =
+  'The review ended without a result — its run failed, or its harness exited without writing one — and was retried once in place, and the retry ended without a result as well: nothing was decided on its findings, so the operator decides whether the push goes.';
+
 export const PUSH_GATE_RULES: readonly WorkflowRunDecideRule[] = [
   {
     when: { expression: "state.overrideCheck == 'refused'" },
@@ -94,6 +106,11 @@ export const PUSH_GATE_RULES: readonly WorkflowRunDecideRule[] = [
       'The review found nothing and did not approve: it could not judge the range, so the operator decides whether the push goes.',
   },
   {
+    when: { allOf: ['state.verdict == null', 'state.retryOutcome != null'] },
+    decision: 'ask',
+    reason: REVIEW_RETRIED_REASON,
+  },
+  {
     when: { expression: "state.afterReview == 'publish_as_is'" },
     decision: 'push',
     reason:
@@ -117,14 +134,14 @@ export function decidePushTask(checksCleared: { anyOf: string[]; onMissingRef: t
   return {
     taskId: 'decide-push',
     name: 'Decide whether the push asks',
-    goal: "Decide, by rules over what the run read, whether the push goes without asking, waits for the operator, or stays on the machine: an uncleared scan or an `always` folder asks; a `never` folder pushes; under `unless-unreviewed` an override the run could not verify keeps the branch local, and otherwise the decision on the review's findings — `fix_before_merge` keeps the branch local, `publish_as_is` pushes over findings no more severe than minor and asks over a blocker or a major, or where the operator's word set the decision aside; where the review found nothing, `publish_as_is` pushes only on an approving verdict; and a review that did not finish asks.",
+    goal: "Decide, by rules over what the run read, whether the push goes without asking, waits for the operator, or stays on the machine: an uncleared scan or an `always` folder asks; a `never` folder pushes; under `unless-unreviewed` an override the run could not verify keeps the branch local, and otherwise the decision on the review's findings — `fix_before_merge` keeps the branch local, `publish_as_is` pushes over findings no more severe than minor and asks over a blocker or a major, or where the operator's word set the decision aside; where the review found nothing, `publish_as_is` pushes only on an approving verdict; and a review that did not finish asks — saying so where it was retried once and the retry ended without a result too.",
     type: 'operation' as const,
     operation: 'workflow.run.decide',
     dependsOn: [
       'read-repository',
       'scan-commit',
       'read-push-approval',
-      'review-commit',
+      ...REVIEW_TASK_IDS,
       'verify-override',
       'describe-pr',
     ],
@@ -138,7 +155,8 @@ export function decidePushTask(checksCleared: { anyOf: string[]; onMissingRef: t
         taskId: 'read-push-approval',
         path: 'branchPolicy.pushApproval',
       },
-      verdict: { kind: 'task_output' as const, taskId: 'review-commit', path: 'verdict' },
+      ...reviewBindings('verdict', 'verdict'),
+      retryOutcome: out(RETRY_REVIEW_TASK_ID, 'outcome'),
       afterReview: {
         kind: 'task_output' as const,
         taskId: 'describe-pr',
@@ -169,7 +187,8 @@ export function decidePushTask(checksCleared: { anyOf: string[]; onMissingRef: t
       state: {
         scanClean: { $bind: 'scanClean' },
         posture: { $bind: 'posture' },
-        verdict: { $bind: 'verdict' },
+        verdict: reviewValue('verdict'),
+        retryOutcome: { $bind: 'retryOutcome' },
         afterReview: { $bind: 'afterReview' },
         overrideBy: { $bind: 'overrideBy' },
         severest: { $bind: 'severest' },

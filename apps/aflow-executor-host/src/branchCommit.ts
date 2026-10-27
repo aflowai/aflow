@@ -17,6 +17,7 @@ import {
 } from './baseMerge.js';
 import { makeScratch } from './executorScratch.js';
 import { noPublicationGitMessage, publicationGitReadiness } from './gitReadiness.js';
+import { measurePushChanges, type PushChanges } from './pushChanges.js';
 import {
   APPLY_OUTPUT_CAP_BYTES,
   applyPatch,
@@ -90,9 +91,14 @@ export interface PatchCommit {
   readonly pushBaseSha?: string;
   /** Whether `pushBaseSha` holds commits the commit does not; present exactly when it is. */
   readonly baseMoved?: boolean;
+  /** What `pushRange` changes, in all and within each area asked about; present where it could be read. */
+  readonly pushChanges?: PushChanges;
   /** `<sha>:refs/heads/<branch>`: what a push of this commit sends. */
   readonly pushRefspec: string;
 }
+
+/** Named sets of path globs a push's changes are also counted within. */
+export type PushAreas = Readonly<Record<string, readonly string[]>>;
 
 export interface PatchCommitOutcome {
   readonly apply: ApplyOutcome;
@@ -274,10 +280,11 @@ export async function commitPatchOnBranch(
   options: {
     readonly baseSha?: string;
     readonly pushBaseSha?: string;
+    readonly pushAreas?: PushAreas;
     readonly mergeFrom?: string;
   } = {},
 ): Promise<PatchCommitOutcome> {
-  const { pushBaseSha } = options;
+  const { pushBaseSha, pushAreas } = options;
   // `fetchFromClone` below is what needs the floor; asked first, so a git
   // without the flag is refused before a clone and a commit are made for nothing.
   const gitReadiness = await publicationGitReadiness();
@@ -345,7 +352,7 @@ export async function commitPatchOnBranch(
     await fetchFromClone(root, worktree, sha);
     // Measured before the branch is set: once the ref has moved, a git failure
     // here would fail a task whose branch already holds the commit.
-    const measure = await pushMeasure(root, pushBaseSha, sha);
+    const measure = await pushMeasure(root, pushBaseSha, sha, pushAreas);
     try {
       // Compare-and-swap on the old head: a branch that moved between the check
       // above and this line is refused here rather than overwritten.
@@ -393,12 +400,15 @@ async function pushMeasure(
   root: string,
   pushBaseSha: string | undefined,
   sha: string,
-): Promise<Pick<PatchCommit, 'pushRange' | 'pushBaseSha' | 'baseMoved'>> {
+  pushAreas: PushAreas = {},
+): Promise<Pick<PatchCommit, 'pushRange' | 'pushBaseSha' | 'baseMoved' | 'pushChanges'>> {
   if (pushBaseSha === undefined) return {};
+  const pushChanges = await measurePushChanges(root, pushBaseSha, sha, pushAreas);
   return {
     pushRange: `${pushBaseSha}..${sha}`,
     pushBaseSha,
     baseMoved: !(await isAncestor(root, pushBaseSha, sha)),
+    ...(pushChanges !== undefined ? { pushChanges } : {}),
   };
 }
 
@@ -448,6 +458,7 @@ export async function branchAsItStands(
   branch: string,
   baseSha: string | undefined,
   pushBaseSha: string | undefined,
+  pushAreas?: PushAreas,
 ): Promise<PatchCommit> {
   if (baseSha === undefined) {
     throw new WorktreeError(
@@ -489,7 +500,7 @@ export async function branchAsItStands(
     appended: false,
     asItStands: true,
     range: `${parent}..${head}`,
-    ...(await pushMeasure(root, pushBaseSha, head)),
+    ...(await pushMeasure(root, pushBaseSha, head, pushAreas)),
     pushRefspec: `${head}:refs/heads/${branch}`,
   };
 }

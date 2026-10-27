@@ -1,5 +1,11 @@
 import type { WorkflowRunDecideRule } from '@aflow/schemas';
-import { bind, ctx, out, runInput, SKIP } from './localPrShepherdWiring.js';
+import { bind, ctx, out, runInput } from './localPrShepherdWiring.js';
+import {
+  REVIEW_TASK_IDS,
+  reviewBindings,
+  reviewHas,
+  reviewValue,
+} from './publishLocalChangesReview.js';
 import {
   REVIEW_FINDINGS_MAX,
   REVIEW_SEVERITIES,
@@ -84,19 +90,23 @@ export const SETTLE_AFTER_REVIEW_TASK = {
   goal: "Read the review's verdict, the severities of its findings and this publication's round, and decide by the rounds rule: a review that did not approve is fix_before_merge; an approving review of nits alone, or none, is publish_as_is; an approving review with a minor or worse is fix_before_merge on the slice's first publication and publish_as_is once a fix round has run, its findings carried open. No model is asked.",
   type: 'operation' as const,
   operation: 'workflow.run.decide',
-  dependsOn: ['review-commit'],
+  dependsOn: REVIEW_TASK_IDS,
   // A review that did not finish returned no findings to read.
-  when: { expression: 'tasks.review-commit.output.findings != null', onMissingRef: SKIP },
+  when: reviewHas('findings'),
   retryability: 'safe' as const,
   maxAttempts: 1,
   inputBindings: {
-    verdict: out('review-commit', 'verdict'),
-    findings: out('review-commit', 'findings'),
+    ...reviewBindings('verdict', 'verdict'),
+    ...reviewBindings('findings', 'findings'),
     round: runInput('round'),
   },
   context: ctx('workflow.run.decide'),
   inputTemplate: {
-    state: { verdict: bind('verdict'), findings: bind('findings'), round: bind('round') },
+    state: {
+      verdict: reviewValue('verdict'),
+      findings: reviewValue('findings'),
+      round: bind('round'),
+    },
     rules: AFTER_REVIEW_SETTLE_RULES,
     otherwise: AFTER_REVIEW_SETTLE_OTHERWISE,
   },

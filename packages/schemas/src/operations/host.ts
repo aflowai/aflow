@@ -630,6 +630,38 @@ export const HostMcpCallOutputSchema = z.object({
     ),
 });
 
+const HostPushAreaNameSchema = z
+  .string()
+  .regex(/^[a-z][a-z0-9_]{0,31}$/, { message: 'An area is a lowercase name: `docs`, `schemas`.' });
+
+export const HostPushAreasSchema = z
+  .record(HostPushAreaNameSchema, z.array(z.string().min(1).max(200)).min(1).max(32))
+  .refine((areas) => Object.keys(areas).length <= 8, { message: 'At most 8 areas.' })
+  .describe(
+    'Named sets of path globs, each relative to the repository root — `*` within one ' +
+      'directory, `**` across any number of them — that `pushChanges` counts the changed ' +
+      'files and lines within, area by area. Read only where `pushBase` is given.',
+  );
+
+const HostChangeCountSchema = z.object({
+  files: z.number().int().nonnegative(),
+  lines: z
+    .number()
+    .int()
+    .nonnegative()
+    .describe('Lines added and removed together; a binary file counts none.'),
+});
+
+export const HostPushChangesSchema = HostChangeCountSchema.extend({
+  areas: z
+    .record(z.string(), HostChangeCountSchema)
+    .describe('Every area `pushAreas` named, counted over the files its globs match.'),
+}).describe(
+  'What `pushRange` changes, read as the review reads it — the diff from where its two ends ' +
+    'meet: the files and the lines, in all and within each area `pushAreas` named. Present ' +
+    'where `pushRange` is and the diff could be read.',
+);
+
 export const HostFilePatchInputSchema = z
   .object({
     bindingId: HostBindingRef,
@@ -696,6 +728,7 @@ export const HostFilePatchInputSchema = z
             'the push would add, including any of the folder’s own that `origin` does not ' +
             'have yet. A base `origin` cannot give is refused with nothing made.',
         ),
+        pushAreas: HostPushAreasSchema.optional(),
         mergeFrom: HostCommitShaSchema.optional().describe(
           'The commit the commission merged into its checkout, as it reported it in ' +
             '`merge.from`. Only when appending to `branch`: its head merges this commit, ' +
@@ -844,6 +877,7 @@ export const HostFilePatchOutputSchema = z.object({
             'since the branch was cut from it or last merged it, so a further round on the ' +
             'branch merges it in first. Present exactly when `pushBaseSha` is.',
         ),
+      pushChanges: HostPushChangesSchema.optional(),
       pushRefspec: z
         .string()
         .min(1)

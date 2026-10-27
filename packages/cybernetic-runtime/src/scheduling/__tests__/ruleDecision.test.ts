@@ -15,6 +15,29 @@ function decide(state: Record<string, unknown>, rules: WorkflowRunDecideInput['r
   return decideByRules({ state, rules, otherwise: OTHERWISE });
 }
 
+describe('decideByRules — a value beside the decision', () => {
+  it('hands on the value the rule that held names, and none where it names none', () => {
+    const rules: WorkflowRunDecideInput['rules'] = [
+      { when: { expression: 'state.lines < 30' }, decision: 'brief', reason: 'Small.', value: 8 },
+      { when: { expression: 'state.lines < 300' }, decision: 'standard', reason: 'Medium.' },
+    ];
+    expect(decide({ lines: 3 }, rules)).toEqual({
+      decision: 'brief',
+      reason: 'Small.',
+      rule: 0,
+      value: 8,
+    });
+    expect(decide({ lines: 100 }, rules)).not.toHaveProperty('value');
+    expect(
+      decideByRules({
+        state: { lines: 1000 },
+        rules,
+        otherwise: { decision: 'deep', reason: 'Large.', value: 'all' },
+      }),
+    ).toEqual({ decision: 'deep', reason: 'Large.', rule: null, value: 'all' });
+  });
+});
+
 describe('decideByRules', () => {
   const rules: WorkflowRunDecideInput['rules'] = [
     {

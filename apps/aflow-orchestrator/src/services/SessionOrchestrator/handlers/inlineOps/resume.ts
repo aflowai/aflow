@@ -95,8 +95,10 @@ export async function handleResumeInline(args: InlineHandlerArgs): Promise<void>
       );
     }
 
-    // Send resume control message to child with the follow-up message
-    const resumeInputRef = `inline:${Buffer.from(JSON.stringify({ prompt: message })).toString('base64')}`;
+    // Send resume control message to child with the follow-up message: as
+    // `input`, the text a pause with a resume contract maps to the child's
+    // chat input, and as `prompt`, the input variable a pause without one maps.
+    const resumeInputRef = `inline:${Buffer.from(JSON.stringify({ input: message, prompt: message })).toString('base64')}`;
     const actingRun = await getSessionState(redis, context.tenantId, context.runId);
 
     await addControlMessage(redis, {

@@ -1,6 +1,12 @@
 import type { WorkflowRunDecideRule } from '@aflow/schemas';
 import { bind, ctx, out, SKIP } from './localPrShepherdWiring.js';
 import { BASE } from './publishLocalChangesRepository.js';
+import {
+  REVIEW_TASK_IDS,
+  reviewBindings,
+  reviewHas,
+  reviewValue,
+} from './publishLocalChangesReview.js';
 
 /**
  * What a publication that decided `fix_before_merge` hands the round after it
@@ -42,7 +48,7 @@ function fixRoundTask(baseMoved: boolean) {
     goal: `Where the decision on the review's findings is \`fix_before_merge\` and the branch stayed on the machine, record what the fix round needs: the branch, its head, whether \`origin\`'s base moved past it, the review run and the findings — and the Commission Change inputs it starts from, \`base\` the branch's name${baseMoved ? ' and `mergeFrom` the base on `origin`, which moved' : ''}.`,
     type: 'operation' as const,
     operation: 'workflow.run.decide',
-    dependsOn: ['commit', 'review-commit', 'describe-pr', 'decide-push'],
+    dependsOn: ['commit', ...REVIEW_TASK_IDS, 'describe-pr', 'decide-push'],
     when: {
       allOf: [
         "tasks.describe-pr.output.afterReview == 'fix_before_merge'",
@@ -57,7 +63,7 @@ function fixRoundTask(baseMoved: boolean) {
       branch: out('commit', 'commit.branch'),
       headSha: out('commit', 'commit.sha'),
       baseMoved: out('commit', 'commit.baseMoved'),
-      reviewRunId: out('review-commit', 'reviewRunId'),
+      ...reviewBindings('reviewRunId', 'reviewRunId'),
       findings: out('describe-pr', 'findings'),
       ...(baseMoved ? { base: BASE } : {}),
     },
@@ -67,7 +73,7 @@ function fixRoundTask(baseMoved: boolean) {
         branch: bind('branch'),
         headSha: bind('headSha'),
         baseMovedSince: bind('baseMoved'),
-        reviewRunId: bind('reviewRunId'),
+        reviewRunId: reviewValue('reviewRunId'),
         findings: bind('findings'),
         commissionInputs: baseMoved
           ? { base: bind('branch'), mergeFrom: ORIGIN_BASE }
@@ -101,15 +107,15 @@ export const READ_REVIEW_TASK = {
   goal: "Read the verdict of this publication's Local Code Review from the review run as it stands — its final attempt, where a failed review was retried in place — for the run to record.",
   type: 'operation' as const,
   operation: 'workflow.run.detail',
-  dependsOn: ['review-commit', 'push'],
-  when: { expression: 'tasks.review-commit.output.reviewRunId != null', onMissingRef: SKIP },
+  dependsOn: [...REVIEW_TASK_IDS, 'push'],
+  when: reviewHas('reviewRunId'),
   // The verdict on record, never the push's: nothing waits on it here.
   optional: true,
   retryability: 'safe' as const,
   maxAttempts: 2,
-  inputBindings: { reviewRunId: out('review-commit', 'reviewRunId') },
+  inputBindings: reviewBindings('reviewRunId', 'reviewRunId'),
   context: ctx('workflow.run.detail'),
-  inputTemplate: { runId: bind('reviewRunId'), compact: true },
+  inputTemplate: { runId: reviewValue('reviewRunId'), compact: true },
   // Only a completed review promoted a verdict: one failed, cancelled or
   // still running reads as null.
   outputProjection: {

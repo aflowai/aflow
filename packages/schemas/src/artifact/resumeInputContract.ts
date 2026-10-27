@@ -132,10 +132,18 @@ export function mapResumeInput(
       return { error: 'Resume contract mode is "primary" but no targetVariableId declared' };
     }
 
-    // For primary mode, the input value goes directly to the target variable
-    const result: ResumeInputMapping = { variables: { [targetVar]: inputValue } };
-    if (typeof inputValue === 'string') {
-      result.userMessage = inputValue;
+    // For primary mode, the input value goes directly to the target variable —
+    // or, keyed by the target's id as the fields form keys them, its value.
+    const value =
+      typeof inputValue === 'object' &&
+      inputValue !== null &&
+      !Array.isArray(inputValue) &&
+      Object.prototype.hasOwnProperty.call(inputValue, targetVar)
+        ? (inputValue as Record<string, unknown>)[targetVar]
+        : inputValue;
+    const result: ResumeInputMapping = { variables: { [targetVar]: value } };
+    if (typeof value === 'string') {
+      result.userMessage = value;
     }
     if (configOverrides) result.configOverrides = configOverrides;
     return result;

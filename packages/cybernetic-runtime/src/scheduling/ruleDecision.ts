@@ -116,7 +116,19 @@ export function decideByRules(input: WorkflowRunDecideInput): WorkflowRunDecideO
     const results = comparisons.map((comparison) => holds(comparison, input.state));
     const met =
       predicateCombinator(rule.when) === 'anyOf' ? results.some(Boolean) : results.every(Boolean);
-    if (met) return { decision: rule.decision, reason: rule.reason, rule: index };
+    if (met) {
+      return {
+        decision: rule.decision,
+        reason: rule.reason,
+        rule: index,
+        ...(rule.value !== undefined ? { value: rule.value } : {}),
+      };
+    }
   }
-  return { decision: input.otherwise.decision, reason: input.otherwise.reason, rule: null };
+  return {
+    decision: input.otherwise.decision,
+    reason: input.otherwise.reason,
+    rule: null,
+    ...(input.otherwise.value !== undefined ? { value: input.otherwise.value } : {}),
+  };
 }

@@ -12,6 +12,7 @@ import {
 import { SHEPHERD_BUDGET_SPENT } from './localPrShepherdRules.js';
 import { bind, ctx, github, out, runInput, SKIP } from './localPrShepherdWiring.js';
 import { BASE, REPOSITORY } from './publishLocalChangesRepository.js';
+import { REVIEW_TASK_IDS, reviewBindings, reviewValue } from './publishLocalChangesReview.js';
 
 /**
  * An override sets the decision on the review's findings aside only on an
@@ -147,20 +148,20 @@ export function overrideTasks(checksCleared: { anyOf: string[]; onMissingRef: ty
       goal: "Read whether an override was passed that would set the decision on the review's findings aside — the review finished and the decision is not already publish_as_is — and which authority it names, so that authority's check alone runs.",
       type: 'operation' as const,
       operation: 'workflow.run.decide',
-      dependsOn: ['review-commit', SETTLE_AFTER_REVIEW_TASK.taskId],
+      dependsOn: [...REVIEW_TASK_IDS, SETTLE_AFTER_REVIEW_TASK.taskId],
       when: checksCleared,
       retryability: 'safe' as const,
       maxAttempts: 1,
       inputBindings: {
         override: runInput('override'),
-        findings: out('review-commit', 'findings'),
+        ...reviewBindings('findings', 'findings'),
         ...AFTER_REVIEW_BINDINGS,
       },
       context: ctx('workflow.run.decide'),
       inputTemplate: {
         state: {
           override: bind('override'),
-          findings: bind('findings'),
+          findings: reviewValue('findings'),
           decided: AFTER_REVIEW_VALUE,
         },
         rules: OVERRIDE_CLAIM_RULES,
