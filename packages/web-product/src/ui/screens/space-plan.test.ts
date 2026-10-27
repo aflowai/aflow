@@ -497,7 +497,7 @@ describe('SpacePlanPage — the board', () => {
     ).toEqual([NEXT]);
     expect(card(NEXT).textContent).toContain('Next');
     expect(card(NEXT).querySelector('[data-plan-waiting]')?.textContent).toBe(
-      'Its run ended; the loop advances it next',
+      'Its run ended; the loop advances it when it returns',
     );
     expect(card(ARTICLE).textContent).not.toContain('Next');
   });

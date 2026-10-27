@@ -90,7 +90,7 @@ export function planHeader(tally: PlanRootTally): {
 export function waitingLine(node: PlanTreeNode): string | undefined {
   if (node.status !== 'waiting') return undefined;
   const running = node.counts.inFlightRuns;
-  if (running === 0) return 'Its run ended; the loop advances it next';
+  if (running === 0) return 'Its run ended; the loop advances it when it returns';
   return running === 1 ? 'A run is on it' : `${String(running)} runs are on it`;
 }
 

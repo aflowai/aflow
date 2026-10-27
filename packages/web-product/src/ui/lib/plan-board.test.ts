@@ -117,7 +117,7 @@ describe('planCards', () => {
   it('says what holds a waiting step: its run, or the loop yet to advance it', () => {
     const counts = { runs: 1, pullRequests: 0, findings: 0, documents: 0, inFlightRuns: 0 };
     expect(waitingLine(node('w', { status: 'waiting', counts }))).toBe(
-      'Its run ended; the loop advances it next',
+      'Its run ended; the loop advances it when it returns',
     );
     expect(
       waitingLine(node('w', { status: 'waiting', counts: { ...counts, inFlightRuns: 1 } })),
