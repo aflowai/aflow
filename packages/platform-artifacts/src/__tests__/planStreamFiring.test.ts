@@ -9,6 +9,11 @@ import { describe, expect, it } from 'vitest';
 import {
   FlowScheduleCreateInputSchema,
   getOperation,
+  isPlanResidentSchedule,
+  PLAN_RESIDENT_SCHEDULE_CRON,
+  PLAN_RESIDENT_SCHEDULE_VARIABLE,
+  planResidentScheduleInput,
+  resolveInputTemplate,
   PLAN_NODE_NEXT_OPERATION_ID,
   PLAN_STREAM_ATTEMPTS_DEFAULT,
   PLAN_STREAM_COMMISSION_SLUG,
@@ -62,5 +67,69 @@ describe('a stream’s schedule (Plan 322 P2b)', () => {
     expect(helmsmanCoreOperations()).not.toContain(PLAN_NODE_NEXT_OPERATION_ID);
     const op = getOperation(PLAN_NODE_NEXT_OPERATION_ID);
     expect(op).toMatchObject({ agentTool: true, mutates: false, accessMode: 'read' });
+  });
+});
+
+describe('the resident schedule (Plan 331 D1)', () => {
+  const helmsman = () =>
+    CYBERNETIC_AGENTS.find((a) => a.flowId === PLAN_STREAM_SCHEDULE_TARGET.systemRole);
+
+  it('is one agent.schedule.create the operator makes: the Helmsman, every fifteen minutes, naming no root', () => {
+    const input = planResidentScheduleInput();
+    const schedule = FlowScheduleCreateInputSchema.safeParse({
+      name: 'Resident',
+      action: 'start_run',
+      target: PLAN_STREAM_SCHEDULE_TARGET,
+      cron: PLAN_RESIDENT_SCHEDULE_CRON,
+      input,
+    });
+    expect(schedule.success).toBe(true);
+    expect(PLAN_RESIDENT_SCHEDULE_CRON).toBe('*/15 * * * *');
+    expect(input.input).toContain(PLAN_NODE_NEXT_OPERATION_ID);
+    expect(input.input).not.toContain('rootNodeId":');
+    expect(
+      isPlanResidentSchedule({
+        targetKind: PLAN_STREAM_SCHEDULE_TARGET.kind,
+        targetSystemRole: PLAN_STREAM_SCHEDULE_TARGET.systemRole,
+        inputTemplate: input,
+      }),
+    ).toBe(true);
+  });
+
+  it('is found as the resident when created as documented, whatever message the creator wrote', () => {
+    const schedule = FlowScheduleCreateInputSchema.safeParse({
+      name: 'Resident',
+      action: 'start_run',
+      target: PLAN_STREAM_SCHEDULE_TARGET,
+      cron: PLAN_RESIDENT_SCHEDULE_CRON,
+      input: { ...planResidentScheduleInput(), input: 'Take the next approved node.' },
+    });
+    expect(schedule.success).toBe(true);
+    if (!schedule.success) return;
+    expect(
+      isPlanResidentSchedule({
+        targetKind: PLAN_STREAM_SCHEDULE_TARGET.kind,
+        targetSystemRole: PLAN_STREAM_SCHEDULE_TARGET.systemRole,
+        inputTemplate: schedule.data.input,
+      }),
+    ).toBe(true);
+    expect(
+      isPlanResidentSchedule({
+        targetKind: PLAN_STREAM_SCHEDULE_TARGET.kind,
+        targetSystemRole: PLAN_STREAM_SCHEDULE_TARGET.systemRole,
+        inputTemplate: { input: 'Take the next approved node.' },
+      }),
+    ).toBe(false);
+  });
+
+  it('hands each wake its own schedule, a config the Helmsman declares, so the wake renews it', async () => {
+    const resolved = await resolveInputTemplate(planResidentScheduleInput(), {
+      schedule: { id: 'sched-1' },
+    });
+    expect(resolved).toMatchObject({ config: { [PLAN_RESIDENT_SCHEDULE_VARIABLE]: 'sched-1' } });
+    const declared = helmsman()?.stateVariables.find(
+      (v) => v.variableId === PLAN_RESIDENT_SCHEDULE_VARIABLE,
+    );
+    expect(declared).toMatchObject({ inputRole: 'config', lifecycle: { isInput: true } });
   });
 });

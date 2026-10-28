@@ -6,6 +6,7 @@
  * enterprise, but attribution for who changed what is not something an
  * appliance does without.
  */
+import { resolvePrincipalActorKind } from '../utils/actorContext.js';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 
 export function recordAdminAudit(
@@ -20,7 +21,7 @@ export function recordAdminAudit(
   fastify.audit.record({
     actor: {
       userId: request.authUser.userId,
-      kind: request.authUser.isServicePrincipal ? 'service_principal' : 'human',
+      kind: resolvePrincipalActorKind(request.authUser),
       authMethod: request.authUser.authMethod,
       tenantId: tenant.tenantId,
       ...(tenant.tenantRole !== undefined ? { tenantRole: tenant.tenantRole } : {}),

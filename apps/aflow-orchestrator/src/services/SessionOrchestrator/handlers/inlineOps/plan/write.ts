@@ -28,6 +28,7 @@ function planWriteContext(args: InlineHandlerArgs): PlanWriteContext {
     ...planReadContext(args),
     redis: args.redis,
     tenantId: args.context.tenantId as string,
+    actorKind: 'agent',
   };
 }
 

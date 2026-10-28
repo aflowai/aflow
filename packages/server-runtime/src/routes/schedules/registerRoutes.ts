@@ -1,4 +1,5 @@
-import type { FastifyInstance } from 'fastify';
+import { resolvePrincipalActorKind } from '../../utils/actorContext.js';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { eq, and, desc, sql } from 'drizzle-orm';
@@ -15,6 +16,44 @@ import {
   UpdateScheduleBodySchema,
 } from './schemas.js';
 import { rowToResponse } from './helpers.js';
+
+/**
+ * A schedule write through this API, kept where every other operator write is:
+ * Plan 331 D7 counts a person's schedule writes among their actions.
+ */
+export function recordScheduleWrite(
+  fastify: FastifyInstance,
+  request: FastifyRequest,
+  write: {
+    action: 'schedule.create' | 'schedule.update' | 'schedule.delete';
+    tenantId: string;
+    spaceId: string;
+    scheduleId: string;
+    details?: Record<string, unknown>;
+  },
+): void {
+  const authUser = request.authUser;
+  if (!fastify.audit || !authUser) return;
+  fastify.audit.record({
+    actor: {
+      userId: authUser.userId,
+      kind: resolvePrincipalActorKind(authUser),
+      authMethod: authUser.authMethod,
+      tenantId: write.tenantId,
+    },
+    category: 'resource',
+    action: write.action,
+    outcome: 'success',
+    target: {
+      resourceType: 'schedule',
+      resourceId: write.scheduleId,
+      tenantId: write.tenantId,
+      spaceId: write.spaceId,
+    },
+    ...(write.details !== undefined ? { details: write.details } : {}),
+    request: { method: request.method, path: request.url },
+  });
+}
 
 export function registerScheduleRoutes(fastify: FastifyInstance): void {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
@@ -209,6 +248,12 @@ export function registerScheduleRoutes(fastify: FastifyInstance): void {
           .status(500)
           .send({ error: 'Internal Server Error', message: 'Failed to create schedule' });
       }
+      recordScheduleWrite(fastify, request, {
+        action: 'schedule.create',
+        tenantId: tenant.tenantId,
+        spaceId: space.spaceId,
+        scheduleId: row.id,
+      });
       return reply.status(201).send(rowToResponse(row));
     },
   );
@@ -311,7 +356,6 @@ export function registerScheduleRoutes(fastify: FastifyInstance): void {
       if (!row) {
         return reply.status(404).send({ error: 'Not Found', message: 'Schedule not found' });
       }
-
       return reply.send(rowToResponse(row));
     },
   );
@@ -345,7 +389,18 @@ export function registerScheduleRoutes(fastify: FastifyInstance): void {
 
       const updates: Record<string, unknown> = { updatedAt: new Date() };
 
-      if (body.status !== undefined) updates['status'] = body.status;
+      if (body.status !== undefined) {
+        updates['status'] = body.status;
+        // Who paused or resumed it, and why, stay on the schedule (Plan 331 D5).
+        const stamp = {
+          status: body.status,
+          by: request.authUser?.userId ?? null,
+          at: new Date().toISOString(),
+          ...(body.why !== undefined ? { why: body.why } : {}),
+        };
+        updates['metadata'] =
+          sql`jsonb_set(coalesce(${agentSchedules.metadata}, '{}'::jsonb), '{statusChange}', ${JSON.stringify(stamp)}::jsonb)`;
+      }
       if (body.name !== undefined) updates['name'] = body.name;
       if (body.description !== undefined) updates['description'] = body.description;
       if (body.inputTemplate !== undefined) updates['inputTemplate'] = body.inputTemplate;
@@ -387,6 +442,17 @@ export function registerScheduleRoutes(fastify: FastifyInstance): void {
       if (!row) {
         return reply.status(404).send({ error: 'Not Found', message: 'Schedule not found' });
       }
+
+      recordScheduleWrite(fastify, request, {
+        action: 'schedule.update',
+        tenantId: tenant.tenantId,
+        spaceId: space.spaceId,
+        scheduleId,
+        details: {
+          ...(body.status !== undefined ? { status: body.status } : {}),
+          ...(body.why !== undefined ? { why: body.why } : {}),
+        },
+      });
 
       return reply.send(rowToResponse(row));
     },
@@ -431,6 +497,12 @@ export function registerScheduleRoutes(fastify: FastifyInstance): void {
       if (rows.length === 0) {
         return reply.status(404).send({ error: 'Not Found', message: 'Schedule not found' });
       }
+      recordScheduleWrite(fastify, request, {
+        action: 'schedule.delete',
+        tenantId: tenant.tenantId,
+        spaceId: space.spaceId,
+        scheduleId,
+      });
 
       return reply.send({ deleted: true as const, scheduleId });
     },

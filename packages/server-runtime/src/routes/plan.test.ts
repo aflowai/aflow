@@ -16,9 +16,12 @@ const mockReadPlanOverview = vi.fn();
 const mockReadPlanBoard = vi.fn();
 const mockUpdatePlanNode = vi.fn();
 const mockReadPlanNodeDetail = vi.fn();
-const mockOpenPlanNode = vi.fn();
 const mockPlacePlanNode = vi.fn();
 const mockCreatePlanNodeStore = vi.fn((..._args: unknown[]) => ({ store: 'tenant-store' }));
+const mockOpenPlanNode = vi.fn();
+const mockRequestResidentWake = vi.fn((..._args: unknown[]) => Promise.resolve('started'));
+const mockReadPlanLoopMeasure = vi.fn();
+const SCHEDULES = { schedules: 'resident' };
 
 vi.mock('@aflow/cybernetic-runtime', () => ({
   readPlanOverview: (...a: unknown[]) => mockReadPlanOverview(...a),
@@ -28,6 +31,9 @@ vi.mock('@aflow/cybernetic-runtime', () => ({
   openPlanNode: (...a: unknown[]) => mockOpenPlanNode(...a),
   placePlanNode: (...a: unknown[]) => mockPlacePlanNode(...a),
   createPlanNodeStore: (...a: unknown[]) => mockCreatePlanNodeStore(...a),
+  createResidentScheduleStore: () => SCHEDULES,
+  requestResidentWake: (...a: unknown[]) => mockRequestResidentWake(...a),
+  readPlanLoopMeasure: (...a: unknown[]) => mockReadPlanLoopMeasure(...a),
 }));
 
 const { planRoutes } = await import('./plan.js');
@@ -413,6 +419,7 @@ describe('PATCH /v1/spaces/:spaceId/plan/nodes/:nodeId', () => {
         redis: REDIS,
         tenantId: TENANT_ID,
         createdBy: OPERATOR_ID,
+        actorKind: 'human',
       },
       { nodeId: CHILD_ID, expectedRevision: 3, status: 'done', outcome: 'Merged.' },
     );
@@ -544,6 +551,230 @@ describe('PATCH /v1/spaces/:spaceId/plan/nodes/:nodeId', () => {
 
     expect(res.statusCode).toBe(503);
     expect(mockUpdatePlanNode).not.toHaveBeenCalled();
+  });
+});
+
+describe('PATCH /v1/spaces/:spaceId/plan/nodes/:nodeId/open (Plan 332 D6, Plan 331 D5)', () => {
+  const url = `/v1/spaces/${SPACE_ID}/plan/nodes/${CHILD_ID}/open`;
+
+  function openedNode(extra: Partial<PlanNode> = {}): PlanNode {
+    return {
+      nodeId: CHILD_ID,
+      spaceId: SPACE_ID,
+      parentId: ROOT_ID,
+      kind: 'execute',
+      title: 'P1 — the loop takes the next node',
+      goal: 'The resident takes approved work.',
+      criteria: 'Three nodes land over a weekend.',
+      status: 'active',
+      note: 'Approved: go.\nProposed from the merged plan document.',
+      revision: 5,
+      position: 0,
+      createdAt: '2026-10-05T08:00:00.000Z',
+      updatedAt: '2026-10-05T11:00:00.000Z',
+      ...extra,
+    };
+  }
+
+  function open(body: unknown) {
+    return app.inject({ method: 'PATCH', url, payload: body as Record<string, unknown> });
+  }
+
+  it('accepts the person’s spend ceiling and passes it to the open write', async () => {
+    mockOpenPlanNode.mockResolvedValue({
+      ok: true,
+      node: openedNode({ spendCents: 900 }),
+      from: 'blocked',
+    });
+    const res = await open({ expectedRevision: 4, spendCents: 900 });
+    expect(res.statusCode).toBe(200);
+    expect(mockOpenPlanNode).toHaveBeenCalledWith(expect.anything(), {
+      nodeId: CHILD_ID,
+      expectedRevision: 4,
+      spendCents: 900,
+    });
+  });
+
+  it.each([0, -1, 1.5, 1_000_001])('refuses an invalid spend ceiling %s', async (spendCents) => {
+    expect((await open({ expectedRevision: 4, spendCents })).statusCode).toBe(400);
+    expect(mockOpenPlanNode).not.toHaveBeenCalled();
+  });
+
+  it('resets the spend window through the authenticated production open path', async () => {
+    const { openPlanNode } = await import('../../../cybernetic-runtime/src/plan/operations.js');
+    const { InMemoryPlanNodeStore } =
+      await import('../../../cybernetic-runtime/src/__tests__/planStoreFake.js');
+    const { default: Redis } = await import('ioredis-mock');
+    const store = new InMemoryPlanNodeStore();
+    store.nodes.set(CHILD_ID, { ...openedNode(), status: 'blocked', revision: 4 });
+    mockOpenPlanNode.mockImplementationOnce(
+      (...[context, input]: Parameters<typeof openPlanNode>) =>
+        openPlanNode({ ...context, store, redis: new Redis() }, input),
+    );
+    const response = await open({ expectedRevision: 4 });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().node.status).toBe('active');
+    expect(mockOpenPlanNode.mock.calls[0]![0]).toMatchObject({ actorKind: 'human' });
+    expect(store.openedAt.get(CHILD_ID)).toBeInstanceOf(Date);
+  });
+
+  it('moves a blocked node to active through the open write, its own audit row naming what it left', async () => {
+    mockOpenPlanNode.mockResolvedValue({ ok: true, node: openedNode(), from: 'blocked' });
+
+    const res = await open({ expectedRevision: 4, why: 'go.' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ node: openedNode() });
+    expect(mockOpenPlanNode).toHaveBeenCalledWith(
+      {
+        store: { store: 'tenant-store' },
+        spaceId: SPACE_ID,
+        redis: REDIS,
+        tenantId: TENANT_ID,
+        createdBy: OPERATOR_ID,
+        actorKind: 'human',
+      },
+      { nodeId: CHILD_ID, expectedRevision: 4, why: 'go.' },
+    );
+    expect(mockUpdatePlanNode).not.toHaveBeenCalled();
+    expect(audit.record).toHaveBeenCalledTimes(1);
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actor: expect.objectContaining({ userId: OPERATOR_ID, kind: 'human' }),
+        action: 'plan.node.open',
+        target: expect.objectContaining({ resourceType: 'plan_node', resourceId: CHILD_ID }),
+        details: { status: 'blocked', revision: 5 },
+      }),
+    );
+    expect(audit.record).not.toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'plan.node.close' }),
+    );
+  });
+
+  it('takes a why of any length the note it lands in can hold', async () => {
+    mockOpenPlanNode.mockResolvedValue({ ok: true, node: openedNode(), from: 'blocked' });
+    const why = 'The review read the wrong base; the fix is on main now. '.repeat(40);
+
+    const res = await open({ expectedRevision: 4, why });
+
+    expect(res.statusCode).toBe(200);
+    expect(mockOpenPlanNode).toHaveBeenCalledWith(expect.anything(), {
+      nodeId: CHILD_ID,
+      expectedRevision: 4,
+      why: why.trim(),
+    });
+  });
+
+  it('wakes the space’s resident after the write, as any person’s write to a node does', async () => {
+    mockOpenPlanNode.mockResolvedValue({ ok: true, node: openedNode(), from: 'blocked' });
+
+    await open({ expectedRevision: 4 });
+
+    expect(mockRequestResidentWake).toHaveBeenCalledWith(
+      { redis: REDIS, schedules: SCHEDULES },
+      { tenantId: TENANT_ID, spaceId: SPACE_ID, cause: 'node_written' },
+    );
+  });
+
+  it('is not the close: a body naming a status is refused, and the close route refuses active', async () => {
+    expect((await open({ expectedRevision: 4, status: 'active' })).statusCode).toBe(400);
+    expect((await open({ why: 'go' })).statusCode).toBe(400);
+    expect((await open({ expectedRevision: 4, why: 'x'.repeat(64_001) })).statusCode).toBe(400);
+    const close = await app.inject({
+      method: 'PATCH',
+      url: `/v1/spaces/${SPACE_ID}/plan/nodes/${CHILD_ID}`,
+      payload: { expectedRevision: 4, status: 'active' },
+    });
+    expect(close.statusCode).toBe(400);
+    expect(mockOpenPlanNode).not.toHaveBeenCalled();
+    expect(mockUpdatePlanNode).not.toHaveBeenCalled();
+  });
+
+  it('refuses a stale revision with the node as it stands, and an open node with 422', async () => {
+    const current = {
+      nodeId: CHILD_ID,
+      revision: 6,
+      status: 'blocked',
+      updatedAt: '2026-10-05T10:30:00.000Z',
+      differingFields: ['status'],
+    };
+    mockOpenPlanNode.mockResolvedValueOnce({
+      ok: false,
+      code: 'PLAN_NODE_STALE',
+      message: 'engine words',
+      details: current,
+    });
+    const stale = await open({ expectedRevision: 4 });
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json()).toMatchObject({ error: 'PLAN_NODE_STALE', current });
+
+    mockOpenPlanNode.mockResolvedValueOnce({
+      ok: false,
+      code: 'PLAN_NODE_UNCHANGED',
+      message: 'engine words',
+      details: { ...current, status: 'active', differingFields: [] },
+    });
+    const unchanged = await open({ expectedRevision: 6 });
+    expect(unchanged.statusCode).toBe(422);
+    expect(unchanged.json().message).toContain('nothing to approve');
+    expect(audit.record).not.toHaveBeenCalled();
+    expect(mockRequestResidentWake).not.toHaveBeenCalled();
+  });
+
+  it('is a person’s write only: an agent’s credential and a person’s own API key are refused operator_only', async () => {
+    caller.servicePrincipal = true;
+    caller.authMethod = 'api_key';
+    const agent = await open({ expectedRevision: 4 });
+    expect(agent.statusCode).toBe(403);
+    expect(agent.json()).toMatchObject({ error: 'operator_only' });
+
+    caller.servicePrincipal = false;
+    const key = await open({ expectedRevision: 4 });
+    expect(key.statusCode).toBe(403);
+    expect(key.json()).toMatchObject({ error: 'operator_only' });
+    expect(mockOpenPlanNode).not.toHaveBeenCalled();
+  });
+
+  it('refuses a caller who may read the space but not write it', async () => {
+    caller.writable = new Set();
+    expect((await open({ expectedRevision: 4 })).statusCode).toBe(403);
+    expect(mockOpenPlanNode).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /v1/spaces/:spaceId/plan/loop (Plan 331 D7)', () => {
+  it('reads the window through the engine for a caller who may read the space', async () => {
+    const measure = {
+      window: { from: '2026-10-23T16:00:00.000Z', to: '2026-10-26T07:00:00.000Z' },
+      operatorActions: {
+        total: 0,
+        helmsmanMessages: 0,
+        actionCenter: { total: 0, byKind: {} },
+        planWrites: { close: 0, open: 0 },
+        scheduleWrites: 0,
+      },
+      mergedPullRequests: 3,
+      actionsPerMergedPullRequest: 0,
+      idle: [],
+      cost: { nodes: [], wakes: { sessions: 12, cents: 240, centsPerMergedPullRequest: 80 } },
+    };
+    mockReadPlanLoopMeasure.mockResolvedValue(measure);
+    const query = 'from=2026-10-23T16:00:00.000Z&to=2026-10-26T07:00:00.000Z';
+    const res = await app.inject({
+      method: 'GET',
+      url: `/v1/spaces/${SPACE_ID}/plan/loop?${query}`,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual(measure);
+    expect(mockReadPlanLoopMeasure).toHaveBeenCalledWith(DB, TENANT_ID, SPACE_ID, {
+      from: '2026-10-23T16:00:00.000Z',
+      to: '2026-10-26T07:00:00.000Z',
+    });
+
+    caller.readable = new Set();
+    expect(
+      (await app.inject({ method: 'GET', url: `/v1/spaces/${SPACE_ID}/plan/loop` })).statusCode,
+    ).toBe(403);
   });
 });
 
@@ -688,6 +919,7 @@ const ENGINE_CTX = {
   redis: REDIS,
   tenantId: TENANT_ID,
   createdBy: OPERATOR_ID,
+  actorKind: 'human',
 };
 
 const STALE_CURRENT = {
@@ -745,8 +977,8 @@ describe('PATCH /v1/spaces/:spaceId/plan/nodes/:nodeId/open', () => {
     });
   });
 
-  it('refuses a reason past 500 characters, a missing revision and a status, before the engine', async () => {
-    expect((await open({ expectedRevision: 3, why: 'x'.repeat(501) })).statusCode).toBe(400);
+  it('refuses a reason past the note ceiling, a missing revision and a status, before the engine', async () => {
+    expect((await open({ expectedRevision: 3, why: 'x'.repeat(64001) })).statusCode).toBe(400);
     expect((await open({ why: 'go' })).statusCode).toBe(400);
     expect((await open({ expectedRevision: 3, status: 'active' })).statusCode).toBe(400);
     expect(mockOpenPlanNode).not.toHaveBeenCalled();
@@ -873,6 +1105,10 @@ describe('PATCH /v1/spaces/:spaceId/plan/nodes/:nodeId/place', () => {
     const res = await place({ expectedRevision: 3, before: GRANDCHILD_ID });
 
     expect(res.statusCode).toBe(200);
+    expect(mockRequestResidentWake).toHaveBeenCalledWith(
+      { redis: REDIS, schedules: SCHEDULES },
+      { tenantId: TENANT_ID, spaceId: SPACE_ID, cause: 'node_written' },
+    );
     expect(mockPlacePlanNode).toHaveBeenCalledWith(ENGINE_CTX, {
       nodeId: CHILD_ID,
       expectedRevision: 3,

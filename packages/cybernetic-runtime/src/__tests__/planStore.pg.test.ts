@@ -20,8 +20,11 @@ import {
   type TenantContext,
 } from '@aflow/database';
 import {
+  CLOSED_PLAN_NODE_STATUSES,
+  OPEN_PLAN_NODE_STATUSES,
   PLAN_NODE_POSITION_MAX,
   PLAN_TREE_DEPTH_LIMIT,
+  PLAN_TREE_WALK_NODE_LIMIT,
   PlanBoardOutputSchema,
   type PlanNode,
 } from '@aflow/schemas';
@@ -259,5 +262,49 @@ describeDb('moveAtRevision — two crossing moves never close a loop (real DB)',
 
     const read = await readPlanBoard({ store, spaceId: SPACE_ID }, target.nodeId);
     expect(read.ok && PlanBoardOutputSchema.parse(read).root.goalHead).toBe(amended);
+  });
+
+  it('walks from open roots only and below them through every status, alone or together in one read', async () => {
+    async function close(target: PlanNode): Promise<void> {
+      const fresh = await store.find(SPACE_ID, target.nodeId);
+      const result = await updatePlanNode(ctx, {
+        nodeId: target.nodeId,
+        expectedRevision: fresh!.revision,
+        status: 'done',
+        outcome: 'It landed.',
+      });
+      if (!result.ok) throw new Error(result.message);
+    }
+    const open = await node('open root');
+    const landed = await node('landed step', open.nodeId);
+    const under = await node('landed under it', landed.nodeId);
+    const stopped = await node('stopped step', open.nodeId);
+    await updatePlanNode(ctx, { nodeId: stopped.nodeId, expectedRevision: 1, status: 'blocked' });
+    await close(under);
+    await close(landed);
+    const shut = await node('closed root');
+    const shutStep = await node('step of the closed root', shut.nodeId);
+    await close(shutStep);
+    await close(shut);
+    const ours = new Set([open, landed, under, stopped, shut, shutStep].map((n) => n.nodeId));
+    const bounds = { maxDepth: PLAN_TREE_DEPTH_LIMIT, maxNodes: PLAN_TREE_WALK_NODE_LIMIT };
+    const openWalk = { ...bounds, rootStatuses: OPEN_PLAN_NODE_STATUSES };
+    const closedRoots = { ...bounds, maxDepth: 0, statuses: CLOSED_PLAN_NODE_STATUSES };
+    const titles = (walk: { nodes: { nodeId: string; title: string }[] }) =>
+      walk.nodes
+        .filter((n) => ours.has(n.nodeId))
+        .map((n) => n.title)
+        .sort();
+
+    const alone = await store.walk(SPACE_ID, openWalk);
+    const [closedTogether, openTogether] = await store.walkTogether(SPACE_ID, [
+      closedRoots,
+      openWalk,
+    ]);
+
+    const expected = ['landed step', 'landed under it', 'open root', 'stopped step'];
+    expect(titles(alone)).toEqual(expected);
+    expect(titles(openTogether!)).toEqual(expected);
+    expect(titles(closedTogether!)).toEqual(['closed root']);
   });
 });

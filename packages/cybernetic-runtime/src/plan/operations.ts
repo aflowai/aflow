@@ -35,6 +35,7 @@ import {
   type PlanNodeLinkInput,
   type PlanNodeListInput,
   type PlanNodeListOutput,
+  type PlanNodeOpen,
   type PlanNodePlaceRefusalDetails,
   type PlanNodeRefusalDetails,
   type PlanNodeStatus,
@@ -100,6 +101,8 @@ export interface PlanWriteContext extends PlanReadContext {
   tenantId: string;
   /** The user behind the writing session; recorded as `created_by` on a new node. */
   createdBy?: string;
+  /** The writer's authority, never the person who started an agent's session. */
+  actorKind?: 'human' | 'agent';
 }
 
 function notFound(
@@ -260,15 +263,18 @@ function reopenedNote(
   return rest === null ? kept : `${kept}\n${rest}`;
 }
 
+/** The columns a write is judged by; `openedAt` is stamped after, never compared. */
+type ComparedPatch = Omit<PlanNodePatch, 'openedAt'>;
+
 function changesNothing(
   current: PlanNode,
-  patch: PlanNodePatch,
+  patch: ComparedPatch,
   parentId: string | null | undefined,
 ): boolean {
   return (
     (parentId === undefined || parentId === current.parentId) &&
     Object.entries(patch).every(([column, value]) =>
-      sameColumn(value, current[column as keyof PlanNodePatch]),
+      sameColumn(value, current[column as keyof ComparedPatch]),
     )
   );
 }
@@ -346,9 +352,17 @@ export async function createPlanNode(
 // plan.node.update — compare-and-set on the node's revision (Plan 322 D6)
 // ============================================================================
 
-export async function updatePlanNode(
+export function updatePlanNode(
   ctx: PlanWriteContext,
   input: PlanNodeUpdateInput,
+): Promise<PlanOpResult<{ node: PlanNode }>> {
+  return writePlanNode(ctx, input, {});
+}
+
+async function writePlanNode(
+  ctx: PlanWriteContext,
+  input: PlanNodeUpdateInput,
+  stamp: Pick<PlanNodePatch, 'openedAt' | 'spendCents'>,
 ): Promise<PlanOpResult<{ node: PlanNode }>> {
   const current = await ctx.store.find(ctx.spaceId, input.nodeId);
   if (!current) return notFound(input.nodeId);
@@ -385,6 +399,7 @@ export async function updatePlanNode(
 
   const parentId = input.parentId;
   if (changesNothing(current, patch, parentId)) return unchanged(current, input);
+  Object.assign(patch, stamp);
   let node: PlanNode | null;
   if (parentId !== undefined && parentId !== current.parentId) {
     const move = await ctx.store.moveAtRevision(
@@ -418,12 +433,7 @@ export async function updatePlanNode(
 // The operator's open and place (Plan 332 D6)
 // ============================================================================
 
-export interface PlanNodeOpenRequest {
-  nodeId: string;
-  expectedRevision: number;
-  /** The operator's reason; the note gains it by the rule for the node's status. */
-  why?: string;
-}
+export type PlanNodeOpenRequest = PlanNodeOpen & { nodeId: string };
 
 /**
  * Moves a `blocked`, `done` or `dropped` node to `active` through
@@ -465,7 +475,10 @@ export async function openPlanNode(
       update.note = `Reopened: ${request.why}`;
     }
   }
-  const written = await updatePlanNode(ctx, update);
+  const written = await writePlanNode(ctx, update, {
+    openedAt: new Date(),
+    ...(request.spendCents !== undefined ? { spendCents: request.spendCents } : {}),
+  });
   return written.ok ? { ...written, from: current.status } : written;
 }
 
@@ -721,20 +734,17 @@ export async function listPlanNodes(
  * own row. No step is returned, only counted.
  */
 export async function readPlanOverview(ctx: PlanReadContext): Promise<PlanOverviewOutput> {
-  const [closed, open] = await Promise.all([
+  // One snapshot for both: a root closed or reopened between two reads would
+  // otherwise be listed twice, or not at all.
+  const [closed, open] = await ctx.store.walkTogether(ctx.spaceId, [
     // Depth 0 returns the roots alone, and only the node bound can cut that
     // list short; the walk still sends its one-row probe for children below
     // them, whose depth verdict is not read here.
-    ctx.store.walk(ctx.spaceId, {
-      ...PLAN_TREE_WALK_BOUNDS,
-      maxDepth: 0,
-      statuses: CLOSED_PLAN_NODE_STATUSES,
-    }),
-    ctx.store.walk(ctx.spaceId, {
-      ...PLAN_TREE_WALK_BOUNDS,
-      rootStatuses: OPEN_PLAN_NODE_STATUSES,
-    }),
+    { ...PLAN_TREE_WALK_BOUNDS, maxDepth: 0, statuses: CLOSED_PLAN_NODE_STATUSES },
+    { ...PLAN_TREE_WALK_BOUNDS, rootStatuses: OPEN_PLAN_NODE_STATUSES },
   ]);
+  if (closed === undefined || open === undefined)
+    throw new Error('walkTogether returned fewer walks than asked');
   const placed = orderPlanTree(open.nodes);
   const inFlight = await ctx.store.inFlightRunCountsOf(
     ctx.spaceId,

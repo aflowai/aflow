@@ -785,7 +785,7 @@ describe('readPlanOverview — the plans as rows', () => {
     }
     const open = await node('open', { position: 0 });
     const step = await node('open step', { parentId: open.nodeId });
-    const walks = vi.spyOn(store, 'walk');
+    const walks = vi.spyOn(store, 'walkTogether');
     const runLookups = vi.spyOn(store, 'inFlightRunCountsOf');
 
     const read = await rows();
@@ -795,7 +795,9 @@ describe('readPlanOverview — the plans as rows', () => {
     expect(read.roots.slice(1).every((r) => r.state === 'closed' && r.counts === undefined)).toBe(
       true,
     );
-    expect(walks).toHaveBeenCalledTimes(2);
+    // Both walks, closed roots and open plans, in one call: one snapshot.
+    expect(walks).toHaveBeenCalledTimes(1);
+    expect(walks.mock.calls[0]![1]).toHaveLength(2);
     expect(runLookups).toHaveBeenCalledTimes(1);
     const looked = runLookups.mock.calls[0]![1];
     expect([...looked].sort()).toEqual([open.nodeId, step.nodeId].sort());
@@ -896,6 +898,8 @@ describe('readPlanOverview — the plans as rows', () => {
     expect(read.truncated).toBeUndefined();
     expect(rowOf(deep.nodeId)).toMatchObject({
       truncated: { bound: 'nodes', value: PLAN_TREE_WALK_NODE_LIMIT },
+      // Every step counted is done, but the two past the bound are open: not finished.
+      state: 'queued',
       counts: { steps: 5, done: 5 },
     });
     expect((await board(deep.nodeId)).tally).toMatchObject({ steps: 7, done: 5, needsYou: 2 });

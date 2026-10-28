@@ -281,7 +281,10 @@ function rootsCutShort(
  * and its steps counted by the same column rule the board uses. A plan the
  * walk read whole counts the nodes its board's header counts, so the two
  * agree; a plan its bound may have cut short carries that bound as its own
- * `truncated`, its counts and state reading only the steps reached. A step's
+ * `truncated`, its counts and state reading only the steps reached — never
+ * `finished`, which says every step is closed when the steps not reached may
+ * be open: such a row whose counted steps are all closed reads `queued`, work
+ * the list did not count still ahead of it. A step's
  * column reads only its status, kind, a closed ancestor and the runs in flight
  * under it, so nothing but those runs is read.
  */
@@ -299,13 +302,14 @@ export function buildPlanRows(
   const cut = rootsCutShort(placed, truncated);
   return roots.map((root, i) => {
     const tally = tallies[i]!;
+    const countedShort = truncated !== undefined && cut.has(root.nodeId);
     return {
       nodeId: root.nodeId,
       title: root.title,
       status: root.status,
       position: root.position,
       revision: root.revision,
-      state: tally.state,
+      state: countedShort && tally.state === 'finished' ? 'queued' : tally.state,
       counts: {
         steps: tally.steps,
         needsYou: tally.needsYou,
@@ -314,7 +318,7 @@ export function buildPlanRows(
         done: tally.done,
         dropped: tally.dropped,
       },
-      ...(truncated !== undefined && cut.has(root.nodeId) ? { truncated } : {}),
+      ...(countedShort ? { truncated } : {}),
       lastWrittenAt: newestWrite(root),
     };
   });

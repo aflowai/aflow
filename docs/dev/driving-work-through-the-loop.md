@@ -72,8 +72,9 @@ request, done nodes by day), linkable as `?plan=<rootId>&node=<nodeId>`; it open
 node in the side rail (`GET …/plan/nodes/:nodeId`, its links paged) for its goal, outcome,
 runs and findings, with no Helmsman turn needed to ask. The operator writes it from the rail
 (`PATCH /v1/spaces/:spaceId/plan/nodes/:nodeId`): **Mark done** with an outcome, or
-**Drop** a node and the branch under it, through the same engine and against the revision of the
-node the rail read and shows — its goal and criteria above the field — so a conversation and
+**Drop** a node and the branch under it, and on a `blocked` node **Approve** (or **Resume**,
+for a stop) through its own write (`PATCH …/plan/nodes/:nodeId/open`), each through the
+same engine and against the revision of the node the rail read and shows — its goal and criteria above the field — so a conversation and
 the page cannot overwrite each other. Only a person signed in writes there or answers a
 decision; an API key, the MCP server's included, is refused. A node of kind
 `decide` is the operator's: it raises a **Decide** item in the Action Center, the answer is
@@ -221,9 +222,53 @@ scripts/verify-commit.mjs`), and Local Publish runs it after the commit and befo
 Approvals are held until the verdict is in; an approval given early pushes a commit the
 review may still send back.
 
+## The resident
+
+The space's Helmsman takes the next approved node without a person (Plan 331 P1). The
+operator creates its schedule once, in one action: `agent.schedule.create` with `action:
+'start_run'`, target `{ kind: 'platform-role', systemRole: 'cybernetic-helmsman' }`, cron
+`*/15 * * * *` unless they name another, and `input` `planResidentScheduleInput()` from
+`@aflow/schemas` — the wake message, naming no root, and `config.scheduleId` set to `{
+$schedule: 'id' }`, so each wake knows its schedule. That config is what marks the
+schedule as the space's resident; the message may be worded any way. Nothing creates it for
+a space by itself. A wake's first call is `plan.node.next` with no `rootNodeId`: every open root in
+the board's order — the operator's priority, so moving a plan up the board reprioritises the
+resident — each decided as the stream below decides one, and the decisions that are not
+`wait` answered finish-first (a merge to record, a commission to publish, a pull request to
+read, a stop to write, a failed round to commission again, then new work), at most three a
+wake. A wake whose decisions are all `wait` writes nothing and replies nothing. A
+`publish` names a commission that completed with a change: the wake starts Local Publish
+with that `commission` and the node's `planNodeId`, and the commit takes the commission's
+summary. A wake renews its schedule near the firing cap, as the shepherd's pass does; a
+paused schedule is not renewed, and pausing it pauses the resident — heartbeats and the
+wakes below alike — leaving runs in flight to finish. Pause it with `PATCH
+/v1/schedules/:id` `{ status: 'paused', why }`, which stamps who and why on it.
+
+A heartbeat that meets the space's previous wake not yet ended is skipped and recorded on
+the schedule (`metadata.overlap`), with no catch-up. Heartbeats and the event wakes below
+take one atomic guard, keyed by the space rather than the schedule, so only one wake per
+space is ever starting or running, and a wake that renews its schedule mid-run still holds
+it and still answers the pending mark when it ends. Only the resident's schedule takes this
+guard; every other agent schedule, the shepherd's included, fires on time whatever its last
+run is doing. A run a wake started for a node ending, and a
+person's write to a node from the plan page, wake the resident at once; while a wake is in
+flight they set the space's pending mark instead, and that wake starts exactly one more
+when it ends, which reads the board and so sees every event the mark stood for. A node is
+done on its merge: `record_merge` judges it with the merged change from GitHub, the next
+commission is based on `origin/<base>`, and the connected folder is never asked for the
+merge. A node whose runs cost its spend ceiling ($50 by default, counted since a person last
+opened it) is stopped `blocked` with the spend and its runs in its note. On the plan page
+a `blocked` node offers **Approve** — **Resume** where a stop blocked it — which is the open
+write (`PATCH /v1/spaces/:spaceId/plan/nodes/:nodeId/open`, a person's only, against the
+revision the rail read): the node goes `active`, the reason given heads its note, and the
+resident takes it in its place. `GET /v1/spaces/:spaceId/plan/loop` reads, for a window,
+the operator's actions per merged pull request, each node's idle time before its first
+commission, and each node's cost with the wakes beside it.
+
 ## A stream that continues itself
 
-A stream can wake itself (Plan 322 P2b). Its schedule is a recurring `agent.schedule.create`
+A stream can wake itself (Plan 322 P2b), and `plan.node.next` with a `rootNodeId` decides
+that one stream. Its schedule is a recurring `agent.schedule.create`
 with `action: 'start_run'`, target `{ kind: 'platform-role', systemRole:
 'cybernetic-helmsman' }` and the operator's `cron`, whose `input` is
 `planStreamScheduleInput(rootNodeId, attempts)` from `@aflow/schemas`: one message naming the
@@ -251,13 +296,17 @@ the decision asks the firing to read (`read_pull_request`) and pass back:
   items; its pull request is open; a read failed — including a read of the nodes under it
   that stopped at its bound, which cannot show nothing runs below; or its state is one no
   rule names.
-- `stop` — its pull request was closed unmerged after its last write, its push was declined,
-  or more of its commissions ended without a pull request since its last write than
-  `attempts` allows. The decision carries the `plan.node.update` that marks it `blocked` with
+- `stop` — its pull request was closed unmerged after its last write, its runs cost its
+  spend ceiling, its push was declined, or more of its commissions ended without a pull
+  request since its last write than `attempts` allows. The decision carries the `plan.node.update` that marks it `blocked` with
   why; the walk then holds the stream there until a person moves the node on.
+- `publish` — its last commission completed with a change and nothing has published it:
+  start Local Publish with the decision's `commission` and its `planNodeId`. A commission
+  that made no change is a `stop`.
 - `continue` — no commission since its last write, or its last round failed, was cancelled,
   or ended at `fix_before_merge`, within the budget: commission it with its `planNodeId`,
-  briefed from its goal and criteria and, on a retry, from the run the decision names.
+  based on `origin/<base>` (a fix round on its branch), briefed from its goal and criteria
+  and, on a retry, from the run the decision names.
 
 A person's write to a node starts its attempt count afresh.
 
@@ -358,7 +407,8 @@ lands such a port is refused.
   it. A publication or commission in flight on the branch, whoever started it, holds it
   back too. On a schedule (the Local PR Shepherd agent, `*/5 * * * *` by default), each
   pass tends the next of the loop's pull requests in turn, and two passes on one meet at
-  its branch's lease. The schedule renews itself: created with input
+  its branch's lease — the schedule does not hold a firing back while the last pass runs,
+  so overlapping passes are expected and the lease is what serialises them. The schedule renews itself: created with input
   `{ input: 'tend', config: { scheduleId: { $schedule: 'id' } } }`, each pass is handed
   the schedule that started it, and a pass within `SCHEDULE_RENEWAL_WINDOW` (5) firings of
   its `maxFirings` creates the successor (`agent.schedule.create` with `renews`), which

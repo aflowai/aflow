@@ -6,4 +6,6 @@ export * from './operations.js';
 export * from './attention.js';
 export * from './stream.js';
 export * from './streamReads.js';
+export * from './resident.js';
+export * from './loopMeasure.js';
 export * from './placement.js';

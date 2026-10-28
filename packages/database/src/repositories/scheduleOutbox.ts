@@ -1,12 +1,60 @@
 /**
  * Reader and writer sides of the schedule dispatch outbox.
  *
- * Writing is always inside the caller's transaction — the point of the outbox
- * is that the row and the schedule advance commit together — so the insert
- * takes the transaction handle rather than the pool.
+ * A due-time dispatch shares the transaction that advances the schedule.
+ * An event wake inserts its occurrence directly: no schedule row advances.
  */
+import { createHash } from 'node:crypto';
 import type postgres from 'postgres';
+import { sql } from 'drizzle-orm';
+import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { SCHEDULE_DISPATCH_OUTBOX_TABLE } from '../tenant/scheduleOutbox.js';
+
+/**
+ * What one occurrence carries to its dispatch: the schedule as it stood when
+ * the occurrence was recorded, and the input resolved for it. Every producer
+ * of an occurrence — a due time, a source run's end, a resident's wake —
+ * writes this shape, and the drain lowers it.
+ */
+export interface ScheduleDispatchItem extends Record<string, unknown> {
+  tenantId: string;
+  scheduleId: string;
+  scheduleName: string;
+  schemaName: string;
+  spaceId: string;
+  action: string;
+  targetKind: string | null;
+  targetSystemRole: string | null;
+  targetAgentId: string | null;
+  agentVersion: string | null;
+  targetSessionId: string | null;
+  targetStepExecutionId: string | null;
+  resolvedInput: Record<string, unknown>;
+  firingCount: number;
+  idempotencyKey: string;
+  creatorUserId: string | null;
+  creatorTenantRole: string | null;
+  creatorSpaceRole: string | null;
+}
+
+const SCHEDULE_RUN_NAMESPACE = 'aflow:schedule-occurrence';
+
+/**
+ * The run id for one occurrence, derived from the occurrence itself.
+ *
+ * A retry after an ambiguous emit must present the same id or it cannot be
+ * deduplicated: `addControlMessage` is a single XADD, and a failover that drops
+ * the reply after the server applied it looks exactly like a failure. Minting a
+ * fresh id per attempt turns that ambiguity into two runs for one occurrence —
+ * `startRun` deduplicates on the run id and has nothing else to go on.
+ */
+export function scheduleOccurrenceRunId(idempotencyKey: string): string {
+  const h = createHash('sha1').update(SCHEDULE_RUN_NAMESPACE).update(idempotencyKey).digest();
+  h[6] = (h[6]! & 0x0f) | 0x50;
+  h[8] = (h[8]! & 0x3f) | 0x80;
+  const hex = h.subarray(0, 16).toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+}
 
 export interface ScheduleDispatchRow {
   idempotencyKey: string;
@@ -25,9 +73,16 @@ export interface ScheduleDispatchRow {
  * twice is the double-fire this table exists to prevent.
  */
 export async function insertScheduleDispatch(
-  tx: postgres.TransactionSql,
+  tx: postgres.TransactionSql | PostgresJsDatabase,
   row: Omit<ScheduleDispatchRow, 'attempts'>,
 ): Promise<void> {
+  if ('execute' in tx) {
+    await tx.execute(sql`INSERT INTO ${sql.raw(SCHEDULE_DISPATCH_OUTBOX_TABLE)}
+      (idempotency_key, tenant_id, schedule_id, dispatch)
+      VALUES (${row.idempotencyKey}, ${row.tenantId}::uuid, ${row.scheduleId}::uuid, ${JSON.stringify(row.dispatch)}::jsonb)
+      ON CONFLICT (idempotency_key) DO NOTHING`);
+    return;
+  }
   await tx.unsafe(
     `INSERT INTO ${SCHEDULE_DISPATCH_OUTBOX_TABLE}
        (idempotency_key, tenant_id, schedule_id, dispatch)

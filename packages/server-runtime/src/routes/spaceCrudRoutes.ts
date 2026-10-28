@@ -1,8 +1,7 @@
-import { validateAgentCapabilitySettings } from './agentCapabilityValidation.js';
 /**
  * Space create, list, slug resolution, read, and update endpoints.
  */
-
+import { validateAgentCapabilitySettings } from './agentCapabilityValidation.js';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';

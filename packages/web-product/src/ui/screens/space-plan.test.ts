@@ -15,6 +15,7 @@
 import { act, createContext, createElement, useContext, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { PlanNodeOpenSchema } from '@aflow/schemas';
 import type {
   PlanNode,
   PlanNodeDetailOutput,
@@ -139,6 +140,7 @@ vi.mock('@aflow/design-system', () => {
         { ...passed(rest), type: 'button', onClick, disabled, role: undefined },
         children,
       ),
+    Input: (props: Record<string, unknown>) => createElement('input', props),
     Textarea: (props: Record<string, unknown>) =>
       createElement('textarea', {
         'aria-label': props['aria-label'],
@@ -444,6 +446,16 @@ const PLAN: SpaceFixture = {
     },
   ],
 };
+
+/** The board with one step's status changed. */
+function withStatus(nodeId: string, status: PlanTreeNode['status']): SpaceFixture {
+  const restatus = (node: PlanTreeNode): PlanTreeNode => ({
+    ...node,
+    ...(node.nodeId === nodeId ? { status } : {}),
+    children: node.children.map(restatus),
+  });
+  return { ...PLAN, roots: PLAN.roots.map(restatus) };
+}
 
 /** A node as the rail reads it in full. */
 function fullNode(nodeId: string, title: string, extra: Partial<PlanNode> = {}): PlanNode {
@@ -1233,6 +1245,116 @@ describe('SpacePlanPage — the operator’s writes from the rail', () => {
     expect(recorded.refetch).not.toHaveBeenCalled();
   });
 
+  it('approves a blocked step through the open write, the operator’s reason its note’s first line', async () => {
+    recorded.mutateAsync.mockResolvedValue({ node: {} });
+    recorded.details[ARTICLE] = detail(
+      fullNode(ARTICLE, 'Write the help article', {
+        parentId: R322,
+        status: 'blocked',
+        revision: 4,
+        note: 'Proposed from the merged plan document; awaits the operator’s approval.',
+      }),
+    );
+    await render({ data: withStatus(ARTICLE, 'blocked') });
+    await click(card(ARTICLE));
+
+    await click(button(rail(), 'Approve'));
+    await type(rail(), '  Go ahead.  ');
+    await click(button(rail(), 'Approve'));
+
+    expect(recorded.mutateAsync).toHaveBeenCalledWith({
+      nodeId: ARTICLE,
+      expectedRevision: 4,
+      why: 'Go ahead.',
+    });
+    const open = mutationFor('/open')!;
+    expect(open.method).toBe('PATCH');
+    expect(open.path({ nodeId: ARTICLE })).toBe(`/spaces/${SPACE_ID}/plan/nodes/${ARTICLE}/open`);
+    expect(
+      JSON.parse(open.serialize({ nodeId: ARTICLE, expectedRevision: 4, why: 'Go ahead.' })),
+    ).toEqual({ expectedRevision: 4, why: 'Go ahead.' });
+    expect(open.invalidate).toEqual([['space', SPACE_ID, 'plan']]);
+  });
+
+  it('sends an optional spend ceiling when resuming a stopped step', async () => {
+    recorded.mutateAsync.mockResolvedValue({ node: {} });
+    recorded.details[ARTICLE] = detail(
+      fullNode(ARTICLE, 'Write the help article', {
+        parentId: R322,
+        status: 'blocked',
+        revision: 4,
+        note: 'Blocked: spend ceiling reached.',
+      }),
+    );
+    await render({ data: withStatus(ARTICLE, 'blocked') });
+    await click(card(ARTICLE));
+    await click(button(rail(), 'Approve'));
+    const field = rail().querySelector('input')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(
+        field,
+        '12500',
+      );
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await click(button(rail(), 'Approve'));
+    expect(recorded.mutateAsync).toHaveBeenCalledWith({
+      nodeId: ARTICLE,
+      expectedRevision: 4,
+      spendCents: 12500,
+    });
+    expect(
+      JSON.parse(
+        mutationFor('/open')!.serialize({
+          nodeId: ARTICLE,
+          expectedRevision: 4,
+          spendCents: 12500,
+        }),
+      ),
+    ).toEqual({ expectedRevision: 4, spendCents: 12500 });
+  });
+
+  it('names the failing reason field when validation refuses an open with blank spend', async () => {
+    recorded.details[ARTICLE] = detail(
+      fullNode(ARTICLE, 'Write the help article', {
+        parentId: R322,
+        status: 'blocked',
+        revision: 4,
+      }),
+    );
+    await render({ data: withStatus(ARTICLE, 'blocked') });
+    await click(card(ARTICLE));
+    await click(button(rail(), 'Approve'));
+    const failure = PlanNodeOpenSchema.safeParse({ expectedRevision: 4, why: '' });
+    const parse = vi.spyOn(PlanNodeOpenSchema, 'safeParse').mockReturnValueOnce(failure);
+    try {
+      await click(button(rail(), 'Approve'));
+      expect(rail().querySelector('[role="alert"]')?.textContent).toContain('Reason:');
+      expect(rail().querySelector('[role="alert"]')?.textContent).not.toContain('spend');
+      expect(recorded.mutateAsync).not.toHaveBeenCalled();
+    } finally {
+      parse.mockRestore();
+    }
+  });
+
+  it('calls it Resume on a step the stream stopped, and offers neither on an open one', async () => {
+    recorded.details[ARTICLE] = detail(
+      fullNode(ARTICLE, 'Write the help article', {
+        parentId: R322,
+        status: 'blocked',
+        note: 'Blocked: 3 rounds ended without a pull request.',
+      }),
+    );
+    await render({ data: withStatus(ARTICLE, 'blocked') });
+    await click(card(ARTICLE));
+    expect(button(rail(), 'Approve')).toBeTruthy();
+
+    await click(card(BOARD));
+    expect([...rail().querySelectorAll('button')].map((b) => b.textContent)).not.toContain(
+      'Approve',
+    );
+  });
+
   it('holds the write until the step is read, and offers none on a step the read finds closed', async () => {
     delete recorded.details[NEXT];
     await render();
@@ -1391,11 +1513,11 @@ describe('SpacePlanPage — approve, reopen and order (Plan 332 P2)', () => {
     expect(recorded.sent[0]?.body).toEqual({ expectedRevision: 3 });
   });
 
-  it('refuses to send a reason past 500 characters', async () => {
+  it('refuses to send a reason past the note ceiling', async () => {
     await render({ data: P2_PLAN });
     await click(card(BLOCKED));
     await click(button(rail(), 'Approve'));
-    await type(openForm(), 'x'.repeat(501));
+    await type(openForm(), 'x'.repeat(64001));
 
     expect(button(openForm(), 'Approve').disabled).toBe(true);
   });
