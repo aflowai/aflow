@@ -473,7 +473,11 @@ export function SpacePlanPage(): React.ReactNode {
             tone="danger"
           >{`The plans could not be read: ${rowsQuery.error.message}`}</Text>
         )}
-        <TruncationLine truncated={rows.truncated} />
+        {rows.truncated !== undefined && (
+          <Text size="xs" variant="muted" data-plan-list-truncated>
+            {`First ${String(rows.truncated.value)} plans`}
+          </Text>
+        )}
       </Column>
     </PageContainer>
   );

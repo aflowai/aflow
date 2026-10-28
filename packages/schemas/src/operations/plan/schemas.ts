@@ -377,11 +377,20 @@ export const PlanRootRowSchema = z
     position: z.number().int().min(0),
     revision: z.number().int().min(1),
     state: PlanRootStateSchema,
-    counts: PlanRootCountsSchema,
+    counts: PlanRootCountsSchema.optional().describe(
+      'Absent on a closed plan, whose state is `closed` by rule and whose steps are not read.',
+    ),
+    truncated: PlanNodeListTruncationSchema.optional().describe(
+      'Absent when every step of the plan was counted; otherwise the bound of the read (`depth` or ' +
+        '`nodes`) that may have left steps of this plan uncounted, so `counts` and `state` read only ' +
+        'the steps it reached. The plan’s board reads it on its own.',
+    ),
     lastWrittenAt: z
       .string()
       .datetime()
-      .describe('The newest write to the root or any node under it.'),
+      .describe(
+        'The newest write to the root or any step counted under it; on a closed plan, the root’s own.',
+      ),
   })
   .strict();
 export type PlanRootRow = z.infer<typeof PlanRootRowSchema>;
@@ -433,7 +442,7 @@ export type PlanBoardOutput = z.infer<typeof PlanBoardOutputSchema>;
 export const PlanOverviewOutputSchema = z.object({
   roots: z.array(PlanRootRowSchema),
   truncated: PlanNodeListTruncationSchema.optional().describe(
-    'Absent when every node of the space was counted; otherwise the walk bound (`depth` or `nodes`) that cut it short.',
+    'Absent when every plan of the space is a row; otherwise the bound (`nodes`) that cut the list of plans short. A row whose steps were counted short says so on its own `truncated`.',
   ),
 });
 export type PlanOverviewOutput = z.infer<typeof PlanOverviewOutputSchema>;

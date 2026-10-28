@@ -19,6 +19,7 @@ import {
   PLAN_NODE_UPDATE_FIELDS,
   PLAN_TREE_DEPTH_LIMIT,
   PLAN_TREE_WALK_NODE_LIMIT,
+  CLOSED_PLAN_NODE_STATUSES,
   OPEN_PLAN_NODE_STATUSES,
   type CoachLearning,
   type PlanNode,
@@ -45,10 +46,11 @@ import {
 import { publishActionCenterWake } from '@aflow/redis';
 import { bumpAttentionGeneration } from '../attentionCache.js';
 import { emitPlanUpdated } from '../entityEvents.js';
-import { findPlanRoots, orderPlanTree, type PlanTreeWalkBounds } from './tree.js';
+import { bySiblingOrder, findPlanRoots, orderPlanTree, type PlanTreeWalkBounds } from './tree.js';
 import {
   buildPlanBoard,
   buildPlanRows,
+  closedPlanRow,
   decodePlanLinkCursor,
   encodePlanLinkCursor,
   type PlanBoardOptions,
@@ -710,29 +712,43 @@ export async function listPlanNodes(
 /**
  * Every plan of the space as a row (Plan 332 D7's rows): each root with its
  * state and its steps counted by column, by position and then id, open and
- * closed alike. Each root is counted from its own walk, the one its board
- * takes, so a row reads the same nodes as its board's header and agrees with
- * it even where the plan is past the bounds; a bound met listing the roots or
- * walking any plan is named. No step is returned, only counted.
+ * closed alike. Its work is bounded whatever the space has held: a closed
+ * plan is `closed` by rule, so its root alone is read; the open plans share
+ * one walk under the bounds every read of the plan takes, and only the steps
+ * it reached are looked up for runs. A plan that walk read whole counts what
+ * its board's header counts; one its bound may have cut short says so on its
+ * own row. No step is returned, only counted.
  */
 export async function readPlanOverview(ctx: PlanReadContext): Promise<PlanOverviewOutput> {
-  // Depth 0 reads the roots alone; only the node bound can cut that list short.
-  const listed = await ctx.store.walk(ctx.spaceId, { ...PLAN_TREE_WALK_BOUNDS, maxDepth: 0 });
-  const rootsCut = listed.truncated?.bound === 'nodes' ? listed.truncated : undefined;
-  const rootIds = orderPlanTree(listed.nodes).map((p) => p.node.nodeId);
-  const walks = await Promise.all(
-    rootIds.map((rootId) => ctx.store.walk(ctx.spaceId, { rootId, ...PLAN_TREE_WALK_BOUNDS })),
-  );
-  const placed = walks.flatMap((walk, i) => orderPlanTree(walk.nodes, { rootId: rootIds[i]! }));
+  const [closed, open] = await Promise.all([
+    // Depth 0 reads the roots alone; only the node bound can cut that list short.
+    ctx.store.walk(ctx.spaceId, {
+      ...PLAN_TREE_WALK_BOUNDS,
+      maxDepth: 0,
+      statuses: CLOSED_PLAN_NODE_STATUSES,
+    }),
+    ctx.store.walk(ctx.spaceId, {
+      ...PLAN_TREE_WALK_BOUNDS,
+      rootStatuses: OPEN_PLAN_NODE_STATUSES,
+    }),
+  ]);
+  const placed = orderPlanTree(open.nodes);
   const inFlight = await ctx.store.inFlightRunCountsOf(
     ctx.spaceId,
     placed.map((p) => p.node.nodeId),
   );
-  const truncated = rootsCut ?? walks.find((walk) => walk.truncated !== undefined)?.truncated;
-  return {
-    roots: buildPlanRows(placed, inFlight),
-    ...(truncated !== undefined ? { truncated } : {}),
-  };
+  const rows = [
+    ...buildPlanRows(placed, inFlight, open.truncated),
+    ...closed.nodes.map(closedPlanRow),
+  ].sort(bySiblingOrder);
+  // A node bound met on the roots themselves may have left plans out of the list.
+  const openRootsCut =
+    open.truncated?.bound === 'nodes' && placed.every((p) => p.depth === 0)
+      ? open.truncated
+      : undefined;
+  const truncated =
+    (closed.truncated?.bound === 'nodes' ? closed.truncated : undefined) ?? openRootsCut;
+  return { roots: rows, ...(truncated !== undefined ? { truncated } : {}) };
 }
 
 /**

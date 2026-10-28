@@ -327,8 +327,17 @@ describe('the plan list (Plan 332 D2)', () => {
     expect(planLandingRoot([])).toBeUndefined();
   });
 
-  it('reads progress as steps closed of all', () => {
+  it('reads progress as steps closed of all, and none on a plan whose steps are not counted', () => {
     expect(planRowProgress(row('a', 'queued'))).toBe('2/4');
+    const { counts: _counts, ...closed } = row('c', 'closed');
+    expect(planRowProgress(closed)).toBeUndefined();
+  });
+
+  it('keeps a finished row counted short among the open plans', () => {
+    const short = row('short', 'finished', { truncated: { bound: 'nodes', value: 2000 } });
+    const sections = planListSections([row('needs', 'needs_you'), short, row('f', 'finished')]);
+    expect(sections.open.map((r) => r.nodeId)).toEqual(['needs', 'short']);
+    expect(sections.finished.map((r) => r.nodeId)).toEqual(['f']);
   });
 
   it('moves an open plan past the open row beside it, and offers no way out of the ends', () => {

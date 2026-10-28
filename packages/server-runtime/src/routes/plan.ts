@@ -237,8 +237,8 @@ export const planRoutes: FastifyPluginAsync = async (fastify) => {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
   app.addHook('preHandler', app.authenticate);
 
-  // Plan 332 D7's rows: the plan list reads every root with its state and its
-  // steps' counts, and no step.
+  // Plan 332 D7's rows: the plan list reads every root with its state and, on
+  // an open plan, its steps' counts, and no step.
   app.get(
     '/:spaceId/plan',
     {
@@ -246,7 +246,7 @@ export const planRoutes: FastifyPluginAsync = async (fastify) => {
       schema: {
         tags: ['Spaces'],
         summary:
-          "The space's plans as rows: every root by position with its state and its steps counted by the board's columns",
+          "The space's plans as rows: every root by position with its state and, open, its steps counted by the board's columns",
         params: z.object({ spaceId: z.string().uuid() }),
         querystring: z.object({}).strict(),
         response: { 200: PlanOverviewOutputSchema },

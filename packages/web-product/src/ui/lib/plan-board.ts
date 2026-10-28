@@ -105,22 +105,26 @@ export function planHeader(tally: PlanRootTally): {
 /**
  * The plan list's sections, each in the rows' position order: open plans —
  * the order the loop takes them — then **Finished**, open roots whose every
- * step is closed, then **Closed**.
+ * step is closed, then **Closed**. A row counted short stays among the open
+ * plans whatever its state: the steps it did not count may be open, so the
+ * list does not offer to close it.
  */
 export function planListSections(rows: readonly PlanRootRow[]): {
   open: PlanRootRow[];
   finished: PlanRootRow[];
   closed: PlanRootRow[];
 } {
+  const isFinished = (r: PlanRootRow) => r.state === 'finished' && r.truncated === undefined;
   return {
-    open: rows.filter((r) => r.state !== 'closed' && r.state !== 'finished'),
-    finished: rows.filter((r) => r.state === 'finished'),
+    open: rows.filter((r) => r.state !== 'closed' && !isFinished(r)),
+    finished: rows.filter(isFinished),
     closed: rows.filter((r) => r.state === 'closed'),
   };
 }
 
-/** A row's progress: its steps closed of all. */
-export function planRowProgress(row: PlanRootRow): string {
+/** A row's progress: its steps closed of all; none on a closed plan, whose steps are not counted. */
+export function planRowProgress(row: PlanRootRow): string | undefined {
+  if (row.counts === undefined) return undefined;
   return `${String(row.counts.done + row.counts.dropped)}/${String(row.counts.steps)}`;
 }
 

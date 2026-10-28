@@ -9,6 +9,7 @@ import {
   PlanNodeLinkKindSchema,
   planBoardCards,
   type PlanDoneDay,
+  type PlanNodeListTruncation,
   type PlanNodeStatus,
   type PlanNodeSummary,
   type PlanRootCounts,
@@ -252,18 +253,42 @@ function newestWrite(node: PlanTreeNode): string {
 }
 
 /**
- * Every root as the plan list shows it (Plan 332 D2): its state and its steps
- * counted by the same column rule the board uses. A row agrees with its
- * board's header when `placed` holds what that root's own bounded walk read —
- * the walk its board takes — which holds even for a plan cut short by a bound;
- * built from one walk of the whole space, a bound met there would count a
- * plan short where its board does not. A step's column reads only its status,
- * kind, a closed ancestor and the runs in flight under it, so nothing but
- * those runs is read.
+ * The roots of a walk from many roots that its bound may have left steps of
+ * unread. A walk reads whole levels until one passes the node bound, so under
+ * `nodes` the level it stopped partway through hangs from the last level read
+ * or the one above it, and under `depth` only nodes on the deepest level read
+ * can have children unread. A plan with no node that deep ended above the cut
+ * and was read whole.
+ */
+function rootsCutShort(
+  placed: readonly PlacedPlanNode[],
+  truncated: PlanNodeListTruncation | undefined,
+): Set<string> {
+  const cut = new Set<string>();
+  if (truncated === undefined) return cut;
+  const deepest = Math.max(...placed.map((p) => p.depth));
+  const from = truncated.bound === 'nodes' ? deepest - 1 : deepest;
+  let rootId: string | undefined;
+  for (const { node, depth } of placed) {
+    if (depth === 0) rootId = node.nodeId;
+    if (depth >= from && rootId !== undefined) cut.add(rootId);
+  }
+  return cut;
+}
+
+/**
+ * Every open root of a walk as the plan list shows it (Plan 332 D2): its state
+ * and its steps counted by the same column rule the board uses. A plan the
+ * walk read whole counts the nodes its board's header counts, so the two
+ * agree; a plan its bound may have cut short carries that bound as its own
+ * `truncated`, its counts and state reading only the steps reached. A step's
+ * column reads only its status, kind, a closed ancestor and the runs in flight
+ * under it, so nothing but those runs is read.
  */
 export function buildPlanRows(
   placed: readonly PlacedPlanNode[],
   inFlight: ReadonlyMap<string, number>,
+  truncated?: PlanNodeListTruncation,
 ): PlanRootRow[] {
   const { roots, tallies } = buildPlanBoard(placed, {
     facts: new Map(),
@@ -271,6 +296,7 @@ export function buildPlanRows(
     pullRequests: new Map(),
     inFlight,
   });
+  const cut = rootsCutShort(placed, truncated);
   return roots.map((root, i) => {
     const tally = tallies[i]!;
     return {
@@ -288,9 +314,23 @@ export function buildPlanRows(
         done: tally.done,
         dropped: tally.dropped,
       },
+      ...(truncated !== undefined && cut.has(root.nodeId) ? { truncated } : {}),
       lastWrittenAt: newestWrite(root),
     };
   });
+}
+
+/** A closed root as the plan list shows it: `closed` by rule, from the root's own row, its steps unread. */
+export function closedPlanRow(root: PlanNodeSummary): PlanRootRow {
+  return {
+    nodeId: root.nodeId,
+    title: root.title,
+    status: root.status,
+    position: root.position,
+    revision: root.revision,
+    state: 'closed',
+    lastWrittenAt: root.updatedAt,
+  };
 }
 
 // ============================================================================

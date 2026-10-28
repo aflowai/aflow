@@ -111,6 +111,11 @@ export interface PlanTreeWalkOptions extends PlanTreeWalkBounds {
    * chose to look, not a node the walk came upon.
    */
   statuses?: readonly PlanNodeStatus[];
+  /**
+   * Walk from only the roots of these statuses, and below them through every
+   * status `statuses` allows; in place of `statuses` for the roots alone.
+   */
+  rootStatuses?: readonly PlanNodeStatus[];
 }
 
 export interface NewPlanNodeLink {
@@ -515,11 +520,19 @@ const siblingOrder = (): SQL[] => {
   return PLAN_SIBLING_ORDER.map((key) => asc(columns[key]));
 };
 
-function levelIs(level: PlanTreeLevel, statuses: readonly PlanNodeStatus[] | undefined): SQL {
+function levelIs(
+  level: PlanTreeLevel,
+  { statuses, rootStatuses }: Pick<PlanTreeWalkOptions, 'statuses' | 'rootStatuses'>,
+): SQL {
   const ofStatus = statuses !== undefined ? inArray(planNodes.status, [...statuses]) : undefined;
   switch (level.kind) {
-    case 'roots':
-      return and(isNull(planNodes.parentId), ofStatus)!;
+    case 'roots': {
+      const ofRootStatus = rootStatuses ?? statuses;
+      return and(
+        isNull(planNodes.parentId),
+        ofRootStatus !== undefined ? inArray(planNodes.status, [...ofRootStatus]) : undefined,
+      )!;
+    }
     case 'node':
       return eq(planNodes.id, level.nodeId);
     case 'children':
@@ -814,7 +827,7 @@ export function createPlanNodeStore(db: PostgresJsDatabase, tenantId: string): P
             const rows = await tx
               .select(summaryColumns())
               .from(planNodes)
-              .where(and(eq(planNodes.spaceId, spaceId), levelIs(level, opts.statuses)))
+              .where(and(eq(planNodes.spaceId, spaceId), levelIs(level, opts)))
               .orderBy(...siblingOrder())
               .limit(limit);
             return rows.map(summaryRowToSummary);

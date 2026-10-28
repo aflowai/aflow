@@ -13,7 +13,10 @@ export interface PlacedPlanNode {
  */
 export const PLAN_SIBLING_ORDER = ['position', 'nodeId'] as const;
 
-export function bySiblingOrder(a: PlanNodeSummary, b: PlanNodeSummary): number {
+export function bySiblingOrder(
+  a: Pick<PlanNodeSummary, 'position' | 'nodeId'>,
+  b: Pick<PlanNodeSummary, 'position' | 'nodeId'>,
+): number {
   for (const key of PLAN_SIBLING_ORDER) {
     // Code-unit order, which is Postgres's byte order for a lowercase uuid.
     if (a[key] < b[key]) return -1;

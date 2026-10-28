@@ -41,6 +41,13 @@ export const PLAN_STATE_BADGE: Record<PlanRootState, BadgeVariant> = {
   empty: 'neutral',
 };
 
+/** A row whose steps the list's read did not all count: its board counts them on its own. */
+const PLAN_ROW_TRUNCATION_LINE: Record<'limit' | 'depth' | 'nodes', (value: number) => string> = {
+  limit: (value) => `Counted short: the first ${String(value)} steps`,
+  depth: (value) => `Counted short: steps deeper than ${String(value)} levels left out`,
+  nodes: (value) => `Counted short: the list counts ${String(value)} steps across its plans`,
+};
+
 /**
  * The form behind **Close plan**: the existing close write on the root, done
  * with how its criteria were met. It reads the root fresh when it opens and
@@ -215,6 +222,7 @@ function PlanRowView({
   rowRef: (element: HTMLLIElement | null) => void;
   children?: React.ReactNode;
 }) {
+  const progress = planRowProgress(row);
   return (
     <li
       ref={rowRef}
@@ -242,14 +250,21 @@ function PlanRowView({
             </Text>
             <Row gap="xs" align="center" wrap>
               <Badge variant={PLAN_STATE_BADGE[row.state]}>{PLAN_STATE_LABEL[row.state]}</Badge>
-              <Text size="xs" variant="muted" data-plan-row-progress>
-                {planRowProgress(row)}
-              </Text>
-              {row.counts.needsYou > 0 && (
+              {progress !== undefined && (
+                <Text size="xs" variant="muted" data-plan-row-progress>
+                  {progress}
+                </Text>
+              )}
+              {row.counts !== undefined && row.counts.needsYou > 0 && (
                 <Badge variant="warning">{`${String(row.counts.needsYou)} need you`}</Badge>
               )}
-              {row.counts.inFlight > 0 && (
+              {row.counts !== undefined && row.counts.inFlight > 0 && (
                 <Badge variant="running">{`${String(row.counts.inFlight)} in flight`}</Badge>
+              )}
+              {row.truncated !== undefined && (
+                <Text size="xs" variant="muted" data-plan-row-truncated>
+                  {PLAN_ROW_TRUNCATION_LINE[row.truncated.bound](row.truncated.value)}
+                </Text>
               )}
             </Row>
           </Column>

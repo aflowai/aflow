@@ -7,7 +7,7 @@
  * and a done window applied on the server. And one node for the rail, its
  * links paged by an opaque cursor.
  */
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import Redis from 'ioredis-mock';
 import type { Redis as RedisType } from 'ioredis';
 import {
@@ -771,6 +771,35 @@ describe('readPlanOverview — the plans as rows', () => {
       status: 'active',
       counts: { steps: 2, done: 1, dropped: 1 },
     });
+    // A closed plan is closed by rule: its steps are not read, so it has no counts.
+    expect(read.roots[0]).not.toHaveProperty('counts');
+  });
+
+  it('reads a closed plan’s root alone, whatever the space has held', async () => {
+    const closedSteps: string[] = [];
+    for (let n = 0; n < 30; n++) {
+      const root = await node(`closed ${String(n)}`, { position: n + 3 });
+      for (const m of [1, 2])
+        closedSteps.push((await node(`step ${String(m)}`, { parentId: root.nodeId })).nodeId);
+      await close(root, 'done');
+    }
+    const open = await node('open', { position: 0 });
+    const step = await node('open step', { parentId: open.nodeId });
+    const walks = vi.spyOn(store, 'walk');
+    const runLookups = vi.spyOn(store, 'inFlightRunCountsOf');
+
+    const read = await rows();
+
+    expect(read.roots).toHaveLength(31);
+    expect(read.roots[0]).toMatchObject({ nodeId: open.nodeId, state: 'queued' });
+    expect(read.roots.slice(1).every((r) => r.state === 'closed' && r.counts === undefined)).toBe(
+      true,
+    );
+    expect(walks).toHaveBeenCalledTimes(2);
+    expect(runLookups).toHaveBeenCalledTimes(1);
+    const looked = runLookups.mock.calls[0]![1];
+    expect([...looked].sort()).toEqual([open.nodeId, step.nodeId].sort());
+    expect(looked.some((id) => closedSteps.includes(id))).toBe(false);
   });
 
   it('lists every root by position, open and closed, with its revision and its newest write', async () => {
@@ -835,51 +864,76 @@ describe('readPlanOverview — the plans as rows', () => {
     });
   });
 
-  it('counts each plan from its own walk, so open steps past a space-wide bound still count', async () => {
+  it('marks the plans the shared walk cut short, and counts every plan it read whole as its board does', async () => {
+    const closedAt = '2026-10-03T00:00:00.000Z';
     const wide = store.seed(SPACE, { title: 'wide', position: 0 });
-    const narrow = store.seed(SPACE, { title: 'narrow', position: 1 });
-    // One walk of the whole space would read both roots and every first level
-    // — exactly its node bound — and stop before narrow's open grandchild.
-    for (let n = 0; n < PLAN_TREE_WALK_NODE_LIMIT - 3; n++) {
+    for (let n = 0; n < PLAN_TREE_WALK_NODE_LIMIT - 10; n++) {
       store.seed(SPACE, { parentId: wide.nodeId, title: `wide ${String(n)}`, position: n });
     }
-    const landed = store.seed(SPACE, {
-      parentId: narrow.nodeId,
-      title: 'landed',
-      status: 'done',
-      closedAt: '2026-10-03T00:00:00.000Z',
-    });
-    store.seed(SPACE, { parentId: landed.nodeId, title: 'still open' });
-    expect((await store.walk(SPACE, PLAN_TREE_WALK_BOUNDS)).truncated?.bound).toBe('nodes');
+    const flat = store.seed(SPACE, { title: 'flat', position: 1 });
+    store.seed(SPACE, { parentId: flat.nodeId, title: 'landed', status: 'done', closedAt });
+    store.seed(SPACE, { parentId: flat.nodeId, title: 'approved', position: 1 });
+    const deep = store.seed(SPACE, { title: 'deep', position: 2 });
+    const a = store.seed(SPACE, { parentId: deep.nodeId, title: 'a', status: 'done', closedAt });
+    const b = store.seed(SPACE, { parentId: a.nodeId, title: 'b', status: 'done', closedAt });
+    // The walk's last three nodes are deep's first three leaves, all done; the
+    // two open ones past them are past its bound.
+    for (let n = 0; n < 5; n++) {
+      store.seed(SPACE, {
+        parentId: b.nodeId,
+        title: `leaf ${String(n)}`,
+        position: n,
+        ...(n < 3 ? { status: 'done' as const, closedAt } : {}),
+      });
+    }
+    // A closed plan takes nothing from the bound.
+    const gone = store.seed(SPACE, { title: 'gone', position: 3, status: 'dropped', closedAt });
+    store.seed(SPACE, { parentId: gone.nodeId, title: 'under gone' });
 
     const read = await rows();
-    const row = read.roots.find((r) => r.nodeId === narrow.nodeId);
-    const { tally } = await board(narrow.nodeId);
+    const rowOf = (id: string) => read.roots.find((r) => r.nodeId === id)!;
 
     expect(read.truncated).toBeUndefined();
-    expect(row?.state).toBe('needs_you');
-    expect(row?.state).toBe(tally.state);
-    expect(row?.counts).toEqual({
-      steps: tally.steps,
-      needsYou: tally.needsYou,
-      inFlight: tally.inFlight,
-      upNext: tally.upNext,
-      done: tally.done,
-      dropped: tally.dropped,
+    expect(rowOf(deep.nodeId)).toMatchObject({
+      truncated: { bound: 'nodes', value: PLAN_TREE_WALK_NODE_LIMIT },
+      counts: { steps: 5, done: 5 },
     });
-    expect(row?.counts).toMatchObject({ steps: 2, needsYou: 1, done: 1 });
+    expect((await board(deep.nodeId)).tally).toMatchObject({ steps: 7, done: 5, needsYou: 2 });
+    for (const id of [wide.nodeId, flat.nodeId]) {
+      const row = rowOf(id);
+      const { tally, truncated } = await board(id);
+      expect(row).not.toHaveProperty('truncated');
+      expect(truncated).toBeUndefined();
+      expect(row.state).toBe(tally.state);
+      expect(row.counts).toEqual({
+        steps: tally.steps,
+        needsYou: tally.needsYou,
+        inFlight: tally.inFlight,
+        upNext: tally.upNext,
+        done: tally.done,
+        dropped: tally.dropped,
+      });
+    }
+    expect(rowOf(flat.nodeId)).toMatchObject({ state: 'queued', counts: { steps: 2, done: 1 } });
+    expect(rowOf(gone.nodeId)).toMatchObject({ state: 'closed' });
   });
 
-  it(`counts short past depth ${String(PLAN_TREE_DEPTH_LIMIT)} and names the bound`, async () => {
+  it(`counts short past depth ${String(PLAN_TREE_DEPTH_LIMIT)} and names the bound on that plan’s row`, async () => {
     let parent = store.seed(SPACE, { title: 'level 0' });
     for (let depth = 1; depth <= PLAN_TREE_DEPTH_LIMIT + 1; depth++) {
       parent = store.seed(SPACE, { parentId: parent.nodeId, title: `level ${String(depth)}` });
     }
+    const shallow = store.seed(SPACE, { title: 'shallow', position: 1 });
+    store.seed(SPACE, { parentId: shallow.nodeId, title: 'one step' });
 
     const read = await rows();
 
-    expect(read.truncated).toEqual({ bound: 'depth', value: PLAN_TREE_DEPTH_LIMIT });
-    expect(read.roots[0]?.counts.steps).toBe(PLAN_TREE_DEPTH_LIMIT);
+    expect(read.truncated).toBeUndefined();
+    expect(read.roots[0]).toMatchObject({
+      truncated: { bound: 'depth', value: PLAN_TREE_DEPTH_LIMIT },
+      counts: { steps: PLAN_TREE_DEPTH_LIMIT },
+    });
+    expect(read.roots[1]).not.toHaveProperty('truncated');
   });
 });
 

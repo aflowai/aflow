@@ -297,8 +297,11 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
           return node.parentId !== null && level.parentIds.includes(node.parentId);
       }
     };
-    const ofStatus = (node: PlanNode, level: PlanTreeLevel): boolean =>
-      level.kind === 'node' || statuses === undefined || statuses.includes(node.status);
+    const ofStatus = (node: PlanNode, level: PlanTreeLevel): boolean => {
+      if (level.kind === 'node') return true;
+      const allowed = level.kind === 'roots' ? (opts.rootStatuses ?? statuses) : statuses;
+      return allowed === undefined || allowed.includes(node.status);
+    };
     return walkPlanTree(
       (level, limit) =>
         Promise.resolve(

@@ -28,6 +28,10 @@ interface SpaceFixture {
   roots: PlanTreeNode[];
   tallies: PlanRootTally[];
   truncated?: { bound: 'limit' | 'depth' | 'nodes'; value: number };
+  /** The rows counted short, by root, and the bound each names. */
+  rowTruncated?: Record<string, { bound: 'depth' | 'nodes'; value: number }>;
+  /** The bound that cut the list of plans short. */
+  listTruncated?: { bound: 'nodes'; value: number };
 }
 
 interface Answer {
@@ -323,7 +327,7 @@ function cached<T>(space: SpaceFixture, read: string, build: () => T): T {
   return held.get(read) as T;
 }
 
-/** The rows `GET …/plan` answers for a space: each root with its tally's state and counts. */
+/** The rows `GET …/plan` answers for a space: each root with its tally's state and, open, its counts. */
 function rowsOf(space: SpaceFixture) {
   return {
     roots: space.roots.map((tree) => {
@@ -335,18 +339,26 @@ function rowsOf(space: SpaceFixture) {
         position: tree.position,
         revision: tree.revision,
         state: tally.state,
-        counts: {
-          steps: tally.steps,
-          needsYou: tally.needsYou,
-          inFlight: tally.inFlight,
-          upNext: tally.upNext,
-          done: tally.done,
-          dropped: tally.dropped,
-        },
+        // A closed plan is closed by rule: its steps are not counted.
+        ...(tally.state !== 'closed'
+          ? {
+              counts: {
+                steps: tally.steps,
+                needsYou: tally.needsYou,
+                inFlight: tally.inFlight,
+                upNext: tally.upNext,
+                done: tally.done,
+                dropped: tally.dropped,
+              },
+            }
+          : {}),
+        ...(space.rowTruncated?.[tree.nodeId] !== undefined
+          ? { truncated: space.rowTruncated[tree.nodeId] }
+          : {}),
         lastWrittenAt: tree.updatedAt,
       };
     }),
-    ...(space.truncated !== undefined ? { truncated: space.truncated } : {}),
+    ...(space.listTruncated !== undefined ? { truncated: space.listTruncated } : {}),
   };
 }
 
@@ -1570,6 +1582,43 @@ describe('SpacePlanPage — the plan list (Plan 332 P3)', () => {
     await click(closed as HTMLElement);
     expect(rowIds('closed')).toEqual([L_CLOSED]);
     expect(listRow(L_CLOSED)?.textContent).toContain('Closed');
+    expect(listRow(L_CLOSED)?.querySelector('[data-plan-row-progress]')).toBe(null);
+    expect(container.querySelector('[data-plan-row-truncated]')).toBe(null);
+    expect(container.querySelector('[data-plan-list-truncated]')).toBe(null);
+  });
+
+  it('marks every row counted short on the row itself, and offers no Close plan on one', async () => {
+    await render({
+      data: {
+        ...LIST,
+        rowTruncated: {
+          [L_FLIGHT]: { bound: 'nodes', value: 2000 },
+          [L_FINISHED]: { bound: 'depth', value: 64 },
+        },
+      },
+    });
+
+    const marked = [...container.querySelectorAll('[data-plan-row-truncated]')].map((m) => [
+      m.closest('[data-plan-row]')?.getAttribute('data-plan-row'),
+      m.textContent,
+    ]);
+    expect(marked).toEqual([
+      [L_FLIGHT, 'Counted short: the list counts 2000 steps across its plans'],
+      [L_FINISHED, 'Counted short: steps deeper than 64 levels left out'],
+    ]);
+    // Its uncounted steps may be open: it stays among the open plans, with no Close plan.
+    expect(rowIds('open')).toEqual([L_NEEDS, L_FLIGHT, L_QUEUED, L_FINISHED, L_EMPTY]);
+    expect(rowIds('finished')).toEqual([]);
+    expect(buttonTexts(listRow(L_FINISHED)!)).not.toContain('Close plan');
+    expect(container.querySelector('[data-plan-list-truncated]')).toBe(null);
+  });
+
+  it('says when the list of plans itself was cut short', async () => {
+    await render({ data: { ...LIST, listTruncated: { bound: 'nodes', value: 2000 } } });
+
+    expect(container.querySelector('[data-plan-list-truncated]')?.textContent).toBe(
+      'First 2000 plans',
+    );
   });
 
   it('holds the list in the 280px left column beside the board', async () => {
