@@ -12,6 +12,8 @@ import {
   type PlanBoardColumn,
   type PlanDoneDay,
   type PlanNeedsYouReason,
+  type PlanRootRow,
+  type PlanRootState,
   type PlanRootTally,
   type PlanTreeNode,
 } from '@aflow/schemas';
@@ -61,8 +63,19 @@ export function phaseLabel(title: string): string {
     : `${trimmed.slice(0, PHASE_LABEL_MAX - 1).trimEnd()}…`;
 }
 
-/** The plan's header: its steps closed of all, and the non-zero count of each column. */
+/** A plan's state (Plan 332 D3) as its row and its header say it. */
+export const PLAN_STATE_LABEL: Record<PlanRootState, string> = {
+  closed: 'Closed',
+  needs_you: 'Needs you',
+  in_flight: 'In flight',
+  queued: 'Queued',
+  finished: 'Finished',
+  empty: 'No steps',
+};
+
+/** The plan's header (Plan 332 D10): its state, its steps closed of all, and the non-zero count of each column. */
 export function planHeader(tally: PlanRootTally): {
+  state: string;
   progress: string;
   counts: Array<{ column: PlanBoardColumn; label: string }>;
 } {
@@ -74,6 +87,7 @@ export function planHeader(tally: PlanRootTally): {
     { column: 'dropped', count: tally.dropped, noun: 'dropped' },
   ];
   return {
+    state: PLAN_STATE_LABEL[tally.state],
     progress: `${String(tally.done + tally.dropped)} of ${String(tally.steps)} closed`,
     counts: counts
       .filter((c) => c.count > 0)
@@ -82,6 +96,77 @@ export function planHeader(tally: PlanRootTally): {
         label: `${String(c.count)} ${c.column === 'needs_you' && c.count === 1 ? 'needs you' : c.noun}`,
       })),
   };
+}
+
+// ============================================================================
+// The plan list (Plan 332 D2)
+// ============================================================================
+
+/**
+ * The plan list's sections, each in the rows' position order: open plans —
+ * the order the loop takes them — then **Finished**, open roots whose every
+ * step is closed, then **Closed**.
+ */
+export function planListSections(rows: readonly PlanRootRow[]): {
+  open: PlanRootRow[];
+  finished: PlanRootRow[];
+  closed: PlanRootRow[];
+} {
+  return {
+    open: rows.filter((r) => r.state !== 'closed' && r.state !== 'finished'),
+    finished: rows.filter((r) => r.state === 'finished'),
+    closed: rows.filter((r) => r.state === 'closed'),
+  };
+}
+
+/** A row's progress: its steps closed of all. */
+export function planRowProgress(row: PlanRootRow): string {
+  return `${String(row.counts.done + row.counts.dropped)}/${String(row.counts.steps)}`;
+}
+
+/**
+ * The plan shown where the URL names none or one the space does not hold:
+ * the first open plan by position, else the first finished, else the first closed.
+ */
+export function planLandingRoot(rows: readonly PlanRootRow[]): PlanRootRow | undefined {
+  const { open, finished, closed } = planListSections(rows);
+  return open[0] ?? finished[0] ?? closed[0];
+}
+
+/**
+ * The open rows directly above and below a plan in the list: what **Move up**
+ * and **Move down** place it before and after (Plan 332 D6). Every open plan is
+ * a row of the list, so the root the write names is one the operator can see.
+ */
+export function planRowMoveTargets(
+  open: readonly PlanRootRow[],
+  nodeId: string,
+): { above?: PlanRootRow; below?: PlanRootRow } {
+  const at = open.findIndex((r) => r.nodeId === nodeId);
+  if (at < 0) return {};
+  const above = open[at - 1];
+  const below = open[at + 1];
+  return {
+    ...(above !== undefined ? { above } : {}),
+    ...(below !== undefined ? { below } : {}),
+  };
+}
+
+/**
+ * Where the operator is, as the page's URL holds it (Plan 332 D8): the plan
+ * and the step whose rail is open. Every other parameter is kept.
+ */
+export function planViewQuery(
+  current: string,
+  view: { plan?: string | undefined; node?: string | undefined },
+): string {
+  const params = new URLSearchParams(current);
+  for (const key of ['plan', 'node'] as const) {
+    const value = view[key];
+    if (value === undefined) params.delete(key);
+    else params.set(key, value);
+  }
+  return params.toString();
 }
 
 /**

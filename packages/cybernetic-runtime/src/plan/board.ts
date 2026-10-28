@@ -5,13 +5,17 @@
  * anything out. Pure: the store's reads come in, the response goes out.
  */
 import {
+  isClosedPlanNodeStatus,
   PlanNodeLinkKindSchema,
   planBoardCards,
   type PlanDoneDay,
+  type PlanNodeStatus,
   type PlanNodeSummary,
+  type PlanRootCounts,
+  type PlanRootRow,
+  type PlanRootState,
   type PlanRootTally,
   type PlanTreeNode,
-  type PlanTreeOutput,
 } from '@aflow/schemas';
 import { nestPlanTree, type PlacedPlanNode } from './tree.js';
 import { findActiveStreamNode, mergeShaOf } from './stream.js';
@@ -148,6 +152,25 @@ function nextNodeIdOf(root: PlanTreeNode): string | undefined {
   return next !== null && next.nodeId !== root.nodeId ? next.nodeId : undefined;
 }
 
+/**
+ * A plan's state (Plan 332 D3) from its root's status and its steps counted by
+ * column, the first that holds deciding. A plan that needs the operator and
+ * has work in flight reads `needs_you`; its row carries both counts. Every
+ * step closed is `finished`, never a status: the root stays open until the
+ * operator closes it, because a node is done against its own criteria, not
+ * its children's (Plan 322 D2).
+ */
+export function planRootState(
+  rootStatus: PlanNodeStatus,
+  counts: Pick<PlanRootCounts, 'steps' | 'needsYou' | 'inFlight' | 'upNext'>,
+): PlanRootState {
+  if (isClosedPlanNodeStatus(rootStatus)) return 'closed';
+  if (counts.needsYou > 0) return 'needs_you';
+  if (counts.inFlight > 0) return 'in_flight';
+  if (counts.upNext > 0) return 'queued';
+  return counts.steps > 0 ? 'finished' : 'empty';
+}
+
 function tallyOf(root: PlanTreeNode, dayOf: (iso: string) => string): PlanRootTally {
   const counts = { needs_you: 0, in_flight: 0, up_next: 0, done: 0, dropped: 0 };
   const byDay = new Map<string, number>();
@@ -160,14 +183,18 @@ function tallyOf(root: PlanTreeNode, dayOf: (iso: string) => string): PlanRootTa
     }
   }
   const nextNodeId = nextNodeIdOf(root);
-  return {
-    rootId: root.nodeId,
+  const counted: PlanRootCounts = {
     steps: cards.length,
     needsYou: counts.needs_you,
     inFlight: counts.in_flight,
     upNext: counts.up_next,
     done: counts.done,
     dropped: counts.dropped,
+  };
+  return {
+    rootId: root.nodeId,
+    state: planRootState(root.status, counted),
+    ...counted,
     doneByDay: [...byDay]
       .map(([day, count]): PlanDoneDay => ({ day, count }))
       .sort((a, b) => (a.day < b.day ? 1 : a.day > b.day ? -1 : 0)),
@@ -187,17 +214,23 @@ function prune(nodes: readonly PlanTreeNode[], since: number): PlanTreeNode[] {
   return kept;
 }
 
+/** Boards built from placed nodes: every tree in reading order, and each root's tally in the same order. */
+export interface PlanBoards {
+  roots: PlanTreeNode[];
+  tallies: PlanRootTally[];
+}
+
 /**
  * The board from nodes placed in reading order: nested, each with its card's
  * facts and a parent with its progress and activity; each root's tallies over
  * every node under it; then the done window applied below the roots, which
- * always stay — each is a tab.
+ * always stay.
  */
 export function buildPlanBoard(
   placed: readonly PlacedPlanNode[],
   reads: PlanBoardReads,
   opts: PlanBoardOptions = {},
-): Omit<PlanTreeOutput, 'truncated'> {
+): PlanBoards {
   const full = nestPlanTree(placed, (node) => boardNode(node, reads)).map(withChildren);
   const dayOf = planDayReader(opts.tz);
   const tallies = full.map((root) => tallyOf(root, dayOf));
@@ -207,6 +240,53 @@ export function buildPlanBoard(
       ? full
       : full.map((root) => ({ ...root, children: prune(root.children, since) }));
   return { roots, tallies };
+}
+
+function newestWrite(node: PlanTreeNode): string {
+  let newest = node.updatedAt;
+  for (const child of node.children) {
+    const below = newestWrite(child);
+    if (Date.parse(below) > Date.parse(newest)) newest = below;
+  }
+  return newest;
+}
+
+/**
+ * Every root as the plan list shows it (Plan 332 D2): its state and its steps
+ * counted by the same column rule the board uses, so a row and its board's
+ * header never disagree. A step's column reads only its status, kind, a closed
+ * ancestor and the runs in flight under it, so nothing but those runs is read.
+ */
+export function buildPlanRows(
+  placed: readonly PlacedPlanNode[],
+  inFlight: ReadonlyMap<string, number>,
+): PlanRootRow[] {
+  const { roots, tallies } = buildPlanBoard(placed, {
+    facts: new Map(),
+    tallies: new Map(),
+    pullRequests: new Map(),
+    inFlight,
+  });
+  return roots.map((root, i) => {
+    const tally = tallies[i]!;
+    return {
+      nodeId: root.nodeId,
+      title: root.title,
+      status: root.status,
+      position: root.position,
+      revision: root.revision,
+      state: tally.state,
+      counts: {
+        steps: tally.steps,
+        needsYou: tally.needsYou,
+        inFlight: tally.inFlight,
+        upNext: tally.upNext,
+        done: tally.done,
+        dropped: tally.dropped,
+      },
+      lastWrittenAt: newestWrite(root),
+    };
+  });
 }
 
 // ============================================================================

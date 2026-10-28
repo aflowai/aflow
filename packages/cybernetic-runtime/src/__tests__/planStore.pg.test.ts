@@ -22,14 +22,14 @@ import {
 import {
   PLAN_NODE_POSITION_MAX,
   PLAN_TREE_DEPTH_LIMIT,
-  PlanTreeOutputSchema,
+  PlanBoardOutputSchema,
   type PlanNode,
 } from '@aflow/schemas';
 import {
   createPlanNode,
   linkPlanNode,
   listPlanNodes,
-  readPlanTrees,
+  readPlanBoard,
   updatePlanNode,
 } from '../plan/operations.js';
 import { createPlanNodeStore } from '../plan/store.js';
@@ -201,8 +201,8 @@ describeDb('moveAtRevision — two crossing moves never close a loop (real DB)',
       outcome: `Merged ${PR_URL}.`,
     });
 
-    const trees = PlanTreeOutputSchema.parse(await readPlanTrees({ store, spaceId: SPACE_ID }));
-    const tree = trees.roots.find((r) => r.nodeId === root.nodeId);
+    const read = await readPlanBoard({ store, spaceId: SPACE_ID }, root.nodeId);
+    const tree = read.ok ? PlanBoardOutputSchema.parse(read).root : undefined;
 
     expect(tree?.progress).toEqual({ done: 1, total: 2 });
     expect(
@@ -255,7 +255,7 @@ describeDb('moveAtRevision — two crossing moves never close a loop (real DB)',
     expect(same).toMatchObject({ ok: false, code: 'PLAN_NODE_UNCHANGED' });
     expect(await store.find(SPACE_ID, target.nodeId)).toMatchObject({ goal: amended, revision: 2 });
 
-    const trees = PlanTreeOutputSchema.parse(await readPlanTrees({ store, spaceId: SPACE_ID }));
-    expect(trees.roots.find((r) => r.nodeId === target.nodeId)?.goalHead).toBe(amended);
+    const read = await readPlanBoard({ store, spaceId: SPACE_ID }, target.nodeId);
+    expect(read.ok && PlanBoardOutputSchema.parse(read).root.goalHead).toBe(amended);
   });
 });

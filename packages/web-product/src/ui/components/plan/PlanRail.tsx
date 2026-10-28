@@ -205,7 +205,7 @@ function AllRunsMore({
  * opening of the card: an open form pins the first node it is given, and a
  * stale one would be refused.
  */
-function freshRead(query: {
+export function freshRead(query: {
   data?: PlanNodeDetailOutput | undefined;
   error: Error | null;
   isFetchedAfterMount: boolean;

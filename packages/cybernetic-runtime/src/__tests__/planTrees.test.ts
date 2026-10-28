@@ -1,6 +1,7 @@
 /**
- * The space's plan as the operator's board reads it (Plan 322 P3.3): every
- * tree, every status, each node nested under its parent in sibling order with
+ * The space's plan as the operator reads it: the plans as rows with their
+ * state (Plan 332 D3, D7), and one plan as its board (Plan 322 P3.3, scoped to
+ * one root by Plan 332 D7) — every status, each node nested under its parent in sibling order with
  * its card's facts — counts in place of links, rounds, activity, newest pull
  * request, a parent's progress — each plan's tallies and done nodes by day,
  * and a done window applied on the server. And one node for the rail, its
@@ -15,7 +16,8 @@ import {
   PLAN_TREE_DEPTH_LIMIT,
   PlanNodeDetailOutputSchema,
   PlanNodeDetailQuerySchema,
-  PlanTreeOutputSchema,
+  PlanBoardOutputSchema,
+  PlanOverviewOutputSchema,
   planBoardCards,
   planBoardColumn,
   type PlanNode,
@@ -28,7 +30,8 @@ import {
   linkPlanNode,
   readPlanNodeDetail,
   PLAN_TREE_WALK_BOUNDS,
-  readPlanTrees,
+  readPlanBoard,
+  readPlanOverview,
   updatePlanNode,
   type PlanWriteContext,
 } from '../plan/operations.js';
@@ -37,6 +40,7 @@ import {
   decodePlanLinkCursor,
   encodePlanLinkCursor,
   planDayReader,
+  planRootState,
   type PlanBoardOptions,
 } from '../plan/board.js';
 import { planGoalHead } from '../plan/store.js';
@@ -103,9 +107,27 @@ function countDayFormatters(): { readonly count: number; restore: () => void } {
   };
 }
 
-async function read(opts: PlanBoardOptions = {}) {
+async function rows() {
   // What the route serializes: the engine's answer must be the schema's.
-  return PlanTreeOutputSchema.parse(await readPlanTrees({ store, spaceId: SPACE }, opts));
+  return PlanOverviewOutputSchema.parse(await readPlanOverview({ store, spaceId: SPACE }));
+}
+
+async function board(rootId: string, opts: PlanBoardOptions = {}) {
+  const result = await readPlanBoard({ store, spaceId: SPACE }, rootId, opts);
+  if (!result.ok) throw new Error(result.message);
+  const { ok: _ok, ...read } = result;
+  return PlanBoardOutputSchema.parse(read);
+}
+
+/** Every plan's board, read one root at a time in the rows' order. */
+async function read(opts: PlanBoardOptions = {}) {
+  const boards = await Promise.all((await rows()).roots.map((r) => board(r.nodeId, opts)));
+  const truncated = boards.find((b) => b.truncated !== undefined)?.truncated;
+  return {
+    roots: boards.map((b) => b.root),
+    tallies: boards.map((b) => b.tally),
+    ...(truncated !== undefined ? { truncated } : {}),
+  };
 }
 
 function titles(trees: readonly PlanTreeNode[]): unknown[] {
@@ -138,7 +160,7 @@ beforeEach(async () => {
   await redis.flushall();
 });
 
-describe('readPlanTrees — the board', () => {
+describe('readPlanBoard — one plan as its board', () => {
   it('reads an empty plan as no roots and no tallies', async () => {
     expect(await read()).toEqual({ roots: [], tallies: [] });
   });
@@ -370,17 +392,15 @@ describe('readPlanTrees — the board', () => {
     expect(find((await read()).roots, root.nodeId)?.activity).toBe('in_flight');
   });
 
-  it('builds one day formatter for every done node of every plan', async () => {
-    for (const title of ['one', 'two']) {
-      const root = await node(title);
-      for (const n of [1, 2, 3])
-        await close(await node(`${title} ${String(n)}`, { parentId: root.nodeId }), 'done');
-    }
+  it('builds one day formatter for every done node of a plan', async () => {
+    const root = await node('one');
+    for (const n of [1, 2, 3])
+      await close(await node(`one ${String(n)}`, { parentId: root.nodeId }), 'done');
     const built = countDayFormatters();
     try {
-      const trees = await read({ tz: 'Europe/Paris' });
+      const read = await board(root.nodeId, { tz: 'Europe/Paris' });
 
-      expect(trees.tallies.map((t) => t.done)).toEqual([3, 3]);
+      expect(read.tally.done).toBe(3);
       expect(built.count).toBe(1);
     } finally {
       built.restore();
@@ -453,6 +473,7 @@ describe('readPlanTrees — the board', () => {
     // P3 and building are up next, queued in flight; choose and on a person need the operator.
     expect(tallies[0]).toMatchObject({
       rootId: root.nodeId,
+      state: 'needs_you',
       steps: 7,
       needsYou: 2,
       inFlight: 1,
@@ -462,6 +483,7 @@ describe('readPlanTrees — the board', () => {
     });
     expect(tallies[1]).toEqual({
       rootId: other.nodeId,
+      state: 'empty',
       steps: 0,
       needsYou: 0,
       inFlight: 0,
@@ -633,6 +655,195 @@ describe('readPlanTrees — the board', () => {
     let depth = 0;
     for (let at = trees.roots[0]; at?.children[0] !== undefined; at = at.children[0]) depth++;
     expect(depth).toBe(PLAN_TREE_DEPTH_LIMIT);
+  });
+});
+
+describe('readPlanBoard — scoped to one root', () => {
+  it('returns no other root’s nodes, and only that root’s tally', async () => {
+    const mine = await node('Plan 332', { position: 0 });
+    const step = await node('P3', { parentId: mine.nodeId });
+    await node('P3.1', { parentId: step.nodeId });
+    const other = await node('Plan 331', { position: 1 });
+    const otherStep = await node('P1', { parentId: other.nodeId });
+    store.runs.push(inFlightRun('r-other', otherStep.nodeId, 'running'));
+
+    const read = await board(mine.nodeId);
+
+    expect(titles([read.root])).toEqual([{ 'Plan 332': [{ P3: ['P3.1'] }] }]);
+    const ids = JSON.stringify(read);
+    expect(ids).not.toContain(other.nodeId);
+    expect(ids).not.toContain(otherStep.nodeId);
+    expect(read.tally).toMatchObject({ rootId: mine.nodeId, steps: 2, inFlight: 0, upNext: 2 });
+  });
+
+  it('finds no plan for a step’s id, a root of another space, or an id the space never held', async () => {
+    const root = await node('Plan 332');
+    const step = await node('P3', { parentId: root.nodeId });
+    const foreign = await node('elsewhere', {}, OTHER_SPACE);
+
+    for (const id of [step.nodeId, foreign.nodeId, '00000000-0000-4000-8000-0000000000ee']) {
+      const result = await readPlanBoard({ store, spaceId: SPACE }, id);
+      expect(result).toMatchObject({ ok: false, code: 'PLAN_NODE_NOT_FOUND' });
+    }
+  });
+});
+
+describe('planRootState — a plan’s state (Plan 332 D3)', () => {
+  const none = { steps: 0, needsYou: 0, inFlight: 0, upNext: 0 };
+
+  it('reads each state by its rule, the first that holds deciding', () => {
+    expect(planRootState('done', { ...none, steps: 3, needsYou: 1 })).toBe('closed');
+    expect(planRootState('dropped', none)).toBe('closed');
+    expect(planRootState('active', { ...none, steps: 2, needsYou: 1, upNext: 1 })).toBe(
+      'needs_you',
+    );
+    expect(planRootState('active', { ...none, steps: 2, inFlight: 1, upNext: 1 })).toBe(
+      'in_flight',
+    );
+    expect(planRootState('active', { ...none, steps: 2, upNext: 1 })).toBe('queued');
+    expect(planRootState('active', { ...none, steps: 2 })).toBe('finished');
+    expect(planRootState('active', none)).toBe('empty');
+  });
+
+  it('reads a plan both needing the operator and in flight as needs_you', () => {
+    expect(planRootState('active', { steps: 2, needsYou: 1, inFlight: 1, upNext: 0 })).toBe(
+      'needs_you',
+    );
+  });
+
+  it('reads a blocked or waiting root by its steps, not by its own status', () => {
+    expect(planRootState('blocked', { ...none, steps: 1, upNext: 1 })).toBe('queued');
+    expect(planRootState('waiting', { ...none, steps: 1 })).toBe('finished');
+  });
+});
+
+describe('readPlanOverview — the plans as rows', () => {
+  it('reads an empty space as no rows', async () => {
+    expect(await rows()).toEqual({ roots: [] });
+  });
+
+  it('derives every state on the server from the plan’s own steps', async () => {
+    const closed = await node('closed', { position: 0 });
+    await node('open under closed', { parentId: closed.nodeId });
+    await close(closed, 'done');
+
+    const needsYou = await node('needs you and in flight', { position: 1 });
+    store.seed(SPACE, { parentId: needsYou.nodeId, title: 'a stop', status: 'blocked' });
+    const running = await node('running', { parentId: needsYou.nodeId, position: 1 });
+    store.runs.push(inFlightRun('r1', running.nodeId, 'running'));
+
+    const inFlight = await node('in flight', { position: 2 });
+    store.seed(SPACE, { parentId: inFlight.nodeId, title: 'on a run', status: 'waiting' });
+    await node('after it', { parentId: inFlight.nodeId, position: 1 });
+
+    const queued = await node('queued', { position: 3 });
+    await node('approved', { parentId: queued.nodeId });
+    await close(await node('landed', { parentId: queued.nodeId, position: 1 }), 'done');
+
+    const finished = await node('finished', { position: 4 });
+    await close(await node('landed', { parentId: finished.nodeId }), 'done');
+    await close(await node('let go', { parentId: finished.nodeId, position: 1 }), 'dropped');
+
+    await node('empty', { position: 5 });
+
+    const read = await rows();
+
+    expect(read.roots.map((r) => [r.title, r.state])).toEqual([
+      ['closed', 'closed'],
+      ['needs you and in flight', 'needs_you'],
+      ['in flight', 'in_flight'],
+      ['queued', 'queued'],
+      ['finished', 'finished'],
+      ['empty', 'empty'],
+    ]);
+    // Both counts on the row of a plan that needs the operator while a run is on it.
+    expect(read.roots[1]?.counts).toEqual({
+      steps: 2,
+      needsYou: 1,
+      inFlight: 1,
+      upNext: 0,
+      done: 0,
+      dropped: 0,
+    });
+    // Finished is not a status: the root stays open until the operator closes it.
+    expect(read.roots[4]).toMatchObject({
+      status: 'active',
+      counts: { steps: 2, done: 1, dropped: 1 },
+    });
+  });
+
+  it('lists every root by position, open and closed, with its revision and its newest write', async () => {
+    const later = store.seed(SPACE, {
+      title: 'second',
+      position: 5,
+      updatedAt: '2026-10-01T00:00:00.000Z',
+    });
+    const first = store.seed(SPACE, {
+      title: 'first',
+      position: 1,
+      revision: 4,
+      updatedAt: '2026-10-02T00:00:00.000Z',
+    });
+    store.seed(SPACE, {
+      parentId: later.nodeId,
+      title: 'written last',
+      updatedAt: '2026-10-20T00:00:00.000Z',
+    });
+    store.seed(SPACE, {
+      title: 'gone',
+      position: 3,
+      status: 'dropped',
+      closedAt: '2026-10-03T00:00:00.000Z',
+    });
+    await node('elsewhere', {}, OTHER_SPACE);
+
+    const read = await rows();
+
+    expect(read.roots.map((r) => [r.title, r.position, r.status])).toEqual([
+      ['first', 1, 'active'],
+      ['gone', 3, 'dropped'],
+      ['second', 5, 'active'],
+    ]);
+    expect(read.roots[0]).toMatchObject({
+      nodeId: first.nodeId,
+      revision: 4,
+      lastWrittenAt: '2026-10-02T00:00:00.000Z',
+    });
+    expect(read.roots[2]?.lastWrittenAt).toBe('2026-10-20T00:00:00.000Z');
+  });
+
+  it('counts each row by the same rule as its board’s tally', async () => {
+    const root = await node('Plan 320');
+    const p6 = await node('P6', { parentId: root.nodeId });
+    await node('P6.a', { parentId: p6.nodeId });
+    const running = await node('running', { parentId: root.nodeId, position: 5 });
+    store.runs.push(inFlightRun('r7', running.nodeId, 'running'));
+    await close(p6, 'done');
+
+    const [row] = (await rows()).roots;
+    const { tally } = await board(root.nodeId);
+
+    expect(row?.state).toBe(tally.state);
+    expect(row?.counts).toEqual({
+      steps: tally.steps,
+      needsYou: tally.needsYou,
+      inFlight: tally.inFlight,
+      upNext: tally.upNext,
+      done: tally.done,
+      dropped: tally.dropped,
+    });
+  });
+
+  it(`counts short past depth ${String(PLAN_TREE_DEPTH_LIMIT)} and names the bound`, async () => {
+    let parent = store.seed(SPACE, { title: 'level 0' });
+    for (let depth = 1; depth <= PLAN_TREE_DEPTH_LIMIT + 1; depth++) {
+      parent = store.seed(SPACE, { parentId: parent.nodeId, title: `level ${String(depth)}` });
+    }
+
+    const read = await rows();
+
+    expect(read.truncated).toEqual({ bound: 'depth', value: PLAN_TREE_DEPTH_LIMIT });
+    expect(read.roots[0]?.counts.steps).toBe(PLAN_TREE_DEPTH_LIMIT);
   });
 });
 

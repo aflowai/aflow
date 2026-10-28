@@ -66,7 +66,7 @@ A wake acts on decisions until the board answers only `wait`, or the wake's budg
 
 ## 4. What it affects
 
-- `packages/cybernetic-runtime` — `plan/stream.ts`: `plan.node.next` without a root (D2), the cross-board order (D3), the `publish` decision (D3.1), the node spend stop (D4), and from P2 the asked-once rule and the `recalibrate` answer; `plan/streamReads.ts`: a commission's completion and its publication by run id, and the spend of a node's runs; the D7 read beside `readPlanTrees`.
+- `packages/cybernetic-runtime` — `plan/stream.ts`: `plan.node.next` without a root (D2), the cross-board order (D3), the `publish` decision (D3.1), the node spend stop (D4), and from P2 the asked-once rule and the `recalibrate` answer; `plan/streamReads.ts`: a commission's completion and its publication by run id, and the spend of a node's runs; the D7 read beside `readPlanOverview`.
 - `packages/schemas` — `operations/plan/schemas.ts`: `plan.node.next`'s optional `rootNodeId`, the board-wide answer, `publish`, the resident schedule's input beside `planStreamScheduleInput`; the open write of D5 is Plan 332's `PlanNodeOpenSchema`, not a grown `PlanNodeCloseSchema`; the D7 read's output.
 - `apps/aflow-orchestrator` — `ScheduleEvaluator.ts`: an occurrence skipped while the schedule's previous run is in flight (D1); the informational wake and the space's pending mark at a run's end (`completeRun`, `packages/cybernetic-runtime/src/ledger/runs.ts`, which already links the run to its node) and at a node write (D4); `handlers/inlineOps/plan/stream.ts` for the operation's new shape.
 - `packages/server-runtime` — `routes/plan.ts`: the `blocked → active` write, a person's only; the D7 read's route.

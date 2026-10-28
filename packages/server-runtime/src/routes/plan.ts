@@ -19,8 +19,9 @@ import {
   PlanNodeRefusalDetailsSchema,
   PlanNodeUpdateOutputSchema,
   PlanNodeWriteRefusalSchema,
-  PlanTreeOutputSchema,
-  PlanTreeQuerySchema,
+  PlanBoardOutputSchema,
+  PlanBoardQuerySchema,
+  PlanOverviewOutputSchema,
   type PlanNodeStatus,
   type PlanNodeWriteRefusal,
 } from '@aflow/schemas';
@@ -28,8 +29,9 @@ import {
   createPlanNodeStore,
   openPlanNode,
   placePlanNode,
+  readPlanBoard,
   readPlanNodeDetail,
-  readPlanTrees,
+  readPlanOverview,
   updatePlanNode,
   type PlanOpError,
   type PlanWriteContext,
@@ -134,6 +136,15 @@ const PLAN_WRITE_AUTHZ = {
   },
 } as const;
 
+const PLAN_READ_AUTHZ = {
+  authz: {
+    resource: 'space',
+    action: 'read',
+    resourceIdFrom: 'param',
+    resourceIdParam: 'spaceId',
+  },
+} as const;
+
 const PlanWriteParamsSchema = z.object({ spaceId: z.string().uuid(), nodeId: z.string().uuid() });
 
 const PLAN_WRITE_RESPONSES = {
@@ -226,41 +237,64 @@ export const planRoutes: FastifyPluginAsync = async (fastify) => {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
   app.addHook('preHandler', app.authenticate);
 
+  // Plan 332 D7's rows: the plan list reads every root with its state and its
+  // steps' counts, and no step.
   app.get(
     '/:spaceId/plan',
     {
-      config: {
-        authz: {
-          resource: 'space',
-          action: 'read',
-          resourceIdFrom: 'param',
-          resourceIdParam: 'spaceId',
-        },
-      },
+      config: PLAN_READ_AUTHZ,
       schema: {
         tags: ['Spaces'],
         summary:
-          "The space's plan as a board: every tree, each node nested under its parent with its counts, rounds, owner and newest pull request, and each plan's tallies with its done nodes by day",
+          "The space's plans as rows: every root by position with its state and its steps counted by the board's columns",
         params: z.object({ spaceId: z.string().uuid() }),
-        querystring: PlanTreeQuerySchema,
-        response: { 200: PlanTreeOutputSchema },
+        querystring: z.object({}).strict(),
+        response: { 200: PlanOverviewOutputSchema },
       },
     },
     async (request) => {
       const tenant = await request.requireTenant();
-      const { spaceId } = request.params;
+      const store = createPlanNodeStore(
+        fastify.appContext.db as PostgresJsDatabase,
+        tenant.tenantId,
+      );
+      return readPlanOverview({ store, spaceId: request.params.spaceId });
+    },
+  );
+
+  app.get(
+    '/:spaceId/plan/roots/:rootId',
+    {
+      config: PLAN_READ_AUTHZ,
+      schema: {
+        tags: ['Spaces'],
+        summary:
+          "One plan as a board: its root and every node under it nested with its counts, rounds and newest pull request, and the plan's tally with its state and its done nodes by day",
+        params: z.object({ spaceId: z.string().uuid(), rootId: z.string().uuid() }),
+        querystring: PlanBoardQuerySchema,
+        response: { 200: PlanBoardOutputSchema, 404: PlanNodeWriteRefusalSchema },
+      },
+    },
+    async (request, reply) => {
+      const tenant = await request.requireTenant();
+      const { spaceId, rootId } = request.params;
       const store = createPlanNodeStore(
         fastify.appContext.db as PostgresJsDatabase,
         tenant.tenantId,
       );
       const { closedSince, tz } = request.query;
-      return readPlanTrees(
-        { store, spaceId },
-        {
-          ...(closedSince !== undefined ? { closedSince } : {}),
-          ...(tz !== undefined ? { tz } : {}),
-        },
-      );
+      const result = await readPlanBoard({ store, spaceId }, rootId, {
+        ...(closedSince !== undefined ? { closedSince } : {}),
+        ...(tz !== undefined ? { tz } : {}),
+      });
+      if (!result.ok) {
+        return reply.status(404).send({
+          error: result.code,
+          message: 'This plan is not in the space any more.',
+        });
+      }
+      const { ok: _ok, ...board } = result;
+      return board;
     },
   );
 
