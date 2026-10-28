@@ -54,7 +54,8 @@ describe('help catalog integrity', () => {
     expect(article?.body).toContain(
       'The current blocked step of each stream raises an Action Center item',
     );
-    expect(article?.body).toContain('a separate blocked live check waits on a read');
+    expect(article?.body).toContain('a separate blocked live check waits on you to read');
+    expect(article?.body).toContain('The folder read does not run automatically.');
     expect(article?.body).not.toContain('never asks whether your folder holds the merge');
   });
   it('has unique article ids', () => {

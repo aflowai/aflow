@@ -283,12 +283,15 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
       : Math.min(Math.max(...siblings.map((n) => n.position)) + 1, PLAN_NODE_POSITION_MAX);
   }
 
-  listChildren: PlanNodeStore['listChildren'] = (spaceId, parentId, limit) => {
+  listChildren: PlanNodeStore['listChildren'] = (spaceId, parentId, limit, offset = 0) => {
     const children = this.inSpace(spaceId)
       .filter((n) => n.parentId === parentId)
       .map((n) => this.summary(n))
       .sort(bySiblingOrder);
-    return Promise.resolve({ children: children.slice(0, limit), total: children.length });
+    return Promise.resolve({
+      children: children.slice(offset, offset + limit),
+      total: children.length,
+    });
   };
 
   walk: PlanNodeStore['walk'] = (spaceId, opts) => this.walkOf(this.inSpace(spaceId), opts);

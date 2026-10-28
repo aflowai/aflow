@@ -127,7 +127,7 @@ function emittedOutput(): unknown {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockGetSessionState.mockResolvedValue({ trigger: 'user' });
+  mockGetSessionState.mockResolvedValue({ trigger: 'chat' });
   mockResidentMarker.mockResolvedValue(null);
   mockGetSessionStateSafe.mockResolvedValue({ ok: true, state: { createdBy: OPERATOR } });
   mockReadDurableSessionCreatedBy.mockResolvedValue(undefined);
@@ -138,7 +138,12 @@ describe('plan.node.update', () => {
     [{ trigger: 'schedule' }, null, true],
     [{ trigger: 'schedule' }, 'other-run@123', true],
     [{}, null, true],
-    [{ trigger: 'user' }, `${SESSION}@123`, false],
+    [{ trigger: 'webhook', activatedByPerson: true }, null, true],
+    [{ trigger: 'api', activatedByPerson: false }, null, true],
+    [{ trigger: 'mcp', activatedByPerson: false }, null, true],
+    [{ trigger: 'eval' }, null, true],
+    [{ trigger: 'voice' }, null, false],
+    [{ trigger: 'chat' }, `${SESSION}@123`, false],
     [null, null, true],
   ])(
     'derives authority from immutable provenance and fails closed without it (%j)',

@@ -1,3 +1,4 @@
+import { isFindingsCarrier } from './carrier.js';
 /**
  * A stream continues on a schedule (Plan 322 P2b), and the space's resident
  * takes the whole board (Plan 331 D2). A wake is a Helmsman run whose first
@@ -1004,7 +1005,10 @@ export async function nextOnPlanBoard(
         rootId: candidate.nodeId,
       });
       const declined = history.nodes.some(
-        (node) => node.status === 'dropped' && node.noteHead?.startsWith(PLAN_NODE_PROPOSED_HEAD),
+        (node) =>
+          node.status === 'dropped' &&
+          node.noteHead?.startsWith(PLAN_NODE_PROPOSED_HEAD) &&
+          !isFindingsCarrier(node.noteHead),
       );
       if (root?.status !== 'active' || declined) continue;
       proposal = {

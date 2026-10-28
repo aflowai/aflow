@@ -341,13 +341,13 @@ async function nodeWritten<T extends { node: PlanNode }>(
 // plan.node.create
 // ============================================================================
 
-/** A live check's first line: what read of the folder it waits on (Plan 331 D8). */
+/** Plan 331 D8 leaves the folder read with the operator; no automatic reader is scheduled. */
 export function liveCheckHead(check: PlanNodeLiveCheck): string {
   const holding =
     check.mergeCommitSha !== undefined
       ? `${check.mergeCommitSha}, the merge of ${check.pullRequest}`
       : `the merge of ${check.pullRequest}`;
-  return `${PLAN_NODE_LIVE_CHECK_HEAD}waits on a read of the connected folder's head holding ${holding} (host.binding.inspect with \`holds\`); the merged step closed on its merge.`;
+  return `${PLAN_NODE_LIVE_CHECK_HEAD}waits on a person to read the connected folder's head holding ${holding} (host.binding.inspect with \`holds\`); the merged step closed on its merge.`;
 }
 
 function residentCreates(): PlanOpError {
@@ -444,16 +444,22 @@ async function proposeCarrier(
   ctx: PlanWriteContext,
   closed: PlanNode,
 ): Promise<PlanNode | undefined> {
-  const siblings =
-    closed.parentId !== null
-      ? (await ctx.store.listChildren(ctx.spaceId, closed.parentId, PLAN_NODE_CHILDREN_LIMIT))
-          .children
-      : (await ctx.store.walk(ctx.spaceId, { maxDepth: 0, maxNodes: PLAN_TREE_WALK_NODE_LIMIT }))
-          .nodes;
-  const fullSiblings = await Promise.all(
-    siblings.map((sibling) => ctx.store.find(ctx.spaceId, sibling.nodeId)),
-  );
-  const carriers = fullSiblings.filter((node): node is PlanNode => node !== null);
+  const carriers: PlanNode[] = [];
+  let offset = 0;
+  for (;;) {
+    const page = await ctx.store.listChildren(
+      ctx.spaceId,
+      closed.parentId,
+      PLAN_NODE_CHILDREN_LIMIT,
+      offset,
+    );
+    const nodes = await Promise.all(
+      page.children.map((sibling) => ctx.store.find(ctx.spaceId, sibling.nodeId)),
+    );
+    carriers.push(...nodes.filter((node): node is PlanNode => node !== null));
+    offset += page.children.length;
+    if (offset >= page.total || page.children.length === 0) break;
+  }
   const findings: PlanNodeLink[] = [];
   let uncarried = 0;
   let after: PlanLinkPageKey | undefined;

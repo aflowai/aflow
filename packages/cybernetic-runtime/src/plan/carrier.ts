@@ -11,6 +11,7 @@
  */
 import {
   PLAN_NODE_PROPOSED_HEAD,
+  PLAN_NODE_PROSE_MAX_CHARS,
   PLAN_NODE_TITLE_MAX_CHARS,
   type PlanNode,
   type PlanNodeLink,
@@ -23,6 +24,12 @@ export const PLAN_CARRIER_FINDINGS_LIMIT = 50;
 /** The carrier's first line: proposed, and which closed node it carries for. */
 export function carrierHead(closed: Pick<PlanNode, 'nodeId' | 'title'>): string {
   return `${carrierPrefix(closed.nodeId)} ("${closed.title}"); approve it to have them fixed.`;
+}
+
+export function isFindingsCarrier(note: string | null | undefined): boolean {
+  return (
+    note?.startsWith(`${PLAN_NODE_PROPOSED_HEAD}carries the findings left open when step `) === true
+  );
 }
 
 function carrierPrefix(nodeId: string): string {
@@ -64,6 +71,8 @@ export function carrierNode(
   const title = `Carry the open findings of "${closed.title}"`;
   const lines = findings.map(findingLine);
   if (more > 0) lines.push(`- and ${String(more)} more linked to step ${closed.nodeId}`);
+  const goal = `Fix the findings "${closed.title}" closed with still open, or settle with the operator that one is not to be fixed:\n${lines.join('\n')}`;
+  const overflow = `…\nSee the findings linked to step ${closed.nodeId} for the full text.`;
   return {
     parentId: closed.parentId,
     kind: 'execute',
@@ -71,7 +80,10 @@ export function carrierNode(
       title.length <= PLAN_NODE_TITLE_MAX_CHARS
         ? title
         : `${title.slice(0, PLAN_NODE_TITLE_MAX_CHARS - 1)}…`,
-    goal: `Fix the findings "${closed.title}" closed with still open, or settle with the operator that one is not to be fixed:\n${lines.join('\n')}`,
+    goal:
+      goal.length <= PLAN_NODE_PROSE_MAX_CHARS
+        ? goal
+        : `${goal.slice(0, PLAN_NODE_PROSE_MAX_CHARS - overflow.length)}${overflow}`,
     criteria:
       'Each finding the goal lists is fixed by a merged change, or the operator has said it is not to be fixed.',
     note: carrierHead(closed),

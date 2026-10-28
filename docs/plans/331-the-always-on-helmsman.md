@@ -132,3 +132,5 @@ operator conversation retains publication of its own commissions. Resident event
 dispatch uses the shared schedule outbox insert.
 
 Round 7: the operator open route resets the spend window; the unused blocked-to-active update reset was removed in round 9. A later node write or Approve supersedes a conversation-owned completed commission awaiting publication; resident-owned patches retain their publication claim across Approve. The plan rail accepts an optional spend ceiling in cents on Approve and Reopen; leaving it blank preserves the ceiling.
+
+- _Review round 7._ Only a dropped proposal declines further proposals for its root; dropped findings carriers do not. Carrier selection pages all siblings, including root siblings, and bounds composed goals to the node storage ceiling with a pointer to full linked findings. Non-person trigger surfaces retain restricted write authority. Per D8, live checks explicitly wait for a person to perform the connected-folder read; no automatic reader is promised. Recalibrate gating remains unchanged.

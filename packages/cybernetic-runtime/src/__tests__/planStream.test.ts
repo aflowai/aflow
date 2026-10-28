@@ -3,6 +3,8 @@ import Redis from 'ioredis-mock';
 import type { Redis as RedisType } from 'ioredis';
 import {
   getOperation,
+  PLAN_NODE_PROSE_MAX_CHARS,
+  PlanNodeSchema,
   PLAN_NODE_LINKS_LIMIT,
   PLAN_NODE_NEXT_OPERATION_ID,
   PLAN_STREAM_ATTEMPTS_DEFAULT,
@@ -37,6 +39,7 @@ import {
   type PlanStreamReads,
 } from '../plan/stream.js';
 import { InMemoryPlanNodeStore } from './planStoreFake.js';
+import { carrierNode } from '../plan/carrier.js';
 import { listAskedNodes } from '../plan/asks.js';
 
 const TENANT = 'a0000000-0000-4000-8000-000000000322';
@@ -942,11 +945,46 @@ describe('resident asking and proposing', () => {
     expect(await wake()).toHaveProperty('propose');
   });
 
+  it('a dropped findings carrier does not decline proposals for its root', async () => {
+    const root = await created();
+    const step = await created({ parentId: root.nodeId });
+    await linkPlanNode(session(), { nodeId: step.nodeId, kind: 'finding', ref: 'open' });
+    const closed = await updatePlanNode(session(), {
+      nodeId: step.nodeId,
+      expectedRevision: step.revision,
+      status: 'done',
+      outcome: 'Merged',
+    });
+    if (!closed.ok || !closed.carrier) throw new Error('No carrier');
+    await write(closed.carrier.nodeId, { status: 'dropped' });
+    expect(await wake()).toHaveProperty('propose');
+  });
+
+  it('bounds carrier goals while keeping a pointer to complete findings', async () => {
+    const step = await created();
+    const finding = {
+      nodeId: step.nodeId,
+      kind: 'finding' as const,
+      ref: 'ref',
+      label: 'x'.repeat(64000),
+      createdAt: step.createdAt,
+    };
+    const carrier = carrierNode(
+      step,
+      Array.from({ length: 50 }, () => finding),
+      5,
+    );
+    expect(carrier.goal.length).toBeLessThanOrEqual(PLAN_NODE_PROSE_MAX_CHARS);
+    expect(carrier.goal).toContain('See the findings linked to step ' + step.nodeId);
+    expect(PlanNodeSchema.safeParse({ ...step, ...carrier }).success).toBe(true);
+  });
+
   it.each([0, 49, 50, 60])(
     'counts only uncarried findings across pages (%s new)',
     async (fresh) => {
       const root = await created();
       const step = await created({ parentId: root.nodeId });
+      for (let i = 0; i < 105; i++) store.seed(SPACE, { parentId: root.nodeId, status: 'done' });
       for (let i = 0; i < 55; i++) {
         await linkPlanNode(session(), {
           nodeId: step.nodeId,
@@ -1025,6 +1063,7 @@ describe('resident asking and proposing', () => {
       if (answer.decision !== 'record_merge') throw new Error('expected merge');
       const check = await createPlanNode(session(), answer.liveCheck);
       if (!check.ok) throw new Error(check.message);
+      expect(check.node.note).toContain('waits on a person to read');
       expect(check.node.parentId).toBe(node.parentId);
       // Even before the close lands, the new sibling cannot hide the merged node.
       expect(await fire(root.nodeId, (url) => merged(url, mergedAt))).toMatchObject({

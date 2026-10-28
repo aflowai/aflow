@@ -252,8 +252,9 @@ export interface PlanNodeStore {
   ): Promise<PlanNodePlaceWrite>;
   listChildren(
     spaceId: string,
-    parentId: string,
+    parentId: string | null,
     limit: number,
+    offset?: number,
   ): Promise<{ children: PlanNodeSummary[]; total: number }>;
   walk(spaceId: string, opts: PlanTreeWalkOptions): Promise<PlanTreeWalk>;
   /**
@@ -836,15 +837,19 @@ export function createPlanNodeStore(db: PostgresJsDatabase, tenantId: string): P
     placeAtRevision: (spaceId, nodeId, expectedRevision, anchor) =>
       retryingDeadlocks(() => placeOnce(spaceId, nodeId, expectedRevision, anchor)),
 
-    listChildren: (spaceId, parentId, limit) =>
+    listChildren: (spaceId, parentId, limit, offset = 0) =>
       inTenant(async (tx) => {
-        const where = and(eq(planNodes.spaceId, spaceId), eq(planNodes.parentId, parentId));
+        const where = and(
+          eq(planNodes.spaceId, spaceId),
+          parentId === null ? isNull(planNodes.parentId) : eq(planNodes.parentId, parentId),
+        );
         const rows = await tx
           .select(summaryColumns())
           .from(planNodes)
           .where(where)
           .orderBy(...siblingOrder())
-          .limit(limit);
+          .limit(limit)
+          .offset(offset);
         const [count] = await tx
           .select({ total: sql<number>`count(*)::int` })
           .from(planNodes)
