@@ -59,7 +59,12 @@ import {
   encodePlanLinkCursor,
   type PlanBoardOptions,
 } from './board.js';
-import type { PlanNodePatch, PlanNodeStore, PlanPlacementRefusal } from './store.js';
+import type {
+  PlanLinkPageKey,
+  PlanNodePatch,
+  PlanNodeStore,
+  PlanPlacementRefusal,
+} from './store.js';
 import type { PlanPlaceAnchor } from './placement.js';
 import { carrierNode, findingsToCarry, PLAN_CARRIER_FINDINGS_LIMIT } from './carrier.js';
 
@@ -361,7 +366,7 @@ function residentUnblocks(current: PlanNode): PlanOpError {
     ok: false,
     code: 'PLAN_NODE_RESIDENT_SCOPE',
     message:
-      `Plan node "${current.title}" is ${current.status}, and only a person approves or reopens it — Approve on the plan ` +
+      `Plan node "${current.title}" is ${current.status}, and only a person approves, closes or reopens it — Approve on the plan ` +
       'page or in the Action Center. A resident wake writes what the node waits on in its note and leaves its ' +
       'status as it stands; nothing was written.',
     details: { nodeId: current.nodeId, status: current.status },
@@ -439,11 +444,6 @@ async function proposeCarrier(
   ctx: PlanWriteContext,
   closed: PlanNode,
 ): Promise<PlanNode | undefined> {
-  const page = await ctx.store.pageLinks(ctx.spaceId, closed.nodeId, {
-    kind: 'finding',
-    limit: PLAN_CARRIER_FINDINGS_LIMIT,
-  });
-  if (page.links.length === 0) return undefined;
   const siblings =
     closed.parentId !== null
       ? (await ctx.store.listChildren(ctx.spaceId, closed.parentId, PLAN_NODE_CHILDREN_LIMIT))
@@ -453,13 +453,23 @@ async function proposeCarrier(
   const fullSiblings = await Promise.all(
     siblings.map((sibling) => ctx.store.find(ctx.spaceId, sibling.nodeId)),
   );
-  const findings = findingsToCarry(
-    page.links,
-    fullSiblings.filter((node): node is PlanNode => node !== null),
-    closed.nodeId,
-  );
+  const carriers = fullSiblings.filter((node): node is PlanNode => node !== null);
+  const findings: PlanNodeLink[] = [];
+  let uncarried = 0;
+  let after: PlanLinkPageKey | undefined;
+  do {
+    const page = await ctx.store.pageLinks(ctx.spaceId, closed.nodeId, {
+      kind: 'finding',
+      limit: PLAN_CARRIER_FINDINGS_LIMIT,
+      ...(after !== undefined ? { after } : {}),
+    });
+    const fresh = findingsToCarry(page.links, carriers, closed.nodeId);
+    uncarried += fresh.length;
+    findings.push(...fresh.slice(0, PLAN_CARRIER_FINDINGS_LIMIT - findings.length));
+    after = page.next;
+  } while (after !== undefined);
   if (findings.length === 0) return undefined;
-  const more = findings.length === page.links.length ? page.total - page.links.length : 0;
+  const more = uncarried - findings.length;
   const inserted = await ctx.store.insert(ctx.spaceId, {
     ...carrierNode(closed, findings, more),
     createdBy: ctx.createdBy ?? null,
@@ -487,8 +497,8 @@ async function writePlanNode(
   if (
     ctx.resident === true &&
     (current.status === 'blocked' || isClosedPlanNodeStatus(current.status)) &&
-    (current.status !== 'blocked' || status !== 'blocked') &&
-    !isClosedPlanNodeStatus(status)
+    (input.status !== undefined || input.outcome !== undefined) &&
+    !(current.status === 'blocked' && status === 'blocked' && input.outcome === undefined)
   ) {
     return residentUnblocks(current);
   }

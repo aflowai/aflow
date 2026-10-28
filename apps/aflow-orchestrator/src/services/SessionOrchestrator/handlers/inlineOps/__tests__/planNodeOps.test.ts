@@ -135,11 +135,13 @@ beforeEach(() => {
 
 describe('plan.node.update', () => {
   it.each([
-    [{ trigger: 'schedule' }, null, false],
-    [{ trigger: 'user' }, `${SESSION}@123`, true],
+    [{ trigger: 'schedule' }, null, true],
+    [{ trigger: 'schedule' }, 'other-run@123', true],
+    [{}, null, true],
+    [{ trigger: 'user' }, `${SESSION}@123`, false],
     [null, null, true],
   ])(
-    'derives authority from the resident marker and fails closed without hot state (%j)',
+    'derives authority from immutable provenance and fails closed without it (%j)',
     async (state, marker, resident) => {
       mockGetSessionState.mockResolvedValueOnce(state);
       mockResidentMarker.mockResolvedValueOnce(marker);

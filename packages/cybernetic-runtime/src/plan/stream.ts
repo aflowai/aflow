@@ -997,14 +997,16 @@ export async function nextOnPlanBoard(
     !open.nodes.some((node) => node.status === 'blocked' || node.status === 'waiting') &&
     [...waits.keys()].every((cause) => cause === 'stream_closed')
   ) {
-    const root = await ctx.store.find(ctx.spaceId, roots[0].nodeId);
-    const history = await ctx.store.walk(ctx.spaceId, PLAN_TREE_WALK_BOUNDS);
-    const declined =
-      history.truncated !== undefined ||
-      history.nodes.some(
+    for (const candidate of roots) {
+      const root = await ctx.store.find(ctx.spaceId, candidate.nodeId);
+      const history = await ctx.store.walk(ctx.spaceId, {
+        ...PLAN_TREE_WALK_BOUNDS,
+        rootId: candidate.nodeId,
+      });
+      const declined = history.nodes.some(
         (node) => node.status === 'dropped' && node.noteHead?.startsWith(PLAN_NODE_PROPOSED_HEAD),
       );
-    if (root?.status === 'active' && !declined)
+      if (root?.status !== 'active' || declined) continue;
       proposal = {
         reason:
           'No approved work is actionable; propose at most one next step toward this open root for operator approval.',
@@ -1012,6 +1014,8 @@ export async function nextOnPlanBoard(
         goal: root.goal,
         criteria: root.criteria,
       };
+      break;
+    }
   }
 
   return {

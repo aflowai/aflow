@@ -875,6 +875,126 @@ describe('resident asking and proposing', () => {
     },
   );
 
+  it.each(['blocked', 'done', 'dropped'] as const)(
+    'refuses resident settlement of %s scope but permits notes',
+    async (status) => {
+      const node = await created({ proposed: 'Needs approval' });
+      if (status !== 'blocked') await write(node.nodeId, { status, outcome: 'Operator closed' });
+      const before = await current(node.nodeId);
+      for (const close of ['done', 'dropped'] as const) {
+        expect(
+          await updatePlanNode(
+            { ...session(), resident: true },
+            {
+              nodeId: node.nodeId,
+              expectedRevision: before.revision,
+              status: close,
+              outcome: 'Self settled',
+            },
+          ),
+        ).toMatchObject({ ok: false, code: 'PLAN_NODE_RESIDENT_SCOPE' });
+      }
+      expect(await current(node.nodeId)).toEqual(before);
+      if (status !== 'blocked') {
+        expect(
+          await updatePlanNode(
+            { ...session(), resident: true },
+            {
+              nodeId: node.nodeId,
+              expectedRevision: before.revision,
+              outcome: 'Rewritten',
+            },
+          ),
+        ).toMatchObject({ ok: false, code: 'PLAN_NODE_RESIDENT_SCOPE' });
+      }
+      expect(
+        await updatePlanNode(
+          { ...session(), resident: true },
+          {
+            nodeId: node.nodeId,
+            expectedRevision: before.revision,
+            note: 'Waiting for operator',
+          },
+        ),
+      ).toMatchObject({ ok: true });
+    },
+  );
+
+  it('keeps a declined proposal local to its root and tries the next root', async () => {
+    const first = await created({ title: 'Declined root' });
+    const second = await created({ title: 'Eligible root' });
+    for (const root of [first, second]) {
+      const child = await created({ parentId: root.nodeId });
+      await write(child.nodeId, { status: 'done', outcome: 'Merged' });
+    }
+    const proposal = await created({ parentId: first.nodeId, proposed: 'Next scope' });
+    await write(proposal.nodeId, { status: 'dropped', outcome: 'Declined' });
+    expect(await wake()).toMatchObject({ propose: { title: second.title } });
+  });
+
+  it('does not suppress proposals when space history exceeds the walk limit', async () => {
+    const root = await created();
+    const child = await created({ parentId: root.nodeId });
+    await write(child.nodeId, { status: 'done', outcome: 'Merged' });
+    for (let i = 0; i <= PLAN_TREE_WALK_NODE_LIMIT; i++) {
+      store.seed(SPACE, { title: String(i), status: 'done' });
+    }
+    expect(await wake()).toHaveProperty('propose');
+  });
+
+  it.each([0, 49, 50, 60])(
+    'counts only uncarried findings across pages (%s new)',
+    async (fresh) => {
+      const root = await created();
+      const step = await created({ parentId: root.nodeId });
+      for (let i = 0; i < 55; i++) {
+        await linkPlanNode(session(), {
+          nodeId: step.nodeId,
+          kind: 'finding',
+          ref: 'old:' + String(i),
+        });
+      }
+      const closed = await updatePlanNode(session(), {
+        nodeId: step.nodeId,
+        expectedRevision: step.revision,
+        status: 'done',
+        outcome: 'Merged',
+      });
+      if (!closed.ok || !closed.carrier) throw new Error('No carrier');
+      expect(closed.carrier.goal).toContain('and 5 more');
+      // Separate the carrier watermark from findings that arrive after it.
+      store.nodes.set(closed.carrier.nodeId, {
+        ...closed.carrier,
+        createdAt: '2020-01-02T00:00:00.000Z',
+      });
+      for (const link of store.links) link.createdAt = '2020-01-01T00:00:00.000Z';
+      await write(step.nodeId, { status: 'active' });
+      for (let i = 0; i < fresh; i++) {
+        await linkPlanNode(session(), {
+          nodeId: step.nodeId,
+          kind: 'finding',
+          ref: 'new:' + String(i),
+        });
+      }
+      const pageLinks = vi.spyOn(store, 'pageLinks');
+      const again = await updatePlanNode(session(), {
+        nodeId: step.nodeId,
+        expectedRevision: (await current(step.nodeId)).revision,
+        status: 'done',
+        outcome: 'Merged again',
+      });
+      if (!again.ok) throw new Error(again.message);
+      expect(pageLinks.mock.calls.length).toBeGreaterThan(1);
+      if (fresh === 0) expect(again.carrier).toBeUndefined();
+      else {
+        expect(again.carrier?.goal).toContain('new:');
+        expect(again.carrier?.goal).not.toContain('old:');
+        if (fresh > 50) expect(again.carrier?.goal).toContain('and 10 more');
+        else expect(again.carrier?.goal).not.toContain('more linked');
+      }
+    },
+  );
+
   it('does not commission an exhausted root in either path beyond a child page', async () => {
     const root = await created();
     for (let i = 0; i < 105; i++) {
@@ -889,7 +1009,7 @@ describe('resident asking and proposing', () => {
     const child = await created({ parentId: root.nodeId });
     await write(child.nodeId, { status: 'done', outcome: 'Merged' });
     expect(await wake()).toHaveProperty('propose');
-    const proposal = await created({ proposed: 'Next scope' });
+    const proposal = await created({ parentId: root.nodeId, proposed: 'Next scope' });
     await write(proposal.nodeId, { status: 'dropped', outcome: 'Declined' });
     expect(await wake()).not.toHaveProperty('propose');
     expect(await wake({}, 'another-wake')).not.toHaveProperty('propose');
