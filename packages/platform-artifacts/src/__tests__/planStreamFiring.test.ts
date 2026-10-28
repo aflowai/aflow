@@ -9,7 +9,6 @@ import { describe, expect, it } from 'vitest';
 import {
   FlowScheduleCreateInputSchema,
   getOperation,
-  harnessPostureFor,
   isPlanResidentSchedule,
   PLAN_RESIDENT_SCHEDULE_CRON,
   PLAN_RESIDENT_SCHEDULE_VARIABLE,
@@ -132,15 +131,5 @@ describe('the resident schedule (Plan 331 D1)', () => {
       (v) => v.variableId === PLAN_RESIDENT_SCHEDULE_VARIABLE,
     );
     expect(declared).toMatchObject({ inputRole: 'config', lifecycle: { isInput: true } });
-  });
-});
-
-describe('the resident’s commissions stay open (Plan 328 D6, Plan 331 §6)', () => {
-  it('a commission a wake started compiles open on a trusted folder: a schedule’s exchange is no operator message', () => {
-    const wake = { activatedByPerson: false };
-    expect(harnessPostureFor('trusted', wake)).toBe('open');
-    expect(harnessPostureFor('open', wake)).toBe('open');
-    expect(harnessPostureFor('confined', wake)).toBe('confined');
-    expect(harnessPostureFor('trusted', { activatedByPerson: true })).toBe('trusted');
   });
 });

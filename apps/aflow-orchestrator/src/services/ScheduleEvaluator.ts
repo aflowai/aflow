@@ -39,6 +39,7 @@ import type {
 import {
   agentTargetKey,
   getNextCronFireTime,
+  isPlanResidentSchedule,
   backgroundTaskControlPlane,
   resolveInputTemplate,
   type BackgroundTaskMode,
@@ -48,9 +49,9 @@ import {
 } from '@aflow/schemas';
 import { createLeasedWorkConsumer, type LeasedWorkResult } from '@aflow/lib';
 import {
-  claimScheduleRun,
+  claimResidentWake,
   createResidentScheduleStore,
-  releaseScheduleRun,
+  releaseResidentWake,
   residentWakeEnded,
 } from '@aflow/cybernetic-runtime';
 import {
@@ -506,20 +507,22 @@ export class ScheduleEvaluator {
       return false;
     }
 
-    // The guard an event-driven resident wake takes too (Plan 331 D4), so a
-    // heartbeat and an event can never start two runs of one schedule. The
-    // advance's own guard fixes the occurrence's count, and so its run id.
+    // A resident heartbeat takes the space's wake guard, as an event-driven
+    // wake does (Plan 331 D4), so the two never start two wakes of one space.
+    // No other schedule takes it: overlapping firings of any other meet
+    // wherever their own work serialises (the shepherd's at the branch lease).
+    // The advance's own guard fixes the occurrence's count, and so its run id.
     let claimedRunId: string | null = null;
-    if (schedule.action === 'start_run' && schedule.kind === 'cron') {
+    if (isResidentHeartbeat(schedule)) {
       const runId = scheduleOccurrenceRunId(occurrenceKey(schedule.id, newFiringCount));
-      const claimed = await claimScheduleRun(
+      const claim = await claimResidentWake(
         this.redis,
         schedule.tenant_id,
-        { id: schedule.id, lastSessionId: schedule.last_session_id },
+        schedule.space_id,
         runId,
       );
-      if (!claimed) {
-        await this.skipOccurrence(schedule);
+      if (!claim.taken) {
+        await this.skipOccurrence(schedule, claim.inFlight);
         return false;
       }
       claimedRunId = runId;
@@ -531,7 +534,7 @@ export class ScheduleEvaluator {
       return fired;
     } finally {
       if (!fired && claimedRunId !== null) {
-        await releaseScheduleRun(this.redis, schedule.tenant_id, schedule.id, claimedRunId);
+        await releaseResidentWake(this.redis, schedule.tenant_id, schedule.space_id, claimedRunId);
       }
     }
   }
@@ -574,12 +577,12 @@ export class ScheduleEvaluator {
   }
 
   /**
-   * An occurrence whose schedule's previous run has not ended (Plan 331 D1):
+   * A resident heartbeat while the space's previous wake has not ended (Plan 331 D1):
    * recorded as skipped and not dispatched, and the schedule moves to its next
    * time from now, so nothing queues behind the run and nothing catches up
    * after it. A skip is not a firing and spends none of the schedule's cap.
    */
-  private async skipOccurrence(schedule: DueScheduleRow): Promise<void> {
+  private async skipOccurrence(schedule: DueScheduleRow, inFlight: string | null): Promise<void> {
     const nextFireAt =
       schedule.cron_expression !== null
         ? getNextCronFireTime(schedule.cron_expression, schedule.timezone)
@@ -603,7 +606,7 @@ export class ScheduleEvaluator {
           AND next_fire_at IS NOT DISTINCT FROM $6::timestamptz`,
       [
         nextFireAt,
-        schedule.last_session_id,
+        inFlight,
         schedule.id,
         schedule.firing_count,
         schedule.status,
@@ -611,7 +614,7 @@ export class ScheduleEvaluator {
       ],
     );
     getOrchestratorLogger().info(
-      `[ScheduleEvaluator] Skipped an occurrence of "${schedule.name}": its previous run ${String(schedule.last_session_id)} has not ended`,
+      `[ScheduleEvaluator] Skipped an occurrence of "${schedule.name}": the space's wake ${String(inFlight)} has not ended`,
       { scheduleId: schedule.id, tenantId: schedule.tenant_id },
     );
   }
@@ -735,7 +738,38 @@ export class ScheduleEvaluator {
 
   private async dispatchOne(row: ScheduleDispatchRow): Promise<LeasedWorkResult> {
     const item = row.dispatch as unknown as DispatchItem;
+    const result = await this.dispatchItem(item);
+    if (result.kind !== 'unworkable') return result;
+    // An occurrence that will never start a run gives back the resident wake
+    // guard it may hold, rather than holding the space's next wake for the
+    // guard's starting window. A no-op for any occurrence that holds none.
+    return {
+      kind: 'unworkable',
+      disposition: async () => {
+        try {
+          await releaseResidentWake(
+            this.redis,
+            item.tenantId,
+            item.spaceId,
+            scheduleOccurrenceRunId(item.idempotencyKey),
+          );
+        } catch (err) {
+          // The guard lapses on its own once its starting window passes.
+          logOrchestratorError(
+            '[ScheduleEvaluator] releasing the resident wake guard failed',
+            err,
+            {
+              scheduleId: item.scheduleId,
+              tenantId: item.tenantId,
+            },
+          );
+        }
+        return result.disposition();
+      },
+    };
+  }
 
+  private async dispatchItem(item: DispatchItem): Promise<LeasedWorkResult> {
     if (await this.isSpaceArchived(item)) {
       return {
         kind: 'unworkable',
@@ -1288,6 +1322,19 @@ function buildDispatchItem(
     creatorTenantRole: schedule.creator_tenant_role,
     creatorSpaceRole: schedule.creator_space_role,
   };
+}
+
+/** A cron occurrence of a space's resident schedule (Plan 331 D1): a heartbeat. */
+function isResidentHeartbeat(schedule: DueScheduleRow): boolean {
+  return (
+    schedule.action === 'start_run' &&
+    schedule.kind === 'cron' &&
+    isPlanResidentSchedule({
+      targetKind: schedule.target_kind,
+      targetSystemRole: schedule.target_system_role,
+      inputTemplate: schedule.input_template,
+    })
+  );
 }
 
 /** Names one firing of one schedule. The count comes from the advance itself. */

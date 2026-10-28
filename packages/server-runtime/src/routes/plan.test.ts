@@ -90,9 +90,10 @@ const TREES: PlanTreeOutput = {
     {
       rootId: ROOT_ID,
       steps: 2,
+      needsYou: 0,
+      inFlight: 0,
+      upNext: 0,
       done: 1,
-      active: 0,
-      decide: 0,
       dropped: 1,
       doneByDay: [{ day: '2026-10-05', count: 1 }],
     },

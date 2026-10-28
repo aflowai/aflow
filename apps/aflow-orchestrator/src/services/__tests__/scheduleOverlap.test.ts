@@ -19,7 +19,7 @@ vi.mock('@aflow/redis', async (importOriginal) => ({
 }));
 
 const { ScheduleEvaluator } = await import('../ScheduleEvaluator.js');
-const { requestResidentWake, residentPendingKey, scheduleStartingKey } =
+const { claimResidentWake, requestResidentWake, residentPendingKey, residentWakeKey } =
   await import('@aflow/cybernetic-runtime');
 type ResidentSchedule = import('@aflow/cybernetic-runtime').ResidentSchedule;
 type ScheduleDispatchItem = import('@aflow/database').ScheduleDispatchItem;
@@ -83,14 +83,22 @@ function residentRow() {
   };
 }
 
-async function occur(): Promise<boolean> {
-  const evaluator = new ScheduleEvaluator({
+interface EvaluatorSeams {
+  recordOccurrence(row: unknown): Promise<boolean>;
+  dispatchOne(row: unknown): Promise<{ kind: string; disposition?: () => Promise<boolean> }>;
+}
+
+function evaluator(): EvaluatorSeams {
+  return new ScheduleEvaluator({
     redis,
     sqlClient: sqlClient(),
     db: {} as never,
     mode: 'observe',
-  }) as unknown as { recordOccurrence(row: unknown): Promise<boolean> };
-  return evaluator.recordOccurrence(residentRow());
+  }) as unknown as EvaluatorSeams;
+}
+
+async function occur(row: unknown = residentRow()): Promise<boolean> {
+  return evaluator().recordOccurrence(row);
 }
 
 beforeEach(async () => {
@@ -101,8 +109,9 @@ beforeEach(async () => {
   transactions = 0;
 });
 
-describe('an occurrence while the previous run is in flight (Plan 331 D1)', () => {
+describe('a resident heartbeat while the space’s previous wake is in flight (Plan 331 D1)', () => {
   it('starts no run and is recorded as skipped, moving to the next time without spending a firing', async () => {
+    await claimResidentWake(redis, TENANT, SPACE, PREVIOUS_RUN);
     sessions.set(PREVIOUS_RUN, { status: 'RUNNING' });
     expect(await occur()).toBe(false);
     expect(transactions).toBe(0);
@@ -121,7 +130,7 @@ describe('an occurrence while the previous run is in flight (Plan 331 D1)', () =
     expect(await occur()).toBe(true);
     expect(transactions).toBe(1);
     expect(statements.some((s) => s.query.includes('schedule_dispatch_outbox'))).toBe(true);
-    expect(await redis.get(scheduleStartingKey(TENANT, SCHEDULE))).not.toBeNull();
+    expect(await redis.get(residentWakeKey(TENANT, SPACE))).not.toBeNull();
 
     statements = [];
     expect(await occur()).toBe(false);
@@ -147,7 +156,6 @@ describe('heartbeats and event wakes share one guard (Plan 331 D4)', () => {
       targetStepExecutionId: null,
       inputTemplate: row.input_template,
       firingCount: row.firing_count,
-      lastSessionId: row.last_session_id,
       creatorUserId: row.creator_user_id,
       creatorTenantRole: row.creator_tenant_role,
       creatorSpaceRole: row.creator_space_role,
@@ -218,7 +226,71 @@ describe('heartbeats and event wakes share one guard (Plan 331 D4)', () => {
       mode: 'observe',
     }) as unknown as { recordOccurrence(row: unknown): Promise<boolean> };
     expect(await lost.recordOccurrence(residentRow())).toBe(false);
-    expect(await redis.get(scheduleStartingKey(TENANT, SCHEDULE))).toBeNull();
+    expect(await redis.get(residentWakeKey(TENANT, SPACE))).toBeNull();
     expect(await event()).toBe('started');
+  });
+});
+
+describe('the guard survives renewal, and holds only the resident (Plan 331 D1)', () => {
+  const SUCCESSOR = 'c0000000-0000-4000-8000-000000000999';
+
+  async function heldBy(): Promise<string> {
+    const held = await redis.get(residentWakeKey(TENANT, SPACE));
+    if (held === null) throw new Error('no wake holds the space');
+    return held.slice(0, held.lastIndexOf('@'));
+  }
+
+  it('a wake that renews its schedule mid-run still holds the space: the successor’s heartbeat is skipped', async () => {
+    sessions.set(PREVIOUS_RUN, { status: 'SUCCEEDED' });
+    expect(await occur()).toBe(true);
+    const renewing = await heldBy();
+    sessions.set(renewing, { status: 'RUNNING' });
+
+    statements = [];
+    const successor = { ...residentRow(), id: SUCCESSOR, firing_count: 0, last_session_id: null };
+    expect(await occur(successor)).toBe(false);
+    expect(statements[0]!.query).toContain("'{overlap}'");
+    expect(statements[0]!.params[1]).toBe(renewing);
+
+    sessions.set(renewing, { status: 'SUCCEEDED' });
+    expect(await occur(successor)).toBe(true);
+  });
+
+  it('another agent’s cron schedule, the shepherd’s, is never held back and takes no guard', async () => {
+    const shepherd = {
+      ...residentRow(),
+      target_system_role: 'local-pr-shepherd',
+      input_template: { input: 'tend', config: { scheduleId: { $schedule: 'id' } } },
+    };
+    sessions.set(PREVIOUS_RUN, { status: 'RUNNING' });
+    expect(await occur(shepherd)).toBe(true);
+    expect(await occur(shepherd)).toBe(true);
+    expect(await redis.get(residentWakeKey(TENANT, SPACE))).toBeNull();
+  });
+
+  it('a heartbeat whose dispatch is unworkable gives the guard back at once', async () => {
+    sessions.set(PREVIOUS_RUN, { status: 'SUCCEEDED' });
+    expect(await occur()).toBe(true);
+    expect(await redis.get(residentWakeKey(TENANT, SPACE))).not.toBeNull();
+
+    const result = await evaluator().dispatchOne({
+      dispatch: {
+        tenantId: TENANT,
+        scheduleId: SCHEDULE,
+        scheduleName: 'Resident',
+        schemaName: residentRow().tenant_schema,
+        spaceId: SPACE,
+        action: 'start_run',
+        targetKind: 'platform-role',
+        targetSystemRole: 'cybernetic-helmsman',
+        idempotencyKey: `schedule:${SCHEDULE}:8`,
+        resolvedInput: {},
+        firingCount: 8,
+        creatorUserId: null,
+      },
+    });
+    expect(result.kind).toBe('unworkable');
+    expect(await result.disposition?.()).toBe(true);
+    expect(await redis.get(residentWakeKey(TENANT, SPACE))).toBeNull();
   });
 });

@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { HOST_BINARY_FILE_LINES } from '@aflow/schemas';
+import { REVIEW_DEPTH_AREAS } from '../../../../packages/platform-artifacts/src/skillCatalog/publishLocalChangesReview.js';
 
 import { countChanges, globMatcher, parseNumstat } from '../pushChanges.js';
 
@@ -45,6 +46,23 @@ describe('parseNumstat', () => {
 });
 
 describe('countChanges', () => {
+  it.each(['CLAUDE.md', 'AGENTS.md', 'src/CLAUDE.md', 'docs/AGENTS.md'])(
+    'counts %s as sensitive code while ordinary docs remain light',
+    (path) => {
+      const instructions = countChanges([{ path, lines: 1 }], REVIEW_DEPTH_AREAS);
+      expect(instructions.areas['deep']).toEqual({ files: 1, lines: 1 });
+      const docs = countChanges(
+        [
+          { path: 'README.md', lines: 1 },
+          { path: 'docs/guide.md', lines: 1 },
+        ],
+        REVIEW_DEPTH_AREAS,
+      );
+      expect(docs.areas['deep']).toEqual({ files: 0, lines: 0 });
+      expect(docs.areas['light']).toEqual({ files: 2, lines: 2 });
+    },
+  );
+
   it('counts files and lines in all and within each area, a file in two areas counted in both', () => {
     const changes = countChanges(
       [

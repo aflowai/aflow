@@ -8,7 +8,6 @@ import {
 } from '@aflow/redis';
 import { getClearedDelegationStatePatch } from '../helpers/delegationState.js';
 import { generateEventId } from '../helpers/ids.js';
-import { releaseScheduleCreates } from '../handlers/inlineOps/scheduleCreateBudget.js';
 import { buildRunStatusChangedRecoveryEvent } from '../helpers/recoveryEmitter.js';
 import {
   enqueuePendingAndReconcile,
@@ -74,7 +73,6 @@ export function createCancelRun(bindings: SessionOrchestratorBindings) {
       );
 
       await markRunInactive(redis, params.tenantId, params.runId).catch(() => {});
-      await releaseScheduleCreates(redis, params.tenantId, params.runId);
 
       manifestService?.updateStatus(params.runId, params.tenantId, 'CANCELLED');
     }

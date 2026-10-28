@@ -242,9 +242,13 @@ paused schedule is not renewed, and pausing it pauses the resident — heartbeat
 wakes below alike — leaving runs in flight to finish. Pause it with `PATCH
 /v1/schedules/:id` `{ status: 'paused', why }`, which stamps who and why on it.
 
-An occurrence whose previous wake has not ended is skipped and recorded on the schedule
-(`metadata.overlap`), with no catch-up. Heartbeats and the event wakes below take one
-atomic guard, so only one wake per space is ever starting or running. A run a wake started for a node ending, and a
+A heartbeat that meets the space's previous wake not yet ended is skipped and recorded on
+the schedule (`metadata.overlap`), with no catch-up. Heartbeats and the event wakes below
+take one atomic guard, keyed by the space rather than the schedule, so only one wake per
+space is ever starting or running, and a wake that renews its schedule mid-run still holds
+it and still answers the pending mark when it ends. Only the resident's schedule takes this
+guard; every other agent schedule, the shepherd's included, fires on time whatever its last
+run is doing. A run a wake started for a node ending, and a
 person's write to a node from the plan page, wake the resident at once; while a wake is in
 flight they set the space's pending mark instead, and that wake starts exactly one more
 when it ends, which reads the board and so sees every event the mark stood for. A node is
@@ -400,7 +404,8 @@ lands such a port is refused.
   it. A publication or commission in flight on the branch, whoever started it, holds it
   back too. On a schedule (the Local PR Shepherd agent, `*/5 * * * *` by default), each
   pass tends the next of the loop's pull requests in turn, and two passes on one meet at
-  its branch's lease. The schedule renews itself: created with input
+  its branch's lease — the schedule does not hold a firing back while the last pass runs,
+  so overlapping passes are expected and the lease is what serialises them. The schedule renews itself: created with input
   `{ input: 'tend', config: { scheduleId: { $schedule: 'id' } } }`, each pass is handed
   the schedule that started it, and a pass within `SCHEDULE_RENEWAL_WINDOW` (5) firings of
   its `maxFirings` creates the successor (`agent.schedule.create` with `renews`), which

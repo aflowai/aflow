@@ -143,24 +143,6 @@ export type HostSandboxPosture = z.infer<typeof HostSandboxPostureSchema>;
  */
 export const HOST_SANDBOX_POSTURE_DEFAULT: HostSandboxPosture = 'open';
 
-/** A folder's posture as a person may declare it, `trusted` being Plan 328 D6's third. */
-export type HostPostureDeclared = HostSandboxPosture | 'trusted';
-
-/**
- * The posture a harness task runs under (Plan 328 D6): a run an operator
- * message started takes the folder's own, and any other — a schedule's
- * exchange, the resident's wake and every commission it starts (Plan 331) —
- * runs `open` at most, so a `trusted` folder gives a run nobody asked for no
- * reach past `open`. Nothing widens a `confined` folder.
- */
-export function harnessPostureFor(
-  folder: HostPostureDeclared,
-  run: { activatedByPerson: boolean },
-): HostPostureDeclared {
-  if (run.activatedByPerson) return folder;
-  return folder === 'confined' ? 'confined' : 'open';
-}
-
 /**
  * Tokens in a folder's checks. One program and its arguments; a longer list is
  * a script, and the repository is the place to keep one.

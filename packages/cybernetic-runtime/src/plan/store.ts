@@ -3,6 +3,7 @@ import { and, asc, desc, eq, gt, inArray, isNull, lt, or, sql, type SQL } from '
 import { alias } from 'drizzle-orm/pg-core';
 import {
   PLAN_NODE_GOAL_HEAD_MAX_CHARS,
+  PLAN_NODE_NOTE_HEAD_MAX_CHARS,
   PLAN_NODE_POSITION_MAX,
   PLAN_REVIEW_WORKFLOW_SLUGS,
   PLAN_TREE_DEPTH_LIMIT,
@@ -113,6 +114,8 @@ export interface PlanNodeBoardFacts {
   closedAt?: string;
   /** The goal's head, by `planGoalHead`. */
   goalHead: string;
+  /** The note's first line, by `planBoardNoteHead`; absent where there is none. */
+  noteHead?: string;
 }
 
 /** A node's links counted by kind, and its review rounds among its run links. */
@@ -238,7 +241,7 @@ export interface PlanNodeStore {
     nodeId: string,
     page: { kind?: PlanNodeLinkKind; after?: PlanLinkPageKey; limit: number },
   ): Promise<PlanLinkPage>;
-  /** Each of `nodeIds`'s creation, closing and goal head; a node not in the space is absent. */
+  /** Each of `nodeIds`'s creation, closing, goal head and note head; a node not in the space is absent. */
   boardFactsOf(
     spaceId: string,
     nodeIds: readonly string[],
@@ -401,12 +404,25 @@ export function planDependencyView(
  * split a surrogate pair.
  */
 export function planGoalHead(goal: string): string {
+  return headByCodePoints(goal, PLAN_NODE_GOAL_HEAD_MAX_CHARS);
+}
+
+function headByCodePoints(text: string, maxUnits: number): string {
   let head = '';
-  for (const codePoint of goal) {
-    if (head.length + codePoint.length > PLAN_NODE_GOAL_HEAD_MAX_CHARS) break;
+  for (const codePoint of text) {
+    if (head.length + codePoint.length > maxUnits) break;
     head += codePoint;
   }
   return head;
+}
+
+/**
+ * The note's first line as a board card carries it: trimmed, then cut as the
+ * goal's head is, at `PLAN_NODE_NOTE_HEAD_MAX_CHARS`. Undefined for no line.
+ */
+export function planBoardNoteHead(note: string | null | undefined): string | undefined {
+  const line = (note ?? '').split('\n', 1)[0]?.trim() ?? '';
+  return line === '' ? undefined : headByCodePoints(line, PLAN_NODE_NOTE_HEAD_MAX_CHARS);
 }
 
 /** The note's first line, bounded — what a list or the attention block shows of it. */
@@ -825,14 +841,20 @@ export function createPlanNodeStore(db: PostgresJsDatabase, tenantId: string): P
             closedAt: planNodes.closedAt,
             // The head only: a board must not carry every goal in the space.
             goalHead: sql<string>`left(${planNodes.goal}, ${PLAN_NODE_GOAL_HEAD_MAX_CHARS})`,
+            // The first line's head, with room for the whitespace a trim takes off it.
+            noteHead: sql<
+              string | null
+            >`left(split_part(${planNodes.note}, chr(10), 1), ${PLAN_NOTE_HEAD_MAX_CHARS})`,
           })
           .from(planNodes)
           .where(and(eq(planNodes.spaceId, spaceId), inArray(planNodes.id, [...nodeIds])));
         for (const row of rows) {
+          const noteHead = planBoardNoteHead(row.noteHead);
           facts.set(row.id, {
             createdAt: new Date(row.createdAt).toISOString(),
             ...(row.closedAt != null ? { closedAt: new Date(row.closedAt).toISOString() } : {}),
             goalHead: planGoalHead(row.goalHead),
+            ...(noteHead !== undefined ? { noteHead } : {}),
           });
         }
         return facts;

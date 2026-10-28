@@ -132,6 +132,12 @@ describe.skipIf(!databaseUrl)('readiness facts in the database', () => {
       await tx.execute(sql`UPDATE agent_schedules SET input_template =
         '{"input":"shepherd","note":"x","config":{"scheduleId":{"$schedule":"id"}}}'::jsonb`);
       expect((await read())[4]).toMatchObject({ state: 'done' });
+      await tx.execute(sql`UPDATE agent_schedules SET input_template =
+        '{"input":"shepherd","config":{"scheduleId":{"$schedule":"id"},"sibling":"ignored","nested":{"enabled":true}}}'::jsonb`);
+      expect((await read())[4]).toMatchObject({
+        state: 'done',
+        description: expect.stringContaining('renews itself'),
+      });
       await tx.execute(sql`UPDATE agent_schedules SET input_template = ${RENEWAL_TEMPLATE}::jsonb`);
 
       await tx.execute(sql`UPDATE sessions SET status = 'FAILED'`);

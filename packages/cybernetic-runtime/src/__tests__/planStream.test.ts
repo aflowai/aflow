@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import Redis from 'ioredis-mock';
 import type { Redis as RedisType } from 'ioredis';
 import {
+  getOperation,
   PLAN_NODE_LINKS_LIMIT,
+  PLAN_NODE_NEXT_OPERATION_ID,
   PLAN_STREAM_ATTEMPTS_DEFAULT,
   PLAN_STREAM_COMMISSION_SLUG,
   PLAN_STREAM_PUBLICATION_SLUG,
@@ -977,6 +979,53 @@ describe('publish — a completed commission is published by the next wake (Plan
         bindingId: 'hb_aflow',
       },
     });
+  });
+
+  it('a wake that commissions a node is answered publish once the commission completes, never a second commission', async () => {
+    const { root, first } = await stream();
+    const before = revisions();
+
+    // The wake does what `continue` says: the commission, serving the node, and no node write.
+    const started = await wake({}, 'wake-1');
+    expect(started.decisions[0]).toMatchObject({
+      answer: { decision: 'continue', node: { nodeId: first.nodeId } },
+    });
+    const commission = await run(first, PLAN_STREAM_COMMISSION_SLUG, 'running');
+    expect(revisions()).toEqual(before);
+
+    expect((await wake({}, 'wake-2')).decisions).toEqual([]);
+    ends(commission, 'completed');
+    await linkEndedRun(session(), {
+      nodeId: first.nodeId,
+      runId: commission,
+      slug: PLAN_STREAM_COMMISSION_SLUG,
+      status: 'completed',
+    });
+
+    const published = await wake({}, 'wake-3');
+    expect(published.decisions).toHaveLength(1);
+    expect(published.decisions[0]).toMatchObject({
+      root: { nodeId: root.nodeId },
+      answer: { decision: 'publish', commission: { commission } },
+    });
+    await run(first, PLAN_STREAM_PUBLICATION_SLUG, 'running');
+    expect((await wake({}, 'wake-4')).decisions).toEqual([]);
+    expect(
+      store.runs.filter((r) => r.nodeId === first.nodeId && r.slug === PLAN_STREAM_COMMISSION_SLUG),
+    ).toHaveLength(1);
+  });
+
+  it('the `continue` a wake acts on writes nothing to the node: a write after the start would hide the commission', async () => {
+    const pitfalls = getOperation(PLAN_NODE_NEXT_OPERATION_ID)?.usage?.pitfalls ?? [];
+    const onContinue = pitfalls.find((p) => p.startsWith('continue:'));
+    expect(onContinue).toContain('Write nothing to the node');
+    expect(onContinue).not.toMatch(/write one line[^.]*note/);
+
+    // Why: the stream reads a round started before the node's last write as superseded.
+    const { root, first } = await stream();
+    await run(first, PLAN_STREAM_COMMISSION_SLUG, 'completed');
+    await write(first.nodeId, { note: 'Started a commission.' });
+    expect(await fire(root.nodeId)).toMatchObject({ decision: 'continue' });
   });
 
   it('waits once the publication is under way', async () => {

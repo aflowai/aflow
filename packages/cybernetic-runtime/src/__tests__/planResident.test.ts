@@ -26,8 +26,9 @@ vi.mock('@aflow/redis', async (importOriginal) => ({
 }));
 
 const {
-  claimScheduleRun,
-  isScheduleRunInFlight,
+  claimResidentWake,
+  residentWakeInFlight,
+  residentWakeKey,
   requestResidentWake,
   residentPendingKey,
   residentWakeEnded,
@@ -57,7 +58,6 @@ function resident(): ResidentSchedule {
     targetStepExecutionId: null,
     inputTemplate: planResidentScheduleInput(),
     firingCount: 3,
-    lastSessionId: null,
     creatorUserId: CREATOR,
     creatorTenantRole: 'admin',
     creatorSpaceRole: 'editor',
@@ -77,15 +77,16 @@ function deps() {
   };
 }
 
-/** The drain dispatches the newest occurrence: its run starts and the schedule records it. */
+/** The drain dispatches the newest occurrence: its run starts. */
 function dispatched(status: SessionStatus = 'RUNNING'): string {
   const item = enqueued.at(-1);
-  if (!item || !schedule) throw new Error('nothing enqueued');
+  if (!item) throw new Error('nothing enqueued');
   const runId = scheduleOccurrenceRunId(item.idempotencyKey);
-  schedule = { ...schedule, lastSessionId: runId };
   sessions.set(runId, { status });
   return runId;
 }
+
+const claim = async (runId: string) => (await claimResidentWake(redis, TENANT, SPACE, runId)).taken;
 
 beforeEach(async () => {
   redis = new Redis() as unknown as RedisType;
@@ -133,24 +134,56 @@ describe('the resident schedule (Plan 331 D1)', () => {
     for (const schedule of notResident) expect(isPlanResidentSchedule(schedule)).toBe(false);
   });
 
-  it('holds its next occurrence while its previous run is in flight, and frees it when it ends', async () => {
-    const facts = { id: SCHEDULE, lastSessionId: 'run-1' };
+  it('holds the next wake while the previous one is in flight, and frees it when it ends', async () => {
+    expect(await claim('run-1')).toBe(true);
     sessions.set('run-1', { status: 'RUNNING' });
-    expect(await isScheduleRunInFlight(redis, TENANT, facts)).toBe(true);
+    expect(await residentWakeInFlight(redis, TENANT, SPACE)).toBe('run-1');
     sessions.set('run-1', { status: 'SUCCEEDED' });
-    expect(await isScheduleRunInFlight(redis, TENANT, facts)).toBe(false);
+    expect(await residentWakeInFlight(redis, TENANT, SPACE)).toBeNull();
     // A paused wake has nobody to resume it, so it holds nothing back.
     sessions.set('run-1', { status: 'PAUSED' });
-    expect(await isScheduleRunInFlight(redis, TENANT, facts)).toBe(false);
+    expect(await residentWakeInFlight(redis, TENANT, SPACE)).toBeNull();
   });
 
-  it('counts an occurrence recorded but not yet started as in flight', async () => {
+  it('counts a wake recorded but not yet started as in flight, until its starting window lapses', async () => {
+    expect(await claim('run-2')).toBe(true);
+    expect(await residentWakeInFlight(redis, TENANT, SPACE)).toBe('run-2');
+    expect(await claim('run-3')).toBe(false);
+
+    // A start that never landed: no state, claimed past the window.
+    await redis.set(residentWakeKey(TENANT, SPACE), `run-2@${String(Date.now() - 6 * 60_000)}`);
+    expect(await residentWakeInFlight(redis, TENANT, SPACE)).toBeNull();
+    expect(await claim('run-3')).toBe(true);
+  });
+
+  it('a wake that renews its schedule mid-run still holds the space, and its end answers the pending mark', async () => {
+    await requestResidentWake(deps(), { tenantId: TENANT, spaceId: SPACE, cause: 'run_ended' });
+    const renewing = dispatched();
+
+    // The wake renews: the successor is a schedule with another id that has started no run.
+    const successor = '5c4ed000-0000-4000-8000-000000000999';
+    schedule = { ...resident(), id: successor, firingCount: 0 };
+
+    expect(await claim('heartbeat-of-successor')).toBe(false);
     expect(
-      await claimScheduleRun(redis, TENANT, { id: SCHEDULE, lastSessionId: null }, 'run-2'),
-    ).toBe(true);
+      await requestResidentWake(deps(), {
+        tenantId: TENANT,
+        spaceId: SPACE,
+        cause: 'node_written',
+      }),
+    ).toBe('pending');
+    expect(enqueued).toHaveLength(1);
+
+    sessions.set(renewing, { status: 'SUCCEEDED' });
     expect(
-      await isScheduleRunInFlight(redis, TENANT, { id: SCHEDULE, lastSessionId: 'run-1' }),
-    ).toBe(true);
+      await residentWakeEnded(deps(), { tenantId: TENANT, spaceId: SPACE, sessionId: renewing }),
+    ).toBe('started');
+    expect(enqueued).toHaveLength(2);
+    expect(enqueued[1]).toMatchObject({
+      scheduleId: successor,
+      resolvedInput: { config: { scheduleId: successor } },
+    });
+    expect(await redis.get(residentPendingKey(TENANT, SPACE))).toBeNull();
   });
 });
 
@@ -234,22 +267,16 @@ describe('informational wakes (Plan 331 D4)', () => {
 });
 
 describe('one guard for heartbeats and events (Plan 331 D4)', () => {
-  const facts = () => ({ id: SCHEDULE, lastSessionId: schedule?.lastSessionId ?? null });
-
   it('two starts that read the same ended run race at the guard, and exactly one wins', async () => {
-    schedule = { ...resident(), lastSessionId: 'run-ended' };
     sessions.set('run-ended', { status: 'SUCCEEDED' });
-    await redis.set(`schedule:starting:${TENANT}:${SCHEDULE}`, 'run-ended');
-    const won = await Promise.all([
-      claimScheduleRun(redis, TENANT, facts(), 'heartbeat-run'),
-      claimScheduleRun(redis, TENANT, facts(), 'event-run'),
-    ]);
+    await redis.set(residentWakeKey(TENANT, SPACE), 'run-ended@1');
+    const won = await Promise.all([claim('heartbeat-run'), claim('event-run')]);
     expect(won.filter(Boolean)).toHaveLength(1);
   });
 
   it('an event and a heartbeat arriving together start one wake; the event is left pending', async () => {
     const [heartbeat, event] = await Promise.all([
-      claimScheduleRun(redis, TENANT, facts(), 'heartbeat-run'),
+      claim('heartbeat-run'),
       requestResidentWake(deps(), { tenantId: TENANT, spaceId: SPACE, cause: 'node_written' }),
     ]);
     const started = (heartbeat ? 1 : 0) + (event === 'started' ? 1 : 0);
@@ -261,14 +288,13 @@ describe('one guard for heartbeats and events (Plan 331 D4)', () => {
   });
 
   it('an event that meets a heartbeat’s wake still starting marks pending, and its end answers it', async () => {
-    expect(await claimScheduleRun(redis, TENANT, facts(), 'heartbeat-run')).toBe(true);
+    expect(await claim('heartbeat-run')).toBe(true);
     expect(
       await requestResidentWake(deps(), { tenantId: TENANT, spaceId: SPACE, cause: 'run_ended' }),
     ).toBe('pending');
     expect(enqueued).toEqual([]);
 
     // The heartbeat's run starts and ends; its end starts the one wake the mark asked for.
-    schedule = { ...resident(), lastSessionId: 'heartbeat-run' };
     sessions.set('heartbeat-run', { status: 'SUCCEEDED' });
     expect(
       await residentWakeEnded(deps(), {
@@ -282,9 +308,9 @@ describe('one guard for heartbeats and events (Plan 331 D4)', () => {
 
   it('a heartbeat that meets an event’s wake is refused the guard', async () => {
     await requestResidentWake(deps(), { tenantId: TENANT, spaceId: SPACE, cause: 'node_written' });
-    expect(await claimScheduleRun(redis, TENANT, facts(), 'heartbeat-run')).toBe(false);
+    expect(await claim('heartbeat-run')).toBe(false);
     dispatched();
-    expect(await claimScheduleRun(redis, TENANT, facts(), 'heartbeat-run')).toBe(false);
+    expect(await claim('heartbeat-run')).toBe(false);
   });
 
   it('a wake that could not be written gives the guard back', async () => {
@@ -298,6 +324,6 @@ describe('one guard for heartbeats and events (Plan 331 D4)', () => {
     await expect(
       requestResidentWake(failing, { tenantId: TENANT, spaceId: SPACE, cause: 'node_written' }),
     ).rejects.toThrow('outbox down');
-    expect(await claimScheduleRun(redis, TENANT, facts(), 'heartbeat-run')).toBe(true);
+    expect(await claim('heartbeat-run')).toBe(true);
   });
 });

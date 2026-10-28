@@ -65,6 +65,7 @@ import {
   spaceTemplateRefusal,
   spaceHelpReadsGithub,
   templateReadsGithub,
+  bundleReadsGithub,
   previewBundleInstall,
   ListingInstalledStateSchema,
 } from '@aflow/cybernetic-runtime';
@@ -102,7 +103,7 @@ const ReadinessSchema = z.object({
  * space made from it — the one place its readiness is read.
  */
 function readinessAsksGithub(entry: CatalogEntry, spaceMadeFromIt: boolean): boolean {
-  if (entry.catalogId === 'coding-loop') return true;
+  if (entry.kind === 'bundle' && bundleReadsGithub(entry.catalogId)) return true;
   return entry.kind === 'space' && spaceMadeFromIt && templateReadsGithub(entry.payload);
 }
 

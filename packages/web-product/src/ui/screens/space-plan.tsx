@@ -1,11 +1,13 @@
 'use client';
 
 /**
- * The space's plan (Plan 322 P3.3): a board. A tab per plan, five columns in
- * which the column is the status, a card per step carrying labels only, and
- * a side rail that reads a step on demand and holds the operator's own
- * controls — mark done, decide, drop (P3.2). The tree it reads carries counts
- * rather than links, and done steps only for the Done folds open.
+ * The space's plan (Plan 322 P3.3): a board. A tab per plan, the plan's
+ * header — steps closed and the non-zero count of each column — five columns
+ * saying what the loop is doing with each step (Plan 332 D4), a card per step
+ * carrying labels only, and a side rail that reads a step on demand and holds
+ * the operator's own controls — mark done, decide, drop (P3.2). The tree it
+ * reads carries counts rather than links, and done steps only for the Done
+ * folds open.
  */
 import { useEffect, useState } from 'react';
 import {
@@ -21,8 +23,9 @@ import {
   Tabs,
   Text,
   useMediaQuery,
+  type BadgeVariant,
 } from '@aflow/design-system';
-import type { PlanNodeUpdateOutput, PlanTreeNode, PlanTreeOutput } from '@aflow/schemas';
+import type { PlanBoardColumn, PlanNodeUpdateOutput, PlanTreeOutput } from '@aflow/schemas';
 import { useSpaceFromRoute } from '../components/providers.js';
 import { useApiMutation, useApiQuery } from '../hooks/useApiQuery.js';
 import { PlanBoard } from '../components/plan/PlanBoard.js';
@@ -39,12 +42,13 @@ import {
   phaseLabel,
   planCards,
   planDoneGroups,
+  planHeader,
+  planPhases,
   readerTimeZone,
+  showsPhaseFilter,
   startOfDay,
   type PlanCard,
   type PlanDoneGroup,
-  type PlanDoneWindow,
-  type PlanActivityFilter,
 } from '../lib/plan-board.js';
 
 const TRUNCATION_LINE: Record<'limit' | 'depth' | 'nodes', (value: number) => string> = {
@@ -53,29 +57,13 @@ const TRUNCATION_LINE: Record<'limit' | 'depth' | 'nodes', (value: number) => st
   nodes: (value) => `First ${String(value)} steps`,
 };
 
-const ACTIVITY_OPTIONS: ReadonlyArray<{ id: PlanActivityFilter; label: string }> = [
-  { id: 'all', label: 'All' },
-  { id: 'in_flight', label: 'In flight' },
-  { id: 'idle', label: 'Idle' },
-];
-
-/** What moves a step between the two, and which idle steps wait on the reader. */
-const ACTIVITY_LINES: ReadonlyArray<{ label: string; line: string }> = [
-  {
-    label: 'In flight',
-    line: 'a run is working on the step or one under it; it goes idle when that run ends.',
-  },
-  {
-    label: 'Idle',
-    line: 'no run is on it now; it goes in flight when the loop starts one. Only the idle steps under Needs you — decisions and blocked steps — wait on you.',
-  },
-];
-
-const WINDOW_OPTIONS: ReadonlyArray<{ id: PlanDoneWindow; label: string }> = [
-  { id: 'today', label: 'Today' },
-  { id: 'week', label: '7 days' },
-  { id: 'all', label: 'All' },
-];
+const HEADER_BADGE: Record<PlanBoardColumn, BadgeVariant> = {
+  needs_you: 'warning',
+  in_flight: 'running',
+  up_next: 'accent',
+  done: 'success',
+  dropped: 'danger',
+};
 
 function Segmented<T extends string>({
   label,
@@ -120,8 +108,6 @@ export function SpacePlanPage(): React.ReactNode {
 
   const [chosenRootId, setChosenRootId] = useState<string | undefined>(undefined);
   const [phaseId, setPhaseId] = useState<string>(ALL_PHASES);
-  const [activity, setActivity] = useState<PlanActivityFilter>('all');
-  const [doneWindow, setDoneWindow] = useState<PlanDoneWindow>('all');
   /** The Done folds open; null until the operator toggles one: the first fold alone. */
   const [expanded, setExpanded] = useState<ReadonlySet<string> | null>(null);
   const [selected, setSelected] = useState<{
@@ -132,20 +118,19 @@ export function SpacePlanPage(): React.ReactNode {
   const today = localDay(new Date());
   const tz = readerTimeZone();
   // The last board read: what the done folds are decided from before the
-  // next read, and what stays on screen while a wider done window is read.
+  // next read, and what stays on screen while an older fold's steps are read.
   const [held, setHeld] = useState<{
     spaceId: string;
     since: string;
     data: PlanTreeOutput;
   } | null>(null);
   const last = held?.spaceId === spaceId ? held.data : undefined;
-  const filtered = phaseId !== ALL_PHASES || activity !== 'all';
-
   const rootOf = (tree: PlanTreeOutput | undefined) =>
     tree?.roots.find((r) => r.nodeId === chosenRootId) ?? tree?.roots[0];
+  const filtered = phaseId !== ALL_PHASES;
   const foldsOf = (tree: PlanTreeOutput | undefined) => {
     const tally = tree?.tallies.find((t) => t.rootId === rootOf(tree)?.nodeId);
-    return tally ? planDoneGroups(tally.doneByDay, today, doneWindow) : [];
+    return tally ? planDoneGroups(tally.doneByDay, today) : [];
   };
   const firstFoldOnly = (groups: readonly PlanDoneGroup[]) =>
     new Set(groups[0] ? [groups[0].id] : []);
@@ -236,8 +221,10 @@ export function SpacePlanPage(): React.ReactNode {
 
   const cards = planCards(root);
   const selectedCard: PlanCard | undefined = cards.find((c) => c.node.nodeId === selected?.nodeId);
-  const phases = root.children.filter((child: PlanTreeNode) => child.children.length > 0);
-  const phaseFilter = phases.some((p) => p.nodeId === phaseId) ? phaseId : ALL_PHASES;
+  const phases = planPhases(root);
+  const phaseShown = showsPhaseFilter(phases);
+  const phaseFilter = phaseShown && phases.some((p) => p.nodeId === phaseId) ? phaseId : ALL_PHASES;
+  const planLine = planHeader(tally);
 
   const chooseRoot = (rootId: string) => {
     setChosenRootId(rootId);
@@ -258,6 +245,8 @@ export function SpacePlanPage(): React.ReactNode {
         key={selectedCard.node.nodeId}
         node={selectedCard.node}
         column={selectedCard.column}
+        reason={selectedCard.reason}
+        next={selectedCard.node.nodeId === tally.nextNodeId}
         phase={selectedCard.phase}
         spaceId={spaceId}
         spaceSlug={spaceSlug}
@@ -292,7 +281,7 @@ export function SpacePlanPage(): React.ReactNode {
             </TabList>
           </Tabs>
           <Row gap="md" align="center" wrap>
-            {phases.length > 0 && (
+            {phaseShown && (
               <Segmented
                 label="Phase"
                 options={[
@@ -303,38 +292,19 @@ export function SpacePlanPage(): React.ReactNode {
                 onChange={setPhaseId}
               />
             )}
-            <Column gap="none" data-plan-activity-help>
-              <Segmented
-                label="Activity"
-                options={ACTIVITY_OPTIONS}
-                value={activity}
-                onChange={setActivity}
-              />
-              {ACTIVITY_LINES.map(({ label, line }) => (
-                <Text key={label} size="xs" variant="muted">
-                  <strong>{label}</strong>
-                  {` — ${line}`}
-                </Text>
-              ))}
-            </Column>
-            <Segmented
-              label="Done"
-              options={WINDOW_OPTIONS}
-              value={doneWindow}
-              onChange={(next) => {
-                setDoneWindow(next);
-                setExpanded(null);
-              }}
-            />
           </Row>
         </Row>
         <Column gap="xs">
           <Text weight="semibold">{root.title}</Text>
           <Row gap="xs" align="center" wrap data-plan-tally={root.nodeId}>
-            <Badge variant="success">{`${String(tally.done)} done`}</Badge>
-            <Badge variant="running">{`${String(tally.active)} active`}</Badge>
-            <Badge variant="warning">{`${String(tally.decide)} decide`}</Badge>
-            <Badge variant="danger">{`${String(tally.dropped)} dropped`}</Badge>
+            <Text size="sm" variant="muted" data-plan-progress-line>
+              {planLine.progress}
+            </Text>
+            {planLine.counts.map(({ column, label }) => (
+              <Badge key={column} variant={HEADER_BADGE[column]}>
+                {label}
+              </Badge>
+            ))}
           </Row>
         </Column>
         {error && (
@@ -345,11 +315,7 @@ export function SpacePlanPage(): React.ReactNode {
             <PlanBoard
               root={root}
               tally={tally}
-              filters={{
-                ...(phaseFilter !== ALL_PHASES ? { phaseId: phaseFilter } : {}),
-                activity,
-              }}
-              doneWindow={doneWindow}
+              filters={phaseFilter !== ALL_PHASES ? { phaseId: phaseFilter } : {}}
               doneReadSince={boardSince}
               today={today}
               expanded={openFolds}

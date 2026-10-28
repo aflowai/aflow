@@ -9,6 +9,7 @@
  * drop provenance rows with the last claim.
  */
 import { sql } from 'drizzle-orm';
+import { getCatalogEntry } from '@aflow/platform-artifacts';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { Redis } from 'ioredis';
 import {
@@ -90,6 +91,19 @@ function notInstalledBody(catalogId: string): StoreUninstallErrorBody {
   };
 }
 
+function spaceListingRefusal(catalogId: string) {
+  if (getCatalogEntry(catalogId)?.kind !== 'space') return null;
+  return {
+    ok: false as const,
+    statusCode: 404 as const,
+    body: {
+      error: 'A space listing installs a space and has no uninstall.',
+      code: 'NOT_INSTALLED',
+      catalogId,
+    },
+  };
+}
+
 // ============================================================================
 // Idempotency (same TTL contract as install/update, separate namespace)
 // ============================================================================
@@ -115,6 +129,8 @@ export async function executeStoreUninstallPreview(
   params: ExecuteStoreUninstallPreviewParams,
 ): Promise<ExecuteStoreUninstallPreviewResult> {
   const { db, tenantId, spaceId, catalogId } = params;
+  const refusal = spaceListingRefusal(catalogId);
+  if (refusal) return refusal;
   const plan = await withTenantSchema(db, createTenantContext(tenantId), async (tx) =>
     buildStoreUninstallPlan(tx, { tenantId, spaceId }, catalogId, { keepUserData: null }),
   );
@@ -329,6 +345,8 @@ export async function executeStoreUninstall(
   params: ExecuteStoreUninstallParams,
 ): Promise<ExecuteStoreUninstallResult> {
   const { db, redis, tenantId, spaceId, actorUserId, catalogId, idempotencyKey } = params;
+  const refusal = spaceListingRefusal(catalogId);
+  if (refusal) return refusal;
   const keepUserData = params.keepUserData === undefined ? null : new Set(params.keepUserData);
 
   const idempotencyRedisKey = storeUninstallIdempotencyRedisKey(

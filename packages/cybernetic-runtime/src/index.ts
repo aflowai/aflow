@@ -69,6 +69,7 @@ export {
 export {
   deriveMcpBindingSetupTask,
   fetchPresentCredentialKeys,
+  bundleReadsGithub,
 } from './stagedChange/bundleInstallManifest.js';
 export * from './stagedChange/skillBundleInstall.js';
 export * from './stagedChange/bundleInstallValidator.js';
