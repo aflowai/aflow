@@ -16,6 +16,7 @@ import {
   isClosedPlanNodeStatus,
   OPEN_PLAN_NODE_STATUSES,
   PLAN_NODE_PROSE_MAX_CHARS,
+  PLAN_NODE_PROPOSED_HEAD,
   PLAN_NODE_RUNS_LIMIT,
   PLAN_STREAM_COMMISSION_SLUG,
   PLAN_STREAM_SPEND_CENTS_DEFAULT,
@@ -633,7 +634,7 @@ export function decideStreamFiring(facts: PlanStreamFacts): PlanStreamAnswer {
           },
           noteHead: mergeNoteHead(link.ref, answer.mergeCommitSha),
           liveCheck: {
-            parentId: node.nodeId,
+            ...(node.parentId !== null ? { parentId: node.parentId } : {}),
             kind: 'investigate',
             title: node.title,
             goal: node.goal,
@@ -856,6 +857,15 @@ async function decideRoot(
     };
   }
   if (answer.decision !== 'continue') return decided(answer);
+  if (!answer.retry && active.nodeId === root.nodeId && opened.childrenTotal > 0) {
+    if (open.truncated)
+      return decided(
+        wait('read_failed', 'The root’s open children could not all be read.', opened.node),
+      );
+    return decided(
+      wait('stream_closed', `The children of "${root.title}" are closed.`, opened.node),
+    );
+  }
   return {
     ok: true,
     answer,
@@ -941,21 +951,6 @@ export async function nextOnPlanBoard(
   for (const [order, root] of roots.entries()) {
     const decided = await decideRoot(ctx, root, input);
     if (!decided.ok) return decided;
-    if (
-      decided.answer.decision === 'continue' &&
-      !decided.answer.retry &&
-      decided.answer.node.nodeId === root.nodeId
-    ) {
-      const children = await ctx.store.listChildren(ctx.spaceId, root.nodeId, PLAN_NODE_RUNS_LIMIT);
-      if (
-        children.children.length > 0 &&
-        children.total === children.children.length &&
-        children.children.every((child) => isClosedPlanNodeStatus(child.status))
-      ) {
-        waited('stream_closed');
-        continue;
-      }
-    }
     if (decided.answer.decision === 'wait') {
       waited(decided.answer.cause);
       continue;
@@ -1003,7 +998,13 @@ export async function nextOnPlanBoard(
     [...waits.keys()].every((cause) => cause === 'stream_closed')
   ) {
     const root = await ctx.store.find(ctx.spaceId, roots[0].nodeId);
-    if (root?.status === 'active')
+    const history = await ctx.store.walk(ctx.spaceId, PLAN_TREE_WALK_BOUNDS);
+    const declined =
+      history.truncated !== undefined ||
+      history.nodes.some(
+        (node) => node.status === 'dropped' && node.noteHead?.startsWith(PLAN_NODE_PROPOSED_HEAD),
+      );
+    if (root?.status === 'active' && !declined)
       proposal = {
         reason:
           'No approved work is actionable; propose at most one next step toward this open root for operator approval.',

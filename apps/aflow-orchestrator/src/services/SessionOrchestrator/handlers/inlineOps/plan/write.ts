@@ -12,6 +12,7 @@ import {
 } from '@aflow/schemas';
 import {
   createPlanNode,
+  residentWakeKey,
   dependPlanNode,
   learnOnPlanNode,
   linkPlanNode,
@@ -25,13 +26,15 @@ import { emitStepSuccess } from '../helpers.js';
 import { emitPlanError, parsePlanInput, planReadContext } from './shared.js';
 
 async function planWriteContext(args: InlineHandlerArgs): Promise<PlanWriteContext> {
+  const read = planReadContext(args);
   const state = await getSessionState(args.redis, args.context.tenantId, args.context.runId);
+  const marker = await args.redis.get(residentWakeKey(args.context.tenantId, read.spaceId));
   return {
-    ...planReadContext(args),
+    ...read,
     redis: args.redis,
     tenantId: args.context.tenantId as string,
     actorKind: 'agent',
-    ...(state?.trigger === 'schedule' ? { resident: true } : {}),
+    resident: state == null || marker?.split('@')[0] === args.context.runId,
   };
 }
 

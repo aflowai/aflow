@@ -357,7 +357,7 @@ function residentUnblocks(current: PlanNode): PlanOpError {
     ok: false,
     code: 'PLAN_NODE_RESIDENT_SCOPE',
     message:
-      `Plan node "${current.title}" is blocked, and only a person moves a blocked node on — Approve on the plan ` +
+      `Plan node "${current.title}" is ${current.status}, and only a person approves or reopens it — Approve on the plan ` +
       'page or in the Action Center. A resident wake writes what the node waits on in its note and leaves its ' +
       'status as it stands; nothing was written.',
     details: { nodeId: current.nodeId, status: current.status },
@@ -482,8 +482,8 @@ async function writePlanNode(
   }
   if (
     ctx.resident === true &&
-    current.status === 'blocked' &&
-    status !== 'blocked' &&
+    (current.status === 'blocked' || isClosedPlanNodeStatus(current.status)) &&
+    (current.status !== 'blocked' || status !== 'blocked') &&
     !isClosedPlanNodeStatus(status)
   ) {
     return residentUnblocks(current);

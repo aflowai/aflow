@@ -49,6 +49,14 @@ function fabricated(overrides: Partial<HelpArticle>): HelpArticle {
 const ARTICLES = allHelpArticles();
 
 describe('help catalog integrity', () => {
+  it('describes current-node asks and the post-merge live check', () => {
+    const article = ARTICLES.find((entry) => entry.body.includes('## The resident'));
+    expect(article?.body).toContain(
+      'The current blocked step of each stream raises an Action Center item',
+    );
+    expect(article?.body).toContain('a separate blocked live check waits on a read');
+    expect(article?.body).not.toContain('never asks whether your folder holds the merge');
+  });
   it('has unique article ids', () => {
     const ids = ARTICLES.map((article) => article.id);
     expect(ids.filter((id, index) => ids.indexOf(id) !== index)).toEqual([]);

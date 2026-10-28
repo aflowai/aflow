@@ -854,6 +854,78 @@ function revisions(): number[] {
 }
 
 describe('resident asking and proposing', () => {
+  it.each(['done', 'dropped'] as const)(
+    'refuses resident reopening of %s scope',
+    async (status) => {
+      const node = await created({ proposed: 'Needs approval' });
+      const closed = await write(node.nodeId, { status, outcome: 'Operator closed' });
+      for (const reopen of ['active', 'waiting', 'blocked'] as const) {
+        expect(
+          await updatePlanNode(
+            { ...session(), resident: true },
+            {
+              nodeId: node.nodeId,
+              expectedRevision: closed.revision,
+              status: reopen,
+            },
+          ),
+        ).toMatchObject({ ok: false, code: 'PLAN_NODE_RESIDENT_SCOPE' });
+      }
+      expect((await current(node.nodeId)).status).toBe(status);
+    },
+  );
+
+  it('does not commission an exhausted root in either path beyond a child page', async () => {
+    const root = await created();
+    for (let i = 0; i < 105; i++) {
+      store.seed(SPACE, { parentId: root.nodeId, title: `closed ${String(i)}`, status: 'done' });
+    }
+    expect(await fire(root.nodeId)).toMatchObject({ decision: 'wait', cause: 'stream_closed' });
+    expect((await wake()).decisions).toEqual([]);
+  });
+
+  it('treats a dropped proposal as a decline on following wakes', async () => {
+    const root = await created();
+    const child = await created({ parentId: root.nodeId });
+    await write(child.nodeId, { status: 'done', outcome: 'Merged' });
+    expect(await wake()).toHaveProperty('propose');
+    const proposal = await created({ proposed: 'Next scope' });
+    await write(proposal.nodeId, { status: 'dropped', outcome: 'Declined' });
+    expect(await wake()).not.toHaveProperty('propose');
+    expect(await wake({}, 'another-wake')).not.toHaveProperty('propose');
+  });
+
+  it.each([true, false])(
+    'surfaces a live check beside its merged node (nested: %s)',
+    async (nested) => {
+      const root = await created();
+      const node = nested ? await created({ parentId: root.nodeId }) : root;
+      const mergedAt = await publishedRound(node);
+      const answer = await fire(root.nodeId, (url) => merged(url, mergedAt));
+      if (answer.decision !== 'record_merge') throw new Error('expected merge');
+      const check = await createPlanNode(session(), answer.liveCheck);
+      if (!check.ok) throw new Error(check.message);
+      expect(check.node.parentId).toBe(node.parentId);
+      // Even before the close lands, the new sibling cannot hide the merged node.
+      expect(await fire(root.nodeId, (url) => merged(url, mergedAt))).toMatchObject({
+        decision: 'record_merge',
+      });
+      await write(node.nodeId, { status: 'done', outcome: 'Merged' });
+      expect((await wake()).decisions).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            answer: expect.objectContaining({
+              decision: 'ask',
+              node: expect.objectContaining({ nodeId: check.node.nodeId }),
+            }),
+          }),
+        ]),
+      );
+      expect(await listAskedNodes(session())).toEqual(
+        expect.arrayContaining([expect.objectContaining({ nodeId: check.node.nodeId })]),
+      );
+    },
+  );
   it('asks once across two wakes and exposes exactly one Action Center target', async () => {
     const node = await created({ proposed: 'Needs operator approval' });
     const first = await wake();

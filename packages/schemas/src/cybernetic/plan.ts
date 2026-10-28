@@ -166,7 +166,7 @@ export type PlanNodeLiveCheck = z.infer<typeof PlanNodeLiveCheckSchema>;
 export const PLAN_NODE_PROPOSAL_AND_LIVE_CHECK_MESSAGE =
   'A node is created as a proposal or as a live check, not both: a live check is not new scope, a proposal is.';
 export const PLAN_NODE_LIVE_CHECK_PLACEMENT_MESSAGE =
-  'A live check is an `investigate` node under the merged node it checks: pass that node as `parentId` and `kind: "investigate"`.';
+  'A live check is an `investigate` node beside the merged node it checks: use its parent, or omit `parentId` for a root.';
 
 export const PlanNodeCreateSchema = z
   .object({
@@ -193,10 +193,7 @@ export const PlanNodeCreateSchema = z
         message: PLAN_NODE_PROPOSAL_AND_LIVE_CHECK_MESSAGE,
       });
     }
-    if (
-      create.liveCheck !== undefined &&
-      (create.parentId === undefined || create.kind !== 'investigate')
-    ) {
+    if (create.liveCheck !== undefined && create.kind !== 'investigate') {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['liveCheck'],
