@@ -1047,7 +1047,10 @@ export interface ServiceExit {
 export interface RunningService {
   readonly processId: string;
   readonly exited: Promise<ServiceExit>;
-  /** End its group politely, then for it; `exited` settles once it has. */
+  /**
+   * End its group politely, then for it. Once stopped, `exited` settles when
+   * every process of the group is gone and reaped, not when its leader is.
+   */
   stop(): void;
 }
 
@@ -1096,6 +1099,8 @@ export function startUnconfinedService(input: ServiceStartInput): RunningService
     input.onOutput?.(chunk.toString('utf8'));
   });
 
+  let stopping = false;
+  let groupDone = false;
   const exited = new Promise<ServiceExit>((resolve) => {
     const settle = (code: number | null, signal: NodeJS.Signals | null): void => {
       if (entry.exited) return;
@@ -1103,7 +1108,14 @@ export function startUnconfinedService(input: ServiceStartInput): RunningService
       entry.exitCode = code;
       entry.exitedAt = Date.now();
       if (child.pid !== undefined) forgetSpawn(child.pid);
-      resolve({ code, signal, stderrTail });
+      const done = (): void => {
+        groupDone = true;
+        resolve({ code, signal, stderrTail });
+      };
+      // The leader's close is not the group's end: a child the shell forked
+      // can outlive it by a moment, or linger unreaped once reparented.
+      if (stopping) void groupGone(child).then(done);
+      else done();
     };
     child.once('close', settle);
     child.once('error', (error: Error) => {
@@ -1117,11 +1129,37 @@ export function startUnconfinedService(input: ServiceStartInput): RunningService
     processId,
     exited,
     stop: () => {
-      if (entry.exited) return;
+      if (entry.exited || stopping) return;
+      stopping = true;
       signalGroup(child, 'SIGTERM');
       setTimeout(() => {
-        if (!entry.exited) signalGroup(child, 'SIGKILL');
+        // While any member is left the kernel keeps the group's id, so this
+        // reaches only what is still this service's.
+        if (!groupDone) signalGroup(child, 'SIGKILL');
       }, SIGKILL_AFTER_MS).unref();
     },
   };
+}
+
+const GROUP_POLL_MS = 25;
+/** Past the SIGKILL, room for the last member to be reaped. */
+const GROUP_GONE_WAIT_MS = SIGKILL_AFTER_MS + 2_000;
+
+function groupExists(child: ChildProcess): boolean {
+  if (child.pid === undefined) return false;
+  try {
+    process.kill(-child.pid, 0);
+    return true;
+  } catch {
+    // ESRCH, or EPERM: the id names a group that is not ours, so ours is gone.
+    return false;
+  }
+}
+
+/** Settles once no process of the child's group is left, zombies included, or the wait runs out. */
+async function groupGone(child: ChildProcess): Promise<void> {
+  const deadline = Date.now() + GROUP_GONE_WAIT_MS;
+  while (groupExists(child) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, GROUP_POLL_MS));
+  }
 }

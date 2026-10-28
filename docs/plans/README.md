@@ -54,6 +54,7 @@ the wrong shape, change the plan rather than quietly diverging from it.
 | [330](330-default-spaces-quick-start.md)                                    | Default spaces: a quick start installs with the product         |
 | [331](331-the-always-on-helmsman.md)                                        | The always-on Helmsman                                          |
 | [332](332-the-plan-page-serves-the-operators-jobs.md)                       | The plan page serves the operator's jobs                        |
+| [333](333-agent-facing-english-is-controlled.md)                            | Agent-facing English is controlled                              |
 
 ## What a plan is not
 

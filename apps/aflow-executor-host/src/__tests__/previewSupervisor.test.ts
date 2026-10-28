@@ -31,7 +31,7 @@ import type { ServiceExit } from '../sandboxedRun.js';
 
 const onLoopback = requires(LOOPBACK_LISTENER);
 /** Ports nothing here listens on, for the cases where nothing ever does. */
-const UNUSED_PORTS = { silent: 41_791, aborted: 41_792, exits: 41_793 };
+const UNUSED_PORTS = { silent: 41_791, aborted: 41_792, exits: 41_793, forked: 41_798 };
 const NO_STACK = new Map<number, StackPortOwner>();
 const FREE = { stackOwn: NO_STACK, taken: () => Promise.resolve(false) };
 
@@ -100,12 +100,20 @@ function alive(pid: number): boolean {
 
 async function start(
   mode: string,
-  options: { port?: number; readyTimeoutMs?: number; signal?: AbortSignal } = {},
+  options: {
+    port?: number;
+    readyTimeoutMs?: number;
+    signal?: AbortSignal;
+    /** Keep the shell after the server, so the server is a process it forked. */
+    forked?: boolean;
+  } = {},
 ): Promise<StartedPreview> {
   const port = options.port ?? (await pickFreeLoopbackPort());
   return await startPreview({
     preview: {
-      command: `"${process.execPath}" server.mjs {port} ${mode}`,
+      command:
+        `"${process.execPath}" server.mjs {port} ${mode}` +
+        (options.forked === true ? '; true' : ''),
       readyPath: '/health',
       uiPaths: [],
       webAppDirs: [],
@@ -172,6 +180,18 @@ describe('a run’s preview', () => {
     expect((error as PreviewError).log).toContain('secret=none');
     // And it was stopped, not left running.
     expect(alive(pidIn(message))).toBe(false);
+  }, 30_000);
+
+  it('has ended a server the shell forked by the time it fails, not only the shell', async () => {
+    const error = await start('silent', {
+      port: UNUSED_PORTS.forked,
+      readyTimeoutMs: 1_000,
+      forked: true,
+    }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(PreviewError);
+    const pid = pidIn((error as Error).message);
+    expect(pid).toBeGreaterThan(0);
+    expect(alive(pid)).toBe(false);
   }, 30_000);
 
   it('fails at once when the command exits before it answers', async () => {
