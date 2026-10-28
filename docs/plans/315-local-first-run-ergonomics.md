@@ -244,6 +244,8 @@ A copy test over the product package for the withheld words on local surfaces; e
 
 ## 9. Open questions
 
+Publication treats `CLAUDE.md` and `AGENTS.md` at any repository depth as sensitive code and reviews them at deep depth, even when they are the only changed Markdown files. Ordinary documentation and README files retain brief review sizing. Session terminal transitions release schedule-create counts in the existing active-membership Redis call rather than making a separate delete round trip.
+
 - A home across spaces and agents, or straight to a space's chat: decided in P2 with a prototype, not here.
 - Whether the appliance CLI is the executor binary itself (`aflow-host connect`) or a thin `aflow` command that fronts it; pairing already writes `~/.aflow`, so the name is the only decision.
 - Whether resuming the last conversation on open is the default for every local workspace or only a personal one.

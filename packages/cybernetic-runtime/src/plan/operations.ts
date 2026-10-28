@@ -42,6 +42,7 @@ import {
 } from '@aflow/schemas';
 import { publishActionCenterWake } from '@aflow/redis';
 import { bumpAttentionGeneration } from '../attentionCache.js';
+import { emitPlanUpdated } from '../entityEvents.js';
 import { findPlanRoots, orderPlanTree, type PlanTreeWalkBounds } from './tree.js';
 import {
   buildPlanBoard,
@@ -266,17 +267,41 @@ async function written<T>(ctx: PlanWriteContext, value: T): Promise<T> {
 }
 
 /**
+ * Every committed write of a plan node — and of what is linked to it — returns
+ * through here, never a refused one: the attention bump, then the plan page's
+ * `entity.plan.updated` (Plan 332 D9). A new node write (P2's open and place)
+ * inherits the signal by returning through `nodeWritten` or this.
+ */
+async function planWritten<T>(
+  ctx: PlanWriteContext,
+  node: { nodeId: string; revision: number },
+  value: T,
+): Promise<T> {
+  await written(ctx, value);
+  await emitPlanUpdated(ctx.redis, {
+    tenantId: ctx.tenantId,
+    spaceId: ctx.spaceId,
+    nodeId: node.nodeId,
+    revision: node.revision,
+  });
+  return value;
+}
+
+/**
  * A `decide` node's Action Center item is read from the nodes themselves, so
  * any node write — a decision created, rewritten or closed, or a branch above
  * one closed — can change what the space's Action Center shows.
  */
-async function nodeWritten<T>(ctx: PlanWriteContext, value: T): Promise<T> {
+async function nodeWritten<T extends { node: PlanNode }>(
+  ctx: PlanWriteContext,
+  value: T,
+): Promise<T> {
   publishActionCenterWake(ctx.redis, {
     source: 'plan_node_write',
     tenantId: ctx.tenantId,
     spaceId: ctx.spaceId,
   });
-  return written(ctx, value);
+  return planWritten(ctx, value.node, value);
 }
 
 // ============================================================================
@@ -703,7 +728,11 @@ export async function linkPlanNode(
         details: { ...inserted.link },
       };
     case 'inserted':
-      return written(ctx, { ok: true as const, link: inserted.link });
+      return planWritten(
+        ctx,
+        { nodeId: input.nodeId, revision: inserted.revision },
+        { ok: true as const, link: inserted.link },
+      );
   }
 }
 
@@ -735,13 +764,13 @@ export async function linkEndedRun(ctx: PlanWriteContext, run: EndedPlanRun): Pr
         ]
       : []),
   ];
-  let wrote = false;
+  let revision: number | undefined;
   for (const link of links) {
     const inserted = await ctx.store.insertLink(ctx.spaceId, { nodeId: run.nodeId, ...link });
     if (inserted.outcome === 'node_not_found') return;
-    wrote ||= inserted.outcome === 'inserted';
+    if (inserted.outcome === 'inserted') revision = inserted.revision;
   }
-  if (wrote) await bumpAttentionGeneration(ctx.redis, ctx.tenantId, ctx.spaceId);
+  if (revision !== undefined) await planWritten(ctx, { nodeId: run.nodeId, revision }, undefined);
 }
 
 // ============================================================================

@@ -69,6 +69,7 @@ export {
 export {
   deriveMcpBindingSetupTask,
   fetchPresentCredentialKeys,
+  bundleReadsGithub,
 } from './stagedChange/bundleInstallManifest.js';
 export * from './stagedChange/skillBundleInstall.js';
 export * from './stagedChange/bundleInstallValidator.js';
@@ -199,6 +200,7 @@ export * from './workflowHarnessAdvance.js';
 
 export * from './workflowRunProgress.js';
 export * from './runEvents.js';
+export * from './entityEvents.js';
 
 // Phase 3 — attention cache
 export * from './attentionCache.js';

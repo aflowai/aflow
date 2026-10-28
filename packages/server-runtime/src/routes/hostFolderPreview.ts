@@ -65,11 +65,11 @@ const NOT_SPACE_ADMIN = {
 const Params = z.object({ bindingId: z.string().min(1).max(64) });
 const Target = z.object({ hostname: z.string().min(1).max(256) });
 
-async function relay(request: HostFolderRequest): Promise<HostExchange<HostFolderAnswer>> {
+async function relay(asked: HostFolderRequest): Promise<HostExchange<HostFolderAnswer>> {
   return await askHost(hostExchangeConnections('host-folder-answer'), {
-    requestChannel: hostFolderRequestChannel(request.hostname),
-    answerChannel: hostFolderAnswerChannel(request.answerId),
-    request,
+    requestChannel: hostFolderRequestChannel(asked.hostname),
+    answerChannel: hostFolderAnswerChannel(asked.answerId),
+    request: asked,
     parse: (value) => HostFolderAnswerSchema.safeParse(value).data,
     timeoutMs: PREVIEW_ANSWER_TIMEOUT_MS,
   });

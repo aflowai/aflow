@@ -378,6 +378,19 @@ beforeEach(() => {
 // ============================================================================
 
 describe('executeStoreUninstall — guards', () => {
+  it('refuses space listings in preview and execution without mutating their provenance', async () => {
+    const catalogId = 'local-review-quick-start';
+    store.installs.push(installRow(catalogId, 'space'));
+    for (const result of [await preview(catalogId), await uninstall({ catalogId })]) {
+      expect(result).toMatchObject({
+        ok: false,
+        body: { error: 'A space listing installs a space and has no uninstall.' },
+      });
+    }
+    expect(store.installs).toHaveLength(1);
+    expect(archiveSkill).not.toHaveBeenCalled();
+  });
+
   it('fails NOT_INSTALLED when the space has no install row', async () => {
     const result = await uninstall();
     expect(result.ok).toBe(false);

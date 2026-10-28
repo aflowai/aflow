@@ -63,7 +63,6 @@ import {
   type DiscoveryScope,
 } from '../helpers/agentTurn.js';
 import { checkPlatformOpScope } from './inlineOps/catalogToolPromote.js';
-import { releaseScheduleCreates } from './inlineOps/scheduleCreateBudget.js';
 import {
   isHistoryEnabled,
   loadOrCreateConversation,
@@ -754,7 +753,6 @@ export async function applyStepSucceeded(params: ApplyStepSucceededParams): Prom
     );
 
     await markRunInactive(redis, result.tenantId, result.sessionId).catch(() => {});
-    await releaseScheduleCreates(redis, result.tenantId, result.sessionId);
 
     try {
       const { forwardEventToParent } = await import('./forwardChildEvent.js');

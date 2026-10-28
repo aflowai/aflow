@@ -404,6 +404,7 @@ return redis.call('SCARD', KEYS[2])
 `;
 
 const CLEAR_RUN_ACTIVE_LUA = `
+redis.call('DEL', KEYS[4])
 redis.call('SREM', KEYS[1], ARGV[1])
 redis.call('SREM', KEYS[2], ARGV[1])
 if redis.call('SCARD', KEYS[1]) == 0 then
@@ -437,6 +438,8 @@ export async function markRunActive(
 
 /**
  * Called when a run reaches a terminal state — SUCCEEDED, FAILED, CANCELLED.
+ * Releases its schedule-create budget in the same call, including runs that
+ * never created a schedule, without a separate cleanup round trip.
  *
  * Not called on pause: a paused run still holds its slot, and its shard stays
  * swept by the recovery pass that keys off this set, which is what lets a
@@ -451,10 +454,11 @@ export async function markRunInactive(
   const member = activeRunMember(tenantId, runId);
   const result = await redis.eval(
     CLEAR_RUN_ACTIVE_LUA,
-    3,
+    4,
     StreamKeys.shardActiveRunsKey(shardId),
     StreamKeys.activeRunsKey,
     StreamKeys.activeShardsKey,
+    StreamKeys.scheduleCreateCountKey(tenantId, runId),
     member,
     String(shardId),
   );

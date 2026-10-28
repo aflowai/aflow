@@ -4312,6 +4312,8 @@ describe("Publish Local Changes — the review reads as deep as the commit's sha
   it('names the sensitive paths and the documentation and tests as areas the commit task takes', () => {
     expect(HostPushAreasSchema.safeParse(REVIEW_DEPTH_AREAS).success).toBe(true);
     expect(REVIEW_DEPTH_AREAS.deep).toEqual([
+      '**/CLAUDE.md',
+      '**/AGENTS.md',
       'packages/schemas/**',
       'apps/aflow-orchestrator/**',
       'apps/aflow-executor-host/**',
