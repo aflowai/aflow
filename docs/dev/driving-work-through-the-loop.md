@@ -65,8 +65,10 @@ cannot start until another lands waits on it with `plan.node.depend` (`done`, `d
 and `plan.node.get` shows each dependency with whether it is met. The Local PR Shepherd reads
 its pull request's node too: a run in flight serving it, whoever started it, holds a pass at
 `wait`, as a publication or commission on the branch does. The operator reads the same tree on the
-space's **Plan** page, a board with a tab per plan (`GET /v1/spaces/:spaceId/plan`: every
-node with its counts, review rounds and newest pull request, done nodes by day), and opens a
+space's **Plan** page: a list of plans with each one's state (`GET /v1/spaces/:spaceId/plan`:
+every root with its steps counted by column), and the chosen plan's board
+(`GET …/plan/roots/:rootId`: every node with its counts, review rounds and newest pull
+request, done nodes by day), linkable as `?plan=<rootId>&node=<nodeId>`; it opens a
 node in the side rail (`GET …/plan/nodes/:nodeId`, its links paged) for its goal, outcome,
 runs and findings, with no Helmsman turn needed to ask. The operator writes it from the rail
 (`PATCH /v1/spaces/:spaceId/plan/nodes/:nodeId`): **Mark done** with an outcome, or

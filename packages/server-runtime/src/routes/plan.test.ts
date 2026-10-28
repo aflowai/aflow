@@ -1,6 +1,7 @@
 /**
  * The operator's plan routes (Plan 322 P3). GET /v1/spaces/:spaceId/plan reads
- * whole trees as the plan engine reads them, for a caller who may read the
+ * the space's plans as rows and GET …/plan/roots/:rootId one plan's board
+ * (Plan 332 D7), as the plan engine reads them, for a caller who may read the
  * space named in the URL, and for no other. PATCH …/plan/nodes/:nodeId closes
  * a node through the engine's update — compare-and-set on the revision the
  * operator read, a stale one refused with the node's current revision — for a
@@ -9,9 +10,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
-import type { PlanNode, PlanTreeNode, PlanTreeOutput } from '@aflow/schemas';
+import type { PlanBoardOutput, PlanNode, PlanOverviewOutput, PlanTreeNode } from '@aflow/schemas';
 
-const mockReadPlanTrees = vi.fn();
+const mockReadPlanOverview = vi.fn();
+const mockReadPlanBoard = vi.fn();
 const mockUpdatePlanNode = vi.fn();
 const mockReadPlanNodeDetail = vi.fn();
 const mockPlacePlanNode = vi.fn();
@@ -22,7 +24,8 @@ const mockReadPlanLoopMeasure = vi.fn();
 const SCHEDULES = { schedules: 'resident' };
 
 vi.mock('@aflow/cybernetic-runtime', () => ({
-  readPlanTrees: (...a: unknown[]) => mockReadPlanTrees(...a),
+  readPlanOverview: (...a: unknown[]) => mockReadPlanOverview(...a),
+  readPlanBoard: (...a: unknown[]) => mockReadPlanBoard(...a),
   updatePlanNode: (...a: unknown[]) => mockUpdatePlanNode(...a),
   readPlanNodeDetail: (...a: unknown[]) => mockReadPlanNodeDetail(...a),
   openPlanNode: (...a: unknown[]) => mockOpenPlanNode(...a),
@@ -69,35 +72,57 @@ function treeNode(
   };
 }
 
-const TREES: PlanTreeOutput = {
+const BOARD: PlanBoardOutput = {
+  root: treeNode(ROOT_ID, null, {
+    noteHead: 'next: the plan page',
+    counts: { runs: 0, pullRequests: 0, findings: 0, documents: 0, inFlightRuns: 1 },
+    progress: { done: 1, total: 1 },
+    children: [
+      treeNode(CHILD_ID, ROOT_ID, {
+        status: 'done',
+        closedAt: '2026-10-05T10:00:00.000Z',
+        counts: { runs: 2, pullRequests: 1, findings: 3, documents: 0, inFlightRuns: 0 },
+        rounds: 1,
+        pullRequest: { url: PR, merged: true, mergeSha: 'abc1234' },
+        progress: { done: 0, total: 0 },
+        children: [treeNode(GRANDCHILD_ID, CHILD_ID, { status: 'dropped' })],
+      }),
+    ],
+  }),
+  tally: {
+    rootId: ROOT_ID,
+    state: 'finished',
+    steps: 2,
+    needsYou: 0,
+    inFlight: 0,
+    upNext: 0,
+    done: 1,
+    dropped: 1,
+    doneByDay: [{ day: '2026-10-05', count: 1 }],
+  },
+};
+
+const ROWS: PlanOverviewOutput = {
   roots: [
-    treeNode(ROOT_ID, null, {
-      noteHead: 'next: the plan page',
-      counts: { runs: 0, pullRequests: 0, findings: 0, documents: 0, inFlightRuns: 1 },
-      progress: { done: 1, total: 1 },
-      children: [
-        treeNode(CHILD_ID, ROOT_ID, {
-          status: 'done',
-          closedAt: '2026-10-05T10:00:00.000Z',
-          counts: { runs: 2, pullRequests: 1, findings: 3, documents: 0, inFlightRuns: 0 },
-          rounds: 1,
-          pullRequest: { url: PR, merged: true, mergeSha: 'abc1234' },
-          progress: { done: 0, total: 0 },
-          children: [treeNode(GRANDCHILD_ID, CHILD_ID, { status: 'dropped' })],
-        }),
-      ],
-    }),
-  ],
-  tallies: [
     {
-      rootId: ROOT_ID,
-      steps: 2,
-      needsYou: 0,
-      inFlight: 0,
-      upNext: 0,
-      done: 1,
-      dropped: 1,
-      doneByDay: [{ day: '2026-10-05', count: 1 }],
+      nodeId: ROOT_ID,
+      title: 'Plan 332',
+      status: 'active',
+      position: 0,
+      revision: 3,
+      state: 'needs_you',
+      counts: { steps: 4, needsYou: 1, inFlight: 1, upNext: 1, done: 1, dropped: 0 },
+      lastWrittenAt: '2026-10-05T10:00:00.000Z',
+    },
+    {
+      nodeId: CHILD_ID,
+      title: 'Plan 322',
+      status: 'done',
+      position: 1,
+      revision: 9,
+      state: 'closed',
+      counts: { steps: 2, needsYou: 0, inFlight: 0, upNext: 0, done: 2, dropped: 0 },
+      lastWrittenAt: '2026-10-04T10:00:00.000Z',
     },
   ],
 };
@@ -175,7 +200,8 @@ beforeEach(async () => {
   caller.servicePrincipal = false;
   caller.authMethod = 'session';
   appContext.redis = REDIS;
-  mockReadPlanTrees.mockResolvedValue(TREES);
+  mockReadPlanOverview.mockResolvedValue(ROWS);
+  mockReadPlanBoard.mockResolvedValue({ ok: true, ...BOARD });
   app = await buildApp();
 });
 
@@ -184,57 +210,46 @@ afterEach(async () => {
 });
 
 describe('GET /v1/spaces/:spaceId/plan', () => {
-  it('returns the board: every node nested with its counts, rounds, owner, pull request and progress, and each plan’s tallies', async () => {
+  it('returns every plan as a row with its state and its steps’ counts, and no step', async () => {
     const res = await app.inject({ method: 'GET', url: `/v1/spaces/${SPACE_ID}/plan` });
 
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual(TREES);
+    expect(res.json()).toEqual(ROWS);
+    expect(JSON.stringify(res.json())).not.toContain('children');
   });
 
   it('reads the space in the URL through the tenant’s plan store', async () => {
     await app.inject({ method: 'GET', url: `/v1/spaces/${SPACE_ID}/plan` });
 
     expect(mockCreatePlanNodeStore).toHaveBeenCalledWith(DB, TENANT_ID);
-    expect(mockReadPlanTrees).toHaveBeenCalledWith(
-      { store: { store: 'tenant-store' }, spaceId: SPACE_ID },
-      {},
-    );
+    expect(mockReadPlanOverview).toHaveBeenCalledWith({
+      store: { store: 'tenant-store' },
+      spaceId: SPACE_ID,
+    });
+    expect(mockReadPlanBoard).not.toHaveBeenCalled();
   });
 
-  it('hands the done window and the reader’s time zone to the engine', async () => {
-    const closedSince = '2026-10-22T00:00:00.000+02:00';
-
+  it('takes no done window: the rows count every step', async () => {
     const res = await app.inject({
       method: 'GET',
-      url: `/v1/spaces/${SPACE_ID}/plan?closedSince=${encodeURIComponent(closedSince)}&tz=Europe%2FParis`,
+      url: `/v1/spaces/${SPACE_ID}/plan?closedSince=${encodeURIComponent('2026-10-22T00:00:00.000Z')}`,
     });
 
-    expect(res.statusCode).toBe(200);
-    expect(mockReadPlanTrees).toHaveBeenCalledWith(
-      { store: { store: 'tenant-store' }, spaceId: SPACE_ID },
-      { closedSince, tz: 'Europe/Paris' },
-    );
+    expect(res.statusCode).toBe(400);
+    expect(mockReadPlanOverview).not.toHaveBeenCalled();
   });
 
-  it('refuses a done window that is not an instant, and a time zone that is not one', async () => {
-    for (const query of ['closedSince=yesterday', 'tz=Mars%2FOlympus', 'links=all']) {
-      const res = await app.inject({ method: 'GET', url: `/v1/spaces/${SPACE_ID}/plan?${query}` });
-      expect(res.statusCode).toBe(400);
-    }
-    expect(mockReadPlanTrees).not.toHaveBeenCalled();
-  });
-
-  it('answers an empty plan with no roots', async () => {
-    mockReadPlanTrees.mockResolvedValue({ roots: [], tallies: [] });
+  it('answers an empty plan with no rows', async () => {
+    mockReadPlanOverview.mockResolvedValue({ roots: [] });
 
     const res = await app.inject({ method: 'GET', url: `/v1/spaces/${SPACE_ID}/plan` });
 
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ roots: [], tallies: [] });
+    expect(res.json()).toEqual({ roots: [] });
   });
 
-  it('names the bound that cut a large plan short', async () => {
-    mockReadPlanTrees.mockResolvedValue({ ...TREES, truncated: { bound: 'nodes', value: 2000 } });
+  it('names the bound that cut a large space short', async () => {
+    mockReadPlanOverview.mockResolvedValue({ ...ROWS, truncated: { bound: 'nodes', value: 2000 } });
 
     const res = await app.inject({ method: 'GET', url: `/v1/spaces/${SPACE_ID}/plan` });
 
@@ -245,7 +260,7 @@ describe('GET /v1/spaces/:spaceId/plan', () => {
     const res = await app.inject({ method: 'GET', url: `/v1/spaces/${OTHER_SPACE_ID}/plan` });
 
     expect(res.statusCode).toBe(403);
-    expect(mockReadPlanTrees).not.toHaveBeenCalled();
+    expect(mockReadPlanOverview).not.toHaveBeenCalled();
   });
 
   it('refuses an unauthenticated caller, and reads nothing', async () => {
@@ -254,7 +269,7 @@ describe('GET /v1/spaces/:spaceId/plan', () => {
     const res = await app.inject({ method: 'GET', url: `/v1/spaces/${SPACE_ID}/plan` });
 
     expect(res.statusCode).toBe(401);
-    expect(mockReadPlanTrees).not.toHaveBeenCalled();
+    expect(mockReadPlanOverview).not.toHaveBeenCalled();
   });
 
   it('refuses a space id that is not a UUID', async () => {
@@ -263,7 +278,102 @@ describe('GET /v1/spaces/:spaceId/plan', () => {
     const res = await app.inject({ method: 'GET', url: '/v1/spaces/not-a-space/plan' });
 
     expect(res.statusCode).toBe(400);
-    expect(mockReadPlanTrees).not.toHaveBeenCalled();
+    expect(mockReadPlanOverview).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /v1/spaces/:spaceId/plan/roots/:rootId', () => {
+  const url = `/v1/spaces/${SPACE_ID}/plan/roots/${ROOT_ID}`;
+
+  it('returns one plan’s board: its tree nested with counts, rounds, pull request and progress, and its tally with its state', async () => {
+    const res = await app.inject({ method: 'GET', url });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual(BOARD);
+  });
+
+  it('reads the root in the URL, in the space in the URL, through the tenant’s plan store', async () => {
+    await app.inject({ method: 'GET', url });
+
+    expect(mockCreatePlanNodeStore).toHaveBeenCalledWith(DB, TENANT_ID);
+    expect(mockReadPlanBoard).toHaveBeenCalledWith(
+      { store: { store: 'tenant-store' }, spaceId: SPACE_ID },
+      ROOT_ID,
+      {},
+    );
+    expect(mockReadPlanOverview).not.toHaveBeenCalled();
+  });
+
+  it('hands the done window and the reader’s time zone to the engine', async () => {
+    const closedSince = '2026-10-22T00:00:00.000+02:00';
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `${url}?closedSince=${encodeURIComponent(closedSince)}&tz=Europe%2FParis`,
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(mockReadPlanBoard).toHaveBeenCalledWith(
+      { store: { store: 'tenant-store' }, spaceId: SPACE_ID },
+      ROOT_ID,
+      { closedSince, tz: 'Europe/Paris' },
+    );
+  });
+
+  it('refuses a done window that is not an instant, and a time zone that is not one', async () => {
+    for (const query of ['closedSince=yesterday', 'tz=Mars%2FOlympus', 'links=all']) {
+      const res = await app.inject({ method: 'GET', url: `${url}?${query}` });
+      expect(res.statusCode).toBe(400);
+    }
+    expect(mockReadPlanBoard).not.toHaveBeenCalled();
+  });
+
+  it('answers a root the space does not hold, or a step’s id, with 404', async () => {
+    mockReadPlanBoard.mockResolvedValue({
+      ok: false,
+      code: 'PLAN_NODE_NOT_FOUND',
+      message: 'engine words',
+    });
+
+    const res = await app.inject({ method: 'GET', url });
+
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({
+      error: 'PLAN_NODE_NOT_FOUND',
+      message: 'This plan is not in the space any more.',
+    });
+  });
+
+  it('names the bound that cut a large plan short', async () => {
+    mockReadPlanBoard.mockResolvedValue({
+      ok: true,
+      ...BOARD,
+      truncated: { bound: 'depth', value: 64 },
+    });
+
+    const res = await app.inject({ method: 'GET', url });
+
+    expect(res.json()).toMatchObject({ truncated: { bound: 'depth', value: 64 } });
+  });
+
+  it('refuses a space the caller may not read, and reads nothing', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/v1/spaces/${OTHER_SPACE_ID}/plan/roots/${ROOT_ID}`,
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(mockReadPlanBoard).not.toHaveBeenCalled();
+  });
+
+  it('refuses a root id that is not a UUID', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/v1/spaces/${SPACE_ID}/plan/roots/not-a-root`,
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(mockReadPlanBoard).not.toHaveBeenCalled();
   });
 });
 

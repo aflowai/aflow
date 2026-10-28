@@ -280,6 +280,26 @@ function delay(ms: number, signal: AbortSignal): Promise<void> {
 }
 
 /**
+ * The ready path's default transport: the global fetch, refused anything but
+ * plain http to a loopback address literal. Nothing is resolved by name, so
+ * the address checked is the address dialled; `safeFetch` would refuse the
+ * loopback this asks on purpose.
+ */
+export const loopbackReadyFetch: typeof fetch = (target, init) => {
+  const url =
+    target instanceof URL ? target : new URL(typeof target === 'string' ? target : target.url);
+  if (
+    url.protocol !== 'http:' ||
+    !(PREVIEW_LOOPBACK_HOSTS as readonly string[]).includes(url.hostname)
+  ) {
+    return Promise.reject(
+      new PreviewError(`The preview is asked only on loopback, not at ${url.origin}.`, 'not_ready'),
+    );
+  }
+  return globalThis.fetch(url, init);
+};
+
+/**
  * Whether the ready path answered as up. A response of any status but a
  * server error counts — `/` on a dev server can be a redirect or a 404 page
  * and is still serving — while a 5xx is a server that is not ready yet, as a
@@ -373,7 +393,7 @@ export async function startPreview(input: StartPreviewInput): Promise<StartedPre
     await stopping;
   };
 
-  const fetchImpl = input.fetch ?? fetch;
+  const fetchImpl = input.fetch ?? loopbackReadyFetch;
   const timeoutMs = input.readyTimeoutMs ?? FOLDER_PREVIEW_READY_TIMEOUT_MS;
   const deadline = Date.now() + timeoutMs;
   let host: PreviewLoopbackHost | undefined;

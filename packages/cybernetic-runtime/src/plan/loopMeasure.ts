@@ -3,7 +3,7 @@
  * platform already writes: the operator's actions per merged pull request,
  * the idle time between a node becoming actionable and its first commission,
  * and the cost of each node's runs with the resident's wakes beside it. One
- * read for a window, beside `readPlanTrees`; nothing is stored.
+ * read for a window, beside `readPlanOverview`; nothing is stored.
  */
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { sql, type SQL } from 'drizzle-orm';

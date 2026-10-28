@@ -2,12 +2,14 @@
  * @vitest-environment jsdom
  */
 /**
- * The plan page as the operator sees it (Plan 322 P3.3, Plan 332 P1): a board
- * — a tab per plan with its step count, the plan's header, five columns saying
- * what the loop is doing with each step, Next on the walk's step, cards
- * carrying labels only, Done folded by day from the plan's own counts, no
- * Activity filter and no Done window — and a side rail that reads a step on
- * demand and holds the operator's own controls (P3.2). Rendered through the screen itself, the design system's
+ * The plan page as the operator sees it (Plan 322 P3.3, Plan 332 P1–P3): the
+ * plans as a list with each one's state, Finished and Closed below the open
+ * ones, Move up and Move down on open plans and Close plan on finished ones;
+ * the chosen plan's board — its header, five columns saying what the loop is
+ * doing with each step, Next on the walk's step, cards carrying labels only,
+ * Done folded by day from the plan's own counts, no Activity filter and no
+ * Done window — and a side rail that reads a step on demand and holds the
+ * operator's own controls (P3.2); where the operator is, in the URL. Rendered through the screen itself, the design system's
  * primitives as plain elements and every query recorded.
  */
 import { act, createContext, createElement, useContext, type ReactNode } from 'react';
@@ -18,15 +20,19 @@ import type {
   PlanNode,
   PlanNodeDetailOutput,
   PlanNodeLink,
+  PlanRootTally,
   PlanTreeNode,
-  PlanTreeOutput,
 } from '@aflow/schemas';
 
-interface Mutation {
-  path: (input: { nodeId: string }) => string;
-  method: string;
-  serialize: (input: Record<string, unknown>) => string;
-  invalidate: unknown[];
+/** The space's plans as the fixtures hold them: each root's tree and its tally, which the reads are cut from. */
+interface SpaceFixture {
+  roots: PlanTreeNode[];
+  tallies: PlanRootTally[];
+  truncated?: { bound: 'limit' | 'depth' | 'nodes'; value: number };
+  /** The rows counted short, by root, and the bound each names. */
+  rowTruncated?: Record<string, { bound: 'depth' | 'nodes'; value: number }>;
+  /** The bound that cut the list of plans short. */
+  listTruncated?: { bound: 'nodes'; value: number };
 }
 
 interface Answer {
@@ -36,8 +42,17 @@ interface Answer {
   fetchedAfterMount?: boolean;
 }
 
+/** The page's URL as the router holds it, and every push. */
+const nav = vi.hoisted(() => ({
+  search: '',
+  pushed: [] as string[],
+  listeners: new Set<() => void>(),
+}));
+
 const recorded = vi.hoisted(() => ({
   boardQueries: [] as Array<{ key: unknown[]; path: string }>,
+  rowQueries: [] as Array<{ key: unknown[]; path: string }>,
+  rowsRefetch: vi.fn(),
   board: {} as { data?: unknown; isLoading?: boolean; error?: Error | null },
   refetch: vi.fn(),
   /** The rail's read of each node, by id; absent reads as still loading. */
@@ -137,6 +152,29 @@ vi.mock('@aflow/design-system', () => {
   };
 });
 
+vi.mock('next/navigation', async () => {
+  const { useSyncExternalStore } = await import('react');
+  const subscribe = (listener: () => void) => {
+    nav.listeners.add(listener);
+    return () => {
+      nav.listeners.delete(listener);
+    };
+  };
+  const router = {
+    push: (href: string) => {
+      nav.pushed.push(href);
+      const at = href.indexOf('?');
+      nav.search = at < 0 ? '' : href.slice(at + 1);
+      for (const listener of nav.listeners) listener();
+    },
+  };
+  return {
+    useRouter: () => router,
+    usePathname: () => '/s/work/plan',
+    useSearchParams: () => new URLSearchParams(useSyncExternalStore(subscribe, () => nav.search)),
+  };
+});
+
 vi.mock('next/link', () => ({
   default: ({ href, children }: { href: string; children?: ReactNode }) =>
     createElement('a', { href }, children),
@@ -165,14 +203,34 @@ vi.mock('../hooks/useApiQuery.js', () => ({
       return { data: undefined, error: null, isFetchedAfterMount: false, refetch: vi.fn() };
     }
     const [, , , kind, nodeId, sub, linkKind, cursor] = options.key as string[];
+    const space = recorded.board.data as SpaceFixture | undefined;
+    if (kind === 'rows') {
+      recorded.rowQueries.push(options);
+      return {
+        data: space !== undefined ? cached(space, 'rows', () => rowsOf(space)) : undefined,
+        isLoading: recorded.board.isLoading ?? false,
+        error: recorded.board.error ?? null,
+        refetch: recorded.rowsRefetch,
+      };
+    }
     if (kind === 'board') {
       recorded.boardQueries.push(options);
+      // The board of the root the key names, cut from the space's fixture.
+      const rootId = nodeId;
+      const tree = space?.roots.find((r) => r.nodeId === rootId);
+      const tally = space?.tallies.find((t) => t.rootId === rootId);
       return {
-        data: undefined,
+        data:
+          space !== undefined && tree !== undefined && tally !== undefined
+            ? cached(space, `board:${rootId!}`, () => ({
+                root: tree,
+                tally,
+                ...(space.truncated !== undefined ? { truncated: space.truncated } : {}),
+              }))
+            : undefined,
         isLoading: false,
         error: null,
         refetch: recorded.refetch,
-        ...recorded.board,
       };
     }
     if (sub === 'links') {
@@ -224,7 +282,6 @@ const RUN_ID = '00000000-0000-4000-8000-0000000000f1';
 const ENDED_RUN_ID = '00000000-0000-4000-8000-0000000000f2';
 const PR = 'https://github.com/aflowai/aflow/pull/181';
 const MERGED_PR = 'https://github.com/aflowai/aflow/pull/176';
-const PLAN_315_TAB = 'Plan 315 · the loop runs itself53';
 
 /** Local times, so the reader's day is the test's to set. */
 const at = (month: number, day: number, hour = 9) =>
@@ -260,7 +317,54 @@ function treeNode(
   };
 }
 
-const PLAN: PlanTreeOutput = {
+/**
+ * One answer per fixture and read, as a query cache holds it: the same object
+ * on every render until the fixture changes, as the page's effects expect.
+ */
+const answers = new WeakMap<SpaceFixture, Map<string, unknown>>();
+function cached<T>(space: SpaceFixture, read: string, build: () => T): T {
+  const held = answers.get(space) ?? new Map<string, unknown>();
+  answers.set(space, held);
+  if (!held.has(read)) held.set(read, build());
+  return held.get(read) as T;
+}
+
+/** The rows `GET …/plan` answers for a space: each root with its tally's state and, open, its counts. */
+function rowsOf(space: SpaceFixture) {
+  return {
+    roots: space.roots.map((tree) => {
+      const tally = space.tallies.find((t) => t.rootId === tree.nodeId)!;
+      return {
+        nodeId: tree.nodeId,
+        title: tree.title,
+        status: tree.status,
+        position: tree.position,
+        revision: tree.revision,
+        state: tally.state,
+        // A closed plan is closed by rule: its steps are not counted.
+        ...(tally.state !== 'closed'
+          ? {
+              counts: {
+                steps: tally.steps,
+                needsYou: tally.needsYou,
+                inFlight: tally.inFlight,
+                upNext: tally.upNext,
+                done: tally.done,
+                dropped: tally.dropped,
+              },
+            }
+          : {}),
+        ...(space.rowTruncated?.[tree.nodeId] !== undefined
+          ? { truncated: space.rowTruncated[tree.nodeId] }
+          : {}),
+        lastWrittenAt: tree.updatedAt,
+      };
+    }),
+    ...(space.listTruncated !== undefined ? { truncated: space.listTruncated } : {}),
+  };
+}
+
+const PLAN: SpaceFixture = {
   roots: [
     treeNode(R322, null, 'Plan 322 · plans are platform records', {
       activity: 'in_flight',
@@ -311,6 +415,7 @@ const PLAN: PlanTreeOutput = {
   tallies: [
     {
       rootId: R322,
+      state: 'needs_you',
       steps: 10,
       needsYou: 1,
       inFlight: 3,
@@ -325,6 +430,7 @@ const PLAN: PlanTreeOutput = {
     },
     {
       rootId: R315,
+      state: 'closed',
       steps: 53,
       needsYou: 0,
       inFlight: 0,
@@ -342,7 +448,7 @@ const PLAN: PlanTreeOutput = {
 };
 
 /** The board with one step's status changed. */
-function withStatus(nodeId: string, status: PlanTreeNode['status']): PlanTreeOutput {
+function withStatus(nodeId: string, status: PlanTreeNode['status']): SpaceFixture {
   const restatus = (node: PlanTreeNode): PlanTreeNode => ({
     ...node,
     ...(node.nodeId === nodeId ? { status } : {}),
@@ -416,6 +522,28 @@ function card(nodeId: string): HTMLElement {
   return found;
 }
 
+function listRow(rootId: string): HTMLElement | null {
+  return container.querySelector<HTMLElement>(`[data-plan-row="${rootId}"]`);
+}
+
+/** Chooses a plan from the list, unfolding Closed where it sits there. */
+async function choosePlan(rootId: string): Promise<void> {
+  if (listRow(rootId) === null) {
+    const closed = container.querySelector('[data-plan-list-section="closed"] > button');
+    if (closed instanceof HTMLElement) await click(closed);
+  }
+  const row = listRow(rootId);
+  if (!row) throw new Error(`no plan row ${rootId}`);
+  await click(row.querySelector('button')!);
+}
+
+function rowIds(section: 'open' | 'finished' | 'closed'): string[] {
+  const scope = container.querySelector(`[data-plan-list-section="${section}"]`);
+  return [...(scope?.querySelectorAll('[data-plan-row]') ?? [])].map(
+    (r) => r.getAttribute('data-plan-row') ?? '',
+  );
+}
+
 function rail(): Element {
   const found = container.querySelector('[data-plan-rail]');
   if (!found) throw new Error('no rail');
@@ -474,7 +602,11 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(NOW);
   recorded.boardQueries = [];
+  recorded.rowQueries = [];
+  recorded.rowsRefetch.mockReset();
   recorded.board = {};
+  nav.search = '';
+  nav.pushed = [];
   recorded.refetch.mockReset();
   recorded.details = {
     [BOARD]: detail(fullNode(BOARD, 'P3.3 the board')),
@@ -505,12 +637,16 @@ afterEach(() => {
 });
 
 describe('SpacePlanPage — the board', () => {
-  it('reads the board under the space’s plan key, done steps from today, in the reader’s time zone', async () => {
+  it('reads the rows and the first open plan’s board under the space’s plan key, done steps from today, in the reader’s time zone', async () => {
     await render();
 
+    expect(recorded.rowQueries.at(-1)).toMatchObject({
+      key: ['space', SPACE_ID, 'plan', 'rows'],
+      path: `/spaces/${SPACE_ID}/plan`,
+    });
     const { query, url } = lastBoardQuery();
-    expect(query.key.slice(0, 4)).toEqual(['space', SPACE_ID, 'plan', 'board']);
-    expect(url.pathname).toBe(`/spaces/${SPACE_ID}/plan`);
+    expect(query.key.slice(0, 5)).toEqual(['space', SPACE_ID, 'plan', 'board', R322]);
+    expect(url.pathname).toBe(`/spaces/${SPACE_ID}/plan/roots/${R322}`);
     expect(url.searchParams.get('closedSince')).toBe(new Date(2026, 9, 22).toISOString());
     expect(url.searchParams.get('tz')).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
   });
@@ -521,18 +657,17 @@ describe('SpacePlanPage — the board', () => {
     expect(new Set(recorded.liveRefresh)).toEqual(new Set([SPACE_ID]));
   });
 
-  it('shows a tab per plan with its step count, and the selected plan’s title and header', async () => {
+  it('shows no tab rail, and the chosen plan’s title and header with its state', async () => {
     await render();
 
-    const tabs = [...container.querySelectorAll('[role="tab"]')].map((t) => t.textContent);
-    expect(tabs).toEqual(['Plan 322 · plans are platform records10', PLAN_315_TAB]);
+    expect(container.querySelector('[role="tab"]')).toBe(null);
     expect(container.querySelector(`[data-plan-tally="${R322}"]`)?.textContent).toBe(
-      '4 of 10 closed1 needs you3 in flight2 up next3 done1 dropped',
+      'Needs you4 of 10 closed1 needs you3 in flight2 up next3 done1 dropped',
     );
 
-    await click(button(container, PLAN_315_TAB));
+    await choosePlan(R315);
     expect(container.querySelector(`[data-plan-tally="${R315}"]`)?.textContent).toBe(
-      '53 of 53 closed53 done',
+      'Closed53 of 53 closed53 done',
     );
   });
 
@@ -569,7 +704,7 @@ describe('SpacePlanPage — the board', () => {
 
   it('shows why a step needs the reader, a step under a closed one included', async () => {
     const STRANDED = '00000000-0000-4000-8000-0000000000b3';
-    const stranded: PlanTreeOutput = {
+    const stranded: SpaceFixture = {
       ...PLAN,
       roots: PLAN.roots.map((r) =>
         r.nodeId === R315
@@ -587,7 +722,7 @@ describe('SpacePlanPage — the board', () => {
     expect(card(DECISION).getAttribute('data-reason')).toBe('decide');
     expect(card(DECISION).textContent).toContain('Decision');
 
-    await click(button(container, PLAN_315_TAB));
+    await choosePlan(R315);
     expect(cardIds(column('needs_you'))).toEqual([STRANDED]);
     expect(card(STRANDED).getAttribute('data-reason')).toBe('stranded');
     expect(card(STRANDED).textContent).toContain('Under a closed step');
@@ -595,7 +730,7 @@ describe('SpacePlanPage — the board', () => {
 
   it('renders no Activity filter, no explanation of it and no Done window', async () => {
     await render();
-    await click(button(container, PLAN_315_TAB));
+    await choosePlan(R315);
 
     expect(container.querySelector('[data-plan-filter="Activity"]')).toBe(null);
     expect(container.querySelector('[data-plan-filter="Done"]')).toBe(null);
@@ -633,7 +768,7 @@ describe('SpacePlanPage — the board', () => {
 
   it('folds Done by day from the plan’s counts, only the first fold open', async () => {
     await render();
-    await click(button(container, PLAN_315_TAB));
+    await choosePlan(R315);
 
     expect(folds()).toEqual([
       ['Today · 1', 'true'],
@@ -647,7 +782,7 @@ describe('SpacePlanPage — the board', () => {
 
   it('reads an earlier fold’s steps when it is opened, from the first day it covers', async () => {
     await render();
-    await click(button(container, PLAN_315_TAB));
+    await choosePlan(R315);
 
     await click(button(column('done'), 'Oct 5 – 20 · 50'));
 
@@ -658,7 +793,7 @@ describe('SpacePlanPage — the board', () => {
   });
 
   it('opens the first fold, and reads its steps, where nothing closed today', async () => {
-    const quiet: PlanTreeOutput = {
+    const quiet: SpaceFixture = {
       ...PLAN,
       tallies: PLAN.tallies.map((t) =>
         t.rootId === R322 ? { ...t, doneByDay: [{ day: '2026-09-20', count: 2 }] } : t,
@@ -678,7 +813,7 @@ describe('SpacePlanPage — the board', () => {
     expect(container.querySelector('[data-plan-filter="Phase"]')).toBe(null);
 
     const ARTICLE_DRAFT = '00000000-0000-4000-8000-0000000000a9';
-    const twoPhases: PlanTreeOutput = {
+    const twoPhases: SpaceFixture = {
       ...PLAN,
       roots: PLAN.roots.map((r) =>
         r.nodeId === R322
@@ -782,7 +917,7 @@ describe('SpacePlanPage — the rail', () => {
   });
 
   it('shows the note’s first line under Now above the goal, and the whole note folded under Working note', async () => {
-    const withNote: PlanTreeOutput = {
+    const withNote: SpaceFixture = {
       ...PLAN,
       roots: PLAN.roots.map((r) => ({
         ...r,
@@ -1253,7 +1388,7 @@ const UP_C = '00000000-0000-4000-8000-0000000000d7';
 const PHASE = '00000000-0000-4000-8000-0000000000d8';
 const LONE = '00000000-0000-4000-8000-0000000000d9';
 
-const P2_PLAN: PlanTreeOutput = {
+const P2_PLAN: SpaceFixture = {
   roots: [
     treeNode(R331, null, 'Plan 331 · the always-on Helmsman', {
       children: [
@@ -1282,6 +1417,7 @@ const P2_PLAN: PlanTreeOutput = {
   tallies: [
     {
       rootId: R331,
+      state: 'needs_you',
       steps: 9,
       needsYou: 2,
       inFlight: 0,
@@ -1464,5 +1600,478 @@ describe('SpacePlanPage — approve, reopen and order (Plan 332 P2)', () => {
       'not beside it any more',
     );
     expect(recorded.refetch).toHaveBeenCalled();
+  });
+});
+
+// Plan 332 P3: a space whose plans stand in every state.
+const L_NEEDS = '00000000-0000-4000-8000-0000000001a1';
+const L_FLIGHT = '00000000-0000-4000-8000-0000000001a2';
+const L_QUEUED = '00000000-0000-4000-8000-0000000001a3';
+const L_FINISHED = '00000000-0000-4000-8000-0000000001a4';
+const L_CLOSED = '00000000-0000-4000-8000-0000000001a5';
+const L_EMPTY = '00000000-0000-4000-8000-0000000001a6';
+const L_STEP = '00000000-0000-4000-8000-0000000001b1';
+
+function tally(rootId: string, extra: Partial<PlanRootTally>): PlanRootTally {
+  return {
+    rootId,
+    state: 'empty',
+    steps: 0,
+    needsYou: 0,
+    inFlight: 0,
+    upNext: 0,
+    done: 0,
+    dropped: 0,
+    doneByDay: [],
+    ...extra,
+  };
+}
+
+const LIST: SpaceFixture = {
+  roots: [
+    treeNode(L_NEEDS, null, 'Plan 331 · the always-on Helmsman', {
+      revision: 2,
+      children: [treeNode(L_STEP, L_NEEDS, 'P1 — the loop takes the next node')],
+    }),
+    treeNode(L_FLIGHT, null, 'Plan 332 · the plan page', { position: 1, revision: 3 }),
+    treeNode(L_QUEUED, null, 'Plan 329 · planning', { position: 2, revision: 4 }),
+    treeNode(L_FINISHED, null, 'Plan 324 · capabilities', { position: 3, revision: 7 }),
+    treeNode(L_CLOSED, null, 'Plan 315 · the loop runs itself', {
+      position: 4,
+      status: 'done',
+      closedAt: at(10, 20),
+    }),
+    treeNode(L_EMPTY, null, 'Plan 328 · not started', { position: 5, revision: 5 }),
+  ],
+  tallies: [
+    tally(L_NEEDS, {
+      state: 'needs_you',
+      steps: 4,
+      needsYou: 3,
+      inFlight: 1,
+      done: 1,
+      doneByDay: [{ day: '2026-10-22', count: 1 }],
+    }),
+    tally(L_FLIGHT, { state: 'in_flight', steps: 3, inFlight: 1, upNext: 1, done: 1 }),
+    tally(L_QUEUED, { state: 'queued', steps: 2, upNext: 2 }),
+    tally(L_FINISHED, { state: 'finished', steps: 5, done: 4, dropped: 1 }),
+    tally(L_CLOSED, { state: 'closed', steps: 53, done: 53 }),
+    tally(L_EMPTY, { state: 'empty' }),
+  ],
+};
+
+/** The browser moving to `search`, as back and forward do. */
+async function goTo(search: string): Promise<void> {
+  await act(async () => {
+    nav.search = search;
+    for (const listener of nav.listeners) listener();
+  });
+}
+
+function boardShown(): string | null {
+  return container.querySelector('[data-plan-board]')?.getAttribute('data-plan-board') ?? null;
+}
+
+describe('SpacePlanPage — the plan list (Plan 332 P3)', () => {
+  it('lists open plans in position order with state, progress and non-zero counts, then Finished, then Closed folded', async () => {
+    await render({ data: LIST });
+
+    expect(rowIds('open')).toEqual([L_NEEDS, L_FLIGHT, L_QUEUED, L_EMPTY]);
+    expect(rowIds('finished')).toEqual([L_FINISHED]);
+    expect(rowIds('closed')).toEqual([]);
+
+    const needs = listRow(L_NEEDS)!;
+    expect([...needs.querySelectorAll('[data-badge]')].map((b) => b.textContent)).toEqual([
+      'Needs you',
+      '3 need you',
+      '1 in flight',
+    ]);
+    expect(needs.querySelector('[data-plan-row-progress]')?.textContent).toBe('1/4');
+    expect(
+      [...listRow(L_QUEUED)!.querySelectorAll('[data-badge]')].map((b) => b.textContent),
+    ).toEqual(['Queued']);
+    expect(listRow(L_FINISHED)?.textContent).toContain('5/5');
+    expect(listRow(L_EMPTY)?.textContent).toContain('No steps');
+
+    const finished = container.querySelector('[data-plan-list-section="finished"]')!;
+    expect(finished.textContent).toContain('Finished · 1');
+    expect(buttonTexts(listRow(L_FINISHED)!)).toContain('Close plan');
+    expect(buttonTexts(listRow(L_NEEDS)!)).not.toContain('Close plan');
+
+    const closed = container.querySelector('[data-plan-list-section="closed"] > button')!;
+    expect(closed.textContent).toBe('Closed · 1');
+    expect(closed.getAttribute('aria-expanded')).toBe('false');
+    await click(closed as HTMLElement);
+    expect(rowIds('closed')).toEqual([L_CLOSED]);
+    expect(listRow(L_CLOSED)?.textContent).toContain('Closed');
+    expect(listRow(L_CLOSED)?.querySelector('[data-plan-row-progress]')).toBe(null);
+    expect(container.querySelector('[data-plan-row-truncated]')).toBe(null);
+    expect(container.querySelector('[data-plan-list-truncated]')).toBe(null);
+  });
+
+  it('marks every row counted short on the row itself, and offers no Close plan on one', async () => {
+    await render({
+      data: {
+        ...LIST,
+        rowTruncated: {
+          [L_FLIGHT]: { bound: 'nodes', value: 2000 },
+          [L_FINISHED]: { bound: 'depth', value: 64 },
+        },
+      },
+    });
+
+    const marked = [...container.querySelectorAll('[data-plan-row-truncated]')].map((m) => [
+      m.closest('[data-plan-row]')?.getAttribute('data-plan-row'),
+      m.textContent,
+    ]);
+    expect(marked).toEqual([
+      [L_FLIGHT, 'Counted short: the list counts 2000 steps across its plans'],
+      [L_FINISHED, 'Counted short: steps deeper than 64 levels left out'],
+    ]);
+    // Its uncounted steps may be open: it stays among the open plans, with no Close plan.
+    expect(rowIds('open')).toEqual([L_NEEDS, L_FLIGHT, L_QUEUED, L_FINISHED, L_EMPTY]);
+    expect(rowIds('finished')).toEqual([]);
+    expect(buttonTexts(listRow(L_FINISHED)!)).not.toContain('Close plan');
+    expect(container.querySelector('[data-plan-list-truncated]')).toBe(null);
+  });
+
+  it('says when the list of plans itself was cut short', async () => {
+    await render({ data: { ...LIST, listTruncated: { bound: 'nodes', value: 2000 } } });
+
+    expect(container.querySelector('[data-plan-list-truncated]')?.textContent).toBe(
+      'First 2000 plans',
+    );
+  });
+
+  it('holds the list in the 280px left column beside the board', async () => {
+    await render({ data: LIST });
+
+    const list = container.querySelector<HTMLElement>('[data-plan-list]')!;
+    expect(list.getAttribute('data-layout')).toBe('column');
+    expect(list.style.width).toBe('280px');
+    expect(list.querySelector('[data-plan-board]')).toBe(null);
+  });
+
+  it('is a disclosure above the content below 900px, closed again once a plan is chosen', async () => {
+    recorded.narrow = true;
+    await render({ data: LIST });
+
+    const list = container.querySelector('[data-plan-list]')!;
+    expect(list.getAttribute('data-layout')).toBe('disclosure');
+    expect(
+      list.compareDocumentPosition(container.querySelector('[data-plan-board]')!) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    const toggle = list.querySelector('button')!;
+    expect(toggle.textContent).toBe('Plans · 6 — Plan 331 · the always-on Helmsman');
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(listRow(L_NEEDS)).toBe(null);
+
+    await click(toggle);
+    expect(rowIds('open')).toEqual([L_NEEDS, L_FLIGHT, L_QUEUED, L_EMPTY]);
+
+    await choosePlan(L_FLIGHT);
+    expect(listRow(L_NEEDS)).toBe(null);
+    expect(boardShown()).toBe(L_FLIGHT);
+    expect(container.querySelector('[data-plan-list] button')?.textContent).toBe(
+      'Plans · 6 — Plan 332 · the plan page',
+    );
+  });
+
+  it('renders a list of 50 plans with the selected row scrolled into view', async () => {
+    const roots = Array.from({ length: 50 }, (_, i) =>
+      treeNode(
+        `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+        null,
+        `Plan ${String(i)}`,
+        { position: i },
+      ),
+    );
+    const fifty: SpaceFixture = {
+      roots,
+      tallies: roots.map((r) => tally(r.nodeId, { state: 'queued', steps: 1, upNext: 1 })),
+    };
+    const scrolled: Element[] = [];
+    const scrollIntoView = vi.fn(function (this: Element) {
+      scrolled.push(this);
+    });
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      value: scrollIntoView,
+      configurable: true,
+      writable: true,
+    });
+    try {
+      nav.search = `plan=${roots[44]!.nodeId}`;
+      await render({ data: fifty });
+
+      expect(rowIds('open')).toHaveLength(50);
+      expect(listRow(roots[44]!.nodeId)?.getAttribute('aria-current')).toBe('true');
+      expect(scrolled.at(-1)).toBe(listRow(roots[44]!.nodeId));
+      expect(scrollIntoView).toHaveBeenLastCalledWith({ block: 'nearest' });
+
+      await choosePlan(roots[3]!.nodeId);
+      expect(scrolled.at(-1)).toBe(listRow(roots[3]!.nodeId));
+    } finally {
+      delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    }
+  });
+
+  it('unfolds Closed when the plan chosen is closed, so its row is in view', async () => {
+    nav.search = `plan=${L_CLOSED}`;
+    await render({ data: LIST });
+
+    expect(rowIds('closed')).toEqual([L_CLOSED]);
+    expect(listRow(L_CLOSED)?.getAttribute('aria-current')).toBe('true');
+    expect(boardShown()).toBe(L_CLOSED);
+  });
+});
+
+describe('SpacePlanPage — where the operator is, in the URL (Plan 332 D8)', () => {
+  it('shows the first open plan’s board where the URL names no plan, and writes nothing to the URL', async () => {
+    await render({ data: LIST });
+
+    expect(boardShown()).toBe(L_NEEDS);
+    expect(listRow(L_NEEDS)?.getAttribute('aria-current')).toBe('true');
+    expect(nav.pushed).toEqual([]);
+  });
+
+  it('shows the plan the URL names, and the first open plan for one the space does not hold', async () => {
+    nav.search = `plan=${L_QUEUED}`;
+    await render({ data: LIST });
+    expect(boardShown()).toBe(L_QUEUED);
+    expect(lastBoardQuery().url.pathname).toBe(`/spaces/${SPACE_ID}/plan/roots/${L_QUEUED}`);
+
+    await goTo('plan=00000000-0000-4000-8000-0000000009ff');
+    expect(boardShown()).toBe(L_NEEDS);
+  });
+
+  it('puts the plan chosen in the URL, and back lands on the plan before it', async () => {
+    await render({ data: LIST });
+
+    await choosePlan(L_FLIGHT);
+    expect(nav.pushed).toEqual([`/s/work/plan?plan=${L_FLIGHT}`]);
+    expect(boardShown()).toBe(L_FLIGHT);
+
+    await goTo('');
+    expect(boardShown()).toBe(L_NEEDS);
+  });
+
+  it('puts the step opened in the URL beside its plan, and takes it out when the rail closes', async () => {
+    await render();
+
+    await click(card(BOARD));
+    expect(nav.pushed.at(-1)).toBe(`/s/work/plan?plan=${R322}&node=${BOARD}`);
+    expect(rail().getAttribute('data-plan-rail')).toBe(BOARD);
+
+    await click(button(rail(), 'Close'));
+    expect(nav.pushed.at(-1)).toBe(`/s/work/plan?plan=${R322}`);
+    expect(container.querySelector('[data-plan-rail]')).toBe(null);
+  });
+
+  it('reopens the same board and rail on reload of a URL with plan and node', async () => {
+    nav.search = `plan=${R315}&node=${STEP_315}`;
+    recorded.details[STEP_315] = detail(
+      fullNode(STEP_315, 'F116 crash restarts', { parentId: R315, status: 'done' }),
+    );
+    await render();
+
+    expect(boardShown()).toBe(R315);
+    expect(rail().getAttribute('data-plan-rail')).toBe(STEP_315);
+    expect(recorded.detailQueries.at(-1)?.key).toEqual([
+      'space',
+      SPACE_ID,
+      'plan',
+      'node',
+      STEP_315,
+    ]);
+    expect(nav.pushed).toEqual([]);
+
+    // Back from the rail closes it over the same board.
+    await goTo(`plan=${R315}`);
+    expect(boardShown()).toBe(R315);
+    expect(container.querySelector('[data-plan-rail]')).toBe(null);
+  });
+
+  it('closes the rail when another plan is chosen', async () => {
+    nav.search = `plan=${R322}&node=${BOARD}`;
+    await render();
+    expect(rail().getAttribute('data-plan-rail')).toBe(BOARD);
+
+    await choosePlan(R315);
+    expect(nav.pushed.at(-1)).toBe(`/s/work/plan?plan=${R315}`);
+    expect(container.querySelector('[data-plan-rail]')).toBe(null);
+  });
+});
+
+describe('SpacePlanPage — ordering and closing plans from the list (Plan 332 P3)', () => {
+  beforeEach(() => {
+    recorded.mutateAsync.mockResolvedValue({ node: {} });
+  });
+
+  it('offers Move up and Move down on open rows only where an open plan lies that way', async () => {
+    await render({ data: LIST });
+
+    const moves = (rootId: string) =>
+      buttonTexts(listRow(rootId)!).filter((t) => t.startsWith('Move'));
+    expect(moves(L_NEEDS)).toEqual(['Move down']);
+    expect(moves(L_FLIGHT)).toEqual(['Move up', 'Move down']);
+    expect(moves(L_EMPTY)).toEqual(['Move up']);
+    expect(moves(L_FINISHED)).toEqual([]);
+  });
+
+  it('places a plan before or after the open row beside it, against the revision the rows read', async () => {
+    await render({ data: LIST });
+
+    await click(button(listRow(L_FLIGHT)!, 'Move up'));
+    await click(button(listRow(L_QUEUED)!, 'Move down'));
+
+    expect(recorded.sent).toEqual([
+      {
+        path: `/spaces/${SPACE_ID}/plan/nodes/${L_FLIGHT}/place`,
+        body: { expectedRevision: 3, before: L_NEEDS },
+      },
+      {
+        path: `/spaces/${SPACE_ID}/plan/nodes/${L_QUEUED}/place`,
+        body: { expectedRevision: 4, after: L_EMPTY },
+      },
+    ]);
+    expect(mutationFor('/place')?.invalidate).toEqual([['space', SPACE_ID, 'plan']]);
+    // A move is not a choice of plan.
+    expect(nav.pushed).toEqual([]);
+  });
+
+  it('lists the plans in their new order once the rows are read again after a move', async () => {
+    await render({ data: LIST });
+    await click(button(listRow(L_FLIGHT)!, 'Move up'));
+
+    const [needs, flight, ...rest] = LIST.roots;
+    const moved: SpaceFixture = {
+      ...LIST,
+      roots: [{ ...flight!, position: 0, revision: 4 }, { ...needs!, position: 1 }, ...rest],
+    };
+    await render({ data: moved });
+
+    expect(rowIds('open')).toEqual([L_FLIGHT, L_NEEDS, L_QUEUED, L_EMPTY]);
+    expect(buttonTexts(listRow(L_FLIGHT)!).filter((t) => t.startsWith('Move'))).toEqual([
+      'Move down',
+    ]);
+  });
+
+  it('says why a move was refused on its row, and reads the rows again when a plan moved', async () => {
+    recorded.mutateAsync.mockRejectedValue(
+      Object.assign(new Error('The step this was placed against is not beside it any more.'), {
+        status: 409,
+      }),
+    );
+    await render({ data: LIST });
+
+    await click(button(listRow(L_QUEUED)!, 'Move up'));
+
+    expect(listRow(L_QUEUED)?.querySelector('[role="alert"]')?.textContent).toContain(
+      'not beside it any more',
+    );
+    expect(recorded.rowsRefetch).toHaveBeenCalled();
+  });
+
+  it('closes a finished plan with the close write on its root, pinned to the revision its fresh read showed, and lists it under Closed', async () => {
+    recorded.details[L_FINISHED] = detail(
+      fullNode(L_FINISHED, 'Plan 324 · capabilities', {
+        parentId: null,
+        revision: 7,
+        criteria: 'Every phase landed.',
+      }),
+    );
+    await render({ data: LIST });
+
+    await click(button(listRow(L_FINISHED)!, 'Close plan'));
+    expect(recorded.detailQueries.at(-1)).toMatchObject({
+      key: ['space', SPACE_ID, 'plan', 'node', L_FINISHED, 'head'],
+      path: `/spaces/${SPACE_ID}/plan/nodes/${L_FINISHED}?limit=1`,
+      staleTime: 0,
+    });
+    const form = listRow(L_FINISHED)!.querySelector('[data-plan-close-root]')!;
+    expect(form.textContent).toContain('Done when: Every phase landed.');
+    expect(button(form, 'Close plan').disabled).toBe(true);
+    await type(form, 'Every phase merged.');
+    await click(button(form, 'Close plan'));
+
+    expect(recorded.sent).toEqual([
+      {
+        path: `/spaces/${SPACE_ID}/plan/nodes/${L_FINISHED}`,
+        body: { expectedRevision: 7, status: 'done', outcome: 'Every phase merged.' },
+      },
+    ]);
+    expect(mutationFor('')?.invalidate).toEqual([['space', SPACE_ID, 'plan']]);
+    expect(listRow(L_FINISHED)?.querySelector('[data-plan-close-root]')).toBe(null);
+
+    // The rows read again: the root is done, so the plan is closed.
+    const closed: SpaceFixture = {
+      roots: LIST.roots.map((r) =>
+        r.nodeId === L_FINISHED ? { ...r, status: 'done', revision: 8 } : r,
+      ),
+      tallies: LIST.tallies.map((t) => (t.rootId === L_FINISHED ? { ...t, state: 'closed' } : t)),
+    };
+    await render({ data: closed });
+
+    expect(rowIds('finished')).toEqual([]);
+    expect(container.querySelector('[data-plan-list-section="finished"]')?.textContent).toContain(
+      'Finished · 0',
+    );
+    await click(
+      container.querySelector<HTMLElement>('[data-plan-list-section="closed"] > button')!,
+    );
+    expect(rowIds('closed')).toEqual([L_FINISHED, L_CLOSED]);
+  });
+
+  it('keeps Close plan pinned to the root as first read, and reads it again after a refusal', async () => {
+    recorded.details[L_FINISHED] = detail(
+      fullNode(L_FINISHED, 'Plan 324 · capabilities', { parentId: null, revision: 7 }),
+    );
+    recorded.mutateAsync.mockRejectedValue(
+      Object.assign(new Error('This step changed since the plan was read: it is at revision 8.'), {
+        status: 409,
+      }),
+    );
+    await render({ data: LIST });
+    await click(button(listRow(L_FINISHED)!, 'Close plan'));
+    await type(listRow(L_FINISHED)!, 'Every phase merged.');
+
+    recorded.details[L_FINISHED] = detail(
+      fullNode(L_FINISHED, 'Plan 324 · capabilities', { parentId: null, revision: 8 }),
+    );
+    await render({ data: LIST });
+    expect(listRow(L_FINISHED)?.querySelector('[data-plan-close-moved]')).not.toBe(null);
+    await click(
+      button(listRow(L_FINISHED)!.querySelector('[data-plan-close-root]')!, 'Close plan'),
+    );
+
+    expect(recorded.sent[0]?.body).toMatchObject({ expectedRevision: 7 });
+    expect(listRow(L_FINISHED)?.querySelector('[role="alert"]')?.textContent).toContain(
+      'it is at revision 8',
+    );
+    expect(recorded.detailRefetch).toHaveBeenCalled();
+    expect(recorded.rowsRefetch).toHaveBeenCalled();
+  });
+
+  it('offers Close plan in a finished plan’s header, and none on a plan with open steps', async () => {
+    await render({ data: LIST });
+    const header = () => container.querySelector(`[data-plan-tally]`)!.parentElement!;
+    expect(buttonTexts(header())).not.toContain('Close plan');
+
+    await choosePlan(L_FINISHED);
+    expect(header().textContent).toContain('Finished');
+    expect(buttonTexts(header())).toContain('Close plan');
+  });
+
+  it('offers no Close plan in the header of a finished plan whose board was read short, and says why', async () => {
+    await render({ data: { ...LIST, truncated: { bound: 'nodes', value: 2000 } } });
+    await choosePlan(L_FINISHED);
+    const header = container.querySelector(`[data-plan-tally]`)!.parentElement!;
+
+    expect(header.textContent).toContain('Finished');
+    expect(buttonTexts(header)).not.toContain('Close plan');
+    expect(header.querySelector('[data-plan-close-withheld]')?.textContent).toBe(
+      'Counted short: the first 2000 steps, so no Close plan',
+    );
   });
 });

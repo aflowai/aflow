@@ -17,6 +17,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { LOOPBACK_LISTENER, requires } from './fixtures/capabilities.js';
 import {
   claimPreviewPort,
+  loopbackReadyFetch,
   pickFreeLoopbackPort,
   previewCommand,
   PreviewError,
@@ -482,6 +483,17 @@ describe('the preview’s command and ready address', () => {
     expect(previewReadyUrl(5180, '/health', '[::1]').href).toBe('http://[::1]:5180/health');
     for (const path of ['//evil.example/health', '/\\evil.example']) {
       expect(() => previewReadyUrl(5180, path), path).toThrow(PreviewError);
+    }
+  });
+
+  it('asks by default only over plain http to a loopback address, never a name', async () => {
+    for (const target of [
+      'http://localhost:5180/',
+      'http://evil.example/',
+      'https://127.0.0.1:5180/',
+      'http://10.0.0.1:5180/',
+    ]) {
+      await expect(loopbackReadyFetch(target), target).rejects.toThrow(PreviewError);
     }
   });
 });
