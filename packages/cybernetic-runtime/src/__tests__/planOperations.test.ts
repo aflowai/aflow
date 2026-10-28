@@ -520,6 +520,7 @@ describe('updatePlanNode — reopening a closed node', () => {
       code: 'PLAN_NODE_NOTE_TOO_LONG',
       details: {
         nodeId: node.nodeId,
+        status: 'done',
         noteLength: PLAN_NODE_PROSE_MAX_CHARS + 1,
         noteMaxChars: PLAN_NODE_PROSE_MAX_CHARS,
       },

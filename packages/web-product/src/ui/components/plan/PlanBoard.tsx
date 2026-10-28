@@ -20,11 +20,20 @@ import {
   planCards,
   planDoneFolds,
   planDoneGroups,
+  planMoveTargets,
   pullRequestLabel,
   waitingLine,
   type PlanBoardFilters,
   type PlanCard,
 } from '../../lib/plan-board.js';
+import type { PlanNodeCloseAnswer } from './PlanNodeCloseControl.js';
+
+/** What the operator asks of an Up next step: directly before or after a sibling, against the revision the board read. */
+export type PlanNodePlaceRequest = { nodeId: string; expectedRevision: number } & (
+  { before: string } | { after: string }
+);
+
+export type PlanNodePlacer = (request: PlanNodePlaceRequest) => Promise<PlanNodeCloseAnswer>;
 
 const STRIP_WIDTH = '32px';
 
@@ -54,14 +63,88 @@ function SubtaskBar({ done, total }: { done: number; total: number }) {
   );
 }
 
+/**
+ * **Move up** and **Move down** on an Up next card (Plan 332 D6): each puts the
+ * step before or after its nearest open sibling, and shows only where there is
+ * one. The board's read holds the whole plan, so every sibling is on screen.
+ */
+function MoveControls({
+  node,
+  moves,
+  onPlace,
+}: {
+  node: PlanTreeNode;
+  moves: { above?: PlanTreeNode; below?: PlanTreeNode };
+  onPlace: PlanNodePlacer;
+}) {
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  if (moves.above === undefined && moves.below === undefined) return null;
+  const place = async (anchor: { before: string } | { after: string }) => {
+    setPending(true);
+    setError(null);
+    const answer = await onPlace({
+      nodeId: node.nodeId,
+      expectedRevision: node.revision,
+      ...anchor,
+    });
+    setPending(false);
+    if (!answer.ok) setError(answer.message);
+  };
+  const above = moves.above;
+  const below = moves.below;
+  return (
+    <Column gap="xs" data-plan-move={node.nodeId}>
+      <Row gap="xs" align="center">
+        {above !== undefined && (
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={pending}
+            onClick={(event) => {
+              event.stopPropagation();
+              void place({ before: above.nodeId });
+            }}
+          >
+            Move up
+          </Button>
+        )}
+        {below !== undefined && (
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={pending}
+            onClick={(event) => {
+              event.stopPropagation();
+              void place({ after: below.nodeId });
+            }}
+          >
+            Move down
+          </Button>
+        )}
+      </Row>
+      {error !== null && (
+        <Text size="xs" tone="danger" role="alert">
+          {error}
+        </Text>
+      )}
+    </Column>
+  );
+}
+
 function PlanCardView({
   card,
   next,
   selected,
+  moves,
   onSelect,
   onDecide,
+  onPlace,
 }: {
   card: PlanCard;
+  /** For an Up next card, the open siblings it may move past. */
+  moves: { above?: PlanTreeNode; below?: PlanTreeNode } | undefined;
+  onPlace: PlanNodePlacer;
   /** The step the stream walk takes next for this plan. */
   next: boolean;
   selected: boolean;
@@ -147,6 +230,7 @@ function PlanCardView({
               </Button>
             </Row>
           )}
+          {moves !== undefined && <MoveControls node={node} moves={moves} onPlace={onPlace} />}
         </Column>
       </CardBody>
     </Card>
@@ -207,6 +291,7 @@ export interface PlanBoardProps {
   selectedId: string | undefined;
   onSelect: (card: PlanCard) => void;
   onDecide: (card: PlanCard) => void;
+  onPlace: PlanNodePlacer;
   /** Below ~900px the columns stack, their headers as section headers. */
   narrow: boolean;
 }
@@ -222,6 +307,7 @@ export function PlanBoard({
   selectedId,
   onSelect,
   onDecide,
+  onPlace,
   narrow,
 }: PlanBoardProps) {
   const [droppedOpen, setDroppedOpen] = useState(false);
@@ -241,8 +327,10 @@ export function PlanBoard({
       card={card}
       next={card.node.nodeId === tally.nextNodeId}
       selected={card.node.nodeId === selectedId}
+      moves={card.column === 'up_next' ? planMoveTargets(root, card.node.nodeId) : undefined}
       onSelect={onSelect}
       onDecide={onDecide}
+      onPlace={onPlace}
     />
   );
   const renderCards = (list: readonly PlanCard[]): ReactNode =>

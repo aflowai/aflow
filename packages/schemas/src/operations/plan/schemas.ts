@@ -9,6 +9,9 @@ import {
   OPEN_PLAN_NODE_STATUSES,
   PlanNodeCloseSchema,
   PlanNodeCreateSchema,
+  PlanNodeOpenSchema,
+  PlanNodePlaceSchema,
+  PlanNodeSiblingSchema,
   PlanNodeDependencyConditionSchema,
   PlanNodeDependencySchema,
   PlanNodeDependencyViewSchema,
@@ -488,6 +491,29 @@ export type PlanNodeDetailOutput = z.infer<typeof PlanNodeDetailOutputSchema>;
 export const PlanNodeCloseInputSchema = PlanNodeCloseSchema;
 export type PlanNodeCloseInput = z.infer<typeof PlanNodeCloseInputSchema>;
 
+/**
+ * `PATCH /v1/spaces/:spaceId/plan/nodes/:nodeId/open` — the operator approves a
+ * blocked node or reopens a closed one (Plan 332 D6).
+ */
+export const PlanNodeOpenInputSchema = PlanNodeOpenSchema;
+export type PlanNodeOpenInput = z.infer<typeof PlanNodeOpenInputSchema>;
+
+/**
+ * `PATCH /v1/spaces/:spaceId/plan/nodes/:nodeId/place` — the operator puts a
+ * node before or after a sibling (Plan 332 D6).
+ */
+export const PlanNodePlaceInputSchema = PlanNodePlaceSchema;
+export type PlanNodePlaceInput = z.infer<typeof PlanNodePlaceInputSchema>;
+
+/** `error.details` for `PLAN_NODE_PLACE_STALE`: the node's siblings, itself among them, in order. */
+export const PlanNodePlaceRefusalDetailsSchema = z
+  .object({
+    nodeId: z.string().uuid(),
+    siblings: z.array(PlanNodeSiblingSchema),
+  })
+  .strict();
+export type PlanNodePlaceRefusalDetails = z.infer<typeof PlanNodePlaceRefusalDetailsSchema>;
+
 /** An operator's write the engine refused, with what a retry needs. */
 export const PlanNodeWriteRefusalSchema = z.object({
   error: z.string().describe('The engine’s code, e.g. `PLAN_NODE_STALE`.'),
@@ -495,6 +521,12 @@ export const PlanNodeWriteRefusalSchema = z.object({
   current: PlanNodeRefusalDetailsSchema.optional().describe(
     'For a stale or unchanged write: the node as it now stands — write again against `current.revision`.',
   ),
+  siblings: z
+    .array(PlanNodeSiblingSchema)
+    .optional()
+    .describe(
+      'For a place whose sibling moved away: the node’s siblings as they now stand, in order, the node among them.',
+    ),
 });
 export type PlanNodeWriteRefusal = z.infer<typeof PlanNodeWriteRefusalSchema>;
 

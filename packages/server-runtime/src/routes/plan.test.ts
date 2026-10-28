@@ -14,12 +14,16 @@ import type { PlanNode, PlanTreeNode, PlanTreeOutput } from '@aflow/schemas';
 const mockReadPlanTrees = vi.fn();
 const mockUpdatePlanNode = vi.fn();
 const mockReadPlanNodeDetail = vi.fn();
+const mockOpenPlanNode = vi.fn();
+const mockPlacePlanNode = vi.fn();
 const mockCreatePlanNodeStore = vi.fn((..._args: unknown[]) => ({ store: 'tenant-store' }));
 
 vi.mock('@aflow/cybernetic-runtime', () => ({
   readPlanTrees: (...a: unknown[]) => mockReadPlanTrees(...a),
   updatePlanNode: (...a: unknown[]) => mockUpdatePlanNode(...a),
   readPlanNodeDetail: (...a: unknown[]) => mockReadPlanNodeDetail(...a),
+  openPlanNode: (...a: unknown[]) => mockOpenPlanNode(...a),
+  placePlanNode: (...a: unknown[]) => mockPlacePlanNode(...a),
   createPlanNodeStore: (...a: unknown[]) => mockCreatePlanNodeStore(...a),
 }));
 
@@ -545,5 +549,314 @@ describe('GET /v1/spaces/:spaceId/plan/nodes/:nodeId', () => {
 
     expect(res.statusCode).toBe(403);
     expect(mockReadPlanNodeDetail).not.toHaveBeenCalled();
+  });
+});
+
+/** A node as an open or place write answers with it. */
+function writtenNode(extra: Partial<PlanNode> = {}): PlanNode {
+  return {
+    nodeId: CHILD_ID,
+    spaceId: SPACE_ID,
+    parentId: ROOT_ID,
+    kind: 'execute',
+    title: 'P1 — the loop takes the next node',
+    goal: 'The loop takes approved work.',
+    criteria: 'It is taken.',
+    status: 'active',
+    note: 'Approved: go ahead\nProposed from the plan document',
+    revision: 4,
+    position: 0,
+    createdAt: '2026-10-05T08:00:00.000Z',
+    updatedAt: '2026-10-05T11:00:00.000Z',
+    ...extra,
+  };
+}
+
+const ENGINE_CTX = {
+  store: { store: 'tenant-store' },
+  spaceId: SPACE_ID,
+  redis: REDIS,
+  tenantId: TENANT_ID,
+  createdBy: OPERATOR_ID,
+};
+
+const STALE_CURRENT = {
+  nodeId: CHILD_ID,
+  revision: 5,
+  status: 'blocked',
+  updatedAt: '2026-10-05T10:30:00.000Z',
+  differingFields: ['status'],
+};
+
+describe('PATCH /v1/spaces/:spaceId/plan/nodes/:nodeId/open', () => {
+  const url = `/v1/spaces/${SPACE_ID}/plan/nodes/${CHILD_ID}/open`;
+  const open = (body: unknown) =>
+    app.inject({ method: 'PATCH', url, payload: body as Record<string, unknown> });
+
+  it('approves through the engine against the revision read, stamped from the session, with the status it left', async () => {
+    mockOpenPlanNode.mockResolvedValue({ ok: true, node: writtenNode(), from: 'blocked' });
+
+    const res = await open({ expectedRevision: 3, why: 'go ahead' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ node: writtenNode() });
+    expect(mockOpenPlanNode).toHaveBeenCalledWith(ENGINE_CTX, {
+      nodeId: CHILD_ID,
+      expectedRevision: 3,
+      why: 'go ahead',
+    });
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actor: expect.objectContaining({
+          userId: OPERATOR_ID,
+          kind: 'human',
+          authMethod: 'session',
+        }),
+        action: 'plan.node.open',
+        target: expect.objectContaining({
+          resourceType: 'plan_node',
+          resourceId: CHILD_ID,
+          spaceId: SPACE_ID,
+        }),
+        details: { status: 'blocked', revision: 4 },
+      }),
+    );
+  });
+
+  it('reopens without a reason, and records that it left done', async () => {
+    mockOpenPlanNode.mockResolvedValue({ ok: true, node: writtenNode(), from: 'done' });
+
+    const res = await open({ expectedRevision: 3 });
+
+    expect(res.statusCode).toBe(200);
+    expect(mockOpenPlanNode.mock.calls[0]?.[1]).toEqual({ nodeId: CHILD_ID, expectedRevision: 3 });
+    expect(audit.record.mock.calls[0]?.[0]).toMatchObject({
+      details: { status: 'done', revision: 4 },
+    });
+  });
+
+  it('refuses a reason past 500 characters, a missing revision and a status, before the engine', async () => {
+    expect((await open({ expectedRevision: 3, why: 'x'.repeat(501) })).statusCode).toBe(400);
+    expect((await open({ why: 'go' })).statusCode).toBe(400);
+    expect((await open({ expectedRevision: 3, status: 'active' })).statusCode).toBe(400);
+    expect(mockOpenPlanNode).not.toHaveBeenCalled();
+  });
+
+  it('refuses a stale revision with the node’s current one, and writes no audit row', async () => {
+    mockOpenPlanNode.mockResolvedValue({
+      ok: false,
+      code: 'PLAN_NODE_STALE',
+      message: 'engine words',
+      details: STALE_CURRENT,
+    });
+
+    const res = await open({ expectedRevision: 3 });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: 'PLAN_NODE_STALE', current: STALE_CURRENT });
+    expect(audit.record).not.toHaveBeenCalled();
+  });
+
+  it('answers an active or waiting node with 422 and the node as it stands', async () => {
+    for (const status of ['active', 'waiting'] as const) {
+      mockOpenPlanNode.mockResolvedValueOnce({
+        ok: false,
+        code: 'PLAN_NODE_UNCHANGED',
+        message: 'engine words',
+        details: { ...STALE_CURRENT, revision: 3, status, differingFields: [] },
+      });
+
+      const res = await open({ expectedRevision: 3 });
+
+      expect(res.statusCode).toBe(422);
+      expect(res.json()).toMatchObject({ error: 'PLAN_NODE_UNCHANGED', current: { status } });
+      expect(res.json().message).toContain(`This step is ${status}`);
+    }
+    expect(audit.record).not.toHaveBeenCalled();
+  });
+
+  it('answers an overlong note with the operator’s remedy, not the engine’s', async () => {
+    mockOpenPlanNode.mockResolvedValue({
+      ok: false,
+      code: 'PLAN_NODE_NOTE_TOO_LONG',
+      message: 'Pass a shorter `note` in this update, or "" to keep only that line.',
+      details: { nodeId: CHILD_ID, status: 'blocked', noteLength: 64_012, noteMaxChars: 64_000 },
+    });
+
+    const res = await open({ expectedRevision: 3, why: 'go ahead' });
+
+    expect(res.statusCode).toBe(422);
+    expect(res.json()).toEqual({
+      error: 'PLAN_NODE_NOTE_TOO_LONG',
+      message:
+        'This would leave the step’s note at 64012 characters, past the 64000 a note holds, so nothing ' +
+        'was written. Shorten the reason, or clear it and approve again without one.',
+    });
+    expect(audit.record).not.toHaveBeenCalled();
+  });
+
+  it('answers an overlong note on a reopen with the outcome as the cause, not the reason', async () => {
+    const refusal = (status: string) => ({
+      ok: false,
+      code: 'PLAN_NODE_NOTE_TOO_LONG',
+      message: 'engine words',
+      details: { nodeId: CHILD_ID, status, noteLength: 64_012, noteMaxChars: 64_000 },
+    });
+    mockOpenPlanNode.mockResolvedValueOnce(refusal('blocked'));
+    mockOpenPlanNode.mockResolvedValueOnce(refusal('done'));
+
+    const approve = (await open({ expectedRevision: 3, why: 'go ahead' })).json();
+    const reopen = await open({ expectedRevision: 3 });
+
+    expect(reopen.statusCode).toBe(422);
+    expect(reopen.json()).toEqual({
+      error: 'PLAN_NODE_NOTE_TOO_LONG',
+      message:
+        'Reopening heads this step’s note with the outcome it was closed with, which would leave the note at ' +
+        '64012 characters, past the 64000 a note holds, so nothing was written. A shorter reason, or none, ' +
+        'does not bring it under: the recorded outcome has to be shortened first, and the plan page cannot ' +
+        'write it. Ask the Helmsman to shorten the outcome while the step is still done, then reopen it.',
+    });
+    expect(reopen.json().message).not.toBe(approve.message);
+    expect(reopen.json().message).not.toContain('approve again');
+  });
+
+  it('answers a node not in the space with 404', async () => {
+    mockOpenPlanNode.mockResolvedValue({ ok: false, code: 'PLAN_NODE_NOT_FOUND', message: 'gone' });
+
+    expect((await open({ expectedRevision: 3 })).statusCode).toBe(404);
+  });
+
+  it('refuses an API key and a service principal: the write is a person’s', async () => {
+    for (const [authMethod, servicePrincipal] of [
+      ['api_key', false],
+      ['api_key', true],
+      ['session', true],
+    ] as const) {
+      caller.authMethod = authMethod;
+      caller.servicePrincipal = servicePrincipal;
+
+      const res = await open({ expectedRevision: 3 });
+
+      expect(res.statusCode).toBe(403);
+      expect(res.json()).toMatchObject({ error: 'operator_only' });
+    }
+    expect(mockOpenPlanNode).not.toHaveBeenCalled();
+  });
+
+  it('says so rather than writing where the server runs without Redis', async () => {
+    appContext.redis = null;
+
+    expect((await open({ expectedRevision: 3 })).statusCode).toBe(503);
+    expect(mockOpenPlanNode).not.toHaveBeenCalled();
+  });
+});
+
+describe('PATCH /v1/spaces/:spaceId/plan/nodes/:nodeId/place', () => {
+  const url = `/v1/spaces/${SPACE_ID}/plan/nodes/${CHILD_ID}/place`;
+  const place = (body: unknown) =>
+    app.inject({ method: 'PATCH', url, payload: body as Record<string, unknown> });
+
+  it('places before a sibling through the engine, stamped from the session, with an audit row', async () => {
+    mockPlacePlanNode.mockResolvedValue({ ok: true, node: writtenNode({ position: 512 }) });
+
+    const res = await place({ expectedRevision: 3, before: GRANDCHILD_ID });
+
+    expect(res.statusCode).toBe(200);
+    expect(mockPlacePlanNode).toHaveBeenCalledWith(ENGINE_CTX, {
+      nodeId: CHILD_ID,
+      expectedRevision: 3,
+      before: GRANDCHILD_ID,
+    });
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actor: expect.objectContaining({ userId: OPERATOR_ID, kind: 'human' }),
+        action: 'plan.node.place',
+        target: expect.objectContaining({ resourceType: 'plan_node', resourceId: CHILD_ID }),
+        details: { before: GRANDCHILD_ID, revision: 4 },
+      }),
+    );
+  });
+
+  it('places after a sibling, and records after', async () => {
+    mockPlacePlanNode.mockResolvedValue({ ok: true, node: writtenNode() });
+
+    await place({ expectedRevision: 3, after: GRANDCHILD_ID });
+
+    expect(mockPlacePlanNode.mock.calls[0]?.[1]).toEqual({
+      nodeId: CHILD_ID,
+      expectedRevision: 3,
+      after: GRANDCHILD_ID,
+    });
+    expect(audit.record.mock.calls[0]?.[0]).toMatchObject({
+      details: { after: GRANDCHILD_ID, revision: 4 },
+    });
+  });
+
+  it('refuses both anchors, neither, a position and a non-uuid, before the engine', async () => {
+    for (const body of [
+      { expectedRevision: 3, before: GRANDCHILD_ID, after: ROOT_ID },
+      { expectedRevision: 3 },
+      { expectedRevision: 3, position: 0 },
+      { expectedRevision: 3, before: 'P6.a' },
+    ]) {
+      expect((await place(body)).statusCode).toBe(400);
+    }
+    expect(mockPlacePlanNode).not.toHaveBeenCalled();
+  });
+
+  it('refuses a sibling that moved away with 409 and the siblings’ order as it stands', async () => {
+    const siblings = [
+      { nodeId: ROOT_ID, title: 'P6.a', status: 'active', position: 0 },
+      { nodeId: CHILD_ID, title: 'P6.b', status: 'blocked', position: 1024 },
+    ];
+    mockPlacePlanNode.mockResolvedValue({
+      ok: false,
+      code: 'PLAN_NODE_PLACE_STALE',
+      message: 'engine words',
+      details: { nodeId: CHILD_ID, siblings },
+    });
+
+    const res = await place({ expectedRevision: 3, before: GRANDCHILD_ID });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: 'PLAN_NODE_PLACE_STALE', siblings });
+    expect(audit.record).not.toHaveBeenCalled();
+  });
+
+  it('refuses a stale revision with the current one, and a place that changes nothing with 422', async () => {
+    mockPlacePlanNode.mockResolvedValueOnce({
+      ok: false,
+      code: 'PLAN_NODE_STALE',
+      message: 'engine words',
+      details: STALE_CURRENT,
+    });
+    const stale = await place({ expectedRevision: 3, before: GRANDCHILD_ID });
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json()).toMatchObject({ error: 'PLAN_NODE_STALE', current: STALE_CURRENT });
+
+    mockPlacePlanNode.mockResolvedValueOnce({
+      ok: false,
+      code: 'PLAN_NODE_UNCHANGED',
+      message: 'engine words',
+      details: { ...STALE_CURRENT, revision: 3, differingFields: [] },
+    });
+    expect((await place({ expectedRevision: 3, after: GRANDCHILD_ID })).statusCode).toBe(422);
+  });
+
+  it('refuses an API key and a service principal: the write is a person’s', async () => {
+    for (const [authMethod, servicePrincipal] of [
+      ['api_key', false],
+      ['session', true],
+    ] as const) {
+      caller.authMethod = authMethod;
+      caller.servicePrincipal = servicePrincipal;
+
+      const res = await place({ expectedRevision: 3, before: GRANDCHILD_ID });
+
+      expect(res.statusCode).toBe(403);
+      expect(res.json()).toMatchObject({ error: 'operator_only' });
+    }
+    expect(mockPlacePlanNode).not.toHaveBeenCalled();
   });
 });

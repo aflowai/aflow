@@ -38,6 +38,32 @@ export function isClosedStatus(status: PlanNodeStatus): boolean {
   return status === 'done' || status === 'dropped';
 }
 
+/**
+ * The node as an open form first read it. The page re-reads the plan on every
+ * write and run change (Plan 332 D9), so the live read can move under an open
+ * form; the write stays pinned to the revision the operator saw, and the form
+ * says when the live read has moved past it.
+ */
+export function usePinnedNode(
+  read: PlanNodeRead,
+  formOpen: boolean,
+): {
+  shown: PlanNode | undefined;
+  movedSinceOpened: boolean;
+  setPinned: (node: PlanNode | undefined) => void;
+} {
+  const [pinned, setPinned] = useState<PlanNode | undefined>(undefined);
+  if (!formOpen) {
+    if (pinned !== undefined) setPinned(undefined);
+  } else if (pinned === undefined && read.node !== undefined) {
+    setPinned(read.node);
+  }
+  const shown = formOpen ? (pinned ?? read.node) : read.node;
+  const movedSinceOpened =
+    shown !== undefined && read.node !== undefined && read.node.revision !== shown.revision;
+  return { shown, movedSinceOpened, setPinned };
+}
+
 const CLOSING_COPY: Record<
   'done' | 'decide' | 'dropped',
   { open: string; field: string; confirm: string }
@@ -69,18 +95,7 @@ export function PlanNodeCloseControl({
   const [text, setText] = useState('');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // The node as the open form first read it. The page re-reads the plan on
-  // every write and run change (Plan 332 D9), so the live read can move under
-  // an open form; the write stays pinned to the revision the operator saw.
-  const [pinned, setPinned] = useState<PlanNode | undefined>(undefined);
-  if (choosing === null) {
-    if (pinned !== undefined) setPinned(undefined);
-  } else if (pinned === undefined && read.node !== undefined) {
-    setPinned(read.node);
-  }
-  const shown = choosing === null ? read.node : (pinned ?? read.node);
-  const movedSinceOpened =
-    shown !== undefined && read.node !== undefined && read.node.revision !== shown.revision;
+  const { shown, movedSinceOpened, setPinned } = usePinnedNode(read, choosing !== null);
   const closedNow =
     read.node !== undefined && isClosedStatus(read.node.status) ? read.node.status : undefined;
   const openUnder = node.children.some((child) => !isClosedStatus(child.status));
