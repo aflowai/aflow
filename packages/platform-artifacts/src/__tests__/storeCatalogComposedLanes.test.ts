@@ -47,7 +47,9 @@ function catalogIds(lanes: ComposedLanes): string[] {
 describe('store listings against the edition’s composed lanes', () => {
   it('derives a bundle’s required operations from its skills’ tasks', () => {
     expect(listingRequiredOperations(entryOrThrow('local-code-review'))).toEqual([
+      'host.binding.inspect',
       'host.harness.run',
+      'workflow.run.decide',
     ]);
     expect(listingRequiredOperations(entryOrThrow('coding-pr-loop'))).toEqual(
       expect.arrayContaining(['code.agent.run', 'code.repo.push']),
@@ -102,7 +104,8 @@ describe('store listings against the edition’s composed lanes', () => {
   it('refuses an uncomposed listing in the operation’s own words, and only then', () => {
     const reason = uncomposedListingReason(entryOrThrow('local-code-review'), HOSTED);
     expect(reason).toContain('lane_not_composed');
-    expect(reason).toContain('host.harness.run');
+    expect(reason).toContain('host.binding.inspect');
+    expect(reason).toContain('the host lane');
     expect(reason).toContain('enterprise');
     expect(
       uncomposedListingReason(entryOrThrow('local-code-review'), LOCAL_WITH_MACHINE),

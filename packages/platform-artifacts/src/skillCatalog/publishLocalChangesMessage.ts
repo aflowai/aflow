@@ -16,7 +16,9 @@ import { bind, ctx, out, runInput, SKIP } from './localPrShepherdWiring.js';
  */
 
 /** The commission's task, whose recorded `patchRef` finds its run. */
-const COMMISSION_TASK = COMMISSION_CHANGE.bundle.workflow.tasks[0]?.taskId ?? 'commission';
+const COMMISSION_TASK =
+  COMMISSION_CHANGE.bundle.workflow.tasks.find((task) => task.operation === 'host.harness.run')
+    ?.taskId ?? 'commission';
 
 export const COMMISSION_RUN_ID_SCHEMA = {
   type: 'string',

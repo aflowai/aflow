@@ -16,7 +16,12 @@ import { coerceJsonObjectArg } from './jsonObjectArg.js';
 
 import { PayloadRefSchema, STORED_PAYLOAD_REF_PATTERN } from '../runtime/payloadRef.js';
 import { DeclaredBrowserProfileIdSchema, EPHEMERAL_BROWSER_PROFILE } from './browserProfile.js';
-import { harnessPreviewRequestIssue, HostHarnessPreviewFlagSchema } from './hostFolderPreview.js';
+import {
+  harnessPreviewRequestIssue,
+  HostFolderUiAnswerSchema,
+  HostFolderUiQuestionSchema,
+  HostHarnessPreviewFlagSchema,
+} from './hostFolderPreview.js';
 
 /**
  * What a branch name and a branch prefix may be, in one place.
@@ -1402,6 +1407,7 @@ export const HostBindingInspectInputSchema = z.object({
         'that never recorded `refs/remotes/origin/HEAD` asks `origin` over the network for it, ' +
         'so pass `true` only where the branch is needed; otherwise it is left out.',
     ),
+  ui: HostFolderUiQuestionSchema.optional(),
 });
 
 /** GitHub's rule for an owner: letters, digits and single hyphens between them, at most 39. */
@@ -1488,4 +1494,5 @@ export const HostBindingInspectOutputSchema = z.object({
     'Whether the machine holding the folder is held awake while it has work: the mode the ' +
       'operator chose, else the default now.',
   ),
+  ui: HostFolderUiAnswerSchema.optional().describe('The answer to `ui`, where it was asked.'),
 });

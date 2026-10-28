@@ -2,11 +2,23 @@ import { describe, it, expect } from 'vitest';
 import AjvModule from 'ajv';
 import { materializeAndValidateSkillConfig } from '@aflow/cybernetic-runtime';
 import {
+  HOST_HARNESS_CONCURRENCY_DEFAULT,
+  HOST_KEEP_AWAKE_DEFAULT,
+  HOST_SANDBOX_POSTURE_DEFAULT,
+  HostBindingInspectInputSchema,
+  HostBindingInspectOutputSchema,
+  type HostFolderUiAnswer,
   HostHarnessRunInputSchema,
   isEvalPlaneOperation,
   substituteTemplateBinds,
 } from '@aflow/schemas';
-import { REVIEW_LOCAL_CHANGES } from './reviewLocalChanges.js';
+import {
+  BROWSER_UNAVAILABLE_ON_HARNESS,
+  UI_NOT_SEEN_NO_GRANT,
+  UI_NOT_SEEN_NO_PREVIEW,
+} from './localBrowserRule.js';
+import { REVIEW_LOCAL_CHANGES, REVIEW_PREVIEW_PARAGRAPH } from './reviewLocalChanges.js';
+import { runSkillTasks, type TaskAnswer } from '../__tests__/runSkillTasks.js';
 import { skillGuidance } from '../__tests__/skillGuidance.js';
 
 const AjvCtor = (AjvModule as unknown as { default: typeof AjvModule }).default ?? AjvModule;
@@ -17,17 +29,28 @@ interface SchemaField {
 }
 
 const wf = REVIEW_LOCAL_CHANGES.bundle.workflow;
-const task = wf.tasks[0];
+const task = wf.tasks.find((t) => t.taskId === 'review');
 const template = task?.inputTemplate as
   | {
       bindingId: unknown;
-      task: string;
+      task: unknown;
       inputs: Record<string, unknown>;
       outputSchema: Record<string, unknown>;
       maxTurns: unknown;
       resultRetries: number;
     }
   | undefined;
+
+/** The brief a review is handed where the rule gives it no preview: the task prose alone. */
+function reviewBrief(): string {
+  return HostHarnessRunInputSchema.parse(
+    substituteTemplateBinds(
+      task?.inputTemplate ?? {},
+      { bindingId: 'hb_repo', at: 'HEAD' },
+      new Set(Object.keys(task?.inputBindings ?? {})),
+    ),
+  ).task;
+}
 
 describe('Review Local Changes — the first harness inside a skill', () => {
   it('has a valid contract', () => {
@@ -54,14 +77,19 @@ describe('Review Local Changes — the first harness inside a skill', () => {
     expect(validity.status).toBe('valid');
   });
 
-  it('is one read-only operation task on the host harness', () => {
-    expect(wf.tasks).toHaveLength(1);
+  it('is a read of the folder, a decision by rule, and one read-only harness run', () => {
+    expect(wf.tasks.map((t) => t.taskId)).toEqual(['read-ui', 'decide-browser', 'review']);
+    // Nothing in the skill writes: the folder is only read, and the decision is the orchestrator's.
+    expect(wf.tasks.map((t) => t.operation)).toEqual([
+      'host.binding.inspect',
+      'workflow.run.decide',
+      'host.harness.run',
+    ]);
     expect(task?.type).toBe('operation');
-    expect(task?.operation).toBe('host.harness.run');
     expect(task?.context?.capabilities?.operations).toEqual(['host.harness.run']);
     expect(task?.context?.capabilities?.integrations ?? []).toEqual([]);
     expect(template?.resultRetries).toBe(2);
-    expect(template?.task).toContain('Edit no file, stage nothing and commit nothing.');
+    expect(reviewBrief()).toContain('Edit no file, stage nothing and commit nothing.');
   });
 
   it('takes the folder and the range’s two ends as run inputs, and carries them to the harness', () => {
@@ -70,7 +98,7 @@ describe('Review Local Changes — the first harness inside a skill', () => {
     expect(task?.inputBindings?.['bindingId']).toMatchObject({ kind: 'run_input' });
     expect(Object.keys(template?.inputs ?? {})).toEqual(['range', 'focus', 'depth']);
     expect(template?.outputSchema).not.toHaveProperty('x-reviewRequest');
-    expect(template?.task).toContain('inputs of this task');
+    expect(reviewBrief()).toContain('inputs of this task');
   });
 
   /** The harness call a run makes from these run inputs. */
@@ -130,8 +158,8 @@ describe('Review Local Changes — the first harness inside a skill', () => {
     expect(task?.inputBindings?.['at']).toEqual({ kind: 'run_input', path: 'at' });
     expect(task?.inputBindings?.['from']).toEqual({ kind: 'run_input', path: 'from' });
     // The skill says so, to the harness and to the Helmsman that fills `at`.
-    expect(template?.task).toContain('detached at the commit the range ends at');
-    expect(template?.task).toContain('names only where the diff starts');
+    expect(reviewBrief()).toContain('detached at the commit the range ends at');
+    expect(reviewBrief()).toContain('names only where the diff starts');
     expect(skillGuidance(REVIEW_LOCAL_CHANGES)).toContain('detached at `at`');
     const at = (wf.runInputs ?? []).find((i) => i.id === 'at');
     expect(at?.description).toContain('"HEAD" for "main..HEAD"');
@@ -140,9 +168,9 @@ describe('Review Local Changes — the first harness inside a skill', () => {
   it('reads a range’s diff from where its two ends meet, and its commits as given', () => {
     // A branch its base moved past, read two-dot, shows every change the base
     // took since as one the branch undoes.
-    expect(template?.task).toContain('`git log <base>..<sha>`');
-    expect(template?.task).toContain('`git diff <base>...<sha>`');
-    expect(template?.task).not.toMatch(/git diff <base>\.\.<sha>/);
+    expect(reviewBrief()).toContain('`git log <base>..<sha>`');
+    expect(reviewBrief()).toContain('`git diff <base>...<sha>`');
+    expect(reviewBrief()).not.toMatch(/git diff <base>\.\.<sha>/);
     const from = (wf.runInputs ?? []).find((i) => i.id === 'from');
     expect(from?.description).toContain('`<from>...<at>`');
     expect(skillGuidance(REVIEW_LOCAL_CHANGES)).toContain('`main...HEAD`');
@@ -164,7 +192,7 @@ describe('Review Local Changes — the first harness inside a skill', () => {
       kind: 'run_input',
       path: 'maxTurns',
     });
-    expect(template?.task).toContain('At `brief`');
+    expect(reviewBrief()).toContain('At `brief`');
     // What tells the Helmsman that a request for something quick is this rung
     // and not a sentence in `focus`.
     expect(skillGuidance(REVIEW_LOCAL_CHANGES)).toContain('smoke test');
@@ -174,10 +202,16 @@ describe('Review Local Changes — the first harness inside a skill', () => {
   });
 
   it('promotes the verdict, the summary a person reads, and the findings a publication decides on one at a time', () => {
-    const promoted = (task?.promoteOutputs ?? []).map((p) => ('toState' in p ? p.toState : ''));
-    expect(promoted).toEqual(['verdict', 'reviewSummary', 'findings']);
+    expect((task?.promoteOutputs ?? []).map((p) => ('toState' in p ? p.toState : ''))).toEqual([
+      'verdict',
+      'reviewSummary',
+      'findings',
+    ]);
+    const promoted = wf.tasks.flatMap((t) =>
+      (t.promoteOutputs ?? []).map((p) => ('toState' in p ? p.toState : '')),
+    );
     const declared = (wf.stateVariables ?? []).map((v) => v.variableId);
-    expect(declared).toEqual(['verdict', 'reviewSummary', 'findings']);
+    expect(declared).toEqual(['verdict', 'reviewSummary', 'findings', 'uiNotSeen']);
     for (const id of promoted) expect(declared).toContain(id);
     // The summary stays the review as it is reported; the findings are for a run to act on.
     expect(wf.output?.primary).toBe('verdict');
@@ -188,7 +222,7 @@ describe('Review Local Changes — the first harness inside a skill', () => {
       .properties['summary'];
     expect(summary?.maxLength).toBe(16000);
     expect(summary?.description).toContain('file:line');
-    expect(template?.task).toContain('Write the summary as the deliverable');
+    expect(reviewBrief()).toContain('Write the summary as the deliverable');
   });
 
   it('declares a result schema that admits a review and refuses one with no verdict', () => {
@@ -279,5 +313,162 @@ describe('Review Local Changes — the first harness inside a skill', () => {
       ...(t.context?.capabilities?.operations ?? []),
     ]);
     expect(operations.filter((op) => isEvalPlaneOperation(op))).toEqual([]);
+  });
+});
+
+// --- Plan 320 D20: the browser and the preview, by rule over the range -------
+
+const RANGE = { bindingId: 'hb_app', from: 'main', at: 'feature' };
+
+/** The folder's answer about the range, as the machine holding it returns it. */
+function folderAnswer(ui: Partial<HostFolderUiAnswer> & Pick<HostFolderUiAnswer, 'preview'>) {
+  return HostBindingInspectOutputSchema.parse({
+    id: 'hb_app',
+    sandbox: HOST_SANDBOX_POSTURE_DEFAULT,
+    maxConcurrentHarnessRuns: HOST_HARNESS_CONCURRENCY_DEFAULT,
+    keepAwake: HOST_KEEP_AWAKE_DEFAULT,
+    ui: {
+      uiPaths: ['src/web/**'],
+      files: [],
+      touched: false,
+      browser: { harness: 'claude' },
+      ...ui,
+    },
+  });
+}
+
+const TOUCHED = { files: ['src/web/Checkout.vue'], touched: true };
+
+const VERDICT = { result: { verdict: 'approve', summary: 'Nothing found.', findings: [] } };
+
+/** A review run over `runInputs`, the folder answering `read` and the harness approving. */
+function review(read: TaskAnswer, runInputs: Record<string, unknown> = RANGE) {
+  return runSkillTasks(wf.tasks, runInputs, (taskId) => (taskId === 'read-ui' ? read : VERDICT));
+}
+
+describe('Review Local Changes — the browser and the preview by rule (Plan 320 D20)', () => {
+  it('asks the folder about the range as the review reads it, and the harness it would get', () => {
+    const run = review(folderAnswer({ preview: 'declared' }), { ...RANGE, harness: 'codex' });
+    expect(HostBindingInspectInputSchema.parse(run.inputs.get('read-ui'))).toEqual({
+      bindingId: 'hb_app',
+      ui: { from: 'main', at: 'feature', harness: 'codex' },
+    });
+    // A single commit is `at` alone.
+    const single = review(folderAnswer({ preview: 'declared' }), {
+      bindingId: 'hb_app',
+      at: 'abc1234',
+    });
+    expect(single.inputs.get('read-ui')).toEqual({ bindingId: 'hb_app', ui: { at: 'abc1234' } });
+  });
+
+  it('takes the browser and the preview where the range touches uiPaths and the folder declares a preview', () => {
+    const run = review(folderAnswer({ preview: 'declared', ...TOUCHED }));
+    const call = HostHarnessRunInputSchema.parse(run.inputs.get('review'));
+    expect(call.browser).toEqual({ profile: 'ephemeral' });
+    expect(call.preview).toBe(true);
+    expect(call.task.endsWith(REVIEW_PREVIEW_PARAGRAPH)).toBe(true);
+    // The review's depth is the caller's: the same checkout, range and budget as without it.
+    const without = HostHarnessRunInputSchema.parse(
+      review(folderAnswer({ preview: 'declared' })).inputs.get('review'),
+    );
+    expect(call.base).toBe(without.base);
+    expect(call.inputs).toEqual(without.inputs);
+    expect(call.maxTurns).toBe(without.maxTurns);
+    expect(call.timeoutMs).toBe(without.timeoutMs);
+    expect(run.state).toMatchObject({ verdict: 'approve' });
+    expect(run.state).not.toHaveProperty('uiNotSeen');
+  });
+
+  it('asks the reviewer to open the pages the range changes, exercise what changed and report what it saw', () => {
+    expect(REVIEW_PREVIEW_PARAGRAPH).toContain('`previewUrl`');
+    expect(REVIEW_PREVIEW_PARAGRAPH).toContain('Open there the pages the range changes');
+    expect(REVIEW_PREVIEW_PARAGRAPH).toContain('exercise what changed');
+    expect(REVIEW_PREVIEW_PARAGRAPH).toContain('Report what you saw in the summary');
+    expect(REVIEW_PREVIEW_PARAGRAPH).toContain('What you saw is part of the verdict');
+    expect(REVIEW_PREVIEW_PARAGRAPH).toContain(
+      "browser log, which the publication links from the pull request's body",
+    );
+    expect(REVIEW_PREVIEW_PARAGRAPH).toContain('the range as it will be pushed');
+    // Only the run with the browser is told so.
+    expect(reviewBrief()).not.toContain('previewUrl');
+  });
+
+  it('reviews as a diff where the range touches no UI file', () => {
+    const run = review(folderAnswer({ preview: 'declared' }));
+    expect(run.ran).toContain('review');
+    expect(run.inputs.get('review')).not.toHaveProperty('browser');
+    expect(run.inputs.get('review')).not.toHaveProperty('preview');
+    expect(run.state).not.toHaveProperty('uiNotSeen');
+  });
+
+  it('never takes the browser for the focus, the depth or anything a caller passes', () => {
+    const asking = {
+      ...RANGE,
+      focus: 'open the checkout page in a browser and click through it',
+      depth: 'deep',
+      browser: { profile: 'ephemeral' },
+      preview: true,
+    };
+    const run = review(folderAnswer({ preview: 'declared' }), asking);
+    const call = HostHarnessRunInputSchema.parse(run.inputs.get('review'));
+    expect(call.browser).toBeUndefined();
+    expect(call.preview).toBeUndefined();
+    // No run input names a browser, and the rule reads neither the focus nor the depth.
+    const ids = (wf.runInputs ?? []).map((i) => i.id);
+    expect(ids).not.toContain('browser');
+    expect(ids).not.toContain('preview');
+    for (const id of ['read-ui', 'decide-browser']) {
+      const bindings = Object.keys(wf.tasks.find((t) => t.taskId === id)?.inputBindings ?? {});
+      expect(bindings).not.toContain('focus');
+      expect(bindings).not.toContain('depth');
+    }
+  });
+
+  it('says the folder declares no preview, with the command that declares one, and reviews on', () => {
+    const run = review(folderAnswer({ preview: 'not_declared', ...TOUCHED }));
+    expect(run.ran).toContain('review');
+    expect(run.inputs.get('review')).not.toHaveProperty('browser');
+    expect(run.state['uiNotSeen']).toContain(UI_NOT_SEEN_NO_PREVIEW);
+    expect(run.state['uiNotSeen']).toContain('`aflow folder hb_app preview --command');
+    expect(run.state).toMatchObject({ verdict: 'approve' });
+  });
+
+  it('degrades to the needs_setup line where the grant lacks the browser, never failing the review', () => {
+    const run = review(
+      folderAnswer({
+        preview: 'declared',
+        ...TOUCHED,
+        browser: { harness: 'claude', unavailable: 'grant' },
+      }),
+    );
+    expect(run.ran).toContain('review');
+    expect(run.statuses.get('review')).toBe('succeeded');
+    expect(run.inputs.get('decide-browser')).toBeDefined();
+    expect(run.state['uiNotSeen']).toBe(UI_NOT_SEEN_NO_GRANT);
+    expect(run.state).toMatchObject({ verdict: 'approve' });
+  });
+
+  it('says which harness cannot take a browser', () => {
+    const run = review(
+      folderAnswer({
+        preview: 'declared',
+        ...TOUCHED,
+        browser: { harness: 'codex', unavailable: 'harness' },
+      }),
+    );
+    expect(run.ran).toContain('review');
+    expect(run.state['uiNotSeen']).toContain(`${BROWSER_UNAVAILABLE_ON_HARNESS} codex`);
+  });
+
+  it('reviews without a browser where the folder cannot be read', () => {
+    const run = review('fail');
+    expect(run.ran).toContain('review');
+    expect(run.inputs.get('review')).not.toHaveProperty('browser');
+    expect(run.state).toMatchObject({ verdict: 'approve' });
+  });
+
+  it('says so to the Helmsman, which never asks for the browser', () => {
+    expect(skillGuidance(REVIEW_LOCAL_CHANGES)).toContain('The browser is never asked for');
+    expect(skillGuidance(REVIEW_LOCAL_CHANGES)).toContain('`uiNotSeen` says why');
   });
 });

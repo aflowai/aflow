@@ -7,6 +7,7 @@
  */
 import { z } from 'zod';
 
+import { PayloadRefSchema } from '../runtime/payloadRef.js';
 import { EPHEMERAL_BROWSER_PROFILE } from './browserProfile.js';
 
 /** Where a preview command takes the port it serves on. */
@@ -246,3 +247,105 @@ export function resolveFolderPreview(preview: HostFolderPreview): HostResolvedFo
     webAppDirs,
   };
 }
+
+/** The longest text a UI question reads: a brief, as `host.harness.run` takes one whole. */
+export const FOLDER_UI_TEXT_MAX_LENGTH = 32_000;
+/** The most UI files an answer names; `touched` holds whatever the count. */
+export const FOLDER_UI_FILES_MAX = 200;
+
+/** A commit as a person names one, safe to hand git as a single argument. */
+const FolderUiRefSchema = z
+  .string()
+  .min(1)
+  .max(200)
+  // eslint-disable-next-line no-control-regex -- the control range is what is refused
+  .regex(/^(?!-)[^\s\u0000-\u001f\u007f]+$/, {
+    message:
+      'A branch, tag or commit — `main`, `HEAD~3`, a sha — with no whitespace, never starting ' +
+      'with `-`.',
+  });
+
+/**
+ * What `host.binding.inspect` is asked about a folder's UI (Plan 320 D20): the
+ * files a brief, a branch, a range or a run's diff names, matched against the
+ * folder's `uiPaths`, and whether a harness run there could be given a browser.
+ * Asked by the skills that add the browser and the preview by rule, never by
+ * an agent choosing one.
+ */
+export const HostFolderUiQuestionSchema = z
+  .object({
+    text: z
+      .string()
+      .min(1)
+      .max(FOLDER_UI_TEXT_MAX_LENGTH)
+      .optional()
+      .describe(
+        'A brief: every path it names — `src/app/page.tsx`, `src/app/page.tsx:12` — is matched.',
+      ),
+    branch: FolderUiRefSchema.optional().describe(
+      'A branch a run continues: what it changes from where it meets the default branch of ' +
+        "the folder's `origin` is matched. That default branch itself changes nothing.",
+    ),
+    from: FolderUiRefSchema.optional().describe('Where a range starts; only with `at`.'),
+    at: FolderUiRefSchema.optional().describe(
+      'Where a range ends: what `<from>..<at>` changes, read from where its two ends meet, is ' +
+        'matched; without `from`, what that one commit changes.',
+    ),
+    patchRef: PayloadRefSchema.optional().describe(
+      'A diff a `host.harness.run` result reports as `patchRef`: every file it changes is matched.',
+    ),
+    harness: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        'The harness a run would name; absent, the one the machine would choose for it. Whether ' +
+          'that harness can be handed a browser is answered.',
+      ),
+  })
+  .refine((question) => question.from === undefined || question.at !== undefined, {
+    message: '`from` names where a range starts and needs `at`, where it ends.',
+    path: ['from'],
+  })
+  .describe(
+    "Ask which files touch the folder's UI — those a brief names, a branch or a range " +
+      "changes, or a run's diff holds, matched against its `uiPaths` — and whether a harness " +
+      'run there could be given a browser.',
+  );
+export type HostFolderUiQuestion = z.infer<typeof HostFolderUiQuestionSchema>;
+
+/** Why a harness run on a folder could not be given a browser. */
+export const HostFolderBrowserUnavailableSchema = z.enum(['executor', 'harness', 'grant']);
+export type HostFolderBrowserUnavailable = z.infer<typeof HostFolderBrowserUnavailableSchema>;
+
+export const HostFolderUiAnswerSchema = z
+  .object({
+    preview: z
+      .enum(['declared', 'not_declared'])
+      .describe("Whether a person declared the folder's preview."),
+    uiPaths: z
+      .array(z.string())
+      .describe('The globs matched against: the declared ones, else the default.'),
+    files: z
+      .array(z.string())
+      .max(FOLDER_UI_FILES_MAX)
+      .describe(
+        `The files asked about that match, sorted; at most ${String(FOLDER_UI_FILES_MAX)}.`,
+      ),
+    touched: z.boolean().describe('True when any file asked about matches.'),
+    browser: z
+      .object({
+        harness: z
+          .string()
+          .optional()
+          .describe('The harness the answer is for; absent where none could be chosen.'),
+        unavailable: HostFolderBrowserUnavailableSchema.optional().describe(
+          'Why a run could not be given a browser: `executor`, this machine serves none; ' +
+            "`harness`, the harness has no browser arguments; `grant`, the run's grant does " +
+            'not cover `browser.page:write`. Absent where it could.',
+        ),
+      })
+      .describe('Whether a harness run on the folder could be given a browser.'),
+  })
+  .describe("The folder's preview, the UI files among those asked about, and the browser.");
+export type HostFolderUiAnswer = z.infer<typeof HostFolderUiAnswerSchema>;

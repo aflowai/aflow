@@ -3,7 +3,8 @@
  * coding agents its machine runs at once and whether it holds itself awake
  * while they run, read from the policy file on this machine — and the GitHub
  * repository its `origin` fetches from, read from its git config, with the
- * branch its HEAD names.
+ * branch its HEAD names. Asked `ui`, which files touch the folder's UI and
+ * whether a harness run there could have a browser (`folderUi.ts`).
  *
  * Read here rather than from the workspace's copy because both are only ever
  * declared here. Nothing in the folder is written, so a file-only binding
@@ -23,9 +24,12 @@ import {
   type HostFolderOrigin,
   type HostGitHubOrigin,
   parseGitHubRemote,
+  parsePayloadRef,
   resolveBranchPolicy,
 } from '@aflow/schemas';
 import type { z } from 'zod';
+
+import { selectHarness } from './harnessHandlers.js';
 
 import {
   type HostBinding,
@@ -34,8 +38,10 @@ import {
   requireBinding,
   requireSpace,
 } from '../bindings.js';
+import { answerFolderUi } from '../folderUi.js';
 import { sandboxPostureOf } from '../sandboxPosture.js';
 import {
+  DIFF_CEILING_BYTES,
   isGitRepository,
   readRemoteDefaultBranch,
   remoteFetchUrl,
@@ -70,7 +76,22 @@ async function githubOrigin(
   return 'branch' in head ? { ...repository, defaultBranch: head.branch } : repository;
 }
 
-async function inspect(ctx: ExecutorContext, policyPath: string): Promise<StepResult> {
+/** What a folder's stored diff says, read through the job's own tenant; undefined where it is not one. */
+async function storedDiff(ctx: ExecutorContext, ref: string): Promise<string | undefined> {
+  const parsed = parsePayloadRef(ref);
+  if (parsed?.form !== 'object' || parsed.payloadKind !== 'patch') return undefined;
+  const stored = await ctx.readPayload(ref).catch(() => undefined);
+  if (typeof stored !== 'string' || Buffer.byteLength(stored, 'utf8') > DIFF_CEILING_BYTES) {
+    return undefined;
+  }
+  return stored;
+}
+
+async function inspect(
+  ctx: ExecutorContext,
+  policyPath: string,
+  servesBrowser: boolean,
+): Promise<StepResult> {
   try {
     const parsed = HostBindingInspectInputSchema.safeParse(await ctx.readPayload(ctx.job.inputRef));
     if (!parsed.success) {
@@ -80,6 +101,24 @@ async function inspect(ctx: ExecutorContext, policyPath: string): Promise<StepRe
     const binding = requireBinding(policy.bindings, parsed.data.bindingId);
     requireSpace(binding, ctx.spaceId);
     const origin = await githubOrigin(binding, parsed.data.defaultBranch === true);
+    const question = parsed.data.ui;
+    const ui =
+      question === undefined
+        ? undefined
+        : await answerFolderUi(binding, question, {
+            servesBrowser,
+            browserGranted: ctx.browserGranted,
+            harness: async () =>
+              await selectHarness(
+                policy.harnesses,
+                question.harness,
+                ctx.preferredHarness,
+                policy.defaultHarness,
+              )
+                .then((selection) => selection.profile)
+                .catch(() => undefined),
+            readDiff: async (ref) => await storedDiff(ctx, ref),
+          });
 
     const output: HostBindingInspectOutput = {
       id: binding.id,
@@ -90,6 +129,7 @@ async function inspect(ctx: ExecutorContext, policyPath: string): Promise<StepRe
       sandbox: sandboxPostureOf(binding),
       maxConcurrentHarnessRuns: policy.maxConcurrentHarnessRuns,
       keepAwake: policy.keepAwake,
+      ...(ui !== undefined ? { ui } : {}),
     };
     return await successWithData(ctx, output);
   } catch (error) {
@@ -103,12 +143,16 @@ async function inspect(ctx: ExecutorContext, policyPath: string): Promise<StepRe
   }
 }
 
-export function createHostBindingHandler(policyPath: string): {
+export function createHostBindingHandler(
+  policyPath: string,
+  options: { readonly servesBrowser: boolean } = { servesBrowser: false },
+): {
   handles: ReadonlySet<string>;
   execute: (ctx: ExecutorContext) => Promise<StepResult>;
 } {
   return {
     handles: new Set(['host.binding.inspect']),
-    execute: async (ctx: ExecutorContext): Promise<StepResult> => await inspect(ctx, policyPath),
+    execute: async (ctx: ExecutorContext): Promise<StepResult> =>
+      await inspect(ctx, policyPath, options.servesBrowser),
   };
 }

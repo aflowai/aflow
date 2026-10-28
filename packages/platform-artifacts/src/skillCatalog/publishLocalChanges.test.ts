@@ -1764,7 +1764,8 @@ describe('Publish Local Changes — the folder decides whether the push asks', (
       onMissingRef: 'skip',
     });
     // Every verdict the review can return either clears the push or asks.
-    const review = REVIEW_LOCAL_CHANGES.bundle.workflow.tasks[0]?.inputTemplate as {
+    const review = REVIEW_LOCAL_CHANGES.bundle.workflow.tasks.find((t) => t.taskId === 'review')
+      ?.inputTemplate as {
       outputSchema: { properties: { verdict: { enum: string[] } } };
     };
     expect(review.outputSchema.properties.verdict.enum.sort()).toEqual([

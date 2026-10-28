@@ -29,12 +29,20 @@ const DecisionLabelSchema = z
 const DecisionReasonSchema = z.string().min(1).max(4000);
 
 /**
- * A value the decision hands on beside its label — a number or a text a label
- * cannot be. A task template substitutes whole nodes and cannot pick a value
- * per decision, so a value that follows the decision is named on the rule and
- * a later task binds it from the output, absent where the rule names none.
+ * A value the decision hands on beside its label — a number, a text or an
+ * object a label cannot be. A task template substitutes whole nodes and cannot
+ * pick a value per decision, so a value that follows the decision is named on
+ * the rule and a later task binds it, or a path into it, from the output,
+ * absent where the rule names none: an object lets one decision add several
+ * inputs to a later operation, such as a harness run's `browser` and
+ * `preview`, without a second task written for each branch.
  */
-const DecisionValueSchema = z.union([z.string().max(4000), z.number(), z.boolean()]);
+const DecisionValueSchema = z.union([
+  z.string().max(4000),
+  z.number(),
+  z.boolean(),
+  z.record(z.unknown()),
+]);
 
 export const WorkflowRunDecideRuleSchema = z
   .object({

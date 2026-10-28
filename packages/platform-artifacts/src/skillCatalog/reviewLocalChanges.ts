@@ -1,4 +1,14 @@
 import type { SkillCatalogEntry } from '@aflow/schemas';
+import {
+  DECIDE_BROWSER_TASK_ID,
+  decideBrowserTask,
+  entryContract,
+  readUiTask,
+  RULE_BINDINGS,
+  RULE_INPUTS,
+  ruleBrief,
+} from './localBrowserRule.js';
+import { bind, runInput } from './localPrShepherdWiring.js';
 
 const REVIEW_TASK = `Review the changes in a revision range of this repository and report what is wrong with them. This checkout is an isolated copy of the connected folder detached at the commit the range ends at — the commit this review judges — so every file on disk is that file as the range leaves it, and a check run here runs on the change. The range's base names only where the diff starts; it is never what is checked out. Only committed work is visible here.
 
@@ -18,6 +28,19 @@ How to review:
 Write the summary as the deliverable: it names every finding inline — severity, \`file:line\`, one sentence of what is wrong — blockers first, and every check you ran with its outcome. Someone reading only the summary can act on it. The evidence behind each finding, and the fix it suggests, stay in \`findings\`.
 
 Edit no file, stage nothing and commit nothing. The result is the whole deliverable.`;
+
+/**
+ * What the review's brief adds when the range touches the folder's `uiPaths`
+ * and the rule gives the run a browser and the preview (Plan 320 D17, D20):
+ * the preview serves the commit the checkout stands on, the range as it will
+ * be pushed, so what the reviewer sees there is the change working or not.
+ */
+export const REVIEW_PREVIEW_PARAGRAPH = `The range changes this folder's UI, so this run has a browser and the folder's own preview is serving the commit this checkout stands on — the range as it will be pushed — at \`previewUrl\`, in this task's inputs:
+
+- Open there the pages the range changes, and exercise what changed as a person using it would: navigate to it, click, type, submit, and look at the states the change adds. Take a screenshot of what you see at each step that bears on the verdict.
+- Report what you saw in the summary, under its own heading, page by page: what you opened, what you did, and what it showed. What you saw is part of the verdict — a page that does not do what the range set out to do, or that the diff alone would not show is broken, is a finding like any other, at the severity its effect has, naming the file that renders it and what the page showed as its evidence.
+- Your screenshots are kept in the run's browser log, which the publication links from the pull request's body; describe what each shows rather than pasting it.
+- Start or stop no server yourself: the preview is the executor's, and it stops when the run ends.`;
 
 /**
  * What each severity means, most severe first: the review grades its findings
@@ -167,13 +190,145 @@ export const BRIEF_MAX_TURNS = 8;
 const REVIEW_PITFALLS: string[] = [
   `What it needs: the connected folder holding the repository, and the range to review as its two ends — \`at\`, the commit it ends at, and \`from\`, where it starts. Ask for whichever is missing — \`main..HEAD\` is \`from\` \`main\` and \`at\` \`HEAD\`, \`HEAD~3..HEAD\` is \`from\` \`HEAD~3\` and \`at\` \`HEAD\`, and a single commit is \`at\` alone. The range is made from the two, so the commit it ends at and the commit the review stands on are one value and cannot disagree. The review lists a range's commits as given and reads its diff from where the two ends meet, \`main...HEAD\`, so a branch \`main\` has moved past reads as what it adds and not as undoing what \`main\` took since. A focus is optional and worth asking for when the request names a worry: security, an API surface, the blast radius of a refactor.`,
   `Depth is a first-class choice, not something to ask the coding agent for in \`focus\`. \`brief\` is the smoke test — a first look, a check that the mechanics work: a handful of tool calls, one paragraph, and a verdict of \`comment\` unless something is plainly a blocker. An operator asking for something quick, a glance or a sanity check means \`brief\`, and it is budgeted in coding-agent turns (\`maxTurns\`: ${String(BRIEF_MAX_TURNS)}) so that it stays brief. \`standard\` reads the range with the repository around it. \`deep\` also runs the project's own checks over the touched files, and costs the most.`,
+  `The browser is never asked for, in \`focus\` or anywhere else. Where the range touches the folder's \`uiPaths\` and the folder declares a preview, the review runs with a browser and that preview by rule, opens the pages the range changes, exercises what changed and reports what it saw as part of its verdict. Where the folder declares no preview, or the browser cannot be had, it reviews the range as a diff and \`uiNotSeen\` says why, with the command that settles it.`,
   `The review stands on the commit it judges. It runs over an isolated copy of the repository detached at \`at\`, so the files it reads whole and the checks it runs at \`deep\` are the change's own; the range's base names only where the diff starts. Only committed work is reviewed: anything still uncommitted in the working tree is invisible to it. When the request is about work in progress, say so and ask for it to be committed first — a branch is fine — then review the range those commits make.`,
   `With the result: report the verdict and the summary. The summary is the review — it names every finding with its severity and its file and line, blockers first, and the checks that ran — so it needs nothing added to it. The evidence behind each finding and the fix it suggests stay on the run, to be opened when someone wants them. Nothing was changed, so a finding is a proposal until someone acts on it: offer to commission the fix as its own piece of work, and never edit the files while reporting. Run the review again once a fix lands as a new commit, over the range that includes it — a verdict covers the commits it read and nothing later.`,
 ];
 
+const REVIEW_RUN_INPUTS = [
+  {
+    id: 'bindingId',
+    required: true,
+    description: 'The connected folder holding the repository to review.',
+    schema: { type: 'string', minLength: 1, maxLength: 128 },
+  },
+  {
+    id: 'at',
+    required: true,
+    description:
+      'The commit the range ends at — the one the review judges, and where its checkout stands: "HEAD" for "main..HEAD", "feature" for "main..feature", the sha for a single commit or for `<base>..<sha>`. It must be committed. The range is `<from>..<at>`, or `at` alone, so its tip is this value and nothing else.',
+    schema: { type: 'string', minLength: 1, maxLength: 200 },
+  },
+  {
+    id: 'from',
+    required: false,
+    description:
+      'Where the range starts: "main" for "main..HEAD", "HEAD~3" for "HEAD~3..HEAD", a sha for `<base>..<sha>`. Omit it to review the single commit `at`. The range `<from>..<at>` is read as its commits, `<from>..<at>`, and its diff from where the two ends meet, `<from>...<at>`, so a branch its base has moved past reads as what it adds. It names only where the diff starts: checked out, it would have the review read every file, and run every check, as it was before the change.',
+    schema: { type: 'string', minLength: 1, maxLength: 200 },
+  },
+  {
+    id: 'focus',
+    required: false,
+    description:
+      'The lens to weight — security, correctness, the API surface. Omit for a balanced review.',
+    schema: { type: 'string', minLength: 1, maxLength: 2000 },
+  },
+  {
+    id: 'depth',
+    required: false,
+    description:
+      '"brief" (a handful of tool calls, one paragraph, a first look), "standard" (read the range with the repository around it) or "deep" (also run the project\'s checks over the touched files). Absent is "standard".',
+    schema: { type: 'string', enum: ['brief', 'standard', 'deep'], default: 'standard' },
+  },
+  {
+    id: 'maxTurns',
+    required: false,
+    // The rung and its budget arrive as two run inputs because a task
+    // template substitutes whole nodes and cannot pick a value per rung:
+    // nothing between the rung and the operation can turn `brief` into a
+    // number. So the skill names the number and the caller carries it.
+    description: `The harness turn budget that makes a brief review brief: ${String(BRIEF_MAX_TURNS)}, with depth "brief". Omit it at "standard" and "deep", which read the range through.`,
+    schema: { type: 'integer', minimum: 1, maximum: BRIEF_MAX_TURNS },
+  },
+  {
+    id: 'harness',
+    required: false,
+    description:
+      "Which coding agent reviews, by the id the operator configured on the machine. Absent, the space's preferred coding agent, else the machine's default, each where installed; name one only to have a different agent review, such as a second opinion from another.",
+    schema: { type: 'string', minLength: 1 },
+  },
+];
+
+const REVIEW_TASKS = [
+  readUiTask({
+    name: "Read whether the range touches the folder's UI",
+    goal: "Ask the machine holding the folder which files the range changes — read from where its two ends meet, as the review reads it — fall under the folder's `uiPaths`; whether the folder declares a preview; and whether the harness the review would get can be given a browser. A read that fails leaves the review without a browser.",
+    inputBindings: { from: runInput('from'), at: runInput('at'), harness: runInput('harness') },
+    // The entry task's contract is the skill's input surface: a run input
+    // missing from it is refused at start, whichever task reads it.
+    inputContract: entryContract(REVIEW_RUN_INPUTS),
+    question: { from: bind('from'), at: bind('at'), harness: bind('harness') },
+  }),
+  {
+    ...decideBrowserTask(
+      "Decide, by rule over the folder's answer, whether the review takes `browser: { profile: 'ephemeral' }` and `preview: true` and its brief the paragraph asking it to open and exercise what changed: where the range touches the folder's `uiPaths`, the folder declares a preview and the browser can be had. Where the preview is not declared or the browser cannot be had, the review goes on without one and says why in D21's words. Never by the depth, the focus or the Helmsman; no model is asked.",
+      REVIEW_PREVIEW_PARAGRAPH,
+    ),
+    // A setup decision's line; absent wherever the review had the browser or needed none.
+    promoteOutputs: [{ kind: 'output_path' as const, path: 'value.line', toState: 'uiNotSeen' }],
+  },
+  {
+    taskId: 'review',
+    name: 'Review the range',
+    goal: 'Run the harness installed on the operator’s machine over an isolated checkout of the connected repository detached at the range’s tip, read the requested range with the whole repository around it, and return a verdict with grounded findings — where the range touches the folder’s UI and the rule gives the run the preview, after opening the pages it changes there and exercising what changed. Read-only: nothing is edited, staged or committed.',
+    type: 'operation' as const,
+    operation: 'host.harness.run',
+    dependsOn: [DECIDE_BROWSER_TASK_ID],
+    retryability: 'safe' as const,
+    inputBindings: {
+      bindingId: runInput('bindingId'),
+      from: runInput('from'),
+      at: runInput('at'),
+      focus: runInput('focus'),
+      depth: runInput('depth'),
+      maxTurns: runInput('maxTurns'),
+      harness: runInput('harness'),
+      ...RULE_BINDINGS,
+    },
+    context: {
+      strategy: 'scoped' as const,
+      contextPolicy: 'auto-optimize' as const,
+      learnings: 'none' as const,
+      capabilities: {
+        operations: ['host.harness.run'],
+        integrations: [],
+      },
+    },
+    inputTemplate: {
+      bindingId: bind('bindingId'),
+      harness: bind('harness'),
+      base: bind('at'),
+      // The rule adds the browser, the preview and the paragraph, and nothing
+      // else: the depth, the focus and the budget are the caller's either way.
+      task: ruleBrief(REVIEW_TASK),
+      inputs: {
+        // Built from `at`, so the range the review reads ends at the
+        // commit its checkout stands on, whatever the caller passed.
+        range: {
+          $firstOf: [{ $concat: [bind('from'), '..', bind('at')] }, bind('at')],
+        },
+        focus: bind('focus'),
+        depth: bind('depth'),
+      },
+      ...RULE_INPUTS,
+      outputSchema: RESULT_SCHEMA,
+      maxTurns: bind('maxTurns'),
+      resultRetries: 2,
+      // A review reads the whole range and everything around it; the
+      // operation's default is sized for a single change.
+      timeoutMs: 7_200_000,
+    },
+    promoteOutputs: [
+      { kind: 'output_path' as const, path: 'result.verdict', toState: 'verdict' },
+      { kind: 'output_path' as const, path: 'result.summary', toState: 'reviewSummary' },
+      { kind: 'output_path' as const, path: 'result.findings', toState: 'findings' },
+    ],
+  },
+];
+
 const REVIEW_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'review-local-changes',
-  version: 11,
+  version: 12,
   name: 'Review Local Changes',
   tagline:
     "Review committed changes in a connected repository with the machine's own coding agent.",
@@ -184,7 +339,7 @@ const REVIEW_LOCAL_CHANGES: SkillCatalogEntry = {
       slug: 'review-local-changes',
       name: 'Review Local Changes',
       description:
-        "Review a revision range of a repository connected as a host folder: the operator's installed coding agent reads the range in an isolated checkout detached at the commit the range ends at and returns a verdict with grounded findings. Read-only — one task, no write, no publication.",
+        "Review a revision range of a repository connected as a host folder: the operator's installed coding agent reads the range in an isolated checkout detached at the commit the range ends at and returns a verdict with grounded findings. Where the range touches the folder's UI and the folder declares a preview, the review also opens the changed pages in that preview, by rule. Read-only — no write, no publication.",
       usage: {
         whenToUse: [
           'Reviewing changes already committed in a repository connected as a folder — "review what I just did on this branch", "look over these commits before they go anywhere": a verdict with findings that name their file and line, and nothing changed',
@@ -221,116 +376,8 @@ const REVIEW_LOCAL_CHANGES: SkillCatalogEntry = {
           },
         },
       ],
-      runInputs: [
-        {
-          id: 'bindingId',
-          required: true,
-          description: 'The connected folder holding the repository to review.',
-          schema: { type: 'string', minLength: 1, maxLength: 128 },
-        },
-        {
-          id: 'at',
-          required: true,
-          description:
-            'The commit the range ends at — the one the review judges, and where its checkout stands: "HEAD" for "main..HEAD", "feature" for "main..feature", the sha for a single commit or for `<base>..<sha>`. It must be committed. The range is `<from>..<at>`, or `at` alone, so its tip is this value and nothing else.',
-          schema: { type: 'string', minLength: 1, maxLength: 200 },
-        },
-        {
-          id: 'from',
-          required: false,
-          description:
-            'Where the range starts: "main" for "main..HEAD", "HEAD~3" for "HEAD~3..HEAD", a sha for `<base>..<sha>`. Omit it to review the single commit `at`. The range `<from>..<at>` is read as its commits, `<from>..<at>`, and its diff from where the two ends meet, `<from>...<at>`, so a branch its base has moved past reads as what it adds. It names only where the diff starts: checked out, it would have the review read every file, and run every check, as it was before the change.',
-          schema: { type: 'string', minLength: 1, maxLength: 200 },
-        },
-        {
-          id: 'focus',
-          required: false,
-          description:
-            'The lens to weight — security, correctness, the API surface. Omit for a balanced review.',
-          schema: { type: 'string', minLength: 1, maxLength: 2000 },
-        },
-        {
-          id: 'depth',
-          required: false,
-          description:
-            '"brief" (a handful of tool calls, one paragraph, a first look), "standard" (read the range with the repository around it) or "deep" (also run the project\'s checks over the touched files). Absent is "standard".',
-          schema: { type: 'string', enum: ['brief', 'standard', 'deep'], default: 'standard' },
-        },
-        {
-          id: 'maxTurns',
-          required: false,
-          // The rung and its budget arrive as two run inputs because a task
-          // template substitutes whole nodes and cannot pick a value per rung:
-          // nothing between the rung and the operation can turn `brief` into a
-          // number. So the skill names the number and the caller carries it.
-          description: `The harness turn budget that makes a brief review brief: ${String(BRIEF_MAX_TURNS)}, with depth "brief". Omit it at "standard" and "deep", which read the range through.`,
-          schema: { type: 'integer', minimum: 1, maximum: BRIEF_MAX_TURNS },
-        },
-        {
-          id: 'harness',
-          required: false,
-          description:
-            "Which coding agent reviews, by the id the operator configured on the machine. Absent, the space's preferred coding agent, else the machine's default, each where installed; name one only to have a different agent review, such as a second opinion from another.",
-          schema: { type: 'string', minLength: 1 },
-        },
-      ],
-      tasks: [
-        {
-          taskId: 'review',
-          name: 'Review the range',
-          goal: 'Run the harness installed on the operator’s machine over an isolated checkout of the connected repository detached at the range’s tip, read the requested range with the whole repository around it, and return a verdict with grounded findings. Read-only: nothing is edited, staged or committed.',
-          type: 'operation' as const,
-          operation: 'host.harness.run',
-          retryability: 'safe' as const,
-          inputBindings: {
-            bindingId: { kind: 'run_input' as const, path: 'bindingId' },
-            from: { kind: 'run_input' as const, path: 'from' },
-            at: { kind: 'run_input' as const, path: 'at' },
-            focus: { kind: 'run_input' as const, path: 'focus' },
-            depth: { kind: 'run_input' as const, path: 'depth' },
-            maxTurns: { kind: 'run_input' as const, path: 'maxTurns' },
-            harness: { kind: 'run_input' as const, path: 'harness' },
-          },
-          context: {
-            strategy: 'scoped' as const,
-            contextPolicy: 'auto-optimize' as const,
-            learnings: 'none' as const,
-            capabilities: {
-              operations: ['host.harness.run'],
-              integrations: [],
-            },
-          },
-          inputTemplate: {
-            bindingId: { $bind: 'bindingId' },
-            harness: { $bind: 'harness' },
-            base: { $bind: 'at' },
-            task: REVIEW_TASK,
-            inputs: {
-              // Built from `at`, so the range the review reads ends at the
-              // commit its checkout stands on, whatever the caller passed.
-              range: {
-                $firstOf: [
-                  { $concat: [{ $bind: 'from' }, '..', { $bind: 'at' }] },
-                  { $bind: 'at' },
-                ],
-              },
-              focus: { $bind: 'focus' },
-              depth: { $bind: 'depth' },
-            },
-            outputSchema: RESULT_SCHEMA,
-            maxTurns: { $bind: 'maxTurns' },
-            resultRetries: 2,
-            // A review reads the whole range and everything around it; the
-            // operation's default is sized for a single change.
-            timeoutMs: 7_200_000,
-          },
-          promoteOutputs: [
-            { kind: 'output_path' as const, path: 'result.verdict', toState: 'verdict' },
-            { kind: 'output_path' as const, path: 'result.summary', toState: 'reviewSummary' },
-            { kind: 'output_path' as const, path: 'result.findings', toState: 'findings' },
-          ],
-        },
-      ],
+      runInputs: REVIEW_RUN_INPUTS,
+      tasks: REVIEW_TASKS,
       stateVariables: [
         {
           variableId: 'verdict',
@@ -358,11 +405,20 @@ const REVIEW_LOCAL_CHANGES: SkillCatalogEntry = {
           sensitive: false,
           immutable: false,
         },
+        {
+          variableId: 'uiNotSeen',
+          name: 'UI not seen in a browser',
+          description:
+            "Present where the range touches the folder's `uiPaths` and the review ran without a browser, saying why in one line: the folder declares no preview (with the `aflow folder <bindingId> preview` command that declares one), or the harness or the run's grant could not take a browser. Reported, never blocking.",
+          required: false,
+          sensitive: false,
+          immutable: false,
+        },
       ],
       output: {
         primary: 'verdict',
         guidance:
-          'The run carries the verdict and reviewSummary, and the summary already names every finding with its file and line, blockers first, and the checks that ran — reporting it is reporting the review. The evidence behind each finding stays on the task result, for whoever opens the run. Nothing was changed: a fix is a separate piece of work to commission, and the review is worth running again over the range that includes the fix once it is committed.',
+          "The run carries the verdict and reviewSummary; the summary names every finding with its file and line, blockers first, the checks that ran and, where the range touched the folder's UI, what the review saw in its preview — reporting it is reporting the review. Nothing was changed: a fix is a separate commission, and the review is worth running again over the range that includes it. Report uiNotSeen, where present, as it stands.",
       },
       iteration: { auto: false, maxConsecutiveRuns: 1, stopOnOutcomesMet: true, cooldownMs: 0 },
     },
@@ -404,7 +460,7 @@ const REVIEW_LOCAL_CHANGES: SkillCatalogEntry = {
       priority: 50,
     },
     rationale:
-      "One operation task on host.harness.run with an outputSchema of findings and a verdict: the skill description steers the Helmsman (when it fits, what to ask for, what to do with the result) and the task prose instructs the harness (how to review). Read-only by construction — a single task with no write, no push and no second step — so a fix is a separate commission rather than something this skill can slip in. The repository arrives as a run input until folder roles land, and the review checkout holds the folder's commits alone, detached at the range's tip (`at`, passed as the harness `base`) so it reads and checks the change itself; the range is built as `<from>..<at>` rather than taken whole, so its tip and the checkout are one input and cannot disagree, which is why the description says uncommitted work is invisible.",
+      "host.harness.run with an outputSchema of findings and a verdict: the description steers the Helmsman and the task prose instructs the harness. Read-only by construction — no task writes, pushes or publishes. The checkout is detached at the range's tip (at, the harness base) and the range is built as <from>..<at>, so its tip and the checkout cannot disagree; uncommitted work is invisible. The browser is added by rule (Plan 320 D17, D20), never by the depth, the focus or the Helmsman: host.binding.inspect says whether the range touches the folder's uiPaths, whether it declares a preview and whether the harness and grant can take a browser, and workflow.run.decide gives the run browser and preview where all of that holds; the decision hands the harness run its browser, preview and paragraph as one value, bound by path. The preview serves the range as it will be pushed, so what the reviewer sees is part of the verdict; where the browser cannot be had, uiNotSeen says why in D21's words.",
   },
 };
 

@@ -87,6 +87,30 @@ export function decideStepGating(args: DecideStepGatingArgs): GrantEnforcementRe
 
 const HOST_HARNESS_RUN_OPERATION_ID = buildOperationId('host', 'harness', 'run');
 
+/**
+ * Whether a grant covers a harness browser: the reach of `browser.page.open`,
+ * which a harness run given `browser` has in the operator's Chrome. Asked by
+ * the gate below and when a skill's read of a folder is dispatched, so the rule
+ * that adds a browser asks what the gate would answer (Plan 320 D20).
+ */
+export function harnessBrowserGrant(
+  grant: RunAccessGrant | null,
+  caller: CallerContext['kind'],
+): GrantEnforcementResult {
+  const open = getOperation(BROWSER_PAGE_OPEN_OPERATION_ID);
+  return enforceGrant(
+    grant,
+    BROWSER_PAGE_OPEN_OPERATION_ID,
+    open?.mutates ?? true,
+    open?.privileged ?? false,
+    open?.capabilityGroupId ?? 'browser.page',
+    open?.accessMode ?? 'write',
+    open?.riskModifiers ?? [],
+    {},
+    { kind: caller },
+  );
+}
+
 export interface DecideHarnessBrowserGatingArgs {
   stepDef: StepDefinition;
   grant: RunAccessGrant | null;
@@ -109,18 +133,7 @@ export function decideHarnessBrowserGating(
   if (typeof input !== 'object' || input === null) return { allowed: true };
   if ((input as Record<string, unknown>)['browser'] === undefined) return { allowed: true };
 
-  const open = getOperation(BROWSER_PAGE_OPEN_OPERATION_ID);
-  const decision = enforceGrant(
-    args.grant,
-    BROWSER_PAGE_OPEN_OPERATION_ID,
-    open?.mutates ?? true,
-    open?.privileged ?? false,
-    open?.capabilityGroupId ?? 'browser.page',
-    open?.accessMode ?? 'write',
-    open?.riskModifiers ?? [],
-    {},
-    { kind: callerKindFromStep(args.stepDef, args.allSteps) },
-  );
+  const decision = harnessBrowserGrant(args.grant, callerKindFromStep(args.stepDef, args.allSteps));
   if (decision.allowed) return decision;
   return {
     allowed: false,
