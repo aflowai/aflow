@@ -83,6 +83,25 @@ function refusalBody(
   return { error: refusal.code, message: refusal.message };
 }
 
+/**
+ * The engine's remedy for an overlong note names update fields the open route
+ * does not take; the operator's one lever there is the reason they typed.
+ */
+function openNoteTooLongBody(refusal: PlanOpError): PlanNodeWriteRefusal {
+  const details = z
+    .object({ noteLength: z.number(), noteMaxChars: z.number() })
+    .safeParse(refusal.details);
+  const size = details.success
+    ? ` at ${String(details.data.noteLength)} characters, past the ${String(details.data.noteMaxChars)} a note holds`
+    : ' longer than a note holds';
+  return {
+    error: refusal.code,
+    message:
+      `This would leave the step’s note${size}, so nothing was written. Shorten the reason, or clear it ` +
+      'and approve again without one.',
+  };
+}
+
 type OperatorAuthMethod = NonNullable<FastifyRequest['authUser']>['authMethod'];
 
 function refusalStatus(refusal: PlanOpError): 404 | 409 | 422 {
@@ -338,6 +357,9 @@ export const planRoutes: FastifyPluginAsync = async (fastify) => {
         ...(body.why !== undefined ? { why: body.why } : {}),
       });
       if (!result.ok) {
+        if (result.code === 'PLAN_NODE_NOTE_TOO_LONG') {
+          return reply.status(refusalStatus(result)).send(openNoteTooLongBody(result));
+        }
         return reply
           .status(refusalStatus(result))
           .send(

@@ -675,6 +675,26 @@ describe('PATCH /v1/spaces/:spaceId/plan/nodes/:nodeId/open', () => {
     expect(audit.record).not.toHaveBeenCalled();
   });
 
+  it('answers an overlong note with the operator’s remedy, not the engine’s', async () => {
+    mockOpenPlanNode.mockResolvedValue({
+      ok: false,
+      code: 'PLAN_NODE_NOTE_TOO_LONG',
+      message: 'Pass a shorter `note` in this update, or "" to keep only that line.',
+      details: { nodeId: CHILD_ID, noteLength: 64_012, noteMaxChars: 64_000 },
+    });
+
+    const res = await open({ expectedRevision: 3, why: 'go ahead' });
+
+    expect(res.statusCode).toBe(422);
+    expect(res.json()).toEqual({
+      error: 'PLAN_NODE_NOTE_TOO_LONG',
+      message:
+        'This would leave the step’s note at 64012 characters, past the 64000 a note holds, so nothing ' +
+        'was written. Shorten the reason, or clear it and approve again without one.',
+    });
+    expect(audit.record).not.toHaveBeenCalled();
+  });
+
   it('answers a node not in the space with 404', async () => {
     mockOpenPlanNode.mockResolvedValue({ ok: false, code: 'PLAN_NODE_NOT_FOUND', message: 'gone' });
 
