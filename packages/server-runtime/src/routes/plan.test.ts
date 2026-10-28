@@ -680,7 +680,7 @@ describe('PATCH /v1/spaces/:spaceId/plan/nodes/:nodeId/open', () => {
       ok: false,
       code: 'PLAN_NODE_NOTE_TOO_LONG',
       message: 'Pass a shorter `note` in this update, or "" to keep only that line.',
-      details: { nodeId: CHILD_ID, noteLength: 64_012, noteMaxChars: 64_000 },
+      details: { nodeId: CHILD_ID, status: 'blocked', noteLength: 64_012, noteMaxChars: 64_000 },
     });
 
     const res = await open({ expectedRevision: 3, why: 'go ahead' });
@@ -693,6 +693,32 @@ describe('PATCH /v1/spaces/:spaceId/plan/nodes/:nodeId/open', () => {
         'was written. Shorten the reason, or clear it and approve again without one.',
     });
     expect(audit.record).not.toHaveBeenCalled();
+  });
+
+  it('answers an overlong note on a reopen with the outcome as the cause, not the reason', async () => {
+    const refusal = (status: string) => ({
+      ok: false,
+      code: 'PLAN_NODE_NOTE_TOO_LONG',
+      message: 'engine words',
+      details: { nodeId: CHILD_ID, status, noteLength: 64_012, noteMaxChars: 64_000 },
+    });
+    mockOpenPlanNode.mockResolvedValueOnce(refusal('blocked'));
+    mockOpenPlanNode.mockResolvedValueOnce(refusal('done'));
+
+    const approve = (await open({ expectedRevision: 3, why: 'go ahead' })).json();
+    const reopen = await open({ expectedRevision: 3 });
+
+    expect(reopen.statusCode).toBe(422);
+    expect(reopen.json()).toEqual({
+      error: 'PLAN_NODE_NOTE_TOO_LONG',
+      message:
+        'Reopening heads this step’s note with the outcome it was closed with, which would leave the note at ' +
+        '64012 characters, past the 64000 a note holds, so nothing was written. A shorter reason, or none, ' +
+        'does not bring it under: the recorded outcome has to be shortened first, and the plan page cannot ' +
+        'write it. Ask the Helmsman to shorten the outcome while the step is still done, then reopen it.',
+    });
+    expect(reopen.json().message).not.toBe(approve.message);
+    expect(reopen.json().message).not.toContain('approve again');
   });
 
   it('answers a node not in the space with 404', async () => {

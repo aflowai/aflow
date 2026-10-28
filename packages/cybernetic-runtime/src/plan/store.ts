@@ -60,7 +60,8 @@ export interface NewPlanNode {
   goal: string;
   criteria: string;
   note: string | null;
-  position: number;
+  /** Absent: after the last sibling, read under the parent's sibling lock. */
+  position?: number;
   createdBy: string | null;
 }
 
@@ -195,7 +196,9 @@ export interface PlanNodeStore {
    * Writes the node unless its parent is gone or it would sit past
    * `PLAN_TREE_DEPTH_LIMIT`. The check and the write are one transaction
    * holding the rows from the parent up to its root, so no concurrent move
-   * can carry the parent deeper between them.
+   * can carry the parent deeper between them. Without a position it goes after
+   * the last sibling, read under the lock a place holds, so it cannot land
+   * inside a renumbering.
    */
   insert(spaceId: string, values: NewPlanNode): Promise<PlanNodeInsert>;
   find(spaceId: string, nodeId: string): Promise<PlanNode | null>;
@@ -237,8 +240,6 @@ export interface PlanNodeStore {
     expectedRevision: number,
     anchor: PlanPlaceAnchor,
   ): Promise<PlanNodePlaceWrite>;
-  /** The position after the last sibling under `parentId` (null: the roots). */
-  nextPosition(spaceId: string, parentId: string | null): Promise<number>;
   listChildren(
     spaceId: string,
     parentId: string,
@@ -526,6 +527,22 @@ function levelIs(level: PlanTreeLevel, statuses: readonly PlanNodeStatus[] | und
   }
 }
 
+/**
+ * Held by every write that orders children of `parentId` (null: the roots) for
+ * the rest of its transaction. A place's `FOR UPDATE` holds the siblings that
+ * exist but not an insert, so a create reading the last position before a
+ * renumbering commits would land among the renumbered; this makes it wait and
+ * read the order the place leaves.
+ */
+async function lockSiblings(
+  tx: PostgresJsDatabase,
+  spaceId: string,
+  parentId: string | null,
+): Promise<void> {
+  const key = `${spaceId}:plan-siblings:${parentId ?? 'roots'}`;
+  await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`);
+}
+
 async function nextPositionIn(
   tx: PostgresJsDatabase,
   spaceId: string,
@@ -640,6 +657,7 @@ export function createPlanNodeStore(db: PostgresJsDatabase, tenantId: string): P
     patch: PlanNodePatch,
   ): Promise<PlanNodeMove> =>
     inTenant(async (tx) => {
+      if (patch.position === undefined) await lockSiblings(tx, spaceId, parentId);
       if (parentId !== null) {
         const reads = placementReads(tx, spaceId);
         // Held before the subtree is measured, so a create below it waits.
@@ -673,6 +691,7 @@ export function createPlanNodeStore(db: PostgresJsDatabase, tenantId: string): P
       };
       const held = await findIn();
       if (!held) return { outcome: 'not_found' };
+      await lockSiblings(tx, spaceId, held.parentId);
       // Every sibling locked, the node among them: a second place under this
       // parent waits here and then reads this one's order. Sorted again once
       // locked, since a row another write changed is returned as it now
@@ -733,6 +752,7 @@ export function createPlanNodeStore(db: PostgresJsDatabase, tenantId: string): P
     insert: (spaceId, values) =>
       retryingDeadlocks(() =>
         inTenant(async (tx): Promise<PlanNodeInsert> => {
+          if (values.position === undefined) await lockSiblings(tx, spaceId, values.parentId);
           if (values.parentId !== null) {
             const check = await checkPlacement(
               values.parentId,
@@ -742,9 +762,10 @@ export function createPlanNodeStore(db: PostgresJsDatabase, tenantId: string): P
             );
             if (check.outcome !== 'clear') return check;
           }
+          const position = values.position ?? (await nextPositionIn(tx, spaceId, values.parentId));
           const [row] = await tx
             .insert(planNodes)
-            .values({ spaceId, ...values })
+            .values({ spaceId, ...values, position })
             .returning();
           if (!row) throw new Error('plan_nodes insert returned no row');
           return { outcome: 'inserted', node: rowToPlanNode(row) };
@@ -769,8 +790,6 @@ export function createPlanNodeStore(db: PostgresJsDatabase, tenantId: string): P
 
     placeAtRevision: (spaceId, nodeId, expectedRevision, anchor) =>
       retryingDeadlocks(() => placeOnce(spaceId, nodeId, expectedRevision, anchor)),
-
-    nextPosition: (spaceId, parentId) => inTenant((tx) => nextPositionIn(tx, spaceId, parentId)),
 
     listChildren: (spaceId, parentId, limit) =>
       inTenant(async (tx) => {

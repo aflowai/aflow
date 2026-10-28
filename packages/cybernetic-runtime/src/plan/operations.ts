@@ -186,7 +186,12 @@ function reopenedNoteTooLong(current: PlanNode, noteLength: number): PlanOpError
       `Reopening plan node "${current.title}" puts its outcome at the head of its note, which would then hold ` +
       `${String(noteLength)} characters; a note holds at most ${String(PLAN_NODE_PROSE_MAX_CHARS)}, so nothing was ` +
       `written. ${remedy}`,
-    details: { nodeId: current.nodeId, noteLength, noteMaxChars: PLAN_NODE_PROSE_MAX_CHARS },
+    details: {
+      nodeId: current.nodeId,
+      status: current.status,
+      noteLength,
+      noteMaxChars: PLAN_NODE_PROSE_MAX_CHARS,
+    },
   };
 }
 
@@ -316,7 +321,6 @@ export async function createPlanNode(
   input: PlanNodeCreateInput,
 ): Promise<PlanOpResult<{ node: PlanNode }>> {
   const parentId = input.parentId ?? null;
-  const position = input.position ?? (await ctx.store.nextPosition(ctx.spaceId, parentId));
   const inserted = await ctx.store.insert(ctx.spaceId, {
     parentId,
     kind: input.kind,
@@ -324,7 +328,7 @@ export async function createPlanNode(
     goal: input.goal,
     criteria: input.criteria,
     note: input.note !== undefined && input.note !== '' ? input.note : null,
-    position,
+    ...(input.position !== undefined ? { position: input.position } : {}),
     createdBy: ctx.createdBy ?? null,
   });
   if (inserted.outcome === 'inserted') {
@@ -469,7 +473,12 @@ function approvedNoteTooLong(current: PlanNode, noteLength: number): PlanOpError
       `Approving plan node "${current.title}" with this reason puts it above its note, which would then hold ` +
       `${String(noteLength)} characters; a note holds at most ${String(PLAN_NODE_PROSE_MAX_CHARS)}, so nothing was ` +
       'written. Approve it without a reason, or shorten its note first.',
-    details: { nodeId: current.nodeId, noteLength, noteMaxChars: PLAN_NODE_PROSE_MAX_CHARS },
+    details: {
+      nodeId: current.nodeId,
+      status: current.status,
+      noteLength,
+      noteMaxChars: PLAN_NODE_PROSE_MAX_CHARS,
+    },
   };
 }
 

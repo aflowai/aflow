@@ -4,7 +4,9 @@
  * The in-memory store serialises every write, so its tests cannot show what
  * the Postgres store's sibling lock does: two places under one parent run at
  * once, the second waiting on the first's rows and then reading the order the
- * first left, so both land and neither loses the other's move; a renumbering
+ * first left, so both land and neither loses the other's move; a create under
+ * that parent waits on the same lock, so it lands after the last sibling and
+ * never inside a renumbering; a renumbering
  * rewrites positions and no sibling's revision; and a write decided against a
  * revision or an order that no longer stands is refused with what does. Gated
  * on DATABASE_URL like every pg test.
@@ -157,6 +159,31 @@ describeDb('placeAtRevision — places under one parent (real DB)', () => {
       expect(titlesOf(after)).toEqual(['D', 'A', 'C', 'B']);
       expect(new Set(after.map((row) => row.position)).size).toBe(4);
       expect(revisionsOf(after)).toEqual({ A: 1, B: 1, C: 2, D: 2 });
+    }
+  });
+
+  it('puts a step created during a renumbering place after the last sibling, never among them', async () => {
+    const groups = await Promise.all(
+      Array.from({ length: RACING_PARENTS }, (_, i) =>
+        packed(`created ${String(i)}`, ['A', 'B', 'C', 'D']),
+      ),
+    );
+
+    const outcomes = await Promise.all(
+      groups.map(({ root, children: [a, , , d] }) =>
+        Promise.all([
+          placePlanNode(ctx, { nodeId: d!.nodeId, expectedRevision: 1, after: a!.nodeId }),
+          node('E', root.nodeId),
+        ]),
+      ),
+    );
+
+    for (const [i, [placed]] of outcomes.entries()) {
+      expect(placed.ok).toBe(true);
+      const after = await siblings(groups[i]!.root.nodeId);
+      expect(titlesOf(after)).toEqual(['A', 'D', 'B', 'C', 'E']);
+      expect(new Set(after.map((row) => row.position)).size).toBe(5);
+      expect(revisionsOf(after)).toEqual({ A: 1, B: 1, C: 1, D: 2, E: 1 });
     }
   });
 

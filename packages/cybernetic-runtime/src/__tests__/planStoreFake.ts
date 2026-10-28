@@ -142,7 +142,7 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
         goal: values.goal,
         criteria: values.criteria,
         ...(values.note !== null ? { note: values.note } : {}),
-        position: values.position,
+        position: values.position ?? this.positionAfterLast(spaceId, values.parentId),
         ...(values.createdBy !== null ? { createdBy: values.createdBy } : {}),
       });
       return { outcome: 'inserted', node };
@@ -232,7 +232,7 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
       );
       if (check.outcome !== 'clear') return check;
     }
-    const position = patch.position ?? (await this.nextPosition(spaceId, parentId));
+    const position = patch.position ?? this.positionAfterLast(spaceId, parentId);
     const node = this.write(spaceId, nodeId, expectedRevision, { ...patch, parentId, position });
     return node ? { outcome: 'moved', node } : { outcome: 'stale' };
   }
@@ -270,14 +270,12 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
     return structuredClone(next);
   }
 
-  nextPosition: PlanNodeStore['nextPosition'] = (spaceId, parentId) => {
+  private positionAfterLast(spaceId: string, parentId: string | null): number {
     const siblings = this.inSpace(spaceId).filter((n) => n.parentId === parentId);
-    return Promise.resolve(
-      siblings.length === 0
-        ? 0
-        : Math.min(Math.max(...siblings.map((n) => n.position)) + 1, PLAN_NODE_POSITION_MAX),
-    );
-  };
+    return siblings.length === 0
+      ? 0
+      : Math.min(Math.max(...siblings.map((n) => n.position)) + 1, PLAN_NODE_POSITION_MAX);
+  }
 
   listChildren: PlanNodeStore['listChildren'] = (spaceId, parentId, limit) => {
     const children = this.inSpace(spaceId)

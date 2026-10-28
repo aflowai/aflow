@@ -85,15 +85,30 @@ function refusalBody(
 
 /**
  * The engine's remedy for an overlong note names update fields the open route
- * does not take; the operator's one lever there is the reason they typed.
+ * does not take. On an approve the operator's lever is the reason they typed;
+ * on a reopen the overflow is the engine's line over the recorded outcome,
+ * which a shorter reason or none cannot bring under the limit.
  */
 function openNoteTooLongBody(refusal: PlanOpError): PlanNodeWriteRefusal {
   const details = z
-    .object({ noteLength: z.number(), noteMaxChars: z.number() })
+    .object({ status: z.string(), noteLength: z.number(), noteMaxChars: z.number() })
+    .partial()
     .safeParse(refusal.details);
-  const size = details.success
-    ? ` at ${String(details.data.noteLength)} characters, past the ${String(details.data.noteMaxChars)} a note holds`
-    : ' longer than a note holds';
+  const { status, noteLength, noteMaxChars } = details.success ? details.data : {};
+  const size =
+    noteLength !== undefined && noteMaxChars !== undefined
+      ? ` at ${String(noteLength)} characters, past the ${String(noteMaxChars)} a note holds`
+      : ' longer than a note holds';
+  if (status === 'done' || status === 'dropped') {
+    return {
+      error: refusal.code,
+      message:
+        `Reopening heads this step’s note with the outcome it was closed with, which would leave the note${size}, ` +
+        'so nothing was written. A shorter reason, or none, does not bring it under: the recorded outcome has ' +
+        `to be shortened first, and the plan page cannot write it. Ask the Helmsman to shorten the outcome while ` +
+        `the step is still ${status}, then reopen it.`,
+    };
+  }
   return {
     error: refusal.code,
     message:
