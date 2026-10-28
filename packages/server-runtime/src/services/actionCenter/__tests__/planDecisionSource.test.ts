@@ -192,6 +192,7 @@ describe('planDecisionSource — the answer', () => {
         redis: REDIS,
         tenantId: TENANT_ID,
         createdBy: ACTOR_ID,
+        actorKind: 'human',
       },
       { nodeId: NODE_ID, expectedRevision: 3, status: 'done', outcome: 'In the outcome.' },
     );

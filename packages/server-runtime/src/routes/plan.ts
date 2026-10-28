@@ -1,4 +1,3 @@
-import { resolvePrincipalActorKind } from '../utils/actorContext.js';
 /**
  * The space's plan as the operator reads and writes it (Plan 322 P3). Both go
  * through the plan engine, the one authority the Helmsman's `plan.node.*`
@@ -6,6 +5,7 @@ import { resolvePrincipalActorKind } from '../utils/actorContext.js';
  * write of theirs is judged by the same rules — the revision compare-and-set
  * of D6 above all.
  */
+import { resolvePrincipalActorKind } from '../utils/actorContext.js';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -251,7 +251,14 @@ export const planRoutes: FastifyPluginAsync = async (fastify) => {
         tenant.tenantId,
       );
       const result = await updatePlanNode(
-        { store, spaceId, redis, tenantId: tenant.tenantId, createdBy: operator.userId },
+        {
+          store,
+          spaceId,
+          redis,
+          tenantId: tenant.tenantId,
+          createdBy: operator.userId,
+          actorKind: 'human',
+        },
         {
           nodeId,
           expectedRevision: body.expectedRevision,
@@ -351,6 +358,7 @@ export const planRoutes: FastifyPluginAsync = async (fastify) => {
           redis,
           tenantId: tenant.tenantId,
           createdBy: authUser.userId,
+          actorKind: 'human',
         },
         {
           nodeId,

@@ -217,7 +217,13 @@ describe('plan.node.update', () => {
         makeArgs('plan.node.update', { nodeId: NODE_ID, expectedRevision: 2, status }),
       );
       expect(mockUpdatePlanNode).toHaveBeenCalledWith(
-        { store: STORE, spaceId: SPACE, redis: { kind: 'redis' }, tenantId: TENANT },
+        {
+          store: STORE,
+          spaceId: SPACE,
+          redis: { kind: 'redis' },
+          tenantId: TENANT,
+          actorKind: 'agent',
+        },
         { nodeId: NODE_ID, expectedRevision: 2, status },
       );
       expect(emitted()['status']).toBe('SUCCEEDED');
@@ -292,7 +298,13 @@ describe('plan.node.link', () => {
       makeArgs('plan.node.link', { nodeId: NODE_ID, kind: 'pull_request', ref: LINK.ref }),
     );
     expect(mockLinkPlanNode).toHaveBeenCalledWith(
-      { store: STORE, spaceId: SPACE, redis: { kind: 'redis' }, tenantId: TENANT },
+      {
+        store: STORE,
+        spaceId: SPACE,
+        redis: { kind: 'redis' },
+        tenantId: TENANT,
+        actorKind: 'agent',
+      },
       { nodeId: NODE_ID, kind: 'pull_request', ref: LINK.ref },
     );
     expect(emitted()['status']).toBe('SUCCEEDED');
@@ -348,7 +360,13 @@ describe('plan.node.learn (Plan 322 P2)', () => {
     mockLearnOnPlanNode.mockResolvedValue({ ok: true, learning, superseded: [] });
     await handlePlanNodeInline(makeArgs('plan.node.learn', LEARNING));
     expect(mockLearnOnPlanNode).toHaveBeenCalledWith(
-      { store: STORE, spaceId: SPACE, redis: { kind: 'redis' }, tenantId: TENANT },
+      {
+        store: STORE,
+        spaceId: SPACE,
+        redis: { kind: 'redis' },
+        tenantId: TENANT,
+        actorKind: 'agent',
+      },
       LEARNING,
       { sessionId: SESSION },
     );

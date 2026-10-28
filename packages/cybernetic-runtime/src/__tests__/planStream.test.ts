@@ -1346,6 +1346,24 @@ describe('resident review regressions', () => {
     expect(decisions.filter((answer) => answer.decision === 'publish')).toHaveLength(1);
   });
 
+  it.each(['write', 'resume'] as const)(
+    'starts fresh after %s supersedes an operator commission',
+    async (path) => {
+      const { root, first } = await stream();
+      const runId = await run(first, PLAN_STREAM_COMMISSION_SLUG, 'completed');
+      operatorCommissions.add(runId);
+      expect(await next(root.nodeId)).toMatchObject({ cause: 'awaiting_publication' });
+      if (path === 'resume') {
+        await write(first.nodeId, { status: 'blocked' });
+        const blocked = await current(first.nodeId);
+        await openPlanNode(session(), { nodeId: first.nodeId, expectedRevision: blocked.revision });
+      } else {
+        await write(first.nodeId, { note: 'Take a fresh approach.' });
+      }
+      expect(await next(root.nodeId)).toMatchObject({ decision: 'continue' });
+    },
+  );
+
   it('leaves an operator conversation commission to its owner', async () => {
     const { root, first } = await stream();
     const runId = await run(first, PLAN_STREAM_COMMISSION_SLUG, 'completed');

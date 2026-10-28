@@ -307,6 +307,7 @@ describe('PATCH /v1/spaces/:spaceId/plan/nodes/:nodeId', () => {
         redis: REDIS,
         tenantId: TENANT_ID,
         createdBy: OPERATOR_ID,
+        actorKind: 'human',
       },
       { nodeId: CHILD_ID, expectedRevision: 3, status: 'done', outcome: 'Merged.' },
     );
@@ -482,6 +483,29 @@ describe('PATCH /v1/spaces/:spaceId/plan/nodes/:nodeId/open (Plan 332 D6, Plan 3
     });
   });
 
+  it.each([0, -1, 1.5, 1_000_001])('refuses an invalid spend ceiling %s', async (spendCents) => {
+    expect((await open({ expectedRevision: 4, spendCents })).statusCode).toBe(400);
+    expect(mockOpenPlanNode).not.toHaveBeenCalled();
+  });
+
+  it('resets the spend window through the authenticated production open path', async () => {
+    const { openPlanNode } = await import('../../../cybernetic-runtime/src/plan/operations.js');
+    const { InMemoryPlanNodeStore } =
+      await import('../../../cybernetic-runtime/src/__tests__/planStoreFake.js');
+    const { default: Redis } = await import('ioredis-mock');
+    const store = new InMemoryPlanNodeStore();
+    store.nodes.set(CHILD_ID, { ...openedNode(), status: 'blocked', revision: 4 });
+    mockOpenPlanNode.mockImplementationOnce(
+      (...[context, input]: Parameters<typeof openPlanNode>) =>
+        openPlanNode({ ...context, store, redis: new Redis() }, input),
+    );
+    const response = await open({ expectedRevision: 4 });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().node.status).toBe('active');
+    expect(mockOpenPlanNode.mock.calls[0]![0]).toMatchObject({ actorKind: 'human' });
+    expect(store.openedAt.get(CHILD_ID)).toBeInstanceOf(Date);
+  });
+
   it('moves a blocked node to active through the open write, its own audit row naming what it left', async () => {
     mockOpenPlanNode.mockResolvedValue({ ok: true, node: openedNode(), left: 'blocked' });
 
@@ -496,6 +520,7 @@ describe('PATCH /v1/spaces/:spaceId/plan/nodes/:nodeId/open (Plan 332 D6, Plan 3
         redis: REDIS,
         tenantId: TENANT_ID,
         createdBy: OPERATOR_ID,
+        actorKind: 'human',
       },
       { nodeId: CHILD_ID, expectedRevision: 4, why: 'go.' },
     );

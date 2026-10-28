@@ -1,7 +1,7 @@
-import { resolvePrincipalActorKind } from '../utils/actorContext.js';
 /**
  * API key management endpoints.
  */
+import { resolvePrincipalActorKind } from '../utils/actorContext.js';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';

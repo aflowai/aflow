@@ -118,6 +118,7 @@ vi.mock('@aflow/design-system', () => {
         { ...passed(rest), type: 'button', onClick, disabled, role: undefined },
         children,
       ),
+    Input: (props: Record<string, unknown>) => createElement('input', props),
     Textarea: (props: Record<string, unknown>) =>
       createElement('textarea', {
         'aria-label': props['aria-label'],
@@ -1105,6 +1106,44 @@ describe('SpacePlanPage — the operator’s writes from the rail', () => {
       JSON.parse(open.serialize({ nodeId: ARTICLE, expectedRevision: 4, why: 'Go ahead.' })),
     ).toEqual({ expectedRevision: 4, why: 'Go ahead.' });
     expect(open.invalidate).toEqual([['space', SPACE_ID, 'plan']]);
+  });
+
+  it('sends an optional spend ceiling when resuming a stopped step', async () => {
+    recorded.mutateAsync.mockResolvedValue({ node: {} });
+    recorded.details[ARTICLE] = detail(
+      fullNode(ARTICLE, 'Write the help article', {
+        parentId: R322,
+        status: 'blocked',
+        revision: 4,
+        note: 'Blocked: spend ceiling reached.',
+      }),
+    );
+    await render({ data: withStatus(ARTICLE, 'blocked') });
+    await click(card(ARTICLE));
+    await click(button(rail(), 'Resume'));
+    const field = rail().querySelector('input')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(
+        field,
+        '12500',
+      );
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await click(button(rail(), 'Resume'));
+    expect(recorded.mutateAsync).toHaveBeenCalledWith({
+      nodeId: ARTICLE,
+      expectedRevision: 4,
+      spendCents: 12500,
+    });
+    expect(
+      JSON.parse(
+        recorded.openMutation!.serialize({
+          nodeId: ARTICLE,
+          expectedRevision: 4,
+          spendCents: 12500,
+        }),
+      ),
+    ).toEqual({ expectedRevision: 4, spendCents: 12500 });
   });
 
   it('calls it Resume on a step the stream stopped, and offers neither on an open one', async () => {

@@ -9,8 +9,14 @@
  * reads the node again.
  */
 import { useState } from 'react';
-import { Button, Column, Row, Text, Textarea } from '@aflow/design-system';
-import type { PlanNode, PlanNodeStatus, PlanTreeNode } from '@aflow/schemas';
+import { Button, Column, Row, Text, Textarea, Input } from '@aflow/design-system';
+import {
+  PlanNodeOpenSchema,
+  type PlanNodeOpen,
+  type PlanNode,
+  type PlanNodeStatus,
+  type PlanTreeNode,
+} from '@aflow/schemas';
 
 /** What the operator asks of one node: close it, against the revision they read. */
 export interface PlanNodeCloseRequest {
@@ -25,11 +31,7 @@ export type PlanNodeCloseAnswer = { ok: true } | { ok: false; message: string };
 export type PlanNodeCloser = (request: PlanNodeCloseRequest) => Promise<PlanNodeCloseAnswer>;
 
 /** What the operator asks of a blocked node: open it, against the revision they read. */
-export interface PlanNodeOpenRequest {
-  nodeId: string;
-  expectedRevision: number;
-  why?: string;
-}
+export type PlanNodeOpenRequest = { nodeId: string } & PlanNodeOpen;
 
 export type PlanNodeOpener = (request: PlanNodeOpenRequest) => Promise<PlanNodeCloseAnswer>;
 
@@ -89,6 +91,7 @@ export function PlanNodeCloseControl({
   onChoose: (choosing: PlanNodeChoosing) => void;
 }) {
   const [text, setText] = useState('');
+  const [spend, setSpend] = useState('');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // The node as the open form first read it. The page re-reads the plan on
@@ -152,6 +155,7 @@ export function PlanNodeCloseControl({
   const reset = () => {
     onChoose(null);
     setText('');
+    setSpend('');
     setError(null);
   };
 
@@ -159,12 +163,20 @@ export function PlanNodeCloseControl({
     const shownOpen = shown !== undefined && shown.status !== 'blocked';
     const submitOpen = async () => {
       if (!shown) return;
+      const body = PlanNodeOpenSchema.safeParse({
+        expectedRevision: shown.revision,
+        ...(outcome.length > 0 ? { why: outcome } : {}),
+        ...(spend.trim() !== '' ? { spendCents: Number(spend) } : {}),
+      });
+      if (!body.success) {
+        setError('Enter a spend ceiling from 1 to 1,000,000 whole cents.');
+        return;
+      }
       setPending(true);
       setError(null);
       const answer = await onOpen({
         nodeId: node.nodeId,
-        expectedRevision: shown.revision,
-        ...(outcome.length > 0 ? { why: outcome } : {}),
+        ...body.data,
       });
       setPending(false);
       if (answer.ok) {
@@ -201,8 +213,22 @@ export function PlanNodeCloseControl({
             setText(event.target.value);
           }}
         />
+        <Input
+          aria-label="Spend ceiling in cents (optional)"
+          type="number"
+          min={1}
+          max={1_000_000}
+          step={1}
+          placeholder="Spend ceiling in cents (optional)"
+          value={spend}
+          disabled={pending}
+          onChange={(event) => {
+            setSpend(event.target.value);
+          }}
+        />
         <Text size="xs" variant="muted">
-          The resident takes it from here, in its place on the plan.
+          Leave the ceiling blank to keep it. The resident takes it from here, in its place on the
+          plan.
         </Text>
         {error !== null && (
           <Text size="sm" tone="danger" role="alert">

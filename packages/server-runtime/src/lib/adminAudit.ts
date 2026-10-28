@@ -1,4 +1,3 @@
-import { resolvePrincipalActorKind } from '../utils/actorContext.js';
 /**
  * Recording an administrative action in the audit log.
  *
@@ -7,6 +6,7 @@ import { resolvePrincipalActorKind } from '../utils/actorContext.js';
  * enterprise, but attribution for who changed what is not something an
  * appliance does without.
  */
+import { resolvePrincipalActorKind } from '../utils/actorContext.js';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 
 export function recordAdminAudit(

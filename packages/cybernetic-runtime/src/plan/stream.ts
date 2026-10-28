@@ -521,9 +521,11 @@ function roundToAnswer(
   updatedAt: string,
 ): PlanStreamRun | undefined {
   const latest = rounds[0];
-  // A stop and Resume write the node after the patch completed. That patch
+  // A stop and Resume write the node after its resident patch completed. That patch
   // still owns its publication, until a publication or newer commission exists.
-  return latest?.slug === PLAN_STREAM_COMMISSION_SLUG && latest.status === 'completed'
+  return latest?.slug === PLAN_STREAM_COMMISSION_SLUG &&
+    latest.status === 'completed' &&
+    latest.wakeSessionId !== undefined
     ? latest
     : latestRoundSinceWrite(rounds, updatedAt);
 }

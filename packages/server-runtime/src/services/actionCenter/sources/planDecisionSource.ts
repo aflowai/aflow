@@ -129,6 +129,7 @@ export function createPlanDecisionSource(deps: ActionCenterSourceDeps): ActionCe
           redis: deps.redis,
           tenantId: ctx.tenantId,
           createdBy: ctx.actorUserId,
+          actorKind: 'human',
         },
         { nodeId, expectedRevision: revision, status: 'done', outcome: answer.trim() },
       );
