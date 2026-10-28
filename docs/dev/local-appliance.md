@@ -572,10 +572,12 @@ everything under each `--web-app` directory). The same declaration is under each
 folder on **This Computer**, which says **Preview not declared** where the folder
 holds a web app and declares none. Only a person declares it, a port this stack
 serves on is refused, and declaring it starts nothing. A harness run that asks for
-it (`preview: true`, with the ephemeral browser) has the executor start it from
-that run's checkout, unconfined but in a process group the executor stops when the
-run ends, with none of the harness's credential; wait up to 120 s for the ready
-path; and open its port to that run's browser alone. A fixed port serves one run
+it (`preview: true`, with the ephemeral browser) has the executor start it in a
+snapshot of that run's checkout — its commit, copied before the agent starts, never
+the checkout the agent edits — unconfined but in a process group the executor stops
+when the run ends, with none of the harness's credential; wait up to 120 s for the
+ready path on IPv4 or IPv6 loopback; and open its port to that run's browser alone.
+What it printed is kept with the run, failed or not. A fixed port serves one run
 at a time, and a run that finds it held is refused rather than queued:
 
 ```bash

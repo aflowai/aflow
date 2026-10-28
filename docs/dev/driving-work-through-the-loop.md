@@ -295,15 +295,18 @@ the checkout (`yarn dev --port {port}`, or whatever that folder's project runs),
 if it must be fixed (a fixed port serves one run at a time; left out, each run takes a free
 one), the path that answers once it is up, and the files that count as its UI. No operation
 sets it, and a port this stack serves on is refused. Declaring it starts nothing; a harness
-run asking for `preview: true` has the executor start it from that run's checkout, open it
+run asking for `preview: true` has the executor start it in a snapshot of that run's checkout
+— its commit, copied before the agent starts, so nothing the agent writes is run — open it
 in that run's browser alone and stop it at the run's end (P6.b), and a run whose fixed port
 another run holds is refused — start it again once that run ends. Once the skills ask for
 it (P6.c), the loop is standardized:
 a commission whose brief or branch names those files, and a review whose range touches
 them, takes the ephemeral browser and the preview without being asked, the executor starts
-the preview from that run's checkout and stops it at the run's end, and the agent opens it
-and sees the change working before it reports. A commission's trigger is best-effort — its
-change does not exist until it has run — so one that changes those files unasked says so
+the preview from a snapshot of that run's checkout and stops it at the run's end, and the
+agent opens it. The snapshot is the commit the run started from, so a review sees the range
+working, while a commission's preview shows its base: its own edits are seen by the review.
+A commission's trigger is best-effort — its change does not exist until it has run — so one
+that changes those files unasked says so
 in its result; the review's, over the range, cannot miss them, and its screenshots are the
 ones the pull request links. A folder with no declaration is not skipped in silence: the
 review reports a `needs_setup` finding naming the command, the commission's result says

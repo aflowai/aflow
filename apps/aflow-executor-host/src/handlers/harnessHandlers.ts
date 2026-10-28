@@ -37,6 +37,7 @@ import {
   HostHarnessRunInputSchema,
   MAX_INLINE_PAYLOAD_BYTES,
   resolveFolderPreview,
+  type AflowError,
   type HarnessActivityLine,
   type HostResolvedFolderPreview,
   type PayloadRef,
@@ -131,6 +132,7 @@ import {
   resolveBase,
   resolveCommit,
   RUN_SCRATCH_DIR,
+  snapshotCheckout,
   utf8Prefix,
   WorktreeError,
   type Checkout,
@@ -492,27 +494,36 @@ async function failure(
   ctx: ExecutorContext,
   error: unknown,
   secrets: readonly string[],
+  /** What the run kept before it failed, carried on the error beside its own details. */
+  kept: Record<string, unknown> = {},
 ): Promise<StepResult> {
-  const message = scrubSecrets(error instanceof Error ? error.message : String(error), secrets);
+  const shaped = failureShape(
+    error,
+    scrubSecrets(error instanceof Error ? error.message : String(error), secrets),
+  );
+  const own = shaped.details;
+  // A list of validation issues has nowhere to carry a field; none is shaped here.
+  if (Object.keys(kept).length === 0 || Array.isArray(own)) {
+    return await failureWithError(ctx, shaped);
+  }
+  return await failureWithError(ctx, { ...shaped, details: { ...own, ...kept } });
+}
+
+function failureShape(error: unknown, message: string): AflowError {
   if (error instanceof HarnessProfileError) {
     // A request the machine's harness cannot take is answered as a validation
     // refusal: sending the task again without it is the remedy, where a missing
     // or unknown profile is the operator's to grant.
-    return await failureWithError(
-      ctx,
-      error.kind === 'unsupported_request' ? validationError(message) : permissionError(message),
-    );
+    return error.kind === 'unsupported_request'
+      ? validationError(message)
+      : permissionError(message);
   }
-  if (error instanceof HostBindingError) {
-    return await failureWithError(ctx, permissionError(message));
-  }
-  if (error instanceof BrowserDriverError) {
-    return await failureWithError(ctx, browserFailure(error));
-  }
+  if (error instanceof HostBindingError) return permissionError(message);
+  if (error instanceof BrowserDriverError) return browserFailure(error);
   if (error instanceof WorktreeError || error instanceof PreviewError) {
-    return await failureWithError(ctx, validationError(message));
+    return validationError(message);
   }
-  return await failureWithError(ctx, internalError(message));
+  return internalError(message);
 }
 
 /**
@@ -595,6 +606,8 @@ async function runHarness(
   let browser: HarnessBrowser | undefined;
   let previewClaim: PreviewPortClaim | undefined;
   let preview: StartedPreview | undefined;
+  let previewLog: PayloadRef | undefined;
+  let previewSnapshotPath: string | undefined;
   // A session's checkout outlives the run, so the teardown below must not take
   // it away. Set only when this run owns the scratch it made.
   let keepScratch = false;
@@ -683,6 +696,8 @@ async function runHarness(
       previewClaim = await claimPreviewPort(declaredPreview, {
         runId: ctx.runId,
         bindingId: binding.id,
+        tenantId: ctx.tenantId,
+        spaceId,
       });
     }
 
@@ -890,14 +905,17 @@ async function runHarness(
       // next.
       void ctx.emitLiveDelta('activity', `${JSON.stringify(line)}\n`);
     };
-    // Started by this executor from the run's own checkout, never by the agent,
-    // and up before the browser opens, since its port is what that browser is
-    // opened to (Plan 320 D19).
+    // Started by this executor, never by the agent, and up before the browser
+    // opens, since its port is what that browser is opened to (Plan 320 D19).
+    // Unconfined, so never in the checkout the agent edits: in a copy of its
+    // commit taken now, which nothing the agent writes reaches (F49).
     if (declaredPreview !== undefined && previewClaim !== undefined) {
+      const snapshot = await snapshotCheckout(binding.root, worktree, scratchDir, 'preview-tree');
+      previewSnapshotPath = snapshot.path;
       preview = await startPreview({
         preview: declaredPreview,
         port: previewClaim.port,
-        cwd: worktree.workDir,
+        cwd: snapshot.workDir,
         scratchDir: join(scratchDir, 'preview'),
         bindingId: binding.id,
         ownerRunId: ctx.runId,
@@ -1129,7 +1147,6 @@ async function runHarness(
     }
     // Stopped once the harness is done with it, so its log runs to its stop.
     // A kind of its own: `logs` is the browser log's path for this step.
-    let previewLog: PayloadRef | undefined;
     if (preview !== undefined) {
       await preview.stop();
       previewLog = await ctx.writePayload('preview_log', preview.log());
@@ -1323,12 +1340,23 @@ async function runHarness(
           : { resultProblem: scrubSecrets(check.problem, secrets) }),
     });
   } catch (error) {
-    return await failure(ctx, error, secrets);
+    // Kept with a failed run as with one that succeeded, and written once the
+    // preview is stopped so it runs to its end.
+    if (previewLog === undefined) {
+      if (preview !== undefined) await preview.stop();
+      const printed = preview?.log() ?? (error instanceof PreviewError ? error.log : undefined);
+      if (printed !== undefined) {
+        previewLog = await ctx.writePayload('preview_log', printed).catch(() => undefined);
+      }
+    }
+    return await failure(ctx, error, secrets, previewLog !== undefined ? { previewLog } : {});
   } finally {
     await browser?.close();
-    // Before the checkout goes: the preview runs in it.
+    // Before either checkout goes: it runs in the snapshot, which borrows the
+    // run's checkout's objects.
     await preview?.stop();
     previewClaim?.release();
+    if (previewSnapshotPath !== undefined) await removeWorktree(previewSnapshotPath);
     if (claimed !== undefined) releaseSession(claimed);
     if (!keepScratch) {
       if (worktreePath !== undefined) await removeWorktree(worktreePath);

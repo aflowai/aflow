@@ -1,10 +1,12 @@
 /**
  * Contract: a harness run with `preview: true` has the executor — never the
- * agent — start the folder's preview from the run's checkout before the
- * browser opens, hands the harness its address in the inputs, opens that port
- * to the run's ephemeral browser and no other, keeps what it printed as a
- * payload of its own beside the browser log, and stops it however the run
- * ends (Plan 320 D19). A run it cannot serve is refused before any checkout.
+ * agent — start the folder's preview in a snapshot of the run's checkout,
+ * which nothing the agent writes reaches, before the browser opens (F49);
+ * hands the harness its address in the inputs, opens that port to the run's
+ * ephemeral browser and no other, keeps what it printed as a payload of its
+ * own beside the browser log, whether the run succeeds or fails, and stops it
+ * however the run ends (Plan 320 D19). A run it cannot serve is refused before
+ * any checkout, naming another run only to a caller in that run's workspace.
  *
  * The sandboxed spawn and the preview's start are stood in for; the port
  * claim, the browser and the payload writes are the real ones.
@@ -32,8 +34,16 @@ const FIXED_PORT = 41_801;
 
 const handed: SandboxedRunInput[] = [];
 const started: StartPreviewInput[] = [];
-/** For each preview started: whether its checkout was there, at each stop. */
-const stopped: Array<{ port: number; checkoutPresent: boolean }> = [];
+/** For each preview stopped: what was on disk when it was. */
+const stopped: Array<{
+  port: number;
+  checkoutPresent: boolean;
+  agentWriteSeen: boolean;
+  readmeSeen: boolean;
+}> = [];
+
+/** What the stand-in harness writes into its checkout while the preview runs. */
+const AGENT_WRITE = 'agent-wrote-this.mjs';
 
 /** The address the brief handed the harness, read back out of its task. */
 function previewUrlIn(argv: readonly string[]): string | undefined {
@@ -100,12 +110,20 @@ vi.mock('../previewSupervisor.js', async (importOriginal) => {
     ...actual,
     startPreview: (input: StartPreviewInput): Promise<StartedPreview> => {
       started.push(input);
+      let done = false;
       return Promise.resolve({
         port: input.port,
         previewUrl: `http://127.0.0.1:${String(input.port)}/`,
         log: () => `the preview served from ${input.cwd}\n`,
         stop: () => {
-          stopped.push({ port: input.port, checkoutPresent: existsSync(input.cwd) });
+          if (done) return Promise.resolve();
+          done = true;
+          stopped.push({
+            port: input.port,
+            checkoutPresent: existsSync(input.cwd),
+            agentWriteSeen: existsSync(join(input.cwd, AGENT_WRITE)),
+            readmeSeen: existsSync(join(input.cwd, 'README.md')),
+          });
           return Promise.resolve();
         },
       });
@@ -120,6 +138,7 @@ vi.mock('../sandboxedRun.js', async (importOriginal) => {
     sandboxReadiness: () => ({ ready: true, missing: [] }),
     runSandboxed: async (input: SandboxedRunInput): Promise<SandboxedRunResult> => {
       handed.push(input);
+      await writeFile(join(input.cwd, AGENT_WRITE), 'process.exit(1)\n');
       if (input.argv.some((arg) => arg.includes('BREAK THE TURN'))) {
         throw new Error('the harness could not be started');
       }
@@ -268,7 +287,7 @@ function browserLog(ran: Ran): Array<[string, string]> {
 }
 
 describe('a harness run with a preview', () => {
-  it('starts it in the run’s checkout, hands the harness its address and stops it', async () => {
+  it('starts it in a snapshot of the run’s checkout, hands the harness its address and stops it', async () => {
     const ran = await runHarness({ inputs: { range: 'main..HEAD' } }, 'run-preview');
     expect(ran.status).toBe('SUCCEEDED');
 
@@ -278,9 +297,15 @@ describe('a harness run with a preview', () => {
     expect(preview.preview.command).toBe('yarn dev --port {port}');
     expect(preview.bindingId).toBe('hb');
     expect(preview.ownerRunId).toBe('run-preview');
-    // The run's own clone, never the operator's folder.
+    // Neither the operator's folder nor the checkout the agent works in: a
+    // copy of its commit, which the agent's writes never reach.
     expect(preview.cwd).not.toBe(join(base, 'site'));
-    expect(preview.cwd).toBe(handed[0]?.cwd);
+    expect(preview.cwd).not.toBe(handed[0]?.cwd);
+    expect(stopped[0]?.readmeSeen).toBe(true);
+    expect(stopped[0]?.agentWriteSeen).toBe(false);
+    expect(String(ran.output?.['patch'])).toContain(AGENT_WRITE);
+    // Taken away with the run, as its checkout is.
+    expect(existsSync(preview.cwd)).toBe(false);
 
     const url = `http://127.0.0.1:${String(preview.port)}/`;
     expect(previewUrlIn(handed[0]?.argv ?? [])).toBe(url);
@@ -313,13 +338,16 @@ describe('a harness run with a preview', () => {
     expect(String(ran.written['logs'])).toContain('"action":"open"');
   }, 60_000);
 
-  it('stops the preview and frees its port when the run fails', async () => {
+  it('stops the preview, keeps its log and frees its port when the run fails', async () => {
     const ran = await runHarness({ task: 'BREAK THE TURN' }, 'run-broken');
     expect(ran.status).toBe('FAILED');
     expect(started).toHaveLength(1);
     expect(stopped).toHaveLength(1);
     expect(stopped[0]?.checkoutPresent).toBe(true);
     expect(previewPortHolder(started[0]?.port ?? 0)).toBeUndefined();
+    expect(String(ran.written['preview_log'])).toContain('the preview served from');
+    const details = (ran.error as { details?: Record<string, unknown> } | undefined)?.details;
+    expect(details?.['previewLog']).toBe('inline:preview_log');
   }, 60_000);
 });
 
@@ -344,7 +372,7 @@ describe('a harness run refused its preview before any checkout', () => {
   it('is refused while another run’s preview holds the folder’s fixed port, naming that run', async () => {
     const holding = await claimPreviewPort(
       { port: FIXED_PORT },
-      { runId: 'run-holder', bindingId: 'hb-fixed' },
+      { runId: 'run-holder', bindingId: 'hb-fixed', tenantId: 't1', spaceId: 'space-test' },
     );
     try {
       const ran = await runHarness({ bindingId: 'hb-fixed' }, 'run-second');
@@ -362,6 +390,22 @@ describe('a harness run refused its preview before any checkout', () => {
     const after = await runHarness({ bindingId: 'hb-fixed' }, 'run-third');
     expect(after.status).toBe('SUCCEEDED');
     expect(started[0]?.port).toBe(FIXED_PORT);
+  }, 60_000);
+
+  it('is refused without the holder’s name while another workspace’s run holds the port', async () => {
+    const holding = await claimPreviewPort(
+      { port: FIXED_PORT },
+      { runId: 'run-elsewhere', bindingId: 'hb-other', tenantId: 't1', spaceId: 'space-other' },
+    );
+    try {
+      const ran = await runHarness({ bindingId: 'hb-fixed' }, 'run-outsider');
+      expect(ran.status).toBe('FAILED');
+      expect(ran.error?.message).toContain(`preview port ${String(FIXED_PORT)} is in use`);
+      expect(ran.error?.message).not.toContain('run-elsewhere');
+      expect(handed).toHaveLength(0);
+    } finally {
+      holding.release();
+    }
   }, 60_000);
 
   it('is refused when anything else listens on the folder’s fixed port', async () => {

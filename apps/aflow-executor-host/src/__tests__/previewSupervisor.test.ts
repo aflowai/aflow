@@ -1,9 +1,9 @@
 /**
  * Contract: a run's preview (Plan 320 D19) is started by the executor in the
- * run's checkout, waited for on its ready path, refused when its fixed port is
- * held, and stopped — its whole group, politely and then not — before the run
- * lets the checkout go. A small node http server stands in for the folder's
- * dev server.
+ * directory it is given, waited for on its ready path on either loopback
+ * family, refused when its fixed port is held — naming the holder only within
+ * its workspace — and stopped, its whole group, politely and then not. A small
+ * node http server stands in for the folder's dev server.
  */
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:net';
@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import type { StackPortOwner } from '@aflow/lib';
+import { portTaken } from '@aflow/lib/port-probe';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { LOOPBACK_LISTENER, requires } from './fixtures/capabilities.js';
@@ -23,13 +24,36 @@ import {
   previewReadyUrl,
   startPreview,
   type StartedPreview,
+  type StartPreviewInput,
 } from '../previewSupervisor.js';
+import type { ServiceExit } from '../sandboxedRun.js';
 
 const onLoopback = requires(LOOPBACK_LISTENER);
 /** Ports nothing here listens on, for the cases where nothing ever does. */
 const UNUSED_PORTS = { silent: 41_791, aborted: 41_792, exits: 41_793 };
 const NO_STACK = new Map<number, StackPortOwner>();
 const FREE = { stackOwn: NO_STACK, taken: () => Promise.resolve(false) };
+
+function holder(runId: string, spaceId = 'space-a', tenantId = 't1') {
+  return { runId, bindingId: 'hb', tenantId, spaceId };
+}
+
+/** A preview whose process stands in, for the cases about the wait alone. */
+function standIn(): NonNullable<StartPreviewInput['start']> {
+  return () => {
+    let ended: (exit: ServiceExit) => void = () => undefined;
+    const exited = new Promise<ServiceExit>((resolve) => {
+      ended = resolve;
+    });
+    return {
+      processId: 'pv_test',
+      exited,
+      stop: () => {
+        ended({ code: null, signal: 'SIGTERM', stderrTail: '' });
+      },
+    };
+  };
+}
 
 let dir: string;
 
@@ -139,8 +163,12 @@ describe('a run’s preview', () => {
     const message = (error as Error).message;
     expect(message).toContain('server.mjs');
     expect(message).toContain('silent');
-    expect(message).toMatch(/did not answer at http:\/\/127\.0\.0\.1:\d+\/health within 1 s/);
+    expect(message).toMatch(
+      /did not answer at http:\/\/127\.0\.0\.1:\d+\/health or http:\/\/\[::1\]:\d+\/health within 1 s/,
+    );
     expect(message).toContain('secret=none');
+    // What it printed is carried whole as well, for the run to keep.
+    expect((error as PreviewError).log).toContain('secret=none');
     // And it was stopped, not left running.
     expect(alive(pidIn(message))).toBe(false);
   }, 30_000);
@@ -164,6 +192,50 @@ describe('a run’s preview', () => {
     expect((error as Error).message).toContain('exited with 3');
     expect((error as Error).message).toContain(`boom ${String(port)}`);
   }, 30_000);
+
+  it('counts a preview answering on IPv6 loopback alone as ready, and hands over that address', async () => {
+    const asked: string[] = [];
+    const preview = await startPreview({
+      preview: { command: 'serve {port}', readyPath: '/health', uiPaths: [], webAppDirs: [] },
+      port: 41_794,
+      cwd: dir,
+      scratchDir: await mkdtemp(join(dir, 'scratch-')),
+      bindingId: 'hb',
+      ownerRunId: 'run-v6',
+      secrets: [],
+      signal: new AbortController().signal,
+      pollMs: 10,
+      start: standIn(),
+      fetch: (url) => {
+        asked.push(String(url));
+        return String(url).startsWith('http://[::1]:')
+          ? Promise.resolve(new Response('ok'))
+          : Promise.reject(new Error('ECONNREFUSED'));
+      },
+    });
+    expect(asked).toContain('http://127.0.0.1:41794/health');
+    expect(asked).toContain('http://[::1]:41794/health');
+    expect(preview.previewUrl).toBe('http://[::1]:41794/');
+    await preview.stop();
+  });
+
+  it('prefers IPv4 loopback when both answer', async () => {
+    const preview = await startPreview({
+      preview: { command: 'serve {port}', readyPath: '/', uiPaths: [], webAppDirs: [] },
+      port: 41_795,
+      cwd: dir,
+      scratchDir: await mkdtemp(join(dir, 'scratch-')),
+      bindingId: 'hb',
+      ownerRunId: 'run-both',
+      secrets: [],
+      signal: new AbortController().signal,
+      pollMs: 10,
+      start: standIn(),
+      fetch: () => Promise.resolve(new Response('ok')),
+    });
+    expect(preview.previewUrl).toBe('http://127.0.0.1:41795/');
+    await preview.stop();
+  });
 
   it('stops waiting when the run is stopped', async () => {
     const controller = new AbortController();
@@ -193,26 +265,35 @@ describe('a run’s preview', () => {
 
 describe('the port a preview is claimed on', () => {
   it('refuses a fixed port another run holds, naming that run, until it is released', async () => {
-    const first = await claimPreviewPort(
-      { port: 41_731 },
-      { runId: 'run-a', bindingId: 'hb' },
-      FREE,
+    const first = await claimPreviewPort({ port: 41_731 }, holder('run-a'), FREE);
+    expect(previewPortHolder(41_731)).toEqual(holder('run-a'));
+    await expect(claimPreviewPort({ port: 41_731 }, holder('run-b'), FREE)).rejects.toThrow(
+      'preview port 41731 is held by run run-a',
     );
-    expect(previewPortHolder(41_731)).toEqual({ runId: 'run-a', bindingId: 'hb' });
-    await expect(
-      claimPreviewPort({ port: 41_731 }, { runId: 'run-b', bindingId: 'hb' }, FREE),
-    ).rejects.toThrow('preview port 41731 is held by run run-a');
     first.release();
-    const second = await claimPreviewPort(
-      { port: 41_731 },
-      { runId: 'run-b', bindingId: 'hb' },
-      FREE,
-    );
+    const second = await claimPreviewPort({ port: 41_731 }, holder('run-b'), FREE);
     // The first run's late release frees nothing of the second's.
     first.release();
     expect(previewPortHolder(41_731)?.runId).toBe('run-b');
     second.release();
     expect(previewPortHolder(41_731)).toBeUndefined();
+  });
+
+  it('names the holding run to no one outside its workspace', async () => {
+    const first = await claimPreviewPort({ port: 41_735 }, holder('run-a'), FREE);
+    try {
+      for (const other of [holder('run-b', 'space-b'), holder('run-b', 'space-a', 't2')]) {
+        const error = await claimPreviewPort({ port: 41_735 }, other, FREE).catch(
+          (e: unknown) => e,
+        );
+        expect((error as PreviewError).kind).toBe('in_use');
+        expect((error as Error).message).toContain('preview port 41735 is in use');
+        expect((error as Error).message).not.toContain('run-a');
+      }
+      expect(previewPortHolder(41_735)?.runId).toBe('run-a');
+    } finally {
+      first.release();
+    }
   });
 
   it('gives a fixed port to one of two runs claiming it at once', async () => {
@@ -226,8 +307,8 @@ describe('the port a preview is claimed on', () => {
       },
     };
     const outcomes = await Promise.allSettled([
-      claimPreviewPort({ port: 41_732 }, { runId: 'run-a', bindingId: 'hb' }, slow),
-      claimPreviewPort({ port: 41_732 }, { runId: 'run-b', bindingId: 'hb' }, slow),
+      claimPreviewPort({ port: 41_732 }, holder('run-a'), slow),
+      claimPreviewPort({ port: 41_732 }, holder('run-b'), slow),
     ]);
     const won = outcomes.filter((o) => o.status === 'fulfilled');
     const lost = outcomes.filter((o) => o.status === 'rejected');
@@ -248,7 +329,7 @@ describe('the port a preview is claimed on', () => {
       const port = typeof address === 'object' && address !== null ? address.port : 0;
       try {
         await expect(
-          claimPreviewPort({ port }, { runId: 'run-a', bindingId: 'hb' }, { stackOwn: NO_STACK }),
+          claimPreviewPort({ port }, holder('run-a'), { stackOwn: NO_STACK }),
         ).rejects.toThrow(`preview port ${String(port)} is in use`);
         expect(previewPortHolder(port)).toBeUndefined();
       } finally {
@@ -259,32 +340,69 @@ describe('the port a preview is claimed on', () => {
 
   it('refuses a fixed port this stack serves on', async () => {
     const stackOwn = new Map<number, StackPortOwner>([[3001, { service: 'web', from: 'default' }]]);
-    const error = await claimPreviewPort(
-      { port: 3001 },
-      { runId: 'run-a', bindingId: 'hb' },
-      { stackOwn, taken: () => Promise.resolve(false) },
-    ).catch((e: unknown) => e);
+    const error = await claimPreviewPort({ port: 3001 }, holder('run-a'), {
+      stackOwn,
+      taken: () => Promise.resolve(false),
+    }).catch((e: unknown) => e);
     expect((error as PreviewError).kind).toBe('stack_port');
     expect((error as Error).message).toContain("Port 3001 is this stack's own");
   });
 
   it('takes a free port no run holds and this stack does not serve on', async () => {
-    const holding = await claimPreviewPort(
-      { port: 41_733 },
-      { runId: 'run-a', bindingId: 'hb' },
-      FREE,
-    );
+    const holding = await claimPreviewPort({ port: 41_733 }, holder('run-a'), FREE);
     const offered = [3001, 41_733, 41_734];
     const stackOwn = new Map<number, StackPortOwner>([[3001, { service: 'web', from: 'default' }]]);
-    const claim = await claimPreviewPort(
-      {},
-      { runId: 'run-b', bindingId: 'hb' },
-      { stackOwn, freePort: () => Promise.resolve(offered.shift() ?? 0) },
-    );
+    const claim = await claimPreviewPort({}, holder('run-b'), {
+      stackOwn,
+      taken: () => Promise.resolve(false),
+      freePort: () => Promise.resolve(offered.shift() ?? 0),
+    });
     expect(claim.port).toBe(41_734);
     claim.release();
     holding.release();
   });
+
+  it('passes over a free IPv4 port that a wildcard or IPv6 listener holds', async () => {
+    const offered = [41_736, 41_737];
+    const probed: number[] = [];
+    const claim = await claimPreviewPort({}, holder('run-a'), {
+      stackOwn: NO_STACK,
+      // The shared probe binds every stack, wildcard and loopback, IPv4 and IPv6.
+      taken: (port) => {
+        probed.push(port);
+        return Promise.resolve(port === 41_736);
+      },
+      freePort: () => Promise.resolve(offered.shift() ?? 0),
+    });
+    expect(probed).toEqual([41_736, 41_737]);
+    expect(claim.port).toBe(41_737);
+    expect(previewPortHolder(41_736)).toBeUndefined();
+    claim.release();
+  });
+
+  it.skipIf(onLoopback.skip)(
+    onLoopback.title('finds a port held on IPv6 loopback alone taken'),
+    { tags: ['listener'] },
+    async () => {
+      const server: Server = createServer();
+      const listening = await new Promise<boolean>((resolve) => {
+        server.once('error', () => {
+          resolve(false);
+        });
+        server.listen(0, '::1', () => {
+          resolve(true);
+        });
+      });
+      if (!listening) return;
+      const address = server.address();
+      const port = typeof address === 'object' && address !== null ? address.port : 0;
+      try {
+        expect(await portTaken(port)).toBe(true);
+      } finally {
+        await new Promise((resolve) => server.close(resolve));
+      }
+    },
+  );
 });
 
 describe('the preview’s command and ready address', () => {
@@ -296,6 +414,7 @@ describe('the preview’s command and ready address', () => {
 
   it('stays on the preview’s own loopback origin', () => {
     expect(previewReadyUrl(5180, '/health').href).toBe('http://127.0.0.1:5180/health');
+    expect(previewReadyUrl(5180, '/health', '[::1]').href).toBe('http://[::1]:5180/health');
     for (const path of ['//evil.example/health', '/\\evil.example']) {
       expect(() => previewReadyUrl(5180, path), path).toThrow(PreviewError);
     }
