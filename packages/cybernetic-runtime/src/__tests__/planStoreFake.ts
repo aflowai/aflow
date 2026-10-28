@@ -31,7 +31,11 @@ import {
   type PlanNodeStore,
   type PlanTreeWalkOptions,
 } from '../plan/store.js';
-import type { PlanOverviewNode, PlanOverviewRootCount } from '../plan/overviewReads.js';
+import type {
+  PlanOverviewNode,
+  PlanOverviewRead,
+  PlanOverviewRootCount,
+} from '../plan/overviewReads.js';
 import {
   bySiblingOrder,
   checkPlacement,
@@ -39,6 +43,7 @@ import {
   type PlacementReads,
   type PlanTreeLevel,
   type PlanTreeWalk,
+  type PlanTreeWalkBounds,
 } from '../plan/tree.js';
 
 /**
@@ -51,7 +56,7 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
   readonly nodes = new Map<string, PlanNode>();
   readonly links: PlanNodeLink[] = [];
   /** Runs as `workflow_runs` holds them, for the reads that join a node to its runs. */
-  readonly runs: Array<Omit<PlanNodeRun, 'status'> & { spaceId: string; status: string }> = [];
+  readonly runs: FakeRun[] = [];
   readonly dependencies: PlanNodeDependency[] = [];
   /** `coach_learnings` rows of `plan` scope, with the space each was written in. */
   readonly learnings: Array<{ spaceId: string; learning: CoachLearning }> = [];
@@ -293,11 +298,30 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
 
   walk: PlanNodeStore['walk'] = (spaceId, opts) => this.walkOf(this.inSpace(spaceId), opts);
 
-  /** Calls of `readOverview`, as one recursive query each. */
+  /** Calls of `readOverview`, as one snapshot each. */
   overviewReads = 0;
+  /** The lookups each `readOverview` made in its snapshot, in call order. */
+  overviewLookups: Array<{ pullRequestsOf: readonly string[]; runsOf: readonly string[] }> = [];
+  /** Runs once `readOverview` has walked, before its lookups: a run's change its snapshot must not see. */
+  afterOverviewWalk: (() => void) | undefined;
 
-  readOverview: PlanNodeStore['readOverview'] = (spaceId, bounds) => {
+  readOverview: PlanNodeStore['readOverview'] = async (spaceId, bounds, place) => {
     this.overviewReads++;
+    // The snapshot: the lookups read the runs as they stood at the walk.
+    const runsThen = structuredClone(this.runs);
+    const read = this.overviewOf(spaceId, bounds);
+    this.afterOverviewWalk?.();
+    const { placed, pullRequestsOf, runsOf, runsPerNode } = place(read);
+    this.overviewLookups.push({ pullRequestsOf, runsOf });
+    return {
+      read,
+      placed,
+      pullRequests: await this.newestPullRequestsOf(spaceId, pullRequestsOf),
+      runs: runsInFlightAmong(runsThen, spaceId, runsOf, runsPerNode),
+    };
+  };
+
+  private overviewOf(spaceId: string, bounds: PlanTreeWalkBounds): PlanOverviewRead {
     const nodes = this.inSpace(spaceId);
     const childrenOf = new Map<string, PlanNode[]>();
     for (const node of nodes) {
@@ -306,6 +330,7 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
       siblings.push(node);
       childrenOf.set(node.parentId, siblings);
     }
+    for (const siblings of childrenOf.values()) siblings.sort(bySiblingOrder);
     const closed = (node: PlanNode) => node.status === 'done' || node.status === 'dropped';
     const inFlight = (nodeId: string) =>
       this.runs.filter(
@@ -321,58 +346,72 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
       openParentId: string | null;
       closedAncestor: PlanNode | undefined;
       phase: PlanNode | undefined;
+      /** Where the node sorts as the SQL's paths do: parents first, siblings by position. */
+      path: string[];
     }
-    // Depth first in sibling order: the order the SQL's paths sort in.
+    const pathKey = (node: PlanNode) => `${String(node.position).padStart(10, '0')}:${node.nodeId}`;
+    // A level at a time, as the recursion yields them, stopped one node past the bound.
     const reached: Reached[] = [];
-    const visit = (at: Reached) => {
-      reached.push(at);
-      if (at.depth > bounds.maxDepth || (at.depth === 0 && closed(at.node))) return;
-      for (const child of (childrenOf.get(at.node.nodeId) ?? []).sort(bySiblingOrder)) {
-        visit({
-          node: child,
-          rootId: at.rootId,
-          depth: at.depth + 1,
-          openParentId: closed(at.node) ? at.openParentId : at.node.nodeId,
-          closedAncestor: closed(at.node) ? at.node : at.closedAncestor,
-          phase: at.depth === 1 ? at.node : at.phase,
-        });
-      }
-    };
-    for (const root of nodes.filter((n) => n.parentId === null).sort(bySiblingOrder)) {
-      visit({
+    let level: Reached[] = nodes
+      .filter((n) => n.parentId === null)
+      .sort(bySiblingOrder)
+      .map((root) => ({
         node: root,
         rootId: root.nodeId,
         depth: 0,
         openParentId: null,
         closedAncestor: undefined,
         phase: undefined,
-      });
+        path: [pathKey(root)],
+      }));
+    while (level.length > 0 && reached.length <= bounds.maxNodes) {
+      reached.push(...level);
+      level = level.flatMap((at) =>
+        at.depth > bounds.maxDepth || (at.depth === 0 && closed(at.node))
+          ? []
+          : (childrenOf.get(at.node.nodeId) ?? []).map((child): Reached => ({
+              node: child,
+              rootId: at.rootId,
+              depth: at.depth + 1,
+              openParentId: closed(at.node) ? at.openParentId : at.node.nodeId,
+              closedAncestor: closed(at.node) ? at.node : at.closedAncestor,
+              phase: at.depth === 1 ? at.node : at.phase,
+              path: [...at.path, pathKey(child)],
+            })),
+      );
     }
+    const walkCut = reached.length > bounds.maxNodes;
+    const walked = reached.slice(0, bounds.maxNodes);
+    const lastDepth = Math.max(...walked.map((at) => at.depth));
+
     const counted = new Map<string, PlanOverviewRootCount>();
-    for (const at of reached) {
-      const count = counted.get(at.rootId) ?? { openSteps: 0, done: 0, dropped: 0, deeper: false };
+    for (const at of walked) {
+      const count = counted.get(at.rootId) ?? { done: 0, dropped: 0, deeper: false, cut: false };
       counted.set(at.rootId, count);
+      if (walkCut && at.depth >= lastDepth - 1 && !(at.depth === 0 && closed(at.node))) {
+        count.cut = true;
+      }
       if (at.depth > bounds.maxDepth) count.deeper = true;
-      if (at.depth === 0 || at.depth > bounds.maxDepth) continue;
-      if (!closed(at.node)) count.openSteps++;
-      else {
-        if (at.node.status === 'done') count.done++;
-        else count.dropped++;
-        if (
-          count.closedWrittenAt === undefined ||
-          at.node.updatedAt.localeCompare(count.closedWrittenAt) > 0
-        ) {
-          count.closedWrittenAt = at.node.updatedAt;
-        }
+      if (at.depth === 0 || at.depth > bounds.maxDepth || !closed(at.node)) continue;
+      if (at.node.status === 'done') count.done++;
+      else count.dropped++;
+      if (
+        count.closedWrittenAt === undefined ||
+        at.node.updatedAt.localeCompare(count.closedWrittenAt) > 0
+      ) {
+        count.closedWrittenAt = at.node.updatedAt;
       }
     }
-    const shipped = reached
+    const byPath = (a: Reached, b: Reached) => {
+      const [x, y] = [a.path.join('/'), b.path.join('/')];
+      return x < y ? -1 : x > y ? 1 : 0;
+    };
+    const shipped = walked
+      .filter((at) => at.depth === 0 || (at.depth <= bounds.maxDepth && !closed(at.node)))
+      .sort(byPath)
       .map((at, i) => ({ at, walkOrder: i + 1 }))
-      .filter(({ at }) => at.depth === 0 || (at.depth <= bounds.maxDepth && !closed(at.node)));
-    // Renumbered among the rows shipped, as `row_number()` over them is.
-    shipped.forEach((s, i) => (s.walkOrder = i + 1));
-    const cut = [...shipped].sort((a, b) => a.at.depth - b.at.depth || a.walkOrder - b.walkOrder);
-    const rows = cut.slice(0, bounds.maxNodes).map(({ at, walkOrder }): PlanOverviewNode => {
+      .sort((a, b) => a.at.depth - b.at.depth || a.walkOrder - b.walkOrder);
+    const rows = shipped.map(({ at, walkOrder }): PlanOverviewNode => {
       const noteHead = planBoardNoteHead(at.node.note);
       const { noteHead: _summaryNoteHead, ...summary } = this.summary(at.node);
       return {
@@ -395,15 +434,13 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
       };
     });
     const returnedRoots = new Set(rows.filter((r) => r.depth === 0).map((r) => r.nodeId));
-    return Promise.resolve({
+    return {
       nodes: rows,
       counted: new Map([...counted].filter(([rootId]) => returnedRoots.has(rootId))),
-      rootsTotal: shipped.filter((s) => s.at.depth === 0).length,
-      ...(cut.length > bounds.maxNodes
-        ? { truncated: { bound: 'nodes' as const, value: bounds.maxNodes } }
-        : {}),
-    });
-  };
+      rootsTotal: nodes.filter((n) => n.parentId === null).length,
+      ...(walkCut ? { truncated: { bound: 'nodes' as const, value: bounds.maxNodes } } : {}),
+    };
+  }
 
   private walkOf(nodes: readonly PlanNode[], opts: PlanTreeWalkOptions): Promise<PlanTreeWalk> {
     const statuses = opts.statuses;
@@ -592,24 +629,6 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
     return Promise.resolve(counts);
   };
 
-  runsInFlightOf: PlanNodeStore['runsInFlightOf'] = (spaceId, nodeIds, perNode) => {
-    const runs = new Map<string, PlanNodeRun[]>();
-    const inFlight = this.runs
-      .filter(
-        (r) =>
-          r.spaceId === spaceId &&
-          nodeIds.includes(r.nodeId) &&
-          (PLAN_NODE_RUN_STATUSES as readonly string[]).includes(r.status),
-      )
-      .sort((a, b) => b.startedAt.localeCompare(a.startedAt) || a.runId.localeCompare(b.runId));
-    for (const { spaceId: _spaceId, ...run } of inFlight) {
-      const held = runs.get(run.nodeId) ?? [];
-      if (held.length < perNode) held.push(run as PlanNodeRun);
-      runs.set(run.nodeId, held);
-    }
-    return Promise.resolve(runs);
-  };
-
   listRunsServing: PlanNodeStore['listRunsServing'] = (spaceId, nodeIds, limit) => {
     const runs = this.runs
       .filter(
@@ -753,4 +772,30 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
       total: learnings.length,
     });
   };
+}
+
+type FakeRun = Omit<PlanNodeRun, 'status'> & { spaceId: string; status: string };
+
+/** The running and paused runs among `runs` serving each of `nodeIds` itself, newest first, at most `perNode` each. */
+function runsInFlightAmong(
+  runs: readonly FakeRun[],
+  spaceId: string,
+  nodeIds: readonly string[],
+  perNode: number,
+): Map<string, PlanNodeRun[]> {
+  const held = new Map<string, PlanNodeRun[]>();
+  const inFlight = runs
+    .filter(
+      (r) =>
+        r.spaceId === spaceId &&
+        nodeIds.includes(r.nodeId) &&
+        (PLAN_NODE_RUN_STATUSES as readonly string[]).includes(r.status),
+    )
+    .sort((a, b) => b.startedAt.localeCompare(a.startedAt) || a.runId.localeCompare(b.runId));
+  for (const { spaceId: _spaceId, ...run } of inFlight) {
+    const onIt = held.get(run.nodeId) ?? [];
+    if (onIt.length < perNode) onIt.push(run as PlanNodeRun);
+    held.set(run.nodeId, onIt);
+  }
+  return held;
 }

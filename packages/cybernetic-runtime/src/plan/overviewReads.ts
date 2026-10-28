@@ -1,9 +1,10 @@
 /**
- * The overview's store reads (Plan 332 D7): one recursive query from the roots
- * carrying each open node's root and whether a closed node lies above it, the
- * closed steps only as counts per root, and the runs in flight joined to each
- * row; and the newest runs in flight on the nodes a lane shows.
- * `buildPlanOverview` (`board.ts`) makes the lanes from what these return.
+ * The overview's store reads (Plan 332 D7): one recursive query from the roots,
+ * stopped at the node bound, carrying each open node's root and whether a
+ * closed node lies above it, the closed steps only as counts per root, and the
+ * runs in flight joined to each row; and the newest runs in flight on the
+ * nodes a lane shows. `buildPlanOverview` (`board.ts`) makes the lanes from
+ * what these return, and the store reads both in one snapshot.
  */
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { sql, type SQL } from 'drizzle-orm';
@@ -15,7 +16,12 @@ import {
   type PlanNodeStatus,
   type PlanNodeSummary,
 } from '@aflow/schemas';
-import { PLAN_NODE_RUN_STATUSES, PLAN_NOTE_HEAD_MAX_CHARS, planBoardNoteHead } from './store.js';
+import {
+  PLAN_NODE_RUN_STATUSES,
+  PLAN_NOTE_HEAD_MAX_CHARS,
+  planBoardNoteHead,
+  type PlanNodeNewestPullRequest,
+} from './store.js';
 import type { PlanTreeWalkBounds } from './tree.js';
 
 /**
@@ -41,28 +47,49 @@ export interface PlanOverviewNode extends PlanNodeSummary {
 
 /** What the overview's read counted under one root it returned, open or closed. */
 export interface PlanOverviewRootCount {
-  /** Open steps within the depth bound, whether or not the node bound let them all be returned. */
-  openSteps: number;
   done: number;
   dropped: number;
   /** The newest write to a closed step under the root. */
   closedWrittenAt?: string;
   /** Steps lie past the depth bound, uncounted. */
   deeper: boolean;
+  /** The node bound stopped the walk where steps under the root, open or closed, may lie unread. */
+  cut: boolean;
 }
 
 /**
- * The overview's read: every root and the open steps of the open roots as
- * rows, roots first and then level by level, at most the node bound of them;
- * each returned root's steps counted, closed ones only ever counted.
+ * The overview's read: a walk of at most the node bound of nodes, open and
+ * closed, roots first and then level by level; every root it reached and the
+ * open steps of the open roots as rows; each returned root's steps counted,
+ * closed ones only ever counted.
  */
 export interface PlanOverviewRead {
   nodes: PlanOverviewNode[];
   counted: Map<string, PlanOverviewRootCount>;
   /** Every root of the space, returned or not. */
   rootsTotal: number;
-  /** The node bound, where the rows reached it. */
+  /** The node bound, where the walk reached it. */
   truncated?: PlanNodeListTruncation;
+}
+
+/**
+ * What the overview places from its read, and which of the nodes it shows are
+ * looked up in the same snapshot: the newest pull request of each of
+ * `pullRequestsOf`, and up to `runsPerNode` runs in flight on each of `runsOf`.
+ */
+export interface PlanOverviewPlacement<T> {
+  placed: T;
+  pullRequestsOf: readonly string[];
+  runsOf: readonly string[];
+  runsPerNode: number;
+}
+
+/** The overview's read, what was placed from it, and its lookups, all from one snapshot. */
+export interface PlanOverviewSnapshot<T> {
+  read: PlanOverviewRead;
+  placed: T;
+  pullRequests: Map<string, PlanNodeNewestPullRequest>;
+  runs: Map<string, PlanNodeRun[]>;
 }
 
 function statusList(statuses: readonly string[]): SQL {
@@ -95,6 +122,12 @@ export async function overviewIn(
   // The tree is carried by key alone; a node's row is joined only where it is
   // returned. Below a closed root nothing is read: its plan is closed by rule.
   // Nodes one level past the depth bound are reached only to say they exist.
+  // The recursion yields one level at a time and runs only as far as it is
+  // fetched, so `walked`'s LIMIT stops it at the node bound, closed steps
+  // included; `beyond` fetches one node further from the same rows to say
+  // so. Where it stopped, every level above the last one walked was read
+  // whole, so only a root that reached that level or the one above it may
+  // hold steps unread.
   const rows = (await tx.execute(sql`
     WITH RECURSIVE tree AS (
       SELECT r.id, r.id AS root_id, r.status, r.updated_at,
@@ -120,18 +153,28 @@ export async function overviewIn(
         AND t.depth <= ${bounds.maxDepth}
         AND NOT (t.depth = 0 AND t.closed)
     ),
+    walked AS (
+      SELECT * FROM tree LIMIT ${bounds.maxNodes}
+    ),
+    beyond AS (
+      SELECT count(*) > ${bounds.maxNodes} AS walk_cut
+      FROM (SELECT 1 FROM tree LIMIT ${bounds.maxNodes + 1}) reached
+    ),
+    frontier AS (
+      SELECT max(depth) AS last_depth FROM walked
+    ),
     counted AS (
       SELECT root_id,
-        (count(*) FILTER (WHERE ${steps} AND NOT closed))::int AS open_steps,
         (count(*) FILTER (WHERE ${steps} AND status = 'done'))::int AS done,
         (count(*) FILTER (WHERE ${steps} AND status = 'dropped'))::int AS dropped,
         max(updated_at) FILTER (WHERE ${steps} AND closed) AS closed_written_at,
-        bool_or(depth > ${bounds.maxDepth}) AS deeper
-      FROM tree
+        bool_or(depth > ${bounds.maxDepth}) AS deeper,
+        coalesce(bool_or(walk_cut AND depth >= last_depth - 1 AND NOT (depth = 0 AND closed)), false) AS cut
+      FROM walked CROSS JOIN beyond CROSS JOIN frontier
       GROUP BY root_id
     ),
     shipped AS (
-      SELECT * FROM tree WHERE depth = 0 OR (depth <= ${bounds.maxDepth} AND NOT closed)
+      SELECT * FROM walked WHERE depth = 0 OR (depth <= ${bounds.maxDepth} AND NOT closed)
     )
     SELECT s.id, n.parent_id, s.root_id, s.depth, s.open_parent_id,
       s.closed_ancestor_id, ancestor_row.title AS closed_ancestor_title, phase_row.title AS phase_title,
@@ -146,20 +189,21 @@ export async function overviewIn(
           AND w.eval_batch_id IS NULL
       ) END::int AS in_flight_runs,
       (row_number() OVER (ORDER BY s.path COLLATE "C"))::int AS walk_order,
-      (count(*) FILTER (WHERE s.depth = 0) OVER ())::int AS roots_total,
-      c.open_steps, c.done, c.dropped, c.closed_written_at, c.deeper
+      (SELECT count(*) FROM plan_nodes r
+        WHERE r.space_id = ${spaceId}::uuid AND r.parent_id IS NULL)::int AS roots_total,
+      (SELECT walk_cut FROM beyond) AS walk_cut,
+      c.done, c.dropped, c.closed_written_at, c.deeper, c.cut
     FROM shipped s
     INNER JOIN plan_nodes n ON n.id = s.id
     LEFT JOIN plan_nodes ancestor_row ON ancestor_row.id = s.closed_ancestor_id
     LEFT JOIN plan_nodes phase_row ON phase_row.id = s.phase_id
     LEFT JOIN counted c ON c.root_id = s.id AND s.depth = 0
     ORDER BY s.depth, s.path COLLATE "C"
-    LIMIT ${bounds.maxNodes + 1}
   `)) as Array<Record<string, unknown>>;
 
   const nodes: PlanOverviewNode[] = [];
   const counted = new Map<string, PlanOverviewRootCount>();
-  for (const row of rows.slice(0, bounds.maxNodes)) {
+  for (const row of rows) {
     const nodeId = String(row['id']);
     const noteHead = planBoardNoteHead(row['note_head'] as string | null);
     const closedAncestorId = row['closed_ancestor_id'] as string | null;
@@ -193,13 +237,13 @@ export async function overviewIn(
     });
     if (Number(row['depth']) === 0) {
       counted.set(nodeId, {
-        openSteps: Number(row['open_steps'] ?? 0),
         done: Number(row['done'] ?? 0),
         dropped: Number(row['dropped'] ?? 0),
         ...(row['closed_written_at'] != null
           ? { closedWrittenAt: isoOf(row['closed_written_at']) }
           : {}),
         deeper: row['deeper'] === true,
+        cut: row['cut'] === true,
       });
     }
   }
@@ -207,7 +251,7 @@ export async function overviewIn(
     nodes,
     counted,
     rootsTotal: Number(rows[0]?.['roots_total'] ?? 0),
-    ...(rows.length > bounds.maxNodes
+    ...(rows[0]?.['walk_cut'] === true
       ? { truncated: { bound: 'nodes' as const, value: bounds.maxNodes } }
       : {}),
   };

@@ -510,7 +510,13 @@ export type PlanLaneItem = z.infer<typeof PlanLaneItemSchema>;
 export const PlanLaneSchema = z
   .object({
     items: z.array(PlanLaneItemSchema),
-    total: z.number().int().min(0).describe('Every step the lane holds; `items` may list fewer.'),
+    total: z
+      .number()
+      .int()
+      .min(0)
+      .describe(
+        'Every step the lane holds among those the read reached; `items` may list fewer, and where the lanes carry `truncated` the lane may hold more.',
+      ),
   })
   .strict();
 export type PlanLane = z.infer<typeof PlanLaneSchema>;
@@ -530,8 +536,10 @@ export const PlanOverviewLanesSchema = z
     inFlight: PlanLaneSchema,
     upNext: PlanLaneSchema,
     truncated: PlanNodeListTruncationSchema.optional().describe(
-      'Absent when every open step of every listed plan was read; otherwise the bound (`depth` or ' +
-        '`nodes`) that left open steps unread, so a lane may miss some. Closed steps are only counted, never read as rows.',
+      'Absent when every step of every open plan was reached; otherwise the bound (`depth` or `nodes`) ' +
+        'that a plan’s row names as its `truncated`, or `nodes` where plans were left unlisted, so a ' +
+        'lane may miss steps and its `total` counts only those reached. Closed steps are walked, and count ' +
+        'toward the node bound, but are only counted, never read as rows.',
     ),
   })
   .strict();
@@ -540,8 +548,9 @@ export type PlanOverviewLanes = z.infer<typeof PlanOverviewLanesSchema>;
 /**
  * The space's plans as the overview reads them (`GET …/plan`, Plan 332 D7):
  * every root as a row by position and then id, open and closed alike, and the
- * lanes. Open steps are read and closed ones only counted, so the read grows
- * with what is open rather than with what the space has held.
+ * lanes. Open steps are read and closed ones only counted; the walk stops at
+ * the node bound, closed steps included, so its cost is bounded whatever the
+ * space has held, and a plan or lane it cut short says so.
  */
 export const PlanOverviewOutputSchema = z.object({
   roots: z.array(PlanRootRowSchema),

@@ -399,7 +399,7 @@ export function buildPlanOverview(
       dropped,
     };
     const truncated: PlanNodeListTruncation | undefined =
-      steps.length < (counted?.openSteps ?? 0)
+      counted?.cut === true
         ? { bound: 'nodes', value: bounds.maxNodes }
         : counted?.deeper === true
           ? { bound: 'depth', value: bounds.maxDepth }
@@ -419,9 +419,13 @@ export function buildPlanOverview(
     };
   });
 
-  const deeper = [...read.counted.values()].some((counted) => counted.deeper);
+  // The lanes hold the steps of the plans listed: they are cut short wherever
+  // a plan's row is, and wherever a plan was left unlisted.
+  const cutRows = rows.flatMap((row) => (row.truncated !== undefined ? [row.truncated] : []));
   const lanesTruncated: PlanNodeListTruncation | undefined =
-    read.truncated ?? (deeper ? { bound: 'depth', value: bounds.maxDepth } : undefined);
+    roots.length < read.rootsTotal || cutRows.some((cut) => cut.bound === 'nodes')
+      ? { bound: 'nodes', value: bounds.maxNodes }
+      : cutRows[0];
   return {
     roots: rows,
     lanes: {

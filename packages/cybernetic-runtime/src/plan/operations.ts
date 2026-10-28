@@ -727,25 +727,29 @@ export async function listPlanNodes(
  * The space's plans as the overview reads them (Plan 332 D7): every root as a
  * row with its state and, open, its steps counted by the board's column rule;
  * and the Needs you, In flight and Up next lanes across every open plan. One
- * recursive read in one snapshot returns the roots and the open steps and
- * counts the closed ones, so the rows and the lanes agree on which plans are
- * open and no done step is read as a row, whatever the space has held. Only
- * the lanes' rows are looked up after it: their newest pull requests, and the
- * runs on the In flight rows.
+ * recursive read, stopped at the node bound, returns the roots and the open
+ * steps and counts the closed ones, so the rows and the lanes agree on which
+ * plans are open and no done step is read as a row. The lanes' rows are
+ * looked up in the same snapshot — their newest pull requests, and the runs
+ * on the In flight rows — so a row's `runsTotal` and its `runs` agree.
  */
 export async function readPlanOverview(ctx: PlanReadContext): Promise<PlanOverviewOutput> {
-  const read = await ctx.store.readOverview(ctx.spaceId, PLAN_TREE_WALK_BOUNDS);
-  const overview = buildPlanOverview(read, PLAN_TREE_WALK_BOUNDS);
+  const {
+    placed: overview,
+    pullRequests,
+    runs,
+  } = await ctx.store.readOverview(ctx.spaceId, PLAN_TREE_WALK_BOUNDS, (read) => {
+    const placed = buildPlanOverview(read, PLAN_TREE_WALK_BOUNDS);
+    const { needsYou, inFlight, upNext } = placed.lanes;
+    const shown = [...needsYou.items, ...inFlight.items, ...upNext.items];
+    return {
+      placed,
+      pullRequestsOf: [...new Set(shown.map((item) => item.nodeId))],
+      runsOf: inFlight.items.filter((item) => (item.runsTotal ?? 0) > 0).map((item) => item.nodeId),
+      runsPerNode: PLAN_LANE_ITEM_RUNS_LIMIT,
+    };
+  });
   const { needsYou, inFlight, upNext } = overview.lanes;
-  const shown = [...needsYou.items, ...inFlight.items, ...upNext.items];
-  const [pullRequests, runs] = await Promise.all([
-    ctx.store.newestPullRequestsOf(ctx.spaceId, [...new Set(shown.map((item) => item.nodeId))]),
-    ctx.store.runsInFlightOf(
-      ctx.spaceId,
-      inFlight.items.filter((item) => (item.runsTotal ?? 0) > 0).map((item) => item.nodeId),
-      PLAN_LANE_ITEM_RUNS_LIMIT,
-    ),
-  ]);
   const decorate = (item: PlanLaneItem): PlanLaneItem => {
     const pullRequest = pullRequests.get(item.nodeId);
     const onIt = runs.get(item.nodeId);

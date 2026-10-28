@@ -271,6 +271,17 @@ describeDb('moveAtRevision — two crossing moves never close a loop (real DB)',
     const spaces: string[] = [];
     const bounds = { maxDepth: PLAN_TREE_DEPTH_LIMIT, maxNodes: PLAN_TREE_WALK_NODE_LIMIT };
 
+    /** The overview's read alone: nothing placed, nothing looked up. */
+    async function readOnly(spaceId: string) {
+      const snapshot = await store.readOverview(spaceId, bounds, () => ({
+        placed: null,
+        pullRequestsOf: [],
+        runsOf: [],
+        runsPerNode: 1,
+      }));
+      return snapshot.read;
+    }
+
     afterAll(async () => {
       if (!tablePresent || spaces.length === 0) return;
       await withTenantSchema(handle.db, tenantCtx, (tx) =>
@@ -307,7 +318,7 @@ describeDb('moveAtRevision — two crossing moves never close a loop (real DB)',
       );
     }
 
-    it('returns no done step as a row and reaches no bound over 5,000 done steps and 10 open', async () => {
+    it('returns no done step as a row and reaches no bound over 1,500 done steps and 10 open', async () => {
       const { spaceId, ctx: here } = space();
       const roots: PlanNode[] = [];
       for (let n = 0; n < 10; n++) {
@@ -320,26 +331,56 @@ describeDb('moveAtRevision — two crossing moves never close a loop (real DB)',
         });
         if (!result.ok) throw new Error(result.message);
         roots.push(result.node);
-        await bulk(spaceId, result.node.nodeId, 500, 'done');
+        await bulk(spaceId, result.node.nodeId, 150, 'done');
         await bulk(spaceId, result.node.nodeId, 1, 'active', 9000);
       }
 
-      const read = await store.readOverview(spaceId, bounds);
+      const read = await readOnly(spaceId);
       const overview = PlanOverviewOutputSchema.parse(await readPlanOverview({ store, spaceId }));
 
       expect(read.truncated).toBeUndefined();
       expect(read.rootsTotal).toBe(10);
       expect(read.nodes).toHaveLength(20);
       expect(read.nodes.every((n) => n.status === 'active')).toBe(true);
-      expect([...read.counted.values()].every((c) => c.done === 500 && c.openSteps === 1)).toBe(
-        true,
-      );
+      expect([...read.counted.values()].every((c) => c.done === 150 && !c.cut)).toBe(true);
       expect(overview.truncated).toBeUndefined();
       expect(overview.lanes.truncated).toBeUndefined();
       expect(overview.roots.map((r) => [r.nodeId, r.counts?.steps, r.counts?.done])).toEqual(
-        roots.map((r) => [r.nodeId, 501, 500]),
+        roots.map((r) => [r.nodeId, 151, 150]),
       );
       expect(overview.lanes.upNext.items.map((i) => i.rootId)).toEqual(roots.map((r) => r.nodeId));
+    });
+
+    it('stops the recursion at the node bound over 5,000 done steps, and says so on every plan and the lanes', async () => {
+      const { spaceId, ctx: here } = space();
+      for (let n = 0; n < 10; n++) {
+        const result = await createPlanNode(here, {
+          kind: 'execute',
+          title: `plan ${String(n)}`,
+          goal: 'Hold steps.',
+          criteria: 'It holds them.',
+          position: n,
+        });
+        if (!result.ok) throw new Error(result.message);
+        await bulk(spaceId, result.node.nodeId, 500, 'done');
+        await bulk(spaceId, result.node.nodeId, 1, 'active', 9000);
+      }
+
+      const read = await readOnly(spaceId);
+      const overview = PlanOverviewOutputSchema.parse(await readPlanOverview({ store, spaceId }));
+
+      expect(read.truncated).toEqual({ bound: 'nodes', value: bounds.maxNodes });
+      expect(read.rootsTotal).toBe(10);
+      const counted = [...read.counted.values()];
+      // The walk held at most the bound, closed steps included.
+      expect(counted.reduce((sum, c) => sum + c.done, 0) + read.nodes.length).toBeLessThanOrEqual(
+        bounds.maxNodes,
+      );
+      expect(counted.every((c) => c.cut)).toBe(true);
+      expect(overview.truncated).toBeUndefined();
+      expect(overview.roots).toHaveLength(10);
+      expect(overview.roots.every((r) => r.truncated?.bound === 'nodes')).toBe(true);
+      expect(overview.lanes.truncated).toEqual({ bound: 'nodes', value: bounds.maxNodes });
     });
 
     it('shows a blocked step in the last of 50 plans in Needs you', async () => {
@@ -422,7 +463,7 @@ describeDb('moveAtRevision — two crossing moves never close a loop (real DB)',
       await make('under shut', shut.nodeId);
       await closeIt(shut);
 
-      const read = await store.readOverview(spaceId, bounds);
+      const read = await readOnly(spaceId);
       const byId = new Map(read.nodes.map((n) => [n.nodeId, n]));
 
       expect(read.nodes.map((n) => n.title)).toEqual(['root', 'shut', 'P7', 'P6.a', 'P6.a.1']);
@@ -448,8 +489,8 @@ describeDb('moveAtRevision — two crossing moves never close a loop (real DB)',
         .sort((a, b) => a.walkOrder - b.walkOrder)
         .map((n) => n.title);
       expect(order).toEqual(['root', 'P6.a', 'P6.a.1', 'P7']);
-      expect(read.counted.get(root.nodeId)).toMatchObject({ openSteps: 3, done: 1, dropped: 0 });
-      expect(read.counted.get(shut.nodeId)).toMatchObject({ openSteps: 0, done: 0 });
+      expect(read.counted.get(root.nodeId)).toMatchObject({ done: 1, dropped: 0, cut: false });
+      expect(read.counted.get(shut.nodeId)).toMatchObject({ done: 0, cut: false });
     });
   });
 });

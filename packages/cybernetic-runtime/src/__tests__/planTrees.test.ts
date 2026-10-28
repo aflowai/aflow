@@ -792,8 +792,6 @@ describe('readPlanOverview — the plans as rows', () => {
     const open = await node('open', { position: 0 });
     const step = await node('open step', { parentId: open.nodeId });
     const walks = vi.spyOn(store, 'walk');
-    const pullRequestLookups = vi.spyOn(store, 'newestPullRequestsOf');
-    const runLookups = vi.spyOn(store, 'runsInFlightOf');
 
     const read = await rows();
 
@@ -805,10 +803,8 @@ describe('readPlanOverview — the plans as rows', () => {
     // Rows and lanes from one read, one snapshot; no walk of the tree beside it.
     expect(store.overviewReads).toBe(1);
     expect(walks).not.toHaveBeenCalled();
-    // Only the lanes' rows are looked up after it: here the one Up next step.
-    expect(pullRequestLookups).toHaveBeenCalledTimes(1);
-    expect(pullRequestLookups.mock.calls[0]![1]).toEqual([step.nodeId]);
-    expect(runLookups.mock.calls[0]![1]).toEqual([]);
+    // Only the lanes' rows are looked up, in its snapshot: here the one Up next step.
+    expect(store.overviewLookups).toEqual([{ pullRequestsOf: [step.nodeId], runsOf: [] }]);
     expect(JSON.stringify(read)).not.toContain(closedSteps[0]);
   });
 
@@ -874,61 +870,90 @@ describe('readPlanOverview — the plans as rows', () => {
     });
   });
 
-  it('marks the plans whose open steps the node bound cut short, counting their closed steps all the same', async () => {
+  it('stops the walk at the node bound, closed steps included, and marks the plans it may have left steps of', async () => {
     const closedAt = '2026-10-03T00:00:00.000Z';
-    const wide = store.seed(SPACE, { title: 'wide', position: 0 });
-    // Four roots and these fill the bound with the one open step of flat.
-    for (let n = 0; n < PLAN_TREE_WALK_NODE_LIMIT - 5; n++) {
-      store.seed(SPACE, { parentId: wide.nodeId, title: `wide ${String(n)}`, position: n });
-    }
-    const flat = store.seed(SPACE, { title: 'flat', position: 1 });
+    const flat = store.seed(SPACE, { title: 'flat', position: 0 });
     store.seed(SPACE, { parentId: flat.nodeId, title: 'landed', status: 'done', closedAt });
     store.seed(SPACE, { parentId: flat.nodeId, title: 'approved', position: 1 });
-    const deep = store.seed(SPACE, { title: 'deep', position: 2 });
+    const deep = store.seed(SPACE, { title: 'deep', position: 1 });
     const a = store.seed(SPACE, { parentId: deep.nodeId, title: 'a', status: 'done', closedAt });
     const b = store.seed(SPACE, { parentId: a.nodeId, title: 'b', status: 'done', closedAt });
-    // Three done leaves, counted; two open ones, a level deeper than the bound reached.
-    for (let n = 0; n < 5; n++) {
+    // A closed plan's steps are not walked at all.
+    const gone = store.seed(SPACE, { title: 'gone', position: 2, status: 'dropped', closedAt });
+    store.seed(SPACE, { parentId: gone.nodeId, title: 'under gone' });
+    // Seven nodes above, then done leaves to the bound: the last two leaves,
+    // open and stranded, lie past it on the level where the walk stopped.
+    const leaves = PLAN_TREE_WALK_NODE_LIMIT - 7 + 2;
+    for (let n = 0; n < leaves; n++) {
       store.seed(SPACE, {
         parentId: b.nodeId,
         title: `leaf ${String(n)}`,
         position: n,
-        ...(n < 3 ? { status: 'done' as const, closedAt } : {}),
+        ...(n < leaves - 2 ? { status: 'done' as const, closedAt } : {}),
       });
     }
-    // A closed plan's steps are not read at all.
-    const gone = store.seed(SPACE, { title: 'gone', position: 3, status: 'dropped', closedAt });
-    store.seed(SPACE, { parentId: gone.nodeId, title: 'under gone' });
 
     const read = await rows();
     const rowOf = (id: string) => read.roots.find((r) => r.nodeId === id)!;
 
+    // Every plan is listed; the lanes may miss steps, and say so.
     expect(read.truncated).toBeUndefined();
     expect(read.lanes.truncated).toEqual({ bound: 'nodes', value: PLAN_TREE_WALK_NODE_LIMIT });
+    expect(read.lanes.needsYou.total).toBe(0);
     expect(rowOf(deep.nodeId)).toMatchObject({
       truncated: { bound: 'nodes', value: PLAN_TREE_WALK_NODE_LIMIT },
       // Every step counted is done, but the two the bound left are open: not finished.
       state: 'queued',
-      counts: { steps: 5, done: 5 },
+      counts: { steps: leaves, done: leaves },
     });
-    expect((await board(deep.nodeId)).tally).toMatchObject({ steps: 7, done: 5, needsYou: 2 });
-    for (const id of [wide.nodeId, flat.nodeId]) {
-      const row = rowOf(id);
-      const { tally, truncated } = await board(id);
-      expect(row).not.toHaveProperty('truncated');
-      expect(truncated).toBeUndefined();
-      expect(row.state).toBe(tally.state);
-      expect(row.counts).toEqual({
-        steps: tally.steps,
-        needsYou: tally.needsYou,
-        inFlight: tally.inFlight,
-        upNext: tally.upNext,
-        done: tally.done,
-        dropped: tally.dropped,
+    expect((await board(deep.nodeId)).tally).toMatchObject({
+      steps: leaves + 2,
+      done: leaves,
+      needsYou: 2,
+    });
+    // A plan read whole above the level the walk stopped on is not marked.
+    const row = rowOf(flat.nodeId);
+    const { tally, truncated } = await board(flat.nodeId);
+    expect(row).not.toHaveProperty('truncated');
+    expect(truncated).toBeUndefined();
+    expect(row.state).toBe(tally.state);
+    expect(row.counts).toEqual({
+      steps: tally.steps,
+      needsYou: tally.needsYou,
+      inFlight: tally.inFlight,
+      upNext: tally.upNext,
+      done: tally.done,
+      dropped: tally.dropped,
+    });
+    expect(row).toMatchObject({ state: 'queued', counts: { steps: 2, done: 1 } });
+    expect(rowOf(gone.nodeId)).toMatchObject({ state: 'closed' });
+    expect(rowOf(gone.nodeId)).not.toHaveProperty('truncated');
+  });
+
+  it('marks every open plan reaching the level the walk stopped on, or the one above it', async () => {
+    const closedAt = '2026-10-03T00:00:00.000Z';
+    const wide = store.seed(SPACE, { title: 'wide', position: 0 });
+    for (let n = 0; n < PLAN_TREE_WALK_NODE_LIMIT; n++) {
+      store.seed(SPACE, {
+        parentId: wide.nodeId,
+        title: `landed ${String(n)}`,
+        status: 'done',
+        closedAt,
+        position: n,
       });
     }
-    expect(rowOf(flat.nodeId)).toMatchObject({ state: 'queued', counts: { steps: 2, done: 1 } });
-    expect(rowOf(gone.nodeId)).toMatchObject({ state: 'closed' });
+    // Its one step lies past the bound, on the level the walk stopped on.
+    const flat = store.seed(SPACE, { title: 'flat', position: 1 });
+    store.seed(SPACE, { parentId: flat.nodeId, title: 'approved' });
+
+    const read = await rows();
+
+    expect(read.truncated).toBeUndefined();
+    expect(read.lanes.truncated).toEqual({ bound: 'nodes', value: PLAN_TREE_WALK_NODE_LIMIT });
+    for (const row of read.roots) {
+      expect(row.truncated).toEqual({ bound: 'nodes', value: PLAN_TREE_WALK_NODE_LIMIT });
+      expect(row.state).not.toBe('finished');
+    }
   });
 
   it(`counts short past depth ${String(PLAN_TREE_DEPTH_LIMIT)} and names the bound on that plan’s row`, async () => {
@@ -1094,6 +1119,26 @@ describe('readPlanOverview — the lanes across plans (Plan 332 D7)', () => {
     }
   });
 
+  it('reads an In flight row’s runs in the snapshot that placed it, though the run ends before they are read', async () => {
+    const root = await node('Plan 320');
+    const busy = await node('busy', { parentId: root.nodeId });
+    store.runs.push(inFlightRun('r1', busy.nodeId, 'running'));
+    store.afterOverviewWalk = () => {
+      store.runs[0]!.status = 'completed';
+    };
+
+    const { lanes } = await rows();
+
+    expect(lanes.inFlight.items).toEqual([
+      expect.objectContaining({
+        nodeId: busy.nodeId,
+        runsTotal: 1,
+        runs: [expect.objectContaining({ runId: 'r1', status: 'running' })],
+      }),
+    ]);
+    expect(store.overviewReads).toBe(1);
+  });
+
   it('shows a blocked step in the last of 50 plans in Needs you', async () => {
     let last: PlanNode | undefined;
     for (let n = 0; n < 50; n++) {
@@ -1156,7 +1201,7 @@ describe('readPlanOverview — the lanes across plans (Plan 332 D7)', () => {
     const roots: PlanNode[] = [];
     for (let n = 0; n < 10; n++)
       roots.push(store.seed(SPACE, { title: `plan ${String(n)}`, position: n }));
-    for (let n = 0; n < 5000; n++) {
+    for (let n = 0; n < 1500; n++) {
       store.seed(SPACE, {
         parentId: roots[n % 10]!.nodeId,
         title: `landed ${String(n)}`,
@@ -1175,9 +1220,39 @@ describe('readPlanOverview — the lanes across plans (Plan 332 D7)', () => {
     expect(read.lanes.truncated).toBeUndefined();
     expect(read.roots.every((r) => r.truncated === undefined)).toBe(true);
     expect(read.roots.map((r) => r.counts)).toEqual(
-      roots.map(() => ({ steps: 501, needsYou: 0, inFlight: 0, upNext: 1, done: 500, dropped: 0 })),
+      roots.map(() => ({ steps: 151, needsYou: 0, inFlight: 0, upNext: 1, done: 150, dropped: 0 })),
     );
     expect(ids(read.lanes.upNext)).toEqual(open.map((o) => o.nodeId));
+  });
+
+  it('walks no further than the node bound however many done steps the plans hold, and says the lanes may miss steps', async () => {
+    const roots: PlanNode[] = [];
+    for (let n = 0; n < 10; n++)
+      roots.push(store.seed(SPACE, { title: `plan ${String(n)}`, position: n }));
+    for (let n = 0; n < 5000; n++) {
+      store.seed(SPACE, {
+        parentId: roots[n % 10]!.nodeId,
+        title: `landed ${String(n)}`,
+        status: 'done',
+        closedAt: '2026-10-03T00:00:00.000Z',
+        position: n,
+      });
+    }
+    for (const root of roots)
+      store.seed(SPACE, { parentId: root.nodeId, title: 'open', position: 9000 });
+    const reads = vi.spyOn(store, 'readOverview');
+
+    const read = await rows();
+
+    const { read: walked } = await reads.mock.results[0]!.value;
+    expect(walked.truncated).toEqual({ bound: 'nodes', value: PLAN_TREE_WALK_NODE_LIMIT });
+    const counted = [...walked.counted.values()].reduce((sum, c) => sum + c.done + c.dropped, 0);
+    expect(counted + walked.nodes.length).toBeLessThanOrEqual(PLAN_TREE_WALK_NODE_LIMIT);
+    // Every plan listed, each marked as counted short, and the lanes say they may miss steps.
+    expect(read.truncated).toBeUndefined();
+    expect(read.roots).toHaveLength(10);
+    expect(read.roots.every((r) => r.truncated?.bound === 'nodes')).toBe(true);
+    expect(read.lanes.truncated).toEqual({ bound: 'nodes', value: PLAN_TREE_WALK_NODE_LIMIT });
   });
 });
 

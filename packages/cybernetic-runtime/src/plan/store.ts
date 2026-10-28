@@ -35,7 +35,13 @@ import {
 import type { PlanNodeDependencyRow, PlanNodeLinkRow, PlanNodeRow } from '@aflow/database';
 import { coachLearningToRow, rowToCoachLearning } from '../coachLearningsStore.js';
 import { checkDependency, type DependencyCheck, type DependencyReads } from './dependencies.js';
-import { overviewIn, runsInFlightIn, type PlanOverviewRead } from './overviewReads.js';
+import {
+  overviewIn,
+  runsInFlightIn,
+  type PlanOverviewPlacement,
+  type PlanOverviewRead,
+  type PlanOverviewSnapshot,
+} from './overviewReads.js';
 import { placeAmongSiblings, type PlanPlaceAnchor } from './placement.js';
 import {
   checkPlacement,
@@ -251,16 +257,22 @@ export interface PlanNodeStore {
   ): Promise<{ children: PlanNodeSummary[]; total: number }>;
   walk(spaceId: string, opts: PlanTreeWalkOptions): Promise<PlanTreeWalk>;
   /**
-   * The overview's read (Plan 332 D7), in one read-only snapshot: one
-   * recursive query from the roots carrying each node's root and whether a
-   * closed node lies above it, below the open roots only, no further than
-   * `bounds.maxDepth`. It returns every root and every open step as a row,
-   * with the runs in flight on each — at most `bounds.maxNodes` rows, roots
-   * first, a shallower level before a deeper — and the closed steps only as
-   * counts per root, so no done step is ever shipped and none takes room
-   * under the node bound.
+   * The overview's read (Plan 332 D7), in one read-only repeatable-read
+   * snapshot: one recursive query from the roots carrying each node's root and
+   * whether a closed node lies above it, below the open roots only, no further
+   * than `bounds.maxDepth`, and stopped once it has walked `bounds.maxNodes`
+   * nodes, open or closed, roots first and a shallower level before a deeper.
+   * It returns every root and every open step it walked as a row, with the
+   * runs in flight on each, and the closed steps only as counts per root, so
+   * no done step is ever shipped. `place` makes the view from it, and the
+   * pull requests and runs it names are read in the same snapshot, so a row
+   * and what is looked up for it cannot disagree.
    */
-  readOverview(spaceId: string, bounds: PlanTreeWalkBounds): Promise<PlanOverviewRead>;
+  readOverview<T>(
+    spaceId: string,
+    bounds: PlanTreeWalkBounds,
+    place: (read: PlanOverviewRead) => PlanOverviewPlacement<T>,
+  ): Promise<PlanOverviewSnapshot<T>>;
   /** Each node's parent (null for a root); a node not in the space is absent. */
   parentsOf(spaceId: string, nodeIds: readonly string[]): Promise<Map<string, string | null>>;
   /** Writes the link unless its node is not in the space or already holds it. */
@@ -300,12 +312,6 @@ export interface PlanNodeStore {
   ): Promise<Map<string, PlanNodeNewestPullRequest>>;
   /** How many runs, running or paused, serve each of `nodeIds` itself; eval trials never. */
   inFlightRunCountsOf(spaceId: string, nodeIds: readonly string[]): Promise<Map<string, number>>;
-  /** The running and paused runs serving each of `nodeIds` itself, newest first, at most `perNode` each; eval trials never. */
-  runsInFlightOf(
-    spaceId: string,
-    nodeIds: readonly string[],
-    perNode: number,
-  ): Promise<Map<string, PlanNodeRun[]>>;
   /** The running and paused runs serving any of `nodeIds`, newest first; eval trials never. */
   listRunsServing(
     spaceId: string,
@@ -666,6 +672,62 @@ async function writeAtRevision(
   return row ? rowToPlanNode(row) : null;
 }
 
+/** Each of `nodeIds`'s newest pull request link, read in `tx`; a node with none is absent. */
+async function newestPullRequestsIn(
+  tx: PostgresJsDatabase,
+  spaceId: string,
+  nodeIds: readonly string[],
+): Promise<Map<string, PlanNodeNewestPullRequest>> {
+  const newest = new Map<string, PlanNodeNewestPullRequest>();
+  if (nodeIds.length === 0) return newest;
+  const merges = alias(planNodeLinks, 'merges');
+  const rows = await tx
+    .selectDistinctOn([planNodeLinks.nodeId], {
+      nodeId: planNodeLinks.nodeId,
+      ref: planNodeLinks.ref,
+      merge: {
+        kind: merges.kind,
+        ref: merges.ref,
+        label: merges.label,
+        createdAt: merges.createdAt,
+      },
+    })
+    .from(planNodeLinks)
+    .leftJoin(
+      merges,
+      and(
+        eq(merges.nodeId, planNodeLinks.nodeId),
+        eq(merges.kind, 'merge'),
+        eq(merges.ref, planNodeLinks.ref),
+      ),
+    )
+    .where(
+      and(
+        eq(planNodeLinks.spaceId, spaceId),
+        eq(planNodeLinks.kind, 'pull_request'),
+        inArray(planNodeLinks.nodeId, [...nodeIds]),
+      ),
+    )
+    .orderBy(asc(planNodeLinks.nodeId), desc(planNodeLinks.createdAt), asc(planNodeLinks.ref));
+  for (const row of rows) {
+    newest.set(row.nodeId, {
+      ref: row.ref,
+      merge:
+        row.merge === null
+          ? null
+          : rowToPlanNodeLink({
+              nodeId: row.nodeId,
+              spaceId,
+              kind: row.merge.kind,
+              ref: row.merge.ref,
+              label: row.merge.label,
+              createdAt: new Date(row.merge.createdAt),
+            }),
+    });
+  }
+  return newest;
+}
+
 function walkIn(
   tx: PostgresJsDatabase,
   spaceId: string,
@@ -851,11 +913,19 @@ export function createPlanNodeStore(db: PostgresJsDatabase, tenantId: string): P
 
     walk: (spaceId, opts) => inTenant((tx) => walkIn(tx, spaceId, opts)),
 
-    readOverview: (spaceId, bounds) =>
-      withTenantSchema(db, tenantCtx, (tx) => overviewIn(tx, spaceId, bounds), {
-        isolationLevel: 'repeatable read',
-        accessMode: 'read only',
-      }),
+    readOverview: (spaceId, bounds, place) =>
+      withTenantSchema(
+        db,
+        tenantCtx,
+        async (tx) => {
+          const read = await overviewIn(tx, spaceId, bounds);
+          const { placed, pullRequestsOf, runsOf, runsPerNode } = place(read);
+          const pullRequests = await newestPullRequestsIn(tx, spaceId, pullRequestsOf);
+          const runs = await runsInFlightIn(tx, spaceId, runsOf, runsPerNode);
+          return { read, placed, pullRequests, runs };
+        },
+        { isolationLevel: 'repeatable read', accessMode: 'read only' },
+      ),
 
     parentsOf: (spaceId, nodeIds) =>
       inTenant(async (tx) => {
@@ -1049,60 +1119,7 @@ export function createPlanNodeStore(db: PostgresJsDatabase, tenantId: string): P
       }),
 
     newestPullRequestsOf: (spaceId, nodeIds) =>
-      inTenant(async (tx) => {
-        const newest = new Map<string, PlanNodeNewestPullRequest>();
-        if (nodeIds.length === 0) return newest;
-        const merges = alias(planNodeLinks, 'merges');
-        const rows = await tx
-          .selectDistinctOn([planNodeLinks.nodeId], {
-            nodeId: planNodeLinks.nodeId,
-            ref: planNodeLinks.ref,
-            merge: {
-              kind: merges.kind,
-              ref: merges.ref,
-              label: merges.label,
-              createdAt: merges.createdAt,
-            },
-          })
-          .from(planNodeLinks)
-          .leftJoin(
-            merges,
-            and(
-              eq(merges.nodeId, planNodeLinks.nodeId),
-              eq(merges.kind, 'merge'),
-              eq(merges.ref, planNodeLinks.ref),
-            ),
-          )
-          .where(
-            and(
-              eq(planNodeLinks.spaceId, spaceId),
-              eq(planNodeLinks.kind, 'pull_request'),
-              inArray(planNodeLinks.nodeId, [...nodeIds]),
-            ),
-          )
-          .orderBy(
-            asc(planNodeLinks.nodeId),
-            desc(planNodeLinks.createdAt),
-            asc(planNodeLinks.ref),
-          );
-        for (const row of rows) {
-          newest.set(row.nodeId, {
-            ref: row.ref,
-            merge:
-              row.merge === null
-                ? null
-                : rowToPlanNodeLink({
-                    nodeId: row.nodeId,
-                    spaceId,
-                    kind: row.merge.kind,
-                    ref: row.merge.ref,
-                    label: row.merge.label,
-                    createdAt: new Date(row.merge.createdAt),
-                  }),
-          });
-        }
-        return newest;
-      }),
+      inTenant((tx) => newestPullRequestsIn(tx, spaceId, nodeIds)),
 
     inFlightRunCountsOf: (spaceId, nodeIds) =>
       inTenant(async (tx) => {
@@ -1123,9 +1140,6 @@ export function createPlanNodeStore(db: PostgresJsDatabase, tenantId: string): P
         for (const row of rows) if (row.nodeId !== null) counts.set(row.nodeId, row.total);
         return counts;
       }),
-
-    runsInFlightOf: (spaceId, nodeIds, perNode) =>
-      inTenant((tx) => runsInFlightIn(tx, spaceId, nodeIds, perNode)),
 
     listRunsServing: (spaceId, nodeIds, limit) =>
       inTenant(async (tx) => {

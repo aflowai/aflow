@@ -18,9 +18,11 @@ import { spaceRoute } from '../../lib/space-routes.js';
 import {
   NEEDS_YOU_REASON_LABEL,
   PLAN_LANES,
+  PLAN_LANE_EMPTY_CUT,
   PLAN_LANES_TRUNCATION_LINE,
   phaseLabel,
   planAge,
+  planLaneCount,
   planLaneMore,
   planTag,
   pullRequestLabel,
@@ -237,10 +239,10 @@ export function PlanOverview({
         const more = planLaneMore(lane);
         return (
           <Column key={id} gap="xs" data-plan-lane={id}>
-            <Text variant="label" size="xs">{`${label} · ${String(lane.total)}`}</Text>
+            <Text variant="label" size="xs">{`${label} · ${planLaneCount(lane, lanes)}`}</Text>
             {lane.items.length === 0 ? (
               <Text size="sm" variant="muted">
-                {empty}
+                {lanes.truncated !== undefined ? PLAN_LANE_EMPTY_CUT : empty}
               </Text>
             ) : (
               <ul style={listStyle} aria-label={label}>

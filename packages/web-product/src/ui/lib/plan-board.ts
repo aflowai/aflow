@@ -8,6 +8,7 @@
  */
 import {
   isClosedPlanNodeStatus,
+  PLAN_NODE_NOTE_HEAD_MAX_CHARS,
   planBoardCards,
   planBoardColumn,
   type PlanBoardCard,
@@ -276,6 +277,9 @@ export const PLAN_LANES: ReadonlyArray<{
   { id: 'up_next', key: 'upNext', label: 'Up next', empty: 'No plan has a step to take next' },
 ];
 
+/** What an empty lane says where a bound left steps unread: it may not be empty. */
+export const PLAN_LANE_EMPTY_CUT = 'None among the steps read';
+
 /** The lane a step stands in on the overview, and its row there; undefined where it stands in none. */
 export function planLaneOf(
   lanes: PlanOverviewLanes,
@@ -293,6 +297,14 @@ export function planLaneOf(
 export function planLaneMore(lane: PlanLane): string | undefined {
   const more = lane.total - lane.items.length;
   return more > 0 ? `and ${String(more)} more` : undefined;
+}
+
+/**
+ * A lane's count as its heading says it: the steps it holds, and `+` where a
+ * bound left steps unread, so a lane cut short never reads as complete.
+ */
+export function planLaneCount(lane: PlanLane, lanes: Pick<PlanOverviewLanes, 'truncated'>): string {
+  return lanes.truncated !== undefined ? `${String(lane.total)}+` : String(lane.total);
 }
 
 /** A step as the rail opens it from a lane row, before the rail's own read answers. */
@@ -318,8 +330,6 @@ export function planLaneRailNode(
   };
 }
 
-const NOTE_HEAD_MAX = 160;
-
 /**
  * A step the URL names that no lane holds, as the rail opens it from the
  * step's own read: placed by the board's column rule on its status and the
@@ -343,7 +353,7 @@ export function planDetailRailNode(detail: PlanNodeDetailOutput): {
       title: node.title,
       status: node.status,
       revision: node.revision,
-      ...(line !== '' ? { noteHead: line.slice(0, NOTE_HEAD_MAX) } : {}),
+      ...(line !== '' ? { noteHead: line.slice(0, PLAN_NODE_NOTE_HEAD_MAX_CHARS) } : {}),
       ...(node.closedAt !== undefined ? { closedAt: node.closedAt } : {}),
       goalHead: node.goal,
       rounds: 0,
@@ -376,7 +386,7 @@ export const PLAN_LANES_TRUNCATION_LINE: Record<
   depth: (value) =>
     `Steps deeper than ${String(value)} levels were not read; the lanes may miss some`,
   nodes: (value) =>
-    `The lanes read the first ${String(value)} open steps across plans; some may be missing`,
+    `The lanes read the first ${String(value)} steps across plans, closed ones included; some may be missing`,
 };
 
 // ============================================================================

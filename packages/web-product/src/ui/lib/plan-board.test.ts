@@ -28,6 +28,7 @@ import {
   planHeader,
   planAge,
   planDetailRailNode,
+  planLaneCount,
   planLaneMore,
   planLaneOf,
   planLaneRailNode,
@@ -391,6 +392,13 @@ describe('the overview’s lanes (Plan 332 D7)', () => {
   it('says what a lane holds past its rows, and nothing where it lists them all', () => {
     expect(planLaneMore(lanes.needsYou)).toBe('and 51 more');
     expect(planLaneMore(lanes.inFlight)).toBeUndefined();
+  });
+
+  it('counts a lane as at least its total where a bound left steps unread', () => {
+    expect(planLaneCount(lanes.needsYou, lanes)).toBe('52');
+    expect(planLaneCount(lanes.needsYou, { truncated: { bound: 'nodes', value: 2000 } })).toBe(
+      '52+',
+    );
   });
 
   it('tags a row with its plan’s code, else its title cut as a phase chip', () => {

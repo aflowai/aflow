@@ -2249,7 +2249,7 @@ describe('SpacePlanPage — the overview across plans (Plan 332 P4)', () => {
     expect(lane('in_flight').querySelector('[data-plan-lane-more]')).toBe(null);
   });
 
-  it('says when the lanes’ read reached a bound, and what an empty lane means', async () => {
+  it('says when the lanes’ read reached a bound, and a lane cut short reads as at least what it holds', async () => {
     await render({
       data: {
         ...OVERVIEW,
@@ -2263,8 +2263,29 @@ describe('SpacePlanPage — the overview across plans (Plan 332 P4)', () => {
     });
 
     expect(container.querySelector('[data-plan-lanes-truncated]')?.textContent).toBe(
-      'The lanes read the first 2000 open steps across plans; some may be missing',
+      'The lanes read the first 2000 steps across plans, closed ones included; some may be missing',
     );
+    // A lane cut short never reads as complete: neither its count nor its emptiness.
+    expect(lane('needs_you').textContent).toContain('Needs you · 0+');
+    expect(lane('needs_you').textContent).toContain('None among the steps read');
+    expect(lane('needs_you').textContent).not.toContain('Nothing waits on you');
+  });
+
+  it('says what an empty lane means where the read reached no bound', async () => {
+    await render({
+      data: {
+        ...OVERVIEW,
+        lanes: {
+          needsYou: { items: [], total: 0 },
+          inFlight: { items: [], total: 0 },
+          upNext: { items: [], total: 0 },
+        },
+      },
+    });
+
+    expect(container.querySelector('[data-plan-lanes-truncated]')).toBe(null);
+    expect(lane('needs_you').textContent).toContain('Needs you · 0');
+    expect(lane('needs_you').textContent).not.toContain('0+');
     expect(lane('needs_you').textContent).toContain('Nothing waits on you');
   });
 
