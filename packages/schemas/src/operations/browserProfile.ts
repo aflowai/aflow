@@ -243,3 +243,17 @@ export function browserStackPortRefusal(port: number, owner: string): string {
   const reason = browserStackPortReason(port, owner);
   return `${reason.charAt(0).toUpperCase()}${reason.slice(1)}, so no browser profile is opened to it.`;
 }
+
+/**
+ * The refusal of a folder preview declared on such a port (Plan 320 D18): the
+ * run's browser is admitted to its preview's port, so a preview there would
+ * admit it to this stack. The command, the executor's writer and the route all
+ * say this, so the words cannot drift between them.
+ */
+export function folderPreviewStackPortRefusal(port: number, owner: string): string {
+  const reason = browserStackPortReason(port, owner);
+  return (
+    `${reason.charAt(0).toUpperCase()}${reason.slice(1)}, so no folder's preview is declared ` +
+    "on it. Leave the port out and each run takes a free one, or fix one this stack doesn't serve on."
+  );
+}

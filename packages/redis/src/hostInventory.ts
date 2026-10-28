@@ -12,6 +12,7 @@ import {
   BrowserLocalPortSchema,
   BrowserProfileIdSchema,
   BrowserProfileSchema,
+  HostFolderPreviewSchema,
   type HostPublishedChecks,
   HOST_MERGE_POSTURE_DEFAULT,
   type HostMergePosture,
@@ -183,6 +184,57 @@ export function readHostBrowserRequest(
   return request.data;
 }
 
+/**
+ * The operator asking, from the machine page, for what `aflow folder <id>
+ * preview` does on the machine: declare a folder's preview, or clear it (Plan
+ * 320 D18). Published only by the operator route, which takes a person's
+ * authenticated request — no operation dispatches it — and acted on only by
+ * the executor of the machine it names, which writes it with the command's own
+ * writer after checking the folder was connected for the workspace asking.
+ * Its own channel pair rather than the browser's, because a browser request
+ * is keyed by profile and this one by folder.
+ */
+export function hostFolderRequestChannel(hostname: string): string {
+  return `aflow:pubsub:host-folder:${hostname}`;
+}
+
+export function hostFolderAnswerChannel(answerId: string): string {
+  return `aflow:pubsub:host-folder-answer:${answerId}`;
+}
+
+export const HostFolderRequestSchema = z.object({
+  kind: z.literal('preview'),
+  hostname: z.string().min(1),
+  answerId: z.string().regex(/^[A-Za-z0-9_-]{16,64}$/),
+  spaceId: z.string().min(1),
+  bindingId: z.string().min(1).max(64),
+  /** The declaration to write, or null to clear it. */
+  preview: HostFolderPreviewSchema.nullable(),
+});
+export type HostFolderRequest = z.infer<typeof HostFolderRequestSchema>;
+
+/** The request, when it is well formed and names `hostname`. */
+export function readHostFolderRequest(
+  raw: string,
+  hostname: string,
+): HostFolderRequest | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+  const request = HostFolderRequestSchema.safeParse(parsed);
+  if (!request.success || request.data.hostname !== hostname) return undefined;
+  return request.data;
+}
+
+export const HostFolderAnswerSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('changed'), preview: HostFolderPreviewSchema.nullable() }),
+  z.object({ kind: z.literal('refused'), message: z.string() }),
+]);
+export type HostFolderAnswer = z.infer<typeof HostFolderAnswerSchema>;
+
 export const HostBrowserSettingAnswerSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('changed'), profile: BrowserProfileSchema }),
   z.object({ kind: z.literal('refused'), message: z.string() }),
@@ -269,6 +321,24 @@ export const HostInventorySchema = z.object({
     }),
   ),
   /**
+   * Every folder the machine connected for a workspace, pushing or not, with
+   * its preview as the person declared it (Plan 320 D18). Where none is
+   * declared, `detectedWebApps` names the directories where the machine found
+   * a web app — relative to the folder's root, `.` for the root — so the
+   * machine page can say the preview is not declared; empty where it found
+   * none. Detection is a hint for that line alone: nothing is run from it and
+   * no default is taken from it. Apart from `folders`, which lists only the
+   * folders that push.
+   */
+  previews: z.array(
+    z.object({
+      id: z.string(),
+      spaceId: z.string(),
+      preview: HostFolderPreviewSchema.optional(),
+      detectedWebApps: z.array(z.string()).default([]),
+    }),
+  ),
+  /**
    * The browser profiles this machine offers, from its policy file, and
    * whether each one's browser is running now. Sites are the hosts a running
    * profile holds cookies for, by name: never a value, and absent while the
@@ -295,6 +365,7 @@ export const HostInventorySchema = z.object({
 });
 export type HostInventory = z.infer<typeof HostInventorySchema>;
 export type HostInventoryFolders = HostInventory['folders'];
+export type HostInventoryPreviews = HostInventory['previews'];
 export type HostInventoryBrowsers = HostInventory['browsers'];
 
 /** What the machine holding a pushing folder declares about publishing from it. */
@@ -327,6 +398,36 @@ export function publishingFoldersForSpace(
     }
   }
   return folders;
+}
+
+/** A folder's preview as the machine holding it publishes it, and which machine that is. */
+export interface PublishedFolderPreview {
+  readonly hostname: string;
+  readonly preview?: HostInventoryPreviews[number]['preview'];
+  readonly detectedWebApps: readonly string[];
+}
+
+/**
+ * Each folder's preview for one workspace, as the machines publishing now
+ * declare it, with the machine to ask to change it. A folder missing here has
+ * no machine running for it.
+ */
+export function folderPreviewsForSpace(
+  inventories: ReadonlyArray<Pick<HostInventory, 'hostname' | 'previews'>>,
+  spaceId: string,
+): Map<string, PublishedFolderPreview> {
+  const previews = new Map<string, PublishedFolderPreview>();
+  for (const machine of inventories) {
+    for (const folder of machine.previews) {
+      if (folder.spaceId !== spaceId || previews.has(folder.id)) continue;
+      previews.set(folder.id, {
+        hostname: machine.hostname,
+        ...(folder.preview !== undefined ? { preview: folder.preview } : {}),
+        detectedWebApps: folder.detectedWebApps,
+      });
+    }
+  }
+  return previews;
 }
 
 /** One machine's inventory, when it is publishing one that reads. */

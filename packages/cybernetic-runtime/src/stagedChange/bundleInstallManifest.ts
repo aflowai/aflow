@@ -65,8 +65,8 @@ export function readingsForItems(
     ) {
       readings.add(item.answeredBy);
     }
-    // `folder_preview` reads a declaration Plan 320 P6(a) has not built
-    // (§7 F3), so nothing lists it yet.
+    // `folder_preview` is not listed yet: Plan 320 P6(a) built the declaration
+    // it reads, and listing it is Plan 330 §7 F3's to do.
   }
   return readings;
 }
