@@ -713,7 +713,8 @@ export async function listPlanNodes(
  * Every plan of the space as a row (Plan 332 D7's rows): each root with its
  * state and its steps counted by column, by position and then id, open and
  * closed alike. Its work is bounded whatever the space has held: a closed
- * plan is `closed` by rule, so its root alone is read; the open plans share
+ * plan is `closed` by rule, so its root is read and none of its steps are
+ * counted (the walk's one-row depth probe aside); the open plans share
  * one walk under the bounds every read of the plan takes, and only the steps
  * it reached are looked up for runs. A plan that walk read whole counts what
  * its board's header counts; one its bound may have cut short says so on its
@@ -721,7 +722,9 @@ export async function listPlanNodes(
  */
 export async function readPlanOverview(ctx: PlanReadContext): Promise<PlanOverviewOutput> {
   const [closed, open] = await Promise.all([
-    // Depth 0 reads the roots alone; only the node bound can cut that list short.
+    // Depth 0 returns the roots alone, and only the node bound can cut that
+    // list short; the walk still sends its one-row probe for children below
+    // them, whose depth verdict is not read here.
     ctx.store.walk(ctx.spaceId, {
       ...PLAN_TREE_WALK_BOUNDS,
       maxDepth: 0,
@@ -741,11 +744,9 @@ export async function readPlanOverview(ctx: PlanReadContext): Promise<PlanOvervi
     ...buildPlanRows(placed, inFlight, open.truncated),
     ...closed.nodes.map(closedPlanRow),
   ].sort(bySiblingOrder);
-  // A node bound met on the roots themselves may have left plans out of the list.
-  const openRootsCut =
-    open.truncated?.bound === 'nodes' && placed.every((p) => p.depth === 0)
-      ? open.truncated
-      : undefined;
+  // Only more open roots than the node bound holds leave plans out of the list;
+  // roots that exactly fill it are every one listed, their steps cut on their rows.
+  const openRootsCut = open.cutAtDepth === 0 ? open.truncated : undefined;
   const truncated =
     (closed.truncated?.bound === 'nodes' ? closed.truncated : undefined) ?? openRootsCut;
   return { roots: rows, ...(truncated !== undefined ? { truncated } : {}) };

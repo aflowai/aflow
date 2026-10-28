@@ -49,6 +49,12 @@ export interface PlanTreeWalk {
   nodes: PlanNodeSummary[];
   /** The bound that stopped the walk before it read every node it would reach. */
   truncated?: PlanNodeListTruncation;
+  /**
+   * Under the node bound, the depth of the level the walk found more of than
+   * it had room for: 0 when the first level itself did not fit, deeper when it
+   * fit whole, even with no room to spare.
+   */
+  cutAtDepth?: number;
 }
 
 /**
@@ -68,7 +74,7 @@ export async function walkPlanTree(
     const read = await readLevel(level, room + 1);
     nodes.push(...read.slice(0, room));
     if (read.length > room) {
-      return { nodes, truncated: { bound: 'nodes', value: bounds.maxNodes } };
+      return { nodes, truncated: { bound: 'nodes', value: bounds.maxNodes }, cutAtDepth: depth };
     }
     if (read.length === 0) return { nodes };
     level = { kind: 'children', parentIds: read.map((node) => node.nodeId) };

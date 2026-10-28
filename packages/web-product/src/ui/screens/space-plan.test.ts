@@ -1940,4 +1940,16 @@ describe('SpacePlanPage — ordering and closing plans from the list (Plan 332 P
     expect(header().textContent).toContain('Finished');
     expect(buttonTexts(header())).toContain('Close plan');
   });
+
+  it('offers no Close plan in the header of a finished plan whose board was read short, and says why', async () => {
+    await render({ data: { ...LIST, truncated: { bound: 'nodes', value: 2000 } } });
+    await choosePlan(L_FINISHED);
+    const header = container.querySelector(`[data-plan-tally]`)!.parentElement!;
+
+    expect(header.textContent).toContain('Finished');
+    expect(buttonTexts(header)).not.toContain('Close plan');
+    expect(header.querySelector('[data-plan-close-withheld]')?.textContent).toBe(
+      'Counted short: the first 2000 steps, so no Close plan',
+    );
+  });
 });

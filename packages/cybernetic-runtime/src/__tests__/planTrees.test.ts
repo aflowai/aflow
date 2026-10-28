@@ -935,6 +935,32 @@ describe('readPlanOverview — the plans as rows', () => {
     });
     expect(read.roots[1]).not.toHaveProperty('truncated');
   });
+
+  it('lists every plan when the open roots exactly fill the node bound, their steps counted short', async () => {
+    for (let n = 0; n < PLAN_TREE_WALK_NODE_LIMIT; n++) {
+      const root = store.seed(SPACE, { title: `plan ${String(n)}`, position: n });
+      store.seed(SPACE, { parentId: root.nodeId, title: 'a step' });
+    }
+
+    const read = await rows();
+
+    expect(read.truncated).toBeUndefined();
+    expect(read.roots).toHaveLength(PLAN_TREE_WALK_NODE_LIMIT);
+    expect(read.roots[0]).toMatchObject({
+      truncated: { bound: 'nodes', value: PLAN_TREE_WALK_NODE_LIMIT },
+    });
+  });
+
+  it('says the list of plans was cut when more open roots than the node bound holds', async () => {
+    for (let n = 0; n <= PLAN_TREE_WALK_NODE_LIMIT; n++) {
+      store.seed(SPACE, { title: `plan ${String(n)}`, position: n });
+    }
+
+    const read = await rows();
+
+    expect(read.truncated).toEqual({ bound: 'nodes', value: PLAN_TREE_WALK_NODE_LIMIT });
+    expect(read.roots).toHaveLength(PLAN_TREE_WALK_NODE_LIMIT);
+  });
 });
 
 describe('buildPlanBoard — a node written between the walk and its row', () => {

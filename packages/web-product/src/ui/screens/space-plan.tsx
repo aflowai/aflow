@@ -67,6 +67,14 @@ const TRUNCATION_LINE: Record<'limit' | 'depth' | 'nodes', (value: number) => st
   nodes: (value) => `First ${String(value)} steps`,
 };
 
+/** Why a finished plan's header offers no Close plan: its board was read short. */
+const CLOSE_WITHHELD_LINE: Record<'limit' | 'depth' | 'nodes', (value: number) => string> = {
+  limit: (value) => `Counted short: the first ${String(value)} steps, so no Close plan`,
+  depth: (value) =>
+    `Counted short: steps deeper than ${String(value)} levels left out, so no Close plan`,
+  nodes: (value) => `Counted short: the first ${String(value)} steps, so no Close plan`,
+};
+
 function TruncationLine({ truncated }: { truncated: PlanNodeListTruncation | undefined }) {
   if (truncated === undefined) return null;
   return (
@@ -374,14 +382,20 @@ export function SpacePlanPage(): React.ReactNode {
                 </Badge>
               ))}
             </Row>
-            {tally.state === 'finished' && (
-              <PlanRootCloseControl
-                key={root.nodeId}
-                rootId={root.nodeId}
-                spaceId={spaceId}
-                onClose={onClose}
-              />
-            )}
+            {tally.state === 'finished' &&
+              (board.truncated === undefined ? (
+                <PlanRootCloseControl
+                  key={root.nodeId}
+                  rootId={root.nodeId}
+                  spaceId={spaceId}
+                  onClose={onClose}
+                />
+              ) : (
+                // Steps the board's read did not reach may be open, as on a row counted short.
+                <Text size="xs" variant="muted" data-plan-close-withheld>
+                  {CLOSE_WITHHELD_LINE[board.truncated.bound](board.truncated.value)}
+                </Text>
+              ))}
           </Column>
           {phaseShown && (
             <Segmented

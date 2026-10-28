@@ -202,7 +202,8 @@ describeDb('moveAtRevision — two crossing moves never close a loop (real DB)',
     });
 
     const read = await readPlanBoard({ store, spaceId: SPACE_ID }, root.nodeId);
-    const tree = read.ok ? PlanBoardOutputSchema.parse(read).root : undefined;
+    const board = read.ok ? PlanBoardOutputSchema.parse(read) : undefined;
+    const tree = board?.root;
 
     expect(tree?.progress).toEqual({ done: 1, total: 2 });
     expect(
@@ -218,7 +219,8 @@ describeDb('moveAtRevision — two crossing moves never close a loop (real DB)',
     });
     expect(tree?.children[1]).not.toHaveProperty('outcome');
     expect(tree?.children[1]?.closedAt).toEqual(expect.any(String));
-    expect(trees.tallies.find((t) => t.rootId === root.nodeId)).toMatchObject({
+    expect(board?.tally).toMatchObject({
+      rootId: root.nodeId,
       steps: 2,
       done: 1,
     });
