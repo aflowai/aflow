@@ -79,7 +79,7 @@ _Rejected:_ running `ste-lint.py`. Python is not a dependency of this repository
 - `packages/platform-artifacts`: every `SKILL_CATALOG` entry — tagline, descriptions, `usage`, `next`, run-input and state-variable descriptions, output guidance, activation hint, and task goals.
 - `apps/aflow-executor-host`: the sentences `composeHarnessTask`, `resultInstruction`, `retryInstruction` and `mergeConflictSentence` add to a brief, built from fixtures.
 
-A unit is one operation, one catalog skill or one sentence builder. `scripts/controlled-english-baseline.json` records the hard count of each unit by rule, and its count of modal hedges (may, might, could). The guard fails when a unit's hard count rises or a new unit has any hard finding. Its message names the unit, the field, the rule and the words. `scripts/controlled-english/cli.ts` has `scan`, `check` and `update-baseline`, as `scripts/context-budget/cli.ts` does. The sweep then takes every hard count to zero, a package at a time.
+A unit is one operation, one catalog skill or one sentence builder. The baseline file P1 creates, `controlled-english-baseline.json` under `scripts/` (planned, not yet present), records the hard count of each unit by rule, and its count of modal hedges (may, might, could). The guard fails when a unit's hard count rises or a new unit has any hard finding. Its message names the unit, the field, the rule and the words. The linter's CLI P1 creates, `controlled-english/cli.ts` under `scripts/` (planned, not yet present), has `scan`, `check` and `update-baseline`, as `scripts/context-budget/cli.ts` does. The sweep then takes every hard count to zero, a package at a time.
 
 A rewrite in the sweep keeps every fact, condition and hedge. The guard fails when a unit's hedge count falls below the baseline. The context-budget check holds the token counts of the Helmsman's tool components as they stand. A rewrite that grows them is the wrong rewrite.
 
@@ -199,7 +199,7 @@ _Exit:_ the skill is contract-valid (Plan 190). Given §1's sentence from `workf
 - **Prose cannot decide a review.** P6's exit: the same range with and without a prose finding gets the same verdict and the same decision.
 - **The effect is measured, not claimed.** The plan claims an effect only from two numbers, and names where each lives:
   - Fix rounds caused by brief ambiguity: `fixRounds` in the loop's measure, `GET /v1/spaces/:spaceId/plan/loop` (`readPlanLoopMeasure`). It counts from the round records on the plan nodes. Those are the commission runs linked to a node and the review runs whose findings they answer. Each finding's `kind` and `briefQuote` are in its review run's result. With fewer than 20 review-driven fix rounds on either side of P5, the plan records the counts and claims nothing.
-  - The linter baseline on the agent-facing strings: `scripts/controlled-english-baseline.json`, read with `node --import tsx scripts/controlled-english/cli.ts scan`. P4's exit is every hard count in it at zero.
+  - The linter baseline on the agent-facing strings: the baseline file P1 creates, `controlled-english-baseline.json` under `scripts/`, read with `node --import tsx scripts/controlled-english/cli.ts scan`. P4's exit is every hard count in it at zero.
 - **This document holds itself to D11.** `ste-lint.py --disable synonym-rotation` reports no hard finding in it. Its advisory findings, passive voice and compound tenses, stay as D2 allows.
 
 ## 6. Open questions
