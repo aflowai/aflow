@@ -685,12 +685,29 @@ export const PlanStreamPullRequestAnswerSchema = z
   });
 export type PlanStreamPullRequestAnswer = z.infer<typeof PlanStreamPullRequestAnswerSchema>;
 
+/**
+ * What a node may spend before the stream stops on it (Plan 331 D4): the
+ * `total_cost_cents` of the runs serving it since a person last opened it,
+ * with the wake sessions that started them.
+ */
+export const PLAN_STREAM_SPEND_CENTS_DEFAULT = 5_000;
+
+/** How many board decisions one wake acts on (Plan 331 D4); the rest wait for the next. */
+export const PLAN_BOARD_DECISIONS_DEFAULT = 3;
+const PLAN_BOARD_DECISIONS_MAX = 10;
+
+export const PLAN_STREAM_PULL_REQUEST_NEEDS_ROOT_MESSAGE =
+  '`pullRequest` answers a read_pull_request decision, which names its root: call again with that root as `rootNodeId` beside it.';
+
 export const PlanNodeNextInputSchema = z
   .object({
     rootNodeId: z
       .string()
       .uuid()
-      .describe('The stream: its root node, as the schedule’s message names it.'),
+      .optional()
+      .describe(
+        'One stream: its root node. Absent, the whole board — every open root in position order, which is the operator’s priority.',
+      ),
     attempts: z
       .number()
       .int()
@@ -700,11 +717,29 @@ export const PlanNodeNextInputSchema = z
       .describe(
         'How many times a node whose round failed is commissioned again before the stream stops on it, as the schedule’s message names it.',
       ),
+    decisions: z
+      .number()
+      .int()
+      .min(1)
+      .max(PLAN_BOARD_DECISIONS_MAX)
+      .default(PLAN_BOARD_DECISIONS_DEFAULT)
+      .describe(
+        'Across the board only: how many decisions this wake acts on. The rest are counted in `deferred` and left to the next wake.',
+      ),
     pullRequest: PlanStreamPullRequestAnswerSchema.optional().describe(
-      'Only after a `read_pull_request` decision: GitHub’s answer for the pull request it named, read through the space’s GitHub binding — or `read: "failed"` where that read failed.',
+      'Only after a `read_pull_request` decision, with its root as `rootNodeId`: GitHub’s answer for the pull request it named, read through the space’s GitHub binding — or `read: "failed"` where that read failed.',
     ),
   })
-  .strict();
+  .strict()
+  .superRefine((input, ctx) => {
+    if (input.pullRequest !== undefined && input.rootNodeId === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['rootNodeId'],
+        message: PLAN_STREAM_PULL_REQUEST_NEEDS_ROOT_MESSAGE,
+      });
+    }
+  });
 export type PlanNodeNextInput = z.infer<typeof PlanNodeNextInputSchema>;
 
 /** The active node as a decision names it. */
@@ -731,11 +766,11 @@ export const PlanStreamWaitCauseSchema = z.enum([
   'stream_closed',
   'blocked',
   'awaiting_decision',
+  'awaiting_publication',
   'in_flight',
   'claimed',
   'pull_request_open',
   'read_failed',
-  'awaiting_publication',
   'unknown_state',
 ]);
 export type PlanStreamWaitCause = z.infer<typeof PlanStreamWaitCauseSchema>;
@@ -744,6 +779,8 @@ export const PlanStreamStopCauseSchema = z.enum([
   'pull_request_closed',
   'publication_denied',
   'attempts_spent',
+  'spend_spent',
+  'commission_unchanged',
 ]);
 export type PlanStreamStopCause = z.infer<typeof PlanStreamStopCauseSchema>;
 
@@ -771,7 +808,37 @@ export const PlanStreamRetrySchema = z
   .strict();
 export type PlanStreamRetry = z.infer<typeof PlanStreamRetrySchema>;
 
-export const PlanNodeNextOutputSchema = z.discriminatedUnion('decision', [
+/** What a node spent since a person last opened it, and on which runs (Plan 331 D4). */
+export const PlanStreamSpendSchema = z
+  .object({
+    cents: z.number().int().min(0),
+    ceilingCents: z.number().int().min(1),
+    runIds: z.array(z.string()).describe('The runs serving the node, newest first.'),
+    wakeSessionIds: z
+      .array(z.string())
+      .describe(
+        'The scheduled Helmsman sessions that started them. `cents` counts each one’s share: its cost divided across the nodes it started runs for.',
+      ),
+  })
+  .strict();
+export type PlanStreamSpend = z.infer<typeof PlanStreamSpendSchema>;
+
+/** A completed commission as its publication takes it (Plan 331 D3.1). */
+export const PlanStreamCommissionSchema = z
+  .object({
+    commission: z.string().describe('The commission’s run id: Local Publish’s `commission`.'),
+    patchRef: z.string(),
+    baseSha: z.string().optional(),
+    mergeFrom: z.string().optional().describe('The commission’s `merge.from`, where it merged.'),
+    bindingId: z
+      .string()
+      .optional()
+      .describe('The connected folder the commission ran on, where its run recorded it.'),
+  })
+  .strict();
+export type PlanStreamCommission = z.infer<typeof PlanStreamCommissionSchema>;
+
+export const PlanStreamAnswerSchema = z.discriminatedUnion('decision', [
   z
     .object({
       decision: z.literal('read_pull_request'),
@@ -786,7 +853,7 @@ export const PlanNodeNextOutputSchema = z.discriminatedUnion('decision', [
         })
         .strict()
         .describe(
-          'Read it with the space’s GitHub binding (`getPullRequest`: owner, repo, pull_number), then call plan.node.next again with the same rootNodeId and attempts and `pullRequest` set from the answer.',
+          'Read it with the space’s GitHub binding (`getPullRequest`: owner, repo, pull_number), then call plan.node.next again with its stream’s root as rootNodeId, the same attempts and `pullRequest` set from the answer.',
         ),
     })
     .strict(),
@@ -829,6 +896,19 @@ export const PlanNodeNextOutputSchema = z.discriminatedUnion('decision', [
       update: PlanNodeUpdateSchema.describe(
         'The write that holds the stream on this node: pass it to plan.node.update as it stands.',
       ),
+      spend: PlanStreamSpendSchema.optional().describe(
+        'On spend_spent: what the node spent, and on which runs.',
+      ),
+    })
+    .strict(),
+  z
+    .object({
+      decision: z.literal('publish'),
+      reason: decisionReason,
+      node: PlanStreamBriefNodeSchema,
+      commission: PlanStreamCommissionSchema.describe(
+        'The completed commission to publish: start Local Publish with these inputs as they stand, a branch, and the node’s id as planNodeId. It commits under the commission’s summary.',
+      ),
     })
     .strict(),
   z
@@ -848,8 +928,217 @@ export const PlanNodeNextOutputSchema = z.discriminatedUnion('decision', [
     })
     .strict(),
 ]);
+export type PlanStreamAnswer = z.infer<typeof PlanStreamAnswerSchema>;
+export type PlanStreamDecision = PlanStreamAnswer['decision'];
+
+/** A root of the board, as a board decision names the stream it came from. */
+export const PlanBoardRootSchema = z
+  .object({ nodeId: z.string().uuid(), title: z.string(), position: z.number().int() })
+  .strict();
+
+export const PlanBoardDecisionSchema = z
+  .object({
+    root: PlanBoardRootSchema,
+    answer: PlanStreamAnswerSchema,
+  })
+  .strict();
+export type PlanBoardDecision = z.infer<typeof PlanBoardDecisionSchema>;
+
+/**
+ * `plan.node.next` with no root (Plan 331 D2): every open root in position
+ * order, each decided as one stream is, and the decisions that are not `wait`
+ * ordered finish before start across the board (D3).
+ */
+export const PlanBoardNextSchema = z
+  .object({
+    scope: z.literal('board'),
+    decisions: z
+      .array(PlanBoardDecisionSchema)
+      .describe(
+        'Act on these in order: a merge recorded, a commission published, a stop written, a failed round re-commissioned, new work commissioned, then pull requests read; within each, the operator’s root order. Empty: end the wake with no reply.',
+      ),
+    deferred: z
+      .number()
+      .int()
+      .min(0)
+      .describe('Decisions past this wake’s cap, left to the next wake as they stand.'),
+    waits: z
+      .array(
+        z.object({ cause: PlanStreamWaitCauseSchema, roots: z.number().int().min(1) }).strict(),
+      )
+      .describe('The roots that answered wait, counted by cause. Nothing to act on.'),
+    roots: z.number().int().min(0).describe('Open roots read.'),
+    truncated: PlanNodeListTruncationSchema.optional().describe(
+      'The read of the board stopped at a bound: roots past it were not decided.',
+    ),
+  })
+  .strict();
+export type PlanBoardNext = z.infer<typeof PlanBoardNextSchema>;
+
+export const PlanNodeNextOutputSchema = z.union([PlanStreamAnswerSchema, PlanBoardNextSchema]);
 export type PlanNodeNextOutput = z.infer<typeof PlanNodeNextOutputSchema>;
-export type PlanStreamDecision = PlanNodeNextOutput['decision'];
+
+// ============================================================================
+// The resident (Plan 331 D1) — one schedule per space, waking the Helmsman
+// ============================================================================
+
+/** The resident's heartbeat: the longest an approved node sits idle unannounced. */
+export const PLAN_RESIDENT_SCHEDULE_CRON = '*/15 * * * *';
+
+/**
+ * The config key the resident's schedule hands its wake: the schedule itself,
+ * resolved from `{ $schedule: 'id' }` at each firing, so the wake renews it.
+ */
+export const PLAN_RESIDENT_SCHEDULE_VARIABLE = 'scheduleId';
+
+/**
+ * The message a wake starts with. It names no root and carries no live value:
+ * everything the wake acts on it reads from the board when it wakes.
+ */
+export function planResidentWakeMessage(): string {
+  return `Wake as this space's resident: call ${PLAN_NODE_NEXT_OPERATION_ID} with {} — no rootNodeId — and act on its decisions in order. When it answers none, end with no reply.`;
+}
+
+/** The `input` of `agent.schedule.create` for the space's resident schedule. */
+export function planResidentScheduleInput(): {
+  input: string;
+  config: { [PLAN_RESIDENT_SCHEDULE_VARIABLE]: { $schedule: 'id' } };
+} {
+  return {
+    input: planResidentWakeMessage(),
+    config: { [PLAN_RESIDENT_SCHEDULE_VARIABLE]: { $schedule: 'id' } },
+  };
+}
+
+/**
+ * Whether a schedule is a space's resident: it starts the Helmsman and hands
+ * each wake its own id — `config.scheduleId` is `{ $schedule: 'id' }`, the
+ * static input `planResidentScheduleInput` writes. The message is the
+ * caller's and is not read: an operator or a Helmsman may word it their own
+ * way. A stream's schedule names a root and hands nothing, so it is not one.
+ */
+export function isPlanResidentSchedule(schedule: {
+  targetKind: string | null;
+  targetSystemRole: string | null;
+  inputTemplate: unknown;
+}): boolean {
+  if (
+    schedule.targetKind !== PLAN_STREAM_SCHEDULE_TARGET.kind ||
+    schedule.targetSystemRole !== PLAN_STREAM_SCHEDULE_TARGET.systemRole
+  ) {
+    return false;
+  }
+  const template = asRecord(schedule.inputTemplate);
+  const handed = asRecord(asRecord(template?.['config'])?.[PLAN_RESIDENT_SCHEDULE_VARIABLE]);
+  return handed !== null && Object.keys(handed).length === 1 && handed['$schedule'] === 'id';
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+// ============================================================================
+// What the loop costs the operator (Plan 331 D7)
+// ============================================================================
+
+export const PLAN_LOOP_MEASURE_DEFAULT_DAYS = 7;
+export const PLAN_LOOP_MEASURE_MAX_DAYS = 31;
+/** How many nodes the idle and cost lists carry, newest first. */
+export const PLAN_LOOP_MEASURE_NODES_LIMIT = 200;
+
+export const PlanLoopMeasureQuerySchema = z
+  .object({
+    from: z
+      .string()
+      .datetime()
+      .optional()
+      .describe('The window’s start; a week before `to` when absent.'),
+    to: z.string().datetime().optional().describe('The window’s end; now when absent.'),
+  })
+  .strict();
+export type PlanLoopMeasureQuery = z.infer<typeof PlanLoopMeasureQuerySchema>;
+
+export const PlanLoopMeasureOutputSchema = z
+  .object({
+    window: z.object({ from: z.string().datetime(), to: z.string().datetime() }).strict(),
+    operatorActions: z
+      .object({
+        total: z.number().int().min(0),
+        helmsmanMessages: z
+          .number()
+          .int()
+          .min(0)
+          .describe('Messages a person sent to any Helmsman conversation in the space.'),
+        actionCenter: z
+          .object({
+            total: z.number().int().min(0),
+            byKind: z
+              .record(z.number().int().min(0))
+              .describe(
+                'Resolutions by item kind, from `hitl_action_audit` — push approvals and merge cards among them.',
+              ),
+          })
+          .strict(),
+        planWrites: z
+          .object({ close: z.number().int().min(0), open: z.number().int().min(0) })
+          .strict()
+          .describe(
+            'The plan page’s writes: `plan.node.close`, and `plan.node.open` — Approve, Resume, Reopen.',
+          ),
+        scheduleWrites: z.number().int().min(0),
+      })
+      .strict(),
+    mergedPullRequests: z
+      .number()
+      .int()
+      .min(0)
+      .describe('Pull requests merged for nodes in the window: `merge` links written in it.'),
+    actionsPerMergedPullRequest: z.number().min(0).nullable(),
+    idle: z
+      .array(
+        z
+          .object({
+            nodeId: z.string().uuid(),
+            title: z.string(),
+            actionableAt: z
+              .string()
+              .datetime()
+              .describe('When it became actionable: created, approved, or its predecessor closed.'),
+            firstCommissionAt: z.string().datetime(),
+            idleMs: z.number().int().min(0),
+          })
+          .strict(),
+      )
+      .describe('Nodes whose first commission started in the window.'),
+    cost: z
+      .object({
+        nodes: z.array(
+          z
+            .object({
+              nodeId: z.string().uuid(),
+              title: z.string(),
+              runs: z.number().int().min(0),
+              cents: z.number().min(0),
+            })
+            .strict(),
+        ),
+        wakes: z
+          .object({
+            sessions: z.number().int().min(0),
+            cents: z.number().min(0),
+            centsPerMergedPullRequest: z.number().min(0).nullable(),
+          })
+          .strict()
+          .describe(
+            'Only resident-schedule Helmsman sessions as overhead; per-stream schedule firings are excluded.',
+          ),
+      })
+      .strict(),
+  })
+  .strict();
+export type PlanLoopMeasureOutput = z.infer<typeof PlanLoopMeasureOutputSchema>;
 
 /**
  * The message a stream's schedule starts the Helmsman with: the stream's root

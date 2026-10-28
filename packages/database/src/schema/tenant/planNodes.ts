@@ -42,6 +42,13 @@ export const planNodes = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
     closedAt: timestamp('closed_at', { withTimezone: true }),
+    /**
+     * When a person last opened the node (Plan 331 D5) — approved, resumed or
+     * reopened it — written by the open write itself. The node's spend counts
+     * from here; the audit row of the open is evidence, not the source.
+     */
+    openedAt: timestamp('opened_at', { withTimezone: true }),
+    spendCents: integer('spend_cents'),
   },
   (table) => [
     index('plan_nodes_space_status_idx').on(table.spaceId, table.status),

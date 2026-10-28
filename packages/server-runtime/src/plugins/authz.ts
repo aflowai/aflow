@@ -1,3 +1,4 @@
+import { resolvePrincipalActorKind } from '../utils/actorContext.js';
 import fp from 'fastify-plugin';
 import type { FastifyInstance, FastifyRequest, FastifyReply, RouteOptions } from 'fastify';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
@@ -254,7 +255,7 @@ function recordDenial(
   fastify.audit.record({
     actor: {
       userId: request.authUser!.userId,
-      kind: request.authUser!.isServicePrincipal ? 'service_principal' : 'human',
+      kind: resolvePrincipalActorKind(request.authUser!),
       authMethod: request.authUser!.authMethod,
       tenantId,
       tenantRole,

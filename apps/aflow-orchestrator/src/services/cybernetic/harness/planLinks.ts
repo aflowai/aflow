@@ -5,7 +5,11 @@
 import {
   buildWorkflowRunResult,
   createPlanNodeStore,
+  createResidentScheduleStore,
   linkEndedRun,
+  requestResidentWake,
+  RUN_WAKE_SESSION_METADATA_KEY,
+  type ResidentWakeOutcome,
   type WorkflowRunDetail,
 } from '@aflow/cybernetic-runtime';
 import { PlanNodeLinkCreateSchema, RUN_PULL_REQUEST_URL_OUTPUT } from '@aflow/schemas';
@@ -53,5 +57,25 @@ export async function linkEndedRunToPlanNode(
       status,
       ...(pullRequestUrl !== undefined ? { pullRequestUrl } : {}),
     },
+  );
+}
+
+/**
+ * A run a wake started for a node ended: wake the space's resident to act on
+ * it, or mark the space pending for the wake in flight (Plan 331 D4). A run
+ * a conversation started is that conversation's to answer, and wakes nothing.
+ */
+export async function wakeResidentOnRunEnd(
+  deps: HarnessDeps,
+  tenantId: string,
+  run: WorkflowRunDetail,
+): Promise<ResidentWakeOutcome | 'not_a_wake_run'> {
+  const metadata = (run.metadata ?? {}) as Record<string, unknown>;
+  if (run.planNodeId === undefined || typeof metadata[RUN_WAKE_SESSION_METADATA_KEY] !== 'string') {
+    return 'not_a_wake_run';
+  }
+  return requestResidentWake(
+    { redis: deps.redis, schedules: createResidentScheduleStore(deps.db) },
+    { tenantId, spaceId: run.spaceId, cause: 'run_ended' },
   );
 }

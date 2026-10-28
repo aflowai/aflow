@@ -1,3 +1,4 @@
+import { resolvePrincipalActorKind } from '../utils/actorContext.js';
 import type { FastifyPluginAsync } from 'fastify';
 import { classifyDbError } from '../lib/databaseErrors.js';
 import { wakeDocsWaitingForEmbedding } from '../lib/memoryEmbeddingWake.js';
@@ -602,7 +603,7 @@ export const credentialRoutes: FastifyPluginAsync = async (fastify) => {
           fastify.audit.record({
             actor: {
               userId,
-              kind: 'human',
+              kind: resolvePrincipalActorKind(request.authUser!),
               authMethod: request.authUser?.authMethod ?? 'unknown',
               tenantId: tenant.tenantId,
               ...(tenant.tenantRole ? { tenantRole: tenant.tenantRole } : {}),

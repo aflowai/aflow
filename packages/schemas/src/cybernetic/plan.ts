@@ -63,6 +63,15 @@ const PlanNodePositionSchema = z
   })
   .describe('Order among siblings, lowest first.');
 
+export const PLAN_STREAM_SPEND_CENTS_MAX = 1_000_000;
+
+const PlanNodeSpendCentsSchema = z
+  .number()
+  .int()
+  .min(1)
+  .max(PLAN_STREAM_SPEND_CENTS_MAX)
+  .describe('The person-set spend ceiling in cents; only the operator open route may write it.');
+
 export const PlanNodeSchema = z
   .object({
     nodeId: z.string().uuid(),
@@ -83,6 +92,7 @@ export const PlanNodeSchema = z
     createdBy: z.string().optional(),
     createdAt: z.string().datetime(),
     updatedAt: z.string().datetime(),
+    spendCents: PlanNodeSpendCentsSchema.optional(),
     closedAt: z.string().datetime().optional(),
   })
   .strict();
@@ -229,7 +239,7 @@ const ExpectedRevisionSchema = z
   .describe('The revision the page showed when the operator chose.');
 
 /** How long the operator's reason for an approve or a reopen may be: one line of a note. */
-export const PLAN_NODE_OPEN_WHY_MAX_CHARS = 500;
+export const PLAN_NODE_OPEN_WHY_MAX_CHARS = PLAN_NODE_PROSE_MAX_CHARS;
 
 /**
  * The operator moves a `blocked`, `done` or `dropped` node to `active` (Plan
@@ -238,6 +248,7 @@ export const PLAN_NODE_OPEN_WHY_MAX_CHARS = 500;
  */
 export const PlanNodeOpenSchema = z
   .object({
+    spendCents: PlanNodeSpendCentsSchema.optional(),
     expectedRevision: ExpectedRevisionSchema,
     why: z
       .string()

@@ -14,6 +14,8 @@ import {
   CoachLearningScopeSchema,
   planDependencyMet,
   PlanNodeCreateInputSchema,
+  PlanNodeOpenSchema,
+  PLAN_STREAM_SPEND_CENTS_MAX,
   PlanNodeLearnInputSchema,
   PlanNodeLinkInputSchema,
   PlanNodeListInputSchema,
@@ -26,6 +28,19 @@ import {
 } from '../../index.js';
 
 const NODE_ID = '7b0c4b52-58a4-4c39-9a51-0d3f3c0b8a11';
+
+it('bounds operator spend ceilings by the exported maximum', () => {
+  expect(
+    PlanNodeOpenSchema.safeParse({ expectedRevision: 1, spendCents: PLAN_STREAM_SPEND_CENTS_MAX })
+      .success,
+  ).toBe(true);
+  expect(
+    PlanNodeOpenSchema.safeParse({
+      expectedRevision: 1,
+      spendCents: PLAN_STREAM_SPEND_CENTS_MAX + 1,
+    }).success,
+  ).toBe(false);
+});
 
 const PLAN_OPERATIONS = {
   create: 'write',

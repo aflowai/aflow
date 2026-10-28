@@ -10,9 +10,12 @@ import { ActionCenterItemSchema, type PlanNode } from '@aflow/schemas';
 const mockListOpenDecisions = vi.fn();
 const mockFindOpenDecision = vi.fn();
 const mockUpdatePlanNode = vi.fn();
+const mockRequestResidentWake = vi.fn();
 const mockCreatePlanNodeStore = vi.fn((..._args: unknown[]) => ({ store: 'tenant-store' }));
 
 vi.mock('@aflow/cybernetic-runtime', () => ({
+  createResidentScheduleStore: () => ({ schedules: 'resident' }),
+  requestResidentWake: (...a: unknown[]) => mockRequestResidentWake(...a),
   listOpenDecisions: (...a: unknown[]) => mockListOpenDecisions(...a),
   findOpenDecision: (...a: unknown[]) => mockFindOpenDecision(...a),
   updatePlanNode: (...a: unknown[]) => mockUpdatePlanNode(...a),
@@ -192,6 +195,7 @@ describe('planDecisionSource — the answer', () => {
         redis: REDIS,
         tenantId: TENANT_ID,
         createdBy: ACTOR_ID,
+        actorKind: 'human',
       },
       { nodeId: NODE_ID, expectedRevision: 3, status: 'done', outcome: 'In the outcome.' },
     );
@@ -199,6 +203,10 @@ describe('planDecisionSource — the answer', () => {
       reportedOperationId: 'plan.node.update',
       item: { status: 'resolved', resolvedBy: ACTOR_ID },
     });
+    expect(mockRequestResidentWake).toHaveBeenCalledWith(
+      { redis: REDIS, schedules: { schedules: 'resident' } },
+      { tenantId: TENANT_ID, spaceId: SPACE_ID, cause: 'node_written' },
+    );
     // Who answered is the server's record, not the node's prose.
     expect(auditRows).toEqual([
       expect.objectContaining({
