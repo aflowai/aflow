@@ -44,6 +44,7 @@ import {
   type PlanOpResult,
   type PlanReadContext,
 } from './operations.js';
+import { askedRevision, isAsked, planAsk, claimAsk } from './asks.js';
 import { bySiblingOrder } from './tree.js';
 
 /** How many of a node's own rounds a firing reads, newest first. */
@@ -711,6 +712,7 @@ type StreamRoot = Pick<PlanNodeSummary, 'nodeId' | 'title' | 'status'>;
 interface RootDecision {
   answer: PlanStreamAnswer;
   claim?: { key: string; node: PlanNode };
+  ask?: { node: PlanNode; record: string | null };
 }
 
 /** Read what one stream's decision turns on, and decide; nothing is claimed here. */
@@ -754,6 +756,26 @@ async function decideRoot(
         active,
       ),
     );
+  }
+  if (
+    opened.node.status === 'blocked' &&
+    opened.node.kind !== 'decide' &&
+    input.rootNodeId === undefined
+  ) {
+    const record = await askedRevision(ctx, opened.node.nodeId);
+    if (!isAsked(opened.node, record)) {
+      const ask = planAsk(opened.node);
+      return {
+        ok: true,
+        answer: {
+          decision: 'ask',
+          reason: ask.waitsOn,
+          node: streamNode(opened.node),
+          ...ask,
+        },
+        ask: { node: opened.node, record },
+      };
+    }
   }
   // Nothing past this line is read for a node no rule would act on.
   if (opened.node.status === 'blocked' || opened.node.kind === 'decide') {
@@ -884,7 +906,7 @@ export function boardRank(answer: PlanStreamAnswer): number {
     case 'publish':
       return 1;
     case 'ask':
-      return 2;
+      return 7;
     case 'read_pull_request':
       return 6;
     case 'stop':
@@ -892,7 +914,7 @@ export function boardRank(answer: PlanStreamAnswer): number {
     case 'continue':
       return answer.retry ? 4 : 5;
     case 'wait':
-      return 7;
+      return 8;
   }
 }
 
@@ -919,6 +941,21 @@ export async function nextOnPlanBoard(
   for (const [order, root] of roots.entries()) {
     const decided = await decideRoot(ctx, root, input);
     if (!decided.ok) return decided;
+    if (
+      decided.answer.decision === 'continue' &&
+      !decided.answer.retry &&
+      decided.answer.node.nodeId === root.nodeId
+    ) {
+      const children = await ctx.store.listChildren(ctx.spaceId, root.nodeId, PLAN_NODE_RUNS_LIMIT);
+      if (
+        children.children.length > 0 &&
+        children.total === children.children.length &&
+        children.children.every((child) => isClosedPlanNodeStatus(child.status))
+      ) {
+        waited('stream_closed');
+        continue;
+      }
+    }
     if (decided.answer.decision === 'wait') {
       waited(decided.answer.cause);
       continue;
@@ -942,7 +979,38 @@ export async function nextOnPlanBoard(
       waited('claimed');
       continue;
     }
+    if (
+      candidate.ask &&
+      !(await claimAsk(
+        ctx,
+        candidate.ask.node,
+        candidate.ask.record,
+        candidate.answer.decision === 'ask' && candidate.answer.update !== undefined,
+      ))
+    ) {
+      waited('claimed');
+      continue;
+    }
     decisions.push({ root: candidate.root, answer: candidate.answer });
+  }
+
+  let proposal: PlanBoardNext['propose'];
+  if (
+    candidates.length === 0 &&
+    !open.truncated &&
+    roots[0] &&
+    !open.nodes.some((node) => node.status === 'blocked' || node.status === 'waiting') &&
+    [...waits.keys()].every((cause) => cause === 'stream_closed')
+  ) {
+    const root = await ctx.store.find(ctx.spaceId, roots[0].nodeId);
+    if (root?.status === 'active')
+      proposal = {
+        reason:
+          'No approved work is actionable; propose at most one next step toward this open root for operator approval.',
+        title: root.title,
+        goal: root.goal,
+        criteria: root.criteria,
+      };
   }
 
   return {
@@ -953,6 +1021,7 @@ export async function nextOnPlanBoard(
       deferred,
       waits: [...waits].map(([cause, count]) => ({ cause, roots: count })),
       roots: roots.length,
+      ...(proposal ? { propose: proposal } : {}),
       ...(open.truncated !== undefined ? { truncated: open.truncated } : {}),
     },
   };

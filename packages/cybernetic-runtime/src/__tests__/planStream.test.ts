@@ -37,6 +37,7 @@ import {
   type PlanStreamReads,
 } from '../plan/stream.js';
 import { InMemoryPlanNodeStore } from './planStoreFake.js';
+import { listAskedNodes } from '../plan/asks.js';
 
 const TENANT = 'a0000000-0000-4000-8000-000000000322';
 const SPACE = '5e1d0000-0000-4000-8000-000000000322';
@@ -852,6 +853,124 @@ function revisions(): number[] {
   return [...store.nodes.values()].map((n) => n.revision);
 }
 
+describe('resident asking and proposing', () => {
+  it('asks once across two wakes and exposes exactly one Action Center target', async () => {
+    const node = await created({ proposed: 'Needs operator approval' });
+    const first = await wake();
+    expect(first.decisions).toHaveLength(1);
+    const answer = first.decisions[0]!.answer;
+    expect(answer.decision).toBe('ask');
+    if (answer.decision === 'ask' && answer.update) await updatePlanNode(session(), answer.update);
+    expect(await listAskedNodes(session())).toMatchObject([{ nodeId: node.nodeId }]);
+    expect((await wake({}, 'wake-b')).decisions).toEqual([]);
+    expect(await listAskedNodes(session())).toHaveLength(1);
+  });
+
+  it('keeps actionable work ahead of asks at the per-wake cap', async () => {
+    await created({ proposed: 'Ask first in root order' });
+    const active = await created();
+    const result = await wake({ decisions: 1 });
+    expect(result.decisions[0]!.answer).toMatchObject({
+      decision: 'continue',
+      node: { nodeId: active.nodeId },
+    });
+    expect(result.deferred).toBe(1);
+    expect(await listAskedNodes(session())).toEqual([]);
+  });
+
+  it('reads pull requests before asking, leaving capped asks unclaimed', async () => {
+    await created({ proposed: 'First root needs approval' });
+    const node = await created();
+    await linkPlanNode(session(), { nodeId: node.nodeId, kind: 'pull_request', ref: PR });
+    const result = await wake({ decisions: 1 });
+    expect(result.decisions).toMatchObject([{ answer: { decision: 'read_pull_request' } }]);
+    expect(result.deferred).toBe(1);
+    expect(await listAskedNodes(session())).toEqual([]);
+  });
+
+  it('proposes toward an exhausted open root with title, goal and criteria', async () => {
+    const root = await created();
+    const child = await created({ parentId: root.nodeId });
+    await write(child.nodeId, { status: 'done', outcome: 'Merged' });
+    expect(await wake()).toMatchObject({
+      decisions: [],
+      propose: { title: root.title, goal: root.goal, criteria: root.criteria },
+    });
+  });
+
+  it('refuses resident creation of active work and approval of blocked work', async () => {
+    const resident = { ...session(), resident: true };
+    expect(
+      await createPlanNode(resident, {
+        kind: 'execute',
+        title: 'Unapproved',
+        goal: 'g',
+        criteria: 'c',
+      }),
+    ).toMatchObject({ ok: false, code: 'PLAN_NODE_RESIDENT_SCOPE' });
+    const node = await created({ proposed: 'Needs approval' });
+    expect(
+      await updatePlanNode(resident, {
+        nodeId: node.nodeId,
+        expectedRevision: node.revision,
+        status: 'active',
+      }),
+    ).toMatchObject({ ok: false, code: 'PLAN_NODE_RESIDENT_SCOPE' });
+    expect((await current(node.nodeId)).status).toBe('blocked');
+  });
+
+  it('proposes a carrier on done-close and recognises it after approval with a reason', async () => {
+    const root = await created();
+    const step = await created({ parentId: root.nodeId });
+    await linkPlanNode(session(), {
+      nodeId: step.nodeId,
+      kind: 'finding',
+      ref: 'review:open-1',
+      label: 'Fix the edge case',
+    });
+    const close = await updatePlanNode(session(), {
+      nodeId: step.nodeId,
+      expectedRevision: step.revision,
+      status: 'done',
+      outcome: 'Merged with an open finding',
+    });
+    expect(close).toMatchObject({
+      ok: true,
+      carrier: {
+        parentId: root.nodeId,
+        status: 'blocked',
+        goal: expect.stringContaining('review:open-1'),
+      },
+    });
+    if (!close.ok || !close.carrier) throw new Error('No carrier');
+    await wake();
+    await wake({}, 'second-wake');
+    expect(await listAskedNodes(session())).toHaveLength(1);
+    const carrier = await current(close.carrier.nodeId);
+    expect(
+      await openPlanNode(session(), {
+        nodeId: carrier.nodeId,
+        expectedRevision: carrier.revision,
+        why: 'Approved for the next round',
+      }),
+    ).toMatchObject({ ok: true });
+    await openPlanNode(session(), {
+      nodeId: step.nodeId,
+      expectedRevision: (await current(step.nodeId)).revision,
+    });
+    const again = await updatePlanNode(session(), {
+      nodeId: step.nodeId,
+      expectedRevision: (await current(step.nodeId)).revision,
+      status: 'done',
+      outcome: 'Still done',
+    });
+    expect(again.ok && again.carrier).toBeUndefined();
+    expect(
+      [...store.nodes.values()].filter((n) => n.title.startsWith('Carry the open findings')),
+    ).toHaveLength(1);
+  });
+});
+
 describe('plan.node.next across the board (Plan 331 D2)', () => {
   it('commissions the first root by position, and the other once the operator swaps them', async () => {
     const a = await created({ title: 'Plan 330' });
@@ -899,6 +1018,7 @@ describe('plan.node.next across the board (Plan 331 D2)', () => {
     await created({ parentId: held.nodeId, title: 'proposed', note: 'Proposed: …' });
     const proposed = [...store.nodes.values()].find((n) => n.title === 'proposed')!;
     await write(proposed.nodeId, { status: 'blocked' });
+    await wake();
     const before = revisions();
 
     const board = await wake();
@@ -921,8 +1041,8 @@ describe('plan.node.next across the board (Plan 331 D2)', () => {
     await write(blocked.nodeId, { status: 'blocked', note: 'Proposed: carry the findings.' });
 
     const board = await wake();
-    expect(board.decisions).toEqual([]);
-    expect(board.waits).toEqual([{ cause: 'blocked', roots: 1 }]);
+    expect(board.decisions).toMatchObject([{ answer: { decision: 'ask' } }]);
+    expect(board.waits).toEqual([]);
     expect(
       board.decisions.some(
         (d) => d.answer.decision === 'continue' && d.answer.node.nodeId === after.nodeId,
@@ -1085,8 +1205,8 @@ describe('the node spend stop (Plan 331 D4)', () => {
 
     await updatePlanNode(session(), decided.update);
     const board = await wake({ attempts: 10 });
-    expect(board.decisions).toEqual([]);
-    expect(board.waits).toEqual([{ cause: 'blocked', roots: 1 }]);
+    expect(board.decisions).toMatchObject([{ answer: { decision: 'ask' } }]);
+    expect(board.waits).toEqual([]);
     expect((await current(second.nodeId)).revision).toBe(second.revision);
   });
 

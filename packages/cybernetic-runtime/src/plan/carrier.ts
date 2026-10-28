@@ -14,7 +14,6 @@ import {
   PLAN_NODE_TITLE_MAX_CHARS,
   type PlanNode,
   type PlanNodeLink,
-  type PlanNodeSummary,
 } from '@aflow/schemas';
 import type { NewPlanNode } from './store.js';
 
@@ -30,9 +29,9 @@ function carrierPrefix(nodeId: string): string {
   return `${PLAN_NODE_PROPOSED_HEAD}carries the findings left open when step ${nodeId} closed`;
 }
 
-/** Whether a node, by its note's first line, is a carrier for `nodeId`. */
-export function isCarrierOf(node: Pick<PlanNodeSummary, 'noteHead'>, nodeId: string): boolean {
-  return node.noteHead?.startsWith(carrierPrefix(nodeId)) === true;
+/** Whether a node, by its stable token anywhere in the note, is a carrier for `nodeId`. */
+export function isCarrierOf(node: Pick<PlanNode, 'note'>, nodeId: string): boolean {
+  return node.note?.includes(carrierPrefix(nodeId)) === true;
 }
 
 /**
@@ -42,7 +41,7 @@ export function isCarrierOf(node: Pick<PlanNodeSummary, 'noteHead'>, nodeId: str
  */
 export function findingsToCarry(
   findings: readonly PlanNodeLink[],
-  siblings: readonly PlanNodeSummary[],
+  siblings: readonly PlanNode[],
   closedId: string,
 ): PlanNodeLink[] {
   const carried = siblings

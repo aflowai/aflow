@@ -18,17 +18,20 @@ import {
   updatePlanNode,
   type PlanWriteContext,
 } from '@aflow/cybernetic-runtime';
+import { getSessionState } from '@aflow/redis';
 import { sessionUser } from '../sessionUser.js';
 import type { InlineHandlerArgs } from '../types.js';
 import { emitStepSuccess } from '../helpers.js';
 import { emitPlanError, parsePlanInput, planReadContext } from './shared.js';
 
-function planWriteContext(args: InlineHandlerArgs): PlanWriteContext {
+async function planWriteContext(args: InlineHandlerArgs): Promise<PlanWriteContext> {
+  const state = await getSessionState(args.redis, args.context.tenantId, args.context.runId);
   return {
     ...planReadContext(args),
     redis: args.redis,
     tenantId: args.context.tenantId as string,
     actorKind: 'agent',
+    ...(state?.trigger === 'schedule' ? { resident: true } : {}),
   };
 }
 
@@ -40,7 +43,7 @@ export async function handlePlanNodeCreate(
   if (!input) return;
   const createdBy = await sessionUser(args);
   const result = await createPlanNode(
-    { ...planWriteContext(args), ...(createdBy !== undefined ? { createdBy } : {}) },
+    { ...(await planWriteContext(args)), ...(createdBy !== undefined ? { createdBy } : {}) },
     input,
   );
   if (!result.ok) {
@@ -57,12 +60,15 @@ export async function handlePlanNodeUpdate(
 ): Promise<void> {
   const input = await parsePlanInput(args, PlanNodeUpdateInputSchema, startTime);
   if (!input) return;
-  const result = await updatePlanNode(planWriteContext(args), input);
+  const result = await updatePlanNode(await planWriteContext(args), input);
   if (!result.ok) {
     await emitPlanError(args, result, startTime);
     return;
   }
-  const output: PlanNodeUpdateOutput = { node: result.node };
+  const output: PlanNodeUpdateOutput = {
+    node: result.node,
+    ...(result.carrier ? { carrier: result.carrier } : {}),
+  };
   await emitStepSuccess(args, output as unknown as Record<string, unknown>, startTime);
 }
 
@@ -72,7 +78,7 @@ export async function handlePlanNodeDepend(
 ): Promise<void> {
   const input = await parsePlanInput(args, PlanNodeDependInputSchema, startTime);
   if (!input) return;
-  const result = await dependPlanNode(planWriteContext(args), input);
+  const result = await dependPlanNode(await planWriteContext(args), input);
   if (!result.ok) {
     await emitPlanError(args, result, startTime);
     return;
@@ -90,7 +96,7 @@ export async function handlePlanNodeLearn(
 ): Promise<void> {
   const input = await parsePlanInput(args, PlanNodeLearnInputSchema, startTime);
   if (!input) return;
-  const result = await learnOnPlanNode(planWriteContext(args), input, {
+  const result = await learnOnPlanNode(await planWriteContext(args), input, {
     sessionId: args.context.runId,
   });
   if (!result.ok) {
@@ -107,7 +113,7 @@ export async function handlePlanNodeLink(
 ): Promise<void> {
   const input = await parsePlanInput(args, PlanNodeLinkInputSchema, startTime);
   if (!input) return;
-  const result = await linkPlanNode(planWriteContext(args), input);
+  const result = await linkPlanNode(await planWriteContext(args), input);
   if (!result.ok) {
     await emitPlanError(args, result, startTime);
     return;

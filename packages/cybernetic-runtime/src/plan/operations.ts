@@ -446,7 +446,14 @@ async function proposeCarrier(
           .children
       : (await ctx.store.walk(ctx.spaceId, { maxDepth: 0, maxNodes: PLAN_TREE_WALK_NODE_LIMIT }))
           .nodes;
-  const findings = findingsToCarry(page.links, siblings, closed.nodeId);
+  const fullSiblings = await Promise.all(
+    siblings.map((sibling) => ctx.store.find(ctx.spaceId, sibling.nodeId)),
+  );
+  const findings = findingsToCarry(
+    page.links,
+    fullSiblings.filter((node): node is PlanNode => node !== null),
+    closed.nodeId,
+  );
   if (findings.length === 0) return undefined;
   const more = findings.length === page.links.length ? page.total - page.links.length : 0;
   const inserted = await ctx.store.insert(ctx.spaceId, {

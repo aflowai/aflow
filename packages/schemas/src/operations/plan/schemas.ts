@@ -981,7 +981,7 @@ export const PlanBoardNextSchema = z
         'Act on these in order: a merge recorded, a commission published, a stop written, a failed round re-commissioned, new work commissioned, pull requests read, then blocked nodes asked about; within each, the operator’s root order. Empty, and no `propose`: end the wake with no reply.',
       ),
     propose: z
-      .object({ reason: decisionReason })
+      .object({ reason: decisionReason, title: z.string(), goal: z.string(), criteria: z.string() })
       .strict()
       .optional()
       .describe(

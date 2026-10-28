@@ -130,6 +130,19 @@ beforeEach(() => {
 });
 
 describe('plan.node.update', () => {
+  it('passes scheduled wake provenance to the scope guards and returns the carrier', async () => {
+    mockGetSessionState.mockResolvedValueOnce({ trigger: 'schedule' });
+    const carrier = { ...NODE, nodeId: SPACE, status: 'blocked' };
+    mockUpdatePlanNode.mockResolvedValueOnce({ ok: true, node: NODE, carrier });
+    await handlePlanNodeInline(
+      makeArgs('plan.node.update', { nodeId: NODE_ID, expectedRevision: 2, note: 'Next' }),
+    );
+    expect(mockUpdatePlanNode).toHaveBeenCalledWith(
+      expect.objectContaining({ resident: true }),
+      expect.anything(),
+    );
+    expect(emittedOutput()).toMatchObject({ carrier });
+  });
   it('surfaces a stale write as a validation error carrying what a retry needs, not the node', async () => {
     mockUpdatePlanNode.mockResolvedValue({
       ok: false,
