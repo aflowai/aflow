@@ -480,6 +480,20 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
       ),
     );
 
+  closedAncestorOf: PlanNodeStore['closedAncestorOf'] = (spaceId, nodeId) => {
+    const node = this.nodes.get(nodeId);
+    let parentId = node !== undefined && node.spaceId === spaceId ? node.parentId : null;
+    for (let height = 1; parentId !== null && height <= PLAN_TREE_DEPTH_LIMIT + 1; height++) {
+      const above = this.nodes.get(parentId);
+      if (above === undefined || above.spaceId !== spaceId) break;
+      if (above.status === 'done' || above.status === 'dropped') {
+        return Promise.resolve({ nodeId: above.nodeId, title: above.title });
+      }
+      parentId = above.parentId;
+    }
+    return Promise.resolve(null);
+  };
+
   insertLink: PlanNodeStore['insertLink'] = (spaceId, link) => {
     const node = this.nodes.get(link.nodeId);
     if (!node || node.spaceId !== spaceId) return Promise.resolve({ outcome: 'node_not_found' });

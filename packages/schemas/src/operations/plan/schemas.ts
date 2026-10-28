@@ -647,6 +647,13 @@ export const PlanNodeDetailOutputSchema = z.object({
   /** The runs in flight for this node and every node under it, newest first. */
   runs: z.array(PlanNodeRunSchema),
   runsTotal: z.number().int().min(0),
+  closedAncestor: z
+    .object({ nodeId: z.string().uuid(), title: z.string() })
+    .strict()
+    .optional()
+    .describe(
+      'The closed node nearest above, its root included, whose reopening frees an open node stranded under it; absent where every node above is open.',
+    ),
 });
 export type PlanNodeDetailOutput = z.infer<typeof PlanNodeDetailOutputSchema>;
 

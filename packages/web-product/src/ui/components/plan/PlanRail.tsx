@@ -549,7 +549,7 @@ export function PlanRailFromDetail({
       </Column>
     );
   }
-  const { node, placement } = planDetailRailNode(detail.data);
+  const { node, placement, closedAncestor } = planDetailRailNode(detail.data);
   return (
     <PlanRail
       node={node}
@@ -557,6 +557,7 @@ export function PlanRailFromDetail({
       reason={placement.reason}
       next={false}
       phase={undefined}
+      closedAncestor={closedAncestor}
       {...controls}
     />
   );

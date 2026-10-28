@@ -451,8 +451,13 @@ describe('the overview’s lanes (Plan 332 D7)', () => {
       updatedAt: '2026-10-21T09:00:00.000Z',
       ...extra,
     });
-    const read = (node: PlanNode, onIt = false) =>
+    const read = (
+      node: PlanNode,
+      onIt = false,
+      closedAncestor?: { nodeId: string; title: string },
+    ) =>
       planDetailRailNode({
+        ...(closedAncestor !== undefined ? { closedAncestor } : {}),
         node,
         children: [],
         childrenTotal: 0,
@@ -481,6 +486,19 @@ describe('the overview’s lanes (Plan 332 D7)', () => {
     });
     expect(read(full({}), true).placement).toEqual({ column: 'in_flight' });
     expect(read(full({})).placement).toEqual({ column: 'up_next' });
+    expect(read(full({})).closedAncestor).toBeUndefined();
+    // Stranded under a closed phase, whatever its own status and runs say.
+    const phase = { nodeId: 'phase', title: 'P6 — a phase' };
+    expect(read(full({}), true, phase)).toMatchObject({
+      placement: { column: 'needs_you', reason: 'stranded' },
+      closedAncestor: phase,
+    });
+    expect(
+      read(full({ status: 'done', closedAt: '2026-10-21T09:00:00.000Z' }), false, phase),
+    ).toEqual(expect.objectContaining({ placement: { column: 'done' } }));
+    expect(
+      read(full({ status: 'done', closedAt: '2026-10-21T09:00:00.000Z' }), false, phase),
+    ).not.toHaveProperty('closedAncestor');
     expect(read(full({ note: '  Now: waiting on review  \nMore.' })).node).toMatchObject({
       noteHead: 'Now: waiting on review',
       goalHead: 'Its goal.',

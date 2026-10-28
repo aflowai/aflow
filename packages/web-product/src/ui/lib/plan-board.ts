@@ -333,8 +333,8 @@ export function planLaneRailNode(
 /**
  * A step the URL names that no lane holds, as the rail opens it from the
  * step's own read: placed by the board's column rule on its status and the
- * runs on it. Whether a closed step lies above it is not read here, so a
- * stranded step reads by its own status until its plan's board is opened.
+ * runs on it, and stranded where the read names a closed node above it — the
+ * node the rail offers to reopen.
  */
 export function planDetailRailNode(detail: PlanNodeDetailOutput): {
   node: Pick<
@@ -342,10 +342,15 @@ export function planDetailRailNode(detail: PlanNodeDetailOutput): {
     'nodeId' | 'kind' | 'title' | 'status' | 'revision' | 'noteHead' | 'closedAt' | 'goalHead'
   > & { rounds: number; children: PlanTreeNode[]; counts: { runs: number } };
   placement: PlanBoardPlacement;
+  closedAncestor?: { nodeId: string; title: string };
 } {
   const { node } = detail;
   const line = (node.note ?? '').split('\n', 1)[0]?.trim() ?? '';
   const onIt = detail.runs.some((run) => run.nodeId === node.nodeId);
+  const placement = planBoardColumn(
+    { kind: node.kind, status: node.status, activity: onIt ? 'in_flight' : 'idle' },
+    { closedAncestor: detail.closedAncestor !== undefined },
+  );
   return {
     node: {
       nodeId: node.nodeId,
@@ -360,10 +365,10 @@ export function planDetailRailNode(detail: PlanNodeDetailOutput): {
       children: [],
       counts: { runs: detail.linksTotal },
     },
-    placement: planBoardColumn(
-      { kind: node.kind, status: node.status, activity: onIt ? 'in_flight' : 'idle' },
-      { closedAncestor: false },
-    ),
+    placement,
+    ...(placement.reason === 'stranded' && detail.closedAncestor !== undefined
+      ? { closedAncestor: detail.closedAncestor }
+      : {}),
   };
 }
 

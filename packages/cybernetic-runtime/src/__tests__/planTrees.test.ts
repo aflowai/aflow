@@ -1348,6 +1348,33 @@ describe('readPlanNodeDetail — the rail', () => {
     expect(read.runs.map((r) => r.runId)).toEqual(['r1']);
     expect(read).toMatchObject({ links: [], linksTotal: 0 });
     expect(read).not.toHaveProperty('nextCursor');
+    expect(read).not.toHaveProperty('closedAncestor');
+  });
+
+  it('names the closed node nearest above an open step, its root included', async () => {
+    const root = await node('root');
+    const phase = await node('P6 — a phase', { parentId: root.nodeId });
+    const step = await node('P6.a', { parentId: phase.nodeId });
+    const deeper = await node('P6.a.1', { parentId: step.nodeId });
+    const shut = await node('shut');
+    const under = await node('under shut', { parentId: shut.nodeId });
+    await close(phase, 'done');
+    await close(shut, 'dropped');
+
+    expect((await detail(deeper.nodeId)).closedAncestor).toEqual({
+      nodeId: phase.nodeId,
+      title: 'P6 — a phase',
+    });
+    expect((await detail(step.nodeId)).closedAncestor).toEqual({
+      nodeId: phase.nodeId,
+      title: 'P6 — a phase',
+    });
+    expect((await detail(under.nodeId)).closedAncestor).toEqual({
+      nodeId: shut.nodeId,
+      title: 'shut',
+    });
+    expect(await detail(phase.nodeId)).not.toHaveProperty('closedAncestor');
+    expect(await detail(root.nodeId)).not.toHaveProperty('closedAncestor');
   });
 
   it('pages the links newest first, 50 by default, each page after the cursor of the one before', async () => {

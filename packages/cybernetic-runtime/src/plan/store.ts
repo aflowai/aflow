@@ -2,6 +2,7 @@ import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { and, asc, desc, eq, gt, inArray, isNull, lt, or, sql, type SQL } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import {
+  CLOSED_PLAN_NODE_STATUSES,
   PLAN_NODE_GOAL_HEAD_MAX_CHARS,
   PLAN_NODE_NOTE_HEAD_MAX_CHARS,
   PLAN_NODE_POSITION_MAX,
@@ -261,8 +262,10 @@ export interface PlanNodeStore {
    * snapshot: one recursive query from the roots carrying each node's root and
    * whether a closed node lies above it, below the open roots only, no further
    * than `bounds.maxDepth`, and stopped once it has walked `bounds.maxNodes`
-   * nodes, open or closed, roots first and a shallower level before a deeper.
-   * It returns every root and every open step it walked as a row, with the
+   * nodes, open or closed, roots first and a shallower level before a deeper,
+   * each level in reading order — roots by position, then each parent's
+   * children by position in its parents' order — so past the bound it keeps
+   * the reading-order head. It returns every root and every open step it walked as a row, with the
    * runs in flight on each, and the closed steps only as counts per root, so
    * no done step is ever shipped. `place` makes the view from it, and the
    * pull requests and runs it names are read in the same snapshot, so a row
@@ -275,6 +278,15 @@ export interface PlanNodeStore {
   ): Promise<PlanOverviewSnapshot<T>>;
   /** Each node's parent (null for a root); a node not in the space is absent. */
   parentsOf(spaceId: string, nodeIds: readonly string[]): Promise<Map<string, string | null>>;
+  /**
+   * The closed node nearest above `nodeId`, its root included, as the board
+   * reads a stranded step's; null where every node above it is open, or it is
+   * a root or gone.
+   */
+  closedAncestorOf(
+    spaceId: string,
+    nodeId: string,
+  ): Promise<{ nodeId: string; title: string } | null>;
   /** Writes the link unless its node is not in the space or already holds it. */
   insertLink(spaceId: string, link: NewPlanNodeLink): Promise<PlanNodeLinkInsert>;
   /** The node's newest link of `kind`, read by kind rather than from a page of every link. */
@@ -935,6 +947,36 @@ export function createPlanNodeStore(db: PostgresJsDatabase, tenantId: string): P
           .from(planNodes)
           .where(and(eq(planNodes.spaceId, spaceId), inArray(planNodes.id, [...nodeIds])));
         return new Map(rows.map((row) => [row.id, row.parentId]));
+      }),
+
+    closedAncestorOf: (spaceId, nodeId) =>
+      inTenant(async (tx) => {
+        const closed = sql.join(
+          CLOSED_PLAN_NODE_STATUSES.map((status) => sql`${status}`),
+          sql`, `,
+        );
+        const rows = (await tx.execute(sql`
+          WITH RECURSIVE above AS (
+            SELECT n.parent_id AS id, 1 AS height
+            FROM plan_nodes n
+            WHERE n.space_id = ${spaceId}::uuid AND n.id = ${nodeId}::uuid
+            UNION ALL
+            SELECT p.parent_id, a.height + 1
+            FROM above a
+            INNER JOIN plan_nodes p ON p.id = a.id
+            WHERE p.space_id = ${spaceId}::uuid AND a.height <= ${PLAN_TREE_DEPTH_LIMIT}
+          )
+          SELECT p.id, p.title
+          FROM above a
+          INNER JOIN plan_nodes p ON p.id = a.id
+          WHERE p.space_id = ${spaceId}::uuid AND p.status IN (${closed})
+          ORDER BY a.height
+          LIMIT 1
+        `)) as Array<Record<string, unknown>>;
+        const [row] = rows;
+        return row !== undefined
+          ? { nodeId: String(row['id']), title: String(row['title']) }
+          : null;
       }),
 
     insertLink: (spaceId, link) =>

@@ -383,6 +383,61 @@ describeDb('moveAtRevision — two crossing moves never close a loop (real DB)',
       expect(overview.lanes.truncated).toEqual({ bound: 'nodes', value: bounds.maxNodes });
     });
 
+    it('keeps the lowest-positioned roots past the node bound, the open plan written last among them', async () => {
+      const { spaceId, ctx: here } = space();
+      await withTenantSchema(handle.db, tenantCtx, (tx) =>
+        tx.execute(drizzleSql`
+          INSERT INTO plan_nodes (space_id, parent_id, kind, title, goal, criteria, status, position, closed_at)
+          SELECT ${spaceId}::uuid, NULL, 'execute', 'shut ' || g, 'Seeded.', 'Seeded.', 'done', g, now()
+          FROM generate_series(1, ${bounds.maxNodes + 1}::int) AS g
+        `),
+      );
+      const open = await createPlanNode(here, {
+        kind: 'execute',
+        title: 'open plan',
+        goal: 'Hold steps.',
+        criteria: 'It holds them.',
+        position: 0,
+      });
+      if (!open.ok) throw new Error(open.message);
+
+      const read = await readOnly(spaceId);
+      const overview = PlanOverviewOutputSchema.parse(await readPlanOverview({ store, spaceId }));
+
+      expect(read.truncated).toEqual({ bound: 'nodes', value: bounds.maxNodes });
+      expect(read.rootsTotal).toBe(bounds.maxNodes + 2);
+      const positions = read.nodes.map((n) => n.position).sort((a, b) => a - b);
+      expect(positions).toEqual(Array.from({ length: bounds.maxNodes }, (_, i) => i));
+      expect(overview.roots[0]).toMatchObject({ nodeId: open.node.nodeId, status: 'active' });
+    });
+
+    it('keeps the first siblings in reading order where the node bound cuts a level', async () => {
+      const { spaceId, ctx: here } = space();
+      const root = await createPlanNode(here, {
+        kind: 'execute',
+        title: 'plan',
+        goal: 'Hold steps.',
+        criteria: 'It holds them.',
+      });
+      if (!root.ok) throw new Error(root.message);
+      // The later siblings are written first, so the table's own order is not reading order.
+      await bulk(spaceId, root.node.nodeId, 1100, 'active', 1000);
+      await bulk(spaceId, root.node.nodeId, 1000, 'active', 0);
+
+      const read = await readOnly(spaceId);
+      const overview = PlanOverviewOutputSchema.parse(await readPlanOverview({ store, spaceId }));
+
+      expect(read.truncated).toEqual({ bound: 'nodes', value: bounds.maxNodes });
+      const steps = read.nodes.filter((n) => n.depth === 1);
+      expect(steps.map((n) => n.position)).toEqual(
+        Array.from({ length: bounds.maxNodes - 1 }, (_, i) => i),
+      );
+      expect(read.counted.get(root.node.nodeId)).toMatchObject({ cut: true });
+      expect(overview.lanes.upNext.items).toMatchObject([
+        { nodeId: steps[0]!.nodeId, rootId: root.node.nodeId },
+      ]);
+    });
+
     it('shows a blocked step in the last of 50 plans in Needs you', async () => {
       const { spaceId, ctx: here } = space();
       let last: PlanNode | undefined;
@@ -491,6 +546,13 @@ describeDb('moveAtRevision — two crossing moves never close a loop (real DB)',
       expect(order).toEqual(['root', 'P6.a', 'P6.a.1', 'P7']);
       expect(read.counted.get(root.nodeId)).toMatchObject({ done: 1, dropped: 0, cut: false });
       expect(read.counted.get(shut.nodeId)).toMatchObject({ done: 0, cut: false });
+      // The rail's own read of a step names the same closed node above it.
+      expect(await store.closedAncestorOf(spaceId, deeper.nodeId)).toEqual({
+        nodeId: phase.nodeId,
+        title: 'P6 — a phase',
+      });
+      expect(await store.closedAncestorOf(spaceId, next.nodeId)).toBeNull();
+      expect(await store.closedAncestorOf(spaceId, root.nodeId)).toBeNull();
     });
   });
 });

@@ -59,9 +59,9 @@ export interface PlanOverviewRootCount {
 
 /**
  * The overview's read: a walk of at most the node bound of nodes, open and
- * closed, roots first and then level by level; every root it reached and the
- * open steps of the open roots as rows; each returned root's steps counted,
- * closed ones only ever counted.
+ * closed, roots first and then level by level, each level in reading order;
+ * every root it reached and the open steps of the open roots as rows; each
+ * returned root's steps counted, closed ones only ever counted.
  */
 export interface PlanOverviewRead {
   nodes: PlanOverviewNode[];
@@ -119,17 +119,63 @@ export async function overviewIn(
 ): Promise<PlanOverviewRead> {
   const closed = statusList(CLOSED_PLAN_NODE_STATUSES);
   const steps = sql`depth BETWEEN 1 AND ${bounds.maxDepth}`;
-  // The tree is carried by key alone; a node's row is joined only where it is
-  // returned. Below a closed root nothing is read: its plan is closed by rule.
-  // Nodes one level past the depth bound are reached only to say they exist.
-  // The recursion yields one level at a time and runs only as far as it is
-  // fetched, so `walked`'s LIMIT stops it at the node bound, closed steps
-  // included; `beyond` fetches one node further from the same rows to say
-  // so. Where it stopped, every level above the last one walked was read
-  // whole, so only a root that reached that level or the one above it may
-  // hold steps unread.
+  // `levels` walks the tree a level at a time, each level one array of keys
+  // in reading order — its parents' order, then siblings by position — and
+  // stops once it holds one node past the node bound, closed steps included,
+  // so the nodes kept are the reading-order head of the tree: every level
+  // above the last one walked whole, and of that one its first nodes. Below a
+  // closed root nothing is read: its plan is closed by rule. Nodes one level
+  // past the depth bound are reached only to say they exist. `walked` then
+  // carries each kept node's root and ancestors over those keys alone; a
+  // node's row is joined only where it is returned. Where the bound stopped
+  // the walk, only a root that reached its last level or the one above it
+  // may hold steps unread.
   const rows = (await tx.execute(sql`
-    WITH RECURSIVE tree AS (
+    WITH RECURSIVE levels AS (
+      SELECT 0 AS depth, roots.ids, cardinality(roots.ids) AS reached
+      FROM (
+        SELECT array_agg(head.id ORDER BY head.position, head.id) AS ids
+        FROM (
+          SELECT r.id, r.position
+          FROM plan_nodes r
+          WHERE r.space_id = ${spaceId}::uuid AND r.parent_id IS NULL
+          ORDER BY r.position, r.id
+          LIMIT ${bounds.maxNodes + 1}
+        ) head
+      ) roots
+      WHERE roots.ids IS NOT NULL
+      UNION ALL
+      SELECT l.depth + 1, below.ids, l.reached + cardinality(below.ids)
+      FROM levels l
+      CROSS JOIN LATERAL (
+        SELECT array_agg(head.id ORDER BY head.parent_order, head.position, head.id) AS ids
+        FROM (
+          SELECT n.id, n.position, p.parent_order
+          FROM unnest(l.ids) WITH ORDINALITY AS p(id, parent_order)
+          INNER JOIN plan_nodes n ON n.parent_id = p.id
+          WHERE n.space_id = ${spaceId}::uuid
+            AND (l.depth > 0 OR NOT EXISTS (
+              SELECT 1 FROM plan_nodes shut
+              WHERE shut.id = p.id AND shut.status IN (${closed})
+            ))
+          ORDER BY p.parent_order, n.position, n.id
+          LIMIT ${bounds.maxNodes + 1} - l.reached
+        ) head
+      ) below
+      WHERE l.depth <= ${bounds.maxDepth}
+        AND l.reached <= ${bounds.maxNodes}
+        AND below.ids IS NOT NULL
+    ),
+    reached AS (
+      SELECT k.id, l.depth,
+        row_number() OVER (ORDER BY l.depth, k.level_order) AS reading_rank
+      FROM levels l
+      CROSS JOIN LATERAL unnest(l.ids) WITH ORDINALITY AS k(id, level_order)
+    ),
+    kept AS (
+      SELECT id, depth FROM reached WHERE reading_rank <= ${bounds.maxNodes}
+    ),
+    walked AS (
       SELECT r.id, r.id AS root_id, r.status, r.updated_at,
         NULL::uuid AS open_parent_id,
         NULL::uuid AS closed_ancestor_id,
@@ -137,8 +183,9 @@ export async function overviewIn(
         0 AS depth,
         r.status IN (${closed}) AS closed,
         ARRAY[lpad(r.position::text, ${PATH_POSITION_DIGITS}, '0') || ':' || r.id::text] AS path
-      FROM plan_nodes r
-      WHERE r.space_id = ${spaceId}::uuid AND r.parent_id IS NULL
+      FROM kept k
+      INNER JOIN plan_nodes r ON r.id = k.id
+      WHERE k.depth = 0
       UNION ALL
       SELECT n.id, t.root_id, n.status, n.updated_at,
         CASE WHEN t.closed THEN t.open_parent_id ELSE t.id END,
@@ -147,18 +194,12 @@ export async function overviewIn(
         t.depth + 1,
         n.status IN (${closed}),
         t.path || (lpad(n.position::text, ${PATH_POSITION_DIGITS}, '0') || ':' || n.id::text)
-      FROM plan_nodes n
-      INNER JOIN tree t ON n.parent_id = t.id
-      WHERE n.space_id = ${spaceId}::uuid
-        AND t.depth <= ${bounds.maxDepth}
-        AND NOT (t.depth = 0 AND t.closed)
-    ),
-    walked AS (
-      SELECT * FROM tree LIMIT ${bounds.maxNodes}
+      FROM walked t
+      INNER JOIN kept k ON k.depth = t.depth + 1
+      INNER JOIN plan_nodes n ON n.id = k.id AND n.parent_id = t.id
     ),
     beyond AS (
-      SELECT count(*) > ${bounds.maxNodes} AS walk_cut
-      FROM (SELECT 1 FROM tree LIMIT ${bounds.maxNodes + 1}) reached
+      SELECT count(*) > ${bounds.maxNodes} AS walk_cut FROM reached
     ),
     frontier AS (
       SELECT max(depth) AS last_depth FROM walked

@@ -831,7 +831,7 @@ export async function readPlanNodeDetail(
   if (!node) return notFound(nodeId);
   // Every status: a run in flight for a node closed under it is still in flight.
   const subtree = await ctx.store.walk(ctx.spaceId, { rootId: nodeId, ...PLAN_TREE_WALK_BOUNDS });
-  const [children, links, runs] = await Promise.all([
+  const [children, links, runs, closedAncestor] = await Promise.all([
     ctx.store.listChildren(ctx.spaceId, nodeId, PLAN_NODE_CHILDREN_LIMIT),
     ctx.store.pageLinks(ctx.spaceId, nodeId, {
       ...(page.linkKind !== undefined ? { kind: page.linkKind } : {}),
@@ -843,6 +843,7 @@ export async function readPlanNodeDetail(
       subtree.nodes.map((n) => n.nodeId),
       PLAN_NODE_RUNS_LIMIT,
     ),
+    ctx.store.closedAncestorOf(ctx.spaceId, nodeId),
   ]);
   return {
     ok: true,
@@ -854,6 +855,7 @@ export async function readPlanNodeDetail(
     ...(links.next !== undefined ? { nextCursor: encodePlanLinkCursor(links.next) } : {}),
     runs: runs.runs,
     runsTotal: runs.total,
+    ...(closedAncestor !== null ? { closedAncestor } : {}),
   };
 }
 
