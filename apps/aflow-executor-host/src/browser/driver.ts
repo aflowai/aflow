@@ -1091,7 +1091,7 @@ export class BrowserDriver {
       egressHost(url.hostname),
       port,
       reach !== undefined
-        ? { reach }
+        ? { reach, stackOwn: this.stackPorts }
         : { localPorts: { opened: () => profile.localPorts, stackOwn: this.stackPorts } },
       this.deps.classifier ?? machineAddresses,
     );

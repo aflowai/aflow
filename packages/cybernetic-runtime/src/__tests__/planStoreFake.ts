@@ -438,7 +438,12 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
       nodes: rows,
       counted: new Map([...counted].filter(([rootId]) => returnedRoots.has(rootId))),
       rootsTotal: nodes.filter((n) => n.parentId === null).length,
-      ...(walkCut ? { truncated: { bound: 'nodes' as const, value: bounds.maxNodes } } : {}),
+      ...(walkCut
+        ? {
+            truncated: { bound: 'nodes' as const, value: bounds.maxNodes },
+            frontierDepth: lastDepth,
+          }
+        : {}),
     };
   }
 

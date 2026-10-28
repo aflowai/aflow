@@ -810,8 +810,8 @@ export async function readPlanBoard(
 
 /**
  * One node for the board's rail: in full, its children, a page of its links
- * — of one kind where `linkKind` names it — and the runs in flight for it and
- * every node under it.
+ * — of one kind where `linkKind` names it — the runs in flight for it and
+ * every node under it, and its activity as the board derives it.
  */
 export async function readPlanNodeDetail(
   ctx: PlanReadContext,
@@ -831,7 +831,7 @@ export async function readPlanNodeDetail(
   if (!node) return notFound(nodeId);
   // Every status: a run in flight for a node closed under it is still in flight.
   const subtree = await ctx.store.walk(ctx.spaceId, { rootId: nodeId, ...PLAN_TREE_WALK_BOUNDS });
-  const [children, links, runs, closedAncestor] = await Promise.all([
+  const [children, links, runs, closedAncestor, inFlight] = await Promise.all([
     ctx.store.listChildren(ctx.spaceId, nodeId, PLAN_NODE_CHILDREN_LIMIT),
     ctx.store.pageLinks(ctx.spaceId, nodeId, {
       ...(page.linkKind !== undefined ? { kind: page.linkKind } : {}),
@@ -844,7 +844,17 @@ export async function readPlanNodeDetail(
       PLAN_NODE_RUNS_LIMIT,
     ),
     ctx.store.closedAncestorOf(ctx.spaceId, nodeId),
+    ctx.store.inFlightRunCountsOf(
+      ctx.spaceId,
+      subtree.nodes.map((n) => n.nodeId),
+    ),
   ]);
+  // The board's rule: the node's own runs count whatever its status, a run
+  // under it only where it serves an active node.
+  const servesIt = (n: { nodeId: string; status: string }) =>
+    (inFlight.get(n.nodeId) ?? 0) > 0 && (n.nodeId === nodeId || n.status === 'active');
+  const activity =
+    servesIt(node) || subtree.nodes.some(servesIt) ? ('in_flight' as const) : ('idle' as const);
   return {
     ok: true,
     node,
@@ -855,6 +865,7 @@ export async function readPlanNodeDetail(
     ...(links.next !== undefined ? { nextCursor: encodePlanLinkCursor(links.next) } : {}),
     runs: runs.runs,
     runsTotal: runs.total,
+    activity,
     ...(closedAncestor !== null ? { closedAncestor } : {}),
   };
 }

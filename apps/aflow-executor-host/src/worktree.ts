@@ -949,6 +949,44 @@ async function clonePrivately(top: string, checkout: Checkout, baseSha: string):
   await mkdir(checkout.workDir, { recursive: true });
 }
 
+/**
+ * A copy of `checkout` at its current commit, at `<scratchDir>/<runKey>`, for
+ * a run's preview to execute in (Plan 320 F49).
+ *
+ * Cloned from the checkout's own git directory, which the sandbox is denied,
+ * at the commit that directory's HEAD names — so it holds what the executor
+ * checked out and merged, and nothing the working tree holds uncommitted:
+ * nothing the agent writes in the checkout, before the copy or after it,
+ * reaches it. The folder's installations (`root`'s) are linked in as a run's
+ * are. It borrows the checkout's objects, so it is removed before the checkout.
+ */
+export async function snapshotCheckout(
+  root: string,
+  checkout: Checkout,
+  scratchDir: string,
+  runKey: string,
+): Promise<PreparedWorktree> {
+  const prefix = relativePath(checkout.path, checkout.workDir);
+  const snapshot = checkoutAt(join(await realpath(scratchDir), runKey), prefix);
+  // A session's scratch outlives a run; one left by a run that died goes first.
+  await removeWorktree(snapshot.path);
+  let sha: string;
+  let top: string;
+  try {
+    sha = (await git(checkout, ['rev-parse', 'HEAD'])).trim();
+    top = (await git(root, ['rev-parse', '--show-toplevel'])).trim();
+    await clonePrivately(checkout.gitDir, snapshot, sha);
+  } catch (error) {
+    await removeWorktree(snapshot.path);
+    throw new WorktreeError(
+      `Could not copy the run's checkout for its preview: ${error instanceof Error ? error.message : String(error)}`,
+      'git_failed',
+    );
+  }
+  await linkDependencies(top, snapshot);
+  return { ...snapshot, baseSha: sha };
+}
+
 export interface WorktreeChanges {
   /**
    * The whole unified diff against `baseSha`, never a prefix. Empty when the

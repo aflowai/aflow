@@ -829,6 +829,7 @@ describe('GET /v1/spaces/:spaceId/plan/nodes/:nodeId', () => {
     linksTotal: 0,
     runs: [],
     runsTotal: 0,
+    activity: 'idle' as const,
   };
 
   it('reads one node in full through the engine, the newest 50 links by default', async () => {

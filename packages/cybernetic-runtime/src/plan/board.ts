@@ -335,7 +335,8 @@ function lane(items: readonly PlanLaneItem[], limit: number): PlanLane {
  * the node bound left open steps of, or with steps past the depth bound,
  * carries that bound as its own `truncated` and is never `finished`. Up next
  * holds, per open plan, the step `findActiveStreamNode` takes over the same
- * nodes, where that step stands under Up next. Pull requests and runs are not
+ * nodes, where that step stands under Up next and the node bound cannot have
+ * left its children unread. Pull requests and runs are not
  * read here: the lanes' rows carry none.
  */
 export function buildPlanOverview(
@@ -384,7 +385,14 @@ export function buildPlanOverview(
     const next = findActiveStreamNode([root, ...steps], root.nodeId);
     const nextStep = steps.find((step) => step.nodeId === next?.nodeId);
     const nextPlacement = nextStep !== undefined ? placements.get(nextStep.nodeId) : undefined;
-    if (nextStep !== undefined && nextPlacement?.column === 'up_next') {
+    // The walk stops at an active step without children it read; where the
+    // node bound may have left them unread, it would descend past the step, so
+    // the plan names none and its row says it was cut short.
+    const childrenUnread =
+      nextStep !== undefined &&
+      read.frontierDepth !== undefined &&
+      nextStep.depth >= read.frontierDepth - 1;
+    if (nextStep !== undefined && nextPlacement?.column === 'up_next' && !childrenUnread) {
       upNext.push(laneItem(nextStep, root, nextPlacement));
     }
 

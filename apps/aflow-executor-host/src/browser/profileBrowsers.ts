@@ -241,7 +241,7 @@ export class ProfileBrowsers {
       classifier: this.deps.classifier,
       now: this.deps.now,
       ...(ephemeral !== undefined
-        ? { reach: ephemeral.reach }
+        ? { reach: ephemeral.reach, stackOwn: this.deps.stackPorts }
         : {
             localPorts: {
               opened: () => state.profile.localPorts,

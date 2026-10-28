@@ -72,6 +72,7 @@ export type ExecutorPayloadKind =
   | 'activity'
   | 'patch'
   | 'logs'
+  | 'preview_log'
   | 'screenshot';
 
 // ============================================================================

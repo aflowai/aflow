@@ -333,7 +333,8 @@ export function planLaneRailNode(
 /**
  * A step the URL names that no lane holds, as the rail opens it from the
  * step's own read: placed by the board's column rule on its status and the
- * runs on it, and stranded where the read names a closed node above it — the
+ * activity the read derives as the board does — in flight where a run serves
+ * the step or any active node under it — and stranded where the read names a closed node above it — the
  * node the rail offers to reopen.
  */
 export function planDetailRailNode(detail: PlanNodeDetailOutput): {
@@ -346,9 +347,8 @@ export function planDetailRailNode(detail: PlanNodeDetailOutput): {
 } {
   const { node } = detail;
   const line = (node.note ?? '').split('\n', 1)[0]?.trim() ?? '';
-  const onIt = detail.runs.some((run) => run.nodeId === node.nodeId);
   const placement = planBoardColumn(
-    { kind: node.kind, status: node.status, activity: onIt ? 'in_flight' : 'idle' },
+    { kind: node.kind, status: node.status, activity: detail.activity },
     { closedAncestor: detail.closedAncestor !== undefined },
   );
   return {

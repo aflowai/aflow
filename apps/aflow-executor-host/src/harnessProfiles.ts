@@ -156,8 +156,11 @@ export const HarnessProfileSchema = z.object({
   allowedDomains: z.array(z.string()).default([]),
   /**
    * Ports on this machine the harness's ephemeral browser may load, on
-   * loopback alone. The harness itself stays off loopback; these are for a dev
-   * server it starts and wants to see. Set on the machine, never by a run.
+   * loopback alone, on a run with no preview. Not how a preview is reached: a
+   * run asking for one gets its own port instead (Plan 320 D19), and the
+   * harness never starts a server. Set on the machine, never by a run, and
+   * never one of this stack's own ports — refused at declaration and at the
+   * connection.
    */
   browserLocalPorts: z.array(z.number().int().min(1).max(65_535)).default([]),
   /**

@@ -498,6 +498,7 @@ function detail(node: PlanNode, extra: Partial<PlanNodeDetailOutput> = {}): Answ
     linksTotal: 0,
     runs: [],
     runsTotal: 0,
+    activity: 'idle',
     ...extra,
   };
   return { data };
@@ -893,6 +894,7 @@ describe('SpacePlanPage — the rail', () => {
         },
       ],
       runsTotal: 1,
+      activity: 'in_flight',
     });
     recorded.findings[BOARD] = detail(fullNode(BOARD, 'P3.3 the board'), {
       links: [{ nodeId: BOARD, kind: 'finding', ref: 'F121', createdAt: at(10, 21) }],

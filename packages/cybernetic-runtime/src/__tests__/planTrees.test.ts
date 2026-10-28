@@ -1254,6 +1254,34 @@ describe('readPlanOverview — the lanes across plans (Plan 332 D7)', () => {
     expect(read.roots.every((r) => r.truncated?.bound === 'nodes')).toBe(true);
     expect(read.lanes.truncated).toEqual({ bound: 'nodes', value: PLAN_TREE_WALK_NODE_LIMIT });
   });
+
+  it('names no Up next step in a cut plan where the node bound left that step’s children unread', async () => {
+    const cut = store.seed(SPACE, { title: 'cut', position: 0 });
+    const parent = store.seed(SPACE, { parentId: cut.nodeId, title: 'parent', position: 0 });
+    const child = store.seed(SPACE, { parentId: parent.nodeId, title: 'child', position: 0 });
+    const wide = store.seed(SPACE, { title: 'wide', position: 1 });
+    for (let n = 0; n < PLAN_TREE_WALK_NODE_LIMIT; n++) {
+      store.seed(SPACE, {
+        parentId: wide.nodeId,
+        title: `landed ${String(n)}`,
+        status: 'done',
+        closedAt: '2026-10-03T00:00:00.000Z',
+        position: n,
+      });
+    }
+
+    const read = await rows();
+
+    // The walk read the parent but not its child, so it would stop at the parent.
+    const all = [...store.nodes.values()].filter((n) => n.spaceId === SPACE);
+    expect(findActiveStreamNode(all, cut.nodeId)?.nodeId).toBe(child.nodeId);
+    expect(read.roots[0]).toMatchObject({
+      nodeId: cut.nodeId,
+      truncated: { bound: 'nodes', value: PLAN_TREE_WALK_NODE_LIMIT },
+    });
+    expect(ids(read.lanes.upNext)).not.toContain(parent.nodeId);
+    expect(read.lanes.upNext).toEqual({ items: [], total: 0 });
+  });
 });
 
 describe('buildPlanBoard — a node written between the walk and its row', () => {
@@ -1349,6 +1377,30 @@ describe('readPlanNodeDetail — the rail', () => {
     expect(read).toMatchObject({ links: [], linksTotal: 0 });
     expect(read).not.toHaveProperty('nextCursor');
     expect(read).not.toHaveProperty('closedAncestor');
+  });
+
+  it('derives the node’s activity as the board does: its own runs, or a run on an active node under it', async () => {
+    const root = await node('root');
+    const phase = await node('phase', { parentId: root.nodeId });
+    const deep = await node('deep', { parentId: phase.nodeId });
+    const landed = await node('landed', { parentId: root.nodeId, position: 1 });
+    await close(landed, 'done');
+    const idle = await node('idle', { parentId: root.nodeId, position: 2 });
+
+    store.runs.push(inFlightRun('r-landed', landed.nodeId, 'running'));
+    // A run still serving a closed child moves nothing the parent waits on.
+    expect((await detail(root.nodeId)).activity).toBe('idle');
+    // That child's own read is in flight, though it is closed.
+    expect((await detail(landed.nodeId)).activity).toBe('in_flight');
+
+    store.runs.push(inFlightRun('r-deep', deep.nodeId, 'running'));
+    // A run two levels down, on an active step, sets both parents in flight.
+    expect((await detail(root.nodeId)).activity).toBe('in_flight');
+    expect((await detail(phase.nodeId)).activity).toBe('in_flight');
+    expect((await detail(idle.nodeId)).activity).toBe('idle');
+    const tree = (await board(root.nodeId)).root;
+    expect(tree.activity).toBe('in_flight');
+    expect(tree.children.find((c) => c.nodeId === phase.nodeId)?.activity).toBe('in_flight');
   });
 
   it('names the closed node nearest above an open step, its root included', async () => {

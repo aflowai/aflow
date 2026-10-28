@@ -30,6 +30,12 @@
       "import": "./dist/serviceBundlePath.js",
       "require": "./dist/serviceBundlePath.cjs"
     },
+    "./port-probe": {
+      "ts-source": "./src/portProbe.mjs",
+      "types": "./dist/portProbe.d.mts",
+      "import": "./dist/portProbe.js",
+      "require": "./dist/portProbe.cjs"
+    },
     "./appliance-bundle": {
       "ts-source": "./src/applianceBundle.ts",
       "types": "./dist/applianceBundle.d.ts",
@@ -41,7 +47,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "npx tsup src/index.ts src/serviceBundlePath.ts src/applianceBundle.ts --format esm,cjs && rm -f tsconfig.tsbuildinfo && npx tsc --emitDeclarationOnly",
+    "build": "npx tsup src/index.ts src/serviceBundlePath.ts src/applianceBundle.ts src/portProbe.mjs --format esm,cjs && rm -f tsconfig.tsbuildinfo && npx tsc --emitDeclarationOnly",
     "dev": "npx tsup src/index.ts src/serviceBundlePath.ts --format esm,cjs --watch",
     "test": "vitest run --passWithNoTests"
   },

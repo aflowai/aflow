@@ -475,6 +475,7 @@ describe('the overview’s lanes (Plan 332 D7)', () => {
             ]
           : [],
         runsTotal: onIt ? 1 : 0,
+        activity: onIt ? 'in_flight' : 'idle',
       });
 
     expect(read(full({ status: 'done', closedAt: '2026-10-21T09:00:00.000Z' })).placement).toEqual({

@@ -7,12 +7,12 @@
 
 import { execSync, spawn, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeSync } from 'node:fs';
-import { createServer } from 'node:net';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
 import process from 'node:process';
 
+import { portTaken } from '../packages/lib/src/portProbe.mjs';
 import { listenersOn, mcpPortHeldMessage, readProcessTable } from './devMcpPort.mjs';
 import { findRunningStack, profileConflicts, stackConflictMessage } from './devStackLock.mjs';
 import { restartAfterExit } from './serviceRestart.mjs';
@@ -448,29 +448,6 @@ function hostExecutorAlreadyRunning() {
   } catch {
     return false;
   }
-}
-
-/**
- * Whether something already listens on a TCP port here, decided by binding it.
- * Each address is tried on its own because macOS lets a wildcard bind succeed
- * beside a loopback-only listener and a loopback bind beside a wildcard one.
- */
-async function portTaken(port) {
-  for (const host of ['0.0.0.0', '::', '127.0.0.1', '::1']) {
-    const inUse = await new Promise((resolve) => {
-      const probe = createServer();
-      probe.once('error', (error) => {
-        resolve(error.code === 'EADDRINUSE');
-      });
-      probe.listen({ port, host, ipv6Only: host === '::' }, () => {
-        probe.close(() => {
-          resolve(false);
-        });
-      });
-    });
-    if (inUse) return true;
-  }
-  return false;
 }
 
 /**

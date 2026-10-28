@@ -458,6 +458,31 @@ describe('what an ephemeral profile’s proxy decides', () => {
       },
     );
 
+  it('refuses this stack’s own port on loopback even where its reach lists it', async () => {
+    const stackOwn = stackOwnPorts({});
+    const listed: HarnessReach = { allowedDomains: [], localPorts: [3001, DECLARED] };
+    for (const host of ['localhost', '127.0.0.1', '[::1]']) {
+      const decision = await decideEgress(
+        host,
+        3001,
+        { reach: listed, stackOwn },
+        { classifier, lookup: () => Promise.resolve([]) },
+      );
+      expect(decision, host).toMatchObject({ verdict: 'refuse', kind: 'local' });
+      expect((decision as { reason: string }).reason).toContain("port 3001 is this stack's own");
+    }
+    // Read from this executor's own environment where the policy names none.
+    expect(await decide('localhost', 3001, listed)).toMatchObject({ verdict: 'refuse' });
+    expect(
+      await decideEgress(
+        'localhost',
+        DECLARED,
+        { reach: listed, stackOwn },
+        { classifier, lookup: () => Promise.resolve([]) },
+      ),
+    ).toMatchObject({ verdict: 'connect' });
+  });
+
   it('refuses every spelling of this machine when no port was declared', async () => {
     for (const [what, host] of SELF_SPELLINGS) {
       for (const port of [DECLARED, 3000, 3001]) {

@@ -39,6 +39,16 @@ describe('what one step may keep', () => {
     expect(await store.retrieve(compiled)).toBe('compiled');
   });
 
+  it('keeps a harness run’s browser log and its preview log side by side', async () => {
+    const store = createMemoryPayloadStore();
+    const browserLog = await store.store({ ...STEP, kind: 'logs', data: 'browser calls' });
+    const previewLog = await store.store({ ...STEP, kind: 'preview_log', data: 'dev server' });
+
+    expect(previewLog).not.toBe(browserLog);
+    expect(await store.retrieve(browserLog)).toBe('browser calls');
+    expect(await store.retrieve(previewLog)).toBe('dev server');
+  });
+
   it('keeps an unbounded set only by addressing each blob with its own bytes', async () => {
     // A hermetic capture writes one blob per captured asset and there is no
     // kind to enumerate N of them, so a step-scoped path cannot hold them.

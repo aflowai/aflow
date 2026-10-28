@@ -528,7 +528,8 @@ export type PlanLane = z.infer<typeof PlanLaneSchema>;
  * `PLAN_LANE_ITEMS_LIMIT` rows. Up next is one row per open plan: the step the
  * stream walk (`findActiveStreamNode`) takes next, where it is `active` and
  * idle — not every idle `active` step, which is the board's column, and with
- * no reorder: ordering steps is the board's.
+ * no reorder: ordering steps is the board's. A plan the node bound cut short
+ * has no row where the walk may not have read that step's children.
  */
 export const PlanOverviewLanesSchema = z
   .object({
@@ -647,6 +648,9 @@ export const PlanNodeDetailOutputSchema = z.object({
   /** The runs in flight for this node and every node under it, newest first. */
   runs: z.array(PlanNodeRunSchema),
   runsTotal: z.number().int().min(0),
+  activity: PlanNodeActivitySchema.describe(
+    'The board’s rule: in flight where a run serves the node itself or any active node under it.',
+  ),
   closedAncestor: z
     .object({ nodeId: z.string().uuid(), title: z.string() })
     .strict()

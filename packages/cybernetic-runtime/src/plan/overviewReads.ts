@@ -70,6 +70,11 @@ export interface PlanOverviewRead {
   rootsTotal: number;
   /** The node bound, where the walk reached it. */
   truncated?: PlanNodeListTruncation;
+  /**
+   * Where the node bound stopped the walk, the deepest level it kept: a node
+   * at that level or the one above it may have children the walk never read.
+   */
+  frontierDepth?: number;
 }
 
 /**
@@ -233,6 +238,7 @@ export async function overviewIn(
       (SELECT count(*) FROM plan_nodes r
         WHERE r.space_id = ${spaceId}::uuid AND r.parent_id IS NULL)::int AS roots_total,
       (SELECT walk_cut FROM beyond) AS walk_cut,
+      (SELECT last_depth FROM frontier) AS last_depth,
       c.done, c.dropped, c.closed_written_at, c.deeper, c.cut
     FROM shipped s
     INNER JOIN plan_nodes n ON n.id = s.id
@@ -293,7 +299,10 @@ export async function overviewIn(
     counted,
     rootsTotal: Number(rows[0]?.['roots_total'] ?? 0),
     ...(rows[0]?.['walk_cut'] === true
-      ? { truncated: { bound: 'nodes' as const, value: bounds.maxNodes } }
+      ? {
+          truncated: { bound: 'nodes' as const, value: bounds.maxNodes },
+          frontierDepth: Number(rows[0]['last_depth']),
+        }
       : {}),
   };
 }

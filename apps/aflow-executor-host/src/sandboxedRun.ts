@@ -1028,6 +1028,13 @@ export interface ServiceStartInput {
    * this executor's own is passed through.
    */
   readonly env: Readonly<Record<string, string>>;
+  /** The run it serves, when it serves one; nobody's for the operator's own browser. */
+  readonly ownerRunId?: string;
+  /**
+   * Everything it writes, on either descriptor, as it arrives. Given, standard
+   * output is read too; absent, it is discarded as a browser's is.
+   */
+  readonly onOutput?: (text: string) => void;
 }
 
 export interface ServiceExit {
@@ -1040,7 +1047,10 @@ export interface ServiceExit {
 export interface RunningService {
   readonly processId: string;
   readonly exited: Promise<ServiceExit>;
-  /** End its group politely, then for it. */
+  /**
+   * End its group politely, then for it. Once stopped, `exited` settles when
+   * every process of the group is gone and reaped, not when its leader is.
+   */
   stop(): void;
 }
 
@@ -1048,10 +1058,12 @@ const SERVICE_STDERR_TAIL_CHARS = 4_000;
 
 /**
  * Start a long-lived process this executor serves from — the operator's own
- * browser — unconfined, outside any binding, and running until it is stopped.
+ * browser, or a harness run's preview (Plan 320 D19, F49) — unconfined, and
+ * running until it is stopped.
  *
- * Unconfined for the reason the push is: the sandbox cannot hold it. Unlike a
- * push it is nobody's step, so it has no deadline and no output anyone reads;
+ * Unconfined for the reason the push is: the sandbox cannot hold it — a
+ * preview's server cannot listen on loopback inside it on macOS. Unlike a
+ * push it is no step of its own, so it has no deadline of its own;
  * what it shares with every other spawn is the registry, the orphan journal and
  * the group kill, which is what puts it in reach of withdrawal, shutdown and the
  * next boot's sweep. It sees the environment its caller named and nothing a job sent.
@@ -1065,17 +1077,30 @@ export function startUnconfinedService(input: ServiceStartInput): RunningService
     cwd: input.cwd,
     env: { ...input.env },
     detached: true,
-    stdio: ['ignore', 'ignore', 'pipe'],
+    stdio: ['ignore', input.onOutput === undefined ? 'ignore' : 'pipe', 'pipe'],
   });
   // No scratch directory: nothing it uses is this executor's to delete.
   if (child.pid !== undefined) recordSpawn(child.pid);
-  const { processId, entry } = enterRegistry(child, input.idPrefix, input.scope, '', new Date());
+  const { processId, entry } = enterRegistry(
+    child,
+    input.idPrefix,
+    input.scope,
+    input.ownerRunId ?? '',
+    new Date(),
+  );
 
   let stderrTail = '';
-  child.stderr.on('data', (chunk: Buffer) => {
-    stderrTail = (stderrTail + chunk.toString('utf8')).slice(-SERVICE_STDERR_TAIL_CHARS);
+  child.stderr?.on('data', (chunk: Buffer) => {
+    const text = chunk.toString('utf8');
+    stderrTail = (stderrTail + text).slice(-SERVICE_STDERR_TAIL_CHARS);
+    input.onOutput?.(text);
+  });
+  child.stdout?.on('data', (chunk: Buffer) => {
+    input.onOutput?.(chunk.toString('utf8'));
   });
 
+  let stopping = false;
+  let groupDone = false;
   const exited = new Promise<ServiceExit>((resolve) => {
     const settle = (code: number | null, signal: NodeJS.Signals | null): void => {
       if (entry.exited) return;
@@ -1083,7 +1108,14 @@ export function startUnconfinedService(input: ServiceStartInput): RunningService
       entry.exitCode = code;
       entry.exitedAt = Date.now();
       if (child.pid !== undefined) forgetSpawn(child.pid);
-      resolve({ code, signal, stderrTail });
+      const done = (): void => {
+        groupDone = true;
+        resolve({ code, signal, stderrTail });
+      };
+      // The leader's close is not the group's end: a child the shell forked
+      // can outlive it by a moment, or linger unreaped once reparented.
+      if (stopping) void groupGone(child).then(done);
+      else done();
     };
     child.once('close', settle);
     child.once('error', (error: Error) => {
@@ -1097,11 +1129,37 @@ export function startUnconfinedService(input: ServiceStartInput): RunningService
     processId,
     exited,
     stop: () => {
-      if (entry.exited) return;
+      if (entry.exited || stopping) return;
+      stopping = true;
       signalGroup(child, 'SIGTERM');
       setTimeout(() => {
-        if (!entry.exited) signalGroup(child, 'SIGKILL');
+        // While any member is left the kernel keeps the group's id, so this
+        // reaches only what is still this service's.
+        if (!groupDone) signalGroup(child, 'SIGKILL');
       }, SIGKILL_AFTER_MS).unref();
     },
   };
+}
+
+const GROUP_POLL_MS = 25;
+/** Past the SIGKILL, room for the last member to be reaped. */
+const GROUP_GONE_WAIT_MS = SIGKILL_AFTER_MS + 2_000;
+
+function groupExists(child: ChildProcess): boolean {
+  if (child.pid === undefined) return false;
+  try {
+    process.kill(-child.pid, 0);
+    return true;
+  } catch {
+    // ESRCH, or EPERM: the id names a group that is not ours, so ours is gone.
+    return false;
+  }
+}
+
+/** Settles once no process of the child's group is left, zombies included, or the wait runs out. */
+async function groupGone(child: ChildProcess): Promise<void> {
+  const deadline = Date.now() + GROUP_GONE_WAIT_MS;
+  while (groupExists(child) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, GROUP_POLL_MS));
+  }
 }
