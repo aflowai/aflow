@@ -9,11 +9,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import Redis from 'ioredis-mock';
 import type { Redis as RedisType } from 'ioredis';
 import { PLAN_NODE_POSITION_MAX, type PlanNode } from '@aflow/schemas';
-import {
-  openPlanNode,
-  placePlanNode,
-  type PlanWriteContext,
-} from '../plan/operations.js';
+import { openPlanNode, placePlanNode, type PlanWriteContext } from '../plan/operations.js';
 import { PLAN_PLACE_STRIDE, placeAmongSiblings } from '../plan/placement.js';
 import { InMemoryPlanNodeStore } from './planStoreFake.js';
 
@@ -64,7 +60,11 @@ describe('openPlanNode — Approve on a blocked node', () => {
       why: 'go ahead after Plan 330',
     });
 
-    expect(result).toMatchObject({ ok: true, from: 'blocked', node: { status: 'active', revision: 4 } });
+    expect(result).toMatchObject({
+      ok: true,
+      from: 'blocked',
+      node: { status: 'active', revision: 4 },
+    });
     expect(store.nodes.get(node.nodeId)?.note).toBe(
       'Approved: go ahead after Plan 330\n' +
         'Proposed from the merged plan document; awaits the operator’s approval\nnext: the resident',
@@ -78,8 +78,14 @@ describe('openPlanNode — Approve on a blocked node', () => {
     await openPlanNode(ctx(), { nodeId: kept.nodeId, expectedRevision: 1 });
     await openPlanNode(ctx(), { nodeId: bare.nodeId, expectedRevision: 1, why: 'bound now' });
 
-    expect(store.nodes.get(kept.nodeId)).toMatchObject({ status: 'active', note: 'needs a GitHub binding' });
-    expect(store.nodes.get(bare.nodeId)).toMatchObject({ status: 'active', note: 'Approved: bound now' });
+    expect(store.nodes.get(kept.nodeId)).toMatchObject({
+      status: 'active',
+      note: 'needs a GitHub binding',
+    });
+    expect(store.nodes.get(bare.nodeId)).toMatchObject({
+      status: 'active',
+      note: 'Approved: bound now',
+    });
   });
 });
 
@@ -102,7 +108,11 @@ describe('openPlanNode — Reopen on a closed node', () => {
       why: 'the column rule misreads waiting steps',
     });
 
-    expect(result).toMatchObject({ ok: true, from: 'done', node: { status: 'active', revision: 6 } });
+    expect(result).toMatchObject({
+      ok: true,
+      from: 'done',
+      node: { status: 'active', revision: 6 },
+    });
     const now = store.nodes.get(node.nodeId)!;
     expect(now.note).toBe(
       'Reopened; it was done: Merged in #212.\nReopened: the column rule misreads waiting steps',
@@ -196,9 +206,11 @@ describe('placeAmongSiblings', () => {
         ['n2', 2048],
       ]),
     });
-    expect(
-      placeAmongSiblings(at(0, PLAN_NODE_POSITION_MAX), 'n0', { after: 'n1' }),
-    ).toMatchObject({ outcome: 'placed', position: 1024, renumbered: new Map([['n1', 0]]) });
+    expect(placeAmongSiblings(at(0, PLAN_NODE_POSITION_MAX), 'n0', { after: 'n1' })).toMatchObject({
+      outcome: 'placed',
+      position: 1024,
+      renumbered: new Map([['n1', 0]]),
+    });
   });
 
   it('answers unchanged where the node already stands there, and not a sibling otherwise', () => {
@@ -207,7 +219,9 @@ describe('placeAmongSiblings', () => {
     expect(placeAmongSiblings(at(0, 1), 'n0', { before: 'elsewhere' })).toEqual({
       outcome: 'not_sibling',
     });
-    expect(placeAmongSiblings(at(0, 1), 'n0', { before: 'n0' })).toEqual({ outcome: 'not_sibling' });
+    expect(placeAmongSiblings(at(0, 1), 'n0', { before: 'n0' })).toEqual({
+      outcome: 'not_sibling',
+    });
   });
 });
 

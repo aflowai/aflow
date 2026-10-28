@@ -5,7 +5,8 @@
  * header — steps closed and the non-zero count of each column — five columns
  * saying what the loop is doing with each step (Plan 332 D4), a card per step
  * carrying labels only, and a side rail that reads a step on demand and holds
- * the operator's own controls — mark done, decide, drop (P3.2). The tree it
+ * the operator's own controls — mark done, decide, drop (P3.2), approve and
+ * reopen (Plan 332 D6) — with Move up and Move down on Up next cards. The tree it
  * reads carries counts rather than links, and done steps only for the Done
  * folds open. It is read again on every plan write and run change (D9).
  */
@@ -29,7 +30,8 @@ import type { PlanBoardColumn, PlanNodeUpdateOutput, PlanTreeOutput } from '@afl
 import { useSpaceFromRoute } from '../components/providers.js';
 import { useApiMutation, useApiQuery } from '../hooks/useApiQuery.js';
 import { spacePlanKey, usePlanLiveRefresh } from '../hooks/use-plan-live-refresh.js';
-import { PlanBoard } from '../components/plan/PlanBoard.js';
+import { PlanBoard, type PlanNodePlaceRequest } from '../components/plan/PlanBoard.js';
+import type { PlanNodeOpenRequest } from '../components/plan/PlanNodeOpenControl.js';
 import { PlanRail, RAIL_WIDTH } from '../components/plan/PlanRail.js';
 import type {
   PlanNodeCloseAnswer,
@@ -40,6 +42,7 @@ import {
   localDay,
   phaseLabel,
   planCards,
+  planClosedAncestor,
   planDoneGroups,
   planHeader,
   planPhases,
@@ -159,17 +162,38 @@ export function SpacePlanPage(): React.ReactNode {
     onError: () => undefined,
   });
 
-  const onClose = async (request: PlanNodeCloseRequest): Promise<PlanNodeCloseAnswer> => {
+  // Approve, Reopen and Move (Plan 332 D6). Each re-reads the plan on
+  // success itself rather than waiting for the space's entity event.
+  const openNode = useApiMutation<PlanNodeOpenRequest, PlanNodeUpdateOutput>({
+    path: ({ nodeId }) => `/spaces/${spaceId}/plan/nodes/${nodeId}/open`,
+    method: 'PATCH',
+    serialize: ({ nodeId: _nodeId, ...body }) => JSON.stringify(body),
+    invalidate: [spacePlanKey(spaceId)],
+    onError: () => undefined,
+  });
+  const placeNode = useApiMutation<PlanNodePlaceRequest, PlanNodeUpdateOutput>({
+    path: ({ nodeId }) => `/spaces/${spaceId}/plan/nodes/${nodeId}/place`,
+    method: 'PATCH',
+    serialize: ({ nodeId: _nodeId, ...body }) => JSON.stringify(body),
+    invalidate: [spacePlanKey(spaceId)],
+    onError: () => undefined,
+  });
+
+  const answered = async (write: Promise<unknown>): Promise<PlanNodeCloseAnswer> => {
     try {
-      await closeNode.mutateAsync(request);
+      await write;
       return { ok: true };
     } catch (err) {
-      // A refusal on the revision means the board on screen is stale: read it
-      // again so the operator chooses against the node as it now stands.
+      // A refusal on the revision — or a sibling that moved — means the board
+      // on screen is stale: read it again so the operator chooses against
+      // the plan as it now stands.
       if ((err as { status?: unknown }).status === 409) void refetch();
       return { ok: false, message: err instanceof Error ? err.message : String(err) };
     }
   };
+  const onClose = (request: PlanNodeCloseRequest) => answered(closeNode.mutateAsync(request));
+  const onOpen = (request: PlanNodeOpenRequest) => answered(openNode.mutateAsync(request));
+  const onPlace = (request: PlanNodePlaceRequest) => answered(placeNode.mutateAsync(request));
 
   const header = <Heading level={2}>Plan</Heading>;
 
@@ -240,6 +264,12 @@ export function SpacePlanPage(): React.ReactNode {
         spaceId={spaceId}
         spaceSlug={spaceSlug}
         onClose={onClose}
+        closedAncestor={
+          selectedCard.reason === 'stranded'
+            ? planClosedAncestor(root, selectedCard.node.nodeId)
+            : undefined
+        }
+        onOpen={onOpen}
         choosing={selected.choosing}
         onChoose={(choosing) => {
           setSelected({ nodeId: selectedCard.node.nodeId, choosing });
@@ -315,6 +345,7 @@ export function SpacePlanPage(): React.ReactNode {
               onDecide={(card) => {
                 setSelected({ nodeId: card.node.nodeId, choosing: 'done' });
               }}
+              onPlace={onPlace}
               narrow={narrow}
             />
           </div>

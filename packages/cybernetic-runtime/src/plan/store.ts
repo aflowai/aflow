@@ -694,7 +694,7 @@ export function createPlanNodeStore(db: PostgresJsDatabase, tenantId: string): P
           a.position - b.position || (a.nodeId < b.nodeId ? -1 : a.nodeId > b.nodeId ? 1 : 0),
       );
       const self = siblings.find((s) => s.nodeId === nodeId);
-      if (!self || self.revision !== expectedRevision) {
+      if (self?.revision !== expectedRevision) {
         // Moved under another parent, or written, since the first read.
         const now = await findIn();
         return now ? { outcome: 'stale', node: now } : { outcome: 'not_found' };
