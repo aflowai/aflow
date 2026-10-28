@@ -574,7 +574,8 @@ holds a web app and declares none. Only a person declares it, a port this stack
 serves on is refused, and declaring it starts nothing. A harness run that asks for
 it (`preview: true`, with the ephemeral browser) has the executor start it in a
 snapshot of that run's checkout — its commit, copied before the agent starts, never
-the checkout the agent edits — unconfined but in a process group the executor stops
+the checkout the agent edits, so it serves the app as of that commit and none of the
+agent's own edits, which are seen working in the review's preview — unconfined but in a process group the executor stops
 when the run ends, with none of the harness's credential; wait up to 120 s for the
 ready path on IPv4 or IPv6 loopback; and open its port to that run's browser alone.
 What it printed is kept with the run, failed or not. A fixed port serves one run

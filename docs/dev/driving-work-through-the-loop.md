@@ -92,7 +92,8 @@ its outcome as it is marked done, and no firing commissions it (`wait`, `awaitin
    takes a turn budget, are sized for a slice; name `timeoutMs` or `maxTurns` only to
    change them. A slice that touches a page of the web UI also takes
    `browser: { profile: 'ephemeral' }`, and the brief names the dev-server URL the agent
-   opens and what it should see working there; any other slice leaves it out.
+   opens and what it should look at there — the app as it runs, never the agent's own
+   edits, which the review sees once its range is committed; any other slice leaves it out.
    Several commissions may run at once, within the machine's limit (below).
    The checks the agent must run are named in the brief, because the folder's checks
    only run once the commission is published: `yarn test:file` on touched and added tests, `npx tsc -p` per touched
@@ -296,7 +297,8 @@ if it must be fixed (a fixed port serves one run at a time; left out, each run t
 one), the path that answers once it is up, and the files that count as its UI. No operation
 sets it, and a port this stack serves on is refused. Declaring it starts nothing; a harness
 run asking for `preview: true` has the executor start it in a snapshot of that run's checkout
-— its commit, copied before the agent starts, so nothing the agent writes is run — open it
+— its commit, copied before the agent starts, so nothing the agent writes is run or shown
+at `previewUrl`, and a change is seen working in its review's preview — open it
 in that run's browser alone and stop it at the run's end (P6.b), and a run whose fixed port
 another run holds is refused — start it again once that run ends. Once the skills ask for
 it (P6.c), the loop is standardized:

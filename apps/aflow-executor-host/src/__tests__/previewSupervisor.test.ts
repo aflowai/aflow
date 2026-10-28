@@ -237,6 +237,71 @@ describe('a run’s preview', () => {
     await preview.stop();
   });
 
+  it('reports its output as progress only until it has answered or failed', async () => {
+    const outputs: Array<(text: string) => void> = [];
+    const printing: NonNullable<StartPreviewInput['start']> = (service) => {
+      if (service.onOutput !== undefined) outputs.push(service.onOutput);
+      return standIn()(service);
+    };
+    let asks = 0;
+    let progress = 0;
+    const preview = await startPreview({
+      preview: { command: 'serve {port}', readyPath: '/', uiPaths: [], webAppDirs: [] },
+      port: 41_796,
+      cwd: dir,
+      scratchDir: await mkdtemp(join(dir, 'scratch-')),
+      bindingId: 'hb',
+      ownerRunId: 'run-chatty',
+      secrets: [],
+      signal: new AbortController().signal,
+      pollMs: 10,
+      start: printing,
+      onProgress: () => {
+        progress += 1;
+      },
+      // Each poll asks both loopback hosts: the first poll's two asks fail.
+      fetch: () => {
+        asks += 1;
+        if (asks === 1) outputs[0]?.('compiling\n');
+        return asks <= 2
+          ? Promise.reject(new Error('ECONNREFUSED'))
+          : Promise.resolve(new Response('ok'));
+      },
+    });
+    const whileStarting = progress;
+    // Its output and the failed poll, both while it was starting.
+    expect(whileStarting).toBe(2);
+    outputs[0]?.('GET / 200\n');
+    outputs[0]?.('GET /app 200\n');
+    expect(progress).toBe(whileStarting);
+    expect(preview.log()).toContain('GET /app 200');
+    await preview.stop();
+
+    outputs.length = 0;
+    progress = 0;
+    const error = await startPreview({
+      preview: { command: 'serve {port}', readyPath: '/', uiPaths: [], webAppDirs: [] },
+      port: 41_797,
+      cwd: dir,
+      scratchDir: await mkdtemp(join(dir, 'scratch-')),
+      bindingId: 'hb',
+      ownerRunId: 'run-chatty-failed',
+      secrets: [],
+      signal: new AbortController().signal,
+      readyTimeoutMs: 50,
+      pollMs: 10,
+      start: printing,
+      onProgress: () => {
+        progress += 1;
+      },
+      fetch: () => Promise.reject(new Error('ECONNREFUSED')),
+    }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(PreviewError);
+    const atFailure = progress;
+    outputs[0]?.('still printing\n');
+    expect(progress).toBe(atFailure);
+  });
+
   it('stops waiting when the run is stopped', async () => {
     const controller = new AbortController();
     setTimeout(() => {

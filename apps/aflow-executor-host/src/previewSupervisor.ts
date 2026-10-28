@@ -253,7 +253,11 @@ export interface StartPreviewInput {
   /** What must never appear in its log, should the preview print it. */
   readonly secrets: readonly string[];
   readonly signal: AbortSignal;
-  /** Called while it starts, so the step's idle window sees the wait as work. */
+  /**
+   * Called while it starts, so the step's idle window sees the wait as work.
+   * Never once it has answered or failed: a dev server that keeps printing
+   * would otherwise hold a stalled harness's idle deadline open to the ceiling.
+   */
   readonly onProgress?: () => void;
   readonly readyTimeoutMs?: number;
   readonly pollMs?: number;
@@ -321,6 +325,7 @@ export async function startPreview(input: StartPreviewInput): Promise<StartedPre
   const kept = createHeadTailBuffer(HOST_CHECK_OUTPUT_HEAD_BYTES, PREVIEW_LOG_TAIL_BYTES);
   const scrubber = createSecretsScrubber(input.secrets);
   let exit: ServiceExit | undefined;
+  let starting = true;
   let flushed = false;
   const log = (): string => {
     if (!flushed && exit !== undefined) {
@@ -347,7 +352,7 @@ export async function startPreview(input: StartPreviewInput): Promise<StartedPre
     },
     onOutput: (text) => {
       kept.push(scrubber.push(text));
-      input.onProgress?.();
+      if (starting) input.onProgress?.();
     },
   });
   void running.exited.then((value) => {
@@ -397,7 +402,9 @@ export async function startPreview(input: StartPreviewInput): Promise<StartedPre
       }
       await delay(input.pollMs ?? READY_POLL_MS, input.signal);
     }
+    starting = false;
   } catch (error) {
+    starting = false;
     await stop();
     // The log kept with the run as well as the tail in the message.
     if (error instanceof PreviewError) throw new PreviewError(error.message, error.kind, log());

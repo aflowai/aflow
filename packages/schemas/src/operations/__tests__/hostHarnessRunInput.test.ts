@@ -343,7 +343,7 @@ describe('host.harness.run asks for a browser by profile', () => {
     const usage = HostOperationRegistrations.find((r) => r.verb === 'run')?.usage;
     const lines = [...(usage?.whenToUse ?? []), ...(usage?.pitfalls ?? [])];
     expect(lines).toContain(
-      "A change to a UI that should be seen working — the harness opens the page it changed on the dev server and checks it: `browser: { profile: 'ephemeral' }`, the default choice, which holds no sign-ins and reaches the harness's allowed domains plus the dev-server ports the operator declared for that harness on this machine",
+      "A UI that should be looked at in a browser: `browser: { profile: 'ephemeral' }`, the default choice, which holds no sign-ins and reaches the harness's allowed domains plus, with `preview: true`, the folder's preview at `previewUrl` — the commit the run started from, never the run's own edits, so a change is seen working in its review's preview — or else the dev-server ports the operator declared for that harness on this machine",
     );
     expect(lines.join('\n')).toContain(
       '`ephemeral` opens one only on a port the operator declared for that harness, and on none ' +
@@ -359,8 +359,21 @@ describe('host.harness.run asks for a browser by profile', () => {
       >;
     };
     const browser = json.properties['browser'];
-    expect(browser?.description).toContain('touches a UI');
+    expect(browser?.description).toContain('when a UI should be looked at');
     expect(browser?.properties?.['profile']?.description).toContain('the default choice');
+  });
+
+  it('says the preview serves the run’s starting commit, never the harness’s own edits', () => {
+    const json = toJsonSchemaSync(HostHarnessRunInputSchema) as {
+      properties: Record<string, { description?: string }>;
+    };
+    for (const field of ['browser', 'preview']) {
+      const description = json.properties[field]?.description ?? '';
+      expect(description).toContain('the commit the run started from');
+      expect(description).toContain("never the harness's own edits");
+      expect(description).toContain('seen working in its review');
+      expect(description).not.toContain('own checkout');
+    }
   });
 
   it('names the browser log on the result', () => {
