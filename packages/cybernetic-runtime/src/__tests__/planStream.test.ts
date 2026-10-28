@@ -1089,43 +1089,53 @@ describe('the node spend stop (Plan 331 D4)', () => {
     expect((await current(second.nodeId)).revision).toBe(second.revision);
   });
 
-  it('starts the spend afresh at the open the write itself stamps on the node, no audit row awaited', async () => {
-    const { root, first } = await stream();
-    await run(first, PLAN_STREAM_COMMISSION_SLUG, 'failed', { cents: 600, failure: 'x' });
-    const stopped = await next(root.nodeId, { attempts: 10, spendCents: 500 });
-    if (stopped.decision !== 'stop') throw new Error('expected a stop');
-    expect(stopped.cause).toBe('spend_spent');
-    await updatePlanNode(session(), stopped.update);
+  it.each(['open', 'update'] as const)(
+    'starts the spend afresh through %s, no audit row awaited',
+    async (path) => {
+      const { root, first } = await stream();
+      await run(first, PLAN_STREAM_COMMISSION_SLUG, 'failed', { cents: 600, failure: 'x' });
+      const stopped = await next(root.nodeId, { attempts: 10, spendCents: 500 });
+      if (stopped.decision !== 'stop') throw new Error('expected a stop');
+      expect(stopped.cause).toBe('spend_spent');
+      await updatePlanNode(session(), stopped.update);
 
-    const openedAt = new Date(stamp());
-    vi.setSystemTime(openedAt);
-    try {
-      const blocked = await current(first.nodeId);
-      const opened = await openPlanNode(session(), {
-        nodeId: first.nodeId,
-        expectedRevision: blocked.revision,
-        why: 'Raise the ceiling; the failure was the folder.',
+      const openedAt = new Date(stamp());
+      vi.setSystemTime(openedAt);
+      try {
+        const blocked = await current(first.nodeId);
+        const opened =
+          path === 'open'
+            ? await openPlanNode(session(), {
+                nodeId: first.nodeId,
+                expectedRevision: blocked.revision,
+                why: 'Raise the ceiling; the failure was the folder.',
+              })
+            : await updatePlanNode(session(), {
+                nodeId: first.nodeId,
+                expectedRevision: blocked.revision,
+                status: 'active',
+              });
+        expect(opened.ok).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+      // Written with the open itself: the next read sees it, with nothing else recorded.
+      expect(store.openedAt.get(first.nodeId)).toEqual(openedAt);
+      expect(await next(root.nodeId, { attempts: 10, spendCents: 500 })).not.toMatchObject({
+        cause: 'spend_spent',
       });
-      expect(opened.ok).toBe(true);
-    } finally {
-      vi.useRealTimers();
-    }
-    // Written with the open itself: the next read sees it, with nothing else recorded.
-    expect(store.openedAt.get(first.nodeId)).toEqual(openedAt);
-    expect(await next(root.nodeId, { attempts: 10, spendCents: 500 })).not.toMatchObject({
-      cause: 'spend_spent',
-    });
 
-    const after = await run(first, PLAN_STREAM_COMMISSION_SLUG, 'failed', {
-      cents: 600,
-      failure: 'y',
-    });
-    expect(await next(root.nodeId, { attempts: 10, spendCents: 500 })).toMatchObject({
-      decision: 'stop',
-      cause: 'spend_spent',
-      spend: { cents: 600, runIds: [after] },
-    });
-  });
+      const after = await run(first, PLAN_STREAM_COMMISSION_SLUG, 'failed', {
+        cents: 600,
+        failure: 'y',
+      });
+      expect(await next(root.nodeId, { attempts: 10, spendCents: 500 })).toMatchObject({
+        decision: 'stop',
+        cause: 'spend_spent',
+        spend: { cents: 600, runIds: [after] },
+      });
+    },
+  );
 
   it('records a merge on a node at its ceiling: recording costs nothing', async () => {
     const { root, first } = await stream();
@@ -1250,7 +1260,12 @@ describe('resident review regressions', () => {
     const { root, first } = await stream();
     const runId = await run(first, PLAN_STREAM_COMMISSION_SLUG, 'completed');
     operatorCommissions.add(runId);
-    expect((await wake()).decisions).toEqual([]);
-    expect(await next(root.nodeId)).toMatchObject({ decision: 'wait' });
+    const board = await wake();
+    expect(board.decisions).toEqual([]);
+    expect(board.waits).toEqual([{ cause: 'awaiting_publication', roots: 1 }]);
+    expect(await next(root.nodeId)).toMatchObject({
+      decision: 'wait',
+      cause: 'awaiting_publication',
+    });
   });
 });

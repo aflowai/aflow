@@ -382,7 +382,7 @@ function answerCompletedCommission(facts: PlanStreamFacts, latest: PlanStreamRun
     return {
       kind: 'decided',
       output: wait(
-        'in_flight',
+        'awaiting_publication',
         'The operator conversation that started this commission owns its publication.',
         node,
       ),

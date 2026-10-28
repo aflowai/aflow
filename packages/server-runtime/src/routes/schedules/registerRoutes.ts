@@ -20,7 +20,7 @@ import { rowToResponse } from './helpers.js';
  * A schedule write through this API, kept where every other operator write is:
  * Plan 331 D7 counts a person's schedule writes among their actions.
  */
-function recordScheduleWrite(
+export function recordScheduleWrite(
   fastify: FastifyInstance,
   request: FastifyRequest,
   write: {
@@ -36,7 +36,11 @@ function recordScheduleWrite(
   fastify.audit.record({
     actor: {
       userId: authUser.userId,
-      kind: authUser.isServicePrincipal ? 'service_principal' : 'human',
+      kind: authUser.isServicePrincipal
+        ? 'service_principal'
+        : authUser.authMethod === 'api_key'
+          ? 'api_key'
+          : 'human',
       authMethod: authUser.authMethod,
       tenantId: write.tenantId,
     },

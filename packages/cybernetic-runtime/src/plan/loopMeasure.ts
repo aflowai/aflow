@@ -197,7 +197,8 @@ export async function readPlanLoopFacts(
       tx,
       sql`SELECT count(*)::int AS n FROM event_log e JOIN sessions s ON s.session_id = e.session_id
            WHERE s.space_id = ${spaceId}::uuid AND s.target_system_role = ${helmsman}
-             AND e.event_type IN ('SessionStarted', 'SessionResumed')
+             AND (e.event_type = 'SessionResumed' OR (e.event_type = 'SessionStarted'
+               AND s.execution_authority ->> 'establishedReason' IS DISTINCT FROM 'schedule'))
              AND e.envelope -> 'metadata' ->> 'userMessage' IS NOT NULL
              AND e.envelope -> 'metadata' ->> 'actorUserId' IS NOT NULL
              AND e.timestamp >= ${from} AND e.timestamp < ${to}`,

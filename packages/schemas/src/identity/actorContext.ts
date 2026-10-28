@@ -17,6 +17,7 @@ import { z } from 'zod';
 
 export const ActorKindSchema = z.enum([
   'human', // Interactive user (web, CLI, MCP)
+  'api_key', // User API key acting on its owner's authority
   'service_principal', // Machine-to-machine (API key, client credentials)
   'system', // Internal system operations (timers, DLQ recovery, migrations)
 ]);

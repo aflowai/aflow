@@ -771,6 +771,7 @@ export const PlanStreamWaitCauseSchema = z.enum([
   'stream_closed',
   'blocked',
   'awaiting_decision',
+  'awaiting_publication',
   'in_flight',
   'claimed',
   'pull_request_open',

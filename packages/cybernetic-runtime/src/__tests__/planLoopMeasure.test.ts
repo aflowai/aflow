@@ -4,9 +4,23 @@
  * became actionable to its first commission, and each node's cost with the
  * resident's wakes beside it.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { PgDialect } from 'drizzle-orm/pg-core';
+import type { SQL } from 'drizzle-orm';
+import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { PlanLoopMeasureOutputSchema } from '@aflow/schemas';
-import { measurePlanLoop, planLoopWindow, type PlanLoopFacts } from '../plan/loopMeasure.js';
+import {
+  measurePlanLoop,
+  planLoopWindow,
+  readPlanLoopFacts,
+  type PlanLoopFacts,
+} from '../plan/loopMeasure.js';
+
+const tx = vi.hoisted(() => ({ execute: vi.fn() }));
+vi.mock('@aflow/database', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@aflow/database')>()),
+  withTenantSchema: (_db: unknown, _ctx: unknown, fn: (t: unknown) => unknown) => fn(tx),
+}));
 
 const ROOT = '00000000-0000-4000-8000-000000000001';
 const A = '00000000-0000-4000-8000-00000000000a';
@@ -66,6 +80,31 @@ function facts(extra: Partial<PlanLoopFacts> = {}): PlanLoopFacts {
 }
 
 describe('the loop’s numbers (Plan 331 D7)', () => {
+  it('excludes scheduled starts without excluding a person resuming a scheduled session', async () => {
+    tx.execute.mockImplementation((query: SQL) => {
+      const { sql } = new PgDialect().sqlToQuery(query);
+      if (sql.includes('FROM event_log')) {
+        expect(sql).toContain(
+          "e.event_type = 'SessionResumed' OR (e.event_type = 'SessionStarted'",
+        );
+        expect(sql).toContain(
+          "s.execution_authority ->> 'establishedReason' IS DISTINCT FROM 'schedule'",
+        );
+        return [{ n: 1 }];
+      }
+      if (sql.includes('FROM public.platform_audit_log') && sql.includes('GROUP BY action')) {
+        expect(sql).toContain("actor_type = 'human'");
+      }
+      if (sql.includes('FROM sessions')) return [{ sessions: 120, cents: '900' }];
+      if (sql.includes('FROM plan_node_links')) return [{ n: 1 }];
+      return [];
+    });
+    const read = await readPlanLoopFacts({} as PostgresJsDatabase, ROOT, ROOT, window);
+    const measure = measurePlanLoop(read, window);
+    expect(measure.operatorActions.total).toBe(1);
+    expect(measure.actionsPerMergedPullRequest).toBe(1);
+    expect(measure.cost.wakes.sessions).toBe(120);
+  });
   it('reads zero operator actions over a weekend in which approved nodes landed', () => {
     const measure = measurePlanLoop(
       facts({ mergedPullRequests: 3, wakes: { sessions: 120, cents: 900 } }),
