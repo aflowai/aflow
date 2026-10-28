@@ -30,6 +30,7 @@ function inventory(
     harnesses,
     maxConcurrentHarnessRuns: HOST_HARNESS_CONCURRENCY_DEFAULT,
     folders,
+    previews: [],
     browsers,
   };
 }
@@ -342,6 +343,19 @@ describe('host inventories', () => {
   it('refuses an inventory missing the folder list', async () => {
     const now = Date.now();
     const { folders: _folders, ...stale } = inventory('laptop', [
+      { id: 'claude', installed: true },
+    ]);
+    const redis = fakeRedis(
+      { [now - 1_000]: 'laptop' },
+      { [hostInventoryKey('laptop')]: JSON.stringify(stale) },
+    );
+
+    expect(await readLiveHostInventories(redis, now)).toEqual([]);
+  });
+
+  it('refuses an inventory missing the preview list', async () => {
+    const now = Date.now();
+    const { previews: _previews, ...stale } = inventory('laptop', [
       { id: 'claude', installed: true },
     ]);
     const redis = fakeRedis(

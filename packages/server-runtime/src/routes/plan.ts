@@ -5,8 +5,7 @@
  * write of theirs is judged by the same rules — the revision compare-and-set
  * of D6 above all.
  */
-import { resolvePrincipalActorKind } from '../utils/actorContext.js';
-import type { FastifyPluginAsync } from 'fastify';
+import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
@@ -17,24 +16,29 @@ import {
   PlanNodeCloseInputSchema,
   PlanNodeDetailOutputSchema,
   PlanNodeDetailQuerySchema,
-  PlanNodeOpenSchema,
+  PlanNodeOpenInputSchema,
+  PlanNodePlaceInputSchema,
+  PlanNodePlaceRefusalDetailsSchema,
   PlanNodeRefusalDetailsSchema,
   PlanNodeUpdateOutputSchema,
   PlanNodeWriteRefusalSchema,
   PlanTreeOutputSchema,
   PlanTreeQuerySchema,
+  type PlanNodeStatus,
   type PlanNodeWriteRefusal,
 } from '@aflow/schemas';
 import {
   createPlanNodeStore,
   createResidentScheduleStore,
-  openPlanNode,
   readPlanLoopMeasure,
+  openPlanNode,
+  placePlanNode,
   readPlanNodeDetail,
   readPlanTrees,
   requestResidentWake,
   updatePlanNode,
   type PlanOpError,
+  type PlanWriteContext,
 } from '@aflow/cybernetic-runtime';
 import { isInteractiveUser } from '../utils/interactiveUser.js';
 import { PLAN_WRITE_OPERATOR_ONLY } from '../lib/planWriteAuthority.js';
@@ -47,8 +51,19 @@ import { PLAN_WRITE_OPERATOR_ONLY } from '../lib/planWriteAuthority.js';
 function refusalBody(
   refusal: PlanOpError,
   expectedRevision: number,
-  write: 'close' | 'open' = 'close',
+  unchanged: (status: PlanNodeStatus) => string = (status) =>
+    `This step already stands as this would leave it (${status}), so nothing was written.`,
 ): PlanNodeWriteRefusal {
+  if (refusal.code === 'PLAN_NODE_PLACE_STALE') {
+    const placed = PlanNodePlaceRefusalDetailsSchema.safeParse(refusal.details);
+    return {
+      error: refusal.code,
+      message:
+        'The step this was placed against is not beside it any more, so nothing was written. Its siblings ' +
+        'are listed as they now stand; choose again among them.',
+      ...(placed.success ? { siblings: placed.data.siblings } : {}),
+    };
+  }
   const current = PlanNodeRefusalDetailsSchema.safeParse(refusal.details);
   if (refusal.code === 'PLAN_NODE_STALE' && current.success) {
     const { revision, status } = current.data;
@@ -61,17 +76,11 @@ function refusalBody(
       current: current.data,
     };
   }
-  if (refusal.code === 'PLAN_NODE_UNCHANGED' && current.success && write === 'open') {
-    return {
-      error: refusal.code,
-      message: `This step is ${current.data.status}: it waits on no person, so there is nothing to approve and nothing was written.`,
-      current: current.data,
-    };
-  }
+
   if (refusal.code === 'PLAN_NODE_UNCHANGED' && current.success) {
     return {
       error: refusal.code,
-      message: `This step already stands as this would leave it (${current.data.status}), so nothing was written.`,
+      message: unchanged(current.data.status),
       current: current.data,
     };
   }
@@ -81,17 +90,152 @@ function refusalBody(
   return { error: refusal.code, message: refusal.message };
 }
 
+/**
+ * The engine's remedy for an overlong note names update fields the open route
+ * does not take. On an approve the operator's lever is the reason they typed;
+ * on a reopen the overflow is the engine's line over the recorded outcome,
+ * which a shorter reason or none cannot bring under the limit.
+ */
+function openNoteTooLongBody(refusal: PlanOpError): PlanNodeWriteRefusal {
+  const details = z
+    .object({ status: z.string(), noteLength: z.number(), noteMaxChars: z.number() })
+    .partial()
+    .safeParse(refusal.details);
+  const { status, noteLength, noteMaxChars } = details.success ? details.data : {};
+  const size =
+    noteLength !== undefined && noteMaxChars !== undefined
+      ? ` at ${String(noteLength)} characters, past the ${String(noteMaxChars)} a note holds`
+      : ' longer than a note holds';
+  if (status === 'done' || status === 'dropped') {
+    return {
+      error: refusal.code,
+      message:
+        `Reopening heads this step’s note with the outcome it was closed with, which would leave the note${size}, ` +
+        'so nothing was written. A shorter reason, or none, does not bring it under: the recorded outcome has ' +
+        `to be shortened first, and the plan page cannot write it. Ask the Helmsman to shorten the outcome while ` +
+        `the step is still ${status}, then reopen it.`,
+    };
+  }
+  return {
+    error: refusal.code,
+    message:
+      `This would leave the step’s note${size}, so nothing was written. Shorten the reason, or clear it ` +
+      'and approve again without one.',
+  };
+}
+
+type OperatorAuthMethod = NonNullable<FastifyRequest['authUser']>['authMethod'];
+
 function refusalStatus(refusal: PlanOpError): 404 | 409 | 422 {
   if (refusal.code === 'PLAN_NODE_NOT_FOUND') return 404;
-  if (refusal.code === 'PLAN_NODE_STALE') return 409;
+  if (refusal.code === 'PLAN_NODE_STALE' || refusal.code === 'PLAN_NODE_PLACE_STALE') return 409;
   return 422;
 }
 
+const PLAN_WRITE_AUTHZ = {
+  authz: {
+    resource: 'space',
+    action: 'write',
+    resourceIdFrom: 'param',
+    resourceIdParam: 'spaceId',
+  },
+} as const;
+
+const PlanWriteParamsSchema = z.object({ spaceId: z.string().uuid(), nodeId: z.string().uuid() });
+
+const PLAN_WRITE_RESPONSES = {
+  200: PlanNodeUpdateOutputSchema,
+  403: z.object({ error: z.string(), message: z.string() }),
+  404: PlanNodeWriteRefusalSchema,
+  409: PlanNodeWriteRefusalSchema,
+  422: PlanNodeWriteRefusalSchema,
+  503: z.object({ error: z.string(), message: z.string() }),
+};
+
+interface PlanWriter {
+  ctx: PlanWriteContext;
+  userId: string;
+  authMethod: OperatorAuthMethod;
+}
+
+/** Who an operator's write is, from the session; undefined once the refusal is sent. */
+async function operatorWriting(
+  fastify: FastifyInstance,
+  request: FastifyRequest,
+  params: { spaceId: string; nodeId: string },
+  reply: FastifyReply,
+): Promise<PlanWriter | undefined> {
+  const authUser = request.authUser;
+  if (!authUser || !isInteractiveUser(authUser)) {
+    await reply.status(403).send({ error: 'operator_only', message: PLAN_WRITE_OPERATOR_ONLY });
+    return undefined;
+  }
+  const redis = fastify.appContext.redis;
+  if (!redis) {
+    await reply.status(503).send({
+      error: 'SERVICE_UNAVAILABLE',
+      message: 'Writing the plan needs Redis, which this server runs without.',
+    });
+    return undefined;
+  }
+  const tenant = await request.requireTenant();
+  const store = createPlanNodeStore(fastify.appContext.db as PostgresJsDatabase, tenant.tenantId);
+  return {
+    ctx: {
+      store,
+      spaceId: params.spaceId,
+      redis,
+      tenantId: tenant.tenantId,
+      createdBy: authUser.userId,
+      actorKind: 'human',
+    },
+    userId: authUser.userId,
+    authMethod: authUser.authMethod,
+  };
+}
+
 /**
- * A person wrote a node: the space's resident acts on it at once, or after the
- * wake in flight (Plan 331 D4). Best effort — the write stands whatever this
- * does, and the next heartbeat reads the same board.
+ * The write is the person signed in: who it was comes from the session, never
+ * the body, and is kept where every other operator write is.
  */
+async function recordPlanWrite(
+  fastify: FastifyInstance,
+  request: FastifyRequest,
+  params: { spaceId: string; nodeId: string },
+  writer: PlanWriter,
+  action: 'plan.node.close' | 'plan.node.open' | 'plan.node.place',
+  details: Record<string, unknown>,
+): Promise<void> {
+  await wakeResident(
+    fastify.appContext.db as PostgresJsDatabase,
+    writer.ctx.redis,
+    writer.ctx.tenantId,
+    params.spaceId,
+    request.log,
+  );
+  if (!fastify.audit) return;
+  const { ctx } = writer;
+  fastify.audit.record({
+    actor: {
+      userId: writer.userId,
+      kind: 'human',
+      authMethod: writer.authMethod,
+      tenantId: ctx.tenantId,
+    },
+    category: 'resource',
+    action,
+    outcome: 'success',
+    target: {
+      resourceType: 'plan_node',
+      resourceId: params.nodeId,
+      tenantId: ctx.tenantId,
+      spaceId: ctx.spaceId,
+    },
+    details,
+    request: { method: request.method, path: request.url },
+  });
+}
+
 async function wakeResident(
   db: PostgresJsDatabase,
   redis: Redis,
@@ -204,196 +348,124 @@ export const planRoutes: FastifyPluginAsync = async (fastify) => {
   app.patch(
     '/:spaceId/plan/nodes/:nodeId',
     {
-      config: {
-        authz: {
-          resource: 'space',
-          action: 'write',
-          resourceIdFrom: 'param',
-          resourceIdParam: 'spaceId',
-        },
-      },
+      config: PLAN_WRITE_AUTHZ,
       schema: {
         tags: ['Spaces'],
         summary:
           'Close a plan node — done with its outcome, or dropped with its branch — against the revision the operator read',
-        params: z.object({ spaceId: z.string().uuid(), nodeId: z.string().uuid() }),
+        params: PlanWriteParamsSchema,
         body: PlanNodeCloseInputSchema,
-        response: {
-          200: PlanNodeUpdateOutputSchema,
-          403: z.object({ error: z.string(), message: z.string() }),
-          404: PlanNodeWriteRefusalSchema,
-          409: PlanNodeWriteRefusalSchema,
-          422: PlanNodeWriteRefusalSchema,
-          503: z.object({ error: z.string(), message: z.string() }),
-        },
+        response: PLAN_WRITE_RESPONSES,
       },
     },
     async (request, reply) => {
-      const authUser = request.authUser;
-      if (!authUser || !isInteractiveUser(authUser)) {
-        return reply
-          .status(403)
-          .send({ error: 'operator_only', message: PLAN_WRITE_OPERATOR_ONLY });
-      }
-      const operator = { userId: authUser.userId };
-      const redis = fastify.appContext.redis;
-      if (!redis) {
-        return reply.status(503).send({
-          error: 'SERVICE_UNAVAILABLE',
-          message: 'Writing the plan needs Redis, which this server runs without.',
-        });
-      }
-      const tenant = await request.requireTenant();
-      const { spaceId, nodeId } = request.params;
+      const writer = await operatorWriting(fastify, request, request.params, reply);
+      if (!writer) return reply;
       const body = request.body;
-      const store = createPlanNodeStore(
-        fastify.appContext.db as PostgresJsDatabase,
-        tenant.tenantId,
-      );
-      const result = await updatePlanNode(
-        {
-          store,
-          spaceId,
-          redis,
-          tenantId: tenant.tenantId,
-          createdBy: operator.userId,
-          actorKind: 'human',
-        },
-        {
-          nodeId,
-          expectedRevision: body.expectedRevision,
-          status: body.status,
-          ...(body.outcome !== undefined ? { outcome: body.outcome } : {}),
-        },
-      );
+      const result = await updatePlanNode(writer.ctx, {
+        nodeId: request.params.nodeId,
+        expectedRevision: body.expectedRevision,
+        status: body.status,
+        ...(body.outcome !== undefined ? { outcome: body.outcome } : {}),
+      });
       if (!result.ok) {
         return reply.status(refusalStatus(result)).send(refusalBody(result, body.expectedRevision));
       }
-      // The write is the person signed in: who it was comes from the session,
-      // never the body, and is kept where every other operator write is.
-      if (fastify.audit) {
-        fastify.audit.record({
-          actor: {
-            userId: operator.userId,
-            kind: resolvePrincipalActorKind(authUser),
-            authMethod: authUser.authMethod,
-            tenantId: tenant.tenantId,
-          },
-          category: 'resource',
-          action: 'plan.node.close',
-          outcome: 'success',
-          target: {
-            resourceType: 'plan_node',
-            resourceId: nodeId,
-            tenantId: tenant.tenantId,
-            spaceId,
-          },
-          details: { status: body.status, revision: result.node.revision },
-          request: { method: request.method, path: request.url },
-        });
-      }
-      await wakeResident(
-        fastify.appContext.db as PostgresJsDatabase,
-        redis,
-        tenant.tenantId,
-        spaceId,
-        request.log,
-      );
+      await recordPlanWrite(fastify, request, request.params, writer, 'plan.node.close', {
+        status: body.status,
+        revision: result.node.revision,
+      });
       return { node: result.node };
     },
   );
 
-  // The operator moves a node to active (Plan 332 D6, Plan 331 D5): Approve or
-  // Resume on a blocked node, Reopen on a closed one. A write of its own, with
-  // an audit row of its own — never the close.
+  // Plan 332 D6: Approve on a blocked node, Reopen on a closed one — to
+  // `active` through the same update, the note left by the engine's rule.
   app.patch(
     '/:spaceId/plan/nodes/:nodeId/open',
     {
-      config: {
-        authz: {
-          resource: 'space',
-          action: 'write',
-          resourceIdFrom: 'param',
-          resourceIdParam: 'spaceId',
-        },
-      },
+      config: PLAN_WRITE_AUTHZ,
       schema: {
         tags: ['Spaces'],
         summary:
-          'Open a plan node — approve or resume a blocked one, reopen a closed one — against the revision the operator read',
-        params: z.object({ spaceId: z.string().uuid(), nodeId: z.string().uuid() }),
-        body: PlanNodeOpenSchema,
-        response: {
-          200: PlanNodeUpdateOutputSchema,
-          403: z.object({ error: z.string(), message: z.string() }),
-          404: PlanNodeWriteRefusalSchema,
-          409: PlanNodeWriteRefusalSchema,
-          422: PlanNodeWriteRefusalSchema,
-          503: z.object({ error: z.string(), message: z.string() }),
-        },
+          'Approve a blocked plan node or reopen a closed one — back to active — against the revision the operator read',
+        params: PlanWriteParamsSchema,
+        body: PlanNodeOpenInputSchema,
+        response: PLAN_WRITE_RESPONSES,
       },
     },
     async (request, reply) => {
-      const authUser = request.authUser;
-      if (!authUser || !isInteractiveUser(authUser)) {
-        return reply
-          .status(403)
-          .send({ error: 'operator_only', message: PLAN_WRITE_OPERATOR_ONLY });
-      }
-      const redis = fastify.appContext.redis;
-      if (!redis) {
-        return reply.status(503).send({
-          error: 'SERVICE_UNAVAILABLE',
-          message: 'Writing the plan needs Redis, which this server runs without.',
-        });
-      }
-      const tenant = await request.requireTenant();
-      const { spaceId, nodeId } = request.params;
+      const writer = await operatorWriting(fastify, request, request.params, reply);
+      if (!writer) return reply;
       const body = request.body;
-      const db = fastify.appContext.db as PostgresJsDatabase;
-      const result = await openPlanNode(
-        {
-          store: createPlanNodeStore(db, tenant.tenantId),
-          spaceId,
-          redis,
-          tenantId: tenant.tenantId,
-          createdBy: authUser.userId,
-          actorKind: 'human',
-        },
-        {
-          nodeId,
-          expectedRevision: body.expectedRevision,
-          ...(body.why !== undefined ? { why: body.why } : {}),
-          ...(body.spendCents !== undefined ? { spendCents: body.spendCents } : {}),
-        },
-      );
+      const result = await openPlanNode(writer.ctx, {
+        nodeId: request.params.nodeId,
+        expectedRevision: body.expectedRevision,
+        ...(body.why !== undefined ? { why: body.why } : {}),
+        ...(body.spendCents !== undefined ? { spendCents: body.spendCents } : {}),
+      });
+      if (!result.ok) {
+        if (result.code === 'PLAN_NODE_NOTE_TOO_LONG') {
+          return reply.status(refusalStatus(result)).send(openNoteTooLongBody(result));
+        }
+        return reply
+          .status(refusalStatus(result))
+          .send(
+            refusalBody(
+              result,
+              body.expectedRevision,
+              (status) =>
+                `This step is ${status}, not blocked or closed, so there is nothing to approve or reopen; nothing was written.`,
+            ),
+          );
+      }
+      await recordPlanWrite(fastify, request, request.params, writer, 'plan.node.open', {
+        status: result.from,
+        revision: result.node.revision,
+      });
+      return { node: result.node };
+    },
+  );
+
+  // Plan 332 D6: directly before or after a sibling — roots among roots.
+  app.patch(
+    '/:spaceId/plan/nodes/:nodeId/place',
+    {
+      config: PLAN_WRITE_AUTHZ,
+      schema: {
+        tags: ['Spaces'],
+        summary:
+          'Put a plan node directly before or after one of its siblings, against the revision the operator read',
+        params: PlanWriteParamsSchema,
+        body: PlanNodePlaceInputSchema,
+        response: PLAN_WRITE_RESPONSES,
+      },
+    },
+    async (request, reply) => {
+      const writer = await operatorWriting(fastify, request, request.params, reply);
+      if (!writer) return reply;
+      const body = request.body;
+      const anchor = 'before' in body ? { before: body.before } : { after: body.after };
+      const result = await placePlanNode(writer.ctx, {
+        nodeId: request.params.nodeId,
+        expectedRevision: body.expectedRevision,
+        ...anchor,
+      });
       if (!result.ok) {
         return reply
           .status(refusalStatus(result))
-          .send(refusalBody(result, body.expectedRevision, 'open'));
+          .send(
+            refusalBody(
+              result,
+              body.expectedRevision,
+              () => 'This step already stands there among its siblings, so nothing was written.',
+            ),
+          );
       }
-      if (fastify.audit) {
-        fastify.audit.record({
-          actor: {
-            userId: authUser.userId,
-            kind: resolvePrincipalActorKind(authUser),
-            authMethod: authUser.authMethod,
-            tenantId: tenant.tenantId,
-          },
-          category: 'resource',
-          action: 'plan.node.open',
-          outcome: 'success',
-          target: {
-            resourceType: 'plan_node',
-            resourceId: nodeId,
-            tenantId: tenant.tenantId,
-            spaceId,
-          },
-          details: { from: result.left, revision: result.node.revision },
-          request: { method: request.method, path: request.url },
-        });
-      }
-      await wakeResident(db, redis, tenant.tenantId, spaceId, request.log);
+      await recordPlanWrite(fastify, request, request.params, writer, 'plan.node.place', {
+        ...anchor,
+        revision: result.node.revision,
+      });
       return { node: result.node };
     },
   );

@@ -7,9 +7,11 @@ import {
 } from '../../cybernetic/coachLearning.js';
 import {
   OPEN_PLAN_NODE_STATUSES,
-  PLAN_NODE_PROSE_MAX_CHARS,
   PlanNodeCloseSchema,
   PlanNodeCreateSchema,
+  PlanNodeOpenSchema,
+  PlanNodePlaceSchema,
+  PlanNodeSiblingSchema,
   PlanNodeDependencyConditionSchema,
   PlanNodeDependencySchema,
   PlanNodeDependencyViewSchema,
@@ -19,7 +21,6 @@ import {
   PlanNodeLinkSchema,
   PlanNodeRunSchema,
   PlanNodeSchema,
-  PlanNodeSpendCentsSchema,
   PlanNodeStatusSchema,
   PlanNodeSummarySchema,
   PlanNodeUpdateFieldSchema,
@@ -491,31 +492,27 @@ export const PlanNodeCloseInputSchema = PlanNodeCloseSchema;
 export type PlanNodeCloseInput = z.infer<typeof PlanNodeCloseInputSchema>;
 
 /**
- * `PATCH /v1/spaces/:spaceId/plan/nodes/:nodeId/open` — a person moves a node
- * to `active` (Plan 332 D6, Plan 331 D5): a `blocked` node is approved, or a
- * stop lifted, and a closed one reopened. A write of its own, never the close.
+ * `PATCH /v1/spaces/:spaceId/plan/nodes/:nodeId/open` — the operator approves a
+ * blocked node or reopens a closed one (Plan 332 D6).
  */
-export const PlanNodeOpenSchema = z
+export const PlanNodeOpenInputSchema = PlanNodeOpenSchema;
+export type PlanNodeOpenInput = z.infer<typeof PlanNodeOpenInputSchema>;
+
+/**
+ * `PATCH /v1/spaces/:spaceId/plan/nodes/:nodeId/place` — the operator puts a
+ * node before or after a sibling (Plan 332 D6).
+ */
+export const PlanNodePlaceInputSchema = PlanNodePlaceSchema;
+export type PlanNodePlaceInput = z.infer<typeof PlanNodePlaceInputSchema>;
+
+/** `error.details` for `PLAN_NODE_PLACE_STALE`: the node's siblings, itself among them, in order. */
+export const PlanNodePlaceRefusalDetailsSchema = z
   .object({
-    spendCents: PlanNodeSpendCentsSchema.optional(),
-    expectedRevision: z
-      .number()
-      .int()
-      .min(1)
-      .describe('The revision the page showed when the operator chose.'),
-    why: z
-      .string()
-      .trim()
-      .min(1)
-      // The note it is written into is the only ceiling.
-      .max(PLAN_NODE_PROSE_MAX_CHARS)
-      .optional()
-      .describe(
-        'Why, in the operator’s words: on a blocked node the note’s first line becomes `Approved: <why>`; on a closed one `Reopened: <why>` follows the engine’s reopened line.',
-      ),
+    nodeId: z.string().uuid(),
+    siblings: z.array(PlanNodeSiblingSchema),
   })
   .strict();
-export type PlanNodeOpen = z.infer<typeof PlanNodeOpenSchema>;
+export type PlanNodePlaceRefusalDetails = z.infer<typeof PlanNodePlaceRefusalDetailsSchema>;
 
 /** An operator's write the engine refused, with what a retry needs. */
 export const PlanNodeWriteRefusalSchema = z.object({
@@ -524,6 +521,12 @@ export const PlanNodeWriteRefusalSchema = z.object({
   current: PlanNodeRefusalDetailsSchema.optional().describe(
     'For a stale or unchanged write: the node as it now stands — write again against `current.revision`.',
   ),
+  siblings: z
+    .array(PlanNodeSiblingSchema)
+    .optional()
+    .describe(
+      'For a place whose sibling moved away: the node’s siblings as they now stand, in order, the node among them.',
+    ),
 });
 export type PlanNodeWriteRefusal = z.infer<typeof PlanNodeWriteRefusalSchema>;
 

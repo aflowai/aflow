@@ -28,6 +28,12 @@ const published = vi.hoisted(() => ({
     mergePosture?: string;
   }>,
   elsewhere: [] as Array<{ id: string; spaceId: string; pushApproval: string }>,
+  previews: [] as Array<{
+    id: string;
+    spaceId: string;
+    preview?: Record<string, unknown>;
+    detectedWebApps: string[];
+  }>,
 }));
 
 function storedRow(values: Record<string, unknown>): Record<string, unknown> {
@@ -88,6 +94,7 @@ vi.mock('@aflow/redis', async (importOriginal) => {
           ],
           defaultHarness: 'claude',
           folders: published.folders,
+          previews: published.previews,
         },
         {
           hostname: 'desktop',
@@ -95,9 +102,11 @@ vi.mock('@aflow/redis', async (importOriginal) => {
           runtimes: [],
           harnesses: [{ id: 'codex', installed: true }],
           folders: published.elsewhere,
+          previews: [],
         },
       ]),
     publishingFoldersForSpace: actual.publishingFoldersForSpace,
+    folderPreviewsForSpace: actual.folderPreviewsForSpace,
   };
 });
 
@@ -144,6 +153,7 @@ beforeEach(() => {
   written.existing = [];
   published.folders = [];
   published.elsewhere = [];
+  published.previews = [];
 });
 
 describe('the folders a workspace lists', () => {
@@ -200,6 +210,49 @@ describe('the folders a workspace lists', () => {
     ]);
     expect(listed[0]!['mergePostureIdleReason']).toBeNull();
     expect(listed[1]!['mergePostureIdleReason']).toMatch(/runs no review/);
+    await app.close();
+  });
+});
+
+describe('how a listed folder is shown working (Plan 320 D18)', () => {
+  it('carries each folder’s preview as its machine declares it, pushing or not, and where it found a web app', async () => {
+    written.existing = [
+      storedRow({ branchPrefix: 'aflow/' }),
+      storedRow({ hostBindingId: 'hb_site', branchPrefix: null }),
+      storedRow({ hostBindingId: 'hb_gone', branchPrefix: null }),
+    ];
+    published.previews = [
+      {
+        id: 'hb_thing',
+        spaceId: SPACE,
+        preview: { command: 'yarn dev --port {port}' },
+        detectedWebApps: [],
+      },
+      { id: 'hb_site', spaceId: SPACE, detectedWebApps: ['apps/web'] },
+      { id: 'hb_gone', spaceId: 'another-space', detectedWebApps: ['.'] },
+    ];
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: `/spaces/${SPACE}/host-bindings` });
+    expect(res.statusCode).toBe(200);
+    const json = res.json<{
+      bindings: Array<Record<string, unknown>>;
+      machines: Array<{ hostname: string }>;
+    }>();
+    expect(json.bindings.map((b) => [b['hostBindingId'], b['preview']])).toEqual([
+      [
+        'hb_thing',
+        {
+          hostname: 'laptop',
+          declared: { command: 'yarn dev --port {port}' },
+          detectedWebApps: [],
+        },
+      ],
+      ['hb_site', { hostname: 'laptop', declared: null, detectedWebApps: ['apps/web'] }],
+      // Published for another workspace, so this one does not hear of it.
+      ['hb_gone', null],
+    ]);
+    // A machine holding only folders that push nothing still holds this workspace's folders.
+    expect(json.machines.map((m) => m.hostname)).toEqual(['laptop']);
     await app.close();
   });
 });

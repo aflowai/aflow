@@ -24,6 +24,7 @@ import {
   HOST_HARNESS_CONCURRENCY_DEFAULT,
   HOST_KEEP_AWAKE_DEFAULT,
   HostBindingBranchPolicySchema,
+  HostFolderPreviewSchema,
   type HostKeepAwakeMode,
   HostKeepAwakeModeSchema,
   HostSandboxPostureSchema,
@@ -70,6 +71,13 @@ export const HostBindingSchema = z.object({
    * time, so a change of default reaches a folder that never chose.
    */
   sandbox: HostSandboxPostureSchema.optional(),
+  /**
+   * How the folder is shown working (Plan 320 D18), written only as the
+   * person declared it: `resolveFolderPreview` reads the defaults in each
+   * time, so a policy written before it loads unchanged and a change of
+   * default reaches a folder that never chose one.
+   */
+  preview: HostFolderPreviewSchema.optional(),
   /** Present for a binding the operator connected as a single file rather than a folder. */
   singleFile: z.boolean().default(false),
   /**

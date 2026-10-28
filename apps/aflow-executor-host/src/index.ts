@@ -34,6 +34,8 @@ import {
   HOST_MACHINES_KEY,
   hostBrowserAnswerChannel,
   hostBrowserRequestChannel,
+  hostFolderAnswerChannel,
+  hostFolderRequestChannel,
   hostRuntimeAnswerChannel,
   hostRuntimeRequestChannel,
   readHostRuntimeRequest,
@@ -43,9 +45,11 @@ import {
   type HostInventory,
   type HostInventoryBrowsers,
   type HostInventoryFolders,
+  type HostInventoryPreviews,
   type HostWithdrawalNotice,
   quitRedisWithTimeout,
   readHostBrowserRequest,
+  readHostFolderRequest,
 } from '@aflow/redis';
 import { HOST_HARNESS_CONCURRENCY_DEFAULT, HOST_KEEP_AWAKE_DEFAULT } from '@aflow/schemas';
 
@@ -87,6 +91,7 @@ import { followPolicy, watchPolicy } from './policyWatch.js';
 import { killAllProcesses, killProcessesForBinding, reapWithdrawn } from './sandboxedRun.js';
 import { observeRuntimes } from './runtimes.js';
 import { createMachineReader } from './machine.js';
+import { folderPreviewsInTurn, previewFolders } from './folderPreview.js';
 import { publishingFolders } from './pushApproval.js';
 import { startUnderSignals } from './startUnderSignals.js';
 import { createStartupTimings } from './startupTimings.js';
@@ -259,6 +264,7 @@ async function main(): Promise<void> {
     handoffs,
   });
   const applyBrowserSetting = browserSettingsInTurn(policyPath, discoverChrome, stackPorts);
+  const applyFolderPreview = folderPreviewsInTurn(policyPath, stackPorts);
 
   runtime.registerHandler(
     createHostHandler(
@@ -288,6 +294,7 @@ async function main(): Promise<void> {
   let lastHarnesses: HostInventory['harnesses'] = [];
   let lastDefaultHarness: string | undefined;
   let lastFolders: HostInventoryFolders = [];
+  let lastPreviews: HostInventoryPreviews = [];
   let lastMaxConcurrentHarnessRuns = HOST_HARNESS_CONCURRENCY_DEFAULT;
   let lastBrowsers: HostInventoryBrowsers = [];
   const machine = createMachineReader({ hostDir: dirname(policyPath) });
@@ -305,32 +312,34 @@ async function main(): Promise<void> {
     // From the policy rather than from discovery: an installed harness the
     // operator never added to the file cannot be addressed by a run, so naming
     // it here would offer work that is refused.
-    const { harnesses, defaultHarness, folders, maxConcurrentHarnessRuns } = await loadHostPolicy(
-      policyPath,
-    )
-      .then(async (policy) => ({
-        harnesses: (
-          await Promise.all(
-            [...policy.harnesses.values()].map(async (profile) => ({
-              id: profile.id,
-              ...(profile.label !== undefined ? { label: profile.label } : {}),
-              installed: await executableResolves(profile.executable),
-            })),
-          )
-        ).sort((a, b) => a.id.localeCompare(b.id)),
-        defaultHarness: policy.defaultHarness,
-        folders: publishingFolders(policy.bindings),
-        maxConcurrentHarnessRuns: policy.maxConcurrentHarnessRuns,
-      }))
-      .catch(() => ({
-        harnesses: lastHarnesses,
-        defaultHarness: lastDefaultHarness,
-        folders: lastFolders,
-        maxConcurrentHarnessRuns: lastMaxConcurrentHarnessRuns,
-      }));
+    const { harnesses, defaultHarness, folders, previews, maxConcurrentHarnessRuns } =
+      await loadHostPolicy(policyPath)
+        .then(async (policy) => ({
+          harnesses: (
+            await Promise.all(
+              [...policy.harnesses.values()].map(async (profile) => ({
+                id: profile.id,
+                ...(profile.label !== undefined ? { label: profile.label } : {}),
+                installed: await executableResolves(profile.executable),
+              })),
+            )
+          ).sort((a, b) => a.id.localeCompare(b.id)),
+          defaultHarness: policy.defaultHarness,
+          folders: publishingFolders(policy.bindings),
+          previews: await previewFolders(policy.bindings),
+          maxConcurrentHarnessRuns: policy.maxConcurrentHarnessRuns,
+        }))
+        .catch(() => ({
+          harnesses: lastHarnesses,
+          defaultHarness: lastDefaultHarness,
+          folders: lastFolders,
+          previews: lastPreviews,
+          maxConcurrentHarnessRuns: lastMaxConcurrentHarnessRuns,
+        }));
     lastHarnesses = harnesses;
     lastDefaultHarness = defaultHarness;
     lastFolders = folders;
+    lastPreviews = previews;
     lastMaxConcurrentHarnessRuns = maxConcurrentHarnessRuns;
     const browsers = await browserDriver
       .machineProfiles()
@@ -360,6 +369,7 @@ async function main(): Promise<void> {
       ...(defaultHarness !== undefined ? { defaultHarness } : {}),
       maxConcurrentHarnessRuns,
       folders,
+      previews,
       browsers,
     };
     await redis.setex(
@@ -651,6 +661,35 @@ async function main(): Promise<void> {
         });
       });
   };
+  // The operator declaring or clearing a folder's preview from the machine page
+  // (Plan 320 D18), written by the command's own writer once the folder is
+  // found connected for the workspace asking. Only the operator route
+  // publishes here, on a person's authenticated request.
+  const folderChannel = hostFolderRequestChannel(hostname);
+  await hostChannels.subscribe(folderChannel).catch((error: unknown) => {
+    log.warn('Could not subscribe to folder requests from the workspace', { error });
+  });
+  const folderAsked = (raw: string): void => {
+    const request = readHostFolderRequest(raw, hostname);
+    if (request === undefined) return;
+    void applyFolderPreview(request)
+      .then(async (answer) => {
+        log.info('Applied a folder preview asked for from the workspace', {
+          bindingId: request.bindingId,
+          cleared: request.preview === null,
+          outcome: answer.kind,
+        });
+        // Before the answer, so the page reading the inventory after it sees the change.
+        if (answer.kind === 'changed') await inventoryTask.runOnce().catch(() => undefined);
+        await redis.publish(hostFolderAnswerChannel(request.answerId), JSON.stringify(answer));
+      })
+      .catch((error: unknown) => {
+        log.warn('Could not answer a folder preview asked for from the workspace', {
+          bindingId: request.bindingId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+  };
   // The operator asking from the workspace for Ollama to start here. Two asks
   // at once share one start, so a double click does not race two launches.
   const runtimeChannel = hostRuntimeRequestChannel(hostname);
@@ -686,6 +725,10 @@ async function main(): Promise<void> {
     }
     if (channel === runtimeChannel) {
       runtimeAsked(raw);
+      return;
+    }
+    if (channel === folderChannel) {
+      folderAsked(raw);
       return;
     }
     if (channel !== HOST_WITHDRAWAL_CHANNEL) return;

@@ -230,6 +230,71 @@ export const PlanNodeCloseSchema = z
   });
 export type PlanNodeClose = z.infer<typeof PlanNodeCloseSchema>;
 
+const ExpectedRevisionSchema = z
+  .number()
+  .int()
+  .min(1)
+  .describe('The revision the page showed when the operator chose.');
+
+/** How long the operator's reason for an approve or a reopen may be: one line of a note. */
+export const PLAN_NODE_OPEN_WHY_MAX_CHARS = PLAN_NODE_PROSE_MAX_CHARS;
+
+/**
+ * The operator moves a `blocked`, `done` or `dropped` node to `active` (Plan
+ * 332 D6): **Approve** on a blocked one, **Reopen** on a closed one. The engine
+ * writes `why` into the note by its rule for each.
+ */
+export const PlanNodeOpenSchema = z
+  .object({
+    spendCents: PlanNodeSpendCentsSchema.optional(),
+    expectedRevision: ExpectedRevisionSchema,
+    why: z
+      .string()
+      .trim()
+      .min(1)
+      .max(PLAN_NODE_OPEN_WHY_MAX_CHARS)
+      .optional()
+      .describe(
+        'Why it is approved or reopened; the note gains it as `Approved: …` or `Reopened: …`.',
+      ),
+  })
+  .strict();
+export type PlanNodeOpen = z.infer<typeof PlanNodeOpenSchema>;
+
+const PlaceAnchorSchema = z.string().uuid();
+
+/**
+ * The operator puts a node directly before or after one of its siblings (Plan
+ * 332 D6) — roots among roots. Never an absolute position: two operators
+ * reordering at once would each overwrite the other's order unrefused.
+ */
+export const PlanNodePlaceSchema = z.union([
+  z
+    .object({
+      expectedRevision: ExpectedRevisionSchema,
+      before: PlaceAnchorSchema.describe('The sibling the node goes directly before.'),
+    })
+    .strict(),
+  z
+    .object({
+      expectedRevision: ExpectedRevisionSchema,
+      after: PlaceAnchorSchema.describe('The sibling the node goes directly after.'),
+    })
+    .strict(),
+]);
+export type PlanNodePlace = z.infer<typeof PlanNodePlaceSchema>;
+
+/** One sibling as a refused place names it: the order as it stands, for the page to show. */
+export const PlanNodeSiblingSchema = z
+  .object({
+    nodeId: z.string().uuid(),
+    title: z.string(),
+    status: PlanNodeStatusSchema,
+    position: z.number().int().min(0),
+  })
+  .strict();
+export type PlanNodeSibling = z.infer<typeof PlanNodeSiblingSchema>;
+
 // ============================================================================
 // Links (Plan 322 P1) — what did or holds a node's work
 // ============================================================================

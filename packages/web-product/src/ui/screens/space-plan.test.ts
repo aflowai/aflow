@@ -46,9 +46,15 @@ const recorded = vi.hoisted(() => ({
   findings: {} as Record<string, Answer>,
   runPages: {} as Record<string, Answer>,
   linkQueries: [] as Array<{ key: unknown[]; path: string }>,
-  mutation: undefined as Mutation | undefined,
-  /** The open write's mutation: Approve and Resume (Plan 332 D6). */
-  openMutation: undefined as Mutation | undefined,
+  /** Every write the page holds, in the order it declared them. */
+  mutations: [] as Array<{
+    path: (input: { nodeId: string }) => string;
+    method: string;
+    serialize: (input: Record<string, unknown>) => string;
+    invalidate: unknown[];
+  }>,
+  /** Each write sent: the route it went to and the body it carried. */
+  sent: [] as Array<{ path: string; body: unknown }>,
   mutateAsync: vi.fn(),
   narrow: false,
   /** The space each render subscribed the page's live refresh for. */
@@ -147,7 +153,16 @@ vi.mock('../hooks/use-plan-live-refresh.js', () => ({
 }));
 
 vi.mock('../hooks/useApiQuery.js', () => ({
-  useApiQuery: (options: { key: unknown[]; path: string; staleTime?: number }) => {
+  useApiQuery: (options: {
+    key: unknown[];
+    path: string;
+    staleTime?: number;
+    enabled?: boolean;
+  }) => {
+    // A disabled query reads nothing.
+    if (options.enabled === false) {
+      return { data: undefined, error: null, isFetchedAfterMount: false, refetch: vi.fn() };
+    }
     const [, , , kind, nodeId, sub, linkKind, cursor] = options.key as string[];
     if (kind === 'board') {
       recorded.boardQueries.push(options);
@@ -177,10 +192,17 @@ vi.mock('../hooks/useApiQuery.js', () => ({
       refetch: recorded.detailRefetch,
     };
   },
-  useApiMutation: (options: Mutation) => {
-    if (options.path({ nodeId: 'probe' }).endsWith('/open')) recorded.openMutation = options;
-    else recorded.mutation = options;
-    return { mutateAsync: recorded.mutateAsync };
+  useApiMutation: (options: (typeof recorded.mutations)[number]) => {
+    recorded.mutations.push(options);
+    return {
+      mutateAsync: (input: { nodeId: string } & Record<string, unknown>) => {
+        recorded.sent.push({
+          path: options.path(input),
+          body: JSON.parse(options.serialize(input)) as unknown,
+        });
+        return recorded.mutateAsync(input) as Promise<unknown>;
+      },
+    };
   },
 }));
 
@@ -427,6 +449,13 @@ async function type(scope: Element, text: string): Promise<void> {
   });
 }
 
+/** The write the page declared whose route ends in `suffix` after the node's id. */
+function mutationFor(suffix: '' | '/open' | '/place') {
+  return recorded.mutations.find(
+    (m) => m.path({ nodeId: BOARD }) === `/spaces/${SPACE_ID}/plan/nodes/${BOARD}${suffix}`,
+  );
+}
+
 function lastBoardQuery() {
   const query = recorded.boardQueries.at(-1);
   if (!query) throw new Error('no board query');
@@ -457,8 +486,8 @@ beforeEach(() => {
   recorded.findings = {};
   recorded.runPages = {};
   recorded.linkQueries = [];
-  recorded.mutation = undefined;
-  recorded.openMutation = undefined;
+  recorded.mutations = [];
+  recorded.sent = [];
   recorded.mutateAsync.mockReset();
   recorded.narrow = false;
   container = document.createElement('div');
@@ -846,7 +875,7 @@ describe('SpacePlanPage — the rail', () => {
     expect([...all.querySelectorAll('button')].map((b) => b.textContent)).not.toContain('More');
   });
 
-  it('shows a closed step’s outcome boxed, its merge and when it closed, and no controls', async () => {
+  it('shows a closed step’s outcome boxed, its merge and when it closed, and only Reopen', async () => {
     recorded.details[LANDED] = detail(
       fullNode(LANDED, 'P3.2 operator writes', {
         status: 'done',
@@ -864,7 +893,10 @@ describe('SpacePlanPage — the rail', () => {
     );
     expect(shown.textContent).toContain('93ce256');
     expect(shown.textContent).toContain('Closed ');
-    expect([...shown.querySelectorAll('button')].map((b) => b.textContent)).toEqual(['Close']);
+    expect([...shown.querySelectorAll('button')].map((b) => b.textContent)).toEqual([
+      'Close',
+      'Reopen',
+    ]);
   });
 
   it('collapses Dropped to a strip while the rail is open', async () => {
@@ -937,7 +969,7 @@ describe('SpacePlanPage — the operator’s writes from the rail', () => {
   it('writes through the plan route: PATCH on the node, the body without its id, the plan re-read', async () => {
     await render();
 
-    const mutation = recorded.mutation!;
+    const mutation = mutationFor('')!;
     expect(mutation.method).toBe('PATCH');
     expect(mutation.path({ nodeId: BOARD })).toBe(`/spaces/${SPACE_ID}/plan/nodes/${BOARD}`);
     expect(
@@ -1099,7 +1131,7 @@ describe('SpacePlanPage — the operator’s writes from the rail', () => {
       expectedRevision: 4,
       why: 'Go ahead.',
     });
-    const open = recorded.openMutation!;
+    const open = mutationFor('/open')!;
     expect(open.method).toBe('PATCH');
     expect(open.path({ nodeId: ARTICLE })).toBe(`/spaces/${SPACE_ID}/plan/nodes/${ARTICLE}/open`);
     expect(
@@ -1120,7 +1152,7 @@ describe('SpacePlanPage — the operator’s writes from the rail', () => {
     );
     await render({ data: withStatus(ARTICLE, 'blocked') });
     await click(card(ARTICLE));
-    await click(button(rail(), 'Resume'));
+    await click(button(rail(), 'Approve'));
     const field = rail().querySelector('input')!;
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(
@@ -1129,7 +1161,7 @@ describe('SpacePlanPage — the operator’s writes from the rail', () => {
       );
       field.dispatchEvent(new Event('input', { bubbles: true }));
     });
-    await click(button(rail(), 'Resume'));
+    await click(button(rail(), 'Approve'));
     expect(recorded.mutateAsync).toHaveBeenCalledWith({
       nodeId: ARTICLE,
       expectedRevision: 4,
@@ -1137,7 +1169,7 @@ describe('SpacePlanPage — the operator’s writes from the rail', () => {
     });
     expect(
       JSON.parse(
-        recorded.openMutation!.serialize({
+        mutationFor('/open')!.serialize({
           nodeId: ARTICLE,
           expectedRevision: 4,
           spendCents: 12500,
@@ -1156,7 +1188,7 @@ describe('SpacePlanPage — the operator’s writes from the rail', () => {
     );
     await render({ data: withStatus(ARTICLE, 'blocked') });
     await click(card(ARTICLE));
-    expect(button(rail(), 'Resume')).toBeTruthy();
+    expect(button(rail(), 'Approve')).toBeTruthy();
 
     await click(card(BOARD));
     expect([...rail().querySelectorAll('button')].map((b) => b.textContent)).not.toContain(
@@ -1181,5 +1213,232 @@ describe('SpacePlanPage — the operator’s writes from the rail', () => {
     expect(container.querySelector('[data-plan-close]')).toBe(null);
     expect(rail().querySelector('[data-plan-outcome]')?.textContent).toBe('Done elsewhere.');
     expect(recorded.mutateAsync).not.toHaveBeenCalled();
+  });
+});
+
+// Plan 332 P2: a plan with a blocked step, Up next steps among open and
+// closed siblings, a done step with an open one stranded under it, and a
+// phase whose only step has no sibling to move past.
+const R331 = '00000000-0000-4000-8000-0000000000d1';
+const BLOCKED = '00000000-0000-4000-8000-0000000000d2';
+const UP_A = '00000000-0000-4000-8000-0000000000d3';
+const CLOSED = '00000000-0000-4000-8000-0000000000d4';
+const STRANDED = '00000000-0000-4000-8000-0000000000d5';
+const UP_B = '00000000-0000-4000-8000-0000000000d6';
+const UP_C = '00000000-0000-4000-8000-0000000000d7';
+const PHASE = '00000000-0000-4000-8000-0000000000d8';
+const LONE = '00000000-0000-4000-8000-0000000000d9';
+
+const P2_PLAN: PlanTreeOutput = {
+  roots: [
+    treeNode(R331, null, 'Plan 331 · the always-on Helmsman', {
+      children: [
+        treeNode(BLOCKED, R331, 'P1 — the loop takes the next node', {
+          status: 'blocked',
+          revision: 3,
+          noteHead: 'Proposed from the merged plan document',
+        }),
+        treeNode(UP_A, R331, 'P2 — asking', { position: 1 }),
+        treeNode(CLOSED, R331, 'P3 — proposing', {
+          position: 2,
+          status: 'done',
+          revision: 5,
+          closedAt: at(10, 22),
+          children: [treeNode(STRANDED, CLOSED, 'P3.a — carried findings')],
+        }),
+        treeNode(UP_B, R331, 'P4 — the thread', { position: 3 }),
+        treeNode(UP_C, R331, 'P5 — the pause', { position: 4 }),
+        treeNode(PHASE, R331, 'P6 — non-code roots', {
+          position: 5,
+          children: [treeNode(LONE, PHASE, 'P6.a — the first non-code root')],
+        }),
+      ],
+    }),
+  ],
+  tallies: [
+    {
+      rootId: R331,
+      steps: 9,
+      needsYou: 2,
+      inFlight: 0,
+      upNext: 5,
+      done: 1,
+      dropped: 0,
+      doneByDay: [{ day: '2026-10-22', count: 1 }],
+      nextNodeId: UP_A,
+    },
+  ],
+};
+
+function openForm(): Element {
+  const found = container.querySelector('[data-plan-open-form]');
+  if (!found) throw new Error('no open form');
+  return found;
+}
+
+function buttonTexts(scope: Element): string[] {
+  return [...scope.querySelectorAll('button')].map((b) => b.textContent ?? '');
+}
+
+describe('SpacePlanPage — approve, reopen and order (Plan 332 P2)', () => {
+  beforeEach(() => {
+    recorded.mutateAsync.mockResolvedValue({ node: {} });
+    recorded.details[BLOCKED] = detail(
+      fullNode(BLOCKED, 'P1 — the loop takes the next node', {
+        parentId: R331,
+        status: 'blocked',
+        revision: 3,
+      }),
+    );
+    recorded.details[CLOSED] = detail(
+      fullNode(CLOSED, 'P3 — proposing', {
+        parentId: R331,
+        status: 'done',
+        outcome: 'Merged.',
+        revision: 5,
+        closedAt: at(10, 22),
+      }),
+    );
+    recorded.details[STRANDED] = detail(
+      fullNode(STRANDED, 'P3.a — carried findings', { parentId: CLOSED }),
+    );
+  });
+
+  it('offers Approve on a blocked step beside its close controls, and none on a decision', async () => {
+    await render({ data: P2_PLAN });
+    await click(card(BLOCKED));
+    expect(buttonTexts(rail())).toEqual(['Close', 'Approve', 'Mark done', 'Drop']);
+
+    await render({ data: PLAN });
+    await click(card(DECISION));
+    expect(buttonTexts(rail())).not.toContain('Approve');
+  });
+
+  it('approves against the revision the rail read, with the reason, and re-reads the board on success', async () => {
+    await render({ data: P2_PLAN });
+    await click(card(BLOCKED));
+
+    await click(button(rail(), 'Approve'));
+    await type(openForm(), 'go ahead after Plan 330');
+    await click(button(openForm(), 'Approve'));
+
+    expect(recorded.sent).toEqual([
+      {
+        path: `/spaces/${SPACE_ID}/plan/nodes/${BLOCKED}/open`,
+        body: { expectedRevision: 3, why: 'go ahead after Plan 330' },
+      },
+    ]);
+    const write = mutationFor('/open')!;
+    expect(write.method).toBe('PATCH');
+    expect(write.invalidate).toEqual([['space', SPACE_ID, 'plan']]);
+    expect(container.querySelector('[data-plan-open-form]')).toBe(null);
+  });
+
+  it('holds an open form to the revision it opened on when the live read moves past it', async () => {
+    await render({ data: P2_PLAN });
+    await click(card(BLOCKED));
+    await click(button(rail(), 'Approve'));
+
+    recorded.details[BLOCKED] = detail(
+      fullNode(BLOCKED, 'P1 — the loop takes the next node', {
+        parentId: R331,
+        status: 'blocked',
+        revision: 4,
+      }),
+    );
+    await render({ data: P2_PLAN });
+    expect(openForm().querySelector('[data-plan-open-moved]')).not.toBe(null);
+
+    await click(button(openForm(), 'Approve'));
+    expect(recorded.sent[0]?.body).toEqual({ expectedRevision: 3 });
+  });
+
+  it('refuses to send a reason past the note ceiling', async () => {
+    await render({ data: P2_PLAN });
+    await click(card(BLOCKED));
+    await click(button(rail(), 'Approve'));
+    await type(openForm(), 'x'.repeat(64001));
+
+    expect(button(openForm(), 'Approve').disabled).toBe(true);
+  });
+
+  it('offers Reopen on a closed step and sends no reason where none is given', async () => {
+    await render({ data: P2_PLAN });
+    await click(card(CLOSED));
+    expect(buttonTexts(rail())).toEqual(['Close', 'Reopen']);
+
+    await click(button(rail(), 'Reopen'));
+    await click(button(openForm(), 'Reopen'));
+
+    expect(recorded.sent).toEqual([
+      { path: `/spaces/${SPACE_ID}/plan/nodes/${CLOSED}/open`, body: { expectedRevision: 5 } },
+    ]);
+  });
+
+  it('offers Reopen of the closed step above a stranded one, never Approve of the step itself', async () => {
+    await render({ data: P2_PLAN });
+    await click(card(STRANDED));
+    expect(buttonTexts(rail())).toEqual(['Close', 'Reopen P3', 'Mark done', 'Drop']);
+    expect(recorded.detailQueries.at(-1)).toMatchObject({
+      key: ['space', SPACE_ID, 'plan', 'node', CLOSED, 'head'],
+      staleTime: 0,
+    });
+
+    await click(button(rail(), 'Reopen P3'));
+    await type(openForm(), 'P3.a still has to land');
+    await click(button(openForm(), 'Reopen P3'));
+
+    expect(recorded.sent).toEqual([
+      {
+        path: `/spaces/${SPACE_ID}/plan/nodes/${CLOSED}/open`,
+        body: { expectedRevision: 5, why: 'P3.a still has to land' },
+      },
+    ]);
+  });
+
+  it('offers Move up and Move down on Up next cards only where an open sibling lies that way', async () => {
+    await render({ data: P2_PLAN });
+
+    expect(cardIds(column('up_next'))).toEqual([UP_A, UP_B, UP_C, PHASE, LONE]);
+    expect(buttonTexts(card(UP_A))).toEqual(['Move up', 'Move down']);
+    expect(buttonTexts(card(PHASE))).toEqual(['Move up']);
+    expect(buttonTexts(card(LONE))).toEqual([]);
+    expect(buttonTexts(card(BLOCKED))).toEqual([]);
+  });
+
+  it('sends the nearest open sibling, past a closed one, and does not open the rail', async () => {
+    await render({ data: P2_PLAN });
+
+    await click(button(card(UP_A), 'Move down'));
+    await click(button(card(UP_B), 'Move up'));
+
+    expect(recorded.sent).toEqual([
+      {
+        path: `/spaces/${SPACE_ID}/plan/nodes/${UP_A}/place`,
+        body: { expectedRevision: 1, after: UP_B },
+      },
+      {
+        path: `/spaces/${SPACE_ID}/plan/nodes/${UP_B}/place`,
+        body: { expectedRevision: 1, before: UP_A },
+      },
+    ]);
+    expect(mutationFor('/place')?.invalidate).toEqual([['space', SPACE_ID, 'plan']]);
+    expect(container.querySelector('[data-plan-rail]')).toBe(null);
+  });
+
+  it('says why a move was refused on its card, and re-reads the board when a sibling moved', async () => {
+    recorded.mutateAsync.mockRejectedValue(
+      Object.assign(new Error('The step this was placed against is not beside it any more.'), {
+        status: 409,
+      }),
+    );
+    await render({ data: P2_PLAN });
+
+    await click(button(card(UP_C), 'Move up'));
+
+    expect(card(UP_C).querySelector('[role="alert"]')?.textContent).toContain(
+      'not beside it any more',
+    );
+    expect(recorded.refetch).toHaveBeenCalled();
   });
 });

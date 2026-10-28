@@ -5,8 +5,9 @@
  * the node on demand when a card is opened — in full, the runs in flight, its
  * newest run links and its findings, each a page of the node detail — with
  * **Now**, the note's first line, above the goal and the whole note folded
- * under **Working note** (Plan 332 D5), and, for an open node, holds the
- * operator's own controls (P3.2).
+ * under **Working note** (Plan 332 D5), and holds the operator's own controls:
+ * close an open node (P3.2), **Approve** a blocked one, **Reopen** a closed one,
+ * and for a stranded one reopen the closed step above it (Plan 332 D6).
  */
 import { useState, type ReactNode } from 'react';
 import Link from 'next/link';
@@ -32,10 +33,10 @@ import {
 import {
   PlanNodeCloseControl,
   isClosedStatus,
-  type PlanNodeChoosing,
   type PlanNodeCloser,
-  type PlanNodeOpener,
+  type PlanNodeRead,
 } from './PlanNodeCloseControl.js';
+import { PlanNodeOpenControl, type PlanNodeOpener } from './PlanNodeOpenControl.js';
 
 /** Run links the rail lists before "All runs". */
 export const PLAN_RAIL_RUNS = 5;
@@ -199,6 +200,24 @@ function AllRunsMore({
   );
 }
 
+/**
+ * Only the read a rail made on opening, never a detail cached from an earlier
+ * opening of the card: an open form pins the first node it is given, and a
+ * stale one would be refused.
+ */
+function freshRead(query: {
+  data?: PlanNodeDetailOutput | undefined;
+  error: Error | null;
+  isFetchedAfterMount: boolean;
+  refetch: () => Promise<{ data?: PlanNodeDetailOutput | undefined }>;
+}): PlanNodeRead {
+  return {
+    node: query.isFetchedAfterMount && query.error === null ? query.data?.node : undefined,
+    error: query.error,
+    refetch: async () => (await query.refetch()).data?.node,
+  };
+}
+
 export interface PlanRailProps {
   node: PlanTreeNode;
   column: PlanBoardColumn;
@@ -210,10 +229,12 @@ export interface PlanRailProps {
   spaceId: string;
   spaceSlug: string;
   onClose: PlanNodeCloser;
+  /** For a stranded step: the closed step above it, which the rail offers to reopen. */
+  closedAncestor?: PlanTreeNode | undefined;
   onOpen: PlanNodeOpener;
-  /** The form open, if any; a card's Decide opens the rail with it open. */
-  choosing: PlanNodeChoosing;
-  onChoose: (choosing: PlanNodeChoosing) => void;
+  /** The close form open, if any; a card's Decide opens the rail with it open. */
+  choosing: 'done' | 'dropped' | null;
+  onChoose: (choosing: 'done' | 'dropped' | null) => void;
   onDismiss: () => void;
 }
 
@@ -226,6 +247,7 @@ export function PlanRail({
   spaceId,
   spaceSlug,
   onClose,
+  closedAncestor,
   onOpen,
   choosing,
   onChoose,
@@ -249,12 +271,21 @@ export function PlanRail({
       `linkKind=finding&limit=${String(PLAN_RAIL_FINDINGS)}`,
     ),
   });
+  // The closed step above a stranded one, read fresh as the rail's own node
+  // is: its revision is what a Reopen of it is pinned to.
+  const ancestorDetail = useApiQuery<PlanNodeDetailOutput>({
+    key: ['space', spaceId, 'plan', 'node', closedAncestor?.nodeId ?? '', 'head'],
+    path: planNodePath(spaceId, closedAncestor?.nodeId ?? '', 'limit=1'),
+    staleTime: 0,
+    enabled: closedAncestor !== undefined,
+  });
   const full = detail.data?.node;
   const columnLabel = PLAN_BOARD_COLUMNS.find((c) => c.id === column)?.label ?? column;
   const runLinks = detail.data?.links ?? [];
   const inFlight = (detail.data?.runs ?? []).filter((run) => run.nodeId === node.nodeId);
   const runsTotal = detail.data?.linksTotal ?? node.counts.runs;
   const open = !isClosedStatus(full?.status ?? node.status);
+  const railRead = freshRead(detail);
 
   return (
     <Column gap="md" data-plan-rail={node.nodeId} style={{ minWidth: 0 }}>
@@ -415,21 +446,39 @@ export function PlanRail({
           )}
         </Section>
       )}
-      {open && (
+      {reason === 'blocked' && (
+        <PlanNodeOpenControl
+          nodeId={node.nodeId}
+          verb="approve"
+          label="Approve"
+          read={railRead}
+          onOpen={onOpen}
+        />
+      )}
+      {reason === 'stranded' && closedAncestor !== undefined && (
+        <PlanNodeOpenControl
+          nodeId={closedAncestor.nodeId}
+          verb="reopen"
+          label={`Reopen ${phaseLabel(closedAncestor.title)}`}
+          read={freshRead(ancestorDetail)}
+          onOpen={onOpen}
+        />
+      )}
+      {open ? (
         <PlanNodeCloseControl
           node={node}
-          read={{
-            // Only the read this rail made on opening, never a detail cached
-            // from an earlier opening of the card: the open form pins the
-            // first node it is given, and a stale one would be refused.
-            node: detail.isFetchedAfterMount && detail.error === null ? full : undefined,
-            error: detail.error,
-            refetch: async () => (await detail.refetch()).data?.node,
-          }}
+          read={railRead}
           onClose={onClose}
-          onOpen={onOpen}
           choosing={choosing}
           onChoose={onChoose}
+        />
+      ) : (
+        <PlanNodeOpenControl
+          nodeId={node.nodeId}
+          verb="reopen"
+          label="Reopen"
+          read={railRead}
+          onOpen={onOpen}
         />
       )}
     </Column>

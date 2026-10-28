@@ -6,6 +6,7 @@
  * without rendering.
  */
 import {
+  isClosedPlanNodeStatus,
   planBoardCards,
   type PlanBoardCard,
   type PlanBoardColumn,
@@ -116,6 +117,51 @@ export function planBoardFiltered(filters: PlanBoardFilters): boolean {
 export function planCardMatches(card: PlanCard, filters: PlanBoardFilters): boolean {
   if (filters.phaseId === undefined) return true;
   return card.node.nodeId === filters.phaseId || card.phase?.nodeId === filters.phaseId;
+}
+
+/** The nodes from `root` down to `nodeId`, both included; empty where it is not under `root`. */
+function pathTo(root: PlanTreeNode, nodeId: string): PlanTreeNode[] {
+  if (root.nodeId === nodeId) return [root];
+  for (const child of root.children) {
+    const below = pathTo(child, nodeId);
+    if (below.length > 0) return [root, ...below];
+  }
+  return [];
+}
+
+/**
+ * The closed node nearest above a stranded step — the root included — which
+ * is what the operator reopens for the loop to reach it (Plan 332 D5).
+ */
+export function planClosedAncestor(root: PlanTreeNode, nodeId: string): PlanTreeNode | undefined {
+  return pathTo(root, nodeId)
+    .slice(0, -1)
+    .reverse()
+    .find((node) => isClosedPlanNodeStatus(node.status));
+}
+
+/**
+ * The nearest open sibling above and below a step, in position order: what
+ * **Move up** and **Move down** place it before and after (Plan 332 D6).
+ * Every open step is on the board, so the siblings the write names are ones
+ * the operator can see.
+ */
+export function planMoveTargets(
+  root: PlanTreeNode,
+  nodeId: string,
+): { above?: PlanTreeNode; below?: PlanTreeNode } {
+  const path = pathTo(root, nodeId);
+  const parent = path.at(-2);
+  if (parent === undefined) return {};
+  const siblings = parent.children;
+  const at = siblings.findIndex((s) => s.nodeId === nodeId);
+  const open = (s: PlanTreeNode) => !isClosedPlanNodeStatus(s.status);
+  const above = siblings.slice(0, at).reverse().find(open);
+  const below = siblings.slice(at + 1).find(open);
+  return {
+    ...(above !== undefined ? { above } : {}),
+    ...(below !== undefined ? { below } : {}),
+  };
 }
 
 // ============================================================================

@@ -78,6 +78,7 @@ const INVENTORY = JSON.stringify({
   harnesses: [],
   maxConcurrentHarnessRuns: HOST_HARNESS_CONCURRENCY_DEFAULT,
   folders: [],
+  previews: [],
   browsers: [],
 });
 

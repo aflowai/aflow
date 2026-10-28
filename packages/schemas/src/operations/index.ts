@@ -24,6 +24,7 @@ export * from './user.js';
 export * from './search.js';
 export * from './compute.js';
 export * from './host.js';
+export * from './hostFolderPreview.js';
 export * from './hostCommitCheck.js';
 export * from './hostCommitScan.js';
 export * from './hostCommitDescribe.js';

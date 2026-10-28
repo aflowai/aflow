@@ -20,6 +20,10 @@ import { useApiQuery, useApiMutation } from '../hooks/useApiQuery.js';
 import { HostBrowserProfiles } from '../components/host/HostBrowserProfiles.js';
 import { HostLocalModels } from '../components/host/HostLocalModels.js';
 import { HostCodingAgent, type SpaceHostMachine } from '../components/host/HostCodingAgent.js';
+import {
+  type FolderPreviewListing,
+  HostFolderPreview,
+} from '../components/host/HostFolderPreview.js';
 
 interface HostBinding {
   hostBindingId: string;
@@ -35,6 +39,8 @@ interface HostBinding {
   mergePosture: HostMergePosture | null;
   /** Why the merge posture merges nothing as it stands; null where it can merge. */
   mergePostureIdleReason: string | null;
+  /** How the folder is shown working; null where no machine holding it is running. */
+  preview: FolderPreviewListing | null;
 }
 
 const PUSH_APPROVAL_LINE: Record<HostPushApproval, string> = {
@@ -251,6 +257,13 @@ export function SpaceHostBindingsPage() {
                             : MERGE_POSTURE_LINE[binding.mergePosture]}
                         </Text>
                       )}
+                      <HostFolderPreview
+                        key={JSON.stringify(binding.preview?.declared ?? null)}
+                        spaceId={spaceId}
+                        bindingId={binding.hostBindingId}
+                        allowsExecution={binding.allowsExecution}
+                        listing={binding.preview ?? null}
+                      />
                     </Column>
                     <Button
                       variant="secondary"

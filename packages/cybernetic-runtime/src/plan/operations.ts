@@ -35,6 +35,7 @@ import {
   type PlanNodeListInput,
   type PlanNodeListOutput,
   type PlanNodeOpen,
+  type PlanNodePlaceRefusalDetails,
   type PlanNodeRefusalDetails,
   type PlanNodeStatus,
   type PlanNodeSummary,
@@ -52,6 +53,7 @@ import {
   type PlanBoardOptions,
 } from './board.js';
 import type { PlanNodePatch, PlanNodeStore, PlanPlacementRefusal } from './store.js';
+import type { PlanPlaceAnchor } from './placement.js';
 
 /** How far any read of a space's plan walks the tree. */
 export const PLAN_TREE_WALK_BOUNDS: PlanTreeWalkBounds = {
@@ -66,6 +68,7 @@ export type PlanOpErrorCode =
   | 'PLAN_NODE_TOO_DEEP'
   | 'PLAN_NODE_OPEN_HAS_NO_OUTCOME'
   | 'PLAN_NODE_UNCHANGED'
+  | 'PLAN_NODE_PLACE_STALE'
   | 'PLAN_NODE_NOTE_TOO_LONG'
   | 'PLAN_NODE_LINK_EXISTS'
   | 'PLAN_LINK_CURSOR_INVALID'
@@ -186,7 +189,12 @@ function reopenedNoteTooLong(current: PlanNode, noteLength: number): PlanOpError
       `Reopening plan node "${current.title}" puts its outcome at the head of its note, which would then hold ` +
       `${String(noteLength)} characters; a note holds at most ${String(PLAN_NODE_PROSE_MAX_CHARS)}, so nothing was ` +
       `written. ${remedy}`,
-    details: { nodeId: current.nodeId, noteLength, noteMaxChars: PLAN_NODE_PROSE_MAX_CHARS },
+    details: {
+      nodeId: current.nodeId,
+      status: current.status,
+      noteLength,
+      noteMaxChars: PLAN_NODE_PROSE_MAX_CHARS,
+    },
   };
 }
 
@@ -319,7 +327,6 @@ export async function createPlanNode(
   input: PlanNodeCreateInput,
 ): Promise<PlanOpResult<{ node: PlanNode }>> {
   const parentId = input.parentId ?? null;
-  const position = input.position ?? (await ctx.store.nextPosition(ctx.spaceId, parentId));
   const inserted = await ctx.store.insert(ctx.spaceId, {
     parentId,
     kind: input.kind,
@@ -327,7 +334,7 @@ export async function createPlanNode(
     goal: input.goal,
     criteria: input.criteria,
     note: input.note !== undefined && input.note !== '' ? input.note : null,
-    position,
+    ...(input.position !== undefined ? { position: input.position } : {}),
     createdBy: ctx.createdBy ?? null,
   });
   if (inserted.outcome === 'inserted') {
@@ -422,56 +429,122 @@ async function writePlanNode(
 }
 
 // ============================================================================
-// The operator's open (Plan 332 D6, Plan 331 D5) — a person moves a node to active
+// The operator's open and place (Plan 332 D6)
 // ============================================================================
 
-/** The note an approved node carries: the person's reason first, the note as it stood under it. */
-export function approvedNote(note: string | undefined, why: string): string {
-  const head = `Approved: ${why}`;
-  return (note !== undefined ? `${head}\n${note}` : head).slice(0, PLAN_NODE_PROSE_MAX_CHARS);
-}
+export type PlanNodeOpenRequest = PlanNodeOpen & { nodeId: string };
 
 /**
- * Move a node to `active`, against the revision the person read: a `blocked`
- * node is approved or its stop lifted, its `why` heading the note; a closed
- * node is reopened, the engine's reopened line first and a `Reopened: <why>`
- * after it in place of the closed work's note. An open node that is not
- * blocked already stands where this would put it. Who may call it is the
- * route's to decide (`planWriteAuthority.ts`), never this engine's.
+ * Moves a `blocked`, `done` or `dropped` node to `active` through
+ * `updatePlanNode`, so it is judged and written as every update is. On a
+ * blocked node `why` goes above the note as `Approved: …`, its first line. On
+ * a closed node the update's reopen rule (`reopenedNote`) heads the note with
+ * what the node claimed; a `why` follows as `Reopened: …` in place of the
+ * prior note, which describes work the reopen declares unfinished, and no
+ * `why` keeps that note under the engine's line.
  */
 export async function openPlanNode(
   ctx: PlanWriteContext,
-  input: PlanNodeOpen & { nodeId: string },
-): Promise<PlanOpResult<{ node: PlanNode; left: PlanNodeStatus }>> {
-  const current = await ctx.store.find(ctx.spaceId, input.nodeId);
-  if (!current) return notFound(input.nodeId);
+  request: PlanNodeOpenRequest,
+): Promise<PlanOpResult<{ node: PlanNode; from: PlanNodeStatus }>> {
   const update: PlanNodeUpdateInput = {
-    nodeId: input.nodeId,
-    expectedRevision: input.expectedRevision,
+    nodeId: request.nodeId,
+    expectedRevision: request.expectedRevision,
     status: 'active',
   };
-  if (current.revision !== input.expectedRevision) return stale(current, update);
+  const current = await ctx.store.find(ctx.spaceId, request.nodeId);
+  if (!current) return notFound(request.nodeId);
+  if (current.revision !== request.expectedRevision) return stale(current, update);
   if (current.status === 'active' || current.status === 'waiting') {
     return {
       ok: false,
       code: 'PLAN_NODE_UNCHANGED',
-      message: `Plan node "${current.title}" is ${current.status}, already open and not waiting on a person, so nothing was written and it stays at revision ${String(current.revision)}.`,
+      message:
+        `Plan node "${current.title}" is ${current.status}, not blocked, done or dropped, so there is nothing ` +
+        `to approve or reopen and nothing was written; it stays at revision ${String(current.revision)}.`,
       details: refusalDetails(current, update),
     };
   }
-  if (input.why !== undefined) {
-    update.note =
-      current.status === 'blocked'
-        ? approvedNote(current.note, input.why)
-        : `Reopened: ${input.why}`;
+  if (request.why !== undefined) {
+    if (current.status === 'blocked') {
+      const note = `Approved: ${request.why}${current.note !== undefined ? `\n${current.note}` : ''}`;
+      if (note.length > PLAN_NODE_PROSE_MAX_CHARS) return approvedNoteTooLong(current, note.length);
+      update.note = note;
+    } else {
+      update.note = `Reopened: ${request.why}`;
+    }
   }
-  // Stamped in the write's own statement, so the spend resets with the open itself.
   const written = await writePlanNode(ctx, update, {
     openedAt: new Date(),
-    ...(input.spendCents !== undefined ? { spendCents: input.spendCents } : {}),
+    ...(request.spendCents !== undefined ? { spendCents: request.spendCents } : {}),
   });
-  if (!written.ok) return written;
-  return { ok: true, node: written.node, left: current.status };
+  return written.ok ? { ...written, from: current.status } : written;
+}
+
+function approvedNoteTooLong(current: PlanNode, noteLength: number): PlanOpError {
+  return {
+    ok: false,
+    code: 'PLAN_NODE_NOTE_TOO_LONG',
+    message:
+      `Approving plan node "${current.title}" with this reason puts it above its note, which would then hold ` +
+      `${String(noteLength)} characters; a note holds at most ${String(PLAN_NODE_PROSE_MAX_CHARS)}, so nothing was ` +
+      'written. Approve it without a reason, or shorten its note first.',
+    details: {
+      nodeId: current.nodeId,
+      status: current.status,
+      noteLength,
+      noteMaxChars: PLAN_NODE_PROSE_MAX_CHARS,
+    },
+  };
+}
+
+export type PlanNodePlaceRequest = {
+  nodeId: string;
+  expectedRevision: number;
+} & PlanPlaceAnchor;
+
+/**
+ * Puts a node directly before or after a sibling — roots among roots — against
+ * the revision the operator read. A sibling that moved away is refused with
+ * the siblings as they stand; the node's revision moves, a renumbered
+ * sibling's never does.
+ */
+export async function placePlanNode(
+  ctx: PlanWriteContext,
+  request: PlanNodePlaceRequest,
+): Promise<PlanOpResult<{ node: PlanNode }>> {
+  const { nodeId, expectedRevision } = request;
+  const anchor: PlanPlaceAnchor =
+    'before' in request ? { before: request.before } : { after: request.after };
+  const placed = await ctx.store.placeAtRevision(ctx.spaceId, nodeId, expectedRevision, anchor);
+  const asked: PlanNodeUpdateInput = { nodeId, expectedRevision };
+  switch (placed.outcome) {
+    case 'not_found':
+      return notFound(nodeId);
+    case 'stale':
+      return stale(placed.node, asked);
+    case 'unchanged':
+      return {
+        ok: false,
+        code: 'PLAN_NODE_UNCHANGED',
+        message: `Plan node "${placed.node.title}" already stands there among its siblings, so nothing was written.`,
+        details: refusalDetails(placed.node, asked),
+      };
+    case 'not_sibling': {
+      const anchorId = 'before' in anchor ? anchor.before : anchor.after;
+      const details: PlanNodePlaceRefusalDetails = { nodeId, siblings: placed.siblings };
+      return {
+        ok: false,
+        code: 'PLAN_NODE_PLACE_STALE',
+        message:
+          `Plan node "${anchorId}" is not a sibling of "${nodeId}" any more, so nothing was written. ` +
+          'error.details.siblings is their order as it now stands.',
+        details,
+      };
+    }
+    case 'placed':
+      return nodeWritten(ctx, { ok: true as const, node: placed.node });
+  }
 }
 
 // ============================================================================

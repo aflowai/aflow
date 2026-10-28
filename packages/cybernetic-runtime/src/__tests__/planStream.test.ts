@@ -1254,7 +1254,7 @@ describe('the open write (Plan 332 D6, Plan 331 D5)', () => {
       expectedRevision: blocked.revision,
       why: 'Try once more with the fixture.',
     });
-    expect(opened).toMatchObject({ ok: true, left: 'blocked', node: { status: 'active' } });
+    expect(opened).toMatchObject({ ok: true, from: 'blocked', node: { status: 'active' } });
     if (!opened.ok) throw new Error('expected the open');
     expect(opened.node.note).toBe(
       'Approved: Try once more with the fixture.\nBlocked: attempts spent.',
@@ -1282,7 +1282,7 @@ describe('the open write (Plan 332 D6, Plan 331 D5)', () => {
       why: 'The fix did not hold.',
     });
     if (!opened.ok) throw new Error(opened.message);
-    expect(opened.left).toBe('done');
+    expect(opened.from).toBe('done');
     expect(opened.node.note).toBe(
       'Reopened; it was done: Met by #200.\nReopened: The fix did not hold.',
     );

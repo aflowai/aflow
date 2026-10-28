@@ -19,18 +19,21 @@ import { z } from 'zod';
 import {
   HOST_LANE_FOLDER_REFUSAL,
   HostBranchPrefixSchema,
+  HostFolderPreviewSchema,
   HostMergePostureSchema,
   HostPushApprovalSchema,
   idleMergePostureReason,
   type EditionDescriptor,
 } from '@aflow/schemas';
 import {
+  folderPreviewsForSpace,
   getRedisConnection,
   HOST_WITHDRAWAL_CHANNEL,
   publishingFoldersForSpace,
   readLiveHostInventories,
   type HostInventory,
   type HostWithdrawalNotice,
+  type PublishedFolderPreview,
 } from '@aflow/redis';
 
 /**
@@ -94,7 +97,9 @@ function machinesForSpace(
   spaceId: string,
 ): Array<z.infer<typeof SpaceHostMachineSchema>> {
   return inventories
-    .filter((inventory) => inventory.folders.some((folder) => folder.spaceId === spaceId))
+    .filter((inventory) =>
+      [...inventory.folders, ...inventory.previews].some((folder) => folder.spaceId === spaceId),
+    )
     .map((inventory) => ({
       hostname: inventory.hostname,
       harnesses: inventory.harnesses,
@@ -102,6 +107,34 @@ function machinesForSpace(
         ? { defaultHarness: inventory.defaultHarness }
         : {}),
     }));
+}
+
+/**
+ * A folder's preview as the machine holding it publishes it (Plan 320 D18),
+ * and the machine to ask to change it.
+ */
+const ListedFolderPreviewSchema = z.object({
+  hostname: z.string().describe('The machine holding the folder, which a change is relayed to.'),
+  declared: HostFolderPreviewSchema.nullable().describe(
+    'The preview as the person declared it, defaults not read in. Null where none is declared.',
+  ),
+  detectedWebApps: z
+    .array(z.string())
+    .describe(
+      'Where none is declared, the directories in which the machine found a web app, relative ' +
+        'to the folder’s root; empty where it found none, or a preview is declared.',
+    ),
+});
+
+function listedPreview(
+  published: PublishedFolderPreview | undefined,
+): z.infer<typeof ListedFolderPreviewSchema> | null {
+  if (published === undefined) return null;
+  return {
+    hostname: published.hostname,
+    declared: published.preview ?? null,
+    detectedWebApps: [...published.detectedWebApps],
+  };
 }
 
 const ListedHostBindingSchema = HostBindingSchema.extend({
@@ -120,6 +153,10 @@ const ListedHostBindingSchema = HostBindingSchema.extend({
       'Why the merge posture merges nothing as it stands — `when-green` beside a push approval ' +
         'that runs no review. Null where it can merge, or where mergePosture is null.',
     ),
+  preview: ListedFolderPreviewSchema.nullable().describe(
+    'How the folder is shown working, as the machine holding it declares. Null where no ' +
+      'machine holding it is running.',
+  ),
 });
 
 const CreateBody = z.object({
@@ -226,6 +263,7 @@ export const hostBindingRoutes: FastifyPluginAsync = async (fastify) => {
         () => [] as HostInventory[],
       );
       const postures = publishingFoldersForSpace(inventories, request.params.spaceId);
+      const previews = folderPreviewsForSpace(inventories, request.params.spaceId);
       return reply.send({
         machines: machinesForSpace(inventories, request.params.spaceId),
         bindings: rows.map((r) => {
@@ -238,6 +276,7 @@ export const hostBindingRoutes: FastifyPluginAsync = async (fastify) => {
             mergePosture: posture?.mergePosture ?? null,
             mergePostureIdleReason:
               posture === undefined ? null : (idleMergePostureReason(posture) ?? null),
+            preview: listedPreview(previews.get(binding.hostBindingId)),
           };
         }),
       });

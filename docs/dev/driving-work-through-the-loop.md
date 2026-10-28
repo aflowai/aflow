@@ -336,14 +336,15 @@ Choose on the machine with `aflow harness sandbox <folder> open|confined`; `hb_a
 none, so it takes the default, `open`. A push takes a check receipt only from checks run under the
 folder's posture as it pushes, so a commit checked before the posture changed is checked again.
 
-**Arriving with Plan 320 P6, not yet in force: how a folder is shown.** A person declares,
-once per connected folder, how its change is seen working:
-`aflow folder preview <bindingId> --command … [--port …] [--ready …] [--ui …]` on the
+**How a folder is shown — declared now, used by the loop once the rest of Plan 320 P6
+lands.** A person declares, once per connected folder, how its change is seen working:
+`aflow folder <bindingId> preview --command … [--port …] [--ready …] [--ui …]` on the
 machine, or the folder's preview on the machine page — the command that serves it, run in
 the checkout (`yarn dev --port {port}`, or whatever that folder's project runs), the port
 if it must be fixed (a fixed port serves one run at a time; left out, each run takes a free
 one), the path that answers once it is up, and the files that count as its UI. No operation
-sets it, and a port this stack serves on is refused. From then on the loop is standardized:
+sets it, and a port this stack serves on is refused. Declaring it starts nothing yet. Once
+the executor starts previews (P6.b) and the skills ask for them (P6.c), the loop is standardized:
 a commission whose brief or branch names those files, and a review whose range touches
 them, takes the ephemeral browser and the preview without being asked, the executor starts
 the preview from that run's checkout and stops it at the run's end, and the agent opens it
