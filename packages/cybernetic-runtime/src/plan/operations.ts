@@ -710,20 +710,28 @@ export async function listPlanNodes(
 /**
  * Every plan of the space as a row (Plan 332 D7's rows): each root with its
  * state and its steps counted by column, by position and then id, open and
- * closed alike. The walk is the one every read of the plan takes, so a space
- * past its bounds counts short and says which bound stopped it; no step is
- * returned, only counted.
+ * closed alike. Each root is counted from its own walk, the one its board
+ * takes, so a row reads the same nodes as its board's header and agrees with
+ * it even where the plan is past the bounds; a bound met listing the roots or
+ * walking any plan is named. No step is returned, only counted.
  */
 export async function readPlanOverview(ctx: PlanReadContext): Promise<PlanOverviewOutput> {
-  const walk = await ctx.store.walk(ctx.spaceId, PLAN_TREE_WALK_BOUNDS);
-  const placed = orderPlanTree(walk.nodes);
+  // Depth 0 reads the roots alone; only the node bound can cut that list short.
+  const listed = await ctx.store.walk(ctx.spaceId, { ...PLAN_TREE_WALK_BOUNDS, maxDepth: 0 });
+  const rootsCut = listed.truncated?.bound === 'nodes' ? listed.truncated : undefined;
+  const rootIds = orderPlanTree(listed.nodes).map((p) => p.node.nodeId);
+  const walks = await Promise.all(
+    rootIds.map((rootId) => ctx.store.walk(ctx.spaceId, { rootId, ...PLAN_TREE_WALK_BOUNDS })),
+  );
+  const placed = walks.flatMap((walk, i) => orderPlanTree(walk.nodes, { rootId: rootIds[i]! }));
   const inFlight = await ctx.store.inFlightRunCountsOf(
     ctx.spaceId,
     placed.map((p) => p.node.nodeId),
   );
+  const truncated = rootsCut ?? walks.find((walk) => walk.truncated !== undefined)?.truncated;
   return {
     roots: buildPlanRows(placed, inFlight),
-    ...(walk.truncated !== undefined ? { truncated: walk.truncated } : {}),
+    ...(truncated !== undefined ? { truncated } : {}),
   };
 }
 

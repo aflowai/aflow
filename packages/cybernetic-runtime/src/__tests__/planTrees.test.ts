@@ -14,6 +14,7 @@ import {
   PLAN_NODE_GOAL_HEAD_MAX_CHARS,
   PLAN_NODE_NOTE_HEAD_MAX_CHARS,
   PLAN_TREE_DEPTH_LIMIT,
+  PLAN_TREE_WALK_NODE_LIMIT,
   PlanNodeDetailOutputSchema,
   PlanNodeDetailQuerySchema,
   PlanBoardOutputSchema,
@@ -832,6 +833,41 @@ describe('readPlanOverview — the plans as rows', () => {
       done: tally.done,
       dropped: tally.dropped,
     });
+  });
+
+  it('counts each plan from its own walk, so open steps past a space-wide bound still count', async () => {
+    const wide = store.seed(SPACE, { title: 'wide', position: 0 });
+    const narrow = store.seed(SPACE, { title: 'narrow', position: 1 });
+    // One walk of the whole space would read both roots and every first level
+    // — exactly its node bound — and stop before narrow's open grandchild.
+    for (let n = 0; n < PLAN_TREE_WALK_NODE_LIMIT - 3; n++) {
+      store.seed(SPACE, { parentId: wide.nodeId, title: `wide ${String(n)}`, position: n });
+    }
+    const landed = store.seed(SPACE, {
+      parentId: narrow.nodeId,
+      title: 'landed',
+      status: 'done',
+      closedAt: '2026-10-03T00:00:00.000Z',
+    });
+    store.seed(SPACE, { parentId: landed.nodeId, title: 'still open' });
+    expect((await store.walk(SPACE, PLAN_TREE_WALK_BOUNDS)).truncated?.bound).toBe('nodes');
+
+    const read = await rows();
+    const row = read.roots.find((r) => r.nodeId === narrow.nodeId);
+    const { tally } = await board(narrow.nodeId);
+
+    expect(read.truncated).toBeUndefined();
+    expect(row?.state).toBe('needs_you');
+    expect(row?.state).toBe(tally.state);
+    expect(row?.counts).toEqual({
+      steps: tally.steps,
+      needsYou: tally.needsYou,
+      inFlight: tally.inFlight,
+      upNext: tally.upNext,
+      done: tally.done,
+      dropped: tally.dropped,
+    });
+    expect(row?.counts).toMatchObject({ steps: 2, needsYou: 1, done: 1 });
   });
 
   it(`counts short past depth ${String(PLAN_TREE_DEPTH_LIMIT)} and names the bound`, async () => {

@@ -253,9 +253,13 @@ function newestWrite(node: PlanTreeNode): string {
 
 /**
  * Every root as the plan list shows it (Plan 332 D2): its state and its steps
- * counted by the same column rule the board uses, so a row and its board's
- * header never disagree. A step's column reads only its status, kind, a closed
- * ancestor and the runs in flight under it, so nothing but those runs is read.
+ * counted by the same column rule the board uses. A row agrees with its
+ * board's header when `placed` holds what that root's own bounded walk read —
+ * the walk its board takes — which holds even for a plan cut short by a bound;
+ * built from one walk of the whole space, a bound met there would count a
+ * plan short where its board does not. A step's column reads only its status,
+ * kind, a closed ancestor and the runs in flight under it, so nothing but
+ * those runs is read.
  */
 export function buildPlanRows(
   placed: readonly PlacedPlanNode[],
