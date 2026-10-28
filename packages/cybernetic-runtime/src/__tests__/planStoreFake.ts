@@ -146,6 +146,7 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
         ...(values.note !== null ? { note: values.note } : {}),
         position: values.position ?? this.positionAfterLast(spaceId, values.parentId),
         ...(values.createdBy !== null ? { createdBy: values.createdBy } : {}),
+        ...(values.status !== undefined ? { status: values.status } : {}),
       });
       return { outcome: 'inserted', node };
     });

@@ -63,6 +63,8 @@ export interface NewPlanNode {
   /** Absent: after the last sibling, read under the parent's sibling lock. */
   position?: number;
   createdBy: string | null;
+  /** Absent: `active`. A proposal and a live check are created `blocked` (Plan 331 D5, D8). */
+  status?: PlanNodeStatus;
 }
 
 /**

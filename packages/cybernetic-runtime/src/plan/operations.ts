@@ -20,6 +20,8 @@ import {
   PLAN_TREE_DEPTH_LIMIT,
   PLAN_TREE_WALK_NODE_LIMIT,
   OPEN_PLAN_NODE_STATUSES,
+  PLAN_NODE_LIVE_CHECK_HEAD,
+  PLAN_NODE_PROPOSED_HEAD,
   type CoachLearning,
   type PlanNode,
   type PlanNodeCreateInput,
@@ -32,6 +34,7 @@ import {
   type PlanNodeGetOutput,
   type PlanNodeLink,
   type PlanNodeLinkInput,
+  type PlanNodeLiveCheck,
   type PlanNodeListInput,
   type PlanNodeListOutput,
   type PlanNodeOpen,
@@ -54,6 +57,7 @@ import {
 } from './board.js';
 import type { PlanNodePatch, PlanNodeStore, PlanPlacementRefusal } from './store.js';
 import type { PlanPlaceAnchor } from './placement.js';
+import { carrierNode, findingsToCarry, PLAN_CARRIER_FINDINGS_LIMIT } from './carrier.js';
 
 /** How far any read of a space's plan walks the tree. */
 export const PLAN_TREE_WALK_BOUNDS: PlanTreeWalkBounds = {
@@ -76,6 +80,7 @@ export type PlanOpErrorCode =
   | 'PLAN_LIST_CURSOR_STALE'
   | 'PLAN_NODE_DEPENDENCY_CYCLE'
   | 'PLAN_NODE_DEPENDENCY_WALK_LIMIT'
+  | 'PLAN_NODE_RESIDENT_SCOPE'
   | 'PLAN_LEARNING_NOT_FOUND';
 
 export interface PlanOpError {
@@ -99,6 +104,11 @@ export interface PlanWriteContext extends PlanReadContext {
   createdBy?: string;
   /** The writer's authority, never the person who started an agent's session. */
   actorKind?: 'human' | 'agent';
+  /**
+   * The writer is a resident wake (Plan 331 D5): it proposes new work, created
+   * blocked, and never moves a blocked node on — approving scope is a person's.
+   */
+  resident?: boolean;
 }
 
 function notFound(
@@ -322,20 +332,82 @@ async function nodeWritten<T extends { node: PlanNode }>(
 // plan.node.create
 // ============================================================================
 
+/** A live check's first line: what read of the folder it waits on (Plan 331 D8). */
+export function liveCheckHead(check: PlanNodeLiveCheck): string {
+  const holding =
+    check.mergeCommitSha !== undefined
+      ? `${check.mergeCommitSha}, the merge of ${check.pullRequest}`
+      : `the merge of ${check.pullRequest}`;
+  return `${PLAN_NODE_LIVE_CHECK_HEAD}waits on a read of the connected folder's head holding ${holding} (host.binding.inspect with \`holds\`); the merged step closed on its merge.`;
+}
+
+function residentCreates(): PlanOpError {
+  return {
+    ok: false,
+    code: 'PLAN_NODE_RESIDENT_SCOPE',
+    message:
+      'A resident wake proposes work and never approves its own scope, so nothing was written. Create the node ' +
+      'with `proposed` saying why it is worth doing — it is created blocked until a person approves it — or, for ' +
+      'a merged node whose criteria need the change running on the stack, with `liveCheck`.',
+  };
+}
+
+function residentUnblocks(current: PlanNode): PlanOpError {
+  return {
+    ok: false,
+    code: 'PLAN_NODE_RESIDENT_SCOPE',
+    message:
+      `Plan node "${current.title}" is blocked, and only a person moves a blocked node on — Approve on the plan ` +
+      'page or in the Action Center. A resident wake writes what the node waits on in its note and leaves its ' +
+      'status as it stands; nothing was written.',
+    details: { nodeId: current.nodeId, status: current.status },
+  };
+}
+
+function createdNoteTooLong(noteLength: number): PlanOpError {
+  return {
+    ok: false,
+    code: 'PLAN_NODE_NOTE_TOO_LONG',
+    message:
+      `A node created blocked has its first line say what it waits on, above the note, which would then hold ` +
+      `${String(noteLength)} characters; a note holds at most ${String(PLAN_NODE_PROSE_MAX_CHARS)}, so nothing was ` +
+      'written. Pass a shorter `note`, or none.',
+    details: { noteLength, noteMaxChars: PLAN_NODE_PROSE_MAX_CHARS },
+  };
+}
+
+/**
+ * A node a person or a conversation writes is `active`. A proposal (Plan 331
+ * D5) and a live check (D8) are created `blocked`, their first line saying
+ * what they wait on; a resident wake writes no other kind.
+ */
 export async function createPlanNode(
   ctx: PlanWriteContext,
   input: PlanNodeCreateInput,
 ): Promise<PlanOpResult<{ node: PlanNode }>> {
   const parentId = input.parentId ?? null;
+  const head =
+    input.proposed !== undefined
+      ? `${PLAN_NODE_PROPOSED_HEAD}${input.proposed}`
+      : input.liveCheck !== undefined
+        ? liveCheckHead(input.liveCheck)
+        : undefined;
+  if (ctx.resident === true && head === undefined) return residentCreates();
+  const given = input.note !== undefined && input.note !== '' ? input.note : null;
+  const note = head === undefined ? given : given === null ? head : `${head}\n${given}`;
+  if (note !== null && note.length > PLAN_NODE_PROSE_MAX_CHARS) {
+    return createdNoteTooLong(note.length);
+  }
   const inserted = await ctx.store.insert(ctx.spaceId, {
     parentId,
     kind: input.kind,
     title: input.title,
     goal: input.goal,
     criteria: input.criteria,
-    note: input.note !== undefined && input.note !== '' ? input.note : null,
+    note,
     ...(input.position !== undefined ? { position: input.position } : {}),
     createdBy: ctx.createdBy ?? null,
+    ...(head !== undefined ? { status: 'blocked' as const } : {}),
   });
   if (inserted.outcome === 'inserted') {
     return nodeWritten(ctx, { ok: true as const, node: inserted.node });
@@ -351,15 +423,47 @@ export async function createPlanNode(
 export function updatePlanNode(
   ctx: PlanWriteContext,
   input: PlanNodeUpdateInput,
-): Promise<PlanOpResult<{ node: PlanNode }>> {
+): Promise<PlanOpResult<{ node: PlanNode; carrier?: PlanNode }>> {
   return writePlanNode(ctx, input, {});
+}
+
+/**
+ * A node closed done with findings linked to it proposes one carrier under
+ * its parent (Plan 331 D6), with the findings it has not already handed on.
+ */
+async function proposeCarrier(
+  ctx: PlanWriteContext,
+  closed: PlanNode,
+): Promise<PlanNode | undefined> {
+  const page = await ctx.store.pageLinks(ctx.spaceId, closed.nodeId, {
+    kind: 'finding',
+    limit: PLAN_CARRIER_FINDINGS_LIMIT,
+  });
+  if (page.links.length === 0) return undefined;
+  const siblings =
+    closed.parentId !== null
+      ? (await ctx.store.listChildren(ctx.spaceId, closed.parentId, PLAN_NODE_CHILDREN_LIMIT))
+          .children
+      : (await ctx.store.walk(ctx.spaceId, { maxDepth: 0, maxNodes: PLAN_TREE_WALK_NODE_LIMIT }))
+          .nodes;
+  const findings = findingsToCarry(page.links, siblings, closed.nodeId);
+  if (findings.length === 0) return undefined;
+  const more = findings.length === page.links.length ? page.total - page.links.length : 0;
+  const inserted = await ctx.store.insert(ctx.spaceId, {
+    ...carrierNode(closed, findings, more),
+    createdBy: ctx.createdBy ?? null,
+  });
+  // The parent the closed node sat under is gone since its close: there is nowhere to propose it.
+  if (inserted.outcome !== 'inserted') return undefined;
+  await nodeWritten(ctx, { node: inserted.node });
+  return inserted.node;
 }
 
 async function writePlanNode(
   ctx: PlanWriteContext,
   input: PlanNodeUpdateInput,
   stamp: Pick<PlanNodePatch, 'openedAt' | 'spendCents'>,
-): Promise<PlanOpResult<{ node: PlanNode }>> {
+): Promise<PlanOpResult<{ node: PlanNode; carrier?: PlanNode }>> {
   const current = await ctx.store.find(ctx.spaceId, input.nodeId);
   if (!current) return notFound(input.nodeId);
   if (current.revision !== input.expectedRevision) return stale(current, input);
@@ -368,6 +472,14 @@ async function writePlanNode(
   const status = input.status ?? current.status;
   if (input.outcome !== undefined && !isClosedPlanNodeStatus(status)) {
     return openHasNoOutcome(current, status);
+  }
+  if (
+    ctx.resident === true &&
+    current.status === 'blocked' &&
+    status !== 'blocked' &&
+    !isClosedPlanNodeStatus(status)
+  ) {
+    return residentUnblocks(current);
   }
 
   const patch: PlanNodePatch = {};
@@ -422,7 +534,10 @@ async function writePlanNode(
     const now = await ctx.store.find(ctx.spaceId, input.nodeId);
     return now ? stale(now, input) : notFound(input.nodeId);
   }
-  return nodeWritten(ctx, { ok: true as const, node });
+  const written = await nodeWritten(ctx, { ok: true as const, node });
+  if (isClosedPlanNodeStatus(current.status) || node.status !== 'done') return written;
+  const carrier = await proposeCarrier(ctx, node);
+  return carrier !== undefined ? { ...written, carrier } : written;
 }
 
 // ============================================================================

@@ -374,5 +374,11 @@ function originMatches(current: ActionCenterItemOrigin, claimed: ActionCenterIte
         current.nodeId === claimed.nodeId &&
         current.revision === claimed.revision
       );
+    case 'plan_ask':
+      return (
+        claimed.type === 'plan_ask' &&
+        current.nodeId === claimed.nodeId &&
+        current.revision === claimed.revision
+      );
   }
 }

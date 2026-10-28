@@ -67,7 +67,12 @@ export type PlanNodeCreateOutput = z.infer<typeof PlanNodeCreateOutputSchema>;
 export const PlanNodeUpdateInputSchema = PlanNodeUpdateSchema;
 export type PlanNodeUpdateInput = z.infer<typeof PlanNodeUpdateInputSchema>;
 
-export const PlanNodeUpdateOutputSchema = z.object({ node: PlanNodeSchema });
+export const PlanNodeUpdateOutputSchema = z.object({
+  node: PlanNodeSchema,
+  carrier: PlanNodeSchema.optional().describe(
+    'Where this update closed the node done with findings linked to it: the node proposed under the same parent to carry them, blocked until a person approves it.',
+  ),
+});
 export type PlanNodeUpdateOutput = z.infer<typeof PlanNodeUpdateOutputSchema>;
 
 /**
@@ -877,6 +882,9 @@ export const PlanStreamAnswerSchema = z.discriminatedUnion('decision', [
       link: PlanNodeLinkCreateSchema.describe(
         'The record that this merge was judged: pass it to plan.node.link once the node’s update is written. Until it is linked, the next firing judges the merge again.',
       ),
+      liveCheck: PlanNodeCreateSchema.describe(
+        'Only where the criteria need the change running on the stack, not only merged: pass it to plan.node.create as it stands, then mark the node done on its merge. It is created blocked on a read of the connected folder’s head, and the node is not held open for it.',
+      ),
     })
     .strict(),
   z
@@ -898,6 +906,21 @@ export const PlanStreamAnswerSchema = z.discriminatedUnion('decision', [
       ),
       spend: PlanStreamSpendSchema.optional().describe(
         'On spend_spent: what the node spent, and on which runs.',
+      ),
+    })
+    .strict(),
+  z
+    .object({
+      decision: z.literal('ask'),
+      reason: decisionReason,
+      node: PlanStreamNodeSchema,
+      waitsOn: z
+        .string()
+        .describe(
+          'What the node waits on, as its note’s first line says it once `update` is written: the operator reads it in the Action Center.',
+        ),
+      update: PlanNodeUpdateSchema.optional().describe(
+        'Where the note does not yet say what the node waits on: pass it to plan.node.update as it stands. Absent, the note already says it and nothing is written. Either way it is asked once until the node is written again.',
       ),
     })
     .strict(),
@@ -955,8 +978,15 @@ export const PlanBoardNextSchema = z
     decisions: z
       .array(PlanBoardDecisionSchema)
       .describe(
-        'Act on these in order: a merge recorded, a commission published, a stop written, a failed round re-commissioned, new work commissioned, then pull requests read; within each, the operator’s root order. Empty: end the wake with no reply.',
+        'Act on these in order: a merge recorded, a commission published, a stop written, a failed round re-commissioned, new work commissioned, pull requests read, then blocked nodes asked about; within each, the operator’s root order. Empty, and no `propose`: end the wake with no reply.',
       ),
+      propose: z
+        .object({ reason: decisionReason })
+        .strict()
+        .optional()
+        .describe(
+          'Present only when no approved node is actionable or moving and no proposal waits on a person: propose at most one node of new work with plan.node.create and `proposed` saying why — it is created blocked — or end with no reply when nothing is worth proposing.',
+        ),
     deferred: z
       .number()
       .int()
