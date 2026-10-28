@@ -1012,6 +1012,7 @@ export async function nextOnPlanBoard(
       );
       if (root?.status !== 'active' || declined) continue;
       proposal = {
+        parentId: root.nodeId,
         reason:
           'No approved work is actionable; propose at most one next step toward this open root for operator approval.',
         title: root.title,

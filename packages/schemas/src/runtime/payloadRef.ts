@@ -95,6 +95,11 @@ export const PayloadKindSchema = z.enum([
   // 'output' because the step's result — its metadata and this reference —
   // takes that path.
   'screenshot',
+  // What a harness run's preview printed. Distinct from 'logs' because the same
+  // step keeps its browser log under that kind, and the payload path is
+  // deterministic per (step, attempt, kind): one kind for both would keep only
+  // whichever was written last.
+  'preview_log',
   // One simulated call's world mutations. Distinct from the step's own output
   // because the payload path is deterministic per (step, attempt, kind): the
   // delta and the response the agent sees would otherwise be one object, and

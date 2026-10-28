@@ -7,10 +7,19 @@
  */
 import { z } from 'zod';
 
+import { EPHEMERAL_BROWSER_PROFILE } from './browserProfile.js';
+
 /** Where a preview command takes the port it serves on. */
 export const FOLDER_PREVIEW_PORT_PLACEHOLDER = '{port}';
 /** The path a preview is waited on when the folder names none. */
 export const FOLDER_PREVIEW_READY_PATH_DEFAULT = '/';
+/**
+ * A path on the preview's own origin: one leading `/` not followed by another
+ * (a protocol-relative `//host` resolves to another host), and no backslash
+ * (which a URL parser reads as `/`), whitespace or control character.
+ */
+// eslint-disable-next-line no-control-regex -- the control range is what is refused
+export const FOLDER_PREVIEW_READY_PATH_PATTERN = /^\/(?![/\\])[^\\\s\u0000-\u001f\u007f]*$/;
 /** The file extensions a folder's UI is made of when it names no `uiPaths` of its own. */
 export const FOLDER_PREVIEW_UI_EXTENSIONS = [
   'tsx',
@@ -106,10 +115,15 @@ export const HostFolderPreviewSchema = z
       .string()
       .min(1)
       .max(FOLDER_PREVIEW_PATH_MAX_LENGTH)
-      .startsWith('/', { message: 'A ready path starts with `/`, as `/` or `/health` does.' })
+      .regex(FOLDER_PREVIEW_READY_PATH_PATTERN, {
+        message:
+          'A ready path is a path on the preview itself — `/` or `/health` — starting with one ' +
+          '`/`, with no second `/` straight after it, no backslash, no whitespace and no ' +
+          'control character: `//host/…` or `/\\host` would name another host.',
+      })
       .optional()
       .describe(
-        'The path that answers once the preview is up. Absent, `FOLDER_PREVIEW_READY_PATH_DEFAULT`.',
+        `The path that answers once the preview is up. Absent, \`${FOLDER_PREVIEW_READY_PATH_DEFAULT}\`.`,
       ),
     uiPaths: z
       .array(FolderRelativeGlobSchema)
@@ -176,6 +190,50 @@ export function defaultFolderUiPaths(webAppDirs: readonly string[] = []): string
       return trimmed === '.' || trimmed === '' ? '**' : `${trimmed}/**`;
     }),
   ];
+}
+
+/** How long the executor waits for a run's preview to answer on its ready path (Plan 320 D19). */
+export const FOLDER_PREVIEW_READY_TIMEOUT_MS = 120_000;
+
+/** `host.harness.run`'s `preview`: the boolean that asks for the folder's declared preview, never a declaration. */
+export const HostHarnessPreviewFlagSchema = z
+  .boolean()
+  .optional()
+  .describe(
+    "`true` starts the connected folder's declared preview before the harness starts — the " +
+      'executor runs it, waits for it to answer and stops it when the run ends — and opens its ' +
+      "port to this run's `ephemeral` browser alone; the harness is handed its address as " +
+      '`previewUrl` in the inputs. It serves the commit the run started from, copied before ' +
+      'the harness starts: for a commission its base, the app before the change; for a review ' +
+      'the committed range. No agent sees its own uncommitted edits through it. It runs ' +
+      "unconfined, with the operator's reach, by the operator's ruling — a deliberate step " +
+      "beyond the checks' sandbox, because that sandbox cannot listen on loopback on macOS and " +
+      "the loop's agents already act with the operator's own posture, so a stricter one would " +
+      'only add friction to the review. Needs `browser` with the `ephemeral` ' +
+      'profile. Refused before any checkout where the folder declares no preview, and where its ' +
+      'fixed port is held by another run or anything else. The harness never starts a server.',
+  );
+
+/** What a run asking for a preview is refused for at once, or nothing when it may ask. */
+export function harnessPreviewRequestIssue(input: {
+  readonly preview?: boolean | undefined;
+  readonly browser?: { readonly profile: string } | undefined;
+}): string | undefined {
+  if (input.preview !== true) return undefined;
+  if (input.browser === undefined) {
+    return (
+      '`preview: true` is given without `browser`. The preview is opened only in the run’s ' +
+      'own browser: add `browser: { profile: "ephemeral" }`, or drop `preview`.'
+    );
+  }
+  if (input.browser.profile !== EPHEMERAL_BROWSER_PROFILE) {
+    return (
+      `\`preview: true\` is given with the \`${input.browser.profile}\` profile. The preview's ` +
+      'port is opened to the run’s `ephemeral` browser alone, never to a profile the machine ' +
+      'declares: use `browser: { profile: "ephemeral" }`.'
+    );
+  }
+  return undefined;
 }
 
 export function resolveFolderPreview(preview: HostFolderPreview): HostResolvedFolderPreview {

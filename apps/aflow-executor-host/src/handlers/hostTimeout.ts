@@ -11,6 +11,7 @@
 import type { ExecutorContext, TimeoutSpec } from '@aflow/executor-runtime';
 import { positiveMsEnv } from '@aflow/lib';
 import {
+  FOLDER_PREVIEW_READY_TIMEOUT_MS,
   HostCommitCheckInputSchema,
   HostHarnessRunInputSchema,
   HostProcessExecInputSchema,
@@ -31,6 +32,14 @@ export const HOST_OUTER_TIMEOUT_MARGIN_MS = 30_000;
  * never part of the time the operator gave the checks themselves.
  */
 export const HOST_CHECK_CHECKOUT_MARGIN_MS = 120_000;
+
+/**
+ * Room around a run's preview (Plan 320 D19): its bounded wait to answer, and
+ * its stop at the end. Added to the ceiling rather than taken from the
+ * harness's own `timeoutMs`, which starts only once the preview is up, so a
+ * slow start neither eats the harness's time nor trips the reap.
+ */
+export const HOST_PREVIEW_MARGIN_MS = FOLDER_PREVIEW_READY_TIMEOUT_MS + 15_000;
 
 /**
  * A check's deadline is the folder's, read from the machine's policy: the step
@@ -59,7 +68,8 @@ async function checkDeadlineMs(raw: unknown, policyPath: string): Promise<number
 function streamCeilingMs(operationId: string, raw: unknown): number | undefined {
   if (operationId === 'host.harness.run') {
     const parsed = HostHarnessRunInputSchema.safeParse(raw);
-    return parsed.success ? parsed.data.timeoutMs : undefined;
+    if (!parsed.success) return undefined;
+    return parsed.data.timeoutMs + (parsed.data.preview === true ? HOST_PREVIEW_MARGIN_MS : 0);
   }
   if (operationId === 'host.process.exec') {
     const parsed = HostProcessExecInputSchema.safeParse(raw);

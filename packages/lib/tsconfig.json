@@ -6,8 +6,10 @@
     "composite": true,
     "declaration": true,
     "declarationMap": true,
-    "emitDeclarationOnly": true
+    "emitDeclarationOnly": true,
+    "allowJs": true,
+    "checkJs": true
   },
-  "include": ["src/**/*.ts", "src/**/*.json"],
+  "include": ["src/**/*.ts", "src/**/*.mjs", "src/**/*.json"],
   "exclude": ["src/**/*.test.ts"]
 }

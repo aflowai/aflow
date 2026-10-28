@@ -1,6 +1,6 @@
 /**
  * The asked-once rule (Plan 331 D3.3): a wake that meets a `blocked` node
- * states what it waits on in the note's first line, and the space's Action
+ * states what it waits on below the existing note, and the space's Action
  * Center raises it, as a `decide` node's question is raised (Plan 322 D9). A
  * node asked about is not asked about again until its revision moves, so the
  * same question is never posted twice.
@@ -35,7 +35,7 @@ export const PLAN_ASKED_TTL_MS = 7 * 24 * 60 * 60_000;
 /** The most asked nodes the space's Action Center lists at once. */
 export const PLAN_OPEN_ASKS_LIMIT = 50;
 
-/** The line an ask writes where the note does not already say what the node waits on. */
+/** The line an ask appends where the note does not already say what the node waits on. */
 export const PLAN_ASK_DEFAULT_LINE = `${PLAN_NODE_ASK_HEAD}approve it on the plan page or in the Action Center to start it, or write what it needs.`;
 
 export function askedKey(tenantId: string, spaceId: string, nodeId: string): string {
@@ -52,9 +52,11 @@ export function planAsk(node: PlanNode): { waitsOn: string; update?: PlanNodeUpd
   if (planNoteStatesWait(node.note)) {
     return { waitsOn: node.note?.split('\n', 1)[0] ?? PLAN_ASK_DEFAULT_LINE };
   }
-  const note = (
-    node.note !== undefined ? `${PLAN_ASK_DEFAULT_LINE}\n${node.note}` : PLAN_ASK_DEFAULT_LINE
-  ).slice(0, PLAN_NODE_PROSE_MAX_CHARS);
+  const existing = node.note ?? '';
+  const room = PLAN_NODE_PROSE_MAX_CHARS - existing.length - (existing ? 1 : 0);
+  if (room <= 0) return { waitsOn: PLAN_ASK_DEFAULT_LINE };
+  const line = PLAN_ASK_DEFAULT_LINE.slice(0, room);
+  const note = existing ? `${existing}\n${line}` : line;
   return {
     waitsOn: PLAN_ASK_DEFAULT_LINE,
     update: { nodeId: node.nodeId, expectedRevision: node.revision, note },

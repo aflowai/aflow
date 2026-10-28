@@ -17,7 +17,6 @@ import {
 const mockAddStepResult = vi.fn();
 const mockGetSessionStateSafe = vi.fn();
 const mockGetSessionState = vi.fn();
-const mockResidentMarker = vi.fn();
 vi.mock('@aflow/redis', () => ({
   addStepResult: (...args: unknown[]) => mockAddStepResult(...args),
   getSessionStateSafe: (...args: unknown[]) => mockGetSessionStateSafe(...args),
@@ -39,7 +38,6 @@ const mockDependPlanNode = vi.fn();
 const STORE = { kind: 'store' };
 const READS = { kind: 'reads' };
 vi.mock('@aflow/cybernetic-runtime', () => ({
-  residentWakeKey: () => 'resident-marker',
   createPlanNodeStore: () => STORE,
   learnOnPlanNode: (...a: unknown[]) => mockLearnOnPlanNode(...a),
   dependPlanNode: (...a: unknown[]) => mockDependPlanNode(...a),
@@ -99,7 +97,7 @@ const REFUSAL_DETAILS = {
 
 function makeArgs(operation: string, input: unknown): InlineHandlerArgs {
   return {
-    redis: { kind: 'redis', get: mockResidentMarker } as never,
+    redis: { kind: 'redis' } as never,
     payloadStore: {
       retrieve: vi.fn(() => Promise.resolve(input)),
       shouldStore: vi.fn(() => false),
@@ -128,28 +126,25 @@ function emittedOutput(): unknown {
 beforeEach(() => {
   vi.clearAllMocks();
   mockGetSessionState.mockResolvedValue({ trigger: 'chat' });
-  mockResidentMarker.mockResolvedValue(null);
   mockGetSessionStateSafe.mockResolvedValue({ ok: true, state: { createdBy: OPERATOR } });
   mockReadDurableSessionCreatedBy.mockResolvedValue(undefined);
 });
 
 describe('plan.node.update', () => {
   it.each([
-    [{ trigger: 'schedule' }, null, true],
-    [{ trigger: 'schedule' }, 'other-run@123', true],
-    [{}, null, true],
-    [{ trigger: 'webhook', activatedByPerson: true }, null, true],
-    [{ trigger: 'api', activatedByPerson: false }, null, true],
-    [{ trigger: 'mcp', activatedByPerson: false }, null, true],
-    [{ trigger: 'eval' }, null, true],
-    [{ trigger: 'voice' }, null, false],
-    [{ trigger: 'chat' }, `${SESSION}@123`, false],
-    [null, null, true],
+    [{ trigger: 'schedule' }, true],
+    [{}, true],
+    [{ trigger: 'webhook', activatedByPerson: true }, true],
+    [{ trigger: 'api', activatedByPerson: false }, true],
+    [{ trigger: 'mcp', activatedByPerson: false }, true],
+    [{ trigger: 'eval' }, true],
+    [{ trigger: 'voice', activatedByPerson: false }, false],
+    [{ trigger: 'chat', activatedByPerson: false }, false],
+    [null, true],
   ])(
     'derives authority from immutable provenance and fails closed without it (%j)',
-    async (state, marker, resident) => {
+    async (state, resident) => {
       mockGetSessionState.mockResolvedValueOnce(state);
-      mockResidentMarker.mockResolvedValueOnce(marker);
       mockUpdatePlanNode.mockResolvedValueOnce({ ok: true, node: NODE });
       await handlePlanNodeInline(
         makeArgs('plan.node.update', { nodeId: NODE_ID, expectedRevision: 2, note: 'Next' }),
@@ -162,7 +157,6 @@ describe('plan.node.update', () => {
   );
   it('passes scheduled wake provenance to the scope guards and returns the carrier', async () => {
     mockGetSessionState.mockResolvedValueOnce({ trigger: 'schedule' });
-    mockResidentMarker.mockResolvedValueOnce(`${SESSION}@123`);
     const carrier = { ...NODE, nodeId: SPACE, status: 'blocked' };
     mockUpdatePlanNode.mockResolvedValueOnce({ ok: true, node: NODE, carrier });
     await handlePlanNodeInline(
@@ -264,7 +258,7 @@ describe('plan.node.update', () => {
         {
           store: STORE,
           spaceId: SPACE,
-          redis: { kind: 'redis', get: mockResidentMarker },
+          redis: { kind: 'redis' },
           tenantId: TENANT,
           actorKind: 'agent',
           resident: false,
@@ -282,11 +276,7 @@ describe('plan.node.create / get / list', () => {
     await handlePlanNodeInline(
       makeArgs('plan.node.create', { kind: 'execute', title: 't', goal: 'g', criteria: 'c' }),
     );
-    expect(mockGetSessionStateSafe).toHaveBeenCalledWith(
-      { kind: 'redis', get: mockResidentMarker },
-      TENANT,
-      SESSION,
-    );
+    expect(mockGetSessionStateSafe).toHaveBeenCalledWith({ kind: 'redis' }, TENANT, SESSION);
     expect(mockCreatePlanNode.mock.calls[0]![0]).toMatchObject({
       createdBy: OPERATOR,
       spaceId: SPACE,
@@ -350,7 +340,7 @@ describe('plan.node.link', () => {
       {
         store: STORE,
         spaceId: SPACE,
-        redis: { kind: 'redis', get: mockResidentMarker },
+        redis: { kind: 'redis' },
         tenantId: TENANT,
         actorKind: 'agent',
         resident: false,
@@ -413,7 +403,7 @@ describe('plan.node.learn (Plan 322 P2)', () => {
       {
         store: STORE,
         spaceId: SPACE,
-        redis: { kind: 'redis', get: mockResidentMarker },
+        redis: { kind: 'redis' },
         tenantId: TENANT,
         actorKind: 'agent',
         resident: false,
@@ -533,7 +523,7 @@ describe('plan.node.next', () => {
         store: STORE,
         spaceId: SPACE,
         reads: READS,
-        redis: { kind: 'redis', get: mockResidentMarker },
+        redis: { kind: 'redis' },
         tenantId: TENANT,
         holder: SESSION,
       },

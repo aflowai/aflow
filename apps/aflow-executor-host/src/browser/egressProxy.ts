@@ -9,10 +9,11 @@
  * checked, and the connection goes to the address that was checked — never to
  * the name, which could resolve differently a moment later.
  *
- * No profile reaches this machine but on loopback, on a port the operator
- * opened for it that this stack does not serve on. An ephemeral profile's
- * proxy also admits nothing beyond its harness's reach, with the loopback
- * ports declared for that harness as the one exception to both.
+ * No profile reaches this machine but on loopback, on a port opened for it
+ * that this stack does not serve on. An ephemeral profile's proxy also admits
+ * nothing beyond its harness's reach, with the loopback ports its run was
+ * given — its preview's, or else those declared for the harness — as the one
+ * exception to both.
  *
  * One per running profile, bound to loopback on a port the system picks, and
  * stopped with the profile's browser.
@@ -36,7 +37,13 @@ import {
   machineAddresses,
 } from './addresses.js';
 import { harnessMayReach, type HarnessReach } from './harnessReach.js';
-import { loopbackOnPort, type ProfileLocalPorts, stackPortReason } from './localPorts.js';
+import {
+  executorStackPorts,
+  loopbackOnPort,
+  type ProfileLocalPorts,
+  stackPortReason,
+  type StackOwnPorts,
+} from './localPorts.js';
 
 /**
  * `local`: this machine's own address. `rule`: an origin rule the operator
@@ -62,6 +69,12 @@ export interface EgressPolicy {
   readonly refuseHost?: (host: string) => string | undefined;
   /** An ephemeral profile's: its harness's reach. Absent for a profile the machine declares. */
   readonly reach?: HarnessReach;
+  /**
+   * The ports this stack serves on, refused to an ephemeral profile on loopback
+   * whatever its reach lists (Plan 320 D19, F47). Absent, this executor's own
+   * reading of them.
+   */
+  readonly stackOwn?: StackOwnPorts;
   /** A profile the machine declares: the loopback ports the operator opened for it. */
   readonly localPorts?: ProfileLocalPorts;
 }
@@ -100,7 +113,11 @@ export function decideByName(
   const { reach, localPorts } = policy;
   if (reach !== undefined) {
     const loopback = loopbackOnPort(host, port, reach.localPorts, classifier);
-    if (loopback !== undefined) return { verdict: 'connect', addresses: loopback };
+    if (loopback !== undefined) {
+      const stack = stackPortReason(port, policy.stackOwn ?? executorStackPorts());
+      if (stack !== undefined) return { verdict: 'refuse', kind: 'local', reason: stack };
+      return { verdict: 'connect', addresses: loopback };
+    }
   }
   if (localPorts !== undefined) {
     const loopback = loopbackOnPort(host, port, localPorts.opened(), classifier);

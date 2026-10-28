@@ -343,7 +343,7 @@ describe('host.harness.run asks for a browser by profile', () => {
     const usage = HostOperationRegistrations.find((r) => r.verb === 'run')?.usage;
     const lines = [...(usage?.whenToUse ?? []), ...(usage?.pitfalls ?? [])];
     expect(lines).toContain(
-      "A change to a UI that should be seen working — the harness opens the page it changed on the dev server and checks it: `browser: { profile: 'ephemeral' }`, the default choice, which holds no sign-ins and reaches the harness's allowed domains plus the dev-server ports the operator declared for that harness on this machine",
+      "A UI that should be looked at in a browser: `browser: { profile: 'ephemeral' }`, the default choice, which holds no sign-ins and reaches the harness's allowed domains plus, with `preview: true`, the folder's preview at `previewUrl` — the commit the run started from, never the run's own edits, so a change is seen working in its review's preview — or else the dev-server ports the operator declared for that harness on this machine",
     );
     expect(lines.join('\n')).toContain(
       '`ephemeral` opens one only on a port the operator declared for that harness, and on none ' +
@@ -359,8 +359,28 @@ describe('host.harness.run asks for a browser by profile', () => {
       >;
     };
     const browser = json.properties['browser'];
-    expect(browser?.description).toContain('touches a UI');
+    expect(browser?.description).toContain('when a UI should be looked at');
     expect(browser?.properties?.['profile']?.description).toContain('the default choice');
+  });
+
+  it('says what the preview serves and that it runs unconfined by the operator’s ruling', () => {
+    const json = toJsonSchemaSync(HostHarnessRunInputSchema) as {
+      properties: Record<string, { description?: string }>;
+    };
+    for (const field of ['browser', 'preview']) {
+      const description = json.properties[field]?.description ?? '';
+      expect(description).toContain('the commit the run started from');
+      expect(description).toContain('for a commission its base');
+      expect(description).toContain('for a review the committed range');
+      expect(description).toContain('own uncommitted edits');
+      expect(description).toContain(
+        "unconfined, with the operator's reach, by the operator's ruling",
+      );
+      expect(description).toContain("a deliberate step beyond the checks' sandbox");
+      expect(description).toContain('cannot listen on loopback on macOS');
+      expect(description).toContain("already act with the operator's own posture");
+      expect(description).not.toContain('own checkout');
+    }
   });
 
   it('names the browser log on the result', () => {
@@ -368,5 +388,54 @@ describe('host.harness.run asks for a browser by profile', () => {
       properties: Record<string, { description?: string }>;
     };
     expect(json.properties['browserLog']?.description).toContain('typed text by its length only');
+  });
+});
+
+describe('host.harness.run asks for its folder’s preview with a boolean (Plan 320 D19)', () => {
+  const issues = (input: Record<string, unknown>): string[] => {
+    const parsed = HostHarnessRunInputSchema.safeParse({ ...base, ...input });
+    return parsed.success ? [] : parsed.error.issues.map((issue) => issue.message);
+  };
+
+  it('takes `preview: true` with the ephemeral browser', () => {
+    expect(issues({ preview: true, browser: { profile: 'ephemeral' } })).toEqual([]);
+    expect(issues({ preview: false })).toEqual([]);
+  });
+
+  it('refuses it without a browser, saying what to add', () => {
+    const [message, ...rest] = issues({ preview: true });
+    expect(rest).toEqual([]);
+    expect(message).toContain('`preview: true` is given without `browser`');
+    expect(message).toContain('browser: { profile: "ephemeral" }');
+  });
+
+  it('refuses it with a profile the machine declares, which never gets the preview’s port', () => {
+    const [message] = issues({ preview: true, browser: { profile: 'default' } });
+    expect(message).toContain('the `default` profile');
+    expect(message).toContain('`ephemeral` browser alone');
+  });
+
+  it('refuses a declaration in its place', () => {
+    expect(
+      issues({ preview: { command: 'yarn dev' }, browser: { profile: 'ephemeral' } }),
+    ).not.toEqual([]);
+  });
+
+  it('names the preview’s log and address on the result, and the browser’s route to it', () => {
+    const output = toJsonSchemaSync(HostHarnessRunOutputSchema) as {
+      properties: Record<string, { description?: string }>;
+    };
+    expect(output.properties['previewLog']?.description).toContain('beside `browserLog`');
+    expect(output.properties['previewUrl']).toBeDefined();
+    const input = toJsonSchemaSync(HostHarnessRunInputSchema) as {
+      properties: Record<
+        string,
+        { description?: string; properties?: Record<string, { description?: string }> }
+      >;
+    };
+    const profile = input.properties['browser']?.properties?.['profile']?.description ?? '';
+    expect(profile).toContain('`previewUrl`');
+    expect(profile).toContain('The harness never starts a server');
+    expect(input.properties['preview']?.description).toContain('The harness never starts a server');
   });
 });

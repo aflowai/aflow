@@ -1,7 +1,9 @@
 /**
  * What an ephemeral profile reaches: no more than the harness driving it may
- * reach, plus the loopback ports the operator declared for that harness
- * (Plan 320 D6, D12).
+ * reach, plus the loopback ports its run was given — the port of the preview
+ * the executor started for that run alone, or, on a run without one, the
+ * ports the operator declared for the harness — never one this stack serves
+ * on (Plan 320 D6, D12, D19).
  *
  * A confined harness is kept off loopback by its sandbox. Its browser is not
  * a way around that: the local edition's web application presents the
@@ -19,7 +21,10 @@ import {
 export interface HarnessReach {
   /** The harness profile's `allowedDomains`. */
   readonly allowedDomains: readonly string[];
-  /** The harness profile's `browserLocalPorts`, admitted on loopback alone. */
+  /**
+   * Admitted on loopback alone: the run's preview port where it has one, else
+   * the harness profile's `browserLocalPorts`. The agent never starts a server.
+   */
   readonly localPorts: readonly number[];
 }
 

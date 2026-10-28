@@ -59,12 +59,7 @@ import {
   encodePlanLinkCursor,
   type PlanBoardOptions,
 } from './board.js';
-import type {
-  PlanLinkPageKey,
-  PlanNodePatch,
-  PlanNodeStore,
-  PlanPlacementRefusal,
-} from './store.js';
+import type { PlanNodePatch, PlanNodeStore, PlanPlacementRefusal } from './store.js';
 import type { PlanPlaceAnchor } from './placement.js';
 import { carrierNode, findingsToCarry, PLAN_CARRIER_FINDINGS_LIMIT } from './carrier.js';
 
@@ -444,6 +439,11 @@ async function proposeCarrier(
   ctx: PlanWriteContext,
   closed: PlanNode,
 ): Promise<PlanNode | undefined> {
+  let page = await ctx.store.pageLinks(ctx.spaceId, closed.nodeId, {
+    kind: 'finding',
+    limit: PLAN_CARRIER_FINDINGS_LIMIT,
+  });
+  if (page.links.length === 0) return undefined;
   const carriers: PlanNode[] = [];
   let offset = 0;
   for (;;) {
@@ -462,18 +462,17 @@ async function proposeCarrier(
   }
   const findings: PlanNodeLink[] = [];
   let uncarried = 0;
-  let after: PlanLinkPageKey | undefined;
-  do {
-    const page = await ctx.store.pageLinks(ctx.spaceId, closed.nodeId, {
-      kind: 'finding',
-      limit: PLAN_CARRIER_FINDINGS_LIMIT,
-      ...(after !== undefined ? { after } : {}),
-    });
+  for (;;) {
     const fresh = findingsToCarry(page.links, carriers, closed.nodeId);
     uncarried += fresh.length;
     findings.push(...fresh.slice(0, PLAN_CARRIER_FINDINGS_LIMIT - findings.length));
-    after = page.next;
-  } while (after !== undefined);
+    if (page.next === undefined) break;
+    page = await ctx.store.pageLinks(ctx.spaceId, closed.nodeId, {
+      kind: 'finding',
+      limit: PLAN_CARRIER_FINDINGS_LIMIT,
+      after: page.next,
+    });
+  }
   if (findings.length === 0) return undefined;
   const more = uncarried - findings.length;
   const inserted = await ctx.store.insert(ctx.spaceId, {
@@ -532,6 +531,17 @@ async function writePlanNode(
     } else if (current.closedAt === undefined) patch.closedAt = new Date();
   }
 
+  if (
+    current.status === 'blocked' &&
+    input.status === 'active' &&
+    current.note?.startsWith(PLAN_NODE_LIVE_CHECK_HEAD)
+  ) {
+    patch.status = 'done';
+    patch.closedAt = new Date();
+    patch.outcome =
+      "The operator approved the live check after reading the connected folder's head holding the merge.";
+  }
+
   const parentId = input.parentId;
   if (changesNothing(current, patch, parentId)) return unchanged(current, input);
   Object.assign(patch, stamp);
@@ -563,7 +573,8 @@ async function writePlanNode(
   }
   const written = await nodeWritten(ctx, { ok: true as const, node });
   if (isClosedPlanNodeStatus(current.status) || node.status !== 'done') return written;
-  const carrier = await proposeCarrier(ctx, node);
+  // A carrier read must not turn a committed close into a failed write.
+  const carrier = await proposeCarrier(ctx, node).catch(() => undefined);
   return carrier !== undefined ? { ...written, carrier } : written;
 }
 
@@ -576,7 +587,8 @@ export type PlanNodeOpenRequest = PlanNodeOpen & { nodeId: string };
 /**
  * Moves a `blocked`, `done` or `dropped` node to `active` through
  * `updatePlanNode`, so it is judged and written as every update is. On a
- * blocked node `why` goes above the note as `Approved: …`, its first line. On
+ * blocked live check approval closes it with the person's folder-head read. On
+ * other blocked nodes `why` goes above the note as `Approved: …`, its first line. On
  * a closed node the update's reopen rule (`reopenedNote`) heads the note with
  * what the node claimed; a `why` follows as `Reopened: …` in place of the
  * prior note, which describes work the reopen declares unfinished, and no

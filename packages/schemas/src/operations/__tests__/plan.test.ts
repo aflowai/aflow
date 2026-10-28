@@ -14,6 +14,8 @@ import {
   CoachLearningScopeSchema,
   planDependencyMet,
   PlanNodeCreateInputSchema,
+  PLAN_NODE_LIVE_CHECK_KIND_MESSAGE,
+  PlanBoardNextSchema,
   PlanNodeOpenSchema,
   PLAN_STREAM_SPEND_CENTS_MAX,
   PlanNodeLearnInputSchema,
@@ -415,4 +417,45 @@ describe('Plan 322 P2 — learnings scoped to a node, dependencies between nodes
   ] as const)('a dependency waiting for %s is met by a node %s: %s', (condition, status, met) => {
     expect(planDependencyMet(condition, status)).toBe(met);
   });
+});
+
+it('requires the proposal to name its parent root', () => {
+  const board = {
+    scope: 'board',
+    decisions: [],
+    deferred: 0,
+    waits: [],
+    roots: 1,
+    propose: { reason: 'Next', title: 'Title', goal: 'Goal', criteria: 'Criteria' },
+  };
+  expect(PlanBoardNextSchema.safeParse(board).success).toBe(false);
+  expect(
+    PlanBoardNextSchema.safeParse({ ...board, propose: { ...board.propose, parentId: NODE_ID } })
+      .success,
+  ).toBe(true);
+});
+
+it('teaches the kind required for a live check and accepts both root and child placement', () => {
+  const create = {
+    kind: 'execute',
+    title: 'Check',
+    goal: 'Goal',
+    criteria: 'Criteria',
+    liveCheck: { pullRequest: 'https://github.com/aflowai/aflow/pull/1' },
+  };
+  const refused = PlanNodeCreateInputSchema.safeParse(create);
+  expect(refused.success).toBe(false);
+  if (!refused.success)
+    expect(refused.error.issues).toContainEqual(
+      expect.objectContaining({
+        path: ['kind'],
+        message: 'A live check must have kind `investigate`.',
+      }),
+    );
+  expect(PLAN_NODE_LIVE_CHECK_KIND_MESSAGE).toBe('A live check must have kind `investigate`.');
+  for (const placement of [{}, { parentId: NODE_ID }]) {
+    expect(
+      PlanNodeCreateInputSchema.safeParse({ ...create, ...placement, kind: 'investigate' }).success,
+    ).toBe(true);
+  }
 });
