@@ -982,7 +982,7 @@ export const PlanStreamAnswerSchema = z.discriminatedUnion('decision', [
       waitsOn: z
         .string()
         .describe(
-          'What the node waits on, as its note’s first line says it once `update` is written: the operator reads it in the Action Center.',
+          'What the node waits on, as its note’s wait line says it once `update` is written: the operator reads it in the Action Center.',
         ),
       update: PlanNodeUpdateSchema.optional().describe(
         'Where the note does not yet say what the node waits on: pass it to plan.node.update as it stands. Absent, the note already says it and nothing is written. Either way it is asked once until the node is written again.',

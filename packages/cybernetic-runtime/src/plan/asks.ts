@@ -17,7 +17,7 @@ import {
   PLAN_NODE_ASK_HEAD,
   PLAN_NODE_PROSE_MAX_CHARS,
   PLAN_TREE_DEPTH_LIMIT,
-  planNoteStatesWait,
+  planNoteWaitLine,
   type PlanNode,
   type PlanNodeUpdate,
 } from '@aflow/schemas';
@@ -49,9 +49,8 @@ export interface PlanAskContext extends PlanReadContext {
 
 /** What a blocked node waits on, and the note write that says so where its note does not yet. */
 export function planAsk(node: PlanNode): { waitsOn: string; update?: PlanNodeUpdate } {
-  if (planNoteStatesWait(node.note)) {
-    return { waitsOn: node.note?.split('\n', 1)[0] ?? PLAN_ASK_DEFAULT_LINE };
-  }
+  const waitLine = planNoteWaitLine(node.note);
+  if (waitLine !== undefined) return { waitsOn: waitLine };
   const existing = node.note ?? '';
   const room = PLAN_NODE_PROSE_MAX_CHARS - existing.length - (existing ? 1 : 0);
   if (room <= 0) return { waitsOn: PLAN_ASK_DEFAULT_LINE };

@@ -435,10 +435,10 @@ export function updatePlanNode(
  * A node closed done with findings linked to it proposes one carrier under
  * its parent (Plan 331 D6), with the findings it has not already handed on.
  */
-async function proposeCarrier(
+async function readCarrierFindings(
   ctx: PlanWriteContext,
   closed: PlanNode,
-): Promise<PlanNode | undefined> {
+): Promise<{ findings: PlanNodeLink[]; more: number } | undefined> {
   let page = await ctx.store.pageLinks(ctx.spaceId, closed.nodeId, {
     kind: 'finding',
     limit: PLAN_CARRIER_FINDINGS_LIMIT,
@@ -474,7 +474,17 @@ async function proposeCarrier(
     });
   }
   if (findings.length === 0) return undefined;
-  const more = uncarried - findings.length;
+  return { findings, more: uncarried - findings.length };
+}
+
+async function proposeCarrier(
+  ctx: PlanWriteContext,
+  closed: PlanNode,
+): Promise<PlanNode | undefined> {
+  // A carrier read must not turn a committed close into a failed write.
+  const read = await readCarrierFindings(ctx, closed).catch(() => undefined);
+  if (!read) return undefined;
+  const { findings, more } = read;
   const inserted = await ctx.store.insert(ctx.spaceId, {
     ...carrierNode(closed, findings, more),
     createdBy: ctx.createdBy ?? null,
@@ -532,6 +542,7 @@ async function writePlanNode(
   }
 
   if (
+    ctx.actorKind === 'human' &&
     current.status === 'blocked' &&
     input.status === 'active' &&
     current.note?.startsWith(PLAN_NODE_LIVE_CHECK_HEAD)
@@ -573,8 +584,7 @@ async function writePlanNode(
   }
   const written = await nodeWritten(ctx, { ok: true as const, node });
   if (isClosedPlanNodeStatus(current.status) || node.status !== 'done') return written;
-  // A carrier read must not turn a committed close into a failed write.
-  const carrier = await proposeCarrier(ctx, node).catch(() => undefined);
+  const carrier = await proposeCarrier(ctx, node);
   return carrier !== undefined ? { ...written, carrier } : written;
 }
 

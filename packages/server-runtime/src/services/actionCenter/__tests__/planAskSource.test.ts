@@ -185,3 +185,13 @@ it.each([
   expect(requestResidentWake).not.toHaveBeenCalled();
   redis.disconnect();
 });
+
+it('summarizes the wait line below an operator note', async () => {
+  const { redis, item } = await fixture();
+  const node = [...store.nodes.values()][0]!;
+  expect(
+    planAskItem({ ...node, note: 'Operator context\nWaiting on you: approve scope' }).summary,
+  ).toBe('Waiting on you: approve scope');
+  expect(item.origin.type).toBe('plan_ask');
+  redis.disconnect();
+});

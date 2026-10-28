@@ -116,7 +116,14 @@ function reads(): PlanStreamReads {
 }
 
 function session(): PlanWriteContext {
-  return { store, redis, tenantId: TENANT, spaceId: SPACE, createdBy: 'operator' };
+  return {
+    store,
+    redis,
+    tenantId: TENANT,
+    spaceId: SPACE,
+    createdBy: 'operator',
+    actorKind: 'human',
+  };
 }
 
 /** A time after everything the store has written, and after the last one handed out. */
@@ -857,6 +864,114 @@ function revisions(): number[] {
 }
 
 describe('resident asking and proposing', () => {
+  it.each(['agent', undefined] as const)(
+    'does not attest a human read for writer %s',
+    async (actorKind) => {
+      const check = await created({ liveCheck: { pullRequest: PR, mergeCommitSha: MERGE_SHA } });
+      const ctx = session();
+      delete ctx.actorKind;
+      const result = await updatePlanNode(
+        { ...ctx, ...(actorKind ? { actorKind } : {}) },
+        {
+          nodeId: check.nodeId,
+          expectedRevision: check.revision,
+          status: 'active',
+        },
+      );
+      expect(result).toMatchObject({ ok: true, node: { status: 'active' } });
+      expect((await current(check.nodeId)).outcome).toBeUndefined();
+    },
+  );
+
+  it.each(['Blocked: needs credentials', 'Proposed: next scope', 'Waiting on you: approve'])(
+    'finds %s below operator prose',
+    async (line) => {
+      const node = await created({ note: `Operator context\n${line}\nMore context` });
+      expect(planAsk({ ...node, status: 'blocked' })).toEqual({ waitsOn: line });
+    },
+  );
+
+  it('reuses a wait below operator prose after a revision changes', async () => {
+    const node = await created({ note: 'Operator context' });
+    await write(node.nodeId, { status: 'blocked' });
+    const first = planAsk(await current(node.nodeId));
+    if (!first.update) throw new Error('Expected note write');
+    await updatePlanNode(session(), first.update);
+    await write(node.nodeId, { title: 'Revised title' });
+    const next = planAsk(await current(node.nodeId));
+    expect(next).toEqual({ waitsOn: first.waitsOn });
+    expect((await current(node.nodeId)).note?.split('Waiting on you:')).toHaveLength(2);
+    expect(await wake()).toMatchObject({
+      decisions: [{ answer: { decision: 'ask', waitsOn: first.waitsOn } }],
+    });
+  });
+
+  it.each(['read', 'insert'] as const)(
+    'handles carrier %s failures at the correct boundary',
+    async (stage) => {
+      const step = await created();
+      await linkPlanNode(session(), {
+        nodeId: step.nodeId,
+        kind: 'finding',
+        ref: 'review:failure',
+      });
+      if (stage === 'read')
+        vi.spyOn(store, 'pageLinks').mockRejectedValueOnce(new Error('carrier read'));
+      else vi.spyOn(store, 'insert').mockRejectedValueOnce(new Error('carrier insert'));
+      const close = updatePlanNode(session(), {
+        nodeId: step.nodeId,
+        expectedRevision: step.revision,
+        status: 'done',
+        outcome: 'Merged',
+      });
+      if (stage === 'read') await expect(close).resolves.toMatchObject({ ok: true });
+      else await expect(close).rejects.toThrow('carrier insert');
+      expect((await current(step.nodeId)).status).toBe('done');
+    },
+  );
+
+  it('surfaces a failure publishing an inserted carrier', async () => {
+    const step = await created();
+    await linkPlanNode(session(), { nodeId: step.nodeId, kind: 'finding', ref: 'review:publish' });
+    const insert = store.insert.bind(store);
+    vi.spyOn(store, 'insert').mockImplementationOnce(async (...args) => {
+      const result = await insert(...args);
+      vi.spyOn(redis, 'publish').mockImplementationOnce(() => {
+        throw new Error('carrier publish');
+      });
+      return result;
+    });
+    await expect(
+      updatePlanNode(session(), {
+        nodeId: step.nodeId,
+        expectedRevision: step.revision,
+        status: 'done',
+        outcome: 'Merged',
+      }),
+    ).rejects.toThrow('carrier publish');
+    expect([...store.nodes.values()].some((node) => node.note?.startsWith('Proposed:'))).toBe(true);
+  });
+
+  it.each(['blocked', 'waiting'] as const)(
+    'proposes for an exhausted root beside unrelated %s work',
+    async (status) => {
+      const held = await created();
+      await write(held.nodeId, { status });
+      if (status === 'waiting')
+        await run(await current(held.nodeId), PLAN_STREAM_COMMISSION_SLUG, 'running');
+      if (status === 'blocked') {
+        const asked = await wake();
+        const answer = asked.decisions[0]?.answer;
+        if (answer?.decision === 'ask' && answer.update)
+          await updatePlanNode(session(), answer.update);
+      }
+      const root = await created();
+      const child = await created({ parentId: root.nodeId });
+      await write(child.nodeId, { status: 'done', outcome: 'Complete' });
+      expect(await wake()).toMatchObject({ decisions: [], propose: { parentId: root.nodeId } });
+    },
+  );
+
   it.each(['open', 'update'] as const)(
     'approval via %s closes a live check without commissioning its goal',
     async (method) => {

@@ -124,7 +124,7 @@ export type PlanNodeSummary = z.infer<typeof PlanNodeSummarySchema>;
 
 /**
  * The first lines the engine writes on a `blocked` node, each saying what it
- * waits on (Plan 331 D3, D5, D6, D8). A note that begins with one of them
+ * waits on (Plan 331 D3, D5, D6, D8). A note that contains one of them
  * already states it, so an ask leaves it as it stands.
  */
 export const PLAN_NODE_BLOCKED_HEAD = 'Blocked: ';
@@ -132,12 +132,15 @@ export const PLAN_NODE_PROPOSED_HEAD = 'Proposed: ';
 export const PLAN_NODE_ASK_HEAD = 'Waiting on you: ';
 export const PLAN_NODE_LIVE_CHECK_HEAD = `${PLAN_NODE_BLOCKED_HEAD}live check — `;
 
-/** Whether a note's first line already says what its blocked node waits on. */
-export function planNoteStatesWait(note: string | undefined): boolean {
-  const head = note?.split('\n', 1)[0] ?? '';
-  return [PLAN_NODE_BLOCKED_HEAD, PLAN_NODE_PROPOSED_HEAD, PLAN_NODE_ASK_HEAD].some((prefix) =>
-    head.startsWith(prefix),
-  );
+/** The line that says what a blocked node waits on, wherever it sits in the note. */
+export function planNoteWaitLine(note: string | undefined): string | undefined {
+  return note
+    ?.split('\n')
+    .find((line) =>
+      [PLAN_NODE_BLOCKED_HEAD, PLAN_NODE_PROPOSED_HEAD, PLAN_NODE_ASK_HEAD].some((prefix) =>
+        line.startsWith(prefix),
+      ),
+    );
 }
 
 /** A commit as git names it in full or abbreviated: what a live check asks the folder to hold. */

@@ -947,12 +947,14 @@ export async function nextOnPlanBoard(
   const roots = open.nodes.filter((node) => node.parentId === null).sort(bySiblingOrder);
 
   const candidates: Array<RootDecision & { root: PlanBoardDecision['root']; order: number }> = [];
+  const exhaustedRoots = new Set<string>();
   const waits = new Map<PlanStreamWaitCause, number>();
   const waited = (cause: PlanStreamWaitCause) => waits.set(cause, (waits.get(cause) ?? 0) + 1);
   for (const [order, root] of roots.entries()) {
     const decided = await decideRoot(ctx, root, input);
     if (!decided.ok) return decided;
     if (decided.answer.decision === 'wait') {
+      if (decided.answer.cause === 'stream_closed') exhaustedRoots.add(root.nodeId);
       waited(decided.answer.cause);
       continue;
     }
@@ -991,14 +993,9 @@ export async function nextOnPlanBoard(
   }
 
   let proposal: PlanBoardNext['propose'];
-  if (
-    candidates.length === 0 &&
-    !open.truncated &&
-    roots[0] &&
-    !open.nodes.some((node) => node.status === 'blocked' || node.status === 'waiting') &&
-    [...waits.keys()].every((cause) => cause === 'stream_closed')
-  ) {
+  if (candidates.length === 0 && !open.truncated && roots[0]) {
     for (const candidate of roots) {
+      if (!exhaustedRoots.has(candidate.nodeId)) continue;
       const root = await ctx.store.find(ctx.spaceId, candidate.nodeId);
       const history = await ctx.store.walk(ctx.spaceId, {
         ...PLAN_TREE_WALK_BOUNDS,
@@ -1010,7 +1007,13 @@ export async function nextOnPlanBoard(
           node.noteHead?.startsWith(PLAN_NODE_PROPOSED_HEAD) &&
           !isFindingsCarrier(node.noteHead),
       );
-      if (root?.status !== 'active' || declined) continue;
+      if (
+        root?.status !== 'active' ||
+        history.truncated ||
+        history.nodes.some((node) => node.status === 'blocked' || node.status === 'waiting') ||
+        declined
+      )
+        continue;
       proposal = {
         parentId: root.nodeId,
         reason:
