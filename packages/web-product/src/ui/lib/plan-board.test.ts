@@ -1,10 +1,18 @@
 /**
  * What the plan board derives from the tree (Plan 322 P3.3, Plan 332 D4):
  * each card's column, reason and phase in walk order, the header, the Phase
- * filter, and the Done column folded by day.
+ * filter, and the Done column folded by day; and what the overview's lanes
+ * derive from their rows (Plan 332 D7).
  */
 import { describe, expect, it } from 'vitest';
-import type { PlanRootRow, PlanRootState, PlanTreeNode } from '@aflow/schemas';
+import type {
+  PlanLaneItem,
+  PlanNode,
+  PlanOverviewLanes,
+  PlanRootRow,
+  PlanRootState,
+  PlanTreeNode,
+} from '@aflow/schemas';
 import {
   NEEDS_YOU_REASON_LABEL,
   PLAN_BOARD_COLUMNS,
@@ -18,7 +26,12 @@ import {
   planDoneFolds,
   planDoneGroups,
   planHeader,
-  planLandingRoot,
+  planAge,
+  planDetailRailNode,
+  planLaneMore,
+  planLaneOf,
+  planLaneRailNode,
+  planTag,
   planListSections,
   planPhases,
   planRowMoveTargets,
@@ -320,13 +333,6 @@ describe('the plan list (Plan 332 D2)', () => {
     expect(sections.closed.map((r) => r.nodeId)).toEqual(['closed']);
   });
 
-  it('lands on the first open plan, else the first finished, else the first closed', () => {
-    expect(planLandingRoot(rows)?.nodeId).toBe('needs');
-    expect(planLandingRoot([row('c', 'closed'), row('f', 'finished')])?.nodeId).toBe('f');
-    expect(planLandingRoot([row('c', 'closed')])?.nodeId).toBe('c');
-    expect(planLandingRoot([])).toBeUndefined();
-  });
-
   it('reads progress as steps closed of all, and none on a plan whose steps are not counted', () => {
     expect(planRowProgress(row('a', 'queued'))).toBe('2/4');
     const { counts: _counts, ...closed } = row('c', 'closed');
@@ -353,5 +359,124 @@ describe('the plan list (Plan 332 D2)', () => {
     expect(planViewQuery('plan=r1', { plan: 'r1', node: 'n2' })).toBe('plan=r1&node=n2');
     expect(planViewQuery('plan=r1&node=n2&x=1', { plan: 'r3' })).toBe('plan=r3&x=1');
     expect(planViewQuery('node=n2', {})).toBe('');
+  });
+});
+
+describe('the overview’s lanes (Plan 332 D7)', () => {
+  const item = (nodeId: string, extra: Partial<PlanLaneItem> = {}): PlanLaneItem => ({
+    nodeId,
+    title: nodeId,
+    kind: 'execute',
+    status: 'active',
+    revision: 2,
+    updatedAt: '2026-10-22T09:00:00.000Z',
+    rootId: 'root',
+    rootTitle: 'Plan 331 · the always-on Helmsman',
+    ...extra,
+  });
+  const lanes: PlanOverviewLanes = {
+    needsYou: { items: [item('stop', { status: 'blocked', reason: 'blocked' })], total: 52 },
+    inFlight: { items: [item('busy')], total: 1 },
+    upNext: { items: [item('next')], total: 1 },
+  };
+
+  it('finds the lane a step stands in, and none for a step no lane lists', () => {
+    expect(planLaneOf(lanes, 'stop')).toEqual({ lane: 'needs_you', item: lanes.needsYou.items[0] });
+    expect(planLaneOf(lanes, 'busy')?.lane).toBe('in_flight');
+    expect(planLaneOf(lanes, 'next')?.lane).toBe('up_next');
+    expect(planLaneOf(lanes, 'elsewhere')).toBeUndefined();
+    expect(planLaneOf(lanes, undefined)).toBeUndefined();
+  });
+
+  it('says what a lane holds past its rows, and nothing where it lists them all', () => {
+    expect(planLaneMore(lanes.needsYou)).toBe('and 51 more');
+    expect(planLaneMore(lanes.inFlight)).toBeUndefined();
+  });
+
+  it('tags a row with its plan’s code, else its title cut as a phase chip', () => {
+    expect(planTag('Plan 331 · the always-on Helmsman')).toBe('Plan 331');
+    expect(planTag('Plan 320b — the browser')).toBe('Plan 320b');
+    expect(planTag('Housekeeping')).toBe('Housekeeping');
+    expect(planTag('A plan without any code at all')).toBe('A plan withou…');
+  });
+
+  it('says a row’s age in the largest whole unit', () => {
+    const now = new Date('2026-10-22T12:00:00.000Z');
+    expect(planAge('2026-10-22T11:59:40.000Z', now)).toBe('now');
+    expect(planAge('2026-10-22T11:48:00.000Z', now)).toBe('12m');
+    expect(planAge('2026-10-22T09:00:00.000Z', now)).toBe('3h');
+    expect(planAge('2026-10-20T11:00:00.000Z', now)).toBe('2d');
+  });
+
+  it('opens the rail from a row with what the row carries, the rest left to the rail’s read', () => {
+    const pr = { url: 'https://github.com/aflowai/aflow/pull/181', merged: false };
+    expect(
+      planLaneRailNode(item('stop', { noteHead: 'Awaits approval', pullRequest: pr })),
+    ).toEqual({
+      nodeId: 'stop',
+      kind: 'execute',
+      title: 'stop',
+      status: 'active',
+      revision: 2,
+      noteHead: 'Awaits approval',
+      pullRequest: pr,
+      goalHead: '',
+      rounds: 0,
+      children: [],
+      counts: { runs: 0 },
+    });
+  });
+
+  it('places a step no lane holds by its own read: status, kind and the runs on it', () => {
+    const full = (extra: Partial<PlanNode>): PlanNode => ({
+      nodeId: 'n',
+      spaceId: 's',
+      parentId: 'p',
+      kind: 'execute',
+      title: 'A step',
+      goal: 'Its goal.',
+      criteria: 'Its criteria.',
+      status: 'active',
+      revision: 3,
+      position: 0,
+      createdAt: '2026-10-20T09:00:00.000Z',
+      updatedAt: '2026-10-21T09:00:00.000Z',
+      ...extra,
+    });
+    const read = (node: PlanNode, onIt = false) =>
+      planDetailRailNode({
+        node,
+        children: [],
+        childrenTotal: 0,
+        links: [],
+        linksTotal: 4,
+        runs: onIt
+          ? [
+              {
+                runId: 'r',
+                slug: 'commission-change',
+                status: 'running',
+                nodeId: 'n',
+                startedAt: '2026-10-21T09:00:00.000Z',
+              },
+            ]
+          : [],
+        runsTotal: onIt ? 1 : 0,
+      });
+
+    expect(read(full({ status: 'done', closedAt: '2026-10-21T09:00:00.000Z' })).placement).toEqual({
+      column: 'done',
+    });
+    expect(read(full({ status: 'blocked' })).placement).toEqual({
+      column: 'needs_you',
+      reason: 'blocked',
+    });
+    expect(read(full({}), true).placement).toEqual({ column: 'in_flight' });
+    expect(read(full({})).placement).toEqual({ column: 'up_next' });
+    expect(read(full({ note: '  Now: waiting on review  \nMore.' })).node).toMatchObject({
+      noteHead: 'Now: waiting on review',
+      goalHead: 'Its goal.',
+      counts: { runs: 4 },
+    });
   });
 });

@@ -14,12 +14,12 @@ import {
   PLAN_NODE_LEARNINGS_LIMIT,
   PLAN_NODE_LINKS_LIMIT,
   PLAN_NODE_LIST_DEFAULT_LIMIT,
+  PLAN_LANE_ITEM_RUNS_LIMIT,
   PLAN_NODE_RUNS_LIMIT,
   PLAN_NODE_PROSE_MAX_CHARS,
   PLAN_NODE_UPDATE_FIELDS,
   PLAN_TREE_DEPTH_LIMIT,
   PLAN_TREE_WALK_NODE_LIMIT,
-  CLOSED_PLAN_NODE_STATUSES,
   OPEN_PLAN_NODE_STATUSES,
   type CoachLearning,
   type PlanNode,
@@ -42,16 +42,17 @@ import {
   type PlanNodeSummary,
   type PlanNodeUpdateInput,
   type PlanBoardOutput,
+  type PlanLaneItem,
   type PlanOverviewOutput,
 } from '@aflow/schemas';
 import { publishActionCenterWake } from '@aflow/redis';
 import { bumpAttentionGeneration } from '../attentionCache.js';
 import { emitPlanUpdated } from '../entityEvents.js';
-import { bySiblingOrder, findPlanRoots, orderPlanTree, type PlanTreeWalkBounds } from './tree.js';
+import { findPlanRoots, orderPlanTree, type PlanTreeWalkBounds } from './tree.js';
 import {
   buildPlanBoard,
-  buildPlanRows,
-  closedPlanRow,
+  buildPlanOverview,
+  cardPullRequest,
   decodePlanLinkCursor,
   encodePlanLinkCursor,
   type PlanBoardOptions,
@@ -723,43 +724,46 @@ export async function listPlanNodes(
 // ============================================================================
 
 /**
- * Every plan of the space as a row (Plan 332 D7's rows): each root with its
- * state and its steps counted by column, by position and then id, open and
- * closed alike. Its work is bounded whatever the space has held: a closed
- * plan is `closed` by rule, so its root is read and none of its steps are
- * counted (the walk's one-row depth probe aside); the open plans share
- * one walk under the bounds every read of the plan takes, and only the steps
- * it reached are looked up for runs. A plan that walk read whole counts what
- * its board's header counts; one its bound may have cut short says so on its
- * own row. No step is returned, only counted.
+ * The space's plans as the overview reads them (Plan 332 D7): every root as a
+ * row with its state and, open, its steps counted by the board's column rule;
+ * and the Needs you, In flight and Up next lanes across every open plan. One
+ * recursive read in one snapshot returns the roots and the open steps and
+ * counts the closed ones, so the rows and the lanes agree on which plans are
+ * open and no done step is read as a row, whatever the space has held. Only
+ * the lanes' rows are looked up after it: their newest pull requests, and the
+ * runs on the In flight rows.
  */
 export async function readPlanOverview(ctx: PlanReadContext): Promise<PlanOverviewOutput> {
-  // One snapshot for both: a root closed or reopened between two reads would
-  // otherwise be listed twice, or not at all.
-  const [closed, open] = await ctx.store.walkTogether(ctx.spaceId, [
-    // Depth 0 returns the roots alone, and only the node bound can cut that
-    // list short; the walk still sends its one-row probe for children below
-    // them, whose depth verdict is not read here.
-    { ...PLAN_TREE_WALK_BOUNDS, maxDepth: 0, statuses: CLOSED_PLAN_NODE_STATUSES },
-    { ...PLAN_TREE_WALK_BOUNDS, rootStatuses: OPEN_PLAN_NODE_STATUSES },
+  const read = await ctx.store.readOverview(ctx.spaceId, PLAN_TREE_WALK_BOUNDS);
+  const overview = buildPlanOverview(read, PLAN_TREE_WALK_BOUNDS);
+  const { needsYou, inFlight, upNext } = overview.lanes;
+  const shown = [...needsYou.items, ...inFlight.items, ...upNext.items];
+  const [pullRequests, runs] = await Promise.all([
+    ctx.store.newestPullRequestsOf(ctx.spaceId, [...new Set(shown.map((item) => item.nodeId))]),
+    ctx.store.runsInFlightOf(
+      ctx.spaceId,
+      inFlight.items.filter((item) => (item.runsTotal ?? 0) > 0).map((item) => item.nodeId),
+      PLAN_LANE_ITEM_RUNS_LIMIT,
+    ),
   ]);
-  if (closed === undefined || open === undefined)
-    throw new Error('walkTogether returned fewer walks than asked');
-  const placed = orderPlanTree(open.nodes);
-  const inFlight = await ctx.store.inFlightRunCountsOf(
-    ctx.spaceId,
-    placed.map((p) => p.node.nodeId),
-  );
-  const rows = [
-    ...buildPlanRows(placed, inFlight, open.truncated),
-    ...closed.nodes.map(closedPlanRow),
-  ].sort(bySiblingOrder);
-  // Only more open roots than the node bound holds leave plans out of the list;
-  // roots that exactly fill it are every one listed, their steps cut on their rows.
-  const openRootsCut = open.cutAtDepth === 0 ? open.truncated : undefined;
-  const truncated =
-    (closed.truncated?.bound === 'nodes' ? closed.truncated : undefined) ?? openRootsCut;
-  return { roots: rows, ...(truncated !== undefined ? { truncated } : {}) };
+  const decorate = (item: PlanLaneItem): PlanLaneItem => {
+    const pullRequest = pullRequests.get(item.nodeId);
+    const onIt = runs.get(item.nodeId);
+    return {
+      ...item,
+      ...(pullRequest !== undefined ? { pullRequest: cardPullRequest(pullRequest) } : {}),
+      ...(item.runs !== undefined && onIt !== undefined ? { runs: onIt } : {}),
+    };
+  };
+  return {
+    ...overview,
+    lanes: {
+      ...overview.lanes,
+      needsYou: { ...needsYou, items: needsYou.items.map(decorate) },
+      inFlight: { ...inFlight, items: inFlight.items.map(decorate) },
+      upNext: { ...upNext, items: upNext.items.map(decorate) },
+    },
+  };
 }
 
 /**

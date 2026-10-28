@@ -29,6 +29,8 @@ import {
   type PlanNodePatch,
   type PlanNodePlaceWrite,
   type PlanNodeStore,
+  type PlanOverviewNode,
+  type PlanOverviewRootCount,
   type PlanTreeWalkOptions,
 } from '../plan/store.js';
 import {
@@ -292,12 +294,116 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
 
   walk: PlanNodeStore['walk'] = (spaceId, opts) => this.walkOf(this.inSpace(spaceId), opts);
 
-  walkTogether: PlanNodeStore['walkTogether'] = async (spaceId, walks) => {
-    // One copy of the space read by every walk, as one snapshot is.
-    const nodes = this.inSpace(spaceId).map((n) => ({ ...n }));
-    const read: PlanTreeWalk[] = [];
-    for (const opts of walks) read.push(await this.walkOf(nodes, opts));
-    return read;
+  /** Calls of `readOverview`, as one recursive query each. */
+  overviewReads = 0;
+
+  readOverview: PlanNodeStore['readOverview'] = (spaceId, bounds) => {
+    this.overviewReads++;
+    const nodes = this.inSpace(spaceId);
+    const childrenOf = new Map<string, PlanNode[]>();
+    for (const node of nodes) {
+      if (node.parentId === null) continue;
+      const siblings = childrenOf.get(node.parentId) ?? [];
+      siblings.push(node);
+      childrenOf.set(node.parentId, siblings);
+    }
+    const closed = (node: PlanNode) => node.status === 'done' || node.status === 'dropped';
+    const inFlight = (nodeId: string) =>
+      this.runs.filter(
+        (r) =>
+          r.spaceId === spaceId &&
+          r.nodeId === nodeId &&
+          (PLAN_NODE_RUN_STATUSES as readonly string[]).includes(r.status),
+      ).length;
+    interface Reached {
+      node: PlanNode;
+      rootId: string;
+      depth: number;
+      openParentId: string | null;
+      closedAncestor: PlanNode | undefined;
+      phase: PlanNode | undefined;
+    }
+    // Depth first in sibling order: the order the SQL's paths sort in.
+    const reached: Reached[] = [];
+    const visit = (at: Reached) => {
+      reached.push(at);
+      if (at.depth > bounds.maxDepth || (at.depth === 0 && closed(at.node))) return;
+      for (const child of (childrenOf.get(at.node.nodeId) ?? []).sort(bySiblingOrder)) {
+        visit({
+          node: child,
+          rootId: at.rootId,
+          depth: at.depth + 1,
+          openParentId: closed(at.node) ? at.openParentId : at.node.nodeId,
+          closedAncestor: closed(at.node) ? at.node : at.closedAncestor,
+          phase: at.depth === 1 ? at.node : at.phase,
+        });
+      }
+    };
+    for (const root of nodes.filter((n) => n.parentId === null).sort(bySiblingOrder)) {
+      visit({
+        node: root,
+        rootId: root.nodeId,
+        depth: 0,
+        openParentId: null,
+        closedAncestor: undefined,
+        phase: undefined,
+      });
+    }
+    const counted = new Map<string, PlanOverviewRootCount>();
+    for (const at of reached) {
+      const count = counted.get(at.rootId) ?? { openSteps: 0, done: 0, dropped: 0, deeper: false };
+      counted.set(at.rootId, count);
+      if (at.depth > bounds.maxDepth) count.deeper = true;
+      if (at.depth === 0 || at.depth > bounds.maxDepth) continue;
+      if (!closed(at.node)) count.openSteps++;
+      else {
+        if (at.node.status === 'done') count.done++;
+        else count.dropped++;
+        if (
+          count.closedWrittenAt === undefined ||
+          at.node.updatedAt.localeCompare(count.closedWrittenAt) > 0
+        ) {
+          count.closedWrittenAt = at.node.updatedAt;
+        }
+      }
+    }
+    const shipped = reached
+      .map((at, i) => ({ at, walkOrder: i + 1 }))
+      .filter(({ at }) => at.depth === 0 || (at.depth <= bounds.maxDepth && !closed(at.node)));
+    // Renumbered among the rows shipped, as `row_number()` over them is.
+    shipped.forEach((s, i) => (s.walkOrder = i + 1));
+    const cut = [...shipped].sort((a, b) => a.at.depth - b.at.depth || a.walkOrder - b.walkOrder);
+    const rows = cut.slice(0, bounds.maxNodes).map(({ at, walkOrder }): PlanOverviewNode => {
+      const noteHead = planBoardNoteHead(at.node.note);
+      const { noteHead: _summaryNoteHead, ...summary } = this.summary(at.node);
+      return {
+        ...summary,
+        ...(noteHead !== undefined ? { noteHead } : {}),
+        rootId: at.rootId,
+        depth: at.depth,
+        walkOrder,
+        openParentId: at.openParentId,
+        ...(at.closedAncestor !== undefined
+          ? {
+              closedAncestor: {
+                nodeId: at.closedAncestor.nodeId,
+                title: at.closedAncestor.title,
+              },
+            }
+          : {}),
+        ...(at.phase !== undefined ? { phaseTitle: at.phase.title } : {}),
+        inFlightRuns: closed(at.node) ? 0 : inFlight(at.node.nodeId),
+      };
+    });
+    const returnedRoots = new Set(rows.filter((r) => r.depth === 0).map((r) => r.nodeId));
+    return Promise.resolve({
+      nodes: rows,
+      counted: new Map([...counted].filter(([rootId]) => returnedRoots.has(rootId))),
+      rootsTotal: shipped.filter((s) => s.at.depth === 0).length,
+      ...(cut.length > bounds.maxNodes
+        ? { truncated: { bound: 'nodes' as const, value: bounds.maxNodes } }
+        : {}),
+    });
   };
 
   private walkOf(nodes: readonly PlanNode[], opts: PlanTreeWalkOptions): Promise<PlanTreeWalk> {
@@ -312,11 +418,8 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
           return node.parentId !== null && level.parentIds.includes(node.parentId);
       }
     };
-    const ofStatus = (node: PlanNode, level: PlanTreeLevel): boolean => {
-      if (level.kind === 'node') return true;
-      const allowed = level.kind === 'roots' ? (opts.rootStatuses ?? statuses) : statuses;
-      return allowed === undefined || allowed.includes(node.status);
-    };
+    const ofStatus = (node: PlanNode, level: PlanTreeLevel): boolean =>
+      level.kind === 'node' || statuses === undefined || statuses.includes(node.status);
     return walkPlanTree(
       (level, limit) =>
         Promise.resolve(
@@ -488,6 +591,24 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
       counts.set(run.nodeId, (counts.get(run.nodeId) ?? 0) + 1);
     }
     return Promise.resolve(counts);
+  };
+
+  runsInFlightOf: PlanNodeStore['runsInFlightOf'] = (spaceId, nodeIds, perNode) => {
+    const runs = new Map<string, PlanNodeRun[]>();
+    const inFlight = this.runs
+      .filter(
+        (r) =>
+          r.spaceId === spaceId &&
+          nodeIds.includes(r.nodeId) &&
+          (PLAN_NODE_RUN_STATUSES as readonly string[]).includes(r.status),
+      )
+      .sort((a, b) => b.startedAt.localeCompare(a.startedAt) || a.runId.localeCompare(b.runId));
+    for (const { spaceId: _spaceId, ...run } of inFlight) {
+      const held = runs.get(run.nodeId) ?? [];
+      if (held.length < perNode) held.push(run as PlanNodeRun);
+      runs.set(run.nodeId, held);
+    }
+    return Promise.resolve(runs);
   };
 
   listRunsServing: PlanNodeStore['listRunsServing'] = (spaceId, nodeIds, limit) => {

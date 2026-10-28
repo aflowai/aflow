@@ -2,14 +2,22 @@
  * The plan as the operator's board reads it (Plan 322 P3.3): each node with
  * what its card shows — counts in place of its links, the goal's head in place
  * of its prose — and each plan's tallies, counted before a done window leaves
- * anything out. Pure: the store's reads come in, the response goes out.
+ * anything out; and the overview's rows and lanes across every plan (Plan 332
+ * D7). Pure: the store's reads come in, the response goes out.
  */
 import {
   isClosedPlanNodeStatus,
+  PLAN_LANE_ITEMS_LIMIT,
   PlanNodeLinkKindSchema,
   planBoardCards,
+  planBoardColumn,
+  type PlanBoardPlacement,
+  type PlanLane,
+  type PlanLaneItem,
+  type PlanOverviewOutput,
   type PlanDoneDay,
   type PlanNodeListTruncation,
+  type PlanNodePullRequest,
   type PlanNodeStatus,
   type PlanNodeSummary,
   type PlanRootCounts,
@@ -18,7 +26,12 @@ import {
   type PlanRootTally,
   type PlanTreeNode,
 } from '@aflow/schemas';
-import { nestPlanTree, type PlacedPlanNode } from './tree.js';
+import {
+  bySiblingOrder,
+  nestPlanTree,
+  type PlacedPlanNode,
+  type PlanTreeWalkBounds,
+} from './tree.js';
 import { findActiveStreamNode, mergeShaOf } from './stream.js';
 import {
   planBoardNoteHead,
@@ -26,6 +39,8 @@ import {
   type PlanNodeBoardFacts,
   type PlanNodeLinkTally,
   type PlanNodeNewestPullRequest,
+  type PlanOverviewNode,
+  type PlanOverviewRead,
 } from './store.js';
 
 /** What the store read for the walked nodes, each map keyed by node id. */
@@ -71,12 +86,21 @@ export function planDayReader(tz = 'UTC'): (iso: string) => string {
   };
 }
 
+/** A node's newest pull request as a card or a lane row shows it. */
+export function cardPullRequest(pullRequest: PlanNodeNewestPullRequest): PlanNodePullRequest {
+  const mergeSha = mergeShaOf(pullRequest.merge?.label);
+  return {
+    url: pullRequest.ref,
+    merged: pullRequest.merge !== null,
+    ...(mergeSha !== undefined ? { mergeSha } : {}),
+  };
+}
+
 function boardNode(node: PlanNodeSummary, reads: PlanBoardReads): PlanTreeNode {
   const facts = reads.facts.get(node.nodeId);
   const { rounds, ...links } = reads.tallies.get(node.nodeId) ?? NO_TALLY;
   const inFlightRuns = reads.inFlight.get(node.nodeId) ?? 0;
   const pullRequest = reads.pullRequests.get(node.nodeId);
-  const mergeSha = mergeShaOf(pullRequest?.merge?.label);
   // The node's own row, read after the walk, is the newer word on both times:
   // a node reopened between the reads has no `closedAt`, whatever the summary
   // carried. A node the walk read and its row did not was deleted between
@@ -93,15 +117,7 @@ function boardNode(node: PlanNodeSummary, reads: PlanBoardReads): PlanTreeNode {
     counts: { ...links, inFlightRuns },
     rounds,
     activity: inFlightRuns > 0 ? 'in_flight' : 'idle',
-    ...(pullRequest !== undefined
-      ? {
-          pullRequest: {
-            url: pullRequest.ref,
-            merged: pullRequest.merge !== null,
-            ...(mergeSha !== undefined ? { mergeSha } : {}),
-          },
-        }
-      : {}),
+    ...(pullRequest !== undefined ? { pullRequest: cardPullRequest(pullRequest) } : {}),
     children: [],
   };
 }
@@ -243,87 +259,6 @@ export function buildPlanBoard(
   return { roots, tallies };
 }
 
-function newestWrite(node: PlanTreeNode): string {
-  let newest = node.updatedAt;
-  for (const child of node.children) {
-    const below = newestWrite(child);
-    if (Date.parse(below) > Date.parse(newest)) newest = below;
-  }
-  return newest;
-}
-
-/**
- * The roots of a walk from many roots that its bound may have left steps of
- * unread. A walk reads whole levels until one passes the node bound, so under
- * `nodes` the level it stopped partway through hangs from the last level read
- * or the one above it, and under `depth` only nodes on the deepest level read
- * can have children unread. A plan with no node that deep ended above the cut
- * and was read whole.
- */
-function rootsCutShort(
-  placed: readonly PlacedPlanNode[],
-  truncated: PlanNodeListTruncation | undefined,
-): Set<string> {
-  const cut = new Set<string>();
-  if (truncated === undefined) return cut;
-  const deepest = Math.max(...placed.map((p) => p.depth));
-  const from = truncated.bound === 'nodes' ? deepest - 1 : deepest;
-  let rootId: string | undefined;
-  for (const { node, depth } of placed) {
-    if (depth === 0) rootId = node.nodeId;
-    if (depth >= from && rootId !== undefined) cut.add(rootId);
-  }
-  return cut;
-}
-
-/**
- * Every open root of a walk as the plan list shows it (Plan 332 D2): its state
- * and its steps counted by the same column rule the board uses. A plan the
- * walk read whole counts the nodes its board's header counts, so the two
- * agree; a plan its bound may have cut short carries that bound as its own
- * `truncated`, its counts and state reading only the steps reached — never
- * `finished`, which says every step is closed when the steps not reached may
- * be open: such a row whose counted steps are all closed reads `queued`, work
- * the list did not count still ahead of it. A step's
- * column reads only its status, kind, a closed ancestor and the runs in flight
- * under it, so nothing but those runs is read.
- */
-export function buildPlanRows(
-  placed: readonly PlacedPlanNode[],
-  inFlight: ReadonlyMap<string, number>,
-  truncated?: PlanNodeListTruncation,
-): PlanRootRow[] {
-  const { roots, tallies } = buildPlanBoard(placed, {
-    facts: new Map(),
-    tallies: new Map(),
-    pullRequests: new Map(),
-    inFlight,
-  });
-  const cut = rootsCutShort(placed, truncated);
-  return roots.map((root, i) => {
-    const tally = tallies[i]!;
-    const countedShort = truncated !== undefined && cut.has(root.nodeId);
-    return {
-      nodeId: root.nodeId,
-      title: root.title,
-      status: root.status,
-      position: root.position,
-      revision: root.revision,
-      state: countedShort && tally.state === 'finished' ? 'queued' : tally.state,
-      counts: {
-        steps: tally.steps,
-        needsYou: tally.needsYou,
-        inFlight: tally.inFlight,
-        upNext: tally.upNext,
-        done: tally.done,
-        dropped: tally.dropped,
-      },
-      ...(countedShort ? { truncated } : {}),
-      lastWrittenAt: newestWrite(root),
-    };
-  });
-}
-
 /** A closed root as the plan list shows it: `closed` by rule, from the root's own row, its steps unread. */
 export function closedPlanRow(root: PlanNodeSummary): PlanRootRow {
   return {
@@ -334,6 +269,171 @@ export function closedPlanRow(root: PlanNodeSummary): PlanRootRow {
     revision: root.revision,
     state: 'closed',
     lastWrittenAt: root.updatedAt,
+  };
+}
+
+// ============================================================================
+// The overview: every plan as a row, and the lanes across them (Plan 332 D7)
+// ============================================================================
+
+/**
+ * The open steps a run serves through an active step under them: every open
+ * node above an `active` step with a run in flight, whatever closed nodes lie
+ * between — the activity `withChildren` gives a parent, read without the
+ * closed nodes the overview does not ship.
+ */
+function servedFromBelow(steps: readonly PlanOverviewNode[]): Set<string> {
+  const byId = new Map(steps.map((step) => [step.nodeId, step]));
+  const served = new Set<string>();
+  for (const step of steps) {
+    if (step.status !== 'active' || step.inFlightRuns === 0) continue;
+    let above = step.openParentId !== null ? byId.get(step.openParentId) : undefined;
+    while (above !== undefined && !served.has(above.nodeId)) {
+      served.add(above.nodeId);
+      above = above.openParentId !== null ? byId.get(above.openParentId) : undefined;
+    }
+  }
+  return served;
+}
+
+function laneItem(
+  step: PlanOverviewNode,
+  root: PlanOverviewNode,
+  placement: PlanBoardPlacement,
+): PlanLaneItem {
+  return {
+    nodeId: step.nodeId,
+    title: step.title,
+    kind: step.kind,
+    status: step.status,
+    revision: step.revision,
+    ...(step.noteHead !== undefined ? { noteHead: step.noteHead } : {}),
+    updatedAt: step.updatedAt,
+    rootId: root.nodeId,
+    rootTitle: root.title,
+    ...(step.phaseTitle !== undefined ? { phaseTitle: step.phaseTitle } : {}),
+    ...(placement.column === 'needs_you' ? { reason: placement.reason } : {}),
+    ...(placement.reason === 'stranded' && step.closedAncestor !== undefined
+      ? { closedAncestor: step.closedAncestor }
+      : {}),
+    ...(placement.column === 'in_flight' ? { runs: [], runsTotal: step.inFlightRuns } : {}),
+  };
+}
+
+function later(a: string, b: string | undefined): string {
+  return b !== undefined && Date.parse(b) > Date.parse(a) ? b : a;
+}
+
+function lane(items: readonly PlanLaneItem[], limit: number): PlanLane {
+  return { items: items.slice(0, limit), total: items.length };
+}
+
+/**
+ * The overview from its store read (Plan 332 D7): every root returned as a
+ * row and the three lanes, each open step placed by the board's own column
+ * rule (`planBoardColumn`) with its activity derived as the board derives it.
+ * A row counts the open steps the read returned and every closed one; a plan
+ * the node bound left open steps of, or with steps past the depth bound,
+ * carries that bound as its own `truncated` and is never `finished`. Up next
+ * holds, per open plan, the step `findActiveStreamNode` takes over the same
+ * nodes, where that step stands under Up next. Pull requests and runs are not
+ * read here: the lanes' rows carry none.
+ */
+export function buildPlanOverview(
+  read: PlanOverviewRead,
+  bounds: PlanTreeWalkBounds,
+  laneLimit = PLAN_LANE_ITEMS_LIMIT,
+): PlanOverviewOutput {
+  const roots = read.nodes.filter((node) => node.depth === 0).sort(bySiblingOrder);
+  const stepsOf = new Map<string, PlanOverviewNode[]>();
+  for (const node of read.nodes) {
+    if (node.depth === 0) continue;
+    const steps = stepsOf.get(node.rootId) ?? [];
+    steps.push(node);
+    stepsOf.set(node.rootId, steps);
+  }
+  const needsYou: PlanLaneItem[] = [];
+  const inFlight: PlanLaneItem[] = [];
+  const upNext: PlanLaneItem[] = [];
+
+  const rows = roots.map((root): PlanRootRow => {
+    if (isClosedPlanNodeStatus(root.status)) return closedPlanRow(root);
+    const steps = (stepsOf.get(root.nodeId) ?? []).sort((a, b) => a.walkOrder - b.walkOrder);
+    const counted = read.counted.get(root.nodeId);
+    const served = servedFromBelow(steps);
+    const columns = { needs_you: 0, in_flight: 0, up_next: 0 };
+    const placements = new Map<string, PlanBoardPlacement>();
+    let lastWrittenAt = later(root.updatedAt, counted?.closedWrittenAt);
+    for (const step of steps) {
+      const activity = step.inFlightRuns > 0 || served.has(step.nodeId) ? 'in_flight' : 'idle';
+      const placement = planBoardColumn(
+        { kind: step.kind, status: step.status, activity },
+        { closedAncestor: step.closedAncestor !== undefined },
+      );
+      placements.set(step.nodeId, placement);
+      lastWrittenAt = later(lastWrittenAt, step.updatedAt);
+      if (placement.column === 'needs_you') {
+        columns.needs_you++;
+        needsYou.push(laneItem(step, root, placement));
+      } else if (placement.column === 'in_flight') {
+        columns.in_flight++;
+        inFlight.push(laneItem(step, root, placement));
+      } else if (placement.column === 'up_next') {
+        columns.up_next++;
+      }
+    }
+    const next = findActiveStreamNode([root, ...steps], root.nodeId);
+    const nextStep = steps.find((step) => step.nodeId === next?.nodeId);
+    const nextPlacement = nextStep !== undefined ? placements.get(nextStep.nodeId) : undefined;
+    if (nextStep !== undefined && nextPlacement?.column === 'up_next') {
+      upNext.push(laneItem(nextStep, root, nextPlacement));
+    }
+
+    const done = counted?.done ?? 0;
+    const dropped = counted?.dropped ?? 0;
+    const counts: PlanRootCounts = {
+      steps: steps.length + done + dropped,
+      needsYou: columns.needs_you,
+      inFlight: columns.in_flight,
+      upNext: columns.up_next,
+      done,
+      dropped,
+    };
+    const truncated: PlanNodeListTruncation | undefined =
+      steps.length < (counted?.openSteps ?? 0)
+        ? { bound: 'nodes', value: bounds.maxNodes }
+        : counted?.deeper === true
+          ? { bound: 'depth', value: bounds.maxDepth }
+          : undefined;
+    const state = planRootState(root.status, counts);
+    return {
+      nodeId: root.nodeId,
+      title: root.title,
+      status: root.status,
+      position: root.position,
+      revision: root.revision,
+      // Steps the read did not reach may be open: never finished.
+      state: truncated !== undefined && state === 'finished' ? 'queued' : state,
+      counts,
+      ...(truncated !== undefined ? { truncated } : {}),
+      lastWrittenAt,
+    };
+  });
+
+  const deeper = [...read.counted.values()].some((counted) => counted.deeper);
+  const lanesTruncated: PlanNodeListTruncation | undefined =
+    read.truncated ?? (deeper ? { bound: 'depth', value: bounds.maxDepth } : undefined);
+  return {
+    roots: rows,
+    lanes: {
+      needsYou: lane(needsYou, laneLimit),
+      inFlight: lane(inFlight, laneLimit),
+      upNext: lane(upNext, upNext.length),
+      ...(lanesTruncated !== undefined ? { truncated: lanesTruncated } : {}),
+    },
+    ...(roots.length < read.rootsTotal
+      ? { truncated: { bound: 'nodes' as const, value: bounds.maxNodes } }
+      : {}),
   };
 }
 

@@ -6,7 +6,10 @@
  * that cross each other run at once — each walk locking the rows the other
  * needs, one of them ended as a deadlock and refused as a cycle on its next
  * attempt — and that the store's own SQL measures a subtree and sums a
- * position as the fake does. Gated on DATABASE_URL like every pg test.
+ * position as the fake does, and that the overview's one recursive query
+ * returns open steps alone, counts the closed ones per plan and carries each
+ * step's root, phase and closed ancestor as the fake does. Gated on
+ * DATABASE_URL like every pg test.
  */
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -20,12 +23,11 @@ import {
   type TenantContext,
 } from '@aflow/database';
 import {
-  CLOSED_PLAN_NODE_STATUSES,
-  OPEN_PLAN_NODE_STATUSES,
   PLAN_NODE_POSITION_MAX,
   PLAN_TREE_DEPTH_LIMIT,
   PLAN_TREE_WALK_NODE_LIMIT,
   PlanBoardOutputSchema,
+  PlanOverviewOutputSchema,
   type PlanNode,
 } from '@aflow/schemas';
 import {
@@ -33,6 +35,7 @@ import {
   linkPlanNode,
   listPlanNodes,
   readPlanBoard,
+  readPlanOverview,
   updatePlanNode,
 } from '../plan/operations.js';
 import { createPlanNodeStore } from '../plan/store.js';
@@ -264,47 +267,189 @@ describeDb('moveAtRevision — two crossing moves never close a loop (real DB)',
     expect(read.ok && PlanBoardOutputSchema.parse(read).root.goalHead).toBe(amended);
   });
 
-  it('walks from open roots only and below them through every status, alone or together in one read', async () => {
-    async function close(target: PlanNode): Promise<void> {
-      const fresh = await store.find(SPACE_ID, target.nodeId);
-      const result = await updatePlanNode(ctx, {
-        nodeId: target.nodeId,
-        expectedRevision: fresh!.revision,
-        status: 'done',
-        outcome: 'It landed.',
-      });
-      if (!result.ok) throw new Error(result.message);
-    }
-    const open = await node('open root');
-    const landed = await node('landed step', open.nodeId);
-    const under = await node('landed under it', landed.nodeId);
-    const stopped = await node('stopped step', open.nodeId);
-    await updatePlanNode(ctx, { nodeId: stopped.nodeId, expectedRevision: 1, status: 'blocked' });
-    await close(under);
-    await close(landed);
-    const shut = await node('closed root');
-    const shutStep = await node('step of the closed root', shut.nodeId);
-    await close(shutStep);
-    await close(shut);
-    const ours = new Set([open, landed, under, stopped, shut, shutStep].map((n) => n.nodeId));
+  describe('the overview read (Plan 332 D7)', () => {
+    const spaces: string[] = [];
     const bounds = { maxDepth: PLAN_TREE_DEPTH_LIMIT, maxNodes: PLAN_TREE_WALK_NODE_LIMIT };
-    const openWalk = { ...bounds, rootStatuses: OPEN_PLAN_NODE_STATUSES };
-    const closedRoots = { ...bounds, maxDepth: 0, statuses: CLOSED_PLAN_NODE_STATUSES };
-    const titles = (walk: { nodes: { nodeId: string; title: string }[] }) =>
-      walk.nodes
-        .filter((n) => ours.has(n.nodeId))
-        .map((n) => n.title)
-        .sort();
 
-    const alone = await store.walk(SPACE_ID, openWalk);
-    const [closedTogether, openTogether] = await store.walkTogether(SPACE_ID, [
-      closedRoots,
-      openWalk,
-    ]);
+    afterAll(async () => {
+      if (!tablePresent || spaces.length === 0) return;
+      await withTenantSchema(handle.db, tenantCtx, (tx) =>
+        tx.execute(
+          drizzleSql`DELETE FROM plan_nodes WHERE space_id IN (${drizzleSql.join(
+            spaces.map((s) => drizzleSql`${s}::uuid`),
+            drizzleSql`, `,
+          )})`,
+        ),
+      );
+    });
 
-    const expected = ['landed step', 'landed under it', 'open root', 'stopped step'];
-    expect(titles(alone)).toEqual(expected);
-    expect(titles(openTogether!)).toEqual(expected);
-    expect(titles(closedTogether!)).toEqual(['closed root']);
+    function space(): { spaceId: string; ctx: typeof ctx } {
+      const spaceId = randomUUID();
+      spaces.push(spaceId);
+      return { spaceId, ctx: { ...ctx, spaceId } };
+    }
+
+    /** Writes `count` rows under `parentId` in one statement, past every rule, positions from `from`. */
+    async function bulk(
+      spaceId: string,
+      parentId: string,
+      count: number,
+      status: 'done' | 'active',
+      from = 0,
+    ): Promise<void> {
+      await withTenantSchema(handle.db, tenantCtx, (tx) =>
+        tx.execute(drizzleSql`
+          INSERT INTO plan_nodes (space_id, parent_id, kind, title, goal, criteria, status, position, closed_at)
+          SELECT ${spaceId}::uuid, ${parentId}::uuid, 'execute', 'bulk ' || g, 'Seeded.', 'Seeded.',
+            ${status}::text, ${from}::int + g, CASE WHEN ${status}::text = 'done' THEN now() END
+          FROM generate_series(0, ${count - 1}::int) AS g
+        `),
+      );
+    }
+
+    it('returns no done step as a row and reaches no bound over 5,000 done steps and 10 open', async () => {
+      const { spaceId, ctx: here } = space();
+      const roots: PlanNode[] = [];
+      for (let n = 0; n < 10; n++) {
+        const result = await createPlanNode(here, {
+          kind: 'execute',
+          title: `plan ${String(n)}`,
+          goal: 'Hold steps.',
+          criteria: 'It holds them.',
+          position: n,
+        });
+        if (!result.ok) throw new Error(result.message);
+        roots.push(result.node);
+        await bulk(spaceId, result.node.nodeId, 500, 'done');
+        await bulk(spaceId, result.node.nodeId, 1, 'active', 9000);
+      }
+
+      const read = await store.readOverview(spaceId, bounds);
+      const overview = PlanOverviewOutputSchema.parse(await readPlanOverview({ store, spaceId }));
+
+      expect(read.truncated).toBeUndefined();
+      expect(read.rootsTotal).toBe(10);
+      expect(read.nodes).toHaveLength(20);
+      expect(read.nodes.every((n) => n.status === 'active')).toBe(true);
+      expect([...read.counted.values()].every((c) => c.done === 500 && c.openSteps === 1)).toBe(
+        true,
+      );
+      expect(overview.truncated).toBeUndefined();
+      expect(overview.lanes.truncated).toBeUndefined();
+      expect(overview.roots.map((r) => [r.nodeId, r.counts?.steps, r.counts?.done])).toEqual(
+        roots.map((r) => [r.nodeId, 501, 500]),
+      );
+      expect(overview.lanes.upNext.items.map((i) => i.rootId)).toEqual(roots.map((r) => r.nodeId));
+    });
+
+    it('shows a blocked step in the last of 50 plans in Needs you', async () => {
+      const { spaceId, ctx: here } = space();
+      let last: PlanNode | undefined;
+      for (let n = 0; n < 50; n++) {
+        const result = await createPlanNode(here, {
+          kind: 'execute',
+          title: `plan ${String(n)}`,
+          goal: 'Hold steps.',
+          criteria: 'It holds them.',
+          position: n,
+        });
+        if (!result.ok) throw new Error(result.message);
+        last = result.node;
+        await bulk(spaceId, last.nodeId, 3, 'done');
+      }
+      const stop = await createPlanNode(here, {
+        kind: 'execute',
+        title: 'waits on the operator',
+        goal: 'Wait.',
+        criteria: 'Approved.',
+        parentId: last!.nodeId,
+        note: 'Proposed from the merged plan document; awaits the operator’s approval',
+      });
+      if (!stop.ok) throw new Error(stop.message);
+      await updatePlanNode(here, {
+        nodeId: stop.node.nodeId,
+        expectedRevision: 1,
+        status: 'blocked',
+      });
+
+      const overview = PlanOverviewOutputSchema.parse(await readPlanOverview({ store, spaceId }));
+
+      expect(overview.roots).toHaveLength(50);
+      expect(overview.lanes.needsYou).toMatchObject({
+        total: 1,
+        items: [
+          {
+            nodeId: stop.node.nodeId,
+            reason: 'blocked',
+            rootId: last!.nodeId,
+            noteHead: 'Proposed from the merged plan document; awaits the operator’s approval',
+          },
+        ],
+      });
+    });
+
+    it('carries each open step’s root, phase and closed ancestor as the fake store does', async () => {
+      const { spaceId, ctx: here } = space();
+      const make = async (title: string, parentId?: string, position?: number) => {
+        const result = await createPlanNode(here, {
+          kind: 'execute',
+          title,
+          goal: 'Hold its place.',
+          criteria: 'It is there.',
+          ...(parentId !== undefined ? { parentId } : {}),
+          ...(position !== undefined ? { position } : {}),
+        });
+        if (!result.ok) throw new Error(result.message);
+        return result.node;
+      };
+      const closeIt = async (target: PlanNode) => {
+        const fresh = await store.find(spaceId, target.nodeId);
+        const result = await updatePlanNode(here, {
+          nodeId: target.nodeId,
+          expectedRevision: fresh!.revision,
+          status: 'done',
+          outcome: 'It landed.',
+        });
+        if (!result.ok) throw new Error(result.message);
+      };
+      const root = await make('root', undefined, 0);
+      const phase = await make('P6 — a phase', root.nodeId, 0);
+      const stranded = await make('P6.a', phase.nodeId, 0);
+      const deeper = await make('P6.a.1', stranded.nodeId, 0);
+      const next = await make('P7', root.nodeId, 1);
+      await closeIt(phase);
+      const shut = await make('shut', undefined, 1);
+      await make('under shut', shut.nodeId);
+      await closeIt(shut);
+
+      const read = await store.readOverview(spaceId, bounds);
+      const byId = new Map(read.nodes.map((n) => [n.nodeId, n]));
+
+      expect(read.nodes.map((n) => n.title)).toEqual(['root', 'shut', 'P7', 'P6.a', 'P6.a.1']);
+      expect(read.rootsTotal).toBe(2);
+      expect(byId.get(stranded.nodeId)).toMatchObject({
+        rootId: root.nodeId,
+        depth: 2,
+        openParentId: root.nodeId,
+        closedAncestor: { nodeId: phase.nodeId, title: 'P6 — a phase' },
+        phaseTitle: 'P6 — a phase',
+        inFlightRuns: 0,
+      });
+      expect(byId.get(deeper.nodeId)).toMatchObject({
+        depth: 3,
+        openParentId: stranded.nodeId,
+        closedAncestor: { nodeId: phase.nodeId },
+      });
+      expect(byId.get(next.nodeId)).toMatchObject({ depth: 1, openParentId: root.nodeId });
+      expect(byId.get(next.nodeId)).not.toHaveProperty('phaseTitle');
+      // Reading order across the read: the root, its phase's steps, then P7.
+      const order = read.nodes
+        .filter((n) => n.rootId === root.nodeId)
+        .sort((a, b) => a.walkOrder - b.walkOrder)
+        .map((n) => n.title);
+      expect(order).toEqual(['root', 'P6.a', 'P6.a.1', 'P7']);
+      expect(read.counted.get(root.nodeId)).toMatchObject({ openSteps: 3, done: 1, dropped: 0 });
+      expect(read.counted.get(shut.nodeId)).toMatchObject({ openSteps: 0, done: 0 });
+    });
   });
 });

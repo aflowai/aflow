@@ -125,6 +125,33 @@ const ROWS: PlanOverviewOutput = {
       lastWrittenAt: '2026-10-04T10:00:00.000Z',
     },
   ],
+  lanes: {
+    needsYou: {
+      items: [
+        {
+          nodeId: GRANDCHILD_ID,
+          title: 'P4 — one view across plans',
+          kind: 'execute',
+          status: 'blocked',
+          revision: 2,
+          noteHead: 'Awaits the operator’s approval',
+          updatedAt: '2026-10-05T10:00:00.000Z',
+          rootId: ROOT_ID,
+          rootTitle: 'Plan 332',
+          reason: 'blocked',
+        },
+      ],
+      total: 1,
+    },
+    inFlight: { items: [], total: 0 },
+    upNext: { items: [], total: 0 },
+  },
+};
+
+const NO_LANES: PlanOverviewOutput['lanes'] = {
+  needsYou: { items: [], total: 0 },
+  inFlight: { items: [], total: 0 },
+  upNext: { items: [], total: 0 },
 };
 
 /** Who is asking, which spaces they may read and write, and whether they are an agent. */
@@ -210,7 +237,7 @@ afterEach(async () => {
 });
 
 describe('GET /v1/spaces/:spaceId/plan', () => {
-  it('returns every plan as a row with its state and its steps’ counts, and no step', async () => {
+  it('returns every plan as a row with its state and its steps’ counts, and the lanes, and no tree', async () => {
     const res = await app.inject({ method: 'GET', url: `/v1/spaces/${SPACE_ID}/plan` });
 
     expect(res.statusCode).toBe(200);
@@ -240,12 +267,12 @@ describe('GET /v1/spaces/:spaceId/plan', () => {
   });
 
   it('answers an empty plan with no rows', async () => {
-    mockReadPlanOverview.mockResolvedValue({ roots: [] });
+    mockReadPlanOverview.mockResolvedValue({ roots: [], lanes: NO_LANES });
 
     const res = await app.inject({ method: 'GET', url: `/v1/spaces/${SPACE_ID}/plan` });
 
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ roots: [] });
+    expect(res.json()).toEqual({ roots: [], lanes: NO_LANES });
   });
 
   it('names the bound that cut a large space short', async () => {
