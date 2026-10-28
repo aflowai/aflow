@@ -18,7 +18,7 @@ import {
   linkEndedRun,
   linkPlanNode,
   listPlanNodes,
-  readPlanTrees,
+  readPlanBoard,
   updatePlanNode,
   type PlanWriteContext,
 } from '../plan/operations.js';
@@ -245,8 +245,8 @@ describe('updatePlanNode — the goal', () => {
       ok: true,
       node: { goal: AMENDED },
     });
-    const board = await readPlanTrees(session('session-a'));
-    expect(board.roots.find((r) => r.nodeId === node.nodeId)?.goalHead).toBe(AMENDED);
+    const board = await readPlanBoard(session('session-a'), node.nodeId);
+    expect(board.ok && board.root.goalHead).toBe(AMENDED);
   });
 
   it('refuses a goal decided on a stale revision with the current one, and keeps the goal', async () => {

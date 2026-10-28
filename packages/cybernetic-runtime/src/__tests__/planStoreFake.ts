@@ -29,6 +29,7 @@ import {
   type PlanNodePatch,
   type PlanNodePlaceWrite,
   type PlanNodeStore,
+  type PlanTreeWalkOptions,
 } from '../plan/store.js';
 import {
   bySiblingOrder,
@@ -36,6 +37,7 @@ import {
   walkPlanTree,
   type PlacementReads,
   type PlanTreeLevel,
+  type PlanTreeWalk,
 } from '../plan/tree.js';
 
 /**
@@ -289,7 +291,17 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
     return Promise.resolve({ children: children.slice(0, limit), total: children.length });
   };
 
-  walk: PlanNodeStore['walk'] = (spaceId, opts) => {
+  walk: PlanNodeStore['walk'] = (spaceId, opts) => this.walkOf(this.inSpace(spaceId), opts);
+
+  walkTogether: PlanNodeStore['walkTogether'] = async (spaceId, walks) => {
+    // One copy of the space read by every walk, as one snapshot is.
+    const nodes = this.inSpace(spaceId).map((n) => ({ ...n }));
+    const read: PlanTreeWalk[] = [];
+    for (const opts of walks) read.push(await this.walkOf(nodes, opts));
+    return read;
+  };
+
+  private walkOf(nodes: readonly PlanNode[], opts: PlanTreeWalkOptions): Promise<PlanTreeWalk> {
     const statuses = opts.statuses;
     const inLevel = (node: PlanNode, level: PlanTreeLevel): boolean => {
       switch (level.kind) {
@@ -301,12 +313,15 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
           return node.parentId !== null && level.parentIds.includes(node.parentId);
       }
     };
-    const ofStatus = (node: PlanNode, level: PlanTreeLevel): boolean =>
-      level.kind === 'node' || statuses === undefined || statuses.includes(node.status);
+    const ofStatus = (node: PlanNode, level: PlanTreeLevel): boolean => {
+      if (level.kind === 'node') return true;
+      const allowed = level.kind === 'roots' ? (opts.rootStatuses ?? statuses) : statuses;
+      return allowed === undefined || allowed.includes(node.status);
+    };
     return walkPlanTree(
       (level, limit) =>
         Promise.resolve(
-          this.inSpace(spaceId)
+          nodes
             .filter((n) => inLevel(n, level))
             .filter((n) => ofStatus(n, level))
             .map((n) => this.summary(n))
@@ -316,7 +331,7 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
       opts.rootId !== undefined ? { rootId: opts.rootId } : {},
       opts,
     );
-  };
+  }
 
   parentsOf: PlanNodeStore['parentsOf'] = (spaceId, nodeIds) =>
     Promise.resolve(

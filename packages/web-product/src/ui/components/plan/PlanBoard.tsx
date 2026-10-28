@@ -28,7 +28,7 @@ import {
 } from '../../lib/plan-board.js';
 import type { PlanNodeCloseAnswer } from './PlanNodeCloseControl.js';
 
-/** What the operator asks of an Up next step: directly before or after a sibling, against the revision the board read. */
+/** What the operator asks of an Up next step or an open plan: directly before or after a sibling, against the revision the page read. */
 export type PlanNodePlaceRequest = { nodeId: string; expectedRevision: number } & (
   { before: string } | { after: string }
 );
@@ -63,18 +63,25 @@ function SubtaskBar({ done, total }: { done: number; total: number }) {
   );
 }
 
+/** What a move names: a node, at the revision the page read. */
+export interface PlanMovable {
+  nodeId: string;
+  revision: number;
+}
+
 /**
- * **Move up** and **Move down** on an Up next card (Plan 332 D6): each puts the
- * step before or after its nearest open sibling, and shows only where there is
- * one. The board's read holds the whole plan, so every sibling is on screen.
+ * **Move up** and **Move down** (Plan 332 D6), on an Up next card and on an
+ * open row of the plan list: each puts the node before or after its nearest
+ * open sibling on screen, and shows only where there is one. The write is
+ * pinned to the revision the page read; a refusal is said under the buttons.
  */
-function MoveControls({
+export function MoveControls({
   node,
   moves,
   onPlace,
 }: {
-  node: PlanTreeNode;
-  moves: { above?: PlanTreeNode; below?: PlanTreeNode };
+  node: PlanMovable;
+  moves: { above?: { nodeId: string }; below?: { nodeId: string } };
   onPlace: PlanNodePlacer;
 }) {
   const [pending, setPending] = useState(false);
