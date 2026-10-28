@@ -150,7 +150,8 @@ export interface PlanLinkPage {
 }
 
 export type PlanNodeLinkInsert =
-  | { outcome: 'inserted'; link: PlanNodeLink }
+  /** `revision` is the node's, which a link leaves where it stands. */
+  | { outcome: 'inserted'; link: PlanNodeLink; revision: number }
   /** The node already holds a link of this kind to this ref; `link` is that one. */
   | { outcome: 'exists'; link: PlanNodeLink }
   | { outcome: 'node_not_found' };
@@ -716,7 +717,7 @@ export function createPlanNodeStore(db: PostgresJsDatabase, tenantId: string): P
     insertLink: (spaceId, link) =>
       inTenant(async (tx): Promise<PlanNodeLinkInsert> => {
         const [node] = await tx
-          .select({ id: planNodes.id })
+          .select({ id: planNodes.id, revision: planNodes.revision })
           .from(planNodes)
           .where(and(eq(planNodes.spaceId, spaceId), eq(planNodes.id, link.nodeId)))
           .limit(1);
@@ -726,7 +727,13 @@ export function createPlanNodeStore(db: PostgresJsDatabase, tenantId: string): P
           .values({ spaceId, ...link })
           .onConflictDoNothing()
           .returning();
-        if (inserted) return { outcome: 'inserted', link: rowToPlanNodeLink(inserted) };
+        if (inserted) {
+          return {
+            outcome: 'inserted',
+            link: rowToPlanNodeLink(inserted),
+            revision: node.revision,
+          };
+        }
         const [held] = await tx
           .select()
           .from(planNodeLinks)

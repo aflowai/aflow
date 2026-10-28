@@ -7,7 +7,7 @@
  * carrying labels only, and a side rail that reads a step on demand and holds
  * the operator's own controls — mark done, decide, drop (P3.2). The tree it
  * reads carries counts rather than links, and done steps only for the Done
- * folds open.
+ * folds open. It is read again on every plan write and run change (D9).
  */
 import { useEffect, useState } from 'react';
 import {
@@ -28,6 +28,7 @@ import {
 import type { PlanBoardColumn, PlanNodeUpdateOutput, PlanTreeOutput } from '@aflow/schemas';
 import { useSpaceFromRoute } from '../components/providers.js';
 import { useApiMutation, useApiQuery } from '../hooks/useApiQuery.js';
+import { spacePlanKey, usePlanLiveRefresh } from '../hooks/use-plan-live-refresh.js';
 import { PlanBoard } from '../components/plan/PlanBoard.js';
 import { PlanRail, RAIL_WIDTH } from '../components/plan/PlanRail.js';
 import type {
@@ -142,6 +143,7 @@ export function SpacePlanPage(): React.ReactNode {
     path: `/spaces/${spaceId}/plan?closedSince=${encodeURIComponent(startOfDay(since))}&tz=${encodeURIComponent(tz)}`,
     enabled: spaceId.length > 0,
   });
+  usePlanLiveRefresh(spaceId.length > 0 ? spaceId : null);
   useEffect(() => {
     if (data !== undefined) setHeld({ spaceId, since, data });
   }, [data, spaceId, since]);
@@ -154,7 +156,7 @@ export function SpacePlanPage(): React.ReactNode {
     path: ({ nodeId }) => `/spaces/${spaceId}/plan/nodes/${nodeId}`,
     method: 'PATCH',
     serialize: ({ nodeId: _nodeId, ...body }) => JSON.stringify(body),
-    invalidate: [['space', spaceId, 'plan']],
+    invalidate: [spacePlanKey(spaceId)],
     // The rail's own form says why; a toast would say it twice.
     onError: () => undefined,
   });

@@ -16,9 +16,10 @@
 import { randomUUID } from 'node:crypto';
 import type { Redis } from 'ioredis';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import {
   agentSchedules,
+  insertScheduleDispatch,
   createTenantContext,
   scheduleOccurrenceRunId,
   withTenantSchema,
@@ -252,11 +253,12 @@ export function createResidentScheduleStore(db: PostgresJsDatabase): ResidentSch
       return rows.find((row) => isPlanResidentSchedule(row)) ?? null;
     },
     async enqueue(item) {
-      await db.execute(
-        sql`INSERT INTO public.schedule_dispatch_outbox (idempotency_key, tenant_id, schedule_id, dispatch)
-            VALUES (${item.idempotencyKey}, ${item.tenantId}::uuid, ${item.scheduleId}::uuid, ${JSON.stringify(item)}::jsonb)
-            ON CONFLICT (idempotency_key) DO NOTHING`,
-      );
+      await insertScheduleDispatch(db, {
+        idempotencyKey: item.idempotencyKey,
+        tenantId: item.tenantId,
+        scheduleId: item.scheduleId,
+        dispatch: item,
+      });
     },
   };
 }

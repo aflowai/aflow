@@ -103,6 +103,7 @@ export function createPlanStreamReads(
             status: workflowRuns.status,
             startedAt: workflowRuns.startedAt,
             failureJson: workflowRuns.failureJson,
+            metadata: workflowRuns.metadata,
           })
           .from(workflowRuns)
           .where(
@@ -120,12 +121,16 @@ export function createPlanStreamReads(
           .limit(limit);
         return rows.map((row) => {
           const failure = row.status === 'failed' ? extractRunFailureReason(row.failureJson) : null;
+          const wakeSessionId = text(
+            (row.metadata as Record<string, unknown> | null)?.[RUN_WAKE_SESSION_METADATA_KEY],
+          );
           return {
             runId: row.runId,
             slug: row.slug,
             status: row.status,
             startedAt: row.startedAt.toISOString(),
             ...(failure !== null ? { failure } : {}),
+            ...(wakeSessionId ? { wakeSessionId } : {}),
           };
         });
       }),

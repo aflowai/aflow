@@ -140,3 +140,28 @@ describe('the spend window (Plan 331 D5)', () => {
     expect(new PgDialect().sqlToQuery(runs!.where!).sql).not.toContain('started_at');
   });
 });
+
+describe('commission ownership reads', () => {
+  it('preserves wake provenance and leaves operator commissions unowned by wakes', async () => {
+    answers = () => [
+      {
+        runId: 'wake-run',
+        slug: 'commission',
+        status: 'completed',
+        startedAt: OPENED_AT,
+        metadata: { [RUN_WAKE_SESSION_METADATA_KEY]: WAKE },
+      },
+      {
+        runId: 'operator-run',
+        slug: 'commission',
+        status: 'completed',
+        startedAt: OPENED_AT,
+        metadata: {},
+      },
+    ];
+    const rounds = await reads().roundsOf(SPACE, NODE, 50);
+    expect(rounds[0]).toMatchObject({ runId: 'wake-run', wakeSessionId: WAKE });
+    expect(rounds[1]).not.toHaveProperty('wakeSessionId');
+    expect(queries[0]?.fields).toHaveProperty('metadata', workflowRuns.metadata);
+  });
+});

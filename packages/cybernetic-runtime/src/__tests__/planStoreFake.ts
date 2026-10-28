@@ -301,7 +301,11 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
       createdAt: this.tick(),
     };
     this.links.push(inserted);
-    return Promise.resolve({ outcome: 'inserted', link: structuredClone(inserted) });
+    return Promise.resolve({
+      outcome: 'inserted',
+      link: structuredClone(inserted),
+      revision: node.revision,
+    });
   };
 
   newestLink: PlanNodeStore['newestLink'] = (spaceId, nodeId, kind) => {

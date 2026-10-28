@@ -8,6 +8,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import Redis from 'ioredis-mock';
+import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { Redis as RedisType } from 'ioredis';
 import { scheduleOccurrenceRunId, type ScheduleDispatchItem } from '@aflow/database';
 import {
@@ -27,6 +28,7 @@ vi.mock('@aflow/redis', async (importOriginal) => ({
 
 const {
   claimResidentWake,
+  createResidentScheduleStore,
   residentWakeInFlight,
   residentWakeKey,
   requestResidentWake,
@@ -325,5 +327,32 @@ describe('one guard for heartbeats and events (Plan 331 D4)', () => {
       requestResidentWake(failing, { tenantId: TENANT, spaceId: SPACE, cause: 'node_written' }),
     ).rejects.toThrow('outbox down');
     expect(await claim('heartbeat-run')).toBe(true);
+  });
+});
+
+describe('resident dispatch storage', () => {
+  it('writes the event occurrence through the shared dispatch insert', async () => {
+    const execute = vi.fn().mockResolvedValue([]);
+    const db = { execute } as unknown as PostgresJsDatabase;
+    const schedules = createResidentScheduleStore(db);
+    const wakeDeps = {
+      redis,
+      schedules: { find: () => Promise.resolve(resident()), enqueue: schedules.enqueue },
+    };
+    expect(
+      await requestResidentWake(wakeDeps, {
+        tenantId: TENANT,
+        spaceId: SPACE,
+        cause: 'node_written',
+      }),
+    ).toBe('started');
+    expect(execute).toHaveBeenCalledOnce();
+    const query = execute.mock.calls[0]?.[0];
+    const { PgDialect } = await import('drizzle-orm/pg-core');
+    const compiled = new PgDialect().sqlToQuery(query);
+    expect(compiled.sql).toContain('INSERT INTO public.schedule_dispatch_outbox');
+    expect(compiled.sql).toContain('ON CONFLICT (idempotency_key) DO NOTHING');
+    const dispatch = JSON.parse(compiled.params[3] as string) as ScheduleDispatchItem;
+    expect(dispatch).toMatchObject({ tenantId: TENANT, scheduleId: SCHEDULE, spaceId: SPACE });
   });
 });

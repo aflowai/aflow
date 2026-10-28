@@ -1,12 +1,13 @@
 /**
  * Reader and writer sides of the schedule dispatch outbox.
  *
- * Writing is always inside the caller's transaction — the point of the outbox
- * is that the row and the schedule advance commit together — so the insert
- * takes the transaction handle rather than the pool.
+ * A due-time dispatch shares the transaction that advances the schedule.
+ * An event wake inserts its occurrence directly: no schedule row advances.
  */
 import { createHash } from 'node:crypto';
 import type postgres from 'postgres';
+import { sql } from 'drizzle-orm';
+import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { SCHEDULE_DISPATCH_OUTBOX_TABLE } from '../tenant/scheduleOutbox.js';
 
 /**
@@ -72,9 +73,16 @@ export interface ScheduleDispatchRow {
  * twice is the double-fire this table exists to prevent.
  */
 export async function insertScheduleDispatch(
-  tx: postgres.TransactionSql,
+  tx: postgres.TransactionSql | PostgresJsDatabase,
   row: Omit<ScheduleDispatchRow, 'attempts'>,
 ): Promise<void> {
+  if ('execute' in tx) {
+    await tx.execute(sql`INSERT INTO ${sql.raw(SCHEDULE_DISPATCH_OUTBOX_TABLE)}
+      (idempotency_key, tenant_id, schedule_id, dispatch)
+      VALUES (${row.idempotencyKey}, ${row.tenantId}::uuid, ${row.scheduleId}::uuid, ${JSON.stringify(row.dispatch)}::jsonb)
+      ON CONFLICT (idempotency_key) DO NOTHING`);
+    return;
+  }
   await tx.unsafe(
     `INSERT INTO ${SCHEDULE_DISPATCH_OUTBOX_TABLE}
        (idempotency_key, tenant_id, schedule_id, dispatch)

@@ -120,3 +120,10 @@ _Exit:_ over a day in which the board answers only `wait`, the resident's wakes 
 - Whether the resident thread is a session list filtered to the schedule's wakes or a surface of its own. P1 builds the smaller, and the operator's use decides.
 - Whether one wake should act on decisions in several roots in parallel up to the machine's harness limit, or one root at a time. P1 caps decisions per wake (D4) and measures idle time before choosing.
 - Whether non-code roots (Plan 329 D5) need a decision P2b does not have, or only a different skill behind `continue`. That is decided when the first non-code root is approved.
+
+The board ranks pull-request reads after actionable work, so open pull requests
+waiting on the operator cannot fill every wake decision slot and starve a new
+commission. Publication is claimed by commission run id across board and root
+firings, and only commissions stamped with a starting wake are eligible; an
+operator conversation retains publication of its own commissions. Resident event
+dispatch uses the shared schedule outbox insert.

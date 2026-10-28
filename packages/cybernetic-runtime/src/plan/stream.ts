@@ -8,8 +8,8 @@
  * active node, its runs, its links, its spend, the space's attention items
  * and its pull request as GitHub answers — by rules, so no wake decides by
  * how its prompt reads. It writes nothing to the plan and starts nothing —
- * the wake acts on the decision — except that a `continue` claims the state
- * it was decided on, so two wakes that read alike cannot both commission.
+ * the wake acts on the decision — except that actionable work claims the state
+ * it was decided on, so two wakes that read alike cannot both commission or publish.
  */
 import type { Redis } from 'ioredis';
 import {
@@ -57,6 +57,7 @@ export interface PlanStreamRun {
   startedAt: string;
   /** The run's own account of its failure, where it failed. */
   failure?: string;
+  wakeSessionId?: string;
 }
 
 /** What a publication that completed promoted. */
@@ -343,7 +344,7 @@ function spendStop(facts: PlanStreamFacts): PlanStreamAnswer | null {
 }
 
 /**
- * A completed commission is published by the wake that reads it (Plan 331
+ * A wake-started commission is published by the wake that reads it (Plan 331
  * D3.1): the run that started it has ended by the time it completes.
  */
 function answerCompletedCommission(facts: PlanStreamFacts, latest: PlanStreamRun): RoundAnswer {
@@ -374,6 +375,16 @@ function answerCompletedCommission(facts: PlanStreamFacts, latest: PlanStreamRun
         node,
         'commission_unchanged',
         `The ${ran} completed with no change to publish; a person reads it and says what the node needs.`,
+      ),
+    };
+  }
+  if (!latest.wakeSessionId) {
+    return {
+      kind: 'decided',
+      output: wait(
+        'in_flight',
+        'The operator conversation that started this commission owns its publication.',
+        node,
       ),
     };
   }
@@ -654,7 +665,7 @@ export function decideStreamFiring(facts: PlanStreamFacts): PlanStreamAnswer {
 
 type StreamRoot = Pick<PlanNodeSummary, 'nodeId' | 'title' | 'status'>;
 
-/** A stream's decision, and for a `continue` the claim it would take. */
+/** A stream's decision and the claim on work it would start. */
 interface RootDecision {
   answer: PlanStreamAnswer;
   claim?: { key: string; node: PlanNode };
@@ -768,6 +779,18 @@ async function decideRoot(
     spend,
     spendCents: input.spendCents,
   });
+  if (answer.decision === 'publish') {
+    return {
+      ok: true,
+      answer,
+      claim: {
+        key: ['plan:stream:publish', ctx.tenantId, ctx.spaceId, answer.commission.commission].join(
+          ':',
+        ),
+        node: opened.node,
+      },
+    };
+  }
   if (answer.decision !== 'continue') return decided(answer);
   return {
     ok: true,
@@ -779,7 +802,7 @@ async function decideRoot(
 function claimedWait(node: PlanNode): PlanStreamAnswer {
   return wait(
     'claimed',
-    `Another firing decided to continue "${node.title}" on the state this one read, and is commissioning it.`,
+    `Another firing claimed work for "${node.title}" on the state this one read, and is starting it.`,
     node,
   );
 }
@@ -808,8 +831,9 @@ export async function nextInPlanStream(
 
 /**
  * Where a decision stands in the wake's order (Plan 331 D3): finish before
- * start — a merge recorded, a commission published, a pull request read, a
- * stop written, a failed round re-commissioned — and only then new work.
+ * start — a merge recorded, a commission published, a stop written, a failed
+ * round re-commissioned, then new work. Pull request reads follow work so
+ * unchanged open PRs cannot consume every decision slot.
  */
 export function boardRank(answer: PlanStreamAnswer): number {
   switch (answer.decision) {
@@ -818,13 +842,13 @@ export function boardRank(answer: PlanStreamAnswer): number {
     case 'publish':
       return 1;
     case 'read_pull_request':
-      return 2;
+      return 6;
     case 'stop':
       return 3;
     case 'continue':
       return answer.retry ? 4 : 5;
     case 'wait':
-      return 6;
+      return 7;
   }
 }
 

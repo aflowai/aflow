@@ -40,7 +40,7 @@ vi.mock('@aflow/cybernetic-runtime', async () => {
           createdAt: '2026-10-05T10:00:00.000Z',
         };
         links.push(inserted);
-        return Promise.resolve({ outcome: 'inserted', link: inserted });
+        return Promise.resolve({ outcome: 'inserted', link: inserted, revision: 1 });
       },
     }),
   };

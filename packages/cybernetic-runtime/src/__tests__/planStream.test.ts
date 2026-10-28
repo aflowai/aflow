@@ -55,6 +55,7 @@ let failures: Map<string, string>;
 let pausedItemRuns: string[];
 let lastStamp: number;
 let runSeq: number;
+let operatorCommissions: Set<string>;
 
 /** The reads as the database answers them, over the fake store's runs. */
 function reads(): PlanStreamReads {
@@ -75,6 +76,7 @@ function reads(): PlanStreamReads {
             slug: r.slug,
             status: r.status,
             startedAt: r.startedAt,
+            ...(operatorCommissions.has(r.runId) ? {} : { wakeSessionId: 'wake-1' }),
             ...(failures.has(r.runId) ? { failure: failures.get(r.runId)! } : {}),
           })),
       ),
@@ -272,6 +274,7 @@ beforeEach(async () => {
   outcomes = new Map();
   commissions = new Map();
   publishes = new Map();
+  operatorCommissions = new Set();
   costs = new Map();
   failures = new Map();
   pausedItemRuns = [];
@@ -1213,5 +1216,41 @@ describe('the open write (Plan 332 D6, Plan 331 D5)', () => {
         node: { nodeId: first.nodeId },
       });
     }
+  });
+});
+
+describe('resident review regressions', () => {
+  it('reserves room for new work despite three open pull requests', async () => {
+    for (let i = 0; i < 3; i += 1) {
+      const { first } = await stream();
+      await publishedRound(first);
+    }
+    const fresh = await stream();
+    const board = await wake({ decisions: 3 });
+    expect(board.decisions).toHaveLength(3);
+    expect(board.decisions).toContainEqual(
+      expect.objectContaining({
+        root: expect.objectContaining({ nodeId: fresh.root.nodeId }),
+        answer: expect.objectContaining({ decision: 'continue' }),
+      }),
+    );
+  });
+
+  it('claims one publication across simultaneous board and root firings', async () => {
+    const { root, first } = await stream();
+    await run(first, PLAN_STREAM_COMMISSION_SLUG, 'completed');
+    const answers = await Promise.all([next(root.nodeId, {}, 'root-wake'), wake({}, 'board-wake')]);
+    const decisions = answers.flatMap((answer) =>
+      'decisions' in answer ? answer.decisions.map((d) => d.answer) : [answer],
+    );
+    expect(decisions.filter((answer) => answer.decision === 'publish')).toHaveLength(1);
+  });
+
+  it('leaves an operator conversation commission to its owner', async () => {
+    const { root, first } = await stream();
+    const runId = await run(first, PLAN_STREAM_COMMISSION_SLUG, 'completed');
+    operatorCommissions.add(runId);
+    expect((await wake()).decisions).toEqual([]);
+    expect(await next(root.nodeId)).toMatchObject({ decision: 'wait' });
   });
 });

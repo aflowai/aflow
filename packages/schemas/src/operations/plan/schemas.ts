@@ -959,7 +959,7 @@ export const PlanBoardNextSchema = z
     decisions: z
       .array(PlanBoardDecisionSchema)
       .describe(
-        'Act on these in order: a merge recorded, a commission published, a stop written or a pull request read before anything is commissioned, and within each the operator’s root order. Empty: end the wake with no reply.',
+        'Act on these in order: a merge recorded, a commission published, a stop written, a failed round re-commissioned, new work commissioned, then pull requests read; within each, the operator’s root order. Empty: end the wake with no reply.',
       ),
     deferred: z
       .number()
