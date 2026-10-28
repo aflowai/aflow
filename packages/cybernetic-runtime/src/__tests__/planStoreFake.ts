@@ -29,10 +29,9 @@ import {
   type PlanNodePatch,
   type PlanNodePlaceWrite,
   type PlanNodeStore,
-  type PlanOverviewNode,
-  type PlanOverviewRootCount,
   type PlanTreeWalkOptions,
 } from '../plan/store.js';
+import type { PlanOverviewNode, PlanOverviewRootCount } from '../plan/overviewReads.js';
 import {
   bySiblingOrder,
   checkPlacement,

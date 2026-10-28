@@ -39,9 +39,8 @@ import {
   type PlanNodeBoardFacts,
   type PlanNodeLinkTally,
   type PlanNodeNewestPullRequest,
-  type PlanOverviewNode,
-  type PlanOverviewRead,
 } from './store.js';
+import type { PlanOverviewNode, PlanOverviewRead } from './overviewReads.js';
 
 /** What the store read for the walked nodes, each map keyed by node id. */
 export interface PlanBoardReads {
