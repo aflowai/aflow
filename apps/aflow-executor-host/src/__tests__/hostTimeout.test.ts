@@ -8,12 +8,13 @@ import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { HOST_CHECKS_TIMEOUT_DEFAULT_MS } from '@aflow/schemas';
+import { FOLDER_PREVIEW_READY_TIMEOUT_MS, HOST_CHECKS_TIMEOUT_DEFAULT_MS } from '@aflow/schemas';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   HOST_CHECK_CHECKOUT_MARGIN_MS,
   HOST_OUTER_TIMEOUT_MARGIN_MS,
+  HOST_PREVIEW_MARGIN_MS,
   HOST_STREAM_IDLE_MS,
   resolveHostTimeout,
 } from '../handlers/hostTimeout.js';
@@ -58,6 +59,23 @@ describe('resolveHostTimeout', () => {
     expect(spec).toEqual({
       idleMs: 60_000 + HOST_OUTER_TIMEOUT_MARGIN_MS,
       maxMs: 60_000 + HOST_OUTER_TIMEOUT_MARGIN_MS,
+    });
+  });
+
+  it('gives a run with a preview the preview’s wait on top of the harness’s own time', async () => {
+    const spec = await resolveFor(
+      ctxFor('host.harness.run', {
+        bindingId: 'b',
+        task: 't',
+        timeoutMs: 1_800_000,
+        browser: { profile: 'ephemeral' },
+        preview: true,
+      }),
+    );
+    expect(HOST_PREVIEW_MARGIN_MS).toBeGreaterThan(FOLDER_PREVIEW_READY_TIMEOUT_MS);
+    expect(spec).toEqual({
+      idleMs: HOST_STREAM_IDLE_MS,
+      maxMs: 1_800_000 + HOST_PREVIEW_MARGIN_MS + HOST_OUTER_TIMEOUT_MARGIN_MS,
     });
   });
 

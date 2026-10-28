@@ -16,6 +16,7 @@ import { coerceJsonObjectArg } from './jsonObjectArg.js';
 
 import { PayloadRefSchema, STORED_PAYLOAD_REF_PATTERN } from '../runtime/payloadRef.js';
 import { DeclaredBrowserProfileIdSchema, EPHEMERAL_BROWSER_PROFILE } from './browserProfile.js';
+import { harnessPreviewRequestIssue, HostHarnessPreviewFlagSchema } from './hostFolderPreview.js';
 
 /**
  * What a branch name and a branch prefix may be, in one place.
@@ -912,9 +913,9 @@ export const HostHarnessBrowserSchema = z
       .describe(
         '`ephemeral` — the default choice — is a browser made for this run and deleted with ' +
           'it: no sign-ins, its own Chrome, and it reaches only the hosts this harness may reach ' +
-          'and, on this machine, the loopback ports the operator declared for the harness — a ' +
-          'dev server the change runs is opened on one of those, at `localhost`, `127.0.0.1` or ' +
-          '`[::1]` — `localhost` reaches a server listening on either loopback. ' +
+          'and, on this machine, the loopback port of the preview the executor started for this ' +
+          'run (`preview: true`, at `previewUrl`) — or, on a run without one, the loopback ports ' +
+          'the operator declared for the harness. The harness never starts a server. ' +
           'A profile id names one the machine declares ' +
           'and this space may use, with its sign-ins, posture and origin rules; it never ' +
           "reaches this machine's own servers.",
@@ -924,9 +925,9 @@ export const HostHarnessBrowserSchema = z
     "A browser for the harness, driven through the operator's Chrome on this machine with the " +
       'same rules as the `browser.page.*` operations: open, navigate, snapshot, read, ' +
       'screenshot, act, list and close as tools, and script evaluation on `ephemeral` only. ' +
-      'Ask for one when the change touches a UI that should be looked at — opening the page ' +
-      'it changed on the dev server and checking it renders and behaves — and leave it out ' +
-      'otherwise. Absent, the harness has no browser.',
+      'Ask for one, with `preview: true`, when the change touches a UI that should be looked ' +
+      'at — opening the page it changed at `previewUrl` and checking it renders and behaves — ' +
+      'and leave it out otherwise. Absent, the harness has no browser.',
   );
 
 /** One browser call a harness made, as `browserLog` records it. Typed text is recorded by length only. */
@@ -1090,6 +1091,7 @@ const HostHarnessRunInputObjectSchema = z.object({
     .default(HOST_HARNESS_TIMEOUT_DEFAULT_MS)
     .describe('Kill the harness and its descendants after this long.'),
   browser: HostHarnessBrowserSchema.optional(),
+  preview: HostHarnessPreviewFlagSchema,
   requiredHosts: z
     .array(
       z
@@ -1118,6 +1120,10 @@ export const HostHarnessRunInputSchema = HostHarnessRunInputObjectSchema.superRe
           'branch it is merged into: name that branch as `base` — the branch the fix is ' +
           'published onto — or drop `mergeFrom`.',
       });
+    }
+    const previewIssue = harnessPreviewRequestIssue(input);
+    if (previewIssue !== undefined) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['preview'], message: previewIssue });
     }
   },
 );
@@ -1274,6 +1280,11 @@ export const HostHarnessRunOutputSchema = z.object({
       'screenshot by the payload holding the image. Present ' +
       'when the run asked for `browser` and the harness used it.',
   ),
+  previewLog: PayloadRefSchema.optional().describe(
+    'What the preview printed, standard output and error, from its start to its stop; present ' +
+      'when the run asked for `preview`. A payload of its own, beside `browserLog`.',
+  ),
+  previewUrl: z.string().optional().describe('Where the run’s preview answered, on loopback.'),
   stderr: z
     .string()
     .optional()

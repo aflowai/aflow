@@ -120,7 +120,10 @@ describe('a harness widening stays a widening', () => {
     // profile the machine declares and this space may use, or a throwaway one;
     // the harness reaches it through pipes in the scratch it could already
     // write, and its compiled policy is byte-identical to a run without one
-    // (harnessBrowserRun.test.ts). `requiredHosts` names hosts the task cannot
+    // (harnessBrowserRun.test.ts). `preview` is a boolean asking for the
+    // folder's own declared preview, which the executor starts unconfined
+    // outside the harness's boundary and opens to its browser alone; the
+    // harness's policy is unchanged (harnessPreviewRun.test.ts). `requiredHosts` names hosts the task cannot
     // do without, compared after the run with the hosts the boundary refused;
     // it can only fail a run, never admit a host.
     const fields = [...harnessInput.matchAll(/^ {2}(\w+):/gm)].map((m) => m[1]);
@@ -139,6 +142,7 @@ describe('a harness widening stays a widening', () => {
       'model',
       'timeoutMs',
       'browser',
+      'preview',
       'requiredHosts',
     ]);
   });

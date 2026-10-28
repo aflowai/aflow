@@ -294,8 +294,11 @@ machine, or the folder's preview on the machine page — the command that serves
 the checkout (`yarn dev --port {port}`, or whatever that folder's project runs), the port
 if it must be fixed (a fixed port serves one run at a time; left out, each run takes a free
 one), the path that answers once it is up, and the files that count as its UI. No operation
-sets it, and a port this stack serves on is refused. Declaring it starts nothing yet. Once
-the executor starts previews (P6.b) and the skills ask for them (P6.c), the loop is standardized:
+sets it, and a port this stack serves on is refused. Declaring it starts nothing; a harness
+run asking for `preview: true` has the executor start it from that run's checkout, open it
+in that run's browser alone and stop it at the run's end (P6.b), and a run whose fixed port
+another run holds is refused — start it again once that run ends. Once the skills ask for
+it (P6.c), the loop is standardized:
 a commission whose brief or branch names those files, and a review whose range touches
 them, takes the ephemeral browser and the preview without being asked, the executor starts
 the preview from that run's checkout and stops it at the run's end, and the agent opens it
@@ -308,8 +311,9 @@ the same and the pull request's body lists it; a harness that takes no browser s
 same way. None of these holds back a push. The same step takes any port this stack serves
 on off the Claude Code harness's browser ports: `aflow harness browser-ports claude <port> …`
 sets the list to the ports that stay. The one to look for is this stack's web app, `3001`
-by default, serving `main`: a coding agent sent there looks at the wrong code, and once P6
-lands such a port is refused.
+by default, serving `main`: a coding agent sent there looks at the wrong code, so such a
+port can no longer be declared and is refused at every connection while the file still
+lists it.
 
 ## Sharing the machine
 

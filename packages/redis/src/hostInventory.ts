@@ -335,7 +335,7 @@ export const HostInventorySchema = z.object({
       id: z.string(),
       spaceId: z.string(),
       preview: HostFolderPreviewSchema.optional(),
-      detectedWebApps: z.array(z.string()).default([]),
+      detectedWebApps: z.array(z.string()),
     }),
   ),
   /**

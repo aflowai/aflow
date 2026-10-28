@@ -36,7 +36,9 @@ import {
   HOST_HARNESS_MAX_TURNS_DEFAULT,
   HostHarnessRunInputSchema,
   MAX_INLINE_PAYLOAD_BYTES,
+  resolveFolderPreview,
   type HarnessActivityLine,
+  type HostResolvedFolderPreview,
   type PayloadRef,
 } from '@aflow/schemas';
 
@@ -138,6 +140,13 @@ import { PUBLICATION_SCRATCH_PREFIX } from '../branchCommit.js';
 import { CHECK_SCRATCH_PREFIX } from '../commitCheck.js';
 import { isMarkedScratch, makeAgentScratch, makeScratch } from '../executorScratch.js';
 import { checkoutWidening } from '../sandboxPolicy.js';
+import {
+  claimPreviewPort,
+  PreviewError,
+  startPreview,
+  type PreviewPortClaim,
+  type StartedPreview,
+} from '../previewSupervisor.js';
 import { browserFailure, jobScopeOf } from './browserHandler.js';
 
 /**
@@ -500,7 +509,7 @@ async function failure(
   if (error instanceof BrowserDriverError) {
     return await failureWithError(ctx, browserFailure(error));
   }
-  if (error instanceof WorktreeError) {
+  if (error instanceof WorktreeError || error instanceof PreviewError) {
     return await failureWithError(ctx, validationError(message));
   }
   return await failureWithError(ctx, internalError(message));
@@ -584,6 +593,8 @@ async function runHarness(
   let secrets: string[] = [];
   let claimed: HarnessSession | undefined;
   let browser: HarnessBrowser | undefined;
+  let previewClaim: PreviewPortClaim | undefined;
+  let preview: StartedPreview | undefined;
   // A session's checkout outlives the run, so the teardown below must not take
   // it away. Set only when this run owns the scratch it made.
   let keepScratch = false;
@@ -638,9 +649,41 @@ async function runHarness(
         );
       }
     }
+    let declaredPreview: HostResolvedFolderPreview | undefined;
+    if (input.preview === true) {
+      if (browserService === undefined) {
+        return await failureWithError(
+          ctx,
+          validationError(
+            'This executor serves no browser, so the run cannot be shown its preview. Send the ' +
+              'task without `preview` and `browser`.',
+          ),
+        );
+      }
+      if (binding.preview === undefined) {
+        return await failureWithError(
+          ctx,
+          validationError(
+            `\`${binding.id}\` declares no preview, so there is none to start. A person declares ` +
+              `one on the machine — \`aflow folder ${binding.id} preview --command "…"\` — or on ` +
+              'the machine page; until then send the task without `preview`.',
+          ),
+        );
+      }
+      declaredPreview = resolveFolderPreview(binding.preview);
+    }
     const readiness = sandboxReadiness();
     if (!readiness.ready) {
       return await failureWithError(ctx, permissionError(noSandboxMessage(readiness.missing)));
+    }
+    // Claimed before any checkout is touched, so a fixed port another run's
+    // preview holds, or anything else listens on, refuses the run at once.
+    // Released in the teardown below, however the run ends.
+    if (declaredPreview !== undefined) {
+      previewClaim = await claimPreviewPort(declaredPreview, {
+        runId: ctx.runId,
+        bindingId: binding.id,
+      });
     }
 
     // An abandoned session holds a checkout on disk, so expiry is collected
@@ -847,13 +890,39 @@ async function runHarness(
       // next.
       void ctx.emitLiveDelta('activity', `${JSON.stringify(line)}\n`);
     };
+    // Started by this executor from the run's own checkout, never by the agent,
+    // and up before the browser opens, since its port is what that browser is
+    // opened to (Plan 320 D19).
+    if (declaredPreview !== undefined && previewClaim !== undefined) {
+      preview = await startPreview({
+        preview: declaredPreview,
+        port: previewClaim.port,
+        cwd: worktree.workDir,
+        scratchDir: join(scratchDir, 'preview'),
+        bindingId: binding.id,
+        ownerRunId: ctx.runId,
+        secrets,
+        signal: ctx.signal,
+        onProgress: () => ctx.reportProgress?.(),
+      });
+      onActivity({
+        kind: 'status',
+        at: Date.now() - startedAt,
+        text: `The preview answers at ${preview.previewUrl}.`,
+      });
+    }
     if (input.browser !== undefined && browserService !== undefined) {
       const tenantId = ctx.tenantId;
       browser = await openHarnessBrowser({
         driver: browserService.driver,
         scope: { ...jobScopeOf(ctx), spaceId },
         profile: input.browser.profile,
-        reach: { allowedDomains: profile.allowedDomains, localPorts: profile.browserLocalPorts },
+        // A run with a preview reaches its own preview's port and no other:
+        // a harness's declared ports could show another checkout.
+        reach: {
+          allowedDomains: profile.allowedDomains,
+          localPorts: preview !== undefined ? [preview.port] : profile.browserLocalPorts,
+        },
         scratchDir: agentScratch,
         stepExecutionId: ctx.stepExecutionId,
         storeScreenshot: async (image) => await browserService.storeScreenshot(tenantId, image),
@@ -1007,9 +1076,10 @@ async function runHarness(
       keepScratch = true;
     }
 
+    // In the inputs, so a result retry and a continued turn carry it too.
     const brief = composeHarnessTask(
       input.task,
-      input.inputs,
+      preview !== undefined ? { ...input.inputs, previewUrl: preview.previewUrl } : input.inputs,
       await repositoryRulesFiles(worktree),
       keptCheckout ? undefined : merge,
     );
@@ -1056,6 +1126,13 @@ async function runHarness(
       await browser.close();
       const records = browser.records();
       if (records.length > 0) browserLog = await ctx.writePayload('logs', browserLogText(records));
+    }
+    // Stopped once the harness is done with it, so its log runs to its stop.
+    // A kind of its own: `logs` is the browser log's path for this step.
+    let previewLog: PayloadRef | undefined;
+    if (preview !== undefined) {
+      await preview.stop();
+      previewLog = await ctx.writePayload('preview_log', preview.log());
     }
 
     // Changes are collected before the worktree goes away, and regardless of how
@@ -1186,6 +1263,8 @@ async function runHarness(
       stdout: spoken ?? result.stdout,
       ...(activityRef !== undefined ? { activityRef } : {}),
       ...(browserLog !== undefined ? { browserLog } : {}),
+      ...(previewLog !== undefined ? { previewLog } : {}),
+      ...(preview !== undefined ? { previewUrl: preview.previewUrl } : {}),
       stderr: scrubbed.text,
       truncated: result.truncated,
       blockedDomains: [...new Set(scrubbed.refusals.map((r) => r.host))],
@@ -1247,6 +1326,9 @@ async function runHarness(
     return await failure(ctx, error, secrets);
   } finally {
     await browser?.close();
+    // Before the checkout goes: the preview runs in it.
+    await preview?.stop();
+    previewClaim?.release();
     if (claimed !== undefined) releaseSession(claimed);
     if (!keepScratch) {
       if (worktreePath !== undefined) await removeWorktree(worktreePath);

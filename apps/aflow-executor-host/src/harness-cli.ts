@@ -18,7 +18,7 @@ import { dirname, resolve } from 'node:path';
 import { resolveBranchPolicy } from '@aflow/schemas';
 
 import { HostPolicySchema } from './bindings.js';
-import { stackPortWarning, parseLocalPorts } from './browserLocalPorts.js';
+import { harnessStackPortRefusal, parseLocalPorts } from './browserLocalPorts.js';
 import { LocalMcpServerSchema } from './localMcpServers.js';
 import { describeHarnessConcurrency, withHarnessConcurrency } from './harnessConcurrency.js';
 import { describePolicyKeepAwake, withKeepAwake } from './keepAwake.js';
@@ -50,7 +50,8 @@ function usage(): never {
       '  harness browser <id> --clear       Hand it no browser.\n' +
       '  harness browser-ports <id> <port>...\n' +
       '                                     Ports on this machine its ephemeral browser may load,\n' +
-      '                                     on loopback only.\n' +
+      '                                     on loopback only, on a run without a preview. Never\n' +
+      "                                     this stack's own.\n" +
       '  harness browser-ports <id> --clear Let it load none.\n' +
       '  harness concurrency <n>            Run at most this many coding agents at once.\n' +
       '  harness concurrency --clear        Run the default number instead.\n' +
@@ -481,13 +482,16 @@ async function setBrowserLocalPorts(id: string, given: readonly string[]): Promi
     console.error(`'${parsed.word}' is not a port: give whole numbers from 1 to 65535.`);
     process.exit(1);
   }
+  const refusal = harnessStackPortRefusal(id, parsed.ports, process.env);
+  if (refusal !== undefined) {
+    console.error(refusal);
+    process.exit(1);
+  }
   const policy = await changePolicy((policy) => {
     const profile = configuredHarness(policy, id);
     profile.browserLocalPorts = [...new Set([...profile.browserLocalPorts, ...parsed.ports])];
     return policy;
   });
-  const warning = stackPortWarning(id, parsed.ports, process.env);
-  if (warning !== undefined) console.warn(warning);
   const ports = configuredHarness(policy, id).browserLocalPorts;
   console.log(
     `\`${id}\`'s ephemeral browser now loads ports ${ports.join(', ')} ` +

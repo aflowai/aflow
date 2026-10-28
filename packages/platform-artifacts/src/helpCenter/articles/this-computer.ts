@@ -186,7 +186,7 @@ Label a pull request **hands-off** to have the shepherd leave it alone — while
     theme: 'this-computer',
     question: 'How do I tell Aflow how my project is served, so a UI change can be seen working?',
     summary:
-      'Declare the folder’s preview once, under This Computer → Connected folders with Declare preview, or on the machine with aflow folder <bindingId> preview --command "<command>". It records the command that serves the project from a checkout, with {port} where its port goes; a fixed port if the project cannot be told one; the path that answers once it is up, / by default; and the files that make up its UI, by default every tsx, jsx, vue, svelte, astro, html, css, scss and less file and everything under each web app directory you name. A port Aflow itself serves on is refused. Only a person can declare it, and declaring it starts nothing. Where the folder has a web app and declares no preview, its card says Preview not declared.',
+      'Declare the folder’s preview once, under This Computer → Connected folders with Declare preview, or on the machine with aflow folder <bindingId> preview --command "<command>". It records the command that serves the project from a checkout, with {port} where its port goes; a fixed port if the project cannot be told one; the path that answers once it is up, / by default; and the files that make up its UI, by default every tsx, jsx, vue, svelte, astro, html, css, scss and less file and everything under each web app directory you name. A port Aflow itself serves on is refused. Only a person can declare it, and declaring it starts nothing: a coding agent run that asks for the preview has Aflow start it from that run’s own checkout, open it in that run’s browser alone, and stop it when the run ends. Where the folder has a web app and declares no preview, its card says Preview not declared.',
     body: `**Where:** **This Computer** in the sidebar → **Connected folders** → a folder's **Declare preview** or **Change preview**; or the \`folder\` command on the machine
 
 A connected folder can be any project, so Aflow does not guess how it is served: you say so once, per folder. The declaration lives in the machine's own policy, beside the folder's other settings.
@@ -195,11 +195,17 @@ A connected folder can be any project, so Aflow does not guess how it is served:
 
 - **Command** — what serves the project, run from the root of a checkout: \`yarn dev --port {port}\`, \`npm run dev -- --port {port}\`, or whatever your project runs. \`{port}\` is replaced with the port it is to listen on.
 - **Port** — leave it empty and each run takes a free port, passed to the command as \`{port}\`; without one the command must contain \`{port}\`. Fix a port only for a project that cannot be told one: a fixed port serves one run at a time. A port Aflow itself serves on — the API, the web app, the MCP server, Redis, Postgres — is refused, because a page from it could approve the agent's own requests.
-- **Ready path** — the path that answers once the project is up. \`/\` by default.
+- **Ready path** — the path that answers once the project is up, such as \`/health\`. \`/\` by default. It is a path on the project itself: one leading \`/\`, no second \`/\` straight after it, no backslash and no spaces.
 - **UI paths** — globs naming the files that make up the UI, one per line; a change touching one is a UI change. Empty, every file ending in \`tsx\`, \`jsx\`, \`vue\`, \`svelte\`, \`astro\`, \`html\`, \`css\`, \`scss\` or \`less\`, and everything under each web app directory. Given, they replace that default whole.
 - **Web app directories** — directories of the folder, such as \`apps/web\`, whose every file counts as UI in the default.
 
-Defaults are read each time, never written in, so a folder that left one empty follows the default as it changes. **Saving replaces the declaration before; Clear preview removes it.** Declaring a preview starts nothing: Aflow does not yet start it for a run.
+Defaults are read each time, never written in, so a folder that left one empty follows the default as it changes. **Saving replaces the declaration before; Clear preview removes it.** Declaring a preview starts nothing.
+
+## When it runs
+
+A coding agent run that asks for the preview — with the agent's own throwaway browser — has Aflow start it, never the agent: from that run's own checkout, with the folder's installed dependencies, on the run's port. Aflow waits up to two minutes for the ready path to answer, then opens the preview in that run's browser alone and hands the agent its address. When the run ends, however it ends, the preview is stopped, and what it printed is kept with the run. A preview that never answers fails the run, quoting the command and the last lines it printed.
+
+The preview runs as you, outside the coding agent's sandbox, as your own dev server would: it is your command, and nothing an agent sends can change it. It is given none of the agent's credentials. A fixed port serves one run at a time: a run that finds it held by another run, or by anything else, is refused at once, naming the holder — start it again once that run has ended.
 
 ## On the machine
 
