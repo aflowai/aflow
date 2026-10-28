@@ -396,9 +396,6 @@ async function writePlanNode(
   const parentId = input.parentId;
   if (changesNothing(current, patch, parentId)) return unchanged(current, input);
   Object.assign(patch, stamp);
-  if (ctx.actorKind === 'human' && current.status === 'blocked' && status === 'active') {
-    patch.openedAt = new Date();
-  }
   let node: PlanNode | null;
   if (parentId !== undefined && parentId !== current.parentId) {
     const move = await ctx.store.moveAtRevision(

@@ -657,7 +657,12 @@ export function decideStreamFiring(facts: PlanStreamFacts): PlanStreamAnswer {
   }
 
   const round = answerLatestRound(facts);
-  if (round.kind === 'decided' && round.output.decision === 'publish') return round.output;
+  if (
+    round.kind === 'decided' &&
+    (round.output.decision === 'publish' ||
+      (round.output.decision === 'wait' && round.output.cause === 'awaiting_publication'))
+  )
+    return round.output;
 
   // Recording a merge and publishing a finished patch take precedence over new work.
   const spent = spendStop(facts);

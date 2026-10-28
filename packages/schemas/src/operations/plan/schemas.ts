@@ -691,11 +691,10 @@ export type PlanStreamPullRequestAnswer = z.infer<typeof PlanStreamPullRequestAn
  * with the wake sessions that started them.
  */
 export const PLAN_STREAM_SPEND_CENTS_DEFAULT = 5_000;
-export const PLAN_STREAM_SPEND_CENTS_MAX = 1_000_000;
 
 /** How many board decisions one wake acts on (Plan 331 D4); the rest wait for the next. */
 export const PLAN_BOARD_DECISIONS_DEFAULT = 3;
-export const PLAN_BOARD_DECISIONS_MAX = 10;
+const PLAN_BOARD_DECISIONS_MAX = 10;
 
 export const PLAN_STREAM_PULL_REQUEST_NEEDS_ROOT_MESSAGE =
   '`pullRequest` answers a read_pull_request decision, which names its root: call again with that root as `rootNodeId` beside it.';
@@ -1132,7 +1131,9 @@ export const PlanLoopMeasureOutputSchema = z
             centsPerMergedPullRequest: z.number().min(0).nullable(),
           })
           .strict()
-          .describe('The resident’s wakes — scheduled Helmsman sessions — as overhead.'),
+          .describe(
+            'Only resident-schedule Helmsman sessions as overhead; per-stream schedule firings are excluded.',
+          ),
       })
       .strict(),
   })

@@ -84,7 +84,19 @@ export function PlanNodeOpenControl({
       ...(spend.trim() !== '' ? { spendCents: Number(spend) } : {}),
     });
     if (!parsed.success) {
-      setError('Enter a spend ceiling from 1 to 1,000,000 whole cents.');
+      setError(
+        parsed.error.issues
+          .map((issue) => {
+            const field =
+              issue.path[0] === 'spendCents'
+                ? 'Spend ceiling'
+                : issue.path[0] === 'why'
+                  ? 'Reason'
+                  : 'Step revision';
+            return `${field}: ${issue.message}`;
+          })
+          .join(' '),
+      );
       return;
     }
     setPending(true);

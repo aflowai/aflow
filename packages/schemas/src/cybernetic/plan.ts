@@ -63,11 +63,13 @@ const PlanNodePositionSchema = z
   })
   .describe('Order among siblings, lowest first.');
 
-export const PlanNodeSpendCentsSchema = z
+export const PLAN_STREAM_SPEND_CENTS_MAX = 1_000_000;
+
+const PlanNodeSpendCentsSchema = z
   .number()
   .int()
   .min(1)
-  .max(1_000_000)
+  .max(PLAN_STREAM_SPEND_CENTS_MAX)
   .describe('The person-set spend ceiling in cents; only the operator open route may write it.');
 
 export const PlanNodeSchema = z

@@ -8,7 +8,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import type { SQL } from 'drizzle-orm';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { PlanLoopMeasureOutputSchema } from '@aflow/schemas';
+import { PlanLoopMeasureOutputSchema, planResidentScheduleInput } from '@aflow/schemas';
 import {
   measurePlanLoop,
   planLoopWindow,
@@ -95,7 +95,20 @@ describe('the loop’s numbers (Plan 331 D7)', () => {
       if (sql.includes('FROM public.platform_audit_log') && sql.includes('GROUP BY action')) {
         expect(sql).toContain("actor_type = 'human'");
       }
-      if (sql.includes('FROM sessions')) return [{ sessions: 120, cents: '900' }];
+      if (sql.includes('FROM agent_schedules'))
+        return [
+          {
+            id: ROOT,
+            targetKind: 'platform-role',
+            targetSystemRole: 'cybernetic-helmsman',
+            inputTemplate: planResidentScheduleInput(),
+          },
+        ];
+      if (sql.includes('FROM sessions'))
+        return Array.from({ length: 120 }, () => ({
+          cents: '7.5',
+          inputRef: `inline:${Buffer.from(JSON.stringify({ config: { scheduleId: ROOT } })).toString('base64')}`,
+        }));
       if (sql.includes('FROM plan_node_links')) return [{ n: 1 }];
       return [];
     });
@@ -104,6 +117,36 @@ describe('the loop’s numbers (Plan 331 D7)', () => {
     expect(measure.operatorActions.total).toBe(1);
     expect(measure.actionsPerMergedPullRequest).toBe(1);
     expect(measure.cost.wakes.sessions).toBe(120);
+  });
+  it('excludes per-stream schedule sessions from resident wake cost', async () => {
+    tx.execute.mockImplementation((query: SQL) => {
+      const { sql } = new PgDialect().sqlToQuery(query);
+      if (sql.includes('FROM agent_schedules'))
+        return [
+          {
+            id: ROOT,
+            targetKind: 'platform-role',
+            targetSystemRole: 'cybernetic-helmsman',
+            inputTemplate: planResidentScheduleInput(),
+          },
+          {
+            id: A,
+            targetKind: 'platform-role',
+            targetSystemRole: 'cybernetic-helmsman',
+            inputTemplate: { input: 'Work the stream' },
+          },
+        ];
+      if (sql.includes('FROM sessions'))
+        return [ROOT, A].map((scheduleId) => ({
+          cents: '20',
+          inputRef: `inline:${Buffer.from(JSON.stringify({ config: { scheduleId } })).toString('base64')}`,
+        }));
+      return [];
+    });
+    expect((await readPlanLoopFacts({} as PostgresJsDatabase, ROOT, ROOT, window)).wakes).toEqual({
+      sessions: 1,
+      cents: 20,
+    });
   });
   it('counts a human schedule write through a user API key', async () => {
     tx.execute.mockImplementation((query: SQL) => {

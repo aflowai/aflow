@@ -7,6 +7,7 @@
  */
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { sql, type SQL } from 'drizzle-orm';
+import { z } from 'zod';
 import { createTenantContext, withTenantSchema } from '@aflow/database';
 import {
   PLAN_LOOP_MEASURE_DEFAULT_DAYS,
@@ -14,6 +15,8 @@ import {
   PLAN_LOOP_MEASURE_NODES_LIMIT,
   PLAN_STREAM_COMMISSION_SLUG,
   PLAN_STREAM_SCHEDULE_TARGET,
+  PLAN_RESIDENT_SCHEDULE_VARIABLE,
+  isPlanResidentSchedule,
   type PlanLoopMeasureOutput,
   type PlanLoopMeasureQuery,
   type TenantId,
@@ -262,14 +265,46 @@ export async function readPlanLoopFacts(
              AND started_at >= ${from} AND started_at < ${to}
            GROUP BY plan_node_id`,
     );
-    const [wakes] = await rows<{ sessions: number; cents: string }>(
+    const schedules = await rows<{
+      id: string;
+      targetKind: string | null;
+      targetSystemRole: string | null;
+      inputTemplate: unknown;
+    }>(
       tx,
-      sql`SELECT count(*)::int AS sessions, coalesce(sum(total_cost_cents), 0)::text AS cents
-            FROM sessions
-           WHERE space_id = ${spaceId}::uuid AND target_system_role = ${helmsman}
-             AND execution_authority ->> 'establishedReason' = 'schedule'
-             AND started_at >= ${from} AND started_at < ${to}`,
+      sql`SELECT id, target_kind AS "targetKind", target_system_role AS "targetSystemRole",
+                 input_template AS "inputTemplate" FROM agent_schedules
+           WHERE space_id = ${spaceId}::uuid`,
     );
+    const residentIds = new Set(schedules.filter(isPlanResidentSchedule).map((s) => s.id));
+    const wakeRows = await rows<{ cents: string; inputRef: string | null }>(
+      tx,
+      sql`SELECT coalesce(s.total_cost_cents, 0)::text AS cents,
+                 e.envelope -> 'metadata' ->> 'inputRef' AS "inputRef"
+            FROM sessions s JOIN event_log e ON e.session_id = s.session_id
+           WHERE s.space_id = ${spaceId}::uuid AND s.target_system_role = ${helmsman}
+             AND s.execution_authority ->> 'establishedReason' = 'schedule'
+             AND e.event_type = 'SessionStarted'
+             AND s.started_at >= ${from} AND s.started_at < ${to}`,
+    );
+    const wakes = { sessions: 0, cents: 0 };
+    const inputSchema = z.object({
+      config: z.object({ [PLAN_RESIDENT_SCHEDULE_VARIABLE]: z.string().uuid() }),
+    });
+    for (const row of wakeRows) {
+      if (!row.inputRef?.startsWith('inline:')) continue;
+      let input: unknown;
+      try {
+        input = JSON.parse(Buffer.from(row.inputRef.slice(7), 'base64').toString('utf8'));
+      } catch {
+        continue;
+      }
+      const parsed = inputSchema.safeParse(input);
+      if (!parsed.success || !residentIds.has(parsed.data.config[PLAN_RESIDENT_SCHEDULE_VARIABLE]))
+        continue;
+      wakes.sessions += 1;
+      wakes.cents += Number(row.cents);
+    }
 
     const count = (action: string) => audited.find((row) => row.action === action)?.n ?? 0;
     return {
@@ -291,7 +326,7 @@ export async function readPlanLoopFacts(
       opens: opens.map((row) => ({ nodeId: row.node_id, at: new Date(row.at) })),
       firstCommissions: firsts.map((row) => ({ nodeId: row.node_id, at: new Date(row.at) })),
       nodeRuns: nodeRuns.map((row) => ({ nodeId: row.node_id, runs: row.runs, cents: row.cents })),
-      wakes: { sessions: wakes?.sessions ?? 0, cents: Number(wakes?.cents ?? 0) },
+      wakes,
     };
   });
 }

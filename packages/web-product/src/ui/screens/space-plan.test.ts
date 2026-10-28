@@ -13,6 +13,7 @@
 import { act, createContext, createElement, useContext, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { PlanNodeOpenSchema } from '@aflow/schemas';
 import type {
   PlanNode,
   PlanNodeDetailOutput,
@@ -1176,6 +1177,29 @@ describe('SpacePlanPage — the operator’s writes from the rail', () => {
         }),
       ),
     ).toEqual({ expectedRevision: 4, spendCents: 12500 });
+  });
+
+  it('names the failing reason field when validation refuses an open with blank spend', async () => {
+    recorded.details[ARTICLE] = detail(
+      fullNode(ARTICLE, 'Write the help article', {
+        parentId: R322,
+        status: 'blocked',
+        revision: 4,
+      }),
+    );
+    await render({ data: withStatus(ARTICLE, 'blocked') });
+    await click(card(ARTICLE));
+    await click(button(rail(), 'Approve'));
+    const failure = PlanNodeOpenSchema.safeParse({ expectedRevision: 4, why: '' });
+    const parse = vi.spyOn(PlanNodeOpenSchema, 'safeParse').mockReturnValueOnce(failure);
+    try {
+      await click(button(rail(), 'Approve'));
+      expect(rail().querySelector('[role="alert"]')?.textContent).toContain('Reason:');
+      expect(rail().querySelector('[role="alert"]')?.textContent).not.toContain('spend');
+      expect(recorded.mutateAsync).not.toHaveBeenCalled();
+    } finally {
+      parse.mockRestore();
+    }
   });
 
   it('calls it Resume on a step the stream stopped, and offers neither on an open one', async () => {

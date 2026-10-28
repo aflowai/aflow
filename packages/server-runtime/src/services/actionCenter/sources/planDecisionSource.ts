@@ -8,6 +8,8 @@ import {
 } from '@aflow/schemas';
 import {
   createPlanNodeStore,
+  createResidentScheduleStore,
+  requestResidentWake,
   findOpenDecision,
   listOpenDecisions,
   updatePlanNode,
@@ -134,6 +136,10 @@ export function createPlanDecisionSource(deps: ActionCenterSourceDeps): ActionCe
         { nodeId, expectedRevision: revision, status: 'done', outcome: answer.trim() },
       );
       if (result.ok) {
+        await requestResidentWake(
+          { redis: deps.redis, schedules: createResidentScheduleStore(deps.db) },
+          { tenantId: ctx.tenantId, spaceId: ctx.spaceId, cause: 'node_written' },
+        );
         return {
           resolvedAt: result.node.updatedAt,
           dispatchedOperationId: PLAN_NODE_UPDATE_OPERATION_ID,

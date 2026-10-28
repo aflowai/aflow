@@ -1090,57 +1090,44 @@ describe('the node spend stop (Plan 331 D4)', () => {
     expect((await current(second.nodeId)).revision).toBe(second.revision);
   });
 
-  it.each(['open', 'update'] as const)(
-    'starts the spend afresh through %s, no audit row awaited',
-    async (path) => {
-      const { root, first } = await stream();
-      store.nodes.set(first.nodeId, { ...first, spendCents: 500 });
-      await run(first, PLAN_STREAM_COMMISSION_SLUG, 'failed', { cents: 600, failure: 'x' });
-      const stopped = await next(root.nodeId, { attempts: 10 });
-      if (stopped.decision !== 'stop') throw new Error('expected a stop');
-      expect(stopped.cause).toBe('spend_spent');
-      await updatePlanNode(session(), stopped.update);
+  it('starts the spend afresh through open, no audit row awaited', async () => {
+    const { root, first } = await stream();
+    store.nodes.set(first.nodeId, { ...first, spendCents: 500 });
+    await run(first, PLAN_STREAM_COMMISSION_SLUG, 'failed', { cents: 600, failure: 'x' });
+    const stopped = await next(root.nodeId, { attempts: 10 });
+    if (stopped.decision !== 'stop') throw new Error('expected a stop');
+    expect(stopped.cause).toBe('spend_spent');
+    await updatePlanNode(session(), stopped.update);
 
-      const openedAt = new Date(stamp());
-      vi.setSystemTime(openedAt);
-      try {
-        const blocked = await current(first.nodeId);
-        const opened =
-          path === 'open'
-            ? await openPlanNode(session(), {
-                nodeId: first.nodeId,
-                expectedRevision: blocked.revision,
-                why: 'Raise the ceiling; the failure was the folder.',
-              })
-            : await updatePlanNode(
-                { ...session(), actorKind: 'human' },
-                {
-                  nodeId: first.nodeId,
-                  expectedRevision: blocked.revision,
-                  status: 'active',
-                },
-              );
-        expect(opened.ok).toBe(true);
-      } finally {
-        vi.useRealTimers();
-      }
-      // Written with the open itself: the next read sees it, with nothing else recorded.
-      expect(store.openedAt.get(first.nodeId)).toEqual(openedAt);
-      expect(await next(root.nodeId, { attempts: 10 })).not.toMatchObject({
-        cause: 'spend_spent',
+    const openedAt = new Date(stamp());
+    vi.setSystemTime(openedAt);
+    try {
+      const blocked = await current(first.nodeId);
+      const opened = await openPlanNode(session(), {
+        nodeId: first.nodeId,
+        expectedRevision: blocked.revision,
+        why: 'Raise the ceiling; the failure was the folder.',
       });
+      expect(opened.ok).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+    // Written with the open itself: the next read sees it, with nothing else recorded.
+    expect(store.openedAt.get(first.nodeId)).toEqual(openedAt);
+    expect(await next(root.nodeId, { attempts: 10 })).not.toMatchObject({
+      cause: 'spend_spent',
+    });
 
-      const after = await run(first, PLAN_STREAM_COMMISSION_SLUG, 'failed', {
-        cents: 600,
-        failure: 'y',
-      });
-      expect(await next(root.nodeId, { attempts: 10 })).toMatchObject({
-        decision: 'stop',
-        cause: 'spend_spent',
-        spend: { cents: 600, runIds: [after] },
-      });
-    },
-  );
+    const after = await run(first, PLAN_STREAM_COMMISSION_SLUG, 'failed', {
+      cents: 600,
+      failure: 'y',
+    });
+    expect(await next(root.nodeId, { attempts: 10 })).toMatchObject({
+      decision: 'stop',
+      cause: 'spend_spent',
+      spend: { cents: 600, runIds: [after] },
+    });
+  });
 
   it('does not let an agent resume reset the window or a next argument raise its ceiling', async () => {
     const { root, first } = await stream();
@@ -1320,6 +1307,33 @@ describe('the open write (Plan 332 D6, Plan 331 D5)', () => {
 });
 
 describe('resident review regressions', () => {
+  it('leaves an over-ceiling completed operator commission with its publishing conversation', async () => {
+    const { root, first } = await stream();
+    store.nodes.set(first.nodeId, { ...first, spendCents: 500 });
+    const runId = await run(first, PLAN_STREAM_COMMISSION_SLUG, 'completed', { cents: 600 });
+    operatorCommissions.add(runId);
+    expect(await next(root.nodeId)).toMatchObject({
+      decision: 'wait',
+      cause: 'awaiting_publication',
+    });
+  });
+
+  it('keeps the spend window on a human update; only the open route resets it', async () => {
+    const { root, first } = await stream();
+    store.nodes.set(first.nodeId, { ...first, spendCents: 500 });
+    await run(first, PLAN_STREAM_COMMISSION_SLUG, 'failed', { cents: 600, failure: 'x' });
+    const blocked = await write(first.nodeId, { status: 'blocked' });
+    await updatePlanNode(
+      { ...session(), actorKind: 'human' },
+      {
+        nodeId: first.nodeId,
+        expectedRevision: blocked.revision,
+        status: 'active',
+      },
+    );
+    expect(store.openedAt.has(first.nodeId)).toBe(false);
+    expect(await next(root.nodeId, { attempts: 10 })).toMatchObject({ cause: 'spend_spent' });
+  });
   it('reserves room for new work despite three open pull requests', async () => {
     for (let i = 0; i < 3; i += 1) {
       const { first } = await stream();
