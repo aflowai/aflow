@@ -13,6 +13,7 @@ import {
   type PlanNodeSummary,
 } from '@aflow/schemas';
 import { checkDependency } from '../plan/dependencies.js';
+import { placeAmongSiblings } from '../plan/placement.js';
 import {
   PLAN_LEARNING_READ_STATUSES,
   PLAN_NODE_RUN_STATUSES,
@@ -26,6 +27,7 @@ import {
   type PlanNodeNewestPullRequest,
   type PlanNodeMove,
   type PlanNodePatch,
+  type PlanNodePlaceWrite,
   type PlanNodeStore,
 } from '../plan/store.js';
 import {
@@ -165,6 +167,46 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
     parentId,
     patch,
   ) => this.oneAtATime(() => this.moveNow(spaceId, nodeId, expectedRevision, parentId, patch));
+
+  /** Positions written by a renumbering, which moves no revision: what a test reads to prove it. */
+  readonly renumbered: Array<{ nodeId: string; position: number }> = [];
+
+  placeAtRevision: PlanNodeStore['placeAtRevision'] = (spaceId, nodeId, expectedRevision, anchor) =>
+    this.oneAtATime((): Promise<PlanNodePlaceWrite> => {
+      const node = this.nodes.get(nodeId);
+      if (!node || node.spaceId !== spaceId) return Promise.resolve({ outcome: 'not_found' });
+      if (node.revision !== expectedRevision) {
+        return Promise.resolve({ outcome: 'stale', node: structuredClone(node) });
+      }
+      const siblings = this.inSpace(spaceId)
+        .filter((n) => n.parentId === node.parentId)
+        .map((n) => this.summary(n))
+        .sort(bySiblingOrder);
+      const placement = placeAmongSiblings(siblings, nodeId, anchor);
+      if (placement.outcome === 'not_sibling') {
+        return Promise.resolve({
+          outcome: 'not_sibling',
+          siblings: siblings.map(({ nodeId: id, title, status, position }) => ({
+            nodeId: id,
+            title,
+            status,
+            position,
+          })),
+        });
+      }
+      if (placement.outcome === 'unchanged') {
+        return Promise.resolve({ outcome: 'unchanged', node: structuredClone(node) });
+      }
+      for (const [id, position] of placement.renumbered) {
+        const sibling = this.nodes.get(id)!;
+        this.nodes.set(id, { ...sibling, position });
+        this.renumbered.push({ nodeId: id, position });
+      }
+      const placed = this.write(spaceId, nodeId, expectedRevision, {
+        position: placement.position,
+      });
+      return Promise.resolve({ outcome: 'placed', node: placed! });
+    });
 
   private oneAtATime<T>(write: () => Promise<T>): Promise<T> {
     const done = this.placements.then(write);

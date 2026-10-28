@@ -18,6 +18,7 @@ import {
   type PlanNodeLink,
   type PlanNodeLinkKind,
   type PlanNodeRun,
+  type PlanNodeSibling,
   type PlanNodeStatus,
   type PlanNodeSummary,
   type TenantId,
@@ -34,6 +35,7 @@ import {
 import type { PlanNodeDependencyRow, PlanNodeLinkRow, PlanNodeRow } from '@aflow/database';
 import { coachLearningToRow, rowToCoachLearning } from '../coachLearningsStore.js';
 import { checkDependency, type DependencyCheck, type DependencyReads } from './dependencies.js';
+import { placeAmongSiblings, type PlanPlaceAnchor } from './placement.js';
 import {
   checkPlacement,
   PLAN_SIBLING_ORDER,
@@ -87,6 +89,17 @@ export type PlanNodeMove =
   /** Not at the expected revision, or gone. */
   | { outcome: 'stale' }
   | PlanPlacementRefusal;
+
+export type PlanNodePlaceWrite =
+  /** The node at its new position, its revision moved; no sibling's revision moved. */
+  | { outcome: 'placed'; node: PlanNode }
+  /** The node is not at the expected revision; `node` is how it stands. */
+  | { outcome: 'stale'; node: PlanNode }
+  /** The node already stands directly there; nothing was written. */
+  | { outcome: 'unchanged'; node: PlanNode }
+  /** The anchor is not a sibling of the node any more; `siblings` in order, the node among them. */
+  | { outcome: 'not_sibling'; siblings: PlanNodeSibling[] }
+  | { outcome: 'not_found' };
 
 export interface PlanTreeWalkOptions extends PlanTreeWalkBounds {
   /** Walk from this node rather than from the roots. */
@@ -210,6 +223,20 @@ export interface PlanNodeStore {
     parentId: string | null,
     patch: PlanNodePatch,
   ): Promise<PlanNodeMove>;
+  /**
+   * Puts the node directly before or after a sibling (roots among roots),
+   * while it is still at `expectedRevision`, by `placeAmongSiblings`. The
+   * siblings are read and locked in one transaction, so two places under one
+   * parent take turns and the second decides against the first's order. A
+   * renumbering writes the siblings' positions only, never their revisions:
+   * it changes no sibling's place relative to another.
+   */
+  placeAtRevision(
+    spaceId: string,
+    nodeId: string,
+    expectedRevision: number,
+    anchor: PlanPlaceAnchor,
+  ): Promise<PlanNodePlaceWrite>;
   /** The position after the last sibling under `parentId` (null: the roots). */
   nextPosition(spaceId: string, parentId: string | null): Promise<number>;
   listChildren(
@@ -629,6 +656,79 @@ export function createPlanNodeStore(db: PostgresJsDatabase, tenantId: string): P
       return node ? { outcome: 'moved', node } : { outcome: 'stale' };
     });
 
+  const placeOnce = (
+    spaceId: string,
+    nodeId: string,
+    expectedRevision: number,
+    anchor: PlanPlaceAnchor,
+  ): Promise<PlanNodePlaceWrite> =>
+    inTenant(async (tx): Promise<PlanNodePlaceWrite> => {
+      const findIn = async (): Promise<PlanNode | null> => {
+        const [row] = await tx
+          .select()
+          .from(planNodes)
+          .where(and(eq(planNodes.spaceId, spaceId), eq(planNodes.id, nodeId)))
+          .limit(1);
+        return row ? rowToPlanNode(row) : null;
+      };
+      const held = await findIn();
+      if (!held) return { outcome: 'not_found' };
+      // Every sibling locked, the node among them: a second place under this
+      // parent waits here and then reads this one's order. Sorted again once
+      // locked, since a row another write changed is returned as it now
+      // stands but where the query first ordered it.
+      const locked = await tx
+        .select({
+          nodeId: planNodes.id,
+          title: planNodes.title,
+          status: planNodes.status,
+          position: planNodes.position,
+          revision: planNodes.revision,
+        })
+        .from(planNodes)
+        .where(and(eq(planNodes.spaceId, spaceId), parentIs(held.parentId)))
+        .orderBy(...siblingOrder())
+        .for('update');
+      const siblings = locked.sort(
+        (a, b) =>
+          a.position - b.position || (a.nodeId < b.nodeId ? -1 : a.nodeId > b.nodeId ? 1 : 0),
+      );
+      const self = siblings.find((s) => s.nodeId === nodeId);
+      if (!self || self.revision !== expectedRevision) {
+        // Moved under another parent, or written, since the first read.
+        const now = await findIn();
+        return now ? { outcome: 'stale', node: now } : { outcome: 'not_found' };
+      }
+      const placement = placeAmongSiblings(siblings, nodeId, anchor);
+      if (placement.outcome === 'not_sibling') {
+        return {
+          outcome: 'not_sibling',
+          siblings: siblings.map((s) => ({
+            nodeId: s.nodeId,
+            title: s.title,
+            status: s.status as PlanNodeStatus,
+            position: s.position,
+          })),
+        };
+      }
+      if (placement.outcome === 'unchanged') return { outcome: 'unchanged', node: held };
+      if (placement.renumbered.size > 0) {
+        const values = [...placement.renumbered].map(
+          ([id, position]) => sql`(${id}::uuid, ${position}::int)`,
+        );
+        await tx.execute(sql`
+          UPDATE plan_nodes AS n SET position = v.position
+          FROM (VALUES ${sql.join(values, sql`, `)}) AS v(id, position)
+          WHERE n.space_id = ${spaceId}::uuid AND n.id = v.id
+        `);
+      }
+      const node = await writeAtRevision(tx, spaceId, nodeId, expectedRevision, {
+        position: placement.position,
+      });
+      if (!node) throw new Error('a plan node held for a place changed under its lock');
+      return { outcome: 'placed', node };
+    });
+
   return {
     insert: (spaceId, values) =>
       retryingDeadlocks(() =>
@@ -666,6 +766,9 @@ export function createPlanNodeStore(db: PostgresJsDatabase, tenantId: string): P
 
     moveAtRevision: (spaceId, nodeId, expectedRevision, parentId, patch) =>
       retryingDeadlocks(() => moveOnce(spaceId, nodeId, expectedRevision, parentId, patch)),
+
+    placeAtRevision: (spaceId, nodeId, expectedRevision, anchor) =>
+      retryingDeadlocks(() => placeOnce(spaceId, nodeId, expectedRevision, anchor)),
 
     nextPosition: (spaceId, parentId) => inTenant((tx) => nextPositionIn(tx, spaceId, parentId)),
 
