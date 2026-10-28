@@ -340,7 +340,7 @@ export const HostOperationRegistrations: OperationRegistration[] = [
         'A fix to a branch its base has moved past is commissioned with `mergeFrom: origin/<base>` and published with the sha the commission reported in `merge.from` as `commit.mergeFrom`; the branch then carries one merge commit holding the fix',
         'A smoke test or a brief look, with `maxTurns` naming how many turns brief means',
         "Pinning the model for a run that has a reason to — a comparison, a cost ceiling, a capability the default lacks; otherwise leave it out, and the run gets the model the operator configured for that harness on the machine, or the harness's own default when none is",
-        "A change to a UI that should be seen working — the harness opens the page it changed on the dev server and checks it: `browser: { profile: 'ephemeral' }`, the default choice, which holds no sign-ins and reaches the harness's allowed domains plus the dev-server ports the operator declared for that harness on this machine",
+        "A UI that should be looked at in a browser: `browser: { profile: 'ephemeral' }`, the default choice, which holds no sign-ins and reaches the harness's allowed domains plus, with `preview: true`, the folder's preview at `previewUrl` — the commit the run started from, never the run's own edits, so a change is seen working in its review's preview — or else the dev-server ports the operator declared for that harness on this machine",
       ],
       whenNotToUse: [
         'Running a build or a test suite — that is host.process.exec, which needs no worktree',

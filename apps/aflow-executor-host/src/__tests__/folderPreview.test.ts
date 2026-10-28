@@ -135,7 +135,7 @@ describe('a folder’s preview in the policy', () => {
     };
     expect(refused({ command: 'yarn dev' })).toContain('{port}');
     expect(refused({ command: 'yarn dev --port {port}', readyPath: 'health' })).toContain(
-      'starts with `/`',
+      'starting with one `/`',
     );
     expect(refused({ command: 'yarn dev', port: 70_000 })).not.toBe('');
     expect(refused({ command: 'yarn dev --port {port}', webAppDirs: ['../elsewhere'] })).toContain(

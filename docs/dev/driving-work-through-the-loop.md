@@ -95,7 +95,8 @@ its outcome as it is marked done, and no firing commissions it (`wait`, `awaitin
    takes a turn budget, are sized for a slice; name `timeoutMs` or `maxTurns` only to
    change them. A slice that touches a page of the web UI also takes
    `browser: { profile: 'ephemeral' }`, and the brief names the dev-server URL the agent
-   opens and what it should see working there; any other slice leaves it out.
+   opens and what it should look at there — the app as it runs, never the agent's own
+   edits, which the review sees once its range is committed; any other slice leaves it out.
    Several commissions may run at once, within the machine's limit (below).
    The checks the agent must run are named in the brief, because the folder's checks
    only run once the commission is published: `yarn test:file` on touched and added tests, `npx tsc -p` per touched
@@ -345,13 +346,29 @@ machine, or the folder's preview on the machine page — the command that serves
 the checkout (`yarn dev --port {port}`, or whatever that folder's project runs), the port
 if it must be fixed (a fixed port serves one run at a time; left out, each run takes a free
 one), the path that answers once it is up, and the files that count as its UI. No operation
-sets it, and a port this stack serves on is refused. Declaring it starts nothing yet. Once
-the executor starts previews (P6.b) and the skills ask for them (P6.c), the loop is standardized:
+sets it, and a port this stack serves on is refused. Declaring it starts nothing; a harness
+run asking for `preview: true` has the executor start it in a snapshot of that run's checkout
+— its commit, copied before the agent starts, so nothing the agent writes is run or shown
+at `previewUrl`, and a change is seen working in its review's preview — open it
+in that run's browser alone and stop it at the run's end (P6.b), and a run whose fixed port
+another run holds is refused — start it again once that run ends. Once the skills ask for
+it (P6.c), the loop is standardized:
 a commission whose brief or branch names those files, and a review whose range touches
 them, takes the ephemeral browser and the preview without being asked, the executor starts
-the preview from that run's checkout and stops it at the run's end, and the agent opens it
-and sees the change working before it reports. A commission's trigger is best-effort — its
-change does not exist until it has run — so one that changes those files unasked says so
+the preview from a snapshot of that run's checkout and stops it at the run's end, and the
+agent opens it. The snapshot is the commit the run started from, so a review sees the range
+working, while a commission's preview shows its base: its own edits are seen by the review.
+The preview runs unconfined, through the executor's supervised service, with the operator's
+reach — a deliberate step beyond the checks' sandbox, which has no operator folder, no `.git`,
+no `~/.aflow` and no loopback. The operator ruled it so (Plan 320 F49): the folder's sandbox
+cannot listen on loopback on macOS, so a confined preview could not serve, and the loop's agents
+already act with the operator's own posture — their git pushes, their folder, their machine — so
+a stricter preview posture would only add friction to a review step that does not need it. A
+review's preview therefore runs the committed range as the operator. No preview ever runs in the
+agent's live checkout, executing files while the agent writes them; that stays rejected, and no
+agent sees its own uncommitted edits through a preview.
+A commission's trigger is best-effort — its change does not exist until it has run — so one
+that changes those files unasked says so
 in its result; the review's, over the range, cannot miss them, and its screenshots are the
 ones the pull request links. A folder with no declaration is not skipped in silence: the
 review reports a `needs_setup` finding naming the command, the commission's result says
@@ -359,8 +376,9 @@ the same and the pull request's body lists it; a harness that takes no browser s
 same way. None of these holds back a push. The same step takes any port this stack serves
 on off the Claude Code harness's browser ports: `aflow harness browser-ports claude <port> …`
 sets the list to the ports that stay. The one to look for is this stack's web app, `3001`
-by default, serving `main`: a coding agent sent there looks at the wrong code, and once P6
-lands such a port is refused.
+by default, serving `main`: a coding agent sent there looks at the wrong code, so such a
+port can no longer be declared and is refused at every connection while the file still
+lists it.
 
 ## Sharing the machine
 

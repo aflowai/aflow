@@ -131,3 +131,37 @@ describe('the refusal of a preview on a port this stack serves on', () => {
     );
   });
 });
+
+describe('a preview’s ready path', () => {
+  const declared = (readyPath: string): boolean =>
+    HostFolderPreviewSchema.safeParse({ command: 'yarn dev --port {port}', readyPath }).success;
+
+  it('is a path on the preview itself', () => {
+    for (const path of ['/', '/health', '/api/ready?full=1', '/a/b.html#top']) {
+      expect(declared(path), path).toBe(true);
+    }
+  });
+
+  it('refuses whatever would name another host, or a path a person did not mean', () => {
+    for (const path of [
+      '//evil.example/health',
+      '/\\evil.example',
+      '/\\x',
+      '/a\\b',
+      '/health check',
+      '/health\tcheck',
+      '/health\n',
+      '/\u0000',
+      '/\u007f',
+      'health',
+    ]) {
+      expect(declared(path), JSON.stringify(path)).toBe(false);
+    }
+  });
+
+  it('names the default in its description as the path itself', () => {
+    const description = HostFolderPreviewSchema.innerType().shape.readyPath.description ?? '';
+    expect(description).toContain('Absent, `/`.');
+    expect(description).not.toContain('FOLDER_PREVIEW_READY_PATH_DEFAULT');
+  });
+});

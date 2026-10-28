@@ -6,8 +6,8 @@
  * The file holds the declaration as the person wrote it; the defaults —
  * readyPath, uiPaths — are read in by `resolveFolderPreview` each time, so a
  * change of default reaches every folder that never chose. This only writes
- * the declaration: nothing here starts the preview, which is the executor's
- * job per run, and its confinement is not settled yet (Plan 320 F49).
+ * the declaration: nothing here starts the preview, which a harness run's
+ * supervisor does per run (`previewSupervisor.ts`, Plan 320 D19, F49).
  */
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';

@@ -547,19 +547,21 @@ off its default is refused by the application, which reads the server's
 environment, and by the executor only where its own environment names it too.
 
 The throwaway profile reaches no more than the harness itself: the hosts allowed
-with `harness allow`, and on this machine only the ports declared for it, on
-loopback (`localhost`, `127.0.0.1`, `[::1]`) and never on a LAN address:
+with `harness allow`, and on this machine only its run's own preview port, where
+the run asked for the folder's preview, or else the ports declared for the
+harness — on loopback (`localhost`, `127.0.0.1`, `[::1]`) and never on a LAN
+address:
 
 ```bash
 yarn workspace @aflow/aflow-executor-host harness browser-ports claude 5173
 yarn workspace @aflow/aflow-executor-host harness browser-ports claude --clear
 ```
 
-Declaring one of this stack's own ports for a harness (the API's 3000 and the web
-application's 3001 by default, and the rest listed above) lets the harness's
-browser load it — the web app presents the instance secret to whoever loads it, so
-the harness could approve its own requests. The command warns before it writes
-such a port.
+One of this stack's own ports (the API's 3000 and the web application's 3001 by
+default, and the rest listed above) is refused for a harness, as for a profile:
+the web app presents the instance secret to whoever loads it, so the harness could
+approve its own requests. The command refuses it and writes nothing, and one
+already in the file is refused at every connection.
 
 A connected folder declares how its project is served, so a change to its UI can
 be seen working (Plan 320 D18): the command, run from the root of a checkout with
@@ -569,7 +571,24 @@ its UI (by default every `tsx jsx vue svelte astro html css scss less` file and
 everything under each `--web-app` directory). The same declaration is under each
 folder on **This Computer**, which says **Preview not declared** where the folder
 holds a web app and declares none. Only a person declares it, a port this stack
-serves on is refused, and declaring it starts nothing:
+serves on is refused, and declaring it starts nothing. A harness run that asks for
+it (`preview: true`, with the ephemeral browser) has the executor start it in a
+snapshot of that run's checkout — its commit, copied before the agent starts, never
+the checkout the agent edits, so it serves the app as of that commit and none of the
+agent's own edits, which are seen working in the review's preview, whose snapshot holds the
+committed range — unconfined but in a process group the executor stops when the run ends, with
+none of the harness's credential; wait up to 120 s for the
+ready path on IPv4 or IPv6 loopback; and open its port to that run's browser alone.
+What it printed is kept with the run, failed or not. Running unconfined, with the
+operator's reach, is a deliberate step beyond the checks' sandbox (which has no
+operator folder, no `.git`, no `~/.aflow` and no loopback), ruled by the operator
+(Plan 320 F49): the folder's sandbox cannot listen on loopback on macOS, so a
+confined preview could not serve, and the loop's agents already act with the
+operator's own posture — their git pushes, their folder, their machine — so a
+stricter one would only add friction to the review step. A review's preview runs
+the committed range as the operator; a commission's serves its base; none runs in
+the checkout an agent is editing. A fixed port serves one run
+at a time, and a run that finds it held is refused rather than queued:
 
 ```bash
 yarn workspace @aflow/aflow-executor-host folder hb_site preview --command "yarn dev --port {port}"

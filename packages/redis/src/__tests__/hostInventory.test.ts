@@ -366,6 +366,21 @@ describe('host inventories', () => {
     expect(await readLiveHostInventories(redis, now)).toEqual([]);
   });
 
+  it('refuses a folder in the preview list that does not say what the machine detected', async () => {
+    const now = Date.now();
+    const redis = fakeRedis(
+      { [now - 1_000]: 'laptop' },
+      {
+        [hostInventoryKey('laptop')]: JSON.stringify({
+          ...inventory('laptop', []),
+          previews: [{ id: 'hb_site', spaceId: 'space-a' }],
+        }),
+      },
+    );
+
+    expect(await readLiveHostInventories(redis, now)).toEqual([]);
+  });
+
   it('refuses checks published as a command rather than the program they run', async () => {
     const now = Date.now();
     const redis = fakeRedis(
