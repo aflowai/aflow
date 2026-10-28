@@ -9,8 +9,12 @@
  * live read has moved past it.
  */
 import { useState } from 'react';
-import { Button, Column, Row, Text, Textarea } from '@aflow/design-system';
-import { PLAN_NODE_OPEN_WHY_MAX_CHARS } from '@aflow/schemas';
+import { Button, Column, Row, Text, Textarea, Input } from '@aflow/design-system';
+import {
+  PlanNodeOpenSchema,
+  PLAN_NODE_OPEN_WHY_MAX_CHARS,
+  type PlanNodeOpen,
+} from '@aflow/schemas';
 import {
   usePinnedNode,
   type PlanNodeCloseAnswer,
@@ -18,11 +22,7 @@ import {
 } from './PlanNodeCloseControl.js';
 
 /** What the operator asks of one node: back to active, against the revision they read. */
-export interface PlanNodeOpenRequest {
-  nodeId: string;
-  expectedRevision: number;
-  why?: string;
-}
+export type PlanNodeOpenRequest = PlanNodeOpen & { nodeId: string };
 
 export type PlanNodeOpener = (request: PlanNodeOpenRequest) => Promise<PlanNodeCloseAnswer>;
 
@@ -43,6 +43,7 @@ export function PlanNodeOpenControl({
 }) {
   const [opening, setOpening] = useState(false);
   const [text, setText] = useState('');
+  const [spend, setSpend] = useState('');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { shown, movedSinceOpened, setPinned } = usePinnedNode(read, opening);
@@ -72,16 +73,37 @@ export function PlanNodeOpenControl({
   const reset = () => {
     setOpening(false);
     setText('');
+    setSpend('');
     setError(null);
   };
   const submit = async () => {
     if (!shown) return;
+    const parsed = PlanNodeOpenSchema.safeParse({
+      expectedRevision: shown.revision,
+      ...(why.length > 0 ? { why } : {}),
+      ...(spend.trim() !== '' ? { spendCents: Number(spend) } : {}),
+    });
+    if (!parsed.success) {
+      setError(
+        parsed.error.issues
+          .map((issue) => {
+            const field =
+              issue.path[0] === 'spendCents'
+                ? 'Spend ceiling'
+                : issue.path[0] === 'why'
+                  ? 'Reason'
+                  : 'Step revision';
+            return `${field}: ${issue.message}`;
+          })
+          .join(' '),
+      );
+      return;
+    }
     setPending(true);
     setError(null);
     const answer = await onOpen({
       nodeId,
-      expectedRevision: shown.revision,
-      ...(why.length > 0 ? { why } : {}),
+      ...parsed.data,
     });
     setPending(false);
     if (answer.ok) {
@@ -114,6 +136,16 @@ export function PlanNodeOpenControl({
           {`This step is ${openNow} now.`}
         </Text>
       )}
+      <Input
+        aria-label="Spend ceiling (cents, optional)"
+        placeholder="Spend ceiling (cents, optional)"
+        type="number"
+        disabled={pending}
+        value={spend}
+        onChange={(event) => {
+          setSpend(event.target.value);
+        }}
+      />
       <Textarea
         aria-label={field}
         placeholder={field}
@@ -124,6 +156,9 @@ export function PlanNodeOpenControl({
           setText(event.target.value);
         }}
       />
+      <Text size="xs" variant="muted">
+        Leave the ceiling blank to keep it. Opening starts a fresh spend window.
+      </Text>
       {tooLong && (
         <Text size="xs" tone="danger">
           {`At most ${String(PLAN_NODE_OPEN_WHY_MAX_CHARS)} characters.`}

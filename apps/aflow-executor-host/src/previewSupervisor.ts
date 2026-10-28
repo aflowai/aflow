@@ -6,11 +6,13 @@
  * the run ends.
  *
  * It runs unconfined but supervised, over a snapshot taken at preview start —
- * never the agent's live checkout (Plan 320 F49). Unconfined because the
- * folder's sandbox cannot listen on loopback on macOS. The snapshot is what
- * makes that acceptable: it is the checkout's commit, copied before the agent
- * runs, so what executes as the operator is the content the run started from
- * and nothing the sandboxed agent writes afterwards. Supervised as a detached
+ * never the agent's live checkout (Plan 320 F49). Unconfined, with the
+ * operator's reach, by the operator's ruling — a deliberate step beyond the
+ * checks' sandbox: that sandbox cannot listen on loopback on macOS, and the
+ * loop's agents already act with the operator's own posture. The snapshot is
+ * the checkout's commit, copied before the agent runs — a review's committed
+ * range, a commission's base — so nothing the agent writes during the run is
+ * executed or shown. Supervised as a detached
  * process group of its own in the one registry every spawn enters, owned by
  * its run and scoped to its binding, so withdrawal, shutdown, a drain and the
  * next boot's orphan sweep all reach it as they reach a harness. What it is

@@ -926,9 +926,14 @@ export const HostHarnessBrowserSchema = z
       'same rules as the `browser.page.*` operations: open, navigate, snapshot, read, ' +
       'screenshot, act, list and close as tools, and script evaluation on `ephemeral` only. ' +
       'Ask for one, with `preview: true`, when a UI should be looked at, and leave it out ' +
-      'otherwise. `previewUrl` serves the commit the run started from: the app as it behaves ' +
-      "at that base, never the harness's own edits. A change is seen working in its review's " +
-      'preview, whose checkout holds the committed change. Absent, the harness has no browser.',
+      'otherwise. `previewUrl` serves the commit the run started from — for a commission its ' +
+      'base, the app before the change; for a review the committed range, the change as it ' +
+      "will be pushed — and never the harness's own uncommitted edits, which no agent sees " +
+      "through it. The preview runs unconfined, with the operator's reach, by the operator's " +
+      "ruling: a deliberate step beyond the checks' sandbox, because that sandbox cannot listen " +
+      "on loopback on macOS and because the loop's agents already act with the operator's own " +
+      'posture, so a stricter one would only add friction to the review. Absent, the harness ' +
+      'has no browser.',
   );
 
 /** One browser call a harness made, as `browserLog` records it. Typed text is recorded by length only. */

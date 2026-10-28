@@ -29,7 +29,7 @@ import {
 } from './helpers.js';
 import { notifyWaiters } from './waiters.js';
 import { releaseScheduleCreates } from '../../SessionOrchestrator/handlers/inlineOps/scheduleCreateBudget.js';
-import { linkEndedRunToPlanNode } from './planLinks.js';
+import { linkEndedRunToPlanNode, wakeResidentOnRunEnd } from './planLinks.js';
 import type { HarnessDeps } from './types.js';
 
 export async function pauseRunForTask(
@@ -373,6 +373,14 @@ export async function completeRun(
   } catch (err) {
     log.warn(
       `[completeRun] linking the run to plan node ${run.planNodeId ?? '(none)'} failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+
+  try {
+    await wakeResidentOnRunEnd(deps, tenantIdStr, run);
+  } catch (err) {
+    log.warn(
+      `[completeRun] waking the resident for run ${runId} failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
     );
   }
 

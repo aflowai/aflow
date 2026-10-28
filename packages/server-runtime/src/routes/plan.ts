@@ -9,7 +9,10 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest 
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Redis } from 'ioredis';
 import {
+  PlanLoopMeasureOutputSchema,
+  PlanLoopMeasureQuerySchema,
   PlanNodeCloseInputSchema,
   PlanNodeDetailOutputSchema,
   PlanNodeDetailQuerySchema,
@@ -26,10 +29,13 @@ import {
 } from '@aflow/schemas';
 import {
   createPlanNodeStore,
+  createResidentScheduleStore,
+  readPlanLoopMeasure,
   openPlanNode,
   placePlanNode,
   readPlanNodeDetail,
   readPlanTrees,
+  requestResidentWake,
   updatePlanNode,
   type PlanOpError,
   type PlanWriteContext,
@@ -70,6 +76,7 @@ function refusalBody(
       current: current.data,
     };
   }
+
   if (refusal.code === 'PLAN_NODE_UNCHANGED' && current.success) {
     return {
       error: refusal.code,
@@ -180,6 +187,7 @@ async function operatorWriting(
       redis,
       tenantId: tenant.tenantId,
       createdBy: authUser.userId,
+      actorKind: 'human',
     },
     userId: authUser.userId,
     authMethod: authUser.authMethod,
@@ -190,14 +198,21 @@ async function operatorWriting(
  * The write is the person signed in: who it was comes from the session, never
  * the body, and is kept where every other operator write is.
  */
-function recordPlanWrite(
+async function recordPlanWrite(
   fastify: FastifyInstance,
   request: FastifyRequest,
   params: { spaceId: string; nodeId: string },
   writer: PlanWriter,
   action: 'plan.node.close' | 'plan.node.open' | 'plan.node.place',
   details: Record<string, unknown>,
-): void {
+): Promise<void> {
+  await wakeResident(
+    fastify.appContext.db as PostgresJsDatabase,
+    writer.ctx.redis,
+    writer.ctx.tenantId,
+    params.spaceId,
+    request.log,
+  );
   if (!fastify.audit) return;
   const { ctx } = writer;
   fastify.audit.record({
@@ -219,6 +234,23 @@ function recordPlanWrite(
     details,
     request: { method: request.method, path: request.url },
   });
+}
+
+async function wakeResident(
+  db: PostgresJsDatabase,
+  redis: Redis,
+  tenantId: string,
+  spaceId: string,
+  log: { warn: (obj: object, msg: string) => void },
+): Promise<void> {
+  try {
+    await requestResidentWake(
+      { redis, schedules: createResidentScheduleStore(db) },
+      { tenantId, spaceId, cause: 'node_written' },
+    );
+  } catch (err) {
+    log.warn({ err, spaceId }, 'waking the resident after a plan write failed');
+  }
 }
 
 // eslint-disable-next-line @typescript-eslint/require-await -- Fastify plugin
@@ -339,7 +371,7 @@ export const planRoutes: FastifyPluginAsync = async (fastify) => {
       if (!result.ok) {
         return reply.status(refusalStatus(result)).send(refusalBody(result, body.expectedRevision));
       }
-      recordPlanWrite(fastify, request, request.params, writer, 'plan.node.close', {
+      await recordPlanWrite(fastify, request, request.params, writer, 'plan.node.close', {
         status: body.status,
         revision: result.node.revision,
       });
@@ -370,6 +402,7 @@ export const planRoutes: FastifyPluginAsync = async (fastify) => {
         nodeId: request.params.nodeId,
         expectedRevision: body.expectedRevision,
         ...(body.why !== undefined ? { why: body.why } : {}),
+        ...(body.spendCents !== undefined ? { spendCents: body.spendCents } : {}),
       });
       if (!result.ok) {
         if (result.code === 'PLAN_NODE_NOTE_TOO_LONG') {
@@ -386,7 +419,7 @@ export const planRoutes: FastifyPluginAsync = async (fastify) => {
             ),
           );
       }
-      recordPlanWrite(fastify, request, request.params, writer, 'plan.node.open', {
+      await recordPlanWrite(fastify, request, request.params, writer, 'plan.node.open', {
         status: result.from,
         revision: result.node.revision,
       });
@@ -429,11 +462,43 @@ export const planRoutes: FastifyPluginAsync = async (fastify) => {
             ),
           );
       }
-      recordPlanWrite(fastify, request, request.params, writer, 'plan.node.place', {
+      await recordPlanWrite(fastify, request, request.params, writer, 'plan.node.place', {
         ...anchor,
         revision: result.node.revision,
       });
       return { node: result.node };
+    },
+  );
+
+  // What the loop costs the operator over a window (Plan 331 D7).
+  app.get(
+    '/:spaceId/plan/loop',
+    {
+      config: {
+        authz: {
+          resource: 'space',
+          action: 'read',
+          resourceIdFrom: 'param',
+          resourceIdParam: 'spaceId',
+        },
+      },
+      schema: {
+        tags: ['Spaces'],
+        summary:
+          "What the loop cost the operator over a window: their actions per merged pull request, each node's idle time before its first commission, and each node's cost with the resident's wakes beside it",
+        params: z.object({ spaceId: z.string().uuid() }),
+        querystring: PlanLoopMeasureQuerySchema,
+        response: { 200: PlanLoopMeasureOutputSchema },
+      },
+    },
+    async (request) => {
+      const tenant = await request.requireTenant();
+      return readPlanLoopMeasure(
+        fastify.appContext.db as PostgresJsDatabase,
+        tenant.tenantId,
+        request.params.spaceId,
+        request.query,
+      );
     },
   );
 };

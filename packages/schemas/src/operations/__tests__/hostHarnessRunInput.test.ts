@@ -363,15 +363,22 @@ describe('host.harness.run asks for a browser by profile', () => {
     expect(browser?.properties?.['profile']?.description).toContain('the default choice');
   });
 
-  it('says the preview serves the run’s starting commit, never the harness’s own edits', () => {
+  it('says what the preview serves and that it runs unconfined by the operator’s ruling', () => {
     const json = toJsonSchemaSync(HostHarnessRunInputSchema) as {
       properties: Record<string, { description?: string }>;
     };
     for (const field of ['browser', 'preview']) {
       const description = json.properties[field]?.description ?? '';
       expect(description).toContain('the commit the run started from');
-      expect(description).toContain("never the harness's own edits");
-      expect(description).toContain('seen working in its review');
+      expect(description).toContain('for a commission its base');
+      expect(description).toContain('for a review the committed range');
+      expect(description).toContain('own uncommitted edits');
+      expect(description).toContain(
+        "unconfined, with the operator's reach, by the operator's ruling",
+      );
+      expect(description).toContain("a deliberate step beyond the checks' sandbox");
+      expect(description).toContain('cannot listen on loopback on macOS');
+      expect(description).toContain("already act with the operator's own posture");
       expect(description).not.toContain('own checkout');
     }
   });

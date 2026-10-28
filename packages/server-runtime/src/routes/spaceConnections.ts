@@ -1,4 +1,3 @@
-import { spaceAgentCapabilitiesRoutes } from './spaceAgentCapabilities.js';
 /**
  * The bound connections a space's agent can carry, each with the per-turn token
  * cost of pinning it.
@@ -15,6 +14,7 @@ import { spaceAgentCapabilitiesRoutes } from './spaceAgentCapabilities.js';
  * tool carries its binding to the executor — so two bindings of one integration
  * cost two tool sets, not one.
  */
+import { spaceAgentCapabilitiesRoutes } from './spaceAgentCapabilities.js';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { SpaceConnectionSchema, type SpaceConnection } from '@aflow/schemas';

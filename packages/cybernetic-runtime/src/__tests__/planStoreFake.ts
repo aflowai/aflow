@@ -52,6 +52,8 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
   readonly dependencies: PlanNodeDependency[] = [];
   /** `coach_learnings` rows of `plan` scope, with the space each was written in. */
   readonly learnings: Array<{ spaceId: string; learning: CoachLearning }> = [];
+  /** `plan_nodes.opened_at`: when a person last opened each node, as the open write stamps it. */
+  readonly openedAt = new Map<string, Date>();
   private clock = Date.parse('2026-10-04T09:00:00.000Z');
   private placements: Promise<unknown> = Promise.resolve();
 
@@ -247,7 +249,7 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
     if (!node || node.spaceId !== spaceId || node.revision !== expectedRevision) {
       return null;
     }
-    const { note, outcome, closedAt, ...rest } = patch;
+    const { note, outcome, closedAt, openedAt, ...rest } = patch;
     const next: PlanNode = {
       ...node,
       ...rest,
@@ -266,6 +268,7 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
       if (closedAt === null) delete next.closedAt;
       else next.closedAt = closedAt.toISOString();
     }
+    if (openedAt !== undefined) this.openedAt.set(nodeId, openedAt);
     this.nodes.set(nodeId, next);
     return structuredClone(next);
   }

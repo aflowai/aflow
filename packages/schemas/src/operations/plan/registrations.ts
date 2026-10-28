@@ -16,7 +16,7 @@ import {
   PlanNodeNextOutputSchema,
   PlanNodeUpdateInputSchema,
   PlanNodeUpdateOutputSchema,
-  PLAN_STREAM_ATTEMPTS_DEFAULT,
+  PLAN_RESIDENT_SCHEDULE_CRON,
 } from './schemas.js';
 
 const EXAMPLE_NODE_ID = '00000000-0000-0000-0000-000000000000';
@@ -257,30 +257,32 @@ export const PlanOperationRegistrations: OperationRegistration[] = [
     stepType: 'plan',
     group: 'node',
     verb: 'next',
-    name: 'Next in Plan Stream',
-    actionLabel: 'Reading where the stream stands…',
+    name: 'Next in Plan',
+    actionLabel: 'Reading where the plan stands…',
     semanticDescription:
-      'Decide what a stream does now, by rule, from its records: walk from its root to the active node, read that node’s runs, links, attention items and pull request, and answer record_merge, wait, stop or continue — read_pull_request first where the answer turns on GitHub. Writes nothing and starts nothing.',
-    tags: ['plan', 'node', 'stream', 'schedule'],
+      'Decide what the plan does now, by rule, from its records: with no root, every open root in position order — the operator’s priority — each walked to its active node and decided from its runs, links, attention items, spend and pull request, the decisions that are not wait answered finish-first; with a root, that stream alone. Answers record_merge, publish, stop, continue or wait — read_pull_request first where the answer turns on GitHub. Writes nothing and starts nothing.',
+    tags: ['plan', 'node', 'stream', 'schedule', 'resident'],
     idempotency: 'idempotent',
     mutates: false,
     usage: {
-      oneLine: 'A stream’s next move — wait, stop or continue — decided from its records.',
+      oneLine:
+        'The plan’s next moves — record, publish, stop, continue or wait — decided from its records.',
       whenToUse: [
-        'A message tells you to continue a plan stream by calling plan.node.next — a scheduled firing: call it before anything else and do only what its decision says',
-        `Making a stream continue itself on a schedule: agent.schedule.create with action "start_run", target {"kind":"platform-role","systemRole":"cybernetic-helmsman"}, the operator’s cron, and input.input the message "Continue the plan stream <rootNodeId>: call plan.node.next with {"rootNodeId":"<rootNodeId>","attempts":${String(PLAN_STREAM_ATTEMPTS_DEFAULT)}} and act on its decision." — the interval and the stream are the operator’s to name`,
+        'A message tells you to wake as the space’s resident, or to continue a plan stream, by calling plan.node.next — a scheduled wake: call it before anything else and do only what its decisions say',
+        `The space’s resident, created once by the operator: agent.schedule.create with action "start_run", target {"kind":"platform-role","systemRole":"cybernetic-helmsman"}, cron "${PLAN_RESIDENT_SCHEDULE_CRON}" unless the operator names another, and input {"input":"<the wake message>","config":{"scheduleId":{"$schedule":"id"}}} (planResidentScheduleInput) — the config is what marks it the resident, whatever the message says. It renews itself; pausing it pauses the resident`,
       ],
       whenNotToUse: [
         'A conversation the operator is driving — plan.node.get on the node, and the operator decides',
       ],
       pitfalls: [
-        'read_pull_request: read it through the space’s GitHub binding, then call again with the same rootNodeId and attempts and `pullRequest` copied from the answer — `read: "failed"` where the read failed. Never fill it in from memory',
-        'record_merge: judge the node against its criteria with the merged change in hand. Met: plan.node.update status "done", outcome naming the pull request and its merge commit. Not met: leave it active, the note’s first line beginning with noteHead and naming the next step. Then pass `link` to plan.node.link — the merge counts as judged only once it is linked — and call plan.node.next again. A PLAN_NODE_STALE refusal means someone wrote first: end the firing as wait, writing nothing more; PLAN_NODE_UNCHANGED means the note was written by an earlier firing: link it',
-        'wait: start nothing, cancel nothing, write nothing, and end — `claimed` means another firing decided continue on the same state and is commissioning it',
+        'Across the board, act on `decisions` in order and nothing else; empty, end with no reply. Each decision’s `answer` is what one stream answers. A blocked node is the operator’s: nothing commissions it, and a node you create is created blocked',
+        'read_pull_request: read it through the space’s GitHub binding, then call again with its root as rootNodeId and `pullRequest` copied from the answer — `read: "failed"` where the read failed. Never fill it in from memory',
+        'record_merge: judge the node against its criteria with the merged change in hand — the merge on GitHub is the change; the connected folder is never asked. Met: plan.node.update status "done", outcome naming the pull request and its merge commit. Not met: leave it active, the note’s first line beginning with noteHead and naming the next step. Then pass `link` to plan.node.link. A PLAN_NODE_STALE refusal means someone wrote first: write nothing more to that node; PLAN_NODE_UNCHANGED means an earlier wake wrote the note: link it',
+        'publish: start Local Publish with `commission` as it stands, a branch, the node’s planNodeId and wait "none"; it commits under the commission’s summary. Write nothing to the node, as on continue: the publication serving it is the record',
         'stop: pass `update` to plan.node.update as it stands; start nothing and cancel nothing',
-        'continue: brief the commission from the node’s goal and criteria — and, on `retry`, from that run’s failure or the review run’s findings — and start it with the node’s id as planNodeId; its publication takes the same planNodeId',
+        'continue: brief the commission from the node’s goal and criteria — on `retry`, from that run’s failure or the review run’s findings — based on origin/<base> (a fix round on its branch), never on the connected folder’s checkout; start it with the node’s planNodeId and wait "none" — that run, serving the node, is the record the next wake reads. Write nothing to the node: a write after the commission starts reads as the node changed since, so the next wake commissions it again instead of publishing what it made',
       ],
-      minimalExampleInput: { rootNodeId: EXAMPLE_NODE_ID, attempts: PLAN_STREAM_ATTEMPTS_DEFAULT },
+      minimalExampleInput: {},
     },
     accessMode: 'read',
     inputZod: PlanNodeNextInputSchema,

@@ -575,10 +575,19 @@ serves on is refused, and declaring it starts nothing. A harness run that asks f
 it (`preview: true`, with the ephemeral browser) has the executor start it in a
 snapshot of that run's checkout — its commit, copied before the agent starts, never
 the checkout the agent edits, so it serves the app as of that commit and none of the
-agent's own edits, which are seen working in the review's preview — unconfined but in a process group the executor stops
-when the run ends, with none of the harness's credential; wait up to 120 s for the
+agent's own edits, which are seen working in the review's preview, whose snapshot holds the
+committed range — unconfined but in a process group the executor stops when the run ends, with
+none of the harness's credential; wait up to 120 s for the
 ready path on IPv4 or IPv6 loopback; and open its port to that run's browser alone.
-What it printed is kept with the run, failed or not. A fixed port serves one run
+What it printed is kept with the run, failed or not. Running unconfined, with the
+operator's reach, is a deliberate step beyond the checks' sandbox (which has no
+operator folder, no `.git`, no `~/.aflow` and no loopback), ruled by the operator
+(Plan 320 F49): the folder's sandbox cannot listen on loopback on macOS, so a
+confined preview could not serve, and the loop's agents already act with the
+operator's own posture — their git pushes, their folder, their machine — so a
+stricter one would only add friction to the review step. A review's preview runs
+the committed range as the operator; a commission's serves its base; none runs in
+the checkout an agent is editing. A fixed port serves one run
 at a time, and a run that finds it held is refused rather than queued:
 
 ```bash

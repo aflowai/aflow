@@ -1,7 +1,11 @@
 import type { FastifyRequest } from 'fastify';
-import type { ActorContext } from '@aflow/schemas';
+import type { ActorContext, ActorKind } from '@aflow/schemas';
 import type { TenantContext } from '../plugins/tenant.js';
 import type { SpaceContext } from '../plugins/space.js';
+
+export function resolvePrincipalActorKind(principal: { isServicePrincipal?: boolean }): ActorKind {
+  return principal.isServicePrincipal ? 'service_principal' : 'human';
+}
 
 /**
  * Builds an ActorContext from the resolved auth, tenant, and space context
@@ -21,7 +25,7 @@ export function buildActorContext(
 
   const base: ActorContext = {
     userId: authUser.userId,
-    kind: authUser.isServicePrincipal ? 'service_principal' : 'human',
+    kind: resolvePrincipalActorKind(authUser),
     authMethod: authUser.authMethod,
     tenantId: tenant.tenantId,
     tenantRole: tenant.tenantRole,

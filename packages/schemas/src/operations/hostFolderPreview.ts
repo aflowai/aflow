@@ -204,9 +204,12 @@ export const HostHarnessPreviewFlagSchema = z
       'executor runs it, waits for it to answer and stops it when the run ends — and opens its ' +
       "port to this run's `ephemeral` browser alone; the harness is handed its address as " +
       '`previewUrl` in the inputs. It serves the commit the run started from, copied before ' +
-      "the harness starts — never the harness's own edits — so a commission sees the app as " +
-      'of its base, and a change is seen working in its review, whose checkout holds the ' +
-      'committed change. Needs `browser` with the `ephemeral` ' +
+      'the harness starts: for a commission its base, the app before the change; for a review ' +
+      'the committed range. No agent sees its own uncommitted edits through it. It runs ' +
+      "unconfined, with the operator's reach, by the operator's ruling — a deliberate step " +
+      "beyond the checks' sandbox, because that sandbox cannot listen on loopback on macOS and " +
+      "the loop's agents already act with the operator's own posture, so a stricter one would " +
+      'only add friction to the review. Needs `browser` with the `ephemeral` ' +
       'profile. Refused before any checkout where the folder declares no preview, and where its ' +
       'fixed port is held by another run or anything else. The harness never starts a server.',
   );
