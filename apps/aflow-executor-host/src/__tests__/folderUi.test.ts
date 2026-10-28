@@ -17,7 +17,13 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { defaultFolderUiPaths, HostFolderUiAnswerSchema } from '@aflow/schemas';
 
 import type { HostBinding } from '../bindings.js';
-import { answerFolderUi, type FolderUiContext, pathsNamedIn, uiFilesAmong } from '../folderUi.js';
+import {
+  answerFolderUi,
+  type FolderUiContext,
+  inFolderFrame,
+  pathsNamedIn,
+  uiFilesAmong,
+} from '../folderUi.js';
 import type { HarnessProfile } from '../harnessProfiles.js';
 
 const run = promisify(execFile);
@@ -156,6 +162,13 @@ describe('host.binding.inspect — the folder’s UI', () => {
     expect(answer).toMatchObject({ files: [], touched: false });
   });
 
+  it('reads the paths git reports as they are for a folder at the repository’s top level', () => {
+    expect(inFolderFrame('', ['web/page.ts', 'README.md'])).toEqual(['web/page.ts', 'README.md']);
+    expect(
+      inFolderFrame('app', ['app/src/a.tsx', 'application/b.tsx', 'lib/c.tsx', 'app']),
+    ).toEqual(['src/a.tsx']);
+  });
+
   it('says why a run could not be given a browser: the executor, the harness, then the grant', async () => {
     const ask = { from: 'main', at: 'feature' };
     const unavailable = async (over: Partial<FolderUiContext>) =>
@@ -178,5 +191,84 @@ describe('host.binding.inspect — the folder’s UI', () => {
       unavailable: 'grant',
     });
     expect(await unavailable({ browserGranted: true })).toEqual({ harness: 'claude' });
+  });
+});
+
+describe('host.binding.inspect — a folder connected inside a repository', () => {
+  let base: string;
+  let top: string;
+  let root: string;
+  let start: string;
+  let tip: string;
+
+  beforeAll(async () => {
+    base = await mkdtemp(join(tmpdir(), 'folder-ui-nested-'));
+    top = join(base, 'repo');
+    root = join(top, 'apps', 'site');
+    await mkdir(join(root, 'pages'), { recursive: true });
+    await mkdir(join(top, 'lib'), { recursive: true });
+    await run('git', ['init', '-q', '-b', 'main', top]);
+    await git(top, 'config', 'user.email', 'ui@example.com');
+    await git(top, 'config', 'user.name', 'UI');
+    await writeFile(join(top, 'README.md'), 'a\n');
+    await git(top, 'add', '.');
+    await git(top, 'commit', '-qm', 'start');
+    start = await git(top, 'rev-parse', 'HEAD');
+    await git(top, 'update-ref', 'refs/remotes/origin/main', start);
+    await git(top, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main');
+    await git(top, 'checkout', '-qb', 'feature');
+    await writeFile(join(root, 'pages', 'home.ts'), 'export {};\n');
+    await writeFile(join(root, 'Card.tsx'), 'export {};\n');
+    await writeFile(join(top, 'lib', 'Outside.tsx'), 'export {};\n');
+    await git(top, 'add', '.');
+    await git(top, 'commit', '-qm', 'pages');
+    tip = await git(top, 'rev-parse', 'HEAD');
+  });
+
+  afterAll(async () => {
+    await rm(base, { recursive: true, force: true });
+  });
+
+  function folder(preview?: { command: string; uiPaths?: string[] }): HostBinding {
+    return {
+      id: 'hb_site',
+      root,
+      singleFile: false,
+      ...(preview ? { preview } : {}),
+    } as HostBinding;
+  }
+
+  const DECLARED = { command: 'npm run dev -- --port {port}', uiPaths: ['pages/**'] };
+
+  it('matches a declared uiPath against what changed under the folder, in the folder’s frame', async () => {
+    const range = await answerFolderUi(
+      folder(DECLARED),
+      { from: 'main', at: 'feature' },
+      context(),
+    );
+    expect(range).toMatchObject({ files: ['pages/home.ts'], touched: true });
+    const single = await answerFolderUi(folder(DECLARED), { at: tip }, context());
+    expect(single.files).toEqual(['pages/home.ts']);
+    const branch = await answerFolderUi(folder(DECLARED), { branch: 'feature' }, context());
+    expect(branch.files).toEqual(['pages/home.ts']);
+    const diff = await git(top, 'diff', `${start}..${tip}`);
+    const patched = await answerFolderUi(
+      folder(DECLARED),
+      { patchRef: 'gs://payloads/t/patch/run' },
+      context({ readDiff: async () => await Promise.resolve(`${diff}\n`) }),
+    );
+    expect(patched.files).toEqual(['pages/home.ts']);
+  });
+
+  it('counts no change outside the folder, though the default extensions match it', async () => {
+    const range = await answerFolderUi(folder(), { from: 'main', at: 'feature' }, context());
+    expect(range.files).toEqual(['Card.tsx']);
+    const diff = await git(top, 'diff', `${start}..${tip}`, '--', 'lib');
+    const outside = await answerFolderUi(
+      folder(),
+      { patchRef: 'gs://payloads/t/patch/run' },
+      context({ readDiff: async () => await Promise.resolve(`${diff}\n`) }),
+    );
+    expect(outside).toMatchObject({ files: [], touched: false });
   });
 });

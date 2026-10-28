@@ -20,6 +20,7 @@ import type { HarnessProfile } from './harnessProfiles.js';
 import { globMatcher } from './pushChanges.js';
 import {
   APPLY_OUTPUT_CAP_BYTES,
+  folderPrefix,
   git,
   isGitRepository,
   patchPaths,
@@ -90,21 +91,42 @@ async function changedOnBranch(root: string, branch: string): Promise<string[]> 
   return await changedBetween(root, base, tip);
 }
 
-/** Every path the question names, from each source it gives. A source that cannot be read adds none. */
+/**
+ * Of paths relative to the repository's top level, as git reports a change,
+ * those under the folder at `prefix`, relative to the folder's root — the
+ * frame its `uiPaths` and `webAppDirs` are declared in. A path outside the
+ * folder is none of its UI, whatever its extension.
+ */
+export function inFolderFrame(prefix: string, repositoryPaths: readonly string[]): string[] {
+  if (prefix === '') return [...repositoryPaths];
+  const lead = prefix + '/';
+  return repositoryPaths
+    .filter((path) => path.startsWith(lead) && path.length > lead.length)
+    .map((path) => path.slice(lead.length));
+}
+
+/**
+ * Every path the question names, relative to the folder's root, from each
+ * source it gives. A brief names paths as the coding agent working in the
+ * folder reads them; what git reports is translated from the repository's top
+ * level. A source that cannot be read adds none.
+ */
 async function pathsAskedAbout(
   binding: HostBinding,
   question: HostFolderUiQuestion,
   readDiff: (ref: string) => Promise<string | undefined>,
 ): Promise<string[]> {
   const paths = new Set<string>(question.text !== undefined ? pathsNamedIn(question.text) : []);
-  const add = (listed: readonly string[]): void => {
-    for (const path of listed) paths.add(path);
-  };
   const repository = !binding.singleFile && (await isGitRepository(binding.root));
-  if (repository && question.branch !== undefined) {
+  if (!repository) return [...paths];
+  const prefix = await folderPrefix(binding.root);
+  const add = (listed: readonly string[]): void => {
+    for (const path of inFolderFrame(prefix, listed)) paths.add(path);
+  };
+  if (question.branch !== undefined) {
     add(await changedOnBranch(binding.root, question.branch).catch(() => []));
   }
-  if (repository && question.at !== undefined) {
+  if (question.at !== undefined) {
     const at = await resolveCommit(binding.root, question.at).catch(() => undefined);
     const from =
       question.from === undefined
@@ -118,7 +140,7 @@ async function pathsAskedAbout(
       );
     }
   }
-  if (repository && question.patchRef !== undefined) {
+  if (question.patchRef !== undefined) {
     const diff = await readDiff(question.patchRef);
     if (diff !== undefined) add(await patchPaths(binding.root, diff).catch(() => []));
   }

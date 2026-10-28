@@ -39,7 +39,7 @@ export const REVIEW_PREVIEW_PARAGRAPH = `The range changes this folder's UI, so 
 
 - Open there the pages the range changes, and exercise what changed as a person using it would: navigate to it, click, type, submit, and look at the states the change adds. Take a screenshot of what you see at each step that bears on the verdict.
 - Report what you saw in the summary, under its own heading, page by page: what you opened, what you did, and what it showed. What you saw is part of the verdict — a page that does not do what the range set out to do, or that the diff alone would not show is broken, is a finding like any other, at the severity its effect has, naming the file that renders it and what the page showed as its evidence.
-- Your screenshots are kept in the run's browser log, which the publication links from the pull request's body; describe what each shows rather than pasting it.
+- Take your screenshots with the browser, which keeps each one in the run's browser log. The verdict is what is read of the review, so say in it what each screenshot showed.
 - Start or stop no server yourself: the preview is the executor's, and it stops when the run ends.`;
 
 /**

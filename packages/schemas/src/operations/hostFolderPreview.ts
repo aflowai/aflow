@@ -330,7 +330,7 @@ export const HostFolderUiAnswerSchema = z
       .array(z.string())
       .max(FOLDER_UI_FILES_MAX)
       .describe(
-        `The files asked about that match, sorted; at most ${String(FOLDER_UI_FILES_MAX)}.`,
+        `The files asked about that match, relative to the folder's root as \`uiPaths\` are — a change outside the folder is none of them — sorted; at most ${String(FOLDER_UI_FILES_MAX)}.`,
       ),
     touched: z.boolean().describe('True when any file asked about matches.'),
     browser: z

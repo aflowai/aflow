@@ -385,9 +385,10 @@ describe('Review Local Changes — the browser and the preview by rule (Plan 320
     expect(REVIEW_PREVIEW_PARAGRAPH).toContain('exercise what changed');
     expect(REVIEW_PREVIEW_PARAGRAPH).toContain('Report what you saw in the summary');
     expect(REVIEW_PREVIEW_PARAGRAPH).toContain('What you saw is part of the verdict');
-    expect(REVIEW_PREVIEW_PARAGRAPH).toContain(
-      "browser log, which the publication links from the pull request's body",
-    );
+    expect(REVIEW_PREVIEW_PARAGRAPH).toContain("keeps each one in the run's browser log");
+    expect(REVIEW_PREVIEW_PARAGRAPH).toContain('say in it what each screenshot showed');
+    // The pull request's body links the browser log only once P6(d) builds it.
+    expect(REVIEW_PREVIEW_PARAGRAPH).not.toContain('pull request');
     expect(REVIEW_PREVIEW_PARAGRAPH).toContain('the range as it will be pushed');
     // Only the run with the browser is told so.
     expect(reviewBrief()).not.toContain('previewUrl');
