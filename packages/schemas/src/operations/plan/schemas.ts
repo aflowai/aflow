@@ -980,13 +980,13 @@ export const PlanBoardNextSchema = z
       .describe(
         'Act on these in order: a merge recorded, a commission published, a stop written, a failed round re-commissioned, new work commissioned, pull requests read, then blocked nodes asked about; within each, the operator’s root order. Empty, and no `propose`: end the wake with no reply.',
       ),
-      propose: z
-        .object({ reason: decisionReason })
-        .strict()
-        .optional()
-        .describe(
-          'Present only when no approved node is actionable or moving and no proposal waits on a person: propose at most one node of new work with plan.node.create and `proposed` saying why — it is created blocked — or end with no reply when nothing is worth proposing.',
-        ),
+    propose: z
+      .object({ reason: decisionReason })
+      .strict()
+      .optional()
+      .describe(
+        'Present only when no approved node is actionable or moving and no proposal waits on a person: propose at most one node of new work with plan.node.create and `proposed` saying why — it is created blocked — or end with no reply when nothing is worth proposing.',
+      ),
     deferred: z
       .number()
       .int()

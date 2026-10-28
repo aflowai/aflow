@@ -631,6 +631,17 @@ export function decideStreamFiring(facts: PlanStreamFacts): PlanStreamAnswer {
             ...(answer.mergeCommitSha ? { mergeCommitSha: answer.mergeCommitSha } : {}),
           },
           noteHead: mergeNoteHead(link.ref, answer.mergeCommitSha),
+          liveCheck: {
+            parentId: node.nodeId,
+            kind: 'investigate',
+            title: node.title,
+            goal: node.goal,
+            criteria: node.criteria,
+            liveCheck: {
+              pullRequest: link.ref,
+              ...(answer.mergeCommitSha ? { mergeCommitSha: answer.mergeCommitSha } : {}),
+            },
+          },
           link: {
             nodeId: node.nodeId,
             kind: 'merge',
@@ -872,6 +883,8 @@ export function boardRank(answer: PlanStreamAnswer): number {
       return 0;
     case 'publish':
       return 1;
+    case 'ask':
+      return 2;
     case 'read_pull_request':
       return 6;
     case 'stop':

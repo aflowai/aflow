@@ -117,7 +117,9 @@ export async function claimAsk(
 }
 
 function askable(node: PlanNode | null, record: string | null): node is PlanNode {
-  return node !== null && node.status === 'blocked' && node.kind !== 'decide' && isAsked(node, record);
+  return (
+    node !== null && node.status === 'blocked' && node.kind !== 'decide' && isAsked(node, record)
+  );
 }
 
 /**
