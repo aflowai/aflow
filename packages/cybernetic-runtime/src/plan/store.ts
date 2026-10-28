@@ -114,6 +114,11 @@ export interface PlanTreeWalkOptions extends PlanTreeWalkBounds {
    * chose to look, not a node the walk came upon.
    */
   statuses?: readonly PlanNodeStatus[];
+  /**
+   * Walk from only the roots of these statuses, and below them through every
+   * status `statuses` allows; in place of `statuses` for the roots alone.
+   */
+  rootStatuses?: readonly PlanNodeStatus[];
 }
 
 export interface NewPlanNodeLink {
@@ -249,6 +254,12 @@ export interface PlanNodeStore {
     limit: number,
   ): Promise<{ children: PlanNodeSummary[]; total: number }>;
   walk(spaceId: string, opts: PlanTreeWalkOptions): Promise<PlanTreeWalk>;
+  /**
+   * Each walk as `walk` takes it, all of them reading the space as it stood at
+   * one moment, so a node a write moves between them is read by one walk, as
+   * it was then, or by none.
+   */
+  walkTogether(spaceId: string, walks: readonly PlanTreeWalkOptions[]): Promise<PlanTreeWalk[]>;
   /** Each node's parent (null for a root); a node not in the space is absent. */
   parentsOf(spaceId: string, nodeIds: readonly string[]): Promise<Map<string, string | null>>;
   /** Writes the link unless its node is not in the space or already holds it. */
@@ -519,11 +530,19 @@ const siblingOrder = (): SQL[] => {
   return PLAN_SIBLING_ORDER.map((key) => asc(columns[key]));
 };
 
-function levelIs(level: PlanTreeLevel, statuses: readonly PlanNodeStatus[] | undefined): SQL {
+function levelIs(
+  level: PlanTreeLevel,
+  { statuses, rootStatuses }: Pick<PlanTreeWalkOptions, 'statuses' | 'rootStatuses'>,
+): SQL {
   const ofStatus = statuses !== undefined ? inArray(planNodes.status, [...statuses]) : undefined;
   switch (level.kind) {
-    case 'roots':
-      return and(isNull(planNodes.parentId), ofStatus)!;
+    case 'roots': {
+      const ofRootStatus = rootStatuses ?? statuses;
+      return and(
+        isNull(planNodes.parentId),
+        ofRootStatus !== undefined ? inArray(planNodes.status, [...ofRootStatus]) : undefined,
+      )!;
+    }
     case 'node':
       return eq(planNodes.id, level.nodeId);
     case 'children':
@@ -646,6 +665,26 @@ async function writeAtRevision(
     )
     .returning();
   return row ? rowToPlanNode(row) : null;
+}
+
+function walkIn(
+  tx: PostgresJsDatabase,
+  spaceId: string,
+  opts: PlanTreeWalkOptions,
+): Promise<PlanTreeWalk> {
+  return walkPlanTree(
+    async (level, limit) => {
+      const rows = await tx
+        .select(summaryColumns())
+        .from(planNodes)
+        .where(and(eq(planNodes.spaceId, spaceId), levelIs(level, opts)))
+        .orderBy(...siblingOrder())
+        .limit(limit);
+      return rows.map(summaryRowToSummary);
+    },
+    opts.rootId !== undefined ? { rootId: opts.rootId } : {},
+    opts,
+  );
 }
 
 export function createPlanNodeStore(db: PostgresJsDatabase, tenantId: string): PlanNodeStore {
@@ -811,21 +850,19 @@ export function createPlanNodeStore(db: PostgresJsDatabase, tenantId: string): P
         return { children: rows.map(summaryRowToSummary), total: count?.total ?? 0 };
       }),
 
-    walk: (spaceId, opts) =>
-      inTenant((tx) =>
-        walkPlanTree(
-          async (level, limit) => {
-            const rows = await tx
-              .select(summaryColumns())
-              .from(planNodes)
-              .where(and(eq(planNodes.spaceId, spaceId), levelIs(level, opts.statuses)))
-              .orderBy(...siblingOrder())
-              .limit(limit);
-            return rows.map(summaryRowToSummary);
-          },
-          opts.rootId !== undefined ? { rootId: opts.rootId } : {},
-          opts,
-        ),
+    walk: (spaceId, opts) => inTenant((tx) => walkIn(tx, spaceId, opts)),
+
+    walkTogether: (spaceId, walks) =>
+      withTenantSchema(
+        db,
+        tenantCtx,
+        async (tx) => {
+          const read: PlanTreeWalk[] = [];
+          for (const opts of walks) read.push(await walkIn(tx, spaceId, opts));
+          return read;
+        },
+        // Every statement of a repeatable-read transaction reads its first snapshot.
+        { isolationLevel: 'repeatable read', accessMode: 'read only' },
       ),
 
     parentsOf: (spaceId, nodeIds) =>

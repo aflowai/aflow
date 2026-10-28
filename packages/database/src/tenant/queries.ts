@@ -2,6 +2,7 @@
  * Tenant-scoped query execution via search_path.
  */
 import { sql } from 'drizzle-orm';
+import { type PgTransactionConfig } from 'drizzle-orm/pg-core';
 import { type PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type postgres from 'postgres';
 import { getPerformanceLogThresholds } from '@aflow/lib';
@@ -13,11 +14,15 @@ import type { TenantContext } from './context.js';
  * Uses SET LOCAL search_path to ensure tenant isolation.
  *
  * CRITICAL: This must be used for ALL tenant-scoped database operations.
+ *
+ * `config` sets the transaction's isolation and access mode, applied before
+ * any statement of it runs.
  */
 export async function withTenantSchema<T>(
   db: PostgresJsDatabase,
   tenantContext: TenantContext,
   callback: (db: PostgresJsDatabase) => Promise<T>,
+  config?: PgTransactionConfig,
 ): Promise<T> {
   const { schemaName } = tenantContext;
 
@@ -49,7 +54,7 @@ export async function withTenantSchema<T>(
     }
 
     return result;
-  });
+  }, config);
 }
 
 /**

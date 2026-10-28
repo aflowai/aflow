@@ -317,31 +317,84 @@ export const PlanDoneDaySchema = z
 export type PlanDoneDay = z.infer<typeof PlanDoneDaySchema>;
 
 /**
- * One plan as its tab and header show it, counted over every node under the
- * root by the board's column rule — whatever `closedSince` left out of the tree.
+ * A plan's state (Plan 332 D3), derived on the server from its steps' columns
+ * and stored nowhere; the first that holds, in this order:
+ * `closed` — the root is done or dropped; `needs_you` — a step under it stands
+ * under Needs you; `in_flight` — one stands under In flight; `queued` — it has
+ * open steps, all under Up next; `finished` — it has steps and every one is
+ * closed; `empty` — it has none. `finished` is not a status: the root stays
+ * open until the operator closes it.
  */
-export const PlanRootTallySchema = z
+export const PlanRootStateSchema = z.enum([
+  'closed',
+  'needs_you',
+  'in_flight',
+  'queued',
+  'finished',
+  'empty',
+]);
+export type PlanRootState = z.infer<typeof PlanRootStateSchema>;
+
+/** A plan's steps counted by the board's column rule, over every node under the root. */
+export const PlanRootCountsSchema = z
   .object({
-    rootId: z.string().uuid(),
     steps: z.number().int().min(0).describe('Nodes under the root.'),
     needsYou: z.number().int().min(0).describe('Nodes in the board’s Needs you column.'),
     inFlight: z.number().int().min(0).describe('Nodes in the board’s In flight column.'),
     upNext: z.number().int().min(0).describe('Nodes in the board’s Up next column.'),
     done: z.number().int().min(0),
     dropped: z.number().int().min(0),
-    doneByDay: z
-      .array(PlanDoneDaySchema)
-      .describe('Done nodes by the day they closed, newest first, one entry per day with any.'),
-    nextNodeId: z
+  })
+  .strict();
+export type PlanRootCounts = z.infer<typeof PlanRootCountsSchema>;
+
+/**
+ * One plan as its board's header shows it, counted over every node under the
+ * root by the board's column rule — whatever `closedSince` left out of the tree.
+ */
+export const PlanRootTallySchema = PlanRootCountsSchema.extend({
+  rootId: z.string().uuid(),
+  state: PlanRootStateSchema,
+  doneByDay: z
+    .array(PlanDoneDaySchema)
+    .describe('Done nodes by the day they closed, newest first, one entry per day with any.'),
+  nextNodeId: z
+    .string()
+    .uuid()
+    .optional()
+    .describe(
+      'The step under the root the stream walk (`findActiveStreamNode`) takes next; absent where it takes none.',
+    ),
+}).strict();
+export type PlanRootTally = z.infer<typeof PlanRootTallySchema>;
+
+/** One plan as the plan list shows it (Plan 332 D2, D7): its state and its steps' counts, no steps. */
+export const PlanRootRowSchema = z
+  .object({
+    nodeId: z.string().uuid(),
+    title: z.string(),
+    status: PlanNodeStatusSchema,
+    position: z.number().int().min(0),
+    revision: z.number().int().min(1),
+    state: PlanRootStateSchema,
+    counts: PlanRootCountsSchema.optional().describe(
+      'Absent on a closed plan, whose state is `closed` by rule and whose steps are not read.',
+    ),
+    truncated: PlanNodeListTruncationSchema.optional().describe(
+      'Absent when every step of the plan was counted; otherwise the bound of the read (`depth` or ' +
+        '`nodes`) that may have left steps of this plan uncounted, so `counts` and `state` read only ' +
+        'the steps it reached, and `state` is never `finished`: a plan whose counted steps are all ' +
+        'closed reads `queued`, as the steps not reached may be open. The plan’s board reads it on its own.',
+    ),
+    lastWrittenAt: z
       .string()
-      .uuid()
-      .optional()
+      .datetime()
       .describe(
-        'The step under the root the stream walk (`findActiveStreamNode`) takes next; absent where it takes none.',
+        'The newest write to the root or any step counted under it; on a closed plan, the root’s own.',
       ),
   })
   .strict();
-export type PlanRootTally = z.infer<typeof PlanRootTallySchema>;
+export type PlanRootRow = z.infer<typeof PlanRootRowSchema>;
 
 function isTimeZone(tz: string): boolean {
   try {
@@ -352,7 +405,7 @@ function isTimeZone(tz: string): boolean {
   }
 }
 
-export const PlanTreeQuerySchema = z
+export const PlanBoardQuerySchema = z
   .object({
     closedSince: z
       .string()
@@ -370,18 +423,30 @@ export const PlanTreeQuerySchema = z
       .describe('The time zone `doneByDay` counts days in; UTC when absent.'),
   })
   .strict();
-export type PlanTreeQuery = z.infer<typeof PlanTreeQuerySchema>;
+export type PlanBoardQuery = z.infer<typeof PlanBoardQuerySchema>;
 
-export const PlanTreeOutputSchema = z.object({
-  /** Roots by position, then id; every root, whatever its status or `closedSince`. */
-  roots: z.array(PlanTreeNodeSchema),
-  /** One per root, in the roots' order. */
-  tallies: z.array(PlanRootTallySchema),
+/** One plan's board (`GET …/plan/roots/:rootId`): its tree and its tally. */
+export const PlanBoardOutputSchema = z.object({
+  /** The root and every node under it, done nodes closed before `closedSince` left out. */
+  root: PlanTreeNodeSchema,
+  tally: PlanRootTallySchema,
   truncated: PlanNodeListTruncationSchema.optional().describe(
-    'Absent when every node of the space is here; otherwise the walk bound (`depth` or `nodes`) that cut it short.',
+    'Absent when every node of the plan is here; otherwise the walk bound (`depth` or `nodes`) that cut it short.',
   ),
 });
-export type PlanTreeOutput = z.infer<typeof PlanTreeOutputSchema>;
+export type PlanBoardOutput = z.infer<typeof PlanBoardOutputSchema>;
+
+/**
+ * The space's plans as rows (`GET …/plan`, the rows of Plan 332 D7): every
+ * root by position and then id, open and closed alike, with no steps.
+ */
+export const PlanOverviewOutputSchema = z.object({
+  roots: z.array(PlanRootRowSchema),
+  truncated: PlanNodeListTruncationSchema.optional().describe(
+    'Absent when every plan of the space is a row; otherwise the bound (`nodes`) that cut the list of plans short. A row whose steps were counted short says so on its own `truncated`.',
+  ),
+});
+export type PlanOverviewOutput = z.infer<typeof PlanOverviewOutputSchema>;
 
 /** Which board column a node stands in. */
 export type PlanBoardColumn = 'needs_you' | 'in_flight' | 'up_next' | 'done' | 'dropped';

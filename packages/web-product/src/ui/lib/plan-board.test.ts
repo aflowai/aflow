@@ -4,7 +4,7 @@
  * filter, and the Done column folded by day.
  */
 import { describe, expect, it } from 'vitest';
-import type { PlanTreeNode } from '@aflow/schemas';
+import type { PlanRootRow, PlanRootState, PlanTreeNode } from '@aflow/schemas';
 import {
   NEEDS_YOU_REASON_LABEL,
   PLAN_BOARD_COLUMNS,
@@ -18,7 +18,12 @@ import {
   planDoneFolds,
   planDoneGroups,
   planHeader,
+  planLandingRoot,
+  planListSections,
   planPhases,
+  planRowMoveTargets,
+  planRowProgress,
+  planViewQuery,
   showsPhaseFilter,
   waitingLine,
   pullRequestLabel,
@@ -131,6 +136,7 @@ describe('planHeader', () => {
     expect(
       planHeader({
         rootId: 'r',
+        state: 'needs_you',
         steps: 10,
         needsYou: 1,
         inFlight: 0,
@@ -140,6 +146,7 @@ describe('planHeader', () => {
         doneByDay: [],
       }),
     ).toEqual({
+      state: 'Needs you',
       progress: '5 of 10 closed',
       counts: [
         { column: 'needs_you', label: '1 needs you' },
@@ -279,5 +286,72 @@ describe('labels', () => {
     expect(runKindLabel(undefined)).toBe('Run');
     expect(runLinkStatus('publish-local-changes failed')).toBe('failed');
     expect(runLinkStatus(undefined)).toBeUndefined();
+  });
+});
+
+function row(nodeId: string, state: PlanRootState, extra: Partial<PlanRootRow> = {}): PlanRootRow {
+  return {
+    nodeId,
+    title: nodeId,
+    status: state === 'closed' ? 'done' : 'active',
+    position: 0,
+    revision: 1,
+    state,
+    counts: { steps: 4, needsYou: 0, inFlight: 0, upNext: 0, done: 1, dropped: 1 },
+    lastWrittenAt: '2026-10-05T08:00:00.000Z',
+    ...extra,
+  };
+}
+
+describe('the plan list (Plan 332 D2)', () => {
+  const rows = [
+    row('finished-first', 'finished'),
+    row('closed', 'closed'),
+    row('needs', 'needs_you'),
+    row('empty', 'empty'),
+    row('finished-second', 'finished'),
+    row('queued', 'queued'),
+  ];
+
+  it('keeps open plans in position order and puts finished and closed ones below', () => {
+    const sections = planListSections(rows);
+    expect(sections.open.map((r) => r.nodeId)).toEqual(['needs', 'empty', 'queued']);
+    expect(sections.finished.map((r) => r.nodeId)).toEqual(['finished-first', 'finished-second']);
+    expect(sections.closed.map((r) => r.nodeId)).toEqual(['closed']);
+  });
+
+  it('lands on the first open plan, else the first finished, else the first closed', () => {
+    expect(planLandingRoot(rows)?.nodeId).toBe('needs');
+    expect(planLandingRoot([row('c', 'closed'), row('f', 'finished')])?.nodeId).toBe('f');
+    expect(planLandingRoot([row('c', 'closed')])?.nodeId).toBe('c');
+    expect(planLandingRoot([])).toBeUndefined();
+  });
+
+  it('reads progress as steps closed of all, and none on a plan whose steps are not counted', () => {
+    expect(planRowProgress(row('a', 'queued'))).toBe('2/4');
+    const { counts: _counts, ...closed } = row('c', 'closed');
+    expect(planRowProgress(closed)).toBeUndefined();
+  });
+
+  it('keeps a finished row counted short among the open plans', () => {
+    const short = row('short', 'finished', { truncated: { bound: 'nodes', value: 2000 } });
+    const sections = planListSections([row('needs', 'needs_you'), short, row('f', 'finished')]);
+    expect(sections.open.map((r) => r.nodeId)).toEqual(['needs', 'short']);
+    expect(sections.finished.map((r) => r.nodeId)).toEqual(['f']);
+  });
+
+  it('moves an open plan past the open row beside it, and offers no way out of the ends', () => {
+    const open = planListSections(rows).open;
+    expect(planRowMoveTargets(open, 'needs')).toEqual({ below: open[1] });
+    expect(planRowMoveTargets(open, 'empty')).toEqual({ above: open[0], below: open[2] });
+    expect(planRowMoveTargets(open, 'queued')).toEqual({ above: open[1] });
+    expect(planRowMoveTargets(open, 'finished-first')).toEqual({});
+  });
+
+  it('writes the plan and the step into the URL, keeping every other parameter', () => {
+    expect(planViewQuery('', { plan: 'r1' })).toBe('plan=r1');
+    expect(planViewQuery('plan=r1', { plan: 'r1', node: 'n2' })).toBe('plan=r1&node=n2');
+    expect(planViewQuery('plan=r1&node=n2&x=1', { plan: 'r3' })).toBe('plan=r3&x=1');
+    expect(planViewQuery('node=n2', {})).toBe('');
   });
 });
