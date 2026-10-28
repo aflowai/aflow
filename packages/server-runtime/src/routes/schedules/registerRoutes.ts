@@ -1,3 +1,4 @@
+import { resolvePrincipalActorKind } from '../../utils/actorContext.js';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -36,11 +37,7 @@ export function recordScheduleWrite(
   fastify.audit.record({
     actor: {
       userId: authUser.userId,
-      kind: authUser.isServicePrincipal
-        ? 'service_principal'
-        : authUser.authMethod === 'api_key'
-          ? 'api_key'
-          : 'human',
+      kind: resolvePrincipalActorKind(authUser),
       authMethod: authUser.authMethod,
       tenantId: write.tenantId,
     },

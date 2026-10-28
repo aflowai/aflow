@@ -1,3 +1,4 @@
+import { resolvePrincipalActorKind } from '../utils/actorContext.js';
 /**
  * The space's plan as the operator reads and writes it (Plan 322 P3). Both go
  * through the plan engine, the one authority the Helmsman's `plan.node.*`
@@ -267,7 +268,7 @@ export const planRoutes: FastifyPluginAsync = async (fastify) => {
         fastify.audit.record({
           actor: {
             userId: operator.userId,
-            kind: 'human',
+            kind: resolvePrincipalActorKind(authUser),
             authMethod: authUser.authMethod,
             tenantId: tenant.tenantId,
           },
@@ -355,6 +356,7 @@ export const planRoutes: FastifyPluginAsync = async (fastify) => {
           nodeId,
           expectedRevision: body.expectedRevision,
           ...(body.why !== undefined ? { why: body.why } : {}),
+          ...(body.spendCents !== undefined ? { spendCents: body.spendCents } : {}),
         },
       );
       if (!result.ok) {
@@ -366,7 +368,7 @@ export const planRoutes: FastifyPluginAsync = async (fastify) => {
         fastify.audit.record({
           actor: {
             userId: authUser.userId,
-            kind: 'human',
+            kind: resolvePrincipalActorKind(authUser),
             authMethod: authUser.authMethod,
             tenantId: tenant.tenantId,
           },

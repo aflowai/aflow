@@ -1,3 +1,4 @@
+import { resolvePrincipalActorKind } from '../utils/actorContext.js';
 /**
  * API key management endpoints.
  */
@@ -84,7 +85,7 @@ export const apiKeysRoutes: FastifyPluginAsync = async (fastify) => {
         fastify.audit.record({
           actor: {
             userId: request.authUser!.userId,
-            kind: request.authUser!.isServicePrincipal ? 'service_principal' : 'human',
+            kind: resolvePrincipalActorKind(request.authUser!),
             authMethod: request.authUser!.authMethod,
             tenantId: tenant.tenantId,
             tenantRole: tenant.tenantRole,
@@ -211,7 +212,7 @@ export const apiKeysRoutes: FastifyPluginAsync = async (fastify) => {
         fastify.audit.record({
           actor: {
             userId: request.authUser!.userId,
-            kind: request.authUser!.isServicePrincipal ? 'service_principal' : 'human',
+            kind: resolvePrincipalActorKind(request.authUser!),
             authMethod: request.authUser!.authMethod,
             tenantId: tenant.tenantId,
             tenantRole: tenant.tenantRole,

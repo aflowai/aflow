@@ -18,6 +18,7 @@ import {
   PLAN_NODE_PROSE_MAX_CHARS,
   PLAN_NODE_RUNS_LIMIT,
   PLAN_STREAM_COMMISSION_SLUG,
+  PLAN_STREAM_SPEND_CENTS_DEFAULT,
   PLAN_STREAM_PUBLICATION_SLUG,
   type PlanBoardDecision,
   type PlanBoardNext,
@@ -433,8 +434,16 @@ type RoundAnswer =
 
 function answerLatestRound(facts: PlanStreamFacts): RoundAnswer {
   const { node } = facts;
-  const latest = latestRoundSinceWrite(facts.rounds, node.updatedAt);
+  const latest = roundToAnswer(facts.rounds, node.updatedAt);
   if (!latest) return { kind: 'fresh' };
+  if (
+    latest.slug === PLAN_STREAM_COMMISSION_SLUG &&
+    at(latest.startedAt) <= at(node.updatedAt) &&
+    facts.commission != null &&
+    facts.commission.patchRef === undefined
+  ) {
+    return { kind: 'fresh' };
+  }
   const ran = `${latest.slug} run ${latest.runId}`;
   const failure = latest.failure !== undefined ? { failure: latest.failure } : {};
   if (latest.slug === PLAN_STREAM_COMMISSION_SLUG) {
@@ -507,6 +516,18 @@ function answerLatestRound(facts: PlanStreamFacts): RoundAnswer {
   };
 }
 
+function roundToAnswer(
+  rounds: readonly PlanStreamRun[],
+  updatedAt: string,
+): PlanStreamRun | undefined {
+  const latest = rounds[0];
+  // A stop and Resume write the node after the patch completed. That patch
+  // still owns its publication, until a publication or newer commission exists.
+  return latest?.slug === PLAN_STREAM_COMMISSION_SLUG && latest.status === 'completed'
+    ? latest
+    : latestRoundSinceWrite(rounds, updatedAt);
+}
+
 function latestRoundSinceWrite(
   rounds: readonly PlanStreamRun[],
   updatedAt: string,
@@ -521,9 +542,10 @@ function latestRoundSinceWrite(
  * `wait` while its own work is in flight, or the read of the nodes under it
  * stopped at a bound before it could show none is; a merge of its newest pull request
  * nobody has acted on is recorded next; then `wait` while that pull request
- * is open or a read failed; `stop` where its pull request was closed unmerged, its spend
+ * is open or a read failed; `publish` where its last commission completed with a change
+ * nothing published; `stop` where its pull request was closed unmerged, its spend
  * reached its ceiling, its push was declined, a commission made no change or its attempts
- * are spent; `publish` where its last commission completed with a change nothing published;
+ * are spent;
  * `continue` where its next step is the work or its last round failed within the budget.
  * Anything else is `wait`.
  */
@@ -632,11 +654,13 @@ export function decideStreamFiring(facts: PlanStreamFacts): PlanStreamAnswer {
     }
   }
 
-  // Recording a merge costs nothing and finishes work; anything after it spends.
+  const round = answerLatestRound(facts);
+  if (round.kind === 'decided' && round.output.decision === 'publish') return round.output;
+
+  // Recording a merge and publishing a finished patch take precedence over new work.
   const spent = spendStop(facts);
   if (spent) return spent;
 
-  const round = answerLatestRound(facts);
   if (round.kind === 'decided') return round.output;
   const used = attemptsUsed(facts);
   if (round.kind === 'retry' && used > facts.attempts) {
@@ -723,7 +747,7 @@ async function decideRoot(
         mergeJudged: false,
         rounds: [],
         attempts: input.attempts,
-        spendCents: input.spendCents,
+        spendCents: opened.node.spendCents ?? PLAN_STREAM_SPEND_CENTS_DEFAULT,
       }),
     );
   }
@@ -742,7 +766,7 @@ async function decideRoot(
     ctx.reads.pausedItemsServing(ctx.spaceId, servedNodeIds),
     ctx.reads.spendOf(ctx.spaceId, active.nodeId),
   ]);
-  const latest = latestRoundSinceWrite(rounds, opened.node.updatedAt);
+  const latest = roundToAnswer(rounds, opened.node.updatedAt);
   const completed = latest?.status === 'completed' ? latest : undefined;
   const publication =
     completed?.slug === PLAN_STREAM_PUBLICATION_SLUG
@@ -777,7 +801,7 @@ async function decideRoot(
     ...(commissionPublications !== undefined ? { commissionPublications } : {}),
     attempts: input.attempts,
     spend,
-    spendCents: input.spendCents,
+    spendCents: opened.node.spendCents ?? PLAN_STREAM_SPEND_CENTS_DEFAULT,
   });
   if (answer.decision === 'publish') {
     return {

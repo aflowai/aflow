@@ -1,3 +1,4 @@
+import { resolvePrincipalActorKind } from '../utils/actorContext.js';
 /**
  * User management endpoints.
  */
@@ -434,7 +435,7 @@ export const usersRoutes: FastifyPluginAsync = async (fastify) => {
         fastify.audit.record({
           actor: {
             userId: request.authUser!.userId,
-            kind: request.authUser!.isServicePrincipal ? 'service_principal' : 'human',
+            kind: resolvePrincipalActorKind(request.authUser!),
             authMethod: request.authUser!.authMethod,
             tenantId: tenant.tenantId,
             tenantRole: tenant.tenantRole,

@@ -48,6 +48,7 @@ export const planNodes = pgTable(
      * from here; the audit row of the open is evidence, not the source.
      */
     openedAt: timestamp('opened_at', { withTimezone: true }),
+    spendCents: integer('spend_cents'),
   },
   (table) => [
     index('plan_nodes_space_status_idx').on(table.spaceId, table.status),

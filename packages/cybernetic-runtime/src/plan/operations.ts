@@ -34,6 +34,7 @@ import {
   type PlanNodeLinkInput,
   type PlanNodeListInput,
   type PlanNodeListOutput,
+  type PlanNodeOpen,
   type PlanNodeRefusalDetails,
   type PlanNodeStatus,
   type PlanNodeSummary,
@@ -93,6 +94,8 @@ export interface PlanWriteContext extends PlanReadContext {
   tenantId: string;
   /** The user behind the writing session; recorded as `created_by` on a new node. */
   createdBy?: string;
+  /** The writer's authority, never the person who started an agent's session. */
+  actorKind?: 'human' | 'agent';
 }
 
 function notFound(
@@ -348,7 +351,7 @@ export function updatePlanNode(
 async function writePlanNode(
   ctx: PlanWriteContext,
   input: PlanNodeUpdateInput,
-  stamp: Pick<PlanNodePatch, 'openedAt'>,
+  stamp: Pick<PlanNodePatch, 'openedAt' | 'spendCents'>,
 ): Promise<PlanOpResult<{ node: PlanNode }>> {
   const current = await ctx.store.find(ctx.spaceId, input.nodeId);
   if (!current) return notFound(input.nodeId);
@@ -386,7 +389,9 @@ async function writePlanNode(
   const parentId = input.parentId;
   if (changesNothing(current, patch, parentId)) return unchanged(current, input);
   Object.assign(patch, stamp);
-  if (current.status === 'blocked' && status === 'active') patch.openedAt = new Date();
+  if (ctx.actorKind === 'human' && current.status === 'blocked' && status === 'active') {
+    patch.openedAt = new Date();
+  }
   let node: PlanNode | null;
   if (parentId !== undefined && parentId !== current.parentId) {
     const move = await ctx.store.moveAtRevision(
@@ -436,7 +441,7 @@ export function approvedNote(note: string | undefined, why: string): string {
  */
 export async function openPlanNode(
   ctx: PlanWriteContext,
-  input: { nodeId: string; expectedRevision: number; why?: string },
+  input: PlanNodeOpen & { nodeId: string },
 ): Promise<PlanOpResult<{ node: PlanNode; left: PlanNodeStatus }>> {
   const current = await ctx.store.find(ctx.spaceId, input.nodeId);
   if (!current) return notFound(input.nodeId);
@@ -461,7 +466,10 @@ export async function openPlanNode(
         : `Reopened: ${input.why}`;
   }
   // Stamped in the write's own statement, so the spend resets with the open itself.
-  const written = await writePlanNode(ctx, update, { openedAt: new Date() });
+  const written = await writePlanNode(ctx, update, {
+    openedAt: new Date(),
+    ...(input.spendCents !== undefined ? { spendCents: input.spendCents } : {}),
+  });
   if (!written.ok) return written;
   return { ok: true, node: written.node, left: current.status };
 }

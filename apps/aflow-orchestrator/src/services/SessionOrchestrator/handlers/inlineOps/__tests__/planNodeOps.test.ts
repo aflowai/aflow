@@ -8,7 +8,6 @@ import {
   PLAN_NODE_DONE_NEEDS_OUTCOME_MESSAGE,
   PLAN_BOARD_DECISIONS_DEFAULT,
   PLAN_STREAM_ATTEMPTS_DEFAULT,
-  PLAN_STREAM_SPEND_CENTS_DEFAULT,
   PlanNodeRefusalDetailsSchema,
   type IdempotencyKey,
   type StepDefinition,
@@ -210,17 +209,20 @@ describe('plan.node.update', () => {
     expect(error.message).toContain(PLAN_NODE_DONE_NEEDS_OUTCOME_MESSAGE);
   });
 
-  it('writes through the engine in this space, with the attention cache’s redis', async () => {
-    mockUpdatePlanNode.mockResolvedValue({ ok: true, node: { ...NODE, revision: 3 } });
-    await handlePlanNodeInline(
-      makeArgs('plan.node.update', { nodeId: NODE_ID, expectedRevision: 2, status: 'waiting' }),
-    );
-    expect(mockUpdatePlanNode).toHaveBeenCalledWith(
-      { store: STORE, spaceId: SPACE, redis: { kind: 'redis' }, tenantId: TENANT },
-      { nodeId: NODE_ID, expectedRevision: 2, status: 'waiting' },
-    );
-    expect(emitted()['status']).toBe('SUCCEEDED');
-  });
+  it.each(['waiting', 'active'] as const)(
+    'keeps Helmsman %s writes outside human authority',
+    async (status) => {
+      mockUpdatePlanNode.mockResolvedValue({ ok: true, node: { ...NODE, revision: 3 } });
+      await handlePlanNodeInline(
+        makeArgs('plan.node.update', { nodeId: NODE_ID, expectedRevision: 2, status }),
+      );
+      expect(mockUpdatePlanNode).toHaveBeenCalledWith(
+        { store: STORE, spaceId: SPACE, redis: { kind: 'redis' }, tenantId: TENANT },
+        { nodeId: NODE_ID, expectedRevision: 2, status },
+      );
+      expect(emitted()['status']).toBe('SUCCEEDED');
+    },
+  );
 });
 
 describe('plan.node.create / get / list', () => {
@@ -470,7 +472,6 @@ describe('plan.node.next', () => {
       {
         rootNodeId: NODE_ID,
         attempts: PLAN_STREAM_ATTEMPTS_DEFAULT,
-        spendCents: PLAN_STREAM_SPEND_CENTS_DEFAULT,
         decisions: PLAN_BOARD_DECISIONS_DEFAULT,
       },
     );
@@ -488,7 +489,6 @@ describe('plan.node.next', () => {
       expect.objectContaining({ spaceId: SPACE, holder: SESSION }),
       {
         attempts: PLAN_STREAM_ATTEMPTS_DEFAULT,
-        spendCents: PLAN_STREAM_SPEND_CENTS_DEFAULT,
         decisions: PLAN_BOARD_DECISIONS_DEFAULT,
       },
     );

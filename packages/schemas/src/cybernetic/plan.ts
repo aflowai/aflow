@@ -63,6 +63,13 @@ const PlanNodePositionSchema = z
   })
   .describe('Order among siblings, lowest first.');
 
+export const PlanNodeSpendCentsSchema = z
+  .number()
+  .int()
+  .min(1)
+  .max(1_000_000)
+  .describe('The person-set spend ceiling in cents; only the operator open route may write it.');
+
 export const PlanNodeSchema = z
   .object({
     nodeId: z.string().uuid(),
@@ -83,6 +90,7 @@ export const PlanNodeSchema = z
     createdBy: z.string().optional(),
     createdAt: z.string().datetime(),
     updatedAt: z.string().datetime(),
+    spendCents: PlanNodeSpendCentsSchema.optional(),
     closedAt: z.string().datetime().optional(),
   })
   .strict();

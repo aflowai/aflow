@@ -1,3 +1,4 @@
+import { resolvePrincipalActorKind } from '../utils/actorContext.js';
 /**
  * Recording an administrative action in the audit log.
  *
@@ -20,7 +21,7 @@ export function recordAdminAudit(
   fastify.audit.record({
     actor: {
       userId: request.authUser.userId,
-      kind: request.authUser.isServicePrincipal ? 'service_principal' : 'human',
+      kind: resolvePrincipalActorKind(request.authUser),
       authMethod: request.authUser.authMethod,
       tenantId: tenant.tenantId,
       ...(tenant.tenantRole !== undefined ? { tenantRole: tenant.tenantRole } : {}),

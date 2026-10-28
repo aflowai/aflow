@@ -467,6 +467,21 @@ describe('PATCH /v1/spaces/:spaceId/plan/nodes/:nodeId/open (Plan 332 D6, Plan 3
     return app.inject({ method: 'PATCH', url, payload: body as Record<string, unknown> });
   }
 
+  it('accepts the person’s spend ceiling and passes it to the open write', async () => {
+    mockOpenPlanNode.mockResolvedValue({
+      ok: true,
+      node: openedNode({ spendCents: 900 }),
+      left: 'blocked',
+    });
+    const res = await open({ expectedRevision: 4, spendCents: 900 });
+    expect(res.statusCode).toBe(200);
+    expect(mockOpenPlanNode).toHaveBeenCalledWith(expect.anything(), {
+      nodeId: CHILD_ID,
+      expectedRevision: 4,
+      spendCents: 900,
+    });
+  });
+
   it('moves a blocked node to active through the open write, its own audit row naming what it left', async () => {
     mockOpenPlanNode.mockResolvedValue({ ok: true, node: openedNode(), left: 'blocked' });
 

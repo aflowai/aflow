@@ -105,6 +105,23 @@ describe('the loop’s numbers (Plan 331 D7)', () => {
     expect(measure.actionsPerMergedPullRequest).toBe(1);
     expect(measure.cost.wakes.sessions).toBe(120);
   });
+  it('counts a human schedule write through a user API key', async () => {
+    tx.execute.mockImplementation((query: SQL) => {
+      const { sql } = new PgDialect().sqlToQuery(query);
+      if (sql.includes('FROM public.platform_audit_log') && sql.includes('GROUP BY action')) {
+        expect(sql).toContain("actor_type = 'human'");
+        expect(sql).not.toContain('auth_method');
+        return [{ action: 'schedule.update', n: 1 }];
+      }
+      return [];
+    });
+    const read = await readPlanLoopFacts({} as PostgresJsDatabase, ROOT, ROOT, window);
+    expect(measurePlanLoop(read, window).operatorActions).toMatchObject({
+      total: 1,
+      scheduleWrites: 1,
+    });
+  });
+
   it('reads zero operator actions over a weekend in which approved nodes landed', () => {
     const measure = measurePlanLoop(
       facts({ mergedPullRequests: 3, wakes: { sessions: 120, cents: 900 } }),

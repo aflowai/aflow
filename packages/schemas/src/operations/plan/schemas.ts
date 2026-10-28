@@ -19,6 +19,7 @@ import {
   PlanNodeLinkSchema,
   PlanNodeRunSchema,
   PlanNodeSchema,
+  PlanNodeSpendCentsSchema,
   PlanNodeStatusSchema,
   PlanNodeSummarySchema,
   PlanNodeUpdateFieldSchema,
@@ -496,6 +497,7 @@ export type PlanNodeCloseInput = z.infer<typeof PlanNodeCloseInputSchema>;
  */
 export const PlanNodeOpenSchema = z
   .object({
+    spendCents: PlanNodeSpendCentsSchema.optional(),
     expectedRevision: z
       .number()
       .int()
@@ -712,15 +714,6 @@ export const PlanNodeNextInputSchema = z
       .default(PLAN_STREAM_ATTEMPTS_DEFAULT)
       .describe(
         'How many times a node whose round failed is commissioned again before the stream stops on it, as the schedule’s message names it.',
-      ),
-    spendCents: z
-      .number()
-      .int()
-      .min(1)
-      .max(PLAN_STREAM_SPEND_CENTS_MAX)
-      .default(PLAN_STREAM_SPEND_CENTS_DEFAULT)
-      .describe(
-        'What the runs serving a node may cost, in cents, since a person last opened it, before the stream stops on it.',
       ),
     decisions: z
       .number()

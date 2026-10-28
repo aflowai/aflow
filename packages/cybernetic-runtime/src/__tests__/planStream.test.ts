@@ -205,7 +205,7 @@ function streamContext(holder = 'firing-a') {
 
 async function next(
   rootNodeId: string,
-  extra: { attempts?: number; spendCents?: number; pullRequest?: PlanStreamPullRequestAnswer } = {},
+  extra: { attempts?: number; pullRequest?: PlanStreamPullRequestAnswer } = {},
   holder?: string,
 ): Promise<PlanStreamAnswer> {
   const input = PlanNodeNextInputSchema.parse({ rootNodeId, ...extra });
@@ -839,7 +839,7 @@ describe('plan.node.next — a merge', () => {
 
 /** A wake across the board, as the resident's first call makes it. */
 async function wake(
-  extra: { decisions?: number; spendCents?: number; attempts?: number } = {},
+  extra: { decisions?: number; attempts?: number } = {},
   holder = 'wake-a',
 ): Promise<PlanBoardNext> {
   const result = await nextOnPlanBoard(streamContext(holder), PlanNodeNextInputSchema.parse(extra));
@@ -1024,11 +1024,11 @@ describe('publish — a completed commission is published by the next wake (Plan
     expect(onContinue).toContain('Write nothing to the node');
     expect(onContinue).not.toMatch(/write one line[^.]*note/);
 
-    // Why: the stream reads a round started before the node's last write as superseded.
+    // A node write cannot discard a finished, unpublished patch.
     const { root, first } = await stream();
     await run(first, PLAN_STREAM_COMMISSION_SLUG, 'completed');
     await write(first.nodeId, { note: 'Started a commission.' });
-    expect(await fire(root.nodeId)).toMatchObject({ decision: 'continue' });
+    expect(await fire(root.nodeId)).toMatchObject({ decision: 'publish' });
   });
 
   it('waits once the publication is under way', async () => {
@@ -1067,9 +1067,10 @@ describe('publish — a completed commission is published by the next wake (Plan
 describe('the node spend stop (Plan 331 D4)', () => {
   it('stops a node whose runs cost its ceiling, naming the spend and the runs, and holds its later siblings', async () => {
     const { root, first, second } = await stream();
+    store.nodes.set(first.nodeId, { ...first, spendCents: 500 });
     const a = await run(first, PLAN_STREAM_COMMISSION_SLUG, 'failed', { cents: 300, failure: 'x' });
     const b = await run(first, PLAN_STREAM_COMMISSION_SLUG, 'failed', { cents: 250, failure: 'y' });
-    const decided = await next(root.nodeId, { attempts: 10, spendCents: 500 });
+    const decided = await next(root.nodeId, { attempts: 10 });
     expect(decided).toMatchObject({
       decision: 'stop',
       cause: 'spend_spent',
@@ -1083,7 +1084,7 @@ describe('the node spend stop (Plan 331 D4)', () => {
     expect(decided.update.note).toContain(b);
 
     await updatePlanNode(session(), decided.update);
-    const board = await wake({ spendCents: 500, attempts: 10 });
+    const board = await wake({ attempts: 10 });
     expect(board.decisions).toEqual([]);
     expect(board.waits).toEqual([{ cause: 'blocked', roots: 1 }]);
     expect((await current(second.nodeId)).revision).toBe(second.revision);
@@ -1093,8 +1094,9 @@ describe('the node spend stop (Plan 331 D4)', () => {
     'starts the spend afresh through %s, no audit row awaited',
     async (path) => {
       const { root, first } = await stream();
+      store.nodes.set(first.nodeId, { ...first, spendCents: 500 });
       await run(first, PLAN_STREAM_COMMISSION_SLUG, 'failed', { cents: 600, failure: 'x' });
-      const stopped = await next(root.nodeId, { attempts: 10, spendCents: 500 });
+      const stopped = await next(root.nodeId, { attempts: 10 });
       if (stopped.decision !== 'stop') throw new Error('expected a stop');
       expect(stopped.cause).toBe('spend_spent');
       await updatePlanNode(session(), stopped.update);
@@ -1110,18 +1112,21 @@ describe('the node spend stop (Plan 331 D4)', () => {
                 expectedRevision: blocked.revision,
                 why: 'Raise the ceiling; the failure was the folder.',
               })
-            : await updatePlanNode(session(), {
-                nodeId: first.nodeId,
-                expectedRevision: blocked.revision,
-                status: 'active',
-              });
+            : await updatePlanNode(
+                { ...session(), actorKind: 'human' },
+                {
+                  nodeId: first.nodeId,
+                  expectedRevision: blocked.revision,
+                  status: 'active',
+                },
+              );
         expect(opened.ok).toBe(true);
       } finally {
         vi.useRealTimers();
       }
       // Written with the open itself: the next read sees it, with nothing else recorded.
       expect(store.openedAt.get(first.nodeId)).toEqual(openedAt);
-      expect(await next(root.nodeId, { attempts: 10, spendCents: 500 })).not.toMatchObject({
+      expect(await next(root.nodeId, { attempts: 10 })).not.toMatchObject({
         cause: 'spend_spent',
       });
 
@@ -1129,7 +1134,7 @@ describe('the node spend stop (Plan 331 D4)', () => {
         cents: 600,
         failure: 'y',
       });
-      expect(await next(root.nodeId, { attempts: 10, spendCents: 500 })).toMatchObject({
+      expect(await next(root.nodeId, { attempts: 10 })).toMatchObject({
         decision: 'stop',
         cause: 'spend_spent',
         spend: { cents: 600, runIds: [after] },
@@ -1137,18 +1142,103 @@ describe('the node spend stop (Plan 331 D4)', () => {
     },
   );
 
+  it('does not let an agent resume reset the window or a next argument raise its ceiling', async () => {
+    const { root, first } = await stream();
+    store.nodes.set(first.nodeId, { ...first, spendCents: 500 });
+    const window = new Date(first.createdAt);
+    store.openedAt.set(first.nodeId, window);
+    await run(first, PLAN_STREAM_COMMISSION_SLUG, 'failed', { cents: 600 });
+    const stopped = await next(root.nodeId);
+    if (stopped.decision !== 'stop') throw new Error('expected stop');
+    await updatePlanNode(session(), stopped.update);
+    const blocked = await current(first.nodeId);
+    await updatePlanNode(session(), {
+      nodeId: first.nodeId,
+      expectedRevision: blocked.revision,
+      status: 'active',
+    });
+    expect(store.openedAt.get(first.nodeId)).toEqual(window);
+    expect(
+      PlanNodeNextInputSchema.safeParse({ rootNodeId: root.nodeId, spendCents: 1_000_000 }).success,
+    ).toBe(false);
+    const input = { ...PlanNodeNextInputSchema.parse({}), spendCents: 1_000_000 };
+    const answer = await nextInPlanStream(streamContext(), root.nodeId, input);
+    expect(answer).toMatchObject({
+      ok: true,
+      output: {
+        decision: 'stop',
+        cause: 'spend_spent',
+        spend: { ceilingCents: 500 },
+      },
+    });
+  });
+
+  it('lets new human instructions supersede a commission that produced no patch', async () => {
+    const { root, first } = await stream();
+    await run(first, PLAN_STREAM_COMMISSION_SLUG, 'completed', { commission: {} });
+    const stopped = await next(root.nodeId);
+    if (stopped.decision !== 'stop') throw new Error('expected no-change stop');
+    expect(stopped.cause).toBe('commission_unchanged');
+    await updatePlanNode(session(), stopped.update);
+    const blocked = await current(first.nodeId);
+    await openPlanNode(session(), {
+      nodeId: first.nodeId,
+      expectedRevision: blocked.revision,
+      why: 'Try the new requirements.',
+    });
+    expect(await next(root.nodeId)).toMatchObject({ decision: 'continue' });
+  });
+
+  it('publishes the finished patch past the ceiling and claims it once after stop and human Resume', async () => {
+    const { root, first } = await stream();
+    store.nodes.set(first.nodeId, { ...first, spendCents: 500 });
+    const commission = await run(first, PLAN_STREAM_COMMISSION_SLUG, 'completed', { cents: 600 });
+    const blocked = await write(first.nodeId, { status: 'blocked', note: 'Blocked: spend spent.' });
+    expect(await next(root.nodeId)).toMatchObject({ decision: 'wait', cause: 'blocked' });
+    const opened = await openPlanNode(session(), {
+      nodeId: first.nodeId,
+      expectedRevision: blocked.revision,
+      why: 'Publish the finished patch.',
+      spendCents: 700,
+    });
+    expect(opened).toMatchObject({ ok: true, node: { spendCents: 700 } });
+    // New spending can exhaust even the resumed window before the wake.
+    const extra = await run(first, 'other-work', 'completed', { cents: 800 });
+    expect(costs.get(extra)).toBe(800);
+    expect(await next(root.nodeId, {}, 'wake-a')).toMatchObject({
+      decision: 'publish',
+      commission: { commission },
+    });
+    expect(await next(root.nodeId, {}, 'wake-b')).toMatchObject({
+      decision: 'wait',
+      cause: 'claimed',
+    });
+    const publication = await run(first, PLAN_STREAM_PUBLICATION_SLUG, 'running');
+    publishes.set(publication, commission);
+    expect(await next(root.nodeId, {}, 'wake-c')).toMatchObject({
+      decision: 'wait',
+      cause: 'in_flight',
+    });
+    ends(publication, 'completed');
+    outcomes.set(publication, { prUrl: PR, afterReview: 'publish_as_is', pushDecision: 'push' });
+    expect(await next(root.nodeId, {}, 'wake-d')).not.toMatchObject({ decision: 'publish' });
+    expect(store.runs.filter((r) => publishes.get(r.runId) === commission)).toHaveLength(1);
+    expect(store.runs.filter((r) => r.slug === PLAN_STREAM_COMMISSION_SLUG)).toHaveLength(1);
+  });
+
   it('records a merge on a node at its ceiling: recording costs nothing', async () => {
     const { root, first } = await stream();
+    store.nodes.set(first.nodeId, { ...first, spendCents: 500 });
     await run(first, PLAN_STREAM_COMMISSION_SLUG, 'completed', { cents: 900 });
     await run(first, PLAN_STREAM_PUBLICATION_SLUG, 'completed', {
       outcome: { prUrl: PR, afterReview: 'publish_as_is', pushDecision: 'push' },
     });
     const mergedAt = stamp();
-    const first1 = await next(root.nodeId, { spendCents: 500 });
+    const first1 = await next(root.nodeId, {});
     expect(first1.decision).toBe('read_pull_request');
-    expect(
-      await next(root.nodeId, { spendCents: 500, pullRequest: merged(PR, mergedAt) }),
-    ).toMatchObject({ decision: 'record_merge' });
+    expect(await next(root.nodeId, { pullRequest: merged(PR, mergedAt) })).toMatchObject({
+      decision: 'record_merge',
+    });
   });
 });
 

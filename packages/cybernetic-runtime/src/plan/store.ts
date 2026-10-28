@@ -77,6 +77,7 @@ export interface PlanNodePatch {
   closedAt?: Date | null;
   /** Written only by a person's open (Plan 331 D5): the node's spend counts from it. */
   openedAt?: Date;
+  spendCents?: number;
 }
 
 /** Why a node may not go where a write puts it. */
@@ -341,6 +342,7 @@ async function retryingDeadlocks<T>(write: () => Promise<T>): Promise<T> {
 
 export function rowToPlanNode(row: PlanNodeRow): PlanNode {
   return {
+    ...(row.spendCents != null ? { spendCents: row.spendCents } : {}),
     nodeId: row.id,
     spaceId: row.spaceId,
     parentId: row.parentId,
