@@ -4,6 +4,7 @@ import {
   McpServerDefinitionSchema,
   McpCachedToolSchema,
   McpSessionMetadataSchema,
+  McpToolFilterSchema,
 } from '../../models/mcpServerDefinition.js';
 import {
   CLEARED_OUTPUT_DESCRIPTION,
@@ -24,6 +25,11 @@ export const MCP_SERVER_CLEARABLE_FIELDS = [
 ] as const;
 export type McpServerClearableField = (typeof MCP_SERVER_CLEARABLE_FIELDS)[number];
 
+/** The exposure rule `applyToolFilter` enforces: default-deny, earned per tool. */
+const TOOL_FILTER_RULE =
+  "The allowlist of the server's tools agents may call: only the tools named in include, less " +
+  'those in exclude, are exposed. With no toolFilter, or an empty include, no tool is exposed.';
+
 /**
  * Upsert input: definition shape minus auto-populated timestamps. Leaving an
  * optional field out of an update — or sending it as `null` — keeps the stored
@@ -36,7 +42,9 @@ export const McpServerUpsertInputSchema = McpServerDefinitionSchema.omit({
   .extend({
     description: definitionShape.description.describe(KEPT_UNLESS_CLEARED),
     toolFilter: definitionShape.toolFilter.describe(
-      `Restricts which of the server's tools are exposed. ${KEPT_UNLESS_CLEARED}`,
+      `${TOOL_FILTER_RULE} To change which tools are exposed, send the toolFilter naming every ` +
+        'tool to expose — it replaces the stored one whole. Clearing it never widens access. ' +
+        KEPT_UNLESS_CLEARED,
     ),
     protectedResourceMetadataPath: definitionShape.protectedResourceMetadataPath.describe(
       `Override path for OAuth Protected Resource Metadata discovery. ${KEPT_UNLESS_CLEARED}`,
@@ -61,6 +69,17 @@ export const McpServerUpsertOutputSchema = z.object({
   spaceId: z.string().uuid(),
   created: z.boolean().describe('True if the row was newly created; false if updated'),
   cleared: z.array(z.enum(MCP_SERVER_CLEARABLE_FIELDS)).describe(CLEARED_OUTPUT_DESCRIPTION),
+  toolFilter: McpToolFilterSchema.nullable().describe(
+    `The toolFilter the definition holds after this write; null when it holds none. ${TOOL_FILTER_RULE}`,
+  ),
+  exposedTools: z
+    .array(z.string())
+    .describe(
+      'The tool names the stored toolFilter lets agents call after this write (include less ' +
+        "exclude). Empty means agents can call none of this server's tools — set a toolFilter " +
+        'whose include names the tools to expose. Which of them the server actually lists is ' +
+        'per binding (mcp.binding.test, mcp.server.refresh_tools).',
+    ),
 });
 export type McpServerUpsertOutput = z.infer<typeof McpServerUpsertOutputSchema>;
 
@@ -137,8 +156,9 @@ export const McpServerOperationRegistrations: OperationRegistration[] = [
       'toolFilter, PRM hints). An update writes only the fields given; every field left out keeps ' +
       'its stored value, and schema defaults apply only when creating. To remove a stored ' +
       'description, toolFilter, icon or protectedResourceMetadataPath, name it in clear — null ' +
-      'keeps the stored value. Definitions hold no credentials — pair with a binding to authorize ' +
-      'access.',
+      'keeps the stored value. toolFilter.include is the allowlist of tools agents may call — ' +
+      'with none, no tool is exposed; the output exposedTools says what is exposed after the ' +
+      'write. Definitions hold no credentials — pair with a binding to authorize access.',
     tags: ['crud', 'mcp', 'integration'],
     crudView: { entityType: 'mcp_server_definition', action: 'create' },
     privileged: true,
@@ -152,6 +172,7 @@ export const McpServerOperationRegistrations: OperationRegistration[] = [
       whenToUse: [
         'Registering a new external MCP server for use by agents',
         'Updating tool filter, PRM path, or tags on an existing definition',
+        "Choosing which of a server's tools agents may call — send toolFilter.include",
       ],
       whenNotToUse: [
         'Changing auth credentials — that is on the binding, not the definition',
@@ -164,9 +185,15 @@ export const McpServerOperationRegistrations: OperationRegistration[] = [
           'Every other field left out — tags, source, toolFilter, description, icon — keeps its ' +
           'stored value; a field given replaces the stored one whole.',
         'To remove a stored description, toolFilter, icon or protectedResourceMetadataPath, name ' +
-          "it in clear (clear: ['toolFilter']). Sending it as null does not remove it: null keeps " +
-          'the stored value, as leaving it out does — removing a toolFilter exposes every tool ' +
-          'the server lists. The output cleared names what was removed.',
+          "it in clear (clear: ['description']). Sending it as null does not remove it: null " +
+          'keeps the stored value, as leaving it out does. The output cleared names only the ' +
+          'fields that held a value and no longer do.',
+        'toolFilter is an allowlist and the default is deny: with no toolFilter, or an empty ' +
+          "include, agents can call none of the server's tools. Clearing toolFilter therefore " +
+          'shuts the server off rather than opening it up. To expose more tools, send toolFilter ' +
+          "with include naming every tool to expose (toolFilter: { include: ['search', 'fetch'] }) " +
+          '— it replaces the stored filter whole. Read exposedTools in the output to see what ' +
+          'agents can call after the write.',
         'Streamable HTTP is the only supported transport per spec rev 2025-11-25.',
       ],
       minimalExampleInput: {

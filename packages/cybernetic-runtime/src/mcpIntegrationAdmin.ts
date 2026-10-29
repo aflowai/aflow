@@ -7,6 +7,7 @@ import {
   type McpConnectionPolicy,
   type McpServerBinding,
   type McpServerDefinition,
+  type McpToolFilter,
   type TenantId,
 } from '@aflow/schemas';
 import {
@@ -231,12 +232,23 @@ export function mcpServerDefinitionFromRow(row: McpServerDefinitionRow): McpServ
   };
 }
 
+/**
+ * `cleared` names the fields the write removed a stored value from — a field
+ * it was told to clear that held nothing (always so on a create) is not one.
+ * `toolFilter` is the filter the row holds after the write, `null` for none.
+ */
+export interface McpServerDefinitionUpsertResult {
+  created: boolean;
+  cleared: string[];
+  toolFilter: McpToolFilter | null;
+}
+
 export async function upsertMcpServerDefinition(
   opts: McpIntegrationAdminScope & {
     definition: McpServerDefinitionWrite;
     statedFields?: StatedFields<McpServerDefinitionWrite>;
   },
-): Promise<{ created: boolean }> {
+): Promise<McpServerDefinitionUpsertResult> {
   const { db, tenantId, spaceId, definition, statedFields } = opts;
   await enforceIntegrationHostPolicy({
     db,
@@ -258,8 +270,25 @@ export async function upsertMcpServerDefinition(
         )} || ${JSON.stringify(pickStated(definition, statedFields))}::jsonb`,
     sql`updated_at = NOW()`,
   ];
-  const rows = await withTenantSchema(db, tenantContextOf(tenantId), async (tx) =>
-    tx.execute<{ created: boolean }>(sql`
+  const { rows, cleared } = await withTenantSchema(db, tenantContextOf(tenantId), async (tx) => {
+    const existing = (
+      (await tx
+        .select()
+        .from(mcpServerDefinitions)
+        .where(
+          and(
+            eq(mcpServerDefinitions.serverId, definition.serverId),
+            eq(mcpServerDefinitions.spaceId, spaceId),
+          ),
+        )
+        .limit(1)) as McpServerDefinitionRow[]
+    )[0];
+    const stored: Record<string, unknown> = existing ? mcpServerDefinitionFromRow(existing) : {};
+    const cleared =
+      statedFields === undefined
+        ? []
+        : clearedOf(definition, statedFields).filter((field) => stored[field] !== undefined);
+    const rows = await tx.execute<{ created: boolean; tool_filter: McpToolFilter | null }>(sql`
       INSERT INTO mcp_server_definitions (
         server_id, name, description, server_url, transport,
         definition_json, tags, source, enabled, space_id
@@ -277,9 +306,10 @@ export async function upsertMcpServerDefinition(
         ${spaceId}::uuid
       )
       ON CONFLICT (server_id, space_id) DO UPDATE SET ${sql.join(updates, sql`, `)}
-      RETURNING (xmax = 0) AS created
-    `),
-  );
+      RETURNING (xmax = 0) AS created, definition_json -> 'toolFilter' AS tool_filter
+    `);
+    return { rows, cleared };
+  });
 
   if (opts.redis) {
     publishMcpCatalogInvalidation(opts.redis, tenantId, spaceId, {
@@ -287,7 +317,11 @@ export async function upsertMcpServerDefinition(
       serverId: definition.serverId,
     });
   }
-  return { created: rows[0]?.created === true };
+  return {
+    created: rows[0]?.created === true,
+    cleared,
+    toolFilter: rows[0]?.tool_filter ?? null,
+  };
 }
 
 /** Deletes the definition with its bindings, space-owned tokens and orphaned credentials. */
@@ -328,7 +362,13 @@ export async function upsertMcpServerBinding(
     scopeOnUpdate: Record<string, unknown> | null;
     stated?: McpBindingStatedFields;
   },
-): Promise<{ created: boolean; scope: Record<string, unknown>; enabled: boolean }> {
+): Promise<{
+  created: boolean;
+  scope: Record<string, unknown>;
+  enabled: boolean;
+  /** The fields the write removed a stored value from; one that held nothing is not named. */
+  cleared: string[];
+}> {
   const { db, tenantId, spaceId, binding, scope, scopeOnUpdate, stated } = opts;
   const statedFields = stated?.fields;
   await enforceIntegrationHostPolicy({
@@ -356,13 +396,14 @@ export async function upsertMcpServerBinding(
     sql`updated_at = NOW()`,
   ];
 
-  const rows = await withTenantSchema(db, tenantContextOf(tenantId), async (tx) => {
+  const { rows, cleared } = await withTenantSchema(db, tenantContextOf(tenantId), async (tx) => {
     const existing = (
       await tx
         .select({
           pinnedOrigin: mcpServerBindings.pinnedOrigin,
           enabled: mcpServerBindings.enabled,
           authJson: mcpServerBindings.authJson,
+          description: mcpServerBindings.description,
         })
         .from(mcpServerBindings)
         .where(
@@ -388,7 +429,19 @@ export async function upsertMcpServerBinding(
       throw new McpBindingOriginNotPinnedError(binding.bindingId, authType);
     }
 
-    return tx.execute<{ created: boolean; scope: Record<string, unknown>; enabled: number }>(sql`
+    const stored: Record<string, unknown> = existing?.description
+      ? { description: existing.description }
+      : {};
+    const cleared =
+      statedFields === undefined
+        ? []
+        : clearedOf(binding, statedFields).filter((field) => stored[field] !== undefined);
+
+    const rows = await tx.execute<{
+      created: boolean;
+      scope: Record<string, unknown>;
+      enabled: number;
+    }>(sql`
       INSERT INTO mcp_server_bindings (
         binding_id, server_id, name, description, space_id,
         scope_json, auth_json, connection_policy_json,
@@ -414,6 +467,7 @@ export async function upsertMcpServerBinding(
       ON CONFLICT (binding_id, space_id) DO UPDATE SET ${sql.join(updates, sql`, `)}
       RETURNING (xmax = 0) AS created, scope_json AS scope, enabled
     `);
+    return { rows, cleared };
   });
 
   if (opts.redis) {
@@ -428,6 +482,7 @@ export async function upsertMcpServerBinding(
     created: row?.created === true,
     scope: row?.scope ?? scope,
     enabled: row ? row.enabled === 1 : binding.enabled,
+    cleared,
   };
 }
 

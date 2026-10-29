@@ -253,7 +253,17 @@ describe('mcp.server.upsert', () => {
   });
 
   it('clears the optional fields an update names in clear and keeps the ones it leaves out', async () => {
-    executeRows = [{ created: false }];
+    selectRows = [
+      {
+        ...storedDefinitionRow,
+        description: 'Docs search',
+        definitionJson: {
+          ...storedDefinitionRow.definitionJson,
+          icon: { kind: 'phosphor', name: 'Books' },
+        },
+      },
+    ];
+    executeRows = [{ created: false, tool_filter: null }];
     await handleMcpServerAdminInline(
       await buildArgs('mcp.server.upsert', {
         ...input,
@@ -263,6 +273,8 @@ describe('mcp.server.upsert', () => {
     expect(decodeOutput(lastResult())).toMatchObject({
       created: false,
       cleared: ['description', 'toolFilter', 'icon'],
+      toolFilter: null,
+      exposedTools: [],
     });
     const update = executed[0]!.slice(executed[0]!.indexOf('DO UPDATE SET'));
     expect(update).toContain('description = EXCLUDED.description');
@@ -274,6 +286,39 @@ describe('mcp.server.upsert', () => {
     expect(params[2]).toBeNull();
     const mergedJson = JSON.parse(params.at(-1) as string) as Record<string, unknown>;
     expect(Object.keys(mergedJson).sort()).toEqual(['name', 'serverId', 'serverUrl'].sort());
+  });
+
+  it('names only the fields that held a value as cleared, leaving out ones stored empty', async () => {
+    selectRows = [storedDefinitionRow];
+    executeRows = [{ created: false, tool_filter: null }];
+    await handleMcpServerAdminInline(
+      await buildArgs('mcp.server.upsert', { ...input, clear: ['description', 'toolFilter'] }),
+    );
+    expect(decodeOutput(lastResult())).toMatchObject({ created: false, cleared: ['toolFilter'] });
+  });
+
+  it('names nothing as cleared on a create, which had nothing stored to remove', async () => {
+    executeRows = [{ created: true, tool_filter: null }];
+    await handleMcpServerAdminInline(
+      await buildArgs('mcp.server.upsert', { ...input, clear: ['description', 'toolFilter'] }),
+    );
+    expect(decodeOutput(lastResult())).toMatchObject({ created: true, cleared: [] });
+  });
+
+  it('echoes the stored toolFilter and the tools it exposes after the write', async () => {
+    executeRows = [
+      {
+        created: false,
+        tool_filter: { include: ['search', 'fetch', 'delete'], exclude: ['delete'] },
+      },
+    ];
+    await handleMcpServerAdminInline(
+      await buildArgs('mcp.server.upsert', { ...input, description: 'Docs search' }),
+    );
+    expect(decodeOutput(lastResult())).toMatchObject({
+      toolFilter: { include: ['search', 'fetch', 'delete'], exclude: ['delete'] },
+      exposedTools: ['search', 'fetch'],
+    });
   });
 
   it('keeps every stored field an agent sends as a habitual null', async () => {
@@ -323,6 +368,8 @@ describe('mcp.server.upsert', () => {
       spaceId: SPACE,
       created: true,
       cleared: [],
+      toolFilter: null,
+      exposedTools: [],
     });
     expect(executed).toHaveLength(1);
     expect(executed[0]).toContain('INSERT INTO mcp_server_definitions');
@@ -572,7 +619,9 @@ describe('mcp.binding.upsert', () => {
   });
 
   it("clears a stored description on an update that sends clear: ['description']", async () => {
-    selectRows = [{ pinnedOrigin: null, enabled: 0, authJson: { type: 'none' } }];
+    selectRows = [
+      { pinnedOrigin: null, enabled: 0, authJson: { type: 'none' }, description: 'Docs search' },
+    ];
     executeRows = [{ created: false, scope: runScope, enabled: 0 }];
     await handleMcpServerAdminInline(
       await buildArgs('mcp.binding.upsert', { ...binding, clear: ['description'] }),
@@ -589,6 +638,25 @@ describe('mcp.binding.upsert', () => {
     }
     // The insert's description is null, which is what EXCLUDED.description writes.
     expect(executedParams[0]![3]).toBeNull();
+  });
+
+  it('names nothing as cleared when the description it was told to clear held no value', async () => {
+    selectRows = [
+      { pinnedOrigin: null, enabled: 0, authJson: { type: 'none' }, description: null },
+    ];
+    executeRows = [{ created: false, scope: runScope, enabled: 0 }];
+    await handleMcpServerAdminInline(
+      await buildArgs('mcp.binding.upsert', { ...binding, clear: ['description'] }),
+    );
+    expect(decodeOutput(lastResult())).toMatchObject({ created: false, cleared: [] });
+  });
+
+  it('names nothing as cleared on a create, which had nothing stored to remove', async () => {
+    executeRows = [{ created: true, scope: runScope, enabled: 1 }];
+    await handleMcpServerAdminInline(
+      await buildArgs('mcp.binding.upsert', { ...binding, clear: ['description'] }),
+    );
+    expect(decodeOutput(lastResult())).toMatchObject({ created: true, cleared: [] });
   });
 
   it('hands the handler the binding input as the agent sent it, with no schema default filled in', async () => {

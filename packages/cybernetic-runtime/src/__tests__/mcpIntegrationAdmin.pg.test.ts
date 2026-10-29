@@ -165,18 +165,18 @@ describeDb('MCP integration admin SQL (real DB)', () => {
     if (!requireSchema(ctx)) return;
 
     expect(await upsertMcpServerDefinition({ ...inSpace, definition: definition('docs') })).toEqual(
-      { created: true },
+      { created: true, cleared: [], toolFilter: null },
     );
     expect(
       await upsertMcpServerDefinition({
         ...inSpace,
         definition: definition('docs', { name: 'Docs renamed' }),
       }),
-    ).toEqual({ created: false });
+    ).toEqual({ created: false, cleared: [], toolFilter: null });
     // The same serverId in another space is a different row.
     expect(
       await upsertMcpServerDefinition({ ...inOtherSpace, definition: definition('docs') }),
-    ).toEqual({ created: true });
+    ).toEqual({ created: true, cleared: [], toolFilter: null });
 
     const row = await getMcpServerDefinitionRow({ ...inSpace, serverId: 'docs' });
     expect(row?.name).toBe('Docs renamed');
@@ -224,7 +224,7 @@ describeDb('MCP integration admin SQL (real DB)', () => {
       scope: narrowed,
       scopeOnUpdate: narrowed,
     });
-    expect(createdResult).toEqual({ created: true, scope: narrowed, enabled: false });
+    expect(createdResult).toEqual({ created: true, scope: narrowed, enabled: false, cleared: [] });
 
     const kept = await upsertMcpServerBinding({
       ...inSpace,
@@ -232,7 +232,7 @@ describeDb('MCP integration admin SQL (real DB)', () => {
       scope: identity,
       scopeOnUpdate: null,
     });
-    expect(kept).toEqual({ created: false, scope: narrowed, enabled: false });
+    expect(kept).toEqual({ created: false, scope: narrowed, enabled: false, cleared: [] });
     expect(await bindingScope('docs-default', SPACE)).toEqual(narrowed);
 
     const widened = await upsertMcpServerBinding({
@@ -241,7 +241,7 @@ describeDb('MCP integration admin SQL (real DB)', () => {
       scope: identity,
       scopeOnUpdate: identity,
     });
-    expect(widened).toEqual({ created: false, scope: identity, enabled: false });
+    expect(widened).toEqual({ created: false, scope: identity, enabled: false, cleared: [] });
     expect(await bindingScope('docs-default', SPACE)).toEqual(identity);
   });
 
@@ -276,7 +276,7 @@ describeDb('MCP integration admin SQL (real DB)', () => {
         connectionPolicy: { timeoutMs: 5_000 },
       },
     });
-    expect(result).toEqual({ created: false, scope: identity, enabled: false });
+    expect(result).toEqual({ created: false, scope: identity, enabled: false, cleared: [] });
 
     const rows = await query<Record<string, unknown>>(drizzleSql`
       SELECT name, owner_scope, sampling_policy, enabled, connection_policy_json
@@ -333,11 +333,20 @@ describeDb('MCP integration admin SQL (real DB)', () => {
       }),
     });
     // What the handler writes for an agent that sent clear: ['description', 'toolFilter', 'icon'].
-    await upsertMcpServerDefinition({
-      ...inSpace,
-      definition: definition('docs'),
-      statedFields: new Set(['serverId', 'name', 'serverUrl', 'description', 'toolFilter', 'icon']),
-    });
+    expect(
+      await upsertMcpServerDefinition({
+        ...inSpace,
+        definition: definition('docs'),
+        statedFields: new Set([
+          'serverId',
+          'name',
+          'serverUrl',
+          'description',
+          'toolFilter',
+          'icon',
+        ]),
+      }),
+    ).toEqual({ created: false, cleared: ['description', 'toolFilter', 'icon'], toolFilter: null });
 
     const row = await getMcpServerDefinitionRow({ ...inSpace, serverId: 'docs' });
     expect(row?.description).toBeNull();
@@ -348,6 +357,54 @@ describeDb('MCP integration admin SQL (real DB)', () => {
     expect(json).not.toHaveProperty('icon');
     expect(json['protectedResourceMetadataPath']).toBe('/.well-known/prm');
     expect(mcpServerDefinitionFromRow(row!)).not.toHaveProperty('toolFilter');
+  });
+
+  it('names as cleared only the fields that held a value, and returns the stored toolFilter', async (ctx) => {
+    if (!requireSchema(ctx)) return;
+
+    const clearing = new Set<keyof McpServerDefinitionWrite>([
+      'serverId',
+      'name',
+      'serverUrl',
+      'description',
+      'toolFilter',
+    ]);
+    // A create has nothing stored to remove.
+    expect(
+      await upsertMcpServerDefinition({
+        ...inSpace,
+        definition: definition('docs'),
+        statedFields: clearing,
+      }),
+    ).toEqual({ created: true, cleared: [], toolFilter: null });
+
+    expect(
+      await upsertMcpServerDefinition({
+        ...inSpace,
+        definition: definition('docs', { toolFilter: { include: ['search', 'fetch'] } }),
+        statedFields: new Set(['serverId', 'name', 'serverUrl', 'toolFilter']),
+      }),
+    ).toEqual({ created: false, cleared: [], toolFilter: { include: ['search', 'fetch'] } });
+
+    // An update stating another field keeps the filter, and says so.
+    expect(
+      (
+        await upsertMcpServerDefinition({
+          ...inSpace,
+          definition: definition('docs', { name: 'Docs renamed' }),
+          statedFields: new Set(['serverId', 'name', 'serverUrl']),
+        })
+      ).toolFilter,
+    ).toEqual({ include: ['search', 'fetch'] });
+
+    // The description never held a value, so only the toolFilter was removed.
+    expect(
+      await upsertMcpServerDefinition({
+        ...inSpace,
+        definition: definition('docs'),
+        statedFields: clearing,
+      }),
+    ).toEqual({ created: false, cleared: ['toolFilter'], toolFilter: null });
   });
 
   it('clears a stored binding description when the update states it and leaves it out', async (ctx) => {
@@ -389,14 +446,18 @@ describeDb('MCP integration admin SQL (real DB)', () => {
     expect(await storedDescription()).toBe('Main docs binding');
 
     // Stated and absent (named in clear): cleared.
-    await upsertMcpServerBinding({
-      ...inSpace,
-      binding: binding('docs-default', 'docs'),
-      scope: identity,
-      scopeOnUpdate: null,
-      stated: stated(['description']),
-    });
+    const clearDescription = () =>
+      upsertMcpServerBinding({
+        ...inSpace,
+        binding: binding('docs-default', 'docs'),
+        scope: identity,
+        scopeOnUpdate: null,
+        stated: stated(['description']),
+      });
+    expect((await clearDescription()).cleared).toEqual(['description']);
     expect(await storedDescription()).toBeNull();
+    // Nothing is left to remove the second time.
+    expect((await clearDescription()).cleared).toEqual([]);
   });
 
   it('refuses to enable a credentialed binding until its origin is pinned in the same space', async (ctx) => {

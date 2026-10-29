@@ -36,5 +36,6 @@ export function clearFieldsSchema<const F extends readonly [string, ...string[]]
 }
 
 export const CLEARED_OUTPUT_DESCRIPTION =
-  'The fields named in clear, which the row no longer holds after this write. Empty when the ' +
-  'call removed nothing.';
+  'The fields named in clear whose stored value this write removed. A field named in clear that ' +
+  'held no value — always the case on a create — is left out, since there was nothing to ' +
+  'remove. Empty when the call removed nothing.';

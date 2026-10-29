@@ -12,6 +12,7 @@ import {
   type McpServerGetOutput,
   type McpServerListOutput,
   type McpServerUpsertOutput,
+  type McpToolFilter,
 } from '@aflow/schemas';
 import { getDatabase } from '@aflow/database';
 import {
@@ -101,6 +102,15 @@ function statedWithCleared<T extends object, F extends keyof T & string>(
   return { fields: new Set([...statedFieldsOf(raw, parsed), ...cleared]), cleared };
 }
 
+/**
+ * The tool names a stored filter admits, by the rule `applyToolFilter`
+ * enforces: no filter or an empty include admits none.
+ */
+function exposedToolsOf(filter: McpToolFilter | null): string[] {
+  const excluded = new Set(filter?.exclude ?? []);
+  return (filter?.include ?? []).filter((tool) => !excluded.has(tool));
+}
+
 /** A delete naming a row the space does not hold — a failure, so agent loop guards count a repeat. */
 class McpAdminNotFoundError extends Error {
   constructor(
@@ -139,7 +149,7 @@ async function runOp(
       } = parseInput(McpServerUpsertInputSchema, op, input);
       assertRunSpace(statedSpaceId, spaceId, op);
       const { fields, cleared } = statedWithCleared(op, input, definition, clear);
-      const { created } = await upsertMcpServerDefinition({
+      const written = await upsertMcpServerDefinition({
         ...scope,
         definition,
         statedFields: fields,
@@ -147,8 +157,10 @@ async function runOp(
       const output: McpServerUpsertOutput = {
         serverId: definition.serverId,
         spaceId,
-        created,
-        cleared,
+        created: written.created,
+        cleared: cleared.filter((field) => written.cleared.includes(field)),
+        toolFilter: written.toolFilter,
+        exposedTools: exposedToolsOf(written.toolFilter),
       };
       return output;
     }
@@ -208,6 +220,7 @@ async function runOp(
         created,
         scope: storedScope,
         enabled,
+        cleared: removed,
       } = await upsertMcpServerBinding({
         ...scope,
         binding,
@@ -229,7 +242,7 @@ async function runOp(
           ...(typeof storedFlowId === 'string' && storedFlowId ? { flowId: storedFlowId } : {}),
         },
         enabled,
-        cleared,
+        cleared: cleared.filter((field) => removed.includes(field)),
       };
       return output;
     }

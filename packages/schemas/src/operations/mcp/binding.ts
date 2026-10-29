@@ -248,7 +248,7 @@ export const McpBindingOperationRegistrations: OperationRegistration[] = [
         'Credentialed bindings require mcp.binding.test to populate pinnedOrigin before they can be enabled.',
         'bindingId, serverId, name and auth are required on every call, so an update always writes them — resend the stored auth unless you mean to change it.',
         'Every other field left out on an update keeps its stored value: enabled, ownerScope, clientScope, samplingPolicy, subscribeListChanged and description are not reset to their defaults. connectionPolicy merges key by key. To change one, send it.',
-        "To remove a stored description, name it in clear (clear: ['description']); description: null keeps the stored one, as leaving it out does. The output cleared names what was removed.",
+        "To remove a stored description, name it in clear (clear: ['description']); description: null keeps the stored one, as leaving it out does. The output cleared names description only when a stored one was removed.",
         'Updating a binding without scope.flowId keeps its stored flow narrowing; pass scope.flowId: null to make it space-wide. The output scope and enabled are what is stored.',
         "The tenant and space are the run's — there is no tenantId to supply, and a scope.spaceId naming another space is refused.",
       ],
