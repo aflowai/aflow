@@ -271,7 +271,18 @@ Optimization archetype — ONLY when \`inputs.intent.iterationModel\` is \`optim
 - The observe op reads the score via \`poll\` + \`outputProjection\` and declares that metric port. Gate irreversible/quota ops (\`retryability: "unsafe"\`) behind a \`human\`/\`approve\` task.
 - Do NOT author \`stateVariables\`/\`promoteOutputs\`/\`output\`/\`outcomes\`/\`manifest.campaign\`+\`goal\` — the assembler DERIVES them all. Omit \`outcomes\` entirely (authoring any is rejected in optimization mode).
 
-Activation is OPTIONAL — omit for chat-only skills. If included, both \`triggerPatterns\` (1–10 strings) and \`activationHint\` are required.`,
+Activation is OPTIONAL — omit for chat-only skills. If included, both \`triggerPatterns\` (1–10 strings) and \`activationHint\` are required.
+
+Write the text the skill carries (goals, descriptions, \`pauseInstruction\`, \`activationHint\`) to these rules:
+- No semicolons. Write two sentences.
+- Keep each sentence under about 25 words.
+- Use one verb, not a nominalisation: "analyse", not "perform an analysis of".
+- Use no soft phrasal verbs: "find", not "figure out".
+- Use no marketing adjectives.
+- Make each list item stand alone. Do not end one with "and" or "or".
+- Inside one unit, use one word per concept. Do not say "check", "validate" and "verify" for one action.
+- Keep every hedge. "May have pushed" stays "may have pushed".
+- Keep the present perfect where it carries meaning.`,
       type: 'agent',
       dependsOn: ['prepare-design-surface'],
       inputBindings: {

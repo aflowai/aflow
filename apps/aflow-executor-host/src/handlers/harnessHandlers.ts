@@ -327,7 +327,17 @@ export function resultInstruction(schema: Record<string, unknown>): string {
     `\n\nWrite your final result as JSON to \`${RESULT_RELATIVE_PATH}\`, relative to the root ` +
     `of this checkout, matching this JSON Schema:\n${JSON.stringify(schema)}\n` +
     'Write that file even when you changed nothing else — it is the only thing read as the ' +
-    'result, and console output is not.'
+    'result, and console output is not.\n\n' +
+    'Write the prose in that result, and any pull request body, to these rules:\n' +
+    '- No semicolons. Write two sentences.\n' +
+    '- Keep each sentence under about 25 words.\n' +
+    '- Use one verb, not a nominalisation: "analyse", not "perform an analysis of".\n' +
+    '- Use no soft phrasal verbs: "find", not "figure out".\n' +
+    '- Use no marketing adjectives.\n' +
+    '- Make each list item stand alone. Do not end one with "and" or "or".\n' +
+    '- Inside one unit, use one word per concept. Do not say "check", "validate" and "verify" for one action.\n' +
+    '- Keep every hedge. "May have pushed" stays "may have pushed".\n' +
+    '- Keep the present perfect where it carries meaning.'
   );
 }
 
