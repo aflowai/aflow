@@ -7,6 +7,7 @@
  */
 import { z } from 'zod';
 
+import { PayloadRefSchema } from '../runtime/payloadRef.js';
 import { EPHEMERAL_BROWSER_PROFILE } from './browserProfile.js';
 
 /** Where a preview command takes the port it serves on. */
@@ -195,9 +196,16 @@ export function defaultFolderUiPaths(webAppDirs: readonly string[] = []): string
 /** How long the executor waits for a run's preview to answer on its ready path (Plan 320 D19). */
 export const FOLDER_PREVIEW_READY_TIMEOUT_MS = 120_000;
 
-/** `host.harness.run`'s `preview`: the boolean that asks for the folder's declared preview, never a declaration. */
+/**
+ * The `preview` a skill's rule asks for (Plan 320 D20, D21): the preview and
+ * the browser it is for where they can be had, and otherwise a run without
+ * them that says why in `previewUnavailable` — never a run refused for them.
+ */
+export const HOST_HARNESS_PREVIEW_IF_AVAILABLE = 'if_available';
+
+/** `host.harness.run`'s `preview`: a flag that asks for the folder's declared preview, never a declaration. */
 export const HostHarnessPreviewFlagSchema = z
-  .boolean()
+  .union([z.boolean(), z.literal(HOST_HARNESS_PREVIEW_IF_AVAILABLE)])
   .optional()
   .describe(
     "`true` starts the connected folder's declared preview before the harness starts — the " +
@@ -211,24 +219,46 @@ export const HostHarnessPreviewFlagSchema = z
       "the loop's agents already act with the operator's own posture, so a stricter one would " +
       'only add friction to the review. Needs `browser` with the `ephemeral` ' +
       'profile. Refused before any checkout where the folder declares no preview, and where its ' +
-      'fixed port is held by another run or anything else. The harness never starts a server.',
+      'fixed port is held by another run or anything else. The harness never starts a server. ' +
+      "`'if_available'` is what a skill's rule asks for: the same preview where it can be had; " +
+      'where it cannot — no preview declared, its port held or in use, it never answers, no ' +
+      'browser served — the run goes on without the preview and the browser it was for, and ' +
+      'the result says why in `previewUnavailable`.',
   );
+
+/** What `host.harness.run`'s result says of its preview. */
+export const HOST_HARNESS_PREVIEW_OUTPUT_SHAPE = {
+  previewLog: PayloadRefSchema.optional().describe(
+    'What the preview printed, standard output and error, from its start to its stop; present ' +
+      'when the run asked for `preview`. A payload of its own, beside `browserLog`.',
+  ),
+  previewUrl: z.string().optional().describe('Where the run’s preview answered, on loopback.'),
+  previewUnavailable: z
+    .string()
+    .optional()
+    .describe(
+      "Present where the run asked for its preview `'if_available'` and could not have it: " +
+        'what happened to the preview, in one line. The run went on without the preview and ' +
+        'the browser it was for; what the preview printed, where it started, is in `previewLog`.',
+    ),
+};
 
 /** What a run asking for a preview is refused for at once, or nothing when it may ask. */
 export function harnessPreviewRequestIssue(input: {
-  readonly preview?: boolean | undefined;
+  readonly preview?: boolean | typeof HOST_HARNESS_PREVIEW_IF_AVAILABLE | undefined;
   readonly browser?: { readonly profile: string } | undefined;
 }): string | undefined {
-  if (input.preview !== true) return undefined;
+  if (input.preview === undefined || input.preview === false) return undefined;
+  const asked = input.preview === true ? '`preview: true`' : `\`preview: '${input.preview}'\``;
   if (input.browser === undefined) {
     return (
-      '`preview: true` is given without `browser`. The preview is opened only in the run’s ' +
+      `${asked} is given without \`browser\`. The preview is opened only in the run’s ` +
       'own browser: add `browser: { profile: "ephemeral" }`, or drop `preview`.'
     );
   }
   if (input.browser.profile !== EPHEMERAL_BROWSER_PROFILE) {
     return (
-      `\`preview: true\` is given with the \`${input.browser.profile}\` profile. The preview's ` +
+      `${asked} is given with the \`${input.browser.profile}\` profile. The preview's ` +
       'port is opened to the run’s `ephemeral` browser alone, never to a profile the machine ' +
       'declares: use `browser: { profile: "ephemeral" }`.'
     );
@@ -246,3 +276,112 @@ export function resolveFolderPreview(preview: HostFolderPreview): HostResolvedFo
     webAppDirs,
   };
 }
+
+/** The longest text a UI question reads: a brief, as `host.harness.run` takes one whole. */
+export const FOLDER_UI_TEXT_MAX_LENGTH = 32_000;
+/** The most UI files an answer names; `touched` holds whatever the count. */
+export const FOLDER_UI_FILES_MAX = 200;
+
+/** A commit as a person names one, safe to hand git as a single argument. */
+const FolderUiRefSchema = z
+  .string()
+  .min(1)
+  .max(200)
+  // eslint-disable-next-line no-control-regex -- the control range is what is refused
+  .regex(/^(?!-)[^\s\u0000-\u001f\u007f]+$/, {
+    message:
+      'A branch, tag or commit — `main`, `HEAD~3`, a sha — with no whitespace, never starting ' +
+      'with `-`.',
+  });
+
+/**
+ * What `host.binding.inspect` is asked about a folder's UI (Plan 320 D20): the
+ * files a brief, a branch, a range or a run's diff names, matched against the
+ * folder's `uiPaths`, and whether a harness run there could be given a browser.
+ * Asked by the skills that add the browser and the preview by rule, never by
+ * an agent choosing one.
+ */
+export const HostFolderUiQuestionSchema = z
+  .object({
+    text: z
+      .string()
+      .min(1)
+      .max(FOLDER_UI_TEXT_MAX_LENGTH)
+      .optional()
+      .describe(
+        'A brief: every path it names — `src/app/page.tsx`, `src/app/page.tsx:12` — is matched.',
+      ),
+    branch: FolderUiRefSchema.optional().describe(
+      'A branch a run continues: what it changes from where it meets the default branch of ' +
+        "the folder's `origin` is matched. That default branch itself changes nothing.",
+    ),
+    from: FolderUiRefSchema.optional().describe('Where a range starts; only with `at`.'),
+    at: FolderUiRefSchema.optional().describe(
+      'Where a range ends: what `<from>..<at>` changes, read from where its two ends meet, is ' +
+        'matched; without `from`, what that one commit changes.',
+    ),
+    patchRef: PayloadRefSchema.optional().describe(
+      'A diff a `host.harness.run` result reports as `patchRef`: every file it changes is matched.',
+    ),
+    harness: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        'The harness a run would name; absent, the one the machine would choose for it. Whether ' +
+          'that harness can be handed a browser is answered.',
+      ),
+  })
+  .refine((question) => question.from === undefined || question.at !== undefined, {
+    message: '`from` names where a range starts and needs `at`, where it ends.',
+    path: ['from'],
+  })
+  .describe(
+    "Ask which files touch the folder's UI — those a brief names, a branch or a range " +
+      "changes, or a run's diff holds, matched against its `uiPaths` — and whether a harness " +
+      'run there could be given a browser.',
+  );
+export type HostFolderUiQuestion = z.infer<typeof HostFolderUiQuestionSchema>;
+
+/** Why a harness run on a folder could not be given a browser. */
+export const HostFolderBrowserUnavailableSchema = z.enum([
+  'executor',
+  'harness',
+  'grant',
+  'grant_not_judged',
+]);
+export type HostFolderBrowserUnavailable = z.infer<typeof HostFolderBrowserUnavailableSchema>;
+
+export const HostFolderUiAnswerSchema = z
+  .object({
+    preview: z
+      .enum(['declared', 'not_declared'])
+      .describe("Whether a person declared the folder's preview."),
+    uiPaths: z
+      .array(z.string())
+      .describe('The globs matched against: the declared ones, else the default.'),
+    files: z
+      .array(z.string())
+      .max(FOLDER_UI_FILES_MAX)
+      .describe(
+        `The files asked about that match, relative to the folder's root as \`uiPaths\` are — a change outside the folder is none of them — sorted; at most ${String(FOLDER_UI_FILES_MAX)}.`,
+      ),
+    touched: z.boolean().describe('True when any file asked about matches.'),
+    browser: z
+      .object({
+        harness: z
+          .string()
+          .optional()
+          .describe('The harness the answer is for; absent where none could be chosen.'),
+        unavailable: HostFolderBrowserUnavailableSchema.optional().describe(
+          'Why a run could not be given a browser: `executor`, this machine serves none; ' +
+            "`harness`, the harness has no browser arguments; `grant`, the run's grant does " +
+            'not cover `browser.page:write`; `grant_not_judged`, no grant was judged for the ' +
+            "read — it is not a workflow run's task — so whether a run may have a browser is not " +
+            'known. Absent where it could.',
+        ),
+      })
+      .describe('Whether a harness run on the folder could be given a browser.'),
+  })
+  .describe("The folder's preview, the UI files among those asked about, and the browser.");
+export type HostFolderUiAnswer = z.infer<typeof HostFolderUiAnswerSchema>;

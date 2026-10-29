@@ -578,10 +578,20 @@ export const StepJobMessageSchema = z
 
     /**
      * The coding agent the step's space prefers, read from its directives when
-     * a `host.harness.run` step is dispatched — never from the step's input,
-     * where a named harness is a requirement rather than a preference.
+     * a `host.harness.run` step is dispatched, or a `host.binding.inspect` that
+     * answers for the harness such a run would get — never from the step's
+     * input, where a named harness is a requirement rather than a preference.
      */
     preferredHarness: z.string().max(64).optional(),
+
+    /**
+     * Whether the step's run is granted a harness browser — `browser.page:write`,
+     * what a harness run given `browser` needs — judged by the orchestrator when
+     * a `host.binding.inspect` step is dispatched, never read from the step's
+     * input. The machine reports it to a skill deciding by rule whether its
+     * harness run takes a browser (Plan 320 D20). Absent: not judged.
+     */
+    browserGranted: z.boolean().optional(),
 
     /**
      * Whether this step's run is attended — its session's `activatedByPerson`,

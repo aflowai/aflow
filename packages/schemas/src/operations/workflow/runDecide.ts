@@ -29,12 +29,45 @@ const DecisionLabelSchema = z
 const DecisionReasonSchema = z.string().min(1).max(4000);
 
 /**
- * A value the decision hands on beside its label — a number or a text a label
- * cannot be. A task template substitutes whole nodes and cannot pick a value
- * per decision, so a value that follows the decision is named on the rule and
- * a later task binds it from the output, absent where the rule names none.
+ * A value the decision hands on beside its label — a number, a text or an
+ * object a label cannot be. A task template substitutes whole nodes and cannot
+ * pick a value per decision, so a value that follows the decision is named on
+ * the rule and a later task binds it, or a path into it, from the output,
+ * absent where the rule names none: an object lets one decision add several
+ * inputs to a later operation, such as a harness run's `browser` and
+ * `preview`, without a second task written for each branch.
  */
-const DecisionValueSchema = z.union([z.string().max(4000), z.number(), z.boolean()]);
+const DECISION_TEXT_MAX = 4000;
+
+/**
+ * An object value is bounded by its JSON as UTF-8, sized to the text form's
+ * worst case — four bytes for each of its characters — so an object holding a
+ * text of that length and a few inputs beside it fits, and a rule cannot hand
+ * on anything larger through the decision's output.
+ */
+export const DECISION_OBJECT_VALUE_MAX_BYTES = 4 * DECISION_TEXT_MAX;
+
+const utf8 = new TextEncoder();
+
+const DecisionObjectValueSchema = z.record(z.unknown()).refine(
+  (value) => {
+    try {
+      return utf8.encode(JSON.stringify(value)).length <= DECISION_OBJECT_VALUE_MAX_BYTES;
+    } catch {
+      return false;
+    }
+  },
+  {
+    message: `An object value serializes to at most ${String(DECISION_OBJECT_VALUE_MAX_BYTES)} bytes of JSON. Carry a large value in the state a later task reads instead.`,
+  },
+);
+
+const DecisionValueSchema = z.union([
+  z.string().max(DECISION_TEXT_MAX),
+  z.number(),
+  z.boolean(),
+  DecisionObjectValueSchema,
+]);
 
 export const WorkflowRunDecideRuleSchema = z
   .object({

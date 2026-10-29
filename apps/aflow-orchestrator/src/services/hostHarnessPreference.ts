@@ -14,7 +14,14 @@ import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { createTenantContext, spaces, withTenantSchema } from '@aflow/database';
 import { buildOperationId, type TenantId } from '@aflow/schemas';
 
-const HARNESS_RUN_OPERATION = buildOperationId('host', 'harness', 'run');
+/**
+ * The harness run, and the read of a folder that says whether the harness that
+ * run would get can be handed a browser — which has to choose it as the run does.
+ */
+const HARNESS_CHOOSING_OPERATIONS: ReadonlySet<string> = new Set([
+  buildOperationId('host', 'harness', 'run'),
+  buildOperationId('host', 'binding', 'inspect'),
+]);
 
 /**
  * The space's preference, or none. A preference the machine is free to pass
@@ -50,6 +57,6 @@ export async function preferredHarnessFor(
   spaceId: string | undefined,
   operationId: string,
 ): Promise<string | undefined> {
-  if (operationId !== HARNESS_RUN_OPERATION || spaceId === undefined) return undefined;
+  if (!HARNESS_CHOOSING_OPERATIONS.has(operationId) || spaceId === undefined) return undefined;
   return await readPreferredHarness(db, tenantId, spaceId);
 }

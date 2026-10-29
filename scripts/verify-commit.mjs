@@ -155,19 +155,45 @@ function git(args) {
 }
 
 /**
+ * The files a workspace's configs compile, by absolute path, or undefined where
+ * it has none. What a config excludes — its tests, and a helper beside them that
+ * only they import — is never compiled with the workspace, so it orders nothing.
+ */
+function compiledFiles(configs) {
+  if (configs.length === 0) return undefined;
+  const files = new Set();
+  for (const config of configs) {
+    const file = path.join(repoRoot, config);
+    const { config: raw } = ts.readConfigFile(file, ts.sys.readFile);
+    const parsed = ts.parseJsonConfigFileContent(raw ?? {}, ts.sys, path.dirname(file));
+    for (const name of parsed.fileNames) files.add(path.resolve(name));
+  }
+  return files;
+}
+
+/**
  * The `@aflow/*` packages a workspace's sources import, apart by reader: a
  * test reads every package it imports from that package's build, but only the
- * other sources are compiled with the workspace, so only they order its build.
+ * sources its configs compile are built with the workspace, so only they order
+ * its build. A helper its configs leave out with the tests is read as a test
+ * is: counted as compiled, its imports made build edges that did not exist,
+ * which could close a cycle and build a package before one it is built after.
  */
-function importedPackages(dir) {
+function importedPackages(dir, configs) {
   const compiled = new Set();
   const tested = new Set();
   const sourceDir = path.join(repoRoot, dir, 'src');
   if (!existsSync(sourceDir)) return { compiled, tested };
+  const compiledByConfig = compiledFiles(configs);
   for (const file of readdirSync(sourceDir, { recursive: true })) {
     if (!LINTED_SOURCE.test(String(file))) continue;
-    const found = TEST_FILE.test(String(file)) ? tested : compiled;
-    const text = readFileSync(path.join(sourceDir, String(file)), 'utf8');
+    const absolute = path.join(sourceDir, String(file));
+    const isCompiled =
+      compiledByConfig === undefined
+        ? !TEST_FILE.test(String(file))
+        : compiledByConfig.has(absolute);
+    const found = isCompiled ? compiled : tested;
+    const text = readFileSync(absolute, 'utf8');
     for (const match of text.matchAll(/['"](@aflow\/[a-z0-9-]+)/g)) found.add(match[1]);
   }
   return { compiled, tested };
@@ -212,17 +238,18 @@ function readWorkspaces() {
       const manifestPath = path.join(repoRoot, dir, 'package.json');
       if (!entry.isDirectory() || !existsSync(manifestPath)) continue;
       const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+      const configs = typecheckedConfigs(manifest.name, dir);
       byName.set(manifest.name, {
         name: manifest.name,
         dir,
         build: manifest.scripts?.build,
-        configs: typecheckedConfigs(manifest.name, dir),
+        configs,
         declared: Object.keys({
           ...manifest.dependencies,
           ...manifest.devDependencies,
           ...manifest.peerDependencies,
         }).filter((name) => name.startsWith('@aflow/')),
-        imported: importedPackages(dir),
+        imported: importedPackages(dir, configs),
       });
     }
   }
@@ -404,12 +431,26 @@ for (const workspace of [...testedDependents, ...guardWorkspaces]) {
   for (const read of workspace.reads) need(read);
   need(workspace.name);
 }
+// A package reached again while what it is built after is still being placed
+// closes a cycle, and no order builds it: placed anyway, it would be built
+// before a package it reads, and pass only where that one's build was already
+// on disk. So the cycle is named and the run ends.
 const ordered = [];
 const placed = new Set();
+const placing = [];
 const place = (name) => {
+  if (placing.includes(name)) {
+    console.log(
+      `FAIL ordering the builds: ${[...placing.slice(placing.indexOf(name)), name].join(' -> ')} ` +
+        'is a cycle of packages each built after the next',
+    );
+    process.exit(1);
+  }
   if (placed.has(name) || !needed.has(name)) return;
-  placed.add(name);
+  placing.push(name);
   for (const earlier of workspaces.byName.get(name).builtAfter) place(earlier);
+  placing.pop();
+  placed.add(name);
   ordered.push(workspaces.byName.get(name));
 };
 for (const name of [...needed].sort()) place(name);
