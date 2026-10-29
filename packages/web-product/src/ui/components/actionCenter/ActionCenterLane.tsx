@@ -60,10 +60,21 @@ export function ActionCenterLane({
   const spaceSlug = useSpaceFromRoute()?.slug ?? '';
   const { push } = useNavigation();
 
-  if (hideWhenEmpty && items.length === 0 && setupChecklists.length === 0) return null;
+  if (
+    hideWhenEmpty &&
+    items.length === 0 &&
+    setupChecklists.length === 0 &&
+    !state.carrierFailures?.length
+  )
+    return null;
 
   return (
     <Column gap="sm">
+      {state.carrierFailures?.map((failure, index) => (
+        <div role="alert" key={index}>
+          {failure}
+        </div>
+      ))}
       <Row gap="sm" align="center">
         <Text size="sm" weight="semibold">
           {title}

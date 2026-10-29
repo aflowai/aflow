@@ -458,7 +458,11 @@ export const planRoutes: FastifyPluginAsync = async (fastify) => {
         status: result.from,
         revision: result.node.revision,
       });
-      return { node: result.node };
+      return {
+        node: result.node,
+        ...(result.carrier ? { carrier: result.carrier } : {}),
+        ...(result.carrierFailure ? { carrierFailure: result.carrierFailure } : {}),
+      };
     },
   );
 

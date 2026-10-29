@@ -177,3 +177,5 @@ P2 round 10 implements the settled rules and adds their regression cases. Carrie
 P2 round 11 refuses resident closes across node kinds and records carrier failures with the closed node and linked findings for recovery. Candidate-root history reads exclude done branches within walk bounds, preserve declines, and describe proposals beside unrelated person waits. Recalibrate gating remains unchanged.
 
 P2 round 12 records resident provenance before input normalization and directs merge closes through the person or system path. Person reopens persist, and close responses preserve carrier recovery pointers.
+
+P2 round 13 restores resident done-on-merge closes with recorded merges while preserving person scope and restricting every unattended schedule. Reopened live checks wait for another person read, running work beneath done children holds proposals, and both approval paths surface carrier failures.

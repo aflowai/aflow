@@ -330,11 +330,12 @@ export interface PlanNodeStore {
   ): Promise<Map<string, PlanNodeNewestPullRequest>>;
   /** How many runs, running or paused, serve each of `nodeIds` itself; eval trials never. */
   inFlightRunCountsOf(spaceId: string, nodeIds: readonly string[]): Promise<Map<string, number>>;
-  /** The running and paused runs serving any of `nodeIds`, newest first; eval trials never. */
+  /** Running and paused runs serving `nodeIds`, or every descendant when `rootId` is given. Excludes eval trials. */
   listRunsServing(
     spaceId: string,
     nodeIds: readonly string[],
     limit: number,
+    rootId?: string,
   ): Promise<{ runs: PlanNodeRun[]; total: number }>;
   /**
    * Makes `nodeId` wait on `dependsOnId` for `condition` — or, with null,
@@ -1193,12 +1194,21 @@ export function createPlanNodeStore(db: PostgresJsDatabase, tenantId: string): P
         return counts;
       }),
 
-    listRunsServing: (spaceId, nodeIds, limit) =>
+    listRunsServing: (spaceId, nodeIds, limit, rootId) =>
       inTenant(async (tx) => {
-        if (nodeIds.length === 0) return { runs: [], total: 0 };
+        if (nodeIds.length === 0 && rootId === undefined) return { runs: [], total: 0 };
         const where = and(
           eq(workflowRuns.spaceId, spaceId),
-          inArray(workflowRuns.planNodeId, [...nodeIds]),
+          rootId === undefined
+            ? inArray(workflowRuns.planNodeId, [...nodeIds])
+            : sql`${workflowRuns.planNodeId} in (
+              with recursive subtree as (
+                select id from plan_nodes where space_id = ${spaceId} and id = ${rootId}
+                union
+                select child.id from plan_nodes child join subtree parent on child.parent_id = parent.id
+                where child.space_id = ${spaceId}
+              ) select id from subtree
+            )`,
           inArray(workflowRuns.status, [...PLAN_NODE_RUN_STATUSES]),
           isNull(workflowRuns.evalBatchId),
         );

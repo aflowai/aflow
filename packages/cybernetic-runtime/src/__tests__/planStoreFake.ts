@@ -674,12 +674,23 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
     return Promise.resolve(counts);
   };
 
-  listRunsServing: PlanNodeStore['listRunsServing'] = (spaceId, nodeIds, limit) => {
+  listRunsServing: PlanNodeStore['listRunsServing'] = (spaceId, nodeIds, limit, rootId) => {
+    const belongs = (nodeId: string): boolean => {
+      if (rootId === undefined) return nodeIds.includes(nodeId);
+      const seen = new Set<string>();
+      let node = this.nodes.get(nodeId);
+      while (node && !seen.has(node.nodeId)) {
+        if (node.nodeId === rootId) return true;
+        seen.add(node.nodeId);
+        node = node.parentId ? this.nodes.get(node.parentId) : undefined;
+      }
+      return false;
+    };
     const runs = this.runs
       .filter(
         (r) =>
           r.spaceId === spaceId &&
-          nodeIds.includes(r.nodeId) &&
+          belongs(r.nodeId) &&
           (PLAN_NODE_RUN_STATUSES as readonly string[]).includes(r.status),
       )
       .sort((a, b) => b.startedAt.localeCompare(a.startedAt))

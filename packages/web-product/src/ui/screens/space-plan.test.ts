@@ -1515,6 +1515,16 @@ describe('SpacePlanPage — approve, reopen and order (Plan 332 P2)', () => {
     );
   });
 
+  it('shows carrier recovery pointers after approving a live check', async () => {
+    const carrierFailure = 'Carrier failed after live-check approval. Read its linked findings.';
+    recorded.mutateAsync.mockResolvedValue({ node: {}, carrierFailure });
+    await render({ data: P2_PLAN });
+    await click(card(BLOCKED));
+    await click(button(rail(), 'Approve'));
+    await click(button(openForm(), 'Approve'));
+    expect(document.body.textContent).toContain(carrierFailure);
+  });
+
   it('offers Approve on a blocked step beside its close controls, and none on a decision', async () => {
     await render({ data: P2_PLAN });
     await click(card(BLOCKED));

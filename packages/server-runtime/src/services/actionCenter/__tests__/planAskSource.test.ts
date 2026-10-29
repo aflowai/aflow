@@ -1,3 +1,4 @@
+import { configureLogging } from '@aflow/observability';
 import { beforeEach, expect, it, vi } from 'vitest';
 import Redis from 'ioredis-mock';
 import type { Redis as RedisType } from 'ioredis';
@@ -17,6 +18,7 @@ import type { ActionCenterContext } from '../types.js';
 import { planAskItem, createPlanAskSource } from '../sources/planAskSource.js';
 
 beforeEach(() => {
+  configureLogging({ service: 'plan-ask-test', level: 'error', prettyPrint: false });
   store = new InMemoryPlanNodeStore();
 });
 
@@ -197,4 +199,19 @@ it('summarizes the wait line below an operator note', async () => {
   expect(planAskItem({ ...node, note: 'x'.repeat(PLAN_NODE_PROSE_MAX_CHARS) }).summary).toContain(
     'Waiting on you:',
   );
+});
+
+it('returns carrier failures after a committed live-check approval', async () => {
+  const { source, item, node, redis } = await fixture(true);
+  await store.insertLink(scope.spaceId, {
+    nodeId: node.nodeId,
+    kind: 'finding',
+    ref: 'Open finding',
+  });
+  vi.spyOn(store, 'pageLinks').mockRejectedValueOnce(new Error('findings unavailable'));
+  const result = await source.resolve(actor, item, { kind: 'approve' }, item.origin);
+  expect(result.carrierFailure).toContain(node.nodeId);
+  expect(result.carrierFailure).toContain('findings unavailable');
+  expect(store.nodes.get(node.nodeId)?.status).toBe('done');
+  redis.disconnect();
 });

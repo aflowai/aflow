@@ -477,16 +477,18 @@ it('describes proposals beside unrelated person waits', () => {
   expect(description).toContain('even when unrelated roots await people');
 });
 
-it('directs record_merge to the person or system close path', () => {
+it('directs residents to record the merge before closing a node whose criteria are met', () => {
   const merge = PlanStreamAnswerSchema.options.find(
     (option) => option.shape.decision.value === 'record_merge',
   );
   const description = merge && 'liveCheck' in merge.shape ? merge.shape.liveCheck.description : '';
-  expect(description).toContain('A person or system closes the merged node through its close path');
-  expect(description).toContain('a resident never closes it');
+  expect(description).toContain('Only a person approves the live check');
+  const link = merge && 'link' in merge.shape ? merge.shape.link.description : '';
+  expect(link).toContain('before closing the node');
+  expect(link).toContain('when its criteria are met');
   const guidance = getOperation('plan.node.next')?.usage.pitfalls?.find((text) =>
     text.startsWith('record_merge:'),
   );
-  expect(guidance).toContain('a resident never closes it');
-  expect(guidance).not.toContain('status "done"');
+  expect(guidance).toContain('plan.node.link before closing');
+  expect(guidance).toContain('When criteria are met, write status "done"');
 });

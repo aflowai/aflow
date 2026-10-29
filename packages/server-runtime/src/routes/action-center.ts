@@ -177,6 +177,7 @@ export const actionCenterRoutes: FastifyPluginAsync<ActionCenterRoutesOptions> =
           200: z.object({
             item: ActionCenterItemSchema,
             setupChecklist: z.array(PostInstallTaskSchema).optional(),
+            carrierFailure: z.string().optional(),
           }),
           403: ErrorSchema,
           404: ErrorSchema,
@@ -225,6 +226,7 @@ export const actionCenterRoutes: FastifyPluginAsync<ActionCenterRoutesOptions> =
         }
         return {
           item: result.item,
+          ...(result.carrierFailure ? { carrierFailure: result.carrierFailure } : {}),
           ...(result.setupChecklist !== undefined ? { setupChecklist: result.setupChecklist } : {}),
         };
       } catch (err) {

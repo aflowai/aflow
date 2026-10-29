@@ -92,6 +92,7 @@ export function createPlanAskSource(deps: ActionCenterSourceDeps): ActionCenterS
       );
       return {
         resolvedAt: result.node.updatedAt,
+        ...(result.carrierFailure ? { carrierFailure: result.carrierFailure } : {}),
         dispatchedOperationId: PLAN_NODE_UPDATE_OPERATION_ID,
       };
     },

@@ -48,6 +48,7 @@ import {
   type PlanLaneItem,
   type PlanOverviewOutput,
 } from '@aflow/schemas';
+import { isFindingsCarrier } from './carrier.js';
 import { logCyberneticError } from '../logger.js';
 import { publishActionCenterWake } from '@aflow/redis';
 import { bumpAttentionGeneration } from '../attentionCache.js';
@@ -522,12 +523,25 @@ async function writePlanNode(
     return residentUnblocks(current);
   }
 
+  const pullRequest =
+    ctx.resident === true && input.status === 'done'
+      ? await ctx.store.newestLink(ctx.spaceId, current.nodeId, 'pull_request')
+      : null;
+  const mergedClose =
+    ctx.resident === true &&
+    current.status === 'active' &&
+    input.status === 'done' &&
+    input.outcome !== undefined &&
+    !current.note?.includes(PLAN_NODE_LIVE_CHECK_HEAD) &&
+    !current.note?.split('\n').some(isFindingsCarrier) &&
+    pullRequest !== null &&
+    (await ctx.store.findLink(ctx.spaceId, current.nodeId, 'merge', pullRequest.ref)) !== null;
   if (
     ctx.resident === true &&
     (input.title !== undefined ||
       input.goal !== undefined ||
       input.criteria !== undefined ||
-      (input.status !== undefined && isClosedPlanNodeStatus(input.status)))
+      (input.status !== undefined && isClosedPlanNodeStatus(input.status) && !mergedClose))
   )
     return residentUnblocks(current);
   if (
@@ -649,7 +663,14 @@ export type PlanNodeOpenRequest = PlanNodeOpen & { nodeId: string };
 export async function openPlanNode(
   ctx: PlanWriteContext,
   request: PlanNodeOpenRequest,
-): Promise<PlanOpResult<{ node: PlanNode; from: PlanNodeStatus }>> {
+): Promise<
+  PlanOpResult<{
+    node: PlanNode;
+    from: PlanNodeStatus;
+    carrier?: PlanNode;
+    carrierFailure?: string;
+  }>
+> {
   const update: PlanNodeUpdateInput = {
     nodeId: request.nodeId,
     expectedRevision: request.expectedRevision,
@@ -669,13 +690,17 @@ export async function openPlanNode(
     };
   }
   if (request.why !== undefined) {
-    if (current.status === 'blocked' || current.note?.includes(PLAN_NODE_LIVE_CHECK_HEAD)) {
+    if (current.status === 'blocked') {
       const note = `Approved: ${request.why}${current.note !== undefined ? `\n${current.note}` : ''}`;
       if (note.length > PLAN_NODE_PROSE_MAX_CHARS) return approvedNoteTooLong(current, note.length);
       update.note = note;
     } else {
       update.note = `Reopened: ${request.why}`;
     }
+  }
+  if (isClosedPlanNodeStatus(current.status) && current.note?.includes(PLAN_NODE_LIVE_CHECK_HEAD)) {
+    update.status = 'blocked';
+    update.note = `${request.why !== undefined ? `Reopened: ${request.why}\n` : ''}${current.note}`;
   }
   const written = await writePlanNode(ctx, update, {
     openedAt: new Date(),

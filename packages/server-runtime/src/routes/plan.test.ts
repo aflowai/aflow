@@ -971,6 +971,19 @@ describe('PATCH /v1/spaces/:spaceId/plan/nodes/:nodeId/open', () => {
   const open = (body: unknown) =>
     app.inject({ method: 'PATCH', url, payload: body as Record<string, unknown> });
 
+  it('returns carrier recovery pointers after a committed live-check approval', async () => {
+    const carrierFailure = 'Carrier failed for closed node. Read its linked findings.';
+    mockOpenPlanNode.mockResolvedValue({
+      ok: true,
+      node: writtenNode({ status: 'done' }),
+      from: 'blocked',
+      carrierFailure,
+    });
+    const res = await open({ expectedRevision: 3 });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().carrierFailure).toBe(carrierFailure);
+  });
+
   it('approves through the engine against the revision read, stamped from the session, with the status it left', async () => {
     mockOpenPlanNode.mockResolvedValue({ ok: true, node: writtenNode(), from: 'blocked' });
 

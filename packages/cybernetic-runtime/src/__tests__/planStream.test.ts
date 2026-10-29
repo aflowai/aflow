@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import * as runtimeLogger from '../logger.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import Redis from 'ioredis-mock';
@@ -765,7 +766,18 @@ describe('plan.node.next — a merge', () => {
       node: { nodeId: first.nodeId, criteria: first.criteria },
       pullRequest: { url: PR, mergedAt, mergeCommitSha: MERGE_SHA },
     });
-    await write(first.nodeId, { status: 'done', outcome: `Met by ${PR}, merged as ${MERGE_SHA}.` });
+    await linkPlanNode(session(), { nodeId: first.nodeId, kind: 'merge', ref: PR });
+    expect(
+      await updatePlanNode(
+        { ...session(), actorKind: 'agent', resident: true },
+        {
+          nodeId: first.nodeId,
+          expectedRevision: (await current(first.nodeId)).revision,
+          status: 'done',
+          outcome: `Met by ${PR}, merged as ${MERGE_SHA}.`,
+        },
+      ),
+    ).toMatchObject({ ok: true });
 
     // The same firing walks on and commissions the next active node.
     expect(await fire(root.nodeId, github)).toMatchObject({
@@ -1016,7 +1028,7 @@ describe('resident asking and proposing', () => {
           expectedRevision: closed.revision,
           why: 'Read the folder again',
         }),
-      ).toMatchObject({ ok: true, node: { status: 'active' } });
+      ).toMatchObject({ ok: true, node: { status: 'blocked' } });
       expect((await current(check.nodeId)).outcome).toBeUndefined();
     },
   );
@@ -1035,7 +1047,12 @@ describe('resident asking and proposing', () => {
         expectedRevision: closed.revision,
         why: 'The folder needs another read.',
       });
-      expect(reopened).toMatchObject({ ok: true, node: { status: 'active' } });
+      expect(reopened).toMatchObject({ ok: true, node: { status: 'blocked' } });
+      expect((await current(check.nodeId)).note).toContain(
+        'Reopened: The folder needs another read.',
+      );
+      expect((await current(check.nodeId)).note).not.toContain('Approved:');
+      expect(await wake()).toMatchObject({ decisions: [{ answer: { decision: 'ask' } }] });
       expect((await current(check.nodeId)).outcome).toBeUndefined();
       expect((await current(check.nodeId)).closedAt).toBeUndefined();
     },
@@ -2249,4 +2266,24 @@ describe('settled P2 rules', () => {
     }
     expect(await current(node.nodeId)).toEqual(node);
   });
+});
+
+describe('round 13 root movement', () => {
+  it('holds an exhausted root while a run serves a done child', async () => {
+    const root = await created();
+    const child = await created({ parentId: root.nodeId });
+    await run(child, PLAN_STREAM_COMMISSION_SLUG, 'running');
+    await write(child.nodeId, { status: 'done', outcome: 'Done' });
+    expect(await next(root.nodeId)).toMatchObject({ decision: 'wait', cause: 'in_flight' });
+    expect(await wake()).toMatchObject({
+      decisions: [],
+      waits: [{ cause: 'in_flight', roots: 1 }],
+    });
+  });
+});
+
+it('keeps the stream module documentation before its imports', () => {
+  const source = readFileSync(new URL('../plan/stream.ts', import.meta.url), 'utf8');
+  expect(source.startsWith('/**')).toBe(true);
+  expect(source.indexOf('import { isFindingsCarrier }')).toBeGreaterThan(source.indexOf('*/'));
 });

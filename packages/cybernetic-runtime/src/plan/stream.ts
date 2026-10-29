@@ -1,4 +1,3 @@
-import { isFindingsCarrier } from './carrier.js';
 /**
  * A stream continues on a schedule (Plan 322 P2b), and the space's resident
  * takes the whole board (Plan 331 D2). A wake is a Helmsman run whose first
@@ -40,6 +39,7 @@ import {
   type PlanStreamStopCause,
   type PlanStreamWaitCause,
 } from '@aflow/schemas';
+import { isFindingsCarrier } from './carrier.js';
 import {
   getPlanNode,
   PLAN_TREE_WALK_BOUNDS,
@@ -807,7 +807,14 @@ async function decideRoot(
   const servedNodeIds = subtree.nodes.map((n) => n.nodeId);
   const [rounds, inFlight, pausedItems, spend] = await Promise.all([
     ctx.reads.roundsOf(ctx.spaceId, active.nodeId, PLAN_STREAM_ROUNDS_LIMIT),
-    ctx.store.listRunsServing(ctx.spaceId, servedNodeIds, PLAN_NODE_RUNS_LIMIT),
+    ctx.store.listRunsServing(
+      ctx.spaceId,
+      servedNodeIds,
+      PLAN_NODE_RUNS_LIMIT,
+      active.nodeId === root.nodeId && opened.childrenTotal > 0 && !open.truncated
+        ? active.nodeId
+        : undefined,
+    ),
     ctx.reads.pausedItemsServing(ctx.spaceId, servedNodeIds),
     ctx.reads.spendOf(ctx.spaceId, active.nodeId),
   ]);

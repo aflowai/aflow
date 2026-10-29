@@ -594,7 +594,7 @@ describe('resident provenance', () => {
   it('identifies residents from schedule provenance and the resident marker, failing closed when unavailable', async () => {
     for (const [state, resident] of [
       [{ trigger: 'schedule', planResident: true }, true],
-      [{ trigger: 'schedule', planResident: false }, false],
+      [{ trigger: 'schedule', planResident: false }, true],
       [{ trigger: 'schedule' }, true],
       [{ trigger: 'chat', planResident: true }, false],
       [null, true],

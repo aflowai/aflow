@@ -87,6 +87,27 @@ describeDb('plan store reads for the operator’s plan (real DB)', () => {
     return result.node;
   }
 
+  it('reads in-flight scope beneath done history without a status-filtered node list', async () => {
+    const root = await node('Root');
+    const child = await node('Done child');
+    const moved = await updatePlanNode(ctx(), {
+      nodeId: child.nodeId,
+      expectedRevision: child.revision,
+      parentId: root.nodeId,
+      status: 'done',
+      outcome: 'Merged',
+    });
+    expect(moved.ok).toBe(true);
+    expect(await store.listRunsServing(SPACE_ID, [], 10, root.nodeId)).toEqual({
+      runs: [],
+      total: 0,
+    });
+    expect(await store.listRunsServing(OTHER_SPACE_ID, [], 10, root.nodeId)).toEqual({
+      runs: [],
+      total: 0,
+    });
+  });
+
   beforeAll(async () => {
     const rows = await handle.sql<{ ok: boolean }[]>`
       SELECT EXISTS (
