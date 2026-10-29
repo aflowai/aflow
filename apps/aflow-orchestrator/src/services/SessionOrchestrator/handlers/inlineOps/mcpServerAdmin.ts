@@ -79,13 +79,36 @@ function statedFieldsOf<T extends object>(raw: unknown, parsed: T): ReadonlySet<
 }
 
 /**
- * The value to write, with every field sent as `null` left out. Such a field
- * is still stated, so the update clears it rather than keeping what is stored.
+ * The fields to write: the ones sent, plus the ones named in `clear`. A
+ * cleared field is absent from the written value, so stating it makes the
+ * update remove what is stored. Giving a field a value and clearing it in the
+ * same call is refused, since it cannot do both.
  */
-function withoutNulls<T extends object>(value: T): { [K in keyof T]: Exclude<T[K], null> } {
-  return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== null)) as {
-    [K in keyof T]: Exclude<T[K], null>;
-  };
+function statedWithCleared<T extends object, F extends keyof T & string>(
+  op: string,
+  raw: Record<string, unknown>,
+  parsed: T,
+  clear: readonly F[] | undefined,
+): { fields: ReadonlySet<keyof T>; cleared: F[] } {
+  const cleared = [...new Set(clear ?? [])];
+  const conflicting = cleared.filter((field) => parsed[field] !== undefined);
+  if (conflicting.length > 0) {
+    throw new McpAdminInputError(
+      `${op} was given a value for ${conflicting.join(', ')} and also named it in clear. ` +
+        'Send the value to replace the stored one, or name the field in clear to remove it — not both.',
+    );
+  }
+  return { fields: new Set([...statedFieldsOf(raw, parsed), ...cleared]), cleared };
+}
+
+/** A delete naming a row the space does not hold — a failure, so agent loop guards count a repeat. */
+class McpAdminNotFoundError extends Error {
+  constructor(
+    readonly code: 'MCP_SERVER_NOT_FOUND' | 'MCP_BINDING_NOT_FOUND',
+    message: string,
+  ) {
+    super(message);
+  }
 }
 
 /**
@@ -109,19 +132,24 @@ async function runOp(
   const { spaceId, tenantId } = scope;
   switch (op) {
     case 'mcp.server.upsert': {
-      const { spaceId: statedSpaceId, ...parsed } = parseInput(
-        McpServerUpsertInputSchema,
-        op,
-        input,
-      );
+      const {
+        spaceId: statedSpaceId,
+        clear,
+        ...definition
+      } = parseInput(McpServerUpsertInputSchema, op, input);
       assertRunSpace(statedSpaceId, spaceId, op);
-      const definition = withoutNulls(parsed);
+      const { fields, cleared } = statedWithCleared(op, input, definition, clear);
       const { created } = await upsertMcpServerDefinition({
         ...scope,
         definition,
-        statedFields: statedFieldsOf(input, parsed),
+        statedFields: fields,
       });
-      const output: McpServerUpsertOutput = { serverId: definition.serverId, spaceId, created };
+      const output: McpServerUpsertOutput = {
+        serverId: definition.serverId,
+        spaceId,
+        created,
+        cleared,
+      };
       return output;
     }
     case 'mcp.server.get': {
@@ -147,20 +175,27 @@ async function runOp(
     case 'mcp.server.delete': {
       const parsed = parseInput(McpServerDeleteInputSchema, op, input);
       assertRunSpace(parsed.spaceId, spaceId, op);
-      const output: McpServerDeleteOutput = await deleteMcpServerDefinition({
-        ...scope,
-        serverId: parsed.serverId,
-      });
+      // Checked first so a wrong id deletes nothing: the cascade would still
+      // sweep bindings and tokens left keyed to a serverId with no definition.
+      if ((await getMcpServerDefinitionRow({ ...scope, serverId: parsed.serverId })) === null) {
+        throw new McpAdminNotFoundError(
+          'MCP_SERVER_NOT_FOUND',
+          `mcp.server.delete found no MCP server "${parsed.serverId}" in space "${spaceId}"; ` +
+            'nothing was deleted. List the servers with mcp.server.list to find the serverId.',
+        );
+      }
+      await deleteMcpServerDefinition({ ...scope, serverId: parsed.serverId });
+      const output: McpServerDeleteOutput = { deleted: true };
       return output;
     }
     case 'mcp.binding.upsert': {
-      const { scope: statedScope = {}, ...parsed } = parseInput(
-        McpBindingUpsertInputSchema,
-        op,
-        input,
-      );
-      const binding = withoutNulls(parsed);
+      const {
+        scope: statedScope = {},
+        clear,
+        ...binding
+      } = parseInput(McpBindingUpsertInputSchema, op, input);
       assertRunSpace(statedScope.spaceId, spaceId, op);
+      const { fields, cleared } = statedWithCleared(op, input, binding, clear);
       const statedPolicyKeys = new Set(statedKeysOf(input['connectionPolicy']));
       const connectionPolicy = Object.fromEntries(
         Object.entries(binding.connectionPolicy).filter(([key]) => statedPolicyKeys.has(key)),
@@ -176,7 +211,7 @@ async function runOp(
       } = await upsertMcpServerBinding({
         ...scope,
         binding,
-        stated: { fields: statedFieldsOf(input, parsed), connectionPolicy },
+        stated: { fields, connectionPolicy },
         scope: statedScope.flowId ? { flowId: statedScope.flowId, ...identity } : identity,
         scopeOnUpdate:
           statedScope.flowId === undefined
@@ -194,13 +229,21 @@ async function runOp(
           ...(typeof storedFlowId === 'string' && storedFlowId ? { flowId: storedFlowId } : {}),
         },
         enabled,
+        cleared,
       };
       return output;
     }
     case 'mcp.binding.delete': {
       const parsed = parseInput(McpBindingDeleteInputSchema, op, input);
       const deleted = await deleteMcpServerBinding({ ...scope, bindingId: parsed.bindingId });
-      const output: McpBindingDeleteOutput = { deleted: deleted !== null };
+      if (deleted === null) {
+        throw new McpAdminNotFoundError(
+          'MCP_BINDING_NOT_FOUND',
+          `mcp.binding.delete found no MCP binding "${parsed.bindingId}" in space "${spaceId}"; ` +
+            'nothing was deleted. List the bindings with mcp.binding.list to find the bindingId.',
+        );
+      }
+      const output: McpBindingDeleteOutput = { deleted: true };
       return output;
     }
     default:
@@ -240,6 +283,10 @@ export async function handleMcpServerAdminInline(args: InlineHandlerArgs): Promi
     }
     if (err instanceof McpBindingOriginNotPinnedError) {
       await emitStepError(args, 'MCP_BINDING_ORIGIN_NOT_PINNED', message, startTime, 'validation');
+      return;
+    }
+    if (err instanceof McpAdminNotFoundError) {
+      await emitStepError(args, err.code, message, startTime, 'validation', false);
       return;
     }
     if (err instanceof McpAdminInputError) {

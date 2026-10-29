@@ -5,30 +5,46 @@ import {
   McpCachedToolSchema,
   McpSessionMetadataSchema,
 } from '../../models/mcpServerDefinition.js';
-import { NULL_CLEARS, RunSpaceIdSchema, UPDATE_KEEPS_OMITTED } from './runSpace.js';
+import {
+  CLEARED_OUTPUT_DESCRIPTION,
+  KEPT_UNLESS_CLEARED,
+  RunSpaceIdSchema,
+  UPDATE_KEEPS_OMITTED,
+  clearFieldsSchema,
+} from './runSpace.js';
 
 const definitionShape = McpServerDefinitionSchema.shape;
 
+/** The optional definition fields an agent can remove by naming them in `clear`. */
+export const MCP_SERVER_CLEARABLE_FIELDS = [
+  'description',
+  'toolFilter',
+  'icon',
+  'protectedResourceMetadataPath',
+] as const;
+export type McpServerClearableField = (typeof MCP_SERVER_CLEARABLE_FIELDS)[number];
+
 /**
- * Upsert input: definition shape minus auto-populated timestamps. The optional
- * fields an operator sets also take `null`, which clears the stored value —
- * leaving one out on an update keeps it.
+ * Upsert input: definition shape minus auto-populated timestamps. Leaving an
+ * optional field out of an update — or sending it as `null` — keeps the stored
+ * value; naming it in `clear` removes it.
  */
 export const McpServerUpsertInputSchema = McpServerDefinitionSchema.omit({
   createdAt: true,
   updatedAt: true,
 })
   .extend({
-    description: definitionShape.description.nullable().describe(NULL_CLEARS),
-    toolFilter: definitionShape.toolFilter
-      .nullable()
-      .describe(`Restricts which of the server's tools are exposed. ${NULL_CLEARS}`),
-    protectedResourceMetadataPath: definitionShape.protectedResourceMetadataPath
-      .nullable()
-      .describe(`Override path for OAuth Protected Resource Metadata discovery. ${NULL_CLEARS}`),
-    icon: definitionShape.icon
-      .nullable()
-      .describe(`${definitionShape.icon.description ?? ''} ${NULL_CLEARS}`.trim()),
+    description: definitionShape.description.describe(KEPT_UNLESS_CLEARED),
+    toolFilter: definitionShape.toolFilter.describe(
+      `Restricts which of the server's tools are exposed. ${KEPT_UNLESS_CLEARED}`,
+    ),
+    protectedResourceMetadataPath: definitionShape.protectedResourceMetadataPath.describe(
+      `Override path for OAuth Protected Resource Metadata discovery. ${KEPT_UNLESS_CLEARED}`,
+    ),
+    icon: definitionShape.icon.describe(
+      `${definitionShape.icon.description ?? ''} ${KEPT_UNLESS_CLEARED}`.trim(),
+    ),
+    clear: clearFieldsSchema(MCP_SERVER_CLEARABLE_FIELDS),
     tags: McpServerDefinitionSchema.shape.tags.describe(
       `Replaces the stored tags when given. ${UPDATE_KEEPS_OMITTED}`,
     ),
@@ -44,6 +60,7 @@ export const McpServerUpsertOutputSchema = z.object({
   serverId: z.string(),
   spaceId: z.string().uuid(),
   created: z.boolean().describe('True if the row was newly created; false if updated'),
+  cleared: z.array(z.enum(MCP_SERVER_CLEARABLE_FIELDS)).describe(CLEARED_OUTPUT_DESCRIPTION),
 });
 export type McpServerUpsertOutput = z.infer<typeof McpServerUpsertOutputSchema>;
 
@@ -79,7 +96,11 @@ export const McpServerDeleteInputSchema = z.object({
 export type McpServerDeleteInput = z.infer<typeof McpServerDeleteInputSchema>;
 
 export const McpServerDeleteOutputSchema = z.object({
-  deleted: z.boolean(),
+  deleted: z
+    .literal(true)
+    .describe(
+      'Always true: deleting a serverId the space does not hold fails as MCP_SERVER_NOT_FOUND.',
+    ),
 });
 export type McpServerDeleteOutput = z.infer<typeof McpServerDeleteOutputSchema>;
 
@@ -114,9 +135,10 @@ export const McpServerOperationRegistrations: OperationRegistration[] = [
     semanticDescription:
       "Create or update an MCP server definition in the run's space (serverId, URL, transport, " +
       'toolFilter, PRM hints). An update writes only the fields given; every field left out keeps ' +
-      'its stored value, and schema defaults apply only when creating. description, toolFilter, ' +
-      'icon and protectedResourceMetadataPath take null to clear the stored value. Definitions hold no ' +
-      'credentials — pair with a binding to authorize access.',
+      'its stored value, and schema defaults apply only when creating. To remove a stored ' +
+      'description, toolFilter, icon or protectedResourceMetadataPath, name it in clear — null ' +
+      'keeps the stored value. Definitions hold no credentials — pair with a binding to authorize ' +
+      'access.',
     tags: ['crud', 'mcp', 'integration'],
     crudView: { entityType: 'mcp_server_definition', action: 'create' },
     privileged: true,
@@ -141,8 +163,10 @@ export const McpServerOperationRegistrations: OperationRegistration[] = [
         'serverId, name and serverUrl are required on every call, so an update always writes them. ' +
           'Every other field left out — tags, source, toolFilter, description, icon — keeps its ' +
           'stored value; a field given replaces the stored one whole.',
-        'To remove a stored description, toolFilter, icon or protectedResourceMetadataPath, send ' +
-          'it as null — leaving it out keeps it.',
+        'To remove a stored description, toolFilter, icon or protectedResourceMetadataPath, name ' +
+          "it in clear (clear: ['toolFilter']). Sending it as null does not remove it: null keeps " +
+          'the stored value, as leaving it out does — removing a toolFilter exposes every tool ' +
+          'the server lists. The output cleared names what was removed.',
         'Streamable HTTP is the only supported transport per spec rev 2025-11-25.',
       ],
       minimalExampleInput: {
@@ -232,6 +256,7 @@ export const McpServerOperationRegistrations: OperationRegistration[] = [
         'Removing one connection — use mcp.binding.delete, which keeps the server and its OAuth tokens',
       ],
       pitfalls: [
+        'A serverId the space does not hold fails as MCP_SERVER_NOT_FOUND and changes nothing — check the id with mcp.server.list rather than resending it.',
         'Irreversible: re-adding the server means upserting its bindings, storing their credential values and completing OAuth consent again.',
         "User- and tenant-owned OAuth tokens survive; only the space's own tokens for this server are removed.",
       ],

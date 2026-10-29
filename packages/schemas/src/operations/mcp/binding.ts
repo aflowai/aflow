@@ -5,7 +5,17 @@ import {
   McpCachedToolSchema,
   McpSessionMetadataSchema,
 } from '../../models/mcpServerDefinition.js';
-import { NULL_CLEARS, RunSpaceIdSchema, UPDATE_KEEPS_OMITTED } from './runSpace.js';
+import {
+  CLEARED_OUTPUT_DESCRIPTION,
+  KEPT_UNLESS_CLEARED,
+  RunSpaceIdSchema,
+  UPDATE_KEEPS_OMITTED,
+  clearFieldsSchema,
+} from './runSpace.js';
+
+/** The optional binding fields an agent can remove by naming them in `clear`. */
+export const MCP_BINDING_CLEARABLE_FIELDS = ['description'] as const;
+export type McpBindingClearableField = (typeof MCP_BINDING_CLEARABLE_FIELDS)[number];
 
 /**
  * Upsert input: binding shape minus auto-populated fields. Server-side validation
@@ -42,7 +52,8 @@ export const McpBindingUpsertInputSchema = McpServerBindingSchema.omit({
       })
       .optional()
       .describe("Optional. The binding is always written to the run's tenant and space."),
-    description: McpServerBindingSchema.shape.description.nullable().describe(NULL_CLEARS),
+    description: McpServerBindingSchema.shape.description.describe(KEPT_UNLESS_CLEARED),
+    clear: clearFieldsSchema(MCP_BINDING_CLEARABLE_FIELDS),
     connectionPolicy: McpServerBindingSchema.shape.connectionPolicy.describe(
       'On an existing binding, only the keys given replace the stored ones; the rest keep their ' +
         'stored values. Defaults apply only when creating.',
@@ -79,6 +90,7 @@ export const McpBindingUpsertOutputSchema = z.object({
     .describe(
       'Whether the binding is enabled after this write; an update that omitted it kept it.',
     ),
+  cleared: z.array(z.enum(MCP_BINDING_CLEARABLE_FIELDS)).describe(CLEARED_OUTPUT_DESCRIPTION),
 });
 export type McpBindingUpsertOutput = z.infer<typeof McpBindingUpsertOutputSchema>;
 
@@ -112,7 +124,11 @@ export const McpBindingDeleteInputSchema = z.object({
 export type McpBindingDeleteInput = z.infer<typeof McpBindingDeleteInputSchema>;
 
 export const McpBindingDeleteOutputSchema = z.object({
-  deleted: z.boolean(),
+  deleted: z
+    .literal(true)
+    .describe(
+      'Always true: deleting a bindingId the space does not hold fails as MCP_BINDING_NOT_FOUND.',
+    ),
 });
 export type McpBindingDeleteOutput = z.infer<typeof McpBindingDeleteOutputSchema>;
 
@@ -207,7 +223,8 @@ export const McpBindingOperationRegistrations: OperationRegistration[] = [
       "Create or update an MCP server binding in the run's space (auth, flow scope, connection + " +
       'sampling policy, owner and client scope, enabled). An update writes only the fields given: ' +
       'every field left out keeps its stored value, and schema defaults apply only when creating; ' +
-      'description: null clears the stored description. Server rejects enabled: true on a credentialed binding without pinnedOrigin — caller must ' +
+      "clear: ['description'] removes the stored description (null keeps it). " +
+      'Server rejects enabled: true on a credentialed binding without pinnedOrigin — caller must ' +
       'run mcp.binding.test first.',
     tags: ['crud', 'mcp', 'integration'],
     crudView: { entityType: 'mcp_server_binding', action: 'create' },
@@ -230,7 +247,8 @@ export const McpBindingOperationRegistrations: OperationRegistration[] = [
         'Credentials are referenced by credentialKey only — store actual values via the Integrations page.',
         'Credentialed bindings require mcp.binding.test to populate pinnedOrigin before they can be enabled.',
         'bindingId, serverId, name and auth are required on every call, so an update always writes them — resend the stored auth unless you mean to change it.',
-        'Every other field left out on an update keeps its stored value: enabled, ownerScope, clientScope, samplingPolicy, subscribeListChanged and description are not reset to their defaults. connectionPolicy merges key by key. To change one, send it; to remove a stored description, send description: null.',
+        'Every other field left out on an update keeps its stored value: enabled, ownerScope, clientScope, samplingPolicy, subscribeListChanged and description are not reset to their defaults. connectionPolicy merges key by key. To change one, send it.',
+        "To remove a stored description, name it in clear (clear: ['description']); description: null keeps the stored one, as leaving it out does. The output cleared names what was removed.",
         'Updating a binding without scope.flowId keeps its stored flow narrowing; pass scope.flowId: null to make it space-wide. The output scope and enabled are what is stored.',
         "The tenant and space are the run's — there is no tenantId to supply, and a scope.spaceId naming another space is refused.",
       ],
@@ -315,6 +333,7 @@ export const McpBindingOperationRegistrations: OperationRegistration[] = [
       whenToUse: ['Removing a binding that is no longer needed'],
       whenNotToUse: ['Temporarily disabling — set enabled: false instead'],
       pitfalls: [
+        "A bindingId the run's space does not hold fails as MCP_BINDING_NOT_FOUND and changes nothing — check the id with mcp.binding.list rather than resending it.",
         'OAuth tokens are connect-once (owner-keyed, shared across bindings to the same server) and are not removed by deleting one binding.',
       ],
       minimalExampleInput: { bindingId: 'kaggle-default' },

@@ -1,11 +1,13 @@
-import { and, eq, sql, type SQL } from 'drizzle-orm';
+import { and, eq, getTableColumns, sql, type SQL } from 'drizzle-orm';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { Redis } from 'ioredis';
-import type {
-  McpConnectionPolicy,
-  McpServerBinding,
-  McpServerDefinition,
-  TenantId,
+import {
+  McpServerBindingSchema,
+  McpServerDefinitionSchema,
+  type McpConnectionPolicy,
+  type McpServerBinding,
+  type McpServerDefinition,
+  type TenantId,
 } from '@aflow/schemas';
 import {
   createTenantContext,
@@ -38,19 +40,20 @@ export interface McpIntegrationAdminScope {
 
 export type McpServerDefinitionWrite = Omit<McpServerDefinition, 'createdAt' | 'updatedAt'>;
 
-export type McpServerBindingWrite = Pick<
+/** Written by the server, never by a caller: timestamps, and the cache and pin `mcp.binding.test` stores. */
+const BINDING_SERVER_FIELDS = [
+  'createdAt',
+  'updatedAt',
+  'cachedTools',
+  'cachedToolsAt',
+  'pinnedOrigin',
+  'sessionMetadata',
+] as const;
+
+/** The scope is stamped from the run (or the request) and written apart from the binding. */
+export type McpServerBindingWrite = Omit<
   McpServerBinding,
-  | 'bindingId'
-  | 'serverId'
-  | 'name'
-  | 'description'
-  | 'auth'
-  | 'connectionPolicy'
-  | 'subscribeListChanged'
-  | 'samplingPolicy'
-  | 'ownerScope'
-  | 'clientScope'
-  | 'enabled'
+  (typeof BINDING_SERVER_FIELDS)[number] | 'scope'
 >;
 
 /**
@@ -90,26 +93,63 @@ function updateColumns<T>(
     .map(([, column]) => sql.raw(`${column} = EXCLUDED.${column}`));
 }
 
-const DEFINITION_COLUMNS: Partial<Record<keyof McpServerDefinitionWrite, string>> = {
-  name: 'name',
-  description: 'description',
-  serverUrl: 'server_url',
-  transport: 'transport',
-  tags: 'tags',
-  source: 'source',
-};
+/** The SQL column a schema field is stored in: the table property of its name, or of its name + `Json`. */
+function columnOf(columns: Record<string, { name: string }>, field: string): string | undefined {
+  return (columns[field] ?? columns[`${field}Json`])?.name;
+}
 
-const BINDING_COLUMNS: Partial<Record<keyof McpServerBindingWrite, string>> = {
-  serverId: 'server_id',
-  name: 'name',
-  description: 'description',
-  auth: 'auth_json',
-  subscribeListChanged: 'subscribe_list_changed',
-  samplingPolicy: 'sampling_policy',
-  ownerScope: 'owner_scope',
-  clientScope: 'client_scope',
-  enabled: 'enabled',
-};
+type UpdateColumns<T> = Readonly<Partial<Record<keyof T, string>>>;
+
+// Derived on first use rather than at import, so a module that imports this
+// one without the tables (a test mocking @aflow/database) still loads.
+let definitionUpdateColumns: UpdateColumns<McpServerDefinitionWrite> | undefined;
+let bindingUpdateColumns: UpdateColumns<McpServerBindingWrite> | undefined;
+
+/**
+ * The definition fields an update writes to a column of their own, derived
+ * from the Zod and drizzle shapes. A definition field with no column is stored
+ * in `definition_json`, which every update merges.
+ */
+export function mcpDefinitionUpdateColumns(): UpdateColumns<McpServerDefinitionWrite> {
+  definitionUpdateColumns ??= Object.fromEntries(
+    Object.keys(McpServerDefinitionSchema.shape)
+      // serverId is the conflict key; the timestamps are the server's.
+      .filter((field) => !['serverId', 'createdAt', 'updatedAt'].includes(field))
+      .flatMap((field) => {
+        const column = columnOf(getTableColumns(mcpServerDefinitions), field);
+        return column === undefined ? [] : [[field, column] as const];
+      }),
+  );
+  return definitionUpdateColumns;
+}
+
+/**
+ * Every binding field an update writes as `column = EXCLUDED.column`, derived
+ * from the Zod and drizzle shapes. A binding has no JSON catch-all, so a field
+ * without a column would be dropped from every write — that throws here
+ * instead.
+ */
+export function mcpBindingUpdateColumns(): UpdateColumns<McpServerBindingWrite> {
+  bindingUpdateColumns ??= Object.fromEntries(
+    Object.keys(McpServerBindingSchema.shape)
+      .filter(
+        (field) =>
+          !(BINDING_SERVER_FIELDS as readonly string[]).includes(field) &&
+          // bindingId is the conflict key; scope and connectionPolicy are merged on their own.
+          !['bindingId', 'scope', 'connectionPolicy'].includes(field),
+      )
+      .map((field) => {
+        const column = columnOf(getTableColumns(mcpServerBindings), field);
+        if (column === undefined) {
+          throw new Error(
+            `McpServerBindingSchema field "${field}" has no mcp_server_bindings column to write`,
+          );
+        }
+        return [field, column] as const;
+      }),
+  );
+  return bindingUpdateColumns;
+}
 
 /** A credentialed binding asked to be enabled before `mcp.binding.test` pinned its origin. */
 export class McpBindingOriginNotPinnedError extends Error {
@@ -209,7 +249,7 @@ export async function upsertMcpServerDefinition(
 
   const definitionJson: Record<string, unknown> = { ...definition };
   const updates = [
-    ...updateColumns(DEFINITION_COLUMNS, statedFields),
+    ...updateColumns(mcpDefinitionUpdateColumns(), statedFields),
     statedFields === undefined
       ? sql`definition_json = EXCLUDED.definition_json`
       : sql`definition_json = ${clearedOf(definition, statedFields).reduce<SQL>(
@@ -304,7 +344,7 @@ export async function upsertMcpServerBinding(
   });
 
   const updates = [
-    ...updateColumns(BINDING_COLUMNS, statedFields),
+    ...updateColumns(mcpBindingUpdateColumns(), statedFields),
     sql`scope_json = COALESCE(${scopeOnUpdate === null ? null : JSON.stringify(scopeOnUpdate)}::jsonb, mcp_server_bindings.scope_json)`,
     ...(statedFields === undefined
       ? [sql`connection_policy_json = EXCLUDED.connection_policy_json`]

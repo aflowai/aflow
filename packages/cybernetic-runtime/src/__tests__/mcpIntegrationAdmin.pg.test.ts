@@ -332,7 +332,7 @@ describeDb('MCP integration admin SQL (real DB)', () => {
         tags: ['search'],
       }),
     });
-    // What the handler writes for an agent that sent description, toolFilter and icon as null.
+    // What the handler writes for an agent that sent clear: ['description', 'toolFilter', 'icon'].
     await upsertMcpServerDefinition({
       ...inSpace,
       definition: definition('docs'),
@@ -388,7 +388,7 @@ describeDb('MCP integration admin SQL (real DB)', () => {
     });
     expect(await storedDescription()).toBe('Main docs binding');
 
-    // Stated and absent (sent as null): cleared.
+    // Stated and absent (named in clear): cleared.
     await upsertMcpServerBinding({
       ...inSpace,
       binding: binding('docs-default', 'docs'),

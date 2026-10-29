@@ -252,17 +252,18 @@ describe('mcp.server.upsert', () => {
     );
   });
 
-  it('clears the optional fields an update sends as null and keeps the ones it leaves out', async () => {
+  it('clears the optional fields an update names in clear and keeps the ones it leaves out', async () => {
     executeRows = [{ created: false }];
     await handleMcpServerAdminInline(
       await buildArgs('mcp.server.upsert', {
         ...input,
-        description: null,
-        toolFilter: null,
-        icon: null,
+        clear: ['description', 'toolFilter', 'icon'],
       }),
     );
-    expect(decodeOutput(lastResult())['created']).toBe(false);
+    expect(decodeOutput(lastResult())).toMatchObject({
+      created: false,
+      cleared: ['description', 'toolFilter', 'icon'],
+    });
     const update = executed[0]!.slice(executed[0]!.indexOf('DO UPDATE SET'));
     expect(update).toContain('description = EXCLUDED.description');
     expect(update.match(/ - \?::text\)/g)).toHaveLength(3);
@@ -273,6 +274,39 @@ describe('mcp.server.upsert', () => {
     expect(params[2]).toBeNull();
     const mergedJson = JSON.parse(params.at(-1) as string) as Record<string, unknown>;
     expect(Object.keys(mergedJson).sort()).toEqual(['name', 'serverId', 'serverUrl'].sort());
+  });
+
+  it('keeps every stored field an agent sends as a habitual null', async () => {
+    executeRows = [{ created: false }];
+    await handleMcpServerAdminInline(
+      await buildArgs('mcp.server.upsert', {
+        ...input,
+        description: null,
+        toolFilter: null,
+        icon: null,
+        protectedResourceMetadataPath: null,
+      }),
+    );
+    expect(decodeOutput(lastResult())).toMatchObject({ created: false, cleared: [] });
+    const update = executed[0]!.slice(executed[0]!.indexOf('DO UPDATE SET'));
+    expect(update).not.toContain('description =');
+    expect(update).not.toContain('::text)');
+    const mergedJson = JSON.parse(executedParams[0]!.at(-1) as string) as Record<string, unknown>;
+    expect(Object.keys(mergedJson).sort()).toEqual(['name', 'serverId', 'serverUrl'].sort());
+  });
+
+  it('refuses a field both given a value and named in clear, and writes nothing', async () => {
+    await handleMcpServerAdminInline(
+      await buildArgs('mcp.server.upsert', {
+        ...input,
+        toolFilter: { include: ['search'] },
+        clear: ['toolFilter'],
+      }),
+    );
+    const error = lastError();
+    expect(error.code).toBe('MCP_ADMIN_INVALID_INPUT');
+    expect(error.message).toContain('toolFilter');
+    expect(executed).toHaveLength(0);
   });
 
   it('hands the handler the input as the agent sent it, with no schema default filled in', async () => {
@@ -288,6 +322,7 @@ describe('mcp.server.upsert', () => {
       serverId: 'docs-mcp',
       spaceId: SPACE,
       created: true,
+      cleared: [],
     });
     expect(executed).toHaveLength(1);
     expect(executed[0]).toContain('INSERT INTO mcp_server_definitions');
@@ -376,8 +411,8 @@ describe('mcp.server.get / list', () => {
 });
 
 describe('mcp.server.delete', () => {
-  it('deletes the definition with its bindings and reports whether it existed', async () => {
-    selectRows = [{ serverId: 'docs-mcp' }];
+  it('deletes the definition with its bindings', async () => {
+    selectRows = [storedDefinitionRow];
     await handleMcpServerAdminInline(
       await buildArgs('mcp.server.delete', { serverId: 'docs-mcp' }),
     );
@@ -386,9 +421,14 @@ describe('mcp.server.delete', () => {
     expect(executed.some((q) => q.includes('DELETE FROM mcp_server_definitions'))).toBe(true);
   });
 
-  it('reports deleted: false for a server that is not there', async () => {
+  it('fails a delete of a server that is not there, naming it, and deletes nothing', async () => {
     await handleMcpServerAdminInline(await buildArgs('mcp.server.delete', { serverId: 'missing' }));
-    expect(decodeOutput(lastResult())).toEqual({ deleted: false });
+    const error = lastError();
+    expect(error.code).toBe('MCP_SERVER_NOT_FOUND');
+    expect(error.classification).toBe('validation');
+    expect(error.message).toContain('"missing"');
+    expect(executed).toHaveLength(0);
+    expect(mockPublishMcpCatalogInvalidation).not.toHaveBeenCalled();
   });
 });
 
@@ -417,6 +457,7 @@ describe('mcp.binding.upsert', () => {
       created: true,
       scope: runScope,
       enabled: true,
+      cleared: [],
     });
     expect(executed).toHaveLength(1);
     expect(executed[0]).toContain('INSERT INTO mcp_server_bindings');
@@ -461,6 +502,7 @@ describe('mcp.binding.upsert', () => {
       created: true,
       scope: runScope,
       enabled: false,
+      cleared: [],
     });
   });
 
@@ -518,14 +560,28 @@ describe('mcp.binding.upsert', () => {
     expect(decodeOutput(lastResult())).toMatchObject({ created: false, enabled: false });
   });
 
-  it('clears a stored description on an update that sends description: null', async () => {
+  it('keeps a stored description on an update that sends description: null', async () => {
     selectRows = [{ pinnedOrigin: null, enabled: 0, authJson: { type: 'none' } }];
     executeRows = [{ created: false, scope: runScope, enabled: 0 }];
     await handleMcpServerAdminInline(
       await buildArgs('mcp.binding.upsert', { ...binding, description: null }),
     );
+    expect(decodeOutput(lastResult())).toMatchObject({ created: false, cleared: [] });
+    const update = executed[0]!.slice(executed[0]!.indexOf('DO UPDATE SET'));
+    expect(update).not.toContain('description =');
+  });
 
-    expect(decodeOutput(lastResult())['created']).toBe(false);
+  it("clears a stored description on an update that sends clear: ['description']", async () => {
+    selectRows = [{ pinnedOrigin: null, enabled: 0, authJson: { type: 'none' } }];
+    executeRows = [{ created: false, scope: runScope, enabled: 0 }];
+    await handleMcpServerAdminInline(
+      await buildArgs('mcp.binding.upsert', { ...binding, clear: ['description'] }),
+    );
+
+    expect(decodeOutput(lastResult())).toMatchObject({
+      created: false,
+      cleared: ['description'],
+    });
     const update = executed[0]!.slice(executed[0]!.indexOf('DO UPDATE SET'));
     expect(update).toContain('description = EXCLUDED.description');
     for (const kept of ['enabled =', 'owner_scope =', 'sampling_policy =']) {
@@ -594,6 +650,7 @@ describe('mcp.binding.upsert', () => {
       created: false,
       scope: { ...runScope, flowId: 'flow-7' },
       enabled: true,
+      cleared: [],
     });
   });
 
@@ -652,11 +709,14 @@ describe('mcp.binding.delete', () => {
     );
   });
 
-  it('reports deleted: false and deletes nothing for an unknown binding', async () => {
+  it('fails a delete of an unknown binding, naming it, and deletes nothing', async () => {
     await handleMcpServerAdminInline(
       await buildArgs('mcp.binding.delete', { bindingId: 'missing' }),
     );
-    expect(decodeOutput(lastResult())).toEqual({ deleted: false });
+    const error = lastError();
+    expect(error.code).toBe('MCP_BINDING_NOT_FOUND');
+    expect(error.classification).toBe('validation');
+    expect(error.message).toContain('"missing"');
     expect(executed).toHaveLength(0);
     expect(mockPublishMcpCatalogInvalidation).not.toHaveBeenCalled();
   });
