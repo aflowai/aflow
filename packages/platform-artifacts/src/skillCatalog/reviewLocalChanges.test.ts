@@ -14,8 +14,10 @@ import {
 } from '@aflow/schemas';
 import {
   BROWSER_UNAVAILABLE_ON_HARNESS,
+  RULE_PREVIEW,
   UI_NOT_SEEN_NO_GRANT,
   UI_NOT_SEEN_NO_PREVIEW,
+  UI_NOT_SEEN_PREVIEW_UNAVAILABLE,
 } from './localBrowserRule.js';
 import { REVIEW_LOCAL_CHANGES, REVIEW_PREVIEW_PARAGRAPH } from './reviewLocalChanges.js';
 import { runSkillTasks, type TaskAnswer } from '../__tests__/runSkillTasks.js';
@@ -78,12 +80,18 @@ describe('Review Local Changes — the first harness inside a skill', () => {
   });
 
   it('is a read of the folder, a decision by rule, and one read-only harness run', () => {
-    expect(wf.tasks.map((t) => t.taskId)).toEqual(['read-ui', 'decide-browser', 'review']);
+    expect(wf.tasks.map((t) => t.taskId)).toEqual([
+      'read-ui',
+      'decide-browser',
+      'review',
+      'report-preview',
+    ]);
     // Nothing in the skill writes: the folder is only read, and the decision is the orchestrator's.
     expect(wf.tasks.map((t) => t.operation)).toEqual([
       'host.binding.inspect',
       'workflow.run.decide',
       'host.harness.run',
+      'workflow.run.decide',
     ]);
     expect(task?.type).toBe('operation');
     expect(task?.context?.capabilities?.operations).toEqual(['host.harness.run']);
@@ -342,8 +350,12 @@ const TOUCHED = { files: ['src/web/Checkout.vue'], touched: true };
 const VERDICT = { result: { verdict: 'approve', summary: 'Nothing found.', findings: [] } };
 
 /** A review run over `runInputs`, the folder answering `read` and the harness approving. */
-function review(read: TaskAnswer, runInputs: Record<string, unknown> = RANGE) {
-  return runSkillTasks(wf.tasks, runInputs, (taskId) => (taskId === 'read-ui' ? read : VERDICT));
+function review(
+  read: TaskAnswer,
+  runInputs: Record<string, unknown> = RANGE,
+  verdict: TaskAnswer = VERDICT,
+) {
+  return runSkillTasks(wf.tasks, runInputs, (taskId) => (taskId === 'read-ui' ? read : verdict));
 }
 
 describe('Review Local Changes — the browser and the preview by rule (Plan 320 D20)', () => {
@@ -365,7 +377,7 @@ describe('Review Local Changes — the browser and the preview by rule (Plan 320
     const run = review(folderAnswer({ preview: 'declared', ...TOUCHED }));
     const call = HostHarnessRunInputSchema.parse(run.inputs.get('review'));
     expect(call.browser).toEqual({ profile: 'ephemeral' });
-    expect(call.preview).toBe(true);
+    expect(call.preview).toBe(RULE_PREVIEW);
     expect(call.task.endsWith(REVIEW_PREVIEW_PARAGRAPH)).toBe(true);
     // The review's depth is the caller's: the same checkout, range and budget as without it.
     const without = HostHarnessRunInputSchema.parse(
@@ -459,6 +471,37 @@ describe('Review Local Changes — the browser and the preview by rule (Plan 320
     );
     expect(run.ran).toContain('review');
     expect(run.state['uiNotSeen']).toContain(`${BROWSER_UNAVAILABLE_ON_HARNESS} codex`);
+  });
+
+  it.each([
+    ['its fixed port is in use', 'preview port 41802 is in use.'],
+    [
+      'it never answers',
+      'The preview `yarn dev` did not answer at http://127.0.0.1:47101/ within 120 s. What it printed is in `previewLog`.',
+    ],
+  ])(
+    'reviews on and says so where the preview the rule gave it cannot be had: %s (D21)',
+    (_case, happened) => {
+      // The executor reviewed without the preview and its browser and said
+      // what happened to the preview, rather than failing the review.
+      const run = review(folderAnswer({ preview: 'declared', ...TOUCHED }), RANGE, {
+        ...VERDICT,
+        previewUnavailable: happened,
+      });
+      expect(HostHarnessRunInputSchema.parse(run.inputs.get('review')).preview).toBe(RULE_PREVIEW);
+      expect(run.statuses.get('review')).toBe('succeeded');
+      expect(run.state['uiNotSeen']).toBe(`${UI_NOT_SEEN_PREVIEW_UNAVAILABLE}: ${happened}`);
+      expect(run.state).toMatchObject({ verdict: 'approve' });
+    },
+  );
+
+  it('says nothing after a review that had its preview', () => {
+    const run = review(folderAnswer({ preview: 'declared', ...TOUCHED }), RANGE, {
+      ...VERDICT,
+      previewUrl: 'http://127.0.0.1:47101/',
+    });
+    expect(run.statuses.get('report-preview')).toBe('skipped');
+    expect(run.state).not.toHaveProperty('uiNotSeen');
   });
 
   it('reviews without a browser where the folder cannot be read', () => {

@@ -31,6 +31,8 @@ const run = promisify(execFile);
 /** A fixed port something other than a run's preview listens on. */
 const PORT_IN_USE = 41_802;
 const FIXED_PORT = 41_801;
+/** A preview command the stand-in never sees answer. */
+const NEVER_READY = 'never-ready';
 
 const handed: SandboxedRunInput[] = [];
 const started: StartPreviewInput[] = [];
@@ -110,6 +112,15 @@ vi.mock('../previewSupervisor.js', async (importOriginal) => {
     ...actual,
     startPreview: (input: StartPreviewInput): Promise<StartedPreview> => {
       started.push(input);
+      if (input.preview.command.includes(NEVER_READY)) {
+        return Promise.reject(
+          new actual.PreviewError(
+            `The preview \`${input.preview.command}\` did not answer at http://127.0.0.1:${String(input.port)}/ within 120 s. The last lines it printed:\nstill compiling\n`,
+            'not_ready',
+            'still compiling\n',
+          ),
+        );
+      }
       let done = false;
       return Promise.resolve({
         port: input.port,
@@ -202,6 +213,7 @@ beforeAll(async () => {
         binding('hb-fixed', await repository('fixed'), { command: 'yarn dev', port: FIXED_PORT }),
         binding('hb-busy', await repository('busy'), { command: 'yarn dev', port: PORT_IN_USE }),
         binding('hb-none', await repository('plain')),
+        binding('hb-slow', await repository('slow'), { command: `yarn ${NEVER_READY} {port}` }),
       ],
       harnesses: [
         {
@@ -414,5 +426,88 @@ describe('a harness run refused its preview before any checkout', () => {
     expect(ran.error?.message).toContain(`preview port ${String(PORT_IN_USE)} is in use`);
     expect(handed).toHaveLength(0);
     expect(previewPortHolder(PORT_IN_USE)).toBeUndefined();
+  }, 60_000);
+
+  it('fails when a preview a person asked for never answers', async () => {
+    const ran = await runHarness({ bindingId: 'hb-slow' }, 'run-slow-asked');
+    expect(ran.status).toBe('FAILED');
+    expect(ran.error?.message).toContain('did not answer');
+    expect(handed).toHaveLength(0);
+  }, 60_000);
+});
+
+/** Whether the harness was handed a browser: its MCP configuration on the argv. */
+function hadBrowser(): boolean {
+  return handed[0]?.argv.includes('--mcp-config') ?? false;
+}
+
+/** What the harness was told of its preview, read out of its brief. */
+function briefSays(text: string): boolean {
+  return handed[0]?.argv.some((arg) => arg.includes(text)) ?? false;
+}
+
+describe('a harness run whose rule asked for its preview if available (D21)', () => {
+  const ruled = { preview: 'if_available' };
+
+  it('takes the preview where it can be had, as `true` does', async () => {
+    const ran = await runHarness({ ...ruled }, 'run-ruled');
+    expect(ran.status).toBe('SUCCEEDED');
+    expect(started).toHaveLength(1);
+    expect(ran.output?.['previewUrl']).toBe(`http://127.0.0.1:${String(started[0]?.port)}/`);
+    expect(ran.output).not.toHaveProperty('previewUnavailable');
+    expect(hadBrowser()).toBe(true);
+  }, 60_000);
+
+  it('runs on without the preview and its browser while another run holds the port', async () => {
+    const holding = await claimPreviewPort(
+      { port: FIXED_PORT },
+      { runId: 'run-holder', bindingId: 'hb-fixed', tenantId: 't1', spaceId: 'space-test' },
+    );
+    try {
+      const ran = await runHarness({ ...ruled, bindingId: 'hb-fixed' }, 'run-ruled-held');
+      expect(ran.status).toBe('SUCCEEDED');
+      expect(ran.output?.['previewUnavailable']).toContain(
+        `preview port ${String(FIXED_PORT)} is held by run run-holder`,
+      );
+      expect(ran.output).not.toHaveProperty('previewUrl');
+      expect(handed).toHaveLength(1);
+      expect(started).toHaveLength(0);
+      expect(hadBrowser()).toBe(false);
+      expect(briefSays('"previewUnavailable"')).toBe(true);
+      expect(previewPortHolder(FIXED_PORT)?.runId).toBe('run-holder');
+    } finally {
+      holding.release();
+    }
+  }, 60_000);
+
+  it('runs on without them when anything else listens on the fixed port', async () => {
+    const ran = await runHarness({ ...ruled, bindingId: 'hb-busy' }, 'run-ruled-busy');
+    expect(ran.status).toBe('SUCCEEDED');
+    expect(ran.output?.['previewUnavailable']).toContain(
+      `preview port ${String(PORT_IN_USE)} is in use`,
+    );
+    expect(hadBrowser()).toBe(false);
+    expect(previewPortHolder(PORT_IN_USE)).toBeUndefined();
+  }, 60_000);
+
+  it('runs on without them when the preview never answers, keeping what it printed', async () => {
+    const ran = await runHarness({ ...ruled, bindingId: 'hb-slow' }, 'run-ruled-slow');
+    expect(ran.status).toBe('SUCCEEDED');
+    const line = String(ran.output?.['previewUnavailable']);
+    expect(line).toContain('did not answer');
+    expect(line).not.toContain('still compiling');
+    expect(line).toContain('`previewLog`');
+    expect(ran.output?.['previewLog']).toBe('inline:preview_log');
+    expect(String(ran.written['preview_log'])).toContain('still compiling');
+    expect(ran.output).not.toHaveProperty('previewUrl');
+    expect(hadBrowser()).toBe(false);
+    expect(previewPortHolder(started[0]?.port ?? 0)).toBeUndefined();
+  }, 60_000);
+
+  it('runs on without them on a folder that declares no preview', async () => {
+    const ran = await runHarness({ ...ruled, bindingId: 'hb-none' }, 'run-ruled-none');
+    expect(ran.status).toBe('SUCCEEDED');
+    expect(ran.output?.['previewUnavailable']).toContain('`hb-none` declares no preview');
+    expect(hadBrowser()).toBe(false);
   }, 60_000);
 });

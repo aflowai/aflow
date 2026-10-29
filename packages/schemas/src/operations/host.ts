@@ -21,6 +21,7 @@ import {
   HostFolderUiAnswerSchema,
   HostFolderUiQuestionSchema,
   HostHarnessPreviewFlagSchema,
+  HOST_HARNESS_PREVIEW_OUTPUT_SHAPE,
 } from './hostFolderPreview.js';
 
 /**
@@ -1291,11 +1292,7 @@ export const HostHarnessRunOutputSchema = z.object({
       'screenshot by the payload holding the image. Present ' +
       'when the run asked for `browser` and the harness used it.',
   ),
-  previewLog: PayloadRefSchema.optional().describe(
-    'What the preview printed, standard output and error, from its start to its stop; present ' +
-      'when the run asked for `preview`. A payload of its own, beside `browserLog`.',
-  ),
-  previewUrl: z.string().optional().describe('Where the run’s preview answered, on loopback.'),
+  ...HOST_HARNESS_PREVIEW_OUTPUT_SHAPE,
   stderr: z
     .string()
     .optional()

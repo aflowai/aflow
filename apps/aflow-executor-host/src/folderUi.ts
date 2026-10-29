@@ -158,12 +158,32 @@ export function uiFilesAmong(paths: readonly string[], uiPaths: readonly string[
 export interface FolderUiContext {
   /** Whether this executor serves a browser at all. */
   readonly servesBrowser: boolean;
-  /** The orchestrator's judgement of the run's grant; undefined where it judged none. */
+  /**
+   * The orchestrator's judgement of the run's grant: `true` where it covers
+   * a harness browser, or where no grant governs the run; undefined where no
+   * grant was judged at all — a read outside a workflow run's task — so the
+   * answer says the browser is not known to be available rather than that it is.
+   */
   readonly browserGranted: boolean | undefined;
   /** The harness a run would get, or undefined where none can be chosen. */
   readonly harness: () => Promise<HarnessProfile | undefined>;
   /** A stored diff's text, or undefined where it cannot be read as one. */
   readonly readDiff: (ref: string) => Promise<string | undefined>;
+}
+
+/**
+ * The run's grant as the folder's answer reads it. The orchestrator judges it
+ * only when it dispatches a workflow run's task, and stamps nothing where no
+ * grant governs that run — which no gate then holds a browser to. Outside a
+ * workflow run's task nothing was judged, and the answer must not say the
+ * browser is available on a judgement no one made: undefined, for `grant_not_judged`.
+ */
+export function judgedBrowserGrant(ctx: {
+  readonly job: { readonly workflowExecution?: unknown };
+  readonly browserGranted?: boolean;
+}): boolean | undefined {
+  if (ctx.browserGranted !== undefined) return ctx.browserGranted;
+  return ctx.job.workflowExecution !== undefined ? true : undefined;
 }
 
 export async function answerFolderUi(
@@ -183,7 +203,9 @@ export async function answerFolderUi(
       ? 'harness'
       : context.browserGranted === false
         ? 'grant'
-        : undefined;
+        : context.browserGranted === undefined
+          ? 'grant_not_judged'
+          : undefined;
   return {
     preview: binding.preview !== undefined ? 'declared' : 'not_declared',
     uiPaths,

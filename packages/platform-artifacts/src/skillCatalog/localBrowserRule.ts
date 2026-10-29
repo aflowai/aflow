@@ -1,4 +1,8 @@
-import { EPHEMERAL_BROWSER_PROFILE, type HostFolderBrowserUnavailable } from '@aflow/schemas';
+import {
+  EPHEMERAL_BROWSER_PROFILE,
+  HOST_HARNESS_PREVIEW_IF_AVAILABLE,
+  type HostFolderBrowserUnavailable,
+} from '@aflow/schemas';
 import { bind, ctx, out, runInput, type SKIP } from './localPrShepherdWiring.js';
 
 /**
@@ -22,8 +26,15 @@ export const NEEDS_SETUP_DECISION = 'needs_setup';
 /** The decision that runs without one because nothing it starts from touches the UI. */
 export const NO_BROWSER_DECISION = 'none';
 
-/** The browser a harness run the rule holds for takes, beside `preview: true`. */
+/** The browser a harness run the rule holds for takes, beside its `preview`. */
 export const RULE_BROWSER = { profile: EPHEMERAL_BROWSER_PROFILE } as const;
+/**
+ * The preview a harness run the rule holds for asks for: best-effort, so one
+ * that cannot be had at run time — its port held, it never answers — leaves
+ * the run without it and its browser and says so in `previewUnavailable`,
+ * where a person's `preview: true` is refused (D21: none of these blocks).
+ */
+export const RULE_PREVIEW = HOST_HARNESS_PREVIEW_IF_AVAILABLE;
 
 // --- What is said where the browser cannot be had (D21) ----------------------
 
@@ -34,7 +45,11 @@ export const UI_NOT_SEEN_NO_GRANT =
   "UI change not seen in a browser: this run's grant does not cover the browser (browser.page:write), so it ran without one. A person with access to the space's capability profile grants `browser.page` write to give it one.";
 export const UI_NOT_SEEN_NO_BROWSER_SERVED =
   'UI change not seen in a browser: the machine holding the folder serves no browser, so the run had none.';
+export const UI_NOT_SEEN_GRANT_NOT_JUDGED =
+  "UI change not seen in a browser: no grant was judged for this run's read of the folder, so it ran without a browser rather than on one its grant may not cover.";
 export const BROWSER_UNAVAILABLE_ON_HARNESS = 'browser unavailable on harness';
+export const UI_NOT_SEEN_PREVIEW_UNAVAILABLE =
+  "UI change not seen in a browser: the folder's preview could not be had when the run started, so it ran without the preview and its browser";
 
 /** The command a person runs on the machine to declare a folder's preview, as the lines name it. */
 export const DECLARE_PREVIEW_ARGUMENTS =
@@ -72,8 +87,35 @@ function harnessLine() {
 const UNAVAILABLE_LINES: ReadonlyArray<readonly [HostFolderBrowserUnavailable, () => unknown]> = [
   ['harness', harnessLine],
   ['grant', () => UI_NOT_SEEN_NO_GRANT],
+  ['grant_not_judged', () => UI_NOT_SEEN_GRANT_NOT_JUDGED],
   ['executor', () => UI_NOT_SEEN_NO_BROWSER_SERVED],
 ];
+
+/** The line for a run whose preview could not be had, naming what happened to it. */
+function previewUnavailableLine() {
+  // A rule's text is substituted whether or not it holds: where the run said
+  // nothing, the line stands without what happened, and the rule does not hold.
+  return {
+    $firstOf: [
+      { $concat: [`${UI_NOT_SEEN_PREVIEW_UNAVAILABLE}: `, bind('previewUnavailable')] },
+      `${UI_NOT_SEEN_PREVIEW_UNAVAILABLE}.`,
+    ],
+  };
+}
+
+/**
+ * The D21 rule over `state.previewUnavailable`, what the harness run said of
+ * a preview the rule gave it and it could not have: first, since it is what
+ * happened rather than what the folder's answer foresaw.
+ */
+export function previewUnavailableRule(decision: string) {
+  return {
+    when: { expression: 'state.previewUnavailable != null' },
+    decision,
+    reason: previewUnavailableLine(),
+    value: { line: previewUnavailableLine() },
+  };
+}
 
 /**
  * The D21 rules over `state.ui`, the folder's answer: no preview first, then
@@ -103,7 +145,7 @@ export const UI_UNREAD_REASON =
 export const UI_UNTOUCHED_REASON =
   "Nothing the run starts from touches the folder's `uiPaths`, so it has no browser.";
 export const BROWSER_REASON =
-  "What the run starts from touches the folder's `uiPaths` and the folder declares a preview: the run takes `browser: { profile: 'ephemeral' }` and `preview: true`.";
+  "What the run starts from touches the folder's `uiPaths` and the folder declares a preview: the run takes `browser: { profile: 'ephemeral' }` and `preview: 'if_available'`, so a preview that cannot be had at run time leaves the run without it and its browser rather than failing it.";
 
 /** The rules before a run: the browser where its UI is touched and everything it needs can be had. */
 export const BROWSER_RULES = [
@@ -129,7 +171,7 @@ export function browserOtherwise(paragraph: string) {
   return {
     decision: BROWSER_DECISION,
     reason: BROWSER_REASON,
-    value: { browser: RULE_BROWSER, preview: true, paragraph: `\n\n${paragraph}` },
+    value: { browser: RULE_BROWSER, preview: RULE_PREVIEW, paragraph: `\n\n${paragraph}` },
   };
 }
 
@@ -208,6 +250,8 @@ export function decideOverUiTask(args: {
   name: string;
   goal: string;
   readTaskId: string;
+  /** The harness run whose `previewUnavailable` the rules read as `state.previewUnavailable`. */
+  harnessTaskId?: string;
   when?: { expression: string; onMissingRef: typeof SKIP };
   rules: readonly unknown[];
   otherwise: { decision: string; reason: string; value?: unknown };
@@ -218,7 +262,7 @@ export function decideOverUiTask(args: {
     goal: args.goal,
     type: 'operation' as const,
     operation: 'workflow.run.decide',
-    dependsOn: [args.readTaskId],
+    dependsOn: [args.readTaskId, ...(args.harnessTaskId !== undefined ? [args.harnessTaskId] : [])],
     ...(args.when !== undefined ? { when: args.when } : {}),
     retryability: 'safe' as const,
     maxAttempts: 1,
@@ -226,9 +270,21 @@ export function decideOverUiTask(args: {
       bindingId: runInput('bindingId'),
       ui: out(args.readTaskId, 'ui'),
       uiHarness: out(args.readTaskId, 'ui.browser.harness'),
+      ...(args.harnessTaskId !== undefined
+        ? { previewUnavailable: out(args.harnessTaskId, 'previewUnavailable') }
+        : {}),
     },
     context: ctx('workflow.run.decide'),
-    inputTemplate: { state: { ui: bind('ui') }, rules: args.rules, otherwise: args.otherwise },
+    inputTemplate: {
+      state: {
+        ui: bind('ui'),
+        ...(args.harnessTaskId !== undefined
+          ? { previewUnavailable: bind('previewUnavailable') }
+          : {}),
+      },
+      rules: args.rules,
+      otherwise: args.otherwise,
+    },
   };
 }
 
@@ -251,5 +307,85 @@ export function decideBrowserTask(goal: string, paragraph: string) {
   };
 }
 
-/** Holds where the decision before the run did not give it the preview. */
-export const NO_PREVIEW_OPEN = `tasks.${DECIDE_BROWSER_TASK_ID}.output.decision != '${BROWSER_DECISION}'`;
+export const PREVIEW_OPEN_TASK_ID = 'preview-open';
+/** The decision after a run that changed files and had no preview open. */
+export const NOT_OPEN_DECISION = 'not_open';
+
+/**
+ * After the harness run `harnessTaskId`: whether it changed anything, and
+ * whether it had its preview open — the rule did not give it one, or gave it
+ * one the run could not have. Read from the run's own result, where an absent
+ * `previewUrl` reads as `null`, which a task's `when` over that result could
+ * not: it skips on a field that is absent.
+ */
+export function previewOpenTask(harnessTaskId: string) {
+  return {
+    taskId: PREVIEW_OPEN_TASK_ID,
+    name: 'Read whether the run had its preview open',
+    goal: 'Decide from the run’s result whether it changed files without its preview open — the rule gave it none, or the preview could not be had when it started — so the files it changed are read again.',
+    type: 'operation' as const,
+    operation: 'workflow.run.decide',
+    dependsOn: [harnessTaskId],
+    optional: true,
+    retryability: 'safe' as const,
+    maxAttempts: 1,
+    inputBindings: {
+      patchRef: out(harnessTaskId, 'patchRef'),
+      previewUrl: out(harnessTaskId, 'previewUrl'),
+    },
+    context: ctx('workflow.run.decide'),
+    inputTemplate: {
+      state: { patchRef: bind('patchRef'), previewUrl: bind('previewUrl') },
+      rules: [
+        {
+          when: { expression: 'state.patchRef == null' },
+          decision: 'unchanged',
+          reason: 'The run changed nothing, so nothing is read again.',
+        },
+        {
+          when: { expression: 'state.previewUrl == null' },
+          decision: NOT_OPEN_DECISION,
+          reason: 'The run changed files without its preview open, so they are read again.',
+        },
+      ],
+      otherwise: { decision: 'open', reason: 'The run had its preview open.' },
+    },
+  };
+}
+
+/** Holds where the run changed files and had no preview open. */
+export const NO_PREVIEW_OPEN = `tasks.${PREVIEW_OPEN_TASK_ID}.output.decision == '${NOT_OPEN_DECISION}'`;
+
+/**
+ * After a harness run the rule gave the preview: where the run could not have
+ * it, D21's line naming what happened, promoted as `uiNotSeen`. Runs only
+ * where the run said so, and fails nothing: optional, as the read is.
+ */
+export function reportPreviewUnavailableTask(harnessTaskId: string) {
+  return {
+    taskId: 'report-preview',
+    name: 'Say why the run had no preview',
+    goal: "Where the run the rule gave the folder's preview could not have it when it started — its port held or in use, or it never answered — name, in D21's words, what happened to it: the run went on without the preview and its browser, and that is reported, never a failure.",
+    type: 'operation' as const,
+    operation: 'workflow.run.decide',
+    dependsOn: [harnessTaskId],
+    when: {
+      expression: `tasks.${harnessTaskId}.output.previewUnavailable != null`,
+      onMissingRef: 'skip' as const,
+    },
+    optional: true,
+    retryability: 'safe' as const,
+    maxAttempts: 1,
+    inputBindings: { previewUnavailable: out(harnessTaskId, 'previewUnavailable') },
+    context: ctx('workflow.run.decide'),
+    inputTemplate: {
+      state: { previewUnavailable: bind('previewUnavailable') },
+      rules: [previewUnavailableRule(NEEDS_SETUP_DECISION)],
+      otherwise: {
+        decision: NO_BROWSER_DECISION,
+        reason: 'The run had its preview: nothing to say.',
+      },
+    },
+    promoteOutputs: [{ kind: 'output_path' as const, path: 'value.line', toState: 'uiNotSeen' }],
+  };
+}

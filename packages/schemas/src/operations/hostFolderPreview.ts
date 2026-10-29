@@ -196,9 +196,16 @@ export function defaultFolderUiPaths(webAppDirs: readonly string[] = []): string
 /** How long the executor waits for a run's preview to answer on its ready path (Plan 320 D19). */
 export const FOLDER_PREVIEW_READY_TIMEOUT_MS = 120_000;
 
-/** `host.harness.run`'s `preview`: the boolean that asks for the folder's declared preview, never a declaration. */
+/**
+ * The `preview` a skill's rule asks for (Plan 320 D20, D21): the preview and
+ * the browser it is for where they can be had, and otherwise a run without
+ * them that says why in `previewUnavailable` — never a run refused for them.
+ */
+export const HOST_HARNESS_PREVIEW_IF_AVAILABLE = 'if_available';
+
+/** `host.harness.run`'s `preview`: a flag that asks for the folder's declared preview, never a declaration. */
 export const HostHarnessPreviewFlagSchema = z
-  .boolean()
+  .union([z.boolean(), z.literal(HOST_HARNESS_PREVIEW_IF_AVAILABLE)])
   .optional()
   .describe(
     "`true` starts the connected folder's declared preview before the harness starts — the " +
@@ -212,24 +219,46 @@ export const HostHarnessPreviewFlagSchema = z
       "the loop's agents already act with the operator's own posture, so a stricter one would " +
       'only add friction to the review. Needs `browser` with the `ephemeral` ' +
       'profile. Refused before any checkout where the folder declares no preview, and where its ' +
-      'fixed port is held by another run or anything else. The harness never starts a server.',
+      'fixed port is held by another run or anything else. The harness never starts a server. ' +
+      "`'if_available'` is what a skill's rule asks for: the same preview where it can be had; " +
+      'where it cannot — no preview declared, its port held or in use, it never answers, no ' +
+      'browser served — the run goes on without the preview and the browser it was for, and ' +
+      'the result says why in `previewUnavailable`.',
   );
+
+/** What `host.harness.run`'s result says of its preview. */
+export const HOST_HARNESS_PREVIEW_OUTPUT_SHAPE = {
+  previewLog: PayloadRefSchema.optional().describe(
+    'What the preview printed, standard output and error, from its start to its stop; present ' +
+      'when the run asked for `preview`. A payload of its own, beside `browserLog`.',
+  ),
+  previewUrl: z.string().optional().describe('Where the run’s preview answered, on loopback.'),
+  previewUnavailable: z
+    .string()
+    .optional()
+    .describe(
+      "Present where the run asked for its preview `'if_available'` and could not have it: " +
+        'what happened to the preview, in one line. The run went on without the preview and ' +
+        'the browser it was for; what the preview printed, where it started, is in `previewLog`.',
+    ),
+};
 
 /** What a run asking for a preview is refused for at once, or nothing when it may ask. */
 export function harnessPreviewRequestIssue(input: {
-  readonly preview?: boolean | undefined;
+  readonly preview?: boolean | typeof HOST_HARNESS_PREVIEW_IF_AVAILABLE | undefined;
   readonly browser?: { readonly profile: string } | undefined;
 }): string | undefined {
-  if (input.preview !== true) return undefined;
+  if (input.preview === undefined || input.preview === false) return undefined;
+  const asked = input.preview === true ? '`preview: true`' : `\`preview: '${input.preview}'\``;
   if (input.browser === undefined) {
     return (
-      '`preview: true` is given without `browser`. The preview is opened only in the run’s ' +
+      `${asked} is given without \`browser\`. The preview is opened only in the run’s ` +
       'own browser: add `browser: { profile: "ephemeral" }`, or drop `preview`.'
     );
   }
   if (input.browser.profile !== EPHEMERAL_BROWSER_PROFILE) {
     return (
-      `\`preview: true\` is given with the \`${input.browser.profile}\` profile. The preview's ` +
+      `${asked} is given with the \`${input.browser.profile}\` profile. The preview's ` +
       'port is opened to the run’s `ephemeral` browser alone, never to a profile the machine ' +
       'declares: use `browser: { profile: "ephemeral" }`.'
     );
@@ -315,7 +344,12 @@ export const HostFolderUiQuestionSchema = z
 export type HostFolderUiQuestion = z.infer<typeof HostFolderUiQuestionSchema>;
 
 /** Why a harness run on a folder could not be given a browser. */
-export const HostFolderBrowserUnavailableSchema = z.enum(['executor', 'harness', 'grant']);
+export const HostFolderBrowserUnavailableSchema = z.enum([
+  'executor',
+  'harness',
+  'grant',
+  'grant_not_judged',
+]);
 export type HostFolderBrowserUnavailable = z.infer<typeof HostFolderBrowserUnavailableSchema>;
 
 export const HostFolderUiAnswerSchema = z
@@ -342,7 +376,9 @@ export const HostFolderUiAnswerSchema = z
         unavailable: HostFolderBrowserUnavailableSchema.optional().describe(
           'Why a run could not be given a browser: `executor`, this machine serves none; ' +
             "`harness`, the harness has no browser arguments; `grant`, the run's grant does " +
-            'not cover `browser.page:write`. Absent where it could.',
+            'not cover `browser.page:write`; `grant_not_judged`, no grant was judged for the ' +
+            "read — it is not a workflow run's task — so whether a run may have a browser is not " +
+            'known. Absent where it could.',
         ),
       })
       .describe('Whether a harness run on the folder could be given a browser.'),

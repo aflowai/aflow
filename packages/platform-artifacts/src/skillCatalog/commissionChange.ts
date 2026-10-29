@@ -15,6 +15,9 @@ import {
   entryContract,
   NEEDS_SETUP_DECISION,
   NO_PREVIEW_OPEN,
+  PREVIEW_OPEN_TASK_ID,
+  previewOpenTask,
+  previewUnavailableRule,
   readUiTask,
   RULE_BINDINGS,
   RULE_INPUTS,
@@ -104,7 +107,7 @@ export const COMMISSION_RESULT_SCHEMA = {
 
 /** What the Helmsman needs once it has chosen the skill: carried as the skill's usage pitfalls. */
 const COMMISSION_PITFALLS: string[] = [
-  `What it needs: the connected folder and the brief — the task text, everything the coding agent needs and nothing it has to guess: the files and the lines where they are known, what is wrong and what right looks like, the tests to add, the checks to run and what its result reports. \`base\` is where the checkout starts: \`origin/main\` for new work, the branch's name for a fix appended to a branch — a fix round included, whose branch holds the earlier round's commit pushed or kept local — so the patch is made against the branch's head and never against the earlier commission's \`baseSha\`. A fix to a branch \`main\` has moved past also takes \`mergeFrom: origin/<base>\`, so the checkout merges it first and the agent resolves what conflicts. A further turn on the same work takes \`continueFrom\`, the \`sessionRef\` the earlier run reported, from the conversation that started that run: a session belongs to that conversation, and a commission from any other is refused it. \`harness\`, \`model\`, \`maxTurns\` and \`timeoutMs\` are optional. The browser is never asked for: where the brief names a file under the folder's \`uiPaths\`, or the branch it continues already changes one, and the folder declares a preview, the run takes a browser and the folder's preview by rule, and the brief gains one standard paragraph sending the coding agent to \`previewUrl\` — so name the files a UI change touches by path, and leave the dev-server URL out. Where the folder declares no preview, or the browser cannot be had, the run goes on without one and the result says so in \`uiNotSeen\`, with the command that settles it; a UI file the run changed without a preview is named there too. \`harness\` is named only to require a coding agent other than the space's preferred one; absent, the machine runs the space's preference, else its own default, each where installed, and the result says which ran. The budgets are sized for a slice already — ${String(COMMISSION_TIMEOUT_DEFAULT_MS / MINUTES)} minutes, and ${String(HOST_HARNESS_MAX_TURNS_DEFAULT)} turns on a coding agent that takes a turn budget — and are named only to change them.`,
+  `What it needs: the connected folder and the brief — the task text, everything the coding agent needs and nothing it has to guess: the files and the lines where they are known, what is wrong and what right looks like, the tests to add, the checks to run and what its result reports. \`base\` is where the checkout starts: \`origin/main\` for new work, the branch's name for a fix appended to a branch — a fix round included, whose branch holds the earlier round's commit pushed or kept local — so the patch is made against the branch's head and never against the earlier commission's \`baseSha\`. A fix to a branch \`main\` has moved past also takes \`mergeFrom: origin/<base>\`, so the checkout merges it first and the agent resolves what conflicts. A further turn on the same work takes \`continueFrom\`, the \`sessionRef\` the earlier run reported, from the conversation that started that run: a session belongs to that conversation, and a commission from any other is refused it. \`harness\`, \`model\`, \`maxTurns\` and \`timeoutMs\` are optional. The browser is never asked for: where the brief names a file under the folder's \`uiPaths\`, or the branch it continues already changes one, and the folder declares a preview, the run takes a browser and the folder's preview by rule, and the brief gains one standard paragraph sending the coding agent to \`previewUrl\` — so name the files a UI change touches by path, and leave the dev-server URL out. Where the folder declares no preview, or the browser or its preview cannot be had, the run goes on without them and the result says so in \`uiNotSeen\`, with the command that settles it; a UI file the run changed without a preview is named there too. \`harness\` is named only to require a coding agent other than the space's preferred one; absent, the machine runs the space's preference, else its own default, each where installed, and the result says which ran. The budgets are sized for a slice already — ${String(COMMISSION_TIMEOUT_DEFAULT_MS / MINUTES)} minutes, and ${String(HOST_HARNESS_MAX_TURNS_DEFAULT)} turns on a coding agent that takes a turn budget — and are named only to change them.`,
   `Start it with \`wait: 'none'\`. A commission runs for tens of minutes. Started that way it returns the run id at once, the conversation stays free, and the commission's end wakes it with the result. Several commissions may run at once on one machine, each in its own checkout. The machine runs only so many coding agents at once — ${String(HOST_HARNESS_CONCURRENCY_DEFAULT)} unless its operator chose another number — and a commission past that waits for one to end rather than being refused; its time counts from when it starts.`,
   `For a plan node: a commission for work in the space's plan is started with \`planNodeId\`, beside its inputs rather than among them, naming the node the round serves — the node opened with \`plan.node.get\` before the brief was written. It then shows under that node in the attention block of the conversation that started it, and when it ends the node holds a link to it. Its publication takes the same \`planNodeId\`.`,
   `The checks a brief asks for are the folder's own — its test runner on the touched tests, its type check, its linter, its formatter, and the guards its own pre-publication check runs over the whole tree; in Aflow's repository those are \`node --import tsx scripts/large-files/cli.ts check\` and \`node --conditions=ts-source --import tsx scripts/context-budget/cli.ts check\`, the two \`scripts/verify-commit.mjs\` runs, the second under the \`ts-source\` condition it runs it with so it reads the checkout's own source. The brief has the coding agent run every one of them in the commission's checkout before it returns, fix what fails in the same session, and put their output in the result the brief asks for. Nothing else runs them before publication, where the folder's declared checks run again on the commit, and a failure found there costs that publication and a further round.`,
@@ -196,7 +199,7 @@ const COMMISSION_TASKS = [
     question: { text: bind('task'), branch: bind('base'), harness: bind('harness') },
   }),
   decideBrowserTask(
-    "Decide, by rule over the folder's answer, whether the run takes `browser: { profile: 'ephemeral' }` and `preview: true` and its brief the standard paragraph: where the brief or the branch touches the folder's `uiPaths`, the folder declares a preview and the browser can be had. Where the preview is not declared or the browser cannot be had, the run goes on without one. No model is asked.",
+    "Decide, by rule over the folder's answer, whether the run takes `browser: { profile: 'ephemeral' }` and `preview: 'if_available'` and its brief the standard paragraph: where the brief or the branch touches the folder's `uiPaths`, the folder declares a preview and the browser can be had. Where the preview is not declared or the browser cannot be had, the run goes on without one. No model is asked.",
     COMMISSION_PREVIEW_PARAGRAPH,
   ),
   {
@@ -260,16 +263,14 @@ const COMMISSION_TASKS = [
       { kind: 'output_path' as const, path: 'continued', toState: 'continued' },
     ],
   },
+  previewOpenTask('commission'),
   {
     ...readUiTask({
       taskId: 'check-ui',
       name: "Read which changed files are the folder's UI",
       goal: "Ask the machine holding the folder which files the run changed fall under the folder's `uiPaths`, for a run that had no preview open: the rule before the run reads the brief and the branch, and a change it could not foresee is named here instead of passing silently.",
-      dependsOn: ['commission'],
-      when: {
-        allOf: [NO_PREVIEW_OPEN, 'tasks.commission.output.patchRef != null'],
-        onMissingRef: SKIP,
-      },
+      dependsOn: ['commission', PREVIEW_OPEN_TASK_ID],
+      when: { expression: NO_PREVIEW_OPEN, onMissingRef: SKIP },
       inputBindings: { patchRef: out('commission', 'patchRef'), harness: runInput('harness') },
       question: { patchRef: bind('patchRef'), harness: bind('harness') },
     }),
@@ -279,10 +280,11 @@ const COMMISSION_TASKS = [
     ...decideOverUiTask({
       taskId: 'report-ui',
       name: 'Say which UI change was not seen in a browser',
-      goal: "Name, in D21's words, why the UI files the run changed were not seen in a browser: the folder declares no preview, with the command that declares it; the harness or the grant could not take a browser; or the rule did not foresee the change. It is reported, never a failure: the review of the range is what sees a UI change working.",
+      goal: "Name, in D21's words, why the UI files the run changed were not seen in a browser: the preview the rule gave the run could not be had when it started, naming what happened to it; the folder declares no preview, with the command that declares it; the harness or the grant could not take a browser; or the rule did not foresee the change. It is reported, never a failure: the review of the range is what sees a UI change working.",
       readTaskId: 'check-ui',
+      harnessTaskId: 'commission',
       when: { expression: 'tasks.check-ui.output.ui.touched == true', onMissingRef: SKIP },
-      rules: setupRules(NEEDS_SETUP_DECISION),
+      rules: [previewUnavailableRule(NEEDS_SETUP_DECISION), ...setupRules(NEEDS_SETUP_DECISION)],
       otherwise: { decision: NOT_SEEN_DECISION, reason: UI_NOT_SEEN_BY_COMMISSION },
     }),
     promoteOutputs: [{ kind: 'output_path' as const, path: 'reason', toState: 'uiNotSeen' }],
@@ -412,7 +414,7 @@ const COMMISSION_CHANGE: SkillCatalogEntry = {
           variableId: 'uiNotSeen',
           name: 'UI not seen in a browser',
           description:
-            "Present where the run changed a file under the folder's `uiPaths` without its preview open, saying why in one line: the folder declares no preview (with the `aflow folder <bindingId> preview` command that declares one), the harness or the run's grant could not take a browser, or the rule before the run did not foresee the change. Reported, never blocking: the review of the range is what sees a UI change working.",
+            "Present where the run changed a file under the folder's `uiPaths` without its preview open, saying why in one line: the preview could not be had when the run started (the line names what happened), the folder declares no preview (with the `aflow folder <bindingId> preview` command), the harness or the run's grant could not take a browser, or the rule did not foresee the change. Reported, never blocking: the review of the range is what sees a UI change working.",
           required: false,
           sensitive: false,
           immutable: false,
@@ -471,7 +473,7 @@ const COMMISSION_CHANGE: SkillCatalogEntry = {
       priority: 50,
     },
     rationale:
-      "host.harness.run with every input a brief names as a run input: the description steers the Helmsman and the brief instructs the coding agent. The outputSchema asks only for summary, not required, since the patch is the product. patchRef is promoted with baseSha, merge and summary so a publication commits it as it stands. The browser is never an input (Plan 320 D20): host.binding.inspect says whether the brief or branch touches the folder's uiPaths, whether it declares a preview and whether the harness and grant can take a browser, and workflow.run.decide adds browser and preview by rule; the decision hands the harness run its browser, preview and paragraph as one value, bound by path. The trigger is best-effort, so a run without the preview is read again after it ends and each UI file it changed is named in uiNotSeen in D21's words; nothing about the browser fails the commission. The time defaults in the template; the turn budget is the machine's.",
+      "host.harness.run with every input a brief names as a run input: the description steers the Helmsman and the brief instructs the coding agent. The outputSchema asks only for summary, not required, since the patch is the product. patchRef is promoted with baseSha, merge and summary so a publication commits it as it stands. The browser is never an input (Plan 320 D20): host.binding.inspect says whether the brief or branch touches the folder's uiPaths, whether it declares a preview and whether the harness and grant can take a browser, and workflow.run.decide adds browser and preview ('if_available') by rule; the decision hands the harness run its browser, preview and paragraph as one value, bound by path. The trigger is best-effort, so a run without the preview is read again after it ends and each UI file it changed is named in uiNotSeen in D21's words; nothing about the browser fails the commission. The time defaults in the template; the turn budget is the machine's.",
   },
 };
 

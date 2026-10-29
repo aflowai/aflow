@@ -25,7 +25,9 @@ import {
 } from './commissionChange.js';
 import {
   BROWSER_UNAVAILABLE_ON_HARNESS,
+  RULE_PREVIEW,
   UI_NOT_SEEN_BY_COMMISSION,
+  UI_NOT_SEEN_PREVIEW_UNAVAILABLE,
   UI_NOT_SEEN_NO_GRANT,
   UI_NOT_SEEN_NO_PREVIEW,
 } from './localBrowserRule.js';
@@ -69,6 +71,7 @@ describe('Commission Change — a brief to the machine’s coding agent', () => 
       'read-ui',
       'decide-browser',
       'commission',
+      'preview-open',
       'check-ui',
       'report-ui',
     ]);
@@ -76,6 +79,7 @@ describe('Commission Change — a brief to the machine’s coding agent', () => 
       'host.binding.inspect',
       'workflow.run.decide',
       'host.harness.run',
+      'workflow.run.decide',
       'host.binding.inspect',
       'workflow.run.decide',
     ]);
@@ -84,7 +88,7 @@ describe('Commission Change — a brief to the machine’s coding agent', () => 
     expect(task?.context?.capabilities?.integrations ?? []).toEqual([]);
     expect(task?.retryability).toBe('unsafe');
     // Only the coding agent's run is the commission; nothing around it fails it.
-    for (const id of ['read-ui', 'decide-browser', 'check-ui']) {
+    for (const id of ['read-ui', 'decide-browser', 'preview-open', 'check-ui']) {
       expect(wf.tasks.find((t) => t.taskId === id)?.optional).toBe(true);
     }
   });
@@ -313,17 +317,26 @@ const CHANGE = {
   result: { summary: { title: 'Say why the cart is empty', paragraph: 'It says why.' } },
 };
 
+const PREVIEW_URL = 'http://127.0.0.1:47101/';
+
+/** The change, as a run that asked for the preview and had it returns it. */
+function changeWithPreview(input: Record<string, unknown>): TaskAnswer {
+  return input['preview'] !== undefined ? { ...CHANGE, previewUrl: PREVIEW_URL } : CHANGE;
+}
+
 /**
  * A commission over `runInputs`: the folder answering `before` ahead of the
- * run and `after` once it ended, the coding agent returning one change.
+ * run and `after` once it ended, the coding agent returning one change — with
+ * the preview open where the run asked for it, unless `change` says otherwise.
  */
 function commission(
   before: TaskAnswer,
   after: TaskAnswer = folderAnswer({ preview: 'declared' }),
   runInputs: Record<string, unknown> = { bindingId: 'hb_repo', task: UI_BRIEF },
+  change: (input: Record<string, unknown>) => TaskAnswer = changeWithPreview,
 ) {
-  return runSkillTasks(wf.tasks, runInputs, (taskId) =>
-    taskId === 'read-ui' ? before : taskId === 'check-ui' ? after : CHANGE,
+  return runSkillTasks(wf.tasks, runInputs, (taskId, input) =>
+    taskId === 'read-ui' ? before : taskId === 'check-ui' ? after : change(input),
   );
 }
 
@@ -345,7 +358,7 @@ describe('Commission Change — the browser and the preview by rule (Plan 320 D2
     const run = commission(folderAnswer({ preview: 'declared', ...TOUCHED }));
     const call = HostHarnessRunInputSchema.parse(run.inputs.get('commission'));
     expect(call.browser).toEqual({ profile: 'ephemeral' });
-    expect(call.preview).toBe(true);
+    expect(call.preview).toBe(RULE_PREVIEW);
     expect(call.task).toBe(`${UI_BRIEF}\n\n${COMMISSION_PREVIEW_PARAGRAPH}`);
     // A run that had the preview open is not read again, and says nothing.
     expect(run.ran).not.toContain('check-ui');
@@ -383,7 +396,7 @@ describe('Commission Change — the browser and the preview by rule (Plan 320 D2
     });
     const call = HostHarnessRunInputSchema.parse(run.inputs.get('commission'));
     expect(call.task).toHaveLength(HOST_HARNESS_TASK_MAX_LENGTH);
-    expect(call.preview).toBe(true);
+    expect(call.preview).toBe(RULE_PREVIEW);
   });
 
   it('gives no browser where the brief and the branch touch no UI file', () => {
@@ -456,6 +469,33 @@ describe('Commission Change — the browser and the preview by rule (Plan 320 D2
     expect(run.state['uiNotSeen']).toContain(`${BROWSER_UNAVAILABLE_ON_HARNESS} codex`);
     expect(run.state['uiNotSeen']).toContain('`aflow harness browser codex`');
   });
+
+  it.each([
+    ['its fixed port is held by another run', 'preview port 41801 is held by run run-2.'],
+    [
+      'it never answers',
+      'The preview `yarn dev` did not answer at http://127.0.0.1:47101/ within 120 s. What it printed is in `previewLog`.',
+    ],
+  ])(
+    'runs on and says so where the preview the rule gave it cannot be had: %s (D21)',
+    (_case, happened) => {
+      const touched = folderAnswer({ preview: 'declared', ...TOUCHED });
+      // The executor ran the commission without the preview and its browser,
+      // and said what happened to the preview instead of failing the run.
+      const run = commission(touched, touched, undefined, () => ({
+        ...CHANGE,
+        previewUnavailable: happened,
+      }));
+      const call = HostHarnessRunInputSchema.parse(run.inputs.get('commission'));
+      expect(call.preview).toBe(RULE_PREVIEW);
+      expect(run.statuses.get('commission')).toBe('succeeded');
+      expect(run.inputs.get('preview-open')?.['state']).toEqual({ patchRef: PATCH_REF });
+      expect(run.ran).toContain('check-ui');
+      expect(run.state['uiNotSeen']).toBe(`${UI_NOT_SEEN_PREVIEW_UNAVAILABLE}: ${happened}`);
+      expect(run.state['uiFilesNotSeen']).toEqual(['src/web/Checkout.vue']);
+      expect(run.state).toMatchObject({ patchRef: PATCH_REF });
+    },
+  );
 
   it('runs without a browser where the folder cannot be read, before the run or after it', () => {
     const run = commission('fail', 'fail');

@@ -4,7 +4,8 @@
  * fall under the folder's `uiPaths` — the declared ones, else the default —
  * says whether the folder declares a preview, and says why a harness run there
  * could not be given a browser: the executor serves none, the harness takes no
- * browser arguments, or the run's grant withholds it.
+ * browser arguments, or the run's grant withholds it — and, where no grant was
+ * judged for the read, that the browser is not known to be available.
  */
 import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -21,6 +22,7 @@ import {
   answerFolderUi,
   type FolderUiContext,
   inFolderFrame,
+  judgedBrowserGrant,
   pathsNamedIn,
   uiFilesAmong,
 } from '../folderUi.js';
@@ -39,7 +41,7 @@ const CODEX = { id: 'codex', mcpArgs: [] as string[] } as HarnessProfile;
 function context(over: Partial<FolderUiContext> = {}): FolderUiContext {
   return {
     servesBrowser: true,
-    browserGranted: undefined,
+    browserGranted: true,
     harness: async () => await Promise.resolve(CLAUDE),
     readDiff: async () => await Promise.resolve(undefined),
     ...over,
@@ -191,6 +193,28 @@ describe('host.binding.inspect — the folder’s UI', () => {
       unavailable: 'grant',
     });
     expect(await unavailable({ browserGranted: true })).toEqual({ harness: 'claude' });
+  });
+
+  it('never says the browser is available where no grant was judged for the read', async () => {
+    const answer = await answerFolderUi(
+      folder(PREVIEW),
+      { from: 'main', at: 'feature' },
+      context({ browserGranted: undefined }),
+    );
+    expect(answer.browser).toEqual({ harness: 'claude', unavailable: 'grant_not_judged' });
+    expect(HostFolderUiAnswerSchema.parse(answer)).toEqual(answer);
+  });
+
+  it('reads the grant as judged in a workflow run’s task, and as not judged anywhere else', () => {
+    const task = { job: { workflowExecution: { runId: 'r1', taskId: 'read-ui' } } };
+    const step = { job: { sessionId: 's1' } };
+    // Stamped by the orchestrator: as it judged it.
+    expect(judgedBrowserGrant({ ...task, browserGranted: false })).toBe(false);
+    expect(judgedBrowserGrant({ ...task, browserGranted: true })).toBe(true);
+    // A workflow run's task with nothing stamped: no grant governs it, so no gate holds it to one.
+    expect(judgedBrowserGrant(task)).toBe(true);
+    // A session's step, an agent's call: nothing was judged.
+    expect(judgedBrowserGrant(step)).toBeUndefined();
   });
 });
 

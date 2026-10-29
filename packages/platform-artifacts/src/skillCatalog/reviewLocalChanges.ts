@@ -4,6 +4,7 @@ import {
   decideBrowserTask,
   entryContract,
   readUiTask,
+  reportPreviewUnavailableTask,
   RULE_BINDINGS,
   RULE_INPUTS,
   ruleBrief,
@@ -190,7 +191,7 @@ export const BRIEF_MAX_TURNS = 8;
 const REVIEW_PITFALLS: string[] = [
   `What it needs: the connected folder holding the repository, and the range to review as its two ends — \`at\`, the commit it ends at, and \`from\`, where it starts. Ask for whichever is missing — \`main..HEAD\` is \`from\` \`main\` and \`at\` \`HEAD\`, \`HEAD~3..HEAD\` is \`from\` \`HEAD~3\` and \`at\` \`HEAD\`, and a single commit is \`at\` alone. The range is made from the two, so the commit it ends at and the commit the review stands on are one value and cannot disagree. The review lists a range's commits as given and reads its diff from where the two ends meet, \`main...HEAD\`, so a branch \`main\` has moved past reads as what it adds and not as undoing what \`main\` took since. A focus is optional and worth asking for when the request names a worry: security, an API surface, the blast radius of a refactor.`,
   `Depth is a first-class choice, not something to ask the coding agent for in \`focus\`. \`brief\` is the smoke test — a first look, a check that the mechanics work: a handful of tool calls, one paragraph, and a verdict of \`comment\` unless something is plainly a blocker. An operator asking for something quick, a glance or a sanity check means \`brief\`, and it is budgeted in coding-agent turns (\`maxTurns\`: ${String(BRIEF_MAX_TURNS)}) so that it stays brief. \`standard\` reads the range with the repository around it. \`deep\` also runs the project's own checks over the touched files, and costs the most.`,
-  `The browser is never asked for, in \`focus\` or anywhere else. Where the range touches the folder's \`uiPaths\` and the folder declares a preview, the review runs with a browser and that preview by rule, opens the pages the range changes, exercises what changed and reports what it saw as part of its verdict. Where the folder declares no preview, or the browser cannot be had, it reviews the range as a diff and \`uiNotSeen\` says why, with the command that settles it.`,
+  `The browser is never asked for, in \`focus\` or anywhere else. Where the range touches the folder's \`uiPaths\` and the folder declares a preview, the review runs with a browser and that preview by rule, opens the pages the range changes, exercises what changed and reports what it saw as part of its verdict. Where the folder declares no preview, or the browser or its preview cannot be had, it reviews the range as a diff and \`uiNotSeen\` says why, with the command that settles it.`,
   `The review stands on the commit it judges. It runs over an isolated copy of the repository detached at \`at\`, so the files it reads whole and the checks it runs at \`deep\` are the change's own; the range's base names only where the diff starts. Only committed work is reviewed: anything still uncommitted in the working tree is invisible to it. When the request is about work in progress, say so and ask for it to be committed first — a branch is fine — then review the range those commits make.`,
   `With the result: report the verdict and the summary. The summary is the review — it names every finding with its severity and its file and line, blockers first, and the checks that ran — so it needs nothing added to it. The evidence behind each finding and the fix it suggests stay on the run, to be opened when someone wants them. Nothing was changed, so a finding is a proposal until someone acts on it: offer to commission the fix as its own piece of work, and never edit the files while reporting. Run the review again once a fix lands as a new commit, over the range that includes it — a verdict covers the commits it read and nothing later.`,
 ];
@@ -261,7 +262,7 @@ const REVIEW_TASKS = [
   }),
   {
     ...decideBrowserTask(
-      "Decide, by rule over the folder's answer, whether the review takes `browser: { profile: 'ephemeral' }` and `preview: true` and its brief the paragraph asking it to open and exercise what changed: where the range touches the folder's `uiPaths`, the folder declares a preview and the browser can be had. Where the preview is not declared or the browser cannot be had, the review goes on without one and says why in D21's words. Never by the depth, the focus or the Helmsman; no model is asked.",
+      "Decide, by rule over the folder's answer, whether the review takes `browser: { profile: 'ephemeral' }` and `preview: 'if_available'` and its brief the paragraph asking it to open and exercise what changed: where the range touches the folder's `uiPaths`, the folder declares a preview and the browser can be had. Where the preview is not declared or the browser cannot be had, the review goes on without one and says why in D21's words. Never by the depth, the focus or the Helmsman; no model is asked.",
       REVIEW_PREVIEW_PARAGRAPH,
     ),
     // A setup decision's line; absent wherever the review had the browser or needed none.
@@ -324,6 +325,7 @@ const REVIEW_TASKS = [
       { kind: 'output_path' as const, path: 'result.findings', toState: 'findings' },
     ],
   },
+  reportPreviewUnavailableTask('review'),
 ];
 
 const REVIEW_LOCAL_CHANGES: SkillCatalogEntry = {
@@ -409,10 +411,13 @@ const REVIEW_LOCAL_CHANGES: SkillCatalogEntry = {
           variableId: 'uiNotSeen',
           name: 'UI not seen in a browser',
           description:
-            "Present where the range touches the folder's `uiPaths` and the review ran without a browser, saying why in one line: the folder declares no preview (with the `aflow folder <bindingId> preview` command that declares one), or the harness or the run's grant could not take a browser. Reported, never blocking.",
+            "Present where the range touches the folder's `uiPaths` and the review ran without a browser, saying why in one line: the folder declares no preview (with the `aflow folder <bindingId> preview` command that declares one), the harness or the run's grant could not take a browser, or the preview the rule gave the review could not be had when it started (its port held or in use, or it never answered — the line names which). Reported, never blocking.",
           required: false,
           sensitive: false,
           immutable: false,
+          // The decision before the run writes it where the run has no browser, the
+          // report after it only where the run was given one and could not have it.
+          writers: 'alternatives' as const,
         },
       ],
       output: {
@@ -460,7 +465,7 @@ const REVIEW_LOCAL_CHANGES: SkillCatalogEntry = {
       priority: 50,
     },
     rationale:
-      "host.harness.run with an outputSchema of findings and a verdict: the description steers the Helmsman and the task prose instructs the harness. Read-only by construction — no task writes, pushes or publishes. The checkout is detached at the range's tip (at, the harness base) and the range is built as <from>..<at>, so its tip and the checkout cannot disagree; uncommitted work is invisible. The browser is added by rule (Plan 320 D17, D20), never by the depth, the focus or the Helmsman: host.binding.inspect says whether the range touches the folder's uiPaths, whether it declares a preview and whether the harness and grant can take a browser, and workflow.run.decide gives the run browser and preview where all of that holds; the decision hands the harness run its browser, preview and paragraph as one value, bound by path. The preview serves the range as it will be pushed, so what the reviewer sees is part of the verdict; where the browser cannot be had, uiNotSeen says why in D21's words.",
+      "host.harness.run with an outputSchema of findings and a verdict: the description steers the Helmsman and the task prose instructs the harness. Read-only by construction — no task writes, pushes or publishes. The checkout is detached at the range's tip (at, the harness base) and the range is built as <from>..<at>, so its tip and the checkout cannot disagree; uncommitted work is invisible. The browser is added by rule (Plan 320 D17, D20), never by the depth, the focus or the Helmsman: host.binding.inspect says whether the range touches the folder's uiPaths, whether it declares a preview and whether the harness and grant can take a browser, and workflow.run.decide gives the run browser and preview ('if_available') where all of that holds, handed to the harness run as one value bound by path. The preview serves the range as it will be pushed, so what the reviewer sees is part of the verdict; where the browser or the preview cannot be had, uiNotSeen says why in D21's words.",
   },
 };
 

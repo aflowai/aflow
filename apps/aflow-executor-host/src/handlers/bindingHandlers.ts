@@ -38,7 +38,7 @@ import {
   requireBinding,
   requireSpace,
 } from '../bindings.js';
-import { answerFolderUi } from '../folderUi.js';
+import { answerFolderUi, judgedBrowserGrant } from '../folderUi.js';
 import { sandboxPostureOf } from '../sandboxPosture.js';
 import {
   DIFF_CEILING_BYTES,
@@ -107,7 +107,7 @@ async function inspect(
         ? undefined
         : await answerFolderUi(binding, question, {
             servesBrowser,
-            browserGranted: ctx.browserGranted,
+            browserGranted: judgedBrowserGrant(ctx),
             harness: async () =>
               await selectHarness(
                 policy.harnesses,

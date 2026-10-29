@@ -415,6 +415,22 @@ describe('host.harness.run asks for its folder’s preview with a boolean (Plan 
     expect(message).toContain('`ephemeral` browser alone');
   });
 
+  it("takes the rule’s `preview: 'if_available'` under the same terms, and no other word", () => {
+    expect(issues({ preview: 'if_available', browser: { profile: 'ephemeral' } })).toEqual([]);
+    const [message] = issues({ preview: 'if_available' });
+    expect(message).toContain("`preview: 'if_available'` is given without `browser`");
+    expect(issues({ preview: 'always', browser: { profile: 'ephemeral' } })).not.toEqual([]);
+  });
+
+  it('says on the result why a run asking `if_available` went on without its preview', () => {
+    const output = toJsonSchemaSync(HostHarnessRunOutputSchema) as {
+      properties: Record<string, { description?: string }>;
+    };
+    expect(output.properties['previewUnavailable']?.description).toContain(
+      'went on without the preview',
+    );
+  });
+
   it('refuses a declaration in its place', () => {
     expect(
       issues({ preview: { command: 'yarn dev' }, browser: { profile: 'ephemeral' } }),
