@@ -210,7 +210,8 @@ export async function deleteMcpServerDefinition(
 
 /**
  * `scope` is what a new row is created with; `scopeOnUpdate` is what an
- * existing row's scope becomes, `null` keeping the stored one.
+ * existing row's scope becomes, `null` keeping the stored one. The returned
+ * `scope` is the row's scope after the write.
  */
 export async function upsertMcpServerBinding(
   opts: McpIntegrationAdminScope & {
@@ -218,7 +219,7 @@ export async function upsertMcpServerBinding(
     scope: Record<string, unknown>;
     scopeOnUpdate: Record<string, unknown> | null;
   },
-): Promise<{ created: boolean }> {
+): Promise<{ created: boolean; scope: Record<string, unknown> }> {
   const { db, tenantId, spaceId, binding, scope, scopeOnUpdate } = opts;
   await enforceIntegrationHostPolicy({
     db,
@@ -249,7 +250,7 @@ export async function upsertMcpServerBinding(
       }
     }
 
-    return tx.execute<{ created: boolean }>(sql`
+    return tx.execute<{ created: boolean; scope: Record<string, unknown> }>(sql`
       INSERT INTO mcp_server_bindings (
         binding_id, server_id, name, description, space_id,
         scope_json, auth_json, connection_policy_json,
@@ -285,7 +286,7 @@ export async function upsertMcpServerBinding(
         client_scope = EXCLUDED.client_scope,
         enabled = EXCLUDED.enabled,
         updated_at = NOW()
-      RETURNING (xmax = 0) AS created
+      RETURNING (xmax = 0) AS created, scope_json AS scope
     `);
   });
 
@@ -296,7 +297,8 @@ export async function upsertMcpServerBinding(
       bindingId: binding.bindingId,
     });
   }
-  return { created: rows[0]?.created === true };
+  const row = rows[0];
+  return { created: row?.created === true, scope: row?.scope ?? scope };
 }
 
 /**

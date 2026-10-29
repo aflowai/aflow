@@ -284,11 +284,22 @@ describe('mcp.binding.upsert', () => {
     auth: { type: 'none' },
   };
 
+  const runScope = { tenantId: 'tenant-1', spaceId: SPACE };
+
+  /** The COALESCE operand an update writes as scope_json; null keeps the stored scope. */
+  function scopeOnUpdateParam(): unknown {
+    return executedParams[0]?.at(-1);
+  }
+
   it('writes an unauthenticated binding enabled, stamped with the run tenant and space', async () => {
-    executeRows = [{ created: true }];
+    executeRows = [{ created: true, scope: runScope }];
     await handleMcpServerAdminInline(buildArgs('mcp.binding.upsert', binding));
 
-    expect(decodeOutput(lastResult())).toEqual({ bindingId: 'docs-default', created: true });
+    expect(decodeOutput(lastResult())).toEqual({
+      bindingId: 'docs-default',
+      created: true,
+      scope: runScope,
+    });
     expect(executed).toHaveLength(1);
     expect(executed[0]).toContain('INSERT INTO mcp_server_bindings');
     const storedScope = JSON.stringify({ tenantId: 'tenant-1', spaceId: SPACE });
@@ -319,7 +330,7 @@ describe('mcp.binding.upsert', () => {
   });
 
   it('writes a credentialed binding disabled, ready for mcp.binding.test', async () => {
-    executeRows = [{ created: true }];
+    executeRows = [{ created: true, scope: runScope }];
     await handleMcpServerAdminInline(
       buildArgs('mcp.binding.upsert', {
         ...binding,
@@ -327,7 +338,50 @@ describe('mcp.binding.upsert', () => {
         enabled: false,
       }),
     );
-    expect(decodeOutput(lastResult())).toEqual({ bindingId: 'docs-default', created: true });
+    expect(decodeOutput(lastResult())).toEqual({
+      bindingId: 'docs-default',
+      created: true,
+      scope: runScope,
+    });
+  });
+
+  it('keeps the stored flow narrowing on an update that omits flowId, and reports it', async () => {
+    executeRows = [{ created: false, scope: { ...runScope, flowId: 'flow-7' } }];
+    await handleMcpServerAdminInline(buildArgs('mcp.binding.upsert', binding));
+
+    expect(scopeOnUpdateParam()).toBeNull();
+    expect(decodeOutput(lastResult())).toEqual({
+      bindingId: 'docs-default',
+      created: false,
+      scope: { ...runScope, flowId: 'flow-7' },
+    });
+  });
+
+  it('narrows to a stated flowId on create and on update', async () => {
+    executeRows = [{ created: true, scope: { ...runScope, flowId: 'flow-9' } }];
+    await handleMcpServerAdminInline(
+      buildArgs('mcp.binding.upsert', { ...binding, scope: { tenantId: 'x', flowId: 'flow-9' } }),
+    );
+    const stated = JSON.stringify({ flowId: 'flow-9', ...runScope });
+    expect(executedParams[0]).toContain(stated);
+    expect(scopeOnUpdateParam()).toBe(stated);
+  });
+
+  it('widens to space-wide only when flowId is stated as null', async () => {
+    executeRows = [{ created: false, scope: runScope }];
+    await handleMcpServerAdminInline(
+      buildArgs('mcp.binding.upsert', { ...binding, scope: { tenantId: 'x', flowId: null } }),
+    );
+    expect(scopeOnUpdateParam()).toBe(JSON.stringify(runScope));
+    expect(decodeOutput(lastResult())['scope']).toEqual(runScope);
+  });
+
+  it('refuses an empty flowId rather than reading it as space-wide', async () => {
+    await handleMcpServerAdminInline(
+      buildArgs('mcp.binding.upsert', { ...binding, scope: { tenantId: 'x', flowId: '' } }),
+    );
+    expect(lastError().code).toBe('MCP_ADMIN_INVALID_INPUT');
+    expect(executed).toHaveLength(0);
   });
 
   it('refuses a scope naming another space', async () => {

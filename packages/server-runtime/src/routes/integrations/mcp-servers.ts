@@ -162,7 +162,9 @@ export function registerMcpServerRoutes(fastify: FastifyInstance): void {
       config: { authz: { resource: 'api_config', action: 'write', spaceIdFrom: 'requireSpace' } },
       schema: {
         tags: ['Integrations'],
-        summary: 'Delete an MCP server definition',
+        summary:
+          'Delete an MCP server definition with its bindings, its space-owned OAuth tokens and ' +
+          'consent state, and the credentials no other binding in the space references',
         params: z.object({ serverId: z.string() }),
         response: {
           200: z.object({ status: z.string() }),

@@ -124,19 +124,29 @@ async function runOp(
       const { scope: statedScope, ...binding } = parseInput(McpBindingUpsertInputSchema, op, input);
       assertRunSpace(statedScope.spaceId, spaceId, op);
       // The tenant and space come from the run; `flowId` is the one narrowing
-      // the caller owns.
-      const storedScope = {
-        ...(statedScope.flowId ? { flowId: statedScope.flowId } : {}),
-        tenantId,
-        spaceId,
-      };
-      const { created } = await upsertMcpServerBinding({
+      // the caller owns, and only a stated one (a flow, or null for space-wide)
+      // replaces what an existing row stores.
+      const identity = { tenantId, spaceId };
+      const { created, scope: storedScope } = await upsertMcpServerBinding({
         ...scope,
         binding,
-        scope: storedScope,
-        scopeOnUpdate: storedScope,
+        scope: statedScope.flowId ? { flowId: statedScope.flowId, ...identity } : identity,
+        scopeOnUpdate:
+          statedScope.flowId === undefined
+            ? null
+            : statedScope.flowId === null
+              ? identity
+              : { flowId: statedScope.flowId, ...identity },
       });
-      const output: McpBindingUpsertOutput = { bindingId: binding.bindingId, created };
+      const storedFlowId = storedScope['flowId'];
+      const output: McpBindingUpsertOutput = {
+        bindingId: binding.bindingId,
+        created,
+        scope: {
+          ...identity,
+          ...(typeof storedFlowId === 'string' && storedFlowId ? { flowId: storedFlowId } : {}),
+        },
+      };
       return output;
     }
     case 'mcp.binding.delete': {

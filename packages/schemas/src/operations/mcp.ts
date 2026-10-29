@@ -149,8 +149,11 @@ export const McpServerGetOutputSchema = z.object({
 export type McpServerGetOutput = z.infer<typeof McpServerGetOutputSchema>;
 
 export const McpServerListInputSchema = z.object({
-  /** Filter by space; omit to list across all spaces in tenant. */
-  spaceId: z.string().uuid().optional(),
+  spaceId: z
+    .string()
+    .uuid()
+    .describe("Optional. The run's space is the one listed; naming any other space is refused.")
+    .optional(),
   /** Filter by source (platform/custom/discovered/bundle). */
   source: z.enum(['platform', 'custom', 'discovered', 'bundle']).optional(),
   /** Filter by enabled status. */
@@ -210,12 +213,31 @@ export const McpBindingUpsertInputSchema = McpServerBindingSchema.omit({
   cachedToolsAt: true,
   pinnedOrigin: true,
   sessionMetadata: true,
+}).extend({
+  scope: McpServerBindingSchema.shape.scope.extend({
+    // Omission is not a statement: an update that leaves flowId out must not
+    // widen an operator's flow narrowing to the whole space.
+    flowId: z
+      .string()
+      .min(1, 'flowId must name a flow; pass null to make the binding space-wide')
+      .nullable()
+      .optional()
+      .describe(
+        'Narrow the binding to one flow. Omitted: a new binding is space-wide and an existing ' +
+          'binding keeps the flow it already has. null: make the binding space-wide, removing ' +
+          'any stored flow.',
+      ),
+  }),
 });
 export type McpBindingUpsertInput = z.infer<typeof McpBindingUpsertInputSchema>;
 
 export const McpBindingUpsertOutputSchema = z.object({
   bindingId: z.string(),
   created: z.boolean(),
+  scope: McpServerBindingSchema.shape.scope.describe(
+    'The scope stored after this write. An update that omitted scope.flowId kept the stored ' +
+      'flowId, which appears here.',
+  ),
 });
 export type McpBindingUpsertOutput = z.infer<typeof McpBindingUpsertOutputSchema>;
 
@@ -556,12 +578,13 @@ export const McpOperationRegistrations: OperationRegistration[] = [
     name: 'List MCP Server Definitions',
     actionLabel: 'Listing MCP servers…',
     semanticDescription:
-      'List MCP server definitions in the tenant, optionally filtered by space, source, or enabled status.',
+      "List the MCP server definitions in the run's space, optionally filtered by source or " +
+      'enabled status. Other spaces are never listed.',
     tags: ['crud', 'mcp'],
     crudView: { entityType: 'mcp_server_definition', action: 'read' },
     idempotency: 'idempotent',
     usage: {
-      oneLine: 'List MCP server definitions in this tenant.',
+      oneLine: "List MCP server definitions in the run's space.",
       whenToUse: ['Browsing available MCP servers', 'Auditing platform vs custom installs'],
       whenNotToUse: ['Looking up a single known definition — use mcp.server.get'],
       pitfalls: [],
@@ -578,19 +601,25 @@ export const McpOperationRegistrations: OperationRegistration[] = [
     name: 'Delete MCP Server Definition',
     actionLabel: 'Deleting MCP server…',
     semanticDescription:
-      'Delete an MCP server definition. Bindings referencing this definition become orphaned ' +
-      '— delete them first or repoint to a new definition.',
+      "Delete an MCP server definition from the run's space together with what exists only for " +
+      "it there: every binding to it, the space's OAuth tokens and in-flight OAuth consent state " +
+      'for it, and the stored credentials no remaining API or MCP binding in the space references. ' +
+      'No binding survives to repoint.',
     tags: ['crud', 'mcp'],
     crudView: { entityType: 'mcp_server_definition', action: 'delete' },
     privileged: true,
     idempotency: 'idempotent',
     mutates: true,
     usage: {
-      oneLine: 'Delete an MCP server definition.',
-      whenToUse: ['Removing a server that is no longer needed'],
-      whenNotToUse: ['Disabling temporarily — set enabled: false on the binding instead'],
+      oneLine: 'Delete an MCP server definition with its bindings, tokens and unused credentials.',
+      whenToUse: ['Removing a server and every connection to it from this space for good'],
+      whenNotToUse: [
+        'Disabling temporarily — set enabled: false on the binding instead',
+        'Removing one connection — use mcp.binding.delete, which keeps the server and its OAuth tokens',
+      ],
       pitfalls: [
-        'Bindings referencing the deleted definition will fail with definition_not_found.',
+        'Irreversible: re-adding the server means upserting its bindings, storing their credential values and completing OAuth consent again.',
+        "User- and tenant-owned OAuth tokens survive; only the space's own tokens for this server are removed.",
       ],
       minimalExampleInput: {
         serverId: 'example-mcp',
@@ -670,6 +699,7 @@ export const McpOperationRegistrations: OperationRegistration[] = [
       pitfalls: [
         'Credentials are referenced by credentialKey only — store actual values via the Integrations page.',
         'Credentialed bindings require mcp.binding.test to populate pinnedOrigin before they can be enabled.',
+        'Updating a binding without scope.flowId keeps its stored flow narrowing; pass scope.flowId: null to make it space-wide. The output scope is what is stored.',
       ],
       minimalExampleInput: {
         bindingId: 'kaggle-default',

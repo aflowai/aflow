@@ -105,9 +105,9 @@ describe('the routes use this contract rather than their own copy', () => {
         fs.readFileSync(new URL('./bindings.ts', import.meta.url), 'utf8'),
       ),
     ]);
-    for (const [name, src] of [
-      ['mcp-bindings.ts', mcp],
-      ['bindings.ts', api],
+    for (const [name, src, requestScope] of [
+      ['mcp-bindings.ts', mcp, 'requestScope'],
+      ['bindings.ts', api, 'body.scope'],
     ] as const) {
       // At the call sites, not merely imported: an unused import satisfies a
       // `toContain` on the bare name, which is how a copy of this schema sat in
@@ -116,7 +116,10 @@ describe('the routes use this contract rather than their own copy', () => {
         'scope: RequestBindingScopeSchema',
       );
       expect(src, `${name} composes its stored scope by hand`).toContain(
-        'composeStoredBindingScope(body.scope',
+        `composeStoredBindingScope(${requestScope}`,
+      );
+      expect(src, `${name} does not keep the stored scope on an update that omits it`).toContain(
+        `statedBindingScope(${requestScope}`,
       );
       expect(src, `${name} keeps its own copy of the request scope`).not.toContain(
         'scope: z.object({ flowId',
@@ -159,8 +162,10 @@ describe('an update that says nothing about scope', () => {
 describe('the upserts preserve rather than overwrite', () => {
   it('coalesces to the stored column instead of taking EXCLUDED outright', async () => {
     const fs = await import('node:fs');
+    // The MCP route's SQL is the shared admin function's, which the orchestrator
+    // runs too; mcpRoutes.pg.test.ts exercises it against Postgres.
     for (const [name, table] of [
-      ['mcp-bindings.ts', 'mcp_server_bindings'],
+      ['../../../../cybernetic-runtime/src/mcpIntegrationAdmin.ts', 'mcp_server_bindings'],
       ['bindings.ts', 'api_bindings'],
     ] as const) {
       const src = fs.readFileSync(new URL(`./${name}`, import.meta.url), 'utf8');
