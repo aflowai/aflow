@@ -291,26 +291,25 @@ export function createWorkflowOperationRegistrations(
       name: 'Get Workflow',
       actionLabel: 'Loading workflow\u2026',
       semanticDescription:
-        'Get a workflow by slug — the one-stop read for status, run budget, and ledger. ' +
-        'Returns the workflow definition plus a ledger summary with totalRuns, lastRunStatus, ' +
-        'bestScore, a compact per-run trajectory (the git-log view: runId, status, timing, ' +
-        'learningCount, costCents, score), active learnings, and a budget block. The heavy ' +
-        'recentEntries (full taskResults + evaluation + learnings per run) are opt-in via ' +
-        'includeRecentEntries; page back through older runs with the before / nextCursor cursor. ' +
-        'Use this before deciding whether to start another run or adjust config via ' +
+        'Get a workflow by slug, with its status, run budget, and ledger in one read. ' +
+        'Returns the workflow definition plus a ledger summary. The summary holds totalRuns, ' +
+        'lastRunStatus, bestScore, active learnings, a budget block, and a compact per-run ' +
+        'trajectory (the git-log view: runId, status, timing, learningCount, costCents, score). ' +
+        'The heavy recentEntries (full taskResults + evaluation + learnings per run) are opt-in ' +
+        'via includeRecentEntries. Page back through older runs with the before / nextCursor cursor. ' +
+        'Read this before you decide whether to start another run or adjust config via ' +
         'workflow.manage.patch.',
       tags: ['workflow', 'read'],
       outputSemanticType: 'workflow_overview',
       idempotency: 'idempotent',
       mutates: false,
       usage: {
-        oneLine:
-          'Retrieve a workflow with a compact run trajectory, budget, and learnings in one call.',
+        oneLine: 'Get a workflow with a compact run trajectory, budget, and learnings in one call.',
         whenToUse: [
           'Understanding the current state of a workflow before running it',
           'Checking how many runs remain against the budget',
           'Reviewing accumulated learnings and the last run status',
-          'Scanning the run history (trajectory); page older runs with before=nextCursor',
+          'Scanning the run history (trajectory). Page older runs with before=nextCursor',
         ],
         whenNotToUse: ['Listing all workflows — use workflow.manage.list'],
         pitfalls: [
@@ -977,7 +976,7 @@ export function createWorkflowOperationRegistrations(
       actionLabel: 'Recording learnings\u2026',
       semanticDescription:
         'Record structured learnings from a workflow run into the ledger. Learnings are ' +
-        'injected into future runs to guide iteration. Supports categories: worked, failed, ' +
+        'injected into future runs to guide iteration. Categories: worked, failed, ' +
         'discovered, platform, hypothesis, and workflow_adjustment (structural changes).',
       tags: ['workflow', 'learn', 'knowledge'],
       idempotency: 'non_idempotent',
@@ -1022,11 +1021,11 @@ export function createWorkflowOperationRegistrations(
       name: 'Get Workflow Ledger',
       actionLabel: 'Loading ledger\u2026',
       semanticDescription:
-        'Get the run history and learnings for a workflow. Returns a compact per-run trajectory ' +
-        '(runId, status, timing, learningCount, costCents, score) plus active learnings by ' +
-        'default. The heavy entries (full taskResults + evaluation + learnings per run) are ' +
-        'opt-in via includeEntries; page back through older runs with the before / nextCursor ' +
-        'cursor. Use this to review what has been tried and learned.',
+        'Get the run history and learnings for a workflow. By default it returns a compact per-run ' +
+        'trajectory (runId, status, timing, learningCount, costCents, score) plus active learnings. ' +
+        'The heavy entries (full taskResults + evaluation + learnings per run) are opt-in via ' +
+        'includeEntries. Page back through older runs with the before / nextCursor cursor. ' +
+        'Use this to review what has been tried and learned.',
       tags: ['workflow', 'ledger', 'history', 'learnings'],
       outputSemanticType: 'workflow_ledger',
       groupDisplayName: 'Workflow Ledger',
@@ -1034,7 +1033,7 @@ export function createWorkflowOperationRegistrations(
       idempotency: 'idempotent',
       mutates: false,
       usage: {
-        oneLine: 'Retrieve a compact run trajectory (entries opt-in) and learnings for a workflow.',
+        oneLine: 'Get a compact run trajectory (entries opt-in) and learnings for a workflow.',
         whenToUse: [
           'Reviewing what has been tried and what was learned',
           'Preparing context for the next iteration',
