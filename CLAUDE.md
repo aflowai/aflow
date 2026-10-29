@@ -292,6 +292,8 @@ The Aflow MCP server (`apps/aflow-mcp/`), **`aflow-local`**, is how a coding age
 
 **Drive.** Follow `docs/dev/driving-work-through-the-loop.md`. Tools (prefixed `mcp__aflow-local__`): `auth_status`, `space_list`, `catalog`, `run_operation`, `start_session`, `watch_session`, `watch_run`, `inspect_session`, `retry_session`, `fetch_payload` (lazy/auto payload mode only). MCP sessions are in-memory (lost on restart). Every space-scoped tool takes an explicit `space_id` (discover via `space_list`). When `start_session`/`run_operation` time out waiting, the response carries a `continuation` (tool + args) — call it verbatim (`watch_session`/`watch_run`) instead of polling. `inspect_session` is bounded: status, target, the newest ten steps without the `agent.control.run_step` wrappers, the agent's latest reply or the question it is paused on, a `census` of every step left out with the parameter that returns it (`last_n_steps`, `cursor`, `status`, `operation`, `include_control_steps`), and for a `FAILED` session a `failure` — the failing step and its stored error, provider's words included — which `watch_session` carries too; `retry_session` then runs it again, as the web UI's Retry does.
 
+**Operating the platform from a session** — driving a Helmsman, watching runs, resolving gates, debugging a stuck run — is `.claude/skills/aflow-operate`; developing Aflow through its own loop (plan board, commission, review, publish, shepherd merge, the post-merge cycle) is `.claude/skills/aflow-loop`. Neither applies to a commissioned harness run.
+
 ## Documentation practices
 
 After every change that affects behavior, schemas, or architecture:

@@ -1,0 +1,10 @@
+---
+description: Operating a running Aflow stack from this session on the operator's behalf — driving a Helmsman, watching runs, resolving gates, debugging a stuck run, or driving plan work through the loop. Not for a commissioned change.
+globs:
+alwaysApply: false
+---
+
+This session drives Aflow for the operator. The procedure, the routes, the posture and the
+scripts live in `.claude/skills/aflow-operate/SKILL.md`; driving plan work through the
+loop is `.claude/skills/aflow-loop/SKILL.md`. Read the one that fits and follow it. If the
+task arrived as a commission or review brief, neither applies: do the brief.
