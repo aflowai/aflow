@@ -1,4 +1,4 @@
-import type { WorkflowRunDecideRule } from '@aflow/schemas';
+import { NEEDS_SETUP_FINDING_KIND, type WorkflowRunDecideRule } from '@aflow/schemas';
 import { bind, ctx, out, runInput } from './localPrShepherdWiring.js';
 import {
   REVIEW_TASK_IDS,
@@ -34,36 +34,62 @@ export const FIRST_ROUND_REASON =
   "The review approved with a minor or worse among its findings on the slice's first publication: the rounds rule gives it one fix round before the branch merges.";
 export const NITS_ONLY_REASON = 'nits-only review: the rounds rule ends the rounds';
 
-const ABOVE_NIT = (Object.keys(REVIEW_SEVERITIES) as ReviewSeverity[]).filter(
-  (severity) => severity !== 'nit',
+/**
+ * The severities above a minor. Each is named rather than `!= 'nit'`
+ * compared: a path past the last finding reads as null, which is not a nit
+ * either.
+ */
+const ABOVE_MINOR = (Object.keys(REVIEW_SEVERITIES) as ReviewSeverity[]).filter(
+  (severity) => severity !== 'nit' && severity !== 'minor',
 );
 
 /** How many comparisons one rule's `anyOf` holds (`WorkflowRunDecideRuleWhenSchema`). */
 const RULE_COMPARISONS_MAX = 10;
-const FINDINGS_PER_RULE = Math.floor(RULE_COMPARISONS_MAX / ABOVE_NIT.length);
+const FINDINGS_PER_RULE = Math.floor(RULE_COMPARISONS_MAX / ABOVE_MINOR.length);
 
-/**
- * Each severity above a nit is named rather than `!= 'nit'` compared: a path
- * past the last finding reads as null, which is not a nit either.
- */
-function aboveNitAt(index: number): string[] {
-  return ABOVE_NIT.map((severity) => `state.findings[${String(index)}].severity == '${severity}'`);
-}
+const at = (index: number) => `state.findings[${String(index)}]`;
 
-/** Every index a review can return a finding at, read a rule's worth at a time. */
-const FIRST_ROUND_RULES: readonly WorkflowRunDecideRule[] = Array.from(
+/** A blocker or a major at each index, a rule's worth of indices at a time. */
+const ABOVE_MINOR_RULES: readonly WorkflowRunDecideRule[] = Array.from(
   { length: Math.ceil(REVIEW_FINDINGS_MAX / FINDINGS_PER_RULE) },
   (_, rule) => {
     const first = rule * FINDINGS_PER_RULE;
     const last = Math.min(first + FINDINGS_PER_RULE, REVIEW_FINDINGS_MAX);
     const indices = Array.from({ length: last - first }, (_, i) => first + i);
     return {
-      when: { anyOf: indices.flatMap(aboveNitAt) },
+      when: {
+        anyOf: indices.flatMap((index) =>
+          ABOVE_MINOR.map((severity) => `${at(index)}.severity == '${severity}'`),
+        ),
+      },
       decision: 'fix_before_merge',
       reason: FIRST_ROUND_REASON,
     };
   },
 );
+
+/**
+ * A minor at each index, unless it is the review's `needs_setup` finding
+ * (Plan 320 D21): setup the operator gives once on the machine, which no fix
+ * round on the branch can, so it never takes one. It always follows every
+ * finding of the reviewer's, so these indices read all of theirs.
+ */
+const MINOR_RULES: readonly WorkflowRunDecideRule[] = Array.from(
+  { length: REVIEW_FINDINGS_MAX },
+  (_, index) => ({
+    when: {
+      allOf: [
+        `${at(index)}.severity == 'minor'`,
+        `${at(index)}.kind != '${NEEDS_SETUP_FINDING_KIND}'`,
+      ],
+    },
+    decision: 'fix_before_merge',
+    reason: FIRST_ROUND_REASON,
+  }),
+);
+
+/** Every index a review can return a finding at: a blocker or a major first, then a minor. */
+const FIRST_ROUND_RULES: readonly WorkflowRunDecideRule[] = [...ABOVE_MINOR_RULES, ...MINOR_RULES];
 
 export const AFTER_REVIEW_SETTLE_RULES: readonly WorkflowRunDecideRule[] = [
   {
@@ -87,7 +113,7 @@ export const AFTER_REVIEW_SETTLE_OTHERWISE = {
 export const SETTLE_AFTER_REVIEW_TASK = {
   taskId: 'settle-after-review',
   name: 'Decide by the rounds rule whether the findings are fixed before merging',
-  goal: "Read the review's verdict, the severities of its findings and this publication's round, and decide by the rounds rule: a review that did not approve is fix_before_merge; an approving review of nits alone, or none, is publish_as_is; an approving review with a minor or worse is fix_before_merge on the slice's first publication and publish_as_is once a fix round has run, its findings carried open. No model is asked.",
+  goal: "Read the review's verdict, the severities of its findings and this publication's round, and decide by the rounds rule: a review that did not approve is fix_before_merge; an approving review of nits alone, or none, is publish_as_is; an approving review with a minor or worse is fix_before_merge on the slice's first publication and publish_as_is once a fix round has run, its findings carried open. A finding of kind `needs_setup` — the browser setup the review ran without — is no defect of the change and counts as none. No model is asked.",
   type: 'operation' as const,
   operation: 'workflow.run.decide',
   dependsOn: REVIEW_TASK_IDS,

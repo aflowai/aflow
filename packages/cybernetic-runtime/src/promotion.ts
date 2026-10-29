@@ -1,4 +1,5 @@
 import type {
+  WorkflowStateVariable,
   WorkflowTask,
   WorkflowTaskOutputPromotion,
   MaterializedSkillGoal,
@@ -34,11 +35,21 @@ function resolvePromotion(
   }
 }
 
+/**
+ * The run-level bag the tasks' promotions write, in task-list order. A
+ * variable declared `writers: 'append'` holds every value written to it — an
+ * array's items, any other value as one item — and every other variable the
+ * last value written: its single writer's, or the alternative that ran.
+ */
 export function resolvePromotedRunMetrics(
   tasks: readonly WorkflowTask[],
   taskResults: readonly PromotionTaskResult[],
+  stateVariables?: readonly WorkflowStateVariable[],
 ): RunLevelMetrics {
   const byId = new Map(taskResults.map((t) => [t.taskId, t]));
+  const appended = new Set(
+    (stateVariables ?? []).filter((v) => v.writers === 'append').map((v) => v.variableId),
+  );
   const out: RunLevelMetrics = {};
   for (const task of tasks) {
     const promos = task.promoteOutputs;
@@ -47,7 +58,16 @@ export function resolvePromotedRunMetrics(
     if (result?.status !== 'succeeded') continue;
     for (const promo of promos) {
       const value = resolvePromotion(promo, result);
-      if (value !== undefined) out[promo.toState] = value;
+      if (value === undefined) continue;
+      if (!appended.has(promo.toState)) {
+        out[promo.toState] = value;
+        continue;
+      }
+      const held = out[promo.toState];
+      out[promo.toState] = [
+        ...(Array.isArray(held) ? (held as unknown[]) : []),
+        ...(Array.isArray(value) ? (value as unknown[]) : [value]),
+      ];
     }
   }
   return out;

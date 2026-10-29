@@ -74,7 +74,7 @@ const SPACE = '6f1d2c3b-4a5e-4f60-9a7b-8c9d0e1f2a3b';
 
 const { HostFolderPreview, PREVIEW_NOT_DECLARED } = await import('./HostFolderPreview.js');
 const { SpaceHostBindingsPage } = await import('../../screens/space-host-bindings.js');
-const { defaultFolderUiPaths } = await import('@aflow/schemas');
+const { declareFolderPreviewCommand, defaultFolderUiPaths } = await import('@aflow/schemas');
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -165,6 +165,7 @@ describe('a folder’s preview on the machine page', () => {
     expect(text).toContain('Ready at / (default)');
     expect(text).toContain(`UI files (default): ${defaultFolderUiPaths().join(', ')}`);
     expect(text).not.toContain(PREVIEW_NOT_DECLARED);
+    expect(text).not.toContain('aflow folder hb_site preview');
 
     await act(async () => {
       button('Clear preview').click();
@@ -197,6 +198,12 @@ describe('a folder’s preview on the machine page', () => {
     await show({ hostname: 'laptop', declared: null, detectedWebApps: ['apps/web'] });
     expect(container.textContent).toContain(PREVIEW_NOT_DECLARED);
     expect(container.textContent).toContain('apps/web');
+    // The command that declares it on the machine, as the review's needs_setup finding names it (D21).
+    expect(container.textContent).toContain(declareFolderPreviewCommand('hb_site'));
+    expect(container.textContent).toContain(
+      'aflow folder hb_site preview --command "<the command that serves it, with {port}>"',
+    );
+    expect(container.textContent).toContain('needs_setup');
     expect(hasButton('Clear preview')).toBe(false);
 
     await act(async () => {
@@ -226,6 +233,8 @@ describe('a folder’s preview on the machine page', () => {
   it('refuses on the page what the shared schema refuses, asking nothing of the machine', async () => {
     await show({ hostname: 'laptop', declared: null, detectedWebApps: [] });
     expect(container.textContent).not.toContain(PREVIEW_NOT_DECLARED);
+    // No web app found: nothing to declare is asked of the person but the form.
+    expect(container.textContent).not.toContain('aflow folder hb_site preview');
     await act(async () => {
       button('Declare preview').click();
     });

@@ -103,6 +103,7 @@ function taskUpdateEvent(opts: {
   startedAt?: string;
   completedAt?: string;
   cleared?: true;
+  promotedState?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
 }): SessionEvent {
   return makeEvent(
@@ -123,6 +124,7 @@ function taskUpdateEvent(opts: {
         ...(opts.startedAt ? { startedAt: opts.startedAt } : {}),
         ...(opts.completedAt ? { completedAt: opts.completedAt } : {}),
         ...(opts.cleared ? { cleared: opts.cleared } : {}),
+        ...(opts.promotedState ? { promotedState: opts.promotedState } : {}),
       },
     },
     opts.metadata ? { metadata: opts.metadata } : {},
@@ -421,6 +423,32 @@ describe('WorkflowTaskUpdate handler', () => {
     expect(next.workflowRuns[RUN_ID].tasks['t1']?.status).toBe('succeeded');
     // Frozen flag is preserved (terminal live signal stays authoritative).
     expect(next.workflowRuns[RUN_ID].isFrozen).toBe(true);
+  });
+
+  it("shows both writer tasks' items of an append variable live, each slice carrying the join so far", () => {
+    // The harness stamps an `append` variable's slice joined with every writer
+    // succeeded before it (`resolveTaskPromotedState`), so the later slice
+    // replacing the key keeps the earlier task's items on screen.
+    const next = apply(
+      initialRunViewState,
+      runUpdateEvent({ status: 'running' }),
+      taskUpdateEvent({
+        taskId: 'review',
+        label: 'Review',
+        status: 'succeeded',
+        promotedState: { findings: [{ claim: 'a' }, { claim: 'b' }], verdict: 'approve' },
+      }),
+      taskUpdateEvent({
+        taskId: 'report-setup',
+        label: 'Report setup',
+        status: 'succeeded',
+        promotedState: { findings: [{ claim: 'a' }, { claim: 'b' }, { claim: 'setup' }] },
+      }),
+    );
+    expect(next.workflowRuns[RUN_ID].outputs).toEqual({
+      findings: [{ claim: 'a' }, { claim: 'b' }, { claim: 'setup' }],
+      verdict: 'approve',
+    });
   });
 
   it('rejects status regressions at the same attempt (`succeeded` → `running` is dropped)', () => {

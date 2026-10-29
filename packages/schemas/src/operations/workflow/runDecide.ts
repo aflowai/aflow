@@ -79,6 +79,13 @@ export const WorkflowRunDecideRuleSchema = z
   .strict();
 export type WorkflowRunDecideRule = z.infer<typeof WorkflowRunDecideRuleSchema>;
 
+/**
+ * The most rules one decision reads. A storage ceiling, not a style limit:
+ * a rule set generated over a list — one rule for each finding a review can
+ * return — has to fit under it whole.
+ */
+export const WORKFLOW_RUN_DECIDE_RULES_MAX = 100;
+
 export const WorkflowRunDecideInputSchema = z.object({
   state: z
     .record(z.unknown())
@@ -88,7 +95,7 @@ export const WorkflowRunDecideInputSchema = z.object({
   rules: z
     .array(WorkflowRunDecideRuleSchema)
     .min(1)
-    .max(50)
+    .max(WORKFLOW_RUN_DECIDE_RULES_MAX)
     .describe('Read in order; the first whose `when` holds decides.'),
   otherwise: z
     .object({

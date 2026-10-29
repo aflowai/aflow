@@ -1,10 +1,11 @@
-import type { SkillCatalogEntry } from '@aflow/schemas';
+import { NEEDS_SETUP_FINDING_KIND, type SkillCatalogEntry } from '@aflow/schemas';
 import {
   DECIDE_BROWSER_TASK_ID,
   decideBrowserTask,
   entryContract,
   readUiTask,
-  reportPreviewUnavailableTask,
+  needsSetupFinding,
+  reportSetupTask,
   RULE_BINDINGS,
   RULE_INPUTS,
   ruleBrief,
@@ -25,6 +26,7 @@ How to review:
 - At \`deep\`, also run the checks this project defines over the touched files — its test command for the touched tests, its type check, its linter — and record each one as run, with its outcome and the reason for any skip.
 - Ground every finding: name the file and the line, give the evidence that shows it, and keep what the code does separate from what it should do. A finding with no evidence in this checkout does not belong in the result.
 - Prefer few sharp findings to many weak ones. A blocker is a defect that must not ship; a nit is a preference.
+- A finding is a defect of the change. That a UI change went unseen in a browser is not one: where this run has no browser, the review itself adds a finding of its own kind, \`needs_setup\`, saying why and what would give it one. Write no finding about a missing browser or preview, and judge the UI from the code.
 
 Write the summary as the deliverable: it names every finding inline — severity, \`file:line\`, one sentence of what is wrong — blockers first, and every check you ran with its outcome. Someone reading only the summary can act on it. The evidence behind each finding, and the fix it suggests, stay in \`findings\`.
 
@@ -63,8 +65,8 @@ export const REVIEW_SEVERITY_ONTOLOGY = Object.entries(REVIEW_SEVERITIES)
 /** The most findings one review returns. */
 export const REVIEW_FINDINGS_MAX = 50;
 
-/** A finding as the review returns it: what a publication waiting on it records, and argues from. */
-export const REVIEW_FINDING_SCHEMA = {
+/** A finding as the reviewer writes it: a defect of the change. */
+const REVIEWER_FINDING_SCHEMA = {
   type: 'object',
   required: ['severity', 'file', 'claim', 'evidence'],
   additionalProperties: false,
@@ -107,6 +109,25 @@ export const REVIEW_FINDING_SCHEMA = {
   },
 };
 
+/**
+ * A finding as the review returns it: what a publication waiting on it
+ * records, and argues from — the reviewer's, or the one of kind
+ * `needs_setup` the review's rule adds (Plan 320 D21), which only the rule
+ * writes: the reviewer's result has no `kind`.
+ */
+export const REVIEW_FINDING_SCHEMA = {
+  ...REVIEWER_FINDING_SCHEMA,
+  properties: {
+    ...REVIEWER_FINDING_SCHEMA.properties,
+    kind: {
+      type: 'string',
+      enum: [NEEDS_SETUP_FINDING_KIND],
+      description:
+        "Absent for a defect of the change. `needs_setup`: the range touches the folder's `uiPaths` and the review ran without a browser; `claim` says why in D21's words and what would give it one. Always `minor`, never a defect to fix: no fix round is asked for it and it blocks no push.",
+    },
+  },
+};
+
 const RESULT_SCHEMA = {
   type: 'object',
   required: ['verdict', 'summary', 'findings'],
@@ -129,7 +150,7 @@ const RESULT_SCHEMA = {
       type: 'array',
       maxItems: REVIEW_FINDINGS_MAX,
       description: 'Everything worth acting on, ordered by severity. Empty when nothing was found.',
-      items: REVIEW_FINDING_SCHEMA,
+      items: REVIEWER_FINDING_SCHEMA,
     },
     checksRun: {
       type: 'array',
@@ -191,7 +212,7 @@ export const BRIEF_MAX_TURNS = 8;
 const REVIEW_PITFALLS: string[] = [
   `What it needs: the connected folder holding the repository, and the range to review as its two ends — \`at\`, the commit it ends at, and \`from\`, where it starts. Ask for whichever is missing — \`main..HEAD\` is \`from\` \`main\` and \`at\` \`HEAD\`, \`HEAD~3..HEAD\` is \`from\` \`HEAD~3\` and \`at\` \`HEAD\`, and a single commit is \`at\` alone. The range is made from the two, so the commit it ends at and the commit the review stands on are one value and cannot disagree. The review lists a range's commits as given and reads its diff from where the two ends meet, \`main...HEAD\`, so a branch \`main\` has moved past reads as what it adds and not as undoing what \`main\` took since. A focus is optional and worth asking for when the request names a worry: security, an API surface, the blast radius of a refactor.`,
   `Depth is a first-class choice, not something to ask the coding agent for in \`focus\`. \`brief\` is the smoke test — a first look, a check that the mechanics work: a handful of tool calls, one paragraph, and a verdict of \`comment\` unless something is plainly a blocker. An operator asking for something quick, a glance or a sanity check means \`brief\`, and it is budgeted in coding-agent turns (\`maxTurns\`: ${String(BRIEF_MAX_TURNS)}) so that it stays brief. \`standard\` reads the range with the repository around it. \`deep\` also runs the project's own checks over the touched files, and costs the most.`,
-  `The browser is never asked for, in \`focus\` or anywhere else. Where the range touches the folder's \`uiPaths\` and the folder declares a preview, the review runs with a browser and that preview by rule, opens the pages the range changes, exercises what changed and reports what it saw as part of its verdict. Where the folder declares no preview, or the browser or its preview cannot be had, it reviews the range as a diff and \`uiNotSeen\` says why, with the command that settles it.`,
+  `The browser is never asked for, in \`focus\` or anywhere else. Where the range touches the folder's \`uiPaths\` and the folder declares a preview, the review runs with a browser and that preview by rule, opens the pages the range changes, exercises what changed and reports what it saw as part of its verdict. Where the folder declares no preview, or the browser or its preview cannot be had, it reviews the range as a diff and \`uiNotSeen\` says why, with the command that settles it; its \`findings\` end with the same as a finding of kind \`needs_setup\`, minor, which asks for no fix and blocks no push.`,
   `The review stands on the commit it judges. It runs over an isolated copy of the repository detached at \`at\`, so the files it reads whole and the checks it runs at \`deep\` are the change's own; the range's base names only where the diff starts. Only committed work is reviewed: anything still uncommitted in the working tree is invisible to it. When the request is about work in progress, say so and ask for it to be committed first — a branch is fine — then review the range those commits make.`,
   `With the result: report the verdict and the summary. The summary is the review — it names every finding with its severity and its file and line, blockers first, and the checks that ran — so it needs nothing added to it. The evidence behind each finding and the fix it suggests stay on the run, to be opened when someone wants them. Nothing was changed, so a finding is a proposal until someone acts on it: offer to commission the fix as its own piece of work, and never edit the files while reporting. Run the review again once a fix lands as a new commit, over the range that includes it — a verdict covers the commits it read and nothing later.`,
 ];
@@ -262,10 +283,12 @@ const REVIEW_TASKS = [
   }),
   {
     ...decideBrowserTask(
-      "Decide, by rule over the folder's answer, whether the review takes `browser: { profile: 'ephemeral' }` and `preview: 'if_available'` and its brief the paragraph asking it to open and exercise what changed: where the range touches the folder's `uiPaths`, the folder declares a preview and the browser can be had. Where the preview is not declared or the browser cannot be had, the review goes on without one and says why in D21's words. Never by the depth, the focus or the Helmsman; no model is asked.",
+      "Decide, by rule over the folder's answer, whether the review takes `browser: { profile: 'ephemeral' }` and `preview: 'if_available'` and its brief the paragraph asking it to open and exercise what changed: where the range touches the folder's `uiPaths`, the folder declares a preview and the browser can be had. Where the preview is not declared or the browser cannot be had, the review goes on without one and says why in D21's words — the line, and the `needs_setup` finding the review reports once it finishes. Never by the depth, the focus or the Helmsman; no model is asked.",
       REVIEW_PREVIEW_PARAGRAPH,
+      needsSetupFinding,
     ),
-    // A setup decision's line; absent wherever the review had the browser or needed none.
+    // A setup decision's line; absent wherever the review had the browser or
+    // needed none. Its finding is promoted after the review, by `report-setup`.
     promoteOutputs: [{ kind: 'output_path' as const, path: 'value.line', toState: 'uiNotSeen' }],
   },
   {
@@ -325,12 +348,12 @@ const REVIEW_TASKS = [
       { kind: 'output_path' as const, path: 'result.findings', toState: 'findings' },
     ],
   },
-  reportPreviewUnavailableTask('review'),
+  reportSetupTask('review'),
 ];
 
 const REVIEW_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'review-local-changes',
-  version: 12,
+  version: 13,
   name: 'Review Local Changes',
   tagline:
     "Review committed changes in a connected repository with the machine's own coding agent.",
@@ -356,7 +379,7 @@ const REVIEW_LOCAL_CHANGES: SkillCatalogEntry = {
         next: [
           {
             skill: 'commission-change',
-            when: 'A finding is to be fixed: commission it as its own piece of work, briefed from the findings, with `base` the branch the range ends on.',
+            when: 'A finding is to be fixed: commission it as its own piece of work, briefed from the findings but any of kind `needs_setup` — setup on the machine, which no fix settles — with `base` the branch the range ends on.',
           },
           {
             skill: 'publish-local-changes',
@@ -402,10 +425,12 @@ const REVIEW_LOCAL_CHANGES: SkillCatalogEntry = {
           variableId: 'findings',
           name: 'Review findings',
           description:
-            'Every finding as the review returned it — severity, file, line, claim, evidence and suggestion — for a run that acts on them one at a time, as a publication deciding on a fix round does.',
+            "Every finding as the review returned it — severity, file, line, claim, evidence, suggestion — for a run acting on them one at a time, as a publication deciding on a fix round does; last, where the range touches `uiPaths` and the review had no browser, one of kind `needs_setup`, minor, saying why in D21's words with the command or grant that settles it. That one is setup, never a defect: it asks no fix round and blocks no push.",
           required: false,
           sensitive: false,
           immutable: false,
+          // The review's own findings, then the one the rule adds after it.
+          writers: 'append' as const,
         },
         {
           variableId: 'uiNotSeen',
@@ -423,7 +448,7 @@ const REVIEW_LOCAL_CHANGES: SkillCatalogEntry = {
       output: {
         primary: 'verdict',
         guidance:
-          "The run carries the verdict and reviewSummary; the summary names every finding with its file and line, blockers first, the checks that ran and, where the range touched the folder's UI, what the review saw in its preview — reporting it is reporting the review. Nothing was changed: a fix is a separate commission, and the review is worth running again over the range that includes it. Report uiNotSeen, where present, as it stands.",
+          "The run carries the verdict and reviewSummary; the summary names every finding with its file and line, blockers first, the checks that ran and, where the range touched the folder's UI, what the review saw in its preview — reporting it is reporting the review. Nothing was changed: a fix is a separate commission, and the review is worth running again over the range that includes it. Report uiNotSeen as it stands; its needs_setup finding is setup, never a fix.",
       },
       iteration: { auto: false, maxConsecutiveRuns: 1, stopOnOutcomesMet: true, cooldownMs: 0 },
     },
@@ -465,7 +490,7 @@ const REVIEW_LOCAL_CHANGES: SkillCatalogEntry = {
       priority: 50,
     },
     rationale:
-      "host.harness.run with an outputSchema of findings and a verdict: the description steers the Helmsman and the task prose instructs the harness. Read-only by construction — no task writes, pushes or publishes. The checkout is detached at the range's tip (at, the harness base) and the range is built as <from>..<at>, so its tip and the checkout cannot disagree; uncommitted work is invisible. The browser is added by rule (Plan 320 D17, D20), never by the depth, the focus or the Helmsman: host.binding.inspect says whether the range touches the folder's uiPaths, whether it declares a preview and whether the harness and grant can take a browser, and workflow.run.decide gives the run browser and preview ('if_available') where all of that holds, handed to the harness run as one value bound by path. The preview serves the range as it will be pushed, so what the reviewer sees is part of the verdict; where the browser or the preview cannot be had, uiNotSeen says why in D21's words.",
+      "host.harness.run with an outputSchema of findings and a verdict: the description steers the Helmsman and the task prose instructs the harness. Read-only by construction — no task writes, pushes or publishes. The checkout is detached at the range's tip (at, the harness base) and the range is built as <from>..<at>, so its tip and the checkout cannot disagree; uncommitted work is invisible. The browser is added by rule (Plan 320 D17, D20), never by the depth, the focus or the Helmsman: host.binding.inspect says whether the range touches the folder's uiPaths, whether it declares a preview and whether the harness and grant can take a browser, and workflow.run.decide gives the run browser and preview ('if_available') where all of that holds, as one value bound by path. The preview serves the range as it will be pushed; where the browser or the preview cannot be had, uiNotSeen says why in D21's words, and report-setup appends it to findings as a minor needs_setup finding.",
   },
 };
 

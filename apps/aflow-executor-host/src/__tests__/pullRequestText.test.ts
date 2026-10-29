@@ -22,6 +22,7 @@ import {
   HostCommitDescribeOutputSchema,
   HANDED_ON_FINDINGS_MAX_COUNT,
   LOCAL_PUBLISH_PULL_REQUEST_MARKER,
+  NEEDS_SETUP_FINDING_KIND,
   PULL_REQUEST_BODY_MAX_CHARS,
 } from '@aflow/schemas';
 
@@ -29,6 +30,7 @@ import { createHostHandler } from '../handlers/hostHandler.js';
 import {
   CHANGES_KEPT_BESIDE_FINDINGS,
   composePullRequest,
+  NOT_SEEN_IN_BROWSER_LEAD,
   SUMMARY_KEPT_BESIDE_FINDINGS,
 } from '../pullRequestText.js';
 import { noPushApprovals } from './fixtures/pushApprovals.js';
@@ -491,6 +493,49 @@ describe('composePullRequest', () => {
         listed,
       );
     }
+  });
+
+  it('lists a range the review did not see in a browser on one line, from its needs_setup finding, and hands that finding on to none (Plan 320 D20, D21)', () => {
+    const claim = 'UI change not seen in a browser: the folder declares no preview';
+    const setup = {
+      kind: NEEDS_SETUP_FINDING_KIND,
+      severity: 'minor',
+      file: 'src/web/Checkout.vue',
+      claim,
+      evidence: 'The range changes `src/web/Checkout.vue`, which matches the folder’s `uiPaths`.',
+      suggestion: 'A person declares it once, on the machine: `aflow folder hb_app preview …`.',
+    } as const;
+    const approved = (findings: readonly unknown[]) =>
+      HostCommitDescribeInputSchema.parse({
+        bindingId: 'hb_app',
+        range,
+        review: {
+          verdict: 'approve',
+          outcome: 'completed',
+          reviewSummary: REVIEW_SUMMARY,
+          findings,
+        },
+        afterReview: 'publish_as_is',
+      });
+    const composed = composePullRequest(approved([MINOR_FINDING, setup]), commits);
+    const line = `${NOT_SEEN_IN_BROWSER_LEAD} This range changes the folder's UI and was published without a review that saw it in a preview: \`src/web/Checkout.vue\` — ${claim}`;
+    expect(composed.body).toContain(`## Review\n\nThe review of this range returned \`approve\`.`);
+    expect(composed.body.split('\n').filter((l) => l.startsWith(NOT_SEEN_IN_BROWSER_LEAD))).toEqual(
+      [line],
+    );
+    // Not a defect: neither handed on, nor listed among what the merge leaves open.
+    expect(composed.findings.map((f) => f.claim)).toEqual([MINOR_FINDING.claim]);
+    expect(composed.body).not.toContain(`- **minor** \`src/web/Checkout.vue\``);
+    expect(composed.severest).toBe('minor');
+    // Alone, it leaves nothing to hand on and no severity for the push to be held to.
+    const alone = composePullRequest(approved([setup]), commits);
+    expect(alone.findings).toEqual([]);
+    expect(alone.severest).toBeUndefined();
+    expect(alone.body).toContain(line);
+    // A review that saw it, or found nothing of the kind, says nothing of a browser.
+    expect(composePullRequest(reviewed('publish_as_is'), commits).body).not.toContain(
+      NOT_SEEN_IN_BROWSER_LEAD,
+    );
   });
 
   it('says a publish_as_is settled over an approval of nits alone, or of nothing, was asked of no decision — and how the push was cleared', () => {

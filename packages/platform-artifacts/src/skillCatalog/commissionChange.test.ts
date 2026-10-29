@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { materializeAndValidateSkillConfig } from '@aflow/cybernetic-runtime';
 import {
+  declareFolderPreviewCommand,
   HOST_HARNESS_CONCURRENCY_DEFAULT,
   HOST_HARNESS_MAX_TURNS_DEFAULT,
   HOST_HARNESS_TASK_MAX_LENGTH,
@@ -457,6 +458,41 @@ describe('Commission Change — the browser and the preview by rule (Plan 320 D2
     expect(run.state['uiNotSeen']).toBe(UI_NOT_SEEN_NO_GRANT);
     expect(run.state).toMatchObject({ patchRef: PATCH_REF });
   });
+
+  it.each([
+    [
+      'no preview, with the command',
+      { preview: 'not_declared' as const },
+      [UI_NOT_SEEN_NO_PREVIEW, `\`${declareFolderPreviewCommand('hb_repo')}\``],
+    ],
+    [
+      'a harness without browser arguments',
+      {
+        preview: 'declared' as const,
+        browser: { harness: 'codex', unavailable: 'harness' as const },
+      },
+      [`${BROWSER_UNAVAILABLE_ON_HARNESS} codex`],
+    ],
+    [
+      'a grant without the browser',
+      {
+        preview: 'declared' as const,
+        browser: { harness: 'claude', unavailable: 'grant' as const },
+      },
+      [UI_NOT_SEEN_NO_GRANT],
+    ],
+  ])(
+    "says in its result what the review's needs_setup finding says: %s (D21)",
+    (_case, ui, says) => {
+      const answer = folderAnswer({ ...ui, ...TOUCHED });
+      const run = commission(answer, answer);
+      expect(run.statuses.get('commission')).toBe('succeeded');
+      for (const words of says) expect(run.state['uiNotSeen']).toContain(words);
+      expect(run.state['uiFilesNotSeen']).toEqual(['src/web/Checkout.vue']);
+      // Said, never blocking: the change is the commission's result as it stands.
+      expect(run.state).toMatchObject({ patchRef: PATCH_REF, filesChanged: 1 });
+    },
+  );
 
   it('says which harness cannot take a browser', () => {
     const noArguments = folderAnswer({
