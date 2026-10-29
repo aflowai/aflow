@@ -59,8 +59,20 @@ export interface QuickStartPickerProps {
    * dialog's blank start, or the first-run offer's empty space.
    */
   leadingCard?: QuickStartLeadingCard;
+  /** Create new workspace says "workspace"; every other caller keeps "space" (Plan 334 D2). */
+  wording?: QuickStartPickerWording;
   onCreated?: () => void;
 }
+
+export interface QuickStartPickerWording {
+  nameLabel: string;
+  createButton: string;
+}
+
+const SPACE_WORDING: QuickStartPickerWording = {
+  nameLabel: 'Name the new space',
+  createButton: 'Create the space',
+};
 
 export interface QuickStartLeadingCard {
   title: string;
@@ -81,6 +93,7 @@ export interface QuickStartLeadingCard {
 export function QuickStartPicker({
   initialCatalogId,
   leadingCard,
+  wording = SPACE_WORDING,
   onCreated,
 }: QuickStartPickerProps) {
   const router = useRouter();
@@ -202,7 +215,7 @@ export function QuickStartPicker({
         <Column gap="sm">
           <label htmlFor="quick-start-name">
             <Text size="sm" weight="medium">
-              Name the new workspace
+              {wording.nameLabel}
             </Text>
           </label>
           <Input
@@ -231,7 +244,7 @@ export function QuickStartPicker({
               disabled={!spaceName}
               onClick={() => void create(selected)}
             >
-              Create workspace
+              {wording.createButton}
             </Button>
           </Row>
         </Column>

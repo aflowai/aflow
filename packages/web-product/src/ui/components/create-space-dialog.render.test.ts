@@ -60,6 +60,7 @@ vi.mock('@aflow/design-system', () => {
 });
 
 const { CreateSpaceDialog } = await import('./create-space-dialog.js');
+const { QuickStartDialog } = await import('./quick-start-picker.js');
 
 const TEMPLATES: QuickStartOffer['templates'] = [
   {
@@ -159,6 +160,24 @@ describe('CreateSpaceDialog', () => {
     const text = document.querySelector('[role="dialog"]')?.textContent ?? '';
     expect(text).toContain('Name the new workspace');
     expect(text).toContain('Create workspace');
+  });
+
+  it('leaves the Store listing dialog saying "space"', () => {
+    state.offer = { applies: false, templates: TEMPLATES };
+    act(() => {
+      root.render(
+        createElement(QuickStartDialog, {
+          open: true,
+          onClose: vi.fn(),
+          initialCatalogId: 'coding-with-github',
+        }),
+      );
+    });
+
+    const text = document.querySelector('[role="dialog"]')?.textContent ?? '';
+    expect(text).toContain('Name the new space');
+    expect(text).toContain('Create the space');
+    expect(text).not.toContain('workspace');
   });
 
   it('opens on the blank form directly when no template is on the shelf', () => {

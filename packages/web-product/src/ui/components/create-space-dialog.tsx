@@ -84,6 +84,7 @@ export function CreateSpaceDialog({ open, onClose, onCreated }: CreateSpaceDialo
               setBlankChosen(true);
             },
           }}
+          wording={{ nameLabel: 'Name the new workspace', createButton: 'Create workspace' }}
           onCreated={close}
         />
       </Column>
