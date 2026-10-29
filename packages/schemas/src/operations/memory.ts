@@ -1029,7 +1029,7 @@ export const MemoryOperationRegistrations: OperationRegistration[] = [
     name: 'Query Memory',
     actionLabel: 'Searching memory…',
     semanticDescription:
-      'Search, list, or grep memory documents. mode="list" lists the directories and files ' +
+      'Search, list, or grep memory documents. Use mode="list" to browse the directories and files ' +
       'at a path, like ls. It lists immediate children unless recursive=true, which lists all descendants. ' +
       'mode="search" runs semantic/hybrid retrieval and mode="grep" runs exact text search. ' +
       'Always explore the directory tree with list before you fetch full documents.',

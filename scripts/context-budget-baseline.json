@@ -11,11 +11,11 @@
       "group": "tools"
     },
     "tools.helmsman.native_fc": {
-      "tokens": 7826,
+      "tokens": 7812,
       "group": "tools"
     },
     "tools.helmsman.generate_json": {
-      "tokens": 7666,
+      "tokens": 7652,
       "group": "tools"
     },
     "tools.coach.resolvedOps": {
@@ -23,27 +23,27 @@
       "group": "tools"
     },
     "tools.coach.native_fc": {
-      "tokens": 26949,
+      "tokens": 26306,
       "group": "tools"
     },
     "tools.coach.generate_json": {
-      "tokens": 26492,
+      "tokens": 25850,
       "group": "tools"
     },
     "tools.helmsman.enterprise.native_fc": {
-      "tokens": 7826,
+      "tokens": 7812,
       "group": "tools"
     },
     "tools.helmsman.enterprise.generate_json": {
-      "tokens": 7666,
+      "tokens": 7652,
       "group": "tools"
     },
     "tools.helmsman.community-local.native_fc": {
-      "tokens": 11346,
+      "tokens": 10819,
       "group": "tools"
     },
     "tools.helmsman.community-local.generate_json": {
-      "tokens": 11210,
+      "tokens": 10683,
       "group": "tools"
     },
     "skills.library100.default": {
@@ -63,7 +63,7 @@
       "group": "helmsmanPrompt"
     },
     "helmsmanPrompt.registerMapping": {
-      "tokens": 4418,
+      "tokens": 4246,
       "group": "helmsmanPrompt"
     },
     "helmsmanPrompt.operatingModel": {
@@ -115,16 +115,16 @@
       "group": "spaceContextGuidance"
     },
     "worstCase.pinnedSurface": {
-      "tokens": 16241,
+      "tokens": 16244,
       "group": "worstCase"
     }
   },
   "totals": {
-    "tools": 107016,
+    "tools": 104621,
     "skillAwareness": 765,
-    "helmsmanPrompt": 6793,
+    "helmsmanPrompt": 6621,
     "runnerPrompt": 2235,
     "spaceContextGuidance": 845,
-    "worstCase": 16241
+    "worstCase": 16244
   }
 }
