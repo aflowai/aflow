@@ -1,5 +1,7 @@
 # Plan 333 — Agents are told the shape of the English they write
 
+_The file name predates the re-cut and is kept so existing links hold._
+
 **Status:** 🌱 design. P0 merged (PR #220). P1 approved by the operator on 2026-10-29, not built.
 
 **Builds on:**
@@ -14,10 +16,10 @@
 Every agent in Aflow acts on English it cannot ask about. The Helmsman chooses a tool from its `semanticDescription` and `usage`. It reads a result through the descriptions of its output fields, and it recovers from an error by its message. The coding agent carries out a brief the Helmsman wrote. Nothing in the repository says what shape that English takes, and nothing checks it.
 
 - **A misread brief costs a round.** A commission runs thirty to forty minutes (`COMMISSION_TIMEOUT_DEFAULT_MS`, `commissionChange.ts`). The coding agent can take a reading the brief's words allow and the node did not mean. Review then finds it, the publication decides `fix_before_merge`, and a fix round runs: a second commission, a second review. Nothing reads the brief before the coding agent does.
-- **Nothing records why a round happened.** The board counts a node's rounds (`PlanTreeNode.rounds`), and the loop's measure counts operator actions and cost. No record says what caused a fix round. So the cost of brief wording is unknown today, and a claim that this plan reduces it could not be checked.
+- **Nothing records why a round happened.** The board counts a node's rounds (`PlanTreeNode.rounds`), and the loop's measure counts operator actions and cost. No record says what caused a fix round. So the cost of brief wording is unknown today. This plan leaves it unknown. The operator judged a measure of round causes over-engineered for the goal, and accepts the cost of a misread brief without measuring it (D3). So this plan claims no drop in rounds.
 - **The catalog prose is long and joined by semicolons.** The table below is `ste-lint.py` run over this repository at `1b0835a8`. It read one file per operation and per catalog skill, so a synonym check covers one unit. Of the 206 operations offered to agents as tools, 53 have a semicolon in `semanticDescription`. The longest sentence in one is 64 words (`workflow.run.list`). A pinned tool carries that description in every turn (Plan 324), so a sentence the model must parse twice costs context in every turn.
 - **One unit names one action with several words.** `ste-lint.py` flags 26 synonym rotations in the operations and 5 in the skills. `api.binding.test` says "check", "validate" and "verify". `api.http.call` says "get" and "fetch". The reader cannot tell whether the text describes one action or several. Some flags are two distinct actions.
-- **The rules exist only as taste.** `CLAUDE.md` teaches by example how to write for an agent. No check reads the shape of the text, so a pitfall with three semicolons merges as easily as one with none.
+- **The rules exist only as taste.** `CLAUDE.md` teaches by example how to write for an agent. No check reads the shape of the text, so a pitfall with three semicolons merges as easily as one with none. This plan writes the rules down (D2) and adds no check (D3), so that stays true.
 
 | Surface                                                                                                 | Units | Words  | Hard findings | Semicolon | Sentence over 25 words | Synonym rotation | Marketing adjective, phrasal verb, nominalization | Advisory: passive, compound tense |
 | ------------------------------------------------------------------------------------------------------- | ----- | ------ | ------------- | --------- | ---------------------- | ---------------- | ------------------------------------------------- | --------------------------------- |
