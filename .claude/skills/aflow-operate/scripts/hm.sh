@@ -3,7 +3,7 @@
 #   hm.sh new <spaceId> <briefFile>              -> prints the new sessionId
 #   hm.sh send <spaceId> <sessionId> <textFile>  -> resumes a conversation paused on user input
 #   hm.sh status <spaceId> <sessionId>
-#   hm.sh last <spaceId> <sessionId> [chars]     -> the last assistant message
+#   hm.sh last <spaceId> <sessionId> [chars]     -> the Helmsman's latest reply
 # Run it from a checkout root that holds mcp.local.json. AFLOW_API overrides the base URL.
 set -u
 API=${AFLOW_API:-http://localhost:3000}
@@ -32,6 +32,6 @@ case "$CMD" in
       | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{const j=JSON.parse(d);console.log(j.status,"steps",j.stepCount,j.blockedOn?("blockedOn "+JSON.stringify(j.blockedOn)):"",(j.requiredInput&&j.requiredInput.prompt||"").replace(/\s+/g," ").slice(0,300))})' ;;
   last)
     curl -s -m 15 "$H[@]" "$API/v1/sessions/$3/chat-history?spaceId=$SP" \
-      | node -e 'let d="";const n=+process.argv[1]||3000;process.stdin.on("data",c=>d+=c).on("end",()=>{const j=JSON.parse(d);const ms=j.messages||[];const la=[...ms].reverse().find(m=>m.role==="assistant");console.log("turn",j.turnNumber);console.log(String(la&&la.content||"").slice(0,n))})' "${4:-3000}" ;;
+      | node -e 'let d="";const n=+process.argv[1]||3000;process.stdin.on("data",c=>d+=c).on("end",()=>{const j=JSON.parse(d);if(!j.messages){console.log(JSON.stringify(j).slice(0,400));return}const r=j.decision&&j.decision.message||j.modelOutput||"";console.log("turn",j.turnNumber);console.log(String(r).slice(0,n))})' "${4:-3000}" ;;
   *) echo "$USAGE" >&2; exit 1 ;;
 esac

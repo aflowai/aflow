@@ -52,7 +52,9 @@ started is in flight. [scripts/hm.sh](scripts/hm.sh) wraps the four calls (`new`
   `requiredInput` is present, `POST /v1/sessions/:id/resume?spaceId=…` with
   `{ stepExecutionId: requiredInput.stepExecutionId, input: { input: "<text>" } }`. The
   input is keyed `input` — keyed by variable id it delivers an empty turn.
-- Its last reply: `GET /v1/sessions/:id/chat-history?spaceId=…`, last `assistant` message.
+- Its last reply: `GET /v1/sessions/:id/chat-history?spaceId=…`, field `decision.message`,
+  or `modelOutput` when the decision carries no message. `messages` holds only what the
+  latest turn sent to the model, so the newest reply is not among them.
 - A session blocked on a `workflow_run` cannot take a message; it queues until the run ends.
 - A session that `FAILED` on a transient provider error: `POST /v1/sessions/:id/retry?spaceId=…` with `{}`.
 
@@ -101,8 +103,10 @@ will read it (a plan node's note or learnings, or memory).
 `docs/dev/debugging-runs.md` is the full playbook. The cases that recur:
 
 - **Nothing fires, schedules silent, runs frozen, `/health` ok** — the orchestrator is
-  gone. `pgrep -f aflow-orchestrator`; the dev supervisor does not restart it after a
-  SIGTERM or a Postgres connection drop. Restart the stack when nothing is mid-check.
+  gone. Run `pgrep -f aflow-orchestrator`. The dev supervisor restarts it after a crash (a
+  non-zero exit) within 2–30 s, but not after a SIGTERM, which ends it cleanly. A Postgres
+  connection drop does not end it: it replaces its database client and reconnects on the
+  next query. Restart the stack when nothing is mid-check.
 - **Commissions return in seconds with an empty patch; reviews end without a verdict** —
   the coding provider's usage limit, shared by every harness on the machine. Wait for the
   window, then republish the branch as it stands.
