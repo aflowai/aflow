@@ -8,6 +8,7 @@ import {
   WorkflowRunResultAdvisorySchema,
   toJsonSchemaSync,
   type JsonSchema,
+  WRITING_STYLE_RULES,
 } from '@aflow/schemas';
 import type { PlatformSkillBundleEntry, PlatformWorkflowDef } from './types.js';
 import { buildAuthoringPlatformSkillBundles } from './platformSkillBundlesAuthoring.js';
@@ -271,7 +272,10 @@ Optimization archetype — ONLY when \`inputs.intent.iterationModel\` is \`optim
 - The observe op reads the score via \`poll\` + \`outputProjection\` and declares that metric port. Gate irreversible/quota ops (\`retryability: "unsafe"\`) behind a \`human\`/\`approve\` task.
 - Do NOT author \`stateVariables\`/\`promoteOutputs\`/\`output\`/\`outcomes\`/\`manifest.campaign\`+\`goal\` — the assembler DERIVES them all. Omit \`outcomes\` entirely (authoring any is rejected in optimization mode).
 
-Activation is OPTIONAL — omit for chat-only skills. If included, both \`triggerPatterns\` (1–10 strings) and \`activationHint\` are required.`,
+Activation is OPTIONAL — omit for chat-only skills. If included, both \`triggerPatterns\` (1–10 strings) and \`activationHint\` are required.
+
+Write the text the skill carries (goals, descriptions, \`pauseInstruction\`, \`activationHint\`) to these rules:
+${WRITING_STYLE_RULES}`,
       type: 'agent',
       dependsOn: ['prepare-design-surface'],
       inputBindings: {
