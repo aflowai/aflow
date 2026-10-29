@@ -52,6 +52,7 @@ import { SurfaceActionProvider } from '../components/surface-action-context.js';
 import { ContentRenderer } from '../components/content-renderer.js';
 import { HarnessActivityProvider } from '../components/harness-activity-card.js';
 import { StatusOrb } from '../components/workflow-run-surface/StatusOrb.js';
+import { FirstRunQuickStartCard } from '../components/first-run-quick-start-card.js';
 import { looksLikeMarkdown } from '../lib/content-detection.js';
 import { buildLiveConversationItems } from '../components/chat/conversation-items.js';
 import { useChatSessionRuns } from '../components/chat/use-chat-session.js';
@@ -776,6 +777,7 @@ function ChatPageInner() {
               shows what's running and what needs your attention.
             </Text>
           </div>
+          <FirstRunQuickStartCard activeSpaceId={activeSpace?.id} emptyChat={greetingReady} />
         </div>
       ) : !selectedFlow && !openingNamedSession ? (
         <EmptyState
