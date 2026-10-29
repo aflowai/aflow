@@ -87,6 +87,16 @@ describe('capability bundles — coverage invariant', () => {
   });
 });
 
+describe('capability bundles — artifact creation sits under Visuals', () => {
+  it('owns generate and publish in Build artifacts, nested under the Visuals bundle', () => {
+    expect(bundleForOperation('ui.artifact.generate')?.id).toBe('artifacts');
+    expect(bundleForOperation('ui.artifact.publish')?.id).toBe('artifacts');
+    expect(bundleForOperation('ui.artifact.render')?.id).toBe('visuals');
+    expect(getCapabilityBundle('artifacts')?.parentId).toBe('visuals');
+    expect(getCapabilityBundle('visuals')).toBeDefined();
+  });
+});
+
 describe('capability bundles — resolution', () => {
   it('resolves an operation to its bundle through the capability group', () => {
     expect(bundleForOperation('memory.store.query')?.id).toBe('memory_read');

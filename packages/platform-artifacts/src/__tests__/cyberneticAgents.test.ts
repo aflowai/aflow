@@ -147,9 +147,12 @@ describe('platform-artifacts cybernetic ensemble — runtime source of truth', (
       expect(ops).not.toContain(id);
       expect(discovery.allowedOperationIds).toContain(id);
     }
-    // Authoring stays out of Helmsman's core surface.
-    expect(ops).not.toContain('ui.artifact.generate');
-    expect(ops).not.toContain('ui.artifact.publish');
+    // Authoring stays out of Helmsman's core surface but is discoverable whole:
+    // a draft generate makes is durable only once publish has run.
+    for (const id of ['ui.artifact.generate', 'ui.artifact.publish']) {
+      expect(ops).not.toContain(id);
+      expect(discovery.allowedOperationIds).toContain(id);
+    }
   });
 
   it('Helmsman discovery is an op-level preset — occasional ops discoverable, whole domains excluded (Plan 233 Part 3)', () => {

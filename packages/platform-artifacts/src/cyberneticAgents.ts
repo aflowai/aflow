@@ -195,6 +195,7 @@ export const HELMSMAN_DISCOVERY_PRESET: readonly string[] = [
   // Spends tokens: promoted when a model change asks for it, never pinned.
   'ai.model.probe_reasoning',
   'ui.artifact.generate',
+  'ui.artifact.publish',
   'ui.artifact.get',
   'ui.artifact.list',
   'ui.catalog.get',

@@ -496,7 +496,12 @@ export const UiArtifactGenerateInputSchema = z.object({
 export type UiArtifactGenerateInput = z.infer<typeof UiArtifactGenerateInputSchema>;
 
 export const UiArtifactGenerateOutputSchema = z.object({
-  draft: UiArtifactDraftSchema,
+  draft: UiArtifactDraftSchema.describe(
+    'The generated draft. A draft is not durable — it expires at expiresAt. Next step:' +
+      'ui.artifact.publish({ draftId: draft.draftId }) makes it a durable published version; ' +
+      'then ui.artifact.render({ artifactId, data }) shows it. An applet draft (applet: true) is ' +
+      'published by ui.applet.instantiate instead.',
+  ),
   validationReport: ValidationReportSchema,
   previewValidation: ValidationReportSchema.optional(),
   dataSchema: z.record(z.unknown()).optional(),
