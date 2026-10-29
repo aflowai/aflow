@@ -175,3 +175,5 @@ P2 review hardening: asks find their wait line anywhere in the note and reuse it
 P2 round 10 implements the settled rules and adds their regression cases. Carrier failures return a successful close with the closed node and linked findings named.
 
 P2 round 11 refuses resident closes across node kinds and records carrier failures with the closed node and linked findings for recovery. Candidate-root history reads exclude done branches within walk bounds, preserve declines, and describe proposals beside unrelated person waits. Recalibrate gating remains unchanged.
+
+P2 round 12 records resident provenance before input normalization and directs merge closes through the person or system path. Person reopens persist, and close responses preserve carrier recovery pointers.

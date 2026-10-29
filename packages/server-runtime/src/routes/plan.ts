@@ -409,7 +409,8 @@ export const planRoutes: FastifyPluginAsync = async (fastify) => {
         status: body.status,
         revision: result.node.revision,
       });
-      return { node: result.node };
+      const { ok: _ok, ...written } = result;
+      return written;
     },
   );
 

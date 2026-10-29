@@ -476,3 +476,17 @@ it('describes proposals beside unrelated person waits', () => {
   expect(description).toContain('without blocked scope, waiting scope or declined proposals');
   expect(description).toContain('even when unrelated roots await people');
 });
+
+it('directs record_merge to the person or system close path', () => {
+  const merge = PlanStreamAnswerSchema.options.find(
+    (option) => option.shape.decision.value === 'record_merge',
+  );
+  const description = merge && 'liveCheck' in merge.shape ? merge.shape.liveCheck.description : '';
+  expect(description).toContain('A person or system closes the merged node through its close path');
+  expect(description).toContain('a resident never closes it');
+  const guidance = getOperation('plan.node.next')?.usage.pitfalls?.find((text) =>
+    text.startsWith('record_merge:'),
+  );
+  expect(guidance).toContain('a resident never closes it');
+  expect(guidance).not.toContain('status "done"');
+});

@@ -1117,6 +1117,19 @@ describe('SpacePlanPage — the operator’s writes from the rail', () => {
     });
   });
 
+  it('shows carrier recovery pointers while accepting the committed close', async () => {
+    const carrierFailure = `Carrier failed for closed node ${BOARD}. Read its linked findings: publish failed`;
+    recorded.mutateAsync.mockResolvedValue({ node: {}, carrierFailure });
+    recorded.details[BOARD] = detail(fullNode(BOARD, 'P3.3 the board', { revision: 5 }));
+    await render();
+    await click(card(BOARD));
+    await click(button(rail(), 'Mark done'));
+    await type(rail(), 'The board renders.');
+    await click(button(rail(), 'Mark done'));
+    expect(rail().querySelector('textarea')).toBe(null);
+    expect(document.body.textContent).toContain(carrierFailure);
+  });
+
   it('marks a step done with how its criteria were met, against the revision the rail read', async () => {
     recorded.mutateAsync.mockResolvedValue({ node: {} });
     recorded.details[BOARD] = detail(fullNode(BOARD, 'P3.3 the board', { revision: 5 }));

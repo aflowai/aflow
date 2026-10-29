@@ -1067,7 +1067,7 @@ export const PlanStreamAnswerSchema = z.discriminatedUnion('decision', [
         'The record that this merge was judged: pass it to plan.node.link once the node’s update is written. Until it is linked, the next firing judges the merge again.',
       ),
       liveCheck: PlanNodeCreateSchema.describe(
-        'Only where the criteria need the change running on the stack, not only merged: pass it to plan.node.create as it stands, then mark the node done on its merge. It is created blocked on a read of the connected folder’s head, and the node is not held open for it.',
+        'Create this blocked live check only when criteria require the merged change running on the stack. A person or system closes the merged node through its close path, and a resident never closes it.',
       ),
     })
     .strict(),

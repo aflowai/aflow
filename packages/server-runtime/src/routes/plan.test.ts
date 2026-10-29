@@ -431,6 +431,14 @@ describe('PATCH /v1/spaces/:spaceId/plan/nodes/:nodeId', () => {
     return app.inject({ method: 'PATCH', url, payload: body as Record<string, unknown> });
   }
 
+  it('returns carrier failure recovery pointers after a successful close', async () => {
+    const carrierFailure = `Carrier failed for closed node ${closedNode().nodeId}. Read its linked findings: publish failed`;
+    mockUpdatePlanNode.mockResolvedValue({ ok: true, node: closedNode(), carrierFailure });
+    const res = await patch({ expectedRevision: 3, status: 'done', outcome: 'Merged.' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ node: closedNode(), carrierFailure });
+  });
+
   it('marks a node done through the engine, against the revision the operator read, stamped with who they are', async () => {
     mockUpdatePlanNode.mockResolvedValue({ ok: true, node: closedNode() });
 

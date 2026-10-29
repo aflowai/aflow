@@ -1016,8 +1016,28 @@ describe('resident asking and proposing', () => {
           expectedRevision: closed.revision,
           why: 'Read the folder again',
         }),
-      ).toMatchObject({ ok: true, node: { status: 'done' } });
-      expect(await wake()).toMatchObject({ decisions: [] });
+      ).toMatchObject({ ok: true, node: { status: 'active' } });
+      expect((await current(check.nodeId)).outcome).toBeUndefined();
+    },
+  );
+
+  it.each(['done', 'dropped'] as const)(
+    'respects a person reopening a %s live check',
+    async (status) => {
+      const check = await created({
+        kind: 'investigate',
+        liveCheck: { pullRequest: PR, mergeCommitSha: MERGE_SHA },
+      });
+      await write(check.nodeId, { status, outcome: 'The person closed this check.' });
+      const closed = await current(check.nodeId);
+      const reopened = await openPlanNode(session(), {
+        nodeId: closed.nodeId,
+        expectedRevision: closed.revision,
+        why: 'The folder needs another read.',
+      });
+      expect(reopened).toMatchObject({ ok: true, node: { status: 'active' } });
+      expect((await current(check.nodeId)).outcome).toBeUndefined();
+      expect((await current(check.nodeId)).closedAt).toBeUndefined();
     },
   );
 

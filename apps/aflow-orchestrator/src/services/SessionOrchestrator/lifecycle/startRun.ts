@@ -127,6 +127,17 @@ export function createStartRun(bindings: SessionOrchestratorBindings) {
       }
     }
 
+    const trigger = existingRun?.trigger ?? params.trigger;
+    const planResident =
+      existingRun?.planResident ??
+      (trigger === 'schedule'
+        ? parsedInput === undefined
+          ? undefined
+          : typeof (parsedInput['config'] as Record<string, unknown> | undefined)?.[
+              PLAN_RESIDENT_SCHEDULE_VARIABLE
+            ] === 'string'
+        : undefined);
+
     if (parsedInput && agentDef.stateVariables.length > 0) {
       const pipelineResult = processFlowInput(parsedInput, agentDef);
       if (pipelineResult.ok) {
@@ -292,7 +303,7 @@ export function createStartRun(bindings: SessionOrchestratorBindings) {
           target: runTarget,
           ...(params.spaceId ? { spaceId: params.spaceId } : {}),
           ...(params.createdBy ? { createdBy: params.createdBy } : {}),
-          ...(params.trigger ? { trigger: params.trigger } : {}),
+          ...(trigger ? { trigger } : {}),
           ...(params.voiceMode ? { voiceMode: true } : {}),
           disclosedCallers,
           ...(params.actorContext
@@ -406,15 +417,8 @@ export function createStartRun(bindings: SessionOrchestratorBindings) {
       // conversation list and away from the metadata plane.
       ...(startUserMessage ? { lastMessageSeq: 1, lastActivityAt: now } : {}),
       ...(params.spaceId ? { spaceId: params.spaceId } : {}),
-      ...(params.trigger ? { trigger: params.trigger } : {}),
-      ...(params.trigger === 'schedule' && parsedInput !== undefined
-        ? {
-            planResident:
-              typeof (parsedInput['config'] as Record<string, unknown> | undefined)?.[
-                PLAN_RESIDENT_SCHEDULE_VARIABLE
-              ] === 'string',
-          }
-        : {}),
+      ...(trigger ? { trigger } : {}),
+      ...(planResident !== undefined ? { planResident } : {}),
       activatedByPerson: params.activatedByPerson,
       ...(params.voiceMode ? { voiceMode: true } : {}),
       ...(params.actorContext ? { actorContextJson: JSON.stringify(params.actorContext) } : {}),

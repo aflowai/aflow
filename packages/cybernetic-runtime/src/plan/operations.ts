@@ -570,6 +570,7 @@ async function writePlanNode(
   if (
     ctx.actorKind === 'human' &&
     input.status === 'active' &&
+    current.status === 'blocked' &&
     current.note?.includes(PLAN_NODE_LIVE_CHECK_HEAD)
   ) {
     patch.status = 'done';

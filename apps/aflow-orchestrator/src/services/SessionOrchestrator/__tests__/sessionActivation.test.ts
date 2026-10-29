@@ -541,3 +541,52 @@ describe('a sub-agent its parent answers while it is paused', () => {
     expect(job['activatedByPerson']).toBe(false);
   });
 });
+
+it('records resident provenance before normalizing the schedule input', async () => {
+  const previous = agentDefinition.stateVariables;
+  agentDefinition.stateVariables = [
+    {
+      variableId: 'input',
+      name: 'Input',
+      typeSchema: { type: 'string' },
+      lifecycle: { isInput: true },
+      required: true,
+    },
+    {
+      variableId: 'scheduleId',
+      name: 'Schedule',
+      typeSchema: { type: 'string' },
+      lifecycle: { isInput: true },
+      required: false,
+    },
+  ] as AgentDefinition['stateVariables'];
+  try {
+    await lifecycle.startRun({
+      tenantId: TENANT,
+      runId: RUN,
+      target: { kind: 'platform-role', systemRole: 'browsing-agent' as SystemRole },
+      agentVersion: '1',
+      inputRef:
+        `inline:${Buffer.from(JSON.stringify({ input: 'Wake', config: { scheduleId: 'resident-schedule' } })).toString('base64')}` as PayloadRef,
+      traceId: 'trace-resident' as TraceId,
+      idempotencyKey: 'resident-start' as IdempotencyKey,
+      spaceId: SPACE,
+      trigger: 'schedule',
+      activatedByPerson: false,
+    });
+    const state = await getSessionState(redis, TENANT, RUN);
+    expect(state?.planResident).toBe(true);
+    expect(state?.trigger).toBe('schedule');
+  } finally {
+    agentDefinition.stateVariables = previous;
+  }
+});
+
+it('preserves recorded schedule provenance when starting a queued session again', async () => {
+  await updateSessionState(redis, TENANT, RUN, { trigger: 'schedule', planResident: true });
+  await chatStart();
+  expect(await getSessionState(redis, TENANT, RUN)).toMatchObject({
+    trigger: 'schedule',
+    planResident: true,
+  });
+});
