@@ -380,8 +380,11 @@ review's say "UI change not seen in a browser: the folder declares no preview" w
 `aflow folder <bindingId> preview` command that declares one; a harness that takes no
 browser says "browser unavailable on harness <id>", and a space whose grant lacks
 `browser.page:write` says that, each the same way — the run goes on without a browser
-rather than being refused. The review's `needs_setup` finding and the pull request's body
-line are still to come (P6.d). None of these holds back a push. The same step takes any port this stack serves
+rather than being refused. The review also ends its `findings` with the same line as a
+finding of its own kind, `needs_setup`, severity `minor`: the publication's rounds rule
+never takes a fix round for it and hands it on to none, and the pull request's body says,
+under its review, that the range is **Not seen in a browser** and why. None of these holds
+back a push. The same step takes any port this stack serves
 on off the Claude Code harness's browser ports: `aflow harness browser-ports claude <port> …`
 sets the list to the ports that stay. The one to look for is this stack's web app, `3001`
 by default, serving `main`: a coding agent sent there looks at the wrong code, so such a

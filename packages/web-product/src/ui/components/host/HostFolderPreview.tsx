@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { Button, Column, HelperText, Input, Row, Text, Textarea } from '@aflow/design-system';
 import {
+  declareFolderPreviewCommand,
   FOLDER_PREVIEW_PORT_PLACEHOLDER,
   type HostFolderPreview,
   HostFolderPreviewSchema,
@@ -145,7 +146,14 @@ export function HostFolderPreview({
           </Text>
           <Text variant="muted" size="sm">
             The machine found a web app in {detectedWebApps.join(', ')}. Declare how it is served
-            and a change to its UI can be seen working before it merges.
+            and a change to its UI can be seen working before it merges. Until then, a review of a
+            change to it reads it as a diff and says so as a needs_setup finding.
+          </Text>
+          <Text variant="muted" size="sm">
+            On the machine:{' '}
+            <Text variant="mono" size="sm">
+              {declareFolderPreviewCommand(bindingId)}
+            </Text>
           </Text>
         </Column>
       ) : null

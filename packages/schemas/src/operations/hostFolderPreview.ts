@@ -172,6 +172,18 @@ export const HostFolderPreviewSchema = z
   );
 export type HostFolderPreview = z.infer<typeof HostFolderPreviewSchema>;
 
+/**
+ * What follows `aflow folder <bindingId>` to declare a folder's preview, as the
+ * review's `needs_setup` finding, the commission's result and the machine page
+ * name it (Plan 320 D21).
+ */
+export const DECLARE_FOLDER_PREVIEW_ARGUMENTS = `preview --command "<the command that serves it, with ${FOLDER_PREVIEW_PORT_PLACEHOLDER}>"`;
+
+/** The command a person runs on the machine to declare `bindingId`'s preview. */
+export function declareFolderPreviewCommand(bindingId: string): string {
+  return `aflow folder ${bindingId} ${DECLARE_FOLDER_PREVIEW_ARGUMENTS}`;
+}
+
 /** The preview as a run reads it: what the person chose, with every default read in now. */
 export interface HostResolvedFolderPreview {
   readonly command: string;

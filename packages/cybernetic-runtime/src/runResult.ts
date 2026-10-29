@@ -113,7 +113,8 @@ export function sanitizePromotedState(
  * the incremental slice of `resolvePromotedRunMetrics` the harness stamps on
  * the terminal `WorkflowTaskUpdate` (`promotedState`), so the chat surface
  * shows output values live as tasks finish instead of waiting for the
- * terminal run result.
+ * terminal run result. An `append` variable's slice is this task's items
+ * alone; the terminal result holds every writer's.
  */
 export function resolveTaskPromotedState(
   taskDef: WorkflowTask,
@@ -121,7 +122,7 @@ export function resolveTaskPromotedState(
   stateVariables: readonly WorkflowStateVariable[] | undefined,
 ): Record<string, unknown> | undefined {
   if (!taskDef.promoteOutputs || taskDef.promoteOutputs.length === 0) return undefined;
-  const bag = resolvePromotedRunMetrics([taskDef], [taskResult]);
+  const bag = resolvePromotedRunMetrics([taskDef], [taskResult], stateVariables);
   return sanitizePromotedState(bag, stateVariables);
 }
 
@@ -252,7 +253,7 @@ export async function buildWorkflowRunResult(
       );
     }
   }
-  const bag = resolvePromotedRunMetrics(workflow.tasks, taskResults);
+  const bag = resolvePromotedRunMetrics(workflow.tasks, taskResults, workflow.stateVariables);
   // Sensitive variables must not leave the server through ANY caller-facing
   // section — not just `output`. Score (`value`/`targetMet`) and outcome
   // checks (`met`) would leak a sensitive metric exactly or by range, so

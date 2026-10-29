@@ -43,6 +43,7 @@ import {
   HostPushAreasSchema,
   HOST_BINARY_FILE_LINES,
   isEvalPlaneOperation,
+  NEEDS_SETUP_FINDING_KIND,
   LoopPullRequestsSchema,
   ShepherdHandoffReadSchema,
   MAX_PARENT_INPUTS_SERIALIZED_BYTES,
@@ -3435,6 +3436,32 @@ describe("Publish Local Changes — the rounds rule decides a review's findings,
         // Every finding is handed on, for the fix round's publication to mark.
         expect(outcome.state['findings'], label).toHaveLength(MINORS.length);
       }
+    });
+
+    it("never takes a fix round for the review's needs_setup finding, hands it on to none, and still takes one for a real minor beside it (Plan 320 D21)", () => {
+      const setup = {
+        kind: NEEDS_SETUP_FINDING_KIND,
+        severity: 'minor',
+        file: 'src/web/Checkout.vue',
+        claim: 'UI change not seen in a browser: the folder declares no preview',
+        evidence: 'The range changes `src/web/Checkout.vue`, which matches the folder’s `uiPaths`.',
+      } as Finding;
+      const alone = reviewedWith({ review: 'approve', findings: [NAME, setup] });
+      expectSettled(alone, 'publish_as_is', NITS_ONLY_REASON, 'needs_setup alone');
+      expect(alone).toMatchObject({ asked: false, pushed: true });
+      expect(alone.state['pushDecision']).toBe('push');
+      expect(PullRequestFindingsSchema.parse(alone.state['findings']).map((f) => f.claim)).toEqual([
+        NAME.claim,
+      ]);
+      // The composition is handed it, and lists it as not seen in a browser.
+      const described = HostCommitDescribeInputSchema.parse(alone.inputs.get('describe-pr'));
+      expect(described.review?.findings?.at(-1)).toMatchObject({ kind: NEEDS_SETUP_FINDING_KIND });
+
+      const beside = reviewedWith({ review: 'approve', findings: [SLIP, setup] });
+      expectSettled(beside, 'fix_before_merge', FIRST_ROUND_REASON, 'a minor beside it');
+      expect(PullRequestFindingsSchema.parse(beside.state['findings']).map((f) => f.claim)).toEqual(
+        [SLIP.claim],
+      );
     });
 
     it('approve with minors once a fix round has run is publish_as_is: pushed without asking, the minors carried open on the pull request', () => {

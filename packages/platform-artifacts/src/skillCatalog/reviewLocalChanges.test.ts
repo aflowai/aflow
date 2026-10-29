@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import AjvModule from 'ajv';
 import { materializeAndValidateSkillConfig } from '@aflow/cybernetic-runtime';
 import {
+  declareFolderPreviewCommand,
   HOST_HARNESS_CONCURRENCY_DEFAULT,
   HOST_KEEP_AWAKE_DEFAULT,
   HOST_SANDBOX_POSTURE_DEFAULT,
@@ -10,6 +11,7 @@ import {
   type HostFolderUiAnswer,
   HostHarnessRunInputSchema,
   isEvalPlaneOperation,
+  NEEDS_SETUP_FINDING_KIND,
   substituteTemplateBinds,
 } from '@aflow/schemas';
 import {
@@ -19,7 +21,11 @@ import {
   UI_NOT_SEEN_NO_PREVIEW,
   UI_NOT_SEEN_PREVIEW_UNAVAILABLE,
 } from './localBrowserRule.js';
-import { REVIEW_LOCAL_CHANGES, REVIEW_PREVIEW_PARAGRAPH } from './reviewLocalChanges.js';
+import {
+  REVIEW_FINDING_SCHEMA,
+  REVIEW_LOCAL_CHANGES,
+  REVIEW_PREVIEW_PARAGRAPH,
+} from './reviewLocalChanges.js';
 import { runSkillTasks, type TaskAnswer } from '../__tests__/runSkillTasks.js';
 import { skillGuidance } from '../__tests__/skillGuidance.js';
 
@@ -84,7 +90,7 @@ describe('Review Local Changes — the first harness inside a skill', () => {
       'read-ui',
       'decide-browser',
       'review',
-      'report-preview',
+      'report-setup',
     ]);
     // Nothing in the skill writes: the folder is only read, and the decision is the orchestrator's.
     expect(wf.tasks.map((t) => t.operation)).toEqual([
@@ -258,6 +264,11 @@ describe('Review Local Changes — the first harness inside a skill', () => {
 
     const { verdict: _verdict, ...noVerdict } = review;
     expect(validate(noVerdict)).toBe(false);
+
+    // Only the rule writes a `needs_setup` finding: the reviewer's result has no kind.
+    expect(
+      validate({ ...review, findings: [{ ...review.findings[0], kind: 'needs_setup' }] }),
+    ).toBe(false);
   });
 
   it('refuses an approval that contradicts its own findings, and admits one that does not', () => {
@@ -355,7 +366,12 @@ function review(
   runInputs: Record<string, unknown> = RANGE,
   verdict: TaskAnswer = VERDICT,
 ) {
-  return runSkillTasks(wf.tasks, runInputs, (taskId) => (taskId === 'read-ui' ? read : verdict));
+  return runSkillTasks(
+    wf.tasks,
+    runInputs,
+    (taskId) => (taskId === 'read-ui' ? read : verdict),
+    wf.stateVariables,
+  );
 }
 
 describe('Review Local Changes — the browser and the preview by rule (Plan 320 D20)', () => {
@@ -500,7 +516,7 @@ describe('Review Local Changes — the browser and the preview by rule (Plan 320
       ...VERDICT,
       previewUrl: 'http://127.0.0.1:47101/',
     });
-    expect(run.statuses.get('report-preview')).toBe('skipped');
+    expect(run.statuses.get('report-setup')).toBe('skipped');
     expect(run.state).not.toHaveProperty('uiNotSeen');
   });
 
@@ -514,5 +530,112 @@ describe('Review Local Changes — the browser and the preview by rule (Plan 320
   it('says so to the Helmsman, which never asks for the browser', () => {
     expect(skillGuidance(REVIEW_LOCAL_CHANGES)).toContain('The browser is never asked for');
     expect(skillGuidance(REVIEW_LOCAL_CHANGES)).toContain('`uiNotSeen` says why');
+  });
+});
+
+// --- Plan 320 D21: the needs_setup finding, of the review's own kind --------
+
+const NIT = {
+  severity: 'nit',
+  file: 'src/web/Checkout.vue',
+  line: 4,
+  claim: 'The class name repeats the component name.',
+  evidence: 'class="checkout-checkout".',
+};
+const WITH_NIT = { result: { verdict: 'approve', summary: 'One nit.', findings: [NIT] } };
+
+const validFinding = new AjvCtor({ allErrors: true, strict: false }).compile(REVIEW_FINDING_SCHEMA);
+
+/** The review's findings, its own first, and the one its rule added last. */
+function setupFinding(run: ReturnType<typeof review>): Record<string, unknown> {
+  const findings = run.state['findings'] as Array<Record<string, unknown>>;
+  expect(findings.slice(0, -1)).toEqual([NIT]);
+  const added = findings.at(-1) ?? {};
+  expect(validFinding(added)).toBe(true);
+  expect(added).toMatchObject({
+    kind: NEEDS_SETUP_FINDING_KIND,
+    severity: 'minor',
+    file: 'src/web/Checkout.vue',
+  });
+  expect(added['evidence']).toContain('`src/web/Checkout.vue`');
+  return added;
+}
+
+describe('Review Local Changes — needs_setup where the review had no browser (Plan 320 D21)', () => {
+  it('reports a folder with no preview as a minor finding of its own kind, with the command that declares one', () => {
+    const run = review(folderAnswer({ preview: 'not_declared', ...TOUCHED }), RANGE, WITH_NIT);
+    const added = setupFinding(run);
+    expect(added['claim']).toBe('UI change not seen in a browser: the folder declares no preview');
+    expect(added['suggestion']).toContain(`\`${declareFolderPreviewCommand('hb_app')}\``);
+    expect(added['suggestion']).toContain('aflow folder hb_app preview --command');
+    // The verdict is the reviewer's, and the line beside it stands.
+    expect(run.state).toMatchObject({ verdict: 'approve' });
+    expect(run.state['uiNotSeen']).toContain(UI_NOT_SEEN_NO_PREVIEW);
+  });
+
+  it('reports a harness without browser arguments the same way, naming the harness', () => {
+    const run = review(
+      folderAnswer({
+        preview: 'declared',
+        ...TOUCHED,
+        browser: { harness: 'codex', unavailable: 'harness' },
+      }),
+      RANGE,
+      WITH_NIT,
+    );
+    const added = setupFinding(run);
+    expect(added['claim']).toContain(`${BROWSER_UNAVAILABLE_ON_HARNESS} codex`);
+    expect(added['claim']).toContain('`aflow harness browser codex`');
+  });
+
+  it('reports a grant without browser.page:write as needs_setup, never a permission failure', () => {
+    const run = review(
+      folderAnswer({
+        preview: 'declared',
+        ...TOUCHED,
+        browser: { harness: 'claude', unavailable: 'grant' },
+      }),
+      RANGE,
+      WITH_NIT,
+    );
+    expect([...run.statuses.values()]).not.toContain('failed');
+    expect(setupFinding(run)['claim']).toBe(UI_NOT_SEEN_NO_GRANT);
+  });
+
+  it('reports a preview the rule gave the review and it could not have, saying what happened', () => {
+    const happened = 'preview port 41802 is in use.';
+    const run = review(folderAnswer({ preview: 'declared', ...TOUCHED }), RANGE, {
+      ...WITH_NIT,
+      previewUnavailable: happened,
+    });
+    expect(setupFinding(run)['claim']).toBe(`${UI_NOT_SEEN_PREVIEW_UNAVAILABLE}: ${happened}`);
+  });
+
+  it('adds nothing where the review had its preview, or its range touched no UI', () => {
+    for (const [label, read, verdict] of [
+      [
+        'preview open',
+        folderAnswer({ preview: 'declared', ...TOUCHED }),
+        { ...WITH_NIT, previewUrl: 'http://127.0.0.1:47101/' },
+      ],
+      ['no UI file', folderAnswer({ preview: 'not_declared' }), WITH_NIT],
+    ] as const) {
+      const run = review(read, RANGE, verdict);
+      expect(run.state['findings'], label).toEqual([NIT]);
+    }
+  });
+
+  it('adds nothing to a review that did not finish, so a publication still reads it as unfinished', () => {
+    const run = review(folderAnswer({ preview: 'not_declared', ...TOUCHED }), RANGE, 'fail');
+    expect(run.statuses.get('review')).toBe('failed');
+    expect(run.state).not.toHaveProperty('findings');
+  });
+
+  it('names the kind in the brief, so the reviewer writes no finding of a missing browser itself', () => {
+    expect(reviewBrief()).toContain('`needs_setup`');
+    expect(reviewBrief()).toContain('Write no finding about a missing browser or preview');
+    const findings = (wf.stateVariables ?? []).find((v) => v.variableId === 'findings');
+    expect(findings?.writers).toBe('append');
+    expect(findings?.description).toContain('`needs_setup`');
   });
 });

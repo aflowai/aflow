@@ -1,7 +1,9 @@
 import {
+  DECLARE_FOLDER_PREVIEW_ARGUMENTS,
   EPHEMERAL_BROWSER_PROFILE,
   HOST_HARNESS_PREVIEW_IF_AVAILABLE,
   type HostFolderBrowserUnavailable,
+  NEEDS_SETUP_FINDING_KIND,
 } from '@aflow/schemas';
 import { bind, ctx, out, runInput, type SKIP } from './localPrShepherdWiring.js';
 
@@ -51,20 +53,52 @@ export const BROWSER_UNAVAILABLE_ON_HARNESS = 'browser unavailable on harness';
 export const UI_NOT_SEEN_PREVIEW_UNAVAILABLE =
   "UI change not seen in a browser: the folder's preview could not be had when the run started, so it ran without the preview and its browser";
 
-/** The command a person runs on the machine to declare a folder's preview, as the lines name it. */
-export const DECLARE_PREVIEW_ARGUMENTS =
-  'preview --command "<the command that serves it, with {port}>"';
+/** The exact command that declares the bound folder's preview, and where else it is declared. */
+function declarePreviewParts() {
+  return [
+    'A person declares it once, on the machine: `aflow folder ',
+    bind('bindingId'),
+    ` ${DECLARE_FOLDER_PREVIEW_ARGUMENTS}\` — or as the folder's preview on the machine page.`,
+  ];
+}
 
 /** The no-preview line with the exact command that settles it, over the bound folder. */
 function noPreviewLine() {
+  return { $concat: [`${UI_NOT_SEEN_NO_PREVIEW}. `, ...declarePreviewParts()] };
+}
+
+// --- The review's needs_setup finding (D21) ----------------------------------
+
+/**
+ * What a D21 case becomes in the review's `findings`: a finding of the rule's
+ * own kind, `minor` and never a blocker, about the first UI file the range
+ * changes (`uiFile`, bound from the folder's answer). `claim` is the case's
+ * line; `suggestion`, where one command settles it, that command.
+ */
+export interface SetupFindingCase {
+  readonly claim: unknown;
+  readonly suggestion?: unknown;
+}
+
+export function needsSetupFinding(found: SetupFindingCase) {
   return {
-    $concat: [
-      `${UI_NOT_SEEN_NO_PREVIEW}. A person declares it once, on the machine: \`aflow folder `,
-      bind('bindingId'),
-      ` ${DECLARE_PREVIEW_ARGUMENTS}\` — or as the folder's preview on the machine page.`,
-    ],
+    kind: NEEDS_SETUP_FINDING_KIND,
+    severity: 'minor',
+    file: bind('uiFile'),
+    claim: found.claim,
+    evidence: {
+      $concat: [
+        'The range changes `',
+        bind('uiFile'),
+        "`, which matches the folder's `uiPaths` as the machine holding it read them, and the review read the range as a diff, with no browser.",
+      ],
+    },
+    ...(found.suggestion !== undefined ? { suggestion: found.suggestion } : {}),
   };
 }
+
+/** How a skill's D21 rules carry the case as a finding; absent, they carry only its line. */
+type SetupFinding = (found: SetupFindingCase) => unknown;
 
 /** The harness line, naming the harness where the machine could choose one. */
 function harnessLine() {
@@ -103,17 +137,25 @@ function previewUnavailableLine() {
   };
 }
 
+/** A D21 rule's value: its line, which a skill promotes, and the line as a finding where it asks for one. */
+function setupValue(line: unknown, finding: SetupFinding | undefined, found?: SetupFindingCase) {
+  return {
+    line,
+    ...(finding !== undefined ? { finding: finding(found ?? { claim: line }) } : {}),
+  };
+}
+
 /**
  * The D21 rule over `state.previewUnavailable`, what the harness run said of
  * a preview the rule gave it and it could not have: first, since it is what
  * happened rather than what the folder's answer foresaw.
  */
-export function previewUnavailableRule(decision: string) {
+export function previewUnavailableRule(decision: string, finding?: SetupFinding) {
   return {
     when: { expression: 'state.previewUnavailable != null' },
     decision,
     reason: previewUnavailableLine(),
-    value: { line: previewUnavailableLine() },
+    value: setupValue(previewUnavailableLine(), finding),
   };
 }
 
@@ -121,21 +163,26 @@ export function previewUnavailableRule(decision: string) {
  * The D21 rules over `state.ui`, the folder's answer: no preview first, then
  * why a browser could not be had. Each names its line as its reason, and as
  * the value's `line`, which a skill promotes: present where one of these
- * decided, absent wherever none did.
+ * decided, absent wherever none did. Given `finding`, the value carries the
+ * case as the review's `needs_setup` finding beside it: the no-preview one
+ * claims D21's words and suggests the command that declares the preview.
  */
-export function setupRules(decision: string) {
+export function setupRules(decision: string, finding?: SetupFinding) {
   return [
     {
       when: { expression: "state.ui.preview == 'not_declared'" },
       decision,
       reason: noPreviewLine(),
-      value: { line: noPreviewLine() },
+      value: setupValue(noPreviewLine(), finding, {
+        claim: UI_NOT_SEEN_NO_PREVIEW,
+        suggestion: { $concat: declarePreviewParts() },
+      }),
     },
     ...UNAVAILABLE_LINES.map(([why, line]) => ({
       when: { expression: `state.ui.browser.unavailable == '${why}'` },
       decision,
       reason: line(),
-      value: { line: line() },
+      value: setupValue(line(), finding),
     })),
   ];
 }
@@ -147,20 +194,28 @@ export const UI_UNTOUCHED_REASON =
 export const BROWSER_REASON =
   "What the run starts from touches the folder's `uiPaths` and the folder declares a preview: the run takes `browser: { profile: 'ephemeral' }` and `preview: 'if_available'`, so a preview that cannot be had at run time leaves the run without it and its browser rather than failing it.";
 
-/** The rules before a run: the browser where its UI is touched and everything it needs can be had. */
-export const BROWSER_RULES = [
-  {
-    when: { expression: 'state.ui == null' },
-    decision: NO_BROWSER_DECISION,
-    reason: UI_UNREAD_REASON,
-  },
-  {
-    when: { expression: 'state.ui.touched == false' },
-    decision: NO_BROWSER_DECISION,
-    reason: UI_UNTOUCHED_REASON,
-  },
-  ...setupRules(NEEDS_SETUP_DECISION),
-];
+/**
+ * The rules before a run: the browser where its UI is touched and everything
+ * it needs can be had. Given `finding`, a setup decision's value carries its
+ * case as a finding too.
+ */
+export function browserRules(finding?: SetupFinding) {
+  return [
+    {
+      when: { expression: 'state.ui == null' },
+      decision: NO_BROWSER_DECISION,
+      reason: UI_UNREAD_REASON,
+    },
+    {
+      when: { expression: 'state.ui.touched == false' },
+      decision: NO_BROWSER_DECISION,
+      reason: UI_UNTOUCHED_REASON,
+    },
+    ...setupRules(NEEDS_SETUP_DECISION, finding),
+  ];
+}
+
+export const BROWSER_RULES = browserRules();
 
 /**
  * The decision that adds the browser: its value is what the harness run takes
@@ -255,6 +310,8 @@ export function decideOverUiTask(args: {
   when?: { expression: string; onMissingRef: typeof SKIP };
   rules: readonly unknown[];
   otherwise: { decision: string; reason: string; value?: unknown };
+  /** Whether the rules carry a `needs_setup` finding, which names the first UI file. */
+  findsSetup?: boolean;
 }) {
   return {
     taskId: args.taskId,
@@ -270,6 +327,8 @@ export function decideOverUiTask(args: {
       bindingId: runInput('bindingId'),
       ui: out(args.readTaskId, 'ui'),
       uiHarness: out(args.readTaskId, 'ui.browser.harness'),
+      // The first UI file, which a rule's needs_setup finding is about.
+      ...(args.findsSetup === true ? { uiFile: out(args.readTaskId, 'ui.files[0]') } : {}),
       ...(args.harnessTaskId !== undefined
         ? { previewUnavailable: out(args.harnessTaskId, 'previewUnavailable') }
         : {}),
@@ -293,14 +352,15 @@ export function decideOverUiTask(args: {
  * Optional, as the read before it is: a decision that could not be made
  * leaves the run without a browser rather than without a run.
  */
-export function decideBrowserTask(goal: string, paragraph: string) {
+export function decideBrowserTask(goal: string, paragraph: string, finding?: SetupFinding) {
   return {
     ...decideOverUiTask({
       taskId: DECIDE_BROWSER_TASK_ID,
       name: 'Decide whether the run takes a browser',
       goal,
       readTaskId: READ_UI_TASK_ID,
-      rules: BROWSER_RULES,
+      rules: finding === undefined ? BROWSER_RULES : browserRules(finding),
+      findsSetup: finding !== undefined,
       otherwise: browserOtherwise(paragraph),
     }),
     optional: true,
@@ -356,36 +416,63 @@ export function previewOpenTask(harnessTaskId: string) {
 /** Holds where the run changed files and had no preview open. */
 export const NO_PREVIEW_OPEN = `tasks.${PREVIEW_OPEN_TASK_ID}.output.decision == '${NOT_OPEN_DECISION}'`;
 
+export const REPORT_SETUP_TASK_ID = 'report-setup';
+
 /**
- * After a harness run the rule gave the preview: where the run could not have
- * it, D21's line naming what happened, promoted as `uiNotSeen`. Runs only
- * where the run said so, and fails nothing: optional, as the read is.
+ * After the review's harness run `harnessTaskId`: the review's `needs_setup`
+ * finding (D21), where it ran without a browser over a range touching the
+ * folder's UI — the case the decision before the run named, or, where the
+ * rule gave the run the preview and it could not be had when it started, what
+ * happened to it, whose line is promoted as `uiNotSeen` here. Runs only after
+ * a review that finished, so one that did not reports no finding, and fails
+ * nothing: optional, as the read is.
  */
-export function reportPreviewUnavailableTask(harnessTaskId: string) {
+export function reportSetupTask(harnessTaskId: string) {
   return {
-    taskId: 'report-preview',
-    name: 'Say why the run had no preview',
-    goal: "Where the run the rule gave the folder's preview could not have it when it started — its port held or in use, or it never answered — name, in D21's words, what happened to it: the run went on without the preview and its browser, and that is reported, never a failure.",
+    taskId: REPORT_SETUP_TASK_ID,
+    name: 'Report the setup the review ran without',
+    goal: "Where the review ran without a browser over a range touching the folder's UI — the folder declares no preview, the harness or the grant could not take a browser, or the preview the rule gave it could not be had when it started — add to its findings, in D21's words, one of their own kind, `needs_setup`, severity `minor` and never a blocker, naming what would give it one. It is reported, never a failure.",
     type: 'operation' as const,
     operation: 'workflow.run.decide',
-    dependsOn: [harnessTaskId],
+    dependsOn: [READ_UI_TASK_ID, DECIDE_BROWSER_TASK_ID, harnessTaskId],
     when: {
-      expression: `tasks.${harnessTaskId}.output.previewUnavailable != null`,
+      anyOf: [
+        `tasks.${DECIDE_BROWSER_TASK_ID}.output.decision == '${NEEDS_SETUP_DECISION}'`,
+        `tasks.${harnessTaskId}.output.previewUnavailable != null`,
+      ],
       onMissingRef: 'skip' as const,
     },
     optional: true,
     retryability: 'safe' as const,
     maxAttempts: 1,
-    inputBindings: { previewUnavailable: out(harnessTaskId, 'previewUnavailable') },
+    inputBindings: {
+      previewUnavailable: out(harnessTaskId, 'previewUnavailable'),
+      decidedFinding: out(DECIDE_BROWSER_TASK_ID, 'value.finding'),
+      uiFile: out(READ_UI_TASK_ID, 'ui.files[0]'),
+    },
     context: ctx('workflow.run.decide'),
     inputTemplate: {
-      state: { previewUnavailable: bind('previewUnavailable') },
-      rules: [previewUnavailableRule(NEEDS_SETUP_DECISION)],
+      state: {
+        previewUnavailable: bind('previewUnavailable'),
+        decidedFinding: bind('decidedFinding'),
+      },
+      rules: [
+        previewUnavailableRule(NEEDS_SETUP_DECISION, needsSetupFinding),
+        {
+          when: { expression: 'state.decidedFinding != null' },
+          decision: NEEDS_SETUP_DECISION,
+          reason: 'The review ran without a browser for the reason the decision before it named.',
+          value: { finding: bind('decidedFinding') },
+        },
+      ],
       otherwise: {
         decision: NO_BROWSER_DECISION,
-        reason: 'The run had its preview: nothing to say.',
+        reason: 'The review had its preview: nothing to report.',
       },
     },
-    promoteOutputs: [{ kind: 'output_path' as const, path: 'value.line', toState: 'uiNotSeen' }],
+    promoteOutputs: [
+      { kind: 'output_path' as const, path: 'value.line', toState: 'uiNotSeen' },
+      { kind: 'output_path' as const, path: 'value.finding', toState: 'findings' },
+    ],
   };
 }

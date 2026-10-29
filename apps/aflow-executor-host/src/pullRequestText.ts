@@ -20,6 +20,7 @@ import {
   type PullRequestFinding,
   type PullRequestReviewRecord,
   pullRequestReviewRecord,
+  splitReviewFindings,
 } from '@aflow/schemas';
 
 import { messageBody } from './branchCommit.js';
@@ -180,6 +181,23 @@ function publishedAsIsClearance(
   return `The push went without asking, ${leaves}`;
 }
 
+export const NOT_SEEN_IN_BROWSER_LEAD = '**Not seen in a browser.**';
+
+/**
+ * The one line saying the range was published without a review that saw it in
+ * a preview (Plan 320 D20, D21): every `needs_setup` finding the review's rule
+ * added, the UI file it names and why the review had no browser, in the rule's
+ * words. Absent where the review saw it, or the range touched no UI.
+ */
+export function notSeenInBrowserLine(
+  findings: NonNullable<NonNullable<HostCommitDescribeInput['review']>['findings']>,
+): string | undefined {
+  const { needsSetup } = splitReviewFindings(findings);
+  if (needsSetup.length === 0) return undefined;
+  const reasons = needsSetup.map((finding) => `\`${finding.file}\` — ${finding.claim}`);
+  return `${NOT_SEEN_IN_BROWSER_LEAD} This range changes the folder's UI and was published without a review that saw it in a preview: ${reasons.join('; ')}`;
+}
+
 /**
  * This round's review is told by its summary, which names every finding it
  * read with its severity and `file:line` beside the checks it ran, and then
@@ -200,6 +218,8 @@ function reviewSection(input: HostCommitDescribeInput, record: PullRequestReview
     parts.push(`The review of this range returned \`${review.verdict}\`.`);
     if (review.reviewSummary) parts.push(review.reviewSummary);
   }
+  const notSeen = notSeenInBrowserLine(review?.findings ?? []);
+  if (notSeen !== undefined) parts.push(notSeen);
   if (record.afterReview !== undefined) parts.push(AFTER_REVIEW_LINES[record.afterReview]);
   if (record.afterReview === 'publish_as_is') {
     parts.push(publishedAsIsClearance(record, review?.verdict));
@@ -233,8 +253,8 @@ function findingsSection(
     [
       `### ${AS_IS_LIST}`,
       record.afterReview === 'publish_as_is'
-        ? (input.review?.findings ?? []).map((finding) =>
-            findingLine({ ...finding, state: 'open' }),
+        ? splitReviewFindings(input.review?.findings ?? []).defects.map(
+            ({ kind: _kind, ...finding }) => findingLine({ ...finding, state: 'open' }),
           )
         : [],
     ],

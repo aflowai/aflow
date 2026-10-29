@@ -274,6 +274,17 @@ describe('validateWorkflowGraph — promoteOutputs', () => {
     expect(errors.filter((e) => e.kind.startsWith('promotion_'))).toEqual([]);
   });
 
+  it('accepts several writers into a variable they append to', () => {
+    const errors = validateWorkflowGraph(
+      [
+        task('a', { promoteOutputs: [{ kind: 'output_root', toState: 'shared' }] }),
+        task('b', { promoteOutputs: [{ kind: 'output_root', toState: 'shared' }] }),
+      ],
+      [stateVar('shared', { writers: 'append' })],
+    );
+    expect(errors.filter((e) => e.kind.startsWith('promotion_'))).toEqual([]);
+  });
+
   it('rejects multi-writer to immutable state var', () => {
     const vars = [stateVar('final', { immutable: true })];
     const errors = validateWorkflowGraph(
