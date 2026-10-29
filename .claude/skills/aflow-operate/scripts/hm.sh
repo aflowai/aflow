@@ -7,7 +7,12 @@
 # Run it from a checkout root that holds mcp.local.json. AFLOW_API overrides the base URL.
 set -u
 API=${AFLOW_API:-http://localhost:3000}
-CMD=$1; SP=$2
+CMD=${1:-}; SP=${2:-}
+USAGE="usage: hm.sh new|send|status|last <spaceId> …"
+case "$CMD" in
+  new|send|status|last) [ -n "$SP" ] && [ -n "${3:-}" ] && { [ "$CMD" != send ] || [ -n "${4:-}" ]; } || { echo "$USAGE" >&2; exit 1; } ;;
+  *) echo "$USAGE" >&2; exit 1 ;;
+esac
 TOK=$(node -e 'const c=require("./mcp.local.json");process.stdout.write(c.apiKey||c.accessToken)') || exit 1
 H=(-H "Authorization: Bearer $TOK" -H "Content-Type: application/json")
 BODY=$(mktemp)
@@ -28,5 +33,5 @@ case "$CMD" in
   last)
     curl -s -m 15 "$H[@]" "$API/v1/sessions/$3/chat-history?spaceId=$SP" \
       | node -e 'let d="";const n=+process.argv[1]||3000;process.stdin.on("data",c=>d+=c).on("end",()=>{const j=JSON.parse(d);const ms=j.messages||[];const la=[...ms].reverse().find(m=>m.role==="assistant");console.log("turn",j.turnNumber);console.log(String(la&&la.content||"").slice(0,n))})' "${4:-3000}" ;;
-  *) echo "usage: hm.sh new|send|status|last <spaceId> …" >&2; exit 1 ;;
+  *) echo "$USAGE" >&2; exit 1 ;;
 esac

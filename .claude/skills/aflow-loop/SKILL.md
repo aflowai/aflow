@@ -1,6 +1,6 @@
 ---
 name: aflow-loop
-description: Develop Aflow through its own loop from a terminal session — plan nodes on the board, Helmsman conversations that commission, review, publish and let the shepherd merge, then the post-merge cycle on the operator's checkout and live stack. Use when the operator asks you to drive plan work, run a stream, land a fix through the loop, or close out a merge. Builds on aflow-operate. Not for a commissioned change.
+description: Develop Aflow through its own loop from a terminal session — plan nodes on the board, Helmsman conversations that commission, review and publish, the merge under the folder's merge posture, then the post-merge cycle on the operator's checkout and live stack. Use when the operator asks you to drive plan work, run a stream, land a fix through the loop, or close out a merge. Builds on aflow-operate. Not for a commissioned change.
 ---
 
 # Developing Aflow through its own loop
@@ -18,9 +18,13 @@ operator-side procedure that uses them. Do not restate either; point at them.
 Work is a plan node on the board, under a plan root. A Helmsman conversation takes a node:
 it commissions the coding harness on the repository's host binding from `origin/main`, the
 publication runs the folder's checks and Local Code Review, pushes, and opens the pull
-request; the scheduled Local PR Shepherd merges it. Nothing is hand-opened or hand-merged
-for loop work: a pull request the shepherd did not open is invisible to it. The session's
-job is to brief, watch, judge, close the merge out, and keep the stack current.
+request. Who merges it depends on the folder's merge posture
+(`docs/dev/driving-work-through-the-loop.md`, The pieces): under `never`, the default, the
+operator merges; under `when-green` the scheduled Local PR Shepherd merges a green pull
+request whose review approved its head, on the operator's approval. Never open a loop pull
+request by hand: the shepherd sees only the ones a publication opened. The session's job is
+to brief, watch, judge, report the pull request, wait for the merge, close it out, and keep
+the stack current.
 
 Board markers: `active` nodes in position order are the approved queue; `blocked` waits on
 a person; `waiting` waits on a run; a proposal is created `blocked` and only a person moves
@@ -49,9 +53,13 @@ has armed it; until then a node moves only when a Helmsman is told to take it.
 4. **A gate** is read before it is touched (`aflow-operate`, Gates). The one the loop
    raises most is the override gate; its premise is "minors only" — check the run's own
    review, not the previous run's, before giving the operator the link.
-5. **The merge**: the shepherd merges a pull request whose publication's review returned
-   `approve`; one whose verdict was `comment` it leaves to the operator by rule. Read the
-   shepherd's last `decide` output when a green pull request sits.
+5. **The merge** depends on the folder's merge posture (`host.binding.inspect` shows it).
+   Under `never`, the default, the merge is the operator's: report the pull request and
+   what its review returned, then wait. Under `when-green`, the scheduled shepherd merges
+   by squash once the required checks pass on the head, the publication's review approved
+   that head and no person requests changes, each merge on the operator's approval; a
+   verdict of `comment` it leaves to the operator. Read the shepherd's last `decide` output
+   when a green pull request sits under `when-green`.
 6. **After the merge**, on the operator's checkout (theirs: fast-forward only, never
    switch its branch — use a worktree for anything else):
    `git fetch origin && git merge --ff-only origin/main`; verify the branch's remote tip

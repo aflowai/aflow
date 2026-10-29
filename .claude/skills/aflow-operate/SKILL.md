@@ -10,10 +10,10 @@ Local Code Review, "Make the change", a `host.harness.run` task): then you are t
 agent the loop started, and the brief is the whole job. This skill is for the session that
 sits beside the operator and drives the platform.
 
-You act with the operator's own posture on their machine (CLAUDE.md, "Loop agents have the
-operator's posture"): you may read anything the operator can read, start and watch runs,
-write to the board, decline a gate with a reason, restart the operator's own stack when it
-is idle. Four acts stay the operator's, and you never take them on their behalf: approving a
+You act with the operator's own posture on their machine, as the loop's agents do
+(`docs/dev/driving-work-through-the-loop.md`, "What a commission runs under"): you may
+read anything the operator can read, start and watch runs, write to the board, decline a
+gate with a reason, restart the operator's own stack when it is idle. Four acts stay the operator's, and you never take them on their behalf: approving a
 gate (a push approval, a merge card, a write approval, an override), merging a pull request
 by hand, widening egress, write policy or confinement, and renewing a credential. Arming a
 schedule that acts on its own (a resident, a shepherd) is theirs too. When one of those is
@@ -21,18 +21,18 @@ the next step, say so and stop.
 
 ## Where everything is
 
-| Thing         | Where                                                                                                                                                                                                                             |
-| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| API           | `http://localhost:3000/v1` on the dev stack (`yarn start`); the appliance and the hosted product answer the same routes on their own host                                                                                         |
-| Auth          | `mcp.local.json` at the checkout root (copy `apps/aflow-mcp/mcp.local.json.example`); holds `apiKey`, `tenantId`, `sessionToken` — **never print the file**                                                                       |
-| Bearer token  | `node -e 'const c=require("./mcp.local.json");process.stdout.write(c.apiKey)'`                                                                                                                                                    |
-| Space         | every space-scoped call takes `spaceId`; find it with the MCP `space_list`, or `GET /v1/spaces`                                                                                                                                   |
-| MCP server    | `aflow-local` (`yarn dev:mcp`, port 3100): `auth_login`, `auth_check`, `space_list`, `catalog`, `run_operation`, `start_session`, `watch_session`, `watch_run`, `inspect_session`, `fetch_payload` — CLAUDE.md "Local MCP server" |
-| Postgres      | `DATABASE_URL` in `.env` (print the key name only); one schema per tenant, `t_<tenantId without dashes>`                                                                                                                          |
-| Runs          | `workflow_runs` keyed by `run_id` (not `id`); `workflow_run_tasks` by `run_id` + `task_id`, with `output_ref` / `input_ref` / `failure_reason`                                                                                    |
-| Conversations | `sessions`; `step_executions` by `session_id`, with `operation_id`, `status`, `error_ref`                                                                                                                                         |
-| Board         | `plan_nodes` (`status`, `position`, `goal`, `criteria`, `note`, `outcome`, `revision`); `agent_schedules`                                                                                                                         |
-| Payloads      | `GET /v1/payloads?ref=<url-encoded ref>&spaceId=…`; `inline:<base64>` refs decode locally                                                                                                                                         |
+| Thing         | Where                                                                                                                                                                                                                                 |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| API           | `http://localhost:3000/v1` on the dev stack (`yarn start`); the appliance and the hosted product answer the same routes on their own host                                                                                             |
+| Auth          | `mcp.local.json` at the checkout root (copy `apps/aflow-mcp/mcp.local.json.example`); holds `apiKey`, `tenantId`, `sessionToken` — **never print the file**                                                                           |
+| Bearer token  | `node -e 'const c=require("./mcp.local.json");process.stdout.write(c.apiKey)'`                                                                                                                                                        |
+| Space         | every space-scoped call takes `spaceId`; find it with the MCP `space_list`, or `GET /v1/spaces`                                                                                                                                       |
+| MCP server    | `aflow-local` (`yarn dev:mcp`, port 3100): `auth_status`, `space_list`, `catalog`, `run_operation`, `start_session`, `watch_session`, `watch_run`, `inspect_session`, `retry_session`, `fetch_payload` — CLAUDE.md "Local MCP server" |
+| Postgres      | `DATABASE_URL` in `.env` (print the key name only); one schema per tenant, `t_<tenantId without dashes>`                                                                                                                              |
+| Runs          | `workflow_runs` keyed by `run_id` (not `id`); `workflow_run_tasks` by `run_id` + `task_id`, with `output_ref` / `input_ref` / `failure_reason`                                                                                        |
+| Conversations | `sessions`; `step_executions` by `session_id`, with `operation_id`, `status`, `error_ref`                                                                                                                                             |
+| Board         | `plan_nodes` (`status`, `position`, `goal`, `criteria`, `note`, `outcome`, `revision`); `agent_schedules`                                                                                                                             |
+| Payloads      | `GET /v1/payloads?ref=<url-encoded ref>&spaceId=…`; `inline:<base64>` refs decode locally                                                                                                                                             |
 
 The MCP is the first choice when it is connected: it carries the catalog and the schemas,
 and `start_session` / `watch_session` return a `continuation` to call verbatim when they
