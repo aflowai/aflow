@@ -1,4 +1,4 @@
-import type { WorkflowRunDecideRule } from '@aflow/schemas';
+import { NEEDS_SETUP_FINDING_KIND, type WorkflowRunDecideRule } from '@aflow/schemas';
 import { bind, ctx, out, SKIP } from './localPrShepherdWiring.js';
 import { BASE } from './publishLocalChangesRepository.js';
 import {
@@ -22,6 +22,17 @@ import {
  * the commission's inputs as they are to be passed — `mergeFrom` present only
  * where it is wanted — and exactly one of them writes `fixRound`.
  */
+
+/**
+ * What a fix round's brief takes from the review run, said wherever a caller
+ * composes one: the review run's findings end with the `needs_setup` one
+ * where the review had no browser (Plan 320 D21), which is setup the operator
+ * does once on the machine. Briefed as a finding, the coding agent would be
+ * asked to fix what no commit on the branch can settle. `fixRound.findings`
+ * already leaves it out (`splitReviewFindings`); the brief is composed by
+ * whoever starts the round, from the run, so it is said to them.
+ */
+export const FIX_ROUND_BRIEF_FINDINGS = `every finding of the \`reviewRunId\` run but any of kind \`${NEEDS_SETUP_FINDING_KIND}\` — the browser setup the review ran without, done once on the machine, which no fix on the branch settles`;
 
 export const FIX_ROUND_MERGE_REASON =
   "`origin`'s base moved past the branch since it was cut or last merged it: the fix round starts at the branch and merges the base in first, `mergeFrom` naming it, so the fix is published onto the branch as one merge commit.";

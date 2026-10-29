@@ -75,6 +75,7 @@ import {
   UNMEASURED_REASON,
 } from './publishLocalChangesReview.js';
 import { PUBLISH_AS_IT_STANDS } from './publishLocalChangesProse.js';
+import { FIX_ROUND_BRIEF_FINDINGS } from './publishLocalChangesFixRound.js';
 import { REPOSITORY_UNKNOWN_FAILURE } from './publishLocalChangesRepository.js';
 import { AFTER_REVIEW_QUESTION, AFTER_REVIEW_ROUTES } from './publishLocalChangesDecisions.js';
 import { SKILL_CATALOG } from './index.js';
@@ -3462,6 +3463,25 @@ describe("Publish Local Changes — the rounds rule decides a review's findings,
       expect(PullRequestFindingsSchema.parse(beside.state['findings']).map((f) => f.claim)).toEqual(
         [SLIP.claim],
       );
+      // `fixRound.findings` is the composition's, so the round is handed the
+      // change's own findings alone; whoever briefs it from the review run is
+      // told to leave the setup one out.
+      expect(
+        PullRequestFindingsSchema.parse(beside.outputs.get('describe-pr')?.['findings']).map(
+          (f) => f.claim,
+        ),
+      ).toEqual([SLIP.claim]);
+      const declared = (id: string) =>
+        wf.stateVariables.find((v) => v.variableId === id)?.description ?? '';
+      for (const told of [
+        declared('fixRound'),
+        declared('reviewRunId'),
+        wf.output?.guidance ?? '',
+        wf.usage?.next?.find((next) => next.skill === 'commission-change')?.when ?? '',
+      ]) {
+        expect(told).toContain(NEEDS_SETUP_FINDING_KIND);
+      }
+      expect(skillGuidance(PUBLISH_LOCAL_CHANGES)).toContain(FIX_ROUND_BRIEF_FINDINGS);
     });
 
     it('approve with minors once a fix round has run is publish_as_is: pushed without asking, the minors carried open on the pull request', () => {

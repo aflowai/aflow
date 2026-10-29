@@ -242,7 +242,8 @@ export const WorkflowTaskUpdatePayloadSchema = z.object({
    * `succeeded` emit when the task declares `promoteOutputs`, so the chat
    * surface shows live output values mid-run without waiting for the
    * terminal `WorkflowRunUpdate.result`. The reducer accumulates these into
-   * `WorkflowRunSurfaceState.outputs`.
+   * `WorkflowRunSurfaceState.outputs`, a key's latest slice replacing the one
+   * before: an `append` variable's slice holds every writer succeeded so far.
    */
   promotedState: z.record(z.unknown()).optional(),
   /**

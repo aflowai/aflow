@@ -382,7 +382,8 @@ browser says "browser unavailable on harness <id>", and a space whose grant lack
 `browser.page:write` says that, each the same way — the run goes on without a browser
 rather than being refused. The review also ends its `findings` with the same line as a
 finding of its own kind, `needs_setup`, severity `minor`: the publication's rounds rule
-never takes a fix round for it and hands it on to none, and the pull request's body says,
+never takes a fix round for it and hands it on to none, a fix round started by another
+finding is briefed from the review run without it, and the pull request's body says,
 under its review, that the range is **Not seen in a browser** and why. None of these holds
 back a push. The same step takes any port this stack serves
 on off the Claude Code harness's browser ports: `aflow harness browser-ports claude <port> …`

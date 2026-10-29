@@ -379,7 +379,7 @@ const REVIEW_LOCAL_CHANGES: SkillCatalogEntry = {
         next: [
           {
             skill: 'commission-change',
-            when: 'A finding is to be fixed: commission it as its own piece of work, briefed from the findings, with `base` the branch the range ends on.',
+            when: 'A finding is to be fixed: commission it as its own piece of work, briefed from the findings but any of kind `needs_setup` — setup on the machine, which no fix settles — with `base` the branch the range ends on.',
           },
           {
             skill: 'publish-local-changes',
