@@ -1029,10 +1029,10 @@ export const MemoryOperationRegistrations: OperationRegistration[] = [
     name: 'Query Memory',
     actionLabel: 'Searching memory…',
     semanticDescription:
-      'Search, list, or grep memory documents. Use mode="list" to browse directories and files ' +
-      'at a given path (like ls). By default lists immediate children; set recursive=true for all descendants. ' +
-      'Use mode="search" for semantic/hybrid retrieval, mode="grep" for exact text search. ' +
-      'Always start with list to explore the directory tree before fetching full documents.',
+      'Search, list, or grep memory documents. Use mode="list" to browse the directories and files ' +
+      'at a path, like ls. It lists immediate children unless recursive=true, which lists all descendants. ' +
+      'mode="search" runs semantic/hybrid retrieval and mode="grep" runs exact text search. ' +
+      'Always explore the directory tree with list before you fetch full documents.',
     tags: ['memory', 'storage', 'search', 'list', 'directory'],
     // These four are 85% of this op's emitted schema and none is mentioned in
     // the description above — the shape was already unexplained, it was just
@@ -1055,17 +1055,17 @@ export const MemoryOperationRegistrations: OperationRegistration[] = [
         'Browsing the memory directory tree (mode="list")',
         'Semantic search for relevant documents (mode="search")',
         'Finding exact text matches across documents (mode="grep")',
-        'Finding notes that reference a doc, or referenced-but-unwritten notes (mode="links", unresolvedOnly)',
+        'Finding documents that reference a document, or referenced-but-unwritten documents (mode="links", unresolvedOnly)',
       ],
       whenNotToUse: [
         'Need the full content of a known document — use memory.store.get instead',
         'Writing or updating a document — use memory.store.put or memory.store.patch',
       ],
       pitfalls: [
-        'mode="search" requires an embedding index — newly-put docs may still be "pending"',
-        'Use budget.limit to cap result count and avoid context flooding',
-        'mode="links" ignores query — set linkFilter.target to list who references a path, omit it for the hub view (linkFilter.unresolvedOnly surfaces ghost targets); pathPrefix filters the referrer side.',
-        'mode="search" with expand.links=1 also returns 1-hop linked neighbors of the top hits — items with `via` came from the link graph, not text similarity; direction defaults to outgoing (the seed\'s own references).',
+        'mode="search" requires an embedding index — newly put documents may still be "pending"',
+        'Cap the result count with budget.limit so results do not flood the context',
+        'mode="links" ignores query. Set linkFilter.target to list who references a path, or omit it for the hub view. linkFilter.unresolvedOnly surfaces ghost targets. pathPrefix filters the referrer side.',
+        'mode="search" with expand.links=1 also returns the 1-hop linked neighbors of the top hits. Items with `via` came from the link graph, not text similarity. direction defaults to outgoing, the seed\'s own references.',
       ],
       minimalExampleInput: { mode: 'list', pathPrefix: '/' },
     },
@@ -1080,15 +1080,15 @@ export const MemoryOperationRegistrations: OperationRegistration[] = [
     name: 'Get Memory Document',
     actionLabel: 'Reading memory…',
     semanticDescription:
-      'Retrieve a memory document by path or ID. Use view="stat" for metadata only, ' +
-      'view="preview" for a small preview, view="content" for the full body, ' +
-      'view="outline" for the SHAPE of a large JSON object (keys/types/sizes — no data). ' +
-      'view="links" returns both directions of the graph around one doc (any docType). ' +
+      'Read a memory document by path or ID. view="stat" returns metadata only, ' +
+      'view="preview" a small preview and view="content" the full body. ' +
+      'view="outline" returns the SHAPE of a large JSON object (keys/types/sizes, no data). ' +
+      'view="links" returns both directions of the graph around one document (any docType). ' +
       'For JSON, navigate with jsonPath (e.g. "ledgerSummary.recentEntries[3]") and window ' +
       'arrays with itemRange { start, count }. For text, use range reads (lineRange, byteRange). ' +
-      'target.version reads an exact past version and target.expectedContentHash verifies the ' +
+      'target.version reads an exact past version. target.expectedContentHash verifies the ' +
       'bytes are the ones that were pinned. ' +
-      'Works the same over /run/outputs/<toolCallId>/data virtual paths.',
+      'Reads work the same over /run/outputs/<toolCallId>/data virtual paths.',
     tags: ['memory', 'storage', 'read'],
     // `target` and the three range readers are 79% of this op's schema. The
     // description above already names their keys, so collapsing them removes
@@ -1105,7 +1105,7 @@ export const MemoryOperationRegistrations: OperationRegistration[] = [
     mutates: false,
     usage: {
       oneLine:
-        'Retrieve a memory document by path or ID — content, range reads, or structural (JSON) navigation.',
+        'Read a memory document by path or ID: content, range reads, or structural (JSON) navigation.',
       whenToUse: [
         'Reading the content of a specific known document',
         'Checking metadata/stat of a document before deciding to read it',
@@ -1120,11 +1120,11 @@ export const MemoryOperationRegistrations: OperationRegistration[] = [
         'For large data files (CSVs, datasets): do NOT read content into context. Use inputPaths on compute.sandbox.exec to load files directly.',
         'Default view is "stat" (metadata only) — set view="content" to get the body',
         'Reads are bounded (about 15K chars by default) — use lineRange or byteRange for targeted reads',
-        "To continue a bounded read, re-read the SAME path with the next window from the returned range metadata (lineRange from range.endLine, byteRange from range.end, itemRange from range.start + range.count) — never read this call's own output path",
-        'For large JSON, do NOT shell out to compute to slice it — use view="outline" then jsonPath + itemRange to read just the section you need',
+        "To continue a bounded read, re-read the SAME path with the next window from the returned range metadata. Take lineRange from range.endLine, byteRange from range.end and itemRange from range.start + range.count. Never read this call's own output path",
+        'For large JSON, do NOT call compute to slice it. Use view="outline", then jsonPath + itemRange to read only the section you need',
         'jsonPath is a small dotted/bracket subset (a.b[3].c), not full JSONPath — it drills, it does not query/filter',
         'To pipe a large body onward without reading it, use inputPaths (compute) or memory.store.put(content: {fromPath}) with the source path',
-        'content view includes up to 10 backlinks (with the true total) — notes that reference this one; follow them for related context.',
+        'content view includes up to 10 backlinks, with the true total. Backlinks are documents that reference this one. Follow them for related context.',
         'Without target.version a read follows the document — a later write changes what you get back. Pin the version you were given if the bytes must not move.',
         'target.version and target.expectedContentHash apply to stored documents only, not to /run/outputs virtual paths.',
       ],

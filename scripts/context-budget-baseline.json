@@ -11,11 +11,11 @@
       "group": "tools"
     },
     "tools.helmsman.native_fc": {
-      "tokens": 7809,
+      "tokens": 7812,
       "group": "tools"
     },
     "tools.helmsman.generate_json": {
-      "tokens": 7650,
+      "tokens": 7652,
       "group": "tools"
     },
     "tools.coach.resolvedOps": {
@@ -23,27 +23,27 @@
       "group": "tools"
     },
     "tools.coach.native_fc": {
-      "tokens": 26310,
+      "tokens": 26306,
       "group": "tools"
     },
     "tools.coach.generate_json": {
-      "tokens": 25854,
+      "tokens": 25850,
       "group": "tools"
     },
     "tools.helmsman.enterprise.native_fc": {
-      "tokens": 7809,
+      "tokens": 7812,
       "group": "tools"
     },
     "tools.helmsman.enterprise.generate_json": {
-      "tokens": 7650,
+      "tokens": 7652,
       "group": "tools"
     },
     "tools.helmsman.community-local.native_fc": {
-      "tokens": 10817,
+      "tokens": 10819,
       "group": "tools"
     },
     "tools.helmsman.community-local.generate_json": {
-      "tokens": 10681,
+      "tokens": 10683,
       "group": "tools"
     },
     "skills.library100.default": {
@@ -120,7 +120,7 @@
     }
   },
   "totals": {
-    "tools": 104615,
+    "tools": 104621,
     "skillAwareness": 765,
     "helmsmanPrompt": 6621,
     "runnerPrompt": 2235,

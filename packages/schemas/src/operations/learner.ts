@@ -482,8 +482,8 @@ export const LearnerOperationRegistrations: OperationRegistration[] = [
     actionLabel: 'Staging workflow refinement\u2026',
     semanticDescription:
       'Stage a refinement to an existing workflow. Creates a StagedChange document ' +
-      'under /learner/staged/ with typed change operations. Authority level is determined ' +
-      'by the change kind, confidence, and governance directives.',
+      'under /learner/staged/ with typed change operations. The change kind, confidence, ' +
+      'and governance directives determine the authority level.',
     tags: ['learner', 'propose', 'workflow', 'cybernetic'],
     groupDisplayName: 'Learner Proposals',
     groupDescription:
@@ -495,16 +495,16 @@ export const LearnerOperationRegistrations: OperationRegistration[] = [
       whenToUse: [
         'After reviewing execution artifacts and identifying an improvement',
         'When a task goal, context spec, or iteration policy should be adjusted',
-        'When outcome thresholds need calibration based on observed performance',
+        'When outcome thresholds should be calibrated to observed performance',
       ],
       whenNotToUse: [
         'Creating a brand new workflow — that is Executive-owned',
         'Flagging a pattern without a specific change — use learner.flag.pattern',
       ],
       pitfalls: [
-        'Ops that modify eval criteria (outcome thresholds) always stage for review — evals cannot gate changes to their own success criteria',
-        'High confidence required for auto-apply; medium/low always stage for review',
-        'If the schema cannot express your intended fix (e.g. a binding kind that does not exist), do NOT approximate with goal-text or context-spec edits — file learner.flag.anomaly as a platform_issue and withdraw any approximation via learner.propose.withdraw',
+        'Ops that modify eval criteria (outcome thresholds) always stage for review. Evals cannot gate changes to their own success criteria',
+        'Auto-apply requires high confidence. Medium/low confidence always stages for review',
+        'If the schema cannot express your intended fix (e.g. a binding kind that does not exist), do NOT approximate it with goal-text or context-spec edits. File learner.flag.anomaly as a platform_issue and withdraw any approximation via learner.propose.withdraw',
       ],
       minimalExampleInput: {
         targetSlug: 'lead-scoring-optimizer',
@@ -570,10 +570,10 @@ export const LearnerOperationRegistrations: OperationRegistration[] = [
     actionLabel: 'Staging artifact refresh…',
     semanticDescription:
       'Stage a refresh of a bundle-shipped UI artifact. The Coach has already ' +
-      'called ui.artifact.generate to produce a draftId; this op stages an artifact_update ' +
-      'proposal carrying the draftId + diff rationale. On operator ratification, the apply ' +
+      'called ui.artifact.generate to produce a draftId. This op stages an artifact_update ' +
+      'proposal carrying the draftId + diff rationale. When the operator ratifies it, the apply ' +
       'path promotes the draft to a new published version (same SQL as ui.artifact.publish). ' +
-      'Authority is ALWAYS require_operator — rendered output is user-facing and there is no ' +
+      'Authority is ALWAYS require_operator. Rendered output is user-facing, and there is no ' +
       'automated regression layer for it yet.',
     tags: ['learner', 'propose', 'artifact', 'cybernetic', 'plan-158'],
     idempotency: 'non_idempotent',
@@ -828,9 +828,9 @@ export const LearnerOperationRegistrations: OperationRegistration[] = [
     actionLabel: 'Recording Coach observation\u2026',
     semanticDescription:
       'Record a typed CoachObservation for a review that produced no actionable proposal. ' +
-      'Use ONLY for observations under /coach/observations/{id}.json — do not write narrative ' +
-      'review reports. Closed-set reason field; observations accumulate as pattern signal ' +
-      'across reviews and never enter the ratification flow.',
+      'Use it ONLY for observations under /coach/observations/{id}.json. Do not write narrative ' +
+      'review reports. The reason field is a closed set. Observations accumulate as pattern ' +
+      'signal across reviews and never enter the ratification flow.',
     tags: ['learner', 'observation', 'cybernetic', 'coach'],
     groupDisplayName: 'Coach Observations',
     groupDescription:
@@ -846,11 +846,11 @@ export const LearnerOperationRegistrations: OperationRegistration[] = [
       ],
       whenNotToUse: [
         'Have a categorized issue — use learner.propose.workflow_change instead',
-        'Need to write a narrative review — do not write narrative reviews; observations are short and structured',
+        'Need to write a narrative review — do not write narrative reviews. Observations are short and structured',
       ],
       pitfalls: [
-        'summary is required and capped at 500 chars; pick the diagnostic phrase, not a paragraph',
-        'Observations are not actionable; they have no ops and no ratification flow',
+        'summary is required and capped at 500 chars. Pick the diagnostic phrase, not a paragraph',
+        'Observations are not actionable. They have no ops and no ratification flow',
       ],
       minimalExampleInput: {
         reason: 'anomalous_metrics',
@@ -869,10 +869,10 @@ export const LearnerOperationRegistrations: OperationRegistration[] = [
     name: 'Record Coach Learning',
     actionLabel: 'Recording Coach learning…',
     semanticDescription:
-      'Record a durable Coach learning — distinct from observations (anomalies without action) ' +
-      'and proposals (workflow / eval mutations). Use for claims the Coach wants to compound ' +
+      'Record a durable Coach learning, distinct from observations (anomalies without action) ' +
+      'and proposals (workflow / eval mutations). Use it for claims the Coach wants to compound ' +
       'across runs / campaigns: heuristics, constraints, parameter ranges, cross-iteration ' +
-      'observations. Campaign-scope learnings auto-record (no durable mutation); skill- and ' +
+      'observations. Campaign-scope learnings auto-record (no durable mutation). Skill- and ' +
       'space-scope learnings stage for operator review. Candidate ledger entries are ' +
       'PROMOTED into learnings via `promotedFrom`.',
     tags: ['learner', 'learning', 'cybernetic', 'coach', 'plan-163'],

@@ -53,9 +53,9 @@ export const LearnerLearningResolveCandidateRegistration: OperationRegistration 
     'Resolve run-recorded learnings in one batched call, addressed by (runId, learningId). ' +
     'Unresolved learnings inject into the next run as pending hypotheses. Rejected/noise ' +
     'entries stop injecting but stay visible as negative evidence (so the same bad learning ' +
-    'is not re-proposed). Promoted campaign entries become durable campaign learnings; ' +
-    'promoted non-campaign entries stage a skill-scope learning for operator review. ' +
-    'Resolution works even before the ledger row exists — the first resolution wins over a ' +
+    'is not re-proposed). Promoted campaign entries become durable campaign learnings. ' +
+    'Promoted non-campaign entries stage a skill-scope learning for operator review. ' +
+    'An entry resolves even before its ledger row exists. The first resolution wins over a ' +
     'later ledger write.',
   tags: ['learner', 'learning', 'candidate', 'cybernetic'],
   groupDisplayName: 'Coach Learnings',
@@ -71,11 +71,11 @@ export const LearnerLearningResolveCandidateRegistration: OperationRegistration 
       'A learning proved out across runs — promote it to a durable campaign learning',
     ],
     whenNotToUse: [
-      'You want to edit a learning — entries are immutable; resolve and record a new one',
+      'You want to edit a learning — entries are immutable. Resolve it and record a new one',
       'Recording a NEW learning — use workflow.learn',
     ],
     pitfalls: [
-      'Resolution is for run-recorded candidates, not durable CoachLearnings (those use ratify/reject)',
+      'This op resolves run-recorded candidates, not durable CoachLearnings (those use ratify/reject)',
       'A rejected entry stays as negative evidence — it is not deleted',
       'The first resolution wins: an already-resolved entry reports applied: false',
     ],
