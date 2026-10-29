@@ -66,8 +66,8 @@ Why this place:
 
 **Dismissal and "gone once used".**
 
-- **Dismissed:** **Not now** writes the existing key, `localStorage['aflow:quick-start-offer-declined'] = '1'`. Reusing the key means a browser that declined the old modal is not asked again. The card has no close icon and is not modal, so there is no Escape or backdrop path to a decline.
-- **Used, gone for good:** the server rule F2 decides this, unchanged. Installing a quick start makes a second live space, and `applies` is false from then on. Starting to work blank (a conversation, an install, a connected folder) also makes it false. The picker's `onCreated` keeps writing the key as well.
+- **Dismissed:** only **Not now** writes the existing key, `localStorage['aflow:quick-start-offer-declined'] = '1'`. Reusing the key means a browser that declined the old modal is not asked again. The card has no close icon and is not modal, so there is no Escape or backdrop path to a decline.
+- **Used, gone for good:** the server rule F2 decides this, unchanged. Installing a quick start makes a second live space, and `applies` is false from then on. Starting to work blank (a conversation, an install, a connected folder) also makes it false. Nothing writes the key on creation, because the first-run path no longer embeds the picker. The first conversation or the first installed quick start turns the offer off through F2 alone.
 - **Where state lives:** in the server predicate (derived, nothing stored) plus one browser key. No new table, column or endpoint.
 
 Clicking **Browse quick starts** is not a dismissal. A user who looks and comes back with nothing installed still sees the card in the empty chat until they choose **Not now** or start working.
