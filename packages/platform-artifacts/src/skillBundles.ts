@@ -254,7 +254,8 @@ Capability rules:
 - Do NOT drop a \`requiredCapability\` from \`inputs.intent\` to satisfy a validation error; signal_blocked with category capability_unavailable instead.
 
 Dataflow rules:
-- For each \`intent.requiredDataSources[*]\` entry, exactly one task must label its \`produces[*].providesPurposeId\` with that entry's \`purposeId\` (verbatim) AND grant the matching api/mcp capability with a callable endpoint/tool. Downstream consumers do NOT re-label.
+- For each \`intent.requiredDataSources[*]\` entry, exactly one task must label its \`produces[*].providesPurposeId\` with that entry's \`purposeId\` (verbatim) AND be able to call the source: an agent task granting the matching api/mcp capability with a callable endpoint/tool, or an \`api.http.call\` operation task whose \`inputTemplate\` names that api's \`apiId\` or \`bindingId\` literally. Downstream consumers do NOT re-label.
+- **Calling an API directly** (a fixed request, no judgement needed) is an operation task, not an agent: \`{ type: 'operation', operationId: 'api.http.call', consumes: [{ runInput: 'a', bindAs: 'a' }, …six run inputs], inputTemplate: { apiId, bindingId, url, method: 'POST', body: { a: { $bind: 'a' }, … } } }\` — \`inputTemplate\` folds many inputs into one body.
 - Discovery tools (\`catalog.tool.list\`, \`api.binding.list\`, \`workflow.manage.list\`) are sanity-check tools — \`inputs.surface\` is the authoritative universe.
 
 Typed channels — Plan 129 (the producer port is the single source of truth):
