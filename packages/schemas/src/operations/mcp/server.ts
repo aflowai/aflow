@@ -105,6 +105,7 @@ export const McpServerOperationRegistrations: OperationRegistration[] = [
     privileged: true,
     idempotency: 'idempotent',
     mutates: true,
+    inputAsSent: true,
     usage: {
       oneLine:
         'Register an MCP server definition. After this: create a binding (mcp.binding.upsert) to ' +

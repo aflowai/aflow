@@ -76,19 +76,55 @@ vi.mock('@aflow/database', async () => {
 });
 
 const { handleMcpServerAdminInline } = await import('../mcpServerAdmin.js');
+const { resolveStepInput } = await import('../../../helpers/stepInputResolution.js');
 const database = await import('@aflow/database');
 
 const SPACE = '11111111-1111-4111-8111-111111111111';
 const OTHER_SPACE = '22222222-2222-4222-8222-222222222222';
 
-function buildArgs(operation: string, input: Record<string, unknown>): InlineHandlerArgs {
+function inlineRef(value: unknown): string {
+  return `inline:${Buffer.from(JSON.stringify(value)).toString('base64')}`;
+}
+
+function readInlineRef(ref: string): unknown {
+  return JSON.parse(Buffer.from(ref.slice('inline:'.length), 'base64').toString());
+}
+
+const inlineStore = {
+  retrieve: vi.fn((ref: string) => Promise.resolve(readInlineRef(ref))),
+  shouldStore: vi.fn(() => false),
+  store: vi.fn((value: { data: unknown }) => Promise.resolve(inlineRef(value.data))),
+} as unknown as InlineHandlerArgs['payloadStore'];
+
+/**
+ * The input ref the handler receives for an agent's call: the arguments the
+ * agent sent, through the step input resolution and schema validation every
+ * scheduled step goes through.
+ */
+async function resolvedInputRefFor(
+  operation: string,
+  agentInput: Record<string, unknown>,
+): Promise<string> {
+  return resolveStepInput(
+    inlineStore,
+    { stepId: 'step-1', stepType: 'mcp', operation, config: {} } as unknown as Parameters<
+      typeof resolveStepInput
+    >[1],
+    inlineRef(agentInput),
+    undefined,
+    undefined,
+    'tenant-1',
+    'run-1',
+    undefined,
+    SPACE,
+  );
+}
+
+/** Handler args carrying `resolvedInputRef` as it is, for input production refuses before the handler. */
+function argsWithRef(operation: string, resolvedInputRef: string): InlineHandlerArgs {
   return {
     redis: {} as InlineHandlerArgs['redis'],
-    payloadStore: {
-      retrieve: vi.fn(() => Promise.resolve(input)),
-      shouldStore: vi.fn(() => false),
-      store: vi.fn(() => Promise.resolve('inline:e30=')),
-    } as unknown as InlineHandlerArgs['payloadStore'],
+    payloadStore: inlineStore,
     context: {
       tenantId: 'tenant-1',
       runId: 'run-1',
@@ -102,10 +138,18 @@ function buildArgs(operation: string, input: Record<string, unknown>): InlineHan
     } as unknown as InlineHandlerArgs['stepDef'],
     stepExecutionId: 'se-1' as InlineHandlerArgs['stepExecutionId'],
     idempotencyKey: 'idem-1' as InlineHandlerArgs['idempotencyKey'],
-    resolvedInputRef: 'inline:e30=',
+    resolvedInputRef,
     attempt: 1,
     scheduledAtMs: Date.now(),
   };
+}
+
+/** The handler args production builds for an agent calling `operation` with `agentInput`. */
+async function buildArgs(
+  operation: string,
+  agentInput: Record<string, unknown>,
+): Promise<InlineHandlerArgs> {
+  return argsWithRef(operation, await resolvedInputRefFor(operation, agentInput));
 }
 
 function lastResult(): Record<string, unknown> {
@@ -169,14 +213,16 @@ describe('mcp.server.upsert', () => {
 
   it('accepts the run space stated explicitly', async () => {
     executeRows = [{ created: true }];
-    await handleMcpServerAdminInline(buildArgs('mcp.server.upsert', { ...input, spaceId: SPACE }));
+    await handleMcpServerAdminInline(
+      await buildArgs('mcp.server.upsert', { ...input, spaceId: SPACE }),
+    );
     expect(decodeOutput(lastResult())['created']).toBe(true);
   });
 
   it('updates only the fields the agent sent, keeping tags, source and the stored JSON', async () => {
     executeRows = [{ created: false }];
     await handleMcpServerAdminInline(
-      buildArgs('mcp.server.upsert', { ...input, toolFilter: { include: ['search'] } }),
+      await buildArgs('mcp.server.upsert', { ...input, toolFilter: { include: ['search'] } }),
     );
     const update = executed[0]!.slice(executed[0]!.indexOf('DO UPDATE SET'));
     expect(update).toContain('name = EXCLUDED.name');
@@ -190,9 +236,30 @@ describe('mcp.server.upsert', () => {
     );
   });
 
+  it('writes no schema default over a stored value on an update that states one field', async () => {
+    executeRows = [{ created: false }];
+    await handleMcpServerAdminInline(
+      await buildArgs('mcp.server.upsert', { ...input, description: 'Docs search' }),
+    );
+    const update = executed[0]!.slice(executed[0]!.indexOf('DO UPDATE SET'));
+    expect(update).toContain('description = EXCLUDED.description');
+    for (const kept of ['tags =', 'source =', 'transport =']) {
+      expect(update).not.toContain(kept);
+    }
+    const mergedJson = JSON.parse(executedParams[0]!.at(-1) as string) as Record<string, unknown>;
+    expect(Object.keys(mergedJson).sort()).toEqual(
+      ['description', 'name', 'serverId', 'serverUrl'].sort(),
+    );
+  });
+
+  it('hands the handler the input as the agent sent it, with no schema default filled in', async () => {
+    const ref = await resolvedInputRefFor('mcp.server.upsert', input);
+    expect(readInlineRef(ref)).toEqual(input);
+  });
+
   it('creates the definition in the run space from a URL alone and invalidates the catalog', async () => {
     executeRows = [{ created: true }];
-    await handleMcpServerAdminInline(buildArgs('mcp.server.upsert', input));
+    await handleMcpServerAdminInline(await buildArgs('mcp.server.upsert', input));
 
     expect(decodeOutput(lastResult())).toEqual({
       serverId: 'docs-mcp',
@@ -211,13 +278,13 @@ describe('mcp.server.upsert', () => {
 
   it('reports an update as created: false', async () => {
     executeRows = [{ created: false }];
-    await handleMcpServerAdminInline(buildArgs('mcp.server.upsert', input));
+    await handleMcpServerAdminInline(await buildArgs('mcp.server.upsert', input));
     expect(decodeOutput(lastResult())['created']).toBe(false);
   });
 
   it('refuses a spaceId naming another space and writes nothing', async () => {
     await handleMcpServerAdminInline(
-      buildArgs('mcp.server.upsert', { ...input, spaceId: OTHER_SPACE }),
+      await buildArgs('mcp.server.upsert', { ...input, spaceId: OTHER_SPACE }),
     );
     const error = lastError();
     expect(error.code).toBe('MCP_ADMIN_INVALID_INPUT');
@@ -228,7 +295,8 @@ describe('mcp.server.upsert', () => {
 
   it('refuses an input without a serverUrl as a validation error', async () => {
     const { serverUrl: _omitted, ...withoutUrl } = input;
-    await handleMcpServerAdminInline(buildArgs('mcp.server.upsert', withoutUrl));
+    await expect(resolvedInputRefFor('mcp.server.upsert', withoutUrl)).rejects.toThrow(/serverUrl/);
+    await handleMcpServerAdminInline(argsWithRef('mcp.server.upsert', inlineRef(withoutUrl)));
     const error = lastError();
     expect(error.code).toBe('MCP_ADMIN_INVALID_INPUT');
     expect(error.message).toContain('serverUrl');
@@ -241,7 +309,7 @@ describe('mcp.server.upsert', () => {
     } as unknown as Awaited<ReturnType<typeof database.getTenantIntegrationPolicy>>);
     vi.spyOn(database, 'getCatalogHostGrants').mockResolvedValue([]);
 
-    await handleMcpServerAdminInline(buildArgs('mcp.server.upsert', input));
+    await handleMcpServerAdminInline(await buildArgs('mcp.server.upsert', input));
 
     const result = lastResult();
     expect(result['status']).toBe('FAILED');
@@ -255,7 +323,7 @@ describe('mcp.server.upsert', () => {
 describe('mcp.server.get / list', () => {
   it('returns the stored definition in the public shape', async () => {
     selectRows = [storedDefinitionRow];
-    await handleMcpServerAdminInline(buildArgs('mcp.server.get', { serverId: 'docs-mcp' }));
+    await handleMcpServerAdminInline(await buildArgs('mcp.server.get', { serverId: 'docs-mcp' }));
     expect(decodeOutput(lastResult())).toEqual({
       definition: {
         serverId: 'docs-mcp',
@@ -272,13 +340,13 @@ describe('mcp.server.get / list', () => {
   });
 
   it('answers definition: null for an unknown server', async () => {
-    await handleMcpServerAdminInline(buildArgs('mcp.server.get', { serverId: 'missing' }));
+    await handleMcpServerAdminInline(await buildArgs('mcp.server.get', { serverId: 'missing' }));
     expect(decodeOutput(lastResult())).toEqual({ definition: null });
   });
 
   it("lists the run space's definitions", async () => {
     selectRows = [storedDefinitionRow];
-    await handleMcpServerAdminInline(buildArgs('mcp.server.list', {}));
+    await handleMcpServerAdminInline(await buildArgs('mcp.server.list', {}));
     const output = decodeOutput(lastResult()) as { definitions: Array<{ serverId: string }> };
     expect(output.definitions.map((d) => d.serverId)).toEqual(['docs-mcp']);
   });
@@ -287,14 +355,16 @@ describe('mcp.server.get / list', () => {
 describe('mcp.server.delete', () => {
   it('deletes the definition with its bindings and reports whether it existed', async () => {
     selectRows = [{ serverId: 'docs-mcp' }];
-    await handleMcpServerAdminInline(buildArgs('mcp.server.delete', { serverId: 'docs-mcp' }));
+    await handleMcpServerAdminInline(
+      await buildArgs('mcp.server.delete', { serverId: 'docs-mcp' }),
+    );
     expect(decodeOutput(lastResult())).toEqual({ deleted: true });
     expect(executed.some((q) => q.includes('DELETE FROM mcp_server_bindings'))).toBe(true);
     expect(executed.some((q) => q.includes('DELETE FROM mcp_server_definitions'))).toBe(true);
   });
 
   it('reports deleted: false for a server that is not there', async () => {
-    await handleMcpServerAdminInline(buildArgs('mcp.server.delete', { serverId: 'missing' }));
+    await handleMcpServerAdminInline(await buildArgs('mcp.server.delete', { serverId: 'missing' }));
     expect(decodeOutput(lastResult())).toEqual({ deleted: false });
   });
 });
@@ -317,7 +387,7 @@ describe('mcp.binding.upsert', () => {
 
   it('writes an unauthenticated binding enabled, stamped with the run tenant and space', async () => {
     executeRows = [{ created: true, scope: runScope, enabled: 1 }];
-    await handleMcpServerAdminInline(buildArgs('mcp.binding.upsert', binding));
+    await handleMcpServerAdminInline(await buildArgs('mcp.binding.upsert', binding));
 
     expect(decodeOutput(lastResult())).toEqual({
       bindingId: 'docs-default',
@@ -341,7 +411,7 @@ describe('mcp.binding.upsert', () => {
   it('refuses to enable a credentialed binding with no pinned origin', async () => {
     selectRows = [];
     await handleMcpServerAdminInline(
-      buildArgs('mcp.binding.upsert', {
+      await buildArgs('mcp.binding.upsert', {
         ...binding,
         auth: { type: 'bearer', credentialKey: 'DOCS_TOKEN' },
         enabled: true,
@@ -357,7 +427,7 @@ describe('mcp.binding.upsert', () => {
   it('writes a credentialed binding disabled, ready for mcp.binding.test', async () => {
     executeRows = [{ created: true, scope: runScope, enabled: 0 }];
     await handleMcpServerAdminInline(
-      buildArgs('mcp.binding.upsert', {
+      await buildArgs('mcp.binding.upsert', {
         ...binding,
         auth: { type: 'bearer', credentialKey: 'DOCS_TOKEN' },
         enabled: false,
@@ -373,7 +443,7 @@ describe('mcp.binding.upsert', () => {
 
   it('writes every field on create, defaults included', async () => {
     executeRows = [{ created: true, scope: runScope, enabled: 1 }];
-    await handleMcpServerAdminInline(buildArgs('mcp.binding.upsert', binding));
+    await handleMcpServerAdminInline(await buildArgs('mcp.binding.upsert', binding));
     expect(executedParams[0]).toEqual(expect.arrayContaining(['space', 'platform', 'off', 1]));
   });
 
@@ -381,7 +451,7 @@ describe('mcp.binding.upsert', () => {
     selectRows = [{ pinnedOrigin: null, enabled: 0, authJson: { type: 'none' } }];
     executeRows = [{ created: false, scope: runScope, enabled: 0 }];
     await handleMcpServerAdminInline(
-      buildArgs('mcp.binding.upsert', { ...binding, samplingPolicy: 'no_tools' }),
+      await buildArgs('mcp.binding.upsert', { ...binding, samplingPolicy: 'no_tools' }),
     );
 
     const update = executed[0]!.slice(executed[0]!.indexOf('DO UPDATE SET'));
@@ -401,11 +471,40 @@ describe('mcp.binding.upsert', () => {
     expect(decodeOutput(lastResult())['enabled']).toBe(false);
   });
 
+  it('writes no schema default over a stored value on an update that states one field', async () => {
+    selectRows = [{ pinnedOrigin: null, enabled: 0, authJson: { type: 'none' } }];
+    executeRows = [{ created: false, scope: runScope, enabled: 0 }];
+    await handleMcpServerAdminInline(
+      await buildArgs('mcp.binding.upsert', { ...binding, name: 'Renamed' }),
+    );
+
+    const update = executed[0]!.slice(executed[0]!.indexOf('DO UPDATE SET'));
+    expect(update).toContain('name = EXCLUDED.name');
+    for (const kept of [
+      'enabled =',
+      'owner_scope =',
+      'client_scope =',
+      'subscribe_list_changed =',
+      'sampling_policy =',
+      'connection_policy_json =',
+      'description =',
+    ]) {
+      expect(update).not.toContain(kept);
+    }
+    expect(scopeOnUpdateParam()).toBeNull();
+    expect(decodeOutput(lastResult())).toMatchObject({ created: false, enabled: false });
+  });
+
+  it('hands the handler the binding input as the agent sent it, with no schema default filled in', async () => {
+    const ref = await resolvedInputRefFor('mcp.binding.upsert', binding);
+    expect(readInlineRef(ref)).toEqual(binding);
+  });
+
   it('writes enabled and ownerScope on an update that states them', async () => {
     selectRows = [{ pinnedOrigin: null, enabled: 1, authJson: { type: 'none' } }];
     executeRows = [{ created: false, scope: runScope, enabled: 0 }];
     await handleMcpServerAdminInline(
-      buildArgs('mcp.binding.upsert', { ...binding, enabled: false, ownerScope: 'user' }),
+      await buildArgs('mcp.binding.upsert', { ...binding, enabled: false, ownerScope: 'user' }),
     );
     const update = executed[0]!.slice(executed[0]!.indexOf('DO UPDATE SET'));
     expect(update).toContain('enabled = EXCLUDED.enabled');
@@ -416,7 +515,7 @@ describe('mcp.binding.upsert', () => {
     selectRows = [{ pinnedOrigin: null, enabled: 1, authJson: { type: 'none' } }];
     executeRows = [{ created: false, scope: runScope, enabled: 1 }];
     await handleMcpServerAdminInline(
-      buildArgs('mcp.binding.upsert', { ...binding, connectionPolicy: { timeoutMs: 5000 } }),
+      await buildArgs('mcp.binding.upsert', { ...binding, connectionPolicy: { timeoutMs: 5000 } }),
     );
     expect(executed[0]).toContain('connection_policy_json = COALESCE(');
     expect(executedParams[0]?.at(-1)).toBe(JSON.stringify({ timeoutMs: 5000 }));
@@ -428,7 +527,7 @@ describe('mcp.binding.upsert', () => {
     ];
     executeRows = [{ created: false, scope: runScope, enabled: 0 }];
     await handleMcpServerAdminInline(
-      buildArgs('mcp.binding.upsert', {
+      await buildArgs('mcp.binding.upsert', {
         ...binding,
         auth: { type: 'bearer', credentialKey: 'DOCS_TOKEN' },
         name: 'Renamed',
@@ -440,14 +539,14 @@ describe('mcp.binding.upsert', () => {
   it('needs no scope at all and ignores a tenantId the agent made up', async () => {
     const { scope: _scope, ...withoutScope } = binding;
     executeRows = [{ created: true, scope: runScope, enabled: 1 }];
-    await handleMcpServerAdminInline(buildArgs('mcp.binding.upsert', withoutScope));
+    await handleMcpServerAdminInline(await buildArgs('mcp.binding.upsert', withoutScope));
     expect(decodeOutput(lastResult())['scope']).toEqual(runScope);
     expect(executedParams[0]).toContain(JSON.stringify(runScope));
   });
 
   it('keeps the stored flow narrowing on an update that omits flowId, and reports it', async () => {
     executeRows = [{ created: false, scope: { ...runScope, flowId: 'flow-7' }, enabled: 1 }];
-    await handleMcpServerAdminInline(buildArgs('mcp.binding.upsert', binding));
+    await handleMcpServerAdminInline(await buildArgs('mcp.binding.upsert', binding));
 
     expect(scopeOnUpdateParam()).toBeNull();
     expect(decodeOutput(lastResult())).toEqual({
@@ -461,7 +560,7 @@ describe('mcp.binding.upsert', () => {
   it('narrows to a stated flowId on create and on update', async () => {
     executeRows = [{ created: true, scope: { ...runScope, flowId: 'flow-9' }, enabled: 1 }];
     await handleMcpServerAdminInline(
-      buildArgs('mcp.binding.upsert', { ...binding, scope: { flowId: 'flow-9' } }),
+      await buildArgs('mcp.binding.upsert', { ...binding, scope: { flowId: 'flow-9' } }),
     );
     const stated = JSON.stringify({ flowId: 'flow-9', ...runScope });
     expect(executedParams[0]).toContain(stated);
@@ -471,23 +570,23 @@ describe('mcp.binding.upsert', () => {
   it('widens to space-wide only when flowId is stated as null', async () => {
     executeRows = [{ created: false, scope: runScope, enabled: 1 }];
     await handleMcpServerAdminInline(
-      buildArgs('mcp.binding.upsert', { ...binding, scope: { flowId: null } }),
+      await buildArgs('mcp.binding.upsert', { ...binding, scope: { flowId: null } }),
     );
     expect(scopeOnUpdateParam()).toBe(JSON.stringify(runScope));
     expect(decodeOutput(lastResult())['scope']).toEqual(runScope);
   });
 
   it('refuses an empty flowId rather than reading it as space-wide', async () => {
-    await handleMcpServerAdminInline(
-      buildArgs('mcp.binding.upsert', { ...binding, scope: { flowId: '' } }),
-    );
+    const emptyFlow = { ...binding, scope: { flowId: '' } };
+    await expect(resolvedInputRefFor('mcp.binding.upsert', emptyFlow)).rejects.toThrow(/flowId/);
+    await handleMcpServerAdminInline(argsWithRef('mcp.binding.upsert', inlineRef(emptyFlow)));
     expect(lastError().code).toBe('MCP_ADMIN_INVALID_INPUT');
     expect(executed).toHaveLength(0);
   });
 
   it('refuses a scope naming another space', async () => {
     await handleMcpServerAdminInline(
-      buildArgs('mcp.binding.upsert', {
+      await buildArgs('mcp.binding.upsert', {
         ...binding,
         scope: { spaceId: OTHER_SPACE },
       }),
@@ -501,7 +600,7 @@ describe('mcp.binding.delete', () => {
   it('deletes a binding in this space and invalidates by its server', async () => {
     selectRows = [{ serverId: 'docs-mcp' }];
     await handleMcpServerAdminInline(
-      buildArgs('mcp.binding.delete', { bindingId: 'docs-default' }),
+      await buildArgs('mcp.binding.delete', { bindingId: 'docs-default' }),
     );
     expect(decodeOutput(lastResult())).toEqual({ deleted: true });
     expect(executed[0]).toContain('DELETE FROM mcp_server_bindings');
@@ -514,7 +613,9 @@ describe('mcp.binding.delete', () => {
   });
 
   it('reports deleted: false and deletes nothing for an unknown binding', async () => {
-    await handleMcpServerAdminInline(buildArgs('mcp.binding.delete', { bindingId: 'missing' }));
+    await handleMcpServerAdminInline(
+      await buildArgs('mcp.binding.delete', { bindingId: 'missing' }),
+    );
     expect(decodeOutput(lastResult())).toEqual({ deleted: false });
     expect(executed).toHaveLength(0);
     expect(mockPublishMcpCatalogInvalidation).not.toHaveBeenCalled();

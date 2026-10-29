@@ -213,6 +213,7 @@ export const McpBindingOperationRegistrations: OperationRegistration[] = [
     privileged: true,
     idempotency: 'idempotent',
     mutates: true,
+    inputAsSent: true,
     usage: {
       oneLine:
         'Register an MCP server binding. Flow: upsert (enabled: false) → mcp.binding.test (pins ' +

@@ -60,20 +60,22 @@ function parseInput<T>(
   return parsed.data;
 }
 
-function isStated(raw: Record<string, unknown>, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(raw, key) && raw[key] !== undefined;
+function statedKeysOf(raw: unknown): string[] {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return [];
+  return Object.entries(raw)
+    .filter(([, value]) => value !== undefined)
+    .map(([key]) => key);
 }
 
 /**
- * The parsed fields the caller actually sent. Parsing fills every omitted
- * field with its schema default, which is right for a new row and wrong for an
- * existing one, so an update writes only these.
+ * The fields of `parsed` the caller sent, read off the raw input. Parsing
+ * fills every omitted field with its schema default — right for a new row,
+ * wrong for an existing one — so an update writes only these. The upserts are
+ * registered `inputAsSent`, which is what keeps step input resolution from
+ * handing this handler the default-filled value in place of the raw one.
  */
-function statedFieldsOf<T extends object>(
-  parsed: T,
-  raw: Record<string, unknown>,
-): ReadonlySet<keyof T> {
-  return new Set(Object.keys(parsed).filter((key) => isStated(raw, key)) as Array<keyof T>);
+function statedFieldsOf<T extends object>(raw: unknown, parsed: T): ReadonlySet<keyof T> {
+  return new Set(statedKeysOf(raw).filter((key) => key in parsed) as Array<keyof T>);
 }
 
 /**
@@ -106,7 +108,7 @@ async function runOp(
       const { created } = await upsertMcpServerDefinition({
         ...scope,
         definition,
-        statedFields: statedFieldsOf(definition, input),
+        statedFields: statedFieldsOf(input, definition),
       });
       const output: McpServerUpsertOutput = { serverId: definition.serverId, spaceId, created };
       return output;
@@ -147,15 +149,10 @@ async function runOp(
         input,
       );
       assertRunSpace(statedScope.spaceId, spaceId, op);
-      const rawConnectionPolicy = input['connectionPolicy'];
-      const connectionPolicy =
-        rawConnectionPolicy !== null && typeof rawConnectionPolicy === 'object'
-          ? Object.fromEntries(
-              Object.entries(binding.connectionPolicy).filter(([key]) =>
-                isStated(rawConnectionPolicy as Record<string, unknown>, key),
-              ),
-            )
-          : {};
+      const statedPolicyKeys = new Set(statedKeysOf(input['connectionPolicy']));
+      const connectionPolicy = Object.fromEntries(
+        Object.entries(binding.connectionPolicy).filter(([key]) => statedPolicyKeys.has(key)),
+      );
       // The tenant and space come from the run; `flowId` is the one narrowing
       // the caller owns, and only a stated one (a flow, or null for space-wide)
       // replaces what an existing row stores.
@@ -167,7 +164,7 @@ async function runOp(
       } = await upsertMcpServerBinding({
         ...scope,
         binding,
-        stated: { fields: statedFieldsOf(binding, input), connectionPolicy },
+        stated: { fields: statedFieldsOf(input, binding), connectionPolicy },
         scope: statedScope.flowId ? { flowId: statedScope.flowId, ...identity } : identity,
         scopeOnUpdate:
           statedScope.flowId === undefined
