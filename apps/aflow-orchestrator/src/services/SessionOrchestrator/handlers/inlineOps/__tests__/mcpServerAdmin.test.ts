@@ -26,14 +26,24 @@ function textOf(chunk: unknown): string | null {
   return Array.isArray(value) ? value.join('') : null;
 }
 
+function chunksOf(chunk: unknown): unknown[] | null {
+  const chunks =
+    chunk !== null && typeof chunk === 'object'
+      ? (chunk as { queryChunks?: unknown }).queryChunks
+      : undefined;
+  return Array.isArray(chunks) ? chunks : null;
+}
+
 function sqlText(query: unknown): string {
-  const chunks = (query as { queryChunks?: unknown[] }).queryChunks ?? [];
-  return chunks.map((chunk) => textOf(chunk) ?? '?').join('');
+  return (chunksOf(query) ?? [])
+    .map((chunk) => (chunksOf(chunk) ? sqlText(chunk) : (textOf(chunk) ?? '?')))
+    .join('');
 }
 
 function sqlParams(query: unknown): unknown[] {
-  const chunks = (query as { queryChunks?: unknown[] }).queryChunks ?? [];
-  return chunks.filter((chunk) => textOf(chunk) === null);
+  return (chunksOf(query) ?? []).flatMap((chunk) =>
+    chunksOf(chunk) ? sqlParams(chunk) : textOf(chunk) === null ? [chunk] : [],
+  );
 }
 
 const tx = {
@@ -155,8 +165,30 @@ describe('mcp.server.upsert', () => {
     serverId: 'docs-mcp',
     name: 'Docs MCP',
     serverUrl: 'https://mcp.example.com/mcp',
-    spaceId: SPACE,
   };
+
+  it('accepts the run space stated explicitly', async () => {
+    executeRows = [{ created: true }];
+    await handleMcpServerAdminInline(buildArgs('mcp.server.upsert', { ...input, spaceId: SPACE }));
+    expect(decodeOutput(lastResult())['created']).toBe(true);
+  });
+
+  it('updates only the fields the agent sent, keeping tags, source and the stored JSON', async () => {
+    executeRows = [{ created: false }];
+    await handleMcpServerAdminInline(
+      buildArgs('mcp.server.upsert', { ...input, toolFilter: { include: ['search'] } }),
+    );
+    const update = executed[0]!.slice(executed[0]!.indexOf('DO UPDATE SET'));
+    expect(update).toContain('name = EXCLUDED.name');
+    expect(update).toContain('server_url = EXCLUDED.server_url');
+    for (const kept of ['tags =', 'source =', 'transport =', 'description =']) {
+      expect(update).not.toContain(kept);
+    }
+    expect(update).toContain('definition_json = COALESCE(');
+    expect(executedParams[0]?.at(-1)).toBe(
+      JSON.stringify({ ...input, toolFilter: { include: ['search'] } }),
+    );
+  });
 
   it('creates the definition in the run space from a URL alone and invalidates the catalog', async () => {
     executeRows = [{ created: true }];
@@ -223,9 +255,7 @@ describe('mcp.server.upsert', () => {
 describe('mcp.server.get / list', () => {
   it('returns the stored definition in the public shape', async () => {
     selectRows = [storedDefinitionRow];
-    await handleMcpServerAdminInline(
-      buildArgs('mcp.server.get', { serverId: 'docs-mcp', spaceId: SPACE }),
-    );
+    await handleMcpServerAdminInline(buildArgs('mcp.server.get', { serverId: 'docs-mcp' }));
     expect(decodeOutput(lastResult())).toEqual({
       definition: {
         serverId: 'docs-mcp',
@@ -242,9 +272,7 @@ describe('mcp.server.get / list', () => {
   });
 
   it('answers definition: null for an unknown server', async () => {
-    await handleMcpServerAdminInline(
-      buildArgs('mcp.server.get', { serverId: 'missing', spaceId: SPACE }),
-    );
+    await handleMcpServerAdminInline(buildArgs('mcp.server.get', { serverId: 'missing' }));
     expect(decodeOutput(lastResult())).toEqual({ definition: null });
   });
 
@@ -259,18 +287,14 @@ describe('mcp.server.get / list', () => {
 describe('mcp.server.delete', () => {
   it('deletes the definition with its bindings and reports whether it existed', async () => {
     selectRows = [{ serverId: 'docs-mcp' }];
-    await handleMcpServerAdminInline(
-      buildArgs('mcp.server.delete', { serverId: 'docs-mcp', spaceId: SPACE }),
-    );
+    await handleMcpServerAdminInline(buildArgs('mcp.server.delete', { serverId: 'docs-mcp' }));
     expect(decodeOutput(lastResult())).toEqual({ deleted: true });
     expect(executed.some((q) => q.includes('DELETE FROM mcp_server_bindings'))).toBe(true);
     expect(executed.some((q) => q.includes('DELETE FROM mcp_server_definitions'))).toBe(true);
   });
 
   it('reports deleted: false for a server that is not there', async () => {
-    await handleMcpServerAdminInline(
-      buildArgs('mcp.server.delete', { serverId: 'missing', spaceId: SPACE }),
-    );
+    await handleMcpServerAdminInline(buildArgs('mcp.server.delete', { serverId: 'missing' }));
     expect(decodeOutput(lastResult())).toEqual({ deleted: false });
   });
 });
@@ -292,13 +316,14 @@ describe('mcp.binding.upsert', () => {
   }
 
   it('writes an unauthenticated binding enabled, stamped with the run tenant and space', async () => {
-    executeRows = [{ created: true, scope: runScope }];
+    executeRows = [{ created: true, scope: runScope, enabled: 1 }];
     await handleMcpServerAdminInline(buildArgs('mcp.binding.upsert', binding));
 
     expect(decodeOutput(lastResult())).toEqual({
       bindingId: 'docs-default',
       created: true,
       scope: runScope,
+      enabled: true,
     });
     expect(executed).toHaveLength(1);
     expect(executed[0]).toContain('INSERT INTO mcp_server_bindings');
@@ -330,7 +355,7 @@ describe('mcp.binding.upsert', () => {
   });
 
   it('writes a credentialed binding disabled, ready for mcp.binding.test', async () => {
-    executeRows = [{ created: true, scope: runScope }];
+    executeRows = [{ created: true, scope: runScope, enabled: 0 }];
     await handleMcpServerAdminInline(
       buildArgs('mcp.binding.upsert', {
         ...binding,
@@ -342,11 +367,86 @@ describe('mcp.binding.upsert', () => {
       bindingId: 'docs-default',
       created: true,
       scope: runScope,
+      enabled: false,
     });
   });
 
+  it('writes every field on create, defaults included', async () => {
+    executeRows = [{ created: true, scope: runScope, enabled: 1 }];
+    await handleMcpServerAdminInline(buildArgs('mcp.binding.upsert', binding));
+    expect(executedParams[0]).toEqual(expect.arrayContaining(['space', 'platform', 'off', 1]));
+  });
+
+  it('updates only the fields the agent sent, keeping enabled, ownerScope and the rest', async () => {
+    selectRows = [{ pinnedOrigin: null, enabled: 0, authJson: { type: 'none' } }];
+    executeRows = [{ created: false, scope: runScope, enabled: 0 }];
+    await handleMcpServerAdminInline(
+      buildArgs('mcp.binding.upsert', { ...binding, samplingPolicy: 'no_tools' }),
+    );
+
+    const update = executed[0]!.slice(executed[0]!.indexOf('DO UPDATE SET'));
+    expect(update).toContain('sampling_policy = EXCLUDED.sampling_policy');
+    expect(update).toContain('name = EXCLUDED.name');
+    expect(update).toContain('auth_json = EXCLUDED.auth_json');
+    for (const kept of [
+      'enabled =',
+      'owner_scope =',
+      'client_scope =',
+      'subscribe_list_changed =',
+      'connection_policy_json =',
+      'description =',
+    ]) {
+      expect(update).not.toContain(kept);
+    }
+    expect(decodeOutput(lastResult())['enabled']).toBe(false);
+  });
+
+  it('writes enabled and ownerScope on an update that states them', async () => {
+    selectRows = [{ pinnedOrigin: null, enabled: 1, authJson: { type: 'none' } }];
+    executeRows = [{ created: false, scope: runScope, enabled: 0 }];
+    await handleMcpServerAdminInline(
+      buildArgs('mcp.binding.upsert', { ...binding, enabled: false, ownerScope: 'user' }),
+    );
+    const update = executed[0]!.slice(executed[0]!.indexOf('DO UPDATE SET'));
+    expect(update).toContain('enabled = EXCLUDED.enabled');
+    expect(update).toContain('owner_scope = EXCLUDED.owner_scope');
+  });
+
+  it('merges only the connectionPolicy keys given over the stored policy', async () => {
+    selectRows = [{ pinnedOrigin: null, enabled: 1, authJson: { type: 'none' } }];
+    executeRows = [{ created: false, scope: runScope, enabled: 1 }];
+    await handleMcpServerAdminInline(
+      buildArgs('mcp.binding.upsert', { ...binding, connectionPolicy: { timeoutMs: 5000 } }),
+    );
+    expect(executed[0]).toContain('connection_policy_json = COALESCE(');
+    expect(executedParams[0]?.at(-1)).toBe(JSON.stringify({ timeoutMs: 5000 }));
+  });
+
+  it('does not re-enable a disabled credentialed binding on an update that omits enabled', async () => {
+    selectRows = [
+      { pinnedOrigin: null, enabled: 0, authJson: { type: 'bearer', credentialKey: 'K' } },
+    ];
+    executeRows = [{ created: false, scope: runScope, enabled: 0 }];
+    await handleMcpServerAdminInline(
+      buildArgs('mcp.binding.upsert', {
+        ...binding,
+        auth: { type: 'bearer', credentialKey: 'DOCS_TOKEN' },
+        name: 'Renamed',
+      }),
+    );
+    expect(decodeOutput(lastResult())).toMatchObject({ created: false, enabled: false });
+  });
+
+  it('needs no scope at all and ignores a tenantId the agent made up', async () => {
+    const { scope: _scope, ...withoutScope } = binding;
+    executeRows = [{ created: true, scope: runScope, enabled: 1 }];
+    await handleMcpServerAdminInline(buildArgs('mcp.binding.upsert', withoutScope));
+    expect(decodeOutput(lastResult())['scope']).toEqual(runScope);
+    expect(executedParams[0]).toContain(JSON.stringify(runScope));
+  });
+
   it('keeps the stored flow narrowing on an update that omits flowId, and reports it', async () => {
-    executeRows = [{ created: false, scope: { ...runScope, flowId: 'flow-7' } }];
+    executeRows = [{ created: false, scope: { ...runScope, flowId: 'flow-7' }, enabled: 1 }];
     await handleMcpServerAdminInline(buildArgs('mcp.binding.upsert', binding));
 
     expect(scopeOnUpdateParam()).toBeNull();
@@ -354,13 +454,14 @@ describe('mcp.binding.upsert', () => {
       bindingId: 'docs-default',
       created: false,
       scope: { ...runScope, flowId: 'flow-7' },
+      enabled: true,
     });
   });
 
   it('narrows to a stated flowId on create and on update', async () => {
-    executeRows = [{ created: true, scope: { ...runScope, flowId: 'flow-9' } }];
+    executeRows = [{ created: true, scope: { ...runScope, flowId: 'flow-9' }, enabled: 1 }];
     await handleMcpServerAdminInline(
-      buildArgs('mcp.binding.upsert', { ...binding, scope: { tenantId: 'x', flowId: 'flow-9' } }),
+      buildArgs('mcp.binding.upsert', { ...binding, scope: { flowId: 'flow-9' } }),
     );
     const stated = JSON.stringify({ flowId: 'flow-9', ...runScope });
     expect(executedParams[0]).toContain(stated);
@@ -368,9 +469,9 @@ describe('mcp.binding.upsert', () => {
   });
 
   it('widens to space-wide only when flowId is stated as null', async () => {
-    executeRows = [{ created: false, scope: runScope }];
+    executeRows = [{ created: false, scope: runScope, enabled: 1 }];
     await handleMcpServerAdminInline(
-      buildArgs('mcp.binding.upsert', { ...binding, scope: { tenantId: 'x', flowId: null } }),
+      buildArgs('mcp.binding.upsert', { ...binding, scope: { flowId: null } }),
     );
     expect(scopeOnUpdateParam()).toBe(JSON.stringify(runScope));
     expect(decodeOutput(lastResult())['scope']).toEqual(runScope);
@@ -378,7 +479,7 @@ describe('mcp.binding.upsert', () => {
 
   it('refuses an empty flowId rather than reading it as space-wide', async () => {
     await handleMcpServerAdminInline(
-      buildArgs('mcp.binding.upsert', { ...binding, scope: { tenantId: 'x', flowId: '' } }),
+      buildArgs('mcp.binding.upsert', { ...binding, scope: { flowId: '' } }),
     );
     expect(lastError().code).toBe('MCP_ADMIN_INVALID_INPUT');
     expect(executed).toHaveLength(0);
@@ -388,7 +489,7 @@ describe('mcp.binding.upsert', () => {
     await handleMcpServerAdminInline(
       buildArgs('mcp.binding.upsert', {
         ...binding,
-        scope: { tenantId: 'tenant-1', spaceId: OTHER_SPACE },
+        scope: { spaceId: OTHER_SPACE },
       }),
     );
     expect(lastError().code).toBe('MCP_ADMIN_INVALID_INPUT');

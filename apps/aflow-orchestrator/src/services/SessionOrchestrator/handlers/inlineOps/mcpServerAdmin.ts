@@ -60,6 +60,22 @@ function parseInput<T>(
   return parsed.data;
 }
 
+function isStated(raw: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(raw, key) && raw[key] !== undefined;
+}
+
+/**
+ * The parsed fields the caller actually sent. Parsing fills every omitted
+ * field with its schema default, which is right for a new row and wrong for an
+ * existing one, so an update writes only these.
+ */
+function statedFieldsOf<T extends object>(
+  parsed: T,
+  raw: Record<string, unknown>,
+): ReadonlySet<keyof T> {
+  return new Set(Object.keys(parsed).filter((key) => isStated(raw, key)) as Array<keyof T>);
+}
+
 /**
  * The run's space is the authority for where a row lives. A stated `spaceId`
  * naming another space is refused rather than silently written here.
@@ -87,7 +103,11 @@ async function runOp(
         input,
       );
       assertRunSpace(statedSpaceId, spaceId, op);
-      const { created } = await upsertMcpServerDefinition({ ...scope, definition });
+      const { created } = await upsertMcpServerDefinition({
+        ...scope,
+        definition,
+        statedFields: statedFieldsOf(definition, input),
+      });
       const output: McpServerUpsertOutput = { serverId: definition.serverId, spaceId, created };
       return output;
     }
@@ -121,15 +141,33 @@ async function runOp(
       return output;
     }
     case 'mcp.binding.upsert': {
-      const { scope: statedScope, ...binding } = parseInput(McpBindingUpsertInputSchema, op, input);
+      const { scope: statedScope = {}, ...binding } = parseInput(
+        McpBindingUpsertInputSchema,
+        op,
+        input,
+      );
       assertRunSpace(statedScope.spaceId, spaceId, op);
+      const rawConnectionPolicy = input['connectionPolicy'];
+      const connectionPolicy =
+        rawConnectionPolicy !== null && typeof rawConnectionPolicy === 'object'
+          ? Object.fromEntries(
+              Object.entries(binding.connectionPolicy).filter(([key]) =>
+                isStated(rawConnectionPolicy as Record<string, unknown>, key),
+              ),
+            )
+          : {};
       // The tenant and space come from the run; `flowId` is the one narrowing
       // the caller owns, and only a stated one (a flow, or null for space-wide)
       // replaces what an existing row stores.
       const identity = { tenantId, spaceId };
-      const { created, scope: storedScope } = await upsertMcpServerBinding({
+      const {
+        created,
+        scope: storedScope,
+        enabled,
+      } = await upsertMcpServerBinding({
         ...scope,
         binding,
+        stated: { fields: statedFieldsOf(binding, input), connectionPolicy },
         scope: statedScope.flowId ? { flowId: statedScope.flowId, ...identity } : identity,
         scopeOnUpdate:
           statedScope.flowId === undefined
@@ -146,6 +184,7 @@ async function runOp(
           ...identity,
           ...(typeof storedFlowId === 'string' && storedFlowId ? { flowId: storedFlowId } : {}),
         },
+        enabled,
       };
       return output;
     }

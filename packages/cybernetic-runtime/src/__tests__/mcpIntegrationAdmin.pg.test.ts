@@ -223,7 +223,7 @@ describeDb('MCP integration admin SQL (real DB)', () => {
       scope: narrowed,
       scopeOnUpdate: narrowed,
     });
-    expect(createdResult).toEqual({ created: true, scope: narrowed });
+    expect(createdResult).toEqual({ created: true, scope: narrowed, enabled: false });
 
     const kept = await upsertMcpServerBinding({
       ...inSpace,
@@ -231,7 +231,7 @@ describeDb('MCP integration admin SQL (real DB)', () => {
       scope: identity,
       scopeOnUpdate: null,
     });
-    expect(kept).toEqual({ created: false, scope: narrowed });
+    expect(kept).toEqual({ created: false, scope: narrowed, enabled: false });
     expect(await bindingScope('docs-default', SPACE)).toEqual(narrowed);
 
     const widened = await upsertMcpServerBinding({
@@ -240,8 +240,82 @@ describeDb('MCP integration admin SQL (real DB)', () => {
       scope: identity,
       scopeOnUpdate: identity,
     });
-    expect(widened).toEqual({ created: false, scope: identity });
+    expect(widened).toEqual({ created: false, scope: identity, enabled: false });
     expect(await bindingScope('docs-default', SPACE)).toEqual(identity);
+  });
+
+  it('updates only the stated binding fields, keeping the rest as stored', async (ctx) => {
+    if (!requireSchema(ctx)) return;
+
+    const identity = { tenantId: TENANT_ID, spaceId: SPACE };
+    await upsertMcpServerBinding({
+      ...inSpace,
+      binding: binding('docs-default', 'docs', {
+        ownerScope: 'user',
+        samplingPolicy: 'no_tools',
+        connectionPolicy: { timeoutMs: 9_000, maxSamplingTokens: 2_000 },
+        enabled: false,
+      } as Partial<McpServerBindingWrite>),
+      scope: identity,
+      scopeOnUpdate: null,
+    });
+
+    // What a parse fills in for an agent that sent only a name and a timeout.
+    const result = await upsertMcpServerBinding({
+      ...inSpace,
+      binding: binding('docs-default', 'docs', {
+        name: 'Renamed',
+        connectionPolicy: { timeoutMs: 5_000, maxSamplingTokens: 4_096 },
+        enabled: true,
+      } as Partial<McpServerBindingWrite>),
+      scope: identity,
+      scopeOnUpdate: null,
+      stated: {
+        fields: new Set(['bindingId', 'serverId', 'name', 'auth', 'connectionPolicy']),
+        connectionPolicy: { timeoutMs: 5_000 },
+      },
+    });
+    expect(result).toEqual({ created: false, scope: identity, enabled: false });
+
+    const rows = await query<Record<string, unknown>>(drizzleSql`
+      SELECT name, owner_scope, sampling_policy, enabled, connection_policy_json
+      FROM mcp_server_bindings
+      WHERE binding_id = 'docs-default' AND space_id = ${SPACE}::uuid
+    `);
+    expect(rows[0]).toEqual({
+      name: 'Renamed',
+      owner_scope: 'user',
+      sampling_policy: 'no_tools',
+      enabled: 0,
+      connection_policy_json: { timeoutMs: 5_000, maxSamplingTokens: 2_000 },
+    });
+  });
+
+  it('updates only the stated definition fields, keeping the rest as stored', async (ctx) => {
+    if (!requireSchema(ctx)) return;
+
+    await upsertMcpServerDefinition({
+      ...inSpace,
+      definition: definition('docs', {
+        tags: ['search'],
+        source: 'bundle',
+        toolFilter: { include: ['search'] },
+      }),
+    });
+    await upsertMcpServerDefinition({
+      ...inSpace,
+      definition: definition('docs', { name: 'Docs renamed' }),
+      statedFields: new Set(['serverId', 'name', 'serverUrl']),
+    });
+
+    const row = await getMcpServerDefinitionRow({ ...inSpace, serverId: 'docs' });
+    expect(row?.name).toBe('Docs renamed');
+    expect(row?.tags).toEqual(['search']);
+    expect(row?.source).toBe('bundle');
+    expect((row?.definitionJson as Record<string, unknown>)['toolFilter']).toEqual({
+      include: ['search'],
+    });
+    expect((row?.definitionJson as Record<string, unknown>)['name']).toBe('Docs renamed');
   });
 
   it('refuses to enable a credentialed binding until its origin is pinned in the same space', async (ctx) => {

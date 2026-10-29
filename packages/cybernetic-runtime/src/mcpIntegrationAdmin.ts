@@ -1,7 +1,12 @@
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, sql, type SQL } from 'drizzle-orm';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { Redis } from 'ioredis';
-import type { McpServerBinding, McpServerDefinition, TenantId } from '@aflow/schemas';
+import type {
+  McpConnectionPolicy,
+  McpServerBinding,
+  McpServerDefinition,
+  TenantId,
+} from '@aflow/schemas';
 import {
   createTenantContext,
   mcpServerBindings,
@@ -47,6 +52,57 @@ export type McpServerBindingWrite = Pick<
   | 'clientScope'
   | 'enabled'
 >;
+
+/**
+ * Which fields an update writes. Absent, an update replaces every field — the
+ * Integrations form sends the whole object. Present, an existing row keeps
+ * every field not named here, so a caller that states one setting does not
+ * reset the others to their schema defaults. A new row is written whole either
+ * way.
+ */
+export type StatedFields<T> = ReadonlySet<keyof T>;
+
+/** The binding fields an update writes, and the connection-policy keys it merges over the stored ones. */
+export interface McpBindingStatedFields {
+  fields: StatedFields<McpServerBindingWrite>;
+  connectionPolicy: Partial<McpConnectionPolicy>;
+}
+
+function pickStated<T extends object>(value: T, stated: StatedFields<T>): Partial<T> {
+  return Object.fromEntries(
+    Object.entries(value).filter(([key]) => stated.has(key as keyof T)),
+  ) as Partial<T>;
+}
+
+function updateColumns<T>(
+  columns: Partial<Record<keyof T, string>>,
+  stated: StatedFields<T> | undefined,
+): SQL[] {
+  return (Object.entries(columns) as Array<[keyof T, string]>)
+    .filter(([field]) => stated === undefined || stated.has(field))
+    .map(([, column]) => sql.raw(`${column} = EXCLUDED.${column}`));
+}
+
+const DEFINITION_COLUMNS: Partial<Record<keyof McpServerDefinitionWrite, string>> = {
+  name: 'name',
+  description: 'description',
+  serverUrl: 'server_url',
+  transport: 'transport',
+  tags: 'tags',
+  source: 'source',
+};
+
+const BINDING_COLUMNS: Partial<Record<keyof McpServerBindingWrite, string>> = {
+  serverId: 'server_id',
+  name: 'name',
+  description: 'description',
+  auth: 'auth_json',
+  subscribeListChanged: 'subscribe_list_changed',
+  samplingPolicy: 'sampling_policy',
+  ownerScope: 'owner_scope',
+  clientScope: 'client_scope',
+  enabled: 'enabled',
+};
 
 /** A credentialed binding asked to be enabled before `mcp.binding.test` pinned its origin. */
 export class McpBindingOriginNotPinnedError extends Error {
@@ -129,9 +185,12 @@ export function mcpServerDefinitionFromRow(row: McpServerDefinitionRow): McpServ
 }
 
 export async function upsertMcpServerDefinition(
-  opts: McpIntegrationAdminScope & { definition: McpServerDefinitionWrite },
+  opts: McpIntegrationAdminScope & {
+    definition: McpServerDefinitionWrite;
+    statedFields?: StatedFields<McpServerDefinitionWrite>;
+  },
 ): Promise<{ created: boolean }> {
-  const { db, tenantId, spaceId, definition } = opts;
+  const { db, tenantId, spaceId, definition, statedFields } = opts;
   await enforceIntegrationHostPolicy({
     db,
     tenantId,
@@ -142,6 +201,13 @@ export async function upsertMcpServerDefinition(
   });
 
   const definitionJson: Record<string, unknown> = { ...definition };
+  const updates = [
+    ...updateColumns(DEFINITION_COLUMNS, statedFields),
+    statedFields === undefined
+      ? sql`definition_json = EXCLUDED.definition_json`
+      : sql`definition_json = COALESCE(mcp_server_definitions.definition_json, '{}'::jsonb) || ${JSON.stringify(pickStated(definition, statedFields))}::jsonb`,
+    sql`updated_at = NOW()`,
+  ];
   const rows = await withTenantSchema(db, tenantContextOf(tenantId), async (tx) =>
     tx.execute<{ created: boolean }>(sql`
       INSERT INTO mcp_server_definitions (
@@ -160,15 +226,7 @@ export async function upsertMcpServerDefinition(
         1,
         ${spaceId}::uuid
       )
-      ON CONFLICT (server_id, space_id) DO UPDATE SET
-        name = EXCLUDED.name,
-        description = EXCLUDED.description,
-        server_url = EXCLUDED.server_url,
-        transport = EXCLUDED.transport,
-        definition_json = EXCLUDED.definition_json,
-        tags = EXCLUDED.tags,
-        source = EXCLUDED.source,
-        updated_at = NOW()
+      ON CONFLICT (server_id, space_id) DO UPDATE SET ${sql.join(updates, sql`, `)}
       RETURNING (xmax = 0) AS created
     `),
   );
@@ -211,16 +269,18 @@ export async function deleteMcpServerDefinition(
 /**
  * `scope` is what a new row is created with; `scopeOnUpdate` is what an
  * existing row's scope becomes, `null` keeping the stored one. The returned
- * `scope` is the row's scope after the write.
+ * `scope` and `enabled` are the row's after the write.
  */
 export async function upsertMcpServerBinding(
   opts: McpIntegrationAdminScope & {
     binding: McpServerBindingWrite;
     scope: Record<string, unknown>;
     scopeOnUpdate: Record<string, unknown> | null;
+    stated?: McpBindingStatedFields;
   },
-): Promise<{ created: boolean; scope: Record<string, unknown> }> {
-  const { db, tenantId, spaceId, binding, scope, scopeOnUpdate } = opts;
+): Promise<{ created: boolean; scope: Record<string, unknown>; enabled: boolean }> {
+  const { db, tenantId, spaceId, binding, scope, scopeOnUpdate, stated } = opts;
+  const statedFields = stated?.fields;
   await enforceIntegrationHostPolicy({
     db,
     tenantId,
@@ -233,10 +293,27 @@ export async function upsertMcpServerBinding(
     ],
   });
 
+  const updates = [
+    ...updateColumns(BINDING_COLUMNS, statedFields),
+    sql`scope_json = COALESCE(${scopeOnUpdate === null ? null : JSON.stringify(scopeOnUpdate)}::jsonb, mcp_server_bindings.scope_json)`,
+    ...(statedFields === undefined
+      ? [sql`connection_policy_json = EXCLUDED.connection_policy_json`]
+      : statedFields.has('connectionPolicy')
+        ? [
+            sql`connection_policy_json = COALESCE(mcp_server_bindings.connection_policy_json, '{}'::jsonb) || ${JSON.stringify(stated?.connectionPolicy ?? {})}::jsonb`,
+          ]
+        : []),
+    sql`updated_at = NOW()`,
+  ];
+
   const rows = await withTenantSchema(db, tenantContextOf(tenantId), async (tx) => {
-    if (binding.enabled && binding.auth.type !== 'none') {
-      const existing = await tx
-        .select({ pinnedOrigin: mcpServerBindings.pinnedOrigin })
+    const existing = (
+      await tx
+        .select({
+          pinnedOrigin: mcpServerBindings.pinnedOrigin,
+          enabled: mcpServerBindings.enabled,
+          authJson: mcpServerBindings.authJson,
+        })
         .from(mcpServerBindings)
         .where(
           and(
@@ -244,13 +321,24 @@ export async function upsertMcpServerBinding(
             eq(mcpServerBindings.spaceId, spaceId),
           ),
         )
-        .limit(1);
-      if (!existing[0]?.pinnedOrigin) {
-        throw new McpBindingOriginNotPinnedError(binding.bindingId, binding.auth.type);
-      }
+        .limit(1)
+    )[0];
+    // The pin rule is checked against what the row will hold, and an existing
+    // row keeps the fields this write does not state.
+    const kept = (field: keyof McpServerBindingWrite): boolean =>
+      existing !== undefined && statedFields !== undefined && !statedFields.has(field);
+    const enabled = kept('enabled') ? existing?.enabled === 1 : binding.enabled;
+    const storedAuthType = (existing?.authJson as { type?: unknown } | null)?.type;
+    const authType = kept('auth')
+      ? typeof storedAuthType === 'string'
+        ? storedAuthType
+        : 'none'
+      : binding.auth.type;
+    if (enabled && authType !== 'none' && !existing?.pinnedOrigin) {
+      throw new McpBindingOriginNotPinnedError(binding.bindingId, authType);
     }
 
-    return tx.execute<{ created: boolean; scope: Record<string, unknown> }>(sql`
+    return tx.execute<{ created: boolean; scope: Record<string, unknown>; enabled: number }>(sql`
       INSERT INTO mcp_server_bindings (
         binding_id, server_id, name, description, space_id,
         scope_json, auth_json, connection_policy_json,
@@ -273,20 +361,8 @@ export async function upsertMcpServerBinding(
         ${binding.clientScope},
         ${!binding.enabled ? 0 : 1}
       )
-      ON CONFLICT (binding_id, space_id) DO UPDATE SET
-        server_id = EXCLUDED.server_id,
-        name = EXCLUDED.name,
-        description = EXCLUDED.description,
-        scope_json = COALESCE(${scopeOnUpdate === null ? null : JSON.stringify(scopeOnUpdate)}::jsonb, mcp_server_bindings.scope_json),
-        auth_json = EXCLUDED.auth_json,
-        connection_policy_json = EXCLUDED.connection_policy_json,
-        subscribe_list_changed = EXCLUDED.subscribe_list_changed,
-        sampling_policy = EXCLUDED.sampling_policy,
-        owner_scope = EXCLUDED.owner_scope,
-        client_scope = EXCLUDED.client_scope,
-        enabled = EXCLUDED.enabled,
-        updated_at = NOW()
-      RETURNING (xmax = 0) AS created, scope_json AS scope
+      ON CONFLICT (binding_id, space_id) DO UPDATE SET ${sql.join(updates, sql`, `)}
+      RETURNING (xmax = 0) AS created, scope_json AS scope, enabled
     `);
   });
 
@@ -298,7 +374,11 @@ export async function upsertMcpServerBinding(
     });
   }
   const row = rows[0];
-  return { created: row?.created === true, scope: row?.scope ?? scope };
+  return {
+    created: row?.created === true,
+    scope: row?.scope ?? scope,
+    enabled: row ? row.enabled === 1 : binding.enabled,
+  };
 }
 
 /**

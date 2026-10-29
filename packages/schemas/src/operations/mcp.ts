@@ -120,14 +120,34 @@ export type McpToolListOutput = z.infer<typeof McpToolListOutputSchema>;
 
 // ============================================================================
 
-/** Upsert input: definition shape minus auto-populated timestamps, plus owning space. */
+/**
+ * Agents write to their run's space, so the space is never theirs to state;
+ * one naming another space is refused rather than written there.
+ */
+const RunSpaceIdSchema = z
+  .string()
+  .uuid()
+  .describe("Optional. The run's space is the one used; naming any other space is refused.")
+  .optional();
+
+const UPDATE_KEEPS_OMITTED =
+  'On an existing row, a field left out keeps its stored value; defaults apply only when creating.';
+
+/** Upsert input: definition shape minus auto-populated timestamps. */
 export const McpServerUpsertInputSchema = McpServerDefinitionSchema.omit({
   createdAt: true,
   updatedAt: true,
-}).extend({
-  /** Space that owns this definition. */
-  spaceId: z.string().uuid().describe('Owning space ID'),
-});
+})
+  .extend({
+    tags: McpServerDefinitionSchema.shape.tags.describe(
+      `Replaces the stored tags when given. ${UPDATE_KEEPS_OMITTED}`,
+    ),
+    source: McpServerDefinitionSchema.shape.source.describe(
+      `Defaults to 'custom' on create. ${UPDATE_KEEPS_OMITTED}`,
+    ),
+    spaceId: RunSpaceIdSchema,
+  })
+  .describe(UPDATE_KEEPS_OMITTED);
 export type McpServerUpsertInput = z.infer<typeof McpServerUpsertInputSchema>;
 
 export const McpServerUpsertOutputSchema = z.object({
@@ -139,7 +159,7 @@ export type McpServerUpsertOutput = z.infer<typeof McpServerUpsertOutputSchema>;
 
 export const McpServerGetInputSchema = z.object({
   serverId: z.string().max(128),
-  spaceId: z.string().uuid(),
+  spaceId: RunSpaceIdSchema,
 });
 export type McpServerGetInput = z.infer<typeof McpServerGetInputSchema>;
 
@@ -149,11 +169,7 @@ export const McpServerGetOutputSchema = z.object({
 export type McpServerGetOutput = z.infer<typeof McpServerGetOutputSchema>;
 
 export const McpServerListInputSchema = z.object({
-  spaceId: z
-    .string()
-    .uuid()
-    .describe("Optional. The run's space is the one listed; naming any other space is refused.")
-    .optional(),
+  spaceId: RunSpaceIdSchema,
   /** Filter by source (platform/custom/discovered/bundle). */
   source: z.enum(['platform', 'custom', 'discovered', 'bundle']).optional(),
   /** Filter by enabled status. */
@@ -168,7 +184,7 @@ export type McpServerListOutput = z.infer<typeof McpServerListOutputSchema>;
 
 export const McpServerDeleteInputSchema = z.object({
   serverId: z.string().max(128),
-  spaceId: z.string().uuid(),
+  spaceId: RunSpaceIdSchema,
 });
 export type McpServerDeleteInput = z.infer<typeof McpServerDeleteInputSchema>;
 
@@ -213,22 +229,50 @@ export const McpBindingUpsertInputSchema = McpServerBindingSchema.omit({
   cachedToolsAt: true,
   pinnedOrigin: true,
   sessionMetadata: true,
-}).extend({
-  scope: McpServerBindingSchema.shape.scope.extend({
-    // Omission is not a statement: an update that leaves flowId out must not
-    // widen an operator's flow narrowing to the whole space.
-    flowId: z
-      .string()
-      .min(1, 'flowId must name a flow; pass null to make the binding space-wide')
-      .nullable()
+})
+  .extend({
+    // The tenant and space are the run's, stamped by the handler; flowId is
+    // the one narrowing the caller owns.
+    scope: z
+      .object({
+        spaceId: RunSpaceIdSchema,
+        // Omission is not a statement: an update that leaves flowId out must not
+        // widen an operator's flow narrowing to the whole space.
+        flowId: z
+          .string()
+          .min(1, 'flowId must name a flow; pass null to make the binding space-wide')
+          .nullable()
+          .optional()
+          .describe(
+            'Narrow the binding to one flow. Omitted: a new binding is space-wide and an existing ' +
+              'binding keeps the flow it already has. null: make the binding space-wide, removing ' +
+              'any stored flow.',
+          ),
+      })
       .optional()
-      .describe(
-        'Narrow the binding to one flow. Omitted: a new binding is space-wide and an existing ' +
-          'binding keeps the flow it already has. null: make the binding space-wide, removing ' +
-          'any stored flow.',
-      ),
-  }),
-});
+      .describe("Optional. The binding is always written to the run's tenant and space."),
+    connectionPolicy: McpServerBindingSchema.shape.connectionPolicy.describe(
+      'On an existing binding, only the keys given replace the stored ones; the rest keep their ' +
+        'stored values. Defaults apply only when creating.',
+    ),
+    subscribeListChanged: McpServerBindingSchema.shape.subscribeListChanged.describe(
+      `Defaults to true on create. ${UPDATE_KEEPS_OMITTED}`,
+    ),
+    samplingPolicy: McpServerBindingSchema.shape.samplingPolicy.describe(
+      `Defaults to 'off' on create. ${UPDATE_KEEPS_OMITTED}`,
+    ),
+    ownerScope: McpServerBindingSchema.shape.ownerScope.describe(
+      `Whose OAuth tokens the binding replays. Defaults to 'space' on create. ${UPDATE_KEEPS_OMITTED}`,
+    ),
+    clientScope: McpServerBindingSchema.shape.clientScope.describe(
+      `Whose OAuth app drives consent. Defaults to 'platform' on create. ${UPDATE_KEEPS_OMITTED}`,
+    ),
+    enabled: McpServerBindingSchema.shape.enabled.describe(
+      'Defaults to true on create. On an existing binding, leaving it out keeps the stored ' +
+        'value: a disabled binding stays disabled until enabled: true is sent.',
+    ),
+  })
+  .describe(UPDATE_KEEPS_OMITTED);
 export type McpBindingUpsertInput = z.infer<typeof McpBindingUpsertInputSchema>;
 
 export const McpBindingUpsertOutputSchema = z.object({
@@ -238,6 +282,11 @@ export const McpBindingUpsertOutputSchema = z.object({
     'The scope stored after this write. An update that omitted scope.flowId kept the stored ' +
       'flowId, which appears here.',
   ),
+  enabled: z
+    .boolean()
+    .describe(
+      'Whether the binding is enabled after this write; an update that omitted it kept it.',
+    ),
 });
 export type McpBindingUpsertOutput = z.infer<typeof McpBindingUpsertOutputSchema>;
 
@@ -503,8 +552,10 @@ export const McpOperationRegistrations: OperationRegistration[] = [
     name: 'Upsert MCP Server Definition',
     actionLabel: 'Saving MCP server definition…',
     semanticDescription:
-      'Create or update an MCP server definition (serverId, URL, transport, toolFilter, PRM hints). ' +
-      'Definitions hold no credentials — pair with a binding to authorize access.',
+      "Create or update an MCP server definition in the run's space (serverId, URL, transport, " +
+      'toolFilter, PRM hints). An update writes only the fields given; every field left out keeps ' +
+      'its stored value, and schema defaults apply only when creating. Definitions hold no ' +
+      'credentials — pair with a binding to authorize access.',
     tags: ['crud', 'mcp', 'integration'],
     crudView: { entityType: 'mcp_server_definition', action: 'create' },
     privileged: true,
@@ -523,8 +574,11 @@ export const McpOperationRegistrations: OperationRegistration[] = [
         'Calling tools — use mcp.tool.call via a promoted binding',
       ],
       pitfalls: [
-        'Definitions are space-scoped via (serverId, spaceId) composite key — same serverId can ' +
-          'live in multiple spaces independently.',
+        "Definitions are written to the run's space; the same serverId can live in other spaces " +
+          'independently. There is no spaceId to supply — naming another space is refused.',
+        'serverId, name and serverUrl are required on every call, so an update always writes them. ' +
+          'Every other field left out — tags, source, toolFilter, description, icon — keeps its ' +
+          'stored value; a field given replaces the stored one whole.',
         'Streamable HTTP is the only supported transport per spec rev 2025-11-25.',
       ],
       minimalExampleInput: {
@@ -532,7 +586,6 @@ export const McpOperationRegistrations: OperationRegistration[] = [
         name: 'Example MCP',
         serverUrl: 'https://mcp.example.com/mcp',
         transport: 'streamable_http',
-        spaceId: '00000000-0000-0000-0000-000000000000',
       },
       followUp: [
         {
@@ -553,7 +606,7 @@ export const McpOperationRegistrations: OperationRegistration[] = [
     verb: 'get',
     name: 'Get MCP Server Definition',
     actionLabel: 'Loading MCP server…',
-    semanticDescription: 'Load a single MCP server definition by (serverId, spaceId).',
+    semanticDescription: "Load a single MCP server definition by serverId from the run's space.",
     tags: ['crud', 'mcp'],
     crudView: { entityType: 'mcp_server_definition', action: 'read' },
     idempotency: 'idempotent',
@@ -562,10 +615,7 @@ export const McpOperationRegistrations: OperationRegistration[] = [
       whenToUse: ['Inspecting a definition before editing or wiring a binding to it'],
       whenNotToUse: ['Listing many definitions — use mcp.server.list'],
       pitfalls: [],
-      minimalExampleInput: {
-        serverId: 'kaggle',
-        spaceId: '00000000-0000-0000-0000-000000000000',
-      },
+      minimalExampleInput: { serverId: 'kaggle' },
     },
     accessMode: 'read',
     inputZod: McpServerGetInputSchema,
@@ -621,10 +671,7 @@ export const McpOperationRegistrations: OperationRegistration[] = [
         'Irreversible: re-adding the server means upserting its bindings, storing their credential values and completing OAuth consent again.',
         "User- and tenant-owned OAuth tokens survive; only the space's own tokens for this server are removed.",
       ],
-      minimalExampleInput: {
-        serverId: 'example-mcp',
-        spaceId: '00000000-0000-0000-0000-000000000000',
-      },
+      minimalExampleInput: { serverId: 'example-mcp' },
     },
     accessMode: 'write',
     riskModifiers: ['privileged'],
@@ -677,7 +724,9 @@ export const McpOperationRegistrations: OperationRegistration[] = [
     name: 'Upsert MCP Server Binding',
     actionLabel: 'Saving MCP binding…',
     semanticDescription:
-      'Create or update an MCP server binding (auth, scope, ACL, connection + sampling policy). ' +
+      "Create or update an MCP server binding in the run's space (auth, flow scope, connection + " +
+      'sampling policy, owner and client scope, enabled). An update writes only the fields given: ' +
+      'every field left out keeps its stored value, and schema defaults apply only when creating. ' +
       'Server rejects enabled: true on a credentialed binding without pinnedOrigin — caller must ' +
       'run mcp.binding.test first.',
     tags: ['crud', 'mcp', 'integration'],
@@ -690,7 +739,7 @@ export const McpOperationRegistrations: OperationRegistration[] = [
         'Register an MCP server binding. Flow: upsert (enabled: false) → mcp.binding.test (pins ' +
         'origin + populates cache) → flip enabled to true.',
       whenToUse: [
-        'Authorizing an MCP server in a specific scope (tenant/space/flow)',
+        "Authorizing an MCP server in the run's space, optionally narrowed to one flow",
         'Updating ACLs, sampling policy, or connection policy on an existing binding',
       ],
       whenNotToUse: [
@@ -699,13 +748,15 @@ export const McpOperationRegistrations: OperationRegistration[] = [
       pitfalls: [
         'Credentials are referenced by credentialKey only — store actual values via the Integrations page.',
         'Credentialed bindings require mcp.binding.test to populate pinnedOrigin before they can be enabled.',
-        'Updating a binding without scope.flowId keeps its stored flow narrowing; pass scope.flowId: null to make it space-wide. The output scope is what is stored.',
+        'bindingId, serverId, name and auth are required on every call, so an update always writes them — resend the stored auth unless you mean to change it.',
+        'Every other field left out on an update keeps its stored value: enabled, ownerScope, clientScope, samplingPolicy, subscribeListChanged and description are not reset to their defaults. connectionPolicy merges key by key. To change one, send it.',
+        'Updating a binding without scope.flowId keeps its stored flow narrowing; pass scope.flowId: null to make it space-wide. The output scope and enabled are what is stored.',
+        "The tenant and space are the run's — there is no tenantId to supply, and a scope.spaceId naming another space is refused.",
       ],
       minimalExampleInput: {
         bindingId: 'kaggle-default',
         serverId: 'kaggle',
         name: 'Kaggle Default',
-        scope: { tenantId: '00000000-0000-0000-0000-000000000000' },
         auth: { type: 'bearer', credentialKey: 'KAGGLE_MCP_TOKEN' },
         enabled: false,
       },
