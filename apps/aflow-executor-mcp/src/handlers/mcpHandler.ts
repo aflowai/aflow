@@ -12,6 +12,7 @@ import {
   McpToolListInputSchema,
   McpServerRefreshToolsInputSchema,
   McpBindingTestInputSchema,
+  MCP_EXECUTOR_OPERATION_IDS,
   TenantIdSchema,
   extractUrlOrigin,
   mcpCredentialsError,
@@ -218,16 +219,16 @@ export class McpHandler implements StepHandler {
     if (operationId === 'mcp.server.refresh_tools') return this.handleRefreshTools(ctx);
 
     // Defense-in-depth: CRUD ops like `mcp.server.upsert` / `mcp.binding.get`
-    // are NOT executor-handled. They live as inline orchestrator handlers
-    // (mirroring `apiAdmin.ts`) or via REST routes — never as executor steps.
+    // are NOT executor-handled. They run inline in the orchestrator
+    // (`mcpServerAdmin.ts`, `mcpBindingAdmin.ts`) — never as executor steps.
     // Reject explicitly so a misconfigured `coreOperations` doesn't silently
     // parse a CRUD payload as an `mcp.tool.call` input.
     return failureWithError(
       ctx,
       validationError(
         `MCP executor does not handle operation "${operationId}". ` +
-          `Executor-callable ops are: mcp.tool.call, mcp.tool.list, mcp.binding.test, mcp.server.refresh_tools. ` +
-          `CRUD ops (mcp.server.*, mcp.binding.{upsert,get,list,delete}) belong on inline orchestrator handlers or REST routes.`,
+          `Executor-callable ops are: ${MCP_EXECUTOR_OPERATION_IDS.join(', ')}. ` +
+          `CRUD ops (mcp.server.*, mcp.binding.{upsert,get,list,delete}) run inline in the orchestrator.`,
       ),
     );
   }

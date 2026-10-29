@@ -149,6 +149,15 @@ export interface OperationRegistration {
   /** If true, this operation mutates state (used for access-grant enforcement). */
   mutates?: boolean;
   skipInputValidation?: boolean;
+  /**
+   * The handler is handed the input as the caller sent it: validated against
+   * `inputZod`, but not replaced by the parsed value, so no schema default is
+   * filled in before it arrives. For an upsert whose update writes only the
+   * fields the caller stated — once parsing has filled every omitted field
+   * with its default, a field left out is indistinguishable from one sent.
+   * The handler parses the input itself.
+   */
+  inputAsSent?: boolean;
   bypassGrant?: boolean;
 
   /**
@@ -282,6 +291,8 @@ export interface OperationDescriptor {
   /** Whether this operation mutates state (derived from registration, defaults to false). */
   mutates: boolean;
   skipInputValidation?: boolean;
+  /** See `OperationRegistration.inputAsSent`. */
+  inputAsSent?: boolean;
   bypassGrant?: boolean;
 
   // --- Output rendering metadata ---

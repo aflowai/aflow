@@ -170,8 +170,11 @@ export async function resolveStepInput(
     throw err;
   }
 
-  // Use parsed (Zod-transformed) input if available, otherwise fall back to resolved
-  const finalInput = validationResult.parsed ?? resolved;
+  // Use parsed (Zod-transformed) input if available, otherwise fall back to
+  // resolved — except where the handler must see which fields were sent.
+  const finalInput = getOperation(stepDef.operation)?.inputAsSent
+    ? resolved
+    : (validationResult.parsed ?? resolved);
   return encodeTaskInput(
     payloadStore,
     { tenantId, runId, label: `step input (${stepDef.stepId})` },
