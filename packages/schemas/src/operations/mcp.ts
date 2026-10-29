@@ -387,6 +387,18 @@ export const McpToolPromoteOutputSchema = z.object({
 });
 export type McpToolPromoteOutput = z.infer<typeof McpToolPromoteOutputSchema>;
 
+/**
+ * The `mcp.*` operations the MCP executor runs — the ones that open a
+ * session to the server. Every other `mcp.*` operation an agent can call runs
+ * inline in the orchestrator; a contract test there holds the two together.
+ */
+export const MCP_EXECUTOR_OPERATION_IDS: readonly string[] = [
+  'mcp.tool.call',
+  'mcp.tool.list',
+  'mcp.binding.test',
+  'mcp.server.refresh_tools',
+];
+
 // ============================================================================
 // Registration
 // ============================================================================

@@ -42,6 +42,12 @@ export function isInlineOperation(operationId: string): boolean {
     operationId === 'mcp.binding.consent' ||
     operationId === 'mcp.binding.get' ||
     operationId === 'mcp.binding.list' ||
+    operationId === 'mcp.binding.upsert' ||
+    operationId === 'mcp.binding.delete' ||
+    operationId === 'mcp.server.upsert' ||
+    operationId === 'mcp.server.get' ||
+    operationId === 'mcp.server.list' ||
+    operationId === 'mcp.server.delete' ||
     operationId === 'human.chat.ask' ||
     operationId === 'human.action_center.focus' ||
     operationId === 'artifact.inspect.list' ||

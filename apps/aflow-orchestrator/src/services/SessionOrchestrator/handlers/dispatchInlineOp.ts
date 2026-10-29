@@ -49,6 +49,8 @@ import {
   handleIntegrationRegistryListInline,
   handleSimulationOpInline,
   handleMcpBindingAdminInline,
+  handleMcpServerAdminInline,
+  MCP_SERVER_ADMIN_OPERATION_IDS,
   handleHumanChatAskInline,
   handleHumanActionCenterFocusInline,
   handleArtifactInspectInline,
@@ -183,6 +185,20 @@ export async function dispatchInlineOp(
     );
   } else if (stepDef.operation === 'mcp.binding.get' || stepDef.operation === 'mcp.binding.list') {
     await handleMcpBindingAdminInline({
+      redis,
+      payloadStore,
+      context,
+      stepDef,
+      stepExecutionId,
+      idempotencyKey,
+      resolvedInputRef,
+      attempt,
+      scheduledAtMs: now,
+      ...(parentStepExecutionId ? { parentStepExecutionId } : {}),
+      ...workflowExecutionFields,
+    });
+  } else if (MCP_SERVER_ADMIN_OPERATION_IDS.includes(stepDef.operation)) {
+    await handleMcpServerAdminInline({
       redis,
       payloadStore,
       context,
