@@ -2,16 +2,24 @@
  * What the plan board (Plan 322 P3.3, its columns Plan 332 D4's) derives from
  * the tree it reads: the cards under one plan with their phase, which column
  * each stands in and why where it needs the operator, the plan's header, the
- * Phase filter, and how the Done column folds by day. Pure, so it is tested
- * without rendering.
+ * Phase filter, and how the Done column folds by day; and what the overview's
+ * lanes derive from their rows (Plan 332 D7). Pure, so it is tested without
+ * rendering.
  */
 import {
   isClosedPlanNodeStatus,
+  PLAN_NODE_NOTE_HEAD_MAX_CHARS,
   planBoardCards,
+  planBoardColumn,
   type PlanBoardCard,
   type PlanBoardColumn,
+  type PlanBoardPlacement,
   type PlanDoneDay,
+  type PlanLane,
+  type PlanLaneItem,
   type PlanNeedsYouReason,
+  type PlanNodeDetailOutput,
+  type PlanOverviewLanes,
   type PlanRootRow,
   type PlanRootState,
   type PlanRootTally,
@@ -61,6 +69,13 @@ export function phaseLabel(title: string): string {
   return trimmed.length <= PHASE_LABEL_MAX
     ? trimmed
     : `${trimmed.slice(0, PHASE_LABEL_MAX - 1).trimEnd()}…`;
+}
+
+const PLAN_CODE = /^(plan\s+\d+[a-z]?)\b/i;
+
+/** A plan's tag on a lane row: its code where its title leads with one ("Plan 331 · …" reads "Plan 331"), else as a phase's chip. */
+export function planTag(title: string): string {
+  return PLAN_CODE.exec(title.trim())?.[1] ?? phaseLabel(title);
 }
 
 /** A plan's state (Plan 332 D3) as its row and its header say it. */
@@ -126,15 +141,6 @@ export function planListSections(rows: readonly PlanRootRow[]): {
 export function planRowProgress(row: PlanRootRow): string | undefined {
   if (row.counts === undefined) return undefined;
   return `${String(row.counts.done + row.counts.dropped)}/${String(row.counts.steps)}`;
-}
-
-/**
- * The plan shown where the URL names none or one the space does not hold:
- * the first open plan by position, else the first finished, else the first closed.
- */
-export function planLandingRoot(rows: readonly PlanRootRow[]): PlanRootRow | undefined {
-  const { open, finished, closed } = planListSections(rows);
-  return open[0] ?? finished[0] ?? closed[0];
 }
 
 /**
@@ -252,6 +258,141 @@ export function planMoveTargets(
     ...(below !== undefined ? { below } : {}),
   };
 }
+
+// ============================================================================
+// The overview's lanes (Plan 332 D1, D7)
+// ============================================================================
+
+export type PlanLaneId = 'needs_you' | 'in_flight' | 'up_next';
+
+/** The lanes in the order they ask for attention, each named as the board's column is. */
+export const PLAN_LANES: ReadonlyArray<{
+  id: PlanLaneId;
+  key: keyof Pick<PlanOverviewLanes, 'needsYou' | 'inFlight' | 'upNext'>;
+  label: string;
+  empty: string;
+}> = [
+  { id: 'needs_you', key: 'needsYou', label: 'Needs you', empty: 'Nothing waits on you' },
+  { id: 'in_flight', key: 'inFlight', label: 'In flight', empty: 'No step is on a run' },
+  { id: 'up_next', key: 'upNext', label: 'Up next', empty: 'No plan has a step to take next' },
+];
+
+/** What an empty lane says where a bound left steps unread: it may not be empty. */
+export const PLAN_LANE_EMPTY_CUT = 'None among the steps read';
+
+/** The lane a step stands in on the overview, and its row there; undefined where it stands in none. */
+export function planLaneOf(
+  lanes: PlanOverviewLanes,
+  nodeId: string | undefined,
+): { lane: PlanLaneId; item: PlanLaneItem } | undefined {
+  if (nodeId === undefined) return undefined;
+  for (const { id, key } of PLAN_LANES) {
+    const item = lanes[key].items.find((i) => i.nodeId === nodeId);
+    if (item !== undefined) return { lane: id, item };
+  }
+  return undefined;
+}
+
+/** What a lane holds past the rows it lists, as the page says it; undefined where it lists all. */
+export function planLaneMore(lane: PlanLane): string | undefined {
+  const more = lane.total - lane.items.length;
+  return more > 0 ? `and ${String(more)} more` : undefined;
+}
+
+/**
+ * A lane's count as its heading says it: the steps it holds, and `+` where a
+ * bound left steps unread, so a lane cut short never reads as complete.
+ */
+export function planLaneCount(lane: PlanLane, lanes: Pick<PlanOverviewLanes, 'truncated'>): string {
+  return lanes.truncated !== undefined ? `${String(lane.total)}+` : String(lane.total);
+}
+
+/** A step as the rail opens it from a lane row, before the rail's own read answers. */
+export function planLaneRailNode(
+  item: PlanLaneItem,
+): Pick<
+  PlanTreeNode,
+  'nodeId' | 'kind' | 'title' | 'status' | 'revision' | 'noteHead' | 'pullRequest' | 'goalHead'
+> & { rounds: number; children: PlanTreeNode[]; counts: { runs: number } } {
+  return {
+    nodeId: item.nodeId,
+    kind: item.kind,
+    title: item.title,
+    status: item.status,
+    revision: item.revision,
+    ...(item.noteHead !== undefined ? { noteHead: item.noteHead } : {}),
+    ...(item.pullRequest !== undefined ? { pullRequest: item.pullRequest } : {}),
+    // The lanes read no goal, no links and no children: the rail reads them.
+    goalHead: '',
+    rounds: 0,
+    children: [],
+    counts: { runs: 0 },
+  };
+}
+
+/**
+ * A step the URL names that no lane holds, as the rail opens it from the
+ * step's own read: placed by the board's column rule on its status and the
+ * activity the read derives as the board does — in flight where a run serves
+ * the step or any active node under it — and stranded where the read names a closed node above it — the
+ * node the rail offers to reopen.
+ */
+export function planDetailRailNode(detail: PlanNodeDetailOutput): {
+  node: Pick<
+    PlanTreeNode,
+    'nodeId' | 'kind' | 'title' | 'status' | 'revision' | 'noteHead' | 'closedAt' | 'goalHead'
+  > & { rounds: number; children: PlanTreeNode[]; counts: { runs: number } };
+  placement: PlanBoardPlacement;
+  closedAncestor?: { nodeId: string; title: string };
+} {
+  const { node } = detail;
+  const line = (node.note ?? '').split('\n', 1)[0]?.trim() ?? '';
+  const placement = planBoardColumn(
+    { kind: node.kind, status: node.status, activity: detail.activity },
+    { closedAncestor: detail.closedAncestor !== undefined },
+  );
+  return {
+    node: {
+      nodeId: node.nodeId,
+      kind: node.kind,
+      title: node.title,
+      status: node.status,
+      revision: node.revision,
+      ...(line !== '' ? { noteHead: line.slice(0, PLAN_NODE_NOTE_HEAD_MAX_CHARS) } : {}),
+      ...(node.closedAt !== undefined ? { closedAt: node.closedAt } : {}),
+      goalHead: node.goal,
+      rounds: 0,
+      children: [],
+      counts: { runs: detail.linksTotal },
+    },
+    placement,
+    ...(placement.reason === 'stranded' && detail.closedAncestor !== undefined
+      ? { closedAncestor: detail.closedAncestor }
+      : {}),
+  };
+}
+
+/** How long ago `iso` was, as a lane row says it: `now`, `12m`, `3h`, `2d`. */
+export function planAge(iso: string, now: Date): string {
+  const minutes = Math.floor((now.getTime() - Date.parse(iso)) / 60_000);
+  if (minutes < 1) return 'now';
+  if (minutes < 60) return `${String(minutes)}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${String(hours)}h`;
+  return `${String(Math.floor(hours / 24))}d`;
+}
+
+/** Why the lanes may miss a step: the bound their read reached. */
+export const PLAN_LANES_TRUNCATION_LINE: Record<
+  'limit' | 'depth' | 'nodes',
+  (value: number) => string
+> = {
+  limit: (value) => `The lanes read the first ${String(value)} open steps; some may be missing`,
+  depth: (value) =>
+    `Steps deeper than ${String(value)} levels were not read; the lanes may miss some`,
+  nodes: (value) =>
+    `The lanes read the first ${String(value)} steps across plans, closed ones included; some may be missing`,
+};
 
 // ============================================================================
 // Days, in the reader's own time zone

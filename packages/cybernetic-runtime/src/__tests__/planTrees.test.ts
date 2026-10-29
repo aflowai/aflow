@@ -11,6 +11,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import Redis from 'ioredis-mock';
 import type { Redis as RedisType } from 'ioredis';
 import {
+  PLAN_LANE_ITEMS_LIMIT,
   PLAN_NODE_GOAL_HEAD_MAX_CHARS,
   PLAN_NODE_NOTE_HEAD_MAX_CHARS,
   PLAN_TREE_DEPTH_LIMIT,
@@ -19,6 +20,7 @@ import {
   PlanNodeDetailQuerySchema,
   PlanBoardOutputSchema,
   PlanOverviewOutputSchema,
+  isClosedPlanNodeStatus,
   planBoardCards,
   planBoardColumn,
   type PlanNode,
@@ -54,6 +56,11 @@ const SPACE = '5e1d0000-0000-4000-8000-000000000322';
 const OTHER_SPACE = '5e1d0000-0000-4000-8000-000000000999';
 const PR = 'https://github.com/aflowai/aflow/pull/181';
 const OLDER_PR = 'https://github.com/aflowai/aflow/pull/170';
+const NO_LANES = {
+  needsYou: { items: [], total: 0 },
+  inFlight: { items: [], total: 0 },
+  upNext: { items: [], total: 0 },
+};
 
 let store: InMemoryPlanNodeStore;
 let redis: RedisType;
@@ -719,8 +726,8 @@ describe('planRootState — a plan’s state (Plan 332 D3)', () => {
 });
 
 describe('readPlanOverview — the plans as rows', () => {
-  it('reads an empty space as no rows', async () => {
-    expect(await rows()).toEqual({ roots: [] });
+  it('reads an empty space as no rows and empty lanes', async () => {
+    expect(await rows()).toEqual({ roots: [], lanes: NO_LANES });
   });
 
   it('derives every state on the server from the plan’s own steps', async () => {
@@ -785,8 +792,7 @@ describe('readPlanOverview — the plans as rows', () => {
     }
     const open = await node('open', { position: 0 });
     const step = await node('open step', { parentId: open.nodeId });
-    const walks = vi.spyOn(store, 'walkTogether');
-    const runLookups = vi.spyOn(store, 'inFlightRunCountsOf');
+    const walks = vi.spyOn(store, 'walk');
 
     const read = await rows();
 
@@ -795,13 +801,12 @@ describe('readPlanOverview — the plans as rows', () => {
     expect(read.roots.slice(1).every((r) => r.state === 'closed' && r.counts === undefined)).toBe(
       true,
     );
-    // Both walks, closed roots and open plans, in one call: one snapshot.
-    expect(walks).toHaveBeenCalledTimes(1);
-    expect(walks.mock.calls[0]![1]).toHaveLength(2);
-    expect(runLookups).toHaveBeenCalledTimes(1);
-    const looked = runLookups.mock.calls[0]![1];
-    expect([...looked].sort()).toEqual([open.nodeId, step.nodeId].sort());
-    expect(looked.some((id) => closedSteps.includes(id))).toBe(false);
+    // Rows and lanes from one read, one snapshot; no walk of the tree beside it.
+    expect(store.overviewReads).toBe(1);
+    expect(walks).not.toHaveBeenCalled();
+    // Only the lanes' rows are looked up, in its snapshot: here the one Up next step.
+    expect(store.overviewLookups).toEqual([{ pullRequestsOf: [step.nodeId], runsOf: [] }]);
+    expect(JSON.stringify(read)).not.toContain(closedSteps[0]);
   });
 
   it('lists every root by position, open and closed, with its revision and its newest write', async () => {
@@ -866,60 +871,120 @@ describe('readPlanOverview — the plans as rows', () => {
     });
   });
 
-  it('marks the plans the shared walk cut short, and counts every plan it read whole as its board does', async () => {
+  it('stops the walk at the node bound of open steps, closed ones spending none, and marks the plans it may have left steps of', async () => {
     const closedAt = '2026-10-03T00:00:00.000Z';
-    const wide = store.seed(SPACE, { title: 'wide', position: 0 });
-    for (let n = 0; n < PLAN_TREE_WALK_NODE_LIMIT - 10; n++) {
-      store.seed(SPACE, { parentId: wide.nodeId, title: `wide ${String(n)}`, position: n });
-    }
-    const flat = store.seed(SPACE, { title: 'flat', position: 1 });
-    store.seed(SPACE, { parentId: flat.nodeId, title: 'landed', status: 'done', closedAt });
-    store.seed(SPACE, { parentId: flat.nodeId, title: 'approved', position: 1 });
-    const deep = store.seed(SPACE, { title: 'deep', position: 2 });
-    const a = store.seed(SPACE, { parentId: deep.nodeId, title: 'a', status: 'done', closedAt });
-    const b = store.seed(SPACE, { parentId: a.nodeId, title: 'b', status: 'done', closedAt });
-    // The walk's last three nodes are deep's first three leaves, all done; the
-    // two open ones past them are past its bound.
-    for (let n = 0; n < 5; n++) {
+    const deep = store.seed(SPACE, { title: 'deep', position: 0 });
+    // A long done history under the plan is counted, and spends none of the bound.
+    const history = 1500;
+    for (let n = 0; n < history; n++) {
       store.seed(SPACE, {
-        parentId: b.nodeId,
-        title: `leaf ${String(n)}`,
-        position: n,
-        ...(n < 3 ? { status: 'done' as const, closedAt } : {}),
+        parentId: deep.nodeId,
+        title: `landed ${String(n)}`,
+        status: 'done',
+        closedAt,
+        position: n + 1,
       });
     }
-    // A closed plan takes nothing from the bound.
-    const gone = store.seed(SPACE, { title: 'gone', position: 3, status: 'dropped', closedAt });
+    const a = store.seed(SPACE, { parentId: deep.nodeId, title: 'a', status: 'done', closedAt });
+    const b = store.seed(SPACE, { parentId: a.nodeId, title: 'b', status: 'done', closedAt });
+    // Open and stranded, two levels under the closed ones: past the bound.
+    for (const n of [0, 1]) {
+      store.seed(SPACE, { parentId: b.nodeId, title: `stranded ${String(n)}`, position: n });
+    }
+    // Three open roots, then open steps one short of the bound on the first level.
+    const wide = store.seed(SPACE, { title: 'wide', position: 1 });
+    for (let n = 0; n < PLAN_TREE_WALK_NODE_LIMIT - 3; n++) {
+      store.seed(SPACE, { parentId: wide.nodeId, title: `approved ${String(n)}`, position: n });
+    }
+    // A closed plan's steps are not walked at all.
+    const gone = store.seed(SPACE, { title: 'gone', position: 2, status: 'dropped', closedAt });
     store.seed(SPACE, { parentId: gone.nodeId, title: 'under gone' });
+    // Done leaves alone: nothing under them is walked, so nothing is left unread.
+    const landed = store.seed(SPACE, { title: 'landed', position: 3 });
+    for (let n = 0; n < 5; n++) {
+      store.seed(SPACE, {
+        parentId: landed.nodeId,
+        title: `landed ${String(n)}`,
+        status: 'done',
+        closedAt,
+        position: n,
+      });
+    }
+    const reads = vi.spyOn(store, 'readOverview');
 
     const read = await rows();
     const rowOf = (id: string) => read.roots.find((r) => r.nodeId === id)!;
 
+    const { read: walked } = await reads.mock.results[0]!.value;
+    expect(walked.truncated).toEqual({ bound: 'nodes', value: PLAN_TREE_WALK_NODE_LIMIT });
+    expect(walked.nodes.filter((n) => !isClosedPlanNodeStatus(n.status))).toHaveLength(
+      PLAN_TREE_WALK_NODE_LIMIT,
+    );
+    // Every plan is listed; the lanes may miss steps, and say so.
     expect(read.truncated).toBeUndefined();
+    expect(read.lanes.truncated).toEqual({ bound: 'nodes', value: PLAN_TREE_WALK_NODE_LIMIT });
+    expect(read.lanes.needsYou.total).toBe(0);
     expect(rowOf(deep.nodeId)).toMatchObject({
       truncated: { bound: 'nodes', value: PLAN_TREE_WALK_NODE_LIMIT },
-      // Every step counted is done, but the two past the bound are open: not finished.
+      // Every step counted is done, but the two the bound left are open: not finished.
       state: 'queued',
-      counts: { steps: 5, done: 5 },
+      counts: { steps: history + 2, done: history + 2 },
     });
-    expect((await board(deep.nodeId)).tally).toMatchObject({ steps: 7, done: 5, needsYou: 2 });
-    for (const id of [wide.nodeId, flat.nodeId]) {
-      const row = rowOf(id);
-      const { tally, truncated } = await board(id);
-      expect(row).not.toHaveProperty('truncated');
-      expect(truncated).toBeUndefined();
-      expect(row.state).toBe(tally.state);
-      expect(row.counts).toEqual({
-        steps: tally.steps,
-        needsYou: tally.needsYou,
-        inFlight: tally.inFlight,
-        upNext: tally.upNext,
-        done: tally.done,
-        dropped: tally.dropped,
+    expect((await board(deep.nodeId)).tally).toMatchObject({
+      steps: history + 4,
+      done: history + 2,
+      needsYou: 2,
+    });
+    expect(rowOf(wide.nodeId)).toMatchObject({
+      truncated: { bound: 'nodes', value: PLAN_TREE_WALK_NODE_LIMIT },
+      counts: { upNext: PLAN_TREE_WALK_NODE_LIMIT - 3 },
+    });
+    // A plan whose steps are all closed leaves is read whole and not marked.
+    const row = rowOf(landed.nodeId);
+    const { tally, truncated } = await board(landed.nodeId);
+    expect(row).not.toHaveProperty('truncated');
+    expect(truncated).toBeUndefined();
+    expect(row.state).toBe(tally.state);
+    expect(row.counts).toEqual({
+      steps: tally.steps,
+      needsYou: tally.needsYou,
+      inFlight: tally.inFlight,
+      upNext: tally.upNext,
+      done: tally.done,
+      dropped: tally.dropped,
+    });
+    expect(row).toMatchObject({ state: 'finished', counts: { steps: 5, done: 5 } });
+    expect(rowOf(gone.nodeId)).toMatchObject({ state: 'closed' });
+    expect(rowOf(gone.nodeId)).not.toHaveProperty('truncated');
+  });
+
+  it('marks every open plan reaching the level the walk stopped on, or the one above it', async () => {
+    const closedAt = '2026-10-03T00:00:00.000Z';
+    const wide = store.seed(SPACE, { title: 'wide', position: 0 });
+    for (let n = 0; n < 500; n++) {
+      store.seed(SPACE, {
+        parentId: wide.nodeId,
+        title: `landed ${String(n)}`,
+        status: 'done',
+        closedAt,
+        position: n,
       });
     }
-    expect(rowOf(flat.nodeId)).toMatchObject({ state: 'queued', counts: { steps: 2, done: 1 } });
-    expect(rowOf(gone.nodeId)).toMatchObject({ state: 'closed' });
+    for (let n = 0; n < PLAN_TREE_WALK_NODE_LIMIT - 1; n++) {
+      store.seed(SPACE, { parentId: wide.nodeId, title: `approved ${String(n)}`, position: n });
+    }
+    // Its one step lies past the bound, on the level the walk stopped on.
+    const flat = store.seed(SPACE, { title: 'flat', position: 1 });
+    store.seed(SPACE, { parentId: flat.nodeId, title: 'approved' });
+
+    const read = await rows();
+
+    expect(read.truncated).toBeUndefined();
+    expect(read.lanes.truncated).toEqual({ bound: 'nodes', value: PLAN_TREE_WALK_NODE_LIMIT });
+    for (const row of read.roots) {
+      expect(row.truncated).toEqual({ bound: 'nodes', value: PLAN_TREE_WALK_NODE_LIMIT });
+      expect(row.state).not.toBe('finished');
+    }
   });
 
   it(`counts short past depth ${String(PLAN_TREE_DEPTH_LIMIT)} and names the bound on that plan’s row`, async () => {
@@ -964,6 +1029,287 @@ describe('readPlanOverview — the plans as rows', () => {
 
     expect(read.truncated).toEqual({ bound: 'nodes', value: PLAN_TREE_WALK_NODE_LIMIT });
     expect(read.roots).toHaveLength(PLAN_TREE_WALK_NODE_LIMIT);
+  });
+});
+
+describe('readPlanOverview — the lanes across plans (Plan 332 D7)', () => {
+  const ids = (lane: { items: Array<{ nodeId: string }> }) => lane.items.map((i) => i.nodeId);
+
+  it('places each open step in its lane by the board’s column rule, a reason on every Needs-you row', async () => {
+    const root = await node('Plan 320', { note: 'The plan itself.' });
+    const blocked = store.seed(SPACE, {
+      parentId: root.nodeId,
+      title: 'P1 — needs a binding',
+      status: 'blocked',
+      note: 'Needs a scratch repository and a GitHub binding\nThe rest of the note.',
+      position: 0,
+    });
+    const decision = await node('Where it is recorded', {
+      parentId: root.nodeId,
+      kind: 'decide',
+      position: 1,
+    });
+    const p6 = await node('P6 — the folder preview', { parentId: root.nodeId, position: 2 });
+    const p6a = await node('P6.a', { parentId: p6.nodeId });
+    const p6b = store.seed(SPACE, { parentId: p6a.nodeId, title: 'P6.a.1', status: 'blocked' });
+    await close(p6, 'done');
+    const waiting = store.seed(SPACE, {
+      parentId: root.nodeId,
+      title: 'Waiting on its run',
+      status: 'waiting',
+      position: 3,
+    });
+    const phase = await node('P7 — a phase', { parentId: root.nodeId, position: 4 });
+    const running = await node('P7.a — running', { parentId: phase.nodeId });
+    store.runs.push(inFlightRun('r-p7', running.nodeId, 'running'));
+    await node('P8 — approved', { parentId: root.nodeId, position: 5 });
+
+    const { lanes } = await rows();
+
+    expect(lanes.needsYou.items.map((i) => [i.title, i.reason])).toEqual([
+      ['P1 — needs a binding', 'blocked'],
+      ['Where it is recorded', 'decide'],
+      ['P6.a', 'stranded'],
+      ['P6.a.1', 'stranded'],
+    ]);
+    expect(lanes.needsYou.items[0]).toMatchObject({
+      nodeId: blocked.nodeId,
+      kind: 'execute',
+      status: 'blocked',
+      revision: blocked.revision,
+      noteHead: 'Needs a scratch repository and a GitHub binding',
+      updatedAt: blocked.updatedAt,
+      rootId: root.nodeId,
+      rootTitle: 'Plan 320',
+    });
+    expect(lanes.needsYou.items[0]).not.toHaveProperty('phaseTitle');
+    expect(lanes.needsYou.items[1]).toMatchObject({ nodeId: decision.nodeId, kind: 'decide' });
+    // A stranded step names the closed step nearest above it, and its phase.
+    expect(lanes.needsYou.items[3]).toMatchObject({
+      nodeId: p6b.nodeId,
+      phaseTitle: 'P6 — the folder preview',
+      closedAncestor: { nodeId: p6.nodeId, title: 'P6 — the folder preview' },
+    });
+    expect(lanes.needsYou.items[0]).not.toHaveProperty('closedAncestor');
+
+    // In flight: a waiting step whatever its runs, a step with a run on it, and
+    // the phase above it — as on the board.
+    expect(
+      lanes.inFlight.items.map((i) => [i.title, i.runsTotal, i.runs?.map((r) => r.runId)]),
+    ).toEqual([
+      ['Waiting on its run', 0, []],
+      ['P7 — a phase', 0, []],
+      ['P7.a — running', 1, ['r-p7']],
+    ]);
+    expect(lanes.inFlight.items[0]?.nodeId).toBe(waiting.nodeId);
+    expect(lanes.inFlight.items[2]).toMatchObject({
+      phaseTitle: 'P7 — a phase',
+      runs: [
+        { slug: 'commission-change', status: 'running', startedAt: '2026-10-05T08:00:00.000Z' },
+      ],
+    });
+    // Up next: the walk stops at the blocked P1, so this plan has no step to take.
+    expect(lanes.upNext).toEqual({ items: [], total: 0 });
+
+    // The lanes hold exactly what the board's columns hold.
+    const { tally } = await board(root.nodeId);
+    expect([lanes.needsYou.total, lanes.inFlight.total]).toEqual([tally.needsYou, tally.inFlight]);
+  });
+
+  it('holds one Up next row per open plan: the step the stream walk takes, where it is active and idle', async () => {
+    const takes = await node('takes', { position: 0 });
+    const phase = await node('P1', { parentId: takes.nodeId });
+    await close(await node('P1.a landed', { parentId: phase.nodeId }), 'done');
+    const step = await node('P1.b next', { parentId: phase.nodeId, position: 1 });
+    await node('P1.c after it', { parentId: phase.nodeId, position: 2 });
+    await node('P2 later', { parentId: takes.nodeId, position: 1 });
+
+    const busy = await node('busy', { position: 1 });
+    const onRun = await node('on a run', { parentId: busy.nodeId });
+    store.runs.push(inFlightRun('r-busy', onRun.nodeId, 'running'));
+    const stopped = await node('stopped', { position: 2 });
+    store.seed(SPACE, { parentId: stopped.nodeId, title: 'a stop', status: 'blocked' });
+    const deciding = await node('deciding', { position: 3 });
+    await node('which way', { parentId: deciding.nodeId, kind: 'decide' });
+    await node('empty', { position: 4 });
+    const pulled = await node('pulled', { position: 5 });
+    const withPr = await node('its pull request is open', { parentId: pulled.nodeId });
+    await linkPlanNode(ctx(), { nodeId: withPr.nodeId, kind: 'pull_request', ref: PR });
+
+    const { lanes } = await rows();
+
+    expect(ids(lanes.upNext)).toEqual([step.nodeId, withPr.nodeId]);
+    expect(lanes.upNext.total).toBe(2);
+    expect(lanes.upNext.items[0]).toMatchObject({ rootTitle: 'takes', phaseTitle: 'P1' });
+    expect(lanes.upNext.items[1]?.pullRequest).toEqual({ url: PR, merged: false });
+    // Each row is the walk's own step over the plan's tree, and its board's Next.
+    for (const item of lanes.upNext.items) {
+      const all = [...store.nodes.values()].filter((n) => n.spaceId === SPACE);
+      expect(findActiveStreamNode(all, item.rootId)?.nodeId).toBe(item.nodeId);
+      expect((await board(item.rootId)).tally.nextNodeId).toBe(item.nodeId);
+    }
+  });
+
+  it('reads an In flight row’s runs in the snapshot that placed it, though the run ends before they are read', async () => {
+    const root = await node('Plan 320');
+    const busy = await node('busy', { parentId: root.nodeId });
+    store.runs.push(inFlightRun('r1', busy.nodeId, 'running'));
+    store.afterOverviewWalk = () => {
+      store.runs[0]!.status = 'completed';
+    };
+
+    const { lanes } = await rows();
+
+    expect(lanes.inFlight.items).toEqual([
+      expect.objectContaining({
+        nodeId: busy.nodeId,
+        runsTotal: 1,
+        runs: [expect.objectContaining({ runId: 'r1', status: 'running' })],
+      }),
+    ]);
+    expect(store.overviewReads).toBe(1);
+  });
+
+  it('shows a blocked step in the last of 50 plans in Needs you', async () => {
+    let last: PlanNode | undefined;
+    for (let n = 0; n < 50; n++) {
+      last = await node(`Plan ${String(n)}`, { position: n });
+      await node(`step of ${String(n)}`, { parentId: last.nodeId });
+    }
+    const stop = store.seed(SPACE, {
+      parentId: last!.nodeId,
+      title: 'waits on the operator',
+      status: 'blocked',
+      position: 1,
+    });
+
+    const read = await rows();
+
+    expect(read.roots).toHaveLength(50);
+    expect(ids(read.lanes.needsYou)).toEqual([stop.nodeId]);
+    expect(read.lanes.needsYou.items[0]).toMatchObject({ rootId: last!.nodeId, reason: 'blocked' });
+    expect(read.lanes.upNext.total).toBe(50);
+  });
+
+  it(`lists at most ${String(PLAN_LANE_ITEMS_LIMIT)} rows in Needs you and In flight, each with its total`, async () => {
+    const roots = [await node('first', { position: 0 }), await node('second', { position: 1 })];
+    const stops: string[] = [];
+    const busy: string[] = [];
+    for (let n = 0; n < 60; n++) {
+      const under = roots[n % 2]!.nodeId;
+      stops.push(
+        store.seed(SPACE, {
+          parentId: under,
+          title: `stop ${String(n)}`,
+          status: 'blocked',
+          position: n,
+        }).nodeId,
+      );
+      busy.push(
+        store.seed(SPACE, {
+          parentId: under,
+          title: `wait ${String(n)}`,
+          status: 'waiting',
+          position: 100 + n,
+        }).nodeId,
+      );
+    }
+
+    const { lanes } = await rows();
+
+    expect(lanes.needsYou.total).toBe(60);
+    expect(lanes.needsYou.items).toHaveLength(PLAN_LANE_ITEMS_LIMIT);
+    expect(lanes.inFlight.total).toBe(60);
+    expect(lanes.inFlight.items).toHaveLength(PLAN_LANE_ITEMS_LIMIT);
+    // By plan, then the walk's order: the first plan's thirty, then the second's.
+    const firstPlan = stops.filter((_, n) => n % 2 === 0);
+    expect(ids(lanes.needsYou).slice(0, 30)).toEqual(firstPlan);
+    expect(lanes.needsYou.items.slice(30).every((i) => i.rootId === roots[1]!.nodeId)).toBe(true);
+    expect(busy).toEqual(expect.arrayContaining(ids(lanes.inFlight)));
+  });
+
+  it('reads no done step as a row and reaches no bound for many done steps and few open ones', async () => {
+    const roots: PlanNode[] = [];
+    for (let n = 0; n < 10; n++)
+      roots.push(store.seed(SPACE, { title: `plan ${String(n)}`, position: n }));
+    for (let n = 0; n < 1500; n++) {
+      store.seed(SPACE, {
+        parentId: roots[n % 10]!.nodeId,
+        title: `landed ${String(n)}`,
+        status: 'done',
+        closedAt: '2026-10-03T00:00:00.000Z',
+        position: n,
+      });
+    }
+    const open = roots.map((r) =>
+      store.seed(SPACE, { parentId: r.nodeId, title: 'open', position: 9000 }),
+    );
+
+    const read = await rows();
+
+    expect(read.truncated).toBeUndefined();
+    expect(read.lanes.truncated).toBeUndefined();
+    expect(read.roots.every((r) => r.truncated === undefined)).toBe(true);
+    expect(read.roots.map((r) => r.counts)).toEqual(
+      roots.map(() => ({ steps: 151, needsYou: 0, inFlight: 0, upNext: 1, done: 150, dropped: 0 })),
+    );
+    expect(ids(read.lanes.upNext)).toEqual(open.map((o) => o.nodeId));
+  });
+
+  it('reaches no bound over 5,000 done steps and 10 open ones: the done steps are counted, not walked', async () => {
+    const roots: PlanNode[] = [];
+    for (let n = 0; n < 10; n++)
+      roots.push(store.seed(SPACE, { title: `plan ${String(n)}`, position: n }));
+    for (let n = 0; n < 5000; n++) {
+      store.seed(SPACE, {
+        parentId: roots[n % 10]!.nodeId,
+        title: `landed ${String(n)}`,
+        status: 'done',
+        closedAt: '2026-10-03T00:00:00.000Z',
+        position: n,
+      });
+    }
+    const open = roots.map((root) =>
+      store.seed(SPACE, { parentId: root.nodeId, title: 'open', position: 9000 }),
+    );
+    const reads = vi.spyOn(store, 'readOverview');
+
+    const read = await rows();
+
+    const { read: walked } = await reads.mock.results[0]!.value;
+    expect(walked.truncated).toBeUndefined();
+    expect(walked.nodes).toHaveLength(20);
+    expect([...walked.counted.values()].every((c) => c.done === 500 && !c.cut)).toBe(true);
+    // Every plan listed and read whole, its done steps counted; nothing said cut.
+    expect(read.truncated).toBeUndefined();
+    expect(read.lanes.truncated).toBeUndefined();
+    expect(read.roots.map((r) => [r.truncated, r.counts?.steps, r.counts?.done])).toEqual(
+      roots.map(() => [undefined, 501, 500]),
+    );
+    expect(ids(read.lanes.upNext)).toEqual(open.map((o) => o.nodeId));
+  });
+
+  it('names no Up next step in a cut plan where the node bound left that step’s children unread', async () => {
+    const cut = store.seed(SPACE, { title: 'cut', position: 0 });
+    const parent = store.seed(SPACE, { parentId: cut.nodeId, title: 'parent', position: 0 });
+    const child = store.seed(SPACE, { parentId: parent.nodeId, title: 'child', position: 0 });
+    // Open steps that fill the first level past the bound, so the walk stops there.
+    const wide = store.seed(SPACE, { title: 'wide', position: 1 });
+    for (let n = 0; n < PLAN_TREE_WALK_NODE_LIMIT - 2; n++) {
+      store.seed(SPACE, { parentId: wide.nodeId, title: `approved ${String(n)}`, position: n });
+    }
+
+    const read = await rows();
+
+    // The walk read the parent but not its child, so it would stop at the parent.
+    const all = [...store.nodes.values()].filter((n) => n.spaceId === SPACE);
+    expect(findActiveStreamNode(all, cut.nodeId)?.nodeId).toBe(child.nodeId);
+    expect(read.roots[0]).toMatchObject({
+      nodeId: cut.nodeId,
+      truncated: { bound: 'nodes', value: PLAN_TREE_WALK_NODE_LIMIT },
+    });
+    expect(ids(read.lanes.upNext)).not.toContain(parent.nodeId);
+    expect(read.lanes.upNext).toEqual({ items: [], total: 0 });
   });
 });
 
@@ -1059,6 +1405,57 @@ describe('readPlanNodeDetail — the rail', () => {
     expect(read.runs.map((r) => r.runId)).toEqual(['r1']);
     expect(read).toMatchObject({ links: [], linksTotal: 0 });
     expect(read).not.toHaveProperty('nextCursor');
+    expect(read).not.toHaveProperty('closedAncestor');
+  });
+
+  it('derives the node’s activity as the board does: its own runs, or a run on an active node under it', async () => {
+    const root = await node('root');
+    const phase = await node('phase', { parentId: root.nodeId });
+    const deep = await node('deep', { parentId: phase.nodeId });
+    const landed = await node('landed', { parentId: root.nodeId, position: 1 });
+    await close(landed, 'done');
+    const idle = await node('idle', { parentId: root.nodeId, position: 2 });
+
+    store.runs.push(inFlightRun('r-landed', landed.nodeId, 'running'));
+    // A run still serving a closed child moves nothing the parent waits on.
+    expect((await detail(root.nodeId)).activity).toBe('idle');
+    // That child's own read is in flight, though it is closed.
+    expect((await detail(landed.nodeId)).activity).toBe('in_flight');
+
+    store.runs.push(inFlightRun('r-deep', deep.nodeId, 'running'));
+    // A run two levels down, on an active step, sets both parents in flight.
+    expect((await detail(root.nodeId)).activity).toBe('in_flight');
+    expect((await detail(phase.nodeId)).activity).toBe('in_flight');
+    expect((await detail(idle.nodeId)).activity).toBe('idle');
+    const tree = (await board(root.nodeId)).root;
+    expect(tree.activity).toBe('in_flight');
+    expect(tree.children.find((c) => c.nodeId === phase.nodeId)?.activity).toBe('in_flight');
+  });
+
+  it('names the closed node nearest above an open step, its root included', async () => {
+    const root = await node('root');
+    const phase = await node('P6 — a phase', { parentId: root.nodeId });
+    const step = await node('P6.a', { parentId: phase.nodeId });
+    const deeper = await node('P6.a.1', { parentId: step.nodeId });
+    const shut = await node('shut');
+    const under = await node('under shut', { parentId: shut.nodeId });
+    await close(phase, 'done');
+    await close(shut, 'dropped');
+
+    expect((await detail(deeper.nodeId)).closedAncestor).toEqual({
+      nodeId: phase.nodeId,
+      title: 'P6 — a phase',
+    });
+    expect((await detail(step.nodeId)).closedAncestor).toEqual({
+      nodeId: phase.nodeId,
+      title: 'P6 — a phase',
+    });
+    expect((await detail(under.nodeId)).closedAncestor).toEqual({
+      nodeId: shut.nodeId,
+      title: 'shut',
+    });
+    expect(await detail(phase.nodeId)).not.toHaveProperty('closedAncestor');
+    expect(await detail(root.nodeId)).not.toHaveProperty('closedAncestor');
   });
 
   it('pages the links newest first, 50 by default, each page after the cursor of the one before', async () => {

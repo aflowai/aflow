@@ -15,6 +15,7 @@ import {
   PlanNodeDependencyConditionSchema,
   PlanNodeDependencySchema,
   PlanNodeDependencyViewSchema,
+  PlanNodeKindSchema,
   PlanNodeLearningSchema,
   PlanNodeLinkCreateSchema,
   PlanNodeLinkKindSchema,
@@ -436,18 +437,6 @@ export const PlanBoardOutputSchema = z.object({
 });
 export type PlanBoardOutput = z.infer<typeof PlanBoardOutputSchema>;
 
-/**
- * The space's plans as rows (`GET …/plan`, the rows of Plan 332 D7): every
- * root by position and then id, open and closed alike, with no steps.
- */
-export const PlanOverviewOutputSchema = z.object({
-  roots: z.array(PlanRootRowSchema),
-  truncated: PlanNodeListTruncationSchema.optional().describe(
-    'Absent when every plan of the space is a row; otherwise the bound (`nodes`) that cut the list of plans short. A row whose steps were counted short says so on its own `truncated`.',
-  ),
-});
-export type PlanOverviewOutput = z.infer<typeof PlanOverviewOutputSchema>;
-
 /** Which board column a node stands in. */
 export type PlanBoardColumn = 'needs_you' | 'in_flight' | 'up_next' | 'done' | 'dropped';
 
@@ -458,6 +447,120 @@ export type PlanBoardColumn = 'needs_you' | 'in_flight' | 'up_next' | 'done' | '
  */
 export const PlanNeedsYouReasonSchema = z.enum(['decide', 'blocked', 'stranded']);
 export type PlanNeedsYouReason = z.infer<typeof PlanNeedsYouReasonSchema>;
+
+/** The most rows the overview's Needs you and In flight lanes each carry; `total` counts the rest. */
+export const PLAN_LANE_ITEMS_LIMIT = 50;
+/** The runs in flight an In flight row carries, newest first; `runsTotal` counts every one. */
+export const PLAN_LANE_ITEM_RUNS_LIMIT = 5;
+
+/**
+ * One step as a lane of the overview shows it (Plan 332 D7): the step, its
+ * plan and phase, why it needs the operator where it does, its newest pull
+ * request, and on In flight the runs on it now. No goal and no links: the
+ * rail reads the step on demand.
+ */
+export const PlanLaneItemSchema = z
+  .object({
+    nodeId: z.string().uuid(),
+    title: z.string(),
+    kind: PlanNodeKindSchema,
+    status: PlanNodeStatusSchema,
+    revision: z.number().int().min(1).describe('What a write from the row is pinned to.'),
+    noteHead: z
+      .string()
+      .max(PLAN_NODE_NOTE_HEAD_MAX_CHARS)
+      .optional()
+      .describe('The note’s first line; absent where the step has no note.'),
+    updatedAt: z.string().datetime(),
+    rootId: z.string().uuid(),
+    rootTitle: z.string(),
+    phaseTitle: z
+      .string()
+      .optional()
+      .describe(
+        'The step’s ancestor directly under the root; absent for a step directly under it.',
+      ),
+    reason: PlanNeedsYouReasonSchema.optional().describe(
+      'Needs you only: why the step waits on the operator.',
+    ),
+    closedAncestor: z
+      .object({ nodeId: z.string().uuid(), title: z.string() })
+      .strict()
+      .optional()
+      .describe(
+        'A stranded step only: the closed step nearest above it, whose reopening frees it.',
+      ),
+    pullRequest: PlanNodePullRequestSchema.optional(),
+    runs: z
+      .array(PlanNodeRunSchema)
+      .optional()
+      .describe(
+        'In flight only: runs serving the step itself now, newest first, at most `PLAN_LANE_ITEM_RUNS_LIMIT`.',
+      ),
+    runsTotal: z
+      .number()
+      .int()
+      .min(0)
+      .optional()
+      .describe('In flight only: every run serving the step itself now.'),
+  })
+  .strict();
+export type PlanLaneItem = z.infer<typeof PlanLaneItemSchema>;
+
+export const PlanLaneSchema = z
+  .object({
+    items: z.array(PlanLaneItemSchema),
+    total: z
+      .number()
+      .int()
+      .min(0)
+      .describe(
+        'Every step the lane holds among those the read reached; `items` may list fewer, and where the lanes carry `truncated` the lane may hold more.',
+      ),
+  })
+  .strict();
+export type PlanLane = z.infer<typeof PlanLaneSchema>;
+
+/**
+ * The overview's three lanes across every open plan, by plan position and
+ * then the walk's order inside each plan. Needs you and In flight hold the
+ * steps the board's columns of the same names hold, each at most
+ * `PLAN_LANE_ITEMS_LIMIT` rows. Up next is one row per open plan: the step the
+ * stream walk (`findActiveStreamNode`) takes next, where it is `active` and
+ * idle — not every idle `active` step, which is the board's column, and with
+ * no reorder: ordering steps is the board's. A plan the node bound cut short
+ * has no row where the walk may not have read that step's children.
+ */
+export const PlanOverviewLanesSchema = z
+  .object({
+    needsYou: PlanLaneSchema,
+    inFlight: PlanLaneSchema,
+    upNext: PlanLaneSchema,
+    truncated: PlanNodeListTruncationSchema.optional().describe(
+      'Absent when every step of every open plan was reached; otherwise the bound (`depth` or `nodes`) ' +
+        'that a plan’s row names as its `truncated`, or `nodes` where plans were left unlisted, so a ' +
+        'lane may miss steps and its `total` counts only those reached. Only open steps count toward the ' +
+        'node bound; closed steps are only counted, never read as rows.',
+    ),
+  })
+  .strict();
+export type PlanOverviewLanes = z.infer<typeof PlanOverviewLanesSchema>;
+
+/**
+ * The space's plans as the overview reads them (`GET …/plan`, Plan 332 D7):
+ * every root as a row by position and then id, open and closed alike, and the
+ * lanes. Open steps are read and closed ones only counted; the walk stops at
+ * the node bound of open nodes, so a plan's done history costs a count rather
+ * than the bound, and a plan or lane it cut short says so.
+ */
+export const PlanOverviewOutputSchema = z.object({
+  roots: z.array(PlanRootRowSchema),
+  lanes: PlanOverviewLanesSchema,
+  truncated: PlanNodeListTruncationSchema.optional().describe(
+    'Absent when every plan of the space is a row; otherwise the bound (`nodes`) that cut the list of plans short. A row whose steps were counted short says so on its own `truncated`.',
+  ),
+});
+export type PlanOverviewOutput = z.infer<typeof PlanOverviewOutputSchema>;
 
 /** A node's column, and for Needs you why. */
 export type PlanBoardPlacement =
@@ -545,6 +648,16 @@ export const PlanNodeDetailOutputSchema = z.object({
   /** The runs in flight for this node and every node under it, newest first. */
   runs: z.array(PlanNodeRunSchema),
   runsTotal: z.number().int().min(0),
+  activity: PlanNodeActivitySchema.describe(
+    'The board’s rule: in flight where a run serves the node itself or any active node under it.',
+  ),
+  closedAncestor: z
+    .object({ nodeId: z.string().uuid(), title: z.string() })
+    .strict()
+    .optional()
+    .describe(
+      'The closed node nearest above, its root included, whose reopening frees an open node stranded under it; absent where every node above is open.',
+    ),
 });
 export type PlanNodeDetailOutput = z.infer<typeof PlanNodeDetailOutputSchema>;
 

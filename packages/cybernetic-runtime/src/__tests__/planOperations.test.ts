@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach } from 'vitest';
+import { describe, expect, it, beforeEach, vi } from 'vitest';
 import Redis from 'ioredis-mock';
 import type { Redis as RedisType } from 'ioredis';
 import {
@@ -809,6 +809,21 @@ describe('getPlanNode / listPlanNodes', () => {
     const result = await getPlanNode({ store, spaceId: SPACE }, root.nodeId);
     expect(result).toMatchObject({ ok: true, node: { nodeId: root.nodeId }, childrenTotal: 2 });
     expect(result.ok && result.children.map((c) => c.title)).toEqual(['first', 'second']);
+  });
+
+  it('reads no placement — no closed ancestor, no run counts over the subtree — for a session', async () => {
+    const root = await created();
+    const child = await created({ parentId: root.nodeId, title: 'under' });
+    const ancestors = vi.spyOn(store, 'closedAncestorOf');
+    const counts = vi.spyOn(store, 'inFlightRunCountsOf');
+
+    const result = await getPlanNode({ store, spaceId: SPACE }, child.nodeId);
+
+    expect(result).toMatchObject({ ok: true, node: { nodeId: child.nodeId } });
+    expect(result).not.toHaveProperty('activity');
+    expect(result).not.toHaveProperty('closedAncestor');
+    expect(ancestors).not.toHaveBeenCalled();
+    expect(counts).not.toHaveBeenCalled();
   });
 
   it('lists parents before children, filtered by status and to one subtree', async () => {

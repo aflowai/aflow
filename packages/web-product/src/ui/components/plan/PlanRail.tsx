@@ -1,7 +1,8 @@
 'use client';
 
 /**
- * The board's side rail (Plan 322 P3.3): where a node's text lives. It reads
+ * The side rail (Plan 322 P3.3), over a plan's board or the overview's lanes
+ * (Plan 332 D8): where a node's text lives. It reads
  * the node on demand when a card is opened — in full, the runs in flight, its
  * newest run links and its findings, each a page of the node detail — with
  * **Now**, the note's first line, above the goal and the whole note folded
@@ -25,6 +26,7 @@ import {
   NEEDS_YOU_REASON_LABEL,
   PLAN_BOARD_COLUMNS,
   phaseLabel,
+  planDetailRailNode,
   pullRequestLabel,
   runKindLabel,
   runLinkStatus,
@@ -218,19 +220,39 @@ export function freshRead(query: {
   };
 }
 
+/**
+ * What the rail needs of a step before its own read answers: a board card, or
+ * a lane row of the overview, which reads no tree — its children, counts and
+ * goal come from the rail's read instead.
+ */
+export type PlanRailNode = Pick<
+  PlanTreeNode,
+  | 'nodeId'
+  | 'kind'
+  | 'title'
+  | 'status'
+  | 'revision'
+  | 'noteHead'
+  | 'closedAt'
+  | 'pullRequest'
+  | 'goalHead'
+  | 'rounds'
+  | 'children'
+> & { counts: Pick<PlanTreeNode['counts'], 'runs'> };
+
 export interface PlanRailProps {
-  node: PlanTreeNode;
+  node: PlanRailNode;
   column: PlanBoardColumn;
   /** Why the step needs the operator, where it stands under Needs you. */
   reason: PlanNeedsYouReason | undefined;
   /** The step the stream walk takes next for its plan. */
   next: boolean;
-  phase: PlanTreeNode | undefined;
+  phase: Pick<PlanTreeNode, 'title'> | undefined;
   spaceId: string;
   spaceSlug: string;
   onClose: PlanNodeCloser;
   /** For a stranded step: the closed step above it, which the rail offers to reopen. */
-  closedAncestor?: PlanTreeNode | undefined;
+  closedAncestor?: Pick<PlanTreeNode, 'nodeId' | 'title'> | undefined;
   onOpen: PlanNodeOpener;
   /** The close form open, if any; a card's Decide opens the rail with it open. */
   choosing: 'done' | 'dropped' | null;
@@ -286,6 +308,10 @@ export function PlanRail({
   const runsTotal = detail.data?.linksTotal ?? node.counts.runs;
   const open = !isClosedStatus(full?.status ?? node.status);
   const railRead = freshRead(detail);
+  // A lane row carries no children; the rail's own read lists them.
+  const openUnder = [...node.children, ...(detail.data?.children ?? [])].some(
+    (child) => !isClosedStatus(child.status),
+  );
 
   return (
     <Column gap="md" data-plan-rail={node.nodeId} style={{ minWidth: 0 }}>
@@ -467,6 +493,7 @@ export function PlanRail({
       {open ? (
         <PlanNodeCloseControl
           node={node}
+          openUnder={openUnder}
           read={railRead}
           onClose={onClose}
           choosing={choosing}
@@ -482,5 +509,56 @@ export function PlanRail({
         />
       )}
     </Column>
+  );
+}
+
+/**
+ * The rail for a step the URL names that the view on screen does not hold —
+ * a closed step, or one a link points at — over the overview (Plan 332 D8):
+ * the step's own read places it, and the rail renders once that read answers.
+ * It is the read the rail itself makes, under the same key, so it is made once.
+ */
+export function PlanRailFromDetail({
+  nodeId,
+  ...controls
+}: Omit<PlanRailProps, 'node' | 'column' | 'reason' | 'next' | 'phase' | 'closedAncestor'> & {
+  nodeId: string;
+}) {
+  const detail = useApiQuery<PlanNodeDetailOutput>({
+    key: ['space', controls.spaceId, 'plan', 'node', nodeId],
+    path: planNodePath(controls.spaceId, nodeId, `linkKind=run&limit=${String(PLAN_RAIL_RUNS)}`),
+    staleTime: 0,
+  });
+  if (detail.data === undefined) {
+    return (
+      <Column gap="xs" data-plan-rail-reading={nodeId}>
+        <Row justify="end">
+          <Button size="sm" variant="ghost" onClick={controls.onDismiss}>
+            Close
+          </Button>
+        </Row>
+        {detail.error ? (
+          <Text size="sm" tone="danger" role="alert">
+            {`This step could not be read: ${detail.error.message}`}
+          </Text>
+        ) : (
+          <Text size="sm" variant="muted">
+            Reading the step…
+          </Text>
+        )}
+      </Column>
+    );
+  }
+  const { node, placement, closedAncestor } = planDetailRailNode(detail.data);
+  return (
+    <PlanRail
+      node={node}
+      column={placement.column}
+      reason={placement.reason}
+      next={false}
+      phase={undefined}
+      closedAncestor={closedAncestor}
+      {...controls}
+    />
   );
 }

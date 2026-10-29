@@ -1,7 +1,8 @@
 'use client';
 
 /**
- * The space's plans as a list (Plan 332 D2): open plans in position order —
+ * The space's plans as a list (Plan 332 D2), below **Overview**, which returns
+ * to the lanes across every plan (D1): open plans in position order —
  * the order the loop takes them — each with its state, its progress and its
  * non-zero counts of steps needing the operator and in flight, with **Move up**
  * and **Move down**; then **Finished**, open plans whose every step is closed,
@@ -278,8 +279,11 @@ function PlanRowView({
 export interface PlanListProps {
   /** Every root, in position order. */
   rows: readonly PlanRootRow[];
+  /** The plan whose board is showing; undefined on the overview. */
   selectedId: string | undefined;
   onSelect: (rootId: string) => void;
+  /** Back to the overview, the lanes across every plan. */
+  onOverview: () => void;
   onPlace: PlanNodePlacer;
   onClose: PlanNodeCloser;
   spaceId: string;
@@ -291,6 +295,7 @@ export function PlanList({
   rows,
   selectedId,
   onSelect,
+  onOverview,
   onPlace,
   onClose,
   spaceId,
@@ -333,8 +338,22 @@ export function PlanList({
     </PlanRowView>
   );
 
+  const overview = selectedId === undefined;
   const body = (
     <Column gap="md">
+      <Button
+        size="sm"
+        variant={overview ? 'secondary' : 'ghost'}
+        aria-pressed={overview}
+        style={{ justifyContent: 'flex-start' }}
+        data-plan-list-overview
+        onClick={() => {
+          if (narrow) setDisclosed(false);
+          onOverview();
+        }}
+      >
+        Overview
+      </Button>
       <ul style={listStyle} aria-label="Open plans" data-plan-list-section="open">
         {open.map((row) =>
           rowOf(

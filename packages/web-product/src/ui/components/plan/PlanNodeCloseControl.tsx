@@ -79,13 +79,16 @@ const CLOSING_COPY: Record<
 
 export function PlanNodeCloseControl({
   node,
+  openUnder,
   read,
   onClose,
   choosing,
   onChoose,
 }: {
-  /** The card's node: its revision is the board's, its children say whether a drop takes a branch. */
-  node: PlanTreeNode;
+  /** The node as the page read it: its revision is the board's or the lane's. */
+  node: Pick<PlanTreeNode, 'nodeId' | 'kind' | 'revision'>;
+  /** Open steps lie under it, so a drop takes the branch. */
+  openUnder: boolean;
   read: PlanNodeRead;
   onClose: PlanNodeCloser;
   /** Which form is open, held by the rail so a card's Decide opens it directly. */
@@ -98,7 +101,6 @@ export function PlanNodeCloseControl({
   const { shown, movedSinceOpened, setPinned } = usePinnedNode(read, choosing !== null);
   const closedNow =
     read.node !== undefined && isClosedStatus(read.node.status) ? read.node.status : undefined;
-  const openUnder = node.children.some((child) => !isClosedStatus(child.status));
 
   const copyFor = (status: 'done' | 'dropped') =>
     CLOSING_COPY[status === 'done' && node.kind === 'decide' ? 'decide' : status];
