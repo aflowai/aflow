@@ -2,7 +2,9 @@
  * @vitest-environment jsdom
  */
 /**
- * The plan page as the operator sees it (Plan 322 P3.3, Plan 332 P1–P3): the
+ * The plan page as the operator sees it (Plan 322 P3.3, Plan 332 P1–P4): the
+ * overview it lands on — Needs you, In flight and Up next across every plan,
+ * Approve on a blocked row, a row opening the rail over it — and the
  * plans as a list with each one's state, Finished and Closed below the open
  * ones, Move up and Move down on open plans and Close plan on finished ones;
  * the chosen plan's board — its header, five columns saying what the loop is
@@ -17,8 +19,10 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PlanNodeOpenSchema } from '@aflow/schemas';
 import type {
+  PlanLaneItem,
   PlanNode,
   PlanNodeDetailOutput,
+  PlanOverviewLanes,
   PlanNodeLink,
   PlanRootTally,
   PlanTreeNode,
@@ -33,6 +37,8 @@ interface SpaceFixture {
   rowTruncated?: Record<string, { bound: 'depth' | 'nodes'; value: number }>;
   /** The bound that cut the list of plans short. */
   listTruncated?: { bound: 'nodes'; value: number };
+  /** The overview's lanes; empty where absent. */
+  lanes?: PlanOverviewLanes;
 }
 
 interface Answer {
@@ -140,6 +146,21 @@ vi.mock('@aflow/design-system', () => {
         { ...passed(rest), type: 'button', onClick, disabled, role: undefined },
         children,
       ),
+    IconButton: ({
+      icon,
+      onClick,
+      disabled,
+      ...rest
+    }: {
+      icon?: ReactNode;
+      onClick?: (event: { stopPropagation: () => void }) => void;
+      disabled?: boolean;
+      [key: string]: unknown;
+    }) => createElement('button', { ...passed(rest), type: 'button', onClick, disabled }, icon),
+    Icon: () => null,
+    Tooltip: ({ children }: { children?: ReactNode }) => children,
+    Panel: block('div'),
+    ScrollArea: block('div'),
     Input: (props: Record<string, unknown>) => createElement('input', props),
     Textarea: (props: Record<string, unknown>) =>
       createElement('textarea', {
@@ -360,9 +381,16 @@ function rowsOf(space: SpaceFixture) {
         lastWrittenAt: tree.updatedAt,
       };
     }),
+    lanes: space.lanes ?? NO_LANES,
     ...(space.listTruncated !== undefined ? { truncated: space.listTruncated } : {}),
   };
 }
+
+const NO_LANES: PlanOverviewLanes = {
+  needsYou: { items: [], total: 0 },
+  inFlight: { items: [], total: 0 },
+  upNext: { items: [], total: 0 },
+};
 
 const PLAN: SpaceFixture = {
   roots: [
@@ -485,6 +513,7 @@ function detail(node: PlanNode, extra: Partial<PlanNodeDetailOutput> = {}): Answ
     linksTotal: 0,
     runs: [],
     runsTotal: 0,
+    activity: 'idle',
     ...extra,
   };
   return { data };
@@ -556,8 +585,13 @@ function filter(name: string): Element {
   return found;
 }
 
+/** A button as it is named: its label where it is an icon, else its text. */
+function buttonName(b: Element): string {
+  return b.getAttribute('aria-label') ?? b.textContent ?? '';
+}
+
 function button(scope: Element, text: string): HTMLButtonElement {
-  const found = [...scope.querySelectorAll('button')].find((b) => b.textContent === text);
+  const found = [...scope.querySelectorAll('button')].find((b) => buttonName(b) === text);
   if (!found) throw new Error(`no button reading ${text}`);
   return found;
 }
@@ -605,7 +639,8 @@ beforeEach(() => {
   recorded.rowQueries = [];
   recorded.rowsRefetch.mockReset();
   recorded.board = {};
-  nav.search = '';
+  // The board of Plan 322; the overview, where the page lands, is tested on its own.
+  nav.search = `plan=${R322}`;
   nav.pushed = [];
   recorded.refetch.mockReset();
   recorded.details = {
@@ -739,7 +774,7 @@ describe('SpacePlanPage — the board', () => {
     expect(container.textContent).not.toContain('Idle');
   });
 
-  it('carries labels only on a card: phase, runs in flight, pull request, rounds, subtasks', async () => {
+  it('carries labels only on a card, each saying what it counts: phase, runs in flight, pull request, rounds, subtasks', async () => {
     await render();
 
     const board = card(BOARD);
@@ -748,20 +783,24 @@ describe('SpacePlanPage — the board', () => {
       b.textContent,
     ]);
     expect(badges).toEqual([
-      ['neutral', 'P3'],
-      ['running', 'Running 1'],
-      ['info', '#181'],
-      ['neutral', 'Rounds 2'],
+      ['running', '1 run in flight'],
+      ['info', 'PR #181 · open'],
     ]);
-    expect(board.querySelector('[data-plan-progress]')?.textContent).toBe('2/2');
+    expect(board.querySelector('[data-plan-card-phase]')?.textContent).toBe('P3');
+    expect(board.querySelector('[data-plan-card-rounds]')?.textContent).toBe('2 review rounds');
+    expect(board.querySelector('[data-plan-progress]')?.textContent).toBe('2/2 subtasks');
     expect(board.textContent).not.toContain('Goal of');
 
     expect(card(ARTICLE).querySelector('[data-badge]')).toBe(null);
     for (const id of [P3, NEXT, BOARD, ARTICLE]) {
       expect(card(id).textContent).not.toContain('Operator');
     }
-    expect(card(LANDED).querySelector('[data-badge="success"]')?.textContent).toBe('#176');
-    expect(card(SKETCH).querySelector('span')?.style.textDecoration).toBe('line-through');
+    expect(card(LANDED).querySelector('[data-badge="success"]')?.textContent).toBe(
+      'PR #176 · merged',
+    );
+    expect(
+      card(SKETCH).querySelector<HTMLElement>('[data-plan-card-title]')?.style.textDecoration,
+    ).toBe('line-through');
     expect(card(DECISION).style.borderLeft).toContain('var(--color-warning-default)');
     expect(button(card(DECISION), 'Decide')).toBeTruthy();
   });
@@ -879,6 +918,7 @@ describe('SpacePlanPage — the rail', () => {
         },
       ],
       runsTotal: 1,
+      activity: 'in_flight',
     });
     recorded.findings[BOARD] = detail(fullNode(BOARD, 'P3.3 the board'), {
       links: [{ nodeId: BOARD, kind: 'finding', ref: 'F121', createdAt: at(10, 21) }],
@@ -900,7 +940,7 @@ describe('SpacePlanPage — the rail', () => {
     const shown = rail();
     expect(shown.textContent).toContain('The whole goal of P3.3 the board.');
     expect(shown.textContent).toContain('Done whenCriteria of P3.3 the board.');
-    expect(shown.textContent).toContain('Rounds 2');
+    expect(shown.textContent).toContain('2 review rounds');
     expect(
       shown.querySelector('[data-plan-rail-section="Carried forward"]')?.textContent,
     ).toContain('F121');
@@ -958,7 +998,7 @@ describe('SpacePlanPage — the rail', () => {
     await click(card(NEXT));
     expect(
       [...rail().querySelectorAll('[data-badge]')].map((b) => b.textContent).slice(0, 2),
-    ).toEqual(['In flight', 'Next']);
+    ).toEqual(['In flight', 'Next for the loop']);
 
     await click(card(DECISION));
     expect(
@@ -1029,10 +1069,7 @@ describe('SpacePlanPage — the rail', () => {
     );
     expect(shown.textContent).toContain('93ce256');
     expect(shown.textContent).toContain('Closed ');
-    expect([...shown.querySelectorAll('button')].map((b) => b.textContent)).toEqual([
-      'Close',
-      'Reopen',
-    ]);
+    expect([...shown.querySelectorAll('button')].map(buttonName)).toEqual(['Close', 'Reopen']);
   });
 
   it('collapses Dropped to a strip while the rail is open', async () => {
@@ -1437,11 +1474,12 @@ function openForm(): Element {
 }
 
 function buttonTexts(scope: Element): string[] {
-  return [...scope.querySelectorAll('button')].map((b) => b.textContent ?? '');
+  return [...scope.querySelectorAll('button')].map(buttonName);
 }
 
 describe('SpacePlanPage — approve, reopen and order (Plan 332 P2)', () => {
   beforeEach(() => {
+    nav.search = `plan=${R331}`;
     recorded.mutateAsync.mockResolvedValue({ node: {} });
     recorded.details[BLOCKED] = detail(
       fullNode(BLOCKED, 'P1 — the loop takes the next node', {
@@ -1469,6 +1507,7 @@ describe('SpacePlanPage — approve, reopen and order (Plan 332 P2)', () => {
     await click(card(BLOCKED));
     expect(buttonTexts(rail())).toEqual(['Close', 'Approve', 'Mark done', 'Drop']);
 
+    nav.search = `plan=${R322}`;
     await render({ data: PLAN });
     await click(card(DECISION));
     expect(buttonTexts(rail())).not.toContain('Approve');
@@ -1586,6 +1625,30 @@ describe('SpacePlanPage — approve, reopen and order (Plan 332 P2)', () => {
     expect(container.querySelector('[data-plan-rail]')).toBe(null);
   });
 
+  it('moves a card from the keyboard: Enter on a focused Move up places it and opens no rail', async () => {
+    await render({ data: P2_PLAN });
+
+    const moveUp = button(card(UP_B), 'Move up');
+    await act(async () => {
+      moveUp.focus();
+      const pressed = new KeyboardEvent('keydown', {
+        key: 'Enter',
+        bubbles: true,
+        cancelable: true,
+      });
+      // A browser activates a focused button on Enter unless a handler cancels the key.
+      if (moveUp.dispatchEvent(pressed)) moveUp.click();
+    });
+
+    expect(recorded.sent).toEqual([
+      {
+        path: `/spaces/${SPACE_ID}/plan/nodes/${UP_B}/place`,
+        body: { expectedRevision: 1, before: UP_A },
+      },
+    ]);
+    expect(container.querySelector('[data-plan-rail]')).toBe(null);
+  });
+
   it('says why a move was refused on its card, and re-reads the board when a sibling moved', async () => {
     recorded.mutateAsync.mockRejectedValue(
       Object.assign(new Error('The step this was placed against is not beside it any more.'), {
@@ -1680,16 +1743,21 @@ describe('SpacePlanPage — the plan list (Plan 332 P3)', () => {
     expect(rowIds('finished')).toEqual([L_FINISHED]);
     expect(rowIds('closed')).toEqual([]);
 
+    // One reading per row: the plan, where it stands, and what needs the reader.
     const needs = listRow(L_NEEDS)!;
-    expect([...needs.querySelectorAll('[data-badge]')].map((b) => b.textContent)).toEqual([
-      'Needs you',
-      '3 need you',
-      '1 in flight',
-    ]);
+    expect(needs.querySelector('[data-plan-row-title]')?.textContent).toBe(
+      'Plan 331 · the always-on Helmsman',
+    );
+    expect(needs.querySelector('[data-plan-row-state]')?.textContent).toBe('Needs you');
     expect(needs.querySelector('[data-plan-row-progress]')?.textContent).toBe('1/4');
-    expect(
-      [...listRow(L_QUEUED)!.querySelectorAll('[data-badge]')].map((b) => b.textContent),
-    ).toEqual(['Queued']);
+    expect(needs.querySelector('[data-plan-row-in-flight]')?.textContent).toBe('1 in flight');
+    expect(needs.querySelector('[data-plan-row-needs-you]')?.textContent).toBe('3 need you');
+    const flight = listRow(L_FLIGHT)!;
+    expect(flight.querySelector('[data-plan-row-state]')?.textContent).toBe('1 in flight');
+    expect(flight.querySelector('[data-plan-row-in-flight]')).toBe(null);
+    expect(flight.querySelector('[data-plan-row-needs-you]')).toBe(null);
+    expect(listRow(L_QUEUED)!.querySelector('[data-plan-row-state]')?.textContent).toBe('Queued');
+    expect(listRow(L_QUEUED)!.querySelector('[data-badge]')).toBe(null);
     expect(listRow(L_FINISHED)?.textContent).toContain('5/5');
     expect(listRow(L_EMPTY)?.textContent).toContain('No steps');
 
@@ -1754,6 +1822,7 @@ describe('SpacePlanPage — the plan list (Plan 332 P3)', () => {
 
   it('is a disclosure above the content below 900px, closed again once a plan is chosen', async () => {
     recorded.narrow = true;
+    nav.search = `plan=${L_NEEDS}`;
     await render({ data: LIST });
 
     const list = container.querySelector('[data-plan-list]')!;
@@ -1827,25 +1896,34 @@ describe('SpacePlanPage — the plan list (Plan 332 P3)', () => {
 });
 
 describe('SpacePlanPage — where the operator is, in the URL (Plan 332 D8)', () => {
-  it('shows the first open plan’s board where the URL names no plan, and writes nothing to the URL', async () => {
+  it('shows the overview where the URL names no plan, the list beside it, and writes nothing to the URL', async () => {
+    nav.search = '';
     await render({ data: LIST });
 
-    expect(boardShown()).toBe(L_NEEDS);
-    expect(listRow(L_NEEDS)?.getAttribute('aria-current')).toBe('true');
+    expect(boardShown()).toBe(null);
+    expect(container.querySelector('[data-plan-overview]')).not.toBe(null);
+    expect(recorded.boardQueries).toEqual([]);
+    expect(rowIds('open')).toEqual([L_NEEDS, L_FLIGHT, L_QUEUED, L_EMPTY]);
+    expect(container.querySelector('[data-plan-row][aria-current]')).toBe(null);
+    expect(container.querySelector('[data-plan-list-overview]')?.getAttribute('aria-pressed')).toBe(
+      'true',
+    );
     expect(nav.pushed).toEqual([]);
   });
 
-  it('shows the plan the URL names, and the first open plan for one the space does not hold', async () => {
+  it('shows the plan the URL names, and the overview for one the space does not hold', async () => {
     nav.search = `plan=${L_QUEUED}`;
     await render({ data: LIST });
     expect(boardShown()).toBe(L_QUEUED);
     expect(lastBoardQuery().url.pathname).toBe(`/spaces/${SPACE_ID}/plan/roots/${L_QUEUED}`);
 
     await goTo('plan=00000000-0000-4000-8000-0000000009ff');
-    expect(boardShown()).toBe(L_NEEDS);
+    expect(boardShown()).toBe(null);
+    expect(container.querySelector('[data-plan-overview]')).not.toBe(null);
   });
 
-  it('puts the plan chosen in the URL, and back lands on the plan before it', async () => {
+  it('puts the plan chosen in the URL, and back lands on the overview before it', async () => {
+    nav.search = '';
     await render({ data: LIST });
 
     await choosePlan(L_FLIGHT);
@@ -1853,7 +1931,13 @@ describe('SpacePlanPage — where the operator is, in the URL (Plan 332 D8)', ()
     expect(boardShown()).toBe(L_FLIGHT);
 
     await goTo('');
-    expect(boardShown()).toBe(L_NEEDS);
+    expect(boardShown()).toBe(null);
+    expect(container.querySelector('[data-plan-overview]')).not.toBe(null);
+
+    await choosePlan(L_QUEUED);
+    await click(container.querySelector<HTMLElement>('[data-plan-list-overview]')!);
+    expect(nav.pushed.at(-1)).toBe('/s/work/plan');
+    expect(boardShown()).toBe(null);
   });
 
   it('puts the step opened in the URL beside its plan, and takes it out when the rail closes', async () => {
@@ -2054,6 +2138,7 @@ describe('SpacePlanPage — ordering and closing plans from the list (Plan 332 P
   });
 
   it('offers Close plan in a finished plan’s header, and none on a plan with open steps', async () => {
+    nav.search = `plan=${L_NEEDS}`;
     await render({ data: LIST });
     const header = () => container.querySelector(`[data-plan-tally]`)!.parentElement!;
     expect(buttonTexts(header())).not.toContain('Close plan');
@@ -2073,5 +2158,310 @@ describe('SpacePlanPage — ordering and closing plans from the list (Plan 332 P
     expect(header.querySelector('[data-plan-close-withheld]')?.textContent).toBe(
       'Counted short: the first 2000 steps, so no Close plan',
     );
+  });
+});
+
+// Plan 332 P4: the overview, where the page lands.
+const LANE_STOP = '00000000-0000-4000-8000-0000000002a1';
+const LANE_STRANDED = '00000000-0000-4000-8000-0000000002a2';
+const LANE_CLOSED_ABOVE = '00000000-0000-4000-8000-0000000002a3';
+const LANE_GONE = '00000000-0000-4000-8000-0000000002a4';
+
+function laneItem(nodeId: string, title: string, extra: Partial<PlanLaneItem> = {}): PlanLaneItem {
+  return {
+    nodeId,
+    title,
+    kind: 'execute',
+    status: 'active',
+    revision: 1,
+    updatedAt: new Date(NOW.getTime() - 3 * 3_600_000).toISOString(),
+    rootId: R322,
+    rootTitle: 'Plan 322 · plans are platform records',
+    ...extra,
+  };
+}
+
+const OVERVIEW: SpaceFixture = {
+  ...PLAN,
+  lanes: {
+    needsYou: {
+      items: [
+        laneItem(LANE_STOP, 'P4 — one view across plans', {
+          status: 'blocked',
+          revision: 4,
+          reason: 'blocked',
+          phaseTitle: 'P3 — Seen by the operator',
+          noteHead: 'Proposed from the merged plan document; awaits the operator’s approval',
+        }),
+        laneItem(DECISION, 'Where the decide answer is recorded', {
+          kind: 'decide',
+          revision: 3,
+          reason: 'decide',
+        }),
+        laneItem(LANE_STRANDED, 'P6.a — the folder preview', {
+          status: 'blocked',
+          reason: 'stranded',
+          closedAncestor: { nodeId: LANE_CLOSED_ABOVE, title: 'P6 — the folder' },
+        }),
+      ],
+      total: 57,
+    },
+    inFlight: {
+      items: [
+        laneItem(BOARD, 'P3.3 the board', {
+          pullRequest: { url: PR, merged: false },
+          runs: [
+            {
+              runId: RUN_ID,
+              slug: 'commission-change',
+              status: 'running',
+              nodeId: BOARD,
+              startedAt: at(10, 22, 14),
+            },
+          ],
+          runsTotal: 1,
+        }),
+      ],
+      total: 1,
+    },
+    upNext: { items: [laneItem(ARTICLE, 'Write the help article')], total: 1 },
+  },
+};
+
+function lane(id: string): Element {
+  const found = container.querySelector(`[data-plan-lane="${id}"]`);
+  if (!found) throw new Error(`no lane ${id}`);
+  return found;
+}
+
+function laneRow(nodeId: string): HTMLElement {
+  const found = container.querySelector<HTMLElement>(`[data-plan-lane-row="${nodeId}"]`);
+  if (!found) throw new Error(`no lane row ${nodeId}`);
+  return found;
+}
+
+function laneRowIds(id: string): string[] {
+  return [...lane(id).querySelectorAll('[data-plan-lane-row]')].map(
+    (r) => r.getAttribute('data-plan-lane-row') ?? '',
+  );
+}
+
+describe('SpacePlanPage — the overview across plans (Plan 332 P4)', () => {
+  beforeEach(() => {
+    nav.search = '';
+    recorded.mutateAsync.mockResolvedValue({ node: {} });
+  });
+
+  it('lands on the three lanes, Needs you first, each step tagged with its plan', async () => {
+    await render({ data: OVERVIEW });
+
+    expect(
+      [...container.querySelectorAll('[data-plan-lane]')].map((l) =>
+        l.getAttribute('data-plan-lane'),
+      ),
+    ).toEqual(['needs_you', 'in_flight', 'up_next']);
+    expect(laneRowIds('needs_you')).toEqual([LANE_STOP, DECISION, LANE_STRANDED]);
+    expect(laneRowIds('in_flight')).toEqual([BOARD]);
+    expect(laneRowIds('up_next')).toEqual([ARTICLE]);
+    expect(lane('needs_you').textContent).toContain('Needs you · 57');
+
+    const stop = laneRow(LANE_STOP);
+    expect(stop.querySelector('[data-plan-lane-plan]')?.textContent).toBe('Plan 322');
+    expect([...stop.querySelectorAll('[data-badge]')].map((b) => b.textContent)).toEqual([
+      'Blocked',
+    ]);
+    expect(stop.querySelector('[data-plan-lane-phase]')?.textContent).toBe('P3');
+    expect(stop.querySelector('[data-plan-lane-note]')?.textContent).toBe(
+      'Proposed from the merged plan document; awaits the operator’s approval',
+    );
+    expect(stop.querySelector('[data-plan-lane-age]')?.textContent).toBe('3h');
+    expect(laneRow(LANE_STRANDED).textContent).toContain('Under a closed step');
+    expect(buttonTexts(laneRow(DECISION))).toContain('Decide');
+
+    const running = laneRow(BOARD);
+    expect(running.querySelector(`[data-plan-lane-run="${RUN_ID}"]`)?.textContent).toContain(
+      'Commission',
+    );
+    expect(running.querySelector(`a[href="/s/work/runs/${RUN_ID}"]`)).not.toBe(null);
+    expect(running.textContent).toContain('PR #181 · open');
+
+    // Up next is the loop's next step per plan, with no reorder: that is the board's.
+    expect(laneRow(ARTICLE).textContent).toContain('Next for the loop');
+    expect(buttonTexts(lane('up_next'))).not.toContain('Move up');
+    expect(buttonTexts(lane('up_next'))).not.toContain('Move down');
+    expect(boardShown()).toBe(null);
+  });
+
+  it('says how many more a lane holds than it lists', async () => {
+    await render({ data: OVERVIEW });
+
+    expect(lane('needs_you').querySelector('[data-plan-lane-more]')?.textContent).toBe(
+      'and 54 more',
+    );
+    expect(lane('in_flight').querySelector('[data-plan-lane-more]')).toBe(null);
+  });
+
+  it('says when the lanes’ read reached a bound, and a lane cut short reads as at least what it holds', async () => {
+    await render({
+      data: {
+        ...OVERVIEW,
+        lanes: {
+          needsYou: { items: [], total: 0 },
+          inFlight: { items: [], total: 0 },
+          upNext: { items: [], total: 0 },
+          truncated: { bound: 'nodes', value: 2000 },
+        },
+      },
+    });
+
+    expect(container.querySelector('[data-plan-lanes-truncated]')?.textContent).toBe(
+      'The lanes read the first 2000 steps across plans, closed ones included; some may be missing',
+    );
+    // A lane cut short never reads as complete: neither its count nor its emptiness.
+    expect(lane('needs_you').textContent).toContain('Needs you · 0+');
+    expect(lane('needs_you').textContent).toContain('None among the steps read');
+    expect(lane('needs_you').textContent).not.toContain('Nothing waits on you');
+  });
+
+  it('says what an empty lane means where the read reached no bound', async () => {
+    await render({
+      data: {
+        ...OVERVIEW,
+        lanes: {
+          needsYou: { items: [], total: 0 },
+          inFlight: { items: [], total: 0 },
+          upNext: { items: [], total: 0 },
+        },
+      },
+    });
+
+    expect(container.querySelector('[data-plan-lanes-truncated]')).toBe(null);
+    expect(lane('needs_you').textContent).toContain('Needs you · 0');
+    expect(lane('needs_you').textContent).not.toContain('0+');
+    expect(lane('needs_you').textContent).toContain('Nothing waits on you');
+  });
+
+  it('approves a blocked step from its row through the open write, against the lanes’ revision, without opening its plan', async () => {
+    await render({ data: OVERVIEW });
+
+    await click(button(laneRow(LANE_STOP), 'Approve'));
+
+    expect(recorded.sent).toEqual([
+      { path: `/spaces/${SPACE_ID}/plan/nodes/${LANE_STOP}/open`, body: { expectedRevision: 4 } },
+    ]);
+    expect(mutationFor('/open')?.invalidate).toEqual([['space', SPACE_ID, 'plan']]);
+    expect(nav.pushed).toEqual([]);
+    expect(boardShown()).toBe(null);
+    // Approve is the blocked row's alone: not a decision's, not a stranded step's.
+    expect(buttonTexts(laneRow(DECISION))).not.toContain('Approve');
+    expect(buttonTexts(laneRow(LANE_STRANDED))).not.toContain('Approve');
+  });
+
+  it('says a refused approve on its row and reads the overview again when the step moved', async () => {
+    recorded.mutateAsync.mockRejectedValue(
+      Object.assign(new Error('This step changed since the plan was read: it is at revision 5.'), {
+        status: 409,
+      }),
+    );
+    await render({ data: OVERVIEW });
+
+    await click(button(laneRow(LANE_STOP), 'Approve'));
+
+    expect(laneRow(LANE_STOP).querySelector('[role="alert"]')?.textContent).toContain(
+      'it is at revision 5',
+    );
+    expect(recorded.rowsRefetch).toHaveBeenCalledTimes(1);
+    expect(recorded.refetch).not.toHaveBeenCalled();
+  });
+
+  it('opens the shared rail over the overview from a row, puts the step in the URL alone, and takes it out on Close', async () => {
+    recorded.details[LANE_STOP] = detail(
+      fullNode(LANE_STOP, 'P4 — one view across plans', { status: 'blocked', revision: 4 }),
+    );
+    await render({ data: OVERVIEW });
+
+    await click(laneRow(LANE_STOP).querySelector('button')!);
+
+    expect(nav.pushed.at(-1)).toBe(`/s/work/plan?node=${LANE_STOP}`);
+    expect(rail().getAttribute('data-plan-rail')).toBe(LANE_STOP);
+    expect(laneRow(LANE_STOP).getAttribute('aria-current')).toBe('true');
+    expect(container.querySelector('[data-plan-overview]')).not.toBe(null);
+    expect([...rail().querySelectorAll('[data-badge]')].map((b) => b.textContent)).toEqual([
+      'Needs you',
+      'Blocked',
+    ]);
+    expect(rail().querySelector('[data-plan-rail-phase]')?.textContent).toBe('P3');
+    expect(buttonTexts(rail())).toEqual(['Close', 'Approve', 'Mark done', 'Drop']);
+
+    await click(button(rail(), 'Close'));
+    expect(nav.pushed.at(-1)).toBe('/s/work/plan');
+    expect(container.querySelector('[data-plan-rail]')).toBe(null);
+  });
+
+  it('opens the rail with the decide form from a decision’s Decide', async () => {
+    recorded.details[DECISION] = detail(
+      fullNode(DECISION, 'Where the decide answer is recorded', { kind: 'decide', revision: 3 }),
+    );
+    await render({ data: OVERVIEW });
+
+    await click(button(laneRow(DECISION), 'Decide'));
+
+    expect(nav.pushed.at(-1)).toBe(`/s/work/plan?node=${DECISION}`);
+    expect(rail().querySelector('[data-plan-close="done"]')).not.toBe(null);
+  });
+
+  it('offers Reopen of the closed step above a stranded row in its rail', async () => {
+    recorded.details[LANE_STRANDED] = detail(
+      fullNode(LANE_STRANDED, 'P6.a — the folder preview', { status: 'blocked' }),
+    );
+    nav.search = `node=${LANE_STRANDED}`;
+    await render({ data: OVERVIEW });
+
+    expect(buttonTexts(rail())).toContain('Reopen P6');
+    expect(buttonTexts(rail())).not.toContain('Approve');
+  });
+
+  it('reopens the rail over the overview on reload of a URL with a step and no plan', async () => {
+    nav.search = `node=${BOARD}`;
+    await render({ data: OVERVIEW });
+
+    expect(boardShown()).toBe(null);
+    expect(container.querySelector('[data-plan-overview]')).not.toBe(null);
+    expect(rail().getAttribute('data-plan-rail')).toBe(BOARD);
+    expect(rail().textContent).toContain('In flight');
+    expect(nav.pushed).toEqual([]);
+  });
+
+  it('reads a step no lane holds on its own, and opens the rail over the overview with it', async () => {
+    recorded.details[LANE_GONE] = detail(
+      fullNode(LANE_GONE, 'A step that landed', {
+        status: 'done',
+        outcome: 'Merged.',
+        closedAt: at(10, 21),
+      }),
+    );
+    nav.search = `node=${LANE_GONE}`;
+    await render({ data: OVERVIEW });
+
+    expect(rail().getAttribute('data-plan-rail')).toBe(LANE_GONE);
+    expect(rail().textContent).toContain('A step that landed');
+    expect([...rail().querySelectorAll('[data-badge]')].map((b) => b.textContent)).toEqual([
+      'Done',
+    ]);
+    expect(buttonTexts(rail())).toContain('Reopen');
+    expect(
+      recorded.detailQueries.some(
+        (q) => q.key.join('/') === `space/${SPACE_ID}/plan/node/${LANE_GONE}`,
+      ),
+    ).toBe(true);
+  });
+
+  it('opens the rail as a dialog over the overview below 900px', async () => {
+    recorded.narrow = true;
+    nav.search = `node=${ARTICLE}`;
+    await render({ data: OVERVIEW });
+
+    expect(container.querySelector('[role="dialog"] [data-plan-rail]')).not.toBe(null);
+    expect(rail().textContent).toContain('Next');
   });
 });

@@ -53,8 +53,8 @@ export function planAsk(node: PlanNode): { waitsOn: string; update?: PlanNodeUpd
   if (waitLine !== undefined) return { waitsOn: waitLine };
   const existing = node.note ?? '';
   const room = PLAN_NODE_PROSE_MAX_CHARS - existing.length - (existing ? 1 : 0);
-  if (room <= 0) return { waitsOn: PLAN_ASK_DEFAULT_LINE };
-  const line = PLAN_ASK_DEFAULT_LINE.slice(0, room);
+  if (room < PLAN_ASK_DEFAULT_LINE.length) return { waitsOn: PLAN_ASK_DEFAULT_LINE };
+  const line = PLAN_ASK_DEFAULT_LINE;
   const note = existing ? `${existing}\n${line}` : line;
   return {
     waitsOn: PLAN_ASK_DEFAULT_LINE,

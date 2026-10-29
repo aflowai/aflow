@@ -28,7 +28,7 @@
     "contentHash": "814ea9d7d423194beaa22fd9e22a10053bd5426d3d352de9df4cfbbc044296df"
   },
   "coding-loop": {
-    "version": 100,
+    "version": 103,
     "contentHash": "48f397a1a4c29daa1c17a0233bce1757c4cdf5fd7a873cb6dc863bd24510dfcf"
   },
   "coding-pr-loop": {
@@ -104,11 +104,11 @@
     "contentHash": "5f9151872e93be3bb7ad3b154b9a539677892df0361ad01c2579f227a27b6856"
   },
   "local-code-review": {
-    "version": 11,
+    "version": 13,
     "contentHash": "9967cfd8ecf43b2540adfc24fe216cf58f62e0a6ea5a8aca25b51390c6c0cd04"
   },
   "local-commission": {
-    "version": 11,
+    "version": 12,
     "contentHash": "087550116c8a38b7e2c401dd34a5e8002568a3db0ab8dd8d22ecb2a0e6d83d75"
   },
   "local-publish": {

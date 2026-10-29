@@ -247,8 +247,10 @@ export function validateTaskGraphSelfConsistent(draft: TaskGraphDraft): ComposeV
 
 /**
  * Cross-validates that every `intent.requiredDataSources` entry has exactly
- * one task in the draft labelling its purpose AND carrying a callable api/mcp
- * grant.
+ * one task in the draft labelling its purpose AND able to call the source: an
+ * agent task carrying a callable api/mcp grant, or an `api.http.call`
+ * operation task whose static inputTemplate names the source's apiId or
+ * bindingId.
  *
  * Most violations blame the `draft` binding (the draft is the producer that
  * forgot to label / wire grants). The only `intent`-bindAs case is when the
@@ -270,10 +272,12 @@ export function validateSourceCoverage(
     interface LabeledTask {
       taskId: string;
       taskIndex: number;
+      isOperation: boolean;
       hasGrantWithCallable: boolean;
     }
     const labeledTasks: LabeledTask[] = [];
-    let anyTaskHasGrant = false;
+    const grantedAgentCallers: string[] = [];
+    const operationCallers: string[] = [];
 
     for (const [taskIdx, task] of draft.tasks.entries()) {
       const labelsThisPurpose = (task.produces ?? []).some(
@@ -288,21 +292,45 @@ export function validateSourceCoverage(
             // A direct_url grant is callable without toolNames.
             (grant.grantKind === 'direct_url' || grant.toolNames.length > 0),
         );
+      } else if (task.type === 'operation' && ds.sourceKind === 'api') {
+        // A deterministic api.http.call reaches the source directly — its
+        // static apiId/bindingId is the callable reference, no grant needed.
+        taskHasGrantWithCallable = collectOperationTaskApiRefs([task]).some(
+          (ref) => ref.apiId === ds.sourceId || ref.bindingId === ds.sourceId,
+        );
       }
-      if (taskHasGrantWithCallable) anyTaskHasGrant = true;
+      if (taskHasGrantWithCallable) {
+        (task.type === 'operation' ? operationCallers : grantedAgentCallers).push(task.taskId);
+      }
       if (labelsThisPurpose) {
         labeledTasks.push({
           taskId: task.taskId,
           taskIndex: taskIdx,
+          isOperation: task.type === 'operation',
           hasGrantWithCallable: taskHasGrantWithCallable,
         });
       }
     }
 
+    const directCallHint =
+      ds.sourceKind === 'api'
+        ? ` — or fetch it with an operation task: { type: 'operation', operationId: 'api.http.call', inputTemplate: { apiId: '${ds.sourceId}', bindingId, ... } }`
+        : '';
+
+    // An operation caller holds no grant — it reaches the source through the
+    // api ref in its inputTemplate — so the fix is to label it, never to move
+    // a grant.
+    const operationCallerHint =
+      operationCallers.length > 0
+        ? `Operation task ${operationCallers.map((id) => `"${id}"`).join(', ')} already calls api "${ds.sourceId}" via api.http.call (its inputTemplate names the api ref) — that's the producer; add providesPurposeId: "${ds.purposeId}" to ITS produces[].`
+        : '';
+
     if (labeledTasks.length === 0) {
-      const grantHint = anyTaskHasGrant
-        ? ` A task in this draft already carries the ${ds.sourceKind} "${ds.sourceId}" grant — that's the producer; add the label to ITS produces[].`
-        : ` No task in this draft grants ${ds.sourceKind} "${ds.sourceId}" yet — first wire the grant on the fetcher task's context.capabilities.integrations[] with { sourceKind: '${ds.sourceKind}', integrationId: '${ds.sourceId}', bindingId, toolNames: [...] }, then label its produces[].`;
+      const grantHint = operationCallerHint
+        ? ` ${operationCallerHint}`
+        : grantedAgentCallers.length > 0
+          ? ` A task in this draft already carries the ${ds.sourceKind} "${ds.sourceId}" grant — that's the producer; add the label to ITS produces[].`
+          : ` No task in this draft grants ${ds.sourceKind} "${ds.sourceId}" yet — first wire the grant on the fetcher task's context.capabilities.integrations[] with { sourceKind: '${ds.sourceKind}', integrationId: '${ds.sourceId}', bindingId, toolNames: [...] }${directCallHint}; then label its produces[].`;
       // No `path` — the violation is structural ("the draft is missing a
       // producer task for this purpose"). Keep the intent details (purpose,
       // sourceId) in the message; pinning a path into `requiredDataSources`
@@ -333,10 +361,24 @@ export function validateSourceCoverage(
     }
 
     const onlyLabeled = labeledTasks[0]!;
+    if (!onlyLabeled.hasGrantWithCallable && onlyLabeled.isOperation) {
+      violations.push({
+        bindAs: 'draft',
+        contractName: VALIDATE_SOURCE_COVERAGE_CONTRACT,
+        path: ['tasks', onlyLabeled.taskIndex, 'inputTemplate'],
+        message:
+          ds.sourceKind === 'api'
+            ? `task="${onlyLabeled.taskId}" labels produces[*].providesPurposeId="${ds.purposeId}" but does not call api "${ds.sourceId}". An operation task fetches a real source only as operationId 'api.http.call' with a literal inputTemplate.apiId (or bindingId) of "${ds.sourceId}".`
+            : `task="${onlyLabeled.taskId}" labels produces[*].providesPurposeId="${ds.purposeId}" but an operation task cannot call mcp "${ds.sourceId}". Label the agent task granted that mcp tool instead.`,
+      });
+      continue;
+    }
     if (!onlyLabeled.hasGrantWithCallable) {
-      const hint = anyTaskHasGrant
-        ? `Some other task carries the ${ds.sourceKind} grant — move it to "${onlyLabeled.taskId}" or split the dataflow.`
-        : `No task in the draft grants ${ds.sourceKind} "${ds.sourceId}" with a concrete ${ds.sourceKind === 'api' ? 'endpoint' : 'tool'}. Add it to "${onlyLabeled.taskId}".context.capabilities.integrations[] with { sourceKind: '${ds.sourceKind}', integrationId: '${ds.sourceId}', bindingId, toolNames: [...the ${ds.sourceKind === 'api' ? 'endpoint(s)' : 'tool(s)'} the task needs] }.`;
+      const hint = operationCallerHint
+        ? `${operationCallerHint} Remove the label from "${onlyLabeled.taskId}" — no grant exists to move. Alternatively make "${onlyLabeled.taskId}" itself an api.http.call operation task whose inputTemplate names apiId "${ds.sourceId}".`
+        : grantedAgentCallers.length > 0
+          ? `Some other task carries the ${ds.sourceKind} grant — move it to "${onlyLabeled.taskId}" or split the dataflow.`
+          : `No task in the draft grants ${ds.sourceKind} "${ds.sourceId}" with a concrete ${ds.sourceKind === 'api' ? 'endpoint' : 'tool'}. Add it to "${onlyLabeled.taskId}".context.capabilities.integrations[] with { sourceKind: '${ds.sourceKind}', integrationId: '${ds.sourceId}', bindingId, toolNames: [...the ${ds.sourceKind === 'api' ? 'endpoint(s)' : 'tool(s)'} the task needs] }${directCallHint}.`;
       violations.push({
         bindAs: 'draft',
         contractName: VALIDATE_SOURCE_COVERAGE_CONTRACT,

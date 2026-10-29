@@ -144,6 +144,9 @@ export interface ExecutorContext {
   /** The coding agent the step's space prefers, for a harness run. */
   readonly preferredHarness?: string;
 
+  /** Whether the run's grant covers a harness browser, for a `host.binding.inspect` step. */
+  readonly browserGranted?: boolean;
+
   /** Step definition (if available) */
   readonly stepDefinition?: StepDefinition;
 

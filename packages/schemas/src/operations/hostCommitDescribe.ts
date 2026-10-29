@@ -49,11 +49,43 @@ export const PullRequestFindingsSchema = z
   );
 
 /**
+ * The kind of a review finding a rule adds rather than the reviewer: the
+ * review ran without a browser over a range touching the folder's UI, and
+ * says what setup would give it one (Plan 320 D21). Always `minor`, and never
+ * a defect of the change: no fix round is asked for it, it is not handed on
+ * as an open finding, and the pull request lists it as not seen in a browser.
+ */
+export const NEEDS_SETUP_FINDING_KIND = 'needs_setup';
+
+/**
  * A finding as the publication's own review returned it. Only what the pull
  * request records is read: the evidence and the suggestion stay on the
  * review's run.
  */
-const ReviewFindingSchema = PullRequestFindingSchema.omit({ state: true }).strip();
+const ReviewFindingSchema = PullRequestFindingSchema.omit({ state: true })
+  .extend({ kind: z.literal(NEEDS_SETUP_FINDING_KIND).optional() })
+  .strip();
+type ReviewFinding = z.infer<typeof ReviewFindingSchema>;
+
+/** Whether `finding` is one a rule added for missing setup, not one of the change's defects. */
+export function isNeedsSetupFinding(finding: { readonly kind?: string | undefined }): boolean {
+  return finding.kind === NEEDS_SETUP_FINDING_KIND;
+}
+
+/**
+ * The review's findings split: the change's own, which the rounds rule and
+ * the hand-on read, and the setup it ran without, which the pull request
+ * lists as not seen in a browser.
+ */
+export function splitReviewFindings(findings: readonly ReviewFinding[]): {
+  defects: ReviewFinding[];
+  needsSetup: ReviewFinding[];
+} {
+  return {
+    defects: findings.filter((finding) => !isNeedsSetupFinding(finding)),
+    needsSetup: findings.filter((finding) => isNeedsSetupFinding(finding)),
+  };
+}
 
 /** What a publication decides about its review's findings, by the rounds rule. */
 export const AFTER_REVIEW_DECISIONS = ['fix_before_merge', 'publish_as_is'] as const;
@@ -327,10 +359,13 @@ export function pullRequestReviewRecord(input: HostCommitDescribeInput): PullReq
   if (reviewFindings === null || reviewFindings === undefined) {
     return handedOn((input.findings ?? []).filter((finding) => finding.state === 'open'));
   }
+  // A setup finding is no defect of the change: nothing is handed on to fix,
+  // and the push is held to the severest of the change's own.
+  const { defects } = splitReviewFindings(reviewFindings);
   const handed = handedOn(
-    reviewFindings.map((finding) => ({ ...finding, state: 'open' as const })),
+    defects.map(({ kind: _kind, ...finding }) => ({ ...finding, state: 'open' as const })),
   );
-  const severest = handed.findings.length === 0 ? {} : { severest: severestOf(reviewFindings) };
+  const severest = handed.findings.length === 0 ? {} : { severest: severestOf(defects) };
   const decided = input.afterReview;
   if (decided === undefined) return { ...handed, ...severest };
   if (input.override === undefined || decided === 'publish_as_is') {

@@ -496,7 +496,10 @@ export const UiArtifactGenerateInputSchema = z.object({
 export type UiArtifactGenerateInput = z.infer<typeof UiArtifactGenerateInputSchema>;
 
 export const UiArtifactGenerateOutputSchema = z.object({
-  draft: UiArtifactDraftSchema,
+  draft: UiArtifactDraftSchema.describe(
+    'The generated draft. A draft is not durable — it expires at expiresAt. See this ' +
+      "operation's pitfalls for the generate → publish → render flow.",
+  ),
   validationReport: ValidationReportSchema,
   previewValidation: ValidationReportSchema.optional(),
   dataSchema: z.record(z.unknown()).optional(),
@@ -848,7 +851,7 @@ export const UiOperationRegistrations: OperationRegistration[] = [
         'Simple text responses — use ai.text.generate instead',
       ],
       pitfalls: [
-        'Generated artifacts are drafts — call ui.artifact.publish to make them durable',
+        'Generated artifacts are drafts that expire — call ui.artifact.publish({ draftId: draft.draftId }) to make one a durable published version, then ui.artifact.render({ artifactId, data }) to show it',
         'Applet drafts (applet: true) are made durable by ui.applet.instantiate instead — it publishes the draft and creates the live instance in one step',
         'Provide a dataSchema when possible to improve generation accuracy',
         'If you already have the real data for the first preview, pass it as data so generate can return preview HTML directly',

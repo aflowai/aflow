@@ -189,7 +189,7 @@ export const ComposeSkillOperationRegistrations: OperationRegistration[] = [
     name: 'Validate Source Coverage',
     actionLabel: 'Validating data-source coverage…',
     semanticDescription:
-      'Graph node — verifies that every `intent.requiredDataSources` entry has exactly one task in the draft labelling its `providesPurposeId` AND carrying a callable api/mcp grant. Emits FAILED with one ContractError per missing/duplicate/unbound producer (all blame=producer-contract, source.bindAs=draft) so a missing label routes back to draft-task-graph for rerun.',
+      'Graph node — verifies that every `intent.requiredDataSources` entry has exactly one task in the draft labelling its `providesPurposeId` AND able to call the source: an agent task carrying a callable api/mcp grant, or (api sources only) an `api.http.call` operation task whose static inputTemplate apiId or bindingId names the source — no grant needed. Emits FAILED with one ContractError per missing/duplicate/unbound producer (all blame=producer-contract, source.bindAs=draft) so a missing label routes back to draft-task-graph for rerun.',
     tags: ['skill', 'compose', 'cybernetic', 'platform-123', 'validation'],
     idempotency: 'idempotent',
     mutates: false,

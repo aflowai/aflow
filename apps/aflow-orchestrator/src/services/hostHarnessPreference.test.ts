@@ -28,6 +28,12 @@ describe("a space's preferred coding agent at dispatch", () => {
     expect(await preferredHarnessFor(db, 't', 's', 'host.harness.run')).toBe('codex');
   });
 
+  it('is read for the read of a folder that answers for the harness such a run would get', async () => {
+    rows.value = [{ preferredHarness: 'codex' }];
+    rows.fail = false;
+    expect(await preferredHarnessFor(db, 't', 's', 'host.binding.inspect')).toBe('codex');
+  });
+
   it('is never read for any other operation', async () => {
     rows.value = [{ preferredHarness: 'codex' }];
     expect(await preferredHarnessFor(db, 't', 's', 'host.process.exec')).toBeUndefined();

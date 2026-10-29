@@ -8,6 +8,7 @@ import {
   buildResumeContract,
   buildEvalTaskResultsFromRows,
   resolvePausedContractRef,
+  appendCoWriterTaskIds,
   resolveTaskPromotedState,
   storeWorkflowResumeContract,
   type WorkflowTaskRow,
@@ -452,10 +453,17 @@ export async function onWorkflowTaskComplete(
     // bag from the rows, so a miss here only delays display.
     const promotedState =
       effectiveOutcome.kind === 'succeeded' && succeededTaskDef && succeededWorkflow
-        ? await computePromotedState(deps, runId, taskRow, effectiveOutcome.outputRef, {
-            taskDef: succeededTaskDef,
-            workflow: succeededWorkflow,
-          })
+        ? await computePromotedState(
+            deps,
+            tenantIdStr,
+            runId,
+            taskRow,
+            effectiveOutcome.outputRef,
+            {
+              taskDef: succeededTaskDef,
+              workflow: succeededWorkflow,
+            },
+          )
         : undefined;
 
     await emitTaskUpdate(deps, {
@@ -571,11 +579,14 @@ export async function onWorkflowTaskComplete(
  * Resolve the just-succeeded task's `promoteOutputs` into a sanitized
  * run-level state slice for the live `WorkflowTaskUpdate`. The in-memory
  * row predates the success write, so status/outputRef are overlaid before
- * decoding. Returns `undefined` when the task promotes nothing or on any
- * decode failure (best-effort).
+ * decoding. A task writing an `append` variable also reads the succeeded
+ * rows of its fellow writers, so its slice holds the join so far. Returns
+ * `undefined` when the task promotes nothing or on any decode failure
+ * (best-effort).
  */
 async function computePromotedState(
   deps: HarnessDeps,
+  tenantId: string,
   runId: string,
   taskRow: WorkflowTaskRow,
   outputRef: string,
@@ -583,14 +594,21 @@ async function computePromotedState(
 ): Promise<Record<string, unknown> | undefined> {
   if (!def.taskDef.promoteOutputs || def.taskDef.promoteOutputs.length === 0) return undefined;
   try {
-    const decoded = await buildEvalTaskResultsFromRows(
-      [{ ...taskRow, status: 'succeeded', outputRef }],
+    const coWriterRows = await Promise.all(
+      appendCoWriterTaskIds(def.taskDef, def.workflow).map((coWriterId) =>
+        getTaskRow(deps.db, tenantId, runId, coWriterId),
+      ),
+    );
+    const [entry, ...coWriterResults] = await buildEvalTaskResultsFromRows(
+      [
+        { ...taskRow, status: 'succeeded', outputRef },
+        ...coWriterRows.filter((row): row is WorkflowTaskRow => row?.status === 'succeeded'),
+      ],
       deps.payloadStore,
       { runId },
     );
-    const entry = decoded[0];
     if (!entry) return undefined;
-    return resolveTaskPromotedState(def.taskDef, entry, def.workflow.stateVariables);
+    return resolveTaskPromotedState(def.taskDef, entry, def.workflow, coWriterResults);
   } catch {
     return undefined;
   }

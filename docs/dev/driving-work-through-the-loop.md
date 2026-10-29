@@ -93,10 +93,14 @@ its outcome as it is marked done, and no firing commissions it (`wait`, `awaitin
    tests to add. `harness` is named only to choose a coding agent other than the
    machine's default (`aflow harness default <id>`). Its two hours, and the operation's several hundred turns on an agent that
    takes a turn budget, are sized for a slice; name `timeoutMs` or `maxTurns` only to
-   change them. A slice that touches a page of the web UI also takes
-   `browser: { profile: 'ephemeral' }`, and the brief names the dev-server URL the agent
-   opens and what it should look at there — the app as it runs, never the agent's own
-   edits, which the review sees once its range is committed; any other slice leaves it out.
+   change them. The browser is never named in a brief: a slice whose brief names a file
+   under the folder's `uiPaths` by its path — or whose branch already changes one — takes
+   the browser and the folder's preview by rule where the folder declares one, and the
+   brief gains one standard paragraph sending the agent to `previewUrl`, the app as of its
+   base; its own edits are seen by the review once its range is committed. Name the UI
+   files a slice touches by path, and no dev-server URL. A UI file changed without the
+   preview, a folder with none declared, or a browser the harness or the grant cannot give
+   is named in the result's `uiNotSeen`, and holds nothing back.
    Several commissions may run at once, within the machine's limit (below).
    The checks the agent must run are named in the brief, because the folder's checks
    only run once the commission is published: `yarn test:file` on touched and added tests, `npx tsc -p` per touched
@@ -339,8 +343,7 @@ Choose on the machine with `aflow harness sandbox <folder> open|confined`; `hb_a
 none, so it takes the default, `open`. A push takes a check receipt only from checks run under the
 folder's posture as it pushes, so a commit checked before the posture changed is checked again.
 
-**How a folder is shown — declared now, used by the loop once the rest of Plan 320 P6
-lands.** A person declares, once per connected folder, how its change is seen working:
+**How a folder is shown — declared once, used by the loop by rule (Plan 320 P6).** A person declares, once per connected folder, how its change is seen working:
 `aflow folder <bindingId> preview --command … [--port …] [--ready …] [--ui …]` on the
 machine, or the folder's preview on the machine page — the command that serves it, run in
 the checkout (`yarn dev --port {port}`, or whatever that folder's project runs), the port
@@ -351,10 +354,11 @@ run asking for `preview: true` has the executor start it in a snapshot of that r
 — its commit, copied before the agent starts, so nothing the agent writes is run or shown
 at `previewUrl`, and a change is seen working in its review's preview — open it
 in that run's browser alone and stop it at the run's end (P6.b), and a run whose fixed port
-another run holds is refused — start it again once that run ends. Once the skills ask for
-it (P6.c), the loop is standardized:
+another run holds is refused — start it again once that run ends. The skills ask for
+it by rule (P6.c), so the loop is standardized:
 a commission whose brief or branch names those files, and a review whose range touches
-them, takes the ephemeral browser and the preview without being asked, the executor starts
+them, takes the ephemeral browser and the preview without being asked — neither the brief,
+the Helmsman nor a review's `focus` adds one — the executor starts
 the preview from a snapshot of that run's checkout and stops it at the run's end, and the
 agent opens it. The snapshot is the commit the run started from, so a review sees the range
 working, while a commission's preview shows its base: its own edits are seen by the review.
@@ -368,12 +372,20 @@ review's preview therefore runs the committed range as the operator. No preview 
 agent's live checkout, executing files while the agent writes them; that stays rejected, and no
 agent sees its own uncommitted edits through a preview.
 A commission's trigger is best-effort — its change does not exist until it has run — so one
-that changes those files unasked says so
-in its result; the review's, over the range, cannot miss them, and its screenshots are the
-ones the pull request links. A folder with no declaration is not skipped in silence: the
-review reports a `needs_setup` finding naming the command, the commission's result says
-the same and the pull request's body lists it; a harness that takes no browser says so the
-same way. None of these holds back a push. The same step takes any port this stack serves
+that changes those files unasked names each in its result's `uiNotSeen` and
+`uiFilesNotSeen` ("UI change not seen in a browser by the commission"); the review's, over
+the range, cannot miss them, and its screenshots are the ones the pull request links. A
+folder with no declaration is not skipped in silence: the commission's result and the
+review's say "UI change not seen in a browser: the folder declares no preview" with the
+`aflow folder <bindingId> preview` command that declares one; a harness that takes no
+browser says "browser unavailable on harness <id>", and a space whose grant lacks
+`browser.page:write` says that, each the same way — the run goes on without a browser
+rather than being refused. The review also ends its `findings` with the same line as a
+finding of its own kind, `needs_setup`, severity `minor`: the publication's rounds rule
+never takes a fix round for it and hands it on to none, a fix round started by another
+finding is briefed from the review run without it, and the pull request's body says,
+under its review, that the range is **Not seen in a browser** and why. None of these holds
+back a push. The same step takes any port this stack serves
 on off the Claude Code harness's browser ports: `aflow harness browser-ports claude <port> …`
 sets the list to the ports that stay. The one to look for is this stack's web app, `3001`
 by default, serving `main`: a coding agent sent there looks at the wrong code, so such a

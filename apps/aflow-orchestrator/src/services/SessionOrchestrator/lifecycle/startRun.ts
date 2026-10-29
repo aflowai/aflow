@@ -6,6 +6,7 @@ import {
   type AflowError,
   errorContext,
   processFlowInput,
+  PLAN_RESIDENT_SCHEDULE_VARIABLE,
 } from '@aflow/schemas';
 import {
   type SessionHotState,
@@ -406,6 +407,14 @@ export function createStartRun(bindings: SessionOrchestratorBindings) {
       ...(startUserMessage ? { lastMessageSeq: 1, lastActivityAt: now } : {}),
       ...(params.spaceId ? { spaceId: params.spaceId } : {}),
       ...(params.trigger ? { trigger: params.trigger } : {}),
+      ...(params.trigger === 'schedule' && parsedInput !== undefined
+        ? {
+            planResident:
+              typeof (parsedInput['config'] as Record<string, unknown> | undefined)?.[
+                PLAN_RESIDENT_SCHEDULE_VARIABLE
+              ] === 'string',
+          }
+        : {}),
       activatedByPerson: params.activatedByPerson,
       ...(params.voiceMode ? { voiceMode: true } : {}),
       ...(params.actorContext ? { actorContextJson: JSON.stringify(params.actorContext) } : {}),

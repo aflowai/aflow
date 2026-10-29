@@ -1,7 +1,7 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import Redis from 'ioredis-mock';
 import type { Redis as RedisType } from 'ioredis';
-import { PlanNodeNextInputSchema } from '@aflow/schemas';
+import { PLAN_NODE_PROSE_MAX_CHARS, PlanNodeNextInputSchema } from '@aflow/schemas';
 import { InMemoryPlanNodeStore } from '../../../../../cybernetic-runtime/src/__tests__/planStoreFake.js';
 
 let store: InMemoryPlanNodeStore;
@@ -194,4 +194,7 @@ it('summarizes the wait line below an operator note', async () => {
   ).toBe('Waiting on you: approve scope');
   expect(item.origin.type).toBe('plan_ask');
   redis.disconnect();
+  expect(planAskItem({ ...node, note: 'x'.repeat(PLAN_NODE_PROSE_MAX_CHARS) }).summary).toContain(
+    'Waiting on you:',
+  );
 });

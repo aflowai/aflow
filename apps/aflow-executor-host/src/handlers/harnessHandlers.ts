@@ -34,6 +34,7 @@ import {
 import {
   buildOperationId,
   HOST_HARNESS_MAX_TURNS_DEFAULT,
+  HOST_HARNESS_PREVIEW_IF_AVAILABLE,
   HostHarnessRunInputSchema,
   MAX_INLINE_PAYLOAD_BYTES,
   resolveFolderPreview,
@@ -41,6 +42,7 @@ import {
   type HarnessActivityLine,
   type HostResolvedFolderPreview,
   type PayloadRef,
+  WRITING_STYLE_RULES,
 } from '@aflow/schemas';
 
 import {
@@ -85,7 +87,6 @@ import {
   refusedRequiredHosts,
 } from '../egressRefusals.js';
 import {
-  assertTakesMcpConfig,
   buildHarnessArgv,
   buildSessionArgs,
   HarnessProfileError,
@@ -150,6 +151,7 @@ import {
   type StartedPreview,
 } from '../previewSupervisor.js';
 import { browserFailure, jobScopeOf } from './browserHandler.js';
+import { browserRefusal, previewRefusal, previewUnavailableLine } from './harnessPreview.js';
 
 /**
  * Where a task that declared an output schema leaves its answer. It is inside
@@ -320,13 +322,21 @@ export function composeHarnessTask(
     .join('\n\n');
 }
 
-/** What the task tells the harness about where its answer goes and what shape it takes. */
-export function resultInstruction(schema: Record<string, unknown>): string {
+/**
+ * What the task tells the harness about the prose it writes, and, when the task
+ * expects a result, where that result goes and what shape it takes.
+ */
+export function resultInstruction(schema?: Record<string, unknown>): string {
+  const resultFile =
+    schema === undefined
+      ? ''
+      : `\n\nWrite your final result as JSON to \`${RESULT_RELATIVE_PATH}\`, relative to the root ` +
+        `of this checkout, matching this JSON Schema:\n${JSON.stringify(schema)}\n` +
+        'Write that file even when you changed nothing else — it is the only thing read as the ' +
+        'result, and console output is not.';
   return (
-    `\n\nWrite your final result as JSON to \`${RESULT_RELATIVE_PATH}\`, relative to the root ` +
-    `of this checkout, matching this JSON Schema:\n${JSON.stringify(schema)}\n` +
-    'Write that file even when you changed nothing else — it is the only thing read as the ' +
-    'result, and console output is not.'
+    `${resultFile}\n\nWrite the prose in your result summary, and in the commit message that ` +
+    `lands in the pull request body, to these rules:\n${WRITING_STYLE_RULES}`
   );
 }
 
@@ -650,55 +660,40 @@ async function runHarness(
       policy.defaultHarness,
     );
     const profile = selection.profile;
+    // A preview a skill's rule asked for is best-effort end to end (Plan 320
+    // D21): what cannot be had is said in `previewUnavailable`, and the run goes
+    // on without the preview and the browser it was for. `true` is refused.
+    const bestEffort = input.preview === HOST_HARNESS_PREVIEW_IF_AVAILABLE;
+    let previewUnavailable: string | undefined;
     if (input.browser !== undefined) {
-      assertTakesMcpConfig(profile);
-      if (browserService === undefined) {
-        return await failureWithError(
-          ctx,
-          validationError(
-            'This executor serves no browser, so the run cannot be given one. Send the task ' +
-              'without `browser`.',
-          ),
-        );
-      }
+      const refusal = browserRefusal(profile, browserService !== undefined);
+      if (refusal !== undefined && bestEffort) previewUnavailable = refusal;
+      else if (refusal !== undefined) return await failureWithError(ctx, validationError(refusal));
     }
     let declaredPreview: HostResolvedFolderPreview | undefined;
-    if (input.preview === true) {
-      if (browserService === undefined) {
-        return await failureWithError(
-          ctx,
-          validationError(
-            'This executor serves no browser, so the run cannot be shown its preview. Send the ' +
-              'task without `preview` and `browser`.',
-          ),
-        );
-      }
-      if (binding.preview === undefined) {
-        return await failureWithError(
-          ctx,
-          validationError(
-            `\`${binding.id}\` declares no preview, so there is none to start. A person declares ` +
-              `one on the machine — \`aflow folder ${binding.id} preview --command "…"\` — or on ` +
-              'the machine page; until then send the task without `preview`.',
-          ),
-        );
-      }
-      declaredPreview = resolveFolderPreview(binding.preview);
+    if (input.preview === true || (bestEffort && previewUnavailable === undefined)) {
+      const refusal = previewRefusal(binding, browserService !== undefined);
+      if (refusal !== undefined && bestEffort) previewUnavailable = refusal;
+      else if (refusal !== undefined) return await failureWithError(ctx, validationError(refusal));
+      else if (binding.preview !== undefined)
+        declaredPreview = resolveFolderPreview(binding.preview);
     }
     const readiness = sandboxReadiness();
     if (!readiness.ready) {
       return await failureWithError(ctx, permissionError(noSandboxMessage(readiness.missing)));
     }
     // Claimed before any checkout is touched, so a fixed port another run's
-    // preview holds, or anything else listens on, refuses the run at once.
+    // preview holds, or anything else listens on, refuses the run at once —
+    // or, asked for `'if_available'`, leaves it without one.
     // Released in the teardown below, however the run ends.
     if (declaredPreview !== undefined) {
-      previewClaim = await claimPreviewPort(declaredPreview, {
-        runId: ctx.runId,
-        bindingId: binding.id,
-        tenantId: ctx.tenantId,
-        spaceId,
-      });
+      const holder = { runId: ctx.runId, bindingId: binding.id, tenantId: ctx.tenantId, spaceId };
+      try {
+        previewClaim = await claimPreviewPort(declaredPreview, holder);
+      } catch (error) {
+        if (!bestEffort || !(error instanceof PreviewError)) throw error;
+        previewUnavailable = previewUnavailableLine(error);
+      }
     }
 
     // An abandoned session holds a checkout on disk, so expiry is collected
@@ -912,29 +907,44 @@ async function runHarness(
     if (declaredPreview !== undefined && previewClaim !== undefined) {
       const snapshot = await snapshotCheckout(binding.root, worktree, scratchDir, 'preview-tree');
       previewSnapshotPath = snapshot.path;
-      preview = await startPreview({
-        preview: declaredPreview,
-        port: previewClaim.port,
-        cwd: snapshot.workDir,
-        scratchDir: join(scratchDir, 'preview'),
-        bindingId: binding.id,
-        ownerRunId: ctx.runId,
-        secrets,
-        signal: ctx.signal,
-        onProgress: () => ctx.reportProgress?.(),
-      });
-      onActivity({
-        kind: 'status',
-        at: Date.now() - startedAt,
-        text: `The preview answers at ${preview.previewUrl}.`,
-      });
+      try {
+        preview = await startPreview({
+          preview: declaredPreview,
+          port: previewClaim.port,
+          cwd: snapshot.workDir,
+          scratchDir: join(scratchDir, 'preview'),
+          bindingId: binding.id,
+          ownerRunId: ctx.runId,
+          secrets,
+          signal: ctx.signal,
+          onProgress: () => ctx.reportProgress?.(),
+        });
+      } catch (error) {
+        // A stopped run is stopped, whichever preview it asked for.
+        if (!bestEffort || !(error instanceof PreviewError) || ctx.signal.aborted) throw error;
+        previewUnavailable = previewUnavailableLine(error);
+        previewClaim.release();
+        if (error.log !== undefined) {
+          previewLog = await ctx.writePayload('preview_log', error.log).catch(() => undefined);
+        }
+      }
+      if (preview !== undefined) {
+        const text = `The preview answers at ${preview.previewUrl}.`;
+        onActivity({ kind: 'status', at: Date.now() - startedAt, text });
+      }
     }
-    if (input.browser !== undefined && browserService !== undefined) {
+    if (previewUnavailable !== undefined) {
+      const text = `The run goes on without its preview and browser: ${scrubSecrets(previewUnavailable, secrets)}`;
+      onActivity({ kind: 'status', at: Date.now() - startedAt, text });
+    }
+    // The browser a best-effort preview was for goes with it.
+    const browserAsked = previewUnavailable === undefined ? input.browser : undefined;
+    if (browserAsked !== undefined && browserService !== undefined) {
       const tenantId = ctx.tenantId;
       browser = await openHarnessBrowser({
         driver: browserService.driver,
         scope: { ...jobScopeOf(ctx), spaceId },
-        profile: input.browser.profile,
+        profile: browserAsked.profile,
         // A run with a preview reaches its own preview's port and no other:
         // a harness's declared ports could show another checkout.
         reach: {
@@ -1097,7 +1107,11 @@ async function runHarness(
     // In the inputs, so a result retry and a continued turn carry it too.
     const brief = composeHarnessTask(
       input.task,
-      preview !== undefined ? { ...input.inputs, previewUrl: preview.previewUrl } : input.inputs,
+      preview !== undefined
+        ? { ...input.inputs, previewUrl: preview.previewUrl }
+        : previewUnavailable !== undefined
+          ? { ...input.inputs, previewUnavailable: scrubSecrets(previewUnavailable, secrets) }
+          : input.inputs,
       await repositoryRulesFiles(worktree),
       keptCheckout ? undefined : merge,
     );
@@ -1105,7 +1119,7 @@ async function runHarness(
     let result: SandboxedRunResult;
     let check: HarnessResultCheck | undefined;
     if (expected === undefined) {
-      result = await runTurn(task, resuming, conversationId);
+      result = await runTurn(task + resultInstruction(), resuming, conversationId);
     } else {
       const { schema, validate } = expected;
       const resultPath = join(worktree.workDir, RESULT_RELATIVE_PATH);
@@ -1282,6 +1296,9 @@ async function runHarness(
       ...(browserLog !== undefined ? { browserLog } : {}),
       ...(previewLog !== undefined ? { previewLog } : {}),
       ...(preview !== undefined ? { previewUrl: preview.previewUrl } : {}),
+      ...(previewUnavailable !== undefined
+        ? { previewUnavailable: scrubSecrets(previewUnavailable, secrets) }
+        : {}),
       stderr: scrubbed.text,
       truncated: result.truncated,
       blockedDomains: [...new Set(scrubbed.refusals.map((r) => r.host))],

@@ -54,6 +54,42 @@ describe('resolvePromotedRunMetrics (§3.1)', () => {
     ]);
     expect(Object.keys(out)).toHaveLength(0);
   });
+
+  it('joins every writer of an `append` variable in task-list order, and keeps the last for any other', () => {
+    const tasks = [
+      task('review', [
+        { kind: 'output_path', path: 'findings', toState: 'findings' },
+        { kind: 'output_path', path: 'verdict', toState: 'verdict' },
+      ]),
+      task('report', [
+        { kind: 'output_path', path: 'finding', toState: 'findings' },
+        { kind: 'output_path', path: 'verdict', toState: 'verdict' },
+      ]),
+      task('skipped', [{ kind: 'output_path', path: 'finding', toState: 'findings' }]),
+    ];
+    const results: PromotionTaskResult[] = [
+      { taskId: 'report', status: 'succeeded', output: { finding: { id: 'c' }, verdict: 'b' } },
+      {
+        taskId: 'review',
+        status: 'succeeded',
+        output: { findings: [{ id: 'a' }, { id: 'b' }], verdict: 'a' },
+      },
+      { taskId: 'skipped', status: 'skipped', output: { finding: { id: 'd' } } },
+    ];
+    const vars = [
+      { variableId: 'findings', writers: 'append' },
+      { variableId: 'verdict', writers: 'alternatives' },
+    ] as unknown as Parameters<typeof resolvePromotedRunMetrics>[2];
+    const out = resolvePromotedRunMetrics(tasks, results, vars);
+    expect(out['findings']).toEqual([{ id: 'a' }, { id: 'b' }, { id: 'c' }]);
+    expect(out['verdict']).toBe('b');
+    // Undeclared, the same promotions keep the last value written, as before.
+    expect(resolvePromotedRunMetrics(tasks, results)['findings']).toEqual({ id: 'c' });
+    // One writer alone holds what it wrote, an array's items or a value as one.
+    expect(resolvePromotedRunMetrics([tasks[1]!], results, vars)['findings']).toEqual([
+      { id: 'c' },
+    ]);
+  });
 });
 
 describe('derivePrimaryScore (§3.3)', () => {

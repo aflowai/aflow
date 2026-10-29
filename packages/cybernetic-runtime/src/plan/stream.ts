@@ -17,6 +17,7 @@ import {
   isClosedPlanNodeStatus,
   OPEN_PLAN_NODE_STATUSES,
   PLAN_NODE_PROSE_MAX_CHARS,
+  PLAN_NODE_CHILDREN_LIMIT,
   PLAN_NODE_PROPOSED_HEAD,
   PLAN_NODE_RUNS_LIMIT,
   PLAN_STREAM_COMMISSION_SLUG,
@@ -797,10 +798,13 @@ async function decideRoot(
   // Every status: a run serving a node closed under the active one is still in
   // flight. Where the walk's bounds cut it short, the runs below are unread, and
   // the decision is told so rather than shown fewer runs.
-  const subtree = await ctx.store.walk(ctx.spaceId, {
-    rootId: active.nodeId,
-    ...PLAN_TREE_WALK_BOUNDS,
-  });
+  const subtree: { nodes: PlanNodeSummary[]; truncated?: PlanNodeListTruncation } =
+    active.nodeId === root.nodeId && opened.childrenTotal > 0 && !open.truncated
+      ? { nodes: [active, ...(await readRootHistory(ctx, root.nodeId))] }
+      : await ctx.store.walk(ctx.spaceId, {
+          rootId: active.nodeId,
+          ...PLAN_TREE_WALK_BOUNDS,
+        });
   const servedNodeIds = subtree.nodes.map((n) => n.nodeId);
   const [rounds, inFlight, pausedItems, spend] = await Promise.all([
     ctx.reads.roundsOf(ctx.spaceId, active.nodeId, PLAN_STREAM_ROUNDS_LIMIT),
@@ -929,6 +933,28 @@ export function boardRank(answer: PlanStreamAnswer): number {
   }
 }
 
+async function readRootHistory(ctx: PlanStreamContext, rootId: string): Promise<PlanNodeSummary[]> {
+  const nodes: PlanNodeSummary[] = [];
+  const pending = [rootId];
+  while (pending.length > 0) {
+    const parentId = pending.pop()!;
+    let offset = 0;
+    for (;;) {
+      const page = await ctx.store.listChildren(
+        ctx.spaceId,
+        parentId,
+        PLAN_NODE_CHILDREN_LIMIT,
+        offset,
+      );
+      nodes.push(...page.children);
+      pending.push(...page.children.map((node) => node.nodeId));
+      offset += page.children.length;
+      if (offset >= page.total || page.children.length === 0) break;
+    }
+  }
+  return nodes;
+}
+
 /**
  * The whole board (Plan 331 D2): every open root in position order — the
  * operator's priority — decided as one stream is. The decisions that are not
@@ -993,15 +1019,16 @@ export async function nextOnPlanBoard(
   }
 
   let proposal: PlanBoardNext['propose'];
-  if (candidates.length === 0 && !open.truncated && roots[0]) {
+  if (
+    candidates.every((candidate) => candidate.answer.decision === 'ask') &&
+    !open.truncated &&
+    roots[0]
+  ) {
     for (const candidate of roots) {
       if (!exhaustedRoots.has(candidate.nodeId)) continue;
       const root = await ctx.store.find(ctx.spaceId, candidate.nodeId);
-      const history = await ctx.store.walk(ctx.spaceId, {
-        ...PLAN_TREE_WALK_BOUNDS,
-        rootId: candidate.nodeId,
-      });
-      const declined = history.nodes.some(
+      const history = await readRootHistory(ctx, candidate.nodeId);
+      const declined = history.some(
         (node) =>
           node.status === 'dropped' &&
           node.noteHead?.startsWith(PLAN_NODE_PROPOSED_HEAD) &&
@@ -1009,8 +1036,7 @@ export async function nextOnPlanBoard(
       );
       if (
         root?.status !== 'active' ||
-        history.truncated ||
-        history.nodes.some((node) => node.status === 'blocked' || node.status === 'waiting') ||
+        history.some((node) => node.status === 'blocked' || node.status === 'waiting') ||
         declined
       )
         continue;

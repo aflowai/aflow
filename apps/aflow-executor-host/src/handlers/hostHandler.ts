@@ -28,7 +28,7 @@ export function createHostHandler(
   const harnesses = createHostHarnessHandler(policyPath, browser);
   const patches = createHostPatchHandler(policyPath);
   const mcpServers = createHostMcpHandler(policyPath);
-  const bindings = createHostBindingHandler(policyPath);
+  const bindings = createHostBindingHandler(policyPath, { servesBrowser: browser !== undefined });
   const commits = createHostCommitHandler(policyPath);
   const checks = createHostCommitCheckHandler(policyPath);
 

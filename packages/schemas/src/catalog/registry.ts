@@ -166,6 +166,7 @@ function buildRegistry(): Map<string, OperationDescriptor> {
       ...(reg.privileged ? { privileged: true } : {}),
       mutates: reg.mutates ?? false,
       ...(reg.skipInputValidation ? { skipInputValidation: true } : {}),
+      ...(reg.inputAsSent ? { inputAsSent: true } : {}),
       ...(reg.bypassGrant ? { bypassGrant: true } : {}),
       ...(reg.outputSemanticType != null ? { outputSemanticType: reg.outputSemanticType } : {}),
       ...(reg.imageOutputPaths != null ? { imageOutputPaths: reg.imageOutputPaths } : {}),

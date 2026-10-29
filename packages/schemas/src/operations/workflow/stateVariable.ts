@@ -34,13 +34,16 @@ export const WorkflowStateVariableSchema = z.object({
   /** Whether this variable is read-only after initial set. */
   immutable: z.boolean().default(false),
   writers: z
-    .enum(['single', 'alternatives'])
+    .enum(['single', 'alternatives', 'append'])
     .optional()
     .describe(
       "Absent or 'single': one task promotes into it. 'alternatives': several tasks do, on " +
         'branches of which a run takes one — a task that finds the thing and one that makes it ' +
         'where nothing was found — so whichever ran is what the variable holds. Where two of ' +
-        'them write, the later in the task list wins.',
+        "them write, the later in the task list wins. 'append': several tasks add to one list " +
+        "— a review's own findings and one a rule adds beside them — so the variable holds " +
+        'every value they wrote, in task-list order: the items of an array, any other value ' +
+        'as one item.',
     ),
 });
 export type WorkflowStateVariable = z.infer<typeof WorkflowStateVariableSchema>;

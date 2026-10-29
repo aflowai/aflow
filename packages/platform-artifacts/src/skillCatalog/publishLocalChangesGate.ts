@@ -79,7 +79,7 @@ export const PUSH_GATE_RULES: readonly WorkflowRunDecideRule[] = [
     when: { expression: "state.afterReview == 'fix_before_merge'" },
     decision: 'keep_local',
     reason:
-      "The decision on the review's findings is `fix_before_merge`: nothing is pushed, and the branch stays on the machine for the fix round, briefed from the review run. The run's `fixRound` names the branch, its head, whether `origin`'s base moved past it, the review run and the findings, and the Commission Change inputs the round starts from: `base` the branch's name, never `origin/main`, which does not hold it — and `mergeFrom: origin/<base>` where the base moved.",
+      "The decision on the review's findings is `fix_before_merge`: nothing is pushed, and the branch stays on the machine for the fix round, briefed from the review run's findings less any of kind `needs_setup`, setup on the machine that no fix on the branch settles. The run's `fixRound` names the branch, its head, whether `origin`'s base moved past it, the review run and the findings, and the Commission Change inputs the round starts from: `base` the branch's name, never `origin/main`, which does not hold it — and `mergeFrom: origin/<base>` where the base moved.",
   },
   {
     when: { expression: "state.overrideBy == 'operator'" },

@@ -27,13 +27,17 @@ import { emitPlanError, parsePlanInput, planReadContext } from './shared.js';
 
 async function planWriteContext(args: InlineHandlerArgs): Promise<PlanWriteContext> {
   const read = planReadContext(args);
-  const state = await getSessionState(args.redis, args.context.tenantId, args.context.runId);
+  const state = await getSessionState(args.redis, args.context.tenantId, args.context.runId).catch(
+    () => null,
+  );
   return {
     ...read,
     redis: args.redis,
     tenantId: args.context.tenantId as string,
     actorKind: 'agent',
-    resident: !isPersonTrigger(state?.trigger),
+    resident:
+      !isPersonTrigger(state?.trigger) &&
+      (state?.trigger !== 'schedule' || state.planResident !== false),
   };
 }
 
@@ -70,6 +74,7 @@ export async function handlePlanNodeUpdate(
   const output: PlanNodeUpdateOutput = {
     node: result.node,
     ...(result.carrier ? { carrier: result.carrier } : {}),
+    ...(result.carrierFailure ? { carrierFailure: result.carrierFailure } : {}),
   };
   await emitStepSuccess(args, output as unknown as Record<string, unknown>, startTime);
 }

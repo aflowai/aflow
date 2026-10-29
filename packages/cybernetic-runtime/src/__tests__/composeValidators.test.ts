@@ -314,6 +314,102 @@ describe('validateSourceCoverage', () => {
     expect(result.violations[0]!.path).toEqual(['tasks', 0, 'context', 'capabilities']);
     expect(result.violations[0]!.message).toMatch(/does not grant the required api/);
   });
+
+  function directCallTask(inputTemplate: Record<string, unknown>): unknown {
+    return {
+      type: 'operation',
+      taskId: 'call',
+      operationId: 'api.http.call',
+      inputBindings: { a: 1, b: 2 },
+      inputTemplate,
+      dependsOn: [],
+      consumes: [],
+      produces: [{ key: 'd', semantics: 'data', providesPurposeId: 'kaggle-data' }],
+    };
+  }
+  const kaggleIntent = (): ComposeIntent =>
+    basicIntent({
+      requiredDataSources: [{ purposeId: 'kaggle-data', sourceKind: 'api', sourceId: 'kaggle' }],
+    });
+
+  it('credits an api.http.call operation task whose inputTemplate names the apiId', () => {
+    const draft = basicDraft([
+      directCallTask({
+        apiId: 'kaggle',
+        bindingId: 'b1',
+        url: 'https://example.test/x',
+        method: 'POST',
+        body: { a: { $bind: 'a' }, b: { $bind: 'b' } },
+      }),
+    ]);
+    expect(validateSourceCoverage(kaggleIntent(), draft)).toEqual({ valid: true });
+  });
+
+  it('credits an api.http.call operation task whose inputTemplate names the bindingId', () => {
+    const intent = basicIntent({
+      requiredDataSources: [{ purposeId: 'kaggle-data', sourceKind: 'api', sourceId: 'b1' }],
+    });
+    const draft = basicDraft([
+      directCallTask({ apiId: 'other', bindingId: 'b1', url: 'https://example.test/x' }),
+    ]);
+    expect(validateSourceCoverage(intent, draft)).toEqual({ valid: true });
+  });
+
+  it('flags an operation task whose api ref does not name the source; path is its inputTemplate', () => {
+    const draft = basicDraft([
+      directCallTask({ apiId: 'other', bindingId: 'b9', url: 'https://example.test/x' }),
+    ]);
+    const result = validateSourceCoverage(kaggleIntent(), draft);
+    expect(result.valid).toBe(false);
+    if (result.valid) return;
+    expect(result.violations[0]!.path).toEqual(['tasks', 0, 'inputTemplate']);
+    expect(result.violations[0]!.message).toMatch(/does not call api "kaggle"/);
+  });
+
+  it('flags an operation task with no static api ref', () => {
+    const draft = basicDraft([directCallTask({ apiId: { $bind: 'a' }, url: 'https://x.test' })]);
+    const result = validateSourceCoverage(kaggleIntent(), draft);
+    expect(result.valid).toBe(false);
+    if (result.valid) return;
+    expect(result.violations).toHaveLength(1);
+    expect(result.violations[0]!.contractName).toBe(VALIDATE_SOURCE_COVERAGE_CONTRACT);
+    expect(result.violations[0]!.path).toEqual(['tasks', 0, 'inputTemplate']);
+    expect(result.violations[0]!.message).toMatch(/does not call api "kaggle"/);
+  });
+
+  function labelledAgentWithoutGrant(): unknown {
+    return fetcherTask('agent', {
+      produces: [{ key: 'd', semantics: 'data', providesPurposeId: 'kaggle-data' }],
+    });
+  }
+  function unlabelledDirectCall(): unknown {
+    return {
+      ...(directCallTask({ apiId: 'kaggle', bindingId: 'b1', url: 'https://x.test' }) as object),
+      produces: [{ key: 'raw', semantics: 'data' }],
+    };
+  }
+
+  it('points an agent label at the operation task that calls the api, not at a grant move', () => {
+    const draft = basicDraft([labelledAgentWithoutGrant(), unlabelledDirectCall()]);
+    const result = validateSourceCoverage(kaggleIntent(), draft);
+    expect(result.valid).toBe(false);
+    if (result.valid) return;
+    const message = result.violations[0]!.message;
+    expect(message).toMatch(/Operation task "call" already calls api "kaggle" via api\.http\.call/);
+    expect(message).toMatch(/providesPurposeId: "kaggle-data" to ITS produces\[\]/);
+    expect(message).not.toMatch(/move it to/);
+  });
+
+  it('names the unlabelled operation caller as the producer when nothing labels the purpose', () => {
+    const draft = basicDraft([unlabelledDirectCall()]);
+    const result = validateSourceCoverage(kaggleIntent(), draft);
+    expect(result.valid).toBe(false);
+    if (result.valid) return;
+    const message = result.violations[0]!.message;
+    expect(message).toMatch(/has no producer/);
+    expect(message).toMatch(/Operation task "call" already calls api "kaggle"/);
+    expect(message).not.toMatch(/carries the api "kaggle" grant/);
+  });
 });
 
 // ============================================================================

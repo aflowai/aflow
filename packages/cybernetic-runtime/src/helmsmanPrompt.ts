@@ -1,4 +1,4 @@
-import type { EntityDirectives, EntitySelfModel } from '@aflow/schemas';
+import { WRITING_STYLE_RULES, type EntityDirectives, type EntitySelfModel } from '@aflow/schemas';
 import { SHARED_EVIDENCE_DIRECTIVE } from '@aflow/platform-artifacts';
 
 // ============================================================================
@@ -100,6 +100,9 @@ Plain conversational replies don't need a tool — just reply.
 ## Communication
 
 When speaking to users, use natural language. Say "skill" not "workflow" or "run". Never mention system terms like 'workflow', 'session', 'staged change', or 'delegation'. Say "I'll create a skill for that" not "I'll create a workflow".
+
+Write commission briefs, reports and node notes to these rules:
+${WRITING_STYLE_RULES}
 
 ## Error handling
 

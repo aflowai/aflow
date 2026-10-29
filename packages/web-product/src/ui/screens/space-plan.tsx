@@ -2,14 +2,19 @@
 
 /**
  * The space's plan (Plan 322 P3.3, Plan 332): the plans as a list, each with
- * its state (D2, D3), and the chosen plan's board — its header, five columns
- * saying what the loop is doing with each step (D4), a card per step carrying
- * labels only, and a side rail that reads a step on demand and holds the
- * operator's own controls — mark done, decide, drop (P3.2), approve and reopen
- * (D6) — with Move up and Move down on Up next cards and on open plans. Where
- * the operator is lives in the URL, `?plan=<rootId>&node=<nodeId>` (D8), so a
- * reload, back and a link land on the same board and rail. The rows and the
- * board are read again on every plan write and run change (D9).
+ * its state (D2, D3), beside the overview — the Needs you, In flight and Up
+ * next lanes across every open plan (D1, D7), where the page lands — or the
+ * chosen plan's board — its header, five columns saying what the loop is
+ * doing with each step (D4), a card per step carrying labels only. One side
+ * rail serves both: it reads a step on demand and holds the operator's own
+ * controls — mark done, decide, drop (P3.2), approve and reopen (D6). Move up
+ * and Move down sit on Up next cards and on open plans, Approve on a blocked
+ * lane row too. Where the operator is lives in the URL,
+ * `?plan=<rootId>&node=<nodeId>` (D8): no plan is the overview, so a reload,
+ * back and a link land on the same view and rail. The overview and the board
+ * are read again on every plan write and run change (D9). The list and the
+ * rail each stand on a raised panel of their own beside the content, never
+ * behind a rule (Plan 332 P6).
  */
 import { useEffect, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
@@ -20,10 +25,11 @@ import {
   Dialog,
   Heading,
   PageContainer,
+  Panel,
   Row,
+  ScrollArea,
   Text,
   useMediaQuery,
-  type BadgeVariant,
 } from '@aflow/design-system';
 import type {
   PlanBoardColumn,
@@ -38,7 +44,9 @@ import { spacePlanKey, usePlanLiveRefresh } from '../hooks/use-plan-live-refresh
 import { PlanBoard, type PlanNodePlaceRequest } from '../components/plan/PlanBoard.js';
 import { PLAN_STATE_BADGE, PlanList, PlanRootCloseControl } from '../components/plan/PlanList.js';
 import type { PlanNodeOpenRequest } from '../components/plan/PlanNodeOpenControl.js';
-import { PlanRail, RAIL_WIDTH } from '../components/plan/PlanRail.js';
+import { PlanOverview } from '../components/plan/PlanOverview.js';
+import { PlanRail, PlanRailFromDetail, RAIL_WIDTH } from '../components/plan/PlanRail.js';
+import { HeadingDot, ProgressMeter } from '../components/plan/PlanParts.js';
 import type {
   PlanNodeCloseAnswer,
   PlanNodeCloseRequest,
@@ -51,9 +59,11 @@ import {
   planClosedAncestor,
   planDoneGroups,
   planHeader,
-  planLandingRoot,
+  planLaneOf,
+  planLaneRailNode,
   planPhases,
   planViewQuery,
+  PLAN_BOARD_COLUMNS,
   readerTimeZone,
   showsPhaseFilter,
   startOfDay,
@@ -84,13 +94,9 @@ function TruncationLine({ truncated }: { truncated: PlanNodeListTruncation | und
   );
 }
 
-const HEADER_BADGE: Record<PlanBoardColumn, BadgeVariant> = {
-  needs_you: 'warning',
-  in_flight: 'running',
-  up_next: 'accent',
-  done: 'success',
-  dropped: 'danger',
-};
+const COLUMN_COLOR = new Map<PlanBoardColumn, string>(
+  PLAN_BOARD_COLUMNS.map((column) => [column.id, column.color]),
+);
 
 function Segmented<T extends string>({
   label,
@@ -153,13 +159,12 @@ export function SpacePlanPage(): React.ReactNode {
   });
   const rows = rowsQuery.data;
   // The plan the URL names, read at once; once the rows answer, a root the
-  // space does not hold gives way to the first open plan.
+  // space does not hold gives way to the overview, as no plan does.
   const rootId =
-    rows === undefined
+    planParam !== undefined &&
+    (rows === undefined || rows.roots.some((r) => r.nodeId === planParam))
       ? planParam
-      : rows.roots.some((r) => r.nodeId === planParam)
-        ? planParam
-        : planLandingRoot(rows.roots)?.nodeId;
+      : undefined;
 
   const [view, setView] = useState<BoardView>({
     rootId,
@@ -286,7 +291,7 @@ export function SpacePlanPage(): React.ReactNode {
       <Text tone="danger">{`The plan could not be read: ${rowsQuery.error?.message ?? 'no answer'}`}</Text>,
     );
   }
-  if (rows.roots.length === 0 || rootId === undefined) {
+  if (rows.roots.length === 0) {
     return page(<Text variant="muted">No plan yet</Text>);
   }
 
@@ -298,6 +303,10 @@ export function SpacePlanPage(): React.ReactNode {
         setChoosing(null);
         navigate({ plan: chosen, node: undefined });
       }}
+      onOverview={() => {
+        setChoosing(null);
+        navigate({ plan: undefined, node: undefined });
+      }}
       onPlace={onPlace}
       onClose={onClose}
       spaceId={spaceId}
@@ -305,7 +314,94 @@ export function SpacePlanPage(): React.ReactNode {
     />
   );
 
+  /** The main view with the rail beside it, or below 900px over it as a dialog. */
+  const withRail = (main: React.ReactNode, rail: React.ReactNode, dismiss: () => void) => (
+    <>
+      <Row gap="md" align="start">
+        <div style={{ flex: 1, minWidth: 0 }}>{main}</div>
+        {rail !== null && !narrow && (
+          <aside
+            aria-label="Step"
+            style={{
+              width: RAIL_WIDTH,
+              flexShrink: 0,
+              position: 'sticky',
+              top: 0,
+            }}
+          >
+            <Panel variant="subtle" padding="md">
+              <ScrollArea style={{ maxHeight: 'calc(100vh - var(--space-10))' }}>{rail}</ScrollArea>
+            </Panel>
+          </aside>
+        )}
+      </Row>
+      {narrow && (
+        <Dialog open={rail !== null} onClose={dismiss}>
+          {rail}
+        </Dialog>
+      )}
+    </>
+  );
+
+  const overview = () => {
+    const shown = planLaneOf(rows.lanes, nodeParam);
+    const formOpen = choosing !== null && choosing.nodeId === nodeParam ? choosing.choosing : null;
+    const openRow = (nodeId: string, form: 'done' | null) => {
+      setChoosing({ nodeId, choosing: form });
+      navigate({ plan: undefined, node: nodeId });
+    };
+    const dismiss = () => {
+      setChoosing(null);
+      navigate({ plan: undefined, node: undefined });
+    };
+    const railControls = {
+      spaceId,
+      spaceSlug,
+      onClose,
+      onOpen,
+      choosing: formOpen,
+      onChoose: (form: 'done' | 'dropped' | null) => {
+        if (nodeParam !== undefined) setChoosing({ nodeId: nodeParam, choosing: form });
+      },
+      onDismiss: dismiss,
+    };
+    const rail =
+      nodeParam === undefined ? null : shown !== undefined ? (
+        <PlanRail
+          key={shown.item.nodeId}
+          node={planLaneRailNode(shown.item)}
+          column={shown.lane}
+          reason={shown.item.reason}
+          next={shown.lane === 'up_next'}
+          phase={shown.item.phaseTitle !== undefined ? { title: shown.item.phaseTitle } : undefined}
+          closedAncestor={shown.item.closedAncestor}
+          {...railControls}
+        />
+      ) : (
+        // A step no lane holds — a closed one, or one a link names — read on its own.
+        <PlanRailFromDetail key={nodeParam} nodeId={nodeParam} {...railControls} />
+      );
+    return withRail(
+      <PlanOverview
+        lanes={rows.lanes}
+        selectedId={nodeParam}
+        now={new Date()}
+        spaceSlug={spaceSlug}
+        onSelect={(item) => {
+          openRow(item.nodeId, null);
+        }}
+        onDecide={(item) => {
+          openRow(item.nodeId, 'done');
+        }}
+        onOpen={onOpen}
+      />,
+      rail,
+      dismiss,
+    );
+  };
+
   const content = (() => {
+    if (rootId === undefined) return overview();
     if (board === undefined) {
       return boardQuery.error ? (
         <Text tone="danger">{`This plan could not be read: ${boardQuery.error.message}`}</Text>
@@ -370,16 +466,24 @@ export function SpacePlanPage(): React.ReactNode {
       <Column gap="md">
         <Row gap="md" align="start" justify="between" wrap>
           <Column gap="xs">
-            <Text weight="semibold">{root.title}</Text>
-            <Row gap="xs" align="center" wrap data-plan-tally={root.nodeId}>
+            <Text weight="semibold" size="lg">
+              {root.title}
+            </Text>
+            <Row gap="sm" align="center" wrap data-plan-tally={root.nodeId}>
               <Badge variant={PLAN_STATE_BADGE[tally.state]}>{planLine.state}</Badge>
-              <Text size="sm" variant="muted" data-plan-progress-line>
-                {planLine.progress}
-              </Text>
+              <Row gap="xs" align="center">
+                <ProgressMeter done={tally.done + tally.dropped} total={tally.steps} />
+                <Text size="sm" variant="muted" data-plan-progress-line>
+                  {planLine.progress}
+                </Text>
+              </Row>
               {planLine.counts.map(({ column, label }) => (
-                <Badge key={column} variant={HEADER_BADGE[column]}>
-                  {label}
-                </Badge>
+                <Row key={column} gap="xs" align="center" data-plan-tally-count={column}>
+                  <HeadingDot color={COLUMN_COLOR.get(column) ?? 'var(--color-border-emphasis)'} />
+                  <Text size="sm" variant="muted">
+                    {label}
+                  </Text>
+                </Row>
               ))}
             </Row>
             {tally.state === 'finished' &&
@@ -417,49 +521,27 @@ export function SpacePlanPage(): React.ReactNode {
             tone="danger"
           >{`The plan could not be read: ${boardQuery.error.message}`}</Text>
         )}
-        <Row gap="md" align="start">
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <PlanBoard
-              root={root}
-              tally={tally}
-              filters={phaseFilter !== ALL_PHASES ? { phaseId: phaseFilter } : {}}
-              doneReadSince={boardSince}
-              today={today}
-              expanded={openFolds}
-              onToggleGroup={toggleGroup}
-              selectedId={selectedCard?.node.nodeId}
-              onSelect={(card) => {
-                openCard(card, null);
-              }}
-              onDecide={(card) => {
-                openCard(card, 'done');
-              }}
-              onPlace={onPlace}
-              narrow={narrow}
-            />
-          </div>
-          {rail !== null && !narrow && (
-            <aside
-              aria-label="Step"
-              style={{
-                width: RAIL_WIDTH,
-                flexShrink: 0,
-                position: 'sticky',
-                top: 0,
-                maxHeight: '100vh',
-                overflowY: 'auto',
-                borderLeft: '1px solid var(--color-border-subtle)',
-                paddingLeft: 'var(--space-3)',
-              }}
-            >
-              {rail}
-            </aside>
-          )}
-        </Row>
-        {narrow && (
-          <Dialog open={rail !== null} onClose={dismiss}>
-            {rail}
-          </Dialog>
+        {withRail(
+          <PlanBoard
+            root={root}
+            tally={tally}
+            filters={phaseFilter !== ALL_PHASES ? { phaseId: phaseFilter } : {}}
+            doneReadSince={boardSince}
+            today={today}
+            expanded={openFolds}
+            onToggleGroup={toggleGroup}
+            selectedId={selectedCard?.node.nodeId}
+            onSelect={(card) => {
+              openCard(card, null);
+            }}
+            onDecide={(card) => {
+              openCard(card, 'done');
+            }}
+            onPlace={onPlace}
+            narrow={narrow}
+          />,
+          rail,
+          dismiss,
         )}
         <TruncationLine truncated={board.truncated} />
       </Column>

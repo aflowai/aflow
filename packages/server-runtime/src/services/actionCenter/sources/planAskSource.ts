@@ -1,10 +1,11 @@
 import { z } from 'zod';
-import { PLAN_NODE_UPDATE_OPERATION_ID, planNoteWaitLine } from '@aflow/schemas';
+import { PLAN_NODE_UPDATE_OPERATION_ID } from '@aflow/schemas';
 import {
   createPlanNodeStore,
   createResidentScheduleStore,
   requestResidentWake,
   listAskedNodes,
+  planAsk,
   findAskedNode,
   openPlanNode,
   updatePlanNode,
@@ -25,7 +26,7 @@ export function planAskItem(node: PlanNode): ActionCenterSourceItem {
     kind: 'human_approval',
     origin: { type: 'plan_ask', nodeId: node.nodeId, revision: node.revision },
     title: `Blocked: ${node.title}`.slice(0, 256),
-    summary: (planNoteWaitLine(node.note) ?? node.goal).slice(0, 2_000),
+    summary: planAsk(node).waitsOn.slice(0, 2_000),
     uiHints: { approveLabel: 'Approve', rejectLabel: 'Drop' },
     requestedAt: node.updatedAt,
     requestedBy: { kind: 'agent', label: 'Helmsman · plan' },

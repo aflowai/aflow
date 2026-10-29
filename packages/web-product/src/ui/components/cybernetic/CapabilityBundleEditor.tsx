@@ -68,6 +68,37 @@ export function bundlePlacementOf(
   );
   return states.size > 1 ? 'mixed' : (states.values().next().value ?? bundle.defaultPlacement);
 }
+
+/**
+ * A bundle whose `parentId` names another offered bundle sits under it, so a
+ * group split out of another (Build artifacts out of Visuals) reads beside it
+ * rather than wherever its label sorts. Other `parentId` values are family keys
+ * with no row of their own, and those bundles stay top-level. Only bundles
+ * passed together nest: a child placed in a different section than its parent
+ * stands alone in that section. Nesting is one level deep.
+ */
+export function nestBundles(
+  bundles: readonly OfferedBundle[],
+): Array<{ bundle: OfferedBundle; children: OfferedBundle[] }> {
+  const byId = new Map(bundles.map((bundle) => [bundle.id, bundle]));
+  const parentOf = (bundle: OfferedBundle): OfferedBundle | undefined =>
+    bundle.parentId === undefined || bundle.parentId === bundle.id
+      ? undefined
+      : byId.get(bundle.parentId);
+  const nestedUnder = (bundle: OfferedBundle): string | undefined => {
+    const parent = parentOf(bundle);
+    return parent && !parentOf(parent) ? parent.id : undefined;
+  };
+  const byLabel = (a: OfferedBundle, b: OfferedBundle) => a.label.localeCompare(b.label);
+  return bundles
+    .filter((bundle) => nestedUnder(bundle) === undefined)
+    .sort(byLabel)
+    .map((bundle) => ({
+      bundle,
+      children: bundles.filter((child) => nestedUnder(child) === bundle.id).sort(byLabel),
+    }));
+}
+
 const choices = [
   { value: 'always_on', label: 'Always on' },
   { value: 'on_demand', label: 'On demand' },
@@ -121,9 +152,9 @@ export function CapabilityBundleEditor({
         }}
       />
       {sections.map(({ state, description }) => {
-        const entries = filtered
-          .filter((bundle) => bundlePlacementOf(bundle, placements, operationPlacements) === state)
-          .sort((a, b) => a.label.localeCompare(b.label));
+        const entries = filtered.filter(
+          (bundle) => bundlePlacementOf(bundle, placements, operationPlacements) === state,
+        );
         if ((state === 'mixed' || search) && !entries.length) return null;
         return (
           <PlacementSection
@@ -133,18 +164,37 @@ export function CapabilityBundleEditor({
             description={description}
             forceOpen={search.length > 0}
           >
-            {entries.map((bundle) => (
-              <BundleRow
-                key={`${bundle.id}-${search}`}
-                bundle={bundle}
-                placements={placements}
-                operationPlacements={operationPlacements}
-                showHints={showHints}
-                search={search}
-                onPlace={onPlace}
-                {...(onOperationPlace ? { onOperationPlace } : {})}
-              />
-            ))}
+            {nestBundles(entries).map(({ bundle, children }) => {
+              const row = (entry: OfferedBundle) => (
+                <BundleRow
+                  key={`${entry.id}-${search}`}
+                  bundle={entry}
+                  placements={placements}
+                  operationPlacements={operationPlacements}
+                  showHints={showHints}
+                  search={search}
+                  onPlace={onPlace}
+                  {...(onOperationPlace ? { onOperationPlace } : {})}
+                />
+              );
+              if (!children.length) return row(bundle);
+              return (
+                <div key={`${bundle.id}-family-${search}`}>
+                  {row(bundle)}
+                  <div
+                    role="group"
+                    aria-label={`Within ${bundle.label}`}
+                    style={{
+                      marginLeft: 'var(--space-4)',
+                      paddingLeft: 'var(--space-3)',
+                      borderLeft: '2px solid var(--color-border-subtle)',
+                    }}
+                  >
+                    {children.map(row)}
+                  </div>
+                </div>
+              );
+            })}
           </PlacementSection>
         );
       })}

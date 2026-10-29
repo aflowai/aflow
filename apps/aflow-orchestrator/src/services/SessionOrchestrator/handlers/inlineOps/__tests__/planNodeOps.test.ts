@@ -589,3 +589,50 @@ describe('plan.node.next', () => {
     });
   });
 });
+
+describe('resident provenance', () => {
+  it('identifies residents from schedule provenance and the resident marker, failing closed when unavailable', async () => {
+    for (const [state, resident] of [
+      [{ trigger: 'schedule', planResident: true }, true],
+      [{ trigger: 'schedule', planResident: false }, false],
+      [{ trigger: 'schedule' }, true],
+      [{ trigger: 'chat', planResident: true }, false],
+      [null, true],
+    ] as const) {
+      mockGetSessionState.mockResolvedValueOnce(state);
+      mockUpdatePlanNode.mockResolvedValueOnce({ ok: true, node: NODE });
+      await handlePlanNodeInline(
+        makeArgs('plan.node.update', { nodeId: NODE_ID, expectedRevision: 2, note: 'Wait' }),
+      );
+      expect(mockUpdatePlanNode.mock.lastCall?.[0]).toMatchObject({ resident });
+    }
+    mockGetSessionState.mockRejectedValueOnce(new Error('unreadable'));
+    mockUpdatePlanNode.mockResolvedValueOnce({ ok: true, node: NODE });
+    await handlePlanNodeInline(
+      makeArgs('plan.node.update', { nodeId: NODE_ID, expectedRevision: 2, note: 'Wait' }),
+    );
+    expect(mockUpdatePlanNode.mock.lastCall?.[0]).toMatchObject({ resident: true });
+  });
+
+  it('preserves resident authority across guard expiry, replacement, pause, resume and retry', async () => {
+    const guard = vi.fn();
+    for (const status of ['RUNNING', 'PAUSED', 'RUNNING', 'FAILED', 'RUNNING']) {
+      mockGetSessionState.mockResolvedValueOnce({
+        trigger: 'schedule',
+        planResident: true,
+        status,
+        activatedByPerson: true,
+      });
+      mockUpdatePlanNode.mockResolvedValueOnce({ ok: true, node: NODE });
+      const args = makeArgs('plan.node.update', {
+        nodeId: NODE_ID,
+        expectedRevision: 2,
+        note: 'Wait',
+      });
+      args.redis = { get: guard } as never;
+      await handlePlanNodeInline(args);
+      expect(mockUpdatePlanNode.mock.lastCall?.[0]).toMatchObject({ resident: true });
+    }
+    expect(guard).not.toHaveBeenCalled();
+  });
+});

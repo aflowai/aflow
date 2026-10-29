@@ -878,7 +878,7 @@ describe('resident asking and proposing', () => {
           status: 'active',
         },
       );
-      expect(result).toMatchObject({ ok: true, node: { status: 'active' } });
+      expect(result).toMatchObject({ ok: false, code: 'PLAN_NODE_LIVE_CHECK_PERSON' });
       expect((await current(check.nodeId)).outcome).toBeUndefined();
     },
   );
@@ -924,13 +924,15 @@ describe('resident asking and proposing', () => {
         status: 'done',
         outcome: 'Merged',
       });
-      if (stage === 'read') await expect(close).resolves.toMatchObject({ ok: true });
-      else await expect(close).rejects.toThrow('carrier insert');
+      await expect(close).resolves.toMatchObject({
+        ok: true,
+        carrierFailure: expect.stringContaining(step.nodeId),
+      });
       expect((await current(step.nodeId)).status).toBe('done');
     },
   );
 
-  it('surfaces a failure publishing an inserted carrier', async () => {
+  it('records a failure publishing an inserted carrier', async () => {
     const step = await created();
     await linkPlanNode(session(), { nodeId: step.nodeId, kind: 'finding', ref: 'review:publish' });
     const insert = store.insert.bind(store);
@@ -948,7 +950,10 @@ describe('resident asking and proposing', () => {
         status: 'done',
         outcome: 'Merged',
       }),
-    ).rejects.toThrow('carrier publish');
+    ).resolves.toMatchObject({
+      ok: true,
+      carrierFailure: expect.stringContaining('carrier publish'),
+    });
     expect([...store.nodes.values()].some((node) => node.note?.startsWith('Proposed:'))).toBe(true);
   });
 
@@ -973,7 +978,7 @@ describe('resident asking and proposing', () => {
   );
 
   it.each(['open', 'update'] as const)(
-    'approval via %s closes a live check without commissioning its goal',
+    'closes a rail-approved live check with the read recorded and never commissions its merged goal (%s)',
     async (method) => {
       const check = await created({
         kind: 'investigate',
@@ -1000,6 +1005,15 @@ describe('resident asking and proposing', () => {
         ok: true,
         node: { status: 'done', outcome: expect.stringContaining("folder's head") },
       });
+      expect(await wake()).toMatchObject({ decisions: [] });
+      const closed = await current(check.nodeId);
+      expect(
+        await openPlanNode(session(), {
+          nodeId: closed.nodeId,
+          expectedRevision: closed.revision,
+          why: 'Read the folder again',
+        }),
+      ).toMatchObject({ ok: true, node: { status: 'done' } });
       expect(await wake()).toMatchObject({ decisions: [] });
     },
   );
@@ -1183,7 +1197,7 @@ describe('resident asking and proposing', () => {
   });
 
   it.each([0, 49, 50, 60])(
-    'counts only uncarried findings across pages (%s new)',
+    'counts only uncarried findings across all finding pages in overflow (%s new)',
     async (fresh) => {
       const root = await created();
       const step = await created({ parentId: root.nodeId });
@@ -1948,5 +1962,240 @@ describe('resident review regressions', () => {
       decision: 'wait',
       cause: 'awaiting_publication',
     });
+  });
+});
+
+describe('settled P2 rules', () => {
+  it('refuses resident reopening of blocked, done and dropped scope', async () => {
+    for (const status of ['blocked', 'done', 'dropped'] as const) {
+      const node = await created({ proposed: 'Person decides' });
+      if (status !== 'blocked') await write(node.nodeId, { status, outcome: 'Closed' });
+      const before = await current(node.nodeId);
+      expect(
+        await openPlanNode(
+          { ...session(), resident: true },
+          {
+            nodeId: node.nodeId,
+            expectedRevision: before.revision,
+          },
+        ),
+      ).toMatchObject({ ok: false, code: 'PLAN_NODE_RESIDENT_SCOPE' });
+      expect(await current(node.nodeId)).toEqual(before);
+    }
+  });
+
+  it('refuses resident done, dropped and repeated closes of person scope', async () => {
+    for (const status of ['active', 'blocked', 'done', 'dropped'] as const) {
+      const node = await created({ kind: 'decide' });
+      if (status !== 'active')
+        await write(node.nodeId, {
+          status,
+          ...(status === 'blocked' ? {} : { outcome: 'Closed' }),
+        });
+      const before = await current(node.nodeId);
+      for (const close of ['done', 'dropped'] as const) {
+        expect(
+          await updatePlanNode(
+            { ...session(), resident: true },
+            {
+              nodeId: node.nodeId,
+              expectedRevision: before.revision,
+              status: close,
+              outcome: 'Agent closes',
+            },
+          ),
+        ).toMatchObject({ ok: false, code: 'PLAN_NODE_RESIDENT_SCOPE' });
+      }
+      expect(await current(node.nodeId)).toEqual(before);
+    }
+  });
+
+  it('refuses resident scope rewrites on person-approved and blocked-proposal nodes', async () => {
+    for (const proposed of [undefined, 'Needs approval']) {
+      const node = await created(proposed ? { proposed } : {});
+      for (const field of ['title', 'goal', 'criteria'] as const) {
+        expect(
+          await updatePlanNode(
+            { ...session(), resident: true },
+            {
+              nodeId: node.nodeId,
+              expectedRevision: node.revision,
+              [field]: 'Widened',
+            },
+          ),
+        ).toMatchObject({ ok: false, code: 'PLAN_NODE_RESIDENT_SCOPE' });
+      }
+      await write(node.nodeId, { note: 'Person wrote' });
+      expect(
+        await updatePlanNode(
+          { ...session(), resident: true },
+          {
+            nodeId: node.nodeId,
+            expectedRevision: node.revision,
+            goal: 'Race',
+          },
+        ),
+      ).toMatchObject({ ok: false, code: 'PLAN_NODE_STALE' });
+    }
+  });
+
+  it('preserves operator notes when appending waits at and near the prose ceiling', async () => {
+    for (const length of [10, PLAN_NODE_PROSE_MAX_CHARS - 2, PLAN_NODE_PROSE_MAX_CHARS]) {
+      const note = 'x'.repeat(length);
+      const node = await created({ note });
+      const ask = planAsk({ ...node, status: 'blocked' });
+      expect(ask.waitsOn).toContain('Waiting on you:');
+      if (ask.update) {
+        expect(ask.update.note).toBe(note + '\n' + ask.waitsOn);
+        expect(ask.update.note!.length).toBeLessThanOrEqual(PLAN_NODE_PROSE_MAX_CHARS);
+      } else expect((await current(node.nodeId)).note).toBe(note);
+    }
+  });
+
+  it('asks once across ten wakes at the same revision', async () => {
+    const node = await created({ note: 'Operator context' });
+    await write(node.nodeId, { status: 'blocked' });
+    let revision: number | undefined;
+    for (let i = 0; i < 10; i++) {
+      const result = await wake({}, 'wake-' + String(i));
+      expect(result.decisions.filter((d) => d.answer.decision === 'ask')).toHaveLength(
+        i === 0 ? 1 : 0,
+      );
+      const answer = result.decisions[0]?.answer;
+      if (answer?.decision === 'ask' && answer.update) {
+        expect((await updatePlanNode(session(), answer.update)).ok).toBe(true);
+        revision = (await current(node.nodeId)).revision;
+      }
+      expect(await listAskedNodes(streamContext('ask-read'))).toHaveLength(1);
+      expect((await current(node.nodeId)).revision).toBe(revision);
+    }
+  });
+
+  it('withholds proposals for actionable or candidate-root waiting work but ignores unrelated waits', async () => {
+    const root = await created();
+    const child = await created({ parentId: root.nodeId });
+    await write(child.nodeId, { status: 'done', outcome: 'Met' });
+    const held = await created({ parentId: root.nodeId, proposed: 'Wait' });
+    expect(await wake()).not.toHaveProperty('propose');
+    await write(held.nodeId, { status: 'waiting' });
+    expect(await wake()).not.toHaveProperty('propose');
+    await write(held.nodeId, { status: 'done', outcome: 'Met' });
+    const actionable = await created();
+    const deferred = await created();
+    const capped = await wake({ decisions: 1 });
+    expect(capped).not.toHaveProperty('propose');
+    expect(capped.deferred).toBe(1);
+    await write(actionable.nodeId, { status: 'blocked', note: 'Waiting on you: approve' });
+    await write(deferred.nodeId, { status: 'blocked', note: 'Waiting on you: approve' });
+    const asks = await wake();
+    expect(asks.decisions.every((decision) => decision.answer.decision === 'ask')).toBe(true);
+    expect(asks).toMatchObject({ propose: { parentId: root.nodeId } });
+    expect(await wake()).toMatchObject({ propose: { parentId: root.nodeId } });
+  });
+
+  it('ignores closed history beyond the candidate-root walk limit without forgetting its decline', async () => {
+    const root = await created();
+    for (let i = 0; i < PLAN_TREE_WALK_NODE_LIMIT + 5; i++) {
+      store.seed(SPACE, { parentId: root.nodeId, status: 'done' });
+    }
+    expect(await wake()).toMatchObject({ decisions: [], propose: { parentId: root.nodeId } });
+    const declined = await created({ parentId: root.nodeId, proposed: 'Next scope' });
+    await write(declined.nodeId, { status: 'dropped', outcome: 'Declined' });
+    expect(await wake()).not.toHaveProperty('propose');
+  });
+
+  it('finds existing carriers beyond the first sibling page including root siblings', async () => {
+    for (const rooted of [false, true]) {
+      const parent = rooted ? await created() : null;
+      const node = await created({ parentId: parent?.nodeId ?? null });
+      for (let i = 0; i < 105; i++) store.seed(SPACE, { parentId: node.parentId, status: 'done' });
+      await linkPlanNode(session(), { nodeId: node.nodeId, kind: 'finding', ref: 'F1' });
+      const first = await updatePlanNode(session(), {
+        nodeId: node.nodeId,
+        expectedRevision: node.revision,
+        status: 'done',
+        outcome: 'Met',
+      });
+      if (!first.ok || !first.carrier) throw new Error('Missing carrier');
+      await write(node.nodeId, { status: 'active' });
+      const again = await updatePlanNode(session(), {
+        nodeId: node.nodeId,
+        expectedRevision: (await current(node.nodeId)).revision,
+        status: 'done',
+        outcome: 'Met again',
+      });
+      expect(again).toMatchObject({ ok: true });
+      expect(again).not.toHaveProperty('carrier');
+    }
+  });
+
+  it('keeps close successful and retries or records carrier read, insert and publish failures', async () => {
+    for (const stage of ['read', 'insert', 'refusal', 'publish'] as const) {
+      const node = await created();
+      await linkPlanNode(session(), { nodeId: node.nodeId, kind: 'finding', ref: 'F-failed' });
+      if (stage === 'read')
+        vi.spyOn(store, 'pageLinks').mockRejectedValueOnce(new Error('read failed'));
+      if (stage === 'insert')
+        vi.spyOn(store, 'insert').mockRejectedValueOnce(new Error('insert failed'));
+      if (stage === 'refusal')
+        vi.spyOn(store, 'insert').mockResolvedValueOnce({ outcome: 'parent_not_found' });
+      if (stage === 'publish') {
+        const insert = store.insert.bind(store);
+        vi.spyOn(store, 'insert').mockImplementationOnce(async (...args) => {
+          const inserted = await insert(...args);
+          vi.spyOn(redis, 'publish').mockImplementationOnce(() => {
+            throw new Error('publish failed');
+          });
+          return inserted;
+        });
+      }
+      const result = await updatePlanNode(session(), {
+        nodeId: node.nodeId,
+        expectedRevision: node.revision,
+        status: 'done',
+        outcome: 'Met',
+      });
+      expect(result).toMatchObject({
+        ok: true,
+        carrierFailure: expect.stringContaining(node.nodeId),
+      });
+      expect(result).toMatchObject({ carrierFailure: expect.stringContaining('linked findings') });
+      expect((await current(node.nodeId)).status).toBe('done');
+      expect(
+        store.links.some((link) => link.nodeId === node.nodeId && link.ref === 'F-failed'),
+      ).toBe(true);
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('refuses live-check completion and read attestation by resident, chat and voice agents', async () => {
+    const node = await created({
+      kind: 'investigate',
+      liveCheck: { pullRequest: PR, mergeCommitSha: MERGE_SHA },
+    });
+    for (const writer of ['resident', 'chat', 'voice']) {
+      const ctx = { ...session(), actorKind: 'agent' as const, resident: writer === 'resident' };
+      for (const patch of [
+        { status: 'active' as const },
+        { status: 'waiting' as const },
+        { status: 'done' as const, outcome: 'Read' },
+        { note: 'I read the folder head' },
+        { outcome: 'Read' },
+      ]) {
+        expect(
+          (
+            await updatePlanNode(ctx, {
+              nodeId: node.nodeId,
+              expectedRevision: node.revision,
+              ...patch,
+            })
+          ).ok,
+        ).toBe(false);
+      }
+      expect(
+        (await openPlanNode(ctx, { nodeId: node.nodeId, expectedRevision: node.revision })).ok,
+      ).toBe(false);
+    }
+    expect(await current(node.nodeId)).toEqual(node);
   });
 });

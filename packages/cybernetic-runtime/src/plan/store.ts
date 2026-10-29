@@ -2,6 +2,7 @@ import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { and, asc, desc, eq, gt, inArray, isNull, lt, or, sql, type SQL } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import {
+  CLOSED_PLAN_NODE_STATUSES,
   PLAN_NODE_GOAL_HEAD_MAX_CHARS,
   PLAN_NODE_NOTE_HEAD_MAX_CHARS,
   PLAN_NODE_POSITION_MAX,
@@ -35,6 +36,13 @@ import {
 import type { PlanNodeDependencyRow, PlanNodeLinkRow, PlanNodeRow } from '@aflow/database';
 import { coachLearningToRow, rowToCoachLearning } from '../coachLearningsStore.js';
 import { checkDependency, type DependencyCheck, type DependencyReads } from './dependencies.js';
+import {
+  overviewIn,
+  runsInFlightIn,
+  type PlanOverviewPlacement,
+  type PlanOverviewRead,
+  type PlanOverviewSnapshot,
+} from './overviewReads.js';
 import { placeAmongSiblings, type PlanPlaceAnchor } from './placement.js';
 import {
   checkPlacement,
@@ -116,11 +124,6 @@ export interface PlanTreeWalkOptions extends PlanTreeWalkBounds {
    * chose to look, not a node the walk came upon.
    */
   statuses?: readonly PlanNodeStatus[];
-  /**
-   * Walk from only the roots of these statuses, and below them through every
-   * status `statuses` allows; in place of `statuses` for the roots alone.
-   */
-  rootStatuses?: readonly PlanNodeStatus[];
 }
 
 export interface NewPlanNodeLink {
@@ -258,13 +261,38 @@ export interface PlanNodeStore {
   ): Promise<{ children: PlanNodeSummary[]; total: number }>;
   walk(spaceId: string, opts: PlanTreeWalkOptions): Promise<PlanTreeWalk>;
   /**
-   * Each walk as `walk` takes it, all of them reading the space as it stood at
-   * one moment, so a node a write moves between them is read by one walk, as
-   * it was then, or by none.
+   * The overview's read (Plan 332 D7), in one read-only repeatable-read
+   * snapshot: one recursive query from the roots carrying each node's root and
+   * whether a closed node lies above it, below the open roots only, no further
+   * than `bounds.maxDepth`, and stopped once it has walked `bounds.maxNodes`
+   * open nodes, roots first and a shallower level before a deeper, each level
+   * in reading order — roots by position, then each parent's children by
+   * position in its parents' order — so past the bound it keeps the
+   * reading-order head. Closed steps spend none of the bound: each is counted
+   * with one aggregate over its parent's children, and the walk passes through
+   * only those with steps under them, to reach an open step stranded there;
+   * closed roots are listed on a bound of their own. It returns the roots and
+   * every open step it walked as rows, with the runs in flight on each, and the
+   * closed steps only as counts per root, so no done step is ever shipped. `place` makes the view from it, and the
+   * pull requests and runs it names are read in the same snapshot, so a row
+   * and what is looked up for it cannot disagree.
    */
-  walkTogether(spaceId: string, walks: readonly PlanTreeWalkOptions[]): Promise<PlanTreeWalk[]>;
+  readOverview<T>(
+    spaceId: string,
+    bounds: PlanTreeWalkBounds,
+    place: (read: PlanOverviewRead) => PlanOverviewPlacement<T>,
+  ): Promise<PlanOverviewSnapshot<T>>;
   /** Each node's parent (null for a root); a node not in the space is absent. */
   parentsOf(spaceId: string, nodeIds: readonly string[]): Promise<Map<string, string | null>>;
+  /**
+   * The closed node nearest above `nodeId`, its root included, as the board
+   * reads a stranded step's; null where every node above it is open, or it is
+   * a root or gone.
+   */
+  closedAncestorOf(
+    spaceId: string,
+    nodeId: string,
+  ): Promise<{ nodeId: string; title: string } | null>;
   /** Writes the link unless its node is not in the space or already holds it. */
   insertLink(spaceId: string, link: NewPlanNodeLink): Promise<PlanNodeLinkInsert>;
   /** The node's newest link of `kind`, read by kind rather than from a page of every link. */
@@ -533,19 +561,11 @@ const siblingOrder = (): SQL[] => {
   return PLAN_SIBLING_ORDER.map((key) => asc(columns[key]));
 };
 
-function levelIs(
-  level: PlanTreeLevel,
-  { statuses, rootStatuses }: Pick<PlanTreeWalkOptions, 'statuses' | 'rootStatuses'>,
-): SQL {
+function levelIs(level: PlanTreeLevel, statuses: readonly PlanNodeStatus[] | undefined): SQL {
   const ofStatus = statuses !== undefined ? inArray(planNodes.status, [...statuses]) : undefined;
   switch (level.kind) {
-    case 'roots': {
-      const ofRootStatus = rootStatuses ?? statuses;
-      return and(
-        isNull(planNodes.parentId),
-        ofRootStatus !== undefined ? inArray(planNodes.status, [...ofRootStatus]) : undefined,
-      )!;
-    }
+    case 'roots':
+      return and(isNull(planNodes.parentId), ofStatus)!;
     case 'node':
       return eq(planNodes.id, level.nodeId);
     case 'children':
@@ -670,6 +690,62 @@ async function writeAtRevision(
   return row ? rowToPlanNode(row) : null;
 }
 
+/** Each of `nodeIds`'s newest pull request link, read in `tx`; a node with none is absent. */
+async function newestPullRequestsIn(
+  tx: PostgresJsDatabase,
+  spaceId: string,
+  nodeIds: readonly string[],
+): Promise<Map<string, PlanNodeNewestPullRequest>> {
+  const newest = new Map<string, PlanNodeNewestPullRequest>();
+  if (nodeIds.length === 0) return newest;
+  const merges = alias(planNodeLinks, 'merges');
+  const rows = await tx
+    .selectDistinctOn([planNodeLinks.nodeId], {
+      nodeId: planNodeLinks.nodeId,
+      ref: planNodeLinks.ref,
+      merge: {
+        kind: merges.kind,
+        ref: merges.ref,
+        label: merges.label,
+        createdAt: merges.createdAt,
+      },
+    })
+    .from(planNodeLinks)
+    .leftJoin(
+      merges,
+      and(
+        eq(merges.nodeId, planNodeLinks.nodeId),
+        eq(merges.kind, 'merge'),
+        eq(merges.ref, planNodeLinks.ref),
+      ),
+    )
+    .where(
+      and(
+        eq(planNodeLinks.spaceId, spaceId),
+        eq(planNodeLinks.kind, 'pull_request'),
+        inArray(planNodeLinks.nodeId, [...nodeIds]),
+      ),
+    )
+    .orderBy(asc(planNodeLinks.nodeId), desc(planNodeLinks.createdAt), asc(planNodeLinks.ref));
+  for (const row of rows) {
+    newest.set(row.nodeId, {
+      ref: row.ref,
+      merge:
+        row.merge === null
+          ? null
+          : rowToPlanNodeLink({
+              nodeId: row.nodeId,
+              spaceId,
+              kind: row.merge.kind,
+              ref: row.merge.ref,
+              label: row.merge.label,
+              createdAt: new Date(row.merge.createdAt),
+            }),
+    });
+  }
+  return newest;
+}
+
 function walkIn(
   tx: PostgresJsDatabase,
   spaceId: string,
@@ -680,7 +756,7 @@ function walkIn(
       const rows = await tx
         .select(summaryColumns())
         .from(planNodes)
-        .where(and(eq(planNodes.spaceId, spaceId), levelIs(level, opts)))
+        .where(and(eq(planNodes.spaceId, spaceId), levelIs(level, opts.statuses)))
         .orderBy(...siblingOrder())
         .limit(limit);
       return rows.map(summaryRowToSummary);
@@ -859,16 +935,17 @@ export function createPlanNodeStore(db: PostgresJsDatabase, tenantId: string): P
 
     walk: (spaceId, opts) => inTenant((tx) => walkIn(tx, spaceId, opts)),
 
-    walkTogether: (spaceId, walks) =>
+    readOverview: (spaceId, bounds, place) =>
       withTenantSchema(
         db,
         tenantCtx,
         async (tx) => {
-          const read: PlanTreeWalk[] = [];
-          for (const opts of walks) read.push(await walkIn(tx, spaceId, opts));
-          return read;
+          const read = await overviewIn(tx, spaceId, bounds);
+          const { placed, pullRequestsOf, runsOf, runsPerNode } = place(read);
+          const pullRequests = await newestPullRequestsIn(tx, spaceId, pullRequestsOf);
+          const runs = await runsInFlightIn(tx, spaceId, runsOf, runsPerNode);
+          return { read, placed, pullRequests, runs };
         },
-        // Every statement of a repeatable-read transaction reads its first snapshot.
         { isolationLevel: 'repeatable read', accessMode: 'read only' },
       ),
 
@@ -880,6 +957,36 @@ export function createPlanNodeStore(db: PostgresJsDatabase, tenantId: string): P
           .from(planNodes)
           .where(and(eq(planNodes.spaceId, spaceId), inArray(planNodes.id, [...nodeIds])));
         return new Map(rows.map((row) => [row.id, row.parentId]));
+      }),
+
+    closedAncestorOf: (spaceId, nodeId) =>
+      inTenant(async (tx) => {
+        const closed = sql.join(
+          CLOSED_PLAN_NODE_STATUSES.map((status) => sql`${status}`),
+          sql`, `,
+        );
+        const rows = (await tx.execute(sql`
+          WITH RECURSIVE above AS (
+            SELECT n.parent_id AS id, 1 AS height
+            FROM plan_nodes n
+            WHERE n.space_id = ${spaceId}::uuid AND n.id = ${nodeId}::uuid
+            UNION ALL
+            SELECT p.parent_id, a.height + 1
+            FROM above a
+            INNER JOIN plan_nodes p ON p.id = a.id
+            WHERE p.space_id = ${spaceId}::uuid AND a.height <= ${PLAN_TREE_DEPTH_LIMIT}
+          )
+          SELECT p.id, p.title
+          FROM above a
+          INNER JOIN plan_nodes p ON p.id = a.id
+          WHERE p.space_id = ${spaceId}::uuid AND p.status IN (${closed})
+          ORDER BY a.height
+          LIMIT 1
+        `)) as Array<Record<string, unknown>>;
+        const [row] = rows;
+        return row !== undefined
+          ? { nodeId: String(row['id']), title: String(row['title']) }
+          : null;
       }),
 
     insertLink: (spaceId, link) =>
@@ -1064,60 +1171,7 @@ export function createPlanNodeStore(db: PostgresJsDatabase, tenantId: string): P
       }),
 
     newestPullRequestsOf: (spaceId, nodeIds) =>
-      inTenant(async (tx) => {
-        const newest = new Map<string, PlanNodeNewestPullRequest>();
-        if (nodeIds.length === 0) return newest;
-        const merges = alias(planNodeLinks, 'merges');
-        const rows = await tx
-          .selectDistinctOn([planNodeLinks.nodeId], {
-            nodeId: planNodeLinks.nodeId,
-            ref: planNodeLinks.ref,
-            merge: {
-              kind: merges.kind,
-              ref: merges.ref,
-              label: merges.label,
-              createdAt: merges.createdAt,
-            },
-          })
-          .from(planNodeLinks)
-          .leftJoin(
-            merges,
-            and(
-              eq(merges.nodeId, planNodeLinks.nodeId),
-              eq(merges.kind, 'merge'),
-              eq(merges.ref, planNodeLinks.ref),
-            ),
-          )
-          .where(
-            and(
-              eq(planNodeLinks.spaceId, spaceId),
-              eq(planNodeLinks.kind, 'pull_request'),
-              inArray(planNodeLinks.nodeId, [...nodeIds]),
-            ),
-          )
-          .orderBy(
-            asc(planNodeLinks.nodeId),
-            desc(planNodeLinks.createdAt),
-            asc(planNodeLinks.ref),
-          );
-        for (const row of rows) {
-          newest.set(row.nodeId, {
-            ref: row.ref,
-            merge:
-              row.merge === null
-                ? null
-                : rowToPlanNodeLink({
-                    nodeId: row.nodeId,
-                    spaceId,
-                    kind: row.merge.kind,
-                    ref: row.merge.ref,
-                    label: row.merge.label,
-                    createdAt: new Date(row.merge.createdAt),
-                  }),
-          });
-        }
-        return newest;
-      }),
+      inTenant((tx) => newestPullRequestsIn(tx, spaceId, nodeIds)),
 
     inFlightRunCountsOf: (spaceId, nodeIds) =>
       inTenant(async (tx) => {

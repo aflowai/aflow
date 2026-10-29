@@ -13,6 +13,7 @@ import {
   parseGitHubRemote,
   type RunAccessGrant,
   parseShepherdHandoff,
+  DECISION_OBJECT_VALUE_MAX_BYTES,
   decodeRequiredChecks,
   encodeRequiredChecks,
   SHEPHERD_HANDOFF_CLOSE,
@@ -24,6 +25,7 @@ import {
   WORKFLOW_RUN_LIST_SELECTOR_MESSAGE,
   WORKFLOW_RUN_LIST_SUCCEEDED_MAX,
   WorkflowRunDecideInputSchema,
+  WorkflowRunDecideOutputSchema,
   WorkflowRunListInputSchema,
 } from '../../index.js';
 
@@ -218,6 +220,28 @@ describe('workflow.run.decide', () => {
       WorkflowRunDecideInputSchema.safeParse({
         ...input,
         otherwise: { decision: 'Fix!', reason: 'x' },
+      }).success,
+    ).toBe(false);
+  });
+
+  it('bounds an object value by its serialized size, as the text form is bounded by its length', () => {
+    const decide = (value: unknown) =>
+      WorkflowRunDecideInputSchema.safeParse({
+        state: {},
+        rules: [{ when: { expression: 'state.a == 1' }, decision: 'wait', reason: 'R.', value }],
+        otherwise: { decision: 'fix', reason: 'Otherwise.', value },
+      }).success;
+    const paragraph = 'x'.repeat(4000);
+    expect(decide({ browser: { profile: 'ephemeral' }, preview: true, paragraph })).toBe(true);
+    expect(decide({ paragraph: 'x'.repeat(DECISION_OBJECT_VALUE_MAX_BYTES) })).toBe(false);
+    expect(decide({ many: Array.from({ length: 2000 }, () => paragraph.slice(0, 10)) })).toBe(
+      false,
+    );
+    const output = { decision: 'wait', reason: 'R.', rule: 0 };
+    expect(
+      WorkflowRunDecideOutputSchema.safeParse({
+        ...output,
+        value: { paragraph: 'x'.repeat(DECISION_OBJECT_VALUE_MAX_BYTES) },
       }).success,
     ).toBe(false);
   });

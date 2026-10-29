@@ -1296,7 +1296,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           variableId: 'reviewRunId',
           name: 'Review run',
           description:
-            "The run of this publication's own review, where one started — its retry's, where the first ended without a result and it was run once more: its output holds every finding whole, with its evidence and suggestion — what a fix round is briefed from.",
+            "The run of this publication's own review, where one started — its retry's, where the first ended without a result and it was run once more: its output holds every finding whole, with its evidence and suggestion — what a fix round is briefed from, less any finding of kind `needs_setup`, which is setup on the machine and no defect a fix settles.",
           required: false,
           sensitive: false,
           immutable: false,
@@ -1315,7 +1315,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           variableId: 'fixRound',
           name: 'Fix round',
           description:
-            "On fix_before_merge, what the fix round takes: `branch`, kept on the machine; `headSha`, its head; `baseMovedSince`, whether `origin`'s base moved past it; `reviewRunId`, the run the round is briefed from; `findings`, the open ones; and `commissionInputs`, the exact Commission Change inputs — `base` the branch, with `mergeFrom: origin/<base>` where the base moved. Never base it on `origin/main`: the branch is not there.",
+            "On fix_before_merge, what the fix round takes: `branch`, kept on the machine; `headSha`, its head; `baseMovedSince`, whether `origin`'s base moved past it; `reviewRunId`, the run the round is briefed from, less its `needs_setup` finding, which no fix on the branch settles; `findings`, the open ones; and `commissionInputs`, the exact Commission Change inputs — `base` the branch, with `mergeFrom: origin/<base>` where the base moved. Never base it on `origin/main`: the branch is not there.",
           required: false,
           sensitive: false,
           immutable: false,
@@ -1325,7 +1325,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
       output: {
         primary: 'prUrl',
         guidance:
-          'prUrl and prNumber are the branch’s pull request: report the link, pushReason and verdict. On afterReview fix_before_merge nothing was pushed: start Commission Change with fixRound.commissionInputs as they stand — never base origin/main, which lacks the branch — briefed from the fixRound.reviewRunId run, then publish its patchRef, baseSha and run id with fixRound.findings and the next round. Absent prUrl otherwise, the run kept local or failed: its account says why.',
+          'prUrl and prNumber are the branch’s pull request: report the link, pushReason and verdict. On afterReview fix_before_merge nothing was pushed: start Commission Change with fixRound.commissionInputs as they stand — never base origin/main — briefed from the fixRound.reviewRunId run’s findings less needs_setup (setup, not a fix), then publish its patchRef, baseSha and run id with fixRound.findings and the next round. Absent prUrl otherwise, the run kept local or failed: its account says why.',
       },
       iteration: { auto: false, maxConsecutiveRuns: 1, stopOnOutcomesMet: true, cooldownMs: 0 },
     },

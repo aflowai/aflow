@@ -55,6 +55,7 @@ export { handleMcpToolPromoteInline } from './mcpToolPromote.js';
 export { handleCatalogToolPromoteInline } from './catalogToolPromote.js';
 export { handleMcpBindingConsentInline } from './mcpBindingConsent.js';
 export { handleMcpBindingAdminInline } from './mcpBindingAdmin.js';
+export { handleMcpServerAdminInline, MCP_SERVER_ADMIN_OPERATION_IDS } from './mcpServerAdmin.js';
 export { handleHumanChatAskInline, HITL_INLINE_PLACEMENT_TAG } from './humanChatAsk.js';
 export { handleHumanActionCenterFocusInline } from './humanActionCenterFocus.js';
 export { handleArtifactInspectInline } from './artifactInspect.js';

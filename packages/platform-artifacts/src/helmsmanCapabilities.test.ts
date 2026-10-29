@@ -28,6 +28,23 @@ describe('Helmsman capability resolution', () => {
     );
     expect(result.pinnedCount).toBeLessThan(MAX_PINNED_TOOLS);
   });
+  it('offers artifact publishing beside generation, in the group nested under Visuals', () => {
+    const result = resolveHelmsmanCapabilities(local);
+    for (const id of ['ui.artifact.generate', 'ui.artifact.publish', 'ui.artifact.render']) {
+      expect(result.coreOperations).not.toContain(id);
+      expect(result.discoverableOperationIds).toContain(id);
+    }
+    const artifacts = result.bundles.find((b) => b.id === 'artifacts')!;
+    expect(artifacts.operations.map((o) => o.operationId)).toEqual(
+      expect.arrayContaining(['ui.artifact.generate', 'ui.artifact.publish']),
+    );
+    expect(artifacts.parentId).toBe('visuals');
+    const visuals = result.bundles.find((b) => b.id === 'visuals')!;
+    expect(visuals.operations.map((o) => o.operationId).sort()).toEqual([
+      'ui.artifact.render',
+      'ui.surface.visualize',
+    ]);
+  });
   it('does not offer an absent lane or an operation outside a custom ceiling', () => {
     const result = resolveHelmsmanCapabilities(local, {
       helmsmanOperations: ['code.agent.run', 'memory.store.delete'],

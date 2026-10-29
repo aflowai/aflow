@@ -16,6 +16,7 @@ import {
   PlanNodeCreateInputSchema,
   PLAN_NODE_LIVE_CHECK_KIND_MESSAGE,
   PlanBoardNextSchema,
+  PlanStreamAnswerSchema,
   PlanNodeOpenSchema,
   PLAN_STREAM_SPEND_CENTS_MAX,
   PlanNodeLearnInputSchema,
@@ -458,4 +459,13 @@ it('teaches the kind required for a live check and accepts both root and child p
       PlanNodeCreateInputSchema.safeParse({ ...create, ...placement, kind: 'investigate' }).success,
     ).toBe(true);
   }
+});
+
+it('defines waitsOn as the wait line anywhere in the note', () => {
+  const ask = PlanStreamAnswerSchema.options.find(
+    (option) => option.shape.decision.value === 'ask',
+  );
+  if (!ask || !('waitsOn' in ask.shape)) throw new Error('Missing ask contract');
+  expect(ask.shape.waitsOn.description).toContain('wait line anywhere in its note');
+  expect(ask.shape.waitsOn.description).toContain('no room');
 });

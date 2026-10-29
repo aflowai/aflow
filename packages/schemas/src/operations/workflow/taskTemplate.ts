@@ -70,7 +70,14 @@ function malformedOperator(
   return undefined;
 }
 
-export const WorkflowTaskInputTemplateSchema = z.record(z.unknown());
+export const WorkflowTaskInputTemplateSchema = z
+  .record(z.unknown())
+  .describe(
+    'Operation tasks only: the exact op input as literal JSON, where any node may be { "$bind": "<inputBindings key>" }, ' +
+      '{ "$concat": [part, …] }, { "$firstOf": [alt, …] } or { "$text": [value] }. Use it to fold several inputs into one nested field — ' +
+      'e.g. a skill calling an API directly with six run inputs in one body: inputBindings { a: { kind: "run_input", path: "a" }, …, f: { kind: "run_input", path: "f" } }, ' +
+      'inputTemplate { apiId, bindingId, url, method: "POST", body: { a: { "$bind": "a" }, …, f: { "$bind": "f" } } } on operation "api.http.call".',
+  );
 export type WorkflowTaskInputTemplate = z.infer<typeof WorkflowTaskInputTemplateSchema>;
 
 /**

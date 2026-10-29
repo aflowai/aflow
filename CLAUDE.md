@@ -77,6 +77,22 @@ scripts/                   # Dev tools, test flows, seed data, integration tests
 - **NEVER run `git clean -f`** — destroys untracked files permanently.
 - **NEVER suggest `yarn infra:reset`** — wipes all local Postgres and Redis data. Use `yarn db:migrate` for schema changes. Only the user should decide to reset infrastructure.
 
+## Writing style for agent-facing prose
+
+Write prose an agent reads (prompts, tool descriptions, briefs, plan notes, PR bodies) to these rules:
+
+<!-- The rule lines copy WRITING_STYLE_RULES in packages/schemas/src/runtime/writingStyle.ts. -->
+
+- No semicolons. Write two sentences.
+- Keep each sentence under about 25 words.
+- Use one verb, not a nominalisation: "analyse", not "perform an analysis of".
+- Use no soft phrasal verbs: "find", not "figure out".
+- Use no marketing adjectives.
+- Make each list item stand alone. Do not end one with "and" or "or".
+- Inside one unit, use one word per concept. Do not say "check", "validate" and "verify" for one action.
+- Keep every hedge. "May have pushed" stays "may have pushed".
+- Keep the present perfect where it carries meaning.
+
 ## Critical patterns to follow
 
 ### TypeScript strictness

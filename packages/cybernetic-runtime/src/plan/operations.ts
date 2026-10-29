@@ -14,12 +14,12 @@ import {
   PLAN_NODE_LEARNINGS_LIMIT,
   PLAN_NODE_LINKS_LIMIT,
   PLAN_NODE_LIST_DEFAULT_LIMIT,
+  PLAN_LANE_ITEM_RUNS_LIMIT,
   PLAN_NODE_RUNS_LIMIT,
   PLAN_NODE_PROSE_MAX_CHARS,
   PLAN_NODE_UPDATE_FIELDS,
   PLAN_TREE_DEPTH_LIMIT,
   PLAN_TREE_WALK_NODE_LIMIT,
-  CLOSED_PLAN_NODE_STATUSES,
   OPEN_PLAN_NODE_STATUSES,
   PLAN_NODE_LIVE_CHECK_HEAD,
   PLAN_NODE_PROPOSED_HEAD,
@@ -45,16 +45,17 @@ import {
   type PlanNodeSummary,
   type PlanNodeUpdateInput,
   type PlanBoardOutput,
+  type PlanLaneItem,
   type PlanOverviewOutput,
 } from '@aflow/schemas';
 import { publishActionCenterWake } from '@aflow/redis';
 import { bumpAttentionGeneration } from '../attentionCache.js';
 import { emitPlanUpdated } from '../entityEvents.js';
-import { bySiblingOrder, findPlanRoots, orderPlanTree, type PlanTreeWalkBounds } from './tree.js';
+import { findPlanRoots, orderPlanTree, type PlanTreeWalkBounds } from './tree.js';
 import {
   buildPlanBoard,
-  buildPlanRows,
-  closedPlanRow,
+  buildPlanOverview,
+  cardPullRequest,
   decodePlanLinkCursor,
   encodePlanLinkCursor,
   type PlanBoardOptions,
@@ -85,6 +86,7 @@ export type PlanOpErrorCode =
   | 'PLAN_NODE_DEPENDENCY_CYCLE'
   | 'PLAN_NODE_DEPENDENCY_WALK_LIMIT'
   | 'PLAN_NODE_RESIDENT_SCOPE'
+  | 'PLAN_NODE_LIVE_CHECK_PERSON'
   | 'PLAN_LEARNING_NOT_FOUND';
 
 export interface PlanOpError {
@@ -427,7 +429,7 @@ export async function createPlanNode(
 export function updatePlanNode(
   ctx: PlanWriteContext,
   input: PlanNodeUpdateInput,
-): Promise<PlanOpResult<{ node: PlanNode; carrier?: PlanNode }>> {
+): Promise<PlanOpResult<{ node: PlanNode; carrier?: PlanNode; carrierFailure?: string }>> {
   return writePlanNode(ctx, input, {});
 }
 
@@ -482,7 +484,7 @@ async function proposeCarrier(
   closed: PlanNode,
 ): Promise<PlanNode | undefined> {
   // A carrier read must not turn a committed close into a failed write.
-  const read = await readCarrierFindings(ctx, closed).catch(() => undefined);
+  const read = await readCarrierFindings(ctx, closed);
   if (!read) return undefined;
   const { findings, more } = read;
   const inserted = await ctx.store.insert(ctx.spaceId, {
@@ -490,7 +492,8 @@ async function proposeCarrier(
     createdBy: ctx.createdBy ?? null,
   });
   // The parent the closed node sat under is gone since its close: there is nowhere to propose it.
-  if (inserted.outcome !== 'inserted') return undefined;
+  if (inserted.outcome !== 'inserted')
+    throw new Error('Carrier placement refused: ' + inserted.outcome);
   await nodeWritten(ctx, { node: inserted.node });
   return inserted.node;
 }
@@ -499,7 +502,7 @@ async function writePlanNode(
   ctx: PlanWriteContext,
   input: PlanNodeUpdateInput,
   stamp: Pick<PlanNodePatch, 'openedAt' | 'spendCents'>,
-): Promise<PlanOpResult<{ node: PlanNode; carrier?: PlanNode }>> {
+): Promise<PlanOpResult<{ node: PlanNode; carrier?: PlanNode; carrierFailure?: string }>> {
   const current = await ctx.store.find(ctx.spaceId, input.nodeId);
   if (!current) return notFound(input.nodeId);
   if (current.revision !== input.expectedRevision) return stale(current, input);
@@ -516,6 +519,30 @@ async function writePlanNode(
     !(current.status === 'blocked' && status === 'blocked' && input.outcome === undefined)
   ) {
     return residentUnblocks(current);
+  }
+
+  if (
+    ctx.resident === true &&
+    (input.title !== undefined ||
+      input.goal !== undefined ||
+      input.criteria !== undefined ||
+      (current.kind === 'decide' &&
+        input.status !== undefined &&
+        isClosedPlanNodeStatus(input.status)))
+  )
+    return residentUnblocks(current);
+  if (
+    ctx.actorKind !== 'human' &&
+    current.note?.includes(PLAN_NODE_LIVE_CHECK_HEAD) &&
+    (input.status !== undefined || input.outcome !== undefined || input.note !== undefined)
+  ) {
+    return {
+      ok: false,
+      code: 'PLAN_NODE_LIVE_CHECK_PERSON',
+      message:
+        'Only a person may attest the folder-head read or complete this live check. Nothing was written.',
+      details: { nodeId: current.nodeId },
+    };
   }
 
   const patch: PlanNodePatch = {};
@@ -543,9 +570,8 @@ async function writePlanNode(
 
   if (
     ctx.actorKind === 'human' &&
-    current.status === 'blocked' &&
     input.status === 'active' &&
-    current.note?.startsWith(PLAN_NODE_LIVE_CHECK_HEAD)
+    current.note?.includes(PLAN_NODE_LIVE_CHECK_HEAD)
   ) {
     patch.status = 'done';
     patch.closedAt = new Date();
@@ -584,8 +610,15 @@ async function writePlanNode(
   }
   const written = await nodeWritten(ctx, { ok: true as const, node });
   if (isClosedPlanNodeStatus(current.status) || node.status !== 'done') return written;
-  const carrier = await proposeCarrier(ctx, node);
-  return carrier !== undefined ? { ...written, carrier } : written;
+  try {
+    const carrier = await proposeCarrier(ctx, node);
+    return carrier !== undefined ? { ...written, carrier } : written;
+  } catch (error) {
+    return {
+      ...written,
+      carrierFailure: `Carrier failed for closed node ${node.nodeId}. Read its linked findings: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
 }
 
 // ============================================================================
@@ -627,7 +660,7 @@ export async function openPlanNode(
     };
   }
   if (request.why !== undefined) {
-    if (current.status === 'blocked') {
+    if (current.status === 'blocked' || current.note?.includes(PLAN_NODE_LIVE_CHECK_HEAD)) {
       const note = `Approved: ${request.why}${current.note !== undefined ? `\n${current.note}` : ''}`;
       if (note.length > PLAN_NODE_PROSE_MAX_CHARS) return approvedNoteTooLong(current, note.length);
       update.note = note;
@@ -716,9 +749,15 @@ export async function getPlanNode(
   ctx: PlanReadContext,
   nodeId: string,
 ): Promise<PlanOpResult<PlanNodeGetOutput>> {
-  // The rail's read, its first page of every link kind, and what a session
-  // needs beyond it: what the node waits on and what was learned above it.
-  const detail = await readPlanNodeDetail(ctx, nodeId, { limit: PLAN_NODE_LINKS_LIMIT });
+  // The rail's read without its placement, its first page of every link kind,
+  // and what a session needs beyond it: what the node waits on and what was
+  // learned above it.
+  const detail = await readPlanNode(
+    ctx,
+    nodeId,
+    { limit: PLAN_NODE_LINKS_LIMIT },
+    { placement: false },
+  );
   if (!detail.ok) return detail;
   const { nextCursor: _nextCursor, ok: _ok, ...read } = detail;
   const [dependencies, dependents, learnings] = await Promise.all([
@@ -883,43 +922,50 @@ export async function listPlanNodes(
 // ============================================================================
 
 /**
- * Every plan of the space as a row (Plan 332 D7's rows): each root with its
- * state and its steps counted by column, by position and then id, open and
- * closed alike. Its work is bounded whatever the space has held: a closed
- * plan is `closed` by rule, so its root is read and none of its steps are
- * counted (the walk's one-row depth probe aside); the open plans share
- * one walk under the bounds every read of the plan takes, and only the steps
- * it reached are looked up for runs. A plan that walk read whole counts what
- * its board's header counts; one its bound may have cut short says so on its
- * own row. No step is returned, only counted.
+ * The space's plans as the overview reads them (Plan 332 D7): every root as a
+ * row with its state and, open, its steps counted by the board's column rule;
+ * and the Needs you, In flight and Up next lanes across every open plan. One
+ * recursive read, stopped at the node bound, returns the roots and the open
+ * steps and counts the closed ones, so the rows and the lanes agree on which
+ * plans are open and no done step is read as a row. The lanes' rows are
+ * looked up in the same snapshot — their newest pull requests, and the runs
+ * on the In flight rows — so a row's `runsTotal` and its `runs` agree.
  */
 export async function readPlanOverview(ctx: PlanReadContext): Promise<PlanOverviewOutput> {
-  // One snapshot for both: a root closed or reopened between two reads would
-  // otherwise be listed twice, or not at all.
-  const [closed, open] = await ctx.store.walkTogether(ctx.spaceId, [
-    // Depth 0 returns the roots alone, and only the node bound can cut that
-    // list short; the walk still sends its one-row probe for children below
-    // them, whose depth verdict is not read here.
-    { ...PLAN_TREE_WALK_BOUNDS, maxDepth: 0, statuses: CLOSED_PLAN_NODE_STATUSES },
-    { ...PLAN_TREE_WALK_BOUNDS, rootStatuses: OPEN_PLAN_NODE_STATUSES },
-  ]);
-  if (closed === undefined || open === undefined)
-    throw new Error('walkTogether returned fewer walks than asked');
-  const placed = orderPlanTree(open.nodes);
-  const inFlight = await ctx.store.inFlightRunCountsOf(
-    ctx.spaceId,
-    placed.map((p) => p.node.nodeId),
-  );
-  const rows = [
-    ...buildPlanRows(placed, inFlight, open.truncated),
-    ...closed.nodes.map(closedPlanRow),
-  ].sort(bySiblingOrder);
-  // Only more open roots than the node bound holds leave plans out of the list;
-  // roots that exactly fill it are every one listed, their steps cut on their rows.
-  const openRootsCut = open.cutAtDepth === 0 ? open.truncated : undefined;
-  const truncated =
-    (closed.truncated?.bound === 'nodes' ? closed.truncated : undefined) ?? openRootsCut;
-  return { roots: rows, ...(truncated !== undefined ? { truncated } : {}) };
+  const {
+    placed: overview,
+    pullRequests,
+    runs,
+  } = await ctx.store.readOverview(ctx.spaceId, PLAN_TREE_WALK_BOUNDS, (read) => {
+    const placed = buildPlanOverview(read, PLAN_TREE_WALK_BOUNDS);
+    const { needsYou, inFlight, upNext } = placed.lanes;
+    const shown = [...needsYou.items, ...inFlight.items, ...upNext.items];
+    return {
+      placed,
+      pullRequestsOf: [...new Set(shown.map((item) => item.nodeId))],
+      runsOf: inFlight.items.filter((item) => (item.runsTotal ?? 0) > 0).map((item) => item.nodeId),
+      runsPerNode: PLAN_LANE_ITEM_RUNS_LIMIT,
+    };
+  });
+  const { needsYou, inFlight, upNext } = overview.lanes;
+  const decorate = (item: PlanLaneItem): PlanLaneItem => {
+    const pullRequest = pullRequests.get(item.nodeId);
+    const onIt = runs.get(item.nodeId);
+    return {
+      ...item,
+      ...(pullRequest !== undefined ? { pullRequest: cardPullRequest(pullRequest) } : {}),
+      ...(item.runs !== undefined && onIt !== undefined ? { runs: onIt } : {}),
+    };
+  };
+  return {
+    ...overview,
+    lanes: {
+      ...overview.lanes,
+      needsYou: { ...needsYou, items: needsYou.items.map(decorate) },
+      inFlight: { ...inFlight, items: inFlight.items.map(decorate) },
+      upNext: { ...upNext, items: upNext.items.map(decorate) },
+    },
+  };
 }
 
 /**
@@ -962,14 +1008,49 @@ export async function readPlanBoard(
 
 /**
  * One node for the board's rail: in full, its children, a page of its links
- * — of one kind where `linkKind` names it — and the runs in flight for it and
- * every node under it.
+ * — of one kind where `linkKind` names it — the runs in flight for it and
+ * every node under it, and its activity and closed ancestor as the board
+ * derives them.
  */
 export async function readPlanNodeDetail(
   ctx: PlanReadContext,
   nodeId: string,
   page: PlanNodeDetailQuery,
 ): Promise<PlanOpResult<PlanNodeDetailOutput>> {
+  return readPlanNode(ctx, nodeId, page, { placement: true });
+}
+
+/** What a node's read carries beyond the node and its pages, where the caller asks. */
+interface PlanNodeReadExtras {
+  /**
+   * The node's activity and its closed ancestor, as the board places it: the
+   * rail's, read over the whole subtree and the node's ancestors. A session's
+   * `plan.node.get` and the stream's own read of its node show neither.
+   */
+  placement: boolean;
+}
+
+type PlanNodeRead = Omit<PlanNodeDetailOutput, 'activity' | 'closedAncestor'> &
+  Partial<Pick<PlanNodeDetailOutput, 'activity' | 'closedAncestor'>>;
+
+async function readPlanNode(
+  ctx: PlanReadContext,
+  nodeId: string,
+  page: PlanNodeDetailQuery,
+  extras: { placement: true },
+): Promise<PlanOpResult<PlanNodeDetailOutput>>;
+async function readPlanNode(
+  ctx: PlanReadContext,
+  nodeId: string,
+  page: PlanNodeDetailQuery,
+  extras: PlanNodeReadExtras,
+): Promise<PlanOpResult<PlanNodeRead>>;
+async function readPlanNode(
+  ctx: PlanReadContext,
+  nodeId: string,
+  page: PlanNodeDetailQuery,
+  extras: PlanNodeReadExtras,
+): Promise<PlanOpResult<PlanNodeRead>> {
   const after = page.cursor !== undefined ? decodePlanLinkCursor(page.cursor) : undefined;
   if (after === null) {
     return {
@@ -983,21 +1064,23 @@ export async function readPlanNodeDetail(
   if (!node) return notFound(nodeId);
   // Every status: a run in flight for a node closed under it is still in flight.
   const subtree = await ctx.store.walk(ctx.spaceId, { rootId: nodeId, ...PLAN_TREE_WALK_BOUNDS });
-  const [children, links, runs] = await Promise.all([
+  const subtreeIds = subtree.nodes.map((n) => n.nodeId);
+  const [children, links, runs, placement] = await Promise.all([
     ctx.store.listChildren(ctx.spaceId, nodeId, PLAN_NODE_CHILDREN_LIMIT),
     ctx.store.pageLinks(ctx.spaceId, nodeId, {
       ...(page.linkKind !== undefined ? { kind: page.linkKind } : {}),
       ...(after !== undefined ? { after } : {}),
       limit: page.limit,
     }),
-    ctx.store.listRunsServing(
-      ctx.spaceId,
-      subtree.nodes.map((n) => n.nodeId),
-      PLAN_NODE_RUNS_LIMIT,
-    ),
+    ctx.store.listRunsServing(ctx.spaceId, subtreeIds, PLAN_NODE_RUNS_LIMIT),
+    extras.placement
+      ? Promise.all([
+          ctx.store.closedAncestorOf(ctx.spaceId, nodeId),
+          ctx.store.inFlightRunCountsOf(ctx.spaceId, subtreeIds),
+        ])
+      : undefined,
   ]);
-  return {
-    ok: true,
+  const read: PlanNodeRead = {
     node,
     children: children.children,
     childrenTotal: children.total,
@@ -1006,6 +1089,20 @@ export async function readPlanNodeDetail(
     ...(links.next !== undefined ? { nextCursor: encodePlanLinkCursor(links.next) } : {}),
     runs: runs.runs,
     runsTotal: runs.total,
+  };
+  if (placement === undefined) return { ok: true, ...read };
+  const [closedAncestor, inFlight] = placement;
+  // The board's rule: the node's own runs count whatever its status, a run
+  // under it only where it serves an active node.
+  const servesIt = (n: { nodeId: string; status: string }) =>
+    (inFlight.get(n.nodeId) ?? 0) > 0 && (n.nodeId === nodeId || n.status === 'active');
+  const activity =
+    servesIt(node) || subtree.nodes.some(servesIt) ? ('in_flight' as const) : ('idle' as const);
+  return {
+    ok: true,
+    ...read,
+    activity,
+    ...(closedAncestor !== null ? { closedAncestor } : {}),
   };
 }
 
