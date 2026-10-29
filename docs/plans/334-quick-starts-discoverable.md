@@ -1,6 +1,6 @@
 # Plan 334 — A new user finds the quick starts
 
-**Status:** 🌱 design (P0). Nothing built. The phases in §6 wait for the operator's approval.
+**Status:** 🚧 in progress. P0 (this design) and P1 (the templates beside the blank start) are built and merged. P2 (the first-run card) and P3 (the live check) remain.
 
 **Builds on:** Plan 330 (a quick start is a Store entry of kind `space`, installed by `POST /v1/store/space-installs` into a space it creates), Plan 315 (the local edition's first run), Plan 325 (help articles).
 
