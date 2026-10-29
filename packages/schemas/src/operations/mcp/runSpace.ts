@@ -12,3 +12,7 @@ export const RunSpaceIdSchema = z
 
 export const UPDATE_KEEPS_OMITTED =
   'On an existing row, a field left out keeps its stored value; defaults apply only when creating.';
+
+/** The rule for an optional field an agent can clear. */
+export const NULL_CLEARS =
+  'Optional. null removes the stored value; left out, an existing row keeps it.';

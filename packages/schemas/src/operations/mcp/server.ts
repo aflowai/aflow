@@ -5,14 +5,30 @@ import {
   McpCachedToolSchema,
   McpSessionMetadataSchema,
 } from '../../models/mcpServerDefinition.js';
-import { RunSpaceIdSchema, UPDATE_KEEPS_OMITTED } from './runSpace.js';
+import { NULL_CLEARS, RunSpaceIdSchema, UPDATE_KEEPS_OMITTED } from './runSpace.js';
 
-/** Upsert input: definition shape minus auto-populated timestamps. */
+const definitionShape = McpServerDefinitionSchema.shape;
+
+/**
+ * Upsert input: definition shape minus auto-populated timestamps. The optional
+ * fields an operator sets also take `null`, which clears the stored value —
+ * leaving one out on an update keeps it.
+ */
 export const McpServerUpsertInputSchema = McpServerDefinitionSchema.omit({
   createdAt: true,
   updatedAt: true,
 })
   .extend({
+    description: definitionShape.description.nullable().describe(NULL_CLEARS),
+    toolFilter: definitionShape.toolFilter
+      .nullable()
+      .describe(`Restricts which of the server's tools are exposed. ${NULL_CLEARS}`),
+    protectedResourceMetadataPath: definitionShape.protectedResourceMetadataPath
+      .nullable()
+      .describe(`Override path for OAuth Protected Resource Metadata discovery. ${NULL_CLEARS}`),
+    icon: definitionShape.icon
+      .nullable()
+      .describe(`${definitionShape.icon.description ?? ''} ${NULL_CLEARS}`.trim()),
     tags: McpServerDefinitionSchema.shape.tags.describe(
       `Replaces the stored tags when given. ${UPDATE_KEEPS_OMITTED}`,
     ),
@@ -98,7 +114,8 @@ export const McpServerOperationRegistrations: OperationRegistration[] = [
     semanticDescription:
       "Create or update an MCP server definition in the run's space (serverId, URL, transport, " +
       'toolFilter, PRM hints). An update writes only the fields given; every field left out keeps ' +
-      'its stored value, and schema defaults apply only when creating. Definitions hold no ' +
+      'its stored value, and schema defaults apply only when creating. description, toolFilter, ' +
+      'icon and protectedResourceMetadataPath take null to clear the stored value. Definitions hold no ' +
       'credentials — pair with a binding to authorize access.',
     tags: ['crud', 'mcp', 'integration'],
     crudView: { entityType: 'mcp_server_definition', action: 'create' },
@@ -124,6 +141,8 @@ export const McpServerOperationRegistrations: OperationRegistration[] = [
         'serverId, name and serverUrl are required on every call, so an update always writes them. ' +
           'Every other field left out — tags, source, toolFilter, description, icon — keeps its ' +
           'stored value; a field given replaces the stored one whole.',
+        'To remove a stored description, toolFilter, icon or protectedResourceMetadataPath, send ' +
+          'it as null — leaving it out keeps it.',
         'Streamable HTTP is the only supported transport per spec rev 2025-11-25.',
       ],
       minimalExampleInput: {

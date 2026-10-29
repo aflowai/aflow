@@ -18,6 +18,7 @@ import {
   getMcpServerDefinitionRow,
   listMcpServerDefinitionRows,
   McpBindingOriginNotPinnedError,
+  mcpServerDefinitionFromRow,
   upsertMcpServerBinding,
   upsertMcpServerDefinition,
   type McpServerBindingWrite,
@@ -316,6 +317,86 @@ describeDb('MCP integration admin SQL (real DB)', () => {
       include: ['search'],
     });
     expect((row?.definitionJson as Record<string, unknown>)['name']).toBe('Docs renamed');
+  });
+
+  it('clears the stated definition fields the update leaves out, keeping the unstated ones', async (ctx) => {
+    if (!requireSchema(ctx)) return;
+
+    await upsertMcpServerDefinition({
+      ...inSpace,
+      definition: definition('docs', {
+        description: 'Docs search',
+        toolFilter: { include: ['search'] },
+        icon: { kind: 'phosphor', name: 'Books' },
+        protectedResourceMetadataPath: '/.well-known/prm',
+        tags: ['search'],
+      }),
+    });
+    // What the handler writes for an agent that sent description, toolFilter and icon as null.
+    await upsertMcpServerDefinition({
+      ...inSpace,
+      definition: definition('docs'),
+      statedFields: new Set(['serverId', 'name', 'serverUrl', 'description', 'toolFilter', 'icon']),
+    });
+
+    const row = await getMcpServerDefinitionRow({ ...inSpace, serverId: 'docs' });
+    expect(row?.description).toBeNull();
+    expect(row?.tags).toEqual(['search']);
+    const json = row?.definitionJson as Record<string, unknown>;
+    expect(json).not.toHaveProperty('description');
+    expect(json).not.toHaveProperty('toolFilter');
+    expect(json).not.toHaveProperty('icon');
+    expect(json['protectedResourceMetadataPath']).toBe('/.well-known/prm');
+    expect(mcpServerDefinitionFromRow(row!)).not.toHaveProperty('toolFilter');
+  });
+
+  it('clears a stored binding description when the update states it and leaves it out', async (ctx) => {
+    if (!requireSchema(ctx)) return;
+
+    const identity = { tenantId: TENANT_ID, spaceId: SPACE };
+    await upsertMcpServerBinding({
+      ...inSpace,
+      binding: binding('docs-default', 'docs', { description: 'Main docs binding' }),
+      scope: identity,
+      scopeOnUpdate: null,
+    });
+    const stated = (fields: Array<keyof McpServerBindingWrite>) => ({
+      fields: new Set<keyof McpServerBindingWrite>([
+        'bindingId',
+        'serverId',
+        'name',
+        'auth',
+        ...fields,
+      ]),
+      connectionPolicy: {},
+    });
+    const storedDescription = async () =>
+      (
+        await query<{ description: string | null }>(drizzleSql`
+          SELECT description FROM mcp_server_bindings
+          WHERE binding_id = 'docs-default' AND space_id = ${SPACE}::uuid
+        `)
+      )[0]?.description;
+
+    // Left out: kept.
+    await upsertMcpServerBinding({
+      ...inSpace,
+      binding: binding('docs-default', 'docs'),
+      scope: identity,
+      scopeOnUpdate: null,
+      stated: stated([]),
+    });
+    expect(await storedDescription()).toBe('Main docs binding');
+
+    // Stated and absent (sent as null): cleared.
+    await upsertMcpServerBinding({
+      ...inSpace,
+      binding: binding('docs-default', 'docs'),
+      scope: identity,
+      scopeOnUpdate: null,
+      stated: stated(['description']),
+    });
+    expect(await storedDescription()).toBeNull();
   });
 
   it('refuses to enable a credentialed binding until its origin is pinned in the same space', async (ctx) => {

@@ -64,6 +64,7 @@ Examples: `ai.text.generate`, `api.http.call`, `memory.store.put`, `flow.control
 
   // Validation control
   skipInputValidation?: true,     // Rare — skip Zod validation
+  inputAsSent?: true,             // Rare — still validated against inputZod, but the handler gets the raw input (no defaults filled in) and parses it itself
 }
 ```
 

@@ -79,6 +79,16 @@ function statedFieldsOf<T extends object>(raw: unknown, parsed: T): ReadonlySet<
 }
 
 /**
+ * The value to write, with every field sent as `null` left out. Such a field
+ * is still stated, so the update clears it rather than keeping what is stored.
+ */
+function withoutNulls<T extends object>(value: T): { [K in keyof T]: Exclude<T[K], null> } {
+  return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== null)) as {
+    [K in keyof T]: Exclude<T[K], null>;
+  };
+}
+
+/**
  * The run's space is the authority for where a row lives. A stated `spaceId`
  * naming another space is refused rather than silently written here.
  */
@@ -99,16 +109,17 @@ async function runOp(
   const { spaceId, tenantId } = scope;
   switch (op) {
     case 'mcp.server.upsert': {
-      const { spaceId: statedSpaceId, ...definition } = parseInput(
+      const { spaceId: statedSpaceId, ...parsed } = parseInput(
         McpServerUpsertInputSchema,
         op,
         input,
       );
       assertRunSpace(statedSpaceId, spaceId, op);
+      const definition = withoutNulls(parsed);
       const { created } = await upsertMcpServerDefinition({
         ...scope,
         definition,
-        statedFields: statedFieldsOf(input, definition),
+        statedFields: statedFieldsOf(input, parsed),
       });
       const output: McpServerUpsertOutput = { serverId: definition.serverId, spaceId, created };
       return output;
@@ -143,11 +154,12 @@ async function runOp(
       return output;
     }
     case 'mcp.binding.upsert': {
-      const { scope: statedScope = {}, ...binding } = parseInput(
+      const { scope: statedScope = {}, ...parsed } = parseInput(
         McpBindingUpsertInputSchema,
         op,
         input,
       );
+      const binding = withoutNulls(parsed);
       assertRunSpace(statedScope.spaceId, spaceId, op);
       const statedPolicyKeys = new Set(statedKeysOf(input['connectionPolicy']));
       const connectionPolicy = Object.fromEntries(
@@ -164,7 +176,7 @@ async function runOp(
       } = await upsertMcpServerBinding({
         ...scope,
         binding,
-        stated: { fields: statedFieldsOf(input, binding), connectionPolicy },
+        stated: { fields: statedFieldsOf(input, parsed), connectionPolicy },
         scope: statedScope.flowId ? { flowId: statedScope.flowId, ...identity } : identity,
         scopeOnUpdate:
           statedScope.flowId === undefined

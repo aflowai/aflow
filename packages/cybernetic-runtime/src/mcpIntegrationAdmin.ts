@@ -57,8 +57,8 @@ export type McpServerBindingWrite = Pick<
  * Which fields an update writes. Absent, an update replaces every field — the
  * Integrations form sends the whole object. Present, an existing row keeps
  * every field not named here, so a caller that states one setting does not
- * reset the others to their schema defaults. A new row is written whole either
- * way.
+ * reset the others to their schema defaults; a field named here that the
+ * written value leaves out is cleared. A new row is written whole either way.
  */
 export type StatedFields<T> = ReadonlySet<keyof T>;
 
@@ -72,6 +72,13 @@ function pickStated<T extends object>(value: T, stated: StatedFields<T>): Partia
   return Object.fromEntries(
     Object.entries(value).filter(([key]) => stated.has(key as keyof T)),
   ) as Partial<T>;
+}
+
+/** The stated fields the value leaves out — the ones an update clears. */
+function clearedOf<T extends object>(value: T, stated: StatedFields<T>): string[] {
+  return [...stated]
+    .map(String)
+    .filter((key) => (value as Record<string, unknown>)[key] === undefined);
 }
 
 function updateColumns<T>(
@@ -205,7 +212,10 @@ export async function upsertMcpServerDefinition(
     ...updateColumns(DEFINITION_COLUMNS, statedFields),
     statedFields === undefined
       ? sql`definition_json = EXCLUDED.definition_json`
-      : sql`definition_json = COALESCE(mcp_server_definitions.definition_json, '{}'::jsonb) || ${JSON.stringify(pickStated(definition, statedFields))}::jsonb`,
+      : sql`definition_json = ${clearedOf(definition, statedFields).reduce<SQL>(
+          (stored, key) => sql`(${stored} - ${key}::text)`,
+          sql`COALESCE(mcp_server_definitions.definition_json, '{}'::jsonb)`,
+        )} || ${JSON.stringify(pickStated(definition, statedFields))}::jsonb`,
     sql`updated_at = NOW()`,
   ];
   const rows = await withTenantSchema(db, tenantContextOf(tenantId), async (tx) =>

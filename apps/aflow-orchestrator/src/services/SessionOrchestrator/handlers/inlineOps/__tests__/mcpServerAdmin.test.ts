@@ -252,6 +252,29 @@ describe('mcp.server.upsert', () => {
     );
   });
 
+  it('clears the optional fields an update sends as null and keeps the ones it leaves out', async () => {
+    executeRows = [{ created: false }];
+    await handleMcpServerAdminInline(
+      await buildArgs('mcp.server.upsert', {
+        ...input,
+        description: null,
+        toolFilter: null,
+        icon: null,
+      }),
+    );
+    expect(decodeOutput(lastResult())['created']).toBe(false);
+    const update = executed[0]!.slice(executed[0]!.indexOf('DO UPDATE SET'));
+    expect(update).toContain('description = EXCLUDED.description');
+    expect(update.match(/ - \?::text\)/g)).toHaveLength(3);
+    const params = executedParams[0]!;
+    expect(params).toEqual(expect.arrayContaining(['description', 'toolFilter', 'icon']));
+    expect(params).not.toContain('protectedResourceMetadataPath');
+    // The insert's description is null, which is what EXCLUDED.description writes.
+    expect(params[2]).toBeNull();
+    const mergedJson = JSON.parse(params.at(-1) as string) as Record<string, unknown>;
+    expect(Object.keys(mergedJson).sort()).toEqual(['name', 'serverId', 'serverUrl'].sort());
+  });
+
   it('hands the handler the input as the agent sent it, with no schema default filled in', async () => {
     const ref = await resolvedInputRefFor('mcp.server.upsert', input);
     expect(readInlineRef(ref)).toEqual(input);
@@ -493,6 +516,23 @@ describe('mcp.binding.upsert', () => {
     }
     expect(scopeOnUpdateParam()).toBeNull();
     expect(decodeOutput(lastResult())).toMatchObject({ created: false, enabled: false });
+  });
+
+  it('clears a stored description on an update that sends description: null', async () => {
+    selectRows = [{ pinnedOrigin: null, enabled: 0, authJson: { type: 'none' } }];
+    executeRows = [{ created: false, scope: runScope, enabled: 0 }];
+    await handleMcpServerAdminInline(
+      await buildArgs('mcp.binding.upsert', { ...binding, description: null }),
+    );
+
+    expect(decodeOutput(lastResult())['created']).toBe(false);
+    const update = executed[0]!.slice(executed[0]!.indexOf('DO UPDATE SET'));
+    expect(update).toContain('description = EXCLUDED.description');
+    for (const kept of ['enabled =', 'owner_scope =', 'sampling_policy =']) {
+      expect(update).not.toContain(kept);
+    }
+    // The insert's description is null, which is what EXCLUDED.description writes.
+    expect(executedParams[0]![3]).toBeNull();
   });
 
   it('hands the handler the binding input as the agent sent it, with no schema default filled in', async () => {

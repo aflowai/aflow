@@ -5,7 +5,7 @@ import {
   McpCachedToolSchema,
   McpSessionMetadataSchema,
 } from '../../models/mcpServerDefinition.js';
-import { RunSpaceIdSchema, UPDATE_KEEPS_OMITTED } from './runSpace.js';
+import { NULL_CLEARS, RunSpaceIdSchema, UPDATE_KEEPS_OMITTED } from './runSpace.js';
 
 /**
  * Upsert input: binding shape minus auto-populated fields. Server-side validation
@@ -42,6 +42,7 @@ export const McpBindingUpsertInputSchema = McpServerBindingSchema.omit({
       })
       .optional()
       .describe("Optional. The binding is always written to the run's tenant and space."),
+    description: McpServerBindingSchema.shape.description.nullable().describe(NULL_CLEARS),
     connectionPolicy: McpServerBindingSchema.shape.connectionPolicy.describe(
       'On an existing binding, only the keys given replace the stored ones; the rest keep their ' +
         'stored values. Defaults apply only when creating.',
@@ -205,8 +206,8 @@ export const McpBindingOperationRegistrations: OperationRegistration[] = [
     semanticDescription:
       "Create or update an MCP server binding in the run's space (auth, flow scope, connection + " +
       'sampling policy, owner and client scope, enabled). An update writes only the fields given: ' +
-      'every field left out keeps its stored value, and schema defaults apply only when creating. ' +
-      'Server rejects enabled: true on a credentialed binding without pinnedOrigin — caller must ' +
+      'every field left out keeps its stored value, and schema defaults apply only when creating; ' +
+      'description: null clears the stored description. Server rejects enabled: true on a credentialed binding without pinnedOrigin — caller must ' +
       'run mcp.binding.test first.',
     tags: ['crud', 'mcp', 'integration'],
     crudView: { entityType: 'mcp_server_binding', action: 'create' },
@@ -229,7 +230,7 @@ export const McpBindingOperationRegistrations: OperationRegistration[] = [
         'Credentials are referenced by credentialKey only — store actual values via the Integrations page.',
         'Credentialed bindings require mcp.binding.test to populate pinnedOrigin before they can be enabled.',
         'bindingId, serverId, name and auth are required on every call, so an update always writes them — resend the stored auth unless you mean to change it.',
-        'Every other field left out on an update keeps its stored value: enabled, ownerScope, clientScope, samplingPolicy, subscribeListChanged and description are not reset to their defaults. connectionPolicy merges key by key. To change one, send it.',
+        'Every other field left out on an update keeps its stored value: enabled, ownerScope, clientScope, samplingPolicy, subscribeListChanged and description are not reset to their defaults. connectionPolicy merges key by key. To change one, send it; to remove a stored description, send description: null.',
         'Updating a binding without scope.flowId keeps its stored flow narrowing; pass scope.flowId: null to make it space-wide. The output scope and enabled are what is stored.',
         "The tenant and space are the run's — there is no tenantId to supply, and a scope.spaceId naming another space is refused.",
       ],
