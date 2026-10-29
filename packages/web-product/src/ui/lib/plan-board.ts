@@ -529,10 +529,24 @@ export function planDoneFolds(
 
 const PULL_REQUEST_NUMBER = /\/pull\/(\d+)/;
 
-/** `#181` for a pull request URL, else the URL. */
-export function pullRequestLabel(url: string): string {
-  const number = PULL_REQUEST_NUMBER.exec(url)?.[1];
-  return number !== undefined ? `#${number}` : url;
+/** A pull request as its chip reads it: what it is, which one, and whether it merged. */
+export function pullRequestChipLabel(pullRequest: { url: string; merged: boolean }): string {
+  const number = PULL_REQUEST_NUMBER.exec(pullRequest.url)?.[1];
+  const state = pullRequest.merged ? 'merged' : 'open';
+  return number !== undefined ? `PR #${number} · ${state}` : `Pull request · ${state}`;
+}
+
+/** The mark on the step the stream walk takes next for its plan. */
+export const PLAN_NEXT_LABEL = 'Next for the loop';
+
+/** A step's review rounds, named as what they count. */
+export function reviewRoundsLabel(rounds: number): string {
+  return `${String(rounds)} review round${rounds === 1 ? '' : 's'}`;
+}
+
+/** Runs in flight on a step, named as what they count. */
+export function runsInFlightLabel(runs: number): string {
+  return `${String(runs)} run${runs === 1 ? '' : 's'} in flight`;
 }
 
 const RUN_KIND_LABEL: Record<string, string> = {

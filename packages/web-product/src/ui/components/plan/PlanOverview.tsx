@@ -8,15 +8,19 @@
  * rail for its step; a blocked step's **Approve** sends the open write from
  * the row itself, against the revision the lanes read, so the step moves on
  * without its plan being opened. Up next carries no reorder: ordering steps
- * is the board's (D6).
+ * is the board's (D6). Each lane is headed in its column's colour and holds
+ * its rows on one contained surface; a row reads plan, step, where it stands,
+ * then age and action, and the selected one is filled and barred in the
+ * accent as the plan list's is (Plan 332 P6).
  */
-import { useState, type CSSProperties } from 'react';
+import { useState } from 'react';
 import Link from 'next/link';
 import { Badge, Button, Column, Row, Text } from '@aflow/design-system';
 import type { PlanLaneItem, PlanOverviewLanes } from '@aflow/schemas';
 import { spaceRoute } from '../../lib/space-routes.js';
 import {
   NEEDS_YOU_REASON_LABEL,
+  PLAN_BOARD_COLUMNS,
   PLAN_LANES,
   PLAN_LANE_EMPTY_CUT,
   PLAN_LANES_TRUNCATION_LINE,
@@ -25,21 +29,11 @@ import {
   planLaneCount,
   planLaneMore,
   planTag,
-  pullRequestLabel,
   runKindLabel,
   type PlanLaneId,
 } from '../../lib/plan-board.js';
 import type { PlanNodeOpener } from './PlanNodeOpenControl.js';
-
-const listStyle: CSSProperties = { listStyle: 'none', margin: 0, padding: 0 };
-
-const rowButtonStyle: CSSProperties = {
-  all: 'unset',
-  cursor: 'pointer',
-  display: 'block',
-  flex: 1,
-  minWidth: 0,
-};
+import { HeadingDot, MetaSep, NextMarker, PullRequestChip } from './PlanParts.js';
 
 const linkStyle = { color: 'var(--color-text-link)' } as const;
 
@@ -56,7 +50,7 @@ function RowState({
   if (lane === 'needs_you' && item.reason !== undefined) {
     return <Badge variant="warning">{NEEDS_YOU_REASON_LABEL[item.reason]}</Badge>;
   }
-  if (lane === 'up_next') return <Badge variant="accent">Next</Badge>;
+  if (lane === 'up_next') return <NextMarker />;
   const runs = item.runs ?? [];
   if (runs.length === 0) {
     return (
@@ -119,6 +113,12 @@ function ApproveFromRow({ item, onOpen }: { item: PlanLaneItem; onOpen: PlanNode
   );
 }
 
+/**
+ * One step on a lane, in D10's order: its plan's code, then the step (its
+ * phase and title), where it stands (the reason, its runs, its PR) and its
+ * note, then how long since it was written and the action that answers it.
+ * The whole row opens the rail; its links and its action stand above that.
+ */
 function LaneRow({
   lane,
   item,
@@ -142,51 +142,46 @@ function LaneRow({
     <li
       data-plan-lane-row={item.nodeId}
       {...(selected ? { 'aria-current': 'true' as const } : {})}
-      style={{
-        padding: 'var(--space-2)',
-        borderRadius: 'var(--radius-md)',
-        ...(selected ? { background: 'var(--color-surface-2)' } : {}),
-      }}
+      className="plan-selectable plan-lane-row"
     >
-      <Row gap="sm" align="start" justify="between">
+      <Text size="xs" variant="mono" className="plan-lane-row__plan" data-plan-lane-plan>
+        {planTag(item.rootTitle)}
+      </Text>
+      <div className="plan-lane-row__main">
         <button
           type="button"
-          style={rowButtonStyle}
+          className="plan-lane-row__select"
           aria-pressed={selected}
           onClick={() => {
             onSelect(item);
           }}
         >
-          <Column gap="xs">
-            <Row gap="xs" align="center" wrap>
-              <Text size="xs" variant="muted" data-plan-lane-plan>
-                {planTag(item.rootTitle)}
+          {item.phaseTitle !== undefined && (
+            <>
+              <Text size="xs" variant="muted" data-plan-lane-phase>
+                {phaseLabel(item.phaseTitle)}
               </Text>
-              {item.phaseTitle !== undefined && (
-                <Badge variant="neutral">{phaseLabel(item.phaseTitle)}</Badge>
-              )}
-              <Text size="sm" weight="medium">
-                {item.title}
-              </Text>
-            </Row>
-            <Row gap="xs" align="center" wrap>
-              <RowState lane={lane} item={item} spaceSlug={spaceSlug} />
-              {item.pullRequest !== undefined && (
-                <Badge variant={item.pullRequest.merged ? 'success' : 'info'}>
-                  {pullRequestLabel(item.pullRequest.url)}
-                </Badge>
-              )}
-              <Text size="xs" variant="muted" data-plan-lane-age>
-                {planAge(item.updatedAt, now)}
-              </Text>
-            </Row>
-            {item.noteHead !== undefined && (
-              <Text size="xs" variant="muted" data-plan-lane-note>
-                {item.noteHead}
-              </Text>
-            )}
-          </Column>
+              <MetaSep />
+            </>
+          )}
+          <Text size="sm" weight={selected ? 'semibold' : 'medium'} className="plan-row__title">
+            {item.title}
+          </Text>
         </button>
+        <div className="plan-row__meta">
+          <RowState lane={lane} item={item} spaceSlug={spaceSlug} />
+          {item.pullRequest !== undefined && <PullRequestChip pullRequest={item.pullRequest} />}
+        </div>
+        {item.noteHead !== undefined && (
+          <Text size="xs" variant="muted" className="plan-lane-row__note" data-plan-lane-note>
+            {item.noteHead}
+          </Text>
+        )}
+      </div>
+      <span className="plan-lane-row__actions">
+        <Text size="xs" variant="muted" data-plan-lane-age>
+          {planAge(item.updatedAt, now)}
+        </Text>
         {lane === 'needs_you' && item.reason === 'blocked' && (
           // Keyed by revision: a row read again at a new revision starts afresh.
           <ApproveFromRow
@@ -206,7 +201,7 @@ function LaneRow({
             Decide
           </Button>
         )}
-      </Row>
+      </span>
     </li>
   );
 }
@@ -237,15 +232,19 @@ export function PlanOverview({
       {PLAN_LANES.map(({ id, key, label, empty }) => {
         const lane = lanes[key];
         const more = planLaneMore(lane);
+        const color = PLAN_BOARD_COLUMNS.find((column) => column.id === id)?.color;
         return (
-          <Column key={id} gap="xs" data-plan-lane={id}>
-            <Text variant="label" size="xs">{`${label} · ${planLaneCount(lane, lanes)}`}</Text>
+          <Column key={id} gap="sm" data-plan-lane={id}>
+            <Row gap="xs" align="center">
+              {color !== undefined && <HeadingDot color={color} />}
+              <Text size="sm" weight="medium">{`${label} · ${planLaneCount(lane, lanes)}`}</Text>
+            </Row>
             {lane.items.length === 0 ? (
-              <Text size="sm" variant="muted">
+              <Text size="sm" variant="muted" style={{ paddingLeft: 'var(--space-4)' }}>
                 {lanes.truncated !== undefined ? PLAN_LANE_EMPTY_CUT : empty}
               </Text>
             ) : (
-              <ul style={listStyle} aria-label={label}>
+              <ul className="plan-lane-list" aria-label={label}>
                 {lane.items.map((item) => (
                   <LaneRow
                     key={item.nodeId}
@@ -262,7 +261,12 @@ export function PlanOverview({
               </ul>
             )}
             {more !== undefined && (
-              <Text size="xs" variant="muted" data-plan-lane-more>
+              <Text
+                size="xs"
+                variant="muted"
+                style={{ paddingLeft: 'var(--space-4)' }}
+                data-plan-lane-more
+              >
                 {more}
               </Text>
             )}

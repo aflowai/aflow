@@ -12,7 +12,17 @@
  */
 import { useState, type ReactNode } from 'react';
 import Link from 'next/link';
-import { Badge, Button, Column, Row, Text, type BadgeVariant } from '@aflow/design-system';
+import {
+  Badge,
+  Button,
+  Column,
+  Icon,
+  IconButton,
+  Row,
+  Text,
+  Tooltip,
+  type BadgeVariant,
+} from '@aflow/design-system';
 import type {
   PlanBoardColumn,
   PlanNeedsYouReason,
@@ -27,7 +37,7 @@ import {
   PLAN_BOARD_COLUMNS,
   phaseLabel,
   planDetailRailNode,
-  pullRequestLabel,
+  reviewRoundsLabel,
   runKindLabel,
   runLinkStatus,
   shortTime,
@@ -39,6 +49,7 @@ import {
   type PlanNodeRead,
 } from './PlanNodeCloseControl.js';
 import { PlanNodeOpenControl, type PlanNodeOpener } from './PlanNodeOpenControl.js';
+import { NextMarker, PullRequestChip } from './PlanParts.js';
 
 /** Run links the rail lists before "All runs". */
 export const PLAN_RAIL_RUNS = 5;
@@ -60,6 +71,21 @@ const linkStyle = { color: 'var(--color-text-link)' } as const;
 
 export function planNodePath(spaceId: string, nodeId: string, query: string): string {
   return `/spaces/${spaceId}/plan/nodes/${nodeId}?${query}`;
+}
+
+/** The rail's own dismiss, a quiet icon in its corner. */
+function RailDismiss({ onDismiss }: { onDismiss: () => void }) {
+  return (
+    <Tooltip content="Close" side="left">
+      <IconButton
+        size="sm"
+        variant="ghost"
+        aria-label="Close"
+        icon={<Icon name="x" size={14} weight="bold" />}
+        onClick={onDismiss}
+      />
+    </Tooltip>
+  );
 }
 
 function Section({ label, children }: { label: string; children: ReactNode }) {
@@ -321,22 +347,24 @@ export function PlanRail({
           {reason !== undefined && (
             <Badge variant="warning">{NEEDS_YOU_REASON_LABEL[reason]}</Badge>
           )}
-          {next && <Badge variant="accent">Next</Badge>}
-          {phase !== undefined && <Badge variant="neutral">{phaseLabel(phase.title)}</Badge>}
+          {next && <NextMarker />}
         </Row>
-        <Button size="sm" variant="ghost" onClick={onDismiss}>
-          Close
-        </Button>
+        <RailDismiss onDismiss={onDismiss} />
       </Row>
-      <Text weight="semibold" size="lg">
-        {node.title}
-      </Text>
+      <Column gap="xs">
+        {phase !== undefined && (
+          <Text size="xs" variant="muted" data-plan-rail-phase>
+            {phaseLabel(phase.title)}
+          </Text>
+        )}
+        <Text weight="semibold" size="lg">
+          {node.title}
+        </Text>
+      </Column>
       <Row gap="xs" align="center" wrap>
         {node.pullRequest !== undefined && (
           <a href={node.pullRequest.url} target="_blank" rel="noopener noreferrer">
-            <Badge variant={node.pullRequest.merged ? 'success' : 'info'}>
-              {pullRequestLabel(node.pullRequest.url)}
-            </Badge>
+            <PullRequestChip pullRequest={node.pullRequest} />
           </a>
         )}
         {node.pullRequest?.mergeSha !== undefined && (
@@ -345,7 +373,9 @@ export function PlanRail({
           </Text>
         )}
         {node.rounds > 0 && (
-          <Text size="xs" variant="muted">{`Rounds ${String(node.rounds)}`}</Text>
+          <Text size="xs" variant="muted">
+            {reviewRoundsLabel(node.rounds)}
+          </Text>
         )}
         {(full?.closedAt ?? node.closedAt) !== undefined && (
           <Text size="xs" variant="muted">
@@ -533,9 +563,7 @@ export function PlanRailFromDetail({
     return (
       <Column gap="xs" data-plan-rail-reading={nodeId}>
         <Row justify="end">
-          <Button size="sm" variant="ghost" onClick={controls.onDismiss}>
-            Close
-          </Button>
+          <RailDismiss onDismiss={controls.onDismiss} />
         </Row>
         {detail.error ? (
           <Text size="sm" tone="danger" role="alert">
