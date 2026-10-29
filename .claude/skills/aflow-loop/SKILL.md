@@ -30,7 +30,7 @@ has armed it; until then a node moves only when a Helmsman is told to take it.
 
 ## A stream, step by step
 
-1. **Brief a Helmsman** (`aflow-operate`, `scripts/hm.sh new`). One conversation per
+1. **Brief a Helmsman** (`aflow-operate`, [hm.sh](../aflow-operate/scripts/hm.sh) `new`). One conversation per
    stream. The brief names the node, the binding, the base (`origin/main` at a sha you
    read from the record), the rounds rule the operator set, and "report run ids, then
    hold". The node's goal, criteria and note are the harness brief; do not paste a second

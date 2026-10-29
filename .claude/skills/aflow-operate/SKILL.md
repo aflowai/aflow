@@ -43,7 +43,7 @@ shape the scripts use.
 
 The Helmsman is the space's agent. A conversation with it is a session; you send a message,
 it runs, it pauses on `user_input` with its reply, or on a `workflow_run` while a skill it
-started is in flight. `scripts/hm.sh` wraps the four calls (`new`, `send`, `status`,
+started is in flight. [scripts/hm.sh](scripts/hm.sh) wraps the four calls (`new`, `send`, `status`,
 `last`); pass **absolute** file paths and **full** session ids.
 
 - New conversation: `POST /v1/sessions?spaceId=…` with
