@@ -325,7 +325,7 @@ Activation is OPTIONAL — omit for chat-only skills. If included, both \`trigge
     {
       taskId: 'validate-source-coverage',
       name: 'Validate Source Coverage',
-      goal: 'Verify every requiredDataSource has exactly one labelled producer with a callable api/mcp grant. Lifted from assembleWorkflow.verifyRequiredDataSourceAccess.',
+      goal: 'Verify every requiredDataSource has exactly one labelled producer that can call it — an agent task with a callable api/mcp grant, or an api.http.call operation task whose api refs name the source. Lifted from assembleWorkflow.verifyRequiredDataSourceAccess.',
       type: 'operation',
       operation: 'skill.compose.validate_source_coverage',
       dependsOn: ['draft-task-graph'],
