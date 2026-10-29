@@ -1178,7 +1178,7 @@ export const PlanBoardNextSchema = z
       .strict()
       .optional()
       .describe(
-        'Present only when no approved node is actionable or moving and no proposal waits on a person: propose at most one node of new work with plan.node.create and `proposed` saying why — it is created blocked — or end with no reply when nothing is worth proposing.',
+        'Present for an exhausted active root without blocked scope, waiting scope or declined proposals, when no approved work is actionable or moving. Create at most one blocked proposal under parentId with plan.node.create and proposed saying why, even when unrelated roots await people.',
       ),
     deferred: z
       .number()

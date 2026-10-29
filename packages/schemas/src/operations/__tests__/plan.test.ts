@@ -469,3 +469,10 @@ it('defines waitsOn as the wait line anywhere in the note', () => {
   expect(ask.shape.waitsOn.description).toContain('wait line anywhere in its note');
   expect(ask.shape.waitsOn.description).toContain('no room');
 });
+
+it('describes proposals beside unrelated person waits', () => {
+  const description = PlanBoardNextSchema.shape.propose.description;
+  expect(description).toContain('exhausted active root');
+  expect(description).toContain('without blocked scope, waiting scope or declined proposals');
+  expect(description).toContain('even when unrelated roots await people');
+});

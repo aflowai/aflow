@@ -48,6 +48,7 @@ import {
   type PlanLaneItem,
   type PlanOverviewOutput,
 } from '@aflow/schemas';
+import { logCyberneticError } from '../logger.js';
 import { publishActionCenterWake } from '@aflow/redis';
 import { bumpAttentionGeneration } from '../attentionCache.js';
 import { emitPlanUpdated } from '../entityEvents.js';
@@ -526,9 +527,7 @@ async function writePlanNode(
     (input.title !== undefined ||
       input.goal !== undefined ||
       input.criteria !== undefined ||
-      (current.kind === 'decide' &&
-        input.status !== undefined &&
-        isClosedPlanNodeStatus(input.status)))
+      (input.status !== undefined && isClosedPlanNodeStatus(input.status)))
   )
     return residentUnblocks(current);
   if (
@@ -614,6 +613,15 @@ async function writePlanNode(
     const carrier = await proposeCarrier(ctx, node);
     return carrier !== undefined ? { ...written, carrier } : written;
   } catch (error) {
+    logCyberneticError(
+      'Carrier failed after close. Recover the findings linked to the closed node before proposing further work.',
+      error,
+      {
+        spaceId: ctx.spaceId,
+        nodeId: node.nodeId,
+        findings: { nodeId: node.nodeId, kind: 'finding' },
+      },
+    );
     return {
       ...written,
       carrierFailure: `Carrier failed for closed node ${node.nodeId}. Read its linked findings: ${error instanceof Error ? error.message : String(error)}`,

@@ -17,7 +17,6 @@ import {
   isClosedPlanNodeStatus,
   OPEN_PLAN_NODE_STATUSES,
   PLAN_NODE_PROSE_MAX_CHARS,
-  PLAN_NODE_CHILDREN_LIMIT,
   PLAN_NODE_PROPOSED_HEAD,
   PLAN_NODE_RUNS_LIMIT,
   PLAN_STREAM_COMMISSION_SLUG,
@@ -800,7 +799,7 @@ async function decideRoot(
   // the decision is told so rather than shown fewer runs.
   const subtree: { nodes: PlanNodeSummary[]; truncated?: PlanNodeListTruncation } =
     active.nodeId === root.nodeId && opened.childrenTotal > 0 && !open.truncated
-      ? { nodes: [active, ...(await readRootHistory(ctx, root.nodeId))] }
+      ? await readRootHistory(ctx, root.nodeId)
       : await ctx.store.walk(ctx.spaceId, {
           rootId: active.nodeId,
           ...PLAN_TREE_WALK_BOUNDS,
@@ -933,26 +932,12 @@ export function boardRank(answer: PlanStreamAnswer): number {
   }
 }
 
-async function readRootHistory(ctx: PlanStreamContext, rootId: string): Promise<PlanNodeSummary[]> {
-  const nodes: PlanNodeSummary[] = [];
-  const pending = [rootId];
-  while (pending.length > 0) {
-    const parentId = pending.pop()!;
-    let offset = 0;
-    for (;;) {
-      const page = await ctx.store.listChildren(
-        ctx.spaceId,
-        parentId,
-        PLAN_NODE_CHILDREN_LIMIT,
-        offset,
-      );
-      nodes.push(...page.children);
-      pending.push(...page.children.map((node) => node.nodeId));
-      offset += page.children.length;
-      if (offset >= page.total || page.children.length === 0) break;
-    }
-  }
-  return nodes;
+async function readRootHistory(ctx: PlanStreamContext, rootId: string) {
+  return ctx.store.walk(ctx.spaceId, {
+    rootId,
+    statuses: ['active', 'blocked', 'waiting', 'dropped'],
+    ...PLAN_TREE_WALK_BOUNDS,
+  });
 }
 
 /**
@@ -1028,7 +1013,7 @@ export async function nextOnPlanBoard(
       if (!exhaustedRoots.has(candidate.nodeId)) continue;
       const root = await ctx.store.find(ctx.spaceId, candidate.nodeId);
       const history = await readRootHistory(ctx, candidate.nodeId);
-      const declined = history.some(
+      const declined = history.nodes.some(
         (node) =>
           node.status === 'dropped' &&
           node.noteHead?.startsWith(PLAN_NODE_PROPOSED_HEAD) &&
@@ -1036,7 +1021,8 @@ export async function nextOnPlanBoard(
       );
       if (
         root?.status !== 'active' ||
-        history.some((node) => node.status === 'blocked' || node.status === 'waiting') ||
+        history.truncated !== undefined ||
+        history.nodes.some((node) => node.status === 'blocked' || node.status === 'waiting') ||
         declined
       )
         continue;

@@ -173,3 +173,5 @@ Approval of a blocked live check records the operator's folder-head read and clo
 P2 review hardening: asks find their wait line anywhere in the note and reuse it after revision changes; the Action Center and waitsOn contract name that line. Only human writes attest approval of a live check. Carrier read failures leave the committed close intact, while carrier insert and publish failures surface. Exhausted roots may receive a next-step proposal beside unrelated blocked or waiting roots; actionable work and waits within the candidate root still withhold it. Recalibrate gating is unchanged.
 
 P2 round 10 implements the settled rules and adds their regression cases. Carrier failures return a successful close with the closed node and linked findings named.
+
+P2 round 11 refuses resident closes across node kinds and records carrier failures with the closed node and linked findings for recovery. Candidate-root history reads exclude done branches within walk bounds, preserve declines, and describe proposals beside unrelated person waits. Recalibrate gating remains unchanged.

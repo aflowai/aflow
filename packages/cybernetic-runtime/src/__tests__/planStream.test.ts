@@ -1,3 +1,4 @@
+import * as runtimeLogger from '../logger.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import Redis from 'ioredis-mock';
 import type { Redis as RedisType } from 'ioredis';
@@ -41,6 +42,8 @@ import {
 import { InMemoryPlanNodeStore } from './planStoreFake.js';
 import { carrierNode } from '../plan/carrier.js';
 import { planAsk, listAskedNodes } from '../plan/asks.js';
+
+vi.mock('../logger.js', () => ({ logCyberneticError: vi.fn() }));
 
 const TENANT = 'a0000000-0000-4000-8000-000000000322';
 const SPACE = '5e1d0000-0000-4000-8000-000000000322';
@@ -1984,31 +1987,34 @@ describe('settled P2 rules', () => {
     }
   });
 
-  it('refuses resident done, dropped and repeated closes of person scope', async () => {
-    for (const status of ['active', 'blocked', 'done', 'dropped'] as const) {
-      const node = await created({ kind: 'decide' });
-      if (status !== 'active')
-        await write(node.nodeId, {
-          status,
-          ...(status === 'blocked' ? {} : { outcome: 'Closed' }),
-        });
-      const before = await current(node.nodeId);
-      for (const close of ['done', 'dropped'] as const) {
-        expect(
-          await updatePlanNode(
-            { ...session(), resident: true },
-            {
-              nodeId: node.nodeId,
-              expectedRevision: before.revision,
-              status: close,
-              outcome: 'Agent closes',
-            },
-          ),
-        ).toMatchObject({ ok: false, code: 'PLAN_NODE_RESIDENT_SCOPE' });
+  it.each(['execute', 'investigate', 'decide'] as const)(
+    'refuses resident done, dropped and repeated closes of person scope (%s)',
+    async (kind) => {
+      for (const status of ['active', 'blocked', 'done', 'dropped'] as const) {
+        const node = await created({ kind });
+        if (status !== 'active')
+          await write(node.nodeId, {
+            status,
+            ...(status === 'blocked' ? {} : { outcome: 'Closed' }),
+          });
+        const before = await current(node.nodeId);
+        for (const close of ['done', 'dropped'] as const) {
+          expect(
+            await updatePlanNode(
+              { ...session(), resident: true },
+              {
+                nodeId: node.nodeId,
+                expectedRevision: before.revision,
+                status: close,
+                outcome: 'Agent closes',
+              },
+            ),
+          ).toMatchObject({ ok: false, code: 'PLAN_NODE_RESIDENT_SCOPE' });
+        }
+        expect(await current(node.nodeId)).toEqual(before);
       }
-      expect(await current(node.nodeId)).toEqual(before);
-    }
-  });
+    },
+  );
 
   it('refuses resident scope rewrites on person-approved and blocked-proposal nodes', async () => {
     for (const proposed of [undefined, 'Needs approval']) {
@@ -2095,10 +2101,16 @@ describe('settled P2 rules', () => {
 
   it('ignores closed history beyond the candidate-root walk limit without forgetting its decline', async () => {
     const root = await created();
+    const children = vi.spyOn(store, 'listChildren');
+    const walk = vi.spyOn(store, 'walk');
     for (let i = 0; i < PLAN_TREE_WALK_NODE_LIMIT + 5; i++) {
       store.seed(SPACE, { parentId: root.nodeId, status: 'done' });
     }
     expect(await wake()).toMatchObject({ decisions: [], propose: { parentId: root.nodeId } });
+    expect(children.mock.calls.length).toBeLessThan(10);
+    expect(
+      walk.mock.calls.every(([, bounds]) => bounds.maxNodes <= PLAN_TREE_WALK_NODE_LIMIT),
+    ).toBe(true);
     const declined = await created({ parentId: root.nodeId, proposed: 'Next scope' });
     await write(declined.nodeId, { status: 'dropped', outcome: 'Declined' });
     expect(await wake()).not.toHaveProperty('propose');
@@ -2129,44 +2141,63 @@ describe('settled P2 rules', () => {
     }
   });
 
-  it('keeps close successful and retries or records carrier read, insert and publish failures', async () => {
-    for (const stage of ['read', 'insert', 'refusal', 'publish'] as const) {
-      const node = await created();
-      await linkPlanNode(session(), { nodeId: node.nodeId, kind: 'finding', ref: 'F-failed' });
-      if (stage === 'read')
-        vi.spyOn(store, 'pageLinks').mockRejectedValueOnce(new Error('read failed'));
-      if (stage === 'insert')
-        vi.spyOn(store, 'insert').mockRejectedValueOnce(new Error('insert failed'));
-      if (stage === 'refusal')
-        vi.spyOn(store, 'insert').mockResolvedValueOnce({ outcome: 'parent_not_found' });
-      if (stage === 'publish') {
-        const insert = store.insert.bind(store);
-        vi.spyOn(store, 'insert').mockImplementationOnce(async (...args) => {
-          const inserted = await insert(...args);
-          vi.spyOn(redis, 'publish').mockImplementationOnce(() => {
-            throw new Error('publish failed');
+  it.each(['execute', 'decide'] as const)(
+    'keeps close successful and retries or records carrier read, insert and publish failures (%s)',
+    async (kind) => {
+      for (const stage of ['read', 'insert', 'refusal', 'publish'] as const) {
+        const logged = vi
+          .spyOn(runtimeLogger, 'logCyberneticError')
+          .mockImplementation(() => undefined);
+        const node = await created({ kind });
+        await linkPlanNode(session(), { nodeId: node.nodeId, kind: 'finding', ref: 'F-failed' });
+        if (stage === 'read')
+          vi.spyOn(store, 'pageLinks').mockRejectedValueOnce(new Error('read failed'));
+        if (stage === 'insert')
+          vi.spyOn(store, 'insert').mockRejectedValueOnce(new Error('insert failed'));
+        if (stage === 'refusal')
+          vi.spyOn(store, 'insert').mockResolvedValueOnce({ outcome: 'parent_not_found' });
+        if (stage === 'publish') {
+          const insert = store.insert.bind(store);
+          vi.spyOn(store, 'insert').mockImplementationOnce(async (...args) => {
+            const inserted = await insert(...args);
+            vi.spyOn(redis, 'publish').mockImplementationOnce(() => {
+              throw new Error('publish failed');
+            });
+            return inserted;
           });
-          return inserted;
+        }
+        const result = await updatePlanNode(
+          { ...session(), actorKind: 'human' },
+          {
+            nodeId: node.nodeId,
+            expectedRevision: node.revision,
+            status: 'done',
+            outcome: 'Met',
+          },
+        );
+        expect(result).toMatchObject({
+          ok: true,
+          carrierFailure: expect.stringContaining(node.nodeId),
         });
+        expect(result).toMatchObject({
+          carrierFailure: expect.stringContaining('linked findings'),
+        });
+        expect(logged).toHaveBeenLastCalledWith(
+          expect.stringContaining('Recover the findings'),
+          expect.any(Error),
+          expect.objectContaining({
+            nodeId: node.nodeId,
+            findings: { nodeId: node.nodeId, kind: 'finding' },
+          }),
+        );
+        expect((await current(node.nodeId)).status).toBe('done');
+        expect(
+          store.links.some((link) => link.nodeId === node.nodeId && link.ref === 'F-failed'),
+        ).toBe(true);
+        vi.restoreAllMocks();
       }
-      const result = await updatePlanNode(session(), {
-        nodeId: node.nodeId,
-        expectedRevision: node.revision,
-        status: 'done',
-        outcome: 'Met',
-      });
-      expect(result).toMatchObject({
-        ok: true,
-        carrierFailure: expect.stringContaining(node.nodeId),
-      });
-      expect(result).toMatchObject({ carrierFailure: expect.stringContaining('linked findings') });
-      expect((await current(node.nodeId)).status).toBe('done');
-      expect(
-        store.links.some((link) => link.nodeId === node.nodeId && link.ref === 'F-failed'),
-      ).toBe(true);
-      vi.restoreAllMocks();
-    }
-  });
+    },
+  );
 
   it('refuses live-check completion and read attestation by resident, chat and voice agents', async () => {
     const node = await created({
