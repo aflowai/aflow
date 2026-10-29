@@ -37,7 +37,17 @@ export function QuickStartOffer() {
   return createPortal(
     <div style={{ position: 'relative', zIndex: 10001 }}>
       <Dialog open onClose={decline} title="Start from a quick start" width="lg">
-        <QuickStartPicker emptySpace={emptySpace} onKeepEmptySpace={decline} onCreated={decline} />
+        <QuickStartPicker
+          leadingCard={{
+            title: emptySpace.name,
+            description: 'Keep the empty space you have and set it up yourself.',
+            icon: 'buildings',
+            ariaLabel: `Keep ${emptySpace.name}`,
+            noteAfterChoice: `${emptySpace.name} stays as it is.`,
+            onChoose: decline,
+          }}
+          onCreated={decline}
+        />
       </Dialog>
     </div>,
     document.body,

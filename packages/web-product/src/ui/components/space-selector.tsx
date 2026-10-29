@@ -5,8 +5,6 @@ import { useRouter, usePathname } from 'next/navigation';
 import { isSoloSpace, useSpace, type SpaceInfo } from './providers.js';
 import { Icon, Popover } from '@aflow/design-system';
 import { CreateSpaceDialog } from './create-space-dialog.js';
-import { QuickStartDialog } from './quick-start-picker.js';
-import { useQuickStartOffer } from '../hooks/use-quick-starts.js';
 import { equivalentRouteInSpace } from '../lib/space-routes.js';
 
 function SpaceIcon({ space }: { space: SpaceInfo }) {
@@ -29,9 +27,6 @@ export function SpaceSelector({
   const [open, setOpen] = useState(false);
   const [hoveredIdx, setHoveredIdx] = useState(-1);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
-  const [quickStartOpen, setQuickStartOpen] = useState(false);
-  // Offered only where the edition composes a quick start, rather than as an empty dialog.
-  const hasQuickStarts = (useQuickStartOffer().data?.templates.length ?? 0) > 0;
 
   if (accessibleSpaces.length === 0) return null;
 
@@ -334,44 +329,7 @@ export function SpaceSelector({
           <Icon name="plus" size="md" style={{ flexShrink: 0 }} />
           <span style={{ flex: 1 }}>Create new workspace</span>
         </div>
-        {hasQuickStarts && (
-          <div
-            role="button"
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 'var(--space-2)',
-              padding: '7px 8px',
-              borderRadius: 'var(--radius-sm)',
-              cursor: 'pointer',
-              fontSize: 'var(--font-size-sm)',
-              color: 'var(--color-text-secondary)',
-              transition: 'background 80ms',
-              flexShrink: 0,
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = 'var(--color-surface-2)';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = 'transparent';
-            }}
-            onClick={() => {
-              setOpen(false);
-              setQuickStartOpen(true);
-            }}
-          >
-            <Icon name="lightning" size="md" style={{ flexShrink: 0 }} />
-            <span style={{ flex: 1 }}>Start from a quick start</span>
-          </div>
-        )}
       </Popover>
-
-      <QuickStartDialog
-        open={quickStartOpen}
-        onClose={() => {
-          setQuickStartOpen(false);
-        }}
-      />
 
       <CreateSpaceDialog
         open={createDialogOpen}

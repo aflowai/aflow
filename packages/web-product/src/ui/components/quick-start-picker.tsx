@@ -14,6 +14,7 @@ import {
   Row,
   Spinner,
   Text,
+  type IconName,
 } from '@aflow/design-system';
 import type { QuickStartOffer } from '@aflow/schemas';
 import { useQuickStartOffer, useStartQuickStart } from '../hooks/use-quick-starts.js';
@@ -54,12 +55,22 @@ export interface QuickStartPickerProps {
   /** Preselects a template, as the Store page does for the listing it shows. */
   initialCatalogId?: string;
   /**
-   * The first-run offer shows the empty space beside the templates; choosing
-   * it keeps that space and makes nothing.
+   * A card ahead of the templates that makes nothing itself: the new-space
+   * dialog's blank start, or the first-run offer's empty space.
    */
-  emptySpace?: QuickStartOffer['emptySpace'];
-  onKeepEmptySpace?: () => void;
+  leadingCard?: QuickStartLeadingCard;
   onCreated?: () => void;
+}
+
+export interface QuickStartLeadingCard {
+  title: string;
+  description: string;
+  icon: IconName;
+  /** Defaults to the title. */
+  ariaLabel?: string;
+  /** Shown under the name field once a template is chosen. */
+  noteAfterChoice?: string;
+  onChoose: () => void;
 }
 
 /**
@@ -69,8 +80,7 @@ export interface QuickStartPickerProps {
  */
 export function QuickStartPicker({
   initialCatalogId,
-  emptySpace,
-  onKeepEmptySpace,
+  leadingCard,
   onCreated,
 }: QuickStartPickerProps) {
   const router = useRouter();
@@ -130,23 +140,23 @@ export function QuickStartPicker({
           gap: 'var(--space-3)',
         }}
       >
-        {emptySpace && (
+        {leadingCard && (
           <Card
             interactive
-            onClick={onKeepEmptySpace}
+            onClick={leadingCard.onChoose}
             role="button"
-            aria-label={`Keep ${emptySpace.name}`}
+            aria-label={leadingCard.ariaLabel ?? leadingCard.title}
           >
             <CardBody>
               <Column gap="xs">
                 <Row gap="sm" align="center">
-                  <Icon name="buildings" size="md" />
+                  <Icon name={leadingCard.icon} size="md" />
                   <Text size="sm" weight="semibold">
-                    {emptySpace.name}
+                    {leadingCard.title}
                   </Text>
                 </Row>
                 <Text size="xs" variant="muted">
-                  Keep the empty space you have and set it up yourself.
+                  {leadingCard.description}
                 </Text>
               </Column>
             </CardBody>
@@ -192,7 +202,7 @@ export function QuickStartPicker({
         <Column gap="sm">
           <label htmlFor="quick-start-name">
             <Text size="sm" weight="medium">
-              Name the new space
+              Name the new workspace
             </Text>
           </label>
           <Input
@@ -204,9 +214,9 @@ export function QuickStartPicker({
             }}
             style={{ width: '100%' }}
           />
-          {emptySpace && (
+          {leadingCard?.noteAfterChoice && (
             <Text size="xs" variant="muted">
-              {emptySpace.name} stays as it is.
+              {leadingCard.noteAfterChoice}
             </Text>
           )}
           {error && (
@@ -221,7 +231,7 @@ export function QuickStartPicker({
               disabled={!spaceName}
               onClick={() => void create(selected)}
             >
-              Create the space
+              Create workspace
             </Button>
           </Row>
         </Column>
@@ -236,7 +246,7 @@ export interface QuickStartDialogProps {
   initialCatalogId?: string;
 }
 
-/** "Start from a quick start" — the space switcher's and the Store page's way in. */
+/** "Start from a quick start" — the Store listing's way in, with that listing preselected. */
 export function QuickStartDialog({ open, onClose, initialCatalogId }: QuickStartDialogProps) {
   if (!open) return null;
   return createPortal(
