@@ -6,6 +6,7 @@ import {
   CapabilityBundleEditor,
   bundleCurrentCost,
   bundlePlacementOf,
+  nestBundles,
   type OfferedBundle,
 } from './CapabilityBundleEditor.js';
 
@@ -168,5 +169,51 @@ describe('capability placement controls', () => {
     expect(changes).toEqual([]);
     expect(target.querySelector('section[aria-label="Always on"]')).toBeNull();
     expect(target.querySelector('section[aria-label="Off"]')).toBeNull();
+  });
+  it('nests a bundle under the offered bundle its parentId names, and leaves family keys flat', async () => {
+    const make = (id: string, label: string, parentId?: string): OfferedBundle => ({
+      ...bundle,
+      id,
+      label,
+      ...(parentId ? { parentId } : {}),
+      operations: [{ operationId: `${id}.op`, tokens: 10, defaultPinned: false }],
+    });
+    const visuals = make('visuals', 'Visuals', 'visuals');
+    const artifacts = make('artifacts', 'Build artifacts', 'visuals');
+    const runSkills = make('run_skills', 'Run skills', 'skills');
+    const agents = make('agents', 'Agents');
+    expect(
+      nestBundles([artifacts, runSkills, visuals, agents]).map(({ bundle: b, children }) => [
+        b.id,
+        children.map((c) => c.id),
+      ]),
+    ).toEqual([
+      ['agents', []],
+      ['run_skills', []],
+      ['visuals', ['artifacts']],
+    ]);
+    expect(nestBundles([artifacts]).map(({ bundle: b }) => b.id)).toEqual(['artifacts']);
+
+    const target = document.createElement('div');
+    document.body.appendChild(target);
+    root = createRoot(target);
+    await act(() =>
+      root!.render(
+        createElement(CapabilityBundleEditor, {
+          bundles: [artifacts, agents, visuals],
+          placements: {},
+          showHints: false,
+          onPlace: () => {},
+        }),
+      ),
+    );
+    await act(() =>
+      target.querySelector<HTMLButtonElement>('section[aria-label="On demand"] > button')!.click(),
+    );
+    const within = target.querySelector('[role="group"][aria-label="Within Visuals"]');
+    expect(within?.querySelector('select[aria-label="Build artifacts placement"]')).not.toBeNull();
+    const order = [...target.querySelectorAll('select')].map((s) => s.getAttribute('aria-label'));
+    expect(order.indexOf('Build artifacts placement')).toBe(order.indexOf('Visuals placement') + 1);
+    expect(order.indexOf('Agents placement')).toBeLessThan(order.indexOf('Visuals placement'));
   });
 });

@@ -391,10 +391,16 @@ export const CAPABILITY_BUNDLES: readonly CapabilityBundle[] = [
   {
     id: 'artifacts',
     label: 'Build artifacts',
-    hint: 'Generate and inspect visual artifacts.',
+    hint: 'Create reusable visuals: generate a draft, publish it, then render it under Visuals.',
     tier: 'on_demand',
     capabilityGroupIds: [],
-    operationIds: ['ui.artifact.generate', 'ui.artifact.get', 'ui.artifact.list', 'ui.catalog.get'],
+    operationIds: [
+      'ui.artifact.generate',
+      'ui.artifact.publish',
+      'ui.artifact.get',
+      'ui.artifact.list',
+      'ui.catalog.get',
+    ],
     parentId: 'visuals',
   },
   {
