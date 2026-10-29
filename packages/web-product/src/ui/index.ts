@@ -448,7 +448,6 @@ export type { ModelOption, ModelOptionsState } from './hooks/useChatModelOptions
 export { BlockedSessionNotice } from './components/blocked-session-notice.js';
 export { CreateSpaceDialog } from './components/create-space-dialog.js';
 export { QuickStartDialog, QuickStartPicker } from './components/quick-start-picker.js';
-export { QuickStartOffer } from './components/quick-start-offer.js';
 export { useQuickStartOffer, useStartQuickStart } from './hooks/use-quick-starts.js';
 export { CreateSpaceForm } from './components/create-space-form.js';
 export type { CreateSpaceResult } from './components/create-space-form.js';
