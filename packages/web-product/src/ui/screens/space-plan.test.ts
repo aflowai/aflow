@@ -1625,6 +1625,30 @@ describe('SpacePlanPage — approve, reopen and order (Plan 332 P2)', () => {
     expect(container.querySelector('[data-plan-rail]')).toBe(null);
   });
 
+  it('moves a card from the keyboard: Enter on a focused Move up places it and opens no rail', async () => {
+    await render({ data: P2_PLAN });
+
+    const moveUp = button(card(UP_B), 'Move up');
+    await act(async () => {
+      moveUp.focus();
+      const pressed = new KeyboardEvent('keydown', {
+        key: 'Enter',
+        bubbles: true,
+        cancelable: true,
+      });
+      // A browser activates a focused button on Enter unless a handler cancels the key.
+      if (moveUp.dispatchEvent(pressed)) moveUp.click();
+    });
+
+    expect(recorded.sent).toEqual([
+      {
+        path: `/spaces/${SPACE_ID}/plan/nodes/${UP_B}/place`,
+        body: { expectedRevision: 1, before: UP_A },
+      },
+    ]);
+    expect(container.querySelector('[data-plan-rail]')).toBe(null);
+  });
+
   it('says why a move was refused on its card, and re-reads the board when a sibling moved', async () => {
     recorded.mutateAsync.mockRejectedValue(
       Object.assign(new Error('The step this was placed against is not beside it any more.'), {

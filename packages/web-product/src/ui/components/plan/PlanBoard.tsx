@@ -117,6 +117,8 @@ function PlanCardView({
       style={style}
       onClick={open}
       onKeyDown={(event: KeyboardEvent) => {
+        // A key on a control inside the card is that control's to activate.
+        if (event.target !== event.currentTarget) return;
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault();
           open();

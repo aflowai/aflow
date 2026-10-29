@@ -529,12 +529,6 @@ export function planDoneFolds(
 
 const PULL_REQUEST_NUMBER = /\/pull\/(\d+)/;
 
-/** `#181` for a pull request URL, else the URL. */
-export function pullRequestLabel(url: string): string {
-  const number = PULL_REQUEST_NUMBER.exec(url)?.[1];
-  return number !== undefined ? `#${number}` : url;
-}
-
 /** A pull request as its chip reads it: what it is, which one, and whether it merged. */
 export function pullRequestChipLabel(pullRequest: { url: string; merged: boolean }): string {
   const number = PULL_REQUEST_NUMBER.exec(pullRequest.url)?.[1];

@@ -41,7 +41,6 @@ import {
   showsPhaseFilter,
   waitingLine,
   pullRequestChipLabel,
-  pullRequestLabel,
   reviewRoundsLabel,
   runKindLabel,
   runsInFlightLabel,
@@ -296,7 +295,6 @@ describe('the Done column folded by day', () => {
 
 describe('labels', () => {
   it('reads a pull request by its number and a run by its kind and status', () => {
-    expect(pullRequestLabel('https://github.com/aflowai/aflow/pull/181')).toBe('#181');
     expect(
       pullRequestChipLabel({ url: 'https://github.com/aflowai/aflow/pull/181', merged: false }),
     ).toBe('PR #181 · open');
