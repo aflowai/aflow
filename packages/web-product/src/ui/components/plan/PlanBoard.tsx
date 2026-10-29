@@ -3,10 +3,14 @@
 /**
  * One plan as a board (Plan 322 P3.3): five columns saying what the loop is
  * doing with each step (Plan 332 D4) — Needs you with its reason, In flight,
- * Up next in the walk's order with Next on the step the walk takes — and a
- * card per node carrying labels only; its text lives in the rail. Done folds
- * by day from the plan's own counts, so a fold shows how many it holds before
- * its cards are read.
+ * Up next in the walk's order with **Next for the loop** on the step the walk
+ * takes — and a card per node carrying labels only; its text lives in the
+ * rail. A card reads top down: its phase, its title, where it stands (why it
+ * needs the operator, Next, runs in flight, its PR), then what it has been
+ * through (review rounds, subtasks). Move up and Move down are quiet icons
+ * that show on the card pointed at, focused or selected (Plan 332 P6). Done
+ * folds by day from the plan's own counts, so a fold shows how many it holds
+ * before its cards are read.
  */
 import { useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react';
 import { Badge, Button, Card, CardBody, Column, Row, Text } from '@aflow/design-system';
@@ -21,12 +25,22 @@ import {
   planDoneFolds,
   planDoneGroups,
   planMoveTargets,
-  pullRequestLabel,
+  reviewRoundsLabel,
+  runsInFlightLabel,
   waitingLine,
   type PlanBoardFilters,
   type PlanCard,
 } from '../../lib/plan-board.js';
 import type { PlanNodeCloseAnswer } from './PlanNodeCloseControl.js';
+import {
+  Disclosure,
+  HeadingDot,
+  MetaSep,
+  NextMarker,
+  ProgressMeter,
+  PullRequestChip,
+  useMoveControls,
+} from './PlanParts.js';
 
 /** What the operator asks of an Up next step or an open plan: directly before or after a sibling, against the revision the page read. */
 export type PlanNodePlaceRequest = { nodeId: string; expectedRevision: number } & (
@@ -38,104 +52,11 @@ export type PlanNodePlacer = (request: PlanNodePlaceRequest) => Promise<PlanNode
 const STRIP_WIDTH = '32px';
 
 function SubtaskBar({ done, total }: { done: number; total: number }) {
-  const share = total === 0 ? 0 : Math.round((done / total) * 100);
   return (
     <Row gap="xs" align="center" data-plan-progress={`${String(done)}/${String(total)}`}>
-      <div
-        style={{
-          width: '40px',
-          height: '4px',
-          borderRadius: 'var(--radius-full)',
-          background: 'var(--color-surface-2)',
-          overflow: 'hidden',
-        }}
-      >
-        <div
-          style={{
-            width: `${String(share)}%`,
-            height: '100%',
-            background: 'var(--color-success-default)',
-          }}
-        />
-      </div>
-      <Text size="xs" variant="muted">{`${String(done)}/${String(total)}`}</Text>
+      <ProgressMeter done={done} total={total} />
+      <Text size="xs" variant="muted">{`${String(done)}/${String(total)} subtasks`}</Text>
     </Row>
-  );
-}
-
-/** What a move names: a node, at the revision the page read. */
-export interface PlanMovable {
-  nodeId: string;
-  revision: number;
-}
-
-/**
- * **Move up** and **Move down** (Plan 332 D6), on an Up next card and on an
- * open row of the plan list: each puts the node before or after its nearest
- * open sibling on screen, and shows only where there is one. The write is
- * pinned to the revision the page read; a refusal is said under the buttons.
- */
-export function MoveControls({
-  node,
-  moves,
-  onPlace,
-}: {
-  node: PlanMovable;
-  moves: { above?: { nodeId: string }; below?: { nodeId: string } };
-  onPlace: PlanNodePlacer;
-}) {
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  if (moves.above === undefined && moves.below === undefined) return null;
-  const place = async (anchor: { before: string } | { after: string }) => {
-    setPending(true);
-    setError(null);
-    const answer = await onPlace({
-      nodeId: node.nodeId,
-      expectedRevision: node.revision,
-      ...anchor,
-    });
-    setPending(false);
-    if (!answer.ok) setError(answer.message);
-  };
-  const above = moves.above;
-  const below = moves.below;
-  return (
-    <Column gap="xs" data-plan-move={node.nodeId}>
-      <Row gap="xs" align="center">
-        {above !== undefined && (
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={pending}
-            onClick={(event) => {
-              event.stopPropagation();
-              void place({ before: above.nodeId });
-            }}
-          >
-            Move up
-          </Button>
-        )}
-        {below !== undefined && (
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={pending}
-            onClick={(event) => {
-              event.stopPropagation();
-              void place({ after: below.nodeId });
-            }}
-          >
-            Move down
-          </Button>
-        )}
-      </Row>
-      {error !== null && (
-        <Text size="xs" tone="danger" role="alert">
-          {error}
-        </Text>
-      )}
-    </Column>
   );
 }
 
@@ -160,19 +81,32 @@ function PlanCardView({
 }) {
   const { node, column, phase } = card;
   const waiting = waitingLine(node);
+  const move = useMoveControls(node, moves, onPlace);
+  const dropped = column === 'dropped';
   const style: CSSProperties = {
     cursor: 'pointer',
     ...(column === 'needs_you' ? { borderLeft: '3px solid var(--color-warning-default)' } : {}),
-    ...(selected
-      ? { outline: '2px solid var(--color-accent-default)', outlineOffset: '-1px' }
-      : {}),
   };
   const open = () => {
     onSelect(card);
   };
+  const facts: ReactNode[] = [
+    ...(node.rounds > 0
+      ? [
+          <Text key="rounds" size="xs" variant="muted" data-plan-card-rounds>
+            {reviewRoundsLabel(node.rounds)}
+          </Text>,
+        ]
+      : []),
+    ...(node.progress !== undefined
+      ? [<SubtaskBar key="progress" done={node.progress.done} total={node.progress.total} />]
+      : []),
+  ];
   return (
     <Card
       interactive
+      running={node.counts.inFlightRuns > 0}
+      className="plan-card plan-reveal-host"
       role="button"
       tabIndex={0}
       aria-pressed={selected}
@@ -191,38 +125,52 @@ function PlanCardView({
     >
       <CardBody>
         <Column gap="xs">
+          {move.controls !== null && <div className="plan-card__corner">{move.controls}</div>}
+          {phase !== undefined && (
+            <Text size="xs" variant="muted" data-plan-card-phase>
+              {phaseLabel(phase.title)}
+            </Text>
+          )}
           <Text
             size="sm"
             weight="medium"
-            style={column === 'dropped' ? { textDecoration: 'line-through' } : undefined}
-            color={column === 'dropped' ? 'muted' : 'primary'}
+            data-plan-card-title
+            style={{
+              ...(dropped ? { textDecoration: 'line-through' } : {}),
+              ...(move.controls !== null ? { paddingRight: 'var(--space-12)' } : {}),
+            }}
+            color={dropped ? 'muted' : 'primary'}
           >
             {node.title}
           </Text>
-          <Row gap="xs" align="center" wrap>
-            {card.reason !== undefined && (
-              <Badge variant="warning">{NEEDS_YOU_REASON_LABEL[card.reason]}</Badge>
-            )}
-            {next && <Badge variant="accent">Next</Badge>}
-            {phase !== undefined && <Badge variant="neutral">{phaseLabel(phase.title)}</Badge>}
-            {node.counts.inFlightRuns > 0 && (
-              <Badge variant="running">{`Running ${String(node.counts.inFlightRuns)}`}</Badge>
-            )}
-            {node.pullRequest !== undefined && (
-              <Badge variant={node.pullRequest.merged ? 'success' : 'info'}>
-                {pullRequestLabel(node.pullRequest.url)}
-              </Badge>
-            )}
-            {node.rounds > 0 && <Badge variant="neutral">{`Rounds ${String(node.rounds)}`}</Badge>}
-            {node.progress !== undefined && (
-              <SubtaskBar done={node.progress.done} total={node.progress.total} />
-            )}
-          </Row>
+          {(card.reason !== undefined ||
+            next ||
+            node.counts.inFlightRuns > 0 ||
+            node.pullRequest !== undefined) && (
+            <Row gap="xs" align="center" wrap>
+              {card.reason !== undefined && (
+                <Badge variant="warning">{NEEDS_YOU_REASON_LABEL[card.reason]}</Badge>
+              )}
+              {next && <NextMarker />}
+              {node.counts.inFlightRuns > 0 && (
+                <Badge variant="running">{runsInFlightLabel(node.counts.inFlightRuns)}</Badge>
+              )}
+              {node.pullRequest !== undefined && <PullRequestChip pullRequest={node.pullRequest} />}
+            </Row>
+          )}
+          {facts.length > 0 && (
+            <Row gap="xs" align="center" wrap>
+              {facts.flatMap((fact, at) =>
+                at === 0 ? [fact] : [<MetaSep key={`sep-${String(at)}`} />, fact],
+              )}
+            </Row>
+          )}
           {waiting !== undefined && (
             <Text size="xs" variant="muted" data-plan-waiting>
               {waiting}
             </Text>
           )}
+          {move.error}
           {card.reason === 'decide' && (
             <Row>
               <Button
@@ -237,7 +185,6 @@ function PlanCardView({
               </Button>
             </Row>
           )}
-          {moves !== undefined && <MoveControls node={node} moves={moves} onPlace={onPlace} />}
         </Column>
       </CardBody>
     </Card>
@@ -256,16 +203,7 @@ function ColumnHeader({
 }) {
   return (
     <Row gap="xs" align="center" data-plan-column-header={label}>
-      <span
-        aria-hidden
-        style={{
-          width: '8px',
-          height: '8px',
-          borderRadius: 'var(--radius-full)',
-          background: color,
-          flexShrink: 0,
-        }}
-      />
+      <HeadingDot color={color} />
       <Text size="sm" weight="medium">
         {label}
       </Text>
@@ -349,17 +287,14 @@ export function PlanBoard({
       const open = expanded.has(group.id);
       return (
         <Column key={group.id} gap="xs" data-plan-done-group={group.id}>
-          <Button
-            size="sm"
-            variant="ghost"
-            aria-expanded={open}
-            onClick={() => {
+          <Disclosure
+            expanded={open}
+            onToggle={() => {
               onToggleGroup(group.id);
             }}
-            style={{ justifyContent: 'flex-start' }}
           >
             {`${group.label} · ${group.shown === undefined ? '…' : String(group.shown)}`}
-          </Button>
+          </Disclosure>
           {open && group.cards.map(renderCard)}
         </Column>
       );

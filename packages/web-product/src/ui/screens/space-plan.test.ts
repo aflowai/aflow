@@ -146,6 +146,21 @@ vi.mock('@aflow/design-system', () => {
         { ...passed(rest), type: 'button', onClick, disabled, role: undefined },
         children,
       ),
+    IconButton: ({
+      icon,
+      onClick,
+      disabled,
+      ...rest
+    }: {
+      icon?: ReactNode;
+      onClick?: (event: { stopPropagation: () => void }) => void;
+      disabled?: boolean;
+      [key: string]: unknown;
+    }) => createElement('button', { ...passed(rest), type: 'button', onClick, disabled }, icon),
+    Icon: () => null,
+    Tooltip: ({ children }: { children?: ReactNode }) => children,
+    Panel: block('div'),
+    ScrollArea: block('div'),
     Input: (props: Record<string, unknown>) => createElement('input', props),
     Textarea: (props: Record<string, unknown>) =>
       createElement('textarea', {
@@ -570,8 +585,13 @@ function filter(name: string): Element {
   return found;
 }
 
+/** A button as it is named: its label where it is an icon, else its text. */
+function buttonName(b: Element): string {
+  return b.getAttribute('aria-label') ?? b.textContent ?? '';
+}
+
 function button(scope: Element, text: string): HTMLButtonElement {
-  const found = [...scope.querySelectorAll('button')].find((b) => b.textContent === text);
+  const found = [...scope.querySelectorAll('button')].find((b) => buttonName(b) === text);
   if (!found) throw new Error(`no button reading ${text}`);
   return found;
 }
@@ -754,7 +774,7 @@ describe('SpacePlanPage — the board', () => {
     expect(container.textContent).not.toContain('Idle');
   });
 
-  it('carries labels only on a card: phase, runs in flight, pull request, rounds, subtasks', async () => {
+  it('carries labels only on a card, each saying what it counts: phase, runs in flight, pull request, rounds, subtasks', async () => {
     await render();
 
     const board = card(BOARD);
@@ -763,20 +783,24 @@ describe('SpacePlanPage — the board', () => {
       b.textContent,
     ]);
     expect(badges).toEqual([
-      ['neutral', 'P3'],
-      ['running', 'Running 1'],
-      ['info', '#181'],
-      ['neutral', 'Rounds 2'],
+      ['running', '1 run in flight'],
+      ['info', 'PR #181 · open'],
     ]);
-    expect(board.querySelector('[data-plan-progress]')?.textContent).toBe('2/2');
+    expect(board.querySelector('[data-plan-card-phase]')?.textContent).toBe('P3');
+    expect(board.querySelector('[data-plan-card-rounds]')?.textContent).toBe('2 review rounds');
+    expect(board.querySelector('[data-plan-progress]')?.textContent).toBe('2/2 subtasks');
     expect(board.textContent).not.toContain('Goal of');
 
     expect(card(ARTICLE).querySelector('[data-badge]')).toBe(null);
     for (const id of [P3, NEXT, BOARD, ARTICLE]) {
       expect(card(id).textContent).not.toContain('Operator');
     }
-    expect(card(LANDED).querySelector('[data-badge="success"]')?.textContent).toBe('#176');
-    expect(card(SKETCH).querySelector('span')?.style.textDecoration).toBe('line-through');
+    expect(card(LANDED).querySelector('[data-badge="success"]')?.textContent).toBe(
+      'PR #176 · merged',
+    );
+    expect(
+      card(SKETCH).querySelector<HTMLElement>('[data-plan-card-title]')?.style.textDecoration,
+    ).toBe('line-through');
     expect(card(DECISION).style.borderLeft).toContain('var(--color-warning-default)');
     expect(button(card(DECISION), 'Decide')).toBeTruthy();
   });
@@ -916,7 +940,7 @@ describe('SpacePlanPage — the rail', () => {
     const shown = rail();
     expect(shown.textContent).toContain('The whole goal of P3.3 the board.');
     expect(shown.textContent).toContain('Done whenCriteria of P3.3 the board.');
-    expect(shown.textContent).toContain('Rounds 2');
+    expect(shown.textContent).toContain('2 review rounds');
     expect(
       shown.querySelector('[data-plan-rail-section="Carried forward"]')?.textContent,
     ).toContain('F121');
@@ -974,7 +998,7 @@ describe('SpacePlanPage — the rail', () => {
     await click(card(NEXT));
     expect(
       [...rail().querySelectorAll('[data-badge]')].map((b) => b.textContent).slice(0, 2),
-    ).toEqual(['In flight', 'Next']);
+    ).toEqual(['In flight', 'Next for the loop']);
 
     await click(card(DECISION));
     expect(
@@ -1045,10 +1069,7 @@ describe('SpacePlanPage — the rail', () => {
     );
     expect(shown.textContent).toContain('93ce256');
     expect(shown.textContent).toContain('Closed ');
-    expect([...shown.querySelectorAll('button')].map((b) => b.textContent)).toEqual([
-      'Close',
-      'Reopen',
-    ]);
+    expect([...shown.querySelectorAll('button')].map(buttonName)).toEqual(['Close', 'Reopen']);
   });
 
   it('collapses Dropped to a strip while the rail is open', async () => {
@@ -1453,7 +1474,7 @@ function openForm(): Element {
 }
 
 function buttonTexts(scope: Element): string[] {
-  return [...scope.querySelectorAll('button')].map((b) => b.textContent ?? '');
+  return [...scope.querySelectorAll('button')].map(buttonName);
 }
 
 describe('SpacePlanPage — approve, reopen and order (Plan 332 P2)', () => {
@@ -1698,16 +1719,21 @@ describe('SpacePlanPage — the plan list (Plan 332 P3)', () => {
     expect(rowIds('finished')).toEqual([L_FINISHED]);
     expect(rowIds('closed')).toEqual([]);
 
+    // One reading per row: the plan, where it stands, and what needs the reader.
     const needs = listRow(L_NEEDS)!;
-    expect([...needs.querySelectorAll('[data-badge]')].map((b) => b.textContent)).toEqual([
-      'Needs you',
-      '3 need you',
-      '1 in flight',
-    ]);
+    expect(needs.querySelector('[data-plan-row-title]')?.textContent).toBe(
+      'Plan 331 · the always-on Helmsman',
+    );
+    expect(needs.querySelector('[data-plan-row-state]')?.textContent).toBe('Needs you');
     expect(needs.querySelector('[data-plan-row-progress]')?.textContent).toBe('1/4');
-    expect(
-      [...listRow(L_QUEUED)!.querySelectorAll('[data-badge]')].map((b) => b.textContent),
-    ).toEqual(['Queued']);
+    expect(needs.querySelector('[data-plan-row-in-flight]')?.textContent).toBe('1 in flight');
+    expect(needs.querySelector('[data-plan-row-needs-you]')?.textContent).toBe('3 need you');
+    const flight = listRow(L_FLIGHT)!;
+    expect(flight.querySelector('[data-plan-row-state]')?.textContent).toBe('1 in flight');
+    expect(flight.querySelector('[data-plan-row-in-flight]')).toBe(null);
+    expect(flight.querySelector('[data-plan-row-needs-you]')).toBe(null);
+    expect(listRow(L_QUEUED)!.querySelector('[data-plan-row-state]')?.textContent).toBe('Queued');
+    expect(listRow(L_QUEUED)!.querySelector('[data-badge]')).toBe(null);
     expect(listRow(L_FINISHED)?.textContent).toContain('5/5');
     expect(listRow(L_EMPTY)?.textContent).toContain('No steps');
 
@@ -2218,9 +2244,9 @@ describe('SpacePlanPage — the overview across plans (Plan 332 P4)', () => {
     const stop = laneRow(LANE_STOP);
     expect(stop.querySelector('[data-plan-lane-plan]')?.textContent).toBe('Plan 322');
     expect([...stop.querySelectorAll('[data-badge]')].map((b) => b.textContent)).toEqual([
-      'P3',
       'Blocked',
     ]);
+    expect(stop.querySelector('[data-plan-lane-phase]')?.textContent).toBe('P3');
     expect(stop.querySelector('[data-plan-lane-note]')?.textContent).toBe(
       'Proposed from the merged plan document; awaits the operator’s approval',
     );
@@ -2233,10 +2259,10 @@ describe('SpacePlanPage — the overview across plans (Plan 332 P4)', () => {
       'Commission',
     );
     expect(running.querySelector(`a[href="/s/work/runs/${RUN_ID}"]`)).not.toBe(null);
-    expect(running.textContent).toContain('#181');
+    expect(running.textContent).toContain('PR #181 · open');
 
     // Up next is the loop's next step per plan, with no reorder: that is the board's.
-    expect(laneRow(ARTICLE).textContent).toContain('Next');
+    expect(laneRow(ARTICLE).textContent).toContain('Next for the loop');
     expect(buttonTexts(lane('up_next'))).not.toContain('Move up');
     expect(buttonTexts(lane('up_next'))).not.toContain('Move down');
     expect(boardShown()).toBe(null);
@@ -2339,8 +2365,8 @@ describe('SpacePlanPage — the overview across plans (Plan 332 P4)', () => {
     expect([...rail().querySelectorAll('[data-badge]')].map((b) => b.textContent)).toEqual([
       'Needs you',
       'Blocked',
-      'P3',
     ]);
+    expect(rail().querySelector('[data-plan-rail-phase]')?.textContent).toBe('P3');
     expect(buttonTexts(rail())).toEqual(['Close', 'Approve', 'Mark done', 'Drop']);
 
     await click(button(rail(), 'Close'));

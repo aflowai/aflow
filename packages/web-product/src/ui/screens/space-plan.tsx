@@ -12,7 +12,9 @@
  * lane row too. Where the operator is lives in the URL,
  * `?plan=<rootId>&node=<nodeId>` (D8): no plan is the overview, so a reload,
  * back and a link land on the same view and rail. The overview and the board
- * are read again on every plan write and run change (D9).
+ * are read again on every plan write and run change (D9). The list and the
+ * rail each stand on a raised panel of their own beside the content, never
+ * behind a rule (Plan 332 P6).
  */
 import { useEffect, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
@@ -23,10 +25,11 @@ import {
   Dialog,
   Heading,
   PageContainer,
+  Panel,
   Row,
+  ScrollArea,
   Text,
   useMediaQuery,
-  type BadgeVariant,
 } from '@aflow/design-system';
 import type {
   PlanBoardColumn,
@@ -43,6 +46,7 @@ import { PLAN_STATE_BADGE, PlanList, PlanRootCloseControl } from '../components/
 import type { PlanNodeOpenRequest } from '../components/plan/PlanNodeOpenControl.js';
 import { PlanOverview } from '../components/plan/PlanOverview.js';
 import { PlanRail, PlanRailFromDetail, RAIL_WIDTH } from '../components/plan/PlanRail.js';
+import { HeadingDot, ProgressMeter } from '../components/plan/PlanParts.js';
 import type {
   PlanNodeCloseAnswer,
   PlanNodeCloseRequest,
@@ -59,6 +63,7 @@ import {
   planLaneRailNode,
   planPhases,
   planViewQuery,
+  PLAN_BOARD_COLUMNS,
   readerTimeZone,
   showsPhaseFilter,
   startOfDay,
@@ -89,13 +94,9 @@ function TruncationLine({ truncated }: { truncated: PlanNodeListTruncation | und
   );
 }
 
-const HEADER_BADGE: Record<PlanBoardColumn, BadgeVariant> = {
-  needs_you: 'warning',
-  in_flight: 'running',
-  up_next: 'accent',
-  done: 'success',
-  dropped: 'danger',
-};
+const COLUMN_COLOR = new Map<PlanBoardColumn, string>(
+  PLAN_BOARD_COLUMNS.map((column) => [column.id, column.color]),
+);
 
 function Segmented<T extends string>({
   label,
@@ -326,13 +327,11 @@ export function SpacePlanPage(): React.ReactNode {
               flexShrink: 0,
               position: 'sticky',
               top: 0,
-              maxHeight: '100vh',
-              overflowY: 'auto',
-              borderLeft: '1px solid var(--color-border-subtle)',
-              paddingLeft: 'var(--space-3)',
             }}
           >
-            {rail}
+            <Panel variant="subtle" padding="md">
+              <ScrollArea style={{ maxHeight: 'calc(100vh - var(--space-10))' }}>{rail}</ScrollArea>
+            </Panel>
           </aside>
         )}
       </Row>
@@ -467,16 +466,24 @@ export function SpacePlanPage(): React.ReactNode {
       <Column gap="md">
         <Row gap="md" align="start" justify="between" wrap>
           <Column gap="xs">
-            <Text weight="semibold">{root.title}</Text>
-            <Row gap="xs" align="center" wrap data-plan-tally={root.nodeId}>
+            <Text weight="semibold" size="lg">
+              {root.title}
+            </Text>
+            <Row gap="sm" align="center" wrap data-plan-tally={root.nodeId}>
               <Badge variant={PLAN_STATE_BADGE[tally.state]}>{planLine.state}</Badge>
-              <Text size="sm" variant="muted" data-plan-progress-line>
-                {planLine.progress}
-              </Text>
+              <Row gap="xs" align="center">
+                <ProgressMeter done={tally.done + tally.dropped} total={tally.steps} />
+                <Text size="sm" variant="muted" data-plan-progress-line>
+                  {planLine.progress}
+                </Text>
+              </Row>
               {planLine.counts.map(({ column, label }) => (
-                <Badge key={column} variant={HEADER_BADGE[column]}>
-                  {label}
-                </Badge>
+                <Row key={column} gap="xs" align="center" data-plan-tally-count={column}>
+                  <HeadingDot color={COLUMN_COLOR.get(column) ?? 'var(--color-border-emphasis)'} />
+                  <Text size="sm" variant="muted">
+                    {label}
+                  </Text>
+                </Row>
               ))}
             </Row>
             {tally.state === 'finished' &&

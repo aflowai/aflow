@@ -40,8 +40,11 @@ import {
   planViewQuery,
   showsPhaseFilter,
   waitingLine,
+  pullRequestChipLabel,
   pullRequestLabel,
+  reviewRoundsLabel,
   runKindLabel,
+  runsInFlightLabel,
   runLinkStatus,
   startOfDay,
 } from './plan-board.js';
@@ -294,6 +297,19 @@ describe('the Done column folded by day', () => {
 describe('labels', () => {
   it('reads a pull request by its number and a run by its kind and status', () => {
     expect(pullRequestLabel('https://github.com/aflowai/aflow/pull/181')).toBe('#181');
+    expect(
+      pullRequestChipLabel({ url: 'https://github.com/aflowai/aflow/pull/181', merged: false }),
+    ).toBe('PR #181 · open');
+    expect(
+      pullRequestChipLabel({ url: 'https://github.com/aflowai/aflow/pull/176', merged: true }),
+    ).toBe('PR #176 · merged');
+    expect(pullRequestChipLabel({ url: 'https://example.com/change', merged: false })).toBe(
+      'Pull request · open',
+    );
+    expect(reviewRoundsLabel(1)).toBe('1 review round');
+    expect(reviewRoundsLabel(14)).toBe('14 review rounds');
+    expect(runsInFlightLabel(1)).toBe('1 run in flight');
+    expect(runsInFlightLabel(3)).toBe('3 runs in flight');
     expect(runKindLabel('commission-change completed')).toBe('Commission');
     expect(runKindLabel('review-local-changes')).toBe('Review');
     expect(runKindLabel('my-skill failed')).toBe('my-skill');
