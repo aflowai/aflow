@@ -1,26 +1,42 @@
 import { describe, it, expect } from 'vitest';
 import { materializeAndValidateSkillConfig } from '@aflow/cybernetic-runtime';
 import {
+  declareFolderPreviewCommand,
   HOST_HARNESS_CONCURRENCY_DEFAULT,
   HOST_HARNESS_MAX_TURNS_DEFAULT,
+  HOST_HARNESS_TASK_MAX_LENGTH,
   HOST_HARNESS_TIMEOUT_DEFAULT_MS,
   HOST_HARNESS_TIMEOUT_MAX_MS,
-  HostHarnessBrowserSchema,
+  HOST_KEEP_AWAKE_DEFAULT,
+  HOST_SANDBOX_POSTURE_DEFAULT,
+  HostBindingInspectInputSchema,
+  HostBindingInspectOutputSchema,
+  type HostFolderUiAnswer,
   HostHarnessRunInputSchema,
   isEvalPlaneOperation,
   substituteTemplateBinds,
-  toJsonSchemaSync,
 } from '@aflow/schemas';
 import { getSkillBundleEntry } from '../skillBundleCatalog.js';
 import {
+  COMMISSION_BRIEF_MAX_LENGTH,
   COMMISSION_CHANGE,
+  COMMISSION_PREVIEW_PARAGRAPH,
   COMMISSION_RESULT_SCHEMA,
   COMMIT_TITLE_MAX_CHARS,
 } from './commissionChange.js';
+import {
+  BROWSER_UNAVAILABLE_ON_HARNESS,
+  RULE_PREVIEW,
+  UI_NOT_SEEN_BY_COMMISSION,
+  UI_NOT_SEEN_PREVIEW_UNAVAILABLE,
+  UI_NOT_SEEN_NO_GRANT,
+  UI_NOT_SEEN_NO_PREVIEW,
+} from './localBrowserRule.js';
+import { runSkillTasks, type TaskAnswer } from '../__tests__/runSkillTasks.js';
 import { skillGuidance } from '../__tests__/skillGuidance.js';
 
 const wf = COMMISSION_CHANGE.bundle.workflow;
-const task = wf.tasks[0];
+const task = wf.tasks.find((t) => t.taskId === 'commission');
 const template = task?.inputTemplate ?? {};
 const declared = new Set(Object.keys(task?.inputBindings ?? {}));
 
@@ -51,12 +67,31 @@ describe('Commission Change — a brief to the machine’s coding agent', () => 
     expect(validity.status).toBe('valid');
   });
 
-  it('is one operation task on the host harness', () => {
-    expect(wf.tasks).toHaveLength(1);
+  it('is a read of the folder, a decision by rule, one harness run, and a read of what it changed', () => {
+    expect(wf.tasks.map((t) => t.taskId)).toEqual([
+      'read-ui',
+      'decide-browser',
+      'commission',
+      'preview-open',
+      'check-ui',
+      'report-ui',
+    ]);
+    expect(wf.tasks.map((t) => t.operation)).toEqual([
+      'host.binding.inspect',
+      'workflow.run.decide',
+      'host.harness.run',
+      'workflow.run.decide',
+      'host.binding.inspect',
+      'workflow.run.decide',
+    ]);
     expect(task?.type).toBe('operation');
-    expect(task?.operation).toBe('host.harness.run');
     expect(task?.context?.capabilities?.operations).toEqual(['host.harness.run']);
     expect(task?.context?.capabilities?.integrations ?? []).toEqual([]);
+    expect(task?.retryability).toBe('unsafe');
+    // Only the coding agent's run is the commission; nothing around it fails it.
+    for (const id of ['read-ui', 'decide-browser', 'preview-open', 'check-ui']) {
+      expect(wf.tasks.find((t) => t.taskId === id)?.optional).toBe(true);
+    }
   });
 
   it('takes as run inputs everything the operation takes that a brief names', () => {
@@ -71,7 +106,6 @@ describe('Commission Change — a brief to the machine’s coding agent', () => 
       'model',
       'maxTurns',
       'timeoutMs',
-      'browser',
     ]);
     expect(inputs.filter((i) => i.required).map((i) => i.id)).toEqual(['bindingId', 'task']);
     for (const input of inputs) {
@@ -132,48 +166,10 @@ describe('Commission Change — a brief to the machine’s coding agent', () => 
       model: 'claude-opus-5-5',
       maxTurns: 40,
       timeoutMs: 600_000,
-      browser: { profile: 'ephemeral' },
     };
     const op = substituteTemplateBinds(template, named, declared);
     expect(op).toEqual({ ...named, outputSchema: COMMISSION_RESULT_SCHEMA, resultRequired: false });
     expect(HostHarnessRunInputSchema.safeParse(op).success).toBe(true);
-  });
-
-  it('gives the coding agent no browser when the brief asks for none', () => {
-    const op = substituteTemplateBinds(template, { bindingId: 'hb_repo', task: BRIEF }, declared);
-    expect('browser' in op).toBe(false);
-    const parsed = HostHarnessRunInputSchema.safeParse(op);
-    expect(parsed.success).toBe(true);
-    expect(parsed.data?.browser).toBeUndefined();
-  });
-
-  it('hands the operation the browser the brief names, unchanged', () => {
-    for (const browser of [{ profile: 'ephemeral' }, { profile: 'work-chrome' }]) {
-      const op = substituteTemplateBinds(
-        template,
-        { bindingId: 'hb_repo', task: BRIEF, browser },
-        declared,
-      );
-      expect(op['browser']).toEqual(browser);
-      const parsed = HostHarnessRunInputSchema.safeParse(op);
-      expect(parsed.success).toBe(true);
-      expect(parsed.data?.browser).toEqual(browser);
-    }
-  });
-
-  it("takes the operation's browser schema, and says to ask for one for a page of the web UI", () => {
-    const input = (wf.runInputs ?? []).find((i) => i.id === 'browser');
-    expect(input?.required).toBe(false);
-    expect(input?.schema).toEqual(toJsonSchemaSync(HostHarnessBrowserSchema));
-    expect(input?.schema?.['description']).toBe(HostHarnessBrowserSchema.description);
-    expect(input?.description).toContain(
-      "A change that touches a page of the repository's web UI gets `{ profile: 'ephemeral' }`",
-    );
-    expect(input?.description).toContain(
-      'names the dev-server URL the coding agent opens and what it should see working there',
-    );
-    expect(input?.description?.length ?? 0).toBeLessThanOrEqual(500);
-    expect(skillGuidance(COMMISSION_CHANGE)).toContain("`browser: { profile: 'ephemeral' }`");
   });
 
   it('promotes the change and what a publication and a further turn take, patchRef primary', () => {
@@ -189,7 +185,11 @@ describe('Commission Change — a brief to the machine’s coding agent', () => 
       'continued',
     ];
     expect(promoted).toEqual(expected);
-    expect((wf.stateVariables ?? []).map((v) => v.variableId)).toEqual(expected);
+    expect((wf.stateVariables ?? []).map((v) => v.variableId)).toEqual([
+      ...expected,
+      'uiNotSeen',
+      'uiFilesNotSeen',
+    ]);
     expect(wf.output?.primary).toBe('patchRef');
     expect(wf.output?.guidance).toContain('patchRef, baseSha and merge.from as they stand');
     expect(wf.output?.guidance).toContain('commits under summary unless given a commitMessage');
@@ -284,5 +284,276 @@ describe('Commission Change — a brief to the machine’s coding agent', () => 
     );
     expect(skillGuidance(COMMISSION_CHANGE)).toContain('plan.node.get');
     expect(wf.runInputs?.map((input) => input.id)).not.toContain('planNodeId');
+  });
+});
+
+// --- Plan 320 D20: the browser and the preview, by rule over the brief --------
+
+const UI_BRIEF = 'Make the empty state of `src/web/Checkout.vue:40` say why the cart is empty.';
+const PATCH_REF = 'gs://payloads/t/patch/run-1';
+
+/** The folder's answer, as the machine holding it returns it. */
+function folderAnswer(ui: Partial<HostFolderUiAnswer> & Pick<HostFolderUiAnswer, 'preview'>) {
+  return HostBindingInspectOutputSchema.parse({
+    id: 'hb_repo',
+    sandbox: HOST_SANDBOX_POSTURE_DEFAULT,
+    maxConcurrentHarnessRuns: HOST_HARNESS_CONCURRENCY_DEFAULT,
+    keepAwake: HOST_KEEP_AWAKE_DEFAULT,
+    ui: {
+      uiPaths: ['src/web/**'],
+      files: [],
+      touched: false,
+      browser: { harness: 'claude' },
+      ...ui,
+    },
+  });
+}
+
+const TOUCHED = { files: ['src/web/Checkout.vue'], touched: true };
+
+const CHANGE = {
+  patchRef: PATCH_REF,
+  baseSha: 'b'.repeat(40),
+  filesChanged: 1,
+  result: { summary: { title: 'Say why the cart is empty', paragraph: 'It says why.' } },
+};
+
+const PREVIEW_URL = 'http://127.0.0.1:47101/';
+
+/** The change, as a run that asked for the preview and had it returns it. */
+function changeWithPreview(input: Record<string, unknown>): TaskAnswer {
+  return input['preview'] !== undefined ? { ...CHANGE, previewUrl: PREVIEW_URL } : CHANGE;
+}
+
+/**
+ * A commission over `runInputs`: the folder answering `before` ahead of the
+ * run and `after` once it ended, the coding agent returning one change — with
+ * the preview open where the run asked for it, unless `change` says otherwise.
+ */
+function commission(
+  before: TaskAnswer,
+  after: TaskAnswer = folderAnswer({ preview: 'declared' }),
+  runInputs: Record<string, unknown> = { bindingId: 'hb_repo', task: UI_BRIEF },
+  change: (input: Record<string, unknown>) => TaskAnswer = changeWithPreview,
+) {
+  return runSkillTasks(wf.tasks, runInputs, (taskId, input) =>
+    taskId === 'read-ui' ? before : taskId === 'check-ui' ? after : change(input),
+  );
+}
+
+describe('Commission Change — the browser and the preview by rule (Plan 320 D20)', () => {
+  it('asks the folder about the brief, the branch it continues and the harness it would get', () => {
+    const run = commission(folderAnswer({ preview: 'declared' }), undefined, {
+      bindingId: 'hb_repo',
+      task: UI_BRIEF,
+      base: 'aflow/checkout-copy',
+      harness: 'codex',
+    });
+    expect(HostBindingInspectInputSchema.parse(run.inputs.get('read-ui'))).toEqual({
+      bindingId: 'hb_repo',
+      ui: { text: UI_BRIEF, branch: 'aflow/checkout-copy', harness: 'codex' },
+    });
+  });
+
+  it('takes the browser and the preview where the brief names a uiPaths file and the folder declares a preview', () => {
+    const run = commission(folderAnswer({ preview: 'declared', ...TOUCHED }));
+    const call = HostHarnessRunInputSchema.parse(run.inputs.get('commission'));
+    expect(call.browser).toEqual({ profile: 'ephemeral' });
+    expect(call.preview).toBe(RULE_PREVIEW);
+    expect(call.task).toBe(`${UI_BRIEF}\n\n${COMMISSION_PREVIEW_PARAGRAPH}`);
+    // A run that had the preview open is not read again, and says nothing.
+    expect(run.ran).not.toContain('check-ui');
+    expect(run.state).not.toHaveProperty('uiNotSeen');
+    expect(run.state).toMatchObject({ patchRef: PATCH_REF });
+  });
+
+  it('carries one standard paragraph naming previewUrl, the app as of its base', () => {
+    expect(COMMISSION_PREVIEW_PARAGRAPH).toContain('`previewUrl`');
+    expect(COMMISSION_PREVIEW_PARAGRAPH).toContain('the app as of its base');
+    expect(COMMISSION_PREVIEW_PARAGRAPH).toContain('your own edits are not part of');
+    expect(COMMISSION_PREVIEW_PARAGRAPH).toContain('start or stop no server yourself');
+    // Always the same text, whatever the brief.
+    const other = 'Restyle `src/web/Nav.vue`.';
+    const run = commission(folderAnswer({ preview: 'declared', ...TOUCHED }), undefined, {
+      bindingId: 'hb_repo',
+      task: other,
+    });
+    expect(run.inputs.get('commission')?.['task']).toBe(
+      `${other}\n\n${COMMISSION_PREVIEW_PARAGRAPH}`,
+    );
+    // Nothing in it names any one project or a port.
+    expect(COMMISSION_PREVIEW_PARAGRAPH).not.toMatch(/aflow|localhost|:\d{2,5}/i);
+  });
+
+  it('leaves room for the paragraph after the longest brief it takes', () => {
+    const input = (wf.runInputs ?? []).find((i) => i.id === 'task');
+    expect(input?.schema).toMatchObject({ maxLength: COMMISSION_BRIEF_MAX_LENGTH });
+    const named = 'Restyle `src/web/Nav.vue`. ';
+    const longest = named + 'x'.repeat(COMMISSION_BRIEF_MAX_LENGTH - named.length);
+    expect(longest).toHaveLength(COMMISSION_BRIEF_MAX_LENGTH);
+    const run = commission(folderAnswer({ preview: 'declared', ...TOUCHED }), undefined, {
+      bindingId: 'hb_repo',
+      task: longest,
+    });
+    const call = HostHarnessRunInputSchema.parse(run.inputs.get('commission'));
+    expect(call.task).toHaveLength(HOST_HARNESS_TASK_MAX_LENGTH);
+    expect(call.preview).toBe(RULE_PREVIEW);
+  });
+
+  it('gives no browser where the brief and the branch touch no UI file', () => {
+    const run = commission(folderAnswer({ preview: 'declared' }));
+    expect(run.ran).toContain('commission');
+    const call = HostHarnessRunInputSchema.parse(run.inputs.get('commission'));
+    expect(call.browser).toBeUndefined();
+    expect(call.preview).toBeUndefined();
+    expect(call.task).toBe(UI_BRIEF);
+    expect(run.state['uiFilesNotSeen']).toEqual([]);
+    expect(run.state).not.toHaveProperty('uiNotSeen');
+  });
+
+  it('does not take the browser where the folder declares no preview, and says so with the command', () => {
+    const noPreview = folderAnswer({ preview: 'not_declared', ...TOUCHED });
+    const run = commission(noPreview, noPreview);
+    expect(run.ran).toContain('commission');
+    expect(run.inputs.get('commission')).not.toHaveProperty('browser');
+    expect(run.inputs.get('commission')).not.toHaveProperty('preview');
+    expect(run.state['uiNotSeen']).toContain(UI_NOT_SEEN_NO_PREVIEW);
+    expect(run.state['uiNotSeen']).toContain(
+      '`aflow folder hb_repo preview --command "<the command that serves it, with {port}>"`',
+    );
+    expect(run.state['uiFilesNotSeen']).toEqual(['src/web/Checkout.vue']);
+    expect(run.statuses.get('commission')).toBe('succeeded');
+  });
+
+  it('names each UI file a run changed without the trigger, and rests nothing on it', () => {
+    const run = commission(
+      folderAnswer({ preview: 'declared' }),
+      folderAnswer({
+        preview: 'declared',
+        files: ['src/web/Cart.vue', 'src/web/Nav.vue'],
+        touched: true,
+      }),
+      { bindingId: 'hb_repo', task: 'Fix the empty-cart bug.', harness: 'claude' },
+    );
+    expect(run.ran).toContain('commission');
+    expect(HostBindingInspectInputSchema.parse(run.inputs.get('check-ui'))).toEqual({
+      bindingId: 'hb_repo',
+      ui: { patchRef: PATCH_REF, harness: 'claude' },
+    });
+    expect(run.state['uiNotSeen']).toBe(UI_NOT_SEEN_BY_COMMISSION);
+    expect(run.state['uiFilesNotSeen']).toEqual(['src/web/Cart.vue', 'src/web/Nav.vue']);
+    expect(run.state).toMatchObject({ patchRef: PATCH_REF, filesChanged: 1 });
+  });
+
+  it('degrades to the needs_setup line where the grant lacks the browser, never failing the commission', () => {
+    const ungranted = folderAnswer({
+      preview: 'declared',
+      ...TOUCHED,
+      browser: { harness: 'claude', unavailable: 'grant' },
+    });
+    const run = commission(ungranted, ungranted);
+    expect(run.ran).toContain('commission');
+    expect(run.inputs.get('commission')).not.toHaveProperty('browser');
+    expect(run.statuses.get('commission')).toBe('succeeded');
+    expect(run.state['uiNotSeen']).toBe(UI_NOT_SEEN_NO_GRANT);
+    expect(run.state).toMatchObject({ patchRef: PATCH_REF });
+  });
+
+  it.each([
+    [
+      'no preview, with the command',
+      { preview: 'not_declared' as const },
+      [UI_NOT_SEEN_NO_PREVIEW, `\`${declareFolderPreviewCommand('hb_repo')}\``],
+    ],
+    [
+      'a harness without browser arguments',
+      {
+        preview: 'declared' as const,
+        browser: { harness: 'codex', unavailable: 'harness' as const },
+      },
+      [`${BROWSER_UNAVAILABLE_ON_HARNESS} codex`],
+    ],
+    [
+      'a grant without the browser',
+      {
+        preview: 'declared' as const,
+        browser: { harness: 'claude', unavailable: 'grant' as const },
+      },
+      [UI_NOT_SEEN_NO_GRANT],
+    ],
+  ])(
+    "says in its result what the review's needs_setup finding says: %s (D21)",
+    (_case, ui, says) => {
+      const answer = folderAnswer({ ...ui, ...TOUCHED });
+      const run = commission(answer, answer);
+      expect(run.statuses.get('commission')).toBe('succeeded');
+      for (const words of says) expect(run.state['uiNotSeen']).toContain(words);
+      expect(run.state['uiFilesNotSeen']).toEqual(['src/web/Checkout.vue']);
+      // Said, never blocking: the change is the commission's result as it stands.
+      expect(run.state).toMatchObject({ patchRef: PATCH_REF, filesChanged: 1 });
+    },
+  );
+
+  it('says which harness cannot take a browser', () => {
+    const noArguments = folderAnswer({
+      preview: 'declared',
+      ...TOUCHED,
+      browser: { harness: 'codex', unavailable: 'harness' },
+    });
+    const run = commission(noArguments, noArguments);
+    expect(run.ran).toContain('commission');
+    expect(run.state['uiNotSeen']).toContain(`${BROWSER_UNAVAILABLE_ON_HARNESS} codex`);
+    expect(run.state['uiNotSeen']).toContain('`aflow harness browser codex`');
+  });
+
+  it.each([
+    ['its fixed port is held by another run', 'preview port 41801 is held by run run-2.'],
+    [
+      'it never answers',
+      'The preview `yarn dev` did not answer at http://127.0.0.1:47101/ within 120 s. What it printed is in `previewLog`.',
+    ],
+  ])(
+    'runs on and says so where the preview the rule gave it cannot be had: %s (D21)',
+    (_case, happened) => {
+      const touched = folderAnswer({ preview: 'declared', ...TOUCHED });
+      // The executor ran the commission without the preview and its browser,
+      // and said what happened to the preview instead of failing the run.
+      const run = commission(touched, touched, undefined, () => ({
+        ...CHANGE,
+        previewUnavailable: happened,
+      }));
+      const call = HostHarnessRunInputSchema.parse(run.inputs.get('commission'));
+      expect(call.preview).toBe(RULE_PREVIEW);
+      expect(run.statuses.get('commission')).toBe('succeeded');
+      expect(run.inputs.get('preview-open')?.['state']).toEqual({ patchRef: PATCH_REF });
+      expect(run.ran).toContain('check-ui');
+      expect(run.state['uiNotSeen']).toBe(`${UI_NOT_SEEN_PREVIEW_UNAVAILABLE}: ${happened}`);
+      expect(run.state['uiFilesNotSeen']).toEqual(['src/web/Checkout.vue']);
+      expect(run.state).toMatchObject({ patchRef: PATCH_REF });
+    },
+  );
+
+  it('runs without a browser where the folder cannot be read, before the run or after it', () => {
+    const run = commission('fail', 'fail');
+    expect(run.ran).toContain('commission');
+    expect(run.inputs.get('commission')).not.toHaveProperty('browser');
+    expect(run.statuses.get('commission')).toBe('succeeded');
+    expect(run.state).toMatchObject({ patchRef: PATCH_REF });
+    expect(run.state).not.toHaveProperty('uiNotSeen');
+  });
+
+  it('offers the Helmsman no browser to ask for, and says what the rule reads', () => {
+    expect((wf.runInputs ?? []).map((i) => i.id)).not.toContain('browser');
+    const guidance = skillGuidance(COMMISSION_CHANGE);
+    expect(guidance).toContain('The browser is never asked for');
+    expect(guidance).toContain("a file under the folder's `uiPaths`");
+    expect(guidance).not.toContain('dev-server URL the coding agent opens');
+    // A caller's browser is not heard: only the rule adds one.
+    const run = commission(folderAnswer({ preview: 'declared' }), undefined, {
+      bindingId: 'hb_repo',
+      task: BRIEF,
+      browser: { profile: 'ephemeral' },
+    });
+    expect(run.inputs.get('commission')).not.toHaveProperty('browser');
   });
 });

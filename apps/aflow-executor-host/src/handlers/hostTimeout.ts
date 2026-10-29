@@ -69,7 +69,12 @@ function streamCeilingMs(operationId: string, raw: unknown): number | undefined 
   if (operationId === 'host.harness.run') {
     const parsed = HostHarnessRunInputSchema.safeParse(raw);
     if (!parsed.success) return undefined;
-    return parsed.data.timeoutMs + (parsed.data.preview === true ? HOST_PREVIEW_MARGIN_MS : 0);
+    return (
+      parsed.data.timeoutMs +
+      (parsed.data.preview === undefined || parsed.data.preview === false
+        ? 0
+        : HOST_PREVIEW_MARGIN_MS)
+    );
   }
   if (operationId === 'host.process.exec') {
     const parsed = HostProcessExecInputSchema.safeParse(raw);

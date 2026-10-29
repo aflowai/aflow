@@ -262,12 +262,15 @@ export interface PlanNodeStore {
    * snapshot: one recursive query from the roots carrying each node's root and
    * whether a closed node lies above it, below the open roots only, no further
    * than `bounds.maxDepth`, and stopped once it has walked `bounds.maxNodes`
-   * nodes, open or closed, roots first and a shallower level before a deeper,
-   * each level in reading order — roots by position, then each parent's
-   * children by position in its parents' order — so past the bound it keeps
-   * the reading-order head. It returns every root and every open step it walked as a row, with the
-   * runs in flight on each, and the closed steps only as counts per root, so
-   * no done step is ever shipped. `place` makes the view from it, and the
+   * open nodes, roots first and a shallower level before a deeper, each level
+   * in reading order — roots by position, then each parent's children by
+   * position in its parents' order — so past the bound it keeps the
+   * reading-order head. Closed steps spend none of the bound: each is counted
+   * with one aggregate over its parent's children, and the walk passes through
+   * only those with steps under them, to reach an open step stranded there;
+   * closed roots are listed on a bound of their own. It returns the roots and
+   * every open step it walked as rows, with the runs in flight on each, and the
+   * closed steps only as counts per root, so no done step is ever shipped. `place` makes the view from it, and the
    * pull requests and runs it names are read in the same snapshot, so a row
    * and what is looked up for it cannot disagree.
    */

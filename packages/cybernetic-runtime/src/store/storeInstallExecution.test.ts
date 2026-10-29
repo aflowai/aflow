@@ -939,7 +939,7 @@ describe('executeStoreInstall — the edition’s composed lanes', () => {
       code: 'LANE_NOT_COMPOSED',
       catalogId: 'local-code-review',
     });
-    expect(result.body.error).toContain('host.harness.run');
+    expect(result.body.error).toContain('the host lane');
     expect(installSkillBundle).not.toHaveBeenCalled();
     expect(store.installs).toEqual([]);
   });

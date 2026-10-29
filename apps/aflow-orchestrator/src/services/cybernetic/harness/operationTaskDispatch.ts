@@ -20,6 +20,7 @@ import {
 } from '../../SessionOrchestrator/helpers/inlineOperations.js';
 import type { HarnessDeps } from './types.js';
 import { preferredHarnessFor } from '../../hostHarnessPreference.js';
+import { browserGrantFor } from './browserGrant.js';
 
 /**
  * Default `completion_pending` supervision window — how long the sweeper
@@ -87,6 +88,8 @@ export interface DispatchClaimedOperationTaskArgs {
   activatedByPerson: boolean;
   /** From `startingConversationOf`; absent when no conversation started the run. */
   startingConversationId?: SessionId;
+  /** The session the run's grant compiles from, for a step whose job carries a judgement of it. */
+  anchorSessionId?: string;
 }
 
 /**
@@ -132,6 +135,7 @@ export async function dispatchClaimedOperationTask(
     credentialOwnerId,
     activatedByPerson,
     startingConversationId,
+    anchorSessionId,
   } = args;
   const stepType = operationId.split('.')[0] as StepType;
   const workflowExecution = { runId, taskId, attempt, dispatchAttemptToken };
@@ -213,6 +217,7 @@ export async function dispatchClaimedOperationTask(
   // Enqueue the workflow-task job. Schema invariant guarantees this path
   // uses workflowExecution + no sessionId.
   const preferredHarness = await preferredHarnessFor(deps.db, tenantId, spaceId, operationId);
+  const browserGranted = await browserGrantFor(deps, tenantId, anchorSessionId, operationId);
   const dispatched = await dispatchOrWaitOnExecutor(deps.redis, {
     messageVersion: 1,
     tenantId,
@@ -231,6 +236,7 @@ export async function dispatchClaimedOperationTask(
     activatedByPerson,
     ...(startingConversationId !== undefined ? { startingConversationId } : {}),
     ...(preferredHarness !== undefined ? { preferredHarness } : {}),
+    ...(browserGranted !== undefined ? { browserGranted } : {}),
   });
   return dispatched.kind === 'waiting' ? 'executor_wait' : 'enqueued';
 }

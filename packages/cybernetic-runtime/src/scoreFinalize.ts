@@ -116,7 +116,9 @@ export async function prepareRunScoring(
     );
   }
 
-  const runLevelMetrics = workflow ? resolvePromotedRunMetrics(workflow.tasks, taskResults) : {};
+  const runLevelMetrics = workflow
+    ? resolvePromotedRunMetrics(workflow.tasks, taskResults, workflow.stateVariables)
+    : {};
 
   return { workflow, goal, runLevelMetrics, campaign };
 }

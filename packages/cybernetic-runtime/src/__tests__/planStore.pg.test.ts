@@ -351,8 +351,9 @@ describeDb('moveAtRevision — two crossing moves never close a loop (real DB)',
       expect(overview.lanes.upNext.items.map((i) => i.rootId)).toEqual(roots.map((r) => r.nodeId));
     });
 
-    it('stops the recursion at the node bound over 5,000 done steps, and says so on every plan and the lanes', async () => {
+    it('returns no done row and reaches no bound over 5,000 done steps and 10 open: the done steps are counted', async () => {
       const { spaceId, ctx: here } = space();
+      const roots: PlanNode[] = [];
       for (let n = 0; n < 10; n++) {
         const result = await createPlanNode(here, {
           kind: 'execute',
@@ -362,6 +363,7 @@ describeDb('moveAtRevision — two crossing moves never close a loop (real DB)',
           position: n,
         });
         if (!result.ok) throw new Error(result.message);
+        roots.push(result.node);
         await bulk(spaceId, result.node.nodeId, 500, 'done');
         await bulk(spaceId, result.node.nodeId, 1, 'active', 9000);
       }
@@ -369,21 +371,21 @@ describeDb('moveAtRevision — two crossing moves never close a loop (real DB)',
       const read = await readOnly(spaceId);
       const overview = PlanOverviewOutputSchema.parse(await readPlanOverview({ store, spaceId }));
 
-      expect(read.truncated).toEqual({ bound: 'nodes', value: bounds.maxNodes });
+      expect(read.truncated).toBeUndefined();
+      expect(read).not.toHaveProperty('frontierDepth');
       expect(read.rootsTotal).toBe(10);
-      const counted = [...read.counted.values()];
-      // The walk held at most the bound, closed steps included.
-      expect(counted.reduce((sum, c) => sum + c.done, 0) + read.nodes.length).toBeLessThanOrEqual(
-        bounds.maxNodes,
-      );
-      expect(counted.every((c) => c.cut)).toBe(true);
+      expect(read.nodes).toHaveLength(20);
+      expect(read.nodes.every((n) => n.status === 'active')).toBe(true);
+      expect([...read.counted.values()].every((c) => c.done === 500 && !c.cut)).toBe(true);
       expect(overview.truncated).toBeUndefined();
-      expect(overview.roots).toHaveLength(10);
-      expect(overview.roots.every((r) => r.truncated?.bound === 'nodes')).toBe(true);
-      expect(overview.lanes.truncated).toEqual({ bound: 'nodes', value: bounds.maxNodes });
+      expect(overview.lanes.truncated).toBeUndefined();
+      expect(
+        overview.roots.map((r) => [r.nodeId, r.truncated, r.counts?.steps, r.counts?.done]),
+      ).toEqual(roots.map((r) => [r.nodeId, undefined, 501, 500]));
+      expect(overview.lanes.upNext.items.map((i) => i.rootId)).toEqual(roots.map((r) => r.nodeId));
     });
 
-    it('keeps the lowest-positioned roots past the node bound, the open plan written last among them', async () => {
+    it('lists the closed plans on a bound of their own, every open plan read whatever their number', async () => {
       const { spaceId, ctx: here } = space();
       await withTenantSchema(handle.db, tenantCtx, (tx) =>
         tx.execute(drizzleSql`
@@ -400,15 +402,26 @@ describeDb('moveAtRevision — two crossing moves never close a loop (real DB)',
         position: 0,
       });
       if (!open.ok) throw new Error(open.message);
+      await bulk(spaceId, open.node.nodeId, 3, 'active');
 
       const read = await readOnly(spaceId);
       const overview = PlanOverviewOutputSchema.parse(await readPlanOverview({ store, spaceId }));
 
-      expect(read.truncated).toEqual({ bound: 'nodes', value: bounds.maxNodes });
+      // The closed roots spend none of the open walk's bound: it is not reached.
+      expect(read.truncated).toBeUndefined();
+      expect(read.counted.get(open.node.nodeId)).toMatchObject({ cut: false });
+      expect(read.nodes.filter((n) => n.depth === 1)).toHaveLength(3);
       expect(read.rootsTotal).toBe(bounds.maxNodes + 2);
-      const positions = read.nodes.map((n) => n.position).sort((a, b) => a - b);
-      expect(positions).toEqual(Array.from({ length: bounds.maxNodes }, (_, i) => i));
+      // The lowest-positioned closed roots, up to the bound, and the open one.
+      const positions = read.nodes
+        .filter((n) => n.depth === 0)
+        .map((n) => n.position)
+        .sort((a, b) => a - b);
+      expect(positions).toEqual(Array.from({ length: bounds.maxNodes + 1 }, (_, i) => i));
       expect(overview.roots[0]).toMatchObject({ nodeId: open.node.nodeId, status: 'active' });
+      expect(overview.roots[0]).not.toHaveProperty('truncated');
+      expect(overview.truncated).toEqual({ bound: 'nodes', value: bounds.maxNodes });
+      expect(overview.lanes.upNext.total).toBe(1);
     });
 
     it('keeps the first siblings in reading order where the node bound cuts a level', async () => {
@@ -513,6 +526,8 @@ describeDb('moveAtRevision — two crossing moves never close a loop (real DB)',
       const stranded = await make('P6.a', phase.nodeId, 0);
       const deeper = await make('P6.a.1', stranded.nodeId, 0);
       const next = await make('P7', root.nodeId, 1);
+      // A closed step under a closed one: counted, though the walk passes through no closed leaf.
+      await closeIt(await make('P6.b', phase.nodeId, 1));
       await closeIt(phase);
       const shut = await make('shut', undefined, 1);
       await make('under shut', shut.nodeId);
@@ -544,7 +559,7 @@ describeDb('moveAtRevision — two crossing moves never close a loop (real DB)',
         .sort((a, b) => a.walkOrder - b.walkOrder)
         .map((n) => n.title);
       expect(order).toEqual(['root', 'P6.a', 'P6.a.1', 'P7']);
-      expect(read.counted.get(root.nodeId)).toMatchObject({ done: 1, dropped: 0, cut: false });
+      expect(read.counted.get(root.nodeId)).toMatchObject({ done: 2, dropped: 0, cut: false });
       expect(read.counted.get(shut.nodeId)).toMatchObject({ done: 0, cut: false });
       // The rail's own read of a step names the same closed node above it.
       expect(await store.closedAncestorOf(spaceId, deeper.nodeId)).toEqual({

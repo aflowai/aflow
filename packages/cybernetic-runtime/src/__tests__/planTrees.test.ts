@@ -20,6 +20,7 @@ import {
   PlanNodeDetailQuerySchema,
   PlanBoardOutputSchema,
   PlanOverviewOutputSchema,
+  isClosedPlanNodeStatus,
   planBoardCards,
   planBoardColumn,
   type PlanNode,
@@ -870,32 +871,55 @@ describe('readPlanOverview — the plans as rows', () => {
     });
   });
 
-  it('stops the walk at the node bound, closed steps included, and marks the plans it may have left steps of', async () => {
+  it('stops the walk at the node bound of open steps, closed ones spending none, and marks the plans it may have left steps of', async () => {
     const closedAt = '2026-10-03T00:00:00.000Z';
-    const flat = store.seed(SPACE, { title: 'flat', position: 0 });
-    store.seed(SPACE, { parentId: flat.nodeId, title: 'landed', status: 'done', closedAt });
-    store.seed(SPACE, { parentId: flat.nodeId, title: 'approved', position: 1 });
-    const deep = store.seed(SPACE, { title: 'deep', position: 1 });
+    const deep = store.seed(SPACE, { title: 'deep', position: 0 });
+    // A long done history under the plan is counted, and spends none of the bound.
+    const history = 1500;
+    for (let n = 0; n < history; n++) {
+      store.seed(SPACE, {
+        parentId: deep.nodeId,
+        title: `landed ${String(n)}`,
+        status: 'done',
+        closedAt,
+        position: n + 1,
+      });
+    }
     const a = store.seed(SPACE, { parentId: deep.nodeId, title: 'a', status: 'done', closedAt });
     const b = store.seed(SPACE, { parentId: a.nodeId, title: 'b', status: 'done', closedAt });
+    // Open and stranded, two levels under the closed ones: past the bound.
+    for (const n of [0, 1]) {
+      store.seed(SPACE, { parentId: b.nodeId, title: `stranded ${String(n)}`, position: n });
+    }
+    // Three open roots, then open steps one short of the bound on the first level.
+    const wide = store.seed(SPACE, { title: 'wide', position: 1 });
+    for (let n = 0; n < PLAN_TREE_WALK_NODE_LIMIT - 3; n++) {
+      store.seed(SPACE, { parentId: wide.nodeId, title: `approved ${String(n)}`, position: n });
+    }
     // A closed plan's steps are not walked at all.
     const gone = store.seed(SPACE, { title: 'gone', position: 2, status: 'dropped', closedAt });
     store.seed(SPACE, { parentId: gone.nodeId, title: 'under gone' });
-    // Seven nodes above, then done leaves to the bound: the last two leaves,
-    // open and stranded, lie past it on the level where the walk stopped.
-    const leaves = PLAN_TREE_WALK_NODE_LIMIT - 7 + 2;
-    for (let n = 0; n < leaves; n++) {
+    // Done leaves alone: nothing under them is walked, so nothing is left unread.
+    const landed = store.seed(SPACE, { title: 'landed', position: 3 });
+    for (let n = 0; n < 5; n++) {
       store.seed(SPACE, {
-        parentId: b.nodeId,
-        title: `leaf ${String(n)}`,
+        parentId: landed.nodeId,
+        title: `landed ${String(n)}`,
+        status: 'done',
+        closedAt,
         position: n,
-        ...(n < leaves - 2 ? { status: 'done' as const, closedAt } : {}),
       });
     }
+    const reads = vi.spyOn(store, 'readOverview');
 
     const read = await rows();
     const rowOf = (id: string) => read.roots.find((r) => r.nodeId === id)!;
 
+    const { read: walked } = await reads.mock.results[0]!.value;
+    expect(walked.truncated).toEqual({ bound: 'nodes', value: PLAN_TREE_WALK_NODE_LIMIT });
+    expect(walked.nodes.filter((n) => !isClosedPlanNodeStatus(n.status))).toHaveLength(
+      PLAN_TREE_WALK_NODE_LIMIT,
+    );
     // Every plan is listed; the lanes may miss steps, and say so.
     expect(read.truncated).toBeUndefined();
     expect(read.lanes.truncated).toEqual({ bound: 'nodes', value: PLAN_TREE_WALK_NODE_LIMIT });
@@ -904,16 +928,20 @@ describe('readPlanOverview — the plans as rows', () => {
       truncated: { bound: 'nodes', value: PLAN_TREE_WALK_NODE_LIMIT },
       // Every step counted is done, but the two the bound left are open: not finished.
       state: 'queued',
-      counts: { steps: leaves, done: leaves },
+      counts: { steps: history + 2, done: history + 2 },
     });
     expect((await board(deep.nodeId)).tally).toMatchObject({
-      steps: leaves + 2,
-      done: leaves,
+      steps: history + 4,
+      done: history + 2,
       needsYou: 2,
     });
-    // A plan read whole above the level the walk stopped on is not marked.
-    const row = rowOf(flat.nodeId);
-    const { tally, truncated } = await board(flat.nodeId);
+    expect(rowOf(wide.nodeId)).toMatchObject({
+      truncated: { bound: 'nodes', value: PLAN_TREE_WALK_NODE_LIMIT },
+      counts: { upNext: PLAN_TREE_WALK_NODE_LIMIT - 3 },
+    });
+    // A plan whose steps are all closed leaves is read whole and not marked.
+    const row = rowOf(landed.nodeId);
+    const { tally, truncated } = await board(landed.nodeId);
     expect(row).not.toHaveProperty('truncated');
     expect(truncated).toBeUndefined();
     expect(row.state).toBe(tally.state);
@@ -925,7 +953,7 @@ describe('readPlanOverview — the plans as rows', () => {
       done: tally.done,
       dropped: tally.dropped,
     });
-    expect(row).toMatchObject({ state: 'queued', counts: { steps: 2, done: 1 } });
+    expect(row).toMatchObject({ state: 'finished', counts: { steps: 5, done: 5 } });
     expect(rowOf(gone.nodeId)).toMatchObject({ state: 'closed' });
     expect(rowOf(gone.nodeId)).not.toHaveProperty('truncated');
   });
@@ -933,7 +961,7 @@ describe('readPlanOverview — the plans as rows', () => {
   it('marks every open plan reaching the level the walk stopped on, or the one above it', async () => {
     const closedAt = '2026-10-03T00:00:00.000Z';
     const wide = store.seed(SPACE, { title: 'wide', position: 0 });
-    for (let n = 0; n < PLAN_TREE_WALK_NODE_LIMIT; n++) {
+    for (let n = 0; n < 500; n++) {
       store.seed(SPACE, {
         parentId: wide.nodeId,
         title: `landed ${String(n)}`,
@@ -941,6 +969,9 @@ describe('readPlanOverview — the plans as rows', () => {
         closedAt,
         position: n,
       });
+    }
+    for (let n = 0; n < PLAN_TREE_WALK_NODE_LIMIT - 1; n++) {
+      store.seed(SPACE, { parentId: wide.nodeId, title: `approved ${String(n)}`, position: n });
     }
     // Its one step lies past the bound, on the level the walk stopped on.
     const flat = store.seed(SPACE, { title: 'flat', position: 1 });
@@ -1225,7 +1256,7 @@ describe('readPlanOverview — the lanes across plans (Plan 332 D7)', () => {
     expect(ids(read.lanes.upNext)).toEqual(open.map((o) => o.nodeId));
   });
 
-  it('walks no further than the node bound however many done steps the plans hold, and says the lanes may miss steps', async () => {
+  it('reaches no bound over 5,000 done steps and 10 open ones: the done steps are counted, not walked', async () => {
     const roots: PlanNode[] = [];
     for (let n = 0; n < 10; n++)
       roots.push(store.seed(SPACE, { title: `plan ${String(n)}`, position: n }));
@@ -1238,36 +1269,34 @@ describe('readPlanOverview — the lanes across plans (Plan 332 D7)', () => {
         position: n,
       });
     }
-    for (const root of roots)
-      store.seed(SPACE, { parentId: root.nodeId, title: 'open', position: 9000 });
+    const open = roots.map((root) =>
+      store.seed(SPACE, { parentId: root.nodeId, title: 'open', position: 9000 }),
+    );
     const reads = vi.spyOn(store, 'readOverview');
 
     const read = await rows();
 
     const { read: walked } = await reads.mock.results[0]!.value;
-    expect(walked.truncated).toEqual({ bound: 'nodes', value: PLAN_TREE_WALK_NODE_LIMIT });
-    const counted = [...walked.counted.values()].reduce((sum, c) => sum + c.done + c.dropped, 0);
-    expect(counted + walked.nodes.length).toBeLessThanOrEqual(PLAN_TREE_WALK_NODE_LIMIT);
-    // Every plan listed, each marked as counted short, and the lanes say they may miss steps.
+    expect(walked.truncated).toBeUndefined();
+    expect(walked.nodes).toHaveLength(20);
+    expect([...walked.counted.values()].every((c) => c.done === 500 && !c.cut)).toBe(true);
+    // Every plan listed and read whole, its done steps counted; nothing said cut.
     expect(read.truncated).toBeUndefined();
-    expect(read.roots).toHaveLength(10);
-    expect(read.roots.every((r) => r.truncated?.bound === 'nodes')).toBe(true);
-    expect(read.lanes.truncated).toEqual({ bound: 'nodes', value: PLAN_TREE_WALK_NODE_LIMIT });
+    expect(read.lanes.truncated).toBeUndefined();
+    expect(read.roots.map((r) => [r.truncated, r.counts?.steps, r.counts?.done])).toEqual(
+      roots.map(() => [undefined, 501, 500]),
+    );
+    expect(ids(read.lanes.upNext)).toEqual(open.map((o) => o.nodeId));
   });
 
   it('names no Up next step in a cut plan where the node bound left that step’s children unread', async () => {
     const cut = store.seed(SPACE, { title: 'cut', position: 0 });
     const parent = store.seed(SPACE, { parentId: cut.nodeId, title: 'parent', position: 0 });
     const child = store.seed(SPACE, { parentId: parent.nodeId, title: 'child', position: 0 });
+    // Open steps that fill the first level past the bound, so the walk stops there.
     const wide = store.seed(SPACE, { title: 'wide', position: 1 });
-    for (let n = 0; n < PLAN_TREE_WALK_NODE_LIMIT; n++) {
-      store.seed(SPACE, {
-        parentId: wide.nodeId,
-        title: `landed ${String(n)}`,
-        status: 'done',
-        closedAt: '2026-10-03T00:00:00.000Z',
-        position: n,
-      });
+    for (let n = 0; n < PLAN_TREE_WALK_NODE_LIMIT - 2; n++) {
+      store.seed(SPACE, { parentId: wide.nodeId, title: `approved ${String(n)}`, position: n });
     }
 
     const read = await rows();

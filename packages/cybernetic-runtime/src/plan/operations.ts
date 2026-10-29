@@ -557,9 +557,15 @@ export async function getPlanNode(
   ctx: PlanReadContext,
   nodeId: string,
 ): Promise<PlanOpResult<PlanNodeGetOutput>> {
-  // The rail's read, its first page of every link kind, and what a session
-  // needs beyond it: what the node waits on and what was learned above it.
-  const detail = await readPlanNodeDetail(ctx, nodeId, { limit: PLAN_NODE_LINKS_LIMIT });
+  // The rail's read without its placement, its first page of every link kind,
+  // and what a session needs beyond it: what the node waits on and what was
+  // learned above it.
+  const detail = await readPlanNode(
+    ctx,
+    nodeId,
+    { limit: PLAN_NODE_LINKS_LIMIT },
+    { placement: false },
+  );
   if (!detail.ok) return detail;
   const { nextCursor: _nextCursor, ok: _ok, ...read } = detail;
   const [dependencies, dependents, learnings] = await Promise.all([
@@ -811,13 +817,48 @@ export async function readPlanBoard(
 /**
  * One node for the board's rail: in full, its children, a page of its links
  * — of one kind where `linkKind` names it — the runs in flight for it and
- * every node under it, and its activity as the board derives it.
+ * every node under it, and its activity and closed ancestor as the board
+ * derives them.
  */
 export async function readPlanNodeDetail(
   ctx: PlanReadContext,
   nodeId: string,
   page: PlanNodeDetailQuery,
 ): Promise<PlanOpResult<PlanNodeDetailOutput>> {
+  return readPlanNode(ctx, nodeId, page, { placement: true });
+}
+
+/** What a node's read carries beyond the node and its pages, where the caller asks. */
+interface PlanNodeReadExtras {
+  /**
+   * The node's activity and its closed ancestor, as the board places it: the
+   * rail's, read over the whole subtree and the node's ancestors. A session's
+   * `plan.node.get` and the stream's own read of its node show neither.
+   */
+  placement: boolean;
+}
+
+type PlanNodeRead = Omit<PlanNodeDetailOutput, 'activity' | 'closedAncestor'> &
+  Partial<Pick<PlanNodeDetailOutput, 'activity' | 'closedAncestor'>>;
+
+async function readPlanNode(
+  ctx: PlanReadContext,
+  nodeId: string,
+  page: PlanNodeDetailQuery,
+  extras: { placement: true },
+): Promise<PlanOpResult<PlanNodeDetailOutput>>;
+async function readPlanNode(
+  ctx: PlanReadContext,
+  nodeId: string,
+  page: PlanNodeDetailQuery,
+  extras: PlanNodeReadExtras,
+): Promise<PlanOpResult<PlanNodeRead>>;
+async function readPlanNode(
+  ctx: PlanReadContext,
+  nodeId: string,
+  page: PlanNodeDetailQuery,
+  extras: PlanNodeReadExtras,
+): Promise<PlanOpResult<PlanNodeRead>> {
   const after = page.cursor !== undefined ? decodePlanLinkCursor(page.cursor) : undefined;
   if (after === null) {
     return {
@@ -831,32 +872,23 @@ export async function readPlanNodeDetail(
   if (!node) return notFound(nodeId);
   // Every status: a run in flight for a node closed under it is still in flight.
   const subtree = await ctx.store.walk(ctx.spaceId, { rootId: nodeId, ...PLAN_TREE_WALK_BOUNDS });
-  const [children, links, runs, closedAncestor, inFlight] = await Promise.all([
+  const subtreeIds = subtree.nodes.map((n) => n.nodeId);
+  const [children, links, runs, placement] = await Promise.all([
     ctx.store.listChildren(ctx.spaceId, nodeId, PLAN_NODE_CHILDREN_LIMIT),
     ctx.store.pageLinks(ctx.spaceId, nodeId, {
       ...(page.linkKind !== undefined ? { kind: page.linkKind } : {}),
       ...(after !== undefined ? { after } : {}),
       limit: page.limit,
     }),
-    ctx.store.listRunsServing(
-      ctx.spaceId,
-      subtree.nodes.map((n) => n.nodeId),
-      PLAN_NODE_RUNS_LIMIT,
-    ),
-    ctx.store.closedAncestorOf(ctx.spaceId, nodeId),
-    ctx.store.inFlightRunCountsOf(
-      ctx.spaceId,
-      subtree.nodes.map((n) => n.nodeId),
-    ),
+    ctx.store.listRunsServing(ctx.spaceId, subtreeIds, PLAN_NODE_RUNS_LIMIT),
+    extras.placement
+      ? Promise.all([
+          ctx.store.closedAncestorOf(ctx.spaceId, nodeId),
+          ctx.store.inFlightRunCountsOf(ctx.spaceId, subtreeIds),
+        ])
+      : undefined,
   ]);
-  // The board's rule: the node's own runs count whatever its status, a run
-  // under it only where it serves an active node.
-  const servesIt = (n: { nodeId: string; status: string }) =>
-    (inFlight.get(n.nodeId) ?? 0) > 0 && (n.nodeId === nodeId || n.status === 'active');
-  const activity =
-    servesIt(node) || subtree.nodes.some(servesIt) ? ('in_flight' as const) : ('idle' as const);
-  return {
-    ok: true,
+  const read: PlanNodeRead = {
     node,
     children: children.children,
     childrenTotal: children.total,
@@ -865,6 +897,18 @@ export async function readPlanNodeDetail(
     ...(links.next !== undefined ? { nextCursor: encodePlanLinkCursor(links.next) } : {}),
     runs: runs.runs,
     runsTotal: runs.total,
+  };
+  if (placement === undefined) return { ok: true, ...read };
+  const [closedAncestor, inFlight] = placement;
+  // The board's rule: the node's own runs count whatever its status, a run
+  // under it only where it serves an active node.
+  const servesIt = (n: { nodeId: string; status: string }) =>
+    (inFlight.get(n.nodeId) ?? 0) > 0 && (n.nodeId === nodeId || n.status === 'active');
+  const activity =
+    servesIt(node) || subtree.nodes.some(servesIt) ? ('in_flight' as const) : ('idle' as const);
+  return {
+    ok: true,
+    ...read,
     activity,
     ...(closedAncestor !== null ? { closedAncestor } : {}),
   };

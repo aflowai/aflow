@@ -240,7 +240,9 @@ export function applyWorkflowEvents(
         // First-class output: a succeeded promoting task carries the
         // sanitized run-level state slice it just filled. Accumulate
         // (later tasks win on key collisions, matching the promotion
-        // semantics) so the surface shows live output values mid-run.
+        // semantics) so the surface shows live output values mid-run. An
+        // `append` variable's slice already holds every writer succeeded so
+        // far, joined in task-list order, so the latest one replaces it whole.
         const mergedOutputs =
           payload.promotedState && Object.keys(payload.promotedState).length > 0
             ? { ...run.outputs, ...payload.promotedState }

@@ -108,20 +108,63 @@ export function sanitizePromotedState(
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
+function appendedVariableIds(stateVariables: readonly WorkflowStateVariable[]): Set<string> {
+  return new Set(stateVariables.filter((v) => v.writers === 'append').map((v) => v.variableId));
+}
+
+/**
+ * The other tasks promoting into an `append` variable `taskDef` promotes into:
+ * the writers whose succeeded results its live slice joins with its own.
+ */
+export function appendCoWriterTaskIds(
+  taskDef: WorkflowTask,
+  workflow: Pick<Workflow, 'tasks' | 'stateVariables'>,
+): string[] {
+  const appended = appendedVariableIds(workflow.stateVariables);
+  const written = new Set(
+    (taskDef.promoteOutputs ?? []).map((p) => p.toState).filter((id) => appended.has(id)),
+  );
+  if (written.size === 0) return [];
+  return workflow.tasks
+    .filter(
+      (t) =>
+        t.taskId !== taskDef.taskId && (t.promoteOutputs ?? []).some((p) => written.has(p.toState)),
+    )
+    .map((t) => t.taskId);
+}
+
 /**
  * Resolve ONE task's declared `promoteOutputs` against its decoded result —
  * the incremental slice of `resolvePromotedRunMetrics` the harness stamps on
  * the terminal `WorkflowTaskUpdate` (`promotedState`), so the chat surface
  * shows output values live as tasks finish instead of waiting for the
- * terminal run result.
+ * terminal run result. The surface keeps each key's latest slice, so an
+ * `append` variable's slice is the join of every writer succeeded so far —
+ * `coWriterResults`, read for `appendCoWriterTaskIds` — in task-list order,
+ * as the terminal result joins them: this task's items alone would replace
+ * the earlier writers' on screen until the run ends.
  */
 export function resolveTaskPromotedState(
   taskDef: WorkflowTask,
   taskResult: PromotionTaskResult,
-  stateVariables: readonly WorkflowStateVariable[] | undefined,
+  workflow: Pick<Workflow, 'tasks' | 'stateVariables'>,
+  coWriterResults: readonly PromotionTaskResult[] = [],
 ): Record<string, unknown> | undefined {
   if (!taskDef.promoteOutputs || taskDef.promoteOutputs.length === 0) return undefined;
-  const bag = resolvePromotedRunMetrics([taskDef], [taskResult]);
+  const { stateVariables } = workflow;
+  const bag = resolvePromotedRunMetrics([taskDef], [taskResult], stateVariables);
+  const coWriters = new Set(appendCoWriterTaskIds(taskDef, workflow));
+  if (coWriters.size > 0) {
+    const joined = resolvePromotedRunMetrics(
+      workflow.tasks.filter((t) => t.taskId === taskDef.taskId || coWriters.has(t.taskId)),
+      [taskResult, ...coWriterResults.filter((r) => coWriters.has(r.taskId))],
+      stateVariables,
+    );
+    const appended = appendedVariableIds(stateVariables);
+    for (const key of Object.keys(bag)) {
+      if (appended.has(key) && joined[key] !== undefined) bag[key] = joined[key];
+    }
+  }
   return sanitizePromotedState(bag, stateVariables);
 }
 
@@ -252,7 +295,7 @@ export async function buildWorkflowRunResult(
       );
     }
   }
-  const bag = resolvePromotedRunMetrics(workflow.tasks, taskResults);
+  const bag = resolvePromotedRunMetrics(workflow.tasks, taskResults, workflow.stateVariables);
   // Sensitive variables must not leave the server through ANY caller-facing
   // section — not just `output`. Score (`value`/`targetMet`) and outcome
   // checks (`met`) would leak a sensitive metric exactly or by range, so

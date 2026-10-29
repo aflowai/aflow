@@ -145,6 +145,7 @@ export async function buildExecutionContext(
     operationId: job.operationId as OperationId,
     ...(job.callerModel !== undefined ? { callerModel: job.callerModel } : {}),
     ...(job.preferredHarness !== undefined ? { preferredHarness: job.preferredHarness } : {}),
+    ...(job.browserGranted !== undefined ? { browserGranted: job.browserGranted } : {}),
 
     readPayload: async <T = unknown>(ref: PayloadRef): Promise<T> => {
       const data = await retrievePayloadForTenant({ payloadStore, ref, tenantId });

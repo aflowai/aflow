@@ -539,8 +539,8 @@ export const PlanOverviewLanesSchema = z
     truncated: PlanNodeListTruncationSchema.optional().describe(
       'Absent when every step of every open plan was reached; otherwise the bound (`depth` or `nodes`) ' +
         'that a plan’s row names as its `truncated`, or `nodes` where plans were left unlisted, so a ' +
-        'lane may miss steps and its `total` counts only those reached. Closed steps are walked, and count ' +
-        'toward the node bound, but are only counted, never read as rows.',
+        'lane may miss steps and its `total` counts only those reached. Only open steps count toward the ' +
+        'node bound; closed steps are only counted, never read as rows.',
     ),
   })
   .strict();
@@ -550,8 +550,8 @@ export type PlanOverviewLanes = z.infer<typeof PlanOverviewLanesSchema>;
  * The space's plans as the overview reads them (`GET …/plan`, Plan 332 D7):
  * every root as a row by position and then id, open and closed alike, and the
  * lanes. Open steps are read and closed ones only counted; the walk stops at
- * the node bound, closed steps included, so its cost is bounded whatever the
- * space has held, and a plan or lane it cut short says so.
+ * the node bound of open nodes, so a plan's done history costs a count rather
+ * than the bound, and a plan or lane it cut short says so.
  */
 export const PlanOverviewOutputSchema = z.object({
   roots: z.array(PlanRootRowSchema),

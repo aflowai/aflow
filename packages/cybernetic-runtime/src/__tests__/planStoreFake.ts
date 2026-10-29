@@ -350,64 +350,86 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
       path: string[];
     }
     const pathKey = (node: PlanNode) => `${String(node.position).padStart(10, '0')}:${node.nodeId}`;
-    // A level at a time, as the recursion yields them, stopped one node past the bound.
-    const reached: Reached[] = [];
-    let level: Reached[] = nodes
-      .filter((n) => n.parentId === null)
-      .sort(bySiblingOrder)
-      .map((root) => ({
-        node: root,
-        rootId: root.nodeId,
-        depth: 0,
-        openParentId: null,
-        closedAncestor: undefined,
-        phase: undefined,
-        path: [pathKey(root)],
-      }));
-    while (level.length > 0 && reached.length <= bounds.maxNodes) {
-      reached.push(...level);
-      level = level.flatMap((at) =>
-        at.depth > bounds.maxDepth || (at.depth === 0 && closed(at.node))
-          ? []
-          : (childrenOf.get(at.node.nodeId) ?? []).map((child): Reached => ({
-              node: child,
-              rootId: at.rootId,
-              depth: at.depth + 1,
-              openParentId: closed(at.node) ? at.openParentId : at.node.nodeId,
-              closedAncestor: closed(at.node) ? at.node : at.closedAncestor,
-              phase: at.depth === 1 ? at.node : at.phase,
-              path: [...at.path, pathKey(child)],
-            })),
-      );
-    }
-    const walkCut = reached.length > bounds.maxNodes;
-    const walked = reached.slice(0, bounds.maxNodes);
-    const lastDepth = Math.max(...walked.map((at) => at.depth));
-
-    const counted = new Map<string, PlanOverviewRootCount>();
-    for (const at of walked) {
-      const count = counted.get(at.rootId) ?? { done: 0, dropped: 0, deeper: false, cut: false };
-      counted.set(at.rootId, count);
-      if (walkCut && at.depth >= lastDepth - 1 && !(at.depth === 0 && closed(at.node))) {
-        count.cut = true;
-      }
-      if (at.depth > bounds.maxDepth) count.deeper = true;
-      if (at.depth === 0 || at.depth > bounds.maxDepth || !closed(at.node)) continue;
-      if (at.node.status === 'done') count.done++;
-      else count.dropped++;
-      if (
-        count.closedWrittenAt === undefined ||
-        at.node.updatedAt.localeCompare(count.closedWrittenAt) > 0
-      ) {
-        count.closedWrittenAt = at.node.updatedAt;
-      }
-    }
     const byPath = (a: Reached, b: Reached) => {
       const [x, y] = [a.path.join('/'), b.path.join('/')];
       return x < y ? -1 : x > y ? 1 : 0;
     };
-    const shipped = walked
-      .filter((at) => at.depth === 0 || (at.depth <= bounds.maxDepth && !closed(at.node)))
+    const below = (at: Reached) =>
+      (childrenOf.get(at.node.nodeId) ?? []).map((child): Reached => ({
+        node: child,
+        rootId: at.rootId,
+        depth: at.depth + 1,
+        openParentId: closed(at.node) ? at.openParentId : at.node.nodeId,
+        closedAncestor: closed(at.node) ? at.node : at.closedAncestor,
+        phase: at.depth === 1 ? at.node : at.phase,
+        path: [...at.path, pathKey(child)],
+      }));
+    const roots = nodes.filter((n) => n.parentId === null).sort(bySiblingOrder);
+    const asRoot = (root: PlanNode): Reached => ({
+      node: root,
+      rootId: root.nodeId,
+      depth: 0,
+      openParentId: null,
+      closedAncestor: undefined,
+      phase: undefined,
+      path: [pathKey(root)],
+    });
+    // A level at a time, as the recursion yields them: the open nodes in
+    // reading order, stopped one past the bound, and beside them the closed
+    // steps something lies under, which spend nothing. A closed leaf is only
+    // ever counted.
+    const reached: Reached[] = [];
+    let opened = 0;
+    let level: Reached[] = roots
+      .filter((root) => !closed(root))
+      .slice(0, bounds.maxNodes + 1)
+      .map(asRoot);
+    for (;;) {
+      reached.push(...level);
+      opened += level.filter((at) => !closed(at.node)).length;
+      const depth = level[0]?.depth;
+      if (depth === undefined || depth >= bounds.maxDepth || opened > bounds.maxNodes) break;
+      const next = level.flatMap(below);
+      level = [
+        ...next
+          .filter((at) => !closed(at.node))
+          .sort(byPath)
+          .slice(0, bounds.maxNodes + 1 - opened),
+        ...next.filter((at) => closed(at.node) && childrenOf.has(at.node.nodeId)),
+      ].sort(byPath);
+    }
+    const walkCut = opened > bounds.maxNodes;
+    const overBound = new Set(
+      reached
+        .filter((at) => !closed(at.node))
+        .slice(bounds.maxNodes)
+        .map((at) => at.node.nodeId),
+    );
+    const walked = reached.filter((at) => !overBound.has(at.node.nodeId));
+    const lastDepth = Math.max(...walked.map((at) => at.depth));
+    const closedRoots = roots.filter(closed).slice(0, bounds.maxNodes).map(asRoot);
+
+    const counted = new Map<string, PlanOverviewRootCount>();
+    for (const at of [...walked, ...closedRoots]) {
+      const count = counted.get(at.rootId) ?? { done: 0, dropped: 0, deeper: false, cut: false };
+      counted.set(at.rootId, count);
+      if (at.depth === 0 && closed(at.node)) continue;
+      if (walkCut && at.depth >= lastDepth - 1) count.cut = true;
+      if (at.depth === bounds.maxDepth && childrenOf.has(at.node.nodeId)) count.deeper = true;
+      if (at.depth >= bounds.maxDepth) continue;
+      for (const child of childrenOf.get(at.node.nodeId) ?? []) {
+        if (!closed(child)) continue;
+        if (child.status === 'done') count.done++;
+        else count.dropped++;
+        if (
+          count.closedWrittenAt === undefined ||
+          child.updatedAt.localeCompare(count.closedWrittenAt) > 0
+        ) {
+          count.closedWrittenAt = child.updatedAt;
+        }
+      }
+    }
+    const shipped = [...walked.filter((at) => !closed(at.node)), ...closedRoots]
       .sort(byPath)
       .map((at, i) => ({ at, walkOrder: i + 1 }))
       .sort((a, b) => a.at.depth - b.at.depth || a.walkOrder - b.walkOrder);

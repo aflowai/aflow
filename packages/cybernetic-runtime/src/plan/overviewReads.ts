@@ -1,9 +1,9 @@
 /**
  * The overview's store reads (Plan 332 D7): one recursive query from the roots,
- * stopped at the node bound, carrying each open node's root and whether a
- * closed node lies above it, the closed steps only as counts per root, and the
- * runs in flight joined to each row; and the newest runs in flight on the
- * nodes a lane shows. `buildPlanOverview` (`board.ts`) makes the lanes from
+ * its open nodes stopped at the node bound, carrying each open node's root and
+ * whether a closed node lies above it, the closed steps only as counts per
+ * root, and the runs in flight joined to each row; and the newest runs in
+ * flight on the nodes a lane shows. `buildPlanOverview` (`board.ts`) makes the lanes from
  * what these return, and the store reads both in one snapshot.
  */
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
@@ -58,17 +58,19 @@ export interface PlanOverviewRootCount {
 }
 
 /**
- * The overview's read: a walk of at most the node bound of nodes, open and
- * closed, roots first and then level by level, each level in reading order;
- * every root it reached and the open steps of the open roots as rows; each
- * returned root's steps counted, closed ones only ever counted.
+ * The overview's read: a walk of at most the node bound of open nodes, open
+ * roots first and then level by level, each level in reading order, passing
+ * through the closed steps that have steps under them without spending the
+ * bound on them; the open roots it reached, the closed roots up to a bound of
+ * their own, and the open steps of the open roots as rows; each returned
+ * root's steps counted, closed ones only ever counted.
  */
 export interface PlanOverviewRead {
   nodes: PlanOverviewNode[];
   counted: Map<string, PlanOverviewRootCount>;
   /** Every root of the space, returned or not. */
   rootsTotal: number;
-  /** The node bound, where the walk reached it. */
+  /** The node bound, where the walk's open nodes reached it. */
   truncated?: PlanNodeListTruncation;
   /**
    * Where the node bound stopped the walk, the deepest level it kept: a node
@@ -123,111 +125,151 @@ export async function overviewIn(
   bounds: PlanTreeWalkBounds,
 ): Promise<PlanOverviewRead> {
   const closed = statusList(CLOSED_PLAN_NODE_STATUSES);
-  const steps = sql`depth BETWEEN 1 AND ${bounds.maxDepth}`;
-  // `levels` walks the tree a level at a time, each level one array of keys
-  // in reading order — its parents' order, then siblings by position — and
-  // stops once it holds one node past the node bound, closed steps included,
-  // so the nodes kept are the reading-order head of the tree: every level
-  // above the last one walked whole, and of that one its first nodes. Below a
-  // closed root nothing is read: its plan is closed by rule. Nodes one level
-  // past the depth bound are reached only to say they exist. `walked` then
-  // carries each kept node's root and ancestors over those keys alone; a
-  // node's row is joined only where it is returned. Where the bound stopped
-  // the walk, only a root that reached its last level or the one above it
-  // may hold steps unread.
+  const pathKey = (alias: SQL) =>
+    sql`lpad(${alias}.position::text, ${PATH_POSITION_DIGITS}, '0') || ':' || ${alias}.id::text`;
+  // A level is one row of parallel arrays, an element for each node the walk
+  // stands on with what its children inherit: its root, the open and closed
+  // nodes nearest above, its phase and its path. Open nodes are the walk's and
+  // alone spend the node bound: each level's are taken in reading order, by
+  // path, until one lies past it, and the walk stops there. A closed step is
+  // carried only where something lies under it, so an open step stranded
+  // below it is still reached, and it spends nothing; a closed leaf is never
+  // carried at all. `closed_below` counts each element's closed children with
+  // one aggregate, so a plan's done history costs a count, not the bound.
+  // Below a closed root nothing is read — its plan is closed by rule — and the
+  // closed roots are listed on a budget of their own.
+  const childrenOf = (shut: boolean) => sql`
+    SELECT n.id, ${sql.raw(shut ? 'true' : 'false')} AS shut, p.root_id,
+      CASE WHEN p.shut THEN p.open_parent_id ELSE p.id END AS open_parent_id,
+      CASE WHEN p.shut THEN p.id ELSE p.closed_ancestor_id END AS closed_ancestor_id,
+      CASE WHEN l.depth = 1 THEN p.id ELSE p.phase_id END AS phase_id,
+      p.path || '/' || ${pathKey(sql`n`)} AS node_path
+    FROM unnest(l.ids, l.shut, l.roots, l.open_parents, l.closed_ancestors, l.phases, l.paths)
+      AS p(id, shut, root_id, open_parent_id, closed_ancestor_id, phase_id, path)
+    INNER JOIN plan_nodes n ON n.parent_id = p.id
+    WHERE n.space_id = ${spaceId}::uuid
+      AND ${
+        shut
+          ? sql`n.status IN (${closed}) AND EXISTS (
+            SELECT 1 FROM plan_nodes under
+            WHERE under.space_id = ${spaceId}::uuid AND under.parent_id = n.id
+          )`
+          : sql`n.status NOT IN (${closed})`
+      }`;
+  const inLevelOrder = (column: string) =>
+    sql`array_agg(${sql.raw(`c.${column}`)} ORDER BY c.node_path COLLATE "C")`;
   const rows = (await tx.execute(sql`
     WITH RECURSIVE levels AS (
-      SELECT 0 AS depth, roots.ids, cardinality(roots.ids) AS reached
+      SELECT 0 AS depth, top.ids, top.ids AS roots,
+        array_fill(NULL::uuid, ARRAY[cardinality(top.ids)]) AS open_parents,
+        array_fill(NULL::uuid, ARRAY[cardinality(top.ids)]) AS closed_ancestors,
+        array_fill(NULL::uuid, ARRAY[cardinality(top.ids)]) AS phases,
+        array_fill(false, ARRAY[cardinality(top.ids)]) AS shut,
+        top.paths,
+        cardinality(top.ids) AS reached
       FROM (
-        SELECT array_agg(head.id ORDER BY head.position, head.id) AS ids
+        SELECT array_agg(head.id ORDER BY head.position, head.id) AS ids,
+          array_agg(head.path ORDER BY head.position, head.id) AS paths
         FROM (
-          SELECT r.id, r.position
+          SELECT r.id, r.position, ${pathKey(sql`r`)} AS path
           FROM plan_nodes r
           WHERE r.space_id = ${spaceId}::uuid AND r.parent_id IS NULL
+            AND r.status NOT IN (${closed})
           ORDER BY r.position, r.id
           LIMIT ${bounds.maxNodes + 1}
         ) head
-      ) roots
-      WHERE roots.ids IS NOT NULL
+      ) top
+      WHERE top.ids IS NOT NULL
       UNION ALL
-      SELECT l.depth + 1, below.ids, l.reached + cardinality(below.ids)
+      SELECT l.depth + 1, below.ids, below.roots, below.open_parents, below.closed_ancestors,
+        below.phases, below.shut, below.paths, l.reached + below.opened
       FROM levels l
       CROSS JOIN LATERAL (
-        SELECT array_agg(head.id ORDER BY head.parent_order, head.position, head.id) AS ids
+        SELECT ${inLevelOrder('id')} AS ids,
+          ${inLevelOrder('root_id')} AS roots,
+          ${inLevelOrder('open_parent_id')} AS open_parents,
+          ${inLevelOrder('closed_ancestor_id')} AS closed_ancestors,
+          ${inLevelOrder('phase_id')} AS phases,
+          ${inLevelOrder('shut')} AS shut,
+          ${inLevelOrder('node_path')} AS paths,
+          (count(*) FILTER (WHERE NOT c.shut))::int AS opened
         FROM (
-          SELECT n.id, n.position, p.parent_order
-          FROM unnest(l.ids) WITH ORDINALITY AS p(id, parent_order)
-          INNER JOIN plan_nodes n ON n.parent_id = p.id
-          WHERE n.space_id = ${spaceId}::uuid
-            AND (l.depth > 0 OR NOT EXISTS (
-              SELECT 1 FROM plan_nodes shut
-              WHERE shut.id = p.id AND shut.status IN (${closed})
-            ))
-          ORDER BY p.parent_order, n.position, n.id
-          LIMIT ${bounds.maxNodes + 1} - l.reached
-        ) head
+          (
+            SELECT * FROM (${childrenOf(false)}) open_child
+            ORDER BY open_child.node_path COLLATE "C"
+            LIMIT ${bounds.maxNodes + 1} - l.reached
+          )
+          UNION ALL
+          (${childrenOf(true)})
+        ) c
       ) below
-      WHERE l.depth <= ${bounds.maxDepth}
+      WHERE l.depth < ${bounds.maxDepth}
         AND l.reached <= ${bounds.maxNodes}
         AND below.ids IS NOT NULL
     ),
-    reached AS (
-      SELECT k.id, l.depth,
-        row_number() OVER (ORDER BY l.depth, k.level_order) AS reading_rank
+    elements AS (
+      SELECT l.depth, e.id, e.shut, e.root_id, e.open_parent_id, e.closed_ancestor_id,
+        e.phase_id, e.path,
+        row_number() OVER (PARTITION BY e.shut ORDER BY l.depth, e.level_order) AS rank_in_kind
       FROM levels l
-      CROSS JOIN LATERAL unnest(l.ids) WITH ORDINALITY AS k(id, level_order)
+      CROSS JOIN LATERAL unnest(
+        l.ids, l.shut, l.roots, l.open_parents, l.closed_ancestors, l.phases, l.paths
+      ) WITH ORDINALITY
+        AS e(id, shut, root_id, open_parent_id, closed_ancestor_id, phase_id, path, level_order)
     ),
     kept AS (
-      SELECT id, depth FROM reached WHERE reading_rank <= ${bounds.maxNodes}
-    ),
-    walked AS (
-      SELECT r.id, r.id AS root_id, r.status, r.updated_at,
-        NULL::uuid AS open_parent_id,
-        NULL::uuid AS closed_ancestor_id,
-        NULL::uuid AS phase_id,
-        0 AS depth,
-        r.status IN (${closed}) AS closed,
-        ARRAY[lpad(r.position::text, ${PATH_POSITION_DIGITS}, '0') || ':' || r.id::text] AS path
-      FROM kept k
-      INNER JOIN plan_nodes r ON r.id = k.id
-      WHERE k.depth = 0
-      UNION ALL
-      SELECT n.id, t.root_id, n.status, n.updated_at,
-        CASE WHEN t.closed THEN t.open_parent_id ELSE t.id END,
-        CASE WHEN t.closed THEN t.id ELSE t.closed_ancestor_id END,
-        CASE WHEN t.depth = 1 THEN t.id ELSE t.phase_id END,
-        t.depth + 1,
-        n.status IN (${closed}),
-        t.path || (lpad(n.position::text, ${PATH_POSITION_DIGITS}, '0') || ':' || n.id::text)
-      FROM walked t
-      INNER JOIN kept k ON k.depth = t.depth + 1
-      INNER JOIN plan_nodes n ON n.id = k.id AND n.parent_id = t.id
+      SELECT * FROM elements WHERE shut OR rank_in_kind <= ${bounds.maxNodes}
     ),
     beyond AS (
-      SELECT count(*) > ${bounds.maxNodes} AS walk_cut FROM reached
+      SELECT coalesce(count(*) FILTER (WHERE NOT shut) > ${bounds.maxNodes}, false) AS walk_cut
+      FROM elements
     ),
     frontier AS (
-      SELECT max(depth) AS last_depth FROM walked
+      SELECT max(depth) AS last_depth FROM kept
     ),
-    counted AS (
-      SELECT root_id,
-        (count(*) FILTER (WHERE ${steps} AND status = 'done'))::int AS done,
-        (count(*) FILTER (WHERE ${steps} AND status = 'dropped'))::int AS dropped,
-        max(updated_at) FILTER (WHERE ${steps} AND closed) AS closed_written_at,
-        bool_or(depth > ${bounds.maxDepth}) AS deeper,
-        coalesce(bool_or(walk_cut AND depth >= last_depth - 1 AND NOT (depth = 0 AND closed)), false) AS cut
-      FROM walked CROSS JOIN beyond CROSS JOIN frontier
-      GROUP BY root_id
+    closed_below AS (
+      SELECT k.root_id,
+        (count(*) FILTER (WHERE c.status = 'done'))::int AS done,
+        (count(*) FILTER (WHERE c.status = 'dropped'))::int AS dropped,
+        max(c.updated_at) AS closed_written_at
+      FROM kept k
+      INNER JOIN plan_nodes c ON c.parent_id = k.id
+      WHERE k.depth < ${bounds.maxDepth}
+        AND c.space_id = ${spaceId}::uuid
+        AND c.status IN (${closed})
+      GROUP BY k.root_id
+    ),
+    deeper AS (
+      SELECT DISTINCT k.root_id FROM kept k
+      WHERE k.depth = ${bounds.maxDepth} AND EXISTS (
+        SELECT 1 FROM plan_nodes c
+        WHERE c.space_id = ${spaceId}::uuid AND c.parent_id = k.id
+      )
+    ),
+    cut AS (
+      SELECT DISTINCT k.root_id FROM kept k CROSS JOIN beyond CROSS JOIN frontier
+      WHERE beyond.walk_cut AND k.depth >= frontier.last_depth - 1
     ),
     shipped AS (
-      SELECT * FROM walked WHERE depth = 0 OR (depth <= ${bounds.maxDepth} AND NOT closed)
+      SELECT id, root_id, depth, open_parent_id, closed_ancestor_id, phase_id, path
+      FROM kept WHERE NOT shut
+      UNION ALL
+      SELECT shut_root.id, shut_root.id, 0, NULL::uuid, NULL::uuid, NULL::uuid, shut_root.path
+      FROM (
+        SELECT r.id, ${pathKey(sql`r`)} AS path
+        FROM plan_nodes r
+        WHERE r.space_id = ${spaceId}::uuid AND r.parent_id IS NULL
+          AND r.status IN (${closed})
+        ORDER BY r.position, r.id
+        LIMIT ${bounds.maxNodes}
+      ) shut_root
     )
     SELECT s.id, n.parent_id, s.root_id, s.depth, s.open_parent_id,
       s.closed_ancestor_id, ancestor_row.title AS closed_ancestor_title, phase_row.title AS phase_title,
       n.kind, n.title, n.status, n.revision, n.position,
       left(split_part(n.note, chr(10), 1), ${PLAN_NOTE_HEAD_MAX_CHARS}) AS note_head,
       n.created_at, n.updated_at, n.closed_at,
-      CASE WHEN s.closed THEN 0 ELSE (
+      CASE WHEN n.status IN (${closed}) THEN 0 ELSE (
         SELECT count(*) FROM workflow_runs w
         WHERE w.space_id = ${spaceId}::uuid
           AND w.plan_node_id = s.id
@@ -239,12 +281,14 @@ export async function overviewIn(
         WHERE r.space_id = ${spaceId}::uuid AND r.parent_id IS NULL)::int AS roots_total,
       (SELECT walk_cut FROM beyond) AS walk_cut,
       (SELECT last_depth FROM frontier) AS last_depth,
-      c.done, c.dropped, c.closed_written_at, c.deeper, c.cut
+      cb.done, cb.dropped, cb.closed_written_at,
+      s.depth = 0 AND EXISTS (SELECT 1 FROM deeper d WHERE d.root_id = s.id) AS deeper,
+      s.depth = 0 AND EXISTS (SELECT 1 FROM cut WHERE cut.root_id = s.id) AS cut
     FROM shipped s
     INNER JOIN plan_nodes n ON n.id = s.id
     LEFT JOIN plan_nodes ancestor_row ON ancestor_row.id = s.closed_ancestor_id
     LEFT JOIN plan_nodes phase_row ON phase_row.id = s.phase_id
-    LEFT JOIN counted c ON c.root_id = s.id AND s.depth = 0
+    LEFT JOIN closed_below cb ON cb.root_id = s.id AND s.depth = 0
     ORDER BY s.depth, s.path COLLATE "C"
   `)) as Array<Record<string, unknown>>;
 
