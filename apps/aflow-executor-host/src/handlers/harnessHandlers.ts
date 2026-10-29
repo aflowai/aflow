@@ -42,6 +42,7 @@ import {
   type HarnessActivityLine,
   type HostResolvedFolderPreview,
   type PayloadRef,
+  WRITING_STYLE_RULES,
 } from '@aflow/schemas';
 
 import {
@@ -321,23 +322,21 @@ export function composeHarnessTask(
     .join('\n\n');
 }
 
-/** What the task tells the harness about where its answer goes and what shape it takes. */
-export function resultInstruction(schema: Record<string, unknown>): string {
+/**
+ * What the task tells the harness about the prose it writes, and, when the task
+ * expects a result, where that result goes and what shape it takes.
+ */
+export function resultInstruction(schema?: Record<string, unknown>): string {
+  const resultFile =
+    schema === undefined
+      ? ''
+      : `\n\nWrite your final result as JSON to \`${RESULT_RELATIVE_PATH}\`, relative to the root ` +
+        `of this checkout, matching this JSON Schema:\n${JSON.stringify(schema)}\n` +
+        'Write that file even when you changed nothing else — it is the only thing read as the ' +
+        'result, and console output is not.';
   return (
-    `\n\nWrite your final result as JSON to \`${RESULT_RELATIVE_PATH}\`, relative to the root ` +
-    `of this checkout, matching this JSON Schema:\n${JSON.stringify(schema)}\n` +
-    'Write that file even when you changed nothing else — it is the only thing read as the ' +
-    'result, and console output is not.\n\n' +
-    'Write the prose in that result, and any pull request body, to these rules:\n' +
-    '- No semicolons. Write two sentences.\n' +
-    '- Keep each sentence under about 25 words.\n' +
-    '- Use one verb, not a nominalisation: "analyse", not "perform an analysis of".\n' +
-    '- Use no soft phrasal verbs: "find", not "figure out".\n' +
-    '- Use no marketing adjectives.\n' +
-    '- Make each list item stand alone. Do not end one with "and" or "or".\n' +
-    '- Inside one unit, use one word per concept. Do not say "check", "validate" and "verify" for one action.\n' +
-    '- Keep every hedge. "May have pushed" stays "may have pushed".\n' +
-    '- Keep the present perfect where it carries meaning.'
+    `${resultFile}\n\nWrite the prose in your result summary, and in the commit message that ` +
+    `lands in the pull request body, to these rules:\n${WRITING_STYLE_RULES}`
   );
 }
 
@@ -1120,7 +1119,7 @@ async function runHarness(
     let result: SandboxedRunResult;
     let check: HarnessResultCheck | undefined;
     if (expected === undefined) {
-      result = await runTurn(task, resuming, conversationId);
+      result = await runTurn(task + resultInstruction(), resuming, conversationId);
     } else {
       const { schema, validate } = expected;
       const resultPath = join(worktree.workDir, RESULT_RELATIVE_PATH);

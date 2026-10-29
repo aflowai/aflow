@@ -81,6 +81,8 @@ scripts/                   # Dev tools, test flows, seed data, integration tests
 
 Write prose an agent reads (prompts, tool descriptions, briefs, plan notes, PR bodies) to these rules:
 
+<!-- The rule lines copy WRITING_STYLE_RULES in packages/schemas/src/runtime/writingStyle.ts. -->
+
 - No semicolons. Write two sentences.
 - Keep each sentence under about 25 words.
 - Use one verb, not a nominalisation: "analyse", not "perform an analysis of".

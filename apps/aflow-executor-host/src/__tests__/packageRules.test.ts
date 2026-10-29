@@ -41,7 +41,8 @@ vi.mock('../sandboxedRun.js', async (importOriginal) => {
   };
 });
 
-const { createHostHarnessHandler } = await import('../handlers/harnessHandlers.js');
+const { createHostHarnessHandler, resultInstruction } =
+  await import('../handlers/harnessHandlers.js');
 
 const TOP_RULES =
   "The repository's own instructions are in `../../CLAUDE.md` at the top level of the " +
@@ -99,9 +100,10 @@ async function briefOf(): Promise<string> {
   expect(result.status).toBe('SUCCEEDED');
   expect(sandboxed).toHaveLength(1);
   const argv = sandboxed[0]?.argv ?? [];
-  const task = argv.find((arg) => arg.endsWith('Fix it.'));
+  const instruction = resultInstruction();
+  const task = argv.find((arg) => arg.endsWith(`Fix it.${instruction}`));
   expect(task, argv.join(' ')).toBeDefined();
-  return task ?? '';
+  return task?.slice(0, -instruction.length) ?? '';
 }
 
 beforeEach(async () => {

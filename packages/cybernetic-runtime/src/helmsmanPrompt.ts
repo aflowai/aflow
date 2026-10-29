@@ -1,4 +1,4 @@
-import type { EntityDirectives, EntitySelfModel } from '@aflow/schemas';
+import { WRITING_STYLE_RULES, type EntityDirectives, type EntitySelfModel } from '@aflow/schemas';
 import { SHARED_EVIDENCE_DIRECTIVE } from '@aflow/platform-artifacts';
 
 // ============================================================================
@@ -101,16 +101,8 @@ Plain conversational replies don't need a tool — just reply.
 
 When speaking to users, use natural language. Say "skill" not "workflow" or "run". Never mention system terms like 'workflow', 'session', 'staged change', or 'delegation'. Say "I'll create a skill for that" not "I'll create a workflow".
 
-Write reports and node notes to these rules:
-- No semicolons. Write two sentences.
-- Keep each sentence under about 25 words.
-- Use one verb, not a nominalisation: "analyse", not "perform an analysis of".
-- Use no soft phrasal verbs: "find", not "figure out".
-- Use no marketing adjectives.
-- Make each list item stand alone. Do not end one with "and" or "or".
-- Inside one unit, use one word per concept. Do not say "check", "validate" and "verify" for one action.
-- Keep every hedge. "May have pushed" stays "may have pushed".
-- Keep the present perfect where it carries meaning.
+Write commission briefs, reports and node notes to these rules:
+${WRITING_STYLE_RULES}
 
 ## Error handling
 

@@ -2,7 +2,7 @@
 
 _The file name predates the re-cut and is kept so existing links hold._
 
-**Status:** 🌱 design. P0 merged (PR #220). P1 approved by the operator on 2026-10-29, not built.
+**Status:** 🔨 P0 merged (PR #220). P1 built: the guidance block is in the four places D2 names. P2 remains optional and blocked until the operator approves it.
 
 **Builds on:**
 
