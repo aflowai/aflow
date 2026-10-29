@@ -260,7 +260,7 @@ const TaskOutputProductionSchema = z.object({
     .optional()
     .describe(
       'Match a purposeId from intent.requiredDataSources[*].purposeId. ' +
-        'Set on EXACTLY ONE task (the source-of-truth fetcher) per requiredDataSources entry — that task must also carry the matching api/mcp capability grant on context.capabilities. ' +
+        'Set on EXACTLY ONE task (the source-of-truth fetcher) per requiredDataSources entry — that task must also be able to call the source: an agent task carrying the matching api/mcp capability grant on context.capabilities, or an "api.http.call" operation task whose inputTemplate names the api\'s apiId or bindingId literally. ' +
         'Consumer/derived/writeback tasks MUST omit this field — provenance propagates through consumes[] automatically. ' +
         'Multiple labels per purposeId, label without matching grant, or missing label for a required entry are all rejected at assembly.',
     ),
@@ -470,7 +470,7 @@ const OperationTaskSchema = z.object({
     .record(z.unknown())
     .optional()
     .describe(
-      'Optional nested op-input template. Literal JSON where any node may be { "$bind": "<name>" } referencing a consumes[].bindAs or a literal inputBindings key. When present, the substituted template is exactly the op input. Use only when the operation requires a nested input shape.',
+      'Optional nested op-input template. Literal JSON where any node may be { "$bind": "<name>" } referencing a consumes[].bindAs or a literal inputBindings key (also { "$concat": [...] }, { "$firstOf": [...] }, { "$text": [v] }). When present, the substituted template is exactly the op input. Use when the operation requires a nested input shape — e.g. calling an API directly with six run inputs in one body: consumes [{ runInput: "a", bindAs: "a" }, …, { runInput: "f", bindAs: "f" }], operationId "api.http.call", inputTemplate { apiId, bindingId, url, method: "POST", body: { a: { "$bind": "a" }, …, f: { "$bind": "f" } } }. A literal apiId/bindingId here is what credits this task as the caller of a requiredDataSources api.',
     ),
   dependsOn: z.array(z.string().max(64)).default([]),
   when: DraftWhenSchema.optional(),
@@ -698,7 +698,7 @@ export const TaskGraphDraftSchema = z
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             path: [...capsPath, 'integrations'],
-            message: `${t.kind} task "${t.taskId}" must grant a callable external source — an integrations[] entry with ≥1 toolName, or a direct_url grant together with "api.http.call" in operations.`,
+            message: `${t.kind} task "${t.taskId}" must grant a callable external source — an integrations[] entry with ≥1 toolName, or a direct_url grant together with "api.http.call" in operations. To call an API with a fixed request instead, make it an operation task: { type: "operation", operationId: "api.http.call", inputTemplate: { apiId, bindingId, … } }.`,
           });
         }
         if (grantsCompute) {
