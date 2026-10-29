@@ -1,5 +1,4 @@
 import {
-  isPersonTrigger,
   PlanNodeCreateInputSchema,
   PlanNodeDependInputSchema,
   PlanNodeLearnInputSchema,
@@ -35,7 +34,7 @@ async function planWriteContext(args: InlineHandlerArgs): Promise<PlanWriteConte
     redis: args.redis,
     tenantId: args.context.tenantId as string,
     actorKind: 'agent',
-    resident: !isPersonTrigger(state?.trigger),
+    resident: state?.trigger === undefined || state.trigger === 'schedule',
   };
 }
 

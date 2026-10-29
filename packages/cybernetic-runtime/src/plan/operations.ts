@@ -639,7 +639,7 @@ async function writePlanNode(
     );
     return {
       ...written,
-      carrierFailure: `Carrier failed for closed node ${node.nodeId}. Read its linked findings: ${error instanceof Error ? error.message : String(error)}`,
+      carrierFailure: `Carrier failed for closed node ${node.nodeId}. Read its linked findings and propose a blocked carrier.`,
     };
   }
 }

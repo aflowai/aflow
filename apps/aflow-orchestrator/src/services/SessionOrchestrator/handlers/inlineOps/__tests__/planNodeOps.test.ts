@@ -134,10 +134,10 @@ describe('plan.node.update', () => {
   it.each([
     [{ trigger: 'schedule' }, true],
     [{}, true],
-    [{ trigger: 'webhook', activatedByPerson: true }, true],
-    [{ trigger: 'api', activatedByPerson: false }, true],
-    [{ trigger: 'mcp', activatedByPerson: false }, true],
-    [{ trigger: 'eval' }, true],
+    [{ trigger: 'webhook', activatedByPerson: true }, false],
+    [{ trigger: 'api', activatedByPerson: false }, false],
+    [{ trigger: 'mcp', activatedByPerson: false }, false],
+    [{ trigger: 'eval' }, false],
     [{ trigger: 'voice', activatedByPerson: false }, false],
     [{ trigger: 'chat', activatedByPerson: false }, false],
     [null, true],
@@ -591,12 +591,10 @@ describe('plan.node.next', () => {
 });
 
 describe('resident provenance', () => {
-  it('identifies residents from schedule provenance and the resident marker, failing closed when unavailable', async () => {
+  it('restricts scheduled runs and fails closed when provenance is unavailable', async () => {
     for (const [state, resident] of [
-      [{ trigger: 'schedule', planResident: true }, true],
-      [{ trigger: 'schedule', planResident: false }, true],
       [{ trigger: 'schedule' }, true],
-      [{ trigger: 'chat', planResident: true }, false],
+      [{ trigger: 'chat' }, false],
       [null, true],
     ] as const) {
       mockGetSessionState.mockResolvedValueOnce(state);
@@ -619,7 +617,6 @@ describe('resident provenance', () => {
     for (const status of ['RUNNING', 'PAUSED', 'RUNNING', 'FAILED', 'RUNNING']) {
       mockGetSessionState.mockResolvedValueOnce({
         trigger: 'schedule',
-        planResident: true,
         status,
         activatedByPerson: true,
       });

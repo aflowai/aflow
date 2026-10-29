@@ -104,8 +104,8 @@ export interface PlanStreamReads {
   publicationsOf(spaceId: string, commissionRunId: string): Promise<PlanStreamRun[]>;
   /** The spend of the runs serving the node since a person last opened it. */
   spendOf(spaceId: string, nodeId: string): Promise<PlanNodeSpendRead>;
-  /** The space's pending `workflow_run_paused` attention items about runs serving these nodes. */
-  pausedItemsServing(spaceId: string, nodeIds: readonly string[]): Promise<number>;
+  /** Pending pauses serving these nodes, or every descendant when `rootId` is given. */
+  pausedItemsServing(spaceId: string, nodeIds: readonly string[], rootId?: string): Promise<number>;
 }
 
 export interface PlanStreamContext extends PlanReadContext {
@@ -815,7 +815,13 @@ async function decideRoot(
         ? active.nodeId
         : undefined,
     ),
-    ctx.reads.pausedItemsServing(ctx.spaceId, servedNodeIds),
+    ctx.reads.pausedItemsServing(
+      ctx.spaceId,
+      servedNodeIds,
+      active.nodeId === root.nodeId && opened.childrenTotal > 0 && !open.truncated
+        ? active.nodeId
+        : undefined,
+    ),
     ctx.reads.spendOf(ctx.spaceId, active.nodeId),
   ]);
   const latest = roundToAnswer(rounds, opened.node.updatedAt);

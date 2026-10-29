@@ -110,10 +110,19 @@ function reads(): PlanStreamReads {
         wakeSessionIds: [],
       });
     },
-    pausedItemsServing: (_spaceId, nodeIds) =>
+    pausedItemsServing: (_spaceId, nodeIds, rootId) =>
       Promise.resolve(
         pausedItemRuns.filter((runId) =>
-          store.runs.some((r) => r.runId === runId && nodeIds.includes(r.nodeId)),
+          store.runs.some((r) => {
+            if (r.runId !== runId) return false;
+            if (rootId === undefined) return nodeIds.includes(r.nodeId);
+            let node = store.nodes.get(r.nodeId);
+            while (node) {
+              if (node.nodeId === rootId) return true;
+              node = node.parentId ? store.nodes.get(node.parentId) : undefined;
+            }
+            return false;
+          }),
         ).length,
       ),
   };
@@ -954,7 +963,7 @@ describe('resident asking and proposing', () => {
     vi.spyOn(store, 'insert').mockImplementationOnce(async (...args) => {
       const result = await insert(...args);
       vi.spyOn(redis, 'publish').mockImplementationOnce(() => {
-        throw new Error('carrier publish');
+        throw new Error('carrier publish\n' + 'raw internals '.repeat(1000));
       });
       return result;
     });
@@ -967,7 +976,7 @@ describe('resident asking and proposing', () => {
       }),
     ).resolves.toMatchObject({
       ok: true,
-      carrierFailure: expect.stringContaining('carrier publish'),
+      carrierFailure: `Carrier failed for closed node ${step.nodeId}. Read its linked findings and propose a blocked carrier.`,
     });
     expect([...store.nodes.values()].some((node) => node.note?.startsWith('Proposed:'))).toBe(true);
   });
@@ -2269,6 +2278,25 @@ describe('settled P2 rules', () => {
 });
 
 describe('round 13 root movement', () => {
+  it('withholds proposals for paused attention beneath a done child', async () => {
+    const root = await created();
+    const child = await created({ parentId: root.nodeId });
+    const grandchild = await created({ parentId: child.nodeId });
+    const paused = await run(grandchild, PLAN_STREAM_COMMISSION_SLUG, 'completed');
+    pausedItemRuns.push(paused);
+    await write(grandchild.nodeId, { status: 'done', outcome: 'Done' });
+    await write(child.nodeId, { status: 'done', outcome: 'Done' });
+    expect(await next(root.nodeId)).toMatchObject({ decision: 'wait', cause: 'in_flight' });
+    const held = await wake();
+    expect(held.propose).toBeUndefined();
+    expect(held).toMatchObject({
+      decisions: [],
+      waits: [{ cause: 'in_flight', roots: 1 }],
+    });
+    pausedItemRuns = [];
+    expect(await wake()).toMatchObject({ propose: { parentId: root.nodeId } });
+  });
+
   it('holds an exhausted root while a run serves a done child', async () => {
     const root = await created();
     const child = await created({ parentId: root.nodeId });

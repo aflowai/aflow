@@ -179,3 +179,5 @@ P2 round 11 refuses resident closes across node kinds and records carrier failur
 P2 round 12 records resident provenance before input normalization and directs merge closes through the person or system path. Person reopens persist, and close responses preserve carrier recovery pointers.
 
 P2 round 13 restores resident done-on-merge closes with recorded merges while preserving person scope and restricting every unattended schedule. Reopened live checks wait for another person read, running work beneath done children holds proposals, and both approval paths surface carrier failures.
+
+P2 round 14 restricts scheduled writes, removes the unused resident marker, and counts paused attention beneath done children. Carrier failures name recovery steps without raw errors.
