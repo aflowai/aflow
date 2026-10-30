@@ -108,6 +108,7 @@ export function createControlConsumer(
           ...(message.createdBy ? { createdBy: message.createdBy } : {}),
           ...(message.spaceId ? { spaceId: message.spaceId } : {}),
           ...(message.trigger ? { trigger: message.trigger } : {}),
+          ...(message.residentScheduleId ? { residentScheduleId: message.residentScheduleId } : {}),
           activatedByPerson: message.activatedByPerson,
           ...(message.voiceMode ? { voiceMode: true } : {}),
           ...(message.actorContext ? { actorContext: message.actorContext } : {}),

@@ -1,3 +1,4 @@
+import { carrierToken } from './carrier.js';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { and, asc, desc, eq, gt, inArray, isNull, lt, or, sql, type SQL } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
@@ -71,6 +72,8 @@ export interface NewPlanNode {
   /** Absent: after the last sibling, read under the parent's sibling lock. */
   position?: number;
   createdBy: string | null;
+  /** Absent: `active`. A proposal and a live check are created `blocked` (Plan 331 D5, D8). */
+  status?: PlanNodeStatus;
 }
 
 /**
@@ -251,10 +254,13 @@ export interface PlanNodeStore {
     expectedRevision: number,
     anchor: PlanPlaceAnchor,
   ): Promise<PlanNodePlaceWrite>;
+  /** The newest carrier creation time for this node, one scalar rather than sibling rows. */
+  latestCarrierAt(spaceId: string, nodeId: string): Promise<string | null>;
   listChildren(
     spaceId: string,
-    parentId: string,
+    parentId: string | null,
     limit: number,
+    offset?: number,
   ): Promise<{ children: PlanNodeSummary[]; total: number }>;
   walk(spaceId: string, opts: PlanTreeWalkOptions): Promise<PlanTreeWalk>;
   /**
@@ -327,11 +333,12 @@ export interface PlanNodeStore {
   ): Promise<Map<string, PlanNodeNewestPullRequest>>;
   /** How many runs, running or paused, serve each of `nodeIds` itself; eval trials never. */
   inFlightRunCountsOf(spaceId: string, nodeIds: readonly string[]): Promise<Map<string, number>>;
-  /** The running and paused runs serving any of `nodeIds`, newest first; eval trials never. */
+  /** Running and paused runs serving `nodeIds`, or every descendant when `rootId` is given. Excludes eval trials. */
   listRunsServing(
     spaceId: string,
     nodeIds: readonly string[],
     limit: number,
+    rootId?: string,
   ): Promise<{ runs: PlanNodeRun[]; total: number }>;
   /**
    * Makes `nodeId` wait on `dependsOnId` for `condition` — or, with null,
@@ -910,15 +917,32 @@ export function createPlanNodeStore(db: PostgresJsDatabase, tenantId: string): P
     placeAtRevision: (spaceId, nodeId, expectedRevision, anchor) =>
       retryingDeadlocks(() => placeOnce(spaceId, nodeId, expectedRevision, anchor)),
 
-    listChildren: (spaceId, parentId, limit) =>
+    latestCarrierAt: (spaceId, nodeId) =>
       inTenant(async (tx) => {
-        const where = and(eq(planNodes.spaceId, spaceId), eq(planNodes.parentId, parentId));
+        const [row] = await tx
+          .select({ at: sql<string | null>`max(${planNodes.createdAt})` })
+          .from(planNodes)
+          .where(
+            and(
+              eq(planNodes.spaceId, spaceId),
+              sql`strpos(${planNodes.note}, ${carrierToken(nodeId)}) > 0`,
+            ),
+          );
+        return row?.at === null || row?.at === undefined ? null : new Date(row.at).toISOString();
+      }),
+    listChildren: (spaceId, parentId, limit, offset = 0) =>
+      inTenant(async (tx) => {
+        const where = and(
+          eq(planNodes.spaceId, spaceId),
+          parentId === null ? isNull(planNodes.parentId) : eq(planNodes.parentId, parentId),
+        );
         const rows = await tx
           .select(summaryColumns())
           .from(planNodes)
           .where(where)
           .orderBy(...siblingOrder())
-          .limit(limit);
+          .limit(limit)
+          .offset(offset);
         const [count] = await tx
           .select({ total: sql<number>`count(*)::int` })
           .from(planNodes)
@@ -1186,12 +1210,21 @@ export function createPlanNodeStore(db: PostgresJsDatabase, tenantId: string): P
         return counts;
       }),
 
-    listRunsServing: (spaceId, nodeIds, limit) =>
+    listRunsServing: (spaceId, nodeIds, limit, rootId) =>
       inTenant(async (tx) => {
-        if (nodeIds.length === 0) return { runs: [], total: 0 };
+        if (nodeIds.length === 0 && rootId === undefined) return { runs: [], total: 0 };
         const where = and(
           eq(workflowRuns.spaceId, spaceId),
-          inArray(workflowRuns.planNodeId, [...nodeIds]),
+          rootId === undefined
+            ? inArray(workflowRuns.planNodeId, [...nodeIds])
+            : sql`${workflowRuns.planNodeId} in (
+              with recursive subtree as (
+                select id from plan_nodes where space_id = ${spaceId} and id = ${rootId}
+                union
+                select child.id from plan_nodes child join subtree parent on child.parent_id = parent.id
+                where child.space_id = ${spaceId}
+              ) select id from subtree
+            )`,
           inArray(workflowRuns.status, [...PLAN_NODE_RUN_STATUSES]),
           isNull(workflowRuns.evalBatchId),
         );

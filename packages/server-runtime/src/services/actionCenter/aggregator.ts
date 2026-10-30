@@ -49,6 +49,7 @@ export interface ResolveResult {
   resolvedAt: string;
   /** Post-install setup tasks (store_install ratification) — surfaced to the resolving operator. */
   setupChecklist?: PostInstallTask[];
+  carrierFailure?: string;
 }
 
 export interface BuildAggregatorOptions {
@@ -276,6 +277,7 @@ export function buildAggregator(opts: BuildAggregatorOptions): ActionCenterAggre
         }),
         reportedOperationId: outcome.reportedOperationId ?? outcome.dispatchedOperationId,
         resolvedAt: outcome.resolvedAt,
+        ...(outcome.carrierFailure ? { carrierFailure: outcome.carrierFailure } : {}),
         ...(outcome.setupChecklist !== undefined ? { setupChecklist: outcome.setupChecklist } : {}),
       };
     },

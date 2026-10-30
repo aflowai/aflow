@@ -68,7 +68,18 @@ export type PlanNodeCreateOutput = z.infer<typeof PlanNodeCreateOutputSchema>;
 export const PlanNodeUpdateInputSchema = PlanNodeUpdateSchema;
 export type PlanNodeUpdateInput = z.infer<typeof PlanNodeUpdateInputSchema>;
 
-export const PlanNodeUpdateOutputSchema = z.object({ node: PlanNodeSchema });
+export const PlanNodeUpdateOutputSchema = z.object({
+  carrierFailure: z
+    .string()
+    .optional()
+    .describe(
+      'The close succeeded but its carrier failed. Read the findings linked to the named closed node.',
+    ),
+  node: PlanNodeSchema,
+  carrier: PlanNodeSchema.optional().describe(
+    'Where this update closed the node done with findings linked to it: the node proposed under the same parent to carry them, blocked until a person approves it.',
+  ),
+});
 export type PlanNodeUpdateOutput = z.infer<typeof PlanNodeUpdateOutputSchema>;
 
 /**
@@ -1053,7 +1064,10 @@ export const PlanStreamAnswerSchema = z.discriminatedUnion('decision', [
           'Where the criteria are not met, the note’s first line begins with this, and goes on to name the next step.',
         ),
       link: PlanNodeLinkCreateSchema.describe(
-        'The record that this merge was judged: pass it to plan.node.link once the node’s update is written. Until it is linked, the next firing judges the merge again.',
+        'Link this merge after a successful close or a note judging unmet criteria. A link alone never judges the merge.',
+      ),
+      liveCheck: PlanNodeCreateSchema.describe(
+        'Create this blocked live check only when criteria require the merged change running on the stack. Only a person approves the live check after reading the folder head.',
       ),
     })
     .strict(),
@@ -1076,6 +1090,21 @@ export const PlanStreamAnswerSchema = z.discriminatedUnion('decision', [
       ),
       spend: PlanStreamSpendSchema.optional().describe(
         'On spend_spent: what the node spent, and on which runs.',
+      ),
+    })
+    .strict(),
+  z
+    .object({
+      decision: z.literal('ask'),
+      reason: decisionReason,
+      node: PlanStreamNodeSchema,
+      waitsOn: z
+        .string()
+        .describe(
+          'What the node waits on. This is the wait line anywhere in its note, or the default wait when the note has no room.',
+        ),
+      update: PlanNodeUpdateSchema.optional().describe(
+        'Where the note has room and no wait line, pass this to plan.node.update. Otherwise waitsOn exposes the wait without changing the note. The resulting revision is asked once across wakes.',
       ),
     })
     .strict(),
@@ -1133,7 +1162,23 @@ export const PlanBoardNextSchema = z
     decisions: z
       .array(PlanBoardDecisionSchema)
       .describe(
-        'Act on these in order: a merge recorded, a commission published, a stop written, a failed round re-commissioned, new work commissioned, then pull requests read; within each, the operator’s root order. Empty: end the wake with no reply.',
+        'Act on these in order: a merge recorded, a commission published, a stop written, a failed round re-commissioned, new work commissioned, pull requests read, then blocked nodes asked about; within each, the operator’s root order. Empty, and no `propose`: end the wake with no reply.',
+      ),
+    propose: z
+      .object({
+        parentId: z
+          .string()
+          .uuid()
+          .describe('Create the proposal under this root with plan.node.create parentId.'),
+        reason: decisionReason,
+        title: z.string(),
+        goal: z.string(),
+        criteria: z.string(),
+      })
+      .strict()
+      .optional()
+      .describe(
+        'Present for an exhausted active root without blocked scope, waiting scope or declined proposals, when no approved work is actionable or moving. Create at most one blocked proposal under parentId with plan.node.create and proposed saying why, even when unrelated roots await people.',
       ),
     deferred: z
       .number()
