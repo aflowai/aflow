@@ -16,6 +16,7 @@ import {
 import { useApi } from './providers.js';
 import { ProposalCard } from './cybernetic/ProposalCard.js';
 import type { ProposalCardPayload, ProposalCardSummary } from './cybernetic/ProposalCard.js';
+import { readProposalReadFailure } from '../lib/proposal-read-failure.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -95,25 +96,21 @@ export function ProposalsTab({ spaceId, workflowSlug }: ProposalsTabProps) {
 
   const loadDetail = useCallback(
     async (proposalId: string): Promise<ProposalCardPayload | null> => {
-      try {
-        const res = await fetch(`${apiUrl}/spaces/${spaceId}/proposals/${proposalId}`, {
-          headers: { ...headers(), 'X-Space-ID': spaceId },
-        });
-        if (!res.ok) throw new Error(`HTTP ${String(res.status)}`);
-        const body = (await res.json()) as { proposal: ProposalDetail };
-        return {
-          kind: body.proposal.kind,
-          proposal: {
-            ops: body.proposal.proposal.ops,
-            validations: body.proposal.proposal.validations,
-          },
-          ...(body.proposal.evidence.reflectionRefs
-            ? { evidence: { reflectionRefs: body.proposal.evidence.reflectionRefs } }
-            : {}),
-        };
-      } catch {
-        return null;
-      }
+      const res = await fetch(`${apiUrl}/spaces/${spaceId}/proposals/${proposalId}`, {
+        headers: { ...headers(), 'X-Space-ID': spaceId },
+      });
+      if (!res.ok) throw new Error(await readProposalReadFailure(res));
+      const body = (await res.json()) as { proposal: ProposalDetail };
+      return {
+        kind: body.proposal.kind,
+        proposal: {
+          ops: body.proposal.proposal.ops,
+          validations: body.proposal.proposal.validations,
+        },
+        ...(body.proposal.evidence.reflectionRefs
+          ? { evidence: { reflectionRefs: body.proposal.evidence.reflectionRefs } }
+          : {}),
+      };
     },
     [apiUrl, headers, spaceId],
   );

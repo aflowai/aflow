@@ -8,6 +8,7 @@ import { useApi } from '../components/providers.js';
 import { useApiQuery } from './useApiQuery.js';
 import * as broker from './action-center-broker.js';
 import { useResumeOnUnblock } from './use-resume-on-unblock.js';
+import { readProposalReadFailure } from '../lib/proposal-read-failure.js';
 import { partitionLanes, type ActionCenterLanes } from './use-action-center-lanes.js';
 import type { ActionCenterItem, CoachProposalExtension } from './use-action-center-types.js';
 
@@ -531,22 +532,7 @@ export function useActionCenter(spaceId: string | null): UseActionCenterResult {
         `${apiRef.current.apiUrl}/spaces/${spaceId}/proposals/${encodeURIComponent(proposalId)}`,
         { headers: { ...apiRef.current.headers(), 'X-Space-ID': spaceId } },
       );
-      if (res.status === 404) return null;
-      if (!res.ok) {
-        let detail = '';
-        try {
-          const body = (await res.json()) as { error?: unknown; message?: unknown };
-          detail =
-            typeof body.error === 'string'
-              ? body.error
-              : typeof body.message === 'string'
-                ? body.message
-                : '';
-        } catch {
-          /* non-JSON */
-        }
-        throw new Error(`HTTP ${String(res.status)}${detail ? `: ${detail}` : ''}`);
-      }
+      if (!res.ok) throw new Error(await readProposalReadFailure(res));
       const body = (await res.json()) as { proposal: RawProposalDetail };
       const sc = body.proposal;
       const reflectionRefs = sc.evidence.reflectionRefs;

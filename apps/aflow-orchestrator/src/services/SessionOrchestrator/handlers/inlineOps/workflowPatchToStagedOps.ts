@@ -688,6 +688,13 @@ export function convertManifestPatchToStagedOps(
   return { ops, unsupported };
 }
 
+function withStagedTask(workflow: Workflow, task: WorkflowTask): Workflow {
+  return {
+    ...workflow,
+    tasks: workflow.tasks.map((t) => (t.taskId === task.taskId ? task : t)),
+  };
+}
+
 export function convertWorkflowPatchToStagedOps(
   jsonPatchOps: WorkflowPatchInput['operations'],
   existing: Workflow,
@@ -708,6 +715,12 @@ export function convertWorkflowPatchToStagedOps(
     // and stop — continuing would make later resolutions meaningless.
     try {
       shadow = applyJsonPatch<Workflow>(shadow, [jp]);
+      // The raw patch leaves behind the inputContract that a bindings edit
+      // re-derived. A later replace_task of the same task copies the shadow's
+      // task whole, so the shadow holds the task as ratification stores it.
+      if (!('unsupported' in out) && out.op === 'replace_task') {
+        shadow = withStagedTask(shadow, out.task);
+      }
     } catch (err) {
       const detail =
         err instanceof JsonPatchError
