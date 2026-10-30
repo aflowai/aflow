@@ -1,5 +1,11 @@
 import type { OperationRegistration } from '../../catalog/operationCatalog.js';
 import {
+  PLAN_NODE_CARD_UPDATE_DESCRIPTION,
+  PLAN_NODE_CARD_WRITE_DESCRIPTION,
+  PlanNodeCardSchema,
+} from '../../cybernetic/plan.js';
+import { toJsonSchemaSync } from '../../utils/jsonSchema.js';
+import {
   PlanNodeCreateInputSchema,
   PlanNodeCreateOutputSchema,
   PlanNodeDependInputSchema,
@@ -20,6 +26,38 @@ import {
 } from './schemas.js';
 
 const EXAMPLE_NODE_ID = '00000000-0000-0000-0000-000000000000';
+
+interface CardJsonSchema {
+  type?: string;
+  properties?: Record<string, CardJsonSchema>;
+  required?: string[];
+  items?: CardJsonSchema;
+}
+
+/** A JSON Schema as a one-line signature: `{key: string, key?: string}[]`. */
+function signature(schema: CardJsonSchema): string {
+  if (schema.type === 'array' && schema.items) return `${signature(schema.items)}[]`;
+  if (schema.type === 'object' && schema.properties) {
+    const required = new Set(schema.required ?? []);
+    const fields = Object.entries(schema.properties).map(
+      ([key, value]) => `${key}${required.has(key) ? '' : '?'}: ${signature(value)}`,
+    );
+    return `{${fields.join(', ')}}`;
+  }
+  return schema.type ?? 'unknown';
+}
+
+/**
+ * The card as a turn's tool declaration carries it (Plan 337 D1): a described
+ * object whose description holds the shape, derived from `PlanNodeCardSchema`.
+ * Every turn pays for the declaration, and the card's full JSON Schema costs
+ * over 300 tokens an operation for a field few turns write. Dispatch validates
+ * against the full schema, whose refusals name the section and the ceiling.
+ */
+function cardForAgents(lead: string): string {
+  const shape = signature(toJsonSchemaSync(PlanNodeCardSchema) as CardJsonSchema);
+  return `${lead} Shape: ${shape}`;
+}
 
 /**
  * Plan 322 D3 — the Helmsman's own tools, never a skill's: a run may serve a
@@ -49,6 +87,8 @@ export const PlanOperationRegistrations: OperationRegistration[] = [
       whenNotToUse: ['Changing a node that exists — use plan.node.update'],
       pitfalls: [
         'Write criteria a later session can check without this conversation — a round’s brief is the node’s goal and criteria',
+        'A node that asks the operator for a decision carries a `card`, a proposal too: one or two short sentences an item, every question with the answer you recommend. Done when is the criteria, so the card does not repeat it',
+        'A plan document is commissioned with the card as its first section: write that same card on the node, unchanged',
       ],
       minimalExampleInput: {
         kind: 'execute',
@@ -56,6 +96,11 @@ export const PlanOperationRegistrations: OperationRegistration[] = [
         goal: 'A new operator reaches a working space without help.',
         criteria: 'yarn start on a clean machine ends with the web app serving a space.',
       },
+    },
+    agentCollapsedFields: {
+      card: cardForAgents(
+        `${String(PlanNodeCardSchema.description)} ${PLAN_NODE_CARD_WRITE_DESCRIPTION}`,
+      ),
     },
     accessMode: 'write',
     inputZod: PlanNodeCreateInputSchema,
@@ -83,7 +128,8 @@ export const PlanOperationRegistrations: OperationRegistration[] = [
       whenNotToUse: ['Adding a step under a node — use plan.node.create with parentId'],
       pitfalls: [
         'An amended goal belongs in `goal`, not the note — every session is briefed from the goal',
-        'A note whose first line begins `Revise: ` is the operator sending a blocked proposal back: rewrite goal and criteria from it, keep status blocked, and replace that line with one beginning `Revised: ` that says what changed',
+        'A note whose first line begins `Revise: ` is the operator sending a blocked proposal back: rewrite goal, criteria and any card from it, keep status blocked, and replace that line with one beginning `Revised: ` that says what changed',
+        'The operator asks for a card on an open node they want to decide: write it here, whole, against the node’s revision',
       ],
       minimalExampleInput: {
         nodeId: EXAMPLE_NODE_ID,
@@ -91,6 +137,7 @@ export const PlanOperationRegistrations: OperationRegistration[] = [
         note: 'next: F114 findings out of the plan file',
       },
     },
+    agentCollapsedFields: { card: cardForAgents(PLAN_NODE_CARD_UPDATE_DESCRIPTION) },
     accessMode: 'write',
     inputZod: PlanNodeUpdateInputSchema,
     outputZod: PlanNodeUpdateOutputSchema,
@@ -171,6 +218,7 @@ export const PlanOperationRegistrations: OperationRegistration[] = [
       ],
       pitfalls: [
         'A record is linked to a node once; linking it again is refused, and plan.node.get lists what is linked',
+        'A plan document’s pull request merges: link the document to its node, kind "document", ref the file’s URL at the merge sha. A folder with no remote gets the path and the sha as the ref. The node keeps its pull_request link until then',
       ],
       minimalExampleInput: {
         nodeId: EXAMPLE_NODE_ID,
@@ -281,7 +329,7 @@ export const PlanOperationRegistrations: OperationRegistration[] = [
         'read_pull_request: read it through the space’s GitHub binding, then call again with its root as rootNodeId and `pullRequest` copied from the answer — `read: "failed"` where the read failed. Never fill it in from memory',
         'record_merge: judge criteria against the merge, then close with status "done" and the outcome when criteria are met. After a successful close, link the merge. Otherwise write unmet criteria beginning with noteHead, then link the merge. A refused close raises a wait line and an Action Center item once per revision.',
         'publish: start Local Publish with `commission` as it stands, a branch, the node’s planNodeId and wait "none"; it commits under the commission’s summary. Write nothing to the node, as on continue: the publication serving it is the record',
-        'revise: the operator sent a blocked proposal back. Rewrite its goal and criteria from `node.instructions` with plan.node.update, keep status blocked, and start the note with noteHead in place of the `Revise: ` line. Start nothing: the operator approves the rewrite',
+        'revise: the operator sent a blocked proposal back. Rewrite its goal, criteria and any card from `node.instructions` with plan.node.update, keep status blocked, and start the note with noteHead in place of the `Revise: ` line. Start nothing: the operator approves the rewrite',
         'stop: pass `update` to plan.node.update as it stands; start nothing and cancel nothing',
         'continue: open the brief with `node.instructions` word for word where it is present, then brief the commission from the node’s goal and criteria — on `retry`, from that run’s failure or the review run’s findings — based on origin/<base> (a fix round on its branch), never on the connected folder’s checkout; start it with the node’s planNodeId and wait "none" — that run, serving the node, is the record the next wake reads. Write nothing to the node: a write after the commission starts reads as the node changed since, so the next wake commissions it again instead of publishing what it made',
       ],
