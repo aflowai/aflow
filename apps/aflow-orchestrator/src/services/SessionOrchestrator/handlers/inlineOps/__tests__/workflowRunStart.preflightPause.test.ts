@@ -267,7 +267,10 @@ describe('workflow.run.start — preflight pause', () => {
       expect.anything(),
       expect.anything(),
       expect.any(String),
-      'failed',
+      expect.objectContaining({
+        status: 'failed',
+        failure: expect.objectContaining({ message: expect.any(String) }),
+      }),
     );
   });
 
@@ -325,7 +328,10 @@ describe('workflow.run.start — preflight pause', () => {
       expect.anything(),
       expect.anything(),
       expect.any(String),
-      'failed',
+      expect.objectContaining({
+        status: 'failed',
+        failure: expect.objectContaining({ message: expect.any(String) }),
+      }),
     );
   });
 
@@ -348,7 +354,10 @@ describe('workflow.run.start — preflight pause', () => {
       expect.anything(),
       expect.anything(),
       expect.any(String),
-      'failed',
+      expect.objectContaining({
+        status: 'failed',
+        failure: expect.objectContaining({ message: expect.any(String) }),
+      }),
     );
     expect(mockStartRun).not.toHaveBeenCalled();
   });

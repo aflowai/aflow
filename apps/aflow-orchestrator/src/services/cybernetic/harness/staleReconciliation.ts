@@ -9,7 +9,6 @@ import {
 } from '@aflow/redis';
 import {
   getTaskRow,
-  casCompleteTask as ledgerCasCompleteTask,
   listDueCompletionPending,
   bumpCompletionPendingDueAt,
   clearCompletionPending,
@@ -22,6 +21,7 @@ import type { TenantId } from '@aflow/schemas';
 import type { SessionId, StepExecutionId } from '@aflow/schemas';
 import { getOrchestratorLogger, logOrchestratorError } from '../../../lib/orchestratorLogger.js';
 import { dispatchNextOrTerminate } from './dispatch.js';
+import { recordTaskOutcome } from './dispatchRecord.js';
 import { applyFailureMode } from './pauseResume.js';
 import { routeRunnerTerminalToHarness } from './runnerBridge.js';
 import type {
@@ -179,16 +179,16 @@ export async function reconcileStaleRunForTenant(
             `${String(row.attemptCount)} sweeper bumps. Likely cause: addStepJob ` +
             `never durably enqueued (orchestrator crashed mid-claim), or executor ` +
             `lost the job. Marking failed so the run can advance.`;
-          const escalatedAt = new Date();
-          const landed = await ledgerCasCompleteTask(deps.db, tenantIdStr, {
-            runId: row.runId,
-            taskId: row.taskId,
-            attempt: row.attempt,
-            status: 'failed',
-            failureReason: reason,
-            completedAt: escalatedAt,
-            failedAt: escalatedAt,
-          });
+          const landed = await recordTaskOutcome(
+            deps,
+            tenantId,
+            row.runId,
+            row.taskId,
+            row.attempt,
+            'failed',
+            taskRow,
+            { failureReason: reason },
+          );
           await clearCompletionPending(deps.db, tenantIdStr, {
             runId: row.runId,
             taskId: row.taskId,

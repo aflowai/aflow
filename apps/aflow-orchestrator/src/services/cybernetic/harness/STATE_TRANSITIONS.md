@@ -7,7 +7,7 @@ Durable authority: `workflow_runs` + `workflow_run_tasks` rows (Postgres). Runne
 | From      | Event / handler                      | To          | Notes                                      |
 | --------- | ------------------------------------ | ----------- | ------------------------------------------ |
 | `running` | `completeRun(completed)`             | `completed` | CAS terminal                               |
-| `running` | `completeRun(failed)`                | `failed`    | CAS terminal                               |
+| `running` | `completeRun(failed)`                | `failed`    | CAS terminal, writes `failure_json`        |
 | `running` | `cancelRun`                          | `cancelled` | Cascade → bulk task cancel → `completeRun` |
 | `running` | `ledgerPauseRun` / `pauseRunForTask` | `paused`    | Bumps `pause_version`                      |
 | `paused`  | `resumeRun` (ledger)                 | `running`   | CAS on `pause_version`                     |
@@ -37,6 +37,10 @@ onWorkflowTaskComplete
   → notifyWaiters (WHERE notified_at IS NULL)
 ```
 
+A recorded task outcome advances the scheduler cursor (version, time and stall deadline) before `completion_pending` is cleared, so the gap before the dependents' claim never reads as a stall.
+
 ## Stale / orphan recovery
 
 `reconcileStaleRunForTenant` reads `workflow_run_completion_pending` + Redis session state → redrive `routeRunnerTerminalToHarness` or bump `due_at`.
+
+`reconcileOrphanedRunsForTenant` reads the cursor version before it looks at a run, and fails a wedged run only while that version holds, with `failure_json` reason `workflow_run_orphaned`.
