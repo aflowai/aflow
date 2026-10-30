@@ -250,7 +250,10 @@ describe('workflow.run.start — wait: none', () => {
       expect.anything(),
       expect.anything(),
       expect.any(String),
-      'failed',
+      expect.objectContaining({
+        status: 'failed',
+        failure: expect.objectContaining({ message: expect.any(String) }),
+      }),
     );
     const [[, result]] = mockAddStepResult.mock.calls as unknown as Array<
       [unknown, { status: string; error?: { code?: string } }]

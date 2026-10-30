@@ -10,6 +10,7 @@ import {
   loadTaskOutputs,
   collectOutputReferencedTaskIds,
   materializeSkillTasks,
+  DEFAULT_STALLED_AFTER_MS,
 } from '@aflow/cybernetic-runtime';
 import type {
   WorkflowRunDetail,
@@ -319,7 +320,17 @@ export async function emitTerminalRunUpdate(
  * Read by the sweeper to detect that scheduling work is fresh; bumped on
  * every task-result write so the version reflects causal progress.
  */
-export async function bumpSchedulerCursorVersion(
+/**
+ * Record causal progress on the run: bump the cursor version and restart the
+ * stall clock in one write.
+ *
+ * The clock has to move with the version. The orphaned-run reconciler reads a
+ * run with no active task, no completion-pending row and a cursor older than
+ * the stall threshold as wedged — which, with a clock that only run start
+ * stamped, is every run older than a minute in the gap between one task's
+ * completion and its dependents' claim.
+ */
+export async function advanceSchedulerCursor(
   db: PostgresJsDatabase,
   tenantId: string,
   runId: string,
@@ -327,11 +338,14 @@ export async function bumpSchedulerCursorVersion(
   const { workflowRuns, createTenantContext, withTenantSchema } = await import('@aflow/database');
   const { eq, sql } = await import('drizzle-orm');
   const tenantCtx = createTenantContext(tenantId as TenantId);
+  const now = new Date();
   await withTenantSchema(db, tenantCtx, async (tx) => {
     await tx
       .update(workflowRuns)
       .set({
         schedulerCursorVersion: sql`${workflowRuns.schedulerCursorVersion} + 1`,
+        schedulerCursorAt: now,
+        schedulerCursorDeadline: new Date(now.getTime() + DEFAULT_STALLED_AFTER_MS),
       })
       .where(eq(workflowRuns.runId, runId));
   });

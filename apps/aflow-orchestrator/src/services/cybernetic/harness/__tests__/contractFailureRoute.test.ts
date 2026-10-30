@@ -20,7 +20,7 @@ vi.mock('@aflow/cybernetic-runtime', () => ({
 }));
 
 vi.mock('../helpers.js', () => ({
-  bumpSchedulerCursorVersion: vi.fn(async () => {}),
+  advanceSchedulerCursor: vi.fn(async () => {}),
   emitTaskUpdate: vi.fn(async () => {}),
 }));
 

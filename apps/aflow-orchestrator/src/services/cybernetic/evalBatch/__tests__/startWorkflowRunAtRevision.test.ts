@@ -316,6 +316,14 @@ describe('startWorkflowRunAtRevision', () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(mockCompleteRun).toHaveBeenCalledWith(deps, TENANT, expect.any(String), 'failed');
+    expect(mockCompleteRun).toHaveBeenCalledWith(
+      deps,
+      TENANT,
+      expect.any(String),
+      expect.objectContaining({
+        status: 'failed',
+        failure: expect.objectContaining({ reason: 'start_failed' }),
+      }),
+    );
   });
 });
