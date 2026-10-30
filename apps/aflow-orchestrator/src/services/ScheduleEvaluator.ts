@@ -17,6 +17,7 @@
  * back at lease expiry rather than taking it away.
  */
 import type { Redis } from 'ioredis';
+import { residentOccurrenceDue } from './residentDueCheck.js';
 import { getOrchestratorLogger, logOrchestratorError } from '../lib/orchestratorLogger.js';
 import {
   undeclaredConfigProblem,
@@ -496,6 +497,7 @@ export class ScheduleEvaluator {
    */
   private async recordOccurrence(schedule: DueScheduleRow): Promise<boolean> {
     const newFiringCount = schedule.firing_count + 1;
+    const key = occurrenceKey(schedule.id, newFiringCount);
 
     if (schedule.action === 'start_run' && !schedule.creator_user_id) {
       logOrchestratorError(
@@ -509,12 +511,10 @@ export class ScheduleEvaluator {
 
     // A resident heartbeat takes the space's wake guard, as an event-driven
     // wake does (Plan 331 D4), so the two never start two wakes of one space.
-    // No other schedule takes it: overlapping firings of any other meet
-    // wherever their own work serialises (the shepherd's at the branch lease).
     // The advance's own guard fixes the occurrence's count, and so its run id.
     let claimedRunId: string | null = null;
     if (isResidentHeartbeat(schedule)) {
-      const runId = scheduleOccurrenceRunId(occurrenceKey(schedule.id, newFiringCount));
+      const runId = scheduleOccurrenceRunId(key);
       const claim = await claimResidentWake(
         this.redis,
         schedule.tenant_id,
@@ -530,6 +530,18 @@ export class ScheduleEvaluator {
 
     let fired = false;
     try {
+      if (
+        claimedRunId !== null &&
+        !(await residentOccurrenceDue(
+          this.db,
+          this.redis,
+          buildDispatchItem(schedule, newFiringCount, key, {}),
+          claimedRunId,
+        ))
+      ) {
+        await this.skipOccurrence(schedule, null);
+        return false;
+      }
       fired = await this.fireOccurrence(schedule, newFiringCount);
       return fired;
     } finally {
@@ -577,10 +589,8 @@ export class ScheduleEvaluator {
   }
 
   /**
-   * A resident heartbeat while the space's previous wake has not ended (Plan 331 D1):
-   * recorded as skipped and not dispatched, and the schedule moves to its next
-   * time from now, so nothing queues behind the run and nothing catches up
-   * after it. A skip is not a firing and spends none of the schedule's cap.
+   * Idle and overlapping heartbeats preserve the firing cap, since only
+   * model wakes can renew it. Moving from now prevents a catch-up backlog.
    */
   private async skipOccurrence(schedule: DueScheduleRow, inFlight: string | null): Promise<void> {
     const nextFireAt =
@@ -614,7 +624,7 @@ export class ScheduleEvaluator {
       ],
     );
     getOrchestratorLogger().info(
-      `[ScheduleEvaluator] Skipped an occurrence of "${schedule.name}": the space's wake ${String(inFlight)} has not ended`,
+      `[ScheduleEvaluator] Skipped an occurrence of "${schedule.name}": ${inFlight === null ? 'the board waits' : `wake ${inFlight} has not ended`}`,
       { scheduleId: schedule.id, tenantId: schedule.tenant_id },
     );
   }
@@ -851,6 +861,10 @@ export class ScheduleEvaluator {
       })
         ? item.scheduleId
         : undefined;
+    if (residentScheduleId && !(await residentOccurrenceDue(this.db, this.redis, item, runId))) {
+      await releaseResidentWake(this.redis, item.tenantId, item.spaceId, runId);
+      return { kind: 'completed' };
+    }
     // The drain is at-least-once: it can die between the XADD and the delete.
     // The claim is what makes a redelivery harmless — the loser learns which run
     // the winner started and retires the occurrence instead of starting another.

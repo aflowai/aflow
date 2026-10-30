@@ -2661,3 +2661,34 @@ it('keeps the stream module documentation before its imports', () => {
   expect(source.startsWith('/**')).toBe(true);
   expect(source.indexOf('import { isFindingsCarrier }')).toBeGreaterThan(source.indexOf('*/'));
 });
+
+describe('model-free board previews', () => {
+  it('waits for work another wake has already claimed', async () => {
+    await stream();
+    await wake({}, 'other-wake');
+    const result = await nextOnPlanBoard(
+      { ...streamContext('due-check'), preview: true },
+      PlanNodeNextInputSchema.parse({}),
+    );
+    expect(result.ok && result.output.decisions).toEqual([]);
+  });
+  it('leaves a blocked node unasked until a model wake claims it', async () => {
+    const { first } = await stream();
+    await write(first.nodeId, { status: 'blocked' });
+    const result = await nextOnPlanBoard(
+      { ...streamContext('due-check'), preview: true },
+      PlanNodeNextInputSchema.parse({}),
+    );
+    expect(result.ok && result.output.decisions[0]?.answer.decision).toBe('ask');
+    expect((await wake({}, 'model-wake')).decisions[0]?.answer.decision).toBe('ask');
+  });
+  it('leaves actionable work and asks for the wake to claim', async () => {
+    await stream();
+    const result = await nextOnPlanBoard(
+      { ...streamContext('due-check'), preview: true },
+      PlanNodeNextInputSchema.parse({}),
+    );
+    expect(result.ok && result.output.decisions.length).toBeGreaterThan(0);
+    expect((await wake({}, 'model-wake')).decisions.length).toBeGreaterThan(0);
+  });
+});

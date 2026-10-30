@@ -10,6 +10,7 @@
  * the schedule hands starts nothing and says so on the schedule.
  */
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import RedisMock from 'ioredis-mock';
 import type { Redis as RedisType } from 'ioredis';
@@ -54,6 +55,21 @@ vi.mock('@aflow/database', async (importOriginal) => {
         throw new actual.VersionNotFoundError(target.agentId, requested);
       }
       return Promise.resolve({ target, definition, version, isPlatform: false });
+    },
+  };
+});
+
+const board = vi.hoisted(() => ({ actionable: true, reads: vi.fn() }));
+vi.mock('@aflow/cybernetic-runtime', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@aflow/cybernetic-runtime')>();
+  return {
+    ...actual,
+    nextOnPlanBoard: async (ctx: unknown) => {
+      board.reads(ctx);
+      return {
+        ok: true,
+        output: { decisions: board.actionable ? [{ answer: { decision: 'continue' } }] : [] },
+      };
     },
   };
 });
@@ -115,12 +131,14 @@ async function fire(
   target: { targetKind: string; targetSystemRole: string | null; targetAgentId: string | null },
   agentVersion: string | null,
   resolvedInput: Record<string, unknown> = { input: 'tend' },
+  event = false,
 ): Promise<Outcome> {
   const ev = evaluator() as unknown as { dispatchOne(row: unknown): Promise<Outcome> };
+  const scheduleId = randomUUID();
   return ev.dispatchOne({
     dispatch: {
       tenantId: TENANT,
-      scheduleId: randomUUID(),
+      scheduleId,
       scheduleName: 'Local PR Shepherd',
       schemaName: 'tenant_test',
       spaceId: SPACE,
@@ -131,7 +149,9 @@ async function fire(
       targetStepExecutionId: null,
       resolvedInput,
       firingCount: 1,
-      idempotencyKey: `schedule-${randomUUID()}`,
+      idempotencyKey: event
+        ? `schedule:${scheduleId}:wake:${randomUUID()}`
+        : `schedule-${randomUUID()}`,
       creatorUserId: CREATOR,
       creatorTenantRole: 'admin',
       creatorSpaceRole: 'editor',
@@ -163,6 +183,8 @@ async function expectSkipped(outcome: Outcome): Promise<void> {
 }
 
 beforeEach(async () => {
+  board.actionable = true;
+  board.reads.mockClear();
   residentTemplate = undefined;
   redis = new RedisMock() as unknown as RedisType;
   await redis.flushall();
@@ -284,3 +306,60 @@ it.each([true, false])(
     } else expect(messages[0]?.['residentScheduleId']).toBeUndefined();
   },
 );
+
+describe('resident due check', () => {
+  const resident = {
+    targetKind: 'platform-role',
+    targetSystemRole: 'cybernetic-helmsman',
+    targetAgentId: null,
+  };
+
+  it('spends no model tokens over a day of wait occurrences, then answers the first event', async () => {
+    residentTemplate = planResidentScheduleInput();
+    board.actionable = false;
+    for (let tick = 0; tick < 96; tick++) await fire(resident, null);
+    expect(await startedVersions()).toEqual([]);
+    expect(board.reads).toHaveBeenCalledTimes(96);
+    expect(board.reads).toHaveBeenLastCalledWith(
+      expect.objectContaining({ preview: true, spaceId: SPACE }),
+    );
+    await redis.set(`plan:resident:pending:${TENANT}:${SPACE}`, '1');
+    await fire(resident, null);
+    expect(await startedVersions()).toEqual(['1']);
+  });
+
+  it('starts a run for a non-wait board decision', async () => {
+    residentTemplate = planResidentScheduleInput();
+    await fire(resident, null);
+    expect(await startedVersions()).toEqual(['1']);
+  });
+});
+
+it('starts an event occurrence while the board waits', async () => {
+  residentTemplate = planResidentScheduleInput();
+  board.actionable = false;
+  await fire(
+    { targetKind: 'platform-role', targetSystemRole: 'cybernetic-helmsman', targetAgentId: null },
+    null,
+    { input: 'wake' },
+    true,
+  );
+  expect(await startedVersions()).toEqual(['1']);
+});
+
+it('never discovers resident candidates by enumerating spaces', () => {
+  for (const file of [
+    '../ScheduleEvaluator.ts',
+    '../residentDueCheck.ts',
+    '../../../../../packages/cybernetic-runtime/src/plan/resident.ts',
+    '../../../../../packages/server-runtime/src/routes/plan.ts',
+    '../../../../../packages/server-runtime/src/services/actionCenter/sources/planAskSource.ts',
+    '../../../../../packages/server-runtime/src/services/actionCenter/sources/planDecisionSource.ts',
+    '../cybernetic/harness/planLinks.ts',
+  ]) {
+    const source = readFileSync(new URL(file, import.meta.url), 'utf8');
+    expect(source).not.toMatch(/listSpaces|space_list|\.from\(spaces\)|redis\.(?:scan|keys)\(/);
+    const spaceReads = source.match(/FROM[^;\n]*\.spaces[^;\n]*/g) ?? [];
+    for (const read of spaceReads) expect(read).toMatch(/WHERE id =/);
+  }
+});

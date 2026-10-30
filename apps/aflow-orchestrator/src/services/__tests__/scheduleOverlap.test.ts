@@ -12,6 +12,8 @@ import type postgres from 'postgres';
 import { planResidentScheduleInput } from '@aflow/schemas';
 
 const sessions = vi.hoisted(() => new Map<string, { status: string }>());
+const due = vi.hoisted(() => vi.fn(async () => true));
+vi.mock('../residentDueCheck.js', () => ({ residentOccurrenceDue: due }));
 vi.mock('@aflow/redis', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@aflow/redis')>()),
   getSessionState: (_redis: unknown, _tenantId: string, sessionId: string) =>
@@ -102,11 +104,23 @@ async function occur(row: unknown = residentRow()): Promise<boolean> {
 }
 
 beforeEach(async () => {
+  due.mockReset().mockResolvedValue(true);
   redis = new RedisMock() as unknown as RedisType;
   await redis.flushall();
   sessions.clear();
   statements = [];
   transactions = 0;
+});
+
+it('keeps idle heartbeats armed without spending the firing cap', async () => {
+  due.mockResolvedValue(false);
+  for (let tick = 0; tick < 96; tick++) expect(await occur()).toBe(false);
+  expect(due).toHaveBeenCalledTimes(96);
+  expect(transactions).toBe(0);
+  expect(await redis.get(residentWakeKey(TENANT, SPACE))).toBeNull();
+  expect(statements.every(({ query }) => !query.includes('RETURNING firing_count'))).toBe(true);
+  due.mockResolvedValue(true);
+  expect(await occur()).toBe(true);
 });
 
 describe('a resident heartbeat while the space’s previous wake is in flight (Plan 331 D1)', () => {

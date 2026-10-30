@@ -115,6 +115,8 @@ export interface PlanStreamContext extends PlanReadContext {
   tenantId: string;
   /** The firing asking: its session. A claim it holds is its own to decide on again. */
   holder: string;
+  /** A system due read must leave work and asks for the model wake to claim. */
+  preview?: boolean;
 }
 
 // ============================================================================
@@ -157,6 +159,10 @@ export function streamClaimKey(
  * at most one of them commissions. The holder that took it may take it again.
  */
 export async function claimStreamState(ctx: PlanStreamContext, key: string): Promise<boolean> {
+  if (ctx.preview) {
+    const holder = await ctx.redis.get(key);
+    return holder === null || holder === ctx.holder;
+  }
   const taken = await ctx.redis.set(key, ctx.holder, 'PX', PLAN_STREAM_CLAIM_TTL_MS, 'NX');
   if (taken === 'OK') return true;
   return (await ctx.redis.get(key)) === ctx.holder;
@@ -1012,6 +1018,7 @@ export async function nextOnPlanBoard(
       continue;
     }
     if (
+      !ctx.preview &&
       candidate.ask &&
       !(await claimAsk(
         ctx,
