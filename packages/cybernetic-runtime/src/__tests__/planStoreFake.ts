@@ -1,3 +1,4 @@
+import { carrierToken } from '../plan/carrier.js';
 import { randomUUID } from 'node:crypto';
 import {
   PLAN_NODE_POSITION_MAX,
@@ -288,6 +289,15 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
       ? 0
       : Math.min(Math.max(...siblings.map((n) => n.position)) + 1, PLAN_NODE_POSITION_MAX);
   }
+
+  latestCarrierAt: PlanNodeStore['latestCarrierAt'] = (spaceId, parentId, nodeId) =>
+    Promise.resolve(
+      this.inSpace(spaceId)
+        .filter((node) => node.parentId === parentId && node.note?.includes(carrierToken(nodeId)))
+        .map((node) => node.createdAt)
+        .sort()
+        .at(-1) ?? null,
+    );
 
   listChildren: PlanNodeStore['listChildren'] = (spaceId, parentId, limit, offset = 0) => {
     const children = this.inSpace(spaceId)

@@ -28,6 +28,7 @@ vi.mock('@aflow/redis', () => ({
 
 const mockCreatePlanNode = vi.fn();
 const mockUpdatePlanNode = vi.fn();
+const mockReadMergedPullRequest = vi.fn();
 const mockGetPlanNode = vi.fn();
 const mockListPlanNodes = vi.fn();
 const mockLinkPlanNode = vi.fn();
@@ -43,6 +44,7 @@ vi.mock('@aflow/cybernetic-runtime', () => ({
   dependPlanNode: (...a: unknown[]) => mockDependPlanNode(...a),
   createPlanNode: (...a: unknown[]) => mockCreatePlanNode(...a),
   updatePlanNode: (...a: unknown[]) => mockUpdatePlanNode(...a),
+  readMergedPullRequest: (...a: unknown[]) => mockReadMergedPullRequest(...a),
   getPlanNode: (...a: unknown[]) => mockGetPlanNode(...a),
   listPlanNodes: (...a: unknown[]) => mockListPlanNodes(...a),
   linkPlanNode: (...a: unknown[]) => mockLinkPlanNode(...a),
@@ -131,6 +133,23 @@ beforeEach(() => {
 });
 
 describe('plan.node.update', () => {
+  it('supplies a platform GitHub reader rather than an agent merge answer', async () => {
+    mockGetSessionState.mockResolvedValueOnce({ trigger: 'schedule' });
+    mockReadMergedPullRequest.mockResolvedValueOnce(true);
+    mockUpdatePlanNode.mockImplementationOnce(async (ctx) => {
+      expect(await ctx.readMergedPullRequest(LINK.ref)).toBe(true);
+      return { ok: true, node: NODE };
+    });
+    await handlePlanNodeInline(
+      makeArgs('plan.node.update', {
+        nodeId: NODE_ID,
+        expectedRevision: 2,
+        status: 'done',
+        outcome: 'Met',
+      }),
+    );
+    expect(mockReadMergedPullRequest).toHaveBeenCalledWith({}, TENANT, SPACE, LINK.ref);
+  });
   it.each([
     [{ trigger: 'schedule' }, true],
     [{}, true],
@@ -262,6 +281,7 @@ describe('plan.node.update', () => {
           tenantId: TENANT,
           actorKind: 'agent',
           resident: false,
+          readMergedPullRequest: expect.any(Function),
         },
         { nodeId: NODE_ID, expectedRevision: 2, status },
       );

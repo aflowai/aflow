@@ -778,7 +778,12 @@ describe('plan.node.next — a merge', () => {
     await linkPlanNode(session(), { nodeId: first.nodeId, kind: 'merge', ref: PR });
     expect(
       await updatePlanNode(
-        { ...session(), actorKind: 'agent', resident: true },
+        {
+          ...session(),
+          actorKind: 'agent',
+          resident: true,
+          readMergedPullRequest: async () => true,
+        },
         {
           nodeId: first.nodeId,
           expectedRevision: (await current(first.nodeId)).revision,
@@ -1087,23 +1092,13 @@ describe('resident asking and proposing', () => {
     expect(siblings).not.toHaveBeenCalled();
   });
 
-  it.each(['pageLinks', 'listChildren', 'find'] as const)(
+  it.each(['pageLinks', 'latestCarrierAt'] as const)(
     'keeps a successful close when carrier %s fails',
     async (read) => {
       const root = await created();
       const node = await created({ parentId: root.nodeId });
       await linkPlanNode(session(), { nodeId: node.nodeId, kind: 'finding', ref: 'F1' });
-      const sibling = await created({ parentId: root.nodeId, title: 'Sibling' });
-      const original = store.find.bind(store);
-      if (read === 'find') {
-        vi.spyOn(store, 'find').mockImplementation((spaceId, nodeId) =>
-          nodeId === sibling.nodeId
-            ? Promise.reject(new Error('unavailable'))
-            : original(spaceId, nodeId),
-        );
-      } else {
-        vi.spyOn(store, read).mockRejectedValue(new Error('unavailable'));
-      }
+      vi.spyOn(store, read).mockRejectedValue(new Error('unavailable'));
       expect(await write(node.nodeId, { status: 'done', outcome: 'Met' })).toMatchObject({
         status: 'done',
       });
@@ -1929,6 +1924,145 @@ describe('the open write (Plan 332 D6, Plan 331 D5)', () => {
 });
 
 describe('resident review regressions', () => {
+  it('requires GitHub to attest the linked merge during each scheduled close', async () => {
+    const root = await created();
+    const node = await created({ parentId: root.nodeId });
+    const read = vi.fn<(url: string) => Promise<boolean>>().mockResolvedValue(true);
+    const ctx = {
+      ...session(),
+      actorKind: 'agent' as const,
+      resident: true,
+      readMergedPullRequest: read,
+    };
+    const input = {
+      nodeId: node.nodeId,
+      expectedRevision: node.revision,
+      status: 'done' as const,
+      outcome: 'Met',
+    };
+    expect(await updatePlanNode(ctx, input)).toMatchObject({
+      ok: false,
+      message: expect.stringContaining('linked pull request'),
+    });
+    expect(read).not.toHaveBeenCalled();
+    await linkPlanNode(session(), { nodeId: node.nodeId, kind: 'pull_request', ref: PR });
+    await linkPlanNode(session(), { nodeId: node.nodeId, kind: 'merge', ref: PR });
+    read.mockResolvedValue(false);
+    expect(await updatePlanNode(ctx, input)).toMatchObject({ ok: false });
+    expect(await current(node.nodeId)).toEqual(node);
+    read.mockRejectedValueOnce(new Error('GitHub unavailable'));
+    expect(await updatePlanNode(ctx, input)).toMatchObject({ ok: false });
+    expect(await updatePlanNode({ ...session(), resident: true }, input)).toMatchObject({
+      ok: false,
+    });
+    read.mockResolvedValue(true);
+    expect(await updatePlanNode(ctx, input)).toMatchObject({ ok: true, node: { status: 'done' } });
+    expect(read).toHaveBeenLastCalledWith(PR);
+  });
+
+  it('closes from GitHub without an earlier merge record and preserves concurrent person writes', async () => {
+    const root = await created();
+    const node = await created({ parentId: root.nodeId });
+    await linkPlanNode(session(), { nodeId: node.nodeId, kind: 'pull_request', ref: PR });
+    const input = {
+      nodeId: node.nodeId,
+      expectedRevision: node.revision,
+      status: 'done' as const,
+      outcome: 'Met',
+    };
+    expect(
+      await updatePlanNode(
+        {
+          ...session(),
+          resident: true,
+          readMergedPullRequest: async () => {
+            await write(node.nodeId, { note: 'Person changed this step' });
+            return true;
+          },
+        },
+        input,
+      ),
+    ).toMatchObject({ ok: false, code: 'PLAN_NODE_STALE' });
+    expect(await current(node.nodeId)).toMatchObject({
+      status: 'active',
+      note: 'Person changed this step',
+    });
+    expect(
+      await updatePlanNode(
+        { ...session(), resident: true, readMergedPullRequest: async () => true },
+        {
+          ...input,
+          expectedRevision: (await current(node.nodeId)).revision,
+        },
+      ),
+    ).toMatchObject({ ok: true });
+  });
+
+  it.each(['human', 'agent'] as const)(
+    'preserves %s conversation closes without merge reads',
+    async (actorKind) => {
+      const node = await created();
+      const read = vi.fn<(url: string) => Promise<boolean>>();
+      expect(
+        await updatePlanNode(
+          { ...session(), actorKind, resident: false, readMergedPullRequest: read },
+          {
+            nodeId: node.nodeId,
+            expectedRevision: node.revision,
+            status: 'done',
+            outcome: 'Met',
+          },
+        ),
+      ).toMatchObject({ ok: true });
+      expect(read).not.toHaveBeenCalled();
+    },
+  );
+
+  it('refuses scheduled reparenting and position changes without writing', async () => {
+    const root = await created();
+    const closed = await created();
+    await write(closed.nodeId, { status: 'done', outcome: 'Met' });
+    for (const node of [
+      root,
+      await created({ parentId: root.nodeId }),
+      await created({ proposed: 'Scope' }),
+    ]) {
+      for (const patch of [{ parentId: closed.nodeId }, { parentId: null }, { position: 0 }]) {
+        expect(
+          await updatePlanNode(
+            { ...session(), resident: true },
+            {
+              nodeId: node.nodeId,
+              expectedRevision: node.revision,
+              ...patch,
+            },
+          ),
+        ).toMatchObject({ ok: false, code: 'PLAN_NODE_RESIDENT_SCOPE' });
+        expect(await current(node.nodeId)).toEqual(node);
+      }
+    }
+  });
+
+  it('reads one carrier timestamp without sibling rows or per-sibling finds', async () => {
+    const node = await created();
+    for (let i = 0; i < 105; i++) store.seed(SPACE, { status: 'done' });
+    await linkPlanNode(session(), { nodeId: node.nodeId, kind: 'finding', ref: 'F-bounded' });
+    const siblings = vi.spyOn(store, 'listChildren');
+    const find = vi.spyOn(store, 'find');
+    const timestamp = vi.spyOn(store, 'latestCarrierAt');
+    expect(
+      await updatePlanNode(session(), {
+        nodeId: node.nodeId,
+        expectedRevision: node.revision,
+        status: 'done',
+        outcome: 'Met',
+      }),
+    ).toMatchObject({ ok: true, carrier: { status: 'blocked' } });
+    expect(siblings).not.toHaveBeenCalled();
+    expect(find).toHaveBeenCalledTimes(1);
+    expect(timestamp).toHaveBeenCalledExactlyOnceWith(SPACE, null, node.nodeId);
+  });
+
   it('leaves an over-ceiling completed operator commission with its publishing conversation', async () => {
     const { root, first } = await stream();
     store.nodes.set(first.nodeId, { ...first, spendCents: 500 });

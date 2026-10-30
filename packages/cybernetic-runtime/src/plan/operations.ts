@@ -64,7 +64,7 @@ import {
 } from './board.js';
 import type { PlanNodePatch, PlanNodeStore, PlanPlacementRefusal } from './store.js';
 import type { PlanPlaceAnchor } from './placement.js';
-import { carrierNode, findingsToCarry, PLAN_CARRIER_FINDINGS_LIMIT } from './carrier.js';
+import { carrierNode, PLAN_CARRIER_FINDINGS_LIMIT } from './carrier.js';
 
 /** How far any read of a space's plan walks the tree. */
 export const PLAN_TREE_WALK_BOUNDS: PlanTreeWalkBounds = {
@@ -117,6 +117,7 @@ export interface PlanWriteContext extends PlanReadContext {
    * blocked, and never moves a blocked node on — approving scope is a person's.
    */
   resident?: boolean;
+  readMergedPullRequest?: (url: string) => Promise<boolean>;
 }
 
 function notFound(
@@ -448,26 +449,13 @@ async function readCarrierFindings(
     limit: PLAN_CARRIER_FINDINGS_LIMIT,
   });
   if (page.links.length === 0) return undefined;
-  const carriers: PlanNode[] = [];
-  let offset = 0;
-  for (;;) {
-    const page = await ctx.store.listChildren(
-      ctx.spaceId,
-      closed.parentId,
-      PLAN_NODE_CHILDREN_LIMIT,
-      offset,
-    );
-    const nodes = await Promise.all(
-      page.children.map((sibling) => ctx.store.find(ctx.spaceId, sibling.nodeId)),
-    );
-    carriers.push(...nodes.filter((node): node is PlanNode => node !== null));
-    offset += page.children.length;
-    if (offset >= page.total || page.children.length === 0) break;
-  }
+  const since = await ctx.store.latestCarrierAt(ctx.spaceId, closed.parentId, closed.nodeId);
   const findings: PlanNodeLink[] = [];
   let uncarried = 0;
   for (;;) {
-    const fresh = findingsToCarry(page.links, carriers, closed.nodeId);
+    const fresh = page.links.filter(
+      (link) => since === null || Date.parse(link.createdAt) > Date.parse(since),
+    );
     uncarried += fresh.length;
     findings.push(...fresh.slice(0, PLAN_CARRIER_FINDINGS_LIMIT - findings.length));
     if (page.next === undefined) break;
@@ -527,21 +515,34 @@ async function writePlanNode(
     ctx.resident === true && input.status === 'done'
       ? await ctx.store.newestLink(ctx.spaceId, current.nodeId, 'pull_request')
       : null;
-  const mergedClose =
-    ctx.resident === true &&
-    current.status === 'active' &&
-    input.status === 'done' &&
-    input.outcome !== undefined &&
-    !current.note?.includes(PLAN_NODE_LIVE_CHECK_HEAD) &&
-    !current.note?.split('\n').some(isFindingsCarrier) &&
-    pullRequest !== null &&
-    (await ctx.store.findLink(ctx.spaceId, current.nodeId, 'merge', pullRequest.ref)) !== null;
+  if (ctx.resident === true && input.status === 'done') {
+    let merged = false;
+    try {
+      merged =
+        pullRequest !== null && (await ctx.readMergedPullRequest?.(pullRequest.ref)) === true;
+    } catch {
+      merged = false;
+    }
+    if (!merged)
+      return {
+        ok: false,
+        code: 'PLAN_NODE_RESIDENT_SCOPE',
+        message:
+          'This scheduled close requires a linked pull request GitHub reports merged at close time. Nothing was written. The node stays for a person.',
+        details: { nodeId: current.nodeId },
+      };
+  }
   if (
     ctx.resident === true &&
     (input.title !== undefined ||
       input.goal !== undefined ||
       input.criteria !== undefined ||
-      (input.status !== undefined && isClosedPlanNodeStatus(input.status) && !mergedClose))
+      input.parentId !== undefined ||
+      input.position !== undefined ||
+      input.status === 'dropped' ||
+      (input.status === 'done' &&
+        (current.note?.includes(PLAN_NODE_LIVE_CHECK_HEAD) ||
+          current.note?.split('\n').some(isFindingsCarrier))))
   )
     return residentUnblocks(current);
   if (

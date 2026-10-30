@@ -1,3 +1,4 @@
+import { carrierToken } from './carrier.js';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { and, asc, desc, eq, gt, inArray, isNull, lt, or, sql, type SQL } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
@@ -253,6 +254,8 @@ export interface PlanNodeStore {
     expectedRevision: number,
     anchor: PlanPlaceAnchor,
   ): Promise<PlanNodePlaceWrite>;
+  /** The newest carrier creation time for this node, one scalar rather than sibling rows. */
+  latestCarrierAt(spaceId: string, parentId: string | null, nodeId: string): Promise<string | null>;
   listChildren(
     spaceId: string,
     parentId: string | null,
@@ -914,6 +917,20 @@ export function createPlanNodeStore(db: PostgresJsDatabase, tenantId: string): P
     placeAtRevision: (spaceId, nodeId, expectedRevision, anchor) =>
       retryingDeadlocks(() => placeOnce(spaceId, nodeId, expectedRevision, anchor)),
 
+    latestCarrierAt: (spaceId, parentId, nodeId) =>
+      inTenant(async (tx) => {
+        const [row] = await tx
+          .select({ at: sql<string | null>`max(${planNodes.createdAt})` })
+          .from(planNodes)
+          .where(
+            and(
+              eq(planNodes.spaceId, spaceId),
+              parentId === null ? isNull(planNodes.parentId) : eq(planNodes.parentId, parentId),
+              sql`strpos(${planNodes.note}, ${carrierToken(nodeId)}) > 0`,
+            ),
+          );
+        return row?.at === null || row?.at === undefined ? null : new Date(row.at).toISOString();
+      }),
     listChildren: (spaceId, parentId, limit, offset = 0) =>
       inTenant(async (tx) => {
         const where = and(

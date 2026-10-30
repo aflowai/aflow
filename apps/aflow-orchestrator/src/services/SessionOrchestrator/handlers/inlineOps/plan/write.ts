@@ -16,9 +16,11 @@ import {
   learnOnPlanNode,
   linkPlanNode,
   updatePlanNode,
+  readMergedPullRequest,
   type PlanWriteContext,
 } from '@aflow/cybernetic-runtime';
 import { getSessionState } from '@aflow/redis';
+import { getDatabase } from '@aflow/database';
 import { sessionUser } from '../sessionUser.js';
 import type { InlineHandlerArgs } from '../types.js';
 import { emitStepSuccess } from '../helpers.js';
@@ -63,7 +65,19 @@ export async function handlePlanNodeUpdate(
 ): Promise<void> {
   const input = await parsePlanInput(args, PlanNodeUpdateInputSchema, startTime);
   if (!input) return;
-  const result = await updatePlanNode(await planWriteContext(args), input);
+  const result = await updatePlanNode(
+    {
+      ...(await planWriteContext(args)),
+      readMergedPullRequest: (url) =>
+        readMergedPullRequest(
+          getDatabase(),
+          args.context.tenantId as string,
+          planReadContext(args).spaceId,
+          url,
+        ),
+    },
+    input,
+  );
   if (!result.ok) {
     await emitPlanError(args, result, startTime);
     return;

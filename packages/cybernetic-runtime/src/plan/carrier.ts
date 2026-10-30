@@ -23,7 +23,7 @@ export const PLAN_CARRIER_FINDINGS_LIMIT = 50;
 
 /** The carrier's first line: proposed, and which closed node it carries for. */
 export function carrierHead(closed: Pick<PlanNode, 'nodeId' | 'title'>): string {
-  return `${carrierPrefix(closed.nodeId)} ("${closed.title}"); approve it to have them fixed.`;
+  return `${carrierToken(closed.nodeId)} ("${closed.title}"); approve it to have them fixed.`;
 }
 
 export function isFindingsCarrier(note: string | null | undefined): boolean {
@@ -32,30 +32,8 @@ export function isFindingsCarrier(note: string | null | undefined): boolean {
   );
 }
 
-function carrierPrefix(nodeId: string): string {
+export function carrierToken(nodeId: string): string {
   return `${PLAN_NODE_PROPOSED_HEAD}carries the findings left open when step ${nodeId} closed`;
-}
-
-/** Whether a node, by its stable token anywhere in the note, is a carrier for `nodeId`. */
-export function isCarrierOf(node: Pick<PlanNode, 'note'>, nodeId: string): boolean {
-  return node.note?.includes(carrierPrefix(nodeId)) === true;
-}
-
-/**
- * The findings a node closing now leaves to carry: those linked to it since its
- * newest carrier was proposed, so a node reopened and closed again does not
- * propose the findings it already handed on.
- */
-export function findingsToCarry(
-  findings: readonly PlanNodeLink[],
-  siblings: readonly PlanNode[],
-  closedId: string,
-): PlanNodeLink[] {
-  const carried = siblings
-    .filter((node) => isCarrierOf(node, closedId))
-    .map((node) => Date.parse(node.createdAt));
-  const since = carried.length > 0 ? Math.max(...carried) : Number.NEGATIVE_INFINITY;
-  return findings.filter((link) => Date.parse(link.createdAt) > since);
 }
 
 function findingLine(link: PlanNodeLink): string {
