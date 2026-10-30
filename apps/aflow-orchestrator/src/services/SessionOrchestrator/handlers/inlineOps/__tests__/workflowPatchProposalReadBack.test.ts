@@ -57,6 +57,20 @@ vi.mock('@aflow/cybernetic-runtime', async () => {
     createStagedChangeDocReader: () => ({
       getByPath: async (path: string, spaceId: string) => store.get(key(spaceId, path)) ?? null,
     }),
+    // The conversation store: DELEGATE is a session the conversation RUN_ID delegated to.
+    loadConversationLookup: vi.fn(async () => ({
+      sessions: new Map([
+        [
+          RUN_ID,
+          { sessionId: RUN_ID, parentSessionId: null, title: 'Storm warnings', manualTitle: null },
+        ],
+        [
+          DELEGATE,
+          { sessionId: DELEGATE, parentSessionId: RUN_ID, title: null, manualTitle: null },
+        ],
+      ]),
+      runSessions: new Map(),
+    })),
   };
 });
 
@@ -74,6 +88,7 @@ const TENANT = 'a0000000-0000-0000-0000-000000000001';
 const SPACE = '41be431d-6011-495b-a4f2-6de539a6a0df';
 const OTHER_SPACE = '52cf542e-7122-4a6c-b5e3-7ef640b7b1e0';
 const RUN_ID = '99999999-2222-3333-4444-555555555555';
+const DELEGATE = '77777777-2222-3333-4444-555555555555';
 const SLUG = 'cx-chatbot-invoke-direct';
 const WHY = 'The chatbot answered with the wrong field.';
 
@@ -126,7 +141,7 @@ function args(operation: string, stepType: string, input: unknown, spaceId = SPA
       traceId: 'trace-1',
       spaceId,
       actorContext: {},
-      agentDefinition: { steps: [] },
+      agentDefinition: { steps: [], systemRole: 'cybernetic-helmsman' },
     } as never,
     stepDef: { stepId: 's', stepType, operation, tags: [] } as never,
     stepExecutionId: 'sx-1' as never,
@@ -149,10 +164,22 @@ function lastResult(): { status: string; output?: unknown; error?: Record<string
   return { status: msg.status, output, ...(msg.error ? { error: msg.error } : {}) };
 }
 
-async function patch(operations: unknown[]): Promise<string> {
-  await handleWorkflowCrudInline(
-    args('workflow.manage.patch', 'workflow', { slug: SLUG, operations, why: WHY }),
-  );
+async function patch(
+  operations: unknown[],
+  agent: { runId?: string; customAgentName?: string } = {},
+): Promise<string> {
+  const call = args('workflow.manage.patch', 'workflow', { slug: SLUG, operations, why: WHY });
+  const context = call.context as unknown as Record<string, unknown>;
+  await handleWorkflowCrudInline({
+    ...call,
+    context: {
+      ...context,
+      runId: agent.runId ?? RUN_ID,
+      agentDefinition: agent.customAgentName
+        ? { steps: [], systemRole: null, metadata: { name: agent.customAgentName } }
+        : { steps: [], systemRole: 'cybernetic-helmsman' },
+    } as never,
+  });
   const result = lastResult();
   expect(result.error).toBeUndefined();
   expect(result.status).toBe('SUCCEEDED');
@@ -206,9 +233,33 @@ describe('a proposal a patch returns is readable through proposal.get', () => {
     const proposal = (read.output as { proposal: Record<string, unknown> }).proposal;
     expect(proposal['source']).toBe('agent_patch');
     expect(proposal['coachSessionId']).toBe(RUN_ID);
-    const rationale = (proposal['proposal'] as { rationale: string }).rationale;
-    expect(rationale.split('\n')[0]).toBe(WHY);
-    expect(rationale).not.toContain(RUN_ID);
+    expect(proposal['proposedBy']).toBe('Helmsman');
+    expect((proposal['proposal'] as { rationale: string }).rationale).toBe(WHY);
+  });
+
+  it('records the agent that patched by its own role, not as the Helmsman', async () => {
+    const proposalId = await patch(
+      [{ op: 'replace', path: '/tasks/answer/name', value: 'Answer directly' }],
+      { customAgentName: 'Forecast analyst' },
+    );
+    const proposal = (
+      (await getProposal(proposalId)).output as { proposal: Record<string, unknown> }
+    ).proposal;
+    expect(proposal['proposedBy']).toBe('Forecast analyst');
+  });
+
+  it('returns the reason from a metadata patch, which stages no proposal', async () => {
+    await handleWorkflowCrudInline(
+      args('workflow.manage.patch', 'workflow', {
+        slug: SLUG,
+        why: WHY,
+        operations: [{ op: 'replace', path: '/name', value: 'Coastal answers' }],
+      }),
+    );
+    const result = lastResult();
+    expect(result.status).toBe('SUCCEEDED');
+    expect(result.output).toMatchObject({ why: WHY });
+    expect([...store.keys()].some((k) => k.includes('/coach/'))).toBe(false);
   });
 
   it('reads back the contract derived from edited bindings, not the stale one', async () => {
@@ -368,8 +419,19 @@ describe('the conversation that proposed a patch can withdraw it', () => {
     expect(storedStatus(proposalId)).toMatchObject({
       status: 'withdrawn',
       resolvedBy: 'helmsman',
+      withdrawnBy: 'Helmsman',
       withdrawReason: 'The operator changed the plan.',
     });
+  });
+
+  it('withdraws a proposal a session it delegated to patched, as the card names that conversation', async () => {
+    const proposalId = await patch(
+      [{ op: 'replace', path: '/tasks/answer/name', value: 'Answer directly' }],
+      { runId: DELEGATE },
+    );
+    const result = await withdraw(proposalId, RUN_ID, 'cybernetic-helmsman');
+    expect(result.status).toBe('SUCCEEDED');
+    expect(storedStatus(proposalId)['status']).toBe('withdrawn');
   });
 
   it('refuses a proposal another conversation made, and leaves it proposed', async () => {
@@ -383,12 +445,16 @@ describe('the conversation that proposed a patch can withdraw it', () => {
     expect(storedStatus(proposalId)['status']).toBe('proposed');
   });
 
-  it('leaves the Coach free to withdraw a proposal from a prior review', async () => {
+  it('lets the Coach withdraw a Helmsman patch, and records the Coach as who withdrew it', async () => {
     const proposalId = await patch([
       { op: 'replace', path: '/tasks/answer/name', value: 'Answer directly' },
     ]);
     const result = await withdraw(proposalId, OTHER_CONVERSATION, 'cybernetic-coach');
     expect(result.status).toBe('SUCCEEDED');
-    expect(storedStatus(proposalId)['resolvedBy']).toBe('coach');
+    expect(storedStatus(proposalId)).toMatchObject({
+      resolvedBy: 'coach',
+      proposedBy: 'Helmsman',
+      withdrawnBy: 'Coach',
+    });
   });
 });

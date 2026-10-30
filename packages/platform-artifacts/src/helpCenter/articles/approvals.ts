@@ -122,10 +122,10 @@ On the local edition, the same card asks before the agent acts in a browser prof
     theme: 'approvals',
     question: 'Why do changes from the Coach or the Helmsman need my approval?',
     summary:
-      'Agents propose changes to what a space runs; a person decides. The Coach reviews completed skill runs and proposes improvements, and the Helmsman proposes new skills and integrations it drafts in chat. Each proposal waits in the Workbench, under the heading of whoever proposed it, until you Ratify, Reject or Dismiss it. Its card says who proposed it, the conversation it came from, when, and why. Ratifying applies the whole change or none of it. Rejecting, with a reason, tells the Coach not to keep proposing the same change. The Helmsman asks you before it ratifies anything for you.',
+      'Agents propose changes to what a space runs; a person decides. The Coach reviews completed skill runs and proposes improvements, and the Helmsman proposes new skills and integrations it drafts in chat. Each proposal waits in the Workbench, under its source, until you Ratify, Reject or Dismiss it. Its card lists who created it, its source, the reason, when, and the skill it changes. Ratifying applies the whole change or none of it. Rejecting, with a reason, tells the Coach not to keep proposing the same change. The Helmsman asks you before it ratifies anything for you.',
     body: `## Where
 
-The **Workbench** in **Chat**, opened from the yellow indicator in the page header. A Coach review sits under **Coach**. A change the Helmsman patched in a conversation sits under **Helmsman**. The Helmsman can also show a proposal in the chat itself.
+The **Workbench** in **Chat**, opened from the yellow indicator in the page header. Each proposal sits under a heading that names its source, such as **Coach review** or **Helmsman patch**. The Helmsman can also show a proposal in the chat itself.
 
 ## What gets proposed
 
@@ -138,9 +138,15 @@ A proposal names its kind, for example:
 
 ## Who proposed it, and why
 
-Under its title, a card names its source: **Patched by the Helmsman**, **Composed from a request** or **Proposed by the Coach after a review**. It links the conversation it came from by its title and says when. Then it shows the reason, in the words of whoever proposed it.
+Under its title, a card lists where the proposal came from, one field to a line:
 
-The conversation that proposed a change can withdraw it while it is pending. The card then reads **Withdrawn by its author**. No other conversation can withdraw it.
+- **Created by**: the conversation it came from, linked by its title. Without a title, the agent's role name or its id.
+- **Source**: **Coach review**, **Helmsman patch**, **Composed skill** or **Platform issue**. A patch another agent made names that agent.
+- **Reason**: the reason, in the words of whoever proposed it.
+- **When**: when it was proposed.
+- **Target**: the skill it changes.
+
+While a proposal is pending, the conversation that proposed it can withdraw it. The Coach can withdraw any proposal an agent made, including a Helmsman patch. No other conversation can withdraw it. A withdrawn card adds **Withdrawn by**, naming the agent that withdrew it, and the reason it gave.
 
 ## Acting on a proposal
 

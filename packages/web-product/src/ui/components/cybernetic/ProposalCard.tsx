@@ -273,8 +273,10 @@ export function ProposalCard({
     withdrawReason: detail?.withdrawReason ?? proposal.withdrawReason,
   };
   const spaceSlug = useSpaceFromRoute()?.slug;
-  const origin = describeProposalProvenance({
+  const provenanceLines = describeProposalProvenance({
     provenance: merged.provenance,
+    rationale: merged.rationale,
+    proposedAt: merged.proposedAt,
     status: merged.status,
     withdrawReason: merged.withdrawReason,
   });
@@ -387,7 +389,7 @@ export function ProposalCard({
                 preview not run
               </Badge>
             ) : null}
-            {merged.targetWorkflowSlug && (
+            {merged.targetWorkflowSlug && !merged.provenance?.target && (
               <Text size="xs" variant="muted">
                 {merged.targetWorkflowSlug}
               </Text>
@@ -412,40 +414,25 @@ export function ProposalCard({
             )}
           </Row>
 
-          {/* Who proposed it, from where and when, then the reason as written */}
-          {origin?.byline && (
-            <Row gap="xs" align="center" wrap>
-              <Text size="xs" weight="semibold">
-                {origin.byline}
-              </Text>
-              {origin.conversation && (
-                <Text size="xs" variant="muted">
-                  in{' '}
-                  <a
-                    href={spaceRoute(spaceSlug, origin.conversation.path)}
-                    style={{ color: 'var(--color-accent-default)' }}
-                  >
-                    {origin.conversation.title}
-                  </a>
+          {/* Provenance: one labelled line per field */}
+          {provenanceLines.length > 0 && (
+            <Column gap="xs">
+              {provenanceLines.map((entry) => (
+                <Text key={entry.label} size="xs" style={{ whiteSpace: 'pre-wrap' }}>
+                  <strong>{entry.label}:</strong>{' '}
+                  {entry.path ? (
+                    <a
+                      href={spaceRoute(spaceSlug, entry.path)}
+                      style={{ color: 'var(--color-accent-default)' }}
+                    >
+                      {entry.text}
+                    </a>
+                  ) : (
+                    entry.text
+                  )}
                 </Text>
-              )}
-              {merged.proposedAt && (
-                <Text size="xs" variant="muted" title={formatTimestampTooltip(merged.proposedAt)}>
-                  · {new Date(merged.proposedAt).toLocaleString()}
-                </Text>
-              )}
-            </Row>
-          )}
-          {merged.rationale && (
-            <Text size="xs" style={{ whiteSpace: 'pre-wrap' }}>
-              {origin?.byline ? <strong>Why: </strong> : null}
-              {merged.rationale}
-            </Text>
-          )}
-          {origin?.withdrawn && (
-            <Text size="xs" variant="muted">
-              {origin.withdrawn}
-            </Text>
+              ))}
+            </Column>
           )}
 
           {/* Ops preview badges */}

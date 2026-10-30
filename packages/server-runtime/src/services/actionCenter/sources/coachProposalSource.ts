@@ -1,7 +1,11 @@
 import { createMemoryDocRepository, createTenantContext } from '@aflow/database';
-import { PROPOSAL_DIRS, tryParseStagedChangeDoc } from '@aflow/cybernetic-runtime';
 import {
-  resolveStagedChangeSource,
+  PROPOSAL_DIRS,
+  provenanceOf,
+  resolveProposalProvenance,
+  tryParseStagedChangeDoc,
+} from '@aflow/cybernetic-runtime';
+import {
   type ActionCenterItemOrigin,
   type ActionCenterRequester,
   type ProposalProvenance,
@@ -9,7 +13,6 @@ import {
   type StagedChangeSource,
 } from '@aflow/schemas';
 import { deriveCoachProposalProjection } from '../../cybernetic/coachProposalProjection.js';
-import { resolveProposalProvenance } from '../../cybernetic/proposalProvenance.js';
 import {
   type ActionCenterResolveOutcome,
   type ActionCenterScope,
@@ -301,21 +304,29 @@ async function mapOne(
   return toActionCenterItem(sc, scope, provenance.get(sc.id));
 }
 
-/** Who asked, by the proposal's source: a Coach review and an agent's patch are told apart. */
-const REQUESTER_BY_SOURCE: Record<StagedChangeSource, Omit<ActionCenterRequester, 'sessionId'>> = {
-  coach: { kind: 'coach', label: 'Coach' },
-  agent_patch: { kind: 'agent', label: 'Helmsman' },
-  compose_skill: { kind: 'workflow', label: 'Skill composer' },
-  bind_capability: { kind: 'workflow', label: 'Capability setup' },
-  operator: { kind: 'system', label: 'Operator' },
+/** Who asked, by the proposal's source. An agent's patch names the agent the record names. */
+const REQUESTER_KIND_BY_SOURCE: Record<StagedChangeSource, ActionCenterRequester['kind']> = {
+  coach: 'coach',
+  agent_patch: 'agent',
+  compose_skill: 'workflow',
+  bind_capability: 'workflow',
+  operator: 'system',
 };
+
+function requesterOf(provenance: ProposalProvenance): ActionCenterRequester {
+  return {
+    kind: REQUESTER_KIND_BY_SOURCE[provenance.source],
+    label: provenance.authorRole ?? provenance.sourceLabel,
+    ...(provenance.conversation ? { sessionId: provenance.conversation.sessionId } : {}),
+  };
+}
 
 function toActionCenterItem(
   sc: StagedChange,
   scope: ActionCenterScope,
-  provenance: ProposalProvenance | undefined,
+  resolved: ProposalProvenance | undefined,
 ): ActionCenterSourceItem | null {
-  const conversation = provenance?.conversation ?? null;
+  const provenance = resolved ?? provenanceOf(sc, null);
   const kind =
     sc.resolutionRoute === 'platform_issue'
       ? ('platform_issue' as const)
@@ -353,18 +364,15 @@ function toActionCenterItem(
         ? sc.proposal.summary.slice(0, 256)
         : kind === 'platform_issue'
           ? 'Platform issue'
-          : 'Coach proposal',
+          : provenance.sourceLabel,
     summary:
       kind === 'platform_issue'
-        ? `Coach flagged a platform-side issue (${sc.kind}). Diagnostic only — dismiss to acknowledge.`
+        ? `A platform-side issue (${sc.kind}). Diagnostic only — dismiss to acknowledge.`
         : `${sc.proposal.summary} (confidence: ${sc.proposal.confidence})`,
-    extension: deriveCoachProposalProjection(sc, conversation),
+    extension: deriveCoachProposalProjection(sc, provenance),
     requestedAt: sc.proposedAt,
     ...(sc.expiresAt ? { expiresAt: sc.expiresAt } : {}),
-    requestedBy: {
-      ...REQUESTER_BY_SOURCE[resolveStagedChangeSource(sc)],
-      ...(conversation ? { sessionId: conversation.sessionId } : {}),
-    },
+    requestedBy: requesterOf(provenance),
     priority: 'normal',
     relatesTo: sc.targetWorkflowSlug
       ? [{ kind: 'workflow' as const, id: sc.targetWorkflowSlug, label: sc.targetWorkflowSlug }]

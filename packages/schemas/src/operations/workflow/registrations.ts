@@ -267,7 +267,7 @@ export function createWorkflowOperationRegistrations(
           'Approving a skill — the operator approves it from the skill page',
         ],
         pitfalls: [
-          'why is the reason the operator reads on the proposal card, beside the change itself. Say what you saw and what the change fixes, for a reader who has not seen this conversation',
+          'why is required on every patch. Say what you saw and what the change fixes. A definition patch shows it to the operator as the proposal\u2019s Reason. A metadata patch applies at once, stages no proposal, and returns it in the result',
           'Patch paths must start with "/" (e.g., "/budget/maxRuns"); a task may be addressed as /tasks/{taskId} or /tasks/{index} — a segment of digits is always an index',
           'Use expectedRevision to guard against concurrent writers',
           'A definition patch this conversation staged can be withdrawn with learner.propose.withdraw while it is still proposed. A proposal another conversation staged is refused',

@@ -22,9 +22,9 @@ import { loadWorkflowContentWithDiagnostic } from '../../services/workflowLoader
 import { EntityDirectivesSchema } from '@aflow/schemas';
 import { appendEntityEvent } from '@aflow/redis';
 import { deriveCoachProposalProjection } from '../../services/cybernetic/coachProposalProjection.js';
-import { resolveProposalProvenance } from '../../services/cybernetic/proposalProvenance.js';
 import {
   PROPOSAL_DIRS,
+  resolveProposalProvenance,
   triggerCoachReview,
   loadRunById,
   getRunStatistics,
@@ -202,10 +202,7 @@ export const proposalRoutes: FastifyPluginAsync = async (fastify) => {
       const provenance = await resolveProposalProvenance(db, tenant.tenantId, spaceId, matching);
       const proposals: Array<z.infer<typeof ProposalSummarySchema>> = [];
       for (const sc of matching) {
-        const projection = deriveCoachProposalProjection(
-          sc,
-          provenance.get(sc.id)?.conversation ?? null,
-        );
+        const projection = deriveCoachProposalProjection(sc, provenance.get(sc.id));
         proposals.push({
           id: sc.id,
           kind: projection.proposalKind,

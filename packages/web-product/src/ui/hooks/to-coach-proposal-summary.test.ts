@@ -6,7 +6,15 @@ const BASE_COACH_EXTENSION: CoachProposalExtension = {
   kind: 'coach_proposal',
   proposalKind: 'workflow_refinement',
   proposalSummary: 'tighten the goal on task-a',
-  provenance: { source: 'coach', conversation: null },
+  provenance: {
+    source: 'coach',
+    sourceLabel: 'Coach review',
+    conversation: null,
+    authorRole: 'Coach',
+    authorId: null,
+    target: { slug: 'my-skill', name: null },
+    withdrawnBy: null,
+  },
   rationale: 'observed N runs miss the eval target',
   confidence: 'medium',
   opCount: 1,
@@ -196,7 +204,12 @@ describe('toCoachProposalSummary — Plan 156 §7A.3 Phase B', () => {
   it('carries who proposed it and from which conversation to the card', () => {
     const provenance = {
       source: 'agent_patch' as const,
-      conversation: { sessionId: 'aaaaaaaa-0000-4000-8000-000000000001', title: 'Commissions' },
+      sourceLabel: 'Helmsman patch',
+      conversation: { sessionId: 'aaaaaaaa-0000-4000-8000-000000000001', title: 'Garden watering' },
+      authorRole: 'Helmsman',
+      authorId: 'aaaaaaaa-0000-4000-8000-000000000001',
+      target: { slug: 'garden-watering', name: 'Garden watering' },
+      withdrawnBy: null,
     };
     const out = toCoachProposalSummary(acItem({ extension: coachExt({ provenance }) }));
     expect(out.provenance).toEqual(provenance);

@@ -52,10 +52,10 @@ export const StagedChangeStatusSchema = z.enum([
   'dismissed',
   //             neutral signal, NO fingerprint suppression (Coach must keep
   //             surfacing the diagnostic until platform code is patched)
-  'withdrawn', // Coach retracted its OWN still-proposed change (an
-  //             approximation superseded by a platform_issue must
-  //             not stand and confuse the operator). Neutral signal, NO
-  //             fingerprint suppression — the Coach may re-propose properly.
+  'withdrawn', // An agent retracted a still-proposed change: the Coach any
+  //             non-operator proposal, another agent one its own conversation
+  //             made. Neutral signal, NO fingerprint suppression — the
+  //             change may be re-proposed properly.
   'expired', // TTL elapsed without action
 ]);
 
@@ -1210,6 +1210,9 @@ export const StagedChangeSchema = z.object({
 
   source: StagedChangeSourceSchema.optional(),
 
+  /** The role name of the agent that proposed it (`agentRoleName`), when an agent wrote it in a conversation. */
+  proposedBy: z.string().min(1).max(120).optional(),
+
   /** Current lifecycle status. */
   status: StagedChangeStatusSchema,
 
@@ -1366,8 +1369,11 @@ export const StagedChangeSchema = z.object({
   /** Who resolved this change: 'coach' (auto), 'helmsman', or operator userId. */
   resolvedBy: z.string().optional(),
 
-  /** Why the Coach withdrew this proposal (status 'withdrawn' only). */
+  /** Why the agent withdrew this proposal (status 'withdrawn' only). */
   withdrawReason: z.string().max(2000).optional(),
+
+  /** The role name of the agent that withdrew it (`agentRoleName`). The Coach may withdraw a proposal it did not write. */
+  withdrawnBy: z.string().min(1).max(120).optional(),
 
   /** When this proposal expires if unresolved (ISO 8601). */
   expiresAt: z.string().datetime(),

@@ -1,3 +1,10 @@
+import { getDatabase } from '@aflow/database';
+import {
+  isProposalOfConversation,
+  loadConversationLookup,
+  proposalAuthorIds,
+} from '@aflow/cybernetic-runtime';
+import { agentRoleName } from '@aflow/schemas';
 import type { LearnerProposeWithdrawInput, StagedChange } from '@aflow/schemas';
 import type { InlineHandlerArgs } from './types.js';
 import { emitStepSuccess, emitStepError } from './helpers.js';
@@ -68,16 +75,16 @@ export async function handleWithdrawProposal(
     await emitStepError(
       args,
       'PROPOSAL_NOT_WITHDRAWABLE',
-      `Staged change ${input.stagedChangeId} is operator-authored (${sc.kind}) — the Coach may only withdraw its own proposals.`,
+      `Staged change ${input.stagedChangeId} is operator-authored (${sc.kind}). No agent may withdraw it.`,
       startTime,
       'validation',
     );
     return;
   }
   // Any other agent is one conversation, not a standing entity: it withdraws
-  // only what that conversation proposed.
+  // only what that conversation proposed, the conversation the card names.
   const byCoach = args.context.agentDefinition.systemRole === 'cybernetic-coach';
-  if (!byCoach && sc.coachSessionId !== args.context.runId) {
+  if (!byCoach && !(await proposedInCallersConversation(args, spaceId, sc))) {
     await emitStepError(
       args,
       'PROPOSAL_NOT_WITHDRAWABLE',
@@ -104,7 +111,7 @@ export async function handleWithdrawProposal(
     return;
   }
 
-  const withdrawnBy = byCoach
+  const resolvedBy = byCoach
     ? 'coach'
     : args.context.agentDefinition.systemRole === 'cybernetic-helmsman'
       ? 'helmsman'
@@ -113,8 +120,9 @@ export async function handleWithdrawProposal(
     ...sc,
     status: 'withdrawn',
     resolvedAt: new Date().toISOString(),
-    resolvedBy: withdrawnBy,
+    resolvedBy,
     withdrawReason: input.reason,
+    withdrawnBy: agentRoleName(args.context.agentDefinition),
   };
   await writeCoachJsonDoc(
     docRepo,
@@ -152,4 +160,29 @@ export async function handleWithdrawProposal(
   }
 
   await emitStepSuccess(args, { stagedChangeId: sc.id, status: 'withdrawn' }, startTime);
+}
+
+/**
+ * Whether the caller's session belongs to the conversation the proposal came
+ * from. A delegated session counts as its top conversation, as on the card.
+ * When the sessions cannot be read, only the recorded session matches.
+ */
+async function proposedInCallersConversation(
+  args: InlineHandlerArgs,
+  spaceId: string,
+  sc: StagedChange,
+): Promise<boolean> {
+  const sessionId = args.context.runId as string;
+  if (sc.coachSessionId === sessionId) return true;
+  try {
+    const lookup = await loadConversationLookup(
+      getDatabase(),
+      args.context.tenantId as string,
+      spaceId,
+      [...proposalAuthorIds(sc), sessionId],
+    );
+    return isProposalOfConversation(sc, sessionId, lookup);
+  } catch {
+    return false;
+  }
 }

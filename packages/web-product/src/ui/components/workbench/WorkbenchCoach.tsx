@@ -17,8 +17,8 @@ import { WorkbenchLink, WorkbenchSection } from './WorkbenchSection.js';
  * light lifecycle status (reviewing / stalled) and a **review queue** of
  * proposals to ratify/reject — rendered `accent`, not `warning`, to read as
  * "review when you can", not "blocking". Hidden when Coach is idle with
- * nothing to review. A proposal an agent patched or a request composed sits
- * under a heading naming its source, never under the Coach.
+ * nothing to review. Every proposal sits under its Source line: a Coach
+ * review here, any other source under a heading of its own.
  */
 export function WorkbenchCoach({
   state,
@@ -30,18 +30,16 @@ export function WorkbenchCoach({
   spaceSlug: string;
 }) {
   const coach = useCoachSurface(spaceId);
-  const proposals = state.lanes.coachProposals.filter(isCoachReview);
-  const otherSources = groupBySource(
-    state.lanes.coachProposals.filter((item) => !isCoachReview(item)),
-    (item) => item.requestedBy.label,
-  );
+  const groups = groupBySource(state.lanes.coachProposals, proposalHeading);
+  const proposals = groups.find((group) => group.heading === COACH_REVIEW)?.items ?? [];
+  const otherSources = groups.filter((group) => group.heading !== COACH_REVIEW);
   const active = coach.lifecycle !== 'idle';
 
   return (
     <>
       {(proposals.length > 0 || active) && (
         <WorkbenchSection
-          title="Coach"
+          title={COACH_REVIEW}
           icon="stethoscope"
           meta={
             proposals.length > 0 ? <Badge variant="accent">{String(proposals.length)}</Badge> : null
@@ -80,11 +78,13 @@ export function WorkbenchCoach({
   );
 }
 
-/** A Coach review stays under the Coach. Any other source gets a section of its own. */
-function isCoachReview(item: ActionCenterItem): boolean {
+const COACH_REVIEW = 'Coach review';
+
+/** The section a proposal sits under: its Source line. */
+function proposalHeading(item: ActionCenterItem): string {
   return item.extension?.kind === 'coach_proposal'
-    ? item.extension.provenance.source === 'coach'
-    : item.requestedBy.kind === 'coach';
+    ? item.extension.provenance.sourceLabel
+    : item.requestedBy.label;
 }
 
 function ProposalItems({

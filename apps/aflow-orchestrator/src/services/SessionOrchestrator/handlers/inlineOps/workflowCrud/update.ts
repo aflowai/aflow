@@ -7,7 +7,7 @@ import type {
   StagedChangeOp,
   SkillManifest,
 } from '@aflow/schemas';
-import { StagedChangeSchema, WorkflowSchema } from '@aflow/schemas';
+import { agentRoleName, StagedChangeSchema, WorkflowSchema } from '@aflow/schemas';
 import { applyJsonPatch, JsonPatchError } from '@aflow/lib';
 import {
   runWorkflowProposalValidations,
@@ -219,6 +219,7 @@ export async function handleWorkflowPatch(
       revision: updated.revision,
       status: updated.status,
       applied: operations.map((op) => ({ op: op.op, path: op.path })),
+      why: input.why.trim(),
     };
     if (activeRunWarning) {
       result['warning'] = activeRunWarning;
@@ -315,8 +316,8 @@ export async function handleWorkflowPatch(
   });
   const validations = runWorkflowProposalValidations(validatedPatched, snapshot, campaign);
 
-  // Active-run advisory — surface to the operator on the proposal card via
-  // rationale text; not load-bearing for the proposal itself.
+  // Active-run advisory for the agent, in the patch result. The proposal's
+  // reason stays the agent's own words.
   let activeRunWarning: string | undefined;
   {
     const activeRuns = await listActiveRuns(db, args.context.tenantId as string, spaceId, {
@@ -354,23 +355,18 @@ export async function handleWorkflowPatch(
   });
 
   const overallSafe = isProposalReadinessSafe(validations);
-  const rationale = [
-    input.why.trim(),
-    ...(activeRunWarning ? [activeRunWarning] : []),
-    ...(!overallSafe
-      ? ['One or more hard checks failed — review the validations block before ratifying.']
-      : []),
-  ].join('\n');
 
   const stagedChange: StagedChange = {
     id: proposalId,
     kind: 'workflow_refinement',
     source: 'agent_patch',
+    proposedBy: agentRoleName(args.context.agentDefinition),
     status: 'proposed',
     targetWorkflowSlug: slug,
     proposal: {
       summary: `Agent-initiated patch (${String(conversion.ops.length)} op(s)) for "${slug}"`,
-      rationale,
+      // The reason as the agent wrote it. The checks show on the card as validations.
+      rationale: input.why.trim(),
       confidence: 'medium',
       ops: conversion.ops,
       validations,
