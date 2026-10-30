@@ -34,5 +34,12 @@
     "tsx": "^4.23.15",
     "typescript": "^5.8.3",
     "vitest": "^4.1.12"
+  },
+  "exports": {
+    "./binding-read": {
+      "ts-source": "./src/bindingRead.ts",
+      "types": "./dist/bindingRead.d.ts",
+      "import": "./dist/bindingRead.js"
+    }
   }
 }

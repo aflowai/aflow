@@ -768,7 +768,9 @@ async function decideRoot(
     );
   }
   if (
-    opened.node.status === 'blocked' &&
+    (opened.node.status === 'blocked' ||
+      ((opened.node.status === 'active' || opened.node.status === 'waiting') &&
+        opened.node.note?.includes(PLAN_NODE_MERGE_WAIT_LINE))) &&
     opened.node.kind !== 'decide' &&
     input.rootNodeId === undefined
   ) {

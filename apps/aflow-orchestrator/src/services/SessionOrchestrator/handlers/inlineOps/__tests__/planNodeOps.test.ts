@@ -137,7 +137,7 @@ describe('plan.node.update', () => {
     mockGetSessionState.mockResolvedValueOnce({ trigger: 'schedule' });
     mockReadMergedPullRequest.mockResolvedValueOnce(true);
     mockUpdatePlanNode.mockImplementationOnce(async (ctx) => {
-      expect(await ctx.readMergedPullRequest(LINK.ref)).toBe(true);
+      expect(await ctx.readMergedPullRequest(LINK.ref, NODE_ID)).toBe(true);
       return { ok: true, node: NODE };
     });
     await handlePlanNodeInline(
@@ -148,19 +148,27 @@ describe('plan.node.update', () => {
         outcome: 'Met',
       }),
     );
-    expect(mockReadMergedPullRequest).toHaveBeenCalledWith({}, TENANT, SPACE, LINK.ref);
+    expect(mockReadMergedPullRequest).toHaveBeenCalledWith(
+      {},
+      TENANT,
+      SPACE,
+      LINK.ref,
+      NODE_ID,
+      expect.objectContaining({ readBinding: expect.any(Function) }),
+    );
   });
   it.each([
     [{ trigger: 'schedule', planResident: true }, true],
-    [{ trigger: 'schedule', planResident: false }, false],
+    [{ trigger: 'schedule', planResident: false }, true],
     [{ trigger: 'schedule' }, true],
     [{}, true],
     [{ planResident: false, trigger: 'webhook', activatedByPerson: true }, false],
-    [{ planResident: false, trigger: 'api', activatedByPerson: false }, false],
-    [{ planResident: false, trigger: 'mcp', activatedByPerson: false }, false],
-    [{ planResident: false, trigger: 'eval' }, false],
+    [{ planResident: false, trigger: 'api', activatedByPerson: false }, true],
+    [{ planResident: false, trigger: 'mcp', activatedByPerson: false }, true],
+    [{ planResident: false, trigger: 'eval' }, true],
     [{ planResident: false, trigger: 'voice', activatedByPerson: false }, false],
     [{ trigger: 'chat', activatedByPerson: false }, false],
+    [{ trigger: 'webhook', activatedByPerson: false }, true],
     [null, true],
   ])(
     'derives authority from immutable provenance and fails closed without it (%j)',
@@ -616,7 +624,7 @@ describe('resident provenance', () => {
   it('restricts scheduled runs and fails closed when provenance is unavailable', async () => {
     for (const [state, resident] of [
       [{ trigger: 'schedule', planResident: true }, true],
-      [{ trigger: 'schedule', planResident: false }, false],
+      [{ trigger: 'schedule', planResident: false }, true],
       [{ trigger: 'schedule' }, true],
       [{ planResident: false, trigger: 'chat' }, false],
       [null, true],

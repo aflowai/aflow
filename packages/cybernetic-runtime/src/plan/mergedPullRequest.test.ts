@@ -1,64 +1,121 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-const { execute, resolve, decrypt } = vi.hoisted(() => ({
+import type { PayloadStore } from '@aflow/payload-store';
+const { execute, resolve, task } = vi.hoisted(() => ({
   execute: vi.fn(),
   resolve: vi.fn(),
-  decrypt: vi.fn(),
+  task: vi.fn(),
 }));
 vi.mock('../repoConnection.js', () => ({ resolveConnectionForRepoCoordinate: resolve }));
+vi.mock('../ledger/queries.js', () => ({ getTaskRow: task }));
 vi.mock('@aflow/database', () => ({
   createTenantContext: vi.fn(),
-  decryptCredentialAsync: decrypt,
   withTenantSchema: (_db: unknown, _tenant: unknown, read: (tx: unknown) => unknown) =>
     read({ execute }),
 }));
 import { readMergedPullRequest } from './mergedPullRequest.js';
 
 const URL = 'https://github.com/aflowai/aflow/pull/160';
+const SHA = 'a'.repeat(40);
+const MERGE = 'b'.repeat(40);
 const db = {} as PostgresJsDatabase;
-afterEach(() => {
-  vi.unstubAllGlobals();
-  vi.clearAllMocks();
+const retrieve = vi.fn();
+const readBinding = vi.fn();
+const deps = { payloadStore: { retrieve } as unknown as PayloadStore, readBinding };
+const read = (url = URL) => readMergedPullRequest(db, 'tenant', 'space', url, 'node', deps);
+beforeEach(() => {
+  vi.resetAllMocks();
+  resolve.mockResolvedValue('github-default');
+  execute.mockResolvedValue([{ run_id: 'publication' }]);
+  task.mockResolvedValue({
+    status: 'succeeded',
+    operationId: 'host.file.patch',
+    outputRef: 'record',
+  });
+  retrieve.mockResolvedValue({ commit: { sha: SHA, branch: 'aflow/work' } });
+  readBinding.mockResolvedValue({
+    merged: true,
+    html_url: URL,
+    merge_commit_sha: MERGE,
+    head: { sha: SHA, ref: 'aflow/work', repo: { full_name: 'aflowai/aflow' } },
+  });
 });
 
 describe('scheduled merge attestation', () => {
-  it.each([
-    [{ merged: true, html_url: URL }, true],
-    [{ merged: false, html_url: URL }, false],
-    [{ merged: true, html_url: URL + '1' }, false],
-    [{ merged: 'true', html_url: URL }, false],
-    [null, false],
-  ])('uses GitHub response %j', async (answer, expected) => {
-    resolve.mockResolvedValue('github-default');
-    execute.mockResolvedValue([{ encrypted: 'sealed' }]);
-    decrypt.mockResolvedValue('token');
-    const request = vi.fn().mockResolvedValue({ ok: true, json: async () => answer });
-    vi.stubGlobal('fetch', request);
-    expect(await readMergedPullRequest(db, 'tenant', 'space', URL)).toBe(expected);
-    expect(request).toHaveBeenCalledWith(
-      'https://api.github.com/repos/aflowai/aflow/pulls/160',
-      expect.objectContaining({ redirect: 'error', cache: 'no-store' }),
-    );
-    expect(resolve).toHaveBeenCalledWith(db, 'tenant', 'space', 'aflowai/aflow');
-  });
-
-  it('does not request arbitrary hosts or use stored merge answers', async () => {
-    const request = vi.fn();
-    vi.stubGlobal('fetch', request);
-    expect(
-      await readMergedPullRequest(db, 'tenant', 'space', URL.replace('github.com', 'example.com')),
-    ).toBe(false);
-    expect(request).not.toHaveBeenCalled();
-    resolve.mockResolvedValue('github-default');
-    execute.mockResolvedValue([{ encrypted: 'sealed' }]);
-    decrypt.mockResolvedValue('token');
-    request.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ merged: true, html_url: URL }),
+  it('reads GitHub through the binding on every close against the node publication record', async () => {
+    expect(await read()).toBe(true);
+    expect(task).toHaveBeenCalledWith(db, 'tenant', 'publication', 'commit');
+    expect(readBinding).toHaveBeenCalledWith('github-default', 'getPullRequest', {
+      owner: 'aflowai',
+      repo: 'aflow',
+      pull_number: '160',
     });
-    request.mockResolvedValueOnce({ ok: false });
-    expect(await readMergedPullRequest(db, 'tenant', 'space', URL)).toBe(true);
-    expect(await readMergedPullRequest(db, 'tenant', 'space', URL)).toBe(false);
-    expect(request).toHaveBeenCalledTimes(2);
+    readBinding.mockResolvedValueOnce({ merged: false, html_url: URL });
+    expect(await read()).toBe(false);
+  });
+  it('accepts canonical owner and repository case', async () => {
+    expect(await read(URL.replace('aflowai/aflow', 'AflowAI/Aflow') + '/')).toBe(true);
+  });
+  it.each([null, { merged: 'true', html_url: URL }, { merged: true, html_url: URL + '1' }])(
+    'refuses a mismatched GitHub answer %j',
+    async (answer) => {
+      readBinding.mockResolvedValue(answer);
+      expect(await read()).toBe(false);
+    },
+  );
+  it('rejects unrelated merged pull requests even with planted links', async () => {
+    readBinding.mockResolvedValueOnce({
+      merged: true,
+      html_url: URL,
+      merge_commit_sha: MERGE,
+      head: { sha: 'c'.repeat(40), ref: 'unrelated', repo: { full_name: 'aflowai/aflow' } },
+    });
+    readBinding.mockResolvedValueOnce({ status: 'diverged' });
+    expect(await read()).toBe(false);
+  });
+  it.each(['ahead', 'identical'])(
+    'accepts a recorded commit reachable from the merge (%s)',
+    async (status) => {
+      readBinding.mockResolvedValueOnce({ merged: true, html_url: URL, merge_commit_sha: MERGE });
+      readBinding.mockResolvedValueOnce({ status });
+      expect(await read()).toBe(true);
+      expect(readBinding).toHaveBeenLastCalledWith('github-default', 'compareCommits', {
+        owner: 'aflowai',
+        repo: 'aflow',
+        base: SHA,
+        head: MERGE,
+      });
+    },
+  );
+  it('accepts a matching branch after squash without trusting another repository', async () => {
+    const answer = {
+      merged: true,
+      html_url: URL,
+      merge_commit_sha: MERGE,
+      head: { sha: 'c'.repeat(40), ref: 'aflow/work', repo: { full_name: 'aflowai/aflow' } },
+    };
+    readBinding.mockResolvedValueOnce(answer);
+    expect(await read()).toBe(true);
+    readBinding.mockResolvedValueOnce({
+      ...answer,
+      head: { ...answer.head, repo: { full_name: 'other/aflow' } },
+    });
+    readBinding.mockResolvedValueOnce({ status: 'diverged' });
+    expect(await read()).toBe(false);
+  });
+  it('refuses absent publication records and arbitrary hosts without a binding call', async () => {
+    expect(await read(URL.replace('github.com', 'example.com'))).toBe(false);
+    execute.mockResolvedValueOnce([]);
+    expect(await read()).toBe(false);
+    expect(readBinding).not.toHaveBeenCalled();
+  });
+  it('refuses an agent task posing as a publication commit', async () => {
+    task.mockResolvedValueOnce({
+      status: 'succeeded',
+      operationId: 'agent.turn',
+      outputRef: 'forged',
+    });
+    expect(await read()).toBe(false);
+    expect(readBinding).not.toHaveBeenCalled();
   });
 });

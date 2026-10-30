@@ -128,8 +128,8 @@ export function createStartRun(bindings: SessionOrchestratorBindings) {
     }
 
     const trigger = existingRun?.trigger ?? params.trigger;
-    const planResident =
-      existingRun?.planResident ?? planResidentSessionMarker(trigger, params.target, parsedInput);
+    const residentScheduleId = existingRun?.planResidentScheduleId ?? params.residentScheduleId;
+    const planResident = planResidentSessionMarker(trigger, params.target, residentScheduleId);
 
     if (parsedInput && agentDef.stateVariables.length > 0) {
       const pipelineResult = processFlowInput(parsedInput, agentDef);
@@ -216,6 +216,9 @@ export function createStartRun(bindings: SessionOrchestratorBindings) {
           activatedByPerson: params.activatedByPerson,
           ...(trigger ? { trigger } : {}),
           planResident,
+          ...(planResident && residentScheduleId
+            ? { planResidentScheduleId: residentScheduleId }
+            : {}),
         },
       );
       manifestService?.trackRun({ runId, tenantId: params.tenantId, status: 'PAUSED' });
@@ -414,6 +417,7 @@ export function createStartRun(bindings: SessionOrchestratorBindings) {
       ...(params.spaceId ? { spaceId: params.spaceId } : {}),
       ...(trigger ? { trigger } : {}),
       planResident,
+      ...(planResident && residentScheduleId ? { planResidentScheduleId: residentScheduleId } : {}),
       activatedByPerson: params.activatedByPerson,
       ...(params.voiceMode ? { voiceMode: true } : {}),
       ...(params.actorContext ? { actorContextJson: JSON.stringify(params.actorContext) } : {}),

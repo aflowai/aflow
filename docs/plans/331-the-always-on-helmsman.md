@@ -191,3 +191,7 @@ A merge link alone never judges criteria. Refused closes retain active status an
 The session creation write records the resident marker from the scheduled Helmsman's schedule input. Missing session provenance retains restricted authority.
 Needs attention retains dismissible carrier failures after approval or drop removes the item. Carrier history spans earlier parents after a person moves the node.
 Recalibrate gating remains unchanged.
+
+### P2 review round 17
+
+Resident closes read GitHub through binding fulfillment and match the node publication’s recorded commit or branch, regardless of the link writer. Canonical URL case differences do not prevent a match, and unrelated merged pull requests still fail. Refused closes raise a wait line and an Action Center item once per revision. The operator can close the step from that item after judging the merge. Session creation records resident provenance from the server-carried schedule identity, never from run input. Unattended sessions retain restricted scope authority without that marker. Person and conversation authority remain unchanged, as does recalibrate gating.

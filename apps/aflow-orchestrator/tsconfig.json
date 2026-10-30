@@ -10,6 +10,7 @@
   "include": ["src/**/*.ts"],
   "exclude": ["src/**/*.test.ts"],
   "references": [
+    { "path": "../aflow-executor-api" },
     { "path": "../../packages/credential-resolver" },
     { "path": "../../packages/cybernetic-hooks" },
     { "path": "../../packages/cybernetic-runtime" },

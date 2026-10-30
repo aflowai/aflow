@@ -233,6 +233,7 @@ export async function pauseForMissingVariables(
       | 'activatedByPerson'
       | 'trigger'
       | 'planResident'
+      | 'planResidentScheduleId'
     >
   >,
 ): Promise<{ runId: SessionId; status: SessionStatus; requestedInputRef: string }> {

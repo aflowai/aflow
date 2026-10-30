@@ -1,3 +1,4 @@
+import { readBindingEndpoint } from '@aflow/aflow-executor-api/binding-read';
 import {
   PlanNodeCreateInputSchema,
   PlanNodeDependInputSchema,
@@ -37,8 +38,9 @@ async function planWriteContext(args: InlineHandlerArgs): Promise<PlanWriteConte
     tenantId: args.context.tenantId as string,
     actorKind: 'agent',
     resident:
-      state?.trigger === undefined ||
-      (state.trigger === 'schedule' && state.planResident !== false),
+      !state ||
+      state.trigger === 'schedule' ||
+      (!['chat', 'voice'].includes(state.trigger ?? '') && state.activatedByPerson !== true),
   };
 }
 
@@ -70,12 +72,33 @@ export async function handlePlanNodeUpdate(
   const result = await updatePlanNode(
     {
       ...(await planWriteContext(args)),
-      readMergedPullRequest: (url) =>
+      readMergedPullRequest: (url, nodeId) =>
         readMergedPullRequest(
           getDatabase(),
           args.context.tenantId as string,
           planReadContext(args).spaceId,
           url,
+          nodeId,
+          {
+            payloadStore: args.payloadStore,
+            readBinding: async (bindingId, endpointId, params) => {
+              const credentialOwnerId = await sessionUser(args);
+              return readBindingEndpoint(
+                {
+                  db: getDatabase(),
+                  redis: args.redis,
+                  payloadStore: args.payloadStore,
+                  tenantId: args.context.tenantId as string,
+                  spaceId: planReadContext(args).spaceId,
+                  runId: args.context.runId as string,
+                  ...(credentialOwnerId ? { credentialOwnerId } : {}),
+                },
+                bindingId,
+                endpointId,
+                params,
+              );
+            },
+          },
         ),
     },
     input,

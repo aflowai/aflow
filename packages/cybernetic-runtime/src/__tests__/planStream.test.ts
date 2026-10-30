@@ -1962,12 +1962,50 @@ describe('resident review regressions', () => {
     });
     read.mockResolvedValue(true);
     expect(await updatePlanNode(ctx, input)).toMatchObject({ ok: true, node: { status: 'done' } });
-    expect(read).toHaveBeenLastCalledWith(PR);
+    expect(read).toHaveBeenLastCalledWith(PR, node.nodeId);
   });
 
-  it('rejects a merged pull request planted by the scheduled writer', async () => {
+  it('closes record_merge with the resident own link and asks once when attestation refuses', async () => {
     const node = await created();
-    const read = vi.fn<(url: string) => Promise<boolean>>().mockResolvedValue(true);
+    const read = vi.fn().mockResolvedValue(false);
+    const wake = {
+      ...session(),
+      actorKind: 'agent' as const,
+      resident: true,
+      readMergedPullRequest: read,
+    };
+    await linkPlanNode(wake, { nodeId: node.nodeId, kind: 'pull_request', ref: PR });
+    const close = () =>
+      updatePlanNode(wake, {
+        nodeId: node.nodeId,
+        expectedRevision: store.nodes.get(node.nodeId)!.revision,
+        status: 'done',
+        outcome: 'The merge meets the criteria.',
+      });
+    expect(await close()).toMatchObject({ ok: false });
+    const waiting = await current(node.nodeId);
+    expect(await listAskedNodes(wake)).toContainEqual(waiting);
+    const record = await redis.get(askedKey(TENANT, SPACE, node.nodeId));
+    expect(await close()).toMatchObject({ ok: false });
+    expect((await current(node.nodeId)).revision).toBe(waiting.revision);
+    expect(await redis.get(askedKey(TENANT, SPACE, node.nodeId))).toBe(record);
+    await write(node.nodeId, { note: waiting.note + '\nOperator context' });
+    const changed = await current(node.nodeId);
+    expect(
+      await nextOnPlanBoard(
+        { ...wake, holder: 'wake-after-person', reads: reads() },
+        PlanNodeNextInputSchema.parse({}),
+      ),
+    ).toMatchObject({ ok: true, output: { decisions: [{ answer: { decision: 'ask' } }] } });
+    expect(await redis.get(askedKey(TENANT, SPACE, node.nodeId))).toBe(String(changed.revision));
+    read.mockResolvedValue(true);
+    expect(await close()).toMatchObject({ ok: true, node: { status: 'done' } });
+    expect(await listAskedNodes(wake)).toEqual([]);
+  });
+
+  it('rejects a merged pull request that does not deliver the node work', async () => {
+    const node = await created();
+    const read = vi.fn<(url: string) => Promise<boolean>>().mockResolvedValue(false);
     const wake = {
       ...session(),
       actorKind: 'agent' as const,
@@ -1983,7 +2021,7 @@ describe('resident review regressions', () => {
         outcome: 'Met',
       }),
     ).toMatchObject({ ok: false });
-    expect(read).not.toHaveBeenCalled();
+    expect(read).toHaveBeenCalledWith(PR, node.nodeId);
     expect(await current(node.nodeId)).toMatchObject({
       status: 'active',
       note: expect.stringContaining('Waiting on you:'),
@@ -2014,7 +2052,8 @@ describe('resident review regressions', () => {
       status: 'active',
       note: expect.stringContaining('Waiting on you:'),
     });
-    expect(await redis.get(askedKey(TENANT, SPACE, first.nodeId))).toBeNull();
+    expect(await redis.get(askedKey(TENANT, SPACE, first.nodeId))).toBe(String(waiting.revision));
+    expect(await listAskedNodes({ ...session(), redis, tenantId: TENANT })).toContainEqual(waiting);
     expect(await fire(root.nodeId, (url) => merged(url, mergedAt))).toMatchObject({
       decision: 'wait',
     });
@@ -2036,7 +2075,9 @@ describe('resident review regressions', () => {
       ),
     ).toMatchObject({ ok: false });
     expect(await current(node.nodeId)).toMatchObject({ status: 'blocked', note: full.note });
-    expect(await redis.get(askedKey(TENANT, SPACE, node.nodeId))).toBeNull();
+    expect(await redis.get(askedKey(TENANT, SPACE, node.nodeId))).toBe(
+      String((await current(node.nodeId)).revision),
+    );
   });
 
   it('does not propose earlier findings again after the closed node moves', async () => {

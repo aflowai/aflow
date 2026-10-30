@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { PLAN_NODE_UPDATE_OPERATION_ID } from '@aflow/schemas';
+import { PLAN_NODE_MERGE_WAIT_LINE, PLAN_NODE_UPDATE_OPERATION_ID } from '@aflow/schemas';
 import {
   createPlanNodeStore,
   createResidentScheduleStore,
@@ -25,9 +25,12 @@ export function planAskItem(node: PlanNode): ActionCenterSourceItem {
     spaceId: node.spaceId,
     kind: 'human_approval',
     origin: { type: 'plan_ask', nodeId: node.nodeId, revision: node.revision },
-    title: `Blocked: ${node.title}`.slice(0, 256),
+    title: `${node.status !== 'blocked' ? 'Judge merge' : 'Blocked'}: ${node.title}`.slice(0, 256),
     summary: planAsk(node).waitsOn.slice(0, 2_000),
-    uiHints: { approveLabel: 'Approve', rejectLabel: 'Drop' },
+    uiHints: {
+      approveLabel: node.status !== 'blocked' ? 'Close done' : 'Approve',
+      rejectLabel: 'Drop',
+    },
     requestedAt: node.updatedAt,
     requestedBy: { kind: 'agent', label: 'Helmsman · plan' },
     priority: 'high',
@@ -73,9 +76,18 @@ export function createPlanAskSource(deps: ActionCenterSourceDeps): ActionCenterS
       }
       const write = { ...context(ctx), createdBy: ctx.actorUserId, actorKind: 'human' as const };
       const input = { nodeId: observed.nodeId, expectedRevision: observed.revision };
+      const node = await findAskedNode(context(ctx), observed.nodeId);
+      const closesMerge =
+        node?.status !== 'blocked' && node?.note?.includes(PLAN_NODE_MERGE_WAIT_LINE) === true;
       const result =
         resolution.kind === 'approve'
-          ? await openPlanNode(write, input)
+          ? closesMerge
+            ? await updatePlanNode(write, {
+                ...input,
+                status: 'done',
+                outcome: 'The operator judged the merge and closed the node.',
+              })
+            : await openPlanNode(write, input)
           : await updatePlanNode(write, {
               ...input,
               status: 'dropped',

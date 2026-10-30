@@ -126,6 +126,8 @@ export const SessionHotStateSchema = z.object({
   // How this session was triggered (immutable after creation)
   trigger: RunTriggerSchema.optional(),
   planResident: z.boolean().optional(),
+  /** Resident provenance survives resume independently of caller-authored config. */
+  planResidentScheduleId: z.string().uuid().optional(),
   /**
    * Whether this session is attended as of its latest activation. When a run
    * sets another run going — delegating to it, starting it as a workflow task,

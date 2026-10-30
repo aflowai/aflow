@@ -50,6 +50,7 @@ import {
   type PlanOverviewOutput,
 } from '@aflow/schemas';
 import { isFindingsCarrier } from './carrier.js';
+import { askedRevision, claimAsk, isAsked } from './asks.js';
 import { logCyberneticError } from '../logger.js';
 import { publishActionCenterWake } from '@aflow/redis';
 import { bumpAttentionGeneration } from '../attentionCache.js';
@@ -118,7 +119,7 @@ export interface PlanWriteContext extends PlanReadContext {
    * blocked, and never moves a blocked node on — approving scope is a person's.
    */
   resident?: boolean;
-  readMergedPullRequest?: (url: string) => Promise<boolean>;
+  readMergedPullRequest?: (url: string, nodeId: string) => Promise<boolean>;
 }
 
 function notFound(
@@ -547,29 +548,33 @@ async function writePlanNode(
     let merged = false;
     try {
       merged =
-        pullRequest?.trustedForClose === true &&
-        (await ctx.readMergedPullRequest?.(pullRequest.ref)) === true;
+        pullRequest !== null &&
+        (await ctx.readMergedPullRequest?.(pullRequest.ref, current.nodeId)) === true;
     } catch {
       merged = false;
     }
     if (!merged) {
+      let waiting = current;
       const line = PLAN_NODE_MERGE_WAIT_LINE;
       const note = current.note ? `${current.note}\n${line}` : line;
       if (!current.note?.includes(line)) {
-        const waiting = await ctx.store.updateAtRevision(
+        const updated = await ctx.store.updateAtRevision(
           ctx.spaceId,
           current.nodeId,
           current.revision,
           note.length <= PLAN_NODE_PROSE_MAX_CHARS ? { note } : { status: 'blocked' },
         );
-        if (!waiting) return stale(current, input);
+        if (!updated) return stale(current, input);
+        waiting = updated;
         await nodeWritten(ctx, { node: waiting });
       }
+      const record = await askedRevision(ctx, waiting.nodeId);
+      if (!isAsked(waiting, record)) await claimAsk(ctx, waiting, record, false);
       return {
         ok: false,
         code: 'PLAN_NODE_RESIDENT_SCOPE',
         message:
-          'This scheduled close requires a linked pull request GitHub reports merged at close time, with a link written by a person or conversation. The node waits on a person.',
+          'This scheduled close requires a linked pull request GitHub reports merged at close time, delivering this node’s recorded work. The node waits on a person.',
         details: { nodeId: current.nodeId },
       };
     }

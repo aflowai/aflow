@@ -278,9 +278,7 @@ async function chatStart(): Promise<void> {
 it.each([true, false])(
   'records the resident marker in session creation and preserves it across resume (%s)',
   async (resident) => {
-    const input = resident
-      ? { config: { scheduleId: '00000000-0000-4000-8000-000000000331' } }
-      : {};
+    const input = { config: { scheduleId: '00000000-0000-4000-8000-000000000331' } };
     await lifecycle.startRun({
       tenantId: TENANT,
       runId: RUN,
@@ -291,17 +289,20 @@ it.each([true, false])(
       idempotencyKey: 'resident-start' as IdempotencyKey,
       spaceId: SPACE,
       trigger: 'schedule',
+      ...(resident ? { residentScheduleId: '00000000-0000-4000-8000-000000000331' } : {}),
       activatedByPerson: false,
     });
     expect(await getSessionState(redis, TENANT, RUN)).toMatchObject({
       trigger: 'schedule',
       planResident: resident,
+      ...(resident ? { planResidentScheduleId: '00000000-0000-4000-8000-000000000331' } : {}),
     });
     const paused = await pauseOnCurrentStep();
     await deliverResume(resumeCommand(paused, true));
     expect(await getSessionState(redis, TENANT, RUN)).toMatchObject({
       trigger: 'schedule',
       planResident: resident,
+      ...(resident ? { planResidentScheduleId: '00000000-0000-4000-8000-000000000331' } : {}),
     });
   },
 );

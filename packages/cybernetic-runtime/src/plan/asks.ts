@@ -15,6 +15,7 @@ import {
   isClosedPlanNodeStatus,
   OPEN_PLAN_NODE_STATUSES,
   PLAN_NODE_ASK_HEAD,
+  PLAN_NODE_MERGE_WAIT_LINE,
   PLAN_NODE_PROSE_MAX_CHARS,
   PLAN_TREE_DEPTH_LIMIT,
   planNoteWaitLine,
@@ -117,10 +118,16 @@ export async function claimAsk(
   return true;
 }
 
-function askable(node: PlanNode | null, record: string | null): node is PlanNode {
+function waitsOnPerson(node: Pick<PlanNode, 'status' | 'note'>): boolean {
   return (
-    node !== null && node.status === 'blocked' && node.kind !== 'decide' && isAsked(node, record)
+    node.status === 'blocked' ||
+    ((node.status === 'active' || node.status === 'waiting') &&
+      node.note?.includes(PLAN_NODE_MERGE_WAIT_LINE) === true)
   );
+}
+
+function askable(node: PlanNode | null, record: string | null): node is PlanNode {
+  return node !== null && waitsOnPerson(node) && node.kind !== 'decide' && isAsked(node, record);
 }
 
 /**
@@ -135,7 +142,7 @@ export async function listAskedNodes(ctx: PlanAskContext): Promise<PlanNode[]> {
   });
   const blocked = orderPlanTree(walk.nodes)
     .map((placed) => placed.node)
-    .filter((node) => node.status === 'blocked' && node.kind !== 'decide');
+    .filter((node) => !isClosedPlanNodeStatus(node.status) && node.kind !== 'decide');
   if (blocked.length === 0) return [];
   const records = await ctx.redis.mget(
     ...blocked.map((node) => askedKey(ctx.tenantId, ctx.spaceId, node.nodeId)),

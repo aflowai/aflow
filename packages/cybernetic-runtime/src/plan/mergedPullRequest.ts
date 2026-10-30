@@ -1,56 +1,89 @@
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { sql } from 'drizzle-orm';
-import { createTenantContext, decryptCredentialAsync, withTenantSchema } from '@aflow/database';
-import type { TenantId } from '@aflow/schemas';
+import { createTenantContext, withTenantSchema } from '@aflow/database';
+import { PLAN_STREAM_PUBLICATION_SLUG, type TenantId } from '@aflow/schemas';
+import type { PayloadStore } from '@aflow/payload-store';
 import { resolveConnectionForRepoCoordinate } from '../repoConnection.js';
+import { getTaskRow } from '../ledger/queries.js';
 
-/** Each close asks GitHub anew. Stored links and earlier answers confer no authority. */
+type BindingRead = (
+  bindingId: string,
+  endpointId: string,
+  params: Record<string, string>,
+) => Promise<unknown>;
+
+function record(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : null;
+}
+
+/** Each close reads both the node's publication record and GitHub anew. */
 export async function readMergedPullRequest(
   db: PostgresJsDatabase,
   tenantId: string,
   spaceId: string,
   url: string,
+  nodeId: string,
+  deps: { payloadStore: PayloadStore; readBinding: BindingRead },
 ): Promise<boolean> {
-  const match = /^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/([1-9]\d*)\/?$/.exec(url);
+  const match = /^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/([1-9]\d*)\/?$/i.exec(url);
   if (!match) return false;
-  const [, owner, repo, number] = match;
+  const owner = match[1]!;
+  const repo = match[2]!;
+  const number = match[3]!;
   const bindingId = await resolveConnectionForRepoCoordinate(
     db,
     tenantId,
     spaceId,
-    `${owner}/${repo}`,
+    `${owner}/${repo}`.toLowerCase(),
   );
-  const sealed = await withTenantSchema(
+  const publication = await withTenantSchema(
     db,
     createTenantContext(tenantId as TenantId),
     async (tx) => {
-      const [row] = await tx.execute<{ encrypted: string }>(sql`
-      SELECT c.encrypted_value AS encrypted
-      FROM api_bindings b JOIN api_credentials c
-        ON c.space_id = b.space_id AND c.credential_key = b.auth_json->>'credentialKey'
-      WHERE b.space_id = ${spaceId}::uuid AND b.binding_id = ${bindingId}
-        AND b.api_id = 'github' AND b.enabled = 1 AND b.auth_json->>'type' = 'bearer'
-      LIMIT 1
+      const [row] = await tx.execute<{ run_id: string }>(sql`
+      SELECT run_id FROM workflow_runs
+      WHERE space_id = ${spaceId}::uuid AND plan_node_id = ${nodeId}::uuid
+        AND workflow_slug = ${PLAN_STREAM_PUBLICATION_SLUG} AND eval_batch_id IS NULL
+      ORDER BY started_at DESC, run_id DESC LIMIT 1
     `);
-      return row?.encrypted;
+      return row;
     },
   );
-  if (!sealed) return false;
-  const token = await decryptCredentialAsync(sealed);
-  const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/pulls/${number}`, {
-    headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
-    redirect: 'error',
-    cache: 'no-store',
-    signal: AbortSignal.timeout(15_000),
-  });
-  if (!response.ok) return false;
-  const answer: unknown = await response.json();
-  return (
-    typeof answer === 'object' &&
-    answer !== null &&
-    'merged' in answer &&
-    answer.merged === true &&
-    'html_url' in answer &&
-    answer.html_url === url.replace(/\/$/, '')
+  if (!publication) return false;
+  const task = await getTaskRow(db, tenantId, publication.run_id, 'commit');
+  if (task?.status !== 'succeeded' || task.operationId !== 'host.file.patch' || !task.outputRef)
+    return false;
+  const output = record(await deps.payloadStore.retrieve(task.outputRef));
+  const merge = record(output?.['commit']);
+  const sha = merge?.['sha'];
+  const branch = merge?.['branch'];
+  if (typeof sha !== 'string' || !/^[0-9a-f]{40}$/i.test(sha)) return false;
+
+  const answer = record(
+    await deps.readBinding(bindingId, 'getPullRequest', { owner, repo, pull_number: number }),
   );
+  if (
+    answer?.['merged'] !== true ||
+    typeof answer['html_url'] !== 'string' ||
+    answer['html_url'].replace(/\/$/, '').toLowerCase() !== url.replace(/\/$/, '').toLowerCase()
+  )
+    return false;
+  const head = record(answer['head']);
+  const headRepo = record(head?.['repo']);
+  const coordinate = `${owner}/${repo}`.toLowerCase();
+  if (
+    head?.['sha'] === sha ||
+    (typeof branch === 'string' &&
+      head?.['ref'] === branch &&
+      typeof headRepo?.['full_name'] === 'string' &&
+      headRepo['full_name'].toLowerCase() === coordinate)
+  )
+    return true;
+  const mergeSha = answer['merge_commit_sha'];
+  if (typeof mergeSha !== 'string' || !/^[0-9a-f]{40}$/i.test(mergeSha)) return false;
+  if (mergeSha.toLowerCase() === sha.toLowerCase()) return true;
+  const comparison = record(
+    await deps.readBinding(bindingId, 'compareCommits', { owner, repo, base: sha, head: mergeSha }),
+  );
+  return comparison?.['status'] === 'ahead' || comparison?.['status'] === 'identical';
 }

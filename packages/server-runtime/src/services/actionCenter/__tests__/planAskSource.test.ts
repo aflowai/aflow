@@ -2,7 +2,11 @@ import { configureLogging } from '@aflow/observability';
 import { beforeEach, expect, it, vi } from 'vitest';
 import Redis from 'ioredis-mock';
 import type { Redis as RedisType } from 'ioredis';
-import { PLAN_NODE_PROSE_MAX_CHARS, PlanNodeNextInputSchema } from '@aflow/schemas';
+import {
+  PLAN_NODE_MERGE_WAIT_LINE,
+  PLAN_NODE_PROSE_MAX_CHARS,
+  PlanNodeNextInputSchema,
+} from '@aflow/schemas';
 import { InMemoryPlanNodeStore } from '../../../../../cybernetic-runtime/src/__tests__/planStoreFake.js';
 
 let store: InMemoryPlanNodeStore;
@@ -13,13 +17,52 @@ vi.mock('@aflow/cybernetic-runtime', async (original) => ({
   requestResidentWake: vi.fn(),
 }));
 
-import { createPlanNode, nextOnPlanBoard, requestResidentWake } from '@aflow/cybernetic-runtime';
+import {
+  createPlanNode,
+  updatePlanNode,
+  nextOnPlanBoard,
+  requestResidentWake,
+} from '@aflow/cybernetic-runtime';
 import type { ActionCenterContext } from '../types.js';
 import { planAskItem, createPlanAskSource } from '../sources/planAskSource.js';
 
 beforeEach(() => {
   configureLogging({ service: 'plan-ask-test', level: 'error', prettyPrint: false });
   store = new InMemoryPlanNodeStore();
+});
+
+it('raises a refused merge close once and lets the person close it from the item', async () => {
+  const redis = new Redis() as unknown as RedisType;
+  const context = { ...scope, redis, store };
+  const created = await createPlanNode(context, {
+    kind: 'execute',
+    title: 'Merge',
+    goal: 'g',
+    criteria: 'c',
+  });
+  if (!created.ok) throw new Error(created.message);
+  const refuse = async () =>
+    updatePlanNode(
+      { ...context, resident: true },
+      {
+        nodeId: created.node.nodeId,
+        expectedRevision: store.nodes.get(created.node.nodeId)!.revision,
+        status: 'done',
+        outcome: 'Met',
+      },
+    );
+  expect(await refuse()).toMatchObject({ ok: false });
+  const source = createPlanAskSource({ redis, db: {} as never, payloadStore: {} as never });
+  const items = await source.listOpen(scope);
+  expect(items).toHaveLength(1);
+  expect(items[0]?.uiHints?.approveLabel).toBe('Close done');
+  expect(await refuse()).toMatchObject({ ok: false });
+  expect(await source.listOpen(scope)).toEqual(items);
+  const item = items[0]!;
+  await source.resolve(actor, item, { kind: 'approve' }, item.origin);
+  expect(store.nodes.get(created.node.nodeId)?.status).toBe('done');
+  expect(await source.listOpen(scope)).toEqual([]);
+  redis.disconnect();
 });
 
 it('produces one plan_ask item through the Action Center source across two wakes', async () => {
@@ -96,6 +139,28 @@ async function fixture(live = false) {
     source: createPlanAskSource({ redis, db: {} as never, payloadStore: {} as never }),
   };
 }
+
+it('approves blocked scope with an old merge wait line without closing it', async () => {
+  const { source, node, redis } = await fixture();
+  const context = { ...scope, redis, store };
+  const current = store.nodes.get(node.nodeId)!;
+  expect(
+    await updatePlanNode(context, {
+      nodeId: node.nodeId,
+      expectedRevision: current.revision,
+      note: PLAN_NODE_MERGE_WAIT_LINE,
+    }),
+  ).toMatchObject({ ok: true });
+  await nextOnPlanBoard(
+    { ...context, holder: 'ask-again', reads: {} as never },
+    PlanNodeNextInputSchema.parse({}),
+  );
+  const item = (await source.listOpen(scope))[0]!;
+  expect(item.uiHints?.approveLabel).toBe('Approve');
+  await source.resolve(actor, item, { kind: 'approve' }, item.origin);
+  expect(store.nodes.get(node.nodeId)?.status).toBe('active');
+  redis.disconnect();
+});
 
 it.each(['approve', 'reject'] as const)(
   'resolves %s with a revision-checked plan write and wakes the resident',
