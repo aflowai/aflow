@@ -12,22 +12,22 @@
  * lane row too. Where the operator is lives in the URL,
  * `?plan=<rootId>&node=<nodeId>` (D8): no plan is the overview, so a reload,
  * back and a link land on the same view and rail. The overview and the board
- * are read again on every plan write and run change (D9). The list and the
- * rail each stand on a raised panel of their own beside the content, never
- * behind a rule (Plan 332 P6).
+ * are read again on every plan write and run change (D9). The page takes the
+ * skill designer's shell: the list as its outline, the overview or board as
+ * its canvas and the rail as its inspector, each a pane on one inset surface.
+ * Below 900px the list is a disclosure and the rail a dialog.
  */
 import { useEffect, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import {
   Badge,
   Button,
+  CollapsibleSide,
   Column,
   Dialog,
   Heading,
   PageContainer,
-  Panel,
   Row,
-  ScrollArea,
   Text,
   useMediaQuery,
 } from '@aflow/design-system';
@@ -45,7 +45,7 @@ import { PlanBoard, type PlanNodePlaceRequest } from '../components/plan/PlanBoa
 import { PLAN_STATE_BADGE, PlanList, PlanRootCloseControl } from '../components/plan/PlanList.js';
 import type { PlanNodeOpenRequest } from '../components/plan/PlanNodeOpenControl.js';
 import { PlanOverview } from '../components/plan/PlanOverview.js';
-import { PlanRail, PlanRailFromDetail, RAIL_WIDTH } from '../components/plan/PlanRail.js';
+import { PlanRail, PlanRailFromDetail } from '../components/plan/PlanRail.js';
 import { HeadingDot, ProgressMeter } from '../components/plan/PlanParts.js';
 import type {
   PlanNodeCloseAnswer,
@@ -173,6 +173,11 @@ export function SpacePlanPage(): React.ReactNode {
   });
   const current: BoardView =
     view.rootId === rootId ? view : { rootId, phaseId: ALL_PHASES, expanded: null };
+  // The Step pane's fold, for the step the URL names: any change of step
+  // unfolds it, while the pane stays mounted and keeps the width dragged.
+  const [stepFold, setStepFold] = useState({ nodeId: nodeParam, folded: false });
+  if (stepFold.nodeId !== nodeParam) setStepFold({ nodeId: nodeParam, folded: false });
+  const stepFolded = stepFold.nodeId === nodeParam && stepFold.folded;
   /** The close form open in the rail, for the step it was opened on. */
   const [choosing, setChoosing] = useState<{
     nodeId: string;
@@ -314,34 +319,23 @@ export function SpacePlanPage(): React.ReactNode {
     />
   );
 
-  /** The main view with the rail beside it, or below 900px over it as a dialog. */
-  const withRail = (main: React.ReactNode, rail: React.ReactNode, dismiss: () => void) => (
-    <>
-      <Row gap="md" align="start">
-        <div style={{ flex: 1, minWidth: 0 }}>{main}</div>
-        {rail !== null && !narrow && (
-          <aside
-            aria-label="Step"
-            style={{
-              width: RAIL_WIDTH,
-              flexShrink: 0,
-              position: 'sticky',
-              top: 0,
-            }}
-          >
-            <Panel variant="subtle" padding="md">
-              <ScrollArea style={{ maxHeight: 'calc(100vh - var(--space-10))' }}>{rail}</ScrollArea>
-            </Panel>
-          </aside>
-        )}
-      </Row>
-      {narrow && (
+  /** The rail for the shell's right pane, where the view on screen opens one. */
+  let inspector = null as React.ReactNode;
+  /** The main view, its rail in the shell's right pane, or below 900px over it as a dialog. */
+  const withRail = (main: React.ReactNode, rail: React.ReactNode, dismiss: () => void) => {
+    if (!narrow) {
+      inspector = rail;
+      return main;
+    }
+    return (
+      <>
+        {main}
         <Dialog open={rail !== null} onClose={dismiss}>
           {rail}
         </Dialog>
-      )}
-    </>
-  );
+      </>
+    );
+  };
 
   const overview = () => {
     const shown = planLaneOf(rows.lanes, nodeParam);
@@ -548,33 +542,118 @@ export function SpacePlanPage(): React.ReactNode {
     );
   })();
 
+  const listNotes = (
+    <>
+      {rowsQuery.error && (
+        <Text
+          size="sm"
+          tone="danger"
+        >{`The plans could not be read: ${rowsQuery.error.message}`}</Text>
+      )}
+      {rows.truncated !== undefined && (
+        <Text size="xs" variant="muted" data-plan-list-truncated>
+          {`First ${String(rows.truncated.value)} plans`}
+        </Text>
+      )}
+    </>
+  );
+
+  if (narrow) {
+    return (
+      <PageContainer maxWidth="none">
+        <Column gap="md">
+          {header}
+          {list}
+          {content}
+          {listNotes}
+        </Column>
+      </PageContainer>
+    );
+  }
+
+  // The skill designer's shell: the plan list as its outline, the overview or
+  // the board as its canvas, the step rail as its inspector, each a pane of
+  // its own on one inset surface.
+  const needsYou = rows.roots.reduce((sum, row) => sum + (row.counts?.needsYou ?? 0), 0);
   return (
-    <PageContainer maxWidth="none">
-      <Column gap="md">
+    <div
+      style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, height: '100%' }}
+    >
+      <Row gap="sm" align="center" wrap style={{ padding: 'var(--space-sm) var(--space-md) 0' }}>
         {header}
-        {narrow ? (
-          <Column gap="md">
-            {list}
+        {listNotes}
+      </Row>
+      <div
+        style={{
+          display: 'flex',
+          flex: 1,
+          minHeight: 0,
+          gap: 'var(--space-sm)',
+          backgroundColor: 'var(--surface-overlay-alpha)',
+          padding: 'var(--space-2-5)',
+          borderRadius: 'var(--radius-lg)',
+          margin: 'var(--space-2)',
+        }}
+      >
+        <CollapsibleSide
+          side="left"
+          defaultWidth={280}
+          minWidth={220}
+          maxWidth={400}
+          icon="list"
+          label="Plans"
+          badge={needsYou}
+        >
+          <Pane>{list}</Pane>
+        </CollapsibleSide>
+        <Pane style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ height: '100%', overflow: 'auto', padding: 'var(--space-lg)' }}>
             {content}
-          </Column>
-        ) : (
-          <Row gap="md" align="start">
-            {list}
-            <div style={{ flex: 1, minWidth: 0 }}>{content}</div>
-          </Row>
+          </div>
+        </Pane>
+        {inspector !== null && (
+          <CollapsibleSide
+            side="right"
+            defaultWidth={372}
+            minWidth={280}
+            maxWidth={560}
+            icon="sliders"
+            label="Step"
+            collapsed={stepFolded}
+            onCollapsedChange={(folded) => {
+              setStepFold({ nodeId: nodeParam, folded });
+            }}
+          >
+            <Pane>
+              <aside
+                aria-label="Step"
+                style={{ height: '100%', overflow: 'auto', padding: 'var(--space-lg)' }}
+              >
+                {inspector}
+              </aside>
+            </Pane>
+          </CollapsibleSide>
         )}
-        {rowsQuery.error && (
-          <Text
-            size="sm"
-            tone="danger"
-          >{`The plans could not be read: ${rowsQuery.error.message}`}</Text>
-        )}
-        {rows.truncated !== undefined && (
-          <Text size="xs" variant="muted" data-plan-list-truncated>
-            {`First ${String(rows.truncated.value)} plans`}
-          </Text>
-        )}
-      </Column>
-    </PageContainer>
+      </div>
+    </div>
+  );
+}
+
+/** One pane of the shell, the surface the skill designer sets each of its panes on. */
+function Pane({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
+  return (
+    <div
+      style={{
+        height: '100%',
+        minHeight: 0,
+        overflow: 'hidden',
+        background: 'var(--surface-overlay-alpha)',
+        borderRadius: 'var(--radius-lg)',
+        boxShadow: 'var(--shadow-xs)',
+        ...style,
+      }}
+    >
+      {children}
+    </div>
   );
 }

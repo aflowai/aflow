@@ -10,8 +10,9 @@
  * without its plan being opened. Up next carries no reorder: ordering steps
  * is the board's (D6). Each lane is headed in its column's colour and holds
  * its rows on one contained surface; a row reads plan, step, where it stands,
- * then age and action, and the selected one is filled and barred in the
- * accent as the plan list's is (Plan 332 P6).
+ * then age and action. A row is barred in its lane's colour, as the skill
+ * designer's issues panel bars an issue, and the selected one is filled
+ * and barred as the plan list's is (Plan 332 P6).
  */
 import { useState } from 'react';
 import Link from 'next/link';
@@ -33,7 +34,16 @@ import {
   type PlanLaneId,
 } from '../../lib/plan-board.js';
 import type { PlanNodeOpener } from './PlanNodeOpenControl.js';
-import { HeadingDot, MetaSep, NextMarker, PullRequestChip } from './PlanParts.js';
+import {
+  GroupLabel,
+  HOVER_TINT,
+  HeadingDot,
+  MetaSep,
+  NextMarker,
+  PullRequestChip,
+  hoverTransition,
+  useHover,
+} from './PlanParts.js';
 
 const linkStyle = { color: 'var(--color-text-link)' } as const;
 
@@ -121,6 +131,7 @@ function ApproveFromRow({ item, onOpen }: { item: PlanLaneItem; onOpen: PlanNode
  */
 function LaneRow({
   lane,
+  color,
   item,
   selected,
   now,
@@ -130,6 +141,8 @@ function LaneRow({
   onOpen,
 }: {
   lane: PlanLaneId;
+  /** The lane's colour, which bars the row as the designer's issues are barred. */
+  color: string;
   item: PlanLaneItem;
   selected: boolean;
   now: Date;
@@ -138,22 +151,64 @@ function LaneRow({
   onDecide: (item: PlanLaneItem) => void;
   onOpen: PlanNodeOpener;
 }) {
+  const { hovered, hoverProps } = useHover();
   return (
     <li
       data-plan-lane-row={item.nodeId}
       {...(selected ? { 'aria-current': 'true' as const } : {})}
-      className="plan-selectable plan-lane-row"
+      {...hoverProps}
+      onClick={() => {
+        onSelect(item);
+      }}
+      style={{
+        display: 'grid',
+        gridTemplateColumns: '72px minmax(0, 1fr) auto',
+        alignItems: 'start',
+        columnGap: 'var(--space-3)',
+        padding: 'var(--space-2) var(--space-2-5)',
+        marginBottom: 'var(--space-1)',
+        ...hoverTransition,
+        background: selected
+          ? 'var(--color-surface-3, var(--color-surface-2))'
+          : hovered
+            ? HOVER_TINT
+            : 'var(--color-surface-0)',
+        border: '1px solid var(--color-border-subtle)',
+        borderLeft: `3px solid ${selected ? 'var(--color-interactive-default)' : color}`,
+        borderRadius: 'var(--radius-sm)',
+        cursor: 'pointer',
+      }}
     >
-      <Text size="xs" variant="mono" className="plan-lane-row__plan" data-plan-lane-plan>
+      <Text
+        size="xs"
+        variant="mono"
+        truncate
+        style={{ paddingTop: 3, color: 'var(--color-text-muted)' }}
+        data-plan-lane-plan
+      >
         {planTag(item.rootTitle)}
       </Text>
-      <div className="plan-lane-row__main">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-1)', minWidth: 0 }}>
+        {/* The row's button for the keyboard; a click anywhere on the row opens the rail. */}
         <button
           type="button"
-          className="plan-lane-row__select"
           aria-pressed={selected}
-          onClick={() => {
+          onClick={(event) => {
+            event.stopPropagation();
             onSelect(item);
+          }}
+          style={{
+            display: 'flex',
+            alignItems: 'baseline',
+            gap: 'var(--space-1)',
+            minWidth: 0,
+            padding: 0,
+            border: 'none',
+            background: 'transparent',
+            color: 'inherit',
+            font: 'inherit',
+            textAlign: 'left',
+            cursor: 'pointer',
           }}
         >
           {item.phaseTitle !== undefined && (
@@ -164,21 +219,36 @@ function LaneRow({
               <MetaSep />
             </>
           )}
-          <Text size="sm" weight={selected ? 'semibold' : 'medium'} className="plan-row__title">
+          <Text size="sm" weight={selected ? 'semibold' : 'medium'}>
             {item.title}
           </Text>
         </button>
-        <div className="plan-row__meta">
+        <div
+          style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 'var(--space-1)' }}
+          onClick={(event) => {
+            event.stopPropagation();
+          }}
+        >
           <RowState lane={lane} item={item} spaceSlug={spaceSlug} />
           {item.pullRequest !== undefined && <PullRequestChip pullRequest={item.pullRequest} />}
         </div>
         {item.noteHead !== undefined && (
-          <Text size="xs" variant="muted" className="plan-lane-row__note" data-plan-lane-note>
+          <Text size="xs" variant="muted" truncate data-plan-lane-note>
             {item.noteHead}
           </Text>
         )}
       </div>
-      <span className="plan-lane-row__actions">
+      <span
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          alignSelf: 'center',
+          gap: 'var(--space-2)',
+        }}
+        onClick={(event) => {
+          event.stopPropagation();
+        }}
+      >
         <Text size="xs" variant="muted" data-plan-lane-age>
           {planAge(item.updatedAt, now)}
         </Text>
@@ -232,23 +302,26 @@ export function PlanOverview({
       {PLAN_LANES.map(({ id, key, label, empty }) => {
         const lane = lanes[key];
         const more = planLaneMore(lane);
-        const color = PLAN_BOARD_COLUMNS.find((column) => column.id === id)?.color;
+        const color =
+          PLAN_BOARD_COLUMNS.find((column) => column.id === id)?.color ??
+          'var(--color-border-emphasis)';
         return (
           <Column key={id} gap="sm" data-plan-lane={id}>
             <Row gap="xs" align="center">
-              {color !== undefined && <HeadingDot color={color} />}
-              <Text size="sm" weight="medium">{`${label} · ${planLaneCount(lane, lanes)}`}</Text>
+              <HeadingDot color={color} />
+              <GroupLabel>{`${label} · ${planLaneCount(lane, lanes)}`}</GroupLabel>
             </Row>
             {lane.items.length === 0 ? (
               <Text size="sm" variant="muted" style={{ paddingLeft: 'var(--space-4)' }}>
                 {lanes.truncated !== undefined ? PLAN_LANE_EMPTY_CUT : empty}
               </Text>
             ) : (
-              <ul className="plan-lane-list" aria-label={label}>
+              <ul style={{ listStyle: 'none', margin: 0, padding: 0 }} aria-label={label}>
                 {lane.items.map((item) => (
                   <LaneRow
                     key={item.nodeId}
                     lane={id}
+                    color={color}
                     item={item}
                     selected={item.nodeId === selectedId}
                     now={now}
