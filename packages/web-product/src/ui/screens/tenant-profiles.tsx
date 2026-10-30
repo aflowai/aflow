@@ -2,8 +2,8 @@
 
 /**
  * Settings → Profiles: the owner's list of the people who share this install
- * (Plan 335 P2, modelled on §4). Add one with a name and an avatar, rename it,
- * change its avatar, or remove it.
+ * (Plan 335 P2, modelled on §4). Rename a profile, change its avatar, or
+ * remove it. Adding one waits for the P3 picker (see `addWouldShutOutBrowsers`).
  *
  * Local edition only, and owner only. The route ships in the local build alone,
  * and the API refuses every other caller, so the checks here only choose what
@@ -95,6 +95,12 @@ export function TenantProfilesPage() {
 
   const list = profiles.data?.profiles ?? [];
 
+  // Plan 335 §4: with two profiles, a browser without a profile session is
+  // refused, and nothing issues one until the P3 picker. This browser could
+  // then reach neither this page nor the removal that ends the state, so the
+  // screen refuses the add that would make a second profile.
+  const addWouldShutOutBrowsers = list.length >= 1;
+
   return (
     <>
       <PageContainer>
@@ -108,6 +114,7 @@ export function TenantProfilesPage() {
               variant="primary"
               size="sm"
               leftIcon={<Icon name="plus" size="sm" />}
+              disabled={addWouldShutOutBrowsers}
               onClick={() => {
                 setAdding(true);
               }}
@@ -115,6 +122,14 @@ export function TenantProfilesPage() {
               Add profile
             </Button>
           </Row>
+          {addWouldShutOutBrowsers && (
+            <Text size="xs" variant="muted">
+              Adding a profile waits for the profile picker. Once a second profile exists, every
+              browser must choose a profile before it opens Aflow, this one included. This version
+              cannot choose one. No browser could open Aflow again, and this page could not remove
+              the profile.
+            </Text>
+          )}
 
           {profiles.error ? (
             <Text size="sm" style={{ color: 'var(--color-status-failed-fg)' }}>
@@ -185,8 +200,7 @@ export function TenantProfilesPage() {
       </PageContainer>
 
       <AddProfileDialog
-        open={adding}
-        isFirstExtraProfile={list.length === 1}
+        open={adding && !addWouldShutOutBrowsers}
         onClose={() => {
           setAdding(false);
         }}
@@ -290,16 +304,7 @@ function ProfileFields({
   );
 }
 
-function AddProfileDialog({
-  open,
-  isFirstExtraProfile,
-  onClose,
-}: {
-  open: boolean;
-  /** The install has one profile now, so this add makes it two. */
-  isFirstExtraProfile: boolean;
-  onClose: () => void;
-}) {
+function AddProfileDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [name, setName] = useState('');
   const [avatar, setAvatar] = useState<LocalProfileAvatar | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -362,13 +367,6 @@ function AddProfileDialog({
           The new profile starts with a space of its own called Personal. It does not see your
           spaces.
         </Text>
-        {isFirstExtraProfile && (
-          <Text size="xs" style={{ color: 'var(--color-status-failed-fg)' }}>
-            Once a second profile exists, a browser must choose a profile before it opens Aflow.
-            This version has no profile picker yet, so this browser stops opening Aflow until the
-            profile is removed with the instance secret.
-          </Text>
-        )}
       </Column>
     </Dialog>
   );

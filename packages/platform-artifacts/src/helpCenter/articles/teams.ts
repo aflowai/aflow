@@ -44,6 +44,37 @@ Aflow Local has no invitations, no People entry and no Members tab. Several peop
     keywords: ['invite', 'members', 'people', 'role', 'viewer', 'editor', 'admin', 'collaborate'],
   },
   {
+    id: 'local-profiles',
+    theme: 'teams',
+    question: 'How do several people share Aflow Local?',
+    summary:
+      'Aflow Local has no invitations and no members. People who share one install each get a profile, which the owner manages under Settings → Profiles. Each profile has its own spaces, conversations and memory, and model keys stored for the whole install are shared. The owner can rename a profile, change its avatar or remove it. Adding a profile waits for the profile picker, because a second profile would stop every browser from opening Aflow until a browser can choose a profile.',
+    body: `**Where:** **Settings** → **Profiles** (the owner only)
+
+## What a profile is
+
+Each person who shares this install has a profile with a name and an avatar. A profile has its own spaces, conversations and memory. Model keys stored for the whole install are shared by every profile.
+
+## Editing a profile
+
+Press **Edit** on a profile, change its **Name** or choose another **Avatar**, and press **Save**.
+
+## Removing a profile
+
+1. Press **Remove** on the profile. The owner's own profile has no **Remove**.
+2. The dialog lists the spaces only that profile is in. They are deleted with everything in them.
+3. Spaces it shares with others pass to you.
+4. Press **Remove profile**. Its sessions end, and this cannot be undone.
+
+## Adding a profile
+
+**Add profile** is off in this version. Once a second profile exists, every browser must choose a profile before it opens Aflow, the owner's included. This version has no profile picker, so no browser could open Aflow again and this page could not remove the profile. **Add profile** turns on when the picker arrives.`,
+    editions: ['community-local'],
+    anchors: { routes: ['settings/profiles'], operations: [] },
+    related: ['local-edition-limits', 'api-keys'],
+    keywords: ['profile', 'profiles', 'share', 'family', 'avatar', 'rename', 'remove', 'people'],
+  },
+  {
     id: 'api-keys',
     theme: 'teams',
     question: 'How do I create an API key to call Aflow from a script or another tool?',

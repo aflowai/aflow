@@ -353,12 +353,12 @@ P2 adds the routes and the screen that make and remove profiles. It adds no tabl
 
 ### Settings → Profiles
 
-- `TenantProfilesPage` lists the profiles with their avatars and offers **Add profile**, **Edit** and **Remove**. Removal shows what the cascade would delete before it asks.
+- `TenantProfilesPage` lists the profiles with their avatars and offers **Edit** and **Remove**. **Add profile** is shown disabled until P3 (below). Removal shows what the cascade would delete before it asks.
 - The tab is gated on the edition and the owner role, never on a surface name. The route ships in the local build only.
 
 ### A gap P3 closes
 
-Nothing issues a profile session until P3's picker. So once a second profile exists, every browser gets 401 `PROFILE_SESSION_REQUIRED`, the owner's included. The add dialog says so before the second profile is made. The bare secret still reaches `DELETE /v1/local-profiles/:userId`, which ends the state. Ship P2 to an operator only with P3.
+Nothing issues a profile session until P3's picker. So once a second profile exists, every browser gets 401 `PROFILE_SESSION_REQUIRED`, the owner's included. A warning in the add dialog cannot make that reversible from the screen. The browser that made the profile is refused on its next request, so **Edit** and **Remove** stop working with it. The screen therefore refuses the add that would make a second profile. **Add profile** stays disabled while the install has a profile, which it always has, and the page says why. The route still adds a profile for a bare-secret caller, and the bare secret still reaches `DELETE /v1/local-profiles/:userId`, which ends the state. P3 lifts the gate in `TenantProfilesPage` when it issues sessions.
 
 ### Tests
 
