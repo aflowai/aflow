@@ -245,7 +245,7 @@ Option B is rejected because it breaks fixed tenancy and forbids sharing. Option
 - A profile boundary against someone with the operator's OS account. The PIN does not claim one.
 - A tenant per profile.
 - A picker on an install with one profile.
-- Per-profile MCP files. `mcp.local.json` stays the owner's. A profile may mint its own key under Settings → API Keys.
+- Per-profile MCP files. `mcp.local.json` stays the owner's. Whether a profile may mint its own key under Settings → API Keys is left open in §8 question 4.
 
 ## 8. Open questions
 
