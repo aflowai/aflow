@@ -243,6 +243,7 @@ function readWorkspaces() {
         name: manifest.name,
         dir,
         build: manifest.scripts?.build,
+        exports: manifest.exports,
         configs,
         declared: Object.keys({
           ...manifest.dependencies,
@@ -411,8 +412,8 @@ await run('migration numbers', 'checking the numbers of added migrations', proce
 // packages it is built against, by its own `build` — which writes inside its
 // own directory, so in the checkout and never in the folder. A dependent about
 // to be tested is built too, since its tests can read its own output as they
-// read any other package's. Only packages are built, as postinstall builds
-// them: an application builds in its deploy pipeline — `web-local`'s fetches
+// read any other package's. Packages and exported application modules are built. Other applications build
+// in their deploy pipeline — `web-local`'s fetches
 // its fonts, which a check's closed egress refuses — so its build is skipped,
 // by name, and its tests run without it.
 const needed = new Set();
@@ -457,7 +458,7 @@ for (const name of [...needed].sort()) place(name);
 
 for (const workspace of ordered) {
   if (workspace.build === undefined) continue;
-  if (!workspace.dir.startsWith('packages/')) {
+  if (!workspace.dir.startsWith('packages/') && workspace.exports === undefined) {
     console.log(`skip build ${workspace.name}: an application builds in its deploy pipeline`);
     continue;
   }

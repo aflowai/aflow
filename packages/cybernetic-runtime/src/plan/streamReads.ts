@@ -270,9 +270,9 @@ export function createPlanStreamReads(
         };
       }),
 
-    pausedItemsServing: (spaceId, nodeIds) =>
+    pausedItemsServing: (spaceId, nodeIds, rootId) =>
       inTenant(async (tx) => {
-        if (nodeIds.length === 0) return 0;
+        if (nodeIds.length === 0 && rootId === undefined) return 0;
         const [row] = await tx
           .select({ total: sql<number>`count(*)::int` })
           .from(attentionItems)
@@ -283,7 +283,16 @@ export function createPlanStreamReads(
               eq(attentionItems.spaceId, spaceId),
               eq(attentionItems.kind, 'workflow_run_paused' satisfies AttentionItemKind),
               isNull(attentionItems.consumedAt),
-              inArray(workflowRuns.planNodeId, [...nodeIds]),
+              rootId === undefined
+                ? inArray(workflowRuns.planNodeId, [...nodeIds])
+                : sql`${workflowRuns.planNodeId} in (
+                    with recursive subtree as (
+                      select id from plan_nodes where space_id = ${spaceId} and id = ${rootId}
+                      union
+                      select child.id from plan_nodes child join subtree parent on child.parent_id = parent.id
+                      where child.space_id = ${spaceId}
+                    ) select id from subtree
+                  )`,
             ),
           );
         return row?.total ?? 0;

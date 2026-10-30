@@ -14,8 +14,10 @@
 import type { Redis } from 'ioredis';
 import {
   isClosedPlanNodeStatus,
+  PLAN_NODE_MERGE_WAIT_LINE,
   OPEN_PLAN_NODE_STATUSES,
   PLAN_NODE_PROSE_MAX_CHARS,
+  PLAN_NODE_PROPOSED_HEAD,
   PLAN_NODE_RUNS_LIMIT,
   PLAN_STREAM_COMMISSION_SLUG,
   PLAN_STREAM_SPEND_CENTS_DEFAULT,
@@ -38,12 +40,14 @@ import {
   type PlanStreamStopCause,
   type PlanStreamWaitCause,
 } from '@aflow/schemas';
+import { isFindingsCarrier } from './carrier.js';
 import {
   getPlanNode,
   PLAN_TREE_WALK_BOUNDS,
   type PlanOpResult,
   type PlanReadContext,
 } from './operations.js';
+import { askedRevision, isAsked, planAsk, claimAsk } from './asks.js';
 import { bySiblingOrder } from './tree.js';
 
 /** How many of a node's own rounds a firing reads, newest first. */
@@ -101,8 +105,8 @@ export interface PlanStreamReads {
   publicationsOf(spaceId: string, commissionRunId: string): Promise<PlanStreamRun[]>;
   /** The spend of the runs serving the node since a person last opened it. */
   spendOf(spaceId: string, nodeId: string): Promise<PlanNodeSpendRead>;
-  /** The space's pending `workflow_run_paused` attention items about runs serving these nodes. */
-  pausedItemsServing(spaceId: string, nodeIds: readonly string[]): Promise<number>;
+  /** Pending pauses serving these nodes, or every descendant when `rootId` is given. */
+  pausedItemsServing(spaceId: string, nodeIds: readonly string[], rootId?: string): Promise<number>;
 }
 
 export interface PlanStreamContext extends PlanReadContext {
@@ -207,7 +211,7 @@ export interface PlanStreamFacts {
   pausedItems: number;
   /** The node's newest `pull_request` link. */
   pullRequestLink?: PlanNodeLink;
-  /** The node holds a `merge` link to its newest pull request: that merge was judged. */
+  /** The node's note records unmet criteria against its newest pull request's merge. */
   mergeJudged: boolean;
   /** GitHub's answer for that pull request, where the caller read it. */
   pullRequest?: PlanStreamPullRequestAnswer;
@@ -587,6 +591,13 @@ export function decideStreamFiring(facts: PlanStreamFacts): PlanStreamAnswer {
     );
   }
 
+  if (node.note?.includes(PLAN_NODE_MERGE_WAIT_LINE)) {
+    return wait(
+      'unknown_state',
+      'A person must judge the merge after the scheduled close was refused.',
+      node,
+    );
+  }
   const link = facts.pullRequestLink;
   let pullRequest: Extract<PlanStreamPullRequestAnswer, { read: 'ok' }> | undefined;
   if (link) {
@@ -631,6 +642,17 @@ export function decideStreamFiring(facts: PlanStreamFacts): PlanStreamAnswer {
             ...(answer.mergeCommitSha ? { mergeCommitSha: answer.mergeCommitSha } : {}),
           },
           noteHead: mergeNoteHead(link.ref, answer.mergeCommitSha),
+          liveCheck: {
+            ...(node.parentId !== null ? { parentId: node.parentId } : {}),
+            kind: 'investigate',
+            title: node.title,
+            goal: node.goal,
+            criteria: node.criteria,
+            liveCheck: {
+              pullRequest: link.ref,
+              ...(answer.mergeCommitSha ? { mergeCommitSha: answer.mergeCommitSha } : {}),
+            },
+          },
           link: {
             nodeId: node.nodeId,
             kind: 'merge',
@@ -700,6 +722,7 @@ type StreamRoot = Pick<PlanNodeSummary, 'nodeId' | 'title' | 'status'>;
 interface RootDecision {
   answer: PlanStreamAnswer;
   claim?: { key: string; node: PlanNode };
+  ask?: { node: PlanNode; record: string | null };
 }
 
 /** Read what one stream's decision turns on, and decide; nothing is claimed here. */
@@ -744,6 +767,28 @@ async function decideRoot(
       ),
     );
   }
+  if (
+    (opened.node.status === 'blocked' ||
+      ((opened.node.status === 'active' || opened.node.status === 'waiting') &&
+        opened.node.note?.includes(PLAN_NODE_MERGE_WAIT_LINE))) &&
+    opened.node.kind !== 'decide' &&
+    input.rootNodeId === undefined
+  ) {
+    const record = await askedRevision(ctx, opened.node.nodeId);
+    if (!isAsked(opened.node, record)) {
+      const ask = planAsk(opened.node);
+      return {
+        ok: true,
+        answer: {
+          decision: 'ask',
+          reason: ask.waitsOn,
+          node: streamNode(opened.node),
+          ...ask,
+        },
+        ask: { node: opened.node, record },
+      };
+    }
+  }
   // Nothing past this line is read for a node no rule would act on.
   if (opened.node.status === 'blocked' || opened.node.kind === 'decide') {
     return decided(
@@ -762,15 +807,31 @@ async function decideRoot(
   // Every status: a run serving a node closed under the active one is still in
   // flight. Where the walk's bounds cut it short, the runs below are unread, and
   // the decision is told so rather than shown fewer runs.
-  const subtree = await ctx.store.walk(ctx.spaceId, {
-    rootId: active.nodeId,
-    ...PLAN_TREE_WALK_BOUNDS,
-  });
+  const subtree: { nodes: PlanNodeSummary[]; truncated?: PlanNodeListTruncation } =
+    active.nodeId === root.nodeId && opened.childrenTotal > 0 && !open.truncated
+      ? await readRootHistory(ctx, root.nodeId)
+      : await ctx.store.walk(ctx.spaceId, {
+          rootId: active.nodeId,
+          ...PLAN_TREE_WALK_BOUNDS,
+        });
   const servedNodeIds = subtree.nodes.map((n) => n.nodeId);
   const [rounds, inFlight, pausedItems, spend] = await Promise.all([
     ctx.reads.roundsOf(ctx.spaceId, active.nodeId, PLAN_STREAM_ROUNDS_LIMIT),
-    ctx.store.listRunsServing(ctx.spaceId, servedNodeIds, PLAN_NODE_RUNS_LIMIT),
-    ctx.reads.pausedItemsServing(ctx.spaceId, servedNodeIds),
+    ctx.store.listRunsServing(
+      ctx.spaceId,
+      servedNodeIds,
+      PLAN_NODE_RUNS_LIMIT,
+      active.nodeId === root.nodeId && opened.childrenTotal > 0 && !open.truncated
+        ? active.nodeId
+        : undefined,
+    ),
+    ctx.reads.pausedItemsServing(
+      ctx.spaceId,
+      servedNodeIds,
+      active.nodeId === root.nodeId && opened.childrenTotal > 0 && !open.truncated
+        ? active.nodeId
+        : undefined,
+    ),
     ctx.reads.spendOf(ctx.spaceId, active.nodeId),
   ]);
   const latest = roundToAnswer(rounds, opened.node.updatedAt);
@@ -792,7 +853,7 @@ async function decideRoot(
     (await ctx.store.newestLink(ctx.spaceId, active.nodeId, 'pull_request')) ?? undefined;
   const mergeJudged =
     pullRequestLink !== undefined &&
-    (await ctx.store.findLink(ctx.spaceId, active.nodeId, 'merge', pullRequestLink.ref)) !== null;
+    opened.node.note?.startsWith(mergeNoteHead(pullRequestLink.ref)) === true;
 
   const answer = decideStreamFiring({
     node: opened.node,
@@ -823,6 +884,15 @@ async function decideRoot(
     };
   }
   if (answer.decision !== 'continue') return decided(answer);
+  if (!answer.retry && active.nodeId === root.nodeId && opened.childrenTotal > 0) {
+    if (open.truncated)
+      return decided(
+        wait('read_failed', 'The root’s open children could not all be read.', opened.node),
+      );
+    return decided(
+      wait('stream_closed', `The children of "${root.title}" are closed.`, opened.node),
+    );
+  }
   return {
     ok: true,
     answer,
@@ -872,6 +942,8 @@ export function boardRank(answer: PlanStreamAnswer): number {
       return 0;
     case 'publish':
       return 1;
+    case 'ask':
+      return 7;
     case 'read_pull_request':
       return 6;
     case 'stop':
@@ -879,8 +951,16 @@ export function boardRank(answer: PlanStreamAnswer): number {
     case 'continue':
       return answer.retry ? 4 : 5;
     case 'wait':
-      return 7;
+      return 8;
   }
+}
+
+async function readRootHistory(ctx: PlanStreamContext, rootId: string) {
+  return ctx.store.walk(ctx.spaceId, {
+    rootId,
+    statuses: ['active', 'blocked', 'waiting', 'dropped'],
+    ...PLAN_TREE_WALK_BOUNDS,
+  });
 }
 
 /**
@@ -901,12 +981,14 @@ export async function nextOnPlanBoard(
   const roots = open.nodes.filter((node) => node.parentId === null).sort(bySiblingOrder);
 
   const candidates: Array<RootDecision & { root: PlanBoardDecision['root']; order: number }> = [];
+  const exhaustedRoots = new Set<string>();
   const waits = new Map<PlanStreamWaitCause, number>();
   const waited = (cause: PlanStreamWaitCause) => waits.set(cause, (waits.get(cause) ?? 0) + 1);
   for (const [order, root] of roots.entries()) {
     const decided = await decideRoot(ctx, root, input);
     if (!decided.ok) return decided;
     if (decided.answer.decision === 'wait') {
+      if (decided.answer.cause === 'stream_closed') exhaustedRoots.add(root.nodeId);
       waited(decided.answer.cause);
       continue;
     }
@@ -929,7 +1011,54 @@ export async function nextOnPlanBoard(
       waited('claimed');
       continue;
     }
+    if (
+      candidate.ask &&
+      !(await claimAsk(
+        ctx,
+        candidate.ask.node,
+        candidate.ask.record,
+        candidate.answer.decision === 'ask' && candidate.answer.update !== undefined,
+      ))
+    ) {
+      waited('claimed');
+      continue;
+    }
     decisions.push({ root: candidate.root, answer: candidate.answer });
+  }
+
+  let proposal: PlanBoardNext['propose'];
+  if (
+    candidates.every((candidate) => candidate.answer.decision === 'ask') &&
+    !open.truncated &&
+    roots[0]
+  ) {
+    for (const candidate of roots) {
+      if (!exhaustedRoots.has(candidate.nodeId)) continue;
+      const root = await ctx.store.find(ctx.spaceId, candidate.nodeId);
+      const history = await readRootHistory(ctx, candidate.nodeId);
+      const declined = history.nodes.some(
+        (node) =>
+          node.status === 'dropped' &&
+          node.noteHead?.startsWith(PLAN_NODE_PROPOSED_HEAD) &&
+          !isFindingsCarrier(node.noteHead),
+      );
+      if (
+        root?.status !== 'active' ||
+        history.truncated !== undefined ||
+        history.nodes.some((node) => node.status === 'blocked' || node.status === 'waiting') ||
+        declined
+      )
+        continue;
+      proposal = {
+        parentId: root.nodeId,
+        reason:
+          'No approved work is actionable; propose at most one next step toward this open root for operator approval.',
+        title: root.title,
+        goal: root.goal,
+        criteria: root.criteria,
+      };
+      break;
+    }
   }
 
   return {
@@ -940,6 +1069,7 @@ export async function nextOnPlanBoard(
       deferred,
       waits: [...waits].map(([cause, count]) => ({ cause, roots: count })),
       roots: roots.length,
+      ...(proposal ? { propose: proposal } : {}),
       ...(open.truncated !== undefined ? { truncated: open.truncated } : {}),
     },
   };

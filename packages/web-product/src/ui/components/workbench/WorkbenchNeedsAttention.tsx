@@ -1,5 +1,6 @@
 'use client';
 
+import { CarrierFailures } from '../actionCenter/CarrierFailures.js';
 import { useMemo } from 'react';
 import { Badge, Column, Row, Text } from '@aflow/design-system';
 import type { ActionCenterItem } from '../../hooks/use-action-center-types.js';
@@ -40,7 +41,7 @@ export function WorkbenchNeedsAttention({
   );
   const personFor = useSpacePeople(spaceId);
 
-  if (items.length === 0) return null;
+  if (items.length === 0 && !state.carrierFailures?.length) return null;
 
   const mine = items.filter((i) => i.audience !== 'someone_else');
   const theirs = items.filter((i) => i.audience === 'someone_else');
@@ -57,6 +58,7 @@ export function WorkbenchNeedsAttention({
       meta={mine.length > 0 ? <Badge variant="warning">{String(mine.length)}</Badge> : null}
     >
       <Column gap="sm">
+        <CarrierFailures state={state} />
         {actionable.map((item) => (
           <ActionCenterItemCard key={item.id} item={item} state={state} />
         ))}

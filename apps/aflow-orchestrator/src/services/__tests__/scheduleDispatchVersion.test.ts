@@ -16,6 +16,7 @@ import type { Redis as RedisType } from 'ioredis';
 import type postgres from 'postgres';
 import {
   AgentDefinitionSchema,
+  planResidentScheduleInput,
   StreamKeys,
   skillStarterAgentDefinition,
   type AgentDefinition,
@@ -83,10 +84,24 @@ const handsScheduleId = {
 
 let redis: RedisType;
 const scheduleErrors: string[] = [];
+let residentTemplate: unknown;
 
 function evaluator() {
   const sqlClient = {
     unsafe: (query: string, params?: unknown[]) => {
+      if (query.includes('SELECT target_kind, target_system_role, input_template')) {
+        return Promise.resolve(
+          residentTemplate
+            ? [
+                {
+                  target_kind: 'platform-role',
+                  target_system_role: 'cybernetic-helmsman',
+                  input_template: residentTemplate,
+                },
+              ]
+            : [],
+        );
+      }
       if (query.includes('SET last_error = $1')) scheduleErrors.push(String(params?.[0]));
       return Promise.resolve([]);
     },
@@ -148,6 +163,7 @@ async function expectSkipped(outcome: Outcome): Promise<void> {
 }
 
 beforeEach(async () => {
+  residentTemplate = undefined;
   redis = new RedisMock() as unknown as RedisType;
   await redis.flushall();
   published.versions = new Map([
@@ -237,3 +253,34 @@ describe('each firing hands only config the version it starts declares', () => {
     expect(scheduleErrors[0]).toContain('version "1", which this schedule pins');
   });
 });
+
+it.each([true, false])(
+  'carries resident identity from the stored schedule, never resolved input (%s)',
+  async (resident) => {
+    residentTemplate = resident ? planResidentScheduleInput() : { input: 'wake' };
+    const outcome = await fire(
+      {
+        targetKind: 'platform-role',
+        targetSystemRole: 'cybernetic-helmsman',
+        targetAgentId: null,
+      },
+      null,
+      { input: 'wake', config: { scheduleId: '5247eee7-0000-4000-8000-000000000001' } },
+    );
+    expect(outcome.kind).toBe('completed');
+    const messages: Record<string, string>[] = [];
+    for (let shard = 0; shard < 128; shard++) {
+      const entries = await redis.xrange(StreamKeys.shardControlStream(shard), '-', '+');
+      for (const [, fields] of entries as Array<[string, string[]]>) {
+        const message: Record<string, string> = {};
+        for (let i = 0; i + 1 < fields.length; i += 2) message[fields[i]!] = fields[i + 1]!;
+        if (message['type'] === 'start_run') messages.push(message);
+      }
+    }
+    expect(messages).toHaveLength(1);
+    if (resident) {
+      expect(messages[0]?.['residentScheduleId']).toMatch(/^[0-9a-f-]{36}$/);
+      expect(messages[0]?.['residentScheduleId']).not.toBe('5247eee7-0000-4000-8000-000000000001');
+    } else expect(messages[0]?.['residentScheduleId']).toBeUndefined();
+  },
+);

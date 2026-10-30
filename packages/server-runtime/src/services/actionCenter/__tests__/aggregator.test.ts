@@ -191,6 +191,7 @@ describe('buildAggregator', () => {
       resolvedAt: '2026-05-21T15:00:00.000Z',
       dispatchedOperationId: 'mock.op',
       reportedOperationId: 'mcp.tool.call',
+      carrierFailure: 'Read the closed node findings.',
     }));
     const agg = buildAggregator({
       db: dbStub as never,
@@ -203,5 +204,6 @@ describe('buildAggregator', () => {
     expect(out.item.resolvedAt).toBe('2026-05-21T15:00:00.000Z');
     expect(out.item.resolution).toEqual({ kind: 'approve', comment: 'lgtm' });
     expect(out.reportedOperationId).toBe('mcp.tool.call');
+    expect(out.carrierFailure).toBe('Read the closed node findings.');
   });
 });

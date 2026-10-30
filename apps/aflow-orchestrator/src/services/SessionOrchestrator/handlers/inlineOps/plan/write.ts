@@ -4,6 +4,7 @@ import {
   PlanNodeLearnInputSchema,
   PlanNodeLinkInputSchema,
   PlanNodeUpdateInputSchema,
+  StepJobMessageSchema,
   type PlanNodeCreateOutput,
   type PlanNodeDependOutput,
   type PlanNodeLearnOutput,
@@ -16,19 +17,27 @@ import {
   learnOnPlanNode,
   linkPlanNode,
   updatePlanNode,
+  restrictedPlanWriteAuthority,
   type PlanWriteContext,
 } from '@aflow/cybernetic-runtime';
+import { getSessionState } from '@aflow/redis';
+import { dispatchOrWaitOnExecutor } from '../../../scheduling/executorWait.js';
 import { sessionUser } from '../sessionUser.js';
 import type { InlineHandlerArgs } from '../types.js';
 import { emitStepSuccess } from '../helpers.js';
 import { emitPlanError, parsePlanInput, planReadContext } from './shared.js';
 
-function planWriteContext(args: InlineHandlerArgs): PlanWriteContext {
+async function planWriteContext(args: InlineHandlerArgs): Promise<PlanWriteContext> {
+  const read = planReadContext(args);
+  const state = await getSessionState(args.redis, args.context.tenantId, args.context.runId).catch(
+    () => null,
+  );
   return {
-    ...planReadContext(args),
+    ...read,
     redis: args.redis,
     tenantId: args.context.tenantId as string,
     actorKind: 'agent',
+    resident: restrictedPlanWriteAuthority(state),
   };
 }
 
@@ -40,7 +49,7 @@ export async function handlePlanNodeCreate(
   if (!input) return;
   const createdBy = await sessionUser(args);
   const result = await createPlanNode(
-    { ...planWriteContext(args), ...(createdBy !== undefined ? { createdBy } : {}) },
+    { ...(await planWriteContext(args)), ...(createdBy !== undefined ? { createdBy } : {}) },
     input,
   );
   if (!result.ok) {
@@ -57,12 +66,42 @@ export async function handlePlanNodeUpdate(
 ): Promise<void> {
   const input = await parsePlanInput(args, PlanNodeUpdateInputSchema, startTime);
   if (!input) return;
-  const result = await updatePlanNode(planWriteContext(args), input);
+  const context = await planWriteContext(args);
+  if (context.resident && input.status === 'done') {
+    const credentialOwnerId = await sessionUser(args);
+    await dispatchOrWaitOnExecutor(
+      args.redis,
+      StepJobMessageSchema.parse({
+        tenantId: args.context.tenantId,
+        ...(args.workflowExecution
+          ? { workflowExecution: args.workflowExecution }
+          : { sessionId: args.context.runId }),
+        spaceId: context.spaceId,
+        stepExecutionId: args.stepExecutionId,
+        parentStepExecutionId: args.parentStepExecutionId,
+        stepId: args.stepDef.stepId,
+        stepType: 'api',
+        operationId: args.stepDef.operation,
+        idempotencyKey: args.idempotencyKey,
+        inputRef: args.resolvedInputRef,
+        traceId: args.context.traceId,
+        attempt: args.attempt,
+        scheduledAtMs: args.scheduledAtMs,
+        credentialOwnerId,
+      }),
+    );
+    return;
+  }
+  const result = await updatePlanNode(context, input);
   if (!result.ok) {
     await emitPlanError(args, result, startTime);
     return;
   }
-  const output: PlanNodeUpdateOutput = { node: result.node };
+  const output: PlanNodeUpdateOutput = {
+    node: result.node,
+    ...(result.carrier ? { carrier: result.carrier } : {}),
+    ...(result.carrierFailure ? { carrierFailure: result.carrierFailure } : {}),
+  };
   await emitStepSuccess(args, output as unknown as Record<string, unknown>, startTime);
 }
 
@@ -72,7 +111,7 @@ export async function handlePlanNodeDepend(
 ): Promise<void> {
   const input = await parsePlanInput(args, PlanNodeDependInputSchema, startTime);
   if (!input) return;
-  const result = await dependPlanNode(planWriteContext(args), input);
+  const result = await dependPlanNode(await planWriteContext(args), input);
   if (!result.ok) {
     await emitPlanError(args, result, startTime);
     return;
@@ -90,7 +129,7 @@ export async function handlePlanNodeLearn(
 ): Promise<void> {
   const input = await parsePlanInput(args, PlanNodeLearnInputSchema, startTime);
   if (!input) return;
-  const result = await learnOnPlanNode(planWriteContext(args), input, {
+  const result = await learnOnPlanNode(await planWriteContext(args), input, {
     sessionId: args.context.runId,
   });
   if (!result.ok) {
@@ -107,7 +146,7 @@ export async function handlePlanNodeLink(
 ): Promise<void> {
   const input = await parsePlanInput(args, PlanNodeLinkInputSchema, startTime);
   if (!input) return;
-  const result = await linkPlanNode(planWriteContext(args), input);
+  const result = await linkPlanNode(await planWriteContext(args), input);
   if (!result.ok) {
     await emitPlanError(args, result, startTime);
     return;
