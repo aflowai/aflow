@@ -57,6 +57,7 @@ the wrong shape, change the plan rather than quietly diverging from it.
 | [333](333-agent-facing-english-is-controlled.md)                            | Agents are told the shape of the English they write             |
 | [334](334-quick-starts-discoverable.md)                                     | A new user finds the quick starts                               |
 | [335](335-local-profiles.md)                                                | Several people share one install as profiles (discovery)        |
+| [336](336-mcp-on-the-private-network.md)                                    | An MCP server on the operator's private network connects        |
 
 ## What a plan is not
 
