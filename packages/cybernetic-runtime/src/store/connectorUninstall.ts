@@ -8,7 +8,16 @@
  */
 import { sql } from 'drizzle-orm';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import {
+  MCP_PRIVATE_NETWORK_AUDIT_ACTIONS,
+  parseMcpPrivateNetworkAcknowledgment,
+  processEditionDescriptor,
+} from '@aflow/schemas';
 import { extractCredentialKeys } from '../stagedChange/apiWriteHelpers.js';
+import {
+  writeMcpPrivateNetworkAudit,
+  type PrivateNetworkAuditActor,
+} from '../mcpPrivateNetwork.js';
 
 export function collectCredentialKeys(authJsons: ReadonlyArray<Record<string, unknown>>): string[] {
   const set = new Set<string>();
@@ -126,10 +135,16 @@ export async function deleteApiIntegration(
   );
 }
 
+/**
+ * `actor` is who deleted the definition. A definition that held a private
+ * network acknowledgment leaves a `cleared` audit row naming them, because
+ * the deletion withdrew that access as surely as clearing it would.
+ */
 export async function deleteMcpIntegration(
   tx: PostgresJsDatabase,
   spaceId: string,
   serverId: string,
+  actor: PrivateNetworkAuditActor,
 ): Promise<void> {
   const doomedBindings = (await tx.execute(sql`
     SELECT auth_json FROM mcp_server_bindings
@@ -157,7 +172,21 @@ export async function deleteMcpIntegration(
     sql`DELETE FROM mcp_server_bindings WHERE server_id = ${serverId} AND space_id = ${spaceId}::uuid`,
   );
   await deleteUnreferencedCredentials(tx, spaceId, candidateKeys);
-  await tx.execute(
-    sql`DELETE FROM mcp_server_definitions WHERE server_id = ${serverId} AND space_id = ${spaceId}::uuid`,
-  );
+  const deleted = (await tx.execute(sql`
+    DELETE FROM mcp_server_definitions WHERE server_id = ${serverId} AND space_id = ${spaceId}::uuid
+    RETURNING private_network_json
+  `)) as unknown as Array<{ private_network_json: unknown }>;
+  const record = parseMcpPrivateNetworkAcknowledgment(deleted[0]?.private_network_json);
+  if (record !== null) {
+    await writeMcpPrivateNetworkAudit(tx, {
+      spaceId,
+      serverId,
+      actor,
+      action: MCP_PRIVATE_NETWORK_AUDIT_ACTIONS.cleared,
+      hostsBefore: record.hosts,
+      hostsAfter: [],
+      edition: processEditionDescriptor().edition,
+      cause: 'definition_deleted',
+    });
+  }
 }

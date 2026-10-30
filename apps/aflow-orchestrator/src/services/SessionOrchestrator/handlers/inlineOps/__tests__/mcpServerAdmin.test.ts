@@ -381,6 +381,23 @@ describe('mcp.server.upsert', () => {
     );
   });
 
+  // Plan 336 D1: the acknowledgment is the operator's, so an agent's upsert carrying one writes none.
+  it('leaves the private network record alone when the input carries one', async () => {
+    executeRows = [{ created: false }];
+    const privateNetwork = {
+      hosts: ['mcp.corp.example'],
+      setBy: '00000000-0000-4000-8000-0000000000aa',
+      setAt: '2026-10-30T12:00:00.000Z',
+    };
+    await handleMcpServerAdminInline(
+      argsWithRef('mcp.server.upsert', inlineRef({ ...input, privateNetwork })),
+    );
+    expect(lastResult()['status']).toBe('SUCCEEDED');
+    expect(executed).toHaveLength(1);
+    expect(executed[0]).not.toContain('private_network');
+    expect(JSON.stringify(executedParams[0])).not.toContain('mcp.corp.example');
+  });
+
   it('reports an update as created: false', async () => {
     executeRows = [{ created: false }];
     await handleMcpServerAdminInline(await buildArgs('mcp.server.upsert', input));
@@ -466,6 +483,31 @@ describe('mcp.server.delete', () => {
     expect(decodeOutput(lastResult())).toEqual({ deleted: true });
     expect(executed.some((q) => q.includes('DELETE FROM mcp_server_bindings'))).toBe(true);
     expect(executed.some((q) => q.includes('DELETE FROM mcp_server_definitions'))).toBe(true);
+  });
+
+  it('writes a cleared audit row when the deleted definition held private network hosts', async () => {
+    selectRows = [storedDefinitionRow];
+    // Every statement answers with this row: the binding read sees no credential,
+    // and the definition delete returns the record it held.
+    executeRows = [
+      {
+        auth_json: { type: 'none' },
+        private_network_json: {
+          hosts: ['mcp.corp.example'],
+          setBy: '00000000-0000-4000-8000-0000000000aa',
+          setAt: '2026-10-30T12:00:00.000Z',
+        },
+      },
+    ];
+    await handleMcpServerAdminInline(
+      await buildArgs('mcp.server.delete', { serverId: 'docs-mcp' }),
+    );
+    expect(decodeOutput(lastResult())).toEqual({ deleted: true });
+    const audit = executed.findIndex((q) => q.includes('INSERT INTO tenant_audit_log'));
+    expect(audit).toBeGreaterThan(-1);
+    expect(executedParams[audit]).toEqual(
+      expect.arrayContaining([null, 'system', 'mcp.private_network.cleared', 'docs-mcp']),
+    );
   });
 
   it('fails a delete of a server that is not there, naming it, and deletes nothing', async () => {

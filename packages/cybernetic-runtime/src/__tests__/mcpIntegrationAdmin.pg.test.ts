@@ -24,6 +24,7 @@ import {
   type McpServerBindingWrite,
   type McpServerDefinitionWrite,
 } from '../mcpIntegrationAdmin.js';
+import { setMcpPrivateNetwork } from '../mcpPrivateNetwork.js';
 
 const DATABASE_URL = process.env['DATABASE_URL'];
 const TENANT_ID = 'a0000000-0000-0000-0000-000000000001';
@@ -33,6 +34,7 @@ const OTHER_SPACE = '3c900000-0000-4000-8000-0000000000a2';
 const SPACES = [SPACE, OTHER_SPACE];
 
 const describeDb = DATABASE_URL ? describe : describe.skip;
+const SYSTEM = { actorId: null, actorKind: 'system' } as const;
 
 function definition(
   serverId: string,
@@ -184,6 +186,59 @@ describeDb('MCP integration admin SQL (real DB)', () => {
     expect((await getMcpServerDefinitionRow({ ...inOtherSpace, serverId: 'docs' }))?.name).toBe(
       'docs server',
     );
+  });
+
+  it('keeps the private network record through every definition upsert, and audits its changes', async (ctx) => {
+    if (!requireSchema(ctx)) return;
+    const operator = {
+      actorId: '00000000-0000-4000-8000-0000000000aa',
+      actorKind: 'human',
+    } as const;
+    const auditRows = () =>
+      query<{ action: string; actor_id: string | null; details: { hostsAfter: string[] } }>(
+        drizzleSql`
+          SELECT action, actor_id, details FROM tenant_audit_log
+          WHERE resource_type = 'mcp_server_definition' AND resource_id = 'corp'
+            AND space_id = ${SPACE}::uuid
+          ORDER BY timestamp, created_at
+        `,
+      );
+    await query(drizzleSql`DELETE FROM tenant_audit_log WHERE space_id = ${SPACE}::uuid`);
+
+    await upsertMcpServerDefinition({ ...inSpace, definition: definition('corp') });
+    const set = await setMcpPrivateNetwork({
+      ...inSpace,
+      serverId: 'corp',
+      hosts: ['corp.example.com'],
+      actor: operator,
+      edition: 'community-local',
+      deploymentHosts: [],
+    });
+    expect(set.action).toBe('set');
+
+    const rewrite = {
+      ...definition('corp', { serverUrl: 'https://other.example.com/mcp' }),
+      privateNetwork: {
+        hosts: ['other.example.com'],
+        setBy: 'agent',
+        setAt: set.privateNetwork!.setAt,
+      },
+    } as McpServerDefinitionWrite;
+    await upsertMcpServerDefinition({ ...inSpace, definition: rewrite });
+    await upsertMcpServerDefinition({
+      ...inSpace,
+      definition: rewrite,
+      statedFields: new Set(['serverUrl', 'name']),
+    });
+    const row = await getMcpServerDefinitionRow({ ...inSpace, serverId: 'corp' });
+    expect(row?.privateNetworkJson).toEqual(set.privateNetwork);
+
+    await deleteMcpServerDefinition({ ...inSpace, serverId: 'corp', actor: operator });
+    const rows = await auditRows();
+    expect(rows.map((r) => [r.action, r.actor_id, r.details.hostsAfter])).toEqual([
+      ['mcp.private_network.set', operator.actorId, ['corp.example.com']],
+      ['mcp.private_network.cleared', operator.actorId, []],
+    ]);
   });
 
   it('gets and lists only the space it is asked about, honouring its filters', async (ctx) => {
@@ -561,7 +616,9 @@ describeDb('MCP integration admin SQL (real DB)', () => {
     await seedOauthState('mcp-admin-pg-state-a', 'docs', SPACE);
     await seedOauthState('mcp-admin-pg-state-b', 'docs', OTHER_SPACE);
 
-    expect(await deleteMcpServerDefinition({ ...inSpace, serverId: 'docs' })).toEqual({
+    expect(
+      await deleteMcpServerDefinition({ ...inSpace, serverId: 'docs', actor: SYSTEM }),
+    ).toEqual({
       deleted: true,
     });
 
@@ -603,7 +660,9 @@ describeDb('MCP integration admin SQL (real DB)', () => {
     `);
     expect(states).toEqual([{ state: 'mcp-admin-pg-state-b' }]);
 
-    expect(await deleteMcpServerDefinition({ ...inSpace, serverId: 'docs' })).toEqual({
+    expect(
+      await deleteMcpServerDefinition({ ...inSpace, serverId: 'docs', actor: SYSTEM }),
+    ).toEqual({
       deleted: false,
     });
   });

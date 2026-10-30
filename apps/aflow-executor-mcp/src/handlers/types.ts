@@ -6,6 +6,7 @@ import type {
 } from '@aflow/schemas';
 import type { AflowError } from '@aflow/schemas';
 import type { TenantPolicyCache } from '@aflow/database';
+import type { PrivateNetworkPolicy } from '@aflow/network-safety';
 
 /**
  * Compose a stable `${tenantId}|${spaceId}` key for the per-slice maps.
@@ -47,6 +48,12 @@ export interface McpSpaceStores {
    * Populated only when the tenant runs in allowlist mode.
    */
   catalogGrantStore: Map<string, string[]>;
+  /**
+   * serverId → the definition's private network policy (Plan 336 D3), built
+   * once per load so every path in this process reads one value. A server
+   * absent here gets the default policy.
+   */
+  privateNetworkStore: Map<string, PrivateNetworkPolicy>;
 }
 
 export interface McpHandlerStores {
@@ -80,6 +87,7 @@ export function getMcpSpaceStores(
       bindingStore: [],
       credentialStore: new Map(),
       catalogGrantStore: new Map(),
+      privateNetworkStore: new Map(),
     };
     stores.bySpace.set(key, slice);
   }

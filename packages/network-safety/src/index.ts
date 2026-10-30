@@ -33,10 +33,14 @@ function buildBlockedCidrs() {
   return [
     cidr('0.0.0.0', 8, 'current-network'),
     cidr('10.0.0.0', 8, 'private-rfc1918'),
+    // The first match names the range, so a metadata address precedes the
+    // block that contains it. A private network policy lifts shared address
+    // space for a listed host, and this label is what keeps the address refused.
+    cidr('100.100.100.200', 32, 'cloud-metadata'),
     cidr('100.64.0.0', 10, 'shared-address-space'),
     cidr('127.0.0.0', 8, 'loopback'),
-    cidr('169.254.0.0', 16, 'link-local'),
     cidr('169.254.169.254', 32, 'cloud-metadata'),
+    cidr('169.254.0.0', 16, 'link-local'),
     cidr('172.16.0.0', 12, 'private-rfc1918'),
     cidr('192.0.0.0', 24, 'ietf-protocol'),
     cidr('192.168.0.0', 16, 'private-rfc1918'),
@@ -125,6 +129,123 @@ export interface ResolvedHost {
   family: 4 | 6;
 }
 
+// ============================================================================
+// Private Network Policy (Plan 336 D2, D3)
+// ============================================================================
+
+/**
+ * Cloud metadata services reached by name. Refused before resolution for every
+ * caller and under every policy, so a resolver that answers them with an
+ * address no range covers still reaches nothing.
+ */
+export const CLOUD_METADATA_HOSTNAMES: readonly string[] = Object.freeze([
+  'metadata',
+  'metadata.google.internal',
+  'metadata.goog',
+]);
+
+/** The only ranges a policy lifts. Every other label stays refused for every host. */
+const LIFTABLE_RANGE_LABELS: ReadonlySet<string> = new Set([
+  'private-rfc1918',
+  'shared-address-space',
+]);
+
+/** Lowercased, without the trailing dot that names the same host. */
+function normalizeHostname(hostname: string): string {
+  const lowered = hostname.trim().toLowerCase();
+  return lowered.endsWith('.') ? lowered.slice(0, -1) : lowered;
+}
+
+export function isCloudMetadataHostname(hostname: string): boolean {
+  return CLOUD_METADATA_HOSTNAMES.includes(normalizeHostname(hostname));
+}
+
+declare const privateNetworkPolicyBrand: unique symbol;
+
+/**
+ * Which hosts may resolve into a private range. Built only by
+ * `privateNetworkPolicyFor`, so a caller passes a value and never decides
+ * reachability itself.
+ */
+export interface PrivateNetworkPolicy {
+  readonly [privateNetworkPolicyBrand]: true;
+  /** Hosts admitted to `private-rfc1918` and `shared-address-space` addresses. */
+  readonly hosts: readonly string[];
+  /** Hosts acknowledged by the operator that the deployment does not list. */
+  readonly withheld: readonly string[];
+}
+
+function brandPolicy(hosts: readonly string[], withheld: readonly string[]): PrivateNetworkPolicy {
+  return Object.freeze({
+    hosts: Object.freeze([...hosts]),
+    withheld: Object.freeze([...withheld]),
+  }) as unknown as PrivateNetworkPolicy;
+}
+
+/** The empty policy. It refuses exactly what the guard refused before policies existed. */
+export const DEFAULT_PRIVATE_NETWORK_POLICY: PrivateNetworkPolicy = brandPolicy([], []);
+
+export type PrivateNetworkEdition = 'community-local' | 'enterprise';
+
+export interface PrivateNetworkPolicyInput {
+  /** The operator's stored acknowledgment, or nothing when none is set. */
+  acknowledgment: { readonly hosts: readonly string[] } | null | undefined;
+  edition: PrivateNetworkEdition;
+  /** The hosts whoever runs the deployment listed. Read only in `enterprise`. */
+  deploymentHosts: readonly string[];
+}
+
+/**
+ * The one function that builds a policy. The local edition honours the
+ * acknowledgment as set, because its operator runs the deployment. The hosted
+ * edition honours a host only when the deployment also lists it, because there
+ * a private address may be the platform's own network.
+ */
+export function privateNetworkPolicyFor(input: PrivateNetworkPolicyInput): PrivateNetworkPolicy {
+  const acknowledged = [
+    ...new Set((input.acknowledgment?.hosts ?? []).map(normalizeHostname)),
+  ].filter((host) => host !== '' && !isCloudMetadataHostname(host));
+  if (acknowledged.length === 0) return DEFAULT_PRIVATE_NETWORK_POLICY;
+  if (input.edition === 'community-local') return brandPolicy(acknowledged, []);
+  const listed = new Set(input.deploymentHosts.map(normalizeHostname));
+  return brandPolicy(
+    acknowledged.filter((host) => listed.has(host)),
+    acknowledged.filter((host) => !listed.has(host)),
+  );
+}
+
+/**
+ * What the operator can do about a refused address. `none` means no setting
+ * reaches it.
+ */
+export type PrivateNetworkRemedy =
+  'acknowledge_private_network' | 'deployment_must_list_host' | 'none';
+
+function rangeRefusal(
+  hostname: string,
+  label: string | undefined,
+  policy: PrivateNetworkPolicy,
+): { admitted: boolean; remedy: PrivateNetworkRemedy } {
+  if (label === undefined || !LIFTABLE_RANGE_LABELS.has(label)) {
+    return { admitted: false, remedy: 'none' };
+  }
+  const host = normalizeHostname(hostname);
+  if (policy.hosts.includes(host)) return { admitted: true, remedy: 'none' };
+  return {
+    admitted: false,
+    remedy: policy.withheld.includes(host)
+      ? 'deployment_must_list_host'
+      : 'acknowledge_private_network',
+  };
+}
+
+function remedySentence(hostname: string, remedy: PrivateNetworkRemedy): string {
+  if (remedy === 'deployment_must_list_host') {
+    return ` The operator has set ${hostname} as a private network host, but this deployment does not list it.`;
+  }
+  return '';
+}
+
 /**
  * Resolve hostname and validate the IP is not in a private/reserved range.
  *
@@ -132,8 +253,14 @@ export interface ResolvedHost {
  * ranges (fc00::/7, fe80::/10) are harder to enumerate exhaustively, and most
  * external APIs serve over IPv4. If IPv6 support is needed, extend BLOCKED_CIDRS
  * to cover all RFC 4193 / RFC 6890 ranges.
+ *
+ * `policy` admits a `private-rfc1918` or `shared-address-space` address for the
+ * hosts it lists. It moves no other refusal. The default refuses every range.
  */
-export async function resolveAndValidateHost(hostname: string): Promise<ResolvedHost> {
+export async function resolveAndValidateHost(
+  hostname: string,
+  policy: PrivateNetworkPolicy = DEFAULT_PRIVATE_NETWORK_POLICY,
+): Promise<ResolvedHost> {
   // An IPv6 literal is refused outright rather than range-checked, because
   // BLOCKED_CIDRS describes no IPv6 range — and the alternative, a bespoke
   // IPv6 parser inside the guard, is a place where one subtle bug is a bypass.
@@ -147,7 +274,16 @@ export async function resolveAndValidateHost(hostname: string): Promise<Resolved
     throw new SsrfBlockedError(`Blocked: IPv6 literal ${hostname} is not permitted`, hostname, {
       kind: 'private-ip',
       rangeLabel: 'ipv6-literal',
+      remedy: 'none',
     });
+  }
+
+  if (isCloudMetadataHostname(hostname)) {
+    throw new SsrfBlockedError(
+      `Blocked: ${hostname} names a cloud metadata service, which no setting reaches`,
+      hostname,
+      { kind: 'private-ip', rangeLabel: 'cloud-metadata', remedy: 'none' },
+    );
   }
 
   // Only the canonical dotted quad may skip DNS — the one spelling this
@@ -155,10 +291,17 @@ export async function resolveAndValidateHost(hostname: string): Promise<Resolved
   if (isIPv4(hostname)) {
     const check = isPrivateIp(hostname);
     if (check.blocked) {
+      const verdict = rangeRefusal(hostname, check.label, policy);
+      if (verdict.admitted) return { hostname, ip: hostname, family: 4 };
       throw new SsrfBlockedError(
-        `Blocked: IP ${hostname} is in a private/reserved range (${check.label ?? 'unknown'})`,
+        `Blocked: IP ${hostname} is in a private/reserved range (${check.label ?? 'unknown'})` +
+          remedySentence(hostname, verdict.remedy),
         hostname,
-        { kind: 'private-ip', ...(check.label ? { rangeLabel: check.label } : {}) },
+        {
+          kind: 'private-ip',
+          ...(check.label ? { rangeLabel: check.label } : {}),
+          remedy: verdict.remedy,
+        },
       );
     }
     return { hostname, ip: hostname, family: 4 };
@@ -168,7 +311,7 @@ export async function resolveAndValidateHost(hostname: string): Promise<Resolved
     throw new SsrfBlockedError(
       `Blocked: ${hostname} is a non-canonical numeric address; write it as a dotted quad`,
       hostname,
-      { kind: 'private-ip', rangeLabel: 'non-canonical-numeric' },
+      { kind: 'private-ip', rangeLabel: 'non-canonical-numeric', remedy: 'none' },
     );
   }
 
@@ -176,10 +319,19 @@ export async function resolveAndValidateHost(hostname: string): Promise<Resolved
     const result = await lookup(hostname, { family: 4 });
     const check = isPrivateIp(result.address);
     if (check.blocked) {
+      const verdict = rangeRefusal(hostname, check.label, policy);
+      if (verdict.admitted) {
+        return { hostname, ip: result.address, family: result.family as 4 | 6 };
+      }
       throw new SsrfBlockedError(
-        `DNS rebinding blocked: ${hostname} resolved to private IP ${result.address} (${check.label ?? 'unknown'})`,
+        `DNS rebinding blocked: ${hostname} resolved to private IP ${result.address} (${check.label ?? 'unknown'})` +
+          remedySentence(hostname, verdict.remedy),
         hostname,
-        { kind: 'private-ip', ...(check.label ? { rangeLabel: check.label } : {}) },
+        {
+          kind: 'private-ip',
+          ...(check.label ? { rangeLabel: check.label } : {}),
+          remedy: verdict.remedy,
+        },
       );
     }
     return { hostname, ip: result.address, family: result.family as 4 | 6 };
@@ -256,7 +408,11 @@ export interface ValidatedUrl {
   resolvedHost: ResolvedHost;
 }
 
-export async function validateUrl(rawUrl: string, allowedHosts: string[]): Promise<ValidatedUrl> {
+export async function validateUrl(
+  rawUrl: string,
+  allowedHosts: string[],
+  policy: PrivateNetworkPolicy = DEFAULT_PRIVATE_NETWORK_POLICY,
+): Promise<ValidatedUrl> {
   let parsed: URL;
   try {
     parsed = new URL(rawUrl);
@@ -278,7 +434,7 @@ export async function validateUrl(rawUrl: string, allowedHosts: string[]): Promi
     });
   }
 
-  const resolvedHost = await resolveAndValidateHost(parsed.hostname);
+  const resolvedHost = await resolveAndValidateHost(parsed.hostname, policy);
   return { url: parsed, resolvedHost };
 }
 
@@ -293,8 +449,15 @@ export async function validateUrl(rawUrl: string, allowedHosts: string[]): Promi
  * TOCTOU-racable; https-only is what closes it — TLS server-certificate
  * validation defeats a rebind to another origin (the same split that has the
  * api executor pin http fetches to the resolved IP but fetch https by name).
+ *
+ * No policy lifts the https rule. A private network policy widens the
+ * addresses a listed host may resolve to, and the certificate is still what
+ * binds that name to the server receiving the secret.
  */
-export async function validateCredentialedUrl(rawUrl: string): Promise<ValidatedUrl> {
+export async function validateCredentialedUrl(
+  rawUrl: string,
+  policy: PrivateNetworkPolicy = DEFAULT_PRIVATE_NETWORK_POLICY,
+): Promise<ValidatedUrl> {
   let protocol: string;
   try {
     protocol = new URL(rawUrl).protocol;
@@ -308,7 +471,7 @@ export async function validateCredentialedUrl(rawUrl: string): Promise<Validated
       { kind: 'invalid-protocol' },
     );
   }
-  return validateUrl(rawUrl, []);
+  return validateUrl(rawUrl, [], policy);
 }
 
 // ============================================================================
@@ -344,14 +507,21 @@ export type SafeFetchInit = Omit<RequestInit, 'redirect'> & {
    * the new URL, which puts the next hop through the same checks.
    */
   redirect?: 'error' | 'manual';
+  /** The policy the URL is checked under. The default refuses every private range. */
+  privateNetwork?: PrivateNetworkPolicy;
 };
 
 export async function safeFetch(
   rawUrl: string | URL,
   options: SafeFetchInit = {},
 ): Promise<Response> {
-  const { allowedHosts = [], redirect = 'error', ...init } = options;
-  const validated = await validateUrl(rawUrl.toString(), [...allowedHosts]);
+  const {
+    allowedHosts = [],
+    redirect = 'error',
+    privateNetwork = DEFAULT_PRIVATE_NETWORK_POLICY,
+    ...init
+  } = options;
+  const validated = await validateUrl(rawUrl.toString(), [...allowedHosts], privateNetwork);
 
   if (validated.url.protocol === 'https:') {
     return fetch(validated.url.toString(), { ...init, redirect });
@@ -366,33 +536,42 @@ export async function safeFetch(
 }
 
 /**
- * `safeFetch` in the shape of `fetch`, for the injection points that type their
- * transport as `typeof fetch`. A `Request` carries its own URL past the checks
- * above, so it is refused rather than quietly unwrapped.
+ * `safeFetch` in the shape of `fetch`, bound to one policy, for the injection
+ * points that type their transport as `typeof fetch`. A `Request` carries its
+ * own URL past the checks above, so it is refused rather than quietly unwrapped.
  */
-export const safeFetchImpl: typeof fetch = (input, init) => {
-  if (input instanceof Request) {
-    return Promise.reject(
-      new SsrfBlockedError('Blocked: a Request object bypasses URL validation', input.url, {
-        kind: 'invalid-url',
-      }),
-    );
-  }
-  // `typeof fetch` admits `'follow'`, so the compile-time exclusion on
-  // SafeFetchInit cannot reach this boundary — the injected-transport callers
-  // are exactly the ones that would otherwise reintroduce unchecked hops.
-  if (init?.redirect === 'follow') {
-    return Promise.reject(
-      new SsrfBlockedError(
-        'Blocked: following redirects would leave the next hop unvalidated',
-        String(input),
-        { kind: 'invalid-url' },
-      ),
-    );
-  }
-  const { redirect, ...rest } = init ?? {};
-  return safeFetch(input, { ...rest, ...(redirect === 'manual' ? { redirect } : {}) });
-};
+export function safeFetchFor(policy: PrivateNetworkPolicy): typeof fetch {
+  return (input, init) => {
+    if (input instanceof Request) {
+      return Promise.reject(
+        new SsrfBlockedError('Blocked: a Request object bypasses URL validation', input.url, {
+          kind: 'invalid-url',
+        }),
+      );
+    }
+    // `typeof fetch` admits `'follow'`, so the compile-time exclusion on
+    // SafeFetchInit cannot reach this boundary — the injected-transport callers
+    // are exactly the ones that would otherwise reintroduce unchecked hops.
+    if (init?.redirect === 'follow') {
+      return Promise.reject(
+        new SsrfBlockedError(
+          'Blocked: following redirects would leave the next hop unvalidated',
+          String(input),
+          { kind: 'invalid-url' },
+        ),
+      );
+    }
+    const { redirect, ...rest } = init ?? {};
+    return safeFetch(input, {
+      ...rest,
+      ...(redirect === 'manual' ? { redirect } : {}),
+      privateNetwork: policy,
+    });
+  };
+}
+
+/** The default-policy transport. */
+export const safeFetchImpl: typeof fetch = safeFetchFor(DEFAULT_PRIVATE_NETWORK_POLICY);
 
 // ============================================================================
 // Method Restriction
@@ -453,11 +632,13 @@ export class SsrfBlockedError extends Error {
   readonly kind: SsrfBlockKind;
   readonly target: string;
   readonly rangeLabel?: string;
+  /** Set on an address refusal: what the operator can do about it. */
+  readonly remedy?: PrivateNetworkRemedy;
 
   constructor(
     message: string,
     target: string,
-    options?: { kind?: SsrfBlockKind; rangeLabel?: string },
+    options?: { kind?: SsrfBlockKind; rangeLabel?: string; remedy?: PrivateNetworkRemedy },
   ) {
     super(message);
     this.name = 'SsrfBlockedError';
@@ -466,11 +647,15 @@ export class SsrfBlockedError extends Error {
     if (options?.rangeLabel !== undefined) {
       this.rangeLabel = options.rangeLabel;
     }
+    if (options?.remedy !== undefined) {
+      this.remedy = options.remedy;
+    }
   }
 }
 
 export class DnsBlockedError extends Error {
   readonly code = 'API_DNS_BLOCKED' as const;
+  readonly kind = 'unresolvable' as const satisfies SsrfBlockKind;
   readonly hostname: string;
 
   constructor(message: string, hostname: string) {

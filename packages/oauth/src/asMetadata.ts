@@ -1,4 +1,9 @@
-import { safeFetchImpl, validateUrl } from '@aflow/network-safety';
+import {
+  DEFAULT_PRIVATE_NETWORK_POLICY,
+  safeFetchFor,
+  validateUrl,
+  type PrivateNetworkPolicy,
+} from '@aflow/network-safety';
 
 /**
  * Subset of RFC 8414 / OIDC discovery fields we depend on. Other fields are
@@ -33,6 +38,8 @@ export function clearAsCacheForTests(): void {
 
 export interface DiscoverAsMetadataOptions {
   fetchImpl?: typeof fetch;
+  /** The MCP definition's private network policy (Plan 336 D3). Default for an API binding. */
+  privateNetwork?: PrivateNetworkPolicy;
 }
 
 /**
@@ -49,11 +56,12 @@ export async function discoverAsMetadata(
     return cached.metadata;
   }
 
-  const fetchImpl = opts.fetchImpl ?? safeFetchImpl;
+  const privateNetwork = opts.privateNetwork ?? DEFAULT_PRIVATE_NETWORK_POLICY;
+  const fetchImpl = opts.fetchImpl ?? safeFetchFor(privateNetwork);
 
   // The issuer can be space-authored (pinned AS, PRM-discovered) — SSRF-check
   // it before any discovery fetch. All discovery URLs below are issuer-rooted.
-  await validateUrl(normalizedIssuer, []);
+  await validateUrl(normalizedIssuer, [], privateNetwork);
 
   // RFC 8414 first.
   const rfc8414Url = `${normalizedIssuer}/.well-known/oauth-authorization-server`;

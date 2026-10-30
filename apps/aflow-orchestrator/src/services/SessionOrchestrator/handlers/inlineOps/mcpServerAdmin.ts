@@ -196,7 +196,12 @@ async function runOp(
             'nothing was deleted. List the servers with mcp.server.list to find the serverId.',
         );
       }
-      await deleteMcpServerDefinition({ ...scope, serverId: parsed.serverId });
+      // A run deletes as the system: no person stands behind this call.
+      await deleteMcpServerDefinition({
+        ...scope,
+        serverId: parsed.serverId,
+        actor: { actorId: null, actorKind: 'system' },
+      });
       const output: McpServerDeleteOutput = { deleted: true };
       return output;
     }
