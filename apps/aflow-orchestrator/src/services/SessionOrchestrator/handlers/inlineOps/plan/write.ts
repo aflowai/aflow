@@ -117,6 +117,7 @@ export async function handlePlanNodeUpdate(
     node: result.node,
     ...(result.carrier ? { carrier: result.carrier } : {}),
     ...(result.carrierFailure ? { carrierFailure: result.carrierFailure } : {}),
+    ...(result.linkFailure ? { linkFailure: result.linkFailure } : {}),
   };
   await emitStepSuccess(args, output as unknown as Record<string, unknown>, startTime);
 }

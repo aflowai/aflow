@@ -77,6 +77,12 @@ export const PlanNodeUpdateOutputSchema = z.object({
     .describe(
       'The close succeeded but its carrier failed. Read the findings linked to the named closed node.',
     ),
+  linkFailure: z
+    .string()
+    .optional()
+    .describe(
+      'The update landed but linking this conversation on the node failed. The node stands as returned.',
+    ),
   node: PlanNodeSchema,
   carrier: PlanNodeSchema.optional().describe(
     'Where this update closed the node done with findings linked to it: the node proposed under the same parent to carry them, blocked until a person approves it.',

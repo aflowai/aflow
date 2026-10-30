@@ -9,6 +9,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { Redis } from 'ioredis';
 import {
   isClosedPlanNodeStatus,
+  planNodeInstructions,
   planNodeOperatorLine,
   PLAN_NODE_APPROVED_HEAD,
   PLAN_NODE_MERGE_WAIT_LINE,
@@ -295,10 +296,17 @@ export async function createPlanNode(
 // plan.node.update — compare-and-set on the node's revision (Plan 322 D6)
 // ============================================================================
 
+export interface PlanNodeWritten {
+  node: PlanNode;
+  carrier?: PlanNode;
+  carrierFailure?: string;
+  linkFailure?: string;
+}
+
 export function updatePlanNode(
   ctx: PlanWriteContext,
   input: PlanNodeUpdateInput,
-): Promise<PlanOpResult<{ node: PlanNode; carrier?: PlanNode; carrierFailure?: string }>> {
+): Promise<PlanOpResult<PlanNodeWritten>> {
   return writePlanNode(ctx, input, {});
 }
 
@@ -354,11 +362,59 @@ async function proposeCarrier(
   return inserted.node;
 }
 
+/**
+ * A resident write that answers the operator's Revise (Plan 337 P4) may
+ * rewrite the proposal's goal and criteria, and no other resident write may.
+ * It holds only while the node is blocked under the `Revise: …` line and still
+ * at the revision the Revise was recorded at, so the rewrite lands once.
+ * The rule above it keeps the node blocked.
+ */
+async function answersRevise(ctx: PlanWriteContext, current: PlanNode): Promise<boolean> {
+  if (
+    current.status !== 'blocked' ||
+    planNodeInstructions(current.note)?.startsWith(PLAN_NODE_REVISE_HEAD) !== true
+  ) {
+    return false;
+  }
+  const sentAt = await ctx.redis.get(planNodeReviseKey(ctx, current.nodeId));
+  return sentAt === String(current.revision);
+}
+
+/**
+ * Links the operator's conversation on a node its update landed on. The
+ * update has committed, so a failed link is reported beside it, never as a
+ * failed write. A link leaves the revision where it stands, so the writer's
+ * next update against the revision it was just given is not refused as stale.
+ * A conversation already linked stays linked once.
+ */
+async function linkConversation(
+  ctx: PlanWriteContext,
+  node: PlanNode,
+): Promise<string | undefined> {
+  if (ctx.conversationId === undefined) return undefined;
+  try {
+    await ctx.store.insertLink(ctx.spaceId, {
+      nodeId: node.nodeId,
+      kind: 'session',
+      ref: ctx.conversationId,
+      label: PLAN_NODE_CONVERSATION_LINK_LABEL,
+    });
+    return undefined;
+  } catch (error) {
+    logCyberneticError('Conversation link failed after a plan node update landed.', error, {
+      spaceId: ctx.spaceId,
+      nodeId: node.nodeId,
+      conversationId: ctx.conversationId,
+    });
+    return `The update landed at revision ${String(node.revision)}, but this conversation was not linked on node ${node.nodeId}. Link it with plan.node.link, kind "session", if the operator needs to find it from the node.`;
+  }
+}
+
 async function writePlanNode(
   ctx: PlanWriteContext,
   input: PlanNodeUpdateInput,
   stamp: Pick<PlanNodePatch, 'openedAt' | 'spendCents'>,
-): Promise<PlanOpResult<{ node: PlanNode; carrier?: PlanNode; carrierFailure?: string }>> {
+): Promise<PlanOpResult<PlanNodeWritten>> {
   const current = await ctx.store.find(ctx.spaceId, input.nodeId);
   if (!current) return notFound(input.nodeId);
   if (current.revision !== input.expectedRevision) return stale(current, input);
@@ -377,11 +433,11 @@ async function writePlanNode(
     return residentUnblocks(current);
   }
 
+  const rewritesProposal = input.goal !== undefined || input.criteria !== undefined;
   if (
     ctx.resident === true &&
     (input.title !== undefined ||
-      input.goal !== undefined ||
-      input.criteria !== undefined ||
+      (rewritesProposal && !(await answersRevise(ctx, current))) ||
       input.parentId !== undefined ||
       input.position !== undefined ||
       input.status === 'dropped' ||
@@ -515,18 +571,12 @@ async function writePlanNode(
     const now = await ctx.store.find(ctx.spaceId, input.nodeId);
     return now ? stale(now, input) : notFound(input.nodeId);
   }
-  if (ctx.conversationId !== undefined) {
-    // A link leaves the revision where it stands, so the writer's next update
-    // against the revision it was just given is not refused as stale. A
-    // conversation already linked stays linked once.
-    await ctx.store.insertLink(ctx.spaceId, {
-      nodeId: node.nodeId,
-      kind: 'session',
-      ref: ctx.conversationId,
-      label: PLAN_NODE_CONVERSATION_LINK_LABEL,
-    });
-  }
-  const written = await nodeWritten(ctx, { ok: true as const, node });
+  const linkFailure = await linkConversation(ctx, node);
+  const written = await nodeWritten(ctx, {
+    ok: true as const,
+    node,
+    ...(linkFailure !== undefined ? { linkFailure } : {}),
+  });
   if (isClosedPlanNodeStatus(current.status) || node.status !== 'done') return written;
   try {
     const carrier = await proposeCarrier(ctx, node);
@@ -631,7 +681,7 @@ export type PlanNodeReviseRequest = PlanNodeRevise & { nodeId: string };
  * `updatePlanNode`: the status stays blocked, and `why` goes above the note as
  * one `Revise: …` line. The write moves the revision like any other, which is
  * what re-arms a rule keyed on it. The Helmsman rewrites the node from that
- * line with the update authority it already holds.
+ * line, a resident wake only at the revision recorded here (`answersRevise`).
  */
 export async function revisePlanNode(
   ctx: PlanWriteContext,
