@@ -37,6 +37,12 @@ vi.mock('@aflow/cybernetic-runtime', () => ({
 }));
 
 const { planRoutes } = await import('./plan.js');
+// Imported with the file, not inside a test: evaluating the engine's source
+// graph takes seconds, which a loaded runner charges to one test's timeout.
+const { openPlanNode } = await import('../../../cybernetic-runtime/src/plan/operations.js');
+const { InMemoryPlanNodeStore } =
+  await import('../../../cybernetic-runtime/src/__tests__/planStoreFake.js');
+const { default: RedisMock } = await import('ioredis-mock');
 
 const TENANT_ID = 'a0000000-0000-4000-8000-000000000001';
 const SPACE_ID = '00000000-0000-4000-8000-000000000002';
@@ -636,15 +642,11 @@ describe('PATCH /v1/spaces/:spaceId/plan/nodes/:nodeId/open (Plan 332 D6, Plan 3
   });
 
   it('resets the spend window through the authenticated production open path', async () => {
-    const { openPlanNode } = await import('../../../cybernetic-runtime/src/plan/operations.js');
-    const { InMemoryPlanNodeStore } =
-      await import('../../../cybernetic-runtime/src/__tests__/planStoreFake.js');
-    const { default: Redis } = await import('ioredis-mock');
     const store = new InMemoryPlanNodeStore();
     store.nodes.set(CHILD_ID, { ...openedNode(), status: 'blocked', revision: 4 });
     mockOpenPlanNode.mockImplementationOnce(
       (...[context, input]: Parameters<typeof openPlanNode>) =>
-        openPlanNode({ ...context, store, redis: new Redis() }, input),
+        openPlanNode({ ...context, store, redis: new RedisMock() }, input),
     );
     const response = await open({ expectedRevision: 4 });
     expect(response.statusCode).toBe(200);
