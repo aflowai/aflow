@@ -34,12 +34,14 @@ import {
 import type { PlanNodeCloseAnswer } from './PlanNodeCloseControl.js';
 import {
   Disclosure,
+  GroupLabel,
   HeadingDot,
   MetaSep,
   NextMarker,
   ProgressMeter,
   PullRequestChip,
   useMoveControls,
+  useReveal,
 } from './PlanParts.js';
 
 /** What the operator asks of an Up next step or an open plan: directly before or after a sibling, against the revision the page read. */
@@ -81,11 +83,16 @@ function PlanCardView({
 }) {
   const { node, column, phase } = card;
   const waiting = waitingLine(node);
-  const move = useMoveControls(node, moves, onPlace);
+  const reveal = useReveal();
+  const move = useMoveControls(node, moves, onPlace, reveal.shown || selected);
   const dropped = column === 'dropped';
   const style: CSSProperties = {
+    position: 'relative',
     cursor: 'pointer',
     ...(column === 'needs_you' ? { borderLeft: '3px solid var(--color-warning-default)' } : {}),
+    ...(selected
+      ? { boxShadow: '0 0 0 2px var(--color-interactive-default), var(--shadow-md)' }
+      : {}),
   };
   const open = () => {
     onSelect(card);
@@ -106,7 +113,7 @@ function PlanCardView({
     <Card
       interactive
       running={node.counts.inFlightRuns > 0}
-      className="plan-card plan-reveal-host"
+      {...reveal.hostProps}
       role="button"
       tabIndex={0}
       aria-pressed={selected}
@@ -127,7 +134,13 @@ function PlanCardView({
     >
       <CardBody>
         <Column gap="xs">
-          {move.controls !== null && <div className="plan-card__corner">{move.controls}</div>}
+          {move.controls !== null && (
+            <div
+              style={{ position: 'absolute', top: 'var(--space-1-5)', right: 'var(--space-1-5)' }}
+            >
+              {move.controls}
+            </div>
+          )}
           {phase !== undefined && (
             <Text size="xs" variant="muted" data-plan-card-phase>
               {phaseLabel(phase.title)}
@@ -206,9 +219,7 @@ function ColumnHeader({
   return (
     <Row gap="xs" align="center" data-plan-column-header={label}>
       <HeadingDot color={color} />
-      <Text size="sm" weight="medium">
-        {label}
-      </Text>
+      <GroupLabel>{label}</GroupLabel>
       <Text size="xs" variant="muted">
         {count === undefined ? '…' : String(count)}
       </Text>

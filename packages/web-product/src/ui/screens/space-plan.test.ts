@@ -159,6 +159,9 @@ vi.mock('@aflow/design-system', () => {
     }) => createElement('button', { ...passed(rest), type: 'button', onClick, disabled }, icon),
     Icon: () => null,
     Tooltip: ({ children }: { children?: ReactNode }) => children,
+    CollapsibleSide: ({ children, label }: { children?: ReactNode; label: string }) =>
+      createElement('div', { 'data-side': label }, children),
+    Pulse: ({ children }: { children?: ReactNode }) => children,
     Panel: block('div'),
     ScrollArea: block('div'),
     Input: (props: Record<string, unknown>) => createElement('input', props),
@@ -1811,13 +1814,17 @@ describe('SpacePlanPage — the plan list (Plan 332 P3)', () => {
     );
   });
 
-  it('holds the list in the 280px left column beside the board', async () => {
-    await render({ data: LIST });
+  it('holds the list in the shell’s Plans pane and the rail in its Step pane, beside the board', async () => {
+    await render();
 
     const list = container.querySelector<HTMLElement>('[data-plan-list]')!;
     expect(list.getAttribute('data-layout')).toBe('column');
-    expect(list.style.width).toBe('280px');
+    expect(list.closest('[data-side="Plans"]')).not.toBe(null);
     expect(list.querySelector('[data-plan-board]')).toBe(null);
+    expect(container.querySelector('[data-side="Step"]')).toBe(null);
+
+    await click(card(BOARD));
+    expect(rail().closest('[data-side="Step"]')).not.toBe(null);
   });
 
   it('is a disclosure above the content below 900px, closed again once a plan is chosen', async () => {

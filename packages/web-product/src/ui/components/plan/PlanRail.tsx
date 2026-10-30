@@ -8,7 +8,8 @@
  * **Now**, the note's first line, above the goal and the whole note folded
  * under **Working note** (Plan 332 D5), and holds the operator's own controls:
  * close an open node (P3.2), **Approve** a blocked one, **Reopen** a closed one,
- * and for a stranded one reopen the closed step above it (Plan 332 D6).
+ * and for a stranded one reopen the closed step above it (Plan 332 D6). It is
+ * the page's inspector, headed, sectioned and set as the skill designer's is.
  */
 import { useState, type ReactNode } from 'react';
 import Link from 'next/link';
@@ -16,12 +17,14 @@ import {
   Badge,
   Button,
   Column,
+  Heading,
   Icon,
   IconButton,
   Row,
   Text,
   Tooltip,
   type BadgeVariant,
+  type IconName,
 } from '@aflow/design-system';
 import type {
   PlanBoardColumn,
@@ -49,7 +52,7 @@ import {
   type PlanNodeRead,
 } from './PlanNodeCloseControl.js';
 import { PlanNodeOpenControl, type PlanNodeOpener } from './PlanNodeOpenControl.js';
-import { NextMarker, PullRequestChip } from './PlanParts.js';
+import { GroupLabel, NextMarker, PullRequestChip } from './PlanParts.js';
 
 /** Run links the rail lists before "All runs". */
 export const PLAN_RAIL_RUNS = 5;
@@ -57,7 +60,13 @@ export const PLAN_RAIL_RUNS = 5;
 export const PLAN_RAIL_FINDINGS = 50;
 const ALL_RUNS_PAGE = 50;
 
-export const RAIL_WIDTH = '360px';
+const COLUMN_ICON: Record<PlanBoardColumn, IconName> = {
+  needs_you: 'warning',
+  in_flight: 'lightning',
+  up_next: 'play',
+  done: 'check-circle',
+  dropped: 'x',
+};
 
 const COLUMN_BADGE: Record<PlanBoardColumn, BadgeVariant> = {
   needs_you: 'warning',
@@ -88,16 +97,18 @@ function RailDismiss({ onDismiss }: { onDismiss: () => void }) {
   );
 }
 
+/** One labelled part of the rail, as the skill inspector sections its own. */
 function Section({ label, children }: { label: string; children: ReactNode }) {
   return (
     <Column gap="xs" data-plan-rail-section={label}>
-      <Text variant="label" size="xs">
-        {label}
-      </Text>
+      <GroupLabel>{label}</GroupLabel>
       {children}
     </Column>
   );
 }
+
+/** A section's text, in the inspector's prose. */
+const prose = { lineHeight: 1.55, whiteSpace: 'pre-wrap' } as const;
 
 function RunLine({ link, spaceSlug }: { link: PlanNodeLink; spaceSlug: string }) {
   const status = runLinkStatus(link.label);
@@ -328,6 +339,8 @@ export function PlanRail({
     enabled: closedAncestor !== undefined,
   });
   const full = detail.data?.node;
+  const accent =
+    PLAN_BOARD_COLUMNS.find((c) => c.id === column)?.color ?? 'var(--color-accent-default)';
   const columnLabel = PLAN_BOARD_COLUMNS.find((c) => c.id === column)?.label ?? column;
   const runLinks = detail.data?.links ?? [];
   const inFlight = (detail.data?.runs ?? []).filter((run) => run.nodeId === node.nodeId);
@@ -340,9 +353,24 @@ export function PlanRail({
   );
 
   return (
-    <Column gap="md" data-plan-rail={node.nodeId} style={{ minWidth: 0 }}>
+    <Column gap="lg" data-plan-rail={node.nodeId} style={{ minWidth: 0 }}>
       <Row gap="xs" align="center" justify="between">
         <Row gap="xs" align="center" wrap>
+          <span
+            aria-hidden
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 30,
+              height: 30,
+              borderRadius: 'var(--radius-md)',
+              background: `color-mix(in srgb, ${accent} 12%, transparent)`,
+              color: accent,
+            }}
+          >
+            <Icon name={COLUMN_ICON[column]} size="md" weight="thin" />
+          </span>
           <Badge variant={COLUMN_BADGE[column]}>{columnLabel}</Badge>
           {reason !== undefined && (
             <Badge variant="warning">{NEEDS_YOU_REASON_LABEL[reason]}</Badge>
@@ -357,9 +385,7 @@ export function PlanRail({
             {phaseLabel(phase.title)}
           </Text>
         )}
-        <Text weight="semibold" size="lg">
-          {node.title}
-        </Text>
+        <Heading level={4}>{node.title}</Heading>
       </Column>
       <Row gap="xs" align="center" wrap>
         {node.pullRequest !== undefined && (
@@ -390,17 +416,19 @@ export function PlanRail({
       )}
       {node.noteHead !== undefined && (
         <Section label="Now">
-          <Text size="sm">{node.noteHead}</Text>
+          <Text size="base" color="secondary" style={prose}>
+            {node.noteHead}
+          </Text>
         </Section>
       )}
       <Section label="Goal">
-        <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>
+        <Text size="base" color="secondary" style={prose}>
           {full?.goal ?? node.goalHead}
         </Text>
       </Section>
       {full !== undefined && (
         <Section label={full.kind === 'decide' ? 'Decided when' : 'Done when'}>
-          <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>
+          <Text size="base" color="secondary" style={prose}>
             {full.criteria}
           </Text>
         </Section>
@@ -420,7 +448,7 @@ export function PlanRail({
             </Button>
           </Row>
           {noteOpen && (
-            <Text size="sm" style={{ whiteSpace: 'pre-wrap' }} data-plan-note>
+            <Text size="base" color="secondary" style={prose} data-plan-note>
               {full.note}
             </Text>
           )}
@@ -436,7 +464,7 @@ export function PlanRail({
               padding: 'var(--space-2)',
             }}
           >
-            <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>
+            <Text size="base" color="secondary" style={prose}>
               {full.outcome}
             </Text>
           </div>
@@ -502,42 +530,48 @@ export function PlanRail({
           )}
         </Section>
       )}
-      {reason === 'blocked' && (
-        <PlanNodeOpenControl
-          nodeId={node.nodeId}
-          verb="approve"
-          label="Approve"
-          read={railRead}
-          onOpen={onOpen}
-        />
-      )}
-      {reason === 'stranded' && closedAncestor !== undefined && (
-        <PlanNodeOpenControl
-          nodeId={closedAncestor.nodeId}
-          verb="reopen"
-          label={`Reopen ${phaseLabel(closedAncestor.title)}`}
-          read={freshRead(ancestorDetail)}
-          onOpen={onOpen}
-        />
-      )}
-      {open ? (
-        <PlanNodeCloseControl
-          node={node}
-          openUnder={openUnder}
-          read={railRead}
-          onClose={onClose}
-          choosing={choosing}
-          onChoose={onChoose}
-        />
-      ) : (
-        <PlanNodeOpenControl
-          nodeId={node.nodeId}
-          verb="reopen"
-          label="Reopen"
-          read={railRead}
-          onOpen={onOpen}
-        />
-      )}
+      {/* The operator's own writes, apart from what the step says, as the designer keeps its save apart. */}
+      <Column
+        gap="sm"
+        style={{ borderTop: '1px solid var(--color-border-subtle)', paddingTop: 'var(--space-md)' }}
+      >
+        {reason === 'blocked' && (
+          <PlanNodeOpenControl
+            nodeId={node.nodeId}
+            verb="approve"
+            label="Approve"
+            read={railRead}
+            onOpen={onOpen}
+          />
+        )}
+        {reason === 'stranded' && closedAncestor !== undefined && (
+          <PlanNodeOpenControl
+            nodeId={closedAncestor.nodeId}
+            verb="reopen"
+            label={`Reopen ${phaseLabel(closedAncestor.title)}`}
+            read={freshRead(ancestorDetail)}
+            onOpen={onOpen}
+          />
+        )}
+        {open ? (
+          <PlanNodeCloseControl
+            node={node}
+            openUnder={openUnder}
+            read={railRead}
+            onClose={onClose}
+            choosing={choosing}
+            onChoose={onChoose}
+          />
+        ) : (
+          <PlanNodeOpenControl
+            nodeId={node.nodeId}
+            verb="reopen"
+            label="Reopen"
+            read={railRead}
+            onOpen={onOpen}
+          />
+        )}
+      </Column>
     </Column>
   );
 }
