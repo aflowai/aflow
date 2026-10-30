@@ -49,7 +49,9 @@ import {
   authenticateLocalInstance,
   findLocalAuthConfigViolations,
   resolveInstanceSecret,
+  type LocalPrincipal,
 } from './localInstanceAuth.js';
+import { hasSeveralLocalProfiles } from './localProfiles.js';
 
 // ============================================================================
 // Constants
@@ -112,6 +114,8 @@ export interface AuthUser {
   apiKeyTenantId?: TenantId | undefined;
   /** Raw JWT claims (only set when authMethod is 'jwt' or 'dev_bypass') */
   claims?: Auth0Claims | undefined;
+  /** How a local request named its user (only set when authMethod is 'local') */
+  localPrincipal?: LocalPrincipal | undefined;
 }
 
 // Extend Fastify types — use a custom property to avoid conflicts with jwt.user
@@ -729,6 +733,17 @@ export const authPlugin = fp(
       }
     }
 
+    // ---- Helper: count the local edition's profiles -------------------------
+    // Throws rather than answering "one": an unread count that fell back to the
+    // owner would hand a browser with no profile session the owner's authority.
+    async function hasSeveralProfilesInPinnedTenant(): Promise<boolean> {
+      const db = fastify.appContext?.db as PostgresJsDatabase | undefined;
+      if (!db) throw new Error('No database to read the local profiles from');
+      const tenancy = fastify.edition.tenancy;
+      if (tenancy.mode !== 'fixed') throw new Error('The local edition pins one tenant');
+      return hasSeveralLocalProfiles(db, tenancy.tenantId);
+    }
+
     // ---- Helper: ensure dev user exists ------------------------------------
     async function ensureDevUser(): Promise<void> {
       const ctx = fastify.appContext;
@@ -794,16 +809,35 @@ export const authPlugin = fp(
 
       // --- Local edition: instance secret or API key, never a JWT ---
       if (fastify.edition.authProvider === 'local-instance') {
-        const outcome = authenticateLocalInstance(request, {
-          instanceSecret: resolveInstanceSecret(),
-          apiKeyPrefix: API_KEY_PREFIX,
-        });
-        if (outcome.kind === 'owner') {
+        let outcome;
+        try {
+          outcome = await authenticateLocalInstance(request, {
+            instanceSecret: resolveInstanceSecret(),
+            apiKeyPrefix: API_KEY_PREFIX,
+            hasSeveralProfiles: () => hasSeveralProfilesInPinnedTenant(),
+          });
+        } catch (err) {
+          fastify.log.error({ err }, 'Local profile lookup failed');
+          reply.status(503).send({
+            error: 'ServiceUnavailable',
+            message: 'Could not read the local profiles to decide who this request is',
+          });
+          return;
+        }
+        if (outcome.kind === 'local') {
           request.authUser = outcome.authUser;
           return;
         }
         if (outcome.kind === 'api-key') {
           await applyApiKey(request, reply, outcome.token);
+          return;
+        }
+        if (outcome.kind === 'refused') {
+          reply.status(401).send({
+            error: 'Unauthorized',
+            code: outcome.code,
+            message: outcome.message,
+          });
           return;
         }
         reply.status(401).send({

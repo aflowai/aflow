@@ -30,6 +30,7 @@ export type {
 } from './session/recovery.js';
 
 export { refuseLocalRequest } from './localRequestGuard.js';
+export { LOCAL_BROWSER_CALLER_HEADER, LOCAL_PROFILE_SESSION_HEADER } from '@aflow/schemas';
 
 export type { LocalRequest } from './localRequestGuard.js';
 
