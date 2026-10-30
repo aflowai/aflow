@@ -1,3 +1,4 @@
+import { carrierToken } from '../plan/carrier.js';
 import { randomUUID } from 'node:crypto';
 import {
   PLAN_NODE_POSITION_MAX,
@@ -154,6 +155,7 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
         ...(values.note !== null ? { note: values.note } : {}),
         position: values.position ?? this.positionAfterLast(spaceId, values.parentId),
         ...(values.createdBy !== null ? { createdBy: values.createdBy } : {}),
+        ...(values.status !== undefined ? { status: values.status } : {}),
       });
       return { outcome: 'inserted', node };
     });
@@ -288,12 +290,24 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
       : Math.min(Math.max(...siblings.map((n) => n.position)) + 1, PLAN_NODE_POSITION_MAX);
   }
 
-  listChildren: PlanNodeStore['listChildren'] = (spaceId, parentId, limit) => {
+  latestCarrierAt: PlanNodeStore['latestCarrierAt'] = (spaceId, nodeId) =>
+    Promise.resolve(
+      this.inSpace(spaceId)
+        .filter((node) => node.note?.includes(carrierToken(nodeId)))
+        .map((node) => node.createdAt)
+        .sort()
+        .at(-1) ?? null,
+    );
+
+  listChildren: PlanNodeStore['listChildren'] = (spaceId, parentId, limit, offset = 0) => {
     const children = this.inSpace(spaceId)
       .filter((n) => n.parentId === parentId)
       .map((n) => this.summary(n))
       .sort(bySiblingOrder);
-    return Promise.resolve({ children: children.slice(0, limit), total: children.length });
+    return Promise.resolve({
+      children: children.slice(offset, offset + limit),
+      total: children.length,
+    });
   };
 
   walk: PlanNodeStore['walk'] = (spaceId, opts) => this.walkOf(this.inSpace(spaceId), opts);
@@ -671,12 +685,23 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
     return Promise.resolve(counts);
   };
 
-  listRunsServing: PlanNodeStore['listRunsServing'] = (spaceId, nodeIds, limit) => {
+  listRunsServing: PlanNodeStore['listRunsServing'] = (spaceId, nodeIds, limit, rootId) => {
+    const belongs = (nodeId: string): boolean => {
+      if (rootId === undefined) return nodeIds.includes(nodeId);
+      const seen = new Set<string>();
+      let node = this.nodes.get(nodeId);
+      while (node && !seen.has(node.nodeId)) {
+        if (node.nodeId === rootId) return true;
+        seen.add(node.nodeId);
+        node = node.parentId ? this.nodes.get(node.parentId) : undefined;
+      }
+      return false;
+    };
     const runs = this.runs
       .filter(
         (r) =>
           r.spaceId === spaceId &&
-          nodeIds.includes(r.nodeId) &&
+          belongs(r.nodeId) &&
           (PLAN_NODE_RUN_STATUSES as readonly string[]).includes(r.status),
       )
       .sort((a, b) => b.startedAt.localeCompare(a.startedAt))

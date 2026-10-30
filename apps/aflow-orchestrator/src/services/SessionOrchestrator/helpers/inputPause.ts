@@ -227,7 +227,13 @@ export async function pauseForMissingVariables(
   linkageCarryover?: Partial<
     Pick<
       SessionHotState,
-      'parentSessionId' | 'parentStepExecutionId' | 'workflowExecution' | 'activatedByPerson'
+      | 'parentSessionId'
+      | 'parentStepExecutionId'
+      | 'workflowExecution'
+      | 'activatedByPerson'
+      | 'trigger'
+      | 'planResident'
+      | 'planResidentScheduleId'
     >
   >,
 ): Promise<{ runId: SessionId; status: SessionStatus; requestedInputRef: string }> {

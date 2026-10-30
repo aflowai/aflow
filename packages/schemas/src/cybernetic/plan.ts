@@ -122,6 +122,56 @@ export type PlanNodeSummary = z.infer<typeof PlanNodeSummarySchema>;
 // Writes
 // ============================================================================
 
+/**
+ * The first lines the engine writes on a `blocked` node, each saying what it
+ * waits on (Plan 331 D3, D5, D6, D8). A note that contains one of them
+ * already states it, so an ask leaves it as it stands.
+ */
+export const PLAN_NODE_BLOCKED_HEAD = 'Blocked: ';
+export const PLAN_NODE_PROPOSED_HEAD = 'Proposed: ';
+export const PLAN_NODE_ASK_HEAD = 'Waiting on you: ';
+export const PLAN_NODE_MERGE_WAIT_LINE =
+  'Waiting on you: judge this merge because the scheduled close lacks a publication pull request that GitHub reports merged.';
+export const PLAN_NODE_LIVE_CHECK_HEAD = `${PLAN_NODE_BLOCKED_HEAD}live check — `;
+
+/** The line that says what a blocked node waits on, wherever it sits in the note. */
+export function planNoteWaitLine(note: string | undefined): string | undefined {
+  return note
+    ?.split('\n')
+    .find((line) =>
+      [PLAN_NODE_BLOCKED_HEAD, PLAN_NODE_PROPOSED_HEAD, PLAN_NODE_ASK_HEAD].some((prefix) =>
+        line.startsWith(prefix),
+      ),
+    );
+}
+
+/** A commit as git names it in full or abbreviated: what a live check asks the folder to hold. */
+export const PlanCommitShaSchema = z
+  .string()
+  .regex(/^[0-9a-f]{7,64}$/, { message: 'A commit is named by its hex sha, 7 to 64 characters.' });
+
+/**
+ * A node whose criteria need a merged change running on the operator's stack
+ * (Plan 331 D8): it waits on a read of the connected folder's head holding
+ * the merge, not on the merged node, which closes on its merge.
+ */
+export const PlanNodeLiveCheckSchema = z
+  .object({
+    pullRequest: z
+      .string()
+      .regex(/^https?:\/\/\S+$/, { message: 'The merged pull request’s URL.' })
+      .describe('The merged pull request whose change the check needs running.'),
+    mergeCommitSha: PlanCommitShaSchema.optional().describe(
+      'The merge commit, where GitHub named it: what `host.binding.inspect` is asked the folder `holds`.',
+    ),
+  })
+  .strict();
+export type PlanNodeLiveCheck = z.infer<typeof PlanNodeLiveCheckSchema>;
+
+export const PLAN_NODE_PROPOSAL_AND_LIVE_CHECK_MESSAGE =
+  'A node is created as a proposal or as a live check, not both: a live check is not new scope, a proposal is.';
+export const PLAN_NODE_LIVE_CHECK_KIND_MESSAGE = 'A live check must have kind `investigate`.';
+
 export const PlanNodeCreateSchema = z
   .object({
     parentId: z.string().uuid().optional().describe('Omit for a root.'),
@@ -131,8 +181,30 @@ export const PlanNodeCreateSchema = z
     criteria: PlanNodeProseSchema.describe('How to tell the node is done.'),
     note: PlanNodeNoteSchema.optional(),
     position: PlanNodePositionSchema.optional(),
+    proposed: PlanNodeProseSchema.optional().describe(
+      'Why this work is proposed. The node is created blocked, its note’s first line `Proposed: <why>`, and nothing starts from it until a person approves it. A resident wake creates nothing else.',
+    ),
+    liveCheck: PlanNodeLiveCheckSchema.optional().describe(
+      'Where a merged node’s criteria need its change running on the stack: the node is created blocked on a read of the connected folder’s head holding the merge, and the merged node closes on its merge without waiting for it.',
+    ),
   })
-  .strict();
+  .strict()
+  .superRefine((create, ctx) => {
+    if (create.proposed !== undefined && create.liveCheck !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['liveCheck'],
+        message: PLAN_NODE_PROPOSAL_AND_LIVE_CHECK_MESSAGE,
+      });
+    }
+    if (create.liveCheck !== undefined && create.kind !== 'investigate') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['kind'],
+        message: PLAN_NODE_LIVE_CHECK_KIND_MESSAGE,
+      });
+    }
+  });
 export type PlanNodeCreate = z.infer<typeof PlanNodeCreateSchema>;
 
 export const PLAN_NODE_DONE_NEEDS_OUTCOME_MESSAGE =

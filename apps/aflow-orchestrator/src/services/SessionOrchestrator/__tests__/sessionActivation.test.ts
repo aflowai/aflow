@@ -275,6 +275,38 @@ async function chatStart(): Promise<void> {
   });
 }
 
+it.each([true, false])(
+  'records the resident marker in session creation and preserves it across resume (%s)',
+  async (resident) => {
+    const input = { config: { scheduleId: '00000000-0000-4000-8000-000000000331' } };
+    await lifecycle.startRun({
+      tenantId: TENANT,
+      runId: RUN,
+      target: { kind: 'platform-role', systemRole: 'cybernetic-helmsman' },
+      agentVersion: '1',
+      inputRef: `inline:${Buffer.from(JSON.stringify(input)).toString('base64')}` as PayloadRef,
+      traceId: 'trace-resident' as TraceId,
+      idempotencyKey: 'resident-start' as IdempotencyKey,
+      spaceId: SPACE,
+      trigger: 'schedule',
+      ...(resident ? { residentScheduleId: '00000000-0000-4000-8000-000000000331' } : {}),
+      activatedByPerson: false,
+    });
+    expect(await getSessionState(redis, TENANT, RUN)).toMatchObject({
+      trigger: 'schedule',
+      planResident: resident,
+      ...(resident ? { planResidentScheduleId: '00000000-0000-4000-8000-000000000331' } : {}),
+    });
+    const paused = await pauseOnCurrentStep();
+    await deliverResume(resumeCommand(paused, true));
+    expect(await getSessionState(redis, TENANT, RUN)).toMatchObject({
+      trigger: 'schedule',
+      planResident: resident,
+      ...(resident ? { planResidentScheduleId: '00000000-0000-4000-8000-000000000331' } : {}),
+    });
+  },
+);
+
 describe('a conversation a person starts, then a schedule resumes', () => {
   it('is attended from its start', async () => {
     await chatStart();
@@ -539,5 +571,13 @@ describe('a sub-agent its parent answers while it is paused', () => {
     const job = await answeredChildSchedules(true, false);
     expect((await getSessionState(redis, TENANT, RUN))?.activatedByPerson).toBe(false);
     expect(job['activatedByPerson']).toBe(false);
+  });
+});
+
+it('preserves recorded schedule provenance when starting a queued session again', async () => {
+  await updateSessionState(redis, TENANT, RUN, { trigger: 'schedule' });
+  await chatStart();
+  expect(await getSessionState(redis, TENANT, RUN)).toMatchObject({
+    trigger: 'schedule',
   });
 });

@@ -16,6 +16,7 @@ import { createWorkflowOAuthConsentSource } from './sources/workflowOAuthConsent
 import { createWorkflowWriteApprovalSource } from './sources/workflowWriteApprovalSource.js';
 import { createSessionInvitationSource } from './sources/sessionInvitationSource.js';
 import { createBrowserHandoffSource } from './sources/browserHandoffSource.js';
+import { createPlanAskSource } from './sources/planAskSource.js';
 import { createPlanDecisionSource } from './sources/planDecisionSource.js';
 
 export interface BuildSpaceActionCenterAggregatorDeps {
@@ -51,6 +52,7 @@ export function buildSpaceActionCenterAggregator(
       createSessionInvitationSource(sourceDeps),
       createBrowserHandoffSource(sourceDeps),
       createPlanDecisionSource(sourceDeps),
+      createPlanAskSource(sourceDeps),
     ],
   });
 }

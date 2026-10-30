@@ -11,6 +11,7 @@ import {
   isClosedPlanNodeStatus,
   planNodeOperatorLine,
   PLAN_NODE_APPROVED_HEAD,
+  PLAN_NODE_MERGE_WAIT_LINE,
   PLAN_NODE_CHILDREN_LIMIT,
   PLAN_NODE_CONVERSATION_LINK_LABEL,
   PLAN_NODE_REVISE_HEAD,
@@ -21,10 +22,11 @@ import {
   PLAN_LANE_ITEM_RUNS_LIMIT,
   PLAN_NODE_RUNS_LIMIT,
   PLAN_NODE_PROSE_MAX_CHARS,
-  PLAN_NODE_UPDATE_FIELDS,
   PLAN_TREE_DEPTH_LIMIT,
   PLAN_TREE_WALK_NODE_LIMIT,
   OPEN_PLAN_NODE_STATUSES,
+  PLAN_NODE_LIVE_CHECK_HEAD,
+  PLAN_NODE_PROPOSED_HEAD,
   type CoachLearning,
   type PlanNode,
   type PlanNodeCreateInput,
@@ -37,6 +39,7 @@ import {
   type PlanNodeGetOutput,
   type PlanNodeLink,
   type PlanNodeLinkInput,
+  type PlanNodeLiveCheck,
   type PlanNodeListInput,
   type PlanNodeListOutput,
   type PlanNodeOpen,
@@ -50,6 +53,9 @@ import {
   type PlanLaneItem,
   type PlanOverviewOutput,
 } from '@aflow/schemas';
+import { isFindingsCarrier } from './carrier.js';
+import { askedRevision, claimAsk, isAsked } from './asks.js';
+import { logCyberneticError } from '../logger.js';
 import { publishActionCenterWake } from '@aflow/redis';
 import { bumpAttentionGeneration } from '../attentionCache.js';
 import { emitPlanUpdated } from '../entityEvents.js';
@@ -62,8 +68,21 @@ import {
   encodePlanLinkCursor,
   type PlanBoardOptions,
 } from './board.js';
-import type { PlanNodePatch, PlanNodeStore, PlanPlacementRefusal } from './store.js';
+import type { PlanNodePatch, PlanNodeStore } from './store.js';
 import type { PlanPlaceAnchor } from './placement.js';
+import { carrierNode, PLAN_CARRIER_FINDINGS_LIMIT } from './carrier.js';
+import {
+  notFound,
+  openHasNoOutcome,
+  operatorNoteTooLong,
+  placementRefusal,
+  refusalDetails,
+  reopenedNote,
+  reopenedNoteTooLong,
+  sameColumn,
+  stale,
+  unchanged,
+} from './refusals.js';
 
 /** How far any read of a space's plan walks the tree. */
 export const PLAN_TREE_WALK_BOUNDS: PlanTreeWalkBounds = {
@@ -86,6 +105,9 @@ export type PlanOpErrorCode =
   | 'PLAN_LIST_CURSOR_STALE'
   | 'PLAN_NODE_DEPENDENCY_CYCLE'
   | 'PLAN_NODE_DEPENDENCY_WALK_LIMIT'
+  | 'PLAN_NODE_ATTESTATION_UNAVAILABLE'
+  | 'PLAN_NODE_RESIDENT_SCOPE'
+  | 'PLAN_NODE_LIVE_CHECK_PERSON'
   | 'PLAN_LEARNING_NOT_FOUND';
 
 export interface PlanOpError {
@@ -114,164 +136,12 @@ export interface PlanWriteContext extends PlanReadContext {
    * P4): an update it lands links it on the node as a `session` link.
    */
   conversationId?: string;
-}
-
-function notFound(
-  nodeId: string,
-  role: 'node' | 'parent' | 'root' | 'dependency' = 'node',
-): PlanOpError {
-  return {
-    ok: false,
-    code: 'PLAN_NODE_NOT_FOUND',
-    message: `No plan node "${nodeId}" in this space${role === 'node' ? '' : ` to use as the ${role}`}. The attention block lists the open tree; plan.node.list finds the rest.`,
-    details: { nodeId },
-  };
-}
-
-/** A patch column against the node's: absent is null, and a time compares as its ISO string. */
-function sameColumn(patched: unknown, held: unknown): boolean {
-  const stored = (value: unknown) =>
-    value instanceof Date ? value.toISOString() : (value ?? null);
-  return stored(patched) === stored(held);
-}
-
-function refusalDetails(current: PlanNode, input: PlanNodeUpdateInput): Record<string, unknown> {
-  const differingFields = PLAN_NODE_UPDATE_FIELDS.filter((field) => {
-    const value = field === 'note' && input.note === '' ? null : input[field];
-    return value !== undefined && !sameColumn(value, current[field]);
-  });
-  const details: PlanNodeRefusalDetails = {
-    nodeId: current.nodeId,
-    revision: current.revision,
-    status: current.status,
-    updatedAt: current.updatedAt,
-    differingFields,
-  };
-  return details;
-}
-
-function stale(current: PlanNode, input: PlanNodeUpdateInput): PlanOpError {
-  return {
-    ok: false,
-    code: 'PLAN_NODE_STALE',
-    message:
-      `Plan node "${current.title}" is at revision ${String(current.revision)}; this update was decided against revision ` +
-      `${String(input.expectedRevision)}, so nothing was written. error.details.differingFields names what this update ` +
-      `would still change; read the node with plan.node.get, reconcile with it, and update against revision ` +
-      `${String(current.revision)}.`,
-    details: refusalDetails(current, input),
-  };
-}
-
-function openHasNoOutcome(current: PlanNode, status: PlanNodeStatus): PlanOpError {
-  const stands =
-    status === current.status ? `is ${status}` : `would be ${status} after this update`;
-  return {
-    ok: false,
-    code: 'PLAN_NODE_OPEN_HAS_NO_OUTCOME',
-    message:
-      `Plan node "${current.title}" ${stands}, and an open node has no outcome, so nothing was written. ` +
-      'Pass `outcome` in the update that sets status "done" or "dropped", or put what you found in the note.',
-    details: { nodeId: current.nodeId, status },
-  };
-}
-
-function unchanged(current: PlanNode, input: PlanNodeUpdateInput): PlanOpError {
-  return {
-    ok: false,
-    code: 'PLAN_NODE_UNCHANGED',
-    message:
-      `Plan node "${current.title}" already stands as this update would leave it, so nothing was written ` +
-      `and it stays at revision ${String(current.revision)}. An update names at least one field whose value ` +
-      'differs from the node; plan.node.get reads it as it stands.',
-    details: refusalDetails(current, input),
-  };
-}
-
-function reopenedNoteTooLong(current: PlanNode, noteLength: number): PlanOpError {
-  const headLength = reopenedNote(current, null)?.length ?? 0;
-  const room = PLAN_NODE_PROSE_MAX_CHARS - headLength - 1;
-  const shortenOutcome = `shorten the outcome with an update while the node is still ${current.status}`;
-  const remedy =
-    headLength > PLAN_NODE_PROSE_MAX_CHARS
-      ? `Its outcome alone passes that: ${shortenOutcome}, then reopen it.`
-      : `Pass a shorter \`note\` in this update${room > 0 ? ` (at most ${String(room)} characters fit under the reopened line)` : ''}, ` +
-        `or "" to keep only that line, or ${shortenOutcome} first.`;
-  return {
-    ok: false,
-    code: 'PLAN_NODE_NOTE_TOO_LONG',
-    message:
-      `Reopening plan node "${current.title}" puts its outcome at the head of its note, which would then hold ` +
-      `${String(noteLength)} characters; a note holds at most ${String(PLAN_NODE_PROSE_MAX_CHARS)}, so nothing was ` +
-      `written. ${remedy}`,
-    details: {
-      nodeId: current.nodeId,
-      status: current.status,
-      noteLength,
-      noteMaxChars: PLAN_NODE_PROSE_MAX_CHARS,
-    },
-  };
-}
-
-function cycle(nodeId: string, parentId: string): PlanOpError {
-  return {
-    ok: false,
-    code: 'PLAN_NODE_CYCLE',
-    message: `Plan node "${parentId}" is "${nodeId}" itself or sits under it, so it cannot be its parent. Nothing was written.`,
-    details: { nodeId, parentId },
-  };
-}
-
-type TooDeep = Extract<PlanPlacementRefusal, { outcome: 'too_deep' }>;
-
-/** `nodeId` is null for a node not yet created. */
-function tooDeep(nodeId: string | null, parentId: string, check: TooDeep): PlanOpError {
-  const deepest = check.parentDepth + 1 + check.height;
-  const placed =
-    nodeId === null
-      ? `a new node under it would sit at depth ${String(deepest)}`
-      : `"${nodeId}" has ${String(check.height)} level${check.height === 1 ? '' : 's'} below it, so moving it there would put its deepest node at depth ${String(deepest)}`;
-  return {
-    ok: false,
-    code: 'PLAN_NODE_TOO_DEEP',
-    message:
-      `Plan node "${parentId}" sits at depth ${String(check.parentDepth)} (a root is depth 0) and ${placed}; ` +
-      `a plan holds nodes to depth ${String(PLAN_TREE_DEPTH_LIMIT)}. Nothing was written; choose a parent nearer the root.`,
-    details: {
-      ...(nodeId !== null ? { nodeId } : {}),
-      parentId,
-      parentDepth: check.parentDepth,
-      height: check.height,
-      depthLimit: PLAN_TREE_DEPTH_LIMIT,
-    },
-  };
-}
-
-function placementRefusal(
-  refusal: PlanPlacementRefusal,
-  nodeId: string | null,
-  parentId: string,
-): PlanOpError {
-  switch (refusal.outcome) {
-    case 'cycle':
-      if (nodeId === null) throw new Error('a placement check met a node not yet created');
-      return cycle(nodeId, parentId);
-    case 'too_deep':
-      return tooDeep(nodeId, parentId, refusal);
-    case 'parent_not_found':
-      return notFound(parentId, 'parent');
-  }
-}
-
-/** A reopened node keeps what it claimed, as the head of its note, not as its outcome. */
-function reopenedNote(
-  current: PlanNode,
-  note: string | null | undefined,
-): string | null | undefined {
-  if (current.outcome === undefined) return note;
-  const kept = `Reopened; it was ${current.status}: ${current.outcome}`;
-  const rest = note === undefined ? (current.note ?? null) : note;
-  return rest === null ? kept : `${kept}\n${rest}`;
+  /**
+   * The writer is a resident wake (Plan 331 D5): it proposes new work, created
+   * blocked, and never moves a blocked node on — approving scope is a person's.
+   */
+  resident?: boolean;
+  readMergedPullRequest?: (url: string, nodeId: string) => Promise<boolean>;
 }
 
 /** The columns a write is judged by; `openedAt` is stamped after, never compared. */
@@ -337,20 +207,82 @@ async function nodeWritten<T extends { node: PlanNode }>(
 // plan.node.create
 // ============================================================================
 
+/** Plan 331 D8 leaves the folder read with the operator; no automatic reader is scheduled. */
+export function liveCheckHead(check: PlanNodeLiveCheck): string {
+  const holding =
+    check.mergeCommitSha !== undefined
+      ? `${check.mergeCommitSha}, the merge of ${check.pullRequest}`
+      : `the merge of ${check.pullRequest}`;
+  return `${PLAN_NODE_LIVE_CHECK_HEAD}waits on a person to read the connected folder's head holding ${holding} (host.binding.inspect with \`holds\`); the merged step closed on its merge.`;
+}
+
+function residentCreates(): PlanOpError {
+  return {
+    ok: false,
+    code: 'PLAN_NODE_RESIDENT_SCOPE',
+    message:
+      'A resident wake proposes work and never approves its own scope, so nothing was written. Create the node ' +
+      'with `proposed` saying why it is worth doing — it is created blocked until a person approves it — or, for ' +
+      'a merged node whose criteria need the change running on the stack, with `liveCheck`.',
+  };
+}
+
+function residentUnblocks(current: PlanNode): PlanOpError {
+  return {
+    ok: false,
+    code: 'PLAN_NODE_RESIDENT_SCOPE',
+    message:
+      `Plan node "${current.title}" is ${current.status}, and only a person approves, closes or reopens it — Approve on the plan ` +
+      'page or in the Action Center. A resident wake writes what the node waits on in its note and leaves its ' +
+      'status as it stands; nothing was written.',
+    details: { nodeId: current.nodeId, status: current.status },
+  };
+}
+
+function createdNoteTooLong(noteLength: number): PlanOpError {
+  return {
+    ok: false,
+    code: 'PLAN_NODE_NOTE_TOO_LONG',
+    message:
+      `A node created blocked has its first line say what it waits on, above the note, which would then hold ` +
+      `${String(noteLength)} characters; a note holds at most ${String(PLAN_NODE_PROSE_MAX_CHARS)}, so nothing was ` +
+      'written. Pass a shorter `note`, or none.',
+    details: { noteLength, noteMaxChars: PLAN_NODE_PROSE_MAX_CHARS },
+  };
+}
+
+/**
+ * A node a person or a conversation writes is `active`. A proposal (Plan 331
+ * D5) and a live check (D8) are created `blocked`, their first line saying
+ * what they wait on; a resident wake writes no other kind.
+ */
 export async function createPlanNode(
   ctx: PlanWriteContext,
   input: PlanNodeCreateInput,
 ): Promise<PlanOpResult<{ node: PlanNode }>> {
   const parentId = input.parentId ?? null;
+  const head =
+    input.proposed !== undefined
+      ? `${PLAN_NODE_PROPOSED_HEAD}${input.proposed}`
+      : input.liveCheck !== undefined
+        ? liveCheckHead(input.liveCheck)
+        : undefined;
+  if (ctx.resident === true && head === undefined) return residentCreates();
+  const given = input.note !== undefined && input.note !== '' ? input.note : null;
+  const note = head === undefined ? given : given === null ? head : `${head}\n${given}`;
+  if (note !== null && note.length > PLAN_NODE_PROSE_MAX_CHARS) {
+    return createdNoteTooLong(note.length);
+  }
   const inserted = await ctx.store.insert(ctx.spaceId, {
     parentId,
     kind: input.kind,
     title: input.title,
     goal: input.goal,
     criteria: input.criteria,
-    note: input.note !== undefined && input.note !== '' ? input.note : null,
+    note,
     ...(input.position !== undefined ? { position: input.position } : {}),
     createdBy: ctx.createdBy ?? null,
+    ...(head !== undefined ? { status: 'blocked' as const } : {}),
   });
   if (inserted.outcome === 'inserted') {
     return nodeWritten(ctx, { ok: true as const, node: inserted.node });
@@ -366,15 +298,67 @@ export async function createPlanNode(
 export function updatePlanNode(
   ctx: PlanWriteContext,
   input: PlanNodeUpdateInput,
-): Promise<PlanOpResult<{ node: PlanNode }>> {
+): Promise<PlanOpResult<{ node: PlanNode; carrier?: PlanNode; carrierFailure?: string }>> {
   return writePlanNode(ctx, input, {});
+}
+
+/**
+ * A node closed done with findings linked to it proposes one carrier under
+ * its parent (Plan 331 D6), with the findings it has not already handed on.
+ */
+async function readCarrierFindings(
+  ctx: PlanWriteContext,
+  closed: PlanNode,
+): Promise<{ findings: PlanNodeLink[]; more: number } | undefined> {
+  let page = await ctx.store.pageLinks(ctx.spaceId, closed.nodeId, {
+    kind: 'finding',
+    limit: PLAN_CARRIER_FINDINGS_LIMIT,
+  });
+  if (page.links.length === 0) return undefined;
+  const since = await ctx.store.latestCarrierAt(ctx.spaceId, closed.nodeId);
+  const findings: PlanNodeLink[] = [];
+  let uncarried = 0;
+  for (;;) {
+    const fresh = page.links.filter(
+      (link) => since === null || Date.parse(link.createdAt) > Date.parse(since),
+    );
+    uncarried += fresh.length;
+    findings.push(...fresh.slice(0, PLAN_CARRIER_FINDINGS_LIMIT - findings.length));
+    if (page.next === undefined) break;
+    page = await ctx.store.pageLinks(ctx.spaceId, closed.nodeId, {
+      kind: 'finding',
+      limit: PLAN_CARRIER_FINDINGS_LIMIT,
+      after: page.next,
+    });
+  }
+  if (findings.length === 0) return undefined;
+  return { findings, more: uncarried - findings.length };
+}
+
+async function proposeCarrier(
+  ctx: PlanWriteContext,
+  closed: PlanNode,
+): Promise<PlanNode | undefined> {
+  // A carrier read must not turn a committed close into a failed write.
+  const read = await readCarrierFindings(ctx, closed);
+  if (!read) return undefined;
+  const { findings, more } = read;
+  const inserted = await ctx.store.insert(ctx.spaceId, {
+    ...carrierNode(closed, findings, more),
+    createdBy: ctx.createdBy ?? null,
+  });
+  // The parent the closed node sat under is gone since its close: there is nowhere to propose it.
+  if (inserted.outcome !== 'inserted')
+    throw new Error('Carrier placement refused: ' + inserted.outcome);
+  await nodeWritten(ctx, { node: inserted.node });
+  return inserted.node;
 }
 
 async function writePlanNode(
   ctx: PlanWriteContext,
   input: PlanNodeUpdateInput,
   stamp: Pick<PlanNodePatch, 'openedAt' | 'spendCents'>,
-): Promise<PlanOpResult<{ node: PlanNode }>> {
+): Promise<PlanOpResult<{ node: PlanNode; carrier?: PlanNode; carrierFailure?: string }>> {
   const current = await ctx.store.find(ctx.spaceId, input.nodeId);
   if (!current) return notFound(input.nodeId);
   if (current.revision !== input.expectedRevision) return stale(current, input);
@@ -384,7 +368,89 @@ async function writePlanNode(
   if (input.outcome !== undefined && !isClosedPlanNodeStatus(status)) {
     return openHasNoOutcome(current, status);
   }
+  if (
+    ctx.resident === true &&
+    (current.status === 'blocked' || isClosedPlanNodeStatus(current.status)) &&
+    (input.status !== undefined || input.outcome !== undefined) &&
+    !(current.status === 'blocked' && status === 'blocked' && input.outcome === undefined)
+  ) {
+    return residentUnblocks(current);
+  }
 
+  if (
+    ctx.resident === true &&
+    (input.title !== undefined ||
+      input.goal !== undefined ||
+      input.criteria !== undefined ||
+      input.parentId !== undefined ||
+      input.position !== undefined ||
+      input.status === 'dropped' ||
+      (input.status === 'done' &&
+        (current.note?.includes(PLAN_NODE_LIVE_CHECK_HEAD) ||
+          current.note?.split('\n').some(isFindingsCarrier))))
+  )
+    return residentUnblocks(current);
+  if (
+    ctx.actorKind !== 'human' &&
+    current.note?.includes(PLAN_NODE_LIVE_CHECK_HEAD) &&
+    (input.status !== undefined || input.outcome !== undefined || input.note !== undefined)
+  ) {
+    return {
+      ok: false,
+      code: 'PLAN_NODE_LIVE_CHECK_PERSON',
+      message:
+        'Only a person may attest the folder-head read or complete this live check. Nothing was written.',
+      details: { nodeId: current.nodeId },
+    };
+  }
+
+  const pullRequest =
+    ctx.resident === true && input.status === 'done'
+      ? await ctx.store.newestLink(ctx.spaceId, current.nodeId, 'pull_request')
+      : null;
+  if (ctx.resident === true && input.status === 'done') {
+    let merged = false;
+    try {
+      if (pullRequest !== null && !ctx.readMergedPullRequest)
+        throw new Error('Merge attestation reader unavailable');
+      merged =
+        pullRequest !== null &&
+        (await ctx.readMergedPullRequest?.(pullRequest.ref, current.nodeId)) === true;
+    } catch {
+      return {
+        ok: false,
+        code: 'PLAN_NODE_ATTESTATION_UNAVAILABLE',
+        message:
+          'GitHub merge attestation failed. Leave this node open and retry the close on a later wake.',
+        details: { nodeId: current.nodeId },
+      };
+    }
+    if (!merged) {
+      let waiting = current;
+      const line = PLAN_NODE_MERGE_WAIT_LINE;
+      const note = current.note ? `${current.note}\n${line}` : line;
+      if (!current.note?.includes(line)) {
+        const updated = await ctx.store.updateAtRevision(
+          ctx.spaceId,
+          current.nodeId,
+          current.revision,
+          note.length <= PLAN_NODE_PROSE_MAX_CHARS ? { note } : { status: 'blocked' },
+        );
+        if (!updated) return stale(current, input);
+        waiting = updated;
+        await nodeWritten(ctx, { node: waiting });
+      }
+      const record = await askedRevision(ctx, waiting.nodeId);
+      if (!isAsked(waiting, record)) await claimAsk(ctx, waiting, record, false);
+      return {
+        ok: false,
+        code: 'PLAN_NODE_RESIDENT_SCOPE',
+        message:
+          'This scheduled close requires a linked pull request GitHub reports merged at close time, delivering this node’s recorded work. The node waits on a person.',
+        details: { nodeId: current.nodeId },
+      };
+    }
+  }
   const patch: PlanNodePatch = {};
   if (input.title !== undefined) patch.title = input.title;
   if (input.goal !== undefined) patch.goal = input.goal;
@@ -406,6 +472,18 @@ async function writePlanNode(
         patch.outcome = null;
       }
     } else if (current.closedAt === undefined) patch.closedAt = new Date();
+  }
+
+  if (
+    ctx.actorKind === 'human' &&
+    input.status === 'active' &&
+    current.status === 'blocked' &&
+    current.note?.includes(PLAN_NODE_LIVE_CHECK_HEAD)
+  ) {
+    patch.status = 'done';
+    patch.closedAt = new Date();
+    patch.outcome =
+      "The operator approved the live check after reading the connected folder's head holding the merge.";
   }
 
   const parentId = input.parentId;
@@ -448,7 +526,26 @@ async function writePlanNode(
       label: PLAN_NODE_CONVERSATION_LINK_LABEL,
     });
   }
-  return nodeWritten(ctx, { ok: true as const, node });
+  const written = await nodeWritten(ctx, { ok: true as const, node });
+  if (isClosedPlanNodeStatus(current.status) || node.status !== 'done') return written;
+  try {
+    const carrier = await proposeCarrier(ctx, node);
+    return carrier !== undefined ? { ...written, carrier } : written;
+  } catch (error) {
+    logCyberneticError(
+      'Carrier failed after close. Recover the findings linked to the closed node before proposing further work.',
+      error,
+      {
+        spaceId: ctx.spaceId,
+        nodeId: node.nodeId,
+        findings: { nodeId: node.nodeId, kind: 'finding' },
+      },
+    );
+    return {
+      ...written,
+      carrierFailure: `Carrier failed for closed node ${node.nodeId}. Read its linked findings and propose a blocked carrier.`,
+    };
+  }
 }
 
 // ============================================================================
@@ -460,8 +557,9 @@ export type PlanNodeOpenRequest = PlanNodeOpen & { nodeId: string };
 /**
  * Moves a `blocked`, `done` or `dropped` node to `active` through
  * `updatePlanNode`, so it is judged and written as every update is. On a
- * blocked node `why` goes above the note as one `Approved: …` line, its first
- * line, which the next brief opens with (`planNodeInstructions`). On
+ * blocked live check approval closes it with the person's folder-head read. On
+ * other blocked nodes `why` goes above the note as one `Approved: …` line, its
+ * first line, which the next brief opens with (`planNodeInstructions`). On
  * a closed node the update's reopen rule (`reopenedNote`) heads the note with
  * what the node claimed; a `why` follows as `Reopened: …` in place of the
  * prior note, which describes work the reopen declares unfinished, and no
@@ -470,7 +568,14 @@ export type PlanNodeOpenRequest = PlanNodeOpen & { nodeId: string };
 export async function openPlanNode(
   ctx: PlanWriteContext,
   request: PlanNodeOpenRequest,
-): Promise<PlanOpResult<{ node: PlanNode; from: PlanNodeStatus }>> {
+): Promise<
+  PlanOpResult<{
+    node: PlanNode;
+    from: PlanNodeStatus;
+    carrier?: PlanNode;
+    carrierFailure?: string;
+  }>
+> {
   const update: PlanNodeUpdateInput = {
     nodeId: request.nodeId,
     expectedRevision: request.expectedRevision,
@@ -502,6 +607,10 @@ export async function openPlanNode(
     } else {
       update.note = `Reopened: ${request.why}`;
     }
+  }
+  if (isClosedPlanNodeStatus(current.status) && current.note?.includes(PLAN_NODE_LIVE_CHECK_HEAD)) {
+    update.status = 'blocked';
+    update.note = `${request.why !== undefined ? `Reopened: ${request.why}\n` : ''}${current.note}`;
   }
   const written = await writePlanNode(ctx, update, {
     openedAt: new Date(),
@@ -577,27 +686,6 @@ export function planNodeReviseKey(
   nodeId: string,
 ): string {
   return ['plan:node:revise', ctx.tenantId, ctx.spaceId, nodeId].join(':');
-}
-
-function operatorNoteTooLong(
-  current: PlanNode,
-  noteLength: number,
-  act: 'Approving' | 'Sending back',
-): PlanOpError {
-  return {
-    ok: false,
-    code: 'PLAN_NODE_NOTE_TOO_LONG',
-    message:
-      `${act} plan node "${current.title}" with this note puts it above its note, which would then hold ` +
-      `${String(noteLength)} characters. A note holds at most ${String(PLAN_NODE_PROSE_MAX_CHARS)}, so nothing was ` +
-      'written. Shorten what you wrote, or shorten the node’s note first.',
-    details: {
-      nodeId: current.nodeId,
-      status: current.status,
-      noteLength,
-      noteMaxChars: PLAN_NODE_PROSE_MAX_CHARS,
-    },
-  };
 }
 
 export type PlanNodePlaceRequest = {

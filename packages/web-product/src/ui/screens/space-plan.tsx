@@ -270,9 +270,11 @@ export function SpacePlanPage(): React.ReactNode {
     onError: () => undefined,
   });
 
-  const answered = async (write: Promise<unknown>): Promise<PlanNodeCloseAnswer> => {
+  const [carrierFailure, setCarrierFailure] = useState<string>();
+  const answered = async (write: Promise<PlanNodeUpdateOutput>): Promise<PlanNodeCloseAnswer> => {
     try {
-      await write;
+      const result = await write;
+      if (result.carrierFailure) setCarrierFailure(result.carrierFailure);
       return { ok: true };
     } catch (err) {
       // A refusal on the revision — or a sibling that moved — means what is
@@ -295,6 +297,11 @@ export function SpacePlanPage(): React.ReactNode {
     <PageContainer>
       <Column gap="lg">
         {header}
+        {carrierFailure && (
+          <Text role="alert" tone="danger">
+            {carrierFailure}
+          </Text>
+        )}
         {body}
       </Column>
     </PageContainer>
@@ -595,6 +602,11 @@ export function SpacePlanPage(): React.ReactNode {
     >
       <Row gap="sm" align="center" wrap style={{ padding: 'var(--space-sm) var(--space-md) 0' }}>
         {header}
+        {carrierFailure && (
+          <Text role="alert" tone="danger">
+            {carrierFailure}
+          </Text>
+        )}
         {listNotes}
       </Row>
       <div

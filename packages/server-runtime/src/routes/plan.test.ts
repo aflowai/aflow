@@ -433,6 +433,14 @@ describe('PATCH /v1/spaces/:spaceId/plan/nodes/:nodeId', () => {
     return app.inject({ method: 'PATCH', url, payload: body as Record<string, unknown> });
   }
 
+  it('returns carrier failure recovery pointers after a successful close', async () => {
+    const carrierFailure = `Carrier failed for closed node ${closedNode().nodeId}. Read its linked findings: publish failed`;
+    mockUpdatePlanNode.mockResolvedValue({ ok: true, node: closedNode(), carrierFailure });
+    const res = await patch({ expectedRevision: 3, status: 'done', outcome: 'Merged.' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ node: closedNode(), carrierFailure });
+  });
+
   it('marks a node done through the engine, against the revision the operator read, stamped with who they are', async () => {
     mockUpdatePlanNode.mockResolvedValue({ ok: true, node: closedNode() });
 
@@ -1081,6 +1089,19 @@ describe('PATCH /v1/spaces/:spaceId/plan/nodes/:nodeId/open', () => {
   const url = `/v1/spaces/${SPACE_ID}/plan/nodes/${CHILD_ID}/open`;
   const open = (body: unknown) =>
     app.inject({ method: 'PATCH', url, payload: body as Record<string, unknown> });
+
+  it('returns carrier recovery pointers after a committed live-check approval', async () => {
+    const carrierFailure = 'Carrier failed for closed node. Read its linked findings.';
+    mockOpenPlanNode.mockResolvedValue({
+      ok: true,
+      node: writtenNode({ status: 'done' }),
+      from: 'blocked',
+      carrierFailure,
+    });
+    const res = await open({ expectedRevision: 3 });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().carrierFailure).toBe(carrierFailure);
+  });
 
   it('approves through the engine against the revision read, stamped from the session, with the status it left', async () => {
     mockOpenPlanNode.mockResolvedValue({ ok: true, node: writtenNode(), from: 'blocked' });
