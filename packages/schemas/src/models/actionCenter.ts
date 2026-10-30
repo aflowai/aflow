@@ -174,6 +174,21 @@ export const PlanDecisionOriginSchema = z.object({
 });
 export type PlanDecisionOrigin = z.infer<typeof PlanDecisionOriginSchema>;
 
+/**
+ * A `blocked` node the resident asked about (Plan 331 D3.3): what it waits on
+ * is its note's wait line, and the ask's record names the revision it was
+ * asked at. Derived from the node and that record at read time; a write to
+ * the node moves its revision and the item goes until the next ask. Approve is
+ * the plan page's open write, Drop its close — a person's alone, CAS on the
+ * revision shown.
+ */
+export const PlanAskOriginSchema = z.object({
+  type: z.literal('plan_ask'),
+  nodeId: z.string().uuid(),
+  revision: z.number().int().min(1),
+});
+export type PlanAskOrigin = z.infer<typeof PlanAskOriginSchema>;
+
 export const ActionCenterItemOriginSchema = z.discriminatedUnion('type', [
   StepOriginSchema,
   ProposalOriginSchema,
@@ -185,6 +200,7 @@ export const ActionCenterItemOriginSchema = z.discriminatedUnion('type', [
   SessionInvitationOriginSchema,
   BrowserHandoffOriginSchema,
   PlanDecisionOriginSchema,
+  PlanAskOriginSchema,
 ]);
 export type ActionCenterItemOrigin = z.infer<typeof ActionCenterItemOriginSchema>;
 

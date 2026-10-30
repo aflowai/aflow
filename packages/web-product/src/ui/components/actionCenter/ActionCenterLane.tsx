@@ -1,5 +1,6 @@
 'use client';
 
+import { CarrierFailures } from './CarrierFailures.js';
 import { useState, type ReactElement } from 'react';
 import { Badge, Card, CardBody, Column, HitlResolution, Row, Text } from '@aflow/design-system';
 import type { PostInstallTask } from '@aflow/schemas';
@@ -60,10 +61,17 @@ export function ActionCenterLane({
   const spaceSlug = useSpaceFromRoute()?.slug ?? '';
   const { push } = useNavigation();
 
-  if (hideWhenEmpty && items.length === 0 && setupChecklists.length === 0) return null;
+  if (
+    hideWhenEmpty &&
+    items.length === 0 &&
+    setupChecklists.length === 0 &&
+    !state.carrierFailures?.length
+  )
+    return null;
 
   return (
     <Column gap="sm">
+      <CarrierFailures state={state} />
       <Row gap="sm" align="center">
         <Text size="sm" weight="semibold">
           {title}

@@ -176,6 +176,7 @@ export const actionCenterRoutes: FastifyPluginAsync<ActionCenterRoutesOptions> =
           200: z.object({
             item: ActionCenterItemSchema,
             setupChecklist: z.array(PostInstallTaskSchema).optional(),
+            carrierFailure: z.string().optional(),
           }),
           403: ErrorSchema,
           404: ErrorSchema,
@@ -223,6 +224,7 @@ export const actionCenterRoutes: FastifyPluginAsync<ActionCenterRoutesOptions> =
         }
         return {
           item: result.item,
+          ...(result.carrierFailure ? { carrierFailure: result.carrierFailure } : {}),
           ...(result.setupChecklist !== undefined ? { setupChecklist: result.setupChecklist } : {}),
         };
       } catch (err) {
@@ -389,6 +391,12 @@ function originMatches(current: ActionCenterItemOrigin, claimed: ActionCenterIte
     case 'plan_decision':
       return (
         claimed.type === 'plan_decision' &&
+        current.nodeId === claimed.nodeId &&
+        current.revision === claimed.revision
+      );
+    case 'plan_ask':
+      return (
+        claimed.type === 'plan_ask' &&
         current.nodeId === claimed.nodeId &&
         current.revision === claimed.revision
       );

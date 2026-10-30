@@ -907,6 +907,8 @@ export const StartRunCommandSchema = z.object({
   spaceId: z.string().uuid().optional(),
   /** How this run was triggered — surfaces in agent FlowRunContext */
   trigger: RunTriggerSchema.optional(),
+  /** The scheduler stamps this from its stored schedule, never from run input. */
+  residentScheduleId: z.string().uuid().optional(),
   /**
    * Whether the run is attended from this command on — the session's
    * `activatedByPerson`, decided where the command is made and never from what

@@ -40,6 +40,7 @@ import {
 } from '../plan/operations.js';
 import { createPlanNodeStore } from '../plan/store.js';
 import { mergeLinkLabel } from '../plan/stream.js';
+import { carrierToken } from '../plan/carrier.js';
 
 const DATABASE_URL = process.env['DATABASE_URL'];
 const TENANT_ID = 'a0000000-0000-0000-0000-000000000001';
@@ -95,6 +96,29 @@ describeDb('moveAtRevision — two crossing moves never close a loop (real DB)',
       );
     }
     await handle.close();
+  });
+
+  it('projects only the newest matching carrier timestamp across parents within the space', async () => {
+    const root = await node('Carrier root');
+    const closed = await node('Closed step', root.nodeId);
+    expect(await store.latestCarrierAt(SPACE_ID, closed.nodeId)).toBeNull();
+    const carrier = await node('Carrier', root.nodeId);
+    await updatePlanNode(ctx, {
+      nodeId: carrier.nodeId,
+      expectedRevision: carrier.revision,
+      note: carrierToken(closed.nodeId),
+    });
+    expect(await store.latestCarrierAt(SPACE_ID, closed.nodeId)).toBe(carrier.createdAt);
+
+    const movedParent = await node('Moved parent');
+    await updatePlanNode(ctx, {
+      nodeId: closed.nodeId,
+      expectedRevision: closed.revision,
+      parentId: movedParent.nodeId,
+    });
+    expect(await store.latestCarrierAt(SPACE_ID, closed.nodeId)).toBe(carrier.createdAt);
+    expect(await store.latestCarrierAt(randomUUID(), closed.nodeId)).toBeNull();
+    expect(await store.latestCarrierAt(SPACE_ID, randomUUID())).toBeNull();
   });
 
   it('refuses one of A-under-B and B-under-A, and both stay in the tree', async () => {

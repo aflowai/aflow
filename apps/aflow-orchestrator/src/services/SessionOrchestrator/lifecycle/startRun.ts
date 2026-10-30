@@ -24,6 +24,7 @@ import {
 import { createTenantContext } from '@aflow/database';
 import { resolveDisclosedCallers } from '@aflow/cybernetic-runtime';
 import type { DisclosedCallerBinding } from '@aflow/schemas';
+import { planResidentSessionMarker } from '../helpers/planResidentSession.js';
 import { resolveStepInput } from '../helpers/stepInputResolution.js';
 import { buildSpaceContext, readSpaceContextGen } from '../helpers/spaceContext.js';
 import { initializeRuntimeState } from '../helpers/runtimeState.js';
@@ -126,6 +127,10 @@ export function createStartRun(bindings: SessionOrchestratorBindings) {
       }
     }
 
+    const trigger = existingRun?.trigger ?? params.trigger;
+    const residentScheduleId = existingRun?.planResidentScheduleId ?? params.residentScheduleId;
+    const planResident = planResidentSessionMarker(trigger, params.target, residentScheduleId);
+
     if (parsedInput && agentDef.stateVariables.length > 0) {
       const pipelineResult = processFlowInput(parsedInput, agentDef);
       if (pipelineResult.ok) {
@@ -209,6 +214,11 @@ export function createStartRun(bindings: SessionOrchestratorBindings) {
             ? { workflowExecution: existingRun.workflowExecution }
             : {}),
           activatedByPerson: params.activatedByPerson,
+          ...(trigger ? { trigger } : {}),
+          planResident,
+          ...(planResident && residentScheduleId
+            ? { planResidentScheduleId: residentScheduleId }
+            : {}),
         },
       );
       manifestService?.trackRun({ runId, tenantId: params.tenantId, status: 'PAUSED' });
@@ -291,7 +301,7 @@ export function createStartRun(bindings: SessionOrchestratorBindings) {
           target: runTarget,
           ...(params.spaceId ? { spaceId: params.spaceId } : {}),
           ...(params.createdBy ? { createdBy: params.createdBy } : {}),
-          ...(params.trigger ? { trigger: params.trigger } : {}),
+          ...(trigger ? { trigger } : {}),
           ...(params.voiceMode ? { voiceMode: true } : {}),
           disclosedCallers,
           ...(params.actorContext
@@ -405,7 +415,9 @@ export function createStartRun(bindings: SessionOrchestratorBindings) {
       // conversation list and away from the metadata plane.
       ...(startUserMessage ? { lastMessageSeq: 1, lastActivityAt: now } : {}),
       ...(params.spaceId ? { spaceId: params.spaceId } : {}),
-      ...(params.trigger ? { trigger: params.trigger } : {}),
+      ...(trigger ? { trigger } : {}),
+      planResident,
+      ...(planResident && residentScheduleId ? { planResidentScheduleId: residentScheduleId } : {}),
       activatedByPerson: params.activatedByPerson,
       ...(params.voiceMode ? { voiceMode: true } : {}),
       ...(params.actorContext ? { actorContextJson: JSON.stringify(params.actorContext) } : {}),

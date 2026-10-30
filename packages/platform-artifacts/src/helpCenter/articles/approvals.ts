@@ -6,7 +6,7 @@ export const APPROVALS_ARTICLES: readonly HelpArticleInput[] = [
     theme: 'approvals',
     question: 'Where do I find approvals and other things waiting for me?',
     summary:
-      "Everything in a space that needs a person collects in the Workbench beside the chat: approvals for writes and other actions, questions a run is waiting on, decisions the space's plan leaves to you, account sign-ins an integration needs, and proposals from the Coach. While anything is pending, a yellow indicator appears in the header of the space's other pages; choosing it opens Chat with the Workbench. The Helmsman can also bring an approval into the chat so you answer it where you are talking. Work that waits on an item stays paused until it is answered.",
+      "Everything in a space that needs a person collects in the Workbench beside the chat: approvals for writes and other actions, questions a run is waiting on, decisions the space's plan leaves to you, account sign-ins an integration needs, and proposals from agents such as the Coach. While anything is pending, a yellow indicator appears in the header of the space's other pages; choosing it opens Chat with the Workbench. The Helmsman can also bring an approval into the chat so you answer it where you are talking. Work that waits on an item stays paused until it is answered.",
     body: `## Where
 
 - **Chat** — the **Workbench** sits beside the conversation. On a phone, switch between **Chat** and **Workbench** at the top; the Workbench shows how many items need you.
@@ -21,7 +21,7 @@ export const APPROVALS_ARTICLES: readonly HelpArticleInput[] = [
 - **Inputs**: a question a run is waiting for you to answer, and a decision the space's plan leaves to you — a step of kind **decide**, titled **Decide: …**. Write your choice and choose **Decide**; it is recorded as the step's outcome and the step is marked done, as it would be on the **Plan** page. If the Helmsman changed the question after you opened it, your answer is refused and the card shows the question as it now stands.
 - **Connections**: a **Connect** or **Reconnect** card when an integration needs you to sign in with an account, or a sign-in has expired.
 
-The **Coach** section holds proposals: changes the Coach, or the Helmsman, wants to make to skills, evaluations or integrations. These do not block a run; they wait for you to **Ratify**, **Reject** or **Dismiss** them.
+Proposals are changes an agent wants to make to skills, evaluations or integrations. Each sits in a section named for its source. **Coach review** holds the Coach's proposals, and every other source, such as **Helmsman patch**, has a section of its own. Proposals do not block a run. They wait for you to **Ratify**, **Reject** or **Dismiss** them.
 
 ## When an item names someone else
 
@@ -141,7 +141,7 @@ A proposal names its kind, for example:
 Under its title, a card lists where the proposal came from, one field to a line:
 
 - **Created by**: the conversation it came from, linked by its title. Without a title, the agent's role name or its id.
-- **Source**: **Coach review**, **Helmsman patch**, **Composed skill** or **Platform issue**. A patch another agent made names that agent.
+- **Source**: **Coach review**, **Helmsman patch**, **Composed skill**, **Capability binding**, **Operator amendment** or **Platform issue**. A patch another agent made names that agent.
 - **Reason**: the reason, in the words of whoever proposed it.
 - **When**: when it was proposed.
 - **Target**: the skill it changes.

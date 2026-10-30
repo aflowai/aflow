@@ -48,6 +48,9 @@
     },
     {
       "path": "../../packages/schemas"
+    },
+    {
+      "path": "../../packages/cybernetic-runtime"
     }
   ]
 }

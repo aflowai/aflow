@@ -28,12 +28,12 @@
     "contentHash": "814ea9d7d423194beaa22fd9e22a10053bd5426d3d352de9df4cfbbc044296df"
   },
   "coding-loop": {
-    "version": 103,
-    "contentHash": "48f397a1a4c29daa1c17a0233bce1757c4cdf5fd7a873cb6dc863bd24510dfcf"
+    "version": 104,
+    "contentHash": "5b6a8efb163df3ac9b53667740828144d55a13d753c9d2db1b2050c74acde971"
   },
   "coding-pr-loop": {
-    "version": 7,
-    "contentHash": "38d06d06b9224aaab6966af28418d500d4af117a5200fec87bedda3aaccb9a21"
+    "version": 8,
+    "contentHash": "2f060c50c0368062ff3a505cc74a139a6064c73636f96e461d2586c4e283bc75"
   },
   "coding-with-github": {
     "version": 1,
@@ -72,8 +72,8 @@
     "contentHash": "b610570fe219f32c317bdd686215aaeb2ee5aa4eb30acf9f0cecca40ac62bc06"
   },
   "github": {
-    "version": 6,
-    "contentHash": "b1d527fba0c6b7112cc7d075f599469ea2d4e4ebba5da66e5ca5caa526582626"
+    "version": 7,
+    "contentHash": "acc3c324dc9dbb7efdec12c83539212f399f0bd626534136157241e267815cf0"
   },
   "gmail": {
     "version": 1,
@@ -112,16 +112,16 @@
     "contentHash": "087550116c8a38b7e2c401dd34a5e8002568a3db0ab8dd8d22ecb2a0e6d83d75"
   },
   "local-publish": {
-    "version": 51,
-    "contentHash": "b378e3f77066759c92f16a7b6fef320beb4cac0d85387bdff14ede5fd76b02e2"
+    "version": 52,
+    "contentHash": "778fdc04fd3e22adbd4efd12399bdddc39bb8204769d29874a10e2126e08249a"
   },
   "local-review-quick-start": {
     "version": 1,
     "contentHash": "3f4d1d30ba290aa0c1375e96fabac69bbdc916d1de5f4148b464fa6d9b1ebf78"
   },
   "local-shepherd": {
-    "version": 23,
-    "contentHash": "dee02ddc49749c4338480562cfa1496b23abaf6d59379ccc8b9c130d905e1eef"
+    "version": 24,
+    "contentHash": "7502f7514672dbaa92e87a925032a23bb7191677f862b9637a06536e5db63331"
   },
   "newsapi": {
     "version": 1,

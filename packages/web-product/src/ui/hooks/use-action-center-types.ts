@@ -109,6 +109,11 @@ export type ActionCenterItemOrigin =
       type: 'plan_decision';
       nodeId: string;
       revision: number;
+    }
+  | {
+      type: 'plan_ask';
+      nodeId: string;
+      revision: number;
     };
 
 export interface CoachProposalExtension {

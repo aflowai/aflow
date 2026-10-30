@@ -83,6 +83,7 @@ vi.mock('@aflow/redis', () => ({
 import { handleWorkflowCrudInline } from '../workflowCrud.js';
 import { handleProposalCrudInline } from '../proposalCrud.js';
 import { handleWithdrawProposal } from '../coachWithdrawProposal.js';
+import { loadConversationLookup } from '@aflow/cybernetic-runtime';
 
 const TENANT = 'a0000000-0000-0000-0000-000000000001';
 const SPACE = '41be431d-6011-495b-a4f2-6de539a6a0df';
@@ -442,6 +443,23 @@ describe('the conversation that proposed a patch can withdraw it', () => {
     expect(result.status).toBe('FAILED');
     expect(result.error?.['code']).toBe('PROPOSAL_NOT_WITHDRAWABLE');
     expect(String(result.error?.['message'])).toContain('another conversation');
+    expect(storedStatus(proposalId)['status']).toBe('proposed');
+  });
+
+  it('asks for a retry, not a refusal, when the conversations cannot be read', async () => {
+    const proposalId = await patch(
+      [{ op: 'replace', path: '/tasks/answer/name', value: 'Answer directly' }],
+      { runId: DELEGATE },
+    );
+    vi.mocked(loadConversationLookup).mockRejectedValueOnce(new Error('connection reset'));
+    const result = await withdraw(proposalId, RUN_ID, 'cybernetic-helmsman');
+    expect(result.status).toBe('FAILED');
+    expect(result.error).toMatchObject({
+      code: 'PROPOSAL_OWNER_UNREADABLE',
+      classification: 'transient',
+      retryable: true,
+    });
+    expect(String(result.error?.['message'])).not.toContain('another conversation');
     expect(storedStatus(proposalId)['status']).toBe('proposed');
   });
 
