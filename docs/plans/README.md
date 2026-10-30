@@ -58,6 +58,7 @@ the wrong shape, change the plan rather than quietly diverging from it.
 | [334](334-quick-starts-discoverable.md)                                     | A new user finds the quick starts                               |
 | [335](335-local-profiles.md)                                                | Several people share one install as profiles (discovery)        |
 | [336](336-mcp-on-the-private-network.md)                                    | An MCP server on the operator's private network connects        |
+| [337](337-plans-the-operator-can-decide-from.md)                            | Plans the operator can decide from                              |
 
 ## What a plan is not
 
