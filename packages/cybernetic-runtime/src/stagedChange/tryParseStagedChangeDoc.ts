@@ -19,7 +19,15 @@ export interface StagedChangeParseContext {
 
 export type StagedChangeParseResult =
   | { ok: true; staged: StagedChange }
-  | { ok: false; reason: 'json' | 'schema'; zodPath: string | undefined };
+  | {
+      ok: false;
+      reason: 'json' | 'schema';
+      zodPath: string | undefined;
+      /** What failed to parse, as `path: message` entries a reader can show. */
+      detail: string;
+    };
+
+const MAX_DETAIL_ISSUES = 5;
 
 const MAX_DEDUP_SIGNATURES = 1000;
 const loggedSignatures = new Set<string>();
@@ -92,7 +100,8 @@ export function tryParseStagedChangeDoc(
     raw = JSON.parse(inlineContent);
   } catch (err) {
     emitFailure(ctx, 'json', undefined, inlineContent, err);
-    return { ok: false, reason: 'json', zodPath: undefined };
+    const detail = `not valid JSON: ${err instanceof Error ? err.message : String(err)}`;
+    return { ok: false, reason: 'json', zodPath: undefined, detail };
   }
 
   raw = normalizeStagedChangeRaw(raw);
@@ -101,7 +110,18 @@ export function tryParseStagedChangeDoc(
 
   const zodPath = result.error.errors[0]?.path.map(String).join('.') ?? 'unknown';
   emitFailure(ctx, 'schema', zodPath, inlineContent, result.error);
-  return { ok: false, reason: 'schema', zodPath };
+  return { ok: false, reason: 'schema', zodPath, detail: describeZodIssues(result.error.issues) };
+}
+
+/** Name the first few Zod issues as `path: message` entries. */
+export function describeZodIssues(
+  issues: ReadonlyArray<{ path: ReadonlyArray<string | number>; message: string }>,
+): string {
+  const shown = issues
+    .slice(0, MAX_DETAIL_ISSUES)
+    .map((i) => `${i.path.length > 0 ? i.path.join('.') : '(root)'}: ${i.message}`);
+  const rest = issues.length - shown.length;
+  return [...shown, ...(rest > 0 ? [`${String(rest)} more issue(s)`] : [])].join(' | ');
 }
 
 function emitFailure(

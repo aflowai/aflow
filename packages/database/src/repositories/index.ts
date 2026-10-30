@@ -11,6 +11,7 @@ export * from './signupPolicy.js';
 export * from './flows.js';
 export * from './memory.js';
 export * from './memoryDocs.js';
+export { isReservedScratchPath as isReservedMemoryPath } from './reservedPaths.js';
 export * from './memoryDirs.js';
 export * from './memoryLinks.js';
 export * from './activeMemory.js';

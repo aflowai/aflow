@@ -1,6 +1,13 @@
 import { getDatabase, createTenantContext, createMemoryDocRepository } from '@aflow/database';
 import type { TenantId, StagedChange, ProposalListInput, ProposalGetInput } from '@aflow/schemas';
-import { PROPOSAL_DIRS, tryParseStagedChangeDoc } from '@aflow/cybernetic-runtime';
+import {
+  PROPOSAL_DIRS,
+  createStagedChangeDocReader,
+  describeStagedChangeReadFailure,
+  readStagedChange,
+  stagedChangeReadFailureDetails,
+  tryParseStagedChangeDoc,
+} from '@aflow/cybernetic-runtime';
 import type { InlineHandlerArgs } from './types.js';
 import { emitStepSuccess, emitStepError } from './helpers.js';
 import { requireSpaceId } from './spaceScope.js';
@@ -154,6 +161,13 @@ async function handleProposalList(
 // proposal.get
 // ============================================================================
 
+const READ_FAILURE_CODES = {
+  not_found: 'PROPOSAL_NOT_FOUND',
+  deleted: 'PROPOSAL_DELETED',
+  refused_path: 'PROPOSAL_PATH_REFUSED',
+  unparseable: 'PROPOSAL_UNREADABLE',
+} as const;
+
 async function handleProposalGet(
   args: InlineHandlerArgs,
   input: ProposalGetInput,
@@ -161,48 +175,32 @@ async function handleProposalGet(
 ): Promise<void> {
   const spaceId = requireSpaceId(args.context);
   const tenantId = args.context.tenantId as string;
-  const sc = await loadProposal(tenantId, spaceId, input.proposalId);
-  if (!sc) {
+  const readCtx = {
+    tenantId,
+    spaceId,
+    proposalId: input.proposalId,
+    reader: 'proposal.get',
+  };
+  const read = await readStagedChange(
+    createStagedChangeDocReader(getDatabase(), tenantId),
+    readCtx,
+  );
+  if (!read.ok) {
     await emitStepError(
       args,
-      'PROPOSAL_NOT_FOUND',
-      `Proposal ${input.proposalId} not found in space ${spaceId}.`,
+      READ_FAILURE_CODES[read.reason],
+      describeStagedChangeReadFailure(read),
       startTime,
       'validation',
+      false,
+      stagedChangeReadFailureDetails(readCtx, read),
     );
     return;
   }
 
-  await emitStepSuccess(args, { proposal: sc as unknown as Record<string, unknown> }, startTime);
-}
-
-// ============================================================================
-
-// ============================================================================
-// Helpers
-// ============================================================================
-
-async function loadProposal(
-  tenantId: string,
-  spaceId: string,
-  proposalId: string,
-): Promise<StagedChange | null> {
-  const db = getDatabase();
-  const tenantCtx = createTenantContext(tenantId as TenantId);
-  const docRepo = createMemoryDocRepository(db, tenantCtx);
-  for (const dir of PROPOSAL_DIRS) {
-    const path = `${dir}/${proposalId}.json`;
-    const doc = await docRepo.getByPath(path, spaceId);
-    if (!doc?.inlineContent) continue;
-    const parsed = tryParseStagedChangeDoc(doc.inlineContent, {
-      tenantId,
-      spaceId,
-      docPath: path,
-      reader: 'proposal.get/loadProposal',
-    });
-    if (parsed.ok) return parsed.staged;
-    // fall through to next dir (matches prior catch behaviour) — the
-    // helper has already emitted the warn+counter.
-  }
-  return null;
+  await emitStepSuccess(
+    args,
+    { proposal: read.staged as unknown as Record<string, unknown> },
+    startTime,
+  );
 }

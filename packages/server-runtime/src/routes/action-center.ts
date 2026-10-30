@@ -8,6 +8,7 @@ import {
   ActionCenterItemSchema,
   ActionCenterResolveRequestSchema,
   PostInstallTaskSchema,
+  type ActionCenterItem,
   type ActionCenterItemOrigin,
   type TenantId,
 } from '@aflow/schemas';
@@ -140,13 +141,11 @@ export const actionCenterRoutes: FastifyPluginAsync<ActionCenterRoutesOptions> =
       const tenant = await request.requireTenant();
       const { spaceId, itemId } = request.params;
       const ctx = await resolveActorContext(request, tenant.tenantId, spaceId, db!);
-      const item = await aggregator.get(ctx, itemId);
-      if (!item) {
-        return reply
-          .status(404)
-          .send({ error: 'NOT_FOUND', message: `Action Center item ${itemId} not found.` });
+      const read = await readItem(aggregator, ctx, itemId);
+      if ('notFound' in read) {
+        return reply.status(404).send({ error: 'NOT_FOUND', message: read.notFound });
       }
-      return item;
+      return read.item;
     },
   );
 
@@ -196,12 +195,11 @@ export const actionCenterRoutes: FastifyPluginAsync<ActionCenterRoutesOptions> =
 
       // CAS: the origin the client observed must match the source's current
       // state. We re-read the item here and compare; mismatches return 409.
-      const current = await aggregator.get(ctx, itemId);
-      if (!current) {
-        return reply
-          .status(404)
-          .send({ error: 'NOT_FOUND', message: `Action Center item ${itemId} not found.` });
+      const read = await readItem(aggregator, ctx, itemId);
+      if ('notFound' in read) {
+        return reply.status(404).send({ error: 'NOT_FOUND', message: read.notFound });
       }
+      const current = read.item;
       if (!originMatches(current.origin, body.origin)) {
         return reply.status(409).send({
           error: 'STALE_ACTION_CENTER_ITEM',
@@ -276,6 +274,26 @@ export const actionCenterRoutes: FastifyPluginAsync<ActionCenterRoutesOptions> =
 // ============================================================================
 // Helpers
 // ============================================================================
+
+/**
+ * Read one item, or say why it cannot be read. A source throws NOT_FOUND for
+ * an item that exists but cannot be shown, and its message names the cause.
+ */
+async function readItem(
+  aggregator: ActionCenterAggregator,
+  ctx: ActionCenterContext,
+  itemId: string,
+): Promise<{ item: ActionCenterItem } | { notFound: string }> {
+  try {
+    const item = await aggregator.get(ctx, itemId);
+    return item ? { item } : { notFound: `Action Center item ${itemId} not found.` };
+  } catch (err) {
+    if (err instanceof ActionCenterResolveError && err.code === 'NOT_FOUND') {
+      return { notFound: err.message };
+    }
+    throw err;
+  }
+}
 
 function notLive(reply: FastifyReply): FastifyReply {
   return reply.status(503).send({

@@ -7,9 +7,12 @@ import {
   WorkflowStateVariableSchema,
   SkillGoalSchema,
   CampaignContractFieldSchema,
+  StagedChangeOpSchema,
 } from '@aflow/schemas';
 import type { WorkflowPatchInput } from '@aflow/schemas';
 import { applyJsonPatch, JsonPatchError } from '@aflow/lib';
+import { describeZodIssues } from '@aflow/cybernetic-runtime';
+import { deriveInputContract } from './assembleWorkflow.js';
 
 /** The slice of the manifest a `workflow.manage.patch` may edit via `/goal` + `/campaign`. */
 export interface ManifestPatchDoc {
@@ -217,7 +220,18 @@ function convertTaskPatch(
         unsupported: `${op.op} ${op.path} would change taskId from "${taskId}" to "${parse.data.taskId}". Task identity is immutable; add a new task and remove the old one instead.`,
       };
     }
-    return { op: 'replace_task', taskId, task: parse.data } as StagedChangeOp;
+    if (!sameDerivedFields(task, parse.data)) {
+      return {
+        unsupported: `${op.op} ${op.path} would change task "${taskId}"'s inputContract or system_feedback bindings. The assembler derives both, so a patch may not author them. Edit inputBindings or the task's other fields instead.`,
+      };
+    }
+    const rederived = rederiveInputContract(existing, task, parse.data);
+    if ('unsupported' in rederived) {
+      return {
+        unsupported: `${op.op} ${op.path} changes task "${taskId}"'s inputBindings, and the assembler cannot derive its inputContract from them: ${rederived.unsupported} The composed task's contract must be recomposed, so recompose the skill to make this change.`,
+      };
+    }
+    return { op: 'replace_task', taskId, task: rederived.task } as StagedChangeOp;
   } catch (err) {
     const detail =
       err instanceof JsonPatchError
@@ -229,6 +243,69 @@ function convertTaskPatch(
       unsupported: `${op.op} ${op.path} cannot be applied to task "${taskId}": ${detail}`,
     };
   }
+}
+
+type WorkflowTask = Workflow['tasks'][number];
+
+/**
+ * Only the assembler writes an inputContract, so a workflow whose tasks carry
+ * one is composed. A bindings edit on such a task derives the contract again,
+ * as the assembler would, so the contract never describes the old bindings.
+ */
+function rederiveInputContract(
+  workflow: Workflow,
+  before: WorkflowTask,
+  after: WorkflowTask,
+): { task: WorkflowTask } | { unsupported: string } {
+  const composed = workflow.tasks.some((t) => t.inputContract !== undefined);
+  if (!composed) return { task: after };
+  if (JSON.stringify(before.inputBindings ?? {}) === JSON.stringify(after.inputBindings ?? {})) {
+    return { task: after };
+  }
+  const ports = new Map(
+    workflow.tasks.flatMap((t) =>
+      (t.produces ?? []).map((port) => [`${t.taskId}::${port.key}`, port] as const),
+    ),
+  );
+  try {
+    const inputContract = deriveInputContract(after.taskId, after.inputBindings, ports);
+    const { inputContract: _stale, ...rest } = after;
+    void _stale;
+    return { task: inputContract ? { ...rest, inputContract } : rest };
+  } catch (err) {
+    return { unsupported: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** The fields the assembler derives on a stored task, which a patch may carry but not change. */
+function derivedFields(task: Workflow['tasks'][number]): string {
+  const feedback = Object.entries(task.inputBindings ?? {}).filter(
+    ([, binding]) => binding.kind === 'system_feedback',
+  );
+  return JSON.stringify({ inputContract: task.inputContract ?? null, feedback });
+}
+
+function sameDerivedFields(
+  before: Workflow['tasks'][number],
+  after: Workflow['tasks'][number],
+): boolean {
+  return derivedFields(before) === derivedFields(after);
+}
+
+/**
+ * Hold a lowered op to the shape the proposal store reads back. An op the
+ * store refuses would be written, return its id and then never be readable.
+ */
+function storable(
+  jp: WorkflowPatchInput['operations'][number],
+  out: StagedChangeOp | { unsupported: string },
+): StagedChangeOp | { unsupported: string } {
+  if ('unsupported' in out) return out;
+  const parsed = StagedChangeOpSchema.safeParse(out);
+  if (parsed.success) return out;
+  return {
+    unsupported: `${jp.op} ${jp.path} lowers to a ${out.op} op the proposal store refuses: ${describeZodIssues(parsed.error.issues)}`,
+  };
 }
 
 function convertWorkflowContractPatch(
@@ -587,7 +664,7 @@ export function convertManifestPatchToStagedOps(
   // contract. An all-removed contract is cleared back to undefined by the engine.
   if (!shadow.campaign) shadow.campaign = { fields: {} };
   for (const jp of jsonPatchOps) {
-    const out = convertManifestOne(jp, shadow);
+    const out = storable(jp, convertManifestOne(jp, shadow));
     if ('unsupported' in out) {
       unsupported.push(out.unsupported);
     } else {
@@ -611,6 +688,13 @@ export function convertManifestPatchToStagedOps(
   return { ops, unsupported };
 }
 
+function withStagedTask(workflow: Workflow, task: WorkflowTask): Workflow {
+  return {
+    ...workflow,
+    tasks: workflow.tasks.map((t) => (t.taskId === task.taskId ? task : t)),
+  };
+}
+
 export function convertWorkflowPatchToStagedOps(
   jsonPatchOps: WorkflowPatchInput['operations'],
   existing: Workflow,
@@ -619,7 +703,7 @@ export function convertWorkflowPatchToStagedOps(
   const unsupported: string[] = [];
   let shadow: Workflow = existing;
   for (const jp of jsonPatchOps) {
-    const out = convertOne(jp, shadow);
+    const out = storable(jp, convertOne(jp, shadow));
     if ('unsupported' in out) {
       unsupported.push(out.unsupported);
     } else {
@@ -631,6 +715,12 @@ export function convertWorkflowPatchToStagedOps(
     // and stop — continuing would make later resolutions meaningless.
     try {
       shadow = applyJsonPatch<Workflow>(shadow, [jp]);
+      // The raw patch leaves behind the inputContract that a bindings edit
+      // re-derived. A later replace_task of the same task copies the shadow's
+      // task whole, so the shadow holds the task as ratification stores it.
+      if (!('unsupported' in out) && out.op === 'replace_task') {
+        shadow = withStagedTask(shadow, out.task);
+      }
     } catch (err) {
       const detail =
         err instanceof JsonPatchError

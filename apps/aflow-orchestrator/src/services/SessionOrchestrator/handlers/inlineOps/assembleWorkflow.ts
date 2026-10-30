@@ -136,7 +136,7 @@ function lowerProduces(task: TaskGraphDraftTask): WorkflowTaskOutputPort[] | und
  * via `producedKeys`, but the contract derivation is the place where the
  * topology check has the richest information for diagnostics.
  */
-function deriveInputContract(
+export function deriveInputContract(
   taskId: string,
   inputBindings: Record<string, WorkflowTaskInputBinding> | undefined,
   producerPortIndex: ReadonlyMap<string, WorkflowTaskOutputPort>,

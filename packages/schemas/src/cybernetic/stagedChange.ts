@@ -1118,7 +1118,9 @@ export const CoachProposableOpSchema = z
 /**
  * Discriminated union of all typed change operations — everything the staged
  * change rail can store and ratify, including ops only an authoring skill
- * proposes.
+ * proposes. A patch stages `replace_task` from the stored task, which carries
+ * the assembler's `inputContract` and `system_feedback` bindings, so storage
+ * holds only `add_task` to the authored form. The Coach's union holds both.
  */
 export const StagedChangeOpSchema = z
   .discriminatedUnion('op', [
@@ -1126,7 +1128,9 @@ export const StagedChangeOpSchema = z
     EvalCaseDraftOpSchema,
     UpdateTaskRoutesOpSchema,
   ])
-  .superRefine(assertAuthoredTaskOp);
+  .superRefine((data, ctx) => {
+    if (data.op === 'add_task') assertAuthoredTaskOp(data, ctx);
+  });
 
 export type StagedChangeOp = z.infer<typeof StagedChangeOpSchema>;
 

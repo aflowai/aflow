@@ -14,6 +14,7 @@ import { useActiveSurface } from './use-active-surface.js';
 import { useApiQuery } from './useApiQuery.js';
 import * as coachSurfaceBroker from './coach-surface-broker.js';
 import { useResumeOnUnblock } from './use-resume-on-unblock.js';
+import { readProposalReadFailure } from '../lib/proposal-read-failure.js';
 
 // ============================================================================
 // DTOs (mirror server response shapes — kept narrow on purpose)
@@ -451,16 +452,12 @@ export function useCoachSurface(
   // fetch) so a session expiry on detail-load redirects properly.
   const loadProposalDetail = useCallback(
     async (proposalId: string): Promise<CoachProposalDetail | null> => {
-      try {
-        const res = await authFetch(`${apiUrl}/spaces/${spaceId}/proposals/${proposalId}`, {
-          headers: { ...headers(), 'X-Space-ID': spaceId },
-        });
-        if (!res.ok) return null;
-        const body = (await res.json()) as { proposal: CoachProposalDetail };
-        return body.proposal;
-      } catch {
-        return null;
-      }
+      const res = await authFetch(`${apiUrl}/spaces/${spaceId}/proposals/${proposalId}`, {
+        headers: { ...headers(), 'X-Space-ID': spaceId },
+      });
+      if (!res.ok) throw new Error(await readProposalReadFailure(res));
+      const body = (await res.json()) as { proposal: CoachProposalDetail };
+      return body.proposal;
     },
     [apiUrl, authFetch, headers, spaceId],
   );
