@@ -837,6 +837,20 @@ export class ScheduleEvaluator {
     }
 
     const runId = scheduleOccurrenceRunId(item.idempotencyKey) as SessionId;
+    const [schedule] = await this.sqlClient.unsafe<DueScheduleRow[]>(
+      `SELECT target_kind, target_system_role, input_template
+       FROM "${item.schemaName}".agent_schedules WHERE id = $1::uuid`,
+      [item.scheduleId],
+    );
+    const residentScheduleId =
+      schedule &&
+      isPlanResidentSchedule({
+        targetKind: schedule.target_kind,
+        targetSystemRole: schedule.target_system_role,
+        inputTemplate: schedule.input_template,
+      })
+        ? item.scheduleId
+        : undefined;
     // The drain is at-least-once: it can die between the XADD and the delete.
     // The claim is what makes a redelivery harmless — the loser learns which run
     // the winner started and retires the occurrence instead of starting another.
@@ -866,6 +880,7 @@ export class ScheduleEvaluator {
         requestedAtMs: Date.now(),
         spaceId: item.spaceId,
         trigger: 'schedule',
+        ...(residentScheduleId ? { residentScheduleId } : {}),
         actorContext: buildActorContext({
           tenantId: item.tenantId,
           spaceId: item.spaceId,

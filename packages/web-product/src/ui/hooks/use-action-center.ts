@@ -98,6 +98,8 @@ export interface UseActionCenterResult {
   /** Per-item resolve state (idle/submitting/error). Drives <HitlResolution state>. */
   resolveStateById: Record<string, 'idle' | 'submitting' | 'error'>;
   resolveErrorById: Record<string, string | undefined>;
+  carrierFailures?: string[];
+  clearCarrierFailures?: () => void;
 
   /** Resolve action — returns the result so callers can chain on success. */
   resolve: (
@@ -425,6 +427,11 @@ export function useActionCenter(spaceId: string | null): UseActionCenterResult {
   const [resolveStateById, setResolveStateById] = useState<
     Record<string, 'idle' | 'submitting' | 'error'>
   >({});
+  const [carrierWarnings, setCarrierWarnings] = useState<{
+    spaceId: string | null;
+    failures: string[];
+  }>({ spaceId, failures: [] });
+  const carrierFailures = carrierWarnings.spaceId === spaceId ? carrierWarnings.failures : [];
   const [resolveErrorById, setResolveErrorById] = useState<Record<string, string | undefined>>({});
 
   const resolve = useCallback(
@@ -453,6 +460,7 @@ export function useActionCenter(spaceId: string | null): UseActionCenterResult {
         );
         if (res.ok) {
           interface ResolveBody {
+            carrierFailure?: string;
             setupChecklist?: PostInstallTask[];
             item?: unknown;
           }
@@ -461,6 +469,13 @@ export function useActionCenter(spaceId: string | null): UseActionCenterResult {
           try {
             resolvedBody = (await res.json()) as ResolveBody;
             setupChecklist = resolvedBody.setupChecklist;
+            if (resolvedBody.carrierFailure) {
+              const failure = resolvedBody.carrierFailure;
+              setCarrierWarnings((previous) => ({
+                spaceId,
+                failures: [...(previous.spaceId === spaceId ? previous.failures : []), failure],
+              }));
+            }
           } catch {
             /* non-JSON */
           }
@@ -578,6 +593,10 @@ export function useActionCenter(spaceId: string | null): UseActionCenterResult {
     lastError,
     resolveStateById,
     resolveErrorById,
+    carrierFailures,
+    clearCarrierFailures: () => {
+      setCarrierWarnings({ spaceId, failures: [] });
+    },
     resolve,
     refresh,
     loadProposalDetail,

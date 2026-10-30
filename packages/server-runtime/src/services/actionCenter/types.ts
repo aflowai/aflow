@@ -72,6 +72,7 @@ export interface ActionCenterResolveOutcome {
   reportedOperationId?: string;
   /** Post-install setup tasks (store_install ratification) — surfaced to the resolving operator. */
   setupChecklist?: PostInstallTask[];
+  carrierFailure?: string;
 }
 
 /**

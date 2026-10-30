@@ -50,7 +50,7 @@ const runIdParam = {
 
 export const GITHUB_CONNECTOR: ConnectorCatalogEntry = {
   catalogId: 'github',
-  version: 6,
+  version: 7,
   name: 'GitHub',
   tagline: 'Open pull requests, poll CI checks, read failing jobs, merge, and close PRs.',
   description:
@@ -203,6 +203,25 @@ export const GITHUB_CONNECTOR: ConnectorCatalogEntry = {
         method: 'GET',
         pathTemplate: '/repos/{owner}/{repo}',
         params: [ownerParam, repoParam],
+        tags: ['repositories'],
+      },
+      {
+        endpointId: 'compareCommits',
+        name: 'Compare commits',
+        description: 'Compare a base commit with a head commit to attest ancestry.',
+        method: 'GET',
+        pathTemplate: '/repos/{owner}/{repo}/compare/{base}...{head}',
+        params: [
+          ownerParam,
+          repoParam,
+          ...['base', 'head'].map((name) => ({
+            name,
+            location: 'path' as const,
+            required: true,
+            description: 'The commit SHA to compare.',
+            schema: { type: 'string' },
+          })),
+        ],
         tags: ['repositories'],
       },
       {

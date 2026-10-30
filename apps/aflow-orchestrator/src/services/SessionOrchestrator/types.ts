@@ -109,6 +109,7 @@ export interface SessionOrchestrator {
     spaceId?: string;
     /** How this run was triggered */
     trigger?: RunTrigger;
+    residentScheduleId?: string;
     /** Whether the run is attended from this command on — see `SessionHotState.activatedByPerson`. */
     activatedByPerson: boolean;
     /** Whether the user is interacting via voice */

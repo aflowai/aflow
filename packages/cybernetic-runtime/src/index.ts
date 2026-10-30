@@ -267,3 +267,5 @@ export {
   buildInstalledSkillAwareness,
   validatePinnedSkillBudget,
 } from './skillDiscovery.js';
+
+export { restrictedPlanWriteAuthority } from './plan/writeAuthority.js';

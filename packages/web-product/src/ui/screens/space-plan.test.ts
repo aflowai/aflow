@@ -1161,6 +1161,19 @@ describe('SpacePlanPage — the operator’s writes from the rail', () => {
     });
   });
 
+  it('shows carrier recovery pointers while accepting the committed close', async () => {
+    const carrierFailure = `Carrier failed for closed node ${BOARD}. Read its linked findings: publish failed`;
+    recorded.mutateAsync.mockResolvedValue({ node: {}, carrierFailure });
+    recorded.details[BOARD] = detail(fullNode(BOARD, 'P3.3 the board', { revision: 5 }));
+    await render();
+    await click(card(BOARD));
+    await click(button(rail(), 'Mark done'));
+    await type(rail(), 'The board renders.');
+    await click(button(rail(), 'Mark done'));
+    expect(rail().querySelector('textarea')).toBe(null);
+    expect(document.body.textContent).toContain(carrierFailure);
+  });
+
   it('marks a step done with how its criteria were met, against the revision the rail read', async () => {
     recorded.mutateAsync.mockResolvedValue({ node: {} });
     recorded.details[BOARD] = detail(fullNode(BOARD, 'P3.3 the board', { revision: 5 }));
@@ -1544,6 +1557,16 @@ describe('SpacePlanPage — approve, reopen and order (Plan 332 P2)', () => {
     recorded.details[STRANDED] = detail(
       fullNode(STRANDED, 'P3.a — carried findings', { parentId: CLOSED }),
     );
+  });
+
+  it('shows carrier recovery pointers after approving a live check', async () => {
+    const carrierFailure = 'Carrier failed after live-check approval. Read its linked findings.';
+    recorded.mutateAsync.mockResolvedValue({ node: {}, carrierFailure });
+    await render({ data: P2_PLAN });
+    await click(card(BLOCKED));
+    await click(button(rail(), 'Approve'));
+    await click(button(openForm(), 'Approve'));
+    expect(document.body.textContent).toContain(carrierFailure);
   });
 
   it('offers Approve on a blocked step beside its close controls, and none on a decision', async () => {

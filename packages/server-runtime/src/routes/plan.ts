@@ -409,7 +409,8 @@ export const planRoutes: FastifyPluginAsync = async (fastify) => {
         status: body.status,
         revision: result.node.revision,
       });
-      return { node: result.node };
+      const { ok: _ok, ...written } = result;
+      return written;
     },
   );
 
@@ -457,7 +458,11 @@ export const planRoutes: FastifyPluginAsync = async (fastify) => {
         status: result.from,
         revision: result.node.revision,
       });
-      return { node: result.node };
+      return {
+        node: result.node,
+        ...(result.carrier ? { carrier: result.carrier } : {}),
+        ...(result.carrierFailure ? { carrierFailure: result.carrierFailure } : {}),
+      };
     },
   );
 

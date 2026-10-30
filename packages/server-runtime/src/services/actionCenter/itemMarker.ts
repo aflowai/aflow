@@ -35,7 +35,7 @@ export function actionCenterItemMarker(
     // The waiting runs count: one more joining changes what the item lists.
     const waiting = o.waiting.map((w) => w.stepExecutionId).join(',');
     cas = `${o.machineLabel}:${o.profileId}:${o.site}:${o.startedAt}:${waiting}`;
-  } else if (o.type === 'plan_decision') {
+  } else if (o.type === 'plan_decision' || o.type === 'plan_ask') {
     cas = `${o.nodeId}:r${String(o.revision)}`;
   } else {
     cas = `${o.runId}:${o.taskId}:v${o.pauseVersion}`;
