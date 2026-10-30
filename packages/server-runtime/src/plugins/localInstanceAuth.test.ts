@@ -17,6 +17,7 @@ import {
   cacheLocalProfileCount,
   issueLocalProfileSession,
   readLocalProfileSession,
+  type LocalProfileCount,
 } from './localProfiles.js';
 
 const SECRET = 'a'.repeat(48);
@@ -48,8 +49,13 @@ const request = (authorization?: string, extra: Record<string, string> = {}) =>
     headers: authorization === undefined ? { ...extra } : { authorization, ...extra },
   }) as FastifyRequest;
 
-const ONE_PROFILE = () => Promise.resolve(false);
-const TWO_PROFILES = () => Promise.resolve(true);
+const ONE_PROFILE = () => Promise.resolve<LocalProfileCount>('one');
+const TWO_PROFILES = () => Promise.resolve<LocalProfileCount>('several');
+const UNREAD = () => Promise.resolve<LocalProfileCount>('unread');
+
+/** What `hasSeveralLocalProfiles` reads, as the cache asks it. */
+const READS_ONE = () => Promise.resolve(false);
+const READS_TWO = () => Promise.resolve(true);
 
 /** Every user at the generation a session issued with no bump carries. */
 const NEVER_BUMPED = () => Promise.resolve(0);
@@ -57,7 +63,7 @@ const NEVER_BUMPED = () => Promise.resolve(0);
 const opts = {
   instanceSecret: SECRET,
   apiKeyPrefix: 'phx_',
-  hasSeveralProfiles: ONE_PROFILE,
+  profileCount: ONE_PROFILE,
   profileSessionGeneration: NEVER_BUMPED,
 };
 
@@ -158,18 +164,20 @@ describe('authenticateLocalInstance', () => {
 describe('the profile rule', () => {
   const principal = async (
     headers: Record<string, string>,
-    hasSeveralProfiles: () => Promise<boolean>,
+    profileCount: () => Promise<LocalProfileCount>,
   ) => {
     const outcome = await authenticateLocalInstance(request(`Bearer ${SECRET}`, headers), {
       ...opts,
-      hasSeveralProfiles,
+      profileCount,
       env: {},
     });
     return outcome.kind === 'local'
       ? { userId: outcome.authUser.userId, via: outcome.authUser.localPrincipal }
       : outcome.kind === 'refused'
         ? { refused: outcome.code }
-        : { kind: outcome.kind };
+        : outcome.kind === 'unavailable'
+          ? { unavailable: outcome.code }
+          : { kind: outcome.kind };
   };
 
   describe('on an install with one profile', () => {
@@ -215,6 +223,41 @@ describe('the profile rule', () => {
         userId: SECOND_USER,
         via: 'profile-session',
       });
+    });
+  });
+
+  // An unread count may hide a second profile, so it never grants the owner
+  // shortcut, and a refusal would claim a second profile nobody has read.
+  describe('on an install whose count is unread', () => {
+    it('answers a browser with no session unavailable, never the owner', async () => {
+      expect(await principal(BROWSER, UNREAD)).toEqual({ unavailable: 'PROFILE_COUNT_UNREAD' });
+    });
+
+    it('keeps a bare-secret caller as the owner, through the membership read', async () => {
+      expect(await principal({}, UNREAD)).toEqual({
+        userId: LOCAL_EDITION_OWNER_ID,
+        via: 'instance-secret',
+      });
+    });
+
+    it('names a profile from its session', async () => {
+      expect(await principal({ ...BROWSER, ...sessionFor(SECOND_USER) }, UNREAD)).toEqual({
+        userId: SECOND_USER,
+        via: 'profile-session',
+      });
+    });
+  });
+
+  it('answers a session unavailable when its generation read fails', async () => {
+    const fault = new Error('connection refused');
+    const outcome = await authenticateLocalInstance(
+      request(`Bearer ${SECRET}`, { ...BROWSER, ...sessionFor(SECOND_USER) }),
+      { ...opts, profileSessionGeneration: () => Promise.reject(fault), env: {} },
+    );
+    expect(outcome).toMatchObject({
+      kind: 'unavailable',
+      code: 'PROFILE_SESSION_UNREAD',
+      cause: fault,
     });
   });
 
@@ -303,20 +346,34 @@ describe('the profile count cache', () => {
     return { now: () => t, advance: (ms: number) => (t += ms) };
   };
 
+  const SOLE_PROFILE_OWNER = {
+    kind: 'local',
+    authUser: { userId: LOCAL_EDITION_OWNER_ID, localPrincipal: 'sole-profile' },
+  };
+
+  const asBrowser = (count: () => Promise<LocalProfileCount>) =>
+    authenticateLocalInstance(request(`Bearer ${SECRET}`, BROWSER), {
+      ...opts,
+      profileCount: count,
+      env: {},
+    });
+
   it('reads the database when the cache is cold', async () => {
-    const read = vi.fn(TWO_PROFILES);
+    const read = vi.fn(READS_TWO);
     const count = cacheLocalProfileCount(read, { ttlMs: 5_000, now: clock().now });
-    expect(await count()).toBe(true);
+    expect(await count()).toBe('several');
     expect(read).toHaveBeenCalledTimes(1);
   });
 
+  // The true one-profile install: no database read while the count is fresh.
   it('answers from the cache while the count is fresh', async () => {
-    const read = vi.fn(ONE_PROFILE);
+    const read = vi.fn(READS_ONE);
     const { now, advance } = clock();
     const count = cacheLocalProfileCount(read, { ttlMs: 5_000, now });
-    await count();
+    expect(await asBrowser(count)).toMatchObject(SOLE_PROFILE_OWNER);
     advance(4_999);
-    expect(await count()).toBe(false);
+    expect(await count()).toBe('one');
+    expect(await asBrowser(count)).toMatchObject(SOLE_PROFILE_OWNER);
     expect(read).toHaveBeenCalledTimes(1);
   });
 
@@ -325,93 +382,81 @@ describe('the profile count cache', () => {
     read.mockResolvedValueOnce(true);
     const { now, advance } = clock();
     const count = cacheLocalProfileCount(read, { ttlMs: 5_000, now });
-    expect(await count()).toBe(false);
+    expect(await count()).toBe('one');
     advance(5_000);
-    expect(await count()).toBe(true);
+    expect(await count()).toBe('several');
     expect(read).toHaveBeenCalledTimes(2);
   });
 
   it('shares one read between concurrent callers on a cold cache', async () => {
-    const read = vi.fn(TWO_PROFILES);
+    const read = vi.fn(READS_TWO);
     const count = cacheLocalProfileCount(read, { ttlMs: 5_000, now: clock().now });
-    expect(await Promise.all([count(), count(), count()])).toEqual([true, true, true]);
+    expect(await Promise.all([count(), count(), count()])).toEqual([
+      'several',
+      'several',
+      'several',
+    ]);
     expect(read).toHaveBeenCalledTimes(1);
   });
 
-  // A database fault must not claim a second profile nobody has read, and it
-  // must not turn a request into a 503 either.
-  it('answers one profile when the first read fails, and reads again next time', async () => {
+  it('answers unread when the first read fails, and reads again next time', async () => {
     const fault = new Error('connection refused');
     const read = vi.fn<() => Promise<boolean>>().mockRejectedValueOnce(fault);
     read.mockResolvedValueOnce(true);
     const onReadError = vi.fn();
     const count = cacheLocalProfileCount(read, { ttlMs: 5_000, now: clock().now, onReadError });
-    expect(await count()).toBe(false);
+    expect(await count()).toBe('unread');
     expect(onReadError).toHaveBeenCalledWith(fault);
-    expect(await count()).toBe(true);
+    expect(await count()).toBe('several');
     expect(read).toHaveBeenCalledTimes(2);
   });
 
-  it('answers one profile when the read throws before it awaits', async () => {
+  it('answers unread when the read throws before it awaits', async () => {
     const read = vi.fn((): Promise<boolean> => {
       throw new Error('no database');
     });
     const count = cacheLocalProfileCount(read, { ttlMs: 5_000, now: clock().now });
-    expect(await count()).toBe(false);
-    expect(await count()).toBe(false);
+    expect(await count()).toBe('unread');
+    expect(await count()).toBe('unread');
     expect(read).toHaveBeenCalledTimes(2);
   });
 
   it.each([
-    ['one profile', false],
-    ['several profiles', true],
-  ])('answers the last count read, %s, when a later read fails', async (_label, several) => {
+    ['a count of one goes unread', false, 'unread'],
+    ['a count of several stays several', true, 'several'],
+  ])('when a later read fails, %s', async (_label, several, answer) => {
     const read = vi.fn<() => Promise<boolean>>().mockResolvedValueOnce(several);
     read.mockRejectedValueOnce(new Error('down'));
     const { now, advance } = clock();
     const count = cacheLocalProfileCount(read, { ttlMs: 5_000, now });
-    expect(await count()).toBe(several);
+    await count();
     advance(5_000);
-    expect(await count()).toBe(several);
+    expect(await count()).toBe(answer);
     expect(read).toHaveBeenCalledTimes(2);
   });
 
-  it('serves a browser as the owner when a one-profile install cannot read its count', async () => {
+  // The install may have gained a second profile since the process started.
+  it('never grants a browser the owner when the count has never been read', async () => {
+    const count = cacheLocalProfileCount(() => Promise.reject(new Error('down')), {
+      now: clock().now,
+    });
+    const outcome = await asBrowser(count);
+    expect(outcome).not.toMatchObject({ kind: 'local' });
+    expect(outcome).toMatchObject({ kind: 'unavailable', code: 'PROFILE_COUNT_UNREAD' });
+  });
+
+  // A second profile may have been added after the one-profile read.
+  it('never grants a browser the owner on a stale count of one', async () => {
     const read = vi.fn<() => Promise<boolean>>().mockResolvedValueOnce(false);
     read.mockRejectedValue(new Error('down'));
     const { now, advance } = clock();
     const count = cacheLocalProfileCount(read, { ttlMs: 5_000, now });
-    const asBrowser = () =>
-      authenticateLocalInstance(request(`Bearer ${SECRET}`, BROWSER), {
-        ...opts,
-        hasSeveralProfiles: count,
-        env: {},
-      });
-    expect(await asBrowser()).toMatchObject({
-      kind: 'local',
-      authUser: { userId: LOCAL_EDITION_OWNER_ID, localPrincipal: 'sole-profile' },
-    });
+    expect(await asBrowser(count)).toMatchObject(SOLE_PROFILE_OWNER);
     advance(5_000);
-    expect(await asBrowser()).toMatchObject({
-      kind: 'local',
-      authUser: { userId: LOCAL_EDITION_OWNER_ID, localPrincipal: 'sole-profile' },
-    });
+    const outcome = await asBrowser(count);
+    expect(outcome).not.toMatchObject({ kind: 'local' });
+    expect(outcome).toMatchObject({ kind: 'unavailable', code: 'PROFILE_COUNT_UNREAD' });
     expect(read).toHaveBeenCalledTimes(2);
-  });
-
-  it('serves a browser as the owner when the count has never been read', async () => {
-    const count = cacheLocalProfileCount(() => Promise.reject(new Error('down')), {
-      now: clock().now,
-    });
-    const asBrowser = await authenticateLocalInstance(request(`Bearer ${SECRET}`, BROWSER), {
-      ...opts,
-      hasSeveralProfiles: count,
-      env: {},
-    });
-    expect(asBrowser).toMatchObject({
-      kind: 'local',
-      authUser: { userId: LOCAL_EDITION_OWNER_ID, localPrincipal: 'sole-profile' },
-    });
   });
 
   it('keeps refusing a browser once a second profile has been read', async () => {
@@ -421,15 +466,13 @@ describe('the profile count cache', () => {
     const count = cacheLocalProfileCount(read, { ttlMs: 5_000, now });
     await count();
     advance(5_000);
-    const asBrowser = await authenticateLocalInstance(request(`Bearer ${SECRET}`, BROWSER), {
-      ...opts,
-      hasSeveralProfiles: count,
-      env: {},
+    expect(await asBrowser(count)).toMatchObject({
+      kind: 'refused',
+      code: 'PROFILE_SESSION_REQUIRED',
     });
-    expect(asBrowser).toMatchObject({ kind: 'refused', code: 'PROFILE_SESSION_REQUIRED' });
     const bare = await authenticateLocalInstance(request(`Bearer ${SECRET}`), {
       ...opts,
-      hasSeveralProfiles: count,
+      profileCount: count,
       env: {},
     });
     expect(bare).toMatchObject({

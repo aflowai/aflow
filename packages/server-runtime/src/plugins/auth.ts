@@ -745,10 +745,10 @@ export const authPlugin = fp(
 
     // ---- Helper: count the local edition's profiles -------------------------
     // Answered from a short cache, so an unsessioned request reads Postgres
-    // only when the cache is cold. An unread count answers the last count
-    // read, and one profile when none has been read, so a database fault never
-    // refuses a browser on a one-profile install (see `cacheLocalProfileCount`).
-    const hasSeveralProfilesInPinnedTenant = cacheLocalProfileCount(
+    // only when the cache is cold or stale. A failed read never answers one
+    // profile, so a database fault never grants a browser the sole-profile
+    // owner (see `cacheLocalProfileCount`).
+    const localProfileCountInPinnedTenant = cacheLocalProfileCount(
       async () => {
         const db = fastify.appContext?.db as PostgresJsDatabase | undefined;
         if (!db) throw new Error('No database to read the local profiles from');
@@ -759,7 +759,7 @@ export const authPlugin = fp(
       {
         ttlMs: options.localProfileCountTtlMs,
         onReadError: (err) => {
-          fastify.log.error({ err }, 'Local profile count unread, answering the last count read');
+          fastify.log.error({ err }, 'Local profile count unread');
         },
       },
     );
@@ -838,11 +838,22 @@ export const authPlugin = fp(
         const outcome = await authenticateLocalInstance(request, {
           instanceSecret: resolveInstanceSecret(),
           apiKeyPrefix: API_KEY_PREFIX,
-          hasSeveralProfiles: hasSeveralProfilesInPinnedTenant,
+          profileCount: localProfileCountInPinnedTenant,
           profileSessionGeneration: localProfileSessionGeneration,
         });
         if (outcome.kind === 'local') {
           request.authUser = outcome.authUser;
+          return;
+        }
+        if (outcome.kind === 'unavailable') {
+          if (outcome.cause !== undefined) {
+            fastify.log.error({ err: outcome.cause }, 'Local profile session unread');
+          }
+          reply.status(503).send({
+            error: 'ServiceUnavailable',
+            code: outcome.code,
+            message: outcome.message,
+          });
           return;
         }
         if (outcome.kind === 'api-key') {

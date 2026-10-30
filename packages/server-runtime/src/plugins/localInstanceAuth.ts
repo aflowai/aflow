@@ -19,7 +19,7 @@ import {
   type EditionDescriptor,
 } from '@aflow/schemas';
 import type { AuthUser } from './auth.js';
-import { readLocalProfileSession } from './localProfiles.js';
+import { readLocalProfileSession, type LocalProfileCount } from './localProfiles.js';
 
 export const INSTANCE_SECRET_ENV = 'PHOENIX_INSTANCE_SECRET';
 
@@ -146,6 +146,8 @@ function localProfile(userId: UserId): AuthUser {
 
 export type LocalRefusalCode = 'PROFILE_SESSION_REQUIRED' | 'PROFILE_SESSION_INVALID';
 
+export type LocalUnavailableCode = 'PROFILE_COUNT_UNREAD' | 'PROFILE_SESSION_UNREAD';
+
 export type LocalAuthOutcome =
   /** The instance secret was presented, and the rule below named the user. */
   | { kind: 'local'; authUser: AuthUser }
@@ -153,6 +155,8 @@ export type LocalAuthOutcome =
   | { kind: 'api-key'; token: string }
   /** The secret was presented, and the request still names no user it may act as. */
   | { kind: 'refused'; code: LocalRefusalCode; message: string }
+  /** The secret was presented, and a database read the rule needs failed. */
+  | { kind: 'unavailable'; code: LocalUnavailableCode; message: string; cause?: unknown }
   /** Nothing usable was presented. */
   | { kind: 'unauthenticated' };
 
@@ -191,21 +195,23 @@ function headerValue(request: FastifyRequest, name: string): string | undefined 
  * whose generation is no longer the user's. That is how P4 ends the sessions
  * issued before a PIN (`bumpLocalProfileSessionGeneration`).
  *
- * `hasSeveralProfiles` is asked only when rule 2 or 3 needs the answer. The
- * auth plugin answers it from a short cache that never rejects. With the
- * database unreadable it answers the last count read, and one profile when it
- * has read none (`cacheLocalProfileCount`).
+ * `profileCount` is asked only when rule 2 or 3 needs the answer. The auth
+ * plugin answers it from a short cache that never rejects
+ * (`cacheLocalProfileCount`). An `unread` count is no evidence of one profile,
+ * so it never grants rule 2. A browser then gets a 503 that names the fault,
+ * and a bare-secret caller is the owner through the membership read, as in
+ * rule 4.
  */
 export async function authenticateLocalInstance(
   request: FastifyRequest,
   opts: {
     instanceSecret: string;
     apiKeyPrefix: string;
-    hasSeveralProfiles: () => Promise<boolean>;
+    profileCount: () => Promise<LocalProfileCount>;
     /**
      * The user's current session generation, or null when no such user
-     * exists. A session reaches the membership read anyway, so this read adds
-     * no new dependency on the database.
+     * exists. It puts Postgres on the path of every request that carries a
+     * session, ahead of the membership read. A rejection answers `unavailable`.
      */
     profileSessionGeneration: (userId: UserId) => Promise<number | null>;
     env?: NodeJS.ProcessEnv;
@@ -237,7 +243,17 @@ export async function authenticateLocalInstance(
     }
     // A user with no row has no membership either, so the membership read
     // refuses it with the 403 any other non-member gets.
-    const generation = await opts.profileSessionGeneration(claims.userId);
+    let generation: number | null;
+    try {
+      generation = await opts.profileSessionGeneration(claims.userId);
+    } catch (cause) {
+      return {
+        kind: 'unavailable',
+        code: 'PROFILE_SESSION_UNREAD',
+        message: 'Could not read the profile session from the database. Try again.',
+        cause,
+      };
+    }
     if (generation !== null && generation !== claims.generation) {
       return {
         kind: 'refused',
@@ -248,10 +264,18 @@ export async function authenticateLocalInstance(
     return { kind: 'local', authUser: localProfile(claims.userId) };
   }
 
-  if (!(await opts.hasSeveralProfiles())) {
+  const count = await opts.profileCount();
+  if (count === 'one') {
     return { kind: 'local', authUser: localOwner(opts.env, 'sole-profile') };
   }
   if (headerValue(request, LOCAL_BROWSER_CALLER_HEADER) !== undefined) {
+    if (count === 'unread') {
+      return {
+        kind: 'unavailable',
+        code: 'PROFILE_COUNT_UNREAD',
+        message: 'Could not read the local profiles to decide who this request is. Try again.',
+      };
+    }
     return {
       kind: 'refused',
       code: 'PROFILE_SESSION_REQUIRED',

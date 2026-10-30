@@ -66,7 +66,7 @@ async function buildApp(): Promise<FastifyInstance> {
     const outcome = await authenticateLocalInstance(request, {
       instanceSecret: INSTANCE_WORD,
       apiKeyPrefix: API_KEY_PREFIX,
-      hasSeveralProfiles: () => Promise.resolve(false),
+      profileCount: () => Promise.resolve('one'),
       profileSessionGeneration: () => Promise.resolve(0),
       env: {},
     });

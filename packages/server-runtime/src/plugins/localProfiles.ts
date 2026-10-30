@@ -156,6 +156,12 @@ export async function hasSeveralLocalProfiles(
 export const LOCAL_PROFILE_COUNT_TTL_MS = 5_000;
 
 /**
+ * What the auth plugin knows of the profile count. `unread` means no read has
+ * succeeded within the lifetime, and no earlier read saw two profiles.
+ */
+export type LocalProfileCount = 'one' | 'several' | 'unread';
+
+/**
  * `read`, answered from memory between reads.
  *
  * Every browser request without a profile session asks the count, so an
@@ -163,14 +169,12 @@ export const LOCAL_PROFILE_COUNT_TTL_MS = 5_000;
  * answers with no read. A stale or absent one triggers a single read that
  * concurrent callers share.
  *
- * The returned function never rejects. A failed read answers the last count
- * read, however old. Only a count read as two or more refuses a browser with
- * no session, so the refusal never claims a second profile nobody has seen.
- * With no count read since the process started, the answer is one profile.
- * That is the owner, which is what an install answered before a second profile
- * could exist, and it keeps a one-profile install free of the database at
- * authentication. A second profile shows up on the first read that succeeds.
- * The failure is not cached, so the next request reads again.
+ * The returned function never rejects. When a read fails, a count last read
+ * as two or more still answers `several`, which refuses a browser and grants
+ * nothing. Anything else answers `unread`: no count since the process started,
+ * or a stale count of one. A second profile may exist in either case, so
+ * neither may grant the sole-profile owner (Plan 335 §10). The failure is not
+ * cached, so the next request reads again.
  */
 export function cacheLocalProfileCount(
   read: () => Promise<boolean>,
@@ -179,25 +183,26 @@ export function cacheLocalProfileCount(
     now?: () => number;
     onReadError?: (err: unknown) => void;
   } = {},
-): () => Promise<boolean> {
+): () => Promise<LocalProfileCount> {
   const ttlMs = opts.ttlMs ?? LOCAL_PROFILE_COUNT_TTL_MS;
   const now = opts.now ?? Date.now;
   let cached: { several: boolean; readAt: number } | undefined;
-  let inFlight: Promise<boolean> | undefined;
+  let inFlight: Promise<LocalProfileCount> | undefined;
+  const answer = (several: boolean): LocalProfileCount => (several ? 'several' : 'one');
 
   return () => {
     if (cached !== undefined && now() - cached.readAt < ttlMs) {
-      return Promise.resolve(cached.several);
+      return Promise.resolve(answer(cached.several));
     }
     if (inFlight !== undefined) return inFlight;
-    const pending = (async () => {
+    const pending = (async (): Promise<LocalProfileCount> => {
       try {
         const several = await read();
         cached = { several, readAt: now() };
-        return several;
+        return answer(several);
       } catch (err) {
         opts.onReadError?.(err);
-        return cached?.several ?? false;
+        return cached?.several === true ? 'several' : 'unread';
       }
     })();
     inFlight = pending;

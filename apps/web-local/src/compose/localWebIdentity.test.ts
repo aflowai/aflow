@@ -89,14 +89,17 @@ describe('authorizeUpstream', () => {
     });
   });
 
+  // The web process forwards the cookie unread. The API alone reads the value.
+  const OPAQUE_SESSION = 'opaque-profile-session-cookie';
+
   it('forwards the profile session the browser holds', async () => {
-    browserCookies.set(PROFILE_SESSION_COOKIE, 'v1.session');
+    browserCookies.set(PROFILE_SESSION_COOKIE, OPAQUE_SESSION);
     const outcome = await withSecret(SECRET, () =>
       localWebIdentity.authorizeUpstream({ anonymousOk: false }),
     );
     expect(outcome.kind === 'authorized' && outcome.headers).toEqual({
       'x-aflow-browser-caller': '1',
-      'x-aflow-profile-session': 'v1.session',
+      'x-aflow-profile-session': OPAQUE_SESSION,
     });
   });
 
