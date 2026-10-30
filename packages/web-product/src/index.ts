@@ -20,7 +20,12 @@ export { allowsAnonymous, clientIpOf, proxyToApi, upstreamHeaders } from './bffT
 export { PREFERRED_SPACE_COOKIE } from './preferredSpaceCookie.js';
 export type { TransportConfig } from './bffTransport.js';
 
-export { RECOVERY_MARKER, createSessionRecovery, provesAuthenticated } from './session/recovery.js';
+export {
+  RECOVERY_MARKER,
+  createSessionRecovery,
+  provesAuthenticated,
+  readRefusalCode,
+} from './session/recovery.js';
 export { PROXY_RESPONSE_HEADER } from './proxyResponseHeader.js';
 export type {
   BlockedSession,
@@ -30,6 +35,7 @@ export type {
 } from './session/recovery.js';
 
 export { refuseLocalRequest } from './localRequestGuard.js';
+export { LOCAL_BROWSER_CALLER_HEADER, LOCAL_PROFILE_SESSION_HEADER } from '@aflow/schemas';
 
 export type { LocalRequest } from './localRequestGuard.js';
 

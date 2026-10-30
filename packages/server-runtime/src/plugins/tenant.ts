@@ -316,10 +316,16 @@ export const tenantPlugin = fp(
 
         let role: string | null = null;
 
-        // The local appliance's instance credential IS the owner; there is no
-        // membership to look up, and requiring one would make the API depend on
-        // a row bootstrap has not necessarily written yet.
-        if (tenancy.mode === 'fixed' && authUser.authMethod === 'local') {
+        // On a local install with one profile, the instance credential with no
+        // profile session IS the owner, and there is no membership to look up.
+        // Every other local principal — a profile session, or the bare secret
+        // once a second profile exists — reads its membership like any other
+        // (Plan 335 §8 question 7, decided in `authenticateLocalInstance`).
+        if (
+          tenancy.mode === 'fixed' &&
+          authUser.authMethod === 'local' &&
+          authUser.localPrincipal === 'sole-profile'
+        ) {
           role = 'owner';
         }
 

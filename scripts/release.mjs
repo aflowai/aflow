@@ -34,6 +34,7 @@ import {
   applyConciergeConfigRemovalMigration,
   applyIdentityProviderKeyMigration,
   applyAgentModelAllowlistMigration,
+  applyLocalProfileSessionGenerationMigration,
   seedPublicTenantFreemiumDefaults,
   seedModelCatalog,
   applyMigrationsToAllTenants,
@@ -98,6 +99,9 @@ async function main() {
   await step('identity provider key', () => applyIdentityProviderKeyMigration(sql));
   await step('concierge config removal', () => applyConciergeConfigRemovalMigration(sql));
   await step('agent-model allowlist', () => applyAgentModelAllowlistMigration(sql));
+  await step('local profile session generation', () =>
+    applyLocalProfileSessionGenerationMigration(sql),
+  );
 
   // 6b. Freemium spend bounds on the public tenant (generous but bounded).
   const publicTenantId = process.env['DEFAULT_TENANT_ID'];
