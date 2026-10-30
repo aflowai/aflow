@@ -211,7 +211,13 @@ async function failRunAfterStartupPauseError(
       { db: handoff.db, redis: handoff.redis, payloadStore: handoff.payloadStore },
       handoff.tenantId,
       handoff.runId,
-      'failed',
+      {
+        status: 'failed',
+        failure: {
+          reason: 'start_failed',
+          message: `Pausing the run for its startup preflight failed: ${errMsg}`,
+        },
+      },
     );
   } catch (completeErr) {
     getOrchestratorLogger().error(

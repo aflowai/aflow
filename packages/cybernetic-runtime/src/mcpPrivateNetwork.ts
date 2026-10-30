@@ -19,7 +19,7 @@ import {
   type McpPrivateNetworkSetResult,
   type TenantId,
 } from '@aflow/schemas';
-import { isCloudMetadataHostname } from '@aflow/network-safety';
+import { isCloudMetadataHostname, unliftableRangeOf } from '@aflow/network-safety';
 import { createTenantContext, withTenantSchema } from '@aflow/database';
 import { publishMcpCatalogInvalidation } from '@aflow/redis';
 import type { McpIntegrationAdminScope } from './mcpIntegrationAdmin.js';
@@ -50,6 +50,13 @@ type ExecuteTx = Pick<PostgresJsDatabase, 'execute'>;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+function unliftableRangeProblem(host: string): string | null {
+  const label = unliftableRangeOf(host);
+  return label === null
+    ? null
+    : `is in a range the platform never admits (${label}), which no setting reaches`;
+}
+
 /**
  * The hosts as they will be stored, or the reason the write is refused. The
  * local edition accepts a host as set. The hosted edition refuses one its
@@ -64,7 +71,7 @@ export function privateNetworkHostsForWrite(input: {
   for (const host of hosts) {
     const problem = isCloudMetadataHostname(host)
       ? 'names a cloud metadata service, which no setting reaches'
-      : privateNetworkHostProblem(host);
+      : (privateNetworkHostProblem(host) ?? unliftableRangeProblem(host));
     if (problem !== null) {
       throw new McpPrivateNetworkWriteError(
         'PRIVATE_NETWORK_HOST_REFUSED',

@@ -6,12 +6,10 @@
  * this module so the dispatch helper stays unit-testable without this
  * module's ledger/emit import graph).
  */
-import {
-  casCompleteTask as ledgerCasCompleteTask,
-  clearCompletionPending,
-} from '@aflow/cybernetic-runtime';
+import { clearCompletionPending } from '@aflow/cybernetic-runtime';
 import type { TenantId } from '@aflow/schemas';
 import { getOrchestratorLogger, logOrchestratorError } from '../../../lib/orchestratorLogger.js';
+import { recordTaskOutcome } from './dispatchRecord.js';
 import { emitTaskUpdate } from './helpers.js';
 import type { HarnessDeps } from './types.js';
 
@@ -38,18 +36,17 @@ export async function postClaimFailure(
   });
 
   let casLanded = false;
-  const failedAt = new Date();
   try {
-    await ledgerCasCompleteTask(deps.db, tenantIdStr, {
+    casLanded = await recordTaskOutcome(
+      deps,
+      tenantId,
       runId,
       taskId,
       attempt,
-      status: 'failed',
-      completedAt: failedAt,
-      failureReason: reason,
-      failedAt,
-    });
-    casLanded = true;
+      'failed',
+      { startedAt: failureMeta?.startedAt ?? null },
+      { failureReason: reason },
+    );
   } catch (casErr) {
     log.error(
       `[postClaimFailure] CAS to 'failed' threw — row may be in a transient state for the sweeper`,

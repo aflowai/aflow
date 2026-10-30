@@ -10,24 +10,7 @@
  */
 import { Providers } from '@aflow/web-product/ui';
 
-import type { RecoveryAction, SessionRecovery } from '@aflow/web-product';
-
-/**
- * There is nobody to sign in as.
- *
- * A 401 here means the credential this process holds is wrong, not that a visitor
- * needs to authenticate — reaching this instance is the whole of the identity. So
- * recovery says what is actually wrong instead of sending an operator to a login
- * page that does not exist, and the notice offers no retry, because asking again
- * would only re-derive the same sentence.
- */
-const localRecovery: SessionRecovery = {
-  resolve: (): RecoveryAction => ({
-    kind: 'message',
-    message:
-      'This instance could not authenticate to its own API. Check that the web process and the API share an instance secret.',
-  }),
-};
+import { localRecovery } from '@/compose/localRecovery';
 
 /**
  * The tenant is the server's to know.

@@ -15,7 +15,9 @@ export default async function Home() {
     apiUrl: process.env.API_URL || 'http://localhost:3000',
     headers: async (): Promise<Record<string, string> | null> => {
       const authorization = await localWebIdentity.authorizeUpstream({ anonymousOk: false });
-      return authorization.kind === 'authorized' ? { Authorization: authorization.header } : null;
+      return authorization.kind === 'authorized'
+        ? { ...authorization.headers, Authorization: authorization.header }
+        : null;
     },
   });
 }

@@ -63,12 +63,14 @@ async function buildApp(): Promise<FastifyInstance> {
       request.authUser = hostedPrincipal;
       return;
     }
-    const outcome = authenticateLocalInstance(request, {
+    const outcome = await authenticateLocalInstance(request, {
       instanceSecret: INSTANCE_WORD,
       apiKeyPrefix: API_KEY_PREFIX,
+      profileCount: () => Promise.resolve('one'),
+      profileSessionGeneration: () => Promise.resolve(0),
       env: {},
     });
-    if (outcome.kind === 'owner') request.authUser = outcome.authUser;
+    if (outcome.kind === 'local') request.authUser = outcome.authUser;
     // As the auth plugin resolves a key that validates.
     if (outcome.kind === 'api-key') {
       request.authUser = {

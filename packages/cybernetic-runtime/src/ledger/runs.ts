@@ -112,22 +112,46 @@ export async function recordRunStart(
   });
 }
 
-export interface CompleteRunParams {
+/**
+ * Why a run ended `failed`, as `failure_json` records it. A failed run always
+ * carries one: `message` is what a reader is shown, `reason` names the path
+ * that ended the run, and `taskIds` names the tasks it ended on, where any did.
+ */
+export interface RunFailure {
+  reason: string;
+  message: string;
+  taskIds?: string[];
+  detail?: string;
+}
+
+interface CompleteRunCommon {
   runId: string;
-  status: 'completed' | 'failed' | 'cancelled';
   completedAt: Date;
   totalCostCents?: number;
   totalTokens?: number;
-  failureJson?: unknown;
   learningsJson?: unknown;
   /**
-   * Cancellation provenance — only meaningful with `status: 'cancelled'`.
-   * Stamps `cancelled_by` / `cancel_reason` on the run row so post-run
-   * hooks and read surfaces can distinguish a deliberate operator stop
-   * from agent/system teardown.
+   * The run's `scheduler_cursor_version` as the caller read it. When set, the
+   * terminal write lands only if no task outcome was recorded since, so a
+   * verdict reached from that read cannot end a run another path has advanced.
    */
-  cancellation?: WorkflowRunCancellation;
+  expectedSchedulerCursorVersion?: number;
 }
+
+export type CompleteRunParams = CompleteRunCommon &
+  (
+    | { status: 'completed' }
+    | { status: 'failed'; failure: RunFailure }
+    | {
+        status: 'cancelled';
+        /**
+         * Stamps `cancelled_by` / `cancel_reason` on the run row so post-run
+         * hooks and read surfaces can distinguish a deliberate operator stop
+         * from agent/system teardown.
+         */
+        cancellation?: WorkflowRunCancellation;
+      }
+  );
 
 export async function completeRun(
   db: PostgresJsDatabase,
@@ -143,7 +167,7 @@ export async function completeRun(
         completedAt: params.completedAt,
         ...(params.totalCostCents != null ? { totalCostCents: params.totalCostCents } : {}),
         ...(params.totalTokens != null ? { totalTokens: params.totalTokens } : {}),
-        ...(params.failureJson != null ? { failureJson: params.failureJson } : {}),
+        ...(params.status === 'failed' ? { failureJson: params.failure } : {}),
         ...(params.learningsJson != null ? { learningsJson: params.learningsJson } : {}),
         ...(params.status === 'cancelled' && params.cancellation
           ? {
@@ -160,6 +184,9 @@ export async function completeRun(
           // CAS guard: only transition non-terminal runs. Mirrors
           // isTerminalRunStatus() in WorkflowRunHarness.
           sql`${workflowRuns.status} NOT IN ('completed', 'failed', 'cancelled')`,
+          ...(params.expectedSchedulerCursorVersion !== undefined
+            ? [eq(workflowRuns.schedulerCursorVersion, params.expectedSchedulerCursorVersion)]
+            : []),
         ),
       )
       .returning({ runId: workflowRuns.runId });

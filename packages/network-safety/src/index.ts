@@ -160,6 +160,18 @@ export function isCloudMetadataHostname(hostname: string): boolean {
   return CLOUD_METADATA_HOSTNAMES.includes(normalizeHostname(hostname));
 }
 
+/**
+ * The range label of a canonical dotted quad that no policy lifts, or `null`
+ * for a public address, a liftable one, or anything that is not a dotted quad.
+ * The label is the one a connect refusal names.
+ */
+export function unliftableRangeOf(host: string): string | null {
+  const address = normalizeHostname(host);
+  if (!isIPv4(address)) return null;
+  const { label } = isPrivateIp(address);
+  return label !== undefined && !LIFTABLE_RANGE_LABELS.has(label) ? label : null;
+}
+
 declare const privateNetworkPolicyBrand: unique symbol;
 
 /**

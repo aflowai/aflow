@@ -20,6 +20,7 @@ import {
   RECOVERY_MARKER,
   createSessionRecovery,
   provesAuthenticated,
+  readRefusalCode,
   PROXY_RESPONSE_HEADER,
   type BlockedSession,
   type SessionRecovery,
@@ -349,7 +350,7 @@ function ApiProvider({
       const startedAt = coordinator.generation();
       const response = await fetch(input, init);
       if (response.status === 401) {
-        setBlockedSession(coordinator.onUnauthenticated());
+        setBlockedSession(coordinator.onUnauthenticated(await readRefusalCode(response)));
       } else if (
         provesAuthenticated(
           response.status,

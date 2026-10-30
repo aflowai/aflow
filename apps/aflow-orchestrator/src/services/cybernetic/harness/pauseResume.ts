@@ -9,6 +9,8 @@ import {
   blockDescendantTasks,
   computeDescendants,
   emitRunUpdated,
+  type CompleteRunParams,
+  type RunFailure,
 } from '@aflow/cybernetic-runtime';
 import type {
   TenantId,
@@ -19,7 +21,7 @@ import type {
 import { getOrchestratorLogger } from '../../../lib/orchestratorLogger.js';
 import { fireCyberneticPostRunHooksStandalone } from '../postRunHooks.js';
 import {
-  bumpSchedulerCursorVersion,
+  advanceSchedulerCursor,
   isTerminalRunStatus,
   isTerminalTaskStatus,
   loadRunByRunIdAcrossSpaces,
@@ -89,7 +91,7 @@ export async function pauseRunForTask(
     log.info(`[pauseRunForTask] CAS lost; another path advanced run=${runId} task=${taskId}`);
     return;
   }
-  await bumpSchedulerCursorVersion(deps.db, tenantIdStr, runId);
+  await advanceSchedulerCursor(deps.db, tenantIdStr, runId);
 
   // 2+3+4. Run-side pause sequence (run row pause + attention + waiters).
   await pauseRunOnly(deps, tenantId, runId, taskId, attempt, contractRef, {
@@ -244,7 +246,10 @@ export async function applyFailureMode(
         nonTerminal.map((t) => t.taskId),
       );
     }
-    await completeRun(deps, tenantId, runId, 'failed');
+    await completeRun(deps, tenantId, runId, {
+      status: 'failed',
+      failure: failedTasksFailure(run.tasks, [failedTaskId]),
+    });
     return;
   }
 
@@ -257,24 +262,67 @@ export async function applyFailureMode(
   await dispatchNextOrTerminate(deps, tenantId, runId);
 }
 
+/**
+ * The failure of a run that ended on its tasks, naming each one with the
+ * reason its row records.
+ */
+export function failedTasksFailure(
+  rows: ReadonlyArray<{ taskId: string; status: string; failureReason: string | null }>,
+  taskIds: readonly string[],
+): RunFailure {
+  const parts = taskIds.map((taskId) => {
+    const row = rows.find((r) => r.taskId === taskId);
+    const status = row?.status ?? 'failed';
+    return row?.failureReason
+      ? `${taskId} (${status}): ${row.failureReason}`
+      : `${taskId} (${status})`;
+  });
+  return {
+    reason: 'task_failed',
+    message: `The run ended on ${taskIds.length === 1 ? 'task' : 'tasks'} ${parts.join('; ')}.`,
+    taskIds: [...taskIds],
+  };
+}
+
 // ============================================================================
 // completeRun — terminal flush + waiters + attention + post-run hooks
 // ============================================================================
+
+/**
+ * How a run ends. A failed run names why — the record a reader of the run
+ * gets, written to `failure_json` by the same CAS that ends it — so no path
+ * can end a run failed in silence.
+ */
+export type RunEnding =
+  | { status: 'completed' }
+  | {
+      status: 'failed';
+      failure: RunFailure;
+      /**
+       * The cursor version the caller's verdict was reached from. The run
+       * ends only if no task outcome has been recorded since.
+       */
+      expectedSchedulerCursorVersion?: number;
+    }
+  | {
+      status: 'cancelled';
+      /**
+       * Stamped on the run row by the terminal CAS and threaded into the
+       * waiter wake-up envelope so the parked Helmsman can distinguish an
+       * operator's deliberate stop.
+       */
+      cancellation: WorkflowRunCancellation;
+      attention?: Record<string, unknown>;
+    };
 
 export async function completeRun(
   deps: HarnessDeps,
   tenantId: TenantId,
   runId: string,
-  terminalStatus: 'completed' | 'failed' | 'cancelled',
-  attentionPayloadExtras?: Record<string, unknown>,
-  /**
-   * Cancellation provenance — only meaningful with `terminalStatus:
-   * 'cancelled'` (the `cancelRun` caller). Stamped on the run row by the
-   * terminal CAS and threaded into the waiter wake-up envelope so the
-   * parked Helmsman can distinguish an operator's deliberate stop.
-   */
-  cancellation?: WorkflowRunCancellation,
+  ending: RunEnding,
 ): Promise<boolean> {
+  const terminalStatus = ending.status;
+  const cancellation = ending.status === 'cancelled' ? ending.cancellation : undefined;
   const tenantIdStr = tenantId as string;
   const log = getOrchestratorLogger().child({
     component: 'WorkflowRunHarness',
@@ -300,29 +348,36 @@ export async function completeRun(
   //      "running" rather than terminal-without-attention. The ledger
   const attentionKind = terminalStatusToAttentionKind(terminalStatus);
   const tenantCtx = createTenantContext(tenantId);
+  const completedAt = new Date();
+  const ledgerParams: CompleteRunParams =
+    ending.status === 'failed'
+      ? {
+          runId,
+          completedAt,
+          status: 'failed',
+          failure: ending.failure,
+          ...(ending.expectedSchedulerCursorVersion !== undefined
+            ? { expectedSchedulerCursorVersion: ending.expectedSchedulerCursorVersion }
+            : {}),
+        }
+      : ending.status === 'cancelled'
+        ? { runId, completedAt, status: 'cancelled', cancellation: ending.cancellation }
+        : { runId, completedAt, status: 'completed' };
+  const attentionPayload: Record<string, unknown> = {
+    terminalStatus,
+    ...(ending.status === 'failed' ? ending.failure : {}),
+    ...(ending.status === 'cancelled' ? (ending.attention ?? {}) : {}),
+  };
   const casLanded = await withTenantSchema(deps.db, tenantCtx, async (tx) => {
-    const landed = await ledgerCompleteRun(
-      deps.db,
-      tenantIdStr,
-      {
-        runId,
-        status: terminalStatus,
-        completedAt: new Date(),
-        ...(cancellation ? { cancellation } : {}),
-      },
-      tx,
-    );
+    const landed = await ledgerCompleteRun(deps.db, tenantIdStr, ledgerParams, tx);
     if (!landed) return false;
-    await writeAttentionItem(tx, tenantId, run, attentionKind, {
-      terminalStatus,
-      ...(attentionPayloadExtras ?? {}),
-    });
+    await writeAttentionItem(tx, tenantId, run, attentionKind, attentionPayload);
     return true;
   });
 
   if (!casLanded) {
     log.info(
-      `[completeRun] CAS lost — concurrent terminal write reached run=${runId} first; skipping waiters/hooks`,
+      `[completeRun] CAS lost — run=${runId} was ended or advanced by another path first; skipping waiters/hooks`,
     );
     return false;
   }
@@ -384,6 +439,12 @@ export async function completeRun(
     );
   }
 
-  log.info(`[completeRun] run=${runId} terminal=${terminalStatus}`);
+  if (ending.status === 'failed') {
+    log.warn(
+      `[completeRun] run=${runId} terminal=failed reason=${ending.failure.reason}: ${ending.failure.message}`,
+    );
+  } else {
+    log.info(`[completeRun] run=${runId} terminal=${terminalStatus}`);
+  }
   return true;
 }

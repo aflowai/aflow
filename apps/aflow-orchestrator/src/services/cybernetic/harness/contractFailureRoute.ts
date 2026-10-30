@@ -26,7 +26,7 @@ import {
   type WorkflowTask,
 } from '@aflow/schemas';
 import { getOrchestratorLogger, logOrchestratorError } from '../../../lib/orchestratorLogger.js';
-import { bumpSchedulerCursorVersion, emitTaskUpdate } from './helpers.js';
+import { advanceSchedulerCursor, emitTaskUpdate } from './helpers.js';
 import { applyFailureMode, pauseRunForTask } from './pauseResume.js';
 import { dispatchRetriedTask } from './dispatchRetriedTask.js';
 import type { HarnessDeps, WorkflowTaskOutcome } from './types.js';
@@ -231,7 +231,7 @@ async function routeProducerRerun(
     return { kind: 'reran' };
   }
 
-  await bumpSchedulerCursorVersion(deps.db, tenantIdStr, run.runId);
+  await advanceSchedulerCursor(deps.db, tenantIdStr, run.runId);
 
   // The deleted descendant rows include the producer's sibling consumers,
   // which all depend only on the producer and so dispatched in parallel when

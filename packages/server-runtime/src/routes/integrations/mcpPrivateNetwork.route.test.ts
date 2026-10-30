@@ -213,6 +213,14 @@ describe('PUT /mcp/servers/:serverId/private-network', () => {
     expect(state.audit).toEqual([]);
   });
 
+  it('refuses a literal address no policy lifts and stores nothing', async () => {
+    const res = await put(['100.100.100.200']);
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ code: 'PRIVATE_NETWORK_HOST_REFUSED' });
+    expect(res.json().error).toContain('a range the platform never admits (cloud-metadata)');
+    expect(state.audit).toEqual([]);
+  });
+
   it('answers 404 for a definition the space does not hold', async () => {
     const res = await put([HOST], 'missing');
     expect(res.statusCode).toBe(404);

@@ -22,12 +22,13 @@ import {
   stampSchedulerDeadline,
   deriveRunLiveness,
   listCompletionPendingForRun,
+  readSchedulerCursorVersion,
   DEFAULT_STALLED_AFTER_MS,
 } from '@aflow/cybernetic-runtime';
 import type { TenantId } from '@aflow/schemas';
 import { getOrchestratorLogger, logOrchestratorError } from '../../../lib/orchestratorLogger.js';
 import { dispatchNextOrTerminate } from './dispatch.js';
-import { completeRun } from './pauseResume.js';
+import { completeRun, type RunEnding } from './pauseResume.js';
 import { isTerminalRunStatus, loadRunByRunIdAcrossSpaces } from './helpers.js';
 import type { HarnessDeps } from './types.js';
 
@@ -44,6 +45,18 @@ export interface ReconcileOrphanedRunsResult {
   skipped: number;
   /** Runs that threw during reconciliation. */
   errors: number;
+}
+
+function orphanedEnding(
+  message: string,
+  detail: string,
+  cursorVersion: number | null,
+): Extract<RunEnding, { status: 'failed' }> {
+  return {
+    status: 'failed',
+    failure: { reason: 'workflow_run_orphaned', message, detail },
+    ...(cursorVersion !== null ? { expectedSchedulerCursorVersion: cursorVersion } : {}),
+  };
 }
 
 export async function reconcileOrphanedRunsForTenant(
@@ -82,6 +95,12 @@ export async function reconcileOrphanedRunsForTenant(
 
   for (const runId of candidates) {
     try {
+      // Read before anything else this pass reads: the verdict is drawn from
+      // what follows, and it may end the run only while no task outcome has
+      // been recorded since. A child run completing in the same tick resumes
+      // its parent through such an outcome, and the parent's dependents may
+      // not have been claimed yet when this pass looks.
+      const cursorVersion = await readSchedulerCursorVersion(deps.db, tenantIdStr, runId);
       const run = await loadRunByRunIdAcrossSpaces(deps.db, tenantIdStr, runId);
       // Status moved on between selection and load (terminated, or paused —
       // a paused run is intentionally waiting and is never an orphan here).
@@ -128,10 +147,16 @@ export async function reconcileOrphanedRunsForTenant(
             `${dispatchErr instanceof Error ? dispatchErr.message : String(dispatchErr)} — ` +
             `failing run to release waiters`,
         );
-        const failedNow = await completeRun(deps, tenantId, runId, 'failed', {
-          reason: 'workflow_run_orphaned',
-          detail: liveness.reason,
-        });
+        const failedNow = await completeRun(
+          deps,
+          tenantId,
+          runId,
+          orphanedEnding(
+            `Recovering the run threw: ${dispatchErr instanceof Error ? dispatchErr.message : String(dispatchErr)}`,
+            liveness.reason,
+            cursorVersion,
+          ),
+        );
         if (failedNow) result.failed += 1;
         else result.skipped += 1;
         continue;
@@ -163,10 +188,16 @@ export async function reconcileOrphanedRunsForTenant(
       // Dispatch produced no tracked work and did not terminate — the graph
       // is wedged (no ready successors, required tasks not all terminal).
       // Fail so the parked waiters are released rather than spinning forever.
-      const failedNow = await completeRun(deps, tenantId, runId, 'failed', {
-        reason: 'workflow_run_orphaned',
-        detail: liveness.reason,
-      });
+      const failedNow = await completeRun(
+        deps,
+        tenantId,
+        runId,
+        orphanedEnding(
+          'No task of the run was in flight or ready to start, and its required tasks had not all ended.',
+          liveness.reason,
+          cursorVersion,
+        ),
+      );
       if (failedNow) result.failed += 1;
       else result.skipped += 1;
     } catch (err) {

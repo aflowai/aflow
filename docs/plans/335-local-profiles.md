@@ -1,6 +1,6 @@
 # Plan 335 — Local profiles: several people share one install
 
-**Status:** 🔎 discovery. Nothing is built. This document reads the code as it stands, judges three shapes for a profile and proposes phases. The phases wait for the operator's choice.
+**Status:** 🚧 P1 built under option A (§11). P2 to P5 are not built. This document reads the code as it stood, judges three shapes for a profile and proposes phases.
 
 **Builds on:** Plan 315 (the local edition's first run), Plan 330 (the first space a fresh install gets), Plan 334 (the first-run card in the empty chat).
 
@@ -284,3 +284,42 @@ Each of these cases fails if the change is wrong:
 - On an install with a second profile, a browser request with no profile session does not act as the owner. Clearing the cookie or opening a private window reaches no locked profile, the owner's included. What it reaches instead waits on §8 question 7.
 - A profile session for a user without an active membership in the pinned tenant is refused with a 403.
 - A locked profile's session cannot start without the PIN, through the web or through a direct API call.
+
+## 11. P1 — as built
+
+P1 follows option A. It adds no UI, no route and no table. It adds one column, `users.profile_session_generation`.
+
+### The profile session
+
+- **The value.** A session is `v2.<user id>.<issue time>.<generation>.<MAC>`. The issue time is in Unix seconds. The generation is the user's `profile_session_generation` when the session was issued. The MAC is an HMAC-SHA256 under a key derived from the instance secret (`packages/server-runtime/src/plugins/localProfiles.ts`). It holds no state of its own.
+- **Its end.** Removing a profile's membership ends its sessions, because the tenant plugin reads that membership on every request. `bumpLocalProfileSessionGeneration` ends every session issued to one user before the bump, because the API refuses a session whose generation is not the user's. P1 makes no change that bumps it. P4 bumps it when a PIN is set, changed or reset, so a session issued before the PIN cannot start a locked profile (§10). Rotating the instance secret ends every session.
+- **Its path.** The browser holds the session in the `aflow_profile_session` cookie. The web process forwards it in `X-Aflow-Profile-Session` beside the instance secret (`apps/web-local/src/compose/localWebIdentity.ts`).
+- **Its issue.** `issueLocalProfileSession` issues the value. No route calls it in P1. P3's picker calls it when a profile is chosen, and P4 puts the PIN check in front of it.
+- **This differs from §6.** §6 proposed a stored session in `public`. A signed value is enough for P1, because the membership read already revokes it. A stored session returns if §8 question 3 asks for an idle timeout.
+
+### The answer to §8 question 7
+
+`authenticateLocalInstance` (`packages/server-runtime/src/plugins/localInstanceAuth.ts`) holds the rule. It applies to a request that carries the instance secret.
+
+| The request carries                   | One profile                   | Two or more profiles           |
+| ------------------------------------- | ----------------------------- | ------------------------------ |
+| A profile session                     | That user, membership read    | That user, membership read     |
+| A session this instance did not issue | 401 `PROFILE_SESSION_INVALID` | 401 `PROFILE_SESSION_INVALID`  |
+| No session, from the web process      | The owner, no membership read | 401 `PROFILE_SESSION_REQUIRED` |
+| No session, the bare secret           | The owner, no membership read | The owner, membership read     |
+
+- **What separates a browser from a bare-secret caller.** The web process sets `X-Aflow-Browser-Caller` on every call it makes. The browser cannot remove it, because the web forwards a fixed list of browser headers and sets its own after them. Clearing the cookie or opening a private window therefore reaches no profile once a second one exists.
+- **What a bare-secret caller gets.** It stays the owner on every install. `yarn mcp:setup` keeps working. Its holder can read `instance.env` and could issue an owner session, so a refusal would guard nothing (D3).
+- **A single profile with a PIN.** P1 gives it a session that names it, read through its membership. P4 must also end the no-session fallback for a single profile that holds a PIN. The one-profile column then applies only to an unlocked profile.
+- **The count.** A profile is a human user with an active membership in the pinned tenant. The API reads at most two such rows and keeps the answer for five seconds, so most requests without a session read no database. A one-profile install reaches the owner from that answer while it is fresh. When a read fails, a count last read as two or more still answers several profiles. Any other failed read answers the count as unread: none read since the process started, or a stale count of one. A second profile may exist in either case, so an unread count never grants the owner with no membership read. A browser with no session then gets a 503 `PROFILE_COUNT_UNREAD`. A bare-secret caller stays the owner through the membership read. Only a count read as two or more refuses a browser with `PROFILE_SESSION_REQUIRED`, so that refusal never names a second profile nobody has seen.
+- **The generation read.** A request that carries a session reads the user's generation from Postgres before the membership read, so the database is on the path of every sessioned request. A failed read answers 503 `PROFILE_SESSION_UNREAD`.
+
+### The tenant plugin
+
+The owner shortcut at `tenant.ts` applies only to the `sole-profile` principal. A profile session, and the bare secret on an install with several profiles, read `tenant_memberships` as any principal does.
+
+### Tests
+
+- `localInstanceAuth.test.ts` covers the rule on each install for a browser and for a bare-secret caller. It also covers the count cache warm, cold and after a failed read. It shows that neither a count never read nor a stale count of one grants a browser the owner. It covers the session's generation check and a failed generation read.
+- `tenantPinning.test.ts` shows that only the sole-profile principal skips the membership read.
+- `localProfiles.pg.test.ts` runs the auth and tenant plugins on a bootstrapped install. It then adds a second profile through the `seedLocalProfile` fixture and covers the §10 cases this phase owns. It also shows that a bumped generation ends a session issued before the bump.

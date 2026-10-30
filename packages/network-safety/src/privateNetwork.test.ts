@@ -18,6 +18,7 @@ import {
   safeFetchImpl,
   validateCredentialedUrl,
   validateUrl,
+  unliftableRangeOf,
   type PrivateNetworkPolicy,
 } from './index.js';
 
@@ -63,6 +64,22 @@ describe('metadata labels', () => {
       blocked: true,
       label: 'shared-address-space',
     });
+  });
+});
+
+describe('unliftableRangeOf', () => {
+  it('names the range a listed literal is refused under at connect', async () => {
+    for (const address of ['100.100.100.200', '224.0.0.1', '198.18.0.1', '240.0.0.1']) {
+      const label = unliftableRangeOf(address);
+      const err = await refusal(resolveAndValidateHost(address, localPolicy([address]), 'https:'));
+      expect(err, address).toMatchObject({ rangeLabel: label, remedy: 'none' });
+    }
+  });
+
+  it('returns null for a liftable or public quad and for a hostname', () => {
+    for (const host of ['10.0.0.5', '100.64.1.2', '192.168.1.10', '93.184.216.34', HOST]) {
+      expect(unliftableRangeOf(host), host).toBeNull();
+    }
   });
 });
 

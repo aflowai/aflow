@@ -18,8 +18,26 @@ export interface SessionRecovery {
    * @param returnTo Where the visitor was, as a path with its query and fragment.
    *   Not just the pathname: dropping the query loses the state the page was in,
    *   which for a deep link is the whole address.
+   * @param code The `code` field of the 401's JSON body, or null when it has
+   *   none. An API can refuse a credential it accepted, and the code names why.
    */
-  resolve(returnTo: string): RecoveryAction;
+  resolve(returnTo: string, code: string | null): RecoveryAction;
+}
+
+/**
+ * The `code` field of a refusal's JSON body, or null.
+ *
+ * Reads a clone, so the caller still gets a response whose body is unread.
+ */
+export async function readRefusalCode(response: Response): Promise<string | null> {
+  try {
+    const body: unknown = await response.clone().json();
+    if (typeof body !== 'object' || body === null) return null;
+    const code = (body as Record<string, unknown>)['code'];
+    return typeof code === 'string' ? code : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Why authenticated traffic is currently blocked, for a surface to render. */
@@ -99,8 +117,11 @@ export function createSessionRecovery(recovery: SessionRecovery, host: RecoveryH
    */
   let generation = 0;
 
+  /** The code of the newest 401, so a retry answers the same refusal. */
+  let lastCode: string | null = null;
+
   function attempt(manual: boolean): BlockedSession {
-    const action = recovery.resolve(host.currentLocation());
+    const action = recovery.resolve(host.currentLocation(), lastCode);
 
     if (action.kind === 'message') {
       return { message: action.message, canRetry: false };
@@ -137,9 +158,13 @@ export function createSessionRecovery(recovery: SessionRecovery, host: RecoveryH
       return generation;
     },
 
-    /** Called for every 401. Returns what a surface should show. */
-    onUnauthenticated(): BlockedSession {
+    /**
+     * Called for every 401, with the code its body carries. Returns what a
+     * surface should show.
+     */
+    onUnauthenticated(code: string | null = null): BlockedSession {
       generation += 1;
+      lastCode = code;
       return attempt(false);
     },
 

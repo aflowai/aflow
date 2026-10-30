@@ -952,7 +952,13 @@ export async function handleWorkflowRunResume(
         { db, redis: args.redis, payloadStore: args.payloadStore },
         args.context.tenantId,
         run.runId,
-        'failed',
+        {
+          status: 'failed',
+          failure: {
+            reason: 'resume_failed',
+            message: `Resuming the run failed after the resume was recorded: ${harnessErr instanceof Error ? harnessErr.message : String(harnessErr)}`,
+          },
+        },
       );
     } catch (completeErr) {
       // Last-resort log. The sweeper recovers an orphan running run

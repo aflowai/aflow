@@ -241,6 +241,24 @@ describe('privateNetworkHostsForWrite', () => {
     expect(write(['mcp.corp.internal'])).toEqual(['mcp.corp.internal']);
   });
 
+  it('refuses a dotted quad in a range no policy lifts, naming the range', () => {
+    for (const [host, label] of [
+      ['100.100.100.200', 'cloud-metadata'],
+      ['224.0.0.1', 'multicast'],
+      ['198.18.0.1', 'benchmark'],
+      ['240.0.0.1', 'reserved'],
+    ] as const) {
+      expect(() => write([host]), host).toThrow(
+        `"${host}" is in a range the platform never admits (${label})`,
+      );
+    }
+  });
+
+  it('keeps a dotted quad in a range a policy lifts', () => {
+    const hosts = ['10.0.0.5', '100.64.1.2', '192.168.1.10'];
+    expect(write(hosts)).toEqual(hosts);
+  });
+
   it('refuses a wildcard, loopback and an IPv6 literal', () => {
     for (const host of ['*.corp.example', 'localhost', '127.0.0.1', 'fe80::1']) {
       expect(() => write([host]), host).toThrow(/PRIVATE|no setting|wildcard|"/);

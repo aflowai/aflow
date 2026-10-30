@@ -49,7 +49,13 @@ import {
   authenticateLocalInstance,
   findLocalAuthConfigViolations,
   resolveInstanceSecret,
+  type LocalPrincipal,
 } from './localInstanceAuth.js';
+import {
+  cacheLocalProfileCount,
+  hasSeveralLocalProfiles,
+  readLocalProfileSessionGeneration,
+} from './localProfiles.js';
 
 // ============================================================================
 // Constants
@@ -112,6 +118,8 @@ export interface AuthUser {
   apiKeyTenantId?: TenantId | undefined;
   /** Raw JWT claims (only set when authMethod is 'jwt' or 'dev_bypass') */
   claims?: Auth0Claims | undefined;
+  /** How a local request named its user (only set when authMethod is 'local') */
+  localPrincipal?: LocalPrincipal | undefined;
 }
 
 // Extend Fastify types — use a custom property to avoid conflicts with jwt.user
@@ -164,6 +172,12 @@ export interface AuthPluginOptions {
    * production boot that would rely on it.
    */
   identityPlane?: IdentityPlane | undefined;
+  /**
+   * How long the local edition's profile count answers from memory. Defaults
+   * to `LOCAL_PROFILE_COUNT_TTL_MS`. A test that changes the profiles between
+   * requests sets 0.
+   */
+  localProfileCountTtlMs?: number | undefined;
 }
 
 export const authPlugin = fp(
@@ -729,6 +743,41 @@ export const authPlugin = fp(
       }
     }
 
+    // ---- Helper: count the local edition's profiles -------------------------
+    // Answered from a short cache, so an unsessioned request reads Postgres
+    // only when the cache is cold or stale. A failed read never answers one
+    // profile, so a database fault never grants a browser the sole-profile
+    // owner (see `cacheLocalProfileCount`).
+    const localProfileCountInPinnedTenant = cacheLocalProfileCount(
+      async () => {
+        const db = fastify.appContext?.db as PostgresJsDatabase | undefined;
+        if (!db) throw new Error('No database to read the local profiles from');
+        const tenancy = fastify.edition.tenancy;
+        if (tenancy.mode !== 'fixed') throw new Error('The local edition pins one tenant');
+        return hasSeveralLocalProfiles(db, tenancy.tenantId);
+      },
+      {
+        ttlMs: options.localProfileCountTtlMs,
+        onReadError: (err) => {
+          fastify.log.error({ err }, 'Local profile count unread');
+        },
+      },
+    );
+
+    // Plan 335 P2's profile-adding route calls this once the second profile is
+    // written. Otherwise a cached count of one keeps granting a browser with no
+    // session the sole-profile owner until the count expires. P1 adds no
+    // profile, so nothing calls it yet.
+    fastify.decorate('dropLocalProfileCount', (): void => {
+      localProfileCountInPinnedTenant.drop();
+    });
+
+    const localProfileSessionGeneration = (userId: string): Promise<number | null> => {
+      const db = fastify.appContext?.db as PostgresJsDatabase | undefined;
+      if (!db) return Promise.reject(new Error('No database to read the profile session from'));
+      return readLocalProfileSessionGeneration(db, userId);
+    };
+
     // ---- Helper: ensure dev user exists ------------------------------------
     async function ensureDevUser(): Promise<void> {
       const ctx = fastify.appContext;
@@ -794,16 +843,37 @@ export const authPlugin = fp(
 
       // --- Local edition: instance secret or API key, never a JWT ---
       if (fastify.edition.authProvider === 'local-instance') {
-        const outcome = authenticateLocalInstance(request, {
+        const outcome = await authenticateLocalInstance(request, {
           instanceSecret: resolveInstanceSecret(),
           apiKeyPrefix: API_KEY_PREFIX,
+          profileCount: localProfileCountInPinnedTenant,
+          profileSessionGeneration: localProfileSessionGeneration,
         });
-        if (outcome.kind === 'owner') {
+        if (outcome.kind === 'local') {
           request.authUser = outcome.authUser;
+          return;
+        }
+        if (outcome.kind === 'unavailable') {
+          if (outcome.cause !== undefined) {
+            fastify.log.error({ err: outcome.cause }, 'Local profile session unread');
+          }
+          reply.status(503).send({
+            error: 'ServiceUnavailable',
+            code: outcome.code,
+            message: outcome.message,
+          });
           return;
         }
         if (outcome.kind === 'api-key') {
           await applyApiKey(request, reply, outcome.token);
+          return;
+        }
+        if (outcome.kind === 'refused') {
+          reply.status(401).send({
+            error: 'Unauthorized',
+            code: outcome.code,
+            message: outcome.message,
+          });
           return;
         }
         reply.status(401).send({
@@ -980,5 +1050,7 @@ export const authPlugin = fp(
 declare module 'fastify' {
   interface FastifyInstance {
     authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+    /** Forgets the local edition's cached profile count. The next request reads it again. */
+    dropLocalProfileCount: () => void;
   }
 }
