@@ -132,7 +132,6 @@ export interface NewPlanNodeLink {
   kind: PlanNodeLinkKind;
   ref: string;
   label: string | null;
-  trustedForClose?: boolean;
 }
 
 /** What a board card carries of a node past its summary, read from its own row. */
@@ -441,7 +440,6 @@ export function rowToPlanNodeLink(row: PlanNodeLinkRow): PlanNodeLink {
   return {
     nodeId: row.nodeId,
     kind: row.kind as PlanNodeLinkKind,
-    trustedForClose: row.trustedForClose,
     ref: row.ref,
     ...(row.label != null ? { label: row.label } : {}),
     createdAt: row.createdAt.toISOString(),
@@ -745,7 +743,6 @@ async function newestPullRequestsIn(
               kind: row.merge.kind,
               ref: row.merge.ref,
               label: row.merge.label,
-              trustedForClose: false,
               createdAt: new Date(row.merge.createdAt),
             }),
     });
@@ -1108,7 +1105,6 @@ export function createPlanNodeStore(db: PostgresJsDatabase, tenantId: string): P
             kind: planNodeLinks.kind,
             ref: planNodeLinks.ref,
             label: planNodeLinks.label,
-            trustedForClose: planNodeLinks.trustedForClose,
             createdAt: planNodeLinks.createdAt,
             at: sql<string>`${planNodeLinks.createdAt}::text`,
           })

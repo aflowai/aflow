@@ -27,12 +27,14 @@ beforeEach(() => {
   vi.resetAllMocks();
   resolve.mockResolvedValue('github-default');
   execute.mockResolvedValue([{ run_id: 'publication' }]);
-  task.mockResolvedValue({
+  task.mockImplementation(async (_db, _tenant, _run, taskId) => ({
     status: 'succeeded',
-    operationId: 'host.file.patch',
-    outputRef: 'record',
-  });
-  retrieve.mockResolvedValue({ commit: { sha: SHA, branch: 'aflow/work' } });
+    operationId: taskId === 'commit' ? 'host.file.patch' : 'api.http.call',
+    outputRef: taskId === 'commit' ? 'record' : 'pr-record',
+  }));
+  retrieve.mockImplementation(async (ref) =>
+    ref === 'pr-record' ? { prUrl: URL } : { commit: { sha: SHA, branch: 'aflow/work' } },
+  );
   readBinding.mockResolvedValue({
     merged: true,
     html_url: URL,
@@ -56,7 +58,7 @@ describe('scheduled merge attestation', () => {
   it('accepts canonical owner and repository case', async () => {
     expect(await read(URL.replace('aflowai/aflow', 'AflowAI/Aflow') + '/')).toBe(true);
   });
-  it.each([null, { merged: 'true', html_url: URL }, { merged: true, html_url: URL + '1' }])(
+  it.each([{ merged: true, html_url: URL + '1' }])(
     'refuses a mismatched GitHub answer %j',
     async (answer) => {
       readBinding.mockResolvedValue(answer);
@@ -110,12 +112,38 @@ describe('scheduled merge attestation', () => {
     expect(readBinding).not.toHaveBeenCalled();
   });
   it('refuses an agent task posing as a publication commit', async () => {
-    task.mockResolvedValueOnce({
+    task.mockImplementation(async (_db, _tenant, _run, taskId) => ({
       status: 'succeeded',
-      operationId: 'agent.turn',
-      outputRef: 'forged',
-    });
+      operationId: taskId === 'commit' ? 'agent.turn' : 'api.http.call',
+      outputRef: taskId === 'commit' ? 'forged' : 'pr-record',
+    }));
     expect(await read()).toBe(false);
     expect(readBinding).not.toHaveBeenCalled();
   });
+});
+
+it.each([null, { merged: 'true' }])(
+  'fails retryably on malformed GitHub responses %j',
+  async (answer) => {
+    readBinding.mockResolvedValue(answer);
+    await expect(read()).rejects.toThrow('Invalid GitHub');
+  },
+);
+it('propagates missing compareCommits and binding failures for a later wake', async () => {
+  readBinding.mockResolvedValueOnce({
+    merged: true,
+    html_url: URL,
+    head: { sha: 'c'.repeat(40) },
+    merge_commit_sha: MERGE,
+  });
+  readBinding.mockRejectedValueOnce(new Error('Endpoint compareCommits unavailable'));
+  await expect(read()).rejects.toThrow('compareCommits');
+});
+
+it('refuses an agent link to a PR absent from the platform publication output', async () => {
+  retrieve.mockImplementation(async (ref) =>
+    ref === 'pr-record' ? { prUrl: URL + '1' } : { commit: { sha: SHA, branch: 'aflow/work' } },
+  );
+  expect(await read()).toBe(false);
+  expect(readBinding).not.toHaveBeenCalled();
 });

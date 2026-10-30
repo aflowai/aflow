@@ -1,10 +1,10 @@
-import { readBindingEndpoint } from '@aflow/aflow-executor-api/binding-read';
 import {
   PlanNodeCreateInputSchema,
   PlanNodeDependInputSchema,
   PlanNodeLearnInputSchema,
   PlanNodeLinkInputSchema,
   PlanNodeUpdateInputSchema,
+  StepJobMessageSchema,
   type PlanNodeCreateOutput,
   type PlanNodeDependOutput,
   type PlanNodeLearnOutput,
@@ -17,11 +17,10 @@ import {
   learnOnPlanNode,
   linkPlanNode,
   updatePlanNode,
-  readMergedPullRequest,
+  restrictedPlanWriteAuthority,
   type PlanWriteContext,
 } from '@aflow/cybernetic-runtime';
-import { getSessionState } from '@aflow/redis';
-import { getDatabase } from '@aflow/database';
+import { addStepJob, getSessionState } from '@aflow/redis';
 import { sessionUser } from '../sessionUser.js';
 import type { InlineHandlerArgs } from '../types.js';
 import { emitStepSuccess } from '../helpers.js';
@@ -37,10 +36,7 @@ async function planWriteContext(args: InlineHandlerArgs): Promise<PlanWriteConte
     redis: args.redis,
     tenantId: args.context.tenantId as string,
     actorKind: 'agent',
-    resident:
-      !state ||
-      state.trigger === 'schedule' ||
-      (!['chat', 'voice'].includes(state.trigger ?? '') && state.activatedByPerson !== true),
+    resident: restrictedPlanWriteAuthority(state),
   };
 }
 
@@ -69,40 +65,33 @@ export async function handlePlanNodeUpdate(
 ): Promise<void> {
   const input = await parsePlanInput(args, PlanNodeUpdateInputSchema, startTime);
   if (!input) return;
-  const result = await updatePlanNode(
-    {
-      ...(await planWriteContext(args)),
-      readMergedPullRequest: (url, nodeId) =>
-        readMergedPullRequest(
-          getDatabase(),
-          args.context.tenantId as string,
-          planReadContext(args).spaceId,
-          url,
-          nodeId,
-          {
-            payloadStore: args.payloadStore,
-            readBinding: async (bindingId, endpointId, params) => {
-              const credentialOwnerId = await sessionUser(args);
-              return readBindingEndpoint(
-                {
-                  db: getDatabase(),
-                  redis: args.redis,
-                  payloadStore: args.payloadStore,
-                  tenantId: args.context.tenantId as string,
-                  spaceId: planReadContext(args).spaceId,
-                  runId: args.context.runId as string,
-                  ...(credentialOwnerId ? { credentialOwnerId } : {}),
-                },
-                bindingId,
-                endpointId,
-                params,
-              );
-            },
-          },
-        ),
-    },
-    input,
-  );
+  const context = await planWriteContext(args);
+  if (context.resident && input.status === 'done') {
+    const credentialOwnerId = await sessionUser(args);
+    await addStepJob(
+      args.redis,
+      StepJobMessageSchema.parse({
+        tenantId: args.context.tenantId,
+        ...(args.workflowExecution
+          ? { workflowExecution: args.workflowExecution }
+          : { sessionId: args.context.runId }),
+        spaceId: context.spaceId,
+        stepExecutionId: args.stepExecutionId,
+        parentStepExecutionId: args.parentStepExecutionId,
+        stepId: args.stepDef.stepId,
+        stepType: 'api',
+        operationId: args.stepDef.operation,
+        idempotencyKey: args.idempotencyKey,
+        inputRef: args.resolvedInputRef,
+        traceId: args.context.traceId,
+        attempt: args.attempt,
+        scheduledAtMs: args.scheduledAtMs,
+        credentialOwnerId,
+      }),
+    );
+    return;
+  }
+  const result = await updatePlanNode(context, input);
   if (!result.ok) {
     await emitPlanError(args, result, startTime);
     return;

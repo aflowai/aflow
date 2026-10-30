@@ -1,6 +1,5 @@
 import {
   pgTable,
-  boolean,
   uuid,
   text,
   integer,
@@ -76,7 +75,6 @@ export const planNodeLinks = pgTable(
     kind: text('kind').notNull(),
     ref: text('ref').notNull(),
     label: text('label'),
-    trustedForClose: boolean('trusted_for_close').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [

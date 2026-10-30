@@ -89,6 +89,7 @@ export type PlanOpErrorCode =
   | 'PLAN_LIST_CURSOR_STALE'
   | 'PLAN_NODE_DEPENDENCY_CYCLE'
   | 'PLAN_NODE_DEPENDENCY_WALK_LIMIT'
+  | 'PLAN_NODE_ATTESTATION_UNAVAILABLE'
   | 'PLAN_NODE_RESIDENT_SCOPE'
   | 'PLAN_NODE_LIVE_CHECK_PERSON'
   | 'PLAN_LEARNING_NOT_FOUND';
@@ -547,11 +548,19 @@ async function writePlanNode(
   if (ctx.resident === true && input.status === 'done') {
     let merged = false;
     try {
+      if (pullRequest !== null && !ctx.readMergedPullRequest)
+        throw new Error('Merge attestation reader unavailable');
       merged =
         pullRequest !== null &&
         (await ctx.readMergedPullRequest?.(pullRequest.ref, current.nodeId)) === true;
     } catch {
-      merged = false;
+      return {
+        ok: false,
+        code: 'PLAN_NODE_ATTESTATION_UNAVAILABLE',
+        message:
+          'GitHub merge attestation failed. Leave this node open and retry the close on a later wake.',
+        details: { nodeId: current.nodeId },
+      };
     }
     if (!merged) {
       let waiting = current;
@@ -1222,8 +1231,6 @@ export async function linkPlanNode(
     kind: input.kind,
     ref: input.ref,
     label: input.label ?? null,
-    trustedForClose:
-      ctx.actorKind === 'human' || (ctx.actorKind === 'agent' && ctx.resident === false),
   });
   switch (inserted.outcome) {
     case 'node_not_found':

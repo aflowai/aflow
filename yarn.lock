@@ -30,12 +30,13 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@aflow/aflow-executor-api@workspace:*, @aflow/aflow-executor-api@workspace:apps/aflow-executor-api":
+"@aflow/aflow-executor-api@workspace:apps/aflow-executor-api":
   version: 0.0.0-use.local
   resolution: "@aflow/aflow-executor-api@workspace:apps/aflow-executor-api"
   dependencies:
     "@aflow/ai-client": "workspace:*"
     "@aflow/credential-resolver": "workspace:*"
+    "@aflow/cybernetic-runtime": "workspace:*"
     "@aflow/database": "workspace:*"
     "@aflow/executor-runtime": "workspace:*"
     "@aflow/integration-simulator": "workspace:*"
@@ -236,7 +237,6 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@aflow/aflow-orchestrator@workspace:apps/aflow-orchestrator"
   dependencies:
-    "@aflow/aflow-executor-api": "workspace:*"
     "@aflow/applet-runtime": "workspace:*"
     "@aflow/credential-resolver": "workspace:*"
     "@aflow/cybernetic-hooks": "workspace:*"

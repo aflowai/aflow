@@ -186,7 +186,7 @@ P2 round 15 requires GitHub to attest merges during scheduled closes and refuses
 
 ### Round 16 close provenance
 
-A scheduled close requires a pull request link stamped by a person or conversation, plus GitHub's close-time merge attestation. Resident-written links never suffice.
+A scheduled close requires the platform publication record and GitHub's close-time merge attestation. The link writer grants no close authority.
 A merge link alone never judges criteria. Refused closes retain active status and a wait line without consuming the asked-once record. A full note instead blocks the node for the existing ask flow.
 The session creation write records the resident marker from the scheduled Helmsman's schedule input. Missing session provenance retains restricted authority.
 Needs attention retains dismissible carrier failures after approval or drop removes the item. Carrier history spans earlier parents after a person moves the node.
@@ -195,3 +195,7 @@ Recalibrate gating remains unchanged.
 ### P2 review round 17
 
 Resident closes read GitHub through binding fulfillment and match the node publication’s recorded commit or branch, regardless of the link writer. Canonical URL case differences do not prevent a match, and unrelated merged pull requests still fail. Refused closes raise a wait line and an Action Center item once per revision. The operator can close the step from that item after judging the merge. Session creation records resident provenance from the server-carried schedule identity, never from run input. Unattended sessions retain restricted scope authority without that marker. Person and conversation authority remain unchanged, as does recalibrate gating.
+
+P2 round 18 executes scheduled closes on the API executor, which reads GitHub through binding fulfillment. Failed attestation reads leave nodes retryable for later wakes, while definitive refusals route them to a person.
+
+Write authority reads the session creation marker and schedule trigger, failing closed when provenance is missing. Link trust storage is removed, and help describes the blocked fallback when a merge wait line cannot fit.

@@ -1,3 +1,5 @@
+import { executePlanNodeUpdate } from '../../planNodeUpdate.js';
+import { getDatabase } from '@aflow/database';
 /**
  * API step handler v2 — executes HTTP API calls.
  *
@@ -23,7 +25,11 @@ import {
   successWithData,
 } from '@aflow/executor-runtime';
 import type { AflowError } from '@aflow/schemas';
-import { ApiCallInputSchema, ApiHttpDownloadInputSchema } from '@aflow/schemas';
+import {
+  ApiCallInputSchema,
+  ApiHttpDownloadInputSchema,
+  PLAN_NODE_UPDATE_OPERATION_ID,
+} from '@aflow/schemas';
 import type { ApiCallInput } from '@aflow/schemas';
 import type { Redis } from '@aflow/redis';
 import { ALLOW_UNSAFE_DIRECT_URL } from './config.js';
@@ -90,6 +96,7 @@ export class ApiCallHandler implements StepHandler {
   }
 
   async validate(ctx: ExecutorContext): Promise<AflowError | null> {
+    if (ctx.operationId === PLAN_NODE_UPDATE_OPERATION_ID) return null;
     const input = await ctx.readPayload(ctx.job.inputRef);
     try {
       const parsed = this.parseInput(ctx, input);
@@ -105,6 +112,13 @@ export class ApiCallHandler implements StepHandler {
   }
 
   async execute(ctx: ExecutorContext): Promise<StepResult> {
+    if (ctx.operationId === PLAN_NODE_UPDATE_OPERATION_ID) {
+      return executePlanNodeUpdate(ctx, {
+        db: (this.opts?.db as PostgresJsDatabase | undefined) ?? getDatabase(),
+        redis: this.opts?.redis as Redis,
+        payloadStore: this.opts?.payloadStore as PayloadStore,
+      });
+    }
     const inputRaw = await ctx.readPayload(ctx.job.inputRef);
     const isDownload = ctx.job.operationId === API_HTTP_DOWNLOAD_OPERATION_ID;
     const input = this.parseInput(ctx, inputRaw);

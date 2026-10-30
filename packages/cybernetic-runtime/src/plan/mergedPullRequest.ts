@@ -50,6 +50,23 @@ export async function readMergedPullRequest(
     },
   );
   if (!publication) return false;
+  let publishedUrl: string | undefined;
+  for (const taskId of ['open-pr', 'find-pr']) {
+    const prTask = await getTaskRow(db, tenantId, publication.run_id, taskId);
+    if (
+      prTask?.status !== 'succeeded' ||
+      prTask.operationId !== 'api.http.call' ||
+      !prTask.outputRef
+    )
+      continue;
+    const prOutput = record(await deps.payloadStore.retrieve(prTask.outputRef));
+    if (typeof prOutput?.['prUrl'] === 'string') {
+      publishedUrl = prOutput['prUrl'];
+      break;
+    }
+  }
+  if (publishedUrl?.replace(/\/$/, '').toLowerCase() !== url.replace(/\/$/, '').toLowerCase())
+    return false;
   const task = await getTaskRow(db, tenantId, publication.run_id, 'commit');
   if (task?.status !== 'succeeded' || task.operationId !== 'host.file.patch' || !task.outputRef)
     return false;
@@ -62,8 +79,10 @@ export async function readMergedPullRequest(
   const answer = record(
     await deps.readBinding(bindingId, 'getPullRequest', { owner, repo, pull_number: number }),
   );
+  if (!answer || typeof answer['merged'] !== 'boolean')
+    throw new Error('Invalid GitHub pull request response');
   if (
-    answer?.['merged'] !== true ||
+    answer['merged'] !== true ||
     typeof answer['html_url'] !== 'string' ||
     answer['html_url'].replace(/\/$/, '').toLowerCase() !== url.replace(/\/$/, '').toLowerCase()
   )
@@ -85,5 +104,10 @@ export async function readMergedPullRequest(
   const comparison = record(
     await deps.readBinding(bindingId, 'compareCommits', { owner, repo, base: sha, head: mergeSha }),
   );
-  return comparison?.['status'] === 'ahead' || comparison?.['status'] === 'identical';
+  if (
+    !comparison ||
+    !['ahead', 'identical', 'behind', 'diverged'].includes(String(comparison['status']))
+  )
+    throw new Error('Invalid GitHub comparison response');
+  return comparison['status'] === 'ahead' || comparison['status'] === 'identical';
 }

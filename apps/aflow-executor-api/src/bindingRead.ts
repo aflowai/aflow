@@ -75,9 +75,14 @@ export async function readBindingEndpoint(
   const result = await new ApiCallHandler(deps).execute(ctx);
   if (result.status !== 'SUCCEEDED') throw new Error('The binding could not attest this merge');
   const value = await deps.payloadStore.retrieve(result.outputRef);
-  if (typeof value !== 'object' || value === null) return null;
+  if (typeof value !== 'object' || value === null) throw new Error('Invalid GitHub response');
   const output = value as Record<string, unknown>;
-  if (typeof output['statusCode'] !== 'number' || output['statusCode'] >= 300) return null;
+  if (
+    typeof output['statusCode'] !== 'number' ||
+    output['statusCode'] < 200 ||
+    output['statusCode'] >= 300
+  )
+    throw new Error('GitHub attestation request failed');
   return output['dataRef']
     ? deps.payloadStore.retrieve(output['dataRef'] as PayloadRef)
     : output['data'];

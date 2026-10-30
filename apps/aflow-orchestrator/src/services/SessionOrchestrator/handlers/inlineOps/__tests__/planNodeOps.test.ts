@@ -14,11 +14,13 @@ import {
   type StepExecutionId,
 } from '@aflow/schemas';
 
+const mockAddStepJob = vi.fn();
 const mockAddStepResult = vi.fn();
 const mockGetSessionStateSafe = vi.fn();
 const mockGetSessionState = vi.fn();
 vi.mock('@aflow/redis', () => ({
   addStepResult: (...args: unknown[]) => mockAddStepResult(...args),
+  addStepJob: (...args: unknown[]) => mockAddStepJob(...args),
   getSessionStateSafe: (...args: unknown[]) => mockGetSessionStateSafe(...args),
   getSessionState: (...args: unknown[]) => mockGetSessionState(...args),
   getRunAccessGrant: vi.fn(() => Promise.resolve(null)),
@@ -38,7 +40,9 @@ const mockLearnOnPlanNode = vi.fn();
 const mockDependPlanNode = vi.fn();
 const STORE = { kind: 'store' };
 const READS = { kind: 'reads' };
-vi.mock('@aflow/cybernetic-runtime', () => ({
+vi.mock('@aflow/cybernetic-runtime', async (original) => ({
+  restrictedPlanWriteAuthority: (await original<typeof import('@aflow/cybernetic-runtime')>())
+    .restrictedPlanWriteAuthority,
   createPlanNodeStore: () => STORE,
   learnOnPlanNode: (...a: unknown[]) => mockLearnOnPlanNode(...a),
   dependPlanNode: (...a: unknown[]) => mockDependPlanNode(...a),
@@ -64,7 +68,7 @@ import type { InlineHandlerArgs } from '../types.js';
 const TENANT = 'a0000000-0000-0000-0000-000000000001';
 const SPACE = '00000000-0000-0000-0000-000000000002';
 const NODE_ID = '00000000-0000-4000-8000-0000000003a2';
-const SESSION = 'session-helmsman-2';
+const SESSION = '00000000-0000-4000-8000-000000000003';
 const OPERATOR = 'b0000000-0000-4000-8000-0000000000aa';
 
 const NODE = {
@@ -107,7 +111,7 @@ function makeArgs(operation: string, input: unknown): InlineHandlerArgs {
     } as never,
     context: { tenantId: TENANT, runId: SESSION, traceId: 'trace-plan', spaceId: SPACE } as never,
     stepDef: { stepId: 'plan', stepType: 'plan', operation } as unknown as StepDefinition,
-    stepExecutionId: 'exec-1' as StepExecutionId,
+    stepExecutionId: '00000000-0000-4000-8000-000000000004' as StepExecutionId,
     idempotencyKey: 'idem-1' as IdempotencyKey,
     resolvedInputRef: 'inline:e30=',
     attempt: 1,
@@ -133,33 +137,34 @@ beforeEach(() => {
 });
 
 describe('plan.node.update', () => {
-  it('supplies a platform GitHub reader rather than an agent merge answer', async () => {
-    mockGetSessionState.mockResolvedValueOnce({ trigger: 'schedule' });
-    mockReadMergedPullRequest.mockResolvedValueOnce(true);
-    mockUpdatePlanNode.mockImplementationOnce(async (ctx) => {
-      expect(await ctx.readMergedPullRequest(LINK.ref, NODE_ID)).toBe(true);
-      return { ok: true, node: NODE };
+  it('dispatches the attested close as the existing step without reading credentials or GitHub locally', async () => {
+    mockGetSessionState.mockResolvedValueOnce({ trigger: 'schedule', planResident: true });
+    const args = makeArgs('plan.node.update', {
+      nodeId: NODE_ID,
+      expectedRevision: 2,
+      status: 'done',
+      outcome: 'Met',
     });
-    await handlePlanNodeInline(
-      makeArgs('plan.node.update', {
-        nodeId: NODE_ID,
-        expectedRevision: 2,
-        status: 'done',
-        outcome: 'Met',
+    args.scheduledAtMs = 1;
+    await handlePlanNodeInline(args);
+    expect(mockAddStepJob).toHaveBeenCalledWith(
+      args.redis,
+      expect.objectContaining({
+        stepExecutionId: args.stepExecutionId,
+        inputRef: args.resolvedInputRef,
+        operationId: 'plan.node.update',
+        stepType: 'api',
+        sessionId: SESSION,
+        spaceId: SPACE,
       }),
     );
-    expect(mockReadMergedPullRequest).toHaveBeenCalledWith(
-      {},
-      TENANT,
-      SPACE,
-      LINK.ref,
-      NODE_ID,
-      expect.objectContaining({ readBinding: expect.any(Function) }),
-    );
+    expect(mockReadMergedPullRequest).not.toHaveBeenCalled();
+    expect(mockUpdatePlanNode).not.toHaveBeenCalled();
+    expect(mockAddStepResult).not.toHaveBeenCalled();
   });
   it.each([
     [{ trigger: 'schedule', planResident: true }, true],
-    [{ trigger: 'schedule', planResident: false }, true],
+    [{ trigger: 'schedule', planResident: false }, false],
     [{ trigger: 'schedule' }, true],
     [{}, true],
     [{ planResident: false, trigger: 'webhook', activatedByPerson: true }, false],
@@ -291,7 +296,6 @@ describe('plan.node.update', () => {
           tenantId: TENANT,
           actorKind: 'agent',
           resident: false,
-          readMergedPullRequest: expect.any(Function),
         },
         { nodeId: NODE_ID, expectedRevision: 2, status },
       );
@@ -624,7 +628,7 @@ describe('resident provenance', () => {
   it('restricts scheduled runs and fails closed when provenance is unavailable', async () => {
     for (const [state, resident] of [
       [{ trigger: 'schedule', planResident: true }, true],
-      [{ trigger: 'schedule', planResident: false }, true],
+      [{ trigger: 'schedule', planResident: false }, false],
       [{ trigger: 'schedule' }, true],
       [{ planResident: false, trigger: 'chat' }, false],
       [null, true],

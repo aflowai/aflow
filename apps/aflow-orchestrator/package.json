@@ -26,8 +26,7 @@
     "@aflow/platform-artifacts": "workspace:*",
     "@aflow/redis": "workspace:*",
     "@aflow/schemas": "workspace:*",
-    "ajv": "^8.20.0",
-    "@aflow/aflow-executor-api": "workspace:*"
+    "ajv": "^8.20.0"
   },
   "devDependencies": {
     "vitest": "^4.1.12"

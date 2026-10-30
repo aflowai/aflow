@@ -14,7 +14,7 @@
  * operator's own controls (P3.2); where the operator is, in the URL. Rendered through the screen itself, the design system's
  * primitives as plain elements and every query recorded.
  */
-import { act, createContext, createElement, useContext, type ReactNode } from 'react';
+import { act, createContext, createElement, useContext, useState, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PlanNodeOpenSchema } from '@aflow/schemas';
@@ -81,6 +81,8 @@ const recorded = vi.hoisted(() => ({
   narrow: false,
   /** The space each render subscribed the page's live refresh for. */
   liveRefresh: [] as Array<string | null>,
+  /** How many times a CollapsibleSide has mounted. */
+  sideMounts: 0,
 }));
 
 vi.mock('@aflow/design-system', () => {
@@ -159,6 +161,48 @@ vi.mock('@aflow/design-system', () => {
     }) => createElement('button', { ...passed(rest), type: 'button', onClick, disabled }, icon),
     Icon: () => null,
     Tooltip: ({ children }: { children?: ReactNode }) => children,
+    // Its badge, its fold and its mount as attributes, so a remount, which
+    // drops the width dragged, shows as a new mount.
+    CollapsibleSide: function CollapsibleSide({
+      children,
+      label,
+      badge,
+      collapsed,
+      onCollapsedChange,
+    }: {
+      children?: ReactNode;
+      label: string;
+      badge?: number;
+      collapsed?: boolean;
+      onCollapsedChange?: (collapsed: boolean) => void;
+    }) {
+      const [mount] = useState(() => ++recorded.sideMounts);
+      const [internal, setInternal] = useState(false);
+      const folded = collapsed ?? internal;
+      return createElement(
+        'div',
+        {
+          'data-side': label,
+          'data-side-badge': badge,
+          'data-side-folded': String(folded),
+          'data-side-mount': mount,
+        },
+        createElement(
+          'button',
+          {
+            type: 'button',
+            'data-side-fold': label,
+            onClick: () => {
+              onCollapsedChange?.(!folded);
+              if (collapsed === undefined) setInternal(!folded);
+            },
+          },
+          folded ? `Expand ${label}` : `Collapse ${label}`,
+        ),
+        folded ? null : children,
+      );
+    },
+    Pulse: ({ children }: { children?: ReactNode }) => children,
     Panel: block('div'),
     ScrollArea: block('div'),
     Input: (props: Record<string, unknown>) => createElement('input', props),
@@ -1834,13 +1878,48 @@ describe('SpacePlanPage — the plan list (Plan 332 P3)', () => {
     );
   });
 
-  it('holds the list in the 280px left column beside the board', async () => {
-    await render({ data: LIST });
+  it('holds the list in the shell’s Plans pane and the rail in its Step pane, beside the board', async () => {
+    await render();
 
     const list = container.querySelector<HTMLElement>('[data-plan-list]')!;
     expect(list.getAttribute('data-layout')).toBe('column');
-    expect(list.style.width).toBe('280px');
+    expect(list.closest('[data-side="Plans"]')).not.toBe(null);
     expect(list.querySelector('[data-plan-board]')).toBe(null);
+    expect(container.querySelector('[data-side="Step"]')).toBe(null);
+
+    await click(card(BOARD));
+    expect(rail().closest('[data-side="Step"]')).not.toBe(null);
+  });
+
+  it('badges the Plans pane with the steps that need the operator, summed across the plans', async () => {
+    const twoNeedYou: SpaceFixture = {
+      ...LIST,
+      tallies: LIST.tallies.map((t) => (t.rootId === L_FLIGHT ? { ...t, needsYou: 2 } : t)),
+    };
+    await render({ data: twoNeedYou });
+
+    const plans = container.querySelector('[data-side="Plans"]')!;
+    expect(plans.getAttribute('data-side-badge')).toBe('5');
+
+    await click(container.querySelector<HTMLElement>('[data-side-fold="Plans"]')!);
+    expect(plans.getAttribute('data-side-folded')).toBe('true');
+    expect(plans.getAttribute('data-side-badge')).toBe('5');
+  });
+
+  it('unfolds the Step pane when another step is opened, without mounting it again', async () => {
+    await render();
+    await click(card(BOARD));
+
+    const step = () => container.querySelector('[data-side="Step"]')!;
+    const mount = step().getAttribute('data-side-mount');
+    await click(container.querySelector<HTMLElement>('[data-side-fold="Step"]')!);
+    expect(step().getAttribute('data-side-folded')).toBe('true');
+
+    await click(card(NEXT));
+    expect(step().getAttribute('data-side-folded')).toBe('false');
+    // One mount throughout, so the width the operator dragged stays.
+    expect(step().getAttribute('data-side-mount')).toBe(mount);
+    expect(rail().closest('[data-side="Step"]')).not.toBe(null);
   });
 
   it('is a disclosure above the content below 900px, closed again once a plan is chosen', async () => {
@@ -2024,6 +2103,89 @@ describe('SpacePlanPage — ordering and closing plans from the list (Plan 332 P
     expect(moves(L_FLIGHT)).toEqual(['Move up', 'Move down']);
     expect(moves(L_EMPTY)).toEqual(['Move up']);
     expect(moves(L_FINISHED)).toEqual([]);
+  });
+
+  it('shows Move up and Move down where the row is pointed at, focused or selected, and the dot gives way to them', async () => {
+    nav.search = `plan=${L_QUEUED}`;
+    await render({ data: LIST });
+
+    const controls = (rootId: string) =>
+      listRow(rootId)!.querySelector<HTMLElement>(`[data-plan-move="${rootId}"]`)!;
+    const dot = (rootId: string) =>
+      listRow(rootId)!.querySelector<HTMLElement>('span[aria-hidden][data-state]')!;
+    const hover = async (target: HTMLElement, type: 'mouseover' | 'mouseout') => {
+      await act(async () => {
+        target.dispatchEvent(new MouseEvent(type, { bubbles: true, relatedTarget: null }));
+      });
+    };
+
+    // At rest: the dot shows, the controls are quiet.
+    expect(controls(L_FLIGHT).style.opacity).toBe('0');
+    expect(dot(L_FLIGHT).style.opacity).toBe('1');
+    // The selected row shows its controls in the dot's place.
+    expect(controls(L_QUEUED).style.opacity).toBe('1');
+    expect(dot(L_QUEUED).style.opacity).toBe('0');
+
+    await hover(listRow(L_FLIGHT)!, 'mouseover');
+    expect(controls(L_FLIGHT).style.opacity).toBe('1');
+    expect(dot(L_FLIGHT).style.opacity).toBe('0');
+    await hover(listRow(L_FLIGHT)!, 'mouseout');
+    expect(controls(L_FLIGHT).style.opacity).toBe('0');
+    expect(dot(L_FLIGHT).style.opacity).toBe('1');
+
+    await act(async () => {
+      listRow(L_EMPTY)!.querySelector('button')!.focus();
+    });
+    expect(controls(L_EMPTY).style.opacity).toBe('1');
+    expect(dot(L_EMPTY).style.opacity).toBe('0');
+
+    // A row with no move has no controls: its dot never gives way.
+    await hover(listRow(L_FINISHED)!, 'mouseover');
+    expect(listRow(L_FINISHED)!.querySelector('[data-plan-move]')).toBe(null);
+    expect(dot(L_FINISHED).style.opacity).toBe('1');
+  });
+
+  it('keeps the controls shown while a move is pending, though the row is no longer pointed at', async () => {
+    recorded.mutateAsync.mockReturnValue(new Promise(() => undefined));
+    await render({ data: LIST });
+
+    const controls = listRow(L_FLIGHT)!.querySelector<HTMLElement>(
+      `[data-plan-move="${L_FLIGHT}"]`,
+    )!;
+    expect(controls.style.opacity).toBe('0');
+
+    await click(button(listRow(L_FLIGHT)!, 'Move up'));
+    expect(controls.getAttribute('data-pending')).toBe('true');
+    expect(controls.style.opacity).toBe('1');
+  });
+
+  it('tints a row, the Overview item and the Closed disclosure while pointed at, and not the selected row', async () => {
+    nav.search = `plan=${L_QUEUED}`;
+    await render({ data: LIST });
+
+    const hover = async (target: HTMLElement, type: 'mouseover' | 'mouseout') => {
+      await act(async () => {
+        target.dispatchEvent(new MouseEvent(type, { bubbles: true, relatedTarget: null }));
+      });
+    };
+    const tinted = (target: HTMLElement) =>
+      (target.getAttribute('style') ?? '').includes('var(--color-surface-2)') &&
+      !(target.getAttribute('style') ?? '').includes('var(--color-surface-3');
+    const overview = container.querySelector<HTMLElement>('[data-plan-list-overview]')!;
+    const closed = container.querySelector<HTMLElement>(
+      '[data-plan-list-section="closed"] > button',
+    )!;
+
+    for (const target of [listRow(L_FLIGHT)!, overview, closed]) {
+      expect(tinted(target)).toBe(false);
+      await hover(target, 'mouseover');
+      expect(tinted(target)).toBe(true);
+      await hover(target, 'mouseout');
+      expect(tinted(target)).toBe(false);
+    }
+
+    await hover(listRow(L_QUEUED)!, 'mouseover');
+    expect(listRow(L_QUEUED)!.getAttribute('style')).toContain('var(--color-surface-3');
   });
 
   it('places a plan before or after the open row beside it, against the revision the rows read', async () => {
@@ -2313,6 +2475,21 @@ describe('SpacePlanPage — the overview across plans (Plan 332 P4)', () => {
     expect(buttonTexts(lane('up_next'))).not.toContain('Move up');
     expect(buttonTexts(lane('up_next'))).not.toContain('Move down');
     expect(boardShown()).toBe(null);
+  });
+
+  it('tints a lane row while pointed at', async () => {
+    await render({ data: OVERVIEW });
+
+    const row = laneRow(BOARD);
+    expect(row.getAttribute('style')).toContain('var(--color-surface-0)');
+    await act(async () => {
+      row.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, relatedTarget: null }));
+    });
+    expect(row.getAttribute('style')).toContain('var(--color-surface-2)');
+    await act(async () => {
+      row.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: null }));
+    });
+    expect(row.getAttribute('style')).toContain('var(--color-surface-0)');
   });
 
   it('says how many more a lane holds than it lists', async () => {

@@ -8,9 +8,9 @@
  * and **Move down** quiet in the row's dot until it is pointed at or focused;
  * then **Finished**, open plans whose every step is closed, each with a quiet
  * **Close plan**; then **Closed**, folded. The selected row is filled and
- * barred in the accent and scrolls into view. The list stands on a raised
- * panel of its own (Plan 332 P6). Below 900px it is a disclosure above the
- * content.
+ * barred as the skill designer's outline bars its current item, and scrolls
+ * into view. The list fills the page's left pane, as the outline does.
+ * Below 900px it is a disclosure above the content.
  */
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import {
@@ -19,7 +19,6 @@ import {
   Icon,
   Panel,
   Row,
-  ScrollArea,
   Text,
   Textarea,
   type BadgeVariant,
@@ -34,10 +33,19 @@ import {
 } from '../../lib/plan-board.js';
 import type { PlanNodePlacer } from './PlanBoard.js';
 import { isClosedStatus, usePinnedNode, type PlanNodeCloser } from './PlanNodeCloseControl.js';
-import { Disclosure, MetaSep, ProgressMeter, StateDot, useMoveControls } from './PlanParts.js';
+import {
+  Disclosure,
+  GroupLabel,
+  MetaSep,
+  ProgressMeter,
+  StateDot,
+  selectableStyle,
+  srOnly,
+  useHover,
+  useMoveControls,
+  useReveal,
+} from './PlanParts.js';
 import { freshRead, planNodePath } from './PlanRail.js';
-
-export const PLAN_LIST_WIDTH = '280px';
 
 export const PLAN_STATE_BADGE: Record<PlanRootState, BadgeVariant> = {
   needs_you: 'warning',
@@ -209,6 +217,62 @@ export function PlanRootCloseControl({
 
 const listStyle: CSSProperties = { listStyle: 'none', margin: 0, padding: 0 };
 
+/** A row: the state dot's gutter, the main area that is its hit target, a quiet action at its end. */
+const rowGrid: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: '20px minmax(0, 1fr) auto',
+  alignItems: 'center',
+  columnGap: 'var(--space-2)',
+  padding: 'var(--space-1-5) var(--space-2)',
+};
+
+const rowButton: CSSProperties = {
+  gridRow: 1,
+  gridColumn: 2,
+  display: 'flex',
+  alignItems: 'center',
+  gap: 'var(--space-2)',
+  minWidth: 0,
+  padding: 0,
+  border: 'none',
+  background: 'transparent',
+  color: 'inherit',
+  font: 'inherit',
+  textAlign: 'left',
+  cursor: 'pointer',
+};
+
+const titleClamp: CSSProperties = {
+  overflow: 'hidden',
+  display: '-webkit-box',
+  WebkitLineClamp: 2,
+  WebkitBoxOrient: 'vertical',
+};
+
+const metaLine: CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  alignItems: 'center',
+  gap: 'var(--space-1)',
+};
+
+/** What needs the operator: the one filled element of a row. */
+const attentionCount: CSSProperties = {
+  position: 'relative',
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  minWidth: 20,
+  height: 20,
+  padding: '0 var(--space-1-5)',
+  borderRadius: 'var(--radius-full)',
+  background: 'var(--color-warning-default)',
+  color: 'var(--color-content-inverse)',
+  fontSize: 'var(--font-size-xs)',
+  fontWeight: 'var(--font-weight-semibold)',
+  fontVariantNumeric: 'tabular-nums',
+};
+
 /** Where a row's plan stands, as its meta line names it: its state, or how many steps are in flight where that is its state. */
 function rowStateLine(row: PlanRootRow): string {
   const inFlight = row.counts?.inFlight ?? 0;
@@ -230,7 +294,9 @@ function PlanRowView({
   selected,
   onSelect,
   rowRef,
+  hostProps,
   gutter,
+  gutterShown = false,
   trailing,
   below,
 }: {
@@ -238,8 +304,12 @@ function PlanRowView({
   selected: boolean;
   onSelect: (rootId: string) => void;
   rowRef: (element: HTMLLIElement | null) => void;
+  /** What tells the row's reveal it is pointed at or focused. */
+  hostProps?: ReturnType<typeof useReveal>['hostProps'];
   /** Controls that show in the dot's place on a row pointed at or focused. */
   gutter?: ReactNode;
+  /** The controls show, so the dot gives way to them. */
+  gutterShown?: boolean;
   /** A quiet action at the row's end. */
   trailing?: ReactNode;
   /** What opens under the row: a refusal, a form. */
@@ -248,32 +318,50 @@ function PlanRowView({
   const progress = planRowProgress(row);
   const needsYou = row.counts?.needsYou ?? 0;
   const inFlight = row.counts?.inFlight ?? 0;
+  const hover = useHover();
   return (
     <li
       ref={rowRef}
       data-plan-row={row.nodeId}
       data-state={row.state}
       {...(selected ? { 'aria-current': 'true' as const } : {})}
-      className="plan-selectable plan-reveal-host plan-row"
+      {...hostProps}
+      onMouseEnter={() => {
+        hover.hoverProps.onMouseEnter();
+        hostProps?.onMouseEnter();
+      }}
+      onMouseLeave={() => {
+        hover.hoverProps.onMouseLeave();
+        hostProps?.onMouseLeave();
+      }}
+      style={{ ...rowGrid, ...selectableStyle(selected, hover.hovered) }}
     >
       <button
         type="button"
-        className="plan-row__select"
         aria-pressed={selected}
         onClick={() => {
           onSelect(row.nodeId);
         }}
+        style={rowButton}
       >
-        <span className="plan-row__body">
+        <span
+          style={{
+            display: 'flex',
+            flex: 1,
+            flexDirection: 'column',
+            gap: 2,
+            minWidth: 0,
+          }}
+        >
           <Text
             size="sm"
             weight={selected ? 'semibold' : 'medium'}
-            className="plan-row__title"
+            style={titleClamp}
             data-plan-row-title
           >
             {row.title}
           </Text>
-          <span className="plan-row__meta">
+          <span style={metaLine}>
             <Text size="xs" variant="muted" data-plan-row-state>
               {rowStateLine(row)}
             </Text>
@@ -306,22 +394,40 @@ function PlanRowView({
         </span>
         {needsYou > 0 && (
           <span
-            className="plan-attention"
             data-plan-row-needs-you={needsYou}
             title={`${String(needsYou)} need you`}
+            style={attentionCount}
           >
             {String(needsYou)}
-            <span className="plan-sr-only"> need you</span>
+            <span style={srOnly}> need you</span>
           </span>
         )}
       </button>
       {/* After the row's button in reading and tab order; the grid draws it first. */}
-      <span className="plan-row__gutter">
-        <StateDot state={row.state} />
-        {gutter}
+      <span
+        style={{
+          gridRow: 1,
+          gridColumn: 1,
+          display: 'grid',
+          alignSelf: 'stretch',
+          placeItems: 'center',
+        }}
+      >
+        <span style={{ gridArea: '1 / 1' }}>
+          <StateDot state={row.state} hidden={gutter !== undefined && gutterShown} />
+        </span>
+        {gutter !== undefined && <span style={{ gridArea: '1 / 1' }}>{gutter}</span>}
       </span>
-      {trailing !== undefined && <span className="plan-row__trailing">{trailing}</span>}
-      {below !== undefined && below !== null && <div className="plan-row__below">{below}</div>}
+      {trailing !== undefined && (
+        <span style={{ gridRow: 1, gridColumn: 3, display: 'inline-flex', alignItems: 'center' }}>
+          {trailing}
+        </span>
+      )}
+      {below !== undefined && below !== null && (
+        <div style={{ gridRow: 2, gridColumn: '2 / -1', paddingTop: 'var(--space-1)' }}>
+          {below}
+        </div>
+      )}
     </li>
   );
 }
@@ -339,12 +445,23 @@ function OpenPlanRow({
   onPlace,
   ...placement
 }: RowPlacement & { open: readonly PlanRootRow[]; onPlace: PlanNodePlacer }) {
+  const reveal = useReveal();
+  const shown = reveal.shown || placement.selected;
   const move = useMoveControls(
     placement.row,
     planRowMoveTargets(open, placement.row.nodeId),
     onPlace,
+    shown,
+    'column',
   );
-  return <PlanRowView {...placement} gutter={move.controls} below={move.error} />;
+  return (
+    <PlanRowView
+      {...placement}
+      hostProps={reveal.hostProps}
+      {...(move.controls !== null ? { gutter: move.controls, gutterShown: shown } : {})}
+      below={move.error}
+    />
+  );
 }
 
 /**
@@ -365,7 +482,6 @@ function FinishedPlanRow({
           <Button
             size="sm"
             variant="ghost"
-            className="plan-quiet-action"
             leftIcon={<Icon name="check" size={12} weight="bold" />}
             onClick={() => {
               setClosing(true);
@@ -450,28 +566,33 @@ export function PlanList({
   });
 
   const overview = selectedId === undefined;
+  const overviewHover = useHover();
   const body = (
     <Column gap="md">
       <button
         type="button"
-        className="plan-selectable plan-row plan-overview-item"
         aria-pressed={overview}
         {...(overview ? { 'aria-current': 'true' as const } : {})}
         data-plan-list-overview
+        {...overviewHover.hoverProps}
         onClick={() => {
           if (narrow) setDisclosed(false);
           onOverview();
         }}
+        style={{
+          ...rowButton,
+          ...rowGrid,
+          width: '100%',
+          ...selectableStyle(overview, overviewHover.hovered),
+        }}
       >
-        <span className="plan-row__gutter" aria-hidden>
-          <Icon name="squares-four" size={14} weight="bold" />
-        </span>
-        <Text size="sm" weight={overview ? 'semibold' : 'medium'} className="plan-row__title">
+        <Icon name="squares-four" size="xs" />
+        <Text size="sm" weight={overview ? 'semibold' : 'medium'}>
           Overview
         </Text>
       </button>
       <Column gap="xs" data-plan-list-section="open">
-        <Text variant="label" size="xs">{`Open · ${String(open.length)}`}</Text>
+        <GroupLabel>{`Open · ${String(open.length)}`}</GroupLabel>
         <ul style={listStyle} aria-label="Open plans">
           {open.map((row) => {
             const { key, ...placement } = placementOf(row);
@@ -485,7 +606,7 @@ export function PlanList({
         )}
       </Column>
       <Column gap="xs" data-plan-list-section="finished">
-        <Text variant="label" size="xs">{`Finished · ${String(finished.length)}`}</Text>
+        <GroupLabel>{`Finished · ${String(finished.length)}`}</GroupLabel>
         {finished.length > 0 && (
           <ul style={listStyle} aria-label="Finished plans">
             {finished.map((row) => {
@@ -545,23 +666,28 @@ export function PlanList({
     );
   }
 
-  // The list stands on its own raised surface rather than behind a rule, and
-  // scrolls with the design system's quiet scrollbar, shown on hover only.
+  // The outline of the designer: a pane of its own that scrolls on its own,
+  // headed as the designer heads its outline.
   return (
     <nav
       aria-label="Plans"
       data-plan-list
       data-layout="column"
-      style={{
-        width: PLAN_LIST_WIDTH,
-        flexShrink: 0,
-        position: 'sticky',
-        top: 0,
-      }}
+      style={{ height: '100%', overflow: 'auto', padding: 'var(--space-2-5)' }}
     >
-      <Panel variant="subtle" padding="sm">
-        <ScrollArea style={{ maxHeight: 'calc(100vh - var(--space-8))' }}>{body}</ScrollArea>
-      </Panel>
+      <div style={{ padding: 'var(--space-3) var(--space-2) var(--space-2)' }}>
+        <Text
+          style={{
+            fontSize: 'var(--font-size-base)',
+            textTransform: 'uppercase',
+            letterSpacing: 'var(--font-letter-spacing-wide)',
+            color: 'var(--color-text-primary)',
+          }}
+        >
+          Plans
+        </Text>
+      </div>
+      {body}
     </nav>
   );
 }

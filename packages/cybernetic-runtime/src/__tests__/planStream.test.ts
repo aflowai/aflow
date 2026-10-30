@@ -1965,6 +1965,32 @@ describe('resident review regressions', () => {
     expect(read).toHaveBeenLastCalledWith(PR, node.nodeId);
   });
 
+  it('retries failed attestation on a later wake without a wait line or person routing', async () => {
+    const node = await created();
+    const read = vi.fn().mockRejectedValueOnce(new Error('GitHub timeout')).mockResolvedValue(true);
+    const wake = {
+      ...session(),
+      actorKind: 'agent' as const,
+      resident: true,
+      readMergedPullRequest: read,
+    };
+    await linkPlanNode(wake, { nodeId: node.nodeId, kind: 'pull_request', ref: PR });
+    const input = {
+      nodeId: node.nodeId,
+      expectedRevision: node.revision,
+      status: 'done' as const,
+      outcome: 'Met',
+    };
+    expect(await updatePlanNode(wake, input)).toMatchObject({
+      ok: false,
+      code: 'PLAN_NODE_ATTESTATION_UNAVAILABLE',
+    });
+    expect(await current(node.nodeId)).toEqual(node);
+    expect(await listAskedNodes(wake)).toEqual([]);
+    expect(await updatePlanNode(wake, input)).toMatchObject({ ok: true, node: { status: 'done' } });
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
   it('closes record_merge with the resident own link and asks once when attestation refuses', async () => {
     const node = await created();
     const read = vi.fn().mockResolvedValue(false);

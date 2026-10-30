@@ -546,7 +546,6 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
       nodeId: link.nodeId,
       kind: link.kind,
       ref: link.ref,
-      trustedForClose: link.trustedForClose ?? false,
       ...(link.label !== null ? { label: link.label } : {}),
       createdAt: this.tick(),
     };

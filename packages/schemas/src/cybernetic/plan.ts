@@ -131,7 +131,7 @@ export const PLAN_NODE_BLOCKED_HEAD = 'Blocked: ';
 export const PLAN_NODE_PROPOSED_HEAD = 'Proposed: ';
 export const PLAN_NODE_ASK_HEAD = 'Waiting on you: ';
 export const PLAN_NODE_MERGE_WAIT_LINE =
-  'Waiting on you: judge this merge because the scheduled close lacks a trusted pull request that GitHub reports merged.';
+  'Waiting on you: judge this merge because the scheduled close lacks a publication pull request that GitHub reports merged.';
 export const PLAN_NODE_LIVE_CHECK_HEAD = `${PLAN_NODE_BLOCKED_HEAD}live check — `;
 
 /** The line that says what a blocked node waits on, wherever it sits in the note. */
@@ -441,7 +441,6 @@ export const PlanNodeLinkSchema = z
     ref: z.string(),
     label: z.string().optional(),
     createdAt: z.string().datetime(),
-    trustedForClose: z.boolean().optional(),
   })
   .strict();
 export type PlanNodeLink = z.infer<typeof PlanNodeLinkSchema>;

@@ -10,8 +10,9 @@ const { resolve, simulate, live } = vi.hoisted(() => ({
 vi.mock('./handlers/api/resolution.js', () => ({ resolveCall: resolve }));
 vi.mock('./handlers/api/simulation/execute.js', () => ({
   executeSimulatedCall: simulate,
-  toSimulatedFetchResponse: (answer: { body: unknown }) =>
+  toSimulatedFetchResponse: (answer: { body: unknown; status: number }) =>
     new Response(JSON.stringify(answer.body), {
+      status: answer.status,
       headers: { 'content-type': 'application/json' },
     }),
 }));
@@ -77,4 +78,17 @@ it('uses the API executor egress path for a live merge read', async () => {
   );
   expect(live).toHaveBeenCalledOnce();
   expect(simulate).not.toHaveBeenCalled();
+});
+
+it('throws on GitHub 5xx so a later wake can retry', async () => {
+  resolve.mockResolvedValue({
+    apiId: 'github',
+    endpointId: 'getPullRequest',
+    method: 'GET',
+    url: 'https://api.github.com/repos/owner/repo/pulls/1',
+    headers: {},
+    simulation: { bindingId: 'github', simulationId: 'world', apiId: 'github' },
+  });
+  simulate.mockResolvedValue({ status: 503, body: { message: 'Unavailable' }, rung: 'code' });
+  await expect(readBindingEndpoint(deps, 'github', 'getPullRequest', {})).rejects.toThrow();
 });
