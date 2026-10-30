@@ -291,6 +291,19 @@ const {
   resolveWorkflowForRun,
 } = await import('../WorkflowRunHarness.js');
 
+/**
+ * A cleared completion_pending row with an unmoved cursor reads as a stall to
+ * the orphaned-run reconciler, so every task-outcome writer advances first.
+ */
+function expectCursorAdvancedBeforePendingCleared(): void {
+  const cursorOrders = mockRunRowSet.mock.calls
+    .map(([values], index) => ({ values, order: mockRunRowSet.mock.invocationCallOrder[index]! }))
+    .filter(({ values }) => 'schedulerCursorAt' in values)
+    .map(({ order }) => order);
+  expect(cursorOrders.length).toBeGreaterThanOrEqual(1);
+  expect(cursorOrders[0]!).toBeLessThan(mockClearCompletionPending.mock.invocationCallOrder[0]!);
+}
+
 // ─── Fixtures ───────────────────────────────────────────────────────────────
 
 // Real UUIDs — `createTenantContext` validates UUID format on
@@ -2104,6 +2117,7 @@ describe('dispatchTask', () => {
 
     // completion_pending cleared so the sweeper doesn't re-fire.
     expect(mockClearCompletionPending).toHaveBeenCalledOnce();
+    expectCursorAdvancedBeforePendingCleared();
 
     const failedTaskUpdates = mockAppendSessionEvent.mock.calls
       .map((c) => c[3] as { eventType: string; workflowTaskUpdate?: { status: string } })
@@ -4275,6 +4289,7 @@ describe('reconcileStaleRunForTenant — Plan 132v2 §Phase 5.3', () => {
     expect(casArgs.status).toBe('failed');
     expect(casArgs.failureReason).toMatch(/Operation task stalled/);
     expect(mockClearCompletionPending).toHaveBeenCalledOnce();
+    expectCursorAdvancedBeforePendingCleared();
     expect(result.escalations).toBe(1);
     expect(result.operationBumps).toBe(0);
   });

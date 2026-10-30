@@ -112,9 +112,19 @@ const WorkflowPatchOperationSchema = z.object({
   from: z.string().optional(),
 });
 
+/** A definition patch stores `why` as its proposal's rationale, which holds 8000 characters. */
+export const WORKFLOW_PATCH_WHY_MAX = 8000;
+
 export const WorkflowPatchInputSchema = z.object({
   slug: z.string().min(1).max(64),
   operations: z.array(WorkflowPatchOperationSchema).min(1).max(50),
+  why: z
+    .string()
+    .regex(/\S/, 'Say why you are making this change.')
+    .max(WORKFLOW_PATCH_WHY_MAX)
+    .describe(
+      'Your reason for this change, in your own words, for a reader who has not seen this conversation. A definition patch becomes a proposal, and the operator reads this as its Reason. A metadata patch applies at once, and its result returns this.',
+    ),
   /** Optimistic concurrency — if provided, patch fails when the current revision differs. */
   expectedRevision: z.number().int().nonnegative().optional(),
 });
@@ -134,6 +144,8 @@ export const WorkflowPatchOutputSchema = z.object({
   ),
   /** Non-fatal advisory — e.g. "a run is currently active; edits apply to the next run". */
   warning: z.string().optional(),
+  /** The reason the call gave, returned by a metadata patch, which stages no proposal to hold it. */
+  why: z.string().optional(),
 });
 export type WorkflowPatchOutput = z.infer<typeof WorkflowPatchOutputSchema>;
 

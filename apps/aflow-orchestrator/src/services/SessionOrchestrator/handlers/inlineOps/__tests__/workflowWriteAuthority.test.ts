@@ -193,6 +193,7 @@ describe('an agent creates a workflow; it does not replace or approve one', () =
     mockGetByPath.mockResolvedValue(stored(existingWorkflow('draft')));
     const input: WorkflowPatchInput = {
       slug: SLUG,
+      why: 'The operator asked for it.',
       operations: [{ op: 'replace', path: '/status', value: 'approved' }],
     };
 
@@ -208,6 +209,7 @@ describe('an agent creates a workflow; it does not replace or approve one', () =
     mockGetByPath.mockResolvedValue(stored(existingWorkflow('approved')));
     const input: WorkflowPatchInput = {
       slug: SLUG,
+      why: 'The operator asked for it.',
       operations: [{ op: 'replace', path: '/status', value: 'completed' }],
     };
 

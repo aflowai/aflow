@@ -112,6 +112,8 @@ export function InlineFocusedProposal({ itemId, reason }: InlineFocusedProposalP
           kind: sc.kind,
           status: sc.status,
           summary: sc.proposal.summary ?? '',
+          ...(sc.provenance ? { provenance: sc.provenance } : {}),
+          ...(sc.withdrawReason ? { withdrawReason: sc.withdrawReason } : {}),
           ...(sc.proposal.rationale ? { rationale: sc.proposal.rationale } : {}),
           ...(sc.proposal.confidence ? { confidence: sc.proposal.confidence } : {}),
           ...(sc.targetWorkflowSlug !== undefined
@@ -196,6 +198,7 @@ export function InlineFocusedProposal({ itemId, reason }: InlineFocusedProposalP
               summary: {
                 ...prev.summary,
                 status: sc.status,
+                ...(sc.withdrawReason ? { withdrawReason: sc.withdrawReason } : {}),
                 ...(sc.lastRatificationError !== undefined
                   ? { lastRatificationError: sc.lastRatificationError }
                   : {}),
@@ -434,6 +437,8 @@ interface RawProposalDetail {
   lastRatificationError?: ProposalCardSummary['lastRatificationError'];
   rebaseState?: 'stale' | 'clean';
   staleSummary?: ProposalCardSummary['staleSummary'];
+  provenance?: ProposalCardSummary['provenance'];
+  withdrawReason?: string;
   proposal: {
     summary?: string;
     rationale?: string;

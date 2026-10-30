@@ -316,11 +316,6 @@ export async function emitTerminalRunUpdate(
 }
 
 /**
- * Bump `workflow_runs.scheduler_cursor_version` to mark "the run advanced".
- * Read by the sweeper to detect that scheduling work is fresh; bumped on
- * every task-result write so the version reflects causal progress.
- */
-/**
  * Record causal progress on the run: bump the cursor version and restart the
  * stall clock in one write.
  *

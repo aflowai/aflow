@@ -1,6 +1,17 @@
 import { createMemoryDocRepository, createTenantContext } from '@aflow/database';
-import { PROPOSAL_DIRS, tryParseStagedChangeDoc } from '@aflow/cybernetic-runtime';
-import { type ActionCenterItemOrigin, type StagedChange } from '@aflow/schemas';
+import {
+  PROPOSAL_DIRS,
+  provenanceOf,
+  resolveProposalProvenance,
+  tryParseStagedChangeDoc,
+} from '@aflow/cybernetic-runtime';
+import {
+  type ActionCenterItemOrigin,
+  type ActionCenterRequester,
+  type ProposalProvenance,
+  type StagedChange,
+  type StagedChangeSource,
+} from '@aflow/schemas';
 import { deriveCoachProposalProjection } from '../../cybernetic/coachProposalProjection.js';
 import {
   type ActionCenterResolveOutcome,
@@ -30,9 +41,15 @@ export function createCoachProposalSource(deps: ActionCenterSourceDeps): ActionC
 
     async listOpen(scope: ActionCenterScope): Promise<ActionCenterSourceItem[]> {
       const docs = await listPendingProposalDocs(deps, scope);
+      const provenance = await resolveProposalProvenance(
+        deps.db,
+        scope.tenantId,
+        scope.spaceId,
+        docs,
+      );
       const items: ActionCenterSourceItem[] = [];
       for (const sc of docs) {
-        const item = toActionCenterItem(sc, scope);
+        const item = toActionCenterItem(sc, scope, provenance.get(sc.id));
         if (item) items.push(item);
       }
       return items;
@@ -48,7 +65,7 @@ export function createCoachProposalSource(deps: ActionCenterSourceDeps): ActionC
         proposalId,
         'coachProposalSource.getById',
       );
-      if (read.ok) return toActionCenterItem(read.staged, ctx);
+      if (read.ok) return mapOne(deps, read.staged, ctx);
       if (read.reason === 'not_found') return null;
       // A proposal that exists but cannot be shown is not a missing one: say why.
       throw proposalUnreadableError(proposalId, ctx.spaceId, proposalNotFound(read));
@@ -216,7 +233,7 @@ async function loadAndMap(
     'coachProposalSource.loadAndMap',
   );
   if (!read.ok) return undefined;
-  return toActionCenterItem(read.staged, scope) ?? undefined;
+  return (await mapOne(deps, read.staged, scope)) ?? undefined;
 }
 
 /** The error for a proposal that exists in this space but cannot be shown, naming why. */
@@ -278,10 +295,38 @@ async function listPendingProposalDocs(
 // Mapping — StagedChange → ActionCenterSourceItem
 // ============================================================================
 
+async function mapOne(
+  deps: ActionCenterSourceDeps,
+  sc: StagedChange,
+  scope: ActionCenterScope,
+): Promise<ActionCenterSourceItem | null> {
+  const provenance = await resolveProposalProvenance(deps.db, scope.tenantId, scope.spaceId, [sc]);
+  return toActionCenterItem(sc, scope, provenance.get(sc.id));
+}
+
+/** Who asked, by the proposal's source. An agent's patch names the agent the record names. */
+const REQUESTER_KIND_BY_SOURCE: Record<StagedChangeSource, ActionCenterRequester['kind']> = {
+  coach: 'coach',
+  agent_patch: 'agent',
+  compose_skill: 'workflow',
+  bind_capability: 'workflow',
+  operator: 'system',
+};
+
+function requesterOf(provenance: ProposalProvenance): ActionCenterRequester {
+  return {
+    kind: REQUESTER_KIND_BY_SOURCE[provenance.source],
+    label: provenance.authorRole ?? provenance.sourceLabel,
+    ...(provenance.conversation ? { sessionId: provenance.conversation.sessionId } : {}),
+  };
+}
+
 function toActionCenterItem(
   sc: StagedChange,
   scope: ActionCenterScope,
+  resolved: ProposalProvenance | undefined,
 ): ActionCenterSourceItem | null {
+  const provenance = resolved ?? provenanceOf(sc, null);
   const kind =
     sc.resolutionRoute === 'platform_issue'
       ? ('platform_issue' as const)
@@ -319,18 +364,15 @@ function toActionCenterItem(
         ? sc.proposal.summary.slice(0, 256)
         : kind === 'platform_issue'
           ? 'Platform issue'
-          : 'Coach proposal',
+          : provenance.sourceLabel,
     summary:
       kind === 'platform_issue'
-        ? `Coach flagged a platform-side issue (${sc.kind}). Diagnostic only — dismiss to acknowledge.`
+        ? `A platform-side issue (${sc.kind}). Diagnostic only — dismiss to acknowledge.`
         : `${sc.proposal.summary} (confidence: ${sc.proposal.confidence})`,
-    extension: deriveCoachProposalProjection(sc),
+    extension: deriveCoachProposalProjection(sc, provenance),
     requestedAt: sc.proposedAt,
     ...(sc.expiresAt ? { expiresAt: sc.expiresAt } : {}),
-    requestedBy: {
-      kind: 'coach',
-      label: 'Coach',
-    },
+    requestedBy: requesterOf(provenance),
     priority: 'normal',
     relatesTo: sc.targetWorkflowSlug
       ? [{ kind: 'workflow' as const, id: sc.targetWorkflowSlug, label: sc.targetWorkflowSlug }]

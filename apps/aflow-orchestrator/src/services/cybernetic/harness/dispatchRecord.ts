@@ -95,7 +95,7 @@ export async function recordTaskOutcome(
   taskId: string,
   attempt: number,
   status: 'succeeded' | 'failed',
-  taskRow: WorkflowTaskRow,
+  taskRow: Pick<WorkflowTaskRow, 'startedAt'>,
   extras: RecordTaskOutcomeExtras,
 ): Promise<boolean> {
   const tenantIdStr = tenantId as string;
