@@ -25,7 +25,7 @@ import { bootstrapLocalEdition } from '../bootstrap/localEdition.js';
 import { seedLocalProfile } from '../bootstrap/__fixtures__/localProfiles.js';
 import { authPlugin } from './auth.js';
 import { tenantPlugin } from './tenant.js';
-import { issueLocalProfileSession } from './localProfiles.js';
+import { bumpLocalProfileSessionGeneration, issueLocalProfileSession } from './localProfiles.js';
 
 const DATABASE_URL = process.env['DATABASE_URL'];
 const describeDb = DATABASE_URL ? describe : describe.skip;
@@ -206,6 +206,25 @@ describeDb('local profiles (real DB)', () => {
     it('refuses a session for a user without an active membership with a 403', async () => {
       expect((await probe(browser(pending))).status).toBe(403);
       expect((await probe(browser(randomUUID()))).status).toBe(403);
+    });
+
+    // The room Plan 335 P4 needs: a PIN bumps the generation, and a session
+    // issued before it no longer starts the profile.
+    it('ends a session issued before the profile generation was bumped', async () => {
+      const issuedBefore = browser(second);
+      const generation = await bumpLocalProfileSessionGeneration(db, second);
+      const { status, body } = await probe(issuedBefore);
+      expect(status).toBe(401);
+      expect(body['code']).toBe('PROFILE_SESSION_INVALID');
+      expect(
+        await probe({
+          ...browser(),
+          [LOCAL_PROFILE_SESSION_HEADER]: issueLocalProfileSession(second, SECRET, { generation }),
+        }),
+      ).toEqual({
+        status: 200,
+        body: { userId: second, via: 'profile-session', role: 'member' },
+      });
     });
 
     it('serves a browser with no session as the owner again once the second profile leaves', async () => {

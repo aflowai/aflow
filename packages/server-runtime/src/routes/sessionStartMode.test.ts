@@ -67,6 +67,7 @@ async function buildApp(): Promise<FastifyInstance> {
       instanceSecret: INSTANCE_WORD,
       apiKeyPrefix: API_KEY_PREFIX,
       hasSeveralProfiles: () => Promise.resolve(false),
+      profileSessionGeneration: () => Promise.resolve(0),
       env: {},
     });
     if (outcome.kind === 'local') request.authUser = outcome.authUser;

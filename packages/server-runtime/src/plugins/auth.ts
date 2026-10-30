@@ -51,7 +51,11 @@ import {
   resolveInstanceSecret,
   type LocalPrincipal,
 } from './localInstanceAuth.js';
-import { cacheLocalProfileCount, hasSeveralLocalProfiles } from './localProfiles.js';
+import {
+  cacheLocalProfileCount,
+  hasSeveralLocalProfiles,
+  readLocalProfileSessionGeneration,
+} from './localProfiles.js';
 
 // ============================================================================
 // Constants
@@ -741,9 +745,9 @@ export const authPlugin = fp(
 
     // ---- Helper: count the local edition's profiles -------------------------
     // Answered from a short cache, so an unsessioned request reads Postgres
-    // only when the cache is cold. An unread count answers "several", never
-    // "one": falling back to the owner would hand a browser with no profile
-    // session the owner's authority (see `cacheLocalProfileCount`).
+    // only when the cache is cold. An unread count answers the last count
+    // read, and one profile when none has been read, so a database fault never
+    // refuses a browser on a one-profile install (see `cacheLocalProfileCount`).
     const hasSeveralProfilesInPinnedTenant = cacheLocalProfileCount(
       async () => {
         const db = fastify.appContext?.db as PostgresJsDatabase | undefined;
@@ -755,10 +759,16 @@ export const authPlugin = fp(
       {
         ttlMs: options.localProfileCountTtlMs,
         onReadError: (err) => {
-          fastify.log.error({ err }, 'Local profile count unread, answering several profiles');
+          fastify.log.error({ err }, 'Local profile count unread, answering the last count read');
         },
       },
     );
+
+    const localProfileSessionGeneration = (userId: string): Promise<number | null> => {
+      const db = fastify.appContext?.db as PostgresJsDatabase | undefined;
+      if (!db) return Promise.reject(new Error('No database to read the profile session from'));
+      return readLocalProfileSessionGeneration(db, userId);
+    };
 
     // ---- Helper: ensure dev user exists ------------------------------------
     async function ensureDevUser(): Promise<void> {
@@ -829,6 +839,7 @@ export const authPlugin = fp(
           instanceSecret: resolveInstanceSecret(),
           apiKeyPrefix: API_KEY_PREFIX,
           hasSeveralProfiles: hasSeveralProfilesInPinnedTenant,
+          profileSessionGeneration: localProfileSessionGeneration,
         });
         if (outcome.kind === 'local') {
           request.authUser = outcome.authUser;

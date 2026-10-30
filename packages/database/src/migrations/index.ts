@@ -21,6 +21,7 @@ export {
   applyTimerDeadLettersMigration,
   applyConciergeConfigRemovalMigration,
   applyAgentModelAllowlistMigration,
+  applyLocalProfileSessionGenerationMigration,
   applyIdentityProviderKeyMigration,
   seedPublicTenantFreemiumDefaults,
   seedModelCatalog,

@@ -207,6 +207,12 @@ export const users = pgTable('users', {
   /** Account status */
   status: text('status').notNull().default('active'),
 
+  /**
+   * The local edition's profile session generation (Plan 335). A session
+   * carries the value it was issued at, so a bump ends every earlier session.
+   */
+  profileSessionGeneration: integer('profile_session_generation').notNull().default(0),
+
   /** When the user was created */
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 

@@ -51,7 +51,15 @@ const request = (authorization?: string, extra: Record<string, string> = {}) =>
 const ONE_PROFILE = () => Promise.resolve(false);
 const TWO_PROFILES = () => Promise.resolve(true);
 
-const opts = { instanceSecret: SECRET, apiKeyPrefix: 'phx_', hasSeveralProfiles: ONE_PROFILE };
+/** Every user at the generation a session issued with no bump carries. */
+const NEVER_BUMPED = () => Promise.resolve(0);
+
+const opts = {
+  instanceSecret: SECRET,
+  apiKeyPrefix: 'phx_',
+  hasSeveralProfiles: ONE_PROFILE,
+  profileSessionGeneration: NEVER_BUMPED,
+};
 
 const SECOND_USER = '22222222-3333-4444-8555-666666666666';
 const BROWSER = { [LOCAL_BROWSER_CALLER_HEADER]: '1' };
@@ -215,13 +223,62 @@ describe('the profile rule', () => {
   it.each([
     ['another secret', issueLocalProfileSession(SECOND_USER, 'c'.repeat(48))],
     ['a bare user id', SECOND_USER],
-    ['a tampered user id', sessionFor(SECOND_USER)[LOCAL_PROFILE_SESSION_HEADER].replace('2', '7')],
+    [
+      'a tampered user id',
+      sessionFor(SECOND_USER)[LOCAL_PROFILE_SESSION_HEADER].replace(
+        SECOND_USER,
+        SECOND_USER.replace('2', '7'),
+      ),
+    ],
+    [
+      'a tampered generation',
+      issueLocalProfileSession(SECOND_USER, SECRET, { issuedAt: 1_800_000_000 }).replace(
+        '.1800000000.0.',
+        '.1800000000.1.',
+      ),
+    ],
   ])('refuses a session signed with %s', async (_label, value) => {
     for (const count of [ONE_PROFILE, TWO_PROFILES]) {
       expect(await principal({ [LOCAL_PROFILE_SESSION_HEADER]: value }, count)).toEqual({
         refused: 'PROFILE_SESSION_INVALID',
       });
     }
+  });
+
+  // The room P4 needs: a PIN bumps the user's generation, and every session
+  // issued before the bump ends with it.
+  it('refuses a session issued before the user generation was bumped', async () => {
+    const outcome = await authenticateLocalInstance(
+      request(`Bearer ${SECRET}`, { ...BROWSER, ...sessionFor(SECOND_USER) }),
+      { ...opts, profileSessionGeneration: () => Promise.resolve(1), env: {} },
+    );
+    expect(outcome).toEqual({
+      kind: 'refused',
+      code: 'PROFILE_SESSION_INVALID',
+      message: 'This profile session has ended. Choose a profile again.',
+    });
+  });
+
+  it('serves a session issued at the user current generation', async () => {
+    const outcome = await authenticateLocalInstance(
+      request(`Bearer ${SECRET}`, {
+        ...BROWSER,
+        [LOCAL_PROFILE_SESSION_HEADER]: issueLocalProfileSession(SECOND_USER, SECRET, {
+          generation: 1,
+        }),
+      }),
+      { ...opts, profileSessionGeneration: () => Promise.resolve(1), env: {} },
+    );
+    expect(outcome.kind === 'local' && outcome.authUser.userId).toBe(SECOND_USER);
+  });
+
+  // No row means no membership, and the membership read refuses that with 403.
+  it('leaves a session naming no known user to the membership read', async () => {
+    const outcome = await authenticateLocalInstance(
+      request(`Bearer ${SECRET}`, sessionFor(SECOND_USER)),
+      { ...opts, profileSessionGeneration: () => Promise.resolve(null), env: {} },
+    );
+    expect(outcome.kind === 'local' && outcome.authUser.localPrincipal).toBe('profile-session');
   });
 
   it('counts profiles only when no session names the user', async () => {
@@ -281,34 +338,89 @@ describe('the profile count cache', () => {
     expect(read).toHaveBeenCalledTimes(1);
   });
 
-  // §8 question 7: an unread count must not hand a browser the owner, and it
+  // A database fault must not claim a second profile nobody has read, and it
   // must not turn a request into a 503 either.
-  it('answers several profiles when the read fails, and reads again next time', async () => {
+  it('answers one profile when the first read fails, and reads again next time', async () => {
     const fault = new Error('connection refused');
     const read = vi.fn<() => Promise<boolean>>().mockRejectedValueOnce(fault);
-    read.mockResolvedValueOnce(false);
+    read.mockResolvedValueOnce(true);
     const onReadError = vi.fn();
     const count = cacheLocalProfileCount(read, { ttlMs: 5_000, now: clock().now, onReadError });
-    expect(await count()).toBe(true);
-    expect(onReadError).toHaveBeenCalledWith(fault);
     expect(await count()).toBe(false);
+    expect(onReadError).toHaveBeenCalledWith(fault);
+    expect(await count()).toBe(true);
     expect(read).toHaveBeenCalledTimes(2);
   });
 
-  it('answers several profiles when the read throws before it awaits', async () => {
+  it('answers one profile when the read throws before it awaits', async () => {
     const read = vi.fn((): Promise<boolean> => {
       throw new Error('no database');
     });
     const count = cacheLocalProfileCount(read, { ttlMs: 5_000, now: clock().now });
-    expect(await count()).toBe(true);
-    expect(await count()).toBe(true);
+    expect(await count()).toBe(false);
+    expect(await count()).toBe(false);
     expect(read).toHaveBeenCalledTimes(2);
   });
 
-  it('refuses a browser and keeps a bare-secret caller when the count is unread', async () => {
+  it.each([
+    ['one profile', false],
+    ['several profiles', true],
+  ])('answers the last count read, %s, when a later read fails', async (_label, several) => {
+    const read = vi.fn<() => Promise<boolean>>().mockResolvedValueOnce(several);
+    read.mockRejectedValueOnce(new Error('down'));
+    const { now, advance } = clock();
+    const count = cacheLocalProfileCount(read, { ttlMs: 5_000, now });
+    expect(await count()).toBe(several);
+    advance(5_000);
+    expect(await count()).toBe(several);
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it('serves a browser as the owner when a one-profile install cannot read its count', async () => {
+    const read = vi.fn<() => Promise<boolean>>().mockResolvedValueOnce(false);
+    read.mockRejectedValue(new Error('down'));
+    const { now, advance } = clock();
+    const count = cacheLocalProfileCount(read, { ttlMs: 5_000, now });
+    const asBrowser = () =>
+      authenticateLocalInstance(request(`Bearer ${SECRET}`, BROWSER), {
+        ...opts,
+        hasSeveralProfiles: count,
+        env: {},
+      });
+    expect(await asBrowser()).toMatchObject({
+      kind: 'local',
+      authUser: { userId: LOCAL_EDITION_OWNER_ID, localPrincipal: 'sole-profile' },
+    });
+    advance(5_000);
+    expect(await asBrowser()).toMatchObject({
+      kind: 'local',
+      authUser: { userId: LOCAL_EDITION_OWNER_ID, localPrincipal: 'sole-profile' },
+    });
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it('serves a browser as the owner when the count has never been read', async () => {
     const count = cacheLocalProfileCount(() => Promise.reject(new Error('down')), {
       now: clock().now,
     });
+    const asBrowser = await authenticateLocalInstance(request(`Bearer ${SECRET}`, BROWSER), {
+      ...opts,
+      hasSeveralProfiles: count,
+      env: {},
+    });
+    expect(asBrowser).toMatchObject({
+      kind: 'local',
+      authUser: { userId: LOCAL_EDITION_OWNER_ID, localPrincipal: 'sole-profile' },
+    });
+  });
+
+  it('keeps refusing a browser once a second profile has been read', async () => {
+    const read = vi.fn<() => Promise<boolean>>().mockResolvedValueOnce(true);
+    read.mockRejectedValue(new Error('down'));
+    const { now, advance } = clock();
+    const count = cacheLocalProfileCount(read, { ttlMs: 5_000, now });
+    await count();
+    advance(5_000);
     const asBrowser = await authenticateLocalInstance(request(`Bearer ${SECRET}`, BROWSER), {
       ...opts,
       hasSeveralProfiles: count,
@@ -329,8 +441,29 @@ describe('the profile count cache', () => {
 
 describe('the profile session', () => {
   it('names the user it was issued for', () => {
-    expect(readLocalProfileSession(issueLocalProfileSession(SECOND_USER, SECRET), SECRET)).toBe(
-      SECOND_USER,
+    expect(
+      readLocalProfileSession(issueLocalProfileSession(SECOND_USER, SECRET), SECRET)?.userId,
+    ).toBe(SECOND_USER);
+  });
+
+  it('carries its issue time and the user generation', () => {
+    const value = issueLocalProfileSession(SECOND_USER, SECRET, {
+      issuedAt: 1_800_000_000,
+      generation: 3,
+    });
+    expect(readLocalProfileSession(value, SECRET)).toEqual({
+      userId: SECOND_USER,
+      issuedAt: 1_800_000_000,
+      generation: 3,
+    });
+  });
+
+  it('is not issued with a generation that is not a whole number', () => {
+    expect(() => issueLocalProfileSession(SECOND_USER, SECRET, { generation: -1 })).toThrow(
+      /generation/,
+    );
+    expect(() => issueLocalProfileSession(SECOND_USER, SECRET, { issuedAt: 1.5 })).toThrow(
+      /issue time/,
     );
   });
 

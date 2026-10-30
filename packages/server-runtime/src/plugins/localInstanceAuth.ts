@@ -187,9 +187,14 @@ function headerValue(request: FastifyRequest, name: string): string | undefined 
  * condition. Until then a session naming the one profile is what it gets, and
  * rule 1 serves it.
  *
+ * A session also carries the user's session generation, and rule 1 refuses one
+ * whose generation is no longer the user's. That is how P4 ends the sessions
+ * issued before a PIN (`bumpLocalProfileSessionGeneration`).
+ *
  * `hasSeveralProfiles` is asked only when rule 2 or 3 needs the answer. The
- * auth plugin answers it from a short cache that never rejects and answers
- * "several" when the count is unread (`cacheLocalProfileCount`).
+ * auth plugin answers it from a short cache that never rejects. With the
+ * database unreadable it answers the last count read, and one profile when it
+ * has read none (`cacheLocalProfileCount`).
  */
 export async function authenticateLocalInstance(
   request: FastifyRequest,
@@ -197,6 +202,12 @@ export async function authenticateLocalInstance(
     instanceSecret: string;
     apiKeyPrefix: string;
     hasSeveralProfiles: () => Promise<boolean>;
+    /**
+     * The user's current session generation, or null when no such user
+     * exists. A session reaches the membership read anyway, so this read adds
+     * no new dependency on the database.
+     */
+    profileSessionGeneration: (userId: UserId) => Promise<number | null>;
     env?: NodeJS.ProcessEnv;
   },
 ): Promise<LocalAuthOutcome> {
@@ -216,15 +227,25 @@ export async function authenticateLocalInstance(
 
   const session = headerValue(request, LOCAL_PROFILE_SESSION_HEADER);
   if (session !== undefined) {
-    const userId = readLocalProfileSession(session, opts.instanceSecret);
-    if (userId === null) {
+    const claims = readLocalProfileSession(session, opts.instanceSecret);
+    if (claims === null) {
       return {
         kind: 'refused',
         code: 'PROFILE_SESSION_INVALID',
         message: 'The profile session was not issued by this instance. Choose a profile again.',
       };
     }
-    return { kind: 'local', authUser: localProfile(userId) };
+    // A user with no row has no membership either, so the membership read
+    // refuses it with the 403 any other non-member gets.
+    const generation = await opts.profileSessionGeneration(claims.userId);
+    if (generation !== null && generation !== claims.generation) {
+      return {
+        kind: 'refused',
+        code: 'PROFILE_SESSION_INVALID',
+        message: 'This profile session has ended. Choose a profile again.',
+      };
+    }
+    return { kind: 'local', authUser: localProfile(claims.userId) };
   }
 
   if (!(await opts.hasSeveralProfiles())) {
