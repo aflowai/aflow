@@ -12,6 +12,7 @@ import {
   planNodeOperatorLine,
   PLAN_NODE_APPROVED_HEAD,
   PLAN_NODE_CHILDREN_LIMIT,
+  PLAN_NODE_CONVERSATION_LINK_LABEL,
   PLAN_NODE_REVISE_HEAD,
   PLAN_NODE_DEPENDENCIES_LIMIT,
   PLAN_NODE_LEARNINGS_LIMIT,
@@ -114,9 +115,6 @@ export interface PlanWriteContext extends PlanReadContext {
    */
   conversationId?: string;
 }
-
-/** The label a conversation's link on a node carries. */
-export const PLAN_NODE_CONVERSATION_LINK_LABEL = 'conversation';
 
 function notFound(
   nodeId: string,

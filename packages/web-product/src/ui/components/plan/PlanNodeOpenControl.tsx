@@ -67,7 +67,11 @@ export function PlanNodeOpenControl({
   const [spend, setSpend] = useState('');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const { shown, movedSinceOpened, setPinned } = usePinnedNode(read, opening);
+  // After a write lands the approve form stays open, and it follows the live
+  // read until the operator edits it again: the write moved the revision, and
+  // a Revise asks the Helmsman to move it once more.
+  const [followingLive, setFollowingLive] = useState(false);
+  const { shown, movedSinceOpened, setPinned } = usePinnedNode(read, opening && !followingLive);
 
   if (!opening) {
     return (
@@ -93,6 +97,7 @@ export function PlanNodeOpenControl({
       : undefined;
   const reset = () => {
     setOpening(false);
+    setFollowingLive(verb === 'approve');
     setText('');
     setSpend('');
     setError(null);
@@ -160,6 +165,7 @@ export function PlanNodeOpenControl({
       rows={verb === 'approve' ? 3 : 2}
       disabled={pending}
       onChange={(event) => {
+        setFollowingLive(false);
         setText(event.target.value);
       }}
     />
@@ -204,6 +210,7 @@ export function PlanNodeOpenControl({
         disabled={pending}
         value={spend}
         onChange={(event) => {
+          setFollowingLive(false);
           setSpend(event.target.value);
         }}
       />
@@ -237,7 +244,7 @@ export function PlanNodeOpenControl({
           <Button
             size="sm"
             variant="secondary"
-            disabled={blocked || why.length === 0 || shown?.status !== 'blocked'}
+            disabled={blocked || why.length === 0 || shown.status !== 'blocked'}
             onClick={() => {
               void revise();
             }}

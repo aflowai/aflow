@@ -751,6 +751,16 @@ async function decideRoot(
   if (!active) {
     return decided(wait('stream_closed', `The stream under "${root.title}" has no open node.`));
   }
+  // The walk to the active node ends at the first blocked node, but the
+  // operator can send back any blocked node, so a revise is looked for on all.
+  const sentBack = open.nodes.find(
+    (n) => n.status === 'blocked' && n.noteHead?.startsWith(PLAN_NODE_REVISE_HEAD) === true,
+  );
+  if (sentBack) {
+    const node = await ctx.store.find(ctx.spaceId, sentBack.nodeId);
+    const revise = node ? reviseAnswer(node) : null;
+    if (revise) return decided(revise);
+  }
 
   const opened = await getPlanNode(ctx, active.nodeId);
   if (!opened.ok) return opened;

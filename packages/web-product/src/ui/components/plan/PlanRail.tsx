@@ -29,12 +29,13 @@ import {
   type BadgeVariant,
   type IconName,
 } from '@aflow/design-system';
-import type {
-  PlanBoardColumn,
-  PlanNeedsYouReason,
-  PlanNodeDetailOutput,
-  PlanNodeLink,
-  PlanTreeNode,
+import {
+  PLAN_NODE_CONVERSATION_LINK_LABEL,
+  type PlanBoardColumn,
+  type PlanNeedsYouReason,
+  type PlanNodeDetailOutput,
+  type PlanNodeLink,
+  type PlanTreeNode,
 } from '@aflow/schemas';
 import { useApiQuery } from '../../hooks/useApiQuery.js';
 import { spaceRoute } from '../../lib/space-routes.js';
@@ -360,6 +361,10 @@ export function PlanRail({
       `linkKind=session&limit=${String(PLAN_RAIL_CONVERSATIONS)}`,
     ),
   });
+  // A `session` link carries other sessions too: only the engine's label names a conversation.
+  const conversationLinks = (conversations.data?.links ?? []).filter(
+    (link) => link.label === PLAN_NODE_CONVERSATION_LINK_LABEL,
+  );
   // The closed step above a stranded one, read fresh as the rail's own node
   // is: its revision is what a Reopen of it is pinned to.
   const ancestorDetail = useApiQuery<PlanNodeDetailOutput>({
@@ -573,9 +578,9 @@ export function PlanRail({
             Discuss with the Helmsman
           </Link>
         </Row>
-        {(conversations.data?.links.length ?? 0) > 0 && (
+        {conversationLinks.length > 0 && (
           <ul style={listStyle} data-plan-conversations>
-            {conversations.data?.links.map((link) => (
+            {conversationLinks.map((link) => (
               <li key={link.ref}>
                 <Row gap="xs" align="center">
                   <Link

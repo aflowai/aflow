@@ -1376,6 +1376,36 @@ describe('the operator’s note on a node (Plan 337 P4)', () => {
     expect(await next(root.nodeId)).toMatchObject({ decision: 'wait', cause: 'blocked' });
   });
 
+  it('revise: answers a blocked node sent back where it is not the active node', async () => {
+    const { root, first, second } = await stream();
+    await write(first.nodeId, { status: 'blocked', note: 'Waiting on a person' });
+    const blocked = await write(second.nodeId, { status: 'blocked', note: 'Proposed' });
+    expect(await next(root.nodeId)).toMatchObject({
+      decision: 'wait',
+      cause: 'blocked',
+      node: { nodeId: first.nodeId },
+    });
+
+    const revised = await revisePlanNode(session(), {
+      nodeId: second.nodeId,
+      expectedRevision: blocked.revision,
+      why: 'Name the risk.',
+    });
+    if (!revised.ok) throw new Error(revised.message);
+
+    expect(await next(root.nodeId)).toMatchObject({
+      decision: 'revise',
+      node: { nodeId: second.nodeId, instructions: 'Revise: Name the risk.' },
+    });
+
+    await write(second.nodeId, { note: 'Revised: the risk is named.' });
+    expect(await next(root.nodeId)).toMatchObject({
+      decision: 'wait',
+      cause: 'blocked',
+      node: { nodeId: first.nodeId },
+    });
+  });
+
   it('ranks a revise after a publication and before new work across the board', async () => {
     const proposal = await created({ title: 'Plan 340' });
     const finished = await created({ title: 'Plan 341' });

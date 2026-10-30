@@ -247,6 +247,8 @@ export const PLAN_NODE_APPROVED_HEAD = 'Approved: ';
 export const PLAN_NODE_REVISE_HEAD = 'Revise: ';
 /** The head of the line a Helmsman writes once it has rewritten a node from a revise. */
 export const PLAN_NODE_REVISED_HEAD = 'Revised: ';
+/** The label on the `session` link an operator's conversation leaves on a node it wrote. */
+export const PLAN_NODE_CONVERSATION_LINK_LABEL = 'conversation';
 
 /**
  * The operator's words as the engine writes them into a note: one line, so the

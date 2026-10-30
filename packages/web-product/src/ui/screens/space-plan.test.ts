@@ -1608,6 +1608,31 @@ describe('SpacePlanPage — approve, reopen and order (Plan 332 P2)', () => {
     expect(write.invalidate).toEqual([['space', SPACE_ID, 'plan']]);
   });
 
+  it('follows the step’s new revision after a Revise lands, through the Helmsman’s rewrite', async () => {
+    await render({ data: P2_PLAN });
+    await click(card(BLOCKED));
+    await type(openForm(), 'Split it: the schema first.');
+    await click(button(openForm(), 'Revise'));
+
+    // The revise moved the step to 4, and the Helmsman's rewrite moved it to 5.
+    recorded.details[BLOCKED] = detail(
+      fullNode(BLOCKED, 'P1 — the loop takes the next node', {
+        parentId: R331,
+        status: 'blocked',
+        revision: 5,
+      }),
+    );
+    await render({ data: P2_PLAN });
+    expect(openForm().querySelector('[data-plan-open-moved]')).toBe(null);
+
+    await type(openForm(), 'Go ahead.');
+    await click(button(openForm(), 'Approve'));
+    expect(recorded.sent.map((s) => s.body)).toEqual([
+      { expectedRevision: 3, why: 'Split it: the schema first.' },
+      { expectedRevision: 5, why: 'Go ahead.' },
+    ]);
+  });
+
   it('links the step to the space chat with its title and id, and lists the conversations that wrote it', async () => {
     recorded.conversations[BLOCKED] = {
       data: {
@@ -1620,8 +1645,15 @@ describe('SpacePlanPage — approve, reopen and order (Plan 332 P2)', () => {
             label: 'conversation',
             createdAt: at(10, 23),
           },
+          {
+            nodeId: BLOCKED,
+            kind: 'session',
+            ref: 'c0000000-0000-4000-8000-000000000338',
+            label: 'a run that served it',
+            createdAt: at(10, 22),
+          },
         ],
-        linksTotal: 1,
+        linksTotal: 2,
       },
     };
     await render({ data: P2_PLAN });
