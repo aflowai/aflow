@@ -1,11 +1,15 @@
-import type { CoachProposalExtension, StagedChange } from '@aflow/schemas';
+import type { CoachProposalExtension, ProposalProvenance, StagedChange } from '@aflow/schemas';
 import {
   isProposalReadinessSafe,
   proposalReadinessWarningCount,
   proposalReadinessBlockerCount,
+  provenanceOf,
 } from '@aflow/cybernetic-runtime';
 
-export function deriveCoachProposalProjection(sc: StagedChange): CoachProposalExtension {
+export function deriveCoachProposalProjection(
+  sc: StagedChange,
+  provenance: ProposalProvenance = provenanceOf(sc, null),
+): CoachProposalExtension {
   return {
     kind: 'coach_proposal',
     proposalKind: sc.kind,
@@ -14,6 +18,7 @@ export function deriveCoachProposalProjection(sc: StagedChange): CoachProposalEx
     // string for non-Coach surfaces; the panel rendering
     // `<ProposalCard>` needs this raw text.
     proposalSummary: sc.proposal.summary,
+    provenance,
     rationale: sc.proposal.rationale,
     confidence: sc.proposal.confidence,
     opCount: sc.proposal.ops.length,

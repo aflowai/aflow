@@ -9,6 +9,12 @@ import { ProposalValidationsChecklist } from './ProposalValidationsChecklist.js'
 import type { ProposalReadiness } from './ProposalValidationsChecklist.js';
 import { failedApplyVariant } from '../../hooks/use-coach-surface.js';
 import type { CoachProposalSummary } from '../../hooks/use-coach-surface.js';
+import { useSpaceFromRoute } from '../providers.js';
+import { spaceRoute } from '../../lib/space-routes.js';
+import {
+  describeProposalProvenance,
+  type ProposalProvenance,
+} from '../../lib/proposal-provenance.js';
 
 // ============================================================================
 // Public types — superset across every surface
@@ -20,6 +26,10 @@ export interface ProposalCardSummary {
   kind: string;
   status: string; // 'proposed' | 'ratified' | 'rejected' | 'dismissed' | 'auto_applied' | 'expired'
   summary: string;
+  /** Who proposed it and from which conversation. */
+  provenance?: ProposalProvenance | undefined;
+  /** The author's reason, once it has withdrawn the proposal. */
+  withdrawReason?: string | undefined;
   rationale?: string;
   confidence?: string;
   targetWorkflowSlug?: string | null;
@@ -68,6 +78,8 @@ export interface ProposalCardPayload {
   status?: string;
   summary?: string;
   rationale?: string;
+  provenance?: ProposalProvenance | undefined;
+  withdrawReason?: string | undefined;
   confidence?: string;
   opKinds?: string[];
   targetWorkflowSlug?: string | null;
@@ -167,6 +179,7 @@ const STATUS_VARIANT: Record<string, 'success' | 'danger' | 'warning' | 'neutral
   dismissed: 'neutral',
   auto_applied: 'success',
   expired: 'neutral',
+  withdrawn: 'neutral',
 };
 
 export function ProposalCard({
@@ -256,7 +269,17 @@ export function ProposalCard({
     lastRatificationError: detail?.lastRatificationError ?? proposal.lastRatificationError,
     rebaseState: detail?.rebaseState ?? proposal.rebaseState,
     staleSummary: detail?.staleSummary ?? proposal.staleSummary,
+    provenance: detail?.provenance ?? proposal.provenance,
+    withdrawReason: detail?.withdrawReason ?? proposal.withdrawReason,
   };
+  const spaceSlug = useSpaceFromRoute()?.slug;
+  const provenanceLines = describeProposalProvenance({
+    provenance: merged.provenance,
+    rationale: merged.rationale,
+    proposedAt: merged.proposedAt,
+    status: merged.status,
+    withdrawReason: merged.withdrawReason,
+  });
 
   const variant = failedApplyVariant(merged.lastRatificationError ?? undefined);
   const isFailed = variant !== null;
@@ -366,7 +389,7 @@ export function ProposalCard({
                 preview not run
               </Badge>
             ) : null}
-            {merged.targetWorkflowSlug && (
+            {merged.targetWorkflowSlug && !merged.provenance?.target && (
               <Text size="xs" variant="muted">
                 {merged.targetWorkflowSlug}
               </Text>
@@ -391,8 +414,26 @@ export function ProposalCard({
             )}
           </Row>
 
-          {/* Summary + rationale */}
-          {merged.rationale && <Text size="xs">{merged.rationale}</Text>}
+          {/* Provenance: one labelled line per field */}
+          {provenanceLines.length > 0 && (
+            <Column gap="xs">
+              {provenanceLines.map((entry) => (
+                <Text key={entry.label} size="xs" style={{ whiteSpace: 'pre-wrap' }}>
+                  <strong>{entry.label}:</strong>{' '}
+                  {entry.path ? (
+                    <a
+                      href={spaceRoute(spaceSlug, entry.path)}
+                      style={{ color: 'var(--color-accent-default)' }}
+                    >
+                      {entry.text}
+                    </a>
+                  ) : (
+                    entry.text
+                  )}
+                </Text>
+              ))}
+            </Column>
+          )}
 
           {/* Ops preview badges */}
           {merged.opKinds && merged.opKinds.length > 0 && (
