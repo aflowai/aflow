@@ -17,9 +17,9 @@ export async function residentOccurrenceDue(
   runId: string,
 ): Promise<boolean> {
   const runtime = backgroundTaskControlPlane().resolve('orchestrator.resident_due_check');
-  if (runtime.mode !== 'enabled') throw new Error('Resident due check is disabled');
-  const pending = await redis.get(residentPendingKey(item.tenantId, item.spaceId));
-  const informational = item.idempotencyKey.startsWith(`schedule:${item.scheduleId}:wake:`);
+  if (runtime.mode !== 'enabled') return false;
+  if (item.idempotencyKey.startsWith(`schedule:${item.scheduleId}:wake:`)) return true;
+  if ((await redis.get(residentPendingKey(item.tenantId, item.spaceId))) !== null) return true;
   const payload = resolvePayloadStore({ redis });
   if (!payload) throw new Error('Resident due check requires a payload store');
   const result = await nextOnPlanBoard(
@@ -35,10 +35,5 @@ export async function residentOccurrenceDue(
     PlanNodeNextInputSchema.parse({}),
   );
   if (!result.ok) throw new Error(result.message);
-  return (
-    informational ||
-    pending !== null ||
-    result.output.decisions.length > 0 ||
-    result.output.propose !== undefined
-  );
+  return result.output.decisions.length > 0 || result.output.propose !== undefined;
 }

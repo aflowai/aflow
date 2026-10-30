@@ -11,18 +11,22 @@
  */
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import RedisMock from 'ioredis-mock';
 import type { Redis as RedisType } from 'ioredis';
 import type postgres from 'postgres';
 import {
   AgentDefinitionSchema,
   planResidentScheduleInput,
+  resetBackgroundTaskControlPlane,
   StreamKeys,
   skillStarterAgentDefinition,
   type AgentDefinition,
   type PersistentAgentTarget,
 } from '@aflow/schemas';
+import { scheduleOccurrenceRunId, type ScheduleDispatchItem } from '@aflow/database';
+import { claimResidentWake, residentWakeKey } from '@aflow/cybernetic-runtime';
+import { residentOccurrenceDue } from '../residentDueCheck.js';
 
 const TENANT = 'a0000000-0000-4000-8000-000000000001';
 const SPACE = 'b0000000-0000-4000-8000-000000000002';
@@ -132,9 +136,9 @@ async function fire(
   agentVersion: string | null,
   resolvedInput: Record<string, unknown> = { input: 'tend' },
   event = false,
+  scheduleId = randomUUID(),
 ): Promise<Outcome> {
   const ev = evaluator() as unknown as { dispatchOne(row: unknown): Promise<Outcome> };
-  const scheduleId = randomUUID();
   return ev.dispatchOne({
     dispatch: {
       tenantId: TENANT,
@@ -151,7 +155,7 @@ async function fire(
       firingCount: 1,
       idempotencyKey: event
         ? `schedule:${scheduleId}:wake:${randomUUID()}`
-        : `schedule-${randomUUID()}`,
+        : `schedule:${scheduleId}:1`,
       creatorUserId: CREATOR,
       creatorTenantRole: 'admin',
       creatorSpaceRole: 'editor',
@@ -317,22 +321,80 @@ describe('resident due check', () => {
   it('spends no model tokens over a day of wait occurrences, then answers the first event', async () => {
     residentTemplate = planResidentScheduleInput();
     board.actionable = false;
-    for (let tick = 0; tick < 96; tick++) await fire(resident, null);
+    const item = {
+      tenantId: TENANT,
+      spaceId: SPACE,
+      scheduleId: AGENT,
+      idempotencyKey: `schedule:${AGENT}:1`,
+    } as ScheduleDispatchItem;
+    for (let tick = 0; tick < 96; tick++) {
+      expect(await residentOccurrenceDue({} as never, redis, item, randomUUID())).toBe(false);
+    }
     expect(await startedVersions()).toEqual([]);
     expect(board.reads).toHaveBeenCalledTimes(96);
     expect(board.reads).toHaveBeenLastCalledWith(
       expect.objectContaining({ preview: true, spaceId: SPACE }),
     );
     await redis.set(`plan:resident:pending:${TENANT}:${SPACE}`, '1');
-    await fire(resident, null);
-    expect(await startedVersions()).toEqual(['1']);
+    expect(await residentOccurrenceDue({} as never, redis, item, randomUUID())).toBe(true);
+    expect(board.reads).toHaveBeenCalledTimes(96);
   });
 
-  it('starts a run for a non-wait board decision', async () => {
+  it('judges a non-wait board decision due without re-reading it during dispatch', async () => {
     residentTemplate = planResidentScheduleInput();
+    const item = {
+      tenantId: TENANT,
+      spaceId: SPACE,
+      scheduleId: AGENT,
+      idempotencyKey: `schedule:${AGENT}:1`,
+    } as ScheduleDispatchItem;
+    expect(await residentOccurrenceDue({} as never, redis, item, randomUUID())).toBe(true);
     await fire(resident, null);
     expect(await startedVersions()).toEqual(['1']);
+    expect(board.reads).toHaveBeenCalledTimes(1);
   });
+
+  it('dispatches a recorded heartbeat once after the board becomes idle and retains its guard', async () => {
+    residentTemplate = planResidentScheduleInput();
+    board.actionable = false;
+    const scheduleId = randomUUID();
+    const runId = scheduleOccurrenceRunId(`schedule:${scheduleId}:1`);
+    await claimResidentWake(redis, TENANT, SPACE, runId);
+    await fire(resident, null, {}, false, scheduleId);
+    const guard = await redis.get(residentWakeKey(TENANT, SPACE));
+    await fire(resident, null, {}, false, scheduleId);
+    expect(await startedVersions()).toEqual(['1']);
+    expect(board.reads).not.toHaveBeenCalled();
+    expect(guard).not.toBeNull();
+    expect(await redis.get(residentWakeKey(TENANT, SPACE))).toBe(guard);
+  });
+
+  it('completes an event with no run when the due check is disabled', async () => {
+    vi.stubEnv(
+      'BACKGROUND_TASK_OVERRIDES',
+      JSON.stringify({
+        'orchestrator.resident_due_check': { mode: 'disabled' },
+      }),
+    );
+    resetBackgroundTaskControlPlane();
+    residentTemplate = planResidentScheduleInput();
+    const item = {
+      tenantId: TENANT,
+      spaceId: SPACE,
+      scheduleId: AGENT,
+      idempotencyKey: `schedule:${AGENT}:1`,
+    } as ScheduleDispatchItem;
+    await redis.set(`plan:resident:pending:${TENANT}:${SPACE}`, '1');
+    expect(await residentOccurrenceDue({} as never, redis, item, randomUUID())).toBe(false);
+    expect((await fire(resident, null, {}, true)).kind).toBe('completed');
+    expect(await startedVersions()).toEqual([]);
+    expect(board.reads).not.toHaveBeenCalled();
+  });
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+  resetBackgroundTaskControlPlane();
 });
 
 it('starts an event occurrence while the board waits', async () => {
@@ -345,6 +407,7 @@ it('starts an event occurrence while the board waits', async () => {
     true,
   );
   expect(await startedVersions()).toEqual(['1']);
+  expect(board.reads).not.toHaveBeenCalled();
 });
 
 it('never discovers resident candidates by enumerating spaces', () => {

@@ -509,12 +509,20 @@ export class ScheduleEvaluator {
       return false;
     }
 
-    // A resident heartbeat takes the space's wake guard, as an event-driven
-    // wake does (Plan 331 D4), so the two never start two wakes of one space.
-    // The advance's own guard fixes the occurrence's count, and so its run id.
     let claimedRunId: string | null = null;
     if (isResidentHeartbeat(schedule)) {
       const runId = scheduleOccurrenceRunId(key);
+      if (
+        !(await residentOccurrenceDue(
+          this.db,
+          this.redis,
+          buildDispatchItem(schedule, newFiringCount, key, {}),
+          runId,
+        ))
+      ) {
+        await this.skipOccurrence(schedule, null);
+        return false;
+      }
       const claim = await claimResidentWake(
         this.redis,
         schedule.tenant_id,
@@ -530,18 +538,6 @@ export class ScheduleEvaluator {
 
     let fired = false;
     try {
-      if (
-        claimedRunId !== null &&
-        !(await residentOccurrenceDue(
-          this.db,
-          this.redis,
-          buildDispatchItem(schedule, newFiringCount, key, {}),
-          claimedRunId,
-        ))
-      ) {
-        await this.skipOccurrence(schedule, null);
-        return false;
-      }
       fired = await this.fireOccurrence(schedule, newFiringCount);
       return fired;
     } finally {
@@ -861,10 +857,6 @@ export class ScheduleEvaluator {
       })
         ? item.scheduleId
         : undefined;
-    if (residentScheduleId && !(await residentOccurrenceDue(this.db, this.redis, item, runId))) {
-      await releaseResidentWake(this.redis, item.tenantId, item.spaceId, runId);
-      return { kind: 'completed' };
-    }
     // The drain is at-least-once: it can die between the XADD and the delete.
     // The claim is what makes a redelivery harmless — the loser learns which run
     // the winner started and retires the occurrence instead of starting another.
@@ -880,6 +872,15 @@ export class ScheduleEvaluator {
     // the key held, read that as "already started", and retire an occurrence
     // that never produced a run.
     try {
+      // Recorded heartbeats are due. Deduplicate before releasing an event's guard.
+      if (
+        residentScheduleId &&
+        item.idempotencyKey.startsWith(`schedule:${item.scheduleId}:wake:`) &&
+        !(await residentOccurrenceDue(this.db, this.redis, item, runId))
+      ) {
+        await releaseResidentWake(this.redis, item.tenantId, item.spaceId, runId);
+        return { kind: 'completed' };
+      }
       await addControlMessage(this.redis, {
         messageVersion: 1,
         type: 'start_run',

@@ -202,4 +202,4 @@ Write authority reads the session creation marker and schedule trigger, failing 
 
 ### P3 system heartbeat
 
-Resident schedule occurrences and informational events reach the existing dispatch runner. It reads the board without claims before emitting any model run. Wait-only occurrences preserve the firing cap without a session, while actionable decisions, proposals and pending informational wakes start one. The registered due check shares the dispatch lease, cadence and budgets, with no space enumeration.
+Heartbeats read the board before claiming the wake guard, so events can wake immediately during idle reads. Recorded heartbeats dispatch without another board read, and redelivery retains live wake guards. Disabled due checks answer off without errors, while events and pending marks bypass board reads when enabled. Wait-only heartbeats preserve the firing cap, and the registered due check retains the existing dispatch cadence and budgets without space enumeration.

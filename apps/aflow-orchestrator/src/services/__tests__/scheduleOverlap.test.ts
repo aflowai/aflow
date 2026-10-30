@@ -200,6 +200,19 @@ describe('heartbeats and event wakes share one guard (Plan 331 D4)', () => {
     sessions.set(PREVIOUS_RUN, { status: 'SUCCEEDED' });
   });
 
+  it('lets an event start immediately during an idle heartbeat board read', async () => {
+    due.mockImplementationOnce(async () => {
+      expect(await redis.get(residentWakeKey(TENANT, SPACE))).toBeNull();
+      expect(await event()).toBe('started');
+      return false;
+    });
+    expect(await occur()).toBe(false);
+    expect(enqueued).toHaveLength(1);
+    expect(fired()).toBe(0);
+    expect(await redis.get(residentPendingKey(TENANT, SPACE))).toBeNull();
+    expect(await redis.get(residentWakeKey(TENANT, SPACE))).not.toBeNull();
+  });
+
   it('a heartbeat and an event arriving while an event’s wake is in flight: one wake, the heartbeat skipped, the event pending', async () => {
     expect(await event()).toBe('started');
     expect(await occur()).toBe(false);
