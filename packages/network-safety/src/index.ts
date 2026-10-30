@@ -256,11 +256,29 @@ function remedySentence(hostname: string, remedy: PrivateNetworkRemedy): string 
  *
  * `policy` admits a `private-rfc1918` or `shared-address-space` address for the
  * hosts it lists. It moves no other refusal. The default refuses every range.
+ *
+ * `protocol` is the scheme of the URL the caller dials. A host the policy lists
+ * is reached over https only (Plan 336 D2), so any other scheme is refused
+ * before resolution. The default policy lists no host and keeps http to a
+ * public host.
  */
 export async function resolveAndValidateHost(
   hostname: string,
   policy: PrivateNetworkPolicy = DEFAULT_PRIVATE_NETWORK_POLICY,
+  protocol?: string,
 ): Promise<ResolvedHost> {
+  if (
+    protocol !== undefined &&
+    protocol !== 'https:' &&
+    policy.hosts.includes(normalizeHostname(hostname))
+  ) {
+    throw new SsrfBlockedError(
+      `Blocked: ${hostname} is on the operator's private network, so it is reached over https only (got ${protocol})`,
+      hostname,
+      { kind: 'invalid-protocol', remedy: 'none' },
+    );
+  }
+
   // An IPv6 literal is refused outright rather than range-checked, because
   // BLOCKED_CIDRS describes no IPv6 range — and the alternative, a bespoke
   // IPv6 parser inside the guard, is a place where one subtle bug is a bypass.
@@ -434,7 +452,7 @@ export async function validateUrl(
     });
   }
 
-  const resolvedHost = await resolveAndValidateHost(parsed.hostname, policy);
+  const resolvedHost = await resolveAndValidateHost(parsed.hostname, policy, parsed.protocol);
   return { url: parsed, resolvedHost };
 }
 

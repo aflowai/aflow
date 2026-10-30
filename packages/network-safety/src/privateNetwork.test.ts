@@ -251,6 +251,31 @@ describe('https stays required', () => {
   });
 });
 
+describe('a listed host is reached over https only', () => {
+  it('refuses the http URL with the https remedy', async () => {
+    answers('10.1.2.3');
+    const err = await refusal(validateUrl(`http://${HOST}/mcp`, [], localPolicy([HOST])));
+    expect(err).toMatchObject({ kind: 'invalid-protocol', remedy: 'none' });
+    expect(err.message).toContain(`${HOST} is on the operator's private network`);
+    expect(err.message).toContain('reached over https only');
+    expect(lookup).not.toHaveBeenCalled();
+  });
+
+  it('admits the same URL over https', async () => {
+    answers('10.1.2.3');
+    await expect(
+      validateUrl(`https://${HOST}/mcp`, [], localPolicy([HOST])),
+    ).resolves.toMatchObject({ resolvedHost: { ip: '10.1.2.3' } });
+  });
+
+  it('keeps http to a public host with no policy', async () => {
+    answers('93.184.216.34');
+    await expect(validateUrl('http://api.example.com/v1', [])).resolves.toMatchObject({
+      resolvedHost: { ip: '93.184.216.34' },
+    });
+  });
+});
+
 describe('the transports', () => {
   function captureFetch() {
     const calls: Array<{ url: string; host: string | null }> = [];
@@ -264,11 +289,14 @@ describe('the transports', () => {
     return calls;
   }
 
-  it('safeFetch passes its policy through and still pins http to the checked address', async () => {
+  it('safeFetch refuses http to a listed host before it dials', async () => {
     const calls = captureFetch();
     answers('10.1.2.3');
-    await safeFetch(`http://${HOST}/mcp`, { privateNetwork: localPolicy([HOST]) });
-    expect(calls).toEqual([{ url: 'http://10.1.2.3/mcp', host: HOST }]);
+    const err = await refusal(
+      safeFetch(`http://${HOST}/mcp`, { privateNetwork: localPolicy([HOST]) }),
+    );
+    expect(err.kind).toBe('invalid-protocol');
+    expect(calls).toEqual([]);
   });
 
   it('safeFetchFor binds one policy, and safeFetchImpl stays on the default', async () => {
