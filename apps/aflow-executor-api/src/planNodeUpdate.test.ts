@@ -36,30 +36,36 @@ beforeEach(() => {
   vi.clearAllMocks();
   state.mockResolvedValue({ trigger: 'schedule', planResident: true });
 });
-it('reads the platform publication and GitHub inside the executor step', async () => {
-  attest.mockImplementation(async (_db, _tenant, _space, _url, _node, readers) => {
-    await readers.readBinding('github', 'getPullRequest', { pull_number: '1' });
-    return true;
-  });
-  update.mockImplementation(async (context) => {
-    expect(context.resident).toBe(true);
-    expect(await context.readMergedPullRequest('https://github.com/o/r/pull/1', nodeId)).toBe(true);
-    return { ok: true, node: { nodeId } };
-  });
-  expect(await executePlanNodeUpdate(ctx, deps)).toMatchObject({ status: 'SUCCEEDED' });
-  expect(binding).toHaveBeenCalledWith(
-    expect.objectContaining({
-      ...deps,
-      tenantId: 'tenant',
-      spaceId: 'space',
-      runId: 'session',
-      credentialOwnerId: 'person',
-    }),
-    'github',
-    'getPullRequest',
-    { pull_number: '1' },
-  );
-});
+it.each([true, false])(
+  'reads the platform publication and GitHub for scheduled marker %s',
+  async (planResident) => {
+    state.mockResolvedValue({ trigger: 'schedule', planResident });
+    attest.mockImplementation(async (_db, _tenant, _space, _url, _node, readers) => {
+      await readers.readBinding('github', 'getPullRequest', { pull_number: '1' });
+      return true;
+    });
+    update.mockImplementation(async (context) => {
+      expect(context.resident).toBe(true);
+      expect(await context.readMergedPullRequest('https://github.com/o/r/pull/1', nodeId)).toBe(
+        true,
+      );
+      return { ok: true, node: { nodeId } };
+    });
+    expect(await executePlanNodeUpdate(ctx, deps)).toMatchObject({ status: 'SUCCEEDED' });
+    expect(binding).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ...deps,
+        tenantId: 'tenant',
+        spaceId: 'space',
+        runId: 'session',
+        credentialOwnerId: 'person',
+      }),
+      'github',
+      'getPullRequest',
+      { pull_number: '1' },
+    );
+  },
+);
 it('reports attestation failures as retryable step errors', async () => {
   update.mockResolvedValue({
     ok: false,

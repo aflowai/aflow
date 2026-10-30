@@ -3,7 +3,8 @@ import { restrictedPlanWriteAuthority } from './writeAuthority.js';
 
 it.each([
   [{ trigger: 'schedule', planResident: true }, true],
-  [{ trigger: 'schedule', planResident: false }, false],
+  [{ trigger: 'schedule', planResident: false }, true],
+  [{ trigger: 'schedule', planResident: false, activatedByPerson: true }, true],
   [{ trigger: 'schedule' }, true],
   [null, true],
   [{}, true],

@@ -20,7 +20,8 @@ import {
   restrictedPlanWriteAuthority,
   type PlanWriteContext,
 } from '@aflow/cybernetic-runtime';
-import { addStepJob, getSessionState } from '@aflow/redis';
+import { getSessionState } from '@aflow/redis';
+import { dispatchOrWaitOnExecutor } from '../../../scheduling/executorWait.js';
 import { sessionUser } from '../sessionUser.js';
 import type { InlineHandlerArgs } from '../types.js';
 import { emitStepSuccess } from '../helpers.js';
@@ -68,7 +69,8 @@ export async function handlePlanNodeUpdate(
   const context = await planWriteContext(args);
   if (context.resident && input.status === 'done') {
     const credentialOwnerId = await sessionUser(args);
-    await addStepJob(
+    const state = await getSessionState(args.redis, args.context.tenantId, args.context.runId);
+    await dispatchOrWaitOnExecutor(
       args.redis,
       StepJobMessageSchema.parse({
         tenantId: args.context.tenantId,
@@ -87,6 +89,7 @@ export async function handlePlanNodeUpdate(
         attempt: args.attempt,
         scheduledAtMs: args.scheduledAtMs,
         credentialOwnerId,
+        activatedByPerson: state?.activatedByPerson,
       }),
     );
     return;

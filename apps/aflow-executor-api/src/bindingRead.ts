@@ -78,6 +78,7 @@ export async function readBindingEndpoint(
   if (typeof value !== 'object' || value === null) throw new Error('Invalid GitHub response');
   const output = value as Record<string, unknown>;
   if (
+    output['backend'] !== 'http' ||
     typeof output['statusCode'] !== 'number' ||
     output['statusCode'] < 200 ||
     output['statusCode'] >= 300

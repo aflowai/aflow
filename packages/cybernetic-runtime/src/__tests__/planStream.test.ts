@@ -43,6 +43,7 @@ import {
 import { InMemoryPlanNodeStore } from './planStoreFake.js';
 import { carrierNode } from '../plan/carrier.js';
 import { planAsk, listAskedNodes, askedKey } from '../plan/asks.js';
+import { restrictedPlanWriteAuthority } from '../plan/writeAuthority.js';
 
 vi.mock('../logger.js', () => ({ logCyberneticError: vi.fn() }));
 
@@ -1925,6 +1926,42 @@ describe('the open write (Plan 332 D6, Plan 331 D5)', () => {
 });
 
 describe('resident review regressions', () => {
+  it('refuses active creation, approval, drop and unattested close for other scheduled sessions', async () => {
+    const ctx = {
+      ...session(),
+      actorKind: 'agent' as const,
+      resident: restrictedPlanWriteAuthority({ trigger: 'schedule', planResident: false }),
+    };
+    expect(
+      await createPlanNode(ctx, { kind: 'execute', title: 'Unapproved', goal: 'g', criteria: 'c' }),
+    ).toMatchObject({ ok: false, code: 'PLAN_NODE_RESIDENT_SCOPE' });
+    const proposal = await created({ proposed: 'Needs approval' });
+    expect(
+      await updatePlanNode(ctx, {
+        nodeId: proposal.nodeId,
+        expectedRevision: proposal.revision,
+        status: 'active',
+      }),
+    ).toMatchObject({ ok: false, code: 'PLAN_NODE_RESIDENT_SCOPE' });
+    const node = await created();
+    expect(
+      await updatePlanNode(ctx, {
+        nodeId: node.nodeId,
+        expectedRevision: node.revision,
+        status: 'dropped',
+        outcome: 'Drop',
+      }),
+    ).toMatchObject({ ok: false, code: 'PLAN_NODE_RESIDENT_SCOPE' });
+    expect(
+      await updatePlanNode(ctx, {
+        nodeId: node.nodeId,
+        expectedRevision: node.revision,
+        status: 'done',
+        outcome: 'Met',
+      }),
+    ).toMatchObject({ ok: false });
+    expect((await current(node.nodeId)).status).toBe('active');
+  });
   it('requires GitHub to attest the linked merge during each scheduled close', async () => {
     const root = await created();
     const node = await created({ parentId: root.nodeId });

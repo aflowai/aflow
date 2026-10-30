@@ -1,5 +1,6 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import type { PayloadStore } from '@aflow/payload-store';
+import { successWithData } from '@aflow/executor-runtime';
 import type { Redis } from '@aflow/redis';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 const { resolve, simulate, live } = vi.hoisted(() => ({
@@ -45,7 +46,7 @@ beforeEach(() => {
   data.clear();
 });
 
-it('routes a simulated merge read through the binding simulation without live egress', async () => {
+it('refuses a simulated merged answer as attestation', async () => {
   resolve.mockResolvedValue({
     apiId: 'github',
     endpointId: 'getPullRequest',
@@ -55,9 +56,9 @@ it('routes a simulated merge read through the binding simulation without live eg
     simulation: { bindingId: 'github', simulationId: 'world', apiId: 'github' },
   });
   simulate.mockResolvedValue({ status: 200, body: { merged: true }, rung: 'code' });
-  expect(await readBindingEndpoint(deps, 'github', 'getPullRequest', { pull_number: '1' })).toEqual(
-    { merged: true },
-  );
+  await expect(
+    readBindingEndpoint(deps, 'github', 'getPullRequest', { pull_number: '1' }),
+  ).rejects.toThrow('attestation request failed');
   expect(simulate).toHaveBeenCalledOnce();
   expect(resolve.mock.calls[0]?.[2]?.job.credentialOwnerId).toBe('operator');
   expect(live).not.toHaveBeenCalled();
@@ -80,6 +81,30 @@ it('uses the API executor egress path for a live merge read', async () => {
   expect(simulate).not.toHaveBeenCalled();
 });
 
+it.each(['http', 'simulated', 'fulfilled', undefined])(
+  'accepts only a live response backend (%s)',
+  async (backend) => {
+    resolve.mockResolvedValue({
+      apiId: 'github',
+      endpointId: 'getPullRequest',
+      method: 'GET',
+      url: 'https://api.github.com/repos/owner/repo/pulls/1',
+      headers: {},
+      egressPolicy: {},
+    });
+    live.mockImplementation(async (ctx) =>
+      successWithData(ctx, {
+        statusCode: 200,
+        backend,
+        data: { merged: true },
+      }),
+    );
+    const read = readBindingEndpoint(deps, 'github', 'getPullRequest', {});
+    if (backend === 'http') await expect(read).resolves.toEqual({ merged: true });
+    else await expect(read).rejects.toThrow('attestation request failed');
+  },
+);
+
 it('throws on GitHub 5xx so a later wake can retry', async () => {
   resolve.mockResolvedValue({
     apiId: 'github',
@@ -87,8 +112,14 @@ it('throws on GitHub 5xx so a later wake can retry', async () => {
     method: 'GET',
     url: 'https://api.github.com/repos/owner/repo/pulls/1',
     headers: {},
-    simulation: { bindingId: 'github', simulationId: 'world', apiId: 'github' },
+    egressPolicy: {},
   });
-  simulate.mockResolvedValue({ status: 503, body: { message: 'Unavailable' }, rung: 'code' });
+  live.mockImplementation(async (ctx) =>
+    successWithData(ctx, {
+      statusCode: 503,
+      backend: 'http',
+      data: { message: 'Unavailable' },
+    }),
+  );
   await expect(readBindingEndpoint(deps, 'github', 'getPullRequest', {})).rejects.toThrow();
 });

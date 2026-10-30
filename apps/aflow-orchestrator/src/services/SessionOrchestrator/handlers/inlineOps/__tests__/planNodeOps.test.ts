@@ -4,6 +4,7 @@
  * validation errors carrying their details, the writing session recorded.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { NoExecutorAvailableError } from '@aflow/redis';
 import {
   PLAN_NODE_DONE_NEEDS_OUTCOME_MESSAGE,
   PLAN_BOARD_DECISIONS_DEFAULT,
@@ -18,7 +19,14 @@ const mockAddStepJob = vi.fn();
 const mockAddStepResult = vi.fn();
 const mockGetSessionStateSafe = vi.fn();
 const mockGetSessionState = vi.fn();
-vi.mock('@aflow/redis', () => ({
+const mockUpdateStepState = vi.fn();
+const mockScheduleShardTimer = vi.fn();
+const mockAppendSessionEvent = vi.fn();
+vi.mock('@aflow/redis', async (original) => ({
+  ...(await original<typeof import('@aflow/redis')>()),
+  updateStepState: (...args: unknown[]) => mockUpdateStepState(...args),
+  scheduleShardTimer: (...args: unknown[]) => mockScheduleShardTimer(...args),
+  appendSessionEvent: (...args: unknown[]) => mockAppendSessionEvent(...args),
   addStepResult: (...args: unknown[]) => mockAddStepResult(...args),
   addStepJob: (...args: unknown[]) => mockAddStepJob(...args),
   getSessionStateSafe: (...args: unknown[]) => mockGetSessionStateSafe(...args),
@@ -137,8 +145,50 @@ beforeEach(() => {
 });
 
 describe('plan.node.update', () => {
+  it('parks a scheduled close and signals waiting when the API executor is absent', async () => {
+    mockGetSessionState.mockResolvedValue({
+      trigger: 'schedule',
+      planResident: false,
+      activatedByPerson: true,
+    });
+    mockAddStepJob.mockRejectedValueOnce(new NoExecutorAvailableError('api'));
+    mockAppendSessionEvent.mockResolvedValue(undefined);
+    const args = makeArgs('plan.node.update', {
+      nodeId: NODE_ID,
+      expectedRevision: 2,
+      status: 'done',
+      outcome: 'Met',
+    });
+    args.scheduledAtMs = 1;
+    await handlePlanNodeInline(args);
+    expect(mockUpdateStepState).toHaveBeenCalledWith(
+      args.redis,
+      TENANT,
+      args.stepExecutionId,
+      expect.objectContaining({
+        executorWait: expect.objectContaining({
+          job: expect.objectContaining({ activatedByPerson: true, stepType: 'api' }),
+        }),
+      }),
+    );
+    expect(mockScheduleShardTimer).toHaveBeenCalledWith(
+      args.redis,
+      expect.objectContaining({ reason: 'executor_wait' }),
+    );
+    expect(mockAppendSessionEvent).toHaveBeenCalledWith(
+      args.redis,
+      TENANT,
+      SESSION,
+      expect.objectContaining({ eventType: 'StepWaitingOnExecutor' }),
+    );
+    expect(mockUpdatePlanNode).not.toHaveBeenCalled();
+  });
   it('dispatches the attested close as the existing step without reading credentials or GitHub locally', async () => {
-    mockGetSessionState.mockResolvedValueOnce({ trigger: 'schedule', planResident: true });
+    mockGetSessionState.mockResolvedValue({
+      trigger: 'schedule',
+      planResident: false,
+      activatedByPerson: true,
+    });
     const args = makeArgs('plan.node.update', {
       nodeId: NODE_ID,
       expectedRevision: 2,
@@ -156,6 +206,7 @@ describe('plan.node.update', () => {
         stepType: 'api',
         sessionId: SESSION,
         spaceId: SPACE,
+        activatedByPerson: true,
       }),
     );
     expect(mockReadMergedPullRequest).not.toHaveBeenCalled();
@@ -164,7 +215,7 @@ describe('plan.node.update', () => {
   });
   it.each([
     [{ trigger: 'schedule', planResident: true }, true],
-    [{ trigger: 'schedule', planResident: false }, false],
+    [{ trigger: 'schedule', planResident: false }, true],
     [{ trigger: 'schedule' }, true],
     [{}, true],
     [{ planResident: false, trigger: 'webhook', activatedByPerson: true }, false],
@@ -628,7 +679,7 @@ describe('resident provenance', () => {
   it('restricts scheduled runs and fails closed when provenance is unavailable', async () => {
     for (const [state, resident] of [
       [{ trigger: 'schedule', planResident: true }, true],
-      [{ trigger: 'schedule', planResident: false }, false],
+      [{ trigger: 'schedule', planResident: false }, true],
       [{ trigger: 'schedule' }, true],
       [{ planResident: false, trigger: 'chat' }, false],
       [null, true],

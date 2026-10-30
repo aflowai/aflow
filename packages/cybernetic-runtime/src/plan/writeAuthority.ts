@@ -6,6 +6,6 @@ export function restrictedPlanWriteAuthority(
   } | null,
 ): boolean {
   if (!state?.trigger) return true;
-  if (state.trigger === 'schedule') return state.planResident !== false;
+  if (state.trigger === 'schedule') return true;
   return !['chat', 'voice'].includes(state.trigger) && state.activatedByPerson !== true;
 }
