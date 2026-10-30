@@ -764,6 +764,14 @@ export const authPlugin = fp(
       },
     );
 
+    // Plan 335 P2's profile-adding route calls this once the second profile is
+    // written. Otherwise a cached count of one keeps granting a browser with no
+    // session the sole-profile owner until the count expires. P1 adds no
+    // profile, so nothing calls it yet.
+    fastify.decorate('dropLocalProfileCount', (): void => {
+      localProfileCountInPinnedTenant.drop();
+    });
+
     const localProfileSessionGeneration = (userId: string): Promise<number | null> => {
       const db = fastify.appContext?.db as PostgresJsDatabase | undefined;
       if (!db) return Promise.reject(new Error('No database to read the profile session from'));
@@ -1042,5 +1050,7 @@ export const authPlugin = fp(
 declare module 'fastify' {
   interface FastifyInstance {
     authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+    /** Forgets the local edition's cached profile count. The next request reads it again. */
+    dropLocalProfileCount: () => void;
   }
 }

@@ -161,6 +161,11 @@ export const LOCAL_PROFILE_COUNT_TTL_MS = 5_000;
  */
 export type LocalProfileCount = 'one' | 'several' | 'unread';
 
+/** The cached count, and the hook that forgets it. */
+export type CachedLocalProfileCount = (() => Promise<LocalProfileCount>) & {
+  drop: () => void;
+};
+
 /**
  * `read`, answered from memory between reads.
  *
@@ -175,6 +180,10 @@ export type LocalProfileCount = 'one' | 'several' | 'unread';
  * or a stale count of one. A second profile may exist in either case, so
  * neither may grant the sole-profile owner (Plan 335 §10). The failure is not
  * cached, so the next request reads again.
+ *
+ * `drop` forgets the count, so the next request reads it again. A read already
+ * in flight still answers its callers but no longer fills the cache, because
+ * it may have started before the change that prompted the drop.
  */
 export function cacheLocalProfileCount(
   read: () => Promise<boolean>,
@@ -183,22 +192,24 @@ export function cacheLocalProfileCount(
     now?: () => number;
     onReadError?: (err: unknown) => void;
   } = {},
-): () => Promise<LocalProfileCount> {
+): CachedLocalProfileCount {
   const ttlMs = opts.ttlMs ?? LOCAL_PROFILE_COUNT_TTL_MS;
   const now = opts.now ?? Date.now;
   let cached: { several: boolean; readAt: number } | undefined;
   let inFlight: Promise<LocalProfileCount> | undefined;
+  let epoch = 0;
   const answer = (several: boolean): LocalProfileCount => (several ? 'several' : 'one');
 
-  return () => {
+  const count = () => {
     if (cached !== undefined && now() - cached.readAt < ttlMs) {
       return Promise.resolve(answer(cached.several));
     }
     if (inFlight !== undefined) return inFlight;
+    const readEpoch = epoch;
     const pending = (async (): Promise<LocalProfileCount> => {
       try {
         const several = await read();
-        cached = { several, readAt: now() };
+        if (readEpoch === epoch) cached = { several, readAt: now() };
         return answer(several);
       } catch (err) {
         opts.onReadError?.(err);
@@ -211,4 +222,12 @@ export function cacheLocalProfileCount(
     });
     return pending;
   };
+
+  return Object.assign(count, {
+    drop: (): void => {
+      epoch += 1;
+      cached = undefined;
+      inFlight = undefined;
+    },
+  });
 }

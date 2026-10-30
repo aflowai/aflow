@@ -388,6 +388,34 @@ describe('the profile count cache', () => {
     expect(read).toHaveBeenCalledTimes(2);
   });
 
+  it('reads again on the next request once the count is dropped', async () => {
+    const read = vi.fn<() => Promise<boolean>>().mockResolvedValueOnce(false);
+    read.mockResolvedValueOnce(true);
+    const count = cacheLocalProfileCount(read, { ttlMs: 5_000, now: clock().now });
+    expect(await asBrowser(count)).toMatchObject(SOLE_PROFILE_OWNER);
+    count.drop();
+    expect(await asBrowser(count)).toMatchObject({
+      kind: 'refused',
+      code: 'PROFILE_SESSION_REQUIRED',
+    });
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps a read in flight at the drop out of the cache', async () => {
+    let finish: (several: boolean) => void = () => undefined;
+    const read = vi
+      .fn<() => Promise<boolean>>()
+      .mockReturnValueOnce(new Promise((resolve) => (finish = resolve)))
+      .mockResolvedValueOnce(true);
+    const count = cacheLocalProfileCount(read, { ttlMs: 5_000, now: clock().now });
+    const early = count();
+    count.drop();
+    finish(false);
+    expect(await early).toBe('one');
+    expect(await count()).toBe('several');
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
   it('shares one read between concurrent callers on a cold cache', async () => {
     const read = vi.fn(READS_TWO);
     const count = cacheLocalProfileCount(read, { ttlMs: 5_000, now: clock().now });
