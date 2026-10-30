@@ -1,6 +1,6 @@
 # Plan 335 — Local profiles: several people share one install
 
-**Status:** 🚧 P1 built under option A (§11). P2 to P5 are not built. This document reads the code as it stood, judges three shapes for a profile and proposes phases.
+**Status:** 🚧 P1 built under option A (§11). P2 built (§12). P3 to P5 are not built. This document reads the code as it stood, judges three shapes for a profile and proposes phases.
 
 **Builds on:** Plan 315 (the local edition's first run), Plan 330 (the first space a fresh install gets), Plan 334 (the first-run card in the empty chat).
 
@@ -323,3 +323,46 @@ The owner shortcut at `tenant.ts` applies only to the `sole-profile` principal. 
 - `localInstanceAuth.test.ts` covers the rule on each install for a browser and for a bare-secret caller. It also covers the count cache warm, cold and after a failed read. It shows that neither a count never read nor a stale count of one grants a browser the owner. It covers the session's generation check and a failed generation read.
 - `tenantPinning.test.ts` shows that only the sole-profile principal skips the membership read.
 - `localProfiles.pg.test.ts` runs the auth and tenant plugins on a bootstrapped install. It then adds a second profile through the `seedLocalProfile` fixture and covers the §10 cases this phase owns. It also shows that a bumped generation ends a session issued before the bump.
+
+## 12. P2 — as built
+
+P2 adds the routes and the screen that make and remove profiles. It adds no table and no column.
+
+### The routes
+
+- **Where.** `/v1/local-profiles` lists, adds, renames, sets the avatar, previews a removal and removes (`packages/server-runtime/src/routes/localProfiles.ts`). The service is `packages/server-runtime/src/services/localProfiles.ts`. The shapes are in `packages/schemas/src/edition/localProfiles.ts`.
+- **Which edition.** The surface is `core`, as host pairing is. The hosted edition registers it and answers every call with a 404 before authentication.
+- **Who.** The owner role alone. The owner's profile session, the bare secret and the sole-profile owner all resolve to it. The route states the rule itself as well as through `owner_admin`, because the authz plugin grants `owner_admin` to an admin when Redis is down.
+- **The count.** Adding and removing call `fastify.dropLocalProfileCount`, so the rule in §11 takes effect on the next request.
+
+### Adding a profile
+
+- One transaction writes the user, an active `member` membership and the profile's first space.
+- The space comes from `createLocalProfileWorkspace` in `bootstrap/localEdition.ts`. It runs bootstrap's own steps: the `Personal` row with compute off, the admin membership and the default capability profile. Bootstrap now calls the same three steps for the owner.
+- The slug is `personal-` and the first twelve hex digits of the user id. Slugs are unique in the one tenant schema, and the owner may hold `personal`.
+- **No email.** The user carries none, as §5 says. The P2 brief asked for a `@phoenix.local` identity. §2.3 shows that address belongs to the development bypass user, and §5 rules it out for a profile, so this document was followed.
+- **The avatar.** One of eight built-in avatars, stored in `users.avatar_url` as `aflow-avatar:<key>`. `realAvatarUrl` treats the value as no picture, and `UserAvatar` draws the glyph.
+
+### Removing a profile
+
+- The owner cannot be removed.
+- Removal runs the account erasure cascade (`accountCascade.ts`), as D2 says. It deletes the spaces only that profile is in. It hands the spaces the profile owns and shares to the owner. It deletes the user, and its memberships go with it. The tenant and every other profile stay.
+- Removal first calls `bumpLocalProfileSessionGeneration`, so a session in use is refused from that moment. After the cascade it evicts the user's cached tenant role and publishes the RBAC invalidation. Without the eviction a deleted membership could still answer for up to the cache's lifetime.
+- Removal refuses a user with a membership in another tenant, because the cascade would erase it there too. A profile has none, so such a user is not one these routes made.
+- Payload objects of the deleted sessions stay where the payload store keeps them. Space purge leaves them the same way.
+
+### Settings → Profiles
+
+- `TenantProfilesPage` lists the profiles with their avatars and offers **Add profile**, **Edit** and **Remove**. Removal shows what the cascade would delete before it asks.
+- The tab is gated on the edition and the owner role, never on a surface name. The route ships in the local build only.
+
+### A gap P3 closes
+
+Nothing issues a profile session until P3's picker. So once a second profile exists, every browser gets 401 `PROFILE_SESSION_REQUIRED`, the owner's included. The add dialog says so before the second profile is made. The bare secret still reaches `DELETE /v1/local-profiles/:userId`, which ends the state. Ship P2 to an operator only with P3.
+
+### Tests
+
+- `routes/localProfiles.test.ts` covers the refusal outside the local edition and the refusal of a member and an admin session. It shows that an add and a removal drop the count and a refused removal does not.
+- `services/localProfiles.test.ts` shows that removal bumps the generation before the cascade and evicts the cached role after it.
+- `routes/localProfiles.pg.test.ts` runs the real plugins on a bootstrapped install with the count cached for its usual lifetime. A profile added there has its own `Personal` space and lists none of the owner's. The owner sees that space as a name only. Rename and avatar persist. A member session and an admin from the seed fixture are refused on every route. Removal ends the profile's session, drops the count and leaves the tenant and the owner.
+- `tenant-settings/tabs.test.ts` shows the tab only for the local owner.

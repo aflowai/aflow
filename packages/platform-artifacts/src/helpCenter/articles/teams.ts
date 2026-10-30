@@ -37,7 +37,7 @@ Organisation-wide membership and invitations are under **Tenant Admin** at the f
 
 ## In Aflow Local
 
-Aflow Local has one owner and no other members, so it has no People entry and no Members tab.`,
+Aflow Local has no invitations, no People entry and no Members tab. Several people share it as profiles instead, which its owner adds under **Settings** → **Profiles**. Each profile starts with a space of its own and does not see the others' spaces.`,
     editions: ['enterprise'],
     anchors: { routes: ['s/[space]/settings/members'], operations: [] },
     related: ['what-is-a-space', 'api-keys', 'local-edition-limits'],
