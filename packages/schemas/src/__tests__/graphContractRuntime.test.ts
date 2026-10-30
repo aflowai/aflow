@@ -9,6 +9,7 @@ import {
   ContractErrorSchema,
   ComposedWorkflowSchema,
   StagedChangeOpSchema,
+  CoachProposableOpSchema,
   WorkflowSchema,
 } from '../index.js';
 
@@ -435,6 +436,26 @@ describe('Plan 123 — author-boundary refusal of inputContract (P1)', () => {
       expect(issue).toBeDefined();
       expect(issue?.message).toMatch(/inputContract is derived at assemble time/i);
     }
+  });
+
+  it('StagedChangeOp replace_task stores a task with its assembler-derived inputContract', () => {
+    // A patch stages replace_task from the stored task. Storage must read back
+    // what it stores, while the Coach's authoring union still refuses it.
+    const op = {
+      op: 'replace_task',
+      taskId: baseAgentTask.taskId,
+      task: {
+        ...baseAgentTask,
+        inputBindings: { question: { kind: 'run_input', path: 'question' } },
+        inputContract: {
+          bindings: {
+            question: { kind: 'run_input', bindAs: 'question', path: 'question', schema: {} },
+          },
+        },
+      },
+    };
+    expect(StagedChangeOpSchema.safeParse(op).success).toBe(true);
+    expect(CoachProposableOpSchema.safeParse(op).success).toBe(false);
   });
 
   it('WorkflowTaskSchema (runtime/persisted) STILL accepts inputContract (assembler-emitted)', () => {

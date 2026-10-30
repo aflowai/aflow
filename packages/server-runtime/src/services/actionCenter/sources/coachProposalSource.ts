@@ -1,5 +1,11 @@
 import { createMemoryDocRepository, createTenantContext } from '@aflow/database';
-import { PROPOSAL_DIRS, tryParseStagedChangeDoc } from '@aflow/cybernetic-runtime';
+import {
+  PROPOSAL_DIRS,
+  createStagedChangeDocReader,
+  describeStagedChangeReadFailure,
+  readStagedChange,
+  tryParseStagedChangeDoc,
+} from '@aflow/cybernetic-runtime';
 import { type ActionCenterItemOrigin, type StagedChange } from '@aflow/schemas';
 import { deriveCoachProposalProjection } from '../../cybernetic/coachProposalProjection.js';
 import {
@@ -39,9 +45,21 @@ export function createCoachProposalSource(deps: ActionCenterSourceDeps): ActionC
     async getById(ctx, itemId): Promise<ActionCenterSourceItem | null> {
       if (!itemId.startsWith(PROPOSAL_ITEM_ID_PREFIX)) return null;
       const proposalId = itemId.slice(PROPOSAL_ITEM_ID_PREFIX.length);
-      const sc = await loadProposal(deps.db, ctx.tenantId, ctx.spaceId, proposalId);
-      if (!sc) return null;
-      return toActionCenterItem(sc, ctx);
+      const read = await readStagedChange(createStagedChangeDocReader(deps.db, ctx.tenantId), {
+        tenantId: ctx.tenantId,
+        spaceId: ctx.spaceId,
+        proposalId,
+        reader: 'coachProposalSource.getById',
+      });
+      if (read.ok) return toActionCenterItem(read.staged, ctx);
+      if (read.reason === 'not_found') return null;
+      // A proposal that exists but cannot be shown is not a missing one: say why.
+      throw new ActionCenterResolveError(
+        'NOT_FOUND',
+        `Proposal ${proposalId} in space ${ctx.spaceId} cannot be shown. ${describeStagedChangeReadFailure(read)}`,
+        'permanent',
+        read.reason,
+      );
     },
 
     async resolve(ctx, item, resolution): Promise<ActionCenterResolveOutcome> {

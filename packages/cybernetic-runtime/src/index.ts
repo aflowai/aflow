@@ -115,9 +115,11 @@ export * from './stagedChange/preconditions.js';
 export * from './stagedChange/proactiveStalenessSweep.js';
 export {
   tryParseStagedChangeDoc,
+  describeZodIssues,
   type StagedChangeParseContext,
   type StagedChangeParseResult,
 } from './stagedChange/tryParseStagedChangeDoc.js';
+export * from './stagedChange/readStagedChange.js';
 export * from './stagedChange/proposalValidations.js';
 export * from './stagedChange/loadCapabilitySnapshot.js';
 export * from './operationTaskApiRefs.js';

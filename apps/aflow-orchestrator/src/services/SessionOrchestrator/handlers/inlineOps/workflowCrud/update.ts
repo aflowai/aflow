@@ -7,7 +7,7 @@ import type {
   StagedChangeOp,
   SkillManifest,
 } from '@aflow/schemas';
-import { WorkflowSchema } from '@aflow/schemas';
+import { StagedChangeSchema, WorkflowSchema } from '@aflow/schemas';
 import { applyJsonPatch, JsonPatchError } from '@aflow/lib';
 import {
   runWorkflowProposalValidations,
@@ -22,6 +22,7 @@ import {
   renderSkillDiagnostics,
   resolveCampaignManifestParams,
   resolveSkillForWorkflow,
+  describeZodIssues,
 } from '@aflow/cybernetic-runtime';
 import {
   convertWorkflowPatchToStagedOps,
@@ -386,6 +387,20 @@ export async function handleWorkflowPatch(
     pinnedRevision: existing.revision,
     preconditions,
   };
+
+  // The store reads a proposal back through StagedChangeSchema, so a shape it
+  // refuses is refused here: written, it would return an id nothing can read.
+  const storable = StagedChangeSchema.safeParse(stagedChange);
+  if (!storable.success) {
+    await emitStepError(
+      args,
+      'WORKFLOW_PATCH_UNSTORABLE',
+      `The patch lowers to a proposal the proposal store cannot read back, so nothing was proposed. What fails: ${describeZodIssues(storable.error.issues)}`,
+      startTime,
+      'validation',
+    );
+    return;
+  }
 
   const proposalDir =
     resolutionRoute === 'platform_issue' ? '/coach/platform-issues' : '/coach/staged';

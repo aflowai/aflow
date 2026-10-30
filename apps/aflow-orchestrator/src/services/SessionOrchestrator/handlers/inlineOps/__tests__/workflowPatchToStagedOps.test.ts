@@ -625,3 +625,52 @@ describe('a refused patch shape points at a patch, never at replacing the workfl
     expect(out.unsupported[1]).toContain("operator's decision");
   });
 });
+
+describe('a lowered op is held to the shape the proposal store reads back', () => {
+  it('refuses a goal longer than a stored update_task_goal holds', () => {
+    const out = convertWorkflowPatchToStagedOps(
+      [{ op: 'replace', path: '/tasks/0/goal', value: 'x'.repeat(4001) }],
+      makeWorkflow(),
+    );
+    expect(out.ops).toEqual([]);
+    expect(out.unsupported[0]).toContain(
+      'lowers to a update_task_goal op the proposal store refuses',
+    );
+    expect(out.unsupported[0]).toContain('newGoal');
+  });
+
+  it('refuses an iteration policy the store refuses', () => {
+    const out = convertWorkflowPatchToStagedOps(
+      [
+        {
+          op: 'replace',
+          path: '/iteration',
+          value: { auto: false, maxConsecutiveRuns: 500, stopOnOutcomesMet: true, cooldownMs: 0 },
+        },
+      ],
+      makeWorkflow(),
+    );
+    expect(out.unsupported[0]).toContain('maxConsecutiveRuns');
+  });
+
+  it('refuses an added task that declares the derived inputContract', () => {
+    const out = convertWorkflowPatchToStagedOps(
+      [
+        {
+          op: 'add',
+          path: '/tasks/-',
+          value: {
+            taskId: 'extra',
+            name: 'Extra',
+            goal: 'Do more.',
+            type: 'agent',
+            dependsOn: ['hydrate'],
+            inputContract: { bindings: {} },
+          },
+        },
+      ],
+      makeWorkflow(),
+    );
+    expect(out.unsupported[0]).toContain('task.inputContract');
+  });
+});

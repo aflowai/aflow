@@ -7,9 +7,11 @@ import {
   WorkflowStateVariableSchema,
   SkillGoalSchema,
   CampaignContractFieldSchema,
+  StagedChangeOpSchema,
 } from '@aflow/schemas';
 import type { WorkflowPatchInput } from '@aflow/schemas';
 import { applyJsonPatch, JsonPatchError } from '@aflow/lib';
+import { describeZodIssues } from '@aflow/cybernetic-runtime';
 
 /** The slice of the manifest a `workflow.manage.patch` may edit via `/goal` + `/campaign`. */
 export interface ManifestPatchDoc {
@@ -217,6 +219,11 @@ function convertTaskPatch(
         unsupported: `${op.op} ${op.path} would change taskId from "${taskId}" to "${parse.data.taskId}". Task identity is immutable; add a new task and remove the old one instead.`,
       };
     }
+    if (!sameDerivedFields(task, parse.data)) {
+      return {
+        unsupported: `${op.op} ${op.path} would change task "${taskId}"'s inputContract or system_feedback bindings. The assembler derives both, so a patch may not author them. Edit inputBindings or the task's other fields instead.`,
+      };
+    }
     return { op: 'replace_task', taskId, task: parse.data } as StagedChangeOp;
   } catch (err) {
     const detail =
@@ -229,6 +236,37 @@ function convertTaskPatch(
       unsupported: `${op.op} ${op.path} cannot be applied to task "${taskId}": ${detail}`,
     };
   }
+}
+
+/** The fields the assembler derives on a stored task, which a patch may carry but not change. */
+function derivedFields(task: Workflow['tasks'][number]): string {
+  const feedback = Object.entries(task.inputBindings ?? {}).filter(
+    ([, binding]) => binding.kind === 'system_feedback',
+  );
+  return JSON.stringify({ inputContract: task.inputContract ?? null, feedback });
+}
+
+function sameDerivedFields(
+  before: Workflow['tasks'][number],
+  after: Workflow['tasks'][number],
+): boolean {
+  return derivedFields(before) === derivedFields(after);
+}
+
+/**
+ * Hold a lowered op to the shape the proposal store reads back. An op the
+ * store refuses would be written, return its id and then never be readable.
+ */
+function storable(
+  jp: WorkflowPatchInput['operations'][number],
+  out: StagedChangeOp | { unsupported: string },
+): StagedChangeOp | { unsupported: string } {
+  if ('unsupported' in out) return out;
+  const parsed = StagedChangeOpSchema.safeParse(out);
+  if (parsed.success) return out;
+  return {
+    unsupported: `${jp.op} ${jp.path} lowers to a ${out.op} op the proposal store refuses: ${describeZodIssues(parsed.error.issues)}`,
+  };
 }
 
 function convertWorkflowContractPatch(
@@ -587,7 +625,7 @@ export function convertManifestPatchToStagedOps(
   // contract. An all-removed contract is cleared back to undefined by the engine.
   if (!shadow.campaign) shadow.campaign = { fields: {} };
   for (const jp of jsonPatchOps) {
-    const out = convertManifestOne(jp, shadow);
+    const out = storable(jp, convertManifestOne(jp, shadow));
     if ('unsupported' in out) {
       unsupported.push(out.unsupported);
     } else {
@@ -619,7 +657,7 @@ export function convertWorkflowPatchToStagedOps(
   const unsupported: string[] = [];
   let shadow: Workflow = existing;
   for (const jp of jsonPatchOps) {
-    const out = convertOne(jp, shadow);
+    const out = storable(jp, convertOne(jp, shadow));
     if ('unsupported' in out) {
       unsupported.push(out.unsupported);
     } else {

@@ -28,6 +28,9 @@ import {
   loadRunById,
   getRunStatistics,
   tryParseStagedChangeDoc,
+  createStagedChangeDocReader,
+  describeStagedChangeReadFailure,
+  readStagedChange,
 } from '@aflow/cybernetic-runtime';
 import {
   dismissProposal,
@@ -244,17 +247,26 @@ export const proposalRoutes: FastifyPluginAsync = async (fastify) => {
         }),
         response: {
           200: z.object({ proposal: z.record(z.unknown()) }),
-          404: z.object({ error: z.string() }),
+          404: z.object({ error: z.string(), message: z.string().optional() }),
         },
       },
     },
     async (request, reply) => {
       const tenant = await request.requireTenant();
       const { spaceId, proposalId } = request.params;
-      const sc = await loadProposal(db, tenant.tenantId, spaceId, proposalId);
-      if (!sc) {
-        return reply.status(404).send({ error: 'Proposal not found' });
+      const read = await readStagedChange(createStagedChangeDocReader(db, tenant.tenantId), {
+        tenantId: tenant.tenantId,
+        spaceId,
+        proposalId,
+        reader: 'GET /proposals/:proposalId',
+      });
+      if (!read.ok) {
+        return reply.status(404).send({
+          error: read.reason === 'not_found' ? 'Proposal not found' : 'Proposal unreadable',
+          message: describeStagedChangeReadFailure(read),
+        });
       }
+      const sc = read.staged;
 
       // Before→after diff against the CURRENT workflow
       // (what ratify would apply onto). Best-effort: a missing/unparseable
