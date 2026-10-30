@@ -139,7 +139,7 @@ Option C looks like profiles and isolates nothing. It also has no answer to §5.
 This is the shape only. P1 designs it in full.
 
 - **The web says which profile.** After a profile is chosen, the browser holds an opaque profile session in an `httpOnly` cookie. The web process forwards it beside the instance secret.
-- **The API maps the session to a user.** `authenticateLocalInstance` returns the owner today (F6). With a valid profile session it returns that profile's user instead, still with `authMethod: 'local'`. A missing session keeps today's answer, the owner.
+- **The API maps the session to a user.** `authenticateLocalInstance` returns the owner today (F6). With a valid profile session it returns that profile's user instead, still with `authMethod: 'local'`. A missing session keeps today's answer, the owner. **That answer defeats the per-profile PIN of D3 at a shared browser.** A person who clears the cookie or opens a private window skips the picker and acts as the owner. The owner's own PIN then guards nothing. Every other PIN falls too, because the owner resets a forgotten PIN (D3). The code as it stands forces this answer. The web process attaches the instance secret to every call it forwards and reads no session (`apps/web-local/src/compose/localWebIdentity.ts:30-43`). The API makes the secret the owner with nothing else to read (`localInstanceAuth.ts:134-135`). `yarn mcp:setup` calls the API with the bare secret too (`scripts/mcp-local-setup.mjs:368`, `:379`). This outline does not settle what a missing session should mean. §8 question 7 carries it.
 - **The tenant plugin reads the membership.** The shortcut at `tenant.ts:319-324` applies to the owner only. Every other profile reads its `tenant_memberships` row, as a hosted user does (F7).
 - **Nothing in the run path changes.** Runs already carry their creator, and keys already resolve user first (F21).
 
@@ -168,7 +168,7 @@ Netflix and HBO Max share one pattern. A "Who's watching?" grid of avatars opens
 
 - A profile may set a PIN of four to six digits. The picker asks for it before it starts that profile's session.
 - The API checks the PIN and issues the session. The web does not decide it.
-- The PIN keeps one person at a shared browser out of another's profile. It is not a boundary against someone with the operator's OS account. That person can read `instance.env`, which holds the owner's authority (F2). The settings page says so in one sentence.
+- The PIN keeps one person at a shared browser out of another's profile. **This promise is conditional.** It holds only once a request with no profile session stops acting as the owner, and that needs later work (§3.4, §8 question 7). It is not a boundary against someone with the operator's OS account. That person can read `instance.env`, which holds the owner's authority (F2). The settings page says so in one sentence.
 - The owner resets a forgotten PIN.
 
 ### D4 — A restricted profile: a question, not a commitment
@@ -229,7 +229,7 @@ Under option A, if the phases below are approved:
 The reasons:
 
 1. **It uses what is built.** Users, memberships, space roles, redacted admin views, user-scoped keys and account erasure are all `core` (F13–F16, F21, F23).
-2. **It isolates what matters.** Spaces, memory, history, keys and spend attribution separate with no new rule in the run path.
+2. **It isolates what matters.** Spaces, memory, history and spend attribution separate with no new rule in the run path. Keys separate too, wherever a profile may hold them. Whether a non-owner profile may create API keys stays open (§8 question 4).
 3. **It shares what a household shares.** One machine, one set of model keys at tenant scope, and a space two profiles join on purpose.
 4. **It keeps the edition's core decision.** One tenant stays pinned, and backups stay as they are (F2).
 5. **It is the seam §5 needs.** An aflow.ai account later links to a user, as an Auth0 identity does in the hosted edition.
@@ -252,15 +252,16 @@ Option B is rejected because it breaks fixed tenancy and forbids sharing. Option
 1. Does the owner see other profiles' space names in the switcher, as a tenant admin does today (F15)? The alternative is a list filtered to the owner's own spaces in the local edition.
 2. Do profiles other than the owner hold `member` or `admin`? An `admin` sees every space name and can change tenant settings.
 3. Should a profile session end after idle time?
-4. May a non-owner profile create API keys? Today that needs `tenant` `write` (F23).
+4. May a non-owner profile create API keys? Today that needs `tenant` `write` (F23). Where a profile may hold keys, they are its own (§7 reason 2).
 5. Which model keys does a new profile get: the tenant's, its own, or a choice at creation?
 6. Who may pair the machine and bind folders in a profile's space? The machine is one and shared (F25).
+7. What does a request with no profile session mean once a second profile exists? Today it is the owner, and that defeats every PIN at a shared browser (§3.4, D3). Callers such as `yarn mcp:setup` hold the bare secret and expect the owner (F24). The answer decides whether D3's promise can hold.
 
 ## 9. Phases — proposed, pending the operator's choice
 
 **P0 — This document and its index row.** _Exit:_ the operator chooses an option and answers §8, or amends them.
 
-**P1 — The API serves more than one local user.** The profile session, the change to `authenticateLocalInstance` and the owner-only shortcut in the tenant plugin. A seeded second user is enough to test it. No UI. _Exit:_ the cases in §10 pass.
+**P1 — The API serves more than one local user.** The profile session, the change to `authenticateLocalInstance` and the owner-only shortcut in the tenant plugin. A seeded second user is enough to test it. No UI. P1 does not assume that a missing session may fall back to the owner. Its design waits on §8 question 7 and builds that answer. _Exit:_ the cases in §10 pass.
 
 **P2 — Profiles can be made and removed.** Routes to list, add, rename, set the avatar and remove, refused outside the local edition. A new profile gets its first space through bootstrap's steps. Settings → Profiles for the owner. _Exit:_ a profile added in Settings has its own `Personal` space and does not see the owner's.
 
@@ -279,6 +280,7 @@ Each of these cases fails if the change is wrong:
 - A second profile with a `member` role calls `GET /v1/spaces` and gets only its own spaces. The owner's `Personal` is absent.
 - Profile A stores a user-scoped OpenAI key. A run started by profile B resolves to the tenant key or to none. It never resolves to A's key.
 - The owner opens profile B's space by slug and gets the not-found state.
-- A request with the instance secret and no profile session is still the owner. A fresh install and `yarn mcp:setup` work unchanged.
+- On an install with one profile and no PIN, a request with the instance secret and no profile session is still the owner. A fresh install and `yarn mcp:setup` work unchanged.
+- On an install with a second profile, a browser request with no profile session does not act as the owner. Clearing the cookie or opening a private window reaches no locked profile, the owner's included. What it reaches instead waits on §8 question 7.
 - A profile session for a user without an active membership in the pinned tenant is refused with a 403.
 - A locked profile's session cannot start without the PIN, through the web or through a direct API call.
