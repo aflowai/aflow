@@ -56,11 +56,6 @@ vi.mock('@aflow/cybernetic-runtime', async () => {
     resolveSkillForWorkflow: vi.fn(async () => null),
     createStagedChangeDocReader: () => ({
       getByPath: async (path: string, spaceId: string) => store.get(key(spaceId, path)) ?? null,
-      otherSpacesHoldingPath: async (path: string, spaceId: string) =>
-        [...store.keys()]
-          .map((k) => k.split('|'))
-          .filter(([s, p]) => p === path && s !== spaceId)
-          .map(([s]) => s!),
     }),
   };
 });
@@ -200,6 +195,62 @@ describe('a proposal a patch returns is readable through proposal.get', () => {
     });
   });
 
+  it('reads back the contract derived from edited bindings, not the stale one', async () => {
+    const proposalId = await patch([
+      {
+        op: 'replace',
+        path: '/tasks/answer/inputBindings/question',
+        value: { kind: 'run_input', path: 'query' },
+      },
+    ]);
+
+    const read = await getProposal(proposalId);
+    expect(read.status).toBe('SUCCEEDED');
+    const proposal = (read.output as { proposal: Record<string, unknown> }).proposal;
+    const ops = (proposal['proposal'] as { ops: Array<Record<string, unknown>> }).ops;
+    expect(ops[0]).toMatchObject({
+      op: 'replace_task',
+      task: {
+        inputBindings: { question: { kind: 'run_input', path: 'query' } },
+        inputContract: {
+          bindings: { question: { kind: 'run_input', bindAs: 'question', path: 'query' } },
+        },
+      },
+    });
+  });
+
+  it('fails a bindings edit to a port the producer lacks, and stores nothing', async () => {
+    const workflow = composedWorkflow();
+    workflow.tasks = [
+      {
+        taskId: 'lookup',
+        name: 'Lookup',
+        goal: 'Look the question up.',
+        type: 'agent',
+        produces: [{ key: 'facts', shape: { type: 'string' }, semantics: 'data' }],
+      },
+      { ...workflow.tasks[0]!, dependsOn: ['lookup'] },
+    ];
+    store.set(key(SPACE, `/workflows/${SLUG}/workflow.json`), {
+      inlineContent: JSON.stringify(workflow),
+      deletedAt: null,
+    });
+    await handleWorkflowCrudInline(
+      args('workflow.manage.patch', 'workflow', {
+        slug: SLUG,
+        operations: [
+          {
+            op: 'add',
+            path: '/tasks/answer/inputBindings/prior',
+            value: { kind: 'task_output', taskId: 'lookup', path: 'missing-port' },
+          },
+        ],
+      }),
+    );
+    expect(lastResult().status).toBe('FAILED');
+    expect([...store.keys()].some((k) => k.includes('/coach/'))).toBe(false);
+  });
+
   it('refuses a patch that authors the derived inputContract, and stores nothing', async () => {
     await handleWorkflowCrudInline(
       args('workflow.manage.patch', 'workflow', {
@@ -240,14 +291,14 @@ describe('proposal.get names why a proposal cannot be read', () => {
     expect(message).toContain('status: Required');
   });
 
-  it('names the other space that holds the proposal', async () => {
+  it('reads a proposal another space holds as missing, naming no other space', async () => {
     store.set(key(OTHER_SPACE, `/coach/staged/${MISSING}.json`), {
       inlineContent: '{}',
       deletedAt: null,
     });
     const read = await getProposal(MISSING);
-    expect(read.error?.['code']).toBe('PROPOSAL_IN_OTHER_SPACE');
-    expect(read.error?.['details']).toMatchObject({ foundInSpaceIds: [OTHER_SPACE] });
+    expect(read.error?.['code']).toBe('PROPOSAL_NOT_FOUND');
+    expect(JSON.stringify(read.error)).not.toContain(OTHER_SPACE);
   });
 
   it('says a deleted proposal was deleted', async () => {

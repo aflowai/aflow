@@ -17,12 +17,15 @@ import {
   onProposalRatified,
   persistRatificationError,
   proactiveStalenessSweep,
-  PROPOSAL_DIRS,
+  createStagedChangeDocReader,
+  describeStagedChangeReadFailure,
   proposalPath,
   RatificationApplyError,
+  readStagedChange,
   recordRejectedFingerprint,
-  tryParseStagedChangeDoc,
   type ApplyResult,
+  type StagedChangeReadFailure,
+  type StagedChangeReadResult,
 } from '@aflow/cybernetic-runtime';
 import {
   EntityDirectivesSchema,
@@ -62,7 +65,13 @@ export type ProposalResolutionResult<S extends 'ratified' | 'rejected' | 'dismis
   | ProposalResolutionFailure;
 
 export type ProposalResolutionFailure =
-  | { ok: false; code: 'NOT_FOUND' }
+  | {
+      ok: false;
+      code: 'NOT_FOUND';
+      /** Why the proposal cannot be read: missing, deleted, unparseable or a refused path. */
+      reason: StagedChangeReadFailure['reason'];
+      detail: string;
+    }
   | { ok: false; code: 'ALREADY_RESOLVED'; status: string }
   | { ok: false; code: 'PROPOSAL_NOT_RATIFIABLE'; detail: string }
   | { ok: false; code: 'PROPOSAL_NOT_DISMISSIBLE'; detail: string }
@@ -93,29 +102,35 @@ export interface DismissOptions {
 // the Action Center source)
 // ============================================================================
 
-export async function loadProposal(
+/**
+ * Read one proposal through the reader every surface shares, so a proposal
+ * that cannot be returned carries the same reason on every surface.
+ */
+export function readProposal(
   db: PostgresJsDatabase,
   tenantId: TenantId,
   spaceId: string,
   proposalId: string,
-): Promise<StagedChange | null> {
-  const tenantCtx = createTenantContext(tenantId);
-  const docRepo = createMemoryDocRepository(db, tenantCtx);
-  for (const dir of PROPOSAL_DIRS) {
-    const path = `${dir}/${proposalId}.json`;
-    const doc = await docRepo.getByPath(path, spaceId);
-    if (!doc?.inlineContent) continue;
-    const parsed = tryParseStagedChangeDoc(doc.inlineContent, {
-      tenantId,
-      spaceId,
-      docPath: path,
-      reader: 'proposalResolution.loadProposal',
-    });
-    if (parsed.ok) return parsed.staged;
-    // fall through to the other dir (matches prior catch behaviour) — the
-    // helper has already emitted the warn+counter.
-  }
-  return null;
+  reader: string,
+): Promise<StagedChangeReadResult> {
+  return readStagedChange(createStagedChangeDocReader(db, tenantId), {
+    tenantId,
+    spaceId,
+    proposalId,
+    reader,
+  });
+}
+
+/** The NOT_FOUND failure for a proposal that cannot be read, with the reason it cannot. */
+export function proposalNotFound(
+  failure: StagedChangeReadFailure,
+): Extract<ProposalResolutionFailure, { code: 'NOT_FOUND' }> {
+  return {
+    ok: false,
+    code: 'NOT_FOUND',
+    reason: failure.reason,
+    detail: describeStagedChangeReadFailure(failure),
+  };
 }
 
 export async function persistProposal(
@@ -161,8 +176,9 @@ export async function ratifyProposal(
   proposalId: string,
   options: RatifyOptions = {},
 ): Promise<ProposalResolutionResult<'ratified'>> {
-  const sc = await loadProposal(deps.db, ctx.tenantId, ctx.spaceId, proposalId);
-  if (!sc) return { ok: false, code: 'NOT_FOUND' };
+  const read = await readProposal(deps.db, ctx.tenantId, ctx.spaceId, proposalId, 'ratifyProposal');
+  if (!read.ok) return proposalNotFound(read);
+  const sc = read.staged;
   if (sc.status !== 'proposed') {
     return { ok: false, code: 'ALREADY_RESOLVED', status: sc.status };
   }
@@ -413,8 +429,9 @@ export async function rejectProposal(
   proposalId: string,
   options: RejectOptions = {},
 ): Promise<ProposalResolutionResult<'rejected'>> {
-  const sc = await loadProposal(deps.db, ctx.tenantId, ctx.spaceId, proposalId);
-  if (!sc) return { ok: false, code: 'NOT_FOUND' };
+  const read = await readProposal(deps.db, ctx.tenantId, ctx.spaceId, proposalId, 'rejectProposal');
+  if (!read.ok) return proposalNotFound(read);
+  const sc = read.staged;
   if (sc.status !== 'proposed') {
     return { ok: false, code: 'ALREADY_RESOLVED', status: sc.status };
   }
@@ -483,8 +500,15 @@ export async function dismissProposal(
   proposalId: string,
   options: DismissOptions = {},
 ): Promise<ProposalResolutionResult<'dismissed'>> {
-  const sc = await loadProposal(deps.db, ctx.tenantId, ctx.spaceId, proposalId);
-  if (!sc) return { ok: false, code: 'NOT_FOUND' };
+  const read = await readProposal(
+    deps.db,
+    ctx.tenantId,
+    ctx.spaceId,
+    proposalId,
+    'dismissProposal',
+  );
+  if (!read.ok) return proposalNotFound(read);
+  const sc = read.staged;
   if (sc.status !== 'proposed') {
     return { ok: false, code: 'ALREADY_RESOLVED', status: sc.status };
   }

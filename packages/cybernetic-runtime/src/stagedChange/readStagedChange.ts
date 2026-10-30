@@ -1,25 +1,25 @@
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { and, eq, isNull, ne } from 'drizzle-orm';
 import {
   createMemoryDocRepository,
   createTenantContext,
   isReservedMemoryPath,
-  memoryDocs,
-  withTenantSchema,
 } from '@aflow/database';
 import type { StagedChange, TenantId } from '@aflow/schemas';
 import { PROPOSAL_DIRS } from './resolveProposalRoute.js';
 import { tryParseStagedChangeDoc } from './tryParseStagedChangeDoc.js';
 
-/** The two reads a proposal lookup needs, so a test can hold the store in memory. */
+/**
+ * The read a proposal lookup needs, so a test can hold the store in memory.
+ * It reads the caller's space only. A caller scoped to one space learns
+ * nothing about the tenant's other spaces, so a proposal held elsewhere reads
+ * as missing, exactly as it does for a stranger.
+ */
 export interface StagedChangeDocReader {
   /** The document at `path` in `spaceId`, deleted or not. */
   getByPath(
     path: string,
     spaceId: string,
   ): Promise<{ inlineContent: string | null; deletedAt: Date | null } | null>;
-  /** Every other space of the tenant holding a live document at `path`. */
-  otherSpacesHoldingPath(path: string, spaceId: string): Promise<string[]>;
 }
 
 export function createStagedChangeDocReader(
@@ -33,22 +33,6 @@ export function createStagedChangeDocReader(
       const doc = await docRepo.getByPath(path, spaceId, { includeDeleted: true });
       return doc ? { inlineContent: doc.inlineContent, deletedAt: doc.deletedAt } : null;
     },
-    async otherSpacesHoldingPath(path, spaceId) {
-      const rows = await withTenantSchema(db, tenantCtx, async (tx) =>
-        tx
-          .select({ spaceId: memoryDocs.spaceId })
-          .from(memoryDocs)
-          .where(
-            and(
-              eq(memoryDocs.path, path),
-              ne(memoryDocs.spaceId, spaceId),
-              isNull(memoryDocs.deletedAt),
-            ),
-          )
-          .limit(5),
-      );
-      return rows.map((r) => r.spaceId);
-    },
   };
 }
 
@@ -56,7 +40,6 @@ export type StagedChangeReadFailure =
   | { reason: 'not_found'; searchedPaths: string[] }
   | { reason: 'deleted'; path: string }
   | { reason: 'refused_path'; path: string }
-  | { reason: 'other_space'; path: string; foundInSpaceIds: string[] }
   | { reason: 'unparseable'; path: string; parse: 'json' | 'schema'; detail: string };
 
 export type StagedChangeReadResult =
@@ -72,8 +55,8 @@ export interface StagedChangeReadContext {
 
 /**
  * Read one proposal and, when it cannot be returned, say why. A document that
- * fails to parse, a deleted one, a refused path and one held by another space
- * each get their own reason, so no reader reports any of them as "not found".
+ * fails to parse, a deleted one and a refused path each get their own reason,
+ * so no reader reports any of them as "not found".
  */
 export async function readStagedChange(
   docs: StagedChangeDocReader,
@@ -107,13 +90,6 @@ export async function readStagedChange(
     failure = { reason: 'unparseable', path, parse: parsed.reason, detail: parsed.detail };
   }
   if (failure) return { ok: false, ...failure };
-
-  for (const path of paths) {
-    const foundInSpaceIds = await docs.otherSpacesHoldingPath(path, ctx.spaceId);
-    if (foundInSpaceIds.length > 0) {
-      return { ok: false, reason: 'other_space', path, foundInSpaceIds };
-    }
-  }
   return { ok: false, reason: 'not_found', searchedPaths: paths };
 }
 
@@ -133,11 +109,6 @@ export function describeStagedChangeReadFailure(failure: StagedChangeReadFailure
       return 'The proposal with this id has been deleted from this space.';
     case 'refused_path':
       return 'The proposal path is reserved scratch space, and the memory store refuses to read it.';
-    case 'other_space':
-      return (
-        'The proposal with this id is not in this space. ' +
-        'Another space of this tenant holds it, so read it from that space.'
-      );
     case 'unparseable':
       return (
         'The proposal document exists in this space but does not parse as a staged change ' +

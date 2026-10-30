@@ -1,11 +1,5 @@
 import { createMemoryDocRepository, createTenantContext } from '@aflow/database';
-import {
-  PROPOSAL_DIRS,
-  createStagedChangeDocReader,
-  describeStagedChangeReadFailure,
-  readStagedChange,
-  tryParseStagedChangeDoc,
-} from '@aflow/cybernetic-runtime';
+import { PROPOSAL_DIRS, tryParseStagedChangeDoc } from '@aflow/cybernetic-runtime';
 import { type ActionCenterItemOrigin, type StagedChange } from '@aflow/schemas';
 import { deriveCoachProposalProjection } from '../../cybernetic/coachProposalProjection.js';
 import {
@@ -18,9 +12,11 @@ import {
 } from '../types.js';
 import {
   dismissProposal,
-  loadProposal,
+  proposalNotFound,
   ratifyProposal,
+  readProposal,
   rejectProposal,
+  type ProposalResolutionFailure,
 } from '../../cybernetic/proposalResolution.js';
 
 /** Action Center item ids carry an origin-discriminating prefix. */
@@ -45,21 +41,17 @@ export function createCoachProposalSource(deps: ActionCenterSourceDeps): ActionC
     async getById(ctx, itemId): Promise<ActionCenterSourceItem | null> {
       if (!itemId.startsWith(PROPOSAL_ITEM_ID_PREFIX)) return null;
       const proposalId = itemId.slice(PROPOSAL_ITEM_ID_PREFIX.length);
-      const read = await readStagedChange(createStagedChangeDocReader(deps.db, ctx.tenantId), {
-        tenantId: ctx.tenantId,
-        spaceId: ctx.spaceId,
+      const read = await readProposal(
+        deps.db,
+        ctx.tenantId,
+        ctx.spaceId,
         proposalId,
-        reader: 'coachProposalSource.getById',
-      });
+        'coachProposalSource.getById',
+      );
       if (read.ok) return toActionCenterItem(read.staged, ctx);
       if (read.reason === 'not_found') return null;
       // A proposal that exists but cannot be shown is not a missing one: say why.
-      throw new ActionCenterResolveError(
-        'NOT_FOUND',
-        `Proposal ${proposalId} in space ${ctx.spaceId} cannot be shown. ${describeStagedChangeReadFailure(read)}`,
-        'permanent',
-        read.reason,
-      );
+      throw proposalUnreadableError(proposalId, ctx.spaceId, proposalNotFound(read));
     },
 
     async resolve(ctx, item, resolution): Promise<ActionCenterResolveOutcome> {
@@ -141,12 +133,20 @@ async function convertFailureToError(
   failure: { ok: false } & Record<string, unknown>,
 ): Promise<ActionCenterResolveError> {
   switch (failure['code']) {
-    case 'NOT_FOUND':
+    case 'NOT_FOUND': {
+      const notFound = failure as unknown as Extract<
+        ProposalResolutionFailure,
+        { code: 'NOT_FOUND' }
+      >;
+      if (notFound.reason !== 'not_found') {
+        return proposalUnreadableError(proposalId, scope.spaceId, notFound);
+      }
       return new ActionCenterResolveError(
         'NOT_FOUND',
         `Proposal ${proposalId} not found.`,
         'permanent',
       );
+    }
     case 'ALREADY_RESOLVED':
     case 'STALE': {
       const latest = await loadAndMap(deps, scope, proposalId);
@@ -208,13 +208,33 @@ async function loadAndMap(
   scope: ActionCenterScope,
   proposalId: string,
 ): Promise<ActionCenterSourceItem | undefined> {
-  const sc = await loadProposal(deps.db, scope.tenantId, scope.spaceId, proposalId);
-  if (!sc) return undefined;
-  return toActionCenterItem(sc, scope) ?? undefined;
+  const read = await readProposal(
+    deps.db,
+    scope.tenantId,
+    scope.spaceId,
+    proposalId,
+    'coachProposalSource.loadAndMap',
+  );
+  if (!read.ok) return undefined;
+  return toActionCenterItem(read.staged, scope) ?? undefined;
+}
+
+/** The error for a proposal that exists in this space but cannot be shown, naming why. */
+function proposalUnreadableError(
+  proposalId: string,
+  spaceId: string,
+  failure: Extract<ProposalResolutionFailure, { code: 'NOT_FOUND' }>,
+): ActionCenterResolveError {
+  return new ActionCenterResolveError(
+    'NOT_FOUND',
+    `Proposal ${proposalId} in space ${spaceId} cannot be shown. ${failure.detail}`,
+    'permanent',
+    failure.reason,
+  );
 }
 
 // ============================================================================
-// Doc helpers — mirror the loadProposal / persistProposal pair in
+// Doc helpers — mirror the readProposal / persistProposal pair in
 // packages/server-runtime/src/routes/cybernetic/proposals.ts. Local copies keep the
 // adapter standalone; a future refactor can extract the shared helper.
 // ============================================================================

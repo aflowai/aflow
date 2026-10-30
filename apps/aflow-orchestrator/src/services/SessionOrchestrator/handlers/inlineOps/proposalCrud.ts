@@ -165,7 +165,6 @@ const READ_FAILURE_CODES = {
   not_found: 'PROPOSAL_NOT_FOUND',
   deleted: 'PROPOSAL_DELETED',
   refused_path: 'PROPOSAL_PATH_REFUSED',
-  other_space: 'PROPOSAL_IN_OTHER_SPACE',
   unparseable: 'PROPOSAL_UNREADABLE',
 } as const;
 

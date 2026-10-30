@@ -22,11 +22,6 @@ vi.mock('@aflow/cybernetic-runtime', async () => {
     ...actual,
     createStagedChangeDocReader: () => ({
       getByPath: async (path: string, spaceId: string) => store.get(key(spaceId, path)) ?? null,
-      otherSpacesHoldingPath: async (path: string, spaceId: string) =>
-        [...store.keys()]
-          .map((k) => k.split('|'))
-          .filter(([s, p]) => p === path && s !== spaceId)
-          .map(([s]) => s!),
     }),
   };
 });
@@ -144,10 +139,9 @@ describe('coach proposal source — reading one proposal', () => {
     expect(message).toContain('status');
   });
 
-  it('says the proposal is in another space', async () => {
+  it('answers null for a proposal another space holds, as for a stranger', async () => {
     put(OTHER_SPACE_ID, JSON.stringify(patchProposal()));
-    const message = await notFoundMessage(`proposal:${PROPOSAL_ID}`);
-    expect(message).toContain('Another space of this tenant holds it');
+    expect(await source().getById(ctx, `proposal:${PROPOSAL_ID}`)).toBeNull();
   });
 
   it('says the path is refused', async () => {
@@ -159,5 +153,40 @@ describe('coach proposal source — reading one proposal', () => {
     put(SPACE_ID, JSON.stringify(patchProposal()), new Date());
     const message = await notFoundMessage(`proposal:${PROPOSAL_ID}`);
     expect(message).toContain('has been deleted');
+  });
+});
+
+describe('coach proposal source — resolving one proposal', () => {
+  const item = { id: `proposal:${PROPOSAL_ID}` } as never;
+
+  async function resolveError(): Promise<InstanceType<typeof ActionCenterResolveError>> {
+    try {
+      await source().resolve(ctx, item, { kind: 'ratify' } as never);
+    } catch (err) {
+      expect(err).toBeInstanceOf(ActionCenterResolveError);
+      return err as InstanceType<typeof ActionCenterResolveError>;
+    }
+    throw new Error('resolve did not throw');
+  }
+
+  it('names what failed to parse, as reading the item does', async () => {
+    put(SPACE_ID, JSON.stringify({ ...patchProposal(), status: 'pending' }));
+    const err = await resolveError();
+    expect(err.code).toBe('NOT_FOUND');
+    expect(err.detail).toBe('unparseable');
+    expect(err.message).toBe(await notFoundMessage(`proposal:${PROPOSAL_ID}`));
+  });
+
+  it('says the proposal was deleted, as reading the item does', async () => {
+    put(SPACE_ID, JSON.stringify(patchProposal()), new Date());
+    const err = await resolveError();
+    expect(err.detail).toBe('deleted');
+    expect(err.message).toBe(await notFoundMessage(`proposal:${PROPOSAL_ID}`));
+  });
+
+  it('reports a missing proposal as not found', async () => {
+    const err = await resolveError();
+    expect(err.code).toBe('NOT_FOUND');
+    expect(err.message).toBe(`Proposal ${PROPOSAL_ID} not found.`);
   });
 });

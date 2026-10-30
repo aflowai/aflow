@@ -674,3 +674,150 @@ describe('a lowered op is held to the shape the proposal store reads back', () =
     expect(out.unsupported[0]).toContain('task.inputContract');
   });
 });
+
+describe('a bindings edit on a composed task derives its inputContract again', () => {
+  const answerShape = { type: 'object', properties: { text: { type: 'string' } } };
+
+  /** Two composed tasks as the assembler stores them, each carrying its derived contract. */
+  function composedWorkflow(): Workflow {
+    return {
+      ...makeWorkflow(),
+      tasks: [
+        {
+          taskId: 'draft',
+          name: 'Draft',
+          goal: 'Draft an answer.',
+          type: 'agent',
+          inputBindings: { question: { kind: 'run_input', path: 'question' } },
+          inputContract: {
+            bindings: {
+              question: { kind: 'run_input', bindAs: 'question', path: 'question', schema: {} },
+            },
+          },
+          produces: [{ key: 'answer', shape: answerShape, semantics: 'data' }],
+        },
+        {
+          taskId: 'review',
+          name: 'Review',
+          goal: 'Review the answer.',
+          type: 'agent',
+          dependsOn: ['draft'],
+          inputBindings: { question: { kind: 'run_input', path: 'question' } },
+          inputContract: {
+            bindings: {
+              question: { kind: 'run_input', bindAs: 'question', path: 'question', schema: {} },
+            },
+          },
+        },
+      ],
+    } as Workflow;
+  }
+
+  function stagedTask(out: ReturnType<typeof convertWorkflowPatchToStagedOps>) {
+    expect(out.unsupported).toEqual([]);
+    expect(out.ops).toHaveLength(1);
+    expect(out.ops[0]).toMatchObject({ op: 'replace_task' });
+    return (out.ops[0] as Extract<(typeof out.ops)[number], { op: 'replace_task' }>).task;
+  }
+
+  it('derives the contract from a replaced binding, not the old one', () => {
+    const task = stagedTask(
+      convertWorkflowPatchToStagedOps(
+        [
+          {
+            op: 'replace',
+            path: '/tasks/1/inputBindings/question',
+            value: { kind: 'run_input', path: 'query' },
+          },
+        ],
+        composedWorkflow(),
+      ),
+    );
+    expect(task.inputBindings).toEqual({ question: { kind: 'run_input', path: 'query' } });
+    expect(task.inputContract).toEqual({
+      bindings: {
+        question: { kind: 'run_input', bindAs: 'question', path: 'query', schema: {} },
+      },
+    });
+  });
+
+  it('takes an added task_output binding schema from the producer port', () => {
+    const task = stagedTask(
+      convertWorkflowPatchToStagedOps(
+        [
+          {
+            op: 'add',
+            path: '/tasks/1/inputBindings/draft',
+            value: { kind: 'task_output', taskId: 'draft', path: 'answer' },
+          },
+        ],
+        composedWorkflow(),
+      ),
+    );
+    expect(task.inputContract?.bindings['draft']).toEqual({
+      kind: 'task_output',
+      bindAs: 'draft',
+      taskId: 'draft',
+      outputKey: 'answer',
+      schema: answerShape,
+    });
+    expect(task.inputContract?.bindings['question']).toBeDefined();
+  });
+
+  it('drops the contract when the edit removes every binding', () => {
+    const task = stagedTask(
+      convertWorkflowPatchToStagedOps(
+        [{ op: 'remove', path: '/tasks/1/inputBindings/question' }],
+        composedWorkflow(),
+      ),
+    );
+    expect(task.inputBindings).toEqual({});
+    expect(task.inputContract).toBeUndefined();
+  });
+
+  it('refuses a binding the assembler cannot derive a contract for, and says to recompose', () => {
+    const out = convertWorkflowPatchToStagedOps(
+      [
+        {
+          op: 'add',
+          path: '/tasks/1/inputBindings/draft',
+          value: { kind: 'task_output', taskId: 'draft', path: 'summary' },
+        },
+      ],
+      composedWorkflow(),
+    );
+    expect(out.ops).toEqual([]);
+    expect(out.unsupported).toHaveLength(1);
+    expect(out.unsupported[0]).toContain('cannot derive its inputContract');
+    expect(out.unsupported[0]).toContain('produces[].key="summary"');
+    expect(out.unsupported[0]).toContain("composed task's contract must be recomposed");
+  });
+
+  it('keeps the contract of a composed task whose bindings the patch leaves alone', () => {
+    const before = composedWorkflow().tasks[1]!;
+    const task = stagedTask(
+      convertWorkflowPatchToStagedOps(
+        [{ op: 'replace', path: '/tasks/1/name', value: 'Check' }],
+        composedWorkflow(),
+      ),
+    );
+    expect(task.inputContract).toEqual(before.inputContract);
+  });
+
+  it('derives no contract for a bindings edit on a workflow the assembler did not compose', () => {
+    const task = stagedTask(
+      convertWorkflowPatchToStagedOps(
+        [
+          {
+            op: 'add',
+            path: '/tasks/1/inputBindings',
+            value: { question: { kind: 'run_input', path: 'question' } },
+          },
+        ],
+        makeWorkflow(),
+      ),
+    );
+    expect(task.inputBindings).toEqual({ question: { kind: 'run_input', path: 'question' } });
+    expect(task.inputContract).toBeUndefined();
+  });
+});

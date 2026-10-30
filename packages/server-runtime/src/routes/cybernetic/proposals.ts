@@ -28,21 +28,32 @@ import {
   loadRunById,
   getRunStatistics,
   tryParseStagedChangeDoc,
-  createStagedChangeDocReader,
-  describeStagedChangeReadFailure,
-  readStagedChange,
 } from '@aflow/cybernetic-runtime';
 import {
   dismissProposal,
   ratifyProposal,
   rejectProposal,
-  loadProposal,
   persistProposal,
+  proposalNotFound,
+  readProposal,
 } from '../../services/cybernetic/proposalResolution.js';
 
 // ---------------------------------------------------------------------------
 // Response schemas
 // ---------------------------------------------------------------------------
+
+const ProposalNotFoundResponseSchema = z.object({
+  error: z.string(),
+  message: z.string().optional(),
+});
+
+/** The 404 body every proposal route sends, naming why the proposal cannot be read. */
+function proposalNotFoundBody(failure: { reason: string; detail: string }) {
+  return {
+    error: failure.reason === 'not_found' ? 'Proposal not found' : 'Proposal unreadable',
+    message: failure.detail,
+  };
+}
 
 const ResolutionRouteSchema = z.enum(['tenant_ratification', 'platform_issue']);
 
@@ -247,24 +258,22 @@ export const proposalRoutes: FastifyPluginAsync = async (fastify) => {
         }),
         response: {
           200: z.object({ proposal: z.record(z.unknown()) }),
-          404: z.object({ error: z.string(), message: z.string().optional() }),
+          404: ProposalNotFoundResponseSchema,
         },
       },
     },
     async (request, reply) => {
       const tenant = await request.requireTenant();
       const { spaceId, proposalId } = request.params;
-      const read = await readStagedChange(createStagedChangeDocReader(db, tenant.tenantId), {
-        tenantId: tenant.tenantId,
+      const read = await readProposal(
+        db,
+        tenant.tenantId,
         spaceId,
         proposalId,
-        reader: 'GET /proposals/:proposalId',
-      });
+        'GET /proposals/:proposalId',
+      );
       if (!read.ok) {
-        return reply.status(404).send({
-          error: read.reason === 'not_found' ? 'Proposal not found' : 'Proposal unreadable',
-          message: describeStagedChangeReadFailure(read),
-        });
+        return reply.status(404).send(proposalNotFoundBody(proposalNotFound(read)));
       }
       const sc = read.staged;
 
@@ -351,7 +360,7 @@ export const proposalRoutes: FastifyPluginAsync = async (fastify) => {
             setupChecklist: z.array(PostInstallTaskSchema).optional(),
           }),
           400: z.object({ error: z.string() }),
-          404: z.object({ error: z.string() }),
+          404: ProposalNotFoundResponseSchema,
           409: z.object({
             error: z.literal('PROPOSAL_STALE'),
             detail: z.string(),
@@ -388,7 +397,7 @@ export const proposalRoutes: FastifyPluginAsync = async (fastify) => {
       // codes can fire here in practice. The else branch covers any
       // future code added to the service union without a route update.
       if (result.code === 'NOT_FOUND') {
-        return reply.status(404).send({ error: 'Proposal not found' });
+        return reply.status(404).send(proposalNotFoundBody(result));
       }
       if (result.code === 'ALREADY_RESOLVED') {
         return reply.status(400).send({ error: `Proposal is already ${result.status}` });
@@ -448,7 +457,7 @@ export const proposalRoutes: FastifyPluginAsync = async (fastify) => {
             detail: z.string(),
           }),
           400: z.object({ error: z.string(), detail: z.string().optional() }),
-          404: z.object({ error: z.string() }),
+          404: ProposalNotFoundResponseSchema,
           422: z.object({ error: z.string(), detail: z.string().optional() }),
         },
       },
@@ -458,10 +467,17 @@ export const proposalRoutes: FastifyPluginAsync = async (fastify) => {
       const { spaceId, proposalId } = request.params;
       const operatorUserId = request.authUser?.userId ?? 'operator';
 
-      const sc = await loadProposal(db, tenant.tenantId, spaceId, proposalId);
-      if (!sc) {
-        return reply.status(404).send({ error: 'Proposal not found' });
+      const read = await readProposal(
+        db,
+        tenant.tenantId,
+        spaceId,
+        proposalId,
+        'POST /proposals/:proposalId/regenerate',
+      );
+      if (!read.ok) {
+        return reply.status(404).send(proposalNotFoundBody(proposalNotFound(read)));
       }
+      const sc = read.staged;
       if (sc.status !== 'proposed') {
         return reply.status(400).send({ error: `Proposal is already ${sc.status}` });
       }
@@ -621,7 +637,7 @@ export const proposalRoutes: FastifyPluginAsync = async (fastify) => {
         response: {
           200: z.object({ stagedChangeId: z.string().uuid(), status: z.literal('rejected') }),
           400: z.object({ error: z.string(), detail: z.string().optional() }),
-          404: z.object({ error: z.string() }),
+          404: ProposalNotFoundResponseSchema,
         },
       },
     },
@@ -644,7 +660,7 @@ export const proposalRoutes: FastifyPluginAsync = async (fastify) => {
         return { stagedChangeId: proposalId, status: 'rejected' as const };
       }
       if (result.code === 'NOT_FOUND') {
-        return reply.status(404).send({ error: 'Proposal not found' });
+        return reply.status(404).send(proposalNotFoundBody(result));
       }
       if (result.code === 'ALREADY_RESOLVED') {
         return reply.status(400).send({ error: `Proposal is already ${result.status}` });
@@ -685,7 +701,7 @@ export const proposalRoutes: FastifyPluginAsync = async (fastify) => {
         response: {
           200: z.object({ stagedChangeId: z.string().uuid(), status: z.literal('dismissed') }),
           400: z.object({ error: z.string(), detail: z.string().optional() }),
-          404: z.object({ error: z.string() }),
+          404: ProposalNotFoundResponseSchema,
         },
       },
     },
@@ -710,7 +726,7 @@ export const proposalRoutes: FastifyPluginAsync = async (fastify) => {
         return { stagedChangeId: proposalId, status: 'dismissed' as const };
       }
       if (result.code === 'NOT_FOUND') {
-        return reply.status(404).send({ error: 'Proposal not found' });
+        return reply.status(404).send(proposalNotFoundBody(result));
       }
       if (result.code === 'ALREADY_RESOLVED') {
         return reply.status(400).send({ error: `Proposal is already ${result.status}` });
