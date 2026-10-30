@@ -299,8 +299,10 @@ the decision asks the firing to read (`read_pull_request`) and pass back:
   (`awaiting_decision`); another firing claimed the same state for a `continue`
   (`claimed`); a run of it or of any node under it is in flight, or paused in the attention
   items; its pull request is open; a read failed — including a read of the nodes under it
-  that stopped at its bound, which cannot show nothing runs below; or its state is one no
-  rule names.
+  that stopped at its bound, which cannot show nothing runs below; a node the operator sent
+  back still opens with their `Revise: ` line after a rewrite, or a wake was already asked
+  to rewrite it at the revision it stands at (`revise_unanswered`); or its
+  state is one no rule names.
 - `stop` — its pull request was closed unmerged after its last write, its runs cost its
   spend ceiling, its push was declined, or more of its commissions ended without a pull
   request since its last write than `attempts` allows. The decision carries the `plan.node.update` that marks it `blocked` with

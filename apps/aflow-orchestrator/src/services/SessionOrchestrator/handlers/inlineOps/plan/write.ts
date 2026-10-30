@@ -1,4 +1,5 @@
 import {
+  isPersonTrigger,
   PlanNodeCreateInputSchema,
   PlanNodeDependInputSchema,
   PlanNodeLearnInputSchema,
@@ -20,25 +21,41 @@ import {
   restrictedPlanWriteAuthority,
   type PlanWriteContext,
 } from '@aflow/cybernetic-runtime';
-import { getSessionState } from '@aflow/redis';
+import { getSessionState, type SessionHotState } from '@aflow/redis';
 import { dispatchOrWaitOnExecutor } from '../../../scheduling/executorWait.js';
 import { sessionUser } from '../sessionUser.js';
 import type { InlineHandlerArgs } from '../types.js';
 import { emitStepSuccess } from '../helpers.js';
 import { emitPlanError, parsePlanInput, planReadContext } from './shared.js';
 
-async function planWriteContext(args: InlineHandlerArgs): Promise<PlanWriteContext> {
-  const read = planReadContext(args);
-  const state = await getSessionState(args.redis, args.context.tenantId, args.context.runId).catch(
-    () => null,
-  );
+async function readSessionState(args: InlineHandlerArgs): Promise<SessionHotState | null> {
+  return getSessionState(args.redis, args.context.tenantId, args.context.runId).catch(() => null);
+}
+
+function writeContext(args: InlineHandlerArgs, state: SessionHotState | null): PlanWriteContext {
   return {
-    ...read,
+    ...planReadContext(args),
     redis: args.redis,
     tenantId: args.context.tenantId as string,
     actorKind: 'agent',
     resident: restrictedPlanWriteAuthority(state),
   };
+}
+
+async function planWriteContext(args: InlineHandlerArgs): Promise<PlanWriteContext> {
+  return writeContext(args, await readSessionState(args));
+}
+
+/**
+ * The session, where it is a conversation only a person starts (Plan 337 P4):
+ * a node it writes links it, so the operator finds the talk from the node.
+ * A scheduled wake or an API run links nothing.
+ */
+function operatorConversation(
+  args: InlineHandlerArgs,
+  state: SessionHotState | null,
+): string | undefined {
+  return state !== null && isPersonTrigger(state.trigger) ? args.context.runId : undefined;
 }
 
 export async function handlePlanNodeCreate(
@@ -66,7 +83,8 @@ export async function handlePlanNodeUpdate(
 ): Promise<void> {
   const input = await parsePlanInput(args, PlanNodeUpdateInputSchema, startTime);
   if (!input) return;
-  const context = await planWriteContext(args);
+  const state = await readSessionState(args);
+  const context = writeContext(args, state);
   if (context.resident && input.status === 'done') {
     const credentialOwnerId = await sessionUser(args);
     await dispatchOrWaitOnExecutor(
@@ -92,7 +110,11 @@ export async function handlePlanNodeUpdate(
     );
     return;
   }
-  const result = await updatePlanNode(context, input);
+  const conversationId = operatorConversation(args, state);
+  const result = await updatePlanNode(
+    { ...context, ...(conversationId !== undefined ? { conversationId } : {}) },
+    input,
+  );
   if (!result.ok) {
     await emitPlanError(args, result, startTime);
     return;
@@ -101,6 +123,7 @@ export async function handlePlanNodeUpdate(
     node: result.node,
     ...(result.carrier ? { carrier: result.carrier } : {}),
     ...(result.carrierFailure ? { carrierFailure: result.carrierFailure } : {}),
+    ...(result.linkFailure ? { linkFailure: result.linkFailure } : {}),
   };
   await emitStepSuccess(args, output as unknown as Record<string, unknown>, startTime);
 }

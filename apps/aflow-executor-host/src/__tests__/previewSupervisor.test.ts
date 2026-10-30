@@ -191,7 +191,11 @@ describe('a run’s preview', () => {
     expect(error).toBeInstanceOf(PreviewError);
     const pid = pidIn((error as Error).message);
     expect(pid).toBeGreaterThan(0);
-    expect(alive(pid)).toBe(false);
+    // The shell has exited, so launchd reaps the server, a moment after it has
+    // exited too. Until then macOS still answers `kill(pid, 0)` for it, while
+    // it answers the group with EPERM, which the stop counts as gone. A leaked
+    // server never exits, so a poll still catches one.
+    await expect.poll(() => alive(pid), { timeout: 10_000, interval: 25 }).toBe(false);
   }, 30_000);
 
   it('fails at once when the command exits before it answers', async () => {
