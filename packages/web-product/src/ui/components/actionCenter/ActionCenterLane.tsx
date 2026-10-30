@@ -209,6 +209,7 @@ function ActionCenterItemBody({
       targetWorkflowSlug: ext ? ext.targetWorkflowSlug : (workflowRef?.id ?? null),
       ...(ext
         ? {
+            provenance: ext.provenance,
             rationale: ext.rationale,
             confidence: ext.confidence,
             opKinds: ext.opKinds,

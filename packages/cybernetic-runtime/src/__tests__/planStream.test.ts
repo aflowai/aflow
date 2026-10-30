@@ -1317,6 +1317,50 @@ describe('resident asking and proposing', () => {
     expect(await wake({}, 'another-wake')).not.toHaveProperty('propose');
   });
 
+  it.each([false, true])(
+    'treats a proposal the operator revised and then dropped as a decline (rewritten: %s)',
+    async (rewritten) => {
+      const root = await created();
+      const child = await created({ parentId: root.nodeId });
+      await write(child.nodeId, { status: 'done', outcome: 'Merged' });
+      const proposal = await created({ parentId: root.nodeId, proposed: 'Next scope' });
+      const revised = await revisePlanNode(session(), {
+        nodeId: proposal.nodeId,
+        expectedRevision: proposal.revision,
+        why: 'Name the risk.',
+      });
+      if (!revised.ok) throw new Error(revised.message);
+      if (rewritten) {
+        const note = revised.node.note!.replace(/^Revise: [^\n]*/, 'Revised: the risk is named.');
+        await write(proposal.nodeId, { note });
+      }
+      await write(proposal.nodeId, { status: 'dropped', outcome: 'Declined' });
+
+      expect(await wake()).not.toHaveProperty('propose');
+      expect(await wake({}, 'another-wake')).not.toHaveProperty('propose');
+    },
+  );
+
+  it('a findings carrier the operator revised and then dropped does not decline its root', async () => {
+    const root = await created();
+    const step = await created({ parentId: root.nodeId });
+    await linkPlanNode(session(), { nodeId: step.nodeId, kind: 'finding', ref: 'open' });
+    const closed = await updatePlanNode(session(), {
+      nodeId: step.nodeId,
+      expectedRevision: step.revision,
+      status: 'done',
+      outcome: 'Merged',
+    });
+    if (!closed.ok || !closed.carrier) throw new Error('No carrier');
+    await revisePlanNode(session(), {
+      nodeId: closed.carrier.nodeId,
+      expectedRevision: closed.carrier.revision,
+      why: 'Only the first finding.',
+    });
+    await write(closed.carrier.nodeId, { status: 'dropped' });
+    expect(await wake()).toHaveProperty('propose');
+  });
+
   it.each([true, false])(
     'surfaces a live check beside its merged node (nested: %s)',
     async (nested) => {
@@ -2054,7 +2098,6 @@ describe('the operator’s note on a node (Plan 337 P4)', () => {
       why: 'Split it: the schema first.',
     });
     expect(await next(root.nodeId)).toMatchObject({ decision: 'revise' });
-    expect(await next(root.nodeId)).toMatchObject({ decision: 'revise' });
 
     // The rewrite changes the goal and keeps the operator's line on top.
     const rewritten = await write(first.nodeId, { goal: 'Add the schema for the stream.' });
@@ -2090,6 +2133,79 @@ describe('the operator’s note on a node (Plan 337 P4)', () => {
       decision: 'continue',
       node: { nodeId: first.nodeId },
     });
+  });
+
+  it('revise: answered once per revision, so an unwritten answer frees the root’s other work', async () => {
+    const { root, first, second } = await stream();
+    const blocked = await write(second.nodeId, { status: 'blocked', note: 'Proposed' });
+    await revisePlanNode(session(), {
+      nodeId: second.nodeId,
+      expectedRevision: blocked.revision,
+      why: 'Name the risk.',
+    });
+
+    const raced = await Promise.all([
+      next(root.nodeId, {}, 'firing-a'),
+      next(root.nodeId, {}, 'firing-b'),
+    ]);
+    expect(raced.filter((d) => d.decision === 'revise')).toHaveLength(1);
+    expect(raced.find((d) => d.decision !== 'revise')).toMatchObject({
+      decision: 'wait',
+      cause: 'claimed',
+      node: { nodeId: second.nodeId },
+    });
+
+    // The wake answered and wrote nothing: the node stands at the same revision.
+    expect(await current(second.nodeId)).toMatchObject({ revision: blocked.revision + 1 });
+    for (const holder of ['firing-a', 'firing-b', 'firing-c']) {
+      const answer = await next(root.nodeId, {}, holder);
+      expect(answer.decision).not.toBe('revise');
+    }
+    expect(await next(root.nodeId, {}, 'firing-a')).toMatchObject({
+      decision: 'continue',
+      node: { nodeId: first.nodeId },
+    });
+  });
+
+  it('revise: a wake that answers without writing is not asked again, and a fresh Revise is', async () => {
+    const root = await created({ title: 'Plan 340' });
+    const active = await created({ parentId: root.nodeId, title: 'P1' });
+    const proposal = await created({ parentId: root.nodeId, proposed: 'Next scope' });
+    await revisePlanNode(session(), {
+      nodeId: proposal.nodeId,
+      expectedRevision: proposal.revision,
+      why: 'Name the risk.',
+    });
+
+    const first = await wake({ decisions: 1 }, 'wake-1');
+    expect(first.decisions.map((d) => d.answer.decision)).toEqual(['revise']);
+
+    // The answer's write was refused, or the wake ended first: nothing landed.
+    const second = await wake({ decisions: 1 }, 'wake-2');
+    expect(second.decisions).toMatchObject([
+      { answer: { decision: 'continue', node: { nodeId: active.nodeId } } },
+    ]);
+    const third = await wake({ decisions: 1 }, 'wake-3');
+    expect(third.decisions.map((d) => d.answer.decision)).not.toContain('revise');
+
+    const again = await revisePlanNode(session(), {
+      nodeId: proposal.nodeId,
+      expectedRevision: (await current(proposal.nodeId)).revision,
+      why: 'Name the risk and its owner.',
+    });
+    if (!again.ok) throw new Error(again.message);
+    const fourth = await wake({ decisions: 1 }, 'wake-4');
+    expect(fourth.decisions).toMatchObject([
+      {
+        answer: {
+          decision: 'revise',
+          node: {
+            nodeId: proposal.nodeId,
+            instructions: 'Revise: Name the risk and its owner.',
+          },
+        },
+      },
+    ]);
   });
 
   it('ranks a revise after a publication and before new work across the board', async () => {

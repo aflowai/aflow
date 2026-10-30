@@ -13,6 +13,7 @@ import {
   RECOVERY_MARKER,
   createSessionRecovery,
   provesAuthenticated,
+  readRefusalCode,
   type SessionRecovery,
 } from './recovery.js';
 
@@ -199,6 +200,35 @@ describe('an edition with nobody to sign in as', () => {
     expect(recovery.onUnauthenticated().canRetry).toBe(false);
     expect(recovery.retry().canRetry).toBe(false);
     expect(h.navigated).toEqual([]);
+  });
+
+  it('hands the refusal code to the policy, and again on a retry', () => {
+    const resolve = vi.fn<SessionRecovery['resolve']>(() => ({ kind: 'message', message: 'm' }));
+    const recovery = createSessionRecovery({ resolve }, host().impl);
+    recovery.onUnauthenticated('PROFILE_SESSION_REQUIRED');
+    recovery.retry();
+    recovery.onUnauthenticated();
+    expect(resolve.mock.calls.map(([, code]) => code)).toEqual([
+      'PROFILE_SESSION_REQUIRED',
+      'PROFILE_SESSION_REQUIRED',
+      null,
+    ]);
+  });
+});
+
+describe('the code a refusal carries', () => {
+  it('reads the body code and leaves the body unread for the caller', async () => {
+    const response = new Response(JSON.stringify({ code: 'PROFILE_SESSION_INVALID' }), {
+      status: 401,
+    });
+    expect(await readRefusalCode(response)).toBe('PROFILE_SESSION_INVALID');
+    expect(response.bodyUsed).toBe(false);
+  });
+
+  it('answers null for a body with no code, or no JSON', async () => {
+    expect(await readRefusalCode(new Response(JSON.stringify({ error: 'x' })))).toBeNull();
+    expect(await readRefusalCode(new Response('not json'))).toBeNull();
+    expect(await readRefusalCode(new Response(JSON.stringify({ code: 7 })))).toBeNull();
   });
 });
 

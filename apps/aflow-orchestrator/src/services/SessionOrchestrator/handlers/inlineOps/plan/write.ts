@@ -21,20 +21,20 @@ import {
   restrictedPlanWriteAuthority,
   type PlanWriteContext,
 } from '@aflow/cybernetic-runtime';
-import { getSessionState, getSessionStateSafe } from '@aflow/redis';
+import { getSessionState, type SessionHotState } from '@aflow/redis';
 import { dispatchOrWaitOnExecutor } from '../../../scheduling/executorWait.js';
 import { sessionUser } from '../sessionUser.js';
 import type { InlineHandlerArgs } from '../types.js';
 import { emitStepSuccess } from '../helpers.js';
 import { emitPlanError, parsePlanInput, planReadContext } from './shared.js';
 
-async function planWriteContext(args: InlineHandlerArgs): Promise<PlanWriteContext> {
-  const read = planReadContext(args);
-  const state = await getSessionState(args.redis, args.context.tenantId, args.context.runId).catch(
-    () => null,
-  );
+async function readSessionState(args: InlineHandlerArgs): Promise<SessionHotState | null> {
+  return getSessionState(args.redis, args.context.tenantId, args.context.runId).catch(() => null);
+}
+
+function writeContext(args: InlineHandlerArgs, state: SessionHotState | null): PlanWriteContext {
   return {
-    ...read,
+    ...planReadContext(args),
     redis: args.redis,
     tenantId: args.context.tenantId as string,
     actorKind: 'agent',
@@ -42,15 +42,20 @@ async function planWriteContext(args: InlineHandlerArgs): Promise<PlanWriteConte
   };
 }
 
+async function planWriteContext(args: InlineHandlerArgs): Promise<PlanWriteContext> {
+  return writeContext(args, await readSessionState(args));
+}
+
 /**
  * The session, where it is a conversation only a person starts (Plan 337 P4):
  * a node it writes links it, so the operator finds the talk from the node.
  * A scheduled wake or an API run links nothing.
  */
-async function operatorConversation(args: InlineHandlerArgs): Promise<string | undefined> {
-  const { tenantId, runId } = args.context;
-  const read = await getSessionStateSafe(args.redis, tenantId, runId);
-  return read.ok && isPersonTrigger(read.state.trigger) ? runId : undefined;
+function operatorConversation(
+  args: InlineHandlerArgs,
+  state: SessionHotState | null,
+): string | undefined {
+  return state !== null && isPersonTrigger(state.trigger) ? args.context.runId : undefined;
 }
 
 export async function handlePlanNodeCreate(
@@ -78,7 +83,8 @@ export async function handlePlanNodeUpdate(
 ): Promise<void> {
   const input = await parsePlanInput(args, PlanNodeUpdateInputSchema, startTime);
   if (!input) return;
-  const context = await planWriteContext(args);
+  const state = await readSessionState(args);
+  const context = writeContext(args, state);
   if (context.resident && input.status === 'done') {
     const credentialOwnerId = await sessionUser(args);
     await dispatchOrWaitOnExecutor(
@@ -104,7 +110,7 @@ export async function handlePlanNodeUpdate(
     );
     return;
   }
-  const conversationId = await operatorConversation(args);
+  const conversationId = operatorConversation(args, state);
   const result = await updatePlanNode(
     { ...context, ...(conversationId !== undefined ? { conversationId } : {}) },
     input,

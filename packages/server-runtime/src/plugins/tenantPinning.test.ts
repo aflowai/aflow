@@ -210,6 +210,38 @@ describe('tenant resolution under a fixed-tenancy edition', () => {
   });
 });
 
+// With no database the membership read finds nothing, so a 200 here can come
+// only from the owner shortcut, and a 403 shows the request went to the read.
+describe('the local owner shortcut (Plan 335 §8 question 7)', () => {
+  it('grants the owner role without a membership read on a one-profile install', async () => {
+    const app = await boot(LOCAL, {
+      ...OWNER,
+      authMethod: 'local',
+      localPrincipal: 'sole-profile',
+    });
+    const res = await app.inject({ method: 'GET', url: '/probe' });
+    await app.close();
+    expect(res.statusCode).toBe(200);
+  });
+
+  it.each(['profile-session', 'instance-secret'] as const)(
+    'sends a %s principal to the membership read',
+    async (localPrincipal) => {
+      const app = await boot(LOCAL, { ...OWNER, authMethod: 'local', localPrincipal });
+      const res = await app.inject({ method: 'GET', url: '/probe' });
+      await app.close();
+      expect(res.statusCode).toBe(403);
+    },
+  );
+
+  it('sends a local principal that names no origin to the membership read', async () => {
+    const app = await boot(LOCAL, { ...OWNER, authMethod: 'local' });
+    const res = await app.inject({ method: 'GET', url: '/probe' });
+    await app.close();
+    expect(res.statusCode).toBe(403);
+  });
+});
+
 describe('tenant resolution under multi-tenancy', () => {
   it('keeps header precedence over a disagreeing claim', async () => {
     const app = await boot(HOSTED, {

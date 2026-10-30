@@ -154,9 +154,9 @@ describe('plan.node.update', () => {
   ])(
     'a session started by %s writes the node with conversationId %s (Plan 337 P4)',
     async (trigger, conversationId) => {
-      mockGetSessionStateSafe.mockResolvedValue({
-        ok: true,
-        state: { createdBy: OPERATOR, ...(trigger !== undefined ? { trigger } : {}) },
+      mockGetSessionState.mockResolvedValue({
+        planResident: false,
+        ...(trigger !== undefined ? { trigger } : {}),
       });
       mockUpdatePlanNode.mockResolvedValue({ ok: true, node: NODE });
 
@@ -167,11 +167,14 @@ describe('plan.node.update', () => {
       expect(emitted()['status']).toBe('SUCCEEDED');
       const ctx = mockUpdatePlanNode.mock.calls[0]![0] as { conversationId?: string };
       expect(ctx.conversationId).toBe(conversationId);
+      // The resident decision and the conversation read one session state.
+      expect(mockGetSessionState).toHaveBeenCalledTimes(1);
+      expect(mockGetSessionStateSafe).not.toHaveBeenCalled();
     },
   );
 
   it('links no conversation where the session’s state cannot be read', async () => {
-    mockGetSessionStateSafe.mockResolvedValue({ ok: false, kind: 'missing' });
+    mockGetSessionState.mockResolvedValue(null);
     mockUpdatePlanNode.mockResolvedValue({ ok: true, node: NODE });
 
     await handlePlanNodeInline(
@@ -382,6 +385,7 @@ describe('plan.node.update', () => {
           tenantId: TENANT,
           actorKind: 'agent',
           resident: false,
+          conversationId: SESSION,
         },
         { nodeId: NODE_ID, expectedRevision: 2, status },
       );

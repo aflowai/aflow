@@ -43,6 +43,7 @@ export function toCoachProposalSummary(item: ActionCenterItem): CoachProposalSum
     // duplicate or replace what `<ProposalCard>` would render via
     // its own confidence badge and section label.
     summary: ext.proposalSummary,
+    provenance: ext.provenance,
     rationale: ext.rationale,
     confidence: ext.confidence,
     targetWorkflowSlug: ext.targetWorkflowSlug,

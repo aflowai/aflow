@@ -183,6 +183,7 @@ describe('workflow.manage.patch — metadata-only patch preserves authored tasks
     await handleWorkflowCrudInline(
       makePatchArgs({
         slug: 'kaggle-optimizer',
+        why: 'The operator asked for it.',
         operations: [{ op: 'replace', path: '/budget/maxRuns', value: 25 }],
       }),
     );
@@ -204,6 +205,7 @@ describe('workflow.manage.patch — metadata-only patch preserves authored tasks
     await handleWorkflowCrudInline(
       makePatchArgs({
         slug: 'kaggle-optimizer',
+        why: 'The operator asked for it.',
         operations: [{ op: 'add', path: '/budget', value: { maxRuns: 25 } }],
       }),
     );
@@ -218,6 +220,7 @@ describe('workflow.manage.patch — metadata-only patch preserves authored tasks
     await handleWorkflowCrudInline(
       makePatchArgs({
         slug: 'kaggle-optimizer',
+        why: 'The operator asked for it.',
         operations: [{ op: 'replace', path: '/tasks/0/goal', value: 'a different goal' }],
       }),
     );

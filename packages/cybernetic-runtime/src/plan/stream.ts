@@ -304,37 +304,98 @@ function blockedNote(node: PlanNode, why: string): string {
   return note.slice(0, PLAN_NODE_PROSE_MAX_CHARS);
 }
 
+/** Where the revision a revise was last answered at is kept, once per revision as an ask is. */
+export function planNodeReviseAnsweredKey(
+  ctx: Pick<PlanStreamContext, 'tenantId' | 'spaceId'>,
+  nodeId: string,
+): string {
+  return ['plan:node:revise:answered', ctx.tenantId, ctx.spaceId, nodeId].join(':');
+}
+
+/** A revise to answer, and the answered record as it was read, for its claim. */
+interface SentBack {
+  answer: PlanStreamAnswer;
+  revise?: { node: PlanNode; record: string | null };
+}
+
 /**
  * A blocked node whose note opens with the operator's `Revise: …` line (Plan
  * 337 P4): the Helmsman rewrites the proposal from it and leaves it blocked
  * for the operator. The rewrite replaces that line, so the next firing waits.
  * A write past the revision the node was sent back at that leaves the line in
  * place is a rewrite the line survived: the stream stops asking and waits on
- * the operator with `revise_unanswered`.
+ * the operator with `revise_unanswered`. A revise is answered once per
+ * revision (`claimRevise`), so one answered with no write landing since waits
+ * the same way, and a new Revise moves the revision and is answered again.
  */
-async function reviseAnswer(
-  ctx: PlanStreamContext,
-  node: PlanNode,
-): Promise<PlanStreamAnswer | null> {
+async function reviseAnswer(ctx: PlanStreamContext, node: PlanNode): Promise<SentBack | null> {
   const instructions = planNodeInstructions(node.note);
   if (node.status !== 'blocked' || !instructions?.startsWith(PLAN_NODE_REVISE_HEAD)) return null;
   const key = planNodeReviseKey(ctx, node.nodeId);
-  const sentAt = await ctx.redis.get(key);
+  const [sentAt, answeredAt] = await Promise.all([
+    ctx.redis.get(key),
+    ctx.redis.get(planNodeReviseAnsweredKey(ctx, node.nodeId)),
+  ]);
   if (sentAt === null) {
     await ctx.redis.set(key, String(node.revision), 'PX', PLAN_NODE_REVISE_RECORD_TTL_MS, 'NX');
   } else if (node.revision > Number(sentAt)) {
-    return wait(
-      'revise_unanswered',
-      `"${node.title}" was written at revision ${String(node.revision)}, after the operator sent it back at revision ${sentAt}, and its note still opens with their "${PLAN_NODE_REVISE_HEAD}…" line. The stream no longer asks for the rewrite: the operator approves the node or sends it back again.`,
-      node,
-    );
+    return {
+      answer: wait(
+        'revise_unanswered',
+        `"${node.title}" was written at revision ${String(node.revision)}, after the operator sent it back at revision ${sentAt}, and its note still opens with their "${PLAN_NODE_REVISE_HEAD}…" line. The stream no longer asks for the rewrite: the operator approves the node or sends it back again.`,
+        node,
+      ),
+    };
+  }
+  if (answeredAt !== null && Number(answeredAt) === node.revision) {
+    return {
+      answer: wait(
+        'revise_unanswered',
+        `A wake was asked to rewrite "${node.title}" at revision ${answeredAt}, and no write has landed on it since. The stream asks once per revision: the operator approves the node or sends it back again.`,
+        node,
+      ),
+    };
   }
   return {
-    decision: 'revise',
-    reason: `The operator sent "${node.title}" back with a note. Rewrite it from that note and leave it blocked for them to approve.`,
-    node: briefNode(node),
-    noteHead: PLAN_NODE_REVISED_HEAD,
+    answer: {
+      decision: 'revise',
+      reason: `The operator sent "${node.title}" back with a note. Rewrite it from that note and leave it blocked for them to approve.`,
+      node: briefNode(node),
+      noteHead: PLAN_NODE_REVISED_HEAD,
+    },
+    revise: { node, record: answeredAt },
   };
+}
+
+// Writes the record only where it still holds what the caller read: two wakes
+// that read the same node race here, and exactly one is asked for the rewrite.
+const CLAIM_REVISE_LUA = `
+local current = redis.call('GET', KEYS[1])
+if (current == false and ARGV[1] == '') or current == ARGV[1] then
+  redis.call('SET', KEYS[1], ARGV[2], 'PX', ARGV[3])
+  return 1
+end
+return 0
+`;
+
+/**
+ * Record the revise as answered at the node's revision, against the record as
+ * it was read. A wake that answers it and writes nothing leaves the node at
+ * that revision, so later wakes wait rather than ask again.
+ */
+async function claimRevise(
+  ctx: PlanStreamContext,
+  revise: NonNullable<SentBack['revise']>,
+): Promise<boolean> {
+  const taken = await ctx.redis.eval(
+    CLAIM_REVISE_LUA,
+    1,
+    planNodeReviseAnsweredKey(ctx, revise.node.nodeId),
+    revise.record ?? '',
+    String(revise.node.revision),
+    String(PLAN_NODE_REVISE_RECORD_TTL_MS),
+  );
+  return Number(taken) === 1;
 }
 
 function stop(
@@ -764,6 +825,7 @@ interface RootDecision {
   answer: PlanStreamAnswer;
   claim?: { key: string; node: PlanNode };
   ask?: { node: PlanNode; record: string | null };
+  revise?: { node: PlanNode; record: string | null };
 }
 
 /** Read what one stream's decision turns on, and decide; nothing is claimed here. */
@@ -795,23 +857,27 @@ async function decideRoot(
   const decision = await decideActive(ctx, root, open, active, input);
   if (!decision.ok || !sentBack) return decision;
   // A revise ranks where the board ranks it: after a merge recorded and a
-  // publication. A revise the rewrite left standing waits behind any work.
-  if (sentBack.decision === 'wait') {
-    return decision.answer.decision === 'wait' ? decided(sentBack) : decision;
+  // publication. A revise the rewrite left standing, or one already answered
+  // at its revision, waits behind any work.
+  if (!sentBack.revise) {
+    return decision.answer.decision === 'wait' ? decided(sentBack.answer) : decision;
   }
-  return boardRank(sentBack) < boardRank(decision.answer) ? decided(sentBack) : decision;
+  return boardRank(sentBack.answer) < boardRank(decision.answer)
+    ? { ok: true, answer: sentBack.answer, revise: sentBack.revise }
+    : decision;
 }
 
 /**
  * The walk to the active node ends at the first blocked node, but the
  * operator can send back any blocked node, so a revise is looked for on all:
- * the first still to answer, or else the first whose line survived its rewrite.
+ * the first still to answer, or else the first whose line survived its rewrite
+ * or that was answered at the revision it stands at.
  */
 async function sentBackAnswer(
   ctx: PlanStreamContext,
   nodes: readonly PlanNodeSummary[],
-): Promise<PlanStreamAnswer | null> {
-  let survived: PlanStreamAnswer | null = null;
+): Promise<SentBack | null> {
+  let survived: SentBack | null = null;
   for (const summary of nodes) {
     if (
       summary.status !== 'blocked' ||
@@ -820,9 +886,9 @@ async function sentBackAnswer(
       continue;
     }
     const node = await ctx.store.find(ctx.spaceId, summary.nodeId);
-    const answer = node ? await reviseAnswer(ctx, node) : null;
-    if (answer?.decision === 'revise') return answer;
-    survived ??= answer;
+    const sentBack = node ? await reviseAnswer(ctx, node) : null;
+    if (sentBack?.revise) return sentBack;
+    survived ??= sentBack;
   }
   return survived;
 }
@@ -1010,6 +1076,10 @@ export async function nextInPlanStream(
   }
   const decided = await decideRoot(ctx, root, input);
   if (!decided.ok) return decided;
+  if (decided.revise) {
+    const claimed = await claimRevise(ctx, decided.revise);
+    return { ok: true, output: claimed ? decided.answer : claimedWait(decided.revise.node) };
+  }
   if (!decided.claim) return { ok: true, output: decided.answer };
   const claimed = await claimStreamState(ctx, decided.claim.key);
   return { ok: true, output: claimed ? decided.answer : claimedWait(decided.claim.node) };
@@ -1041,6 +1111,34 @@ export function boardRank(answer: PlanStreamAnswer): number {
     case 'wait':
       return 8;
   }
+}
+
+function isProposalLine(line: string): boolean {
+  return line.startsWith(PLAN_NODE_PROPOSED_HEAD) && !isFindingsCarrier(line);
+}
+
+/**
+ * A dropped proposal under the root, carriers aside. One the operator sent
+ * back opens with their `Revise: …` line or the rewrite's `Revised: …` line,
+ * with the `Proposed: …` line below it, so its whole note is read.
+ */
+async function declinedProposal(
+  ctx: PlanStreamContext,
+  nodes: readonly PlanNodeSummary[],
+): Promise<boolean> {
+  for (const summary of nodes) {
+    if (summary.status !== 'dropped' || summary.noteHead === undefined) continue;
+    if (isProposalLine(summary.noteHead)) return true;
+    if (
+      !summary.noteHead.startsWith(PLAN_NODE_REVISE_HEAD) &&
+      !summary.noteHead.startsWith(PLAN_NODE_REVISED_HEAD)
+    ) {
+      continue;
+    }
+    const node = await ctx.store.find(ctx.spaceId, summary.nodeId);
+    if (node?.note?.split('\n').some(isProposalLine) === true) return true;
+  }
+  return false;
 }
 
 async function readRootHistory(ctx: PlanStreamContext, rootId: string) {
@@ -1111,6 +1209,10 @@ export async function nextOnPlanBoard(
       waited('claimed');
       continue;
     }
+    if (candidate.revise && !(await claimRevise(ctx, candidate.revise))) {
+      waited('claimed');
+      continue;
+    }
     decisions.push({ root: candidate.root, answer: candidate.answer });
   }
 
@@ -1124,12 +1226,7 @@ export async function nextOnPlanBoard(
       if (!exhaustedRoots.has(candidate.nodeId)) continue;
       const root = await ctx.store.find(ctx.spaceId, candidate.nodeId);
       const history = await readRootHistory(ctx, candidate.nodeId);
-      const declined = history.nodes.some(
-        (node) =>
-          node.status === 'dropped' &&
-          node.noteHead?.startsWith(PLAN_NODE_PROPOSED_HEAD) &&
-          !isFindingsCarrier(node.noteHead),
-      );
+      const declined = await declinedProposal(ctx, history.nodes);
       if (
         root?.status !== 'active' ||
         history.truncated !== undefined ||

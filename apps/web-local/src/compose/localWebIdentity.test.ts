@@ -4,11 +4,32 @@
  * a request refused for arriving under someone else's name, and a process that
  * has no credential to attach.
  */
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { INSTANCE_SECRET_ENV, localWebComposition, localWebIdentity } from './localWebIdentity.js';
+import {
+  INSTANCE_SECRET_ENV,
+  PROFILE_SESSION_COOKIE,
+  localWebComposition,
+  localWebIdentity,
+} from './localWebIdentity.js';
 
 const SECRET = 'a'.repeat(40);
+
+const browserCookies = new Map<string, string>();
+
+vi.mock('next/headers', () => ({
+  cookies: () =>
+    Promise.resolve({
+      get: (name: string) => {
+        const value = browserCookies.get(name);
+        return value === undefined ? undefined : { name, value };
+      },
+    }),
+}));
+
+beforeEach(() => {
+  browserCookies.clear();
+});
 
 function request(headers: Record<string, string>, url = 'http://127.0.0.1:3002/api/identity') {
   return new Request(url, { headers });
@@ -54,11 +75,32 @@ describe('admitRequest', () => {
 });
 
 describe('authorizeUpstream', () => {
-  it('carries the instance secret as a bearer credential', async () => {
+  // The mark is what the API reads to refuse a browser that has lost its
+  // profile session once the install has a second profile. A call without it
+  // would pass as a bare-secret caller and act as the owner.
+  it('carries the instance secret and marks the call as a browser', async () => {
     const outcome = await withSecret(SECRET, () =>
       localWebIdentity.authorizeUpstream({ anonymousOk: false }),
     );
-    expect(outcome).toEqual({ kind: 'authorized', header: `Bearer ${SECRET}` });
+    expect(outcome).toEqual({
+      kind: 'authorized',
+      header: `Bearer ${SECRET}`,
+      headers: { 'x-aflow-browser-caller': '1' },
+    });
+  });
+
+  // The web process forwards the cookie unread. The API alone reads the value.
+  const OPAQUE_SESSION = 'opaque-profile-session-cookie';
+
+  it('forwards the profile session the browser holds', async () => {
+    browserCookies.set(PROFILE_SESSION_COOKIE, OPAQUE_SESSION);
+    const outcome = await withSecret(SECRET, () =>
+      localWebIdentity.authorizeUpstream({ anonymousOk: false }),
+    );
+    expect(outcome.kind === 'authorized' && outcome.headers).toEqual({
+      'x-aflow-browser-caller': '1',
+      'x-aflow-profile-session': OPAQUE_SESSION,
+    });
   });
 
   it('is unavailable rather than anonymous when no secret is set', async () => {

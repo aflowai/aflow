@@ -57,6 +57,20 @@ vi.mock('@aflow/cybernetic-runtime', async () => {
     createStagedChangeDocReader: () => ({
       getByPath: async (path: string, spaceId: string) => store.get(key(spaceId, path)) ?? null,
     }),
+    // The conversation store: DELEGATE is a session the conversation RUN_ID delegated to.
+    loadConversationLookup: vi.fn(async () => ({
+      sessions: new Map([
+        [
+          RUN_ID,
+          { sessionId: RUN_ID, parentSessionId: null, title: 'Storm warnings', manualTitle: null },
+        ],
+        [
+          DELEGATE,
+          { sessionId: DELEGATE, parentSessionId: RUN_ID, title: null, manualTitle: null },
+        ],
+      ]),
+      runSessions: new Map(),
+    })),
   };
 });
 
@@ -68,12 +82,16 @@ vi.mock('@aflow/redis', () => ({
 
 import { handleWorkflowCrudInline } from '../workflowCrud.js';
 import { handleProposalCrudInline } from '../proposalCrud.js';
+import { handleWithdrawProposal } from '../coachWithdrawProposal.js';
+import { loadConversationLookup } from '@aflow/cybernetic-runtime';
 
 const TENANT = 'a0000000-0000-0000-0000-000000000001';
 const SPACE = '41be431d-6011-495b-a4f2-6de539a6a0df';
 const OTHER_SPACE = '52cf542e-7122-4a6c-b5e3-7ef640b7b1e0';
 const RUN_ID = '99999999-2222-3333-4444-555555555555';
+const DELEGATE = '77777777-2222-3333-4444-555555555555';
 const SLUG = 'cx-chatbot-invoke-direct';
+const WHY = 'The chatbot answered with the wrong field.';
 
 /** A composed skill as the assembler stores it: the entry task carries its derived inputContract. */
 function composedWorkflow(): Workflow {
@@ -124,7 +142,7 @@ function args(operation: string, stepType: string, input: unknown, spaceId = SPA
       traceId: 'trace-1',
       spaceId,
       actorContext: {},
-      agentDefinition: { steps: [] },
+      agentDefinition: { steps: [], systemRole: 'cybernetic-helmsman' },
     } as never,
     stepDef: { stepId: 's', stepType, operation, tags: [] } as never,
     stepExecutionId: 'sx-1' as never,
@@ -147,10 +165,22 @@ function lastResult(): { status: string; output?: unknown; error?: Record<string
   return { status: msg.status, output, ...(msg.error ? { error: msg.error } : {}) };
 }
 
-async function patch(operations: unknown[]): Promise<string> {
-  await handleWorkflowCrudInline(
-    args('workflow.manage.patch', 'workflow', { slug: SLUG, operations }),
-  );
+async function patch(
+  operations: unknown[],
+  agent: { runId?: string; customAgentName?: string } = {},
+): Promise<string> {
+  const call = args('workflow.manage.patch', 'workflow', { slug: SLUG, operations, why: WHY });
+  const context = call.context as unknown as Record<string, unknown>;
+  await handleWorkflowCrudInline({
+    ...call,
+    context: {
+      ...context,
+      runId: agent.runId ?? RUN_ID,
+      agentDefinition: agent.customAgentName
+        ? { steps: [], systemRole: null, metadata: { name: agent.customAgentName } }
+        : { steps: [], systemRole: 'cybernetic-helmsman' },
+    } as never,
+  });
   const result = lastResult();
   expect(result.error).toBeUndefined();
   expect(result.status).toBe('SUCCEEDED');
@@ -193,6 +223,44 @@ describe('a proposal a patch returns is readable through proposal.get', () => {
       taskId: 'answer',
       task: { name: 'Answer directly', inputContract: { bindings: { question: {} } } },
     });
+  });
+
+  it('stores the reason the agent gave as the rationale, and records the agent as the source', async () => {
+    const proposalId = await patch([
+      { op: 'replace', path: '/tasks/answer/name', value: 'Answer directly' },
+    ]);
+
+    const read = await getProposal(proposalId);
+    const proposal = (read.output as { proposal: Record<string, unknown> }).proposal;
+    expect(proposal['source']).toBe('agent_patch');
+    expect(proposal['coachSessionId']).toBe(RUN_ID);
+    expect(proposal['proposedBy']).toBe('Helmsman');
+    expect((proposal['proposal'] as { rationale: string }).rationale).toBe(WHY);
+  });
+
+  it('records the agent that patched by its own role, not as the Helmsman', async () => {
+    const proposalId = await patch(
+      [{ op: 'replace', path: '/tasks/answer/name', value: 'Answer directly' }],
+      { customAgentName: 'Forecast analyst' },
+    );
+    const proposal = (
+      (await getProposal(proposalId)).output as { proposal: Record<string, unknown> }
+    ).proposal;
+    expect(proposal['proposedBy']).toBe('Forecast analyst');
+  });
+
+  it('returns the reason from a metadata patch, which stages no proposal', async () => {
+    await handleWorkflowCrudInline(
+      args('workflow.manage.patch', 'workflow', {
+        slug: SLUG,
+        why: WHY,
+        operations: [{ op: 'replace', path: '/name', value: 'Coastal answers' }],
+      }),
+    );
+    const result = lastResult();
+    expect(result.status).toBe('SUCCEEDED');
+    expect(result.output).toMatchObject({ why: WHY });
+    expect([...store.keys()].some((k) => k.includes('/coach/'))).toBe(false);
   });
 
   it('reads back the contract derived from edited bindings, not the stale one', async () => {
@@ -238,6 +306,7 @@ describe('a proposal a patch returns is readable through proposal.get', () => {
     await handleWorkflowCrudInline(
       args('workflow.manage.patch', 'workflow', {
         slug: SLUG,
+        why: WHY,
         operations: [
           {
             op: 'add',
@@ -255,6 +324,7 @@ describe('a proposal a patch returns is readable through proposal.get', () => {
     await handleWorkflowCrudInline(
       args('workflow.manage.patch', 'workflow', {
         slug: SLUG,
+        why: WHY,
         operations: [{ op: 'remove', path: '/tasks/answer/inputContract' }],
       }),
     );
@@ -308,5 +378,101 @@ describe('proposal.get names why a proposal cannot be read', () => {
     });
     const read = await getProposal(MISSING);
     expect(read.error?.['code']).toBe('PROPOSAL_DELETED');
+  });
+});
+
+describe('the conversation that proposed a patch can withdraw it', () => {
+  const OTHER_CONVERSATION = '88888888-2222-3333-4444-555555555555';
+
+  async function withdraw(
+    stagedChangeId: string,
+    runId: string,
+    systemRole: 'cybernetic-helmsman' | 'cybernetic-coach',
+  ) {
+    const call = args('learner.propose.withdraw', 'learner', {
+      stagedChangeId,
+      reason: 'The operator changed the plan.',
+    });
+    const context = {
+      ...(call.context as unknown as Record<string, unknown>),
+      runId,
+      agentDefinition: { steps: [], systemRole },
+    };
+    await handleWithdrawProposal(
+      { ...call, context: context as never },
+      { stagedChangeId, reason: 'The operator changed the plan.' },
+      Date.now(),
+    );
+    return lastResult();
+  }
+
+  function storedStatus(proposalId: string): Record<string, unknown> {
+    const doc = store.get(key(SPACE, `/coach/staged/${proposalId}.json`));
+    return JSON.parse(doc!.inlineContent!) as Record<string, unknown>;
+  }
+
+  it('withdraws a proposal its own conversation made', async () => {
+    const proposalId = await patch([
+      { op: 'replace', path: '/tasks/answer/name', value: 'Answer directly' },
+    ]);
+    const result = await withdraw(proposalId, RUN_ID, 'cybernetic-helmsman');
+    expect(result.status).toBe('SUCCEEDED');
+    expect(storedStatus(proposalId)).toMatchObject({
+      status: 'withdrawn',
+      resolvedBy: 'helmsman',
+      withdrawnBy: 'Helmsman',
+      withdrawReason: 'The operator changed the plan.',
+    });
+  });
+
+  it('withdraws a proposal a session it delegated to patched, as the card names that conversation', async () => {
+    const proposalId = await patch(
+      [{ op: 'replace', path: '/tasks/answer/name', value: 'Answer directly' }],
+      { runId: DELEGATE },
+    );
+    const result = await withdraw(proposalId, RUN_ID, 'cybernetic-helmsman');
+    expect(result.status).toBe('SUCCEEDED');
+    expect(storedStatus(proposalId)['status']).toBe('withdrawn');
+  });
+
+  it('refuses a proposal another conversation made, and leaves it proposed', async () => {
+    const proposalId = await patch([
+      { op: 'replace', path: '/tasks/answer/name', value: 'Answer directly' },
+    ]);
+    const result = await withdraw(proposalId, OTHER_CONVERSATION, 'cybernetic-helmsman');
+    expect(result.status).toBe('FAILED');
+    expect(result.error?.['code']).toBe('PROPOSAL_NOT_WITHDRAWABLE');
+    expect(String(result.error?.['message'])).toContain('another conversation');
+    expect(storedStatus(proposalId)['status']).toBe('proposed');
+  });
+
+  it('asks for a retry, not a refusal, when the conversations cannot be read', async () => {
+    const proposalId = await patch(
+      [{ op: 'replace', path: '/tasks/answer/name', value: 'Answer directly' }],
+      { runId: DELEGATE },
+    );
+    vi.mocked(loadConversationLookup).mockRejectedValueOnce(new Error('connection reset'));
+    const result = await withdraw(proposalId, RUN_ID, 'cybernetic-helmsman');
+    expect(result.status).toBe('FAILED');
+    expect(result.error).toMatchObject({
+      code: 'PROPOSAL_OWNER_UNREADABLE',
+      classification: 'transient',
+      retryable: true,
+    });
+    expect(String(result.error?.['message'])).not.toContain('another conversation');
+    expect(storedStatus(proposalId)['status']).toBe('proposed');
+  });
+
+  it('lets the Coach withdraw a Helmsman patch, and records the Coach as who withdrew it', async () => {
+    const proposalId = await patch([
+      { op: 'replace', path: '/tasks/answer/name', value: 'Answer directly' },
+    ]);
+    const result = await withdraw(proposalId, OTHER_CONVERSATION, 'cybernetic-coach');
+    expect(result.status).toBe('SUCCEEDED');
+    expect(storedStatus(proposalId)).toMatchObject({
+      resolvedBy: 'coach',
+      proposedBy: 'Helmsman',
+      withdrawnBy: 'Coach',
+    });
   });
 });
