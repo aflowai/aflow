@@ -41,6 +41,7 @@ import {
   StateDot,
   selectableStyle,
   srOnly,
+  useHover,
   useMoveControls,
   useReveal,
 } from './PlanParts.js';
@@ -317,6 +318,7 @@ function PlanRowView({
   const progress = planRowProgress(row);
   const needsYou = row.counts?.needsYou ?? 0;
   const inFlight = row.counts?.inFlight ?? 0;
+  const hover = useHover();
   return (
     <li
       ref={rowRef}
@@ -324,7 +326,15 @@ function PlanRowView({
       data-state={row.state}
       {...(selected ? { 'aria-current': 'true' as const } : {})}
       {...hostProps}
-      style={{ ...rowGrid, ...selectableStyle(selected) }}
+      onMouseEnter={() => {
+        hover.hoverProps.onMouseEnter();
+        hostProps?.onMouseEnter();
+      }}
+      onMouseLeave={() => {
+        hover.hoverProps.onMouseLeave();
+        hostProps?.onMouseLeave();
+      }}
+      style={{ ...rowGrid, ...selectableStyle(selected, hover.hovered) }}
     >
       <button
         type="button"
@@ -556,6 +566,7 @@ export function PlanList({
   });
 
   const overview = selectedId === undefined;
+  const overviewHover = useHover();
   const body = (
     <Column gap="md">
       <button
@@ -563,11 +574,17 @@ export function PlanList({
         aria-pressed={overview}
         {...(overview ? { 'aria-current': 'true' as const } : {})}
         data-plan-list-overview
+        {...overviewHover.hoverProps}
         onClick={() => {
           if (narrow) setDisclosed(false);
           onOverview();
         }}
-        style={{ ...rowButton, ...rowGrid, width: '100%', ...selectableStyle(overview) }}
+        style={{
+          ...rowButton,
+          ...rowGrid,
+          width: '100%',
+          ...selectableStyle(overview, overviewHover.hovered),
+        }}
       >
         <Icon name="squares-four" size="xs" />
         <Text size="sm" weight={overview ? 'semibold' : 'medium'}>

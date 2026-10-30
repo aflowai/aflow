@@ -34,7 +34,16 @@ import {
   type PlanLaneId,
 } from '../../lib/plan-board.js';
 import type { PlanNodeOpener } from './PlanNodeOpenControl.js';
-import { GroupLabel, HeadingDot, MetaSep, NextMarker, PullRequestChip } from './PlanParts.js';
+import {
+  GroupLabel,
+  HOVER_TINT,
+  HeadingDot,
+  MetaSep,
+  NextMarker,
+  PullRequestChip,
+  hoverTransition,
+  useHover,
+} from './PlanParts.js';
 
 const linkStyle = { color: 'var(--color-text-link)' } as const;
 
@@ -142,10 +151,12 @@ function LaneRow({
   onDecide: (item: PlanLaneItem) => void;
   onOpen: PlanNodeOpener;
 }) {
+  const { hovered, hoverProps } = useHover();
   return (
     <li
       data-plan-lane-row={item.nodeId}
       {...(selected ? { 'aria-current': 'true' as const } : {})}
+      {...hoverProps}
       onClick={() => {
         onSelect(item);
       }}
@@ -156,9 +167,12 @@ function LaneRow({
         columnGap: 'var(--space-3)',
         padding: 'var(--space-2) var(--space-2-5)',
         marginBottom: 'var(--space-1)',
+        ...hoverTransition,
         background: selected
           ? 'var(--color-surface-3, var(--color-surface-2))'
-          : 'var(--color-surface-0)',
+          : hovered
+            ? HOVER_TINT
+            : 'var(--color-surface-0)',
         border: '1px solid var(--color-border-subtle)',
         borderLeft: `3px solid ${selected ? 'var(--color-interactive-default)' : color}`,
         borderRadius: 'var(--radius-sm)',

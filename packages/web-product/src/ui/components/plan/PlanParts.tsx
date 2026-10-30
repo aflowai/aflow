@@ -29,12 +29,45 @@ export const srOnly: CSSProperties = {
   border: 0,
 };
 
-/** The designer outline's row: filled and barred in the interactive colour when current. */
-export function selectableStyle(current: boolean): CSSProperties {
+/** The tint a row, an item or a disclosure takes while pointed at, and how fast it takes it. */
+export const HOVER_TINT = 'var(--color-surface-2)';
+export const hoverTransition: CSSProperties = {
+  transition: 'background-color var(--transition-duration-fast) var(--transition-timing-default)',
+};
+
+/**
+ * The designer outline's row: filled and barred in the interactive colour
+ * when current, tinted while pointed at otherwise.
+ */
+export function selectableStyle(current: boolean, hovered = false): CSSProperties {
   return {
-    background: current ? 'var(--color-surface-3, var(--color-surface-2))' : 'transparent',
+    ...hoverTransition,
+    background: current
+      ? 'var(--color-surface-3, var(--color-surface-2))'
+      : hovered
+        ? HOVER_TINT
+        : 'transparent',
     borderLeft: `2px solid ${current ? 'var(--color-interactive-default)' : 'transparent'}`,
     color: current ? 'var(--color-text-primary)' : 'var(--color-text-secondary)',
+  };
+}
+
+/** Whether an element is pointed at, which tints it. */
+export function useHover(): {
+  hovered: boolean;
+  hoverProps: { onMouseEnter: () => void; onMouseLeave: () => void };
+} {
+  const [hovered, setHovered] = useState(false);
+  return {
+    hovered,
+    hoverProps: {
+      onMouseEnter: () => {
+        setHovered(true);
+      },
+      onMouseLeave: () => {
+        setHovered(false);
+      },
+    },
   };
 }
 
@@ -204,20 +237,26 @@ export function Disclosure({
   onToggle: () => void;
   children: ReactNode;
 }) {
+  const { hovered, hoverProps } = useHover();
   return (
     <button
       type="button"
       aria-expanded={expanded}
       onClick={onToggle}
+      {...hoverProps}
       style={{
+        ...hoverTransition,
         display: 'inline-flex',
         alignItems: 'center',
         gap: 'var(--space-1)',
-        padding: 'var(--space-1) 0',
+        // The tint reaches past the label, while the caret stays on the label's edge.
+        padding: 'var(--space-1) var(--space-1-5)',
+        margin: '0 calc(-1 * var(--space-1-5))',
         border: 'none',
-        background: 'transparent',
+        borderRadius: 'var(--radius-sm)',
+        background: hovered ? HOVER_TINT : 'transparent',
         cursor: 'pointer',
-        color: 'var(--color-text-muted)',
+        color: hovered ? 'var(--color-text-primary)' : 'var(--color-text-muted)',
         fontSize: 'var(--font-size-xs)',
         fontWeight: 'var(--font-weight-semibold)',
         textTransform: 'uppercase',

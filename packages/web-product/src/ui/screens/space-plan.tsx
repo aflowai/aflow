@@ -173,6 +173,11 @@ export function SpacePlanPage(): React.ReactNode {
   });
   const current: BoardView =
     view.rootId === rootId ? view : { rootId, phaseId: ALL_PHASES, expanded: null };
+  // The Step pane's fold, for the step the URL names: any change of step
+  // unfolds it, while the pane stays mounted and keeps the width dragged.
+  const [stepFold, setStepFold] = useState({ nodeId: nodeParam, folded: false });
+  if (stepFold.nodeId !== nodeParam) setStepFold({ nodeId: nodeParam, folded: false });
+  const stepFolded = stepFold.nodeId === nodeParam && stepFold.folded;
   /** The close form open in the rail, for the step it was opened on. */
   const [choosing, setChoosing] = useState<{
     nodeId: string;
@@ -607,15 +612,17 @@ export function SpacePlanPage(): React.ReactNode {
           </div>
         </Pane>
         {inspector !== null && (
-          // Keyed by the step, so a step opened reopens a pane the operator collapsed.
           <CollapsibleSide
-            key={nodeParam}
             side="right"
             defaultWidth={372}
             minWidth={280}
             maxWidth={560}
             icon="sliders"
             label="Step"
+            collapsed={stepFolded}
+            onCollapsedChange={(folded) => {
+              setStepFold({ nodeId: nodeParam, folded });
+            }}
           >
             <Pane>
               <aside
