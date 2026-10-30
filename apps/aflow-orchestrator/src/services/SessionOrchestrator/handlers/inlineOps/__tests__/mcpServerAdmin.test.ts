@@ -8,10 +8,12 @@ beforeAll(() => {
 
 const mockAddStepResult = vi.fn();
 const mockPublishMcpCatalogInvalidation = vi.fn();
+const mockGetSessionState = vi.fn();
 
 vi.mock('@aflow/redis', () => ({
   addStepResult: (...args: unknown[]) => mockAddStepResult(...args),
   publishMcpCatalogInvalidation: (...args: unknown[]) => mockPublishMcpCatalogInvalidation(...args),
+  getSessionState: (...args: unknown[]) => mockGetSessionState(...args),
 }));
 
 // Rows the next `select` answers with, and the SQL and bound values every `execute` was given.
@@ -194,6 +196,8 @@ const storedDefinitionRow = {
 beforeEach(() => {
   mockAddStepResult.mockClear();
   mockPublishMcpCatalogInvalidation.mockClear();
+  mockGetSessionState.mockReset();
+  mockGetSessionState.mockResolvedValue(null);
   selectRows = [];
   executeRows = [];
   executed.length = 0;
@@ -485,7 +489,11 @@ describe('mcp.server.delete', () => {
     expect(executed.some((q) => q.includes('DELETE FROM mcp_server_definitions'))).toBe(true);
   });
 
-  it('writes a cleared audit row when the deleted definition held private network hosts', async () => {
+  /** Deletes a definition that held private network hosts and returns its audit row's values. */
+  async function deleteAcknowledgedDefinition(): Promise<{
+    params: unknown[];
+    details: Record<string, unknown>;
+  }> {
     selectRows = [storedDefinitionRow];
     // Every statement answers with this row: the binding read sees no credential,
     // and the definition delete returns the record it held.
@@ -505,9 +513,44 @@ describe('mcp.server.delete', () => {
     expect(decodeOutput(lastResult())).toEqual({ deleted: true });
     const audit = executed.findIndex((q) => q.includes('INSERT INTO tenant_audit_log'));
     expect(audit).toBeGreaterThan(-1);
-    expect(executedParams[audit]).toEqual(
+    const params = executedParams[audit]!;
+    const details = params.find(
+      (value): value is string => typeof value === 'string' && value.startsWith('{'),
+    );
+    expect(details).toBeDefined();
+    return { params, details: JSON.parse(details!) as Record<string, unknown> };
+  }
+
+  it('writes a cleared audit row naming the actor the run acts for, its run and its step', async () => {
+    const USER = '00000000-0000-4000-8000-0000000000bb';
+    mockGetSessionState.mockResolvedValue({
+      actorContextJson: JSON.stringify({
+        userId: USER,
+        kind: 'human',
+        authMethod: 'jwt',
+        tenantId: '00000000-0000-4000-8000-0000000000cc',
+        tenantRole: 'owner',
+        capturedAt: '2026-10-30T12:00:00.000Z',
+      }),
+    });
+    const { params, details } = await deleteAcknowledgedDefinition();
+    expect(params).toEqual(
+      expect.arrayContaining([USER, 'human', 'mcp.private_network.cleared', 'docs-mcp']),
+    );
+    expect(details).toMatchObject({
+      cause: 'definition_deleted',
+      runId: 'run-1',
+      stepExecutionId: 'se-1',
+    });
+    expect(mockGetSessionState).toHaveBeenCalledWith({}, 'tenant-1', 'run-1');
+  });
+
+  it('names the run and step as the system when the run carries no actor context', async () => {
+    const { params, details } = await deleteAcknowledgedDefinition();
+    expect(params).toEqual(
       expect.arrayContaining([null, 'system', 'mcp.private_network.cleared', 'docs-mcp']),
     );
+    expect(details).toMatchObject({ runId: 'run-1', stepExecutionId: 'se-1' });
   });
 
   it('fails a delete of a server that is not there, naming it, and deletes nothing', async () => {

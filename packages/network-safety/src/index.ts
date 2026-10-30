@@ -258,22 +258,19 @@ function remedySentence(hostname: string, remedy: PrivateNetworkRemedy): string 
  * hosts it lists. It moves no other refusal. The default refuses every range.
  *
  * `protocol` is the scheme of the URL the caller dials. A host the policy lists
- * is reached over https only (Plan 336 D2), so any other scheme is refused
- * before resolution. The default policy lists no host and keeps http to a
- * public host.
+ * is reached over https only (Plan 336 D2), so it is refused before resolution
+ * unless the scheme is `https:`. The rule keys on the policy alone: a call that
+ * states no scheme is refused too, because nothing shows it dials https. The
+ * default policy lists no host and keeps http to a public host.
  */
 export async function resolveAndValidateHost(
   hostname: string,
   policy: PrivateNetworkPolicy = DEFAULT_PRIVATE_NETWORK_POLICY,
   protocol?: string,
 ): Promise<ResolvedHost> {
-  if (
-    protocol !== undefined &&
-    protocol !== 'https:' &&
-    policy.hosts.includes(normalizeHostname(hostname))
-  ) {
+  if (protocol !== 'https:' && policy.hosts.includes(normalizeHostname(hostname))) {
     throw new SsrfBlockedError(
-      `Blocked: ${hostname} is on the operator's private network, so it is reached over https only (got ${protocol})`,
+      `Blocked: ${hostname} is on the operator's private network, so it is reached over https only (got ${protocol ?? 'no scheme'})`,
       hostname,
       { kind: 'invalid-protocol', remedy: 'none' },
     );

@@ -101,7 +101,7 @@ describe('listed host, private address', () => {
 
   it('admits a listed name answering an RFC1918 address', async () => {
     answers('10.1.2.3');
-    await expect(resolveAndValidateHost(HOST, policy)).resolves.toEqual({
+    await expect(resolveAndValidateHost(HOST, policy, 'https:')).resolves.toEqual({
       hostname: HOST,
       ip: '10.1.2.3',
       family: 4,
@@ -110,14 +110,16 @@ describe('listed host, private address', () => {
 
   it('admits a listed name answering shared address space', async () => {
     answers('100.64.12.7');
-    await expect(resolveAndValidateHost(HOST, policy)).resolves.toMatchObject({
+    await expect(resolveAndValidateHost(HOST, policy, 'https:')).resolves.toMatchObject({
       ip: '100.64.12.7',
     });
   });
 
   it('matches the host exactly, ignoring case and a trailing dot', async () => {
     answers('10.1.2.3');
-    await expect(resolveAndValidateHost('MCP.corp.example.', policy)).resolves.toMatchObject({
+    await expect(
+      resolveAndValidateHost('MCP.corp.example.', policy, 'https:'),
+    ).resolves.toMatchObject({
       ip: '10.1.2.3',
     });
     const sub = await refusal(resolveAndValidateHost(`api.${HOST}`, policy));
@@ -125,7 +127,9 @@ describe('listed host, private address', () => {
   });
 
   it('admits a listed canonical quad without resolution', async () => {
-    await expect(resolveAndValidateHost('10.0.0.5', localPolicy(['10.0.0.5']))).resolves.toEqual({
+    await expect(
+      resolveAndValidateHost('10.0.0.5', localPolicy(['10.0.0.5']), 'https:'),
+    ).resolves.toEqual({
       hostname: '10.0.0.5',
       ip: '10.0.0.5',
       family: 4,
@@ -146,7 +150,7 @@ describe('listed host, private address', () => {
       ['240.0.0.1', 'reserved'],
     ] as const) {
       answers(address);
-      const err = await refusal(resolveAndValidateHost(HOST, policy));
+      const err = await refusal(resolveAndValidateHost(HOST, policy, 'https:'));
       expect(err, address).toMatchObject({ kind: 'private-ip', rangeLabel: label, remedy: 'none' });
     }
   });
@@ -154,10 +158,12 @@ describe('listed host, private address', () => {
   it('keeps the spelling refusals for a listed entry', async () => {
     const spelled = localPolicy(['::1', '0x0a.0.0.1']);
     expect(spelled.hosts).toEqual(['::1', '0x0a.0.0.1']);
-    expect((await refusal(resolveAndValidateHost('::1', spelled))).rangeLabel).toBe('ipv6-literal');
-    expect((await refusal(resolveAndValidateHost('0x0a.0.0.1', spelled))).rangeLabel).toBe(
-      'non-canonical-numeric',
+    expect((await refusal(resolveAndValidateHost('::1', spelled, 'https:'))).rangeLabel).toBe(
+      'ipv6-literal',
     );
+    expect(
+      (await refusal(resolveAndValidateHost('0x0a.0.0.1', spelled, 'https:'))).rangeLabel,
+    ).toBe('non-canonical-numeric');
   });
 });
 
@@ -261,17 +267,33 @@ describe('a listed host is reached over https only', () => {
     expect(lookup).not.toHaveBeenCalled();
   });
 
+  it('refuses a listed host under a policy alone, with no protocol passed', async () => {
+    answers('10.1.2.3');
+    for (const protocol of [undefined, 'http:']) {
+      const err = await refusal(resolveAndValidateHost(HOST, localPolicy([HOST]), protocol));
+      expect(err, String(protocol)).toMatchObject({ kind: 'invalid-protocol', remedy: 'none' });
+      expect(err.message).toContain('reached over https only');
+    }
+    expect(lookup).not.toHaveBeenCalled();
+  });
+
   it('admits the same URL over https', async () => {
     answers('10.1.2.3');
     await expect(
       validateUrl(`https://${HOST}/mcp`, [], localPolicy([HOST])),
     ).resolves.toMatchObject({ resolvedHost: { ip: '10.1.2.3' } });
+    await expect(
+      resolveAndValidateHost(HOST, localPolicy([HOST]), 'https:'),
+    ).resolves.toMatchObject({ ip: '10.1.2.3' });
   });
 
   it('keeps http to a public host with no policy', async () => {
     answers('93.184.216.34');
     await expect(validateUrl('http://api.example.com/v1', [])).resolves.toMatchObject({
       resolvedHost: { ip: '93.184.216.34' },
+    });
+    await expect(resolveAndValidateHost('api.example.com')).resolves.toMatchObject({
+      ip: '93.184.216.34',
     });
   });
 });

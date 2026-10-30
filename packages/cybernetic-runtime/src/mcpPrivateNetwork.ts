@@ -29,6 +29,8 @@ export interface PrivateNetworkAuditActor {
   /** A user id. A value that is not a UUID is kept in `details` instead. */
   actorId: string | null;
   actorKind: 'human' | 'service_principal' | 'system';
+  /** The run and step that made the change, when an agent run made it. */
+  run?: { runId: string; stepExecutionId: string };
 }
 
 export type McpPrivateNetworkWriteErrorCode =
@@ -113,6 +115,9 @@ export async function writeMcpPrivateNetworkAudit(
     edition: row.edition,
     cause: row.cause,
     ...(actorId === null && row.actor.actorId !== null ? { actor: row.actor.actorId } : {}),
+    ...(row.actor.run
+      ? { runId: row.actor.run.runId, stepExecutionId: row.actor.run.stepExecutionId }
+      : {}),
   };
   await tx.execute(sql`
     INSERT INTO tenant_audit_log (
