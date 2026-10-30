@@ -98,6 +98,7 @@ export interface UseActionCenterResult {
   resolveStateById: Record<string, 'idle' | 'submitting' | 'error'>;
   resolveErrorById: Record<string, string | undefined>;
   carrierFailures?: string[];
+  clearCarrierFailures?: () => void;
 
   /** Resolve action — returns the result so callers can chain on success. */
   resolve: (
@@ -607,6 +608,9 @@ export function useActionCenter(spaceId: string | null): UseActionCenterResult {
     resolveStateById,
     resolveErrorById,
     carrierFailures,
+    clearCarrierFailures: () => {
+      setCarrierWarnings({ spaceId, failures: [] });
+    },
     resolve,
     refresh,
     loadProposalDetail,

@@ -1,5 +1,6 @@
 'use client';
 
+import { CarrierFailures } from './CarrierFailures.js';
 import { useState, type ReactElement } from 'react';
 import { Badge, Card, CardBody, Column, HitlResolution, Row, Text } from '@aflow/design-system';
 import type { PostInstallTask } from '@aflow/schemas';
@@ -70,11 +71,7 @@ export function ActionCenterLane({
 
   return (
     <Column gap="sm">
-      {state.carrierFailures?.map((failure, index) => (
-        <div role="alert" key={index}>
-          {failure}
-        </div>
-      ))}
+      <CarrierFailures state={state} />
       <Row gap="sm" align="center">
         <Text size="sm" weight="semibold">
           {title}

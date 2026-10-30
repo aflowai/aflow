@@ -24,6 +24,7 @@ import {
 import { createTenantContext } from '@aflow/database';
 import { resolveDisclosedCallers } from '@aflow/cybernetic-runtime';
 import type { DisclosedCallerBinding } from '@aflow/schemas';
+import { planResidentSessionMarker } from '../helpers/planResidentSession.js';
 import { resolveStepInput } from '../helpers/stepInputResolution.js';
 import { buildSpaceContext, readSpaceContextGen } from '../helpers/spaceContext.js';
 import { initializeRuntimeState } from '../helpers/runtimeState.js';
@@ -127,6 +128,8 @@ export function createStartRun(bindings: SessionOrchestratorBindings) {
     }
 
     const trigger = existingRun?.trigger ?? params.trigger;
+    const planResident =
+      existingRun?.planResident ?? planResidentSessionMarker(trigger, params.target, parsedInput);
 
     if (parsedInput && agentDef.stateVariables.length > 0) {
       const pipelineResult = processFlowInput(parsedInput, agentDef);
@@ -211,6 +214,8 @@ export function createStartRun(bindings: SessionOrchestratorBindings) {
             ? { workflowExecution: existingRun.workflowExecution }
             : {}),
           activatedByPerson: params.activatedByPerson,
+          ...(trigger ? { trigger } : {}),
+          planResident,
         },
       );
       manifestService?.trackRun({ runId, tenantId: params.tenantId, status: 'PAUSED' });
@@ -408,6 +413,7 @@ export function createStartRun(bindings: SessionOrchestratorBindings) {
       ...(startUserMessage ? { lastMessageSeq: 1, lastActivityAt: now } : {}),
       ...(params.spaceId ? { spaceId: params.spaceId } : {}),
       ...(trigger ? { trigger } : {}),
+      planResident,
       activatedByPerson: params.activatedByPerson,
       ...(params.voiceMode ? { voiceMode: true } : {}),
       ...(params.actorContext ? { actorContextJson: JSON.stringify(params.actorContext) } : {}),

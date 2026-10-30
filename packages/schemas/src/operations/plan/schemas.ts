@@ -1064,7 +1064,7 @@ export const PlanStreamAnswerSchema = z.discriminatedUnion('decision', [
           'Where the criteria are not met, the note’s first line begins with this, and goes on to name the next step.',
         ),
       link: PlanNodeLinkCreateSchema.describe(
-        'Pass this merge record to plan.node.link before closing the node. A resident may close the merged node done with an outcome when its criteria are met.',
+        'Link this merge after a successful close or a note judging unmet criteria. A link alone never judges the merge.',
       ),
       liveCheck: PlanNodeCreateSchema.describe(
         'Create this blocked live check only when criteria require the merged change running on the stack. Only a person approves the live check after reading the folder head.',

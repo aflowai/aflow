@@ -81,11 +81,11 @@ export const LearnerLearningConsolidateRegistration: OperationRegistration = {
   name: 'Consolidate Learnings',
   actionLabel: 'Consolidating learnings…',
   semanticDescription:
-    'Curate the durable learning corpus in one batched call: merge duplicates into a ' +
+    'Curate the durable learning corpus in one batched call. Its actions: merge duplicates into a ' +
     'surviving learning, retire learnings that were internalized into skill structure or ' +
     'went stale, disprove learnings the evidence now contradicts, and prune noise. ' +
-    'Everything except prune keeps the record (as negative or superseded evidence); only ' +
-    'active learnings inject into runs, so consolidation is how the injected set shrinks ' +
+    'Every action except prune keeps the record (as negative or superseded evidence). Only ' +
+    'active learnings inject into runs, so consolidating is how the injected set shrinks ' +
     'back under budget.',
   tags: ['learner', 'learning', 'consolidation', 'cybernetic', 'coach'],
   groupDisplayName: 'Coach Learnings',
@@ -107,10 +107,10 @@ export const LearnerLearningConsolidateRegistration: OperationRegistration = {
       'Operator ratify/reject of a proposed learning — that stays on the operator surface',
     ],
     pitfalls: [
-      'Learning ids come from the durable-learnings block of the review brief or from workflow.manage.get / workflow.ledger.get activeLearnings[].learningId — never invent them',
+      'Learning ids come from the durable-learnings block of the review brief or from workflow.manage.get / workflow.ledger.get activeLearnings[].learningId. Never invent them',
       'prune deletes the record permanently — prefer retire/disprove so the corpus keeps negative evidence',
-      'merge marks the absorbed learnings superseded; they stop injecting immediately',
-      `A survivor's supersedes list caps at ${String(COACH_LEARNING_SUPERSEDES_MAX)}; a merge that would exceed it fails — pick a fresher survivor or prune instead`,
+      'merge marks the absorbed learnings superseded. They stop injecting immediately',
+      `A survivor's supersedes list caps at ${String(COACH_LEARNING_SUPERSEDES_MAX)}. A merge that would exceed it fails. Pick a fresher survivor or prune instead`,
       'Actions apply per-entry: an unknown learning id fails that action and leaves the rest applied',
     ],
     minimalExampleInput: {

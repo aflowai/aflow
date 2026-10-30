@@ -828,9 +828,9 @@ export const UiOperationRegistrations: OperationRegistration[] = [
       'Generate a UI artifact: a DS-bound component (react_tsx, html_js), a standalone interactive ' +
       'applet with third-party libraries (applet), or a pure SVG illustration with CSS/SMIL ' +
       'animations (illustration). The model produces source code that is validated and stored as a draft. ' +
-      'DS-bound kinds are compiled via esbuild; applets and illustrations skip compilation. ' +
-      'Optionally provide a dataSchema and real preview data; generate returns immediate preview HTML ' +
-      'using the supplied data when it validates, otherwise it falls back to sample data or empty-state rendering.',
+      'DS-bound kinds are compiled via esbuild. Applets and illustrations skip compilation. ' +
+      'Optionally pass a dataSchema and real preview data. generate returns immediate preview HTML ' +
+      'from the supplied data when it validates. Otherwise it uses sample data or empty-state rendering.',
     tags: ['ui', 'generation', 'artifact'],
     idempotency: 'non_idempotent',
     mutates: true,
@@ -842,23 +842,23 @@ export const UiOperationRegistrations: OperationRegistration[] = [
         'Creating a draft and immediately previewing it with real runtime data in the same step',
         'Iterating on an existing artifact with a new prompt',
         'Building interactive mini-apps, games, simulations, or creative tools (applet kind with libraries)',
-        'Authoring a stateful applet — a shared work item people and the agent operate together — set applet: true so the definition is emitted with the view',
+        'Authoring a stateful applet, a shared work item that people and the agent operate together. Set applet: true so the definition is emitted with the view',
         'Creating animated SVG illustrations, loaders, avatars, or decorative graphics (illustration kind)',
-        'When previewing with data from a prior tool call, pass it by reference (`{ "$ref": "output.<previousToolCallId>/<field>" }`) — do not transcribe the payload inline',
+        'When previewing with data from a prior tool call, pass it by reference (`{ "$ref": "output.<previousToolCallId>/<field>" }`). Do not transcribe the payload inline',
       ],
       whenNotToUse: [
         'Streaming live progressive UI — use ui.surface.visualize instead',
         'Simple text responses — use ai.text.generate instead',
       ],
       pitfalls: [
-        'Generated artifacts are drafts that expire — call ui.artifact.publish({ draftId: draft.draftId }) to make one a durable published version, then ui.artifact.render({ artifactId, data }) to show it',
-        'Applet drafts (applet: true) are made durable by ui.applet.instantiate instead — it publishes the draft and creates the live instance in one step',
-        'Provide a dataSchema when possible to improve generation accuracy',
+        'Generated artifacts are drafts that expire. Call ui.artifact.publish({ draftId: draft.draftId }) to make one a durable published version. Then call ui.artifact.render({ artifactId, data }) to show it',
+        'Applet drafts (applet: true) are made durable by ui.applet.instantiate instead. It publishes the draft and creates the live instance in one step',
+        'Pass a dataSchema when possible so the model generates more accurately',
         'If you already have the real data for the first preview, pass it as data so generate can return preview HTML directly',
-        'artifactId must be the UUID of an existing published artifact; omit it when creating a new artifact',
-        'For applet kind, pass libraries to select specific third-party libraries; omit to let the model choose',
+        'artifactId must be the UUID of an existing published artifact. Omit it when creating a new artifact',
+        'For applet kind, pass libraries to select specific third-party libraries. Omit libraries to let the model choose',
         'Illustration kind outputs SVG — use the svg field in the output for inline rendering',
-        'Do not transcribe prior tool output inline into `data`. Pass `{ "$ref": "output.<toolCallId>/<field>" }` so the platform resolves it server-side; inline copying wastes tokens and risks numeric precision loss.',
+        'Do not transcribe prior tool output inline into `data`. Pass `{ "$ref": "output.<toolCallId>/<field>" }` so the platform resolves it server-side. Inline copying wastes tokens and risks losing numeric precision.',
       ],
       minimalExampleInput: {
         prompt:
@@ -906,8 +906,8 @@ export const UiOperationRegistrations: OperationRegistration[] = [
     name: 'Get UI Artifact',
     actionLabel: 'Retrieving artifact…',
     semanticDescription:
-      'Retrieve a published artifact version, a specific historical version, or a draft. ' +
-      'Supports latest-by-artifactId, exact-by-versionId, or draft-by-draftId.',
+      'Retrieve the latest published version by artifactId, a specific historical version ' +
+      'by versionId, or a draft by draftId.',
     tags: ['ui', 'artifact', 'read'],
     idempotency: 'idempotent',
     mutates: false,

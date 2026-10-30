@@ -127,7 +127,7 @@ function emittedOutput(): unknown {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockGetSessionState.mockResolvedValue({ trigger: 'chat' });
+  mockGetSessionState.mockResolvedValue({ planResident: false, trigger: 'chat' });
   mockGetSessionStateSafe.mockResolvedValue({ ok: true, state: { createdBy: OPERATOR } });
   mockReadDurableSessionCreatedBy.mockResolvedValue(undefined);
 });
@@ -151,13 +151,15 @@ describe('plan.node.update', () => {
     expect(mockReadMergedPullRequest).toHaveBeenCalledWith({}, TENANT, SPACE, LINK.ref);
   });
   it.each([
+    [{ trigger: 'schedule', planResident: true }, true],
+    [{ trigger: 'schedule', planResident: false }, false],
     [{ trigger: 'schedule' }, true],
     [{}, true],
-    [{ trigger: 'webhook', activatedByPerson: true }, false],
-    [{ trigger: 'api', activatedByPerson: false }, false],
-    [{ trigger: 'mcp', activatedByPerson: false }, false],
-    [{ trigger: 'eval' }, false],
-    [{ trigger: 'voice', activatedByPerson: false }, false],
+    [{ planResident: false, trigger: 'webhook', activatedByPerson: true }, false],
+    [{ planResident: false, trigger: 'api', activatedByPerson: false }, false],
+    [{ planResident: false, trigger: 'mcp', activatedByPerson: false }, false],
+    [{ planResident: false, trigger: 'eval' }, false],
+    [{ planResident: false, trigger: 'voice', activatedByPerson: false }, false],
     [{ trigger: 'chat', activatedByPerson: false }, false],
     [null, true],
   ])(
@@ -613,8 +615,10 @@ describe('plan.node.next', () => {
 describe('resident provenance', () => {
   it('restricts scheduled runs and fails closed when provenance is unavailable', async () => {
     for (const [state, resident] of [
+      [{ trigger: 'schedule', planResident: true }, true],
+      [{ trigger: 'schedule', planResident: false }, false],
       [{ trigger: 'schedule' }, true],
-      [{ trigger: 'chat' }, false],
+      [{ planResident: false, trigger: 'chat' }, false],
       [null, true],
     ] as const) {
       mockGetSessionState.mockResolvedValueOnce(state);

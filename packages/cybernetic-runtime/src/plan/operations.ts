@@ -9,6 +9,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { Redis } from 'ioredis';
 import {
   isClosedPlanNodeStatus,
+  PLAN_NODE_MERGE_WAIT_LINE,
   PLAN_NODE_CHILDREN_LIMIT,
   PLAN_NODE_DEPENDENCIES_LIMIT,
   PLAN_NODE_LEARNINGS_LIMIT,
@@ -449,7 +450,7 @@ async function readCarrierFindings(
     limit: PLAN_CARRIER_FINDINGS_LIMIT,
   });
   if (page.links.length === 0) return undefined;
-  const since = await ctx.store.latestCarrierAt(ctx.spaceId, closed.parentId, closed.nodeId);
+  const since = await ctx.store.latestCarrierAt(ctx.spaceId, closed.nodeId);
   const findings: PlanNodeLink[] = [];
   let uncarried = 0;
   for (;;) {
@@ -511,27 +512,6 @@ async function writePlanNode(
     return residentUnblocks(current);
   }
 
-  const pullRequest =
-    ctx.resident === true && input.status === 'done'
-      ? await ctx.store.newestLink(ctx.spaceId, current.nodeId, 'pull_request')
-      : null;
-  if (ctx.resident === true && input.status === 'done') {
-    let merged = false;
-    try {
-      merged =
-        pullRequest !== null && (await ctx.readMergedPullRequest?.(pullRequest.ref)) === true;
-    } catch {
-      merged = false;
-    }
-    if (!merged)
-      return {
-        ok: false,
-        code: 'PLAN_NODE_RESIDENT_SCOPE',
-        message:
-          'This scheduled close requires a linked pull request GitHub reports merged at close time. Nothing was written. The node stays for a person.',
-        details: { nodeId: current.nodeId },
-      };
-  }
   if (
     ctx.resident === true &&
     (input.title !== undefined ||
@@ -559,6 +539,41 @@ async function writePlanNode(
     };
   }
 
+  const pullRequest =
+    ctx.resident === true && input.status === 'done'
+      ? await ctx.store.newestLink(ctx.spaceId, current.nodeId, 'pull_request')
+      : null;
+  if (ctx.resident === true && input.status === 'done') {
+    let merged = false;
+    try {
+      merged =
+        pullRequest?.trustedForClose === true &&
+        (await ctx.readMergedPullRequest?.(pullRequest.ref)) === true;
+    } catch {
+      merged = false;
+    }
+    if (!merged) {
+      const line = PLAN_NODE_MERGE_WAIT_LINE;
+      const note = current.note ? `${current.note}\n${line}` : line;
+      if (!current.note?.includes(line)) {
+        const waiting = await ctx.store.updateAtRevision(
+          ctx.spaceId,
+          current.nodeId,
+          current.revision,
+          note.length <= PLAN_NODE_PROSE_MAX_CHARS ? { note } : { status: 'blocked' },
+        );
+        if (!waiting) return stale(current, input);
+        await nodeWritten(ctx, { node: waiting });
+      }
+      return {
+        ok: false,
+        code: 'PLAN_NODE_RESIDENT_SCOPE',
+        message:
+          'This scheduled close requires a linked pull request GitHub reports merged at close time, with a link written by a person or conversation. The node waits on a person.',
+        details: { nodeId: current.nodeId },
+      };
+    }
+  }
   const patch: PlanNodePatch = {};
   if (input.title !== undefined) patch.title = input.title;
   if (input.goal !== undefined) patch.goal = input.goal;
@@ -1202,6 +1217,8 @@ export async function linkPlanNode(
     kind: input.kind,
     ref: input.ref,
     label: input.label ?? null,
+    trustedForClose:
+      ctx.actorKind === 'human' || (ctx.actorKind === 'agent' && ctx.resident === false),
   });
   switch (inserted.outcome) {
     case 'node_not_found':

@@ -132,6 +132,7 @@ export interface NewPlanNodeLink {
   kind: PlanNodeLinkKind;
   ref: string;
   label: string | null;
+  trustedForClose?: boolean;
 }
 
 /** What a board card carries of a node past its summary, read from its own row. */
@@ -255,7 +256,7 @@ export interface PlanNodeStore {
     anchor: PlanPlaceAnchor,
   ): Promise<PlanNodePlaceWrite>;
   /** The newest carrier creation time for this node, one scalar rather than sibling rows. */
-  latestCarrierAt(spaceId: string, parentId: string | null, nodeId: string): Promise<string | null>;
+  latestCarrierAt(spaceId: string, nodeId: string): Promise<string | null>;
   listChildren(
     spaceId: string,
     parentId: string | null,
@@ -440,6 +441,7 @@ export function rowToPlanNodeLink(row: PlanNodeLinkRow): PlanNodeLink {
   return {
     nodeId: row.nodeId,
     kind: row.kind as PlanNodeLinkKind,
+    trustedForClose: row.trustedForClose,
     ref: row.ref,
     ...(row.label != null ? { label: row.label } : {}),
     createdAt: row.createdAt.toISOString(),
@@ -743,6 +745,7 @@ async function newestPullRequestsIn(
               kind: row.merge.kind,
               ref: row.merge.ref,
               label: row.merge.label,
+              trustedForClose: false,
               createdAt: new Date(row.merge.createdAt),
             }),
     });
@@ -917,7 +920,7 @@ export function createPlanNodeStore(db: PostgresJsDatabase, tenantId: string): P
     placeAtRevision: (spaceId, nodeId, expectedRevision, anchor) =>
       retryingDeadlocks(() => placeOnce(spaceId, nodeId, expectedRevision, anchor)),
 
-    latestCarrierAt: (spaceId, parentId, nodeId) =>
+    latestCarrierAt: (spaceId, nodeId) =>
       inTenant(async (tx) => {
         const [row] = await tx
           .select({ at: sql<string | null>`max(${planNodes.createdAt})` })
@@ -925,7 +928,6 @@ export function createPlanNodeStore(db: PostgresJsDatabase, tenantId: string): P
           .where(
             and(
               eq(planNodes.spaceId, spaceId),
-              parentId === null ? isNull(planNodes.parentId) : eq(planNodes.parentId, parentId),
               sql`strpos(${planNodes.note}, ${carrierToken(nodeId)}) > 0`,
             ),
           );
@@ -1106,6 +1108,7 @@ export function createPlanNodeStore(db: PostgresJsDatabase, tenantId: string): P
             kind: planNodeLinks.kind,
             ref: planNodeLinks.ref,
             label: planNodeLinks.label,
+            trustedForClose: planNodeLinks.trustedForClose,
             createdAt: planNodeLinks.createdAt,
             at: sql<string>`${planNodeLinks.createdAt}::text`,
           })

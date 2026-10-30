@@ -36,7 +36,9 @@ async function planWriteContext(args: InlineHandlerArgs): Promise<PlanWriteConte
     redis: args.redis,
     tenantId: args.context.tenantId as string,
     actorKind: 'agent',
-    resident: state?.trigger === undefined || state.trigger === 'schedule',
+    resident:
+      state?.trigger === undefined ||
+      (state.trigger === 'schedule' && state.planResident !== false),
   };
 }
 

@@ -42,7 +42,7 @@ import {
 } from '../plan/stream.js';
 import { InMemoryPlanNodeStore } from './planStoreFake.js';
 import { carrierNode } from '../plan/carrier.js';
-import { planAsk, listAskedNodes } from '../plan/asks.js';
+import { planAsk, listAskedNodes, askedKey } from '../plan/asks.js';
 
 vi.mock('../logger.js', () => ({ logCyberneticError: vi.fn() }));
 
@@ -766,6 +766,7 @@ describe('plan.node.next — a merge', () => {
 
   it('records a merge that met the criteria, commissions the next node, and records nothing again', async () => {
     const { root, first, second } = await stream();
+    await linkPlanNode(session(), { nodeId: first.nodeId, kind: 'pull_request', ref: PR });
     const mergedAt = await publishedRound(first);
     const github = (url: string) => merged(url, mergedAt);
 
@@ -1945,11 +1946,15 @@ describe('resident review regressions', () => {
       message: expect.stringContaining('linked pull request'),
     });
     expect(read).not.toHaveBeenCalled();
+    input.expectedRevision = (await current(node.nodeId)).revision;
     await linkPlanNode(session(), { nodeId: node.nodeId, kind: 'pull_request', ref: PR });
     await linkPlanNode(session(), { nodeId: node.nodeId, kind: 'merge', ref: PR });
     read.mockResolvedValue(false);
     expect(await updatePlanNode(ctx, input)).toMatchObject({ ok: false });
-    expect(await current(node.nodeId)).toEqual(node);
+    expect(await current(node.nodeId)).toMatchObject({
+      status: 'active',
+      note: expect.stringContaining('Waiting on you:'),
+    });
     read.mockRejectedValueOnce(new Error('GitHub unavailable'));
     expect(await updatePlanNode(ctx, input)).toMatchObject({ ok: false });
     expect(await updatePlanNode({ ...session(), resident: true }, input)).toMatchObject({
@@ -1958,6 +1963,106 @@ describe('resident review regressions', () => {
     read.mockResolvedValue(true);
     expect(await updatePlanNode(ctx, input)).toMatchObject({ ok: true, node: { status: 'done' } });
     expect(read).toHaveBeenLastCalledWith(PR);
+  });
+
+  it('rejects a merged pull request planted by the scheduled writer', async () => {
+    const node = await created();
+    const read = vi.fn<(url: string) => Promise<boolean>>().mockResolvedValue(true);
+    const wake = {
+      ...session(),
+      actorKind: 'agent' as const,
+      resident: true,
+      readMergedPullRequest: read,
+    };
+    await linkPlanNode(wake, { nodeId: node.nodeId, kind: 'pull_request', ref: PR });
+    expect(
+      await updatePlanNode(wake, {
+        nodeId: node.nodeId,
+        expectedRevision: node.revision,
+        status: 'done',
+        outcome: 'Met',
+      }),
+    ).toMatchObject({ ok: false });
+    expect(read).not.toHaveBeenCalled();
+    expect(await current(node.nodeId)).toMatchObject({
+      status: 'active',
+      note: expect.stringContaining('Waiting on you:'),
+    });
+  });
+
+  it('keeps an early merge link unjudged and waits on a person after refusal', async () => {
+    const { root, first } = await stream();
+    const mergedAt = await publishedRound(first);
+    await linkPlanNode(
+      { ...session(), resident: true },
+      { nodeId: first.nodeId, kind: 'merge', ref: PR },
+    );
+    expect(await fire(root.nodeId, (url) => merged(url, mergedAt))).toMatchObject({
+      decision: 'record_merge',
+    });
+    const ctx = { ...session(), resident: true, readMergedPullRequest: async () => false };
+    expect(
+      await updatePlanNode(ctx, {
+        nodeId: first.nodeId,
+        expectedRevision: first.revision,
+        status: 'done',
+        outcome: 'Met',
+      }),
+    ).toMatchObject({ ok: false });
+    const waiting = await current(first.nodeId);
+    expect(waiting).toMatchObject({
+      status: 'active',
+      note: expect.stringContaining('Waiting on you:'),
+    });
+    expect(await redis.get(askedKey(TENANT, SPACE, first.nodeId))).toBeNull();
+    expect(await fire(root.nodeId, (url) => merged(url, mergedAt))).toMatchObject({
+      decision: 'wait',
+    });
+  });
+
+  it('blocks a refused close with a full note so the existing ask flow can raise it', async () => {
+    const node = await created();
+    await write(node.nodeId, { note: 'x'.repeat(PLAN_NODE_PROSE_MAX_CHARS) });
+    const full = await current(node.nodeId);
+    expect(
+      await updatePlanNode(
+        { ...session(), resident: true },
+        {
+          nodeId: full.nodeId,
+          expectedRevision: full.revision,
+          status: 'done',
+          outcome: 'Met',
+        },
+      ),
+    ).toMatchObject({ ok: false });
+    expect(await current(node.nodeId)).toMatchObject({ status: 'blocked', note: full.note });
+    expect(await redis.get(askedKey(TENANT, SPACE, node.nodeId))).toBeNull();
+  });
+
+  it('does not propose earlier findings again after the closed node moves', async () => {
+    const root = await created();
+    const other = await created();
+    const node = await created({ parentId: root.nodeId });
+    await linkPlanNode(session(), { nodeId: node.nodeId, kind: 'finding', ref: 'carried' });
+    expect(
+      await updatePlanNode(session(), {
+        nodeId: node.nodeId,
+        expectedRevision: node.revision,
+        status: 'done',
+        outcome: 'Met',
+      }),
+    ).toMatchObject({ ok: true, carrier: { status: 'blocked' } });
+    await write(node.nodeId, { status: 'active', parentId: other.nodeId });
+    const reopened = await current(node.nodeId);
+    expect(
+      await updatePlanNode(session(), {
+        nodeId: node.nodeId,
+        expectedRevision: reopened.revision,
+        status: 'done',
+        outcome: 'Met',
+      }),
+    ).toMatchObject({ ok: true });
+    expect(store.nodes.size).toBe(4);
   });
 
   it('closes from GitHub without an earlier merge record and preserves concurrent person writes', async () => {
@@ -2060,7 +2165,7 @@ describe('resident review regressions', () => {
     ).toMatchObject({ ok: true, carrier: { status: 'blocked' } });
     expect(siblings).not.toHaveBeenCalled();
     expect(find).toHaveBeenCalledTimes(1);
-    expect(timestamp).toHaveBeenCalledExactlyOnceWith(SPACE, null, node.nodeId);
+    expect(timestamp).toHaveBeenCalledExactlyOnceWith(SPACE, node.nodeId);
   });
 
   it('leaves an over-ceiling completed operator commission with its publishing conversation', async () => {
@@ -2184,14 +2289,17 @@ describe('settled P2 rules', () => {
               { ...session(), resident: true },
               {
                 nodeId: node.nodeId,
-                expectedRevision: before.revision,
+                expectedRevision: (await current(node.nodeId)).revision,
                 status: close,
                 outcome: 'Agent closes',
               },
             ),
           ).toMatchObject({ ok: false, code: 'PLAN_NODE_RESIDENT_SCOPE' });
         }
-        expect(await current(node.nodeId)).toEqual(before);
+        expect(await current(node.nodeId)).toMatchObject({ status: before.status });
+        if (status === 'active')
+          expect((await current(node.nodeId)).note).toContain('Waiting on you:');
+        else expect(await current(node.nodeId)).toEqual(before);
       }
     },
   );

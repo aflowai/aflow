@@ -101,7 +101,7 @@ _Test references._ Existing cases below exist at that round-9 branch head, not n
 
 **Resident identity and scope**
 
-- A resident is identified by immutable session provenance: trigger `schedule` plus the resident marker recorded at session creation. Missing or unreadable provenance fails closed and retains restricted write authority. **Add:** `apps/aflow-orchestrator/src/services/SessionOrchestrator/handlers/inlineOps/__tests__/planNodeOps.test.ts`, case `identifies residents from schedule provenance and the resident marker, failing closed when unavailable`.
+- A resident is identified by immutable session provenance: trigger `schedule` plus the `planResident` marker recorded at session creation. Missing or unreadable provenance fails closed and retains restricted write authority. **Add:** `apps/aflow-orchestrator/src/services/SessionOrchestrator/handlers/inlineOps/__tests__/planNodeOps.test.ts`, case `identifies residents from schedule provenance and the resident marker, failing closed when unavailable`.
 - The Redis wake-guard key controls overlap, never write authority. Its expiry or replacement cannot change identity, and resident restrictions survive pause, resume and retry. **Add:** `apps/aflow-orchestrator/src/services/SessionOrchestrator/handlers/inlineOps/__tests__/planNodeOps.test.ts`, case `preserves resident authority across guard expiry, replacement, pause, resume and retry`.
 - A resident may create proposed work only as `blocked`, never `active`, and may never approve or reopen blocked or closed scope. **Existing:** `packages/cybernetic-runtime/src/__tests__/planStream.test.ts`, case `refuses resident creation of active work and approval of blocked work`. **Add** in that file: `refuses resident reopening of blocked, done and dropped scope`.
 - A scheduled wake closes an approved step `done` only when the write reads its linked pull request and GitHub reports it merged. Earlier merge links or records never suffice. Without that attestation, the node stays for a person. Person scope without a GitHub-attested merge stays for a person. Live checks and findings carriers retain their person guards. A wake cannot drop or re-close scope. People and conversation Helmsmen close as today. **Add:** `packages/cybernetic-runtime/src/__tests__/planStream.test.ts`, case `refuses resident done, dropped and repeated closes of person scope`.
@@ -183,3 +183,11 @@ P2 round 13 restores resident done-on-merge closes with recorded merges while pr
 P2 round 14 restricts scheduled writes, removes the unused resident marker, and counts paused attention beneath done children. Carrier failures name recovery steps without raw errors.
 
 P2 round 15 requires GitHub to attest merges during scheduled closes and refuses scheduled reparenting or position writes. Carrier reads return one timestamp instead of sibling rows. Recalibrate gating and resident identity remain unchanged.
+
+### Round 16 close provenance
+
+A scheduled close requires a pull request link stamped by a person or conversation, plus GitHub's close-time merge attestation. Resident-written links never suffice.
+A merge link alone never judges criteria. Refused closes retain active status and a wait line without consuming the asked-once record. A full note instead blocks the node for the existing ask flow.
+The session creation write records the resident marker from the scheduled Helmsman's schedule input. Missing session provenance retains restricted authority.
+Needs attention retains dismissible carrier failures after approval or drop removes the item. Carrier history spans earlier parents after a person moves the node.
+Recalibrate gating remains unchanged.

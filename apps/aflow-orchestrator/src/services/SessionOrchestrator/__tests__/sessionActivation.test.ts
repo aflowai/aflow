@@ -275,6 +275,37 @@ async function chatStart(): Promise<void> {
   });
 }
 
+it.each([true, false])(
+  'records the resident marker in session creation and preserves it across resume (%s)',
+  async (resident) => {
+    const input = resident
+      ? { config: { scheduleId: '00000000-0000-4000-8000-000000000331' } }
+      : {};
+    await lifecycle.startRun({
+      tenantId: TENANT,
+      runId: RUN,
+      target: { kind: 'platform-role', systemRole: 'cybernetic-helmsman' },
+      agentVersion: '1',
+      inputRef: `inline:${Buffer.from(JSON.stringify(input)).toString('base64')}` as PayloadRef,
+      traceId: 'trace-resident' as TraceId,
+      idempotencyKey: 'resident-start' as IdempotencyKey,
+      spaceId: SPACE,
+      trigger: 'schedule',
+      activatedByPerson: false,
+    });
+    expect(await getSessionState(redis, TENANT, RUN)).toMatchObject({
+      trigger: 'schedule',
+      planResident: resident,
+    });
+    const paused = await pauseOnCurrentStep();
+    await deliverResume(resumeCommand(paused, true));
+    expect(await getSessionState(redis, TENANT, RUN)).toMatchObject({
+      trigger: 'schedule',
+      planResident: resident,
+    });
+  },
+);
+
 describe('a conversation a person starts, then a schedule resumes', () => {
   it('is attended from its start', async () => {
     await chatStart();

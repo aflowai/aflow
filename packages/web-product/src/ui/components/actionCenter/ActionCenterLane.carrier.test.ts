@@ -3,10 +3,15 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { expect, it, vi } from 'vitest';
 import type { UseActionCenterResult } from '../../hooks/use-action-center.js';
 
+const dismiss = vi.hoisted(() => ({ action: undefined as (() => void) | undefined }));
 vi.mock('@aflow/design-system', () => {
   const tag = ({ children }: { children?: ReactNode }) => createElement('div', null, children);
   return {
     Badge: tag,
+    Button: ({ children, onClick }: { children: ReactNode; onClick?: () => void }) => {
+      dismiss.action = onClick;
+      return createElement('button', null, children);
+    },
     Card: tag,
     CardBody: tag,
     Column: tag,
@@ -26,19 +31,25 @@ vi.mock('./AssignControl.js', () => ({ AssignControl: () => null, AssigneeChip: 
 vi.mock('../../hooks/use-space-people.js', () => ({ useSpacePeople: () => ({}) }));
 vi.mock('../user-avatar.js', () => ({ useCurrentUser: () => null }));
 
-const { ActionCenterLane } = await import('./ActionCenterLane.js');
+const { WorkbenchNeedsAttention } = await import('../workbench/WorkbenchNeedsAttention.js');
+vi.mock('../workbench/WorkbenchSection.js', () => ({
+  WorkbenchSection: ({ children }: { children: ReactNode }) =>
+    createElement('section', null, children),
+}));
 
 it('keeps a carrier failure visible after the approved item disappears', () => {
   const carrierFailure = 'Carrier failed for closed node. Read its linked findings.';
-  const state = { carrierFailures: [carrierFailure] } as UseActionCenterResult;
+  const state = {
+    carrierFailures: [carrierFailure],
+    lanes: { connections: [], approvals: [], inputs: [] },
+    clearCarrierFailures: vi.fn(),
+  } as unknown as UseActionCenterResult;
   const html = renderToStaticMarkup(
-    createElement(ActionCenterLane, {
-      title: 'Approvals',
-      items: [],
-      state,
-      hideWhenEmpty: true,
-    }),
+    createElement(WorkbenchNeedsAttention, { state, spaceId: 'space' }),
   );
   expect(html).toContain('role="alert"');
   expect(html).toContain(carrierFailure);
+  expect(html).toContain('Dismiss');
+  dismiss.action?.();
+  expect(state.clearCarrierFailures).toHaveBeenCalledOnce();
 });

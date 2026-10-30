@@ -14,6 +14,7 @@
 import type { Redis } from 'ioredis';
 import {
   isClosedPlanNodeStatus,
+  PLAN_NODE_MERGE_WAIT_LINE,
   OPEN_PLAN_NODE_STATUSES,
   PLAN_NODE_PROSE_MAX_CHARS,
   PLAN_NODE_PROPOSED_HEAD,
@@ -210,7 +211,7 @@ export interface PlanStreamFacts {
   pausedItems: number;
   /** The node's newest `pull_request` link. */
   pullRequestLink?: PlanNodeLink;
-  /** The node holds a `merge` link to its newest pull request: that merge was judged. */
+  /** The node's note records unmet criteria against its newest pull request's merge. */
   mergeJudged: boolean;
   /** GitHub's answer for that pull request, where the caller read it. */
   pullRequest?: PlanStreamPullRequestAnswer;
@@ -590,6 +591,13 @@ export function decideStreamFiring(facts: PlanStreamFacts): PlanStreamAnswer {
     );
   }
 
+  if (node.note?.includes(PLAN_NODE_MERGE_WAIT_LINE)) {
+    return wait(
+      'unknown_state',
+      'A person must judge the merge after the scheduled close was refused.',
+      node,
+    );
+  }
   const link = facts.pullRequestLink;
   let pullRequest: Extract<PlanStreamPullRequestAnswer, { read: 'ok' }> | undefined;
   if (link) {
@@ -843,7 +851,7 @@ async function decideRoot(
     (await ctx.store.newestLink(ctx.spaceId, active.nodeId, 'pull_request')) ?? undefined;
   const mergeJudged =
     pullRequestLink !== undefined &&
-    (await ctx.store.findLink(ctx.spaceId, active.nodeId, 'merge', pullRequestLink.ref)) !== null;
+    opened.node.note?.startsWith(mergeNoteHead(pullRequestLink.ref)) === true;
 
   const answer = decideStreamFiring({
     node: opened.node,

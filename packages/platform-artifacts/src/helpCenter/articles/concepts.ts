@@ -6,10 +6,10 @@ export const CONCEPTS_ARTICLES: readonly HelpArticleInput[] = [
     theme: 'concepts',
     question: 'What is a space, and when should I create another one?',
     summary:
-      'A space (called a workspace on some screens) is a self-contained place where agents work. Each space has its own chat, skills, integrations, memory, plan, triggers and settings, and its Helmsman sees only what belongs to that space. Create a separate space when a body of work needs its own connections, its own memory or its own rules; use the space selector at the top of the sidebar and choose Create new workspace, or Start from a quick start for a space that comes with its skills. A space you no longer need can be archived from Settings → Danger zone, which hides it and pauses its schedules and webhooks, and can be undone.',
+      'A space (called a workspace on some screens) is a self-contained place where agents work. Each space has its own chat, skills, integrations, memory, plan, triggers and settings, and its Helmsman sees only what belongs to that space. Create a separate space when a body of work needs its own connections, its own memory or its own rules; use the space selector at the top of the sidebar and choose Create new workspace, then start blank or from a quick start that comes with its skills. A space you no longer need can be archived from Settings → Danger zone, which hides it and pauses its schedules and webhooks, and can be undone.',
     body: `## Where
 
-The space selector at the top of the sidebar lists your spaces. **Create new workspace** at the bottom of that list starts a new one, and **Workspace Settings** opens the current space's settings.
+The space selector at the top of the sidebar lists your spaces. **Create new workspace** at the bottom of that list starts a new one, and **Workspace Settings** opens the current space's settings. **Create new workspace** opens on a choice: **Blank workspace** first, then one card for each quick start. **Blank workspace** opens the form for a name, a description and a responsibility, with **Back** to return to the choice. Where no quick start is available, the dialog opens on that form directly.
 
 ## What a space holds
 
@@ -35,9 +35,9 @@ When you create a space and no model provider key is available for it, the dialo
 
 A quick start installs a space and has no uninstall. Archive the space from **Settings → Danger zone** when you no longer need it.
 
-**Start from a quick start** in the space selector makes a new space that already holds the skills and the Helmsman directive a kind of work needs. Choose a quick start, name the space and choose **Create the space**. Its skills are installed the way the Store installs them anywhere, so they show as installed on that space's Store page and update from their own listings; the directive becomes the space's own, and you change it like any other. Nothing in your other spaces changes. Quick starts are also on the Store page, under **Quick starts**, with **Start a new space from it** — a quick start always makes a new space and is never applied to the one you are in.
+A quick start makes a new space that already holds the skills and the Helmsman directive a kind of work needs. In the space selector, choose **Create new workspace**, choose a quick start, name the workspace and choose **Create workspace**. Its skills are installed the way the Store installs them anywhere, so they show as installed on that space's Store page and update from their own listings; the directive becomes the space's own, and you change it like any other. Nothing in your other spaces changes. Quick starts are also on the Store page, under **Quick starts**, with **Start a new space from it** — a quick start always makes a new space and is never applied to the one you are in.
 
-In Aflow Local, while your only space is the one the instance started with and nothing has been made or installed in it, the quick starts are offered beside it when you open Aflow. Choosing the empty space keeps it as it is, and the offer is not shown again in that browser.
+In Aflow Local, while your only space is the one the instance started with and nothing has been made or installed in it, its empty chat shows a card under the Helmsman greeting: **Start from a ready-made workspace**. **Browse quick starts** opens the Store page on **Quick starts**, and the card is still there when you come back with nothing installed. **Not now** hides it in that browser for good. The card goes away by itself once you start working in the space, with a conversation or an install for example.
 
 ## Archiving a space
 

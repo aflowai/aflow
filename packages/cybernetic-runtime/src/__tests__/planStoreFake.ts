@@ -290,10 +290,10 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
       : Math.min(Math.max(...siblings.map((n) => n.position)) + 1, PLAN_NODE_POSITION_MAX);
   }
 
-  latestCarrierAt: PlanNodeStore['latestCarrierAt'] = (spaceId, parentId, nodeId) =>
+  latestCarrierAt: PlanNodeStore['latestCarrierAt'] = (spaceId, nodeId) =>
     Promise.resolve(
       this.inSpace(spaceId)
-        .filter((node) => node.parentId === parentId && node.note?.includes(carrierToken(nodeId)))
+        .filter((node) => node.note?.includes(carrierToken(nodeId)))
         .map((node) => node.createdAt)
         .sort()
         .at(-1) ?? null,
@@ -546,6 +546,7 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
       nodeId: link.nodeId,
       kind: link.kind,
       ref: link.ref,
+      trustedForClose: link.trustedForClose ?? false,
       ...(link.label !== null ? { label: link.label } : {}),
       createdAt: this.tick(),
     };
