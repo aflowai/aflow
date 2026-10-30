@@ -24,6 +24,7 @@ import {
   linkEndedRun,
   linkPlanNode,
   openPlanNode,
+  revisePlanNode,
   updatePlanNode,
   type PlanWriteContext,
 } from '../plan/operations.js';
@@ -1303,6 +1304,98 @@ describe('the open write (Plan 332 D6, Plan 331 D5)', () => {
         node: { nodeId: first.nodeId },
       });
     }
+  });
+});
+
+describe('the operator’s note on a node (Plan 337 P4)', () => {
+  it('approve with instructions: the next commission’s brief carries the operator’s line', async () => {
+    const { root, first } = await stream();
+    const blocked = await write(first.nodeId, {
+      status: 'blocked',
+      note: 'Proposed from the merged plan document',
+    });
+    await openPlanNode(session(), {
+      nodeId: first.nodeId,
+      expectedRevision: blocked.revision,
+      why: 'Do it, and make sure\nthe migration is reversible.',
+    });
+
+    const answer = await next(root.nodeId);
+
+    expect(answer).toMatchObject({
+      decision: 'continue',
+      node: {
+        nodeId: first.nodeId,
+        instructions: 'Approved: Do it, and make sure the migration is reversible.',
+        goal: 'A stream continues on a schedule.',
+      },
+    });
+  });
+
+  it('a brief carries no instructions where the note’s first line is not the operator’s', async () => {
+    const { root, first } = await stream();
+    await write(first.nodeId, { note: 'next: the schema.\nApproved: an older line.' });
+
+    const answer = await next(root.nodeId);
+
+    if (answer.decision !== 'continue')
+      throw new Error(`expected continue, not ${answer.decision}`);
+    expect(answer.node).not.toHaveProperty('instructions');
+  });
+
+  it('revise: the node stays blocked, the wake is asked to rewrite it, and a rewrite ends the ask', async () => {
+    const { root, first } = await stream();
+    const blocked = await write(first.nodeId, {
+      status: 'blocked',
+      note: 'Proposed by the resident',
+    });
+    expect(await next(root.nodeId)).toMatchObject({ decision: 'wait', cause: 'blocked' });
+
+    const revised = await revisePlanNode(session(), {
+      nodeId: first.nodeId,
+      expectedRevision: blocked.revision,
+      why: 'Split it: the schema first.',
+    });
+    if (!revised.ok) throw new Error(revised.message);
+    expect(revised.node).toMatchObject({ status: 'blocked', revision: blocked.revision + 1 });
+
+    const answer = await next(root.nodeId);
+    expect(answer).toMatchObject({
+      decision: 'revise',
+      noteHead: 'Revised: ',
+      node: { nodeId: first.nodeId, instructions: 'Revise: Split it: the schema first.' },
+    });
+    expect(store.runs).toEqual([]);
+
+    // The Helmsman rewrites the proposal with the update it already holds.
+    await write(first.nodeId, {
+      goal: 'Add the schema for the stream.',
+      note: 'Revised: the schema comes first; the routes follow as their own step.',
+    });
+    expect(await current(first.nodeId)).toMatchObject({ status: 'blocked' });
+    expect(await next(root.nodeId)).toMatchObject({ decision: 'wait', cause: 'blocked' });
+  });
+
+  it('ranks a revise after a publication and before new work across the board', async () => {
+    const proposal = await created({ title: 'Plan 340' });
+    const finished = await created({ title: 'Plan 341' });
+    await created({ title: 'Plan 342' });
+    await write(proposal.nodeId, { status: 'blocked' });
+    await revisePlanNode(session(), {
+      nodeId: proposal.nodeId,
+      expectedRevision: (await current(proposal.nodeId)).revision,
+      why: 'Name the risk.',
+    });
+    await run(finished, PLAN_STREAM_COMMISSION_SLUG, 'completed');
+
+    const board = await nextOnPlanBoard(streamContext(), PlanNodeNextInputSchema.parse({}));
+    if (!board.ok) throw new Error(board.message);
+
+    expect(board.output.decisions.map((d) => [d.root.title, d.answer.decision])).toEqual([
+      ['Plan 341', 'publish'],
+      ['Plan 340', 'revise'],
+      ['Plan 342', 'continue'],
+    ]);
   });
 });
 

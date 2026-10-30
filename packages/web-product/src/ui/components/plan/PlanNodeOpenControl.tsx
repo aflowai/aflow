@@ -7,13 +7,20 @@
  * the engine writes into the note. Like the close form, it writes against the
  * revision the rail's own read showed when the form opened, and says when the
  * live read has moved past it.
+ *
+ * On a blocked step the form is open from the start (Plan 337 P4): its field
+ * is the operator's instructions for the work, which the next brief opens
+ * with, and **Revise** beside **Approve** sends the same words back as a
+ * request to rewrite the proposal, the step left blocked.
  */
 import { useState } from 'react';
 import { Button, Column, Row, Text, Textarea, Input } from '@aflow/design-system';
 import {
   PlanNodeOpenSchema,
+  PlanNodeReviseSchema,
   PLAN_NODE_OPEN_WHY_MAX_CHARS,
   type PlanNodeOpen,
+  type PlanNodeRevise,
 } from '@aflow/schemas';
 import {
   usePinnedNode,
@@ -26,12 +33,22 @@ export type PlanNodeOpenRequest = PlanNodeOpen & { nodeId: string };
 
 export type PlanNodeOpener = (request: PlanNodeOpenRequest) => Promise<PlanNodeCloseAnswer>;
 
+/** What the operator asks of one blocked node: rewrite it from their note, against the revision they read. */
+export type PlanNodeReviseRequest = PlanNodeRevise & { nodeId: string };
+
+export type PlanNodeReviser = (request: PlanNodeReviseRequest) => Promise<PlanNodeCloseAnswer>;
+
+/** The approve field: what the words are for, and how they start. */
+export const PLAN_APPROVE_FIELD_LABEL = 'Instructions for the work (optional)';
+export const PLAN_APPROVE_FIELD_PLACEHOLDER = 'Do it, and make sure…';
+
 export function PlanNodeOpenControl({
   nodeId,
   verb,
   label,
   read,
   onOpen,
+  onRevise,
 }: {
   /** The node the write opens: the rail's own, or the closed step above a stranded one. */
   nodeId: string;
@@ -40,8 +57,12 @@ export function PlanNodeOpenControl({
   label: string;
   read: PlanNodeRead;
   onOpen: PlanNodeOpener;
+  /** On an approve: **Revise**, the same words sent back as a request to rewrite. */
+  onRevise?: PlanNodeReviser;
 }) {
-  const [opening, setOpening] = useState(false);
+  const [clickedOpen, setOpening] = useState(false);
+  // An approve shows its field before the click: the instructions are the point of it.
+  const opening = verb === 'approve' || clickedOpen;
   const [text, setText] = useState('');
   const [spend, setSpend] = useState('');
   const [pending, setPending] = useState(false);
@@ -53,7 +74,7 @@ export function PlanNodeOpenControl({
       <Row gap="xs" align="center" data-plan-open={verb}>
         <Button
           size="sm"
-          variant={verb === 'approve' ? 'primary' : 'secondary'}
+          variant="secondary"
           onClick={() => {
             setOpening(true);
           }}
@@ -76,6 +97,35 @@ export function PlanNodeOpenControl({
     setSpend('');
     setError(null);
   };
+  const wordsField = verb === 'approve' ? 'Instructions' : 'Reason';
+  const answered = async (answer: Promise<PlanNodeCloseAnswer>) => {
+    setPending(true);
+    setError(null);
+    const settled = await answer;
+    setPending(false);
+    if (settled.ok) {
+      reset();
+    } else {
+      setError(settled.message);
+      setPinned(await read.refetch());
+    }
+  };
+  const revise = async () => {
+    if (!shown || onRevise === undefined) return;
+    const parsed = PlanNodeReviseSchema.safeParse({ expectedRevision: shown.revision, why });
+    if (!parsed.success) {
+      setError(
+        parsed.error.issues
+          .map(
+            (issue) =>
+              `${issue.path[0] === 'why' ? wordsField : 'Step revision'}: ${issue.message}`,
+          )
+          .join(' '),
+      );
+      return;
+    }
+    await answered(onRevise({ nodeId, ...parsed.data }));
+  };
   const submit = async () => {
     if (!shown) return;
     const parsed = PlanNodeOpenSchema.safeParse({
@@ -91,7 +141,7 @@ export function PlanNodeOpenControl({
               issue.path[0] === 'spendCents'
                 ? 'Spend ceiling'
                 : issue.path[0] === 'why'
-                  ? 'Reason'
+                  ? wordsField
                   : 'Step revision';
             return `${field}: ${issue.message}`;
           })
@@ -99,24 +149,22 @@ export function PlanNodeOpenControl({
       );
       return;
     }
-    setPending(true);
-    setError(null);
-    const answer = await onOpen({
-      nodeId,
-      ...parsed.data,
-    });
-    setPending(false);
-    if (answer.ok) {
-      reset();
-    } else {
-      setError(answer.message);
-      setPinned(await read.refetch());
-    }
+    await answered(onOpen({ nodeId, ...parsed.data }));
   };
-  const field =
-    verb === 'approve'
-      ? 'Why it is approved (optional) — the first line of its note'
-      : 'Why it is reopened (optional)';
+  const field = verb === 'approve' ? PLAN_APPROVE_FIELD_LABEL : 'Why it is reopened (optional)';
+  const words = (
+    <Textarea
+      aria-label={field}
+      placeholder={verb === 'approve' ? PLAN_APPROVE_FIELD_PLACEHOLDER : field}
+      value={text}
+      rows={verb === 'approve' ? 3 : 2}
+      disabled={pending}
+      onChange={(event) => {
+        setText(event.target.value);
+      }}
+    />
+  );
+  const blocked = pending || shown === undefined || tooLong;
 
   return (
     <Column gap="xs" data-plan-open={verb} data-plan-open-form>
@@ -136,6 +184,19 @@ export function PlanNodeOpenControl({
           {`This step is ${openNow} now.`}
         </Text>
       )}
+      {verb === 'approve' && (
+        <>
+          <Text size="xs" weight="medium">
+            {field}
+          </Text>
+          {words}
+          <Text size="xs" variant="muted" data-plan-approve-hint>
+            {onRevise !== undefined
+              ? 'Approve starts the work, and its brief opens with these words. Revise keeps the step blocked and asks the Helmsman to rewrite it from them.'
+              : 'Approve starts the work, and its brief opens with these words.'}
+          </Text>
+        </>
+      )}
       <Input
         aria-label="Spend ceiling (cents, optional)"
         placeholder="Spend ceiling (cents, optional)"
@@ -146,16 +207,7 @@ export function PlanNodeOpenControl({
           setSpend(event.target.value);
         }}
       />
-      <Textarea
-        aria-label={field}
-        placeholder={field}
-        value={text}
-        rows={2}
-        disabled={pending}
-        onChange={(event) => {
-          setText(event.target.value);
-        }}
-      />
+      {verb === 'reopen' && words}
       <Text size="xs" variant="muted">
         Leave the ceiling blank to keep it. Opening starts a fresh spend window.
       </Text>
@@ -174,16 +226,30 @@ export function PlanNodeOpenControl({
           size="sm"
           variant="primary"
           loading={pending}
-          disabled={pending || shown === undefined || openNow !== undefined || tooLong}
+          disabled={blocked || openNow !== undefined}
           onClick={() => {
             void submit();
           }}
         >
           {label}
         </Button>
-        <Button size="sm" variant="ghost" disabled={pending} onClick={reset}>
-          Cancel
-        </Button>
+        {onRevise !== undefined && (
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={blocked || why.length === 0 || shown?.status !== 'blocked'}
+            onClick={() => {
+              void revise();
+            }}
+          >
+            Revise
+          </Button>
+        )}
+        {verb !== 'approve' && (
+          <Button size="sm" variant="ghost" disabled={pending} onClick={reset}>
+            Cancel
+          </Button>
+        )}
       </Row>
     </Column>
   );

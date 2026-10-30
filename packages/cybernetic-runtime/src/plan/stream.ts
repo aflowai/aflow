@@ -16,7 +16,10 @@ import {
   isClosedPlanNodeStatus,
   OPEN_PLAN_NODE_STATUSES,
   PLAN_NODE_PROSE_MAX_CHARS,
+  PLAN_NODE_REVISE_HEAD,
+  PLAN_NODE_REVISED_HEAD,
   PLAN_NODE_RUNS_LIMIT,
+  planNodeInstructions,
   PLAN_STREAM_COMMISSION_SLUG,
   PLAN_STREAM_SPEND_CENTS_DEFAULT,
   PLAN_STREAM_PUBLICATION_SLUG,
@@ -242,8 +245,10 @@ function streamNode(node: PlanNode | PlanNodeSummary): PlanStreamNode {
 }
 
 function briefNode(node: PlanNode): PlanStreamBriefNode {
+  const instructions = planNodeInstructions(node.note);
   return {
     ...streamNode(node),
+    ...(instructions !== undefined ? { instructions } : {}),
     goal: node.goal,
     criteria: node.criteria,
     ...(node.note !== undefined ? { note: node.note } : {}),
@@ -291,6 +296,22 @@ function blockedNote(node: PlanNode, why: string): string {
   const head = `Blocked: ${why}`;
   const note = node.note !== undefined ? `${head}\n${node.note}` : head;
   return note.slice(0, PLAN_NODE_PROSE_MAX_CHARS);
+}
+
+/**
+ * A blocked node whose note opens with the operator's `Revise: …` line (Plan
+ * 337 P4): the Helmsman rewrites the proposal from it and leaves it blocked
+ * for the operator. The rewrite replaces that line, so the next firing waits.
+ */
+function reviseAnswer(node: PlanNode): PlanStreamAnswer | null {
+  const instructions = planNodeInstructions(node.note);
+  if (!instructions?.startsWith(PLAN_NODE_REVISE_HEAD)) return null;
+  return {
+    decision: 'revise',
+    reason: `The operator sent "${node.title}" back with a note. Rewrite it from that note and leave it blocked for them to approve.`,
+    node: briefNode(node),
+    noteHead: PLAN_NODE_REVISED_HEAD,
+  };
 }
 
 function stop(
@@ -540,7 +561,8 @@ function latestRoundSinceWrite(
 /**
  * The firing's decision on the active node, the first rule that holds
  * deciding: a blocked node is the person's, whatever its pull request says,
- * and a `decide` node is the operator's to answer;
+ * except that one they sent back is `revise` for the Helmsman to rewrite;
+ * a `decide` node is the operator's to answer;
  * `wait` while its own work is in flight, or the read of the nodes under it
  * stopped at a bound before it could show none is; a merge of its newest pull request
  * nobody has acted on is recorded next; then `wait` while that pull request
@@ -554,6 +576,8 @@ function latestRoundSinceWrite(
 export function decideStreamFiring(facts: PlanStreamFacts): PlanStreamAnswer {
   const { node } = facts;
   if (node.status === 'blocked') {
+    const revise = reviseAnswer(node);
+    if (revise) return revise;
     return wait('blocked', `"${node.title}" is blocked, waiting on a person.`, node);
   }
   // A decision is the operator's choice, not a run's work (D2): its Action
@@ -862,9 +886,9 @@ export async function nextInPlanStream(
 
 /**
  * Where a decision stands in the wake's order (Plan 331 D3): finish before
- * start — a merge recorded, a commission published, a stop written, a failed
- * round re-commissioned, then new work. Pull request reads follow work so
- * unchanged open PRs cannot consume every decision slot.
+ * start — a merge recorded, a commission published, a proposal revised, a stop
+ * written, a failed round re-commissioned, then new work. Pull request reads
+ * follow work so unchanged open PRs cannot consume every decision slot.
  */
 export function boardRank(answer: PlanStreamAnswer): number {
   switch (answer.decision) {
@@ -872,6 +896,8 @@ export function boardRank(answer: PlanStreamAnswer): number {
       return 0;
     case 'publish':
       return 1;
+    case 'revise':
+      return 2;
     case 'read_pull_request':
       return 6;
     case 'stop':

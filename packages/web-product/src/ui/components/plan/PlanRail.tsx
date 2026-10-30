@@ -8,7 +8,10 @@
  * **Now**, the note's first line, above the goal and the whole note folded
  * under **Working note** (Plan 332 D5), and holds the operator's own controls:
  * close an open node (P3.2), **Approve** a blocked one, **Reopen** a closed one,
- * and for a stranded one reopen the closed step above it (Plan 332 D6). It is
+ * and for a stranded one reopen the closed step above it (Plan 332 D6). A
+ * blocked step's Approve carries the operator's instructions, **Revise** sends
+ * them back for a rewrite, and **Discuss** opens the space chat about the step
+ * (Plan 337 P4). It is
  * the page's inspector, headed, sectioned and set as the skill designer's is.
  */
 import { useState, type ReactNode } from 'react';
@@ -51,13 +54,28 @@ import {
   type PlanNodeCloser,
   type PlanNodeRead,
 } from './PlanNodeCloseControl.js';
-import { PlanNodeOpenControl, type PlanNodeOpener } from './PlanNodeOpenControl.js';
+import {
+  PlanNodeOpenControl,
+  type PlanNodeOpener,
+  type PlanNodeReviser,
+} from './PlanNodeOpenControl.js';
 import { GroupLabel, NextMarker, PullRequestChip } from './PlanParts.js';
 
 /** Run links the rail lists before "All runs". */
 export const PLAN_RAIL_RUNS = 5;
 /** Findings the rail reads at once. */
 export const PLAN_RAIL_FINDINGS = 50;
+/** Conversations about the step the rail lists, newest first. */
+export const PLAN_RAIL_CONVERSATIONS = 5;
+
+/**
+ * The first message of a conversation about one step (Plan 337 P4): its title
+ * and id, so the Helmsman opens the node it is asked about. The operator
+ * writes the rest.
+ */
+export function planDiscussDraft(node: { nodeId: string; title: string }): string {
+  return `About the plan step "${node.title}" (node ${node.nodeId}). Open it with plan.node.get before you answer.\n\n`;
+}
 const ALL_RUNS_PAGE = 50;
 
 const COLUMN_ICON: Record<PlanBoardColumn, IconName> = {
@@ -291,6 +309,8 @@ export interface PlanRailProps {
   /** For a stranded step: the closed step above it, which the rail offers to reopen. */
   closedAncestor?: Pick<PlanTreeNode, 'nodeId' | 'title'> | undefined;
   onOpen: PlanNodeOpener;
+  /** **Revise** on a blocked step: the operator's note back, the step left blocked. */
+  onRevise: PlanNodeReviser;
   /** The close form open, if any; a card's Decide opens the rail with it open. */
   choosing: 'done' | 'dropped' | null;
   onChoose: (choosing: 'done' | 'dropped' | null) => void;
@@ -308,6 +328,7 @@ export function PlanRail({
   onClose,
   closedAncestor,
   onOpen,
+  onRevise,
   choosing,
   onChoose,
   onDismiss,
@@ -328,6 +349,15 @@ export function PlanRail({
       spaceId,
       node.nodeId,
       `linkKind=finding&limit=${String(PLAN_RAIL_FINDINGS)}`,
+    ),
+  });
+  // The operator's conversations that wrote the step, which link themselves on it.
+  const conversations = useApiQuery<PlanNodeDetailOutput>({
+    key: ['space', spaceId, 'plan', 'node', node.nodeId, 'links', 'session'],
+    path: planNodePath(
+      spaceId,
+      node.nodeId,
+      `linkKind=session&limit=${String(PLAN_RAIL_CONVERSATIONS)}`,
     ),
   });
   // The closed step above a stranded one, read fresh as the rail's own node
@@ -530,6 +560,39 @@ export function PlanRail({
           )}
         </Section>
       )}
+      <Section label="Discuss">
+        <Row gap="xs" align="center" wrap>
+          <Link
+            href={spaceRoute(
+              spaceSlug,
+              `/chat?draft=${encodeURIComponent(planDiscussDraft({ nodeId: node.nodeId, title: node.title }))}`,
+            )}
+            style={linkStyle}
+            data-plan-discuss={node.nodeId}
+          >
+            Discuss with the Helmsman
+          </Link>
+        </Row>
+        {(conversations.data?.links.length ?? 0) > 0 && (
+          <ul style={listStyle} data-plan-conversations>
+            {conversations.data?.links.map((link) => (
+              <li key={link.ref}>
+                <Row gap="xs" align="center">
+                  <Link
+                    href={spaceRoute(spaceSlug, `/chat?session=${encodeURIComponent(link.ref)}`)}
+                    style={linkStyle}
+                  >
+                    Conversation
+                  </Link>
+                  <Text size="xs" variant="muted">
+                    {shortTime(link.createdAt)}
+                  </Text>
+                </Row>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Section>
       {/* The operator's own writes, apart from what the step says, as the designer keeps its save apart. */}
       <Column
         gap="sm"
@@ -542,6 +605,7 @@ export function PlanRail({
             label="Approve"
             read={railRead}
             onOpen={onOpen}
+            onRevise={onRevise}
           />
         )}
         {reason === 'stranded' && closedAncestor !== undefined && (

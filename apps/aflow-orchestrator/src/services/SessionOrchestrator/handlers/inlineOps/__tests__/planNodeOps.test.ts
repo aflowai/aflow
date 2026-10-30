@@ -130,6 +130,42 @@ beforeEach(() => {
 });
 
 describe('plan.node.update', () => {
+  it.each([
+    ['chat', SESSION],
+    ['voice', SESSION],
+    ['schedule', undefined],
+    ['api', undefined],
+    [undefined, undefined],
+  ])(
+    'a session started by %s writes the node with conversationId %s (Plan 337 P4)',
+    async (trigger, conversationId) => {
+      mockGetSessionStateSafe.mockResolvedValue({
+        ok: true,
+        state: { createdBy: OPERATOR, ...(trigger !== undefined ? { trigger } : {}) },
+      });
+      mockUpdatePlanNode.mockResolvedValue({ ok: true, node: NODE });
+
+      await handlePlanNodeInline(
+        makeArgs('plan.node.update', { nodeId: NODE_ID, expectedRevision: 2, note: 'Next' }),
+      );
+
+      expect(emitted()['status']).toBe('SUCCEEDED');
+      const ctx = mockUpdatePlanNode.mock.calls[0]![0] as { conversationId?: string };
+      expect(ctx.conversationId).toBe(conversationId);
+    },
+  );
+
+  it('links no conversation where the session’s state cannot be read', async () => {
+    mockGetSessionStateSafe.mockResolvedValue({ ok: false, kind: 'missing' });
+    mockUpdatePlanNode.mockResolvedValue({ ok: true, node: NODE });
+
+    await handlePlanNodeInline(
+      makeArgs('plan.node.update', { nodeId: NODE_ID, expectedRevision: 2, note: 'Next' }),
+    );
+
+    expect(mockUpdatePlanNode.mock.calls[0]![0]).not.toHaveProperty('conversationId');
+  });
+
   it('surfaces a stale write as a validation error carrying what a retry needs, not the node', async () => {
     mockUpdatePlanNode.mockResolvedValue({
       ok: false,

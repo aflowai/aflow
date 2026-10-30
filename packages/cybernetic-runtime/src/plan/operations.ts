@@ -9,7 +9,10 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { Redis } from 'ioredis';
 import {
   isClosedPlanNodeStatus,
+  planNodeOperatorLine,
+  PLAN_NODE_APPROVED_HEAD,
   PLAN_NODE_CHILDREN_LIMIT,
+  PLAN_NODE_REVISE_HEAD,
   PLAN_NODE_DEPENDENCIES_LIMIT,
   PLAN_NODE_LEARNINGS_LIMIT,
   PLAN_NODE_LINKS_LIMIT,
@@ -37,6 +40,7 @@ import {
   type PlanNodeListOutput,
   type PlanNodeOpen,
   type PlanNodePlaceRefusalDetails,
+  type PlanNodeRevise,
   type PlanNodeRefusalDetails,
   type PlanNodeStatus,
   type PlanNodeSummary,
@@ -104,7 +108,15 @@ export interface PlanWriteContext extends PlanReadContext {
   createdBy?: string;
   /** The writer's authority, never the person who started an agent's session. */
   actorKind?: 'human' | 'agent';
+  /**
+   * The operator's conversation writing, where the writer is one (Plan 337
+   * P4): an update it lands links it on the node as a `session` link.
+   */
+  conversationId?: string;
 }
+
+/** The label a conversation's link on a node carries. */
+export const PLAN_NODE_CONVERSATION_LINK_LABEL = 'conversation';
 
 function notFound(
   nodeId: string,
@@ -427,6 +439,17 @@ async function writePlanNode(
     const now = await ctx.store.find(ctx.spaceId, input.nodeId);
     return now ? stale(now, input) : notFound(input.nodeId);
   }
+  if (ctx.conversationId !== undefined) {
+    // A link leaves the revision where it stands, so the writer's next update
+    // against the revision it was just given is not refused as stale. A
+    // conversation already linked stays linked once.
+    await ctx.store.insertLink(ctx.spaceId, {
+      nodeId: node.nodeId,
+      kind: 'session',
+      ref: ctx.conversationId,
+      label: PLAN_NODE_CONVERSATION_LINK_LABEL,
+    });
+  }
   return nodeWritten(ctx, { ok: true as const, node });
 }
 
@@ -439,7 +462,8 @@ export type PlanNodeOpenRequest = PlanNodeOpen & { nodeId: string };
 /**
  * Moves a `blocked`, `done` or `dropped` node to `active` through
  * `updatePlanNode`, so it is judged and written as every update is. On a
- * blocked node `why` goes above the note as `Approved: …`, its first line. On
+ * blocked node `why` goes above the note as one `Approved: …` line, its first
+ * line, which the next brief opens with (`planNodeInstructions`). On
  * a closed node the update's reopen rule (`reopenedNote`) heads the note with
  * what the node claimed; a `why` follows as `Reopened: …` in place of the
  * prior note, which describes work the reopen declares unfinished, and no
@@ -469,8 +493,13 @@ export async function openPlanNode(
   }
   if (request.why !== undefined) {
     if (current.status === 'blocked') {
-      const note = `Approved: ${request.why}${current.note !== undefined ? `\n${current.note}` : ''}`;
-      if (note.length > PLAN_NODE_PROSE_MAX_CHARS) return approvedNoteTooLong(current, note.length);
+      const note = headedNote(
+        planNodeOperatorLine(PLAN_NODE_APPROVED_HEAD, request.why),
+        current.note,
+      );
+      if (note.length > PLAN_NODE_PROSE_MAX_CHARS) {
+        return operatorNoteTooLong(current, note.length, 'Approving');
+      }
       update.note = note;
     } else {
       update.note = `Reopened: ${request.why}`;
@@ -483,14 +512,61 @@ export async function openPlanNode(
   return written.ok ? { ...written, from: current.status } : written;
 }
 
-function approvedNoteTooLong(current: PlanNode, noteLength: number): PlanOpError {
+/** The operator's line above the note as it stands. */
+function headedNote(line: string, note: string | undefined): string {
+  return note !== undefined ? `${line}\n${note}` : line;
+}
+
+export type PlanNodeReviseRequest = PlanNodeRevise & { nodeId: string };
+
+/**
+ * Sends a `blocked` node back for revision (Plan 337 P4) through
+ * `updatePlanNode`: the status stays blocked, and `why` goes above the note as
+ * one `Revise: …` line. The write moves the revision like any other, which is
+ * what re-arms a rule keyed on it. The Helmsman rewrites the node from that
+ * line with the update authority it already holds.
+ */
+export async function revisePlanNode(
+  ctx: PlanWriteContext,
+  request: PlanNodeReviseRequest,
+): Promise<PlanOpResult<{ node: PlanNode }>> {
+  const current = await ctx.store.find(ctx.spaceId, request.nodeId);
+  if (!current) return notFound(request.nodeId);
+  const note = headedNote(planNodeOperatorLine(PLAN_NODE_REVISE_HEAD, request.why), current.note);
+  const update: PlanNodeUpdateInput = {
+    nodeId: request.nodeId,
+    expectedRevision: request.expectedRevision,
+    note,
+  };
+  if (current.revision !== request.expectedRevision) return stale(current, update);
+  if (current.status !== 'blocked') {
+    return {
+      ok: false,
+      code: 'PLAN_NODE_UNCHANGED',
+      message:
+        `Plan node "${current.title}" is ${current.status}, not blocked, so there is no proposal to send back ` +
+        `and nothing was written; it stays at revision ${String(current.revision)}.`,
+      details: refusalDetails(current, update),
+    };
+  }
+  if (note.length > PLAN_NODE_PROSE_MAX_CHARS) {
+    return operatorNoteTooLong(current, note.length, 'Sending back');
+  }
+  return writePlanNode(ctx, update, {});
+}
+
+function operatorNoteTooLong(
+  current: PlanNode,
+  noteLength: number,
+  act: 'Approving' | 'Sending back',
+): PlanOpError {
   return {
     ok: false,
     code: 'PLAN_NODE_NOTE_TOO_LONG',
     message:
-      `Approving plan node "${current.title}" with this reason puts it above its note, which would then hold ` +
-      `${String(noteLength)} characters; a note holds at most ${String(PLAN_NODE_PROSE_MAX_CHARS)}, so nothing was ` +
-      'written. Approve it without a reason, or shorten its note first.',
+      `${act} plan node "${current.title}" with this note puts it above its note, which would then hold ` +
+      `${String(noteLength)} characters. A note holds at most ${String(PLAN_NODE_PROSE_MAX_CHARS)}, so nothing was ` +
+      'written. Shorten what you wrote, or shorten the node’s note first.',
     details: {
       nodeId: current.nodeId,
       status: current.status,

@@ -19,6 +19,7 @@ import {
   PlanNodeOpenInputSchema,
   PlanNodePlaceInputSchema,
   PlanNodePlaceRefusalDetailsSchema,
+  PlanNodeReviseInputSchema,
   PlanNodeRefusalDetailsSchema,
   PlanNodeUpdateOutputSchema,
   PlanNodeWriteRefusalSchema,
@@ -34,6 +35,7 @@ import {
   readPlanLoopMeasure,
   openPlanNode,
   placePlanNode,
+  revisePlanNode,
   readPlanBoard,
   readPlanNodeDetail,
   readPlanOverview,
@@ -214,7 +216,7 @@ async function recordPlanWrite(
   request: FastifyRequest,
   params: { spaceId: string; nodeId: string },
   writer: PlanWriter,
-  action: 'plan.node.close' | 'plan.node.open' | 'plan.node.place',
+  action: 'plan.node.close' | 'plan.node.open' | 'plan.node.place' | 'plan.node.revise',
   details: Record<string, unknown>,
 ): Promise<void> {
   await wakeResident(
@@ -455,6 +457,56 @@ export const planRoutes: FastifyPluginAsync = async (fastify) => {
       }
       await recordPlanWrite(fastify, request, request.params, writer, 'plan.node.open', {
         status: result.from,
+        revision: result.node.revision,
+      });
+      return { node: result.node };
+    },
+  );
+
+  // Plan 337 P4: Revise on a blocked node — it stays blocked, the operator's
+  // note above its note, and the resident is woken to rewrite it.
+  app.patch(
+    '/:spaceId/plan/nodes/:nodeId/revise',
+    {
+      config: PLAN_WRITE_AUTHZ,
+      schema: {
+        tags: ['Spaces'],
+        summary:
+          'Send a blocked plan node back for revision with a note — it stays blocked — against the revision the operator read',
+        params: PlanWriteParamsSchema,
+        body: PlanNodeReviseInputSchema,
+        response: PLAN_WRITE_RESPONSES,
+      },
+    },
+    async (request, reply) => {
+      const writer = await operatorWriting(fastify, request, request.params, reply);
+      if (!writer) return reply;
+      const body = request.body;
+      const result = await revisePlanNode(writer.ctx, {
+        nodeId: request.params.nodeId,
+        expectedRevision: body.expectedRevision,
+        why: body.why,
+      });
+      if (!result.ok) {
+        if (result.code === 'PLAN_NODE_NOTE_TOO_LONG') {
+          return reply.status(refusalStatus(result)).send({
+            error: result.code,
+            message:
+              'This would leave the step’s note longer than a note holds, so nothing was written. Shorten what you wrote.',
+          });
+        }
+        return reply
+          .status(refusalStatus(result))
+          .send(
+            refusalBody(
+              result,
+              body.expectedRevision,
+              (status) =>
+                `This step is ${status}, not blocked, so there is no proposal to send back. Nothing was written.`,
+            ),
+          );
+      }
+      await recordPlanWrite(fastify, request, request.params, writer, 'plan.node.revise', {
         revision: result.node.revision,
       });
       return { node: result.node };

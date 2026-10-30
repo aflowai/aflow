@@ -19,6 +19,7 @@ const mockReadPlanNodeDetail = vi.fn();
 const mockPlacePlanNode = vi.fn();
 const mockCreatePlanNodeStore = vi.fn((..._args: unknown[]) => ({ store: 'tenant-store' }));
 const mockOpenPlanNode = vi.fn();
+const mockRevisePlanNode = vi.fn();
 const mockRequestResidentWake = vi.fn((..._args: unknown[]) => Promise.resolve('started'));
 const mockReadPlanLoopMeasure = vi.fn();
 const SCHEDULES = { schedules: 'resident' };
@@ -29,6 +30,7 @@ vi.mock('@aflow/cybernetic-runtime', () => ({
   updatePlanNode: (...a: unknown[]) => mockUpdatePlanNode(...a),
   readPlanNodeDetail: (...a: unknown[]) => mockReadPlanNodeDetail(...a),
   openPlanNode: (...a: unknown[]) => mockOpenPlanNode(...a),
+  revisePlanNode: (...a: unknown[]) => mockRevisePlanNode(...a),
   placePlanNode: (...a: unknown[]) => mockPlacePlanNode(...a),
   createPlanNodeStore: (...a: unknown[]) => mockCreatePlanNodeStore(...a),
   createResidentScheduleStore: () => SCHEDULES,
@@ -766,6 +768,123 @@ describe('PATCH /v1/spaces/:spaceId/plan/nodes/:nodeId/open (Plan 332 D6, Plan 3
     caller.writable = new Set();
     expect((await open({ expectedRevision: 4 })).statusCode).toBe(403);
     expect(mockOpenPlanNode).not.toHaveBeenCalled();
+  });
+});
+
+describe('PATCH /v1/spaces/:spaceId/plan/nodes/:nodeId/revise (Plan 337 P4)', () => {
+  const url = `/v1/spaces/${SPACE_ID}/plan/nodes/${CHILD_ID}/revise`;
+  const revisedNode: PlanNode = {
+    nodeId: CHILD_ID,
+    spaceId: SPACE_ID,
+    parentId: ROOT_ID,
+    kind: 'execute',
+    title: 'P1 — proposals',
+    goal: 'Propose the next step.',
+    criteria: 'A proposal waits for the operator.',
+    status: 'blocked',
+    note: 'Revise: split it in two.\nProposed by the resident',
+    revision: 5,
+    position: 0,
+    createdAt: '2026-10-05T08:00:00.000Z',
+    updatedAt: '2026-10-05T11:00:00.000Z',
+  };
+
+  function revise(body: unknown) {
+    return app.inject({ method: 'PATCH', url, payload: body as Record<string, unknown> });
+  }
+
+  it('sends a blocked node back as the person signed in, audits it, and wakes the resident', async () => {
+    mockRevisePlanNode.mockResolvedValue({ ok: true, node: revisedNode });
+
+    const res = await revise({ expectedRevision: 4, why: '  split it in two.  ' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ node: revisedNode });
+    expect(mockRevisePlanNode).toHaveBeenCalledWith(
+      {
+        store: { store: 'tenant-store' },
+        spaceId: SPACE_ID,
+        redis: REDIS,
+        tenantId: TENANT_ID,
+        createdBy: OPERATOR_ID,
+        actorKind: 'human',
+      },
+      { nodeId: CHILD_ID, expectedRevision: 4, why: 'split it in two.' },
+    );
+    expect(mockOpenPlanNode).not.toHaveBeenCalled();
+    expect(mockUpdatePlanNode).not.toHaveBeenCalled();
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actor: expect.objectContaining({ userId: OPERATOR_ID, kind: 'human' }),
+        action: 'plan.node.revise',
+        target: expect.objectContaining({ resourceType: 'plan_node', resourceId: CHILD_ID }),
+        details: { revision: 5 },
+      }),
+    );
+    expect(mockRequestResidentWake).toHaveBeenCalledWith(
+      { redis: REDIS, schedules: SCHEDULES },
+      { tenantId: TENANT_ID, spaceId: SPACE_ID, cause: 'node_written' },
+    );
+  });
+
+  it('requires the note, and takes no status, outcome or spend', async () => {
+    expect((await revise({ expectedRevision: 4 })).statusCode).toBe(400);
+    expect((await revise({ expectedRevision: 4, why: '   ' })).statusCode).toBe(400);
+    expect((await revise({ expectedRevision: 4, why: 'x', status: 'active' })).statusCode).toBe(
+      400,
+    );
+    expect((await revise({ expectedRevision: 4, why: 'x', spendCents: 900 })).statusCode).toBe(400);
+    expect(mockRevisePlanNode).not.toHaveBeenCalled();
+  });
+
+  it('refuses a stale revision with the node as it stands, and a node that is not blocked with 422', async () => {
+    const current = {
+      nodeId: CHILD_ID,
+      revision: 6,
+      status: 'blocked',
+      updatedAt: '2026-10-05T10:30:00.000Z',
+      differingFields: ['note'],
+    };
+    mockRevisePlanNode.mockResolvedValueOnce({
+      ok: false,
+      code: 'PLAN_NODE_STALE',
+      message: 'engine words',
+      details: current,
+    });
+    const stale = await revise({ expectedRevision: 4, why: 'again' });
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json()).toMatchObject({ error: 'PLAN_NODE_STALE', current });
+
+    mockRevisePlanNode.mockResolvedValueOnce({
+      ok: false,
+      code: 'PLAN_NODE_UNCHANGED',
+      message: 'engine words',
+      details: { ...current, status: 'active' },
+    });
+    const open = await revise({ expectedRevision: 6, why: 'again' });
+    expect(open.statusCode).toBe(422);
+    expect(open.json().message).toContain('not blocked');
+
+    mockRevisePlanNode.mockResolvedValueOnce({
+      ok: false,
+      code: 'PLAN_NODE_NOTE_TOO_LONG',
+      message: 'engine words',
+      details: { nodeId: CHILD_ID },
+    });
+    const long = await revise({ expectedRevision: 6, why: 'again' });
+    expect(long.statusCode).toBe(422);
+    expect(long.json()).toMatchObject({ error: 'PLAN_NODE_NOTE_TOO_LONG' });
+    expect(audit.record).not.toHaveBeenCalled();
+    expect(mockRequestResidentWake).not.toHaveBeenCalled();
+  });
+
+  it('is a person’s write only: an agent’s credential is refused operator_only', async () => {
+    caller.servicePrincipal = true;
+    caller.authMethod = 'api_key';
+    const agent = await revise({ expectedRevision: 4, why: 'again' });
+    expect(agent.statusCode).toBe(403);
+    expect(agent.json()).toMatchObject({ error: 'operator_only' });
+    expect(mockRevisePlanNode).not.toHaveBeenCalled();
   });
 });
 

@@ -1,4 +1,5 @@
 import {
+  isPersonTrigger,
   PlanNodeCreateInputSchema,
   PlanNodeDependInputSchema,
   PlanNodeLearnInputSchema,
@@ -18,6 +19,7 @@ import {
   updatePlanNode,
   type PlanWriteContext,
 } from '@aflow/cybernetic-runtime';
+import { getSessionStateSafe } from '@aflow/redis';
 import { sessionUser } from '../sessionUser.js';
 import type { InlineHandlerArgs } from '../types.js';
 import { emitStepSuccess } from '../helpers.js';
@@ -30,6 +32,17 @@ function planWriteContext(args: InlineHandlerArgs): PlanWriteContext {
     tenantId: args.context.tenantId as string,
     actorKind: 'agent',
   };
+}
+
+/**
+ * The session, where it is a conversation only a person starts (Plan 337 P4):
+ * a node it writes links it, so the operator finds the talk from the node.
+ * A scheduled wake or an API run links nothing.
+ */
+async function operatorConversation(args: InlineHandlerArgs): Promise<string | undefined> {
+  const { tenantId, runId } = args.context;
+  const read = await getSessionStateSafe(args.redis, tenantId, runId);
+  return read.ok && isPersonTrigger(read.state.trigger) ? runId : undefined;
 }
 
 export async function handlePlanNodeCreate(
@@ -57,7 +70,11 @@ export async function handlePlanNodeUpdate(
 ): Promise<void> {
   const input = await parsePlanInput(args, PlanNodeUpdateInputSchema, startTime);
   if (!input) return;
-  const result = await updatePlanNode(planWriteContext(args), input);
+  const conversationId = await operatorConversation(args);
+  const result = await updatePlanNode(
+    { ...planWriteContext(args), ...(conversationId !== undefined ? { conversationId } : {}) },
+    input,
+  );
   if (!result.ok) {
     await emitPlanError(args, result, startTime);
     return;
