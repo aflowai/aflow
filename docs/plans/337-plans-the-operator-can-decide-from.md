@@ -37,7 +37,7 @@
 **Open questions**
 
 - Does a node that asks for no decision carry a card? Recommended: the field is optional on every node. The guidance asks for it only on nodes that ask for a decision.
-- Does **Approve** with no answer accept every recommended answer? Recommended: yes. The guidance tells the Helmsman so.
+- Does **Approve** with no answer accept every recommended answer? Recommended: yes. The note records each recommended answer under `Approved: …`.
 - Does the commission result carry the card as data? Recommended: yes, as an optional field, added in P3.
 - How does a node link a plan document in a folder with no remote? Recommended: the link's ref is the path and the sha, shown as text.
 
@@ -94,6 +94,8 @@ A node gains an optional `card`. Its shape is a rule, so it lives in the schema.
 | Not done on purpose | `notDoing`  | a list of items                       |
 | Done when           | —           | the node's `criteria`, rendered last  |
 
+**Every stored section is required.** The schema requires all six: `change`, `why`, `affects`, `risks`, `questions` and `notDoing`. `change` holds both items, and `why` holds at least one. The other four lists may be empty. An empty list says the writer found none. A card that omits a section is refused.
+
 **Done when is derived, not stored.** The node already holds `criteria` (F1). A second copy in the card would drift from it. The rail renders `criteria` as the card's last section.
 
 **Every question carries its recommended answer.** The schema requires `recommended`. A question without one asks the operator to do the planning.
@@ -145,10 +147,10 @@ _Rejected:_ the rail fetching the document's first section live. The board would
 **Answers use the decide path and the note.** Both exist (F5). This is the smaller choice.
 
 - On a `decide` node, **Decide** prefills its outcome with each question and its recommended answer. The operator edits any line and records it. The outcome is the answer, as Plan 322 D9 rules.
-- On a `blocked` node, **Approve** offers an optional answer per question. The rail joins the answers into the one `why`, one line per question, so the note gains `Approved: …`.
+- On a `blocked` node, **Approve** offers an optional answer per question. The rail fills each unanswered question with its recommended answer. It joins the answers into the one `why`, one line per question, so the note gains `Approved: …`.
 - The rail shows the recorded answers where they land today: **Now** and **Working note** for a note, **Outcome** for an outcome.
 
-**Approve stays one action.** Approve with no answer accepts every recommended answer. The Helmsman's guidance says so (D4).
+**Approve stays one action.** Approve with no answer accepts every recommended answer. The rail still sends one open write. Its `why` lists each question with its recommended answer. The node's note then records the decision, and the Helmsman reads it there (D4).
 
 _Rejected:_ an `answers` field on the card, written by new operator routes. It adds a write path, an authority rule and a second author to the card. The note and the outcome hold the answer already. P2 records whether the joined text reads well enough. A later plan may add the field if it does not.
 
@@ -159,7 +161,7 @@ _Rejected:_ a confirm step before Approve. It turns one action into two for the 
 | Writer                                 | Where it is told                                                                                                                                                                   | Note                                                                                                                                                                                                                                |
 | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | The Helmsman writing nodes             | The `card` field descriptions on `plan.node.create` and `plan.node.update`, their usage text, and the writing-rules section of `packages/cybernetic-runtime/src/helmsmanPrompt.ts` | A stop's card is the Helmsman's, on its next turn. The engine writes only `Blocked: …` (F6).                                                                                                                                        |
-| The planning skill (Plan 329)          | `PlanProposalSchema`, when Plan 329 P1 builds it                                                                                                                                   | It does not exist yet (F7). Its risks and open questions reuse D1's item shapes, so a phase's card is the proposal's own. Plan 329 D1's 8,000 should read 64,000 (F8).                                                              |
+| The planning skill (Plan 329)          | `PlanProposalSchema`, when Plan 329 P1 builds it                                                                                                                                   | It does not exist yet (F7). Its risks and open questions reuse D1's item shapes, so a phase's card is the proposal's own. Plan 329 D1's 8,000 should read 64,000 (F8). P1 corrects it.                                              |
 | The resident's proposals (Plan 331 P2) | The same `plan.node.create` input                                                                                                                                                  | Not on main (F9). A findings carrier lists its findings under **Why**. The resident may not rewrite the card of a person-approved node or a blocked proposal. P2 sets that rule for `goal` and `criteria`, and the card follows it. |
 | The harness writing a plan document    | The template in `docs/plans/README.md`, and from P3 the commission result's `card`                                                                                                 | The template opens with the card (P3).                                                                                                                                                                                              |
 
@@ -190,13 +192,13 @@ _Rejected:_ rewriting Plans 315 to 336 with a card. They record decisions alread
 
 Each case fails if the change is wrong.
 
-- **Shape.** `PlanNodeCreateSchema` accepts a card with every section and an item of 4,000 characters. It refuses a question with no `recommended`, and a card whose serialised form passes 64,000 characters.
+- **Shape.** `PlanNodeCreateSchema` accepts a card with every section and an item of 4,000 characters. It accepts an empty `risks` list. It refuses a card with no `risks` section, a question with no `recommended`, and a card whose serialised form passes 64,000 characters.
 - **No style check.** A card item of one 60-word sentence with a semicolon is accepted.
 - **Derived Done when.** The rail renders `criteria` as **Done when** under a card. A card holding a `doneWhen` field is refused as an unknown key.
 - **Brief unchanged.** A commission briefed from a carded node carries the goal and criteria, and no card section.
 - **Old nodes.** A node with no card renders **Goal**, **Done when** and **Working note** as today.
-- **One action.** **Approve** with no answers sends one open write with no `why`.
-- **Answers recorded.** **Approve** with an answer to the second question writes a note whose first line is `Approved:` with that answer. **Decide** prefills each question with its recommended answer.
+- **One action.** **Approve** with no answers sends one open write. Its `why` lists each question with its recommended answer.
+- **Answers recorded.** **Approve** with an answer to the second question writes a note whose first line is `Approved:`. The note holds that answer and the recommended answer to every other question. **Decide** prefills each question with its recommended answer.
 - **Read the plan.** A node with a `document` link shows **Read the plan**, which opens the newest link's ref.
 - **Writer rule.** A resident write that changes the card of a blocked proposal is refused, once Plan 331 P2 lands.
 
@@ -210,6 +212,9 @@ Each case fails if the change is wrong.
 - The tenant migration and the plan store.
 - The field descriptions, the usage text and the Helmsman's prompt.
 - The measured token cost of a full card in `plan.node.get`, recorded in D1.
+- Plan 329 D1's stated ceiling, corrected from 8,000 to 64,000 characters (F8).
+
+P1 corrects Plan 329 because P0's range holds only this document and its index row.
 
 _Exit:_ the shape cases in §5 pass. A Helmsman asked to propose a phase writes a node with a card on the live stack.
 
