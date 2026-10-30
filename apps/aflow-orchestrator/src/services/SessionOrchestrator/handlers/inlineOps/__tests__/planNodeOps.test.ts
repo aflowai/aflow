@@ -167,7 +167,7 @@ describe('plan.node.update', () => {
       args.stepExecutionId,
       expect.objectContaining({
         executorWait: expect.objectContaining({
-          job: expect.objectContaining({ activatedByPerson: true, stepType: 'api' }),
+          job: expect.objectContaining({ stepType: 'api' }),
         }),
       }),
     );
@@ -206,7 +206,6 @@ describe('plan.node.update', () => {
         stepType: 'api',
         sessionId: SESSION,
         spaceId: SPACE,
-        activatedByPerson: true,
       }),
     );
     expect(mockReadMergedPullRequest).not.toHaveBeenCalled();

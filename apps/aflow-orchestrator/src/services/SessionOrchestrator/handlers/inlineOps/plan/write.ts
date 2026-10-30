@@ -69,7 +69,6 @@ export async function handlePlanNodeUpdate(
   const context = await planWriteContext(args);
   if (context.resident && input.status === 'done') {
     const credentialOwnerId = await sessionUser(args);
-    const state = await getSessionState(args.redis, args.context.tenantId, args.context.runId);
     await dispatchOrWaitOnExecutor(
       args.redis,
       StepJobMessageSchema.parse({
@@ -89,7 +88,6 @@ export async function handlePlanNodeUpdate(
         attempt: args.attempt,
         scheduledAtMs: args.scheduledAtMs,
         credentialOwnerId,
-        activatedByPerson: state?.activatedByPerson,
       }),
     );
     return;
