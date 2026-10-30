@@ -105,6 +105,7 @@ describe('WorkflowPatchInputSchema', () => {
   it('accepts a single replace op', () => {
     const parsed = WorkflowPatchInputSchema.parse({
       slug: 'my-workflow',
+      why: 'Raise the cap.',
       operations: [{ op: 'replace', path: '/budget/maxRuns', value: 30 }],
     });
     expect(parsed.operations).toHaveLength(1);
@@ -116,6 +117,7 @@ describe('WorkflowPatchInputSchema', () => {
     for (const op of ops) {
       const parsed = WorkflowPatchInputSchema.parse({
         slug: 'my-workflow',
+        why: 'Raise the cap.',
         operations: [{ op, path: '/status', from: '/x', value: 'y' }],
       });
       expect(parsed.operations[0]!.op).toBe(op);
@@ -126,13 +128,20 @@ describe('WorkflowPatchInputSchema', () => {
     expect(() =>
       WorkflowPatchInputSchema.parse({
         slug: 'my-workflow',
+        why: 'Raise the cap.',
         operations: [{ op: 'overwrite', path: '/status' }],
       }),
     ).toThrow();
   });
 
   it('requires at least one op', () => {
-    expect(() => WorkflowPatchInputSchema.parse({ slug: 'my-workflow', operations: [] })).toThrow();
+    expect(() =>
+      WorkflowPatchInputSchema.parse({
+        slug: 'my-workflow',
+        why: 'Raise the cap.',
+        operations: [],
+      }),
+    ).toThrow();
   });
 
   it('rejects > 50 ops', () => {
@@ -142,17 +151,42 @@ describe('WorkflowPatchInputSchema', () => {
       value: 1,
     }));
     expect(() =>
-      WorkflowPatchInputSchema.parse({ slug: 'my-workflow', operations: tooMany }),
+      WorkflowPatchInputSchema.parse({
+        slug: 'my-workflow',
+        why: 'Raise the cap.',
+        operations: tooMany,
+      }),
     ).toThrow();
   });
 
   it('accepts expectedRevision for optimistic concurrency', () => {
     const parsed = WorkflowPatchInputSchema.parse({
       slug: 'my-workflow',
+      why: 'Raise the cap.',
       operations: [{ op: 'replace', path: '/status', value: 'approved' }],
       expectedRevision: 5,
     });
     expect(parsed.expectedRevision).toBe(5);
+  });
+
+  it('refuses a patch that gives no reason', () => {
+    const operations = [{ op: 'replace' as const, path: '/budget/maxRuns', value: 30 }];
+    expect(WorkflowPatchInputSchema.safeParse({ slug: 'my-workflow', operations }).success).toBe(
+      false,
+    );
+    expect(
+      WorkflowPatchInputSchema.safeParse({ slug: 'my-workflow', operations, why: '   ' }).success,
+    ).toBe(false);
+  });
+
+  it('holds a reason of several paragraphs', () => {
+    const why = 'The run budget ran out in the middle of the campaign. '.repeat(100);
+    const parsed = WorkflowPatchInputSchema.parse({
+      slug: 'my-workflow',
+      operations: [{ op: 'replace', path: '/budget/maxRuns', value: 30 }],
+      why,
+    });
+    expect(parsed.why).toBe(why);
   });
 });
 

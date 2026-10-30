@@ -74,6 +74,20 @@ export async function handleWithdrawProposal(
     );
     return;
   }
+  // Any other agent is one conversation, not a standing entity: it withdraws
+  // only what that conversation proposed.
+  const byCoach = args.context.agentDefinition.systemRole === 'cybernetic-coach';
+  if (!byCoach && sc.coachSessionId !== args.context.runId) {
+    await emitStepError(
+      args,
+      'PROPOSAL_NOT_WITHDRAWABLE',
+      `Staged change ${input.stagedChangeId} was proposed by another conversation. You may withdraw only the proposals this conversation made, and the operator decides this one.`,
+      startTime,
+      'permission',
+      false,
+    );
+    return;
+  }
   if (sc.status === 'withdrawn') {
     // Idempotent: withdrawing an already-withdrawn proposal is a no-op success.
     await emitStepSuccess(args, { stagedChangeId: sc.id, status: 'withdrawn' }, startTime);
@@ -90,11 +104,16 @@ export async function handleWithdrawProposal(
     return;
   }
 
+  const withdrawnBy = byCoach
+    ? 'coach'
+    : args.context.agentDefinition.systemRole === 'cybernetic-helmsman'
+      ? 'helmsman'
+      : 'agent';
   const updated: StagedChange = {
     ...sc,
     status: 'withdrawn',
     resolvedAt: new Date().toISOString(),
-    resolvedBy: 'coach',
+    resolvedBy: withdrawnBy,
     withdrawReason: input.reason,
   };
   await writeCoachJsonDoc(
@@ -123,7 +142,9 @@ export async function handleWithdrawProposal(
         causedBySessionId: args.context.runId,
         causedByStepExecutionId: args.stepExecutionId,
         payload: { stagedChangeId: sc.id, reason: input.reason },
-        summary: `Coach withdrew a proposal`,
+        summary: byCoach
+          ? 'Coach withdrew a proposal'
+          : 'The conversation that proposed a change withdrew it',
       },
     });
   } catch {

@@ -355,7 +355,7 @@ export async function handleWorkflowPatch(
 
   const overallSafe = isProposalReadinessSafe(validations);
   const rationale = [
-    `Agent ${args.context.runId} proposed ${String(conversion.ops.length)} patch op(s) against workflow "${slug}".`,
+    input.why.trim(),
     ...(activeRunWarning ? [activeRunWarning] : []),
     ...(!overallSafe
       ? ['One or more hard checks failed — review the validations block before ratifying.']

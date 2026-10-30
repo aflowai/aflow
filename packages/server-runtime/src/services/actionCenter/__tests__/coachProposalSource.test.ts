@@ -26,6 +26,49 @@ vi.mock('@aflow/cybernetic-runtime', async () => {
   };
 });
 
+/** The conversation store: the patching session is a Helmsman conversation with a title. */
+const CONVERSATION_ID = '00000000-0000-4000-8000-0000000000c1';
+vi.mock('../../cybernetic/proposalProvenance.js', async () => {
+  const actual = await vi.importActual<typeof import('../../cybernetic/proposalProvenance.js')>(
+    '../../cybernetic/proposalProvenance.js',
+  );
+  const lookup = {
+    sessions: new Map([
+      [
+        '00000000-0000-4000-8000-0000000000b1',
+        {
+          sessionId: '00000000-0000-4000-8000-0000000000b1',
+          parentSessionId: '00000000-0000-4000-8000-0000000000c1',
+          title: null,
+          manualTitle: null,
+        },
+      ],
+      [
+        '00000000-0000-4000-8000-0000000000c1',
+        {
+          sessionId: '00000000-0000-4000-8000-0000000000c1',
+          parentSessionId: null,
+          title: 'Commission change review',
+          manualTitle: null,
+        },
+      ],
+    ]),
+    runSessions: new Map<string, string>(),
+  };
+  return {
+    ...actual,
+    resolveProposalProvenance: async (
+      _db: unknown,
+      _tenantId: string,
+      _spaceId: string,
+      staged: StagedChange[],
+    ) =>
+      new Map(
+        staged.map((sc) => [sc.id, actual.provenanceOf(sc, actual.conversationFor(sc, lookup))]),
+      ),
+  };
+});
+
 const { createCoachProposalSource } = await import('../sources/coachProposalSource.js');
 const { ActionCenterResolveError } = await import('../types.js');
 
@@ -153,6 +196,33 @@ describe('coach proposal source — reading one proposal', () => {
     put(SPACE_ID, JSON.stringify(patchProposal()), new Date());
     const message = await notFoundMessage(`proposal:${PROPOSAL_ID}`);
     expect(message).toContain('has been deleted');
+  });
+});
+
+describe('coach proposal source — who proposed it', () => {
+  it("names an agent patch as the Helmsman's, with the conversation it came from", async () => {
+    put(SPACE_ID, JSON.stringify(patchProposal()));
+    const item = await source().getById(ctx, `proposal:${PROPOSAL_ID}`);
+    expect(item?.requestedBy).toEqual({
+      kind: 'agent',
+      label: 'Helmsman',
+      sessionId: CONVERSATION_ID,
+    });
+    expect(item?.extension).toMatchObject({
+      kind: 'coach_proposal',
+      provenance: {
+        source: 'agent_patch',
+        conversation: { sessionId: CONVERSATION_ID, title: 'Commission change review' },
+      },
+      rationale: 'Agent proposed 1 patch op(s).',
+    });
+  });
+
+  it('keeps a Coach review under the Coach, apart from an agent patch', async () => {
+    put(SPACE_ID, JSON.stringify({ ...patchProposal(), source: 'coach' }));
+    const item = await source().getById(ctx, `proposal:${PROPOSAL_ID}`);
+    expect(item?.requestedBy).toMatchObject({ kind: 'coach', label: 'Coach' });
+    expect(item?.extension).toMatchObject({ provenance: { source: 'coach' } });
   });
 });
 

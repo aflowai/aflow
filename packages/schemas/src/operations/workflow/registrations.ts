@@ -267,8 +267,10 @@ export function createWorkflowOperationRegistrations(
           'Approving a skill — the operator approves it from the skill page',
         ],
         pitfalls: [
+          'why is the reason the operator reads on the proposal card, beside the change itself. Say what you saw and what the change fixes, for a reader who has not seen this conversation',
           'Patch paths must start with "/" (e.g., "/budget/maxRuns"); a task may be addressed as /tasks/{taskId} or /tasks/{index} — a segment of digits is always an index',
           'Use expectedRevision to guard against concurrent writers',
+          'A definition patch this conversation staged can be withdrawn with learner.propose.withdraw while it is still proposed. A proposal another conversation staged is refused',
           'A single patch may not mix metadata (budget/status) with definition (tasks/goal/campaign)',
           'Identity campaign fields are immutable — their schema cannot be reshaped, only relabeled',
           'A task a route enables gets its guard and its dependency on the source from that route; give it no when of its own, and remove its route before removing it',
@@ -278,6 +280,7 @@ export function createWorkflowOperationRegistrations(
         minimalExampleInput: {
           slug: 'lead-scoring-optimizer',
           operations: [{ op: 'replace', path: '/budget/maxRuns', value: 30 }],
+          why: 'The campaign used its 20 runs before the score levelled off, so it needs 10 more.',
         },
       },
       accessMode: 'write',

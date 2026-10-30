@@ -112,9 +112,22 @@ const WorkflowPatchOperationSchema = z.object({
   from: z.string().optional(),
 });
 
+/**
+ * The stored rationale holds 8000 characters, and a definition patch appends
+ * at most two short platform notes to `why`. The ceiling leaves them room.
+ */
+export const WORKFLOW_PATCH_WHY_MAX = 7000;
+
 export const WorkflowPatchInputSchema = z.object({
   slug: z.string().min(1).max(64),
   operations: z.array(WorkflowPatchOperationSchema).min(1).max(50),
+  why: z
+    .string()
+    .regex(/\S/, 'Say why you are making this change. The operator reads it on the proposal.')
+    .max(WORKFLOW_PATCH_WHY_MAX)
+    .describe(
+      'Your reason for this change, in your own words. The operator reads it as the reason on the proposal card. Write it for someone who has not seen this conversation.',
+    ),
   /** Optimistic concurrency — if provided, patch fails when the current revision differs. */
   expectedRevision: z.number().int().nonnegative().optional(),
 });

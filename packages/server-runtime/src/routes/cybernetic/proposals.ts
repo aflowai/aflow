@@ -11,7 +11,7 @@ import {
   spaces,
 } from '@aflow/database';
 import type { StagedChange, EntityDirectives, Workflow, SkillManifest } from '@aflow/schemas';
-import { PostInstallTaskSchema } from '@aflow/schemas';
+import { PostInstallTaskSchema, ProposalProvenanceSchema } from '@aflow/schemas';
 import { isInteractiveUser } from '../../utils/interactiveUser.js';
 import {
   buildProposalOpDiffs,
@@ -22,6 +22,7 @@ import { loadWorkflowContentWithDiagnostic } from '../../services/workflowLoader
 import { EntityDirectivesSchema } from '@aflow/schemas';
 import { appendEntityEvent } from '@aflow/redis';
 import { deriveCoachProposalProjection } from '../../services/cybernetic/coachProposalProjection.js';
+import { resolveProposalProvenance } from '../../services/cybernetic/proposalProvenance.js';
 import {
   PROPOSAL_DIRS,
   triggerCoachReview,
@@ -79,6 +80,7 @@ const ProposalSummarySchema = z.object({
   kind: z.string(),
   status: z.string(),
   summary: z.string(),
+  provenance: ProposalProvenanceSchema,
   rationale: z.string(),
   confidence: z.string(),
   targetWorkflowSlug: z.string().nullable(),
@@ -90,6 +92,7 @@ const ProposalSummarySchema = z.object({
   expiresAt: z.string(),
   resolvedAt: z.string().nullable(),
   resolvedBy: z.string().nullable(),
+  withdrawReason: z.string().optional(),
   hasReflectionEvidence: z.boolean(),
   lastRatificationError: LastRatificationErrorResponseSchema.optional(),
   rebaseState: z.enum(['clean', 'stale']).optional(),
@@ -174,7 +177,7 @@ export const proposalRoutes: FastifyPluginAsync = async (fastify) => {
       );
       const docs = docArrays.flat();
 
-      const proposals: Array<z.infer<typeof ProposalSummarySchema>> = [];
+      const matching: StagedChange[] = [];
       for (const d of docs) {
         if (!d.path.endsWith('.json')) continue;
         const full = await docRepo.getById(d.id, spaceId);
@@ -193,13 +196,22 @@ export const proposalRoutes: FastifyPluginAsync = async (fastify) => {
         if (pendingOnly && sc.status !== 'proposed') continue;
         if (workflowSlug && sc.targetWorkflowSlug !== workflowSlug) continue;
         if (resolutionRoute && sc.resolutionRoute !== resolutionRoute) continue;
+        matching.push(sc);
+      }
 
-        const projection = deriveCoachProposalProjection(sc);
+      const provenance = await resolveProposalProvenance(db, tenant.tenantId, spaceId, matching);
+      const proposals: Array<z.infer<typeof ProposalSummarySchema>> = [];
+      for (const sc of matching) {
+        const projection = deriveCoachProposalProjection(
+          sc,
+          provenance.get(sc.id)?.conversation ?? null,
+        );
         proposals.push({
           id: sc.id,
           kind: projection.proposalKind,
           status: sc.status,
           summary: projection.proposalSummary,
+          provenance: projection.provenance,
           rationale: projection.rationale,
           confidence: projection.confidence,
           targetWorkflowSlug: projection.targetWorkflowSlug,
@@ -211,6 +223,7 @@ export const proposalRoutes: FastifyPluginAsync = async (fastify) => {
           expiresAt: sc.expiresAt,
           resolvedAt: sc.resolvedAt ?? null,
           resolvedBy: sc.resolvedBy ?? null,
+          ...(sc.withdrawReason ? { withdrawReason: sc.withdrawReason } : {}),
           hasReflectionEvidence: projection.hasReflectionEvidence,
           ...(projection.lastRatificationError
             ? { lastRatificationError: projection.lastRatificationError }
@@ -319,7 +332,12 @@ export const proposalRoutes: FastifyPluginAsync = async (fastify) => {
         opDiffs = buildProposalOpDiffs(null, sc.proposal.ops);
       }
 
-      return { proposal: { ...(sc as unknown as Record<string, unknown>), opDiffs } };
+      const provenance = (await resolveProposalProvenance(db, tenant.tenantId, spaceId, [sc])).get(
+        sc.id,
+      );
+      return {
+        proposal: { ...(sc as unknown as Record<string, unknown>), opDiffs, provenance },
+      };
     },
   );
 

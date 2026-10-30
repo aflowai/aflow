@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { GateContextSchema, RelatesToEntrySchema } from '../operations/user.js';
 import { RatificationApplyReasonSchema } from '../cybernetic/stagedChange.js';
+import { ProposalProvenanceSchema } from '../cybernetic/proposalProvenance.js';
 import { BrowserProfileIdSchema } from '../operations/browserProfile.js';
 import { BROWSER_HANDOFF_REASONS } from '../operations/browserWindow.js';
 import {
@@ -365,6 +366,8 @@ export const CoachProposalExtensionSchema = z.object({
    * (loses voice) or the AC PeekPanel loses its inbox phrasing.
    */
   proposalSummary: z.string(),
+  /** Who proposed it, from which conversation. The card's byline and the section it sits under. */
+  provenance: ProposalProvenanceSchema,
   rationale: z.string(),
   confidence: z.string(),
   opCount: z.number().int().nonnegative(),

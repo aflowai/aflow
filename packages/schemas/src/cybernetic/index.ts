@@ -12,6 +12,7 @@ export * from './evalQuality.js';
 export * from './runEvaluationEnvelope.js';
 export * from './context.js';
 export * from './stagedChange.js';
+export * from './proposalProvenance.js';
 export * from './coachTrigger.js';
 export * from './anomalyReport.js';
 export * from './console.js';

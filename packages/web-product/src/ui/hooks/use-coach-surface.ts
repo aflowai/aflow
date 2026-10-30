@@ -15,6 +15,7 @@ import { useApiQuery } from './useApiQuery.js';
 import * as coachSurfaceBroker from './coach-surface-broker.js';
 import { useResumeOnUnblock } from './use-resume-on-unblock.js';
 import { readProposalReadFailure } from '../lib/proposal-read-failure.js';
+import type { ProposalProvenance } from '../lib/proposal-provenance.js';
 
 // ============================================================================
 // DTOs (mirror server response shapes — kept narrow on purpose)
@@ -25,6 +26,7 @@ export interface CoachProposalSummary {
   kind: string;
   status: string;
   summary: string;
+  provenance?: ProposalProvenance;
   rationale: string;
   confidence: string;
   targetWorkflowSlug: string | null;
@@ -36,6 +38,7 @@ export interface CoachProposalSummary {
   expiresAt: string;
   resolvedAt: string | null;
   resolvedBy: string | null;
+  withdrawReason?: string;
   hasReflectionEvidence: boolean;
   lastRatificationError?: {
     reason: RatificationApplyReason;

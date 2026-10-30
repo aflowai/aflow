@@ -6,6 +6,7 @@ const BASE_COACH_EXTENSION: CoachProposalExtension = {
   kind: 'coach_proposal',
   proposalKind: 'workflow_refinement',
   proposalSummary: 'tighten the goal on task-a',
+  provenance: { source: 'coach', conversation: null },
   rationale: 'observed N runs miss the eval target',
   confidence: 'medium',
   opCount: 1,
@@ -190,6 +191,15 @@ describe('toCoachProposalSummary — Plan 156 §7A.3 Phase B', () => {
     );
     expect(out.rebaseState).toBe('stale');
     expect(out.staleSummary).toEqual({ conflictCount: 2, firstOpKind: 'task.goal' });
+  });
+
+  it('carries who proposed it and from which conversation to the card', () => {
+    const provenance = {
+      source: 'agent_patch' as const,
+      conversation: { sessionId: 'aaaaaaaa-0000-4000-8000-000000000001', title: 'Commissions' },
+    };
+    const out = toCoachProposalSummary(acItem({ extension: coachExt({ provenance }) }));
+    expect(out.provenance).toEqual(provenance);
   });
 
   it('throws on an item without a coach_proposal extension (caller filter bug)', () => {

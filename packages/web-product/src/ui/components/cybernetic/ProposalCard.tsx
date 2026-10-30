@@ -9,6 +9,12 @@ import { ProposalValidationsChecklist } from './ProposalValidationsChecklist.js'
 import type { ProposalReadiness } from './ProposalValidationsChecklist.js';
 import { failedApplyVariant } from '../../hooks/use-coach-surface.js';
 import type { CoachProposalSummary } from '../../hooks/use-coach-surface.js';
+import { useSpaceFromRoute } from '../providers.js';
+import { spaceRoute } from '../../lib/space-routes.js';
+import {
+  describeProposalProvenance,
+  type ProposalProvenance,
+} from '../../lib/proposal-provenance.js';
 
 // ============================================================================
 // Public types — superset across every surface
@@ -20,6 +26,10 @@ export interface ProposalCardSummary {
   kind: string;
   status: string; // 'proposed' | 'ratified' | 'rejected' | 'dismissed' | 'auto_applied' | 'expired'
   summary: string;
+  /** Who proposed it and from which conversation. */
+  provenance?: ProposalProvenance | undefined;
+  /** The author's reason, once it has withdrawn the proposal. */
+  withdrawReason?: string | undefined;
   rationale?: string;
   confidence?: string;
   targetWorkflowSlug?: string | null;
@@ -68,6 +78,8 @@ export interface ProposalCardPayload {
   status?: string;
   summary?: string;
   rationale?: string;
+  provenance?: ProposalProvenance | undefined;
+  withdrawReason?: string | undefined;
   confidence?: string;
   opKinds?: string[];
   targetWorkflowSlug?: string | null;
@@ -167,6 +179,7 @@ const STATUS_VARIANT: Record<string, 'success' | 'danger' | 'warning' | 'neutral
   dismissed: 'neutral',
   auto_applied: 'success',
   expired: 'neutral',
+  withdrawn: 'neutral',
 };
 
 export function ProposalCard({
@@ -256,7 +269,15 @@ export function ProposalCard({
     lastRatificationError: detail?.lastRatificationError ?? proposal.lastRatificationError,
     rebaseState: detail?.rebaseState ?? proposal.rebaseState,
     staleSummary: detail?.staleSummary ?? proposal.staleSummary,
+    provenance: detail?.provenance ?? proposal.provenance,
+    withdrawReason: detail?.withdrawReason ?? proposal.withdrawReason,
   };
+  const spaceSlug = useSpaceFromRoute()?.slug;
+  const origin = describeProposalProvenance({
+    provenance: merged.provenance,
+    status: merged.status,
+    withdrawReason: merged.withdrawReason,
+  });
 
   const variant = failedApplyVariant(merged.lastRatificationError ?? undefined);
   const isFailed = variant !== null;
@@ -391,8 +412,41 @@ export function ProposalCard({
             )}
           </Row>
 
-          {/* Summary + rationale */}
-          {merged.rationale && <Text size="xs">{merged.rationale}</Text>}
+          {/* Who proposed it, from where and when, then the reason as written */}
+          {origin?.byline && (
+            <Row gap="xs" align="center" wrap>
+              <Text size="xs" weight="semibold">
+                {origin.byline}
+              </Text>
+              {origin.conversation && (
+                <Text size="xs" variant="muted">
+                  in{' '}
+                  <a
+                    href={spaceRoute(spaceSlug, origin.conversation.path)}
+                    style={{ color: 'var(--color-accent-default)' }}
+                  >
+                    {origin.conversation.title}
+                  </a>
+                </Text>
+              )}
+              {merged.proposedAt && (
+                <Text size="xs" variant="muted" title={formatTimestampTooltip(merged.proposedAt)}>
+                  · {new Date(merged.proposedAt).toLocaleString()}
+                </Text>
+              )}
+            </Row>
+          )}
+          {merged.rationale && (
+            <Text size="xs" style={{ whiteSpace: 'pre-wrap' }}>
+              {origin?.byline ? <strong>Why: </strong> : null}
+              {merged.rationale}
+            </Text>
+          )}
+          {origin?.withdrawn && (
+            <Text size="xs" variant="muted">
+              {origin.withdrawn}
+            </Text>
+          )}
 
           {/* Ops preview badges */}
           {merged.opKinds && merged.opKinds.length > 0 && (

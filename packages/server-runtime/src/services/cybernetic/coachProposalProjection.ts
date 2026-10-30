@@ -4,8 +4,12 @@ import {
   proposalReadinessWarningCount,
   proposalReadinessBlockerCount,
 } from '@aflow/cybernetic-runtime';
+import { provenanceOf, type ProposalConversation } from './proposalProvenance.js';
 
-export function deriveCoachProposalProjection(sc: StagedChange): CoachProposalExtension {
+export function deriveCoachProposalProjection(
+  sc: StagedChange,
+  conversation: ProposalConversation | null = null,
+): CoachProposalExtension {
   return {
     kind: 'coach_proposal',
     proposalKind: sc.kind,
@@ -14,6 +18,7 @@ export function deriveCoachProposalProjection(sc: StagedChange): CoachProposalEx
     // string for non-Coach surfaces; the panel rendering
     // `<ProposalCard>` needs this raw text.
     proposalSummary: sc.proposal.summary,
+    provenance: provenanceOf(sc, conversation),
     rationale: sc.proposal.rationale,
     confidence: sc.proposal.confidence,
     opCount: sc.proposal.ops.length,

@@ -531,7 +531,8 @@ export const LearnerOperationRegistrations: OperationRegistration[] = [
     name: 'Withdraw Proposal',
     actionLabel: 'Withdrawing proposal…',
     semanticDescription:
-      'Retract a still-proposed StagedChange this Coach authored. Use when a proposal ' +
+      'Retract a still-proposed StagedChange you authored. The Coach withdraws its own proposals. ' +
+      'Any other agent withdraws only those its own conversation proposed. Use when a proposal ' +
       'is superseded (e.g. the root cause turned out to be a platform issue) so stale ' +
       'approximations never reach the operator. Only `proposed` status can be withdrawn; ' +
       'ratified/rejected decisions are immutable.',
@@ -546,9 +547,11 @@ export const LearnerOperationRegistrations: OperationRegistration[] = [
       whenToUse: [
         'You filed a platform_issue for the same failure a pending refinement tried to approximate',
         'New evidence invalidated a proposal you staged earlier in this session or a prior one',
+        'The operator asks you to take back a change you proposed with workflow.manage.patch in this conversation',
       ],
       whenNotToUse: [
         'Reversing an operator decision — ratified/rejected/dismissed proposals are immutable',
+        'A proposal another conversation made — it is refused, and the operator decides it',
       ],
       pitfalls: [
         'Withdrawal is neutral — it does NOT teach via fingerprint suppression; re-propose properly when you know the right fix',
