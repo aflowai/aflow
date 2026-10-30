@@ -74,17 +74,23 @@ export async function discoverPRM(
   const path = url.pathname && url.pathname !== '/' ? url.pathname.replace(/\/$/, '') : '';
   const cacheKey = `${origin}|${path}`;
 
-  const cached = prmCache.get(cacheKey);
-  if (cached && Date.now() - cached.fetchedAtMs < PRM_CACHE_TTL_MS) {
-    return { prm: cached.prm, source: cached.source, metadataUrl: cached.metadataUrl };
-  }
-
   const privateNetwork = opts.privateNetwork ?? DEFAULT_PRIVATE_NETWORK_POLICY;
   const fetchImpl = opts.fetchImpl ?? safeFetchFor(privateNetwork);
 
   // serverUrl is space-authored — SSRF-check its origin before any discovery
-  // fetch. Every well-known URL below is origin-rooted.
+  // fetch. Every well-known URL below is origin-rooted. Checked before the
+  // cache too: a document cached under one definition's private network
+  // policy is served only to a caller whose own policy admits its host.
   await validateUrl(origin, [], privateNetwork);
+
+  const cached = prmCache.get(cacheKey);
+  if (cached && Date.now() - cached.fetchedAtMs < PRM_CACHE_TTL_MS) {
+    // A reactive discovery may have cached a document from another host.
+    if (new URL(cached.metadataUrl).origin !== origin) {
+      await validateUrl(cached.metadataUrl, [], privateNetwork);
+    }
+    return { prm: cached.prm, source: cached.source, metadataUrl: cached.metadataUrl };
+  }
 
   // Path 2 — path-specific well-known. Two layouts in the wild:
   //   canonical:   {origin}/.well-known/oauth-protected-resource{path}

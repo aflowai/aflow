@@ -6,6 +6,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SQL } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 const SPACE = '3c920000-0000-4000-8000-0000000000c1';
 const USER = '00000000-0000-4000-8000-0000000000aa';
@@ -38,6 +40,14 @@ function execute(query: SQL): unknown[] {
     state.audit.push({ text, params });
     return [];
   }
+  if (text.includes('DELETE FROM mcp_server_definitions WHERE space_id')) {
+    const deleted = [...state.definitions].map(([server_id, private_network_json]) => ({
+      server_id,
+      private_network_json,
+    }));
+    state.definitions = new Map();
+    return deleted;
+  }
   throw new Error(`mcpPrivateNetwork.test: unhandled SQL: ${text}`);
 }
 
@@ -53,8 +63,12 @@ vi.mock('@aflow/redis', async (importOriginal) => ({
   publishMcpCatalogInvalidation: publish,
 }));
 
-const { setMcpPrivateNetwork, privateNetworkHostsForWrite, McpPrivateNetworkWriteError } =
-  await import('../mcpPrivateNetwork.js');
+const {
+  setMcpPrivateNetwork,
+  privateNetworkHostsForWrite,
+  McpPrivateNetworkWriteError,
+  deleteArchivedSpaceMcpDefinitions,
+} = await import('../mcpPrivateNetwork.js');
 
 type SetOptions = Parameters<typeof setMcpPrivateNetwork>[0];
 
@@ -231,5 +245,42 @@ describe('privateNetworkHostsForWrite', () => {
     for (const host of ['*.corp.example', 'localhost', '127.0.0.1', 'fe80::1']) {
       expect(() => write([host]), host).toThrow(/PRIVATE|no setting|wildcard|"/);
     }
+  });
+});
+
+describe('archiving a space', () => {
+  const record = { hosts: [HOST], setBy: USER, setAt: '2026-10-30T12:00:00.000Z' };
+
+  it('writes a cleared row for each definition that held private network hosts', async () => {
+    state.definitions = new Map<string, unknown>([
+      ['corp', record],
+      ['plain', null],
+    ]);
+
+    await deleteArchivedSpaceMcpDefinitions(
+      { execute: async (query: SQL) => execute(query) } as never,
+      SPACE,
+      { actorId: USER, actorKind: 'human' },
+    );
+
+    expect(state.definitions.size).toBe(0);
+    expect(state.audit).toHaveLength(1);
+    expect(auditRow(0)).toMatchObject({
+      category: 'security',
+      resourceType: 'mcp_server_definition',
+      actorId: USER,
+      actorKind: 'human',
+      action: 'mcp.private_network.cleared',
+      resourceId: 'corp',
+      spaceId: SPACE,
+      details: { hostsBefore: [HOST], hostsAfter: [], cause: 'space_archived' },
+    });
+    expect(auditRow(0).details).toHaveProperty('edition');
+  });
+
+  it('is how archiveSpace removes MCP definitions', () => {
+    const source = readFileSync(join(import.meta.dirname, '../spaceLifecycle.ts'), 'utf8');
+    expect(source).toContain('deleteArchivedSpaceMcpDefinitions(tx, spaceId,');
+    expect(source).not.toMatch(/DELETE FROM mcp_server_definitions/);
   });
 });

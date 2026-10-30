@@ -121,6 +121,54 @@ describe('discovery through the default transport', () => {
   });
 });
 
+/**
+ * A cached document carries the reach of the policy it was fetched under. It
+ * is served only to a caller whose own policy admits the host that produced
+ * it, so the cache never lends one definition's acknowledgment to another.
+ */
+describe('the discovery caches', () => {
+  it('refuse a cached PRM document to a caller whose policy refuses its host', async () => {
+    await discoverPRM(SERVER, { privateNetwork: listed });
+    await expect(discoverPRM(SERVER)).rejects.toMatchObject({ rangeLabel: 'private-rfc1918' });
+    await expect(discoverPRM(SERVER, { privateNetwork: listed })).resolves.toMatchObject({
+      prm: { authorization_servers: [ISSUER] },
+    });
+    expect(dialled).toHaveLength(1);
+  });
+
+  it('refuse a cached AS document to a caller whose policy refuses the issuer', async () => {
+    await discoverAsMetadata(ISSUER, { privateNetwork: listed });
+    await expect(discoverAsMetadata(ISSUER)).rejects.toMatchObject({
+      rangeLabel: 'private-rfc1918',
+    });
+    await expect(discoverAsMetadata(ISSUER, { privateNetwork: listed })).resolves.toMatchObject({
+      token_endpoint: 'https://10.1.2.3/token',
+    });
+    expect(dialled).toHaveLength(1);
+  });
+
+  it('check the host that served a cached PRM document, not only the server', async () => {
+    const publicServer = 'https://198.51.100.7/mcp';
+    const metadataUrl = 'https://10.1.2.3/prm-for-public';
+    documents[metadataUrl] = { resource: publicServer, authorization_servers: [ISSUER] };
+    try {
+      await expect(
+        discoverPRMReactive(publicServer, `Bearer resource_metadata="${metadataUrl}"`, {
+          privateNetwork: listed,
+        }),
+      ).resolves.toMatchObject({ metadataUrl });
+      await expect(discoverPRM(publicServer)).rejects.toMatchObject({
+        rangeLabel: 'private-rfc1918',
+      });
+      await expect(discoverPRM(publicServer, { privateNetwork: listed })).resolves.toMatchObject({
+        metadataUrl,
+      });
+    } finally {
+      delete documents[metadataUrl];
+    }
+  });
+});
+
 describe('postToTokenEndpoint', () => {
   const post = (tokenEndpoint: string, privateNetwork?: PrivateNetworkPolicy) =>
     postToTokenEndpoint({

@@ -101,7 +101,7 @@ export async function writeMcpPrivateNetworkAudit(
     hostsBefore: readonly string[];
     hostsAfter: readonly string[];
     edition: EditionId;
-    cause: 'route' | 'definition_deleted';
+    cause: 'route' | 'definition_deleted' | 'space_archived';
   },
 ): Promise<void> {
   const actorId =
@@ -131,6 +131,36 @@ export async function writeMcpPrivateNetworkAudit(
       ${JSON.stringify(details)}::jsonb
     )
   `);
+}
+
+/**
+ * Deletes every MCP server definition in an archived space. Each one that held
+ * a private network acknowledgment leaves a `cleared` audit row, because the
+ * archive withdrew that access as surely as clearing it would.
+ */
+export async function deleteArchivedSpaceMcpDefinitions(
+  tx: ExecuteTx,
+  spaceId: string,
+  actor: PrivateNetworkAuditActor,
+): Promise<void> {
+  const deleted = (await tx.execute(sql`
+    DELETE FROM mcp_server_definitions WHERE space_id = ${spaceId}::uuid
+    RETURNING server_id, private_network_json
+  `)) as unknown as Array<{ server_id: string; private_network_json: unknown }>;
+  for (const row of deleted) {
+    const record = parseMcpPrivateNetworkAcknowledgment(row.private_network_json);
+    if (record === null) continue;
+    await writeMcpPrivateNetworkAudit(tx, {
+      spaceId,
+      serverId: row.server_id,
+      actor,
+      action: MCP_PRIVATE_NETWORK_AUDIT_ACTIONS.cleared,
+      hostsBefore: record.hosts,
+      hostsAfter: [],
+      edition: processEditionDescriptor().edition,
+      cause: 'space_archived',
+    });
+  }
 }
 
 /**

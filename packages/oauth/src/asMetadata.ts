@@ -51,17 +51,19 @@ export async function discoverAsMetadata(
   opts: DiscoverAsMetadataOptions = {},
 ): Promise<AsMetadata> {
   const normalizedIssuer = issuer.endsWith('/') ? issuer.slice(0, -1) : issuer;
-  const cached = asCache.get(normalizedIssuer);
-  if (cached && Date.now() - cached.fetchedAtMs < AS_CACHE_TTL_MS) {
-    return cached.metadata;
-  }
-
   const privateNetwork = opts.privateNetwork ?? DEFAULT_PRIVATE_NETWORK_POLICY;
   const fetchImpl = opts.fetchImpl ?? safeFetchFor(privateNetwork);
 
   // The issuer can be space-authored (pinned AS, PRM-discovered) — SSRF-check
   // it before any discovery fetch. All discovery URLs below are issuer-rooted.
+  // Checked before the cache too: a document cached under one definition's
+  // private network policy is served only to a caller whose policy admits it.
   await validateUrl(normalizedIssuer, [], privateNetwork);
+
+  const cached = asCache.get(normalizedIssuer);
+  if (cached && Date.now() - cached.fetchedAtMs < AS_CACHE_TTL_MS) {
+    return cached.metadata;
+  }
 
   // RFC 8414 first.
   const rfc8414Url = `${normalizedIssuer}/.well-known/oauth-authorization-server`;
