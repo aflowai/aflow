@@ -302,13 +302,13 @@ export interface PlanNodeStore {
     ref: string,
   ): Promise<PlanNodeLink | null>;
   /**
-   * One page of the node's links, newest first, of `kind` where one is named,
-   * after `after` — the `next` of the page before.
+   * One page of the node's links, newest first, of `kind` and `label` where
+   * either is named, after `after` — the `next` of the page before.
    */
   pageLinks(
     spaceId: string,
     nodeId: string,
-    page: { kind?: PlanNodeLinkKind; after?: PlanLinkPageKey; limit: number },
+    page: { kind?: PlanNodeLinkKind; label?: string; after?: PlanLinkPageKey; limit: number },
   ): Promise<PlanLinkPage>;
   /** Each of `nodeIds`'s creation, closing, goal head and note head; a node not in the space is absent. */
   boardFactsOf(
@@ -1057,6 +1057,7 @@ export function createPlanNodeStore(db: PostgresJsDatabase, tenantId: string): P
           eq(planNodeLinks.spaceId, spaceId),
           eq(planNodeLinks.nodeId, nodeId),
           page.kind !== undefined ? eq(planNodeLinks.kind, page.kind) : undefined,
+          page.label !== undefined ? eq(planNodeLinks.label, page.label) : undefined,
         );
         const after = page.after;
         // The key's time is the column's own text, so a tie at the microsecond

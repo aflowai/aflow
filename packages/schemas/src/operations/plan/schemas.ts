@@ -7,6 +7,7 @@ import {
 } from '../../cybernetic/coachLearning.js';
 import {
   OPEN_PLAN_NODE_STATUSES,
+  PLAN_NODE_LINK_LABEL_MAX_CHARS,
   PlanNodeCloseSchema,
   PlanNodeCreateSchema,
   PlanNodeOpenSchema,
@@ -620,6 +621,14 @@ export const PLAN_NODE_DETAIL_LINKS_MAX_LIMIT = 200;
 export const PlanNodeDetailQuerySchema = z
   .object({
     linkKind: PlanNodeLinkKindSchema.optional().describe('Only links of this kind.'),
+    linkLabel: z
+      .string()
+      .min(1)
+      .max(PLAN_NODE_LINK_LABEL_MAX_CHARS)
+      .optional()
+      .describe(
+        'Only links with this label, filtered before the page is cut: `linkKind=session&linkLabel=conversation` pages the operator’s conversations.',
+      ),
     cursor: z
       .string()
       .min(1)
@@ -964,6 +973,7 @@ export const PlanStreamWaitCauseSchema = z.enum([
   'pull_request_open',
   'read_failed',
   'unknown_state',
+  'revise_unanswered',
 ]);
 export type PlanStreamWaitCause = z.infer<typeof PlanStreamWaitCauseSchema>;
 

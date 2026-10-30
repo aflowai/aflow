@@ -586,6 +586,7 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
     };
     const ofKind = this.linksOf(spaceId, nodeId)
       .filter((l) => page.kind === undefined || l.kind === page.kind)
+      .filter((l) => page.label === undefined || l.label === page.label)
       .sort((a, b) => compare(key(a), key(b)));
     const after = page.after;
     const rest =

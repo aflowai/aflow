@@ -550,7 +550,33 @@ export async function revisePlanNode(
   if (note.length > PLAN_NODE_PROSE_MAX_CHARS) {
     return operatorNoteTooLong(current, note.length, 'Sending back');
   }
-  return writePlanNode(ctx, update, {});
+  const written = await writePlanNode(ctx, update, {});
+  if (written.ok) {
+    await ctx.redis.set(
+      planNodeReviseKey(ctx, written.node.nodeId),
+      String(written.node.revision),
+      'PX',
+      PLAN_NODE_REVISE_RECORD_TTL_MS,
+    );
+  }
+  return written;
+}
+
+/**
+ * How long the revision a node was sent back at is kept. A record that lapses
+ * is written again by the next firing that asks, so the bound still holds.
+ */
+export const PLAN_NODE_REVISE_RECORD_TTL_MS = 30 * 24 * 60 * 60_000;
+
+/**
+ * Where the revision a node was sent back at is kept. A write past it that
+ * leaves the `Revise: …` line in place is a rewrite the line survived.
+ */
+export function planNodeReviseKey(
+  ctx: { tenantId: string; spaceId: string },
+  nodeId: string,
+): string {
+  return ['plan:node:revise', ctx.tenantId, ctx.spaceId, nodeId].join(':');
 }
 
 function operatorNoteTooLong(
@@ -890,7 +916,7 @@ export async function readPlanBoard(
 
 /**
  * One node for the board's rail: in full, its children, a page of its links
- * — of one kind where `linkKind` names it — the runs in flight for it and
+ * — of one kind and label where `linkKind` and `linkLabel` name them — the runs in flight for it and
  * every node under it, and its activity and closed ancestor as the board
  * derives them.
  */
@@ -951,6 +977,7 @@ async function readPlanNode(
     ctx.store.listChildren(ctx.spaceId, nodeId, PLAN_NODE_CHILDREN_LIMIT),
     ctx.store.pageLinks(ctx.spaceId, nodeId, {
       ...(page.linkKind !== undefined ? { kind: page.linkKind } : {}),
+      ...(page.linkLabel !== undefined ? { label: page.linkLabel } : {}),
       ...(after !== undefined ? { after } : {}),
       limit: page.limit,
     }),

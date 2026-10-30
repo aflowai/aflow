@@ -352,19 +352,18 @@ export function PlanRail({
       `linkKind=finding&limit=${String(PLAN_RAIL_FINDINGS)}`,
     ),
   });
-  // The operator's conversations that wrote the step, which link themselves on it.
+  // The operator's conversations that wrote the step, which link themselves on
+  // it. A `session` link carries other sessions too, so the read filters by the
+  // engine's label before it cuts the page.
   const conversations = useApiQuery<PlanNodeDetailOutput>({
-    key: ['space', spaceId, 'plan', 'node', node.nodeId, 'links', 'session'],
+    key: ['space', spaceId, 'plan', 'node', node.nodeId, 'links', 'conversation'],
     path: planNodePath(
       spaceId,
       node.nodeId,
-      `linkKind=session&limit=${String(PLAN_RAIL_CONVERSATIONS)}`,
+      `linkKind=session&linkLabel=${PLAN_NODE_CONVERSATION_LINK_LABEL}&limit=${String(PLAN_RAIL_CONVERSATIONS)}`,
     ),
   });
-  // A `session` link carries other sessions too: only the engine's label names a conversation.
-  const conversationLinks = (conversations.data?.links ?? []).filter(
-    (link) => link.label === PLAN_NODE_CONVERSATION_LINK_LABEL,
-  );
+  const conversationLinks = conversations.data?.links ?? [];
   // The closed step above a stranded one, read fresh as the rail's own node
   // is: its revision is what a Reopen of it is pinned to.
   const ancestorDetail = useApiQuery<PlanNodeDetailOutput>({

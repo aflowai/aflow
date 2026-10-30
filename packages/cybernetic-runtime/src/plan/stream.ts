@@ -43,7 +43,9 @@ import {
 } from '@aflow/schemas';
 import {
   getPlanNode,
+  PLAN_NODE_REVISE_RECORD_TTL_MS,
   PLAN_TREE_WALK_BOUNDS,
+  planNodeReviseKey,
   type PlanOpResult,
   type PlanReadContext,
 } from './operations.js';
@@ -302,10 +304,27 @@ function blockedNote(node: PlanNode, why: string): string {
  * A blocked node whose note opens with the operator's `Revise: …` line (Plan
  * 337 P4): the Helmsman rewrites the proposal from it and leaves it blocked
  * for the operator. The rewrite replaces that line, so the next firing waits.
+ * A write past the revision the node was sent back at that leaves the line in
+ * place is a rewrite the line survived: the stream stops asking and waits on
+ * the operator with `revise_unanswered`.
  */
-function reviseAnswer(node: PlanNode): PlanStreamAnswer | null {
+async function reviseAnswer(
+  ctx: PlanStreamContext,
+  node: PlanNode,
+): Promise<PlanStreamAnswer | null> {
   const instructions = planNodeInstructions(node.note);
-  if (!instructions?.startsWith(PLAN_NODE_REVISE_HEAD)) return null;
+  if (node.status !== 'blocked' || !instructions?.startsWith(PLAN_NODE_REVISE_HEAD)) return null;
+  const key = planNodeReviseKey(ctx, node.nodeId);
+  const sentAt = await ctx.redis.get(key);
+  if (sentAt === null) {
+    await ctx.redis.set(key, String(node.revision), 'PX', PLAN_NODE_REVISE_RECORD_TTL_MS, 'NX');
+  } else if (node.revision > Number(sentAt)) {
+    return wait(
+      'revise_unanswered',
+      `"${node.title}" was written at revision ${String(node.revision)}, after the operator sent it back at revision ${sentAt}, and its note still opens with their "${PLAN_NODE_REVISE_HEAD}…" line. The stream no longer asks for the rewrite: the operator approves the node or sends it back again.`,
+      node,
+    );
+  }
   return {
     decision: 'revise',
     reason: `The operator sent "${node.title}" back with a note. Rewrite it from that note and leave it blocked for them to approve.`,
@@ -560,8 +579,8 @@ function latestRoundSinceWrite(
 
 /**
  * The firing's decision on the active node, the first rule that holds
- * deciding: a blocked node is the person's, whatever its pull request says,
- * except that one they sent back is `revise` for the Helmsman to rewrite;
+ * deciding: a blocked node is the person's, whatever its pull request says
+ * (one they sent back is `revise`, which `decideRoot` ranks);
  * a `decide` node is the operator's to answer;
  * `wait` while its own work is in flight, or the read of the nodes under it
  * stopped at a bound before it could show none is; a merge of its newest pull request
@@ -576,8 +595,6 @@ function latestRoundSinceWrite(
 export function decideStreamFiring(facts: PlanStreamFacts): PlanStreamAnswer {
   const { node } = facts;
   if (node.status === 'blocked') {
-    const revise = reviseAnswer(node);
-    if (revise) return revise;
     return wait('blocked', `"${node.title}" is blocked, waiting on a person.`, node);
   }
   // A decision is the operator's choice, not a run's work (D2): its Action
@@ -751,17 +768,50 @@ async function decideRoot(
   if (!active) {
     return decided(wait('stream_closed', `The stream under "${root.title}" has no open node.`));
   }
-  // The walk to the active node ends at the first blocked node, but the
-  // operator can send back any blocked node, so a revise is looked for on all.
-  const sentBack = open.nodes.find(
-    (n) => n.status === 'blocked' && n.noteHead?.startsWith(PLAN_NODE_REVISE_HEAD) === true,
-  );
-  if (sentBack) {
-    const node = await ctx.store.find(ctx.spaceId, sentBack.nodeId);
-    const revise = node ? reviseAnswer(node) : null;
-    if (revise) return decided(revise);
+  const sentBack = await sentBackAnswer(ctx, open.nodes);
+  const decision = await decideActive(ctx, open, active, input);
+  if (!decision.ok || !sentBack) return decision;
+  // A revise ranks where the board ranks it: after a merge recorded and a
+  // publication. A revise the rewrite left standing waits behind any work.
+  if (sentBack.decision === 'wait') {
+    return decision.answer.decision === 'wait' ? decided(sentBack) : decision;
   }
+  return boardRank(sentBack) < boardRank(decision.answer) ? decided(sentBack) : decision;
+}
 
+/**
+ * The walk to the active node ends at the first blocked node, but the
+ * operator can send back any blocked node, so a revise is looked for on all:
+ * the first still to answer, or else the first whose line survived its rewrite.
+ */
+async function sentBackAnswer(
+  ctx: PlanStreamContext,
+  nodes: readonly PlanNodeSummary[],
+): Promise<PlanStreamAnswer | null> {
+  let survived: PlanStreamAnswer | null = null;
+  for (const summary of nodes) {
+    if (
+      summary.status !== 'blocked' ||
+      summary.noteHead?.startsWith(PLAN_NODE_REVISE_HEAD) !== true
+    ) {
+      continue;
+    }
+    const node = await ctx.store.find(ctx.spaceId, summary.nodeId);
+    const answer = node ? await reviseAnswer(ctx, node) : null;
+    if (answer?.decision === 'revise') return answer;
+    survived ??= answer;
+  }
+  return survived;
+}
+
+/** The active node's decision, read as a firing reads it. */
+async function decideActive(
+  ctx: PlanStreamContext,
+  open: Pick<Awaited<ReturnType<PlanStreamContext['store']['walk']>>, 'truncated'>,
+  active: PlanNodeSummary,
+  input: PlanNodeNextInput,
+): Promise<PlanOpResult<RootDecision>> {
+  const decided = (answer: PlanStreamAnswer) => ({ ok: true as const, answer });
   const opened = await getPlanNode(ctx, active.nodeId);
   if (!opened.ok) return opened;
   // A walk cut short may not have read the active node's open children.

@@ -67,11 +67,7 @@ export function PlanNodeOpenControl({
   const [spend, setSpend] = useState('');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // After a write lands the approve form stays open, and it follows the live
-  // read until the operator edits it again: the write moved the revision, and
-  // a Revise asks the Helmsman to move it once more.
-  const [followingLive, setFollowingLive] = useState(false);
-  const { shown, movedSinceOpened, setPinned } = usePinnedNode(read, opening && !followingLive);
+  const { shown, movedSinceOpened, setPinned } = usePinnedNode(read, opening);
 
   if (!opening) {
     return (
@@ -97,7 +93,6 @@ export function PlanNodeOpenControl({
       : undefined;
   const reset = () => {
     setOpening(false);
-    setFollowingLive(verb === 'approve');
     setText('');
     setSpend('');
     setError(null);
@@ -107,10 +102,14 @@ export function PlanNodeOpenControl({
     setPending(true);
     setError(null);
     const settled = await answer;
-    setPending(false);
     if (settled.ok) {
+      // The approve form stays open, so it pins the step as its own write left
+      // it: a later write, such as the rewrite a Revise asks for, shows as a move.
+      if (verb === 'approve') setPinned(await read.refetch());
+      setPending(false);
       reset();
     } else {
+      setPending(false);
       setError(settled.message);
       setPinned(await read.refetch());
     }
@@ -165,7 +164,6 @@ export function PlanNodeOpenControl({
       rows={verb === 'approve' ? 3 : 2}
       disabled={pending}
       onChange={(event) => {
-        setFollowingLive(false);
         setText(event.target.value);
       }}
     />
@@ -179,7 +177,7 @@ export function PlanNodeOpenControl({
           Reading the step…
         </Text>
       )}
-      {movedSinceOpened && (
+      {movedSinceOpened && !pending && (
         <Text size="xs" variant="muted" data-plan-open-moved>
           This step changed since this form opened; a write now is refused and shows it as it
           stands.
@@ -210,7 +208,6 @@ export function PlanNodeOpenControl({
         disabled={pending}
         value={spend}
         onChange={(event) => {
-          setFollowingLive(false);
           setSpend(event.target.value);
         }}
       />

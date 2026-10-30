@@ -1406,6 +1406,73 @@ describe('the operator’s note on a node (Plan 337 P4)', () => {
     });
   });
 
+  it('revise: a publication on the active node ranks before a sent-back node under the same root', async () => {
+    const { root, first, second } = await stream();
+    const blocked = await write(second.nodeId, { status: 'blocked', note: 'Proposed' });
+    await revisePlanNode(session(), {
+      nodeId: second.nodeId,
+      expectedRevision: blocked.revision,
+      why: 'Name the risk.',
+    });
+    expect(await next(root.nodeId)).toMatchObject({
+      decision: 'revise',
+      node: { nodeId: second.nodeId },
+    });
+
+    await run(first, PLAN_STREAM_COMMISSION_SLUG, 'completed');
+    expect(await next(root.nodeId)).toMatchObject({
+      decision: 'publish',
+      node: { nodeId: first.nodeId },
+    });
+  });
+
+  it('revise: a line the rewrite left in place stops the ask and is surfaced', async () => {
+    const { root, first, second } = await stream();
+    const blocked = await write(first.nodeId, { status: 'blocked', note: 'Proposed' });
+    await revisePlanNode(session(), {
+      nodeId: first.nodeId,
+      expectedRevision: blocked.revision,
+      why: 'Split it: the schema first.',
+    });
+    expect(await next(root.nodeId)).toMatchObject({ decision: 'revise' });
+    expect(await next(root.nodeId)).toMatchObject({ decision: 'revise' });
+
+    // The rewrite changes the goal and keeps the operator's line on top.
+    const rewritten = await write(first.nodeId, { goal: 'Add the schema for the stream.' });
+    expect(rewritten.note?.startsWith('Revise: Split it')).toBe(true);
+    expect(await next(root.nodeId)).toMatchObject({
+      decision: 'wait',
+      cause: 'revise_unanswered',
+      node: { nodeId: first.nodeId },
+    });
+
+    // Sent back again, it is asked again.
+    await revisePlanNode(session(), {
+      nodeId: first.nodeId,
+      expectedRevision: rewritten.revision,
+      why: 'Keep the routes out.',
+    });
+    expect(await next(root.nodeId)).toMatchObject({
+      decision: 'revise',
+      node: { instructions: 'Revise: Keep the routes out.' },
+    });
+
+    // A sent-back node off the active path no longer holds new work once its line survives.
+    await write(first.nodeId, { status: 'active', note: 'Approved.' });
+    const proposed = await write(second.nodeId, { status: 'blocked', note: 'Proposed' });
+    await revisePlanNode(session(), {
+      nodeId: second.nodeId,
+      expectedRevision: proposed.revision,
+      why: 'Name the risk.',
+    });
+    expect(await next(root.nodeId)).toMatchObject({ decision: 'revise' });
+    await write(second.nodeId, { criteria: 'The risk is named.' });
+    expect(await next(root.nodeId)).toMatchObject({
+      decision: 'continue',
+      node: { nodeId: first.nodeId },
+    });
+  });
+
   it('ranks a revise after a publication and before new work across the board', async () => {
     const proposal = await created({ title: 'Plan 340' });
     const finished = await created({ title: 'Plan 341' });
