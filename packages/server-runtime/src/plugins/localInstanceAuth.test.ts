@@ -13,7 +13,11 @@ import {
   localOwner,
   resolveInstanceSecret,
 } from './localInstanceAuth.js';
-import { issueLocalProfileSession, readLocalProfileSession } from './localProfiles.js';
+import {
+  cacheLocalProfileCount,
+  issueLocalProfileSession,
+  readLocalProfileSession,
+} from './localProfiles.js';
 
 const SECRET = 'a'.repeat(48);
 
@@ -232,6 +236,94 @@ describe('the profile rule', () => {
       opts,
     );
     expect(outcome).toEqual({ kind: 'api-key', token: 'phx_abc' });
+  });
+});
+
+/** The count behind rules 2 and 3, as the auth plugin asks it. */
+describe('the profile count cache', () => {
+  const clock = () => {
+    let t = 1_000;
+    return { now: () => t, advance: (ms: number) => (t += ms) };
+  };
+
+  it('reads the database when the cache is cold', async () => {
+    const read = vi.fn(TWO_PROFILES);
+    const count = cacheLocalProfileCount(read, { ttlMs: 5_000, now: clock().now });
+    expect(await count()).toBe(true);
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it('answers from the cache while the count is fresh', async () => {
+    const read = vi.fn(ONE_PROFILE);
+    const { now, advance } = clock();
+    const count = cacheLocalProfileCount(read, { ttlMs: 5_000, now });
+    await count();
+    advance(4_999);
+    expect(await count()).toBe(false);
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads again once the count has expired', async () => {
+    const read = vi.fn<() => Promise<boolean>>().mockResolvedValueOnce(false);
+    read.mockResolvedValueOnce(true);
+    const { now, advance } = clock();
+    const count = cacheLocalProfileCount(read, { ttlMs: 5_000, now });
+    expect(await count()).toBe(false);
+    advance(5_000);
+    expect(await count()).toBe(true);
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it('shares one read between concurrent callers on a cold cache', async () => {
+    const read = vi.fn(TWO_PROFILES);
+    const count = cacheLocalProfileCount(read, { ttlMs: 5_000, now: clock().now });
+    expect(await Promise.all([count(), count(), count()])).toEqual([true, true, true]);
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  // §8 question 7: an unread count must not hand a browser the owner, and it
+  // must not turn a request into a 503 either.
+  it('answers several profiles when the read fails, and reads again next time', async () => {
+    const fault = new Error('connection refused');
+    const read = vi.fn<() => Promise<boolean>>().mockRejectedValueOnce(fault);
+    read.mockResolvedValueOnce(false);
+    const onReadError = vi.fn();
+    const count = cacheLocalProfileCount(read, { ttlMs: 5_000, now: clock().now, onReadError });
+    expect(await count()).toBe(true);
+    expect(onReadError).toHaveBeenCalledWith(fault);
+    expect(await count()).toBe(false);
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it('answers several profiles when the read throws before it awaits', async () => {
+    const read = vi.fn((): Promise<boolean> => {
+      throw new Error('no database');
+    });
+    const count = cacheLocalProfileCount(read, { ttlMs: 5_000, now: clock().now });
+    expect(await count()).toBe(true);
+    expect(await count()).toBe(true);
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it('refuses a browser and keeps a bare-secret caller when the count is unread', async () => {
+    const count = cacheLocalProfileCount(() => Promise.reject(new Error('down')), {
+      now: clock().now,
+    });
+    const asBrowser = await authenticateLocalInstance(request(`Bearer ${SECRET}`, BROWSER), {
+      ...opts,
+      hasSeveralProfiles: count,
+      env: {},
+    });
+    expect(asBrowser).toMatchObject({ kind: 'refused', code: 'PROFILE_SESSION_REQUIRED' });
+    const bare = await authenticateLocalInstance(request(`Bearer ${SECRET}`), {
+      ...opts,
+      hasSeveralProfiles: count,
+      env: {},
+    });
+    expect(bare).toMatchObject({
+      kind: 'local',
+      authUser: { userId: LOCAL_EDITION_OWNER_ID, localPrincipal: 'instance-secret' },
+    });
   });
 });
 

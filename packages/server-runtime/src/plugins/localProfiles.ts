@@ -75,3 +75,57 @@ export async function hasSeveralLocalProfiles(
     .limit(2);
   return rows.length > 1;
 }
+
+/** How long a profile count answers before the next request reads it again. */
+export const LOCAL_PROFILE_COUNT_TTL_MS = 5_000;
+
+/**
+ * `read`, answered from memory between reads.
+ *
+ * Every browser request without a profile session asks the count, so an
+ * uncached read would put Postgres on the path of each one. A fresh count
+ * answers with no read. A stale or absent one triggers a single read that
+ * concurrent callers share.
+ *
+ * The returned function never rejects. A failed read answers "several", the
+ * direction Plan 335 §8 question 7 implies: an unread count must never hand a
+ * browser with no session the owner. The browser is refused with
+ * `PROFILE_SESSION_REQUIRED`, a bare-secret caller stays the owner through the
+ * membership read, and no request becomes a 503 here. The failure is not
+ * cached, so the next request reads again.
+ */
+export function cacheLocalProfileCount(
+  read: () => Promise<boolean>,
+  opts: {
+    ttlMs?: number | undefined;
+    now?: () => number;
+    onReadError?: (err: unknown) => void;
+  } = {},
+): () => Promise<boolean> {
+  const ttlMs = opts.ttlMs ?? LOCAL_PROFILE_COUNT_TTL_MS;
+  const now = opts.now ?? Date.now;
+  let cached: { several: boolean; readAt: number } | undefined;
+  let inFlight: Promise<boolean> | undefined;
+
+  return () => {
+    if (cached !== undefined && now() - cached.readAt < ttlMs) {
+      return Promise.resolve(cached.several);
+    }
+    if (inFlight !== undefined) return inFlight;
+    const pending = (async () => {
+      try {
+        const several = await read();
+        cached = { several, readAt: now() };
+        return several;
+      } catch (err) {
+        opts.onReadError?.(err);
+        return true;
+      }
+    })();
+    inFlight = pending;
+    void pending.then(() => {
+      if (inFlight === pending) inFlight = undefined;
+    });
+    return pending;
+  };
+}

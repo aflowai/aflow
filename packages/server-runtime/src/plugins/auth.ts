@@ -51,7 +51,7 @@ import {
   resolveInstanceSecret,
   type LocalPrincipal,
 } from './localInstanceAuth.js';
-import { hasSeveralLocalProfiles } from './localProfiles.js';
+import { cacheLocalProfileCount, hasSeveralLocalProfiles } from './localProfiles.js';
 
 // ============================================================================
 // Constants
@@ -168,6 +168,12 @@ export interface AuthPluginOptions {
    * production boot that would rely on it.
    */
   identityPlane?: IdentityPlane | undefined;
+  /**
+   * How long the local edition's profile count answers from memory. Defaults
+   * to `LOCAL_PROFILE_COUNT_TTL_MS`. A test that changes the profiles between
+   * requests sets 0.
+   */
+  localProfileCountTtlMs?: number | undefined;
 }
 
 export const authPlugin = fp(
@@ -734,15 +740,25 @@ export const authPlugin = fp(
     }
 
     // ---- Helper: count the local edition's profiles -------------------------
-    // Throws rather than answering "one": an unread count that fell back to the
-    // owner would hand a browser with no profile session the owner's authority.
-    async function hasSeveralProfilesInPinnedTenant(): Promise<boolean> {
-      const db = fastify.appContext?.db as PostgresJsDatabase | undefined;
-      if (!db) throw new Error('No database to read the local profiles from');
-      const tenancy = fastify.edition.tenancy;
-      if (tenancy.mode !== 'fixed') throw new Error('The local edition pins one tenant');
-      return hasSeveralLocalProfiles(db, tenancy.tenantId);
-    }
+    // Answered from a short cache, so an unsessioned request reads Postgres
+    // only when the cache is cold. An unread count answers "several", never
+    // "one": falling back to the owner would hand a browser with no profile
+    // session the owner's authority (see `cacheLocalProfileCount`).
+    const hasSeveralProfilesInPinnedTenant = cacheLocalProfileCount(
+      async () => {
+        const db = fastify.appContext?.db as PostgresJsDatabase | undefined;
+        if (!db) throw new Error('No database to read the local profiles from');
+        const tenancy = fastify.edition.tenancy;
+        if (tenancy.mode !== 'fixed') throw new Error('The local edition pins one tenant');
+        return hasSeveralLocalProfiles(db, tenancy.tenantId);
+      },
+      {
+        ttlMs: options.localProfileCountTtlMs,
+        onReadError: (err) => {
+          fastify.log.error({ err }, 'Local profile count unread, answering several profiles');
+        },
+      },
+    );
 
     // ---- Helper: ensure dev user exists ------------------------------------
     async function ensureDevUser(): Promise<void> {
@@ -809,21 +825,11 @@ export const authPlugin = fp(
 
       // --- Local edition: instance secret or API key, never a JWT ---
       if (fastify.edition.authProvider === 'local-instance') {
-        let outcome;
-        try {
-          outcome = await authenticateLocalInstance(request, {
-            instanceSecret: resolveInstanceSecret(),
-            apiKeyPrefix: API_KEY_PREFIX,
-            hasSeveralProfiles: () => hasSeveralProfilesInPinnedTenant(),
-          });
-        } catch (err) {
-          fastify.log.error({ err }, 'Local profile lookup failed');
-          reply.status(503).send({
-            error: 'ServiceUnavailable',
-            message: 'Could not read the local profiles to decide who this request is',
-          });
-          return;
-        }
+        const outcome = await authenticateLocalInstance(request, {
+          instanceSecret: resolveInstanceSecret(),
+          apiKeyPrefix: API_KEY_PREFIX,
+          hasSeveralProfiles: hasSeveralProfilesInPinnedTenant,
+        });
         if (outcome.kind === 'local') {
           request.authUser = outcome.authUser;
           return;

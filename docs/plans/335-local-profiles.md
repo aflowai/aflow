@@ -311,7 +311,7 @@ P1 follows option A. It adds no UI, no route and no table.
 - **What separates a browser from a bare-secret caller.** The web process sets `X-Aflow-Browser-Caller` on every call it makes. The browser cannot remove it, because the web forwards a fixed list of browser headers and sets its own after them. Clearing the cookie or opening a private window therefore reaches no profile once a second one exists.
 - **What a bare-secret caller gets.** It stays the owner on every install. `yarn mcp:setup` keeps working. Its holder can read `instance.env` and could issue an owner session, so a refusal would guard nothing (D3).
 - **A single profile with a PIN.** P1 gives it a session that names it, read through its membership. P4 must also end the no-session fallback for a single profile that holds a PIN. The one-profile column then applies only to an unlocked profile.
-- **The count.** A profile is a human user with an active membership in the pinned tenant. The API reads at most two such rows on each request without a session. A failed read is a 503, never the owner.
+- **The count.** A profile is a human user with an active membership in the pinned tenant. The API reads at most two such rows and keeps the answer for five seconds, so most requests without a session read no database. A failed read answers "several profiles", never the owner. A browser is then refused, and a bare-secret caller stays the owner through the membership read.
 
 ### The tenant plugin
 
@@ -319,6 +319,6 @@ The owner shortcut at `tenant.ts` applies only to the `sole-profile` principal. 
 
 ### Tests
 
-- `localInstanceAuth.test.ts` covers the rule on each install for a browser and for a bare-secret caller.
+- `localInstanceAuth.test.ts` covers the rule on each install for a browser and for a bare-secret caller. It also covers the count cache warm, cold and after a failed read.
 - `tenantPinning.test.ts` shows that only the sole-profile principal skips the membership read.
 - `localProfiles.pg.test.ts` runs the auth and tenant plugins on a bootstrapped install. It then adds a second profile through the `seedLocalProfile` fixture and covers the §10 cases this phase owns.

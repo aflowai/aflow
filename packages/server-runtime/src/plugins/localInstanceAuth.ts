@@ -187,7 +187,9 @@ function headerValue(request: FastifyRequest, name: string): string | undefined 
  * condition. Until then a session naming the one profile is what it gets, and
  * rule 1 serves it.
  *
- * `hasSeveralProfiles` is asked only when rule 2 or 3 needs the answer.
+ * `hasSeveralProfiles` is asked only when rule 2 or 3 needs the answer. The
+ * auth plugin answers it from a short cache that never rejects and answers
+ * "several" when the count is unread (`cacheLocalProfileCount`).
  */
 export async function authenticateLocalInstance(
   request: FastifyRequest,

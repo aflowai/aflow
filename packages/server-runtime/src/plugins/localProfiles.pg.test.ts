@@ -110,7 +110,8 @@ describeDb('local profiles (real DB)', () => {
       ),
     );
     await app.register(sensible);
-    await app.register(authPlugin, {});
+    // No cache: the cases below change the profiles between requests.
+    await app.register(authPlugin, { localProfileCountTtlMs: 0 });
     await app.register(tenantPlugin);
     app.get(
       '/probe',
