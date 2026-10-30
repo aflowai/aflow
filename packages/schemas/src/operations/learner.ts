@@ -531,10 +531,11 @@ export const LearnerOperationRegistrations: OperationRegistration[] = [
     name: 'Withdraw Proposal',
     actionLabel: 'Withdrawing proposal…',
     semanticDescription:
-      'Retract a still-proposed StagedChange this Coach authored. Use when a proposal ' +
+      'Retract a still-proposed StagedChange. The Coach may withdraw any proposal an agent made. ' +
+      'Any other agent withdraws only those its own conversation proposed. Use when a proposal ' +
       'is superseded (e.g. the root cause turned out to be a platform issue) so stale ' +
-      'approximations never reach the operator. Only `proposed` status can be withdrawn; ' +
-      'ratified/rejected decisions are immutable.',
+      'approximations never reach the operator. Only `proposed` status can be withdrawn. ' +
+      'Ratified and rejected decisions are immutable.',
     tags: ['learner', 'propose', 'withdraw', 'cybernetic'],
     groupDisplayName: 'Learner Proposals',
     groupDescription:
@@ -542,13 +543,16 @@ export const LearnerOperationRegistrations: OperationRegistration[] = [
     idempotency: 'idempotent',
     mutates: true,
     usage: {
-      oneLine: 'Retract your own still-proposed change (supersession).',
+      oneLine:
+        "Retract a still-proposed change: any agent's if you are the Coach, else only your conversation's.",
       whenToUse: [
         'You filed a platform_issue for the same failure a pending refinement tried to approximate',
-        'New evidence invalidated a proposal you staged earlier in this session or a prior one',
+        'New evidence invalidated a proposal this conversation staged. The Coach may also withdraw one a prior conversation or another agent staged',
+        'The operator asks you to take back a change you proposed with workflow.manage.patch in this conversation',
       ],
       whenNotToUse: [
         'Reversing an operator decision — ratified/rejected/dismissed proposals are immutable',
+        'A proposal another conversation made, unless you are the Coach — it is refused, and the operator decides it',
       ],
       pitfalls: [
         'Withdrawal is neutral — it does NOT teach via fingerprint suppression; re-propose properly when you know the right fix',

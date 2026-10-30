@@ -9,6 +9,7 @@
  * `@aflow/schemas` (keeps the web bundle light).
  */
 import type { WriteApprovalExtension } from '@aflow/schemas';
+import type { ProposalProvenance } from '../lib/proposal-provenance.js';
 
 /**
  * Runtime mirror of the server's `ActionCenterItemKindSchema` enum. The web
@@ -127,6 +128,8 @@ export interface CoachProposalExtension {
    * mounts it.
    */
   proposalSummary: string;
+  /** Who proposed it, from which conversation. */
+  provenance: ProposalProvenance;
   rationale: string;
   confidence: string;
   opCount: number;

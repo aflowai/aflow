@@ -164,6 +164,7 @@ export * from './spaceLifecycle.js';
 
 // 104b — ProposalView adapter
 export * from './proposalView.js';
+export * from './proposalProvenance.js';
 export * from './proposalCoherence.js';
 export * from './proposalOpDiff.js';
 

@@ -42,8 +42,9 @@ import {
  * - **Coach / Learner territory** — all `guardrail.*`, and `learner.*` /
  *   `workflow.evaluate` EXCEPT the between-runs learning vet
  *   (`workflow.learn` + `learner.learning.resolve_candidate`), which is the
- *   Helmsman's own leg of the loop. Of the eval plane the Helmsman holds
- *   exactly the agent-permitted class (Plan 269 D7): golden-dataset reads +
+ *   Helmsman's own leg of the loop, and `learner.propose.withdraw`, which takes
+ *   back a patch proposal its own conversation made and refuses any other.
+ *   Of the eval plane the Helmsman holds exactly the agent-permitted class (Plan 269 D7): golden-dataset reads +
  *   draft promotion below; every dataset/label WRITE is an operator-only
  *   server route and no `eval.*` op is ever a Runner tool.
  * - **Structural space CRUD** — `space.manage.create` / `update`.
@@ -74,6 +75,7 @@ export const HELMSMAN_DISCOVERY_PRESET: readonly string[] = [
   'workflow.ledger.get',
   'workflow.learn',
   'learner.learning.resolve_candidate',
+  'learner.propose.withdraw',
   'workflow.campaign.update',
   'workflow.campaign.end',
   'workflow.campaign.refresh',
