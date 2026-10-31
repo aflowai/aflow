@@ -3,15 +3,17 @@
 import { CarrierFailures } from '../actionCenter/CarrierFailures.js';
 import { useMemo } from 'react';
 import { Badge, Column, Row, Text } from '@aflow/design-system';
+import { PLAN_STATE_LABELS } from '@aflow/schemas';
 import type { ActionCenterItem } from '../../hooks/use-action-center-types.js';
 import type { UseActionCenterResult } from '../../hooks/use-action-center.js';
 import { ActionCenterItemCard } from '../actionCenter/ActionCenterLane.js';
 import { useSpacePeople } from '../../hooks/use-space-people.js';
 import { AssignControl } from '../actionCenter/AssignControl.js';
 import { WorkbenchSection } from './WorkbenchSection.js';
+import { ItemTitleText } from '../actionCenter/ItemText.js';
 
 /**
- * Needs attention (Plan 228 §3.1): human-in-the-loop items that are blocking
+ * Pending (Plan 228 §3.1, named by Plan 338 D5): human-in-the-loop items that are blocking
  * work right now — a connection to authorize, an approval, an input. Coach
  * proposals are deliberately NOT here (they're a distinct, non-blocking review
  * surface — see WorkbenchCoach); the operator never chats with Coach, so
@@ -53,7 +55,7 @@ export function WorkbenchNeedsAttention({
 
   return (
     <WorkbenchSection
-      title="Needs attention"
+      title={PLAN_STATE_LABELS.workbenchSection}
       icon="bell"
       meta={mine.length > 0 ? <Badge variant="warning">{String(mine.length)}</Badge> : null}
     >
@@ -131,7 +133,7 @@ function WaitingOnSomeoneElse({
       }}
     >
       <Text size="sm" color="muted" style={{ flex: 1, minWidth: 0 }} truncate>
-        {item.title}
+        <ItemTitleText item={item} />
       </Text>
       <Text size="xs" color="muted" style={{ flexShrink: 0 }}>
         Waiting on {waitingOn}
@@ -168,7 +170,8 @@ function ViewOnlyNotice({
       }}
     >
       <span
-        aria-hidden
+        role="img"
+        aria-label={PLAN_STATE_LABELS.workbenchSection}
         style={{
           width: 6,
           height: 6,
@@ -178,7 +181,7 @@ function ViewOnlyNotice({
         }}
       />
       <Text size="sm" style={{ flex: 1, minWidth: 0 }} truncate>
-        {item.title}
+        <ItemTitleText item={item} />
       </Text>
       <AssignControl item={item} state={state} spaceId={spaceId} />
     </Row>

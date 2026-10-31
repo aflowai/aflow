@@ -2,6 +2,8 @@ import { z } from 'zod';
 import {
   PLAN_NODE_PROSE_MAX_CHARS,
   PLAN_NODE_UPDATE_OPERATION_ID,
+  planItemSummary,
+  planItemTitle,
   type ActionCenterItemOrigin,
   type PlanNode,
   type TenantId,
@@ -28,14 +30,8 @@ import {
 import { PLAN_WRITE_OPERATOR_ONLY } from '../../../lib/planWriteAuthority.js';
 
 const ITEM_ID_PREFIX = 'plan-decision:';
-const TITLE_MAX_CHARS = 256;
-const SUMMARY_MAX_CHARS = 2_000;
 
 const NodeIdSchema = z.string().uuid();
-
-function bounded(text: string, max: number): string {
-  return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
-}
 
 /**
  * A `decide` node in the space's plan, asking the operator for the choice
@@ -174,8 +170,8 @@ function toItem(node: PlanNode): ActionCenterSourceItem {
     spaceId: node.spaceId,
     kind: 'human_input',
     origin: { type: 'plan_decision', nodeId: node.nodeId, revision: node.revision },
-    title: bounded(`Decide: ${node.title}`, TITLE_MAX_CHARS),
-    summary: bounded(`${node.goal}\n\nDecided when: ${node.criteria}`, SUMMARY_MAX_CHARS),
+    title: planItemTitle('decide', node.title),
+    summary: planItemSummary(`${node.goal}\n\nDecided when: ${node.criteria}`),
     uiHints: { mode: 'textarea', submitLabel: 'Decide' },
     resolutionSchema: {
       type: 'string',

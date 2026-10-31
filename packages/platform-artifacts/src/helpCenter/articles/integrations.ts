@@ -93,7 +93,7 @@ After connecting, the card reads **No tools enabled yet — the agent sees zero 
 
 ## Sign-in later
 
-When a sign-in is missing or has expired, a **Connect** or **Reconnect** card appears under **Needs attention**. Signing in resumes the work that was waiting on it.
+When a sign-in is missing or has expired, a **Connect** or **Reconnect** card appears under **Pending** in the Workbench. Signing in resumes the work that was waiting on it.
 
 ## When the connect is refused
 

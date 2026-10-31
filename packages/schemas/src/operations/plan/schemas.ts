@@ -628,6 +628,21 @@ export function planBoardCards(root: PlanTreeNode): PlanBoardCard[] {
   return cards;
 }
 
+/**
+ * Whether a plan's root itself waits on a person (Plan 338 D5). A node's own
+ * `blocked` status makes it a waiting node wherever states derive, so a
+ * blocked root reads `needs_you` and counts under it, with or without steps.
+ * The root is still no step: `steps` does not count it.
+ */
+export function planRootWaits(root: { status: PlanNodeStatus }): boolean {
+  return root.status === 'blocked';
+}
+
+/** A blocked root as the board's `needs_you` column shows it; undefined for any other root. */
+export function planRootCard(root: PlanTreeNode): PlanBoardCard | undefined {
+  return planRootWaits(root) ? { column: 'needs_you', reason: 'blocked', node: root } : undefined;
+}
+
 // ============================================================================
 // One node for the board's rail, its links paged (Plan 322 P3.3)
 // ============================================================================

@@ -121,7 +121,7 @@ describe('planDecisionSource — the item', () => {
       id: `plan-decision:${NODE_ID}`,
       kind: 'human_input',
       origin: { type: 'plan_decision', nodeId: NODE_ID, revision: 3 },
-      title: 'Decide: Where the decide answer is recorded',
+      title: 'Pending decision · Where the decide answer is recorded',
       uiHints: { mode: 'textarea', submitLabel: 'Decide' },
       resolutionSchema: { type: 'string', minLength: 1 },
       resolverAuthority: { kind: 'space' },
@@ -143,6 +143,21 @@ describe('planDecisionSource — the item', () => {
     expect(ActionCenterItemSchema.safeParse(items[0]).success).toBe(true);
     expect(items[0]?.priority).toBe('high');
     expect(items[0]?.allowedActions).toEqual(['submit', 'reassign']);
+  });
+
+  it('cuts a long title before an open code span and closes a fence the summary cut leaves open', async () => {
+    const title = `${'w '.repeat(115)}\`a code span that runs past the ceiling\``;
+    const goal = `Pick one:\n\`\`\`ts\n${'const a = 1;\n'.repeat(200)}\`\`\``;
+    mockListOpenDecisions.mockResolvedValue([decision({ title, goal })]);
+
+    const [item] = await source().listOpen({ tenantId: TENANT_ID as never, spaceId: SPACE_ID });
+
+    expect(item?.title.length).toBeLessThanOrEqual(256);
+    expect(item?.title.startsWith('Pending decision · ')).toBe(true);
+    expect(item?.title.endsWith('…')).toBe(true);
+    expect(item?.title).not.toContain('`');
+    expect(item?.summary.length).toBeLessThanOrEqual(2_000);
+    expect(item?.summary.endsWith('\n```')).toBe(true);
   });
 
   it('shows a viewer the decision without a way to answer it', async () => {

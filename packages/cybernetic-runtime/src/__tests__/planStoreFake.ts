@@ -5,6 +5,7 @@ import {
   PLAN_REVIEW_WORKFLOW_SLUGS,
   PLAN_TREE_DEPTH_LIMIT,
   PLAN_TREE_WALK_NODE_LIMIT,
+  planNoteHoldsMergeWait,
   type CoachLearning,
   type PlanNode,
   type PlanNodeDependency,
@@ -82,6 +83,7 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
       revision: node.revision,
       position: node.position,
       ...(noteHead !== undefined ? { noteHead } : {}),
+      ...(planNoteHoldsMergeWait(node.note) ? { mergeWait: true as const } : {}),
       createdAt: node.createdAt,
       updatedAt: node.updatedAt,
       ...(node.closedAt !== undefined ? { closedAt: node.closedAt } : {}),
@@ -450,7 +452,12 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
       .sort((a, b) => a.at.depth - b.at.depth || a.walkOrder - b.walkOrder);
     const rows = shipped.map(({ at, walkOrder }): PlanOverviewNode => {
       const noteHead = planBoardNoteHead(at.node.note);
-      const { noteHead: _summaryNoteHead, ...summary } = this.summary(at.node);
+      // The overview reads its own rows, which carry neither the summary's head nor its flag.
+      const {
+        noteHead: _summaryNoteHead,
+        mergeWait: _mergeWait,
+        ...summary
+      } = this.summary(at.node);
       return {
         ...summary,
         ...(noteHead !== undefined ? { noteHead } : {}),

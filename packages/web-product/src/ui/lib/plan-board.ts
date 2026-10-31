@@ -9,7 +9,9 @@
 import {
   isClosedPlanNodeStatus,
   PLAN_NODE_NOTE_HEAD_MAX_CHARS,
+  PLAN_STATE_LABELS,
   planBoardCards,
+  planRootCard,
   planBoardColumn,
   type PlanBoardCard,
   type PlanBoardColumn,
@@ -26,25 +28,29 @@ import {
   type PlanTreeNode,
 } from '@aflow/schemas';
 
+/** Each column's colour, a token from tokens.css, in the order the columns ask for attention. */
+const PLAN_BOARD_COLUMN_COLORS: ReadonlyArray<readonly [PlanBoardColumn, string]> = [
+  ['needs_you', 'var(--color-warning-default)'],
+  ['in_flight', 'var(--color-status-running)'],
+  ['up_next', 'var(--color-accent-default)'],
+  ['done', 'var(--color-success-default)'],
+  ['dropped', 'var(--color-danger-default)'],
+];
+
+/** The board's columns, each labelled from the one table of states (Plan 338 D5). */
 export const PLAN_BOARD_COLUMNS: ReadonlyArray<{
   id: PlanBoardColumn;
   label: string;
   /** A token from tokens.css. */
   color: string;
-}> = [
-  { id: 'needs_you', label: 'Needs you', color: 'var(--color-warning-default)' },
-  { id: 'in_flight', label: 'In flight', color: 'var(--color-status-running)' },
-  { id: 'up_next', label: 'Up next', color: 'var(--color-accent-default)' },
-  { id: 'done', label: 'Done', color: 'var(--color-success-default)' },
-  { id: 'dropped', label: 'Dropped', color: 'var(--color-danger-default)' },
-];
+}> = PLAN_BOARD_COLUMN_COLORS.map(([id, color]) => ({
+  id,
+  label: PLAN_STATE_LABELS.column[id],
+  color,
+}));
 
-/** Why a step stands under Needs you, as its card and the rail say it. */
-export const NEEDS_YOU_REASON_LABEL: Record<PlanNeedsYouReason, string> = {
-  decide: 'Decision',
-  blocked: 'Blocked',
-  stranded: 'Under a closed step',
-};
+/** Why a step stands in the `needs_you` column, as its card and the rail say it. */
+export const NEEDS_YOU_REASON_LABEL: Record<PlanNeedsYouReason, string> = PLAN_STATE_LABELS.reason;
 
 /** A node as the board places it: its column, why where it needs the operator, and its phase. */
 export type PlanCard = PlanBoardCard;
@@ -52,10 +58,12 @@ export type PlanCard = PlanBoardCard;
 /**
  * Every node under `root` in the walk's order — parents before children,
  * siblings by position — so each column, Up next included, lists its cards in
- * the order the loop reaches them.
+ * the order the loop reaches them. A blocked root leads its `needs_you` column,
+ * because it waits on a person itself (Plan 338 D5).
  */
 export function planCards(root: PlanTreeNode): PlanCard[] {
-  return planBoardCards(root);
+  const rootCard = planRootCard(root);
+  return rootCard !== undefined ? [rootCard, ...planBoardCards(root)] : planBoardCards(root);
 }
 
 const PHASE_CODE = /^([A-Z]{1,3}\d+[a-z]?(?:\.\d+)*)\b/;
@@ -81,12 +89,22 @@ export function planTag(title: string): string {
 /** A plan's state (Plan 332 D3) as its row and its header say it. */
 export const PLAN_STATE_LABEL: Record<PlanRootState, string> = {
   closed: 'Closed',
-  needs_you: 'Needs you',
-  in_flight: 'In flight',
-  queued: 'Queued',
+  needs_you: PLAN_STATE_LABELS.planNeedsYou,
+  in_flight: PLAN_STATE_LABELS.column.in_flight,
+  queued: PLAN_STATE_LABELS.column.up_next,
   finished: 'Finished',
   empty: 'No steps',
 };
+
+/**
+ * What follows a count of a column's steps, as a header or a row says it:
+ * "3 pending" for the `needs_you` column, the column's own label otherwise.
+ */
+export function planCountNoun(column: PlanBoardColumn): string {
+  return column === 'needs_you'
+    ? PLAN_STATE_LABELS.pendingCountNoun
+    : PLAN_STATE_LABELS.column[column].toLowerCase();
+}
 
 /** The plan's header (Plan 332 D10): its state, its steps closed of all, and the non-zero count of each column. */
 export function planHeader(tally: PlanRootTally): {
@@ -94,12 +112,12 @@ export function planHeader(tally: PlanRootTally): {
   progress: string;
   counts: Array<{ column: PlanBoardColumn; label: string }>;
 } {
-  const counts: Array<{ column: PlanBoardColumn; count: number; noun: string }> = [
-    { column: 'needs_you', count: tally.needsYou, noun: 'need you' },
-    { column: 'in_flight', count: tally.inFlight, noun: 'in flight' },
-    { column: 'up_next', count: tally.upNext, noun: 'up next' },
-    { column: 'done', count: tally.done, noun: 'done' },
-    { column: 'dropped', count: tally.dropped, noun: 'dropped' },
+  const counts: Array<{ column: PlanBoardColumn; count: number }> = [
+    { column: 'needs_you', count: tally.needsYou },
+    { column: 'in_flight', count: tally.inFlight },
+    { column: 'up_next', count: tally.upNext },
+    { column: 'done', count: tally.done },
+    { column: 'dropped', count: tally.dropped },
   ];
   return {
     state: PLAN_STATE_LABEL[tally.state],
@@ -108,7 +126,7 @@ export function planHeader(tally: PlanRootTally): {
       .filter((c) => c.count > 0)
       .map((c) => ({
         column: c.column,
-        label: `${String(c.count)} ${c.column === 'needs_you' && c.count === 1 ? 'needs you' : c.noun}`,
+        label: `${String(c.count)} ${planCountNoun(c.column)}`,
       })),
   };
 }
@@ -272,9 +290,24 @@ export const PLAN_LANES: ReadonlyArray<{
   label: string;
   empty: string;
 }> = [
-  { id: 'needs_you', key: 'needsYou', label: 'Needs you', empty: 'Nothing waits on you' },
-  { id: 'in_flight', key: 'inFlight', label: 'In flight', empty: 'No step is on a run' },
-  { id: 'up_next', key: 'upNext', label: 'Up next', empty: 'No plan has a step to take next' },
+  {
+    id: 'needs_you',
+    key: 'needsYou',
+    label: PLAN_STATE_LABELS.column.needs_you,
+    empty: PLAN_STATE_LABELS.pendingEmpty,
+  },
+  {
+    id: 'in_flight',
+    key: 'inFlight',
+    label: PLAN_STATE_LABELS.column.in_flight,
+    empty: 'No step is on a run',
+  },
+  {
+    id: 'up_next',
+    key: 'upNext',
+    label: PLAN_STATE_LABELS.column.up_next,
+    empty: 'No plan has a step to take next',
+  },
 ];
 
 /** What an empty lane says where a bound left steps unread: it may not be empty. */

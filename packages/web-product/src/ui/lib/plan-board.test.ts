@@ -103,17 +103,17 @@ describe('planCards', () => {
 
   it('orders the columns by what they ask of the reader, Needs you first', () => {
     expect(PLAN_BOARD_COLUMNS.map((c) => [c.id, c.label])).toEqual([
-      ['needs_you', 'Needs you'],
-      ['in_flight', 'In flight'],
-      ['up_next', 'Up next'],
+      ['needs_you', 'Pending'],
+      ['in_flight', 'Running'],
+      ['up_next', 'Queued'],
       ['done', 'Done'],
       ['dropped', 'Dropped'],
     ]);
-    expect(Object.values(NEEDS_YOU_REASON_LABEL)).toEqual([
-      'Decision',
-      'Blocked',
-      'Under a closed step',
-    ]);
+    expect(NEEDS_YOU_REASON_LABEL).toEqual({
+      blocked: 'Approval',
+      decide: 'Decision',
+      stranded: 'Under a closed step',
+    });
   });
 
   it('filters by phase — the phase and what sits under it', () => {
@@ -147,6 +147,37 @@ describe('planCards', () => {
   });
 });
 
+describe('a blocked root with no steps (Plan 338 D5)', () => {
+  const root = node('proposal', { status: 'blocked' });
+
+  it('stands in its own board’s Pending approval column, the only card', () => {
+    expect(planCards(root).map((c) => [c.node.nodeId, c.column, c.reason])).toEqual([
+      ['proposal', 'needs_you', 'blocked'],
+    ]);
+    expect(planCards(node('approved')).length).toBe(0);
+  });
+
+  it('reads Pending approval in the header, counted as 1 pending, with no step closed', () => {
+    expect(
+      planHeader({
+        rootId: 'proposal',
+        state: 'needs_you',
+        steps: 0,
+        needsYou: 1,
+        inFlight: 0,
+        upNext: 0,
+        done: 0,
+        dropped: 0,
+        doneByDay: [],
+      }),
+    ).toEqual({
+      state: 'Pending approval',
+      progress: '0 of 0 closed',
+      counts: [{ column: 'needs_you', label: '1 pending' }],
+    });
+  });
+});
+
 describe('planHeader', () => {
   it('reads the steps closed of all, and only the columns that hold any', () => {
     expect(
@@ -162,11 +193,11 @@ describe('planHeader', () => {
         doneByDay: [],
       }),
     ).toEqual({
-      state: 'Needs you',
+      state: 'Pending approval',
       progress: '5 of 10 closed',
       counts: [
-        { column: 'needs_you', label: '1 needs you' },
-        { column: 'up_next', label: '4 up next' },
+        { column: 'needs_you', label: '1 pending' },
+        { column: 'up_next', label: '4 queued' },
         { column: 'done', label: '3 done' },
         { column: 'dropped', label: '2 dropped' },
       ],

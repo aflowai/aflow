@@ -60,7 +60,7 @@ export function chatSchedules(rows: readonly ScheduleRow[], now = Date.now()): S
  * Schedules an agent set up in chat, each as the Triggers page shows it,
  * trimmed to this column's width.
  *
- * Kept out of Needs attention deliberately: that section's badge is a count of
+ * Kept out of Pending deliberately: that section's badge is a count of
  * work waiting on this person, and a schedule that only runs on its own would
  * inflate it into a queue nobody can empty. The operator still has to learn
  * that an agent scheduled a run, so it is shown, plainly, next to the section
