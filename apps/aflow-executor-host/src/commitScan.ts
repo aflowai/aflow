@@ -654,9 +654,11 @@ export async function scanCommitRange(
  * the base gained, which `origin` already holds and this branch did not write.
  * The lines read are those the branch's commits add over `base`, and the
  * headers and messages of those commits and of the merge. A merge adds no line
- * of its own only where its tree is the clean merge of its two parents, so
- * one whose first parent does not lead back to `base`, whose second is not
- * `base`, or whose tree is not that clean merge is refused, not scanned.
+ * of its own only where its tree is the clean merge of its two parents, so a
+ * commit with other than two parents, whose second parent is not `base`, or
+ * whose tree is not the clean merge of its first parent and `base` is refused,
+ * not scanned. Its first parent is not held to `base`: `<base>..<first parent>`
+ * is every commit the push adds besides the merge, wherever it forked.
  */
 export async function scanPushedMerge(root: string, range: string): Promise<HostCommitScanOutput> {
   const ends = HOST_COMMIT_RANGE_PATTERN.exec(range);

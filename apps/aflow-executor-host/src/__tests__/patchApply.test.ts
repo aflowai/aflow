@@ -12,7 +12,7 @@ import { promisify } from 'node:util';
 
 import { PayloadAccessError } from '@aflow/executor-runtime';
 import { hostPushRequestHash } from '@aflow/redis';
-import { HostPushBaseMergeSchema } from '@aflow/schemas';
+import { HOST_FULL_SHA_PATTERN, HostPushBaseMergeSchema } from '@aflow/schemas';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { mergeIntoCheckout } from '../baseMerge.js';
@@ -1288,7 +1288,7 @@ describe('measuring what a push of the commit would add', () => {
         expect(await parentsOf(head)).toEqual([sha, now]);
       }, 30_000);
 
-      it('records a SHA-256 merge as the merge helper makes it, and no shorter name', () => {
+      it('records a SHA-1 or SHA-256 merge as the merge helper makes it, and no other length', () => {
         const sha256 = (digit: string) => digit.repeat(64);
         const recorded = {
           baseMoved: true,
@@ -1302,9 +1302,13 @@ describe('measuring what a push of the commit would add', () => {
         expect(
           HostPushBaseMergeSchema.safeParse({ ...recorded, commit: 'd'.repeat(40) }).success,
         ).toBe(true);
-        expect(
-          HostPushBaseMergeSchema.safeParse({ ...recorded, commit: 'd'.repeat(39) }).success,
-        ).toBe(false);
+        for (const length of [39, 41, 63, 65]) {
+          expect(
+            HostPushBaseMergeSchema.safeParse({ ...recorded, commit: 'd'.repeat(length) }).success,
+            String(length),
+          ).toBe(false);
+          expect(HOST_FULL_SHA_PATTERN.test('d'.repeat(length)), String(length)).toBe(false);
+        }
       });
     });
 

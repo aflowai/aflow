@@ -9,7 +9,7 @@ import { z } from 'zod';
  * A commit as git names it in full, SHA-1 or SHA-256, as the executor's merge
  * reads it: every sha here is one the push read or made itself.
  */
-export const HOST_FULL_SHA_PATTERN = /^[0-9a-f]{40,64}$/;
+export const HOST_FULL_SHA_PATTERN = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 
 const FullShaSchema = z.string().regex(HOST_FULL_SHA_PATTERN);
 
