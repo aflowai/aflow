@@ -73,6 +73,9 @@ export const ROUTE_MANIFEST: readonly RouteEntry[] = [
   { route: 'settings', screen: 'TenantSettingsLayout', editions: BOTH, kind: 'layout' },
   { route: 'settings', screen: 'TenantSettingsIndex', editions: BOTH },
   { route: 'settings/api-keys', screen: 'TenantApiKeysPage', editions: BOTH },
+  // A profile is the local edition's way of naming who is at the keyboard. The
+  // hosted edition admits people through its sign-in and refuses the API.
+  { route: 'settings/profiles', screen: 'TenantProfilesPage', editions: ['local'] },
   { route: 'settings/credentials', screen: 'TenantCredentialsPage', editions: BOTH },
   { route: 'settings/oauth-apps', screen: 'TenantOAuthAppsPage', editions: BOTH },
   { route: 'settings/compute', screen: 'TenantComputePolicyPage', editions: BOTH },

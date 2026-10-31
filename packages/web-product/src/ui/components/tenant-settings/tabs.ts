@@ -1,16 +1,29 @@
 import type { TabDef } from '../../TabNav.js';
+import type { Edition } from '../../hooks/useEdition.js';
 
 /**
  * Each tab names the server surface it needs. The server publishes which
  * surfaces it composed, so a tab whose API is not registered in this edition
  * is not rendered — rather than rendered, clicked, and answered with a 404.
  */
-export const SETTINGS_TABS: Array<TabDef & { surface?: string }> = [
+export const SETTINGS_TABS: Array<
+  TabDef & {
+    surface?: string;
+    /** Shown only in the local edition, and only to the install's owner. */
+    localOwnerOnly?: boolean;
+  }
+> = [
   { href: '/settings/members', label: 'Members', surface: 'tenant-members' },
   { href: '/settings/invites', label: 'Invites', surface: 'invites' },
   // Space settings reach the membership surface to share a space.
   { href: '/settings/spaces', label: 'Spaces', surface: 'space-members' },
   { href: '/settings/api-keys', label: 'API Keys', surface: 'api-keys' },
+  // A profile is how the local edition names who is at the keyboard (Plan 335).
+  // The route is registered in both editions and refused in the hosted one,
+  // which admits people through its sign-in, so the edition decides the tab and
+  // a surface name cannot. Only the owner manages profiles. Placed after API
+  // Keys, so Settings still opens on API Keys locally.
+  { href: '/settings/profiles', label: 'Profiles', localOwnerOnly: true },
   { href: '/settings/credentials', label: 'Credentials', surface: 'credentials' },
   { href: '/settings/oauth-apps', label: 'OAuth Apps' },
   { href: '/settings/compute', label: 'Compute' },
@@ -41,14 +54,37 @@ export const SETTINGS_TABS: Array<TabDef & { surface?: string }> = [
   { href: '/settings/audit', label: 'Audit', surface: 'audit' },
 ];
 
+/** What decides which settings tabs a viewer sees. */
+export interface SettingsTabViewer {
+  edition: Pick<Edition, 'id' | 'surfaces'>;
+  /** Whether the viewer owns the install. */
+  isOwner: boolean;
+}
+
 /**
- * The first tab this edition actually serves.
+ * The settings tabs this viewer is served, in order.
+ *
+ * A plain fold so the withholding is testable: the layout pulls the provider
+ * stack in behind it, and the web test environment is node-only.
+ */
+export function visibleSettingsTabs(viewer: SettingsTabViewer): TabDef[] {
+  return SETTINGS_TABS.filter(
+    (tab) => tab.surface === undefined || viewer.edition.surfaces.has(tab.surface),
+  )
+    .filter(
+      (tab) =>
+        tab.localOwnerOnly !== true || (viewer.edition.id === 'community-local' && viewer.isOwner),
+    )
+    .map(({ href, label }) => ({ href, label }));
+}
+
+/**
+ * The first tab this viewer is served.
  *
  * The index redirects here rather than to a fixed tab: the fixed one was
  * Members, which the local edition does not register, so opening Settings
  * landed on a page whose every call 404s.
  */
-export function firstSettingsTab(surfaces: ReadonlySet<string>): string {
-  const tab = SETTINGS_TABS.find((t) => t.surface === undefined || surfaces.has(t.surface));
-  return tab?.href ?? '/settings/spaces';
+export function firstSettingsTab(viewer: SettingsTabViewer): string {
+  return visibleSettingsTabs(viewer)[0]?.href ?? '/settings/spaces';
 }

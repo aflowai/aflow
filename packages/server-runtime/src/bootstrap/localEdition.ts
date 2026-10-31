@@ -34,6 +34,94 @@ import type { EditionDescriptor, TenantId } from '@aflow/schemas';
 
 const FIRST_WORKSPACE = { name: 'Personal', slug: 'personal' } as const;
 
+/**
+ * The row of a local user's first workspace, `Personal`.
+ *
+ * Compute is an explicit no, because absent means something else: the compute
+ * executor runs a space carrying no policy, and the appliance ships no sandbox
+ * to run it in.
+ */
+function firstWorkspaceRow(ownerId: string, slug: string): typeof spaces.$inferInsert {
+  return {
+    name: FIRST_WORKSPACE.name,
+    slug,
+    ownerId,
+    createdBy: ownerId,
+    computePolicy: { ...DEFAULT_SPACE_COMPUTE_POLICY, enabled: false },
+  };
+}
+
+/** Gives `userId` the admin membership a workspace's owner holds. */
+async function grantWorkspaceAdmin(
+  db: PostgresJsDatabase,
+  tenantId: string,
+  userId: string,
+  spaceIds: readonly string[],
+): Promise<void> {
+  if (spaceIds.length === 0) return;
+  await db
+    .insert(spaceMemberships)
+    .values(spaceIds.map((spaceId) => ({ tenantId, spaceId, userId, role: 'admin' })));
+}
+
+/**
+ * Assigns the default capability profile to workspaces, by the same rule and
+ * resolver as every other space-creation path. Runs inside a tenant
+ * transaction.
+ */
+async function assignDefaultCapabilityProfile(
+  tx: PostgresJsDatabase,
+  opts: {
+    edition: EditionDescriptor;
+    spaceIds: readonly string[];
+    assignedBy: string;
+    isTenantAdmin: boolean;
+  },
+): Promise<void> {
+  if (opts.spaceIds.length === 0) return;
+  const profileId = await findDefaultCapabilityProfileId(tx, {
+    memberSafeDefault: defaultsToSafeProfile({
+      isTenantAdmin: opts.isTenantAdmin,
+      edition: opts.edition,
+    }),
+  });
+  if (profileId === undefined) {
+    throw new Error('Refusing to leave a workspace unassigned: no default system profile exists.');
+  }
+  await tx
+    .insert(spaceCapabilityAssignments)
+    .values(opts.spaceIds.map((spaceId) => ({ spaceId, profileId, assignedBy: opts.assignedBy })));
+}
+
+/**
+ * A local profile's first workspace, made by the steps bootstrap runs for the
+ * owner's (Plan 335 D2): the `Personal` row, its admin membership and the
+ * default capability profile. Runs inside the caller's tenant transaction, so
+ * a profile never exists without its workspace.
+ *
+ * The slug carries the user id, because slugs are unique in the one tenant
+ * schema and the owner may already hold `personal`.
+ */
+export async function createLocalProfileWorkspace(
+  tx: PostgresJsDatabase,
+  opts: { edition: EditionDescriptor; tenantId: string; userId: string; isTenantAdmin: boolean },
+): Promise<string> {
+  const slug = `${FIRST_WORKSPACE.slug}-${opts.userId.replace(/-/g, '').slice(0, 12)}`;
+  const [created] = await tx
+    .insert(spaces)
+    .values(firstWorkspaceRow(opts.userId, slug))
+    .returning({ id: spaces.id });
+  if (!created) throw new Error('Failed to create the profile workspace');
+  await grantWorkspaceAdmin(tx, opts.tenantId, opts.userId, [created.id]);
+  await assignDefaultCapabilityProfile(tx, {
+    edition: opts.edition,
+    spaceIds: [created.id],
+    assignedBy: opts.userId,
+    isTenantAdmin: opts.isTenantAdmin,
+  });
+  return created.id;
+}
+
 export type StepOutcome = 'created' | 'present';
 
 export interface BootstrapStep {
@@ -166,15 +254,7 @@ export async function bootstrapLocalEdition({
 
     const [created] = await tx
       .insert(spaces)
-      .values({
-        name: FIRST_WORKSPACE.name,
-        slug: FIRST_WORKSPACE.slug,
-        ownerId,
-        createdBy: ownerId,
-        // Same explicit no as the claimed space above. A workspace made by the
-        // repair path is no likelier to have a sandbox behind it.
-        computePolicy: { ...DEFAULT_SPACE_COMPUTE_POLICY, enabled: false },
-      })
+      .values(firstWorkspaceRow(ownerId, FIRST_WORKSPACE.slug))
       .returning({ id: spaces.id });
 
     if (!created) throw new Error('Failed to create the first workspace');
@@ -214,11 +294,7 @@ export async function bootstrapLocalEdition({
 
   const missingMemberships = spaceId.filter((id) => !held.has(id));
   if (missingMemberships.length > 0) {
-    await db
-      .insert(spaceMemberships)
-      .values(
-        missingMemberships.map((id) => ({ tenantId, spaceId: id, userId: ownerId, role: 'admin' })),
-      );
+    await grantWorkspaceAdmin(db, tenantId, ownerId, missingMemberships);
     record('workspace membership', 'created', `${String(missingMemberships.length)} admin`);
   } else {
     record('workspace membership', 'present');
@@ -239,18 +315,12 @@ export async function bootstrapLocalEdition({
 
     // The same rule and resolver as every other space-creation path, so the first
     // workspace is not the one space that starts differently.
-    const profileId = await findDefaultCapabilityProfileId(tx, {
-      memberSafeDefault: defaultsToSafeProfile({ isTenantAdmin: true, edition }),
+    await assignDefaultCapabilityProfile(tx, {
+      edition,
+      spaceIds: unassigned,
+      assignedBy: ownerId,
+      isTenantAdmin: true,
     });
-    if (profileId === undefined) {
-      throw new Error(
-        'Refusing to leave a workspace unassigned: no default system profile exists.',
-      );
-    }
-
-    await tx
-      .insert(spaceCapabilityAssignments)
-      .values(unassigned.map((id) => ({ spaceId: id, profileId, assignedBy: ownerId })));
     record('capability assignment', 'created', `${String(unassigned.length)} space(s)`);
   });
 
