@@ -1,7 +1,9 @@
 'use client';
 
 import { useMemo } from 'react';
+import { readLocalProfileAvatar } from '@aflow/schemas';
 import { realAvatarUrl } from './room/ParticipantBadge.js';
+import { ProfileAvatar } from './profile-avatar.js';
 import { Icon } from '@aflow/design-system';
 import type { CSSProperties } from 'react';
 
@@ -15,6 +17,8 @@ export interface UserProfile {
   avatarUrl: string | null;
   /** Whether the user is an admin (owner or admin) in their current tenant */
   isAdmin: boolean;
+  /** Whether the user owns their current tenant: the local install's owner, locally. */
+  isOwner: boolean;
 }
 
 interface TenantMembership {
@@ -29,7 +33,7 @@ interface MeResponse {
   tenants?: TenantMembership[];
 }
 
-function isUserProfile(obj: unknown): obj is Omit<UserProfile, 'isAdmin'> {
+function isUserProfile(obj: unknown): obj is Omit<UserProfile, 'isAdmin' | 'isOwner'> {
   return (
     obj !== null &&
     typeof obj === 'object' &&
@@ -56,11 +60,10 @@ export function useCurrentUser(): UserProfile | null {
     if (!data) return null;
     const u = data.user;
     if (!isUserProfile(u)) return null;
-    const isAdmin =
-      data.tenants?.some(
-        (t) => t.status === 'active' && (t.role === 'owner' || t.role === 'admin'),
-      ) ?? false;
-    return { ...u, isAdmin };
+    const active = data.tenants?.filter((t) => t.status === 'active') ?? [];
+    const isAdmin = active.some((t) => t.role === 'owner' || t.role === 'admin');
+    const isOwner = active.some((t) => t.role === 'owner');
+    return { ...u, isAdmin, isOwner };
   }, [data]);
 }
 
@@ -73,6 +76,9 @@ export function UserAvatar({ user, size = 24 }: { user: UserProfile | null; size
     objectFit: 'cover',
     flexShrink: 0,
   };
+
+  const builtIn = readLocalProfileAvatar(user?.avatarUrl);
+  if (builtIn) return <ProfileAvatar avatar={builtIn} size={size} />;
 
   const realUrl = realAvatarUrl(user?.avatarUrl ?? null);
   if (realUrl) {

@@ -1,9 +1,10 @@
 /**
- * A second local user, as the profile routes of Plan 335 P2 will add one.
+ * A second local user, written straight to the database: a human `users` row
+ * with a membership in the pinned tenant.
  *
- * Until those routes exist this is the only way a local install gains a second
- * profile: a human `users` row with a membership in the pinned tenant. It
- * writes no space, because P1's rule reads the membership alone.
+ * It writes no space and takes any role, which the profile routes of Plan 335
+ * P2 do not. A test reaches for it when the membership alone is what it
+ * reads, or when it needs a role those routes never give.
  */
 import { randomUUID } from 'node:crypto';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';

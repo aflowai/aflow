@@ -7,6 +7,7 @@
  * teammate recognisable in one place and not the other defeats the point of
  * showing them at all.
  */
+import { isLocalProfileAvatarUrl } from '@aflow/schemas';
 
 /**
  * Colour is derived from the name so a person looks the same to everyone in
@@ -25,9 +26,12 @@ export function hueOf(name: string): number {
  * (often riding URL-encoded inside a gravatar fallback param) — same first
  * letters, same face for everyone. That is not a picture of anyone: treat it
  * as absent so the named initials badge renders instead.
+ *
+ * A local profile's built-in avatar is a key, not an address, so it is absent
+ * here too. An image pointed at it would draw a broken picture.
  */
 export function realAvatarUrl(url: string | null): string | null {
-  if (!url) return null;
+  if (!url || isLocalProfileAvatarUrl(url)) return null;
   const generated =
     url.includes('cdn.auth0.com/avatars') || url.includes('cdn.auth0.com%2Favatars');
   return generated ? null : url;

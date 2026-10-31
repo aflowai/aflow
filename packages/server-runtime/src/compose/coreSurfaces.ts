@@ -30,6 +30,7 @@ import { activeMemoryRoutes } from '../routes/activeMemory.js';
 import { spaceMemoryEmbeddingRoutes } from '../routes/spaceMemoryEmbedding.js';
 import { spaceLlmReadinessRoutes } from '../routes/spaceLlmReadiness.js';
 import { localModelRoutes } from '../routes/localModels.js';
+import { localProfileRoutes } from '../routes/localProfiles.js';
 import { spaceConnectionsRoutes } from '../routes/spaceConnections.js';
 import { cascadesRoutes } from '../routes/cascades.js';
 import { workflowsRoutes } from '../routes/workflows/index.js';
@@ -194,6 +195,12 @@ function v1Surfaces({ actionCenterAggregator }: V1SurfaceDeps): ServerSurface[] 
     {
       name: 'tenant-settings',
       register: (s) => s.register(tenantSettingsRoutes, { prefix: '/tenant' }),
+    },
+    {
+      // Core, not enterprise, for the reason host pairing is: the hosted
+      // product composes it and refuses every call (Plan 335 P2).
+      name: 'local-profiles',
+      register: (s) => s.register(localProfileRoutes, { prefix: '/local-profiles' }),
     },
     {
       name: 'api-keys',
