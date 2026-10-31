@@ -133,9 +133,10 @@ export const SessionHotStateSchema = z.object({
    * sets another run going — delegating to it, starting it as a workflow task,
    * resuming or answering it, re-parenting it — the target is attended exactly
    * as the acting run is at that moment. When a person's authenticated request
-   * sets a run going, it is attended. When nothing with a person behind it
-   * does — a schedule, a webhook, a timer, a sweep, an API or MCP credential —
-   * it is not. A child returning to the parent that waited on it changes
+   * sets a run going, it is attended — a user's own API key included, so a
+   * conversation the MCP server starts with the operator's key is attended.
+   * When nothing with a person behind it does — a schedule, a webhook, a
+   * timer, a sweep, a service principal — it is not. A child returning to the parent that waited on it changes
    * nothing in the parent, and neither does a resume that knows nothing of
    * who is present (finishing an OAuth consent). The orchestrator writes it in the same write that
    * starts or resumes the session and stamps it on every job the session

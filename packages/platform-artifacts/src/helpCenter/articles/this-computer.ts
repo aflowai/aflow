@@ -262,7 +262,7 @@ A rule names one origin, such as \`https://mail.example.com\`, or a host with a 
 
 ## Runs nobody is present for
 
-**Open to runs nobody is present for** decides whether a run set going by a schedule, a webhook, a timer, or an API or MCP client may use the profile. A run a person started may use it either way.
+**Open to runs nobody is present for** decides whether a run set going by a schedule, a webhook, a timer, or a service principal may use the profile. A run a person started may use it either way, and a run started with your own API key, the MCP server’s included, counts as yours.
 
 ## Local ports
 

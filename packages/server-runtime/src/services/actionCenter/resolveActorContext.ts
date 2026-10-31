@@ -24,6 +24,8 @@ export interface ActionCenterActor {
   authMethod?: string;
   /** From `isInteractiveUser` on REST; the WS subscription resolves nothing and leaves it out. */
   isInteractiveUser?: boolean;
+  /** From `isPersonPrincipal` on REST; the WS subscription resolves nothing and leaves it out. */
+  isPersonPrincipal?: boolean;
 }
 
 export async function resolveActionCenterActorContext(
@@ -40,6 +42,9 @@ export async function resolveActionCenterActorContext(
     ...(actor.authMethod !== undefined ? { actorAuthMethod: actor.authMethod } : {}),
     ...(actor.isInteractiveUser !== undefined
       ? { actorIsInteractiveUser: actor.isInteractiveUser }
+      : {}),
+    ...(actor.isPersonPrincipal !== undefined
+      ? { actorIsPersonPrincipal: actor.isPersonPrincipal }
       : {}),
   };
 

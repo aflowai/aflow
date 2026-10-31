@@ -17,7 +17,7 @@ import {
 /**
  * Triggers that start a run with nobody waiting on its answer, so a turn there
  * must not ask. Not whether a person is present for it — that is the session's
- * `activatedByPerson`: an API caller or an MCP client waits for the answer
+ * `activatedByPerson`: a service principal's API call waits for the answer
  * without being one.
  */
 export function startsWithNobodyWaiting(trigger: string | undefined): boolean {

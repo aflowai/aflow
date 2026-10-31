@@ -22,7 +22,7 @@ import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { buildInlineAgentDefinition, createSessionService } from '../services/sessions.js';
 import { buildSessionSnapshot } from '../services/buildSessionSnapshot.js';
 import { buildActorContext } from '../utils/actorContext.js';
-import { isInteractiveUser, refusedStartMode, StartModeSchema } from '../utils/interactiveUser.js';
+import { isPersonPrincipal, refusedStartMode, StartModeSchema } from '../utils/interactiveUser.js';
 import { classifyRunServiceError } from '../lib/errors.js';
 import { assertSessionSpaceAccess } from '../lib/sessionSpaceAccess.js';
 import { registerMcpElicitationRoutes } from './mcp-elicitations.js';
@@ -350,8 +350,7 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
       const body = request.body;
       const waitParam = request.query.wait;
       const mode = body.mode ?? 'api';
-      const interactiveUser = isInteractiveUser(request.authUser);
-      const modeRefusal = refusedStartMode(mode, interactiveUser);
+      const modeRefusal = refusedStartMode(mode, request.authUser);
       if (modeRefusal) return reply.status(400).send({ error: 'BadRequest', message: modeRefusal });
 
       try {
@@ -474,7 +473,7 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
             createdBy:
               (request.headers['x-on-behalf-of'] as string | undefined) ?? request.authUser?.userId,
             trigger: mode,
-            activatedByPerson: interactiveUser,
+            activatedByPerson: isPersonPrincipal(request.authUser),
             ...(mode === 'voice' ? { voiceMode: true } : {}),
             ...(actorContext ? { actorContext } : {}),
             ...(body.clientMessageId ? { clientMessageId: body.clientMessageId } : {}),
@@ -1041,7 +1040,7 @@ Event-level pages: \`GET /sessions/:id/events?limit=<n>&before=<cursor>\`.`,
           ...(actorContext ? { actorContext } : {}),
           ...(body.voiceMode !== undefined ? { voiceMode: body.voiceMode } : {}),
           ...(body.clientMessageId ? { clientMessageId: body.clientMessageId } : {}),
-          activatedByPerson: isInteractiveUser(request.authUser),
+          activatedByPerson: isPersonPrincipal(request.authUser),
         });
 
         request.log.debug({ sessionId, stepExecutionId: body.stepExecutionId }, 'Session resumed');
@@ -1128,7 +1127,7 @@ Event-level pages: \`GET /sessions/:id/events?limit=<n>&before=<cursor>\`.`,
             : {}),
           idempotencyKey,
           ...(actorContext ? { actorContext } : {}),
-          activatedByPerson: isInteractiveUser(request.authUser),
+          activatedByPerson: isPersonPrincipal(request.authUser),
         });
 
         request.log.info(

@@ -172,6 +172,22 @@ describe('resolveActionCenterActorContext', () => {
     expect(unsaid).not.toHaveProperty('actorIsInteractiveUser');
   });
 
+  it('carries whether a person’s principal made the request, and nothing when it was not told', async () => {
+    const { db } = setup({ ownerRows: [{ ownerId: USER_ID }] });
+    const apiKey = await resolveActionCenterActorContext(db, TENANT_ID, SPACE_ID, {
+      userId: USER_ID,
+      isTenantAdmin: false,
+      isInteractiveUser: false,
+      isPersonPrincipal: true,
+    });
+    expect(apiKey).toMatchObject({ actorIsInteractiveUser: false, actorIsPersonPrincipal: true });
+    const unsaid = await resolveActionCenterActorContext(db, TENANT_ID, SPACE_ID, {
+      userId: USER_ID,
+      isTenantAdmin: false,
+    });
+    expect(unsaid).not.toHaveProperty('actorIsPersonPrincipal');
+  });
+
   it('returns admin under dev bypass (NODE_ENV != production + authMethod = dev_bypass)', async () => {
     process.env['NODE_ENV'] = 'development';
     const { db } = setup({ ownerRows: [{ ownerId: 'someone-else' }], memberCount: 2 });
