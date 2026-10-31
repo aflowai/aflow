@@ -142,8 +142,18 @@ function parseIpv4Loose(host: string): number | null {
  * private ranges stay allowed — a self-hosted GHE can live on a private network.
  */
 function isBlockedInternalHost(lowered: string): boolean {
-  if (lowered === 'localhost' || lowered === 'metadata') return true;
   if (lowered.endsWith('.internal')) return true; // GCE/internal private TLD
+  return isBlockedNetworkHost(lowered);
+}
+
+/**
+ * The rules of `isBlockedInternalHost` without its `*.internal` one, for a host
+ * an operator names on a private network (Plan 336 D2). ICANN reserves
+ * `.internal` for private use, so a corporate server may carry it, and the
+ * metadata names under it are refused by name where the connect is decided.
+ */
+export function isBlockedNetworkHost(lowered: string): boolean {
+  if (lowered === 'localhost' || lowered === 'metadata') return true;
   if (lowered.includes(':')) return true; // IPv6 literal — raw-IPv6 git hosts are not used
   const ip = parseIpv4Loose(lowered);
   if (ip !== null) {

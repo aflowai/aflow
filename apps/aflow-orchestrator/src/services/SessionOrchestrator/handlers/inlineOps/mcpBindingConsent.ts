@@ -17,6 +17,7 @@ import {
   resolveOAuthCallbackUrl,
   resolveOAuthOwner,
   buildMcpOAuthDescriptor,
+  mcpPrivateNetworkPolicy,
   type OAuthBindingTarget,
 } from '@aflow/oauth';
 import type { InlineHandlerArgs } from './types.js';
@@ -117,7 +118,7 @@ export async function handleMcpBindingConsentInline(args: InlineHandlerArgs): Pr
         ),
       )
       .limit(1);
-  })) as Array<{ definitionJson?: unknown }>;
+  })) as Array<{ definitionJson?: unknown; privateNetworkJson?: unknown }>;
 
   if (definitionRows.length === 0) {
     await emitStepError(
@@ -160,7 +161,11 @@ export async function handleMcpBindingConsentInline(args: InlineHandlerArgs): Pr
     return;
   }
 
-  const descriptor = buildMcpOAuthDescriptor(binding, definition);
+  const descriptor = buildMcpOAuthDescriptor(
+    binding,
+    definition,
+    mcpPrivateNetworkPolicy(definitionRows[0]!.privateNetworkJson),
+  );
   const target: OAuthBindingTarget = {
     integrationKind: 'mcp',
     resourceKey: binding.serverId,

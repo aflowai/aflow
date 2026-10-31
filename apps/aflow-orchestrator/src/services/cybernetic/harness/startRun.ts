@@ -8,7 +8,7 @@ import {
 import type { WorkflowTaskRow } from '@aflow/cybernetic-runtime';
 import { getOrchestratorLogger } from '../../../lib/orchestratorLogger.js';
 import { computeReadyView, isTerminalTaskStatus } from './helpers.js';
-import { applyFailureMode, completeRun } from './pauseResume.js';
+import { applyFailureMode, completeRun, failedTasksFailure } from './pauseResume.js';
 import { dispatchAllOrCollectFailures, persistFailedDispatches } from './dispatch.js';
 import type { HarnessDeps, StartRunArgs, StartRunResult } from './types.js';
 
@@ -66,7 +66,14 @@ export async function startRun(deps: HarnessDeps, args: StartRunArgs): Promise<S
   if (readyResult.errors.length > 0) {
     const detail = readyResult.errors.map((e) => `${e.task.taskId}: ${e.reason}`).join('; ');
     log.warn(`[startRun] when-predicate errors on first wave; failing run: ${detail}`);
-    await completeRun(deps, tenantId, runId, 'failed');
+    await completeRun(deps, tenantId, runId, {
+      status: 'failed',
+      failure: {
+        reason: 'when_predicate_error',
+        message: `A task's when-condition could not be evaluated: ${detail}`,
+        taskIds: readyResult.errors.map((e) => e.task.taskId),
+      },
+    });
     return { runId, activeTasks: [] };
   }
 
@@ -79,13 +86,21 @@ export async function startRun(deps: HarnessDeps, args: StartRunArgs): Promise<S
     currentTaskRows.filter((t) => isTerminalTaskStatus(t.status)).map((t) => t.taskId),
   );
   if (readyResult.ready.length === 0 && requiredTasks.every((t) => terminalRowIds.has(t.taskId))) {
-    const hasFailedRequired = requiredTasks.some((t) => {
-      const row = currentTaskRows.find((r) => r.taskId === t.taskId);
-      return row?.status === 'failed' || row?.status === 'blocked' || row?.status === 'cancelled';
-    });
-    const terminalStatus: 'completed' | 'failed' = hasFailedRequired ? 'failed' : 'completed';
+    const failedRequired = requiredTasks
+      .filter((t) => {
+        const row = currentTaskRows.find((r) => r.taskId === t.taskId);
+        return row?.status === 'failed' || row?.status === 'blocked' || row?.status === 'cancelled';
+      })
+      .map((t) => t.taskId);
     log.info(`[startRun] all required tasks resolved during first-wave skip-loop; completing`);
-    await completeRun(deps, tenantId, runId, terminalStatus);
+    await completeRun(
+      deps,
+      tenantId,
+      runId,
+      failedRequired.length > 0
+        ? { status: 'failed', failure: failedTasksFailure(currentTaskRows, failedRequired) }
+        : { status: 'completed' },
+    );
     return { runId, activeTasks: [] };
   }
 

@@ -1457,7 +1457,10 @@ describe('workflow.run.resume — Plan 130 Phase 1 cross-boundary loop', () => {
     // the failure outcome rather than orphan-running.
     expect(mockHarnessCompleteRun).toHaveBeenCalledTimes(1);
     const completeArgs = mockHarnessCompleteRun.mock.calls[0]!;
-    expect(completeArgs[3]).toBe('failed');
+    expect(completeArgs[3]).toMatchObject({
+      status: 'failed',
+      failure: { reason: 'resume_failed' },
+    });
 
     // completeRun was called with status='failed' as the recovery
     // path — wakes the resume step via notifyWaiters('failed').

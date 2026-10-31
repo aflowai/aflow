@@ -24,6 +24,7 @@ import {
   enforceIntegrationHostPolicy,
 } from './integrationPolicy/index.js';
 import { deleteMcpIntegration } from './store/connectorUninstall.js';
+import type { PrivateNetworkAuditActor } from './mcpPrivateNetwork.js';
 
 /**
  * The MCP server and binding admin reads and writes, shared by the
@@ -324,11 +325,15 @@ export async function upsertMcpServerDefinition(
   };
 }
 
-/** Deletes the definition with its bindings, space-owned tokens and orphaned credentials. */
+/**
+ * Deletes the definition with its bindings, space-owned tokens and orphaned
+ * credentials. `actor` is recorded when the definition held a private network
+ * acknowledgment.
+ */
 export async function deleteMcpServerDefinition(
-  opts: McpIntegrationAdminScope & { serverId: string },
+  opts: McpIntegrationAdminScope & { serverId: string; actor: PrivateNetworkAuditActor },
 ): Promise<{ deleted: boolean }> {
-  const { db, tenantId, spaceId, serverId } = opts;
+  const { db, tenantId, spaceId, serverId, actor } = opts;
   const deleted = await withTenantSchema(db, tenantContextOf(tenantId), async (tx) => {
     const existing = await tx
       .select({ serverId: mcpServerDefinitions.serverId })
@@ -337,7 +342,7 @@ export async function deleteMcpServerDefinition(
         and(eq(mcpServerDefinitions.serverId, serverId), eq(mcpServerDefinitions.spaceId, spaceId)),
       )
       .limit(1);
-    await deleteMcpIntegration(tx, spaceId, serverId);
+    await deleteMcpIntegration(tx, spaceId, serverId, actor);
     return existing.length > 0;
   });
 

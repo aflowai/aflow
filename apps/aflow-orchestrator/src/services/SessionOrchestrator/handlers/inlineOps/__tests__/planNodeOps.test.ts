@@ -145,6 +145,45 @@ beforeEach(() => {
 });
 
 describe('plan.node.update', () => {
+  it.each([
+    ['chat', SESSION],
+    ['voice', SESSION],
+    ['schedule', undefined],
+    ['api', undefined],
+    [undefined, undefined],
+  ])(
+    'a session started by %s writes the node with conversationId %s (Plan 337 P4)',
+    async (trigger, conversationId) => {
+      mockGetSessionState.mockResolvedValue({
+        planResident: false,
+        ...(trigger !== undefined ? { trigger } : {}),
+      });
+      mockUpdatePlanNode.mockResolvedValue({ ok: true, node: NODE });
+
+      await handlePlanNodeInline(
+        makeArgs('plan.node.update', { nodeId: NODE_ID, expectedRevision: 2, note: 'Next' }),
+      );
+
+      expect(emitted()['status']).toBe('SUCCEEDED');
+      const ctx = mockUpdatePlanNode.mock.calls[0]![0] as { conversationId?: string };
+      expect(ctx.conversationId).toBe(conversationId);
+      // The resident decision and the conversation read one session state.
+      expect(mockGetSessionState).toHaveBeenCalledTimes(1);
+      expect(mockGetSessionStateSafe).not.toHaveBeenCalled();
+    },
+  );
+
+  it('links no conversation where the session’s state cannot be read', async () => {
+    mockGetSessionState.mockResolvedValue(null);
+    mockUpdatePlanNode.mockResolvedValue({ ok: true, node: NODE });
+
+    await handlePlanNodeInline(
+      makeArgs('plan.node.update', { nodeId: NODE_ID, expectedRevision: 2, note: 'Next' }),
+    );
+
+    expect(mockUpdatePlanNode.mock.calls[0]![0]).not.toHaveProperty('conversationId');
+  });
+
   it('parks a scheduled close and signals waiting when the API executor is absent', async () => {
     mockGetSessionState.mockResolvedValue({
       trigger: 'schedule',
@@ -346,6 +385,7 @@ describe('plan.node.update', () => {
           tenantId: TENANT,
           actorKind: 'agent',
           resident: false,
+          conversationId: SESSION,
         },
         { nodeId: NODE_ID, expectedRevision: 2, status },
       );

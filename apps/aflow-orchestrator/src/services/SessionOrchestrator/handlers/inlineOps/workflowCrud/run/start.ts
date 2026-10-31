@@ -804,14 +804,14 @@ export async function handleWorkflowRunStart(
    * Never throws: a terminalize failure must not mask the refusal that
    * called it, and the orphan sweeper remains the backstop.
    */
-  const terminalizeRefusedRun = async (): Promise<void> => {
+  const terminalizeRefusedRun = async (message: string): Promise<void> => {
     try {
       const { completeRun } = await import('../../../../../cybernetic/WorkflowRunHarness.js');
       await completeRun(
         { db, redis: args.redis, payloadStore: args.payloadStore },
         args.context.tenantId,
         runId,
-        'failed',
+        { status: 'failed', failure: { reason: 'start_refused', message } },
       );
     } catch (completeErr) {
       getOrchestratorLogger().error(
@@ -848,7 +848,11 @@ export async function handleWorkflowRunStart(
       // fail-closed decision reopening on a delay. Terminalize BEFORE reporting
       // — the terminalize cannot throw out, so an `emitStepError` failure can
       // never strand the run in `running`.
-      await terminalizeRefusedRun();
+      await terminalizeRefusedRun(
+        grantGate.kind === 'authority_revoked'
+          ? `The access this run would execute under is no longer held: ${grantGate.detail}`
+          : `The access grant this run would execute under could not be established: ${grantGate.detail}`,
+      );
       await (grantGate.kind === 'authority_revoked'
         ? emitStepError(
             args,
@@ -915,7 +919,10 @@ export async function handleWorkflowRunStart(
           { db, redis: args.redis, payloadStore: args.payloadStore },
           args.context.tenantId,
           runId,
-          'failed',
+          {
+            status: 'failed',
+            failure: { reason: 'start_failed', message: `Starting the run failed: ${errMsg}` },
+          },
         );
       } catch (completeErr) {
         // Last-resort log; the sweeper recovers in Phase 5+.
@@ -945,7 +952,9 @@ export async function handleWorkflowRunStart(
         waiterErr instanceof Error ? waiterErr : undefined,
         { tenantId: tenantIdStr, runId, slug, parentRunId: args.workflowExecution.runId },
       );
-      await terminalizeRefusedRun();
+      await terminalizeRefusedRun(
+        `The run's caller could not be registered to hear its outcome: ${errMsg}`,
+      );
       await emitStepError(
         args,
         'WORKFLOW_RUN_START_WAITER_INSERT_FAILED',
@@ -986,7 +995,9 @@ export async function handleWorkflowRunStart(
         waiterErr instanceof Error ? waiterErr : undefined,
         { tenantId: tenantIdStr, runId, slug },
       );
-      await terminalizeRefusedRun();
+      await terminalizeRefusedRun(
+        `The run's caller could not be registered to hear its outcome: ${errMsg}`,
+      );
       await emitStepError(
         args,
         'WORKFLOW_RUN_START_WAITER_INSERT_FAILED',

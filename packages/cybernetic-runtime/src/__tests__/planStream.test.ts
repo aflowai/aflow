@@ -28,6 +28,7 @@ import {
   linkEndedRun,
   linkPlanNode,
   openPlanNode,
+  revisePlanNode,
   updatePlanNode,
   type PlanWriteContext,
 } from '../plan/operations.js';
@@ -1316,6 +1317,50 @@ describe('resident asking and proposing', () => {
     expect(await wake({}, 'another-wake')).not.toHaveProperty('propose');
   });
 
+  it.each([false, true])(
+    'treats a proposal the operator revised and then dropped as a decline (rewritten: %s)',
+    async (rewritten) => {
+      const root = await created();
+      const child = await created({ parentId: root.nodeId });
+      await write(child.nodeId, { status: 'done', outcome: 'Merged' });
+      const proposal = await created({ parentId: root.nodeId, proposed: 'Next scope' });
+      const revised = await revisePlanNode(session(), {
+        nodeId: proposal.nodeId,
+        expectedRevision: proposal.revision,
+        why: 'Name the risk.',
+      });
+      if (!revised.ok) throw new Error(revised.message);
+      if (rewritten) {
+        const note = revised.node.note!.replace(/^Revise: [^\n]*/, 'Revised: the risk is named.');
+        await write(proposal.nodeId, { note });
+      }
+      await write(proposal.nodeId, { status: 'dropped', outcome: 'Declined' });
+
+      expect(await wake()).not.toHaveProperty('propose');
+      expect(await wake({}, 'another-wake')).not.toHaveProperty('propose');
+    },
+  );
+
+  it('a findings carrier the operator revised and then dropped does not decline its root', async () => {
+    const root = await created();
+    const step = await created({ parentId: root.nodeId });
+    await linkPlanNode(session(), { nodeId: step.nodeId, kind: 'finding', ref: 'open' });
+    const closed = await updatePlanNode(session(), {
+      nodeId: step.nodeId,
+      expectedRevision: step.revision,
+      status: 'done',
+      outcome: 'Merged',
+    });
+    if (!closed.ok || !closed.carrier) throw new Error('No carrier');
+    await revisePlanNode(session(), {
+      nodeId: closed.carrier.nodeId,
+      expectedRevision: closed.carrier.revision,
+      why: 'Only the first finding.',
+    });
+    await write(closed.carrier.nodeId, { status: 'dropped' });
+    expect(await wake()).toHaveProperty('propose');
+  });
+
   it.each([true, false])(
     'surfaces a live check beside its merged node (nested: %s)',
     async (nested) => {
@@ -1922,6 +1967,267 @@ describe('the open write (Plan 332 D6, Plan 331 D5)', () => {
         node: { nodeId: first.nodeId },
       });
     }
+  });
+});
+
+describe('the operator’s note on a node (Plan 337 P4)', () => {
+  it('approve with instructions: the next commission’s brief carries the operator’s line', async () => {
+    const { root, first } = await stream();
+    const blocked = await write(first.nodeId, {
+      status: 'blocked',
+      note: 'Proposed from the merged plan document',
+    });
+    await openPlanNode(session(), {
+      nodeId: first.nodeId,
+      expectedRevision: blocked.revision,
+      why: 'Do it, and make sure\nthe migration is reversible.',
+    });
+
+    const answer = await next(root.nodeId);
+
+    expect(answer).toMatchObject({
+      decision: 'continue',
+      node: {
+        nodeId: first.nodeId,
+        instructions: 'Approved: Do it, and make sure the migration is reversible.',
+        goal: 'A stream continues on a schedule.',
+      },
+    });
+  });
+
+  it('a brief carries no instructions where the note’s first line is not the operator’s', async () => {
+    const { root, first } = await stream();
+    await write(first.nodeId, { note: 'next: the schema.\nApproved: an older line.' });
+
+    const answer = await next(root.nodeId);
+
+    if (answer.decision !== 'continue')
+      throw new Error(`expected continue, not ${answer.decision}`);
+    expect(answer.node).not.toHaveProperty('instructions');
+  });
+
+  it('revise: the node stays blocked, the wake is asked to rewrite it, and a rewrite ends the ask', async () => {
+    const { root, first } = await stream();
+    const blocked = await write(first.nodeId, {
+      status: 'blocked',
+      note: 'Proposed by the resident',
+    });
+    expect(await next(root.nodeId)).toMatchObject({ decision: 'wait', cause: 'blocked' });
+
+    const revised = await revisePlanNode(session(), {
+      nodeId: first.nodeId,
+      expectedRevision: blocked.revision,
+      why: 'Split it: the schema first.',
+    });
+    if (!revised.ok) throw new Error(revised.message);
+    expect(revised.node).toMatchObject({ status: 'blocked', revision: blocked.revision + 1 });
+
+    const answer = await next(root.nodeId);
+    expect(answer).toMatchObject({
+      decision: 'revise',
+      noteHead: 'Revised: ',
+      node: { nodeId: first.nodeId, instructions: 'Revise: Split it: the schema first.' },
+    });
+    expect(store.runs).toEqual([]);
+
+    // The Helmsman rewrites the proposal with the update it already holds.
+    await write(first.nodeId, {
+      goal: 'Add the schema for the stream.',
+      note: 'Revised: the schema comes first; the routes follow as their own step.',
+    });
+    expect(await current(first.nodeId)).toMatchObject({ status: 'blocked' });
+    expect(await next(root.nodeId)).toMatchObject({ decision: 'wait', cause: 'blocked' });
+  });
+
+  it('revise: answers a blocked node sent back where it is not the active node', async () => {
+    const { root, first, second } = await stream();
+    await write(first.nodeId, { status: 'blocked', note: 'Waiting on a person' });
+    const blocked = await write(second.nodeId, { status: 'blocked', note: 'Proposed' });
+    expect(await next(root.nodeId)).toMatchObject({
+      decision: 'wait',
+      cause: 'blocked',
+      node: { nodeId: first.nodeId },
+    });
+
+    const revised = await revisePlanNode(session(), {
+      nodeId: second.nodeId,
+      expectedRevision: blocked.revision,
+      why: 'Name the risk.',
+    });
+    if (!revised.ok) throw new Error(revised.message);
+
+    expect(await next(root.nodeId)).toMatchObject({
+      decision: 'revise',
+      node: { nodeId: second.nodeId, instructions: 'Revise: Name the risk.' },
+    });
+
+    await write(second.nodeId, { note: 'Revised: the risk is named.' });
+    expect(await next(root.nodeId)).toMatchObject({
+      decision: 'wait',
+      cause: 'blocked',
+      node: { nodeId: first.nodeId },
+    });
+  });
+
+  it('revise: a publication on the active node ranks before a sent-back node under the same root', async () => {
+    const { root, first, second } = await stream();
+    const blocked = await write(second.nodeId, { status: 'blocked', note: 'Proposed' });
+    await revisePlanNode(session(), {
+      nodeId: second.nodeId,
+      expectedRevision: blocked.revision,
+      why: 'Name the risk.',
+    });
+    expect(await next(root.nodeId)).toMatchObject({
+      decision: 'revise',
+      node: { nodeId: second.nodeId },
+    });
+
+    await run(first, PLAN_STREAM_COMMISSION_SLUG, 'completed');
+    expect(await next(root.nodeId)).toMatchObject({
+      decision: 'publish',
+      node: { nodeId: first.nodeId },
+    });
+  });
+
+  it('revise: a line the rewrite left in place stops the ask and is surfaced', async () => {
+    const { root, first, second } = await stream();
+    const blocked = await write(first.nodeId, { status: 'blocked', note: 'Proposed' });
+    await revisePlanNode(session(), {
+      nodeId: first.nodeId,
+      expectedRevision: blocked.revision,
+      why: 'Split it: the schema first.',
+    });
+    expect(await next(root.nodeId)).toMatchObject({ decision: 'revise' });
+
+    // The rewrite changes the goal and keeps the operator's line on top.
+    const rewritten = await write(first.nodeId, { goal: 'Add the schema for the stream.' });
+    expect(rewritten.note?.startsWith('Revise: Split it')).toBe(true);
+    expect(await next(root.nodeId)).toMatchObject({
+      decision: 'wait',
+      cause: 'revise_unanswered',
+      node: { nodeId: first.nodeId },
+    });
+
+    // Sent back again, it is asked again.
+    await revisePlanNode(session(), {
+      nodeId: first.nodeId,
+      expectedRevision: rewritten.revision,
+      why: 'Keep the routes out.',
+    });
+    expect(await next(root.nodeId)).toMatchObject({
+      decision: 'revise',
+      node: { instructions: 'Revise: Keep the routes out.' },
+    });
+
+    // A sent-back node off the active path no longer holds new work once its line survives.
+    await write(first.nodeId, { status: 'active', note: 'Approved.' });
+    const proposed = await write(second.nodeId, { status: 'blocked', note: 'Proposed' });
+    await revisePlanNode(session(), {
+      nodeId: second.nodeId,
+      expectedRevision: proposed.revision,
+      why: 'Name the risk.',
+    });
+    expect(await next(root.nodeId)).toMatchObject({ decision: 'revise' });
+    await write(second.nodeId, { criteria: 'The risk is named.' });
+    expect(await next(root.nodeId)).toMatchObject({
+      decision: 'continue',
+      node: { nodeId: first.nodeId },
+    });
+  });
+
+  it('revise: answered once per revision, so an unwritten answer frees the root’s other work', async () => {
+    const { root, first, second } = await stream();
+    const blocked = await write(second.nodeId, { status: 'blocked', note: 'Proposed' });
+    await revisePlanNode(session(), {
+      nodeId: second.nodeId,
+      expectedRevision: blocked.revision,
+      why: 'Name the risk.',
+    });
+
+    const raced = await Promise.all([
+      next(root.nodeId, {}, 'firing-a'),
+      next(root.nodeId, {}, 'firing-b'),
+    ]);
+    expect(raced.filter((d) => d.decision === 'revise')).toHaveLength(1);
+    expect(raced.find((d) => d.decision !== 'revise')).toMatchObject({
+      decision: 'wait',
+      cause: 'claimed',
+      node: { nodeId: second.nodeId },
+    });
+
+    // The wake answered and wrote nothing: the node stands at the same revision.
+    expect(await current(second.nodeId)).toMatchObject({ revision: blocked.revision + 1 });
+    for (const holder of ['firing-a', 'firing-b', 'firing-c']) {
+      const answer = await next(root.nodeId, {}, holder);
+      expect(answer.decision).not.toBe('revise');
+    }
+    expect(await next(root.nodeId, {}, 'firing-a')).toMatchObject({
+      decision: 'continue',
+      node: { nodeId: first.nodeId },
+    });
+  });
+
+  it('revise: a wake that answers without writing is not asked again, and a fresh Revise is', async () => {
+    const root = await created({ title: 'Plan 340' });
+    const active = await created({ parentId: root.nodeId, title: 'P1' });
+    const proposal = await created({ parentId: root.nodeId, proposed: 'Next scope' });
+    await revisePlanNode(session(), {
+      nodeId: proposal.nodeId,
+      expectedRevision: proposal.revision,
+      why: 'Name the risk.',
+    });
+
+    const first = await wake({ decisions: 1 }, 'wake-1');
+    expect(first.decisions.map((d) => d.answer.decision)).toEqual(['revise']);
+
+    // The answer's write was refused, or the wake ended first: nothing landed.
+    const second = await wake({ decisions: 1 }, 'wake-2');
+    expect(second.decisions).toMatchObject([
+      { answer: { decision: 'continue', node: { nodeId: active.nodeId } } },
+    ]);
+    const third = await wake({ decisions: 1 }, 'wake-3');
+    expect(third.decisions.map((d) => d.answer.decision)).not.toContain('revise');
+
+    const again = await revisePlanNode(session(), {
+      nodeId: proposal.nodeId,
+      expectedRevision: (await current(proposal.nodeId)).revision,
+      why: 'Name the risk and its owner.',
+    });
+    if (!again.ok) throw new Error(again.message);
+    const fourth = await wake({ decisions: 1 }, 'wake-4');
+    expect(fourth.decisions).toMatchObject([
+      {
+        answer: {
+          decision: 'revise',
+          node: {
+            nodeId: proposal.nodeId,
+            instructions: 'Revise: Name the risk and its owner.',
+          },
+        },
+      },
+    ]);
+  });
+
+  it('ranks a revise after a publication and before new work across the board', async () => {
+    const proposal = await created({ title: 'Plan 340' });
+    const finished = await created({ title: 'Plan 341' });
+    await created({ title: 'Plan 342' });
+    await write(proposal.nodeId, { status: 'blocked' });
+    await revisePlanNode(session(), {
+      nodeId: proposal.nodeId,
+      expectedRevision: (await current(proposal.nodeId)).revision,
+      why: 'Name the risk.',
+    });
+    await run(finished, PLAN_STREAM_COMMISSION_SLUG, 'completed');
+
+    const board = await nextOnPlanBoard(streamContext(), PlanNodeNextInputSchema.parse({}));
+    if (!board.ok) throw new Error(board.message);
+
+    expect(board.output.decisions.map((d) => [d.root.title, d.answer.decision])).toEqual([
+      ['Plan 341', 'publish'],
+      ['Plan 340', 'revise'],
+      ['Plan 342', 'continue'],
+    ]);
   });
 });
 

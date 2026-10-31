@@ -7,6 +7,7 @@
 export * from './actionCenter.js';
 export * from './apiDefinition.js';
 export * from './mcpServerDefinition.js';
+export * from './mcpPrivateNetwork.js';
 export * from './repoBinding.js';
 export * from './repoBranchMatching.js';
 export * from './repoCoordinate.js';

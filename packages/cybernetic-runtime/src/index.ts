@@ -95,6 +95,7 @@ export * from './store/spaceTemplateInstall.js';
 export * from './store/storeUpdateExecution.js';
 export * from './store/connectorUninstall.js';
 export * from './mcpIntegrationAdmin.js';
+export * from './mcpPrivateNetwork.js';
 export * from './store/storeUninstallPlan.js';
 export * from './store/storeUninstallExecution.js';
 export * from './stagedChange/skillCatalogUpdate.js';

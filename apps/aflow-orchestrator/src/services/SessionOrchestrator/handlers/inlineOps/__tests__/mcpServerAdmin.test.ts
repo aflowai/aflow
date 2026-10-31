@@ -8,10 +8,12 @@ beforeAll(() => {
 
 const mockAddStepResult = vi.fn();
 const mockPublishMcpCatalogInvalidation = vi.fn();
+const mockGetSessionState = vi.fn();
 
 vi.mock('@aflow/redis', () => ({
   addStepResult: (...args: unknown[]) => mockAddStepResult(...args),
   publishMcpCatalogInvalidation: (...args: unknown[]) => mockPublishMcpCatalogInvalidation(...args),
+  getSessionState: (...args: unknown[]) => mockGetSessionState(...args),
 }));
 
 // Rows the next `select` answers with, and the SQL and bound values every `execute` was given.
@@ -194,6 +196,8 @@ const storedDefinitionRow = {
 beforeEach(() => {
   mockAddStepResult.mockClear();
   mockPublishMcpCatalogInvalidation.mockClear();
+  mockGetSessionState.mockReset();
+  mockGetSessionState.mockResolvedValue(null);
   selectRows = [];
   executeRows = [];
   executed.length = 0;
@@ -381,6 +385,23 @@ describe('mcp.server.upsert', () => {
     );
   });
 
+  // Plan 336 D1: the acknowledgment is the operator's, so an agent's upsert carrying one writes none.
+  it('leaves the private network record alone when the input carries one', async () => {
+    executeRows = [{ created: false }];
+    const privateNetwork = {
+      hosts: ['mcp.corp.example'],
+      setBy: '00000000-0000-4000-8000-0000000000aa',
+      setAt: '2026-10-30T12:00:00.000Z',
+    };
+    await handleMcpServerAdminInline(
+      argsWithRef('mcp.server.upsert', inlineRef({ ...input, privateNetwork })),
+    );
+    expect(lastResult()['status']).toBe('SUCCEEDED');
+    expect(executed).toHaveLength(1);
+    expect(executed[0]).not.toContain('private_network');
+    expect(JSON.stringify(executedParams[0])).not.toContain('mcp.corp.example');
+  });
+
   it('reports an update as created: false', async () => {
     executeRows = [{ created: false }];
     await handleMcpServerAdminInline(await buildArgs('mcp.server.upsert', input));
@@ -466,6 +487,70 @@ describe('mcp.server.delete', () => {
     expect(decodeOutput(lastResult())).toEqual({ deleted: true });
     expect(executed.some((q) => q.includes('DELETE FROM mcp_server_bindings'))).toBe(true);
     expect(executed.some((q) => q.includes('DELETE FROM mcp_server_definitions'))).toBe(true);
+  });
+
+  /** Deletes a definition that held private network hosts and returns its audit row's values. */
+  async function deleteAcknowledgedDefinition(): Promise<{
+    params: unknown[];
+    details: Record<string, unknown>;
+  }> {
+    selectRows = [storedDefinitionRow];
+    // Every statement answers with this row: the binding read sees no credential,
+    // and the definition delete returns the record it held.
+    executeRows = [
+      {
+        auth_json: { type: 'none' },
+        private_network_json: {
+          hosts: ['mcp.corp.example'],
+          setBy: '00000000-0000-4000-8000-0000000000aa',
+          setAt: '2026-10-30T12:00:00.000Z',
+        },
+      },
+    ];
+    await handleMcpServerAdminInline(
+      await buildArgs('mcp.server.delete', { serverId: 'docs-mcp' }),
+    );
+    expect(decodeOutput(lastResult())).toEqual({ deleted: true });
+    const audit = executed.findIndex((q) => q.includes('INSERT INTO tenant_audit_log'));
+    expect(audit).toBeGreaterThan(-1);
+    const params = executedParams[audit]!;
+    const details = params.find(
+      (value): value is string => typeof value === 'string' && value.startsWith('{'),
+    );
+    expect(details).toBeDefined();
+    return { params, details: JSON.parse(details!) as Record<string, unknown> };
+  }
+
+  it('writes a cleared audit row naming the actor the run acts for, its run and its step', async () => {
+    const USER = '00000000-0000-4000-8000-0000000000bb';
+    mockGetSessionState.mockResolvedValue({
+      actorContextJson: JSON.stringify({
+        userId: USER,
+        kind: 'human',
+        authMethod: 'jwt',
+        tenantId: '00000000-0000-4000-8000-0000000000cc',
+        tenantRole: 'owner',
+        capturedAt: '2026-10-30T12:00:00.000Z',
+      }),
+    });
+    const { params, details } = await deleteAcknowledgedDefinition();
+    expect(params).toEqual(
+      expect.arrayContaining([USER, 'human', 'mcp.private_network.cleared', 'docs-mcp']),
+    );
+    expect(details).toMatchObject({
+      cause: 'definition_deleted',
+      runId: 'run-1',
+      stepExecutionId: 'se-1',
+    });
+    expect(mockGetSessionState).toHaveBeenCalledWith({}, 'tenant-1', 'run-1');
+  });
+
+  it('names the run and step as the system when the run carries no actor context', async () => {
+    const { params, details } = await deleteAcknowledgedDefinition();
+    expect(params).toEqual(
+      expect.arrayContaining([null, 'system', 'mcp.private_network.cleared', 'docs-mcp']),
+    );
+    expect(details).toMatchObject({ runId: 'run-1', stepExecutionId: 'se-1' });
   });
 
   it('fails a delete of a server that is not there, naming it, and deletes nothing', async () => {

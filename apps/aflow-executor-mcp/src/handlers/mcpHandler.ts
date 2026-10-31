@@ -40,7 +40,9 @@ import {
 } from '@aflow/database';
 import {
   validateUrl,
-  safeFetchImpl,
+  safeFetchFor,
+  DEFAULT_PRIVATE_NETWORK_POLICY,
+  type PrivateNetworkPolicy,
   validateCredentialedUrl,
   SsrfBlockedError,
   DnsBlockedError,
@@ -60,6 +62,7 @@ import {
   type McpTenantGuardRef,
 } from './tenantPolicyGuard.js';
 import { ensureSpaceLoaded, invalidateSpaceCache } from './spaceLoader.js';
+import { egressRefusalDetails, privateNetworkPolicyOf } from './privateNetwork.js';
 import {
   McpConnectionPool,
   poolKeyManaged,
@@ -280,7 +283,7 @@ export class McpHandler implements StepHandler {
     const key = poolKeyRaw(input.serverUrl);
     let entry: PoolEntry;
     try {
-      entry = await this.acquire(key, input.serverUrl, headers);
+      entry = await this.acquire(key, input.serverUrl, headers, DEFAULT_PRIVATE_NETWORK_POLICY);
     } catch (err) {
       return failureWithError(
         ctx,
@@ -355,7 +358,7 @@ export class McpHandler implements StepHandler {
       });
     } catch (err) {
       if (err instanceof SsrfBlockedError || err instanceof DnsBlockedError) {
-        return failureWithError(ctx, validationError(err.message));
+        return failureWithError(ctx, validationError(err.message, egressRefusalDetails(err)));
       }
       return failureWithError(
         ctx,
@@ -562,7 +565,7 @@ export class McpHandler implements StepHandler {
     const key = poolKeyRaw(input.serverUrl);
     let entry: PoolEntry;
     try {
-      entry = await this.acquire(key, input.serverUrl, headers);
+      entry = await this.acquire(key, input.serverUrl, headers, DEFAULT_PRIVATE_NETWORK_POLICY);
     } catch (err) {
       return failureWithError(
         ctx,
@@ -710,7 +713,7 @@ export class McpHandler implements StepHandler {
       });
     } catch (err) {
       if (err instanceof SsrfBlockedError || err instanceof DnsBlockedError) {
-        return failureWithError(ctx, validationError(err.message));
+        return failureWithError(ctx, validationError(err.message, egressRefusalDetails(err)));
       }
       return failureWithError(
         ctx,
@@ -916,6 +919,11 @@ export class McpHandler implements StepHandler {
         error: `Binding "${binding.bindingId}" credential resolution requires a spaceId on the job context.`,
       };
     }
+    const privateNetwork = privateNetworkPolicyOf(this.stores, {
+      tenantId: ctx.job.tenantId,
+      spaceId,
+      serverId: binding.serverId,
+    });
 
     if (auth.type === 'bearer') {
       if (!auth.credentialKey) {
@@ -983,6 +991,7 @@ export class McpHandler implements StepHandler {
             serverId: binding.serverId,
             bindingId: binding.bindingId,
           }),
+          privateNetwork,
           // ioredis `Redis` has overloaded `set`; widen to the narrow
           // RedisLike surface the helper actually uses.
           ...(this.deps.redis
@@ -1040,7 +1049,7 @@ export class McpHandler implements StepHandler {
           error: `Binding "${binding.bindingId}" cannot resolve OAuth token — definition "${binding.serverId}" not loaded in space "${spaceId}".`,
         };
       }
-      const descriptor = buildMcpOAuthDescriptor(binding, definition);
+      const descriptor = buildMcpOAuthDescriptor(binding, definition, privateNetwork);
       const target: OAuthBindingTarget = {
         integrationKind: 'mcp',
         resourceKey: binding.serverId,
@@ -1121,6 +1130,9 @@ export class McpHandler implements StepHandler {
    * before the handshake; when the binding's credentials ride the connect
    * headers, require https so they never travel cleartext. The raw
    * (dev-only, disabled in production) path connects via `acquire` directly.
+   * The guard names the definition, whose private network policy (Plan 336
+   * D3) the checks and the transport run under. The tenant guard runs first,
+   * and no policy lifts it.
    */
   private async acquireManaged(
     key: string,
@@ -1130,18 +1142,20 @@ export class McpHandler implements StepHandler {
     ctx?: ExecutorContext,
   ): Promise<PoolEntry> {
     assertTenantPolicyPermitsConnect(this.stores, serverUrl, guard);
+    const privateNetwork = privateNetworkPolicyOf(this.stores, guard);
     if (Object.keys(headers).length > 0) {
-      await validateCredentialedUrl(serverUrl);
+      await validateCredentialedUrl(serverUrl, privateNetwork);
     } else {
-      await validateUrl(serverUrl, []);
+      await validateUrl(serverUrl, [], privateNetwork);
     }
-    return this.acquire(key, serverUrl, headers, ctx);
+    return this.acquire(key, serverUrl, headers, privateNetwork, ctx);
   }
 
   private async acquire(
     key: string,
     serverUrl: string,
     headers: Record<string, string>,
+    privateNetwork: PrivateNetworkPolicy,
     ctx?: ExecutorContext,
   ): Promise<PoolEntry> {
     const cached = this.pool.get(key);
@@ -1157,7 +1171,7 @@ export class McpHandler implements StepHandler {
     // the name again, which is the rebinding window the guard exists to close.
     const transport = new StreamableHTTPClientTransport(new URL(serverUrl), {
       requestInit: { headers },
-      fetch: safeFetchImpl,
+      fetch: safeFetchFor(privateNetwork),
     });
     const client = new Client(
       { name: 'phoenix-mcp-executor', version: '1.0.0' },

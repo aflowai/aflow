@@ -17,6 +17,7 @@ import {
   tenantAuditLog,
 } from '@aflow/database';
 import { getCyberneticLogger } from './logger.js';
+import { deleteArchivedSpaceMcpDefinitions } from './mcpPrivateNetwork.js';
 
 /** Raw postgres-js client type, derived without a direct `postgres` dep.
  *  Purge needs a raw tx client because the FK-ordered cascade
@@ -501,7 +502,10 @@ export async function archiveSpace(
     );
     await tx.execute(sql`DELETE FROM oauth_state WHERE space_id = ${spaceId}::uuid`);
     await tx.execute(sql`DELETE FROM mcp_server_bindings WHERE space_id = ${spaceId}::uuid`);
-    await tx.execute(sql`DELETE FROM mcp_server_definitions WHERE space_id = ${spaceId}::uuid`);
+    await deleteArchivedSpaceMcpDefinitions(tx, spaceId, {
+      actorId: ctx.actorUserId ?? null,
+      actorKind: ctx.actorUserId ? 'human' : 'system',
+    });
 
     // 6. Set archived_at on the spaces row.
     const now = new Date();

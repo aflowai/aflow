@@ -195,14 +195,11 @@ export async function cancelRun(
   if (resolvedCancellation.reason !== undefined && resolvedCancellation.reason.length > 0) {
     extras['reason'] = resolvedCancellation.reason;
   }
-  const didComplete = await completeRun(
-    deps,
-    tenantId,
-    runId,
-    'cancelled',
-    extras,
-    resolvedCancellation,
-  );
+  const didComplete = await completeRun(deps, tenantId, runId, {
+    status: 'cancelled',
+    cancellation: resolvedCancellation,
+    attention: extras,
+  });
 
   if (!didComplete) {
     const persisted = await loadRunByRunIdAcrossSpaces(deps.db, tenantIdStr, runId);

@@ -83,6 +83,7 @@ export const PlanOperationRegistrations: OperationRegistration[] = [
       whenNotToUse: ['Adding a step under a node — use plan.node.create with parentId'],
       pitfalls: [
         'An amended goal belongs in `goal`, not the note — every session is briefed from the goal',
+        'A note whose first line begins `Revise: ` is the operator sending a blocked proposal back: rewrite goal and criteria from it, keep status blocked, and replace that line with one beginning `Revised: ` that says what changed',
       ],
       minimalExampleInput: {
         nodeId: EXAMPLE_NODE_ID,
@@ -117,6 +118,7 @@ export const PlanOperationRegistrations: OperationRegistration[] = [
       ],
       pitfalls: [
         'A round’s brief is the node’s goal and criteria, with what the operator adds — not a restatement from the conversation',
+        'A note whose first line begins `Approved: ` or `Revise: ` holds the operator’s instructions: the brief opens with that line, word for word',
       ],
       minimalExampleInput: { nodeId: EXAMPLE_NODE_ID },
     },
@@ -279,8 +281,9 @@ export const PlanOperationRegistrations: OperationRegistration[] = [
         'read_pull_request: read it through the space’s GitHub binding, then call again with its root as rootNodeId and `pullRequest` copied from the answer — `read: "failed"` where the read failed. Never fill it in from memory',
         'record_merge: judge criteria against the merge, then close with status "done" and the outcome when criteria are met. After a successful close, link the merge. Otherwise write unmet criteria beginning with noteHead, then link the merge. A refused close raises a wait line and an Action Center item once per revision.',
         'publish: start Local Publish with `commission` as it stands, a branch, the node’s planNodeId and wait "none"; it commits under the commission’s summary. Write nothing to the node, as on continue: the publication serving it is the record',
+        'revise: the operator sent a blocked proposal back. Rewrite its goal and criteria from `node.instructions` with plan.node.update, keep status blocked, and start the note with noteHead in place of the `Revise: ` line. Start nothing: the operator approves the rewrite',
         'stop: pass `update` to plan.node.update as it stands; start nothing and cancel nothing',
-        'continue: brief the commission from the node’s goal and criteria — on `retry`, from that run’s failure or the review run’s findings — based on origin/<base> (a fix round on its branch), never on the connected folder’s checkout; start it with the node’s planNodeId and wait "none" — that run, serving the node, is the record the next wake reads. Write nothing to the node: a write after the commission starts reads as the node changed since, so the next wake commissions it again instead of publishing what it made',
+        'continue: open the brief with `node.instructions` word for word where it is present, then brief the commission from the node’s goal and criteria — on `retry`, from that run’s failure or the review run’s findings — based on origin/<base> (a fix round on its branch), never on the connected folder’s checkout; start it with the node’s planNodeId and wait "none" — that run, serving the node, is the record the next wake reads. Write nothing to the node: a write after the commission starts reads as the node changed since, so the next wake commissions it again instead of publishing what it made',
       ],
       minimalExampleInput: {},
     },

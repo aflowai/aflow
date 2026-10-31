@@ -19,7 +19,11 @@ export { parseWwwAuthenticateResourceMetadata } from './parseWwwAuth.js';
 
 export { resolveOAuthCallbackUrl, resolveCimdDocumentUrl } from './config.js';
 
-export { buildMcpOAuthDescriptor, type McpOAuthDescriptor } from './mcpBinding.js';
+export {
+  buildMcpOAuthDescriptor,
+  mcpPrivateNetworkPolicy,
+  type McpOAuthDescriptor,
+} from './mcpBinding.js';
 
 export {
   resolveOAuthOwner,

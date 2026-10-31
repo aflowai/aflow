@@ -66,6 +66,8 @@ const recorded = vi.hoisted(() => ({
   detailQueries: [] as Array<{ key: unknown[]; path: string; staleTime?: number }>,
   detailRefetch: vi.fn(),
   findings: {} as Record<string, Answer>,
+  /** The conversations linked on each node, by id. */
+  conversations: {} as Record<string, Answer>,
   runPages: {} as Record<string, Answer>,
   linkQueries: [] as Array<{ key: unknown[]; path: string }>,
   /** Every write the page holds, in the order it declared them. */
@@ -303,7 +305,9 @@ vi.mock('../hooks/useApiQuery.js', () => ({
       const answer =
         linkKind === 'finding'
           ? recorded.findings[nodeId!]
-          : recorded.runPages[`${nodeId!}:${cursor ?? ''}`];
+          : linkKind === 'conversation'
+            ? recorded.conversations[nodeId!]
+            : recorded.runPages[`${nodeId!}:${cursor ?? ''}`];
       return { data: answer?.data, error: answer?.error ?? null, refetch: vi.fn() };
     }
     recorded.detailQueries.push(options);
@@ -696,6 +700,7 @@ beforeEach(() => {
   recorded.detailRefetch.mockResolvedValue({ data: undefined });
   recorded.liveRefresh = [];
   recorded.findings = {};
+  recorded.conversations = {};
   recorded.runPages = {};
   recorded.linkQueries = [];
   recorded.mutations = [];
@@ -1352,7 +1357,6 @@ describe('SpacePlanPage — the operator’s writes from the rail', () => {
     await render({ data: withStatus(ARTICLE, 'blocked') });
     await click(card(ARTICLE));
 
-    await click(button(rail(), 'Approve'));
     await type(rail(), '  Go ahead.  ');
     await click(button(rail(), 'Approve'));
 
@@ -1382,7 +1386,6 @@ describe('SpacePlanPage — the operator’s writes from the rail', () => {
     );
     await render({ data: withStatus(ARTICLE, 'blocked') });
     await click(card(ARTICLE));
-    await click(button(rail(), 'Approve'));
     const field = rail().querySelector('input')!;
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(
@@ -1418,12 +1421,11 @@ describe('SpacePlanPage — the operator’s writes from the rail', () => {
     );
     await render({ data: withStatus(ARTICLE, 'blocked') });
     await click(card(ARTICLE));
-    await click(button(rail(), 'Approve'));
     const failure = PlanNodeOpenSchema.safeParse({ expectedRevision: 4, why: '' });
     const parse = vi.spyOn(PlanNodeOpenSchema, 'safeParse').mockReturnValueOnce(failure);
     try {
       await click(button(rail(), 'Approve'));
-      expect(rail().querySelector('[role="alert"]')?.textContent).toContain('Reason:');
+      expect(rail().querySelector('[role="alert"]')?.textContent).toContain('Instructions:');
       expect(rail().querySelector('[role="alert"]')?.textContent).not.toContain('spend');
       expect(recorded.mutateAsync).not.toHaveBeenCalled();
     } finally {
@@ -1572,7 +1574,7 @@ describe('SpacePlanPage — approve, reopen and order (Plan 332 P2)', () => {
   it('offers Approve on a blocked step beside its close controls, and none on a decision', async () => {
     await render({ data: P2_PLAN });
     await click(card(BLOCKED));
-    expect(buttonTexts(rail())).toEqual(['Close', 'Approve', 'Mark done', 'Drop']);
+    expect(buttonTexts(rail())).toEqual(['Close', 'Approve', 'Revise', 'Mark done', 'Drop']);
 
     nav.search = `plan=${R322}`;
     await render({ data: PLAN });
@@ -1584,7 +1586,6 @@ describe('SpacePlanPage — approve, reopen and order (Plan 332 P2)', () => {
     await render({ data: P2_PLAN });
     await click(card(BLOCKED));
 
-    await click(button(rail(), 'Approve'));
     await type(openForm(), 'go ahead after Plan 330');
     await click(button(openForm(), 'Approve'));
 
@@ -1597,13 +1598,108 @@ describe('SpacePlanPage — approve, reopen and order (Plan 332 P2)', () => {
     const write = mutationFor('/open')!;
     expect(write.method).toBe('PATCH');
     expect(write.invalidate).toEqual([['space', SPACE_ID, 'plan']]);
-    expect(container.querySelector('[data-plan-open-form]')).toBe(null);
+    // The approve form stays open on a blocked step, emptied once its write lands.
+    expect(openForm().querySelector('textarea')?.value).toBe('');
+  });
+
+  it('shows the instructions field on a blocked step before any click (Plan 337 P4)', async () => {
+    await render({ data: P2_PLAN });
+    await click(card(BLOCKED));
+
+    const field = openForm().querySelector('textarea');
+    expect(field?.getAttribute('aria-label')).toBe('Instructions for the work (optional)');
+    expect(openForm().textContent).toContain('its brief opens with these words');
+    expect(buttonTexts(openForm())).toEqual(['Approve', 'Revise']);
+  });
+
+  it('sends the words back with Revise, the step left blocked, and asks for words first', async () => {
+    await render({ data: P2_PLAN });
+    await click(card(BLOCKED));
+    expect(button(openForm(), 'Revise').disabled).toBe(true);
+
+    await type(openForm(), '  Split it: the schema first.  ');
+    await click(button(openForm(), 'Revise'));
+
+    expect(recorded.sent).toEqual([
+      {
+        path: `/spaces/${SPACE_ID}/plan/nodes/${BLOCKED}/revise`,
+        body: { expectedRevision: 3, why: 'Split it: the schema first.' },
+      },
+    ]);
+    const write = recorded.mutations.find((m) => m.path({ nodeId: BLOCKED }).endsWith('/revise'))!;
+    expect(write.method).toBe('PATCH');
+    expect(write.invalidate).toEqual([['space', SPACE_ID, 'plan']]);
+  });
+
+  it('pins the step as its Revise left it, and says so when the Helmsman’s rewrite moves it', async () => {
+    const revised = fullNode(BLOCKED, 'P1 — the loop takes the next node', {
+      parentId: R331,
+      status: 'blocked',
+      revision: 4,
+    });
+    recorded.detailRefetch.mockImplementation(() => {
+      recorded.details[BLOCKED] = detail(revised);
+      return Promise.resolve({ data: { node: revised } });
+    });
+    await render({ data: P2_PLAN });
+    await click(card(BLOCKED));
+    await type(openForm(), 'Split it: the schema first.');
+    await click(button(openForm(), 'Revise'));
+
+    // The form's own write moved the step to 4: that is no move to report.
+    await render({ data: P2_PLAN });
+    expect(openForm().querySelector('[data-plan-open-moved]')).toBe(null);
+
+    // The Helmsman's rewrite moves it to 5 while the form holds no edit.
+    recorded.details[BLOCKED] = detail({ ...revised, revision: 5 });
+    await render({ data: P2_PLAN });
+    expect(openForm().querySelector('[data-plan-open-moved]')).not.toBe(null);
+
+    await click(button(openForm(), 'Approve'));
+    expect(recorded.sent.map((s) => s.body)).toEqual([
+      { expectedRevision: 3, why: 'Split it: the schema first.' },
+      { expectedRevision: 4 },
+    ]);
+  });
+
+  it('links the step to the space chat with its title and id, and lists the conversations that wrote it', async () => {
+    recorded.conversations[BLOCKED] = {
+      data: {
+        ...detail(fullNode(BLOCKED, 'P1 — the loop takes the next node')).data,
+        links: [
+          {
+            nodeId: BLOCKED,
+            kind: 'session',
+            ref: 'c0000000-0000-4000-8000-000000000337',
+            label: 'conversation',
+            createdAt: at(10, 23),
+          },
+        ],
+        linksTotal: 1,
+      },
+    };
+    await render({ data: P2_PLAN });
+    await click(card(BLOCKED));
+
+    const discuss = rail().querySelector(`[data-plan-rail-section="Discuss"] a`);
+    const href = discuss?.getAttribute('href') ?? '';
+    expect(href.startsWith('/s/work/chat?draft=')).toBe(true);
+    const draft = new URLSearchParams(href.slice(href.indexOf('?'))).get('draft') ?? '';
+    expect(draft).toContain('"P1 — the loop takes the next node"');
+    expect(draft).toContain(BLOCKED);
+    expect(recorded.linkQueries.map((q) => q.path)).toContainEqual(
+      `/spaces/${SPACE_ID}/plan/nodes/${BLOCKED}?linkKind=session&linkLabel=conversation&limit=5`,
+    );
+    expect(
+      [...rail().querySelectorAll('[data-plan-rail-section="Discuss"] li a')].map((a) =>
+        a.getAttribute('href'),
+      ),
+    ).toEqual(['/s/work/chat?session=c0000000-0000-4000-8000-000000000337']);
   });
 
   it('holds an open form to the revision it opened on when the live read moves past it', async () => {
     await render({ data: P2_PLAN });
     await click(card(BLOCKED));
-    await click(button(rail(), 'Approve'));
 
     recorded.details[BLOCKED] = detail(
       fullNode(BLOCKED, 'P1 — the loop takes the next node', {
@@ -1622,7 +1718,6 @@ describe('SpacePlanPage — approve, reopen and order (Plan 332 P2)', () => {
   it('refuses to send a reason past the note ceiling', async () => {
     await render({ data: P2_PLAN });
     await click(card(BLOCKED));
-    await click(button(rail(), 'Approve'));
     await type(openForm(), 'x'.repeat(64001));
 
     expect(button(openForm(), 'Approve').disabled).toBe(true);
@@ -2591,7 +2686,7 @@ describe('SpacePlanPage — the overview across plans (Plan 332 P4)', () => {
       'Blocked',
     ]);
     expect(rail().querySelector('[data-plan-rail-phase]')?.textContent).toBe('P3');
-    expect(buttonTexts(rail())).toEqual(['Close', 'Approve', 'Mark done', 'Drop']);
+    expect(buttonTexts(rail())).toEqual(['Close', 'Approve', 'Revise', 'Mark done', 'Drop']);
 
     await click(button(rail(), 'Close'));
     expect(nav.pushed.at(-1)).toBe('/s/work/plan');

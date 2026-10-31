@@ -12,6 +12,7 @@ const mockRunRecoveryPass = vi.fn();
 const mockStampDeadline = vi.fn();
 const mockDeriveLiveness = vi.fn();
 const mockListPending = vi.fn();
+const mockReadCursorVersion = vi.fn();
 
 vi.mock('@aflow/cybernetic-runtime', () => ({
   findStalledRunsAcrossSpaces: (...a: unknown[]) => mockFindStalled(...a),
@@ -19,6 +20,7 @@ vi.mock('@aflow/cybernetic-runtime', () => ({
   stampSchedulerDeadline: (...a: unknown[]) => mockStampDeadline(...a),
   deriveRunLiveness: (...a: unknown[]) => mockDeriveLiveness(...a),
   listCompletionPendingForRun: (...a: unknown[]) => mockListPending(...a),
+  readSchedulerCursorVersion: (...a: unknown[]) => mockReadCursorVersion(...a),
   DEFAULT_STALLED_AFTER_MS: 60_000,
 }));
 
@@ -53,6 +55,7 @@ beforeEach(() => {
   mockStampDeadline.mockResolvedValue(undefined);
   mockDispatch.mockResolvedValue(undefined);
   mockCompleteRun.mockResolvedValue(true);
+  mockReadCursorVersion.mockResolvedValue(7);
 });
 
 describe('reconcileOrphanedRunsForTenant', () => {
@@ -92,8 +95,64 @@ describe('reconcileOrphanedRunsForTenant', () => {
     const res = await reconcileOrphanedRunsForTenant(deps, TENANT);
 
     expect(mockCompleteRun).toHaveBeenCalledOnce();
-    expect(mockCompleteRun.mock.calls[0]![3]).toBe('failed');
+    expect(mockCompleteRun.mock.calls[0]![3]).toMatchObject({
+      status: 'failed',
+      failure: { reason: 'workflow_run_orphaned', detail: 'wedged' },
+    });
     expect(res).toMatchObject({ failed: 1, recovered: 0 });
+  });
+
+  it('a recovery that throws fails the run with what it threw on record', async () => {
+    mockFindStalled.mockResolvedValueOnce(['run-z']);
+    mockLoadRun.mockResolvedValueOnce(runningRun());
+    mockDeriveLiveness.mockReturnValue({ liveness: 'stalled', reason: 'stale' });
+    mockListPending.mockResolvedValueOnce([]);
+    mockDispatch.mockRejectedValueOnce(new Error('workflow not resolvable'));
+
+    await reconcileOrphanedRunsForTenant(deps, TENANT);
+
+    const ending = mockCompleteRun.mock.calls[0]![3] as {
+      status: string;
+      failure: { reason: string; message: string };
+    };
+    expect(ending.status).toBe('failed');
+    expect(ending.failure.reason).toBe('workflow_run_orphaned');
+    expect(ending.failure.message).toContain('workflow not resolvable');
+  });
+
+  // A child run completing resumes its parent through a recorded task outcome,
+  // and the same sweeper tick can reach the parent before the parent's
+  // dependents are claimed. The verdict this pass reaches is bound to the
+  // cursor version read before its first look, so that outcome voids it.
+  it('binds the orphan verdict to the cursor version read before the run was looked at', async () => {
+    mockFindStalled.mockResolvedValueOnce(['run-z']);
+    mockLoadRun.mockResolvedValueOnce(runningRun()).mockResolvedValueOnce(runningRun());
+    mockDeriveLiveness.mockReturnValue({ liveness: 'stalled', reason: 'no active tasks' });
+    mockListPending.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+
+    await reconcileOrphanedRunsForTenant(deps, TENANT);
+
+    expect(mockReadCursorVersion.mock.invocationCallOrder[0]!).toBeLessThan(
+      mockLoadRun.mock.invocationCallOrder[0]!,
+    );
+    expect(mockCompleteRun.mock.calls[0]![3]).toMatchObject({
+      status: 'failed',
+      expectedSchedulerCursorVersion: 7,
+    });
+  });
+
+  it('a run another path advanced during the pass is left running, not counted failed', async () => {
+    mockFindStalled.mockResolvedValueOnce(['run-z']);
+    mockLoadRun.mockResolvedValueOnce(runningRun()).mockResolvedValueOnce(runningRun());
+    mockDeriveLiveness.mockReturnValue({ liveness: 'stalled', reason: 'no active tasks' });
+    mockListPending.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+    // The terminal CAS lost on the cursor version: the parent's review outcome
+    // landed after this pass read the run.
+    mockCompleteRun.mockResolvedValueOnce(false);
+
+    const res = await reconcileOrphanedRunsForTenant(deps, TENANT);
+
+    expect(res).toMatchObject({ failed: 0, skipped: 1 });
   });
 
   it('dispatch pauses the run (human first task, no pending row) → held, not failed', async () => {

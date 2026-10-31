@@ -313,6 +313,36 @@ const ExpectedRevisionSchema = z
 /** How long the operator's reason for an approve or a reopen may be: one line of a note. */
 export const PLAN_NODE_OPEN_WHY_MAX_CHARS = PLAN_NODE_PROSE_MAX_CHARS;
 
+/** The head the engine gives the operator's instructions on an approve. */
+export const PLAN_NODE_APPROVED_HEAD = 'Approved: ';
+/** The head the engine gives the operator's note on a revise (Plan 337 P4). */
+export const PLAN_NODE_REVISE_HEAD = 'Revise: ';
+/** The head of the line a Helmsman writes once it has rewritten a node from a revise. */
+export const PLAN_NODE_REVISED_HEAD = 'Revised: ';
+/** The label on the `session` link an operator's conversation leaves on a node it wrote. */
+export const PLAN_NODE_CONVERSATION_LINK_LABEL = 'conversation';
+
+/**
+ * The operator's words as the engine writes them into a note: one line, so the
+ * attention block, the rail's **Now** and a brief each read all of it as the
+ * note's first line.
+ */
+export function planNodeOperatorLine(head: string, words: string): string {
+  return `${head}${words.replace(/\s*[\r\n]+\s*/g, ' ').trim()}`;
+}
+
+/**
+ * The operator's instructions a node carries: its note's first line, where the
+ * engine wrote it there on an approve or a revise. A brief opens with it.
+ */
+export function planNodeInstructions(note: string | undefined): string | undefined {
+  const first = note?.split('\n', 1)[0];
+  if (first === undefined) return undefined;
+  return first.startsWith(PLAN_NODE_APPROVED_HEAD) || first.startsWith(PLAN_NODE_REVISE_HEAD)
+    ? first
+    : undefined;
+}
+
 /**
  * The operator moves a `blocked`, `done` or `dropped` node to `active` (Plan
  * 332 D6): **Approve** on a blocked one, **Reopen** on a closed one. The engine
@@ -329,11 +359,31 @@ export const PlanNodeOpenSchema = z
       .max(PLAN_NODE_OPEN_WHY_MAX_CHARS)
       .optional()
       .describe(
-        'Why it is approved or reopened; the note gains it as `Approved: …` or `Reopened: …`.',
+        'On an approve, the operator’s instructions for the work: the note gains them as one `Approved: …` line, and the next brief opens with it. On a reopen, why; the note gains it as `Reopened: …`.',
       ),
   })
   .strict();
 export type PlanNodeOpen = z.infer<typeof PlanNodeOpenSchema>;
+
+/**
+ * The operator sends a `blocked` node back for revision (Plan 337 P4). It stays
+ * blocked. The engine writes `why` above the note as one `Revise: …` line, and
+ * the write moves the revision, so whatever asked about the node asks again.
+ */
+export const PlanNodeReviseSchema = z
+  .object({
+    expectedRevision: ExpectedRevisionSchema,
+    why: z
+      .string()
+      .trim()
+      .min(1)
+      .max(PLAN_NODE_OPEN_WHY_MAX_CHARS)
+      .describe(
+        'What to change in the proposal; the note gains it as `Revise: …`, and the Helmsman rewrites the node from it.',
+      ),
+  })
+  .strict();
+export type PlanNodeRevise = z.infer<typeof PlanNodeReviseSchema>;
 
 const PlaceAnchorSchema = z.string().uuid();
 

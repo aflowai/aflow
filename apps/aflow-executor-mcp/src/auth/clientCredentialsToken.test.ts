@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { encryptCredentialEnvelope } from '@aflow/database';
+import { privateNetworkPolicyFor } from '@aflow/network-safety';
 import {
   getClientCredentialsToken,
   type ClientCredentialsRedisLike,
@@ -436,5 +437,56 @@ describe('getClientCredentialsToken tenant policy guard', () => {
     const counter = { count: 0 };
     const result = await attempt(null, counter);
     expect(result.accessToken).toBe('tok-1');
+  });
+});
+
+// Plan 336 D3: the definition's private network policy reaches the token exchange.
+describe('getClientCredentialsToken under a private network policy', () => {
+  const listed = privateNetworkPolicyFor({
+    acknowledgment: { hosts: ['10.1.2.3'] },
+    edition: 'community-local',
+    deploymentHosts: [],
+  });
+
+  async function exchange(tokenEndpoint: string, privateNetwork?: typeof listed) {
+    const credentialStore = new Map([
+      ['id', await encryptCredentialEnvelope('client-abc')],
+      ['secret', await encryptCredentialEnvelope('secret-xyz')],
+    ]);
+    const counter = { count: 0 };
+    const result = getClientCredentialsToken({
+      tenantId: 'tenant-1',
+      spaceId: 'space-1',
+      bindingId: 'binding-1',
+      auth: { tokenEndpoint, clientIdCredentialKey: 'id', clientSecretCredentialKey: 'secret' },
+      credentialStore,
+      fetchImpl: makeFetch(
+        { [tokenEndpoint]: { status: 200, body: { access_token: 'tok-private' } } },
+        counter,
+      ),
+      ...(privateNetwork ? { privateNetwork } : {}),
+    });
+    return { result, counter };
+  }
+
+  it('exchanges with a listed private token endpoint', async () => {
+    const { result, counter } = await exchange('https://10.1.2.3/oauth/token', listed);
+    await expect(result).resolves.toMatchObject({ accessToken: 'tok-private' });
+    expect(counter.count).toBe(1);
+  });
+
+  it('refuses the same endpoint with no policy', async () => {
+    const { result, counter } = await exchange('https://10.1.2.3/oauth/token');
+    await expect(result).rejects.toMatchObject({
+      kind: 'private-ip',
+      rangeLabel: 'private-rfc1918',
+    });
+    expect(counter.count).toBe(0);
+  });
+
+  it('still requires https on a listed host', async () => {
+    const { result, counter } = await exchange('http://10.1.2.3/oauth/token', listed);
+    await expect(result).rejects.toMatchObject({ kind: 'invalid-protocol' });
+    expect(counter.count).toBe(0);
   });
 });

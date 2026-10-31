@@ -1,5 +1,9 @@
 import { decryptCredentialAsync } from '@aflow/database';
-import { validateCredentialedUrl } from '@aflow/network-safety';
+import {
+  DEFAULT_PRIVATE_NETWORK_POLICY,
+  validateCredentialedUrl,
+  type PrivateNetworkPolicy,
+} from '@aflow/network-safety';
 import { assertTenantPolicyPermitsTokenEndpoint } from '../handlers/tenantPolicyGuard.js';
 
 const CACHE_PREFIX = 'aflow:mcp:oauth2:cc:';
@@ -32,6 +36,11 @@ export interface ClientCredentialsParams {
    * catalog grant). Null/absent when the tenant policy is open.
    */
   tenantPermittedHosts?: readonly string[] | null;
+  /**
+   * The definition's private network policy (Plan 336 D3). The token endpoint
+   * reaches a private address only when its host is on it. Https stays required.
+   */
+  privateNetwork?: PrivateNetworkPolicy;
 }
 
 export interface ClientCredentialsResult {
@@ -66,7 +75,10 @@ export async function getClientCredentialsToken(
 
   // The endpoint is space-authored and the exchange POSTs the client secret
   // to it: validate before any secret is even resolved.
-  const validated = await validateCredentialedUrl(params.auth.tokenEndpoint);
+  const validated = await validateCredentialedUrl(
+    params.auth.tokenEndpoint,
+    params.privateNetwork ?? DEFAULT_PRIVATE_NETWORK_POLICY,
+  );
 
   const clientId = await resolveCredential(
     params.credentialStore,

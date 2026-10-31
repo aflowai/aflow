@@ -39,6 +39,26 @@ export async function stampSchedulerDeadline(
 }
 
 /**
+ * The run's `scheduler_cursor_version`, which every recorded task outcome
+ * bumps; null for a run that does not exist.
+ */
+export async function readSchedulerCursorVersion(
+  db: PostgresJsDatabase,
+  tenantId: string,
+  runId: string,
+): Promise<number | null> {
+  const tenantCtx = createTenantContext(tenantId as TenantId);
+  return withTenantSchema(db, tenantCtx, async (tx) => {
+    const rows = await tx
+      .select({ version: workflowRuns.schedulerCursorVersion })
+      .from(workflowRuns)
+      .where(eq(workflowRuns.runId, runId))
+      .limit(1);
+    return rows[0]?.version ?? null;
+  });
+}
+
+/**
  * Recovery pass: find task rows in 'scheduled' state that have been stranded
  * (no step execution picked them up) and delete them so they can be re-claimed.
  *
