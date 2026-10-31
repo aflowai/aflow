@@ -5,15 +5,24 @@
  * doing with each step (Plan 332 D4) — Needs you with its reason, In flight,
  * Up next in the walk's order with **Next for the loop** on the step the walk
  * takes — and a card per node carrying labels only; its text lives in the
- * rail. A card reads top down: its phase, its title, where it stands (why it
- * needs the operator, Next, runs in flight, its PR), then what it has been
- * through (review rounds, subtasks). Move up and Move down are quiet icons
+ * rail. A card reads top down: its phase, its title beside its orb (Plan 332
+ * P7), where it stands (why it needs the operator, Next, runs in flight, its
+ * PR), then what it has been through (review rounds, subtasks). Move up and Move down are quiet icons
  * that show on the card pointed at, focused or selected (Plan 332 P6). Done
  * folds by day from the plan's own counts, so a fold shows how many it holds
  * before its cards are read.
  */
 import { useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react';
-import { Badge, Button, Card, CardBody, Column, Row, Text } from '@aflow/design-system';
+import {
+  AnimatedHeight,
+  Badge,
+  Button,
+  Card,
+  CardBody,
+  Column,
+  Row,
+  Text,
+} from '@aflow/design-system';
 import type { PlanBoardColumn, PlanRootTally, PlanTreeNode } from '@aflow/schemas';
 import {
   NEEDS_YOU_REASON_LABEL,
@@ -35,9 +44,10 @@ import type { PlanNodeCloseAnswer } from './PlanNodeCloseControl.js';
 import {
   Disclosure,
   GroupLabel,
-  HeadingDot,
+  HeadingOrb,
   MetaSep,
   NextMarker,
+  PlanStepOrb,
   ProgressMeter,
   PullRequestChip,
   useMoveControls,
@@ -52,6 +62,8 @@ export type PlanNodePlaceRequest = { nodeId: string; expectedRevision: number } 
 export type PlanNodePlacer = (request: PlanNodePlaceRequest) => Promise<PlanNodeCloseAnswer>;
 
 const STRIP_WIDTH = '32px';
+/** The width in pixels of the selected card's ring, drawn outside the card. */
+const SELECTED_RING = 2;
 
 function SubtaskBar({ done, total }: { done: number; total: number }) {
   return (
@@ -91,7 +103,9 @@ function PlanCardView({
     cursor: 'pointer',
     ...(column === 'needs_you' ? { borderLeft: '3px solid var(--color-warning-default)' } : {}),
     ...(selected
-      ? { boxShadow: '0 0 0 2px var(--color-interactive-default), var(--shadow-md)' }
+      ? {
+          boxShadow: `0 0 0 ${String(SELECTED_RING)}px var(--color-interactive-default), var(--shadow-md)`,
+        }
       : {}),
   };
   const open = () => {
@@ -146,18 +160,27 @@ function PlanCardView({
               {phaseLabel(phase.title)}
             </Text>
           )}
-          <Text
-            size="sm"
-            weight="medium"
-            data-plan-card-title
+          <div
             style={{
-              ...(dropped ? { textDecoration: 'line-through' } : {}),
+              display: 'flex',
+              alignItems: 'flex-start',
+              gap: 'var(--space-1-5)',
               ...(move.controls !== null ? { paddingRight: 'var(--space-12)' } : {}),
             }}
-            color={dropped ? 'muted' : 'primary'}
           >
-            {node.title}
-          </Text>
+            <span style={{ display: 'inline-flex', paddingTop: 3 }}>
+              <PlanStepOrb column={column} runInFlight={node.activity === 'in_flight'} />
+            </span>
+            <Text
+              size="sm"
+              weight="medium"
+              data-plan-card-title
+              style={dropped ? { textDecoration: 'line-through' } : {}}
+              color={dropped ? 'muted' : 'primary'}
+            >
+              {node.title}
+            </Text>
+          </div>
           {(card.reason !== undefined ||
             next ||
             node.counts.inFlightRuns > 0 ||
@@ -207,18 +230,18 @@ function PlanCardView({
 }
 
 function ColumnHeader({
+  column,
   label,
-  color,
   count,
 }: {
+  column: PlanBoardColumn;
   label: string;
-  color: string;
   /** Undefined while what it counts is still being read. */
   count: number | undefined;
 }) {
   return (
     <Row gap="xs" align="center" data-plan-column-header={label}>
-      <HeadingDot color={color} />
+      <HeadingOrb column={column} />
       <GroupLabel>{label}</GroupLabel>
       <Text size="xs" variant="muted">
         {count === undefined ? '…' : String(count)}
@@ -308,7 +331,15 @@ export function PlanBoard({
           >
             {`${group.label} · ${group.shown === undefined ? '…' : String(group.shown)}`}
           </Disclosure>
-          {open && group.cards.map(renderCard)}
+          {/* AnimatedHeight clips its box, so the fold widens by the ring and pads its
+              cards by it: the selected card's ring then lies inside the clip. */}
+          <AnimatedHeight style={{ marginInline: -SELECTED_RING }}>
+            {open && (
+              <Column gap="sm" style={{ padding: SELECTED_RING }}>
+                {group.cards.map(renderCard)}
+              </Column>
+            )}
+          </AnimatedHeight>
         </Column>
       );
     });
@@ -340,7 +371,7 @@ export function PlanBoard({
             borderLeft: '1px solid var(--color-border-subtle)',
           }}
         >
-          <ColumnHeader label={column.label} color={column.color} count={count} />
+          <ColumnHeader column={column.id} label={column.label} count={count} />
         </button>
       );
     }
@@ -352,7 +383,7 @@ export function PlanBoard({
         style={{ minWidth: 0 }}
       >
         <Column gap="sm">
-          <ColumnHeader label={column.label} color={column.color} count={count} />
+          <ColumnHeader column={column.id} label={column.label} count={count} />
           <Column gap="sm">{column.id === 'done' ? doneBody() : renderCards(list)}</Column>
         </Column>
       </section>

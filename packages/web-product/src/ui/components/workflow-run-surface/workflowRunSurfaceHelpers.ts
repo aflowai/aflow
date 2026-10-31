@@ -1,4 +1,5 @@
 import type { TimelineItemStatus } from '@aflow/design-system';
+import type { PlanBoardColumn, PlanRootState } from '@aflow/schemas';
 import type {
   WorkflowRunSurfaceState,
   WorkflowSurfaceGraph,
@@ -208,6 +209,47 @@ export function orbForTaskStatus(
   }
 }
 
+/**
+ * A plan's state (Plan 332 D3) → orb. A closed plan and one with no steps
+ * have nothing moving and nothing asked, so both are inert.
+ */
+export function orbForPlanState(state: PlanRootState): OrbKind {
+  switch (state) {
+    case 'in_flight':
+      return 'running';
+    case 'needs_you':
+      return 'paused';
+    case 'queued':
+      return 'idle';
+    case 'finished':
+      return 'completed';
+    case 'closed':
+    case 'empty':
+      return 'inert';
+  }
+}
+
+/**
+ * A plan step → orb, by the board's column (`planBoardColumn`) and whether a
+ * run is on it now. A `waiting` step whose run has ended stands under In
+ * flight, but nothing moves it until the loop returns, so it reads idle. The
+ * board carries no ended run's outcome, so no step reads failed.
+ */
+export function orbForPlanStep(column: PlanBoardColumn, opts: { runInFlight: boolean }): OrbKind {
+  switch (column) {
+    case 'needs_you':
+      return 'paused';
+    case 'in_flight':
+      return opts.runInFlight ? 'running' : 'idle';
+    case 'up_next':
+      return 'idle';
+    case 'done':
+      return 'completed';
+    case 'dropped':
+      return 'inert';
+  }
+}
+
 /** Task-level status → human label shown in the `<TimelineItem time>` slot. */
 export function taskTimeLabel(
   task: WorkflowSurfaceTaskState,
@@ -223,7 +265,7 @@ export function taskTimeLabel(
     case 'paused':
       return 'Paused';
     case 'running': {
-      const elapsed = formatDuration(task.startedAt, nowMs);
+      const elapsed = formatElapsed(task.startedAt, nowMs);
       return elapsed ? `Running · ${elapsed}` : 'Running';
     }
     case 'succeeded': {
@@ -337,7 +379,8 @@ export function formatDurationFromTimestamps(
   return formatMs(Math.max(0, end - start));
 }
 
-function formatDuration(startedAt: string | undefined, endMs: number): string {
+/** Time since `startedAt`, as a running row says it (`42s`, `3m 05s`); empty without a start. */
+export function formatElapsed(startedAt: string | undefined, endMs: number): string {
   if (!startedAt) return '';
   const start = Date.parse(startedAt);
   if (Number.isNaN(start)) return '';

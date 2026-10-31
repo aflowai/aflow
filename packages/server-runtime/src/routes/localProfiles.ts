@@ -76,7 +76,7 @@ const REFUSAL_STATUS: Record<LocalProfileRefusal, 404 | 409> = {
 
 const OWNER_ONLY = { authz: { resource: 'tenant' as const, action: 'owner_admin' as const } };
 
-/** What both scopes share: the count of wrong PIN guesses. */
+/** What both scopes share: the count of wrong PIN guesses and the live PIN marks. */
 interface PinScope {
   pinAttempts: LocalProfilePinAttempts;
 }
@@ -106,7 +106,7 @@ export const localProfileRoutes: FastifyPluginAsync = async (fastify) => {
   // Two scopes, so the owner rule never reaches the picker. `authenticate`
   // refuses a browser with no session once a second profile exists, and that
   // browser is the one the picker must answer. Both scopes share the count of
-  // wrong PIN guesses, so a new PIN or a reset clears it.
+  // wrong PIN guesses and the live PIN marks, so a new PIN or a reset clears them.
   const pinAttempts = new LocalProfilePinAttempts();
   await fastify.register(localProfilePickerRoutes, { pinAttempts });
   await fastify.register(localProfileManagementRoutes, { pinAttempts });
@@ -233,10 +233,18 @@ const localProfilePickerRoutes: FastifyPluginAsync<PinScope> = (fastify, { pinAt
       let pinMark: string | undefined;
       if (gate.pinHash !== null) {
         const presentedMark = request.body?.pinMark;
-        const mark =
+        // A mark signed before the last PIN change or reset, or one dropped
+        // from the profile's live marks, counts with the browsers that have none.
+        const signed =
           presentedMark === undefined
             ? null
-            : readLocalProfilePinMark(presentedMark, userId, resolveInstanceSecret());
+            : readLocalProfilePinMark(
+                presentedMark,
+                userId,
+                gate.generation,
+                resolveInstanceSecret(),
+              );
+        const mark = signed !== null && pinAttempts.isLive(userId, signed) ? signed : null;
         const wait = pinAttempts.retryAfterSec(userId, mark);
         if (wait > 0) {
           void reply.header('retry-after', String(wait));
@@ -258,11 +266,15 @@ const localProfilePickerRoutes: FastifyPluginAsync<PinScope> = (fastify, { pinAt
           return refusePin(401, 'PROFILE_PIN_INCORRECT', 'That PIN is not right. Try again.');
         }
         pinAttempts.clear(userId, mark);
-        // A browser keeps the mark it has, so its count stays its own.
-        pinMark =
-          mark !== null && presentedMark !== undefined
-            ? presentedMark
-            : issueLocalProfilePinMark(userId, resolveInstanceSecret());
+        // A browser keeps the live mark it has, so its count stays its own.
+        if (mark !== null && presentedMark !== undefined) {
+          pinAttempts.keepMark(userId, mark);
+          pinMark = presentedMark;
+        } else {
+          const issued = issueLocalProfilePinMark(userId, gate.generation, resolveInstanceSecret());
+          pinAttempts.keepMark(userId, issued.nonce);
+          pinMark = issued.mark;
+        }
       }
 
       const session = issueLocalProfileSession(userId, resolveInstanceSecret(), {
@@ -474,6 +486,7 @@ const localProfileManagementRoutes: FastifyPluginAsync<PinScope> = (fastify, { p
         }),
       );
       if (removed === null) return reply;
+      pinAttempts.forget(removed.userId);
       // A cached count of several would keep refusing a browser with no
       // session after the install is back to one profile.
       fastify.dropLocalProfileCount();

@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   LOCAL_PROFILE_PIN_FREE_ATTEMPTS,
+  LOCAL_PROFILE_PIN_LIVE_MARKS,
   LocalProfilePinAttempts,
   hashLocalProfilePin,
   issueLocalProfilePinMark,
@@ -102,10 +103,45 @@ describe('the wrong-guess count', () => {
       attempts.fail('a', 'owner-browser');
       attempts.fail('b', null);
     }
+    attempts.keepMark('a', 'owner-browser');
     attempts.forget('a');
     expect(attempts.retryAfterSec('a', null)).toBe(0);
     expect(attempts.retryAfterSec('a', 'owner-browser')).toBe(0);
+    expect(attempts.isLive('a', 'owner-browser')).toBe(false);
     expect(attempts.retryAfterSec('b', null)).toBeGreaterThan(0);
+  });
+
+  it('keeps a bounded number of live marks, dropping the least recently used', () => {
+    const attempts = new LocalProfilePinAttempts(clock().now);
+    for (let i = 0; i < LOCAL_PROFILE_PIN_LIVE_MARKS; i += 1) attempts.keepMark('a', `m${i}`);
+    for (let i = 0; i < 10; i += 1) attempts.fail('a', 'm1');
+    // m0 used again, so m1 is now the least recently used.
+    attempts.keepMark('a', 'm0');
+    attempts.keepMark('a', 'newest');
+    expect(attempts.isLive('a', 'm0')).toBe(true);
+    expect(attempts.isLive('a', 'newest')).toBe(true);
+    expect(attempts.isLive('a', 'm1')).toBe(false);
+    expect(attempts.retryAfterSec('a', 'm1')).toBe(0);
+    expect(attempts.isLive('b', 'm0')).toBe(false);
+  });
+
+  it('drops a count once it has outlived its wait, and only then', () => {
+    const { now, advance } = clock();
+    const attempts = new LocalProfilePinAttempts(now);
+    for (let i = 0; i < LOCAL_PROFILE_PIN_FREE_ATTEMPTS + 1; i += 1) attempts.fail('a', 'gone');
+    for (let i = 0; i < LOCAL_PROFILE_PIN_FREE_ATTEMPTS; i += 1) attempts.fail('a', 'kept');
+    // Past the wait but not past the count's lifetime, the count still stands.
+    advance(30_000 + 60 * 60_000);
+    attempts.fail('a', 'kept');
+    expect(attempts.retryAfterSec('a', 'kept')).toBe(30);
+    advance(15 * 60_000);
+    attempts.fail('b', null);
+    // 'gone' was pruned, so its next wrong guess is a free one again.
+    attempts.fail('a', 'gone');
+    expect(attempts.retryAfterSec('a', 'gone')).toBe(0);
+    // 'kept' last waited until 30 seconds after its fifth guess, too recent to drop.
+    attempts.fail('a', 'kept');
+    expect(attempts.retryAfterSec('a', 'kept')).toBe(60);
   });
 });
 
@@ -115,28 +151,38 @@ describe('the PIN mark', () => {
   const OTHER = '00000000-0000-4000-8000-0000000ed1c1';
 
   it('reads back as its own nonce, and each mark is new', () => {
-    const first = issueLocalProfilePinMark(USER, SECRET);
-    const second = issueLocalProfilePinMark(USER, SECRET);
-    expect(first).not.toBe(second);
-    const nonce = readLocalProfilePinMark(first, USER, SECRET);
-    expect(nonce).toMatch(/^[A-Za-z0-9_-]+$/);
-    expect(readLocalProfilePinMark(second, USER, SECRET)).not.toBe(nonce);
+    const first = issueLocalProfilePinMark(USER, 3, SECRET);
+    const second = issueLocalProfilePinMark(USER, 3, SECRET);
+    expect(first.mark).not.toBe(second.mark);
+    expect(first.nonce).toMatch(/^[A-Za-z0-9_-]+$/);
+    expect(readLocalProfilePinMark(first.mark, USER, 3, SECRET)).toBe(first.nonce);
+    expect(readLocalProfilePinMark(second.mark, USER, 3, SECRET)).toBe(second.nonce);
+    expect(second.nonce).not.toBe(first.nonce);
+  });
+
+  it('reads as nothing once the PIN has changed or been reset', () => {
+    const { mark } = issueLocalProfilePinMark(USER, 3, SECRET);
+    expect(readLocalProfilePinMark(mark, USER, 4, SECRET)).toBeNull();
+    expect(readLocalProfilePinMark(mark, USER, 2, SECRET)).toBeNull();
+    // Rewriting the generation breaks the signature.
+    expect(readLocalProfilePinMark(mark.replace('.3.', '.4.'), USER, 4, SECRET)).toBeNull();
   });
 
   it('reads as nothing for another profile, another secret or a made-up value', () => {
-    const mark = issueLocalProfilePinMark(USER, SECRET);
-    const [version, user, , mac] = mark.split('.');
+    const { mark } = issueLocalProfilePinMark(USER, 0, SECRET);
+    const [version, user, generation, , mac] = mark.split('.');
     for (const value of [
       '',
       'made-up',
-      `${version}.${user}.forged.${mac}`,
+      `${version}.${user}.${generation}.forged.${mac}`,
+      `${version}.${user}.00.forged.${mac}`,
       `${mark}.extra`,
-      mark.replace('m1.', 'm2.'),
+      mark.replace('m2.', 'm1.'),
     ]) {
-      expect(readLocalProfilePinMark(value, USER, SECRET)).toBeNull();
+      expect(readLocalProfilePinMark(value, USER, 0, SECRET)).toBeNull();
     }
-    expect(readLocalProfilePinMark(mark, OTHER, SECRET)).toBeNull();
-    expect(readLocalProfilePinMark(mark, USER, 't'.repeat(48))).toBeNull();
-    expect(readLocalProfilePinMark(mark, USER, '')).toBeNull();
+    expect(readLocalProfilePinMark(mark, OTHER, 0, SECRET)).toBeNull();
+    expect(readLocalProfilePinMark(mark, USER, 0, 't'.repeat(48))).toBeNull();
+    expect(readLocalProfilePinMark(mark, USER, 0, '')).toBeNull();
   });
 });

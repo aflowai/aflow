@@ -70,10 +70,20 @@ export async function verifyLocalProfilePin(pin: string, stored: string): Promis
 export const LOCAL_PROFILE_PIN_FREE_ATTEMPTS = 4;
 const FIRST_WAIT_MS = 30_000;
 const LONGEST_WAIT_MS = 15 * 60_000;
+/**
+ * How long a count outlives its wait with no further wrong guess. Dropping it
+ * frees at most the free guesses and the one that started the wait. Waiting
+ * this long for them costs as much per guess as the longest wait does.
+ */
+const COUNT_LIFETIME_MS = (LOCAL_PROFILE_PIN_FREE_ATTEMPTS + 1) * LONGEST_WAIT_MS;
 
-const MARK_VERSION = 'm1';
+/** PIN marks a profile keeps live at once. One more drops the least recently used. */
+export const LOCAL_PROFILE_PIN_LIVE_MARKS = 8;
+
+const MARK_VERSION = 'm2';
 const MARK_NONCE_BYTES = 16;
 const BASE64URL = /^[A-Za-z0-9_-]+$/;
+const COUNTER = /^(0|[1-9][0-9]{0,15})$/;
 
 function markMac(payload: string, instanceSecret: string): Buffer {
   const key = createHmac('sha256', instanceSecret).update('aflow-local-profile-pin-mark').digest();
@@ -81,30 +91,46 @@ function markMac(payload: string, instanceSecret: string): Buffer {
 }
 
 /**
- * A browser's PIN mark for one profile: `m1.<user id>.<nonce>.<MAC>`.
+ * A browser's PIN mark for one profile: `m2.<user id>.<generation>.<nonce>.<MAC>`.
  *
  * The API issues one only with a right PIN, so a browser that never knew the
  * PIN holds none and cannot make one up. The mark grants nothing. It only
- * names the count its browser's wrong guesses go to.
+ * names the count its browser's wrong guesses go to. `generation` is the
+ * profile's session generation, which every PIN change and reset bumps.
  */
-export function issueLocalProfilePinMark(userId: string, instanceSecret: string): string {
+export function issueLocalProfilePinMark(
+  userId: string,
+  generation: number,
+  instanceSecret: string,
+): { mark: string; nonce: string } {
   if (instanceSecret === '') throw new Error('A PIN mark needs the instance secret.');
-  const payload = `${MARK_VERSION}.${userId}.${randomBytes(MARK_NONCE_BYTES).toString('base64url')}`;
-  return `${payload}.${markMac(payload, instanceSecret).toString('base64url')}`;
+  const nonce = randomBytes(MARK_NONCE_BYTES).toString('base64url');
+  const payload = `${MARK_VERSION}.${userId}.${String(generation)}.${nonce}`;
+  return { mark: `${payload}.${markMac(payload, instanceSecret).toString('base64url')}`, nonce };
 }
 
-/** The nonce of a mark this instance issued for `userId`, or null for any other value. */
+/**
+ * The nonce of a mark this instance issued for `userId` at `generation`, or
+ * null for any other value. A mark issued before a PIN change or a reset
+ * therefore reads as none (Plan 335 §14).
+ */
 export function readLocalProfilePinMark(
   value: string,
   userId: string,
+  generation: number,
   instanceSecret: string,
 ): string | null {
   if (instanceSecret === '') return null;
-  const [version, markedUser, nonce, mac, ...rest] = value.split('.');
+  const [version, markedUser, markedGeneration, nonce, mac, ...rest] = value.split('.');
   if (rest.length > 0 || version !== MARK_VERSION || markedUser !== userId) return null;
+  if (markedGeneration === undefined || !COUNTER.test(markedGeneration)) return null;
+  if (Number(markedGeneration) !== generation) return null;
   if (nonce === undefined || mac === undefined || !BASE64URL.test(nonce)) return null;
   const presented = Buffer.from(mac, 'base64url');
-  const expected = markMac(`${MARK_VERSION}.${userId}.${nonce}`, instanceSecret);
+  const expected = markMac(
+    `${MARK_VERSION}.${userId}.${markedGeneration}.${nonce}`,
+    instanceSecret,
+  );
   if (presented.length !== expected.length || !timingSafeEqual(presented, expected)) return null;
   return nonce;
 }
@@ -117,27 +143,34 @@ interface PinFailure {
 /**
  * Wrong PIN guesses per profile and browser, kept in this process.
  *
- * Each profile has one count for browsers with no mark, and one for each
+ * Each profile has one count for browsers with no mark, and one for each live
  * mark a right PIN issued. A browser that never knew the PIN therefore makes
  * only the unmarked count wait, and a browser that has opened the profile
  * keeps its own (Plan 335 §14). Someone with the marked browser itself still
  * shares that browser's count, because nothing tells them from its owner.
  *
+ * A profile keeps at most `LOCAL_PROFILE_PIN_LIVE_MARKS` marks live. A signed
+ * mark that is not live counts with the browsers that have none, so knowing
+ * the PIN buys at most that many counts of free guesses.
+ *
  * The first four wrong guesses on a count cost nothing. Each one after them
  * makes that count wait before the next guess, 30 seconds at first and
- * doubling to 15 minutes. A right PIN clears the count it was sent on. A new
- * PIN and a reset clear every count of the profile. A restart clears them
- * too, which is acceptable because restarting the API needs the operator's
- * machine, where the PIN guards nothing (D3).
+ * doubling to 15 minutes. A right PIN clears the count it was sent on. A count
+ * goes once it has outlived its wait by `COUNT_LIFETIME_MS`. A new PIN and a
+ * reset clear every count and every live mark of the profile. A restart
+ * clears them too, which is acceptable because restarting the API needs the
+ * operator's machine, where the PIN guards nothing (D3).
  */
 export class LocalProfilePinAttempts {
   private readonly failures = new Map<string, Map<string, PinFailure>>();
+  /** Live mark nonces per profile, least recently used first. */
+  private readonly marks = new Map<string, string[]>();
 
   constructor(private readonly now: () => number = Date.now) {}
 
   /**
    * Seconds until the count may be tried again, or 0 when it may be tried now.
-   * `mark` is the nonce of the browser's mark, or null for a browser with none.
+   * `mark` is the nonce of the browser's live mark, or null for a browser with none.
    */
   retryAfterSec(userId: string, mark: string | null): number {
     const entry = this.failures.get(userId)?.get(mark ?? '');
@@ -147,6 +180,7 @@ export class LocalProfilePinAttempts {
   }
 
   fail(userId: string, mark: string | null): void {
+    this.prune();
     const counts = this.failures.get(userId) ?? new Map<string, PinFailure>();
     const count = (counts.get(mark ?? '')?.count ?? 0) + 1;
     const over = count - LOCAL_PROFILE_PIN_FREE_ATTEMPTS;
@@ -157,13 +191,47 @@ export class LocalProfilePinAttempts {
 
   /** Clears the one count a right PIN was sent on. */
   clear(userId: string, mark: string | null): void {
+    this.dropCount(userId, mark ?? '');
+  }
+
+  /** Whether `nonce` names one of the profile's live marks. */
+  isLive(userId: string, nonce: string): boolean {
+    return this.marks.get(userId)?.includes(nonce) ?? false;
+  }
+
+  /**
+   * Makes `nonce` the profile's most recently used live mark. Past the bound,
+   * the least recently used mark stops being live and its count goes with it.
+   */
+  keepMark(userId: string, nonce: string): void {
+    const live = (this.marks.get(userId) ?? []).filter((kept) => kept !== nonce);
+    live.push(nonce);
+    while (live.length > LOCAL_PROFILE_PIN_LIVE_MARKS) {
+      const dropped = live.shift();
+      if (dropped !== undefined) this.dropCount(userId, dropped);
+    }
+    this.marks.set(userId, live);
+  }
+
+  /** Clears every count and live mark of the profile, for a new PIN, a reset or a removal. */
+  forget(userId: string): void {
+    this.failures.delete(userId);
+    this.marks.delete(userId);
+  }
+
+  private dropCount(userId: string, key: string): void {
     const counts = this.failures.get(userId);
-    counts?.delete(mark ?? '');
+    counts?.delete(key);
     if (counts?.size === 0) this.failures.delete(userId);
   }
 
-  /** Clears every count of the profile, for a new PIN or a reset. */
-  forget(userId: string): void {
-    this.failures.delete(userId);
+  private prune(): void {
+    const cutoff = this.now() - COUNT_LIFETIME_MS;
+    for (const [userId, counts] of this.failures) {
+      for (const [key, entry] of counts) {
+        if (entry.waitUntil <= cutoff) counts.delete(key);
+      }
+      if (counts.size === 0) this.failures.delete(userId);
+    }
   }
 }

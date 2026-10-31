@@ -32,7 +32,6 @@ import {
   useMediaQuery,
 } from '@aflow/design-system';
 import type {
-  PlanBoardColumn,
   PlanBoardOutput,
   PlanNodeListTruncation,
   PlanNodeUpdateOutput,
@@ -49,7 +48,12 @@ import type {
 } from '../components/plan/PlanNodeOpenControl.js';
 import { PlanOverview } from '../components/plan/PlanOverview.js';
 import { PlanRail, PlanRailFromDetail } from '../components/plan/PlanRail.js';
-import { HeadingDot, ProgressMeter } from '../components/plan/PlanParts.js';
+import {
+  HeadingOrb,
+  PLAN_ORB_SIZE,
+  PlanStateOrb,
+  ProgressMeter,
+} from '../components/plan/PlanParts.js';
 import type {
   PlanNodeCloseAnswer,
   PlanNodeCloseRequest,
@@ -66,7 +70,6 @@ import {
   planLaneRailNode,
   planPhases,
   planViewQuery,
-  PLAN_BOARD_COLUMNS,
   readerTimeZone,
   showsPhaseFilter,
   startOfDay,
@@ -96,10 +99,6 @@ function TruncationLine({ truncated }: { truncated: PlanNodeListTruncation | und
     </Text>
   );
 }
-
-const COLUMN_COLOR = new Map<PlanBoardColumn, string>(
-  PLAN_BOARD_COLUMNS.map((column) => [column.id, column.color]),
-);
 
 function Segmented<T extends string>({
   label,
@@ -485,6 +484,7 @@ export function SpacePlanPage(): React.ReactNode {
               {root.title}
             </Text>
             <Row gap="sm" align="center" wrap data-plan-tally={root.nodeId}>
+              <PlanStateOrb state={tally.state} size={PLAN_ORB_SIZE.header} />
               <Badge variant={PLAN_STATE_BADGE[tally.state]}>{planLine.state}</Badge>
               <Row gap="xs" align="center">
                 <ProgressMeter done={tally.done + tally.dropped} total={tally.steps} />
@@ -494,7 +494,7 @@ export function SpacePlanPage(): React.ReactNode {
               </Row>
               {planLine.counts.map(({ column, label }) => (
                 <Row key={column} gap="xs" align="center" data-plan-tally-count={column}>
-                  <HeadingDot color={COLUMN_COLOR.get(column) ?? 'var(--color-border-emphasis)'} />
+                  <HeadingOrb column={column} />
                   <Text size="sm" variant="muted">
                     {label}
                   </Text>

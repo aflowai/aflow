@@ -481,6 +481,30 @@ describeDb('local profile management (real DB)', () => {
         'PROFILE_PIN_REQUIRED',
       );
 
+      // Someone learns the PIN and keeps the mark it answers. Bea changes the
+      // PIN, which ends that mark with the generation it was signed at.
+      const opened = await call('POST', `/local-profiles/${bea}/session`, BARE_SECRET, {
+        pin: '864200',
+      });
+      expect(opened.status).toBe(200);
+      const oldMark = opened.body['pinMark'] as string;
+      expect(
+        (await call('PUT', `/local-profiles/${bea}/pin`, BARE_SECRET, { pin: '975310' })).status,
+      ).toBe(200);
+      for (let i = 0; i < 5; i += 1) {
+        const wrong = await call('POST', `/local-profiles/${bea}/session`, BARE_SECRET, {
+          pin: '000000',
+          pinMark: oldMark,
+        });
+        expect(wrong.body['code']).toBe('PROFILE_PIN_INCORRECT');
+      }
+      // The old mark's guesses went to the count every browser without a live mark shares.
+      const shared = await call('POST', `/local-profiles/${bea}/session`, BARE_SECRET, {
+        pin: '975310',
+      });
+      expect(shared.status).toBe(429);
+      expect(shared.body['code']).toBe('PROFILE_PIN_THROTTLED');
+
       // Bea forgets the PIN. The owner resets it, and Bea starts as P3 did.
       expect((await call('DELETE', `/local-profiles/${bea}/pin`, BARE_SECRET)).status).toBe(200);
       const issued = await call('POST', `/local-profiles/${bea}/session`, BARE_SECRET);

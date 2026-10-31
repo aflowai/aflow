@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { carrierToken } from './carrier.js';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { and, asc, desc, eq, gt, inArray, isNull, lt, or, sql, type SQL } from 'drizzle-orm';
@@ -11,7 +12,7 @@ import {
   PLAN_TREE_DEPTH_LIMIT,
   PLAN_TREE_WALK_NODE_LIMIT,
   planDependencyMet,
-  planNodeCardInOrder,
+  readStoredPlanNodeCard,
   type CoachLearning,
   type PlanNode,
   type PlanNodeCard,
@@ -38,6 +39,7 @@ import {
 } from '@aflow/database';
 import type { PlanNodeDependencyRow, PlanNodeLinkRow, PlanNodeRow } from '@aflow/database';
 import { coachLearningToRow, rowToCoachLearning } from '../coachLearningsStore.js';
+import { getCyberneticLogger } from '../logger.js';
 import { checkDependency, type DependencyCheck, type DependencyReads } from './dependencies.js';
 import {
   overviewIn,
@@ -419,7 +421,34 @@ async function retryingDeadlocks<T>(write: () => Promise<T>): Promise<T> {
   }
 }
 
+/**
+ * A refused card stays stored until the next card replaces it, and every
+ * board, list and get reads it again. The first read of a card warns, and each
+ * later read of the same card logs at debug. The set is bounded, so a process
+ * that has met many refused cards may warn once more for one.
+ */
+const REFUSED_CARDS_WARNED_MAX = 10_000;
+const refusedCardsWarned = new Set<string>();
+
+function storedCard(row: PlanNodeRow): PlanNodeCard | undefined {
+  if (row.card == null) return undefined;
+  const read = readStoredPlanNodeCard(row.card);
+  if ('card' in read) return read.card;
+  const key = `${row.id}:${createHash('sha256').update(JSON.stringify(row.card)).digest('hex')}`;
+  const meta = { nodeId: row.id, spaceId: row.spaceId, refusal: read.refusal };
+  const message = 'plan: stored card refused by the card schema, read as no card';
+  if (refusedCardsWarned.has(key)) {
+    getCyberneticLogger().debug(message, meta);
+    return undefined;
+  }
+  if (refusedCardsWarned.size >= REFUSED_CARDS_WARNED_MAX) refusedCardsWarned.clear();
+  refusedCardsWarned.add(key);
+  getCyberneticLogger().warn(message, meta);
+  return undefined;
+}
+
 export function rowToPlanNode(row: PlanNodeRow): PlanNode {
+  const card = storedCard(row);
   return {
     ...(row.spendCents != null ? { spendCents: row.spendCents } : {}),
     nodeId: row.id,
@@ -432,7 +461,7 @@ export function rowToPlanNode(row: PlanNodeRow): PlanNode {
     status: row.status as PlanNodeStatus,
     ...(row.outcome != null ? { outcome: row.outcome } : {}),
     ...(row.note != null ? { note: row.note } : {}),
-    ...(row.card != null ? { card: planNodeCardInOrder(row.card) } : {}),
+    ...(card !== undefined ? { card } : {}),
     revision: row.revision,
     position: row.position,
     ...(row.createdBy != null ? { createdBy: row.createdBy } : {}),

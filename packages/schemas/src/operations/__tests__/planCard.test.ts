@@ -17,8 +17,10 @@ import {
   PlanNodeGetOutputSchema,
   PlanNodeUpdateInputSchema,
   PlanStreamBriefNodeSchema,
+  readStoredPlanNodeCard,
   type PlanNodeCard,
 } from '../../index.js';
+import { PlanOperationRegistrations } from '../plan/registrations.js';
 
 const NODE_ID = '7b0c4b52-58a4-4c39-9a51-0d3f3c0b8a11';
 
@@ -202,8 +204,25 @@ describe('card on the node record and its writes', () => {
 
   it('returns a card in the schema’s section order, whatever order it was stored in', () => {
     const stored = Object.fromEntries(Object.entries(PLAN_337_CARD).reverse());
-    expect(Object.keys(planNodeCardInOrder(stored))).toEqual(
+    const read = readStoredPlanNodeCard(stored);
+    expect('card' in read && Object.keys(read.card)).toEqual(
       Object.keys(PlanNodeCardSchema.innerType().shape),
+    );
+    expect(Object.keys(planNodeCardInOrder(stored as PlanNodeCard))).toEqual(
+      Object.keys(PlanNodeCardSchema.innerType().shape),
+    );
+  });
+
+  it('reads a stored card the schema now refuses as no card, with the refusal', () => {
+    const { questions: _questions, ...older } = PLAN_337_CARD;
+    const read = readStoredPlanNodeCard({ ...older, doneWhen: 'The board shows it.' });
+    expect(read).not.toHaveProperty('card');
+    const issues = JSON.parse('refusal' in read ? read.refusal : '[]') as unknown[];
+    expect(issues).toContainEqual(
+      expect.objectContaining({ code: 'invalid_type', path: ['questions'] }),
+    );
+    expect(issues).toContainEqual(
+      expect.objectContaining({ code: 'unrecognized_keys', keys: ['doneWhen'] }),
     );
   });
 
@@ -225,6 +244,28 @@ describe('card on the node record and its writes', () => {
       }
       expect(declared).not.toContain(String(PLAN_NODE_CARD_ITEM_MAX_CHARS));
     }
+  });
+
+  it('teaches the card rules in the declaration every turn carries, where the prompt no longer does', () => {
+    const spec = buildCoreToolSpec('plan.node.create');
+    const properties = (
+      spec?.inputSchema as { properties: Record<string, { description?: string }> }
+    ).properties;
+    const declared = properties['card']?.description ?? '';
+    for (const rule of [
+      'a node that asks the operator for a decision',
+      'One or two short sentences an item',
+      'Give every question the answer you recommend',
+      'A plan document you commission opens with this same card',
+      'Link the document to its node at the merge sha',
+    ]) {
+      expect(declared).toContain(rule);
+    }
+
+    const pitfalls = (verb: string) =>
+      PlanOperationRegistrations.find((op) => op.verb === verb)?.usage?.pitfalls?.join('\n') ?? '';
+    expect(pitfalls('create')).toContain('A plan document is commissioned with the card');
+    expect(pitfalls('link')).toContain('at the merge sha');
   });
 });
 

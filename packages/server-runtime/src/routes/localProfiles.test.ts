@@ -43,7 +43,7 @@ vi.mock('../plugins/localProfiles.js', async (importOriginal) => {
 const { localProfileRoutes } = await import('./localProfiles.js');
 const { LocalProfileError } = await import('../services/localProfiles.js');
 const { readLocalProfileSession } = await import('../plugins/localProfiles.js');
-const { hashLocalProfilePin, readLocalProfilePinMark } =
+const { LOCAL_PROFILE_PIN_LIVE_MARKS, hashLocalProfilePin, readLocalProfilePinMark } =
   await import('../services/localProfilePin.js');
 
 const OWNER = '00000000-0000-4000-8000-0000000ed1c1';
@@ -475,7 +475,7 @@ describe('a profile PIN', () => {
     sessions.readLocalProfileSessionGate.mockResolvedValue({ generation: 2, pinHash });
     const first = (await choose(app, PIN)).json<{ pinMark?: string }>().pinMark;
     expect(first).toBeDefined();
-    expect(readLocalProfilePinMark(first ?? '', SECOND, SECRET)).not.toBeNull();
+    expect(readLocalProfilePinMark(first ?? '', SECOND, 2, SECRET)).not.toBeNull();
     expect((await choose(app, PIN, first)).json<{ pinMark?: string }>().pinMark).toBe(first);
     const replaced = (await choose(app, PIN, 'made-up')).json<{ pinMark?: string }>().pinMark;
     expect(replaced).not.toBe('made-up');
@@ -494,7 +494,7 @@ describe('a profile PIN', () => {
     for (let i = 0; i < 5; i += 1) expect((await choose(app, '0000')).statusCode).toBe(401);
     expect((await choose(app, PIN)).statusCode).toBe(429);
     // A made-up mark counts with the browsers that have none.
-    expect((await choose(app, PIN, 'm1.forged')).statusCode).toBe(429);
+    expect((await choose(app, PIN, 'm2.forged')).statusCode).toBe(429);
     expect((await choose(app, PIN, mark)).statusCode).toBe(200);
 
     // Wrong PINs sent with the mark make only the marked browser wait.
@@ -502,6 +502,73 @@ describe('a profile PIN', () => {
     const waiting = await choose(app, PIN, mark);
     expect(waiting.statusCode).toBe(429);
     expect(waiting.headers['retry-after']).toBe('30');
+    await app.close();
+  });
+
+  it('ends every mark when the PIN changes, so the old PIN buys no free guesses', async () => {
+    const { app } = await build('community-local', 'owner');
+    service.readLocalProfile.mockResolvedValue(locked);
+    sessions.readLocalProfileSessionGate.mockResolvedValue({ generation: 2, pinHash });
+    // Someone who knows the old PIN collects marks before the change.
+    const marks: string[] = [];
+    for (let i = 0; i < 3; i += 1) {
+      marks.push((await choose(app, PIN)).json<{ pinMark: string }>().pinMark);
+    }
+
+    const NEW_PIN = '864200';
+    const newHash = await hashLocalProfilePin(NEW_PIN);
+    service.setLocalProfilePin.mockResolvedValue(locked);
+    const changed = await app.inject({
+      method: 'PUT',
+      url: `/${SECOND}/pin`,
+      payload: { pin: NEW_PIN },
+    });
+    expect(changed.statusCode).toBe(200);
+    // The change bumped the generation in the transaction that wrote the hash.
+    sessions.readLocalProfileSessionGate.mockResolvedValue({ generation: 3, pinHash: newHash });
+
+    // Every old mark counts with the browsers that have none: one shared wait.
+    for (let i = 0; i < 5; i += 1) {
+      const mark = marks[i % marks.length];
+      expect((await choose(app, '0000', mark)).statusCode).toBe(401);
+    }
+    for (const mark of marks) {
+      const res = await choose(app, '1111', mark);
+      expect(res.statusCode).toBe(429);
+      expect(res.headers['retry-after']).toBe('30');
+    }
+    await app.close();
+  });
+
+  it('ends every mark on a reset, even once the same PIN is set again', async () => {
+    const { app } = await build('community-local', 'owner');
+    service.readLocalProfile.mockResolvedValue(locked);
+    sessions.readLocalProfileSessionGate.mockResolvedValue({ generation: 2, pinHash });
+    const mark = (await choose(app, PIN)).json<{ pinMark: string }>().pinMark;
+
+    service.resetLocalProfilePin.mockResolvedValue(profile(SECOND, 'member'));
+    expect((await app.inject({ method: 'DELETE', url: `/${SECOND}/pin` })).statusCode).toBe(200);
+    service.setLocalProfilePin.mockResolvedValue(locked);
+    const set = await app.inject({ method: 'PUT', url: `/${SECOND}/pin`, payload: { pin: PIN } });
+    expect(set.statusCode).toBe(200);
+    sessions.readLocalProfileSessionGate.mockResolvedValue({ generation: 4, pinHash });
+
+    for (let i = 0; i < 5; i += 1) expect((await choose(app, '0000')).statusCode).toBe(401);
+    expect((await choose(app, PIN, mark)).statusCode).toBe(429);
+    await app.close();
+  });
+
+  it('keeps at most a bounded number of marks live per profile', async () => {
+    const { app } = await build('community-local', 'member', { sessionless: true });
+    service.readLocalProfile.mockResolvedValue(locked);
+    sessions.readLocalProfileSessionGate.mockResolvedValue({ generation: 2, pinHash });
+    const oldest = (await choose(app, PIN)).json<{ pinMark: string }>().pinMark;
+    for (let i = 0; i < LOCAL_PROFILE_PIN_LIVE_MARKS; i += 1) {
+      expect((await choose(app, PIN)).statusCode).toBe(200);
+    }
+    // The oldest mark has dropped out, so it counts with the browsers that have none.
+    for (let i = 0; i < 5; i += 1) expect((await choose(app, '0000')).statusCode).toBe(401);
+    expect((await choose(app, PIN, oldest)).statusCode).toBe(429);
     await app.close();
   });
 
