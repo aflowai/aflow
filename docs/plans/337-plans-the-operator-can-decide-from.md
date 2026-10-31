@@ -202,7 +202,7 @@ Each case fails if the change is wrong.
 - **One action.** **Approve** with no answers sends one open write. Its `why` lists each question with its recommended answer.
 - **Answers recorded.** **Approve** with an answer to the second question writes a note whose first line is `Approved:`. The note holds that answer and the recommended answer to every other question. **Decide** prefills each question with its recommended answer.
 - **Read the plan.** A node with a `document` link shows **Read the plan**, which opens the newest link's ref.
-- **Writer rule.** A resident write that changes the card of a blocked proposal is refused, once Plan 331 P2 lands.
+- **Writer rule.** A resident rewrites the goal, criteria and card of a proposal only to answer a Revise. The code on main refuses any other resident write that changes them.
 
 ## 6. Phases — proposed, built only after this document merges
 
