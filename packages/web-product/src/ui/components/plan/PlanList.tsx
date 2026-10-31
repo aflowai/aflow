@@ -38,6 +38,7 @@ import {
   Disclosure,
   GroupLabel,
   MetaSep,
+  PLAN_ORB_SIZE,
   PlanStateOrb,
   ProgressMeter,
   selectableStyle,
@@ -221,7 +222,7 @@ const listStyle: CSSProperties = { listStyle: 'none', margin: 0, padding: 0 };
 /** A row: the state orb's gutter, the main area that is its hit target, a quiet action at its end. */
 const rowGrid: CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: '20px minmax(0, 1fr) auto',
+  gridTemplateColumns: `${String(PLAN_ORB_SIZE.row)}px minmax(0, 1fr) auto`,
   alignItems: 'center',
   columnGap: 'var(--space-2)',
   padding: 'var(--space-1-5) var(--space-2)',
