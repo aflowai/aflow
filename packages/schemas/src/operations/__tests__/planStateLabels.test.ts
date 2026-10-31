@@ -37,6 +37,54 @@ describe('PLAN_STATE_LABELS', () => {
     expect(planItemTitle('blocked', 'Ship it')).toBe('Pending approval · Ship it');
     expect(planItemTitle('merge_wait', 'Merge')).toBe('Pending review · Merge');
     expect(planItemTitle('blocked', 'x'.repeat(400))).toHaveLength(256);
+    expect(planItemTitle('blocked', 'x'.repeat(400)).endsWith('…')).toBe(true);
+    const fits = `Pending approval · ${'y'.repeat(256 - 'Pending approval · '.length)}`;
+    expect(planItemTitle('blocked', fits.slice('Pending approval · '.length))).toBe(fits);
+  });
+
+  describe('a title cut to fit', () => {
+    const head = 'Pending approval · ';
+    /** Pads before `tail` so the full title runs `over` characters past the ceiling. */
+    const pastCeiling = (tail: string, over = 20) =>
+      `${'w '.repeat(Math.ceil((256 - head.length - tail.length + over) / 2))}${tail}`;
+
+    it.each([
+      ['a code span', '`some code that runs on`'],
+      ['emphasis', '**strong words that run on**'],
+      ['underscore emphasis', '_leaning words that run on_'],
+      ['strikethrough', '~~struck words that run on~~'],
+      ['a link’s text', '[the linked words](https://example.com/a)'],
+      ['a link’s destination', '[link](https://example.com/a/long/path/that/runs)'],
+      ['an autolink', '<https://example.com/a/long/path/that/runs/on>'],
+    ])('cuts before %s the ceiling falls inside, never in it', (_, tail) => {
+      const title = pastCeiling(tail);
+      const cut = planItemTitle('blocked', title);
+      expect(cut.length).toBeLessThanOrEqual(256);
+      expect(cut).toBe(`${head}${title.slice(0, title.indexOf(tail)).trimEnd()}…`);
+    });
+
+    it('keeps a construct that closes before the ceiling', () => {
+      const title = `**done** and \`code\` and [a](https://x.y) ${'z'.repeat(400)}`;
+      const cut = planItemTitle('blocked', title);
+      expect(cut).toHaveLength(256);
+      expect(cut.startsWith(`${head}**done** and \`code\` and [a](https://x.y) zzz`)).toBe(true);
+    });
+
+    it('reads an underscore inside a word and an escaped star as text', () => {
+      const title = `snake_case and \\*literal ${'z'.repeat(400)}`;
+      const cut = planItemTitle('blocked', title);
+      expect(cut).toHaveLength(256);
+      expect(cut.startsWith(`${head}snake_case and \\*literal zzz`)).toBe(true);
+    });
+
+    it('does not cut a surrogate pair in half', () => {
+      const budget = 256 - head.length - 1;
+      // One letter first, where the budget is even, puts the ceiling inside a pair.
+      const lead = budget % 2 === 0 ? 'a' : '';
+      const cut = planItemTitle('blocked', `${lead}${'😀'.repeat(200)}`);
+      expect(cut).toBe(`${head}${lead}${'😀'.repeat(Math.floor((budget - lead.length) / 2))}…`);
+      expect(cut.length).toBe(255);
+    });
   });
 });
 

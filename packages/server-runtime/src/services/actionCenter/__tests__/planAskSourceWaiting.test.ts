@@ -5,7 +5,7 @@
  * of state labels.
  */
 import { configureLogging } from '@aflow/observability';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Redis from 'ioredis-mock';
 import type { Redis as RedisType } from 'ioredis';
 import { PLAN_NODE_MERGE_WAIT_LINE, PLAN_STATE_LABELS } from '@aflow/schemas';
@@ -21,7 +21,7 @@ vi.mock('@aflow/cybernetic-runtime', async (original) => ({
 
 import { askedKey, createPlanNode, updatePlanNode } from '@aflow/cybernetic-runtime';
 import type { ActionCenterContext } from '../types.js';
-import { createPlanAskSource } from '../sources/planAskSource.js';
+import { createPlanAskSource, planItemSummary } from '../sources/planAskSource.js';
 
 const scope = {
   tenantId: 'a0000000-0000-4000-8000-000000000338' as never,
@@ -100,6 +100,40 @@ it('titles a merge wait Pending review and keeps Close done on its control', asy
   expect(await source().listOpen(scope)).toMatchObject([
     { title: 'Pending review · Merge', uiHints: { approveLabel: 'Close done' } },
   ]);
+});
+
+describe('the item summary', () => {
+  const prose = (n: number) => 'p'.repeat(n);
+
+  it('keeps a text that fits as written, an open fence included', () => {
+    expect(planItemSummary('Waiting on you: approve it')).toBe('Waiting on you: approve it');
+    expect(planItemSummary('Look:\n```ts\nconst a = 1;')).toBe('Look:\n```ts\nconst a = 1;');
+  });
+
+  it('cuts a long text with no fence open at the cut at 2,000 characters', () => {
+    const text = `${prose(10)}\n\`\`\`\ncode\n\`\`\`\n${prose(3_000)}`;
+    expect(planItemSummary(text)).toBe(text.slice(0, 2_000));
+  });
+
+  it('closes a fence the cut leaves open, within 2,000 characters', () => {
+    const text = `${prose(100)}\n~~~~python\n${'x = 1\n'.repeat(600)}~~~~\nAfter the code.`;
+    const summary = planItemSummary(text);
+    expect(summary).toHaveLength(2_000);
+    expect(summary.endsWith('\n~~~~')).toBe(true);
+    expect(summary.slice(0, -'\n~~~~'.length)).toBe(text.slice(0, 2_000 - '\n~~~~'.length));
+  });
+
+  it('closes a backtick fence with a run as long as the one that opened it', () => {
+    const text = `\`\`\`\`\n${'y'.repeat(3_000)}`;
+    const summary = planItemSummary(text);
+    expect(summary).toHaveLength(2_000);
+    expect(summary.endsWith('\n````')).toBe(true);
+  });
+
+  it('reads a closing run shorter than the opening one as code, not as the close', () => {
+    const text = `\`\`\`\`\n\`\`\`\n${'y'.repeat(3_000)}`;
+    expect(planItemSummary(text).endsWith('\n````')).toBe(true);
+  });
 });
 
 it('writes the item title from the schema table, so a label changed there changes the item', async () => {

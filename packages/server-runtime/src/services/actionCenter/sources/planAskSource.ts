@@ -23,6 +23,47 @@ import {
 } from '../types.js';
 import { PLAN_WRITE_OPERATOR_ONLY } from '../../../lib/planWriteAuthority.js';
 
+/** The most characters an Action Center item's summary holds. */
+const PLAN_ITEM_SUMMARY_MAX_CHARS = 2_000;
+
+/** A fence line: up to three spaces, then three or more backticks or tildes. */
+const FENCE_LINE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+
+/** The fence a markdown text leaves open at its end, as the line that closes it; undefined where none is open. */
+function openFence(text: string): string | undefined {
+  let open: string | undefined;
+  for (const line of text.split('\n')) {
+    const match = FENCE_LINE.exec(line);
+    if (!match) continue;
+    const [, run = '', rest = ''] = match;
+    if (open === undefined) {
+      // A backtick fence's info string holds no backtick.
+      if (run.startsWith('~') || !rest.includes('`')) open = run;
+    } else if (run.startsWith(open.charAt(0)) && run.length >= open.length && rest.trim() === '') {
+      open = undefined;
+    }
+  }
+  return open;
+}
+
+/**
+ * The node's wait text as the item's summary, at most
+ * `PLAN_ITEM_SUMMARY_MAX_CHARS`. The client renders it as block markdown, so
+ * a cut inside a fenced code block closes the fence after the cut. Otherwise
+ * the fence would stay open and the rest of the card would render as code.
+ */
+export function planItemSummary(text: string): string {
+  let budget = PLAN_ITEM_SUMMARY_MAX_CHARS;
+  for (;;) {
+    const cut = text.slice(0, budget);
+    const fence = cut.length < text.length ? openFence(cut) : undefined;
+    if (fence === undefined) return cut;
+    const closed = `${cut}${cut.endsWith('\n') ? '' : '\n'}${fence}`;
+    if (closed.length <= PLAN_ITEM_SUMMARY_MAX_CHARS) return closed;
+    budget -= closed.length - PLAN_ITEM_SUMMARY_MAX_CHARS;
+  }
+}
+
 export function planAskItem(node: PlanNode): ActionCenterSourceItem {
   return {
     id: `plan-ask:${node.nodeId}`,
@@ -30,7 +71,7 @@ export function planAskItem(node: PlanNode): ActionCenterSourceItem {
     kind: 'human_approval',
     origin: { type: 'plan_ask', nodeId: node.nodeId, revision: node.revision },
     title: planItemTitle(node.status !== 'blocked' ? 'merge_wait' : 'blocked', node.title),
-    summary: planAsk(node).waitsOn.slice(0, 2_000),
+    summary: planItemSummary(planAsk(node).waitsOn),
     uiHints: {
       approveLabel: node.status !== 'blocked' ? 'Close done' : 'Approve',
       rejectLabel: 'Drop',
