@@ -116,6 +116,7 @@ the wrong shape, change the plan rather than quietly diverging from it.
 | [336](336-mcp-on-the-private-network.md)                                    | An MCP server on the operator's private network connects       |
 | [337](337-plans-the-operator-can-decide-from.md)                            | Plans the operator can decide from (P1, P3 template, P4 built) |
 | [338](338-the-operator-learns-what-waits-on-them.md)                        | The operator learns what waits on them                         |
+| [339](339-the-loop-moves-on-events.md)                                      | The loop moves on events                                       |
 
 ## What a plan is not
 
