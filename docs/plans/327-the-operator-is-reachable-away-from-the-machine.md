@@ -8,6 +8,54 @@
 
 **How to read the review notes.** Each decision ends with a review note: confirmed, amended or questioned, with the code it rests on. A note that says "line N" names the line in this document at `b4426a4a`. Where a decision is amended, its text above the note already reads as amended.
 
+## Decision card
+
+**What changes**
+
+- Today: the operator can reach Aflow only from a browser on the machine that serves it. A run that waits on them while they are away keeps waiting.
+- After: an agent can send the operator a Slack message, with an Action Center item as a card. The operator can answer from the phone and talk to the Helmsman there.
+
+**Why**
+
+- A run that waits on an approval at 01:00 still waits at 09:00. The resident Helmsman (Plan 331) can see the stuck node but cannot tell the operator.
+- "Status?" or "why did that fail?" needs the laptop today.
+
+**What it affects**
+
+- `packages/schemas`: the `channel` step type and stream, `channel.message.send`, `channelLaneComposed`, the ownership rule and the import guard.
+- `packages/redis`: a refusal in `addStepJob` for a `channel` step when the channel lane is absent. No other lane changes.
+- `packages/server-runtime`: the channel lane's Redis credential, `PHOENIX_CHANNEL_REDIS_PASSWORD`, minted and applied as the host lane's is.
+- `packages/database`: one tenant migration that adds the `channel.message` capability group to the system profiles.
+- `packages/platform-artifacts`: the Helmsman's placement of the operation, and a help article on setting up Slack.
+- `apps/aflow-channel-slack`: a new optional app that holds the Slack connection and its own local store.
+- The operator, who links one Slack user at setup.
+
+**Risks**
+
+- An agent may send the operator too many messages. Mitigation: the recipient is derived and never chosen. A repeat send in one run fails, so the loop guards meet a ceiling.
+- Content in the conversation may try to approve something. Mitigation: free text never approves, and only the buttons the D3 table allows resolve an item.
+- The app's API key may resolve more than the phone should. Mitigation: the D3 table is the app's ceiling, and a server-side trust level is the P3 answer.
+- A retried send may post twice. Mitigation: the send is idempotent on the step execution.
+
+**Open questions**
+
+- How late is a late message? Recommended: ten minutes for P2, measured from the `inbound` record (§8).
+- Where does the app keep its records? Recommended: a local store beside its configuration, not a Postgres schema (D6).
+- Who decides when the resident sends? Recommended: Plan 331. It sends plan decisions and plan asks as text until the trust level exists.
+
+**Not done on purpose**
+
+- No hook fires when a run stops. No background task looks for things to send.
+- The orchestrator, session hot state, the run lifecycle and every tenant table stay as they are.
+- `channel.message.ask` is not built. A paused wake would let a second wake of the space start.
+- A plan decision or a plan ask cannot be decided from the phone until the trust level (D5) exists.
+- Missed Slack messages are not recovered. History catch-up is P3.
+
+**Done when**
+
+- The operator accepts or amends D1 to D7 from this card and the decisions under it.
+- Each phase meets its exit in §5, and the proofs in §6 pass.
+
 ## 1. Problem
 
 The operator can reach Aflow only from a browser on the machine that serves it. When the operator walks away, nothing reaches them. A run that waits on an approval at 01:00 still waits at 09:00. The resident Helmsman (Plan 331) can see that a node is stuck, but it has no way to tell the operator.
@@ -158,7 +206,8 @@ _Rejected — a Postgres schema of the app's own, `channel_slack`:_ the app runs
 
 - A new guard test fails on any core file that imports `apps/aflow-channel-slack`.
 - A build with the app deleted compiles, and its tests pass.
-- With the lane absent, `channel.message.send` is not in the catalog, and a direct dispatch is refused as an uncomposed operation. The refusal sits in `addStepJob`, beside the lane breaker every dispatch path already meets.
+- With the lane absent, `channel.message.send` is not in the catalog, and a direct dispatch of a `channel` step is refused as an uncomposed operation. The refusal sits in `addStepJob`, beside the lane breaker every dispatch path already meets.
+- The refusal asks about the channel lane only. It returns nothing for any other step type, as `codeLaneBreakerRefusal` returns nothing for a step type that is not `code`. Every other lane keeps today's dispatch behaviour.
 
 **Review — amended.**
 
@@ -167,7 +216,8 @@ _Rejected — a Postgres schema of the app's own, `channel_slack`:_ the app runs
 - Line 108 is half true today. The catalog withholds an uncomposed operation in search, in schema reads, in promotion and in the Helmsman's surface. The code is `catalogSearch.ts`, `getSchema.ts` and `catalogToolPromote.ts` under `apps/aflow-orchestrator/src/services/SessionOrchestrator/handlers/inlineOps/`, and `packages/platform-artifacts/src/helmsmanSurface.ts`.
 - No dispatch path asks the same question. With no executor, `addStepJob` throws `NoExecutorAvailableError` and the step parks as `StepWaitingOnExecutor` (`apps/aflow-orchestrator/src/services/SessionOrchestrator/scheduling/executorWait.ts`). A skill step naming `channel.message.send` would wait, not be refused.
 - The amended text puts the refusal in `addStepJob` (`packages/redis/src/streams/jobs.ts` line 37), where `codeLaneBreakerRefusal` already sits. That changes `packages/redis`, not the orchestrator.
-- The refusal applies to every lane. An absent `code`, `host` or `browser` lane is then refused too, where today it parks. A present lane whose executor is offline still parks.
+- The refusal is scoped to the `channel` step type. It reads `channelLaneComposed` from the platform's environment, as `codeLaneBreakerRefusal` reads its own switch (`packages/schemas/src/runtime/codeLaneBreaker.ts` line 79).
+- An absent `code`, `host` or `browser` lane still parks, as it does today. A composed channel lane with no executor online also parks. So no existing lane's run lifecycle changes, and the "Leaves alone" line holds.
 
 ## 4. What it affects
 
@@ -179,7 +229,7 @@ _Rejected — a Postgres schema of the app's own, `channel_slack`:_ the app runs
   - `ChannelLaneSchema` and `channelLaneComposed` in `edition/descriptor.ts`, with the `channelLane` field in `EditionDescriptorSchema` and in `EditionSummarySchema`'s lanes.
   - the `channel` case in `isStepTypeComposed`, and the `channelLane` field in `ComposedLanes` (`edition/composedOperations.ts`).
   - the ownership manifest rule for the app, and the guard test that fails on a core import of it.
-- `packages/redis`: the uncomposed-lane refusal in `addStepJob` (D7).
+- `packages/redis`: the uncomposed channel lane refusal in `addStepJob`, for the `channel` step type only (D7).
 - `packages/server-runtime`: `PHOENIX_CHANNEL_REDIS_PASSWORD` in the instance configuration, and the Redis identity it names, applied as `hostPairing.ts` applies the host's (D1).
 - `packages/database`: one tenant migration that adds the `channel.message` capability group to the system profiles (CLAUDE.md, schema-first step 4).
 - `apps/aflow-orchestrator`: no change. Step routing derives the stream from the step type.
@@ -199,7 +249,7 @@ _Rejected — a Postgres schema of the app's own, `channel_slack`:_ the app runs
 
 ## 5. Phases
 
-**P0 — Send.** The lane, its Redis identity and its composition, the uncomposed-lane refusal, the import guard, `channel.message.send` with text only, setup and linking.
+**P0 — Send.** The lane, its Redis identity and its composition, the uncomposed channel lane refusal, the import guard, `channel.message.send` with text only, setup and linking.
 
 _Exit:_ in a Helmsman conversation in the app, the operator says "send me a message on Slack saying hello". The phone receives it. On an install without the channel credential, the operation is not in the Helmsman's catalog, and D7's three proofs pass. A second identical send in the same run fails.
 
@@ -249,5 +299,5 @@ _Exit:_ "status?" sent from the phone gets the Helmsman's answer in its thread. 
   - Recommended: measure from the `sent` and `card` records, joined to the resolve audit by item id.
 - **Where the app keeps its records.** D6 now recommends a local store over a Postgres schema of the app's own.
   - Recommended: the local store. Choose a Postgres role confined to `channel_slack` only if the hosted edition's Slack app (P3) needs the records where several processes can read them.
-- **The decision card.** The plans README requires one at the top of every plan (Plan 337 D1), and this plan has none.
-  - Recommended: write it once the operator has accepted or refused these amendments, so it records the decisions as they stand.
+- **The decision card.** The card at the top records the decisions as the review amended them.
+  - Recommended: rewrite the card wherever the operator refuses an amendment, so it records the decisions as they stand.
