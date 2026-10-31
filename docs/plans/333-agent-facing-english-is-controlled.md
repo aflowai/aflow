@@ -2,7 +2,7 @@
 
 _The file name predates the re-cut and is kept so existing links hold._
 
-**Status:** 🔨 P0 merged (PR #220). P1 built: the guidance block is in the four places D2 names. P2 remains optional and blocked until the operator approves it.
+**Status:** 🔨 P0 merged (PR #220). P1 built: the guidance block is in the four places D2 first named. Plan 337 P3 adds the fifth, the plan-document template. P2 remains optional and blocked until the operator approves it.
 
 **Builds on:**
 
@@ -52,12 +52,15 @@ _Rejected:_ calling the result compliant. Compliance cannot be verified without 
 - Keep every hedge. "May have pushed" stays "may have pushed".
 - Keep the present perfect where it carries meaning.
 
-The house voice holds: the system is the subject, and the text records decisions, not narrative. The block is placed in four places:
+The house voice holds: the system is the subject, and the text records decisions, not narrative. The block is placed in five places:
 
 1. The Helmsman's system prompt (`packages/cybernetic-runtime/src/helmsmanPrompt.ts`), in the section for reports and node notes.
 2. The harness result instruction (`apps/aflow-executor-host`, `composeHarnessTask` and `resultInstruction`). It shapes a commission's summary and the PR body.
 3. Compose-skill's drafting instruction (the `draft-task-graph` goal in `packages/platform-artifacts/src/skillBundles.ts`), for the text a skill carries.
 4. `CLAUDE.md`, for the local session and coding agents.
+5. The plan-document template in `docs/plans/README.md`, after the decision card, for the harness that writes a plan document (Plan 337 P3).
+
+The `card` field descriptions on `plan.node.create` and `plan.node.update` carry no copy of the block. Each points at the block in the Helmsman's system prompt, in one sentence (Plan 337 P3).
 
 **D3 — Nothing checks it.** No linter, guard, baseline, findings kind, review operation, skill or verify-commit step reads the text, and nothing blocks a step over style. This is the one place where `CLAUDE.md`'s rule "Prompts are a last resort" yields. A writing style has no schema to live in, and the operator refused the machinery that would stand in for one.
 

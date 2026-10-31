@@ -1,6 +1,7 @@
 /**
  * Plan 333 D2: the rules for prose an agent reads, written once. Each placement
- * puts its own one-line lead-in above them. CLAUDE.md holds a literal copy.
+ * puts its own one-line lead-in above them. CLAUDE.md and the plan template
+ * in docs/plans/README.md each hold a literal copy.
  */
 export const WRITING_STYLE_RULES = [
   '- No semicolons. Write two sentences.',

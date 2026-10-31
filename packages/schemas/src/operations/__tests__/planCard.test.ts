@@ -258,6 +258,7 @@ describe('card on the node record and its writes', () => {
       'Give every question the answer you recommend',
       'A plan document you commission opens with this same card',
       'Link the document to its node at the merge sha',
+      'Write each item to the writing rules in your system prompt',
     ]) {
       expect(declared).toContain(rule);
     }
