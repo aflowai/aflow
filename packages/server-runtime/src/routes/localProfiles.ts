@@ -97,7 +97,7 @@ export const localProfileRoutes: FastifyPluginAsync = async (fastify) => {
  * Answers only the instance secret itself, never an API key, because a key
  * already names its user and has nothing to choose.
  */
-const localProfilePickerRoutes: FastifyPluginAsync = async (fastify) => {
+const localProfilePickerRoutes: FastifyPluginAsync = (fastify) => {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
   const db = (): PostgresJsDatabase => fastify.appContext.db as PostgresJsDatabase;
 
@@ -175,7 +175,7 @@ const localProfilePickerRoutes: FastifyPluginAsync = async (fastify) => {
         });
       }
       const session = issueLocalProfileSession(userId, resolveInstanceSecret(), { generation });
-      fastify.audit?.record({
+      fastify.audit.record({
         actor: {
           userId: profile.userId,
           kind: 'human',
@@ -192,10 +192,11 @@ const localProfilePickerRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.send({ profile: toChoice(profile), session });
     },
   );
+  return Promise.resolve();
 };
 
 /** The owner's management (Plan 335 P2). */
-const localProfileManagementRoutes: FastifyPluginAsync = async (fastify) => {
+const localProfileManagementRoutes: FastifyPluginAsync = (fastify) => {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
   const db = (): PostgresJsDatabase => fastify.appContext.db as PostgresJsDatabase;
 
@@ -231,7 +232,7 @@ const localProfileManagementRoutes: FastifyPluginAsync = async (fastify) => {
   }
 
   async function audit(request: FastifyRequest, action: string, resourceId: string): Promise<void> {
-    if (!fastify.audit || !request.authUser) return;
+    if (!request.authUser) return;
     const tenant = await request.requireTenant();
     fastify.audit.record({
       actor: {
@@ -396,4 +397,5 @@ const localProfileManagementRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.send(removed);
     },
   );
+  return Promise.resolve();
 };

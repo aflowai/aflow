@@ -143,6 +143,7 @@ describeDb('local profile management (real DB)', () => {
     app.setValidatorCompiler(validatorCompiler);
     app.setSerializerCompiler(serializerCompiler);
     app.decorate('appContext', { db, sql, redis: null } as never);
+    app.decorate('audit', { record: () => undefined } as never);
     await app.register(
       fp(
         (instance, _o, done: () => void) => {

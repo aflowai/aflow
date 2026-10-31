@@ -282,7 +282,8 @@ Each of these cases fails if the change is wrong:
 - The owner opens profile B's space by slug and gets the not-found state.
 - On an install with one profile and no PIN, a request with the instance secret and no profile session is still the owner. A fresh install and `yarn mcp:setup` work unchanged.
 - On an install with a second profile, a browser request with no profile session does not act as the owner. Clearing the cookie or opening a private window reaches no locked profile, the owner's included. What it reaches instead waits on §8 question 7.
-- A profile session for a user without an active membership in the pinned tenant is refused with a 403.
+- A profile session naming a user with no row is refused with a 401 `PROFILE_SESSION_INVALID`, so the browser goes back to the picker.
+- A profile session for a user who has a row and no active membership in the pinned tenant is refused with a 403.
 - A locked profile's session cannot start without the PIN, through the web or through a direct API call.
 
 ## 11. P1 — as built
@@ -381,7 +382,7 @@ P3 adds the picker, the footer menu and the per-profile preferred space. It adds
 - **Where.** Two routes join `/v1/local-profiles` in a scope of their own, so the owner rule of §12 never reaches them (`packages/server-runtime/src/routes/localProfiles.ts`). `GET /picker` lists each profile's id, name, avatar and whether it is the owner. `POST /:userId/session` issues that profile's session.
 - **Who.** A request that presents the instance secret as its bearer token, with or without a profile session. An API key is refused, because a key already names its user. The hosted edition answers both routes with the 404 of §12.
 - **The only issuer.** `POST /:userId/session` is the one caller of `issueLocalProfileSession`. It issues a session only for a profile of the pinned tenant, at the user's current generation, and answers 404 for anything else. It refuses a request with `X-Aflow-Browser-Caller` with a 403. The web process marks every call it proxies for the browser, so a session never passes back through the proxy to a script in the page.
-- **§10 holds.** A browser with no session on an install with two profiles is still refused by `authenticate`. It reaches only the picker's two routes, and those name no owner. It acts as a profile only once it holds that profile's session.
+- **§10 holds.** A browser with no session on an install with two profiles is still refused by `authenticate`. It reaches only the picker's two routes, and those never act as the owner. The picker marks which profile is the owner, and the mark grants nothing. It acts as a profile only once it holds that profile's session.
 
 ### The web process
 

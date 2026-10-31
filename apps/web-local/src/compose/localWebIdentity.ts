@@ -36,7 +36,10 @@ export const INSTANCE_SECRET_ENV = 'PHOENIX_INSTANCE_SECRET';
  */
 export const PROFILE_SESSION_COOKIE = 'aflow_profile_session';
 
-const instanceSecret = (): string => process.env[INSTANCE_SECRET_ENV]?.trim() ?? '';
+export const instanceSecret = (): string => process.env[INSTANCE_SECRET_ENV]?.trim() ?? '';
+
+/** Where this web process reaches the API. */
+export const localApiUrl = (): string => process.env.API_URL || 'http://localhost:3000';
 
 export const localWebIdentity: WebIdentity = {
   name: 'local instance identity',

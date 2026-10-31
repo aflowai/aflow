@@ -22,8 +22,8 @@ import {
   type LocalProfileChoice,
 } from '@aflow/web-product';
 
-import { isProfileSessionRefusal } from './localRecovery.js';
-import { INSTANCE_SECRET_ENV, PROFILE_SESSION_COOKIE } from './localWebIdentity.js';
+import { isProfileSessionRefusal } from '@/compose/localRecovery';
+import { instanceSecret, localApiUrl, PROFILE_SESSION_COOKIE } from '@/compose/localWebIdentity';
 
 /**
  * A session lasts until the person switches profile or the browser clears it
@@ -39,11 +39,9 @@ export const CHOICE_FAILED_MESSAGE =
 
 type Fetch = typeof fetch;
 
-const apiUrl = (): string => process.env.API_URL || 'http://localhost:3000';
-
 /** The instance secret alone. A call made with it carries no browser mark. */
 function secretHeaders(): Record<string, string> | null {
-  const secret = process.env[INSTANCE_SECRET_ENV]?.trim() ?? '';
+  const secret = instanceSecret();
   return secret === '' ? null : { Authorization: `Bearer ${secret}` };
 }
 
@@ -59,7 +57,7 @@ export async function readProfileChoices(
   const headers = secretHeaders();
   if (headers === null) return null;
   try {
-    const response = await fetchImpl(`${apiUrl()}/v1/local-profiles/picker`, {
+    const response = await fetchImpl(`${localApiUrl()}/v1/local-profiles/picker`, {
       headers,
       cache: 'no-store',
     });
@@ -80,7 +78,7 @@ export async function issueProfileSession(
   if (headers === null) return null;
   try {
     const response = await fetchImpl(
-      `${apiUrl()}/v1/local-profiles/${encodeURIComponent(userId)}/session`,
+      `${localApiUrl()}/v1/local-profiles/${encodeURIComponent(userId)}/session`,
       { method: 'POST', headers, cache: 'no-store' },
     );
     if (!response.ok) return null;

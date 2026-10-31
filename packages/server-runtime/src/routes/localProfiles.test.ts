@@ -66,6 +66,7 @@ async function build(
   const dropLocalProfileCount = vi.fn();
   app.decorate('edition', { edition, tenancy: { mode: 'fixed', tenantId: 't' } } as never);
   app.decorate('dropLocalProfileCount', dropLocalProfileCount);
+  app.decorate('audit', { record: vi.fn() } as never);
   app.decorate('authenticate', async (request: { authUser?: unknown }, reply: FastifyReply) => {
     // What the auth plugin answers a browser with no session once a second
     // profile exists.

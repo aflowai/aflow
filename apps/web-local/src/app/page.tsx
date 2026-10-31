@@ -1,7 +1,7 @@
 import { enterPreferredSpace, type SpaceLookupRefusal } from '@aflow/web-product/ui/server';
 import { ProfilePicker } from '@aflow/web-product/ui';
 
-import { localWebIdentity } from '@/compose/localWebIdentity';
+import { localApiUrl, localWebIdentity } from '@/compose/localWebIdentity';
 import { readProfileChoices, requiresProfileChoice } from '@/compose/localProfileSession';
 
 /** Shown in place of the tiles when the API could not list the profiles. */
@@ -32,7 +32,7 @@ async function profilePicker(refusal: SpaceLookupRefusal) {
  */
 export default async function Home() {
   return enterPreferredSpace('/chat', {
-    apiUrl: process.env.API_URL || 'http://localhost:3000',
+    apiUrl: localApiUrl(),
     headers: async (): Promise<Record<string, string> | null> => {
       const authorization = await localWebIdentity.authorizeUpstream({ anonymousOk: false });
       return authorization.kind === 'authorized'
