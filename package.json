@@ -166,7 +166,7 @@
     "source-map-js@npm:^1.2.1": "1.2.2",
     "body-parser@npm:^2.2.1": "2.4.0",
     "zod@npm:^3.25 || ^4.0": "4.6.6",
-    "node-forge": "^1.4.2"
+    "node-forge": "1.4.2"
   },
   "dependencies": {
     "croner": "^10.0.1"
