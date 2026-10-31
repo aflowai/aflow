@@ -1,6 +1,6 @@
 # Plan 335 — Local profiles: several people share one install
 
-**Status:** 🚧 P1 built under option A (§11). P2 built (§12). P3 to P5 are not built. This document reads the code as it stood, judges three shapes for a profile and proposes phases.
+**Status:** 🚧 P1 built under option A (§11). P2 built (§12). P3 built (§13). P4 and P5 are not built. This document reads the code as it stood, judges three shapes for a profile and proposes phases.
 
 **Builds on:** Plan 315 (the local edition's first run), Plan 330 (the first space a fresh install gets), Plan 334 (the first-run card in the empty chat).
 
@@ -282,7 +282,8 @@ Each of these cases fails if the change is wrong:
 - The owner opens profile B's space by slug and gets the not-found state.
 - On an install with one profile and no PIN, a request with the instance secret and no profile session is still the owner. A fresh install and `yarn mcp:setup` work unchanged.
 - On an install with a second profile, a browser request with no profile session does not act as the owner. Clearing the cookie or opening a private window reaches no locked profile, the owner's included. What it reaches instead waits on §8 question 7.
-- A profile session for a user without an active membership in the pinned tenant is refused with a 403.
+- A profile session naming a user with no row is refused with a 401 `PROFILE_SESSION_INVALID`, so the browser goes back to the picker.
+- A profile session for a user who has a row and no active membership in the pinned tenant is refused with a 403.
 - A locked profile's session cannot start without the PIN, through the web or through a direct API call.
 
 ## 11. P1 — as built
@@ -294,7 +295,7 @@ P1 follows option A. It adds no UI, no route and no table. It adds one column, `
 - **The value.** A session is `v2.<user id>.<issue time>.<generation>.<MAC>`. The issue time is in Unix seconds. The generation is the user's `profile_session_generation` when the session was issued. The MAC is an HMAC-SHA256 under a key derived from the instance secret (`packages/server-runtime/src/plugins/localProfiles.ts`). It holds no state of its own.
 - **Its end.** Removing a profile's membership ends its sessions, because the tenant plugin reads that membership on every request. `bumpLocalProfileSessionGeneration` ends every session issued to one user before the bump, because the API refuses a session whose generation is not the user's. P1 makes no change that bumps it. P4 bumps it when a PIN is set, changed or reset, so a session issued before the PIN cannot start a locked profile (§10). Rotating the instance secret ends every session.
 - **Its path.** The browser holds the session in the `aflow_profile_session` cookie. The web process forwards it in `X-Aflow-Profile-Session` beside the instance secret (`apps/web-local/src/compose/localWebIdentity.ts`).
-- **Its issue.** `issueLocalProfileSession` issues the value. No route calls it in P1. P3's picker calls it when a profile is chosen, and P4 puts the PIN check in front of it.
+- **Its issue.** `issueLocalProfileSession` issues the value. No route calls it in P1. P3's picker calls it when a profile is chosen (§13), and P4 puts the PIN check in front of it.
 - **This differs from §6.** §6 proposed a stored session in `public`. A signed value is enough for P1, because the membership read already revokes it. A stored session returns if §8 question 3 asks for an idle timeout.
 
 ### The answer to §8 question 7
@@ -312,7 +313,7 @@ P1 follows option A. It adds no UI, no route and no table. It adds one column, `
 - **What a bare-secret caller gets.** It stays the owner on every install. `yarn mcp:setup` keeps working. Its holder can read `instance.env` and could issue an owner session, so a refusal would guard nothing (D3).
 - **A single profile with a PIN.** P1 gives it a session that names it, read through its membership. P4 must also end the no-session fallback for a single profile that holds a PIN. The one-profile column then applies only to an unlocked profile.
 - **The count.** A profile is a human user with an active membership in the pinned tenant. The API reads at most two such rows and keeps the answer for five seconds, so most requests without a session read no database. A one-profile install reaches the owner from that answer while it is fresh. When a read fails, a count last read as two or more still answers several profiles. Any other failed read answers the count as unread: none read since the process started, or a stale count of one. A second profile may exist in either case, so an unread count never grants the owner with no membership read. A browser with no session then gets a 503 `PROFILE_COUNT_UNREAD`. A bare-secret caller stays the owner through the membership read. Only a count read as two or more refuses a browser with `PROFILE_SESSION_REQUIRED`, so that refusal never names a second profile nobody has seen.
-- **The generation read.** A request that carries a session reads the user's generation from Postgres before the membership read, so the database is on the path of every sessioned request. A failed read answers 503 `PROFILE_SESSION_UNREAD`.
+- **The generation read.** A request that carries a session reads the user's generation from Postgres before the membership read, so the database is on the path of every sessioned request. A failed read answers 503 `PROFILE_SESSION_UNREAD`. A session naming a user with no row answers 401 `PROFILE_SESSION_INVALID`, so the browser of a removed profile goes back to the picker (§13). P1 left that session to the membership read's 403. A user who has a row and no active membership still gets the 403.
 
 ### The tenant plugin
 
@@ -353,12 +354,17 @@ P2 adds the routes and the screen that make and remove profiles. It adds no tabl
 
 ### Settings → Profiles
 
-- `TenantProfilesPage` lists the profiles with their avatars and offers **Edit** and **Remove**. **Add profile** is shown disabled until P3 (below). Removal shows what the cascade would delete before it asks.
+- `TenantProfilesPage` lists the profiles with their avatars and offers **Add profile**, **Edit** and **Remove**. P2 shipped **Add profile** disabled (below). Removal shows what the cascade would delete before it asks.
 - The tab is gated on the edition and the owner role, never on a surface name. The route ships in the local build only.
 
-### A gap P3 closes
+### A gap P3 closed — the gate is lifted
 
-Nothing issues a profile session until P3's picker. So once a second profile exists, every browser gets 401 `PROFILE_SESSION_REQUIRED`, the owner's included. A warning in the add dialog cannot make that reversible from the screen. The browser that made the profile is refused on its next request, so **Edit** and **Remove** stop working with it. The screen therefore refuses the add that would make a second profile. **Add profile** stays disabled while the install has a profile, which it always has, and the page says why. The route still adds a profile for a bare-secret caller, and the bare secret still reaches `DELETE /v1/local-profiles/:userId`, which ends the state. P3 lifts the gate in `TenantProfilesPage` when it issues sessions.
+P2 issued no profile session, so once a second profile existed every browser got 401 `PROFILE_SESSION_REQUIRED`, the owner's included. The browser that made the profile was refused on its next request, so **Edit** and **Remove** stopped working with it. P2 therefore shipped **Add profile** disabled, with a notice that the add waited for the picker.
+
+P3 lifts that gate. The picker issues sessions (§13), so a second profile no longer locks a browser out. **Add profile** is enabled, and the notice is gone. The browser that adds the second profile is refused on its next request and sent to the picker, where the owner chooses their own profile. Two findings left open on PR #248 are settled by the lift:
+
+- **The gate turned off when the list failed to load** (`tenant-profiles.tsx`). The gate no longer exists, so a failed load enables nothing it would have withheld.
+- **The route accepted the lockout add from a sessionless sole-profile principal** (`routes/localProfiles.ts`). That add no longer locks anyone out, so the route keeps accepting it. The add route is unchanged.
 
 ### Tests
 
@@ -366,3 +372,51 @@ Nothing issues a profile session until P3's picker. So once a second profile exi
 - `services/localProfiles.test.ts` shows that removal bumps the generation before the cascade and evicts the cached role after it.
 - `routes/localProfiles.pg.test.ts` runs the real plugins on a bootstrapped install with the count cached for its usual lifetime. A profile added there has its own `Personal` space and lists none of the owner's. The owner sees that space as a name only. Rename and avatar persist. A member session and an admin from the seed fixture are refused on every route. Removal ends the profile's session, drops the count and leaves the tenant and the owner.
 - `tenant-settings/tabs.test.ts` shows the tab only for the local owner.
+
+## 13. P3 — as built
+
+P3 adds the picker, the footer menu and the per-profile preferred space. It adds no table and no column.
+
+### The picker routes
+
+- **Where.** Two routes join `/v1/local-profiles` in a scope of their own, so the owner rule of §12 never reaches them (`packages/server-runtime/src/routes/localProfiles.ts`). `GET /picker` lists each profile's id, name, avatar and whether it is the owner. `POST /:userId/session` issues that profile's session.
+- **Who.** A request that presents the instance secret as its bearer token, with or without a profile session. An API key is refused, because a key already names its user. The hosted edition answers both routes with the 404 of §12.
+- **The only issuer.** `POST /:userId/session` is the one caller of `issueLocalProfileSession`. It issues a session only for a profile of the pinned tenant, at the user's current generation, and answers 404 for anything else. It refuses a request with `X-Aflow-Browser-Caller` with a 403. The web process marks every call it proxies for the browser, so a session never passes back through the proxy to a script in the page.
+- **§10 holds.** A browser with no session on an install with two profiles is still refused by `authenticate`. It reaches only the picker's two routes, and those never act as the owner. The picker marks which profile is the owner, and the mark grants nothing. It acts as a profile only once it holds that profile's session.
+
+### The web process
+
+- **The front door.** `apps/web-local/src/app/page.tsx` asks the API for the browser's spaces, as before. A 401 `PROFILE_SESSION_REQUIRED` or `PROFILE_SESSION_INVALID` renders **Who is using Aflow?** in place of a space (`answerRefusal` on `enterPreferredSpace`). An install with one profile never refuses a browser that sends no session, so a fresh install shows no picker. A browser that sends a session the API refuses still sees the picker, whatever the profile count. One that holds a removed profile's session sees it on an install now down to one profile.
+- **A choice.** Each tile is a submit button in a plain form that posts to `/profiles/choose` (`apps/web-local/src/compose/localProfileSession.ts`). That route asks the API for the session with the bare secret. It keeps the session in the `httpOnly` cookie `aflow_profile_session` and the chosen user id in `aflow_profile`, then redirects to the front door. The admission check refuses a post from another origin. A refused choice returns to the picker with a notice and sets no cookie.
+- **The cookie's life.** The session lasts until the person switches profile or the browser clears it. The cookie keeps it for 400 days, the longest a browser allows. It is `Secure` where the browser used HTTPS.
+- **Recovery.** A 401 `PROFILE_SESSION_REQUIRED` or `PROFILE_SESSION_INVALID` from any screen now sends the browser to the front door, and so to the picker (`localRecovery.ts`). P1 showed a message there.
+- **A removed profile.** A session naming a user with no row answers 401 `PROFILE_SESSION_INVALID` (§11). The browser that used a removed profile therefore reaches the picker rather than a 403.
+
+### The footer menu
+
+- In the local edition the avatar at the foot of the sidebar opens a menu instead of `/account` (`packages/web-product/src/ui/components/profile-menu.tsx`). It names the profile using Aflow now. With two or more profiles it lists the others, each a post to `/profiles/choose`, and **Switch profile**, which opens the picker at `/profiles`. The owner also sees **Manage profiles**, which opens Settings → Profiles. **Account settings** opens `/account`.
+- `/profiles` sends an install with one profile to the front door. Switch profile on such an install therefore shows no picker. The front door still shows one for a refused session.
+- The hosted footer is unchanged.
+
+### The preferred space
+
+- The preferred-space cookie is keyed by the chosen profile: `preferredSpaceSlug.<user id>`, from the `aflow_profile` cookie (`packages/web-product/src/preferredSpaceCookie.ts`). A browser that chose no profile keeps `preferredSpaceSlug`, so a one-profile install and the hosted edition are unchanged.
+- A chosen profile with no keyed hint reads `preferredSpaceSlug`. The owner who adds a second profile and picks themselves lands in the space they were using. The write always goes to the keyed cookie, and clearing removes both.
+- The front door now skips a space listed as a name only (`myRole: null`). Otherwise the owner could land on another profile's space and get the not-found state.
+
+### Not built
+
+- An **Add profile** tile on the picker (D1). Adding stays in Settings → Profiles, because the picker answers a browser that holds no session and cannot tell the owner apart.
+- The PIN (P4).
+
+### Tests
+
+- `routes/localProfiles.test.ts` shows the picker answers a browser that `authenticate` refuses for want of a session, and refuses anything but the instance secret. It shows a session is issued at the user's generation only for a profile that exists, and never to a proxied browser call.
+- `routes/localProfiles.pg.test.ts` adds a second profile on a bootstrapped install. The sessionless browser is refused, and the picker lists both profiles. The session the picker issues lets the owner keep managing profiles.
+- `plugins/localInstanceAuth.test.ts` and `plugins/localProfiles.pg.test.ts` show a session naming no user is a 401 `PROFILE_SESSION_INVALID`.
+- `apps/web-local/src/compose/localProfileSession.test.ts` shows the front door shows the picker only for a profile refusal. It shows a choice sets the `httpOnly` session cookie only when the API issued a session, and asks without the browser mark.
+- `apps/web-local/src/app/frontDoor.test.ts` shows the picker's routes exist in the local build.
+- `localRecovery.test.ts` shows a profile refusal sends the browser to the picker.
+- `preferredSpace.test.ts` shows each profile keeps its own preferred space, and a profile with none reads the unkeyed one. `enterPreferredSpace.test.ts` shows a name-only space is skipped and a refusal can be answered with the picker.
+- `profile-menu-entries.test.ts` shows the menu offers a switch only with two profiles and **Manage profiles** only to the owner.
+- `tenant-profiles.test.ts` shows **Add profile** is no longer gated on the profile count.

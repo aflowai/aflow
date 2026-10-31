@@ -20,7 +20,28 @@ const ajv = new Ajv({ allErrors: true, strict: false });
  * send if it composed the argument from `catalog.tool.list` or from memory of
  * the real schema. Each must survive validation against the COLLAPSED emission.
  */
+const FULL_CARD = {
+  change: { today: 'The rail shows prose.', after: 'The rail shows the card.' },
+  why: ['The operator reads all of the prose to find the decision.'],
+  affects: ['The plan rail.'],
+  risks: [{ risk: 'Items grow long.', mitigation: 'The guidance asks for short items.' }],
+  questions: [{ question: 'Is the card optional?', recommended: 'Yes.' }],
+  notDoing: ['No backfill.'],
+};
+
 const FULL_NESTED_ARGS: Record<string, Record<string, unknown>> = {
+  'plan.node.create': {
+    kind: 'decide',
+    title: 'Decide the card',
+    goal: 'Decide whether nodes carry a card.',
+    criteria: 'The operator approves the card.',
+    card: FULL_CARD,
+  },
+  'plan.node.update': {
+    nodeId: '9a3e0000-0000-4000-8000-000000000001',
+    expectedRevision: 1,
+    card: FULL_CARD,
+  },
   'host.harness.run': {
     bindingId: 'hb_project',
     task: 'Review the UI',

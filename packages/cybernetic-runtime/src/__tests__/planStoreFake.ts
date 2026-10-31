@@ -153,6 +153,7 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
         goal: values.goal,
         criteria: values.criteria,
         ...(values.note !== null ? { note: values.note } : {}),
+        ...(values.card !== undefined ? { card: values.card } : {}),
         position: values.position ?? this.positionAfterLast(spaceId, values.parentId),
         ...(values.createdBy !== null ? { createdBy: values.createdBy } : {}),
         ...(values.status !== undefined ? { status: values.status } : {}),

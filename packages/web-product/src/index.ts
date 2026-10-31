@@ -17,7 +17,12 @@
  */
 
 export { allowsAnonymous, clientIpOf, proxyToApi, upstreamHeaders } from './bffTransport.js';
-export { PREFERRED_SPACE_COOKIE } from './preferredSpaceCookie.js';
+export { ACTIVE_PROFILE_COOKIE, PREFERRED_SPACE_COOKIE } from './preferredSpaceCookie.js';
+export {
+  LOCAL_PROFILE_CHOICE_FIELD,
+  LOCAL_PROFILE_CHOICE_PATH,
+  LOCAL_PROFILE_PICKER_PATH,
+} from './localProfilePicker.js';
 export type { TransportConfig } from './bffTransport.js';
 
 export {
@@ -35,7 +40,14 @@ export type {
 } from './session/recovery.js';
 
 export { refuseLocalRequest } from './localRequestGuard.js';
-export { LOCAL_BROWSER_CALLER_HEADER, LOCAL_PROFILE_SESSION_HEADER } from '@aflow/schemas';
+export {
+  LOCAL_BROWSER_CALLER_HEADER,
+  LOCAL_PROFILE_SESSION_HEADER,
+  LocalProfileChoicesResponseSchema,
+  LocalProfileSessionResponseSchema,
+  showsLocalProfilePicker,
+} from '@aflow/schemas';
+export type { LocalProfileChoice } from '@aflow/schemas';
 
 export type { LocalRequest } from './localRequestGuard.js';
 

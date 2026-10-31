@@ -315,13 +315,17 @@ describe('the profile rule', () => {
     expect(outcome.kind === 'local' && outcome.authUser.userId).toBe(SECOND_USER);
   });
 
-  // No row means no membership, and the membership read refuses that with 403.
-  it('leaves a session naming no known user to the membership read', async () => {
+  // A removed profile has no row, and its browser goes back to the picker.
+  it('refuses a session naming no known user as ended', async () => {
     const outcome = await authenticateLocalInstance(
       request(`Bearer ${SECRET}`, sessionFor(SECOND_USER)),
       { ...opts, profileSessionGeneration: () => Promise.resolve(null), env: {} },
     );
-    expect(outcome.kind === 'local' && outcome.authUser.localPrincipal).toBe('profile-session');
+    expect(outcome).toEqual({
+      kind: 'refused',
+      code: 'PROFILE_SESSION_INVALID',
+      message: 'This profile no longer exists. Choose a profile again.',
+    });
   });
 
   it('counts profiles only when no session names the user', async () => {

@@ -9,12 +9,12 @@
 import type { NextRequest } from 'next/server';
 import { proxyToApi, type TransportConfig } from '@aflow/web-product';
 
-import { localWebIdentity } from '@/compose/localWebIdentity';
+import { localApiUrl, localWebIdentity } from '@/compose/localWebIdentity';
 
 export const runtime = 'nodejs';
 
 const transport: TransportConfig = {
-  apiUrl: process.env.API_URL || 'http://localhost:3000',
+  apiUrl: localApiUrl(),
   // The local API pins one tenant and refuses a request naming another, so a
   // selector would fail every call rather than select anything — and with none
   // forwarded there is no default for it to fall back to.
