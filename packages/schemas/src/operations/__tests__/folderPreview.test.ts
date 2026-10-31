@@ -51,7 +51,7 @@ function declarationCarriers(schema: unknown, at = '$', into: string[] = []): st
     const declared = properties as Record<string, unknown>;
     const names = Object.keys(declared);
     if (isObjectSchema(declared['preview'])) into.push(`${at}.preview is an object`);
-    for (const name of ['uiPaths', 'readyPath']) {
+    for (const name of ['uiPaths', 'readyPath', 'readyWithinSeconds']) {
       if (names.includes(name)) into.push(`${at}.${name}`);
     }
     if (names.includes('command') && (names.includes('uiPaths') || names.includes('readyPath'))) {
@@ -83,6 +83,7 @@ describe('a folder’s preview (Plan 320 D18)', () => {
     expect(declarationCarriers(json(HostFolderPreviewSchema))).toEqual(
       expect.arrayContaining([
         '$.readyPath',
+        '$.readyWithinSeconds',
         '$.uiPaths',
         '$ pairs a command with uiPaths or readyPath',
       ]),

@@ -5,6 +5,8 @@ import { Button, Column, HelperText, Input, Row, Text, Textarea } from '@aflow/d
 import {
   declareFolderPreviewCommand,
   FOLDER_PREVIEW_PORT_PLACEHOLDER,
+  FOLDER_PREVIEW_READY_WITHIN_DEFAULT_SECONDS,
+  FOLDER_PREVIEW_READY_WITHIN_MAX_SECONDS,
   type HostFolderPreview,
   HostFolderPreviewSchema,
   resolveFolderPreview,
@@ -36,6 +38,7 @@ interface Draft {
   command: string;
   port: string;
   readyPath: string;
+  readyWithinSeconds: string;
   uiPaths: string;
   webAppDirs: string;
 }
@@ -45,6 +48,8 @@ function draftOf(declared: HostFolderPreview | null): Draft {
     command: declared?.command ?? '',
     port: declared?.port === undefined ? '' : String(declared.port),
     readyPath: declared?.readyPath ?? '',
+    readyWithinSeconds:
+      declared?.readyWithinSeconds === undefined ? '' : String(declared.readyWithinSeconds),
     uiPaths: (declared?.uiPaths ?? []).join('\n'),
     webAppDirs: (declared?.webAppDirs ?? []).join('\n'),
   };
@@ -58,12 +63,22 @@ export function previewFromDraft(
   if (port !== '' && !/^\d{1,5}$/.test(port)) {
     return { ok: false, reason: `'${port}' is not a port: give a whole number from 1 to 65535.` };
   }
+  const readyWithin = draft.readyWithinSeconds.trim();
+  if (readyWithin !== '' && !/^\d{1,9}$/.test(readyWithin)) {
+    return {
+      ok: false,
+      reason:
+        `'${readyWithin}' is not a number of seconds: give a whole number from 1 to ` +
+        `${String(FOLDER_PREVIEW_READY_WITHIN_MAX_SECONDS)}.`,
+    };
+  }
   const uiPaths = lines(draft.uiPaths);
   const webAppDirs = lines(draft.webAppDirs);
   const parsed = HostFolderPreviewSchema.safeParse({
     command: draft.command,
     ...(port !== '' ? { port: Number(port) } : {}),
     ...(draft.readyPath.trim() !== '' ? { readyPath: draft.readyPath.trim() } : {}),
+    ...(readyWithin !== '' ? { readyWithinSeconds: Number(readyWithin) } : {}),
     ...(uiPaths.length > 0 ? { uiPaths } : {}),
     ...(webAppDirs.length > 0 ? { webAppDirs } : {}),
   });
@@ -179,6 +194,12 @@ export function HostFolderPreview({
               {...field('port')}
             />
             <Input aria-label="Ready path" placeholder="/" {...field('readyPath')} />
+            <Input
+              aria-label="Ready within seconds"
+              inputMode="numeric"
+              placeholder={`${String(FOLDER_PREVIEW_READY_WITHIN_DEFAULT_SECONDS)} s`}
+              {...field('readyWithinSeconds')}
+            />
           </Row>
           <Textarea
             aria-label="UI paths"
@@ -200,7 +221,10 @@ export function HostFolderPreview({
             The command runs from the root of a run’s checkout, with{' '}
             {FOLDER_PREVIEW_PORT_PLACEHOLDER} where its port goes. Leave the port empty and each run
             takes a free one; a fixed port serves one run at a time, and a port Aflow serves on is
-            refused. Saving replaces the declaration before; nothing is started now.
+            refused. Ready within is how many seconds the ready path may take to answer:{' '}
+            {FOLDER_PREVIEW_READY_WITHIN_DEFAULT_SECONDS} when empty, at most{' '}
+            {FOLDER_PREVIEW_READY_WITHIN_MAX_SECONDS}. Saving replaces the declaration before;
+            nothing is started now.
           </HelperText>
           <Row gap="sm" align="center">
             <Button
@@ -279,6 +303,7 @@ function DeclaredPreview({ preview }: { readonly preview: HostFolderPreview }) {
         Port: {resolved.port === undefined ? 'free port, a new one each run' : resolved.port}
         {' · '}Ready at {resolved.readyPath}
         {byDefault(preview.readyPath)}
+        {' · '}Within {resolved.readyWithinSeconds} s{byDefault(preview.readyWithinSeconds)}
       </Text>
       <Text variant="muted" size="sm">
         UI files{byDefault(preview.uiPaths)}: {resolved.uiPaths.join(', ')}
