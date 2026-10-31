@@ -11,8 +11,10 @@ import {
   PLAN_TREE_DEPTH_LIMIT,
   PLAN_TREE_WALK_NODE_LIMIT,
   planDependencyMet,
+  planNodeCardInOrder,
   type CoachLearning,
   type PlanNode,
+  type PlanNodeCard,
   type PlanNodeDependency,
   type PlanNodeDependencyCondition,
   type PlanNodeDependencyView,
@@ -69,6 +71,8 @@ export interface NewPlanNode {
   goal: string;
   criteria: string;
   note: string | null;
+  /** Absent: the node carries no card. */
+  card?: PlanNodeCard;
   /** Absent: after the last sibling, read under the parent's sibling lock. */
   position?: number;
   createdBy: string | null;
@@ -88,6 +92,7 @@ export interface PlanNodePatch {
   title?: string;
   position?: number;
   outcome?: string | null;
+  card?: PlanNodeCard;
   closedAt?: Date | null;
   /** Written only by a person's open (Plan 331 D5): the node's spend counts from it. */
   openedAt?: Date;
@@ -427,6 +432,7 @@ export function rowToPlanNode(row: PlanNodeRow): PlanNode {
     status: row.status as PlanNodeStatus,
     ...(row.outcome != null ? { outcome: row.outcome } : {}),
     ...(row.note != null ? { note: row.note } : {}),
+    ...(row.card != null ? { card: planNodeCardInOrder(row.card) } : {}),
     revision: row.revision,
     position: row.position,
     ...(row.createdBy != null ? { createdBy: row.createdBy } : {}),

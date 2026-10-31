@@ -62,6 +62,8 @@ export type PlanNodePlaceRequest = { nodeId: string; expectedRevision: number } 
 export type PlanNodePlacer = (request: PlanNodePlaceRequest) => Promise<PlanNodeCloseAnswer>;
 
 const STRIP_WIDTH = '32px';
+/** The width in pixels of the selected card's ring, drawn outside the card. */
+const SELECTED_RING = 2;
 
 function SubtaskBar({ done, total }: { done: number; total: number }) {
   return (
@@ -101,7 +103,9 @@ function PlanCardView({
     cursor: 'pointer',
     ...(column === 'needs_you' ? { borderLeft: '3px solid var(--color-warning-default)' } : {}),
     ...(selected
-      ? { boxShadow: '0 0 0 2px var(--color-interactive-default), var(--shadow-md)' }
+      ? {
+          boxShadow: `0 0 0 ${String(SELECTED_RING)}px var(--color-interactive-default), var(--shadow-md)`,
+        }
       : {}),
   };
   const open = () => {
@@ -327,8 +331,14 @@ export function PlanBoard({
           >
             {`${group.label} · ${group.shown === undefined ? '…' : String(group.shown)}`}
           </Disclosure>
-          <AnimatedHeight>
-            {open && <Column gap="sm">{group.cards.map(renderCard)}</Column>}
+          {/* AnimatedHeight clips its box, so the fold widens by the ring and pads its
+              cards by it: the selected card's ring then lies inside the clip. */}
+          <AnimatedHeight style={{ marginInline: -SELECTED_RING }}>
+            {open && (
+              <Column gap="sm" style={{ padding: SELECTED_RING }}>
+                {group.cards.map(renderCard)}
+              </Column>
+            )}
           </AnimatedHeight>
         </Column>
       );

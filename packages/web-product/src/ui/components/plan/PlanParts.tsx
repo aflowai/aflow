@@ -140,7 +140,10 @@ export function useReveal(): {
  */
 export const PLAN_ORB_SIZE = { row: 14, heading: 12, header: 20, rail: 36 } as const;
 
-/** An orb that says a state, which the words beside it name too (Plan 332 P6). */
+/**
+ * An orb that shows a state the words beside it name (Plan 332 P6). It is
+ * decorative, so a screen reader reads the state once, in those words.
+ */
 function StateOrb({
   kind,
   size,
@@ -163,7 +166,7 @@ function StateOrb({
         transition: 'opacity var(--transition-duration-fast) var(--transition-timing-default)',
       }}
     >
-      <StatusOrb kind={kind} size={size} decorative={false} />
+      <StatusOrb kind={kind} size={size} />
     </span>
   );
 }
@@ -234,7 +237,7 @@ export function PlanRunLine({ run, spaceSlug }: { run: PlanNodeRun; spaceSlug: s
         kind={orbForRunStatus(run.status)}
         size={PLAN_ORB_SIZE.row}
         decorative={false}
-        label={`Run ${pill.label}`}
+        label="Run"
       />
       <Link
         href={spaceRoute(spaceSlug, `/runs/${encodeURIComponent(run.runId)}`)}

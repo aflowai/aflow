@@ -27,10 +27,18 @@ export function notFound(
   };
 }
 
-/** A patch column against the node's: absent is null, and a time compares as its ISO string. */
+/**
+ * A patch column against the node's: absent is null, a time compares as its
+ * ISO string, and a card as its serialised form. Both cards come in the
+ * schema's key order, so equal cards serialise alike.
+ */
 export function sameColumn(patched: unknown, held: unknown): boolean {
   const stored = (value: unknown) =>
-    value instanceof Date ? value.toISOString() : (value ?? null);
+    value instanceof Date
+      ? value.toISOString()
+      : typeof value === 'object' && value !== null
+        ? JSON.stringify(value)
+        : (value ?? null);
   return stored(patched) === stored(held);
 }
 

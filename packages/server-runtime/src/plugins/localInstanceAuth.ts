@@ -109,6 +109,17 @@ function secretsMatch(presented: string, expected: string): boolean {
 }
 
 /**
+ * Whether the request presents the instance secret itself as its bearer token.
+ * An API key does not count, so the profile picker answers the web process and
+ * other holders of the secret alone (Plan 335 P3).
+ */
+export function presentsInstanceSecret(request: FastifyRequest, instanceSecret: string): boolean {
+  const header = request.headers.authorization;
+  if (!header?.startsWith('Bearer ')) return false;
+  return secretsMatch(header.slice(7), instanceSecret);
+}
+
+/**
  * How a request holding the instance secret came to name its user.
  *
  * - `sole-profile`: no profile session, on an install with one profile. The
@@ -241,8 +252,6 @@ export async function authenticateLocalInstance(
         message: 'The profile session was not issued by this instance. Choose a profile again.',
       };
     }
-    // A user with no row has no membership either, so the membership read
-    // refuses it with the 403 any other non-member gets.
     let generation: number | null;
     try {
       generation = await opts.profileSessionGeneration(claims.userId);
@@ -254,7 +263,17 @@ export async function authenticateLocalInstance(
         cause,
       };
     }
-    if (generation !== null && generation !== claims.generation) {
+    // A removed profile has no row. Its browser is sent back to the picker, as
+    // one whose session has ended is. A user who has a row and no membership
+    // still meets the membership read's 403.
+    if (generation === null) {
+      return {
+        kind: 'refused',
+        code: 'PROFILE_SESSION_INVALID',
+        message: 'This profile no longer exists. Choose a profile again.',
+      };
+    }
+    if (generation !== claims.generation) {
       return {
         kind: 'refused',
         code: 'PROFILE_SESSION_INVALID',

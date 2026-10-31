@@ -23,6 +23,7 @@ import { useSpace } from './providers.js';
 import { spaceRoute } from '../lib/space-routes.js';
 import { SpaceSelector } from './space-selector.js';
 import { UserAvatar, useCurrentUser } from './user-avatar.js';
+import { ProfileMenu } from './profile-menu.js';
 import { useEdition, useHasSurface } from '../hooks/useEdition.js';
 import { type ReactNode, useEffect } from 'react';
 
@@ -103,6 +104,58 @@ function Sidebar() {
   // The rail's own state, not the pinned one: a collapsed rail under the pointer
   // slides open and its names come with it.
   const showLabel = railExpanded;
+
+  // The avatar and name at the foot of the sidebar, which opens the account
+  // page in the hosted edition and the profile menu in the local one. The name
+  // is clipped away on the rail, so the button carries it as its label.
+  const identityRow = (
+    onClick: () => void,
+    menu?: { ref: (node: HTMLElement | null) => void; open: boolean },
+  ) => (
+    <button
+      type="button"
+      ref={menu?.ref}
+      aria-label={userLabel}
+      {...(menu ? { 'aria-haspopup': 'dialog' as const, 'aria-expanded': menu.open } : {})}
+      style={{
+        width: '100%',
+        border: 'none',
+        background: 'none',
+        font: 'inherit',
+        color: 'inherit',
+        textAlign: 'start',
+        display: 'grid',
+        gridTemplateColumns: showLabel ? 'auto 1fr' : 'auto 0fr',
+        alignItems: 'center',
+        justifyContent: showLabel ? undefined : 'center',
+        columnGap: showLabel ? 'var(--space-3)' : 0,
+        padding: showLabel ? '8px var(--space-3)' : '8px',
+        overflow: 'hidden',
+        marginBottom: 'var(--space-sm)',
+        cursor: 'pointer',
+        borderRadius: 'var(--radius-md)',
+        transition:
+          'grid-template-columns var(--transition-duration-normal) var(--transition-timing-ease-out), column-gap var(--transition-duration-normal) var(--transition-timing-ease-out)',
+      }}
+      onClick={onClick}
+    >
+      <UserAvatar user={user} size={24} />
+      <Text
+        variant="muted"
+        size="xs"
+        truncate
+        style={{
+          opacity: showLabel ? 1 : 0,
+          transform: showLabel ? 'translateX(0)' : 'translateX(-4px)',
+          transition:
+            'opacity var(--transition-duration-normal) var(--transition-timing-ease-out), transform var(--transition-duration-normal) var(--transition-timing-ease-out)',
+        }}
+        aria-hidden={!showLabel}
+      >
+        {userLabel}
+      </Text>
+    </button>
+  );
 
   return (
     <>
@@ -384,43 +437,22 @@ function Sidebar() {
       )}
 
       <SidebarFooter>
-        {user && (
+        {/* Local edition only: a profile names who is at the keyboard there
+            (Plan 335 D2). The hosted footer opens the account page. */}
+        {user && isLocalEdition && (
+          <ProfileMenu user={user} label={userLabel}>
+            {({ ref, open, toggle }) => (
+              <Tooltip content="Profile" side="right">
+                {identityRow(toggle, { ref, open })}
+              </Tooltip>
+            )}
+          </ProfileMenu>
+        )}
+        {user && !isLocalEdition && (
           <Tooltip content="Account settings" side="right">
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: showLabel ? 'auto 1fr' : 'auto 0fr',
-                alignItems: 'center',
-                justifyContent: showLabel ? undefined : 'center',
-                columnGap: showLabel ? 'var(--space-3)' : 0,
-                padding: showLabel ? '8px var(--space-3)' : '8px',
-                overflow: 'hidden',
-                marginBottom: 'var(--space-sm)',
-                cursor: 'pointer',
-                borderRadius: 'var(--radius-md)',
-                transition:
-                  'grid-template-columns var(--transition-duration-normal) var(--transition-timing-ease-out), column-gap var(--transition-duration-normal) var(--transition-timing-ease-out)',
-              }}
-              onClick={() => {
-                router.push('/account');
-              }}
-            >
-              <UserAvatar user={user} size={24} />
-              <Text
-                variant="muted"
-                size="xs"
-                truncate
-                style={{
-                  opacity: showLabel ? 1 : 0,
-                  transform: showLabel ? 'translateX(0)' : 'translateX(-4px)',
-                  transition:
-                    'opacity var(--transition-duration-normal) var(--transition-timing-ease-out), transform var(--transition-duration-normal) var(--transition-timing-ease-out)',
-                }}
-                aria-hidden={!showLabel}
-              >
-                {userLabel}
-              </Text>
-            </div>
+            {identityRow(() => {
+              router.push('/account');
+            })}
           </Tooltip>
         )}
         <Tooltip content="Help" side="right">

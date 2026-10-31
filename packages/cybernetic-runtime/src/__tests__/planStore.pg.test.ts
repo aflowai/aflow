@@ -291,6 +291,30 @@ describeDb('moveAtRevision — two crossing moves never close a loop (real DB)',
     expect(read.ok && PlanBoardOutputSchema.parse(read).root.goalHead).toBe(amended);
   });
 
+  it('stores a card in its jsonb column and reads it back in the schema’s section order', async () => {
+    const card = {
+      change: { today: 'Prose.', after: 'A card.' },
+      why: ['The operator decides from the board.'],
+      affects: [],
+      risks: [{ risk: 'Long items.', mitigation: 'Short items, by guidance.' }],
+      questions: [{ question: 'Optional?', recommended: 'Yes.' }],
+      notDoing: [],
+    };
+    const target = await node('card target');
+    const written = await updatePlanNode(ctx, {
+      nodeId: target.nodeId,
+      expectedRevision: 1,
+      card,
+    });
+    expect(written).toMatchObject({ ok: true, node: { card, revision: 2 } });
+
+    const read = await store.find(SPACE_ID, target.nodeId);
+    expect(Object.keys(read?.card ?? {})).toEqual(Object.keys(card));
+    expect(
+      await updatePlanNode(ctx, { nodeId: target.nodeId, expectedRevision: 2, card }),
+    ).toMatchObject({ ok: false, code: 'PLAN_NODE_UNCHANGED' });
+  });
+
   describe('the overview read (Plan 332 D7)', () => {
     const spaces: string[] = [];
     const bounds = { maxDepth: PLAN_TREE_DEPTH_LIMIT, maxNodes: PLAN_TREE_WALK_NODE_LIMIT };

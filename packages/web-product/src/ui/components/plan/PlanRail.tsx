@@ -380,10 +380,9 @@ export function PlanRail({
   });
   const full = detail.data?.node;
   // The step's own read says whether a run is on it; until it answers, a card
-  // says, and a lane row, which carries no activity, reads In flight as moving.
-  const runInFlight =
-    (detail.data?.activity ?? node.activity ?? (column === 'in_flight' ? 'in_flight' : 'idle')) ===
-    'in_flight';
+  // says. A lane row carries no activity, so it reads idle until the read
+  // answers: a waiting step whose run has ended never shows running first.
+  const runInFlight = (detail.data?.activity ?? node.activity ?? 'idle') === 'in_flight';
   const columnLabel = PLAN_BOARD_COLUMNS.find((c) => c.id === column)?.label ?? column;
   const runLinks = detail.data?.links ?? [];
   const inFlight = (detail.data?.runs ?? []).filter((run) => run.nodeId === node.nodeId);

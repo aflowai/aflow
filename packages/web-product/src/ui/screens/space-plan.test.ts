@@ -14,7 +14,15 @@
  * operator's own controls (P3.2); where the operator is, in the URL. Rendered through the screen itself, the design system's
  * primitives as plain elements and every query recorded.
  */
-import { act, createContext, createElement, useContext, useState, type ReactNode } from 'react';
+import {
+  act,
+  createContext,
+  createElement,
+  useContext,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PlanNodeOpenSchema } from '@aflow/schemas';
@@ -205,8 +213,8 @@ vi.mock('@aflow/design-system', () => {
       );
     },
     // Marked, so a test reads which content grows and shrinks rather than snaps.
-    AnimatedHeight: ({ children }: { children?: ReactNode }) =>
-      createElement('div', { 'data-animated-height': '' }, children),
+    AnimatedHeight: ({ children, style }: { children?: ReactNode; style?: CSSProperties }) =>
+      createElement('div', { 'data-animated-height': '', style }, children),
     Panel: block('div'),
     ScrollArea: block('div'),
     Input: (props: Record<string, unknown>) => createElement('input', props),
@@ -2772,9 +2780,16 @@ describe('SpacePlanPage — the overview across plans (Plan 332 P4)', () => {
   });
 });
 
-/** The label of the state orb that stands first in `scope`. */
-function orbLabel(scope: Element): string | null {
-  return scope.querySelector('[data-plan-orb] [role="img"]')?.getAttribute('aria-label') ?? null;
+/**
+ * The kind of the state orb that stands first in `scope`. The words beside it
+ * name the state, so the orb is hidden from assistive technology.
+ */
+function orbKind(scope: Element): string | null {
+  const orb = scope.querySelector('[data-plan-orb]');
+  if (!orb) return null;
+  expect(orb.querySelector('[role="img"]')).toBe(null);
+  expect(orb.querySelector('[aria-hidden="true"]')).not.toBe(null);
+  return orb.getAttribute('data-plan-orb');
 }
 
 /** A part of the rail by its role and name. */
@@ -2797,31 +2812,31 @@ describe('SpacePlanPage — state as orbs, and motion (Plan 332 P7)', () => {
     await render({ data: LIST });
 
     const read = (rootId: string) => [
-      orbLabel(listRow(rootId)!),
+      orbKind(listRow(rootId)!),
       listRow(rootId)!.querySelector('[data-plan-row-state]')?.textContent,
     ];
-    expect(read(L_NEEDS)).toEqual(['Paused — action expected', 'Needs you']);
-    expect(read(L_FLIGHT)).toEqual(['Running', '1 in flight']);
-    expect(read(L_QUEUED)).toEqual(['Idle', 'Queued']);
-    expect(read(L_EMPTY)).toEqual(['Inactive', 'No steps']);
-    expect(read(L_FINISHED)).toEqual(['Completed', 'Finished']);
+    expect(read(L_NEEDS)).toEqual(['paused', 'Needs you']);
+    expect(read(L_FLIGHT)).toEqual(['running', '1 in flight']);
+    expect(read(L_QUEUED)).toEqual(['idle', 'Queued']);
+    expect(read(L_EMPTY)).toEqual(['inert', 'No steps']);
+    expect(read(L_FINISHED)).toEqual(['completed', 'Finished']);
 
     await click(
       container.querySelector<HTMLElement>('[data-plan-list-section="closed"] > button')!,
     );
-    expect(read(L_CLOSED)).toEqual(['Inactive', 'Closed']);
+    expect(read(L_CLOSED)).toEqual(['inert', 'Closed']);
   });
 
   it('reads the plan’s header state by its orb and its words', async () => {
     await render();
 
     const header = container.querySelector(`[data-plan-tally="${R322}"]`)!;
-    expect(orbLabel(header)).toBe('Paused — action expected');
+    expect(orbKind(header)).toBe('paused');
     expect(header.querySelector('[data-badge]')?.textContent).toBe('Needs you');
 
     await choosePlan(R315);
     const closed = container.querySelector(`[data-plan-tally="${R315}"]`)!;
-    expect(orbLabel(closed)).toBe('Inactive');
+    expect(orbKind(closed)).toBe('inert');
     expect(closed.querySelector('[data-badge]')?.textContent).toBe('Closed');
   });
 
@@ -2833,22 +2848,22 @@ describe('SpacePlanPage — state as orbs, and motion (Plan 332 P7)', () => {
       const heading = shown
         .closest('[data-plan-column]')!
         .querySelector('[data-plan-column-header]');
-      return [orbLabel(shown), heading?.getAttribute('data-plan-column-header')];
+      return [orbKind(shown), heading?.getAttribute('data-plan-column-header')];
     };
-    expect(read(DECISION)).toEqual(['Paused — action expected', 'Needs you']);
+    expect(read(DECISION)).toEqual(['paused', 'Needs you']);
     expect(card(DECISION).textContent).toContain('Decision');
     // A run on the step itself, and one on a step under it, both read running.
-    expect(read(BOARD)).toEqual(['Running', 'In flight']);
+    expect(read(BOARD)).toEqual(['running', 'In flight']);
     expect(card(BOARD).textContent).toContain('1 run in flight');
-    expect(read(P3)).toEqual(['Running', 'In flight']);
+    expect(read(P3)).toEqual(['running', 'In flight']);
     // A waiting step whose run ended is In flight, and nothing moves it until the loop returns.
-    expect(read(NEXT)).toEqual(['Idle', 'In flight']);
+    expect(read(NEXT)).toEqual(['idle', 'In flight']);
     expect(card(NEXT).querySelector('[data-plan-waiting]')?.textContent).toBe(
       'Its run ended; the loop advances it when it returns',
     );
-    expect(read(ARTICLE)).toEqual(['Idle', 'Up next']);
-    expect(read(LANDED)).toEqual(['Completed', 'Done']);
-    expect(read(SKETCH)).toEqual(['Inactive', 'Dropped']);
+    expect(read(ARTICLE)).toEqual(['idle', 'Up next']);
+    expect(read(LANDED)).toEqual(['completed', 'Done']);
+    expect(read(SKETCH)).toEqual(['inert', 'Dropped']);
     expect(container.querySelector('[data-plan-orb="failed"]')).toBe(null);
   });
 
@@ -2856,15 +2871,15 @@ describe('SpacePlanPage — state as orbs, and motion (Plan 332 P7)', () => {
     await render();
 
     await click(card(DECISION));
-    expect(orbLabel(rail())).toBe('Paused — action expected');
+    expect(orbKind(rail())).toBe('paused');
     expect(rail().querySelector('[data-badge]')?.textContent).toBe('Needs you');
 
     await click(card(LANDED));
-    expect(orbLabel(rail())).toBe('Completed');
+    expect(orbKind(rail())).toBe('completed');
     expect(rail().querySelector('[data-badge]')?.textContent).toBe('Done');
 
     await click(card(ARTICLE));
-    expect(orbLabel(rail())).toBe('Idle');
+    expect(orbKind(rail())).toBe('idle');
     expect(rail().querySelector('[data-badge]')?.textContent).toBe('Up next');
   });
 
@@ -2872,19 +2887,35 @@ describe('SpacePlanPage — state as orbs, and motion (Plan 332 P7)', () => {
     nav.search = '';
     await render({ data: OVERVIEW });
 
-    expect(orbLabel(laneRow(LANE_STOP))).toBe('Paused — action expected');
+    expect(orbKind(laneRow(LANE_STOP))).toBe('paused');
     expect(laneRow(LANE_STOP).querySelector('[data-badge]')?.textContent).toBe('Blocked');
-    expect(orbLabel(laneRow(LANE_STRANDED))).toBe('Paused — action expected');
+    expect(orbKind(laneRow(LANE_STRANDED))).toBe('paused');
     expect(laneRow(LANE_STRANDED).textContent).toContain('Under a closed step');
-    expect(orbLabel(laneRow(ARTICLE))).toBe('Idle');
+    expect(orbKind(laneRow(ARTICLE))).toBe('idle');
     expect(laneRow(ARTICLE).textContent).toContain('Next for the loop');
 
     const running = laneRow(BOARD);
-    expect(orbLabel(running)).toBe('Running');
+    expect(orbKind(running)).toBe('running');
     const run = running.querySelector(`[data-plan-lane-run="${RUN_ID}"] [data-plan-run]`)!;
-    expect(run.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe('Run executing');
+    expect(run.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe('Run');
     expect(run.textContent).toBe('Commissionexecuting60m 00s');
     expect(run.querySelector('[data-plan-run-elapsed]')?.textContent).toBe('60m 00s');
+  });
+
+  it('reads a rail opened from an In flight lane row as idle until the step’s read says a run is on it', async () => {
+    delete recorded.details[BOARD];
+    nav.search = '';
+    await render({ data: OVERVIEW });
+
+    await click(laneRow(BOARD).querySelector('button')!);
+    expect(rail().getAttribute('data-plan-rail')).toBe(BOARD);
+    expect(orbKind(rail())).toBe('idle');
+
+    recorded.details[BOARD] = detail(fullNode(BOARD, 'P3.3 the board'), {
+      activity: 'in_flight',
+    });
+    await render({ data: OVERVIEW });
+    expect(orbKind(rail())).toBe('running');
   });
 
   it('writes a run in flight on the rail as the run surface writes its rows', async () => {
@@ -2904,9 +2935,9 @@ describe('SpacePlanPage — state as orbs, and motion (Plan 332 P7)', () => {
     await render();
 
     await click(card(BOARD));
-    expect(orbLabel(rail())).toBe('Running');
+    expect(orbKind(rail())).toBe('running');
     const run = railGroup('Runs').querySelector(`[data-plan-run="${RUN_ID}"]`)!;
-    expect(run.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe('Run paused');
+    expect(run.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe('Run');
     // A paused run says it is paused, and no time runs on it.
     expect(run.textContent).toBe('Commissionpaused');
   });
@@ -2959,5 +2990,11 @@ describe('SpacePlanPage — state as orbs, and motion (Plan 332 P7)', () => {
     await choosePlan(R315);
     const today = column('done').querySelector('[data-plan-done-group="today"]')!;
     expect(animatedWithin(today, today.querySelector('[data-plan-card]'))).toBe(true);
+    // The fold widens by the selected card's ring and pads its cards by it, so its clip spares the ring.
+    const fold = today.querySelector<HTMLElement>('[data-animated-height]')!;
+    expect(fold.style.marginInline).toBe('-2px');
+    expect(fold.querySelector<HTMLElement>('[data-plan-card]')!.parentElement!.style.padding).toBe(
+      '2px',
+    );
   });
 });
