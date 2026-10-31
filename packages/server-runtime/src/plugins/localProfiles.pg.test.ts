@@ -205,7 +205,13 @@ describeDb('local profiles (real DB)', () => {
 
     it('refuses a session for a user without an active membership with a 403', async () => {
       expect((await probe(browser(pending))).status).toBe(403);
-      expect((await probe(browser(randomUUID()))).status).toBe(403);
+    });
+
+    it('sends a session naming no user back to the picker', async () => {
+      expect(await probe(browser(randomUUID()))).toEqual({
+        status: 401,
+        body: expect.objectContaining({ code: 'PROFILE_SESSION_INVALID' }),
+      });
     });
 
     // The room Plan 335 P4 needs: a PIN bumps the generation, and a session

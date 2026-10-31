@@ -1,14 +1,20 @@
 /**
- * The owner's profile management on a local install (Plan 335 P2): list, add,
- * rename, set the avatar and remove.
+ * A local install's profiles: the picker that issues a profile session
+ * (Plan 335 P3), and the owner's management (P2) — list, add, rename, set the
+ * avatar and remove.
  *
  * Registered in every edition and refused outside the local one, because a
  * profile is the local edition's way of naming who is at the keyboard. The
  * hosted edition admits people through its identity provider instead.
  *
- * Owner only. The operator's own profile session, the bare instance secret
- * and the sole-profile owner all resolve to the owner role. Any other profile
- * session is refused, whatever its role.
+ * The picker answers a request that presents the instance secret, with or
+ * without a profile session, because a browser with none is the one that has
+ * to choose. It is the only path that issues a session, and it issues one only
+ * for a profile of the pinned tenant.
+ *
+ * Management is owner only. The operator's own profile session, the bare
+ * instance secret and the sole-profile owner all resolve to the owner role.
+ * Any other profile session is refused, whatever its role.
  */
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type postgres from 'postgres';
@@ -19,18 +25,29 @@ import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import {
   CreateLocalProfileRequestSchema,
   CreateLocalProfileResponseSchema,
+  LOCAL_BROWSER_CALLER_HEADER,
+  LocalProfileChoicesResponseSchema,
   LocalProfileListResponseSchema,
   LocalProfileRemovalPreviewSchema,
   LocalProfileSchema,
+  LocalProfileSessionResponseSchema,
   RemoveLocalProfileResponseSchema,
   UpdateLocalProfileRequestSchema,
+  type LocalProfile,
+  type LocalProfileChoice,
 } from '@aflow/schemas';
 import { resolvePrincipalActorKind } from '../utils/actorContext.js';
+import { presentsInstanceSecret, resolveInstanceSecret } from '../plugins/localInstanceAuth.js';
+import {
+  issueLocalProfileSession,
+  readLocalProfileSessionGeneration,
+} from '../plugins/localProfiles.js';
 import {
   LocalProfileError,
   addLocalProfile,
   listLocalProfiles,
   previewLocalProfileRemoval,
+  readLocalProfile,
   removeLocalProfile,
   updateLocalProfile,
   type LocalProfileRefusal,
@@ -48,12 +65,16 @@ const OWNER_ONLY = { authz: { resource: 'tenant' as const, action: 'owner_admin'
 
 const ProfileParamsSchema = z.object({ userId: z.string().uuid() });
 
-export const localProfileRoutes: FastifyPluginAsync = async (fastify) => {
-  const app = fastify.withTypeProvider<ZodTypeProvider>();
-  const db = (): PostgresJsDatabase => fastify.appContext.db as PostgresJsDatabase;
+const toChoice = (profile: LocalProfile): LocalProfileChoice => ({
+  userId: profile.userId,
+  displayName: profile.displayName,
+  avatar: profile.avatar,
+  isOwner: profile.isOwner,
+});
 
+export const localProfileRoutes: FastifyPluginAsync = async (fastify) => {
   // Before authentication, so the hosted edition answers every caller alike.
-  app.addHook('onRequest', async (_request, reply) => {
+  fastify.addHook('onRequest', async (_request, reply) => {
     if (fastify.edition.edition !== 'community-local') {
       return reply.status(404).send({
         error: 'NotFound',
@@ -63,6 +84,121 @@ export const localProfileRoutes: FastifyPluginAsync = async (fastify) => {
     }
     return undefined;
   });
+  // Two scopes, so the owner rule never reaches the picker. `authenticate`
+  // refuses a browser with no session once a second profile exists, and that
+  // browser is the one the picker must answer.
+  await fastify.register(localProfilePickerRoutes);
+  await fastify.register(localProfileManagementRoutes);
+};
+
+/**
+ * Who is using Aflow? The tiles, and the session one of them issues.
+ *
+ * Answers only the instance secret itself, never an API key, because a key
+ * already names its user and has nothing to choose.
+ */
+const localProfilePickerRoutes: FastifyPluginAsync = async (fastify) => {
+  const app = fastify.withTypeProvider<ZodTypeProvider>();
+  const db = (): PostgresJsDatabase => fastify.appContext.db as PostgresJsDatabase;
+
+  const PICKER = {
+    authzExempt: {
+      reason:
+        'The picker answers a browser that holds no profile session yet. The preHandler below admits the instance secret alone.',
+    },
+  };
+
+  const pinnedTenant = (): string => {
+    const tenancy = fastify.edition.tenancy;
+    if (tenancy.mode !== 'fixed') throw new Error('The local edition pins one tenant');
+    return tenancy.tenantId;
+  };
+
+  app.addHook('preHandler', async (request, reply) => {
+    if (!presentsInstanceSecret(request, resolveInstanceSecret())) {
+      return reply.status(401).send({
+        error: 'Unauthorized',
+        message: "The profile picker answers this install's web process alone.",
+      });
+    }
+    return undefined;
+  });
+
+  app.get(
+    '/picker',
+    {
+      config: PICKER,
+      schema: {
+        tags: ['Local profiles'],
+        summary: 'List the profiles a browser chooses from',
+        response: { 200: LocalProfileChoicesResponseSchema, 401: ErrorSchema, 404: ErrorSchema },
+      },
+    },
+    async () => ({ profiles: (await listLocalProfiles(db(), pinnedTenant())).map(toChoice) }),
+  );
+
+  app.post(
+    '/:userId/session',
+    {
+      config: PICKER,
+      schema: {
+        tags: ['Local profiles'],
+        summary: 'Issue the profile session for the profile a browser chose',
+        params: ProfileParamsSchema,
+        response: {
+          200: LocalProfileSessionResponseSchema,
+          401: ErrorSchema,
+          403: ErrorSchema,
+          404: ErrorSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      // The web process marks every browser call it proxies. A session sent
+      // back through the proxy would reach a script in the page, and the
+      // picker keeps it in a cookie no script reads.
+      if (request.headers[LOCAL_BROWSER_CALLER_HEADER] !== undefined) {
+        return reply.status(403).send({
+          error: 'Forbidden',
+          message: 'A browser chooses a profile through the picker, which keeps the session.',
+        });
+      }
+      const tenantId = pinnedTenant();
+      const { userId } = request.params;
+      const profile = await readLocalProfile(db(), tenantId, userId);
+      const generation =
+        profile === null ? null : await readLocalProfileSessionGeneration(db(), userId);
+      if (profile === null || generation === null) {
+        return reply.status(404).send({
+          error: 'NotFound',
+          message: 'No profile with that id on this install.',
+        });
+      }
+      const session = issueLocalProfileSession(userId, resolveInstanceSecret(), { generation });
+      fastify.audit?.record({
+        actor: {
+          userId: profile.userId,
+          kind: 'human',
+          authMethod: 'local',
+          tenantId,
+          tenantRole: profile.role,
+        },
+        category: 'security',
+        action: 'local_profile.session_issue',
+        outcome: 'success',
+        target: { resourceType: 'user', resourceId: profile.userId, tenantId },
+        request: { method: request.method, path: request.url },
+      });
+      return reply.send({ profile: toChoice(profile), session });
+    },
+  );
+};
+
+/** The owner's management (Plan 335 P2). */
+const localProfileManagementRoutes: FastifyPluginAsync = async (fastify) => {
+  const app = fastify.withTypeProvider<ZodTypeProvider>();
+  const db = (): PostgresJsDatabase => fastify.appContext.db as PostgresJsDatabase;
+
   app.addHook('preHandler', app.authenticate);
   // The central check grants `owner_admin` to an admin when Redis is down, so
   // the owner rule is stated here as well.

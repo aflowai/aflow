@@ -1,9 +1,10 @@
 /**
- * The local edition's profiles as the owner manages them (Plan 335 P2).
+ * The local edition's profiles as the owner manages them (Plan 335 P2) and
+ * as the picker offers them (P3).
  *
  * A profile is a `users` row with an active membership in the pinned tenant.
- * These are the shapes the management routes take and answer, and the
- * built-in avatars a profile chooses from.
+ * These are the shapes the management and picker routes take and answer, and
+ * the built-in avatars a profile chooses from.
  */
 import { z } from 'zod';
 import { TenantRoleSchema } from '../identity/user.js';
@@ -79,6 +80,39 @@ export const LocalProfileListResponseSchema = z.object({
   profiles: z.array(LocalProfileSchema),
 });
 export type LocalProfileListResponse = z.infer<typeof LocalProfileListResponseSchema>;
+
+/**
+ * One tile of the picker (Plan 335 D1). The picker answers a browser that
+ * holds no profile session, so it carries the name and the avatar alone.
+ */
+export const LocalProfileChoiceSchema = LocalProfileSchema.pick({
+  userId: true,
+  displayName: true,
+  avatar: true,
+  isOwner: true,
+});
+export type LocalProfileChoice = z.infer<typeof LocalProfileChoiceSchema>;
+
+export const LocalProfileChoicesResponseSchema = z.object({
+  /** The owner first, then the others in the order they were added. */
+  profiles: z.array(LocalProfileChoiceSchema),
+});
+export type LocalProfileChoicesResponse = z.infer<typeof LocalProfileChoicesResponseSchema>;
+
+/**
+ * The session the picker issues for one profile. The web process keeps it in
+ * an `httpOnly` cookie, so no script in the browser reads it.
+ */
+export const LocalProfileSessionResponseSchema = z.object({
+  profile: LocalProfileChoiceSchema,
+  session: z.string().min(1),
+});
+export type LocalProfileSessionResponse = z.infer<typeof LocalProfileSessionResponseSchema>;
+
+/** Whether an install's profiles call for the picker. One profile never does. */
+export function showsLocalProfilePicker(profiles: readonly unknown[]): boolean {
+  return profiles.length >= 2;
+}
 
 export const CreateLocalProfileRequestSchema = z
   .object({

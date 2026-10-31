@@ -6,6 +6,9 @@
  * profile count cached for its usual lifetime. A browser with no session then
  * changes answer at once after an add or a removal only if the route dropped
  * the count.
+ *
+ * Plan 335 P3 on the same install: after the add, the picker lists both
+ * profiles and issues the session that lets the owner's browser in again.
  */
 import { randomUUID } from 'node:crypto';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -232,6 +235,34 @@ describeDb('local profile management (real DB)', () => {
     expect(assigned).toHaveLength(1);
   });
 
+  // Plan 335 P3: the add no longer locks a browser out. The picker issues the
+  // session that lets the owner's browser in again.
+  it('lets the sessionless browser choose a profile and manage profiles again', async () => {
+    const picker = await call('GET', '/local-profiles/picker', browser());
+    expect(picker.status).toBe(200);
+    expect(picker.body['profiles']).toEqual([
+      { userId: OWNER_ID, displayName: 'Local user', avatar: null, isOwner: true },
+      { userId: ada, displayName: 'Ada', avatar: 'owl', isOwner: false },
+    ]);
+
+    // The web process asks for the session itself, without the browser mark.
+    expect((await call('POST', `/local-profiles/${OWNER_ID}/session`, browser())).status).toBe(403);
+    expect(
+      (await call('POST', `/local-profiles/${randomUUID()}/session`, BARE_SECRET)).status,
+    ).toBe(404);
+    const issued = await call('POST', `/local-profiles/${OWNER_ID}/session`, BARE_SECRET);
+    expect(issued.status).toBe(200);
+    const session = issued.body['session'] as string;
+
+    const withSession = {
+      ...browser(),
+      [LOCAL_PROFILE_SESSION_HEADER]: session,
+    };
+    const list = await call('GET', '/local-profiles', withSession);
+    expect(list.status).toBe(200);
+    expect((list.body['profiles'] as unknown[]).length).toBe(2);
+  });
+
   it("gives the new profile its own Personal space and none of the owner's", async () => {
     const { status, body } = await call('GET', '/spaces', browser(ada));
     expect(status).toBe(200);
@@ -307,7 +338,11 @@ describeDb('local profile management (real DB)', () => {
     expect(removed.status).toBe(200);
     expect(removed.body['spacesDeleted']).toEqual([{ spaceId: adaSpace, name: 'Personal' }]);
 
-    expect((await call('GET', '/spaces', adaSession)).status).toBe(403);
+    // The browser that held the session is sent back to the picker.
+    expect(await call('GET', '/spaces', adaSession)).toEqual({
+      status: 401,
+      body: expect.objectContaining({ code: 'PROFILE_SESSION_INVALID' }),
+    });
     expect(await call('GET', '/local-profiles', browser())).toEqual({
       status: 200,
       body: {

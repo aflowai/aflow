@@ -11,16 +11,19 @@ import { hueOf } from './room/ParticipantBadge.js';
 export function ProfileAvatar({
   avatar,
   size = 32,
+  name,
 }: {
   avatar: LocalProfileAvatar | null;
   size?: number;
+  /** Drawn as its first letter where the profile has no avatar. */
+  name?: string;
 }) {
   const entry = LOCAL_PROFILE_AVATARS.find((a) => a.key === avatar);
   const hue = hueOf(entry?.key ?? '');
   return (
     <span
       role="img"
-      aria-label={entry?.label ?? 'No avatar'}
+      aria-label={entry?.label ?? name ?? 'No avatar'}
       style={{
         width: size,
         height: size,
@@ -35,7 +38,13 @@ export function ProfileAvatar({
         flexShrink: 0,
       }}
     >
-      {entry?.glyph ?? ''}
+      {entry?.glyph ?? initialOf(name)}
     </span>
   );
+}
+
+/** The first letter of a name, or nothing for a name with none. */
+function initialOf(name: string | undefined): string {
+  const first = name?.trim().codePointAt(0);
+  return first === undefined ? '' : String.fromCodePoint(first).toUpperCase();
 }

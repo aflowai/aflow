@@ -33,11 +33,7 @@ Members who are not admins see the list without these controls.
 
 ## Across the organisation
 
-Organisation-wide membership and invitations are under **Tenant Admin** at the foot of the sidebar, on the **Members** and **Invites** tabs, for tenant admins.
-
-## In Aflow Local
-
-Aflow Local has no invitations, no People entry and no Members tab. Several people share it as profiles instead, which its owner adds under **Settings** → **Profiles**. Each profile starts with a space of its own and does not see the others' spaces.`,
+Organisation-wide membership and invitations are under **Tenant Admin** at the foot of the sidebar, on the **Members** and **Invites** tabs, for tenant admins.`,
     editions: ['enterprise'],
     anchors: { routes: ['s/[space]/settings/members'], operations: [] },
     related: ['what-is-a-space', 'api-keys', 'local-edition-limits'],
@@ -48,12 +44,30 @@ Aflow Local has no invitations, no People entry and no Members tab. Several peop
     theme: 'teams',
     question: 'How do several people share Aflow Local?',
     summary:
-      'Aflow Local has no invitations and no members. People who share one install each get a profile, which the owner manages under Settings → Profiles. Each profile has its own spaces, conversations and memory, and model keys stored for the whole install are shared. The owner can rename a profile, change its avatar or remove it. Adding a profile waits for the profile picker, because a second profile would stop every browser from opening Aflow until a browser can choose a profile.',
-    body: `**Where:** **Settings** → **Profiles** (the owner only)
+      'Aflow Local has no invitations and no members. People who share one install each get a profile, which the owner adds and manages under Settings → Profiles. Each profile has its own spaces, conversations and memory, and model keys stored for the whole install are shared. Once an install has two profiles, each browser opens on Who is using Aflow? and the person picks their profile. To switch, open the menu under your avatar at the foot of the sidebar. An install with one profile shows no picker.',
+    body: `**Where:** **Settings** → **Profiles** (the owner only), and the menu under your avatar at the foot of the sidebar
 
 ## What a profile is
 
 Each person who shares this install has a profile with a name and an avatar. A profile has its own spaces, conversations and memory. Model keys stored for the whole install are shared by every profile.
+
+## Adding a profile
+
+1. Press **Add profile**.
+2. Enter a **Name** and choose an **Avatar**.
+3. Press **Add profile**.
+
+The new profile starts with a space of its own called Personal, and it does not see your spaces. Once the install has two profiles, this browser asks who is using Aflow too. Pick your own profile to carry on.
+
+## Who is using Aflow?
+
+An install with two or more profiles opens on **Who is using Aflow?** in a browser that has not picked a profile yet. It shows each profile's avatar and name. Pick yours, and Aflow opens in the space that profile last used. The browser remembers the choice until someone switches profile or the browser's cookies are cleared. An install with one profile never shows this screen.
+
+The picker asks for no PIN in this version. Anyone at the browser can pick any profile.
+
+## Switching profile
+
+Open the menu under your avatar at the foot of the sidebar. It names the profile using Aflow now and lists the other profiles. Pick one to switch to it, or press **Switch profile** to open the picker. The owner also finds **Manage profiles** there, which opens **Settings** → **Profiles**.
 
 ## Editing a profile
 
@@ -64,15 +78,22 @@ Press **Edit** on a profile, change its **Name** or choose another **Avatar**, a
 1. Press **Remove** on the profile. The owner's own profile has no **Remove**.
 2. The dialog lists the spaces only that profile is in. They are deleted with everything in them.
 3. Spaces it shares with others pass to you.
-4. Press **Remove profile**. Its sessions end, and this cannot be undone.
-
-## Adding a profile
-
-**Add profile** is off in this version. Once a second profile exists, every browser must choose a profile before it opens Aflow, the owner's included. This version has no profile picker, so no browser could open Aflow again and this page could not remove the profile. **Add profile** turns on when the picker arrives.`,
+4. Press **Remove profile**. Its sessions end, and this cannot be undone. A browser that was using it goes back to the picker.`,
     editions: ['community-local'],
     anchors: { routes: ['settings/profiles'], operations: [] },
     related: ['local-edition-limits', 'api-keys'],
-    keywords: ['profile', 'profiles', 'share', 'family', 'avatar', 'rename', 'remove', 'people'],
+    keywords: [
+      'profile',
+      'profiles',
+      'share',
+      'family',
+      'avatar',
+      'rename',
+      'remove',
+      'people',
+      'choose',
+      'login',
+    ],
   },
   {
     id: 'api-keys',
