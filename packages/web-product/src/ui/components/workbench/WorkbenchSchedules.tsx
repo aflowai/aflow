@@ -1,64 +1,20 @@
 'use client';
 
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Column } from '@aflow/design-system';
-import { selectChatScheduleNews } from '@aflow/schemas';
 
 import type { UseActionCenterResult } from '../../hooks/use-action-center.js';
-import { spaceSchedulesKey, useSpaceSchedules } from '../../hooks/use-space-schedules.js';
-import { ScheduleCard, type ScheduleRow } from '../schedule-card.js';
+import { chatSchedulesKey, useChatSchedules } from '../../hooks/use-space-schedules.js';
+import { ScheduleCard } from '../schedule-card.js';
 import { WorkbenchSection } from './WorkbenchSection.js';
 
 /**
- * The schedule that now carries a trigger: the last renewal in its chain, or
- * the schedule itself where nothing has renewed it. A renewal expires its
- * predecessor, so showing the predecessor would read a firing trigger as
- * expired. The database keeps one successor per schedule.
- */
-function currentRenewal(
-  row: ScheduleRow,
-  successorOf: ReadonlyMap<string, ScheduleRow>,
-): ScheduleRow {
-  const seen = new Set([row.id]);
-  let current = row;
-  for (;;) {
-    const next = successorOf.get(current.id);
-    if (next === undefined || seen.has(next.id)) return current;
-    seen.add(next.id);
-    current = next;
-  }
-}
-
-/**
- * The schedules an agent set up in chat lately, each followed to the renewal
- * that now carries it. The arrivals are the ones the Action Center's
- * trigger_armed notices announce, picked by the same selectChatScheduleNews,
- * and they keep that order.
- */
-export function chatSchedules(rows: readonly ScheduleRow[], now = Date.now()): ScheduleRow[] {
-  const successorOf = new Map<string, ScheduleRow>();
-  for (const row of rows) {
-    if (row.renewsScheduleId !== null) successorOf.set(row.renewsScheduleId, row);
-  }
-  const arrivals = selectChatScheduleNews(
-    rows,
-    (row) => ({
-      armedInChat: row.createdByRunId !== null,
-      renewsScheduleId: row.renewsScheduleId,
-      status: row.status,
-      createdAt: row.createdAt,
-    }),
-    now,
-  );
-  return arrivals
-    .map((row) => currentRenewal(row, successorOf))
-    .filter((row) => row.status !== 'deleted');
-}
-
-/**
  * Schedules an agent set up in chat, each as the Triggers page shows it,
- * trimmed to this column's width.
+ * trimmed to this column's width. Each is the renewal that now carries its
+ * trigger, because a renewal expires its predecessor and the predecessor would
+ * read a firing trigger as expired. The server picks them through the read the
+ * trigger_armed notices use, so the two list the same arrivals.
  *
  * Kept out of Pending deliberately: that section's badge is a count of
  * work waiting on this person, and a schedule that only runs on its own would
@@ -68,7 +24,7 @@ export function chatSchedules(rows: readonly ScheduleRow[], now = Date.now()): S
  *
  * The trigger_armed notice still reaches the Action Center's notices lane. Here
  * it only tells this section to read the schedules again, because the notice
- * arrives live and the schedule list does not.
+ * arrives live and the schedules read does not.
  */
 export function WorkbenchSchedules({
   state,
@@ -79,8 +35,8 @@ export function WorkbenchSchedules({
   spaceId: string;
   spaceSlug: string;
 }) {
-  const { data } = useSpaceSchedules(spaceId);
-  const schedules = useMemo(() => chatSchedules(data?.schedules ?? []), [data]);
+  const { data } = useChatSchedules(spaceId);
+  const schedules = data?.schedules ?? [];
 
   const queryClient = useQueryClient();
   const noticeIds = state.lanes.notices.map((item) => item.id).join(',');
@@ -88,7 +44,7 @@ export function WorkbenchSchedules({
   useEffect(() => {
     if (seenNoticeIds.current === noticeIds) return;
     seenNoticeIds.current = noticeIds;
-    void queryClient.invalidateQueries({ queryKey: spaceSchedulesKey(spaceId) });
+    void queryClient.invalidateQueries({ queryKey: chatSchedulesKey(spaceId) });
   }, [noticeIds, queryClient, spaceId]);
 
   if (schedules.length === 0) return null;

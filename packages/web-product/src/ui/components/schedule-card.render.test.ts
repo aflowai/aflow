@@ -4,7 +4,8 @@
 /**
  * One schedule card on two surfaces: the Triggers page shows each schedule in
  * full, and the Workbench shows the ones an agent set up in chat, trimmed to
- * its column. Both read the same query and render the same component.
+ * its column. Both render the same component. The Workbench reads the server's
+ * chat read, which picks its schedules, so this test only renders what it returns.
  */
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -88,12 +89,7 @@ const firedOneShot = schedule('fired', {
 /** A daily report an agent set up an hour ago, next due in four minutes. */
 const upcoming = schedule('upcoming', { name: 'Daily report' });
 
-const renewal = schedule('renewal', {
-  name: 'Shepherd, renewed',
-  renewsScheduleId: '00000000-0000-4000-8000-0000000000d1',
-});
 const operatorMade = schedule('operator', { name: 'Weekly backup', createdByRunId: null });
-const longAgo = schedule('old', { name: 'Old reminder', createdAt: at(-10 * DAY) });
 
 const actionCenter = { lanes: { notices: [] } } as unknown as UseActionCenterResult;
 
@@ -193,10 +189,11 @@ describe('the Triggers page', () => {
 });
 
 describe("the Workbench's Schedules section", () => {
-  it('lists only schedules an agent set up in chat lately, newest first', () => {
-    schedules = [firedOneShot, renewal, operatorMade, longAgo, upcoming];
+  it('lists the schedules the chat read returns, in its order', () => {
+    schedules = [upcoming, firedOneShot];
     renderWorkbench();
 
+    expect(queried.map((q) => q.path)).toEqual(['/schedules/chat']);
     expect(container.textContent).toContain('Schedules');
     expect(container.textContent).not.toContain('Recently armed');
     expect(cards().map((el) => el.getAttribute('aria-label'))).toEqual([
@@ -243,25 +240,7 @@ describe("the Workbench's Schedules section", () => {
     expect(words(card('Daily report'))).toContain('next in 4 min · ran 3×');
   });
 
-  it('shows the renewal that now carries a schedule, never the expired one it renewed', () => {
-    const original = schedule('original', {
-      name: 'Local PR Shepherd',
-      status: 'expired',
-      nextFireAt: null,
-      lastFiredAt: at(-DAY),
-      firingCount: 50,
-      maxFirings: 50,
-      createdAt: at(-2 * DAY),
-    });
-    const first = schedule('first', {
-      name: 'Local PR Shepherd',
-      status: 'expired',
-      nextFireAt: null,
-      firingCount: 50,
-      maxFirings: 50,
-      renewsScheduleId: 'original',
-      createdAt: at(-DAY),
-    });
+  it('shows a renewal the chat read returns as the live schedule it is', () => {
     const second = schedule('second', {
       name: 'Local PR Shepherd',
       firingCount: 2,
@@ -270,13 +249,9 @@ describe("the Workbench's Schedules section", () => {
       renewsScheduleId: 'first',
       createdAt: at(-2 * 60 * MINUTE),
     });
-    schedules = [second, upcoming, first, original];
+    schedules = [second];
     renderWorkbench();
 
-    expect(cards().map((el) => el.getAttribute('aria-label'))).toEqual([
-      'Daily report',
-      'Local PR Shepherd',
-    ]);
     expect(words(card('Local PR Shepherd'))).toEqual([
       'Local PR Shepherd',
       'active',
@@ -294,14 +269,16 @@ describe("the Workbench's Schedules section", () => {
     renderWorkbench({ lanes: { notices: [notice] } } as unknown as UseActionCenterResult);
 
     expect(invalidate).toHaveBeenCalledTimes(1);
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['space', SPACE_ID, 'schedules'] });
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: ['space', SPACE_ID, 'schedules', 'chat'],
+    });
 
     renderWorkbench({ lanes: { notices: [notice] } } as unknown as UseActionCenterResult);
     expect(invalidate).toHaveBeenCalledTimes(1);
   });
 
   it('renders nothing when no agent has set one up', () => {
-    schedules = [operatorMade, renewal, longAgo];
+    schedules = [];
     renderWorkbench();
 
     expect(container.textContent).toBe('');
@@ -309,7 +286,7 @@ describe("the Workbench's Schedules section", () => {
 });
 
 describe('one schedule card on both surfaces', () => {
-  it('renders the page and the Workbench through the same component and query', () => {
+  it('renders the page and the Workbench through the same component, under one query key', () => {
     schedules = [upcoming];
 
     renderPage();
@@ -328,7 +305,12 @@ describe('one schedule card on both surfaces', () => {
 
     expect(pageVariants).toContain('page');
     expect(workbenchVariants).toContain('compact');
-    expect(workbenchQuery).toEqual(pageQuery);
+    // The Workbench's key sits under the page's, so a write that refreshes the
+    // page refreshes the section too.
     expect(pageQuery?.key).toEqual(['space', SPACE_ID, 'schedules']);
+    expect(workbenchQuery).toEqual({
+      key: ['space', SPACE_ID, 'schedules', 'chat'],
+      path: '/schedules/chat',
+    });
   });
 });

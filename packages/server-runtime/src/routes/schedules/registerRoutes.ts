@@ -15,6 +15,7 @@ import {
   ListSchedulesQuerySchema,
   UpdateScheduleBodySchema,
 } from './schemas.js';
+import { readChatScheduleChains } from '../../services/actionCenter/sources/triggerArmedSource.js';
 import { rowToResponse } from './helpers.js';
 
 /**
@@ -317,6 +318,30 @@ export function registerScheduleRoutes(fastify: FastifyInstance): void {
         schedules,
         nextCursor: hasMore && lastItem ? lastItem.id : null,
       });
+    },
+  );
+
+  // GET /v1/schedules/chat — The schedules an agent set up in chat lately
+  app.get(
+    '/chat',
+    {
+      config: {
+        authzExempt: {
+          reason:
+            'No `schedule` AuthzResourceType yet; the handler enforces space membership via requireSpace()/canWrite.',
+        },
+      },
+      schema: {
+        tags: ['schedules'],
+        summary:
+          'List the schedules an agent set up in chat lately, each as the renewal that now carries it',
+      },
+    },
+    async (request, reply) => {
+      const space = await request.requireSpace();
+      const tenant = await request.requireTenant();
+      const chains = await readChatScheduleChains(getDatabase(), tenant.tenantId, space.spaceId);
+      return reply.send({ schedules: chains.map((chain) => rowToResponse(chain.current)) });
     },
   );
 

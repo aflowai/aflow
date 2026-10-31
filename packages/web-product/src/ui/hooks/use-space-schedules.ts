@@ -10,8 +10,31 @@ export function spaceSchedulesKey(spaceId: string): QueryKey {
 }
 
 /**
- * The space's schedules, one read for every surface that lists them, so the
- * Triggers page and the Workbench share a cache entry and cannot disagree.
+ * Under the space's schedules key, so a write that refreshes the Triggers page
+ * refreshes the Workbench's section too.
+ */
+export function chatSchedulesKey(spaceId: string): QueryKey {
+  return [...spaceSchedulesKey(spaceId), 'chat'];
+}
+
+/**
+ * The schedules an agent set up in chat lately, each as the renewal that now
+ * carries it, newest arrival first. The server picks them through the read the
+ * Action Center's trigger_armed notices use, so a card and its notice agree. A
+ * page of the whole list cannot serve here: a renewing schedule's renewals push
+ * its original off the page.
+ */
+export function useChatSchedules(spaceId: string) {
+  return useApiQuery<{ schedules: ScheduleRow[] }>({
+    key: chatSchedulesKey(spaceId),
+    path: '/schedules/chat',
+    spaceId,
+    enabled: spaceId.length > 0,
+  });
+}
+
+/**
+ * The space's schedules, as the Triggers page lists them.
  *
  * Cursor-paginated, and this takes the first page. A `nextCursor` coming back
  * says more exist, which the page says out loud rather than dropping.
