@@ -7,6 +7,8 @@
  *
  * Plan 335 P4: a locked profile's PIN goes to the API with the choice, and a
  * refused PIN returns to that profile's prompt with no cookie set.
+ * A throttled PIN carries its wait to the prompt, and a PIN mark keys the
+ * browser's own count of wrong PINs.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LOCAL_BROWSER_CALLER_HEADER } from '@aflow/web-product';
@@ -14,6 +16,7 @@ import { LOCAL_BROWSER_CALLER_HEADER } from '@aflow/web-product';
 import {
   PROFILE_SESSION_MAX_AGE_SEC,
   answerProfileChoice,
+  pinMarkCookie,
   readProfileChoices,
   requiresProfileChoice,
   unlockingFrom,
@@ -42,11 +45,20 @@ afterEach(() => {
   else process.env[INSTANCE_SECRET_ENV] = savedSecret;
 });
 
-function choice(userId: string, origin = 'http://127.0.0.1:3001', pin?: string): Request {
+function choice(
+  userId: string,
+  origin = 'http://127.0.0.1:3001',
+  pin?: string,
+  cookie?: string,
+): Request {
   const form = new FormData();
   form.set('userId', userId);
   if (pin !== undefined) form.set('pin', pin);
-  return new Request(`${origin}/profiles/choose`, { method: 'POST', body: form });
+  return new Request(`${origin}/profiles/choose`, {
+    method: 'POST',
+    body: form,
+    ...(cookie === undefined ? {} : { headers: { cookie } }),
+  });
 }
 
 const json = (status: number, body: unknown): Response =>
@@ -194,6 +206,70 @@ describe('choosing a locked profile', () => {
     expect(response.headers.getSetCookie()).toEqual([]);
   });
 
+  it('carries the wait a throttled PIN was answered with to the prompt', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000_000_000 * 1000);
+    try {
+      const response = await answerProfileChoice(
+        choice(ADA, undefined, '0000'),
+        vi.fn(async () => {
+          const refused = json(429, { error: 'TooManyRequests', code: 'PROFILE_PIN_THROTTLED' });
+          refused.headers.set('retry-after', '240');
+          return refused;
+        }),
+      );
+      const location = new URL(response.headers.get('location') ?? '');
+      expect(location.searchParams.get('pin')).toBe('throttled');
+      expect(location.searchParams.get('until')).toBe(String(1_000_000_000 + 240));
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('keeps the PIN mark a right PIN returns, and sends it back with the next PIN', async () => {
+    const issued = vi.fn(async () =>
+      json(200, { profile: LOCKED, session: 'v2.issued', pinMark: 'm1.mark' }),
+    );
+    const first = await answerProfileChoice(choice(ADA, undefined, '2468'), issued);
+    const mark = first.headers.getSetCookie().find((c) => c.startsWith(`${pinMarkCookie(ADA)}=`));
+    expect(mark).toContain(`${pinMarkCookie(ADA)}=m1.mark`);
+    expect(mark).toMatch(/HttpOnly/i);
+
+    const again = vi.fn(async () => json(401, { code: 'PROFILE_PIN_INCORRECT' }));
+    await answerProfileChoice(
+      choice(ADA, undefined, '0000', `other=1; ${pinMarkCookie(ADA)}=m1.mark`),
+      again,
+    );
+    const [, init] = again.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toEqual({ pin: '0000', pinMark: 'm1.mark' });
+  });
+
+  it('sends no PIN mark without a PIN', async () => {
+    const fetchImpl = vi.fn(async () => json(401, { code: 'PROFILE_PIN_REQUIRED' }));
+    await answerProfileChoice(
+      choice(ADA, undefined, undefined, `${pinMarkCookie(ADA)}=m1.mark`),
+      fetchImpl,
+    );
+    const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(init.body).toBeUndefined();
+  });
+
+  it('counts the remaining wait from the time in the URL', () => {
+    expect(unlockingFrom([OWNER, LOCKED], ADA, 'throttled', '1240', 1000)).toEqual({
+      profile: LOCKED,
+      error: { error: 'throttled', retryAfterSec: 240 },
+    });
+    expect(unlockingFrom([OWNER, LOCKED], ADA, 'throttled', '1000', 1000)).toEqual({
+      profile: LOCKED,
+      error: null,
+    });
+    for (const until of [undefined, 'soon', ['1240']]) {
+      expect(unlockingFrom([OWNER, LOCKED], ADA, 'throttled', until, 1000)).toEqual({
+        profile: LOCKED,
+        error: { error: 'throttled', retryAfterSec: null },
+      });
+    }
+  });
+
   it('asks the PIN only for a profile that has one', () => {
     const open = { ...LOCKED, hasPin: false };
     expect(unlockingFrom([OWNER, LOCKED], ADA, undefined)).toEqual({
@@ -202,7 +278,7 @@ describe('choosing a locked profile', () => {
     });
     expect(unlockingFrom([OWNER, LOCKED], ADA, 'incorrect')).toEqual({
       profile: LOCKED,
-      error: 'incorrect',
+      error: { error: 'incorrect', retryAfterSec: null },
     });
     expect(unlockingFrom([OWNER, LOCKED], ADA, 'made-up')).toEqual({
       profile: LOCKED,

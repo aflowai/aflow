@@ -8,7 +8,7 @@
  * The hash keeps the digits themselves out of the database and its backups,
  * because people reuse a PIN elsewhere.
  */
-import { randomBytes, scrypt, timingSafeEqual, type ScryptOptions } from 'node:crypto';
+import { createHmac, randomBytes, scrypt, timingSafeEqual, type ScryptOptions } from 'node:crypto';
 
 const SCHEME = 'scrypt';
 const PARAMS = { N: 16_384, r: 8, p: 1 } as const;
@@ -71,36 +71,99 @@ export const LOCAL_PROFILE_PIN_FREE_ATTEMPTS = 4;
 const FIRST_WAIT_MS = 30_000;
 const LONGEST_WAIT_MS = 15 * 60_000;
 
+const MARK_VERSION = 'm1';
+const MARK_NONCE_BYTES = 16;
+const BASE64URL = /^[A-Za-z0-9_-]+$/;
+
+function markMac(payload: string, instanceSecret: string): Buffer {
+  const key = createHmac('sha256', instanceSecret).update('aflow-local-profile-pin-mark').digest();
+  return createHmac('sha256', key).update(payload).digest();
+}
+
 /**
- * Wrong PIN guesses per profile, kept in this process.
+ * A browser's PIN mark for one profile: `m1.<user id>.<nonce>.<MAC>`.
  *
- * The first four wrong guesses cost nothing. Each one after them makes the
- * profile wait before the next guess, 30 seconds at first and doubling to 15
- * minutes. A right PIN, a new PIN and a reset clear the count. A restart
- * clears it too, which is acceptable because restarting the API needs the
- * operator's machine, where the PIN guards nothing (D3).
+ * The API issues one only with a right PIN, so a browser that never knew the
+ * PIN holds none and cannot make one up. The mark grants nothing. It only
+ * names the count its browser's wrong guesses go to.
+ */
+export function issueLocalProfilePinMark(userId: string, instanceSecret: string): string {
+  if (instanceSecret === '') throw new Error('A PIN mark needs the instance secret.');
+  const payload = `${MARK_VERSION}.${userId}.${randomBytes(MARK_NONCE_BYTES).toString('base64url')}`;
+  return `${payload}.${markMac(payload, instanceSecret).toString('base64url')}`;
+}
+
+/** The nonce of a mark this instance issued for `userId`, or null for any other value. */
+export function readLocalProfilePinMark(
+  value: string,
+  userId: string,
+  instanceSecret: string,
+): string | null {
+  if (instanceSecret === '') return null;
+  const [version, markedUser, nonce, mac, ...rest] = value.split('.');
+  if (rest.length > 0 || version !== MARK_VERSION || markedUser !== userId) return null;
+  if (nonce === undefined || mac === undefined || !BASE64URL.test(nonce)) return null;
+  const presented = Buffer.from(mac, 'base64url');
+  const expected = markMac(`${MARK_VERSION}.${userId}.${nonce}`, instanceSecret);
+  if (presented.length !== expected.length || !timingSafeEqual(presented, expected)) return null;
+  return nonce;
+}
+
+interface PinFailure {
+  count: number;
+  waitUntil: number;
+}
+
+/**
+ * Wrong PIN guesses per profile and browser, kept in this process.
+ *
+ * Each profile has one count for browsers with no mark, and one for each
+ * mark a right PIN issued. A browser that never knew the PIN therefore makes
+ * only the unmarked count wait, and a browser that has opened the profile
+ * keeps its own (Plan 335 §14). Someone with the marked browser itself still
+ * shares that browser's count, because nothing tells them from its owner.
+ *
+ * The first four wrong guesses on a count cost nothing. Each one after them
+ * makes that count wait before the next guess, 30 seconds at first and
+ * doubling to 15 minutes. A right PIN clears the count it was sent on. A new
+ * PIN and a reset clear every count of the profile. A restart clears them
+ * too, which is acceptable because restarting the API needs the operator's
+ * machine, where the PIN guards nothing (D3).
  */
 export class LocalProfilePinAttempts {
-  private readonly failures = new Map<string, { count: number; waitUntil: number }>();
+  private readonly failures = new Map<string, Map<string, PinFailure>>();
 
   constructor(private readonly now: () => number = Date.now) {}
 
-  /** Seconds until the profile may be tried again, or 0 when it may be tried now. */
-  retryAfterSec(userId: string): number {
-    const entry = this.failures.get(userId);
+  /**
+   * Seconds until the count may be tried again, or 0 when it may be tried now.
+   * `mark` is the nonce of the browser's mark, or null for a browser with none.
+   */
+  retryAfterSec(userId: string, mark: string | null): number {
+    const entry = this.failures.get(userId)?.get(mark ?? '');
     if (entry === undefined) return 0;
     const wait = entry.waitUntil - this.now();
     return wait > 0 ? Math.ceil(wait / 1000) : 0;
   }
 
-  fail(userId: string): void {
-    const count = (this.failures.get(userId)?.count ?? 0) + 1;
+  fail(userId: string, mark: string | null): void {
+    const counts = this.failures.get(userId) ?? new Map<string, PinFailure>();
+    const count = (counts.get(mark ?? '')?.count ?? 0) + 1;
     const over = count - LOCAL_PROFILE_PIN_FREE_ATTEMPTS;
     const wait = over <= 0 ? 0 : Math.min(FIRST_WAIT_MS * 2 ** (over - 1), LONGEST_WAIT_MS);
-    this.failures.set(userId, { count, waitUntil: this.now() + wait });
+    counts.set(mark ?? '', { count, waitUntil: this.now() + wait });
+    this.failures.set(userId, counts);
   }
 
-  clear(userId: string): void {
+  /** Clears the one count a right PIN was sent on. */
+  clear(userId: string, mark: string | null): void {
+    const counts = this.failures.get(userId);
+    counts?.delete(mark ?? '');
+    if (counts?.size === 0) this.failures.delete(userId);
+  }
+
+  /** Clears every count of the profile, for a new PIN or a reset. */
+  forget(userId: string): void {
     this.failures.delete(userId);
   }
 }

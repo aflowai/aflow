@@ -110,6 +110,12 @@ export type LocalProfileChoicesResponse = z.infer<typeof LocalProfileChoicesResp
 export const LocalProfileSessionResponseSchema = z.object({
   profile: LocalProfileChoiceSchema,
   session: z.string().min(1),
+  /**
+   * For a locked profile, the mark that gives this browser its own count of
+   * wrong PINs (Plan 335 P4). The web process keeps it in an `httpOnly`
+   * cookie and sends it back with the next PIN for that profile.
+   */
+  pinMark: z.string().min(1).optional(),
 });
 export type LocalProfileSessionResponse = z.infer<typeof LocalProfileSessionResponseSchema>;
 
@@ -142,9 +148,13 @@ export type SetLocalProfilePinRequest = z.infer<typeof SetLocalProfilePinRequest
 /**
  * What the picker sends with a choice. A locked profile needs its PIN. A
  * profile with no PIN ignores one.
+ *
+ * `pinMark` is the mark a right PIN for this profile earlier issued to this
+ * browser. Wrong PINs sent with it are counted apart from wrong PINs sent
+ * without it, so a browser that never knew the PIN cannot make this one wait.
  */
 export const LocalProfileSessionRequestSchema = z
-  .object({ pin: z.string().max(64).optional() })
+  .object({ pin: z.string().max(64).optional(), pinMark: z.string().max(256).optional() })
   .strict();
 export type LocalProfileSessionRequest = z.infer<typeof LocalProfileSessionRequestSchema>;
 

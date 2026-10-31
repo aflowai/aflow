@@ -43,7 +43,12 @@ import {
 import { resolvePrincipalActorKind } from '../utils/actorContext.js';
 import { presentsInstanceSecret, resolveInstanceSecret } from '../plugins/localInstanceAuth.js';
 import { issueLocalProfileSession, readLocalProfileSessionGate } from '../plugins/localProfiles.js';
-import { LocalProfilePinAttempts, verifyLocalProfilePin } from '../services/localProfilePin.js';
+import {
+  LocalProfilePinAttempts,
+  issueLocalProfilePinMark,
+  readLocalProfilePinMark,
+  verifyLocalProfilePin,
+} from '../services/localProfilePin.js';
 import {
   LocalProfileError,
   addLocalProfile,
@@ -114,7 +119,8 @@ export const localProfileRoutes: FastifyPluginAsync = async (fastify) => {
  * already names its user and has nothing to choose.
  *
  * A profile locked with a PIN gets its session only with that PIN (Plan 335
- * P4). The API decides it, never the web process (D3).
+ * P4). The API decides it, never the web process (D3). A right PIN also
+ * answers a PIN mark, which keys that browser's own count of wrong PINs.
  */
 const localProfilePickerRoutes: FastifyPluginAsync<PinScope> = (fastify, { pinAttempts }) => {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
@@ -224,8 +230,14 @@ const localProfilePickerRoutes: FastifyPluginAsync<PinScope> = (fastify, { pinAt
           message,
         });
 
+      let pinMark: string | undefined;
       if (gate.pinHash !== null) {
-        const wait = pinAttempts.retryAfterSec(userId);
+        const presentedMark = request.body?.pinMark;
+        const mark =
+          presentedMark === undefined
+            ? null
+            : readLocalProfilePinMark(presentedMark, userId, resolveInstanceSecret());
+        const wait = pinAttempts.retryAfterSec(userId, mark);
         if (wait > 0) {
           void reply.header('retry-after', String(wait));
           return refusePin(
@@ -240,19 +252,28 @@ const localProfilePickerRoutes: FastifyPluginAsync<PinScope> = (fastify, { pinAt
         }
         // Counted before the comparison, so guesses sent at once cannot all
         // pass the wait while the first one is still being compared.
-        pinAttempts.fail(userId);
+        pinAttempts.fail(userId, mark);
         if (!(await verifyLocalProfilePin(pin, gate.pinHash))) {
           recordIssue('denied');
           return refusePin(401, 'PROFILE_PIN_INCORRECT', 'That PIN is not right. Try again.');
         }
-        pinAttempts.clear(userId);
+        pinAttempts.clear(userId, mark);
+        // A browser keeps the mark it has, so its count stays its own.
+        pinMark =
+          mark !== null && presentedMark !== undefined
+            ? presentedMark
+            : issueLocalProfilePinMark(userId, resolveInstanceSecret());
       }
 
       const session = issueLocalProfileSession(userId, resolveInstanceSecret(), {
         generation: gate.generation,
       });
       recordIssue('success');
-      return reply.send({ profile: toChoice(profile), session });
+      return reply.send({
+        profile: toChoice(profile),
+        session,
+        ...(pinMark === undefined ? {} : { pinMark }),
+      });
     },
   );
   return Promise.resolve();
@@ -483,7 +504,7 @@ const localProfileManagementRoutes: FastifyPluginAsync<PinScope> = (fastify, { p
         }),
       );
       if (profile === null) return reply;
-      pinAttempts.clear(profile.userId);
+      pinAttempts.forget(profile.userId);
       // A cached count of one would keep granting a browser with no session
       // the sole-profile owner after that profile is locked.
       fastify.dropLocalProfileCount();
@@ -509,7 +530,7 @@ const localProfileManagementRoutes: FastifyPluginAsync<PinScope> = (fastify, { p
         resetLocalProfilePin(db(), { tenantId: tenant.tenantId, userId: request.params.userId }),
       );
       if (profile === null) return reply;
-      pinAttempts.clear(profile.userId);
+      pinAttempts.forget(profile.userId);
       // A cached count of one locked profile would keep refusing a browser
       // with no session after the PIN is gone.
       fastify.dropLocalProfileCount();

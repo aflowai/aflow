@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
 import {
   LOCAL_PROFILE_PIN_ERROR_PARAM,
+  LOCAL_PROFILE_PIN_UNTIL_PARAM,
   LOCAL_PROFILE_UNLOCK_PARAM,
   showsLocalProfilePicker,
 } from '@aflow/web-product';
@@ -40,6 +41,7 @@ export default async function SwitchProfile({
         profiles,
         params[LOCAL_PROFILE_UNLOCK_PARAM],
         params[LOCAL_PROFILE_PIN_ERROR_PARAM],
+        params[LOCAL_PROFILE_PIN_UNTIL_PARAM],
       )}
     />
   );

@@ -6,7 +6,8 @@
  * and it issues a session only for a profile that exists.
  *
  * Plan 335 P4: only the owner sets and resets a PIN, each change drops the
- * count, and a locked profile gets no session without its PIN.
+ * count, and a locked profile gets no session without its PIN. A right PIN
+ * answers a PIN mark, which keeps that browser's count of wrong PINs apart.
  *
  * The service is a double here. `localProfiles.pg.test.ts` runs it on a real
  * database.
@@ -42,7 +43,8 @@ vi.mock('../plugins/localProfiles.js', async (importOriginal) => {
 const { localProfileRoutes } = await import('./localProfiles.js');
 const { LocalProfileError } = await import('../services/localProfiles.js');
 const { readLocalProfileSession } = await import('../plugins/localProfiles.js');
-const { hashLocalProfilePin } = await import('../services/localProfilePin.js');
+const { hashLocalProfilePin, readLocalProfilePinMark } =
+  await import('../services/localProfilePin.js');
 
 const OWNER = '00000000-0000-4000-8000-0000000ed1c1';
 const SECOND = '00000000-0000-4000-8000-000000000b0b';
@@ -346,12 +348,14 @@ describe('a profile PIN', () => {
     pinHash = await hashLocalProfilePin(PIN);
   });
 
-  const choose = (app: FastifyInstance, pin?: string) =>
+  const choose = (app: FastifyInstance, pin?: string, pinMark?: string) =>
     app.inject({
       method: 'POST',
       url: `/${SECOND}/session`,
       headers: WEB,
-      ...(pin === undefined ? {} : { payload: { pin } }),
+      ...(pin === undefined
+        ? {}
+        : { payload: { pin, ...(pinMark === undefined ? {} : { pinMark }) } }),
     });
 
   it('is set by the owner, and the change drops the profile count', async () => {
@@ -462,6 +466,42 @@ describe('a profile PIN', () => {
     service.resetLocalProfilePin.mockResolvedValue(profile(SECOND, 'member'));
     expect((await app.inject({ method: 'DELETE', url: `/${SECOND}/pin` })).statusCode).toBe(200);
     expect((await choose(app, PIN)).statusCode).toBe(200);
+    await app.close();
+  });
+
+  it('answers a right PIN with a PIN mark, and keeps the mark a browser sent', async () => {
+    const { app } = await build('community-local', 'member', { sessionless: true });
+    service.readLocalProfile.mockResolvedValue(locked);
+    sessions.readLocalProfileSessionGate.mockResolvedValue({ generation: 2, pinHash });
+    const first = (await choose(app, PIN)).json<{ pinMark?: string }>().pinMark;
+    expect(first).toBeDefined();
+    expect(readLocalProfilePinMark(first ?? '', SECOND, SECRET)).not.toBeNull();
+    expect((await choose(app, PIN, first)).json<{ pinMark?: string }>().pinMark).toBe(first);
+    const replaced = (await choose(app, PIN, 'made-up')).json<{ pinMark?: string }>().pinMark;
+    expect(replaced).not.toBe('made-up');
+
+    sessions.readLocalProfileSessionGate.mockResolvedValue({ generation: 0, pinHash: null });
+    expect((await choose(app, PIN)).json()).not.toHaveProperty('pinMark');
+    await app.close();
+  });
+
+  it('lets no browser without its mark make a marked browser wait', async () => {
+    const { app } = await build('community-local', 'member', { sessionless: true });
+    service.readLocalProfile.mockResolvedValue(locked);
+    sessions.readLocalProfileSessionGate.mockResolvedValue({ generation: 2, pinHash });
+    const mark = (await choose(app, PIN)).json<{ pinMark: string }>().pinMark;
+
+    for (let i = 0; i < 5; i += 1) expect((await choose(app, '0000')).statusCode).toBe(401);
+    expect((await choose(app, PIN)).statusCode).toBe(429);
+    // A made-up mark counts with the browsers that have none.
+    expect((await choose(app, PIN, 'm1.forged')).statusCode).toBe(429);
+    expect((await choose(app, PIN, mark)).statusCode).toBe(200);
+
+    // Wrong PINs sent with the mark make only the marked browser wait.
+    for (let i = 0; i < 5; i += 1) expect((await choose(app, '0000', mark)).statusCode).toBe(401);
+    const waiting = await choose(app, PIN, mark);
+    expect(waiting.statusCode).toBe(429);
+    expect(waiting.headers['retry-after']).toBe('30');
     await app.close();
   });
 

@@ -300,19 +300,19 @@ P1 follows option A. It adds no UI, no route and no table. It adds one column, `
 
 ### The answer to §8 question 7
 
-`authenticateLocalInstance` (`packages/server-runtime/src/plugins/localInstanceAuth.ts`) holds the rule. It applies to a request that carries the instance secret.
+`authenticateLocalInstance` (`packages/server-runtime/src/plugins/localInstanceAuth.ts`) holds the rule. It applies to a request that carries the instance secret. P4 split the one-profile column in two (§14).
 
-| The request carries                   | One profile                   | Two or more profiles           |
-| ------------------------------------- | ----------------------------- | ------------------------------ |
-| A profile session                     | That user, membership read    | That user, membership read     |
-| A session this instance did not issue | 401 `PROFILE_SESSION_INVALID` | 401 `PROFILE_SESSION_INVALID`  |
-| No session, from the web process      | The owner, no membership read | 401 `PROFILE_SESSION_REQUIRED` |
-| No session, the bare secret           | The owner, no membership read | The owner, membership read     |
+| The request carries                   | One profile, no PIN           | One profile with a PIN (P4)    | Two or more profiles           |
+| ------------------------------------- | ----------------------------- | ------------------------------ | ------------------------------ |
+| A profile session                     | That user, membership read    | That user, membership read     | That user, membership read     |
+| A session this instance did not issue | 401 `PROFILE_SESSION_INVALID` | 401 `PROFILE_SESSION_INVALID`  | 401 `PROFILE_SESSION_INVALID`  |
+| No session, from the web process      | The owner, no membership read | 401 `PROFILE_SESSION_REQUIRED` | 401 `PROFILE_SESSION_REQUIRED` |
+| No session, the bare secret           | The owner, no membership read | The owner, membership read     | The owner, membership read     |
 
 - **What separates a browser from a bare-secret caller.** The web process sets `X-Aflow-Browser-Caller` on every call it makes. The browser cannot remove it, because the web forwards a fixed list of browser headers and sets its own after them. Clearing the cookie or opening a private window therefore reaches no profile once a second one exists.
 - **What a bare-secret caller gets.** It stays the owner on every install. `yarn mcp:setup` keeps working. Its holder can read `instance.env` and could issue an owner session, so a refusal would guard nothing (D3).
-- **A single profile with a PIN.** P1 gives it a session that names it, read through its membership. P4 must also end the no-session fallback for a single profile that holds a PIN. The one-profile column then applies only to an unlocked profile. P4 does so (§14).
-- **The count.** A profile is a human user with an active membership in the pinned tenant. The API reads at most two such rows and keeps the answer for five seconds, so most requests without a session read no database. A one-profile install reaches the owner from that answer while it is fresh. When a read fails, a count last read as two or more still answers several profiles. Any other failed read answers the count as unread: none read since the process started, or a stale count of one. A second profile may exist in either case, so an unread count never grants the owner with no membership read. A browser with no session then gets a 503 `PROFILE_COUNT_UNREAD`. A bare-secret caller stays the owner through the membership read. Only a count read as two or more refuses a browser with `PROFILE_SESSION_REQUIRED`, so that refusal never names a second profile nobody has seen.
+- **A single profile with a PIN.** P1 gives it a session that names it, read through its membership. P4 ends the no-session fallback for it (§14). A browser with no session gets 401 `PROFILE_SESSION_REQUIRED`, and a bare-secret caller is the owner through the membership read.
+- **The count.** A profile is a human user with an active membership in the pinned tenant. The API reads at most two such rows with their PIN hashes and keeps the answer for five seconds. Most requests without a session therefore read no database. The answer is `one`, `one-locked` or `several` (§14). Only a `one` install reaches the owner with no membership read, from that answer while it is fresh. When a read fails, a count last read as `several` or `one-locked` still answers what it last read. Any other failed read answers the count as unread: none read since the process started, or a stale `one`. A second profile or a new PIN may exist in either case, so an unread count never grants the owner with no membership read. A browser with no session then gets a 503 `PROFILE_COUNT_UNREAD`. A bare-secret caller stays the owner through the membership read. Only a count read as `several` or `one-locked` refuses a browser with `PROFILE_SESSION_REQUIRED`. That refusal therefore never names a second profile or a PIN nobody has seen.
 - **The generation read.** A request that carries a session reads the user's generation from Postgres before the membership read, so the database is on the path of every sessioned request. A failed read answers 503 `PROFILE_SESSION_UNREAD`. A session naming a user with no row answers 401 `PROFILE_SESSION_INVALID`, so the browser of a removed profile goes back to the picker (§13). P1 left that session to the membership read's 403. A user who has a row and no active membership still gets the 403.
 
 ### The tenant plugin
@@ -451,19 +451,30 @@ P4 adds the PIN. It adds one column, `users.profile_pin_hash`, and no table.
 
 - `readLocalProfileCount` replaces `hasSeveralLocalProfiles` (`plugins/localProfiles.ts`). It answers `one`, `one-locked` or `several` from the same two-row read.
 - `authenticateLocalInstance` grants the sole-profile owner only for `one`. A browser with no session on a `one-locked` install gets 401 `PROFILE_SESSION_REQUIRED` and goes to the picker. A bare-secret caller stays the owner through the membership read, as on an install with several profiles.
-- The §11 table changes in one cell. "No session, from the web process" on one profile answers the owner only when that profile has no PIN.
+- The §11 table splits its one-profile column in two. On one profile with a PIN, "No session, from the web process" answers 401 `PROFILE_SESSION_REQUIRED`. "No session, the bare secret" answers the owner through the membership read.
 - **A failed read.** A count last read as `one-locked` keeps answering `one-locked` when a later read fails, as `several` does. A stale `one` still answers `unread`, so a PIN set since that read is never skipped.
 
 ### Wrong guesses
 
-- `LocalProfilePinAttempts` counts wrong PINs per profile in the API process. The first four cost nothing. Each one after them makes the profile wait, 30 seconds at first and doubling to 15 minutes. A waiting profile answers 429 `PROFILE_PIN_THROTTLED` with `Retry-After`, whatever PIN it is sent.
-- A guess is counted before it is compared, so guesses sent at once cannot all pass the wait while the first one is still being compared. A right PIN, a new PIN and a reset clear the count.
-- A restart clears the count too. Restarting the API needs the operator's machine, where the PIN guards nothing (D3).
+- `LocalProfilePinAttempts` counts wrong PINs in the API process, per profile and per PIN mark. The first four on a count cost nothing. Each one after them makes that count wait, 30 seconds at first and doubling to 15 minutes. A waiting count answers 429 `PROFILE_PIN_THROTTLED` with `Retry-After`, whatever PIN it is sent.
+- A guess is counted before it is compared, so guesses sent at once cannot all pass the wait while the first one is still being compared. A right PIN clears the count it was sent on. A new PIN and a reset clear every count of the profile.
+- A restart clears the counts too. Restarting the API needs the operator's machine, where the PIN guards nothing (D3).
+
+### The PIN mark — one browser cannot lock another out
+
+Round 1 kept one count per profile. Anyone at any browser could then keep a profile waiting 15 minutes by sending one wrong PIN each time the wait ended. The owner's own profile had no recourse in the UI, because only the owner resets a PIN. Round 2 keys the count so a browser that never knew the PIN cannot make the owner's browser wait.
+
+- **The mark.** A right PIN answers `pinMark` beside the session: `m1.<user id>.<nonce>.<MAC>`, signed under a key derived from the instance secret (`issueLocalProfilePinMark` in `services/localProfilePin.ts`). The web process keeps it in the `httpOnly` cookie `aflow_pin_mark_<user id>` and sends it with the next PIN for that profile. A browser that sends a valid mark keeps it. Any other right PIN gets a new one.
+- **The counts.** Wrong PINs sent with a valid mark go to that mark's own count. Wrong PINs sent with no mark, or with one this instance did not sign for this profile, share one count per profile.
+- **Why a mark and not a browser id.** An id the web process mints for any browser is free to replace. Clearing cookies would then reset the count, and the throttle would stop nothing. A mark comes only from a right PIN, so a guesser without the PIN holds none and cannot make one up. The mark grants nothing, and names only the count its browser's wrong guesses go to.
+- **Why not a recourse instead.** A UI recourse open to the locked-out owner is open to anyone at that browser, because nothing tells them apart before the PIN. The recourse that tells them apart is the instance secret, and it exists already (below).
+- **What it does not solve.** Nothing tells the owner from another person at the browser that holds the owner's mark, so they share its count. That person can keep that browser waiting. The owner can still open the profile from a browser with no mark, unless the same person keeps the unmarked count waiting too. The PIN claims no boundary against a person at the operator's own machine (D3), and the instance secret below stays the owner's last recourse.
+- **Its lifetime.** The cookie lasts as the profile session does. A new PIN or a reset leaves the mark valid, and clears its count.
 
 ### The web process
 
 - **The picker.** A locked profile's tile shows **PIN** and links to `/profiles?unlock=<user id>` instead of posting. That page shows the PIN prompt, a plain form that posts the choice and the PIN to `/profiles/choose` (`packages/web-product/src/ui/components/profile-picker.tsx`). An install whose only profile is locked shows the prompt at the front door at once.
-- **A choice.** `/profiles/choose` sends the PIN to the API in a JSON body, with the bare secret and no browser mark. A PIN refusal returns to the prompt with the reason in `pin=required|incorrect|throttled` and sets no cookie (`apps/web-local/src/compose/localProfileSession.ts`).
+- **A choice.** `/profiles/choose` sends the PIN to the API in a JSON body, with the bare secret and no browser mark. A PIN refusal returns to the prompt with the reason in `pin=required|incorrect|throttled` and sets no cookie (`apps/web-local/src/compose/localProfileSession.ts`). A throttled PIN also carries `until`, the Unix second the API's `Retry-After` names. The page counts the remaining wait from it on each load, and the prompt names it: "Try again in 30 seconds" or "in 15 minutes". Once the wait has passed, the prompt asks plainly again. A choice sends the profile's PIN mark cookie with its PIN, and a right PIN sets the mark the API answered.
 - **`/profiles`.** `showsLocalProfilePicker` now answers true for two profiles or for a locked one. A single locked profile therefore reaches its prompt at `/profiles`. The footer menu keeps its own rule, `offersLocalProfileSwitch`, which still needs a second profile.
 - **The footer menu.** A locked profile in the switch list opens its prompt instead of posting.
 - **Settings → Profiles.** Each row shows **PIN** when the profile has one and offers **Set PIN** or **Change PIN**, and **Reset PIN** where one is set. The page says in one sentence that a PIN does not guard against someone who can sign in to the computer's account (D3).
@@ -474,10 +485,11 @@ Nobody above the owner can reset the owner's own forgotten PIN in the UI. A requ
 
 ### Tests
 
-- `services/localProfilePin.test.ts` shows the hash is salted and holds no digit in the clear, matches no other PIN, and refuses a damaged hash. It covers the wait and its doubling.
+- `services/localProfilePin.test.ts` shows the hash is salted and holds no digit in the clear, matches no other PIN, and refuses a damaged hash. It covers the wait and its doubling. It shows a marked count stays apart from the unmarked one, and a reset clears both. A mark reads as nothing for another profile, another secret or a forged nonce.
 - `services/localProfiles.test.ts` shows a set and a reset write the hash and bump the generation in one transaction.
-- `routes/localProfiles.test.ts` shows only the owner sets and resets, each change drops the count, and a malformed PIN is refused. A locked profile gets no session without its PIN or with a wrong one. The right PIN issues one at the current generation. Five wrong PINs make the profile wait until the owner resets it.
+- `routes/localProfiles.test.ts` shows only the owner sets and resets, each change drops the count, and a malformed PIN is refused. A locked profile gets no session without its PIN or with a wrong one. The right PIN issues one at the current generation. Five wrong PINs make the profile wait until the owner resets it. A right PIN answers a mark, and wrong PINs from browsers without it never make the marked browser wait.
 - `plugins/localInstanceAuth.test.ts` shows a sessionless browser on a `one-locked` install is refused, a bare-secret caller stays the owner, and the cache keeps `one-locked` through a failed read.
 - `routes/localProfiles.pg.test.ts` covers the §10 locked-profile cases on a bootstrapped install. A single profile with a PIN no longer falls back to the owner, and its earlier session ends. It cannot start without its PIN, and a wrong PIN issues nothing. The owner's reset ends the PIN's session and restores the fallback. A second profile is locked and reset the same way.
-- `apps/web-local/src/compose/localProfileSession.test.ts` shows the PIN reaches the API in the body, and a refused PIN returns to the prompt with no cookie.
+- `apps/web-local/src/compose/localProfileSession.test.ts` shows the PIN reaches the API in the body, and a refused PIN returns to the prompt with no cookie. A throttled PIN carries the API's wait to the prompt, and the page counts down from it. The mark a right PIN returns is kept and sent back with the next PIN.
+- `profile-pin-message.test.ts` shows the throttled prompt names the wait in seconds and then in minutes.
 - `profile-menu-entries.test.ts` shows a single locked profile offers no switch.

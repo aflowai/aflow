@@ -24,12 +24,23 @@ export const LOCAL_PROFILE_UNLOCK_PARAM = 'unlock';
 /** The picker's query saying why the PIN let nothing through. */
 export const LOCAL_PROFILE_PIN_ERROR_PARAM = 'pin';
 
+/**
+ * The picker's query saying when a throttled profile may be tried again, in
+ * Unix seconds. The page counts the remaining wait from it on each load.
+ */
+export const LOCAL_PROFILE_PIN_UNTIL_PARAM = 'until';
+
 /** Why the PIN prompt shows again. */
 export type LocalProfilePinError = 'required' | 'incorrect' | 'throttled';
 
 /** The picker, asking for one locked profile's PIN. */
-export function localProfileUnlockHref(userId: string, error?: LocalProfilePinError): string {
+export function localProfileUnlockHref(
+  userId: string,
+  error?: LocalProfilePinError,
+  retryAtSec?: number,
+): string {
   const query = new URLSearchParams({ [LOCAL_PROFILE_UNLOCK_PARAM]: userId });
   if (error !== undefined) query.set(LOCAL_PROFILE_PIN_ERROR_PARAM, error);
+  if (retryAtSec !== undefined) query.set(LOCAL_PROFILE_PIN_UNTIL_PARAM, String(retryAtSec));
   return `${LOCAL_PROFILE_PICKER_PATH}?${query.toString()}`;
 }

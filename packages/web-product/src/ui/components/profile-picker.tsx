@@ -20,17 +20,9 @@ import {
   LOCAL_PROFILE_PICKER_PATH,
   LOCAL_PROFILE_PIN_FIELD,
   localProfileUnlockHref,
-  type LocalProfilePinError,
 } from '@aflow/web-product';
 import { ProfileAvatar } from './profile-avatar.js';
-
-/** What the PIN prompt says when it shows again. */
-export const LOCAL_PROFILE_PIN_ERROR_MESSAGES: Record<LocalProfilePinError, string> = {
-  required: 'Enter the PIN for this profile.',
-  incorrect: 'That PIN is not right. Try again.',
-  throttled: 'Too many wrong PINs. Wait a minute, then try again.',
-};
-
+import { localProfilePinErrorMessage, type LocalProfilePinRefusal } from './profile-pin-message.js';
 const TILE: CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
@@ -80,7 +72,7 @@ function PinPrompt({
   error,
 }: {
   profile: LocalProfileChoice;
-  error: LocalProfilePinError | null;
+  error: LocalProfilePinRefusal | null;
 }) {
   return (
     <form
@@ -131,7 +123,7 @@ function PinPrompt({
           role="alert"
           style={{ margin: 0, color: 'var(--color-status-failed-fg)' }}
         >
-          {LOCAL_PROFILE_PIN_ERROR_MESSAGES[error]}
+          {localProfilePinErrorMessage(error)}
         </p>
       ) : null}
       <button
@@ -170,7 +162,7 @@ export function ProfilePicker({
   /** Where a browser that already holds a session returns without switching. */
   backHref?: string;
   /** The locked profile whose PIN the picker asks for, in place of the tiles. */
-  unlocking?: { profile: LocalProfileChoice; error: LocalProfilePinError | null } | null;
+  unlocking?: { profile: LocalProfileChoice; error: LocalProfilePinRefusal | null } | null;
 }) {
   return (
     <main

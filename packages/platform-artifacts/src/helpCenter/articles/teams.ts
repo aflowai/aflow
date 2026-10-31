@@ -63,7 +63,7 @@ The new profile starts with a space of its own called Personal, and it does not 
 
 An install with two or more profiles opens on **Who is using Aflow?** in a browser that has not picked a profile yet. It shows each profile's avatar and name. Pick yours, and Aflow opens in the space that profile last used. The browser remembers the choice until someone switches profile or the browser's cookies are cleared. An install with one profile and no PIN skips this screen for a browser that has not picked a profile. A browser that picked a profile which has since been removed sees this screen once more, even when one profile is left.
 
-A profile with a PIN shows **PIN** under its name. Pick it, enter its PIN and press **Continue**. A wrong PIN opens nothing, and after several wrong tries the profile makes you wait before the next one. An install whose only profile has a PIN asks for it in every browser that has not entered it yet.
+A profile with a PIN shows **PIN** under its name. Pick it, enter its PIN and press **Continue**. A wrong PIN opens nothing, and after several wrong tries the prompt says how long to wait before the next one. A browser that has opened the profile with its PIN keeps a wait of its own, so wrong tries in another browser do not make it wait. An install whose only profile has a PIN asks for it in every browser that has not entered it yet.
 
 ## Locking a profile with a PIN
 
