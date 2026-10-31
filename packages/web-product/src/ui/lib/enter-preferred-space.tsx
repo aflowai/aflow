@@ -6,6 +6,8 @@
  * reaches the browser.
  */
 import { redirect } from 'next/navigation';
+import type { ReactNode } from 'react';
+import { readRefusalCode } from '@aflow/web-product';
 import { getPreferredSpaceSlug } from './preferredSpace.js';
 
 /** How the space lookup ended, for a caller that reports it. */
@@ -13,7 +15,8 @@ export type SpaceLookupOutcome =
   | { kind: 'slugs'; slugs: string[] }
   | { kind: 'no-credential' }
   | { kind: 'unreachable'; detail: string }
-  | { kind: 'refused'; status: number };
+  /** `code` is the refusal body's own, such as the local edition's `PROFILE_SESSION_REQUIRED`. */
+  | { kind: 'refused'; status: number; code: string | null };
 
 /** How a caller reaches the API on behalf of the process. */
 export interface SpaceLookup {
@@ -21,10 +24,19 @@ export interface SpaceLookup {
   /** `null` means no credential can be had, so the call is not made at all. */
   headers: () => Promise<Record<string, string> | null>;
   report?: (outcome: SpaceLookupOutcome) => void;
+  /**
+   * What to show when the API refuses the lookup, in place of entering a
+   * space. `null` enters the space as before. The local edition answers a
+   * missing profile session with its picker here (Plan 335 P3).
+   */
+  answerRefusal?: (refusal: SpaceLookupRefusal) => Promise<ReactNode | null>;
 }
+
+export type SpaceLookupRefusal = Extract<SpaceLookupOutcome, { kind: 'refused' }>;
 
 interface SpaceSummary {
   slug?: unknown;
+  myRole?: unknown;
 }
 
 async function lookUpSpaces(lookup: SpaceLookup): Promise<SpaceLookupOutcome> {
@@ -36,11 +48,17 @@ async function lookUpSpaces(lookup: SpaceLookup): Promise<SpaceLookupOutcome> {
   } catch (error) {
     return { kind: 'unreachable', detail: error instanceof Error ? error.message : String(error) };
   }
-  if (!response.ok) return { kind: 'refused', status: response.status };
+  if (!response.ok) {
+    return { kind: 'refused', status: response.status, code: await readRefusalCode(response) };
+  }
   const body = (await response.json()) as { spaces?: SpaceSummary[] };
   return {
     kind: 'slugs',
     slugs: (body.spaces ?? [])
+      // A tenant admin lists every space, and one they are not a member of
+      // comes back as a name only. Entering it would land on the not-found
+      // state, as another local profile's space would for the owner.
+      .filter((space) => space.myRole !== null)
       .map((space) => space.slug)
       .filter((slug): slug is string => typeof slug === 'string' && slug !== ''),
   };
@@ -94,11 +112,28 @@ export async function enterPreferredSpace(
     | Record<string, string | string[] | undefined>
     | Promise<Record<string, string | string[] | undefined>>,
 ) {
-  const entry = await resolveSpaceEntry(path, lookup, searchParams);
+  const seen: { refusal?: SpaceLookupRefusal } = {};
+  const observed: SpaceLookup | undefined = lookup && {
+    ...lookup,
+    report: (outcome) => {
+      if (outcome.kind === 'refused') seen.refusal = outcome;
+      lookup.report?.(outcome);
+    },
+  };
+  const entry = await resolveSpaceEntry(path, observed, searchParams);
+  if (seen.refusal !== undefined && lookup?.answerRefusal !== undefined) {
+    const answer = await lookup.answerRefusal(seen.refusal);
+    if (answer !== null) return answer;
+  }
   if (entry !== null) {
     redirect(entry);
   }
 
+  return <NoWorkspace />;
+}
+
+/** What a front door shows a visitor who reaches no space. */
+function NoWorkspace() {
   return (
     <main
       style={{

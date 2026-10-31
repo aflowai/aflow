@@ -62,7 +62,8 @@ export const BROWSER_POSTURE_LINES: Readonly<Record<BrowserPosture, string>> = {
 export const BROWSER_UNATTENDED_LINE =
   'Whether runs nobody is present for may use it. A run is attended when a person’s request ' +
   'last set it going, or a run attended at that moment did; one a schedule, a webhook, a timer ' +
-  'or an API or MCP client set going is not. An attended run may use the profile either way.';
+  'or a service principal set going is not. A request with a user’s own API key, the MCP ' +
+  'server’s included, is a person’s. An attended run may use the profile either way.';
 
 /**
  * What an origin rule names: one origin exactly, or a host and every name
@@ -201,7 +202,8 @@ export const BrowserProfileSchema = z.object({
     .describe(
       'Whether a run nobody is present for may use it. `false` keeps it to attended runs: one ' +
         'a person’s request last set going, or a run attended at that moment did — not one a ' +
-        'schedule, a webhook, a timer or an API or MCP client set going. A sub-agent returning ' +
+        'schedule, a webhook, a timer or a service principal set going. A user’s own API key, the ' +
+        'MCP server’s included, is a person’s request. A sub-agent returning ' +
         'to the run that waited on it changes nothing.',
     ),
   idleMinutes: z

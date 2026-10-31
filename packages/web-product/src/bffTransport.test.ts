@@ -115,6 +115,29 @@ describe('the upstream credential', () => {
     expect(headers.get('Authorization')).toBe('Bearer token');
   });
 
+  // The local API reads these to tell a browser from a bare-secret caller, so a
+  // browser that sent its own would choose its answer.
+  it('attaches the identity headers over any the browser sent', async () => {
+    await proxyToApi(
+      new Request('http://web.test/api/things', {
+        headers: { 'x-aflow-profile-session': 'forged', 'content-type': 'application/json' },
+      }),
+      identity({
+        authorizeUpstream: () =>
+          Promise.resolve({
+            kind: 'authorized',
+            header: 'Bearer token',
+            headers: { 'x-aflow-browser-caller': '1' },
+          }),
+      }),
+      CONFIG,
+    );
+    const headers = fetchMock.mock.calls[0]?.[1]?.headers as Headers;
+    expect(headers.get('x-aflow-browser-caller')).toBe('1');
+    expect(headers.get('x-aflow-profile-session')).toBeNull();
+    expect(headers.get('content-type')).toBe('application/json');
+  });
+
   // The route that exists for people who have no session yet.
   it('forwards a route the API serves anonymously with no credential', async () => {
     const seen: { anonymousOk: boolean }[] = [];

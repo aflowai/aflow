@@ -5,7 +5,7 @@
  * to the lanes across every plan (D1): open plans in position order —
  * the order the loop takes them — each with its state, its progress and its
  * non-zero counts of steps needing the operator and in flight, with **Move up**
- * and **Move down** quiet in the row's dot until it is pointed at or focused;
+ * and **Move down** quiet in the row's orb until it is pointed at or focused;
  * then **Finished**, open plans whose every step is closed, each with a quiet
  * **Close plan**; then **Closed**, folded. The selected row is filled and
  * barred as the skill designer's outline bars its current item, and scrolls
@@ -14,6 +14,7 @@
  */
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import {
+  AnimatedHeight,
   Button,
   Column,
   Icon,
@@ -37,8 +38,8 @@ import {
   Disclosure,
   GroupLabel,
   MetaSep,
+  PlanStateOrb,
   ProgressMeter,
-  StateDot,
   selectableStyle,
   srOnly,
   useHover,
@@ -217,7 +218,7 @@ export function PlanRootCloseControl({
 
 const listStyle: CSSProperties = { listStyle: 'none', margin: 0, padding: 0 };
 
-/** A row: the state dot's gutter, the main area that is its hit target, a quiet action at its end. */
+/** A row: the state orb's gutter, the main area that is its hit target, a quiet action at its end. */
 const rowGrid: CSSProperties = {
   display: 'grid',
   gridTemplateColumns: '20px minmax(0, 1fr) auto',
@@ -283,9 +284,9 @@ function rowStateLine(row: PlanRootRow): string {
 
 /**
  * One plan in the list, read in one order: what the plan is (its title),
- * where it stands (its state, named and as the dot's colour, and its steps
+ * where it stands (its state, named and as its orb, and its steps
  * closed of all), and what needs the operator (the count at the end, the one
- * filled element of the row). The dot's place doubles as the row's reorder
+ * filled element of the row). The orb's place doubles as the row's reorder
  * handle: on an open row pointed at or focused, Move up and Move down show
  * there instead.
  */
@@ -306,9 +307,9 @@ function PlanRowView({
   rowRef: (element: HTMLLIElement | null) => void;
   /** What tells the row's reveal it is pointed at or focused. */
   hostProps?: ReturnType<typeof useReveal>['hostProps'];
-  /** Controls that show in the dot's place on a row pointed at or focused. */
+  /** Controls that show in the orb's place on a row pointed at or focused. */
   gutter?: ReactNode;
-  /** The controls show, so the dot gives way to them. */
+  /** The controls show, so the orb gives way to them. */
   gutterShown?: boolean;
   /** A quiet action at the row's end. */
   trailing?: ReactNode;
@@ -414,7 +415,7 @@ function PlanRowView({
         }}
       >
         <span style={{ gridArea: '1 / 1' }}>
-          <StateDot state={row.state} hidden={gutter !== undefined && gutterShown} />
+          <PlanStateOrb state={row.state} hidden={gutter !== undefined && gutterShown} />
         </span>
         {gutter !== undefined && <span style={{ gridArea: '1 / 1' }}>{gutter}</span>}
       </span>
@@ -439,7 +440,7 @@ interface RowPlacement {
   rowRef: (element: HTMLLIElement | null) => void;
 }
 
-/** An open plan: Move up and Move down in the dot's place, a refusal under the row. */
+/** An open plan: Move up and Move down in the orb's place, a refusal under the row. */
 function OpenPlanRow({
   open,
   onPlace,
@@ -607,16 +608,18 @@ export function PlanList({
       </Column>
       <Column gap="xs" data-plan-list-section="finished">
         <GroupLabel>{`Finished · ${String(finished.length)}`}</GroupLabel>
-        {finished.length > 0 && (
-          <ul style={listStyle} aria-label="Finished plans">
-            {finished.map((row) => {
-              const { key, ...placement } = placementOf(row);
-              return (
-                <FinishedPlanRow key={key} {...placement} spaceId={spaceId} onClose={onClose} />
-              );
-            })}
-          </ul>
-        )}
+        <AnimatedHeight>
+          {finished.length > 0 && (
+            <ul style={listStyle} aria-label="Finished plans">
+              {finished.map((row) => {
+                const { key, ...placement } = placementOf(row);
+                return (
+                  <FinishedPlanRow key={key} {...placement} spaceId={spaceId} onClose={onClose} />
+                );
+              })}
+            </ul>
+          )}
+        </AnimatedHeight>
       </Column>
       <Column gap="xs" data-plan-list-section="closed">
         <Disclosure
@@ -627,14 +630,16 @@ export function PlanList({
         >
           {`Closed · ${String(closed.length)}`}
         </Disclosure>
-        {closedShown && closed.length > 0 && (
-          <ul style={listStyle} aria-label="Closed plans">
-            {closed.map((row) => {
-              const { key, ...placement } = placementOf(row);
-              return <PlanRowView key={key} {...placement} />;
-            })}
-          </ul>
-        )}
+        <AnimatedHeight>
+          {closedShown && closed.length > 0 && (
+            <ul style={listStyle} aria-label="Closed plans">
+              {closed.map((row) => {
+                const { key, ...placement } = placementOf(row);
+                return <PlanRowView key={key} {...placement} />;
+              })}
+            </ul>
+          )}
+        </AnimatedHeight>
       </Column>
     </Column>
   );

@@ -7,10 +7,12 @@ import {
 } from '../../cybernetic/coachLearning.js';
 import {
   OPEN_PLAN_NODE_STATUSES,
+  PLAN_NODE_LINK_LABEL_MAX_CHARS,
   PlanNodeCloseSchema,
   PlanNodeCreateSchema,
   PlanNodeOpenSchema,
   PlanNodePlaceSchema,
+  PlanNodeReviseSchema,
   PlanNodeSiblingSchema,
   PlanNodeDependencyConditionSchema,
   PlanNodeDependencySchema,
@@ -74,6 +76,12 @@ export const PlanNodeUpdateOutputSchema = z.object({
     .optional()
     .describe(
       'The close succeeded but its carrier failed. Read the findings linked to the named closed node.',
+    ),
+  linkFailure: z
+    .string()
+    .optional()
+    .describe(
+      'The update landed but linking this conversation on the node failed. The node stands as returned.',
     ),
   node: PlanNodeSchema,
   carrier: PlanNodeSchema.optional().describe(
@@ -630,6 +638,14 @@ export const PLAN_NODE_DETAIL_LINKS_MAX_LIMIT = 200;
 export const PlanNodeDetailQuerySchema = z
   .object({
     linkKind: PlanNodeLinkKindSchema.optional().describe('Only links of this kind.'),
+    linkLabel: z
+      .string()
+      .min(1)
+      .max(PLAN_NODE_LINK_LABEL_MAX_CHARS)
+      .optional()
+      .describe(
+        'Only links with this label, filtered before the page is cut: `linkKind=session&linkLabel=conversation` pages the operator’s conversations.',
+      ),
     cursor: z
       .string()
       .min(1)
@@ -686,6 +702,13 @@ export type PlanNodeCloseInput = z.infer<typeof PlanNodeCloseInputSchema>;
  */
 export const PlanNodeOpenInputSchema = PlanNodeOpenSchema;
 export type PlanNodeOpenInput = z.infer<typeof PlanNodeOpenInputSchema>;
+
+/**
+ * `PATCH /v1/spaces/:spaceId/plan/nodes/:nodeId/revise` — the operator sends a
+ * blocked node back for revision with a note (Plan 337 P4).
+ */
+export const PlanNodeReviseInputSchema = PlanNodeReviseSchema;
+export type PlanNodeReviseInput = z.infer<typeof PlanNodeReviseInputSchema>;
 
 /**
  * `PATCH /v1/spaces/:spaceId/plan/nodes/:nodeId/place` — the operator puts a
@@ -943,8 +966,14 @@ export const PlanStreamNodeSchema = z
   .strict();
 export type PlanStreamNode = z.infer<typeof PlanStreamNodeSchema>;
 
-/** What a round is briefed from: the node's goal and criteria, and its note. */
+/** What a round is briefed from: the operator's instructions, the node's goal and criteria, and its note. */
 export const PlanStreamBriefNodeSchema = PlanStreamNodeSchema.extend({
+  instructions: z
+    .string()
+    .optional()
+    .describe(
+      'The operator’s own line, `Approved: …` or `Revise: …`, as the note’s first line holds it. The brief opens with it, word for word, above the goal.',
+    ),
   goal: z.string(),
   criteria: z.string(),
   note: z.string().optional(),
@@ -961,6 +990,7 @@ export const PlanStreamWaitCauseSchema = z.enum([
   'pull_request_open',
   'read_failed',
   'unknown_state',
+  'revise_unanswered',
 ]);
 export type PlanStreamWaitCause = z.infer<typeof PlanStreamWaitCauseSchema>;
 
@@ -1095,6 +1125,20 @@ export const PlanStreamAnswerSchema = z.discriminatedUnion('decision', [
     .strict(),
   z
     .object({
+      decision: z.literal('revise'),
+      reason: decisionReason,
+      node: PlanStreamBriefNodeSchema.describe(
+        'The blocked node the operator sent back. `instructions` holds their `Revise: …` line.',
+      ),
+      noteHead: z
+        .string()
+        .describe(
+          'The rewritten note’s first line begins with this in place of the `Revise: …` line, and says what changed.',
+        ),
+    })
+    .strict(),
+  z
+    .object({
       decision: z.literal('ask'),
       reason: decisionReason,
       node: PlanStreamNodeSchema,
@@ -1162,7 +1206,7 @@ export const PlanBoardNextSchema = z
     decisions: z
       .array(PlanBoardDecisionSchema)
       .describe(
-        'Act on these in order: a merge recorded, a commission published, a stop written, a failed round re-commissioned, new work commissioned, pull requests read, then blocked nodes asked about; within each, the operator’s root order. Empty, and no `propose`: end the wake with no reply.',
+        'Act on these in order: a merge recorded, a commission published, a proposal revised, a stop written, a failed round re-commissioned, new work commissioned, pull requests read, then blocked nodes asked about; within each, the operator’s root order. Empty, and no `propose`: end the wake with no reply.',
       ),
     propose: z
       .object({
@@ -1178,7 +1222,7 @@ export const PlanBoardNextSchema = z
       .strict()
       .optional()
       .describe(
-        'Present for an exhausted active root without blocked scope, waiting scope or declined proposals, when no approved work is actionable or moving. Create at most one blocked proposal under parentId with plan.node.create and proposed saying why, even when unrelated roots await people.',
+        'Present for an exhausted active root without blocked scope, waiting scope or declined proposals, when no approved work is actionable or moving. Create at most one blocked proposal under parentId with plan.node.create, proposed saying why and a card for the operator to decide from, even when unrelated roots await people.',
       ),
     deferred: z
       .number()

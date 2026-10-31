@@ -5,13 +5,22 @@
  * renumbering the siblings only where no integer lies between its neighbours
  * — moving no sibling's place, and so no sibling's revision.
  */
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import Redis from 'ioredis-mock';
 import type { Redis as RedisType } from 'ioredis';
-import { PLAN_NODE_POSITION_MAX, type PlanNode } from '@aflow/schemas';
-import { openPlanNode, placePlanNode, type PlanWriteContext } from '../plan/operations.js';
+import { PLAN_NODE_POSITION_MAX, PLAN_NODE_PROSE_MAX_CHARS, type PlanNode } from '@aflow/schemas';
+import {
+  openPlanNode,
+  placePlanNode,
+  revisePlanNode,
+  updatePlanNode,
+  type PlanWriteContext,
+} from '../plan/operations.js';
 import { PLAN_PLACE_STRIDE, placeAmongSiblings } from '../plan/placement.js';
 import { InMemoryPlanNodeStore } from './planStoreFake.js';
+import { logCyberneticError } from '../logger.js';
+
+vi.mock('../logger.js', () => ({ logCyberneticError: vi.fn() }));
 
 const TENANT = 'a0000000-0000-4000-8000-000000000332';
 const SPACE = '5e1d0000-0000-4000-8000-000000000332';
@@ -161,6 +170,226 @@ describe('openPlanNode — refusals', () => {
       code: 'PLAN_NODE_NOT_FOUND',
     });
     expect(store.nodes.get(node.nodeId)?.status).toBe('blocked');
+  });
+});
+
+describe('openPlanNode — Approve with instructions (Plan 337 P4)', () => {
+  it('writes the operator’s instructions as one line, so the whole of them is the note’s first line', async () => {
+    const node = seed('P2 — the rail', { status: 'blocked', note: 'Proposed by the resident' });
+
+    await openPlanNode(ctx(), {
+      nodeId: node.nodeId,
+      expectedRevision: 1,
+      why: 'Do it, and make sure\nthe rail still reads on a phone.\r\n  Keep the old copy.',
+    });
+
+    const note = store.nodes.get(node.nodeId)?.note;
+    expect(note?.split('\n')[0]).toBe(
+      'Approved: Do it, and make sure the rail still reads on a phone. Keep the old copy.',
+    );
+    expect(note?.split('\n').slice(1)).toEqual(['Proposed by the resident']);
+  });
+});
+
+describe('revisePlanNode — Revise on a blocked node (Plan 337 P4)', () => {
+  it('keeps the node blocked, puts the note above its note, and moves the revision', async () => {
+    const node = seed('P1 — proposals', {
+      status: 'blocked',
+      revision: 3,
+      goal: 'Propose the next step.',
+      note: 'Proposed from the merged plan document',
+    });
+
+    const result = await revisePlanNode(ctx(), {
+      nodeId: node.nodeId,
+      expectedRevision: 3,
+      why: 'Split it in two:\nthe schema first.',
+    });
+
+    expect(result).toMatchObject({ ok: true, node: { status: 'blocked', revision: 4 } });
+    expect(store.nodes.get(node.nodeId)).toMatchObject({
+      status: 'blocked',
+      goal: 'Propose the next step.',
+      note: 'Revise: Split it in two: the schema first.\nProposed from the merged plan document',
+    });
+  });
+
+  it('refuses an open or a closed node as unchanged, a stale revision, and a node not in the space', async () => {
+    for (const status of ['active', 'waiting', 'done', 'dropped'] as const) {
+      const node = seed(`a ${status} step`, { status });
+      expect(
+        await revisePlanNode(ctx(), { nodeId: node.nodeId, expectedRevision: 1, why: 'Again' }),
+      ).toMatchObject({ ok: false, code: 'PLAN_NODE_UNCHANGED', details: { status } });
+      expect(store.nodes.get(node.nodeId)?.revision).toBe(1);
+    }
+    const moved = seed('moved on', { status: 'blocked', revision: 4 });
+    expect(
+      await revisePlanNode(ctx(), { nodeId: moved.nodeId, expectedRevision: 3, why: 'Again' }),
+    ).toMatchObject({ ok: false, code: 'PLAN_NODE_STALE', details: { revision: 4 } });
+    expect(
+      await revisePlanNode(ctx(), { nodeId: MISSING, expectedRevision: 1, why: 'Again' }),
+    ).toMatchObject({ ok: false, code: 'PLAN_NODE_NOT_FOUND' });
+  });
+
+  it('refuses a note that would pass the ceiling, writing nothing', async () => {
+    const node = seed('full', {
+      status: 'blocked',
+      note: 'x'.repeat(PLAN_NODE_PROSE_MAX_CHARS - 5),
+    });
+
+    expect(
+      await revisePlanNode(ctx(), { nodeId: node.nodeId, expectedRevision: 1, why: 'Shorter' }),
+    ).toMatchObject({ ok: false, code: 'PLAN_NODE_NOTE_TOO_LONG' });
+    expect(store.nodes.get(node.nodeId)?.revision).toBe(1);
+  });
+});
+
+describe('updatePlanNode — a resident wake answers a Revise (Plan 337 P4)', () => {
+  const resident = (): PlanWriteContext => ({ ...ctx(), actorKind: 'agent', resident: true });
+
+  async function sentBack(): Promise<PlanNode> {
+    const node = seed('P1 — proposals', {
+      status: 'blocked',
+      goal: 'Propose the next step.',
+      criteria: 'One proposal.',
+      note: 'Proposed from the merged plan document',
+    });
+    const revised = await revisePlanNode(ctx(), {
+      nodeId: node.nodeId,
+      expectedRevision: 1,
+      why: 'Split it in two.',
+    });
+    if (!revised.ok) throw new Error(revised.message);
+    return revised.node;
+  }
+
+  it('rewrites the goal and criteria of the node sent back, and leaves it blocked', async () => {
+    const node = await sentBack();
+
+    const result = await updatePlanNode(resident(), {
+      nodeId: node.nodeId,
+      expectedRevision: node.revision,
+      status: 'blocked',
+      goal: 'Propose the schema step first.',
+      criteria: 'Two proposals, the schema first.',
+      note: 'Revised: split in two.\nProposed from the merged plan document',
+    });
+
+    expect(result).toMatchObject({ ok: true, node: { status: 'blocked', revision: 3 } });
+    expect(store.nodes.get(node.nodeId)).toMatchObject({
+      status: 'blocked',
+      goal: 'Propose the schema step first.',
+      criteria: 'Two proposals, the schema first.',
+    });
+  });
+
+  it('refuses a rewrite past the revision the Revise was recorded at, and one of the title', async () => {
+    const node = await sentBack();
+    const first = await updatePlanNode(resident(), {
+      nodeId: node.nodeId,
+      expectedRevision: node.revision,
+      note: 'Revise: Split it in two.\nWaiting on the operator',
+    });
+    if (!first.ok) throw new Error(first.message);
+
+    expect(
+      await updatePlanNode(resident(), {
+        nodeId: node.nodeId,
+        expectedRevision: first.node.revision,
+        goal: 'A later rewrite.',
+      }),
+    ).toMatchObject({ ok: false, code: 'PLAN_NODE_RESIDENT_SCOPE' });
+
+    const again = await sentBack();
+    expect(
+      await updatePlanNode(resident(), {
+        nodeId: again.nodeId,
+        expectedRevision: again.revision,
+        title: 'Renamed',
+        goal: 'Rewritten.',
+      }),
+    ).toMatchObject({ ok: false, code: 'PLAN_NODE_RESIDENT_SCOPE' });
+    expect(store.nodes.get(again.nodeId)?.revision).toBe(again.revision);
+  });
+
+  it('refuses an ordinary rewrite of a blocked node no Revise sent back', async () => {
+    const node = seed('proposed', {
+      status: 'blocked',
+      goal: 'Propose the next step.',
+      note: 'Proposed by the resident',
+    });
+
+    for (const write of [{ goal: 'Rewritten.' }, { criteria: 'Rewritten.' }]) {
+      expect(
+        await updatePlanNode(resident(), { nodeId: node.nodeId, expectedRevision: 1, ...write }),
+      ).toMatchObject({ ok: false, code: 'PLAN_NODE_RESIDENT_SCOPE' });
+    }
+    expect(store.nodes.get(node.nodeId)).toMatchObject({
+      revision: 1,
+      goal: 'Propose the next step.',
+    });
+  });
+});
+
+describe('updatePlanNode — the operator’s conversation links itself (Plan 337 P4)', () => {
+  it('reports a failed link beside the update that landed', async () => {
+    const node = seed('discussed');
+    store.insertLink = () => Promise.reject(new Error('link store down'));
+
+    const result = await updatePlanNode(
+      { ...ctx(), conversationId: 'c0000000-0000-4000-8000-000000000339' },
+      { nodeId: node.nodeId, expectedRevision: 1, goal: 'Landed anyway.' },
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      node: { revision: 2, goal: 'Landed anyway.' },
+      linkFailure: expect.stringContaining(node.nodeId),
+    });
+    expect(store.nodes.get(node.nodeId)?.goal).toBe('Landed anyway.');
+    expect(vi.mocked(logCyberneticError)).toHaveBeenCalledWith(
+      expect.stringContaining('Conversation link failed'),
+      expect.any(Error),
+      expect.objectContaining({ nodeId: node.nodeId }),
+    );
+  });
+
+  it('links the conversation once, and leaves the revision the writer was given', async () => {
+    const node = seed('discussed', { status: 'blocked' });
+    const talking = { ...ctx(), conversationId: 'c0000000-0000-4000-8000-000000000337' };
+
+    const first = await updatePlanNode(talking, {
+      nodeId: node.nodeId,
+      expectedRevision: 1,
+      goal: 'Rewritten in the conversation.',
+    });
+    if (!first.ok) throw new Error(first.message);
+    const second = await updatePlanNode(talking, {
+      nodeId: node.nodeId,
+      expectedRevision: first.node.revision,
+      note: 'Revised: split in two.',
+    });
+
+    expect(second).toMatchObject({ ok: true, node: { revision: 3 } });
+    expect(store.links).toEqual([
+      expect.objectContaining({
+        nodeId: node.nodeId,
+        kind: 'session',
+        ref: 'c0000000-0000-4000-8000-000000000337',
+        label: 'conversation',
+      }),
+    ]);
+  });
+
+  it('links nothing for a writer that is not a conversation, or a write that is refused', async () => {
+    const node = seed('quiet');
+    await updatePlanNode(ctx(), { nodeId: node.nodeId, expectedRevision: 1, note: 'next' });
+    await updatePlanNode(
+      { ...ctx(), conversationId: 'c0000000-0000-4000-8000-000000000338' },
+      { nodeId: node.nodeId, expectedRevision: 1, note: 'stale' },
+    );
+
+    expect(store.links).toEqual([]);
   });
 });
 

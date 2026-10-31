@@ -2,18 +2,32 @@
 
 /**
  * The plan page's shared pieces (Plan 332 P6), so the list, the lanes, the
- * board and the rail say the same thing the same way: a plan's state as a
- * dot, progress as a meter, a pull request as the PR it is, the step the loop
- * takes next by name, a folding group heading, and **Move up** / **Move
+ * board and the rail say the same thing the same way: a plan's or a step's
+ * state as the run surface's orb (Plan 332 P7), a run on a step as the run
+ * surface's row, progress as a meter, a pull request as the PR it is, the
+ * step the loop takes next by name, a folding group heading, and **Move up** / **Move
  * down** as quiet icon controls that show where the row or card is pointed
  * at, focused or selected — reordering is rare (J3), so it is never the
  * loudest thing on a row. Each piece is styled inline on the design system's
  * tokens, as the skill designer's outline and inspector are.
  */
 import { useState, type CSSProperties, type FocusEvent, type ReactNode } from 'react';
-import { Badge, Icon, IconButton, Pulse, Text, Tooltip, useMediaQuery } from '@aflow/design-system';
-import type { PlanRootState } from '@aflow/schemas';
-import { PLAN_NEXT_LABEL, PLAN_STATE_COLOR, pullRequestChipLabel } from '../../lib/plan-board.js';
+import Link from 'next/link';
+import { Badge, Icon, IconButton, Text, Tooltip, useMediaQuery } from '@aflow/design-system';
+import type { PlanBoardColumn, PlanNodeRun, PlanRootState } from '@aflow/schemas';
+import { PLAN_NEXT_LABEL, pullRequestChipLabel, runKindLabel } from '../../lib/plan-board.js';
+import { spaceRoute } from '../../lib/space-routes.js';
+import { StatusOrb } from '../workflow-run-surface/StatusOrb.js';
+import { useNowTicker } from '../workflow-run-surface/useNowTicker.js';
+import { Pill } from '../workflow-run-surface/WorkflowRunSurfaceParts.js';
+import {
+  formatElapsed,
+  orbForPlanState,
+  orbForPlanStep,
+  orbForRunStatus,
+  runPill,
+  type OrbKind,
+} from '../workflow-run-surface/workflowRunSurfaceHelpers.js';
 import type { PlanNodePlacer } from './PlanBoard.js';
 
 /** Read by assistive technology only. */
@@ -120,31 +134,124 @@ export function useReveal(): {
   };
 }
 
-/** A plan's state as a dot in its colour; the words beside it name the state. */
-export function StateDot({ state, hidden = false }: { state: PlanRootState; hidden?: boolean }) {
-  const color = PLAN_STATE_COLOR[state];
-  const ring = state === 'closed' || state === 'empty';
-  const dot = (
+/**
+ * An orb's size by its place. An orb's core is about 60% of its box, so a row's
+ * orb draws its core at the size the row's dot had. The rail's header is larger.
+ */
+export const PLAN_ORB_SIZE = { row: 14, heading: 12, header: 20, rail: 36 } as const;
+
+/**
+ * An orb that shows a state the words beside it name (Plan 332 P6). It is
+ * decorative, so a screen reader reads the state once, in those words.
+ */
+function StateOrb({
+  kind,
+  size,
+  hidden,
+  data,
+}: {
+  kind: OrbKind;
+  size: number;
+  hidden: boolean;
+  data: Record<`data-${string}`, string>;
+}) {
+  return (
     <span
-      aria-hidden
-      data-state={state}
+      data-plan-orb={kind}
+      {...data}
       style={{
-        display: 'block',
-        width: 8,
-        height: 8,
-        borderRadius: 'var(--radius-full)',
-        background: ring ? 'transparent' : color,
-        boxShadow: ring ? `inset 0 0 0 1.5px ${color}` : 'none',
+        display: 'inline-flex',
+        flexShrink: 0,
         opacity: hidden ? 0 : 1,
+        transition: 'opacity var(--transition-duration-fast) var(--transition-timing-default)',
       }}
+    >
+      <StatusOrb kind={kind} size={size} />
+    </span>
+  );
+}
+
+/** A plan's state as its orb; the words beside it name the state. */
+export function PlanStateOrb({
+  state,
+  size = PLAN_ORB_SIZE.row,
+  hidden = false,
+}: {
+  state: PlanRootState;
+  size?: number;
+  /** Controls stand in the orb's place, so it gives way to them. */
+  hidden?: boolean;
+}) {
+  return (
+    <StateOrb
+      kind={orbForPlanState(state)}
+      size={size}
+      hidden={hidden}
+      data={{ 'data-state': state }}
     />
   );
-  return state === 'in_flight' && !hidden ? (
-    <Pulse active color={color}>
-      {dot}
-    </Pulse>
-  ) : (
-    dot
+}
+
+/** A step's state as its orb, by its column and whether a run is on it; its words beside it. */
+export function PlanStepOrb({
+  column,
+  runInFlight,
+  size = PLAN_ORB_SIZE.row,
+}: {
+  column: PlanBoardColumn;
+  runInFlight: boolean;
+  size?: number;
+}) {
+  return (
+    <StateOrb
+      kind={orbForPlanStep(column, { runInFlight })}
+      size={size}
+      hidden={false}
+      data={{ 'data-column': column }}
+    />
+  );
+}
+
+/** A heading's orb, for the column or lane it heads, whose label names it. */
+export function HeadingOrb({ column }: { column: PlanBoardColumn }) {
+  return (
+    <StatusOrb kind={orbForPlanStep(column, { runInFlight: true })} size={PLAN_ORB_SIZE.heading} />
+  );
+}
+
+/**
+ * A run on a step as the run surface writes its rows: the run's orb, its kind
+ * linked to the run, its pill, and how long it has run, ticking while it runs.
+ */
+export function PlanRunLine({ run, spaceSlug }: { run: PlanNodeRun; spaceSlug: string }) {
+  const running = run.status === 'running';
+  const nowMs = useNowTicker(running);
+  const pill = runPill(run.status);
+  const elapsed = running ? formatElapsed(run.startedAt, nowMs) : '';
+  return (
+    <span
+      data-plan-run={run.runId}
+      style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--space-1)' }}
+    >
+      <StatusOrb
+        kind={orbForRunStatus(run.status)}
+        size={PLAN_ORB_SIZE.row}
+        decorative={false}
+        label="Run"
+      />
+      <Link
+        href={spaceRoute(spaceSlug, `/runs/${encodeURIComponent(run.runId)}`)}
+        style={{ color: 'var(--color-text-link)' }}
+      >
+        {runKindLabel(run.slug)}
+      </Link>
+      <Pill label={pill.label} tone={pill.tone} />
+      {elapsed !== '' && (
+        <Text size="xs" variant="muted" data-plan-run-elapsed>
+          {elapsed}
+        </Text>
+      )}
+    </span>
   );
 }
 
@@ -183,22 +290,6 @@ export function MetaSep() {
     <span aria-hidden style={{ color: 'var(--color-text-muted)', opacity: 0.6 }}>
       ·
     </span>
-  );
-}
-
-/** A heading's dot, in the colour of the column or lane it heads. */
-export function HeadingDot({ color }: { color: string }) {
-  return (
-    <span
-      aria-hidden
-      style={{
-        width: 8,
-        height: 8,
-        flexShrink: 0,
-        borderRadius: 'var(--radius-full)',
-        background: color,
-      }}
-    />
   );
 }
 

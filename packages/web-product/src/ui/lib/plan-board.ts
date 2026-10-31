@@ -88,16 +88,6 @@ export const PLAN_STATE_LABEL: Record<PlanRootState, string> = {
   empty: 'No steps',
 };
 
-/** A plan's state as its dot's colour, a token from tokens.css; a closed or empty plan is a ring. */
-export const PLAN_STATE_COLOR: Record<PlanRootState, string> = {
-  closed: 'var(--color-border-emphasis)',
-  needs_you: 'var(--color-warning-default)',
-  in_flight: 'var(--color-status-running)',
-  queued: 'var(--color-accent-fg)',
-  finished: 'var(--color-success-default)',
-  empty: 'var(--color-border-emphasis)',
-};
-
 /** The plan's header (Plan 332 D10): its state, its steps closed of all, and the non-zero count of each column. */
 export function planHeader(tally: PlanRootTally): {
   state: string;

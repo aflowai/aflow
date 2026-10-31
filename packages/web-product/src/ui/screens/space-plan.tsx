@@ -32,7 +32,6 @@ import {
   useMediaQuery,
 } from '@aflow/design-system';
 import type {
-  PlanBoardColumn,
   PlanBoardOutput,
   PlanNodeListTruncation,
   PlanNodeUpdateOutput,
@@ -43,10 +42,18 @@ import { useApiMutation, useApiQuery } from '../hooks/useApiQuery.js';
 import { spacePlanKey, usePlanLiveRefresh } from '../hooks/use-plan-live-refresh.js';
 import { PlanBoard, type PlanNodePlaceRequest } from '../components/plan/PlanBoard.js';
 import { PLAN_STATE_BADGE, PlanList, PlanRootCloseControl } from '../components/plan/PlanList.js';
-import type { PlanNodeOpenRequest } from '../components/plan/PlanNodeOpenControl.js';
+import type {
+  PlanNodeOpenRequest,
+  PlanNodeReviseRequest,
+} from '../components/plan/PlanNodeOpenControl.js';
 import { PlanOverview } from '../components/plan/PlanOverview.js';
 import { PlanRail, PlanRailFromDetail } from '../components/plan/PlanRail.js';
-import { HeadingDot, ProgressMeter } from '../components/plan/PlanParts.js';
+import {
+  HeadingOrb,
+  PLAN_ORB_SIZE,
+  PlanStateOrb,
+  ProgressMeter,
+} from '../components/plan/PlanParts.js';
 import type {
   PlanNodeCloseAnswer,
   PlanNodeCloseRequest,
@@ -63,7 +70,6 @@ import {
   planLaneRailNode,
   planPhases,
   planViewQuery,
-  PLAN_BOARD_COLUMNS,
   readerTimeZone,
   showsPhaseFilter,
   startOfDay,
@@ -93,10 +99,6 @@ function TruncationLine({ truncated }: { truncated: PlanNodeListTruncation | und
     </Text>
   );
 }
-
-const COLUMN_COLOR = new Map<PlanBoardColumn, string>(
-  PLAN_BOARD_COLUMNS.map((column) => [column.id, column.color]),
-);
 
 function Segmented<T extends string>({
   label,
@@ -251,6 +253,14 @@ export function SpacePlanPage(): React.ReactNode {
     invalidate: [spacePlanKey(spaceId)],
     onError: () => undefined,
   });
+  // Revise (Plan 337 P4): the step stays blocked, the operator's note above its note.
+  const reviseNode = useApiMutation<PlanNodeReviseRequest, PlanNodeUpdateOutput>({
+    path: ({ nodeId }) => `/spaces/${spaceId}/plan/nodes/${nodeId}/revise`,
+    method: 'PATCH',
+    serialize: ({ nodeId: _nodeId, ...body }) => JSON.stringify(body),
+    invalidate: [spacePlanKey(spaceId)],
+    onError: () => undefined,
+  });
   const placeNode = useApiMutation<PlanNodePlaceRequest, PlanNodeUpdateOutput>({
     path: ({ nodeId }) => `/spaces/${spaceId}/plan/nodes/${nodeId}/place`,
     method: 'PATCH',
@@ -278,6 +288,7 @@ export function SpacePlanPage(): React.ReactNode {
   };
   const onClose = (request: PlanNodeCloseRequest) => answered(closeNode.mutateAsync(request));
   const onOpen = (request: PlanNodeOpenRequest) => answered(openNode.mutateAsync(request));
+  const onRevise = (request: PlanNodeReviseRequest) => answered(reviseNode.mutateAsync(request));
   const onPlace = (request: PlanNodePlaceRequest) => answered(placeNode.mutateAsync(request));
 
   const header = <Heading level={2}>Plan</Heading>;
@@ -360,6 +371,7 @@ export function SpacePlanPage(): React.ReactNode {
       spaceSlug,
       onClose,
       onOpen,
+      onRevise,
       choosing: formOpen,
       onChoose: (form: 'done' | 'dropped' | null) => {
         if (nodeParam !== undefined) setChoosing({ nodeId: nodeParam, choosing: form });
@@ -455,6 +467,7 @@ export function SpacePlanPage(): React.ReactNode {
               : undefined
           }
           onOpen={onOpen}
+          onRevise={onRevise}
           choosing={formOpen}
           onChoose={(form) => {
             setChoosing({ nodeId: selectedCard.node.nodeId, choosing: form });
@@ -471,6 +484,7 @@ export function SpacePlanPage(): React.ReactNode {
               {root.title}
             </Text>
             <Row gap="sm" align="center" wrap data-plan-tally={root.nodeId}>
+              <PlanStateOrb state={tally.state} size={PLAN_ORB_SIZE.header} />
               <Badge variant={PLAN_STATE_BADGE[tally.state]}>{planLine.state}</Badge>
               <Row gap="xs" align="center">
                 <ProgressMeter done={tally.done + tally.dropped} total={tally.steps} />
@@ -480,7 +494,7 @@ export function SpacePlanPage(): React.ReactNode {
               </Row>
               {planLine.counts.map(({ column, label }) => (
                 <Row key={column} gap="xs" align="center" data-plan-tally-count={column}>
-                  <HeadingDot color={COLUMN_COLOR.get(column) ?? 'var(--color-border-emphasis)'} />
+                  <HeadingOrb column={column} />
                   <Text size="sm" variant="muted">
                     {label}
                   </Text>

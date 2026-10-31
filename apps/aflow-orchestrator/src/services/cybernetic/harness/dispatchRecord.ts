@@ -6,7 +6,7 @@ import type { WorkflowTaskRow } from '@aflow/cybernetic-runtime';
 import type { TenantId, WorkflowTask } from '@aflow/schemas';
 import type { WorkflowTaskOutcome } from './types.js';
 import type { getOrchestratorLogger } from '../../../lib/orchestratorLogger.js';
-import { bumpSchedulerCursorVersion, isRestingTaskStatus } from './helpers.js';
+import { advanceSchedulerCursor, isRestingTaskStatus } from './helpers.js';
 import type { HarnessDeps } from './types.js';
 
 export function shouldPauseOnTransientFailure(
@@ -95,7 +95,7 @@ export async function recordTaskOutcome(
   taskId: string,
   attempt: number,
   status: 'succeeded' | 'failed',
-  taskRow: WorkflowTaskRow,
+  taskRow: Pick<WorkflowTaskRow, 'startedAt'>,
   extras: RecordTaskOutcomeExtras,
 ): Promise<boolean> {
   const tenantIdStr = tenantId as string;
@@ -126,11 +126,13 @@ export async function recordTaskOutcome(
     ...(extras.errorRetryable !== undefined ? { errorRetryable: extras.errorRetryable } : {}),
   });
 
-  // Bump `scheduler_cursor_version` only when the CAS landed. The
-  // sweeper uses this to detect causal progress; bumping on a no-op
-  // would let a sibling sweep mistake a no-progress retry for advance.
+  // Advance the scheduler cursor only when the CAS landed. The sweepers
+  // read it as causal progress; advancing on a no-op would let a sibling
+  // sweep mistake a no-progress retry for advance. It must advance before
+  // the caller clears completion_pending, or the gap before the
+  // dependents' claim reads as a stall to the orphaned-run reconciler.
   if (landed) {
-    await bumpSchedulerCursorVersion(deps.db, tenantIdStr, runId);
+    await advanceSchedulerCursor(deps.db, tenantIdStr, runId);
   }
   return landed;
 }

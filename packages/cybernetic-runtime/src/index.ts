@@ -95,6 +95,7 @@ export * from './store/spaceTemplateInstall.js';
 export * from './store/storeUpdateExecution.js';
 export * from './store/connectorUninstall.js';
 export * from './mcpIntegrationAdmin.js';
+export * from './mcpPrivateNetwork.js';
 export * from './store/storeUninstallPlan.js';
 export * from './store/storeUninstallExecution.js';
 export * from './stagedChange/skillCatalogUpdate.js';
@@ -163,6 +164,7 @@ export * from './spaceLifecycle.js';
 
 // 104b — ProposalView adapter
 export * from './proposalView.js';
+export * from './proposalProvenance.js';
 export * from './proposalCoherence.js';
 export * from './proposalOpDiff.js';
 

@@ -1,14 +1,22 @@
 /**
- * The local instance's identity: one owner, one credential, no directory.
+ * The local instance's identity: one credential, no directory.
  *
- * There is no session here, by design. The appliance authorizes on
+ * There is no login here, by design. The appliance authorizes on
  * reachability — reaching this process means standing on the operator's own
  * host — so the whole decision is whether the request arrived that way, and
  * the instance secret is attached only after it has.
+ *
+ * Which profile is at the keyboard is the API's decision, not this process's.
+ * This process forwards the browser's profile session as it found it and marks
+ * every call as a browser's. The API then refuses a browser with no session
+ * once the install has a second profile (Plan 335 §8 question 7).
  */
+import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 
 import {
+  LOCAL_BROWSER_CALLER_HEADER,
+  LOCAL_PROFILE_SESSION_HEADER,
   refuseLocalRequest,
   type Admission,
   type ConfigViolation,
@@ -22,24 +30,41 @@ import {
 /** Named once; the boot check and the authorizer must not disagree about it. */
 export const INSTANCE_SECRET_ENV = 'PHOENIX_INSTANCE_SECRET';
 
-const instanceSecret = (): string => process.env[INSTANCE_SECRET_ENV]?.trim() ?? '';
+/**
+ * The cookie holding the browser's profile session. The API issues the value
+ * when a profile is chosen, and this process only carries it.
+ */
+export const PROFILE_SESSION_COOKIE = 'aflow_profile_session';
+
+export const instanceSecret = (): string => process.env[INSTANCE_SECRET_ENV]?.trim() ?? '';
+
+/** Where this web process reaches the API. */
+export const localApiUrl = (): string => process.env.API_URL || 'http://localhost:3000';
 
 export const localWebIdentity: WebIdentity = {
   name: 'local instance identity',
 
-  authorizeUpstream(): Promise<UpstreamAuthorization> {
+  async authorizeUpstream(): Promise<UpstreamAuthorization> {
     const secret = instanceSecret();
     // Proceeding without it would reach the API with no credential at all and
     // 401 every call with nothing naming the cause. `anonymousOk` is not
     // consulted: there is no anonymous mode to fall back to, only a missing
     // secret.
     if (secret === '') {
-      return Promise.resolve({
+      return {
         kind: 'unavailable',
         reason: `${INSTANCE_SECRET_ENV} is not set for this web process.`,
-      });
+      };
     }
-    return Promise.resolve({ kind: 'authorized', header: `Bearer ${secret}` });
+    const session = (await cookies()).get(PROFILE_SESSION_COOKIE)?.value ?? '';
+    return {
+      kind: 'authorized',
+      header: `Bearer ${secret}`,
+      headers: {
+        [LOCAL_BROWSER_CALLER_HEADER]: '1',
+        ...(session === '' ? {} : { [LOCAL_PROFILE_SESSION_HEADER]: session }),
+      },
+    };
   },
 
   processRequest(): Promise<Response> {
@@ -70,9 +95,11 @@ export const localWebIdentity: WebIdentity = {
   },
 
   /**
-   * There is no session to find: being admitted is being the owner, so the answer
-   * is whatever admission already decided. A session-shaped implementation here
-   * would have to return `true` and hide the boundary doing the work.
+   * Being admitted is being allowed to act, so the answer is whatever
+   * admission already decided. Which profile acts is the API's question, which
+   * it answers from the session `authorizeUpstream` forwards. A session-shaped
+   * implementation here would have to return `true` and hide the boundary
+   * doing the work.
    */
   authenticateRequest(request: Request): Promise<RequestAuthorization> {
     return this.admitRequest(request);

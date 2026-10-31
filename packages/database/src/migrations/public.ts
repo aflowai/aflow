@@ -942,3 +942,19 @@ export async function applyAgentModelAllowlistMigration(sqlClient: postgres.Sql)
       ADD COLUMN IF NOT EXISTS agent_model_allowlist jsonb;
   `);
 }
+
+/**
+ * The local edition's profile session generation (Plan 335 P1).
+ *
+ * A profile session carries the generation it was issued at, and the API
+ * refuses one that no longer matches. Every existing user starts at 0, which
+ * is the generation a session issued before any bump carries.
+ */
+export async function applyLocalProfileSessionGenerationMigration(
+  sqlClient: postgres.Sql,
+): Promise<void> {
+  await sqlClient.unsafe(`
+    ALTER TABLE public.users
+      ADD COLUMN IF NOT EXISTS profile_session_generation integer NOT NULL DEFAULT 0;
+  `);
+}

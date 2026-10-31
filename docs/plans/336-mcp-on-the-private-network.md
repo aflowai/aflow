@@ -1,6 +1,6 @@
 # Plan 336 — An MCP server on the operator's private network connects
 
-**Status:** proposed. This document is P0. P1 to P4 are not built and start only after it merges.
+**Status:** P0 merged. P1 is built: D1, D2, D3, D5 and the D7 audit. Its unit cases in §5 pass, and the live connect its exit names has not been run. The operator's review deferred D4, so https stays required for every credentialed request in both editions. P2 is built: the D6 refusals reach the step message, the wait response, the card and the form, with the **Private network** form and section and the help article's refusal section. Its UI case in §5 passes as a unit test, and no live test has been run. P4 is written: the `connect-mcp-server` article's first-run section covers the five points §6 names. Its exit, the live case run by following the article, has not been run. P3 is not built.
 
 **Builds on:** Plan 185 (OAuth bindings, consent pause), Plan 253 (operator-owned settings carry a server-stamped principal), Plan 315 (the local edition's first run), Plan 323 D4 (`CREDENTIAL_EXTRA_BASE_URL_ORIGINS` admits a host on the network), Plan 325 (help articles).
 
@@ -62,8 +62,9 @@ _Rejected:_
 The definition gains an operator-only record, the **private network acknowledgment**. It holds these fields:
 
 - The hosts it covers. These are the `serverUrl` host at the time of setting, plus any token or authorization endpoint host the operator adds.
-- Whether plaintext is acknowledged (D4).
 - Who set it and when (D7).
+
+The record holds no plaintext field. D4 is deferred, so a listed host is reached over https only.
 
 Hosts match exactly. Each entry is a hostname or a canonical dotted quad. There are no wildcards.
 
@@ -115,28 +116,25 @@ _Rejected:_
 - **A process-wide switch in `@aflow/network-safety`, read from the environment.** It would widen the API executor and the OpenAPI import in the same process, which D1 refuses.
 - **Extend the exception to API definitions now.** The case is MCP. API definitions can take the same argument in a later plan, once their write path separates the operator from the agent as D2 does here.
 
-### D4 — Https stays required for credentials, and plaintext is a second acknowledgment
+### D4 — Deferred — https required; a plaintext acknowledgment is designed when a server that terminates no TLS is actually in front of an operator
 
-`validateCredentialedUrl` still refuses `http:` by default. Plaintext to a listed private host is a separate acknowledgment on the same record. The operator sets it after reading this risk: **the bearer token, the OAuth access token or the client secret travels in the clear on the local network. Any host that can observe or answer for that address can read it.**
+The operator's review deferred this decision. `validateCredentialedUrl` refuses `http:` for every credentialed request, in both editions and under every policy. A private network policy widens the addresses a listed host may resolve to. It never lifts the https rule.
 
-Does the pinned-IP fetch make http safe against rebinding there? Partly. Pinning (F5) makes the address that was range-checked the address that is dialled. A name that resolves to `10.0.0.5` at the check cannot reach loopback, metadata or the internet at the connect. Pinning does not authenticate the peer:
+So nothing in this plan admits plaintext:
 
-- A name that rebinds from one private address to another passes both the check and the pin, because both addresses are admitted.
-- A host on the LAN that takes over the address by ARP or DHCP spoofing receives the token.
-- An observer on the path reads it.
+- The record has no plaintext field (D2).
+- No label names a public answer for a listed host, and no remedy offers plaintext (D6).
+- The audit records only setting and clearing hosts (D7).
+- The token exchanges keep their transport. `getClientCredentialsToken` and `postToTokenEndpoint` fetch by name over https (F10), and the certificate still defeats a rebind (F4).
 
-Over https, the certificate binds the name to the server, and none of these work.
+The reason for waiting is the risk the design would accept. Over http the bearer token, the OAuth access token or the client secret travels in the clear on the local network. Pinning (F5) makes the checked address the dialled one, but it does not authenticate the peer. A name that rebinds between two private addresses passes both the check and the pin. A host that takes over the address by ARP or DHCP spoofing receives the token, and an observer on the path reads it.
 
-Two rules follow for plaintext:
-
-- **Every credentialed http request on a listed host goes through the pinned `safeFetch`.** The token exchanges in F10 fetch by name with plain `fetch` today. Admitting http there without pinning reopens the window F4 describes. P1 moves the http case of `getClientCredentialsToken` and `postToTokenEndpoint` onto `safeFetchFor(policy)`. `oauth2.ts` keeps the default policy, so its https rule stands.
-- **Under plaintext, a listed host must resolve to a private address.** A public answer is refused as `plaintext-public-address`. Without this rule, a poisoned corporate resolver could send the token over http to the internet.
+Most corporate MCP servers serve https. The design is written when an operator is in front of one that terminates no TLS. It then starts from the rules this section's first draft named: a second acknowledgment the operator sets after reading the risk, every credentialed http request through the pinned `safeFetch`, and a refusal of any public answer for a listed host.
 
 _Rejected:_
 
-- **Fold plaintext into the D2 acknowledgment.** Most corporate MCP servers serve https. Their operators should not accept a risk they do not run.
+- **Build the plaintext acknowledgment now.** No operator has a server that needs it yet, and it would put credentials on the wire for a case nobody has shown.
 - **Allow http on private hosts without an acknowledgment, because pinning holds.** Pinning does not stop the LAN cases above.
-- **Refuse http on private hosts outright.** Some internal servers terminate no TLS. A refusal with no setting sends the operator to a tunnel or a proxy, which carries the same exposure with less visibility.
 
 ### D5 — The local edition accepts the acknowledgment, and the hosted edition needs the deployment to list the host
 
@@ -157,12 +155,13 @@ _Rejected:_
 
 ### D6 — A refusal names the range and the remedy, a 401 leads to consent, and a successful test leads to tool permissions
 
-**Refusals.** The MCP executor passes `details` to `validationError` (F8): `kind`, `rangeLabel`, the `host` and a `remedy`. The remedies are these:
+**Refusals.** `resolveAndValidateHost` sets a `remedy` on every address refusal. The MCP executor passes `details` to `validationError` (F8): `kind`, `rangeLabel`, the refused `target` and the `remedy`. The remedies are these:
 
 - `acknowledge_private_network`, for a `private-rfc1918` or `shared-address-space` host with no acknowledgment or not on the list.
 - `deployment_must_list_host`, for the hosted case in D5.
-- `acknowledge_plaintext`, for credentialed http to a listed host.
 - `none`, for every label D2 keeps refused. The message says that no setting reaches that address.
+
+A credentialed http request is refused as `invalid-protocol`. No setting lifts that refusal while D4 is deferred.
 
 `DnsBlockedError` gets `kind: 'unresolvable'`, so the kind F6 declares is finally raised. Its remedy text says that this machine cannot resolve the name. It adds that the VPN or its DNS may not reach the service.
 
@@ -192,15 +191,15 @@ _Rejected:_
 
 A `clientScope: 'platform'` binding identifies itself by the CIMD document under the same loopback base. An authorization server on another machine cannot fetch that document. So a corporate server needs a client registered with it, used through `clientScope: 'tenant'` or `'space'`. The platform cannot change either fact. The callback is derived from `API_BASE_URL` on purpose, and `config.ts` refuses a caller-supplied one.
 
-**Audit.** The acknowledgment is written only through `PUT` and `DELETE /v1/integrations/mcp/servers/:serverId/private-network`. The authz is `api_config` `write`, as for definitions. The route refuses a service principal, as `mcp-oauth.ts` does for user-scoped consent. Every set, change and clear writes a `tenant_audit_log` row with these values:
+**Audit.** The acknowledgment is written only through `PUT /v1/integrations/mcp/servers/:serverId/private-network`. The body is the host list, and an empty list clears the record. There is no separate `DELETE`. The authz is `api_config` `write`, as for definitions. The route refuses a service principal, as `mcp-oauth.ts` does for user-scoped consent. Writing the hosts already stored changes nothing and writes no row. Every set, change and clear writes a `tenant_audit_log` row in the same transaction, with these values:
 
 - `category: 'security'`.
-- `action` set to `mcp.private_network.set`, `mcp.private_network.plaintext_set` or `mcp.private_network.cleared`.
+- `action` set to `mcp.private_network.set` or `mcp.private_network.cleared`.
 - `resourceType: 'mcp_server_definition'`, with the server id and the space.
 - The actor and the timestamp, which record who and when.
-- `details` holding the hosts and the plaintext flag before and after, and the edition.
+- `details` holding the hosts before and after, and the edition.
 
-Deleting a definition that has the record writes the `cleared` row, with the deletion as its cause. The record also stores `setBy` and `setAt`, so the UI can show them without reading the log.
+Deleting a definition that has the record writes the `cleared` row, with the deletion as its cause. The row names whoever deleted it: the user of the REST route or the store uninstall, or `system` for `mcp.server.delete` in a run. The record also stores `setBy` and `setAt`, so the UI can show them without reading the log.
 
 _Rejected:_
 
@@ -212,8 +211,9 @@ _Rejected:_
 - `@aflow/network-safety`: the policy argument, `safeFetchFor`, `privateNetworkPolicyFor`, the reordered and added metadata entries, the metadata names and the `unresolvable` kind.
 - `@aflow/schemas`: the acknowledgment record and its route schemas, outside `McpServerDefinitionSchema`. Also the `rejected` consent reason, `isLocalEdition()` and the `MCP_PRIVATE_NETWORK_HOSTS` ownership entry.
 - `@aflow/database`: one column on `mcp_server_definitions` holding the record, added by tenant migration.
-- `@aflow/server-runtime`: the two routes, their audit rows, the wait branch's `error`, and the policy on consent discovery.
-- `@aflow/oauth`: the policy carried on `McpDiscovery`, and pinned http on `postToTokenEndpoint`.
+- `@aflow/cybernetic-runtime`: the one writer of the record, its audit rows, and the `cleared` row when a definition holding a record is deleted.
+- `@aflow/server-runtime`: the one `PUT` route, the wait branch's `error`, and the policy on consent discovery.
+- `@aflow/oauth`: the policy carried on `McpDiscovery`, and `mcpPrivateNetworkPolicy`, which every MCP caller reads the policy from. The token exchanges keep fetching by name over https.
 - `apps/aflow-executor-mcp`: the policy at connect, on the transport and for client credentials. Also the refusal details and the 401 handling at connect.
 - `@aflow/web-product`: the refusal text and actions, **Connect account**, the **Private network** section and the **Tool permissions** landing.
 - `packages/platform-artifacts/src/helpCenter/articles/integrations.ts`: the `connect-mcp-server` article.
@@ -227,33 +227,34 @@ Each case fails if the change is wrong.
 - **Unlisted host.** An unlisted name answering `10.1.2.3` is refused as `private-rfc1918` under the same policy.
 - **Metadata name.** `metadata.google.internal` is refused by name under every policy. The write route refuses it as a listed host.
 - **Default argument.** The existing `index.test.ts` passes unchanged with no policy argument.
-- **Plaintext.** `validateCredentialedUrl('http://…')` is refused without the plaintext acknowledgment. With it, a public answer is refused as `plaintext-public-address`. A fetch spy records that the http token exchange dials the IP with a `Host` header.
+- **Https.** `validateCredentialedUrl('http://…', policy)` to a listed host is refused as `invalid-protocol`, before any resolution. So is the http token exchange for client credentials and for `postToTokenEndpoint`.
 - **Agent-chosen destinations.** With a definition listing `mcp.corp.example`, the raw `mcp.tool.call` path and an API direct-URL call to the same host are both refused as `private-rfc1918`.
 - **Agent rewrite.** `mcp.server.upsert` with a `serverUrl` on another private host leaves that host refused. An upsert input carrying the acknowledgment leaves the stored record unchanged.
 - **Hosted.** Under `PHOENIX_EDITION=enterprise`, the route refuses an acknowledgment for a host missing from `MCP_PRIVATE_NETWORK_HOSTS`. An executor given a stored record for that host refuses with `deployment_must_list_host`.
-- **Audit.** Set, plaintext set and clear each write one `tenant_audit_log` row naming the actor.
+- **Audit.** Set and clear each write one `tenant_audit_log` row naming the actor. Deleting a definition that holds a record writes the `cleared` row.
 - **UI.** `testBinding` given a wait response with a `private-rfc1918` error renders the range and **Set as private network**. Given `PAUSED` with an `oauth_consent` request, it renders **Connect account**.
-- **Guard test.** No module outside `@aflow/network-safety` calls `isPrivateIp`.
+- **Guard test.** No module outside `@aflow/network-safety` calls `isPrivateIp` or compares a `rangeLabel` to decide whether to connect.
 - **Live (P4).** On a local install on a VPN, a corporate MCP server with OAuth goes through test, consent and tool permissions to a tool call.
 
-## 6. Phases — proposed, built only after this document merges
+## 6. Phases
 
 **P0 — This document and its index row.** _Exit:_ the operator approves or amends §3.
 
-**P1 — The policy argument and the definition's acknowledgment (D1 to D5, and the D7 audit).** It holds these parts:
+**P1 — The policy argument and the definition's acknowledgment (D1, D2, D3, D5, and the D7 audit). Built.** D4 is deferred. It holds these parts:
 
 - The `@aflow/network-safety` changes and their tests.
-- The record, its column and its two routes, with the edition rule and `MCP_PRIVATE_NETWORK_HOSTS`.
+- The record, its column and its one `PUT` route, with the edition rule and `MCP_PRIVATE_NETWORK_HOSTS`.
 - The audit rows.
-- The policy passed by every MCP caller in the D3 table, and pinned http for the token exchanges.
+- The policy passed by every MCP caller in the D3 table.
+- The `remedy` on an address refusal and the MCP executor's refusal `details`, which the hosted case in §5 reads.
 
 _Exit:_ every case in §5 except UI and Live passes. A local install connects to a listed `10.x` host over https.
 
-**P2 — The UI and the Helmsman's remedy text (the D6 refusals).** It holds the refusal `details` from the MCP executor, `error` in the wait branch, and the card and form text and actions. It also holds the **Private network** section, which shows who set the acknowledgment and when, and the help article. _Exit:_ the UI cases in §5 pass. A refused test names the range and the remedy in the UI and in the step error the Helmsman reads.
+**P2 — The UI and the Helmsman's remedy text (the D6 refusals). Built.** It holds the remedy text in the step message, the `unresolvable` remedy text, `error` in the wait branch, and the card and form text and actions. It also holds the **Private network** section, which shows who set the acknowledgment and when, and the help article. _Exit:_ the UI cases in §5 pass. A refused test names the range and the remedy in the UI and in the step error the Helmsman reads.
 
 **P3 — The auth nudge and the tool-permissions landing (D6 auth and landing).** It holds the `rejected` consent reason, the 401 handling at connect, **Connect account** and the **Tool permissions** landing. It also answers whether an auth challenge without a 401 can be recognised. _Exit:_ a test against a server that answers 401 at connect pauses for consent instead of failing as retryable. A successful first test of a definition with no tools picked lands on **Tool permissions**.
 
-**P4 — An operator note for a corporate MCP server's first run (the D7 note).** A section in the `connect-mcp-server` help article covers these points:
+**P4 — An operator note for a corporate MCP server's first run (the D7 note). Written.** A section in the `connect-mcp-server` help article covers these points:
 
 - The acknowledgment and its risk.
 - The loopback redirect URI to register with the corporate authorization server.

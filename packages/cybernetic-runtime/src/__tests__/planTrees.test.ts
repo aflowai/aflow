@@ -1504,6 +1504,37 @@ describe('readPlanNodeDetail — the rail', () => {
     expect(rest).not.toHaveProperty('nextCursor');
   });
 
+  it('filters by label before it cuts the page, so newer links of another label push none out', async () => {
+    const step = await node('step');
+    for (let i = 0; i < 5; i++) {
+      await linkPlanNode(ctx(), {
+        nodeId: step.nodeId,
+        kind: 'session',
+        ref: `c0000000-0000-4000-8000-00000000000${String(i)}`,
+        label: 'conversation',
+      });
+    }
+    for (let i = 0; i < 5; i++) {
+      await linkPlanNode(ctx(), {
+        nodeId: step.nodeId,
+        kind: 'session',
+        ref: `d0000000-0000-4000-8000-00000000000${String(i)}`,
+        label: 'a run that served it',
+      });
+    }
+
+    const page = await detail(step.nodeId, {
+      linkKind: 'session',
+      linkLabel: 'conversation',
+      limit: '5',
+    });
+
+    expect(page.links).toHaveLength(5);
+    expect(page.links.every((l) => l.label === 'conversation')).toBe(true);
+    expect(page.linksTotal).toBe(5);
+    expect(page).not.toHaveProperty('nextCursor');
+  });
+
   it('pages links that share a time by kind, then ref, losing none', async () => {
     const step = await node('step');
     const createdAt = '2026-10-05T08:00:00.000Z';

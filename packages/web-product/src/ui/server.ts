@@ -15,4 +15,8 @@ export {
   setPreferredSpaceSlug,
 } from './lib/preferredSpace.js';
 export { enterPreferredSpace, resolveSpaceEntry } from './lib/enter-preferred-space.js';
-export type { SpaceLookup, SpaceLookupOutcome } from './lib/enter-preferred-space.js';
+export type {
+  SpaceLookup,
+  SpaceLookupOutcome,
+  SpaceLookupRefusal,
+} from './lib/enter-preferred-space.js';

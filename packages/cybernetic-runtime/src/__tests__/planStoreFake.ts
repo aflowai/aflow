@@ -153,6 +153,7 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
         goal: values.goal,
         criteria: values.criteria,
         ...(values.note !== null ? { note: values.note } : {}),
+        ...(values.card !== undefined ? { card: values.card } : {}),
         position: values.position ?? this.positionAfterLast(spaceId, values.parentId),
         ...(values.createdBy !== null ? { createdBy: values.createdBy } : {}),
         ...(values.status !== undefined ? { status: values.status } : {}),
@@ -600,6 +601,7 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
     };
     const ofKind = this.linksOf(spaceId, nodeId)
       .filter((l) => page.kind === undefined || l.kind === page.kind)
+      .filter((l) => page.label === undefined || l.label === page.label)
       .sort((a, b) => compare(key(a), key(b)));
     const after = page.after;
     const rest =

@@ -173,6 +173,23 @@ describeDb('plan store reads for the operator’s plan (real DB)', () => {
       expect(findings.links.find((l) => l.ref === 'A1')?.label).toBe('first finding');
       expect((await store.pageLinks(SPACE_ID, elsewhere.nodeId, { limit: 10 })).total).toBe(0);
     });
+
+    it('reads one label before it cuts the page, with that label’s total', async () => {
+      const a = await node('a');
+      await link(a.nodeId, 'A1', SPACE_ID, 'conversation');
+      await link(a.nodeId, 'A2', SPACE_ID, 'something else');
+      await link(a.nodeId, 'A3', SPACE_ID, 'something else');
+
+      const page = await store.pageLinks(SPACE_ID, a.nodeId, {
+        kind: 'finding',
+        label: 'conversation',
+        limit: 1,
+      });
+
+      expect(page.links.map((l) => l.ref)).toEqual(['A1']);
+      expect(page.total).toBe(1);
+      expect(page).not.toHaveProperty('next');
+    });
   });
 
   describe('boardFactsOf', () => {

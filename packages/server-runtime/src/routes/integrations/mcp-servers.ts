@@ -1,11 +1,20 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import { McpServerDefinitionSchema } from '@aflow/schemas';
+import {
+  McpPrivateNetworkSetInputSchema,
+  McpPrivateNetworkSetResultSchema,
+  McpServerDefinitionSchema,
+  isLocalEdition,
+  mcpPrivateNetworkDeploymentHosts,
+  parseMcpPrivateNetworkAcknowledgment,
+} from '@aflow/schemas';
 import {
   deleteMcpServerDefinition,
   getMcpServerDefinitionRow,
   listMcpServerDefinitionRows,
+  McpPrivateNetworkWriteError,
+  setMcpPrivateNetwork,
   upsertMcpServerDefinition,
 } from '@aflow/cybernetic-runtime';
 import { McpServerDefinitionResponseSchema, mapMcpDefinitionRow } from './mcp-shared.js';
@@ -15,6 +24,7 @@ import {
   getRedis,
   integrationPolicyDenialPayload,
 } from './shared.js';
+import { resolvePrincipalActorKind } from '../../utils/actorContext.js';
 
 export function registerMcpServerRoutes(fastify: FastifyInstance): void {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
@@ -106,6 +116,7 @@ export function registerMcpServerRoutes(fastify: FastifyInstance): void {
           source: row.source,
           enabled: (row.enabled ?? 1) === 1,
           ...(defJson as Record<string, unknown>),
+          privateNetwork: parseMcpPrivateNetworkAcknowledgment(row.privateNetworkJson),
           createdAt: new Date(row.createdAt).toISOString(),
           updatedAt: new Date(row.updatedAt).toISOString(),
         },
@@ -186,9 +197,78 @@ export function registerMcpServerRoutes(fastify: FastifyInstance): void {
         spaceId: space.spaceId,
         redis: getRedis(fastify),
         serverId,
+        actor: {
+          actorId: request.authUser?.userId ?? null,
+          actorKind: request.authUser ? resolvePrincipalActorKind(request.authUser) : 'system',
+        },
       });
 
       reply.send({ status: 'deleted' });
+    },
+  );
+
+  // Plan 336 D2 and D7: the private network acknowledgment's only write path.
+  // It is not on the definition, so no agent's upsert and no skill bundle sets
+  // it, and a service principal is refused here for the same reason.
+  app.put(
+    '/mcp/servers/:serverId/private-network',
+    {
+      config: { authz: { resource: 'api_config', action: 'write', spaceIdFrom: 'requireSpace' } },
+      schema: {
+        tags: ['Integrations'],
+        summary:
+          "Set the hosts an MCP server definition may reach on the operator's private network, " +
+          'or clear them with an empty list',
+        params: z.object({ serverId: z.string() }),
+        body: McpPrivateNetworkSetInputSchema,
+        response: {
+          200: McpPrivateNetworkSetResultSchema,
+          400: z.object({ error: z.string(), code: z.string() }),
+          403: z.object({ error: z.string(), code: z.string() }),
+          404: z.object({ error: z.string(), code: z.string() }),
+        },
+      },
+    },
+    async (request, reply) => {
+      const authUser = request.authUser;
+      if (!authUser || authUser.isServicePrincipal) {
+        reply.code(403).send({
+          code: 'operator_only',
+          error:
+            'Only a signed-in operator sets private network hosts, because they decide which ' +
+            'private addresses this server may reach. A service principal cannot.',
+        });
+        return;
+      }
+      const tenant = await request.requireTenant();
+      const space = await request.requireSpace();
+      const db = getDb(fastify);
+      const { serverId } = request.params as { serverId: string };
+
+      if (!db) throw new Error('Database not configured');
+
+      try {
+        const result = await setMcpPrivateNetwork({
+          db,
+          tenantId: tenant.tenantId as string,
+          spaceId: space.spaceId,
+          redis: getRedis(fastify),
+          serverId,
+          hosts: request.body.hosts,
+          actor: { actorId: authUser.userId, actorKind: 'human' },
+          // The local edition's operator is the deployment, so it lists nothing.
+          deploymentHosts: isLocalEdition() ? [] : mcpPrivateNetworkDeploymentHosts(),
+        });
+        reply.send(result);
+      } catch (err) {
+        if (err instanceof McpPrivateNetworkWriteError) {
+          reply
+            .code(err.code === 'MCP_SERVER_NOT_FOUND' ? 404 : 400)
+            .send({ code: err.code, error: err.message });
+          return;
+        }
+        throw err;
+      }
     },
   );
 }

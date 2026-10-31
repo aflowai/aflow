@@ -43,6 +43,7 @@ import type {
   SaveMcpServerInput,
 } from './use-mcp-integrations.js';
 import { preservedBindingScope } from '../integrations/bindingScope.js';
+import { McpTestFailure } from './McpPrivateNetworkSection.js';
 
 type SaveStep = 'idle' | 'saving' | 'connecting' | 'enabling' | 'done';
 
@@ -100,6 +101,7 @@ export function McpIntegrationFormDialog({
   onSaveCredential,
   onDeleteCredential,
   onTest,
+  onSetPrivateNetwork,
   onClose,
 }: {
   /** When set, the form is in edit mode and Server ID is locked. */
@@ -120,6 +122,11 @@ export function McpIntegrationFormDialog({
   onDeleteCredential: (key: string) => Promise<void>;
   /** Run mcp.binding.test against the saved binding. */
   onTest: (bindingId: string) => Promise<McpBindingTestResult>;
+  /**
+   * Opens the private network form for the saved definition, with the host a
+   * refused connect named. The definition is saved by then.
+   */
+  onSetPrivateNetwork: (serverId: string, refusedHost?: string) => void;
   onClose: () => void;
 }) {
   const editing = Boolean(initialDefinition);
@@ -186,6 +193,7 @@ export function McpIntegrationFormDialog({
   // === Save state ===
   const [step, setStep] = useState<SaveStep>('idle');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [testFailure, setTestFailure] = useState<McpBindingTestResult | null>(null);
   const [saveError, setSaveError] = useState<unknown>(null);
 
   const saving = step !== 'idle' && step !== 'done';
@@ -217,6 +225,7 @@ export function McpIntegrationFormDialog({
 
   const handleSave = useCallback(async () => {
     setErrorMsg(null);
+    setTestFailure(null);
     setSaveError(null);
 
     const trimmedServerId = serverId.trim();
@@ -338,11 +347,7 @@ export function McpIntegrationFormDialog({
       setStep('connecting');
       const result = await onTest(finalBindingId);
       if (!result.ok) {
-        setErrorMsg(
-          result.message
-            ? `Couldn't connect: ${result.message}. You can still save and try again later from the integration card.`
-            : "Couldn't connect. You can still save and try again later from the integration card.",
-        );
+        setTestFailure(result);
         setStep('idle');
         return;
       }
@@ -559,6 +564,25 @@ export function McpIntegrationFormDialog({
               {errorMsg}
             </Text>
           </Row>
+        )}
+        {testFailure && (
+          <Column gap="1">
+            <McpTestFailure
+              result={testFailure}
+              prefix="Couldn't connect:"
+              refusalContext={{
+                serverName: name.trim() || serverId.trim(),
+                acknowledged: Boolean(initialDefinition?.privateNetwork),
+              }}
+              onSetPrivateNetwork={(refusedHost) => {
+                onSetPrivateNetwork(serverId.trim(), refusedHost);
+              }}
+            />
+            <Text size="xs" color="muted">
+              The integration is saved. Choose Save &amp; connect again once the cause is fixed, or
+              retry later from its card.
+            </Text>
+          </Column>
         )}
         {saveError != null && <IntegrationWriteErrorNotice error={saveError} kind="mcp" />}
 

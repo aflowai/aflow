@@ -12,7 +12,7 @@ import {
   loadRunByRunIdAcrossSpaces,
   resolveWorkflowForRun,
 } from './helpers.js';
-import { applyFailureMode, completeRun } from './pauseResume.js';
+import { applyFailureMode, completeRun, failedTasksFailure } from './pauseResume.js';
 import type { HarnessDeps } from './types.js';
 import { dispatchAllOrCollectFailures, persistFailedDispatches } from './dispatchBatch.js';
 
@@ -118,7 +118,14 @@ export async function dispatchNextOrTerminate(
   if (readyResult.errors.length > 0) {
     const errorDetail = readyResult.errors.map((e) => `${e.task.taskId}: ${e.reason}`).join('; ');
     log.warn(`[dispatchNextOrTerminate] when-predicate errors — failing run: ${errorDetail}`);
-    await completeRun(deps, tenantId, runId, 'failed');
+    await completeRun(deps, tenantId, runId, {
+      status: 'failed',
+      failure: {
+        reason: 'when_predicate_error',
+        message: `A task's when-condition could not be evaluated: ${errorDetail}`,
+        taskIds: readyResult.errors.map((e) => e.task.taskId),
+      },
+    });
     return;
   }
 
@@ -207,12 +214,20 @@ export async function dispatchNextOrTerminate(
     // ends up cancelled by some other path we still surface it as
     // failure-like for the workflow).
     const runRows = run.tasks;
-    const hasFailedRequired = requiredTasks.some((t) => {
-      const row = runRows.find((r) => r.taskId === t.taskId);
-      return row?.status === 'failed' || row?.status === 'blocked' || row?.status === 'cancelled';
-    });
-    const terminalStatus: 'completed' | 'failed' = hasFailedRequired ? 'failed' : 'completed';
-    await completeRun(deps, tenantId, runId, terminalStatus);
+    const failedRequired = requiredTasks
+      .filter((t) => {
+        const row = runRows.find((r) => r.taskId === t.taskId);
+        return row?.status === 'failed' || row?.status === 'blocked' || row?.status === 'cancelled';
+      })
+      .map((t) => t.taskId);
+    await completeRun(
+      deps,
+      tenantId,
+      runId,
+      failedRequired.length > 0
+        ? { status: 'failed', failure: failedTasksFailure(runRows, failedRequired) }
+        : { status: 'completed' },
+    );
     return;
   }
 

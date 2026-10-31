@@ -5,3 +5,6 @@ export * from './ownership.js';
 export * from './ownershipLookup.js';
 export * from './cutTransforms.js';
 export * from './importScan.js';
+export * from './localProfileSession.js';
+export * from './localProfiles.js';
+export * from './localProfiles.js';

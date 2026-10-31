@@ -23,8 +23,50 @@ vi.mock('@aflow/cybernetic-runtime', async () => {
     createStagedChangeDocReader: () => ({
       getByPath: async (path: string, spaceId: string) => store.get(key(spaceId, path)) ?? null,
     }),
+    // The conversation store: the patching session is delegated from a titled conversation.
+    resolveProposalProvenance: async (
+      _db: unknown,
+      _tenantId: string,
+      _spaceId: string,
+      staged: StagedChange[],
+    ) =>
+      new Map(
+        staged.map((sc) => [
+          sc.id,
+          actual.provenanceOf(
+            sc,
+            actual.conversationFor(sc, conversations),
+            sc.targetWorkflowSlug === 'coastal-weather-alerts' ? 'Coastal weather alerts' : null,
+          ),
+        ]),
+      ),
   };
 });
+
+const CONVERSATION_ID = '00000000-0000-4000-8000-0000000000c1';
+const conversations = {
+  sessions: new Map([
+    [
+      '00000000-0000-4000-8000-0000000000b1',
+      {
+        sessionId: '00000000-0000-4000-8000-0000000000b1',
+        parentSessionId: '00000000-0000-4000-8000-0000000000c1',
+        title: null,
+        manualTitle: null,
+      },
+    ],
+    [
+      '00000000-0000-4000-8000-0000000000c1',
+      {
+        sessionId: '00000000-0000-4000-8000-0000000000c1',
+        parentSessionId: null,
+        title: 'Coastal storm warnings',
+        manualTitle: null,
+      },
+    ],
+  ]),
+  runSessions: new Map<string, string>(),
+};
 
 const { createCoachProposalSource } = await import('../sources/coachProposalSource.js');
 const { ActionCenterResolveError } = await import('../types.js');
@@ -34,6 +76,7 @@ const SPACE_ID = '00000000-0000-4000-8000-000000000002';
 const OTHER_SPACE_ID = '00000000-0000-4000-8000-000000000003';
 const PROPOSAL_ID = '00000000-0000-4000-8000-0000000000a1';
 const RUN_ID = '00000000-0000-4000-8000-0000000000b1';
+const WHY = 'The alert went out after the storm had passed.';
 
 const ctx = {
   tenantId: TENANT_ID as never,
@@ -52,11 +95,12 @@ function patchProposal(): StagedChange {
     id: PROPOSAL_ID,
     kind: 'workflow_refinement',
     source: 'agent_patch',
+    proposedBy: 'Helmsman',
     status: 'proposed',
-    targetWorkflowSlug: 'cx-chatbot-invoke-direct',
+    targetWorkflowSlug: 'coastal-weather-alerts',
     proposal: {
-      summary: 'Agent-initiated patch (1 op(s)) for "cx-chatbot-invoke-direct"',
-      rationale: 'Agent proposed 1 patch op(s).',
+      summary: 'Agent-initiated patch (1 op(s)) for "coastal-weather-alerts"',
+      rationale: WHY,
       confidence: 'medium',
       ops: [
         {
@@ -153,6 +197,55 @@ describe('coach proposal source — reading one proposal', () => {
     put(SPACE_ID, JSON.stringify(patchProposal()), new Date());
     const message = await notFoundMessage(`proposal:${PROPOSAL_ID}`);
     expect(message).toContain('has been deleted');
+  });
+});
+
+describe('coach proposal source — who proposed it', () => {
+  it('derives every provenance field of a Helmsman patch from the record', async () => {
+    put(SPACE_ID, JSON.stringify(patchProposal()));
+    const item = await source().getById(ctx, `proposal:${PROPOSAL_ID}`);
+    expect(item?.requestedBy).toEqual({
+      kind: 'agent',
+      label: 'Helmsman',
+      sessionId: CONVERSATION_ID,
+    });
+    expect(item?.extension).toMatchObject({
+      kind: 'coach_proposal',
+      provenance: {
+        source: 'agent_patch',
+        sourceLabel: 'Helmsman patch',
+        conversation: { sessionId: CONVERSATION_ID, title: 'Coastal storm warnings' },
+        authorRole: 'Helmsman',
+        authorId: RUN_ID,
+        target: { slug: 'coastal-weather-alerts', name: 'Coastal weather alerts' },
+        withdrawnBy: null,
+      },
+      rationale: WHY,
+    });
+  });
+
+  it("names another agent's patch by that agent, not the Helmsman", async () => {
+    put(SPACE_ID, JSON.stringify({ ...patchProposal(), proposedBy: 'Forecast analyst' }));
+    const item = await source().getById(ctx, `proposal:${PROPOSAL_ID}`);
+    expect(item?.requestedBy).toMatchObject({ kind: 'agent', label: 'Forecast analyst' });
+    expect(item?.extension).toMatchObject({
+      provenance: { sourceLabel: 'Forecast analyst patch', authorRole: 'Forecast analyst' },
+    });
+  });
+
+  it('reads a Coach review through the same path, under its own source', async () => {
+    const { proposedBy: _patcher, ...review } = patchProposal();
+    put(SPACE_ID, JSON.stringify({ ...review, source: 'coach' }));
+    const item = await source().getById(ctx, `proposal:${PROPOSAL_ID}`);
+    expect(item?.requestedBy).toMatchObject({ kind: 'coach', label: 'Coach' });
+    expect(item?.extension).toMatchObject({
+      provenance: {
+        source: 'coach',
+        sourceLabel: 'Coach review',
+        authorRole: 'Coach',
+        target: { slug: 'coastal-weather-alerts', name: 'Coastal weather alerts' },
+      },
+    });
   });
 });
 

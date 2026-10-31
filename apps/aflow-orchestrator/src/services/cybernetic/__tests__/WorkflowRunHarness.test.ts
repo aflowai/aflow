@@ -48,6 +48,10 @@ const mockComputeDescendants = vi.fn();
 const mockLoadRunById = vi.fn();
 const mockLedgerCompleteRun = vi.fn();
 const mockLedgerPauseRun = vi.fn();
+/** Every `set` the harness writes to a run row through the tenant transaction. */
+const mockRunRowSet = vi.fn((_values: Record<string, unknown>) => ({
+  where: () => Promise.resolve(),
+}));
 
 const mockClaimHumanTask = vi.fn();
 const mockLedgerRecordTaskResult = vi.fn();
@@ -146,6 +150,7 @@ vi.mock('@aflow/cybernetic-runtime', async () => ({
   loadRunById: (...args: unknown[]) => mockLoadRunById(...args),
   completeRun: (...args: unknown[]) => mockLedgerCompleteRun(...args),
   pauseRun: (...args: unknown[]) => mockLedgerPauseRun(...args),
+  DEFAULT_STALLED_AFTER_MS: 60_000,
   emitRunUpdated: vi.fn().mockResolvedValue(undefined),
   buildHumanTaskHydrationFields: () => undefined,
   resolveActionPreview: (preview: unknown) => ({ ok: true, preview }),
@@ -264,7 +269,9 @@ vi.mock('@aflow/database', async () => {
             where: () => ({ limit: () => Promise.resolve([{ spaceId: 'space-1' }]) }),
           }),
         }),
-        update: () => ({ set: () => ({ where: () => Promise.resolve() }) }),
+        update: () => ({
+          set: (values: Record<string, unknown>) => mockRunRowSet(values),
+        }),
       }),
     ),
   };
@@ -283,6 +290,19 @@ const {
   reconcileStaleRunForTenant,
   resolveWorkflowForRun,
 } = await import('../WorkflowRunHarness.js');
+
+/**
+ * A cleared completion_pending row with an unmoved cursor reads as a stall to
+ * the orphaned-run reconciler, so every task-outcome writer advances first.
+ */
+function expectCursorAdvancedBeforePendingCleared(): void {
+  const cursorOrders = mockRunRowSet.mock.calls
+    .map(([values], index) => ({ values, order: mockRunRowSet.mock.invocationCallOrder[index]! }))
+    .filter(({ values }) => 'schedulerCursorAt' in values)
+    .map(({ order }) => order);
+  expect(cursorOrders.length).toBeGreaterThanOrEqual(1);
+  expect(cursorOrders[0]!).toBeLessThan(mockClearCompletionPending.mock.invocationCallOrder[0]!);
+}
 
 // ─── Fixtures ───────────────────────────────────────────────────────────────
 
@@ -2097,6 +2117,7 @@ describe('dispatchTask', () => {
 
     // completion_pending cleared so the sweeper doesn't re-fire.
     expect(mockClearCompletionPending).toHaveBeenCalledOnce();
+    expectCursorAdvancedBeforePendingCleared();
 
     const failedTaskUpdates = mockAppendSessionEvent.mock.calls
       .map((c) => c[3] as { eventType: string; workflowTaskUpdate?: { status: string } })
@@ -2875,6 +2896,103 @@ describe('dispatchNextOrTerminate downstream-failure handling', () => {
     // applyFailureMode → completeRun(failed) fires.
     expect(mockLedgerCompleteRun).toHaveBeenCalledOnce();
     expect(mockLedgerCompleteRun.mock.calls[0]?.[2]).toMatchObject({ status: 'failed' });
+  });
+});
+
+// ─── A run that ends failed says why ────────────────────────────────────────
+
+describe('a run that ends failed carries its failure', () => {
+  const twoTasks = {
+    slug: 'two-task-skill',
+    tasks: [
+      { taskId: 'task-a', name: 'A', goal: 'a', optional: false, failureMode: 'isolate' },
+      { taskId: 'task-b', name: 'B', goal: 'b', optional: false, dependsOn: ['task-a'] },
+    ],
+  };
+
+  it('names the failed task and its reason in failure_json and on the attention item', async () => {
+    const failedA = buildTaskRow({ taskId: 'task-a', status: 'failed', failureReason: 'boom' });
+    const blockedB = buildTaskRow({ taskId: 'task-b', status: 'blocked' });
+    mockLoadRunById.mockResolvedValue(buildRunDetail([failedA, blockedB], 'running'));
+    mockResolveWorkflowForRunRevision.mockResolvedValue({ workflow: twoTasks, source: 'revision' });
+    mockComputeReadyTasksWithWhen.mockReturnValue({ ready: [], skipped: [], errors: [] });
+    mockLoadPendingWaiters.mockResolvedValue([]);
+    mockLedgerCompleteRun.mockResolvedValueOnce(true);
+
+    const { dispatchNextOrTerminate } = await import('../WorkflowRunHarness.js');
+    await dispatchNextOrTerminate(deps, TENANT, RUN_ID);
+
+    const params = mockLedgerCompleteRun.mock.calls[0]?.[2] as {
+      status: string;
+      failure: { reason: string; message: string; taskIds: string[] };
+    };
+    expect(params.status).toBe('failed');
+    expect(params.failure.reason).toBe('task_failed');
+    expect(params.failure.taskIds).toEqual(['task-a', 'task-b']);
+    expect(params.failure.message).toContain('task-a (failed): boom');
+    expect(mockAddAttentionItem.mock.calls[0]?.[2]).toMatchObject({
+      kind: 'workflow_run_failed',
+      payload: { terminalStatus: 'failed', reason: 'task_failed' },
+    });
+  });
+
+  it('names the task whose when-condition could not be evaluated', async () => {
+    const succeededA = buildTaskRow({ taskId: 'task-a', status: 'succeeded' });
+    mockLoadRunById.mockResolvedValue(buildRunDetail([succeededA], 'running'));
+    mockResolveWorkflowForRunRevision.mockResolvedValue({ workflow: twoTasks, source: 'revision' });
+    mockComputeReadyTasksWithWhen.mockReturnValue({
+      ready: [],
+      skipped: [],
+      errors: [{ task: twoTasks.tasks[1], reason: 'tasks.task-a.output.x is missing' }],
+    });
+    mockLoadPendingWaiters.mockResolvedValue([]);
+
+    const { dispatchNextOrTerminate } = await import('../WorkflowRunHarness.js');
+    await dispatchNextOrTerminate(deps, TENANT, RUN_ID);
+
+    expect(mockLedgerCompleteRun.mock.calls[0]?.[2]).toMatchObject({
+      status: 'failed',
+      failure: { reason: 'when_predicate_error', taskIds: ['task-b'] },
+    });
+  });
+
+  it('a recorded outcome restarts the stall clock before completion_pending is cleared', async () => {
+    // Between a task's completion and its dependents' claim the run holds no
+    // active task and no completion_pending row. The orphaned-run reconciler
+    // fails such a run once its cursor is older than the stall threshold, so
+    // the outcome has to move the cursor before that gap opens.
+    mockListTaskRows.mockResolvedValueOnce([buildTaskRow({ status: 'running' })]);
+    mockCasCompleteTask.mockResolvedValueOnce(true);
+    mockLoadRunById.mockResolvedValue(
+      buildRunDetail([buildTaskRow({ status: 'succeeded' })], 'running'),
+    );
+    mockResolveWorkflowForRunRevision.mockResolvedValue({
+      workflow: {
+        tasks: [{ taskId: TASK_ID, name: 'Task A', goal: 'do thing', optional: false }],
+        slug: 'test-skill',
+      },
+      source: 'revision',
+    });
+    mockComputeReadyTasksWithWhen.mockReturnValue({ ready: [], skipped: [], errors: [] });
+    mockLoadPendingWaiters.mockResolvedValue([]);
+    const before = Date.now();
+
+    await onWorkflowTaskComplete(deps, {
+      tenantId: TENANT,
+      workflowExecution: { runId: RUN_ID, taskId: TASK_ID, attempt: 1 },
+      outcome: { kind: 'succeeded', outputRef: 'inline:abc=' },
+    });
+
+    const cursorWrites = mockRunRowSet.mock.calls
+      .map(([values], index) => ({ values, order: mockRunRowSet.mock.invocationCallOrder[index]! }))
+      .filter(({ values }) => 'schedulerCursorAt' in values);
+    expect(cursorWrites).toHaveLength(1);
+    const { values, order } = cursorWrites[0]!;
+    const at = values['schedulerCursorAt'] as Date;
+    const deadline = values['schedulerCursorDeadline'] as Date;
+    expect(at.getTime()).toBeGreaterThanOrEqual(before);
+    expect(deadline.getTime() - at.getTime()).toBe(60_000);
+    expect(order).toBeLessThan(mockClearCompletionPending.mock.invocationCallOrder[0]!);
   });
 });
 
@@ -4171,6 +4289,7 @@ describe('reconcileStaleRunForTenant — Plan 132v2 §Phase 5.3', () => {
     expect(casArgs.status).toBe('failed');
     expect(casArgs.failureReason).toMatch(/Operation task stalled/);
     expect(mockClearCompletionPending).toHaveBeenCalledOnce();
+    expectCursorAdvancedBeforePendingCleared();
     expect(result.escalations).toBe(1);
     expect(result.operationBumps).toBe(0);
   });

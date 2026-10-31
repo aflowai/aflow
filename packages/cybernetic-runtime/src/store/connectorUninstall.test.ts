@@ -26,6 +26,8 @@ const store = {
   mcpBindings: [] as McpBindingRow[],
   apiDefinitionDeletes: [] as string[],
   mcpDefinitionDeletes: [] as string[],
+  mcpDefinitionRecords: new Map<string, unknown>(),
+  auditRows: [] as unknown[][],
   credentialDeletes: [] as string[],
   oauthTokenDeletes: [] as Array<{ integrationKind: string; resourceKey: string; ownerId: string }>,
   oauthStateDeletes: [] as Array<{ integrationKind: string; resourceKey: string; spaceId: string }>,
@@ -76,6 +78,11 @@ function applyExecute(query: SQL): unknown[] {
   if (text.includes('DELETE FROM mcp_server_definitions')) {
     const [serverId] = params as [string];
     store.mcpDefinitionDeletes.push(serverId);
+    const record = store.mcpDefinitionRecords.get(serverId);
+    return record === undefined ? [] : [{ private_network_json: record }];
+  }
+  if (text.includes('INSERT INTO tenant_audit_log')) {
+    store.auditRows.push(params);
     return [];
   }
   if (text.includes('SELECT auth_json FROM api_bindings')) {
@@ -98,12 +105,15 @@ function applyExecute(query: SQL): unknown[] {
 const fakeTx = { execute: async (query: SQL) => applyExecute(query) } as never;
 
 const SPACE_ID = '00000000-0000-0000-0000-000000000001';
+const ACTOR = { actorId: '00000000-0000-4000-8000-0000000000aa', actorKind: 'human' } as const;
 
 beforeEach(() => {
   store.apiBindings = [];
   store.mcpBindings = [];
   store.apiDefinitionDeletes = [];
   store.mcpDefinitionDeletes = [];
+  store.mcpDefinitionRecords = new Map();
+  store.auditRows = [];
   store.credentialDeletes = [];
   store.oauthTokenDeletes = [];
   store.oauthStateDeletes = [];
@@ -157,7 +167,7 @@ describe('deleteMcpIntegration', () => {
       auth_json: { type: 'bearer', credentialKey: 'kaggle-default-token' },
     });
 
-    await deleteMcpIntegration(fakeTx, SPACE_ID, 'kaggle');
+    await deleteMcpIntegration(fakeTx, SPACE_ID, 'kaggle', ACTOR);
 
     expect(store.oauthTokenDeletes).toEqual([
       { integrationKind: 'mcp', resourceKey: 'kaggle', ownerId: SPACE_ID },
@@ -168,5 +178,38 @@ describe('deleteMcpIntegration', () => {
     expect(store.mcpBindings).toEqual([]);
     expect(store.credentialDeletes).toEqual(['kaggle-default-token']);
     expect(store.mcpDefinitionDeletes).toEqual(['kaggle']);
+    expect(store.auditRows).toEqual([]);
+  });
+
+  it('writes a cleared audit row naming the actor when the definition held private network hosts', async () => {
+    store.mcpDefinitionRecords.set('corp', {
+      hosts: ['mcp.corp.example'],
+      setBy: ACTOR.actorId,
+      setAt: '2026-10-30T12:00:00.000Z',
+    });
+
+    await deleteMcpIntegration(fakeTx, SPACE_ID, 'corp', ACTOR);
+
+    expect(store.auditRows).toHaveLength(1);
+    const [actorId, actorKind, action, serverId, spaceId, details] = store.auditRows[0] as [
+      string,
+      string,
+      string,
+      string,
+      string,
+      string,
+    ];
+    expect({ actorId, actorKind, action, serverId, spaceId }).toEqual({
+      actorId: ACTOR.actorId,
+      actorKind: 'human',
+      action: 'mcp.private_network.cleared',
+      serverId: 'corp',
+      spaceId: SPACE_ID,
+    });
+    expect(JSON.parse(details)).toMatchObject({
+      hostsBefore: ['mcp.corp.example'],
+      hostsAfter: [],
+      cause: 'definition_deleted',
+    });
   });
 });

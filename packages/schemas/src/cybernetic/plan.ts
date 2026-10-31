@@ -63,6 +63,86 @@ const PlanNodePositionSchema = z
   })
   .describe('Order among siblings, lowest first.');
 
+// ============================================================================
+// Plan 337 D1 — the card a node that asks for a decision carries
+// ============================================================================
+
+/** Storage ceilings, not style: one item of a card, and one list of them. */
+export const PLAN_NODE_CARD_ITEM_MAX_CHARS = 4_000;
+export const PLAN_NODE_CARD_LIST_MAX_ITEMS = 50;
+/** The whole card, serialised: the ceiling every other prose field of a node has. */
+export const PLAN_NODE_CARD_MAX_CHARS = PLAN_NODE_PROSE_MAX_CHARS;
+
+export const PLAN_NODE_CARD_KEYS_MESSAGE =
+  'A card holds change, why, affects, risks, questions and notDoing, and nothing else. Done when is the node’s criteria, so the card does not repeat it.';
+
+const PlanNodeCardItemSchema = z.string().trim().min(1).max(PLAN_NODE_CARD_ITEM_MAX_CHARS);
+const PlanNodeCardListSchema = z.array(PlanNodeCardItemSchema).max(PLAN_NODE_CARD_LIST_MAX_ITEMS);
+
+export const PlanNodeCardSchema = z
+  .object({
+    change: z
+      .object({ today: PlanNodeCardItemSchema, after: PlanNodeCardItemSchema })
+      .strict()
+      .describe('What changes: how it is today, and how it is after.'),
+    why: PlanNodeCardListSchema.min(1).describe('Why: the reasons, at least one.'),
+    affects: PlanNodeCardListSchema.describe('What it affects: packages, surfaces, people.'),
+    risks: z
+      .array(
+        z
+          .object({ risk: PlanNodeCardItemSchema, mitigation: PlanNodeCardItemSchema.optional() })
+          .strict(),
+      )
+      .max(PLAN_NODE_CARD_LIST_MAX_ITEMS),
+    questions: z
+      .array(
+        z
+          .object({ question: PlanNodeCardItemSchema, recommended: PlanNodeCardItemSchema })
+          .strict(),
+      )
+      .max(PLAN_NODE_CARD_LIST_MAX_ITEMS)
+      .describe('Open questions, each with the answer you recommend.'),
+    notDoing: PlanNodeCardListSchema.describe('Not done on purpose.'),
+  })
+  .strict({ message: PLAN_NODE_CARD_KEYS_MESSAGE })
+  .superRefine((card, ctx) => {
+    const length = JSON.stringify(card).length;
+    if (length > PLAN_NODE_CARD_MAX_CHARS) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `This card holds ${String(length)} characters serialised, and a card holds at most ${String(PLAN_NODE_CARD_MAX_CHARS)}. Shorten its items: the plan document holds the full record.`,
+      });
+    }
+  })
+  .describe(
+    'The decision card the operator decides from. Every section is required, and a list may be empty where you found none. One or two short sentences an item. Done when is the node’s criteria.',
+  );
+export type PlanNodeCard = z.infer<typeof PlanNodeCardSchema>;
+
+/** A card the schema accepts, in its section order: how a write puts it in a patch. */
+export function planNodeCardInOrder(card: PlanNodeCard): PlanNodeCard {
+  return PlanNodeCardSchema.parse(card);
+}
+
+export type StoredPlanNodeCard = { card: PlanNodeCard } | { refusal: string };
+
+/**
+ * A stored card as a node read returns it. A `jsonb` column returns keys in
+ * its own order, and a reader takes the card in D1's order. A card written
+ * before a schema change may fail the schema now. The read then carries no
+ * card and returns the refusal, so the node still passes its output schema.
+ */
+export function readStoredPlanNodeCard(stored: unknown): StoredPlanNodeCard {
+  const parsed = PlanNodeCardSchema.safeParse(stored);
+  return parsed.success ? { card: parsed.data } : { refusal: parsed.error.message };
+}
+
+/** What `plan.node.create` and `plan.node.update` say of the card they write. */
+export const PLAN_NODE_CARD_WRITE_DESCRIPTION =
+  'Write it on a node that asks the operator for a decision. A proposal carries one. Give every question the answer you recommend. A plan document you commission opens with this same card. Link the document to its node at the merge sha. Write each item to the writing rules in your system prompt.';
+export const PLAN_NODE_CARD_UPDATE_DESCRIPTION =
+  'The card, as plan.node.create writes it. It replaces the whole card. Write each item to the writing rules in your system prompt.';
+
 export const PLAN_STREAM_SPEND_CENTS_MAX = 1_000_000;
 
 const PlanNodeSpendCentsSchema = z
@@ -85,6 +165,7 @@ export const PlanNodeSchema = z
     /** How the criteria were met (done) or why the node was let go (dropped). */
     outcome: z.string().max(PLAN_NODE_PROSE_MAX_CHARS).optional(),
     note: z.string().max(PLAN_NODE_PROSE_MAX_CHARS).optional(),
+    card: PlanNodeCardSchema.optional(),
     /** Name it as `expectedRevision` on the next update. */
     revision: z.number().int().min(1),
     position: z.number().int().min(0),
@@ -181,6 +262,7 @@ export const PlanNodeCreateSchema = z
     criteria: PlanNodeProseSchema.describe('How to tell the node is done.'),
     note: PlanNodeNoteSchema.optional(),
     position: PlanNodePositionSchema.optional(),
+    card: PlanNodeCardSchema.optional().describe(PLAN_NODE_CARD_WRITE_DESCRIPTION),
     proposed: PlanNodeProseSchema.optional().describe(
       'Why this work is proposed. The node is created blocked, its note’s first line `Proposed: <why>`, and nothing starts from it until a person approves it. A resident wake creates nothing else.',
     ),
@@ -214,7 +296,7 @@ export const PLAN_NODE_OPEN_HAS_NO_OUTCOME_MESSAGE =
   'An open node has no outcome: pass `outcome` with status "done" or "dropped", or leave it out. Reopening a node moves its outcome into the note.';
 
 export const PLAN_NODE_UPDATE_EMPTY_MESSAGE =
-  'This update changes nothing. Name at least one of status, note, goal, criteria, title, parentId, position or outcome.';
+  'This update changes nothing. Name at least one of status, note, goal, criteria, title, parentId, position, outcome or card.';
 
 export const PLAN_NODE_UPDATE_FIELDS = [
   'status',
@@ -225,6 +307,7 @@ export const PLAN_NODE_UPDATE_FIELDS = [
   'parentId',
   'position',
   'outcome',
+  'card',
 ] as const;
 export const PlanNodeUpdateFieldSchema = z.enum(PLAN_NODE_UPDATE_FIELDS);
 export type PlanNodeUpdateField = z.infer<typeof PlanNodeUpdateFieldSchema>;
@@ -247,6 +330,7 @@ export const PlanNodeUpdateSchema = z
     outcome: PlanNodeProseSchema.optional().describe(
       'How the criteria were met, or why the node was dropped.',
     ),
+    card: PlanNodeCardSchema.optional().describe(PLAN_NODE_CARD_UPDATE_DESCRIPTION),
   })
   .strict()
   .superRefine((update, ctx) => {
@@ -313,6 +397,36 @@ const ExpectedRevisionSchema = z
 /** How long the operator's reason for an approve or a reopen may be: one line of a note. */
 export const PLAN_NODE_OPEN_WHY_MAX_CHARS = PLAN_NODE_PROSE_MAX_CHARS;
 
+/** The head the engine gives the operator's instructions on an approve. */
+export const PLAN_NODE_APPROVED_HEAD = 'Approved: ';
+/** The head the engine gives the operator's note on a revise (Plan 337 P4). */
+export const PLAN_NODE_REVISE_HEAD = 'Revise: ';
+/** The head of the line a Helmsman writes once it has rewritten a node from a revise. */
+export const PLAN_NODE_REVISED_HEAD = 'Revised: ';
+/** The label on the `session` link an operator's conversation leaves on a node it wrote. */
+export const PLAN_NODE_CONVERSATION_LINK_LABEL = 'conversation';
+
+/**
+ * The operator's words as the engine writes them into a note: one line, so the
+ * attention block, the rail's **Now** and a brief each read all of it as the
+ * note's first line.
+ */
+export function planNodeOperatorLine(head: string, words: string): string {
+  return `${head}${words.replace(/\s*[\r\n]+\s*/g, ' ').trim()}`;
+}
+
+/**
+ * The operator's instructions a node carries: its note's first line, where the
+ * engine wrote it there on an approve or a revise. A brief opens with it.
+ */
+export function planNodeInstructions(note: string | undefined): string | undefined {
+  const first = note?.split('\n', 1)[0];
+  if (first === undefined) return undefined;
+  return first.startsWith(PLAN_NODE_APPROVED_HEAD) || first.startsWith(PLAN_NODE_REVISE_HEAD)
+    ? first
+    : undefined;
+}
+
 /**
  * The operator moves a `blocked`, `done` or `dropped` node to `active` (Plan
  * 332 D6): **Approve** on a blocked one, **Reopen** on a closed one. The engine
@@ -329,11 +443,31 @@ export const PlanNodeOpenSchema = z
       .max(PLAN_NODE_OPEN_WHY_MAX_CHARS)
       .optional()
       .describe(
-        'Why it is approved or reopened; the note gains it as `Approved: …` or `Reopened: …`.',
+        'On an approve, the operator’s instructions for the work: the note gains them as one `Approved: …` line, and the next brief opens with it. On a reopen, why; the note gains it as `Reopened: …`.',
       ),
   })
   .strict();
 export type PlanNodeOpen = z.infer<typeof PlanNodeOpenSchema>;
+
+/**
+ * The operator sends a `blocked` node back for revision (Plan 337 P4). It stays
+ * blocked. The engine writes `why` above the note as one `Revise: …` line, and
+ * the write moves the revision, so whatever asked about the node asks again.
+ */
+export const PlanNodeReviseSchema = z
+  .object({
+    expectedRevision: ExpectedRevisionSchema,
+    why: z
+      .string()
+      .trim()
+      .min(1)
+      .max(PLAN_NODE_OPEN_WHY_MAX_CHARS)
+      .describe(
+        'What to change in the proposal; the note gains it as `Revise: …`, and the Helmsman rewrites the node from it.',
+      ),
+  })
+  .strict();
+export type PlanNodeRevise = z.infer<typeof PlanNodeReviseSchema>;
 
 const PlaceAnchorSchema = z.string().uuid();
 
@@ -411,7 +545,7 @@ export const PlanNodeLinkCreateSchema = z
       .max(PLAN_NODE_LINK_REF_MAX_CHARS)
       .describe(
         'What the link points at: the id of a run, session or campaign; the URL of a pull request; ' +
-          'a memory path or URL for a document; the finding’s own name for a finding; the merged pull request’s URL for a merge.',
+          'a memory path or URL for a document, a plan document’s at its merge sha; the finding’s own name for a finding; the merged pull request’s URL for a merge.',
       ),
     label: z.string().trim().min(1).max(PLAN_NODE_LINK_LABEL_MAX_CHARS).optional(),
   })

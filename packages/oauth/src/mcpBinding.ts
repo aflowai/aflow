@@ -7,10 +7,35 @@
  * resolver, the orchestrator inline consent op, and the executor all build the
  * same `OAuthBindingTarget`/`McpDiscovery` shape rather than each re-deriving it.
  */
-import { extractUrlOrigin } from '@aflow/schemas';
+import {
+  extractUrlOrigin,
+  mcpPrivateNetworkDeploymentHosts,
+  parseMcpPrivateNetworkAcknowledgment,
+  processEditionDescriptor,
+} from '@aflow/schemas';
 import type { McpServerBinding, McpServerDefinition } from '@aflow/schemas';
+import { privateNetworkPolicyFor, type PrivateNetworkPolicy } from '@aflow/network-safety';
 import { resolveCimdDocumentUrl } from './config.js';
 import type { McpDiscovery } from './tokenManager.js';
+
+/**
+ * The policy an MCP definition's stored acknowledgment yields in this
+ * process. Every MCP caller reads it from here: the executor's space loader
+ * once per definition, and the API server for consent. The edition rule is
+ * applied again at every read, so a record that predates a change to
+ * `MCP_PRIVATE_NETWORK_HOSTS`, or arrived in a copied database, is refused
+ * rather than honoured.
+ */
+export function mcpPrivateNetworkPolicy(
+  storedRecord: unknown,
+  env: NodeJS.ProcessEnv = process.env,
+): PrivateNetworkPolicy {
+  return privateNetworkPolicyFor({
+    acknowledgment: parseMcpPrivateNetworkAcknowledgment(storedRecord),
+    edition: processEditionDescriptor().edition,
+    deploymentHosts: mcpPrivateNetworkDeploymentHosts(env),
+  });
+}
 
 export interface McpOAuthDescriptor {
   discovery: McpDiscovery;
@@ -37,6 +62,7 @@ function originOf(url: string): string {
 export function buildMcpOAuthDescriptor(
   binding: McpServerBinding,
   definition: McpServerDefinition,
+  privateNetwork: PrivateNetworkPolicy,
 ): McpOAuthDescriptor {
   const auth = binding.auth;
   const authorizationServer =
@@ -46,6 +72,7 @@ export function buildMcpOAuthDescriptor(
 
   const discovery: McpDiscovery = {
     serverUrl: definition.serverUrl,
+    privateNetwork,
     ...(definition.protectedResourceMetadataPath
       ? { protectedResourceMetadataPath: definition.protectedResourceMetadataPath }
       : {}),

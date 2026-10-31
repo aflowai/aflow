@@ -61,6 +61,7 @@ vi.mock('@aflow/oauth', () => ({
     if (ownerScope === 'user') return { needsConsent: 'no_user_identity' };
     return { ownerId: ctx.spaceId };
   },
+  mcpPrivateNetworkPolicy: () => ({ hosts: [], withheld: [] }),
   buildMcpOAuthDescriptor: () => ({
     discovery: { serverUrl: 'https://kaggle.com/mcp' },
     issuerKey: 'https://kaggle.com',

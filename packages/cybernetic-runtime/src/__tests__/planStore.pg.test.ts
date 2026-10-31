@@ -27,11 +27,13 @@ import {
   PLAN_TREE_DEPTH_LIMIT,
   PLAN_TREE_WALK_NODE_LIMIT,
   PlanBoardOutputSchema,
+  PlanNodeGetOutputSchema,
   PlanOverviewOutputSchema,
   type PlanNode,
 } from '@aflow/schemas';
 import {
   createPlanNode,
+  getPlanNode,
   linkPlanNode,
   listPlanNodes,
   readPlanBoard,
@@ -289,6 +291,57 @@ describeDb('moveAtRevision — two crossing moves never close a loop (real DB)',
 
     const read = await readPlanBoard({ store, spaceId: SPACE_ID }, target.nodeId);
     expect(read.ok && PlanBoardOutputSchema.parse(read).root.goalHead).toBe(amended);
+  });
+
+  it('stores a card in its jsonb column and reads it back in the schema’s section order', async () => {
+    const card = {
+      change: { today: 'Prose.', after: 'A card.' },
+      why: ['The operator decides from the board.'],
+      affects: [],
+      risks: [{ risk: 'Long items.', mitigation: 'Short items, by guidance.' }],
+      questions: [{ question: 'Optional?', recommended: 'Yes.' }],
+      notDoing: [],
+    };
+    const target = await node('card target');
+    const written = await updatePlanNode(ctx, {
+      nodeId: target.nodeId,
+      expectedRevision: 1,
+      card,
+    });
+    expect(written).toMatchObject({ ok: true, node: { card, revision: 2 } });
+
+    const read = await store.find(SPACE_ID, target.nodeId);
+    expect(Object.keys(read?.card ?? {})).toEqual(Object.keys(card));
+    expect(
+      await updatePlanNode(ctx, { nodeId: target.nodeId, expectedRevision: 2, card }),
+    ).toMatchObject({ ok: false, code: 'PLAN_NODE_UNCHANGED' });
+  });
+
+  it('reads a node whose stored card the schema now refuses as a node with no card', async () => {
+    const card = {
+      change: { today: 'Prose.', after: 'A card.' },
+      why: ['The operator decides from the board.'],
+      affects: [],
+      risks: [],
+      questions: [],
+      notDoing: [],
+    };
+    const target = await node('older card target');
+    const written = await updatePlanNode(ctx, { nodeId: target.nodeId, expectedRevision: 1, card });
+    expect(written).toMatchObject({ ok: true, node: { card } });
+
+    const older = { change: 'Prose becomes a card.', why: card.why, doneWhen: 'It reads.' };
+    await withTenantSchema(handle.db, tenantCtx, (tx) =>
+      tx.execute(
+        drizzleSql`UPDATE plan_nodes SET card = ${JSON.stringify(older)}::jsonb WHERE id = ${target.nodeId}::uuid`,
+      ),
+    );
+
+    const read = await getPlanNode(ctx, target.nodeId);
+    expect(read.ok).toBe(true);
+    const output = PlanNodeGetOutputSchema.parse(read);
+    expect(output.node).not.toHaveProperty('card');
+    expect(output.node.revision).toBe(2);
   });
 
   describe('the overview read (Plan 332 D7)', () => {

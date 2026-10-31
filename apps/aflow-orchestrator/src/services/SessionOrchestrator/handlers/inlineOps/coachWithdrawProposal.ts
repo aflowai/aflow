@@ -1,8 +1,16 @@
+import { getDatabase } from '@aflow/database';
+import {
+  isProposalOfConversation,
+  loadConversationLookup,
+  proposalAuthorIds,
+} from '@aflow/cybernetic-runtime';
+import { agentRoleName } from '@aflow/schemas';
 import type { LearnerProposeWithdrawInput, StagedChange } from '@aflow/schemas';
 import type { InlineHandlerArgs } from './types.js';
 import { emitStepSuccess, emitStepError } from './helpers.js';
 import { requireSpaceId } from './spaceScope.js';
 import { getCoachCrudRepos, writeCoachJsonDoc } from './coachCrudMemory.js';
+import { logOrchestratorError } from '../../../../lib/orchestratorLogger.js';
 
 /** Tolerant JSON parse of a persisted StagedChange doc (shared with coachCrud). */
 export function parseStagedChange(content: string | null | undefined): StagedChange | null {
@@ -68,9 +76,35 @@ export async function handleWithdrawProposal(
     await emitStepError(
       args,
       'PROPOSAL_NOT_WITHDRAWABLE',
-      `Staged change ${input.stagedChangeId} is operator-authored (${sc.kind}) — the Coach may only withdraw its own proposals.`,
+      `Staged change ${input.stagedChangeId} is operator-authored (${sc.kind}). No agent may withdraw it.`,
       startTime,
       'validation',
+    );
+    return;
+  }
+  // Any other agent is one conversation, not a standing entity: it withdraws
+  // only what that conversation proposed, the conversation the card names.
+  const byCoach = args.context.agentDefinition.systemRole === 'cybernetic-coach';
+  const ownership = byCoach ? 'own' : await proposedInCallersConversation(args, spaceId, sc);
+  if (ownership === 'unknown') {
+    await emitStepError(
+      args,
+      'PROPOSAL_OWNER_UNREADABLE',
+      `The conversations behind staged change ${input.stagedChangeId} could not be read, so whether this conversation proposed it is unknown. Nothing was withdrawn. Retry the call.`,
+      startTime,
+      'transient',
+      true,
+    );
+    return;
+  }
+  if (ownership === 'other') {
+    await emitStepError(
+      args,
+      'PROPOSAL_NOT_WITHDRAWABLE',
+      `Staged change ${input.stagedChangeId} was proposed by another conversation. You may withdraw only the proposals this conversation made, and the operator decides this one.`,
+      startTime,
+      'permission',
+      false,
     );
     return;
   }
@@ -90,12 +124,18 @@ export async function handleWithdrawProposal(
     return;
   }
 
+  const resolvedBy = byCoach
+    ? 'coach'
+    : args.context.agentDefinition.systemRole === 'cybernetic-helmsman'
+      ? 'helmsman'
+      : 'agent';
   const updated: StagedChange = {
     ...sc,
     status: 'withdrawn',
     resolvedAt: new Date().toISOString(),
-    resolvedBy: 'coach',
+    resolvedBy,
     withdrawReason: input.reason,
+    withdrawnBy: agentRoleName(args.context.agentDefinition),
   };
   await writeCoachJsonDoc(
     docRepo,
@@ -123,7 +163,9 @@ export async function handleWithdrawProposal(
         causedBySessionId: args.context.runId,
         causedByStepExecutionId: args.stepExecutionId,
         payload: { stagedChangeId: sc.id, reason: input.reason },
-        summary: `Coach withdrew a proposal`,
+        summary: byCoach
+          ? 'Coach withdrew a proposal'
+          : 'The conversation that proposed a change withdrew it',
       },
     });
   } catch {
@@ -131,4 +173,40 @@ export async function handleWithdrawProposal(
   }
 
   await emitStepSuccess(args, { stagedChangeId: sc.id, status: 'withdrawn' }, startTime);
+}
+
+/**
+ * Whether the caller's session belongs to the conversation the proposal came
+ * from. A delegated session counts as its top conversation, as on the card.
+ * When the sessions cannot be read and the recorded session is not the
+ * caller's, ownership is unknown: the caller is told to retry, not refused.
+ */
+async function proposedInCallersConversation(
+  args: InlineHandlerArgs,
+  spaceId: string,
+  sc: StagedChange,
+): Promise<'own' | 'other' | 'unknown'> {
+  const sessionId = args.context.runId as string;
+  if (sc.coachSessionId === sessionId) return 'own';
+  try {
+    const lookup = await loadConversationLookup(
+      getDatabase(),
+      args.context.tenantId as string,
+      spaceId,
+      [...proposalAuthorIds(sc), sessionId],
+    );
+    return isProposalOfConversation(sc, sessionId, lookup) ? 'own' : 'other';
+  } catch (err) {
+    logOrchestratorError(
+      '[learner.propose.withdraw] Could not load the conversations behind a proposal',
+      err,
+      {
+        tenantId: args.context.tenantId,
+        spaceId,
+        sessionId,
+        stagedChangeId: sc.id,
+      },
+    );
+    return 'unknown';
+  }
 }

@@ -196,7 +196,10 @@ async function performUninstall(
       if (integration.sourceKind === 'api') {
         await deleteApiIntegration(tx, ids.spaceId, integration.integrationId);
       } else {
-        await deleteMcpIntegration(tx, ids.spaceId, integration.integrationId);
+        await deleteMcpIntegration(tx, ids.spaceId, integration.integrationId, {
+          actorId: ids.actorUserId,
+          actorKind: 'human',
+        });
       }
     } else {
       for (const bindingId of integration.bindingIds) {

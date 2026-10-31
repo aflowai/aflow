@@ -27,7 +27,16 @@
  * and every call 401s with nothing naming the cause.
  */
 export type UpstreamAuthorization =
-  | { kind: 'authorized'; header: string }
+  | {
+      kind: 'authorized';
+      header: string;
+      /**
+       * Further headers the call carries with the credential. The local
+       * edition names the browser's profile here. They are set after the
+       * forwarded browser headers, so a browser cannot supply one of its own.
+       */
+      headers?: Readonly<Record<string, string>> | undefined;
+    }
   | { kind: 'anonymous' }
   | { kind: 'unauthenticated' }
   | { kind: 'unavailable'; reason: string };

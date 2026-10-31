@@ -121,6 +121,8 @@ export { ConnectedAccountsPage } from './screens/account-connected.js';
 export { TenantSettingsIndex } from './screens/tenant-settings-index.js';
 export { TenantSettingsLayout } from './screens/tenant-settings-layout.js';
 export { TenantApiKeysPage } from './screens/tenant-api-keys.js';
+export { TenantProfilesPage } from './screens/tenant-profiles.js';
+export { ProfilePicker } from './components/profile-picker.js';
 export { TenantCredentialsPage } from './screens/tenant-credentials.js';
 export { TenantOAuthAppsPage } from './screens/tenant-oauth-apps.js';
 export { TenantComputePolicyPage } from './screens/tenant-compute.js';

@@ -150,6 +150,12 @@ function buildHeaders(
     if (tenant !== undefined && tenant !== '') headers.set('X-Tenant-ID', tenant);
   }
 
+  if (authorization.kind === 'authorized') {
+    for (const [name, value] of Object.entries(authorization.headers ?? {})) {
+      headers.set(name, value);
+    }
+  }
+
   return headers;
 }
 

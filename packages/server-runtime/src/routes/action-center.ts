@@ -19,7 +19,7 @@ import {
 } from '../services/actionCenter/aggregator.js';
 import { publishActionCenterWake } from '@aflow/redis';
 import type { ActionCenterContext } from '../services/actionCenter/types.js';
-import { isInteractiveUser } from '../utils/interactiveUser.js';
+import { isInteractiveUser, isPersonPrincipal } from '../utils/interactiveUser.js';
 import { projectActionCenterItem } from '../services/actionCenter/authz.js';
 
 const ErrorSchema = z.object({
@@ -320,6 +320,7 @@ async function resolveActorContext(
     isTenantAdmin: Boolean(tenant?.isAdmin),
     ...(request.authUser?.authMethod ? { authMethod: request.authUser.authMethod } : {}),
     isInteractiveUser: isInteractiveUser(request.authUser),
+    isPersonPrincipal: isPersonPrincipal(request.authUser),
   });
 }
 

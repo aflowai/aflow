@@ -335,7 +335,13 @@ export async function startWorkflowRunAtRevision(
       runId,
     });
     try {
-      await completeRun(deps, tenantId, runId, 'failed');
+      await completeRun(deps, tenantId, runId, {
+        status: 'failed',
+        failure: {
+          reason: 'start_failed',
+          message: `Starting the run failed: ${err instanceof Error ? err.message : String(err)}`,
+        },
+      });
     } catch (completeErr) {
       logOrchestratorError(
         '[startWorkflowRunAtRevision] completeRun(failed) recovery also failed',

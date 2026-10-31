@@ -16,8 +16,10 @@ import {
   Text,
   Tooltip,
 } from '@aflow/design-system';
+import { MCP_SET_PRIVATE_NETWORK_LABEL } from '@aflow/schemas';
 import { ChipList, DetailRow, DetailsSection, formatJson } from '../integrations-api/helpers.js';
 import { getMcpReadiness } from './mcpReadiness.js';
+import { McpPrivateNetworkSection, McpTestFailure } from './McpPrivateNetworkSection.js';
 import type { McpReadiness } from './mcpReadiness.js';
 import type { IntegrationCredentialMeta } from '../../hooks/use-integrations.js';
 import type {
@@ -101,6 +103,8 @@ export function McpIntegrationCard({
   onDelete,
   onConnect,
   onTest,
+  onSetPrivateNetwork,
+  spaceId,
   kindBadge,
   readOnly = false,
 }: {
@@ -113,6 +117,9 @@ export function McpIntegrationCard({
   onConnect: () => void;
   /** Run mcp.binding.test against the connection. No-op when no binding. */
   onTest: () => Promise<McpBindingTestResult>;
+  /** Opens the private network form, with the host a refused connect named. */
+  onSetPrivateNetwork: (refusedHost?: string) => void;
+  spaceId: string;
   /** Optional badge rendered next to the name — used by the unified list to mark API vs MCP. */
   kindBadge?: ReactNode;
   /** Viewer-role rendering: status only, no mutation affordances (the server rejects those writes anyway). */
@@ -234,6 +241,22 @@ export function McpIntegrationCard({
                   />
                 </Tooltip>
               )}
+              {!readOnly && !definition.privateNetwork && (
+                // Standing, whatever the binding's state: a refused connect's
+                // message names this action on this card.
+                <Tooltip content="Let this server reach hosts on a private network address, over https only">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    leftIcon={<Icon name="shield-check" size="sm" />}
+                    onClick={() => {
+                      onSetPrivateNetwork();
+                    }}
+                  >
+                    {MCP_SET_PRIVATE_NETWORK_LABEL}
+                  </Button>
+                </Tooltip>
+              )}
               {!readOnly && (
                 <>
                   <Tooltip content="Edit integration">
@@ -278,6 +301,20 @@ export function McpIntegrationCard({
             <DefinitionDetailsView definition={definition} />
           </DetailsSection>
 
+          {definition.privateNetwork && (
+            <McpPrivateNetworkSection
+              acknowledgment={definition.privateNetwork}
+              spaceId={spaceId}
+              {...(readOnly
+                ? {}
+                : {
+                    onEdit: () => {
+                      onSetPrivateNetwork();
+                    },
+                  })}
+            />
+          )}
+
           {/* Tools section — mirrors the API card's "Endpoints" section.
               Shows the effective tool names (after applying the definition's
               tool filter) so the operator sees the same surface the agent
@@ -318,12 +355,21 @@ export function McpIntegrationCard({
           )}
 
           {/* Refresh-tools result narration */}
-          {refreshResult && (
-            <Text size="xs" tone={refreshResult.ok ? 'success' : 'danger'}>
-              {refreshResult.ok
-                ? `Refreshed — ${String(effectiveCount)} of ${String(cachedCount)} tools available to the agent.`
-                : `Couldn't refresh: ${refreshResult.message ?? 'connection error'}`}
+          {refreshResult?.ok && (
+            <Text size="xs" tone="success">
+              {`Refreshed — ${String(effectiveCount)} of ${String(cachedCount)} tools available to the agent.`}
             </Text>
+          )}
+          {refreshResult && !refreshResult.ok && (
+            <McpTestFailure
+              result={refreshResult}
+              prefix="Couldn't refresh:"
+              refusalContext={{
+                serverName: definition.name,
+                acknowledged: definition.privateNetwork != null,
+              }}
+              {...(readOnly ? {} : { onSetPrivateNetwork })}
+            />
           )}
 
           {/* Readiness hints (only when there's a binding) */}

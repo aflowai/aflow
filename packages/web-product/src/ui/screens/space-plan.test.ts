@@ -14,7 +14,15 @@
  * operator's own controls (P3.2); where the operator is, in the URL. Rendered through the screen itself, the design system's
  * primitives as plain elements and every query recorded.
  */
-import { act, createContext, createElement, useContext, useState, type ReactNode } from 'react';
+import {
+  act,
+  createContext,
+  createElement,
+  useContext,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PlanNodeOpenSchema } from '@aflow/schemas';
@@ -66,6 +74,8 @@ const recorded = vi.hoisted(() => ({
   detailQueries: [] as Array<{ key: unknown[]; path: string; staleTime?: number }>,
   detailRefetch: vi.fn(),
   findings: {} as Record<string, Answer>,
+  /** The conversations linked on each node, by id. */
+  conversations: {} as Record<string, Answer>,
   runPages: {} as Record<string, Answer>,
   linkQueries: [] as Array<{ key: unknown[]; path: string }>,
   /** Every write the page holds, in the order it declared them. */
@@ -202,7 +212,9 @@ vi.mock('@aflow/design-system', () => {
         folded ? null : children,
       );
     },
-    Pulse: ({ children }: { children?: ReactNode }) => children,
+    // Marked, so a test reads which content grows and shrinks rather than snaps.
+    AnimatedHeight: ({ children, style }: { children?: ReactNode; style?: CSSProperties }) =>
+      createElement('div', { 'data-animated-height': '', style }, children),
     Panel: block('div'),
     ScrollArea: block('div'),
     Input: (props: Record<string, unknown>) => createElement('input', props),
@@ -244,6 +256,15 @@ vi.mock('next/link', () => ({
   default: ({ href, children }: { href: string; children?: ReactNode }) =>
     createElement('a', { href }, children),
 }));
+
+// The orbs pick their asset by theme, and read it to seek its animation.
+vi.mock('../providers/theme.js', () => ({
+  useTheme: () => ({ theme: 'light', resolvedTheme: 'light', setTheme: () => undefined }),
+}));
+vi.stubGlobal(
+  'fetch',
+  vi.fn(() => Promise.resolve({ ok: false, text: () => Promise.resolve('') })),
+);
 
 vi.mock('../components/providers.js', () => ({
   useSpaceFromRoute: () => ({ id: SPACE_ID, slug: 'work', slugFromRoute: 'work' }),
@@ -303,7 +324,9 @@ vi.mock('../hooks/useApiQuery.js', () => ({
       const answer =
         linkKind === 'finding'
           ? recorded.findings[nodeId!]
-          : recorded.runPages[`${nodeId!}:${cursor ?? ''}`];
+          : linkKind === 'conversation'
+            ? recorded.conversations[nodeId!]
+            : recorded.runPages[`${nodeId!}:${cursor ?? ''}`];
       return { data: answer?.data, error: answer?.error ?? null, refetch: vi.fn() };
     }
     recorded.detailQueries.push(options);
@@ -696,6 +719,7 @@ beforeEach(() => {
   recorded.detailRefetch.mockResolvedValue({ data: undefined });
   recorded.liveRefresh = [];
   recorded.findings = {};
+  recorded.conversations = {};
   recorded.runPages = {};
   recorded.linkQueries = [];
   recorded.mutations = [];
@@ -1352,7 +1376,6 @@ describe('SpacePlanPage — the operator’s writes from the rail', () => {
     await render({ data: withStatus(ARTICLE, 'blocked') });
     await click(card(ARTICLE));
 
-    await click(button(rail(), 'Approve'));
     await type(rail(), '  Go ahead.  ');
     await click(button(rail(), 'Approve'));
 
@@ -1382,7 +1405,6 @@ describe('SpacePlanPage — the operator’s writes from the rail', () => {
     );
     await render({ data: withStatus(ARTICLE, 'blocked') });
     await click(card(ARTICLE));
-    await click(button(rail(), 'Approve'));
     const field = rail().querySelector('input')!;
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(
@@ -1418,12 +1440,11 @@ describe('SpacePlanPage — the operator’s writes from the rail', () => {
     );
     await render({ data: withStatus(ARTICLE, 'blocked') });
     await click(card(ARTICLE));
-    await click(button(rail(), 'Approve'));
     const failure = PlanNodeOpenSchema.safeParse({ expectedRevision: 4, why: '' });
     const parse = vi.spyOn(PlanNodeOpenSchema, 'safeParse').mockReturnValueOnce(failure);
     try {
       await click(button(rail(), 'Approve'));
-      expect(rail().querySelector('[role="alert"]')?.textContent).toContain('Reason:');
+      expect(rail().querySelector('[role="alert"]')?.textContent).toContain('Instructions:');
       expect(rail().querySelector('[role="alert"]')?.textContent).not.toContain('spend');
       expect(recorded.mutateAsync).not.toHaveBeenCalled();
     } finally {
@@ -1572,7 +1593,7 @@ describe('SpacePlanPage — approve, reopen and order (Plan 332 P2)', () => {
   it('offers Approve on a blocked step beside its close controls, and none on a decision', async () => {
     await render({ data: P2_PLAN });
     await click(card(BLOCKED));
-    expect(buttonTexts(rail())).toEqual(['Close', 'Approve', 'Mark done', 'Drop']);
+    expect(buttonTexts(rail())).toEqual(['Close', 'Approve', 'Revise', 'Mark done', 'Drop']);
 
     nav.search = `plan=${R322}`;
     await render({ data: PLAN });
@@ -1584,7 +1605,6 @@ describe('SpacePlanPage — approve, reopen and order (Plan 332 P2)', () => {
     await render({ data: P2_PLAN });
     await click(card(BLOCKED));
 
-    await click(button(rail(), 'Approve'));
     await type(openForm(), 'go ahead after Plan 330');
     await click(button(openForm(), 'Approve'));
 
@@ -1597,13 +1617,108 @@ describe('SpacePlanPage — approve, reopen and order (Plan 332 P2)', () => {
     const write = mutationFor('/open')!;
     expect(write.method).toBe('PATCH');
     expect(write.invalidate).toEqual([['space', SPACE_ID, 'plan']]);
-    expect(container.querySelector('[data-plan-open-form]')).toBe(null);
+    // The approve form stays open on a blocked step, emptied once its write lands.
+    expect(openForm().querySelector('textarea')?.value).toBe('');
+  });
+
+  it('shows the instructions field on a blocked step before any click (Plan 337 P4)', async () => {
+    await render({ data: P2_PLAN });
+    await click(card(BLOCKED));
+
+    const field = openForm().querySelector('textarea');
+    expect(field?.getAttribute('aria-label')).toBe('Instructions for the work (optional)');
+    expect(openForm().textContent).toContain('its brief opens with these words');
+    expect(buttonTexts(openForm())).toEqual(['Approve', 'Revise']);
+  });
+
+  it('sends the words back with Revise, the step left blocked, and asks for words first', async () => {
+    await render({ data: P2_PLAN });
+    await click(card(BLOCKED));
+    expect(button(openForm(), 'Revise').disabled).toBe(true);
+
+    await type(openForm(), '  Split it: the schema first.  ');
+    await click(button(openForm(), 'Revise'));
+
+    expect(recorded.sent).toEqual([
+      {
+        path: `/spaces/${SPACE_ID}/plan/nodes/${BLOCKED}/revise`,
+        body: { expectedRevision: 3, why: 'Split it: the schema first.' },
+      },
+    ]);
+    const write = recorded.mutations.find((m) => m.path({ nodeId: BLOCKED }).endsWith('/revise'))!;
+    expect(write.method).toBe('PATCH');
+    expect(write.invalidate).toEqual([['space', SPACE_ID, 'plan']]);
+  });
+
+  it('pins the step as its Revise left it, and says so when the Helmsman’s rewrite moves it', async () => {
+    const revised = fullNode(BLOCKED, 'P1 — the loop takes the next node', {
+      parentId: R331,
+      status: 'blocked',
+      revision: 4,
+    });
+    recorded.detailRefetch.mockImplementation(() => {
+      recorded.details[BLOCKED] = detail(revised);
+      return Promise.resolve({ data: { node: revised } });
+    });
+    await render({ data: P2_PLAN });
+    await click(card(BLOCKED));
+    await type(openForm(), 'Split it: the schema first.');
+    await click(button(openForm(), 'Revise'));
+
+    // The form's own write moved the step to 4: that is no move to report.
+    await render({ data: P2_PLAN });
+    expect(openForm().querySelector('[data-plan-open-moved]')).toBe(null);
+
+    // The Helmsman's rewrite moves it to 5 while the form holds no edit.
+    recorded.details[BLOCKED] = detail({ ...revised, revision: 5 });
+    await render({ data: P2_PLAN });
+    expect(openForm().querySelector('[data-plan-open-moved]')).not.toBe(null);
+
+    await click(button(openForm(), 'Approve'));
+    expect(recorded.sent.map((s) => s.body)).toEqual([
+      { expectedRevision: 3, why: 'Split it: the schema first.' },
+      { expectedRevision: 4 },
+    ]);
+  });
+
+  it('links the step to the space chat with its title and id, and lists the conversations that wrote it', async () => {
+    recorded.conversations[BLOCKED] = {
+      data: {
+        ...detail(fullNode(BLOCKED, 'P1 — the loop takes the next node')).data,
+        links: [
+          {
+            nodeId: BLOCKED,
+            kind: 'session',
+            ref: 'c0000000-0000-4000-8000-000000000337',
+            label: 'conversation',
+            createdAt: at(10, 23),
+          },
+        ],
+        linksTotal: 1,
+      },
+    };
+    await render({ data: P2_PLAN });
+    await click(card(BLOCKED));
+
+    const discuss = rail().querySelector(`[data-plan-rail-section="Discuss"] a`);
+    const href = discuss?.getAttribute('href') ?? '';
+    expect(href.startsWith('/s/work/chat?draft=')).toBe(true);
+    const draft = new URLSearchParams(href.slice(href.indexOf('?'))).get('draft') ?? '';
+    expect(draft).toContain('"P1 — the loop takes the next node"');
+    expect(draft).toContain(BLOCKED);
+    expect(recorded.linkQueries.map((q) => q.path)).toContainEqual(
+      `/spaces/${SPACE_ID}/plan/nodes/${BLOCKED}?linkKind=session&linkLabel=conversation&limit=5`,
+    );
+    expect(
+      [...rail().querySelectorAll('[data-plan-rail-section="Discuss"] li a')].map((a) =>
+        a.getAttribute('href'),
+      ),
+    ).toEqual(['/s/work/chat?session=c0000000-0000-4000-8000-000000000337']);
   });
 
   it('holds an open form to the revision it opened on when the live read moves past it', async () => {
     await render({ data: P2_PLAN });
     await click(card(BLOCKED));
-    await click(button(rail(), 'Approve'));
 
     recorded.details[BLOCKED] = detail(
       fullNode(BLOCKED, 'P1 — the loop takes the next node', {
@@ -1622,7 +1737,6 @@ describe('SpacePlanPage — approve, reopen and order (Plan 332 P2)', () => {
   it('refuses to send a reason past the note ceiling', async () => {
     await render({ data: P2_PLAN });
     await click(card(BLOCKED));
-    await click(button(rail(), 'Approve'));
     await type(openForm(), 'x'.repeat(64001));
 
     expect(button(openForm(), 'Approve').disabled).toBe(true);
@@ -2105,44 +2219,44 @@ describe('SpacePlanPage — ordering and closing plans from the list (Plan 332 P
     expect(moves(L_FINISHED)).toEqual([]);
   });
 
-  it('shows Move up and Move down where the row is pointed at, focused or selected, and the dot gives way to them', async () => {
+  it('shows Move up and Move down where the row is pointed at, focused or selected, and the orb gives way to them', async () => {
     nav.search = `plan=${L_QUEUED}`;
     await render({ data: LIST });
 
     const controls = (rootId: string) =>
       listRow(rootId)!.querySelector<HTMLElement>(`[data-plan-move="${rootId}"]`)!;
-    const dot = (rootId: string) =>
-      listRow(rootId)!.querySelector<HTMLElement>('span[aria-hidden][data-state]')!;
+    const orb = (rootId: string) =>
+      listRow(rootId)!.querySelector<HTMLElement>('[data-plan-orb][data-state]')!;
     const hover = async (target: HTMLElement, type: 'mouseover' | 'mouseout') => {
       await act(async () => {
         target.dispatchEvent(new MouseEvent(type, { bubbles: true, relatedTarget: null }));
       });
     };
 
-    // At rest: the dot shows, the controls are quiet.
+    // At rest: the orb shows, the controls are quiet.
     expect(controls(L_FLIGHT).style.opacity).toBe('0');
-    expect(dot(L_FLIGHT).style.opacity).toBe('1');
-    // The selected row shows its controls in the dot's place.
+    expect(orb(L_FLIGHT).style.opacity).toBe('1');
+    // The selected row shows its controls in the orb's place.
     expect(controls(L_QUEUED).style.opacity).toBe('1');
-    expect(dot(L_QUEUED).style.opacity).toBe('0');
+    expect(orb(L_QUEUED).style.opacity).toBe('0');
 
     await hover(listRow(L_FLIGHT)!, 'mouseover');
     expect(controls(L_FLIGHT).style.opacity).toBe('1');
-    expect(dot(L_FLIGHT).style.opacity).toBe('0');
+    expect(orb(L_FLIGHT).style.opacity).toBe('0');
     await hover(listRow(L_FLIGHT)!, 'mouseout');
     expect(controls(L_FLIGHT).style.opacity).toBe('0');
-    expect(dot(L_FLIGHT).style.opacity).toBe('1');
+    expect(orb(L_FLIGHT).style.opacity).toBe('1');
 
     await act(async () => {
       listRow(L_EMPTY)!.querySelector('button')!.focus();
     });
     expect(controls(L_EMPTY).style.opacity).toBe('1');
-    expect(dot(L_EMPTY).style.opacity).toBe('0');
+    expect(orb(L_EMPTY).style.opacity).toBe('0');
 
-    // A row with no move has no controls: its dot never gives way.
+    // A row with no move has no controls: its orb never gives way.
     await hover(listRow(L_FINISHED)!, 'mouseover');
     expect(listRow(L_FINISHED)!.querySelector('[data-plan-move]')).toBe(null);
-    expect(dot(L_FINISHED).style.opacity).toBe('1');
+    expect(orb(L_FINISHED).style.opacity).toBe('1');
   });
 
   it('keeps the controls shown while a move is pending, though the row is no longer pointed at', async () => {
@@ -2591,7 +2705,7 @@ describe('SpacePlanPage — the overview across plans (Plan 332 P4)', () => {
       'Blocked',
     ]);
     expect(rail().querySelector('[data-plan-rail-phase]')?.textContent).toBe('P3');
-    expect(buttonTexts(rail())).toEqual(['Close', 'Approve', 'Mark done', 'Drop']);
+    expect(buttonTexts(rail())).toEqual(['Close', 'Approve', 'Revise', 'Mark done', 'Drop']);
 
     await click(button(rail(), 'Close'));
     expect(nav.pushed.at(-1)).toBe('/s/work/plan');
@@ -2663,5 +2777,224 @@ describe('SpacePlanPage — the overview across plans (Plan 332 P4)', () => {
 
     expect(container.querySelector('[role="dialog"] [data-plan-rail]')).not.toBe(null);
     expect(rail().textContent).toContain('Next');
+  });
+});
+
+/**
+ * The kind of the state orb that stands first in `scope`. The words beside it
+ * name the state, so the orb is hidden from assistive technology.
+ */
+function orbKind(scope: Element): string | null {
+  const orb = scope.querySelector('[data-plan-orb]');
+  if (!orb) return null;
+  expect(orb.querySelector('[role="img"]')).toBe(null);
+  expect(orb.querySelector('[aria-hidden="true"]')).not.toBe(null);
+  return orb.getAttribute('data-plan-orb');
+}
+
+/** A part of the rail by its role and name. */
+function railGroup(name: string): Element {
+  const found = [...rail().querySelectorAll('[role="group"]')].find(
+    (g) => g.getAttribute('aria-label') === name,
+  );
+  if (!found) throw new Error(`no rail group ${name}`);
+  return found;
+}
+
+/** Whether `content` sits in a body that grows and shrinks rather than snaps, inside `scope`. */
+function animatedWithin(scope: Element, content: Element | null): boolean {
+  const body = content?.closest('[data-animated-height]');
+  return body !== null && body !== undefined && scope.contains(body);
+}
+
+describe('SpacePlanPage — state as orbs, and motion (Plan 332 P7)', () => {
+  it('reads each plan row’s state by its orb and its words', async () => {
+    await render({ data: LIST });
+
+    const read = (rootId: string) => [
+      orbKind(listRow(rootId)!),
+      listRow(rootId)!.querySelector('[data-plan-row-state]')?.textContent,
+    ];
+    expect(read(L_NEEDS)).toEqual(['paused', 'Needs you']);
+    expect(read(L_FLIGHT)).toEqual(['running', '1 in flight']);
+    expect(read(L_QUEUED)).toEqual(['idle', 'Queued']);
+    expect(read(L_EMPTY)).toEqual(['inert', 'No steps']);
+    expect(read(L_FINISHED)).toEqual(['completed', 'Finished']);
+
+    await click(
+      container.querySelector<HTMLElement>('[data-plan-list-section="closed"] > button')!,
+    );
+    expect(read(L_CLOSED)).toEqual(['inert', 'Closed']);
+  });
+
+  it('reads the plan’s header state by its orb and its words', async () => {
+    await render();
+
+    const header = container.querySelector(`[data-plan-tally="${R322}"]`)!;
+    expect(orbKind(header)).toBe('paused');
+    expect(header.querySelector('[data-badge]')?.textContent).toBe('Needs you');
+
+    await choosePlan(R315);
+    const closed = container.querySelector(`[data-plan-tally="${R315}"]`)!;
+    expect(orbKind(closed)).toBe('inert');
+    expect(closed.querySelector('[data-badge]')?.textContent).toBe('Closed');
+  });
+
+  it('reads each card’s state by its orb and the words its card and column say', async () => {
+    await render();
+
+    const read = (nodeId: string) => {
+      const shown = card(nodeId);
+      const heading = shown
+        .closest('[data-plan-column]')!
+        .querySelector('[data-plan-column-header]');
+      return [orbKind(shown), heading?.getAttribute('data-plan-column-header')];
+    };
+    expect(read(DECISION)).toEqual(['paused', 'Needs you']);
+    expect(card(DECISION).textContent).toContain('Decision');
+    // A run on the step itself, and one on a step under it, both read running.
+    expect(read(BOARD)).toEqual(['running', 'In flight']);
+    expect(card(BOARD).textContent).toContain('1 run in flight');
+    expect(read(P3)).toEqual(['running', 'In flight']);
+    // A waiting step whose run ended is In flight, and nothing moves it until the loop returns.
+    expect(read(NEXT)).toEqual(['idle', 'In flight']);
+    expect(card(NEXT).querySelector('[data-plan-waiting]')?.textContent).toBe(
+      'Its run ended; the loop advances it when it returns',
+    );
+    expect(read(ARTICLE)).toEqual(['idle', 'Up next']);
+    expect(read(LANDED)).toEqual(['completed', 'Done']);
+    expect(read(SKETCH)).toEqual(['inert', 'Dropped']);
+    expect(container.querySelector('[data-plan-orb="failed"]')).toBe(null);
+  });
+
+  it('reads the rail’s state by its orb and its words', async () => {
+    await render();
+
+    await click(card(DECISION));
+    expect(orbKind(rail())).toBe('paused');
+    expect(rail().querySelector('[data-badge]')?.textContent).toBe('Needs you');
+
+    await click(card(LANDED));
+    expect(orbKind(rail())).toBe('completed');
+    expect(rail().querySelector('[data-badge]')?.textContent).toBe('Done');
+
+    await click(card(ARTICLE));
+    expect(orbKind(rail())).toBe('idle');
+    expect(rail().querySelector('[data-badge]')?.textContent).toBe('Up next');
+  });
+
+  it('reads each lane row’s state by its orb and its words, and a run as the run surface writes it', async () => {
+    nav.search = '';
+    await render({ data: OVERVIEW });
+
+    expect(orbKind(laneRow(LANE_STOP))).toBe('paused');
+    expect(laneRow(LANE_STOP).querySelector('[data-badge]')?.textContent).toBe('Blocked');
+    expect(orbKind(laneRow(LANE_STRANDED))).toBe('paused');
+    expect(laneRow(LANE_STRANDED).textContent).toContain('Under a closed step');
+    expect(orbKind(laneRow(ARTICLE))).toBe('idle');
+    expect(laneRow(ARTICLE).textContent).toContain('Next for the loop');
+
+    const running = laneRow(BOARD);
+    expect(orbKind(running)).toBe('running');
+    const run = running.querySelector(`[data-plan-lane-run="${RUN_ID}"] [data-plan-run]`)!;
+    expect(run.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe('Run');
+    expect(run.textContent).toBe('Commissionexecuting60m 00s');
+    expect(run.querySelector('[data-plan-run-elapsed]')?.textContent).toBe('60m 00s');
+  });
+
+  it('reads a rail opened from an In flight lane row as idle until the step’s read says a run is on it', async () => {
+    delete recorded.details[BOARD];
+    nav.search = '';
+    await render({ data: OVERVIEW });
+
+    await click(laneRow(BOARD).querySelector('button')!);
+    expect(rail().getAttribute('data-plan-rail')).toBe(BOARD);
+    expect(orbKind(rail())).toBe('idle');
+
+    recorded.details[BOARD] = detail(fullNode(BOARD, 'P3.3 the board'), {
+      activity: 'in_flight',
+    });
+    await render({ data: OVERVIEW });
+    expect(orbKind(rail())).toBe('running');
+  });
+
+  it('writes a run in flight on the rail as the run surface writes its rows', async () => {
+    recorded.details[BOARD] = detail(fullNode(BOARD, 'P3.3 the board'), {
+      runs: [
+        {
+          runId: RUN_ID,
+          slug: 'commission-change',
+          status: 'paused',
+          nodeId: BOARD,
+          startedAt: at(10, 22, 10),
+        },
+      ],
+      runsTotal: 1,
+      activity: 'in_flight',
+    });
+    await render();
+
+    await click(card(BOARD));
+    expect(orbKind(rail())).toBe('running');
+    const run = railGroup('Runs').querySelector(`[data-plan-run="${RUN_ID}"]`)!;
+    expect(run.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe('Run');
+    // A paused run says it is paused, and no time runs on it.
+    expect(run.textContent).toBe('Commissionpaused');
+  });
+
+  it('grows and shrinks the rail’s sections and the step’s note rather than snapping them', async () => {
+    recorded.details[ARTICLE] = detail(
+      fullNode(ARTICLE, 'Write the help article', {
+        parentId: R322,
+        note: 'Proposed: write it after P3 lands.\nThe board is still moving.',
+      }),
+    );
+    await render();
+
+    await click(card(ARTICLE));
+    for (const name of ['Goal', 'Done when', 'Working note', 'Discuss']) {
+      // Everything under the section's label is the body that grows and shrinks.
+      const group = railGroup(name);
+      const body = [...group.children].find((c) => c.hasAttribute('data-animated-height'));
+      expect(body?.textContent, name).toBe(group.textContent?.slice(name.length));
+      expect(body?.textContent, name).not.toBe('');
+    }
+
+    const note = railGroup('Working note');
+    await click(button(note, 'Show note'));
+    expect(animatedWithin(note, note.querySelector('[data-plan-note]'))).toBe(true);
+  });
+
+  it('grows and shrinks a lane row’s detail, a Done fold and the list’s Finished and Closed sections', async () => {
+    nav.search = '';
+    await render({ data: OVERVIEW });
+    const row = laneRow(LANE_STOP);
+    expect(animatedWithin(row, row.querySelector('[data-plan-lane-note]'))).toBe(true);
+
+    root.unmount();
+    root = createRoot(container);
+    await render({ data: LIST });
+    const finished = container.querySelector('[data-plan-list-section="finished"]')!;
+    expect(animatedWithin(finished, finished.querySelector('[aria-label="Finished plans"]'))).toBe(
+      true,
+    );
+    const closed = container.querySelector('[data-plan-list-section="closed"]')!;
+    expect(closed.querySelector('[data-animated-height]')).not.toBe(null);
+    await click(button(closed, 'Closed · 1'));
+    expect(animatedWithin(closed, closed.querySelector('[aria-label="Closed plans"]'))).toBe(true);
+
+    root.unmount();
+    root = createRoot(container);
+    nav.search = `plan=${R322}`;
+    await render();
+    await choosePlan(R315);
+    const today = column('done').querySelector('[data-plan-done-group="today"]')!;
+    expect(animatedWithin(today, today.querySelector('[data-plan-card]'))).toBe(true);
+    // The fold widens by the selected card's ring and pads its cards by it, so its clip spares the ring.
+    const fold = today.querySelector<HTMLElement>('[data-animated-height]')!;
+    expect(fold.style.marginInline).toBe('-2px');
+    expect(fold.querySelector<HTMLElement>('[data-plan-card]')!.parentElement!.style.padding).toBe(
+      '2px',
+    );
   });
 });

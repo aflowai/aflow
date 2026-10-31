@@ -10,7 +10,11 @@ import {
   decryptCredentialAsync,
 } from '@aflow/database';
 import { TenantIdSchema, extractUrlOrigin, getOAuthIssuer } from '@aflow/schemas';
-import { validateCredentialedUrl } from '@aflow/network-safety';
+import {
+  DEFAULT_PRIVATE_NETWORK_POLICY,
+  validateCredentialedUrl,
+  type PrivateNetworkPolicy,
+} from '@aflow/network-safety';
 import { discoverPRM, type PrmDiscoveryResult } from './prmDiscovery.js';
 import { discoverAsMetadata, type AsMetadata } from './asMetadata.js';
 import { resolveOAuthClient, type OAuthClientScope } from './clientResolution.js';
@@ -31,6 +35,12 @@ export type IntegrationKind = 'mcp' | 'api';
 export interface McpDiscovery {
   serverUrl: string;
   protectedResourceMetadataPath?: string;
+  /**
+   * The definition's private network policy (Plan 336 D3). Every discovery
+   * fetch and token exchange for this binding is checked under it. Built only
+   * by `privateNetworkPolicyFor`, from the operator's acknowledgment.
+   */
+  privateNetwork: PrivateNetworkPolicy;
   /** Pinned AS from the binding; overrides PRM-discovered authorization servers. */
   authorizationServer?: string;
 }
@@ -141,6 +151,7 @@ async function resolveAuthorizationServer(
         ? { protectedResourceMetadataPath: discovery.protectedResourceMetadataPath }
         : {}),
       ...(fetchImpl ? { fetchImpl } : {}),
+      privateNetwork: discovery.privateNetwork,
     });
     const issuer =
       discovery.authorizationServer ??
@@ -151,7 +162,10 @@ async function resolveAuthorizationServer(
         `oauth_no_authorization_server: PRM at ${prm.metadataUrl} returned no authorization_servers and no authorizationServer is set for binding "${bindingId}".`,
       );
     }
-    const asMetadata = await discoverAsMetadata(issuer, fetchImpl ? { fetchImpl } : {});
+    const asMetadata = await discoverAsMetadata(issuer, {
+      ...(fetchImpl ? { fetchImpl } : {}),
+      privateNetwork: discovery.privateNetwork,
+    });
     return { asMetadata, prm };
   }
 
@@ -387,6 +401,8 @@ export interface PostToTokenEndpointParams {
   failureCode: string;
   missingTokenCode: string;
   fetchImpl?: typeof fetch;
+  /** The MCP definition's policy, carried on `McpDiscovery`. Absent for an API binding. */
+  privateNetwork?: PrivateNetworkPolicy;
 }
 
 /**
@@ -399,7 +415,10 @@ export interface PostToTokenEndpointParams {
 export async function postToTokenEndpoint(
   params: PostToTokenEndpointParams,
 ): Promise<TokenResponse> {
-  const validated = await validateCredentialedUrl(params.tokenEndpoint);
+  const validated = await validateCredentialedUrl(
+    params.tokenEndpoint,
+    params.privateNetwork ?? DEFAULT_PRIVATE_NETWORK_POLICY,
+  );
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/x-www-form-urlencoded',
@@ -493,6 +512,7 @@ export async function completeConsent(
     ...(client.clientSecret ? { clientSecret: client.clientSecret } : {}),
     failureCode: 'oauth_token_exchange_failed',
     missingTokenCode: 'oauth_token_response_missing_access_token',
+    ...(ctx.discovery ? { privateNetwork: ctx.discovery.privateNetwork } : {}),
     ...(params.fetchImpl ? { fetchImpl: params.fetchImpl } : {}),
   });
 
@@ -844,6 +864,7 @@ async function refreshAccessToken(
     ...(client.clientSecret ? { clientSecret: client.clientSecret } : {}),
     failureCode: 'oauth_refresh_failed',
     missingTokenCode: 'oauth_refresh_missing_access_token',
+    ...(params.discovery ? { privateNetwork: params.discovery.privateNetwork } : {}),
     ...(params.fetchImpl ? { fetchImpl: params.fetchImpl } : {}),
   });
 

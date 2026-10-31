@@ -200,6 +200,10 @@ P2 round 18 executes scheduled closes on the API executor, which reads GitHub th
 
 Write authority reads the session creation marker and schedule trigger, failing closed when provenance is missing. Link trust storage is removed, and help describes the blocked fallback when a merge wait line cannot fit.
 
+### A conversation a person starts over REST
+
+A session that `POST /v1/sessions` starts, resumes or retries for a user is attended (`isPersonPrincipal`). That covers a web sign-in and a user API key, the MCP server's `start_session` included. A conversation the operator starts with their own key then creates `active` nodes and closes its own nodes `done`, as Plan 328 D6 has it. A service principal, a webhook and a schedule stamp nothing and stay restricted. `restrictedPlanWriteAuthority` is unchanged, and a `schedule` session stays restricted whatever its stamp.
+
 ### P3 system heartbeat
 
 Heartbeats read the board before claiming the wake guard, so events can wake immediately during idle reads. Recorded heartbeats dispatch without another board read, and redelivery retains live wake guards. Disabled due checks answer off without errors, while events and pending marks bypass board reads when enabled. Wait-only heartbeats preserve the firing cap, and the registered due check retains the existing dispatch cadence and budgets without space enumeration.
