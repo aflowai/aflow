@@ -28,6 +28,7 @@ import type { PlanNodeDetailOutput, PlanRootRow, PlanRootState } from '@aflow/sc
 import { useApiQuery } from '../../hooks/useApiQuery.js';
 import {
   PLAN_STATE_LABEL,
+  planCountNoun,
   planListSections,
   planRowMoveTargets,
   planRowProgress,
@@ -278,7 +279,7 @@ const attentionCount: CSSProperties = {
 function rowStateLine(row: PlanRootRow): string {
   const inFlight = row.counts?.inFlight ?? 0;
   return row.state === 'in_flight' && inFlight > 0
-    ? `${String(inFlight)} in flight`
+    ? `${String(inFlight)} ${planCountNoun('in_flight')}`
     : PLAN_STATE_LABEL[row.state];
 }
 
@@ -382,7 +383,7 @@ function PlanRowView({
               <>
                 <MetaSep />
                 <Text size="xs" variant="muted" data-plan-row-in-flight>
-                  {`${String(inFlight)} in flight`}
+                  {`${String(inFlight)} ${planCountNoun('in_flight')}`}
                 </Text>
               </>
             )}
@@ -396,11 +397,11 @@ function PlanRowView({
         {needsYou > 0 && (
           <span
             data-plan-row-needs-you={needsYou}
-            title={`${String(needsYou)} need you`}
+            title={`${String(needsYou)} ${planCountNoun('needs_you')}`}
             style={attentionCount}
           >
             {String(needsYou)}
-            <span style={srOnly}> need you</span>
+            <span style={srOnly}> {planCountNoun('needs_you')}</span>
           </span>
         )}
       </button>

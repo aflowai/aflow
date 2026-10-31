@@ -95,6 +95,13 @@ export interface HitlResolutionProps {
    * Renders above the controls.
    */
   bodySlot?: ReactNode;
+  /**
+   * Renders the title in place of its plain text — e.g. as markdown, where
+   * the item carries it so. The title row and its gate pill stay.
+   */
+  titleSlot?: ReactNode;
+  /** Renders the summary in place of its plain text, as `titleSlot` does the title. */
+  summarySlot?: ReactNode;
   /** Optional style on the controls wrapper (e.g. margin-top in inline chat). */
   controlsStyle?: CSSProperties;
 }
@@ -109,6 +116,8 @@ export function HitlResolution({
   state = 'idle',
   errorMessage,
   bodySlot,
+  titleSlot,
+  summarySlot,
   controlsStyle,
 }: HitlResolutionProps): ReactElement {
   const submitting = state === 'submitting';
@@ -127,7 +136,7 @@ export function HitlResolution({
           {/* Title row with optional gate hint pill */}
           <Row gap="sm" align="center" wrap>
             <Text size="base" weight="semibold">
-              {item.title}
+              {titleSlot ?? item.title}
             </Text>
             {item.gateContext && (
               <Badge variant="info" title={`Gate reason: ${item.gateContext.reason}`}>
@@ -137,7 +146,7 @@ export function HitlResolution({
           </Row>
 
           {/* Summary */}
-          {item.summary && <Text size="sm">{item.summary}</Text>}
+          {item.summary && (summarySlot ?? <Text size="sm">{item.summary}</Text>)}
 
           {/* Gate context detail — small inline disclosure */}
           {item.gateContext && (

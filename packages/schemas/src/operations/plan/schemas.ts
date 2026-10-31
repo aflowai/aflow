@@ -467,6 +467,59 @@ export type PlanBoardColumn = 'needs_you' | 'in_flight' | 'up_next' | 'done' | '
 export const PlanNeedsYouReasonSchema = z.enum(['decide', 'blocked', 'stranded']);
 export type PlanNeedsYouReason = z.infer<typeof PlanNeedsYouReasonSchema>;
 
+/**
+ * The one vocabulary of a plan step's state (Plan 338 D5). The board, the
+ * overview, the Action Center item's title and the Workbench all read their
+ * words from here, so a label changed here changes on every surface at once.
+ * Labels name a state. The verbs on the controls (Approve, Decide, Drop,
+ * Reopen, Close done) are actions and are not in this table.
+ */
+export const PLAN_STATE_LABELS = {
+  /** A board column, and the overview lane of the same id. */
+  column: {
+    needs_you: 'Pending approval',
+    in_flight: 'Running',
+    up_next: 'Queued',
+    done: 'Done',
+    dropped: 'Dropped',
+  } satisfies Record<PlanBoardColumn, string>,
+  /** Why a step stands in the `needs_you` column. */
+  reason: {
+    blocked: 'Approval',
+    decide: 'Decision',
+    stranded: 'Under a closed step',
+  } satisfies Record<PlanNeedsYouReason, string>,
+  /** A plan whose step stands in the `needs_you` column. */
+  planNeedsYou: 'Pending approval',
+  /** What follows the count of `needs_you` steps in a plan's header: "3 pending". */
+  pendingCountNoun: 'pending',
+  /** The `needs_you` lane with no step in it. */
+  pendingEmpty: 'Nothing pending',
+  /** What a plan step's Action Center item is titled before the step's own title. */
+  itemTitle: {
+    blocked: 'Pending approval',
+    merge_wait: 'Pending review',
+  },
+  /** The Workbench section that holds approvals, inputs and connections. */
+  workbenchSection: 'Pending',
+} as const;
+
+/** What a plan step's Action Center item waits on: an approval of a blocked step, or a merge to judge. */
+export type PlanItemWait = keyof (typeof PLAN_STATE_LABELS)['itemTitle'];
+
+/** The most characters an Action Center item's title holds. */
+const PLAN_ITEM_TITLE_MAX_CHARS = 256;
+
+/** A plan step's Action Center item title: "Pending approval · <title>". */
+export function planItemTitle(wait: PlanItemWait, title: string): string {
+  return `${PLAN_STATE_LABELS.itemTitle[wait]} · ${title}`.slice(0, PLAN_ITEM_TITLE_MAX_CHARS);
+}
+
+/** The most blocked and merge-wait nodes the space's Action Center lists at once, newest first. */
+export const PLAN_OPEN_ASKS_LIMIT = 50;
+/** The most open `decide` nodes the space's Action Center lists at once. */
+export const PLAN_OPEN_DECISIONS_LIMIT = 50;
+
 /** The most rows the overview's Needs you and In flight lanes each carry; `total` counts the rest. */
 export const PLAN_LANE_ITEMS_LIMIT = 50;
 /** The runs in flight an In flight row carries, newest first; `runsTotal` counts every one. */
@@ -626,6 +679,21 @@ export function planBoardCards(root: PlanTreeNode): PlanBoardCard[] {
   const rootClosed = isClosedPlanNodeStatus(root.status);
   for (const child of root.children) visit(child, undefined, rootClosed);
   return cards;
+}
+
+/**
+ * Whether a plan's root itself waits on a person (Plan 338 D5). A node's own
+ * `blocked` status makes it a waiting node wherever states derive, so a
+ * blocked root reads `needs_you` and counts under it, with or without steps.
+ * The root is still no step: `steps` does not count it.
+ */
+export function planRootWaits(root: { status: PlanNodeStatus }): boolean {
+  return root.status === 'blocked';
+}
+
+/** A blocked root as the board's `needs_you` column shows it; undefined for any other root. */
+export function planRootCard(root: PlanTreeNode): PlanBoardCard | undefined {
+  return planRootWaits(root) ? { column: 'needs_you', reason: 'blocked', node: root } : undefined;
 }
 
 // ============================================================================

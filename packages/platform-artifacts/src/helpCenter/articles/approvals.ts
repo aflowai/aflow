@@ -15,9 +15,10 @@ export const APPROVALS_ARTICLES: readonly HelpArticleInput[] = [
 
 ## What appears
 
-**Needs attention** holds items that are blocking work now:
+**Pending** holds items that are blocking work now:
 
 - **Approvals**: a write the agent wants to make, an approval a skill asks for as one of its steps, or another action that asks first. A write approval card has **Approve**, **Deny** and an optional reason.
+- **Plan steps**: a step of the space's plan that waits on you, from the moment it is blocked. **Pending approval · …** is a blocked step, with **Approve** to start it and **Drop** to leave it out. **Pending review · …** is a merge waiting for you to judge it, with **Close done** and **Drop**. At most 50 are listed, the newest first, and the **Plan** page holds the rest.
 - **Inputs**: a question a run is waiting for you to answer, and a decision the space's plan leaves to you — a step of kind **decide**, titled **Decide: …**. Write your choice and choose **Decide**; it is recorded as the step's outcome and the step is marked done, as it would be on the **Plan** page. If the Helmsman changed the question after you opened it, your answer is refused and the card shows the question as it now stands.
 - **Connections**: a **Connect** or **Reconnect** card when an integration needs you to sign in with an account, or a sign-in has expired.
 
@@ -29,7 +30,7 @@ A request addressed to another person stays visible, says who it is waiting on, 
 
 ## What happens after you answer
 
-The work that was waiting on the item continues from where it stopped; nothing needs to be restarted. **Needs attention** is hidden when nothing is pending, and the indicator goes back to its resting colour.`,
+The work that was waiting on the item continues from where it stopped; nothing needs to be restarted. **Pending** is hidden when nothing is pending, and the indicator goes back to its resting colour.`,
     editions: ['enterprise', 'community-local'],
     anchors: {
       routes: ['s/[space]/chat'],
@@ -48,7 +49,8 @@ The work that was waiting on the item continues from where it stopped; nothing n
       'inbox',
       'pending',
       'notifications',
-      'needs attention',
+      'pending approval',
+      'pending review',
       'workbench',
       'waiting',
       'blocked',
@@ -63,7 +65,7 @@ The work that was waiting on the item continues from where it stopped; nothing n
       'Every endpoint of an API integration carries a risk tier. Before the agent, or a step of a running skill, makes a write call, the space checks that tier against its Write Policy: by default, low-risk writes run unattended, while medium-risk writes (external sends, hard-to-undo changes) and high-risk writes (money movement, destructive changes at scale) wait for a person to approve them in the Workbench. Nothing is sent until you approve. Denying stops that call and tells the agent why. Space admins change the defaults per tier under Settings → Write Policy.',
     body: `## Where
 
-Approve or deny under **Needs attention** in the Workbench. Change the rules under **Settings → Write Policy**.
+Approve or deny under **Pending** in the Workbench. Change the rules under **Settings → Write Policy**.
 
 ## Why it is waiting
 

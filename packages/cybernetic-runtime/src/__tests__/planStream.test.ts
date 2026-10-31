@@ -43,7 +43,7 @@ import {
 } from '../plan/stream.js';
 import { InMemoryPlanNodeStore } from './planStoreFake.js';
 import { carrierNode } from '../plan/carrier.js';
-import { planAsk, listAskedNodes, askedKey } from '../plan/asks.js';
+import { planAsk, listWaitingNodes, askedKey } from '../plan/asks.js';
 import { restrictedPlanWriteAuthority } from '../plan/writeAuthority.js';
 
 vi.mock('../logger.js', () => ({ logCyberneticError: vi.fn() }));
@@ -1388,7 +1388,7 @@ describe('resident asking and proposing', () => {
           }),
         ]),
       );
-      expect(await listAskedNodes(session())).toEqual(
+      expect(await listWaitingNodes(session())).toEqual(
         expect.arrayContaining([expect.objectContaining({ nodeId: check.node.nodeId })]),
       );
     },
@@ -1400,13 +1400,13 @@ describe('resident asking and proposing', () => {
     const answer = first.decisions[0]!.answer;
     expect(answer.decision).toBe('ask');
     if (answer.decision === 'ask' && answer.update) await updatePlanNode(session(), answer.update);
-    expect(await listAskedNodes(session())).toMatchObject([{ nodeId: node.nodeId }]);
+    expect(await listWaitingNodes(session())).toMatchObject([{ nodeId: node.nodeId }]);
     expect((await wake({}, 'wake-b')).decisions).toEqual([]);
-    expect(await listAskedNodes(session())).toHaveLength(1);
+    expect(await listWaitingNodes(session())).toHaveLength(1);
   });
 
   it('keeps actionable work ahead of asks at the per-wake cap', async () => {
-    await created({ proposed: 'Ask first in root order' });
+    const blocked = await created({ proposed: 'Ask first in root order' });
     const active = await created();
     const result = await wake({ decisions: 1 });
     expect(result.decisions[0]!.answer).toMatchObject({
@@ -1414,17 +1414,19 @@ describe('resident asking and proposing', () => {
       node: { nodeId: active.nodeId },
     });
     expect(result.deferred).toBe(1);
-    expect(await listAskedNodes(session())).toEqual([]);
+    expect(await redis.get(askedKey(TENANT, SPACE, blocked.nodeId))).toBeNull();
+    // Unasked, it is listed all the same: the record gates the note, not the item.
+    expect(await listWaitingNodes(session())).toMatchObject([{ nodeId: blocked.nodeId }]);
   });
 
   it('reads pull requests before asking, leaving capped asks unclaimed', async () => {
-    await created({ proposed: 'First root needs approval' });
+    const blocked = await created({ proposed: 'First root needs approval' });
     const node = await created();
     await linkPlanNode(session(), { nodeId: node.nodeId, kind: 'pull_request', ref: PR });
     const result = await wake({ decisions: 1 });
     expect(result.decisions).toMatchObject([{ answer: { decision: 'read_pull_request' } }]);
     expect(result.deferred).toBe(1);
-    expect(await listAskedNodes(session())).toEqual([]);
+    expect(await redis.get(askedKey(TENANT, SPACE, blocked.nodeId))).toBeNull();
   });
 
   it('proposes toward an exhausted open root with title, goal and criteria', async () => {
@@ -1489,7 +1491,7 @@ describe('resident asking and proposing', () => {
     if (!close.ok || !close.carrier) throw new Error('No carrier');
     await wake();
     await wake({}, 'second-wake');
-    expect(await listAskedNodes(session())).toHaveLength(1);
+    expect(await listWaitingNodes(session())).toHaveLength(1);
     const carrier = await current(close.carrier.nodeId);
     expect(
       await openPlanNode(session(), {
@@ -2399,7 +2401,7 @@ describe('resident review regressions', () => {
       code: 'PLAN_NODE_ATTESTATION_UNAVAILABLE',
     });
     expect(await current(node.nodeId)).toEqual(node);
-    expect(await listAskedNodes(wake)).toEqual([]);
+    expect(await listWaitingNodes(wake)).toEqual([]);
     expect(await updatePlanNode(wake, input)).toMatchObject({ ok: true, node: { status: 'done' } });
     expect(read).toHaveBeenCalledTimes(2);
   });
@@ -2423,7 +2425,7 @@ describe('resident review regressions', () => {
       });
     expect(await close()).toMatchObject({ ok: false });
     const waiting = await current(node.nodeId);
-    expect(await listAskedNodes(wake)).toContainEqual(waiting);
+    expect(await listWaitingNodes(wake)).toContainEqual(waiting);
     const record = await redis.get(askedKey(TENANT, SPACE, node.nodeId));
     expect(await close()).toMatchObject({ ok: false });
     expect((await current(node.nodeId)).revision).toBe(waiting.revision);
@@ -2439,7 +2441,7 @@ describe('resident review regressions', () => {
     expect(await redis.get(askedKey(TENANT, SPACE, node.nodeId))).toBe(String(changed.revision));
     read.mockResolvedValue(true);
     expect(await close()).toMatchObject({ ok: true, node: { status: 'done' } });
-    expect(await listAskedNodes(wake)).toEqual([]);
+    expect(await listWaitingNodes(wake)).toEqual([]);
   });
 
   it('rejects a merged pull request that does not deliver the node work', async () => {
@@ -2492,7 +2494,9 @@ describe('resident review regressions', () => {
       note: expect.stringContaining('Waiting on you:'),
     });
     expect(await redis.get(askedKey(TENANT, SPACE, first.nodeId))).toBe(String(waiting.revision));
-    expect(await listAskedNodes({ ...session(), redis, tenantId: TENANT })).toContainEqual(waiting);
+    expect(await listWaitingNodes({ ...session(), redis, tenantId: TENANT })).toContainEqual(
+      waiting,
+    );
     expect(await fire(root.nodeId, (url) => merged(url, mergedAt))).toMatchObject({
       decision: 'wait',
     });
@@ -2829,6 +2833,10 @@ describe('settled P2 rules', () => {
   it('asks once across ten wakes at the same revision', async () => {
     const node = await created({ note: 'Operator context' });
     await write(node.nodeId, { status: 'blocked' });
+    // Listed before any wake has asked (Plan 338 D1); the wake still writes its line once.
+    expect(await listWaitingNodes(streamContext('ask-read'))).toMatchObject([
+      { nodeId: node.nodeId },
+    ]);
     let revision: number | undefined;
     for (let i = 0; i < 10; i++) {
       const result = await wake({}, 'wake-' + String(i));
@@ -2840,8 +2848,9 @@ describe('settled P2 rules', () => {
         expect((await updatePlanNode(session(), answer.update)).ok).toBe(true);
         revision = (await current(node.nodeId)).revision;
       }
-      expect(await listAskedNodes(streamContext('ask-read'))).toHaveLength(1);
+      expect(await listWaitingNodes(streamContext('ask-read'))).toHaveLength(1);
       expect((await current(node.nodeId)).revision).toBe(revision);
+      expect((await current(node.nodeId)).note?.split('Waiting on you:')).toHaveLength(2);
     }
   });
 

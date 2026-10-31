@@ -52,7 +52,7 @@ describe('help catalog integrity', () => {
   it('describes current-node asks and the post-merge live check', () => {
     const article = ARTICLES.find((entry) => entry.body.includes('## The resident'));
     expect(article?.body).toContain(
-      'The current blocked step of each stream raises an Action Center item',
+      'Every blocked step is an Action Center item, **Pending approval · …**, from the moment it is blocked, whether or not the resident runs',
     );
     expect(article?.body).toContain('a separate blocked live check waits on you to read');
     expect(article?.body).toContain('The folder read does not run automatically.');

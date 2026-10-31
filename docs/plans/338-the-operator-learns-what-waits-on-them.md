@@ -1,6 +1,6 @@
 # Plan 338 — The operator learns what waits on them
 
-**Status:** proposed. This document is P0. P1 to P4 are not built and start only after it merges.
+**Status:** P0 merged. P1 built: the listing rule, the merge-wait flag, the two caps in the schema, the sidebar count, the label table and the help articles. P2 to P4 are not built.
 
 **Builds on:** Plan 331 (D3.3, the asked-once rule, and the resident), Plan 332 (the overview, the column rule of D4, the open question of §8), Plan 337 (the decision card, written here by hand because 337 P3 is not merged), Plan 333 (D2's writing rules).
 
@@ -300,6 +300,21 @@ Each case fails if the change is wrong.
 **P0 — This document and its index row.** _Exit:_ the operator approves or amends §3.
 
 **P1 — The item, the bell, the sidebar count and the vocabulary (D1, D5).** It holds the listing rule, the merge-wait flag, the resolve lookup, the two constants in the schema, the sidebar count, the label table and every label in D5's table. It updates the help articles and points Plan 332 §8 and D5 here. _Exit:_ on the live stack, the operator's three blocked steps show in the bell, under **Pending** in the Workbench and as the Plan entry's count, with no wake.
+
+_Delivered (P1)._ The items below were built.
+
+- **The listing rule.** `listWaitingNodes` and `findWaitingNode` in `plan/asks.ts` list by the exported predicate `isWaitingPlanNode`. The ask record does not gate them, and it still governs the walk's ask and its note line. The source lists at most `PLAN_OPEN_ASKS_LIMIT`, newest first by `updatedAt`, with ties by id.
+- **The merge-wait flag.** The summary columns in `plan/store.ts` select `strpos(note, PLAN_NODE_MERGE_WAIT_LINE) > 0`, so the walk returns `mergeWait: true` on `PlanNodeSummary`. A node's children carry it too, from the same columns. The note itself stays in the row. `store.find` runs only for the listed nodes.
+- **The schema.** `PLAN_OPEN_ASKS_LIMIT`, `PLAN_OPEN_DECISIONS_LIMIT`, `PLAN_STATE_LABELS` and `planItemTitle` live in `operations/plan/schemas.ts`. `planNoteHoldsMergeWait` lives beside the merge-wait line.
+- **The labels.** `PLAN_BOARD_COLUMNS`, `NEEDS_YOU_REASON_LABEL`, `PLAN_STATE_LABEL`, `planHeader` and `PLAN_LANES` read the table. The header and the plan list name every column count by its column's label, such as "3 running" and "2 queued". The plan state `in_flight` reads **Running**, so the plan list and its columns agree. The item title is **Pending approval · …** or **Pending review · …**. The Workbench section is **Pending**.
+- **A blocked root.** A node's own `blocked` status makes it a waiting node wherever states derive, by `planRootWaits` in the schema. `planRootState` reads `needs_you` for a blocked root with or without steps. `counts.needsYou` counts the root, and `steps` does not. The overview lists it in the `needs_you` lane with reason `blocked`, and `planCards` puts it first in its board's column. `listWaitingNodes` already lists it, because the walk reads the roots. Before this, a blocked root with no steps read `empty`, as node `0a16ef72` did on the live stack.
+- **The sidebar count.** `usePlanPendingCount` and `PlanNavCount` read `useActionCenter`. The entry shows the count only where the active space is the route's space, so a space switch never shows the previous space's count.
+- **Markdown.** A plan item's title and summary render as markdown on its card (`HitlResolution` takes `titleSlot` and `summarySlot`) and on every row of **Pending** (`ItemText.tsx`, `InlineMarkdown`). Items from other sources keep their plain text, because an underscore in an operation id is not emphasis. The sidebar entry shows digits and the word "pending", and no step text reaches it.
+- **Tests.** `planWaitingNodes.test.ts` covers no wake, a lapsed record, the cut at 60 and at exactly 50, a stranded node and the merge-wait flag. `planStoreReads.pg.test.ts` covers the flag against Postgres. `planAskSourceWaiting.test.ts` covers approving a node that was never asked and the item title. `PlanNavCount.test.ts` shows the count adds no HTTP read beside the bell and rises by one on a rebuild. `plan-pending-count.test.ts` covers "50+", "52+" and exactly 50. `planVocabulary.test.ts` changes the table and reads the board, the overview, the item title and the Workbench. `ItemText.test.ts` covers markdown on the card and the Workbench rows.
+
+- **Preview.** The review sees the items rendered on two pages. The first is the chat page with the Workbench open, `/s/<slug>/chat?workbench=1`, with a blocked step under **Pending**. The second is the Action Center as the header of another page shows it, such as `/s/<slug>/plan`: the bell with its count, which opens the first page, and the sidebar's Plan count. A space with one blocked step whose title holds markdown shows the item with its title rendered.
+
+**Open:** the phase exit on the live stack.
 
 **P2 — The Helmsman knows what waits (D2).** It holds the counts, the section and the ceiling test, and records the measured tokens in D2. _Exit:_ asked "is anything waiting on me?", a Helmsman names the count and points at the plan link without a tool call.
 

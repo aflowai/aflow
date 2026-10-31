@@ -47,6 +47,7 @@ import {
   type PlanBoardOptions,
 } from '../plan/board.js';
 import { planGoalHead } from '../plan/store.js';
+import { listWaitingNodes } from '../plan/asks.js';
 import { findActiveStreamNode, mergeLinkLabel } from '../plan/stream.js';
 import { orderPlanTree } from '../plan/tree.js';
 import { InMemoryPlanNodeStore } from './planStoreFake.js';
@@ -719,8 +720,9 @@ describe('planRootState — a plan’s state (Plan 332 D3)', () => {
     );
   });
 
-  it('reads a blocked or waiting root by its steps, not by its own status', () => {
-    expect(planRootState('blocked', { ...none, steps: 1, upNext: 1 })).toBe('queued');
+  it('reads a blocked root as needs_you with or without steps, and a waiting one by its steps', () => {
+    expect(planRootState('blocked', none)).toBe('needs_you');
+    expect(planRootState('blocked', { ...none, steps: 1, upNext: 1 })).toBe('needs_you');
     expect(planRootState('waiting', { ...none, steps: 1 })).toBe('finished');
   });
 });
@@ -728,6 +730,24 @@ describe('planRootState — a plan’s state (Plan 332 D3)', () => {
 describe('readPlanOverview — the plans as rows', () => {
   it('reads an empty space as no rows and empty lanes', async () => {
     expect(await rows()).toEqual({ roots: [], lanes: NO_LANES });
+  });
+
+  it('reads a blocked root with no steps as needs_you, counts it, lists it, and its board says the same', async () => {
+    const root = await node('Plan 338 · a proposal', { proposed: 'Worth doing' });
+    expect(root.status).toBe('blocked');
+
+    const read = await rows();
+    expect(read.roots).toMatchObject([
+      { nodeId: root.nodeId, state: 'needs_you', counts: { steps: 0, needsYou: 1 } },
+    ]);
+    expect(read.lanes.needsYou).toMatchObject({
+      total: 1,
+      items: [{ nodeId: root.nodeId, rootId: root.nodeId, reason: 'blocked' }],
+    });
+
+    const plan = await board(root.nodeId);
+    expect(plan.tally).toMatchObject({ state: 'needs_you', steps: 0, needsYou: 1 });
+    expect(await listWaitingNodes(ctx())).toMatchObject([{ nodeId: root.nodeId }]);
   });
 
   it('derives every state on the server from the plan’s own steps', async () => {

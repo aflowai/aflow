@@ -7,7 +7,7 @@ import { WorkbenchSection } from './WorkbenchSection.js';
 /**
  * Something armed itself to run later, and nobody was asked.
  *
- * Kept out of Needs attention deliberately: that section's badge is a count of
+ * Kept out of Pending deliberately: that section's badge is a count of
  * work waiting on this person, and an entry that only reports an event would
  * inflate it into a queue nobody can empty. The operator still has to learn
  * that an agent scheduled a run, so it is shown — plainly, next to the section

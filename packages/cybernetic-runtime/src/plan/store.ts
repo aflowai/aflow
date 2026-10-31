@@ -6,6 +6,7 @@ import { alias } from 'drizzle-orm/pg-core';
 import {
   CLOSED_PLAN_NODE_STATUSES,
   PLAN_NODE_GOAL_HEAD_MAX_CHARS,
+  PLAN_NODE_MERGE_WAIT_LINE,
   PLAN_NODE_NOTE_HEAD_MAX_CHARS,
   PLAN_NODE_POSITION_MAX,
   PLAN_REVIEW_WORKFLOW_SLUGS,
@@ -555,6 +556,7 @@ const summaryColumns = () => ({
   position: planNodes.position,
   // The first line only: a summary must not carry every note in the space.
   noteFirstLine: sql<string | null>`split_part(${planNodes.note}, chr(10), 1)`,
+  mergeWait: sql<boolean>`coalesce(strpos(${planNodes.note}, ${PLAN_NODE_MERGE_WAIT_LINE}) > 0, false)`,
   createdAt: planNodes.createdAt,
   updatedAt: planNodes.updatedAt,
   closedAt: planNodes.closedAt,
@@ -569,6 +571,7 @@ interface SummaryRow {
   revision: number;
   position: number;
   noteFirstLine: string | null;
+  mergeWait: boolean;
   createdAt: Date;
   updatedAt: Date;
   closedAt: Date | null;
@@ -585,6 +588,7 @@ function summaryRowToSummary(row: SummaryRow): PlanNodeSummary {
     revision: row.revision,
     position: row.position,
     ...(noteHead !== undefined ? { noteHead } : {}),
+    ...(row.mergeWait ? { mergeWait: true as const } : {}),
     createdAt: new Date(row.createdAt).toISOString(),
     updatedAt: new Date(row.updatedAt).toISOString(),
     ...(row.closedAt != null ? { closedAt: new Date(row.closedAt).toISOString() } : {}),
