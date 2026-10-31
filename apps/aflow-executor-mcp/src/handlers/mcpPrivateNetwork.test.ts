@@ -150,9 +150,59 @@ describe('the managed connect', () => {
       kind: 'private-ip',
       target: '10.1.2.3',
       rangeLabel: 'private-rfc1918',
+      range: 'private network address (10.0.0.0/8, 172.16.0.0/12 or 192.168.0.0/16)',
       remedy: 'acknowledge_private_network',
     });
     expect(acquire).not.toHaveBeenCalled();
+  });
+
+  it('says the range and where the operator acts in the message the Helmsman reads', async () => {
+    state.privateNetworkJson = null;
+    const error = failure(await test());
+    expect(error.message).toContain(
+      '10.1.2.3 is on a private network address (10.0.0.0/8, 172.16.0.0/12 or 192.168.0.0/16).',
+    );
+    expect(error.message).toContain(
+      'An operator can let this server reach 10.1.2.3 with the Set as private network action' +
+        ' on the Corp card in Integrations, which opens the private network form.',
+    );
+    expect(error.message).not.toContain('→ Private network');
+    expect(error.message).toContain('An agent cannot set it.');
+  });
+
+  it('names the Private network section when an acknowledgment that misses the host is set', async () => {
+    state.serverUrl = 'https://10.9.9.9/mcp';
+    const error = failure(await test());
+    expect(error.details).toMatchObject({ remedy: 'acknowledge_private_network' });
+    expect(error.message).toContain(
+      'An operator can add 10.9.9.9 to the hosts under Integrations → Corp → Private network.',
+    );
+  });
+
+  it('names the host, not the raw URL, on a scheme refusal', async () => {
+    state.serverUrl = 'ftp://10.1.2.3/mcp';
+    const error = failure(await test());
+    expect(error.details).toMatchObject({ kind: 'invalid-protocol', target: '10.1.2.3' });
+  });
+
+  it('says that no setting reaches a range the acknowledgment never lifts', async () => {
+    state.serverUrl = 'https://127.0.0.1/mcp';
+    state.privateNetworkJson = { ...RECORD, hosts: ['127.0.0.1'] };
+    const error = failure(await test());
+    expect(error.details).toMatchObject({
+      range: 'loopback address (127.0.0.0/8)',
+      remedy: 'none',
+    });
+    expect(error.message).toContain(
+      '127.0.0.1 is on a loopback address (127.0.0.0/8). No setting reaches it.',
+    );
+  });
+
+  it('refuses plain http to a listed host and names the https rule', async () => {
+    state.serverUrl = 'http://10.1.2.3/mcp';
+    const error = failure(await test());
+    expect(error.details).toMatchObject({ kind: 'invalid-protocol', target: '10.1.2.3' });
+    expect(error.message).toContain('Change the server URL to https.');
   });
 
   it('refuses a serverUrl an agent rewrote to another private host', async () => {
@@ -181,6 +231,9 @@ describe('the hosted edition', () => {
       rangeLabel: 'private-rfc1918',
       remedy: 'deployment_must_list_host',
     });
+    expect(error.message).toContain(
+      'Whoever runs this deployment adds 10.1.2.3 to MCP_PRIVATE_NETWORK_HOSTS.',
+    );
     expect(acquire).not.toHaveBeenCalled();
   });
 

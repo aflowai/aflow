@@ -199,3 +199,7 @@ Resident closes read GitHub through binding fulfillment and match the node publi
 P2 round 18 executes scheduled closes on the API executor, which reads GitHub through binding fulfillment. Failed attestation reads leave nodes retryable for later wakes, while definitive refusals route them to a person.
 
 Write authority reads the session creation marker and schedule trigger, failing closed when provenance is missing. Link trust storage is removed, and help describes the blocked fallback when a merge wait line cannot fit.
+
+### A conversation a person starts over REST
+
+A session that `POST /v1/sessions` starts, resumes or retries for a user is attended (`isPersonPrincipal`). That covers a web sign-in and a user API key, the MCP server's `start_session` included. A conversation the operator starts with their own key then creates `active` nodes and closes its own nodes `done`, as Plan 328 D6 has it. A service principal, a webhook and a schedule stamp nothing and stay restricted. `restrictedPlanWriteAuthority` is unchanged, and a `schedule` session stays restricted whatever its stamp.

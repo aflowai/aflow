@@ -1,6 +1,6 @@
 # Plan 336 — An MCP server on the operator's private network connects
 
-**Status:** P0 merged. P1 is built: D1, D2, D3, D5 and the D7 audit. Its unit cases in §5 pass, and the live connect its exit names has not been run. The operator's review deferred D4, so https stays required for every credentialed request in both editions. P2 to P4 are not built.
+**Status:** P0 merged. P1 is built: D1, D2, D3, D5 and the D7 audit. Its unit cases in §5 pass, and the live connect its exit names has not been run. The operator's review deferred D4, so https stays required for every credentialed request in both editions. P2 is built: the D6 refusals reach the step message, the wait response, the card and the form, with the **Private network** form and section and the help article's refusal section. Its UI case in §5 passes as a unit test, and no live test has been run. P4 is written: the `connect-mcp-server` article's first-run section covers the five points §6 names. Its exit, the live case run by following the article, has not been run. P3 is not built.
 
 **Builds on:** Plan 185 (OAuth bindings, consent pause), Plan 253 (operator-owned settings carry a server-stamped principal), Plan 315 (the local edition's first run), Plan 323 D4 (`CREDENTIAL_EXTRA_BASE_URL_ORIGINS` admits a host on the network), Plan 325 (help articles).
 
@@ -250,11 +250,11 @@ Each case fails if the change is wrong.
 
 _Exit:_ every case in §5 except UI and Live passes. A local install connects to a listed `10.x` host over https.
 
-**P2 — The UI and the Helmsman's remedy text (the D6 refusals).** It holds the remedy text in the step message, the `unresolvable` remedy text, `error` in the wait branch, and the card and form text and actions. It also holds the **Private network** section, which shows who set the acknowledgment and when, and the help article. _Exit:_ the UI cases in §5 pass. A refused test names the range and the remedy in the UI and in the step error the Helmsman reads.
+**P2 — The UI and the Helmsman's remedy text (the D6 refusals). Built.** It holds the remedy text in the step message, the `unresolvable` remedy text, `error` in the wait branch, and the card and form text and actions. It also holds the **Private network** section, which shows who set the acknowledgment and when, and the help article. _Exit:_ the UI cases in §5 pass. A refused test names the range and the remedy in the UI and in the step error the Helmsman reads.
 
 **P3 — The auth nudge and the tool-permissions landing (D6 auth and landing).** It holds the `rejected` consent reason, the 401 handling at connect, **Connect account** and the **Tool permissions** landing. It also answers whether an auth challenge without a 401 can be recognised. _Exit:_ a test against a server that answers 401 at connect pauses for consent instead of failing as retryable. A successful first test of a definition with no tools picked lands on **Tool permissions**.
 
-**P4 — An operator note for a corporate MCP server's first run (the D7 note).** A section in the `connect-mcp-server` help article covers these points:
+**P4 — An operator note for a corporate MCP server's first run (the D7 note). Written.** A section in the `connect-mcp-server` help article covers these points:
 
 - The acknowledgment and its risk.
 - The loopback redirect URI to register with the corporate authorization server.

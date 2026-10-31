@@ -222,7 +222,8 @@ export const BrowserProfileListOutputSchema = z.object({
         .describe(
           'Whether runs nobody is present for may use it. A run is attended when a person’s ' +
             'request last set it going, or a run attended at that moment did; one a schedule, ' +
-            'a webhook, a timer or an API or MCP client set going is not. A sub-agent returning ' +
+            'a webhook, a timer or a service principal set going is not. A user’s own API key, the ' +
+            'MCP server’s included, is a person’s request. A sub-agent returning ' +
             'to the run that waited on it changes nothing.',
         ),
       openToThisRun: z

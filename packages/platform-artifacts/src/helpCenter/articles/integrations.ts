@@ -93,9 +93,118 @@ After connecting, the card reads **No tools enabled yet — the agent sees zero 
 
 ## Sign-in later
 
-When a sign-in is missing or has expired, a **Connect** or **Reconnect** card appears under **Needs attention**. Signing in resumes the work that was waiting on it.`,
+When a sign-in is missing or has expired, a **Connect** or **Reconnect** card appears under **Needs attention**. Signing in resumes the work that was waiting on it.
+
+## When the connect is refused
+
+A server URL whose host resolves to an address outside the public internet is refused. The dialog and the card name the host and its range in words:
+
+- **Private network address** (10.0.0.0/8, 172.16.0.0/12 or 192.168.0.0/16), and **shared address space** (100.64.0.0/10), which overlay VPNs use. A setting can lift these two ranges for a server.
+- **Loopback** (127.0.0.0/8), **link-local** (169.254.0.0/16) and **cloud metadata** (169.254.169.254, 100.100.100.200 and the metadata names). No setting reaches these. The same holds for current network, IETF protocol, benchmarking, multicast, reserved and broadcast addresses, IPv6 addresses and numeric addresses not written as a dotted quad.
+
+For a server on your private network, such as one behind a VPN:
+
+1. Choose **Set as private network** under the refusal, or on the server's card. The card offers it until a list is set, whether or not the server has connected. The **Private network** form opens for that server.
+2. List each host the server uses, exactly, one per line: the server URL host, and any token or authorization endpoint host. A wildcard is refused.
+3. Choose **Save**. Then edit the integration and choose **Save & connect** again.
+
+A listed host is reached over https only, so its server URL must start with \`https://\`. No setting lifts that rule. The card's **Private network** section lists the hosts and who set them, and when. **Change hosts** edits the list, and **Clear** removes it. Only a signed-in operator sets the list. An agent cannot.
+
+In the hosted edition, a listed host is reached only when whoever runs the deployment also lists it in \`MCP_PRIVATE_NETWORK_HOSTS\`. Until then the refusal says so.
+
+When the refusal says this machine cannot resolve the host, the name is not known here. The VPN or its DNS may not reach the service from this machine.
+
+## A corporate server's first run
+
+A corporate MCP server sits on your company's network, often behind a VPN. Its first connect needs the five things below.
+
+### 1. Set its hosts as private network
+
+**Set as private network** saves the host list through \`PUT /v1/integrations/mcp/servers/:serverId/private-network\`. Only a signed-in operator can call it. An agent and a service principal cannot. Saving an empty list clears it.
+
+What a listed host may reach:
+
+- A listed host may resolve to a private network address or a shared address space address. The install connects to whichever such address the name answers with.
+- A host not on the list stays refused on those ranges. That includes a host an agent writes into the server URL later.
+- Loopback, link-local and cloud metadata addresses stay refused for every host, listed or not. So do IPv6 addresses and numeric addresses not written as a dotted quad.
+- Every request to a listed host goes over https. An http URL to a listed host is refused before its name is looked up.
+
+The risk is the DNS answer. Whoever controls a listed name's DNS record chooses which machine on your network it reaches. The https certificate is what proves that machine is the server named. List only hosts your organisation runs.
+
+Every set, change and clear writes a security entry to the tenant's audit log. The entry records who made the change, when, and the hosts before and after. Saving the list already stored writes nothing. Deleting the server, or archiving its space, writes a clear entry.
+
+### 2. Allow the redirect URI on the corporate authorization server
+
+Sign-in returns to a callback address that ends in \`/v1/oauth/callback\`. Its origin depends on the edition.
+
+On a local install:
+
+- An installed bundle: \`http://127.0.0.1:3000/v1/oauth/callback\`.
+- A source build from \`docker-compose.local.yml\`: \`http://127.0.0.1:<AFLOW_API_PORT>/v1/oauth/callback\`. \`AFLOW_API_PORT\` is 3000 unless you set it.
+- A dev checkout: \`API_BASE_URL\` from \`.env\` followed by \`/v1/oauth/callback\`. By default that is \`http://localhost:3000/v1/oauth/callback\`.
+
+In the hosted edition, the callback is the deployment's public API origin followed by \`/v1/oauth/callback\`, such as \`https://api.example.com/v1/oauth/callback\`. That origin is \`API_BASE_URL\`, which whoever runs the deployment sets. Ask them for its value.
+
+The corporate authorization server must allow that exact URI for the client you use. It treats \`127.0.0.1\` and \`localhost\` as different URIs. Your browser follows the redirect, so the authorization server never connects to the callback address. Aflow derives the address from \`API_BASE_URL\` and accepts no other. Only the authorization server's administrators can allow it.
+
+### 3. Register a client with the corporate authorization server
+
+The built-in OAuth app is a public client with no secret. Its client ID is the URL of a document Aflow serves at \`/.well-known/cimd\` under \`API_BASE_URL\`. The authorization server fetches that document to learn the app's name and redirect URI.
+
+- On a local install, the built-in app cannot sign in. Its document sits on the install's loopback address, and an authorization server on another machine cannot fetch it.
+- In the hosted edition, the document sits on the deployment's public origin and names the callback from step 2. Aflow does not stop the built-in app from signing in there. It works only when the corporate authorization server accepts a document URL as a client ID and can fetch that document. Aflow does not check either before sign-in.
+
+When the built-in app cannot sign in, use a client registered with the corporate authorization server instead:
+
+1. Ask its administrators for a client that allows the redirect URI from step 2. Sign-in uses the authorization code flow with PKCE. A client secret is optional, for a public client.
+2. Under **Tenant Admin → OAuth Apps**, choose **Register app**, then **Issuer → Other (custom)**.
+3. Set **Issuer key** to the server URL's origin, such as \`https://mcp.corp.example\`. Sign-in looks the app up by this key, so it must match exactly. When the integration's **Auth server** is filled in, use that value as typed instead.
+4. Set **Authorization server URL** to the corporate authorization server. Fill in **Client ID**, **Client secret** and **Default scopes**. Sign-in asks for the default scopes, or for the scopes the server advertises when you give none.
+5. Edit the integration. Choose **OAuth — browser sign-in**, and set **Which OAuth app drives sign-in?** to **A tenant-registered OAuth app**.
+
+In the hosted edition, a space admin can register the client under the space's **Settings → OAuth Apps** instead. The integration then names **A space-registered OAuth app**.
+
+Sign-in reads the client ID and secret from the registered app, not from the integration form. It reads the server's protected resource metadata first, so the server must publish it. When the authorization server's host resolves to a private address, list it in step 1 too.
+
+A server that takes **OAuth — client credentials** needs no redirect URI and no registered app. Its client ID and secret go on the integration form, and **Token URL** names the token endpoint. List the token endpoint's host in step 1 when it is on your private network. **Scopes** under **More OAuth options** go with the token request.
+
+### 4. In the hosted edition, the deployment lists the host
+
+The hosted edition reaches a listed host only when \`MCP_PRIVATE_NETWORK_HOSTS\` also names it. The variable holds comma-separated hostnames, matched exactly, with no wildcards. Whoever runs the deployment sets it in the deployment's environment. A tenant admin cannot set it, and no screen sets it.
+
+- Saving a host list with a host the variable does not name is refused. The refusal names the variable.
+- The variable is read again at every connect. A host removed from it is refused at the next connect, and the refusal says the deployment does not list it.
+- Set it on the API server, which runs sign-in, and on the worker, which runs the MCP connection.
+
+The local edition does not read the variable. Its operator is the deployment.
+
+### 5. Test that the install's containers resolve and reach the server
+
+A VPN client may resolve corporate names for this machine and not for Docker's containers. That depends on the VPN client and on Docker. Test from inside Aflow Local, in the folder that holds its compose file:
+
+\`\`\`sh
+docker compose exec worker node -e "require('node:dns').lookup('mcp.corp.example',{family:4},(e,a)=>console.log(e?e.code:a))"
+\`\`\`
+
+Use your server's hostname, and run it again with \`api\` in place of \`worker\`. A source build adds \`-f docker-compose.local.yml\` after \`docker compose\`.
+
+- An address such as \`10.1.2.3\` means the container resolves the name.
+- \`ENOTFOUND\` or \`EAI_AGAIN\` means it cannot. Aflow reports the same failure as a host this machine cannot resolve.
+
+Then test the route:
+
+\`\`\`sh
+docker compose exec worker node -e "fetch('https://mcp.corp.example/').then(r=>console.log(r.status),e=>console.log(e.cause?.code??e.message))"
+\`\`\`
+
+- Any HTTP status, even 401 or 404, means the container reaches the server over https.
+- \`ETIMEDOUT\`, \`UND_ERR_CONNECT_TIMEOUT\`, \`ECONNREFUSED\` or \`EHOSTUNREACH\` means the name resolves but the container has no route to it.
+- A certificate code such as \`UNABLE_TO_VERIFY_LEAF_SIGNATURE\` or \`SELF_SIGNED_CERT_IN_CHAIN\` means the container does not trust the server's certificate. Aflow's connect fails the same way.`,
     editions: ['enterprise', 'community-local'],
-    anchors: { routes: ['s/[space]/integrations'], operations: [] },
+    anchors: {
+      routes: ['s/[space]/integrations', 'settings/oauth-apps', 's/[space]/settings/oauth-apps'],
+      operations: [],
+    },
     related: ['connect-an-integration', 'where-credentials-live', 'what-is-waiting-for-me'],
     keywords: [
       'mcp',
@@ -105,6 +214,16 @@ When a sign-in is missing or has expired, a **Connect** or **Reconnect** card ap
       'tool permissions',
       'allowlist',
       'sign in',
+      'private network',
+      'vpn',
+      'refused',
+      'MCP_PRIVATE_NETWORK_HOSTS',
+      'corporate',
+      'redirect uri',
+      'callback',
+      'oauth app',
+      'dns',
+      'first run',
     ],
   },
   {

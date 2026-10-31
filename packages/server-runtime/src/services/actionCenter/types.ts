@@ -47,10 +47,16 @@ export interface ActionCenterContext extends ActionCenterScope, ActionCenterRead
   actorAuthMethod?: string;
   /**
    * Whether the request resolving was authenticated as an interactive user
-   * (`isInteractiveUser`): a resolve that resumes a run counts as a person
-   * setting it going only then. Absent reads as not.
+   * (`isInteractiveUser`). A plan write is taken only then. Absent reads as not.
    */
   actorIsInteractiveUser?: boolean;
+  /**
+   * Whether a person's principal made the request resolving
+   * (`isPersonPrincipal`: a web sign-in or a user API key). A resolve that
+   * resumes a run counts as a person setting it going only then, as on the
+   * resume route. Absent reads as not.
+   */
+  actorIsPersonPrincipal?: boolean;
 }
 
 /**

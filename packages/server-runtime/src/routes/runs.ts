@@ -22,7 +22,7 @@ import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { buildInlineAgentDefinition, createSessionService } from '../services/sessions.js';
 import { buildSessionSnapshot } from '../services/buildSessionSnapshot.js';
 import { buildActorContext } from '../utils/actorContext.js';
-import { isInteractiveUser, refusedStartMode, StartModeSchema } from '../utils/interactiveUser.js';
+import { isPersonPrincipal, refusedStartMode, StartModeSchema } from '../utils/interactiveUser.js';
 import { classifyRunServiceError } from '../lib/errors.js';
 import { assertSessionSpaceAccess } from '../lib/sessionSpaceAccess.js';
 import { registerMcpElicitationRoutes } from './mcp-elicitations.js';
@@ -31,6 +31,7 @@ import { registerSessionParticipantRoutes } from './sessionParticipants.js';
 import { registerSessionMetadataRoutes } from './sessionMetadataRoutes.js';
 import { recordSpeechJoin, recordStartInvites } from '../lib/sessionMembership.js';
 import { resolveApiBaseUrl } from '../lib/apiBaseUrl.js';
+import { failedSessionError, StoredStepErrorSchema } from '../lib/storedStepError.js';
 
 // ============================================================================
 // Request/Response Schemas
@@ -329,12 +330,7 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
             // Extended response when wait is used
             outputRef: z.string().optional(),
             errorRef: z.string().optional(),
-            error: z
-              .object({
-                code: z.string(),
-                message: z.string(),
-              })
-              .optional(),
+            error: StoredStepErrorSchema.optional(),
           }),
           400: z.object({ error: z.string(), message: z.string() }),
           403: z.object({ error: z.string(), message: z.string() }),
@@ -354,8 +350,7 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
       const body = request.body;
       const waitParam = request.query.wait;
       const mode = body.mode ?? 'api';
-      const interactiveUser = isInteractiveUser(request.authUser);
-      const modeRefusal = refusedStartMode(mode, interactiveUser);
+      const modeRefusal = refusedStartMode(mode, request.authUser);
       if (modeRefusal) return reply.status(400).send({ error: 'BadRequest', message: modeRefusal });
 
       try {
@@ -478,7 +473,7 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
             createdBy:
               (request.headers['x-on-behalf-of'] as string | undefined) ?? request.authUser?.userId,
             trigger: mode,
-            activatedByPerson: interactiveUser,
+            activatedByPerson: isPersonPrincipal(request.authUser),
             ...(mode === 'voice' ? { voiceMode: true } : {}),
             ...(actorContext ? { actorContext } : {}),
             ...(body.clientMessageId ? { clientMessageId: body.clientMessageId } : {}),
@@ -532,11 +527,13 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
                       requiredInput: details.requiredInput,
                     }
                   : undefined;
+              const error = await failedSessionError(app.appContext.payloadStore, details);
               return await reply.status(201).send({
                 ...result,
                 status: details.status,
                 outputRef: details.outputRef,
                 errorRef: details.errorRef,
+                ...(error ? { error } : {}),
                 requiredInput: details.requiredInput,
                 next,
               });
@@ -1043,7 +1040,7 @@ Event-level pages: \`GET /sessions/:id/events?limit=<n>&before=<cursor>\`.`,
           ...(actorContext ? { actorContext } : {}),
           ...(body.voiceMode !== undefined ? { voiceMode: body.voiceMode } : {}),
           ...(body.clientMessageId ? { clientMessageId: body.clientMessageId } : {}),
-          activatedByPerson: isInteractiveUser(request.authUser),
+          activatedByPerson: isPersonPrincipal(request.authUser),
         });
 
         request.log.debug({ sessionId, stepExecutionId: body.stepExecutionId }, 'Session resumed');
@@ -1130,7 +1127,7 @@ Event-level pages: \`GET /sessions/:id/events?limit=<n>&before=<cursor>\`.`,
             : {}),
           idempotencyKey,
           ...(actorContext ? { actorContext } : {}),
-          activatedByPerson: isInteractiveUser(request.authUser),
+          activatedByPerson: isPersonPrincipal(request.authUser),
         });
 
         request.log.info(

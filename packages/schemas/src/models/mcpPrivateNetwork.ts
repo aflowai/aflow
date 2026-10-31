@@ -92,6 +92,27 @@ export const McpPrivateNetworkSetResultSchema = z.object({
 export type McpPrivateNetworkSetResult = z.infer<typeof McpPrivateNetworkSetResultSchema>;
 
 /**
+ * What a refused MCP connect carries in its step error `details` (Plan 336 D6).
+ * The MCP executor builds it from `@aflow/network-safety`'s refusal, so `kind`
+ * and `remedy` hold that package's values, and its type check fails when they
+ * drift. `range` is the range in words. `rangeLabel` is carried for display
+ * and never compared.
+ */
+export const McpEgressRefusalDetailsSchema = z.object({
+  kind: z.enum(['allowlist-host', 'private-ip', 'invalid-protocol', 'invalid-url', 'unresolvable']),
+  /** The refused host. */
+  target: z.string().optional(),
+  rangeLabel: z.string().optional(),
+  range: z.string().optional(),
+  /**
+   * What the operator can do. `acknowledge_private_network` is answered by
+   * setting the host on the definition's private network acknowledgment.
+   */
+  remedy: z.enum(['acknowledge_private_network', 'deployment_must_list_host', 'none']).optional(),
+});
+export type McpEgressRefusalDetails = z.infer<typeof McpEgressRefusalDetailsSchema>;
+
+/**
  * The hosts the deployment lists in `MCP_PRIVATE_NETWORK_HOSTS`. Read only by
  * the hosted edition. The local edition's operator is the deployment.
  */
