@@ -142,6 +142,14 @@ export interface PushUnderCheck {
   readonly posture: HostSandboxPosture;
 }
 
+/** A merge of the measured base the push sends in place of the checked commit. */
+export interface PushedMerge {
+  /** The merge commit, as a full sha. */
+  readonly commit: string;
+  /** Its parents in order, as full shas, as git reads them from the commit. */
+  readonly parents: readonly string[];
+}
+
 /**
  * Refuse a push from a folder that declares checks unless it carries the
  * receipt of those checks passing here on exactly the commit it sends, against
@@ -154,6 +162,10 @@ export interface PushUnderCheck {
  * A base `origin` has moved past since the checks ran still holds: the push
  * then sends fewer of the commit's ancestors than the checks were measured
  * over, and the commit they ran on is the one it sends.
+ *
+ * Where the push sends `merge` instead, the receipt for `sha` holds for it
+ * only where the merge's first parent is `sha`, its second is `base`, and it
+ * has no other (Plan 339 D3): the merge adds no line that is in neither parent.
  */
 export async function requireCheckedPush(
   push: PushUnderCheck & {
@@ -166,6 +178,8 @@ export async function requireCheckedPush(
     readonly base: string;
     /** Whether `base` is the commit `origin/<pushBase>` is at now, or one under it. */
     readonly baseHolds: (base: string) => Promise<boolean>;
+    /** The merge of `base` the push sends in place of `sha`, where it makes one. */
+    readonly merge?: PushedMerge;
   },
   now: number = Date.now(),
 ): Promise<HostSandboxPosture | undefined> {
@@ -192,6 +206,19 @@ export async function requireCheckedPush(
         `so nothing says they passed on ${short}. ${checkAgain}`,
       'no_check_receipt',
     );
+  }
+  const { merge } = push;
+  if (merge !== undefined) {
+    const [first, second, ...more] = merge.parents.map((parent) => parent.toLowerCase());
+    if (first !== push.sha.toLowerCase() || second !== push.base.toLowerCase() || more.length > 0) {
+      throw new CheckReceiptError(
+        `This push sends \`${merge.commit}\`, whose parents are ` +
+          `${merge.parents.map((parent) => `\`${parent}\``).join(', ')}, and the receipt for ` +
+          `the checks on \`${push.sha}\` holds only for a merge whose first parent is that ` +
+          `commit and whose second is \`${push.base}\`. ${checkAgain}`,
+        'check_other_commit',
+      );
+    }
   }
   const receipt = readCheckReceipt(push.receipt);
   if (receipt === undefined) {

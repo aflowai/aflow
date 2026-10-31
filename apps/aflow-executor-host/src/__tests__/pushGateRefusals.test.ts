@@ -69,6 +69,8 @@ const stillAtBase: PushHistory = {
   measureBase: () => Promise.resolve(BASE),
   holds: () => Promise.resolve(false),
   conflicts: () => Promise.resolve([]),
+  merge: () => Promise.reject(new Error('a push its receipt covers merges nothing')),
+  parents: () => Promise.reject(new Error('a push its receipt covers merges nothing')),
   scanSecrets: () => Promise.reject(new Error('a push its receipt covers scans nothing')),
 };
 
@@ -78,6 +80,8 @@ function movedOn(history: Partial<PushHistory>): PushHistory {
     measureBase: () => Promise.resolve(MOVED),
     holds: () => Promise.resolve(true),
     conflicts: () => Promise.resolve([]),
+    merge: () => Promise.reject(new Error('not merged in this case')),
+    parents: () => Promise.reject(new Error('not merged in this case')),
     scanSecrets: () => Promise.reject(new Error('not scanned in this case')),
     ...history,
   };
@@ -132,6 +136,20 @@ const REFUSED: ReadonlyArray<readonly [Refusal, PushUnderScan]> = [
   ['check_other_folder', withCheck({ receipt: checkReceipt({ bindingId: 'hb_other' }) })],
   ['check_stale', withCheck({ receipt: checkReceipt({ now: Date.now() - RECEIPT_TTL_MS - 1 }) })],
   ['check_other_commit', withCheck({ receipt: checkReceipt({ sha: 'f'.repeat(40) }) })],
+  [
+    'check_other_commit',
+    push({
+      history: movedOn({
+        // `TIP` does not hold `MOVED`, so the push merges it: a merge whose
+        // second parent is not the measured base takes no receipt for `TIP`.
+        holds: (commit) => Promise.resolve(commit === MOVED),
+        merge: () => Promise.resolve('d'.repeat(40)),
+        parents: () => Promise.resolve([TIP, BASE]),
+        scanSecrets: () =>
+          Promise.resolve({ clean: true, unflaggedRange: `${MOVED}..${'d'.repeat(40)}` } as never),
+      }),
+    }),
+  ],
   ['check_other_base', withCheck({ receipt: checkReceipt({ base: 'e'.repeat(40) }) })],
   ['check_other_checks', withCheck({ receipt: checkReceipt({ argv: ['npm', 'run', 'x'] }) })],
   ['check_other_posture', withCheck({ posture: 'confined' })],

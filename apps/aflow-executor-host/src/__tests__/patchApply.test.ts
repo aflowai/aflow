@@ -13,6 +13,7 @@ import { promisify } from 'node:util';
 import { PayloadAccessError } from '@aflow/executor-runtime';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { mergeIntoCheckout } from '../baseMerge.js';
 import { PUSH_REQUIRED_OPTIONS } from '../bindings.js';
 import { createHostCommitCheckHandler } from '../handlers/checkHandlers.js';
 import { createHostCommitHandler } from '../handlers/commitHandlers.js';
@@ -21,7 +22,12 @@ import { createHostProcessHandler } from '../handlers/processHandlers.js';
 import { noPushApprovals } from './fixtures/pushApprovals.js';
 import { fetchedBranch, fetchHeadSource } from '../pushBase.js';
 import { issueScanReceipt } from '../scanReceipt.js';
-import { INLINE_DIFF_CAP_BYTES } from '../worktree.js';
+import {
+  commitIdentityArgs,
+  INLINE_DIFF_CAP_BYTES,
+  prepareWorktree,
+  removeWorktree,
+} from '../worktree.js';
 
 const run = promisify(execFile);
 
@@ -1068,15 +1074,105 @@ describe('measuring what a push of the commit would add', () => {
       expect(await pushedBranch()).toBe(sha);
     }, 30_000);
 
-    it('scans the range from where origin moved the base to, and pushes on that scan', async () => {
-      const { range, sha } = await measured();
-      const receipt = await scanned(range);
-      const now = await pushedElsewhere();
-      const { result, output } = await push(range, 'origin', receipt);
-      expect(result.status).toBe('SUCCEEDED');
-      expect(output?.['rescanned']).toBe(`${now}..${sha}`);
-      expect(await pushedBranch()).toBe(sha);
-    }, 30_000);
+    describe('a base that moved between the scan and the push (Plan 339 D3)', () => {
+      /** The parents of `commit`, in order. */
+      async function parentsOf(commit: string): Promise<string[]> {
+        return (await git(root, 'rev-list', '--parents', '--no-walk', commit))
+          .trim()
+          .split(' ')
+          .slice(1);
+      }
+
+      it('merges a base that merges cleanly and pushes the merge, recording it', async () => {
+        const { range, from, sha } = await measured();
+        const receipt = await scanned(range);
+        const now = await pushedElsewhere();
+        const { result, output } = await push(range, 'origin', receipt);
+        expect(result.status).toBe('SUCCEEDED');
+
+        const head = await pushedBranch();
+        expect(head).toBeDefined();
+        expect(head).not.toBe(sha);
+        expect(await parentsOf(head ?? '')).toEqual([sha, now]);
+        expect(output?.['baseMerge']).toEqual({
+          baseMoved: true,
+          scannedBase: from,
+          base: now,
+          branchCommit: sha,
+          commit: head,
+        });
+        expect(output?.['rescanned']).toBe(`${now}..${head ?? ''}`);
+        expect(output?.['command']).toContain(`${head ?? ''}:refs/heads/aflow/x`);
+        // Under the operator's commit identity, holding both parents' changes.
+        expect(
+          (await git(root, 'log', '-1', '--format=%an <%ae>|%cn <%ce>', head ?? '')).trim(),
+        ).toBe('T <t@e.com>|T <t@e.com>');
+        expect(await git(root, 'show', `${head ?? ''}:c.txt`)).toBe('pushed by someone else\n');
+        expect(await git(root, 'show', `${head ?? ''}:a.txt`)).toBe('one\nFIXED\nthree\n');
+      }, 30_000);
+
+      it('refuses a base that conflicts with base_conflicts, naming the files, with nothing pushed', async () => {
+        const { range, from, sha } = await measured();
+        const receipt = await scanned(range);
+        const now = await pushedElsewhere('a.txt', 'one\nCHANGED ELSEWHERE\nthree\n');
+        const { result, message, output } = await push(range, 'origin', receipt);
+        expect(result.status).toBe('FAILED');
+        expect(message).toContain(`\`origin/main\` moved from \`${from}\` to \`${now}\``);
+        expect(message).toContain(
+          `\`${sha}\` no longer merges into it cleanly: \`a.txt\` conflict`,
+        );
+        expect(message).toContain('The remedy is the merge round');
+        expect(message).toContain('`mergeFrom: origin/main`');
+        expect(message).toContain('Nothing was pushed');
+        expect(output?.['baseMerge']).toBeUndefined();
+        expect(await pushedBranch()).toBeUndefined();
+      }, 30_000);
+
+      it('pushes the commit unchanged, recording no merge, where the base has not moved', async () => {
+        const { range, sha } = await measured();
+        const { result, output } = await push(range, 'origin', await scanned(range));
+        expect(result.status).toBe('SUCCEEDED');
+        expect(await pushedBranch()).toBe(sha);
+        expect(output).not.toHaveProperty('baseMerge');
+        expect(output).not.toHaveProperty('checkedMerge');
+        expect(output).not.toHaveProperty('rescanned');
+      }, 30_000);
+
+      it("makes the merge whose tree merge-tree writes for its parents, as a commission's merge does", async () => {
+        const { range, sha } = await measured();
+        const receipt = await scanned(range);
+        const now = await pushedElsewhere();
+        const { result } = await push(range, 'origin', receipt);
+        expect(result.status).toBe('SUCCEEDED');
+        const head = (await pushedBranch()) ?? '';
+        const tree = (await git(root, 'rev-parse', `${head}^{tree}`)).trim();
+
+        const written = (await git(root, 'merge-tree', '--write-tree', sha, now)).trim();
+        expect(tree).toBe(written);
+
+        // The merge Plan 315 D15 makes in a commission's checkout, of the same parents.
+        const scratch = await mkdtemp(join(tmpdir(), 'aflow-push-merge-'));
+        const checkout = await prepareWorktree(root, scratch, 'merge', {
+          dependencies: 'none',
+          at: sha,
+        });
+        try {
+          const commissioned = await mergeIntoCheckout(
+            checkout,
+            now,
+            await commitIdentityArgs(root),
+          );
+          expect(commissioned?.conflicts).toEqual([]);
+          // The checkout's merge lives in the checkout's own git directory.
+          expect(
+            (await git(checkout.path, 'rev-parse', `${commissioned?.commit ?? ''}^{tree}`)).trim(),
+          ).toBe(tree);
+        } finally {
+          await removeWorktree(checkout.path);
+          await rm(scratch, { recursive: true, force: true });
+        }
+      }, 30_000);
+    });
 
     it('pushes on its own scan where the executor restarted since the receipt was issued', async () => {
       const { range, sha } = await measured();
@@ -1093,8 +1189,11 @@ describe('measuring what a push of the commit would add', () => {
       const now = await pushedElsewhere();
       const { result, output } = await push(range, 'origin', stale);
       expect(result.status).toBe('SUCCEEDED');
-      expect(output?.['rescanned']).toBe(`${now}..${sha}`);
-      expect(await pushedBranch()).toBe(sha);
+      const head = (await pushedBranch()) ?? '';
+      expect((await git(root, 'rev-list', '--parents', '--no-walk', head)).trim()).toBe(
+        `${head} ${sha} ${now}`,
+      );
+      expect(output?.['rescanned']).toBe(`${now}..${head}`);
     }, 30_000);
 
     it('clears nothing with a receipt it cannot read: its own scan finds what is there', async () => {
@@ -1224,20 +1323,6 @@ describe('measuring what a push of the commit would add', () => {
         `\`aflow/x\` is at \`${sha}\`, which does not hold \`${beside}\``,
       );
       expect((await git(root, 'rev-parse', 'aflow/x')).trim()).toBe(sha);
-    }, 30_000);
-
-    it('names the merge round where the moved base conflicts with the commit, with nothing pushed', async () => {
-      const { range, from, sha } = await measured();
-      const receipt = await scanned(range);
-      const now = await pushedElsewhere('a.txt', 'one\nCHANGED ELSEWHERE\nthree\n');
-      const { result, message } = await push(range, 'origin', receipt);
-      expect(result.status).toBe('FAILED');
-      expect(message).toContain(`\`origin/main\` moved from \`${from}\` to \`${now}\``);
-      expect(message).toContain(`\`${sha}\` no longer merges into it cleanly: \`a.txt\` conflict`);
-      expect(message).toContain('The remedy is the merge round');
-      expect(message).toContain('`mergeFrom: origin/main`');
-      expect(message).toContain('Nothing was pushed');
-      expect(await pushedBranch()).toBeUndefined();
     }, 30_000);
 
     it('fails when origin rewound the base, which would send what the scan left out', async () => {

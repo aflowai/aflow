@@ -160,8 +160,38 @@ export interface PushHistory {
   readonly holds: (commit: string, ancestor: string) => Promise<boolean>;
   /** The paths a merge of `sha` into `base` would leave conflicted. */
   readonly conflicts: (base: string, sha: string) => Promise<string[]>;
+  /**
+   * Merge `base` into `sha` as a commission's merge is made, `sha` the first
+   * parent, under `message`: the merge commit's sha, or nothing where they conflict.
+   */
+  readonly merge: (sha: string, base: string, message: string) => Promise<string | undefined>;
+  /** The parents of `commit`, in order, as full shas. */
+  readonly parents: (commit: string) => Promise<string[]>;
   /** A scan of `range` for secrets, as `host.commit.scan` reads one. */
   readonly scanSecrets: (range: string) => Promise<HostCommitScanOutput>;
+}
+
+/** The merge of a moved base a push sends in place of the commit its scan ended at. */
+export interface PushBaseMerge {
+  readonly baseMoved: true;
+  /** Where `origin/<pushBase>` was when the scan read the range, as a full sha. */
+  readonly scannedBase: string;
+  /** Where it is now, the merge's second parent, as a full sha. */
+  readonly base: string;
+  /** The commit the scan ended at, the merge's first parent, as a full sha. */
+  readonly branchCommit: string;
+  /** The merge commit the push sends, as a full sha. */
+  readonly commit: string;
+}
+
+/** The check receipt for the branch's commit, accepted for the merge the push sends. */
+export interface PushCheckedMerge {
+  /** The commit the checks passed on, the merge's first parent. */
+  readonly checked: string;
+  /** The base the merge merged, its second parent. */
+  readonly base: string;
+  /** The merge commit the push sends. */
+  readonly commit: string;
 }
 
 /** What a push that cleared the gate records with it. */
@@ -170,6 +200,12 @@ export interface PushClearance {
   readonly checkedUnder?: HostSandboxPosture;
   /** The range the push scanned in its own step, where its receipt did not cover what it sends. */
   readonly rescanned?: string;
+  /** The refspec git is to push, where it is not the one the push named: the merge's. */
+  readonly refspec?: string;
+  /** The merge of the moved base the push sends, where it made one. */
+  readonly baseMerge?: PushBaseMerge;
+  /** The check receipt it accepted for that merge, where the folder declares checks. */
+  readonly checkedMerge?: PushCheckedMerge;
 }
 
 /** The range a push sends and how it was cleared of secrets: by its receipt, or by a scan of its own. */
@@ -179,6 +215,8 @@ interface ScannedRange {
   readonly range: string;
   readonly outcome: ScanOutcome;
   readonly rescanned: boolean;
+  /** The merge of `base` the range ends at, where the base moved and merged cleanly. */
+  readonly merge?: PushBaseMerge;
 }
 
 /**
@@ -206,6 +244,33 @@ function publishedBranch(refspecs: readonly string[]): string {
     : 'the branch';
 }
 
+/** The refusal of a push whose moved base conflicts with its commit, naming the merge round. */
+function conflictRefusal(
+  moving: {
+    readonly pushBase: string;
+    readonly from: string;
+    readonly to: string;
+    readonly sha: string;
+    readonly branch: string;
+  },
+  conflicted: readonly string[],
+): ScanReceiptError {
+  const { pushBase, branch } = moving;
+  const named =
+    conflicted.length > 0
+      ? `${conflicted.map((path) => `\`${path}\``).join(', ')} conflict`
+      : 'git reports a conflict';
+  return new ScanReceiptError(
+    `\`origin/${pushBase}\` moved from \`${moving.from}\` to \`${moving.to}\` since the ` +
+      `scan, and \`${moving.sha}\` no longer merges into it cleanly: ${named}. ` +
+      'Nothing was pushed. ' +
+      `The remedy is the merge round: commission the fix from \`${branch}\` with ` +
+      `\`mergeFrom: origin/${pushBase}\`, and publish it onto \`${branch}\` with the ` +
+      'sha the commission reports in `merge.from` as `mergeFrom`.',
+    'base_conflicts',
+  );
+}
+
 /**
  * The range the push sends, from where `origin/<pushBase>` is now, and how it
  * was cleared of secrets. The receipt clears it where this process signed it
@@ -214,6 +279,11 @@ function publishedBranch(refspecs: readonly string[]): string {
  * scanned here, provided the receipt's own base is one `origin` still holds:
  * a base it no longer holds was rewound, and the push would carry commits the
  * publication's scan and review read as already there.
+ *
+ * Where `origin` moved on to a commit the scanned commit does not hold, and
+ * the two merge without conflict, the push sends their merge instead (Plan
+ * 339 D3), and the range scanned here ends at it: the branch's commits and
+ * the merge commit. Only a true conflict is refused, naming the merge round.
  */
 async function rangeToPush(
   push: PushUnderScan & { readonly pushBase: string; readonly receipt: string },
@@ -242,30 +312,44 @@ async function rangeToPush(
       'other_range',
     );
   }
+  let merge: PushBaseMerge | undefined;
   if (moved) {
+    const branch = destinationBranch(refspec);
+    const moving = { pushBase, from: claimed.base, to: measured, sha: claimed.sha, branch };
     const conflicted = await history.conflicts(measured, claimed.sha);
-    if (conflicted.length > 0) {
-      const branch = destinationBranch(refspec);
-      throw new ScanReceiptError(
-        `\`origin/${pushBase}\` moved from \`${claimed.base}\` to \`${measured}\` since the ` +
-          `scan, and \`${claimed.sha}\` no longer merges into it cleanly: ` +
-          `${conflicted.map((path) => `\`${path}\``).join(', ')} conflict. Nothing was pushed. ` +
-          `The remedy is the merge round: commission the fix from \`${branch}\` with ` +
-          `\`mergeFrom: origin/${pushBase}\`, and publish it onto \`${branch}\` with the ` +
-          'sha the commission reports in `merge.from` as `mergeFrom`.',
-        'base_conflicts',
+    if (conflicted.length > 0) throw conflictRefusal(moving, conflicted);
+    if (!(await history.holds(claimed.sha, measured))) {
+      const commit = await history.merge(
+        claimed.sha,
+        measured,
+        `Merge origin/${pushBase} at ${measured} into ${branch}`,
       );
+      if (commit === undefined) throw conflictRefusal(moving, []);
+      merge = {
+        baseMoved: true,
+        scannedBase: claimed.base,
+        base: measured,
+        branchCommit: claimed.sha,
+        commit: commit.toLowerCase(),
+      };
     }
   }
-  const scan = await history.scanSecrets(range);
+  const sent = merge === undefined ? range : `${measured}..${merge.commit}`;
+  const scan = await history.scanSecrets(sent);
   if (scan.unflaggedRange === undefined) {
     throw new ScanReceiptError(
-      `The push scanned \`${range}\`, the range it sends, and found what looks like a ` +
+      `The push scanned \`${sent}\`, the range it sends, and found what looks like a ` +
         `secret. ${scan.summary} Nothing was pushed.`,
       'secret_found',
     );
   }
-  return { base: measured, range, outcome: outcomeOf(scan), rescanned: true };
+  return {
+    base: measured,
+    range: sent,
+    outcome: outcomeOf(scan),
+    rescanned: true,
+    ...(merge !== undefined ? { merge } : {}),
+  };
 }
 
 /**
@@ -282,7 +366,9 @@ async function rangeToPush(
  *
  * The approval stays the one the operator gave for the receipt the push
  * carries: a range scanned again starts at or above the receipt's, so it adds
- * nothing the operator did not see.
+ * nothing the operator did not see. A merge of a moved base adds only what
+ * `origin` already holds. A push that sends one records it, with the check
+ * receipt it accepted for it, and names its refspec for git to push.
  *
  * Under `unless-unreviewed` a cleared range goes out with no grant: whether a
  * review cleared it is the publication skill's to establish, and nothing this
@@ -342,6 +428,7 @@ export async function requireScannedPush(
     refspec,
     now,
   );
+  const { merge } = sent;
   const checkedUnder = await requireCheckedPush(
     {
       bindingId,
@@ -349,6 +436,14 @@ export async function requireScannedPush(
       sha: claimed.sha,
       base: sent.base,
       baseHolds: (base) => push.history.holds(sent.base, base),
+      ...(merge !== undefined
+        ? {
+            merge: {
+              commit: merge.commit,
+              parents: await push.history.parents(merge.commit),
+            },
+          }
+        : {}),
       ...push.checks,
     },
     now,
@@ -356,6 +451,21 @@ export async function requireScannedPush(
   const clearance: PushClearance = {
     ...(checkedUnder !== undefined ? { checkedUnder } : {}),
     ...(sent.rescanned ? { rescanned: sent.range } : {}),
+    ...(merge !== undefined
+      ? {
+          refspec: `${merge.commit}:${refspec.slice(refspec.indexOf(':') + 1)}`,
+          baseMerge: merge,
+          ...(checkedUnder !== undefined
+            ? {
+                checkedMerge: {
+                  checked: merge.branchCommit,
+                  base: merge.base,
+                  commit: merge.commit,
+                },
+              }
+            : {}),
+        }
+      : {}),
   };
 
   const asksAlways = push.pushApproval === 'always';

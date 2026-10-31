@@ -160,6 +160,81 @@ export async function mergeConflictPaths(
 }
 
 /**
+ * Merge `base` into `sha` as one merge commit made in the object store alone,
+ * under `identity`: `sha` its first parent and `base` its second, as
+ * `merge --no-ff` in a checkout of `sha` makes it. The tree is the one
+ * `merge-tree` writes for the two under the same pins as
+ * {@link mergeIntoCheckout}, so it is a function of the two parents. Answers
+ * the merge commit's sha, or nothing where the two conflict: no checkout, ref
+ * or index is touched either way.
+ */
+export async function mergeBaseIntoCommit(
+  root: string,
+  sha: string,
+  base: string,
+  identity: readonly string[],
+  message: string,
+): Promise<string | undefined> {
+  let tree: string;
+  try {
+    tree = await git(
+      root,
+      [...MERGE_PINS, 'merge-tree', '--write-tree', '--no-messages', sha, base],
+      APPLY_OUTPUT_CAP_BYTES,
+    );
+  } catch (error) {
+    // 1 is merge-tree's "conflicts": there is no merge to make.
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === 1) {
+      return undefined;
+    }
+    throw new WorktreeError(
+      `\`${base}\` could not be merged into \`${sha}\`: ${firstLine(error)}`,
+      'git_failed',
+    );
+  }
+  const written = tree.split('\n')[0]?.trim() ?? '';
+  if (!/^[0-9a-f]{40,64}$/.test(written)) {
+    throw new WorktreeError(
+      `Merging \`${base}\` into \`${sha}\` wrote no tree git named.`,
+      'git_failed',
+    );
+  }
+  const commit = await git(
+    root,
+    [...identity, 'commit-tree', written, '-p', sha, '-p', base, '-m', message],
+    APPLY_OUTPUT_CAP_BYTES,
+  );
+  return commit.trim();
+}
+
+/** The parents of `commit`, in order, as full shas, read from the commit object. */
+export async function commitParents(root: string, commit: string): Promise<string[]> {
+  const listed = await git(root, [
+    'rev-list',
+    '--parents',
+    '--no-walk',
+    '--end-of-options',
+    commit,
+  ]);
+  return listed.trim().split(/\s+/).slice(1);
+}
+
+/**
+ * The `-c` arguments a push's merge of a moved base is committed under: the
+ * operator's commit identity, as a commission's merge is.
+ */
+export async function pushMergeIdentityArgs(root: string): Promise<string[]> {
+  return await commitIdentityArgs(
+    root,
+    (keys) =>
+      "A push whose base moved merges the base under the operator's commit identity, as a " +
+      `commission's merge is, and neither this repository nor the global git config sets ` +
+      `${keys}. Nothing was pushed. Set ${keys} in the repository, or globally, then publish ` +
+      'the branch again as it stands.',
+  );
+}
+
+/**
  * The `-c` arguments a commission's merge is committed under: the operator's
  * commit identity, the one the publication's commit carries.
  */

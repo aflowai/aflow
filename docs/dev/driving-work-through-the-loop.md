@@ -415,8 +415,11 @@ lists it.
   installed bundles through the Store when a catalog version moved.
 - **A publication outlives a moved `main` and a restart** (Plan 315 F113, F117). Where
   `origin/main` moved on, or the host executor restarted, between a publication's scan and
-  its push, the push scans the range it sends itself and goes ahead; where the move
-  conflicts with the commit, it is refused naming the merge round. Checks do not survive a
+  its push, the push scans the range it sends itself and goes ahead. Where `main` moved
+  and merges into the commit without conflict, the push merges it, `--no-ff` under the
+  operator's commit identity, and pushes the merge on the commit's check receipt
+  (Plan 339 D3). Its output records the merge as `baseMerge`. Where the move conflicts
+  with the commit, it is refused naming the merge round and the conflicting files. Checks do not survive a
   restart, so `hb_aflow`'s push after one is refused for its check receipt. A refused push
   leaves its reviewed commit on the branch, and Local Publish publishes it as it stands:
   the branch, its head as `baseSha`, and no patch, `mergeFrom` or `commitMessage` — never
