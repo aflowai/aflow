@@ -960,14 +960,11 @@ export async function applyLocalProfileSessionGenerationMigration(
 }
 
 /**
- * The local edition's profile PIN (Plan 335 P4).
- *
- * Every existing user starts with null, which is a profile with no PIN. A set
- * PIN is a salted scrypt hash, never the digits themselves.
+ * Drops the local edition's profile PIN (Plan 335 §14). Profiles serve one
+ * person, so a PIN guards nothing, and every stored hash goes with the column.
  */
-export async function applyLocalProfilePinMigration(sqlClient: postgres.Sql): Promise<void> {
+export async function applyLocalProfilePinRemovalMigration(sqlClient: postgres.Sql): Promise<void> {
   await sqlClient.unsafe(`
-    ALTER TABLE public.users
-      ADD COLUMN IF NOT EXISTS profile_pin_hash text;
+    ALTER TABLE public.users DROP COLUMN IF EXISTS profile_pin_hash;
   `);
 }

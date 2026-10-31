@@ -22,7 +22,7 @@ export {
   applyConciergeConfigRemovalMigration,
   applyAgentModelAllowlistMigration,
   applyLocalProfileSessionGenerationMigration,
-  applyLocalProfilePinMigration,
+  applyLocalProfilePinRemovalMigration,
   applyIdentityProviderKeyMigration,
   seedPublicTenantFreemiumDefaults,
   seedModelCatalog,

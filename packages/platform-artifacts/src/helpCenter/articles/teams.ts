@@ -42,14 +42,14 @@ Organisation-wide membership and invitations are under **Tenant Admin** at the f
   {
     id: 'local-profiles',
     theme: 'teams',
-    question: 'How do several people share Aflow Local?',
+    question: 'How do I keep separate profiles in Aflow Local?',
     summary:
-      'Aflow Local has no invitations and no members. People who share one install each get a profile, which the owner adds and manages under Settings → Profiles. Each profile has its own spaces, conversations and memory, and model keys stored for the whole install are shared. Once an install has two profiles, each browser opens on Who is using Aflow? and the person picks their profile. To switch, open the menu under your avatar at the foot of the sidebar. The owner can lock a profile with a PIN of four to six digits, and the picker then asks for it. A browser that has not picked a profile skips the picker on an install with one profile and no PIN.',
+      'Aflow Local has no invitations and no members. It serves one person, who can keep separate profiles for different access and topics. The owner profile adds and manages them under Settings → Profiles. Each profile has its own spaces, conversations and memory, and model keys stored for the whole install are shared. Once an install has two profiles, each browser opens on Who is using Aflow? and one tap on a profile opens it. To switch, open the menu under your avatar at the foot of the sidebar. A browser that has not picked a profile skips the picker on an install with one profile.',
     body: `**Where:** **Settings** → **Profiles** (the owner only), and the menu under your avatar at the foot of the sidebar
 
 ## What a profile is
 
-Each person who shares this install has a profile with a name and an avatar. A profile has its own spaces, conversations and memory. Model keys stored for the whole install are shared by every profile.
+A profile keeps one part of your work apart from the rest, such as a topic or a set of access. Each has a name and an avatar. A profile has its own spaces, conversations and memory. Model keys stored for the whole install are shared by every profile.
 
 ## Adding a profile
 
@@ -61,27 +61,9 @@ The new profile starts with a space of its own called Personal, and it does not 
 
 ## Who is using Aflow?
 
-An install with two or more profiles opens on **Who is using Aflow?** in a browser that has not picked a profile yet. It shows each profile's avatar and name. Pick yours, and Aflow opens in the space that profile last used. The browser remembers the choice until someone switches profile or the browser's cookies are cleared. An install with one profile and no PIN skips this screen for a browser that has not picked a profile. A browser that picked a profile which has since been removed sees this screen once more, even when one profile is left.
+An install with two or more profiles opens on **Who is using Aflow?** in a browser that has not picked a profile yet. It shows each profile's avatar and name. Tap one, and Aflow opens in the space that profile last used. The browser remembers the choice until someone switches profile or the browser's cookies are cleared. An install with one profile skips this screen for a browser that has not picked a profile. A browser that picked a profile which has since been removed sees this screen once more, even when one profile is left.
 
-A profile with a PIN shows **PIN** under its name. Pick it, enter its PIN and press **Continue**. A wrong PIN opens nothing, and after several wrong tries the prompt says how long to wait before the next one. A browser that has opened the profile with its PIN keeps a wait of its own, so wrong tries in another browser do not make it wait. An install whose only profile has a PIN asks for it in every browser that has not entered it yet.
-
-## Locking a profile with a PIN
-
-The owner sets each profile's PIN in **Settings** → **Profiles**.
-
-1. Press **Set PIN** on the profile, or **Change PIN** where it has one.
-2. Enter four to six digits, and enter them again.
-3. Press **Set PIN** or **Change PIN**.
-
-Every browser using that profile goes back to the picker, yours included when it is your own profile. Choose the profile there and enter the new PIN. Aflow stores the PIN as a one-way hash, never the digits themselves.
-
-A PIN keeps people at this browser out of each other's profiles. It does not protect a profile from anyone who can sign in to this computer's account, because that person can read the install's own files.
-
-## A forgotten PIN
-
-The owner presses **Reset PIN** on the profile and confirms. The profile has no PIN afterwards, and every browser using it goes back to the picker. Set a new PIN if the profile should stay locked. Only the owner sets or resets a PIN.
-
-Nobody above the owner can reset the owner's own PIN, so keep it somewhere safe. A request that carries the install's instance secret, from \`instance.env\`, still acts as the owner and can reset it with \`DELETE /v1/local-profiles/<profile id>/pin\`.
+Profiles have no PIN, because Aflow Local serves the one person who uses this computer. A profile separates your work. It does not keep anyone at this computer out of it.
 
 ## Switching profile
 
@@ -104,7 +86,6 @@ Press **Edit** on a profile, change its **Name** or choose another **Avatar**, a
       'profile',
       'profiles',
       'share',
-      'family',
       'avatar',
       'rename',
       'remove',
@@ -112,9 +93,6 @@ Press **Edit** on a profile, change its **Name** or choose another **Avatar**, a
       'choose',
       'login',
       'pin',
-      'lock',
-      'forgot pin',
-      'reset pin',
     ],
   },
   {

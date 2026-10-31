@@ -214,8 +214,8 @@ describeDb('local profiles (real DB)', () => {
       });
     });
 
-    // The room Plan 335 P4 needs: a PIN bumps the generation, and a session
-    // issued before it no longer starts the profile.
+    // A profile's removal bumps the generation, and a session issued before
+    // the bump no longer starts the profile.
     it('ends a session issued before the profile generation was bumped', async () => {
       const issuedBefore = browser(second);
       const generation = await bumpLocalProfileSessionGeneration(db, second);

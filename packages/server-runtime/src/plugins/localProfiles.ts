@@ -1,6 +1,6 @@
 /**
  * Local profiles as the API sees them (Plan 335 P1): the session that names
- * one, and whether the install has more than one or a single locked one (P4).
+ * one, and whether the install has more than one.
  *
  * A profile is a `users` row with an active membership in the pinned tenant.
  * The session is a signed user id, its issue time and the user's session
@@ -105,33 +105,11 @@ export async function readLocalProfileSessionGeneration(
 }
 
 /**
- * What the picker reads before it issues a session: the user's generation and
- * PIN hash, in one row, or null when no such user exists.
- *
- * One read, because a PIN and its generation bump are written together. Two
- * reads could pair the old PIN with the new generation and issue a session
- * the new PIN never let through.
- */
-export async function readLocalProfileSessionGate(
-  db: PostgresJsDatabase,
-  userId: string,
-): Promise<{ generation: number; pinHash: string | null } | null> {
-  const rows = await db
-    .select({ generation: users.profileSessionGeneration, pinHash: users.profilePinHash })
-    .from(users)
-    .where(eq(users.id, userId))
-    .limit(1);
-  return rows[0] ?? null;
-}
-
-/**
  * Ends every profile session issued to the user so far, and returns the
  * generation a new session must carry.
  *
- * Call it whenever a profile's authentication state changes. Plan 335 P4
- * calls it when a PIN is set, changed or reset, in the transaction that
- * writes the PIN, so a session issued before the PIN cannot start a locked
- * profile (§10). P2 calls it before removing a profile.
+ * Call it whenever a profile's authentication state changes. Plan 335 P2 calls
+ * it before removing a profile, so a session in use is refused from then on.
  */
 export async function bumpLocalProfileSessionGeneration(
   db: PostgresJsDatabase,
@@ -147,28 +125,22 @@ export async function bumpLocalProfileSessionGeneration(
   return generation;
 }
 
-/**
- * What a read of the pinned tenant's profiles answers.
- *
- * - `one`: a single profile with no PIN.
- * - `one-locked`: a single profile locked with a PIN (Plan 335 P4).
- * - `several`: two or more profiles.
- */
-export type ReadLocalProfileCount = 'one' | 'one-locked' | 'several';
+/** What a read of the pinned tenant's profiles answers: one, or two and more. */
+export type ReadLocalProfileCount = 'one' | 'several';
 
 /**
- * How many profiles the pinned tenant has, and whether a single one is locked.
+ * How many profiles the pinned tenant has.
  *
  * Reads at most two rows, because the rule this feeds asks only that. A
  * service principal is not a profile, so only human users count. No row at
- * all answers `one`, as the count did before a PIN existed.
+ * all answers `one`.
  */
 export async function readLocalProfileCount(
   db: PostgresJsDatabase,
   tenantId: string,
 ): Promise<ReadLocalProfileCount> {
   const rows = await db
-    .select({ userId: tenantMemberships.userId, pinHash: users.profilePinHash })
+    .select({ userId: tenantMemberships.userId })
     .from(tenantMemberships)
     .innerJoin(users, eq(users.id, tenantMemberships.userId))
     .where(
@@ -179,8 +151,7 @@ export async function readLocalProfileCount(
       ),
     )
     .limit(2);
-  if (rows.length > 1) return 'several';
-  return rows[0]?.pinHash != null ? 'one-locked' : 'one';
+  return rows.length > 1 ? 'several' : 'one';
 }
 
 /** How long a profile count answers before the next request reads it again. */
@@ -188,8 +159,7 @@ export const LOCAL_PROFILE_COUNT_TTL_MS = 5_000;
 
 /**
  * What the auth plugin knows of the profile count. `unread` means no read has
- * succeeded within the lifetime, and no earlier read saw two profiles or a
- * locked one.
+ * succeeded within the lifetime, and no earlier read saw two profiles.
  */
 export type LocalProfileCount = ReadLocalProfileCount | 'unread';
 
@@ -207,12 +177,11 @@ export type CachedLocalProfileCount = (() => Promise<LocalProfileCount>) & {
  * concurrent callers share.
  *
  * The returned function never rejects. When a read fails, a count last read
- * as two or more, or as one locked profile, still answers as it was read.
- * Either refuses a browser and grants nothing. Anything else answers `unread`:
- * no count since the process started, or a stale count of one. A second
- * profile or a PIN may exist in either case, so neither may grant the
- * sole-profile owner (Plan 335 §10). The failure is not cached, so the next
- * request reads again.
+ * as two or more still answers `several`, which refuses a browser and grants
+ * nothing. Anything else answers `unread`: no count since the process started,
+ * or a stale count of one. A second profile may exist in either case, so
+ * neither may grant the sole-profile owner (Plan 335 §10). The failure is not
+ * cached, so the next request reads again.
  *
  * `drop` forgets the count, so the next request reads it again. A read already
  * in flight still answers its callers but no longer fills the cache, because
@@ -245,7 +214,7 @@ export function cacheLocalProfileCount(
         return answer;
       } catch (err) {
         opts.onReadError?.(err);
-        return cached === undefined || cached.count === 'one' ? 'unread' : cached.count;
+        return cached?.count === 'several' ? 'several' : 'unread';
       }
     })();
     inFlight = pending;

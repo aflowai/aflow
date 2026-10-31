@@ -1,7 +1,7 @@
 /**
  * A local install's profiles: the picker that issues a profile session
  * (Plan 335 P3), and the owner's management (P2) — list, add, rename, set the
- * avatar and remove — with each profile's PIN (P4): set, change and reset.
+ * avatar and remove.
  *
  * Registered in every edition and refused outside the local one, because a
  * profile is the local edition's way of naming who is at the keyboard. The
@@ -10,12 +10,11 @@
  * The picker answers a request that presents the instance secret, with or
  * without a profile session, because a browser with none is the one that has
  * to choose. It is the only path that issues a session, and it issues one only
- * for a profile of the pinned tenant, and for a locked one only with its PIN.
+ * for a profile of the pinned tenant.
  *
- * Management is owner only, setting and resetting a profile's PIN included.
- * The operator's own profile session, the bare instance secret and the
- * sole-profile owner all resolve to the owner role. Any other profile session
- * is refused, whatever its role.
+ * Management is owner only. The operator's own profile session, the bare
+ * instance secret and the sole-profile owner all resolve to the owner role.
+ * Any other profile session is refused, whatever its role.
  */
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type postgres from 'postgres';
@@ -31,24 +30,18 @@ import {
   LocalProfileListResponseSchema,
   LocalProfileRemovalPreviewSchema,
   LocalProfileSchema,
-  LocalProfileSessionRequestSchema,
   LocalProfileSessionResponseSchema,
   RemoveLocalProfileResponseSchema,
-  SetLocalProfilePinRequestSchema,
   UpdateLocalProfileRequestSchema,
-  type LocalProfilePinRefusalCode,
   type LocalProfile,
   type LocalProfileChoice,
 } from '@aflow/schemas';
 import { resolvePrincipalActorKind } from '../utils/actorContext.js';
 import { presentsInstanceSecret, resolveInstanceSecret } from '../plugins/localInstanceAuth.js';
-import { issueLocalProfileSession, readLocalProfileSessionGate } from '../plugins/localProfiles.js';
 import {
-  LocalProfilePinAttempts,
-  issueLocalProfilePinMark,
-  readLocalProfilePinMark,
-  verifyLocalProfilePin,
-} from '../services/localProfilePin.js';
+  issueLocalProfileSession,
+  readLocalProfileSessionGeneration,
+} from '../plugins/localProfiles.js';
 import {
   LocalProfileError,
   addLocalProfile,
@@ -56,17 +49,11 @@ import {
   previewLocalProfileRemoval,
   readLocalProfile,
   removeLocalProfile,
-  resetLocalProfilePin,
-  setLocalProfilePin,
   updateLocalProfile,
   type LocalProfileRefusal,
 } from '../services/localProfiles.js';
 
-const ErrorSchema = z.object({
-  error: z.string(),
-  code: z.string().optional(),
-  message: z.string(),
-});
+const ErrorSchema = z.object({ error: z.string(), message: z.string() });
 
 const REFUSAL_STATUS: Record<LocalProfileRefusal, 404 | 409> = {
   not_found: 404,
@@ -76,27 +63,13 @@ const REFUSAL_STATUS: Record<LocalProfileRefusal, 404 | 409> = {
 
 const OWNER_ONLY = { authz: { resource: 'tenant' as const, action: 'owner_admin' as const } };
 
-/** What both scopes share: the count of wrong PIN guesses and the live PIN marks. */
-interface PinScope {
-  pinAttempts: LocalProfilePinAttempts;
-}
-
-// A uuid reads the same in any letter case, and the PIN counts and marks are
-// keyed by its text. Lower case is the form Postgres answers, so every case
-// variant of one profile id keys one count.
-const ProfileParamsSchema = z.object({
-  userId: z
-    .string()
-    .uuid()
-    .transform((id) => id.toLowerCase()),
-});
+const ProfileParamsSchema = z.object({ userId: z.string().uuid() });
 
 const toChoice = (profile: LocalProfile): LocalProfileChoice => ({
   userId: profile.userId,
   displayName: profile.displayName,
   avatar: profile.avatar,
   isOwner: profile.isOwner,
-  hasPin: profile.hasPin,
 });
 
 export const localProfileRoutes: FastifyPluginAsync = async (fastify) => {
@@ -113,11 +86,9 @@ export const localProfileRoutes: FastifyPluginAsync = async (fastify) => {
   });
   // Two scopes, so the owner rule never reaches the picker. `authenticate`
   // refuses a browser with no session once a second profile exists, and that
-  // browser is the one the picker must answer. Both scopes share the count of
-  // wrong PIN guesses and the live PIN marks, so a new PIN or a reset clears them.
-  const pinAttempts = new LocalProfilePinAttempts();
-  await fastify.register(localProfilePickerRoutes, { pinAttempts });
-  await fastify.register(localProfileManagementRoutes, { pinAttempts });
+  // browser is the one the picker must answer.
+  await fastify.register(localProfilePickerRoutes);
+  await fastify.register(localProfileManagementRoutes);
 };
 
 /**
@@ -125,12 +96,8 @@ export const localProfileRoutes: FastifyPluginAsync = async (fastify) => {
  *
  * Answers only the instance secret itself, never an API key, because a key
  * already names its user and has nothing to choose.
- *
- * A profile locked with a PIN gets its session only with that PIN (Plan 335
- * P4). The API decides it, never the web process (D3). A right PIN also
- * answers a PIN mark, which keys that browser's own count of wrong PINs.
  */
-const localProfilePickerRoutes: FastifyPluginAsync<PinScope> = (fastify, { pinAttempts }) => {
+const localProfilePickerRoutes: FastifyPluginAsync = (fastify) => {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
   const db = (): PostgresJsDatabase => fastify.appContext.db as PostgresJsDatabase;
 
@@ -177,17 +144,12 @@ const localProfilePickerRoutes: FastifyPluginAsync<PinScope> = (fastify, { pinAt
       schema: {
         tags: ['Local profiles'],
         summary: 'Issue the profile session for the profile a browser chose',
-        description:
-          'A profile locked with a PIN needs the PIN in the body. A missing or wrong PIN issues nothing.',
         params: ProfileParamsSchema,
-        // Fastify reads a post with no body as null, which is a choice with no PIN.
-        body: LocalProfileSessionRequestSchema.nullish(),
         response: {
           200: LocalProfileSessionResponseSchema,
           401: ErrorSchema,
           403: ErrorSchema,
           404: ErrorSchema,
-          429: ErrorSchema,
         },
       },
     },
@@ -204,107 +166,37 @@ const localProfilePickerRoutes: FastifyPluginAsync<PinScope> = (fastify, { pinAt
       const tenantId = pinnedTenant();
       const { userId } = request.params;
       const profile = await readLocalProfile(db(), tenantId, userId);
-      const gate = profile === null ? null : await readLocalProfileSessionGate(db(), userId);
-      if (profile === null || gate === null) {
+      const generation =
+        profile === null ? null : await readLocalProfileSessionGeneration(db(), userId);
+      if (profile === null || generation === null) {
         return reply.status(404).send({
           error: 'NotFound',
           message: 'No profile with that id on this install.',
         });
       }
-      const recordIssue = (outcome: 'success' | 'denied'): void => {
-        fastify.audit.record({
-          actor: {
-            userId: profile.userId,
-            kind: 'human',
-            authMethod: 'local',
-            tenantId,
-            tenantRole: profile.role,
-          },
-          category: 'security',
-          action: 'local_profile.session_issue',
-          outcome,
-          target: { resourceType: 'user', resourceId: profile.userId, tenantId },
-          request: { method: request.method, path: request.url },
-        });
-      };
-      const refusePin = (
-        status: 401 | 429,
-        code: LocalProfilePinRefusalCode,
-        message: string,
-      ): FastifyReply =>
-        reply.status(status).send({
-          error: status === 429 ? 'TooManyRequests' : 'Unauthorized',
-          code,
-          message,
-        });
-
-      let pinMark: string | undefined;
-      if (gate.pinHash !== null) {
-        const presentedMark = request.body?.pinMark;
-        // A mark signed before the last PIN change or reset, or one dropped
-        // from the profile's live marks, counts with the browsers that have none.
-        const signed =
-          presentedMark === undefined
-            ? null
-            : readLocalProfilePinMark(
-                presentedMark,
-                userId,
-                gate.generation,
-                resolveInstanceSecret(),
-              );
-        const mark = signed !== null && pinAttempts.isLive(userId, signed) ? signed : null;
-        const wait = pinAttempts.retryAfterSec(userId, mark);
-        if (wait > 0) {
-          void reply.header('retry-after', String(wait));
-          return refusePin(
-            429,
-            'PROFILE_PIN_THROTTLED',
-            `Too many wrong PINs for this profile. Try again in ${String(wait)} seconds.`,
-          );
-        }
-        const pin = request.body?.pin;
-        if (pin === undefined || pin === '') {
-          return refusePin(401, 'PROFILE_PIN_REQUIRED', 'This profile is locked. Enter its PIN.');
-        }
-        // Counted before the comparison, so guesses sent at once cannot all
-        // pass the wait while the first one is still being compared.
-        const guess = pinAttempts.fail(userId, mark);
-        if (!(await verifyLocalProfilePin(pin, gate.pinHash))) {
-          recordIssue('denied');
-          return refusePin(401, 'PROFILE_PIN_INCORRECT', 'That PIN is not right. Try again.');
-        }
-        // A live mark's count is its browser's own to clear. The unmarked
-        // count holds the guesses of every browser with no mark, so a right
-        // PIN there takes back only the guess it just added.
-        if (mark === null) pinAttempts.withdraw(guess);
-        else pinAttempts.clear(userId, mark);
-        // A browser keeps the live mark it has, so its count stays its own.
-        if (mark !== null && presentedMark !== undefined) {
-          pinAttempts.keepMark(userId, mark);
-          pinMark = presentedMark;
-        } else {
-          const issued = issueLocalProfilePinMark(userId, gate.generation, resolveInstanceSecret());
-          pinAttempts.keepMark(userId, issued.nonce);
-          pinMark = issued.mark;
-        }
-      }
-
-      const session = issueLocalProfileSession(userId, resolveInstanceSecret(), {
-        generation: gate.generation,
+      const session = issueLocalProfileSession(userId, resolveInstanceSecret(), { generation });
+      fastify.audit.record({
+        actor: {
+          userId: profile.userId,
+          kind: 'human',
+          authMethod: 'local',
+          tenantId,
+          tenantRole: profile.role,
+        },
+        category: 'security',
+        action: 'local_profile.session_issue',
+        outcome: 'success',
+        target: { resourceType: 'user', resourceId: profile.userId, tenantId },
+        request: { method: request.method, path: request.url },
       });
-      recordIssue('success');
-      return reply.send({
-        profile: toChoice(profile),
-        session,
-        ...(pinMark === undefined ? {} : { pinMark }),
-      });
+      return reply.send({ profile: toChoice(profile), session });
     },
   );
   return Promise.resolve();
 };
 
-/** The owner's management (Plan 335 P2), and each profile's PIN (P4). */
-const localProfileManagementRoutes: FastifyPluginAsync<PinScope> = (fastify, { pinAttempts }) => {
+/** The owner's management (Plan 335 P2). */
+const localProfileManagementRoutes: FastifyPluginAsync = (fastify) => {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
   const db = (): PostgresJsDatabase => fastify.appContext.db as PostgresJsDatabase;
 
@@ -498,69 +390,11 @@ const localProfileManagementRoutes: FastifyPluginAsync<PinScope> = (fastify, { p
         }),
       );
       if (removed === null) return reply;
-      pinAttempts.forget(removed.userId);
       // A cached count of several would keep refusing a browser with no
       // session after the install is back to one profile.
       fastify.dropLocalProfileCount();
       await audit(request, 'local_profile.remove', removed.userId);
       return reply.send(removed);
-    },
-  );
-
-  app.put(
-    '/:userId/pin',
-    {
-      config: OWNER_ONLY,
-      schema: {
-        tags: ['Local profiles'],
-        summary: "Set or change a profile's PIN, ending its sessions",
-        params: ProfileParamsSchema,
-        body: SetLocalProfilePinRequestSchema,
-        response: { 200: LocalProfileSchema, 403: ErrorSchema, 404: ErrorSchema },
-      },
-    },
-    async (request, reply) => {
-      const tenant = await request.requireTenant();
-      const profile = await unlessRefused(reply, () =>
-        setLocalProfilePin(db(), {
-          tenantId: tenant.tenantId,
-          userId: request.params.userId,
-          pin: request.body.pin,
-        }),
-      );
-      if (profile === null) return reply;
-      pinAttempts.forget(profile.userId);
-      // A cached count of one would keep granting a browser with no session
-      // the sole-profile owner after that profile is locked.
-      fastify.dropLocalProfileCount();
-      await audit(request, 'local_profile.pin_set', profile.userId);
-      return reply.send(profile);
-    },
-  );
-
-  app.delete(
-    '/:userId/pin',
-    {
-      config: OWNER_ONLY,
-      schema: {
-        tags: ['Local profiles'],
-        summary: "Reset a profile's PIN, ending its sessions",
-        params: ProfileParamsSchema,
-        response: { 200: LocalProfileSchema, 403: ErrorSchema, 404: ErrorSchema },
-      },
-    },
-    async (request, reply) => {
-      const tenant = await request.requireTenant();
-      const profile = await unlessRefused(reply, () =>
-        resetLocalProfilePin(db(), { tenantId: tenant.tenantId, userId: request.params.userId }),
-      );
-      if (profile === null) return reply;
-      pinAttempts.forget(profile.userId);
-      // A cached count of one locked profile would keep refusing a browser
-      // with no session after the PIN is gone.
-      fastify.dropLocalProfileCount();
-      await audit(request, 'local_profile.pin_reset', profile.userId);
-      return reply.send(profile);
     },
   );
   return Promise.resolve();
