@@ -4,7 +4,7 @@
 
 **Builds on:** Plan 331 (the resident, its wake on a run's end and its pending mark, D8's rule on the folder), Plan 321 (the Local PR Shepherd, its rules, its turn and its hand-over), Plan 315 (the local loop, D15's merge round, the push's own scan), Plan 180 (background work is declared and candidate-driven), Plan 337 (the decision card), Plan 333 (D2's writing rules).
 
-**Leaves alone:** the shepherd's rules and what each decision does, the push posture and the folder's push approval, the scan and its receipt, the merge round as Plan 315 D15 built it, the resident's board order, Plan 331 D8.
+**Leaves alone:** the shepherd's rules and what each decision does, the folder's push approval and when it asks the operator, the secret scan's rules and the range it reads from the measured base (D3 changes what the push sends and which checks' receipt it accepts), the merge round as Plan 315 D15 built it, the resident's board order, Plan 331 D8.
 
 ## Decision card
 
@@ -18,7 +18,7 @@
 - 440 shepherd runs have fired since midnight, against 77 publications and 61 commissions.
 - Two runs fire every five minutes whether or not a pull request is open.
 - With four pull requests open, a green one waited up to twenty minutes for its turn.
-- Two publications of one branch were approved and then failed at the push, because `main` moved in the twenty-five minutes between the scan and the push. Each cost a merge round of about thirty minutes.
+- Two publications of one branch were approved and then failed at the push, after `main` moved in the twenty-five minutes between the scan and the push. The refusal's exact cause is uncertain (§2), and P1 reads it before it builds. Each failure cost a merge round of about thirty minutes.
 - A person relayed every signal the loop needed: a run ending, a pull request going green, merging or conflicting, a node changing status, a gate resolving.
 
 **What it affects**

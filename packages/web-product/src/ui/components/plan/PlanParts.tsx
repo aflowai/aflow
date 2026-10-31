@@ -163,10 +163,10 @@ export function useReveal(): {
 }
 
 /**
- * An orb's size by its place. An orb's core is about 60% of its box, so a row's
- * orb draws its core at the size the row's dot had. The rail's header is larger.
+ * An orb's size by its place. An orb's core is about 60% of its box, so below a
+ * 28px box its state does not read. The rail's header is larger.
  */
-export const PLAN_ORB_SIZE = { row: 14, heading: 12, header: 20, rail: 36 } as const;
+export const PLAN_ORB_SIZE = { row: 28, heading: 28, header: 28, rail: 36 } as const;
 
 /**
  * An orb that shows a state the words beside it name (Plan 332 P6). It is
