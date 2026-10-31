@@ -90,6 +90,7 @@ function shepherdSchedule(overrides: Partial<AgentScheduleRow> = {}): AgentSched
     createdBySessionId: null,
     metadata: {},
     renewsScheduleId: null,
+    originalScheduleId: null,
     creatorUserId: OWNER,
     creatorTenantRole: 'member',
     creatorSpaceRole: 'editor',
@@ -252,6 +253,7 @@ describe('renewSchedule: a schedule near its cap is handed to exactly one succes
       inputTemplate: { input: 'tend', config: { scheduleId: { $schedule: 'id' } } },
       expiresAt: new Date('2099-11-23T08:00:00Z'),
       renewsScheduleId: PREDECESSOR,
+      originalScheduleId: PREDECESSOR,
     });
     expect(successor.nextFireAt).toBeInstanceOf(Date);
     expect(table.get(PREDECESSOR)?.status).toBe('expired');
@@ -274,6 +276,24 @@ describe('renewSchedule: a schedule near its cap is handed to exactly one succes
         renewsScheduleId: PREDECESSOR,
       });
     }
+  });
+
+  it("a renewal of a renewal names the chain's first schedule, not its predecessor", async () => {
+    const ORIGINAL = 'a0000000-0000-4000-8000-0000000000f0';
+    const { table, store } = memoryTable([
+      shepherdSchedule({
+        firingCount: nearCap,
+        renewsScheduleId: ORIGINAL,
+        originalScheduleId: ORIGINAL,
+      }),
+    ]);
+
+    await renewSchedule(store, renewal());
+
+    expect(table.get(scheduleSuccessorId(PREDECESSOR))).toMatchObject({
+      renewsScheduleId: PREDECESSOR,
+      originalScheduleId: ORIGINAL,
+    });
   });
 
   it('with headroom, creates none and leaves the schedule firing', async () => {

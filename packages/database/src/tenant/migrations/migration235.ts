@@ -1,37 +1,49 @@
 import type postgres from 'postgres';
 
 /**
- * Plan 327: `Full Access` and `Standard` carry `channel.message`; `Read Only`
- * carries its read mode.
+ * A renewal records the schedule its chain began with.
  *
- * Granted in every install, used or not. It reaches nothing where the channel
- * lane is absent: the catalog withholds `channel.*` there and dispatch refuses
- * it, so the profile only says what the tenant permits once a channel exists.
+ * A renewing schedule writes a successor every few dozen firings, so a chain
+ * grows without end. `original_schedule_id` names the first schedule of the
+ * chain on every renewal and stays NULL on the first schedule itself. A reader
+ * that wants a chain's newest renewal reads it through the index instead of
+ * walking every renewal from the start. The backfill walks each existing chain
+ * once.
  */
 export async function applyMigration235(
   sqlClient: postgres.Sql,
   schemaName: string,
 ): Promise<void> {
   await sqlClient.unsafe(`
-      UPDATE "${schemaName}".capability_profiles
-      SET allowed_capabilities = allowed_capabilities
-        || '[
-          {"capabilityGroupId":"channel.message","accessMode":"read"},
-          {"capabilityGroupId":"channel.message","accessMode":"write"}
-        ]'::jsonb
-      WHERE is_system_profile = true
-        AND name IN ('Full Access', 'Standard')
-        AND NOT (allowed_capabilities @> '[{"capabilityGroupId":"channel.message","accessMode":"write"}]'::jsonb);
+      ALTER TABLE "${schemaName}".agent_schedules
+        ADD COLUMN IF NOT EXISTS original_schedule_id UUID;
 
-      UPDATE "${schemaName}".capability_profiles
-      SET allowed_capabilities = allowed_capabilities
-        || '[{"capabilityGroupId":"channel.message","accessMode":"read"}]'::jsonb
-      WHERE is_system_profile = true
-        AND name = 'Read Only'
-        AND NOT (allowed_capabilities @> '[{"capabilityGroupId":"channel.message","accessMode":"read"}]'::jsonb);
+      WITH RECURSIVE walk AS (
+        SELECT original.id AS original_id, original.id
+        FROM "${schemaName}".agent_schedules original
+        WHERE original.renews_schedule_id IS NULL
+          AND EXISTS (
+            SELECT 1 FROM "${schemaName}".agent_schedules renewal
+            WHERE renewal.renews_schedule_id = original.id
+          )
+        UNION ALL
+        SELECT walk.original_id, renewal.id
+        FROM walk
+        JOIN "${schemaName}".agent_schedules renewal ON renewal.renews_schedule_id = walk.id
+      )
+      UPDATE "${schemaName}".agent_schedules target
+      SET original_schedule_id = walk.original_id
+      FROM walk
+      WHERE target.id = walk.id
+        AND target.id <> walk.original_id
+        AND target.original_schedule_id IS NULL;
+
+      CREATE INDEX IF NOT EXISTS idx_agent_schedules_original_newest
+        ON "${schemaName}".agent_schedules (original_schedule_id, created_at DESC)
+        WHERE original_schedule_id IS NOT NULL;
 
       INSERT INTO "${schemaName}".schema_migrations (version, description)
-      VALUES (235, 'Full Access and Standard carry the channel.message capability group; Read Only carries its read mode')
+      VALUES (235, 'agent_schedules.original_schedule_id, the first schedule of a renewal chain')
       ON CONFLICT (version) DO NOTHING;
   `);
 }
