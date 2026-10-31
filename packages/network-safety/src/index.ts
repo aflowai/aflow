@@ -16,10 +16,31 @@ import { URL } from 'node:url';
 // Private / Reserved IP Ranges
 // ============================================================================
 
-const BLOCKED_CIDRS: Array<{ prefix: bigint; mask: bigint; label: string }> = buildBlockedCidrs();
+/**
+ * Every label a refusal can carry: the blocked ranges, and the address forms
+ * refused before any range is read.
+ */
+export type RangeLabel =
+  | 'current-network'
+  | 'private-rfc1918'
+  | 'cloud-metadata'
+  | 'shared-address-space'
+  | 'loopback'
+  | 'link-local'
+  | 'ietf-protocol'
+  | 'benchmark'
+  | 'multicast'
+  | 'reserved'
+  | 'broadcast'
+  | 'ipv6-literal'
+  | 'non-canonical-numeric'
+  | 'unrecognized-address-form';
+
+const BLOCKED_CIDRS: Array<{ prefix: bigint; mask: bigint; label: RangeLabel; block: string }> =
+  buildBlockedCidrs();
 
 function buildBlockedCidrs() {
-  function cidr(addr: string, bits: number, label: string) {
+  function cidr(addr: string, bits: number, label: RangeLabel) {
     const parts = addr.split('.').map(Number);
     const ip =
       (BigInt(parts[0]!) << 24n) |
@@ -27,7 +48,12 @@ function buildBlockedCidrs() {
       (BigInt(parts[2]!) << 8n) |
       BigInt(parts[3]!);
     const mask = bits === 0 ? 0n : ((1n << 32n) - 1n) << BigInt(32 - bits);
-    return { prefix: ip & mask, mask, label };
+    return {
+      prefix: ip & mask,
+      mask,
+      label,
+      block: bits === 32 ? addr : `${addr}/${String(bits)}`,
+    };
   }
 
   return [
@@ -49,6 +75,42 @@ function buildBlockedCidrs() {
     cidr('240.0.0.0', 4, 'reserved'),
     cidr('255.255.255.255', 32, 'broadcast'),
   ];
+}
+
+const RANGE_WORDS: Readonly<Record<RangeLabel, string>> = {
+  'current-network': 'current network address',
+  'private-rfc1918': 'private network address',
+  'cloud-metadata': 'cloud metadata address',
+  'shared-address-space': 'shared address space address',
+  loopback: 'loopback address',
+  'link-local': 'link-local address',
+  'ietf-protocol': 'IETF protocol address',
+  benchmark: 'benchmarking address',
+  multicast: 'multicast address',
+  reserved: 'reserved address',
+  broadcast: 'broadcast address',
+  'ipv6-literal': 'IPv6 address',
+  'non-canonical-numeric': 'numeric address not written as a dotted quad',
+  'unrecognized-address-form': 'address in a form this guard cannot read',
+};
+
+function isRangeLabel(label: string): label is RangeLabel {
+  return Object.prototype.hasOwnProperty.call(RANGE_WORDS, label);
+}
+
+/**
+ * A refusal's range in words, with the blocks it covers, as a person reads it:
+ * `private network address (10.0.0.0/8, 172.16.0.0/12 or 192.168.0.0/16)`. An
+ * unknown label comes back as it is.
+ */
+export function describeRangeLabel(label: string): string {
+  if (!isRangeLabel(label)) return label;
+  const blocks = BLOCKED_CIDRS.filter((c) => c.label === label).map((c) => c.block);
+  if (label === 'cloud-metadata') blocks.push(...CLOUD_METADATA_HOSTNAMES);
+  if (blocks.length === 0) return RANGE_WORDS[label];
+  const last = blocks[blocks.length - 1]!;
+  const listed = blocks.length === 1 ? last : `${blocks.slice(0, -1).join(', ')} or ${last}`;
+  return `${RANGE_WORDS[label]} (${listed})`;
 }
 
 /**

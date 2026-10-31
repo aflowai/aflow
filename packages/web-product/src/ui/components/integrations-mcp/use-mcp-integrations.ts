@@ -1,11 +1,17 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import type { IconRef } from '@aflow/schemas';
+import type { IconRef, McpPrivateNetworkAcknowledgment } from '@aflow/schemas';
 import type { IntegrationCredentialMeta } from '../../hooks/use-integrations.js';
 export type { IntegrationCredentialMeta };
 import { useApi } from '../providers.js';
 import { apiErrorFromResponse } from '../../lib/query-client.js';
+import {
+  testResultFromWaitBody,
+  type McpBindingTestResult,
+  type McpBindingTestWaitBody,
+} from './mcpEgressRefusal.js';
+export type { McpBindingTestResult };
 
 export interface McpServerDefinitionSummary {
   serverId: string;
@@ -25,6 +31,8 @@ export interface McpServerDefinitionSummary {
     exclude?: string[];
     opTaskOnly?: string[];
   } | null;
+  /** Who let this server reach private addresses, and for which hosts. Null when nobody has. */
+  privateNetwork: McpPrivateNetworkAcknowledgment | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -84,12 +92,6 @@ export interface SaveMcpBindingInput {
   ownerScope?: 'user' | 'space';
   clientScope?: 'platform' | 'tenant' | 'space';
   enabled?: boolean;
-}
-
-export interface McpBindingTestResult {
-  ok: boolean;
-  message?: string;
-  errorCode?: string;
 }
 
 export function useMcpIntegrations() {
@@ -228,17 +230,26 @@ export function useMcpIntegrations() {
       if (!res.ok) {
         return { ok: false, message: await readError(res, 'Failed to start test session') };
       }
-      const body = (await res.json()) as {
-        status: string;
-        error?: { code?: string; message?: string };
-      };
+      const body = (await res.json()) as McpBindingTestWaitBody;
       await refresh();
-      if (body.status === 'SUCCEEDED') return { ok: true };
-      return {
-        ok: false,
-        ...(body.error?.message ? { message: body.error.message } : {}),
-        ...(body.error?.code ? { errorCode: body.error.code } : {}),
-      };
+      return testResultFromWaitBody(body);
+    },
+    [apiUrl, headers, refresh],
+  );
+
+  /**
+   * Replace the hosts this definition may reach on a private address. An empty
+   * list clears the acknowledgment. The route takes it from a signed-in
+   * operator only and stamps who set it.
+   */
+  const setPrivateNetwork = useCallback(
+    async (serverId: string, hosts: string[]) => {
+      const res = await fetch(
+        `${apiUrl}/integrations/mcp/servers/${encodeURIComponent(serverId)}/private-network`,
+        { method: 'PUT', headers: headers(), body: JSON.stringify({ hosts }) },
+      );
+      if (!res.ok) throw new Error(await readError(res, 'Failed to set private network hosts'));
+      await refresh();
     },
     [apiUrl, headers, refresh],
   );
@@ -256,6 +267,7 @@ export function useMcpIntegrations() {
     saveCredential,
     deleteCredential,
     testBinding,
+    setPrivateNetwork,
   };
 }
 
