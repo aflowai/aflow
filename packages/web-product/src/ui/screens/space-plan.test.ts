@@ -25,10 +25,11 @@ import {
 } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { PlanNodeOpenSchema } from '@aflow/schemas';
+import { PLAN_NODE_APPROVED_HEAD, PlanNodeOpenSchema, planNodeOperatorLine } from '@aflow/schemas';
 import type {
   PlanLaneItem,
   PlanNode,
+  PlanNodeCard,
   PlanNodeDetailOutput,
   PlanOverviewLanes,
   PlanNodeLink,
@@ -76,6 +77,8 @@ const recorded = vi.hoisted(() => ({
   findings: {} as Record<string, Answer>,
   /** The conversations linked on each node, by id. */
   conversations: {} as Record<string, Answer>,
+  /** The newest plan document linked on each node, by id. */
+  documents: {} as Record<string, Answer>,
   runPages: {} as Record<string, Answer>,
   linkQueries: [] as Array<{ key: unknown[]; path: string }>,
   /** Every write the page holds, in the order it declared them. */
@@ -326,7 +329,9 @@ vi.mock('../hooks/useApiQuery.js', () => ({
           ? recorded.findings[nodeId!]
           : linkKind === 'conversation'
             ? recorded.conversations[nodeId!]
-            : recorded.runPages[`${nodeId!}:${cursor ?? ''}`];
+            : linkKind === 'document'
+              ? recorded.documents[nodeId!]
+              : recorded.runPages[`${nodeId!}:${cursor ?? ''}`];
       return { data: answer?.data, error: answer?.error ?? null, refetch: vi.fn() };
     }
     recorded.detailQueries.push(options);
@@ -720,6 +725,7 @@ beforeEach(() => {
   recorded.liveRefresh = [];
   recorded.findings = {};
   recorded.conversations = {};
+  recorded.documents = {};
   recorded.runPages = {};
   recorded.linkQueries = [];
   recorded.mutations = [];
@@ -2996,5 +3002,234 @@ describe('SpacePlanPage — state as orbs, and motion (Plan 332 P7)', () => {
     expect(fold.querySelector<HTMLElement>('[data-plan-card]')!.parentElement!.style.padding).toBe(
       '2px',
     );
+  });
+});
+
+describe('SpacePlanPage — the decision card on the rail (Plan 337 P2)', () => {
+  const CARD: PlanNodeCard = {
+    change: { today: 'The rail shows prose.', after: 'The rail shows the card.' },
+    why: ['The operator reads all of the prose to find the decision.'],
+    affects: ['The plan rail.', 'The help article.'],
+    risks: [
+      { risk: 'Items grow long.', mitigation: 'The guidance asks for short items.' },
+      { risk: 'The card drifts from the document.' },
+    ],
+    questions: [
+      { question: 'Is the card optional?', recommended: 'Yes, on every node.' },
+      { question: 'Does Approve accept every recommendation?', recommended: 'Yes.' },
+    ],
+    notDoing: [],
+  };
+  const DOC_URL =
+    'https://github.com/aflowai/aflow/blob/93ce25659c0c/docs/plans/337-plans-the-operator-can-decide-from.md';
+
+  function sections(): string[] {
+    return [...rail().querySelectorAll('[data-plan-rail-section]')].map(
+      (s) => s.getAttribute('data-plan-rail-section') ?? '',
+    );
+  }
+
+  function railGroup(label: string): Element {
+    const found = rail().querySelector(`[data-plan-rail-section="${label}"]`);
+    if (!found) throw new Error(`no rail section ${label}`);
+    return found;
+  }
+
+  async function answer(index: number, text: string): Promise<void> {
+    const field = openForm().querySelector<HTMLInputElement>(
+      `input[aria-label="Answer to question ${String(index + 1)}"]`,
+    );
+    if (!field) throw new Error(`no answer field ${String(index + 1)}`);
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+    await act(async () => {
+      setValue.call(field, text);
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  }
+
+  function blockedCarded(): void {
+    recorded.mutateAsync.mockResolvedValue({ node: {} });
+    recorded.details[ARTICLE] = detail(
+      fullNode(ARTICLE, 'Write the help article', {
+        parentId: R322,
+        status: 'blocked',
+        revision: 4,
+        note: 'Proposed: write it after P3 lands.',
+        card: CARD,
+      }),
+    );
+  }
+
+  it('renders a carded step’s sections in the card’s order, its criteria as Done when, and folds its goal', async () => {
+    recorded.details[BOARD] = detail(
+      fullNode(BOARD, 'P3.3 the board', { card: CARD, note: 'Working on the rail.' }),
+    );
+    await render();
+    await click(card(BOARD));
+
+    expect(sections().slice(0, 9)).toEqual([
+      'What changes',
+      'Why',
+      'What it affects',
+      'Risks',
+      'Open questions',
+      'Not done on purpose',
+      'Done when',
+      'Goal',
+      'Working note',
+    ]);
+    const change = railGroup('What changes');
+    expect(change.querySelector('[data-plan-card-change="today"]')?.textContent).toBe(
+      'Today: The rail shows prose.',
+    );
+    expect(change.querySelector('[data-plan-card-change="after"]')?.textContent).toBe(
+      'After: The rail shows the card.',
+    );
+    expect(
+      [...railGroup('What it affects').querySelectorAll('li')].map((li) => li.textContent),
+    ).toEqual(['The plan rail.', 'The help article.']);
+    const risks = [...railGroup('Risks').querySelectorAll('[data-plan-card-risk]')];
+    expect(risks.map((r) => r.querySelector('[data-plan-card-mitigation]')?.textContent)).toEqual([
+      'Mitigation: The guidance asks for short items.',
+      undefined,
+    ]);
+    expect(
+      [...railGroup('Open questions').querySelectorAll('[data-plan-card-recommended]')].map(
+        (r) => r.textContent,
+      ),
+    ).toEqual(['Recommended: Yes, on every node.', 'Recommended: Yes.']);
+    expect(railGroup('Not done on purpose').textContent).toBe('Not done on purposeNone.');
+    // Done when is the node's criteria, read from the node: the card holds no copy.
+    expect(railGroup('Done when').textContent).toBe('Done whenCriteria of P3.3 the board.');
+
+    const goal = railGroup('Goal');
+    expect(goal.textContent).not.toContain('The whole goal of P3.3 the board.');
+    await click(button(goal, 'Show goal'));
+    expect(goal.querySelector('[data-plan-goal]')?.textContent).toBe(
+      'The whole goal of P3.3 the board.',
+    );
+  });
+
+  it('renders a step with no card as today: Goal, Done when and Working note', async () => {
+    recorded.details[BOARD] = detail(
+      fullNode(BOARD, 'P3.3 the board', { note: 'Working on the rail.' }),
+    );
+    await render();
+    await click(card(BOARD));
+
+    expect(sections().slice(0, 3)).toEqual(['Goal', 'Done when', 'Working note']);
+    expect(sections()).not.toContain('What changes');
+    expect(railGroup('Goal').textContent).toBe('GoalThe whole goal of P3.3 the board.');
+    expect(rail().querySelector('[data-plan-document]')).toBe(null);
+  });
+
+  it('Approve with no answers sends one open write whose why lists each question with its recommended answer', async () => {
+    blockedCarded();
+    await render({ data: withStatus(ARTICLE, 'blocked') });
+    await click(card(ARTICLE));
+
+    expect(
+      [...openForm().querySelectorAll('input[aria-label^="Answer to question"]')].map((f) =>
+        f.getAttribute('placeholder'),
+      ),
+    ).toEqual(['Recommended: Yes, on every node.', 'Recommended: Yes.']);
+    await click(button(openForm(), 'Approve'));
+
+    expect(recorded.sent).toEqual([
+      {
+        path: `/spaces/${SPACE_ID}/plan/nodes/${ARTICLE}/open`,
+        body: {
+          expectedRevision: 4,
+          why: 'Is the card optional? Answer: Yes, on every node.\nDoes Approve accept every recommendation? Answer: Yes.',
+        },
+      },
+    ]);
+  });
+
+  it('Approve with an answer to the second question writes a note headed Approved: with it and the recommended answer to the first', async () => {
+    blockedCarded();
+    await render({ data: withStatus(ARTICLE, 'blocked') });
+    await click(card(ARTICLE));
+
+    await answer(1, '  No: a risk the operator names stays open.  ');
+    await type(openForm(), 'Keep the article short.');
+    await click(button(openForm(), 'Approve'));
+
+    expect(recorded.sent).toHaveLength(1);
+    const why = (recorded.sent[0]!.body as { why: string }).why;
+    expect(why).toBe(
+      'Is the card optional? Answer: Yes, on every node.\n' +
+        'Does Approve accept every recommendation? Answer: No: a risk the operator names stays open.\n' +
+        'Keep the article short.',
+    );
+    // The engine heads the note with the why as one line (`openPlanNode`).
+    const note = `${planNodeOperatorLine(PLAN_NODE_APPROVED_HEAD, why)}\nProposed: write it after P3 lands.`;
+    const first = note.split('\n', 1)[0]!;
+    expect(first.startsWith('Approved: ')).toBe(true);
+    expect(first).toContain('No: a risk the operator names stays open.');
+    expect(first).toContain('Is the card optional? Answer: Yes, on every node.');
+    expect(first).not.toContain('Answer: Yes.');
+  });
+
+  it('prefills Decide with each question and its recommended answer, and records the edited text as the outcome', async () => {
+    recorded.mutateAsync.mockResolvedValue({ node: {} });
+    recorded.details[DECISION] = detail(
+      fullNode(DECISION, 'Where the decide answer is recorded', {
+        kind: 'decide',
+        revision: 3,
+        card: CARD,
+      }),
+    );
+    await render();
+    await click(button(card(DECISION), 'Decide'));
+
+    const field = rail().querySelector('textarea')!;
+    expect(field.value).toBe(
+      'Is the card optional? Answer: Yes, on every node.\nDoes Approve accept every recommendation? Answer: Yes.',
+    );
+    expect(rail().querySelector('[data-plan-decide-hint]')).not.toBe(null);
+
+    await type(
+      rail(),
+      'Is the card optional? Answer: Yes, on every node.\nDoes Approve accept every recommendation? Answer: No.',
+    );
+    await click(button(rail(), 'Record decision'));
+
+    expect(recorded.mutateAsync).toHaveBeenCalledWith({
+      nodeId: DECISION,
+      expectedRevision: 3,
+      status: 'done',
+      outcome:
+        'Is the card optional? Answer: Yes, on every node.\nDoes Approve accept every recommendation? Answer: No.',
+    });
+  });
+
+  it('offers Read the plan from the newest document link, a URL opened and a path shown as text', async () => {
+    recorded.documents[BOARD] = detail(fullNode(BOARD, 'P3.3 the board'), {
+      links: [{ nodeId: BOARD, kind: 'document', ref: DOC_URL, createdAt: at(10, 21) }],
+      linksTotal: 2,
+    });
+    await render();
+    await click(card(BOARD));
+
+    expect(recorded.linkQueries.map((q) => q.path)).toContain(
+      `/spaces/${SPACE_ID}/plan/nodes/${BOARD}?linkKind=document&limit=1`,
+    );
+    const link = rail().querySelector('[data-plan-document] a');
+    expect(link?.textContent).toBe('Read the plan');
+    expect(link?.getAttribute('href')).toBe(DOC_URL);
+
+    root.unmount();
+    root = createRoot(container);
+    const pathRef = 'docs/plans/337-plans-the-operator-can-decide-from.md@93ce25659c0c';
+    recorded.documents[BOARD] = detail(fullNode(BOARD, 'P3.3 the board'), {
+      links: [{ nodeId: BOARD, kind: 'document', ref: pathRef, createdAt: at(10, 21) }],
+      linksTotal: 1,
+    });
+    await render();
+    await click(card(BOARD));
+    const shown = rail().querySelector('[data-plan-document]')!;
+    expect(shown.querySelector('a')).toBe(null);
+    expect(shown.querySelector('[data-plan-document-ref]')?.textContent).toBe(pathRef);
   });
 });
