@@ -9,7 +9,7 @@ Production background discovery must be event- or candidate-driven. A task may n
 work by scanning the Redis keyspace, reading a whole dirty set, or enumerating tenant schemas;
 idle cost may not grow with logical shards, tenants, stored keys, or connected subscribers.
 
-**46 registered tasks** across 8 services.
+**47 registered tasks** across 8 services.
 2 task(s) still carry a residual poll — a periodic datastore read that
 exists only because an event or candidate path is incomplete.
 
@@ -55,6 +55,7 @@ Datastore operations per minute with zero due work, grouped by what each scope m
 | `orchestrator.orphan_recovery` | orchestrator | correctness | audit | per_instance | event-driven | 0 | never |
 | `orchestrator.pending_recovery` | orchestrator | correctness | candidate | shard_owner | 30s | 258 | never |
 | `orchestrator.projection` | orchestrator | correctness | candidate | singleton | 3s | 20 | breakglass |
+| `orchestrator.resident_due_check` | orchestrator | feature | candidate | per_instance | 15s | 0 | safe |
 | `orchestrator.result_consumer` | orchestrator | correctness | blocking | shard_owner | event-driven | 120 | never |
 | `orchestrator.schedule_dispatch` | orchestrator | feature | candidate | per_instance | 15s | 4 | safe |
 | `orchestrator.schedule_evaluator` | orchestrator | feature | candidate | per_instance | 15s | 4 | safe |
@@ -818,6 +819,34 @@ Datastore operations per minute with zero due work, grouped by what each scope m
 | Source | `packages/redis/src/hotState/events.ts`<br>`packages/redis/src/hotState/legacyDirtyCarryOver.ts`<br>`apps/aflow-orchestrator/src/services/ProjectionWorker.ts`<br>`packages/redis/src/hotState/projectionCandidates.ts`<br>`packages/redis/src/hotState/dirty.ts`<br>`packages/database/src/repositories/projectionFailures.ts`<br>`packages/redis/src/shard.ts` |
 
 > One claim EVAL per cycle whether or not anything is due, and it returns only what is due, so cost tracks the backlog rather than how many sessions exist. Version and due time are separate scores on separate indexes: sharing one would force a choice between starving a session that changes often and losing two marks that land in the same millisecond. The attempt ceiling lives on the failure record rather than in the process, so it survives a restart and means the same thing on five instances as on one. This is also where an on_completion schedule fires: recording its occurrences inside the transaction that stamps the run as fired makes the pair retriable, and it reaches every terminal writer rather than the two that remembered to call it. Durable events flush incrementally — for running sessions too — from a per-session cursor on the session row, advanced only in the transaction that inserts them, so the stream MAXLEN cap is a memory backstop rather than a retention policy.
+
+### `orchestrator.resident_due_check`
+
+**Purpose.** Read the plan board before a resident occurrence starts a model session.
+
+**Invariant.** An idle resident occurrence spends no model tokens.
+
+**Recovery.** A failed occurrence stays due. The dispatch lease retries failed board reads before starting a run.
+
+| Field | Value |
+| ----- | ----- |
+| Service | orchestrator |
+| Owner domain | plans |
+| Criticality | feature |
+| Trigger | candidate |
+| Execution scope | per_instance |
+| Substrate | postgres-due |
+| Base cadence | 15s |
+| Max batch | 100 |
+| Max cycle | 60000 ms |
+| Idle datastore ops/min | 0 |
+| Hot-path producer budget | 0 added RTT — Schedule occurrences and resident events use the existing dispatch outbox. |
+| Feature gate | SCHEDULES_ENABLED |
+| Disable policy | safe |
+| Residual poll | — |
+| Source | `apps/aflow-orchestrator/src/services/ScheduleEvaluator.ts`<br>`apps/aflow-orchestrator/src/services/residentDueCheck.ts`<br>`packages/cybernetic-runtime/src/plan/resident.ts`<br>`packages/cybernetic-runtime/src/plan/stream.ts` |
+
+> Runs inside the schedule discovery and dispatch runners with their claims and budgets. Events identify one space directly and never enumerate spaces.
 
 ### `orchestrator.result_consumer`
 
