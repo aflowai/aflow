@@ -1,6 +1,6 @@
 # Plan 337 — Plans the operator can decide from
 
-**Status:** P0 merged. P1, the card on the node record and the writers' guidance, is built. P4, the operator's note on a node, is built. P3's template is built, and its `card` in the commission result is not. P2 is not built (§6).
+**Status:** P0 merged. P1, the card on the node record and the writers' guidance, is built. P4, the operator's note on a node, is built. P3's template is built, and its `card` in the commission result is not. P2, the rail's card, is built (§6).
 
 **Builds on:** Plan 322 (plan nodes, `decide` nodes and D9's answer as the outcome), Plan 329 (the planning skill and D1's proposal), Plan 331 (the resident and P2's proposals), Plan 332 (the rail, **Approve** and **Reopen**), Plan 333 (the writing rules and D3: nothing checks them).
 
@@ -238,6 +238,19 @@ Where the code differed from the design's reading:
 - Plan 329 has no `PlanProposalSchema` yet (F7). Its D1 now says the proposal reuses the card's risk and question shapes.
 
 **P2 — The rail renders the card (D2's link, D3).** It holds the card sections, **Read the plan**, the prefilled **Decide**, the per-question answers on **Approve** and the help article. _Exit:_ the rail, answer and link cases in §5 pass. The operator decides one carded node from the rail without opening its document.
+
+P2 is built. `PlanCardSections.tsx` renders the card, and `lib/plan-card.ts` holds the answer lines. Tests: the Plan 337 P2 block in `space-plan.test.ts`, and a carded brief in `planStream.test.ts`.
+
+Where the code differed from the design's reading:
+
+- One answer line is `<question> Answer: <answer>`. **Decide** and **Approve** write the same line.
+- The engine folds the lines of a `why` into one note line (`planNodeOperatorLine`, P4). So the note holds every answer on its `Approved: …` line, and each line reads on its own there.
+- **Approve** sends the answers first, then the operator's instructions, in one `why`. **Revise** sends the instructions only.
+- **Done when** keeps the label **Decided when** on a `decide` node, as the rail labels criteria today.
+- An empty list shows _None._, so the operator sees that the writer found none.
+- **Read the plan** reads one more page of links, `linkKind=document&limit=1`. A ref that is not an `http` or `https` URL shows as text.
+- The overview's lane row keeps its one-click **Approve** with no words. It reads no card, so its write records no recommended answer.
+- The operator has not yet decided a carded node from the rail on the live stack. That is the second half of the exit.
 
 **P3 — The plan-document template and the README (D2, D4).** It holds the card as the first section of the template in `docs/plans/README.md`, and the optional `card` in the commission result. _Exit:_ a commissioned plan document opens with the card, and its commission result carries the same card as data.
 

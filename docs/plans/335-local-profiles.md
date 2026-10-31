@@ -434,7 +434,7 @@ P3 adds the picker, the footer menu and the per-profile preferred space. It adds
 
 - The routes `PUT` and `DELETE /v1/local-profiles/:userId/pin`.
 - The PIN check on `POST /v1/local-profiles/:userId/session`. The route takes no body and issues the session at once, as in P3 (§13).
-- The PIN mark, its `aflow_pin_mark_<user id>` cookie and the counts of wrong guesses.
+- The PIN mark, its `aflow_pin_mark_<user id>` cookie and the counts of wrong guesses. A browser may still hold such a cookie for up to 400 days. The next profile choice clears every one it carries.
 - The `one-locked` count. `readLocalProfileCount` answers `one` or `several`, and the §11 table has one column per count again.
 - The `users.profile_pin_hash` column. `applyLocalProfilePinRemovalMigration` drops it in `public`, with no compatibility path.
 - The picker's PIN prompt and the PIN controls in Settings → Profiles.
@@ -445,5 +445,5 @@ P1 to P3 are unchanged. The API still serves several local users, the owner stil
 
 - `routes/localProfiles.test.ts` shows the owner and a member each start with one call and no body, and the PIN routes answer 404.
 - `routes/localProfiles.pg.test.ts` shows a profile starts with one direct call on a bootstrapped install and reaches its own spaces. It also shows no PIN route is served.
-- `apps/web-local/src/compose/localProfileSession.test.ts` shows the tile's post alone starts the profile, through one call with no body.
+- `apps/web-local/src/compose/localProfileSession.test.ts` shows the tile's post alone starts the profile, through one call with no body. It also shows a choice clears every PIN mark cookie the browser holds.
 - `profile-picker.render.test.ts` shows each tile is a submit button that posts the profile's id, and the picker asks for nothing else.

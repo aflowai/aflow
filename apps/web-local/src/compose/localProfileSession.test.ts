@@ -147,6 +147,47 @@ describe('choosing a profile', () => {
     for (const cookie of response.headers.getSetCookie()) expect(cookie).toMatch(/Secure/i);
   });
 
+  // Profiles have no PIN, so a PIN mark cookie a browser still holds is
+  // cleared on its next choice, whichever profile it named.
+  it('clears every PIN mark cookie the browser still holds', async () => {
+    const fetchImpl = vi.fn(async () =>
+      json(200, {
+        profile: { userId: ADA, displayName: 'Ada', avatar: 'owl', isOwner: false },
+        session: 'v2.issued',
+      }),
+    );
+    const request = choice(ADA, 'https://localhost:3001');
+    request.headers.set(
+      'cookie',
+      `aflow_pin_mark_${ADA}=m1; theme=dark; aflow_pin_mark_${OWNER.userId}=m2`,
+    );
+    const response = await answerProfileChoice(request, fetchImpl);
+
+    const cookies = response.headers.getSetCookie();
+    for (const userId of [ADA, OWNER.userId]) {
+      const cleared = cookies.find((c) => c.startsWith(`aflow_pin_mark_${userId}=`));
+      expect(cleared).toMatch(new RegExp(`^aflow_pin_mark_${userId}=;`));
+      expect(cleared).toContain('Max-Age=0');
+      expect(cleared).toContain('Path=/');
+      expect(cleared).toMatch(/Secure/i);
+    }
+    expect(cookies.some((c) => c.startsWith('theme='))).toBe(false);
+  });
+
+  it('clears no cookie it did not set when the browser holds no PIN mark', async () => {
+    const fetchImpl = vi.fn(async () =>
+      json(200, {
+        profile: { userId: ADA, displayName: 'Ada', avatar: 'owl', isOwner: false },
+        session: 'v2.issued',
+      }),
+    );
+    const response = await answerProfileChoice(choice(ADA), fetchImpl);
+    expect(response.headers.getSetCookie().map((c) => c.split('=', 1)[0])).toEqual([
+      PROFILE_SESSION_COOKIE,
+      'aflow_profile',
+    ]);
+  });
+
   it('sets no cookie when the API issues no session, and goes back to the picker', async () => {
     const response = await answerProfileChoice(
       choice(ADA),

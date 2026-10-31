@@ -122,7 +122,26 @@ export async function answerProfileChoice(
   } as const;
   response.cookies.set(PROFILE_SESSION_COOKIE, issued.session, cookie);
   response.cookies.set(ACTIVE_PROFILE_COOKIE, issued.userId, cookie);
+  for (const name of stalePinMarkCookies(request)) {
+    response.cookies.set(name, '', { ...cookie, maxAge: 0 });
+  }
   return response;
+}
+
+const STALE_PIN_MARK_PREFIX = 'aflow_pin_mark_';
+
+/**
+ * The PIN mark cookies this browser still holds. Profiles have no PIN, so
+ * nothing reads them, and a browser would otherwise keep each one for up to
+ * `PROFILE_SESSION_MAX_AGE_SEC`.
+ */
+function stalePinMarkCookies(request: Request): string[] {
+  const names = new Set<string>();
+  for (const part of (request.headers.get('cookie') ?? '').split(';')) {
+    const name = part.split('=', 1)[0]?.trim() ?? '';
+    if (name.startsWith(STALE_PIN_MARK_PREFIX)) names.add(name);
+  }
+  return [...names];
 }
 
 function browserUsedHttps(request: Request): boolean {

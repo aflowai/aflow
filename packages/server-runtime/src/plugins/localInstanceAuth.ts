@@ -125,7 +125,8 @@ export function presentsInstanceSecret(request: FastifyRequest, instanceSecret: 
  * - `sole-profile`: no profile session, on an install with one profile. The
  *   owner, granted without a membership read.
  * - `instance-secret`: no profile session and no browser behind it, on an
- *   install with several profiles. The owner, through the membership read.
+ *   install with several profiles or an `unread` count. The owner, through
+ *   the membership read.
  * - `profile-session`: a profile session named the user. The membership read
  *   decides, as it does for any other principal.
  */
@@ -191,8 +192,8 @@ function headerValue(request: FastifyRequest, name: string): string | undefined 
  *    web process marks every call it makes for one, and the browser cannot
  *    remove the mark, so clearing the cookie or opening a private window
  *    reaches no profile at all.
- * 4. With no session and no mark, on an install with several profiles, the
- *    caller is the owner through the membership read. Such a caller holds the
+ * 4. With no session and no mark, on an install with several profiles or an
+ *    `unread` count, the caller is the owner through the membership read. Such a caller holds the
  *    secret itself, which is the owner's whole authority, and could issue an
  *    owner session with it. Refusing it would guard nothing and break
  *    `yarn mcp:setup`.
@@ -205,8 +206,7 @@ function headerValue(request: FastifyRequest, name: string): string | undefined 
  * plugin answers it from a short cache that never rejects
  * (`cacheLocalProfileCount`). An `unread` count is no evidence of one profile,
  * so it never grants rule 2. A browser then gets a 503 that names the fault,
- * and a bare-secret caller is the owner through the membership read, as in
- * rule 4.
+ * and a bare-secret caller meets rule 4.
  */
 export async function authenticateLocalInstance(
   request: FastifyRequest,
