@@ -127,11 +127,11 @@ In these terms "heavy" means this today. An open dock makes at least 15 new HTTP
 
 **The rule.** `listAskedNodes` becomes `listWaitingNodes`. It keeps a node that is open, is not a `decide` node, lies under open branches only, and is `blocked` or carries the merge-wait line. It does not read the ask record. `findAskedNode` becomes `findWaitingNode` by the same rule, so `resolve` finds what `listOpen` listed. A `decide` node keeps its own item (`planDecisionSource.ts`). A stranded node is not listed, because the walk does not pass a closed node (`PlanTreeWalkOptions.statuses`, `plan/store.ts`).
 
-**The bound and the cut.** The source lists at most `PLAN_OPEN_ASKS_LIMIT`, 50, newest first by `updatedAt`. Past 50 the list cuts, and the Plan page's Needs-you lane holds the rest with its total (Plan 332 P4). The constant moves to `@aflow/schemas`, so the client can say "50+" at the cut.
+**The bound and the cut.** The source lists at most `PLAN_OPEN_ASKS_LIMIT`, 50, newest first by `updatedAt`. Past 50 the list cuts, and the Plan page's Needs-you lane holds the rest with its total (Plan 332 P4). The decision source keeps its own cap, `PLAN_OPEN_DECISIONS_LIMIT`, 50 (`plan/operations.ts`). Both constants move to `@aflow/schemas`, so the client can mark a cut.
 
 **The read's cost.** The walk gains a flag that says whether the note holds the merge-wait line (F10). Then `store.find` runs only for the 50 or fewer listed nodes, for their summary. A rebuild runs at most once per 2,000 ms (F8).
 
-**The sidebar count (Plan 332 §8, answered here).** The Plan entry in `app-shell.tsx` shows the count of open items whose origin is `plan_ask` or `plan_decision`. It reads `useActionCenter`, the key the bell and the chat already hold (F7). The read is shared and adds no request. On a page whose header shows no bell, the sidebar's mount is the one broker subscription.
+**The sidebar count (Plan 332 §8, answered here).** The Plan entry in `app-shell.tsx` shows the count of open items whose origin is `plan_ask` or `plan_decision`. It reads `useActionCenter`, the key the bell and the chat already hold (F7). The read is shared and adds no request. On a page whose header shows no bell, the sidebar's mount is the one broker subscription. The count is the sum of the two origins. Where either origin holds as many items as its cap, the count gains a "+", because that list has cut.
 
 **Plan 332 D5 is superseded on this point.** The item has two verbs and no free text (F5). P1 points 332's text here.
 
@@ -158,7 +158,7 @@ Waiting on a person: 3 plan steps, 1 run gate, 0 consents. Point with the plan l
 
 The kinds are fixed. Plan steps are items with origin `plan_ask` or `plan_decision`. Consents are `needs_oauth_consent`. Run gates are the other kinds in the approvals and inputs lanes. Coach proposals keep their own section (F12).
 
-**The source of the counts.** The builder runs in the orchestrator (`apps/aflow-orchestrator/src/services/SessionOrchestrator/helpers/agentTurn.ts`), not the server. It counts plan steps from the walk `loadActivePlanTree` already makes, with D1's predicate imported from `asks.ts`. It counts gates and consents with count queries over the tables their sources read (`pausedStepSource.ts`, `workflowHumanTaskSource.ts`, `workflowWriteApprovalSource.ts`, `workflowOAuthConsentSource.ts`, `computeEgressSource.ts`). It does not call the aggregator.
+**The source of the counts.** The builder runs in the orchestrator (`apps/aflow-orchestrator/src/services/SessionOrchestrator/helpers/agentTurn.ts`), not the server. It counts plan steps from the walk `loadActivePlanTree` already makes, as two sets that match the sidebar's two origins. One is the nodes D1's predicate keeps, imported from `asks.ts`, and it leaves out `decide` nodes. The other is the open `decide` nodes under open branches, by the rule `listOpenDecisions` lists by (`plan/operations.ts`). Each set stops at its source's cap of 50, and a set at its cap gains a "+", as the sidebar's count does. The Helmsman's plan-step count and the sidebar's count therefore agree. It counts gates and consents with count queries over the tables their sources read (`pausedStepSource.ts`, `workflowHumanTaskSource.ts`, `workflowWriteApprovalSource.ts`, `workflowOAuthConsentSource.ts`, `computeEgressSource.ts`). It does not call the aggregator.
 
 **The ceiling.** The section holds at most 500 tokens by `estimateStringTokens` (`packages/schemas/src/runtime/tokenEstimate.ts`). A test renders five lines with 120-character titles and the longest item ids, and fails above 500. P2 records the measured number of one live space here. The 120-character cut is a prompt budget, measured, and not a write validation.
 
@@ -225,7 +225,7 @@ Otherwise the chat lands new, as today.
 
 _Rejected:_ (a). It is the round trip the operator described.
 
-_Rejected:_ (c). A browser's memory outlives the conversation. A session ended elsewhere or hours old would come back, where (b) reads the list the server already returns.
+_Rejected:_ (c). A browser's memory outlives the conversation. A session ended elsewhere or hours old would come back. Under (b), the status and six-hour tests run at landing, on what the server reports of the session then.
 
 ### D5 — One vocabulary of states across the Action Center, the Workbench and the Plan page
 
@@ -269,7 +269,7 @@ _Rejected:_ renaming the column ids. The ids belong to the API and the tests, an
 
 - `@aflow/cybernetic-runtime`: `plan/asks.ts` (`listWaitingNodes`, `findWaitingNode`, the exported predicate), `plan/store.ts` (the walk's merge-wait flag), `attentionBuilder.ts` (the counts and the section).
 - `@aflow/server-runtime`: `planAskSource.ts` (the listing, the resolve lookup, the title from the table).
-- `@aflow/schemas`: the label table and `PLAN_OPEN_ASKS_LIMIT` in `operations/plan/schemas.ts`.
+- `@aflow/schemas`: the label table, `PLAN_OPEN_ASKS_LIMIT` and `PLAN_OPEN_DECISIONS_LIMIT` in `operations/plan/schemas.ts`.
 - `@aflow/web-product`: `app-shell.tsx` (the Plan count), `plan-board.ts` and the plan components (labels), `WorkbenchNeedsAttention.tsx` (**Pending**), `Workbench.tsx` (lazy sections), `space-chat.tsx` (the remembered dock state, the landing), `cybernetic-provider.tsx` and `entity-chat-inspector.tsx` (the two reads onto `useApiQuery`), `ChatHeader.tsx` (the shortcut).
 - `@aflow/platform-artifacts`: `helpCenter/articles/concepts.ts` (the Plan entry's labels) and `approvals.ts` (**Needs attention**, the Workbench's default, the landing).
 - `docs/plans/332-the-plan-page-serves-the-operators-jobs.md`: §8 answered, and D5's rejection pointed here.
@@ -282,7 +282,7 @@ Each case fails if the change is wrong.
 - **No wake needed.** A space with no resident schedule creates a `blocked` node. The Action Center lists its item within one rebuild, and `counts.actionable` rises by one.
 - **The record does not gate the list.** A blocked node whose ask record has lapsed is still listed.
 - **The note is written once.** A wake over a listed node writes `Waiting on you:` once per revision, as today.
-- **The cut.** 60 blocked nodes list the 50 newest, and the sidebar reads "50+".
+- **The cut.** A space with 60 blocked nodes and no open `decide` node lists the 50 newest, and the sidebar reads "50+". With two open `decide` nodes added, it reads "52+".
 - **No stranded item.** An open node under a closed parent is not listed.
 - **Resolve finds what list shows.** Approving a listed node that was never asked opens it.
 - **The sidebar adds no request.** With the bell mounted, the Plan count adds no HTTP read.
@@ -299,7 +299,7 @@ Each case fails if the change is wrong.
 
 **P0 — This document and its index row.** _Exit:_ the operator approves or amends §3.
 
-**P1 — The item, the bell, the sidebar count and the vocabulary (D1, D5).** It holds the listing rule, the merge-wait flag, the resolve lookup, the constant in the schema, the sidebar count, the label table and every label in D5's table. It updates the help articles and points Plan 332 §8 and D5 here. _Exit:_ on the live stack, the operator's three blocked steps show in the bell, under **Pending** in the Workbench and as the Plan entry's count, with no wake.
+**P1 — The item, the bell, the sidebar count and the vocabulary (D1, D5).** It holds the listing rule, the merge-wait flag, the resolve lookup, the two constants in the schema, the sidebar count, the label table and every label in D5's table. It updates the help articles and points Plan 332 §8 and D5 here. _Exit:_ on the live stack, the operator's three blocked steps show in the bell, under **Pending** in the Workbench and as the Plan entry's count, with no wake.
 
 **P2 — The Helmsman knows what waits (D2).** It holds the counts, the section and the ceiling test, and records the measured tokens in D2. _Exit:_ asked "is anything waiting on me?", a Helmsman names the count and points at the plan link without a tool call.
 
