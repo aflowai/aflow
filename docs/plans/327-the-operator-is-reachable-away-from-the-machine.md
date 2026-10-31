@@ -150,11 +150,9 @@ _Exit:_ "status?" sent from the phone gets the Helmsman's answer in its thread. 
 
 ## 7. What exists to reuse
 
-The branch `plan/326-operator-channels` built an earlier shape of this plan into the engine, and that shape is rejected (§3, D1). Read it for the rules, never merge it or check it out (`git show plan/326-operator-channels:<path>`):
-
-- the late-message and duplicate rules: `packages/server-runtime/src/channels/inbound/dispatcher.ts` and `packages/database/src/repositories/channelInbound.ts`.
-- the approval preview values, if P1 shows the existing preview is not enough to decide on: `apps/aflow-executor-api/src/handlers/api/writeApprovalGate.ts`.
-- the phone experience the design aims at: §3 of that branch's `docs/plans/327-the-operator-is-reachable-away-from-the-machine.md`.
+- The lane's composition: `hostLaneComposed` in `packages/schemas/src/edition/descriptor.ts`, and its case in `packages/schemas/src/edition/composedOperations.ts`.
+- The setup script's key minting and file handling: `scripts/mcp-local-setup.mjs`.
+- The approval preview a P1 card shows: `apps/aflow-executor-api/src/handlers/api/writeApprovalGate.ts`.
 
 ## 8. Open questions
 
