@@ -36,6 +36,13 @@ export const mcpServerDefinitions = pgTable(
     /** Enabled flag */
     enabled: integer('enabled').notNull().default(1),
 
+    /**
+     * The private network acknowledgment (Plan 336 D2), an
+     * `McpPrivateNetworkAcknowledgment` or null. Written only by the
+     * operator route, never by a definition upsert, so no agent sets it.
+     */
+    privateNetworkJson: jsonb('private_network_json'),
+
     /** Owning space — each space gets its own independent MCP server definitions */
     spaceId: uuid('space_id').notNull(),
 

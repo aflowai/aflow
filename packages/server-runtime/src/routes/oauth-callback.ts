@@ -24,6 +24,7 @@ import {
   resolveOAuthCallbackUrl,
   resolveCimdDocumentUrl,
   buildMcpOAuthDescriptor,
+  mcpPrivateNetworkPolicy,
   type CompleteConsentContext,
 } from '@aflow/oauth';
 import { getDb, getRedis, getPayloadStore } from './integrations/shared.js';
@@ -264,7 +265,7 @@ async function resolveBindingForCallback(
         )
         .limit(1);
     },
-  )) as Array<{ definitionJson?: unknown }>;
+  )) as Array<{ definitionJson?: unknown; privateNetworkJson?: unknown }>;
   if (definitionRows.length === 0) {
     throw new Error(
       `oauth_callback_definition_not_found: serverId="${binding.serverId}" spaceId="${spaceId}"`,
@@ -275,7 +276,11 @@ async function resolveBindingForCallback(
     throw new Error(`oauth_callback_definition_invalid: serverId="${binding.serverId}"`);
   }
 
-  const descriptor = buildMcpOAuthDescriptor(binding, definition);
+  const descriptor = buildMcpOAuthDescriptor(
+    binding,
+    definition,
+    mcpPrivateNetworkPolicy(definitionRows[0]!.privateNetworkJson),
+  );
   return {
     tenantId,
     discovery: descriptor.discovery,

@@ -13,8 +13,10 @@ import {
   type McpServerListOutput,
   type McpServerUpsertOutput,
   type McpToolFilter,
+  ActorContextSchema,
 } from '@aflow/schemas';
 import { getDatabase } from '@aflow/database';
+import { getSessionState } from '@aflow/redis';
 import {
   deleteMcpServerBinding,
   deleteMcpServerDefinition,
@@ -26,6 +28,7 @@ import {
   upsertMcpServerBinding,
   upsertMcpServerDefinition,
   type McpIntegrationAdminScope,
+  type PrivateNetworkAuditActor,
 } from '@aflow/cybernetic-runtime';
 import type { InlineHandlerArgs } from './types.js';
 import { emitStepError, emitStepSuccess } from './helpers.js';
@@ -134,10 +137,33 @@ function assertRunSpace(stated: string | undefined, spaceId: string, op: string)
   }
 }
 
+/**
+ * Who a private network audit row names when this step changes the record:
+ * the person or principal the run acts for, and the run and step themselves.
+ * The run and step are always recorded. The actor falls back to the system
+ * when the run carries no readable actor context.
+ */
+async function runAuditActor(args: InlineHandlerArgs): Promise<PrivateNetworkAuditActor> {
+  const run = { runId: args.context.runId as string, stepExecutionId: args.stepExecutionId };
+  try {
+    const state = await getSessionState(args.redis, args.context.tenantId, args.context.runId);
+    const parsed = state?.actorContextJson
+      ? ActorContextSchema.safeParse(JSON.parse(state.actorContextJson))
+      : null;
+    if (parsed?.success) {
+      return { actorId: parsed.data.userId, actorKind: parsed.data.kind, run };
+    }
+  } catch {
+    // An unreadable actor context still leaves the run and step on the row.
+  }
+  return { actorId: null, actorKind: 'system', run };
+}
+
 async function runOp(
   op: string,
   input: Record<string, unknown>,
   scope: McpIntegrationAdminScope,
+  runActor: () => Promise<PrivateNetworkAuditActor>,
 ): Promise<Record<string, unknown>> {
   const { spaceId, tenantId } = scope;
   switch (op) {
@@ -196,7 +222,11 @@ async function runOp(
             'nothing was deleted. List the servers with mcp.server.list to find the serverId.',
         );
       }
-      await deleteMcpServerDefinition({ ...scope, serverId: parsed.serverId });
+      await deleteMcpServerDefinition({
+        ...scope,
+        serverId: parsed.serverId,
+        actor: await runActor(),
+      });
       const output: McpServerDeleteOutput = { deleted: true };
       return output;
     }
@@ -273,12 +303,17 @@ export async function handleMcpServerAdminInline(args: InlineHandlerArgs): Promi
     const input = await readInlineInput(args, startTime);
     if (!input) return;
 
-    const output = await runOp(op, input, {
-      db: getDatabase(),
-      tenantId: args.context.tenantId as string,
-      spaceId,
-      redis: args.redis,
-    });
+    const output = await runOp(
+      op,
+      input,
+      {
+        db: getDatabase(),
+        tenantId: args.context.tenantId as string,
+        spaceId,
+        redis: args.redis,
+      },
+      () => runAuditActor(args),
+    );
     await emitStepSuccess(args, output, startTime);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
