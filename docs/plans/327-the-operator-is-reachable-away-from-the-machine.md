@@ -1,10 +1,12 @@
 # Plan 327 — The operator is reachable away from the machine
 
-**Status:** Design. No phase is built.
+**Status:** Design, reviewed against the code on main at `b4426a4a`. No phase is built.
 
 **Builds on:** Plan 331 (the resident Helmsman, which watches the space and decides when the operator must act), Plan 324 (how the Helmsman finds an operation without carrying it), Plan 253 (the write approval card and its grant), the host lane (an executor that ships outside the image and is composed only where it is configured), and `yarn mcp:setup` (a local client of the API that holds its own key).
 
 **Leaves alone:** the orchestrator, session hot state, the run lifecycle, the Action Center's items and its resolve boundary, every tenant table, and `user.notification.email`.
+
+**How to read the review notes.** Each decision ends with a review note: confirmed, amended or questioned, with the code it rests on. A note that says "line N" names the line in this document at `b4426a4a`. Where a decision is amended, its text above the note already reads as amended.
 
 ## 1. Problem
 
@@ -23,51 +25,77 @@ The operator also cannot ask anything from a phone. "Status?" or "why did that f
 
 ### D1 — A channel is an executor lane, served by an optional app
 
-Channel operations have their own step type, `channel`, served by the stream `jobs:channel`. One optional app, `apps/aflow-channel-slack`, consumes that stream and holds the Slack connection. It is the executor and the inbound listener in one process.
+Channel operations have their own step type, `channel`, served by the stream `aflow:jobs:channel`. One optional app, `apps/aflow-channel-slack`, consumes that stream and holds the Slack connection. It is the executor and the inbound listener in one process.
 
-The lane is composed as the host lane is (`hostLaneComposed`, `packages/schemas/src/edition/descriptor.ts`). `channelLaneComposed` answers `present` only when the app's configuration file exists. When the lane is absent, `isOperationComposed` withholds every `channel.*` operation from the catalog (`packages/schemas/src/edition/composedOperations.ts`). An agent never sees a tool that can only fail.
+The lane is composed as the host lane is (`hostLaneComposed`, `packages/schemas/src/edition/descriptor.ts`). `channelLaneComposed` answers `present` only when the platform holds the channel lane's credential, `PHOENIX_CHANNEL_REDIS_PASSWORD`. That credential is the app's own Redis identity, provisioned as the host executor's is. It can claim channel jobs and report their results, and nothing else. When the lane is absent, `isOperationComposed` withholds every `channel.*` operation from the catalog (`packages/schemas/src/edition/composedOperations.ts`). An agent never sees a tool that can only fail.
 
-The app ships outside the image, as the host executor does. The ownership manifest classes it `optional-pack`, so its guards fail on any core file that imports it.
+The app ships outside the image, as the host executor does. The ownership manifest classes it `optional-pack`. A new guard test fails on any core file that imports it (D7).
 
 _Rejected — a hook when a run stops:_ every run would pay for a feature most installs never use, and the person would be told about every run.
 
 _Rejected — a notification outbox with a delivery task:_ rows would be written for people who never linked a channel, and a background task would run on every install.
 
+_Rejected — composing the lane on the app's own file:_ the server and the orchestrator read the descriptor from their own environment. In the appliance they run in a container that cannot see `~/.aflow/channel-slack.env`.
+
+**Review — amended.**
+
+- Line 26 named the stream `jobs:channel`. `StreamKeys.jobStream` builds `aflow:jobs:<stepType>` (`packages/schemas/src/runtime/streamMessages.ts` line 73), so the name now reads `aflow:jobs:channel`.
+- Line 28 composed the lane on the app's configuration file. `hostLaneComposed` keys on `PHOENIX_HOST_REDIS_PASSWORD` in the platform's environment (`descriptor.ts` line 140), not on a file. That credential is the paired executor's Redis identity. It is minted at first boot (`packages/server-runtime/src/bootstrap/instanceConfig.ts` line 99) and applied at pairing (`packages/server-runtime/src/routes/hostPairing.ts` line 204).
+- Line 28 also never said how the app reaches Redis. The amended text keys composition on a channel credential of the same kind, which answers both points.
+- Line 30 said the manifest's guards fail on a core file that imports an `optional-pack` path. They do not. `survivesCoreCut` keeps `optional-pack` (`packages/schemas/src/edition/ownershipLookup.ts` line 37). The closure guard fails only on edges into a class the cut drops (`packages/schemas/src/edition/ownershipClosure.test.ts`). The import guard is new work, and D7 names it.
+- The class itself is right. The host executor is `local` (`packages/schemas/src/edition/ownership.ts` line 118). A Slack channel can serve the hosted edition too (P3), so `optional-pack` fits.
+
 ### D2 — One operation: `channel.message.send`
 
 The input is `{ text, itemId? }`. `text` is what the agent wants the operator to read. `itemId` names an open Action Center item to attach as a card (D3).
 
-- **The recipient is derived.** It is the person the calling run works for: the run's `createdBy`. For a resident wake, that is the person who created the resident schedule. The agent never names a recipient.
+- **The recipient is derived.** It is the person the calling run works for: the run's `createdBy`, which every job carries as `credentialOwnerId`. For a resident wake, that is the person who created the resident schedule. The agent never names a recipient.
 - **The recipient must be the linked operator.** When they are not, or no link exists, the step fails with a teaching error that names Settings → Channels.
 - **The send is synchronous.** The executor posts to Slack and returns `{ delivered: true, messageRef }`. A provider error fails the step, and the existing step retry applies.
 - **It is idempotent on the step execution.** A retried step whose message was already posted returns the first `messageRef` and posts nothing.
+- **A repeat is a failure.** A send whose text and `itemId` match one the same run has already delivered fails with a teaching error. The loop guards count failures, so a model that repeats itself meets a ceiling.
 
 The operation is discoverable for the Helmsman and grantable to Runners and skill steps (Plan 324). Its `whenToUse` says: "the operator must act and may be away from the machine". Its `whenNotToUse` says: "progress reports nobody asked for".
 
-_Rejected — `channel.message.ask`, a send that pauses for the answer:_ a resident wake that paused would hold the space's wake guard (Plan 331 D1), so the next heartbeat would be skipped until the operator answered. A question already exists as an Action Center item, and D3 puts that item on the phone.
+_Rejected — `channel.message.ask`, a send that pauses for the answer:_ a resident wake that paused would give up the space's wake guard, because a paused wake does not count as in flight (Plan 331 D1). The next heartbeat would start a new wake. An answer from the phone would then resume the old wake beside the new one, and two wakes of one space would run at once. A question already exists as an Action Center item, and D3 puts that item on the phone.
 
 _Rejected — a recipient field:_ an agent that chooses recipients is an exfiltration path and a spam path.
 
+**Review — confirmed, with one reason replaced and one rule added.**
+
+- Line 40, the recipient, is confirmed. A schedule's run starts with `createdBy: creatorUserId` (`apps/aflow-orchestrator/src/services/ScheduleEvaluator.ts` line 894). Every dispatch stamps the run's `createdBy` on the job as `credentialOwnerId` (`apps/aflow-orchestrator/src/services/SessionOrchestrator/scheduling/scheduleStep.ts` line 726). The executor reads it there, as the write approval gate already does (`apps/aflow-executor-api/src/handlers/api/writeApprovalGate.ts` line 161).
+- Line 43, the idempotency key, is confirmed. A retry re-dispatches the same `stepExecutionId`, and only the job's `idempotencyKey` carries the attempt (`apps/aflow-orchestrator/src/services/SessionOrchestrator/scheduling/timers.ts`, the retry job). Keying on the step execution is what makes a retry post once.
+- The repeat rule is added after line 43. A second call from the agent is a new step execution, so the idempotency key cannot catch it. CLAUDE.md records a Runner that re-sent one draft 130 times because every call succeeded.
+- Line 47 gave the wrong reason for rejecting `ask`. `IN_FLIGHT_STATUSES` leaves out `PAUSED`, and its comment says a paused wake "does not hold the next one back" (`packages/cybernetic-runtime/src/plan/resident.ts`). The rejection stands on the overlap it would cause instead. `claimResidentWake` exists to prevent that overlap.
+
 ### D3 — An Action Center item becomes a card the operator can decide from
 
-When `itemId` is given, the app reads the item through the API (`GET /v1/spaces/:spaceId/action-center/:itemId`). It renders the item with the buttons its kind allows. A tap calls the same resolve route the web app calls (`POST /v1/spaces/:spaceId/action-center/:itemId/resolve`). Then the app edits the card to say what was decided and by whom.
+When `itemId` is given, the app reads the item through the API (`GET /v1/spaces/:spaceId/action-center/:itemId`). It renders the item with the buttons the table below allows. A tap calls the same resolve route the web app calls (`POST /v1/spaces/:spaceId/action-center/:itemId/resolve`), with the item's `origin` as the app read it. Then the app edits the card to say what was decided and by whom.
 
-The app offers buttons only for these kinds:
+The table keys on the item's origin as well as its kind. The app's key is not an interactive sign-in, and some sources refuse every resolver that is not one.
 
-| Item                                            | On the phone                                                      |
-| ----------------------------------------------- | ----------------------------------------------------------------- |
-| `human_input` with a flat schema                | Buttons for an enum or a boolean. A thread reply for a string.    |
-| `human_approval`                                | Approve or deny.                                                  |
-| `write_approval`, tier `medium`, with a preview | Approve or deny, with the preview Plan 253 already computes.      |
-| Every other kind                                | The card says what waits and that it needs the operator at Aflow. |
+| Item                                                                   | On the phone                                                      |
+| ---------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| `human_input` from a paused step (origin `step`), with a flat schema   | Buttons for an enum or a boolean. A thread reply for a string.    |
+| `human_approval` from a paused step (origin `step`)                    | Approve or deny.                                                  |
+| `write_approval`, target `api`, tier `low` or `medium`, with a preview | Approve or deny, with the preview Plan 253 already computes.      |
+| Every other item, a plan decision and a plan ask included              | The card says what waits and that it needs the operator at Aflow. |
 
 A tap on an item that is no longer open gets the resolve route's own answer, and the card says the item was already decided. Free text never approves anything.
 
 _Rejected — "reply YES to approve":_ the approval would be parsed out of prose, which any content reaching the conversation could inject.
 
+**Review — amended.**
+
+- Line 53 is confirmed. Both routes exist as named (`packages/server-runtime/src/routes/action-center.ts` lines 113 and 156). The resolve body carries the `origin` the client observed. A mismatch answers `409 STALE_ACTION_CENTER_ITEM` with the latest item (lines 197 to 210). That 409 is line 64's "already decided", so the amended text says the app sends the origin it read.
+- Lines 57 to 62 keyed the table on kind alone, which puts dead buttons on the resident's own asks. A plan decision is a `human_input` item (`packages/server-runtime/src/services/actionCenter/sources/planDecisionSource.ts` line 175). A plan ask is a `human_approval` item (`packages/server-runtime/src/services/actionCenter/sources/planAskSource.ts` line 26). Both refuse a resolver that is not an interactive user (lines 100 and 64). An API key never is one (`packages/server-runtime/src/utils/interactiveUser.ts`, `INTERACTIVE_AUTH_METHODS`).
+- The paused-step source accepts the key. It stamps the resume `activatedByPerson` from `isPersonPrincipal` (`packages/server-runtime/src/services/actionCenter/sources/pausedStepSource.ts` line 143). So the first two rows name origin `step`.
+- Line 61 named `write_approval` tier `medium` only. The request is a union of three targets, and only `api` carries a tier (`packages/schemas/src/runtime/requestedInput.ts`, `WriteApprovalRequestPayloadSchema`). A space's policy can also gate `low` (`requiresWriteApproval`, `packages/schemas/src/models/apiDefinition.ts` line 285). The row now names the target and both tiers. A `browser` or `local_model` approval shows no buttons.
+- The ceiling is the app's alone, as D5 says. A write approval's `resolverPolicy` names roles, not sign-in methods (`packages/schemas/src/models/actionCenter.ts`, `ResolverPolicySchema`). The resolve route would accept a `high` approval from the app's key.
+
 ### D4 — A message from the operator continues a Helmsman conversation
 
-A direct message to the bot starts a Helmsman conversation in the operator's home space (`POST /v1/sessions`). A reply in that message's Slack thread continues the same session (`POST /v1/sessions/:sessionId/resume` with `input: { input: text }`). The app records each thread against its session.
+A direct message to the bot starts a Helmsman conversation in the operator's home space (`POST /v1/sessions?spaceId=…` with target `{ kind: "platform-role", systemRole: "cybernetic-helmsman" }` and mode `api`). A reply in that message's Slack thread continues the same session (`POST /v1/sessions/:sessionId/resume` with `{ stepExecutionId, input: { input: text } }`). `stepExecutionId` is the paused step that the last `SessionPaused` event named. The app records each thread against its session.
 
 The app relays the answer by watching that session's events until it pauses with the agent's reply (`agentResponse` on `SessionPaused`). It watches only sessions it started, and stops when the reply is posted. This is a client reading its own conversation, as the web app does.
 
@@ -75,9 +103,16 @@ The app relays the answer by watching that session's events until it pauses with
 - **A late message asks first.** A message older than ten minutes when it reaches the app is not sent to the Helmsman. The app replies "This arrived late. Run it now?" with **Run it now** and **Discard**.
 - **Missed messages are not recovered in this plan.** Slack delivers what it delivers while the app is connected. History catch-up is P3.
 
+**Review — amended.**
+
+- Line 70 omitted two things the routes require (`packages/server-runtime/src/routes/runs.ts`). A start from an API key may not use mode `chat`, which `refusedStartMode` keeps for an interactive sign-in. Mode `api` is the default, and it is attended because the key is a person's principal.
+- The resume body requires `stepExecutionId` as its pause-point guard (`ResumeSessionRequestSchema`). Line 70 now names it and where the app reads it.
+- Line 72 is confirmed. The agent's reply rides the pause event's metadata as `agentResponse` (`apps/aflow-orchestrator/src/services/SessionOrchestrator/handlers/applyAgentDecision.ts` line 1016).
+- Lines 74 to 76 are confirmed as stated.
+
 ### D5 — One operator per install, linked at setup
 
-`yarn channel:slack setup` writes the app's configuration file. That holds the Slack bot token and the app-level token for Socket Mode. It also mints a user API key for the person running setup, as `yarn mcp:setup` does (`scripts/mcp-local-setup.mjs`). The file lives at `~/.aflow/channel-slack.env`, mode `0600`.
+`yarn channel:slack setup` writes the app's configuration file. That holds the Slack bot token, the app-level token for Socket Mode and the channel lane's Redis credential (D1). It also mints a user API key for the instance owner, as `yarn mcp:setup` does (`scripts/mcp-local-setup.mjs`). The key expires after 365 days, and the app says so in Slack before it does. The file lives at `~/.aflow/channel-slack.env`, mode `0600`.
 
 Setup prints a one-time code. The operator sends that code to the bot from Slack, and the app links that Slack user to the key's user. From then on the app serves only that Slack user. Anyone else gets one fixed reply. No turn runs, and no message text is stored.
 
@@ -85,52 +120,92 @@ The app acts with the operator's API key, so it can do what an MCP client with t
 
 _Rejected — the operator's browser session as the app's credential:_ whoever holds the unlocked phone would inherit every step-up the browser login has.
 
-_Open — a server-side trust level for "a person, not at the machine":_ it would let the resolve route refuse kinds above the ceiling itself, instead of trusting the app. It is P3, and it is the only core change this feature may need later.
+_Open — a server-side trust level for "a person, not at the machine":_ it would let the resolve route refuse kinds above the ceiling itself, instead of trusting the app. It would also be the way to decide the resident's plan decisions and asks from the phone, which D3 cannot offer today. It is P3, and it is the only core change this feature may need later.
+
+**Review — amended.**
+
+- Line 80 said the key belongs to "the person running setup". `mcp-local-setup.mjs` mints the key with `PHOENIX_INSTANCE_SECRET`, so it belongs to the instance owner. It refuses any edition but the local one (`editionRefusal`), and the key it mints expires (`KEY_EXPIRES_IN_DAYS = 365`). The text now names the owner and the expiry.
+- The parts to reuse are the minting, `existingKeyVerdict` and `writeAuthFile`, which writes mode `0600`.
+- Line 80 now also lists the Redis credential, which D1's amendment adds.
+- Line 84 is confirmed. The ceiling is the app's alone (D3 review).
+- Line 88 is confirmed as open. The D3 review shows it also gates the resident's own asks, so the line now says so.
 
 ### D6 — The app owns its storage
 
-The app keeps its records in its own Postgres schema, `channel_slack`, outside every tenant schema. It creates and migrates that schema itself, with its own migration ledger, when it starts. The tables are:
+The app keeps its records in a local store of its own, beside its configuration under `~/.aflow/`, mode `0600`. It creates and migrates that store itself, with its own migration ledger, when it starts. It holds no Postgres credential. The records are:
 
 - `link`: the Slack user, the Aflow user and tenant, the home space, and when it was linked.
-- `inbound`: each Slack event id (unique), when it was sent, and its outcome.
+- `inbound`: each Slack event id (unique), when it was sent, when it arrived, and its outcome.
 - `thread`: each Slack thread and the session it continues.
 - `card`: each card's Slack message reference and the item it shows.
-- `sent`: each step execution's `messageRef`, for D2's idempotency.
+- `sent`: each step execution's `messageRef` and text, for D2's idempotency and repeat rule.
 
-Removing the app and its schema leaves nothing behind in the platform.
+Removing the app and its store leaves nothing behind in the platform.
 
 _Rejected — tenant tables:_ they would exist in every install, used or not.
 
+_Rejected — a Postgres schema of the app's own, `channel_slack`:_ the app runs outside the image as the operator's user. To create a schema it would hold a database credential that reaches every tenant schema.
+
+**Review — questioned, with a recommendation written in.**
+
+- Line 92 put the records in a Postgres schema the app creates. The host executor, the precedent this plan follows, "holds neither the wrapping key nor the instance secret". Its credential is good for claiming host jobs only (`instanceConfig.ts` lines 188 to 191).
+- An app that creates a Postgres schema needs a role that may create one, and in this stack that is the platform's own role. Line 92 named no such credential and no limit on it.
+- The recommendation is a local store, written in above. One operator and five small record sets need no shared database. The operator may prefer a Postgres role confined to `channel_slack` instead, and §8 asks that question.
+- Line 96 now records when an event arrived as well as when it was sent. §8's late threshold needs both.
+- Line 98 now keeps the text sent, which D2's repeat rule compares.
+
 ### D7 — Absent is proven, not claimed
 
-- A guard test fails on any core file that imports `apps/aflow-channel-slack`.
+- A new guard test fails on any core file that imports `apps/aflow-channel-slack`.
 - A build with the app deleted compiles, and its tests pass.
-- With the lane absent, `channel.message.send` is not in the catalog, and a direct dispatch is refused as an uncomposed operation.
+- With the lane absent, `channel.message.send` is not in the catalog, and a direct dispatch is refused as an uncomposed operation. The refusal sits in `addStepJob`, beside the lane breaker every dispatch path already meets.
+
+**Review — amended.**
+
+- Line 106 is new work, not an existing guard (D1 review).
+- Line 107 is confirmed as stated.
+- Line 108 is half true today. The catalog withholds an uncomposed operation in search, in schema reads, in promotion and in the Helmsman's surface. The code is `catalogSearch.ts`, `getSchema.ts` and `catalogToolPromote.ts` under `apps/aflow-orchestrator/src/services/SessionOrchestrator/handlers/inlineOps/`, and `packages/platform-artifacts/src/helmsmanSurface.ts`.
+- No dispatch path asks the same question. With no executor, `addStepJob` throws `NoExecutorAvailableError` and the step parks as `StepWaitingOnExecutor` (`apps/aflow-orchestrator/src/services/SessionOrchestrator/scheduling/executorWait.ts`). A skill step naming `channel.message.send` would wait, not be refused.
+- The amended text puts the refusal in `addStepJob` (`packages/redis/src/streams/jobs.ts` line 37), where `codeLaneBreakerRefusal` already sits. That changes `packages/redis`, not the orchestrator.
+- The refusal applies to every lane. An absent `code`, `host` or `browser` lane is then refused too, where today it parks. A present lane whose executor is offline still parks.
 
 ## 4. What it affects
 
 **Core, kept small:**
 
 - `packages/schemas`:
-  - the `channel` step type, in the step type list (`artifact/operationDefinition.ts`) and the stream list (`runtime/streamMessages.ts`).
+  - the `channel` step type, in the step type list (`artifact/operationDefinition.ts`, `StepTypeSchema`) and the stream list (`runtime/streamMessages.ts`, `EXECUTOR_JOB_STEP_TYPES`).
   - the `channel.message.send` registration, with `whenToUse` and `whenNotToUse`.
-  - `ChannelLaneSchema` and `channelLaneComposed` in `edition/descriptor.ts`, and the `channel` case in `composedOperations.ts`.
-  - the ownership manifest rule for the app.
+  - `ChannelLaneSchema` and `channelLaneComposed` in `edition/descriptor.ts`, with the `channelLane` field in `EditionDescriptorSchema` and in `EditionSummarySchema`'s lanes.
+  - the `channel` case in `isStepTypeComposed`, and the `channelLane` field in `ComposedLanes` (`edition/composedOperations.ts`).
+  - the ownership manifest rule for the app, and the guard test that fails on a core import of it.
+- `packages/redis`: the uncomposed-lane refusal in `addStepJob` (D7).
+- `packages/server-runtime`: `PHOENIX_CHANNEL_REDIS_PASSWORD` in the instance configuration, and the Redis identity it names, applied as `hostPairing.ts` applies the host's (D1).
 - `packages/database`: one tenant migration that adds the `channel.message` capability group to the system profiles (CLAUDE.md, schema-first step 4).
-- `apps/aflow-orchestrator`: no change, if step routing derives the stream from the step type. If it does not, the stream name is the only line added.
+- `apps/aflow-orchestrator`: no change. Step routing derives the stream from the step type.
 - `packages/platform-artifacts`: the Helmsman's placement of `channel.message.send` as discoverable, and a help article on setting up Slack.
 
-**The app, all new:** `apps/aflow-channel-slack`, with the lane consumer, the Socket Mode listener, the card renderer, its schema and migrations, and the setup script.
+**The app, all new:** `apps/aflow-channel-slack`, with the lane consumer, the Socket Mode listener, the card renderer, its store and migrations, and the setup script.
+
+**Review — amended.**
+
+- Line 115 is confirmed, with the lists named. `StepTypeSchema` is the step type list (`operationDefinition.ts` line 17). `EXECUTOR_JOB_STEP_TYPES` is the stream list (`streamMessages.ts` line 833).
+- Adding `channel` to that list makes every install create its consumer group and an empty stream key (`packages/redis/src/streams/consumerGroups.ts`). `host` already does the same. An empty key runs no code, so the constraint at line 19 holds.
+- Line 117 is amended. The descriptor schema, the client summary and `ComposedLanes` each list the lanes by name, so each gains `channelLane`.
+- Line 119 is confirmed. The migration writes the group name into every install's system profiles. It grants nothing where the lane is absent, and it adds no row.
+- Line 120 is confirmed, and its condition holds. `addStepJob` writes to `StreamKeys.jobStream(validatedJob.stepType)` (`jobs.ts` line 51), and `scheduleStep` passes `stepDef.stepType` from the registry. The orchestrator's one lane-specific branch is the host binding gate (`scheduleStep.ts` line 197), which a channel step does not need.
+- The `packages/redis` and `packages/server-runtime` items are new, from D7 and D1.
+- Line 123 now names a store, not a schema (D6).
 
 ## 5. Phases
 
-**P0 — Send.** The lane, its composition, `channel.message.send` with text only, setup and linking.
+**P0 — Send.** The lane, its Redis identity and its composition, the uncomposed-lane refusal, the import guard, `channel.message.send` with text only, setup and linking.
 
-_Exit:_ in a Helmsman conversation in the app, the operator says "send me a message on Slack saying hello". The phone receives it. On an install without the configuration file, the operation is not in the Helmsman's catalog, and D7's three proofs pass.
+_Exit:_ in a Helmsman conversation in the app, the operator says "send me a message on Slack saying hello". The phone receives it. On an install without the channel credential, the operation is not in the Helmsman's catalog, and D7's three proofs pass. A second identical send in the same run fails.
 
 **P1 — Cards.** `itemId`, the D3 table, the tap that resolves, and the card edited after.
 
-_Exit:_ a skill run parks on a medium-tier write approval. A Helmsman sends its item. The operator approves it from the phone, and the run resumes. A second tap is answered "already decided". A high-tier approval sent the same way shows no buttons.
+_Exit:_ a skill run parks on a medium-tier write approval. A Helmsman sends its item. The operator approves it from the phone, and the run resumes. A second tap is answered "already decided". A high-tier approval sent the same way shows no buttons. A plan decision sent the same way shows no buttons and says it needs the operator at Aflow.
 
 **P2 — Conversation.** D4: a direct message starts a conversation, a thread continues it, and the answer is relayed.
 
@@ -138,23 +213,41 @@ _Exit:_ "status?" sent from the phone gets the Helmsman's answer in its thread. 
 
 **P3 — Later, each its own decision:** the server-side trust level (D5), history catch-up after the laptop sleeps, several profiles on one install (Plan 335), the hosted edition's Slack app, and other providers.
 
+**Review.**
+
+- **P0 — re-cut.** Line 127 left out the Redis identity, the dispatch refusal and the import guard. Line 129's exit asks for D7's proofs, which need all three, so they move into P0. The exit now names the credential, not the file (D1). It also proves D2's repeat rule.
+- **P1 — confirmed, with one exit added.** A skill run's write approval is a `workflow_task` item. Its source reads only the resolver's user id, so it accepts the app's key (`packages/server-runtime/src/services/actionCenter/sources/workflowWriteApprovalSource.ts`). The added exit proves the plan-item row of the D3 table.
+- **P2 — confirmed.** The exit stands. D4's amendment changes the calls, not what is proven.
+- **P3 — confirmed.** The trust level matters more than line 139 implies. Without it, nothing the resident asks through the plan board can be decided from the phone (D3 review). It should be the first P3 item decided.
+
 ## 6. How it is proven
 
-- **Nothing without a call.** With the app running, a run that never calls `channel.message.send` sends nothing and writes no row in `channel_slack`.
+- **Nothing without a call.** With the app running, a run that never calls `channel.message.send` sends nothing and writes no record in the app's store.
 - **Absent is absent.** D7's three proofs.
 - **The recipient is never chosen.** No `channel.*` operation accepts a user, chat or channel id, and a guard test fails on one that does.
 - **A retry posts once.** A step retried after its message was posted returns the first `messageRef`.
+- **A repeat fails.** A second send of the same text in the same run fails, and the first is the only message posted.
 - **Free text approves nothing.** "yes" typed in a card's thread leaves the item open, and the app points to the button.
-- **The ceiling holds.** Every kind outside the D3 table renders with no buttons.
+- **The ceiling holds.** Every item outside the D3 table renders with no buttons, a plan decision and a plan ask included.
 - **A stranger gets nothing.** A message from an unlinked Slack user runs no turn and stores no text.
 
 ## 7. What exists to reuse
 
 - The lane's composition: `hostLaneComposed` in `packages/schemas/src/edition/descriptor.ts`, and its case in `packages/schemas/src/edition/composedOperations.ts`.
+- The lane's Redis identity: `PHOENIX_HOST_REDIS_PASSWORD` in `packages/server-runtime/src/bootstrap/instanceConfig.ts`, applied by `packages/server-runtime/src/routes/hostPairing.ts`.
+- The dispatch choke point: `addStepJob` and `codeLaneBreakerRefusal` in `packages/redis/src/streams/jobs.ts`.
 - The setup script's key minting and file handling: `scripts/mcp-local-setup.mjs`.
-- The approval preview a P1 card shows: `apps/aflow-executor-api/src/handlers/api/writeApprovalGate.ts`.
+- The approval preview a P1 card shows: `apps/aflow-executor-api/src/handlers/api/writeApprovalGate.ts`, rendered by `buildWriteApprovalCard` in `packages/server-runtime/src/services/actionCenter/sources/pausedStepSource.ts`.
+- The item read and resolve routes: `packages/server-runtime/src/routes/action-center.ts`.
 
 ## 8. Open questions
 
 - **The late threshold.** Ten minutes is the starting value. Measure how often the app asks and how often the operator discards.
+  - Recommended: keep ten minutes for P2. Record each late message's age and the operator's choice in `inbound` (D6). Lower the threshold where the operator chooses **Run it now** for most of them. Raise it where they discard most.
 - **The resident's policy.** When the resident sends, and what, is Plan 331's to decide. This plan only measures what was sent and what was decided from the phone.
+  - Recommended: the policy stays with Plan 331. Plan 331 should know one limit before it writes one. A plan decision or a plan ask sent as a card cannot be decided from the phone (D3). So the resident sends those as text that points to Aflow, until the trust level (D5) exists.
+  - Recommended: measure from the `sent` and `card` records, joined to the resolve audit by item id.
+- **Where the app keeps its records.** D6 now recommends a local store over a Postgres schema of the app's own.
+  - Recommended: the local store. Choose a Postgres role confined to `channel_slack` only if the hosted edition's Slack app (P3) needs the records where several processes can read them.
+- **The decision card.** The plans README requires one at the top of every plan (Plan 337 D1), and this plan has none.
+  - Recommended: write it once the operator has accepted or refused these amendments, so it records the decisions as they stand.
