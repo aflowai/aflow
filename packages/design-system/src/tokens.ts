@@ -204,8 +204,8 @@ export const tokens = {
           "bg": "#f0eeea"
         },
         "running": {
-          "fg": "#0a6f82",
-          "bg": "#d7eef3"
+          "fg": "#5a3da8",
+          "bg": "#f2eefbc4"
         },
         "paused": {
           "fg": "#d4a030",
@@ -317,7 +317,7 @@ export const tokens = {
         },
         "running": {
           "fg": "#c979ff",
-          "bg": "#d175ff3d"
+          "bg": "#211729d4"
         },
         "paused": {
           "fg": "#d4a94e",

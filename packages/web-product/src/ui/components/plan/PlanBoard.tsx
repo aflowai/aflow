@@ -8,7 +8,8 @@
  * rail. A card reads top down: its phase, its title beside its orb (Plan 332
  * P7), where it stands (why it needs the operator, Next, runs in flight, its
  * PR), then what it has been through (review rounds, subtasks). Move up and Move down are quiet icons
- * that show on the card pointed at, focused or selected (Plan 332 P6). Done
+ * that show on the card pointed at, focused or selected (Plan 332 P6). A
+ * card's surface says where it stands, as a lane row's does. Done
  * folds by day from the plan's own counts, so a fold shows how many it holds
  * before its cards are read.
  */
@@ -44,12 +45,13 @@ import type { PlanNodeCloseAnswer } from './PlanNodeCloseControl.js';
 import {
   Disclosure,
   GroupLabel,
-  HeadingOrb,
   MetaSep,
   NextMarker,
   PlanStepOrb,
   ProgressMeter,
   PullRequestChip,
+  SELECTED_RING,
+  planItemSurface,
   useMoveControls,
   useReveal,
 } from './PlanParts.js';
@@ -62,8 +64,6 @@ export type PlanNodePlaceRequest = { nodeId: string; expectedRevision: number } 
 export type PlanNodePlacer = (request: PlanNodePlaceRequest) => Promise<PlanNodeCloseAnswer>;
 
 const STRIP_WIDTH = '32px';
-/** The width in pixels of the selected card's ring, drawn outside the card. */
-const SELECTED_RING = 2;
 
 function SubtaskBar({ done, total }: { done: number; total: number }) {
   return (
@@ -98,16 +98,13 @@ function PlanCardView({
   const reveal = useReveal();
   const move = useMoveControls(node, moves, onPlace, reveal.shown || selected);
   const dropped = column === 'dropped';
-  const style: CSSProperties = {
-    position: 'relative',
-    cursor: 'pointer',
-    ...(column === 'needs_you' ? { borderLeft: '3px solid var(--color-warning-default)' } : {}),
-    ...(selected
-      ? {
-          boxShadow: `0 0 0 ${String(SELECTED_RING)}px var(--color-interactive-default), var(--shadow-md)`,
-        }
-      : {}),
-  };
+  const running = node.counts.inFlightRuns > 0;
+  const style: CSSProperties = planItemSurface({
+    column,
+    running,
+    selected,
+    hovered: reveal.hovered,
+  });
   const open = () => {
     onSelect(card);
   };
@@ -126,7 +123,8 @@ function PlanCardView({
   return (
     <Card
       interactive
-      running={node.counts.inFlightRuns > 0}
+      running={running}
+      className="ds-enter-rise"
       {...reveal.hostProps}
       role="button"
       tabIndex={0}
@@ -230,18 +228,15 @@ function PlanCardView({
 }
 
 function ColumnHeader({
-  column,
   label,
   count,
 }: {
-  column: PlanBoardColumn;
   label: string;
   /** Undefined while what it counts is still being read. */
   count: number | undefined;
 }) {
   return (
     <Row gap="xs" align="center" data-plan-column-header={label}>
-      <HeadingOrb column={column} />
       <GroupLabel>{label}</GroupLabel>
       <Text size="xs" variant="muted">
         {count === undefined ? '…' : String(count)}
@@ -371,7 +366,7 @@ export function PlanBoard({
             borderLeft: '1px solid var(--color-border-subtle)',
           }}
         >
-          <ColumnHeader column={column.id} label={column.label} count={count} />
+          <ColumnHeader label={column.label} count={count} />
         </button>
       );
     }
@@ -383,8 +378,14 @@ export function PlanBoard({
         style={{ minWidth: 0 }}
       >
         <Column gap="sm">
-          <ColumnHeader column={column.id} label={column.label} count={count} />
-          <Column gap="sm">{column.id === 'done' ? doneBody() : renderCards(list)}</Column>
+          <ColumnHeader label={column.label} count={count} />
+          {/* A column grows and shrinks as cards come and go, widened and padded by the
+              ring as a Done fold is. */}
+          <AnimatedHeight style={{ marginInline: -SELECTED_RING }}>
+            <Column gap="sm" style={{ padding: SELECTED_RING }}>
+              {column.id === 'done' ? doneBody() : renderCards(list)}
+            </Column>
+          </AnimatedHeight>
         </Column>
       </section>
     );
