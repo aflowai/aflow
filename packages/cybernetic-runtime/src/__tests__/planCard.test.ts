@@ -181,7 +181,10 @@ describe('the card on a plan node', () => {
     expect(debug).toHaveBeenCalledTimes(2);
     expect(debug).toHaveBeenCalledWith(
       expect.stringContaining('stored card refused'),
-      expect.objectContaining({ nodeId: row.id }),
+      expect.objectContaining({
+        nodeId: row.id,
+        refusal: expect.stringMatching(/"path": \[\s*"why"/),
+      }),
     );
 
     rowToPlanNode({ ...row, card: { change: 'Another older card.' } as unknown as PlanNodeCard });
