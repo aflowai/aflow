@@ -633,7 +633,15 @@ export function SpacePlanPage(): React.ReactNode {
           <Pane>{list}</Pane>
         </CollapsibleSide>
         <Pane style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ height: '100%', overflow: 'auto', padding: 'var(--space-lg)' }}>
+          <div
+            data-plan-canvas
+            style={{
+              height: '100%',
+              overflow: 'auto',
+              padding: 'var(--space-lg)',
+              ...PLAN_CANVAS_DOTS,
+            }}
+          >
             {content}
           </div>
         </Pane>
@@ -664,6 +672,13 @@ export function SpacePlanPage(): React.ReactNode {
     </div>
   );
 }
+
+/** The dot grid the skill designer's canvas draws, at its gap and dot size. */
+const PLAN_CANVAS_DOTS: React.CSSProperties = {
+  backgroundImage: 'radial-gradient(circle, var(--color-border-subtle) 1px, transparent 1px)',
+  backgroundSize: '20px 20px',
+  backgroundAttachment: 'local',
+};
 
 /** One pane of the shell, the surface the skill designer sets each of its panes on. */
 function Pane({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
