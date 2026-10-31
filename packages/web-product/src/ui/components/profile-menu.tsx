@@ -19,11 +19,7 @@ import {
   type PopoverTriggerApi,
 } from '@aflow/design-system';
 import type { LocalProfileChoicesResponse } from '@aflow/schemas';
-import {
-  LOCAL_PROFILE_CHOICE_FIELD,
-  LOCAL_PROFILE_CHOICE_PATH,
-  localProfileUnlockHref,
-} from '@aflow/web-product';
+import { LOCAL_PROFILE_CHOICE_FIELD, LOCAL_PROFILE_CHOICE_PATH } from '@aflow/web-product';
 import { useApiQuery } from '../hooks/useApiQuery.js';
 import { ProfileAvatar } from './profile-avatar.js';
 import {
@@ -101,34 +97,19 @@ export function ProfileMenu({
           </div>
           {switches.length > 0 ? (
             // A plain post, as the picker's tiles make, so the web process
-            // issues the session and keeps it from this page's scripts. A
-            // locked profile opens the picker's PIN prompt instead.
+            // issues the session and keeps it from this page's scripts.
             <form method="post" action={LOCAL_PROFILE_CHOICE_PATH}>
               {switches.map(({ profile }) => (
                 <MenuItem
                   key={profile.userId}
-                  {...(profile.hasPin
-                    ? {
-                        type: 'button' as const,
-                        onClick: () => {
-                          close();
-                          router.push(localProfileUnlockHref(profile.userId));
-                        },
-                      }
-                    : {
-                        type: 'submit' as const,
-                        name: LOCAL_PROFILE_CHOICE_FIELD,
-                        value: profile.userId,
-                      })}
+                  type="submit"
+                  name={LOCAL_PROFILE_CHOICE_FIELD}
+                  value={profile.userId}
                   icon={
                     <ProfileAvatar avatar={profile.avatar} name={profile.displayName} size={20} />
                   }
                   label={profile.displayName}
-                  description={
-                    profile.hasPin
-                      ? 'Switch to this profile with its PIN'
-                      : 'Switch to this profile'
-                  }
+                  description="Switch to this profile"
                   style={{ width: '100%' }}
                 />
               ))}

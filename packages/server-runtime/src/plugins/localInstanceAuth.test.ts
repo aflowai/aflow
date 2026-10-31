@@ -53,7 +53,6 @@ const request = (authorization?: string, extra: Record<string, string> = {}) =>
 const ONE_PROFILE = () => Promise.resolve<LocalProfileCount>('one');
 const TWO_PROFILES = () => Promise.resolve<LocalProfileCount>('several');
 const UNREAD = () => Promise.resolve<LocalProfileCount>('unread');
-const ONE_LOCKED = () => Promise.resolve<LocalProfileCount>('one-locked');
 
 /** What `readLocalProfileCount` reads, as the cache asks it. */
 const READS_ONE = () => Promise.resolve<ReadLocalProfileCount>('one');
@@ -204,35 +203,6 @@ describe('the profile rule', () => {
     });
   });
 
-  // Plan 335 P4: a PIN on the only profile ends the no-session fallback.
-  describe('on an install with one profile locked with a PIN', () => {
-    it('sends a browser with no session to the picker rather than the owner', async () => {
-      const outcome = await authenticateLocalInstance(request(`Bearer ${SECRET}`, BROWSER), {
-        ...opts,
-        profileCount: ONE_LOCKED,
-        env: {},
-      });
-      expect(outcome).toEqual({
-        kind: 'refused',
-        code: 'PROFILE_SESSION_REQUIRED',
-        message: 'This profile is locked with a PIN. Choose it and enter the PIN to continue.',
-      });
-    });
-
-    it('keeps a bare-secret caller as the owner, through the membership read', async () => {
-      expect(await principal({}, ONE_LOCKED)).toEqual({
-        userId: LOCAL_EDITION_OWNER_ID,
-        via: 'instance-secret',
-      });
-    });
-
-    it('names the profile from the session the PIN let through', async () => {
-      expect(
-        await principal({ ...BROWSER, ...sessionFor(LOCAL_EDITION_OWNER_ID) }, ONE_LOCKED),
-      ).toEqual({ userId: LOCAL_EDITION_OWNER_ID, via: 'profile-session' });
-    });
-  });
-
   describe('on an install with two profiles', () => {
     it('refuses a browser with no session rather than acting as the owner', async () => {
       expect(await principal(BROWSER, TWO_PROFILES)).toEqual({
@@ -317,8 +287,8 @@ describe('the profile rule', () => {
     }
   });
 
-  // The room P4 needs: a PIN bumps the user's generation, and every session
-  // issued before the bump ends with it.
+  // Removing a profile bumps the user's generation, and every session issued
+  // before the bump ends with it.
   it('refuses a session issued before the user generation was bumped', async () => {
     const outcome = await authenticateLocalInstance(
       request(`Bearer ${SECRET}`, { ...BROWSER, ...sessionFor(SECOND_USER) }),
@@ -485,7 +455,6 @@ describe('the profile count cache', () => {
   it.each([
     ['a count of one goes unread', 'one', 'unread'],
     ['a count of several stays several', 'several', 'several'],
-    ['a locked single profile stays locked', 'one-locked', 'one-locked'],
   ] as const)('when a later read fails, %s', async (_label, first, answer) => {
     const read = vi.fn<() => Promise<ReadLocalProfileCount>>().mockResolvedValueOnce(first);
     read.mockRejectedValueOnce(new Error('down'));
@@ -519,19 +488,6 @@ describe('the profile count cache', () => {
     expect(outcome).not.toMatchObject({ kind: 'local' });
     expect(outcome).toMatchObject({ kind: 'unavailable', code: 'PROFILE_COUNT_UNREAD' });
     expect(read).toHaveBeenCalledTimes(2);
-  });
-
-  it('keeps refusing a browser once a locked single profile has been read', async () => {
-    const read = vi.fn<() => Promise<ReadLocalProfileCount>>().mockResolvedValueOnce('one-locked');
-    read.mockRejectedValue(new Error('down'));
-    const { now, advance } = clock();
-    const count = cacheLocalProfileCount(read, { ttlMs: 5_000, now });
-    await count();
-    advance(5_000);
-    expect(await asBrowser(count)).toMatchObject({
-      kind: 'refused',
-      code: 'PROFILE_SESSION_REQUIRED',
-    });
   });
 
   it('keeps refusing a browser once a second profile has been read', async () => {

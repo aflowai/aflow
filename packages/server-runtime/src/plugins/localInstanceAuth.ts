@@ -122,10 +122,11 @@ export function presentsInstanceSecret(request: FastifyRequest, instanceSecret: 
 /**
  * How a request holding the instance secret came to name its user.
  *
- * - `sole-profile`: no profile session, on an install with one profile and no PIN. The
+ * - `sole-profile`: no profile session, on an install with one profile. The
  *   owner, granted without a membership read.
- * - `instance-secret`: no profile session and no browser behind it, on any other
- *   install. The owner, through the membership read.
+ * - `instance-secret`: no profile session and no browser behind it, on an
+ *   install with several profiles or an `unread` count. The owner, through
+ *   the membership read.
  * - `profile-session`: a profile session named the user. The membership read
  *   decides, as it does for any other principal.
  */
@@ -185,30 +186,27 @@ function headerValue(request: FastifyRequest, name: string): string | undefined 
  * 1. A profile session names its user, and the tenant plugin reads that user's
  *    membership. A session this instance did not issue is refused, never read
  *    as its absence.
- * 2. With no session, an install with one profile and no PIN answers as it
- *    always has: the owner, with no membership read.
- * 3. With no session, an install with several profiles, or with one profile
- *    locked with a PIN (Plan 335 P4), refuses a browser. The web process
- *    marks every call it makes for one, and the browser cannot remove the
- *    mark, so clearing the cookie or opening a private window reaches no
- *    profile at all. The browser goes to the picker, which asks for the PIN.
- * 4. With no session and no mark, on any install rule 2 does not serve, the
- *    caller is the owner through the membership read. Such a caller holds the
+ * 2. With no session, an install with one profile answers as it always has:
+ *    the owner, with no membership read.
+ * 3. With no session, an install with several profiles refuses a browser. The
+ *    web process marks every call it makes for one, and the browser cannot
+ *    remove the mark, so clearing the cookie or opening a private window
+ *    reaches no profile at all.
+ * 4. With no session and no mark, on an install with several profiles or an
+ *    `unread` count, the caller is the owner through the membership read. Such a caller holds the
  *    secret itself, which is the owner's whole authority, and could issue an
  *    owner session with it. Refusing it would guard nothing and break
  *    `yarn mcp:setup`.
  *
  * A session also carries the user's session generation, and rule 1 refuses one
- * whose generation is no longer the user's. Setting, changing or resetting a
- * PIN bumps it (`bumpLocalProfileSessionGeneration`), which ends every session
- * issued before.
+ * whose generation is no longer the user's. Removing a profile bumps it
+ * (`bumpLocalProfileSessionGeneration`), which ends every session issued before.
  *
  * `profileCount` is asked only when rule 2 or 3 needs the answer. The auth
  * plugin answers it from a short cache that never rejects
  * (`cacheLocalProfileCount`). An `unread` count is no evidence of one profile,
  * so it never grants rule 2. A browser then gets a 503 that names the fault,
- * and a bare-secret caller is the owner through the membership read, as in
- * rule 4.
+ * and a bare-secret caller meets rule 4.
  */
 export async function authenticateLocalInstance(
   request: FastifyRequest,
@@ -295,10 +293,7 @@ export async function authenticateLocalInstance(
     return {
       kind: 'refused',
       code: 'PROFILE_SESSION_REQUIRED',
-      message:
-        count === 'one-locked'
-          ? 'This profile is locked with a PIN. Choose it and enter the PIN to continue.'
-          : 'This install has more than one profile. Choose a profile to continue.',
+      message: 'This install has more than one profile. Choose a profile to continue.',
     };
   }
   return { kind: 'local', authUser: localOwner(opts.env, 'instance-secret') };

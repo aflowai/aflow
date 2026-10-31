@@ -3,7 +3,7 @@
  * profiles to switch to, the picker, Settings → Profiles for the owner, and
  * the account page.
  */
-import { offersLocalProfileSwitch, type LocalProfileChoice } from '@aflow/schemas';
+import { showsLocalProfilePicker, type LocalProfileChoice } from '@aflow/schemas';
 import { LOCAL_PROFILE_PICKER_PATH } from '@aflow/web-product';
 
 export type ProfileMenuEntry =
@@ -23,7 +23,7 @@ export function profileMenuEntries(input: {
   profiles: readonly LocalProfileChoice[] | null;
 }): ProfileMenuEntry[] {
   const entries: ProfileMenuEntry[] = [];
-  if (input.profiles !== null && offersLocalProfileSwitch(input.profiles)) {
+  if (input.profiles !== null && showsLocalProfilePicker(input.profiles)) {
     for (const profile of input.profiles) {
       if (profile.userId !== input.currentUserId) entries.push({ kind: 'switch-to', profile });
     }

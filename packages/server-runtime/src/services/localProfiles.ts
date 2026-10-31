@@ -1,6 +1,6 @@
 /**
  * The local edition's profile lifecycle (Plan 335 P2): list, add, rename, set
- * the avatar and remove. And the PIN that locks a profile (P4): set and reset.
+ * the avatar and remove.
  *
  * A profile is a human `users` row with an active membership in the pinned
  * tenant (option A). Adding one writes the user, a `member` membership and its
@@ -37,7 +37,6 @@ import {
 } from '@aflow/schemas';
 import { createLocalProfileWorkspace } from '../bootstrap/localEdition.js';
 import { bumpLocalProfileSessionGeneration } from '../plugins/localProfiles.js';
-import { hashLocalProfilePin } from './localProfilePin.js';
 
 export type LocalProfileRefusal = 'not_found' | 'owner' | 'blocked';
 
@@ -57,7 +56,6 @@ const profileColumns = {
   displayName: users.displayName,
   avatarUrl: users.avatarUrl,
   role: tenantMemberships.role,
-  pinHash: users.profilePinHash,
   createdAt: users.createdAt,
 };
 
@@ -66,7 +64,6 @@ interface ProfileRow {
   displayName: string;
   avatarUrl: string | null;
   role: string;
-  pinHash: string | null;
   createdAt: Date;
 }
 
@@ -78,7 +75,6 @@ function toProfile(row: ProfileRow): LocalProfile {
     avatar: readLocalProfileAvatar(row.avatarUrl),
     role,
     isOwner: role === 'owner',
-    hasPin: row.pinHash !== null,
     createdAt: row.createdAt.toISOString(),
   };
 }
@@ -138,8 +134,7 @@ async function requireLocalProfile(
 }
 
 /**
- * Adds a profile and its first workspace, in one transaction. A new profile
- * has no PIN.
+ * Adds a profile and its first workspace, in one transaction.
  *
  * The user carries no email (Plan 335 §5): a later aflow.ai account supplies
  * one, and an invented address would be a second identity to undo.
@@ -185,7 +180,6 @@ export async function addLocalProfile(
         displayName: opts.displayName,
         avatarUrl: localProfileAvatarUrl(opts.avatar),
         role: 'member',
-        pinHash: null,
         createdAt: user.createdAt,
       }),
       spaceId,
@@ -213,57 +207,6 @@ export async function updateLocalProfile(
     })
     .where(eq(users.id, opts.userId));
   return requireLocalProfile(db, opts.tenantId, opts.userId);
-}
-
-/**
- * Writes a profile's PIN hash, or clears it with null, and ends every session
- * the profile holds.
- *
- * The hash and the generation bump share one transaction. The picker reads
- * both in one row (`readLocalProfileSessionGate`), so it never pairs the old
- * PIN with the new generation.
- */
-async function writeLocalProfilePin(
-  db: PostgresJsDatabase,
-  opts: { tenantId: string; userId: string; pinHash: string | null },
-): Promise<LocalProfile> {
-  await requireLocalProfile(db, opts.tenantId, opts.userId);
-  await db.transaction(async (tx) => {
-    const t = tx as unknown as PostgresJsDatabase;
-    await t
-      .update(users)
-      .set({ profilePinHash: opts.pinHash, updatedAt: new Date() })
-      .where(eq(users.id, opts.userId));
-    await bumpLocalProfileSessionGeneration(t, opts.userId);
-  });
-  return requireLocalProfile(db, opts.tenantId, opts.userId);
-}
-
-/**
- * Sets or changes a profile's PIN (Plan 335 P4). Only the hash is stored.
- * Every session the profile held ends, the caller's own included when the
- * owner locks their own profile.
- */
-export async function setLocalProfilePin(
-  db: PostgresJsDatabase,
-  opts: { tenantId: string; userId: string; pin: string },
-): Promise<LocalProfile> {
-  return writeLocalProfilePin(db, {
-    tenantId: opts.tenantId,
-    userId: opts.userId,
-    pinHash: await hashLocalProfilePin(opts.pin),
-  });
-}
-
-/**
- * Resets a profile's PIN: the profile has none afterwards, and every session
- * it held ends. The owner's answer to a forgotten PIN (D3).
- */
-export async function resetLocalProfilePin(
-  db: PostgresJsDatabase,
-  opts: { tenantId: string; userId: string },
-): Promise<LocalProfile> {
-  return writeLocalProfilePin(db, { ...opts, pinHash: null });
 }
 
 interface RemovalPlan {

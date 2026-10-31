@@ -1,9 +1,6 @@
 /**
  * Plan 335 P2: removing a profile ends its sessions before it erases the user,
  * and evicts the cached role a deleted membership would otherwise keep.
- *
- * Plan 335 P4: setting or resetting a PIN stores a hash, never the PIN, and
- * bumps the session generation in the same transaction.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -41,19 +38,14 @@ vi.mock('@aflow/database', async (importOriginal) => {
   };
 });
 
-const bumped = vi.hoisted(() => [] as unknown[]);
-
 vi.mock('../plugins/localProfiles.js', () => ({
-  bumpLocalProfileSessionGeneration: vi.fn(async (db: unknown) => {
+  bumpLocalProfileSessionGeneration: vi.fn(async () => {
     order.push('bump');
-    bumped.push(db);
     return 1;
   }),
 }));
 
-const { removeLocalProfile, resetLocalProfilePin, setLocalProfilePin, LocalProfileError } =
-  await import('./localProfiles.js');
-const { verifyLocalProfilePin } = await import('./localProfilePin.js');
+const { removeLocalProfile, LocalProfileError } = await import('./localProfiles.js');
 
 /** A Drizzle double answering the one profile read the removal makes. */
 function dbWithProfile(role: string) {
@@ -62,7 +54,6 @@ function dbWithProfile(role: string) {
     displayName: 'Bob',
     avatarUrl: 'aflow-avatar:owl',
     role,
-    pinHash: null,
     createdAt: new Date(0),
   };
   const chain = {
@@ -76,73 +67,6 @@ function dbWithProfile(role: string) {
 
 beforeEach(() => {
   order.length = 0;
-  bumped.length = 0;
-});
-
-/**
- * A Drizzle double for a PIN change: the profile reads, and a transaction
- * whose update records what it writes.
- */
-function dbForPin() {
-  const writes: Record<string, unknown>[] = [];
-  const row = {
-    userId: 'b0b',
-    displayName: 'Bob',
-    avatarUrl: null,
-    role: 'member',
-    pinHash: null as string | null,
-    createdAt: new Date(0),
-  };
-  const read = {
-    from: () => read,
-    innerJoin: () => read,
-    where: () => read,
-    limit: async () => [{ ...row }],
-  };
-  const tx = {
-    update: () => ({
-      set: (values: Record<string, unknown>) => ({
-        where: async () => {
-          order.push('write');
-          writes.push(values);
-          row.pinHash = (values['profilePinHash'] as string | null | undefined) ?? null;
-        },
-      }),
-    }),
-  };
-  const db = {
-    select: () => read,
-    transaction: async (work: (t: unknown) => Promise<void>) => {
-      order.push('begin');
-      await work(tx);
-      order.push('commit');
-    },
-  };
-  return { db: db as never, tx, writes };
-}
-
-describe('a profile PIN', () => {
-  it('is stored as a hash and ends the sessions in the same transaction', async () => {
-    const { db, tx, writes } = dbForPin();
-    const profile = await setLocalProfilePin(db, { tenantId: 't', userId: 'b0b', pin: '2468' });
-    expect(order).toEqual(['begin', 'write', 'bump', 'commit']);
-    expect(bumped).toEqual([tx]);
-    const stored = writes[0]?.['profilePinHash'];
-    expect(typeof stored).toBe('string');
-    expect(stored).not.toContain('2468');
-    expect(await verifyLocalProfilePin('2468', stored as string)).toBe(true);
-    expect(await verifyLocalProfilePin('1357', stored as string)).toBe(false);
-    expect(profile.hasPin).toBe(true);
-  });
-
-  it('is reset to none and ends the sessions in the same transaction', async () => {
-    const { db, tx, writes } = dbForPin();
-    const profile = await resetLocalProfilePin(db, { tenantId: 't', userId: 'b0b' });
-    expect(order).toEqual(['begin', 'write', 'bump', 'commit']);
-    expect(bumped).toEqual([tx]);
-    expect(writes[0]).toEqual(expect.objectContaining({ profilePinHash: null }));
-    expect(profile.hasPin).toBe(false);
-  });
 });
 
 describe('removeLocalProfile', () => {
