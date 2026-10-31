@@ -8,17 +8,16 @@
  * rail for its step; a blocked step's **Approve** sends the open write from
  * the row itself, against the revision the lanes read, so the step moves on
  * without its plan being opened. Up next carries no reorder: ordering steps
- * is the board's (D6). Each lane is headed in its column's colour and holds
- * its rows on one contained surface; a row reads plan, step, where it stands,
- * then age and action. A row is barred in its lane's colour, as the skill
- * designer's issues panel bars an issue, and the selected one is filled
+ * is the board's (D6). Each lane is headed by its column's orb and holds
+ * its rows on one contained surface; a row reads plan, step with its orb,
+ * where it stands, then age and action. A run on a step reads as the run
+ * surface's row (Plan 332 P7). A row is barred in its lane's colour, as the
+ * skill designer's issues panel bars an issue, and the selected one is filled
  * and barred as the plan list's is (Plan 332 P6).
  */
 import { useState } from 'react';
-import Link from 'next/link';
-import { Badge, Button, Column, Row, Text } from '@aflow/design-system';
+import { AnimatedHeight, Badge, Button, Column, Row, Text } from '@aflow/design-system';
 import type { PlanLaneItem, PlanOverviewLanes } from '@aflow/schemas';
-import { spaceRoute } from '../../lib/space-routes.js';
 import {
   NEEDS_YOU_REASON_LABEL,
   PLAN_BOARD_COLUMNS,
@@ -30,22 +29,30 @@ import {
   planLaneCount,
   planLaneMore,
   planTag,
-  runKindLabel,
   type PlanLaneId,
 } from '../../lib/plan-board.js';
 import type { PlanNodeOpener } from './PlanNodeOpenControl.js';
 import {
   GroupLabel,
   HOVER_TINT,
-  HeadingDot,
+  HeadingOrb,
   MetaSep,
   NextMarker,
+  PlanRunLine,
+  PlanStepOrb,
   PullRequestChip,
   hoverTransition,
   useHover,
 } from './PlanParts.js';
 
-const linkStyle = { color: 'var(--color-text-link)' } as const;
+/**
+ * Whether a run is on an In flight row's step, as its row says it: a run of
+ * its own, or a run on a step under an `active` one. A `waiting` step with no
+ * run of its own has had its run end.
+ */
+function laneRunInFlight(item: PlanLaneItem): boolean {
+  return (item.runs?.length ?? 0) > 0 || item.status !== 'waiting';
+}
 
 /** What a row says of where its step stands, beside its title. */
 function RowState({
@@ -76,13 +83,7 @@ function RowState({
     <Row gap="xs" align="center" wrap>
       {runs.map((run) => (
         <Row key={run.runId} gap="xs" align="center" data-plan-lane-run={run.runId}>
-          <Link
-            href={spaceRoute(spaceSlug, `/runs/${encodeURIComponent(run.runId)}`)}
-            style={linkStyle}
-          >
-            {runKindLabel(run.slug)}
-          </Link>
-          <Badge variant={run.status}>{run.status}</Badge>
+          <PlanRunLine run={run} spaceSlug={spaceSlug} />
         </Row>
       ))}
       {more > 0 && <Text size="xs" variant="muted">{`and ${String(more)} more`}</Text>}
@@ -211,6 +212,9 @@ function LaneRow({
             cursor: 'pointer',
           }}
         >
+          <span style={{ alignSelf: 'center' }}>
+            <PlanStepOrb column={lane} runInFlight={laneRunInFlight(item)} />
+          </span>
           {item.phaseTitle !== undefined && (
             <>
               <Text size="xs" variant="muted" data-plan-lane-phase>
@@ -223,20 +227,36 @@ function LaneRow({
             {item.title}
           </Text>
         </button>
-        <div
-          style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 'var(--space-1)' }}
-          onClick={(event) => {
-            event.stopPropagation();
-          }}
-        >
-          <RowState lane={lane} item={item} spaceSlug={spaceSlug} />
-          {item.pullRequest !== undefined && <PullRequestChip pullRequest={item.pullRequest} />}
-        </div>
-        {item.noteHead !== undefined && (
-          <Text size="xs" variant="muted" truncate data-plan-lane-note>
-            {item.noteHead}
-          </Text>
-        )}
+        {/* The row's detail grows and shrinks as its runs, its PR and its note come and go. */}
+        <AnimatedHeight>
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 'var(--space-1)',
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                alignItems: 'center',
+                gap: 'var(--space-1)',
+              }}
+              onClick={(event) => {
+                event.stopPropagation();
+              }}
+            >
+              <RowState lane={lane} item={item} spaceSlug={spaceSlug} />
+              {item.pullRequest !== undefined && <PullRequestChip pullRequest={item.pullRequest} />}
+            </div>
+            {item.noteHead !== undefined && (
+              <Text size="xs" variant="muted" truncate data-plan-lane-note>
+                {item.noteHead}
+              </Text>
+            )}
+          </div>
+        </AnimatedHeight>
       </div>
       <span
         style={{
@@ -308,7 +328,7 @@ export function PlanOverview({
         return (
           <Column key={id} gap="sm" data-plan-lane={id}>
             <Row gap="xs" align="center">
-              <HeadingDot color={color} />
+              <HeadingOrb column={id} />
               <GroupLabel>{`${label} · ${planLaneCount(lane, lanes)}`}</GroupLabel>
             </Row>
             {lane.items.length === 0 ? (

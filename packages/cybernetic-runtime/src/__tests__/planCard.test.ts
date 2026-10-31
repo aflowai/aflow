@@ -3,10 +3,11 @@
  * whole, compared whole, replaced whole, and kept from a resident's rewrite
  * as the goal and criteria are.
  */
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import Redis from 'ioredis-mock';
 import type { Redis as RedisType } from 'ioredis';
-import { type PlanNode, type PlanNodeCard } from '@aflow/schemas';
+import type { PlanNodeRow } from '@aflow/database';
+import { PlanNodeGetOutputSchema, type PlanNode, type PlanNodeCard } from '@aflow/schemas';
 import {
   createPlanNode,
   getPlanNode,
@@ -14,7 +15,11 @@ import {
   updatePlanNode,
   type PlanWriteContext,
 } from '../plan/operations.js';
+import { rowToPlanNode } from '../plan/store.js';
 import { InMemoryPlanNodeStore } from './planStoreFake.js';
+
+const { warn, debug } = vi.hoisted(() => ({ warn: vi.fn(), debug: vi.fn() }));
+vi.mock('../logger.js', () => ({ getCyberneticLogger: () => ({ warn, debug }) }));
 
 const TENANT = 'a0000000-0000-4000-8000-000000000337';
 const SPACE = '5e1d0000-0000-4000-8000-000000000337';
@@ -106,6 +111,83 @@ describe('the card on a plan node', () => {
     });
     expect(result).toMatchObject({ ok: true });
     expect(result.ok && 'card' in result.node).toBe(false);
+  });
+
+  it('reads a stored card the schema now refuses as no card, and the node passes its output schema', () => {
+    const at = new Date('2026-10-31T00:00:00.000Z');
+    const row: PlanNodeRow = {
+      id: '7b0c4b52-58a4-4c39-9a51-0d3f3c0b8a11',
+      spaceId: SPACE,
+      parentId: null,
+      kind: 'decide',
+      title: 'Decide the card',
+      goal: 'Decide whether nodes carry a card.',
+      criteria: 'The operator approves the card.',
+      status: 'blocked',
+      outcome: null,
+      note: null,
+      revision: 2,
+      position: 0,
+      createdBy: null,
+      createdAt: at,
+      updatedAt: at,
+      closedAt: null,
+      openedAt: null,
+      spendCents: null,
+      card: { change: 'Prose becomes a card.', doneWhen: 'It reads.' } as unknown as PlanNodeCard,
+    };
+    const node = rowToPlanNode(row);
+    expect(node).not.toHaveProperty('card');
+    expect(PlanNodeGetOutputSchema.shape.node.safeParse(node).success).toBe(true);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('stored card refused'),
+      expect.objectContaining({ nodeId: row.id, refusal: expect.stringContaining('why') }),
+    );
+
+    warn.mockClear();
+    expect(rowToPlanNode({ ...row, card: CARD }).card).toEqual(CARD);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('warns once for a refused stored card, and logs each later read of it at debug', () => {
+    const at = new Date('2026-10-31T00:00:00.000Z');
+    const row: PlanNodeRow = {
+      id: '9c1d5e63-69b5-4d4a-8b62-1e4d4c4d9b22',
+      spaceId: SPACE,
+      parentId: null,
+      kind: 'decide',
+      title: 'Decide the card',
+      goal: 'Decide whether nodes carry a card.',
+      criteria: 'The operator approves the card.',
+      status: 'blocked',
+      outcome: null,
+      note: null,
+      revision: 2,
+      position: 0,
+      createdBy: null,
+      createdAt: at,
+      updatedAt: at,
+      closedAt: null,
+      openedAt: null,
+      spendCents: null,
+      card: { change: 'Prose becomes a card.' } as unknown as PlanNodeCard,
+    };
+    warn.mockClear();
+    debug.mockClear();
+    rowToPlanNode(row);
+    rowToPlanNode(row);
+    rowToPlanNode({ ...row });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(debug).toHaveBeenCalledTimes(2);
+    expect(debug).toHaveBeenCalledWith(
+      expect.stringContaining('stored card refused'),
+      expect.objectContaining({ nodeId: row.id }),
+    );
+    const { refusal } = debug.mock.calls[0]?.[1] as { refusal: string };
+    expect(JSON.parse(refusal)).toContainEqual(expect.objectContaining({ path: ['why'] }));
+
+    rowToPlanNode({ ...row, card: { change: 'Another older card.' } as unknown as PlanNodeCard });
+    expect(warn).toHaveBeenCalledTimes(2);
   });
 });
 
