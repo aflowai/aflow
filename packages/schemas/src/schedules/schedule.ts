@@ -112,20 +112,3 @@ export const FlowScheduleSchema = z.object({
   updatedAt: z.string().datetime(),
 });
 export type FlowSchedule = z.infer<typeof FlowScheduleSchema>;
-
-// ============================================================================
-// Schedules an agent set up in chat
-// ============================================================================
-
-/**
- * How long a schedule an agent set up in chat stays news, for the Action
- * Center notice and the Workbench's Schedules section alike.
- *
- * A schedule is durable, so "most recent N" alone would leave one set up months
- * ago standing there forever. The standing answer to "what runs here" is the
- * Triggers page, and these surfaces show only the moment one appeared.
- */
-export const CHAT_SCHEDULE_NEWS_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
-
-/** How many schedules set up in chat those surfaces list, newest first. */
-export const CHAT_SCHEDULE_LIST_LIMIT = 20;

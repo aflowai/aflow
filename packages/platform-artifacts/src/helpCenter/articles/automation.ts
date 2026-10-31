@@ -32,7 +32,7 @@ Each schedule shows its name, when it repeats, what it will ask the agent to do,
 
 ## Schedules in the Workbench
 
-The **Workbench** beside the chat lists, under **Schedules**, the schedules an agent set up in chat in the last 7 days, newest first. Each shows its name and its state: **active**, **paused** or **expired**. Below them is when it runs next or when it last ran, with how many times it has run, such as **next in 4 min** or **ran once · 2 d ago**. **Schedules** at the top of the section opens the Triggers page. The section is hidden when there is nothing to list.
+The **Workbench** beside the chat lists, under **Schedules**, the schedules an agent set up in chat in the last 7 days, newest first. Each shows its name and its state: **active**, **paused** or **expired**. Below them is when it runs next or when it last ran, with how many times it has run, such as **next in 4 min** or **ran once · 2 d ago**. A schedule that has been renewed shows as its renewal, which is the one still running. **Schedules** at the top of the section opens the Triggers page. The section is hidden when there is nothing to list.
 
 ## Pausing and removing
 

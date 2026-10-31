@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Column } from '@aflow/design-system';
-import { CHAT_SCHEDULE_LIST_LIMIT, CHAT_SCHEDULE_NEWS_WINDOW_MS } from '@aflow/schemas';
+import { selectChatScheduleNews } from '@aflow/schemas';
 
 import type { UseActionCenterResult } from '../../hooks/use-action-center.js';
 import { spaceSchedulesKey, useSpaceSchedules } from '../../hooks/use-space-schedules.js';
@@ -11,22 +11,49 @@ import { ScheduleCard, type ScheduleRow } from '../schedule-card.js';
 import { WorkbenchSection } from './WorkbenchSection.js';
 
 /**
- * The schedules an agent set up in chat lately: set up during a conversation
- * and not a renewal of one already shown, created within the news window,
- * newest first. The same rule picks the Action Center's trigger_armed notices.
+ * The schedule that now carries a trigger: the last renewal in its chain, or
+ * the schedule itself where nothing has renewed it. A renewal expires its
+ * predecessor, so showing the predecessor would read a firing trigger as
+ * expired. The database keeps one successor per schedule.
+ */
+function currentRenewal(
+  row: ScheduleRow,
+  successorOf: ReadonlyMap<string, ScheduleRow>,
+): ScheduleRow {
+  const seen = new Set([row.id]);
+  let current = row;
+  for (;;) {
+    const next = successorOf.get(current.id);
+    if (next === undefined || seen.has(next.id)) return current;
+    seen.add(next.id);
+    current = next;
+  }
+}
+
+/**
+ * The schedules an agent set up in chat lately, each followed to the renewal
+ * that now carries it. The arrivals are the ones the Action Center's
+ * trigger_armed notices announce, picked by the same selectChatScheduleNews,
+ * and they keep that order.
  */
 export function chatSchedules(rows: readonly ScheduleRow[], now = Date.now()): ScheduleRow[] {
-  const since = now - CHAT_SCHEDULE_NEWS_WINDOW_MS;
-  return rows
-    .filter(
-      (row) =>
-        row.createdByRunId !== null &&
-        row.renewsScheduleId === null &&
-        row.status !== 'deleted' &&
-        new Date(row.createdAt).getTime() >= since,
-    )
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-    .slice(0, CHAT_SCHEDULE_LIST_LIMIT);
+  const successorOf = new Map<string, ScheduleRow>();
+  for (const row of rows) {
+    if (row.renewsScheduleId !== null) successorOf.set(row.renewsScheduleId, row);
+  }
+  const arrivals = selectChatScheduleNews(
+    rows,
+    (row) => ({
+      armedInChat: row.createdByRunId !== null,
+      renewsScheduleId: row.renewsScheduleId,
+      status: row.status,
+      createdAt: row.createdAt,
+    }),
+    now,
+  );
+  return arrivals
+    .map((row) => currentRenewal(row, successorOf))
+    .filter((row) => row.status !== 'deleted');
 }
 
 /**

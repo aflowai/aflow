@@ -99,6 +99,7 @@ const actionCenter = { lanes: { notices: [] } } as unknown as UseActionCenterRes
 
 let container: HTMLDivElement;
 let root: Root;
+let queryClient: QueryClient;
 
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -113,6 +114,7 @@ beforeEach(() => {
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
+  queryClient = new QueryClient();
   queried.length = 0;
   vi.mocked(ScheduleCard).mockClear();
 });
@@ -126,7 +128,7 @@ afterEach(() => {
 
 function render(element: React.ReactElement): void {
   act(() => {
-    root.render(createElement(QueryClientProvider, { client: new QueryClient() }, element));
+    root.render(createElement(QueryClientProvider, { client: queryClient }, element));
   });
 }
 
@@ -134,10 +136,10 @@ function renderPage(): void {
   render(createElement(TriggersPage));
 }
 
-function renderWorkbench(): void {
+function renderWorkbench(state: UseActionCenterResult = actionCenter): void {
   render(
     createElement(WorkbenchSchedules, {
-      state: actionCenter,
+      state,
       spaceId: SPACE_ID,
       spaceSlug: 'home',
     }),
@@ -239,6 +241,63 @@ describe("the Workbench's Schedules section", () => {
     renderWorkbench();
 
     expect(words(card('Daily report'))).toContain('next in 4 min · ran 3×');
+  });
+
+  it('shows the renewal that now carries a schedule, never the expired one it renewed', () => {
+    const original = schedule('original', {
+      name: 'Local PR Shepherd',
+      status: 'expired',
+      nextFireAt: null,
+      lastFiredAt: at(-DAY),
+      firingCount: 50,
+      maxFirings: 50,
+      createdAt: at(-2 * DAY),
+    });
+    const first = schedule('first', {
+      name: 'Local PR Shepherd',
+      status: 'expired',
+      nextFireAt: null,
+      firingCount: 50,
+      maxFirings: 50,
+      renewsScheduleId: 'original',
+      createdAt: at(-DAY),
+    });
+    const second = schedule('second', {
+      name: 'Local PR Shepherd',
+      firingCount: 2,
+      maxFirings: 50,
+      lastFiredAt: at(-5 * MINUTE),
+      renewsScheduleId: 'first',
+      createdAt: at(-2 * 60 * MINUTE),
+    });
+    schedules = [second, upcoming, first, original];
+    renderWorkbench();
+
+    expect(cards().map((el) => el.getAttribute('aria-label'))).toEqual([
+      'Daily report',
+      'Local PR Shepherd',
+    ]);
+    expect(words(card('Local PR Shepherd'))).toEqual([
+      'Local PR Shepherd',
+      'active',
+      'next in 4 min · ran 2×',
+    ]);
+  });
+
+  it('fetches the schedules again when a trigger_armed notice arrives', () => {
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    schedules = [upcoming];
+    renderWorkbench();
+    expect(invalidate).not.toHaveBeenCalled();
+
+    const notice = { id: 'trigger-armed:upcoming', kind: 'trigger_armed' };
+    renderWorkbench({ lanes: { notices: [notice] } } as unknown as UseActionCenterResult);
+
+    expect(invalidate).toHaveBeenCalledTimes(1);
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['space', SPACE_ID, 'schedules'] });
+
+    renderWorkbench({ lanes: { notices: [notice] } } as unknown as UseActionCenterResult);
+    expect(invalidate).toHaveBeenCalledTimes(1);
   });
 
   it('renders nothing when no agent has set one up', () => {
