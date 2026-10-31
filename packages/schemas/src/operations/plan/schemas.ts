@@ -1222,7 +1222,7 @@ export const PlanBoardNextSchema = z
       .strict()
       .optional()
       .describe(
-        'Present for an exhausted active root without blocked scope, waiting scope or declined proposals, when no approved work is actionable or moving. Create at most one blocked proposal under parentId with plan.node.create and proposed saying why, even when unrelated roots await people.',
+        'Present for an exhausted active root without blocked scope, waiting scope or declined proposals, when no approved work is actionable or moving. Create at most one blocked proposal under parentId with plan.node.create, proposed saying why and a card for the operator to decide from, even when unrelated roots await people.',
       ),
     deferred: z
       .number()

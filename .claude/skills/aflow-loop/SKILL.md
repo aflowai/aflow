@@ -29,7 +29,10 @@ the stack current.
 Board markers: `active` nodes in position order are the approved queue; `blocked` waits on
 a person; `waiting` waits on a run; a proposal is created `blocked` and only a person moves
 it. A node reopened from `done` keeps "Reopened; it was done: <outcome>" at the head of its
-note. The resident (Plan 331) takes the next active node on a schedule when the operator
+note. A node that asks the operator for a decision carries a `card` (Plan 337): what
+changes, why, what it affects, risks, open questions with a recommended answer, and what is
+not done. A commissioned plan document opens with the same card, and the Helmsman links the
+merged document to its node at the merge sha. The resident (Plan 331) takes the next active node on a schedule when the operator
 has armed it; until then a node moves only when a Helmsman is told to take it.
 
 ## A stream, step by step

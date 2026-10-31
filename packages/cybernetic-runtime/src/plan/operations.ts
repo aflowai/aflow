@@ -28,6 +28,7 @@ import {
   OPEN_PLAN_NODE_STATUSES,
   PLAN_NODE_LIVE_CHECK_HEAD,
   PLAN_NODE_PROPOSED_HEAD,
+  planNodeCardInOrder,
   type CoachLearning,
   type PlanNode,
   type PlanNodeCreateInput,
@@ -281,6 +282,7 @@ export async function createPlanNode(
     goal: input.goal,
     criteria: input.criteria,
     note,
+    ...(input.card !== undefined ? { card: input.card } : {}),
     ...(input.position !== undefined ? { position: input.position } : {}),
     createdBy: ctx.createdBy ?? null,
     ...(head !== undefined ? { status: 'blocked' as const } : {}),
@@ -433,7 +435,9 @@ async function writePlanNode(
     return residentUnblocks(current);
   }
 
-  const rewritesProposal = input.goal !== undefined || input.criteria !== undefined;
+  // The card follows the goal and criteria (Plan 337 D4): a resident rewrites it only answering a Revise.
+  const rewritesProposal =
+    input.goal !== undefined || input.criteria !== undefined || input.card !== undefined;
   if (
     ctx.resident === true &&
     (input.title !== undefined ||
@@ -513,6 +517,7 @@ async function writePlanNode(
   if (input.criteria !== undefined) patch.criteria = input.criteria;
   if (input.note !== undefined) patch.note = input.note === '' ? null : input.note;
   if (input.outcome !== undefined) patch.outcome = input.outcome;
+  if (input.card !== undefined) patch.card = planNodeCardInOrder(input.card);
   if (input.position !== undefined) patch.position = input.position;
 
   if (input.status !== undefined) {

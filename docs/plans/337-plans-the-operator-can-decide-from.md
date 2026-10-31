@@ -1,6 +1,6 @@
 # Plan 337 — Plans the operator can decide from
 
-**Status:** proposed. This document is P0. P1 to P3 are not built and start only after it merges. P4, the operator's note on a node, is built (§6).
+**Status:** P0 merged. P1, the card on the node record and the writers' guidance, is built. P4, the operator's note on a node, is built. P2 and P3 are not built (§6).
 
 **Builds on:** Plan 322 (plan nodes, `decide` nodes and D9's answer as the outcome), Plan 329 (the planning skill and D1's proposal), Plan 331 (the resident and P2's proposals), Plan 332 (the rail, **Approve** and **Reopen**), Plan 333 (the writing rules and D3: nothing checks them).
 
@@ -103,6 +103,8 @@ A node gains an optional `card`. Its shape is a rule, so it lives in the schema.
 **A risk carries its mitigation where there is one.** Plan 329 D1 gives each risk a mitigation. The same pair here lets a proposal become a card with no translation.
 
 **The ceilings are storage ceilings.** An item is a trimmed string of at most `PLAN_NODE_CARD_ITEM_MAX_CHARS`, 4,000 characters. A list holds at most 50 items. The whole card, serialised, holds at most `PLAN_NODE_PROSE_MAX_CHARS`, the ceiling every other prose field has. Nothing breaks below these numbers. P1 measures the tokens a full card adds to `plan.node.get` and records the number here.
+
+**Measured (P1).** The platform's estimate is 3.5 characters a token (`estimateStringTokens`). This document's own card, every section filled, serialises to 2,396 characters, so it adds 685 tokens to `plan.node.get`. A card at the whole-card ceiling adds at most 18,286 tokens. Every result that returns the whole node carries it: `plan.node.get`, the node a create, update or depend returns, and the rail's detail read. A list, a tree, the attention block and a brief do not. The declaration of the tool is a separate cost, paid every turn. The card's shape adds 147 tokens to `plan.node.create` and 89 to `plan.node.update`.
 
 **Style is guidance only.** The guidance asks for one or two short sentences per item. It asks for one topic per sentence, active voice, one word per concept and under about 25 words. No validator reads it (D4).
 
@@ -217,6 +219,22 @@ Each case fails if the change is wrong.
 P1 corrects Plan 329 because P0's range holds only this document and its index row.
 
 _Exit:_ the shape cases in §5 pass. A Helmsman asked to propose a phase writes a node with a card on the live stack.
+
+P1 is built. It holds these parts beyond the list above:
+
+- **The link at the merge sha (D2).** No phase built this guidance, and P2's **Read the plan** renders from it. A `plan.node.link` pitfall and the `document` ref description tell the Helmsman to link a merged plan document at its merge sha. A folder with no remote gets the path and the sha.
+- **The resident's proposals (D4).** The board's `propose` answer asks for a card on the proposal. The `revise` guidance rewrites the card with the goal and criteria.
+- **The harness writing a plan document (D4).** Until P3's template, the harness is told through the brief. A `plan.node.create` pitfall and the prompt say a commissioned plan document opens with the same card.
+- **Migration 234** adds the nullable `card jsonb` column. Plan 331 P2 withdrew 232, and its guard refuses that number. The open Plan 336 P1 branch holds 233. Tests: `planCard.test.ts` in `@aflow/schemas` and in `@aflow/cybernetic-runtime`, a case in `planStore.pg.test.ts`, and `migration234.test.ts`.
+
+Where the code differed from the design's reading:
+
+- A whole card in the declaration costs about 340 tokens an operation, and the Helmsman pins both writes. So the declaration carries the card as a described object, and its description holds a one-line shape. The shape is derived from `PlanNodeCardSchema`, so it cannot drift from the schema. Dispatch validates against the full schema. The two writes add 236 tokens to every Helmsman turn, and the prompt's guidance adds 75. The context-budget baseline was moved for them.
+- A `jsonb` column returns keys in its own order. `planNodeCardInOrder` reads the card back in D1's order, and an update compares cards by their serialised form. The same card sent again is refused as a write that changes nothing.
+- A resident rule exists on main for the goal and criteria, before Plan 331 P2. A resident may rewrite them only to answer a Revise. The card follows that rule now (D4).
+- `plan.node.update` replaces a card whole and never removes one. The design names no removal. The executor checks arguments against the declared object, so a `null` card would be refused before dispatch.
+- The engine's findings carrier gains no card. The engine writes no prose beyond its own lines (F6), and D4 leaves the carrier's card to Plan 331 P2.
+- Plan 329 has no `PlanProposalSchema` yet (F7). Its D1 now says the proposal reuses the card's risk and question shapes.
 
 **P2 — The rail renders the card (D2's link, D3).** It holds the card sections, **Read the plan**, the prefilled **Decide**, the per-question answers on **Approve** and the help article. _Exit:_ the rail, answer and link cases in §5 pass. The operator decides one carded node from the rail without opening its document.
 
