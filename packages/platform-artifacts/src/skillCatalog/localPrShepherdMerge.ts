@@ -154,7 +154,7 @@ export const MERGE_READ_TASKS = [
   {
     taskId: 'read-publication-review',
     name: "Read the publication's review and override",
-    goal: "Read the pushed head's publication review, its reviewed commit, and its overrideCheck from result.output, trusted only from that publication run. The read takes the verdict from the review run as it stands, so a review retried in place counts by its final attempt.",
+    goal: "Read the pushed head's publication review, its reviewed commit, and its overrideCheck and pushDecision from result.output, trusted only from that publication run. Read the verdict from the review run's final attempt, including a review retried in place.",
     type: 'operation' as const,
     operation: 'workflow.run.detail',
     when: { expression: 'tasks.read-publication.output.runs[0].id != null', onMissingRef: SKIP },

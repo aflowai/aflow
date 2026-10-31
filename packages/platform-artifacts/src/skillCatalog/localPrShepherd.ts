@@ -205,7 +205,7 @@ const DECIDE_STATE = {
   publication: outputFields(
     'publication',
     'read-publication-review',
-    ['overrideCheck'],
+    ['overrideCheck', 'pushDecision'],
     'result.output',
   ),
   publicationReview: outputFields(
@@ -218,7 +218,7 @@ const DECIDE_STATE = {
 
 /** What the Helmsman needs once it has chosen the skill: carried as the skill's usage pitfalls. */
 const SHEPHERD_PITFALLS: string[] = [
-  `When it merges: only where the folder's merge posture, \`mergePosture\` beside the push approval, is \`when-green\` — \`never\` is the default, and leaves every merge to the operator. Then a green pull request is merged by squash, pinned to the head it read, when every check the base branch requires — by its rulesets or its classic protection — passed on that head, no person's standing review requests changes, and GitHub says the head merges into its base. The publication's review must approve the head, or its \`overrideCheck\` must be \`operator\`, recorded at the push approval. Each condition that does not hold leaves it, saying which; a mergeability GitHub has not computed yet is read again next pass, never merged on. The merge asks the operator's approval of exactly that request, as every merge does; a declined or refused merge of a head is not asked for again until a push moves it. One refusal is not of the head: GitHub answering 405 \`Base branch was modified\` because another pull request merged first, while the head, read again, is still the one pinned and green. That merge is sent once more in the same pass, and if GitHub refuses it again the pass hands back \`merge\` with nothing recorded against the head, so the next pass asks again.`,
+  `When it merges: only where the folder's merge posture, \`mergePosture\` beside the push approval, is \`when-green\` — \`never\` is the default, and leaves every merge to the operator. Then a green pull request is merged by squash, pinned to the head it read, when every check the base branch requires — by its rulesets or its classic protection — passed on that head, no person's standing review requests changes, and GitHub says the head merges into its base. The publication's review must approve the head, or its \`overrideCheck\` must be \`operator\`, recorded with \`pushDecision: ask\` at the push approval. Each condition that does not hold leaves it, saying which; a mergeability GitHub has not computed yet is read again next pass, never merged on. The merge asks the operator's approval of exactly that request, as every merge does; a declined or refused merge of a head is not asked for again until a push moves it. One refusal is not of the head: GitHub answering 405 \`Base branch was modified\` because another pull request merged first, while the head, read again, is still the one pinned and green. That merge is sent once more in the same pass, and if GitHub refuses it again the pass hands back \`merge\` with nothing recorded against the head, so the next pass asks again.`,
   `What it needs: the connected folder, \`bindingId\`, connected with a publish prefix and an \`origin\` on GitHub, and the GitHub connection for the space. \`pullNumber\` aims a pass at one pull request, which must still be one the loop opened; without it a pass tends the one after the pull request the last such pass tended, so passes on a schedule take them in turn. \`attemptBudget\` is how many failures of one pull request it acts on before it stops — ${String(SHEPHERD_ATTEMPT_BUDGET_DEFAULT)} unless named.`,
   `When it stops: a pull request whose budget is spent and whose CI fails again is \`abandon\`: the handoff comment says why, and one Action Center item asks a person to take it — one per head, however many passes find it so. A push that moves the head is read again.`,
   `What it hands to the agent: a pass that ends on a case its rules cannot act on — GitHub refused the merge for anything but a base that moved, the head does not merge into its base while CI has not failed on it and the shepherd would merge it, reviews or check runs past the one page a pass reads, or a repository whose open pull requests the connection has refused to list on every pass for ${String(SHEPHERD_UNLISTED_PERSISTS_AFTER_MS / 60_000)} minutes — starts a Helmsman conversation on it, carrying what the pass read, what it decided and why, and what the handoff records as tried, for the Helmsman to decide and act on with the skills it has. A read that failed once is read again by the next pass, and a draft, or a folder whose merge is the operator's, stays with them. A case is handed over once: a pull request's once per head and case, so a push that moves the head is a new case, and so is another case on the same head; a repository's once until a pass lists its pull requests again.`,
@@ -234,7 +234,7 @@ const SHEPHERD_PITFALLS: string[] = [
 
 const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
   catalogId: 'local-pr-shepherd',
-  version: 19,
+  version: 20,
   name: 'Local PR Shepherd',
   tagline:
     "Tend the pull requests the loop opened: read their CI, fix and publish a red check through Local Publish, and merge a green one where the folder's merge posture allows — never approving or closing.",

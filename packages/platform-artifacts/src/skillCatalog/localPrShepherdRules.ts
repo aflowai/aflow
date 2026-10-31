@@ -141,18 +141,17 @@ export const MERGE_RULES: readonly WorkflowRunDecideRule[] = [
   ),
   // `workflow.run.detail` reads a task that waited on a run from that run as
   // it stands, so a review retried in place counts by its final attempt.
-  {
+  ...[
+    "state.publication.overrideCheck != 'operator'",
+    "state.publication.pushDecision != 'ask'",
+  ].map((expression) => ({
     when: {
-      allOf: [
-        GREEN,
-        "state.publicationReview.verdict != 'approve'",
-        "state.publication.overrideCheck != 'operator'",
-      ],
+      allOf: [GREEN, "state.publicationReview.verdict != 'approve'", expression],
     },
     decision: 'leave',
     reason:
       "The Local Code Review of the publication that pushed this head did not return `approve` — read from the review run itself, its final attempt where it was retried in place: the merge is the operator's.",
-  },
+  })),
   // GitHub computes whether a head merges after it is asked, and answers null
   // until it has: a merge asked for on null is a guess GitHub may refuse. The
   // read asked, so the next pass has the answer. A head that does not merge
@@ -168,6 +167,7 @@ export const MERGE_RULES: readonly WorkflowRunDecideRule[] = [
       allOf: [
         GREEN,
         "state.publication.overrideCheck == 'operator'",
+        "state.publication.pushDecision == 'ask'",
         "state.publicationReview.verdict == 'comment'",
       ],
     },
@@ -180,6 +180,7 @@ export const MERGE_RULES: readonly WorkflowRunDecideRule[] = [
       allOf: [
         GREEN,
         "state.publication.overrideCheck == 'operator'",
+        "state.publication.pushDecision == 'ask'",
         "state.publicationReview.verdict != 'approve'",
       ],
     },

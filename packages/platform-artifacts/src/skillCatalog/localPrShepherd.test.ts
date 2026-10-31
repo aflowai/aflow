@@ -255,7 +255,13 @@ interface Scenario {
   reviews?: PullRequestReviews;
   /** The one finished publication of the branch: the verdict its review returned, for the commit it reviewed and pushed. */
   publication?:
-    | { verdict: string | null; at: string; retriedInPlace?: boolean; overrideCheck?: string }
+    | {
+        verdict: string | null;
+        at: string;
+        retriedInPlace?: boolean;
+        pushDecision?: string;
+        overrideCheck?: string;
+      }
     | 'none';
   /** The branch's finished publications, newest first, where there are several; over `publication`. */
   publications?: PublicationRecord[];
@@ -316,6 +322,7 @@ interface Scenario {
 
 /** One publication of the branch: its run, its review's verdict and the commit it reviewed, and the commit its push sent, if it pushed. */
 interface PublicationRecord {
+  pushDecision?: string;
   overrideCheck?: string;
   id: string;
   verdict: string | null;
@@ -333,6 +340,7 @@ function publicationsOf(s: Scenario): PublicationRecord[] {
     : [
         {
           id: PUBLICATION_RUN,
+          pushDecision: publication.pushDecision ?? 'ask',
           ...(publication.overrideCheck === undefined
             ? {}
             : { overrideCheck: publication.overrideCheck }),
@@ -528,7 +536,23 @@ function answer(taskId: string, input: Record<string, unknown>, s: Scenario): An
       const publication = publicationsOf(s).find((p) => p.id === input['runId']);
       if (publication === undefined) return { ok: false };
       return ok({
-        result: { output: { overrideCheck: publication.overrideCheck } },
+        result: {
+          output: Object.fromEntries(
+            [
+              ['verify-override', publication.overrideCheck],
+              ['decide-push', publication.pushDecision],
+            ].map(([taskId, decision]) => {
+              const task = PUBLISH_LOCAL_CHANGES.bundle.workflow.tasks.find(
+                (task) => task.taskId === taskId,
+              )!;
+              const promotion = task.promoteOutputs?.find(
+                (rule) => rule.kind === 'output_path' && rule.path === 'decision',
+              );
+              expect(promotion).toBeDefined();
+              return [promotion!.toState, decision];
+            }),
+          ),
+        },
         run: { runId: publication.id, status: 'completed' },
         tasks: [],
         activeWaiters: [],
@@ -2179,6 +2203,26 @@ describe('Local PR Shepherd — it merges what the posture allows', () => {
       );
     }
   });
+
+  it.each(['push', 'keep_local', undefined])(
+    'leaves an operator override whose push gate recorded %s',
+    (pushDecision) => {
+      const result = green({
+        publications: [
+          {
+            id: PUBLICATION_RUN,
+            verdict: 'comment',
+            reviewed: HEAD,
+            pushed: HEAD,
+            overrideCheck: 'operator',
+            ...(pushDecision === undefined ? {} : { pushDecision }),
+          },
+        ],
+      });
+      expect(result.decision).toBe('leave');
+      expect(result.ran).not.toContain('merge');
+    },
+  );
 
   it.each([
     { mergePosture: 'never' as const },
