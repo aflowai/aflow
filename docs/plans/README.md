@@ -51,7 +51,8 @@ the card, so it holds these sections, in this order:
 - The criteria the plan is done against.
 ```
 
-A section with nothing in it says "None." Write one or two short sentences an item.
+Keep a section with nothing in it as its heading with no items. The node card
+records it as an empty list. Write one or two short sentences an item.
 The card on the plan's node holds the same sections, and Done when is the node's criteria.
 
 Write the card and the plan to the writing rules of Plan 333 D2:
