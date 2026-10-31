@@ -99,7 +99,8 @@ function IntegrationsPageInner() {
   };
   const { isDeleting, run: runMcpDelete } = useDeleteAction(closeMcpDelete);
   // The private network form for one definition, opened from a refused
-  // connect's action or from the definition's Private network section.
+  // connect's action, the card's standing action or the definition's Private
+  // network section.
   const [privateNetworkTarget, setPrivateNetworkTarget] = useState<{
     serverId: string;
     refusedHost?: string;

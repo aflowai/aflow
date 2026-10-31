@@ -160,7 +160,7 @@ describe('the managed connect', () => {
     state.privateNetworkJson = null;
     const error = failure(await test());
     expect(error.message).toContain(
-      'It is a private network address (10.0.0.0/8, 172.16.0.0/12 or 192.168.0.0/16).',
+      '10.1.2.3 is on a private network address (10.0.0.0/8, 172.16.0.0/12 or 192.168.0.0/16).',
     );
     expect(error.message).toContain(
       'An operator can let this server reach 10.1.2.3 with the Set as private network action' +
@@ -194,7 +194,7 @@ describe('the managed connect', () => {
       remedy: 'none',
     });
     expect(error.message).toContain(
-      'It is a loopback address (127.0.0.0/8). No setting reaches it.',
+      '127.0.0.1 is on a loopback address (127.0.0.0/8). No setting reaches it.',
     );
   });
 

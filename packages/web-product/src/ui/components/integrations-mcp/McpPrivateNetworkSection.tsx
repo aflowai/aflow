@@ -1,11 +1,15 @@
 'use client';
 
 import { Button, Column, Icon, Row, Text } from '@aflow/design-system';
-import type { McpPrivateNetworkAcknowledgment } from '@aflow/schemas';
+import {
+  MCP_SET_PRIVATE_NETWORK_LABEL,
+  type McpEgressRefusalContext,
+  type McpPrivateNetworkAcknowledgment,
+} from '@aflow/schemas';
 import { useCurrentUser } from '../user-avatar.js';
 import { useSpacePeople } from '../../hooks/use-space-people.js';
 import { ChipList, DetailRow, DetailsSection, formatJson } from '../integrations-api/helpers.js';
-import { describeMcpRefusal, SET_PRIVATE_NETWORK_LABEL } from './mcpEgressRefusal.js';
+import { describeMcpRefusal } from './mcpEgressRefusal.js';
 import type { McpBindingTestResult } from './use-mcp-integrations.js';
 
 /** Who set the acknowledgment and when, read from the record itself. */
@@ -78,14 +82,17 @@ export function McpPrivateNetworkSection({
 export function McpTestFailure({
   result,
   prefix,
+  refusalContext,
   onSetPrivateNetwork,
 }: {
   result: McpBindingTestResult;
   prefix: string;
+  /** The definition the refusal names: its name, and whether an acknowledgment is set. */
+  refusalContext: McpEgressRefusalContext;
   /** Opens the private network form for the refused host. Absent for a viewer. */
   onSetPrivateNetwork?: (refusedHost: string | undefined) => void;
 }) {
-  const view = result.refusal ? describeMcpRefusal(result.refusal) : null;
+  const view = result.refusal ? describeMcpRefusal(result.refusal, refusalContext) : null;
   const text = view?.text ?? result.message ?? 'The server could not be reached.';
   return (
     <Column gap="1">
@@ -101,7 +108,7 @@ export function McpTestFailure({
               onSetPrivateNetwork(result.refusal?.target);
             }}
           >
-            {SET_PRIVATE_NETWORK_LABEL}
+            {MCP_SET_PRIVATE_NETWORK_LABEL}
           </Button>
         </Row>
       )}

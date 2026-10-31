@@ -3,19 +3,18 @@
  *
  * The step error's `details` carry the refusal the MCP executor built from
  * `@aflow/network-safety`: its kind, the refused host, the range in words and
- * the remedy. This reads the kind and the remedy, never the range label, so
- * whether an address is reachable stays that package's decision.
+ * the remedy. The words come from `describeMcpEgressRefusal` in
+ * `@aflow/schemas`, which the executor's message uses too.
  */
 import {
   McpEgressRefusalDetailsSchema,
+  describeMcpEgressRefusal,
   normalizePrivateNetworkHost,
+  type McpEgressRefusalContext,
   type McpEgressRefusalDetails,
 } from '@aflow/schemas';
 
 export type { McpEgressRefusalDetails };
-
-/** The action that answers `acknowledge_private_network`. */
-export const SET_PRIVATE_NETWORK_LABEL = 'Set as private network';
 
 export interface McpBindingTestResult {
   ok: boolean;
@@ -49,47 +48,19 @@ export interface McpRefusalView {
   action: 'set_private_network' | null;
 }
 
-function withArticle(words: string): string {
-  return `${/^[aeiou]/i.test(words) ? 'an' : 'a'} ${words}`;
-}
-
 /**
- * The refusal in words, or `null` for a refusal this does not describe — the
- * tenant allowlist says its own reason in the message.
+ * The refusal in the words the MCP executor's step message uses, or `null` for
+ * a refusal those words do not describe.
  */
-export function describeMcpRefusal(refusal: McpEgressRefusalDetails): McpRefusalView | null {
-  const host = refusal.target ?? 'The server';
-  const range = refusal.range ?? refusal.rangeLabel;
-  const onRange = range !== undefined ? ` is on ${withArticle(range)}` : ' is on a refused address';
-  switch (refusal.kind) {
-    case 'unresolvable':
-      return {
-        text: `This machine cannot resolve ${host}. The VPN or its DNS may not reach the service from here.`,
-        action: null,
-      };
-    case 'invalid-protocol':
-      return {
-        text: `${host} is reached over https only. Change the server URL to https. No setting lifts the https rule.`,
-        action: null,
-      };
-    case 'private-ip':
-      if (refusal.remedy === 'acknowledge_private_network') {
-        return {
-          text: `${host}${onRange}. Set it as a private network host to let this server reach it over https.`,
-          action: 'set_private_network',
-        };
-      }
-      if (refusal.remedy === 'deployment_must_list_host') {
-        return {
-          text: `${host}${onRange}. It is set as a private network host, but this deployment does not list it. Whoever runs the deployment adds it to MCP_PRIVATE_NETWORK_HOSTS.`,
-          action: null,
-        };
-      }
-      return { text: `${host}${onRange}. No setting reaches it.`, action: null };
-    case 'allowlist-host':
-    case 'invalid-url':
-      return null;
-  }
+export function describeMcpRefusal(
+  refusal: McpEgressRefusalDetails,
+  context: McpEgressRefusalContext,
+): McpRefusalView | null {
+  const text = describeMcpEgressRefusal(refusal, context);
+  if (text === null) return null;
+  const answersIt =
+    refusal.kind === 'private-ip' && refusal.remedy === 'acknowledge_private_network';
+  return { text, action: answersIt ? 'set_private_network' : null };
 }
 
 /** The host of a server URL, normalized as the acknowledgment stores it, or `null`. */

@@ -3,13 +3,15 @@
  * connect names the range in words and offers the remedy as an action.
  */
 import { describe, expect, it } from 'vitest';
+import { MCP_SET_PRIVATE_NETWORK_LABEL, describeMcpEgressRefusal } from '@aflow/schemas';
 import {
-  SET_PRIVATE_NETWORK_LABEL,
   describeMcpRefusal,
   parseHostList,
   proposedPrivateNetworkHosts,
   testResultFromWaitBody,
 } from './mcpEgressRefusal.js';
+
+const CORP = { serverName: 'Corp', acknowledged: false };
 
 const PRIVATE_RANGE = 'private network address (10.0.0.0/8, 172.16.0.0/12 or 192.168.0.0/16)';
 
@@ -39,10 +41,30 @@ describe('a test refused on a private address', () => {
   });
 
   it('names the range in words and offers Set as private network', () => {
-    const view = describeMcpRefusal(result.refusal!);
+    const view = describeMcpRefusal(result.refusal!, CORP);
     expect(view?.text).toContain(`mcp.corp.example is on a ${PRIVATE_RANGE}.`);
     expect(view?.action).toBe('set_private_network');
-    expect(SET_PRIVATE_NETWORK_LABEL).toBe('Set as private network');
+    expect(MCP_SET_PRIVATE_NETWORK_LABEL).toBe('Set as private network');
+  });
+
+  it('says the sentences the executor message carries', () => {
+    expect(describeMcpRefusal(result.refusal!, CORP)?.text).toBe(
+      describeMcpEgressRefusal(result.refusal!, CORP),
+    );
+  });
+
+  it('names the card action without an acknowledgment', () => {
+    expect(describeMcpRefusal(result.refusal!, CORP)?.text).toContain(
+      'with the Set as private network action on the Corp card in Integrations',
+    );
+  });
+
+  it('names the Private network section once an acknowledgment is set', () => {
+    const view = describeMcpRefusal(result.refusal!, { ...CORP, acknowledged: true });
+    expect(view?.text).toContain(
+      'An operator can add mcp.corp.example to the hosts under Integrations → Corp → Private network.',
+    );
+    expect(view?.action).toBe('set_private_network');
   });
 });
 
@@ -55,6 +77,7 @@ describe('the other remedies', () => {
         range: PRIVATE_RANGE,
         remedy: 'deployment_must_list_host',
       }).refusal!,
+      CORP,
     );
     expect(view?.text).toContain('MCP_PRIVATE_NETWORK_HOSTS');
     expect(view?.action).toBeNull();
@@ -68,6 +91,7 @@ describe('the other remedies', () => {
         range: 'cloud metadata address (169.254.169.254)',
         remedy: 'none',
       }).refusal!,
+      CORP,
     );
     expect(view).toEqual({
       text: 'metadata.google.internal is on a cloud metadata address (169.254.169.254). No setting reaches it.',
@@ -78,6 +102,7 @@ describe('the other remedies', () => {
   it('names the https rule', () => {
     const view = describeMcpRefusal(
       failed({ kind: 'invalid-protocol', target: 'mcp.corp.example', remedy: 'none' }).refusal!,
+      CORP,
     );
     expect(view?.text).toContain('https only');
     expect(view?.action).toBeNull();
@@ -86,6 +111,7 @@ describe('the other remedies', () => {
   it('says the name does not resolve from this machine', () => {
     const view = describeMcpRefusal(
       failed({ kind: 'unresolvable', target: 'mcp.corp.example' }).refusal!,
+      CORP,
     );
     expect(view?.text).toBe(
       'This machine cannot resolve mcp.corp.example. The VPN or its DNS may not reach the service from here.',
@@ -93,7 +119,7 @@ describe('the other remedies', () => {
   });
 
   it('leaves the tenant allowlist refusal to its own message', () => {
-    expect(describeMcpRefusal({ kind: 'allowlist-host', target: 'x.example' })).toBeNull();
+    expect(describeMcpRefusal({ kind: 'allowlist-host', target: 'x.example' }, CORP)).toBeNull();
   });
 });
 

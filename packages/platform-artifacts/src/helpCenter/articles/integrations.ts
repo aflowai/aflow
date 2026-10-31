@@ -104,7 +104,7 @@ A server URL whose host resolves to an address outside the public internet is re
 
 For a server on your private network, such as one behind a VPN:
 
-1. Choose **Set as private network** under the refusal. The **Private network** form opens for that server.
+1. Choose **Set as private network** under the refusal, or on the server's card. The card offers it until a list is set, whether or not the server has connected. The **Private network** form opens for that server.
 2. List each host the server uses, exactly, one per line: the server URL host, and any token or authorization endpoint host. A wildcard is refused.
 3. Choose **Save**. Then edit the integration and choose **Save & connect** again.
 

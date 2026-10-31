@@ -570,6 +570,10 @@ export function McpIntegrationFormDialog({
             <McpTestFailure
               result={testFailure}
               prefix="Couldn't connect:"
+              refusalContext={{
+                serverName: name.trim() || serverId.trim(),
+                acknowledged: Boolean(initialDefinition?.privateNetwork),
+              }}
               onSetPrivateNetwork={(refusedHost) => {
                 onSetPrivateNetwork(serverId.trim(), refusedHost);
               }}

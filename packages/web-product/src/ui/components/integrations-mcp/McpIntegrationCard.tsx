@@ -16,6 +16,7 @@ import {
   Text,
   Tooltip,
 } from '@aflow/design-system';
+import { MCP_SET_PRIVATE_NETWORK_LABEL } from '@aflow/schemas';
 import { ChipList, DetailRow, DetailsSection, formatJson } from '../integrations-api/helpers.js';
 import { getMcpReadiness } from './mcpReadiness.js';
 import { McpPrivateNetworkSection, McpTestFailure } from './McpPrivateNetworkSection.js';
@@ -240,6 +241,22 @@ export function McpIntegrationCard({
                   />
                 </Tooltip>
               )}
+              {!readOnly && !definition.privateNetwork && (
+                // Standing, whatever the binding's state: a refused connect's
+                // message names this action on this card.
+                <Tooltip content="Let this server reach hosts on a private network address, over https only">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    leftIcon={<Icon name="shield-check" size="sm" />}
+                    onClick={() => {
+                      onSetPrivateNetwork();
+                    }}
+                  >
+                    {MCP_SET_PRIVATE_NETWORK_LABEL}
+                  </Button>
+                </Tooltip>
+              )}
               {!readOnly && (
                 <>
                   <Tooltip content="Edit integration">
@@ -347,6 +364,10 @@ export function McpIntegrationCard({
             <McpTestFailure
               result={refreshResult}
               prefix="Couldn't refresh:"
+              refusalContext={{
+                serverName: definition.name,
+                acknowledged: definition.privateNetwork != null,
+              }}
               {...(readOnly ? {} : { onSetPrivateNetwork })}
             />
           )}
