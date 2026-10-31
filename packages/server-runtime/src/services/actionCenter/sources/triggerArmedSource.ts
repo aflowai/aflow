@@ -1,5 +1,6 @@
 import { and, desc, eq, gte, isNotNull, isNull, ne } from 'drizzle-orm';
 import { agentSchedules, createTenantContext, withTenantSchema } from '@aflow/database';
+import { CHAT_SCHEDULE_LIST_LIMIT, CHAT_SCHEDULE_NEWS_WINDOW_MS } from '@aflow/schemas';
 
 import {
   ActionCenterResolveError,
@@ -12,17 +13,6 @@ import {
 } from '../types.js';
 
 const ITEM_ID_PREFIX = 'trigger-armed:';
-const LIST_LIMIT = 20;
-
-/**
- * How long an arming stays news.
- *
- * A schedule is durable, unlike the coach activity this borrows its shape from,
- * so "most recent N" would leave a job armed months ago sitting here forever.
- * The standing answer to "what runs here" is the Triggers page; this is only the
- * moment it appeared.
- */
-const NEWS_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
  * Whether a schedule is news of an arming: armed by an agent in conversation,
@@ -73,11 +63,11 @@ export function createTriggerArmedSource(deps: ActionCenterSourceDeps): ActionCe
                 isNotNull(agentSchedules.createdBySessionId),
                 isNull(agentSchedules.renewsScheduleId),
                 ne(agentSchedules.status, 'deleted'),
-                gte(agentSchedules.createdAt, new Date(Date.now() - NEWS_WINDOW_MS)),
+                gte(agentSchedules.createdAt, new Date(Date.now() - CHAT_SCHEDULE_NEWS_WINDOW_MS)),
               ),
             )
             .orderBy(desc(agentSchedules.createdAt))
-            .limit(LIST_LIMIT),
+            .limit(CHAT_SCHEDULE_LIST_LIMIT),
       );
       return rows.filter(announcesArming).map((row) => toItem(row));
     },
