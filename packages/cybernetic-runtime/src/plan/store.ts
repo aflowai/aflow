@@ -11,7 +11,7 @@ import {
   PLAN_TREE_DEPTH_LIMIT,
   PLAN_TREE_WALK_NODE_LIMIT,
   planDependencyMet,
-  planNodeCardInOrder,
+  readStoredPlanNodeCard,
   type CoachLearning,
   type PlanNode,
   type PlanNodeCard,
@@ -38,6 +38,7 @@ import {
 } from '@aflow/database';
 import type { PlanNodeDependencyRow, PlanNodeLinkRow, PlanNodeRow } from '@aflow/database';
 import { coachLearningToRow, rowToCoachLearning } from '../coachLearningsStore.js';
+import { getCyberneticLogger } from '../logger.js';
 import { checkDependency, type DependencyCheck, type DependencyReads } from './dependencies.js';
 import {
   overviewIn,
@@ -419,7 +420,20 @@ async function retryingDeadlocks<T>(write: () => Promise<T>): Promise<T> {
   }
 }
 
+function storedCard(row: PlanNodeRow): PlanNodeCard | undefined {
+  if (row.card == null) return undefined;
+  const read = readStoredPlanNodeCard(row.card);
+  if ('card' in read) return read.card;
+  getCyberneticLogger().warn('plan: stored card refused by the card schema, read as no card', {
+    nodeId: row.id,
+    spaceId: row.spaceId,
+    refusal: read.refusal,
+  });
+  return undefined;
+}
+
 export function rowToPlanNode(row: PlanNodeRow): PlanNode {
+  const card = storedCard(row);
   return {
     ...(row.spendCents != null ? { spendCents: row.spendCents } : {}),
     nodeId: row.id,
@@ -432,7 +446,7 @@ export function rowToPlanNode(row: PlanNodeRow): PlanNode {
     status: row.status as PlanNodeStatus,
     ...(row.outcome != null ? { outcome: row.outcome } : {}),
     ...(row.note != null ? { note: row.note } : {}),
-    ...(row.card != null ? { card: planNodeCardInOrder(row.card) } : {}),
+    ...(card !== undefined ? { card } : {}),
     revision: row.revision,
     position: row.position,
     ...(row.createdBy != null ? { createdBy: row.createdBy } : {}),

@@ -119,14 +119,22 @@ export const PlanNodeCardSchema = z
   );
 export type PlanNodeCard = z.infer<typeof PlanNodeCardSchema>;
 
+/** A card the schema accepts, in its section order: how a write puts it in a patch. */
+export function planNodeCardInOrder(card: PlanNodeCard): PlanNodeCard {
+  return PlanNodeCardSchema.parse(card);
+}
+
+export type StoredPlanNodeCard = { card: PlanNodeCard } | { refusal: string };
+
 /**
- * The card in the schema's section order. A `jsonb` column returns keys in its
- * own order, and a reader takes the card in D1's order. A stored card the
- * schema no longer accepts is returned as stored.
+ * A stored card as a node read returns it. A `jsonb` column returns keys in
+ * its own order, and a reader takes the card in D1's order. A card written
+ * before a schema change may fail the schema now. The read then carries no
+ * card and returns the refusal, so the node still passes its output schema.
  */
-export function planNodeCardInOrder(stored: unknown): PlanNodeCard {
+export function readStoredPlanNodeCard(stored: unknown): StoredPlanNodeCard {
   const parsed = PlanNodeCardSchema.safeParse(stored);
-  return parsed.success ? parsed.data : (stored as PlanNodeCard);
+  return parsed.success ? { card: parsed.data } : { refusal: parsed.error.message };
 }
 
 /** What `plan.node.create` and `plan.node.update` say of the card they write. */

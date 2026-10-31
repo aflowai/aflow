@@ -17,8 +17,10 @@ import {
   PlanNodeGetOutputSchema,
   PlanNodeUpdateInputSchema,
   PlanStreamBriefNodeSchema,
+  readStoredPlanNodeCard,
   type PlanNodeCard,
 } from '../../index.js';
+import { PlanOperationRegistrations } from '../plan/registrations.js';
 
 const NODE_ID = '7b0c4b52-58a4-4c39-9a51-0d3f3c0b8a11';
 
@@ -202,9 +204,20 @@ describe('card on the node record and its writes', () => {
 
   it('returns a card in the schema’s section order, whatever order it was stored in', () => {
     const stored = Object.fromEntries(Object.entries(PLAN_337_CARD).reverse());
-    expect(Object.keys(planNodeCardInOrder(stored))).toEqual(
+    const read = readStoredPlanNodeCard(stored);
+    expect('card' in read && Object.keys(read.card)).toEqual(
       Object.keys(PlanNodeCardSchema.innerType().shape),
     );
+    expect(Object.keys(planNodeCardInOrder(stored as PlanNodeCard))).toEqual(
+      Object.keys(PlanNodeCardSchema.innerType().shape),
+    );
+  });
+
+  it('reads a stored card the schema now refuses as no card, with the refusal', () => {
+    const { questions: _questions, ...older } = PLAN_337_CARD;
+    const read = readStoredPlanNodeCard({ ...older, doneWhen: 'The board shows it.' });
+    expect(read).not.toHaveProperty('card');
+    expect('refusal' in read && read.refusal).toContain('questions');
   });
 
   it('declares the card’s whole shape to a turn, derived from the schema, without its ceilings', () => {
@@ -225,6 +238,15 @@ describe('card on the node record and its writes', () => {
       }
       expect(declared).not.toContain(String(PLAN_NODE_CARD_ITEM_MAX_CHARS));
     }
+  });
+
+  it('teaches the card rules in the registry, where the prompt no longer carries them', () => {
+    const pitfalls = (verb: string) =>
+      PlanOperationRegistrations.find((op) => op.verb === verb)?.usage?.pitfalls?.join('\n') ?? '';
+    expect(pitfalls('create')).toContain('asks the operator for a decision carries a `card`');
+    expect(pitfalls('create')).toContain('every question with the answer you recommend');
+    expect(pitfalls('create')).toContain('A plan document is commissioned with the card');
+    expect(pitfalls('link')).toContain('at the merge sha');
   });
 });
 

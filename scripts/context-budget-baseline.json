@@ -63,7 +63,7 @@
       "group": "helmsmanPrompt"
     },
     "helmsmanPrompt.registerMapping": {
-      "tokens": 4515,
+      "tokens": 4441,
       "group": "helmsmanPrompt"
     },
     "helmsmanPrompt.operatingModel": {
@@ -122,7 +122,7 @@
   "totals": {
     "tools": 110045,
     "skillAwareness": 765,
-    "helmsmanPrompt": 6890,
+    "helmsmanPrompt": 6816,
     "runnerPrompt": 2235,
     "spaceContextGuidance": 845,
     "worstCase": 16241
