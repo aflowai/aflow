@@ -75,13 +75,35 @@ describe('the wrong-guess count', () => {
     expect(attempts.retryAfterSec('a', null)).toBe(15 * 60);
   });
 
-  it('forgets the count once cleared', () => {
+  it("forgets a mark's count once cleared", () => {
     const attempts = new LocalProfilePinAttempts(clock().now);
-    for (let i = 0; i < 10; i += 1) attempts.fail('a', null);
-    attempts.clear('a', null);
+    for (let i = 0; i < 10; i += 1) attempts.fail('a', 'm1');
+    attempts.clear('a', 'm1');
+    expect(attempts.retryAfterSec('a', 'm1')).toBe(0);
+    attempts.fail('a', 'm1');
+    expect(attempts.retryAfterSec('a', 'm1')).toBe(0);
+  });
+
+  it('takes back only the guess that proved right, leaving the guesses before it', () => {
+    const attempts = new LocalProfilePinAttempts(clock().now);
+    for (let i = 0; i < LOCAL_PROFILE_PIN_FREE_ATTEMPTS; i += 1) attempts.fail('a', null);
+    attempts.withdraw(attempts.fail('a', null));
     expect(attempts.retryAfterSec('a', null)).toBe(0);
+    // The four guesses before it still count, so the next wrong one waits.
     attempts.fail('a', null);
-    expect(attempts.retryAfterSec('a', null)).toBe(0);
+    expect(attempts.retryAfterSec('a', null)).toBe(30);
+  });
+
+  it('keeps the guesses counted after a right one when it takes that one back', () => {
+    const attempts = new LocalProfilePinAttempts(clock().now);
+    const right = attempts.fail('a', null);
+    for (let i = 0; i < LOCAL_PROFILE_PIN_FREE_ATTEMPTS + 1; i += 1) attempts.fail('a', null);
+    attempts.withdraw(right);
+    // The wait the later guesses earned stands.
+    expect(attempts.retryAfterSec('a', null)).toBe(60);
+    // The count is one lower: a sixth guess waits 60 seconds, not a seventh's 120.
+    attempts.fail('a', null);
+    expect(attempts.retryAfterSec('a', null)).toBe(60);
   });
 
   it('keeps a marked browser apart from browsers with no mark', () => {

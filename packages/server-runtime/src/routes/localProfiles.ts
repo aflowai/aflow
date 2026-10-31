@@ -81,7 +81,15 @@ interface PinScope {
   pinAttempts: LocalProfilePinAttempts;
 }
 
-const ProfileParamsSchema = z.object({ userId: z.string().uuid() });
+// A uuid reads the same in any letter case, and the PIN counts and marks are
+// keyed by its text. Lower case is the form Postgres answers, so every case
+// variant of one profile id keys one count.
+const ProfileParamsSchema = z.object({
+  userId: z
+    .string()
+    .uuid()
+    .transform((id) => id.toLowerCase()),
+});
 
 const toChoice = (profile: LocalProfile): LocalProfileChoice => ({
   userId: profile.userId,
@@ -260,12 +268,16 @@ const localProfilePickerRoutes: FastifyPluginAsync<PinScope> = (fastify, { pinAt
         }
         // Counted before the comparison, so guesses sent at once cannot all
         // pass the wait while the first one is still being compared.
-        pinAttempts.fail(userId, mark);
+        const guess = pinAttempts.fail(userId, mark);
         if (!(await verifyLocalProfilePin(pin, gate.pinHash))) {
           recordIssue('denied');
           return refusePin(401, 'PROFILE_PIN_INCORRECT', 'That PIN is not right. Try again.');
         }
-        pinAttempts.clear(userId, mark);
+        // A live mark's count is its browser's own to clear. The unmarked
+        // count holds the guesses of every browser with no mark, so a right
+        // PIN there takes back only the guess it just added.
+        if (mark === null) pinAttempts.withdraw(guess);
+        else pinAttempts.clear(userId, mark);
         // A browser keeps the live mark it has, so its count stays its own.
         if (mark !== null && presentedMark !== undefined) {
           pinAttempts.keepMark(userId, mark);

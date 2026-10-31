@@ -469,6 +469,72 @@ describe('a profile PIN', () => {
     await app.close();
   });
 
+  it('counts every letter case of one profile id on one count', async () => {
+    const { app } = await build('community-local', 'member', { sessionless: true });
+    service.readLocalProfile.mockResolvedValue(locked);
+    sessions.readLocalProfileSessionGate.mockResolvedValue({ generation: 2, pinHash });
+    const variants = [SECOND, SECOND.toUpperCase(), '00000000-0000-4000-8000-000000000B0b'];
+    for (let i = 0; i < 5; i += 1) {
+      const res = await app.inject({
+        method: 'POST',
+        url: `/${variants[i % variants.length] ?? SECOND}/session`,
+        headers: WEB,
+        payload: { pin: '0000' },
+      });
+      expect(res.statusCode).toBe(401);
+    }
+    for (const variant of variants) {
+      const res = await app.inject({
+        method: 'POST',
+        url: `/${variant}/session`,
+        headers: WEB,
+        payload: { pin: PIN },
+      });
+      expect(res.statusCode).toBe(429);
+      expect(res.headers['retry-after']).toBe('30');
+    }
+    expect(service.readLocalProfile).toHaveBeenCalledWith({}, 't', SECOND);
+    expect(service.readLocalProfile).not.toHaveBeenCalledWith({}, 't', SECOND.toUpperCase());
+    await app.close();
+  });
+
+  it("leaves another browser's count when a browser with no mark sends the right PIN", async () => {
+    const { app } = await build('community-local', 'member', { sessionless: true });
+    service.readLocalProfile.mockResolvedValue(locked);
+    sessions.readLocalProfileSessionGate.mockResolvedValue({ generation: 2, pinHash });
+    // A guesser spends the free guesses at a browser with no mark.
+    for (let i = 0; i < 4; i += 1) expect((await choose(app, '0000')).statusCode).toBe(401);
+    // The profile's person opens it from another browser with no mark.
+    expect((await choose(app, PIN)).statusCode).toBe(200);
+    // The guesser's next wrong PIN still starts the wait.
+    expect((await choose(app, '0000')).statusCode).toBe(401);
+    const waiting = await choose(app, PIN);
+    expect(waiting.statusCode).toBe(429);
+    expect(waiting.headers['retry-after']).toBe('30');
+    await app.close();
+  });
+
+  it('keeps the doubled wait a guesser earned past a right PIN from a browser with no mark', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const { app } = await build('community-local', 'member', { sessionless: true });
+      service.readLocalProfile.mockResolvedValue(locked);
+      sessions.readLocalProfileSessionGate.mockResolvedValue({ generation: 2, pinHash });
+      for (let i = 0; i < 5; i += 1) expect((await choose(app, '0000')).statusCode).toBe(401);
+      expect((await choose(app, PIN)).statusCode).toBe(429);
+      vi.advanceTimersByTime(30_000);
+      expect((await choose(app, PIN)).statusCode).toBe(200);
+      // The guesser's next wrong PIN is the sixth on the count, so it waits twice as long.
+      expect((await choose(app, '0000')).statusCode).toBe(401);
+      const waiting = await choose(app, PIN);
+      expect(waiting.statusCode).toBe(429);
+      expect(waiting.headers['retry-after']).toBe('60');
+      await app.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('answers a right PIN with a PIN mark, and keeps the mark a browser sent', async () => {
     const { app } = await build('community-local', 'member', { sessionless: true });
     service.readLocalProfile.mockResolvedValue(locked);

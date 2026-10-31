@@ -140,6 +140,14 @@ interface PinFailure {
   waitUntil: number;
 }
 
+/** One guess `fail` counted: the count it went to, as it was before and after. */
+export interface PinGuess {
+  readonly userId: string;
+  readonly mark: string | null;
+  readonly before: PinFailure | undefined;
+  readonly after: PinFailure;
+}
+
 /**
  * Wrong PIN guesses per profile and browser, kept in this process.
  *
@@ -155,7 +163,9 @@ interface PinFailure {
  *
  * The first four wrong guesses on a count cost nothing. Each one after them
  * makes that count wait before the next guess, 30 seconds at first and
- * doubling to 15 minutes. A right PIN clears the count it was sent on. A count
+ * doubling to 15 minutes. A right PIN sent with a live mark clears that mark's
+ * count. A right PIN sent with none takes back only its own guess, because
+ * the unmarked count holds the guesses of every browser with no mark. A count
  * goes once it has outlived its wait by `COUNT_LIFETIME_MS`. A new PIN and a
  * reset clear every count and every live mark of the profile. A restart
  * clears them too, which is acceptable because restarting the API needs the
@@ -179,19 +189,46 @@ export class LocalProfilePinAttempts {
     return wait > 0 ? Math.ceil(wait / 1000) : 0;
   }
 
-  fail(userId: string, mark: string | null): void {
+  /**
+   * Counts one guess against the count. The answer is what `withdraw` needs
+   * to take that guess back once it proves right.
+   */
+  fail(userId: string, mark: string | null): PinGuess {
     this.prune();
     const counts = this.failures.get(userId) ?? new Map<string, PinFailure>();
-    const count = (counts.get(mark ?? '')?.count ?? 0) + 1;
+    const before = counts.get(mark ?? '');
+    const count = (before?.count ?? 0) + 1;
     const over = count - LOCAL_PROFILE_PIN_FREE_ATTEMPTS;
     const wait = over <= 0 ? 0 : Math.min(FIRST_WAIT_MS * 2 ** (over - 1), LONGEST_WAIT_MS);
-    counts.set(mark ?? '', { count, waitUntil: this.now() + wait });
+    const after: PinFailure = { count, waitUntil: this.now() + wait };
+    counts.set(mark ?? '', after);
     this.failures.set(userId, counts);
+    return { userId, mark, before, after };
   }
 
-  /** Clears the one count a right PIN was sent on. */
-  clear(userId: string, mark: string | null): void {
-    this.dropCount(userId, mark ?? '');
+  /** Clears a live mark's count, for a right PIN sent with that mark. */
+  clear(userId: string, mark: string): void {
+    this.dropCount(userId, mark);
+  }
+
+  /**
+   * Takes back one guess `fail` counted, because it proved right. Every other
+   * guess on the count stays, so a right PIN on the shared unmarked count
+   * leaves the waits other browsers earned. With no guess counted since, the
+   * count returns to what it was. Otherwise it drops by one and keeps its wait.
+   */
+  withdraw(guess: PinGuess): void {
+    const key = guess.mark ?? '';
+    const counts = this.failures.get(guess.userId);
+    const current = counts?.get(key);
+    if (counts === undefined || current === undefined) return;
+    if (current === guess.after) {
+      if (guess.before === undefined) this.dropCount(guess.userId, key);
+      else counts.set(key, guess.before);
+      return;
+    }
+    if (current.count <= 1) this.dropCount(guess.userId, key);
+    else counts.set(key, { count: current.count - 1, waitUntil: current.waitUntil });
   }
 
   /** Whether `nonce` names one of the profile's live marks. */

@@ -510,5 +510,83 @@ describeDb('local profile management (real DB)', () => {
       const issued = await call('POST', `/local-profiles/${bea}/session`, BARE_SECRET);
       expect(issued.status).toBe(200);
     });
+
+    it("counts a locked profile's wrong PINs on one count whatever the id's letter case", async () => {
+      const added = await call('POST', '/local-profiles', BARE_SECRET, {
+        displayName: 'Cal',
+        avatar: 'fox',
+      });
+      const cal = (added.body['profile'] as { userId: string }).userId;
+      created.push(cal);
+      expect(
+        (await call('PUT', `/local-profiles/${cal}/pin`, BARE_SECRET, { pin: '135790' })).status,
+      ).toBe(200);
+
+      const variants = [cal, cal.toUpperCase(), cal.replace(/[a-f]/, (c) => c.toUpperCase())];
+      for (let i = 0; i < 5; i += 1) {
+        const wrong = await call(
+          'POST',
+          `/local-profiles/${variants[i % variants.length] ?? cal}/session`,
+          BARE_SECRET,
+          { pin: '000000' },
+        );
+        expect(wrong.body['code']).toBe('PROFILE_PIN_INCORRECT');
+      }
+      for (const variant of variants) {
+        const waiting = await call('POST', `/local-profiles/${variant}/session`, BARE_SECRET, {
+          pin: '135790',
+        });
+        expect(waiting.status).toBe(429);
+        expect(waiting.body['code']).toBe('PROFILE_PIN_THROTTLED');
+      }
+
+      // A reset named in any case clears the one count.
+      const reset = await call('DELETE', `/local-profiles/${cal.toUpperCase()}/pin`, BARE_SECRET);
+      expect(reset.status).toBe(200);
+      expect((await call('POST', `/local-profiles/${cal}/session`, BARE_SECRET)).status).toBe(200);
+    });
+
+    it("leaves another browser's count when a browser with no mark opens the profile", async () => {
+      const added = await call('POST', '/local-profiles', BARE_SECRET, {
+        displayName: 'Dee',
+        avatar: 'owl',
+      });
+      const dee = (added.body['profile'] as { userId: string }).userId;
+      created.push(dee);
+      expect(
+        (await call('PUT', `/local-profiles/${dee}/pin`, BARE_SECRET, { pin: '246800' })).status,
+      ).toBe(200);
+
+      // A guesser spends the free guesses at a browser with no mark.
+      for (let i = 0; i < 4; i += 1) {
+        const wrong = await call('POST', `/local-profiles/${dee}/session`, BARE_SECRET, {
+          pin: '000000',
+        });
+        expect(wrong.body['code']).toBe('PROFILE_PIN_INCORRECT');
+      }
+      // Dee opens the profile from another browser with no mark.
+      const opened = await call('POST', `/local-profiles/${dee}/session`, BARE_SECRET, {
+        pin: '246800',
+      });
+      expect(opened.status).toBe(200);
+
+      // The guesser's next wrong PIN still starts the wait.
+      const fifth = await call('POST', `/local-profiles/${dee}/session`, BARE_SECRET, {
+        pin: '000000',
+      });
+      expect(fifth.body['code']).toBe('PROFILE_PIN_INCORRECT');
+      const waiting = await call('POST', `/local-profiles/${dee}/session`, BARE_SECRET, {
+        pin: '246800',
+      });
+      expect(waiting.status).toBe(429);
+      expect(waiting.body['code']).toBe('PROFILE_PIN_THROTTLED');
+
+      // Dee's own browser holds the mark the right PIN answered, so its count is its own.
+      const marked = await call('POST', `/local-profiles/${dee}/session`, BARE_SECRET, {
+        pin: '246800',
+        pinMark: opened.body['pinMark'] as string,
+      });
+      expect(marked.status).toBe(200);
+    });
   });
 });
