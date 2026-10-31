@@ -2231,6 +2231,76 @@ describe('the operator’s note on a node (Plan 337 P4)', () => {
   });
 });
 
+describe('a conversation started over REST', () => {
+  /** An agent's write context, its authority read from the session state the start recorded. */
+  function conversation(state: Parameters<typeof restrictedPlanWriteAuthority>[0]) {
+    return {
+      ...session(),
+      actorKind: 'agent' as const,
+      resident: restrictedPlanWriteAuthority(state),
+    };
+  }
+
+  it('with a user API key creates an active node and closes its own node done', async () => {
+    // As `POST /v1/sessions` records a user API key's `mcp` start (`isPersonPrincipal`).
+    const ctx = conversation({ trigger: 'mcp', activatedByPerson: true });
+    const made = await createPlanNode(ctx, {
+      kind: 'execute',
+      title: 'Approved fix',
+      goal: 'g',
+      criteria: 'c',
+    });
+    if (!made.ok) throw new Error(made.message);
+    expect(made.node.status).toBe('active');
+
+    const closed = await updatePlanNode(ctx, {
+      nodeId: made.node.nodeId,
+      expectedRevision: made.node.revision,
+      status: 'done',
+      outcome: 'Met',
+    });
+    expect(closed).toMatchObject({ ok: true, node: { status: 'done' } });
+  });
+
+  it('with a service principal is restricted', async () => {
+    // A service principal's key stamps nothing, which the start records as false.
+    const ctx = conversation({ trigger: 'mcp', activatedByPerson: false });
+    expect(ctx.resident).toBe(true);
+    expect(
+      await createPlanNode(ctx, { kind: 'execute', title: 'Unapproved', goal: 'g', criteria: 'c' }),
+    ).toMatchObject({ ok: false, code: 'PLAN_NODE_RESIDENT_SCOPE' });
+    const node = await created();
+    expect(
+      await updatePlanNode(ctx, {
+        nodeId: node.nodeId,
+        expectedRevision: node.revision,
+        status: 'done',
+        outcome: 'Met',
+      }),
+    ).toMatchObject({ ok: false });
+    expect((await current(node.nodeId)).status).toBe('active');
+  });
+
+  it.each([true, false, undefined])(
+    'leaves a schedule session restricted whatever its stamp (%s)',
+    async (activatedByPerson) => {
+      const ctx = conversation({
+        trigger: 'schedule',
+        ...(activatedByPerson !== undefined ? { activatedByPerson } : {}),
+      });
+      expect(ctx.resident).toBe(true);
+      expect(
+        await createPlanNode(ctx, {
+          kind: 'execute',
+          title: 'Unapproved',
+          goal: 'g',
+          criteria: 'c',
+        }),
+      ).toMatchObject({ ok: false, code: 'PLAN_NODE_RESIDENT_SCOPE' });
+    },
+  );
+});
+
 describe('resident review regressions', () => {
   it('refuses active creation, approval, drop and unattested close for other scheduled sessions', async () => {
     const ctx = {

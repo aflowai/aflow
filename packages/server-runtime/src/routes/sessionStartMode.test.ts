@@ -3,7 +3,9 @@
  * request was authenticated, by one rule for a start, a resume and a retry:
  * `mode` only names the surface, and is refused `chat` and `voice` from a
  * credential that is not an interactive user, rather than rewritten. The local edition's authentication is the real one: its web
- * server presents the instance secret and is the owner; an API key is a key.
+ * server presents the instance secret and is the owner. A user's API key, the
+ * MCP server's included, sets a run going as that person. A service
+ * principal's key does not.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
@@ -51,6 +53,8 @@ const SIGNED_IN: AuthUser = {
 };
 
 let hostedPrincipal: AuthUser | undefined;
+/** Whether the API key the script presents is a service principal's rather than a user's. */
+let keyIsServicePrincipal = false;
 
 async function buildApp(): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
@@ -77,7 +81,7 @@ async function buildApp(): Promise<FastifyInstance> {
         userId: '00000000-0000-4000-8000-0000000000c2' as AuthUser['userId'],
         roles: [],
         authMethod: 'api_key',
-        isServicePrincipal: false,
+        isServicePrincipal: keyIsServicePrincipal,
         apiKeyPrefix: API_KEY_PREFIX,
       };
     }
@@ -109,6 +113,7 @@ const HELMSMAN = { target: { kind: 'platform-role', systemRole: 'cybernetic-helm
 beforeEach(() => {
   vi.clearAllMocks();
   hostedPrincipal = undefined;
+  keyIsServicePrincipal = false;
   mockStartSession.mockResolvedValue({
     sessionId: SESSION,
     status: 'QUEUED',
@@ -133,8 +138,23 @@ describe('POST /v1/sessions — who may start a run as a person', () => {
   );
 
   it.each(['api', 'mcp'] as const)(
-    'starts an API key’s run with mode %s as that trigger, nobody present',
+    'starts a user API key’s run with mode %s as that trigger, attended',
     async (mode) => {
+      const app = await buildApp();
+      const res = await start(app, SCRIPT, { ...HELMSMAN, mode });
+      expect(res.statusCode).toBe(201);
+      expect(mockStartSession.mock.calls[0]?.[0]).toMatchObject({
+        trigger: mode,
+        activatedByPerson: true,
+      });
+      await app.close();
+    },
+  );
+
+  it.each(['api', 'mcp'] as const)(
+    'starts a service principal key’s run with mode %s as that trigger, nobody present',
+    async (mode) => {
+      keyIsServicePrincipal = true;
       const app = await buildApp();
       const res = await start(app, SCRIPT, { ...HELMSMAN, mode });
       expect(res.statusCode).toBe(201);
@@ -146,7 +166,7 @@ describe('POST /v1/sessions — who may start a run as a person', () => {
     },
   );
 
-  it('starts the MCP server’s own run, as FlowRunner sends it', async () => {
+  it('starts the MCP server’s own run, as FlowRunner sends it, attended', async () => {
     const app = await buildApp();
     const res = await start(app, SCRIPT, {
       mode: 'mcp',
@@ -154,6 +174,17 @@ describe('POST /v1/sessions — who may start a run as a person', () => {
       input: { input: {}, config: { operationId: 'memory.store.query', inputs: {} } },
     });
     expect(res.statusCode).toBe(201);
+    expect(mockStartSession.mock.calls[0]?.[0]).toMatchObject({
+      trigger: 'mcp',
+      activatedByPerson: true,
+    });
+    await app.close();
+  });
+
+  it('starts a hosted service principal’s mcp run with nobody present', async () => {
+    hostedPrincipal = { ...SIGNED_IN, isServicePrincipal: true };
+    const app = await buildApp();
+    expect((await start(app, {}, { ...HELMSMAN, mode: 'mcp' })).statusCode).toBe(201);
     expect(mockStartSession.mock.calls[0]?.[0]).toMatchObject({
       trigger: 'mcp',
       activatedByPerson: false,
@@ -215,9 +246,14 @@ describe('POST /v1/sessions — who may start a run as a person', () => {
 describe('POST /v1/sessions/:id/resume — who sets a run going again', () => {
   const answer = { stepExecutionId: STEP, input: { message: 'go on' } };
 
-  it('counts the web application’s message as a person and an API key’s as nobody', async () => {
+  it('counts the web application’s and a user API key’s message as a person, a service principal’s as nobody', async () => {
     const app = await buildApp();
-    for (const headers of [WEB_APP, SCRIPT]) {
+    for (const [headers, servicePrincipal] of [
+      [WEB_APP, false],
+      [SCRIPT, false],
+      [SCRIPT, true],
+    ] as const) {
+      keyIsServicePrincipal = servicePrincipal;
       const res = await app.inject({
         method: 'POST',
         url: `/v1/sessions/${SESSION}/resume?spaceId=${SPACE}`,
@@ -227,6 +263,7 @@ describe('POST /v1/sessions/:id/resume — who sets a run going again', () => {
       expect(res.statusCode).toBe(200);
     }
     expect(mockResumeSession.mock.calls.map(([request]) => request)).toMatchObject([
+      { activatedByPerson: true },
       { activatedByPerson: true },
       { activatedByPerson: false },
     ]);

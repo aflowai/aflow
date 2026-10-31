@@ -125,16 +125,10 @@ const ACTIVATION_WRITERS: readonly Writer[] = [
   // ── A person's authenticated request ────────────────────────────────────
   {
     file: `${S}/routes/runs.ts`,
-    write: 'activatedByPerson: interactiveUser',
+    write: 'activatedByPerson: isPersonPrincipal(request.authUser)',
+    times: 3,
     acts: 'person',
-    why: 'Start: `interactiveUser` is `isInteractiveUser(request.authUser)`, whatever mode the request names.',
-  },
-  {
-    file: `${S}/routes/runs.ts`,
-    write: 'activatedByPerson: isInteractiveUser(request.authUser)',
-    times: 2,
-    acts: 'person',
-    why: 'Resume and retry.',
+    why: 'Start, resume and retry over REST, whatever mode the request names: a user’s sign-in or own API key, the MCP server’s included, is a person, and a service principal is not.',
   },
   {
     file: `${S}/routes/sessionRoomMessages.ts`,
@@ -580,7 +574,7 @@ describe('activatedByPerson writers', () => {
       personSites
         .filter(
           (w) =>
-            !/isInteractive(User|Actor)\(|actorIsInteractiveUser|interactiveUser$|^activatedByPerson$/.test(
+            !/(isInteractive(User|Actor)|isPersonPrincipal)\(|actorIsInteractiveUser|interactiveUser$|^activatedByPerson$/.test(
               w.write,
             ),
         )
