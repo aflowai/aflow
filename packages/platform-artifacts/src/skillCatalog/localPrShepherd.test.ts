@@ -254,7 +254,9 @@ interface Scenario {
   checkConclusions?: Record<string, string>;
   reviews?: PullRequestReviews;
   /** The one finished publication of the branch: the verdict its review returned, for the commit it reviewed and pushed. */
-  publication?: { verdict: string | null; at: string; retriedInPlace?: boolean } | 'none';
+  publication?:
+    | { verdict: string | null; at: string; retriedInPlace?: boolean; overrideCheck?: string }
+    | 'none';
   /** The branch's finished publications, newest first, where there are several; over `publication`. */
   publications?: PublicationRecord[];
   /** Where the base branch stands now; `unread` where its read failed. */
@@ -314,6 +316,7 @@ interface Scenario {
 
 /** One publication of the branch: its run, its review's verdict and the commit it reviewed, and the commit its push sent, if it pushed. */
 interface PublicationRecord {
+  overrideCheck?: string;
   id: string;
   verdict: string | null;
   reviewed: string;
@@ -330,6 +333,9 @@ function publicationsOf(s: Scenario): PublicationRecord[] {
     : [
         {
           id: PUBLICATION_RUN,
+          ...(publication.overrideCheck === undefined
+            ? {}
+            : { overrideCheck: publication.overrideCheck }),
           verdict: publication.verdict,
           reviewed: publication.at,
           pushed: publication.at,
@@ -522,6 +528,7 @@ function answer(taskId: string, input: Record<string, unknown>, s: Scenario): An
       const publication = publicationsOf(s).find((p) => p.id === input['runId']);
       if (publication === undefined) return { ok: false };
       return ok({
+        result: { output: { overrideCheck: publication.overrideCheck } },
         run: { runId: publication.id, status: 'completed' },
         tasks: [],
         activeWaiters: [],
@@ -1875,15 +1882,13 @@ describe('Local PR Shepherd — it approves nothing', () => {
       expect(task.maxAttempts).toBe(1);
     }
 
-    // The one rule that decides `merge` is the last of the merge rules, and
-    // the first of them leaves every pull request of a folder not `when-green`.
     const merges = SHEPHERD_RULES.filter((rule) => rule.decision === 'merge');
-    expect(merges).toHaveLength(1);
+    expect(merges).toHaveLength(3);
     const first = SHEPHERD_RULES.findIndex((rule) =>
       JSON.stringify(rule.when).includes('mergePosture'),
     );
     expect(SHEPHERD_RULES[first]).toMatchObject({ decision: 'leave' });
-    expect(SHEPHERD_RULES.indexOf(merges[0]!)).toBeGreaterThan(first);
+    for (const merge of merges) expect(SHEPHERD_RULES.indexOf(merge)).toBeGreaterThan(first);
     // Every wait that can hold on a green head — hands-off, a live lease, a
     // publication or commission in flight, a read that failed — is read first.
     // The waits after them hold only where CI is not passing — but a read a
@@ -2149,6 +2154,61 @@ describe('Local PR Shepherd — it merges what the posture allows', () => {
       expect(left.ran).not.toContain('merge');
     },
   );
+
+  it.each([
+    ['comment', 'operator', 'merge'],
+    ['request_changes', 'operator', 'merge'],
+    ['comment', 'shepherd_rule', 'leave'],
+    ['comment', 'hands_off_label', 'leave'],
+    ['comment', undefined, 'leave'],
+    ['comment', 'none', 'leave'],
+    ['comment', 'refused', 'leave'],
+    ['approve', undefined, 'merge'],
+  ] as const)('review %s with overrideCheck %s decides %s', (verdict, overrideCheck, decision) => {
+    const result = green({
+      publication: { verdict, at: HEAD, ...(overrideCheck === undefined ? {} : { overrideCheck }) },
+    });
+    expect(result.decision).toBe(decision);
+    expect(result.ran.includes('merge')).toBe(decision === 'merge');
+    if (overrideCheck === 'operator' && verdict === 'comment') {
+      expect(result.outputs.get('decide')?.['reason']).toContain(
+        'review `comment`, set aside by the operator at the push',
+      );
+      expect(JSON.stringify(result.inputs.get('handoff-edit'))).toContain(
+        'review `comment`, set aside by the operator at the push',
+      );
+    }
+  });
+
+  it.each([
+    { mergePosture: 'never' as const },
+    { reviews: { changesRequestedBy: ['octo'], approvedBy: [], count: 1, complete: true } },
+    { pullRequest: { mergeable: false } },
+    { checkConclusions: { Test: 'failure', Lint: 'success' } },
+  ])('keeps the other merge conditions under an operator override: %j', (scenario) => {
+    const result = green({
+      ...scenario,
+      publication: { verdict: 'comment', at: HEAD, overrideCheck: 'operator' },
+    });
+    expect(result.ran).not.toContain('merge');
+  });
+
+  it('reads the operator override only from the publication that pushed the head', () => {
+    const result = green({
+      publications: [
+        {
+          id: 'newer-unpushed',
+          verdict: 'comment',
+          reviewed: HEAD,
+          pushed: null,
+          overrideCheck: 'operator',
+        },
+        { id: PUBLICATION_RUN, verdict: 'comment', reviewed: HEAD, pushed: HEAD },
+      ],
+    });
+    expect(result.decision).toBe('leave');
+    expect(result.ran).not.toContain('merge');
+  });
 
   it('merges on the approve of a review retried in place, as on a first pass that approved', () => {
     const merged = green({ publication: { verdict: 'approve', at: HEAD, retriedInPlace: true } });

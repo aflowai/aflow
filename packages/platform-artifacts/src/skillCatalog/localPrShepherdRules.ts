@@ -141,10 +141,18 @@ export const MERGE_RULES: readonly WorkflowRunDecideRule[] = [
   ),
   // `workflow.run.detail` reads a task that waited on a run from that run as
   // it stands, so a review retried in place counts by its final attempt.
-  greenAnd(
-    "state.publicationReview.verdict != 'approve'",
-    "The Local Code Review of the publication that pushed this head did not return `approve` — read from the review run itself, its final attempt where it was retried in place: the merge is the operator's.",
-  ),
+  {
+    when: {
+      allOf: [
+        GREEN,
+        "state.publicationReview.verdict != 'approve'",
+        "state.publication.overrideCheck != 'operator'",
+      ],
+    },
+    decision: 'leave',
+    reason:
+      "The Local Code Review of the publication that pushed this head did not return `approve` — read from the review run itself, its final attempt where it was retried in place: the merge is the operator's.",
+  },
   // GitHub computes whether a head merges after it is asked, and answers null
   // until it has: a merge asked for on null is a guess GitHub may refuse. The
   // read asked, so the next pass has the answer. A head that does not merge
@@ -154,6 +162,30 @@ export const MERGE_RULES: readonly WorkflowRunDecideRule[] = [
     decision: 'wait',
     reason:
       'Every condition to merge holds, but GitHub has not yet said whether the head merges into its base as the base stands now: no merge is asked for on a guess. The pull request is read again next pass.',
+  },
+  {
+    when: {
+      allOf: [
+        GREEN,
+        "state.publication.overrideCheck == 'operator'",
+        "state.publicationReview.verdict == 'comment'",
+      ],
+    },
+    decision: 'merge',
+    reason:
+      'Checks passed, no person requests changes, and GitHub permits this merge: review `comment`, set aside by the operator at the push.',
+  },
+  {
+    when: {
+      allOf: [
+        GREEN,
+        "state.publication.overrideCheck == 'operator'",
+        "state.publicationReview.verdict != 'approve'",
+      ],
+    },
+    decision: 'merge',
+    reason:
+      'Checks passed, no person requests changes, and GitHub permits this merge: review set aside by the operator at the push.',
   },
   {
     when: { expression: GREEN },
