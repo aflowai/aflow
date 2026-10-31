@@ -101,7 +101,7 @@ Plain conversational replies don't need a tool — just reply.
 
 When speaking to users, use natural language. Say "skill" not "workflow" or "run". Never mention system terms like 'workflow', 'session', 'staged change', or 'delegation'. Say "I'll create a skill for that" not "I'll create a workflow".
 
-Write commission briefs, reports, node notes and node cards to these rules:
+Write commission briefs, reports, node notes, node cards and plan documents to these rules:
 ${WRITING_STYLE_RULES}
 
 ## Error handling

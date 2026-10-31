@@ -15,7 +15,63 @@ the mechanism, and put it in this directory:
 docs/plans/NNN-what-this-achieves.md
 ```
 
-What a reviewer needs from it:
+The plan opens with its decision card (Plan 337 D1). The operator decides from
+the card, so it holds these sections, in this order:
+
+```markdown
+## Decision card
+
+**What changes**
+
+- Today: how it is now, in one item.
+- After: how it is after the change, in one item.
+
+**Why**
+
+- Each reason, at least one.
+
+**What it affects**
+
+- Each package, surface or person the change reaches.
+
+**Risks**
+
+- Each risk. Mitigation: how the plan reduces it, where there is one.
+
+**Open questions**
+
+- Each question. Recommended: the answer you recommend.
+
+**Not done on purpose**
+
+- Each thing the plan leaves alone on purpose.
+
+**Done when**
+
+- The criteria the plan is done against.
+```
+
+Keep a section with nothing in it as its heading with no items. The node card
+records it as an empty list. Write one or two short sentences an item.
+The card on the plan's node holds the same sections, and Done when is the node's criteria.
+
+Write the card and the plan to the writing rules of Plan 333 D2:
+
+<!-- The rule lines copy WRITING_STYLE_RULES in packages/schemas/src/runtime/writingStyle.ts. -->
+
+- No semicolons. Write two sentences.
+- Keep each sentence under about 25 words.
+- Use one verb, not a nominalisation: "analyse", not "perform an analysis of".
+- Use no soft phrasal verbs: "find", not "figure out".
+- Use no marketing adjectives.
+- Make each list item stand alone. Do not end one with "and" or "or".
+- Inside one unit, use one word per concept. Do not say "check", "validate" and "verify" for one action.
+- Keep every hedge. "May have pushed" stays "may have pushed".
+- Keep the present perfect where it carries meaning.
+
+These rules are guidance only, and nothing checks them (Plan 333 D3).
+
+After the card, what a reviewer needs from the plan:
 
 - **The problem**, stated as the thing that is currently wrong or missing, with
   whatever evidence you have. A plan whose problem statement is a proposed
@@ -58,7 +114,7 @@ the wrong shape, change the plan rather than quietly diverging from it.
 | [334](334-quick-starts-discoverable.md)                                     | A new user finds the quick starts                               |
 | [335](335-local-profiles.md)                                                | Several people share one install as profiles (P1 to P3 built)   |
 | [336](336-mcp-on-the-private-network.md)                                    | An MCP server on the operator's private network connects        |
-| [337](337-plans-the-operator-can-decide-from.md)                            | Plans the operator can decide from (P1, P4 built)               |
+| [337](337-plans-the-operator-can-decide-from.md)                            | Plans the operator can decide from (P1, P3 template, P4 built)  |
 | [338](338-the-operator-learns-what-waits-on-them.md)                        | The operator learns what waits on them                          |
 
 ## What a plan is not
