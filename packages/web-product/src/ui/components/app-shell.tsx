@@ -106,11 +106,24 @@ function Sidebar() {
   const showLabel = railExpanded;
 
   // The avatar and name at the foot of the sidebar, which opens the account
-  // page in the hosted edition and the profile menu in the local one.
-  const identityRow = (onClick: () => void, ref?: (node: HTMLElement | null) => void) => (
-    <div
-      ref={ref}
+  // page in the hosted edition and the profile menu in the local one. The name
+  // is clipped away on the rail, so the button carries it as its label.
+  const identityRow = (
+    onClick: () => void,
+    menu?: { ref: (node: HTMLElement | null) => void; open: boolean },
+  ) => (
+    <button
+      type="button"
+      ref={menu?.ref}
+      aria-label={userLabel}
+      {...(menu ? { 'aria-haspopup': 'dialog' as const, 'aria-expanded': menu.open } : {})}
       style={{
+        width: '100%',
+        border: 'none',
+        background: 'none',
+        font: 'inherit',
+        color: 'inherit',
+        textAlign: 'start',
         display: 'grid',
         gridTemplateColumns: showLabel ? 'auto 1fr' : 'auto 0fr',
         alignItems: 'center',
@@ -141,7 +154,7 @@ function Sidebar() {
       >
         {userLabel}
       </Text>
-    </div>
+    </button>
   );
 
   return (
@@ -428,9 +441,9 @@ function Sidebar() {
             (Plan 335 D2). The hosted footer opens the account page. */}
         {user && isLocalEdition && (
           <ProfileMenu user={user} label={userLabel}>
-            {({ ref, toggle }) => (
+            {({ ref, open, toggle }) => (
               <Tooltip content="Profile" side="right">
-                {identityRow(toggle, ref)}
+                {identityRow(toggle, { ref, open })}
               </Tooltip>
             )}
           </ProfileMenu>

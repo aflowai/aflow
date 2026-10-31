@@ -2,7 +2,11 @@ import { cookies } from 'next/headers';
 import { SpaceSlugSchema } from '@aflow/schemas';
 
 export { PREFERRED_SPACE_COOKIE } from '../../preferredSpaceCookie.js';
-import { ACTIVE_PROFILE_COOKIE, preferredSpaceCookieName } from '../../preferredSpaceCookie.js';
+import {
+  ACTIVE_PROFILE_COOKIE,
+  PREFERRED_SPACE_COOKIE,
+  preferredSpaceCookieName,
+} from '../../preferredSpaceCookie.js';
 
 /** 90 days in seconds. */
 const PREFERRED_SPACE_MAX_AGE_SEC = 60 * 60 * 24 * 90;
@@ -25,7 +29,10 @@ function cookieNameIn(store: CookieStore): string {
  */
 export async function getPreferredSpaceSlug(): Promise<string | null> {
   const store = await cookies();
-  const raw = store.get(cookieNameIn(store))?.value;
+  // A browser used before its install had a second profile holds only the
+  // unkeyed hint. The profile it then picks carries on from that hint until it
+  // writes its own.
+  const raw = store.get(cookieNameIn(store))?.value ?? store.get(PREFERRED_SPACE_COOKIE)?.value;
   if (!raw) return null;
   const parsed = SpaceSlugSchema.safeParse(raw);
   return parsed.success ? (parsed.data as string) : null;
@@ -57,9 +64,11 @@ export async function setPreferredSpaceSlug(slug: string): Promise<void> {
 
 /**
  * Clear the preferred-space cookie. Used on logout or when the user
- * explicitly opts out (e.g. "always land on space picker").
+ * explicitly opts out (e.g. "always land on space picker"). The unkeyed hint
+ * goes too, or the read would fall back to it.
  */
 export async function clearPreferredSpaceSlug(): Promise<void> {
   const store = await cookies();
   store.delete(cookieNameIn(store));
+  store.delete(PREFERRED_SPACE_COOKIE);
 }

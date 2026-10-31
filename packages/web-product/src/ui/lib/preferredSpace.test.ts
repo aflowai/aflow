@@ -100,6 +100,28 @@ describe('preferredSpace cookie helpers', () => {
     expect(await getPreferredSpaceSlug()).toBe('general');
   });
 
+  it('falls back to the unkeyed hint until the chosen profile writes its own', async () => {
+    const { setPreferredSpaceSlug, getPreferredSpaceSlug } = await import('./preferredSpace.js');
+    const owner = '00000000-0000-4000-8000-00000000a0a0';
+    await setPreferredSpaceSlug('research');
+    fakeCookieStore.store.set('aflow_profile', owner);
+    expect(await getPreferredSpaceSlug()).toBe('research');
+    await setPreferredSpaceSlug('personal');
+    expect(fakeCookieStore.store.get(`preferredSpaceSlug.${owner}`)).toBe('personal');
+    expect(fakeCookieStore.store.get('preferredSpaceSlug')).toBe('research');
+    expect(await getPreferredSpaceSlug()).toBe('personal');
+  });
+
+  it('clear removes the keyed and the unkeyed hint', async () => {
+    const owner = '00000000-0000-4000-8000-00000000a0a0';
+    fakeCookieStore.store.set('preferredSpaceSlug', 'research');
+    fakeCookieStore.store.set('aflow_profile', owner);
+    fakeCookieStore.store.set(`preferredSpaceSlug.${owner}`, 'personal');
+    const { clearPreferredSpaceSlug, getPreferredSpaceSlug } = await import('./preferredSpace.js');
+    await clearPreferredSpaceSlug();
+    expect(await getPreferredSpaceSlug()).toBeNull();
+  });
+
   it('clear removes the cookie', async () => {
     fakeCookieStore.store.set('preferredSpaceSlug', 'general');
     const { clearPreferredSpaceSlug, getPreferredSpaceSlug } = await import('./preferredSpace.js');

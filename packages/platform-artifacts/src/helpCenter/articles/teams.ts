@@ -44,7 +44,7 @@ Organisation-wide membership and invitations are under **Tenant Admin** at the f
     theme: 'teams',
     question: 'How do several people share Aflow Local?',
     summary:
-      'Aflow Local has no invitations and no members. People who share one install each get a profile, which the owner adds and manages under Settings → Profiles. Each profile has its own spaces, conversations and memory, and model keys stored for the whole install are shared. Once an install has two profiles, each browser opens on Who is using Aflow? and the person picks their profile. To switch, open the menu under your avatar at the foot of the sidebar. An install with one profile shows no picker.',
+      'Aflow Local has no invitations and no members. People who share one install each get a profile, which the owner adds and manages under Settings → Profiles. Each profile has its own spaces, conversations and memory, and model keys stored for the whole install are shared. Once an install has two profiles, each browser opens on Who is using Aflow? and the person picks their profile. To switch, open the menu under your avatar at the foot of the sidebar. A browser that has not picked a profile skips the picker on an install with one profile.',
     body: `**Where:** **Settings** → **Profiles** (the owner only), and the menu under your avatar at the foot of the sidebar
 
 ## What a profile is
@@ -61,7 +61,7 @@ The new profile starts with a space of its own called Personal, and it does not 
 
 ## Who is using Aflow?
 
-An install with two or more profiles opens on **Who is using Aflow?** in a browser that has not picked a profile yet. It shows each profile's avatar and name. Pick yours, and Aflow opens in the space that profile last used. The browser remembers the choice until someone switches profile or the browser's cookies are cleared. An install with one profile never shows this screen.
+An install with two or more profiles opens on **Who is using Aflow?** in a browser that has not picked a profile yet. It shows each profile's avatar and name. Pick yours, and Aflow opens in the space that profile last used. The browser remembers the choice until someone switches profile or the browser's cookies are cleared. An install with one profile skips this screen for a browser that has not picked a profile. A browser that picked a profile which has since been removed sees this screen once more, even when one profile is left.
 
 The picker asks for no PIN in this version. Anyone at the browser can pick any profile.
 

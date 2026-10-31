@@ -385,7 +385,7 @@ P3 adds the picker, the footer menu and the per-profile preferred space. It adds
 
 ### The web process
 
-- **The front door.** `apps/web-local/src/app/page.tsx` asks the API for the browser's spaces, as before. A 401 `PROFILE_SESSION_REQUIRED` or `PROFILE_SESSION_INVALID` renders **Who is using Aflow?** in place of a space (`answerRefusal` on `enterPreferredSpace`). An install with one profile is never refused, so a fresh install shows no picker.
+- **The front door.** `apps/web-local/src/app/page.tsx` asks the API for the browser's spaces, as before. A 401 `PROFILE_SESSION_REQUIRED` or `PROFILE_SESSION_INVALID` renders **Who is using Aflow?** in place of a space (`answerRefusal` on `enterPreferredSpace`). An install with one profile never refuses a browser that sends no session, so a fresh install shows no picker. A browser that sends a session the API refuses still sees the picker, whatever the profile count. One that holds a removed profile's session sees it on an install now down to one profile.
 - **A choice.** Each tile is a submit button in a plain form that posts to `/profiles/choose` (`apps/web-local/src/compose/localProfileSession.ts`). That route asks the API for the session with the bare secret. It keeps the session in the `httpOnly` cookie `aflow_profile_session` and the chosen user id in `aflow_profile`, then redirects to the front door. The admission check refuses a post from another origin. A refused choice returns to the picker with a notice and sets no cookie.
 - **The cookie's life.** The session lasts until the person switches profile or the browser clears it. The cookie keeps it for 400 days, the longest a browser allows. It is `Secure` where the browser used HTTPS.
 - **Recovery.** A 401 `PROFILE_SESSION_REQUIRED` or `PROFILE_SESSION_INVALID` from any screen now sends the browser to the front door, and so to the picker (`localRecovery.ts`). P1 showed a message there.
@@ -394,12 +394,13 @@ P3 adds the picker, the footer menu and the per-profile preferred space. It adds
 ### The footer menu
 
 - In the local edition the avatar at the foot of the sidebar opens a menu instead of `/account` (`packages/web-product/src/ui/components/profile-menu.tsx`). It names the profile using Aflow now. With two or more profiles it lists the others, each a post to `/profiles/choose`, and **Switch profile**, which opens the picker at `/profiles`. The owner also sees **Manage profiles**, which opens Settings → Profiles. **Account settings** opens `/account`.
-- `/profiles` sends an install with one profile to the front door, so it never shows a picker either.
+- `/profiles` sends an install with one profile to the front door. Switch profile on such an install therefore shows no picker. The front door still shows one for a refused session.
 - The hosted footer is unchanged.
 
 ### The preferred space
 
 - The preferred-space cookie is keyed by the chosen profile: `preferredSpaceSlug.<user id>`, from the `aflow_profile` cookie (`packages/web-product/src/preferredSpaceCookie.ts`). A browser that chose no profile keeps `preferredSpaceSlug`, so a one-profile install and the hosted edition are unchanged.
+- A chosen profile with no keyed hint reads `preferredSpaceSlug`. The owner who adds a second profile and picks themselves lands in the space they were using. The write always goes to the keyed cookie, and clearing removes both.
 - The front door now skips a space listed as a name only (`myRole: null`). Otherwise the owner could land on another profile's space and get the not-found state.
 
 ### Not built
@@ -415,6 +416,6 @@ P3 adds the picker, the footer menu and the per-profile preferred space. It adds
 - `apps/web-local/src/compose/localProfileSession.test.ts` shows the front door shows the picker only for a profile refusal. It shows a choice sets the `httpOnly` session cookie only when the API issued a session, and asks without the browser mark.
 - `apps/web-local/src/app/frontDoor.test.ts` shows the picker's routes exist in the local build.
 - `localRecovery.test.ts` shows a profile refusal sends the browser to the picker.
-- `preferredSpace.test.ts` shows each profile keeps its own preferred space. `enterPreferredSpace.test.ts` shows a name-only space is skipped and a refusal can be answered with the picker.
+- `preferredSpace.test.ts` shows each profile keeps its own preferred space, and a profile with none reads the unkeyed one. `enterPreferredSpace.test.ts` shows a name-only space is skipped and a refusal can be answered with the picker.
 - `profile-menu-entries.test.ts` shows the menu offers a switch only with two profiles and **Manage profiles** only to the owner.
 - `tenant-profiles.test.ts` shows **Add profile** is no longer gated on the profile count.

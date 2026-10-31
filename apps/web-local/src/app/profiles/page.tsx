@@ -13,8 +13,8 @@ export const dynamic = 'force-dynamic';
 /**
  * Switch profile: the picker, opened from the footer menu (Plan 335 D2).
  *
- * An install with one profile has nothing to switch to and never shows a
- * picker, so this page sends it to the front door.
+ * An install with one profile has nothing to switch to, so this page sends it
+ * to the front door.
  */
 export default async function SwitchProfile({
   searchParams,
