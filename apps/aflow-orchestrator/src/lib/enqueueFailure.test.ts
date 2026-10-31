@@ -12,7 +12,13 @@
 import { describe, expect, it } from 'vitest';
 
 import { NoExecutorAvailableError } from '@aflow/redis';
-import { errorContextFromUnknown, toAgentToolError, type StepType } from '@aflow/schemas';
+import {
+  ChannelLaneAbsentError,
+  LANE_NOT_COMPOSED_CODE,
+  errorContextFromUnknown,
+  toAgentToolError,
+  type StepType,
+} from '@aflow/schemas';
 
 import { describeEnqueueFailure, enqueueFailureResultError } from './enqueueFailure.js';
 
@@ -47,6 +53,22 @@ describe('no executor for the browser lane', () => {
     expect(failure.message).toMatch(/browser/i);
     expect(failure.classification).toBe('transient');
     expect(toAgentToolError(failure).message).not.toContain('system error');
+  });
+});
+
+describe('a channel step where no channel lane is composed', () => {
+  const failure = describeEnqueueFailure(new ChannelLaneAbsentError('channel.message.send'));
+
+  it('is a refusal the agent answers with signal_blocked, not an outage to retry', () => {
+    expect(failure.code).toBe(LANE_NOT_COMPOSED_CODE);
+    expect(failure.classification).toBe('permission');
+    expect(failure.retryable).toBe(false);
+    expect(toAgentToolError(failure).retry).toBe(false);
+  });
+
+  it('names the operation and how the operator sets the lane up', () => {
+    expect(failure.message).toContain('channel.message.send');
+    expect(failure.message).toContain('yarn channel:slack setup');
   });
 });
 

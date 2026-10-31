@@ -174,6 +174,8 @@ export function buildScanReport(): BudgetReport {
       codeLane: edition === 'enterprise' ? 'present' : 'absent',
       hostLane: edition === 'community-local' ? 'present' : 'absent',
       browserLane: edition === 'community-local' ? 'present' : 'absent',
+      // Discoverable, never pinned, so a composed channel lane adds nothing to this surface.
+      channelLane: 'absent',
     });
     const { specs } = resolveSpecs(resolved.coreOperations);
     for (const mode of ['native_fc', 'generate_json'] as const) {

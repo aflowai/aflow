@@ -9,7 +9,7 @@
  * work waits for its executor (`executorWait.ts`), and only a wait that spends
  * its looks reaches here as a failure.
  */
-import { CodeLaneDisabledError, type AflowError, type ErrorClassification } from '@aflow/schemas';
+import { LaneRefusalError, type AflowError, type ErrorClassification } from '@aflow/schemas';
 import { NoExecutorAvailableError } from '@aflow/redis';
 
 export interface StepResultErrorPayload {
@@ -21,7 +21,7 @@ export interface StepResultErrorPayload {
 }
 
 export function describeEnqueueFailure(error: unknown): AflowError {
-  if (error instanceof CodeLaneDisabledError) return error.toAflowError();
+  if (error instanceof LaneRefusalError) return error.toAflowError();
   if (error instanceof NoExecutorAvailableError) return error.toAflowError();
   return {
     code: 'ENQUEUE_FAILED',

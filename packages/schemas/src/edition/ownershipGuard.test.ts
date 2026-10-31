@@ -68,9 +68,13 @@ describe('ownership manifest', () => {
     // A cut tree cannot resolve the rules the cut removed, so only a tree that
     // has not been cut is held to all of them. In this repository that is
     // every rule.
+    // An optional pack may be deleted from an install that does without it,
+    // and the platform must still pass its tests then (Plan 327 D7), so its
+    // rule is not held to a path that is present.
     const cut = cutWasPerformed(tracked);
     const dead = OWNERSHIP_MANIFEST.filter(
-      (rule) => (!cut || survivesCoreCut(rule.owner)) && !resolves(rule),
+      (rule) =>
+        (!cut || survivesCoreCut(rule.owner)) && rule.owner !== 'optional-pack' && !resolves(rule),
     ).map((rule) => rule.path);
     expect(dead).toEqual([]);
   });

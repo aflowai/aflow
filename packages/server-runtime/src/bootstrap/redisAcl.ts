@@ -188,11 +188,64 @@ const HOST_USER = 'hostexec';
 
 const HOST_GRANT_RULES = [...HOST_KEY_PATTERNS, ...HOST_CHANNEL_PATTERNS, ...HOST_COMMANDS];
 
+/**
+ * The channel lane's app (Plan 327 D1): an executor runtime claiming
+ * `aflow:jobs:channel`, and nothing the host lane holds for its machine.
+ *
+ * Its families are the executor runtime's own, each one the host grant carries
+ * for the same reason, so none is explained twice. What it leaves out is the
+ * point: no other lane's stream, no write-approval grant, no browser hand-off,
+ * no host inventory. Its own records live in the app's local store, not here.
+ */
+const CHANNEL_KEY_PATTERNS = [
+  '~aflow:jobs:channel',
+  '~aflow:shard:*:results',
+  '~aflow:step:*:state',
+  '~aflow:step-inflight:*',
+  '~aflow:session_events:*',
+  '~aflow:executor-heartbeat:*',
+  '~aflow:executor-seen:*',
+  '~aflow:idempotency:*',
+  '~aflow:retention:candidates',
+  '~aflow:cancelled:*',
+  '~aflow:live:*',
+  '~aflow:step:*:scratch',
+  '~aflow:workflow_task_progress:*',
+  '~aflow:workflow_task_progress_index',
+  '~aflow:projection:candidates',
+  '~aflow:projection:order',
+  '~aflow:payload:*',
+] as const;
+
+/** Session wakeups and aborts. It publishes no hand-off and answers no machine query. */
+const CHANNEL_CHANNEL_PATTERNS = ['&aflow:pubsub:*', '&aflow:abort:*'] as const;
+
+export const CHANNEL_REDIS_USER = 'channelexec';
+
+const CHANNEL_GRANT_RULES = [
+  ...CHANNEL_KEY_PATTERNS,
+  ...CHANNEL_CHANNEL_PATTERNS,
+  ...HOST_COMMANDS,
+];
+
 export interface RedisAclInput {
   /** Every in-appliance service authenticates with this. */
   defaultPassword: string;
   /** The paired host executor's credential. */
   hostPassword: string;
+  /**
+   * The channel lane's credential, present only where a channel app was set up.
+   * Absent, the ACL carries no channel identity at all.
+   */
+  channelPassword?: string;
+}
+
+function channelIdentityLine(channelPassword: string): string {
+  return [
+    `user ${CHANNEL_REDIS_USER} resetpass on`,
+    `>${channelPassword}`,
+    ...CHANNEL_GRANT_RULES,
+  ].join(' ');
 }
 
 /**
@@ -215,7 +268,18 @@ export function renderRedisAcl(input: RedisAclInput): string {
     ...HOST_GRANT_RULES,
   ].join(' ');
 
-  return [`user default resetpass on >${input.defaultPassword} ~* &* +@all`, host, ''].join('\n');
+  const channelPassword = input.channelPassword?.trim();
+  const channel =
+    channelPassword === undefined || channelPassword === ''
+      ? []
+      : [channelIdentityLine(channelPassword)];
+
+  return [
+    `user default resetpass on >${input.defaultPassword} ~* &* +@all`,
+    host,
+    ...channel,
+    '',
+  ].join('\n');
 }
 
 export const REDIS_ACL_FILENAME = 'redis-acl.conf';
@@ -281,6 +345,43 @@ export async function assertHostGrantOnRunningServer(
     'clearselectors',
     '-@all',
     ...HOST_GRANT_RULES,
+  );
+  return { outcome: 'asserted' };
+}
+
+/**
+ * Apply the channel identity, credential included, to a running server.
+ *
+ * A full start calls this with the credential it has just read from
+ * `instance.env`, as it does for the host identity, which is what creates the
+ * identity on a Redis started without an ACL file and corrects one that drifted.
+ */
+export async function applyChannelIdentityToRunningServer(
+  redis: RedisCaller,
+  channelPassword: string,
+): Promise<void> {
+  const rule = channelIdentityLine(channelPassword).split(' ').slice(2);
+  await redis.call('ACL', 'SETUSER', CHANNEL_REDIS_USER, ...rule);
+}
+
+/**
+ * Bring an existing channel identity's grant up to the running code's, leaving
+ * its password as it is — the host grant's rule, for the same reason.
+ */
+export async function assertChannelGrantOnRunningServer(
+  redis: RedisCaller,
+): Promise<{ outcome: 'asserted' } | { outcome: 'absent' }> {
+  const existing = await redis.call('ACL', 'GETUSER', CHANNEL_REDIS_USER);
+  if (existing === null) return { outcome: 'absent' };
+  await redis.call(
+    'ACL',
+    'SETUSER',
+    CHANNEL_REDIS_USER,
+    'resetkeys',
+    'resetchannels',
+    'clearselectors',
+    '-@all',
+    ...CHANNEL_GRANT_RULES,
   );
   return { outcome: 'asserted' };
 }
