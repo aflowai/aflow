@@ -21,6 +21,7 @@ import {
   resolveOAuthCallbackUrl,
   resolveOAuthOwner,
   buildMcpOAuthDescriptor,
+  mcpPrivateNetworkPolicy,
   type OAuthBindingTarget,
 } from '@aflow/oauth';
 import { getDb } from './shared.js';
@@ -115,7 +116,7 @@ export function registerMcpOauthRoutes(fastify: FastifyInstance): void {
             ),
           )
           .limit(1);
-      })) as Array<{ definitionJson?: unknown }>;
+      })) as Array<{ definitionJson?: unknown; privateNetworkJson?: unknown }>;
 
       if (definitionRows.length === 0) {
         reply.code(404).send({
@@ -169,7 +170,11 @@ export function registerMcpOauthRoutes(fastify: FastifyInstance): void {
         }
       }
 
-      const descriptor = buildMcpOAuthDescriptor(binding, definition);
+      const descriptor = buildMcpOAuthDescriptor(
+        binding,
+        definition,
+        mcpPrivateNetworkPolicy(definitionRows[0]!.privateNetworkJson),
+      );
       const target: OAuthBindingTarget = {
         integrationKind: 'mcp',
         resourceKey: binding.serverId,

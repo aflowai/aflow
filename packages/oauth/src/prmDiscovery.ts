@@ -1,4 +1,9 @@
-import { safeFetchImpl, validateUrl } from '@aflow/network-safety';
+import {
+  DEFAULT_PRIVATE_NETWORK_POLICY,
+  safeFetchFor,
+  validateUrl,
+  type PrivateNetworkPolicy,
+} from '@aflow/network-safety';
 import { parseWwwAuthenticateResourceMetadata } from './parseWwwAuth.js';
 
 /**
@@ -46,6 +51,11 @@ export function clearPrmCacheForTests(): void {
 export interface DiscoverPrmOptions {
   /** Override path on Path 3 (root well-known); per `McpServerDefinition.protectedResourceMetadataPath`. */
   protectedResourceMetadataPath?: string | undefined;
+  /**
+   * The definition's private network policy (Plan 336 D3). A discovered URL
+   * reaches a private address only when its host is on the policy.
+   */
+  privateNetwork?: PrivateNetworkPolicy;
   /** Override fetch (for tests). Receives a URL string + RequestInit. */
   fetchImpl?: typeof fetch;
 }
@@ -64,16 +74,23 @@ export async function discoverPRM(
   const path = url.pathname && url.pathname !== '/' ? url.pathname.replace(/\/$/, '') : '';
   const cacheKey = `${origin}|${path}`;
 
-  const cached = prmCache.get(cacheKey);
-  if (cached && Date.now() - cached.fetchedAtMs < PRM_CACHE_TTL_MS) {
-    return { prm: cached.prm, source: cached.source, metadataUrl: cached.metadataUrl };
-  }
-
-  const fetchImpl = opts.fetchImpl ?? safeFetchImpl;
+  const privateNetwork = opts.privateNetwork ?? DEFAULT_PRIVATE_NETWORK_POLICY;
+  const fetchImpl = opts.fetchImpl ?? safeFetchFor(privateNetwork);
 
   // serverUrl is space-authored — SSRF-check its origin before any discovery
-  // fetch. Every well-known URL below is origin-rooted.
-  await validateUrl(origin, []);
+  // fetch. Every well-known URL below is origin-rooted. Checked before the
+  // cache too: a document cached under one definition's private network
+  // policy is served only to a caller whose own policy admits its host.
+  await validateUrl(origin, [], privateNetwork);
+
+  const cached = prmCache.get(cacheKey);
+  if (cached && Date.now() - cached.fetchedAtMs < PRM_CACHE_TTL_MS) {
+    // A reactive discovery may have cached a document from another host.
+    if (new URL(cached.metadataUrl).origin !== origin) {
+      await validateUrl(cached.metadataUrl, [], privateNetwork);
+    }
+    return { prm: cached.prm, source: cached.source, metadataUrl: cached.metadataUrl };
+  }
 
   // Path 2 — path-specific well-known. Two layouts in the wild:
   //   canonical:   {origin}/.well-known/oauth-protected-resource{path}
@@ -158,8 +175,9 @@ export async function discoverPRMReactive(
   // The advertised URL comes from the server's own 401 header and can point
   // anywhere — SSRF-check it before fetching. Reactive discovery is
   // best-effort, so a blocked URL degrades to pre-emptive discovery.
+  const privateNetwork = opts.privateNetwork ?? DEFAULT_PRIVATE_NETWORK_POLICY;
   try {
-    await validateUrl(url, []);
+    await validateUrl(url, [], privateNetwork);
   } catch (err) {
     console.warn(
       `[prm] rejecting advertised resource_metadata URL "${url}": ${err instanceof Error ? err.message : String(err)}`,
@@ -167,7 +185,7 @@ export async function discoverPRMReactive(
     return null;
   }
 
-  const fetchImpl = opts.fetchImpl ?? safeFetchImpl;
+  const fetchImpl = opts.fetchImpl ?? safeFetchFor(privateNetwork);
   const prm = await tryFetch(fetchImpl, url);
   if (!prm) return null;
 

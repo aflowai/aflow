@@ -10,6 +10,8 @@ import {
 } from '@aflow/database';
 import { McpServerBindingSchema, McpServerDefinitionSchema, TenantIdSchema } from '@aflow/schemas';
 import type { McpServerBinding, McpServerDefinition } from '@aflow/schemas';
+import type { PrivateNetworkPolicy } from '@aflow/network-safety';
+import { mcpPrivateNetworkPolicy } from '@aflow/oauth';
 import {
   definitionStoreKey,
   getMcpSpaceStores,
@@ -113,12 +115,20 @@ async function loadSpaceData(
   );
 
   const parsedDefs: McpServerDefinition[] = [];
-  for (const row of (defRows ?? []) as Array<{ definitionJson?: unknown }>) {
+  const privateNetworkPolicies = new Map<string, PrivateNetworkPolicy>();
+  for (const row of (defRows ?? []) as Array<{
+    definitionJson?: unknown;
+    privateNetworkJson?: unknown;
+  }>) {
     const raw = row.definitionJson as Record<string, unknown> | undefined;
     if (!raw) continue;
     const result = McpServerDefinitionSchema.safeParse(raw);
     if (result.success) {
       parsedDefs.push(result.data);
+      privateNetworkPolicies.set(
+        result.data.serverId,
+        mcpPrivateNetworkPolicy(row.privateNetworkJson),
+      );
     } else {
       const serverId = (raw['serverId'] as string | undefined) ?? '<unknown>';
       const issues = result.error.issues
@@ -207,5 +217,6 @@ async function loadSpaceData(
   slice.bindingStore = parsedBindings;
   slice.credentialStore = credentialMap;
   slice.catalogGrantStore = grantMap;
+  slice.privateNetworkStore = privateNetworkPolicies;
   stores.loadedAtMs.set(spaceScopeKey(tenantId, spaceId), Date.now());
 }

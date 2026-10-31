@@ -406,6 +406,17 @@ export function processEditionDescriptor(): EditionDescriptor {
   return resolvedForProcess;
 }
 
+/**
+ * Whether this process runs the local edition, where the operator is also
+ * whoever runs the deployment. The server-side counterpart of the client's
+ * `useEdition().id === 'community-local'`.
+ */
+export function isLocalEdition(
+  descriptor: Pick<EditionDescriptor, 'edition'> = processEditionDescriptor(),
+): boolean {
+  return descriptor.edition === 'community-local';
+}
+
 /** Whether a surface at `tier` is composed into a process running `edition`. */
 export function isTierEnabled(edition: EditionId, tier: EditionTier): boolean {
   return tier === 'core' || edition === 'enterprise';
