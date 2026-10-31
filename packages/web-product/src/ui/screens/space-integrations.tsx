@@ -24,6 +24,7 @@ import { useMcpIntegrations } from '../components/integrations-mcp/use-mcp-integ
 import type { McpServerDefinitionSummary } from '../components/integrations-mcp/use-mcp-integrations.js';
 import { McpIntegrationCard } from '../components/integrations-mcp/McpIntegrationCard.js';
 import { McpIntegrationFormDialog } from '../components/integrations-mcp/McpIntegrationFormDialog.js';
+import { McpPrivateNetworkDialog } from '../components/integrations-mcp/McpPrivateNetworkDialog.js';
 import {
   McpConfirmDeleteDialog,
   useDeleteAction,
@@ -97,6 +98,15 @@ function IntegrationsPageInner() {
     setMcpDeleteTarget(null);
   };
   const { isDeleting, run: runMcpDelete } = useDeleteAction(closeMcpDelete);
+  // The private network form for one definition, opened from a refused
+  // connect's action or from the definition's Private network section.
+  const [privateNetworkTarget, setPrivateNetworkTarget] = useState<{
+    serverId: string;
+    refusedHost?: string;
+  } | null>(null);
+  const openPrivateNetwork = (serverId: string, refusedHost?: string) => {
+    setPrivateNetworkTarget({ serverId, ...(refusedHost ? { refusedHost } : {}) });
+  };
 
   // Repo binding dialog state — `null` = closed, `{}` = add, `{ binding }` = edit.
   const [repoFormTarget, setRepoFormTarget] = useState<{ binding?: RepoBindingSummary } | null>(
@@ -439,6 +449,10 @@ function IntegrationsPageInner() {
                   onDelete={() => {
                     setMcpDeleteTarget(item.def);
                   }}
+                  spaceId={spaceId}
+                  onSetPrivateNetwork={(refusedHost) => {
+                    openPrivateNetwork(item.def.serverId, refusedHost);
+                  }}
                   onTest={() => {
                     const b = firstMcpBindingByServerId.get(item.def.serverId);
                     if (!b)
@@ -538,8 +552,31 @@ function IntegrationsPageInner() {
                 }}
                 onDeleteCredential={(key) => mcp.deleteCredential(key)}
                 onTest={(bindingId) => mcp.testBinding(bindingId)}
+                onSetPrivateNetwork={(serverId, refusedHost) => {
+                  setMcpFormTarget(null);
+                  openPrivateNetwork(serverId, refusedHost);
+                }}
                 onClose={() => {
                   setMcpFormTarget(null);
+                }}
+              />
+            );
+          })()}
+
+        {privateNetworkTarget !== null &&
+          (() => {
+            const def = mcp.definitions.find((d) => d.serverId === privateNetworkTarget.serverId);
+            if (!def) return null;
+            return (
+              <McpPrivateNetworkDialog
+                definition={def}
+                {...(privateNetworkTarget.refusedHost
+                  ? { refusedHost: privateNetworkTarget.refusedHost }
+                  : {})}
+                spaceId={spaceId}
+                onSave={mcp.setPrivateNetwork}
+                onClose={() => {
+                  setPrivateNetworkTarget(null);
                 }}
               />
             );

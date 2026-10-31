@@ -62,7 +62,11 @@ import {
   type McpTenantGuardRef,
 } from './tenantPolicyGuard.js';
 import { ensureSpaceLoaded, invalidateSpaceCache } from './spaceLoader.js';
-import { egressRefusalDetails, privateNetworkPolicyOf } from './privateNetwork.js';
+import {
+  egressRefusalDetails,
+  egressRefusalMessage,
+  privateNetworkPolicyOf,
+} from './privateNetwork.js';
 import {
   McpConnectionPool,
   poolKeyManaged,
@@ -358,7 +362,10 @@ export class McpHandler implements StepHandler {
       });
     } catch (err) {
       if (err instanceof SsrfBlockedError || err instanceof DnsBlockedError) {
-        return failureWithError(ctx, validationError(err.message, egressRefusalDetails(err)));
+        return failureWithError(
+          ctx,
+          validationError(egressRefusalMessage(err, definition.name), egressRefusalDetails(err)),
+        );
       }
       return failureWithError(
         ctx,
@@ -713,7 +720,10 @@ export class McpHandler implements StepHandler {
       });
     } catch (err) {
       if (err instanceof SsrfBlockedError || err instanceof DnsBlockedError) {
-        return failureWithError(ctx, validationError(err.message, egressRefusalDetails(err)));
+        return failureWithError(
+          ctx,
+          validationError(egressRefusalMessage(err, definition.name), egressRefusalDetails(err)),
+        );
       }
       return failureWithError(
         ctx,

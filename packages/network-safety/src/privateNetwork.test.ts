@@ -9,6 +9,7 @@ import {
   DEFAULT_PRIVATE_NETWORK_POLICY,
   DnsBlockedError,
   SsrfBlockedError,
+  describeRangeLabel,
   isCloudMetadataHostname,
   isPrivateIp,
   privateNetworkPolicyFor,
@@ -368,5 +369,44 @@ describe('DnsBlockedError', () => {
     );
     expect(outcome).toBeInstanceOf(DnsBlockedError);
     expect(outcome).toMatchObject({ kind: 'unresolvable', hostname: HOST });
+  });
+});
+
+describe('describeRangeLabel', () => {
+  it('names a range in words with every block it covers', () => {
+    expect(describeRangeLabel('private-rfc1918')).toBe(
+      'private network address (10.0.0.0/8, 172.16.0.0/12 or 192.168.0.0/16)',
+    );
+    expect(describeRangeLabel('shared-address-space')).toBe(
+      'shared address space address (100.64.0.0/10)',
+    );
+    expect(describeRangeLabel('loopback')).toBe('loopback address (127.0.0.0/8)');
+  });
+
+  it('names the metadata addresses and the metadata names', () => {
+    expect(describeRangeLabel('cloud-metadata')).toBe(
+      'cloud metadata address (100.100.100.200, 169.254.169.254, metadata, ' +
+        'metadata.google.internal or metadata.goog)',
+    );
+  });
+
+  it('names an address form no block covers in words alone', () => {
+    expect(describeRangeLabel('ipv6-literal')).toBe('IPv6 address');
+  });
+
+  it('names the label every refusal of a listed host carries', async () => {
+    answers('100.100.100.200');
+    const policy = privateNetworkPolicyFor({
+      acknowledgment: { hosts: [HOST] },
+      edition: 'community-local',
+      deploymentHosts: [],
+    });
+    const err = await resolveAndValidateHost(HOST, policy, 'https:').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(SsrfBlockedError);
+    expect(describeRangeLabel((err as SsrfBlockedError).rangeLabel!)).toMatch(/^cloud metadata/);
+  });
+
+  it('returns an unknown label as it is', () => {
+    expect(describeRangeLabel('something-new')).toBe('something-new');
   });
 });

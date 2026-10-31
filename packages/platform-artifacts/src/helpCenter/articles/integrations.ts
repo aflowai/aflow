@@ -93,7 +93,26 @@ After connecting, the card reads **No tools enabled yet — the agent sees zero 
 
 ## Sign-in later
 
-When a sign-in is missing or has expired, a **Connect** or **Reconnect** card appears under **Needs attention**. Signing in resumes the work that was waiting on it.`,
+When a sign-in is missing or has expired, a **Connect** or **Reconnect** card appears under **Needs attention**. Signing in resumes the work that was waiting on it.
+
+## When the connect is refused
+
+A server URL whose host resolves to an address outside the public internet is refused. The dialog and the card name the host and its range in words:
+
+- **Private network address** (10.0.0.0/8, 172.16.0.0/12 or 192.168.0.0/16), and **shared address space** (100.64.0.0/10), which overlay VPNs use. A setting can lift these two ranges for a server.
+- **Loopback** (127.0.0.0/8), **link-local** (169.254.0.0/16) and **cloud metadata** (169.254.169.254, 100.100.100.200 and the metadata names). No setting reaches these. The same holds for current network, IETF protocol, benchmarking, multicast, reserved and broadcast addresses, IPv6 addresses and numeric addresses not written as a dotted quad.
+
+For a server on your private network, such as one behind a VPN:
+
+1. Choose **Set as private network** under the refusal. The **Private network** form opens for that server.
+2. List each host the server uses, exactly, one per line: the server URL host, and any token or authorization endpoint host. A wildcard is refused.
+3. Choose **Save**. Then edit the integration and choose **Save & connect** again.
+
+A listed host is reached over https only, so its server URL must start with \`https://\`. No setting lifts that rule. The card's **Private network** section lists the hosts and who set them, and when. **Change hosts** edits the list, and **Clear** removes it. Only a signed-in operator sets the list. An agent cannot.
+
+In the hosted edition, a listed host is reached only when whoever runs the deployment also lists it in \`MCP_PRIVATE_NETWORK_HOSTS\`. Until then the refusal says so.
+
+When the refusal says this machine cannot resolve the host, the name is not known here. The VPN or its DNS may not reach the service from this machine.`,
     editions: ['enterprise', 'community-local'],
     anchors: { routes: ['s/[space]/integrations'], operations: [] },
     related: ['connect-an-integration', 'where-credentials-live', 'what-is-waiting-for-me'],
@@ -105,6 +124,10 @@ When a sign-in is missing or has expired, a **Connect** or **Reconnect** card ap
       'tool permissions',
       'allowlist',
       'sign in',
+      'private network',
+      'vpn',
+      'refused',
+      'MCP_PRIVATE_NETWORK_HOSTS',
     ],
   },
   {

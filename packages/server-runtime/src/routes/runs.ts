@@ -31,6 +31,7 @@ import { registerSessionParticipantRoutes } from './sessionParticipants.js';
 import { registerSessionMetadataRoutes } from './sessionMetadataRoutes.js';
 import { recordSpeechJoin, recordStartInvites } from '../lib/sessionMembership.js';
 import { resolveApiBaseUrl } from '../lib/apiBaseUrl.js';
+import { failedSessionError, StoredStepErrorSchema } from '../lib/storedStepError.js';
 
 // ============================================================================
 // Request/Response Schemas
@@ -329,12 +330,7 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
             // Extended response when wait is used
             outputRef: z.string().optional(),
             errorRef: z.string().optional(),
-            error: z
-              .object({
-                code: z.string(),
-                message: z.string(),
-              })
-              .optional(),
+            error: StoredStepErrorSchema.optional(),
           }),
           400: z.object({ error: z.string(), message: z.string() }),
           403: z.object({ error: z.string(), message: z.string() }),
@@ -532,11 +528,13 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
                       requiredInput: details.requiredInput,
                     }
                   : undefined;
+              const error = await failedSessionError(app.appContext.payloadStore, details);
               return await reply.status(201).send({
                 ...result,
                 status: details.status,
                 outputRef: details.outputRef,
                 errorRef: details.errorRef,
+                ...(error ? { error } : {}),
                 requiredInput: details.requiredInput,
                 next,
               });

@@ -1,5 +1,9 @@
 import { z } from 'zod';
-import { IconRefSchema } from '@aflow/schemas';
+import {
+  IconRefSchema,
+  McpPrivateNetworkAcknowledgmentSchema,
+  parseMcpPrivateNetworkAcknowledgment,
+} from '@aflow/schemas';
 import { resolveIntegrationIcon } from './shared.js';
 
 export const McpServerDefinitionResponseSchema = z.object({
@@ -22,6 +26,8 @@ export const McpServerDefinitionResponseSchema = z.object({
       opTaskOnly: z.array(z.string()).optional(),
     })
     .nullable(),
+  /** The operator's private network acknowledgment, or null when none is set (Plan 336 D2). */
+  privateNetwork: McpPrivateNetworkAcknowledgmentSchema.nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -68,6 +74,8 @@ interface McpServerDefinitionRowLike {
   space_id?: string;
   definitionJson?: Record<string, unknown>;
   definition_json?: Record<string, unknown>;
+  privateNetworkJson?: unknown;
+  private_network_json?: unknown;
   createdAt?: Date;
   created_at?: Date;
   updatedAt?: Date;
@@ -151,6 +159,9 @@ export function mapMcpDefinitionRow(row: McpServerDefinitionRowLike): McpServerD
         : null,
     ...(icon ? { icon } : {}),
     toolFilter,
+    privateNetwork: parseMcpPrivateNetworkAcknowledgment(
+      row.privateNetworkJson ?? row.private_network_json,
+    ),
     createdAt: new Date(row.createdAt ?? row.created_at ?? 0).toISOString(),
     updatedAt: new Date(row.updatedAt ?? row.updated_at ?? 0).toISOString(),
   };
