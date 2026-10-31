@@ -94,7 +94,8 @@ export const HostMergePostureSchema = z
       '`never`, the default: the merge is the operator’s. ' +
       '`when-green`: the shepherd merges it by squash, pinned to its head, once every required ' +
       "check of the base branch passed on that head, the publication's own Local Code Review " +
-      'approved that head, and no person’s review on the pull request requests changes — each ' +
+      'returned `approve` for that head or the publication recorded `overrideCheck: operator` ' +
+      'with `pushDecision: ask`. No person’s review may request changes, and each ' +
       "merge still on the operator's write approval. It needs the push approval " +
       '`unless-unreviewed`, the only posture under which a publication reviews what it pushes.',
   );
