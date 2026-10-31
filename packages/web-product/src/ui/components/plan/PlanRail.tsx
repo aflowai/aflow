@@ -17,6 +17,7 @@
 import { useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import {
+  AnimatedHeight,
   Badge,
   Button,
   Column,
@@ -27,7 +28,6 @@ import {
   Text,
   Tooltip,
   type BadgeVariant,
-  type IconName,
 } from '@aflow/design-system';
 import {
   PLAN_NODE_CONVERSATION_LINK_LABEL,
@@ -60,7 +60,14 @@ import {
   type PlanNodeOpener,
   type PlanNodeReviser,
 } from './PlanNodeOpenControl.js';
-import { GroupLabel, NextMarker, PullRequestChip } from './PlanParts.js';
+import {
+  GroupLabel,
+  NextMarker,
+  PLAN_ORB_SIZE,
+  PlanRunLine,
+  PlanStepOrb,
+  PullRequestChip,
+} from './PlanParts.js';
 
 /** Run links the rail lists before "All runs". */
 export const PLAN_RAIL_RUNS = 5;
@@ -78,14 +85,6 @@ export function planDiscussDraft(node: { nodeId: string; title: string }): strin
   return `About the plan step "${node.title}" (node ${node.nodeId}). Open it with plan.node.get before you answer.\n\n`;
 }
 const ALL_RUNS_PAGE = 50;
-
-const COLUMN_ICON: Record<PlanBoardColumn, IconName> = {
-  needs_you: 'warning',
-  in_flight: 'lightning',
-  up_next: 'play',
-  done: 'check-circle',
-  dropped: 'x',
-};
 
 const COLUMN_BADGE: Record<PlanBoardColumn, BadgeVariant> = {
   needs_you: 'warning',
@@ -116,12 +115,18 @@ function RailDismiss({ onDismiss }: { onDismiss: () => void }) {
   );
 }
 
-/** One labelled part of the rail, as the skill inspector sections its own. */
+/**
+ * One labelled part of the rail, as the skill inspector sections its own. Its
+ * body grows and shrinks as it unfolds and folds, a note shown or All runs
+ * listed.
+ */
 function Section({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <Column gap="xs" data-plan-rail-section={label}>
+    <Column gap="xs" role="group" aria-label={label} data-plan-rail-section={label}>
       <GroupLabel>{label}</GroupLabel>
-      {children}
+      <AnimatedHeight>
+        <Column gap="xs">{children}</Column>
+      </AnimatedHeight>
     </Column>
   );
 }
@@ -294,7 +299,8 @@ export type PlanRailNode = Pick<
   | 'goalHead'
   | 'rounds'
   | 'children'
-> & { counts: Pick<PlanTreeNode['counts'], 'runs'> };
+> &
+  Partial<Pick<PlanTreeNode, 'activity'>> & { counts: Pick<PlanTreeNode['counts'], 'runs'> };
 
 export interface PlanRailProps {
   node: PlanRailNode;
@@ -373,8 +379,11 @@ export function PlanRail({
     enabled: closedAncestor !== undefined,
   });
   const full = detail.data?.node;
-  const accent =
-    PLAN_BOARD_COLUMNS.find((c) => c.id === column)?.color ?? 'var(--color-accent-default)';
+  // The step's own read says whether a run is on it; until it answers, a card
+  // says, and a lane row, which carries no activity, reads In flight as moving.
+  const runInFlight =
+    (detail.data?.activity ?? node.activity ?? (column === 'in_flight' ? 'in_flight' : 'idle')) ===
+    'in_flight';
   const columnLabel = PLAN_BOARD_COLUMNS.find((c) => c.id === column)?.label ?? column;
   const runLinks = detail.data?.links ?? [];
   const inFlight = (detail.data?.runs ?? []).filter((run) => run.nodeId === node.nodeId);
@@ -390,21 +399,7 @@ export function PlanRail({
     <Column gap="lg" data-plan-rail={node.nodeId} style={{ minWidth: 0 }}>
       <Row gap="xs" align="center" justify="between">
         <Row gap="xs" align="center" wrap>
-          <span
-            aria-hidden
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              width: 30,
-              height: 30,
-              borderRadius: 'var(--radius-md)',
-              background: `color-mix(in srgb, ${accent} 12%, transparent)`,
-              color: accent,
-            }}
-          >
-            <Icon name={COLUMN_ICON[column]} size="md" weight="thin" />
-          </span>
+          <PlanStepOrb column={column} runInFlight={runInFlight} size={PLAN_ORB_SIZE.rail} />
           <Badge variant={COLUMN_BADGE[column]}>{columnLabel}</Badge>
           {reason !== undefined && (
             <Badge variant="warning">{NEEDS_YOU_REASON_LABEL[reason]}</Badge>
@@ -509,18 +504,7 @@ export function PlanRail({
           <ul style={listStyle}>
             {inFlight.map((run) => (
               <li key={run.runId}>
-                <Row gap="xs" align="center">
-                  <Link
-                    href={spaceRoute(spaceSlug, `/runs/${encodeURIComponent(run.runId)}`)}
-                    style={linkStyle}
-                  >
-                    {runKindLabel(run.slug)}
-                  </Link>
-                  <Badge variant={run.status}>{run.status}</Badge>
-                  <Text size="xs" variant="muted">
-                    {shortTime(run.startedAt)}
-                  </Text>
-                </Row>
+                <PlanRunLine run={run} spaceSlug={spaceSlug} />
               </li>
             ))}
           </ul>

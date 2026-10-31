@@ -204,7 +204,9 @@ vi.mock('@aflow/design-system', () => {
         folded ? null : children,
       );
     },
-    Pulse: ({ children }: { children?: ReactNode }) => children,
+    // Marked, so a test reads which content grows and shrinks rather than snaps.
+    AnimatedHeight: ({ children }: { children?: ReactNode }) =>
+      createElement('div', { 'data-animated-height': '' }, children),
     Panel: block('div'),
     ScrollArea: block('div'),
     Input: (props: Record<string, unknown>) => createElement('input', props),
@@ -246,6 +248,15 @@ vi.mock('next/link', () => ({
   default: ({ href, children }: { href: string; children?: ReactNode }) =>
     createElement('a', { href }, children),
 }));
+
+// The orbs pick their asset by theme, and read it to seek its animation.
+vi.mock('../providers/theme.js', () => ({
+  useTheme: () => ({ theme: 'light', resolvedTheme: 'light', setTheme: () => undefined }),
+}));
+vi.stubGlobal(
+  'fetch',
+  vi.fn(() => Promise.resolve({ ok: false, text: () => Promise.resolve('') })),
+);
 
 vi.mock('../components/providers.js', () => ({
   useSpaceFromRoute: () => ({ id: SPACE_ID, slug: 'work', slugFromRoute: 'work' }),
@@ -2200,44 +2211,44 @@ describe('SpacePlanPage — ordering and closing plans from the list (Plan 332 P
     expect(moves(L_FINISHED)).toEqual([]);
   });
 
-  it('shows Move up and Move down where the row is pointed at, focused or selected, and the dot gives way to them', async () => {
+  it('shows Move up and Move down where the row is pointed at, focused or selected, and the orb gives way to them', async () => {
     nav.search = `plan=${L_QUEUED}`;
     await render({ data: LIST });
 
     const controls = (rootId: string) =>
       listRow(rootId)!.querySelector<HTMLElement>(`[data-plan-move="${rootId}"]`)!;
-    const dot = (rootId: string) =>
-      listRow(rootId)!.querySelector<HTMLElement>('span[aria-hidden][data-state]')!;
+    const orb = (rootId: string) =>
+      listRow(rootId)!.querySelector<HTMLElement>('[data-plan-orb][data-state]')!;
     const hover = async (target: HTMLElement, type: 'mouseover' | 'mouseout') => {
       await act(async () => {
         target.dispatchEvent(new MouseEvent(type, { bubbles: true, relatedTarget: null }));
       });
     };
 
-    // At rest: the dot shows, the controls are quiet.
+    // At rest: the orb shows, the controls are quiet.
     expect(controls(L_FLIGHT).style.opacity).toBe('0');
-    expect(dot(L_FLIGHT).style.opacity).toBe('1');
-    // The selected row shows its controls in the dot's place.
+    expect(orb(L_FLIGHT).style.opacity).toBe('1');
+    // The selected row shows its controls in the orb's place.
     expect(controls(L_QUEUED).style.opacity).toBe('1');
-    expect(dot(L_QUEUED).style.opacity).toBe('0');
+    expect(orb(L_QUEUED).style.opacity).toBe('0');
 
     await hover(listRow(L_FLIGHT)!, 'mouseover');
     expect(controls(L_FLIGHT).style.opacity).toBe('1');
-    expect(dot(L_FLIGHT).style.opacity).toBe('0');
+    expect(orb(L_FLIGHT).style.opacity).toBe('0');
     await hover(listRow(L_FLIGHT)!, 'mouseout');
     expect(controls(L_FLIGHT).style.opacity).toBe('0');
-    expect(dot(L_FLIGHT).style.opacity).toBe('1');
+    expect(orb(L_FLIGHT).style.opacity).toBe('1');
 
     await act(async () => {
       listRow(L_EMPTY)!.querySelector('button')!.focus();
     });
     expect(controls(L_EMPTY).style.opacity).toBe('1');
-    expect(dot(L_EMPTY).style.opacity).toBe('0');
+    expect(orb(L_EMPTY).style.opacity).toBe('0');
 
-    // A row with no move has no controls: its dot never gives way.
+    // A row with no move has no controls: its orb never gives way.
     await hover(listRow(L_FINISHED)!, 'mouseover');
     expect(listRow(L_FINISHED)!.querySelector('[data-plan-move]')).toBe(null);
-    expect(dot(L_FINISHED).style.opacity).toBe('1');
+    expect(orb(L_FINISHED).style.opacity).toBe('1');
   });
 
   it('keeps the controls shown while a move is pending, though the row is no longer pointed at', async () => {
@@ -2758,5 +2769,195 @@ describe('SpacePlanPage — the overview across plans (Plan 332 P4)', () => {
 
     expect(container.querySelector('[role="dialog"] [data-plan-rail]')).not.toBe(null);
     expect(rail().textContent).toContain('Next');
+  });
+});
+
+/** The label of the state orb that stands first in `scope`. */
+function orbLabel(scope: Element): string | null {
+  return scope.querySelector('[data-plan-orb] [role="img"]')?.getAttribute('aria-label') ?? null;
+}
+
+/** A part of the rail by its role and name. */
+function railGroup(name: string): Element {
+  const found = [...rail().querySelectorAll('[role="group"]')].find(
+    (g) => g.getAttribute('aria-label') === name,
+  );
+  if (!found) throw new Error(`no rail group ${name}`);
+  return found;
+}
+
+/** Whether `content` sits in a body that grows and shrinks rather than snaps, inside `scope`. */
+function animatedWithin(scope: Element, content: Element | null): boolean {
+  const body = content?.closest('[data-animated-height]');
+  return body !== null && body !== undefined && scope.contains(body);
+}
+
+describe('SpacePlanPage — state as orbs, and motion (Plan 332 P7)', () => {
+  it('reads each plan row’s state by its orb and its words', async () => {
+    await render({ data: LIST });
+
+    const read = (rootId: string) => [
+      orbLabel(listRow(rootId)!),
+      listRow(rootId)!.querySelector('[data-plan-row-state]')?.textContent,
+    ];
+    expect(read(L_NEEDS)).toEqual(['Paused — action expected', 'Needs you']);
+    expect(read(L_FLIGHT)).toEqual(['Running', '1 in flight']);
+    expect(read(L_QUEUED)).toEqual(['Idle', 'Queued']);
+    expect(read(L_EMPTY)).toEqual(['Inactive', 'No steps']);
+    expect(read(L_FINISHED)).toEqual(['Completed', 'Finished']);
+
+    await click(
+      container.querySelector<HTMLElement>('[data-plan-list-section="closed"] > button')!,
+    );
+    expect(read(L_CLOSED)).toEqual(['Inactive', 'Closed']);
+  });
+
+  it('reads the plan’s header state by its orb and its words', async () => {
+    await render();
+
+    const header = container.querySelector(`[data-plan-tally="${R322}"]`)!;
+    expect(orbLabel(header)).toBe('Paused — action expected');
+    expect(header.querySelector('[data-badge]')?.textContent).toBe('Needs you');
+
+    await choosePlan(R315);
+    const closed = container.querySelector(`[data-plan-tally="${R315}"]`)!;
+    expect(orbLabel(closed)).toBe('Inactive');
+    expect(closed.querySelector('[data-badge]')?.textContent).toBe('Closed');
+  });
+
+  it('reads each card’s state by its orb and the words its card and column say', async () => {
+    await render();
+
+    const read = (nodeId: string) => {
+      const shown = card(nodeId);
+      const heading = shown
+        .closest('[data-plan-column]')!
+        .querySelector('[data-plan-column-header]');
+      return [orbLabel(shown), heading?.getAttribute('data-plan-column-header')];
+    };
+    expect(read(DECISION)).toEqual(['Paused — action expected', 'Needs you']);
+    expect(card(DECISION).textContent).toContain('Decision');
+    // A run on the step itself, and one on a step under it, both read running.
+    expect(read(BOARD)).toEqual(['Running', 'In flight']);
+    expect(card(BOARD).textContent).toContain('1 run in flight');
+    expect(read(P3)).toEqual(['Running', 'In flight']);
+    // A waiting step whose run ended is In flight, and nothing moves it until the loop returns.
+    expect(read(NEXT)).toEqual(['Idle', 'In flight']);
+    expect(card(NEXT).querySelector('[data-plan-waiting]')?.textContent).toBe(
+      'Its run ended; the loop advances it when it returns',
+    );
+    expect(read(ARTICLE)).toEqual(['Idle', 'Up next']);
+    expect(read(LANDED)).toEqual(['Completed', 'Done']);
+    expect(read(SKETCH)).toEqual(['Inactive', 'Dropped']);
+    expect(container.querySelector('[data-plan-orb="failed"]')).toBe(null);
+  });
+
+  it('reads the rail’s state by its orb and its words', async () => {
+    await render();
+
+    await click(card(DECISION));
+    expect(orbLabel(rail())).toBe('Paused — action expected');
+    expect(rail().querySelector('[data-badge]')?.textContent).toBe('Needs you');
+
+    await click(card(LANDED));
+    expect(orbLabel(rail())).toBe('Completed');
+    expect(rail().querySelector('[data-badge]')?.textContent).toBe('Done');
+
+    await click(card(ARTICLE));
+    expect(orbLabel(rail())).toBe('Idle');
+    expect(rail().querySelector('[data-badge]')?.textContent).toBe('Up next');
+  });
+
+  it('reads each lane row’s state by its orb and its words, and a run as the run surface writes it', async () => {
+    nav.search = '';
+    await render({ data: OVERVIEW });
+
+    expect(orbLabel(laneRow(LANE_STOP))).toBe('Paused — action expected');
+    expect(laneRow(LANE_STOP).querySelector('[data-badge]')?.textContent).toBe('Blocked');
+    expect(orbLabel(laneRow(LANE_STRANDED))).toBe('Paused — action expected');
+    expect(laneRow(LANE_STRANDED).textContent).toContain('Under a closed step');
+    expect(orbLabel(laneRow(ARTICLE))).toBe('Idle');
+    expect(laneRow(ARTICLE).textContent).toContain('Next for the loop');
+
+    const running = laneRow(BOARD);
+    expect(orbLabel(running)).toBe('Running');
+    const run = running.querySelector(`[data-plan-lane-run="${RUN_ID}"] [data-plan-run]`)!;
+    expect(run.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe('Run executing');
+    expect(run.textContent).toBe('Commissionexecuting60m 00s');
+    expect(run.querySelector('[data-plan-run-elapsed]')?.textContent).toBe('60m 00s');
+  });
+
+  it('writes a run in flight on the rail as the run surface writes its rows', async () => {
+    recorded.details[BOARD] = detail(fullNode(BOARD, 'P3.3 the board'), {
+      runs: [
+        {
+          runId: RUN_ID,
+          slug: 'commission-change',
+          status: 'paused',
+          nodeId: BOARD,
+          startedAt: at(10, 22, 10),
+        },
+      ],
+      runsTotal: 1,
+      activity: 'in_flight',
+    });
+    await render();
+
+    await click(card(BOARD));
+    expect(orbLabel(rail())).toBe('Running');
+    const run = railGroup('Runs').querySelector(`[data-plan-run="${RUN_ID}"]`)!;
+    expect(run.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe('Run paused');
+    // A paused run says it is paused, and no time runs on it.
+    expect(run.textContent).toBe('Commissionpaused');
+  });
+
+  it('grows and shrinks the rail’s sections and the step’s note rather than snapping them', async () => {
+    recorded.details[ARTICLE] = detail(
+      fullNode(ARTICLE, 'Write the help article', {
+        parentId: R322,
+        note: 'Proposed: write it after P3 lands.\nThe board is still moving.',
+      }),
+    );
+    await render();
+
+    await click(card(ARTICLE));
+    for (const name of ['Goal', 'Done when', 'Working note', 'Discuss']) {
+      // Everything under the section's label is the body that grows and shrinks.
+      const group = railGroup(name);
+      const body = [...group.children].find((c) => c.hasAttribute('data-animated-height'));
+      expect(body?.textContent, name).toBe(group.textContent?.slice(name.length));
+      expect(body?.textContent, name).not.toBe('');
+    }
+
+    const note = railGroup('Working note');
+    await click(button(note, 'Show note'));
+    expect(animatedWithin(note, note.querySelector('[data-plan-note]'))).toBe(true);
+  });
+
+  it('grows and shrinks a lane row’s detail, a Done fold and the list’s Finished and Closed sections', async () => {
+    nav.search = '';
+    await render({ data: OVERVIEW });
+    const row = laneRow(LANE_STOP);
+    expect(animatedWithin(row, row.querySelector('[data-plan-lane-note]'))).toBe(true);
+
+    root.unmount();
+    root = createRoot(container);
+    await render({ data: LIST });
+    const finished = container.querySelector('[data-plan-list-section="finished"]')!;
+    expect(animatedWithin(finished, finished.querySelector('[aria-label="Finished plans"]'))).toBe(
+      true,
+    );
+    const closed = container.querySelector('[data-plan-list-section="closed"]')!;
+    expect(closed.querySelector('[data-animated-height]')).not.toBe(null);
+    await click(button(closed, 'Closed · 1'));
+    expect(animatedWithin(closed, closed.querySelector('[aria-label="Closed plans"]'))).toBe(true);
+
+    root.unmount();
+    root = createRoot(container);
+    nav.search = `plan=${R322}`;
+    await render();
+    await choosePlan(R315);
+    const today = column('done').querySelector('[data-plan-done-group="today"]')!;
+    expect(animatedWithin(today, today.querySelector('[data-plan-card]'))).toBe(true);
   });
 });
