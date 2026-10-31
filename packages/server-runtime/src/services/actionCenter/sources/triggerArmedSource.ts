@@ -1,5 +1,11 @@
-import { and, desc, eq, gte, isNotNull, isNull, ne } from 'drizzle-orm';
+import { and, desc, eq, gte } from 'drizzle-orm';
 import { agentSchedules, createTenantContext, withTenantSchema } from '@aflow/database';
+import {
+  announcesScheduleArming,
+  CHAT_SCHEDULE_NEWS_WINDOW_MS,
+  selectChatScheduleNews,
+  type ChatScheduleFacts,
+} from '@aflow/schemas';
 
 import {
   ActionCenterResolveError,
@@ -12,28 +18,20 @@ import {
 } from '../types.js';
 
 const ITEM_ID_PREFIX = 'trigger-armed:';
-const LIST_LIMIT = 20;
+
+type ScheduleRow = typeof agentSchedules.$inferSelect;
 
 /**
- * How long an arming stays news.
- *
- * A schedule is durable, unlike the coach activity this borrows its shape from,
- * so "most recent N" would leave a job armed months ago sitting here forever.
- * The standing answer to "what runs here" is the Triggers page; this is only the
- * moment it appeared.
+ * A session id is the record that an agent armed it in conversation; an
+ * operator acting through the API leaves none.
  */
-const NEWS_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
-
-/**
- * Whether a schedule is news of an arming: armed by an agent in conversation,
- * and not a renewal — a renewal is the trigger already announced, continuing,
- * and announcing it again at every renewal is the dismissable noise the
- * operator-created exclusion avoids.
- */
-export function announcesArming(
-  row: Pick<typeof agentSchedules.$inferSelect, 'createdBySessionId' | 'renewsScheduleId'>,
-): boolean {
-  return row.createdBySessionId !== null && row.renewsScheduleId === null;
+function chatScheduleFacts(row: ScheduleRow): ChatScheduleFacts {
+  return {
+    armedInChat: row.createdBySessionId !== null,
+    renewsScheduleId: row.renewsScheduleId,
+    status: row.status,
+    createdAt: row.createdAt,
+  };
 }
 
 /**
@@ -58,6 +56,10 @@ export function createTriggerArmedSource(deps: ActionCenterSourceDeps): ActionCe
     handlesOriginTypes: ['trigger_armed'],
 
     async listOpen(scope: ActionCenterScope): Promise<ActionCenterSourceItem[]> {
+      const now = Date.now();
+      // The query bounds the read to the news window and nothing else. Which
+      // rows are news is selectChatScheduleNews, the rule the Workbench's
+      // Schedules section applies too. A filter repeated here could drift from it.
       const rows = await withTenantSchema(
         deps.db,
         createTenantContext(scope.tenantId),
@@ -68,18 +70,12 @@ export function createTriggerArmedSource(deps: ActionCenterSourceDeps): ActionCe
             .where(
               and(
                 eq(agentSchedules.spaceId, scope.spaceId),
-                // A session id is the record that an agent armed it in
-                // conversation; an operator acting through the API leaves none.
-                isNotNull(agentSchedules.createdBySessionId),
-                isNull(agentSchedules.renewsScheduleId),
-                ne(agentSchedules.status, 'deleted'),
-                gte(agentSchedules.createdAt, new Date(Date.now() - NEWS_WINDOW_MS)),
+                gte(agentSchedules.createdAt, new Date(now - CHAT_SCHEDULE_NEWS_WINDOW_MS)),
               ),
             )
-            .orderBy(desc(agentSchedules.createdAt))
-            .limit(LIST_LIMIT),
+            .orderBy(desc(agentSchedules.createdAt)),
       );
-      return rows.filter(announcesArming).map((row) => toItem(row));
+      return selectChatScheduleNews(rows, chatScheduleFacts, now).map((row) => toItem(row));
     },
 
     async getById(
@@ -96,7 +92,7 @@ export function createTriggerArmedSource(deps: ActionCenterSourceDeps): ActionCe
           .limit(1),
       );
       const row = rows[0];
-      if (row === undefined || !announcesArming(row)) return null;
+      if (row === undefined || !announcesScheduleArming(chatScheduleFacts(row))) return null;
       return toItem(row);
     },
 
@@ -116,7 +112,7 @@ export function createTriggerArmedSource(deps: ActionCenterSourceDeps): ActionCe
   };
 }
 
-function toItem(row: typeof agentSchedules.$inferSelect): ActionCenterSourceItem {
+function toItem(row: ScheduleRow): ActionCenterSourceItem {
   const createdAt = row.createdAt.toISOString();
   const when =
     row.kind === 'cron' && row.cronExpression !== null

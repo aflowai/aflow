@@ -7,7 +7,7 @@ import { useApiQuery } from '../../hooks/useApiQuery.js';
 import { useActionCenter } from '../../hooks/use-action-center.js';
 import { useSpaceWorkflowRuns } from '../../hooks/use-space-workflow-runs.js';
 import { WorkbenchNeedsAttention, waitingOnLabel } from './WorkbenchNeedsAttention.js';
-import { WorkbenchArmedTriggers } from './WorkbenchArmedTriggers.js';
+import { WorkbenchSchedules } from './WorkbenchSchedules.js';
 import { useSpacePeople } from '../../hooks/use-space-people.js';
 import { WorkbenchCoach } from './WorkbenchCoach.js';
 import { WorkbenchSkills, type WorkbenchSkill } from './WorkbenchSkills.js';
@@ -115,7 +115,7 @@ export function Workbench({
       <div style={{ flex: '1 1 auto', minHeight: 0, overflow: 'auto', scrollbarWidth: 'thin' }}>
         <Column gap="2xl" style={{ padding: 'var(--space-3) var(--space-2)' }}>
           <WorkbenchNeedsAttention state={actionCenter} spaceId={spaceId} />
-          <WorkbenchArmedTriggers state={actionCenter} spaceSlug={spaceSlug} />
+          <WorkbenchSchedules state={actionCenter} spaceId={spaceId} spaceSlug={spaceSlug} />
           <WorkbenchSkills
             skills={skills}
             spaceId={spaceId}
