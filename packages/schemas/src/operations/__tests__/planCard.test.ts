@@ -217,7 +217,13 @@ describe('card on the node record and its writes', () => {
     const { questions: _questions, ...older } = PLAN_337_CARD;
     const read = readStoredPlanNodeCard({ ...older, doneWhen: 'The board shows it.' });
     expect(read).not.toHaveProperty('card');
-    expect('refusal' in read && read.refusal).toContain('questions');
+    const issues = JSON.parse('refusal' in read ? read.refusal : '[]') as unknown[];
+    expect(issues).toContainEqual(
+      expect.objectContaining({ code: 'invalid_type', path: ['questions'] }),
+    );
+    expect(issues).toContainEqual(
+      expect.objectContaining({ code: 'unrecognized_keys', keys: ['doneWhen'] }),
+    );
   });
 
   it('declares the card’s whole shape to a turn, derived from the schema, without its ceilings', () => {
@@ -240,11 +246,24 @@ describe('card on the node record and its writes', () => {
     }
   });
 
-  it('teaches the card rules in the registry, where the prompt no longer carries them', () => {
+  it('teaches the card rules in the declaration every turn carries, where the prompt no longer does', () => {
+    const spec = buildCoreToolSpec('plan.node.create');
+    const properties = (
+      spec?.inputSchema as { properties: Record<string, { description?: string }> }
+    ).properties;
+    const declared = properties['card']?.description ?? '';
+    for (const rule of [
+      'a node that asks the operator for a decision',
+      'One or two short sentences an item',
+      'Give every question the answer you recommend',
+      'A plan document you commission opens with this same card',
+      'Link the document to its node at the merge sha',
+    ]) {
+      expect(declared).toContain(rule);
+    }
+
     const pitfalls = (verb: string) =>
       PlanOperationRegistrations.find((op) => op.verb === verb)?.usage?.pitfalls?.join('\n') ?? '';
-    expect(pitfalls('create')).toContain('asks the operator for a decision carries a `card`');
-    expect(pitfalls('create')).toContain('every question with the answer you recommend');
     expect(pitfalls('create')).toContain('A plan document is commissioned with the card');
     expect(pitfalls('link')).toContain('at the merge sha');
   });

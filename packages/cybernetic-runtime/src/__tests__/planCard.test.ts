@@ -18,8 +18,8 @@ import {
 import { rowToPlanNode } from '../plan/store.js';
 import { InMemoryPlanNodeStore } from './planStoreFake.js';
 
-const warn = vi.hoisted(() => vi.fn());
-vi.mock('../logger.js', () => ({ getCyberneticLogger: () => ({ warn }) }));
+const { warn, debug } = vi.hoisted(() => ({ warn: vi.fn(), debug: vi.fn() }));
+vi.mock('../logger.js', () => ({ getCyberneticLogger: () => ({ warn, debug }) }));
 
 const TENANT = 'a0000000-0000-4000-8000-000000000337';
 const SPACE = '5e1d0000-0000-4000-8000-000000000337';
@@ -147,6 +147,45 @@ describe('the card on a plan node', () => {
     warn.mockClear();
     expect(rowToPlanNode({ ...row, card: CARD }).card).toEqual(CARD);
     expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('warns once for a refused stored card, and logs each later read of it at debug', () => {
+    const at = new Date('2026-10-31T00:00:00.000Z');
+    const row: PlanNodeRow = {
+      id: '9c1d5e63-69b5-4d4a-8b62-1e4d4c4d9b22',
+      spaceId: SPACE,
+      parentId: null,
+      kind: 'decide',
+      title: 'Decide the card',
+      goal: 'Decide whether nodes carry a card.',
+      criteria: 'The operator approves the card.',
+      status: 'blocked',
+      outcome: null,
+      note: null,
+      revision: 2,
+      position: 0,
+      createdBy: null,
+      createdAt: at,
+      updatedAt: at,
+      closedAt: null,
+      openedAt: null,
+      spendCents: null,
+      card: { change: 'Prose becomes a card.' } as unknown as PlanNodeCard,
+    };
+    warn.mockClear();
+    debug.mockClear();
+    rowToPlanNode(row);
+    rowToPlanNode(row);
+    rowToPlanNode({ ...row });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(debug).toHaveBeenCalledTimes(2);
+    expect(debug).toHaveBeenCalledWith(
+      expect.stringContaining('stored card refused'),
+      expect.objectContaining({ nodeId: row.id }),
+    );
+
+    rowToPlanNode({ ...row, card: { change: 'Another older card.' } as unknown as PlanNodeCard });
+    expect(warn).toHaveBeenCalledTimes(2);
   });
 });
 

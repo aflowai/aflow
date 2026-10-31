@@ -139,7 +139,7 @@ export function readStoredPlanNodeCard(stored: unknown): StoredPlanNodeCard {
 
 /** What `plan.node.create` and `plan.node.update` say of the card they write. */
 export const PLAN_NODE_CARD_WRITE_DESCRIPTION =
-  'Write it on a node that asks the operator for a decision. A proposal carries one.';
+  'Write it on a node that asks the operator for a decision. A proposal carries one. Give every question the answer you recommend. A plan document you commission opens with this same card. Link the document to its node at the merge sha.';
 export const PLAN_NODE_CARD_UPDATE_DESCRIPTION =
   'The card, as plan.node.create writes it. It replaces the whole card.';
 
