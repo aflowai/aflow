@@ -52,10 +52,13 @@ export interface ChatScheduleChain {
  *
  * The Action Center's trigger_armed notices and the Workbench's Schedules
  * section both read through this, so a card cannot vanish while its notice
- * stays. The query keeps to arrivals and stops at the lane's limit, because a
- * renewing schedule writes a renewal every few minutes and a read of them all
- * grows with each one. selectChatScheduleNews still decides which arrivals are
- * news. The chain walk passes over deleted renewals, as the schedules list does.
+ * stays. A renewing schedule writes a renewal every few dozen firings, so a
+ * read that visits every renewal grows with each one. The query keeps to
+ * arrivals and stops at the lane's limit. It then reads each arrival's newest
+ * renewal through `original_schedule_id` and its index, one probe per arrival,
+ * however long the chain. The probe passes over deleted renewals, as the
+ * schedules list does, so a live renewal after a deleted one is still found.
+ * selectChatScheduleNews still decides which arrivals are news.
  */
 export async function readChatScheduleChains(
   db: PostgresJsDatabase,
@@ -66,8 +69,8 @@ export async function readChatScheduleChains(
   const since = new Date(now - CHAT_SCHEDULE_NEWS_WINDOW_MS).toISOString();
   return withTenantSchema(db, createTenantContext(tenantId), async (tx) => {
     const picked = (await tx.execute(sql`
-      WITH RECURSIVE arrivals AS (
-        SELECT id
+      WITH arrivals AS (
+        SELECT id, created_at
         FROM agent_schedules
         WHERE space_id = ${spaceId}::uuid
           AND created_by_session_id IS NOT NULL
@@ -76,19 +79,19 @@ export async function readChatScheduleChains(
           AND created_at >= ${since}::timestamptz
         ORDER BY created_at DESC
         LIMIT ${CHAT_SCHEDULE_LIST_LIMIT}
-      ), chain AS (
-        SELECT id AS arrival_id, id, 0 AS depth
-        FROM arrivals
-        UNION ALL
-        SELECT chain.arrival_id, renewal.id, chain.depth + 1
-        FROM chain
-        JOIN agent_schedules renewal ON renewal.renews_schedule_id = chain.id
-        WHERE renewal.space_id = ${spaceId}::uuid
-          AND renewal.status <> 'deleted'
       )
-      SELECT DISTINCT ON (arrival_id) arrival_id, id AS current_id
-      FROM chain
-      ORDER BY arrival_id, depth DESC
+      SELECT arrivals.id AS arrival_id, COALESCE(newest.id, arrivals.id) AS current_id
+      FROM arrivals
+      LEFT JOIN LATERAL (
+        SELECT renewal.id
+        FROM agent_schedules renewal
+        WHERE renewal.original_schedule_id = arrivals.id
+          AND renewal.space_id = ${spaceId}::uuid
+          AND renewal.status <> 'deleted'
+        ORDER BY renewal.created_at DESC
+        LIMIT 1
+      ) newest ON true
+      ORDER BY arrivals.created_at DESC
     `)) as unknown as ReadonlyArray<{ arrival_id: string; current_id: string }>;
     if (picked.length === 0) return [];
 
@@ -107,6 +110,32 @@ export async function readChatScheduleChains(
     }
     return selectChatScheduleNews(chains, (chain) => chatScheduleFacts(chain.arrival), now);
   });
+}
+
+/** Active, not past its end, and with a next firing still ahead of `now`. */
+function firesAgain(row: ScheduleRow, now: number): boolean {
+  return (
+    row.status === 'active' &&
+    row.nextFireAt !== null &&
+    row.nextFireAt.getTime() > now &&
+    (row.expiresAt === null || row.expiresAt.getTime() > now)
+  );
+}
+
+/**
+ * The Workbench's Schedules section: of the chains the notices announce, the
+ * ones whose newest renewal will fire again, as that renewal. A one-shot that
+ * has run, a chain at its end and a superseded renewal are left out. The
+ * notices keep the whole news window, and only this section narrows.
+ */
+export async function readActiveChatSchedules(
+  db: PostgresJsDatabase,
+  tenantId: TenantId,
+  spaceId: string,
+  now: number = Date.now(),
+): Promise<ScheduleRow[]> {
+  const chains = await readChatScheduleChains(db, tenantId, spaceId, now);
+  return chains.map((chain) => chain.current).filter((row) => firesAgain(row, now));
 }
 
 /**

@@ -80,6 +80,7 @@ function schedule(id: string, overrides: Partial<AgentScheduleRow>): AgentSchedu
     createdBySessionId: ARMING_SESSION,
     metadata: {},
     renewsScheduleId: null,
+    originalScheduleId: null,
     creatorUserId: null,
     creatorTenantRole: null,
     creatorSpaceRole: null,
@@ -90,7 +91,10 @@ function schedule(id: string, overrides: Partial<AgentScheduleRow>): AgentSchedu
 }
 
 const armed = schedule(ORIGINAL, {});
-const renewal = schedule(SUCCESSOR, { renewsScheduleId: ORIGINAL });
+const renewal = schedule(SUCCESSOR, {
+  renewsScheduleId: ORIGINAL,
+  originalScheduleId: ORIGINAL,
+});
 const source = createTriggerArmedSource({} as ActionCenterSourceDeps);
 const ctx = { tenantId: TENANT, spaceId: SPACE } as ActionCenterContext;
 
@@ -118,6 +122,22 @@ describe('the chain query', () => {
     expect(text).toContain("status <> 'deleted'");
     expect(text).toMatch(/ORDER BY created_at DESC LIMIT \$\d+/);
     expect(query.params).toContain(CHAT_SCHEDULE_LIST_LIMIT);
+  });
+
+  it("reads each arrival's newest renewal by one indexed probe, not by walking the chain", async () => {
+    await readChatScheduleChains({} as PostgresJsDatabase, TENANT, SPACE);
+    const text = new PgDialect().sqlToQuery(table.executed[0] as SQL).sql.replace(/\s+/g, ' ');
+    expect(text).not.toContain('RECURSIVE');
+    expect(text).toContain('LEFT JOIN LATERAL');
+    expect(text).toContain('renewal.original_schedule_id = arrivals.id');
+    expect(text).toMatch(/ORDER BY renewal.created_at DESC LIMIT 1/);
+  });
+
+  it('passes over a deleted renewal to the newest one that is not deleted', async () => {
+    await readChatScheduleChains({} as PostgresJsDatabase, TENANT, SPACE);
+    const text = new PgDialect().sqlToQuery(table.executed[0] as SQL).sql.replace(/\s+/g, ' ');
+    const probe = text.slice(text.indexOf('LEFT JOIN LATERAL'));
+    expect(probe).toContain("renewal.status <> 'deleted' ORDER BY renewal.created_at DESC LIMIT 1");
   });
 
   it('pairs each arrival with its newest renewal, in the order the shared rule gives', async () => {

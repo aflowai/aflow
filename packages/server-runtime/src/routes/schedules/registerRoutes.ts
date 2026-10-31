@@ -15,7 +15,7 @@ import {
   ListSchedulesQuerySchema,
   UpdateScheduleBodySchema,
 } from './schemas.js';
-import { readChatScheduleChains } from '../../services/actionCenter/sources/triggerArmedSource.js';
+import { readActiveChatSchedules } from '../../services/actionCenter/sources/triggerArmedSource.js';
 import { rowToResponse } from './helpers.js';
 
 /**
@@ -321,7 +321,7 @@ export function registerScheduleRoutes(fastify: FastifyInstance): void {
     },
   );
 
-  // GET /v1/schedules/chat — The schedules an agent set up in chat lately
+  // GET /v1/schedules/chat — The active schedules an agent set up in chat lately
   app.get(
     '/chat',
     {
@@ -334,14 +334,14 @@ export function registerScheduleRoutes(fastify: FastifyInstance): void {
       schema: {
         tags: ['schedules'],
         summary:
-          'List the schedules an agent set up in chat lately, each as the renewal that now carries it',
+          'List the active schedules an agent set up in chat lately, each as the newest renewal of its chain',
       },
     },
     async (request, reply) => {
       const space = await request.requireSpace();
       const tenant = await request.requireTenant();
-      const chains = await readChatScheduleChains(getDatabase(), tenant.tenantId, space.spaceId);
-      return reply.send({ schedules: chains.map((chain) => rowToResponse(chain.current)) });
+      const rows = await readActiveChatSchedules(getDatabase(), tenant.tenantId, space.spaceId);
+      return reply.send({ schedules: rows.map(rowToResponse) });
     },
   );
 

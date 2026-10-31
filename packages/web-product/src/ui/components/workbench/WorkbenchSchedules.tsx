@@ -10,11 +10,11 @@ import { ScheduleCard } from '../schedule-card.js';
 import { WorkbenchSection } from './WorkbenchSection.js';
 
 /**
- * Schedules an agent set up in chat, each as the Triggers page shows it,
- * trimmed to this column's width. Each is the renewal that now carries its
- * trigger, because a renewal expires its predecessor and the predecessor would
- * read a firing trigger as expired. The server picks them through the read the
- * trigger_armed notices use, so the two list the same arrivals.
+ * The active schedules an agent set up in chat, each folded to one line: its
+ * name and when it runs next. The server picks them from the chains the
+ * trigger_armed notices announce, and keeps only those whose newest renewal
+ * will fire again. An expired one-shot, a chain at its end and a superseded
+ * renewal never reach this section, so it stays as tall as what still runs.
  *
  * Kept out of Pending deliberately: that section's badge is a count of
  * work waiting on this person, and a schedule that only runs on its own would

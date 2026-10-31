@@ -3,9 +3,9 @@
  */
 /**
  * One schedule card on two surfaces: the Triggers page shows each schedule in
- * full, and the Workbench shows the ones an agent set up in chat, trimmed to
- * its column. Both render the same component. The Workbench reads the server's
- * chat read, which picks its schedules, so this test only renders what it returns.
+ * full, and the Workbench folds each active one an agent set up in chat to one
+ * line. Both render the same component. The Workbench reads the server's chat
+ * read, which picks its schedules, so this test only renders what it returns.
  */
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -190,7 +190,8 @@ describe('the Triggers page', () => {
 
 describe("the Workbench's Schedules section", () => {
   it('lists the schedules the chat read returns, in its order', () => {
-    schedules = [upcoming, firedOneShot];
+    const later = schedule('later', { name: 'Weekly digest', createdAt: at(-2 * DAY) });
+    schedules = [upcoming, later];
     renderWorkbench();
 
     expect(queried.map((q) => q.path)).toEqual(['/schedules/chat']);
@@ -198,46 +199,61 @@ describe("the Workbench's Schedules section", () => {
     expect(container.textContent).not.toContain('Recently armed');
     expect(cards().map((el) => el.getAttribute('aria-label'))).toEqual([
       'Daily report',
-      'Send the release note',
+      'Weekly digest',
     ]);
     const link = container.querySelector('a');
     expect(link?.getAttribute('href')).toBe('/s/home/triggers');
   });
 
-  it("reads a schedule's name, state badge and time line", () => {
+  it('reads the name and the next fire on one line, with the rest folded', () => {
     schedules = [upcoming];
     renderWorkbench();
 
     const daily = card('Daily report');
-    expect(words(daily)).toEqual(['Daily report', 'active', 'next in 4 min']);
+    const fold = daily.querySelector('details');
+    expect(fold?.open).toBe(false);
+    const line = fold?.querySelector('summary');
+    expect(line?.children).toHaveLength(1);
+    expect(words(line as HTMLElement)).toEqual(['Daily report', 'next in 4 min']);
     expect(buttons(daily)).toEqual([]);
+
+    const folded = words(daily).slice(2);
+    expect(folded).toEqual(['Every day at 09:00 UTC', 'never run']);
   });
 
-  it('reads an expired one-shot that fired as expired and ran once, never as will run', () => {
+  it('folds the runs of a schedule that will run again under its line', () => {
+    schedules = [{ ...upcoming, firingCount: 3, lastFiredAt: at(-DAY) }];
+    renderWorkbench();
+
+    const daily = card('Daily report');
+    expect(words(daily.querySelector('summary') as HTMLElement)).toEqual([
+      'Daily report',
+      'next in 4 min',
+    ]);
+    expect(words(daily)).toContain('ran 1 d ago · 3×');
+  });
+
+  it('opens the fold when the line is chosen', () => {
+    schedules = [upcoming];
+    renderWorkbench();
+
+    const fold = card('Daily report').querySelector('details');
+    act(() => {
+      fold?.querySelector('summary')?.click();
+    });
+    expect(fold?.open).toBe(true);
+  });
+
+  it('never gives a time to a schedule that will not run', () => {
     schedules = [firedOneShot];
     renderWorkbench();
 
     const fired = card('Send the release note');
-    expect(words(fired)).toEqual(['Send the release note', 'expired', 'ran once · 2 d ago']);
-    expect(fired.textContent).not.toMatch(/will run|next/);
-  });
-
-  it('reads a one-shot whose end has passed as expired while its status still says active', () => {
-    schedules = [{ ...firedOneShot, status: 'active', expiresAt: at(-MINUTE) }];
-    renderWorkbench();
-
-    expect(words(card('Send the release note'))).toEqual([
+    expect(words(fired.querySelector('summary') as HTMLElement)).toEqual([
       'Send the release note',
       'expired',
-      'ran once · 2 d ago',
     ]);
-  });
-
-  it('counts the runs of a schedule that will run again', () => {
-    schedules = [{ ...upcoming, firingCount: 3, lastFiredAt: at(-DAY) }];
-    renderWorkbench();
-
-    expect(words(card('Daily report'))).toContain('next in 4 min · ran 3×');
+    expect(fired.textContent).not.toMatch(/next/);
   });
 
   it('shows a renewal the chat read returns as the live schedule it is', () => {
@@ -252,10 +268,9 @@ describe("the Workbench's Schedules section", () => {
     schedules = [second];
     renderWorkbench();
 
-    expect(words(card('Local PR Shepherd'))).toEqual([
+    expect(words(card('Local PR Shepherd').querySelector('summary') as HTMLElement)).toEqual([
       'Local PR Shepherd',
-      'active',
-      'next in 4 min · ran 2×',
+      'next in 4 min',
     ]);
   });
 

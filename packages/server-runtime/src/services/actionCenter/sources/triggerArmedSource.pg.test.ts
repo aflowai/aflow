@@ -1,6 +1,7 @@
 /**
  * The chat schedule read is bounded by the lane's limit however many renewals a
- * chain has written. The bound lives in the query, and a fake runs no query.
+ * chain has written, and it reads each chain's newest renewal without walking
+ * the chain. The bound lives in the query, and a fake runs no query.
  */
 import { randomUUID } from 'node:crypto';
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
@@ -61,6 +62,7 @@ describeDb('readChatScheduleChains (real DB)', () => {
       rows.push(
         row({
           renewsScheduleId: previous?.id ?? null,
+          originalScheduleId: arrival.id ?? null,
           createdAt: new Date(start + i * 5 * MINUTE),
         }),
       );
@@ -78,7 +80,7 @@ describeDb('readChatScheduleChains (real DB)', () => {
         SELECT 1 FROM information_schema.columns
         WHERE table_schema = ${TENANT_SCHEMA}
           AND table_name = 'agent_schedules'
-          AND column_name = 'renews_schedule_id'
+          AND column_name = 'original_schedule_id'
       ) AS ok`;
     schemaReady = rows[0]?.ok === true;
   });
@@ -126,6 +128,23 @@ describeDb('readChatScheduleChains (real DB)', () => {
 
     expect(chains.map((c) => [c.arrival.id, c.current.id])).toEqual([
       [shepherd[0]?.id, shepherd[2]?.id],
+    ]);
+  });
+
+  it('passes over a deleted renewal to a live one after it', async (ctx: TestContext) => {
+    if (!schemaReady) {
+      ctx.skip();
+      return;
+    }
+    const shepherd = chainOf(Date.now() - 60 * MINUTE, 3);
+    const deleted = shepherd[2];
+    if (deleted) deleted.status = 'deleted';
+    await insert(shepherd);
+
+    const chains = await readChatScheduleChains(db, TENANT_ID, SPACE);
+
+    expect(chains.map((c) => [c.arrival.id, c.current.id])).toEqual([
+      [shepherd[0]?.id, shepherd[3]?.id],
     ]);
   });
 });

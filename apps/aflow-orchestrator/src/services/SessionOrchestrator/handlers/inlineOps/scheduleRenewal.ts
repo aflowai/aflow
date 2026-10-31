@@ -163,6 +163,7 @@ export async function renewSchedule(
     creatorTenantRole: predecessor.creatorTenantRole,
     creatorSpaceRole: predecessor.creatorSpaceRole,
     renewsScheduleId: predecessorId,
+    originalScheduleId: predecessor.originalScheduleId ?? predecessorId,
   });
   await store.expireIfActive(predecessorId);
 

@@ -18,11 +18,11 @@ export function chatSchedulesKey(spaceId: string): QueryKey {
 }
 
 /**
- * The schedules an agent set up in chat lately, each as the renewal that now
- * carries it, newest arrival first. The server picks them through the read the
- * Action Center's trigger_armed notices use, so a card and its notice agree. A
- * page of the whole list cannot serve here: a renewing schedule's renewals push
- * its original off the page.
+ * The active schedules an agent set up in chat lately, each as the newest
+ * renewal of its chain, newest arrival first. The server picks them from the
+ * chains the Action Center's trigger_armed notices announce, and leaves out
+ * every chain that will not fire again. A page of the whole list cannot serve
+ * here: a renewing schedule's renewals push its original off the page.
  */
 export function useChatSchedules(spaceId: string) {
   return useApiQuery<{ schedules: ScheduleRow[] }>({
