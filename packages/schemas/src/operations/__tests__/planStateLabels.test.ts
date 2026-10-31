@@ -14,7 +14,7 @@ import {
 describe('PLAN_STATE_LABELS', () => {
   it('names each state as D5’s table does', () => {
     expect(PLAN_STATE_LABELS.column).toEqual({
-      needs_you: 'Pending approval',
+      needs_you: 'Pending',
       in_flight: 'Running',
       up_next: 'Queued',
       done: 'Done',
@@ -36,6 +36,7 @@ describe('PLAN_STATE_LABELS', () => {
   it('titles an item from the table, cut to the item title’s length', () => {
     expect(planItemTitle('blocked', 'Ship it')).toBe('Pending approval · Ship it');
     expect(planItemTitle('merge_wait', 'Merge')).toBe('Pending review · Merge');
+    expect(planItemTitle('decide', 'Which way')).toBe('Pending decision · Which way');
     expect(planItemTitle('blocked', 'x'.repeat(400))).toHaveLength(256);
     expect(planItemTitle('blocked', 'x'.repeat(400)).endsWith('…')).toBe(true);
     const fits = `Pending approval · ${'y'.repeat(256 - 'Pending approval · '.length)}`;

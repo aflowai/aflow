@@ -3,16 +3,21 @@
  * the open Action Center items a plan raises, read from the list the bell and
  * the chat already hold. Pure, so it is tested without rendering.
  */
-import { PLAN_OPEN_ASKS_LIMIT, PLAN_OPEN_DECISIONS_LIMIT } from '@aflow/schemas';
+import {
+  ACTION_CENTER_LIST_LIMIT,
+  PLAN_OPEN_ASKS_LIMIT,
+  PLAN_OPEN_DECISIONS_LIMIT,
+} from '@aflow/schemas';
 import type { ActionCenterItem } from '../hooks/use-action-center-types.js';
 
 export interface PlanPendingCount {
   /** Open items whose origin is `plan_ask` or `plan_decision`, whatever their audience. */
   count: number;
   /**
-   * Whether either origin holds as many items as its source lists at most. The
-   * list carries no total, so the client cannot tell a full list from a cut
-   * one: this says the list may have cut, not that it has.
+   * Whether either origin holds as many items as its source lists at most, or
+   * the whole list holds as many as the route returns. The list carries no
+   * total, so the client cannot tell a full list from a cut one: this says
+   * the list may have cut, not that it has.
    */
   mayBeCut: boolean;
   /** The count as the entry shows it: "3", or "50+" where the list may have cut. */
@@ -29,6 +34,9 @@ export function planPendingCount(
     else if (item.origin.type === 'plan_decision') decisions += 1;
   }
   const count = asks + decisions;
-  const mayBeCut = asks >= PLAN_OPEN_ASKS_LIMIT || decisions >= PLAN_OPEN_DECISIONS_LIMIT;
+  const mayBeCut =
+    asks >= PLAN_OPEN_ASKS_LIMIT ||
+    decisions >= PLAN_OPEN_DECISIONS_LIMIT ||
+    items.length >= ACTION_CENTER_LIST_LIMIT;
   return { count, mayBeCut, label: mayBeCut ? `${String(count)}+` : String(count) };
 }

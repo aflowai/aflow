@@ -1,10 +1,14 @@
 /**
  * The sidebar's Plan count (Plan 338 D1): the open `plan_ask` and
  * `plan_decision` items, with `+` where either origin holds as many items as
- * its source lists at most.
+ * its source lists at most, or the whole list as many as the route returns.
  */
 import { describe, expect, it } from 'vitest';
-import { PLAN_OPEN_ASKS_LIMIT, PLAN_OPEN_DECISIONS_LIMIT } from '@aflow/schemas';
+import {
+  ACTION_CENTER_LIST_LIMIT,
+  PLAN_OPEN_ASKS_LIMIT,
+  PLAN_OPEN_DECISIONS_LIMIT,
+} from '@aflow/schemas';
 import type { ActionCenterItem } from '../hooks/use-action-center-types.js';
 import { planPendingCount } from './plan-pending-count.js';
 
@@ -39,6 +43,17 @@ describe('planPendingCount', () => {
     expect(planPendingCount([...asks(49), ...decisions(3)]).label).toBe('52');
     expect(planPendingCount(decisions(PLAN_OPEN_DECISIONS_LIMIT)).label).toBe('50+');
     expect(planPendingCount([]).label).toBe('0');
+  });
+
+  it('reads + where the whole list fills the route’s cut, below either source’s cap', () => {
+    const other: Origin = { origin: { type: 'coach_activity' } } as unknown as Origin;
+    const others = Array.from({ length: ACTION_CENTER_LIST_LIMIT - 5 }, () => other);
+    expect(planPendingCount([...asks(3), ...decisions(2), ...others])).toEqual({
+      count: 5,
+      mayBeCut: true,
+      label: '5+',
+    });
+    expect(planPendingCount([...asks(3), ...decisions(1), ...others]).label).toBe('4');
   });
 
   it('reads 1 for the one item a blocked root with no steps raises', () => {

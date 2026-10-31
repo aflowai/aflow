@@ -10,7 +10,7 @@ import type { PlanBoardColumn, PlanNeedsYouReason } from './schemas.js';
 export const PLAN_STATE_LABELS = {
   /** A board column, and the overview lane of the same id. */
   column: {
-    needs_you: 'Pending approval',
+    needs_you: 'Pending',
     in_flight: 'Running',
     up_next: 'Queued',
     done: 'Done',
@@ -32,12 +32,13 @@ export const PLAN_STATE_LABELS = {
   itemTitle: {
     blocked: 'Pending approval',
     merge_wait: 'Pending review',
+    decide: 'Pending decision',
   },
   /** The Workbench section that holds approvals, inputs and connections. */
   workbenchSection: 'Pending',
 } as const;
 
-/** What a plan step's Action Center item waits on: an approval of a blocked step, or a merge to judge. */
+/** What a plan step's Action Center item waits on: an approval of a blocked step, a merge to judge, or a decision. */
 export type PlanItemWait = keyof (typeof PLAN_STATE_LABELS)['itemTitle'];
 
 /** The most characters an Action Center item's title holds. */
@@ -158,6 +159,11 @@ function inlineMarkdownCut(text: string, budget: number): string {
 export const PLAN_OPEN_ASKS_LIMIT = 50;
 /** The most open `decide` nodes the space's Action Center lists at once. */
 export const PLAN_OPEN_DECISIONS_LIMIT = 50;
+/**
+ * The most items the space's Action Center list route returns by default,
+ * across every source. It cuts the combined list after the per-source limits.
+ */
+export const ACTION_CENTER_LIST_LIMIT = 200;
 
 /** The most characters an Action Center item's summary holds. */
 const PLAN_ITEM_SUMMARY_MAX_CHARS = 2_000;
@@ -183,7 +189,7 @@ function openFence(text: string): string | undefined {
 }
 
 /**
- * The node's wait text as the item's summary, at most
+ * A plan item's markdown text as its summary, at most
  * `PLAN_ITEM_SUMMARY_MAX_CHARS`. The client renders it as block markdown, so
  * a cut inside a fenced code block closes the fence after the cut. Otherwise
  * the fence would stay open and the rest of the card would render as code.

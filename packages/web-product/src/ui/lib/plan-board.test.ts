@@ -103,7 +103,7 @@ describe('planCards', () => {
 
   it('orders the columns by what they ask of the reader, Needs you first', () => {
     expect(PLAN_BOARD_COLUMNS.map((c) => [c.id, c.label])).toEqual([
-      ['needs_you', 'Pending approval'],
+      ['needs_you', 'Pending'],
       ['in_flight', 'Running'],
       ['up_next', 'Queued'],
       ['done', 'Done'],

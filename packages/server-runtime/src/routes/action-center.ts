@@ -4,6 +4,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { resolveActionCenterActorContext } from '../services/actionCenter/resolveActorContext.js';
 import {
+  ACTION_CENTER_LIST_LIMIT,
   ActionCenterItemKindSchema,
   ActionCenterItemSchema,
   ActionCenterResolveRequestSchema,
@@ -84,7 +85,13 @@ export const actionCenterRoutes: FastifyPluginAsync<ActionCenterRoutesOptions> =
         params: z.object({ spaceId: z.string().uuid() }),
         querystring: z.object({
           kind: ActionCenterItemKindSchema.optional(),
-          limit: z.coerce.number().int().min(1).max(500).default(200).optional(),
+          limit: z.coerce
+            .number()
+            .int()
+            .min(1)
+            .max(500)
+            .default(ACTION_CENTER_LIST_LIMIT)
+            .optional(),
         }),
         response: {
           200: z.object({ items: z.array(ActionCenterItemSchema) }),
@@ -97,7 +104,7 @@ export const actionCenterRoutes: FastifyPluginAsync<ActionCenterRoutesOptions> =
       if (!aggregator) return notLive(reply);
       const tenant = await request.requireTenant();
       const { spaceId } = request.params;
-      const { kind, limit = 200 } = request.query;
+      const { kind, limit = ACTION_CENTER_LIST_LIMIT } = request.query;
       const ctx = await resolveActorContext(request, tenant.tenantId, spaceId, db!);
       let items = await aggregator.list(ctx);
       if (kind) items = items.filter((i) => i.kind === kind);
