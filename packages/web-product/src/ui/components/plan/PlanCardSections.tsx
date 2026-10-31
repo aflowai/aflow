@@ -4,11 +4,13 @@
  * A node's decision card on the rail (Plan 337 D3), in D1's order: What
  * changes, Why, What it affects, Risks, Open questions, Not done on purpose
  * and Done when. Done when is the node's criteria, read from the node and
- * never from the card.
+ * never from the card. Each item renders as markdown, and its label stays
+ * outside the markdown.
  */
 import type { ReactNode } from 'react';
 import { Text } from '@aflow/design-system';
 import type { PlanNodeCard } from '@aflow/schemas';
+import { MarkdownRenderer } from '../markdown-renderer.js';
 import { RailSection, railProse } from './PlanParts.js';
 
 const cardListStyle = {
@@ -19,12 +21,19 @@ const cardListStyle = {
   gap: 'var(--space-1)',
 } as const;
 
-function Prose({ children }: { children: ReactNode }) {
-  return (
-    <Text as="span" size="base" color="secondary" style={railProse}>
-      {children}
-    </Text>
-  );
+const proseStyle = {
+  color: 'var(--color-text-secondary)',
+  fontSize: 'var(--font-size-base)',
+  lineHeight: 1.55,
+  minWidth: 0,
+} as const;
+
+/** A label and the item it heads, on one line where the item fits. */
+const leadRow = { display: 'flex', gap: 'var(--space-1)', alignItems: 'baseline' } as const;
+
+/** One card item. A writer may use markdown, so the item renders as markdown. */
+function Prose({ children }: { children: string }) {
+  return <MarkdownRenderer content={children} style={proseStyle} />;
 }
 
 /** A section's items as a list. An empty list says the writer found none. */
@@ -48,7 +57,13 @@ function CardList({ items }: { items: readonly ReactNode[] }) {
 /** A small label above or before an item's own words. */
 function Lead({ children }: { children: string }) {
   return (
-    <Text as="span" size="sm" weight="medium" color="secondary">
+    <Text
+      as="span"
+      size="sm"
+      weight="medium"
+      color="secondary"
+      style={{ flexShrink: 0, whiteSpace: 'pre' }}
+    >
       {children}
     </Text>
   );
@@ -67,11 +82,11 @@ export function PlanCardSections({
   return (
     <>
       <RailSection label="What changes">
-        <div data-plan-card-change="today">
+        <div data-plan-card-change="today" style={leadRow}>
           <Lead>Today: </Lead>
           <Prose>{card.change.today}</Prose>
         </div>
-        <div data-plan-card-change="after">
+        <div data-plan-card-change="after" style={leadRow}>
           <Lead>After: </Lead>
           <Prose>{card.change.after}</Prose>
         </div>
@@ -96,7 +111,7 @@ export function PlanCardSections({
             <div data-plan-card-risk>
               <Prose>{item.risk}</Prose>
               {item.mitigation !== undefined && (
-                <div data-plan-card-mitigation>
+                <div data-plan-card-mitigation style={leadRow}>
                   <Lead>Mitigation: </Lead>
                   <Prose>{item.mitigation}</Prose>
                 </div>
@@ -110,7 +125,7 @@ export function PlanCardSections({
           items={card.questions.map((item) => (
             <div data-plan-card-question>
               <Prose>{item.question}</Prose>
-              <div data-plan-card-recommended>
+              <div data-plan-card-recommended style={leadRow}>
                 <Lead>Recommended: </Lead>
                 <Prose>{item.recommended}</Prose>
               </div>

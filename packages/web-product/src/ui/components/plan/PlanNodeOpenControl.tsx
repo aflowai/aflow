@@ -41,6 +41,10 @@ export type PlanNodeReviseRequest = PlanNodeRevise & { nodeId: string };
 
 export type PlanNodeReviser = (request: PlanNodeReviseRequest) => Promise<PlanNodeCloseAnswer>;
 
+function answerKey(index: number, question: string): string {
+  return `${String(index)}\u0000${question}`;
+}
+
 /** The approve field: what the words are for, and how they start. */
 export const PLAN_APPROVE_FIELD_LABEL = 'Instructions for the work (optional)';
 export const PLAN_APPROVE_FIELD_PLACEHOLDER = 'Do it, and make sure…';
@@ -67,8 +71,12 @@ export function PlanNodeOpenControl({
   // An approve shows its field before the click: the instructions are the point of it.
   const opening = verb === 'approve' || clickedOpen;
   const [text, setText] = useState('');
-  /** The operator's answer to each open question of the card, by position. */
-  const [answers, setAnswers] = useState<string[]>([]);
+  /**
+   * The operator's answer to each open question of the card, keyed by the
+   * question's place and words. A re-pin after a refusal may show a rewritten
+   * card, and an answer never moves to a question it was not written for.
+   */
+  const [answers, setAnswers] = useState<Record<string, string>>({});
   const [spend, setSpend] = useState('');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -95,9 +103,18 @@ export function PlanNodeOpenControl({
   // left empty takes its recommended answer, so Approve with no words still
   // records every recommended answer in the note.
   const questions = verb === 'approve' ? (shown?.card?.questions ?? []) : [];
-  const openWhy = verb === 'approve' ? (planCardApproveWhy(questions, answers, text) ?? '') : why;
-  const tooLong =
-    why.length > PLAN_NODE_OPEN_WHY_MAX_CHARS || openWhy.length > PLAN_NODE_OPEN_WHY_MAX_CHARS;
+  const answerKeys = questions.map((q, index) => answerKey(index, q.question));
+  const openWhy =
+    verb === 'approve'
+      ? (planCardApproveWhy(
+          questions,
+          answerKeys.map((key) => answers[key] ?? ''),
+          text,
+        ) ?? '')
+      : why;
+  // Revise sends the instructions only, so only their length can refuse it.
+  const wordsTooLong = why.length > PLAN_NODE_OPEN_WHY_MAX_CHARS;
+  const tooLong = wordsTooLong || openWhy.length > PLAN_NODE_OPEN_WHY_MAX_CHARS;
   const openNow =
     read.node !== undefined && (read.node.status === 'active' || read.node.status === 'waiting')
       ? read.node.status
@@ -105,7 +122,7 @@ export function PlanNodeOpenControl({
   const reset = () => {
     setOpening(false);
     setText('');
-    setAnswers([]);
+    setAnswers({});
     setSpend('');
     setError(null);
   };
@@ -214,15 +231,10 @@ export function PlanNodeOpenControl({
                 aria-label={`Answer to question ${String(index + 1)}`}
                 placeholder={`Recommended: ${q.recommended}`}
                 disabled={pending}
-                value={answers[index] ?? ''}
+                value={answers[answerKey(index, q.question)] ?? ''}
                 onChange={(event) => {
                   const value = event.target.value;
-                  setAnswers((held) => {
-                    const nextAnswers = [...held];
-                    while (nextAnswers.length <= index) nextAnswers.push('');
-                    nextAnswers[index] = value;
-                    return nextAnswers;
-                  });
+                  setAnswers((held) => ({ ...held, [answerKey(index, q.question)]: value }));
                 }}
               />
             </Column>
@@ -286,7 +298,13 @@ export function PlanNodeOpenControl({
           <Button
             size="sm"
             variant="secondary"
-            disabled={blocked || why.length === 0 || shown.status !== 'blocked'}
+            disabled={
+              pending ||
+              shown === undefined ||
+              wordsTooLong ||
+              why.length === 0 ||
+              shown.status !== 'blocked'
+            }
             onClick={() => {
               void revise();
             }}

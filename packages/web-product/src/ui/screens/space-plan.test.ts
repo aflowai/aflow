@@ -25,7 +25,12 @@ import {
 } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { PLAN_NODE_APPROVED_HEAD, PlanNodeOpenSchema, planNodeOperatorLine } from '@aflow/schemas';
+import {
+  PLAN_NODE_APPROVED_HEAD,
+  PLAN_NODE_OPEN_WHY_MAX_CHARS,
+  PlanNodeOpenSchema,
+  planNodeOperatorLine,
+} from '@aflow/schemas';
 import type {
   PlanLaneItem,
   PlanNode,
@@ -3169,6 +3174,88 @@ describe('SpacePlanPage — the decision card on the rail (Plan 337 P2)', () => 
     expect(first).toContain('No: a risk the operator names stays open.');
     expect(first).toContain('Is the card optional? Answer: Yes, on every node.');
     expect(first).not.toContain('Answer: Yes.');
+  });
+
+  it('drops an answer whose question a refused Approve shows rewritten, so it never goes out under another question', async () => {
+    blockedCarded();
+    const rewritten = fullNode(ARTICLE, 'Write the help article', {
+      parentId: R322,
+      status: 'blocked',
+      revision: 5,
+      card: {
+        ...CARD,
+        questions: [
+          CARD.questions[0]!,
+          { question: 'Does the lane row record answers?', recommended: 'No.' },
+        ],
+      },
+    });
+    recorded.mutateAsync.mockRejectedValueOnce(
+      Object.assign(new Error('This step changed since the plan was read: it is at revision 5.'), {
+        status: 409,
+      }),
+    );
+    recorded.detailRefetch.mockImplementation(() => {
+      recorded.details[ARTICLE] = detail(rewritten);
+      return Promise.resolve({ data: recorded.details[ARTICLE]!.data });
+    });
+    await render({ data: withStatus(ARTICLE, 'blocked') });
+    await click(card(ARTICLE));
+
+    await answer(0, 'Only on decision nodes.');
+    await answer(1, 'No: the operator answers each one.');
+    await click(button(openForm(), 'Approve'));
+    expect(rail().querySelector('[role="alert"]')?.textContent).toContain('revision 5');
+
+    const second = openForm().querySelector<HTMLInputElement>(
+      'input[aria-label="Answer to question 2"]',
+    );
+    expect(second?.value).toBe('');
+    expect(second?.getAttribute('placeholder')).toBe('Recommended: No.');
+    recorded.mutateAsync.mockResolvedValue({ node: {} });
+    await click(button(openForm(), 'Approve'));
+    expect(recorded.sent.at(-1)).toEqual({
+      path: `/spaces/${SPACE_ID}/plan/nodes/${ARTICLE}/open`,
+      body: {
+        expectedRevision: 5,
+        why: 'Is the card optional? Answer: Only on decision nodes.\nDoes the lane row record answers? Answer: No.',
+      },
+    });
+  });
+
+  it('gates Revise on the instructions alone, whatever the length of the answers', async () => {
+    blockedCarded();
+    await render({ data: withStatus(ARTICLE, 'blocked') });
+    await click(card(ARTICLE));
+
+    await answer(0, 'x'.repeat(PLAN_NODE_OPEN_WHY_MAX_CHARS));
+    await type(openForm(), 'Split it.');
+    expect(button(openForm(), 'Approve').disabled).toBe(true);
+    expect(button(openForm(), 'Revise').disabled).toBe(false);
+  });
+
+  it('renders each card item as markdown, its label outside the markdown', async () => {
+    recorded.details[BOARD] = detail(
+      fullNode(BOARD, 'P3.3 the board', {
+        card: {
+          ...CARD,
+          change: { today: 'The rail shows **prose**.', after: 'The rail shows `sections`.' },
+          risks: [{ risk: 'Items grow long.', mitigation: 'Read [the plan](https://x.test).' }],
+        },
+      }),
+    );
+    await render();
+    await click(card(BOARD));
+
+    const today = rail().querySelector('[data-plan-card-change="today"]')!;
+    expect(today.querySelector('.md-content strong')?.textContent).toBe('prose');
+    expect(today.querySelector('.md-content')?.textContent).not.toContain('Today:');
+    expect(
+      rail().querySelector('[data-plan-card-change="after"] .md-content code')?.textContent,
+    ).toBe('sections');
+    expect(
+      rail().querySelector('[data-plan-card-mitigation] .md-content a')?.getAttribute('href'),
+    ).toBe('https://x.test');
   });
 
   it('prefills Decide with each question and its recommended answer, and records the edited text as the outcome', async () => {
