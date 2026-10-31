@@ -6,6 +6,9 @@
  * or remove it. Once a second profile exists, a browser with no profile
  * session chooses one at the picker (P3), this one included.
  *
+ * The owner also sets, changes and resets each profile's PIN (P4). Every
+ * change ends that profile's sessions, so its browsers go back to the picker.
+ *
  * Local edition only, and owner only. The route ships in the local build alone,
  * and the API refuses every other caller, so the checks here only choose what
  * to say instead of a list nobody could change.
@@ -36,6 +39,7 @@ import {
   type LocalProfileListResponse,
   type LocalProfileRemovalPreview,
   type RemoveLocalProfileResponse,
+  LocalProfilePinSchema,
 } from '@aflow/schemas';
 import { useApiMutation, useApiQuery } from '../hooks/useApiQuery.js';
 import { useEdition } from '../hooks/useEdition.js';
@@ -77,6 +81,8 @@ export function TenantProfilesPage() {
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<LocalProfile | null>(null);
   const [removing, setRemoving] = useState<LocalProfile | null>(null);
+  const [settingPin, setSettingPin] = useState<LocalProfile | null>(null);
+  const [resettingPin, setResettingPin] = useState<LocalProfile | null>(null);
 
   if (edition.isLoading || currentUser === null) return <Loading />;
 
@@ -101,10 +107,15 @@ export function TenantProfilesPage() {
       <PageContainer>
         <Column gap="lg">
           <Row justify="between" align="center">
-            <Text size="sm" variant="muted">
-              Each profile has its own spaces, conversations and memory. Model keys stored for the
-              whole install are shared.
-            </Text>
+            <Column gap="xs">
+              <Text size="sm" variant="muted">
+                Each profile has its own spaces, conversations and memory. Model keys stored for the
+                whole install are shared.
+              </Text>
+              <Text size="sm" variant="muted">
+                {PIN_LIMIT_NOTE}
+              </Text>
+            </Column>
             <Button
               variant="primary"
               size="sm"
@@ -128,7 +139,7 @@ export function TenantProfilesPage() {
                   <Th style={{ width: 48 }}></Th>
                   <Th>Name</Th>
                   <Th>Added</Th>
-                  <Th style={{ width: 180 }}></Th>
+                  <Th style={{ width: 320 }}></Th>
                 </Tr>
               </thead>
               <tbody>
@@ -146,6 +157,7 @@ export function TenantProfilesPage() {
                         {profile.userId === currentUser.userId && (
                           <Badge variant="neutral">You</Badge>
                         )}
+                        {profile.hasPin && <Badge variant="neutral">PIN</Badge>}
                       </Row>
                     </Td>
                     <Td>
@@ -164,6 +176,26 @@ export function TenantProfilesPage() {
                         >
                           Edit
                         </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            setSettingPin(profile);
+                          }}
+                        >
+                          {profile.hasPin ? 'Change PIN' : 'Set PIN'}
+                        </Button>
+                        {profile.hasPin && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              setResettingPin(profile);
+                            }}
+                          >
+                            Reset PIN
+                          </Button>
+                        )}
                         {!profile.isOwner && (
                           <Button
                             variant="danger"
@@ -203,7 +235,197 @@ export function TenantProfilesPage() {
           setRemoving(null);
         }}
       />
+      <SetPinDialog
+        profile={settingPin}
+        isSelf={settingPin?.userId === currentUser.userId}
+        onClose={() => {
+          setSettingPin(null);
+        }}
+      />
+      <ResetPinDialog
+        profile={resettingPin}
+        isSelf={resettingPin?.userId === currentUser.userId}
+        onClose={() => {
+          setResettingPin(null);
+        }}
+      />
     </>
+  );
+}
+
+/** Plan 335 D3: the one sentence that says what a PIN does not guard against. */
+export const PIN_LIMIT_NOTE =
+  "A PIN keeps people at this browser out of each other's profiles, but anyone who can sign in to this computer's account can still reach every profile.";
+
+// ============================================================================
+// PIN
+// ============================================================================
+
+function SetPinDialog({
+  profile,
+  isSelf,
+  onClose,
+}: {
+  profile: LocalProfile | null;
+  isSelf: boolean;
+  onClose: () => void;
+}) {
+  const [pin, setPin] = useState('');
+  const [again, setAgain] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setPin('');
+    setAgain('');
+    setError(null);
+  }, [profile]);
+
+  const save = useApiMutation<{ userId: string; pin: string }, LocalProfile>({
+    path: (input) => `/local-profiles/${encodeURIComponent(input.userId)}/pin`,
+    method: 'PUT',
+    serialize: ({ userId: _userId, ...body }) => JSON.stringify(body),
+    invalidate: INVALIDATE,
+    onSuccess: onClose,
+    onError: (err) => {
+      setError(err.message);
+    },
+  });
+
+  if (!profile) return null;
+
+  const valid = LocalProfilePinSchema.safeParse(pin).success;
+  const ready = valid && pin === again;
+
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      title={`${profile.hasPin ? 'Change' : 'Set'} the PIN for ${profile.displayName}`}
+      footer={
+        <Row gap="sm">
+          <Button variant="ghost" size="sm" onClick={onClose} disabled={save.isPending}>
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            size="sm"
+            loading={save.isPending}
+            disabled={!ready}
+            onClick={() => {
+              save.mutate({ userId: profile.userId, pin });
+            }}
+          >
+            {profile.hasPin ? 'Change PIN' : 'Set PIN'}
+          </Button>
+        </Row>
+      }
+    >
+      <Column gap="md">
+        {error && (
+          <Text size="sm" style={{ color: 'var(--color-status-failed-fg)' }}>
+            {error}
+          </Text>
+        )}
+        <Field>
+          <Label>PIN (four to six digits)</Label>
+          <Input
+            type="password"
+            inputMode="numeric"
+            autoComplete="new-password"
+            maxLength={6}
+            value={pin}
+            onChange={(e) => {
+              setPin((e.target as HTMLInputElement).value);
+            }}
+          />
+        </Field>
+        <Field>
+          <Label>Enter it again</Label>
+          <Input
+            type="password"
+            inputMode="numeric"
+            autoComplete="new-password"
+            maxLength={6}
+            value={again}
+            error={again !== '' && again !== pin}
+            onChange={(e) => {
+              setAgain((e.target as HTMLInputElement).value);
+            }}
+          />
+        </Field>
+        <Text size="xs" variant="muted">
+          {isSelf
+            ? 'Every browser using this profile goes back to the picker, this one included. Choose the profile there and enter the new PIN.'
+            : 'Every browser using this profile goes back to the picker, where the profile now asks for this PIN.'}
+        </Text>
+      </Column>
+    </Dialog>
+  );
+}
+
+function ResetPinDialog({
+  profile,
+  isSelf,
+  onClose,
+}: {
+  profile: LocalProfile | null;
+  isSelf: boolean;
+  onClose: () => void;
+}) {
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setError(null);
+  }, [profile]);
+
+  const reset = useApiMutation<{ userId: string }, LocalProfile>({
+    path: (input) => `/local-profiles/${encodeURIComponent(input.userId)}/pin`,
+    method: 'DELETE',
+    invalidate: INVALIDATE,
+    onSuccess: onClose,
+    onError: (err) => {
+      setError(err.message);
+    },
+  });
+
+  if (!profile) return null;
+
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      title={`Reset the PIN for ${profile.displayName}?`}
+      footer={
+        <Row gap="sm">
+          <Button variant="ghost" size="sm" onClick={onClose} disabled={reset.isPending}>
+            Cancel
+          </Button>
+          <Button
+            variant="danger"
+            size="sm"
+            loading={reset.isPending}
+            onClick={() => {
+              reset.mutate({ userId: profile.userId });
+            }}
+          >
+            Reset PIN
+          </Button>
+        </Row>
+      }
+    >
+      <Column gap="md">
+        {error && (
+          <Text size="sm" style={{ color: 'var(--color-status-failed-fg)' }}>
+            {error}
+          </Text>
+        )}
+        <Text size="sm">
+          The profile will have no PIN, and every browser using it goes back to the picker
+          {isSelf ? ', this one included' : ''}. Set a new PIN afterwards if the profile should stay
+          locked.
+        </Text>
+      </Column>
+    </Dialog>
   );
 }
 

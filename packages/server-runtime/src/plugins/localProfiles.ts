@@ -1,6 +1,6 @@
 /**
  * Local profiles as the API sees them (Plan 335 P1): the session that names
- * one, and whether the install has more than one.
+ * one, and whether the install has more than one or a single locked one (P4).
  *
  * A profile is a `users` row with an active membership in the pinned tenant.
  * The session is a signed user id, its issue time and the user's session
@@ -105,13 +105,33 @@ export async function readLocalProfileSessionGeneration(
 }
 
 /**
+ * What the picker reads before it issues a session: the user's generation and
+ * PIN hash, in one row, or null when no such user exists.
+ *
+ * One read, because a PIN and its generation bump are written together. Two
+ * reads could pair the old PIN with the new generation and issue a session
+ * the new PIN never let through.
+ */
+export async function readLocalProfileSessionGate(
+  db: PostgresJsDatabase,
+  userId: string,
+): Promise<{ generation: number; pinHash: string | null } | null> {
+  const rows = await db
+    .select({ generation: users.profileSessionGeneration, pinHash: users.profilePinHash })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+/**
  * Ends every profile session issued to the user so far, and returns the
  * generation a new session must carry.
  *
- * Call it whenever a profile's authentication state changes. P1 makes no such
- * change. Plan 335 P4 calls it when a PIN is set, changed or reset, which is
- * what keeps a session issued before the PIN from starting a locked profile
- * (§10).
+ * Call it whenever a profile's authentication state changes. Plan 335 P4
+ * calls it when a PIN is set, changed or reset, in the transaction that
+ * writes the PIN, so a session issued before the PIN cannot start a locked
+ * profile (§10). P2 calls it before removing a profile.
  */
 export async function bumpLocalProfileSessionGeneration(
   db: PostgresJsDatabase,
@@ -128,17 +148,27 @@ export async function bumpLocalProfileSessionGeneration(
 }
 
 /**
- * Whether the pinned tenant has two or more profiles.
+ * What a read of the pinned tenant's profiles answers.
+ *
+ * - `one`: a single profile with no PIN.
+ * - `one-locked`: a single profile locked with a PIN (Plan 335 P4).
+ * - `several`: two or more profiles.
+ */
+export type ReadLocalProfileCount = 'one' | 'one-locked' | 'several';
+
+/**
+ * How many profiles the pinned tenant has, and whether a single one is locked.
  *
  * Reads at most two rows, because the rule this feeds asks only that. A
- * service principal is not a profile, so only human users count.
+ * service principal is not a profile, so only human users count. No row at
+ * all answers `one`, as the count did before a PIN existed.
  */
-export async function hasSeveralLocalProfiles(
+export async function readLocalProfileCount(
   db: PostgresJsDatabase,
   tenantId: string,
-): Promise<boolean> {
+): Promise<ReadLocalProfileCount> {
   const rows = await db
-    .select({ userId: tenantMemberships.userId })
+    .select({ userId: tenantMemberships.userId, pinHash: users.profilePinHash })
     .from(tenantMemberships)
     .innerJoin(users, eq(users.id, tenantMemberships.userId))
     .where(
@@ -149,7 +179,8 @@ export async function hasSeveralLocalProfiles(
       ),
     )
     .limit(2);
-  return rows.length > 1;
+  if (rows.length > 1) return 'several';
+  return rows[0]?.pinHash != null ? 'one-locked' : 'one';
 }
 
 /** How long a profile count answers before the next request reads it again. */
@@ -157,9 +188,10 @@ export const LOCAL_PROFILE_COUNT_TTL_MS = 5_000;
 
 /**
  * What the auth plugin knows of the profile count. `unread` means no read has
- * succeeded within the lifetime, and no earlier read saw two profiles.
+ * succeeded within the lifetime, and no earlier read saw two profiles or a
+ * locked one.
  */
-export type LocalProfileCount = 'one' | 'several' | 'unread';
+export type LocalProfileCount = ReadLocalProfileCount | 'unread';
 
 /** The cached count, and the hook that forgets it. */
 export type CachedLocalProfileCount = (() => Promise<LocalProfileCount>) & {
@@ -175,18 +207,19 @@ export type CachedLocalProfileCount = (() => Promise<LocalProfileCount>) & {
  * concurrent callers share.
  *
  * The returned function never rejects. When a read fails, a count last read
- * as two or more still answers `several`, which refuses a browser and grants
- * nothing. Anything else answers `unread`: no count since the process started,
- * or a stale count of one. A second profile may exist in either case, so
- * neither may grant the sole-profile owner (Plan 335 §10). The failure is not
- * cached, so the next request reads again.
+ * as two or more, or as one locked profile, still answers as it was read.
+ * Either refuses a browser and grants nothing. Anything else answers `unread`:
+ * no count since the process started, or a stale count of one. A second
+ * profile or a PIN may exist in either case, so neither may grant the
+ * sole-profile owner (Plan 335 §10). The failure is not cached, so the next
+ * request reads again.
  *
  * `drop` forgets the count, so the next request reads it again. A read already
  * in flight still answers its callers but no longer fills the cache, because
  * it may have started before the change that prompted the drop.
  */
 export function cacheLocalProfileCount(
-  read: () => Promise<boolean>,
+  read: () => Promise<ReadLocalProfileCount>,
   opts: {
     ttlMs?: number | undefined;
     now?: () => number;
@@ -195,25 +228,24 @@ export function cacheLocalProfileCount(
 ): CachedLocalProfileCount {
   const ttlMs = opts.ttlMs ?? LOCAL_PROFILE_COUNT_TTL_MS;
   const now = opts.now ?? Date.now;
-  let cached: { several: boolean; readAt: number } | undefined;
+  let cached: { count: ReadLocalProfileCount; readAt: number } | undefined;
   let inFlight: Promise<LocalProfileCount> | undefined;
   let epoch = 0;
-  const answer = (several: boolean): LocalProfileCount => (several ? 'several' : 'one');
 
   const count = () => {
     if (cached !== undefined && now() - cached.readAt < ttlMs) {
-      return Promise.resolve(answer(cached.several));
+      return Promise.resolve<LocalProfileCount>(cached.count);
     }
     if (inFlight !== undefined) return inFlight;
     const readEpoch = epoch;
     const pending = (async (): Promise<LocalProfileCount> => {
       try {
-        const several = await read();
-        if (readEpoch === epoch) cached = { several, readAt: now() };
-        return answer(several);
+        const answer = await read();
+        if (readEpoch === epoch) cached = { count: answer, readAt: now() };
+        return answer;
       } catch (err) {
         opts.onReadError?.(err);
-        return cached?.several === true ? 'several' : 'unread';
+        return cached === undefined || cached.count === 'one' ? 'unread' : cached.count;
       }
     })();
     inFlight = pending;

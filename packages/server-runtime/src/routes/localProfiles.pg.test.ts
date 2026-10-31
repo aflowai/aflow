@@ -9,6 +9,10 @@
  *
  * Plan 335 P3 on the same install: after the add, the picker lists both
  * profiles and issues the session that lets the owner's browser in again.
+ *
+ * Plan 335 P4 on the same install, back to one profile: a PIN on that profile
+ * ends the no-session fallback, a locked profile starts only with its PIN, a
+ * wrong PIN issues nothing, and the owner's reset ends the profile's sessions.
  */
 import { randomUUID } from 'node:crypto';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -103,7 +107,7 @@ describeDb('local profile management (real DB)', () => {
   }
 
   async function call(
-    method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
+    method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
     url: string,
     headers: Record<string, string>,
     payload?: Record<string, unknown>,
@@ -242,8 +246,8 @@ describeDb('local profile management (real DB)', () => {
     const picker = await call('GET', '/local-profiles/picker', browser());
     expect(picker.status).toBe(200);
     expect(picker.body['profiles']).toEqual([
-      { userId: OWNER_ID, displayName: 'Local user', avatar: null, isOwner: true },
-      { userId: ada, displayName: 'Ada', avatar: 'owl', isOwner: false },
+      { userId: OWNER_ID, displayName: 'Local user', avatar: null, isOwner: true, hasPin: false },
+      { userId: ada, displayName: 'Ada', avatar: 'owl', isOwner: false, hasPin: false },
     ]);
 
     // The web process asks for the session itself, without the browser mark.
@@ -311,6 +315,8 @@ describeDb('local profile management (real DB)', () => {
         ['PATCH', `/local-profiles/${OWNER_ID}`, { displayName: 'Mallory' }],
         ['GET', `/local-profiles/${OWNER_ID}/removal`, undefined],
         ['DELETE', `/local-profiles/${ada}`, undefined],
+        ['PUT', `/local-profiles/${ada}/pin`, { pin: '2468' }],
+        ['DELETE', `/local-profiles/${OWNER_ID}/pin`, undefined],
       ] as const) {
         const { status } = await call(method, url, browser(caller), payload);
         expect(status, `${caller} ${method} ${url}`).toBe(403);
@@ -366,5 +372,221 @@ describeDb('local profile management (real DB)', () => {
           and(eq(tenantMemberships.tenantId, TENANT_ID), eq(tenantMemberships.userId, OWNER_ID)),
         ),
     ).toHaveLength(1);
+  });
+
+  describe('a PIN', () => {
+    const PIN = '2468';
+    let lockedSession: string;
+
+    async function storedPin(userId: string): Promise<string | null> {
+      const [row] = await db
+        .select({ pinHash: users.profilePinHash })
+        .from(users)
+        .where(eq(users.id, userId));
+      return row?.pinHash ?? null;
+    }
+
+    it('leaves a single profile with no PIN as it was', async () => {
+      expect((await call('GET', '/spaces', browser())).status).toBe(200);
+      expect(await storedPin(OWNER_ID)).toBeNull();
+    });
+
+    it('on the only profile ends the fallback to the owner, and ends its sessions', async () => {
+      const before = browser(OWNER_ID);
+      expect((await call('GET', '/spaces', before)).status).toBe(200);
+
+      const set = await call('PUT', `/local-profiles/${OWNER_ID}/pin`, BARE_SECRET, { pin: PIN });
+      expect(set.status).toBe(200);
+      expect(set.body).toEqual(expect.objectContaining({ userId: OWNER_ID, hasPin: true }));
+
+      const stored = await storedPin(OWNER_ID);
+      expect(stored).toMatch(/^scrypt\$/);
+      expect(stored).not.toContain(PIN);
+
+      // The count read a moment ago said one profile with no PIN. Only a
+      // dropped count sends the sessionless browser to the picker now.
+      expect(await call('GET', '/spaces', browser())).toEqual({
+        status: 401,
+        body: expect.objectContaining({ code: 'PROFILE_SESSION_REQUIRED' }),
+      });
+      expect(await call('GET', '/spaces', before)).toEqual({
+        status: 401,
+        body: expect.objectContaining({ code: 'PROFILE_SESSION_INVALID' }),
+      });
+      // A bare-secret caller holds the owner's whole authority already.
+      expect((await call('GET', '/local-profiles', BARE_SECRET)).status).toBe(200);
+
+      const picker = await call('GET', '/local-profiles/picker', browser());
+      expect(picker.body['profiles']).toEqual([
+        expect.objectContaining({ userId: OWNER_ID, hasPin: true }),
+      ]);
+    });
+
+    it('keeps a locked profile from starting without its PIN', async () => {
+      const missing = await call('POST', `/local-profiles/${OWNER_ID}/session`, BARE_SECRET);
+      expect(missing.status).toBe(401);
+      expect(missing.body['code']).toBe('PROFILE_PIN_REQUIRED');
+      expect(missing.body).not.toHaveProperty('session');
+    });
+
+    it('issues nothing for a wrong PIN', async () => {
+      const wrong = await call('POST', `/local-profiles/${OWNER_ID}/session`, BARE_SECRET, {
+        pin: '1357',
+      });
+      expect(wrong.status).toBe(401);
+      expect(wrong.body['code']).toBe('PROFILE_PIN_INCORRECT');
+      expect(wrong.body).not.toHaveProperty('session');
+    });
+
+    it('starts the locked profile with its PIN', async () => {
+      const issued = await call('POST', `/local-profiles/${OWNER_ID}/session`, BARE_SECRET, {
+        pin: PIN,
+      });
+      expect(issued.status).toBe(200);
+      lockedSession = issued.body['session'] as string;
+      const withSession = { ...browser(), [LOCAL_PROFILE_SESSION_HEADER]: lockedSession };
+      expect((await call('GET', '/spaces', withSession)).status).toBe(200);
+    });
+
+    it('is reset by the owner, which ends the profile sessions and the lock', async () => {
+      const reset = await call('DELETE', `/local-profiles/${OWNER_ID}/pin`, BARE_SECRET);
+      expect(reset.status).toBe(200);
+      expect(reset.body).toEqual(expect.objectContaining({ hasPin: false }));
+      expect(await storedPin(OWNER_ID)).toBeNull();
+
+      const withSession = { ...browser(), [LOCAL_PROFILE_SESSION_HEADER]: lockedSession };
+      expect(await call('GET', '/spaces', withSession)).toEqual({
+        status: 401,
+        body: expect.objectContaining({ code: 'PROFILE_SESSION_INVALID' }),
+      });
+      // One profile with no PIN again, so the browser falls back as before.
+      expect((await call('GET', '/spaces', browser())).status).toBe(200);
+    });
+
+    it('locks a second profile, which the owner resets after a forgotten PIN', async () => {
+      const added = await call('POST', '/local-profiles', BARE_SECRET, {
+        displayName: 'Bea',
+        avatar: 'cat',
+      });
+      const bea = (added.body['profile'] as { userId: string }).userId;
+      created.push(bea);
+      const beaBefore = browser(bea);
+      expect((await call('GET', '/spaces', beaBefore)).status).toBe(200);
+
+      expect(
+        (await call('PUT', `/local-profiles/${bea}/pin`, BARE_SECRET, { pin: '864200' })).status,
+      ).toBe(200);
+      expect((await call('GET', '/spaces', beaBefore)).status).toBe(401);
+      expect((await call('POST', `/local-profiles/${bea}/session`, BARE_SECRET)).body['code']).toBe(
+        'PROFILE_PIN_REQUIRED',
+      );
+
+      // Someone learns the PIN and keeps the mark it answers. Bea changes the
+      // PIN, which ends that mark with the generation it was signed at.
+      const opened = await call('POST', `/local-profiles/${bea}/session`, BARE_SECRET, {
+        pin: '864200',
+      });
+      expect(opened.status).toBe(200);
+      const oldMark = opened.body['pinMark'] as string;
+      expect(
+        (await call('PUT', `/local-profiles/${bea}/pin`, BARE_SECRET, { pin: '975310' })).status,
+      ).toBe(200);
+      for (let i = 0; i < 5; i += 1) {
+        const wrong = await call('POST', `/local-profiles/${bea}/session`, BARE_SECRET, {
+          pin: '000000',
+          pinMark: oldMark,
+        });
+        expect(wrong.body['code']).toBe('PROFILE_PIN_INCORRECT');
+      }
+      // The old mark's guesses went to the count every browser without a live mark shares.
+      const shared = await call('POST', `/local-profiles/${bea}/session`, BARE_SECRET, {
+        pin: '975310',
+      });
+      expect(shared.status).toBe(429);
+      expect(shared.body['code']).toBe('PROFILE_PIN_THROTTLED');
+
+      // Bea forgets the PIN. The owner resets it, and Bea starts as P3 did.
+      expect((await call('DELETE', `/local-profiles/${bea}/pin`, BARE_SECRET)).status).toBe(200);
+      const issued = await call('POST', `/local-profiles/${bea}/session`, BARE_SECRET);
+      expect(issued.status).toBe(200);
+    });
+
+    it("counts a locked profile's wrong PINs on one count whatever the id's letter case", async () => {
+      const added = await call('POST', '/local-profiles', BARE_SECRET, {
+        displayName: 'Cal',
+        avatar: 'fox',
+      });
+      const cal = (added.body['profile'] as { userId: string }).userId;
+      created.push(cal);
+      expect(
+        (await call('PUT', `/local-profiles/${cal}/pin`, BARE_SECRET, { pin: '135790' })).status,
+      ).toBe(200);
+
+      const variants = [cal, cal.toUpperCase(), cal.replace(/[a-f]/, (c) => c.toUpperCase())];
+      for (let i = 0; i < 5; i += 1) {
+        const wrong = await call(
+          'POST',
+          `/local-profiles/${variants[i % variants.length] ?? cal}/session`,
+          BARE_SECRET,
+          { pin: '000000' },
+        );
+        expect(wrong.body['code']).toBe('PROFILE_PIN_INCORRECT');
+      }
+      for (const variant of variants) {
+        const waiting = await call('POST', `/local-profiles/${variant}/session`, BARE_SECRET, {
+          pin: '135790',
+        });
+        expect(waiting.status).toBe(429);
+        expect(waiting.body['code']).toBe('PROFILE_PIN_THROTTLED');
+      }
+
+      // A reset named in any case clears the one count.
+      const reset = await call('DELETE', `/local-profiles/${cal.toUpperCase()}/pin`, BARE_SECRET);
+      expect(reset.status).toBe(200);
+      expect((await call('POST', `/local-profiles/${cal}/session`, BARE_SECRET)).status).toBe(200);
+    });
+
+    it("leaves another browser's count when a browser with no mark opens the profile", async () => {
+      const added = await call('POST', '/local-profiles', BARE_SECRET, {
+        displayName: 'Dee',
+        avatar: 'owl',
+      });
+      const dee = (added.body['profile'] as { userId: string }).userId;
+      created.push(dee);
+      expect(
+        (await call('PUT', `/local-profiles/${dee}/pin`, BARE_SECRET, { pin: '246800' })).status,
+      ).toBe(200);
+
+      // A guesser spends the free guesses at a browser with no mark.
+      for (let i = 0; i < 4; i += 1) {
+        const wrong = await call('POST', `/local-profiles/${dee}/session`, BARE_SECRET, {
+          pin: '000000',
+        });
+        expect(wrong.body['code']).toBe('PROFILE_PIN_INCORRECT');
+      }
+      // Dee opens the profile from another browser with no mark.
+      const opened = await call('POST', `/local-profiles/${dee}/session`, BARE_SECRET, {
+        pin: '246800',
+      });
+      expect(opened.status).toBe(200);
+
+      // The guesser's next wrong PIN still starts the wait.
+      const fifth = await call('POST', `/local-profiles/${dee}/session`, BARE_SECRET, {
+        pin: '000000',
+      });
+      expect(fifth.body['code']).toBe('PROFILE_PIN_INCORRECT');
+      const waiting = await call('POST', `/local-profiles/${dee}/session`, BARE_SECRET, {
+        pin: '246800',
+      });
+      expect(waiting.status).toBe(429);
+      expect(waiting.body['code']).toBe('PROFILE_PIN_THROTTLED');
+
+      // Dee's own browser holds the mark the right PIN answered, so its count is its own.
+      const marked = await call('POST', `/local-profiles/${dee}/session`, BARE_SECRET, {
+        pin: '246800',
+        pinMark: opened.body['pinMark'] as string,
+      });
+      expect(marked.status).toBe(200);
+    });
   });
 });
