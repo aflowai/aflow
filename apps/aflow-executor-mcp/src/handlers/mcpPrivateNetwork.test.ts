@@ -163,9 +163,26 @@ describe('the managed connect', () => {
       'It is a private network address (10.0.0.0/8, 172.16.0.0/12 or 192.168.0.0/16).',
     );
     expect(error.message).toContain(
-      'An operator can let this server reach 10.1.2.3 under Integrations → Corp → Private network.',
+      'An operator can let this server reach 10.1.2.3 with the Set as private network action' +
+        ' on the Corp card in Integrations, which opens the private network form.',
     );
+    expect(error.message).not.toContain('→ Private network');
     expect(error.message).toContain('An agent cannot set it.');
+  });
+
+  it('names the Private network section when an acknowledgment that misses the host is set', async () => {
+    state.serverUrl = 'https://10.9.9.9/mcp';
+    const error = failure(await test());
+    expect(error.details).toMatchObject({ remedy: 'acknowledge_private_network' });
+    expect(error.message).toContain(
+      'An operator can add 10.9.9.9 to the hosts under Integrations → Corp → Private network.',
+    );
+  });
+
+  it('names the host, not the raw URL, on a scheme refusal', async () => {
+    state.serverUrl = 'ftp://10.1.2.3/mcp';
+    const error = failure(await test());
+    expect(error.details).toMatchObject({ kind: 'invalid-protocol', target: '10.1.2.3' });
   });
 
   it('says that no setting reaches a range the acknowledgment never lifts', async () => {

@@ -62,11 +62,7 @@ import {
   type McpTenantGuardRef,
 } from './tenantPolicyGuard.js';
 import { ensureSpaceLoaded, invalidateSpaceCache } from './spaceLoader.js';
-import {
-  egressRefusalDetails,
-  egressRefusalMessage,
-  privateNetworkPolicyOf,
-} from './privateNetwork.js';
+import { egressRefusalError, privateNetworkPolicyOf } from './privateNetwork.js';
 import {
   McpConnectionPool,
   poolKeyManaged,
@@ -353,19 +349,17 @@ export class McpHandler implements StepHandler {
     }
 
     let entry: PoolEntry;
+    const guard = {
+      tenantId: ctx.job.tenantId,
+      spaceId: binding.scope.spaceId!,
+      serverId: binding.serverId,
+      bindingId: binding.bindingId,
+    };
     try {
-      entry = await this.acquireManaged(key, definition.serverUrl, headers, {
-        tenantId: ctx.job.tenantId,
-        spaceId: binding.scope.spaceId!,
-        serverId: binding.serverId,
-        bindingId: binding.bindingId,
-      });
+      entry = await this.acquireManaged(key, definition.serverUrl, headers, guard);
     } catch (err) {
       if (err instanceof SsrfBlockedError || err instanceof DnsBlockedError) {
-        return failureWithError(
-          ctx,
-          validationError(egressRefusalMessage(err, definition.name), egressRefusalDetails(err)),
-        );
+        return failureWithError(ctx, egressRefusalError(err, definition.name, this.stores, guard));
       }
       return failureWithError(
         ctx,
@@ -711,19 +705,17 @@ export class McpHandler implements StepHandler {
     await this.pool.remove(key);
 
     let entry: PoolEntry;
+    const guard = {
+      tenantId: ctx.job.tenantId,
+      spaceId,
+      serverId: binding.serverId,
+      bindingId: binding.bindingId,
+    };
     try {
-      entry = await this.acquireManaged(key, definition.serverUrl, headersResult.headers, {
-        tenantId: ctx.job.tenantId,
-        spaceId,
-        serverId: binding.serverId,
-        bindingId: binding.bindingId,
-      });
+      entry = await this.acquireManaged(key, definition.serverUrl, headersResult.headers, guard);
     } catch (err) {
       if (err instanceof SsrfBlockedError || err instanceof DnsBlockedError) {
-        return failureWithError(
-          ctx,
-          validationError(egressRefusalMessage(err, definition.name), egressRefusalDetails(err)),
-        );
+        return failureWithError(ctx, egressRefusalError(err, definition.name, this.stores, guard));
       }
       return failureWithError(
         ctx,

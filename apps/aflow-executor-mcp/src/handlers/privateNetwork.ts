@@ -9,7 +9,8 @@ import {
   type PrivateNetworkPolicy,
   type SsrfBlockedError,
 } from '@aflow/network-safety';
-import type { McpEgressRefusalDetails } from '@aflow/schemas';
+import { validationError } from '@aflow/executor-runtime';
+import type { AflowError, McpEgressRefusalDetails } from '@aflow/schemas';
 import { getMcpSpaceStores, type McpHandlerStores } from './types.js';
 
 /** The ceiling `AflowErrorSchema` puts on a message. */
@@ -43,7 +44,7 @@ export function egressRefusalDetails(
   if (err instanceof DnsBlockedError) return { kind: err.kind, target: err.hostname };
   return {
     kind: err.kind,
-    target: err.target,
+    target: err.kind === 'invalid-protocol' ? hostOf(err.target) : err.target,
     ...(err.rangeLabel
       ? { rangeLabel: err.rangeLabel, range: describeRangeLabel(err.rangeLabel) }
       : {}),
@@ -52,13 +53,39 @@ export function egressRefusalDetails(
 }
 
 /**
+ * `validateUrl` and `validateCredentialedUrl` name the raw URL on a protocol
+ * refusal. The details name the host the policy judges.
+ */
+function hostOf(target: string): string {
+  try {
+    return new URL(target).hostname || target;
+  } catch {
+    return target;
+  }
+}
+
+/** The step error a refused managed connect fails with: its message and its details. */
+export function egressRefusalError(
+  err: SsrfBlockedError | DnsBlockedError,
+  serverName: string,
+  stores: McpHandlerStores,
+  ref: { tenantId: string; spaceId: string; serverId: string },
+): AflowError {
+  const policy = privateNetworkPolicyOf(stores, ref);
+  return validationError(egressRefusalMessage(err, serverName, policy), egressRefusalDetails(err));
+}
+
+/**
  * The refusal's message with its remedy in words, because the Helmsman reads
  * the message on its next turn. Each remedy names where the operator acts. The
- * acknowledgment is not on the definition's upsert, so no agent sets it.
+ * acknowledgment is not on the definition's upsert, so no agent sets it. The
+ * Private network section exists only once an acknowledgment is set, so
+ * without one the remedy names the card's action that opens the form.
  */
 export function egressRefusalMessage(
   err: SsrfBlockedError | DnsBlockedError,
   serverName: string,
+  policy: PrivateNetworkPolicy,
 ): string {
   const details = egressRefusalDetails(err);
   const host = details.target ?? 'the host';
@@ -72,9 +99,13 @@ export function egressRefusalMessage(
   } else if (details.kind === 'invalid-protocol') {
     remedy = ' Change the server URL to https. No setting lifts the https rule.';
   } else if (details.remedy === 'acknowledge_private_network') {
-    remedy =
-      `${range} An operator can let this server reach ${host} under ${where}.` +
-      ' An agent cannot set it.';
+    const acknowledged = policy.hosts.length > 0 || policy.withheld.length > 0;
+    remedy = acknowledged
+      ? `${range} An operator can add ${host} to the hosts under ${where}.` +
+        ' An agent cannot set it.'
+      : `${range} An operator can let this server reach ${host} with the Set as private network` +
+        ` action on the ${serverName} card in Integrations, which opens the private network form.` +
+        ' An agent cannot set it.';
   } else if (details.remedy === 'deployment_must_list_host') {
     remedy =
       `${range} Whoever runs this deployment adds ${host} to MCP_PRIVATE_NETWORK_HOSTS.` +
