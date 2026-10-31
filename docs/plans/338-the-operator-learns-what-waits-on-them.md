@@ -209,13 +209,15 @@ _Rejected:_ (b). The peek is a second rendering of the first item, beside the ca
 - **(b) The last conversation, where it is recent and not ended, with New chat one key away.**
 - (c) A remembered last session per browser, as `preferredSpaceSlug` remembers the space (F17).
 
-**Recommended: (b).** The rule is in place to be switched on (F16). The chat resumes the newest row of the list it already loads, where all of these hold:
+**Recommended: (b).** The rule is work to build, not a switch to flip. The chat resumes the reader's newest conversation where all of these hold:
 
 - The reader opened it (`createdBy`).
 - Its status is not terminal.
 - Its `lastActivityAt` lies within `CHAT_RESUME_WINDOW_MS`, six hours.
 
 Otherwise the chat lands new, as today.
+
+**What exists, and what P4 adds.** `autoResumeLatest` seeds only the first listed row (F16). It cannot apply the `createdBy`, status and six-hour tests. The list holds the space's newest 10 sessions, so it may omit the reader's own conversation. P4 adds one of two things. One is a read that returns the reader's own last active conversation with those tests applied. The other is `useChatSessionRuns` extended to apply the same tests to the reader's own conversations.
 
 **The URL stays canonical.** The conversation's URL is `/s/<slug>/chat?session=<id>`, and resuming writes it with `router.replace` (F15). Back and forward keep the history the operator made, and the landing adds no entry. The commission named `/s/<slug>/sessions/<id>` as the canonical form. That route is the run's detail page (F15), and it does not change.
 
@@ -303,4 +305,4 @@ Each case fails if the change is wrong.
 
 **P3 — The Workbench's default (D3), the measurement first.** It records the measured reads of both columns of D3's table first. It then builds the lazy sections, the remembered state and the two reads onto the cache. _Exit:_ the operator reads the numbers and keeps or changes the recommendation. The dock then opens as decided.
 
-**P4 — Where the chat lands (D4).** It holds the resume rule, the window constant and the shortcut. _Exit:_ on the live stack, the operator moves from the Plan page to Chat and back, and lands in the conversation they left.
+**P4 — Where the chat lands (D4).** It holds the resume rule, the window constant and the shortcut. It builds the read or the hook extension that D4 names. _Exit:_ on the live stack, the operator moves from the Plan page to Chat and back, and lands in the conversation they left.
