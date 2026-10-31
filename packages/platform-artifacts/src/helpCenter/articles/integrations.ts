@@ -135,17 +135,26 @@ Every set, change and clear writes a security entry to the tenant's audit log. T
 
 ### 2. Allow the redirect URI on the corporate authorization server
 
-Sign-in returns to this install's callback address:
+Sign-in returns to a callback address that ends in \`/v1/oauth/callback\`. Its origin depends on the edition.
+
+On a local install:
 
 - An installed bundle: \`http://127.0.0.1:3000/v1/oauth/callback\`.
 - A source build from \`docker-compose.local.yml\`: \`http://127.0.0.1:<AFLOW_API_PORT>/v1/oauth/callback\`. \`AFLOW_API_PORT\` is 3000 unless you set it.
 - A dev checkout: \`API_BASE_URL\` from \`.env\` followed by \`/v1/oauth/callback\`. By default that is \`http://localhost:3000/v1/oauth/callback\`.
 
-The corporate authorization server must allow that exact URI for the client you use. It treats \`127.0.0.1\` and \`localhost\` as different URIs. Your browser follows the redirect on this machine, so the authorization server never connects to the install. Aflow derives the address from the install's API address and accepts no other. Only the authorization server's administrators can allow it.
+In the hosted edition, the callback is the deployment's public API origin followed by \`/v1/oauth/callback\`, such as \`https://api.example.com/v1/oauth/callback\`. That origin is \`API_BASE_URL\`, which whoever runs the deployment sets. Ask them for its value.
+
+The corporate authorization server must allow that exact URI for the client you use. It treats \`127.0.0.1\` and \`localhost\` as different URIs. Your browser follows the redirect, so the authorization server never connects to the callback address. Aflow derives the address from \`API_BASE_URL\` and accepts no other. Only the authorization server's administrators can allow it.
 
 ### 3. Register a client with the corporate authorization server
 
-The built-in OAuth app cannot sign in here. Its client ID is a document this install serves at \`/.well-known/cimd\` on its loopback address. An authorization server on another machine cannot fetch it. Use a client registered with the corporate authorization server instead:
+The built-in OAuth app is a public client with no secret. Its client ID is the URL of a document Aflow serves at \`/.well-known/cimd\` under \`API_BASE_URL\`. The authorization server fetches that document to learn the app's name and redirect URI.
+
+- On a local install, the built-in app cannot sign in. Its document sits on the install's loopback address, and an authorization server on another machine cannot fetch it.
+- In the hosted edition, the document sits on the deployment's public origin and names the callback from step 2. Aflow does not stop the built-in app from signing in there. It works only when the corporate authorization server accepts a document URL as a client ID and can fetch that document. Aflow does not check either before sign-in.
+
+When the built-in app cannot sign in, use a client registered with the corporate authorization server instead:
 
 1. Ask its administrators for a client that allows the redirect URI from step 2. Sign-in uses the authorization code flow with PKCE. A client secret is optional, for a public client.
 2. Under **Tenant Admin → OAuth Apps**, choose **Register app**, then **Issuer → Other (custom)**.
