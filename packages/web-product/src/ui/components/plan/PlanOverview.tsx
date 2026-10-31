@@ -8,19 +8,16 @@
  * rail for its step; a blocked step's **Approve** sends the open write from
  * the row itself, against the revision the lanes read, so the step moves on
  * without its plan being opened. Up next carries no reorder: ordering steps
- * is the board's (D6). Each lane is headed by its column's orb and holds
- * its rows on one contained surface; a row reads plan, step with its orb,
- * where it stands, then age and action. A run on a step reads as the run
- * surface's row (Plan 332 P7). A row is barred in its lane's colour, as the
- * skill designer's issues panel bars an issue, and the selected one is filled
- * and barred as the plan list's is (Plan 332 P6).
+ * is the board's (D6). A row reads plan, step with its orb, where it stands,
+ * then age and action. A run on a step reads as the run surface's row
+ * (Plan 332 P7). A row's surface says where its step stands, as a board
+ * card's does, and the selected one is ringed as the selected card is.
  */
 import { useState } from 'react';
 import { AnimatedHeight, Badge, Button, Column, Row, Text } from '@aflow/design-system';
 import type { PlanLaneItem, PlanOverviewLanes } from '@aflow/schemas';
 import {
   NEEDS_YOU_REASON_LABEL,
-  PLAN_BOARD_COLUMNS,
   PLAN_LANES,
   PLAN_LANE_EMPTY_CUT,
   PLAN_LANES_TRUNCATION_LINE,
@@ -34,14 +31,13 @@ import {
 import type { PlanNodeOpener } from './PlanNodeOpenControl.js';
 import {
   GroupLabel,
-  HOVER_TINT,
-  HeadingOrb,
   MetaSep,
   NextMarker,
   PlanRunLine,
   PlanStepOrb,
   PullRequestChip,
-  hoverTransition,
+  SELECTED_RING,
+  planItemSurface,
   useHover,
 } from './PlanParts.js';
 
@@ -132,7 +128,6 @@ function ApproveFromRow({ item, onOpen }: { item: PlanLaneItem; onOpen: PlanNode
  */
 function LaneRow({
   lane,
-  color,
   item,
   selected,
   now,
@@ -142,8 +137,6 @@ function LaneRow({
   onOpen,
 }: {
   lane: PlanLaneId;
-  /** The lane's colour, which bars the row as the designer's issues are barred. */
-  color: string;
   item: PlanLaneItem;
   selected: boolean;
   now: Date;
@@ -153,8 +146,10 @@ function LaneRow({
   onOpen: PlanNodeOpener;
 }) {
   const { hovered, hoverProps } = useHover();
+  const running = lane === 'in_flight' && laneRunInFlight(item);
   return (
     <li
+      className={running ? 'ds-enter-rise ds-card--running' : 'ds-enter-rise'}
       data-plan-lane-row={item.nodeId}
       {...(selected ? { 'aria-current': 'true' as const } : {})}
       {...hoverProps}
@@ -167,17 +162,8 @@ function LaneRow({
         alignItems: 'start',
         columnGap: 'var(--space-3)',
         padding: 'var(--space-2) var(--space-2-5)',
-        marginBottom: 'var(--space-1)',
-        ...hoverTransition,
-        background: selected
-          ? 'var(--color-surface-3, var(--color-surface-2))'
-          : hovered
-            ? HOVER_TINT
-            : 'var(--color-surface-0)',
-        border: '1px solid var(--color-border-subtle)',
-        borderLeft: `3px solid ${selected ? 'var(--color-interactive-default)' : color}`,
-        borderRadius: 'var(--radius-sm)',
-        cursor: 'pointer',
+        border: '1px solid transparent',
+        ...planItemSurface({ column: lane, running, selected, hovered }),
       }}
     >
       <Text
@@ -322,44 +308,48 @@ export function PlanOverview({
       {PLAN_LANES.map(({ id, key, label, empty }) => {
         const lane = lanes[key];
         const more = planLaneMore(lane);
-        const color =
-          PLAN_BOARD_COLUMNS.find((column) => column.id === id)?.color ??
-          'var(--color-border-emphasis)';
         return (
           <Column key={id} gap="sm" data-plan-lane={id}>
-            <Row gap="xs" align="center">
-              <HeadingOrb column={id} />
-              <GroupLabel>{`${label} · ${planLaneCount(lane, lanes)}`}</GroupLabel>
-            </Row>
-            {lane.items.length === 0 ? (
-              <Text size="sm" variant="muted" style={{ paddingLeft: 'var(--space-4)' }}>
-                {lanes.truncated !== undefined ? PLAN_LANE_EMPTY_CUT : empty}
-              </Text>
-            ) : (
-              <ul style={{ listStyle: 'none', margin: 0, padding: 0 }} aria-label={label}>
-                {lane.items.map((item) => (
-                  <LaneRow
-                    key={item.nodeId}
-                    lane={id}
-                    color={color}
-                    item={item}
-                    selected={item.nodeId === selectedId}
-                    now={now}
-                    spaceSlug={spaceSlug}
-                    onSelect={onSelect}
-                    onDecide={onDecide}
-                    onOpen={onOpen}
-                  />
-                ))}
-              </ul>
-            )}
+            <GroupLabel>{`${label} · ${planLaneCount(lane, lanes)}`}</GroupLabel>
+            {/* A lane grows and shrinks as steps come and go. It is widened and padded by
+                the ring, so the selected row's ring lies inside the clip. */}
+            <AnimatedHeight style={{ marginInline: -SELECTED_RING }}>
+              <div style={{ padding: SELECTED_RING }}>
+                {lane.items.length === 0 ? (
+                  <Text size="sm" variant="muted">
+                    {lanes.truncated !== undefined ? PLAN_LANE_EMPTY_CUT : empty}
+                  </Text>
+                ) : (
+                  <ul
+                    style={{
+                      listStyle: 'none',
+                      margin: 0,
+                      padding: 0,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 'var(--space-1-5)',
+                    }}
+                    aria-label={label}
+                  >
+                    {lane.items.map((item) => (
+                      <LaneRow
+                        key={item.nodeId}
+                        lane={id}
+                        item={item}
+                        selected={item.nodeId === selectedId}
+                        now={now}
+                        spaceSlug={spaceSlug}
+                        onSelect={onSelect}
+                        onDecide={onDecide}
+                        onOpen={onOpen}
+                      />
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </AnimatedHeight>
             {more !== undefined && (
-              <Text
-                size="xs"
-                variant="muted"
-                style={{ paddingLeft: 'var(--space-4)' }}
-                data-plan-lane-more
-              >
+              <Text size="xs" variant="muted" data-plan-lane-more>
                 {more}
               </Text>
             )}

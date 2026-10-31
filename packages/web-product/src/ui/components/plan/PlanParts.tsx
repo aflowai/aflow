@@ -33,7 +33,6 @@ import {
   formatElapsed,
   orbForPlanState,
   orbForPlanStep,
-  orbForRunStatus,
   runPill,
   type OrbKind,
 } from '../workflow-run-surface/workflowRunSurfaceHelpers.js';
@@ -57,6 +56,50 @@ export const HOVER_TINT = 'var(--color-surface-2)';
 export const hoverTransition: CSSProperties = {
   transition: 'background-color var(--transition-duration-fast) var(--transition-timing-default)',
 };
+
+/** The width in pixels of the selected card's ring, drawn outside the card. */
+export const SELECTED_RING = 2;
+
+/**
+ * A step's card or lane row, its surface saying where it stands: tinted as a
+ * pause where it needs the operator, as a run where one is on it, neutral
+ * otherwise. Pointed at, the hover tint lies over that surface rather than
+ * replacing it, and the selected one is ringed. The surface is translucent, so
+ * it blurs the canvas's dots under it as a design-system card does.
+ */
+export function planItemSurface({
+  column,
+  running,
+  selected,
+  hovered,
+}: {
+  column: PlanBoardColumn;
+  running: boolean;
+  selected: boolean;
+  hovered: boolean;
+}): CSSProperties {
+  return {
+    position: 'relative',
+    borderRadius: 'var(--radius-lg)',
+    WebkitBackdropFilter: 'blur(12px)',
+    backdropFilter: 'blur(12px)',
+    transition:
+      'background-color var(--transition-duration-fast) var(--transition-timing-default), box-shadow var(--transition-duration-fast) var(--transition-timing-default)',
+    backgroundColor:
+      column === 'needs_you'
+        ? 'var(--color-status-paused-bg)'
+        : running
+          ? 'var(--color-status-running-bg)'
+          : 'var(--color-surface-2)',
+    backgroundImage: hovered ? `linear-gradient(${HOVER_TINT}, ${HOVER_TINT})` : 'none',
+    ...(selected
+      ? {
+          boxShadow: `0 0 0 ${String(SELECTED_RING)}px var(--color-interactive-default), var(--shadow-md)`,
+        }
+      : {}),
+    cursor: 'pointer',
+  };
+}
 
 /**
  * The designer outline's row: filled and barred in the interactive colour
@@ -133,6 +176,7 @@ export const railProse = { lineHeight: 1.55, whiteSpace: 'pre-wrap' } as const;
  */
 export function useReveal(): {
   shown: boolean;
+  hovered: boolean;
   hostProps: {
     onMouseEnter: () => void;
     onMouseLeave: () => void;
@@ -145,6 +189,7 @@ export function useReveal(): {
   const [focused, setFocused] = useState(false);
   return {
     shown: touch || hovered || focused,
+    hovered,
     hostProps: {
       onMouseEnter: () => {
         setHovered(true);
@@ -166,7 +211,7 @@ export function useReveal(): {
  * An orb's size by its place. An orb's core is about 60% of its box, so below a
  * 28px box its state does not read. The rail's header is larger.
  */
-export const PLAN_ORB_SIZE = { row: 28, heading: 28, header: 28, rail: 36 } as const;
+export const PLAN_ORB_SIZE = { row: 28, header: 28, rail: 36 } as const;
 
 /**
  * An orb that shows a state the words beside it name (Plan 332 P6). It is
@@ -240,16 +285,10 @@ export function PlanStepOrb({
   );
 }
 
-/** A heading's orb, for the column or lane it heads, whose label names it. */
-export function HeadingOrb({ column }: { column: PlanBoardColumn }) {
-  return (
-    <StatusOrb kind={orbForPlanStep(column, { runInFlight: true })} size={PLAN_ORB_SIZE.heading} />
-  );
-}
-
 /**
- * A run on a step as the run surface writes its rows: the run's orb, its kind
- * linked to the run, its pill, and how long it has run, ticking while it runs.
+ * A run on a step as the run surface writes its rows: its kind linked to the
+ * run, its pill, and how long it has run, ticking while it runs. The step's
+ * orb already says a run is on it, so the run carries none of its own.
  */
 export function PlanRunLine({ run, spaceSlug }: { run: PlanNodeRun; spaceSlug: string }) {
   const running = run.status === 'running';
@@ -261,12 +300,6 @@ export function PlanRunLine({ run, spaceSlug }: { run: PlanNodeRun; spaceSlug: s
       data-plan-run={run.runId}
       style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--space-1)' }}
     >
-      <StatusOrb
-        kind={orbForRunStatus(run.status)}
-        size={PLAN_ORB_SIZE.row}
-        decorative={false}
-        label="Run"
-      />
       <Link
         href={spaceRoute(spaceSlug, `/runs/${encodeURIComponent(run.runId)}`)}
         style={{ color: 'var(--color-text-link)' }}

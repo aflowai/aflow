@@ -880,7 +880,7 @@ describe('SpacePlanPage — the board', () => {
     expect(
       card(SKETCH).querySelector<HTMLElement>('[data-plan-card-title]')?.style.textDecoration,
     ).toBe('line-through');
-    expect(card(DECISION).style.borderLeft).toContain('var(--color-warning-default)');
+    expect(card(DECISION).style.backgroundColor).toBe('var(--color-status-paused-bg)');
     expect(button(card(DECISION), 'Decide')).toBeTruthy();
   });
 
@@ -2602,19 +2602,24 @@ describe('SpacePlanPage — the overview across plans (Plan 332 P4)', () => {
     expect(boardShown()).toBe(null);
   });
 
-  it('tints a lane row while pointed at', async () => {
+  it('says where a lane row’s step stands by its surface, and tints it over that while pointed at', async () => {
     await render({ data: OVERVIEW });
 
+    expect(laneRow(LANE_STOP).style.backgroundColor).toBe('var(--color-status-paused-bg)');
+    expect(laneRow(ARTICLE).style.backgroundColor).toBe('var(--color-surface-2)');
     const row = laneRow(BOARD);
-    expect(row.getAttribute('style')).toContain('var(--color-surface-0)');
+    expect(row.style.backgroundColor).toBe('var(--color-status-running-bg)');
+    expect(row.classList.contains('ds-card--running')).toBe(true);
+    expect(row.style.backgroundImage).toBe('none');
     await act(async () => {
       row.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, relatedTarget: null }));
     });
-    expect(row.getAttribute('style')).toContain('var(--color-surface-2)');
+    expect(row.style.backgroundColor).toBe('var(--color-status-running-bg)');
+    expect(row.style.backgroundImage).toContain('var(--color-surface-2)');
     await act(async () => {
       row.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: null }));
     });
-    expect(row.getAttribute('style')).toContain('var(--color-surface-0)');
+    expect(row.style.backgroundImage).toBe('none');
   });
 
   it('says how many more a lane holds than it lists', async () => {
@@ -2908,7 +2913,8 @@ describe('SpacePlanPage — state as orbs, and motion (Plan 332 P7)', () => {
     const running = laneRow(BOARD);
     expect(orbKind(running)).toBe('running');
     const run = running.querySelector(`[data-plan-lane-run="${RUN_ID}"] [data-plan-run]`)!;
-    expect(run.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe('Run');
+    // The step's orb says a run is on it, so the run carries no orb of its own.
+    expect(run.querySelector('.workflow-run-surface__orb')).toBe(null);
     expect(run.textContent).toBe('Commissionexecuting60m 00s');
     expect(run.querySelector('[data-plan-run-elapsed]')?.textContent).toBe('60m 00s');
   });
@@ -2948,7 +2954,8 @@ describe('SpacePlanPage — state as orbs, and motion (Plan 332 P7)', () => {
     await click(card(BOARD));
     expect(orbKind(rail())).toBe('running');
     const run = railGroup('Runs').querySelector(`[data-plan-run="${RUN_ID}"]`)!;
-    expect(run.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe('Run');
+    // The step's orb says a run is on it, so the run carries no orb of its own.
+    expect(run.querySelector('.workflow-run-surface__orb')).toBe(null);
     // A paused run says it is paused, and no time runs on it.
     expect(run.textContent).toBe('Commissionpaused');
   });

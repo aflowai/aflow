@@ -417,7 +417,7 @@ export function PlanRail({
   );
 
   return (
-    <Column gap="lg" data-plan-rail={node.nodeId} style={{ minWidth: 0 }}>
+    <Column gap="lg" className="ds-enter-rise" data-plan-rail={node.nodeId} style={{ minWidth: 0 }}>
       <Row gap="xs" align="center" justify="between">
         <Row gap="xs" align="center" wrap>
           <PlanStepOrb column={column} runInFlight={runInFlight} size={PLAN_ORB_SIZE.rail} />

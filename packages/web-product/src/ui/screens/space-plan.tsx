@@ -48,12 +48,7 @@ import type {
 } from '../components/plan/PlanNodeOpenControl.js';
 import { PlanOverview } from '../components/plan/PlanOverview.js';
 import { PlanRail, PlanRailFromDetail } from '../components/plan/PlanRail.js';
-import {
-  HeadingOrb,
-  PLAN_ORB_SIZE,
-  PlanStateOrb,
-  ProgressMeter,
-} from '../components/plan/PlanParts.js';
+import { PLAN_ORB_SIZE, PlanStateOrb, ProgressMeter } from '../components/plan/PlanParts.js';
 import type {
   PlanNodeCloseAnswer,
   PlanNodeCloseRequest,
@@ -493,12 +488,9 @@ export function SpacePlanPage(): React.ReactNode {
                 </Text>
               </Row>
               {planLine.counts.map(({ column, label }) => (
-                <Row key={column} gap="xs" align="center" data-plan-tally-count={column}>
-                  <HeadingOrb column={column} />
-                  <Text size="sm" variant="muted">
-                    {label}
-                  </Text>
-                </Row>
+                <Text key={column} size="sm" variant="muted" data-plan-tally-count={column}>
+                  {label}
+                </Text>
               ))}
             </Row>
             {tally.state === 'finished' &&

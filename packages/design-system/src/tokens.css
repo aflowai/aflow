@@ -29,8 +29,8 @@
   --color-highlight-fg: #9a7418;
   --color-status-queued-fg: #777777;
   --color-status-queued-bg: #f0eeea;
-  --color-status-running-fg: #0a6f82;
-  --color-status-running-bg: #d7eef3;
+  --color-status-running-fg: #5a3da8;
+  --color-status-running-bg: #f2eefbc4;
   --color-status-paused-fg: #d4a030;
   --color-status-paused-bg: #fdf6e3;
   --color-status-succeeded-fg: #0a8f6c;
@@ -133,7 +133,7 @@
   --color-status-queued-fg: #6b6b6b;
   --color-status-queued-bg: #212121;
   --color-status-running-fg: #c979ff;
-  --color-status-running-bg: #d175ff3d;
+  --color-status-running-bg: #211729d4;
   --color-status-paused-fg: #d4a94e;
   --color-status-paused-bg: #3a2d1087;
   --color-status-succeeded-fg: #13a688;
@@ -237,7 +237,7 @@
     --color-status-queued-fg: #6b6b6b;
     --color-status-queued-bg: #212121;
     --color-status-running-fg: #c979ff;
-    --color-status-running-bg: #d175ff3d;
+    --color-status-running-bg: #211729d4;
     --color-status-paused-fg: #d4a94e;
     --color-status-paused-bg: #3a2d1087;
     --color-status-succeeded-fg: #13a688;
