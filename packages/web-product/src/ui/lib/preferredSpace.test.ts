@@ -76,6 +76,52 @@ describe('preferredSpace cookie helpers', () => {
     await expect(setPreferredSpaceSlug('NOT_A_SLUG')).rejects.toThrow();
   });
 
+  // Plan 335 P3: each local profile lands in its own space after a switch.
+  it('keeps one hint per local profile', async () => {
+    const { setPreferredSpaceSlug, getPreferredSpaceSlug } = await import('./preferredSpace.js');
+    const ada = '00000000-0000-4000-8000-00000000a0a0';
+    const bob = '00000000-0000-4000-8000-00000000b0b0';
+    fakeCookieStore.store.set('aflow_profile', ada);
+    await setPreferredSpaceSlug('personal-ada');
+    fakeCookieStore.store.set('aflow_profile', bob);
+    expect(await getPreferredSpaceSlug()).toBeNull();
+    await setPreferredSpaceSlug('personal-bob');
+    fakeCookieStore.store.set('aflow_profile', ada);
+    expect(await getPreferredSpaceSlug()).toBe('personal-ada');
+    expect(fakeCookieStore.store.get(`preferredSpaceSlug.${bob}`)).toBe('personal-bob');
+    expect(fakeCookieStore.store.has('preferredSpaceSlug')).toBe(false);
+  });
+
+  it('keeps the one hint where no profile was chosen, or the choice is not an id', async () => {
+    const { setPreferredSpaceSlug, getPreferredSpaceSlug } = await import('./preferredSpace.js');
+    await setPreferredSpaceSlug('general');
+    expect(fakeCookieStore.store.get('preferredSpaceSlug')).toBe('general');
+    fakeCookieStore.store.set('aflow_profile', '../not-an-id');
+    expect(await getPreferredSpaceSlug()).toBe('general');
+  });
+
+  it('falls back to the unkeyed hint until the chosen profile writes its own', async () => {
+    const { setPreferredSpaceSlug, getPreferredSpaceSlug } = await import('./preferredSpace.js');
+    const owner = '00000000-0000-4000-8000-00000000a0a0';
+    await setPreferredSpaceSlug('research');
+    fakeCookieStore.store.set('aflow_profile', owner);
+    expect(await getPreferredSpaceSlug()).toBe('research');
+    await setPreferredSpaceSlug('personal');
+    expect(fakeCookieStore.store.get(`preferredSpaceSlug.${owner}`)).toBe('personal');
+    expect(fakeCookieStore.store.get('preferredSpaceSlug')).toBe('research');
+    expect(await getPreferredSpaceSlug()).toBe('personal');
+  });
+
+  it('clear removes the keyed and the unkeyed hint', async () => {
+    const owner = '00000000-0000-4000-8000-00000000a0a0';
+    fakeCookieStore.store.set('preferredSpaceSlug', 'research');
+    fakeCookieStore.store.set('aflow_profile', owner);
+    fakeCookieStore.store.set(`preferredSpaceSlug.${owner}`, 'personal');
+    const { clearPreferredSpaceSlug, getPreferredSpaceSlug } = await import('./preferredSpace.js');
+    await clearPreferredSpaceSlug();
+    expect(await getPreferredSpaceSlug()).toBeNull();
+  });
+
   it('clear removes the cookie', async () => {
     fakeCookieStore.store.set('preferredSpaceSlug', 'general');
     const { clearPreferredSpaceSlug, getPreferredSpaceSlug } = await import('./preferredSpace.js');

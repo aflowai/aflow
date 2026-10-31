@@ -15,6 +15,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
+import { LOCAL_PROFILE_CHOICE_PATH, LOCAL_PROFILE_PICKER_PATH } from '@aflow/web-product';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PAGE_SRC = readFileSync(resolve(__dirname, './page.tsx'), 'utf8');
@@ -57,6 +58,19 @@ describe('the local front door', () => {
         `the front door redirects to ${target}, which this build does not serve`,
       ).toBe(true);
     }
+  });
+
+  // Plan 335 P3: a tile posts to the choice route, and the footer menu opens
+  // the picker. A missing route answers 404 to every choice made.
+  it('carries the routes the profile picker posts to and opens', () => {
+    for (const target of [LOCAL_PROFILE_CHOICE_PATH, LOCAL_PROFILE_PICKER_PATH]) {
+      const segments = target.replace(/^\//, '').split('/').filter(Boolean);
+      expect(servesRoute(...segments), `the picker needs ${target}`).toBe(true);
+    }
+  });
+
+  it('answers the profile refusal with the picker', () => {
+    expect(PAGE_SRC).toMatch(/answerRefusal:\s*profilePicker/);
   });
 
   it('links only to routes this application carries', () => {

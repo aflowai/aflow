@@ -21,6 +21,9 @@ const narrowSourceAliases = {
   ),
 };
 
+// The Next applications import their own modules as `@/…`, as their tsconfig maps it.
+const nextAppsWithSrcAlias = new Set(['@aflow/web', '@aflow/web-local']);
+
 const projectsWithGlobals = new Set(['@aflow/ai-client', '@aflow/input-resolution']);
 const projectsWithLongTests = new Set([
   '@aflow/aflow-executor-api',
@@ -74,7 +77,9 @@ function discoverWorkspaceProjects(): UserWorkspaceConfig[] {
 
         const alias = {
           ...narrowSourceAliases,
-          ...(manifest.name === '@aflow/web' ? { '@': path.join(workspaceRoot, 'src') } : {}),
+          ...(nextAppsWithSrcAlias.has(manifest.name)
+            ? { '@': path.join(workspaceRoot, 'src') }
+            : {}),
         };
 
         return [
