@@ -53,7 +53,7 @@ import {
 } from './localInstanceAuth.js';
 import {
   cacheLocalProfileCount,
-  hasSeveralLocalProfiles,
+  readLocalProfileCount,
   readLocalProfileSessionGeneration,
 } from './localProfiles.js';
 
@@ -754,7 +754,7 @@ export const authPlugin = fp(
         if (!db) throw new Error('No database to read the local profiles from');
         const tenancy = fastify.edition.tenancy;
         if (tenancy.mode !== 'fixed') throw new Error('The local edition pins one tenant');
-        return hasSeveralLocalProfiles(db, tenancy.tenantId);
+        return readLocalProfileCount(db, tenancy.tenantId);
       },
       {
         ttlMs: options.localProfileCountTtlMs,
@@ -764,7 +764,7 @@ export const authPlugin = fp(
       },
     );
 
-    // Plan 335 P2's profile routes call this after an add and after a removal.
+    // Plan 335's profile routes call this after an add, a removal and a PIN change.
     // Otherwise a cached count of one keeps granting a browser with no session
     // the sole-profile owner until the count expires.
     fastify.decorate('dropLocalProfileCount', (): void => {

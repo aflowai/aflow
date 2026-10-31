@@ -112,7 +112,7 @@ the wrong shape, change the plan rather than quietly diverging from it.
 | [332](332-the-plan-page-serves-the-operators-jobs.md)                       | The plan page serves the operator's jobs                       |
 | [333](333-agent-facing-english-is-controlled.md)                            | Agents are told the shape of the English they write            |
 | [334](334-quick-starts-discoverable.md)                                     | A new user finds the quick starts                              |
-| [335](335-local-profiles.md)                                                | Several people share one install as profiles (P1 to P3 built)  |
+| [335](335-local-profiles.md)                                                | Several people share one install as profiles (P1 to P4 built)  |
 | [336](336-mcp-on-the-private-network.md)                                    | An MCP server on the operator's private network connects       |
 | [337](337-plans-the-operator-can-decide-from.md)                            | Plans the operator can decide from (P1, P3 template, P4 built) |
 | [338](338-the-operator-learns-what-waits-on-them.md)                        | The operator learns what waits on them                         |

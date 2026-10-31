@@ -9,16 +9,22 @@ const PROFILES_UNREAD = 'The profiles could not be read. Reload the page to try 
 
 /**
  * Who is using Aflow? (Plan 335 D1). The API refuses a browser with no profile
- * session once the install has a second profile, and the picker answers that
- * refusal. An install with one profile is never refused, so it never sees one.
+ * session once the install has a second profile, or once its one profile is
+ * locked with a PIN (P4), and the picker answers that refusal. An install with
+ * one profile and no PIN is never refused, so it never sees one. A single
+ * locked profile has nothing to choose between, so the picker asks its PIN at
+ * once.
  */
 async function profilePicker(refusal: SpaceLookupRefusal) {
   if (!requiresProfileChoice(refusal)) return null;
   const profiles = await readProfileChoices();
-  return profiles === null ? (
-    <ProfilePicker profiles={[]} notice={PROFILES_UNREAD} />
-  ) : (
-    <ProfilePicker profiles={profiles} />
+  if (profiles === null) return <ProfilePicker profiles={[]} notice={PROFILES_UNREAD} />;
+  const only = profiles.length === 1 ? profiles[0] : undefined;
+  return (
+    <ProfilePicker
+      profiles={profiles}
+      unlocking={only?.hasPin === true ? { profile: only, error: null } : null}
+    />
   );
 }
 

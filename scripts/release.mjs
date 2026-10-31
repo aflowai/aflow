@@ -35,6 +35,7 @@ import {
   applyIdentityProviderKeyMigration,
   applyAgentModelAllowlistMigration,
   applyLocalProfileSessionGenerationMigration,
+  applyLocalProfilePinMigration,
   seedPublicTenantFreemiumDefaults,
   seedModelCatalog,
   applyMigrationsToAllTenants,
@@ -102,6 +103,7 @@ async function main() {
   await step('local profile session generation', () =>
     applyLocalProfileSessionGenerationMigration(sql),
   );
+  await step('local profile PIN', () => applyLocalProfilePinMigration(sql));
 
   // 6b. Freemium spend bounds on the public tenant (generous but bounded).
   const publicTenantId = process.env['DEFAULT_TENANT_ID'];

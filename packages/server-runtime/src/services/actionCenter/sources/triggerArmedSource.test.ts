@@ -10,7 +10,7 @@ vi.mock('@aflow/database', async (importOriginal) => {
   const query = {
     from: () => query,
     where: () => query,
-    orderBy: () => query,
+    orderBy: () => Promise.resolve(table.rows),
     limit: () => Promise.resolve(table.rows),
   };
   return {
@@ -20,7 +20,7 @@ vi.mock('@aflow/database', async (importOriginal) => {
   };
 });
 
-const { announcesArming, createTriggerArmedSource } = await import('./triggerArmedSource.js');
+const { createTriggerArmedSource } = await import('./triggerArmedSource.js');
 
 const TENANT = 'a0000000-0000-4000-8000-000000000001' as TenantId;
 const SPACE = 'b0000000-0000-4000-8000-000000000002';
@@ -78,16 +78,20 @@ const source = createTriggerArmedSource({} as ActionCenterSourceDeps);
 const ctx = { tenantId: TENANT, spaceId: SPACE } as ActionCenterContext;
 
 describe('a renewal is not news of an arming', () => {
-  it('only a schedule armed in chat, and not a renewal of one, announces an arming', () => {
-    expect(announcesArming(armed)).toBe(true);
-    expect(announcesArming(renewal)).toBe(false);
-    expect(announcesArming(schedule(ORIGINAL, { createdBySessionId: null }))).toBe(false);
-  });
-
   it('lists the schedule armed in chat and not its renewal', async () => {
     table.rows = [renewal, armed];
     const items = await source.listOpen({ tenantId: TENANT, spaceId: SPACE });
     expect(items.map((item) => item.id)).toEqual([`trigger-armed:${ORIGINAL}`]);
+  });
+
+  it('lists neither a schedule the operator made nor a deleted or aged-out one', async () => {
+    const old = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+    table.rows = [
+      schedule(ORIGINAL, { createdBySessionId: null }),
+      schedule(ORIGINAL, { status: 'deleted' }),
+      schedule(ORIGINAL, { createdAt: old }),
+    ];
+    expect(await source.listOpen({ tenantId: TENANT, spaceId: SPACE })).toEqual([]);
   });
 
   it('finds no item for a renewal by its id', async () => {
