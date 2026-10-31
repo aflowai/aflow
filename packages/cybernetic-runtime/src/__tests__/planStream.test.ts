@@ -550,6 +550,32 @@ describe('plan.node.next — continue', () => {
     });
   });
 
+  it('briefs a carded node from its goal and criteria, and carries no card section (Plan 337 §5)', async () => {
+    const root = await created({ title: 'Plan 337' });
+    const carded = await created({
+      parentId: root.nodeId,
+      title: 'P2',
+      card: {
+        change: { today: 'CARD-TODAY prose on the rail.', after: 'CARD-AFTER sections.' },
+        why: ['CARD-WHY the operator reads prose.'],
+        affects: ['CARD-AFFECTS the rail.'],
+        risks: [{ risk: 'CARD-RISK long items.', mitigation: 'CARD-MITIGATION short items.' }],
+        questions: [{ question: 'CARD-QUESTION optional?', recommended: 'CARD-RECOMMENDED yes.' }],
+        notDoing: ['CARD-NOT-DOING no migration.'],
+      },
+    });
+    expect((await current(carded.nodeId)).card).toBeDefined();
+
+    const answer = await fire(root.nodeId);
+    expect(answer).toMatchObject({
+      decision: 'continue',
+      node: { nodeId: carded.nodeId, goal: carded.goal, criteria: carded.criteria },
+    });
+    if (answer.decision !== 'continue') throw new Error(answer.decision);
+    expect(answer.node).not.toHaveProperty('card');
+    expect(JSON.stringify(answer)).not.toContain('CARD-');
+  });
+
   it('two overlapping firings with no work in flight: at most one continues to commission', async () => {
     const { root, first } = await stream();
     const decisions = await Promise.all([

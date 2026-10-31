@@ -7,11 +7,13 @@
  * shows the node as the rail read it when the form opened, and writes against
  * the revision that read showed, whatever the page has read since; a node
  * changed since is refused rather than overwritten, and a refusal reads it
- * again.
+ * again. On a decision with a card, **Decide** opens with each open question
+ * and its recommended answer, one line each (Plan 337 D3).
  */
 import { useState } from 'react';
 import { Button, Column, Row, Text, Textarea } from '@aflow/design-system';
 import type { PlanNode, PlanNodeStatus, PlanTreeNode } from '@aflow/schemas';
+import { planCardDecidePrefill } from '../../lib/plan-card.js';
 
 /** What the operator asks of one node: close it, against the revision they read. */
 export interface PlanNodeCloseRequest {
@@ -99,6 +101,35 @@ export function PlanNodeCloseControl({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { shown, movedSinceOpened, setPinned } = usePinnedNode(read, choosing !== null);
+  // Decide on a carded decision opens with each question and its recommended
+  // answer (Plan 337 D3). The prefill remembers the revision and the text it
+  // was made from. A refusal can pin a rewritten card: an untouched field takes
+  // the new questions, and an edited one stays as the operator wrote it, with a notice.
+  const [prefill, setPrefill] = useState<{
+    revision: number;
+    text: string;
+    cardChanged: boolean;
+  } | null>(null);
+  const deciding = choosing === 'done' && node.kind === 'decide';
+  if (choosing === null) {
+    if (prefill !== null) setPrefill(null);
+  } else if (deciding && shown !== undefined) {
+    if (prefill === null) {
+      const made = planCardDecidePrefill(shown.card);
+      setPrefill({ revision: shown.revision, text: made, cardChanged: false });
+      if (made.length > 0 && text.length === 0) setText(made);
+    } else if (prefill.revision !== shown.revision) {
+      const made = planCardDecidePrefill(shown.card);
+      const untouched = text === prefill.text;
+      if (made !== prefill.text && untouched) setText(made);
+      setPrefill({
+        revision: shown.revision,
+        text: made,
+        cardChanged: prefill.cardChanged || (made !== prefill.text && !untouched),
+      });
+    }
+  }
+  const fromCard = deciding && (shown?.card?.questions.length ?? 0) > 0;
   const closedNow =
     read.node !== undefined && isClosedStatus(read.node.status) ? read.node.status : undefined;
 
@@ -186,12 +217,24 @@ export function PlanNodeCloseControl({
         aria-label={copy.field}
         placeholder={copy.field}
         value={text}
-        rows={3}
+        rows={fromCard ? Math.min(12, Math.max(3, text.split('\n').length + 1)) : 3}
         disabled={pending}
         onChange={(event) => {
           setText(event.target.value);
         }}
       />
+      {prefill?.cardChanged === true && (
+        <Text size="xs" tone="warning" data-plan-decide-card-changed>
+          The card's questions changed after you edited this field. Read them above before you
+          record the decision.
+        </Text>
+      )}
+      {fromCard && (
+        <Text size="xs" variant="muted" data-plan-decide-hint>
+          Each line holds one open question and the recommended answer. Edit any line, then record
+          the decision. The text becomes the outcome.
+        </Text>
+      )}
       {choosing === 'dropped' && openUnder && (
         <Text size="xs" variant="muted">
           The open steps under it leave the plan with it.

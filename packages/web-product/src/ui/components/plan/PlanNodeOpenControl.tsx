@@ -11,7 +11,9 @@
  * On a blocked step the form is open from the start (Plan 337 P4): its field
  * is the operator's instructions for the work, which the next brief opens
  * with, and **Revise** beside **Approve** sends the same words back as a
- * request to rewrite the proposal, the step left blocked.
+ * request to rewrite the proposal, the step left blocked. On a step with a
+ * card, Approve also offers an answer to each open question. The answers and
+ * the instructions go out as the one `why` of one open write (Plan 337 D3).
  */
 import { useState } from 'react';
 import { Button, Column, Row, Text, Textarea, Input } from '@aflow/design-system';
@@ -27,6 +29,7 @@ import {
   type PlanNodeCloseAnswer,
   type PlanNodeRead,
 } from './PlanNodeCloseControl.js';
+import { planCardApproveWhy } from '../../lib/plan-card.js';
 
 /** What the operator asks of one node: back to active, against the revision they read. */
 export type PlanNodeOpenRequest = PlanNodeOpen & { nodeId: string };
@@ -37,6 +40,10 @@ export type PlanNodeOpener = (request: PlanNodeOpenRequest) => Promise<PlanNodeC
 export type PlanNodeReviseRequest = PlanNodeRevise & { nodeId: string };
 
 export type PlanNodeReviser = (request: PlanNodeReviseRequest) => Promise<PlanNodeCloseAnswer>;
+
+function answerKey(index: number, question: string): string {
+  return `${String(index)}\u0000${question}`;
+}
 
 /** The approve field: what the words are for, and how they start. */
 export const PLAN_APPROVE_FIELD_LABEL = 'Instructions for the work (optional)';
@@ -64,6 +71,12 @@ export function PlanNodeOpenControl({
   // An approve shows its field before the click: the instructions are the point of it.
   const opening = verb === 'approve' || clickedOpen;
   const [text, setText] = useState('');
+  /**
+   * The operator's answer to each open question of the card, keyed by the
+   * question's place and words. A re-pin after a refusal may show a rewritten
+   * card, and an answer never moves to a question it was not written for.
+   */
+  const [answers, setAnswers] = useState<Record<string, string>>({});
   const [spend, setSpend] = useState('');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -86,7 +99,22 @@ export function PlanNodeOpenControl({
   }
 
   const why = text.trim();
-  const tooLong = why.length > PLAN_NODE_OPEN_WHY_MAX_CHARS;
+  // On a carded step, Approve answers each open question (Plan 337 D3). One
+  // left empty takes its recommended answer, so Approve with no words still
+  // records every recommended answer in the note.
+  const questions = verb === 'approve' ? (shown?.card?.questions ?? []) : [];
+  const answerKeys = questions.map((q, index) => answerKey(index, q.question));
+  const openWhy =
+    verb === 'approve'
+      ? (planCardApproveWhy(
+          questions,
+          answerKeys.map((key) => answers[key] ?? ''),
+          text,
+        ) ?? '')
+      : why;
+  // Revise sends the instructions only, so only their length can refuse it.
+  const wordsTooLong = why.length > PLAN_NODE_OPEN_WHY_MAX_CHARS;
+  const tooLong = wordsTooLong || openWhy.length > PLAN_NODE_OPEN_WHY_MAX_CHARS;
   const openNow =
     read.node !== undefined && (read.node.status === 'active' || read.node.status === 'waiting')
       ? read.node.status
@@ -94,6 +122,7 @@ export function PlanNodeOpenControl({
   const reset = () => {
     setOpening(false);
     setText('');
+    setAnswers({});
     setSpend('');
     setError(null);
   };
@@ -134,7 +163,7 @@ export function PlanNodeOpenControl({
     if (!shown) return;
     const parsed = PlanNodeOpenSchema.safeParse({
       expectedRevision: shown.revision,
-      ...(why.length > 0 ? { why } : {}),
+      ...(openWhy.length > 0 ? { why: openWhy } : {}),
       ...(spend.trim() !== '' ? { spendCents: Number(spend) } : {}),
     });
     if (!parsed.success) {
@@ -188,6 +217,34 @@ export function PlanNodeOpenControl({
           {`This step is ${openNow} now.`}
         </Text>
       )}
+      {questions.length > 0 && (
+        <Column gap="xs" data-plan-approve-questions>
+          <Text size="xs" weight="medium">
+            Answers to the open questions (optional)
+          </Text>
+          {questions.map((q, index) => (
+            <Column gap="xs" key={index} data-plan-approve-question={index}>
+              <Text size="sm" color="secondary">
+                {q.question}
+              </Text>
+              <Input
+                aria-label={`Answer to question ${String(index + 1)}`}
+                placeholder={`Recommended: ${q.recommended}`}
+                disabled={pending}
+                value={answers[answerKey(index, q.question)] ?? ''}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setAnswers((held) => ({ ...held, [answerKey(index, q.question)]: value }));
+                }}
+              />
+            </Column>
+          ))}
+          <Text size="xs" variant="muted" data-plan-approve-answers-hint>
+            An empty answer takes the recommended answer. Approve writes each question and its
+            answer into the note, on the Approved: line.
+          </Text>
+        </Column>
+      )}
       {verb === 'approve' && (
         <>
           <Text size="xs" weight="medium">
@@ -195,9 +252,12 @@ export function PlanNodeOpenControl({
           </Text>
           {words}
           <Text size="xs" variant="muted" data-plan-approve-hint>
-            {onRevise !== undefined
-              ? 'Approve starts the work, and its brief opens with these words. Revise keeps the step blocked and asks the Helmsman to rewrite it from them.'
-              : 'Approve starts the work, and its brief opens with these words.'}
+            {(questions.length > 0
+              ? 'Approve starts the work. Its brief opens with the answers, and then with these words.'
+              : 'Approve starts the work, and its brief opens with these words.') +
+              (onRevise !== undefined
+                ? ' Revise keeps the step blocked and asks the Helmsman to rewrite it from these words.'
+                : '')}
           </Text>
         </>
       )}
@@ -241,7 +301,13 @@ export function PlanNodeOpenControl({
           <Button
             size="sm"
             variant="secondary"
-            disabled={blocked || why.length === 0 || shown.status !== 'blocked'}
+            disabled={
+              pending ||
+              shown === undefined ||
+              wordsTooLong ||
+              why.length === 0 ||
+              shown.status !== 'blocked'
+            }
             onClick={() => {
               void revise();
             }}

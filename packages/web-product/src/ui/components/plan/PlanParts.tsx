@@ -13,7 +13,16 @@
  */
 import { useState, type CSSProperties, type FocusEvent, type ReactNode } from 'react';
 import Link from 'next/link';
-import { Badge, Icon, IconButton, Text, Tooltip, useMediaQuery } from '@aflow/design-system';
+import {
+  AnimatedHeight,
+  Badge,
+  Column,
+  Icon,
+  IconButton,
+  Text,
+  Tooltip,
+  useMediaQuery,
+} from '@aflow/design-system';
 import type { PlanBoardColumn, PlanNodeRun, PlanRootState } from '@aflow/schemas';
 import { PLAN_NEXT_LABEL, pullRequestChipLabel, runKindLabel } from '../../lib/plan-board.js';
 import { spaceRoute } from '../../lib/space-routes.js';
@@ -98,6 +107,25 @@ export function GroupLabel({ children }: { children: ReactNode }) {
     </Text>
   );
 }
+
+/**
+ * One labelled part of the rail, as the skill inspector sections its own. Its
+ * body grows and shrinks as it unfolds and folds, a note shown or All runs
+ * listed.
+ */
+export function RailSection({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <Column gap="xs" role="group" aria-label={label} data-plan-rail-section={label}>
+      <GroupLabel>{label}</GroupLabel>
+      <AnimatedHeight>
+        <Column gap="xs">{children}</Column>
+      </AnimatedHeight>
+    </Column>
+  );
+}
+
+/** A rail section's text, in the inspector's prose. */
+export const railProse = { lineHeight: 1.55, whiteSpace: 'pre-wrap' } as const;
 
 /**
  * Whether a row or card is pointed at or holds focus, which reveals its quiet

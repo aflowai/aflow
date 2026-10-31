@@ -11,13 +11,14 @@
  * and for a stranded one reopen the closed step above it (Plan 332 D6). A
  * blocked step's Approve carries the operator's instructions, **Revise** sends
  * them back for a rewrite, and **Discuss** opens the space chat about the step
- * (Plan 337 P4). It is
+ * (Plan 337 P4). A step with a decision card shows the card's sections above
+ * its goal, and the goal folds. **Read the plan** opens the step's newest plan
+ * document (Plan 337 P2). It is
  * the page's inspector, headed, sectioned and set as the skill designer's is.
  */
-import { useState, type ReactNode } from 'react';
+import { useState } from 'react';
 import Link from 'next/link';
 import {
-  AnimatedHeight,
   Badge,
   Button,
   Column,
@@ -61,13 +62,16 @@ import {
   type PlanNodeReviser,
 } from './PlanNodeOpenControl.js';
 import {
-  GroupLabel,
   NextMarker,
   PLAN_ORB_SIZE,
   PlanRunLine,
   PlanStepOrb,
   PullRequestChip,
+  RailSection,
+  railProse,
 } from './PlanParts.js';
+import { PlanCardSections } from './PlanCardSections.js';
+import { planDocumentTarget } from '../../lib/plan-card.js';
 
 /** Run links the rail lists before "All runs". */
 export const PLAN_RAIL_RUNS = 5;
@@ -115,25 +119,6 @@ function RailDismiss({ onDismiss }: { onDismiss: () => void }) {
   );
 }
 
-/**
- * One labelled part of the rail, as the skill inspector sections its own. Its
- * body grows and shrinks as it unfolds and folds, a note shown or All runs
- * listed.
- */
-function Section({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <Column gap="xs" role="group" aria-label={label} data-plan-rail-section={label}>
-      <GroupLabel>{label}</GroupLabel>
-      <AnimatedHeight>
-        <Column gap="xs">{children}</Column>
-      </AnimatedHeight>
-    </Column>
-  );
-}
-
-/** A section's text, in the inspector's prose. */
-const prose = { lineHeight: 1.55, whiteSpace: 'pre-wrap' } as const;
-
 function RunLine({ link, spaceSlug }: { link: PlanNodeLink; spaceSlug: string }) {
   const status = runLinkStatus(link.label);
   return (
@@ -159,6 +144,33 @@ function RunLine({ link, spaceSlug }: { link: PlanNodeLink; spaceSlug: string })
 }
 
 const listStyle = { listStyle: 'none', margin: 0, padding: 0 } as const;
+
+/**
+ * **Read the plan** (Plan 337 D2): the newest document link's ref. A URL
+ * opens in a new tab. A path and a sha, from a folder with no remote, show as
+ * text to copy.
+ */
+function ReadThePlan({ documentRef }: { documentRef: string }) {
+  const target = planDocumentTarget(documentRef);
+  return (
+    <Row gap="xs" align="center" wrap data-plan-document>
+      {'href' in target ? (
+        <a href={target.href} target="_blank" rel="noopener noreferrer" style={linkStyle}>
+          Read the plan
+        </a>
+      ) : (
+        <>
+          <Text size="sm" weight="medium">
+            Read the plan:
+          </Text>
+          <Text variant="mono" size="xs" data-plan-document-ref>
+            {target.text}
+          </Text>
+        </>
+      )}
+    </Row>
+  );
+}
 
 /** Every run link of the node, a page at a time, newest first. */
 function AllRuns({
@@ -342,6 +354,7 @@ export function PlanRail({
 }: PlanRailProps) {
   const [allRuns, setAllRuns] = useState(false);
   const [noteOpen, setNoteOpen] = useState(false);
+  const [goalOpen, setGoalOpen] = useState(false);
   // Read when the card is opened and again whenever it is, never from the
   // tree: the goal and criteria are what the operator closes it against, and
   // the revision a write is pinned to is the one they were read at.
@@ -370,6 +383,13 @@ export function PlanRail({
     ),
   });
   const conversationLinks = conversations.data?.links ?? [];
+  // The plan document behind the step (Plan 337 D2): links come newest first,
+  // so a page of one is the newest.
+  const documents = useApiQuery<PlanNodeDetailOutput>({
+    key: ['space', spaceId, 'plan', 'node', node.nodeId, 'links', 'document'],
+    path: planNodePath(spaceId, node.nodeId, 'linkKind=document&limit=1'),
+  });
+  const documentLink = documents.data?.links[0];
   // The closed step above a stranded one, read fresh as the rail's own node
   // is: its revision is what a Reopen of it is pinned to.
   const ancestorDetail = useApiQuery<PlanNodeDetailOutput>({
@@ -379,6 +399,8 @@ export function PlanRail({
     enabled: closedAncestor !== undefined,
   });
   const full = detail.data?.node;
+  const card = full?.card;
+  const criteriaLabel = full?.kind === 'decide' ? 'Decided when' : 'Done when';
   // The step's own read says whether a run is on it; until it answers, a card
   // says. A lane row carries no activity, so it reads idle until the read
   // answers: a waiting step whose run has ended never shows running first.
@@ -437,32 +459,61 @@ export function PlanRail({
           </Text>
         )}
       </Row>
+      {documentLink !== undefined && <ReadThePlan documentRef={documentLink.ref} />}
       {detail.error && (
         <Text size="sm" tone="danger" role="alert">
           {`This step could not be read: ${detail.error.message}`}
         </Text>
       )}
       {node.noteHead !== undefined && (
-        <Section label="Now">
-          <Text size="base" color="secondary" style={prose}>
+        <RailSection label="Now">
+          <Text size="base" color="secondary" style={railProse}>
             {node.noteHead}
           </Text>
-        </Section>
+        </RailSection>
       )}
-      <Section label="Goal">
-        <Text size="base" color="secondary" style={prose}>
-          {full?.goal ?? node.goalHead}
-        </Text>
-      </Section>
-      {full !== undefined && (
-        <Section label={full.kind === 'decide' ? 'Decided when' : 'Done when'}>
-          <Text size="base" color="secondary" style={prose}>
-            {full.criteria}
-          </Text>
-        </Section>
+      {card !== undefined && full !== undefined ? (
+        <>
+          <PlanCardSections card={card} criteria={full.criteria} criteriaLabel={criteriaLabel} />
+          {/* Under a card the goal is the brief, which the card already says for the operator. */}
+          <RailSection label="Goal">
+            <Row>
+              <Button
+                size="sm"
+                variant="ghost"
+                aria-expanded={goalOpen}
+                onClick={() => {
+                  setGoalOpen((held) => !held);
+                }}
+              >
+                {goalOpen ? 'Hide goal' : 'Show goal'}
+              </Button>
+            </Row>
+            {goalOpen && (
+              <Text size="base" color="secondary" style={railProse} data-plan-goal>
+                {full.goal}
+              </Text>
+            )}
+          </RailSection>
+        </>
+      ) : (
+        <>
+          <RailSection label="Goal">
+            <Text size="base" color="secondary" style={railProse}>
+              {full?.goal ?? node.goalHead}
+            </Text>
+          </RailSection>
+          {full !== undefined && (
+            <RailSection label={criteriaLabel}>
+              <Text size="base" color="secondary" style={railProse}>
+                {full.criteria}
+              </Text>
+            </RailSection>
+          )}
+        </>
       )}
       {full?.note !== undefined && (
-        <Section label="Working note">
+        <RailSection label="Working note">
           <Row>
             <Button
               size="sm"
@@ -476,14 +527,14 @@ export function PlanRail({
             </Button>
           </Row>
           {noteOpen && (
-            <Text size="base" color="secondary" style={prose} data-plan-note>
+            <Text size="base" color="secondary" style={railProse} data-plan-note>
               {full.note}
             </Text>
           )}
-        </Section>
+        </RailSection>
       )}
       {full?.outcome !== undefined && (
-        <Section label="Outcome">
+        <RailSection label="Outcome">
           <div
             data-plan-outcome
             style={{
@@ -492,14 +543,14 @@ export function PlanRail({
               padding: 'var(--space-2)',
             }}
           >
-            <Text size="base" color="secondary" style={prose}>
+            <Text size="base" color="secondary" style={railProse}>
               {full.outcome}
             </Text>
           </div>
-        </Section>
+        </RailSection>
       )}
       {(inFlight.length > 0 || runLinks.length > 0) && (
-        <Section label="Runs">
+        <RailSection label="Runs">
           <ul style={listStyle}>
             {inFlight.map((run) => (
               <li key={run.runId}>
@@ -529,10 +580,10 @@ export function PlanRail({
               </Button>
             </Row>
           )}
-        </Section>
+        </RailSection>
       )}
       {(findings.data?.links.length ?? 0) > 0 && (
-        <Section label="Carried forward">
+        <RailSection label="Carried forward">
           <ul style={listStyle}>
             {findings.data?.links.map((link) => (
               <li key={link.ref}>
@@ -545,9 +596,9 @@ export function PlanRail({
               {`${String((findings.data?.linksTotal ?? 0) - (findings.data?.links.length ?? 0))} more`}
             </Text>
           )}
-        </Section>
+        </RailSection>
       )}
-      <Section label="Discuss">
+      <RailSection label="Discuss">
         <Row gap="xs" align="center" wrap>
           <Link
             href={spaceRoute(
@@ -579,7 +630,7 @@ export function PlanRail({
             ))}
           </ul>
         )}
-      </Section>
+      </RailSection>
       {/* The operator's own writes, apart from what the step says, as the designer keeps its save apart. */}
       <Column
         gap="sm"
