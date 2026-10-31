@@ -168,7 +168,7 @@ function PlanCardView({
               ...(move.controls !== null ? { paddingRight: 'var(--space-12)' } : {}),
             }}
           >
-            <span style={{ display: 'inline-flex', paddingTop: 3 }}>
+            <span style={{ display: 'inline-flex', marginBlock: -4 }}>
               <PlanStepOrb column={column} runInFlight={node.activity === 'in_flight'} />
             </span>
             <Text
