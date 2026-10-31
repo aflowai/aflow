@@ -8,7 +8,7 @@ import { configureLogging } from '@aflow/observability';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Redis from 'ioredis-mock';
 import type { Redis as RedisType } from 'ioredis';
-import { PLAN_NODE_MERGE_WAIT_LINE, PLAN_STATE_LABELS } from '@aflow/schemas';
+import { PLAN_NODE_MERGE_WAIT_LINE, PLAN_STATE_LABELS, planItemSummary } from '@aflow/schemas';
 import { InMemoryPlanNodeStore } from '../../../../../cybernetic-runtime/src/__tests__/planStoreFake.js';
 
 let store: InMemoryPlanNodeStore;
@@ -21,7 +21,7 @@ vi.mock('@aflow/cybernetic-runtime', async (original) => ({
 
 import { askedKey, createPlanNode, updatePlanNode } from '@aflow/cybernetic-runtime';
 import type { ActionCenterContext } from '../types.js';
-import { createPlanAskSource, planItemSummary } from '../sources/planAskSource.js';
+import { createPlanAskSource } from '../sources/planAskSource.js';
 
 const scope = {
   tenantId: 'a0000000-0000-4000-8000-000000000338' as never,
