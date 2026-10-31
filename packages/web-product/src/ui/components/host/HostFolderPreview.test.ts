@@ -163,6 +163,7 @@ describe('a folder’s preview on the machine page', () => {
     expect(text).toContain('yarn dev --port {port}');
     expect(text).toContain('free port, a new one each run');
     expect(text).toContain('Ready at / (default)');
+    expect(text).toContain('Within 120 s (default)');
     expect(text).toContain(`UI files (default): ${defaultFolderUiPaths().join(', ')}`);
     expect(text).not.toContain(PREVIEW_NOT_DECLARED);
     expect(text).not.toContain('aflow folder hb_site preview');
@@ -184,12 +185,19 @@ describe('a folder’s preview on the machine page', () => {
   it('shows a fixed port and the folder’s own ready path and UI paths as declared', async () => {
     await show({
       hostname: 'laptop',
-      declared: { command: 'pnpm dev', port: 4321, readyPath: '/health', uiPaths: ['src/**'] },
+      declared: {
+        command: 'pnpm dev',
+        port: 4321,
+        readyPath: '/health',
+        readyWithinSeconds: 900,
+        uiPaths: ['src/**'],
+      },
       detectedWebApps: [],
     });
     const text = container.textContent ?? '';
     expect(text).toContain('Port: 4321');
     expect(text).toContain('Ready at /health');
+    expect(text).toContain('Within 900 s');
     expect(text).not.toContain('(default)');
     expect(text).toContain('UI files: src/**');
   });
@@ -211,6 +219,7 @@ describe('a folder’s preview on the machine page', () => {
     });
     await type('Preview command', 'yarn dev --port {port}');
     await type('Ready path', '/health');
+    await type('Ready within seconds', '900');
     await type('UI paths', 'apps/web/**\n\n  src/**/*.css ');
     await type('Web app directories', 'apps/web');
     await act(async () => {
@@ -223,6 +232,7 @@ describe('a folder’s preview on the machine page', () => {
         preview: {
           command: 'yarn dev --port {port}',
           readyPath: '/health',
+          readyWithinSeconds: 900,
           uiPaths: ['apps/web/**', 'src/**/*.css'],
           webAppDirs: ['apps/web'],
         },
@@ -253,6 +263,21 @@ describe('a folder’s preview on the machine page', () => {
     expect(container.textContent).toContain('is not a port');
 
     await type('Preview port', '5173');
+    await type('Ready within seconds', '15m');
+    await act(async () => {
+      button('Save preview').click();
+    });
+    expect(lastRequest('PUT')).toBeUndefined();
+    expect(container.textContent).toContain('is not a number of seconds');
+
+    await type('Ready within seconds', '1801');
+    await act(async () => {
+      button('Save preview').click();
+    });
+    expect(lastRequest('PUT')).toBeUndefined();
+    expect(container.textContent).toContain('at most 1800 seconds');
+
+    await type('Ready within seconds', '');
     await act(async () => {
       button('Save preview').click();
     });

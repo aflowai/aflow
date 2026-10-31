@@ -26,7 +26,7 @@ import { stackOwnPorts, type StackPortOwner } from '@aflow/lib';
 import { portTaken } from '@aflow/lib/port-probe';
 import {
   FOLDER_PREVIEW_PORT_PLACEHOLDER,
-  FOLDER_PREVIEW_READY_TIMEOUT_MS,
+  FOLDER_PREVIEW_READY_WITHIN_MAX_SECONDS,
   HOST_CHECK_OUTPUT_HEAD_BYTES,
   type HostResolvedFolderPreview,
 } from '@aflow/schemas';
@@ -261,8 +261,9 @@ export interface StartPreviewInput {
    * would otherwise hold a stalled harness's idle deadline open to the ceiling.
    */
   readonly onProgress?: () => void;
-  readonly readyTimeoutMs?: number;
   readonly pollMs?: number;
+  /** The clock the wait is measured on. */
+  readonly now?: () => number;
   readonly start?: typeof startUnconfinedService;
   readonly fetch?: typeof fetch;
 }
@@ -357,6 +358,8 @@ export async function startPreview(input: StartPreviewInput): Promise<StartedPre
     return kept.text();
   };
 
+  const now = input.now ?? Date.now;
+  const startedAt = now();
   const start = input.start ?? startUnconfinedService;
   const running: RunningService = start({
     // A shell, because the declaration is one command line as a person would
@@ -394,8 +397,7 @@ export async function startPreview(input: StartPreviewInput): Promise<StartedPre
   };
 
   const fetchImpl = input.fetch ?? loopbackReadyFetch;
-  const timeoutMs = input.readyTimeoutMs ?? FOLDER_PREVIEW_READY_TIMEOUT_MS;
-  const deadline = Date.now() + timeoutMs;
+  const declaredSeconds = input.preview.readyWithinSeconds;
   let host: PreviewLoopbackHost | undefined;
   try {
     for (;;) {
@@ -414,10 +416,15 @@ export async function startPreview(input: StartPreviewInput): Promise<StartedPre
       host = await answeringHost(readyUrls, fetchImpl, input.signal);
       if (host !== undefined) break;
       input.onProgress?.();
-      if (Date.now() >= deadline) {
+      const waitedMs = now() - startedAt;
+      if (waitedMs >= declaredSeconds * 1000) {
         throw new PreviewError(
-          `The preview \`${command}\` did not answer at ${askedAt} within ` +
-            `${String(Math.round(timeoutMs / 1000))} s. The last lines it printed:\n` +
+          `The preview \`${command}\` did not answer at ${askedAt}. It was waited on for ` +
+            `${String(Math.round(waitedMs / 1000))} s, and its declaration gives it ` +
+            `${String(declaredSeconds)} s to answer. A project that builds before it serves ` +
+            `declares more with \`aflow folder ${input.bindingId} preview … --ready-within ` +
+            `<seconds>\`, up to ${String(FOLDER_PREVIEW_READY_WITHIN_MAX_SECONDS)}. ` +
+            'The last lines it printed:\n' +
             checkTail(log()),
           'not_ready',
         );

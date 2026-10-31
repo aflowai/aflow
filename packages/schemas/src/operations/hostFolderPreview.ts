@@ -37,6 +37,13 @@ export const FOLDER_PREVIEW_COMMAND_MAX_LENGTH = 4096;
 export const FOLDER_PREVIEW_PATH_MAX_LENGTH = 1024;
 export const FOLDER_PREVIEW_MAX_GLOBS = 256;
 export const FOLDER_PREVIEW_MAX_WEB_APP_DIRS = 64;
+/** How long, in seconds, a run's preview is waited on to answer when the folder declares no figure. */
+export const FOLDER_PREVIEW_READY_WITHIN_DEFAULT_SECONDS = 120;
+/**
+ * The longest a folder may declare: a ceiling on how long one run's wait holds
+ * its step open, not a judgement of how long a project's build should take.
+ */
+export const FOLDER_PREVIEW_READY_WITHIN_MAX_SECONDS = 1_800;
 
 /**
  * The dependencies that make a `package.json` a web app's when the machine
@@ -126,6 +133,22 @@ export const HostFolderPreviewSchema = z
       .describe(
         `The path that answers once the preview is up. Absent, \`${FOLDER_PREVIEW_READY_PATH_DEFAULT}\`.`,
       ),
+    readyWithinSeconds: z
+      .number()
+      .int()
+      .min(1)
+      .max(FOLDER_PREVIEW_READY_WITHIN_MAX_SECONDS, {
+        message:
+          `A preview is waited on for at most ${String(FOLDER_PREVIEW_READY_WITHIN_MAX_SECONDS)} ` +
+          'seconds, thirty minutes. Give a whole number of seconds up to that.',
+      })
+      .optional()
+      .describe(
+        'How many seconds the ready path may take to answer once the command starts: the time ' +
+          'a project that builds before it serves needs. Absent, ' +
+          `${String(FOLDER_PREVIEW_READY_WITHIN_DEFAULT_SECONDS)}. At most ` +
+          `${String(FOLDER_PREVIEW_READY_WITHIN_MAX_SECONDS)}.`,
+      ),
     uiPaths: z
       .array(FolderRelativeGlobSchema)
       .min(1)
@@ -166,7 +189,7 @@ export const HostFolderPreviewSchema = z
   })
   .describe(
     'How the folder is shown working: the command that serves it, the port, the path that ' +
-      'answers once it is up, and the files that count as its UI. Set by a person, on the ' +
+      'answers once it is up, how long that may take, and the files that count as its UI. Set by a person, on the ' +
       'machine with `aflow folder <bindingId> preview` or on the machine page; no operation ' +
       'sets it.',
   );
@@ -190,6 +213,8 @@ export interface HostResolvedFolderPreview {
   /** Absent: each run takes a free port. */
   readonly port?: number;
   readonly readyPath: string;
+  /** How long the ready path is waited on, in seconds. */
+  readonly readyWithinSeconds: number;
   readonly uiPaths: readonly string[];
   readonly webAppDirs: readonly string[];
 }
@@ -204,9 +229,6 @@ export function defaultFolderUiPaths(webAppDirs: readonly string[] = []): string
     }),
   ];
 }
-
-/** How long the executor waits for a run's preview to answer on its ready path (Plan 320 D19). */
-export const FOLDER_PREVIEW_READY_TIMEOUT_MS = 120_000;
 
 /**
  * The `preview` a skill's rule asks for (Plan 320 D20, D21): the preview and
@@ -284,6 +306,7 @@ export function resolveFolderPreview(preview: HostFolderPreview): HostResolvedFo
     command: preview.command,
     ...(preview.port !== undefined ? { port: preview.port } : {}),
     readyPath: preview.readyPath ?? FOLDER_PREVIEW_READY_PATH_DEFAULT,
+    readyWithinSeconds: preview.readyWithinSeconds ?? FOLDER_PREVIEW_READY_WITHIN_DEFAULT_SECONDS,
     uiPaths: preview.uiPaths ?? defaultFolderUiPaths(webAppDirs),
     webAppDirs,
   };

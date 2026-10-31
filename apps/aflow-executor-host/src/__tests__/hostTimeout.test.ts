@@ -8,13 +8,16 @@ import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { FOLDER_PREVIEW_READY_TIMEOUT_MS, HOST_CHECKS_TIMEOUT_DEFAULT_MS } from '@aflow/schemas';
+import {
+  FOLDER_PREVIEW_READY_WITHIN_DEFAULT_SECONDS,
+  HOST_CHECKS_TIMEOUT_DEFAULT_MS,
+} from '@aflow/schemas';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   HOST_CHECK_CHECKOUT_MARGIN_MS,
   HOST_OUTER_TIMEOUT_MARGIN_MS,
-  HOST_PREVIEW_MARGIN_MS,
+  HOST_PREVIEW_STOP_MARGIN_MS,
   HOST_STREAM_IDLE_MS,
   resolveHostTimeout,
 } from '../handlers/hostTimeout.js';
@@ -62,20 +65,50 @@ describe('resolveHostTimeout', () => {
     });
   });
 
-  it('gives a run with a preview the preview’s wait on top of the harness’s own time', async () => {
-    const spec = await resolveFor(
-      ctxFor('host.harness.run', {
-        bindingId: 'b',
-        task: 't',
-        timeoutMs: 1_800_000,
-        browser: { profile: 'ephemeral' },
-        preview: true,
+  const previewRun = (bindingId: string) =>
+    ctxFor('host.harness.run', {
+      bindingId,
+      task: 't',
+      timeoutMs: 1_800_000,
+      browser: { profile: 'ephemeral' },
+      preview: true,
+    });
+
+  it('gives a run with a preview the default wait on top of the harness’s own time', async () => {
+    expect(await resolveFor(previewRun('b'))).toEqual({
+      idleMs: HOST_STREAM_IDLE_MS,
+      maxMs:
+        1_800_000 +
+        FOLDER_PREVIEW_READY_WITHIN_DEFAULT_SECONDS * 1000 +
+        HOST_PREVIEW_STOP_MARGIN_MS +
+        HOST_OUTER_TIMEOUT_MARGIN_MS,
+    });
+  });
+
+  it('gives a run with a preview the wait its folder declares', async () => {
+    const policyPath = join(
+      await mkdtemp(join(tmpdir(), 'host-timeout-preview-')),
+      'host-policy.json',
+    );
+    await writeFile(
+      policyPath,
+      JSON.stringify({
+        version: 1,
+        bindings: [
+          {
+            id: 'hb_aflow',
+            root: '/tmp/aflow',
+            mode: 'readwrite',
+            allowsExecution: true,
+            spaceId: 'space-a',
+            preview: { command: 'yarn dev --port {port}', readyWithinSeconds: 900 },
+          },
+        ],
       }),
     );
-    expect(HOST_PREVIEW_MARGIN_MS).toBeGreaterThan(FOLDER_PREVIEW_READY_TIMEOUT_MS);
-    expect(spec).toEqual({
+    expect(await resolveFor(previewRun('hb_aflow'), policyPath)).toEqual({
       idleMs: HOST_STREAM_IDLE_MS,
-      maxMs: 1_800_000 + HOST_PREVIEW_MARGIN_MS + HOST_OUTER_TIMEOUT_MARGIN_MS,
+      maxMs: 1_800_000 + 900_000 + HOST_PREVIEW_STOP_MARGIN_MS + HOST_OUTER_TIMEOUT_MARGIN_MS,
     });
   });
 

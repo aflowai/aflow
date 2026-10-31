@@ -11,10 +11,12 @@
 import type { ExecutorContext, TimeoutSpec } from '@aflow/executor-runtime';
 import { positiveMsEnv } from '@aflow/lib';
 import {
-  FOLDER_PREVIEW_READY_TIMEOUT_MS,
+  FOLDER_PREVIEW_READY_WITHIN_DEFAULT_SECONDS,
+  type HostFolderPreview,
   HostCommitCheckInputSchema,
   HostHarnessRunInputSchema,
   HostProcessExecInputSchema,
+  resolveFolderPreview,
 } from '@aflow/schemas';
 
 import { loadHostPolicy } from '../bindings.js';
@@ -33,13 +35,23 @@ export const HOST_OUTER_TIMEOUT_MARGIN_MS = 30_000;
  */
 export const HOST_CHECK_CHECKOUT_MARGIN_MS = 120_000;
 
+/** Room for a run's preview to stop at the end, beside its wait to answer. */
+export const HOST_PREVIEW_STOP_MARGIN_MS = 15_000;
+
 /**
- * Room around a run's preview (Plan 320 D19): its bounded wait to answer, and
- * its stop at the end. Added to the ceiling rather than taken from the
- * harness's own `timeoutMs`, which starts only once the preview is up, so a
- * slow start neither eats the harness's time nor trips the reap.
+ * Room around a run's preview (Plan 320 D19): the wait its folder declares for
+ * it to answer, and its stop at the end. Added to the ceiling rather than
+ * taken from the harness's own `timeoutMs`, which starts only once the preview
+ * is up, so a slow start neither eats the harness's time nor trips the reap.
+ * A folder with no preview takes the default wait, and its run is refused anyway.
  */
-export const HOST_PREVIEW_MARGIN_MS = FOLDER_PREVIEW_READY_TIMEOUT_MS + 15_000;
+export function hostPreviewMarginMs(preview: HostFolderPreview | undefined): number {
+  const seconds =
+    preview === undefined
+      ? FOLDER_PREVIEW_READY_WITHIN_DEFAULT_SECONDS
+      : resolveFolderPreview(preview).readyWithinSeconds;
+  return seconds * 1000 + HOST_PREVIEW_STOP_MARGIN_MS;
+}
 
 /**
  * A check's deadline is the folder's, read from the machine's policy: the step
@@ -65,16 +77,21 @@ async function checkDeadlineMs(raw: unknown, policyPath: string): Promise<number
     : timeoutMs + HOST_CHECK_CHECKOUT_MARGIN_MS + HOST_OUTER_TIMEOUT_MARGIN_MS;
 }
 
-function streamCeilingMs(operationId: string, raw: unknown): number | undefined {
+async function streamCeilingMs(
+  operationId: string,
+  raw: unknown,
+  policyPath: string,
+): Promise<number | undefined> {
   if (operationId === 'host.harness.run') {
     const parsed = HostHarnessRunInputSchema.safeParse(raw);
     if (!parsed.success) return undefined;
-    return (
-      parsed.data.timeoutMs +
-      (parsed.data.preview === undefined || parsed.data.preview === false
-        ? 0
-        : HOST_PREVIEW_MARGIN_MS)
+    if (parsed.data.preview === undefined || parsed.data.preview === false) {
+      return parsed.data.timeoutMs;
+    }
+    const binding = (await loadHostPolicy(policyPath).catch(() => undefined))?.bindings.get(
+      parsed.data.bindingId,
     );
+    return parsed.data.timeoutMs + hostPreviewMarginMs(binding?.preview);
   }
   if (operationId === 'host.process.exec') {
     const parsed = HostProcessExecInputSchema.safeParse(raw);
@@ -92,7 +109,7 @@ export async function resolveHostTimeout(
   if (ctx.stepDefinition?.timeout?.executionTimeoutMs !== undefined) return undefined;
   const input = await ctx.readPayload(ctx.job.inputRef);
   if (ctx.operationId === 'host.commit.check') return await checkDeadlineMs(input, policyPath);
-  const ceiling = streamCeilingMs(ctx.operationId, input);
+  const ceiling = await streamCeilingMs(ctx.operationId, input, policyPath);
   if (ceiling === undefined) return undefined;
   const maxMs = ceiling + HOST_OUTER_TIMEOUT_MARGIN_MS;
   return { idleMs: Math.min(HOST_STREAM_IDLE_MS, maxMs), maxMs };

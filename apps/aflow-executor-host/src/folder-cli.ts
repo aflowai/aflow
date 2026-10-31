@@ -7,6 +7,11 @@
 import { mkdir, readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
+import {
+  FOLDER_PREVIEW_READY_WITHIN_DEFAULT_SECONDS,
+  FOLDER_PREVIEW_READY_WITHIN_MAX_SECONDS,
+} from '@aflow/schemas';
+
 import { HostPolicySchema } from './bindings.js';
 import {
   changeFolderPreview,
@@ -22,11 +27,13 @@ const USAGE =
   'Usage:\n' +
   '  folder <id> preview                 How the folder is shown working, as declared.\n' +
   '  folder <id> preview --command "<command>" [--port <port>] [--ready <path>]\n' +
-  '                      [--ui <glob>]... [--web-app <dir>]...\n' +
+  '                      [--ready-within <seconds>] [--ui <glob>]... [--web-app <dir>]...\n' +
   '                                      Declare it: the command that serves the folder,\n' +
   '                                      run from the checkout, with {port} where its port\n' +
   '                                      goes; a fixed port, else each run takes a free one;\n' +
   '                                      the path that answers once it is up (default /);\n' +
+  '                                      how many seconds it may take to answer (default\n' +
+  `                                      ${String(FOLDER_PREVIEW_READY_WITHIN_DEFAULT_SECONDS)}, at most ${String(FOLDER_PREVIEW_READY_WITHIN_MAX_SECONDS)});\n` +
   '                                      the files that are its UI (default: tsx jsx vue\n' +
   '                                      svelte astro html css scss less, and everything\n' +
   '                                      under each --web-app directory). Replaces what was\n' +

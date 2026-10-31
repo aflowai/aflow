@@ -22,7 +22,7 @@ import { HarnessBrowserLogRecordSchema, type PayloadRef } from '@aflow/schemas';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { StartedPreview, StartPreviewInput } from '../previewSupervisor.js';
-import type { SandboxedRunInput, SandboxedRunResult } from '../sandboxedRun.js';
+import type { SandboxedRunInput, SandboxedRunResult, ServiceExit } from '../sandboxedRun.js';
 import { harness, profile } from './fixtures/fakeBrowser.js';
 import { relayEnd } from './fixtures/relayPipes.js';
 
@@ -113,13 +113,31 @@ vi.mock('../previewSupervisor.js', async (importOriginal) => {
     startPreview: (input: StartPreviewInput): Promise<StartedPreview> => {
       started.push(input);
       if (input.preview.command.includes(NEVER_READY)) {
-        return Promise.reject(
-          new actual.PreviewError(
-            `The preview \`${input.preview.command}\` did not answer at http://127.0.0.1:${String(input.port)}/ within 120 s. The last lines it printed:\nstill compiling\n`,
-            'not_ready',
-            'still compiling\n',
-          ),
-        );
+        // The supervisor itself, on a clock read here: the preview prints and never answers.
+        let at = 0;
+        return actual.startPreview({
+          ...input,
+          pollMs: 1,
+          now: () => at,
+          start: (service) => {
+            service.onOutput?.('still compiling\n');
+            let ended: (exit: ServiceExit) => void = () => undefined;
+            const exited = new Promise<ServiceExit>((resolve) => {
+              ended = resolve;
+            });
+            return {
+              processId: 'pv_never_ready',
+              exited,
+              stop: () => {
+                ended({ code: null, signal: 'SIGTERM', stderrTail: '' });
+              },
+            };
+          },
+          fetch: () => {
+            at += 15_000;
+            return Promise.reject(new Error('ECONNREFUSED'));
+          },
+        });
       }
       let done = false;
       return Promise.resolve({
@@ -213,7 +231,10 @@ beforeAll(async () => {
         binding('hb-fixed', await repository('fixed'), { command: 'yarn dev', port: FIXED_PORT }),
         binding('hb-busy', await repository('busy'), { command: 'yarn dev', port: PORT_IN_USE }),
         binding('hb-none', await repository('plain')),
-        binding('hb-slow', await repository('slow'), { command: `yarn ${NEVER_READY} {port}` }),
+        binding('hb-slow', await repository('slow'), {
+          command: `yarn ${NEVER_READY} {port}`,
+          readyWithinSeconds: 900,
+        }),
       ],
       harnesses: [
         {
@@ -493,8 +514,10 @@ describe('a harness run whose rule asked for its preview if available (D21)', ()
   it('runs on without them when the preview never answers, keeping what it printed', async () => {
     const ran = await runHarness({ ...ruled, bindingId: 'hb-slow' }, 'run-ruled-slow');
     expect(ran.status).toBe('SUCCEEDED');
+    expect(started[0]?.preview.readyWithinSeconds).toBe(900);
     const line = String(ran.output?.['previewUnavailable']);
     expect(line).toContain('did not answer');
+    expect(line).toContain('It was waited on for 900 s, and its declaration gives it 900 s');
     expect(line).not.toContain('still compiling');
     expect(line).toContain('`previewLog`');
     expect(ran.output?.['previewLog']).toBe('inline:preview_log');

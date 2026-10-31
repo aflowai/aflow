@@ -346,7 +346,7 @@ none, so it takes the default, `open`. A push takes a check receipt only from ch
 folder's posture as it pushes, so a commit checked before the posture changed is checked again.
 
 **How a folder is shown — declared once, used by the loop by rule (Plan 320 P6).** A person declares, once per connected folder, how its change is seen working:
-`aflow folder <bindingId> preview --command … [--port …] [--ready …] [--ui …]` on the
+`aflow folder <bindingId> preview --command … [--port …] [--ready …] [--ready-within …] [--ui …]` on the
 machine, or the folder's preview on the machine page — the command that serves it, run in
 the checkout (`yarn dev --port {port}`, or whatever that folder's project runs), the port
 if it must be fixed (a fixed port serves one run at a time; left out, each run takes a free
