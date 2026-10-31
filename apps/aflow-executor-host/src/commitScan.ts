@@ -20,11 +20,13 @@ import {
 } from '@aflow/schemas';
 import type { z } from 'zod';
 
+import { cleanMergeTree, commitParents } from './baseMerge.js';
 import { scanLine } from './secretRules.js';
 import {
   countCommits,
   forEachGitChunk,
   forEachGitLine,
+  git,
   LineCutter,
   resolveCommit,
   WorktreeError,
@@ -641,5 +643,58 @@ export async function scanCommitRange(
     summary: summarize(tally, commits, resolved, Object.keys(texts)),
     ...(unflagged ? { unflaggedRange: resolved } : {}),
     ...(clean ? { clearedRange: resolved } : {}),
+  };
+}
+
+/**
+ * Scan what a push of `merge` adds to `origin` where it made `merge` itself, to
+ * take a base that moved (Plan 339 D3): `<base>..<merge>` read as
+ * {@link scanCommitRange} reads a range, except that the merge's own lines are
+ * not read against its first parent. Against that parent it shows every line
+ * the base gained, which `origin` already holds and this branch did not write.
+ * The lines read are those the branch's commits add over `base`, and the
+ * headers and messages of those commits and of the merge. A merge adds no line
+ * of its own only where its tree is the clean merge of its two parents, so
+ * one whose first parent does not lead back to `base`, whose second is not
+ * `base`, or whose tree is not that clean merge is refused, not scanned.
+ */
+export async function scanPushedMerge(root: string, range: string): Promise<HostCommitScanOutput> {
+  const ends = HOST_COMMIT_RANGE_PATTERN.exec(range);
+  if (ends?.[1] === undefined || ends[2] === undefined) {
+    throw new WorktreeError(`\`${range}\` is not a range of two shas.`, 'unknown_ref');
+  }
+  const base = await resolveRangeEnd(root, ends[1]);
+  const merge = await resolveRangeEnd(root, ends[2]);
+  const resolved = `${base}..${merge}`;
+  const [branch, second, ...more] = await commitParents(root, merge);
+  const tree = (
+    await git(root, ['rev-parse', '--verify', '--end-of-options', `${merge}^{tree}`])
+  ).trim();
+  const clean = branch === undefined ? undefined : await cleanMergeTree(root, branch, base);
+  if (branch === undefined || second !== base || more.length > 0 || clean !== tree) {
+    throw new WorktreeError(
+      `\`${merge}\` is not the clean merge of \`${base}\` into a commit of this branch, so ` +
+        'what it adds cannot be read apart from what the base gained.',
+      'git_failed',
+    );
+  }
+
+  const tally = emptyTally();
+  await readAddedLines(root, base, branch, tally);
+  await readCommitObjects(root, base, merge, tally);
+  const commits = await countCommits(root, base, merge);
+  const unflagged = tally.findings.total === 0;
+  const cleared = unflagged && tally.allowed.total === 0 && tally.unscanned.total === 0;
+  const read =
+    `the lines the commits of \`${base}..${branch}\` add, and the headers and messages of ` +
+    `the ${plural(commits, 'commit', 'commits')} of \`${resolved}\`, the merge of the base among them`;
+  return {
+    clean: cleared,
+    findings: tally.findings.items,
+    unscanned: tally.unscanned.items,
+    allowed: tally.allowed.items,
+    summary: describeTally(tally, read),
+    ...(unflagged ? { unflaggedRange: resolved } : {}),
+    ...(cleared ? { clearedRange: resolved } : {}),
   };
 }

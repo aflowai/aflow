@@ -10,6 +10,8 @@
  * every git this lane runs, and what the repository's own config could still
  * change between the two is pinned.
  */
+import { HOST_FULL_SHA_PATTERN } from '@aflow/schemas';
+
 import { fetchedBranch } from './pushBase.js';
 import {
   APPLY_OUTPUT_CAP_BYTES,
@@ -160,13 +162,48 @@ export async function mergeConflictPaths(
 }
 
 /**
+ * The tree `merge-tree` writes for merging `second` into `first`, under the
+ * same pins as {@link mergeIntoCheckout}, or nothing where the two conflict.
+ * Made in the object store alone: no checkout, ref or index is touched.
+ */
+export async function cleanMergeTree(
+  root: string,
+  first: string,
+  second: string,
+): Promise<string | undefined> {
+  let tree: string;
+  try {
+    tree = await git(
+      root,
+      [...MERGE_PINS, 'merge-tree', '--write-tree', '--no-messages', first, second],
+      APPLY_OUTPUT_CAP_BYTES,
+    );
+  } catch (error) {
+    // 1 is merge-tree's "conflicts": there is no clean tree.
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === 1) {
+      return undefined;
+    }
+    throw new WorktreeError(
+      `\`${second}\` could not be merged into \`${first}\`: ${firstLine(error)}`,
+      'git_failed',
+    );
+  }
+  const written = tree.split('\n')[0]?.trim() ?? '';
+  if (!HOST_FULL_SHA_PATTERN.test(written)) {
+    throw new WorktreeError(
+      `Merging \`${second}\` into \`${first}\` wrote no tree git named.`,
+      'git_failed',
+    );
+  }
+  return written;
+}
+
+/**
  * Merge `base` into `sha` as one merge commit made in the object store alone,
  * under `identity`: `sha` its first parent and `base` its second, as
- * `merge --no-ff` in a checkout of `sha` makes it. The tree is the one
- * `merge-tree` writes for the two under the same pins as
- * {@link mergeIntoCheckout}, so it is a function of the two parents. Answers
- * the merge commit's sha, or nothing where the two conflict: no checkout, ref
- * or index is touched either way.
+ * `merge --no-ff` in a checkout of `sha` makes it. Its tree is
+ * {@link cleanMergeTree}'s for the two, so it is a function of the two parents.
+ * Answers the merge commit's sha, or nothing where the two conflict.
  */
 export async function mergeBaseIntoCommit(
   root: string,
@@ -175,33 +212,11 @@ export async function mergeBaseIntoCommit(
   identity: readonly string[],
   message: string,
 ): Promise<string | undefined> {
-  let tree: string;
-  try {
-    tree = await git(
-      root,
-      [...MERGE_PINS, 'merge-tree', '--write-tree', '--no-messages', sha, base],
-      APPLY_OUTPUT_CAP_BYTES,
-    );
-  } catch (error) {
-    // 1 is merge-tree's "conflicts": there is no merge to make.
-    if (typeof error === 'object' && error !== null && 'code' in error && error.code === 1) {
-      return undefined;
-    }
-    throw new WorktreeError(
-      `\`${base}\` could not be merged into \`${sha}\`: ${firstLine(error)}`,
-      'git_failed',
-    );
-  }
-  const written = tree.split('\n')[0]?.trim() ?? '';
-  if (!/^[0-9a-f]{40,64}$/.test(written)) {
-    throw new WorktreeError(
-      `Merging \`${base}\` into \`${sha}\` wrote no tree git named.`,
-      'git_failed',
-    );
-  }
+  const tree = await cleanMergeTree(root, sha, base);
+  if (tree === undefined) return undefined;
   const commit = await git(
     root,
-    [...identity, 'commit-tree', written, '-p', sha, '-p', base, '-m', message],
+    [...identity, 'commit-tree', tree, '-p', sha, '-p', base, '-m', message],
     APPLY_OUTPUT_CAP_BYTES,
   );
   return commit.trim();

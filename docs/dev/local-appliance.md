@@ -577,8 +577,8 @@ snapshot of that run's checkout — its commit, copied before the agent starts, 
 the checkout the agent edits, so it serves the app as of that commit and none of the
 agent's own edits, which are seen working in the review's preview, whose snapshot holds the
 committed range — unconfined but in a process group the executor stops when the run ends, with
-none of the harness's credential; wait up to 120 s for the
-ready path on IPv4 or IPv6 loopback; and open its port to that run's browser alone.
+none of the harness's credential; wait for the ready path on IPv4 or IPv6 loopback as long
+as the folder's `--ready-within` declares (120 s by default, at most 1800); and open its port to that run's browser alone.
 What it printed is kept with the run, failed or not. Running unconfined, with the
 operator's reach, is a deliberate step beyond the checks' sandbox (which has no
 operator folder, no `.git`, no `~/.aflow` and no loopback), ruled by the operator
@@ -592,7 +592,7 @@ at a time, and a run that finds it held is refused rather than queued:
 
 ```bash
 yarn workspace @aflow/aflow-executor-host folder hb_site preview --command "yarn dev --port {port}"
-yarn workspace @aflow/aflow-executor-host folder hb_site preview --command "yarn dev" --port 4321 --ready /health --ui "src/**/*.tsx" --web-app apps/web
+yarn workspace @aflow/aflow-executor-host folder hb_site preview --command "yarn dev" --port 4321 --ready /health --ready-within 900 --ui "src/**/*.tsx" --web-app apps/web
 yarn workspace @aflow/aflow-executor-host folder hb_site preview
 yarn workspace @aflow/aflow-executor-host folder hb_site preview --clear
 ```

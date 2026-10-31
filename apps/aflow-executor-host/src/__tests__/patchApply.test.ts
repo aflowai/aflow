@@ -11,6 +11,8 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 import { PayloadAccessError } from '@aflow/executor-runtime';
+import { hostPushRequestHash } from '@aflow/redis';
+import { HostPushBaseMergeSchema } from '@aflow/schemas';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { mergeIntoCheckout } from '../baseMerge.js';
@@ -19,9 +21,9 @@ import { createHostCommitCheckHandler } from '../handlers/checkHandlers.js';
 import { createHostCommitHandler } from '../handlers/commitHandlers.js';
 import { createHostPatchHandler } from '../handlers/patchHandlers.js';
 import { createHostProcessHandler } from '../handlers/processHandlers.js';
-import { noPushApprovals } from './fixtures/pushApprovals.js';
+import { noPushApprovals, pushApprovalsHolding } from './fixtures/pushApprovals.js';
 import { fetchedBranch, fetchHeadSource } from '../pushBase.js';
-import { issueScanReceipt } from '../scanReceipt.js';
+import { issueScanReceipt, type PushApprovalReader } from '../scanReceipt.js';
 import {
   commitIdentityArgs,
   INLINE_DIFF_CAP_BYTES,
@@ -985,23 +987,38 @@ describe('measuring what a push of the commit would add', () => {
         singleFile: false,
         spaceId: 'space-test',
       });
+      policy.bindings.push({
+        id: 'hb_push_always',
+        root,
+        mode: 'readwrite',
+        allowsExecution: true,
+        branchPolicy: { branchPrefix: 'aflow/', pushApproval: 'always' },
+        singleFile: false,
+        spaceId: 'space-test',
+      });
       await writeFile(policyPath, JSON.stringify(policy));
     });
 
     /** A push of the range's last commit, carrying `receipt` or a clean one for the range. */
-    async function push(range: string, remote = 'origin', receipt?: string) {
+    async function push(
+      range: string,
+      remote = 'origin',
+      receipt?: string,
+      options: { bindingId?: string; approvals?: PushApprovalReader } = {},
+    ) {
       const [from = '', sha = ''] = range.split('..');
+      const bindingId = options.bindingId ?? 'hb_push';
       const captured: Captured = {};
-      const result = await createHostProcessHandler(policyPath, noPushApprovals).execute({
+      const handler = createHostProcessHandler(policyPath, options.approvals ?? noPushApprovals);
+      const result = await handler.execute({
         ...(contextFor(
           {
-            bindingId: 'hb_push',
+            bindingId,
             command: ['git', 'push', ...PUSH_REQUIRED_OPTIONS, remote, `${sha}:refs/heads/aflow/x`],
             pushBase: 'main',
             scan: {
               receipt:
-                receipt ??
-                issueScanReceipt({ bindingId: 'hb_push', base: from, sha, outcome: 'clean' }),
+                receipt ?? issueScanReceipt({ bindingId, base: from, sha, outcome: 'clean' }),
             },
           },
           captured,
@@ -1100,6 +1117,7 @@ describe('measuring what a push of the commit would add', () => {
           base: now,
           branchCommit: sha,
           commit: head,
+          localBranch: 'moved',
         });
         expect(output?.['rescanned']).toBe(`${now}..${head ?? ''}`);
         expect(output?.['command']).toContain(`${head ?? ''}:refs/heads/aflow/x`);
@@ -1172,6 +1190,122 @@ describe('measuring what a push of the commit would add', () => {
           await rm(scratch, { recursive: true, force: true });
         }
       }, 30_000);
+
+      it("moves the folder's branch to the merge, so the next publication appends to it and pushes", async () => {
+        const { range, sha } = await measured();
+        const receipt = await scanned(range);
+        await pushedElsewhere();
+        const first = await push(range, 'origin', receipt);
+        expect(first.result.status).toBe('SUCCEEDED');
+        const head = (await pushedBranch()) ?? '';
+        expect(head).not.toBe(sha);
+        expect((await git(root, 'rev-parse', 'aflow/x')).trim()).toBe(head);
+        expect(first.output?.['baseMerge']).toMatchObject({ localBranch: 'moved' });
+
+        // The next round's patch, made against what `origin` holds.
+        const patch = await diffFor(async (d) => {
+          await writeFile(join(d, 'b.txt'), 'the next round\n');
+        }, head);
+        const captured: Captured = {};
+        const next = await createHostPatchHandler(policyPath).execute(
+          contextFor(
+            {
+              bindingId: 'hb',
+              patch,
+              commit: {
+                branch: 'aflow/x',
+                message: 'the next round',
+                baseSha: head,
+                pushBase: 'main',
+              },
+            },
+            captured,
+          ),
+        );
+        expect(next.status).toBe('SUCCEEDED');
+        const commit = captured.output?.['commit'] as Record<string, unknown>;
+        expect(commit['appended']).toBe(true);
+        const nextRange = String(commit['pushRange']);
+        const second = await push(nextRange, 'origin', await scanned(nextRange));
+        expect(second.result.status, second.message).toBe('SUCCEEDED');
+        expect(await pushedBranch()).toBe(String(commit['sha']));
+        expect((await git(root, 'rev-parse', `${String(commit['sha'])}^`)).trim()).toBe(head);
+      }, 30_000);
+
+      it('reads what the branch adds and not the lines the base gained, which origin already holds', async () => {
+        const { range, sha } = await measured();
+        const receipt = await scanned(range);
+        // A line that looks like a secret, already on `origin` and not this branch's.
+        const now = await pushedElsewhere(
+          'deploy.ts',
+          `const t = '${'ghp_' + 'A1b2C3d4E5'.repeat(4).slice(0, 36)}';\n`,
+        );
+        const { result, message, output } = await push(range, 'origin', receipt);
+        expect(result.status, message).toBe('SUCCEEDED');
+        const head = (await pushedBranch()) ?? '';
+        expect(await parentsOf(head)).toEqual([sha, now]);
+        expect(output?.['rescanned']).toBe(`${now}..${head}`);
+      }, 30_000);
+
+      it('pushes the merge on the grant for the refspec it was made from, and names the merge when it has none', async () => {
+        const { range, sha } = await measured();
+        const [from = ''] = range.split('..');
+        const now = await pushedElsewhere();
+        const receipt = issueScanReceipt({
+          bindingId: 'hb_push_always',
+          base: from,
+          sha,
+          outcome: 'clean',
+        });
+        const named = `${sha}:refs/heads/aflow/x`;
+
+        const refused = await push(range, 'origin', receipt, { bindingId: 'hb_push_always' });
+        expect(refused.result.status).toBe('FAILED');
+        const pushedRefspec = /approved this push — `([0-9a-f]{40,64}):refs\/heads\/aflow\/x`/.exec(
+          refused.message,
+        );
+        expect(pushedRefspec?.[1]).toBeDefined();
+        expect(pushedRefspec?.[1]).not.toBe(sha);
+        expect(refused.message).toContain(
+          `the merge of \`origin/main\` into \`${named}\`, which an approval of \`${named}\` covers`,
+        );
+        expect(await pushedBranch()).toBeUndefined();
+
+        const hash = hostPushRequestHash({ bindingId: 'hb_push_always', refspec: named, receipt });
+        const approved = await push(range, 'origin', receipt, {
+          bindingId: 'hb_push_always',
+          approvals: pushApprovalsHolding(
+            new Map([
+              [
+                `undefined:undefined:${hash}`,
+                { requestHash: hash, decision: 'approved' as const, approvedBy: 'operator-1' },
+              ],
+            ]),
+          ),
+        });
+        expect(approved.result.status, approved.message).toBe('SUCCEEDED');
+        const head = (await pushedBranch()) ?? '';
+        expect(await parentsOf(head)).toEqual([sha, now]);
+      }, 30_000);
+
+      it('records a SHA-256 merge as the merge helper makes it, and no shorter name', () => {
+        const sha256 = (digit: string) => digit.repeat(64);
+        const recorded = {
+          baseMoved: true,
+          scannedBase: sha256('a'),
+          base: sha256('b'),
+          branchCommit: sha256('c'),
+          commit: sha256('d'),
+          localBranch: 'moved',
+        };
+        expect(HostPushBaseMergeSchema.safeParse(recorded).success).toBe(true);
+        expect(
+          HostPushBaseMergeSchema.safeParse({ ...recorded, commit: 'd'.repeat(40) }).success,
+        ).toBe(true);
+        expect(
+          HostPushBaseMergeSchema.safeParse({ ...recorded, commit: 'd'.repeat(39) }).success,
+        ).toBe(false);
+      });
     });
 
     it('pushes on its own scan where the executor restarted since the receipt was issued', async () => {

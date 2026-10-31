@@ -4,7 +4,7 @@
  * or from the machine page, whose route relays it here. No operation sets it.
  *
  * The file holds the declaration as the person wrote it; the defaults —
- * readyPath, uiPaths — are read in by `resolveFolderPreview` each time, so a
+ * readyPath, readyWithinSeconds, uiPaths — are read in by `resolveFolderPreview` each time, so a
  * change of default reaches every folder that never chose. This only writes
  * the declaration: nothing here starts the preview, which a harness run's
  * supervisor does per run (`previewSupervisor.ts`, Plan 320 D19, F49).
@@ -16,6 +16,7 @@ import type { z } from 'zod';
 
 import { describeStackPortOwner, type StackPortOwner, stackOwnPorts } from '@aflow/lib';
 import {
+  FOLDER_PREVIEW_READY_WITHIN_MAX_SECONDS,
   FOLDER_WEB_APP_DEPENDENCIES,
   folderPreviewStackPortRefusal,
   type HostFolderPreview,
@@ -107,7 +108,10 @@ export function describeFolderPreview(preview: HostFolderPreview | undefined): s
   const resolved = resolveFolderPreview(preview);
   const port = resolved.port === undefined ? 'a free port' : `port ${String(resolved.port)}`;
   const ui = preview.uiPaths === undefined ? 'the default UI files' : 'the UI files it names';
-  return `is shown with \`${resolved.command}\` on ${port}, ready at ${resolved.readyPath}, its UI ${ui}`;
+  return (
+    `is shown with \`${resolved.command}\` on ${port}, ready at ${resolved.readyPath} ` +
+    `within ${String(resolved.readyWithinSeconds)} s, its UI ${ui}`
+  );
 }
 
 /** The declaration in full, one fact per line, defaults marked. */
@@ -116,9 +120,10 @@ export function folderPreviewLines(bindingId: string, preview: HostFolderPreview
   const chosen = (given: unknown): string => (given === undefined ? ' (default)' : '');
   return [
     `\`${bindingId}\` ${describeFolderPreview(preview)}.`,
-    `  command    ${resolved.command}`,
-    `  port       ${resolved.port === undefined ? 'a free port, passed as {port}' : String(resolved.port)}`,
-    `  readyPath  ${resolved.readyPath}${chosen(preview.readyPath)}`,
+    `  command     ${resolved.command}`,
+    `  port        ${resolved.port === undefined ? 'a free port, passed as {port}' : String(resolved.port)}`,
+    `  readyPath   ${resolved.readyPath}${chosen(preview.readyPath)}`,
+    `  readyWithin ${String(resolved.readyWithinSeconds)} s${chosen(preview.readyWithinSeconds)}`,
     `  uiPaths${chosen(preview.uiPaths)}`,
     ...resolved.uiPaths.map((glob) => `    ${glob}`),
     ...(resolved.webAppDirs.length > 0
@@ -163,7 +168,14 @@ export type FolderPreviewVerb =
   | { readonly kind: 'clear' }
   | { readonly kind: 'declare'; readonly requested: FolderPreviewRequested };
 
-const VALUE_FLAGS = new Set(['--command', '--port', '--ready', '--ui', '--web-app']);
+const VALUE_FLAGS = new Set([
+  '--command',
+  '--port',
+  '--ready',
+  '--ready-within',
+  '--ui',
+  '--web-app',
+]);
 
 /**
  * `aflow folder <id> preview` and its flags: nothing prints the declaration,
@@ -183,7 +195,7 @@ export function parseFolderPreviewArgs(args: readonly string[]): FolderPreviewVe
     if (!VALUE_FLAGS.has(flag)) {
       throw new Error(
         `\`${flag}\` is not an option of \`preview\`. It takes --command, --port, --ready, ` +
-          '--ui, --web-app, or --clear alone.',
+          '--ready-within, --ui, --web-app, or --clear alone.',
       );
     }
     const value = args[index + 1];
@@ -210,6 +222,13 @@ export function parseFolderPreviewArgs(args: readonly string[]): FolderPreviewVe
     throw new Error(`'${port}' is not a port: give a whole number from 1 to 65535.`);
   }
   const ready = single('--ready');
+  const readyWithin = single('--ready-within');
+  if (readyWithin !== undefined && !/^\d{1,9}$/.test(readyWithin.trim())) {
+    throw new Error(
+      `'${readyWithin}' is not a number of seconds: give a whole number from 1 to ` +
+        `${String(FOLDER_PREVIEW_READY_WITHIN_MAX_SECONDS)}.`,
+    );
+  }
   const ui = values.get('--ui');
   const webApps = values.get('--web-app');
   return {
@@ -218,6 +237,7 @@ export function parseFolderPreviewArgs(args: readonly string[]): FolderPreviewVe
       command,
       ...(port !== undefined ? { port: Number(port.trim()) } : {}),
       ...(ready !== undefined ? { readyPath: ready } : {}),
+      ...(readyWithin !== undefined ? { readyWithinSeconds: Number(readyWithin.trim()) } : {}),
       ...(ui !== undefined ? { uiPaths: ui } : {}),
       ...(webApps !== undefined ? { webAppDirs: webApps } : {}),
     },

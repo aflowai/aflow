@@ -9,17 +9,7 @@
  * one-shot that has already run expired while the other says it will run.
  */
 
-import {
-  Badge,
-  Card,
-  CardBody,
-  Column,
-  Icon,
-  IconButton,
-  Row,
-  Text,
-  type BadgeVariant,
-} from '@aflow/design-system';
+import { Badge, Card, CardBody, Column, Icon, IconButton, Row, Text } from '@aflow/design-system';
 
 import { describeCron, describeWork } from '../lib/triggers-describe.js';
 
@@ -62,13 +52,6 @@ export function scheduleState(row: ScheduleRow): ScheduleState {
   if (row.status === 'paused' || row.status === 'deleted') return row.status;
   return 'expired';
 }
-
-const STATE_BADGE: Record<ScheduleState, BadgeVariant> = {
-  active: 'success',
-  paused: 'paused',
-  expired: 'neutral',
-  deleted: 'neutral',
-};
 
 /** "in 4 min", "in 3 h", a date further out, or "due now". */
 function untilNext(nextFireAt: string): string {
@@ -116,26 +99,15 @@ function recurrence(row: ScheduleRow): string {
   return row.kind;
 }
 
-function timesRun(firingCount: number): string | null {
-  if (firingCount <= 0) return null;
-  return firingCount === 1 ? 'ran once' : `ran ${String(firingCount)}×`;
-}
-
 /**
- * The one line a narrow card has for time and count: "next in 4 min · ran 3×"
- * for one that will run, "ran once · 2 d ago" for one that will not.
- *
- * The badge already says the state, so this line never restates it, and a
- * schedule that will not run never gets a time it would run at.
+ * What a folded card says beside the name: "next in 4 min" for one that will
+ * run. A schedule that will not run never gets a time it would run at, so it
+ * says its state instead.
  */
-export function scheduleTimeLine(row: ScheduleRow): string {
-  const count = timesRun(row.firingCount);
-  if (scheduleState(row) === 'active') {
-    const next = row.nextFireAt ? `next ${untilNext(row.nextFireAt)}` : 'not scheduled';
-    return count ? `${next} · ${count}` : next;
-  }
-  if (row.lastFiredAt) return `${count ?? 'ran'} · ${sinceLast(row.lastFiredAt)}`;
-  return count ?? 'never ran';
+function compactWhen(row: ScheduleRow): string {
+  const state = scheduleState(row);
+  if (state !== 'active') return state;
+  return row.nextFireAt ? `next ${untilNext(row.nextFireAt)}` : 'not scheduled';
 }
 
 export type ScheduleCardProps =
@@ -148,7 +120,10 @@ export type ScheduleCardProps =
     }
   | {
       schedule: ScheduleRow;
-      /** A narrow column: the name, the state, when it runs or ran, the count. */
+      /**
+       * A narrow column: the name and when it runs next on one line, with the
+       * recurrence, the work and when it last ran folded under it.
+       */
       variant: 'compact';
     };
 
@@ -156,24 +131,46 @@ export function ScheduleCard(props: ScheduleCardProps): React.ReactNode {
   const row = props.schedule;
 
   if (props.variant === 'compact') {
-    const state = scheduleState(row);
+    const work = describeWork(row.inputTemplate) ?? row.description;
     return (
       <Card role="article" aria-label={row.name}>
-        <CardBody>
-          <Column gap="xs">
-            <Row gap="sm" align="center" justify="between">
+        {/* One line until opened, so the section is as tall as the schedules
+            it lists and the sections below it stay in view. */}
+        <details>
+          <summary style={{ cursor: 'pointer', padding: 'var(--space-1) var(--space-2)' }}>
+            <Row
+              gap="sm"
+              align="center"
+              justify="between"
+              style={{ display: 'inline-flex', width: 'calc(100% - 1.25em)' }}
+            >
               <Text weight="medium" size="sm" truncate style={{ minWidth: 0 }}>
                 {row.name}
               </Text>
-              <Badge variant={STATE_BADGE[state]} style={{ flexShrink: 0 }}>
-                {state}
-              </Badge>
+              <Text variant="muted" size="xs" style={{ flexShrink: 0 }}>
+                {compactWhen(row)}
+              </Text>
             </Row>
+          </summary>
+          <Column gap="xs" style={{ padding: '0 var(--space-2) var(--space-1)' }}>
             <Text variant="muted" size="xs">
-              {scheduleTimeLine(row)}
+              {recurrence(row)}
             </Text>
+            {work !== null && (
+              <Text variant="muted" size="xs">
+                {work}
+              </Text>
+            )}
+            <Text variant="muted" size="xs">
+              {whenLast(row)}
+            </Text>
+            {row.lastError !== null && (
+              <Text size="xs" style={{ color: 'var(--color-danger-default)' }}>
+                {`Last run failed: ${row.lastError}`}
+              </Text>
+            )}
           </Column>
-        </CardBody>
+        </details>
       </Card>
     );
   }

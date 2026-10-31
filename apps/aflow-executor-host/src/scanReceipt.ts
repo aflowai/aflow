@@ -169,6 +169,13 @@ export interface PushHistory {
   readonly parents: (commit: string) => Promise<string[]>;
   /** A scan of `range` for secrets, as `host.commit.scan` reads one. */
   readonly scanSecrets: (range: string) => Promise<HostCommitScanOutput>;
+  /**
+   * A scan of `<base>..<merge>` for a merge the push made: the lines the
+   * branch's commits add and the headers and messages of every commit it
+   * sends, not the lines the base gained. Refused where `merge` is not the
+   * clean merge of `base` into a commit of the branch.
+   */
+  readonly scanMerge: (range: string) => Promise<HostCommitScanOutput>;
 }
 
 /** The merge of a moved base a push sends in place of the commit its scan ended at. */
@@ -335,7 +342,8 @@ async function rangeToPush(
     }
   }
   const sent = merge === undefined ? range : `${measured}..${merge.commit}`;
-  const scan = await history.scanSecrets(sent);
+  const scan =
+    merge === undefined ? await history.scanSecrets(sent) : await history.scanMerge(sent);
   if (scan.unflaggedRange === undefined) {
     throw new ScanReceiptError(
       `The push scanned \`${sent}\`, the range it sends, and found what looks like a ` +
@@ -448,12 +456,14 @@ export async function requireScannedPush(
     },
     now,
   );
+  const pushed =
+    merge === undefined ? refspec : `${merge.commit}:${refspec.slice(refspec.indexOf(':') + 1)}`;
   const clearance: PushClearance = {
     ...(checkedUnder !== undefined ? { checkedUnder } : {}),
     ...(sent.rescanned ? { rescanned: sent.range } : {}),
     ...(merge !== undefined
       ? {
-          refspec: `${merge.commit}:${refspec.slice(refspec.indexOf(':') + 1)}`,
+          refspec: pushed,
           baseMerge: merge,
           ...(checkedUnder !== undefined
             ? {
@@ -471,6 +481,10 @@ export async function requireScannedPush(
   const asksAlways = push.pushApproval === 'always';
   if (sent.outcome === 'clean' && !asksAlways) return clearance;
 
+  // The grant is minted at the approval, before the base can have moved, for
+  // the refspec the publication named. A merge the push made is under that
+  // grant only as the clean merge of the base into that refspec's source,
+  // which its scan has established, so its key is the refspec it was made from.
   const requestHash = hostPushRequestHash({ bindingId, refspec, receipt });
   const grant = await push.approvalFor(requestHash);
   if (grant?.decision === 'approved' && grant.requestHash === requestHash) return clearance;
@@ -486,8 +500,13 @@ export async function requireScannedPush(
   const reason = reasons.join(', and ');
   throw new ScanReceiptError(
     `${reason.charAt(0).toUpperCase()}${reason.slice(1)}, so it is pushed only once the ` +
-      `operator has approved this push — \`${refspec}\` from \`${bindingId}\` with this ` +
-      'receipt — in this run, and no such approval is on record. Nothing was pushed.',
+      `operator has approved this push — \`${pushed}\` from \`${bindingId}\` with this ` +
+      'receipt' +
+      (merge === undefined
+        ? ''
+        : `, the merge of \`origin/${pushBase}\` into \`${refspec}\`, which an ` +
+          `approval of \`${refspec}\` covers`) +
+      ' — in this run, and no such approval is on record. Nothing was pushed.',
     'unapproved',
   );
 }

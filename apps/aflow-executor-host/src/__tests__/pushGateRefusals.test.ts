@@ -72,6 +72,7 @@ const stillAtBase: PushHistory = {
   merge: () => Promise.reject(new Error('a push its receipt covers merges nothing')),
   parents: () => Promise.reject(new Error('a push its receipt covers merges nothing')),
   scanSecrets: () => Promise.reject(new Error('a push its receipt covers scans nothing')),
+  scanMerge: () => Promise.reject(new Error('a push its receipt covers scans nothing')),
 };
 
 /** `origin/main` moved on to `MOVED`, which holds `BASE`. */
@@ -83,6 +84,7 @@ function movedOn(history: Partial<PushHistory>): PushHistory {
     merge: () => Promise.reject(new Error('not merged in this case')),
     parents: () => Promise.reject(new Error('not merged in this case')),
     scanSecrets: () => Promise.reject(new Error('not scanned in this case')),
+    scanMerge: () => Promise.reject(new Error('not scanned in this case')),
     ...history,
   };
 }
@@ -145,7 +147,7 @@ const REFUSED: ReadonlyArray<readonly [Refusal, PushUnderScan]> = [
         holds: (commit) => Promise.resolve(commit === MOVED),
         merge: () => Promise.resolve('d'.repeat(40)),
         parents: () => Promise.resolve([TIP, BASE]),
-        scanSecrets: () =>
+        scanMerge: () =>
           Promise.resolve({ clean: true, unflaggedRange: `${MOVED}..${'d'.repeat(40)}` } as never),
       }),
     }),

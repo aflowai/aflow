@@ -5,8 +5,13 @@
  */
 import { z } from 'zod';
 
-/** A commit as git names it in full: every sha here is one the push read or made itself. */
-const FullShaSchema = z.string().regex(/^[0-9a-f]{40}$/);
+/**
+ * A commit as git names it in full, SHA-1 or SHA-256, as the executor's merge
+ * reads it: every sha here is one the push read or made itself.
+ */
+export const HOST_FULL_SHA_PATTERN = /^[0-9a-f]{40,64}$/;
+
+const FullShaSchema = z.string().regex(HOST_FULL_SHA_PATTERN);
 
 export const HostPushBaseMergeSchema = z
   .object({
@@ -21,6 +26,16 @@ export const HostPushBaseMergeSchema = z
       'The commit the scan ended at, the merge commit’s first parent.',
     ),
     commit: FullShaSchema.describe('The merge commit the push sent to the branch.'),
+    localBranch: z
+      .enum(['moved', 'absent', 'elsewhere', 'checked_out', 'failed'])
+      .optional()
+      .describe(
+        "The folder's own branch once the push landed: `moved` to the merge, so the next " +
+          'publication onto it appends to what `origin` holds, or left where it was because ' +
+          'the folder has no such branch (`absent`), it was no longer at `branchCommit` ' +
+          '(`elsewhere`), a checkout has it open (`checked_out`) or git could not move it ' +
+          '(`failed`).',
+      ),
   })
   .describe(
     'Present where `origin/<pushBase>` moved since the scan and merged into the commit with ' +

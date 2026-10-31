@@ -42,7 +42,8 @@ import {
   mergeConflictPaths,
   pushMergeIdentityArgs,
 } from '../baseMerge.js';
-import { scanCommitRange } from '../commitScan.js';
+import { advanceLocalBranch } from '../branchCommit.js';
+import { scanCommitRange, scanPushedMerge } from '../commitScan.js';
 import { createChatterStripper } from '../egressRefusals.js';
 import { EnvPolicyError } from '../envPolicy.js';
 import { explainFailedStart } from '../executableHint.js';
@@ -232,6 +233,7 @@ async function execProcess(
             ),
           parents: (commit) => commitParents(binding.root, commit),
           scanSecrets: (range) => scanCommitRange(binding.root, range),
+          scanMerge: (range) => scanPushedMerge(binding.root, range),
         },
         approvalFor: (requestHash) => approvals(ctx.tenantId, ctx.runId, requestHash),
       });
@@ -307,6 +309,20 @@ async function execProcess(
       );
     }
 
+    // The remote now holds the merge: the folder's branch follows it, so the
+    // next publication onto the branch appends to what `origin` holds.
+    const merged = clearance?.baseMerge;
+    const localBranch =
+      merged === undefined || clearance?.refspec === undefined
+        ? undefined
+        : await advanceLocalBranch(
+            binding.root,
+            clearance.refspec
+              .slice(clearance.refspec.indexOf(':') + 1)
+              .replace(/^refs\/heads\//, ''),
+            merged.branchCommit,
+            merged.commit,
+          ).catch(() => 'failed' as const);
     detached = result.detached;
     // A refusal nobody can attribute is a refusal nobody can act on. Only a
     // confined command has a boundary that could be the reason it never started.
@@ -335,7 +351,9 @@ async function execProcess(
       ...(note !== undefined ? { boundaryNote: note } : {}),
       ...(clearance?.checkedUnder !== undefined ? { checkedUnder: clearance.checkedUnder } : {}),
       ...(clearance?.rescanned !== undefined ? { rescanned: clearance.rescanned } : {}),
-      ...(clearance?.baseMerge !== undefined ? { baseMerge: clearance.baseMerge } : {}),
+      ...(merged !== undefined
+        ? { baseMerge: { ...merged, ...(localBranch !== undefined ? { localBranch } : {}) } }
+        : {}),
       ...(clearance?.checkedMerge !== undefined ? { checkedMerge: clearance.checkedMerge } : {}),
     });
   } catch (error) {

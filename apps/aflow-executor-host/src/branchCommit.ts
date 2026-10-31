@@ -69,6 +69,35 @@ async function checkoutHolding(root: string, branch: string): Promise<string | u
   return undefined;
 }
 
+/** What became of the folder's own branch after a push sent a merge to it on `origin`. */
+export type LocalBranchAfterMerge = 'moved' | 'absent' | 'elsewhere' | 'checked_out' | 'failed';
+
+/**
+ * Move the folder's `branch` from `from` to `to`, the merge a push has sent to
+ * it on `origin`, so the next publication onto the branch appends to what
+ * `origin` holds rather than to a head the remote is past. A branch the folder
+ * lacks, one no longer at `from`, and one a checkout has open are left where
+ * they are: the first two are not the head the push was made from, and moving
+ * the last would leave its checkout's files behind it.
+ */
+export async function advanceLocalBranch(
+  root: string,
+  branch: string,
+  from: string,
+  to: string,
+): Promise<LocalBranchAfterMerge> {
+  if (!(await branchExists(root, branch))) return 'absent';
+  if ((await resolveCommit(root, `refs/heads/${branch}`)) !== from) return 'elsewhere';
+  if ((await checkoutHolding(root, branch)) !== undefined) return 'checked_out';
+  try {
+    // Compare-and-swap on `from`: a branch that moved since the read above stays.
+    await git(root, ['update-ref', '--end-of-options', `refs/heads/${branch}`, to, from]);
+  } catch {
+    return 'elsewhere';
+  }
+  return 'moved';
+}
+
 export interface PatchCommit {
   readonly branch: string;
   readonly sha: string;

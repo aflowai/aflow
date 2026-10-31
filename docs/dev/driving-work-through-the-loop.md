@@ -346,7 +346,7 @@ none, so it takes the default, `open`. A push takes a check receipt only from ch
 folder's posture as it pushes, so a commit checked before the posture changed is checked again.
 
 **How a folder is shown — declared once, used by the loop by rule (Plan 320 P6).** A person declares, once per connected folder, how its change is seen working:
-`aflow folder <bindingId> preview --command … [--port …] [--ready …] [--ui …]` on the
+`aflow folder <bindingId> preview --command … [--port …] [--ready …] [--ready-within …] [--ui …]` on the
 machine, or the folder's preview on the machine page — the command that serves it, run in
 the checkout (`yarn dev --port {port}`, or whatever that folder's project runs), the port
 if it must be fixed (a fixed port serves one run at a time; left out, each run takes a free
@@ -418,7 +418,8 @@ lists it.
   its push, the push scans the range it sends itself and goes ahead. Where `main` moved
   and merges into the commit without conflict, the push merges it, `--no-ff` under the
   operator's commit identity, and pushes the merge on the commit's check receipt
-  (Plan 339 D3). Its output records the merge as `baseMerge`. Where the move conflicts
+  (Plan 339 D3). The scan reads what the branch adds, not the lines `main` gained. The
+  folder's branch then moves to the merge. Its output records the merge as `baseMerge`. Where the move conflicts
   with the commit, it is refused naming the merge round and the conflicting files. Checks do not survive a
   restart, so `hb_aflow`'s push after one is refused for its check receipt. A refused push
   leaves its reviewed commit on the branch, and Local Publish publishes it as it stands:

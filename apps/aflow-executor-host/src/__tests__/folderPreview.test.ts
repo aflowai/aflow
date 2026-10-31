@@ -20,6 +20,7 @@ import { stackOwnPorts } from '@aflow/lib';
 import {
   defaultFolderUiPaths,
   FOLDER_PREVIEW_READY_PATH_DEFAULT,
+  FOLDER_PREVIEW_READY_WITHIN_DEFAULT_SECONDS,
   resolveFolderPreview,
 } from '@aflow/schemas';
 
@@ -89,6 +90,7 @@ describe('a folder’s preview in the policy', () => {
     expect(binding.preview && resolveFolderPreview(binding.preview)).toEqual({
       command: 'npm run dev -- --port {port}',
       readyPath: FOLDER_PREVIEW_READY_PATH_DEFAULT,
+      readyWithinSeconds: FOLDER_PREVIEW_READY_WITHIN_DEFAULT_SECONDS,
       uiPaths: defaultFolderUiPaths(),
       webAppDirs: [],
     });
@@ -116,6 +118,7 @@ describe('a folder’s preview in the policy', () => {
         command: 'yarn dev',
         port: 4321,
         readyPath: '/health',
+        readyWithinSeconds: 900,
         uiPaths: ['src/**/*.ts'],
         webAppDirs: ['apps/web'],
       }),
@@ -123,6 +126,7 @@ describe('a folder’s preview in the policy', () => {
       command: 'yarn dev',
       port: 4321,
       readyPath: '/health',
+      readyWithinSeconds: 900,
       uiPaths: ['src/**/*.ts'],
       webAppDirs: ['apps/web'],
     });
@@ -148,6 +152,12 @@ describe('a folder’s preview in the policy', () => {
     }
     expect(refused({ command: 'yarn dev --port {port}', uiPaths: ['src/**/*.tsx'] })).toBe('');
     expect(refused({ command: '   ' })).not.toBe('');
+    expect(refused({ command: 'yarn dev --port {port}', readyWithinSeconds: 1_800 })).toBe('');
+    expect(refused({ command: 'yarn dev --port {port}', readyWithinSeconds: 1_801 })).toContain(
+      'at most 1800 seconds, thirty minutes',
+    );
+    expect(refused({ command: 'yarn dev --port {port}', readyWithinSeconds: 0 })).not.toBe('');
+    expect(refused({ command: 'yarn dev --port {port}', readyWithinSeconds: 1.5 })).not.toBe('');
   });
 
   it('is declared, replaced and cleared for one folder, leaving the others as they were', () => {
@@ -230,6 +240,12 @@ describe('the command’s arguments', () => {
       kind: 'declare',
       requested: { command: 'yarn dev', port: 4321 },
     });
+    expect(
+      parseFolderPreviewArgs(['--command', 'yarn dev --port {port}', '--ready-within', '900']),
+    ).toEqual({
+      kind: 'declare',
+      requested: { command: 'yarn dev --port {port}', readyWithinSeconds: 900 },
+    });
   });
 
   it('refuses what it cannot read', () => {
@@ -240,6 +256,9 @@ describe('the command’s arguments', () => {
     expect(() => parseFolderPreviewArgs(['--command'])).toThrow('needs a value');
     expect(() => parseFolderPreviewArgs(['--clear', '--command', 'x'])).toThrow('stands alone');
     expect(() => parseFolderPreviewArgs(['--commnd', 'x'])).toThrow('is not an option');
+    expect(() =>
+      parseFolderPreviewArgs(['--command', 'x {port}', '--ready-within', '15m']),
+    ).toThrow('is not a number of seconds');
   });
 });
 
@@ -423,8 +442,29 @@ describe('aflow folder <bindingId> preview', () => {
     expect((await written(path)).find((b) => b['id'] === 'hb_app')).not.toHaveProperty('preview');
 
     const printed = await folder(path, 'hb_site', 'preview');
-    expect(printed.stdout).toContain('readyPath  / (default)');
+    expect(printed.stdout).toContain('readyPath   / (default)');
+    expect(printed.stdout).toContain('readyWithin 120 s (default)');
     expect(printed.stdout).toContain('src/**/*.tsx');
+
+    const slow = await folder(
+      path,
+      'hb_site',
+      'preview',
+      '--command',
+      'yarn build && next dev --webpack --port {port}',
+      '--ready-within',
+      '900',
+    );
+    expect(slow.code, slow.stderr).toBe(0);
+    expect(slow.stdout).toContain('within 900 s');
+    expect(slow.stdout).toContain('readyWithin 900 s\n');
+    expect((await written(path)).find((b) => b['id'] === 'hb_site')?.['preview']).toEqual({
+      command: 'yarn build && next dev --webpack --port {port}',
+      readyWithinSeconds: 900,
+    });
+    const slowPrinted = await folder(path, 'hb_site', 'preview');
+    expect(slowPrinted.stdout).toContain('readyWithin 900 s\n');
+    expect(slowPrinted.stdout).not.toContain('readyWithin 900 s (default)');
 
     const cleared = await folder(path, 'hb_site', 'preview', '--clear');
     expect(cleared.code, cleared.stderr).toBe(0);

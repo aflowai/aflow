@@ -12,6 +12,7 @@ import { join } from 'node:path';
 
 import type { StackPortOwner } from '@aflow/lib';
 import { portTaken } from '@aflow/lib/port-probe';
+import { resolveFolderPreview } from '@aflow/schemas';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { LOOPBACK_LISTENER, requires } from './fixtures/capabilities.js';
@@ -54,6 +55,12 @@ function standIn(): NonNullable<StartPreviewInput['start']> {
       },
     };
   };
+}
+
+/** A clock that moves on by `stepMs` each time it is read. */
+function clockAdvancedBy(stepMs: number): () => number {
+  let at = 0;
+  return () => (at += stepMs);
 }
 
 let dir: string;
@@ -102,7 +109,7 @@ async function start(
   mode: string,
   options: {
     port?: number;
-    readyTimeoutMs?: number;
+    readyWithinSeconds?: number;
     signal?: AbortSignal;
     /** Keep the shell after the server, so the server is a process it forked. */
     forked?: boolean;
@@ -115,6 +122,7 @@ async function start(
         `"${process.execPath}" server.mjs {port} ${mode}` +
         (options.forked === true ? '; true' : ''),
       readyPath: '/health',
+      readyWithinSeconds: options.readyWithinSeconds ?? 20,
       uiPaths: [],
       webAppDirs: [],
     },
@@ -125,7 +133,6 @@ async function start(
     ownerRunId: 'run-preview',
     secrets: ['token-abc'],
     signal: options.signal ?? new AbortController().signal,
-    readyTimeoutMs: options.readyTimeoutMs ?? 20_000,
     pollMs: 50,
   });
 }
@@ -165,7 +172,7 @@ describe('a run’s preview', () => {
   );
 
   it('fails, naming the command and the last lines it printed, when it never answers', async () => {
-    const error = await start('silent', { port: UNUSED_PORTS.silent, readyTimeoutMs: 1_000 }).catch(
+    const error = await start('silent', { port: UNUSED_PORTS.silent, readyWithinSeconds: 1 }).catch(
       (e: unknown) => e,
     );
     expect(error).toBeInstanceOf(PreviewError);
@@ -173,7 +180,7 @@ describe('a run’s preview', () => {
     expect(message).toContain('server.mjs');
     expect(message).toContain('silent');
     expect(message).toMatch(
-      /did not answer at http:\/\/127\.0\.0\.1:\d+\/health or http:\/\/\[::1\]:\d+\/health within 1 s/,
+      /did not answer at http:\/\/127\.0\.0\.1:\d+\/health or http:\/\/\[::1\]:\d+\/health\. It was waited on for 1 s, and its declaration gives it 1 s to answer\./,
     );
     expect(message).toContain('secret=none');
     // What it printed is carried whole as well, for the run to keep.
@@ -185,7 +192,7 @@ describe('a run’s preview', () => {
   it('has ended a server the shell forked by the time it fails, not only the shell', async () => {
     const error = await start('silent', {
       port: UNUSED_PORTS.forked,
-      readyTimeoutMs: 1_000,
+      readyWithinSeconds: 1,
       forked: true,
     }).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(PreviewError);
@@ -201,7 +208,7 @@ describe('a run’s preview', () => {
   it('fails at once when the command exits before it answers', async () => {
     const port = UNUSED_PORTS.exits;
     const error = await startPreview({
-      preview: { command: 'echo boom {port}; exit 3', readyPath: '/', uiPaths: [], webAppDirs: [] },
+      preview: resolveFolderPreview({ command: 'echo boom {port}; exit 3', readyPath: '/' }),
       port,
       cwd: dir,
       scratchDir: await mkdtemp(join(dir, 'scratch-')),
@@ -209,7 +216,6 @@ describe('a run’s preview', () => {
       ownerRunId: 'run-exit',
       secrets: [],
       signal: new AbortController().signal,
-      readyTimeoutMs: 20_000,
       pollMs: 50,
     }).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(PreviewError);
@@ -221,7 +227,7 @@ describe('a run’s preview', () => {
   it('counts a preview answering on IPv6 loopback alone as ready, and hands over that address', async () => {
     const asked: string[] = [];
     const preview = await startPreview({
-      preview: { command: 'serve {port}', readyPath: '/health', uiPaths: [], webAppDirs: [] },
+      preview: resolveFolderPreview({ command: 'serve {port}', readyPath: '/health' }),
       port: 41_794,
       cwd: dir,
       scratchDir: await mkdtemp(join(dir, 'scratch-')),
@@ -246,7 +252,7 @@ describe('a run’s preview', () => {
 
   it('prefers IPv4 loopback when both answer', async () => {
     const preview = await startPreview({
-      preview: { command: 'serve {port}', readyPath: '/', uiPaths: [], webAppDirs: [] },
+      preview: resolveFolderPreview({ command: 'serve {port}' }),
       port: 41_795,
       cwd: dir,
       scratchDir: await mkdtemp(join(dir, 'scratch-')),
@@ -262,6 +268,67 @@ describe('a run’s preview', () => {
     await preview.stop();
   });
 
+  describe('waits as long as its declaration asks', () => {
+    /** A preview on a clock read by the test, its ready path answering from `answersAtMs` on. */
+    async function waitedOn(
+      declared: { readyWithinSeconds?: number },
+      answersAtMs = Number.POSITIVE_INFINITY,
+    ): Promise<{ outcome: StartedPreview | PreviewError; at: number }> {
+      let at = 0;
+      const outcome = await startPreview({
+        preview: resolveFolderPreview({
+          command: 'yarn build && next dev --port {port}',
+          ...declared,
+        }),
+        port: 41_799,
+        cwd: dir,
+        scratchDir: await mkdtemp(join(dir, 'scratch-')),
+        bindingId: 'hb_aflow',
+        ownerRunId: 'run-slow-build',
+        secrets: [],
+        signal: new AbortController().signal,
+        pollMs: 1,
+        start: standIn(),
+        now: () => at,
+        // Each poll asks both loopback hosts: fifteen seconds pass per ask.
+        fetch: () => {
+          at += 15_000;
+          return at >= answersAtMs
+            ? Promise.resolve(new Response('ok'))
+            : Promise.reject(new Error('ECONNREFUSED'));
+        },
+      }).catch((error: unknown) => {
+        if (error instanceof PreviewError) return error;
+        throw error;
+      });
+      return { outcome, at };
+    }
+
+    it('is waited on for 900 seconds when it declares --ready-within 900', async () => {
+      const served = await waitedOn({ readyWithinSeconds: 900 }, 870_000);
+      expect(served.outcome).not.toBeInstanceOf(PreviewError);
+      await (served.outcome as StartedPreview).stop();
+
+      const failed = await waitedOn({ readyWithinSeconds: 900 });
+      expect(failed.outcome).toBeInstanceOf(PreviewError);
+      expect(failed.at).toBe(900_000);
+      const message = (failed.outcome as PreviewError).message;
+      expect(message).toContain('It was waited on for 900 s');
+      expect(message).toContain('its declaration gives it 900 s to answer');
+      expect(message).toContain('aflow folder hb_aflow preview … --ready-within <seconds>');
+    });
+
+    it('keeps the 120-second default when it declares no figure', async () => {
+      const failed = await waitedOn({});
+      expect(failed.outcome).toBeInstanceOf(PreviewError);
+      expect(failed.at).toBe(120_000);
+      expect((failed.outcome as PreviewError).message).toContain(
+        'It was waited on for 120 s, and its declaration gives it 120 s to answer.',
+      );
+      expect((await waitedOn({}, 150_000)).outcome).toBeInstanceOf(PreviewError);
+    });
+  });
+
   it('reports its output as progress only until it has answered or failed', async () => {
     const outputs: Array<(text: string) => void> = [];
     const printing: NonNullable<StartPreviewInput['start']> = (service) => {
@@ -271,7 +338,7 @@ describe('a run’s preview', () => {
     let asks = 0;
     let progress = 0;
     const preview = await startPreview({
-      preview: { command: 'serve {port}', readyPath: '/', uiPaths: [], webAppDirs: [] },
+      preview: resolveFolderPreview({ command: 'serve {port}' }),
       port: 41_796,
       cwd: dir,
       scratchDir: await mkdtemp(join(dir, 'scratch-')),
@@ -305,7 +372,7 @@ describe('a run’s preview', () => {
     outputs.length = 0;
     progress = 0;
     const error = await startPreview({
-      preview: { command: 'serve {port}', readyPath: '/', uiPaths: [], webAppDirs: [] },
+      preview: resolveFolderPreview({ command: 'serve {port}' }),
       port: 41_797,
       cwd: dir,
       scratchDir: await mkdtemp(join(dir, 'scratch-')),
@@ -313,8 +380,8 @@ describe('a run’s preview', () => {
       ownerRunId: 'run-chatty-failed',
       secrets: [],
       signal: new AbortController().signal,
-      readyTimeoutMs: 50,
       pollMs: 10,
+      now: clockAdvancedBy(60_000),
       start: printing,
       onProgress: () => {
         progress += 1;
