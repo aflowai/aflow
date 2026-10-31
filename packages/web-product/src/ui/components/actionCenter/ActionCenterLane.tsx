@@ -19,6 +19,7 @@ import { useNavigation } from '../navigation-provider.js';
 import { AssignControl, AssigneeChip } from './AssignControl.js';
 import { useSpacePeople } from '../../hooks/use-space-people.js';
 import { useCurrentUser } from '../user-avatar.js';
+import { ItemTitleText, itemSummaryMarkdown, itemTextIsMarkdown } from './ItemText.js';
 
 export type ActionCenterNavigate = (target: {
   type: 'session' | 'workflow' | 'proposal';
@@ -293,6 +294,7 @@ function ActionCenterItemBody({
     : undefined;
 
   const resolutionErrorMessage = resolveError ?? sideEffectError;
+  const summarySlot = itemSummaryMarkdown(item);
 
   return (
     <HitlResolution
@@ -318,6 +320,8 @@ function ActionCenterItemBody({
       state={resolveState}
       {...(resolutionErrorMessage ? { errorMessage: resolutionErrorMessage } : {})}
       {...(backlinks ? { bodySlot: backlinks } : {})}
+      {...(itemTextIsMarkdown(item) ? { titleSlot: <ItemTitleText item={item} /> } : {})}
+      {...(summarySlot !== undefined ? { summarySlot } : {})}
     />
   );
 }

@@ -222,3 +222,48 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
     </div>
   );
 });
+
+/** What a line of text keeps of markdown: emphasis, code and links. Blocks unwrap to their text. */
+const INLINE_MARKDOWN_ELEMENTS = ['p', 'strong', 'em', 'del', 'code', 'a', 'br'];
+
+function InlineCode({ children }: { children?: React.ReactNode }) {
+  return <code>{children}</code>;
+}
+
+const inlineMarkdownComponents: ComponentPropsWithoutRef<typeof ReactMarkdown>['components'] = {
+  p: PrePassthrough,
+  code: InlineCode,
+  a: LinkComponent,
+};
+
+export interface InlineMarkdownProps {
+  /** Markdown source text, one line as a title holds it */
+  content: string;
+  className?: string;
+  style?: CSSProperties | undefined;
+}
+
+/**
+ * InlineMarkdown — renders markdown inside a line of text, such as a title.
+ * It keeps emphasis, inline code and links, and unwraps every block to its
+ * text, so a heading or a list in a title reads as words, not as markup.
+ * It inherits the colour and line height of the text around it.
+ */
+export const InlineMarkdown = memo(function InlineMarkdown({
+  content,
+  className = '',
+  style,
+}: InlineMarkdownProps) {
+  return (
+    <span className={`md-content md-inline ${className}`} style={style}>
+      <ReactMarkdown
+        remarkPlugins={remarkPlugins}
+        allowedElements={INLINE_MARKDOWN_ELEMENTS}
+        unwrapDisallowed
+        components={inlineMarkdownComponents}
+      >
+        {content}
+      </ReactMarkdown>
+    </span>
+  );
+});

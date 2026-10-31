@@ -1,12 +1,17 @@
 import { z } from 'zod';
-import { PLAN_NODE_MERGE_WAIT_LINE, PLAN_NODE_UPDATE_OPERATION_ID } from '@aflow/schemas';
+import {
+  PLAN_NODE_UPDATE_OPERATION_ID,
+  planItemSummary,
+  planItemTitle,
+  planNoteHoldsMergeWait,
+} from '@aflow/schemas';
 import {
   createPlanNodeStore,
   createResidentScheduleStore,
   requestResidentWake,
-  listAskedNodes,
+  listWaitingNodes,
   planAsk,
-  findAskedNode,
+  findWaitingNode,
   openPlanNode,
   updatePlanNode,
 } from '@aflow/cybernetic-runtime';
@@ -25,8 +30,8 @@ export function planAskItem(node: PlanNode): ActionCenterSourceItem {
     spaceId: node.spaceId,
     kind: 'human_approval',
     origin: { type: 'plan_ask', nodeId: node.nodeId, revision: node.revision },
-    title: `${node.status !== 'blocked' ? 'Judge merge' : 'Blocked'}: ${node.title}`.slice(0, 256),
-    summary: planAsk(node).waitsOn.slice(0, 2_000),
+    title: planItemTitle(node.status !== 'blocked' ? 'merge_wait' : 'blocked', node.title),
+    summary: planItemSummary(planAsk(node).waitsOn),
     uiHints: {
       approveLabel: node.status !== 'blocked' ? 'Close done' : 'Approve',
       rejectLabel: 'Drop',
@@ -51,13 +56,13 @@ export function createPlanAskSource(deps: ActionCenterSourceDeps): ActionCenterS
     rowScope: 'space',
     handlesOriginTypes: ['plan_ask'],
     async listOpen(scope) {
-      return (await listAskedNodes(context(scope))).map(planAskItem);
+      return (await listWaitingNodes(context(scope))).map(planAskItem);
     },
     async getById(ctx, id) {
       if (!id.startsWith('plan-ask:')) return null;
       const parsed = z.string().uuid().safeParse(id.slice('plan-ask:'.length));
       if (!parsed.success) return null;
-      const node = await findAskedNode(context(ctx), parsed.data);
+      const node = await findWaitingNode(context(ctx), parsed.data);
       return node ? planAskItem(node) : null;
     },
     async resolve(ctx, item, resolution, observed) {
@@ -76,9 +81,9 @@ export function createPlanAskSource(deps: ActionCenterSourceDeps): ActionCenterS
       }
       const write = { ...context(ctx), createdBy: ctx.actorUserId, actorKind: 'human' as const };
       const input = { nodeId: observed.nodeId, expectedRevision: observed.revision };
-      const node = await findAskedNode(context(ctx), observed.nodeId);
+      const node = await findWaitingNode(context(ctx), observed.nodeId);
       const closesMerge =
-        node?.status !== 'blocked' && node?.note?.includes(PLAN_NODE_MERGE_WAIT_LINE) === true;
+        node !== null && node.status !== 'blocked' && planNoteHoldsMergeWait(node.note);
       const result =
         resolution.kind === 'approve'
           ? closesMerge

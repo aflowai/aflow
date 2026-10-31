@@ -191,6 +191,12 @@ export const PlanNodeSummarySchema = z
     position: z.number().int().min(0),
     /** The note's first line. */
     noteHead: z.string().optional(),
+    /**
+     * Present, and true, only where the note holds `PLAN_NODE_MERGE_WAIT_LINE`.
+     * A summary carries the note's first line only, so a walk of the tree says
+     * this way whether the node waits on a person to judge a merge (Plan 338 D1).
+     */
+    mergeWait: z.literal(true).optional(),
     createdAt: z.string().datetime(),
     updatedAt: z.string().datetime(),
     /** When it was marked done or dropped; absent while it is open. */
@@ -214,6 +220,11 @@ export const PLAN_NODE_ASK_HEAD = 'Waiting on you: ';
 export const PLAN_NODE_MERGE_WAIT_LINE =
   'Waiting on you: judge this merge because the scheduled close lacks a publication pull request that GitHub reports merged.';
 export const PLAN_NODE_LIVE_CHECK_HEAD = `${PLAN_NODE_BLOCKED_HEAD}live check — `;
+
+/** Whether a note holds the merge-wait line: its node waits on a person to judge a merge. */
+export function planNoteHoldsMergeWait(note: string | null | undefined): boolean {
+  return note?.includes(PLAN_NODE_MERGE_WAIT_LINE) === true;
+}
 
 /** The line that says what a blocked node waits on, wherever it sits in the note. */
 export function planNoteWaitLine(note: string | undefined): string | undefined {

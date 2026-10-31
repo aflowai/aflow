@@ -6,13 +6,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import Redis from 'ioredis-mock';
 import type { Redis as RedisType } from 'ioredis';
-import { StreamKeys, type PlanNode, type PlanNodeCreateInput } from '@aflow/schemas';
+import {
+  PLAN_OPEN_DECISIONS_LIMIT,
+  StreamKeys,
+  type PlanNode,
+  type PlanNodeCreateInput,
+} from '@aflow/schemas';
 import {
   createPlanNode,
   findOpenDecision,
   linkPlanNode,
   listOpenDecisions,
-  PLAN_OPEN_DECISIONS_LIMIT,
   updatePlanNode,
   type PlanWriteContext,
 } from '../plan/operations.js';

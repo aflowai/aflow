@@ -15,6 +15,7 @@
   "dependencies": {
     "@aflow/ai-client": "workspace:*",
     "@aflow/credential-resolver": "workspace:*",
+    "@aflow/cybernetic-runtime": "workspace:*",
     "@aflow/database": "workspace:*",
     "@aflow/executor-runtime": "workspace:*",
     "@aflow/integration-simulator": "workspace:*",
@@ -27,8 +28,7 @@
     "@aflow/redis": "workspace:*",
     "@aflow/schemas": "workspace:*",
     "ajv": "^8.20.0",
-    "fast-xml-parser": "5.11.2",
-    "@aflow/cybernetic-runtime": "workspace:*"
+    "fast-xml-parser": "5.11.2"
   },
   "devDependencies": {
     "@types/node": "^22.20.5",

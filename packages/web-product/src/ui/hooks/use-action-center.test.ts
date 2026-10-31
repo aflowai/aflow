@@ -68,7 +68,7 @@ describe('partitionLanes — Plan 156 §7A.2 Coach lane split', () => {
     expect(lanes.coachProposals).toHaveLength(0);
   });
 
-  it('routes a plan decision to inputs, where Needs attention answers it (Plan 322 P3.2)', () => {
+  it('routes a plan decision to inputs, where Pending answers it (Plan 322 P3.2)', () => {
     const lanes = partitionLanes([
       item('human_input', {
         id: 'plan-decision:00000000-0000-4000-8000-0000000000d1',

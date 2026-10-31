@@ -51,8 +51,10 @@ the card, so it holds these sections, in this order:
 - The criteria the plan is done against.
 ```
 
-Keep a section with nothing in it as its heading with no items. The node card
-records it as an empty list. Write one or two short sentences an item.
+Write one item for Today and one item for After. Write at least one reason
+under Why. `plan.node.create` refuses a card that leaves out any of the three.
+Keep any other section with nothing in it as its heading with no items. The
+node card records it as an empty list. Write one or two short sentences an item.
 The card on the plan's node holds the same sections, and Done when is the node's criteria.
 
 Write the card and the plan to the writing rules of Plan 333 D2:
@@ -116,6 +118,7 @@ the wrong shape, change the plan rather than quietly diverging from it.
 | [336](336-mcp-on-the-private-network.md)                                    | An MCP server on the operator's private network connects        |
 | [337](337-plans-the-operator-can-decide-from.md)                            | Plans the operator can decide from (P1, P3 template, P4 built)  |
 | [338](338-the-operator-learns-what-waits-on-them.md)                        | The operator learns what waits on them                          |
+| [339](339-the-loop-moves-on-events.md)                                      | The loop moves on events                                        |
 
 ## What a plan is not
 

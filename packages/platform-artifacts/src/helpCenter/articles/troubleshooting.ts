@@ -21,7 +21,7 @@ If the error is about a model key, a banner above the composer names the provide
 
 A paused run is usually waiting for a person. Look for:
 
-- An item in the **Workbench** under **Needs attention**: an approval for a write, a question, or a proposal.
+- An item in the **Workbench** under **Pending**: an approval for a write, a question, or a proposal.
 - On the skill run's page, a task marked **Paused — action expected**, with **Approve** or **Submit** in place.
 - A skill that starts with a connection missing pauses at the beginning; complete the setup it names.
 

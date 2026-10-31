@@ -8,23 +8,26 @@
  * The record is a Redis key per node holding the revision the node stands at
  * once asked — the revision the ask's own note write lands at, where it makes
  * one. Any later write moves the revision past it and re-arms the ask. The
- * Action Center item is read from the node and this record, and stored nowhere.
+ * record governs the walk's ask and the note line it writes, and nothing
+ * else. The Action Center item is read from the node alone, at list time, and
+ * stored nowhere (Plan 338 D1).
  */
 import type { Redis } from 'ioredis';
 import {
   isClosedPlanNodeStatus,
   OPEN_PLAN_NODE_STATUSES,
   PLAN_NODE_ASK_HEAD,
-  PLAN_NODE_MERGE_WAIT_LINE,
   PLAN_NODE_PROSE_MAX_CHARS,
+  PLAN_OPEN_ASKS_LIMIT,
   PLAN_TREE_DEPTH_LIMIT,
+  planNoteHoldsMergeWait,
   planNoteWaitLine,
   type PlanNode,
+  type PlanNodeSummary,
   type PlanNodeUpdate,
 } from '@aflow/schemas';
 import { publishActionCenterWake } from '@aflow/redis';
 import { PLAN_TREE_WALK_BOUNDS, type PlanReadContext } from './operations.js';
-import { orderPlanTree } from './tree.js';
 
 /**
  * How long an ask stands without a write to its node. Past it the next wake
@@ -32,9 +35,6 @@ import { orderPlanTree } from './tree.js';
  * record of a node deleted or closed meanwhile is gone with it.
  */
 export const PLAN_ASKED_TTL_MS = 7 * 24 * 60 * 60_000;
-
-/** The most asked nodes the space's Action Center lists at once. */
-export const PLAN_OPEN_ASKS_LIMIT = 50;
 
 /** The line an ask appends where the note does not already say what the node waits on. */
 export const PLAN_ASK_DEFAULT_LINE = `${PLAN_NODE_ASK_HEAD}approve it on the plan page or in the Action Center to start it, or write what it needs.`;
@@ -118,49 +118,66 @@ export async function claimAsk(
   return true;
 }
 
-function waitsOnPerson(node: Pick<PlanNode, 'status' | 'note'>): boolean {
+/**
+ * Whether a node waits on a person, by the rule the Action Center lists by
+ * (Plan 338 D1): open, not a `decide` node, and `blocked` or carrying the
+ * merge-wait line. A `decide` node is raised by its own item. Whether every
+ * branch above it is open is the walk's to say, which passes no closed node.
+ * The store's summaries carry `mergeWait`, read from the whole note.
+ */
+export function isWaitingPlanNode(
+  node: Pick<PlanNodeSummary, 'kind' | 'status' | 'mergeWait'>,
+): boolean {
+  if (node.kind === 'decide' || isClosedPlanNodeStatus(node.status)) return false;
   return (
     node.status === 'blocked' ||
-    ((node.status === 'active' || node.status === 'waiting') &&
-      node.note?.includes(PLAN_NODE_MERGE_WAIT_LINE) === true)
+    ((node.status === 'active' || node.status === 'waiting') && node.mergeWait === true)
   );
 }
 
-function askable(node: PlanNode | null, record: string | null): node is PlanNode {
-  return node !== null && waitsOnPerson(node) && node.kind !== 'decide' && isAsked(node, record);
+function waitingNode(node: PlanNode | null): node is PlanNode {
+  return (
+    node !== null &&
+    isWaitingPlanNode({
+      kind: node.kind,
+      status: node.status,
+      ...(planNoteHoldsMergeWait(node.note) ? { mergeWait: true as const } : {}),
+    })
+  );
+}
+
+/** Newest first by `updatedAt`, a tie by id, so the cut keeps the same nodes on every read. */
+function newestFirst(a: PlanNodeSummary, b: PlanNodeSummary): number {
+  return b.updatedAt.localeCompare(a.updatedAt) || a.nodeId.localeCompare(b.nodeId);
 }
 
 /**
- * The space's blocked nodes asked about at the revision they stand at, in tree
- * order, under open branches only — what its Action Center lists. A `decide`
- * node is asked by its own item.
+ * The space's nodes that wait on a person, under open branches only — what its
+ * Action Center lists. At most `PLAN_OPEN_ASKS_LIMIT`, newest first. The ask
+ * record does not gate it: a node is listed the moment it is blocked, whether
+ * or not a wake has asked about it, and after its record lapses.
  */
-export async function listAskedNodes(ctx: PlanAskContext): Promise<PlanNode[]> {
+export async function listWaitingNodes(ctx: PlanReadContext): Promise<PlanNode[]> {
   const walk = await ctx.store.walk(ctx.spaceId, {
     statuses: OPEN_PLAN_NODE_STATUSES,
     ...PLAN_TREE_WALK_BOUNDS,
   });
-  const blocked = orderPlanTree(walk.nodes)
-    .map((placed) => placed.node)
-    .filter((node) => !isClosedPlanNodeStatus(node.status) && node.kind !== 'decide');
-  if (blocked.length === 0) return [];
-  const records = await ctx.redis.mget(
-    ...blocked.map((node) => askedKey(ctx.tenantId, ctx.spaceId, node.nodeId)),
-  );
-  const asked = blocked
-    .filter((node, i) => isAsked(node, records[i] ?? null))
+  const listed = walk.nodes
+    .filter(isWaitingPlanNode)
+    .sort(newestFirst)
     .slice(0, PLAN_OPEN_ASKS_LIMIT);
-  const nodes = await Promise.all(asked.map((n) => ctx.store.find(ctx.spaceId, n.nodeId)));
+  const nodes = await Promise.all(listed.map((n) => ctx.store.find(ctx.spaceId, n.nodeId)));
   // Re-judged on the full read: a node written between the walk and here is not listed.
-  return nodes.filter((node, i): node is PlanNode =>
-    askable(node, records[blocked.indexOf(asked[i]!)] ?? null),
-  );
+  return nodes.filter(waitingNode);
 }
 
-/** One asked node by id, by the rule `listAskedNodes` lists by; null for any other. */
-export async function findAskedNode(ctx: PlanAskContext, nodeId: string): Promise<PlanNode | null> {
+/** One waiting node by id, by the rule `listWaitingNodes` lists by; null for any other. */
+export async function findWaitingNode(
+  ctx: PlanReadContext,
+  nodeId: string,
+): Promise<PlanNode | null> {
   const node = await ctx.store.find(ctx.spaceId, nodeId);
-  if (!askable(node, await askedRevision(ctx, nodeId))) return null;
+  if (!waitingNode(node)) return null;
   let parentId = node.parentId;
   for (let depth = 0; parentId !== null && depth < PLAN_TREE_DEPTH_LIMIT; depth++) {
     const parent = await ctx.store.find(ctx.spaceId, parentId);

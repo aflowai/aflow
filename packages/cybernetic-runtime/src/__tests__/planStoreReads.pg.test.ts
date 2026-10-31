@@ -17,7 +17,13 @@ import {
   withTenantSchema,
   type TenantContext,
 } from '@aflow/database';
-import { PLAN_NODE_NOTE_HEAD_MAX_CHARS, type PlanNode } from '@aflow/schemas';
+import {
+  OPEN_PLAN_NODE_STATUSES,
+  PLAN_NODE_MERGE_WAIT_LINE,
+  PLAN_NODE_NOTE_HEAD_MAX_CHARS,
+  PlanNodeSummarySchema,
+  type PlanNode,
+} from '@aflow/schemas';
 import { createPlanNode, linkPlanNode, updatePlanNode } from '../plan/operations.js';
 import { createPlanNodeStore } from '../plan/store.js';
 
@@ -106,6 +112,26 @@ describeDb('plan store reads for the operator’s plan (real DB)', () => {
       runs: [],
       total: 0,
     });
+  });
+
+  it('flags a walked node whose note holds the merge-wait line below its first, and only that one', async () => {
+    const merge = await node('Merge to judge', OTHER_SPACE_ID);
+    const written = await updatePlanNode(ctx(OTHER_SPACE_ID), {
+      nodeId: merge.nodeId,
+      expectedRevision: merge.revision,
+      note: `Operator context\n${PLAN_NODE_MERGE_WAIT_LINE}`,
+    });
+    expect(written.ok).toBe(true);
+    const plain = await node('Plain step', OTHER_SPACE_ID);
+    const walk = await store.walk(OTHER_SPACE_ID, {
+      statuses: OPEN_PLAN_NODE_STATUSES,
+      maxDepth: 5,
+      maxNodes: 100,
+    });
+    const byId = new Map(walk.nodes.map((n) => [n.nodeId, n]));
+    expect(byId.get(merge.nodeId)).toMatchObject({ mergeWait: true, noteHead: 'Operator context' });
+    expect(byId.get(plain.nodeId)).not.toHaveProperty('mergeWait');
+    expect(PlanNodeSummarySchema.array().safeParse(walk.nodes).success).toBe(true);
   });
 
   beforeAll(async () => {

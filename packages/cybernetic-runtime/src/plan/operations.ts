@@ -21,6 +21,7 @@ import {
   PLAN_NODE_LINKS_LIMIT,
   PLAN_NODE_LIST_DEFAULT_LIMIT,
   PLAN_LANE_ITEM_RUNS_LIMIT,
+  PLAN_OPEN_DECISIONS_LIMIT,
   PLAN_NODE_RUNS_LIMIT,
   PLAN_NODE_PROSE_MAX_CHARS,
   PLAN_TREE_DEPTH_LIMIT,
@@ -1161,9 +1162,6 @@ async function readPlanNode(
 // ============================================================================
 // The decisions the plan asks of the operator (Plan 322 P3.2)
 // ============================================================================
-
-/** The most open `decide` nodes the space's Action Center lists at once. */
-export const PLAN_OPEN_DECISIONS_LIMIT = 50;
 
 /**
  * The space's open `decide` nodes, in tree order, whose every ancestor is open

@@ -28,6 +28,7 @@ import type { PlanNodeDetailOutput, PlanRootRow, PlanRootState } from '@aflow/sc
 import { useApiQuery } from '../../hooks/useApiQuery.js';
 import {
   PLAN_STATE_LABEL,
+  planCountNoun,
   planListSections,
   planRowMoveTargets,
   planRowProgress,
@@ -38,6 +39,7 @@ import {
   Disclosure,
   GroupLabel,
   MetaSep,
+  PLAN_ORB_SIZE,
   PlanStateOrb,
   ProgressMeter,
   selectableStyle,
@@ -221,7 +223,7 @@ const listStyle: CSSProperties = { listStyle: 'none', margin: 0, padding: 0 };
 /** A row: the state orb's gutter, the main area that is its hit target, a quiet action at its end. */
 const rowGrid: CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: '20px minmax(0, 1fr) auto',
+  gridTemplateColumns: `${String(PLAN_ORB_SIZE.row)}px minmax(0, 1fr) auto`,
   alignItems: 'center',
   columnGap: 'var(--space-2)',
   padding: 'var(--space-1-5) var(--space-2)',
@@ -278,7 +280,7 @@ const attentionCount: CSSProperties = {
 function rowStateLine(row: PlanRootRow): string {
   const inFlight = row.counts?.inFlight ?? 0;
   return row.state === 'in_flight' && inFlight > 0
-    ? `${String(inFlight)} in flight`
+    ? `${String(inFlight)} ${planCountNoun('in_flight')}`
     : PLAN_STATE_LABEL[row.state];
 }
 
@@ -382,7 +384,7 @@ function PlanRowView({
               <>
                 <MetaSep />
                 <Text size="xs" variant="muted" data-plan-row-in-flight>
-                  {`${String(inFlight)} in flight`}
+                  {`${String(inFlight)} ${planCountNoun('in_flight')}`}
                 </Text>
               </>
             )}
@@ -396,11 +398,11 @@ function PlanRowView({
         {needsYou > 0 && (
           <span
             data-plan-row-needs-you={needsYou}
-            title={`${String(needsYou)} need you`}
+            title={`${String(needsYou)} ${planCountNoun('needs_you')}`}
             style={attentionCount}
           >
             {String(needsYou)}
-            <span style={srOnly}> need you</span>
+            <span style={srOnly}> {planCountNoun('needs_you')}</span>
           </span>
         )}
       </button>

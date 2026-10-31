@@ -11,6 +11,7 @@ import {
   PlanNodeLinkKindSchema,
   planBoardCards,
   planBoardColumn,
+  planRootWaits,
   type PlanBoardPlacement,
   type PlanLane,
   type PlanLaneItem,
@@ -174,14 +175,15 @@ function nextNodeIdOf(root: PlanTreeNode): string | undefined {
  * has work in flight reads `needs_you`; its row carries both counts. Every
  * step closed is `finished`, never a status: the root stays open until the
  * operator closes it, because a node is done against its own criteria, not
- * its children's (Plan 322 D2).
+ * its children's (Plan 322 D2). A blocked root reads `needs_you` whatever its
+ * steps, because it waits on a person itself (Plan 338 D5).
  */
 export function planRootState(
   rootStatus: PlanNodeStatus,
   counts: Pick<PlanRootCounts, 'steps' | 'needsYou' | 'inFlight' | 'upNext'>,
 ): PlanRootState {
   if (isClosedPlanNodeStatus(rootStatus)) return 'closed';
-  if (counts.needsYou > 0) return 'needs_you';
+  if (planRootWaits({ status: rootStatus }) || counts.needsYou > 0) return 'needs_you';
   if (counts.inFlight > 0) return 'in_flight';
   if (counts.upNext > 0) return 'queued';
   return counts.steps > 0 ? 'finished' : 'empty';
@@ -201,7 +203,7 @@ function tallyOf(root: PlanTreeNode, dayOf: (iso: string) => string): PlanRootTa
   const nextNodeId = nextNodeIdOf(root);
   const counted: PlanRootCounts = {
     steps: cards.length,
-    needsYou: counts.needs_you,
+    needsYou: counts.needs_you + (planRootWaits(root) ? 1 : 0),
     inFlight: counts.in_flight,
     upNext: counts.up_next,
     done: counts.done,
@@ -364,6 +366,10 @@ export function buildPlanOverview(
     const columns = { needs_you: 0, in_flight: 0, up_next: 0 };
     const placements = new Map<string, PlanBoardPlacement>();
     let lastWrittenAt = later(root.updatedAt, counted?.closedWrittenAt);
+    if (planRootWaits(root)) {
+      columns.needs_you++;
+      needsYou.push(laneItem(root, root, { column: 'needs_you', reason: 'blocked' }));
+    }
     for (const step of steps) {
       const activity = step.inFlightRuns > 0 || served.has(step.nodeId) ? 'in_flight' : 'idle';
       const placement = planBoardColumn(

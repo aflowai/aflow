@@ -12,6 +12,12 @@
   border-radius: var(--radius-md);
 }
 
+/* A line of text with markdown in it takes the colour and rhythm of the line. */
+.md-content.md-inline {
+  line-height: inherit;
+  color: inherit;
+}
+
 /* Remove margin from the first and last elements to avoid extra spacing
    inside chat bubbles */
 .md-content > :first-child {
