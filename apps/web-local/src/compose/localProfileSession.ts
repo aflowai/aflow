@@ -10,6 +10,10 @@
  * Which profile the browser chose is also kept in a second cookie. It keys the
  * preferred space, so each profile lands in its own space, and authorizes
  * nothing.
+ *
+ * A locked profile's tile opens the PIN prompt instead of posting (Plan 335
+ * P4). The prompt posts here with the PIN, and the API decides whether it is
+ * right. A refused PIN returns to the prompt and sets no cookie.
  */
 import { NextResponse } from 'next/server';
 
@@ -17,9 +21,14 @@ import {
   ACTIVE_PROFILE_COOKIE,
   LOCAL_PROFILE_CHOICE_FIELD,
   LOCAL_PROFILE_PICKER_PATH,
+  LOCAL_PROFILE_PIN_FIELD,
   LocalProfileChoicesResponseSchema,
   LocalProfileSessionResponseSchema,
+  isLocalProfilePinRefusal,
+  localProfileUnlockHref,
+  readRefusalCode,
   type LocalProfileChoice,
+  type LocalProfilePinError,
 } from '@aflow/web-product';
 
 import { isProfileSessionRefusal } from '@/compose/localRecovery';
@@ -69,22 +78,68 @@ export async function readProfileChoices(
   }
 }
 
-/** The session the API issued for the chosen profile, or null when it issued none. */
+const PIN_ERROR_VALUES: readonly LocalProfilePinError[] = ['required', 'incorrect', 'throttled'];
+
+/**
+ * The locked profile a picker URL asks the PIN for, and why it asks again.
+ * Null when the URL names no profile, or one with no PIN, so the tiles show.
+ */
+export function unlockingFrom(
+  profiles: readonly LocalProfileChoice[],
+  unlock: string | string[] | undefined,
+  error: string | string[] | undefined,
+): { profile: LocalProfileChoice; error: LocalProfilePinError | null } | null {
+  const profile = profiles.find((p) => p.userId === unlock && p.hasPin);
+  if (profile === undefined) return null;
+  const known = PIN_ERROR_VALUES.find((value) => value === error);
+  return { profile, error: known ?? null };
+}
+
+export type ProfileSessionOutcome =
+  | { kind: 'issued'; userId: string; session: string }
+  /** The profile is locked, and the PIN was missing, wrong, or tried too often. */
+  | { kind: 'pin'; error: LocalProfilePinError }
+  | null;
+
+const PIN_ERRORS: Record<string, LocalProfilePinError> = {
+  PROFILE_PIN_REQUIRED: 'required',
+  PROFILE_PIN_INCORRECT: 'incorrect',
+  PROFILE_PIN_THROTTLED: 'throttled',
+};
+
+/**
+ * The session the API issued for the chosen profile, the reason a locked
+ * profile's PIN let nothing through, or null when it issued none for any
+ * other reason.
+ */
 export async function issueProfileSession(
   userId: string,
+  pin: string | undefined,
   fetchImpl: Fetch = fetch,
-): Promise<{ userId: string; session: string } | null> {
+): Promise<ProfileSessionOutcome> {
   const headers = secretHeaders();
   if (headers === null) return null;
   try {
     const response = await fetchImpl(
       `${localApiUrl()}/v1/local-profiles/${encodeURIComponent(userId)}/session`,
-      { method: 'POST', headers, cache: 'no-store' },
+      pin === undefined
+        ? { method: 'POST', headers, cache: 'no-store' }
+        : {
+            method: 'POST',
+            headers: { ...headers, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pin }),
+            cache: 'no-store',
+          },
     );
-    if (!response.ok) return null;
+    if (!response.ok) {
+      const code = await readRefusalCode(response);
+      return isLocalProfilePinRefusal(code)
+        ? { kind: 'pin', error: PIN_ERRORS[code] ?? 'required' }
+        : null;
+    }
     const parsed = LocalProfileSessionResponseSchema.safeParse(await response.json());
     if (!parsed.success) return null;
-    return { userId: parsed.data.profile.userId, session: parsed.data.session };
+    return { kind: 'issued', userId: parsed.data.profile.userId, session: parsed.data.session };
   } catch {
     return null;
   }
@@ -94,7 +149,8 @@ export async function issueProfileSession(
  * Answers a tile's post: the session and the chosen profile in cookies, then
  * the front door, which enters that profile's preferred space.
  *
- * A choice the API refused goes back to the picker with a notice, and the
+ * A refused PIN goes back to that profile's PIN prompt with the reason. Any
+ * other refused choice goes back to the picker with a notice. Either way the
  * browser keeps whatever session it held.
  */
 export async function answerProfileChoice(
@@ -103,8 +159,18 @@ export async function answerProfileChoice(
 ): Promise<Response> {
   const form = await request.formData().catch(() => null);
   const userId = form?.get(LOCAL_PROFILE_CHOICE_FIELD);
-  const issued = typeof userId === 'string' ? await issueProfileSession(userId, fetchImpl) : null;
-  if (issued === null) {
+  const pin = form?.get(LOCAL_PROFILE_PIN_FIELD);
+  const issued =
+    typeof userId === 'string'
+      ? await issueProfileSession(userId, typeof pin === 'string' ? pin : undefined, fetchImpl)
+      : null;
+  if (issued?.kind === 'pin' && typeof userId === 'string') {
+    return NextResponse.redirect(
+      new URL(localProfileUnlockHref(userId, issued.error), request.url),
+      303,
+    );
+  }
+  if (issued?.kind !== 'issued') {
     const back = new URL(LOCAL_PROFILE_PICKER_PATH, request.url);
     back.searchParams.set(CHOICE_FAILED_PARAM, '1');
     return NextResponse.redirect(back, 303);

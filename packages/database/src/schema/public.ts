@@ -213,6 +213,12 @@ export const users = pgTable('users', {
    */
   profileSessionGeneration: integer('profile_session_generation').notNull().default(0),
 
+  /**
+   * The local edition's profile PIN as a salted scrypt hash (Plan 335 P4).
+   * Null for a profile with no PIN. The PIN itself is never stored.
+   */
+  profilePinHash: text('profile_pin_hash'),
+
   /** When the user was created */
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 

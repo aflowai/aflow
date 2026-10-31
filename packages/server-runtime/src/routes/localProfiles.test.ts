@@ -5,6 +5,9 @@
  * Plan 335 P3: the picker answers the instance secret with no profile session,
  * and it issues a session only for a profile that exists.
  *
+ * Plan 335 P4: only the owner sets and resets a PIN, each change drops the
+ * count, and a locked profile gets no session without its PIN.
+ *
  * The service is a double here. `localProfiles.pg.test.ts` runs it on a real
  * database.
  */
@@ -20,9 +23,11 @@ const service = vi.hoisted(() => ({
   previewLocalProfileRemoval: vi.fn(),
   removeLocalProfile: vi.fn(),
   readLocalProfile: vi.fn(),
+  setLocalProfilePin: vi.fn(),
+  resetLocalProfilePin: vi.fn(),
 }));
 
-const sessions = vi.hoisted(() => ({ readLocalProfileSessionGeneration: vi.fn() }));
+const sessions = vi.hoisted(() => ({ readLocalProfileSessionGate: vi.fn() }));
 
 vi.mock('../services/localProfiles.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../services/localProfiles.js')>();
@@ -37,6 +42,7 @@ vi.mock('../plugins/localProfiles.js', async (importOriginal) => {
 const { localProfileRoutes } = await import('./localProfiles.js');
 const { LocalProfileError } = await import('../services/localProfiles.js');
 const { readLocalProfileSession } = await import('../plugins/localProfiles.js');
+const { hashLocalProfilePin } = await import('../services/localProfilePin.js');
 
 const OWNER = '00000000-0000-4000-8000-0000000ed1c1';
 const SECOND = '00000000-0000-4000-8000-000000000b0b';
@@ -52,6 +58,7 @@ const profile = (userId: string, role: 'owner' | 'member'): LocalProfile => ({
   avatar: role === 'owner' ? null : 'owl',
   role,
   isOwner: role === 'owner',
+  hasPin: false,
   createdAt: new Date(0).toISOString(),
 });
 
@@ -87,12 +94,22 @@ async function build(
   return { app, dropLocalProfileCount };
 }
 
+const choice = (p: LocalProfile) => ({
+  userId: p.userId,
+  displayName: p.displayName,
+  avatar: p.avatar,
+  isOwner: p.isOwner,
+  hasPin: p.hasPin,
+});
+
 const CALLS = [
   { method: 'GET', url: '/' },
   { method: 'POST', url: '/', payload: { displayName: 'Bob', avatar: 'owl' } },
   { method: 'PATCH', url: `/${SECOND}`, payload: { displayName: 'Robert' } },
   { method: 'GET', url: `/${SECOND}/removal` },
   { method: 'DELETE', url: `/${SECOND}` },
+  { method: 'PUT', url: `/${SECOND}/pin`, payload: { pin: '2468' } },
+  { method: 'DELETE', url: `/${SECOND}/pin` },
 ] as const;
 
 const PICKER_CALLS = [
@@ -227,13 +244,6 @@ describe('local profile routes', () => {
 });
 
 describe('the profile picker', () => {
-  const choice = (p: LocalProfile) => ({
-    userId: p.userId,
-    displayName: p.displayName,
-    avatar: p.avatar,
-    isOwner: p.isOwner,
-  });
-
   it('answers a browser that authentication refuses for want of a session', async () => {
     const { app } = await build('community-local', 'member', { sessionless: true });
     expect(
@@ -272,7 +282,7 @@ describe('the profile picker', () => {
   it('issues a session that names the chosen profile at its generation', async () => {
     const { app } = await build('community-local', 'member', { sessionless: true });
     service.readLocalProfile.mockResolvedValue(profile(SECOND, 'member'));
-    sessions.readLocalProfileSessionGeneration.mockResolvedValue(3);
+    sessions.readLocalProfileSessionGate.mockResolvedValue({ generation: 3, pinHash: null });
     const res = await app.inject({ method: 'POST', url: `/${SECOND}/session`, headers: WEB });
     expect(res.statusCode).toBe(200);
     const body = res.json<{ profile: unknown; session: string }>();
@@ -290,14 +300,14 @@ describe('the profile picker', () => {
     const res = await app.inject({ method: 'POST', url: `/${SECOND}/session`, headers: WEB });
     expect(res.statusCode).toBe(404);
     expect(res.json()).not.toHaveProperty('session');
-    expect(sessions.readLocalProfileSessionGeneration).not.toHaveBeenCalled();
+    expect(sessions.readLocalProfileSessionGate).not.toHaveBeenCalled();
     await app.close();
   });
 
   it('issues no session for a profile whose user row has gone', async () => {
     const { app } = await build('community-local', 'owner');
     service.readLocalProfile.mockResolvedValue(profile(SECOND, 'member'));
-    sessions.readLocalProfileSessionGeneration.mockResolvedValue(null);
+    sessions.readLocalProfileSessionGate.mockResolvedValue(null);
     const res = await app.inject({ method: 'POST', url: `/${SECOND}/session`, headers: WEB });
     expect(res.statusCode).toBe(404);
     expect(res.json()).not.toHaveProperty('session');
@@ -323,6 +333,144 @@ describe('the profile picker', () => {
     const res = await app.inject({ method: 'POST', url: '/not-a-user/session', headers: WEB });
     expect(res.statusCode).toBe(400);
     expect(service.readLocalProfile).not.toHaveBeenCalled();
+    await app.close();
+  });
+});
+
+describe('a profile PIN', () => {
+  const PIN = '2468';
+  const locked = { ...profile(SECOND, 'member'), hasPin: true };
+  let pinHash: string;
+
+  beforeAll(async () => {
+    pinHash = await hashLocalProfilePin(PIN);
+  });
+
+  const choose = (app: FastifyInstance, pin?: string) =>
+    app.inject({
+      method: 'POST',
+      url: `/${SECOND}/session`,
+      headers: WEB,
+      ...(pin === undefined ? {} : { payload: { pin } }),
+    });
+
+  it('is set by the owner, and the change drops the profile count', async () => {
+    const { app, dropLocalProfileCount } = await build('community-local', 'owner');
+    service.setLocalProfilePin.mockResolvedValue(locked);
+    const res = await app.inject({ method: 'PUT', url: `/${SECOND}/pin`, payload: { pin: PIN } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual(locked);
+    expect(service.setLocalProfilePin).toHaveBeenCalledWith(
+      {},
+      { tenantId: 't', userId: SECOND, pin: PIN },
+    );
+    expect(dropLocalProfileCount).toHaveBeenCalledTimes(1);
+    await app.close();
+  });
+
+  it.each(['123', '1234567', 'abcd', '12 34'])('is refused when it is %j', async (pin) => {
+    const { app, dropLocalProfileCount } = await build('community-local', 'owner');
+    const res = await app.inject({ method: 'PUT', url: `/${SECOND}/pin`, payload: { pin } });
+    expect(res.statusCode).toBe(400);
+    expect(service.setLocalProfilePin).not.toHaveBeenCalled();
+    expect(dropLocalProfileCount).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('is reset by the owner, and the reset drops the profile count', async () => {
+    const { app, dropLocalProfileCount } = await build('community-local', 'owner');
+    service.resetLocalProfilePin.mockResolvedValue(profile(SECOND, 'member'));
+    const res = await app.inject({ method: 'DELETE', url: `/${SECOND}/pin` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual(expect.objectContaining({ hasPin: false }));
+    expect(service.resetLocalProfilePin).toHaveBeenCalledWith(
+      {},
+      { tenantId: 't', userId: SECOND },
+    );
+    expect(dropLocalProfileCount).toHaveBeenCalledTimes(1);
+    await app.close();
+  });
+
+  it('answers a change for no such profile with a 404 and leaves the count alone', async () => {
+    const { app, dropLocalProfileCount } = await build('community-local', 'owner');
+    service.resetLocalProfilePin.mockRejectedValue(
+      new LocalProfileError('not_found', 'No profile with that id on this install.'),
+    );
+    expect((await app.inject({ method: 'DELETE', url: `/${SECOND}/pin` })).statusCode).toBe(404);
+    expect(dropLocalProfileCount).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('keeps a locked profile from starting without its PIN', async () => {
+    const { app } = await build('community-local', 'member', { sessionless: true });
+    service.readLocalProfile.mockResolvedValue(locked);
+    sessions.readLocalProfileSessionGate.mockResolvedValue({ generation: 2, pinHash });
+    for (const pin of [undefined, '']) {
+      const res = await choose(app, pin);
+      expect(res.statusCode).toBe(401);
+      expect(res.json()).toEqual(expect.objectContaining({ code: 'PROFILE_PIN_REQUIRED' }));
+      expect(res.json()).not.toHaveProperty('session');
+    }
+    await app.close();
+  });
+
+  it('issues nothing for a wrong PIN', async () => {
+    const { app } = await build('community-local', 'member', { sessionless: true });
+    service.readLocalProfile.mockResolvedValue(locked);
+    sessions.readLocalProfileSessionGate.mockResolvedValue({ generation: 2, pinHash });
+    const res = await choose(app, '1357');
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toEqual(expect.objectContaining({ code: 'PROFILE_PIN_INCORRECT' }));
+    expect(res.json()).not.toHaveProperty('session');
+    await app.close();
+  });
+
+  it('issues the session at the current generation for the right PIN', async () => {
+    const { app } = await build('community-local', 'member', { sessionless: true });
+    service.readLocalProfile.mockResolvedValue(locked);
+    sessions.readLocalProfileSessionGate.mockResolvedValue({ generation: 2, pinHash });
+    const res = await choose(app, PIN);
+    expect(res.statusCode).toBe(200);
+    const body = res.json<{ profile: unknown; session: string }>();
+    expect(body.profile).toEqual(choice(locked));
+    expect(readLocalProfileSession(body.session, SECRET)).toEqual(
+      expect.objectContaining({ userId: SECOND, generation: 2 }),
+    );
+    await app.close();
+  });
+
+  it('starts a profile with no PIN as P3 does, whatever the body says', async () => {
+    const { app } = await build('community-local', 'member', { sessionless: true });
+    service.readLocalProfile.mockResolvedValue(profile(SECOND, 'member'));
+    sessions.readLocalProfileSessionGate.mockResolvedValue({ generation: 0, pinHash: null });
+    expect((await choose(app)).statusCode).toBe(200);
+    expect((await choose(app, '0000')).statusCode).toBe(200);
+    await app.close();
+  });
+
+  it('makes a profile wait after repeated wrong PINs, until the owner resets it', async () => {
+    const { app } = await build('community-local', 'owner');
+    service.readLocalProfile.mockResolvedValue(locked);
+    sessions.readLocalProfileSessionGate.mockResolvedValue({ generation: 2, pinHash });
+    for (let i = 0; i < 5; i += 1) expect((await choose(app, '0000')).statusCode).toBe(401);
+    const waiting = await choose(app, PIN);
+    expect(waiting.statusCode).toBe(429);
+    expect(waiting.json()).toEqual(expect.objectContaining({ code: 'PROFILE_PIN_THROTTLED' }));
+    expect(waiting.headers['retry-after']).toBe('30');
+    expect(waiting.json()).not.toHaveProperty('session');
+
+    service.resetLocalProfilePin.mockResolvedValue(profile(SECOND, 'member'));
+    expect((await app.inject({ method: 'DELETE', url: `/${SECOND}/pin` })).statusCode).toBe(200);
+    expect((await choose(app, PIN)).statusCode).toBe(200);
+    await app.close();
+  });
+
+  it('lists whether each profile is locked on the picker', async () => {
+    const { app } = await build('community-local', 'member', { sessionless: true });
+    service.listLocalProfiles.mockResolvedValue([profile(OWNER, 'owner'), locked]);
+    const res = await app.inject({ method: 'GET', url: '/picker', headers: WEB });
+    expect(res.json()).toEqual({ profiles: [choice(profile(OWNER, 'owner')), choice(locked)] });
+    expect(JSON.stringify(res.json())).not.toContain('scrypt');
     await app.close();
   });
 });

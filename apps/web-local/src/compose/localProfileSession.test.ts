@@ -4,6 +4,9 @@
  * which an install with one profile never does. A choice becomes a session in
  * an `httpOnly` cookie only when the API issued one, and the call that asks
  * for it carries no browser mark.
+ *
+ * Plan 335 P4: a locked profile's PIN goes to the API with the choice, and a
+ * refused PIN returns to that profile's prompt with no cookie set.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LOCAL_BROWSER_CALLER_HEADER } from '@aflow/web-product';
@@ -13,6 +16,7 @@ import {
   answerProfileChoice,
   readProfileChoices,
   requiresProfileChoice,
+  unlockingFrom,
 } from './localProfileSession.js';
 import { INSTANCE_SECRET_ENV, PROFILE_SESSION_COOKIE } from './localWebIdentity.js';
 
@@ -25,6 +29,7 @@ const OWNER = {
   displayName: 'Local user',
   avatar: null,
   isOwner: true,
+  hasPin: false,
 };
 
 let savedSecret: string | undefined;
@@ -37,9 +42,10 @@ afterEach(() => {
   else process.env[INSTANCE_SECRET_ENV] = savedSecret;
 });
 
-function choice(userId: string, origin = 'http://127.0.0.1:3001'): Request {
+function choice(userId: string, origin = 'http://127.0.0.1:3001', pin?: string): Request {
   const form = new FormData();
   form.set('userId', userId);
+  if (pin !== undefined) form.set('pin', pin);
   return new Request(`${origin}/profiles/choose`, { method: 'POST', body: form });
 }
 
@@ -89,7 +95,7 @@ describe('choosing a profile', () => {
   it('keeps the issued session in an httpOnly cookie and enters the front door', async () => {
     const fetchImpl = vi.fn(async () =>
       json(200, {
-        profile: { userId: ADA, displayName: 'Ada', avatar: 'owl', isOwner: false },
+        profile: { userId: ADA, displayName: 'Ada', avatar: 'owl', isOwner: false, hasPin: false },
         session: 'v2.issued',
       }),
     );
@@ -118,7 +124,7 @@ describe('choosing a profile', () => {
   it('marks the cookies secure where the browser used HTTPS', async () => {
     const fetchImpl = vi.fn(async () =>
       json(200, {
-        profile: { userId: ADA, displayName: 'Ada', avatar: 'owl', isOwner: false },
+        profile: { userId: ADA, displayName: 'Ada', avatar: 'owl', isOwner: false, hasPin: false },
         session: 'v2.issued',
       }),
     );
@@ -144,5 +150,65 @@ describe('choosing a profile', () => {
     );
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(response.headers.getSetCookie()).toEqual([]);
+  });
+});
+
+describe('choosing a locked profile', () => {
+  const LOCKED = {
+    userId: ADA,
+    displayName: 'Ada',
+    avatar: 'owl' as const,
+    isOwner: false,
+    hasPin: true,
+  };
+
+  it('sends the PIN to the API in the body, with no browser mark', async () => {
+    const fetchImpl = vi.fn(async () => json(200, { profile: LOCKED, session: 'v2.issued' }));
+    const response = await answerProfileChoice(choice(ADA, undefined, '2468'), fetchImpl);
+    const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toEqual({ pin: '2468' });
+    expect(headersOf(init)).toEqual({
+      authorization: `Bearer ${SECRET}`,
+      'content-type': 'application/json',
+    });
+    expect(
+      response.headers
+        .getSetCookie()
+        .some((c) => c.startsWith(`${PROFILE_SESSION_COOKIE}=v2.issued`)),
+    ).toBe(true);
+  });
+
+  it.each([
+    ['PROFILE_PIN_REQUIRED', 401, 'required'],
+    ['PROFILE_PIN_INCORRECT', 401, 'incorrect'],
+    ['PROFILE_PIN_THROTTLED', 429, 'throttled'],
+  ] as const)('returns %s to the PIN prompt and sets no cookie', async (code, status, error) => {
+    const response = await answerProfileChoice(
+      choice(ADA, undefined, '0000'),
+      vi.fn(async () => json(status, { error: 'Unauthorized', code })),
+    );
+    expect(response.status).toBe(303);
+    expect(response.headers.get('location')).toBe(
+      `http://127.0.0.1:3001/profiles?unlock=${ADA}&pin=${error}`,
+    );
+    expect(response.headers.getSetCookie()).toEqual([]);
+  });
+
+  it('asks the PIN only for a profile that has one', () => {
+    const open = { ...LOCKED, hasPin: false };
+    expect(unlockingFrom([OWNER, LOCKED], ADA, undefined)).toEqual({
+      profile: LOCKED,
+      error: null,
+    });
+    expect(unlockingFrom([OWNER, LOCKED], ADA, 'incorrect')).toEqual({
+      profile: LOCKED,
+      error: 'incorrect',
+    });
+    expect(unlockingFrom([OWNER, LOCKED], ADA, 'made-up')).toEqual({
+      profile: LOCKED,
+      error: null,
+    });
+    expect(unlockingFrom([OWNER, open], ADA, undefined)).toBeNull();
+    expect(unlockingFrom([OWNER, LOCKED], undefined, undefined)).toBeNull();
   });
 });

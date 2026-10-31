@@ -958,3 +958,16 @@ export async function applyLocalProfileSessionGenerationMigration(
       ADD COLUMN IF NOT EXISTS profile_session_generation integer NOT NULL DEFAULT 0;
   `);
 }
+
+/**
+ * The local edition's profile PIN (Plan 335 P4).
+ *
+ * Every existing user starts with null, which is a profile with no PIN. A set
+ * PIN is a salted scrypt hash, never the digits themselves.
+ */
+export async function applyLocalProfilePinMigration(sqlClient: postgres.Sql): Promise<void> {
+  await sqlClient.unsafe(`
+    ALTER TABLE public.users
+      ADD COLUMN IF NOT EXISTS profile_pin_hash text;
+  `);
+}

@@ -18,6 +18,7 @@ import {
   issueLocalProfileSession,
   readLocalProfileSession,
   type LocalProfileCount,
+  type ReadLocalProfileCount,
 } from './localProfiles.js';
 
 const SECRET = 'a'.repeat(48);
@@ -52,10 +53,11 @@ const request = (authorization?: string, extra: Record<string, string> = {}) =>
 const ONE_PROFILE = () => Promise.resolve<LocalProfileCount>('one');
 const TWO_PROFILES = () => Promise.resolve<LocalProfileCount>('several');
 const UNREAD = () => Promise.resolve<LocalProfileCount>('unread');
+const ONE_LOCKED = () => Promise.resolve<LocalProfileCount>('one-locked');
 
-/** What `hasSeveralLocalProfiles` reads, as the cache asks it. */
-const READS_ONE = () => Promise.resolve(false);
-const READS_TWO = () => Promise.resolve(true);
+/** What `readLocalProfileCount` reads, as the cache asks it. */
+const READS_ONE = () => Promise.resolve<ReadLocalProfileCount>('one');
+const READS_TWO = () => Promise.resolve<ReadLocalProfileCount>('several');
 
 /** Every user at the generation a session issued with no bump carries. */
 const NEVER_BUMPED = () => Promise.resolve(0);
@@ -195,11 +197,38 @@ describe('the profile rule', () => {
       });
     });
 
-    // What P1 owes a single profile that sets a PIN in P4: a session that names
-    // it, read through its membership rather than the owner shortcut.
     it('reads a session naming the one profile through its membership', async () => {
       expect(
         await principal({ ...BROWSER, ...sessionFor(LOCAL_EDITION_OWNER_ID) }, ONE_PROFILE),
+      ).toEqual({ userId: LOCAL_EDITION_OWNER_ID, via: 'profile-session' });
+    });
+  });
+
+  // Plan 335 P4: a PIN on the only profile ends the no-session fallback.
+  describe('on an install with one profile locked with a PIN', () => {
+    it('sends a browser with no session to the picker rather than the owner', async () => {
+      const outcome = await authenticateLocalInstance(request(`Bearer ${SECRET}`, BROWSER), {
+        ...opts,
+        profileCount: ONE_LOCKED,
+        env: {},
+      });
+      expect(outcome).toEqual({
+        kind: 'refused',
+        code: 'PROFILE_SESSION_REQUIRED',
+        message: 'This profile is locked with a PIN. Choose it and enter the PIN to continue.',
+      });
+    });
+
+    it('keeps a bare-secret caller as the owner, through the membership read', async () => {
+      expect(await principal({}, ONE_LOCKED)).toEqual({
+        userId: LOCAL_EDITION_OWNER_ID,
+        via: 'instance-secret',
+      });
+    });
+
+    it('names the profile from the session the PIN let through', async () => {
+      expect(
+        await principal({ ...BROWSER, ...sessionFor(LOCAL_EDITION_OWNER_ID) }, ONE_LOCKED),
       ).toEqual({ userId: LOCAL_EDITION_OWNER_ID, via: 'profile-session' });
     });
   });
@@ -382,8 +411,8 @@ describe('the profile count cache', () => {
   });
 
   it('reads again once the count has expired', async () => {
-    const read = vi.fn<() => Promise<boolean>>().mockResolvedValueOnce(false);
-    read.mockResolvedValueOnce(true);
+    const read = vi.fn<() => Promise<ReadLocalProfileCount>>().mockResolvedValueOnce('one');
+    read.mockResolvedValueOnce('several');
     const { now, advance } = clock();
     const count = cacheLocalProfileCount(read, { ttlMs: 5_000, now });
     expect(await count()).toBe('one');
@@ -393,8 +422,8 @@ describe('the profile count cache', () => {
   });
 
   it('reads again on the next request once the count is dropped', async () => {
-    const read = vi.fn<() => Promise<boolean>>().mockResolvedValueOnce(false);
-    read.mockResolvedValueOnce(true);
+    const read = vi.fn<() => Promise<ReadLocalProfileCount>>().mockResolvedValueOnce('one');
+    read.mockResolvedValueOnce('several');
     const count = cacheLocalProfileCount(read, { ttlMs: 5_000, now: clock().now });
     expect(await asBrowser(count)).toMatchObject(SOLE_PROFILE_OWNER);
     count.drop();
@@ -406,15 +435,15 @@ describe('the profile count cache', () => {
   });
 
   it('keeps a read in flight at the drop out of the cache', async () => {
-    let finish: (several: boolean) => void = () => undefined;
+    let finish: (count: ReadLocalProfileCount) => void = () => undefined;
     const read = vi
-      .fn<() => Promise<boolean>>()
+      .fn<() => Promise<ReadLocalProfileCount>>()
       .mockReturnValueOnce(new Promise((resolve) => (finish = resolve)))
-      .mockResolvedValueOnce(true);
+      .mockResolvedValueOnce('several');
     const count = cacheLocalProfileCount(read, { ttlMs: 5_000, now: clock().now });
     const early = count();
     count.drop();
-    finish(false);
+    finish('one');
     expect(await early).toBe('one');
     expect(await count()).toBe('several');
     expect(read).toHaveBeenCalledTimes(2);
@@ -433,8 +462,8 @@ describe('the profile count cache', () => {
 
   it('answers unread when the first read fails, and reads again next time', async () => {
     const fault = new Error('connection refused');
-    const read = vi.fn<() => Promise<boolean>>().mockRejectedValueOnce(fault);
-    read.mockResolvedValueOnce(true);
+    const read = vi.fn<() => Promise<ReadLocalProfileCount>>().mockRejectedValueOnce(fault);
+    read.mockResolvedValueOnce('several');
     const onReadError = vi.fn();
     const count = cacheLocalProfileCount(read, { ttlMs: 5_000, now: clock().now, onReadError });
     expect(await count()).toBe('unread');
@@ -444,7 +473,7 @@ describe('the profile count cache', () => {
   });
 
   it('answers unread when the read throws before it awaits', async () => {
-    const read = vi.fn((): Promise<boolean> => {
+    const read = vi.fn((): Promise<ReadLocalProfileCount> => {
       throw new Error('no database');
     });
     const count = cacheLocalProfileCount(read, { ttlMs: 5_000, now: clock().now });
@@ -454,10 +483,11 @@ describe('the profile count cache', () => {
   });
 
   it.each([
-    ['a count of one goes unread', false, 'unread'],
-    ['a count of several stays several', true, 'several'],
-  ])('when a later read fails, %s', async (_label, several, answer) => {
-    const read = vi.fn<() => Promise<boolean>>().mockResolvedValueOnce(several);
+    ['a count of one goes unread', 'one', 'unread'],
+    ['a count of several stays several', 'several', 'several'],
+    ['a locked single profile stays locked', 'one-locked', 'one-locked'],
+  ] as const)('when a later read fails, %s', async (_label, first, answer) => {
+    const read = vi.fn<() => Promise<ReadLocalProfileCount>>().mockResolvedValueOnce(first);
     read.mockRejectedValueOnce(new Error('down'));
     const { now, advance } = clock();
     const count = cacheLocalProfileCount(read, { ttlMs: 5_000, now });
@@ -479,7 +509,7 @@ describe('the profile count cache', () => {
 
   // A second profile may have been added after the one-profile read.
   it('never grants a browser the owner on a stale count of one', async () => {
-    const read = vi.fn<() => Promise<boolean>>().mockResolvedValueOnce(false);
+    const read = vi.fn<() => Promise<ReadLocalProfileCount>>().mockResolvedValueOnce('one');
     read.mockRejectedValue(new Error('down'));
     const { now, advance } = clock();
     const count = cacheLocalProfileCount(read, { ttlMs: 5_000, now });
@@ -491,8 +521,21 @@ describe('the profile count cache', () => {
     expect(read).toHaveBeenCalledTimes(2);
   });
 
+  it('keeps refusing a browser once a locked single profile has been read', async () => {
+    const read = vi.fn<() => Promise<ReadLocalProfileCount>>().mockResolvedValueOnce('one-locked');
+    read.mockRejectedValue(new Error('down'));
+    const { now, advance } = clock();
+    const count = cacheLocalProfileCount(read, { ttlMs: 5_000, now });
+    await count();
+    advance(5_000);
+    expect(await asBrowser(count)).toMatchObject({
+      kind: 'refused',
+      code: 'PROFILE_SESSION_REQUIRED',
+    });
+  });
+
   it('keeps refusing a browser once a second profile has been read', async () => {
-    const read = vi.fn<() => Promise<boolean>>().mockResolvedValueOnce(true);
+    const read = vi.fn<() => Promise<ReadLocalProfileCount>>().mockResolvedValueOnce('several');
     read.mockRejectedValue(new Error('down'));
     const { now, advance } = clock();
     const count = cacheLocalProfileCount(read, { ttlMs: 5_000, now });

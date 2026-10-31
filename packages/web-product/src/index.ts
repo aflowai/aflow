@@ -22,7 +22,12 @@ export {
   LOCAL_PROFILE_CHOICE_FIELD,
   LOCAL_PROFILE_CHOICE_PATH,
   LOCAL_PROFILE_PICKER_PATH,
+  LOCAL_PROFILE_PIN_ERROR_PARAM,
+  LOCAL_PROFILE_PIN_FIELD,
+  LOCAL_PROFILE_UNLOCK_PARAM,
+  localProfileUnlockHref,
 } from './localProfilePicker.js';
+export type { LocalProfilePinError } from './localProfilePicker.js';
 export type { TransportConfig } from './bffTransport.js';
 
 export {
@@ -45,6 +50,7 @@ export {
   LOCAL_PROFILE_SESSION_HEADER,
   LocalProfileChoicesResponseSchema,
   LocalProfileSessionResponseSchema,
+  isLocalProfilePinRefusal,
   showsLocalProfilePicker,
 } from '@aflow/schemas';
 export type { LocalProfileChoice } from '@aflow/schemas';

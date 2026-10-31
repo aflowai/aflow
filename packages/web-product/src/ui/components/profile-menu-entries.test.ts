@@ -12,12 +12,14 @@ const OWNER: LocalProfileChoice = {
   displayName: 'Local user',
   avatar: null,
   isOwner: true,
+  hasPin: false,
 };
 const ADA: LocalProfileChoice = {
   userId: '00000000-0000-4000-8000-00000000a0a0',
   displayName: 'Ada',
   avatar: 'owl',
   isOwner: false,
+  hasPin: false,
 };
 
 const labels = (entries: ReturnType<typeof profileMenuEntries>): string[] =>
@@ -29,6 +31,19 @@ describe('the footer profile menu', () => {
   it('offers no switch on an install with one profile', () => {
     expect(
       labels(profileMenuEntries({ currentUserId: OWNER.userId, isOwner: true, profiles: [OWNER] })),
+    ).toEqual(['Manage profiles', 'Account settings']);
+  });
+
+  // Plan 335 P4: a PIN on the only profile gives the menu nobody to switch to.
+  it('offers no switch on an install with one profile locked with a PIN', () => {
+    expect(
+      labels(
+        profileMenuEntries({
+          currentUserId: OWNER.userId,
+          isOwner: true,
+          profiles: [{ ...OWNER, hasPin: true }],
+        }),
+      ),
     ).toEqual(['Manage profiles', 'Account settings']);
   });
 

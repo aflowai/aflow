@@ -1,6 +1,6 @@
 # Plan 335 — Local profiles: several people share one install
 
-**Status:** 🚧 P1 built under option A (§11). P2 built (§12). P3 built (§13). P4 and P5 are not built. This document reads the code as it stood, judges three shapes for a profile and proposes phases.
+**Status:** 🚧 P1 built under option A (§11). P2 built (§12). P3 built (§13). P4 built (§14). P5 is not built. This document reads the code as it stood, judges three shapes for a profile and proposes phases.
 
 **Builds on:** Plan 315 (the local edition's first run), Plan 330 (the first space a fresh install gets), Plan 334 (the first-run card in the empty chat).
 
@@ -311,7 +311,7 @@ P1 follows option A. It adds no UI, no route and no table. It adds one column, `
 
 - **What separates a browser from a bare-secret caller.** The web process sets `X-Aflow-Browser-Caller` on every call it makes. The browser cannot remove it, because the web forwards a fixed list of browser headers and sets its own after them. Clearing the cookie or opening a private window therefore reaches no profile once a second one exists.
 - **What a bare-secret caller gets.** It stays the owner on every install. `yarn mcp:setup` keeps working. Its holder can read `instance.env` and could issue an owner session, so a refusal would guard nothing (D3).
-- **A single profile with a PIN.** P1 gives it a session that names it, read through its membership. P4 must also end the no-session fallback for a single profile that holds a PIN. The one-profile column then applies only to an unlocked profile.
+- **A single profile with a PIN.** P1 gives it a session that names it, read through its membership. P4 must also end the no-session fallback for a single profile that holds a PIN. The one-profile column then applies only to an unlocked profile. P4 does so (§14).
 - **The count.** A profile is a human user with an active membership in the pinned tenant. The API reads at most two such rows and keeps the answer for five seconds, so most requests without a session read no database. A one-profile install reaches the owner from that answer while it is fresh. When a read fails, a count last read as two or more still answers several profiles. Any other failed read answers the count as unread: none read since the process started, or a stale count of one. A second profile may exist in either case, so an unread count never grants the owner with no membership read. A browser with no session then gets a 503 `PROFILE_COUNT_UNREAD`. A bare-secret caller stays the owner through the membership read. Only a count read as two or more refuses a browser with `PROFILE_SESSION_REQUIRED`, so that refusal never names a second profile nobody has seen.
 - **The generation read.** A request that carries a session reads the user's generation from Postgres before the membership read, so the database is on the path of every sessioned request. A failed read answers 503 `PROFILE_SESSION_UNREAD`. A session naming a user with no row answers 401 `PROFILE_SESSION_INVALID`, so the browser of a removed profile goes back to the picker (§13). P1 left that session to the membership read's 403. A user who has a row and no active membership still gets the 403.
 
@@ -407,7 +407,7 @@ P3 adds the picker, the footer menu and the per-profile preferred space. It adds
 ### Not built
 
 - An **Add profile** tile on the picker (D1). Adding stays in Settings → Profiles, because the picker answers a browser that holds no session and cannot tell the owner apart.
-- The PIN (P4).
+- The PIN. P4 builds it (§14).
 
 ### Tests
 
@@ -420,3 +420,64 @@ P3 adds the picker, the footer menu and the per-profile preferred space. It adds
 - `preferredSpace.test.ts` shows each profile keeps its own preferred space, and a profile with none reads the unkeyed one. `enterPreferredSpace.test.ts` shows a name-only space is skipped and a refusal can be answered with the picker.
 - `profile-menu-entries.test.ts` shows the menu offers a switch only with two profiles and **Manage profiles** only to the owner.
 - `tenant-profiles.test.ts` shows **Add profile** is no longer gated on the profile count.
+
+## 14. P4 — as built
+
+P4 adds the PIN. It adds one column, `users.profile_pin_hash`, and no table.
+
+### The PIN and its storage
+
+- **The value.** Four to six digits (D3), checked by `LocalProfilePinSchema` in `packages/schemas/src/edition/localProfiles.ts`.
+- **The storage.** `users.profile_pin_hash` holds a salted scrypt hash in the form `scrypt$N$r$p$<salt>$<key>` (`packages/server-runtime/src/services/localProfilePin.ts`). Null means the profile has no PIN. The digits are never stored, because people reuse a PIN elsewhere.
+- **What the hash does not do.** Four to six digits are few, so someone who reads the database can try them all. That person holds the operator's OS account, and D3 claims no boundary against them.
+- **A damaged hash.** A stored value the module did not write matches no PIN. The profile stays locked until the owner resets it.
+
+### The routes
+
+- **Set and change.** `PUT /v1/local-profiles/:userId/pin` takes `{ pin }` and answers the profile. It sits in the management scope of §12, so it is owner only and answers the hosted edition with a 404.
+- **Reset.** `DELETE /v1/local-profiles/:userId/pin` clears the hash. It is the owner's answer to a forgotten PIN (D3). It sits in the same scope.
+- **Check.** `POST /:userId/session` checks the PIN. A locked profile needs `{ pin }` in the body. A missing PIN answers 401 `PROFILE_PIN_REQUIRED`, and a wrong one 401 `PROFILE_PIN_INCORRECT`. Neither issues a session. A profile with no PIN starts as P3 does and ignores a PIN it is sent.
+- **No separate check route.** An owner-only route that answers whether a PIN matches was not built. The owner can already reset any PIN, so the route would add only a way to learn the PIN a person chose.
+- **Who sets a PIN.** The owner alone, as the commission states for these routes. D5 offered each profile its own PIN on `/account/profile`. That page is not built, because a member who sets a PIN gains nothing the owner's reset cannot undo, and it would need a route outside the owner scope.
+
+### Ending sessions
+
+- Setting, changing and resetting each call `bumpLocalProfileSessionGeneration` in the transaction that writes the hash (`setLocalProfilePin` and `resetLocalProfilePin` in `services/localProfiles.ts`). Every session issued to that profile before the change is refused from the commit on.
+- The session route reads the generation and the hash in one row (`readLocalProfileSessionGate`). Two reads could pair the old PIN with the new generation, and issue a session the new PIN never let through.
+- The owner who locks their own profile ends their own session too. Their browser returns to the picker and asks for the new PIN.
+- Each change also calls `fastify.dropLocalProfileCount`, so the rule below takes effect on the next request.
+
+### The lifted fallback
+
+- `readLocalProfileCount` replaces `hasSeveralLocalProfiles` (`plugins/localProfiles.ts`). It answers `one`, `one-locked` or `several` from the same two-row read.
+- `authenticateLocalInstance` grants the sole-profile owner only for `one`. A browser with no session on a `one-locked` install gets 401 `PROFILE_SESSION_REQUIRED` and goes to the picker. A bare-secret caller stays the owner through the membership read, as on an install with several profiles.
+- The §11 table changes in one cell. "No session, from the web process" on one profile answers the owner only when that profile has no PIN.
+- **A failed read.** A count last read as `one-locked` keeps answering `one-locked` when a later read fails, as `several` does. A stale `one` still answers `unread`, so a PIN set since that read is never skipped.
+
+### Wrong guesses
+
+- `LocalProfilePinAttempts` counts wrong PINs per profile in the API process. The first four cost nothing. Each one after them makes the profile wait, 30 seconds at first and doubling to 15 minutes. A waiting profile answers 429 `PROFILE_PIN_THROTTLED` with `Retry-After`, whatever PIN it is sent.
+- A guess is counted before it is compared, so guesses sent at once cannot all pass the wait while the first one is still being compared. A right PIN, a new PIN and a reset clear the count.
+- A restart clears the count too. Restarting the API needs the operator's machine, where the PIN guards nothing (D3).
+
+### The web process
+
+- **The picker.** A locked profile's tile shows **PIN** and links to `/profiles?unlock=<user id>` instead of posting. That page shows the PIN prompt, a plain form that posts the choice and the PIN to `/profiles/choose` (`packages/web-product/src/ui/components/profile-picker.tsx`). An install whose only profile is locked shows the prompt at the front door at once.
+- **A choice.** `/profiles/choose` sends the PIN to the API in a JSON body, with the bare secret and no browser mark. A PIN refusal returns to the prompt with the reason in `pin=required|incorrect|throttled` and sets no cookie (`apps/web-local/src/compose/localProfileSession.ts`).
+- **`/profiles`.** `showsLocalProfilePicker` now answers true for two profiles or for a locked one. A single locked profile therefore reaches its prompt at `/profiles`. The footer menu keeps its own rule, `offersLocalProfileSwitch`, which still needs a second profile.
+- **The footer menu.** A locked profile in the switch list opens its prompt instead of posting.
+- **Settings → Profiles.** Each row shows **PIN** when the profile has one and offers **Set PIN** or **Change PIN**, and **Reset PIN** where one is set. The page says in one sentence that a PIN does not guard against someone who can sign in to the computer's account (D3).
+
+### A known gap
+
+Nobody above the owner can reset the owner's own forgotten PIN in the UI. A request with the instance secret still acts as the owner, so `DELETE /v1/local-profiles/<owner id>/pin` with that secret resets it. The help article says so. A command that wraps the call is not built.
+
+### Tests
+
+- `services/localProfilePin.test.ts` shows the hash is salted and holds no digit in the clear, matches no other PIN, and refuses a damaged hash. It covers the wait and its doubling.
+- `services/localProfiles.test.ts` shows a set and a reset write the hash and bump the generation in one transaction.
+- `routes/localProfiles.test.ts` shows only the owner sets and resets, each change drops the count, and a malformed PIN is refused. A locked profile gets no session without its PIN or with a wrong one. The right PIN issues one at the current generation. Five wrong PINs make the profile wait until the owner resets it.
+- `plugins/localInstanceAuth.test.ts` shows a sessionless browser on a `one-locked` install is refused, a bare-secret caller stays the owner, and the cache keeps `one-locked` through a failed read.
+- `routes/localProfiles.pg.test.ts` covers the §10 locked-profile cases on a bootstrapped install. A single profile with a PIN no longer falls back to the owner, and its earlier session ends. It cannot start without its PIN, and a wrong PIN issues nothing. The owner's reset ends the PIN's session and restores the fallback. A second profile is locked and reset the same way.
+- `apps/web-local/src/compose/localProfileSession.test.ts` shows the PIN reaches the API in the body, and a refused PIN returns to the prompt with no cookie.
+- `profile-menu-entries.test.ts` shows a single locked profile offers no switch.

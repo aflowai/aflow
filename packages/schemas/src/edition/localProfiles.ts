@@ -1,6 +1,6 @@
 /**
- * The local edition's profiles as the owner manages them (Plan 335 P2) and
- * as the picker offers them (P3).
+ * The local edition's profiles as the owner manages them (Plan 335 P2), as
+ * the picker offers them (P3), and the PIN that locks one (P4).
  *
  * A profile is a `users` row with an active membership in the pinned tenant.
  * These are the shapes the management and picker routes take and answer, and
@@ -72,6 +72,8 @@ export const LocalProfileSchema = z.object({
   role: TenantRoleSchema,
   /** The install's owner. The owner manages profiles and cannot be removed. */
   isOwner: z.boolean(),
+  /** Whether the profile is locked with a PIN (Plan 335 P4). The PIN itself never leaves the API. */
+  hasPin: z.boolean(),
   createdAt: z.string().datetime(),
 });
 export type LocalProfile = z.infer<typeof LocalProfileSchema>;
@@ -83,13 +85,15 @@ export type LocalProfileListResponse = z.infer<typeof LocalProfileListResponseSc
 
 /**
  * One tile of the picker (Plan 335 D1). The picker answers a browser that
- * holds no profile session, so it carries the name and the avatar alone.
+ * holds no profile session, so it carries the name, the avatar and whether
+ * the tile asks for a PIN.
  */
 export const LocalProfileChoiceSchema = LocalProfileSchema.pick({
   userId: true,
   displayName: true,
   avatar: true,
   isOwner: true,
+  hasPin: true,
 });
 export type LocalProfileChoice = z.infer<typeof LocalProfileChoiceSchema>;
 
@@ -109,9 +113,54 @@ export const LocalProfileSessionResponseSchema = z.object({
 });
 export type LocalProfileSessionResponse = z.infer<typeof LocalProfileSessionResponseSchema>;
 
-/** Whether an install's profiles call for the picker. One profile never does. */
-export function showsLocalProfilePicker(profiles: readonly unknown[]): boolean {
+/**
+ * Whether an install's profiles call for the picker. Two profiles do, and so
+ * does one locked with a PIN (Plan 335 P4). One profile with no PIN never does.
+ */
+export function showsLocalProfilePicker(profiles: ReadonlyArray<{ hasPin: boolean }>): boolean {
+  return profiles.length >= 2 || profiles.some((profile) => profile.hasPin);
+}
+
+/** Whether there is another profile to switch to. A PIN on the only one adds none. */
+export function offersLocalProfileSwitch(profiles: readonly unknown[]): boolean {
   return profiles.length >= 2;
+}
+
+/**
+ * A profile PIN: four to six digits (Plan 335 D3). Short on purpose, because
+ * it keeps one person at a shared browser out of another's profile and claims
+ * nothing more. The API throttles wrong guesses.
+ */
+export const LocalProfilePinSchema = z
+  .string()
+  .regex(/^[0-9]{4,6}$/, 'A PIN is four to six digits.');
+
+/** Sets or changes a profile's PIN. The owner sends it from Settings → Profiles. */
+export const SetLocalProfilePinRequestSchema = z.object({ pin: LocalProfilePinSchema }).strict();
+export type SetLocalProfilePinRequest = z.infer<typeof SetLocalProfilePinRequestSchema>;
+
+/**
+ * What the picker sends with a choice. A locked profile needs its PIN. A
+ * profile with no PIN ignores one.
+ */
+export const LocalProfileSessionRequestSchema = z
+  .object({ pin: z.string().max(64).optional() })
+  .strict();
+export type LocalProfileSessionRequest = z.infer<typeof LocalProfileSessionRequestSchema>;
+
+/**
+ * Why the picker issued no session for a locked profile. The web process
+ * answers each with the PIN prompt again.
+ */
+export const LOCAL_PROFILE_PIN_REFUSAL_CODES = [
+  'PROFILE_PIN_REQUIRED',
+  'PROFILE_PIN_INCORRECT',
+  'PROFILE_PIN_THROTTLED',
+] as const;
+export type LocalProfilePinRefusalCode = (typeof LOCAL_PROFILE_PIN_REFUSAL_CODES)[number];
+
+export function isLocalProfilePinRefusal(code: unknown): code is LocalProfilePinRefusalCode {
+  return (LOCAL_PROFILE_PIN_REFUSAL_CODES as readonly unknown[]).includes(code);
 }
 
 export const CreateLocalProfileRequestSchema = z
