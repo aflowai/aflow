@@ -252,9 +252,12 @@ export function PlanNodeOpenControl({
           </Text>
           {words}
           <Text size="xs" variant="muted" data-plan-approve-hint>
-            {onRevise !== undefined
-              ? 'Approve starts the work, and its brief opens with these words. Revise keeps the step blocked and asks the Helmsman to rewrite it from them.'
-              : 'Approve starts the work, and its brief opens with these words.'}
+            {(questions.length > 0
+              ? 'Approve starts the work. Its brief opens with the answers, and then with these words.'
+              : 'Approve starts the work, and its brief opens with these words.') +
+              (onRevise !== undefined
+                ? ' Revise keeps the step blocked and asks the Helmsman to rewrite it from these words.'
+                : '')}
           </Text>
         </>
       )}

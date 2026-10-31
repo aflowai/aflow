@@ -102,15 +102,32 @@ export function PlanNodeCloseControl({
   const [error, setError] = useState<string | null>(null);
   const { shown, movedSinceOpened, setPinned } = usePinnedNode(read, choosing !== null);
   // Decide on a carded decision opens with each question and its recommended
-  // answer (Plan 337 D3), once per opening, so a field the operator clears stays clear.
-  const [prefilled, setPrefilled] = useState(false);
+  // answer (Plan 337 D3). The prefill remembers the revision and the text it
+  // was made from. A refusal can pin a rewritten card: an untouched field takes
+  // the new questions, and an edited one stays as the operator wrote it, with a notice.
+  const [prefill, setPrefill] = useState<{
+    revision: number;
+    text: string;
+    cardChanged: boolean;
+  } | null>(null);
   const deciding = choosing === 'done' && node.kind === 'decide';
   if (choosing === null) {
-    if (prefilled) setPrefilled(false);
-  } else if (deciding && !prefilled && shown !== undefined) {
-    setPrefilled(true);
-    const prefill = planCardDecidePrefill(shown.card);
-    if (prefill.length > 0 && text.length === 0) setText(prefill);
+    if (prefill !== null) setPrefill(null);
+  } else if (deciding && shown !== undefined) {
+    if (prefill === null) {
+      const made = planCardDecidePrefill(shown.card);
+      setPrefill({ revision: shown.revision, text: made, cardChanged: false });
+      if (made.length > 0 && text.length === 0) setText(made);
+    } else if (prefill.revision !== shown.revision) {
+      const made = planCardDecidePrefill(shown.card);
+      const untouched = text === prefill.text;
+      if (made !== prefill.text && untouched) setText(made);
+      setPrefill({
+        revision: shown.revision,
+        text: made,
+        cardChanged: prefill.cardChanged || (made !== prefill.text && !untouched),
+      });
+    }
   }
   const fromCard = deciding && (shown?.card?.questions.length ?? 0) > 0;
   const closedNow =
@@ -206,6 +223,12 @@ export function PlanNodeCloseControl({
           setText(event.target.value);
         }}
       />
+      {prefill?.cardChanged === true && (
+        <Text size="xs" tone="warning" data-plan-decide-card-changed>
+          The card's questions changed after you edited this field. Read them above before you
+          record the decision.
+        </Text>
+      )}
       {fromCard && (
         <Text size="xs" variant="muted" data-plan-decide-hint>
           Each line holds one open question and the recommended answer. Edit any line, then record

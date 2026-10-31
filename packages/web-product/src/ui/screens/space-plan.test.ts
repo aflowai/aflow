@@ -3223,6 +3223,93 @@ describe('SpacePlanPage — the decision card on the rail (Plan 337 P2)', () => 
     });
   });
 
+  it('says on a carded step that the brief opens with the answers, then the instructions', async () => {
+    blockedCarded();
+    await render({ data: withStatus(ARTICLE, 'blocked') });
+    await click(card(ARTICLE));
+
+    expect(openForm().querySelector('[data-plan-approve-hint]')?.textContent).toBe(
+      'Approve starts the work. Its brief opens with the answers, and then with these words. Revise keeps the step blocked and asks the Helmsman to rewrite it from these words.',
+    );
+  });
+
+  it('closes an answer with no closing punctuation, so the folded note line does not run on', async () => {
+    blockedCarded();
+    await render({ data: withStatus(ARTICLE, 'blocked') });
+    await click(card(ARTICLE));
+
+    await answer(0, 'only on decisions');
+    await click(button(openForm(), 'Approve'));
+
+    const why = (recorded.sent[0]!.body as { why: string }).why;
+    expect(why).toBe(
+      'Is the card optional? Answer: only on decisions.\nDoes Approve accept every recommendation? Answer: Yes.',
+    );
+    expect(planNodeOperatorLine(PLAN_NODE_APPROVED_HEAD, why)).toBe(
+      'Approved: Is the card optional? Answer: only on decisions. Does Approve accept every recommendation? Answer: Yes.',
+    );
+  });
+
+  describe('Decide after a refusal pins a rewritten card', () => {
+    const REWRITTEN: PlanNodeCard = {
+      ...CARD,
+      questions: [{ question: 'Where is the answer recorded?', recommended: 'In the outcome.' }],
+    };
+
+    function refusedOnce(): void {
+      recorded.details[DECISION] = detail(
+        fullNode(DECISION, 'Where the decide answer is recorded', {
+          kind: 'decide',
+          revision: 3,
+          card: CARD,
+        }),
+      );
+      recorded.mutateAsync.mockRejectedValueOnce(
+        Object.assign(
+          new Error('This step changed since the plan was read: it is at revision 4.'),
+          {
+            status: 409,
+          },
+        ),
+      );
+      recorded.detailRefetch.mockImplementation(() => {
+        recorded.details[DECISION] = detail(
+          fullNode(DECISION, 'Where the decide answer is recorded', {
+            kind: 'decide',
+            revision: 4,
+            card: REWRITTEN,
+          }),
+        );
+        return Promise.resolve({ data: recorded.details[DECISION]!.data });
+      });
+    }
+
+    it('fills an untouched field with the new questions', async () => {
+      refusedOnce();
+      await render();
+      await click(button(card(DECISION), 'Decide'));
+      await click(button(rail(), 'Record decision'));
+
+      expect(rail().querySelector('textarea')?.value).toBe(
+        'Where is the answer recorded? Answer: In the outcome.',
+      );
+      expect(rail().querySelector('[data-plan-decide-card-changed]')).toBe(null);
+    });
+
+    it('keeps an edited field as written and says the questions changed', async () => {
+      refusedOnce();
+      await render();
+      await click(button(card(DECISION), 'Decide'));
+      await type(rail(), 'Is the card optional? Answer: No.');
+      await click(button(rail(), 'Record decision'));
+
+      expect(rail().querySelector('textarea')?.value).toBe('Is the card optional? Answer: No.');
+      expect(rail().querySelector('[data-plan-decide-card-changed]')?.textContent).toContain(
+        'questions changed',
+      );
+    });
+  });
+
   it('gates Revise on the instructions alone, whatever the length of the answers', async () => {
     blockedCarded();
     await render({ data: withStatus(ARTICLE, 'blocked') });

@@ -8,12 +8,17 @@ import type { PlanNodeCard } from '@aflow/schemas';
 
 type CardQuestion = PlanNodeCard['questions'][number];
 
+/** An end of a sentence, a closing quote or bracket after it allowed. */
+const CLOSED = /[.!?…]["'”’)\]]*$/;
+
 /**
  * One question and its answer as one line. The engine folds the lines of an
- * approve into one note line, so each line reads on its own.
+ * approve into one note line, with one space between them. So each line ends
+ * with a full stop where its answer has no closing punctuation.
  */
 export function planCardAnswerLine(question: string, answer: string): string {
-  return `${question} Answer: ${answer}`;
+  const words = answer.trim();
+  return `${question} Answer: ${CLOSED.test(words) ? words : `${words}.`}`;
 }
 
 /** What **Decide** opens with on a carded decision: each question and its recommended answer. */
