@@ -4,6 +4,21 @@ import type postgres from 'postgres';
  *  apply (no rows for this space) don't appear. */
 export type CascadeCounts = Record<string, number>;
 
+/**
+ * Whether the tenant schema has `memory_entry_embeddings`. The table needs
+ * pgvector (migration148), so a Postgres without it has no such table, and a
+ * statement naming it would abort the caller's transaction.
+ */
+export async function hasMemoryEntryEmbeddings(
+  sqlClient: postgres.Sql,
+  schemaName: string,
+): Promise<boolean> {
+  const rows = await sqlClient<Array<{ present: boolean }>>`
+    SELECT to_regclass(${`"${schemaName}".memory_entry_embeddings`}) IS NOT NULL AS present
+  `;
+  return rows[0]?.present === true;
+}
+
 const DIRECT_SPACE_ID_TABLES = [
   'sessions',
   'memory_docs',
@@ -196,16 +211,18 @@ export async function cascadeDeleteSpace(
   // pgvector-gated: migration148 guarantees it exists on any tenant where
   // pgvector is enabled (repairing migration004/006's swallowed HNSW
   // failures); an environment without pgvector genuinely has neither this
-  // table nor memory_chunks' vector columns.
-  await del(
-    'memory_entry_embeddings',
-    sqlTx`
-      DELETE FROM ${sqlTx(schemaName)}.memory_entry_embeddings
-        WHERE entry_id IN (
-          SELECT id FROM ${sqlTx(schemaName)}.memory_entries WHERE space_id = ${spaceId}
-        )
-    `,
-  );
+  // table nor memory_chunks' vector columns, so the delete is skipped there.
+  if (await hasMemoryEntryEmbeddings(sqlTx, schemaName)) {
+    await del(
+      'memory_entry_embeddings',
+      sqlTx`
+        DELETE FROM ${sqlTx(schemaName)}.memory_entry_embeddings
+          WHERE entry_id IN (
+            SELECT id FROM ${sqlTx(schemaName)}.memory_entries WHERE space_id = ${spaceId}
+          )
+      `,
+    );
+  }
 
   // workflow_run_tasks ← workflow_runs
   await del(
@@ -537,15 +554,17 @@ export async function previewCascadeForSpace(
   );
   // memory_entry_embeddings cascade-deletes via FK when memory_entries go; the
   // purge clears them explicitly in §1 for counting — mirror that here.
-  await count(
-    'memory_entry_embeddings',
-    sqlClient`
-      SELECT COUNT(*)::int AS c FROM ${sqlClient(schemaName)}.memory_entry_embeddings
-        WHERE entry_id IN (
-          SELECT id FROM ${sqlClient(schemaName)}.memory_entries WHERE space_id = ${spaceId}
-        )
-    `,
-  );
+  if (await hasMemoryEntryEmbeddings(sqlClient, schemaName)) {
+    await count(
+      'memory_entry_embeddings',
+      sqlClient`
+        SELECT COUNT(*)::int AS c FROM ${sqlClient(schemaName)}.memory_entry_embeddings
+          WHERE entry_id IN (
+            SELECT id FROM ${sqlClient(schemaName)}.memory_entries WHERE space_id = ${spaceId}
+          )
+      `,
+    );
+  }
   await count(
     'workflow_run_tasks',
     sqlClient`

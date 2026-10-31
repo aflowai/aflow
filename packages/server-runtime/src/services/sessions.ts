@@ -116,8 +116,9 @@ export interface StartSessionRequest {
   trigger?: RunTrigger | undefined;
   /**
    * Whether a person sets the run going with this request: true only for a
-   * request authenticated as an interactive user (`isInteractiveUser`), whatever
-   * surface `trigger` names, and never from anything the request says. The
+   * request a person's principal made (`isPersonPrincipal`: a web sign-in or a
+   * user API key), whatever surface `trigger` names, and never from anything
+   * the request says. The
    * run's jobs carry it until its next start, resume or retry.
    */
   activatedByPerson: boolean;
@@ -177,8 +178,8 @@ export interface ResumeSessionRequest {
   clientMessageId?: string | undefined;
   /**
    * Whether a person sets the run going with this request: true only for a
-   * request authenticated as an interactive user (`isInteractiveUser`), never
-   * from anything the request says. The run's jobs carry it until its next
+   * request a person's principal made (`isPersonPrincipal`: a web sign-in or a
+   * user API key), never from anything the request says. The run's jobs carry it until its next
    * start, resume or retry. Absent leaves the session's value as it is, for a
    * resume that knows nothing of who is present.
    */
@@ -202,8 +203,8 @@ export interface RetrySessionRequest {
   actorContext?: ActorContext | undefined;
   /**
    * Whether a person sets the run going with this request: true only for a
-   * request authenticated as an interactive user (`isInteractiveUser`), never
-   * from anything the request says. The run's jobs carry it until its next
+   * request a person's principal made (`isPersonPrincipal`: a web sign-in or a
+   * user API key), never from anything the request says. The run's jobs carry it until its next
    * start, resume or retry.
    */
   activatedByPerson: boolean;

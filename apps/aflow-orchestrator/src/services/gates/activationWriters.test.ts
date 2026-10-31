@@ -144,9 +144,9 @@ const ACTIVATION_WRITERS: readonly Writer[] = [
   },
   {
     file: `${S}/services/actionCenter/sources/pausedStepSource.ts`,
-    write: 'activatedByPerson: ctx.actorIsInteractiveUser === true',
+    write: 'activatedByPerson: ctx.actorIsPersonPrincipal === true',
     acts: 'person',
-    why: 'An operator’s answer in the Action Center; the route sets the flag from the credential.',
+    why: 'An operator’s answer in the Action Center; the route sets the flag from the credential, a user’s own API key included, as the resume route does.',
   },
   {
     file: `${S}/routes/agui.ts`,
@@ -574,7 +574,7 @@ describe('activatedByPerson writers', () => {
       personSites
         .filter(
           (w) =>
-            !/(isInteractive(User|Actor)|isPersonPrincipal)\(|actorIsInteractiveUser|interactiveUser$|^activatedByPerson$/.test(
+            !/(isInteractive(User|Actor)|isPersonPrincipal)\(|actorIs(InteractiveUser|PersonPrincipal)|interactiveUser$|^activatedByPerson$/.test(
               w.write,
             ),
         )

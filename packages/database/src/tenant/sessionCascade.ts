@@ -1,5 +1,5 @@
 import type postgres from 'postgres';
-import type { CascadeCounts } from './spaceCascade.js';
+import { hasMemoryEntryEmbeddings, type CascadeCounts } from './spaceCascade.js';
 
 export interface SessionCascadeResult {
   deleted: CascadeCounts;
@@ -340,15 +340,17 @@ export async function cascadeDeleteSession(
         )
     `,
   );
-  await del(
-    'memory_entry_embeddings',
-    sqlTx`
-      DELETE FROM ${sqlTx(schemaName)}.memory_entry_embeddings
-        WHERE entry_id IN (
-          SELECT id FROM ${sqlTx(schemaName)}.memory_entries WHERE session_id = ${sessionId}
-        )
-    `,
-  );
+  if (await hasMemoryEntryEmbeddings(sqlTx, schemaName)) {
+    await del(
+      'memory_entry_embeddings',
+      sqlTx`
+        DELETE FROM ${sqlTx(schemaName)}.memory_entry_embeddings
+          WHERE entry_id IN (
+            SELECT id FROM ${sqlTx(schemaName)}.memory_entries WHERE session_id = ${sessionId}
+          )
+      `,
+    );
+  }
   await del(
     'memory_docs',
     sqlTx`DELETE FROM ${sqlTx(schemaName)}.memory_docs WHERE session_id = ${sessionId}`,

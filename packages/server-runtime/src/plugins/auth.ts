@@ -764,10 +764,9 @@ export const authPlugin = fp(
       },
     );
 
-    // Plan 335 P2's profile-adding route calls this once the second profile is
-    // written. Otherwise a cached count of one keeps granting a browser with no
-    // session the sole-profile owner until the count expires. P1 adds no
-    // profile, so nothing calls it yet.
+    // Plan 335 P2's profile routes call this after an add and after a removal.
+    // Otherwise a cached count of one keeps granting a browser with no session
+    // the sole-profile owner until the count expires.
     fastify.decorate('dropLocalProfileCount', (): void => {
       localProfileCountInPinnedTenant.drop();
     });
