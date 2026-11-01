@@ -20,6 +20,7 @@ import {
   AgentDefinitionSchema,
   FlowScheduleCreateInputSchema,
   FlowScheduleGetInputSchema,
+  HOST_HARNESS_CONCURRENCY_DEFAULT,
   isScheduleRenewalDue,
   MAX_FIRINGS_CAP,
   SCHEDULE_RENEWAL_WINDOW,
@@ -317,6 +318,11 @@ interface Scenario {
   handOvers?: Map<string, Record<string, unknown>>;
   /** The schedule that would start the Helmsman's conversation is refused. */
   handOverFails?: true;
+  /**
+   * A Helmsman conversation that has not ended started a publication of the
+   * branch (`live`), or the read of it failed (`fails`). None where unnamed.
+   */
+  branchOwner?: 'live' | 'fails';
   /** How many of the loop's open pull requests the list holds; one where unnamed. */
   listed?: number;
 }
@@ -881,6 +887,27 @@ function answer(taskId: string, input: Record<string, unknown>, s: Scenario): An
       if (s.renewalFails) return { ok: false };
       return ok({ scheduleId: `successor-of-${String(renews)}`, kind: 'cron', status: 'active' });
     }
+    case 'read-branch-owner': {
+      const query = WorkflowRunListInputSchema.parse(input);
+      expect(query.drivenByLiveConversation).toBe(true);
+      expect(query.input).toEqual({ field: 'branch', equals: BRANCH });
+      if (s.branchOwner === 'fails') return { ok: false };
+      return ok({
+        runs:
+          s.branchOwner === 'live'
+            ? [
+                {
+                  id: 'owner-run',
+                  status: 'completed',
+                  startedAt: '2026-10-18T06:00:00Z',
+                  own: false,
+                },
+              ]
+            : [],
+        hasMore: false,
+      });
+    }
+    case 'judge-hand-over-owner':
     case 'read-firing':
     case 'judge-remedy-change':
     case 'name-hand-over-case':
@@ -3208,8 +3235,12 @@ describe('Local PR Shepherd — what its rules cannot act on goes to the agent',
       expect(rule.reason).not.toMatch(/operator/);
     }
     expect(DECIDED_HAND_OVER).toHaveLength(HAND_OVER_RULES.length);
-    expect(taskById.get('claim-hand-over')?.when).toMatchObject({
+    expect(taskById.get('name-hand-over-case')?.when).toMatchObject({
       anyOf: expect.arrayContaining([...DECIDED_HAND_OVER]),
+    });
+    // The claim follows the judgement of the branch's owner, which follows the name.
+    expect(taskById.get('claim-hand-over')?.when).toMatchObject({
+      expression: "tasks.judge-hand-over-owner.output.decision == 'hand_over'",
     });
   });
 
@@ -3990,9 +4021,12 @@ describe('Local PR Shepherd bundle', () => {
       cron: SHEPHERD_SCHEDULE_CRON_DEFAULT,
       input: { input: 'tend', config: { [SKILL_STARTER_SCHEDULE_VARIABLE]: { $schedule: 'id' } } },
     });
-    expect(schedule.cron).toBe('*/5 * * * *');
+    // Hourly: the schedule is the fallback sweep, and a pull request's owner acts on its events (Plan 339 D4).
+    expect(schedule.cron).toBe('0 * * * *');
     const pitfall = wf.usage?.pitfalls.find((p) => p.includes(SHEPHERD_SCHEDULE_CRON_DEFAULT));
     expect(pitfall).toContain(`${SKILL_STARTER_SCHEDULE_VARIABLE}: { $schedule: 'id' }`);
+    expect(pitfall).toContain('fallback sweep');
+    expect(pitfall).toContain('starts nothing while no loop pull request is open');
     // The agent is scheduled by its id, which agent search returns for its slug.
     expect(pitfall).toContain("sources ['agent']");
     expect(wf.usage?.next[0]?.operation).toBe('agent.schedule.create');
@@ -4000,5 +4034,101 @@ describe('Local PR Shepherd bundle', () => {
 
   it('fits the workflow task ceiling', () => {
     expect(wf.tasks.length).toBeLessThanOrEqual(WORKFLOW_TASKS_MAX);
+  });
+});
+
+describe("Plan 339 P3 — the node card's four lines", () => {
+  const CONFLICTING: Scenario = {
+    mergePosture: 'when-green',
+    checks: GREEN,
+    pullRequest: { mergeable: false, mergeableState: 'dirty' },
+    pinned: 'found',
+    handoff: EARLIER_ROUND,
+  };
+  const briefOf = (p: Pass) =>
+    String(FlowScheduleCreateInputSchema.parse(p.inputs.get('hand-over-to-agent')).input?.input);
+
+  it('hands no case over on a branch whose owning conversation is live, and hands it over once that conversation has ended', () => {
+    const handOvers = new Map<string, Record<string, unknown>>();
+    const owned = pass({ ...CONFLICTING, handOvers, branchOwner: 'live' });
+    expect(owned.decision).toBe('leave');
+    const judged = owned.outputs.get('judge-hand-over-owner');
+    expect(judged?.['decision']).toBe('defer');
+    expect(String(judged?.['reason'])).toMatch(/two publications on one branch refuse each other/);
+    expect(owned.statuses.get('claim-hand-over')).toBe('skipped');
+    expect(owned.ran).not.toContain('hand-over-to-agent');
+    for (const action of ACTIONS) expect(owned.ran).not.toContain(action);
+    // The owner is read from every publication of the branch a live conversation started.
+    const query = WorkflowRunListInputSchema.parse(owned.inputs.get('read-branch-owner'));
+    expect(query).toMatchObject({
+      slug: PUBLISH_LOCAL_CHANGES.bundle.workflow.slug,
+      input: { field: 'branch', equals: BRANCH },
+      drivenByLiveConversation: true,
+      status: ['running', 'paused', 'completed', 'failed', 'cancelled'],
+    });
+
+    // An owner that could not be read is not known to be gone.
+    const unread = pass({ ...CONFLICTING, handOvers, branchOwner: 'fails' });
+    expect(unread.outputs.get('judge-hand-over-owner')?.['decision']).toBe('defer');
+    expect(unread.ran).not.toContain('hand-over-to-agent');
+    expect(handOvers.size).toBe(0);
+
+    // No claim was spent, so the first pass after the owner has ended hands it over.
+    const ended = pass({ ...CONFLICTING, handOvers });
+    expect(ended.outputs.get('judge-hand-over-owner')?.['decision']).toBe('hand_over');
+    expect(ended.statuses.get('hand-over-to-agent')).toBe('succeeded');
+    expect(handOvers.size).toBe(1);
+  });
+
+  it('never republishes an unchanged red head', () => {
+    // A remedy that moved nothing starts no publication, so no check runs on the head again.
+    for (const value of ['code_defect', 'dependency_advisory', 'base_conflict'] as const) {
+      const unchanged = pass({ remedy: { value, decided: true }, commission: 'unchanged' });
+      expect(unchanged.statuses.get('publish')).toBe('skipped');
+      expect(unchanged.outputs.get('judge-remedy-change')).toMatchObject({ decision: 'wait' });
+    }
+    // Publication follows only a remedy that left a change: a patch or a merge, each a new head.
+    expect(taskById.get('publish')?.when).toMatchObject({
+      expression: "tasks.judge-remedy-change.output.decision == 'fix'",
+    });
+    // A second pass over the same red head acts on nothing.
+    const again = pass({ pinned: 'found', handoff: readBack(pass()) });
+    expect(again.decision).toBe('wait');
+    for (const action of ACTIONS) expect(again.ran).not.toContain(action);
+    // And the Helmsman a case goes to is told not to publish such a head as it stands.
+    const brief = briefOf(pass(CONFLICTING));
+    expect(brief).toContain(
+      'Never publish the branch as it stands while CI is red on its head and the head has not moved',
+    );
+  });
+
+  it("runs every recovery through the operation the machine's cap counts", () => {
+    // Each coding agent a pass starts is a host.harness.run, which the host lane
+    // admits at most HOST_HARNESS_CONCURRENCY_DEFAULT at once, like every other stream.
+    expect(HOST_HARNESS_CONCURRENCY_DEFAULT).toBe(2);
+    const agents = tasks.filter((task) => task.operation === 'host.harness.run');
+    expect(agents.map((task) => task.taskId).sort()).toEqual([...COMMISSIONS].sort());
+    // No other task starts a coding agent around the cap: the one run it starts is the publication.
+    const started = tasks.filter((task) => task.operation === 'workflow.run.start');
+    expect(started.map((task) => task.taskId)).toEqual(['publish']);
+    expect(started[0]?.inputTemplate).toMatchObject({
+      slug: PUBLISH_LOCAL_CHANGES.bundle.workflow.slug,
+    });
+  });
+
+  it('never continues a kept session it does not own', () => {
+    // No commission of the pass continues a session: each starts its own.
+    for (const taskId of COMMISSIONS) {
+      expect(taskById.get(taskId)?.inputTemplate).not.toHaveProperty('continueFrom');
+    }
+    // The hand-over carries no session of the pass or of another conversation.
+    const handOver = taskById.get('hand-over-to-agent')!;
+    expect(JSON.stringify(handOver.inputBindings)).not.toMatch(/sessionRef/);
+    const brief = briefOf(pass(CONFLICTING));
+    expect(brief).not.toMatch(/sessionRef|hs_/);
+    expect(brief).toContain('Start every commission on this branch fresh, with no `continueFrom`.');
+    expect(brief).toContain(
+      'A kept coding session belongs to the conversation or the run that made it',
+    );
   });
 });

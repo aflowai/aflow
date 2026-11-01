@@ -103,6 +103,12 @@ export const WorkflowRunListInputSchema = z
       .describe(
         `Tasks every listed run succeeded in — and, where \`output\` is named, recorded that value at that path: a publication that pushed one commit is \`[{ taskId: 'push' }, { taskId: 'commit', output: { path: 'commit.sha', equals: <sha> } }]\`. Where any names \`output\`, the newest ${String(WORKFLOW_RUN_LIST_LIMIT_MAX)} runs that succeeded in every named task are read for it, and \`hasMore\` says where more were not. Named with \`slug\` and \`input\`.`,
       ),
+    drivenByLiveConversation: z
+      .literal(true)
+      .optional()
+      .describe(
+        'Lists only the runs a Helmsman conversation started and still holds — one that has not ended. A publication so listed names the conversation that owns its branch. Named with `slug` and `input`.',
+      ),
     status: z
       .array(WorkflowRunListStatusSchema)
       .min(1)
@@ -125,7 +131,9 @@ export const WorkflowRunListInputSchema = z
     const byInput = query.slug !== undefined && query.input !== undefined;
     const byNode = query.servingNodeOfPullRequest !== undefined;
     const partial = (query.slug === undefined) !== (query.input === undefined);
-    if (byInput === byNode || partial || (byNode && query.succeeded !== undefined)) {
+    const byNodeWithInputFilter =
+      byNode && (query.succeeded !== undefined || query.drivenByLiveConversation !== undefined);
+    if (byInput === byNode || partial || byNodeWithInputFilter) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: WORKFLOW_RUN_LIST_SELECTOR_MESSAGE });
     }
   });

@@ -10,6 +10,7 @@
  * a process that dies mid-delivery leaves it for a later cycle.
  */
 import {
+  disownPullRequestWatch,
   markSessionDeclaredWait,
   rearmEndedWait,
   settleEndedWait,
@@ -31,10 +32,42 @@ import { backgroundTaskControlPlane, WAIT_OUTCOME_ACTOR_ID, type TenantId } from
 import { queueMessageForNextTurn } from '../SessionOrchestrator/helpers/queuedMessage.js';
 import { wakeSessionForWait } from '../cybernetic/harness/sessionWakeup.js';
 import type { HarnessDeps } from '../cybernetic/harness/types.js';
+import { holdAgainForOwner } from '../pullRequestEvents/owner.js';
 
 export const WAIT_DELIVERY_TASK_ID = 'orchestrator.wait_delivery';
 
-export type WaitDelivery = 'woke' | 'told' | 'session_gone' | 'retry';
+/** `renewed` is an owner's wait whose window closed: nothing is posted, and the next one is declared. */
+export type WaitDelivery = 'woke' | 'told' | 'session_gone' | 'retry' | 'renewed';
+
+/** The last event an ended wait was told, so the next wait counts from just past it. */
+function pastLastEvent(ended: EndedWait): number | undefined {
+  const { outcome } = ended;
+  if (outcome.endedBy !== 'event') return undefined;
+  const last = outcome.laterEvents?.at(-1) ?? outcome.event;
+  return last.firedAt + 1;
+}
+
+/**
+ * A wait the platform declared for a pull request's owner (Plan 339 D4) is
+ * renewed after each delivery, so the owner hears every change. A window that
+ * closes on it posts nothing: the owner did not ask for it. Where the new wait
+ * catches up on an event at once, that outcome is delivered here too.
+ */
+async function deliverOwnerWait(deps: HarnessDeps, ended: EndedWait): Promise<WaitDelivery> {
+  const { registration } = ended;
+  const delivered =
+    ended.outcome.endedBy === 'window_closed' ? 'renewed' : await deliverToWaiter(deps, ended);
+  if (delivered === 'retry') return delivered;
+  if (delivered === 'session_gone') {
+    await disownPullRequestWatch(deps.redis, registration, registration.sessionId);
+    return delivered;
+  }
+  const held = await holdAgainForOwner(deps, registration, pastLastEvent(ended));
+  if (held.state === 'declared' && held.wait.state === 'ended') {
+    await deliverOwnerWait(deps, { registration: held.registration, outcome: held.wait.outcome });
+  }
+  return delivered;
+}
 
 /**
  * Tell one waiter that its wait ended. The room post is keyed by the wait, so
@@ -50,6 +83,12 @@ export type WaitDelivery = 'woke' | 'told' | 'session_gone' | 'retry';
  * its next turn.
  */
 export async function deliverEndedWait(deps: HarnessDeps, ended: EndedWait): Promise<WaitDelivery> {
+  return ended.registration.owner !== undefined
+    ? deliverOwnerWait(deps, ended)
+    : deliverToWaiter(deps, ended);
+}
+
+async function deliverToWaiter(deps: HarnessDeps, ended: EndedWait): Promise<WaitDelivery> {
   const { registration, outcome } = ended;
   const tenantId = registration.tenantId as TenantId;
   const post = () =>

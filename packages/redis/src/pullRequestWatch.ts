@@ -51,6 +51,14 @@ export const PullRequestWatchSchema = z.object({
   url: z.string().min(1),
   /** Epoch ms. */
   armedAt: z.number().int().nonnegative(),
+  /** The connected folder the publication pushed from, which a shepherd pass is aimed with. */
+  bindingId: z.string().min(1).optional(),
+  /**
+   * The Helmsman conversation that started the publication that opened the
+   * pull request: its owner (Plan 339 D4). Absent where no conversation
+   * started it, or once its owner has ended.
+   */
+  ownerSessionId: z.string().min(1).optional(),
   pull: ConditionalReadSchema(PullRequestReadStateSchema).optional(),
   /** Keyed by the head it was read for: a new head is a new check-runs resource. */
   checks: ConditionalReadSchema(
@@ -85,6 +93,15 @@ export function PULL_REQUEST_WATCH_KEY(ref: WatchRef): string {
 
 export function PULL_REQUEST_WATCH_LEASE_KEY(ref: WatchRef): string {
   return `pr_watch:lease:${ref.tenantId}:${ref.spaceId}:${ref.subject}`;
+}
+
+/**
+ * One space's watched pull requests by subject, scored by when each was armed.
+ * The shepherd sweep's due check reads it, so a firing in a space with no loop
+ * pull request open reads one empty range.
+ */
+export function PULL_REQUEST_WATCH_SPACE_KEY(ref: Pick<WatchRef, 'tenantId' | 'spaceId'>): string {
+  return `pr_watch:space:${ref.tenantId}:${ref.spaceId}`;
 }
 
 function dueMember(ref: WatchRef): string {
@@ -124,16 +141,74 @@ export async function armPullRequestWatch(
   watch: Pick<
     PullRequestWatch,
     'tenantId' | 'spaceId' | 'owner' | 'repo' | 'number' | 'subject' | 'url' | 'armedAt'
-  >,
-): Promise<void> {
+  > &
+    Partial<Pick<PullRequestWatch, 'bindingId' | 'ownerSessionId'>>,
+): Promise<PullRequestWatch> {
   const key = PULL_REQUEST_WATCH_KEY(watch);
   const existing = parseWatch(await redis.get(key));
-  const record: PullRequestWatch = existing ? { ...existing, url: watch.url } : { ...watch };
+  // The owner is the conversation whose publication opened the pull request.
+  // A later publication of the branch — a shepherd's fix among them — names
+  // an owner only where none is recorded.
+  const record: PullRequestWatch = existing
+    ? {
+        ...existing,
+        url: watch.url,
+        ...(existing.bindingId === undefined && watch.bindingId !== undefined
+          ? { bindingId: watch.bindingId }
+          : {}),
+        ...(existing.ownerSessionId === undefined && watch.ownerSessionId !== undefined
+          ? { ownerSessionId: watch.ownerSessionId }
+          : {}),
+      }
+    : { ...watch };
   await redis
     .multi()
     .set(key, JSON.stringify(record), 'EX', PULL_REQUEST_WATCH_TTL_SECONDS)
     .zadd(PULL_REQUEST_WATCH_DUE_KEY, String(watch.armedAt), dueMember(watch))
+    .zadd(PULL_REQUEST_WATCH_SPACE_KEY(watch), String(watch.armedAt), watch.subject)
+    .expire(PULL_REQUEST_WATCH_SPACE_KEY(watch), PULL_REQUEST_WATCH_TTL_SECONDS)
     .exec();
+  return record;
+}
+
+/** The watch of one pull request, or null where the loop does not watch it. */
+export async function readPullRequestWatch(
+  redis: Redis,
+  ref: WatchRef,
+): Promise<PullRequestWatch | null> {
+  return parseWatch(await redis.get(PULL_REQUEST_WATCH_KEY(ref)));
+}
+
+/**
+ * Forget the owner of a pull request where it is still `sessionId`: that
+ * conversation has ended, so the pull request is no conversation's and the
+ * fallback sweep tends it. The record keeps its lifetime.
+ */
+export async function disownPullRequestWatch(
+  redis: Redis,
+  ref: WatchRef,
+  sessionId: string,
+): Promise<void> {
+  const key = PULL_REQUEST_WATCH_KEY(ref);
+  const watch = parseWatch(await redis.get(key));
+  if (watch?.ownerSessionId !== sessionId) return;
+  const { ownerSessionId: _ended, ...rest } = watch;
+  const leftMs = await redis.pttl(key);
+  if (leftMs <= 0) return;
+  await redis.set(key, JSON.stringify(rest), 'PX', leftMs);
+}
+
+/**
+ * The subjects of the pull requests one space's loop has open, oldest armed
+ * first, at most `limit`. A subject whose watch lapsed is read as gone by
+ * whoever reads its watch, and its member lapses with the space's index.
+ */
+export async function listSpacePullRequestSubjects(
+  redis: Redis,
+  ref: Pick<WatchRef, 'tenantId' | 'spaceId'>,
+  limit: number,
+): Promise<string[]> {
+  return redis.zrangebyscore(PULL_REQUEST_WATCH_SPACE_KEY(ref), '-inf', '+inf', 'LIMIT', 0, limit);
 }
 
 /** Stop watching a pull request: it merged or closed. */
@@ -143,6 +218,7 @@ export async function clearPullRequestWatch(redis: Redis, ref: WatchRef): Promis
     .del(PULL_REQUEST_WATCH_KEY(ref))
     .del(PULL_REQUEST_WATCH_LEASE_KEY(ref))
     .zrem(PULL_REQUEST_WATCH_DUE_KEY, dueMember(ref))
+    .zrem(PULL_REQUEST_WATCH_SPACE_KEY(ref), ref.subject)
     .exec();
 }
 
@@ -209,7 +285,11 @@ export async function claimDuePullRequestWatches(
     if (lease !== 'OK') continue;
     const watch = parseWatch(await redis.get(PULL_REQUEST_WATCH_KEY(ref)));
     if (watch === null) {
-      await redis.zrem(PULL_REQUEST_WATCH_DUE_KEY, member);
+      await redis
+        .multi()
+        .zrem(PULL_REQUEST_WATCH_DUE_KEY, member)
+        .zrem(PULL_REQUEST_WATCH_SPACE_KEY(ref), ref.subject)
+        .exec();
       continue;
     }
     claimed.push(watch);

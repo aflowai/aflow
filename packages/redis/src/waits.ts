@@ -306,6 +306,15 @@ export async function readRecordedWaitEvent(
 }
 
 /**
+ * The waits one subject holds now, each as it was registered. One hash read,
+ * addressed by the subject: what holds a subject is never found by a scan.
+ */
+export async function readSubjectWaits(redis: Redis, ref: SubjectRef): Promise<WaitRegistration[]> {
+  const waiters = await redis.hgetall(WAIT_WAITERS_KEY(ref));
+  return waitsOf(waiters).map(({ registration }) => registration);
+}
+
+/**
  * Marks a conversation that has declared a wait, so a turn that comes to rest
  * reads the room for an unread outcome only there. Every outcome is posted
  * inside the longest window from its declaration, plus the time its delivery

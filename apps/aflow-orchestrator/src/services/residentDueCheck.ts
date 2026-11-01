@@ -2,13 +2,36 @@ import type { Redis } from 'ioredis';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { ScheduleDispatchItem } from '@aflow/database';
 import { resolvePayloadStore } from '@aflow/payload-store';
-import { backgroundTaskControlPlane, PlanNodeNextInputSchema } from '@aflow/schemas';
+import {
+  backgroundTaskControlPlane,
+  isPlanResidentSchedule,
+  PlanNodeNextInputSchema,
+} from '@aflow/schemas';
 import {
   createPlanNodeStore,
   createPlanStreamReads,
   nextOnPlanBoard,
   residentPendingKey,
 } from '@aflow/cybernetic-runtime';
+
+/** A cron occurrence of a space's resident schedule (Plan 331 D1): a heartbeat. */
+export function isResidentHeartbeat(schedule: {
+  action: string;
+  kind: string;
+  target_kind: string | null;
+  target_system_role: string | null;
+  input_template: Record<string, unknown>;
+}): boolean {
+  return (
+    schedule.action === 'start_run' &&
+    schedule.kind === 'cron' &&
+    isPlanResidentSchedule({
+      targetKind: schedule.target_kind,
+      targetSystemRole: schedule.target_system_role,
+      inputTemplate: schedule.input_template,
+    })
+  );
+}
 
 export async function residentOccurrenceDue(
   db: PostgresJsDatabase,

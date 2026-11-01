@@ -1,7 +1,8 @@
-import { sql, type SQL } from 'drizzle-orm';
+import { eq, sql, type SQL } from 'drizzle-orm';
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
-import { sessions } from '@aflow/database';
-import type { AgentSystemRole, SessionAgentTarget, SessionStatus } from '@aflow/schemas';
+import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import { createTenantContext, sessions, withTenantSchema } from '@aflow/database';
+import type { AgentSystemRole, SessionAgentTarget, SessionStatus, TenantId } from '@aflow/schemas';
 
 const CONVERSATION_TARGET_KIND = 'platform-role' satisfies SessionAgentTarget['kind'];
 const CONVERSATION_SYSTEM_ROLE: AgentSystemRole = 'cybernetic-helmsman';
@@ -48,6 +49,37 @@ export function drivenByLiveConversationSql(runSessionId: SQL | AnyPgColumn): SQ
       false
     )
   end`;
+}
+
+/**
+ * Whether `sessionId` is a Helmsman conversation that has not ended: one that
+ * still holds its work, by the rule {@link drivenByLiveConversationSql} reads.
+ * A session with no row is not held here, since this asks about a session
+ * named long after it started.
+ */
+export async function isLiveConversation(
+  db: PostgresJsDatabase,
+  tenantId: string,
+  sessionId: string,
+): Promise<boolean> {
+  const rows = await withTenantSchema(db, createTenantContext(tenantId as TenantId), (tx) =>
+    tx
+      .select({
+        targetKind: sessions.targetKind,
+        targetSystemRole: sessions.targetSystemRole,
+        status: sessions.status,
+      })
+      .from(sessions)
+      .where(eq(sessions.sessionId, sessionId))
+      .limit(1),
+  );
+  const row = rows[0];
+  if (row === undefined) return false;
+  return (
+    row.targetKind === CONVERSATION_TARGET_KIND &&
+    row.targetSystemRole === CONVERSATION_SYSTEM_ROLE &&
+    !CONVERSATION_ENDED_STATUSES.includes(row.status as SessionStatus)
+  );
 }
 
 /** Who reads the space's work: a session, and the plan roots its conversation has taken up. */

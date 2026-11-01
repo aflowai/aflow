@@ -12,7 +12,11 @@ import type { WorkflowRunDetail } from '@aflow/cybernetic-runtime';
 import type { HarnessDeps } from '../cybernetic/harness/types.js';
 
 const { buildResult } = vi.hoisted(() => ({ buildResult: vi.fn() }));
-vi.mock('@aflow/cybernetic-runtime', () => ({ buildWorkflowRunResult: buildResult }));
+vi.mock('@aflow/cybernetic-runtime', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@aflow/cybernetic-runtime')>()),
+  buildWorkflowRunResult: buildResult,
+  isLiveConversation: () => Promise.resolve(false),
+}));
 const { armPullRequestOnPublication } = await import('./arm.js');
 
 const TENANT = 'a0000000-0000-4000-8000-000000000339';

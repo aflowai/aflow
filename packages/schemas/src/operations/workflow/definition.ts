@@ -22,12 +22,14 @@ import { WorkflowTaskSchema } from './task.js';
  * case its rules cannot act on to the Helmsman — naming the case, and noting a
  * repository it could not list until that persists — waits, saying why, on a
  * remedy that left nothing to publish, and finds the publication that pushed
- * its head as the merge of a moved base, is sixty-four — the whole ceiling.
+ * its head as the merge of a moved base, was sixty-four. It reads whether a
+ * live conversation drives its branch before it hands a case over, too, so the
+ * ceiling stands at seventy-two.
  * It bounds every shape a workflow's tasks take: the stored
  * workflow, workflow.manage.put's input, and the compose-skill draft
  * (ComposedWorkflowSchema), so a draft holds as many as a stored workflow.
  */
-export const WORKFLOW_TASKS_MAX = 64;
+export const WORKFLOW_TASKS_MAX = 72;
 
 export const IterationPolicySchema = z.object({
   auto: z.boolean().default(false),

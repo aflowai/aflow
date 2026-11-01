@@ -60,6 +60,7 @@ export async function listRunsByInput(params: RunsQueryParams): Promise<Workflow
     params,
     sql`r.workflow_slug = ${slug}
         AND (r.metadata -> 'parentTaskInputs' -> 'inputs' -> ${input.field}) = ${JSON.stringify(input.equals)}::jsonb
+        ${query.drivenByLiveConversation === true ? sql` AND ${drivenByLiveConversationSql(sql`r.session_id`)}` : sql``}
         ${sql.join(
           succeeded.map((task) => sql` AND EXISTS (${succeededTaskRow(task, sql`1`)})`),
           sql``,

@@ -45,6 +45,8 @@ export interface DeclareWaitInput {
    * once. Without it, only an event after the declaration ends the wait.
    */
   since?: number;
+  /** Set where the platform declares the wait for the subject's owner (Plan 339 D4). */
+  owner?: { onEvent: string };
 }
 
 export type DeclaredWait =
@@ -99,6 +101,7 @@ export async function declareWait(
     declaredAt: nowMs,
     closesAt: nowMs + input.windowSeconds * 1000,
     ...(input.since !== undefined ? { since: input.since } : {}),
+    ...(input.owner !== undefined ? { owner: input.owner } : {}),
   };
   const registered = await registerWait(redis, registration);
   return registered.state === 'woken'
@@ -148,7 +151,9 @@ export function describeWaitOutcome(registration: WaitRegistration, outcome: Wai
       (later.length > 0
         ? `Later events on the subject before you were told: ${later.map(describe).join('; ')}. `
         : '') +
-      'Act on it by your own rules.'
+      (registration.owner !== undefined
+        ? `You own the subject, so the platform declared this wait for you. ${registration.owner.onEvent}`
+        : 'Act on it by your own rules.')
     );
   }
   return (

@@ -17,7 +17,8 @@
  * back at lease expiry rather than taking it away.
  */
 import type { Redis } from 'ioredis';
-import { residentOccurrenceDue } from './residentDueCheck.js';
+import { isResidentHeartbeat, residentOccurrenceDue } from './residentDueCheck.js';
+import { shepherdSweepWanted } from './pullRequestEvents/sweep.js';
 import { getOrchestratorLogger, logOrchestratorError } from '../lib/orchestratorLogger.js';
 import {
   undeclaredConfigProblem,
@@ -534,6 +535,11 @@ export class ScheduleEvaluator {
         return false;
       }
       claimedRunId = runId;
+    }
+
+    if (!(await shepherdSweepWanted(this.sqlClient, this.redis, schedule))) {
+      await this.skipOccurrence(schedule, null);
+      return false;
     }
 
     let fired = false;
@@ -1352,19 +1358,6 @@ function buildDispatchItem(
     creatorTenantRole: schedule.creator_tenant_role,
     creatorSpaceRole: schedule.creator_space_role,
   };
-}
-
-/** A cron occurrence of a space's resident schedule (Plan 331 D1): a heartbeat. */
-function isResidentHeartbeat(schedule: DueScheduleRow): boolean {
-  return (
-    schedule.action === 'start_run' &&
-    schedule.kind === 'cron' &&
-    isPlanResidentSchedule({
-      targetKind: schedule.target_kind,
-      targetSystemRole: schedule.target_system_role,
-      inputTemplate: schedule.input_template,
-    })
-  );
 }
 
 /** Names one firing of one schedule. The count comes from the advance itself. */

@@ -150,6 +150,48 @@ describe('workflow.run.list — the runs that succeeded in named tasks', () => {
     expect(parameters[index]).toContain(2);
   });
 
+  it('lists only the runs a live Helmsman conversation holds where the query asks for them', async () => {
+    const owned = WorkflowRunListInputSchema.parse({
+      slug: 'publish-local-changes',
+      input: { field: 'branch', equals: 'aflow/x' },
+      drivenByLiveConversation: true,
+      limit: 1,
+    });
+    const { db, queries } = fakeDb([]);
+    await listRunsByInput({
+      db,
+      tenantId: TENANT_ID,
+      spaceId: SPACE_ID,
+      sessionId: SESSION_ID,
+      query: owned,
+    });
+    const statement = queries.find((query) => query.includes('FROM workflow_runs r'))!;
+    const where = statement.slice(statement.indexOf('WHERE'));
+    expect(where).toContain('"sessions"."target_system_role"');
+    expect(where).toContain('not in');
+
+    const { db: unfiltered, queries: plain } = fakeDb([]);
+    const { drivenByLiveConversation: _filter, ...everyone } = owned;
+    await listRunsByInput({
+      db: unfiltered,
+      tenantId: TENANT_ID,
+      spaceId: SPACE_ID,
+      sessionId: SESSION_ID,
+      query: everyone,
+    });
+    const read = plain.find((query) => query.includes('FROM workflow_runs r'))!;
+    expect(read.slice(read.indexOf('WHERE'))).not.toContain('target_system_role');
+  });
+
+  it('refuses the live-conversation filter beside a pull request selector', () => {
+    expect(
+      WorkflowRunListInputSchema.safeParse({
+        servingNodeOfPullRequest: 'https://github.com/o/r/pull/1',
+        drivenByLiveConversation: true,
+      }).success,
+    ).toBe(false);
+  });
+
   it('refuses to compare an output with no payload store to read it from', async () => {
     const { db } = fakeDb([run('00000000-0000-4000-8000-000000000002', 'inline:x')]);
     await expect(
