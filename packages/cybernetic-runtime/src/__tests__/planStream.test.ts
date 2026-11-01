@@ -811,7 +811,7 @@ describe('plan.node.next — a merge', () => {
           ...session(),
           actorKind: 'agent',
           resident: true,
-          readMergedPullRequest: async () => true,
+          readMergedPullRequest: async () => ({ merged: true, reason: '', evidence: '' }),
         },
         {
           nodeId: first.nodeId,
@@ -2337,7 +2337,43 @@ describe('a conversation started over REST', () => {
   );
 });
 
+function refusedMerge() {
+  return {
+    merged: false,
+    reason: 'The merge does not deliver the recorded commit or branch.',
+    evidence: `Pull request: #160 ${PR}\nMerge commit: abc\nMerged by: operator\nMerged at: today\nMerge delivers recorded commit or branch: not attested`,
+  };
+}
+
 describe('resident review regressions', () => {
+  it.each(['recorded commit', 'squashed branch'])(
+    'closes an attested %s without an item',
+    async () => {
+      const node = await created();
+      const wake = {
+        ...session(),
+        actorKind: 'agent' as const,
+        resident: true,
+        readMergedPullRequest: async () => ({
+          merged: true,
+          reason: 'The merge delivers the recorded commit or branch.',
+          evidence: '',
+        }),
+      };
+      await linkPlanNode(wake, { nodeId: node.nodeId, kind: 'pull_request', ref: PR });
+      expect(
+        await updatePlanNode(wake, {
+          nodeId: node.nodeId,
+          expectedRevision: node.revision,
+          status: 'done',
+          outcome: 'Met',
+        }),
+      ).toMatchObject({ ok: true, node: { status: 'done' } });
+      expect(await listWaitingNodes(wake)).toEqual([]);
+      expect(await redis.get(askedKey(TENANT, SPACE, node.nodeId))).toBeNull();
+    },
+  );
+
   it('refuses active creation, approval, drop and unattested close for other scheduled sessions', async () => {
     const ctx = {
       ...session(),
@@ -2377,7 +2413,9 @@ describe('resident review regressions', () => {
   it('requires GitHub to attest the linked merge during each scheduled close', async () => {
     const root = await created();
     const node = await created({ parentId: root.nodeId });
-    const read = vi.fn<(url: string) => Promise<boolean>>().mockResolvedValue(true);
+    const read = vi
+      .fn<(url: string) => Promise<{ merged: boolean; reason: string; evidence: string }>>()
+      .mockResolvedValue({ merged: true, reason: '', evidence: '' });
     const ctx = {
       ...session(),
       actorKind: 'agent' as const,
@@ -2398,25 +2436,29 @@ describe('resident review regressions', () => {
     input.expectedRevision = (await current(node.nodeId)).revision;
     await linkPlanNode(session(), { nodeId: node.nodeId, kind: 'pull_request', ref: PR });
     await linkPlanNode(session(), { nodeId: node.nodeId, kind: 'merge', ref: PR });
-    read.mockResolvedValue(false);
+    read.mockResolvedValue(refusedMerge());
     expect(await updatePlanNode(ctx, input)).toMatchObject({ ok: false });
     expect(await current(node.nodeId)).toMatchObject({
       status: 'active',
       note: expect.stringContaining('Waiting on you:'),
     });
+    input.expectedRevision = (await current(node.nodeId)).revision;
     read.mockRejectedValueOnce(new Error('GitHub unavailable'));
     expect(await updatePlanNode(ctx, input)).toMatchObject({ ok: false });
     expect(await updatePlanNode({ ...session(), resident: true }, input)).toMatchObject({
       ok: false,
     });
-    read.mockResolvedValue(true);
+    read.mockResolvedValue({ merged: true, reason: '', evidence: '' });
     expect(await updatePlanNode(ctx, input)).toMatchObject({ ok: true, node: { status: 'done' } });
     expect(read).toHaveBeenLastCalledWith(PR, node.nodeId);
   });
 
   it('retries failed attestation on a later wake without a wait line or person routing', async () => {
     const node = await created();
-    const read = vi.fn().mockRejectedValueOnce(new Error('GitHub timeout')).mockResolvedValue(true);
+    const read = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('GitHub timeout'))
+      .mockResolvedValue({ merged: true, reason: '', evidence: '' });
     const wake = {
       ...session(),
       actorKind: 'agent' as const,
@@ -2442,7 +2484,7 @@ describe('resident review regressions', () => {
 
   it('closes record_merge with the resident own link and asks once when attestation refuses', async () => {
     const node = await created();
-    const read = vi.fn().mockResolvedValue(false);
+    const read = vi.fn().mockResolvedValue(refusedMerge());
     const wake = {
       ...session(),
       actorKind: 'agent' as const,
@@ -2460,6 +2502,17 @@ describe('resident review regressions', () => {
     expect(await close()).toMatchObject({ ok: false });
     const waiting = await current(node.nodeId);
     expect(await listWaitingNodes(wake)).toContainEqual(waiting);
+    const { planAsk } = await import('../plan/asks.js');
+    const summary = planAsk(waiting).waitsOn;
+    for (const fact of [
+      'The merge does not deliver the recorded commit or branch.',
+      'Pull request:',
+      'Merge commit:',
+      'Merged by:',
+      'Merged at:',
+      'Merge delivers recorded commit or branch:',
+    ])
+      expect(summary).toContain(fact);
     const record = await redis.get(askedKey(TENANT, SPACE, node.nodeId));
     expect(await close()).toMatchObject({ ok: false });
     expect((await current(node.nodeId)).revision).toBe(waiting.revision);
@@ -2473,14 +2526,22 @@ describe('resident review regressions', () => {
       ),
     ).toMatchObject({ ok: true, output: { decisions: [{ answer: { decision: 'ask' } }] } });
     expect(await redis.get(askedKey(TENANT, SPACE, node.nodeId))).toBe(String(changed.revision));
-    read.mockResolvedValue(true);
+    read.mockResolvedValue({ ...refusedMerge(), reason: 'The pull request is still open.' });
+    expect(await close()).toMatchObject({ ok: false });
+    const rewritten = await current(node.nodeId);
+    expect(rewritten.note).toContain('The pull request is still open.');
+    expect(rewritten.note).toContain('\nOperator context');
+    expect(rewritten.note).not.toContain(refusedMerge().reason);
+    read.mockResolvedValue({ merged: true, reason: '', evidence: '' });
     expect(await close()).toMatchObject({ ok: true, node: { status: 'done' } });
     expect(await listWaitingNodes(wake)).toEqual([]);
   });
 
   it('rejects a merged pull request that does not deliver the node work', async () => {
     const node = await created();
-    const read = vi.fn<(url: string) => Promise<boolean>>().mockResolvedValue(false);
+    const read = vi
+      .fn<(url: string) => Promise<{ merged: boolean; reason: string; evidence: string }>>()
+      .mockResolvedValue(refusedMerge());
     const wake = {
       ...session(),
       actorKind: 'agent' as const,
@@ -2513,7 +2574,7 @@ describe('resident review regressions', () => {
     expect(await fire(root.nodeId, (url) => merged(url, mergedAt))).toMatchObject({
       decision: 'record_merge',
     });
-    const ctx = { ...session(), resident: true, readMergedPullRequest: async () => false };
+    const ctx = { ...session(), resident: true, readMergedPullRequest: async () => refusedMerge() };
     expect(
       await updatePlanNode(ctx, {
         nodeId: first.nodeId,
@@ -2536,7 +2597,7 @@ describe('resident review regressions', () => {
     });
   });
 
-  it('blocks a refused close with a full note so the existing ask flow can raise it', async () => {
+  it('blocks without changing the previous note when evidence has no room', async () => {
     const node = await created();
     await write(node.nodeId, { note: 'x'.repeat(PLAN_NODE_PROSE_MAX_CHARS) });
     const full = await current(node.nodeId);
@@ -2551,7 +2612,10 @@ describe('resident review regressions', () => {
         },
       ),
     ).toMatchObject({ ok: false });
-    expect(await current(node.nodeId)).toMatchObject({ status: 'blocked', note: full.note });
+    expect(await current(node.nodeId)).toMatchObject({
+      status: 'blocked',
+      note: full.note,
+    });
     expect(await redis.get(askedKey(TENANT, SPACE, node.nodeId))).toBe(
       String((await current(node.nodeId)).revision),
     );
@@ -2589,7 +2653,11 @@ describe('resident review regressions', () => {
     await linkPlanNode(session(), { nodeId: node.nodeId, kind: 'pull_request', ref: PR });
     await linkPlanNode(session(), { nodeId: node.nodeId, kind: 'finding', ref: 'review:open-1' });
     const closed = await updatePlanNode(
-      { ...session(), resident: true, readMergedPullRequest: async () => true },
+      {
+        ...session(),
+        resident: true,
+        readMergedPullRequest: async () => ({ merged: true, reason: '', evidence: '' }),
+      },
       { nodeId: node.nodeId, expectedRevision: node.revision, status: 'done', outcome: 'Met' },
     );
     expect(closed).toMatchObject({
@@ -2625,7 +2693,7 @@ describe('resident review regressions', () => {
           resident: true,
           readMergedPullRequest: async () => {
             await write(node.nodeId, { note: 'Person changed this step' });
-            return true;
+            return { merged: true, reason: '', evidence: '' };
           },
         },
         input,
@@ -2637,7 +2705,11 @@ describe('resident review regressions', () => {
     });
     expect(
       await updatePlanNode(
-        { ...session(), resident: true, readMergedPullRequest: async () => true },
+        {
+          ...session(),
+          resident: true,
+          readMergedPullRequest: async () => ({ merged: true, reason: '', evidence: '' }),
+        },
         {
           ...input,
           expectedRevision: (await current(node.nodeId)).revision,
@@ -2650,7 +2722,8 @@ describe('resident review regressions', () => {
     'preserves %s conversation closes without merge reads',
     async (actorKind) => {
       const node = await created();
-      const read = vi.fn<(url: string) => Promise<boolean>>();
+      const read =
+        vi.fn<(url: string) => Promise<{ merged: boolean; reason: string; evidence: string }>>();
       expect(
         await updatePlanNode(
           { ...session(), actorKind, resident: false, readMergedPullRequest: read },

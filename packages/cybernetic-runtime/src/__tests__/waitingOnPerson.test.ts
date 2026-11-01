@@ -24,7 +24,15 @@ import type { WaitingGates } from '../waitingOnPerson.js';
 
 const fakeStore = { current: new InMemoryPlanNodeStore() };
 const fakeGates: { current: { gates: WaitingGates; spaceSlug?: string } } = {
-  current: { gates: { runGates: 0, consents: 0, newest: [] } },
+  current: {
+    gates: {
+      runGates: 0,
+      consents: 0,
+      runGatesMayBeCut: false,
+      consentsMayBeCut: false,
+      newest: [],
+    },
+  },
 };
 
 vi.mock('../plan/store.js', async () => {
@@ -89,7 +97,16 @@ beforeAll(() => {
 
 beforeEach(async () => {
   fakeStore.current = new InMemoryPlanNodeStore();
-  fakeGates.current = { gates: { runGates: 0, consents: 0, newest: [] }, spaceSlug: SLUG };
+  fakeGates.current = {
+    gates: {
+      runGates: 0,
+      consents: 0,
+      runGatesMayBeCut: false,
+      consentsMayBeCut: false,
+      newest: [],
+    },
+    spaceSlug: SLUG,
+  };
   redis = new Redis() as unknown as RedisType;
   await redis.flushall();
 });
@@ -187,6 +204,8 @@ describe('the section names the item and the place', () => {
       gates: {
         runGates: 1,
         consents: 0,
+        runGatesMayBeCut: false,
+        consentsMayBeCut: false,
         newest: [
           {
             kind: 'run_gate',
@@ -215,6 +234,8 @@ describe('the section names the item and the place', () => {
       gates: {
         runGates: 1,
         consents: 0,
+        runGatesMayBeCut: false,
+        consentsMayBeCut: false,
         newest: [
           {
             kind: 'run_gate',
@@ -250,6 +271,21 @@ describe('the section names the item and the place', () => {
     expect(renderWaitingOnPerson({ planSteps: { asks: 2, decisions: 0 }, items: [] })).toEqual([
       'Waiting on a person: 2 plan steps. The run gates and consents could not be read.',
     ]);
+  });
+
+  it('marks a run-gate or consent count a full source window may have cut, as the plan-step count does', () => {
+    const gates = { runGates: 1, consents: 0 };
+    const render = (runGatesMayBeCut: boolean, consentsMayBeCut: boolean) =>
+      renderWaitingOnPerson({
+        planSteps: { asks: 0, decisions: 0 },
+        gates: { ...gates, runGatesMayBeCut, consentsMayBeCut },
+        items: [],
+      })[0];
+    expect(render(false, false)).toBe('Waiting on a person: 0 plan steps, 1 run gate, 0 consents.');
+    expect(render(true, false)).toBe(
+      'Waiting on a person: 0 plan steps, 1+ run gates, 0 consents.',
+    );
+    expect(render(false, true)).toBe('Waiting on a person: 0 plan steps, 1 run gate, 0+ consents.');
   });
 });
 
@@ -392,7 +428,7 @@ describe('the ceiling', () => {
 
     const text = renderWaitingOnPerson({
       planSteps: { asks: PLAN_OPEN_ASKS_LIMIT, decisions: PLAN_OPEN_ASKS_LIMIT },
-      gates: { runGates: 99_999, consents: 99_999 },
+      gates: { runGates: 99_999, consents: 99_999, runGatesMayBeCut: true, consentsMayBeCut: true },
       items: Array.from({ length: WAITING_ON_PERSON_LINE_LIMIT }, () => longest),
       spaceSlug: longestSlug,
     }).join('\n');

@@ -16,6 +16,7 @@ import type { Redis } from 'ioredis';
 import {
   isClosedPlanNodeStatus,
   OPEN_PLAN_NODE_STATUSES,
+  PLAN_NODE_MERGE_WAIT_LINE,
   PLAN_NODE_ASK_HEAD,
   PLAN_NODE_PROSE_MAX_CHARS,
   PLAN_OPEN_ASKS_LIMIT,
@@ -51,6 +52,8 @@ export interface PlanAskContext extends PlanReadContext {
 
 /** What a blocked node waits on, and the note write that says so where its note does not yet. */
 export function planAsk(node: PlanNode): { waitsOn: string; update?: PlanNodeUpdate } {
+  if (planNoteHoldsMergeWait(node.note))
+    return { waitsOn: node.note!.slice(node.note!.indexOf(PLAN_NODE_MERGE_WAIT_LINE)) };
   const waitLine = planNoteWaitLine(node.note);
   if (waitLine !== undefined) return { waitsOn: waitLine };
   const existing = node.note ?? '';

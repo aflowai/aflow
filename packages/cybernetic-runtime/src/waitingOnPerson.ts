@@ -76,17 +76,22 @@ export interface WaitingPlanSteps {
   newest: WaitingItem[];
 }
 
-/** The run gates and consents that wait, counted over their sources' tables. */
+/**
+ * The run gates and consents that wait, counted over their sources' tables.
+ * A count may be cut where a source window it reads is full.
+ */
 export interface WaitingGates {
   runGates: number;
   consents: number;
+  runGatesMayBeCut: boolean;
+  consentsMayBeCut: boolean;
   newest: WaitingItem[];
 }
 
 /** The section's data. A count left out was not read, and the section says so. */
 export interface WaitingOnPerson {
   planSteps?: { asks: number; decisions: number };
-  gates?: { runGates: number; consents: number };
+  gates?: Omit<WaitingGates, 'newest'>;
   /** Newest first, at most `WAITING_ON_PERSON_LINE_LIMIT`. */
   items: WaitingItem[];
   /** The space's slug, for the plan link. */
@@ -226,6 +231,20 @@ function total(rows: readonly Row[], kind?: string): number {
   return row !== undefined ? Number(row['total']) : 0;
 }
 
+/**
+ * Whether a query read its source's whole window. Where nothing in the window
+ * counts, the query still returns one row, with no item, so the window's size
+ * is read even then.
+ */
+function windowFull(rows: readonly Row[], limit: number): boolean {
+  return Number(rows[0]?.['scanned'] ?? 0) >= limit;
+}
+
+/** The rows that carry an item, without the one a query returns to report its window alone. */
+function itemRows(rows: readonly Row[], key: string): Row[] {
+  return rows.filter((row) => row[key] !== null && row[key] !== undefined);
+}
+
 /** The operations the user executor answers with a request for input and for an approval. */
 const USER_INPUT_OPERATION_ID = 'user.interaction.ask';
 const USER_APPROVAL_OPERATION_ID = 'user.interaction.approve';
@@ -362,9 +381,9 @@ export const PAUSED_SESSIONS_SQL = (spaceId: string): SQL => sql`
       FROM waiting
       WHERE kind IS NOT NULL
     )
-    SELECT step_id, started_at, payload, request_kind, kind, total
-    FROM ranked
-    WHERE rank <= ${WAITING_ON_PERSON_LINE_LIMIT}
+    SELECT r.step_id, r.started_at, r.payload, r.request_kind, r.kind, r.total, w.scanned
+    FROM (SELECT count(*)::int AS scanned FROM paused) w
+    LEFT JOIN ranked r ON r.rank <= ${WAITING_ON_PERSON_LINE_LIMIT}
   `;
 
 /** The workflow sources each list at most this many rows, so the count reads no more. */
@@ -510,9 +529,9 @@ export const CONSENT_RUNS_SQL = (spaceId: string): SQL => sql`
       FROM paused
       WHERE NOT inline OR jsonb_typeof(payload -> 'oauthConsent') = 'object'
     )
-    SELECT run_id, started_at, payload -> 'oauthConsent' AS consent, total
-    FROM ranked
-    WHERE rank <= ${WAITING_ON_PERSON_LINE_LIMIT}
+    SELECT r.run_id, r.started_at, r.payload -> 'oauthConsent' AS consent, r.total, w.scanned
+    FROM (SELECT count(*)::int AS scanned FROM listed) w
+    LEFT JOIN ranked r ON r.rank <= ${WAITING_ON_PERSON_LINE_LIMIT}
   `;
 
 /** Pending compute-egress requests, tenant-wide or this space's, as `computeEgressSource` reads them. */
@@ -660,13 +679,20 @@ async function readGates(
     if (kind !== undefined) tasks.push({ row, task, kind });
   }
 
+  const sessions = itemRows(read.sessions, 'step_id');
+  const consents = itemRows(read.consents, 'run_id');
+  const sessionsCut = windowFull(read.sessions, PAUSED_SESSION_SCAN_LIMIT);
   return {
-    runGates: total(read.sessions, 'run_gate') + tasks.length + total(read.egress),
-    consents: total(read.sessions, 'consent') + total(read.consents),
+    runGates: total(sessions, 'run_gate') + tasks.length + total(read.egress),
+    consents: total(sessions, 'consent') + total(consents),
+    // The task query returns each row of either window, so it returns the
+    // window's size in rows once that window is full.
+    runGatesMayBeCut: sessionsCut || read.tasks.length >= PAUSED_TASK_SCAN_LIMIT,
+    consentsMayBeCut: sessionsCut || windowFull(read.consents, PAUSED_TASK_SCAN_LIMIT),
     newest: newestWaitingItems(
-      sessionItems(read.sessions),
+      sessionItems(sessions),
       taskItems(tasks),
-      consentItems(read.consents),
+      consentItems(consents),
       egressItems(read.egress),
     ),
   };
@@ -730,7 +756,14 @@ export function waitingOnPersonFrom(
   return {
     ...(plan !== undefined ? { planSteps: { asks: plan.asks, decisions: plan.decisions } } : {}),
     ...(gates !== undefined
-      ? { gates: { runGates: gates.runGates, consents: gates.consents } }
+      ? {
+          gates: {
+            runGates: gates.runGates,
+            consents: gates.consents,
+            runGatesMayBeCut: gates.runGatesMayBeCut,
+            consentsMayBeCut: gates.consentsMayBeCut,
+          },
+        }
       : {}),
     items: newestWaitingItems(plan?.newest ?? [], gates?.newest ?? []),
     ...(outside?.spaceSlug !== undefined ? { spaceSlug: outside.spaceSlug } : {}),
@@ -786,8 +819,8 @@ export function renderWaitingOnPerson(waiting: WaitingOnPerson): string[] {
     counts.push(counted('plan step', steps.count, steps.mayBeCut));
   }
   if (waiting.gates !== undefined) {
-    counts.push(counted('run gate', waiting.gates.runGates));
-    counts.push(counted('consent', waiting.gates.consents));
+    counts.push(counted('run gate', waiting.gates.runGates, waiting.gates.runGatesMayBeCut));
+    counts.push(counted('consent', waiting.gates.consents, waiting.gates.consentsMayBeCut));
   }
   const heading = [
     counts.length > 0 ? `Waiting on a person: ${counts.join(', ')}.` : 'Waiting on a person:',

@@ -299,6 +299,7 @@ describeDb('readWaitingGates — counts over the tables the sources read (real D
     expect(before.spaceSlug).toBe(SLUG);
     expect(before.gates.runGates).toBe(3);
     expect(before.gates.consents).toBe(2);
+    expect(before.gates).toMatchObject({ runGatesMayBeCut: false, consentsMayBeCut: false });
     const titles = before.gates.newest.map((item) => item.title);
     expect(titles).toEqual(
       expect.arrayContaining([
@@ -413,7 +414,7 @@ describeDb('readWaitingGates — counts over the tables the sources read (real D
       pausedPayloadRef: inline({ oauthConsent: { resourceKey: 'hubspot', bindingId: 'b-4' } }),
       taskOutputRef: null,
     });
-    expect(await read(spaceId)).toMatchObject({ consents: 1 });
+    expect(await read(spaceId)).toMatchObject({ consents: 1, consentsMayBeCut: false });
 
     // 200 newer runs paused for a consent their contract does not carry fill
     // the source's window, and it drops each of them.
@@ -433,6 +434,8 @@ describeDb('readWaitingGates — counts over the tables the sources read (real D
     await withTenantSchema(handle.db, tenant, (tx) => tx.insert(workflowRuns).values(newer));
     const gates = await read(spaceId);
     expect(gates.consents).toBe(0);
+    expect(gates.consentsMayBeCut).toBe(true);
+    expect(gates.runGatesMayBeCut).toBe(false);
     expect(gates.newest.map((item) => item.itemId)).not.toContain(
       `${ACTION_CENTER_ITEM_ID_PREFIX.workflowOAuthConsent}${consentRunId}`,
     );
