@@ -33,9 +33,9 @@ import {
   loadChannelSlackConfig,
 } from './config.js';
 import { createAflowApi } from './aflowApi.js';
-import { answerCardReply, answerCardTap } from './cardActions.js';
+import { Conversations, type WatchOutcome } from './conversation.js';
+import { answerInbound, answerTap } from './inbound.js';
 import { keyExpiryNotice } from './keyExpiry.js';
-import { answerDirectMessage } from './linking.js';
 import { ChannelMessageSendHandler } from './sendHandler.js';
 import { createSlackClient } from './slack.js';
 import { startSocketMode } from './socketMode.js';
@@ -81,7 +81,7 @@ async function main(): Promise<void> {
     },
     deps,
   );
-  // The owner's key from setup: the app reads an item and resolves it with it.
+  // The owner's key from setup: the app reads and resolves items with it, and holds the operator's conversations.
   const api = createAflowApi({
     apiUrl: config.AFLOW_API_URL,
     apiKey: config.AFLOW_API_KEY,
@@ -90,28 +90,32 @@ async function main(): Promise<void> {
   runtime.registerHandler(new ChannelMessageSendHandler({ store, slack, api }));
   await runtime.start();
 
+  const conversations = new Conversations({ store, slack, api, aflowUserId: config.AFLOW_USER_ID });
+  const watched = (watching: Promise<WatchOutcome> | undefined): void => {
+    watching?.catch((error: unknown) => {
+      log.warn('Stopped watching a conversation for its answer', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  };
+  for (const watching of conversations.resumeWatching()) watched(watching);
+
   const socket = startSocketMode({
     slack,
     log,
     onDirectMessage: async (message) => {
-      if (message.threadTs !== undefined) {
-        const reply = await answerCardReply(
-          {
-            slackUserId: message.slackUserId,
-            channel: message.channel,
-            threadTs: message.threadTs,
-            text: message.text,
-          },
-          { store, slack, api },
-        );
-        if (reply !== 'not_a_card') return;
-      }
-      const outcome = await answerDirectMessage(message, { store, config, slack });
-      if (outcome === 'linked') log.info('Linked the Slack user who sent the setup code');
+      const result = await answerInbound(message, { store, slack, api, config, conversations });
+      if (result.outcome === 'linked') log.info('Linked the Slack user who sent the setup code');
+      if ('watching' in result) watched(result.watching);
     },
     onCardTap: async (tap) => {
-      const outcome = await answerCardTap(tap, { store, slack, api });
-      log.info('Answered a tap on a card', { outcome });
+      const result = await answerTap(tap, { store, slack, api, conversations });
+      if (typeof result === 'string') {
+        log.info('Answered a tap on a card', { outcome: result });
+        return;
+      }
+      log.info('Answered a tap on a late message', { outcome: result.outcome });
+      watched(result.watching);
     },
   });
 

@@ -7,8 +7,12 @@
  * resolve route the web app calls, with the origin the app read, and the card
  * is edited to say what was decided and by whom. A tap on an item that is no
  * longer open gets the route's own answer, and the card says it was already
- * decided. A tap on a card that already has an outcome is not sent. The app
- * answers it in the thread from the card's record, so the card keeps its note.
+ * decided. A 409 can also mean the item is still open under an origin that has
+ * moved on. Then the card says the item changed, is still open and needs
+ * Aflow, and never that it was decided. A tap on a card that already has an
+ * outcome is not sent. The app answers it in the thread from the card's
+ * record, so the card keeps its note. A tap on a message the app holds no card
+ * record for decides nothing, and the app says so in its thread.
  *
  * Free text never approves anything. A reply in a card's thread answers only
  * a question that asks for text. On any other card it leaves the item open,
@@ -54,6 +58,22 @@ export const REPLY_CARD_SETTLED = 'This card is settled, so a reply here decides
 
 export const TAP_ALREADY_DECIDED = 'Already decided. This tap changed nothing.';
 
+export const TAP_CARD_OUTDATED = 'This card is out of date, so this tap changed nothing.';
+
+export const ITEM_CHANGED =
+  'This item changed at Aflow after the card was sent, and it is still open, so nothing was decided. ' +
+  'Open it in the Action Center at Aflow to decide it.';
+
+export const TAP_NO_CARD =
+  'This app holds no record of this card, so the tap decided nothing. It may be older than the ' +
+  '30 days the app keeps cards. Open the Action Center at Aflow to decide its item.';
+
+export const TAP_NOT_OFFERED = 'This card does not offer that button, so the tap decided nothing.';
+
+export const STALE_UNREAD =
+  'Aflow answered that this item changed after the card was sent, and the app could not read it ' +
+  'again. Open it in the Action Center at Aflow and check it before you answer again.';
+
 export const CARD_BUSY =
   'A decision on this card is on its way to Aflow. Wait for the card to change before you tap again.';
 
@@ -70,6 +90,8 @@ export const CHECK_BEFORE_ANSWERING =
 export type CardOutcome =
   | 'resolved'
   | 'already_decided'
+  | 'item_changed'
+  | 'no_card'
   | 'refused'
   | 'invalid_answer'
   | 'not_sent'
@@ -100,7 +122,7 @@ function noteFor(
   slackUserId: string,
 ): string {
   if (answer.ok) return `${decided} by <@${slackUserId}> from Slack.`;
-  // The route answers a decided item with a stale origin (409), or with no item at all (404).
+  // A 409 reaches here only once the item is known not to be open, and a 404 has no item at all.
   if (answer.status === 409 || answer.status === 404) {
     return `Already decided. This tap changed nothing. Aflow answered: ${escapeMrkdwn(answer.message)}`;
   }
@@ -122,6 +144,26 @@ function retryAdvice(answer: RouteRefusal): string {
   return answer.outcomeUnknown
     ? `${OUTCOME_UNKNOWN} ${message} ${CHECK_BEFORE_ANSWERING}`
     : `${NOT_SENT_TRY_AGAIN} ${message} Try again.`;
+}
+
+/**
+ * What a 409 means for this card. The route answers 409 when the origin the
+ * app read no longer matches. The item may be decided, or it may still be open
+ * under an origin that has moved on, such as a step paused again. The item the
+ * route sent back says which, and without one the app reads the item again.
+ */
+async function staleItem(
+  card: CardRecord,
+  answer: RouteRefusal,
+  deps: CardDeps,
+): Promise<'open' | 'decided' | 'unread'> {
+  let latest = answer.latestItem;
+  if (latest === undefined) {
+    const read = await deps.api.readItem(card.spaceId, card.itemId);
+    if (!read.ok) return read.status === 404 ? 'decided' : 'unread';
+    latest = read.item;
+  }
+  return latest.status === 'open' ? 'open' : 'decided';
 }
 
 /**
@@ -156,11 +198,16 @@ async function decide(
       await deps.slack.postMessage(card.channel, retryAdvice(answer), { threadTs: card.ts });
       return outcomeOf(answer);
     }
-    const note = noteFor(answer, decided, slackUserId);
-    deps.store.settleCard(card, note, deps.now?.() ?? new Date());
+    const stale = !answer.ok && answer.status === 409 ? await staleItem(card, answer, deps) : null;
+    if (stale === 'unread') {
+      await deps.slack.postMessage(card.channel, STALE_UNREAD, { threadTs: card.ts });
+      return 'outcome_unknown';
+    }
+    const note = stale === 'open' ? ITEM_CHANGED : noteFor(answer, decided, slackUserId);
+    deps.store.settleCard(card, note, deps.now?.() ?? new Date(), stale === 'open');
     const blocks: SlackBlock[] = [...(card.head as SlackBlock[]), ...outcomeFoot(note)];
     await deps.slack.updateMessage(card.channel, card.ts, card.text, blocks);
-    return outcomeOf(answer);
+    return stale === 'open' ? 'item_changed' : outcomeOf(answer);
   } finally {
     deps.store.releaseCard(card);
   }
@@ -170,14 +217,23 @@ async function decide(
 export async function answerCardTap(tap: CardTap, deps: CardDeps): Promise<CardOutcome> {
   if (deps.store.link()?.slackUserId !== tap.slackUserId) return 'ignored';
   const card = deps.store.cardAt(tap.channel, tap.messageTs);
-  const control = card?.controls.find((entry) => entry.id === tap.actionId);
-  if (card === undefined || control === undefined) return 'ignored';
+  if (card === undefined) {
+    // Slack still shows the buttons of a card whose record is gone, so the tap gets an answer.
+    await deps.slack.postMessage(tap.channel, TAP_NO_CARD, { threadTs: tap.messageTs });
+    return 'no_card';
+  }
+  const control = card.controls.find((entry) => entry.id === tap.actionId);
+  if (control === undefined) {
+    await deps.slack.postMessage(card.channel, TAP_NOT_OFFERED, { threadTs: card.ts });
+    return 'ignored';
+  }
   if (card.outcome !== null) {
     // The route would answer 409, and that answer would replace the note that says who decided.
-    await deps.slack.postMessage(card.channel, `${TAP_ALREADY_DECIDED} ${card.outcome.note}`, {
+    const lead = card.outcome.stillOpen === true ? TAP_CARD_OUTDATED : TAP_ALREADY_DECIDED;
+    await deps.slack.postMessage(card.channel, `${lead} ${card.outcome.note}`, {
       threadTs: card.ts,
     });
-    return 'already_decided';
+    return card.outcome.stillOpen === true ? 'item_changed' : 'already_decided';
   }
   return decide(card, control.resolution, control.decided, tap.slackUserId, deps);
 }

@@ -11,6 +11,12 @@ import { useResumeOnUnblock } from './use-resume-on-unblock.js';
 import { readProposalReadFailure } from '../lib/proposal-read-failure.js';
 import { partitionLanes, type ActionCenterLanes } from './use-action-center-lanes.js';
 import type { ActionCenterItem, CoachProposalExtension } from './use-action-center-types.js';
+import {
+  itemsStructuralSharing,
+  snapshotPayload,
+  withItems,
+  type ItemsPayload,
+} from './action-center-cache.js';
 
 // Re-export the types so existing imports
 // (`import type { ActionCenterItem } from './use-action-center.js'`)
@@ -79,7 +85,8 @@ export interface UseActionCenterResult {
 
   /**
    * Whether `items` is every open item: true once the stream's snapshot has
-   * replaced the REST list, which the route may have cut at its limit.
+   * replaced the REST list, which the route may have cut at its limit. A REST
+   * refetch keeps it while the stream is up, unless the route has cut that read.
    */
   listIsWhole: boolean;
 
@@ -201,21 +208,6 @@ function itemsQueryKey(spaceId: string): QueryKey {
   return ['space', spaceId, 'action-center'];
 }
 
-interface ItemsPayload {
-  items?: ActionCenterItem[];
-  /**
-   * True where the list came from the stream's snapshot, which carries every
-   * open item. The REST list may be cut at the route's limit, so it never counts as whole.
-   * Merges and removals keep the flag of the list they edit.
-   */
-  whole?: boolean;
-}
-
-/** The cached payload with its items replaced, keeping where the list came from. */
-function withItems(prev: ItemsPayload | undefined, items: ActionCenterItem[]): ItemsPayload {
-  return prev?.whole === true ? { items, whole: true } : { items };
-}
-
 // Re-export the lane partition helper that lives in its own React-free
 // file (so tests can import it without dragging in TanStack Query).
 // Consumers that need just the helper can import from either path.
@@ -235,11 +227,19 @@ export function useActionCenter(spaceId: string | null): UseActionCenterResult {
   // `setQueryData` on every broker event so subsequent re-renders come
   // from the cache, not the network.
   const queryKey = useMemo(() => (spaceId ? itemsQueryKey(spaceId) : ['__none__']), [spaceId]);
+  const structuralSharing = useMemo(
+    () =>
+      itemsStructuralSharing(() =>
+        spaceId ? broker.getStatusSnapshot(spaceId).isConnected : false,
+      ),
+    [spaceId],
+  );
   const itemsQuery = useApiQuery<ItemsPayload>({
     key: queryKey,
     path: spaceId ? `/spaces/${spaceId}/action-center` : '/spaces',
     staleTime: 30_000,
     enabled: spaceId !== null,
+    structuralSharing,
     ...(spaceId ? { spaceId } : {}),
   });
 
@@ -307,10 +307,10 @@ export function useActionCenter(spaceId: string | null): UseActionCenterResult {
           queryKey: itemsQueryKey(spaceId),
           exact: true,
         });
-        queryClientRef.current.setQueryData<ItemsPayload>(itemsQueryKey(spaceId), {
-          items,
-          whole: true,
-        });
+        queryClientRef.current.setQueryData<ItemsPayload>(
+          itemsQueryKey(spaceId),
+          snapshotPayload(items),
+        );
         lastReconcileAtRef.current = Date.now();
       })();
     });

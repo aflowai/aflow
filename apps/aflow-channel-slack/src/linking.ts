@@ -10,7 +10,6 @@ import { timingSafeEqual } from 'node:crypto';
 
 import type { ChannelSlackConfig } from './config.js';
 import type { DirectMessage } from './socketMode.js';
-import type { SlackClient } from './slack.js';
 import { sha256Hex, type ChannelStore } from './store.js';
 
 export const STRANGER_REPLY =
@@ -19,9 +18,8 @@ export const STRANGER_REPLY =
 export const LINKED_REPLY =
   'Linked. Aflow sends you its messages here when you must act and may be away from the machine.';
 
-export const LINKED_OPERATOR_REPLY =
-  'Aflow sends you its messages here, and a card’s buttons decide its item from here. Talking ' +
-  'to Aflow from Slack comes in a later release, so open Aflow to ask it something.';
+export const CODE_ALREADY_USED_REPLY =
+  'This code has already linked this account, so it changed nothing. It was not sent to the Helmsman.';
 
 /** A code as typed: case, spaces and dashes do not matter. */
 export function normalizeLinkCode(text: string): string {
@@ -38,10 +36,28 @@ function matchesCode(text: string, config: ChannelSlackConfig, now: Date): strin
   return same ? offered : undefined;
 }
 
-export async function answerDirectMessage(
-  message: DirectMessage,
-  deps: { store: ChannelStore; config: ChannelSlackConfig; slack: SlackClient; now?: () => Date },
-): Promise<'linked' | 'operator' | 'stranger'> {
+export type LinkVerdict = 'linked' | 'code_used' | 'operator' | 'stranger';
+
+/**
+ * The reply to each verdict but `operator`, whose message goes on to the
+ * conversation. A code the operator sends again is answered here and never
+ * reaches the Helmsman.
+ */
+export const LINK_REPLIES: Readonly<Record<Exclude<LinkVerdict, 'operator'>, string>> = {
+  linked: LINKED_REPLY,
+  code_used: CODE_ALREADY_USED_REPLY,
+  stranger: STRANGER_REPLY,
+};
+
+/**
+ * Links on the code and says who sent the message, in one synchronous step,
+ * so the caller records the event in the same step as the link. It posts
+ * nothing: the caller posts the verdict's reply.
+ */
+export function linkOnMessage(
+  message: Pick<DirectMessage, 'slackUserId' | 'slackTeamId' | 'text'>,
+  deps: { store: ChannelStore; config: ChannelSlackConfig; now?: () => Date },
+): LinkVerdict {
   const now = deps.now?.() ?? new Date();
   const code = matchesCode(message.text, deps.config, now);
   if (code !== undefined) {
@@ -52,15 +68,10 @@ export async function answerDirectMessage(
       tenantId: deps.config.AFLOW_TENANT_ID,
       linkedAt: now.toISOString(),
     });
-    if (linked) {
-      await deps.slack.postMessage(message.channel, LINKED_REPLY);
-      return 'linked';
-    }
+    if (linked) return 'linked';
   }
   if (deps.store.link()?.slackUserId === message.slackUserId) {
-    await deps.slack.postMessage(message.channel, LINKED_OPERATOR_REPLY);
-    return 'operator';
+    return code === undefined ? 'operator' : 'code_used';
   }
-  await deps.slack.postMessage(message.channel, STRANGER_REPLY);
   return 'stranger';
 }
