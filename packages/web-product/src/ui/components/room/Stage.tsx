@@ -109,7 +109,6 @@ export function StageSplit({
             label="Board"
           >
             <div
-              className="ds-scroll-subtle"
               style={{
                 ...stageCard,
                 // Inset from the panel on every side rather than sized by its
@@ -191,10 +190,7 @@ export function StagePeek({
         </button>
       </Row>
       {expanded ? (
-        <div
-          className="ds-scroll-subtle"
-          style={{ marginTop: 'var(--space-2)', minHeight: 0, overflowY: 'auto' }}
-        >
+        <div style={{ marginTop: 'var(--space-2)', minHeight: 0, overflowY: 'auto' }}>
           <AppletInstanceView spaceId={spaceId} instanceId={instanceId} />
         </div>
       ) : null}

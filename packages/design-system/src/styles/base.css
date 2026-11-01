@@ -275,7 +275,20 @@ hr {
   outline: none;
 }
 
-/* Scrollbar styling (WebKit) — ultra-minimal */
+/* Scrollbars stay hidden until their container is pointed at or scrolling
+   (`data-scrolling`, set by useScrollbarReveal). The bar keeps its space while
+   hidden, so content does not shift when it shows. Engines that read
+   `scrollbar-color` ignore the ::-webkit-scrollbar rules, which serve the rest. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+*:hover,
+[data-scrolling] {
+  scrollbar-color: var(--color-border-strong) transparent;
+}
+
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -286,23 +299,17 @@ hr {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--color-border-strong);
+  background: transparent;
   border-radius: var(--radius-full);
+}
+
+*:hover::-webkit-scrollbar-thumb,
+[data-scrolling]::-webkit-scrollbar-thumb {
+  background: var(--color-border-strong);
 }
 
 ::-webkit-scrollbar-thumb:hover {
   background: var(--color-text-muted);
-}
-
-/* Only show scrollbar on hover for containers */
-.ds-scroll-subtle {
-  scrollbar-width: thin;
-  scrollbar-color: transparent transparent;
-  transition: scrollbar-color var(--transition-duration-normal) var(--transition-timing-default);
-}
-
-.ds-scroll-subtle:hover {
-  scrollbar-color: var(--color-border-strong) transparent;
 }
 
 /* Cybernetic Entity Console — semantic palette + map role accents */

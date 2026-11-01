@@ -27,7 +27,7 @@ export const ScrollArea = forwardRef<HTMLDivElement, ScrollAreaProps>(function S
   };
 
   return (
-    <div ref={ref} className="ds-scroll-subtle" style={s} {...rest}>
+    <div ref={ref} style={s} {...rest}>
       {children}
     </div>
   );

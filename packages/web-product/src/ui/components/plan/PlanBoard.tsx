@@ -5,22 +5,22 @@
  * doing with each step (Plan 332 D4) — Needs you with its reason, In flight,
  * Up next in the walk's order with **Next for the loop** on the step the walk
  * takes — and a card per node carrying labels only; its text lives in the
- * rail. A card reads top down: its phase, its title beside its orb (Plan 332
- * P7), where it stands (why it needs the operator, Next, runs in flight, its
- * PR), then what it has been through (review rounds, subtasks). Move up and Move down are quiet icons
- * that show on the card pointed at, focused or selected (Plan 332 P6). A
- * card's surface says where it stands, as a lane row's does. Done
+ * rail. A card reads top down: its phase, its title, where it stands (why it
+ * needs the operator, Next, runs in flight, its PR), then what it has been
+ * through (review rounds, subtasks). Its surface says where it stands, as a
+ * lane row's does, so it carries no orb in a column's narrow width. An Up next
+ * card is dragged among its open siblings to reorder it (Plan 332 D6). Done
  * folds by day from the plan's own counts, so a fold shows how many it holds
  * before its cards are read.
  */
 import { useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react';
 import {
-  AnimatedHeight,
   Badge,
   Button,
   Card,
   CardBody,
   Column,
+  DropIndicator,
   Row,
   Text,
 } from '@aflow/design-system';
@@ -34,6 +34,7 @@ import {
   planCards,
   planDoneFolds,
   planDoneGroups,
+  planIsOpenSibling,
   planMoveTargets,
   reviewRoundsLabel,
   runsInFlightLabel,
@@ -47,13 +48,15 @@ import {
   GroupLabel,
   MetaSep,
   NextMarker,
-  PlanStepOrb,
   ProgressMeter,
   PullRequestChip,
-  SELECTED_RING,
+  ItemsBody,
+  PLAN_ITEM_GAP,
   planItemSurface,
-  useMoveControls,
-  useReveal,
+  planStepTone,
+  useHover,
+  usePlanReorder,
+  type PlanReorderItem,
 } from './PlanParts.js';
 
 /** What the operator asks of an Up next step or an open plan: directly before or after a sibling, against the revision the page read. */
@@ -78,15 +81,15 @@ function PlanCardView({
   card,
   next,
   selected,
-  moves,
+  reorderItem,
+  reorder,
   onSelect,
   onDecide,
-  onPlace,
 }: {
   card: PlanCard;
-  /** For an Up next card, the open siblings it may move past. */
-  moves: { above?: PlanTreeNode; below?: PlanTreeNode } | undefined;
-  onPlace: PlanNodePlacer;
+  /** For an Up next card, what reorders it among its open siblings. */
+  reorderItem: PlanReorderItem | undefined;
+  reorder: ReturnType<typeof usePlanReorder>;
   /** The step the stream walk takes next for this plan. */
   next: boolean;
   selected: boolean;
@@ -95,16 +98,15 @@ function PlanCardView({
 }) {
   const { node, column, phase } = card;
   const waiting = waitingLine(node);
-  const reveal = useReveal();
-  const move = useMoveControls(node, moves, onPlace, reveal.shown || selected);
+  const { hovered, hoverProps } = useHover();
   const dropped = column === 'dropped';
-  const running = node.counts.inFlightRuns > 0;
-  const style: CSSProperties = planItemSurface({
-    column,
-    running,
-    selected,
-    hovered: reveal.hovered,
-  });
+  // A run on the step itself or on a step under it, as the step's activity says.
+  const running = node.activity === 'in_flight';
+  const reorderProps = reorderItem !== undefined ? reorder.itemProps(reorderItem) : undefined;
+  const style: CSSProperties = {
+    ...planItemSurface({ tone: planStepTone(column, running), selected, hovered }),
+    ...(reorderProps?.['data-dragging'] !== undefined ? { opacity: 0.5 } : {}),
+  };
   const open = () => {
     onSelect(card);
   };
@@ -125,7 +127,8 @@ function PlanCardView({
       interactive
       running={running}
       className="ds-enter-rise"
-      {...reveal.hostProps}
+      {...hoverProps}
+      {...reorderProps}
       role="button"
       tabIndex={0}
       aria-pressed={selected}
@@ -135,7 +138,9 @@ function PlanCardView({
       {...(next ? { 'data-plan-next': 'true' } : {})}
       style={style}
       onClick={open}
-      onKeyDown={(event: KeyboardEvent) => {
+      onKeyDown={(event: KeyboardEvent<HTMLDivElement>) => {
+        reorderProps?.onKeyDown?.(event);
+        if (event.defaultPrevented) return;
         // A key on a control inside the card is that control's to activate.
         if (event.target !== event.currentTarget) return;
         if (event.key === 'Enter' || event.key === ' ') {
@@ -146,39 +151,20 @@ function PlanCardView({
     >
       <CardBody>
         <Column gap="xs">
-          {move.controls !== null && (
-            <div
-              style={{ position: 'absolute', top: 'var(--space-1-5)', right: 'var(--space-1-5)' }}
-            >
-              {move.controls}
-            </div>
-          )}
           {phase !== undefined && (
             <Text size="xs" variant="muted" data-plan-card-phase>
               {phaseLabel(phase.title)}
             </Text>
           )}
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'flex-start',
-              gap: 'var(--space-1-5)',
-              ...(move.controls !== null ? { paddingRight: 'var(--space-12)' } : {}),
-            }}
+          <Text
+            size="sm"
+            weight="medium"
+            data-plan-card-title
+            style={dropped ? { textDecoration: 'line-through' } : {}}
+            color={dropped ? 'muted' : 'primary'}
           >
-            <span style={{ display: 'inline-flex', marginBlock: -4 }}>
-              <PlanStepOrb column={column} runInFlight={node.activity === 'in_flight'} />
-            </span>
-            <Text
-              size="sm"
-              weight="medium"
-              data-plan-card-title
-              style={dropped ? { textDecoration: 'line-through' } : {}}
-              color={dropped ? 'muted' : 'primary'}
-            >
-              {node.title}
-            </Text>
-          </div>
+            {node.title}
+          </Text>
           {(card.reason !== undefined ||
             next ||
             node.counts.inFlightRuns > 0 ||
@@ -206,7 +192,7 @@ function PlanCardView({
               {waiting}
             </Text>
           )}
-          {move.error}
+          {reorder.refusal(node.nodeId)}
           {card.reason === 'decide' && (
             <Row>
               <Button
@@ -297,17 +283,30 @@ export function PlanBoard({
   const railOpen = selectedId !== undefined;
   const droppedStrip = railOpen && !narrow && !droppedOpen;
 
+  const reorder = usePlanReorder(onPlace);
+  const reorderItem = (card: PlanCard): PlanReorderItem | undefined =>
+    card.column === 'up_next'
+      ? {
+          nodeId: card.node.nodeId,
+          revision: card.node.revision,
+          moves: planMoveTargets(root, card.node.nodeId),
+          accepts: (draggedId) => planIsOpenSibling(root, card.node.nodeId, draggedId),
+        }
+      : undefined;
+  // The card clips its own overflow, so the drop line stands beside it rather than in it.
   const renderCard = (card: PlanCard): ReactNode => (
-    <PlanCardView
-      key={card.node.nodeId}
-      card={card}
-      next={card.node.nodeId === tally.nextNodeId}
-      selected={card.node.nodeId === selectedId}
-      moves={card.column === 'up_next' ? planMoveTargets(root, card.node.nodeId) : undefined}
-      onSelect={onSelect}
-      onDecide={onDecide}
-      onPlace={onPlace}
-    />
+    <div key={card.node.nodeId} style={{ position: 'relative' }}>
+      <DropIndicator gap={PLAN_ITEM_GAP} side={reorder.dropSide(card.node.nodeId)} />
+      <PlanCardView
+        card={card}
+        next={card.node.nodeId === tally.nextNodeId}
+        selected={card.node.nodeId === selectedId}
+        reorderItem={reorderItem(card)}
+        reorder={reorder}
+        onSelect={onSelect}
+        onDecide={onDecide}
+      />
+    </div>
   );
   const renderCards = (list: readonly PlanCard[]): ReactNode =>
     list.length === 0 ? <Dash /> : list.map(renderCard);
@@ -326,15 +325,7 @@ export function PlanBoard({
           >
             {`${group.label} · ${group.shown === undefined ? '…' : String(group.shown)}`}
           </Disclosure>
-          {/* AnimatedHeight clips its box, so the fold widens by the ring and pads its
-              cards by it: the selected card's ring then lies inside the clip. */}
-          <AnimatedHeight style={{ marginInline: -SELECTED_RING }}>
-            {open && (
-              <Column gap="sm" style={{ padding: SELECTED_RING }}>
-                {group.cards.map(renderCard)}
-              </Column>
-            )}
-          </AnimatedHeight>
+          <ItemsBody>{open && <Column gap="sm">{group.cards.map(renderCard)}</Column>}</ItemsBody>
         </Column>
       );
     });
@@ -381,11 +372,9 @@ export function PlanBoard({
           <ColumnHeader label={column.label} count={count} />
           {/* A column grows and shrinks as cards come and go, widened and padded by the
               ring as a Done fold is. */}
-          <AnimatedHeight style={{ marginInline: -SELECTED_RING }}>
-            <Column gap="sm" style={{ padding: SELECTED_RING }}>
-              {column.id === 'done' ? doneBody() : renderCards(list)}
-            </Column>
-          </AnimatedHeight>
+          <ItemsBody>
+            <Column gap="sm">{column.id === 'done' ? doneBody() : renderCards(list)}</Column>
+          </ItemsBody>
         </Column>
       </section>
     );
