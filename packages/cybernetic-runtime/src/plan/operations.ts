@@ -6,6 +6,7 @@
  * turn of any session in the space reads the tree as it now stands.
  */
 import { createHash, randomUUID } from 'node:crypto';
+import { formatMergeEvidence, type readMergedPullRequest } from './mergedPullRequest.js';
 import type { Redis } from 'ioredis';
 import {
   isClosedPlanNodeStatus,
@@ -146,7 +147,7 @@ export interface PlanWriteContext extends PlanReadContext {
    * blocked, and never moves a blocked node on — approving scope is a person's.
    */
   resident?: boolean;
-  readMergedPullRequest?: (url: string, nodeId: string) => Promise<boolean>;
+  readMergedPullRequest?: (url: string, nodeId: string) => ReturnType<typeof readMergedPullRequest>;
 }
 
 /** The columns a write is judged by; `openedAt` is stamped after, never compared. */
@@ -476,13 +477,16 @@ async function writePlanNode(
       ? await ctx.store.newestLink(ctx.spaceId, current.nodeId, 'pull_request')
       : null;
   if (ctx.resident === true && input.status === 'done') {
-    let merged = false;
+    let attestation = {
+      merged: false,
+      reason: 'No pull request is linked to this step.',
+      evidence: formatMergeEvidence(),
+    };
     try {
       if (pullRequest !== null && !ctx.readMergedPullRequest)
         throw new Error('Merge attestation reader unavailable');
-      merged =
-        pullRequest !== null &&
-        (await ctx.readMergedPullRequest?.(pullRequest.ref, current.nodeId)) === true;
+      if (pullRequest !== null && ctx.readMergedPullRequest)
+        attestation = await ctx.readMergedPullRequest(pullRequest.ref, current.nodeId);
     } catch {
       return {
         ok: false,
@@ -492,10 +496,22 @@ async function writePlanNode(
         details: { nodeId: current.nodeId },
       };
     }
-    if (!merged) {
+    if (!attestation.merged) {
       let waiting = current;
-      const line = PLAN_NODE_MERGE_WAIT_LINE;
-      const note = current.note ? `${current.note}\n${line}` : line;
+      const line = `${PLAN_NODE_MERGE_WAIT_LINE} ${attestation.reason}\n\n${attestation.evidence}`;
+      const previous = current.note?.indexOf(PLAN_NODE_MERGE_WAIT_LINE) ?? -1;
+      const before = previous >= 0 ? current.note!.slice(0, previous) : '';
+      const after = previous >= 0 ? current.note!.slice(previous) : '';
+      const refusal =
+        /^[^\n]*(?:\n\n(?:- )?Pull request:[^\n]*(?:\n(?:- )?(?:GitHub reports merged|Merge commit|Merged by|Merged at|Recorded publication commit|Recorded publication branch|Merge delivers recorded commit or branch):[^\n]*)*)?/.exec(
+          after,
+        );
+      const note =
+        previous >= 0
+          ? `${before}${line}${after.slice(refusal?.[0].length ?? 0)}`
+          : current.note
+            ? `${current.note}\n${line}`
+            : line;
       if (!current.note?.includes(line)) {
         const updated = await ctx.store.updateAtRevision(
           ctx.spaceId,

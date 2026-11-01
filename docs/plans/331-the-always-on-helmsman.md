@@ -207,3 +207,5 @@ A session that `POST /v1/sessions` starts, resumes or retries for a user is atte
 ### P3 system heartbeat
 
 Heartbeats read the board before claiming the wake guard, so events can wake immediately during idle reads. Recorded heartbeats dispatch without another board read, and redelivery retains live wake guards. Disabled due checks answer off without errors, while events and pending marks bypass board reads when enabled. Wait-only heartbeats preserve the firing cap, and the registered due check retains the existing dispatch cadence and budgets without space enumeration.
+
+Scheduled closes carry GitHub’s merge evidence into refused close items and name the failed fact. Attested merges close without an item, including squash merges that deliver the recorded publication branch.
