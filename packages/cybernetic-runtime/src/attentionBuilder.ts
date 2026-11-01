@@ -659,8 +659,10 @@ export async function buildHelmsmanAttention(params: {
         });
         return undefined;
       }),
-      // A gate or a consent does not bump the cache's generation, so its
-      // count lags by at most the cache's lifetime (Plan 338 D2).
+      // A session's pause, its resume or its end moves the cache's generation
+      // once the projection writes it, and a workflow run's transition does
+      // through `emitRunUpdated`. A compute-egress request moves nothing, so its count
+      // lags by at most the cache's lifetime (Plan 338 D2).
       readWaitingGates({ db, tenantId, spaceId }).catch((err: unknown) => {
         getCyberneticLogger().warn('helmsmanAttention: waiting-gate count failed', {
           error: err instanceof Error ? err.message : String(err),

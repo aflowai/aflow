@@ -267,7 +267,11 @@ export const HumanActionCenterFocusInputSchema = z.object({
    *
    * The prefix discriminates the source: `proposal:` (Coach
    * proposals), `step:` (paused HITL steps), `gate:` (orchestrator
-   * synthetic gates), `settings:` (record-backed items). A bare UUID
+   * synthetic gates), `settings:` (record-backed items), `plan-ask:`
+   * and `plan-decision:` (plan steps), `workflow-task:`,
+   * `workflow-write-approval:` and `workflow-oauth-consent:` (paused
+   * workflow runs). The Helmsman's attention block writes the ids it
+   * lists with these prefixes (Plan 338 D2), so each must parse here. A bare UUID
    * here is the most common hallucination from agents that don't
    * read the catalog usage hints; rejecting it loudly via Zod
    * surfaces a clear error in the tool result, which the agent can
@@ -279,8 +283,8 @@ export const HumanActionCenterFocusInputSchema = z.object({
     .min(1)
     .max(256)
     .regex(
-      /^(proposal|step|gate|settings):.+/,
-      'itemId must be the prefixed id returned by a listing op (e.g. "proposal:<uuid>" from proposal.list, "step:<uuid>" from a paused HITL step). A bare UUID is never a valid Action Center item id — call proposal.list (or the relevant listing) and pass the `id` field verbatim. If no such item exists yet, switch to human.chat.ask instead.',
+      /^(proposal|step|gate|settings|plan-ask|plan-decision|workflow-task|workflow-write-approval|workflow-oauth-consent):.+/,
+      'itemId must be the prefixed id returned by a listing op (e.g. "proposal:<uuid>" from proposal.list, "step:<uuid>" from a paused HITL step, "plan-ask:<nodeId>" from your attention block). A bare UUID is never a valid Action Center item id — call proposal.list (or the relevant listing) and pass the `id` field verbatim. If no such item exists yet, switch to human.chat.ask instead.',
     ),
   /**
    * Optional reason copy surfaced to the operator ("Coach is asking you to
@@ -362,13 +366,13 @@ export const HumanOperationRegistrations: OperationRegistration[] = [
     mutates: false,
     usage: {
       oneLine: 'Point the chat at an existing Action Center item — id MUST come from a listing op.',
-      whenToUse: ['You hold an itemId a listing or a paused gate returned'],
+      whenToUse: ['You hold an itemId a listing, a paused gate or your attention block returned'],
       whenNotToUse: [
         "You don't have an id from a listing — DO NOT invent one. Use human.chat.ask",
         'The thing you want is a workflow run resume — that flows through the workflow.run.resume path',
       ],
       pitfalls: [
-        'Bare UUIDs are rejected at parse time; ids are prefixed (proposal:/step:/gate:/settings:)',
+        'Bare UUIDs are rejected at parse time. Ids are prefixed (proposal:, step:, gate:, settings:, plan-ask:, plan-decision:, workflow-task:, workflow-write-approval:, workflow-oauth-consent:)',
         '`acknowledged: true` is a publish receipt, not a delivery / resolution confirmation',
       ],
       minimalExampleInput: {

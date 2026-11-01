@@ -4,6 +4,7 @@
  * and, for a plan step, its link. The plan-step count reads as the sidebar's,
  * the section holds no item body, and it fits its measured ceiling.
  */
+import { readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import Redis from 'ioredis-mock';
 import type { Redis as RedisType } from 'ioredis';
@@ -11,6 +12,7 @@ import {
   ACTION_CENTER_ITEM_ID_PREFIX,
   ACTION_CENTER_LIST_LIMIT,
   estimateStringTokens,
+  HumanActionCenterFocusInputSchema,
   PLAN_OPEN_ASKS_LIMIT,
   pendingPlanStepCount,
   planItemTitle,
@@ -127,6 +129,40 @@ async function sidebarCount(): Promise<string> {
     listMayBeCut: asks + decisions >= ACTION_CENTER_LIST_LIMIT,
   }).label;
 }
+
+describe('every id the section writes is one human.action_center.focus takes', () => {
+  // Read from the section's own templates, so an id it starts writing under a
+  // new prefix fails here until the focus schema takes that prefix.
+  const source = readFileSync(new URL('../waitingOnPerson.ts', import.meta.url), 'utf8');
+  const assigned = [...source.matchAll(/^\s*itemId:\s*([^\n]+)/gm)]
+    .map((match) => match[1]!.trim())
+    .filter((value) => value !== 'string;');
+
+  it('builds each id from a named Action Center prefix', () => {
+    expect(assigned.length).toBeGreaterThan(0);
+    for (const value of assigned) {
+      expect(value).toMatch(/^`\$\{ACTION_CENTER_ITEM_ID_PREFIX\.\w+\}/);
+    }
+  });
+
+  it.each(
+    [
+      ...new Set(
+        assigned.flatMap((value) => {
+          const key = /^`\$\{ACTION_CENTER_ITEM_ID_PREFIX\.(\w+)\}/.exec(value)?.[1];
+          return key === undefined ? [] : [key];
+        }),
+      ),
+    ].map((key) => [key]),
+  )('the focus schema takes an id the section writes under %s', (key) => {
+    const prefix = (ACTION_CENTER_ITEM_ID_PREFIX as Record<string, string>)[key];
+    expect(prefix).toBeDefined();
+    const parsed = HumanActionCenterFocusInputSchema.safeParse({
+      itemId: `${prefix!}7f2d3a16-9b51-4e7f-a3c5-3bf3a3f04d10`,
+    });
+    expect(parsed.success).toBe(true);
+  });
+});
 
 describe('the section names the item and the place', () => {
   it("carries a plan step's title, its item id and its plan link", async () => {

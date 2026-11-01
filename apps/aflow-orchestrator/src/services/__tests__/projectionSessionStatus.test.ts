@@ -18,6 +18,8 @@ const hot = vi.hoisted(() => ({
   /** The event types in the stream past the projection's cursor. */
   pending: [] as string[],
   signals: [] as Array<{ spaceId: string; eventType: string; payload: unknown }>,
+  /** The spaces whose attention generation moved, in order. */
+  bumps: [] as string[],
 }));
 
 vi.mock('@aflow/redis', async () => {
@@ -87,7 +89,13 @@ vi.mock('@aflow/cybernetic-runtime', async () => {
   const actual = await vi.importActual<typeof import('@aflow/cybernetic-runtime')>(
     '@aflow/cybernetic-runtime',
   );
-  return { ...actual, bumpAttentionGeneration: () => Promise.resolve() };
+  return {
+    ...actual,
+    bumpAttentionGeneration: (_redis: unknown, _tenantId: string, spaceId: string) => {
+      hot.bumps.push(spaceId);
+      return Promise.resolve();
+    },
+  };
 });
 vi.mock('../hotStateSnapshot.js', () => ({ buildHotStateSnapshot: () => Promise.resolve(null) }));
 vi.mock('../pauseNotificationRouter.js', () => ({
@@ -95,7 +103,8 @@ vi.mock('../pauseNotificationRouter.js', () => ({
 }));
 vi.mock('../errorReportAssembly.js', () => ({ assembleErrorReport: () => Promise.resolve() }));
 
-const { createProjectionWorker, movesSessionStatus } = await import('../ProjectionWorker.js');
+const { createProjectionWorker, movesSessionPause, movesSessionStatus } =
+  await import('../ProjectionWorker.js');
 
 function session(status: string, extra: Partial<SessionHotState> = {}): SessionHotState {
   const now = Date.now();
@@ -122,6 +131,7 @@ async function project(state: SessionHotState, pending: string[]): Promise<void>
 
 beforeEach(() => {
   hot.signals = [];
+  hot.bumps = [];
 });
 
 describe("a conversation's status reaches the space", () => {
@@ -170,5 +180,49 @@ describe('which persisted events move a status', () => {
     expect(movesSessionStatus({ eventType: 'StepSucceeded' })).toBe(false);
     expect(movesSessionStatus({ eventType: 'WorkflowTaskUpdate' })).toBe(false);
     expect(movesSessionStatus(null)).toBe(false);
+  });
+});
+
+// The attention block counts the space's paused sessions as gates and is
+// cached per space until its generation moves, so a gate the Helmsman has
+// approved must leave the next turn's count.
+describe("a session's pause and its resolution move the space's attention generation", () => {
+  it('moves it once the pause is durable', async () => {
+    await project(session('PAUSED', { parentSessionId: PARENT }), [
+      'StepSucceeded',
+      'SessionPaused',
+    ]);
+
+    expect(hot.bumps).toEqual([SPACE]);
+  });
+
+  it('moves it once the resume that resolves the gate is durable', async () => {
+    await project(session('RUNNING', { parentSessionId: PARENT }), [
+      'SessionResumed',
+      'StepScheduled',
+    ]);
+
+    expect(hot.bumps).toEqual([SPACE]);
+  });
+
+  it('moves nothing for a projection of steps alone', async () => {
+    await project(session('RUNNING'), ['StepScheduled', 'StepStarted', 'StepSucceeded']);
+
+    expect(hot.bumps).toEqual([]);
+  });
+
+  it('reads a pause, a resume or an end a paused session can reach, and nothing else', () => {
+    for (const eventType of [
+      'SessionPaused',
+      'SessionResumed',
+      'SessionCancelled',
+      'SessionFailed',
+    ]) {
+      expect(movesSessionPause({ eventType })).toBe(true);
+    }
+    for (const eventType of ['SessionStarted', 'SessionCompleted', 'StepSucceeded']) {
+      expect(movesSessionPause({ eventType })).toBe(false);
+    }
+    expect(movesSessionPause(null)).toBe(false);
   });
 });

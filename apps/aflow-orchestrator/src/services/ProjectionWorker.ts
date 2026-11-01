@@ -158,6 +158,26 @@ export function movesSessionStatus(
   return event?.eventType.startsWith('Session') === true;
 }
 
+/**
+ * The events by which a session enters PAUSED or leaves it: the pause, the
+ * resume that resolves it, or an end it can reach while paused. The attention
+ * block counts the space's paused sessions as gates, so each one moves the
+ * block's cache generation. A session cannot complete without a resume first.
+ */
+const PAUSE_EDGE_EVENT_TYPES: ReadonlySet<string> = new Set([
+  'SessionPaused',
+  'SessionResumed',
+  'SessionCancelled',
+  'SessionFailed',
+]);
+
+/** Whether a persisted event moved the session into or out of PAUSED. */
+export function movesSessionPause(
+  event: Pick<SessionEvent, 'eventType'> | null | undefined,
+): boolean {
+  return event != null && PAUSE_EDGE_EVENT_TYPES.has(event.eventType);
+}
+
 function isUuid(value: string): boolean {
   return UUID_RE.test(value);
 }
@@ -291,7 +311,7 @@ export function createProjectionWorker(
     tx: PostgresJsDatabase,
     tenantId: string,
     runId: string,
-  ): Promise<{ evictedGap: boolean; statusMoved: boolean }> {
+  ): Promise<{ evictedGap: boolean; statusMoved: boolean; pauseMoved: boolean }> {
     const [row] = await tx
       .select({ cursor: sessions.lastFlushedEventStreamId, status: sessions.status })
       .from(sessions)
@@ -311,6 +331,7 @@ export function createProjectionWorker(
     const now = new Date();
     let evictedGap = false;
     let statusMoved = false;
+    let pauseMoved = false;
 
     for (;;) {
       const { entries, lastId, oldestId } = await readDurableEventEntries(
@@ -355,6 +376,7 @@ export function createProjectionWorker(
       }
       if (entries.length > 0) {
         if (!statusMoved) statusMoved = entries.some((entry) => movesSessionStatus(entry.event));
+        if (!pauseMoved) pauseMoved = entries.some((entry) => movesSessionPause(entry.event));
         await tx
           .insert(eventLog)
           .values(
@@ -374,7 +396,7 @@ export function createProjectionWorker(
         .set({ lastFlushedEventStreamId: cursor })
         .where(eq(sessions.sessionId, runId));
     }
-    return { evictedGap, statusMoved };
+    return { evictedGap, statusMoved, pauseMoved };
   }
 
   /**
@@ -432,7 +454,7 @@ export function createProjectionWorker(
     // all, and the loss is silent until someone tries.
     const hotStateSnapshot = await buildHotStateSnapshot(redis, tenantId, runState);
     let fenceWon = false;
-    const statusMoved = await withTenantSchema(db, tenantContext, async (tx) => {
+    const { statusMoved, pauseMoved } = await withTenantSchema(db, tenantContext, async (tx) => {
       const upserted = await tx
         .insert(sessions)
         .values({
@@ -492,8 +514,8 @@ export function createProjectionWorker(
         })
         .returning({ sessionId: sessions.sessionId });
       fenceWon = upserted.length > 0;
-      if (!fenceWon) return false;
-      return (await flushDurableEvents(tx, tenantId, runId)).statusMoved;
+      if (!fenceWon) return { statusMoved: false, pauseMoved: false };
+      return flushDurableEvents(tx, tenantId, runId);
     });
 
     if (!fenceWon) {
@@ -522,8 +544,10 @@ export function createProjectionWorker(
       });
       // The attention block reads whose a run is from this row, so a
       // conversation's end is a transition of every run it drove, and the
-      // space's cached block is rebuilt for it as for a run's own.
-      if (endsConversationOwnership(runState.target, runState.status)) {
+      // space's cached block is rebuilt for it as for a run's own. It counts
+      // the space's gates from this row too, so a pause or an end while
+      // paused rebuilds it the same way.
+      if (pauseMoved || endsConversationOwnership(runState.target, runState.status)) {
         await bumpAttentionGeneration(redis, tenantId, runState.spaceId);
       }
     }
@@ -673,9 +697,14 @@ export function createProjectionWorker(
     // from the status upsert, so a failing insert leaves the status row
     // current — the throw still withholds the acknowledgement, which is what
     // re-drives the events.
-    const { statusMoved } = await withTenantSchema(db, tenantContext, (tx) =>
+    const { statusMoved, pauseMoved } = await withTenantSchema(db, tenantContext, (tx) =>
       flushDurableEvents(tx, tenantId, runId),
     );
+    // The resume that resolves a gate lands here: the attention block counts
+    // the space's gates from the row just written, so its cache is rebuilt.
+    if (pauseMoved && runState.spaceId) {
+      await bumpAttentionGeneration(redis, tenantId, runState.spaceId);
+    }
     if (statusMoved) await publishSessionStatus(tenantId, runId, runState);
 
     // The candidate is acknowledged by the caller; a later mutation re-arms it.
