@@ -169,18 +169,45 @@ export function escapeMrkdwn(text: string): string {
 /** Leaves room under Slack's 50 blocks for the item, its preview and the controls. */
 const MAX_TEXT_SECTIONS = 40;
 
-function sections(text: string): SlackBlock[] {
-  const room = MAX_TEXT_SECTIONS * MAX_SECTION_TEXT;
-  const full = escapeMrkdwn(text);
-  const escaped = full.length <= room ? full : `${full.slice(0, room - 1)}…`;
-  const blocks: SlackBlock[] = [];
-  for (let at = 0; at < escaped.length; at += MAX_SECTION_TEXT) {
-    blocks.push({
-      type: 'section',
-      text: { type: 'mrkdwn', text: escaped.slice(at, at + MAX_SECTION_TEXT) },
-    });
+/**
+ * Escapes `text` one character at a time into at most `count` pieces of at
+ * most `room` characters each, and ends a cut text with an ellipsis. A piece
+ * holds whole escapes, because one that ends inside `&amp;` shows the broken
+ * entity.
+ */
+function escapedPieces(text: string, count: number, room: number): string[] {
+  const pieces: string[] = [];
+  let current = '';
+  // How much of `current` fits with room left for the ellipsis of a cut text.
+  let fitsWithEllipsis = 0;
+  for (const char of text) {
+    const escaped = escapeMrkdwn(char);
+    if (current.length + escaped.length > room) {
+      if (pieces.length === count - 1) {
+        pieces.push(`${current.slice(0, fitsWithEllipsis)}…`);
+        return pieces;
+      }
+      pieces.push(current);
+      current = '';
+      fitsWithEllipsis = 0;
+    }
+    current += escaped;
+    if (current.length <= room - 1) fitsWithEllipsis = current.length;
   }
-  return blocks;
+  if (current !== '') pieces.push(current);
+  return pieces;
+}
+
+/** `text` escaped and cut to `room` characters on a whole escape. */
+function escapedWithin(text: string, room: number): string {
+  return escapedPieces(text, 1, room)[0] ?? '';
+}
+
+function sections(text: string): SlackBlock[] {
+  return escapedPieces(text, MAX_TEXT_SECTIONS, MAX_SECTION_TEXT).map((section) => ({
+    type: 'section',
+    text: { type: 'mrkdwn', text: section },
+  }));
 }
 
 function context(text: string): SlackBlock {
@@ -202,12 +229,11 @@ function previewBlocks(item: ActionCenterItem): SlackBlock[] {
   ];
   if (extension.bodyPreview !== undefined) {
     const body = extension.bodyPreview.replace(/```/g, '`​``');
-    const room = MAX_SECTION_TEXT - 8;
     blocks.push({
       type: 'section',
       text: {
         type: 'mrkdwn',
-        text: `\`\`\`${escapeMrkdwn(body.length <= room ? body : `${body.slice(0, room - 1)}…`)}\`\`\``,
+        text: `\`\`\`${escapedWithin(body, MAX_SECTION_TEXT - 6)}\`\`\``,
       },
     });
   }
@@ -219,12 +245,13 @@ function previewBlocks(item: ActionCenterItem): SlackBlock[] {
  * the card, so an edit after the decision shows the same message.
  */
 export function cardHead(text: string, item: ActionCenterItem): SlackBlock[] {
-  // A title holds 256 characters and a summary 2,000, so one section holds both.
-  const what = `*${escapeMrkdwn(item.title)}*\n${escapeMrkdwn(item.summary)}`;
+  // A title holds 256 characters, so escaped it leaves the summary most of the section.
+  const title = `*${escapeMrkdwn(item.title)}*\n`;
+  const what = `${title}${escapedWithin(item.summary, MAX_SECTION_TEXT - title.length)}`;
   return [
     ...sections(text),
     { type: 'divider' },
-    { type: 'section', text: { type: 'mrkdwn', text: what.slice(0, MAX_SECTION_TEXT) } },
+    { type: 'section', text: { type: 'mrkdwn', text: what } },
     ...previewBlocks(item),
   ];
 }

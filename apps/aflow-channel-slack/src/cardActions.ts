@@ -7,11 +7,14 @@
  * resolve route the web app calls, with the origin the app read, and the card
  * is edited to say what was decided and by whom. A tap on an item that is no
  * longer open gets the route's own answer, and the card says it was already
- * decided.
+ * decided. A tap on a card that already has an outcome is not sent. The app
+ * answers it in the thread from the card's record, so the card keeps its note.
  *
  * Free text never approves anything. A reply in a card's thread answers only
  * a question that asks for text. On any other card it leaves the item open,
- * and the app points to the button or to Aflow.
+ * and the app points to the button or to Aflow. An answer the route refuses as
+ * invalid (422) leaves the card open with the route's reason, so the operator
+ * can reply again.
  */
 import type { ActionCenterResolution } from '@aflow/schemas';
 
@@ -42,11 +45,15 @@ export const REPLY_NEEDS_AFLOW =
 
 export const REPLY_CARD_SETTLED = 'This card is settled, so a reply here decides nothing.';
 
+export const TAP_ALREADY_DECIDED = 'Already decided. This tap changed nothing.';
+
 export const CARD_BUSY =
   'A decision on this card is on its way to Aflow. Wait for the card to change before you tap again.';
 
+export const REPLY_AGAIN = 'Reply again in this thread to answer.';
+
 export type CardOutcome =
-  'resolved' | 'already_decided' | 'refused' | 'not_sent' | 'busy' | 'ignored';
+  'resolved' | 'already_decided' | 'refused' | 'invalid_answer' | 'not_sent' | 'busy' | 'ignored';
 
 export type ReplyOutcome = CardOutcome | 'not_a_card' | 'pointed' | 'settled';
 
@@ -88,13 +95,19 @@ function outcomeOf(answer: ResolvedItem | RouteRefusal): CardOutcome {
   return answer.retryable ? 'not_sent' : 'refused';
 }
 
-/** Sends `resolution` for the card's item and edits the card to say how it ended. */
+/**
+ * Sends `resolution` for the card's item and edits the card to say how it
+ * ended. With `reasks`, a 422 leaves the card open, because the operator can
+ * send a different text answer. A button sends the card's own recorded answer,
+ * which cannot change, so a 422 on a tap settles the card as refused.
+ */
 async function decide(
   card: CardRecord,
   resolution: ActionCenterResolution,
   decided: string,
   slackUserId: string,
   deps: CardDeps,
+  reasks = false,
 ): Promise<CardOutcome> {
   if (!deps.store.claimCard(card)) {
     await deps.slack.postMessage(card.channel, CARD_BUSY, { threadTs: card.ts });
@@ -102,6 +115,14 @@ async function decide(
   }
   try {
     const answer = await deps.api.resolveItem(card.spaceId, card.itemId, card.origin, resolution);
+    if (reasks && !answer.ok && answer.status === 422) {
+      await deps.slack.postMessage(
+        card.channel,
+        `Aflow did not take this answer, and the item is still open: ${escapeMrkdwn(answer.message)} ${REPLY_AGAIN}`,
+        { threadTs: card.ts },
+      );
+      return 'invalid_answer';
+    }
     const note = noteFor(answer, decided, slackUserId);
     if (note === undefined) {
       const message = answer.ok ? '' : escapeMrkdwn(answer.message);
@@ -127,6 +148,13 @@ export async function answerCardTap(tap: CardTap, deps: CardDeps): Promise<CardO
   const card = deps.store.cardAt(tap.channel, tap.messageTs);
   const control = card?.controls.find((entry) => entry.id === tap.actionId);
   if (card === undefined || control === undefined) return 'ignored';
+  if (card.outcome !== null) {
+    // The route would answer 409, and that answer would replace the note that says who decided.
+    await deps.slack.postMessage(card.channel, `${TAP_ALREADY_DECIDED} ${card.outcome.note}`, {
+      threadTs: card.ts,
+    });
+    return 'already_decided';
+  }
   return decide(card, control.resolution, control.decided, tap.slackUserId, deps);
 }
 
@@ -155,5 +183,6 @@ export async function answerCardReply(reply: CardReply, deps: CardDeps): Promise
     `Answered “${quoted(answer)}”`,
     reply.slackUserId,
     deps,
+    true,
   );
 }

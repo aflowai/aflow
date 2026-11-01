@@ -23,7 +23,7 @@ An agent can send an Action Center item with its message. It arrives as a card u
 
 Every other card shows no buttons and says it needs you at Aflow. That includes a high-risk write, a browser action, a plan decision and a question the Helmsman asks about the plan. Open the Action Center in Aflow to decide those.
 
-A tap decides the item as the Action Center would, and the card then says what you decided. If the item was already decided, the card says so and the tap changes nothing. A reply in the thread of a card with buttons decides nothing, even "yes". Tap the button instead.
+A tap decides the item as the Action Center would, and the card then says what you decided. If the item was already decided, the app says so and the tap changes nothing. If Aflow does not take a text answer, the app says why in the thread and the item stays open, so you can reply again. A reply in the thread of a card with buttons decides nothing, even "yes". Tap the button instead.
 
 Talking to Aflow from Slack comes in a later release.
 

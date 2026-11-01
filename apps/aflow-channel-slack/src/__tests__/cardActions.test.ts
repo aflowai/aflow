@@ -1,7 +1,7 @@
 /**
  * Plan 327 D3 and §6: a tap resolves through the route the web app calls, and
- * the card says what was decided and by whom. A second tap gets the route's own
- * answer and the card says the item was already decided. Free text approves
+ * the card says what was decided and by whom. A second tap is answered already
+ * decided from the card's record, and the card keeps its note. Free text approves
  * nothing: "yes" in a card's thread leaves the item open, and the app points to
  * the button.
  */
@@ -16,7 +16,9 @@ import {
   CARD_BUSY,
   REPLY_CARD_SETTLED,
   REPLY_DECIDES_NOTHING,
+  REPLY_AGAIN,
   REPLY_NEEDS_AFLOW,
+  TAP_ALREADY_DECIDED,
   answerCardReply,
   answerCardTap,
 } from '../cardActions.js';
@@ -126,26 +128,35 @@ describe('a tap on a card', () => {
     expect(textOf(slack.updates[0]?.blocks)).toContain(`Denied by <@${OPERATOR}> from Slack.`);
   });
 
-  it('answers a second tap "already decided" with the resolve route’s own answer', async () => {
+  it('answers a second tap "already decided" from the card, and the card keeps who decided', async () => {
     const card = await sendCard(approval);
     await tap(card, 'approve');
+    const decided = `Approved by <@${OPERATOR}> from Slack.`;
 
-    expect(await tap(card, 'approve')).toBe('already_decided');
+    expect(await tap(card, 'reject')).toBe('already_decided');
 
-    expect(api.resolves).toHaveLength(2);
-    const second = slack.updates[1];
-    expect(textOf(second?.blocks)).toContain('Already decided. This tap changed nothing.');
-    expect(textOf(second?.blocks)).toContain('Origin CAS mismatch');
-    expect(buttonsOf(second?.blocks)).toEqual([]);
+    expect(api.resolves).toHaveLength(1);
+    expect(slack.updates).toHaveLength(1);
+    expect(textOf(slack.updates[0]?.blocks)).toContain(decided);
+    expect(store.cardAt(card.channel, card.ts)?.outcome?.note).toBe(decided);
+    expect(slack.posts.at(-1)).toEqual({
+      channel: card.channel,
+      text: `${TAP_ALREADY_DECIDED} ${decided}`,
+      threadTs: card.ts,
+    });
     expect(api.items.get(approval.id)?.resolution).toEqual({ kind: 'approve' });
   });
 
-  it('says "already decided" for an item decided at Aflow before the tap', async () => {
+  it('says "already decided" with the resolve route’s own answer for an item decided at Aflow before the tap', async () => {
     const card = await sendCard(approval);
     api.items.set(approval.id, { ...approval, status: 'resolved' });
 
     expect(await tap(card, 'reject')).toBe('already_decided');
-    expect(textOf(slack.updates[0]?.blocks)).toContain('Already decided.');
+    expect(api.resolves).toHaveLength(1);
+    const edit = slack.updates[0];
+    expect(textOf(edit?.blocks)).toContain('Already decided. This tap changed nothing.');
+    expect(textOf(edit?.blocks)).toContain('Origin CAS mismatch');
+    expect(buttonsOf(edit?.blocks)).toEqual([]);
   });
 
   it('resolves nothing for a button the card did not offer', async () => {
@@ -248,6 +259,32 @@ describe('free text in a card’s thread', () => {
     expect(api.resolves[0]?.resolution).toEqual({ kind: 'submit', payload: 'v1.4.0 <final>' });
     expect(textOf(slack.updates[0]?.blocks)).toContain(
       `Answered “v1.4.0 &lt;final&gt;” by <@${OPERATOR}> from Slack.`,
+    );
+  });
+
+  it('leaves the card open on an answer Aflow refuses as invalid, so a reply again can answer', async () => {
+    const card = await sendCard(question);
+    api.nextAnswer = {
+      ok: false,
+      status: 422,
+      error: 'INVALID_RESOLUTION',
+      message: 'The answer must be at most 8 characters <semver>.',
+      retryable: false,
+    };
+
+    expect(await reply(card, 'version one point four')).toBe('invalid_answer');
+
+    expect(slack.updates).toEqual([]);
+    expect(store.cardAt(card.channel, card.ts)?.outcome).toBeNull();
+    expect(api.items.get(question.id)?.status).toBe('open');
+    const said = slack.posts.at(-1);
+    expect(said?.threadTs).toBe(card.ts);
+    expect(said?.text).toContain('The answer must be at most 8 characters &lt;semver&gt;.');
+    expect(said?.text).toContain(REPLY_AGAIN);
+
+    expect(await reply(card, 'v1.4.0')).toBe('resolved');
+    expect(textOf(slack.updates[0]?.blocks)).toContain(
+      `Answered “v1.4.0” by <@${OPERATOR}> from Slack.`,
     );
   });
 

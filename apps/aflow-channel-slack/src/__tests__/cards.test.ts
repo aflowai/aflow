@@ -11,6 +11,7 @@ import {
 import { describe, expect, it } from 'vitest';
 
 import { atAflowNote, cardHead, openFoot, planCard } from '../cards.js';
+import type { SlackBlock } from '../slack.js';
 import { STEP_ORIGIN, buttonsOf, makeItem, textOf, writeApproval } from './cardFixtures.js';
 
 /** The rows of the D3 table that carry buttons, as kind and origin. */
@@ -180,5 +181,47 @@ describe('the ceiling', () => {
     expect(plan.controls).toEqual([]);
     expect(plan.row).toBe('at_aflow');
     expect(buttonsOf(blocks)).toEqual([]);
+  });
+});
+
+describe('the card’s text across sections', () => {
+  /** The mrkdwn text of each section block, in order. */
+  function sectionTexts(blocks: readonly SlackBlock[]): string[] {
+    return blocks.flatMap((block) => {
+      const text = (block as { text?: { text?: unknown } }).text?.text;
+      return block['type'] === 'section' && typeof text === 'string' ? [text] : [];
+    });
+  }
+
+  /** True when `text` ends inside an entity, as `…&am` or `…&lt` does. */
+  function endsInsideEntity(text: string): boolean {
+    return /&[a-z]*$/.test(text);
+  }
+
+  it('never splits an entity where one section ends and the next begins', () => {
+    const text = `${'a'.repeat(2_998)}&<>${'b'.repeat(10)}`;
+    const agentText = sectionTexts(cardHead(text, makeItem())).slice(0, -1);
+
+    expect(agentText.map((section) => section.length <= 3_000)).toEqual([true, true]);
+    expect(agentText.some(endsInsideEntity)).toBe(false);
+    expect(agentText[1]?.startsWith('&')).toBe(true);
+    expect(agentText.join('')).toBe(`${'a'.repeat(2_998)}&amp;&lt;&gt;${'b'.repeat(10)}`);
+  });
+
+  it('cuts a text past the last section on a whole entity, and ends it with an ellipsis', () => {
+    const agentText = sectionTexts(cardHead('&'.repeat(30_000), makeItem())).slice(0, -1);
+
+    expect(agentText).toHaveLength(40);
+    expect(agentText.every((section) => section.length <= 3_000)).toBe(true);
+    expect(agentText.at(-1)?.endsWith('&amp;…')).toBe(true);
+    expect(agentText.some((section) => endsInsideEntity(section.replace(/…$/, '')))).toBe(false);
+  });
+
+  it('cuts a summary that escapes past one section on a whole entity', () => {
+    const item = makeItem({ summary: '<'.repeat(2_000) });
+    const what = sectionTexts(cardHead('Look at this.', item)).at(-1) ?? '';
+
+    expect(what.length).toBeLessThanOrEqual(3_000);
+    expect(what.endsWith('&lt;…')).toBe(true);
   });
 });
