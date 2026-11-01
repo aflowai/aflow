@@ -3,43 +3,58 @@ import { replaceEqualDeep } from '@tanstack/react-query';
 import { ACTION_CENTER_LIST_LIMIT } from '@aflow/schemas';
 import type { ActionCenterItem } from './use-action-center-types.js';
 
+/*
+ * The stream's snapshot holds what each Action Center source lists. Each
+ * source caps its own read, so a source can still cut its share. The route's
+ * limit does not cut the snapshot, as it can cut a REST read. "Whole" below
+ * means only that: no cut at the route's limit.
+ */
+
 export interface ItemsPayload {
   items?: ActionCenterItem[];
   /**
-   * True where the list holds every open item: the stream's snapshot set it,
-   * and the stream has stayed up since. The REST list may be cut at the
-   * route's limit, so on its own it never counts as whole.
+   * The stream whose snapshot made the list whole, as `currentStream` in the
+   * broker numbers it. Absent where the newest read was a REST read the route
+   * may have cut.
    */
-  whole?: boolean;
+  wholeOn?: number;
 }
 
-/** The snapshot's write: every open item, so the list is whole. */
-export function snapshotPayload(items: ActionCenterItem[]): ItemsPayload {
-  return { items, whole: true };
+export function isWhole(payload: ItemsPayload | undefined): boolean {
+  return payload?.wholeOn !== undefined;
+}
+
+/** The snapshot's write. The route's limit has not cut it, so the list is whole. */
+export function snapshotPayload(items: ActionCenterItem[], stream: number | null): ItemsPayload {
+  return stream === null ? { items } : { items, wholeOn: stream };
 }
 
 /** The cached payload with its items replaced, keeping where the list came from. */
 export function withItems(prev: ItemsPayload | undefined, items: ActionCenterItem[]): ItemsPayload {
-  return prev?.whole === true ? { items, whole: true } : { items };
+  return prev?.wholeOn === undefined ? { items } : { items, wholeOn: prev.wholeOn };
 }
 
 /**
- * A write without the flag over a whole list, such as a REST refetch. While
- * the stream is up it has delivered every change since the snapshot, so the
- * list stays whole. It stops being whole when the stream is down. It also
- * stops when the write holds the route's limit and fewer items than the whole
+ * A write without the flag over a whole list, such as a REST refetch. The
+ * stream that sent the snapshot has delivered every change since, so while it
+ * is still the stream in use the list stays whole. Otherwise the refetch is
+ * the newest read and replaces the flag. That covers a stream that is down,
+ * and a reconnected stream whose new snapshot has not yet landed. The flag also
+ * drops where the write holds the route's limit and fewer items than the whole
  * list held, which says the route cut it.
  */
 export function keepWhole(
   prev: ItemsPayload | undefined,
   next: ItemsPayload,
-  streamConnected: boolean,
+  stream: number | null,
 ): ItemsPayload {
-  if (next.whole !== undefined || prev?.whole !== true || !streamConnected) return next;
+  if (next.wholeOn !== undefined || prev?.wholeOn === undefined || prev.wholeOn !== stream) {
+    return next;
+  }
   const nextLength = next.items?.length ?? 0;
   const prevLength = prev.items?.length ?? 0;
   const knownCut = nextLength >= ACTION_CENTER_LIST_LIMIT && nextLength < prevLength;
-  return knownCut ? next : { ...next, whole: true };
+  return knownCut ? next : { ...next, wholeOn: prev.wholeOn };
 }
 
 /**
@@ -48,11 +63,11 @@ export function keepWhole(
  * `keepWhole`.
  */
 export function itemsStructuralSharing(
-  streamConnected: () => boolean,
+  currentStream: () => number | null,
 ): (prev: unknown, next: unknown) => unknown {
   return (prev, next) =>
     replaceEqualDeep(
       prev,
-      keepWhole(prev as ItemsPayload | undefined, next as ItemsPayload, streamConnected()),
+      keepWhole(prev as ItemsPayload | undefined, next as ItemsPayload, currentStream()),
     );
 }

@@ -12,6 +12,7 @@ import { readProposalReadFailure } from '../lib/proposal-read-failure.js';
 import { partitionLanes, type ActionCenterLanes } from './use-action-center-lanes.js';
 import type { ActionCenterItem, CoachProposalExtension } from './use-action-center-types.js';
 import {
+  isWhole,
   itemsStructuralSharing,
   snapshotPayload,
   withItems,
@@ -84,9 +85,12 @@ export interface UseActionCenterResult {
   items: ActionCenterItem[];
 
   /**
-   * Whether `items` is every open item: true once the stream's snapshot has
-   * replaced the REST list, which the route may have cut at its limit. A REST
-   * refetch keeps it while the stream is up, unless the route has cut that read.
+   * Whether the route's limit has not cut `items`: true once the stream's
+   * snapshot has replaced the REST list. The snapshot holds what each source
+   * lists, and each source caps its own read. A REST refetch keeps the flag
+   * while the stream that sent the snapshot stays up, unless the route has cut
+   * that read. A refetch that lands after a reconnect but before the new
+   * snapshot drops it.
    */
   listIsWhole: boolean;
 
@@ -228,10 +232,7 @@ export function useActionCenter(spaceId: string | null): UseActionCenterResult {
   // from the cache, not the network.
   const queryKey = useMemo(() => (spaceId ? itemsQueryKey(spaceId) : ['__none__']), [spaceId]);
   const structuralSharing = useMemo(
-    () =>
-      itemsStructuralSharing(() =>
-        spaceId ? broker.getStatusSnapshot(spaceId).isConnected : false,
-      ),
+    () => itemsStructuralSharing(() => (spaceId ? broker.currentStream(spaceId) : null)),
     [spaceId],
   );
   const itemsQuery = useApiQuery<ItemsPayload>({
@@ -302,6 +303,8 @@ export function useActionCenter(spaceId: string | null): UseActionCenterResult {
     // late-resolving fetch could still slip through; the IIFE shape
     // closes it without blocking the broker event loop.
     const unsubSnapshot = broker.subscribeSnapshot(spaceId, (items) => {
+      // Read before the await: the list rests on the stream that sent it.
+      const stream = broker.currentStream(spaceId);
       void (async () => {
         await queryClientRef.current.cancelQueries({
           queryKey: itemsQueryKey(spaceId),
@@ -309,7 +312,7 @@ export function useActionCenter(spaceId: string | null): UseActionCenterResult {
         });
         queryClientRef.current.setQueryData<ItemsPayload>(
           itemsQueryKey(spaceId),
-          snapshotPayload(items),
+          snapshotPayload(items, stream),
         );
         lastReconcileAtRef.current = Date.now();
       })();
@@ -395,7 +398,7 @@ export function useActionCenter(spaceId: string | null): UseActionCenterResult {
   // ---- derived items/lanes/counts -----------------------------------------
 
   const items = useMemo<ActionCenterItem[]>(() => itemsQuery.data?.items ?? [], [itemsQuery.data]);
-  const listIsWhole = itemsQuery.data?.whole === true;
+  const listIsWhole = isWhole(itemsQuery.data);
 
   const lanes = useMemo<ActionCenterLanes>(() => partitionLanes(items), [items]);
 

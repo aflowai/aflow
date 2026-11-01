@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   __resetForTests,
   acquire,
+  currentStream,
   getStatusSnapshot,
   release,
   subscribeFocus,
@@ -206,6 +207,47 @@ describe('subscribeStatus', () => {
     }
     expect(seen).toContain(true);
     expect(getStatusSnapshot('space-A').isConnected).toBe(true);
+  });
+});
+
+describe('currentStream', () => {
+  const emitStatus = (isConnected: boolean): void => {
+    transportConnected = isConnected;
+    for (const fn of statusListeners) fn({ isConnected, lastError: null });
+  };
+
+  it('is null while the stream is down and for an unknown space', () => {
+    acquire('space-A', ctx);
+    expect(currentStream('space-A')).toBeNull();
+    expect(currentStream('never-acquired')).toBeNull();
+  });
+
+  it('takes a new number on each reconnect', () => {
+    acquire('space-A', ctx);
+    emitStatus(true);
+    const first = currentStream('space-A');
+    expect(first).not.toBeNull();
+    emitStatus(false);
+    expect(currentStream('space-A')).toBeNull();
+    emitStatus(true);
+    const second = currentStream('space-A');
+    expect(second).not.toBeNull();
+    expect(second).not.toBe(first);
+  });
+
+  it('takes a new number when a stream error resubscribes on a live transport', () => {
+    vi.useFakeTimers();
+    try {
+      transportConnected = true;
+      acquire('space-A', ctx);
+      const first = currentStream('space-A');
+      lastSub()?.listeners.onError?.('boom', 'stream failed');
+      vi.runOnlyPendingTimers();
+      expect(captured).toHaveLength(2);
+      expect(currentStream('space-A')).not.toBe(first);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

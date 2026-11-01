@@ -2,7 +2,8 @@
  * The sidebar's Plan count (Plan 338 D1): the open `plan_ask` and
  * `plan_decision` items, with `+` where either origin holds as many items as
  * its source lists at most, or the REST list as many as the route returns.
- * The stream's snapshot carries every open item, so its length marks nothing.
+ * The route's limit does not cut the stream's snapshot, so the snapshot's
+ * length marks nothing.
  */
 import { describe, expect, it } from 'vitest';
 import {
@@ -29,7 +30,7 @@ const listedOf = (blocked: number) => asks(Math.min(blocked, PLAN_OPEN_ASKS_LIMI
 
 /** The list the REST route returned, which it may have cut at its limit. */
 const REST = { whole: false };
-/** The list the stream's snapshot carried, which holds every open item. */
+/** The list the stream's snapshot carried, which the route's limit does not cut. */
 const SNAPSHOT = { whole: true };
 
 const other: Origin = { origin: { type: 'coach_activity' } } as unknown as Origin;

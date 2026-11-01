@@ -18,8 +18,8 @@ export type { PlanPendingCount };
  * Open items whose origin is `plan_ask` or `plan_decision`, whatever their
  * audience. Each source lists at most its cap, so a set at its cap may have
  * cut, whichever list holds it. The REST list carries no total, so a REST list
- * as long as the route returns may have cut as well. The stream's snapshot
- * carries every open item, so its length says nothing about a cut.
+ * as long as the route returns may have cut as well. The route's limit does
+ * not cut the stream's snapshot, so its length says nothing about that cut.
  */
 export function planPendingCount(
   items: ReadonlyArray<Pick<ActionCenterItem, 'origin'>>,
