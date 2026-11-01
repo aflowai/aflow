@@ -69,7 +69,9 @@ const MIGRATIONS: readonly Migration[] = [
 
 /**
  * How long a sent record is kept. A retry or a repeat arrives within its run,
- * and a run that lasts a month is not one this rule has to serve.
+ * and a run that lasts a month is not one this rule has to serve. Applied when
+ * the store opens and on every claimed send, so an app that runs for months
+ * keeps a bounded file.
  */
 export const SENT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -84,8 +86,13 @@ export function sha256Hex(value: string): string {
   return createHash('sha256').update(value).digest('hex');
 }
 
+export type SendClaim =
+  { claimed: true; record: SentRecord } | { claimed: false; prior: SentRecord };
+
 export class ChannelStore {
   private data: StoreData;
+  /** Sends claimed and not yet settled. Process memory: a restart settles none. */
+  private readonly claims = new Set<SentRecord>();
 
   private constructor(
     private readonly path: string,
@@ -123,9 +130,7 @@ export class ChannelStore {
       );
     }
     const store = new ChannelStore(path, parsed.data);
-    store.data.sent = store.data.sent.filter(
-      (record) => now.getTime() - Date.parse(record.sentAt) < SENT_RETENTION_MS,
-    );
+    store.prune(now);
     store.persist();
     return store;
   }
@@ -152,13 +157,54 @@ export class ChannelStore {
     );
   }
 
-  sentInRun(runId: string, text: string): SentRecord | undefined {
-    return this.data.sent.find((record) => record.runId === runId && record.text === text);
+  /** True while the send that wrote `record` has not settled in this process. */
+  inFlight(record: SentRecord): boolean {
+    return this.claims.has(record);
   }
 
-  recordSent(record: SentRecord): void {
+  /**
+   * Claims a send before it leaves, in one synchronous step, so of two sends
+   * that arrive together the second finds the first. Returns the record that
+   * stands in the way: one for this step, or one for the same text in the run.
+   *
+   * The claim is written with no `messageRef`, so a process that dies during
+   * the post leaves a send that may have posted, which is what it is.
+   */
+  claimSend(claim: Omit<SentRecord, 'messageRef'>, now: Date = new Date()): SendClaim {
+    const prior =
+      this.sentFor(claim.runId, claim.executionId) ??
+      this.data.sent.find((record) => record.runId === claim.runId && record.text === claim.text);
+    if (prior !== undefined) return { claimed: false, prior };
+    const record: SentRecord = { ...claim, messageRef: null };
+    this.prune(now);
     this.data.sent.push(record);
+    this.claims.add(record);
     this.persist();
+    return { claimed: true, record };
+  }
+
+  /**
+   * Settles a claimed send: `messageRef` once Slack named the message, null
+   * when the post may have landed and no answer said so.
+   */
+  settleSend(record: SentRecord, messageRef: string | null): void {
+    this.claims.delete(record);
+    record.messageRef = messageRef;
+    this.persist();
+  }
+
+  /** Drops a claimed send that posted nothing, so a retry may post. */
+  releaseSend(record: SentRecord): void {
+    this.claims.delete(record);
+    this.data.sent = this.data.sent.filter((entry) => entry !== record);
+    this.persist();
+  }
+
+  private prune(now: Date): void {
+    this.data.sent = this.data.sent.filter(
+      (record) =>
+        this.claims.has(record) || now.getTime() - Date.parse(record.sentAt) < SENT_RETENTION_MS,
+    );
   }
 
   private persist(): void {

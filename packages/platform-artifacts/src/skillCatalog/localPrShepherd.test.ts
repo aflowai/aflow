@@ -66,6 +66,7 @@ import {
   MERGE_ASKED,
   PUBLICATION_COMMIT_TASK,
   PUBLICATION_PUSH_TASK,
+  PUBLICATION_PUSHED_MERGE_PATH,
   PUBLICATION_PUSHED_SHA_PATH,
 } from './localPrShepherdMerge.js';
 import {
@@ -328,6 +329,8 @@ interface PublicationRecord {
   verdict: string | null;
   reviewed: string;
   pushed: string | null;
+  /** Its push sent the merge of a moved base in place of `pushed`, as `push` records it. */
+  merged?: { commit: string; branchCommit: string };
   /** Its review failed and was retried in place: the read carries the review run's final attempt. */
   retriedInPlace?: boolean;
 }
@@ -356,7 +359,16 @@ function publicationsOf(s: Scenario): PublicationRecord[] {
 function publicationTaskOutputs(publication: PublicationRecord): Record<string, unknown> {
   return {
     commit: { commit: { sha: publication.pushed ?? publication.reviewed } },
-    ...(publication.pushed !== null ? { push: { exitCode: 0 } } : {}),
+    ...(publication.pushed !== null
+      ? {
+          push: {
+            exitCode: 0,
+            ...(publication.merged !== undefined
+              ? { baseMerge: { baseMoved: true, ...publication.merged } }
+              : {}),
+          },
+        }
+      : {}),
   };
 }
 
@@ -509,7 +521,8 @@ function answer(taskId: string, input: Record<string, unknown>, s: Scenario): An
     }
     case 'read-pr-reviews':
       return github(PullRequestReviewsSchema.parse(s.reviews ?? NO_REVIEWS));
-    case 'read-publication': {
+    case 'read-publication':
+    case 'read-merged-publication': {
       // As the ledger selects: newest first, only runs that succeeded in every
       // named task with the value recorded where one is named.
       const query = WorkflowRunListInputSchema.parse(input);
@@ -530,6 +543,17 @@ function answer(taskId: string, input: Record<string, unknown>, s: Scenario): An
           own: false,
         })),
         hasMore: selected.length > query.limit,
+      });
+    }
+    case 'read-publication-merge': {
+      const publication = publicationsOf(s).find((p) => p.id === input['runId']);
+      if (publication === undefined) return { ok: false };
+      return ok({
+        result: { output: {} },
+        run: { runId: publication.id, status: 'completed' },
+        tasks: [],
+        activeWaiters: [],
+        taskOutput: { taskId: 'push', output: publicationTaskOutputs(publication)['push'] },
       });
     }
     case 'read-publication-review': {
@@ -1982,6 +2006,8 @@ const MERGE_READS = [
   'read-required-protection',
   'read-pr-reviews',
   'read-publication',
+  'read-merged-publication',
+  'read-publication-merge',
   'read-publication-review',
 ];
 
@@ -2328,6 +2354,67 @@ describe('Local PR Shepherd — it merges what the posture allows', () => {
       kind: 'task_output',
       taskId: PUBLICATION_COMMIT_TASK,
       path: PUBLICATION_PUSHED_SHA_PATH,
+    });
+  });
+
+  describe('a head its publication pushed as the merge of a moved base (Plan 339 D3)', () => {
+    const BRANCH_COMMIT = '7'.repeat(40);
+    const mergedHead = {
+      id: PUBLICATION_RUN,
+      verdict: 'approve',
+      reviewed: BRANCH_COMMIT,
+      pushed: BRANCH_COMMIT,
+      merged: { commit: HEAD, branchCommit: BRANCH_COMMIT },
+    };
+
+    it('finds the publication by the merge its push recorded, and merges the head under when-green', () => {
+      const merged = green({ publications: [mergedHead] });
+      expect(
+        WorkflowRunListInputSchema.parse(merged.inputs.get('read-merged-publication')),
+      ).toMatchObject({
+        slug: PUBLISH_LOCAL_CHANGES.bundle.workflow.slug,
+        input: { field: 'branch', equals: BRANCH },
+        succeeded: [
+          {
+            taskId: PUBLICATION_PUSH_TASK,
+            output: { path: PUBLICATION_PUSHED_MERGE_PATH, equals: HEAD },
+          },
+        ],
+        status: ['completed', 'failed', 'cancelled'],
+        limit: 1,
+      });
+      expect(merged.inputs.get('read-publication-review')).toMatchObject({
+        runId: PUBLICATION_RUN,
+      });
+      expect(merged.inputs.get('read-publication-merge')).toEqual({
+        runId: PUBLICATION_RUN,
+        compact: true,
+        taskOutput: PUBLICATION_PUSH_TASK,
+      });
+      expect(merged.decision).toBe('merge');
+      expect(merged.inputs.get('merge')).toMatchObject({ params: { body: { sha: HEAD } } });
+    });
+
+    it('leaves it where the review is of a commit other than the one the merge was made from', () => {
+      const left = green({ publications: [{ ...mergedHead, reviewed: 'e'.repeat(40) }] });
+      expect(left.decision).toBe('leave');
+      expect(left.ran).not.toContain('merge');
+      expect(left.outputs.get('decide')?.['reason']).toMatch(
+        /no Local Code Review on record of the commit that merge was made from/,
+      );
+    });
+
+    it('leaves it where the merge the publication pushed is not the head', () => {
+      const left = green({
+        publications: [
+          { ...mergedHead, merged: { commit: 'f'.repeat(40), branchCommit: BRANCH_COMMIT } },
+        ],
+      });
+      expect(left.decision).toBe('leave');
+      expect(left.statuses.get('read-publication-review')).toBe('skipped');
+      expect(left.outputs.get('decide')?.['reason']).toMatch(
+        /no publication of the branch pushed it/,
+      );
     });
   });
 
@@ -2778,6 +2865,41 @@ describe('Local PR Shepherd — what its rules cannot act on goes to the agent',
     expect(handoffBodyOf(conflicting)).toContain(HAND_OVER_SCHEDULE);
   });
 
+  describe('a head its publication pushed as the merge of a moved base (Plan 339 D3)', () => {
+    const BRANCH_COMMIT = '7'.repeat(40);
+    const mergedHead = {
+      id: PUBLICATION_RUN,
+      verdict: 'approve',
+      reviewed: BRANCH_COMMIT,
+      pushed: BRANCH_COMMIT,
+      merged: { commit: HEAD, branchCommit: BRANCH_COMMIT },
+    };
+
+    it('hands a green, approved merge head GitHub says does not merge to the Helmsman', () => {
+      const handOvers = new Map<string, Record<string, unknown>>();
+      const conflicting = pass({ ...CONFLICTING, publications: [mergedHead], handOvers });
+      expect(conflicting.decision).toBe('leave');
+      expect(String(conflicting.outputs.get('decide')?.['reason'])).toMatch(
+        /does not merge into its base/,
+      );
+      expect(conflicting.ran).not.toContain('merge');
+      expect(conflicting.statuses.get('hand-over-to-agent')).toBe('succeeded');
+      expect(handOvers.get(PR_CASE)).toMatchObject({ headSha: HEAD, case: 'does_not_merge' });
+    });
+
+    it('hands nothing over where the review is of a commit other than the one the merge was made from', () => {
+      const handOvers = new Map<string, Record<string, unknown>>();
+      const left = pass({
+        ...CONFLICTING,
+        publications: [{ ...mergedHead, reviewed: 'e'.repeat(40) }],
+        handOvers,
+      });
+      expect(left.decision).toBe('leave');
+      expect(left.statuses.get('hand-over-to-agent')).not.toBe('succeeded');
+      expect(handOvers.has(PR_CASE)).toBe(false);
+    });
+  });
+
   it('hands a head over once, however many passes find it, and a push that moves it is a new case', () => {
     const handOvers = new Map<string, Record<string, unknown>>();
     const first = pass({ ...CONFLICTING, handOvers });
@@ -3100,7 +3222,10 @@ describe('Local PR Shepherd — what its rules cannot act on goes to the agent',
       }).decision;
     const names = HAND_OVER_RULES.map((rule) => name({ rule: SHEPHERD_RULES.indexOf(rule) }));
     expect(names).not.toContain(HAND_OVER_CASE_OTHERWISE.decision);
-    expect(new Set(names).size).toBe(names.length);
+    // `does_not_merge` is one case written as two rules: a head reviewed itself,
+    // and a head pushed as the merge of a moved base whose first parent was reviewed.
+    expect(names.filter((n) => n === 'does_not_merge')).toHaveLength(2);
+    expect(new Set(names).size).toBe(names.length - 1);
     expect(names).toContain('merge_refused');
     expect(name({ rule: SHEPHERD_RULES.length - 1, mergeOutcome: 'merge_refused' })).toBe(
       'merge_refused',

@@ -211,6 +211,119 @@ describe('channel.message.send', () => {
     expect(slack.posts).toHaveLength(1);
   });
 
+  it.each([
+    [
+      'an HTTP 504 from a gateway after Slack took the post',
+      () => new Response('', { status: 504 }),
+    ],
+    [
+      'a 200 whose body could not be read before the timeout',
+      () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.error(
+                new DOMException('The operation was aborted due to timeout', 'TimeoutError'),
+              );
+            },
+          }),
+          { status: 200 },
+        ),
+    ],
+  ])(
+    'fails %s as of unknown outcome, records it, and never posts it twice',
+    async (_case, answer) => {
+      const posts: string[] = [];
+      handler = new ChannelMessageSendHandler({
+        store,
+        slack: createSlackClient({
+          botToken: 'xoxb-test',
+          appToken: 'xapp-test',
+          fetchImpl: (url) => {
+            if (String(url).endsWith('/conversations.open')) {
+              return Promise.resolve(Response.json({ ok: true, channel: { id: 'D-1' } }));
+            }
+            posts.push(String(url));
+            return Promise.resolve(answer());
+          },
+        }),
+      });
+
+      const lost = await send({ text: 'Approve the push.' });
+      if (lost.result.status !== 'FAILED') throw new Error('expected a failure');
+      expect(lost.result.error.code).toBe(CHANNEL_DELIVERY_UNKNOWN_CODE);
+      expect(lost.result.error.retryable).toBe(false);
+
+      const retried = await send({ text: 'Approve the push.' });
+      const resent = await send({ text: 'Approve the push.' }, { executionId: 'exec-2' });
+
+      expect(errorCode(retried.result)).toBe(CHANNEL_DELIVERY_UNKNOWN_CODE);
+      expect(errorCode(resent.result)).toBe(CHANNEL_DELIVERY_UNKNOWN_CODE);
+      expect(posts).toHaveLength(1);
+    },
+  );
+
+  it('keeps an HTTP 5xx from conversations.open retryable, because nothing was posted', async () => {
+    let openFails = true;
+    const posts: string[] = [];
+    handler = new ChannelMessageSendHandler({
+      store,
+      slack: createSlackClient({
+        botToken: 'xoxb-test',
+        appToken: 'xapp-test',
+        fetchImpl: (url) => {
+          if (String(url).endsWith('/conversations.open')) {
+            if (openFails) {
+              openFails = false;
+              return Promise.resolve(new Response('', { status: 503 }));
+            }
+            return Promise.resolve(Response.json({ ok: true, channel: { id: 'D-1' } }));
+          }
+          posts.push(String(url));
+          return Promise.resolve(Response.json({ ok: true, channel: 'D-1', ts: '1.0001' }));
+        },
+      }),
+    });
+
+    const failed = await send({ text: 'Hello.' });
+    expect(errorCode(failed.result)).toBe(CHANNEL_PROVIDER_ERROR_CODE);
+    expect(failed.result.status === 'FAILED' && failed.result.error.retryable).toBe(true);
+
+    const retried = await send({ text: 'Hello.' });
+    expect(retried.result.status).toBe('SUCCEEDED');
+    expect(posts).toHaveLength(1);
+  });
+
+  it('posts once when two sends of the same text in one run arrive together', async () => {
+    const [first, second] = await Promise.all([
+      send({ text: 'Approve the push.' }, { executionId: 'exec-1' }),
+      send({ text: 'Approve the push.' }, { executionId: 'exec-2' }),
+    ]);
+
+    expect(first.result.status).toBe('SUCCEEDED');
+    expect(errorCode(second.result)).toBe(CHANNEL_MESSAGE_REPEATED_CODE);
+    expect(second.result.status === 'FAILED' && second.result.error.retryable).toBe(false);
+    expect(slack.posts).toHaveLength(1);
+
+    const later = await send({ text: 'Approve the push.' }, { executionId: 'exec-3' });
+    expect(errorCode(later.result)).toBe(CHANNEL_MESSAGE_REPEATED_CODE);
+    expect(slack.posts).toHaveLength(1);
+  });
+
+  it('posts once when the same step arrives twice at once, and the retry returns its messageRef', async () => {
+    const [first, duplicate] = await Promise.all([
+      send({ text: 'Approve the push.' }),
+      send({ text: 'Approve the push.' }),
+    ]);
+
+    expect(first.result.status).toBe('SUCCEEDED');
+    expect(errorCode(duplicate.result)).toBe(CHANNEL_MESSAGE_REPEATED_CODE);
+
+    const retried = await send({ text: 'Approve the push.' });
+    expect(retried.written).toEqual(first.written);
+    expect(slack.posts).toHaveLength(1);
+  });
+
   it('keeps a transport failure before the post retryable, because nothing was posted', async () => {
     slack.failOpen = new SlackApiError('conversations.open', 'fetch failed', true, true);
     const failed = await send({ text: 'Hello.' });
@@ -296,5 +409,29 @@ describe('the Slack client', () => {
     expect(refused).toBeInstanceOf(SlackApiError);
     expect((refused as SlackApiError).outcomeUnknown).toBe(false);
     expect((refused as SlackApiError).retryable).toBe(true);
+  });
+
+  it('marks an HTTP 5xx and an unreadable body as of unknown outcome, and a 429 as not', async () => {
+    const answering = (answer: () => Response) =>
+      createSlackClient({
+        botToken: 'xoxb-test',
+        appToken: 'xapp-test',
+        fetchImpl: () => Promise.resolve(answer()),
+      });
+
+    const gateway = await answering(() => new Response('', { status: 504 }))
+      .postMessage('D-1', 'Hello.')
+      .catch((error: unknown) => error);
+    const unreadable = await answering(() => new Response('<html>', { status: 200 }))
+      .postMessage('D-1', 'Hello.')
+      .catch((error: unknown) => error);
+    const limited = await answering(() => new Response('', { status: 429 }))
+      .postMessage('D-1', 'Hello.')
+      .catch((error: unknown) => error);
+
+    expect((gateway as SlackApiError).outcomeUnknown).toBe(true);
+    expect((unreadable as SlackApiError).outcomeUnknown).toBe(true);
+    expect((limited as SlackApiError).outcomeUnknown).toBe(false);
+    expect((limited as SlackApiError).retryable).toBe(true);
   });
 });

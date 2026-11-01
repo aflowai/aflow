@@ -22,9 +22,11 @@ const RETRYABLE_SLACK_ERRORS: ReadonlySet<string> = new Set([
 
 export class SlackApiError extends Error {
   /**
-   * `outcomeUnknown` is true when the request left but no answer came back: a
-   * transport failure or the timeout. Slack may have acted on it, so a write
-   * method that failed this way may have taken effect.
+   * `outcomeUnknown` is true when the request left but no readable answer came
+   * back: a transport failure, the timeout, an HTTP 5xx, or a body that could
+   * not be read. Slack may have acted on it, so a write method that failed this
+   * way may have taken effect. A 5xx can come from a gateway in front of Slack
+   * after Slack has acted, so it is not read as a refusal.
    */
   constructor(
     readonly method: string,
@@ -77,10 +79,33 @@ async function call(
       true,
     );
   }
-  if (response.status === 429 || response.status >= 500) {
-    throw new SlackApiError(method, `HTTP ${String(response.status)}`, true);
+  if (response.status === 429) {
+    throw new SlackApiError(method, 'HTTP 429', true);
   }
-  const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+  if (response.status >= 500) {
+    throw new SlackApiError(method, `HTTP ${String(response.status)}`, true, true);
+  }
+  if (response.status >= 400) {
+    throw new SlackApiError(method, `HTTP ${String(response.status)}`, false);
+  }
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch (error) {
+    throw new SlackApiError(
+      method,
+      `the answer could not be read: ${error instanceof Error ? error.message : 'unknown error'}`,
+      true,
+      true,
+    );
+  }
+  if (payload === null || typeof payload !== 'object') {
+    throw new SlackApiError(method, 'the answer was not a JSON object', true, true);
+  }
+  return checkPayload(method, payload as Record<string, unknown>);
+}
+
+function checkPayload(method: string, payload: Record<string, unknown>): Record<string, unknown> {
   if (payload['ok'] !== true) {
     const slackError = typeof payload['error'] === 'string' ? payload['error'] : 'unknown_error';
     throw new SlackApiError(method, slackError, RETRYABLE_SLACK_ERRORS.has(slackError));
@@ -113,7 +138,7 @@ export function createSlackClient(options: {
       const ts = payload['ts'];
       const posted = payload['channel'];
       if (typeof ts !== 'string' || typeof posted !== 'string') {
-        throw new SlackApiError('chat.postMessage', 'no_ts_in_response', false);
+        throw new SlackApiError('chat.postMessage', 'no_ts_in_response', false, true);
       }
       return { channel: posted, ts };
     },
