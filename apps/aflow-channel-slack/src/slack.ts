@@ -3,7 +3,12 @@
  *
  * Three methods do not earn an SDK: the bot opens a direct message and posts
  * into it, and the app-level token opens a Socket Mode connection.
+ *
+ * The default transport is the checked `safeFetchImpl`, as for every injected
+ * transport. It validates the Slack host before it dials and refuses a redirect.
  */
+import { safeFetchImpl } from '@aflow/network-safety';
+
 const SLACK_API = 'https://slack.com/api';
 
 /** Slack answers these when the request may succeed if sent again. */
@@ -81,7 +86,7 @@ export function createSlackClient(options: {
   appToken: string;
   fetchImpl?: Fetch;
 }): SlackClient {
-  const fetchImpl = options.fetchImpl ?? fetch;
+  const fetchImpl = options.fetchImpl ?? safeFetchImpl;
   return {
     async openDirectMessage(userId) {
       const payload = await call(fetchImpl, options.botToken, 'conversations.open', {

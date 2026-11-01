@@ -12,6 +12,7 @@
   "references": [
     { "path": "../../packages/executor-runtime" },
     { "path": "../../packages/lib" },
+    { "path": "../../packages/network-safety" },
     { "path": "../../packages/payload-store" },
     { "path": "../../packages/redis" },
     { "path": "../../packages/schemas" }

@@ -11,6 +11,7 @@ __metadata:
   dependencies:
     "@aflow/executor-runtime": "workspace:*"
     "@aflow/lib": "workspace:*"
+    "@aflow/network-safety": "workspace:*"
     "@aflow/payload-store": "workspace:*"
     "@aflow/redis": "workspace:*"
     "@aflow/schemas": "workspace:*"
