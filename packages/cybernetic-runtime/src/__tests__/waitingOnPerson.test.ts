@@ -5,9 +5,10 @@
  * the section holds no item body, and it fits its measured ceiling.
  */
 import { readFileSync } from 'node:fs';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import Redis from 'ioredis-mock';
 import type { Redis as RedisType } from 'ioredis';
+import { configureLogging } from '@aflow/observability';
 import {
   ACTION_CENTER_ITEM_ID_PREFIX,
   ACTION_CENTER_LIST_LIMIT,
@@ -81,6 +82,10 @@ const SLUG = 'helm-338';
 const SESSION = 'c0000000-0000-4000-8000-000000000338';
 
 let redis: RedisType;
+
+beforeAll(() => {
+  configureLogging({ service: 'test', level: 'silent' });
+});
 
 beforeEach(async () => {
   fakeStore.current = new InMemoryPlanNodeStore();
@@ -295,6 +300,25 @@ describe('a root counts by the stillAsking rule the plan-ask source lists by', (
     expect(lines.slice(1)).toEqual([
       `- plan step "${planItemTitle('blocked', asking.title)}" [itemId: ${ACTION_CENTER_ITEM_ID_PREFIX.planAsk}${asking.nodeId}] /s/${SLUG}/plan?node=${asking.nodeId}`,
     ]);
+  });
+
+  it('keeps the open plan tree when the read of the finished roots fails, and names the count unread', async () => {
+    const root = blocked('Plan 341 · a root that waits');
+    const step = fakeStore.current.seed(SPACE, { title: 'P1 — open', parentId: root.nodeId });
+    const overview = vi
+      .spyOn(fakeStore.current, 'readOverview')
+      .mockRejectedValue(new Error('overview unavailable'));
+
+    const lines = (await turn()).split('\n');
+    expect(overview).toHaveBeenCalled();
+    expect(lines).toContain('Active plan — open a node with `plan.node.get`:');
+    expect(lines.some((line) => line.endsWith(`[nodeId: ${root.nodeId}]`))).toBe(true);
+    expect(lines.some((line) => line.endsWith(`[nodeId: ${step.nodeId}]`))).toBe(true);
+    const heading = lines.find((line) => line.startsWith('Waiting on a person:'));
+    expect(heading).toBe(
+      'Waiting on a person: 0 run gates, 0 consents. The plan steps could not be read.',
+    );
+    expect(lines.join('\n')).not.toContain(ACTION_CENTER_ITEM_ID_PREFIX.planAsk);
   });
 });
 

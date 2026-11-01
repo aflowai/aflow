@@ -6,6 +6,7 @@ import {
   type PlanNodeStatus,
 } from '@aflow/schemas';
 import { listPlanNodeIdsDrivenBySession } from '../ledger/queries.js';
+import { getCyberneticLogger } from '../logger.js';
 import { waitingPlanSteps, type WaitingPlanSteps } from '../waitingOnPerson.js';
 import { findPlanRootsOf, PLAN_TREE_WALK_BOUNDS } from './operations.js';
 import { createPlanNodeStore, type PlanNodeStore } from './store.js';
@@ -37,8 +38,11 @@ export interface PlanAttention {
 export interface ActivePlan {
   /** The tree the block shows; absent where no node is open. */
   tree?: PlanAttention;
-  /** The plan steps that wait on a person, counted from the same walk (Plan 338 D2). */
-  waiting: WaitingPlanSteps;
+  /**
+   * The plan steps that wait on a person, counted from the same walk (Plan 338
+   * D2). Absent where the count's own read failed, which costs the count alone.
+   */
+  waiting?: WaitingPlanSteps;
 }
 
 /**
@@ -56,9 +60,16 @@ export async function loadActivePlanTree(
     statuses: OPEN_PLAN_NODE_STATUSES,
     ...PLAN_TREE_WALK_BOUNDS,
   });
-  const waiting = await waitingPlanSteps({ store, spaceId }, open.nodes);
+  const waiting = await waitingPlanSteps({ store, spaceId }, open.nodes).catch((err: unknown) => {
+    getCyberneticLogger().warn('helmsmanAttention: plan-step count failed', {
+      error: err instanceof Error ? err.message : String(err),
+      spaceId,
+    });
+    return undefined;
+  });
+  const counted = waiting !== undefined ? { waiting } : {};
   const tree = orderPlanTree(open.nodes);
-  if (tree.length === 0) return { waiting };
+  if (tree.length === 0) return counted;
   return {
     tree: {
       nodes: tree.slice(0, PLAN_ATTENTION_NODE_LIMIT).map(({ node, depth }) => ({
@@ -72,7 +83,7 @@ export async function loadActivePlanTree(
       total: tree.length,
       ...(open.truncated !== undefined ? { truncated: open.truncated } : {}),
     },
-    waiting,
+    ...counted,
   };
 }
 
