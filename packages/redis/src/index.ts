@@ -175,6 +175,7 @@ export {
   type SalvagedCorruptFields,
   type GetSessionStateSafeResult,
   setSessionState,
+  setSessionStateIfAbsent,
   getSessionState,
   getSessionWorkflowExecution,
   updateSessionState,
@@ -495,6 +496,52 @@ export {
   relabelEntityEventStreams104a,
   relabelEntityEventStream104aForSpace,
 } from './entityEventsLegacyRelabel.js';
+
+export {
+  WAIT_WINDOWS_KEY,
+  WAIT_FIRED_SUBJECTS_KEY,
+  WAIT_WAITERS_KEY,
+  WAIT_FIRED_KEY,
+  WAIT_EVENT_SEQ_KEY,
+  WAIT_DELIVERING_KEY,
+  WAIT_DELIVERING_DATA_KEY,
+  WAIT_DELIVERY_LEASE_MS,
+  prepareWaitEventRecording,
+  recordWaitEventInto,
+  recordWaitEvent,
+  readRecordedWaitEvent,
+  registerWait,
+  cancelWait,
+  claimDueDeliveries,
+  claimFiredWaits,
+  claimClosedWindows,
+  rearmEndedWait,
+  settleEndedWait,
+  WAIT_SESSION_MARK_KEY,
+  markSessionDeclaredWait,
+  sessionHasDeclaredWait,
+  type RegisterWaitResult,
+  type EndedWait,
+} from './waits.js';
+
+export {
+  PULL_REQUEST_WATCH_DUE_KEY,
+  PULL_REQUEST_WATCH_TTL_SECONDS,
+  PULL_REQUEST_WATCH_KEY,
+  PULL_REQUEST_WATCH_LEASE_KEY,
+  PullRequestWatchSchema,
+  PullRequestReadStateSchema,
+  PullRequestChecksStateSchema,
+  armPullRequestWatch,
+  clearPullRequestWatch,
+  savePullRequestWatch,
+  reschedulePullRequestWatch,
+  claimDuePullRequestWatches,
+  countPullRequestWatches,
+  type PullRequestWatch,
+  type PullRequestReadState,
+  type PullRequestChecksState,
+} from './pullRequestWatch.js';
 
 // Re-export Redis type for convenience
 export type { Redis } from 'ioredis';

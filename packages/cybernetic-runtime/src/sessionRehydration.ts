@@ -18,6 +18,7 @@ import {
   StepHotStateSchema,
   getSessionStateSafe,
   setSessionState,
+  setSessionStateIfAbsent,
   setStepStateIfAbsent,
 } from '@aflow/redis';
 import { createTenantContext, createSessionRepository } from '@aflow/database';
@@ -28,24 +29,38 @@ export async function rehydratePausedRun(
   tenantId: string,
   runId: string,
 ): Promise<SessionHotState | null> {
-  const tenantContext = createTenantContext(tenantId as TenantId);
-  const runRepo = createSessionRepository(db, tenantContext);
-  const row = await runRepo.getById(runId as SessionId);
-
-  if (row?.status !== 'PAUSED' && row?.status !== 'WAITING_ON_CHILD') return null;
-
-  const snapshot = row.hotStateSnapshot as {
-    runHotState?: unknown;
-    stepHotStates?: Record<string, unknown>;
-  } | null;
-
-  if (!snapshot?.runHotState) return null;
-
-  const runParsed = SessionHotStateSchema.safeParse(snapshot.runHotState);
-  if (!runParsed.success) return null;
+  const snapshot = await loadRestingSnapshot(db, tenantId, runId);
+  const runParsed = SessionHotStateSchema.safeParse(snapshot?.runHotState);
+  if (!snapshot || !runParsed.success) return null;
 
   await setSessionState(redis, runParsed.data);
+  await restoreStepStates(redis, snapshot);
+  return runParsed.data;
+}
 
+/**
+ * Restore a resting session the way {@link rehydratePausedRun} does, but only
+ * where its hash is still absent when the write lands. A writer that put the
+ * hash back first holds newer state than the snapshot, so it is kept and
+ * returned instead. Null where neither a live hash nor a snapshot exists.
+ */
+export async function rehydratePausedRunIfAbsent(
+  redis: Redis,
+  db: PostgresJsDatabase,
+  tenantId: string,
+  runId: string,
+): Promise<SessionHotState | null> {
+  const snapshot = await loadRestingSnapshot(db, tenantId, runId);
+  const runParsed = SessionHotStateSchema.safeParse(snapshot?.runHotState);
+  if (snapshot && runParsed.success && (await setSessionStateIfAbsent(redis, runParsed.data))) {
+    await restoreStepStates(redis, snapshot);
+    return runParsed.data;
+  }
+  const live = await getSessionStateSafe(redis, tenantId, runId);
+  return live.ok ? live.state : null;
+}
+
+async function restoreStepStates(redis: Redis, snapshot: RestingSnapshot): Promise<void> {
   if (snapshot.stepHotStates) {
     for (const stepData of Object.values(snapshot.stepHotStates)) {
       const stepParsed = StepHotStateSchema.safeParse(stepData);
@@ -58,8 +73,6 @@ export async function rehydratePausedRun(
       }
     }
   }
-
-  return runParsed.data;
 }
 
 /**

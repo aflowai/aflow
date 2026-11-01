@@ -103,8 +103,9 @@ const ACTIVATION_WRITERS: readonly Writer[] = [
   {
     file: `${H}/sessionWakeup.ts`,
     write: 'activatedByPerson: attendedAsActingRun(state)',
+    times: 2,
     acts: 'run',
-    why: 'A run the session started without waiting reports in and wakes it; that run acts as the session anchoring it is now.',
+    why: 'A run the session started without waiting reports in and wakes it, or a wait the session declared ends (Plan 339 D1); either way the session is woken as it is now.',
   },
   {
     file: `${SO}/handlers/inlineOps/coachCrud.ts`,

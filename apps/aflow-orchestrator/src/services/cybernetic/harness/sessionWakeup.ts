@@ -11,6 +11,7 @@ import {
   mayWake,
   returnEventDrivenTurn,
   scheduleShardTimer,
+  sessionHasDeclaredWait,
   type SessionEvent,
   type SessionHotState,
   type StepHotState,
@@ -37,6 +38,7 @@ import type {
 } from '@aflow/schemas';
 import { attendedAsActingRun } from '../../SessionOrchestrator/handlers/inlineOps/actingRun.js';
 import { hasUnreadRunWakeups } from '../../SessionOrchestrator/helpers/runWakeups.js';
+import { hasUnreadWaitOutcomes } from '../../SessionOrchestrator/helpers/roomExchange.js';
 import { logOrchestratorError } from '../../../lib/orchestratorLogger.js';
 import type { HarnessDeps } from './types.js';
 
@@ -160,8 +162,8 @@ export async function deliverSessionWakeup(
 }
 
 /**
- * Start a turn for a session resting at its prompt with run wakeups it has not
- * read, the way a room message sent with `wake` does. Anything else — a turn
+ * Start a turn for a session resting at its prompt with run wakeups or wait
+ * outcomes it has not read, the way a room message sent with `wake` does. Anything else — a turn
  * in flight, a step parked on a child, an approval — reads them at its next
  * turn boundary instead, and settling there calls this again.
  */
@@ -193,13 +195,18 @@ export async function wakeSessionForRunWakeups(
 
   let unread: boolean;
   try {
-    unread = await hasUnreadRunWakeups(
-      deps.db,
-      deps.payloadStore,
-      tenantId,
-      sessionId,
-      step.inputRef,
-    );
+    unread =
+      (await hasUnreadRunWakeups(deps.db, deps.payloadStore, tenantId, sessionId, step.inputRef)) ||
+      // Only a session that has declared a wait can hold an outcome, so the
+      // room is read for one only where the session's wait mark stands.
+      ((await sessionHasDeclaredWait(deps.redis, tenantId, sessionId)) &&
+        (await hasUnreadWaitOutcomes(
+          deps.db,
+          deps.payloadStore,
+          tenantId,
+          sessionId,
+          step.inputRef,
+        )));
   } catch (err) {
     if (options.armWakeOnStoreError !== true) throw err;
     // A session resting at its prompt has no turn boundary coming to read the
@@ -256,6 +263,66 @@ export async function wakeSessionForRunWakeups(
     await armEventWakeTimer(deps, tenantId, sessionId, state, step, slot.nextSlotAtMs);
     return 'rate_limited';
   }
+
+  const { firstSeen } = await dispatchResume(deps.db, deps.redis, resume);
+  if (!firstSeen) {
+    await returnEventDrivenTurn(deps.redis, tenantId, sessionId);
+    return 'coalesced';
+  }
+  return 'woke';
+}
+
+/**
+ * Start a turn for a session resting at its prompt because a wait it declared
+ * has ended (Plan 339 D1). Its outcome is already in the room, so there is no
+ * unread check here. A session not resting reads it at its next turn
+ * boundary, and a turn in flight that missed it is woken for it at its settle
+ * (`wakeSessionForRunWakeups`). `rate_limited` leaves the caller to try again on a later cycle.
+ */
+export async function wakeSessionForWait(
+  deps: HarnessDeps,
+  tenantId: TenantId,
+  sessionId: string,
+  waitId: string,
+): Promise<Exclude<SessionWakeupDelivery, 'read' | 'retrying'>> {
+  const stateResult = await getSessionStateSafe(deps.redis, tenantId, sessionId);
+  const state = stateResult.ok
+    ? stateResult.state
+    : await rehydratePausedRun(deps.redis, deps.db, tenantId, sessionId);
+  if (!state) return 'deferred';
+  const stepExecutionId = state.currentStepExecutionId;
+  const step = stepExecutionId ? await getStepState(deps.redis, tenantId, stepExecutionId) : null;
+  if (!stepExecutionId || !step || !mayWake(state, step)) return 'deferred';
+
+  const wakeKey = `wait-wake:${waitId}`;
+  const resume = {
+    tenantId,
+    sessionId: sessionId as SessionId,
+    stepExecutionId: stepExecutionId as StepExecutionId,
+    inputRef: EMPTY_RESUME_INPUT_REF,
+    idempotencyKey: wakeKey,
+    traceId: (state.traceId !== undefined && state.traceId.length > 0
+      ? state.traceId
+      : wakeKey) as TraceId,
+    activatedByPerson: attendedAsActingRun(state),
+  };
+
+  const claims = await resumeClaimsForStep(deps.db, { tenantId, sessionId, stepExecutionId });
+  if (claims.length > 0) {
+    // Someone is already advancing this boundary. When it is this wait's own
+    // claim, a delivery before this one claimed it and may have died before
+    // its send, so sending again is what wakes the session.
+    if (claims.includes(wakeKey)) await dispatchResume(deps.db, deps.redis, resume);
+    return 'coalesced';
+  }
+
+  const slot = await claimEventDrivenTurn(
+    deps.redis,
+    tenantId,
+    sessionId,
+    EVENT_DRIVEN_TURNS_PER_MINUTE,
+  );
+  if (!slot.taken) return 'rate_limited';
 
   const { firstSeen } = await dispatchResume(deps.db, deps.redis, resume);
   if (!firstSeen) {

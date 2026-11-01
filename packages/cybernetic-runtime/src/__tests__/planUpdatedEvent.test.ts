@@ -88,11 +88,11 @@ beforeEach(async () => {
 });
 
 describe('entity.plan.updated — once per committed write, after the commit', () => {
-  it('announces a create with the new node and its revision', async () => {
+  it('announces a create with the new node, its revision and its status', async () => {
     const node = await created();
     expect(since()).toEqual([
       'commit:insert',
-      ['entity.plan.updated', { nodeId: node.nodeId, revision: 1 }],
+      ['entity.plan.updated', { nodeId: node.nodeId, revision: 1, status: node.status }],
     ]);
   });
 
@@ -109,7 +109,10 @@ describe('entity.plan.updated — once per committed write, after the commit', (
     expect(updated.ok).toBe(true);
     expect(since()).toEqual([
       'commit:updateAtRevision',
-      ['entity.plan.updated', { nodeId: node.nodeId, revision: 2 }],
+      [
+        'entity.plan.updated',
+        { nodeId: node.nodeId, revision: 2, status: node.status, previousStatus: node.status },
+      ],
     ]);
 
     await updatePlanNode(ctx(), {
@@ -119,7 +122,10 @@ describe('entity.plan.updated — once per committed write, after the commit', (
     });
     expect(since()).toEqual([
       'commit:moveAtRevision',
-      ['entity.plan.updated', { nodeId: node.nodeId, revision: 3 }],
+      [
+        'entity.plan.updated',
+        { nodeId: node.nodeId, revision: 3, status: node.status, previousStatus: node.status },
+      ],
     ]);
   });
 
@@ -173,7 +179,33 @@ describe('entity.plan.updated — once per committed write, after the commit', (
     });
     expect(since()).toEqual([
       'commit:setDependencyAtRevision',
-      ['entity.plan.updated', { nodeId: waiting.nodeId, revision: 2 }],
+      [
+        'entity.plan.updated',
+        {
+          nodeId: waiting.nodeId,
+          revision: 2,
+          status: waiting.status,
+          previousStatus: waiting.status,
+        },
+      ],
+    ]);
+  });
+
+  it("announces a changed status with the status it left, which wakes the node's waiters (Plan 339 D1)", async () => {
+    const node = await created();
+    since();
+
+    const closed = await updatePlanNode(ctx(), {
+      nodeId: node.nodeId,
+      expectedRevision: 1,
+      status: 'done',
+      outcome: 'The page follows the plan.',
+    });
+    expect(closed.ok).toBe(true);
+    const announced = since().find((entry) => Array.isArray(entry));
+    expect(announced).toEqual([
+      'entity.plan.updated',
+      { nodeId: node.nodeId, revision: 2, status: 'done', previousStatus: node.status },
     ]);
   });
 });

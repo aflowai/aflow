@@ -1,5 +1,10 @@
 import type { Redis } from 'ioredis';
-import { type EntityEventEnvelope, EntityEventEnvelopeSchema } from '@aflow/schemas';
+import {
+  type EntityEventEnvelope,
+  EntityEventEnvelopeSchema,
+  waitEventOfEntityEvent,
+} from '@aflow/schemas';
+import { prepareWaitEventRecording, recordWaitEventInto } from './waits.js';
 
 // ============================================================================
 // Constants
@@ -125,6 +130,10 @@ function deserializeFromStream(fields: Record<string, string>): Record<string, u
  * only by a periodic re-read. Sharing the XADD's round trip removes that
  * failure class and costs two fewer round trips than issuing them in sequence.
  *
+ * An event that is also a wait event (Plan 339 D1) records itself for its
+ * waiters in the same transaction, so a waiter can never miss an event that
+ * reached the stream.
+ *
  * @returns The Redis stream message ID.
  */
 export async function appendEntityEvent(
@@ -140,15 +149,18 @@ export async function appendEntityEvent(
   const fields = serializeForStream(event);
   const channel = ENTITY_EVENTS_PUBSUB_CHANNEL(tenantId, spaceId);
 
-  const results = await redis
+  const waitEvent = waitEventOfEntityEvent(event);
+  if (waitEvent !== null) prepareWaitEventRecording(redis);
+  const multi = redis
     .multi()
     .xadd(streamKey, 'MAXLEN', '~', String(ENTITY_EVENTS_MAXLEN), '*', ...fields)
     .expire(streamKey, ENTITY_EVENTS_TTL_SECONDS)
     .publish(
       channel,
       JSON.stringify({ type: 'entity_event', spaceId, eventType: event.eventType, ts: Date.now() }),
-    )
-    .exec();
+    );
+  if (waitEvent !== null) recordWaitEventInto(multi, { tenantId, spaceId }, waitEvent);
+  const results = await multi.exec();
 
   const appended = results?.[0];
   if (!appended) {
