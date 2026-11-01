@@ -38,6 +38,7 @@ export function buildSpaceActionCenterAggregator(
   };
   return buildAggregator({
     db: deps.db,
+    redis: deps.redis,
     decisionPlane: createDecisionPlaneStore(deps.db),
     sources: [
       createPausedStepSource({ ...sourceDeps, sessionService: deps.sessionService }),

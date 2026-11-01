@@ -496,6 +496,41 @@ export {
   relabelEntityEventStream104aForSpace,
 } from './entityEventsLegacyRelabel.js';
 
+export {
+  WAIT_WINDOWS_KEY,
+  WAIT_FIRED_SUBJECTS_KEY,
+  WAIT_WAITERS_KEY,
+  WAIT_FIRED_KEY,
+  recordWaitEventInto,
+  recordWaitEvent,
+  readRecordedWaitEvent,
+  registerWait,
+  cancelWait,
+  claimFiredWaits,
+  claimClosedWindows,
+  rearmEndedWait,
+  type RegisterWaitResult,
+  type EndedWait,
+} from './waits.js';
+
+export {
+  PULL_REQUEST_WATCH_DUE_KEY,
+  PULL_REQUEST_WATCH_TTL_SECONDS,
+  PULL_REQUEST_WATCH_KEY,
+  PULL_REQUEST_WATCH_LEASE_KEY,
+  PullRequestWatchSchema,
+  PullRequestReadStateSchema,
+  PullRequestChecksStateSchema,
+  armPullRequestWatch,
+  clearPullRequestWatch,
+  savePullRequestWatch,
+  claimDuePullRequestWatches,
+  countPullRequestWatches,
+  type PullRequestWatch,
+  type PullRequestReadState,
+  type PullRequestChecksState,
+} from './pullRequestWatch.js';
+
 // Re-export Redis type for convenience
 export type { Redis } from 'ioredis';
 

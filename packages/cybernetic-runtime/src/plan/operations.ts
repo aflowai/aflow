@@ -178,8 +178,9 @@ async function written<T>(ctx: PlanWriteContext, value: T): Promise<T> {
  */
 async function planWritten<T>(
   ctx: PlanWriteContext,
-  node: { nodeId: string; revision: number },
+  node: { nodeId: string; revision: number; status?: string },
   value: T,
+  previousStatus?: string,
 ): Promise<T> {
   await written(ctx, value);
   await emitPlanUpdated(ctx.redis, {
@@ -187,6 +188,8 @@ async function planWritten<T>(
     spaceId: ctx.spaceId,
     nodeId: node.nodeId,
     revision: node.revision,
+    ...(node.status !== undefined ? { status: node.status } : {}),
+    ...(previousStatus !== undefined ? { previousStatus } : {}),
   });
   return value;
 }
@@ -199,13 +202,15 @@ async function planWritten<T>(
 async function nodeWritten<T extends { node: PlanNode }>(
   ctx: PlanWriteContext,
   value: T,
+  /** The node's status before the write, so a changed status wakes its waiters (Plan 339 D1). */
+  previousStatus?: string,
 ): Promise<T> {
   publishActionCenterWake(ctx.redis, {
     source: 'plan_node_write',
     tenantId: ctx.tenantId,
     spaceId: ctx.spaceId,
   });
-  return planWritten(ctx, value.node, value);
+  return planWritten(ctx, value.node, value, previousStatus);
 }
 
 // ============================================================================
@@ -505,7 +510,7 @@ async function writePlanNode(
         );
         if (!updated) return stale(current, input);
         waiting = updated;
-        await nodeWritten(ctx, { node: waiting });
+        await nodeWritten(ctx, { node: waiting }, current.status);
       }
       const record = await askedRevision(ctx, waiting.nodeId);
       if (!isAsked(waiting, record)) await claimAsk(ctx, waiting, record, false);
@@ -584,11 +589,11 @@ async function writePlanNode(
     return now ? stale(now, input) : notFound(input.nodeId);
   }
   const linkFailure = await linkConversation(ctx, node);
-  const written = await nodeWritten(ctx, {
-    ok: true as const,
-    node,
-    ...(linkFailure !== undefined ? { linkFailure } : {}),
-  });
+  const written = await nodeWritten(
+    ctx,
+    { ok: true as const, node, ...(linkFailure !== undefined ? { linkFailure } : {}) },
+    current.status,
+  );
   if (isClosedPlanNodeStatus(current.status) || node.status !== 'done') return written;
   try {
     const carrier = await proposeCarrier(ctx, node);
@@ -1372,11 +1377,15 @@ export async function dependPlanNode(
   );
   switch (write.outcome) {
     case 'written':
-      return nodeWritten(ctx, {
-        ok: true as const,
-        node: write.node,
-        ...(write.dependency !== undefined ? { dependency: write.dependency } : {}),
-      });
+      return nodeWritten(
+        ctx,
+        {
+          ok: true as const,
+          node: write.node,
+          ...(write.dependency !== undefined ? { dependency: write.dependency } : {}),
+        },
+        current.status,
+      );
     case 'stale': {
       // Another session wrote the node between the read and this write.
       const now = await ctx.store.find(ctx.spaceId, input.nodeId);

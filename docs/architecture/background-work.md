@@ -9,7 +9,7 @@ Production background discovery must be event- or candidate-driven. A task may n
 work by scanning the Redis keyspace, reading a whole dirty set, or enumerating tenant schemas;
 idle cost may not grow with logical shards, tenants, stored keys, or connected subscribers.
 
-**47 registered tasks** across 8 services.
+**49 registered tasks** across 8 services.
 2 task(s) still carry a residual poll — a periodic datastore read that
 exists only because an event or candidate path is incomplete.
 
@@ -19,7 +19,7 @@ Datastore operations per minute with zero due work, grouped by what each scope m
 
 | Execution scope | Multiplies by | Operations/minute |
 | --------------- | ------------- | ----------------: |
-| per_instance | per live process | 355 |
+| per_instance | per live process | 380 |
 | singleton | once per fleet | 20 |
 | shard_owner | per shard-owning orchestrator | 626 |
 | active_subscription | per active subscription | 120 |
@@ -55,6 +55,7 @@ Datastore operations per minute with zero due work, grouped by what each scope m
 | `orchestrator.orphan_recovery` | orchestrator | correctness | audit | per_instance | event-driven | 0 | never |
 | `orchestrator.pending_recovery` | orchestrator | correctness | candidate | shard_owner | 30s | 258 | never |
 | `orchestrator.projection` | orchestrator | correctness | candidate | singleton | 3s | 20 | breakglass |
+| `orchestrator.pull_request_events` | orchestrator | feature | candidate | per_instance | 1m | 1 | safe |
 | `orchestrator.resident_due_check` | orchestrator | feature | candidate | per_instance | 15s | 0 | safe |
 | `orchestrator.result_consumer` | orchestrator | correctness | blocking | shard_owner | event-driven | 120 | never |
 | `orchestrator.schedule_dispatch` | orchestrator | feature | candidate | per_instance | 15s | 4 | safe |
@@ -64,6 +65,7 @@ Datastore operations per minute with zero due work, grouped by what each scope m
 | `orchestrator.step_stall_watchdog` | orchestrator | correctness | candidate | shard_owner | 30s | 2 | never |
 | `orchestrator.stream_retention` | orchestrator | operational | candidate | per_instance | 1m | 1 | safe |
 | `orchestrator.timer_dispatch` | orchestrator | correctness | candidate | shard_owner | 1s | 120 | never |
+| `orchestrator.wait_delivery` | orchestrator | feature | candidate | per_instance | 5s | 24 | safe |
 | `orchestrator.workflow_harness_advance` | orchestrator | correctness | blocking | per_instance | event-driven | 60 | never |
 | `orchestrator.workflow_progress` | orchestrator | feature | blocking | per_instance | event-driven | 120 | safe |
 | `orchestrator.workflow_run_reconcile` | orchestrator | correctness | candidate | per_instance | 10s | 6 | never |
@@ -820,6 +822,34 @@ Datastore operations per minute with zero due work, grouped by what each scope m
 
 > One claim EVAL per cycle whether or not anything is due, and it returns only what is due, so cost tracks the backlog rather than how many sessions exist. Version and due time are separate scores on separate indexes: sharing one would force a choice between starving a session that changes often and losing two marks that land in the same millisecond. The attempt ceiling lives on the failure record rather than in the process, so it survives a restart and means the same thing on five instances as on one. This is also where an on_completion schedule fires: recording its occurrences inside the transaction that stamps the run as fired makes the pair retriable, and it reaches every terminal writer rather than the two that remembered to call it. Durable events flush incrementally — for running sessions too — from a per-session cursor on the session row, advanced only in the transaction that inserts them, so the stream MAXLEN cap is a memory backstop rather than a retention policy.
 
+### `orchestrator.pull_request_events`
+
+**Purpose.** Poll the pull requests the loop has open and emit pull_request.changed when one goes green, merges, conflicts or has changes requested.
+
+**Invariant.** Only a pull request a publication opened is polled, until it merges or closes. With none open the task makes no GitHub request.
+
+**Recovery.** A poll that fails leaves the candidate due at the next cadence. A missed event leaves a waiter to its window, which wakes it and tells it so. A candidate whose clear was lost expires after fourteen days without a poll.
+
+| Field | Value |
+| ----- | ----- |
+| Service | orchestrator |
+| Owner domain | plans |
+| Criticality | feature |
+| Trigger | candidate |
+| Execution scope | per_instance |
+| Substrate | redis-zset |
+| Base cadence | 1m |
+| Max batch | 20 |
+| Max cycle | 30000 ms |
+| Idle datastore ops/min | 1 |
+| Hot-path producer budget | 0 added RTT — The publication's run-end hook arms the candidate after the run's terminal write; nothing joins a step's path. |
+| Feature gate | — |
+| Disable policy | safe |
+| Residual poll | — |
+| Source | `apps/aflow-orchestrator/src/services/pullRequestEvents/source.ts`<br>`apps/aflow-orchestrator/src/services/pullRequestEvents/github.ts`<br>`apps/aflow-orchestrator/src/services/pullRequestEvents/arm.ts`<br>`packages/redis/src/pullRequestWatch.ts` |
+
+> Each poll is conditional: the task keeps each answer's ETag and sends it back as If-None-Match, so an unchanged pull request answers 304, which GitHub says does not count against the primary rate limit. Three reads per pull request — the pull request, its head's check runs and its reviews. The 60-second cadence is proposed and still to be measured (Plan 339 P2). One range read per cycle when nothing is armed.
+
 ### `orchestrator.resident_due_check`
 
 **Purpose.** Read the plan board before a resident occurrence starts a model session.
@@ -1071,6 +1101,34 @@ Datastore operations per minute with zero due work, grouped by what each scope m
 | Source | `apps/aflow-orchestrator/src/services/SessionOrchestrator/scheduling/timers.ts`<br>`packages/redis/src/streams/shardTimers.ts`<br>`apps/aflow-orchestrator/src/services/ResultConsumer.ts` |
 
 > One indexed claim per second regardless of how many shards are owned. A claim leases the timer rather than deleting it, so a worker that dies before dispatching does not lose the wake-up.
+
+### `orchestrator.wait_delivery`
+
+**Purpose.** Wake each waiter of the wait primitive when its event arrives or its window closes, and tell it which ended the wait.
+
+**Invariant.** A declared wait ends exactly once: by its event, or by its window closing with no event. A waiter registered after its event fired is woken at once by its own declaration.
+
+**Recovery.** A wait whose delivery fails is put back, its event subject or its window due again, and the next cycle delivers it. A wait claimed by another instance is woken by that instance only.
+
+| Field | Value |
+| ----- | ----- |
+| Service | orchestrator |
+| Owner domain | cybernetic |
+| Criticality | feature |
+| Trigger | candidate |
+| Execution scope | per_instance |
+| Substrate | redis-zset |
+| Base cadence | 5s |
+| Max batch | 50 |
+| Max cycle | 30000 ms |
+| Idle datastore ops/min | 24 |
+| Hot-path producer budget | 0 added RTT — A wait event records itself inside the transaction that appends its entity event; a declaration is the step it runs in. |
+| Feature gate | — |
+| Disable policy | safe |
+| Residual poll | — |
+| Source | `apps/aflow-orchestrator/src/services/waits/waitDelivery.ts`<br>`packages/cybernetic-runtime/src/waits.ts`<br>`packages/redis/src/waits.ts`<br>`packages/redis/src/entityEvents.ts` |
+
+> Two range reads per cycle when nothing is due — the fired subjects and the windows due — flat in tenants, spaces, waits and stored keys. A woken waiter is told in its conversation and woken the way a run it started wakes it, at the event-driven turn rate.
 
 ### `orchestrator.workflow_harness_advance`
 

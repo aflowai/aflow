@@ -266,6 +266,57 @@ export async function wakeSessionForRunWakeups(
 }
 
 /**
+ * Start a turn for a session resting at its prompt because a wait it declared
+ * has ended (Plan 339 D1). Its outcome is already in the room, so there is no
+ * unread check: a session not resting reads it at its next turn boundary.
+ * `rate_limited` leaves the caller to try again on a later cycle.
+ */
+export async function wakeSessionForWait(
+  deps: HarnessDeps,
+  tenantId: TenantId,
+  sessionId: string,
+  waitId: string,
+): Promise<Exclude<SessionWakeupDelivery, 'read' | 'retrying'>> {
+  const stateResult = await getSessionStateSafe(deps.redis, tenantId, sessionId);
+  const state = stateResult.ok
+    ? stateResult.state
+    : await rehydratePausedRun(deps.redis, deps.db, tenantId, sessionId);
+  if (!state) return 'deferred';
+  const stepExecutionId = state.currentStepExecutionId;
+  const step = stepExecutionId ? await getStepState(deps.redis, tenantId, stepExecutionId) : null;
+  if (!stepExecutionId || !step || !mayWake(state, step)) return 'deferred';
+
+  const claims = await resumeClaimsForStep(deps.db, { tenantId, sessionId, stepExecutionId });
+  if (claims.length > 0) return 'coalesced';
+
+  const slot = await claimEventDrivenTurn(
+    deps.redis,
+    tenantId,
+    sessionId,
+    EVENT_DRIVEN_TURNS_PER_MINUTE,
+  );
+  if (!slot.taken) return 'rate_limited';
+
+  const wakeKey = `wait-wake:${waitId}`;
+  const { firstSeen } = await dispatchResume(deps.db, deps.redis, {
+    tenantId,
+    sessionId: sessionId as SessionId,
+    stepExecutionId: stepExecutionId as StepExecutionId,
+    inputRef: EMPTY_RESUME_INPUT_REF,
+    idempotencyKey: wakeKey,
+    traceId: (state.traceId !== undefined && state.traceId.length > 0
+      ? state.traceId
+      : wakeKey) as TraceId,
+    activatedByPerson: attendedAsActingRun(state),
+  });
+  if (!firstSeen) {
+    await returnEventDrivenTurn(deps.redis, tenantId, sessionId);
+    return 'coalesced';
+  }
+  return 'woke';
+}
+
+/**
  * Arm the session's next event-driven slot. A timer's id is its step and
  * reason, so wakeups deferred on the same pause share one timer.
  */
