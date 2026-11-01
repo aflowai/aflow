@@ -183,6 +183,38 @@ const markdownComponentsJsonTree: ComponentPropsWithoutRef<typeof ReactMarkdown>
 /** Singleton plugin array — avoids re-creating on every render */
 const remarkPlugins = [remarkGfm];
 
+interface MarkdownTreeNode {
+  type: string;
+  value?: string;
+  children?: MarkdownTreeNode[];
+}
+
+function breakEveryLine(node: MarkdownTreeNode): void {
+  if (node.children === undefined) return;
+  node.children = node.children.flatMap((child): MarkdownTreeNode[] => {
+    if (child.type !== 'text' || child.value?.includes('\n') !== true) {
+      breakEveryLine(child);
+      return [child];
+    }
+    return child.value
+      .split('\n')
+      .flatMap((line, i): MarkdownTreeNode[] => [
+        ...(i > 0 ? [{ type: 'break' }] : []),
+        ...(line.length > 0 ? [{ type: 'text', value: line }] : []),
+      ]);
+  });
+}
+
+/**
+ * Turns each soft line break into a hard one, so text written one entry per
+ * line, joined by a single newline, keeps its lines. Code keeps its own newlines.
+ */
+function remarkBreakEveryLine() {
+  return breakEveryLine;
+}
+
+const lineBreakRemarkPlugins = [remarkGfm, remarkBreakEveryLine];
+
 export interface MarkdownRendererProps {
   /** Markdown source text */
   content: string;
@@ -192,6 +224,8 @@ export interface MarkdownRendererProps {
   style?: CSSProperties | undefined;
   /** Render JSON fenced code blocks as interactive JsonViewer trees */
   jsonTree?: boolean;
+  /** Break the line at every newline, for text written one entry per line */
+  lineBreaks?: boolean;
 }
 
 /**
@@ -211,12 +245,16 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
   className = '',
   style,
   jsonTree = false,
+  lineBreaks = false,
 }: MarkdownRendererProps) {
   const components = jsonTree ? markdownComponentsJsonTree : markdownComponents;
 
   return (
     <div className={`md-content ${className}`} style={style}>
-      <ReactMarkdown remarkPlugins={remarkPlugins} components={components}>
+      <ReactMarkdown
+        remarkPlugins={lineBreaks ? lineBreakRemarkPlugins : remarkPlugins}
+        components={components}
+      >
         {content}
       </ReactMarkdown>
     </div>
