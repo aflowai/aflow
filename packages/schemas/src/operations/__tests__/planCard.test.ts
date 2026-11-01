@@ -205,12 +205,12 @@ describe('card on the node record and its writes', () => {
   it('returns a card in the schema’s section order, whatever order it was stored in', () => {
     const stored = Object.fromEntries(Object.entries(PLAN_337_CARD).reverse());
     const read = readStoredPlanNodeCard(stored);
-    expect('card' in read && Object.keys(read.card)).toEqual(
-      Object.keys(PlanNodeCardSchema.innerType().shape),
+    // An optional section the card leaves out, `waitsOn`, is absent from the read too.
+    const order = Object.keys(PlanNodeCardSchema.innerType().shape).filter(
+      (key) => key in PLAN_337_CARD,
     );
-    expect(Object.keys(planNodeCardInOrder(stored as PlanNodeCard))).toEqual(
-      Object.keys(PlanNodeCardSchema.innerType().shape),
-    );
+    expect('card' in read && Object.keys(read.card)).toEqual(order);
+    expect(Object.keys(planNodeCardInOrder(stored as PlanNodeCard))).toEqual(order);
   });
 
   it('reads a stored card the schema now refuses as no card, with the refusal', () => {

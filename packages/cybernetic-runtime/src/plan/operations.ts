@@ -29,7 +29,9 @@ import {
   OPEN_PLAN_NODE_STATUSES,
   PLAN_NODE_LIVE_CHECK_HEAD,
   PLAN_NODE_PROPOSED_HEAD,
+  PLAN_NODE_ASK_HEAD,
   planNodeCardInOrder,
+  planNodeCreatedStatus,
   type CoachLearning,
   type PlanNode,
   type PlanNodeCreateInput,
@@ -255,21 +257,25 @@ function createdNoteTooLong(noteLength: number): PlanOpError {
 }
 
 /**
- * A node a person or a conversation writes is `active`. A proposal (Plan 331
- * D5) and a live check (D8) are created `blocked`, their first line saying
- * what they wait on; a resident wake writes no other kind.
+ * A node starts as `planNodeCreatedStatus` says (Plan 339 D6): approved work
+ * `active`, and `blocked` only for a proposal (Plan 331 D5), a live check (D8)
+ * or a card whose `waitsOn` names the operator's decision. A blocked node's
+ * first line says what it waits on. A resident wake writes no `active` node.
  */
 export async function createPlanNode(
   ctx: PlanWriteContext,
   input: PlanNodeCreateInput,
 ): Promise<PlanOpResult<{ node: PlanNode }>> {
   const parentId = input.parentId ?? null;
+  const waitsOn = input.card?.waitsOn;
   const head =
     input.proposed !== undefined
       ? `${PLAN_NODE_PROPOSED_HEAD}${input.proposed}`
       : input.liveCheck !== undefined
         ? liveCheckHead(input.liveCheck)
-        : undefined;
+        : waitsOn !== undefined
+          ? `${PLAN_NODE_ASK_HEAD}${waitsOn.decision.replace(/\s*\n\s*/g, ' ')}`
+          : undefined;
   if (ctx.resident === true && head === undefined) return residentCreates();
   const given = input.note !== undefined && input.note !== '' ? input.note : null;
   const note = head === undefined ? given : given === null ? head : `${head}\n${given}`;
@@ -286,7 +292,7 @@ export async function createPlanNode(
     ...(input.card !== undefined ? { card: input.card } : {}),
     ...(input.position !== undefined ? { position: input.position } : {}),
     createdBy: ctx.createdBy ?? null,
-    ...(head !== undefined ? { status: 'blocked' as const } : {}),
+    status: planNodeCreatedStatus(input),
   });
   if (inserted.outcome === 'inserted') {
     return nodeWritten(ctx, { ok: true as const, node: inserted.node });
@@ -355,7 +361,7 @@ async function proposeCarrier(
   if (!read) return undefined;
   const { findings, more } = read;
   const inserted = await ctx.store.insert(ctx.spaceId, {
-    ...carrierNode(closed, findings, more),
+    ...carrierNode(closed, findings, more, { resident: ctx.resident === true }),
     createdBy: ctx.createdBy ?? null,
   });
   // The parent the closed node sat under is gone since its close: there is nowhere to propose it.
@@ -599,7 +605,7 @@ async function writePlanNode(
     );
     return {
       ...written,
-      carrierFailure: `Carrier failed for closed node ${node.nodeId}. Read its linked findings and propose a blocked carrier.`,
+      carrierFailure: `Carrier failed for closed node ${node.nodeId}. Read its linked findings and create a step that carries them.`,
     };
   }
 }
