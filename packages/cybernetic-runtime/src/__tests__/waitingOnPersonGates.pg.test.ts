@@ -7,9 +7,11 @@
  * the pause type. A consent a workflow run owns is the run's alone. A paused
  * workflow task is a human task where its hydration is stamped for the pause
  * or its definition resolves to a human task, and a write approval where it
- * holds the run's pause and asks for one. The suite runs only where
- * DATABASE_URL names a Postgres database whose tenant schema holds the tables
- * it reads, and it skips otherwise.
+ * holds the run's pause and asks for one. The suite runs wherever
+ * DATABASE_URL names a migrated Postgres database, CI's included. It makes a
+ * tenant of its own, row and schema, and drops both after, so it needs no
+ * seeded tenant and counts no other tenant's requests. It skips only where
+ * DATABASE_URL is unset, and fails where the tenant cannot be made.
  *
  * The sources live in `@aflow/server-runtime`, which depends on this package,
  * so this suite cannot call their `listOpen`. Each fixture pins one source
@@ -35,11 +37,13 @@
  *   space's.
  */
 import { randomUUID } from 'node:crypto';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { eq, inArray } from 'drizzle-orm';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { eq } from 'drizzle-orm';
 import {
   createDatabase,
   createTenantContext,
+  createTenantSchema,
+  dropTenantSchema,
   egressApprovalRequests,
   sessions,
   spaces,
@@ -76,7 +80,8 @@ vi.mock('@aflow/database', async () => {
 });
 
 const DATABASE_URL = process.env['DATABASE_URL'];
-const TENANT_ID = 'a0000000-0000-0000-0000-000000000001' as TenantId;
+/** A tenant made for one run of the suite, so two runs never share one. */
+const TENANT_ID = `d2a7e000-0000-4000-8000-${randomUUID().slice(-12)}` as TenantId;
 const TENANT_SCHEMA = tenantIdToSchemaName(TENANT_ID);
 const SPACE_ID = randomUUID();
 const SLUG = `waiting-${SPACE_ID.slice(0, 8)}`;
@@ -107,10 +112,6 @@ function pausedSnapshot(
 describeDb('readWaitingGates — counts over the tables the sources read (real DB)', () => {
   const handle = createDatabase({ connectionString: DATABASE_URL ?? '' });
   const tenant = createTenantContext(TENANT_ID);
-  const spaceIds: string[] = [];
-  const sessionIds: string[] = [];
-  const runIds: string[] = [];
-  const egressIds: string[] = [];
   let clock = Date.parse('2026-11-01T00:00:00.000Z');
 
   /** A later instant on every call, so the newest item is the one just written. */
@@ -119,45 +120,36 @@ describeDb('readWaitingGates — counts over the tables the sources read (real D
     return new Date(clock);
   }
 
-  let tablesPresent = false;
-
+  // Not active, so nothing that walks the live tenants (a dev orchestrator's
+  // claims, a migration run) takes it up while the suite holds it.
   beforeAll(async () => {
+    await handle.sql`
+      INSERT INTO public.tenants (tenant_id, schema_name, name, status)
+      VALUES (${TENANT_ID}, ${TENANT_SCHEMA}, 'Waiting gates suite', 'suspended')`;
+    await createTenantSchema(handle.sql, TENANT_ID);
     const rows = await handle.sql<{ present: number }[]>`
       SELECT count(*)::int AS present FROM information_schema.tables
       WHERE (table_schema = ${TENANT_SCHEMA}
               AND table_name IN ('spaces', 'sessions', 'workflow_runs', 'workflow_run_tasks'))
          OR (table_schema = 'public' AND table_name = 'egress_approval_requests')`;
-    tablesPresent = rows[0]?.present === 5;
-  });
-
-  beforeEach((test) => {
-    if (!tablesPresent) test.skip();
-  });
+    if (rows[0]?.present !== 5) {
+      throw new Error(
+        `The tenant schema ${TENANT_SCHEMA} lacks the tables the gate queries read. Run yarn db:migrate on DATABASE_URL first.`,
+      );
+    }
+  }, 120_000);
 
   afterAll(async () => {
-    if (!tablesPresent) {
+    try {
+      await dropTenantSchema(handle.sql, TENANT_ID);
+      // Its egress requests go with it, by the foreign key.
+      await handle.sql`DELETE FROM public.tenants WHERE tenant_id = ${TENANT_ID}`;
+    } finally {
       await handle.close();
-      return;
     }
-    await withTenantSchema(handle.db, tenant, async (tx) => {
-      if (sessionIds.length > 0)
-        await tx.delete(sessions).where(inArray(sessions.sessionId, sessionIds));
-      if (runIds.length > 0)
-        await tx.delete(workflowRunTasks).where(inArray(workflowRunTasks.runId, runIds));
-      if (spaceIds.length > 0) {
-        await tx.delete(workflowRuns).where(inArray(workflowRuns.spaceId, spaceIds));
-        await tx.delete(spaces).where(inArray(spaces.id, spaceIds));
-      }
-    });
-    if (egressIds.length > 0)
-      await handle.db
-        .delete(egressApprovalRequests)
-        .where(inArray(egressApprovalRequests.requestId, egressIds));
-    await handle.close();
-  });
+  }, 60_000);
 
   async function space(id: string = randomUUID()): Promise<string> {
-    spaceIds.push(id);
     await withTenantSchema(handle.db, tenant, (tx) =>
       tx
         .insert(spaces)
@@ -173,7 +165,6 @@ describeDb('readWaitingGates — counts over the tables the sources read (real D
   ): Promise<{ sessionId: string; itemId: string }> {
     const sessionId = randomUUID();
     const stepExecutionId = randomUUID();
-    sessionIds.push(sessionId);
     await withTenantSchema(handle.db, tenant, (tx) =>
       tx.insert(sessions).values({
         sessionId,
@@ -205,7 +196,6 @@ describeDb('readWaitingGates — counts over the tables the sources read (real D
     },
   ): Promise<string> {
     const runId = randomUUID();
-    runIds.push(runId);
     const pauseVersion = params.pauseVersion ?? 1;
     const at = tick();
     await withTenantSchema(handle.db, tenant, async (tx) => {
@@ -289,17 +279,13 @@ describeDb('readWaitingGates — counts over the tables the sources read (real D
         pausedPayloadRef: inline({ oauthConsent: { resourceKey: 'hubspot', bindingId: 'b-3' } }),
       }),
     );
-    const [egress] = await handle.db
-      .insert(egressApprovalRequests)
-      .values({
-        tenantId: TENANT_ID,
-        scope: 'space',
-        spaceId: SPACE_ID,
-        requestedHosts: ['pypi.org', 'files.pythonhosted.org'],
-        requestedBy: 'agent',
-      })
-      .returning({ requestId: egressApprovalRequests.requestId });
-    egressIds.push(egress!.requestId);
+    await handle.db.insert(egressApprovalRequests).values({
+      tenantId: TENANT_ID,
+      scope: 'space',
+      spaceId: SPACE_ID,
+      requestedHosts: ['pypi.org', 'files.pythonhosted.org'],
+      requestedBy: 'agent',
+    });
 
     const before = await readWaitingGates({
       db: handle.db,
@@ -429,7 +415,6 @@ describeDb('readWaitingGates — counts over the tables the sources read (real D
     // the source's window, and it drops each of them.
     const newer = Array.from({ length: 200 }, () => {
       const runId = randomUUID();
-      runIds.push(runId);
       return {
         spaceId,
         workflowSlug: 'sync-crm',

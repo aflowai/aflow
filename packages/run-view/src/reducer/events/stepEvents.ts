@@ -4,6 +4,7 @@ import type {
   InlineAppletItem,
   InlineArtifactItem,
   InlineHitlPayload,
+  InlineProposalFocusPayload,
   InlineSurfaceItem,
   Message,
   SessionEvent,
@@ -21,6 +22,17 @@ import {
 } from '../helpers.js';
 
 import type { SseEventContext } from './sessionLifecycle.js';
+
+const LISTED_FOCUS_KINDS: ReadonlySet<string> = new Set(['plan_step', 'run_gate', 'consent']);
+
+/** The listing a focus step's output carries, where it is well formed. */
+function listedFocusItem(value: unknown): InlineProposalFocusPayload['listed'] {
+  if (value === null || typeof value !== 'object') return undefined;
+  const { kind, title } = value as Record<string, unknown>;
+  if (typeof kind !== 'string' || !LISTED_FOCUS_KINDS.has(kind)) return undefined;
+  if (typeof title !== 'string' || title.length === 0) return undefined;
+  return { kind: kind as NonNullable<InlineProposalFocusPayload['listed']>['kind'], title };
+}
 
 /**
  * A surface step that generated nothing still gets its card, saying why —
@@ -97,7 +109,9 @@ export function applyStepEvents(
         const itemId = typeof obj.itemId === 'string' ? obj.itemId : null;
         if (itemId) {
           const focusMsgId = `inline-focus-${itemId}`;
-          if (!next.messages.some((m) => m.id === focusMsgId)) {
+          const listed = listedFocusItem(obj.listed);
+          const existing = next.messages.findIndex((m) => m.id === focusMsgId);
+          if (existing < 0) {
             const focusMsg: Message = {
               id: focusMsgId,
               role: 'assistant',
@@ -106,10 +120,21 @@ export function applyStepEvents(
               richContent: {
                 itemId,
                 ...(typeof obj.reason === 'string' ? { reason: obj.reason } : {}),
+                ...(listed ? { listed } : {}),
               },
               timestamp: toISOTimestamp(event.timestamp),
             };
             next = { ...next, messages: [...next.messages, focusMsg] };
+          } else if (listed) {
+            // The live focus signal mounts the card first and carries no
+            // listing, so the step's output adds the title it named.
+            const prior = next.messages[existing];
+            const payload = (prior.richContent ?? { itemId }) as InlineProposalFocusPayload;
+            if (!payload.listed) {
+              const messages = [...next.messages];
+              messages[existing] = { ...prior, richContent: { ...payload, listed } };
+              next = { ...next, messages };
+            }
           }
         }
       }

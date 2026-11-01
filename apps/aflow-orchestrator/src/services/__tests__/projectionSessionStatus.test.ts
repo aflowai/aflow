@@ -20,6 +20,8 @@ const hot = vi.hoisted(() => ({
   signals: [] as Array<{ spaceId: string; eventType: string; payload: unknown }>,
   /** The spaces whose attention generation moved, in order. */
   bumps: [] as string[],
+  /** The durable row as the projection finds it before it writes. */
+  row: { status: null as string | null, currentStepExecutionId: null as string | null },
 }));
 
 vi.mock('@aflow/redis', async () => {
@@ -77,7 +79,7 @@ vi.mock('@aflow/database', async () => {
     });
   const tx = {
     insert: () => chain([{ sessionId: SESSION }]),
-    select: () => chain([{ cursor: null, status: null }]),
+    select: () => chain([{ cursor: null, ...hot.row }]),
     update: () => chain([]),
   };
   return {
@@ -103,7 +105,7 @@ vi.mock('../pauseNotificationRouter.js', () => ({
 }));
 vi.mock('../errorReportAssembly.js', () => ({ assembleErrorReport: () => Promise.resolve() }));
 
-const { createProjectionWorker, movesSessionPause, movesSessionStatus } =
+const { createProjectionWorker, movesSessionGate, movesSessionStatus } =
   await import('../ProjectionWorker.js');
 
 function session(status: string, extra: Partial<SessionHotState> = {}): SessionHotState {
@@ -132,6 +134,7 @@ async function project(state: SessionHotState, pending: string[]): Promise<void>
 beforeEach(() => {
   hot.signals = [];
   hot.bumps = [];
+  hot.row = { status: null, currentStepExecutionId: null };
 });
 
 describe("a conversation's status reaches the space", () => {
@@ -185,9 +188,10 @@ describe('which persisted events move a status', () => {
 
 // The attention block counts the space's paused sessions as gates and is
 // cached per space until its generation moves, so a gate the Helmsman has
-// approved must leave the next turn's count.
-describe("a session's pause and its resolution move the space's attention generation", () => {
-  it('moves it once the pause is durable', async () => {
+// approved must leave the next turn's count, and a new one must enter it.
+describe("a session row's pause and its resolution move the space's attention generation", () => {
+  it('moves it once the row reads PAUSED', async () => {
+    hot.row = { status: 'RUNNING', currentStepExecutionId: 'step-1' };
     await project(session('PAUSED', { parentSessionId: PARENT }), [
       'StepSucceeded',
       'SessionPaused',
@@ -196,7 +200,8 @@ describe("a session's pause and its resolution move the space's attention genera
     expect(hot.bumps).toEqual([SPACE]);
   });
 
-  it('moves it once the resume that resolves the gate is durable', async () => {
+  it('moves it once the row no longer reads PAUSED after the resume', async () => {
+    hot.row = { status: 'PAUSED', currentStepExecutionId: 'step-1' };
     await project(session('RUNNING', { parentSessionId: PARENT }), [
       'SessionResumed',
       'StepScheduled',
@@ -205,24 +210,33 @@ describe("a session's pause and its resolution move the space's attention genera
     expect(hot.bumps).toEqual([SPACE]);
   });
 
+  it('waits for the resting flush when the live projection flushes a pause its row does not hold', async () => {
+    hot.row = { status: 'RUNNING', currentStepExecutionId: 'step-1' };
+    await project(session('RUNNING'), ['StepSucceeded', 'SessionPaused']);
+    expect(hot.bumps).toEqual([]);
+
+    await project(session('PAUSED'), []);
+    expect(hot.bumps).toEqual([SPACE]);
+  });
+
   it('moves nothing for a projection of steps alone', async () => {
+    hot.row = { status: 'RUNNING', currentStepExecutionId: 'step-1' };
     await project(session('RUNNING'), ['StepScheduled', 'StepStarted', 'StepSucceeded']);
 
     expect(hot.bumps).toEqual([]);
   });
 
-  it('reads a pause, a resume or an end a paused session can reach, and nothing else', () => {
-    for (const eventType of [
-      'SessionPaused',
-      'SessionResumed',
-      'SessionCancelled',
-      'SessionFailed',
-    ]) {
-      expect(movesSessionPause({ eventType })).toBe(true);
-    }
-    for (const eventType of ['SessionStarted', 'SessionCompleted', 'StepSucceeded']) {
-      expect(movesSessionPause({ eventType })).toBe(false);
-    }
-    expect(movesSessionPause(null)).toBe(false);
+  it('reads an edge into or out of PAUSED, or a move to another pause, and nothing else', () => {
+    const paused = { status: 'PAUSED', currentStepExecutionId: 'step-1' };
+    expect(movesSessionGate(undefined, paused)).toBe(true);
+    expect(movesSessionGate({ status: 'RUNNING' }, paused)).toBe(true);
+    expect(movesSessionGate(paused, { status: 'RUNNING' })).toBe(true);
+    expect(movesSessionGate(paused, { status: 'CANCELLED' })).toBe(true);
+    expect(movesSessionGate(paused, { status: 'PAUSED', currentStepExecutionId: 'step-2' })).toBe(
+      true,
+    );
+    expect(movesSessionGate(paused, { ...paused })).toBe(false);
+    expect(movesSessionGate(undefined, { status: 'RUNNING' })).toBe(false);
+    expect(movesSessionGate({ status: 'RUNNING' }, { status: 'SUCCEEDED' })).toBe(false);
   });
 });

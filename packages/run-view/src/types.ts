@@ -227,6 +227,11 @@ export interface InlineProposalFocusPayload {
   itemId: string;
   /** Optional rationale shown alongside the card. */
   reason?: string;
+  /**
+   * The item as the agent's attention block listed it, from the focus step's
+   * output. The card shows this title when the live item cannot be read.
+   */
+  listed?: { kind: 'plan_step' | 'run_gate' | 'consent'; title: string };
 }
 
 export interface InlineHitlPayload {

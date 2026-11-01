@@ -259,6 +259,32 @@ export type HumanChatAskOutput = z.infer<typeof HumanChatAskOutputSchema>;
 // human.action_center.focus — surface an existing item in the active chat
 // ============================================================================
 
+/**
+ * The prefixes a focus `itemId` may carry, one per Action Center source an
+ * agent can name. The input pattern and the orchestrator's bare-id
+ * diagnostic both read this list, so a prefix added here reaches both.
+ */
+export const ACTION_CENTER_FOCUS_ITEM_ID_PREFIXES = [
+  'proposal',
+  'step',
+  'gate',
+  'settings',
+  'plan-ask',
+  'plan-decision',
+  'workflow-task',
+  'workflow-write-approval',
+  'workflow-oauth-consent',
+] as const;
+
+const FOCUS_ITEM_ID_PREFIX_PATTERN = new RegExp(
+  `^(${ACTION_CENTER_FOCUS_ITEM_ID_PREFIXES.join('|')}):`,
+);
+
+/** Whether an id starts with a prefix the focus takes, whatever follows it. */
+export function hasActionCenterFocusPrefix(itemId: string): boolean {
+  return FOCUS_ITEM_ID_PREFIX_PATTERN.test(itemId);
+}
+
 export const HumanActionCenterFocusInputSchema = z.object({
   /**
    * Action Center item id. MUST come from a listing operation
@@ -283,7 +309,7 @@ export const HumanActionCenterFocusInputSchema = z.object({
     .min(1)
     .max(256)
     .regex(
-      /^(proposal|step|gate|settings|plan-ask|plan-decision|workflow-task|workflow-write-approval|workflow-oauth-consent):.+/,
+      new RegExp(`${FOCUS_ITEM_ID_PREFIX_PATTERN.source}.+`),
       'itemId must be the prefixed id returned by a listing op (e.g. "proposal:<uuid>" from proposal.list, "step:<uuid>" from a paused HITL step, "plan-ask:<nodeId>" from your attention block). A bare UUID is never a valid Action Center item id — call proposal.list (or the relevant listing) and pass the `id` field verbatim. If no such item exists yet, switch to human.chat.ask instead.',
     ),
   /**
@@ -311,6 +337,17 @@ export const HumanActionCenterFocusOutputSchema = z.object({
    * turn and wait for their decision; they will resume this session."
    */
   note: z.string().optional(),
+  /**
+   * The item as the attention block listed it, where the handler found it
+   * there: its kind and its title. The operator's card shows this title
+   * when the live item cannot be read.
+   */
+  listed: z
+    .object({
+      kind: z.enum(['plan_step', 'run_gate', 'consent']),
+      title: z.string(),
+    })
+    .optional(),
 });
 export type HumanActionCenterFocusOutput = z.infer<typeof HumanActionCenterFocusOutputSchema>;
 
