@@ -187,7 +187,7 @@ The app keeps its records in a local store of its own, beside its configuration 
 - `inbound`: each Slack event id (unique), when it was sent, when it arrived, and its outcome.
 - `thread`: each Slack thread and the session it continues.
 - `card`: each card's Slack message reference and the item it shows.
-- `sent`: each step execution's `messageRef` and text, for D2's idempotency and repeat rule.
+- `sent`: each send's run, step, `messageRef` and text, for D2's idempotency and repeat rule.
 
 Removing the app and its store leaves nothing behind in the platform.
 
@@ -279,7 +279,8 @@ _Exit:_ "status?" sent from the phone gets the Helmsman's answer in its thread. 
 - **The refusal.** `addStepJob` throws `ChannelLaneAbsentError` (`LANE_NOT_COMPOSED`, `permission`, not retryable) for a `channel` step where the lane is absent. Every other step type passes through unchanged.
 - **The orchestrator changed, by one class.** Its dispatch paths caught `CodeLaneDisabledError` by name, so a channel refusal would have reached the agent as an internal error. `LaneRefusalError` is now the base of both refusals, and the four checks name it. The run lifecycle is unchanged.
 - **The operation.** `channel.message.send` takes `{ text }` only, strict. It is registered with the `whenToUse` and `whenNotToUse` D2 names, in the bundle `operator_messages`, and discoverable for the Helmsman. Migration 236 adds `channel.message` to the system profiles.
-- **Idempotency is keyed on the logical execution.** On a session's step that is the step execution, which a retry keeps. On a workflow task a retry is a new step execution, and the logical execution is what stays the same.
+- **Idempotency is keyed on the run and the logical execution.** On a session's step the logical execution is the step execution, which a retry keeps. On a workflow task a retry is a new step execution, and the logical execution is what stays the same. That id is `task:<taskId>` in every run of the task, so the run is part of the key. Without it, each later run of a workflow task returned the first run's `messageRef` and sent nothing.
+- **A post that drew no answer is not retried.** A transport failure or the fifteen-second timeout on `chat.postMessage` may follow Slack's acceptance. The step fails with `CHANNEL_DELIVERY_UNKNOWN`, not retryable, and says Slack may have posted it. The app records the send without a `messageRef`, so a later attempt at the step, or the same text again in the run, fails the same way and posts nothing. A transport failure on `conversations.open` posts nothing and stays retryable.
 - **Settings → Channels does not exist yet.** The not-linked error does not name it, though D2 asks for it. It names `yarn channel:slack setup` and the help article `/help/slack-channel`, which are how an operator links in P0. The operation's pitfall names setup too.
 - **The app** keeps `link` and `sent` in `~/.aflow/channel-slack.store.json`, mode 0600, with its own migration ledger. `inbound`, `thread` and `card` arrive with P1 and P2. Socket Mode handles direct messages for linking only. A linked operator who writes to the bot gets one fixed reply, because conversation is P2. The app reads the link code when it starts, so a code from a later setup run links only after the app restarts. Setup and the help article say so.
 - **D7's proofs.** `packages/schemas/src/edition/channelSlackAbsence.test.ts` fails on any file outside the app that imports it. The same file shows that nothing a build reads names the app once the cut's own transforms remove it. The app is not in the root `tsconfig.json` references, so `tsc -b` needs nothing from it. `ownershipGuard.test.ts` excuses an absent `optional-pack` path only where an edition absence guard names it, so the suite passes with the app deleted and still fails on a mistyped or stale pack path. `channelLaneDispatchGate.test.ts` and `helmsmanSurface.test.ts` hold the third proof.
@@ -291,6 +292,8 @@ _Exit:_ "status?" sent from the phone gets the Helmsman's answer in its thread. 
 - **Absent is absent.** D7's three proofs.
 - **The recipient is never chosen.** No `channel.*` operation accepts a user, chat or channel id, and a guard test fails on one that does.
 - **A retry posts once.** A step retried after its message was posted returns the first `messageRef`.
+- **Each run posts its own.** A second run of the same workflow task posts again, and a retried step within that run posts nothing.
+- **A lost answer posts once.** A timeout after Slack took the post fails not retryable, and neither a retry nor a resend of the text posts again.
 - **A repeat fails.** A second send of the same text in the same run fails, and the first is the only message posted.
 - **Free text approves nothing.** "yes" typed in a card's thread leaves the item open, and the app points to the button.
 - **The ceiling holds.** Every item outside the D3 table renders with no buttons, a plan decision and a plan ask included.

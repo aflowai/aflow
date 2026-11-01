@@ -9,7 +9,8 @@
  *
  * P0 keeps two record sets: `link`, the one Slack user this app serves, and
  * `sent`, each send's `messageRef` and text, which make a retried step post once
- * and a repeated message fail. A code that linked once is kept so it cannot link
+ * and a repeated message fail. A send is keyed on its run and its step, because
+ * a workflow task's step carries the same name in every run of it. A code that linked once is kept so it cannot link
  * a second time.
  *
  * Every write replaces the whole file through a rename, and every write is
@@ -31,11 +32,15 @@ export const LinkRecordSchema = z.object({
 export type LinkRecord = z.infer<typeof LinkRecordSchema>;
 
 export const SentRecordSchema = z.object({
-  /** The step's logical execution, stable across its retries. */
+  /**
+   * The step's logical execution, stable across its retries. On the workflow
+   * path it names the task and not the run, so a send is keyed on both.
+   */
   executionId: z.string().min(1),
   runId: z.string().min(1),
   text: z.string(),
-  messageRef: z.string().min(1),
+  /** Null when the post left but Slack's answer never came, so it may have posted. */
+  messageRef: z.string().min(1).nullable(),
   sentAt: z.string().min(1),
 });
 export type SentRecord = z.infer<typeof SentRecordSchema>;
@@ -141,8 +146,10 @@ export class ChannelStore {
     return true;
   }
 
-  sentFor(executionId: string): SentRecord | undefined {
-    return this.data.sent.find((record) => record.executionId === executionId);
+  sentFor(runId: string, executionId: string): SentRecord | undefined {
+    return this.data.sent.find(
+      (record) => record.runId === runId && record.executionId === executionId,
+    );
   }
 
   sentInRun(runId: string, text: string): SentRecord | undefined {

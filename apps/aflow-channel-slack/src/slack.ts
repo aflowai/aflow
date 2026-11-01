@@ -21,10 +21,16 @@ const RETRYABLE_SLACK_ERRORS: ReadonlySet<string> = new Set([
 ]);
 
 export class SlackApiError extends Error {
+  /**
+   * `outcomeUnknown` is true when the request left but no answer came back: a
+   * transport failure or the timeout. Slack may have acted on it, so a write
+   * method that failed this way may have taken effect.
+   */
   constructor(
     readonly method: string,
     readonly slackError: string,
     readonly retryable: boolean,
+    readonly outcomeUnknown = false,
   ) {
     super(`Slack refused ${method}: ${slackError}`);
     this.name = 'SlackApiError';
@@ -67,6 +73,7 @@ async function call(
     throw new SlackApiError(
       method,
       error instanceof Error ? error.message : 'the request did not complete',
+      true,
       true,
     );
   }

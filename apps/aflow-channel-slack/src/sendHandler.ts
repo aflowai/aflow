@@ -5,8 +5,13 @@
  * The rules, in the order they are asked:
  *
  * - A step whose message was already posted returns that message and posts
- *   nothing. Keyed on the logical execution, which a retry keeps, so a retry
- *   after a lost result posts once.
+ *   nothing. Keyed on the run and the logical execution, which a retry keeps,
+ *   so a retry after a lost result posts once. The run is part of the key
+ *   because a workflow task's logical execution is `task:<taskId>` in every
+ *   run of it, and each run posts its own message.
+ * - A post that left but drew no answer, a transport failure or the timeout,
+ *   may have landed. It fails not retryable and is recorded, so neither a
+ *   retry nor the same text again in the run posts it twice.
  * - The recipient is the person the run works for, `credentialOwnerId` on the
  *   job, and it must be the operator this app linked. Nothing in the input can
  *   name another.
@@ -34,6 +39,7 @@ import type { ChannelStore } from './store.js';
 export const CHANNEL_RECIPIENT_NOT_LINKED_CODE = 'CHANNEL_RECIPIENT_NOT_LINKED';
 export const CHANNEL_MESSAGE_REPEATED_CODE = 'CHANNEL_MESSAGE_REPEATED';
 export const CHANNEL_PROVIDER_ERROR_CODE = 'CHANNEL_PROVIDER_ERROR';
+export const CHANNEL_DELIVERY_UNKNOWN_CODE = 'CHANNEL_DELIVERY_UNKNOWN';
 
 export const NOT_LINKED_MESSAGE =
   'The person this run works for is not the operator linked to this channel, so nothing was ' +
@@ -44,6 +50,11 @@ export const NOT_LINKED_MESSAGE =
 export const REPEATED_MESSAGE =
   'This run already sent the operator exactly this text, so it was not sent again. Say something ' +
   'new, or stop: the operator has the first message.';
+
+export const DELIVERY_UNKNOWN_MESSAGE =
+  'The message was sent to Slack, but no answer came back, so Slack may have posted it. It was ' +
+  'not sent again, because a second send could post it twice. Do not send this text again in this ' +
+  'run. If the operator must have it, say so in your reply instead.';
 
 function aflowError(
   code: string,
@@ -92,9 +103,11 @@ export class ChannelMessageSendHandler implements StepHandler {
     }
     const { text } = parsed.data;
 
-    const posted = this.deps.store.sentFor(ctx.logicalExecutionId);
+    const posted = this.deps.store.sentFor(ctx.runId, ctx.logicalExecutionId);
     if (posted !== undefined) {
-      return this.delivered(ctx, posted.messageRef);
+      return posted.messageRef === null
+        ? this.deliveryUnknown(ctx, 'an earlier attempt at this step had no answer from Slack')
+        : this.delivered(ctx, posted.messageRef);
     }
 
     const link = this.deps.store.link();
@@ -111,7 +124,11 @@ export class ChannelMessageSendHandler implements StepHandler {
       );
     }
 
-    if (this.deps.store.sentInRun(ctx.runId, text) !== undefined) {
+    const repeated = this.deps.store.sentInRun(ctx.runId, text);
+    if (repeated?.messageRef === null) {
+      return this.deliveryUnknown(ctx, 'an earlier send of this text had no answer from Slack');
+    }
+    if (repeated !== undefined) {
       return failureWithError(
         ctx,
         aflowError(CHANNEL_MESSAGE_REPEATED_CODE, REPEATED_MESSAGE, 'validation', false),
@@ -119,11 +136,17 @@ export class ChannelMessageSendHandler implements StepHandler {
     }
 
     let messageRef: string;
+    let posting = false;
     try {
       const channel = await this.deps.slack.openDirectMessage(link.slackUserId);
+      posting = true;
       const message = await this.deps.slack.postMessage(channel, text);
       messageRef = `slack:${message.channel}:${message.ts}`;
     } catch (error) {
+      if (posting && error instanceof SlackApiError && error.outcomeUnknown) {
+        this.record(ctx, text, null);
+        return this.deliveryUnknown(ctx, error.slackError);
+      }
       const retryable = error instanceof SlackApiError ? error.retryable : true;
       return failureWithError(
         ctx,
@@ -136,6 +159,11 @@ export class ChannelMessageSendHandler implements StepHandler {
       );
     }
 
+    this.record(ctx, text, messageRef);
+    return this.delivered(ctx, messageRef);
+  }
+
+  private record(ctx: ExecutorContext, text: string, messageRef: string | null): void {
     this.deps.store.recordSent({
       executionId: ctx.logicalExecutionId,
       runId: ctx.runId,
@@ -143,7 +171,23 @@ export class ChannelMessageSendHandler implements StepHandler {
       messageRef,
       sentAt: (this.deps.now?.() ?? new Date()).toISOString(),
     });
-    return this.delivered(ctx, messageRef);
+  }
+
+  /**
+   * Not retryable: a retry would post the same text a second time if Slack
+   * took the first. The record makes a later attempt at this step, or the same
+   * text again in this run, refuse rather than post.
+   */
+  private deliveryUnknown(ctx: ExecutorContext, cause: string): Promise<StepResult> {
+    return failureWithError(
+      ctx,
+      aflowError(
+        CHANNEL_DELIVERY_UNKNOWN_CODE,
+        `${DELIVERY_UNKNOWN_MESSAGE} (${cause})`,
+        'provider',
+        false,
+      ),
+    );
   }
 
   private delivered(ctx: ExecutorContext, messageRef: string): Promise<StepResult> {

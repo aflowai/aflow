@@ -1,6 +1,7 @@
 /**
- * Plan 327 D2 and §6: the recipient is never chosen, a retry posts once, and a
- * repeat fails.
+ * Plan 327 D2 and §6: the recipient is never chosen, a retry posts once, each run
+ * of a workflow task posts its own message, a post with no answer is never sent
+ * twice, and a repeat fails.
  */
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -11,12 +12,13 @@ import { ChannelMessageSendOutputSchema, toAgentToolError } from '@aflow/schemas
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  CHANNEL_DELIVERY_UNKNOWN_CODE,
   CHANNEL_MESSAGE_REPEATED_CODE,
   CHANNEL_PROVIDER_ERROR_CODE,
   CHANNEL_RECIPIENT_NOT_LINKED_CODE,
   ChannelMessageSendHandler,
 } from '../sendHandler.js';
-import { SlackApiError, type SlackClient } from '../slack.js';
+import { SlackApiError, createSlackClient, type SlackClient } from '../slack.js';
 import { ChannelStore } from '../store.js';
 
 const TENANT = 'tenant-1';
@@ -25,12 +27,22 @@ const OWNER = 'owner-1';
 interface FakeSlack extends SlackClient {
   posts: Array<{ channel: string; text: string }>;
   failNext?: SlackApiError;
+  /** Slack takes the post, then the answer is lost with this error. */
+  failAfterPost?: SlackApiError;
+  failOpen?: SlackApiError;
 }
 
 function fakeSlack(): FakeSlack {
   const slack: FakeSlack = {
     posts: [],
-    openDirectMessage: (userId) => Promise.resolve(`D-${userId}`),
+    openDirectMessage: (userId) => {
+      if (slack.failOpen !== undefined) {
+        const error = slack.failOpen;
+        delete slack.failOpen;
+        return Promise.reject(error);
+      }
+      return Promise.resolve(`D-${userId}`);
+    },
     postMessage: (channel, text) => {
       if (slack.failNext !== undefined) {
         const error = slack.failNext;
@@ -38,6 +50,11 @@ function fakeSlack(): FakeSlack {
         return Promise.reject(error);
       }
       slack.posts.push({ channel, text });
+      if (slack.failAfterPost !== undefined) {
+        const error = slack.failAfterPost;
+        delete slack.failAfterPost;
+        return Promise.reject(error);
+      }
       return Promise.resolve({ channel, ts: `17000000${String(slack.posts.length)}.000100` });
     },
     openSocketModeUrl: () => Promise.resolve('wss://example.invalid'),
@@ -150,6 +167,62 @@ describe('channel.message.send', () => {
     expect(slack.posts).toHaveLength(2);
   });
 
+  it('posts again from a second run of the same workflow task, and a retry within a run posts nothing', async () => {
+    const task = { executionId: 'task:notify-operator' };
+    const firstRun = await send(
+      { text: 'The nightly report is ready.' },
+      { ...task, runId: 'wr-1' },
+    );
+    const secondRun = await send(
+      { text: 'The nightly report is ready.' },
+      { ...task, runId: 'wr-2' },
+    );
+    const retriedInSecondRun = await send(
+      { text: 'The nightly report is ready.' },
+      { ...task, runId: 'wr-2' },
+    );
+
+    expect(secondRun.result.status).toBe('SUCCEEDED');
+    expect(secondRun.written).not.toEqual(firstRun.written);
+    expect(retriedInSecondRun.result.status).toBe('SUCCEEDED');
+    expect(retriedInSecondRun.written).toEqual(secondRun.written);
+    expect(slack.posts).toHaveLength(2);
+  });
+
+  it('fails a timeout after Slack took the post as not retryable, and never posts it twice', async () => {
+    slack.failAfterPost = new SlackApiError(
+      'chat.postMessage',
+      'The operation was aborted due to timeout',
+      true,
+      true,
+    );
+    const timedOut = await send({ text: 'Approve the push.' });
+
+    expect(errorCode(timedOut.result)).toBe(CHANNEL_DELIVERY_UNKNOWN_CODE);
+    if (timedOut.result.status !== 'FAILED') throw new Error('expected a failure');
+    expect(timedOut.result.error.retryable).toBe(false);
+    expect(timedOut.result.error.message).toContain('may have posted it');
+
+    const retried = await send({ text: 'Approve the push.' });
+    const resent = await send({ text: 'Approve the push.' }, { executionId: 'exec-2' });
+
+    expect(errorCode(retried.result)).toBe(CHANNEL_DELIVERY_UNKNOWN_CODE);
+    expect(errorCode(resent.result)).toBe(CHANNEL_DELIVERY_UNKNOWN_CODE);
+    expect(slack.posts).toHaveLength(1);
+  });
+
+  it('keeps a transport failure before the post retryable, because nothing was posted', async () => {
+    slack.failOpen = new SlackApiError('conversations.open', 'fetch failed', true, true);
+    const failed = await send({ text: 'Hello.' });
+
+    expect(errorCode(failed.result)).toBe(CHANNEL_PROVIDER_ERROR_CODE);
+    expect(failed.result.status === 'FAILED' && failed.result.error.retryable).toBe(true);
+
+    const retried = await send({ text: 'Hello.' });
+    expect(retried.result.status).toBe('SUCCEEDED');
+    expect(slack.posts).toHaveLength(1);
+  });
+
   it.each([
     ['another person’s run', { owner: 'someone-else' }],
     ['a run with no person behind it', { owner: '' }],
@@ -196,5 +269,32 @@ describe('channel.message.send', () => {
 
     expect(errorCode(result)).toBe('INVALID_INPUT');
     expect(slack.posts).toEqual([]);
+  });
+});
+
+describe('the Slack client', () => {
+  it('marks a post whose answer never came as of unknown outcome, and a refusal as not', async () => {
+    const timingOut = createSlackClient({
+      botToken: 'xoxb-test',
+      appToken: 'xapp-test',
+      fetchImpl: () =>
+        Promise.reject(
+          new DOMException('The operation was aborted due to timeout', 'TimeoutError'),
+        ),
+    });
+    const refusing = createSlackClient({
+      botToken: 'xoxb-test',
+      appToken: 'xapp-test',
+      fetchImpl: () => Promise.resolve(Response.json({ ok: false, error: 'ratelimited' })),
+    });
+
+    const lost = await timingOut.postMessage('D-1', 'Hello.').catch((error: unknown) => error);
+    const refused = await refusing.postMessage('D-1', 'Hello.').catch((error: unknown) => error);
+
+    expect(lost).toBeInstanceOf(SlackApiError);
+    expect((lost as SlackApiError).outcomeUnknown).toBe(true);
+    expect(refused).toBeInstanceOf(SlackApiError);
+    expect((refused as SlackApiError).outcomeUnknown).toBe(false);
+    expect((refused as SlackApiError).retryable).toBe(true);
   });
 });
