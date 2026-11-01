@@ -37,8 +37,9 @@ export const CHANNEL_PROVIDER_ERROR_CODE = 'CHANNEL_PROVIDER_ERROR';
 
 export const NOT_LINKED_MESSAGE =
   'The person this run works for is not the operator linked to this channel, so nothing was ' +
-  'sent. The operator links Slack under Settings → Channels: `yarn channel:slack setup` prints a ' +
-  'one-time code, which they send to the bot from Slack. Do not retry this send.';
+  'sent. The operator links Slack from their aflow checkout: `yarn channel:slack setup` prints a ' +
+  'one-time code, which they send to the bot from Slack. The help article "How do I reach Aflow ' +
+  'from Slack" (/help/slack-channel) walks through it. Do not retry this send.';
 
 export const REPEATED_MESSAGE =
   'This run already sent the operator exactly this text, so it was not sent again. Say something ' +

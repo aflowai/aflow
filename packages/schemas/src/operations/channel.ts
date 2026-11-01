@@ -72,7 +72,7 @@ export const ChannelOperationRegistrations: OperationRegistration[] = [
         'Asking the operator something in this conversation they are already reading — answer them here',
       ],
       pitfalls: [
-        'The message goes to the person this run works for, and only when they linked the channel in Settings → Channels. Any other run fails.',
+        'The message goes to the person this run works for, and only when they linked Slack with `yarn channel:slack setup`. Any other run fails.',
         'Sending the same text twice in one run fails. Say something new, or stop.',
         'The send is synchronous: a result means the channel accepted the message, not that the operator read it.',
       ],

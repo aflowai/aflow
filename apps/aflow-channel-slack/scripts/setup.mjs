@@ -283,7 +283,9 @@ export async function main() {
       `wrote the channel lane's credential into ${instanceFile}. Restart the stack (\`yarn start\`) so it composes the channel lane.`,
     );
   }
-  say('start the app with `yarn channel:slack start`, and keep it running.');
+  say(
+    'start the app with `yarn channel:slack start`, and keep it running. If it is already running, restart it: it reads this code when it starts.',
+  );
   say(`then send this code to the bot in a direct message on Slack, within 30 minutes: ${code}`);
   say('the Slack user who sends it is the only one the app serves from then on.');
 }

@@ -52,12 +52,12 @@ yarn channel:slack start
 
 Send the code to the bot in a direct message. The bot answers **Linked**. The Slack account that sends the code is the only one the app serves from then on. Anyone else who messages the bot gets one fixed reply, and their message is not kept.
 
-To link another account, run setup again and send the new code from that account.
+To link another account, run setup again, then restart the app: stop \`yarn channel:slack start\` and start it again. The app reads the code when it starts, so until it restarts it refuses the new code. Then send the new code from that account.
 
 ## When a message is not sent
 
 - **The operation is not offered at all.** The stack has no channel credential, or has not restarted since setup. Run setup, then restart.
-- **The send fails and names Settings → Channels.** The run works for someone other than the linked operator, or nobody has linked yet. Send the code from Slack.
+- **The send fails and names \`yarn channel:slack setup\`.** The run works for someone other than the linked operator, or nobody has linked yet. Send the code from Slack. A code from a later setup run works only once the app has restarted.
 - **The step waits for the channel app.** The app is not running. Start it with \`yarn channel:slack start\`.
 
 ## Removing it

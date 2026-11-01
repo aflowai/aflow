@@ -94,11 +94,11 @@ The ids default to well-known values and are only interesting when an operator p
 
 Every service in the stack runs as the same user, so ownership separates none of them: what a container mounts is the whole of what it can read, and a process handed `instance.env` can reopen it whatever it dropped from its environment. Bootstrap therefore cuts the file into one volume per audience, and each service mounts only its own, read-only:
 
-| Volume            | Holds                                             | Mounted read-only by |
-| ----------------- | ------------------------------------------------- | -------------------- |
-| `instance_config` | `instance.env` — all four values                  | `api`                |
-| `worker_config`   | `wrapping-key.env` — `CREDENTIAL_ENCRYPTION_KEY`  | `worker`             |
-| `web_config`      | `instance-secret.env` — `PHOENIX_INSTANCE_SECRET` | `web`                |
+| Volume            | Holds                                                                                                                                   | Mounted read-only by |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------- | -------------------- |
+| `instance_config` | `instance.env` — all four values                                                                                                        | `api`                |
+| `worker_config`   | `wrapping-key.env` — `CREDENTIAL_ENCRYPTION_KEY`, `REDIS_PASSWORD`, and `PHOENIX_CHANNEL_REDIS_PASSWORD` where a channel app was set up | `worker`             |
+| `web_config`      | `instance-secret.env` — `PHOENIX_INSTANCE_SECRET`                                                                                       | `web`                |
 
 `api` is the one reader of the whole file: it compares the instance secret, unwraps credentials, and resolves the instance's identity from the pinned ids. `bootstrap` is the one writer, and the only service that mounts any of these writable. The cuts are re-derived on every start and are not archived — a restored `instance_config` replaces them on the next boot, before the worker or the web process reads one.
 

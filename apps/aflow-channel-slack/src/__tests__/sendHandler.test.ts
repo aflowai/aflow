@@ -154,12 +154,14 @@ describe('channel.message.send', () => {
     ['another person’s run', { owner: 'someone-else' }],
     ['a run with no person behind it', { owner: '' }],
     ['the same person in another tenant', { tenantId: 'tenant-2' }],
-  ])('refuses %s with a teaching error naming Settings → Channels', async (_case, scope) => {
+  ])('refuses %s with a teaching error naming setup and the help article', async (_case, scope) => {
     const { result } = await send({ text: 'Hello.' }, scope);
 
     expect(errorCode(result)).toBe(CHANNEL_RECIPIENT_NOT_LINKED_CODE);
     if (result.status !== 'FAILED') throw new Error('expected a failure');
-    expect(result.error.message).toContain('Settings → Channels');
+    expect(result.error.message).toContain('yarn channel:slack setup');
+    expect(result.error.message).toContain('/help/slack-channel');
+    expect(result.error.message).not.toContain('Settings → Channels');
     expect(toAgentToolError(result.error).retry).toBe(false);
     expect(slack.posts).toEqual([]);
   });
