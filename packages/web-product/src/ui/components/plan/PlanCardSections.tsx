@@ -4,14 +4,13 @@
  * A node's decision card on the rail (Plan 337 D3), in D1's order: What
  * changes, Why, What it affects, Risks, Open questions, Not done on purpose
  * and Done when. Done when is the node's criteria, read from the node and
- * never from the card. Each item renders as markdown, and its label stays
- * outside the markdown.
+ * never from the card. Each item and the criteria render as markdown, and a
+ * label stays outside the markdown.
  */
 import type { ReactNode } from 'react';
 import { Text } from '@aflow/design-system';
 import type { PlanNodeCard } from '@aflow/schemas';
-import { MarkdownRenderer } from '../markdown-renderer.js';
-import { RailSection, railProse } from './PlanParts.js';
+import { RailMarkdown, RailSection } from './PlanParts.js';
 
 const cardListStyle = {
   margin: 0,
@@ -21,19 +20,12 @@ const cardListStyle = {
   gap: 'var(--space-1)',
 } as const;
 
-const proseStyle = {
-  color: 'var(--color-text-secondary)',
-  fontSize: 'var(--font-size-base)',
-  lineHeight: 1.55,
-  minWidth: 0,
-} as const;
-
 /** A label and the item it heads, on one line where the item fits. */
 const leadRow = { display: 'flex', gap: 'var(--space-1)', alignItems: 'baseline' } as const;
 
 /** One card item. A writer may use markdown, so the item renders as markdown. */
 function Prose({ children }: { children: string }) {
-  return <MarkdownRenderer content={children} style={proseStyle} />;
+  return <RailMarkdown content={children} />;
 }
 
 /** A section's items as a list. An empty list says the writer found none. */
@@ -141,9 +133,7 @@ export function PlanCardSections({
         />
       </RailSection>
       <RailSection label={criteriaLabel}>
-        <Text size="base" color="secondary" style={railProse}>
-          {criteria}
-        </Text>
+        <RailMarkdown content={criteria} data-plan-criteria />
       </RailSection>
     </>
   );

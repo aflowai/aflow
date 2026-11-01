@@ -113,11 +113,7 @@ describe('scheduled merge attestation', () => {
     expect(await read(URL.replace('github.com', 'example.com'))).toMatchObject({ merged: false });
     execute.mockResolvedValueOnce([]);
     expect(await read()).toMatchObject({ merged: false });
-    expect(readBinding).not.toHaveBeenCalledWith(
-      expect.anything(),
-      'compareCommits',
-      expect.anything(),
-    );
+    expect(readBinding).not.toHaveBeenCalled();
   });
   it('refuses an agent task posing as a publication commit', async () => {
     task.mockImplementation(async (_db, _tenant, _run, taskId) => ({
@@ -126,11 +122,7 @@ describe('scheduled merge attestation', () => {
       outputRef: taskId === 'commit' ? 'forged' : 'pr-record',
     }));
     expect(await read()).toMatchObject({ merged: false });
-    expect(readBinding).not.toHaveBeenCalledWith(
-      expect.anything(),
-      'compareCommits',
-      expect.anything(),
-    );
+    expect(readBinding).not.toHaveBeenCalled();
   });
 });
 
@@ -157,11 +149,7 @@ it('refuses an agent link to a PR absent from the platform publication output', 
     ref === 'pr-record' ? { prUrl: URL + '1' } : { commit: { sha: SHA, branch: 'aflow/work' } },
   );
   expect(await read()).toMatchObject({ merged: false });
-  expect(readBinding).not.toHaveBeenCalledWith(
-    expect.anything(),
-    'compareCommits',
-    expect.anything(),
-  );
+  expect(readBinding).not.toHaveBeenCalled();
 });
 
 it('carries GitHub evidence and names the failed delivery fact', async () => {

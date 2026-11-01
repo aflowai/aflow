@@ -2526,6 +2526,12 @@ describe('resident review regressions', () => {
       ),
     ).toMatchObject({ ok: true, output: { decisions: [{ answer: { decision: 'ask' } }] } });
     expect(await redis.get(askedKey(TENANT, SPACE, node.nodeId))).toBe(String(changed.revision));
+    read.mockResolvedValue({ ...refusedMerge(), reason: 'The pull request is still open.' });
+    expect(await close()).toMatchObject({ ok: false });
+    const rewritten = await current(node.nodeId);
+    expect(rewritten.note).toContain('The pull request is still open.');
+    expect(rewritten.note).toContain('\nOperator context');
+    expect(rewritten.note).not.toContain(refusedMerge().reason);
     read.mockResolvedValue({ merged: true, reason: '', evidence: '' });
     expect(await close()).toMatchObject({ ok: true, node: { status: 'done' } });
     expect(await listWaitingNodes(wake)).toEqual([]);
@@ -2591,7 +2597,7 @@ describe('resident review regressions', () => {
     });
   });
 
-  it('keeps merge evidence visible when the previous note is full', async () => {
+  it('blocks without changing the previous note when evidence has no room', async () => {
     const node = await created();
     await write(node.nodeId, { note: 'x'.repeat(PLAN_NODE_PROSE_MAX_CHARS) });
     const full = await current(node.nodeId);
@@ -2607,8 +2613,8 @@ describe('resident review regressions', () => {
       ),
     ).toMatchObject({ ok: false });
     expect(await current(node.nodeId)).toMatchObject({
-      status: 'active',
-      note: expect.stringContaining('Pull request: not linked'),
+      status: 'blocked',
+      note: full.note,
     });
     expect(await redis.get(askedKey(TENANT, SPACE, node.nodeId))).toBe(
       String((await current(node.nodeId)).revision),

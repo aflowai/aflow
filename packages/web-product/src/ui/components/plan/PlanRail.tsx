@@ -15,7 +15,9 @@
  * them back for a rewrite, and **Discuss** opens the space chat about the step
  * (Plan 337 P4). A step with a decision card shows the card's sections above
  * its goal, and the goal folds. **Read the plan** opens the step's newest plan
- * document (Plan 337 P2). It is
+ * document (Plan 337 P2). The goal, criteria, note and outcome render as
+ * markdown, as their writers put them (Plan 332). The note and the outcome
+ * keep each line the engine writes on its own line. It is
  * the page's inspector, headed, sectioned and set as the skill designer's is.
  */
 import { useState } from 'react';
@@ -71,6 +73,7 @@ import {
   PlanRunLine,
   PlanStepOrb,
   PullRequestChip,
+  RailMarkdown,
   RailSection,
   railProse,
 } from './PlanParts.js';
@@ -494,25 +497,24 @@ export function PlanRail({
                 {goalOpen ? 'Hide goal' : 'Show goal'}
               </Button>
             </Row>
-            {goalOpen && (
-              <Text size="base" color="secondary" style={railProse} data-plan-goal>
-                {full.goal}
-              </Text>
-            )}
+            {goalOpen && <RailMarkdown content={full.goal} data-plan-goal />}
           </RailSection>
         </>
       ) : (
         <>
           <RailSection label="Goal">
-            <Text size="base" color="secondary" style={railProse}>
-              {full?.goal ?? node.goalHead}
-            </Text>
+            {/* Until the read answers, the goal's head stands in, plain as on the card. */}
+            {full !== undefined ? (
+              <RailMarkdown content={full.goal} data-plan-goal />
+            ) : (
+              <Text size="base" color="secondary" style={railProse}>
+                {node.goalHead}
+              </Text>
+            )}
           </RailSection>
           {full !== undefined && (
             <RailSection label={criteriaLabel}>
-              <Text size="base" color="secondary" style={railProse}>
-                {full.criteria}
-              </Text>
+              <RailMarkdown content={full.criteria} data-plan-criteria />
             </RailSection>
           )}
         </>
@@ -531,11 +533,7 @@ export function PlanRail({
               {noteOpen ? 'Hide note' : 'Show note'}
             </Button>
           </Row>
-          {noteOpen && (
-            <Text size="base" color="secondary" style={railProse} data-plan-note>
-              {full.note}
-            </Text>
-          )}
+          {noteOpen && <RailMarkdown content={full.note} lineBreaks data-plan-note />}
         </RailSection>
       )}
       {full?.outcome !== undefined && (
@@ -548,9 +546,7 @@ export function PlanRail({
               padding: 'var(--space-2)',
             }}
           >
-            <Text size="base" color="secondary" style={railProse}>
-              {full.outcome}
-            </Text>
+            <RailMarkdown content={full.outcome} lineBreaks />
           </div>
         </RailSection>
       )}

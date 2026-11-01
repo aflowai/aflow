@@ -16,6 +16,29 @@ function record(value: unknown): Record<string, unknown> | null {
   return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : null;
 }
 
+export function formatMergeEvidence(
+  url?: string,
+  answer: Record<string, unknown> | null = null,
+  work: { sha?: unknown; branch?: unknown } = {},
+  merged = false,
+): string {
+  const reported = (value: unknown) => (typeof value === 'string' ? value : 'not reported');
+  return [
+    url
+      ? `Pull request: #${url.split('/pull/')[1]?.replace(/\/$/, '') ?? '?'} ${url}`
+      : 'Pull request: not linked',
+    `GitHub reports merged: ${answer?.['merged'] === true ? 'yes' : 'no'}`,
+    `Merge commit: ${reported(answer?.['merge_commit_sha'])}`,
+    `Merged by: ${reported(record(answer?.['merged_by'])?.['login'])}`,
+    `Merged at: ${reported(answer?.['merged_at'])}`,
+    `Recorded publication commit: ${typeof work.sha === 'string' ? work.sha : 'not recorded'}`,
+    `Recorded publication branch: ${typeof work.branch === 'string' ? work.branch : 'not recorded'}`,
+    `Merge delivers recorded commit or branch: ${merged ? 'yes' : 'not attested'}`,
+  ]
+    .map((line) => `- ${line}`)
+    .join('\n');
+}
+
 /** Each close reads both the node's publication record and GitHub anew. */
 export async function readMergedPullRequest(
   db: PostgresJsDatabase,
@@ -27,39 +50,16 @@ export async function readMergedPullRequest(
 ): Promise<{ merged: boolean; evidence: string; reason: string }> {
   let answer: Record<string, unknown> | null = null;
   const work = { sha: undefined as unknown, branch: undefined as unknown };
-  const reported = (value: unknown) => (typeof value === 'string' ? value : 'not reported');
   const result = (merged: boolean, reason: string) => ({
     merged,
     reason,
-    evidence: [
-      `Pull request: #${url.split('/pull/')[1]?.replace(/\/$/, '') ?? '?'} ${url}`,
-      `GitHub reports merged: ${answer?.['merged'] === true ? 'yes' : 'no'}`,
-      `Merge commit: ${reported(answer?.['merge_commit_sha'])}`,
-      `Merged by: ${reported(record(answer?.['merged_by'])?.['login'])}`,
-      `Merged at: ${reported(answer?.['merged_at'])}`,
-      `Recorded publication commit: ${typeof work.sha === 'string' ? work.sha : 'not recorded'}`,
-      `Recorded publication branch: ${typeof work.branch === 'string' ? work.branch : 'not recorded'}`,
-      `Merge delivers recorded commit or branch: ${merged ? 'yes' : 'not attested'}`,
-    ]
-      .map((line) => `- ${line}`)
-      .join('\n'),
+    evidence: formatMergeEvidence(url, answer, work, merged),
   });
   const match = /^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/([1-9]\d*)\/?$/i.exec(url);
   if (!match) return result(false, 'The linked URL is not a GitHub pull request.');
   const owner = match[1]!;
   const repo = match[2]!;
   const number = match[3]!;
-  const bindingId = await resolveConnectionForRepoCoordinate(
-    db,
-    tenantId,
-    spaceId,
-    `${owner}/${repo}`.toLowerCase(),
-  );
-  answer = record(
-    await deps.readBinding(bindingId, 'getPullRequest', { owner, repo, pull_number: number }),
-  );
-  if (!answer || typeof answer['merged'] !== 'boolean')
-    throw new Error('Invalid GitHub pull request response');
   const publication = await withTenantSchema(
     db,
     createTenantContext(tenantId as TenantId),
@@ -104,6 +104,18 @@ export async function readMergedPullRequest(
   const recordedSha = typeof sha === 'string' && /^[0-9a-f]{40}$/i.test(sha) ? sha : undefined;
   if (recordedSha === undefined && (typeof branch !== 'string' || branch.length === 0))
     return result(false, 'The publication records neither a commit nor a branch.');
+
+  const bindingId = await resolveConnectionForRepoCoordinate(
+    db,
+    tenantId,
+    spaceId,
+    `${owner}/${repo}`.toLowerCase(),
+  );
+  answer = record(
+    await deps.readBinding(bindingId, 'getPullRequest', { owner, repo, pull_number: number }),
+  );
+  if (!answer || typeof answer['merged'] !== 'boolean')
+    throw new Error('Invalid GitHub pull request response');
 
   if (
     !answer['merged'] ||
