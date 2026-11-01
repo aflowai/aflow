@@ -163,15 +163,42 @@ export function waitingPlanSteps(nodes: readonly PlanNodeSummary[]): WaitingPlan
 // Run gates and consents, over the tables their sources read
 // ============================================================================
 
+/** Padded standard base64, the only text `decode(…, 'base64')` takes without throwing. */
+const BASE64_TEXT = '^([A-Za-z0-9+/]{4})*([A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$';
+
+/**
+ * Bytes, as lowercase hex, that `convert_from(…, 'UTF8')` takes without
+ * throwing: well-formed UTF-8 with no NUL, no surrogate and nothing past
+ * U+10FFFF.
+ */
+const UTF8_HEX =
+  '^(0[1-9a-f]|[1-7][0-9a-f]' +
+  '|(c[2-9a-f]|d[0-9a-f])[89ab][0-9a-f]' +
+  '|e0[ab][0-9a-f][89ab][0-9a-f]' +
+  '|e[1-9a-cef][89ab][0-9a-f][89ab][0-9a-f]' +
+  '|ed[89][0-9a-f][89ab][0-9a-f]' +
+  '|f0[9ab][0-9a-f]([89ab][0-9a-f]){2}' +
+  '|f[1-3]([89ab][0-9a-f]){3}' +
+  '|f48[0-9a-f]([89ab][0-9a-f]){2})*$';
+
 /**
  * A paused request's payload, where its ref holds it inline, read by Postgres
- * itself so a count needs no payload fetch. A payload Postgres cannot hold as
- * `jsonb` — one carrying an escaped NUL — reads as none.
+ * itself so a count needs no payload fetch. Each step that could throw is
+ * tested first, so a ref that is not base64, UTF-8 or `jsonb` reads as none
+ * and costs its own row only. An error would abort the transaction, and with
+ * it every count.
  */
 function inlinePayload(ref: SQL): SQL {
-  return sql`(CASE WHEN ${ref} LIKE 'inline:%' THEN (
-    SELECT CASE WHEN strpos(d.t, '\\u0000') = 0 THEN d.t::jsonb END
-    FROM (SELECT convert_from(decode(substr(${ref}, 8), 'base64'), 'UTF8') AS t) d
+  return sql`(CASE WHEN ${ref} LIKE 'inline:%' AND substr(${ref}, 8) ~ ${BASE64_TEXT} THEN (
+    SELECT CASE WHEN pg_input_is_valid(d.t, 'jsonb') AND strpos(d.t, '\\u0000') = 0
+                THEN d.t::jsonb END
+    FROM (
+      SELECT CASE WHEN b.hex ~ ${UTF8_HEX} THEN convert_from(b.bytes, 'UTF8') END AS t
+      FROM (
+        SELECT decode(substr(${ref}, 8), 'base64') AS bytes,
+               encode(decode(substr(${ref}, 8), 'base64'), 'hex') AS hex
+      ) b
+    ) d
   ) END)`;
 }
 
@@ -196,27 +223,61 @@ const USER_INPUT_OPERATION_ID = 'user.interaction.ask';
 const USER_APPROVAL_OPERATION_ID = 'user.interaction.approve';
 
 /**
+ * A request's kind from its own pause, where the ref holds it outside: the
+ * paused step's operation for the user executor's two requests, and the pause
+ * type the orchestrator stamps for a consent or a write approval. The pause
+ * type outlives a resume, which is why the step's operation is read first.
+ */
+function pauseRequestKind(operationId: SQL, pauseType: SQL): SQL {
+  return sql`(CASE
+    WHEN ${operationId} = ${USER_INPUT_OPERATION_ID} THEN 'input'
+    WHEN ${operationId} = ${USER_APPROVAL_OPERATION_ID} THEN 'approval'
+    WHEN ${pauseType} = 'oauth_consent' THEN 'oauth_consent'
+    WHEN ${pauseType} = 'approval' THEN 'write_approval'
+  END)`;
+}
+
+/** A session id from snapshot text, or null where the text is no UUID, so the cast cannot throw. */
+function sessionIdOf(text: SQL): SQL {
+  return sql`(CASE WHEN ${text} ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    THEN (${text})::uuid END)`;
+}
+
+/** The columns a session's own pause is read by, from its flushed hot state. */
+function pauseColumns(session: SQL): SQL {
+  return sql`${session}.hot_state_snapshot -> 'runHotState' ->> 'pauseType' AS pause_type,
+    ${session}.hot_state_snapshot -> 'stepHotStates'
+      -> (${session}.current_step_execution_id::text) ->> 'operationId' AS operation_id,
+    ${session}.hot_state_snapshot -> 'runHotState' ->> 'pausedChildSessionId' AS child_id`;
+}
+
+/** The deepest delegation `maxDelegationDepth` admits, so a bubbled pause's chain ends. */
+const BUBBLED_PAUSE_DEPTH_LIMIT = 10;
+
+/**
  * Paused sessions, as `pausedStepSource` reads them, each by the request its
- * pause holds: input, an approval or a write approval is a run gate, and an
+ * ref holds: input, an approval or a write approval is a run gate, and an
  * OAuth consent is a consent unless a workflow run owns the pause, which
  * `consentRuns` counts instead. A request held inline is read by its own
  * `kind`, so a conversation waiting for its next message is no item. An
  * executor's request is always held outside the ref, so its kind is read from
- * the pause: the paused step's operation for the user executor's two requests,
- * and the pause type the orchestrator stamps for a consent or a write
- * approval. The pause type outlives a resume, which is why the step's
- * operation is read first. Any other pause is no item.
+ * the pause (`pauseRequestKind`). A child's pause bubbled to its parent
+ * (`subflow_waiting`) leaves the parent holding the child's ref, and the
+ * source lists the parent by that request. Its kind is read from the session
+ * that paused for it, down the chain of paused children holding the same ref
+ * (Helmsman, then Driver, then Runner). Whether a workflow run owns a consent
+ * is read from the listed session itself, as the source reads it. Any other
+ * pause is no item.
  */
 async function pausedSessions(tx: PostgresJsDatabase, spaceId: string): Promise<Row[]> {
   return (await tx.execute(sql`
-    WITH paused AS (
+    WITH RECURSIVE paused AS (
       SELECT s.current_step_execution_id::text AS step_id,
              s.started_at,
+             s.requested_input_ref AS ref,
              s.requested_input_ref LIKE 'inline:%' AS inline,
              ${inlinePayload(sql`s.requested_input_ref`)} AS payload,
-             s.hot_state_snapshot -> 'runHotState' ->> 'pauseType' AS pause_type,
-             s.hot_state_snapshot -> 'stepHotStates'
-               -> (s.current_step_execution_id::text) ->> 'operationId' AS operation_id,
+             ${pauseColumns(sql`s`)},
              COALESCE(
                jsonb_typeof(s.hot_state_snapshot -> 'runHotState' -> 'workflowExecution') <> 'null',
                false
@@ -228,16 +289,41 @@ async function pausedSessions(tx: PostgresJsDatabase, spaceId: string): Promise<
         AND s.current_step_execution_id IS NOT NULL
       ORDER BY s.started_at DESC
       LIMIT ${PAUSED_SESSION_SCAN_LIMIT}
+    ), bubbled AS (
+      SELECT p.step_id, p.ref, ${pauseColumns(sql`c`)}, 1 AS depth
+      FROM paused p
+      JOIN sessions c
+        ON c.session_id = ${sessionIdOf(sql`p.child_id`)}
+       AND c.requested_input_ref = p.ref
+      WHERE NOT p.inline
+        AND p.pause_type = 'subflow_waiting'
+        AND ${pauseRequestKind(sql`p.operation_id`, sql`p.pause_type`)} IS NULL
+      UNION ALL
+      SELECT b.step_id, b.ref, ${pauseColumns(sql`c`)}, b.depth + 1
+      FROM bubbled b
+      JOIN sessions c
+        ON c.session_id = ${sessionIdOf(sql`b.child_id`)}
+       AND c.requested_input_ref = b.ref
+      WHERE b.pause_type = 'subflow_waiting'
+        AND ${pauseRequestKind(sql`b.operation_id`, sql`b.pause_type`)} IS NULL
+        AND b.depth < ${BUBBLED_PAUSE_DEPTH_LIMIT}
+    ), origin AS (
+      SELECT DISTINCT ON (step_id) step_id,
+             ${pauseRequestKind(sql`operation_id`, sql`pause_type`)} AS request_kind
+      FROM bubbled
+      WHERE ${pauseRequestKind(sql`operation_id`, sql`pause_type`)} IS NOT NULL
+      ORDER BY step_id, depth
     ), requested AS (
-      SELECT *,
+      SELECT p.*,
              CASE
-               WHEN inline THEN payload ->> 'kind'
-               WHEN operation_id = ${USER_INPUT_OPERATION_ID} THEN 'input'
-               WHEN operation_id = ${USER_APPROVAL_OPERATION_ID} THEN 'approval'
-               WHEN pause_type = 'oauth_consent' THEN 'oauth_consent'
-               WHEN pause_type = 'approval' THEN 'write_approval'
+               WHEN p.inline THEN p.payload ->> 'kind'
+               ELSE COALESCE(
+                 ${pauseRequestKind(sql`p.operation_id`, sql`p.pause_type`)},
+                 o.request_kind
+               )
              END AS request_kind
-      FROM paused
+      FROM paused p
+      LEFT JOIN origin o ON o.step_id = p.step_id
     ), waiting AS (
       SELECT step_id, started_at, payload, request_kind,
              CASE
@@ -381,19 +467,26 @@ function classifyPausedTask(row: Row, task: WorkflowTask | undefined): PausedTas
 
 /**
  * Runs paused for an OAuth consent, as `workflowOAuthConsentSource` reads
- * them: a run whose stored resume contract carries the consent it waits on.
+ * them: of its newest `PAUSED_TASK_SCAN_LIMIT` such runs, each whose stored
+ * resume contract carries the consent it waits on. The source cuts before it
+ * drops a run with no consent, so the count does too.
  */
 async function consentRuns(tx: PostgresJsDatabase, spaceId: string): Promise<Row[]> {
   return (await tx.execute(sql`
-    WITH paused AS (
-      SELECT run_id, started_at,
-             paused_payload_ref LIKE 'inline:%' AS inline,
-             ${inlinePayload(sql`paused_payload_ref`)} AS payload
+    WITH listed AS (
+      SELECT run_id, started_at, paused_payload_ref
       FROM workflow_runs
       WHERE space_id = ${spaceId}::uuid
         AND status = 'paused'
         AND paused_reason = 'needs_oauth_consent'
-        AND paused_payload_ref IS NOT NULL
+      ORDER BY started_at DESC
+      LIMIT ${PAUSED_TASK_SCAN_LIMIT}
+    ), paused AS (
+      SELECT run_id, started_at,
+             paused_payload_ref LIKE 'inline:%' AS inline,
+             ${inlinePayload(sql`paused_payload_ref`)} AS payload
+      FROM listed
+      WHERE paused_payload_ref IS NOT NULL
     ), ranked AS (
       SELECT *,
              count(*) OVER ()::int AS total,

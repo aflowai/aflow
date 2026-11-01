@@ -9,6 +9,32 @@
  * or its definition resolves to a human task, and a write approval where it
  * holds the run's pause and asks for one. Gated on DATABASE_URL like every pg
  * test.
+ *
+ * The sources live in `@aflow/server-runtime`, which depends on this package,
+ * so this suite cannot call their `listOpen`. Each fixture pins one source
+ * rule by hand, and each number asserted is what that rule lists for the
+ * fixtures. A later change to a source fails no test here, so change the
+ * count, its fixture and this list together. The rules pinned:
+ *
+ * - `pausedStepSource`: a PAUSED session with a ref and a current step, of the
+ *   newest 1,000 by start, listed by the request kind its ref holds. Input,
+ *   approval and write approval list as gates. An OAuth consent lists unless
+ *   the session's own hot state names a `workflowExecution`.
+ * - `pausedStepSource`, bubbled: a parent paused `subflow_waiting` holds its
+ *   child's ref, so it lists by the child's request, at every level.
+ * - `pausedStepSource`, unreadable: a ref that does not decode to a JSON
+ *   object with a known `kind` lists nothing.
+ * - `workflowOAuthConsentSource`: of the newest 200 runs paused
+ *   `needs_oauth_consent`, each whose resume contract carries `oauthConsent`.
+ * - `workflowHumanTaskSource`: of the newest 200 paused tasks of paused runs,
+ *   each stamped for its pause or defined as a human task.
+ * - `workflowWriteApprovalSource`: of the newest 200 tasks holding their
+ *   run's `task_paused` payload, each whose request is a write approval.
+ * - `computeEgressSource`: pending egress requests, tenant-wide or this
+ *   space's.
+ *
+ * This suite has never run. No environment it has met has set DATABASE_URL,
+ * so its numbers are reasoned from the rules above and have not been measured.
  */
 import { randomUUID } from 'node:crypto';
 import { afterAll, describe, expect, it, vi } from 'vitest';
@@ -299,9 +325,109 @@ describeDb('readWaitingGates — counts over the tables the sources read (real D
     await pausedSession(storedRef('requested_input'));
     // The read survives a payload jsonb refuses, and counts it as no item.
     await pausedSession(inline({ kind: 'approval', title: 'nul \u0000 inside' }));
+    // Text that is not base64, bytes that are not UTF-8 and text that is not
+    // JSON each cost their own row, not the read.
+    await pausedSession('inline:not base64!');
+    await pausedSession(`inline:${Buffer.from([0x7b, 0xff, 0xfe, 0x7d]).toString('base64')}`);
+    await pausedSession(`inline:${Buffer.from('{"kind": "approval"', 'utf-8').toString('base64')}`);
+    // A bubbled pause whose child id is no UUID is followed nowhere.
+    await pausedSession(storedRef('requested_input'), (step) =>
+      pausedSnapshot(step, 'agent.control.delegate', {
+        pauseType: 'subflow_waiting',
+        pausedChildSessionId: 'not-a-uuid',
+      }),
+    );
+    // One readable request among them is still counted.
+    await pausedSession(inline({ kind: 'input', prompt: 'Which region?' }));
     const after = await read(SPACE_ID);
-    expect(after.runGates).toBe(before.runGates);
+    expect(after.runGates).toBe(before.runGates + 1);
     expect(after.consents).toBe(before.consents);
+  });
+
+  it("counts a child's pause bubbled to each parent, as the step source lists every level", async () => {
+    const spaceId = await space();
+    const ref = storedRef('requested_input');
+    const runner = await pausedSession(
+      ref,
+      (step) =>
+        pausedSnapshot(step, 'user.interaction.ask', {
+          workflowExecution: { runId: 'r', taskId: 't', attempt: 1 },
+        }),
+      spaceId,
+    );
+    const bubbled = (child: string) => (step: string) =>
+      pausedSnapshot(step, 'agent.control.delegate', {
+        pauseType: 'subflow_waiting',
+        delegationPauseSource: 'child_input',
+        pausedChildSessionId: child,
+      });
+    const driver = await pausedSession(ref, bubbled(runner.sessionId), spaceId);
+    const helmsman = await pausedSession(ref, bubbled(driver.sessionId), spaceId);
+
+    let gates = await read(spaceId);
+    expect(gates).toMatchObject({ runGates: 3, consents: 0 });
+    expect(gates.newest.map((item) => item.itemId)).toEqual([
+      helmsman.itemId,
+      driver.itemId,
+      runner.itemId,
+    ]);
+    expect(gates.newest[0]).toMatchObject({ kind: 'run_gate', title: 'Information requested' });
+
+    // A parent whose child holds another ref no longer waits on that child's request.
+    await pausedSession(storedRef('requested_input'), bubbled(runner.sessionId), spaceId);
+    gates = await read(spaceId);
+    expect(gates).toMatchObject({ runGates: 3, consents: 0 });
+
+    // A consent bubbled from a run's Runner is listed by each parent, whose own
+    // hot state names no workflow run.
+    const consentRef = storedRef('requested_input');
+    const routed = await pausedSession(
+      consentRef,
+      (step) =>
+        pausedSnapshot(step, 'mcp.tool.call', {
+          pauseType: 'oauth_consent',
+          workflowExecution: { runId: 'r', taskId: 't', attempt: 1 },
+        }),
+      spaceId,
+    );
+    await pausedSession(consentRef, bubbled(routed.sessionId), spaceId);
+    gates = await read(spaceId);
+    expect(gates).toMatchObject({ runGates: 3, consents: 1 });
+  });
+
+  it('counts consent runs only among the newest the consent source lists', async () => {
+    const spaceId = await space();
+    const consentRunId = await pausedTask(spaceId, {
+      workflowSlug: 'sync-crm',
+      taskId: 'sync',
+      pausedReason: 'needs_oauth_consent',
+      pausedPayloadRef: inline({ oauthConsent: { resourceKey: 'hubspot', bindingId: 'b-4' } }),
+      taskOutputRef: null,
+    });
+    expect(await read(spaceId)).toMatchObject({ consents: 1 });
+
+    // 200 newer runs paused for a consent their contract does not carry fill
+    // the source's window, and it drops each of them.
+    const newer = Array.from({ length: 200 }, () => {
+      const runId = randomUUID();
+      runIds.push(runId);
+      return {
+        spaceId,
+        workflowSlug: 'sync-crm',
+        runId,
+        status: 'paused' as const,
+        workflowRevision: 1,
+        startedAt: tick(),
+        pausedReason: 'needs_oauth_consent',
+        pausedPayloadRef: inline({ pauseCause: 'needs_oauth_consent' }),
+      };
+    });
+    await withTenantSchema(handle.db, tenant, (tx) => tx.insert(workflowRuns).values(newer));
+    const gates = await read(spaceId);
+    expect(gates.consents).toBe(0);
+    expect(gates.newest.map((item) => item.itemId)).not.toContain(
+      `${ACTION_CENTER_ITEM_ID_PREFIX.workflowOAuthConsent}${consentRunId}`,
+    );
   });
 
   it("reads each executor pause's kind from the paused step and the pause type", async () => {
