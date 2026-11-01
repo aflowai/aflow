@@ -8,7 +8,11 @@
  * windows due, and with nothing due it reads nothing else.
  */
 import { rearmEndedWait, type EndedWait } from '@aflow/redis';
-import { claimEndedWaits, describeWaitOutcome } from '@aflow/cybernetic-runtime';
+import {
+  claimEndedWaits,
+  describeWaitOutcome,
+  rehydratePausedRun,
+} from '@aflow/cybernetic-runtime';
 import {
   backgroundWorkVerboseLogsEnabled,
   createBackgroundTaskRunner,
@@ -28,19 +32,37 @@ export type WaitDelivery = 'woke' | 'told' | 'session_gone' | 'retry';
 /**
  * Tell one waiter that its wait ended. The room post is keyed by the wait, so
  * a second delivery of the same wait posts nothing twice.
+ *
+ * A conversation resting past the hot-state TTL is cold, not gone: it is
+ * rehydrated from its resting snapshot, told and woken. `session_gone` is left
+ * for a conversation with no resting snapshot to restore, which has ended.
  */
 export async function deliverEndedWait(deps: HarnessDeps, ended: EndedWait): Promise<WaitDelivery> {
   const { registration, outcome } = ended;
   const tenantId = registration.tenantId as TenantId;
-  const posted = await queueMessageForNextTurn(deps.db, deps.redis, {
-    tenantId,
-    sessionId: registration.sessionId,
-    deliveryKey: `wait:${registration.waitId}`,
-    actorUserId: WAIT_OUTCOME_ACTOR_ID,
-    actorDisplayName: 'Wait',
-    body: describeWaitOutcome(registration, outcome),
-  });
-  if (posted === undefined) return 'session_gone';
+  const post = () =>
+    queueMessageForNextTurn(deps.db, deps.redis, {
+      tenantId,
+      sessionId: registration.sessionId,
+      deliveryKey: `wait:${registration.waitId}`,
+      actorUserId: WAIT_OUTCOME_ACTOR_ID,
+      actorDisplayName: 'Wait',
+      body: describeWaitOutcome(registration, outcome),
+    });
+  let posted = await post();
+  if (posted === undefined) {
+    // Reached only with the session hash absent, so restoring the snapshot
+    // cannot roll back a live `lastMessageSeq`.
+    const restored = await rehydratePausedRun(
+      deps.redis,
+      deps.db,
+      tenantId,
+      registration.sessionId,
+    );
+    if (!restored) return 'session_gone';
+    posted = await post();
+    if (posted === undefined) return 'session_gone';
+  }
   const woken = await wakeSessionForWait(
     deps,
     tenantId,
