@@ -16,6 +16,7 @@ import {
   describeWaitOutcome,
   WaitDeclarationError,
 } from '../waits.js';
+import { settleEndedWait } from '@aflow/redis';
 import { emitGateResolved, emitPlanUpdated, emitPullRequestChanged } from '../entityEvents.js';
 
 const TENANT = 'a0000000-0000-4000-8000-000000000339';
@@ -155,7 +156,34 @@ describe('a waiter declared before its event', () => {
       endedBy: 'event',
       event: { detail: { status: 'done', previousStatus: 'active' } },
     });
+    await settleEndedWait(redis, declared.waitId);
     expect(await claimEndedWaits(redis, Date.now() + 3_600_000, 10)).toEqual([]);
+  });
+
+  it('is told of every change that fired before it was claimed, not only the last', async () => {
+    const declared = await declareWait(redis, waitOn('pull_request.changed', PULL));
+    for (const change of ['checks_green', 'conflicting'] as const) {
+      await emitPullRequestChanged(redis, {
+        tenantId: TENANT,
+        spaceId: SPACE,
+        subject: PULL,
+        change,
+        url: 'https://github.com/aflowai/aflow/pull/276',
+        headSha: 'abc123',
+      });
+    }
+
+    const [only] = await claimEndedWaits(redis, Date.now(), 10);
+
+    expect(only?.registration.waitId).toBe(declared.waitId);
+    expect(only?.outcome).toMatchObject({
+      endedBy: 'event',
+      event: { detail: { change: 'checks_green' } },
+      laterEvents: [{ detail: { change: 'conflicting' } }],
+    });
+    expect(describeWaitOutcome(only!.registration, only!.outcome)).toContain(
+      'Later events on the subject before you were told',
+    );
   });
 });
 

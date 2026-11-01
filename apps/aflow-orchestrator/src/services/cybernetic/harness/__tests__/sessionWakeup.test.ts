@@ -123,6 +123,10 @@ const mockHasUnreadRunWakeups = vi.fn();
 vi.mock('../../../SessionOrchestrator/helpers/runWakeups.js', () => ({
   hasUnreadRunWakeups: (...args: unknown[]) => mockHasUnreadRunWakeups(...args),
 }));
+const mockHasUnreadWaitOutcomes = vi.fn();
+vi.mock('../../../SessionOrchestrator/helpers/roomExchange.js', () => ({
+  hasUnreadWaitOutcomes: (...args: unknown[]) => mockHasUnreadWaitOutcomes(...args),
+}));
 const { hasUnreadRunWakeups: realHasUnreadRunWakeups } = await vi.importActual<
   typeof import('../../../SessionOrchestrator/helpers/runWakeups.js')
 >('../../../SessionOrchestrator/helpers/runWakeups.js');
@@ -208,6 +212,7 @@ beforeEach(() => {
   registerSessionWaiter();
   mockLoadRun.mockResolvedValue({ runId: RUN, spaceId: 'space-1' });
   mockHasUnreadRunWakeups.mockResolvedValue(true);
+  mockHasUnreadWaitOutcomes.mockResolvedValue(false);
   mockResumeClaimsForStep.mockResolvedValue([]);
   mockClaimEventDrivenTurn.mockResolvedValue({ taken: true });
   mockDispatchResume.mockResolvedValue({ firstSeen: true });
@@ -451,6 +456,23 @@ describe('waking a session resting at its prompt', () => {
     );
     expect(mockClaimEventDrivenTurn).not.toHaveBeenCalled();
     expect(mockDispatchResume).not.toHaveBeenCalled();
+  });
+
+  it('wakes it for a wait outcome posted while its last turn was in flight', async () => {
+    restingAtPrompt();
+    mockHasUnreadRunWakeups.mockResolvedValue(false);
+    mockHasUnreadWaitOutcomes.mockResolvedValue(true);
+
+    await expect(wakeSessionForRunWakeups(deps, TENANT, SESSION)).resolves.toBe('woke');
+
+    expect(mockHasUnreadWaitOutcomes).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      TENANT,
+      SESSION,
+      TURN_INPUT,
+    );
+    expect(mockDispatchResume).toHaveBeenCalledOnce();
   });
 
   it('leaves a session parked on a blocking start alone', async () => {

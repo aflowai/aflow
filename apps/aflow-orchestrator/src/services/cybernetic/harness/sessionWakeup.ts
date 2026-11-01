@@ -37,6 +37,7 @@ import type {
 } from '@aflow/schemas';
 import { attendedAsActingRun } from '../../SessionOrchestrator/handlers/inlineOps/actingRun.js';
 import { hasUnreadRunWakeups } from '../../SessionOrchestrator/helpers/runWakeups.js';
+import { hasUnreadWaitOutcomes } from '../../SessionOrchestrator/helpers/roomExchange.js';
 import { logOrchestratorError } from '../../../lib/orchestratorLogger.js';
 import type { HarnessDeps } from './types.js';
 
@@ -160,8 +161,8 @@ export async function deliverSessionWakeup(
 }
 
 /**
- * Start a turn for a session resting at its prompt with run wakeups it has not
- * read, the way a room message sent with `wake` does. Anything else — a turn
+ * Start a turn for a session resting at its prompt with run wakeups or wait
+ * outcomes it has not read, the way a room message sent with `wake` does. Anything else — a turn
  * in flight, a step parked on a child, an approval — reads them at its next
  * turn boundary instead, and settling there calls this again.
  */
@@ -193,13 +194,9 @@ export async function wakeSessionForRunWakeups(
 
   let unread: boolean;
   try {
-    unread = await hasUnreadRunWakeups(
-      deps.db,
-      deps.payloadStore,
-      tenantId,
-      sessionId,
-      step.inputRef,
-    );
+    unread =
+      (await hasUnreadRunWakeups(deps.db, deps.payloadStore, tenantId, sessionId, step.inputRef)) ||
+      (await hasUnreadWaitOutcomes(deps.db, deps.payloadStore, tenantId, sessionId, step.inputRef));
   } catch (err) {
     if (options.armWakeOnStoreError !== true) throw err;
     // A session resting at its prompt has no turn boundary coming to read the
@@ -268,8 +265,9 @@ export async function wakeSessionForRunWakeups(
 /**
  * Start a turn for a session resting at its prompt because a wait it declared
  * has ended (Plan 339 D1). Its outcome is already in the room, so there is no
- * unread check: a session not resting reads it at its next turn boundary.
- * `rate_limited` leaves the caller to try again on a later cycle.
+ * unread check here. A session not resting reads it at its next turn
+ * boundary, and a turn in flight that missed it is woken for it at its settle
+ * (`wakeSessionForRunWakeups`). `rate_limited` leaves the caller to try again on a later cycle.
  */
 export async function wakeSessionForWait(
   deps: HarnessDeps,

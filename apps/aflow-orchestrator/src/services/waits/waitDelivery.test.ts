@@ -8,15 +8,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import RedisMock from 'ioredis-mock';
 import type { Redis } from 'ioredis';
 import { claimEndedWaits, declareWait, emitPullRequestChanged } from '@aflow/cybernetic-runtime';
-import type { EndedWait } from '@aflow/redis';
+import { WAIT_DELIVERY_LEASE_MS, type EndedWait } from '@aflow/redis';
 import type { BackgroundTaskLogger } from '@aflow/lib';
 import type { HarnessDeps } from '../cybernetic/harness/types.js';
 import { deliverEndedWait, runWaitDeliveryCycle, type WaitDelivery } from './waitDelivery.js';
 
-const { mockQueueMessage, mockWake, mockRehydrate } = vi.hoisted(() => ({
+const { mockQueueMessage, mockWake, mockRehydrateIfAbsent } = vi.hoisted(() => ({
   mockQueueMessage: vi.fn(),
   mockWake: vi.fn(),
-  mockRehydrate: vi.fn(),
+  mockRehydrateIfAbsent: vi.fn(),
 }));
 
 vi.mock('../SessionOrchestrator/helpers/queuedMessage.js', () => ({
@@ -27,7 +27,7 @@ vi.mock('../cybernetic/harness/sessionWakeup.js', () => ({
 }));
 vi.mock('@aflow/cybernetic-runtime', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@aflow/cybernetic-runtime')>()),
-  rehydratePausedRun: (...args: unknown[]) => mockRehydrate(...args),
+  rehydratePausedRunIfAbsent: (...args: unknown[]) => mockRehydrateIfAbsent(...args),
 }));
 
 const TENANT = 'a0000000-0000-4000-8000-000000000339';
@@ -142,6 +142,43 @@ describe('the wait delivery cycle', () => {
     ]);
   });
 
+  it('delivers a wait whose deliverer died after claiming it, once the lease lapses', async () => {
+    const declared = await declareWait(
+      redis,
+      {
+        tenantId: TENANT,
+        spaceId: SPACE,
+        sessionId: SESSION,
+        kind: 'run.ended',
+        subject: 'r',
+        windowSeconds: 60,
+      },
+      T0,
+    );
+    const closedAt = T0 + 60_000;
+    // A process claims the wait and dies before it delivers it.
+    expect(await claimEndedWaits(redis, closedAt, 10)).toHaveLength(1);
+    const { deliver, delivered } = deliverer();
+
+    const early = await runWaitDeliveryCycle(
+      { harnessDeps, logger, now: () => closedAt, deliver },
+      ctx,
+    );
+    const lapsed = await runWaitDeliveryCycle(
+      { harnessDeps, logger, now: () => closedAt + WAIT_DELIVERY_LEASE_MS, deliver },
+      ctx,
+    );
+    const after = await runWaitDeliveryCycle(
+      { harnessDeps, logger, now: () => closedAt + 2 * WAIT_DELIVERY_LEASE_MS, deliver },
+      ctx,
+    );
+
+    expect(early).toEqual({ candidates: 0 });
+    expect(lapsed).toMatchObject({ candidates: 1, processed: 1 });
+    expect(after).toEqual({ candidates: 0 });
+    expect(delivered.map((ended) => ended.registration.waitId)).toEqual([declared.waitId]);
+  });
+
   it('ends no wait in observe mode', async () => {
     await declareWait(
       redis,
@@ -194,7 +231,7 @@ describe('delivering one ended wait', () => {
   beforeEach(() => {
     mockQueueMessage.mockReset();
     mockWake.mockReset();
-    mockRehydrate.mockReset();
+    mockRehydrateIfAbsent.mockReset();
   });
 
   it('tells and wakes a session whose hot state is live, with no rehydration', async () => {
@@ -204,20 +241,20 @@ describe('delivering one ended wait', () => {
     const delivery = await deliverEndedWait(harnessDeps, await endedWait());
 
     expect(delivery).toBe('woke');
-    expect(mockRehydrate).not.toHaveBeenCalled();
+    expect(mockRehydrateIfAbsent).not.toHaveBeenCalled();
     expect(mockWake).toHaveBeenCalledWith(harnessDeps, TENANT, SESSION, expect.any(String));
   });
 
   it('rehydrates a session whose hot state is gone, then tells and wakes it', async () => {
     mockQueueMessage.mockResolvedValueOnce(undefined).mockResolvedValueOnce(posted);
-    mockRehydrate.mockResolvedValueOnce({ runId: SESSION });
+    mockRehydrateIfAbsent.mockResolvedValueOnce({ runId: SESSION });
     mockWake.mockResolvedValueOnce('woke');
     const ended = await endedWait();
 
     const delivery = await deliverEndedWait(harnessDeps, ended);
 
     expect(delivery).toBe('woke');
-    expect(mockRehydrate).toHaveBeenCalledWith(redis, undefined, TENANT, SESSION);
+    expect(mockRehydrateIfAbsent).toHaveBeenCalledWith(redis, undefined, TENANT, SESSION);
     expect(mockQueueMessage).toHaveBeenCalledTimes(2);
     expect(mockQueueMessage.mock.calls[1]?.[2]).toMatchObject({
       sessionId: SESSION,
@@ -228,7 +265,7 @@ describe('delivering one ended wait', () => {
 
   it('tells a rehydrated session that is not resting at its prompt, for its next turn to read', async () => {
     mockQueueMessage.mockResolvedValueOnce(undefined).mockResolvedValueOnce(posted);
-    mockRehydrate.mockResolvedValueOnce({ runId: SESSION });
+    mockRehydrateIfAbsent.mockResolvedValueOnce({ runId: SESSION });
     mockWake.mockResolvedValueOnce('deferred');
 
     expect(await deliverEndedWait(harnessDeps, await endedWait())).toBe('told');
@@ -236,7 +273,7 @@ describe('delivering one ended wait', () => {
 
   it('reports the session gone only where no resting snapshot restores it', async () => {
     mockQueueMessage.mockResolvedValueOnce(undefined);
-    mockRehydrate.mockResolvedValueOnce(null);
+    mockRehydrateIfAbsent.mockResolvedValueOnce(null);
 
     const delivery = await deliverEndedWait(harnessDeps, await endedWait());
 

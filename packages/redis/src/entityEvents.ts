@@ -4,7 +4,7 @@ import {
   EntityEventEnvelopeSchema,
   waitEventOfEntityEvent,
 } from '@aflow/schemas';
-import { recordWaitEventInto } from './waits.js';
+import { prepareWaitEventRecording, recordWaitEventInto } from './waits.js';
 
 // ============================================================================
 // Constants
@@ -149,6 +149,8 @@ export async function appendEntityEvent(
   const fields = serializeForStream(event);
   const channel = ENTITY_EVENTS_PUBSUB_CHANNEL(tenantId, spaceId);
 
+  const waitEvent = waitEventOfEntityEvent(event);
+  if (waitEvent !== null) prepareWaitEventRecording(redis);
   const multi = redis
     .multi()
     .xadd(streamKey, 'MAXLEN', '~', String(ENTITY_EVENTS_MAXLEN), '*', ...fields)
@@ -157,7 +159,6 @@ export async function appendEntityEvent(
       channel,
       JSON.stringify({ type: 'entity_event', spaceId, eventType: event.eventType, ts: Date.now() }),
     );
-  const waitEvent = waitEventOfEntityEvent(event);
   if (waitEvent !== null) recordWaitEventInto(multi, { tenantId, spaceId }, waitEvent);
   const results = await multi.exec();
 

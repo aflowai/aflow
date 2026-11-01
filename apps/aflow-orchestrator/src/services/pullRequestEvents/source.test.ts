@@ -295,6 +295,37 @@ describe('checks a repository reports outside one page of check runs', () => {
   });
 });
 
+describe('a change whose event did not land', () => {
+  it('is sent again at the next poll, and the changes that landed are not', async () => {
+    await arm();
+    const github = fakeGitHub({
+      [PULL]: { etag: '"p1"', body: pull({ mergeable_state: 'dirty' }) },
+      [CHECKS]: { etag: '"c1"', body: { total_count: 1, check_runs: passing(1) } },
+      [REVIEWS]: { etag: '"r1"', body: [] },
+    });
+    let refuse = true;
+    const emit = vi.fn(async (_redis: unknown, params: { change: string }) =>
+      params.change === 'conflicting' && refuse ? false : true,
+    );
+
+    expect(await cycle(github.get, emit as never)).toMatchObject({ candidates: 1, failed: 1 });
+    expect(emit.mock.calls.map(([, params]) => params.change)).toEqual([
+      'checks_green',
+      'conflicting',
+    ]);
+
+    refuse = false;
+    clock += PULL_REQUEST_POLL_CADENCE_MS;
+    expect(await cycle(github.get, emit as never)).toMatchObject({ candidates: 1, processed: 1 });
+    expect(github.requests.slice(3).map((r) => r.etag)).toEqual(['"p1"', '"c1"', '"r1"']);
+    expect(emit.mock.calls.slice(2).map(([, params]) => params.change)).toEqual(['conflicting']);
+
+    clock += PULL_REQUEST_POLL_CADENCE_MS;
+    await cycle(github.get, emit as never);
+    expect(emit).toHaveBeenCalledTimes(3);
+  });
+});
+
 describe('a watch whose polls keep failing', () => {
   it('keeps its lifetime as it stands, and is dropped once that lapses', async () => {
     await arm();

@@ -4,14 +4,16 @@
  * its window closing with no event — and a conversation resting at its prompt
  * is woken to read it.
  *
- * A candidate drain under Plan 180: a cycle reads the fired subjects and the
- * windows due, and with nothing due it reads nothing else.
+ * A candidate drain under Plan 180: a cycle reads the deliveries due, the
+ * fired subjects and the windows due, and with nothing due it reads nothing
+ * else. A claimed wait stays in the delivery set until it is settled here, so
+ * a process that dies mid-delivery leaves it for a later cycle.
  */
-import { rearmEndedWait, type EndedWait } from '@aflow/redis';
+import { rearmEndedWait, settleEndedWait, type EndedWait } from '@aflow/redis';
 import {
   claimEndedWaits,
   describeWaitOutcome,
-  rehydratePausedRun,
+  rehydratePausedRunIfAbsent,
 } from '@aflow/cybernetic-runtime';
 import {
   backgroundWorkVerboseLogsEnabled,
@@ -36,6 +38,11 @@ export type WaitDelivery = 'woke' | 'told' | 'session_gone' | 'retry';
  * A conversation resting past the hot-state TTL is cold, not gone: it is
  * rehydrated from its resting snapshot, told and woken. `session_gone` is left
  * for a conversation with no resting snapshot to restore, which has ended.
+ *
+ * `told` is a conversation not resting at its prompt. A turn in flight did not
+ * read the outcome, so the settle that ends it wakes the conversation for it
+ * (`wakeSessionForRunWakeups`). One parked on a person or a run reads it at
+ * its next turn.
  */
 export async function deliverEndedWait(deps: HarnessDeps, ended: EndedWait): Promise<WaitDelivery> {
   const { registration, outcome } = ended;
@@ -51,9 +58,10 @@ export async function deliverEndedWait(deps: HarnessDeps, ended: EndedWait): Pro
     });
   let posted = await post();
   if (posted === undefined) {
-    // Reached only with the session hash absent, so restoring the snapshot
-    // cannot roll back a live `lastMessageSeq`.
-    const restored = await rehydratePausedRun(
+    // The hash was absent at the post, but a writer may have put it back
+    // since. The restore writes only where it is still absent, so it cannot
+    // roll back a live `lastMessageSeq`.
+    const restored = await rehydratePausedRunIfAbsent(
       deps.redis,
       deps.db,
       tenantId,
@@ -106,6 +114,7 @@ export async function runWaitDeliveryCycle(
         failed++;
         continue;
       }
+      await settleEndedWait(redis, wait.registration.waitId);
       processed++;
       if (delivery === 'session_gone' || backgroundWorkVerboseLogsEnabled()) {
         deps.logger.info('[wait-delivery] wait ended', {

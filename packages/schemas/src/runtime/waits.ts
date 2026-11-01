@@ -51,6 +51,12 @@ export const WAIT_WINDOW_MAX_SECONDS = 24 * 60 * 60;
  */
 export const WAIT_EVENT_RETENTION_SECONDS = 7 * 24 * 60 * 60;
 
+/**
+ * How many recent events a subject keeps recorded, so events that fire close
+ * together all reach the waiter they end.
+ */
+export const WAIT_EVENTS_KEPT_PER_SUBJECT = 32;
+
 /** One event a waiter may be woken by. `detail` is kind-specific and small. */
 export const WaitEventSchema = z.object({
   kind: WaitEventKindSchema,
@@ -84,7 +90,16 @@ export type WaitRegistration = z.infer<typeof WaitRegistrationSchema>;
 
 /** What ended a wait: the event it waited on, or its window closing first. */
 export const WaitOutcomeSchema = z.discriminatedUnion('endedBy', [
-  z.object({ endedBy: z.literal('event'), event: WaitEventSchema }),
+  z.object({
+    endedBy: z.literal('event'),
+    /** The event that ended the wait. */
+    event: WaitEventSchema,
+    /**
+     * Events on the subject after that one and before the wait was claimed,
+     * oldest first. Absent where none fired.
+     */
+    laterEvents: z.array(WaitEventSchema).optional(),
+  }),
   z.object({
     endedBy: z.literal('window_closed'),
     /** Epoch ms. */

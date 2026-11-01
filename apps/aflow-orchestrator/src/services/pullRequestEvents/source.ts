@@ -324,8 +324,9 @@ export async function runPullRequestEventsCycle(
     if (ctx.budgetExhausted()) break;
     try {
       const polled = await pollPullRequest(deps.get, watch, ctx.signal);
-      const changes = pullRequestChanges(snapshotOf(watch), polled.snapshot);
-      let emitted = true;
+      const found = pullRequestChanges(snapshotOf(watch), polled.snapshot);
+      const changes = [...new Set([...(watch.unsent ?? []), ...found])];
+      const unsent: PullRequestChange[] = [];
       for (const change of changes) {
         const ok = await emit(deps.redis, {
           tenantId: watch.tenantId,
@@ -335,19 +336,22 @@ export async function runPullRequestEventsCycle(
           url: watch.url,
           headSha: polled.snapshot.pull.headSha,
         });
-        emitted &&= ok;
+        if (!ok) unsent.push(change);
       }
-      // An event that did not land is reported again: the watch keeps what
-      // the last poll read, so the next poll — a 304 — finds the same change.
-      if (!emitted) {
+      const read: PullRequestWatch = { ...polled.watch };
+      delete read.unsent;
+      // The poll's reads are saved with the changes that did not land, so the
+      // next poll sends those again and not the ones that landed. GitHub
+      // answered, so this poll did not fail, and the save renews the watch.
+      if (unsent.length > 0) {
         failed++;
-        await reschedulePullRequestWatch(deps.redis, watch, now() + cadenceMs);
+        await savePullRequestWatch(deps.redis, { ...read, unsent }, now() + cadenceMs);
         continue;
       }
       if (changes.includes('merged') || changes.includes('closed')) {
         await clearPullRequestWatch(deps.redis, watch);
       } else {
-        await savePullRequestWatch(deps.redis, polled.watch, now() + cadenceMs);
+        await savePullRequestWatch(deps.redis, read, now() + cadenceMs);
       }
       processed++;
       if (changes.length > 0 || backgroundWorkVerboseLogsEnabled()) {

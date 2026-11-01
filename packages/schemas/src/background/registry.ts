@@ -724,16 +724,16 @@ const DEFINITIONS: readonly BackgroundTaskDefinitionInput[] = [
     baseCadenceMs: 5_000,
     maxBatch: 50,
     maxCycleMs: 30_000,
-    idleOperationBudgetPerMinute: 24,
+    idleOperationBudgetPerMinute: 36,
     hotPathProducerBudget: {
       maxAdditionalNetworkRoundTrips: 0,
       description:
-        'A wait event records itself inside the transaction that appends its entity event; a declaration is the step it runs in.',
+        'A wait event records itself inside the transaction that appends its entity event, and arms its subject only where a waiter holds it; a declaration is the step it runs in.',
     },
     disablePolicy: 'safe',
     recovery:
-      'A wait whose delivery fails is put back, its event subject or its window due again, and the next cycle delivers it. A wait claimed by another instance is woken by that instance only.',
-    note: 'Two range reads per cycle when nothing is due — the fired subjects and the windows due — flat in tenants, spaces, waits and stored keys. A woken waiter is told in its conversation and woken the way a run it started wakes it, at the event-driven turn rate.',
+      'A claimed wait stays in the delivery set under a lease until its delivery settles it. A wait whose delivery fails is put back due at once, and one whose deliverer died is delivered again once the lease lapses. The room post is keyed by the wait, so a second delivery posts nothing twice.',
+    note: 'Three range reads per cycle when nothing is due — the deliveries due, the fired subjects and the windows due — flat in tenants, spaces, waits and stored keys. A woken waiter is told in its conversation and woken the way a run it started wakes it, at the event-driven turn rate.',
     sites: [
       'apps/aflow-orchestrator/src/services/waits/waitDelivery.ts',
       'packages/cybernetic-runtime/src/waits.ts',

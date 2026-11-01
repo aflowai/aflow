@@ -4,8 +4,9 @@ import { wakeSessionForRunWakeups } from '../../cybernetic/harness/sessionWakeup
 import { logOrchestratorError } from '../../../lib/orchestratorLogger.js';
 
 /**
- * Wake a session that just came to rest for what its runs reported while the
- * turn was running: that was not in the turn's input, and resting here is the
+ * Wake a session that just came to rest for what its runs reported, or the
+ * outcome of a wait it declared, while the turn was running: that was not in
+ * the turn's input, and resting here is the
  * first boundary that can read it. A failure leaves the wakeups unread for the
  * next settle or event-wake timer.
  */

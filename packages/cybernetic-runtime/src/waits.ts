@@ -14,12 +14,19 @@
  */
 import { randomUUID } from 'node:crypto';
 import type { Redis } from 'ioredis';
-import { claimClosedWindows, claimFiredWaits, registerWait, type EndedWait } from '@aflow/redis';
+import {
+  claimClosedWindows,
+  claimDueDeliveries,
+  claimFiredWaits,
+  registerWait,
+  type EndedWait,
+} from '@aflow/redis';
 import {
   WAIT_WINDOW_MAX_SECONDS,
   WAIT_WINDOW_MIN_SECONDS,
   WaitEventKindSchema,
   WaitSubjectSchema,
+  type WaitEvent,
   type WaitEventKind,
   type WaitOutcome,
   type WaitRegistration,
@@ -105,31 +112,42 @@ export async function declareWait(
 }
 
 /**
- * Claim every wait that has ended since the last call: those an event ended,
- * then those whose window closed by `nowMs`. Each is claimed by one caller
- * only, so concurrent deliverers never wake a waiter twice.
+ * Claim every wait that is due for delivery: those put back or left by a
+ * deliverer that died, then those an event ended, then those whose window
+ * closed by `nowMs`. Each is claimed under a lease by one caller only, and
+ * stays claimed until `settleEndedWait` forgets it.
  */
 export async function claimEndedWaits(
   redis: Redis,
   nowMs: number,
   limit: number,
 ): Promise<EndedWait[]> {
-  const fired = await claimFiredWaits(redis, limit);
-  const closed =
-    fired.length < limit ? await claimClosedWindows(redis, nowMs, limit - fired.length) : [];
-  return [...fired, ...closed];
+  const due = await claimDueDeliveries(redis, nowMs, limit);
+  const fired = due.length < limit ? await claimFiredWaits(redis, limit - due.length, nowMs) : [];
+  const taken = due.length + fired.length;
+  const closed = taken < limit ? await claimClosedWindows(redis, nowMs, limit - taken) : [];
+  return [...due, ...fired, ...closed];
 }
 
 /** The words a woken waiter reads: what ended its wait, and what it should do next. */
 export function describeWaitOutcome(registration: WaitRegistration, outcome: WaitOutcome): string {
   const what = `${registration.kind} on ${registration.subject}`;
   if (outcome.endedBy === 'event') {
-    const detail = Object.entries(outcome.event.detail)
-      .map(([key, value]) => `${key}: ${typeof value === 'string' ? value : JSON.stringify(value)}`)
-      .join(', ');
+    const describe = (event: WaitEvent) => {
+      const detail = Object.entries(event.detail)
+        .map(
+          ([key, value]) => `${key}: ${typeof value === 'string' ? value : JSON.stringify(value)}`,
+        )
+        .join(', ');
+      return `${new Date(event.firedAt).toISOString()}${detail ? ` (${detail})` : ''}`;
+    };
+    const later = outcome.laterEvents ?? [];
     return (
       `Your wait ${registration.waitId} on ${what} has ended: the event arrived at ` +
-      `${new Date(outcome.event.firedAt).toISOString()}${detail ? ` (${detail})` : ''}. ` +
+      `${describe(outcome.event)}. ` +
+      (later.length > 0
+        ? `Later events on the subject before you were told: ${later.map(describe).join('; ')}. `
+        : '') +
       'Act on it by your own rules.'
     );
   }

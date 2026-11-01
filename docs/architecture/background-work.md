@@ -19,7 +19,7 @@ Datastore operations per minute with zero due work, grouped by what each scope m
 
 | Execution scope | Multiplies by | Operations/minute |
 | --------------- | ------------- | ----------------: |
-| per_instance | per live process | 380 |
+| per_instance | per live process | 392 |
 | singleton | once per fleet | 20 |
 | shard_owner | per shard-owning orchestrator | 626 |
 | active_subscription | per active subscription | 120 |
@@ -65,7 +65,7 @@ Datastore operations per minute with zero due work, grouped by what each scope m
 | `orchestrator.step_stall_watchdog` | orchestrator | correctness | candidate | shard_owner | 30s | 2 | never |
 | `orchestrator.stream_retention` | orchestrator | operational | candidate | per_instance | 1m | 1 | safe |
 | `orchestrator.timer_dispatch` | orchestrator | correctness | candidate | shard_owner | 1s | 120 | never |
-| `orchestrator.wait_delivery` | orchestrator | feature | candidate | per_instance | 5s | 24 | safe |
+| `orchestrator.wait_delivery` | orchestrator | feature | candidate | per_instance | 5s | 36 | safe |
 | `orchestrator.workflow_harness_advance` | orchestrator | correctness | blocking | per_instance | event-driven | 60 | never |
 | `orchestrator.workflow_progress` | orchestrator | feature | blocking | per_instance | event-driven | 120 | safe |
 | `orchestrator.workflow_run_reconcile` | orchestrator | correctness | candidate | per_instance | 10s | 6 | never |
@@ -1108,7 +1108,7 @@ Datastore operations per minute with zero due work, grouped by what each scope m
 
 **Invariant.** A declared wait ends exactly once: by its event, or by its window closing with no event. A wait that catches up on an event already recorded is woken at once by its own declaration.
 
-**Recovery.** A wait whose delivery fails is put back, its event subject or its window due again, and the next cycle delivers it. A wait claimed by another instance is woken by that instance only.
+**Recovery.** A claimed wait stays in the delivery set under a lease until its delivery settles it. A wait whose delivery fails is put back due at once, and one whose deliverer died is delivered again once the lease lapses. The room post is keyed by the wait, so a second delivery posts nothing twice.
 
 | Field | Value |
 | ----- | ----- |
@@ -1121,14 +1121,14 @@ Datastore operations per minute with zero due work, grouped by what each scope m
 | Base cadence | 5s |
 | Max batch | 50 |
 | Max cycle | 30000 ms |
-| Idle datastore ops/min | 24 |
-| Hot-path producer budget | 0 added RTT — A wait event records itself inside the transaction that appends its entity event; a declaration is the step it runs in. |
+| Idle datastore ops/min | 36 |
+| Hot-path producer budget | 0 added RTT — A wait event records itself inside the transaction that appends its entity event, and arms its subject only where a waiter holds it; a declaration is the step it runs in. |
 | Feature gate | — |
 | Disable policy | safe |
 | Residual poll | — |
 | Source | `apps/aflow-orchestrator/src/services/waits/waitDelivery.ts`<br>`packages/cybernetic-runtime/src/waits.ts`<br>`packages/redis/src/waits.ts`<br>`packages/redis/src/entityEvents.ts` |
 
-> Two range reads per cycle when nothing is due — the fired subjects and the windows due — flat in tenants, spaces, waits and stored keys. A woken waiter is told in its conversation and woken the way a run it started wakes it, at the event-driven turn rate.
+> Three range reads per cycle when nothing is due — the deliveries due, the fired subjects and the windows due — flat in tenants, spaces, waits and stored keys. A woken waiter is told in its conversation and woken the way a run it started wakes it, at the event-driven turn rate.
 
 ### `orchestrator.workflow_harness_advance`
 

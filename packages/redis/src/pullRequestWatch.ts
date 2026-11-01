@@ -9,6 +9,7 @@
  */
 import type { Redis } from 'ioredis';
 import { z } from 'zod';
+import { PullRequestChangeSchema } from '@aflow/schemas';
 
 /** Watched pull requests by when each is next polled, across every space. */
 export const PULL_REQUEST_WATCH_DUE_KEY = 'pr_watch:due';
@@ -68,6 +69,11 @@ export const PullRequestWatchSchema = z.object({
     z.object({ headSha: z.string().min(1), state: PullRequestChecksStateSchema }),
   ).optional(),
   reviews: ConditionalReadSchema(z.object({ changesRequested: z.boolean() })).optional(),
+  /**
+   * Changes a poll found whose event did not land. The poll's reads are saved
+   * with them, so the next poll sends these again and not the ones that landed.
+   */
+  unsent: z.array(PullRequestChangeSchema).optional(),
 });
 export type PullRequestWatch = z.infer<typeof PullRequestWatchSchema>;
 
