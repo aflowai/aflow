@@ -58,11 +58,20 @@ beforeEach(async () => {
   await redis.flushall();
 });
 
+/** A wait declared after `green` was recorded, catching up from `since` where it names one. */
+function lateWait(overrides: Partial<WaitRegistration> = {}): WaitRegistration {
+  return wait({
+    declaredAt: green.firedAt + 5_000,
+    closesAt: green.firedAt + 65_000,
+    ...overrides,
+  });
+}
+
 describe('a waiter registered after its event fired', () => {
-  it('is woken at once, by its own registration', async () => {
+  it('that asks to catch up is woken at once, by its own registration', async () => {
     await recordWaitEvent(redis, { tenantId: TENANT, spaceId: SPACE }, green);
 
-    const registered = await registerWait(redis, wait());
+    const registered = await registerWait(redis, lateWait({ since: T0 }));
 
     expect(registered).toEqual({ state: 'woken', outcome: { endedBy: 'event', event: green } });
     expect(await redis.zcard(WAIT_WINDOWS_KEY)).toBe(0);
@@ -70,9 +79,26 @@ describe('a waiter registered after its event fired', () => {
 
   it('is not woken twice: the fired subject finds nothing left to wake', async () => {
     await recordWaitEvent(redis, { tenantId: TENANT, spaceId: SPACE }, green);
-    await registerWait(redis, wait());
+    await registerWait(redis, lateWait({ since: T0 }));
 
     expect(await claimFiredWaits(redis, 10)).toEqual([]);
+  });
+
+  it('that names no since waits for a new event rather than return the old one', async () => {
+    await recordWaitEvent(redis, { tenantId: TENANT, spaceId: SPACE }, green);
+    expect(await claimFiredWaits(redis, 10)).toEqual([]);
+
+    const second = lateWait();
+    expect(await registerWait(redis, second)).toEqual({ state: 'waiting' });
+    // The old event's subject is read again by a later event, and still ends nothing.
+    await recordWaitEvent(redis, { tenantId: TENANT, spaceId: SPACE }, green);
+    expect(await claimFiredWaits(redis, 10)).toEqual([]);
+
+    const merged = { ...green, firedAt: second.declaredAt + 1, detail: { change: 'merged' } };
+    await recordWaitEvent(redis, { tenantId: TENANT, spaceId: SPACE }, merged);
+    expect(await claimFiredWaits(redis, 10)).toEqual([
+      { registration: second, outcome: { endedBy: 'event', event: merged } },
+    ]);
   });
 
   it('keeps waiting where the event is older than the time it waits from', async () => {
@@ -169,7 +195,9 @@ describe('the entity event stream feeds the waits', () => {
       firedAt: T0 + 5_000,
       detail: { status: 'completed' },
     });
-    expect(await registerWait(redis, wait({ kind: 'run.ended', subject: RUN }))).toMatchObject({
+    expect(
+      await registerWait(redis, wait({ kind: 'run.ended', subject: RUN, since: T0 })),
+    ).toMatchObject({
       state: 'woken',
       outcome: { endedBy: 'event' },
     });

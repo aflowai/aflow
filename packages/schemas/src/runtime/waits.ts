@@ -74,7 +74,10 @@ export const WaitRegistrationSchema = z.object({
   declaredAt: z.number().int().nonnegative(),
   /** Epoch ms when the window closes. */
   closesAt: z.number().int().nonnegative(),
-  /** Epoch ms. An event recorded before it does not end the wait. */
+  /**
+   * Epoch ms. An event recorded at or after it ends the wait, one recorded
+   * before already included. Without it, the wait counts from `declaredAt`.
+   */
   since: z.number().int().nonnegative().optional(),
 });
 export type WaitRegistration = z.infer<typeof WaitRegistrationSchema>;

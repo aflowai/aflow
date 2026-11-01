@@ -9,9 +9,9 @@
  *
  * Exactly one party wakes a wait: whoever removes its field from the waiter
  * hash. Registration and recording are each one transaction, so a waiter that
- * registers after its event fired reads the event in its own transaction and
- * claims itself, and one registered first is in the hash the event's claimer
- * reads.
+ * asks to catch up on an event already recorded reads it in its own
+ * transaction and claims itself, and one registered first is in the hash the
+ * event's claimer reads.
  */
 import type { ChainableCommander, Redis } from 'ioredis';
 import {
@@ -110,9 +110,13 @@ function parseEvent(raw: unknown): WaitEvent | null {
   }
 }
 
-/** Whether a recorded event ends this wait: one recorded before its `since` does not. */
+/**
+ * Whether a recorded event ends this wait. The kinds fire many times for one
+ * subject, so a wait declared without `since` waits for an event after its
+ * declaration. Only an explicit `since` catches up on one recorded before.
+ */
 function eventEnds(registration: WaitRegistration, event: WaitEvent): boolean {
-  return registration.since === undefined || event.firedAt >= registration.since;
+  return event.firedAt >= (registration.since ?? registration.declaredAt);
 }
 
 /**
@@ -149,12 +153,12 @@ export async function readRecordedWaitEvent(
 
 export type RegisterWaitResult =
   | { state: 'waiting' }
-  /** The event had fired already: the waiter is woken at once, by this call. */
+  /** The event it catches up on had fired already: the waiter is woken at once, by this call. */
   | { state: 'woken'; outcome: WaitOutcome };
 
 /**
- * Register a wait. Where its event was recorded already, the wait ends here
- * and the caller tells the waiter at once.
+ * Register a wait. Where an event it catches up on was recorded already, the
+ * wait ends here and the caller tells the waiter at once.
  */
 export async function registerWait(
   redis: Redis,

@@ -10,7 +10,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import RedisMock from 'ioredis-mock';
 import type { Redis } from 'ioredis';
-import { armPullRequestWatch, countPullRequestWatches, readRecordedWaitEvent } from '@aflow/redis';
+import {
+  PULL_REQUEST_WATCH_KEY,
+  armPullRequestWatch,
+  countPullRequestWatches,
+  readRecordedWaitEvent,
+} from '@aflow/redis';
 import { pullRequestSubject } from '@aflow/schemas';
 import type { BackgroundTaskLogger } from '@aflow/lib';
 import type { ConditionalAnswer, GitHubConditionalGet } from './github.js';
@@ -75,6 +80,9 @@ const pull = (overrides: Record<string, unknown> = {}) => ({
 });
 const CHECKS = '/repos/aflowai/aflow/commits/abc123/check-runs';
 const REVIEWS = '/repos/aflowai/aflow/pulls/276/reviews';
+const STATUS = '/repos/aflowai/aflow/commits/abc123/status';
+const passing = (n: number) =>
+  Array.from({ length: n }, () => ({ status: 'completed', conclusion: 'success' }));
 
 async function arm(): Promise<void> {
   await armPullRequestWatch(redis, {
@@ -165,6 +173,7 @@ describe('a loop pull request the publication armed', () => {
     const github = fakeGitHub({
       [PULL]: { etag: '"p1"', body: pull({ mergeable_state: 'dirty' }) },
       [CHECKS]: { etag: '"c1"', body: { check_runs: [] } },
+      [STATUS]: { etag: '"s1"', body: { state: 'pending', total_count: 0, statuses: [] } },
       [REVIEWS]: { etag: '"r1"', body: [] },
     });
 
@@ -209,6 +218,104 @@ describe('a loop pull request the publication armed', () => {
     const emit = vi.fn(async () => true);
     await cycle(github.get, emit);
     expect(emit).toHaveBeenCalledWith(redis, expect.objectContaining({ change: 'checks_green' }));
+  });
+});
+
+describe('checks a repository reports outside one page of check runs', () => {
+  it('reads green from the combined status where the head has no check runs', async () => {
+    await arm();
+    const github = fakeGitHub({
+      [PULL]: { etag: '"p1"', body: pull() },
+      [CHECKS]: { etag: '"c1"', body: { total_count: 0, check_runs: [] } },
+      [STATUS]: {
+        etag: '"s1"',
+        body: {
+          state: 'success',
+          total_count: 2,
+          statuses: [{ state: 'success' }, { state: 'success' }],
+        },
+      },
+      [REVIEWS]: { etag: '"r1"', body: [] },
+    });
+    const emit = vi.fn(async () => true);
+
+    await cycle(github.get, emit);
+
+    expect(emit).toHaveBeenCalledWith(redis, expect.objectContaining({ change: 'checks_green' }));
+    expect(github.requests.map((r) => r.path)).toContain(STATUS);
+
+    // The next poll sends the status's ETag back, and an unchanged head reports nothing new.
+    clock += PULL_REQUEST_POLL_CADENCE_MS;
+    await cycle(github.get, emit);
+    expect(github.requests.find((r) => r.path === STATUS && r.etag === '"s1"')).toBeDefined();
+    expect(emit).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads green from the combined status past 100 check runs', async () => {
+    await arm();
+    const github = fakeGitHub({
+      [PULL]: { etag: '"p1"', body: pull() },
+      [CHECKS]: { etag: '"c1"', body: { total_count: 150, check_runs: passing(100) } },
+      [STATUS]: { etag: '"s1"', body: { state: 'success', total_count: 1, statuses: [{}] } },
+      [REVIEWS]: { etag: '"r1"', body: [] },
+    });
+    const emit = vi.fn(async () => true);
+
+    await cycle(github.get, emit);
+
+    expect(emit).toHaveBeenCalledWith(redis, expect.objectContaining({ change: 'checks_green' }));
+  });
+
+  it('does not read green past 100 check runs while the combined status is pending', async () => {
+    await arm();
+    const github = fakeGitHub({
+      [PULL]: { etag: '"p1"', body: pull() },
+      [CHECKS]: { etag: '"c1"', body: { total_count: 150, check_runs: passing(100) } },
+      [STATUS]: { etag: '"s1"', body: { state: 'pending', total_count: 1, statuses: [{}] } },
+      [REVIEWS]: { etag: '"r1"', body: [] },
+    });
+    const emit = vi.fn(async () => true);
+
+    await cycle(github.get, emit);
+
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it('asks for no combined status where one page of check runs decides', async () => {
+    await arm();
+    const github = fakeGitHub({
+      [PULL]: { etag: '"p1"', body: pull() },
+      [CHECKS]: { etag: '"c1"', body: { total_count: 2, check_runs: passing(2) } },
+      [REVIEWS]: { etag: '"r1"', body: [] },
+    });
+
+    await cycle(github.get);
+
+    expect(github.requests.map((r) => r.path)).not.toContain(STATUS);
+  });
+});
+
+describe('a watch whose polls keep failing', () => {
+  it('keeps its lifetime as it stands, and is dropped once that lapses', async () => {
+    await arm();
+    const key = PULL_REQUEST_WATCH_KEY({ tenantId: TENANT, spaceId: SPACE, subject: SUBJECT });
+    await redis.pexpire(key, 300);
+    let requests = 0;
+    const failing: GitHubConditionalGet = async () => {
+      requests++;
+      throw new Error('GitHub answered 502');
+    };
+
+    expect(await cycle(failing)).toMatchObject({ candidates: 1, failed: 1 });
+    const left = await redis.pttl(key);
+    expect(left).toBeGreaterThan(0);
+    expect(left).toBeLessThanOrEqual(300);
+
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    clock += PULL_REQUEST_POLL_CADENCE_MS;
+    expect(await cycle(failing)).toEqual({ candidates: 0 });
+    expect(requests).toBe(1);
+    expect(await countPullRequestWatches(redis)).toBe(0);
   });
 });
 

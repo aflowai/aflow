@@ -4,8 +4,9 @@
  *
  * A wait names a kind, a subject and a window, never a cadence. It ends when
  * a matching event arrives or the window closes, whichever comes first, and
- * the waiter learns which of the two ended it. A wait declared after its
- * event fired ends at once. The wait delivers the event and decides nothing:
+ * the waiter learns which of the two ended it. A wait waits for an event after
+ * its declaration. One declared with `since` catches up: an event recorded at or
+ * after that time ends it at once. The wait delivers the event and decides nothing:
  * a woken waiter acts on it by its own rules.
  *
  * The events reach it on the space's entity event stream: `appendEntityEvent`
@@ -32,7 +33,10 @@ export interface DeclareWaitInput {
   kind: WaitEventKind;
   subject: string;
   windowSeconds: number;
-  /** Epoch ms. An event recorded before it does not end the wait. */
+  /**
+   * Epoch ms. Catch up: an event recorded at or after it ends the wait at
+   * once. Without it, only an event after the declaration ends the wait.
+   */
   since?: number;
 }
 
@@ -48,7 +52,7 @@ export class WaitDeclarationError extends Error {
 }
 
 /**
- * Declare a wait. Where its event was recorded already, the wait ends here
+ * Declare a wait. Where an event it catches up on was recorded already, the wait ends here
  * and the caller has the outcome at once; otherwise the waiter is woken later
  * by the event or by its window closing.
  */

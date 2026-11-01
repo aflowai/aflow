@@ -12,6 +12,7 @@ import type { Redis } from 'ioredis';
 import {
   claimDuePullRequestWatches,
   clearPullRequestWatch,
+  reschedulePullRequestWatch,
   savePullRequestWatch,
   type PullRequestChecksState,
   type PullRequestReadState,
@@ -85,6 +86,57 @@ export function parseChecksState(body: unknown): PullRequestChecksState {
   return pending ? 'pending' : 'green';
 }
 
+/** Whether a check-runs answer holds fewer runs than the head has: it stops at one page. */
+export function checkRunsTruncated(body: unknown): boolean {
+  const answer = record(body);
+  const runs = answer['check_runs'];
+  const total = answer['total_count'];
+  return typeof total === 'number' && Array.isArray(runs) && total > runs.length;
+}
+
+/** The combined commit status of a head: `none` where no status was reported on it. */
+export function parseCombinedStatus(body: unknown): PullRequestChecksState {
+  const answer = record(body);
+  const statuses = answer['statuses'];
+  const total = answer['total_count'];
+  if (
+    (typeof total === 'number' && total === 0) ||
+    (Array.isArray(statuses) && statuses.length === 0)
+  ) {
+    return 'none';
+  }
+  const state = answer['state'];
+  if (state === 'success') return 'green';
+  if (state === 'failure' || state === 'error') return 'red';
+  return 'pending';
+}
+
+/**
+ * Whether the check runs alone say what the head's checks are. A run read red
+ * or pending decides it. Green does not where the answer stopped at one page,
+ * and no runs say nothing: CI may report through commit statuses instead.
+ */
+function checkRunsDecide(checks: {
+  state: PullRequestChecksState;
+  truncated?: boolean | undefined;
+}): boolean {
+  if (checks.state === 'red' || checks.state === 'pending') return true;
+  return checks.state === 'green' && checks.truncated !== true;
+}
+
+/**
+ * The head's checks where the runs do not decide them, from its combined
+ * status. Past one page of runs, green needs the combined status green: with
+ * no status reported there, the runs not read keep it pending.
+ */
+function checksOfStatuses(
+  checks: { state: PullRequestChecksState; truncated?: boolean | undefined },
+  statuses: PullRequestChecksState,
+): PullRequestChecksState {
+  if (checks.state === 'none') return statuses;
+  return statuses === 'none' ? 'pending' : statuses;
+}
+
 /** Changes are requested where a reviewer's latest deciding review asked for them. */
 export function parseChangesRequested(body: unknown): boolean {
   if (!Array.isArray(body)) return false;
@@ -124,12 +176,24 @@ export function pullRequestChanges(
   return changes;
 }
 
+/** The checks the last poll read, as it decided them. */
+function storedChecksState(
+  checks: { state: PullRequestChecksState; truncated?: boolean | undefined },
+  statuses: { headSha: string; state: PullRequestChecksState } | undefined,
+  headSha: string,
+): PullRequestChecksState {
+  if (checkRunsDecide(checks)) return checks.state;
+  return statuses?.headSha === headSha ? checksOfStatuses(checks, statuses.state) : checks.state;
+}
+
 function snapshotOf(watch: PullRequestWatch): PullRequestSnapshot | undefined {
   if (watch.pull === undefined) return undefined;
   const pull = watch.pull.value;
   return {
     pull,
-    ...(watch.checks?.value.headSha === pull.headSha ? { checks: watch.checks.value.state } : {}),
+    ...(watch.checks?.value.headSha === pull.headSha
+      ? { checks: storedChecksState(watch.checks.value, watch.statuses?.value, pull.headSha) }
+      : {}),
     ...(watch.reviews !== undefined
       ? { changesRequested: watch.reviews.value.changesRequested }
       : {}),
@@ -182,9 +246,29 @@ export async function pollPullRequest(
     watch,
     `${base}/commits/${encodeURIComponent(headSha)}/check-runs?per_page=100`,
     watch.checks?.value.headSha === headSha ? watch.checks : undefined,
-    (body) => ({ headSha, state: parseChecksState(body) }),
+    (body) => ({
+      headSha,
+      state: parseChecksState(body),
+      ...(checkRunsTruncated(body) ? { truncated: true } : {}),
+    }),
     signal,
   );
+  // Read only where the runs do not decide, so a repository whose CI reports
+  // through check runs spends no request on it.
+  const statuses = checkRunsDecide(checks.value)
+    ? undefined
+    : await readConditional(
+        get,
+        watch,
+        `${base}/commits/${encodeURIComponent(headSha)}/status`,
+        watch.statuses?.value.headSha === headSha ? watch.statuses : undefined,
+        (body) => ({ headSha, state: parseCombinedStatus(body) }),
+        signal,
+      );
+  const checksState =
+    statuses === undefined
+      ? checks.value.state
+      : checksOfStatuses(checks.value, statuses.value.state);
   const reviews = await readConditional(
     get,
     watch,
@@ -194,10 +278,10 @@ export async function pollPullRequest(
     signal,
   );
   return {
-    watch: { ...next, checks, reviews },
+    watch: { ...next, checks, reviews, ...(statuses !== undefined ? { statuses } : {}) },
     snapshot: {
       pull: pull.value,
-      checks: checks.value.state,
+      checks: checksState,
       changesRequested: reviews.value.changesRequested,
     },
   };
@@ -257,7 +341,7 @@ export async function runPullRequestEventsCycle(
       // the last poll read, so the next poll — a 304 — finds the same change.
       if (!emitted) {
         failed++;
-        await savePullRequestWatch(deps.redis, watch, now() + cadenceMs);
+        await reschedulePullRequestWatch(deps.redis, watch, now() + cadenceMs);
         continue;
       }
       if (changes.includes('merged') || changes.includes('closed')) {
@@ -278,9 +362,10 @@ export async function runPullRequestEventsCycle(
         subject: watch.subject,
         error: err instanceof Error ? err.message : String(err),
       });
-      // Where this write fails too, the claim lapses after one cadence and the
-      // pull request, still due, is polled then.
-      await savePullRequestWatch(deps.redis, watch, now() + cadenceMs).catch(() => undefined);
+      // Not saved: a save would renew the watch's lifetime, and one whose polls
+      // keep failing must lapse. Where this write fails too, the claim lapses
+      // after one cadence and the pull request, still due, is polled then.
+      await reschedulePullRequestWatch(deps.redis, watch, now() + cadenceMs).catch(() => undefined);
     }
   }
   return { candidates: watches.length, processed, failed };

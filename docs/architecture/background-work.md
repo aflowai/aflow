@@ -828,7 +828,7 @@ Datastore operations per minute with zero due work, grouped by what each scope m
 
 **Invariant.** Only a pull request a publication opened is polled, until it merges or closes. With none open the task makes no GitHub request.
 
-**Recovery.** A poll that fails leaves the candidate due at the next cadence. A missed event leaves a waiter to its window, which wakes it and tells it so. A candidate whose clear was lost expires after fourteen days without a poll.
+**Recovery.** A poll that fails leaves the candidate due at the next cadence. A missed event leaves a waiter to its window, which wakes it and tells it so. A candidate whose clear was lost, or whose polls keep failing, expires fourteen days after its last successful poll.
 
 | Field | Value |
 | ----- | ----- |
@@ -848,7 +848,7 @@ Datastore operations per minute with zero due work, grouped by what each scope m
 | Residual poll | — |
 | Source | `apps/aflow-orchestrator/src/services/pullRequestEvents/source.ts`<br>`apps/aflow-orchestrator/src/services/pullRequestEvents/github.ts`<br>`apps/aflow-orchestrator/src/services/pullRequestEvents/arm.ts`<br>`packages/redis/src/pullRequestWatch.ts` |
 
-> Each poll is conditional: the task keeps each answer's ETag and sends it back as If-None-Match, so an unchanged pull request answers 304, which GitHub says does not count against the primary rate limit. Three reads per pull request — the pull request, its head's check runs and its reviews. The 60-second cadence is proposed and still to be measured (Plan 339 P2). One range read per cycle when nothing is armed.
+> Each poll is conditional: the task keeps each answer's ETag and sends it back as If-None-Match, so an unchanged pull request answers 304, which GitHub says does not count against the primary rate limit. Three reads per pull request — the pull request, its head's check runs and its reviews — and a fourth, the head's combined status, where the check runs are none or more than one page. The 60-second cadence is proposed and still to be measured (Plan 339 P2). One range read per cycle when nothing is armed.
 
 ### `orchestrator.resident_due_check`
 
@@ -1106,7 +1106,7 @@ Datastore operations per minute with zero due work, grouped by what each scope m
 
 **Purpose.** Wake each waiter of the wait primitive when its event arrives or its window closes, and tell it which ended the wait.
 
-**Invariant.** A declared wait ends exactly once: by its event, or by its window closing with no event. A waiter registered after its event fired is woken at once by its own declaration.
+**Invariant.** A declared wait ends exactly once: by its event, or by its window closing with no event. A wait that catches up on an event already recorded is woken at once by its own declaration.
 
 **Recovery.** A wait whose delivery fails is put back, its event subject or its window due again, and the next cycle delivers it. A wait claimed by another instance is woken by that instance only.
 

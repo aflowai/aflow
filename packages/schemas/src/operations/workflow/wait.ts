@@ -25,7 +25,7 @@ export const WorkflowWaitInputSchema = z.object({
     .datetime()
     .optional()
     .describe(
-      'Ignore an event recorded before this time. Without it, a recorded event ends the wait at once.',
+      'Catch up from this time: an event already recorded since then ends the wait at once. Without it, only a later event does.',
     ),
 });
 export type WorkflowWaitInput = z.infer<typeof WorkflowWaitInputSchema>;

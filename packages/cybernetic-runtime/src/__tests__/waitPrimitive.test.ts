@@ -40,7 +40,8 @@ function waitOn(
 }
 
 describe('a waiter declared after its event fired', () => {
-  it('is woken at once by its own declaration, and told which change happened', async () => {
+  it('that asks to catch up is woken at once by its own declaration, and told which change happened', async () => {
+    const since = Date.now();
     await emitPullRequestChanged(redis, {
       tenantId: TENANT,
       spaceId: SPACE,
@@ -50,7 +51,7 @@ describe('a waiter declared after its event fired', () => {
       headSha: 'abc123',
     });
 
-    const declared = await declareWait(redis, waitOn('pull_request.changed', PULL));
+    const declared = await declareWait(redis, { ...waitOn('pull_request.changed', PULL), since });
 
     expect(declared.state).toBe('ended');
     if (declared.state !== 'ended') return;
@@ -65,7 +66,8 @@ describe('a waiter declared after its event fired', () => {
     expect(await claimEndedWaits(redis, Date.now() + 3_600_000, 10)).toEqual([]);
   });
 
-  it('is woken at once by a gate already resolved', async () => {
+  it('that asks to catch up is woken at once by a gate already resolved', async () => {
+    const since = Date.now();
     await emitGateResolved(redis, {
       tenantId: TENANT,
       spaceId: SPACE,
@@ -73,11 +75,51 @@ describe('a waiter declared after its event fired', () => {
       resolution: 'approve',
     });
 
-    const declared = await declareWait(redis, waitOn('gate.resolved', 'paused:step-1'));
+    const declared = await declareWait(redis, {
+      ...waitOn('gate.resolved', 'paused:step-1'),
+      since,
+    });
 
     expect(declared).toMatchObject({
       state: 'ended',
       outcome: { endedBy: 'event', event: { detail: { resolution: 'approve' } } },
+    });
+  });
+});
+
+describe('a second wait on a subject whose event fired before it', () => {
+  it('waits for the next event rather than return the old one', async () => {
+    const change = (c: 'checks_green' | 'merged') =>
+      emitPullRequestChanged(redis, {
+        tenantId: TENANT,
+        spaceId: SPACE,
+        subject: PULL,
+        change: c,
+        url: 'https://github.com/aflowai/aflow/pull/276',
+        headSha: 'abc123',
+      });
+    const since = Date.now();
+    await change('checks_green');
+    const first = await declareWait(redis, { ...waitOn('pull_request.changed', PULL), since });
+    expect(first.state).toBe('ended');
+
+    // Declared a second later than the event: the old event does not end it.
+    const second = await declareWait(
+      redis,
+      waitOn('pull_request.changed', PULL),
+      Date.now() + 1_000,
+    );
+    expect(second.state).toBe('waiting');
+    expect(await claimEndedWaits(redis, Date.now(), 10)).toEqual([]);
+
+    await new Promise((resolve) => setTimeout(resolve, 1_100));
+    await change('merged');
+    const ended = await claimEndedWaits(redis, Date.now(), 10);
+    expect(ended).toHaveLength(1);
+    expect(ended[0]?.registration.waitId).toBe(second.waitId);
+    expect(ended[0]?.outcome).toMatchObject({
+      endedBy: 'event',
+      event: { detail: { change: 'merged' } },
     });
   });
 });

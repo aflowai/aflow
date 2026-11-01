@@ -524,6 +524,7 @@ export {
   armPullRequestWatch,
   clearPullRequestWatch,
   savePullRequestWatch,
+  reschedulePullRequestWatch,
   claimDuePullRequestWatches,
   countPullRequestWatches,
   type PullRequestWatch,

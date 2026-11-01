@@ -53,6 +53,18 @@ export const PullRequestWatchSchema = z.object({
   pull: ConditionalReadSchema(PullRequestReadStateSchema).optional(),
   /** Keyed by the head it was read for: a new head is a new check-runs resource. */
   checks: ConditionalReadSchema(
+    z.object({
+      headSha: z.string().min(1),
+      state: PullRequestChecksStateSchema,
+      /** The answer held fewer check runs than the head has: past the first page. */
+      truncated: z.boolean().optional(),
+    }),
+  ).optional(),
+  /**
+   * The head's combined commit status, read where the check runs do not say
+   * green or not: none of them, or more than one page.
+   */
+  statuses: ConditionalReadSchema(
     z.object({ headSha: z.string().min(1), state: PullRequestChecksStateSchema }),
   ).optional(),
   reviews: ConditionalReadSchema(z.object({ changesRequested: z.boolean() })).optional(),
@@ -139,6 +151,24 @@ export async function savePullRequestWatch(
     .set(PULL_REQUEST_WATCH_KEY(watch), JSON.stringify(watch), 'EX', PULL_REQUEST_WATCH_TTL_SECONDS)
     .zadd(PULL_REQUEST_WATCH_DUE_KEY, String(nextPollAtMs), dueMember(watch))
     .del(PULL_REQUEST_WATCH_LEASE_KEY(watch))
+    .exec();
+}
+
+/**
+ * Set when a pull request is next due and give up the claim on it, keeping its
+ * record as it stands. A poll that failed calls this rather than save: saving
+ * would renew the record's lifetime, and a watch whose polls keep failing must
+ * still lapse after it.
+ */
+export async function reschedulePullRequestWatch(
+  redis: Redis,
+  ref: WatchRef,
+  nextPollAtMs: number,
+): Promise<void> {
+  await redis
+    .multi()
+    .zadd(PULL_REQUEST_WATCH_DUE_KEY, String(nextPollAtMs), dueMember(ref))
+    .del(PULL_REQUEST_WATCH_LEASE_KEY(ref))
     .exec();
 }
 
