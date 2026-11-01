@@ -15,9 +15,11 @@ import { sql, type SQL } from 'drizzle-orm';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import {
   ACTION_CENTER_ITEM_ID_PREFIX,
+  BROWSER_PAGE_ACT_OPERATION_ID,
   computeEgressTitle,
   humanRequestTitle,
   inferTaskType,
+  MODEL_RUNTIME_CHANGE_OPERATION_ID,
   oauthConsentTitle,
   pausedRequestTitle,
   pendingPlanStepCount,
@@ -32,6 +34,7 @@ import {
   resolveWorkflowForRunRevision,
   withTenantSchema,
 } from '@aflow/database';
+import { getCyberneticLogger } from './logger.js';
 import { selectWaitingNodes } from './plan/asks.js';
 import { selectOpenDecisions } from './plan/operations.js';
 
@@ -221,6 +224,23 @@ function total(rows: readonly Row[], kind?: string): number {
 /** The operations the user executor answers with a request for input and for an approval. */
 const USER_INPUT_OPERATION_ID = 'user.interaction.ask';
 const USER_APPROVAL_OPERATION_ID = 'user.interaction.approve';
+
+/** The step type of the API executor, whose every operation passes its write gate. */
+const WRITE_APPROVAL_STEP_TYPE = 'api';
+
+/**
+ * Whether an operation pauses for a write approval: every operation the API
+ * executor runs gates its resolved write (Plan 253), and the browser action
+ * and the model-runtime change each ask before they act (Plan 320 D7, Plan
+ * 323 D10). These are the operations a write-approval card names.
+ */
+function asksWriteApproval(operation: string): boolean {
+  return (
+    operation.startsWith(`${WRITE_APPROVAL_STEP_TYPE}.`) ||
+    operation === BROWSER_PAGE_ACT_OPERATION_ID ||
+    operation === MODEL_RUNTIME_CHANGE_OPERATION_ID
+  );
+}
 
 /**
  * A request's kind from its own pause, where the ref holds it outside: the
@@ -436,8 +456,8 @@ type PausedTaskKind = 'human_task' | 'write_approval';
  * still resolves to a human task, as `workflowHumanTaskSource` lists it. A
  * write approval is a task holding the run's pause whose request asks for
  * one. Where the ref holds the request inline its kind says so. Otherwise the
- * definition does: only an operation task outside the user executor's two
- * operations pauses with a write approval held outside the ref.
+ * task's operation does, where it is one that asks (`asksWriteApproval`). A
+ * task whose request and operation say nothing of an approval is no item.
  */
 function classifyPausedTask(row: Row, task: WorkflowTask | undefined): PausedTaskKind | undefined {
   const type = taskTypeOf(task);
@@ -454,11 +474,7 @@ function classifyPausedTask(row: Row, task: WorkflowTask | undefined): PausedTas
     return kind === 'write_approval' ? 'write_approval' : undefined;
   }
   const operation = type === 'operation' ? task?.operation : undefined;
-  return operation !== undefined &&
-    operation !== USER_INPUT_OPERATION_ID &&
-    operation !== USER_APPROVAL_OPERATION_ID
-    ? 'write_approval'
-    : undefined;
+  return operation !== undefined && asksWriteApproval(operation) ? 'write_approval' : undefined;
 }
 
 /**
@@ -602,18 +618,24 @@ function egressItems(rows: readonly Row[]): WaitingItem[] {
   }));
 }
 
+/** What the gate read holds. A part left out was not read. */
+export interface WaitingGateRead {
+  gates?: WaitingGates;
+  /** The space's slug, for the plan link. */
+  spaceSlug?: string;
+}
+
 /**
- * The run gates and consents that wait in the space, and the space's slug.
- * One transaction reads every table, and no payload is fetched. A request's
- * kind comes from the payload its ref holds inline, or else from the pause,
- * and a paused task's from its run's definition as well.
+ * The run gates and consents that wait in the space. One transaction reads
+ * every table, and no payload is fetched. A request's kind comes from the
+ * payload its ref holds inline, or else from the pause, and a paused task's
+ * from its run's definition as well.
  */
-export async function readWaitingGates(params: {
-  db: PostgresJsDatabase;
-  tenantId: string;
-  spaceId: string;
-}): Promise<{ gates: WaitingGates; spaceSlug?: string }> {
-  const { db, tenantId, spaceId } = params;
+async function readGates(
+  db: PostgresJsDatabase,
+  tenantId: string,
+  spaceId: string,
+): Promise<WaitingGates> {
   const read = await withTenantSchema(
     db,
     createTenantContext(tenantId as TenantId),
@@ -622,7 +644,6 @@ export async function readWaitingGates(params: {
       tasks: await rows(tx, PAUSED_TASKS_SQL(spaceId)),
       consents: await rows(tx, CONSENT_RUNS_SQL(spaceId)),
       egress: await rows(tx, EGRESS_REQUESTS_SQL(tenantId, spaceId)),
-      slug: await rows(tx, SPACE_SLUG_SQL(spaceId)),
     }),
   );
 
@@ -634,19 +655,60 @@ export async function readWaitingGates(params: {
     if (kind !== undefined) tasks.push({ row, task, kind });
   }
 
-  const slug = read.slug[0]?.['slug'];
   return {
-    gates: {
-      runGates: total(read.sessions, 'run_gate') + tasks.length + total(read.egress),
-      consents: total(read.sessions, 'consent') + total(read.consents),
-      newest: newestWaitingItems(
-        sessionItems(read.sessions),
-        taskItems(tasks),
-        consentItems(read.consents),
-        egressItems(read.egress),
-      ),
-    },
-    ...(typeof slug === 'string' ? { spaceSlug: slug } : {}),
+    runGates: total(read.sessions, 'run_gate') + tasks.length + total(read.egress),
+    consents: total(read.sessions, 'consent') + total(read.consents),
+    newest: newestWaitingItems(
+      sessionItems(read.sessions),
+      taskItems(tasks),
+      consentItems(read.consents),
+      egressItems(read.egress),
+    ),
+  };
+}
+
+async function readSpaceSlug(
+  db: PostgresJsDatabase,
+  tenantId: string,
+  spaceId: string,
+): Promise<string | undefined> {
+  const read = await withTenantSchema(db, createTenantContext(tenantId as TenantId), (tx) =>
+    rows(tx, SPACE_SLUG_SQL(spaceId)),
+  );
+  const slug = read[0]?.['slug'];
+  return typeof slug === 'string' ? slug : undefined;
+}
+
+function warnUnread(what: string, tenantId: string, spaceId: string) {
+  return (err: unknown): undefined => {
+    getCyberneticLogger().warn(`helmsmanAttention: ${what} failed`, {
+      error: err instanceof Error ? err.message : String(err),
+      tenantId,
+      spaceId,
+    });
+    return undefined;
+  };
+}
+
+/**
+ * The run gates and consents that wait in the space, and the space's slug.
+ * The slug is read apart from the gates: a plan step's link needs only it and
+ * the node the walk read, so a failed gate query costs the gate and consent
+ * counts and leaves every plan link standing.
+ */
+export async function readWaitingGates(params: {
+  db: PostgresJsDatabase;
+  tenantId: string;
+  spaceId: string;
+}): Promise<WaitingGateRead> {
+  const { db, tenantId, spaceId } = params;
+  const [gates, spaceSlug] = await Promise.all([
+    readGates(db, tenantId, spaceId).catch(warnUnread('waiting-gate count', tenantId, spaceId)),
+    readSpaceSlug(db, tenantId, spaceId).catch(warnUnread('space-slug read', tenantId, spaceId)),
+  ]);
+  return {
+    ...(gates !== undefined ? { gates } : {}),
+    ...(spaceSlug !== undefined ? { spaceSlug } : {}),
   };
 }
 
@@ -657,14 +719,15 @@ export async function readWaitingGates(params: {
 /** The section's data from the walk's plan steps and the gate read. A read that failed is left out. */
 export function waitingOnPersonFrom(
   plan: WaitingPlanSteps | undefined,
-  outside: { gates: WaitingGates; spaceSlug?: string } | undefined,
+  outside: WaitingGateRead | undefined,
 ): WaitingOnPerson {
+  const gates = outside?.gates;
   return {
     ...(plan !== undefined ? { planSteps: { asks: plan.asks, decisions: plan.decisions } } : {}),
-    ...(outside !== undefined
-      ? { gates: { runGates: outside.gates.runGates, consents: outside.gates.consents } }
+    ...(gates !== undefined
+      ? { gates: { runGates: gates.runGates, consents: gates.consents } }
       : {}),
-    items: newestWaitingItems(plan?.newest ?? [], outside?.gates.newest ?? []),
+    items: newestWaitingItems(plan?.newest ?? [], gates?.newest ?? []),
     ...(outside?.spaceSlug !== undefined ? { spaceSlug: outside.spaceSlug } : {}),
   };
 }
