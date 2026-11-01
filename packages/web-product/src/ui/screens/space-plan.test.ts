@@ -3024,7 +3024,7 @@ describe('SpacePlanPage — state as orbs, and motion (Plan 332 P7)', () => {
     ];
     expect(read(L_NEEDS)).toEqual(['paused', 'Pending approval']);
     expect(read(L_FLIGHT)).toEqual(['running', '1 running']);
-    expect(read(L_QUEUED)).toEqual(['idle', 'Queued']);
+    expect(read(L_QUEUED)).toEqual(['inert', 'Queued']);
     expect(read(L_EMPTY)).toEqual(['inert', 'No steps']);
     expect(read(L_FINISHED)).toEqual(['completed', 'Finished']);
 
@@ -3068,7 +3068,7 @@ describe('SpacePlanPage — state as orbs, and motion (Plan 332 P7)', () => {
     expect(card(NEXT).querySelector('[data-plan-waiting]')?.textContent).toBe(
       'Its run ended; the loop advances it when it returns',
     );
-    expect(read(ARTICLE)).toEqual(['idle', 'Queued']);
+    expect(read(ARTICLE)).toEqual(['inert', 'Queued']);
     expect(read(LANDED)).toEqual(['completed', 'Done']);
     expect(read(SKETCH)).toEqual(['inert', 'Dropped']);
     expect(container.querySelector('[data-plan-orb="failed"]')).toBe(null);
@@ -3086,7 +3086,7 @@ describe('SpacePlanPage — state as orbs, and motion (Plan 332 P7)', () => {
     expect(rail().querySelector('[data-badge]')?.textContent).toBe('Done');
 
     await click(card(ARTICLE));
-    expect(orbKind(rail())).toBe('idle');
+    expect(orbKind(rail())).toBe('inert');
     expect(rail().querySelector('[data-badge]')?.textContent).toBe('Queued');
   });
 
@@ -3098,7 +3098,7 @@ describe('SpacePlanPage — state as orbs, and motion (Plan 332 P7)', () => {
     expect(laneRow(LANE_STOP).querySelector('[data-badge]')?.textContent).toBe('Approval');
     expect(orbKind(laneRow(LANE_STRANDED))).toBe('paused');
     expect(laneRow(LANE_STRANDED).textContent).toContain('Under a closed step');
-    expect(orbKind(laneRow(ARTICLE))).toBe('idle');
+    expect(orbKind(laneRow(ARTICLE))).toBe('inert');
     expect(laneRow(ARTICLE).textContent).toContain('Next for the loop');
 
     const running = laneRow(BOARD);
