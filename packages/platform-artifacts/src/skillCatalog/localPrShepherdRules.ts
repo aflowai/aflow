@@ -458,24 +458,37 @@ export const SHEPHERD_RULES: readonly WorkflowRunDecideRule[] = [
   // rule holds only where the shepherd would merge: those fall through to
   // their own rule. Written `== <expected>`, so a read that did not happen
   // hands nothing over.
-  handedOver('does_not_merge', {
-    when: {
-      allOf: [
-        'state.pr.data.mergeable == false',
-        "state.checks.data.state != 'failing'",
-        'state.pr.data.draft == false',
-        "state.folder.branchPolicy.mergePosture == 'when-green'",
-        `state.folder.branchPolicy.pushApproval == '${HOST_MERGE_POSTURE_REVIEWED_PUSH}'`,
-        'state.handoff.data.mergeDeclinedSha != state.pr.data.headSha',
-        'state.reviews.complete == true',
-        'state.reviews.changesRequestedBy[0] == null',
-        'state.publicationReview.reviewed.at == state.pr.data.headSha',
-        "state.publicationReview.verdict == 'approve'",
-      ],
-    },
-    decision: 'leave',
-    reason: `GitHub says the head does not merge into its base as the base stands now, and CI concluded on it without failing: no fix answers that, and GitHub refuses the merge.${HANDED_OVER_HEAD}`,
-  }),
+  // A head the publication pushed as the merge of a moved base (Plan 339 D3)
+  // counts as reviewed where the review is of the commit that merge was made
+  // from, as on the merge path. The rule holds the most comparisons one rule
+  // may, so the second form compares the review with the merge's first parent
+  // alone: a publication pushes its own commit, so that parent is the commit
+  // it made, and it was found because that commit or its merge is the head.
+  // An approving review always records the commit it read, so a merge read
+  // that did not happen leaves the two unequal and hands nothing over.
+  ...[
+    'state.publicationReview.reviewed.at == state.pr.data.headSha',
+    'state.publicationReview.reviewed.at == state.publicationMerge.baseMerge.branchCommit',
+  ].map((reviewedHead) =>
+    handedOver('does_not_merge', {
+      when: {
+        allOf: [
+          'state.pr.data.mergeable == false',
+          "state.checks.data.state != 'failing'",
+          'state.pr.data.draft == false',
+          "state.folder.branchPolicy.mergePosture == 'when-green'",
+          `state.folder.branchPolicy.pushApproval == '${HOST_MERGE_POSTURE_REVIEWED_PUSH}'`,
+          'state.handoff.data.mergeDeclinedSha != state.pr.data.headSha',
+          'state.reviews.complete == true',
+          'state.reviews.changesRequestedBy[0] == null',
+          reviewedHead,
+          "state.publicationReview.verdict == 'approve'",
+        ],
+      },
+      decision: 'leave',
+      reason: `GitHub says the head does not merge into its base as the base stands now, and CI concluded on it without failing: no fix answers that, and GitHub refuses the merge.${HANDED_OVER_HEAD}`,
+    }),
+  ),
   ...MERGE_RULES,
   // Every later pass reads the same one page, so a wait here would never end.
   handedOver('checks_past_page', {

@@ -177,7 +177,7 @@ export const MERGE_READ_TASKS = [
   {
     taskId: 'read-merged-publication',
     name: 'Find the publication that pushed the head as a base merge',
-    goal: "Find the space's finished publication of the pull request's branch whose push sent the head as the merge of a moved base into the commit it made and reviewed. It is read where no publication pushed the head as its own commit.",
+    goal: "Find the space's finished publication of the pull request's branch whose push sent the head as the merge of a moved base into the commit it made and reviewed. It is read on every green pass of a pull request the loop opened, whatever the lookup by commit found, and the review is read from this publication only where that lookup found none.",
     type: 'operation' as const,
     operation: 'workflow.run.list',
     when: OURS_WHEN_GREEN,

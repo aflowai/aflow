@@ -2865,6 +2865,41 @@ describe('Local PR Shepherd — what its rules cannot act on goes to the agent',
     expect(handoffBodyOf(conflicting)).toContain(HAND_OVER_SCHEDULE);
   });
 
+  describe('a head its publication pushed as the merge of a moved base (Plan 339 D3)', () => {
+    const BRANCH_COMMIT = '7'.repeat(40);
+    const mergedHead = {
+      id: PUBLICATION_RUN,
+      verdict: 'approve',
+      reviewed: BRANCH_COMMIT,
+      pushed: BRANCH_COMMIT,
+      merged: { commit: HEAD, branchCommit: BRANCH_COMMIT },
+    };
+
+    it('hands a green, approved merge head GitHub says does not merge to the Helmsman', () => {
+      const handOvers = new Map<string, Record<string, unknown>>();
+      const conflicting = pass({ ...CONFLICTING, publications: [mergedHead], handOvers });
+      expect(conflicting.decision).toBe('leave');
+      expect(String(conflicting.outputs.get('decide')?.['reason'])).toMatch(
+        /does not merge into its base/,
+      );
+      expect(conflicting.ran).not.toContain('merge');
+      expect(conflicting.statuses.get('hand-over-to-agent')).toBe('succeeded');
+      expect(handOvers.get(PR_CASE)).toMatchObject({ headSha: HEAD, case: 'does_not_merge' });
+    });
+
+    it('hands nothing over where the review is of a commit other than the one the merge was made from', () => {
+      const handOvers = new Map<string, Record<string, unknown>>();
+      const left = pass({
+        ...CONFLICTING,
+        publications: [{ ...mergedHead, reviewed: 'e'.repeat(40) }],
+        handOvers,
+      });
+      expect(left.decision).toBe('leave');
+      expect(left.statuses.get('hand-over-to-agent')).not.toBe('succeeded');
+      expect(handOvers.has(PR_CASE)).toBe(false);
+    });
+  });
+
   it('hands a head over once, however many passes find it, and a push that moves it is a new case', () => {
     const handOvers = new Map<string, Record<string, unknown>>();
     const first = pass({ ...CONFLICTING, handOvers });
@@ -3187,7 +3222,10 @@ describe('Local PR Shepherd — what its rules cannot act on goes to the agent',
       }).decision;
     const names = HAND_OVER_RULES.map((rule) => name({ rule: SHEPHERD_RULES.indexOf(rule) }));
     expect(names).not.toContain(HAND_OVER_CASE_OTHERWISE.decision);
-    expect(new Set(names).size).toBe(names.length);
+    // `does_not_merge` is one case written as two rules: a head reviewed itself,
+    // and a head pushed as the merge of a moved base whose first parent was reviewed.
+    expect(names.filter((n) => n === 'does_not_merge')).toHaveLength(2);
+    expect(new Set(names).size).toBe(names.length - 1);
     expect(names).toContain('merge_refused');
     expect(name({ rule: SHEPHERD_RULES.length - 1, mergeOutcome: 'merge_refused' })).toBe(
       'merge_refused',
