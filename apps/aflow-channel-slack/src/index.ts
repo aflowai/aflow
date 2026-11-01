@@ -32,6 +32,8 @@ import {
   channelSlackDir,
   loadChannelSlackConfig,
 } from './config.js';
+import { createAflowApi } from './aflowApi.js';
+import { answerCardReply, answerCardTap } from './cardActions.js';
 import { keyExpiryNotice } from './keyExpiry.js';
 import { answerDirectMessage } from './linking.js';
 import { ChannelMessageSendHandler } from './sendHandler.js';
@@ -79,15 +81,37 @@ async function main(): Promise<void> {
     },
     deps,
   );
-  runtime.registerHandler(new ChannelMessageSendHandler({ store, slack }));
+  // The owner's key from setup: the app reads an item and resolves it with it.
+  const api = createAflowApi({
+    apiUrl: config.AFLOW_API_URL,
+    apiKey: config.AFLOW_API_KEY,
+    fetchImpl: fetch,
+  });
+  runtime.registerHandler(new ChannelMessageSendHandler({ store, slack, api }));
   await runtime.start();
 
   const socket = startSocketMode({
     slack,
     log,
     onDirectMessage: async (message) => {
+      if (message.threadTs !== undefined) {
+        const reply = await answerCardReply(
+          {
+            slackUserId: message.slackUserId,
+            channel: message.channel,
+            threadTs: message.threadTs,
+            text: message.text,
+          },
+          { store, slack, api },
+        );
+        if (reply !== 'not_a_card') return;
+      }
       const outcome = await answerDirectMessage(message, { store, config, slack });
       if (outcome === 'linked') log.info('Linked the Slack user who sent the setup code');
+    },
+    onCardTap: async (tap) => {
+      const outcome = await answerCardTap(tap, { store, slack, api });
+      log.info('Answered a tap on a card', { outcome });
     },
   });
 

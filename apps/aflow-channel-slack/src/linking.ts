@@ -20,8 +20,8 @@ export const LINKED_REPLY =
   'Linked. Aflow sends you its messages here when you must act and may be away from the machine.';
 
 export const LINKED_OPERATOR_REPLY =
-  'Aflow sends you its messages here. Answering them from Slack comes in a later release, so ' +
-  'open Aflow to act on one.';
+  'Aflow sends you its messages here, and a card’s buttons decide its item from here. Talking ' +
+  'to Aflow from Slack comes in a later release, so open Aflow to ask it something.';
 
 /** A code as typed: case, spaces and dashes do not matter. */
 export function normalizeLinkCode(text: string): string {
