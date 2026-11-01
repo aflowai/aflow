@@ -1,6 +1,6 @@
 # Plan 339 — The loop moves on events
 
-**Status:** proposed. This document is P0. P1, the push-time merge, is built, and the refusal codes it starts from remain to be read. P2, the wait primitive and the pull request source, is built and tested without a live stack, and its live exit is open. P3, the shepherd on events with the schedule as the fallback, is built and tested without a live stack, and its live exit is open. P4, D6's approval gate, is built and tested without a live stack, and its live exit is open.
+**Status:** closed. This document is P0. P1, the push-time merge, is built and merged. P2, the wait primitive and the pull request event source, is built and merged, and its live exit is open. P3, the shepherd on events with the schedule as the fallback, is built and merged as PR #285 (merge 610b911b). P4, D6's approval gate, is built and merged, and its live exit is open.
 
 **Builds on:** Plan 331 (the resident, its wake on a run's end and its pending mark, D8's rule on the folder), Plan 321 (the Local PR Shepherd, its rules, its turn and its hand-over), Plan 315 (the local loop, D15's merge round, the push's own scan), Plan 180 (background work is declared and candidate-driven), Plan 337 (the decision card), Plan 333 (D2's writing rules).
 
