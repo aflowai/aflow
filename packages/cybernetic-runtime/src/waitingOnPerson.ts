@@ -17,12 +17,15 @@ import {
   ACTION_CENTER_ITEM_ID_PREFIX,
   computeEgressTitle,
   humanRequestTitle,
+  inferTaskType,
   oauthConsentTitle,
   pausedRequestTitle,
   pendingPlanStepCount,
   planItemTitle,
   type PlanNodeSummary,
   type TenantId,
+  type Workflow,
+  type WorkflowTask,
 } from '@aflow/schemas';
 import {
   createTenantContext,
@@ -188,14 +191,21 @@ function total(rows: readonly Row[], kind?: string): number {
   return row !== undefined ? Number(row['total']) : 0;
 }
 
+/** The operations the user executor answers with a request for input and for an approval. */
+const USER_INPUT_OPERATION_ID = 'user.interaction.ask';
+const USER_APPROVAL_OPERATION_ID = 'user.interaction.approve';
+
 /**
- * Paused sessions, as `pausedStepSource` reads them. The payload's kind says
- * what the pause asks: input, an approval or a write approval is a run gate,
- * and an OAuth consent is a consent unless a workflow run owns the pause,
- * which its run-plane source shows instead. A payload with no such kind, such
- * as a conversation waiting for its next message, is no item. A payload held
- * outside the ref is read as a gate, since only an executor's large request
- * is stored that way.
+ * Paused sessions, as `pausedStepSource` reads them, each by the request its
+ * pause holds: input, an approval or a write approval is a run gate, and an
+ * OAuth consent is a consent unless a workflow run owns the pause, which
+ * `consentRuns` counts instead. A request held inline is read by its own
+ * `kind`, so a conversation waiting for its next message is no item. An
+ * executor's request is always held outside the ref, so its kind is read from
+ * the pause: the paused step's operation for the user executor's two requests,
+ * and the pause type the orchestrator stamps for a consent or a write
+ * approval. The pause type outlives a resume, which is why the step's
+ * operation is read first. Any other pause is no item.
  */
 async function pausedSessions(tx: PostgresJsDatabase, spaceId: string): Promise<Row[]> {
   return (await tx.execute(sql`
@@ -204,6 +214,9 @@ async function pausedSessions(tx: PostgresJsDatabase, spaceId: string): Promise<
              s.started_at,
              s.requested_input_ref LIKE 'inline:%' AS inline,
              ${inlinePayload(sql`s.requested_input_ref`)} AS payload,
+             s.hot_state_snapshot -> 'runHotState' ->> 'pauseType' AS pause_type,
+             s.hot_state_snapshot -> 'stepHotStates'
+               -> (s.current_step_execution_id::text) ->> 'operationId' AS operation_id,
              COALESCE(
                jsonb_typeof(s.hot_state_snapshot -> 'runHotState' -> 'workflowExecution') <> 'null',
                false
@@ -215,14 +228,23 @@ async function pausedSessions(tx: PostgresJsDatabase, spaceId: string): Promise<
         AND s.current_step_execution_id IS NOT NULL
       ORDER BY s.started_at DESC
       LIMIT ${PAUSED_SESSION_SCAN_LIMIT}
-    ), waiting AS (
-      SELECT step_id, started_at, payload,
+    ), requested AS (
+      SELECT *,
              CASE
-               WHEN NOT inline THEN 'run_gate'
-               WHEN payload ->> 'kind' IN ('input', 'approval', 'write_approval') THEN 'run_gate'
-               WHEN payload ->> 'kind' = 'oauth_consent' AND NOT harness_routed THEN 'consent'
-             END AS kind
+               WHEN inline THEN payload ->> 'kind'
+               WHEN operation_id = ${USER_INPUT_OPERATION_ID} THEN 'input'
+               WHEN operation_id = ${USER_APPROVAL_OPERATION_ID} THEN 'approval'
+               WHEN pause_type = 'oauth_consent' THEN 'oauth_consent'
+               WHEN pause_type = 'approval' THEN 'write_approval'
+             END AS request_kind
       FROM paused
+    ), waiting AS (
+      SELECT step_id, started_at, payload, request_kind,
+             CASE
+               WHEN request_kind IN ('input', 'approval', 'write_approval') THEN 'run_gate'
+               WHEN request_kind = 'oauth_consent' AND NOT harness_routed THEN 'consent'
+             END AS kind
+      FROM requested
     ), ranked AS (
       SELECT *,
              count(*) OVER (PARTITION BY kind)::int AS total,
@@ -230,59 +252,131 @@ async function pausedSessions(tx: PostgresJsDatabase, spaceId: string): Promise<
       FROM waiting
       WHERE kind IS NOT NULL
     )
-    SELECT step_id, started_at, payload, kind, total
+    SELECT step_id, started_at, payload, request_kind, kind, total
     FROM ranked
     WHERE rank <= ${WAITING_ON_PERSON_LINE_LIMIT}
   `)) as unknown as Row[];
 }
 
+/** The workflow sources each list at most this many rows, so the count reads no more. */
+const PAUSED_TASK_SCAN_LIMIT = 200;
+
 /**
- * Paused workflow tasks, as `workflowHumanTaskSource` and
- * `workflowWriteApprovalSource` read them: a human task stamped with its
- * hydration for the pause it stands at, and an operation task whose payload
- * the run's pause holds and asks for a write approval.
+ * Paused tasks of paused runs, in the windows `workflowHumanTaskSource` and
+ * `workflowWriteApprovalSource` select them in. Which of the two lists a row
+ * is decided by `classifyPausedTask`, since the human-task rule reads the
+ * run's definition.
  */
-async function pausedTasks(tx: PostgresJsDatabase, spaceId: string): Promise<Row[]> {
+async function pausedTaskRows(tx: PostgresJsDatabase, spaceId: string): Promise<Row[]> {
   return (await tx.execute(sql`
     WITH paused AS (
-      SELECT r.run_id, r.workflow_slug, r.workflow_revision, r.pause_version,
+      SELECT r.run_id, r.workflow_slug, r.workflow_revision, r.pause_version, r.started_at,
              t.task_id, t.output_ref,
-             CASE
-               WHEN t.human_task_hydration_ref IS NOT NULL
-                 AND t.human_task_hydration_pause_version = r.pause_version
-                 AND t.human_task_hydration_attempt = t.attempt THEN 'human_task'
-               WHEN r.paused_reason = 'task_paused'
+             t.human_task_hydration_ref IS NOT NULL
+               AND (t.human_task_hydration_pause_version IS NULL
+                    OR t.human_task_hydration_pause_version = r.pause_version)
+               AND (t.human_task_hydration_attempt IS NULL
+                    OR t.human_task_hydration_attempt = t.attempt) AS stamped,
+             COALESCE(
+               r.paused_reason = 'task_paused'
                  AND r.paused_payload_ref IS NOT NULL
-                 AND t.output_ref = r.paused_payload_ref THEN 'write_approval'
-             END AS source,
-             CASE
-               WHEN t.human_task_hydration_ref IS NOT NULL THEN COALESCE(t.started_at, r.started_at)
-               ELSE COALESCE(t.completed_at, r.started_at)
-             END AS requested_at
+                 AND t.output_ref = r.paused_payload_ref,
+               false
+             ) AS holds_pause,
+             COALESCE(t.started_at, r.started_at) AS task_started_at,
+             COALESCE(t.completed_at, r.started_at) AS task_paused_at
       FROM workflow_runs r
       JOIN workflow_run_tasks t ON t.run_id = r.run_id
       WHERE r.space_id = ${spaceId}::uuid
         AND r.status = 'paused'
         AND t.status = 'paused'
-    ), waiting AS (
+    ), windowed AS (
       SELECT *,
-             CASE WHEN source = 'write_approval' THEN ${inlinePayload(sql`output_ref`)} END AS payload
+             row_number() OVER (ORDER BY started_at DESC) AS human_rank,
+             row_number() OVER (PARTITION BY holds_pause ORDER BY started_at DESC) AS holder_rank
       FROM paused
-      WHERE source IS NOT NULL
-    ), ranked AS (
-      SELECT *,
-             count(*) OVER (PARTITION BY source)::int AS total,
-             row_number() OVER (PARTITION BY source ORDER BY requested_at DESC) AS rank
-      FROM waiting
-      WHERE source = 'human_task'
-         OR output_ref NOT LIKE 'inline:%'
-         OR payload ->> 'kind' = 'write_approval'
     )
-    SELECT run_id, workflow_slug, workflow_revision, pause_version, task_id, requested_at,
-           payload, source AS kind, total
-    FROM ranked
-    WHERE rank <= ${WAITING_ON_PERSON_LINE_LIMIT}
+    SELECT run_id, workflow_slug, workflow_revision, pause_version, task_id,
+           task_started_at, task_paused_at, stamped,
+           human_rank <= ${PAUSED_TASK_SCAN_LIMIT} AS in_human_window,
+           holds_pause AND holder_rank <= ${PAUSED_TASK_SCAN_LIMIT} AS in_approval_window,
+           output_ref LIKE 'inline:%' AS inline,
+           CASE WHEN holds_pause THEN ${inlinePayload(sql`output_ref`)} END AS payload
+    FROM windowed
+    WHERE human_rank <= ${PAUSED_TASK_SCAN_LIMIT}
+       OR (holds_pause AND holder_rank <= ${PAUSED_TASK_SCAN_LIMIT})
   `)) as unknown as Row[];
+}
+
+/** The paused task's definition at the run's revision, each revision read once. */
+function taskDefinitionLookup(
+  db: PostgresJsDatabase,
+  tenantId: string,
+  spaceId: string,
+): (row: Row) => Promise<WorkflowTask | undefined> {
+  const workflows = new Map<string, Promise<Workflow | undefined>>();
+  return async (row) => {
+    const slug = String(row['workflow_slug']);
+    const revision = Number(row['workflow_revision']);
+    const key = `${slug}@${String(revision)}`;
+    let workflow = workflows.get(key);
+    if (workflow === undefined) {
+      workflow = resolveWorkflowForRunRevision(
+        db,
+        tenantId as TenantId,
+        spaceId,
+        slug,
+        revision,
+      ).then(
+        (resolved) => resolved.workflow,
+        () => undefined,
+      );
+      workflows.set(key, workflow);
+    }
+    return (await workflow)?.tasks.find((t) => t.taskId === row['task_id']);
+  };
+}
+
+function taskTypeOf(task: WorkflowTask | undefined): ReturnType<typeof inferTaskType> | undefined {
+  if (task === undefined) return undefined;
+  try {
+    return inferTaskType(task);
+  } catch {
+    return undefined;
+  }
+}
+
+type PausedTaskKind = 'human_task' | 'write_approval';
+
+/**
+ * Which source lists a paused task, if either does. A human task is listed
+ * where its hydration is stamped for the pause it stands at or its definition
+ * still resolves to a human task, as `workflowHumanTaskSource` lists it. A
+ * write approval is a task holding the run's pause whose request asks for
+ * one. Where the ref holds the request inline its kind says so. Otherwise the
+ * definition does: only an operation task outside the user executor's two
+ * operations pauses with a write approval held outside the ref.
+ */
+function classifyPausedTask(row: Row, task: WorkflowTask | undefined): PausedTaskKind | undefined {
+  const type = taskTypeOf(task);
+  if (row['in_human_window'] === true && (row['stamped'] === true || type === 'human')) {
+    return 'human_task';
+  }
+  if (row['in_approval_window'] !== true) return undefined;
+  if (row['inline'] === true) {
+    const payload = asObject(row['payload']);
+    const kind =
+      typeof payload === 'object' && payload !== null
+        ? (payload as Record<string, unknown>)['kind']
+        : undefined;
+    return kind === 'write_approval' ? 'write_approval' : undefined;
+  }
+  const operation = type === 'operation' ? task?.operation : undefined;
+  return operation !== undefined &&
+    operation !== USER_INPUT_OPERATION_ID &&
+    operation !== USER_APPROVAL_OPERATION_ID
+    ? 'write_approval'
+    : undefined;
 }
 
 /**
@@ -342,23 +436,38 @@ function sessionItems(rows: readonly Row[]): WaitingItem[] {
     return {
       kind: row['kind'] === 'consent' ? ('consent' as const) : ('run_gate' as const),
       itemId: `${ACTION_CENTER_ITEM_ID_PREFIX.pausedStep}${String(row['step_id'])}`,
-      title: waitingItemTitle(
-        pausedRequestTitle(payload) ?? humanRequestTitle('approval', undefined),
-      ),
+      title: waitingItemTitle(pausedRequestTitle(payload) ?? requestKindTitle(row['request_kind'])),
       requestedAt: isoOf(requestedAt, row['started_at']),
     };
   });
 }
 
-function taskItems(rows: readonly Row[]): WaitingItem[] {
-  return rows.map((row) =>
-    row['kind'] === 'human_task'
+/** The title of a request held outside its ref, from its kind alone. */
+function requestKindTitle(kind: unknown): string {
+  switch (kind) {
+    case 'input':
+      return humanRequestTitle('input', undefined);
+    case 'oauth_consent':
+      return oauthConsentTitle({});
+    default:
+      return humanRequestTitle('approval', undefined);
+  }
+}
+
+interface ClassifiedTask {
+  row: Row;
+  task: WorkflowTask | undefined;
+  kind: PausedTaskKind;
+}
+
+function taskItems(tasks: readonly ClassifiedTask[]): WaitingItem[] {
+  return tasks.map(({ row, task, kind }) =>
+    kind === 'human_task'
       ? {
           kind: 'run_gate' as const,
           itemId: `${ACTION_CENTER_ITEM_ID_PREFIX.workflowHumanTask}${String(row['run_id'])}:${String(row['task_id'])}`,
-          // The task's name, where its definition is read, replaces this below.
-          title: waitingItemTitle(String(row['task_id'])),
-          requestedAt: isoOf(row['requested_at']),
+          title: waitingItemTitle(task?.name ?? String(row['task_id'])),
+          requestedAt: isoOf(row['task_started_at']),
         }
       : {
           kind: 'run_gate' as const,
@@ -367,7 +476,7 @@ function taskItems(rows: readonly Row[]): WaitingItem[] {
             pausedRequestTitle(asObject(row['payload'])) ??
               humanRequestTitle('approval', undefined),
           ),
-          requestedAt: isoOf(row['requested_at']),
+          requestedAt: isoOf(row['task_paused_at']),
         },
   );
 }
@@ -404,44 +513,11 @@ function egressItems(rows: readonly Row[]): WaitingItem[] {
   }));
 }
 
-/** A human task's line carries the task's name, as its item does, where the run's definition is read. */
-async function nameHumanTasks(
-  db: PostgresJsDatabase,
-  tenantId: string,
-  spaceId: string,
-  shown: readonly WaitingItem[],
-  rows: readonly Row[],
-): Promise<WaitingItem[]> {
-  return Promise.all(
-    shown.map(async (item) => {
-      const row = rows.find(
-        (r) =>
-          r['kind'] === 'human_task' &&
-          item.itemId ===
-            `${ACTION_CENTER_ITEM_ID_PREFIX.workflowHumanTask}${String(r['run_id'])}:${String(r['task_id'])}`,
-      );
-      if (row === undefined) return item;
-      try {
-        const { workflow } = await resolveWorkflowForRunRevision(
-          db,
-          tenantId as TenantId,
-          spaceId,
-          String(row['workflow_slug']),
-          Number(row['workflow_revision']),
-        );
-        const name = workflow.tasks.find((t) => t.taskId === row['task_id'])?.name;
-        return name !== undefined ? { ...item, title: waitingItemTitle(name) } : item;
-      } catch {
-        return item;
-      }
-    }),
-  );
-}
-
 /**
  * The run gates and consents that wait in the space, and the space's slug.
- * One transaction reads every table, and no payload is fetched: a request's
- * kind and title come from the payload its ref holds inline.
+ * One transaction reads every table, and no payload is fetched. A request's
+ * kind comes from the payload its ref holds inline, or else from the pause,
+ * and a paused task's from its run's definition as well.
  */
 export async function readWaitingGates(params: {
   db: PostgresJsDatabase;
@@ -454,7 +530,7 @@ export async function readWaitingGates(params: {
     createTenantContext(tenantId as TenantId),
     async (tx) => ({
       sessions: await pausedSessions(tx, spaceId),
-      tasks: await pausedTasks(tx, spaceId),
+      tasks: await pausedTaskRows(tx, spaceId),
       consents: await consentRuns(tx, spaceId),
       egress: await egressRequests(tx, tenantId, spaceId),
       slug: (await tx.execute(
@@ -463,22 +539,25 @@ export async function readWaitingGates(params: {
     }),
   );
 
-  const newest = newestWaitingItems(
-    sessionItems(read.sessions),
-    taskItems(read.tasks),
-    consentItems(read.consents),
-    egressItems(read.egress),
-  );
+  const definitionOf = taskDefinitionLookup(db, tenantId, spaceId);
+  const tasks: ClassifiedTask[] = [];
+  for (const row of read.tasks) {
+    const task = await definitionOf(row);
+    const kind = classifyPausedTask(row, task);
+    if (kind !== undefined) tasks.push({ row, task, kind });
+  }
+
   const slug = read.slug[0]?.['slug'];
   return {
     gates: {
-      runGates:
-        total(read.sessions, 'run_gate') +
-        total(read.tasks, 'human_task') +
-        total(read.tasks, 'write_approval') +
-        total(read.egress),
+      runGates: total(read.sessions, 'run_gate') + tasks.length + total(read.egress),
       consents: total(read.sessions, 'consent') + total(read.consents),
-      newest: await nameHumanTasks(db, tenantId, spaceId, newest, read.tasks),
+      newest: newestWaitingItems(
+        sessionItems(read.sessions),
+        taskItems(tasks),
+        consentItems(read.consents),
+        egressItems(read.egress),
+      ),
     },
     ...(typeof slug === 'string' ? { spaceSlug: slug } : {}),
   };
