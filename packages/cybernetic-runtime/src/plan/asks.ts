@@ -195,7 +195,10 @@ async function finishedRoots(ctx: PlanReadContext): Promise<Set<string>> {
 }
 
 /** The waiting nodes that still ask: all but a root whose steps have all closed. */
-async function stillAsking(ctx: PlanReadContext, nodes: PlanNode[]): Promise<PlanNode[]> {
+async function stillAsking<T extends Pick<PlanNodeSummary, 'nodeId' | 'parentId'>>(
+  ctx: PlanReadContext,
+  nodes: T[],
+): Promise<T[]> {
   if (!nodes.some((node) => node.parentId === null)) return nodes;
   const finished = await finishedRoots(ctx);
   return nodes.filter((node) => !finished.has(node.nodeId));
@@ -213,6 +216,19 @@ function newestFirst(a: PlanNodeSummary, b: PlanNodeSummary): number {
  */
 export function selectWaitingNodes(nodes: readonly PlanNodeSummary[]): PlanNodeSummary[] {
   return nodes.filter(isWaitingPlanNode).sort(newestFirst).slice(0, PLAN_OPEN_ASKS_LIMIT);
+}
+
+/**
+ * The waiting nodes of a walk of the open tree that still ask, by the rule the
+ * Action Center's `plan_ask` source lists by: `selectWaitingNodes`, less a
+ * root whose steps have all closed. The Helmsman's attention block counts and
+ * points at this selection, so its count and the sidebar's agree (Plan 338 D2).
+ */
+export async function selectAskingNodes(
+  ctx: PlanReadContext,
+  nodes: readonly PlanNodeSummary[],
+): Promise<PlanNodeSummary[]> {
+  return stillAsking(ctx, selectWaitingNodes(nodes));
 }
 
 /**

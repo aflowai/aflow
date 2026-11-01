@@ -1,6 +1,7 @@
 /**
  * The channel lane's operations (Plan 327): a message to the operator, served by
- * an optional app that reaches them away from the machine.
+ * an optional app that reaches them away from the machine. A message may carry
+ * an Action Center item as a card the operator decides from (D3).
  *
  * No input names a recipient. The recipient is the person the run works for,
  * read from the job's `credentialOwnerId`, and the app serves only the operator
@@ -25,6 +26,16 @@ export const ChannelMessageSendInputSchema = z
       .max(CHANNEL_MESSAGE_TEXT_MAX)
       .describe(
         'What the operator reads on their phone. Say what waits on them and what they must do.',
+      ),
+    itemId: z
+      .string()
+      .trim()
+      .min(1)
+      .max(256)
+      .optional()
+      .describe(
+        "An open Action Center item in this run's space, sent as a card under the text. The card " +
+          'offers buttons only where the operator may decide the item from the phone.',
       ),
   })
   .strict();
@@ -75,6 +86,7 @@ export const ChannelOperationRegistrations: OperationRegistration[] = [
         'The message goes to the person this run works for, and only when they linked Slack with `yarn channel:slack setup`. Any other run fails.',
         'Sending the same text twice in one run fails. Say something new, or stop.',
         'The send is synchronous: a result means the channel accepted the message, not that the operator read it.',
+        'An `itemId` must name an open item in this space. Buttons appear only for an approval or a simple question from a paused step, or a low or medium API write approval. Every other item tells the operator to open Aflow.',
       ],
     },
     inputZod: ChannelMessageSendInputSchema,

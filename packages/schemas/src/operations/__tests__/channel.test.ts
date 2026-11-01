@@ -46,6 +46,8 @@ describe('channel operations', () => {
     const send = getOperation(CHANNEL_MESSAGE_SEND_OPERATION_ID);
     expect(send?.inputZod.safeParse({ text: 'hello', userId: 'U123' }).success).toBe(false);
     expect(send?.inputZod.safeParse({ text: 'hello' }).success).toBe(true);
+    expect(send?.inputZod.safeParse({ text: 'hello', itemId: 'step:abc' }).success).toBe(true);
+    expect(send?.inputZod.safeParse({ text: 'hello', itemId: '' }).success).toBe(false);
   });
 
   it('is chosen for an operator who must act and may be away, never for progress reports', () => {

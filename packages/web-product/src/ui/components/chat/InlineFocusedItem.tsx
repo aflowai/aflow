@@ -3,7 +3,11 @@
 import { useEffect } from 'react';
 import Link from 'next/link';
 import { Badge, Card, CardBody, Column, Row, Text, type BadgeVariant } from '@aflow/design-system';
-import { PLAN_STATE_LABELS } from '@aflow/schemas';
+import {
+  ACTION_CENTER_FOCUS_ITEM_ID_PREFIXES,
+  ACTION_CENTER_ITEM_ID_PREFIX,
+  PLAN_STATE_LABELS,
+} from '@aflow/schemas';
 import type { InlineProposalFocusPayload } from '@aflow/run-view';
 import { useApi, useSpace } from '../providers.js';
 import { useApiQuery } from '../../hooks/useApiQuery.js';
@@ -19,17 +23,29 @@ export interface InlineFocusedItemProps {
   listed?: InlineProposalFocusPayload['listed'];
 }
 
-/** What each item an agent can focus, other than a proposal, is called by its id's prefix. */
-const KIND_BY_PREFIX: ReadonlyArray<readonly [prefix: string, label: string]> = [
-  ['plan-ask:', 'Plan step'],
-  ['plan-decision:', 'Plan decision'],
-  ['workflow-task:', 'Run task'],
-  ['workflow-write-approval:', 'Write approval'],
-  ['workflow-oauth-consent:', 'Connection'],
-  ['step:', 'Paused step'],
-  ['gate:', 'Gate'],
-  ['settings:', 'Settings request'],
-];
+type FocusPrefix = (typeof ACTION_CENTER_FOCUS_ITEM_ID_PREFIXES)[number];
+
+/**
+ * What each item an agent can focus, other than a proposal, is called by its
+ * id's prefix. Keyed by the prefixes the focus input takes, so a prefix added
+ * there does not compile here until it has a label.
+ */
+const KIND_LABEL: Record<Exclude<FocusPrefix, 'proposal'>, string> = {
+  'plan-ask': 'Plan step',
+  'plan-decision': 'Plan decision',
+  'workflow-task': 'Run task',
+  'workflow-write-approval': 'Write approval',
+  'workflow-oauth-consent': 'Connection',
+  step: 'Paused step',
+  gate: 'Gate',
+  settings: 'Settings request',
+};
+
+/** The prefixes whose ids name a plan node, as the plan sources write them. */
+const PLAN_NODE_PREFIXES = [
+  ACTION_CENTER_ITEM_ID_PREFIX.planAsk,
+  ACTION_CENTER_ITEM_ID_PREFIX.planDecision,
+] as const;
 
 const STATE: Record<ActionCenterItemStatus, { label: string; variant: BadgeVariant }> = {
   open: { label: PLAN_STATE_LABELS.workbenchSection, variant: 'warning' },
@@ -46,12 +62,15 @@ const GONE = {
 } as const;
 
 function kindLabel(itemId: string): string {
-  return KIND_BY_PREFIX.find(([prefix]) => itemId.startsWith(prefix))?.[1] ?? 'Request';
+  const prefix = ACTION_CENTER_FOCUS_ITEM_ID_PREFIXES.find(
+    (p): p is keyof typeof KIND_LABEL => p !== 'proposal' && itemId.startsWith(`${p}:`),
+  );
+  return prefix !== undefined ? KIND_LABEL[prefix] : 'Request';
 }
 
 /** The plan node a plan step's id names, where it names one. */
 function planNodeOf(itemId: string): string | null {
-  for (const prefix of ['plan-ask:', 'plan-decision:']) {
+  for (const prefix of PLAN_NODE_PREFIXES) {
     if (itemId.startsWith(prefix)) {
       const nodeId = itemId.slice(prefix.length);
       return nodeId.length > 0 ? nodeId : null;

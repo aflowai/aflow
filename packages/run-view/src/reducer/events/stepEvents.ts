@@ -1,4 +1,7 @@
-import { SURFACE_GENERATION_EMPTY_ERROR_CODE } from '@aflow/schemas';
+import {
+  HumanActionCenterFocusOutputSchema,
+  SURFACE_GENERATION_EMPTY_ERROR_CODE,
+} from '@aflow/schemas';
 
 import type {
   InlineAppletItem,
@@ -23,15 +26,14 @@ import {
 
 import type { SseEventContext } from './sessionLifecycle.js';
 
-const LISTED_FOCUS_KINDS: ReadonlySet<string> = new Set(['plan_step', 'run_gate', 'consent']);
+/** The listing a focus step's output carries, as the focus output schema reads it. */
+const ListedFocusItemSchema = HumanActionCenterFocusOutputSchema.shape.listed.unwrap();
 
 /** The listing a focus step's output carries, where it is well formed. */
 function listedFocusItem(value: unknown): InlineProposalFocusPayload['listed'] {
-  if (value === null || typeof value !== 'object') return undefined;
-  const { kind, title } = value as Record<string, unknown>;
-  if (typeof kind !== 'string' || !LISTED_FOCUS_KINDS.has(kind)) return undefined;
-  if (typeof title !== 'string' || title.length === 0) return undefined;
-  return { kind: kind as NonNullable<InlineProposalFocusPayload['listed']>['kind'], title };
+  const parsed = ListedFocusItemSchema.safeParse(value);
+  if (!parsed.success || parsed.data.title.length === 0) return undefined;
+  return { kind: parsed.data.kind, title: parsed.data.title };
 }
 
 /**

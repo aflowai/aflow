@@ -56,7 +56,7 @@ export async function loadActivePlanTree(
     statuses: OPEN_PLAN_NODE_STATUSES,
     ...PLAN_TREE_WALK_BOUNDS,
   });
-  const waiting = waitingPlanSteps(open.nodes);
+  const waiting = await waitingPlanSteps({ store, spaceId }, open.nodes);
   const tree = orderPlanTree(open.nodes);
   if (tree.length === 0) return { waiting };
   return {

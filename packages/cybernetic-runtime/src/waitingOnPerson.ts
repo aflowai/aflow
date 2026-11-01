@@ -35,8 +35,8 @@ import {
   withTenantSchema,
 } from '@aflow/database';
 import { getCyberneticLogger } from './logger.js';
-import { selectWaitingNodes } from './plan/asks.js';
-import { selectOpenDecisions } from './plan/operations.js';
+import { selectAskingNodes } from './plan/asks.js';
+import { selectOpenDecisions, type PlanReadContext } from './plan/operations.js';
 
 /** The most items the section lists under its counts. */
 export const WAITING_ON_PERSON_LINE_LIMIT = 5;
@@ -133,10 +133,15 @@ function isoOf(...values: unknown[]): string {
 /**
  * The plan steps that wait, from a walk of the open tree: the nodes the
  * Action Center's `plan_ask` source lists and the decisions its
- * `plan_decision` source lists, each set cut where its source cuts.
+ * `plan_decision` source lists, each set cut where its source cuts. A root
+ * whose steps have all closed asks nothing, by the rule the `plan_ask` source
+ * lists by, so it is neither counted nor pointed at.
  */
-export function waitingPlanSteps(nodes: readonly PlanNodeSummary[]): WaitingPlanSteps {
-  const asks = selectWaitingNodes(nodes);
+export async function waitingPlanSteps(
+  ctx: PlanReadContext,
+  nodes: readonly PlanNodeSummary[],
+): Promise<WaitingPlanSteps> {
+  const asks = await selectAskingNodes(ctx, nodes);
   const decisions = selectOpenDecisions(nodes);
   return {
     asks: asks.length,

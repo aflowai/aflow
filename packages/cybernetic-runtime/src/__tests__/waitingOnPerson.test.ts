@@ -268,6 +268,36 @@ describe("the plan-step count agrees with the sidebar's rule", () => {
   );
 });
 
+describe('a root counts by the stillAsking rule the plan-ask source lists by', () => {
+  it('leaves out a blocked root whose steps have all closed, and keeps one with a step still open', async () => {
+    const finished = blocked('Plan 339 · approval is a gate');
+    fakeStore.current.seed(SPACE, {
+      title: 'P1 — shipped',
+      parentId: finished.nodeId,
+      status: 'done',
+      closedAt: new Date().toISOString(),
+    });
+    fakeStore.current.seed(SPACE, {
+      title: 'P2 — let go',
+      parentId: finished.nodeId,
+      position: 1,
+      status: 'dropped',
+      closedAt: new Date().toISOString(),
+    });
+    const asking = blocked('Plan 340 · a root still asking', { position: 1 });
+    fakeStore.current.seed(SPACE, { title: 'P1 — still open', parentId: asking.nodeId });
+
+    expect(await sidebarCount()).toBe('1');
+    const lines = await section();
+    expect(lines[0]).toContain('Waiting on a person: 1 plan step,');
+    const text = lines.join('\n');
+    expect(text).not.toContain(finished.nodeId);
+    expect(lines.slice(1)).toEqual([
+      `- plan step "${planItemTitle('blocked', asking.title)}" [itemId: ${ACTION_CENTER_ITEM_ID_PREFIX.planAsk}${asking.nodeId}] /s/${SLUG}/plan?node=${asking.nodeId}`,
+    ]);
+  });
+});
+
 describe('the section holds no item body', () => {
   it('carries neither the step’s note nor its goal, nor the item’s summary', async () => {
     blocked('Ship the importer', {
