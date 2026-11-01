@@ -50,6 +50,7 @@ const slack: SlackClient = {
     replies.push({ channel, text });
     return Promise.resolve({ channel, ts: '1.0' });
   },
+  updateMessage: () => Promise.resolve(),
   openSocketModeUrl: () => Promise.resolve('wss://example.invalid'),
 };
 
@@ -141,7 +142,7 @@ describe('the store', () => {
   it('lives at mode 0600 and records its migrations', () => {
     expect(statSync(storePath).mode & 0o777).toBe(0o600);
     const data = JSON.parse(readFileSync(storePath, 'utf8')) as { migrations: string[] };
-    expect(data.migrations).toEqual(['0001-link-and-sent']);
+    expect(data.migrations).toEqual(['0001-link-and-sent', '0002-cards']);
   });
 
   it('reopens what it wrote', () => {

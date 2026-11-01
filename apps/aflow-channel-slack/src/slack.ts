@@ -1,8 +1,9 @@
 /**
- * The three Slack Web API methods the app calls, over `fetch`.
+ * The four Slack Web API methods the app calls, over `fetch`.
  *
- * Three methods do not earn an SDK: the bot opens a direct message and posts
- * into it, and the app-level token opens a Socket Mode connection.
+ * Four methods do not earn an SDK: the bot opens a direct message, posts into
+ * it and edits a card it posted, and the app-level token opens a Socket Mode
+ * connection.
  *
  * The default transport is the checked `safeFetchImpl`, as for every injected
  * transport. It validates the Slack host before it dials and refuses a redirect.
@@ -44,22 +45,52 @@ export interface PostedMessage {
   ts: string;
 }
 
+/** Slack Block Kit blocks, passed through as Slack reads them. */
+export type SlackBlock = Record<string, unknown>;
+
+export interface PostOptions {
+  blocks?: readonly SlackBlock[];
+  /** Posts into the thread under this message. */
+  threadTs?: string;
+  /**
+   * Ends the request when it aborts, as the step's own timeout and abort do.
+   * An abort after the request left is an unknown outcome, as the timeout is.
+   */
+  signal?: AbortSignal;
+}
+
 export interface SlackClient {
   /** The direct-message channel between the bot and `userId`. */
-  openDirectMessage(userId: string): Promise<string>;
-  postMessage(channel: string, text: string): Promise<PostedMessage>;
+  openDirectMessage(userId: string, signal?: AbortSignal): Promise<string>;
+  postMessage(channel: string, text: string, options?: PostOptions): Promise<PostedMessage>;
+  /** Replaces the text and blocks of a message the bot posted. */
+  updateMessage(
+    channel: string,
+    ts: string,
+    text: string,
+    blocks: readonly SlackBlock[],
+  ): Promise<void>;
   /** A fresh Socket Mode WebSocket URL, good for one connection. */
   openSocketModeUrl(): Promise<string>;
 }
 
 type Fetch = typeof fetch;
 
+/** The longest one Slack call may take, inside whatever the caller's signal allows. */
+export const SLACK_CALL_TIMEOUT_MS = 15_000;
+
 async function call(
   fetchImpl: Fetch,
   token: string,
   method: string,
   body: Record<string, unknown>,
+  signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
+  // Nothing has left yet, so a signal that has already ended posts nothing.
+  if (signal?.aborted === true) {
+    throw new SlackApiError(method, 'the step ended before the request left', true);
+  }
+  const timeout = AbortSignal.timeout(SLACK_CALL_TIMEOUT_MS);
   let response: Response;
   try {
     response = await fetchImpl(`${SLACK_API}/${method}`, {
@@ -69,7 +100,7 @@ async function call(
         'content-type': 'application/json; charset=utf-8',
       },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(15_000),
+      signal: signal === undefined ? timeout : AbortSignal.any([timeout, signal]),
     });
   } catch (error) {
     throw new SlackApiError(
@@ -120,27 +151,42 @@ export function createSlackClient(options: {
 }): SlackClient {
   const fetchImpl = options.fetchImpl ?? safeFetchImpl;
   return {
-    async openDirectMessage(userId) {
-      const payload = await call(fetchImpl, options.botToken, 'conversations.open', {
-        users: userId,
-      });
+    async openDirectMessage(userId, signal) {
+      const payload = await call(
+        fetchImpl,
+        options.botToken,
+        'conversations.open',
+        { users: userId },
+        signal,
+      );
       const channel = (payload['channel'] as { id?: unknown } | undefined)?.id;
       if (typeof channel !== 'string') {
         throw new SlackApiError('conversations.open', 'no_channel_in_response', false);
       }
       return channel;
     },
-    async postMessage(channel, text) {
-      const payload = await call(fetchImpl, options.botToken, 'chat.postMessage', {
-        channel,
-        text,
-      });
+    async postMessage(channel, text, post = {}) {
+      const payload = await call(
+        fetchImpl,
+        options.botToken,
+        'chat.postMessage',
+        {
+          channel,
+          text,
+          ...(post.blocks === undefined ? {} : { blocks: post.blocks }),
+          ...(post.threadTs === undefined ? {} : { thread_ts: post.threadTs }),
+        },
+        post.signal,
+      );
       const ts = payload['ts'];
       const posted = payload['channel'];
       if (typeof ts !== 'string' || typeof posted !== 'string') {
         throw new SlackApiError('chat.postMessage', 'no_ts_in_response', false, true);
       }
       return { channel: posted, ts };
+    },
+    async updateMessage(channel, ts, text, blocks) {
+      await call(fetchImpl, options.botToken, 'chat.update', { channel, ts, text, blocks });
     },
     async openSocketModeUrl() {
       const payload = await call(fetchImpl, options.appToken, 'apps.connections.open', {});
