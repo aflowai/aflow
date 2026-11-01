@@ -104,14 +104,29 @@ const recorded = vi.hoisted(() => ({
   sideMounts: 0,
 }));
 
-vi.mock('@aflow/design-system', () => {
+vi.mock('@aflow/design-system', async () => {
+  // Reordering is the real hook, so a test drags and drops as the page does.
+  const { useDragReorder, DropIndicator } =
+    await vi.importActual<typeof import('@aflow/design-system')>('@aflow/design-system');
   const passed = (props: Record<string, unknown>) =>
     Object.fromEntries(
       Object.entries(props).filter(
         ([key]) =>
           key.startsWith('data-') ||
           key.startsWith('aria-') ||
-          ['role', 'title', 'onClick', 'onKeyDown', 'tabIndex', 'style'].includes(key),
+          key.startsWith('onDrag') ||
+          [
+            'role',
+            'title',
+            'onClick',
+            'onKeyDown',
+            'onDrop',
+            'onMouseEnter',
+            'onMouseLeave',
+            'draggable',
+            'tabIndex',
+            'style',
+          ].includes(key),
       ),
     );
   const block =
@@ -235,6 +250,8 @@ vi.mock('@aflow/design-system', () => {
         disabled: props['disabled'],
       }),
     useMediaQuery: () => recorded.narrow,
+    useDragReorder,
+    DropIndicator,
   };
 });
 
@@ -1715,6 +1732,39 @@ function openForm(): Element {
   return found;
 }
 
+/** Alt with an arrow key on `target`, as the keyboard reorders an item. */
+async function altArrow(target: Element, key: 'ArrowUp' | 'ArrowDown'): Promise<void> {
+  await act(async () => {
+    target.dispatchEvent(
+      new KeyboardEvent('keydown', { key, altKey: true, bubbles: true, cancelable: true }),
+    );
+  });
+}
+
+/** `from` dragged onto `to` and dropped on its upper or lower half. */
+async function dragOnto(from: Element, to: Element, side: 'before' | 'after'): Promise<void> {
+  const dataTransfer = { effectAllowed: 'none', dropEffect: 'none', setData: () => undefined };
+  // jsdom lays nothing out, so every box stands at 0 with no height: above it is its upper half.
+  const fire = (target: Element, type: string) => {
+    target.dispatchEvent(
+      Object.assign(new Event(type, { bubbles: true, cancelable: true }), {
+        dataTransfer,
+        clientY: side === 'before' ? -1 : 1,
+      }),
+    );
+  };
+  await act(async () => {
+    fire(from, 'dragstart');
+  });
+  await act(async () => {
+    fire(to, 'dragover');
+  });
+  await act(async () => {
+    fire(to, 'drop');
+    fire(from, 'dragend');
+  });
+}
+
 function buttonTexts(scope: Element): string[] {
   return [...scope.querySelectorAll('button')].map(buttonName);
 }
@@ -2001,21 +2051,23 @@ describe('SpacePlanPage — approve, reopen and order (Plan 332 P2)', () => {
     ]);
   });
 
-  it('offers Move up and Move down on Up next cards only where an open sibling lies that way', async () => {
+  it('lets an Up next card be dragged among its open siblings, and no other card', async () => {
     await render({ data: P2_PLAN });
 
     expect(cardIds(column('up_next'))).toEqual([UP_A, UP_B, UP_C, PHASE, LONE]);
-    expect(buttonTexts(card(UP_A))).toEqual(['Move up', 'Move down']);
-    expect(buttonTexts(card(PHASE))).toEqual(['Move up']);
-    expect(buttonTexts(card(LONE))).toEqual([]);
-    expect(buttonTexts(card(BLOCKED))).toEqual([]);
+    for (const id of [UP_A, UP_B, UP_C, PHASE, LONE]) {
+      expect(card(id).getAttribute('draggable'), id).toBe('true');
+      expect(card(id).getAttribute('aria-keyshortcuts'), id).toBe('Alt+ArrowUp Alt+ArrowDown');
+    }
+    expect(card(BLOCKED).getAttribute('draggable')).toBe(null);
+    expect(buttonTexts(card(UP_A))).toEqual([]);
   });
 
-  it('sends the nearest open sibling, past a closed one, and does not open the rail', async () => {
+  it('sends the nearest open sibling, past a closed one, by drag and from the keyboard, and does not open the rail', async () => {
     await render({ data: P2_PLAN });
 
-    await click(button(card(UP_A), 'Move down'));
-    await click(button(card(UP_B), 'Move up'));
+    await dragOnto(card(UP_A), card(UP_B), 'after');
+    await altArrow(card(UP_B), 'ArrowUp');
 
     expect(recorded.sent).toEqual([
       {
@@ -2031,28 +2083,14 @@ describe('SpacePlanPage — approve, reopen and order (Plan 332 P2)', () => {
     expect(container.querySelector('[data-plan-rail]')).toBe(null);
   });
 
-  it('moves a card from the keyboard: Enter on a focused Move up places it and opens no rail', async () => {
+  it('sends nothing for a drop beside the sibling a card already stands by, or beside a step that is not its sibling', async () => {
     await render({ data: P2_PLAN });
 
-    const moveUp = button(card(UP_B), 'Move up');
-    await act(async () => {
-      moveUp.focus();
-      const pressed = new KeyboardEvent('keydown', {
-        key: 'Enter',
-        bubbles: true,
-        cancelable: true,
-      });
-      // A browser activates a focused button on Enter unless a handler cancels the key.
-      if (moveUp.dispatchEvent(pressed)) moveUp.click();
-    });
+    await dragOnto(card(UP_B), card(UP_A), 'after');
+    await dragOnto(card(UP_A), card(BLOCKED), 'before');
+    await altArrow(card(LONE), 'ArrowUp');
 
-    expect(recorded.sent).toEqual([
-      {
-        path: `/spaces/${SPACE_ID}/plan/nodes/${UP_B}/place`,
-        body: { expectedRevision: 1, before: UP_A },
-      },
-    ]);
-    expect(container.querySelector('[data-plan-rail]')).toBe(null);
+    expect(recorded.sent).toEqual([]);
   });
 
   it('says why a move was refused on its card, and re-reads the board when a sibling moved', async () => {
@@ -2063,7 +2101,7 @@ describe('SpacePlanPage — approve, reopen and order (Plan 332 P2)', () => {
     );
     await render({ data: P2_PLAN });
 
-    await click(button(card(UP_C), 'Move up'));
+    await altArrow(card(UP_C), 'ArrowUp');
 
     expect(card(UP_C).querySelector('[role="alert"]')?.textContent).toContain(
       'not beside it any more',
@@ -2433,72 +2471,17 @@ describe('SpacePlanPage — ordering and closing plans from the list (Plan 332 P
     recorded.mutateAsync.mockResolvedValue({ node: {} });
   });
 
-  it('offers Move up and Move down on open rows only where an open plan lies that way', async () => {
+  it('lets an open plan be dragged among the open plans, and not a finished or closed one', async () => {
     await render({ data: LIST });
 
-    const moves = (rootId: string) =>
-      buttonTexts(listRow(rootId)!).filter((t) => t.startsWith('Move'));
-    expect(moves(L_NEEDS)).toEqual(['Move down']);
-    expect(moves(L_FLIGHT)).toEqual(['Move up', 'Move down']);
-    expect(moves(L_EMPTY)).toEqual(['Move up']);
-    expect(moves(L_FINISHED)).toEqual([]);
+    for (const id of [L_NEEDS, L_FLIGHT, L_QUEUED, L_EMPTY]) {
+      expect(listRow(id)!.getAttribute('draggable'), id).toBe('true');
+    }
+    expect(listRow(L_FINISHED)!.getAttribute('draggable')).toBe(null);
+    expect(buttonTexts(listRow(L_FLIGHT)!).filter((t) => t.startsWith('Move'))).toEqual([]);
   });
 
-  it('shows Move up and Move down where the row is pointed at, focused or selected, and the orb gives way to them', async () => {
-    nav.search = `plan=${L_QUEUED}`;
-    await render({ data: LIST });
-
-    const controls = (rootId: string) =>
-      listRow(rootId)!.querySelector<HTMLElement>(`[data-plan-move="${rootId}"]`)!;
-    const orb = (rootId: string) =>
-      listRow(rootId)!.querySelector<HTMLElement>('[data-plan-orb][data-state]')!;
-    const hover = async (target: HTMLElement, type: 'mouseover' | 'mouseout') => {
-      await act(async () => {
-        target.dispatchEvent(new MouseEvent(type, { bubbles: true, relatedTarget: null }));
-      });
-    };
-
-    // At rest: the orb shows, the controls are quiet.
-    expect(controls(L_FLIGHT).style.opacity).toBe('0');
-    expect(orb(L_FLIGHT).style.opacity).toBe('1');
-    // The selected row shows its controls in the orb's place.
-    expect(controls(L_QUEUED).style.opacity).toBe('1');
-    expect(orb(L_QUEUED).style.opacity).toBe('0');
-
-    await hover(listRow(L_FLIGHT)!, 'mouseover');
-    expect(controls(L_FLIGHT).style.opacity).toBe('1');
-    expect(orb(L_FLIGHT).style.opacity).toBe('0');
-    await hover(listRow(L_FLIGHT)!, 'mouseout');
-    expect(controls(L_FLIGHT).style.opacity).toBe('0');
-    expect(orb(L_FLIGHT).style.opacity).toBe('1');
-
-    await act(async () => {
-      listRow(L_EMPTY)!.querySelector('button')!.focus();
-    });
-    expect(controls(L_EMPTY).style.opacity).toBe('1');
-    expect(orb(L_EMPTY).style.opacity).toBe('0');
-
-    // A row with no move has no controls: its orb never gives way.
-    await hover(listRow(L_FINISHED)!, 'mouseover');
-    expect(listRow(L_FINISHED)!.querySelector('[data-plan-move]')).toBe(null);
-    expect(orb(L_FINISHED).style.opacity).toBe('1');
-  });
-
-  it('keeps the controls shown while a move is pending, though the row is no longer pointed at', async () => {
-    recorded.mutateAsync.mockReturnValue(new Promise(() => undefined));
-    await render({ data: LIST });
-
-    const controls = listRow(L_FLIGHT)!.querySelector<HTMLElement>(
-      `[data-plan-move="${L_FLIGHT}"]`,
-    )!;
-    expect(controls.style.opacity).toBe('0');
-
-    await click(button(listRow(L_FLIGHT)!, 'Move up'));
-    expect(controls.getAttribute('data-pending')).toBe('true');
-    expect(controls.style.opacity).toBe('1');
-  });
-
-  it('tints a row, the Overview item and the Closed disclosure while pointed at, and not the selected row', async () => {
+  it('tints a row, the Overview item and the Closed disclosure while pointed at, and rings the selected row', async () => {
     nav.search = `plan=${L_QUEUED}`;
     await render({ data: LIST });
 
@@ -2507,31 +2490,37 @@ describe('SpacePlanPage — ordering and closing plans from the list (Plan 332 P
         target.dispatchEvent(new MouseEvent(type, { bubbles: true, relatedTarget: null }));
       });
     };
+    // The tint lies over the surface the item's state gives it.
+    const overlaid = (target: HTMLElement) =>
+      target.style.backgroundImage.includes('var(--color-surface-2)');
     const tinted = (target: HTMLElement) =>
-      (target.getAttribute('style') ?? '').includes('var(--color-surface-2)') &&
-      !(target.getAttribute('style') ?? '').includes('var(--color-surface-3');
+      target.style.background.includes('var(--color-surface-2)');
     const overview = container.querySelector<HTMLElement>('[data-plan-list-overview]')!;
     const closed = container.querySelector<HTMLElement>(
       '[data-plan-list-section="closed"] > button',
     )!;
 
-    for (const target of [listRow(L_FLIGHT)!, overview, closed]) {
-      expect(tinted(target)).toBe(false);
+    for (const [target, shows] of [
+      [listRow(L_FLIGHT)!, overlaid],
+      [overview, overlaid],
+      [closed, tinted],
+    ] as const) {
+      expect(shows(target)).toBe(false);
       await hover(target, 'mouseover');
-      expect(tinted(target)).toBe(true);
+      expect(shows(target)).toBe(true);
       await hover(target, 'mouseout');
-      expect(tinted(target)).toBe(false);
+      expect(shows(target)).toBe(false);
     }
 
-    await hover(listRow(L_QUEUED)!, 'mouseover');
-    expect(listRow(L_QUEUED)!.getAttribute('style')).toContain('var(--color-surface-3');
+    expect(listRow(L_QUEUED)!.style.boxShadow).toContain('var(--color-interactive-default)');
+    expect(listRow(L_FLIGHT)!.style.boxShadow).toBe('');
   });
 
   it('places a plan before or after the open row beside it, against the revision the rows read', async () => {
     await render({ data: LIST });
 
-    await click(button(listRow(L_FLIGHT)!, 'Move up'));
-    await click(button(listRow(L_QUEUED)!, 'Move down'));
+    await altArrow(listRow(L_FLIGHT)!, 'ArrowUp');
+    await dragOnto(listRow(L_QUEUED)!, listRow(L_EMPTY)!, 'after');
 
     expect(recorded.sent).toEqual([
       {
@@ -2550,7 +2539,7 @@ describe('SpacePlanPage — ordering and closing plans from the list (Plan 332 P
 
   it('lists the plans in their new order once the rows are read again after a move', async () => {
     await render({ data: LIST });
-    await click(button(listRow(L_FLIGHT)!, 'Move up'));
+    await altArrow(listRow(L_FLIGHT)!, 'ArrowUp');
 
     const [needs, flight, ...rest] = LIST.roots;
     const moved: SpaceFixture = {
@@ -2560,9 +2549,6 @@ describe('SpacePlanPage — ordering and closing plans from the list (Plan 332 P
     await render({ data: moved });
 
     expect(rowIds('open')).toEqual([L_FLIGHT, L_NEEDS, L_QUEUED, L_EMPTY]);
-    expect(buttonTexts(listRow(L_FLIGHT)!).filter((t) => t.startsWith('Move'))).toEqual([
-      'Move down',
-    ]);
   });
 
   it('says why a move was refused on its row, and reads the rows again when a plan moved', async () => {
@@ -2573,7 +2559,7 @@ describe('SpacePlanPage — ordering and closing plans from the list (Plan 332 P
     );
     await render({ data: LIST });
 
-    await click(button(listRow(L_QUEUED)!, 'Move up'));
+    await altArrow(listRow(L_QUEUED)!, 'ArrowUp');
 
     expect(listRow(L_QUEUED)?.querySelector('[role="alert"]')?.textContent).toContain(
       'not beside it any more',
@@ -3031,7 +3017,8 @@ describe('SpacePlanPage — state as orbs, and motion (Plan 332 P7)', () => {
     await click(
       container.querySelector<HTMLElement>('[data-plan-list-section="closed"] > button')!,
     );
-    expect(read(L_CLOSED)).toEqual(['inert', 'Closed']);
+    // A plan closed as done reads completed; one dropped reads inert, receded.
+    expect(read(L_CLOSED)).toEqual(['completed', 'Closed']);
   });
 
   it('reads the plan’s header state by its orb and its words', async () => {
@@ -3043,11 +3030,11 @@ describe('SpacePlanPage — state as orbs, and motion (Plan 332 P7)', () => {
 
     await choosePlan(R315);
     const closed = container.querySelector(`[data-plan-tally="${R315}"]`)!;
-    expect(orbKind(closed)).toBe('inert');
+    expect(orbKind(closed)).toBe('completed');
     expect(closed.querySelector('[data-badge]')?.textContent).toBe('Closed');
   });
 
-  it('reads each card’s state by its orb and the words its card and column say', async () => {
+  it('reads each card’s state by its surface and the words its card and column say, and draws no orb in a column', async () => {
     await render();
 
     const read = (nodeId: string) => {
@@ -3055,23 +3042,25 @@ describe('SpacePlanPage — state as orbs, and motion (Plan 332 P7)', () => {
       const heading = shown
         .closest('[data-plan-column]')!
         .querySelector('[data-plan-column-header]');
-      return [orbKind(shown), heading?.getAttribute('data-plan-column-header')];
+      return [shown.style.backgroundColor, heading?.getAttribute('data-plan-column-header')];
     };
-    expect(read(DECISION)).toEqual(['paused', 'Pending']);
+    const neutral = 'var(--color-surface-2)';
+    const running = 'var(--color-status-running-bg)';
+    expect(read(DECISION)).toEqual(['var(--color-status-paused-bg)', 'Pending']);
     expect(card(DECISION).textContent).toContain('Decision');
-    // A run on the step itself, and one on a step under it, both read running.
-    expect(read(BOARD)).toEqual(['running', 'Running']);
+    // A run on the step itself, and one on a step under it, both read running and carry the ring.
+    expect(read(BOARD)).toEqual([running, 'Running']);
     expect(card(BOARD).textContent).toContain('1 run in flight');
-    expect(read(P3)).toEqual(['running', 'Running']);
+    expect(read(P3)).toEqual([running, 'Running']);
     // A waiting step whose run ended is In flight, and nothing moves it until the loop returns.
-    expect(read(NEXT)).toEqual(['idle', 'Running']);
+    expect(read(NEXT)).toEqual([neutral, 'Running']);
     expect(card(NEXT).querySelector('[data-plan-waiting]')?.textContent).toBe(
       'Its run ended; the loop advances it when it returns',
     );
-    expect(read(ARTICLE)).toEqual(['inert', 'Queued']);
-    expect(read(LANDED)).toEqual(['completed', 'Done']);
-    expect(read(SKETCH)).toEqual(['inert', 'Dropped']);
-    expect(container.querySelector('[data-plan-orb="failed"]')).toBe(null);
+    expect(read(ARTICLE)).toEqual([neutral, 'Queued']);
+    expect(read(LANDED)).toEqual([neutral, 'Done']);
+    expect(read(SKETCH)).toEqual([neutral, 'Dropped']);
+    expect(container.querySelector('[data-plan-board] [data-plan-orb]')).toBe(null);
   });
 
   it('reads the rail’s state by its orb and its words', async () => {
@@ -3199,12 +3188,11 @@ describe('SpacePlanPage — state as orbs, and motion (Plan 332 P7)', () => {
     await choosePlan(R315);
     const today = column('done').querySelector('[data-plan-done-group="today"]')!;
     expect(animatedWithin(today, today.querySelector('[data-plan-card]'))).toBe(true);
-    // The fold widens by the selected card's ring and pads its cards by it, so its clip spares the ring.
+    // The fold widens by the selected card's ring and pads its cards by it and by half a gap,
+    // so its clip spares the ring and a drop line.
     const fold = today.querySelector<HTMLElement>('[data-animated-height]')!;
-    expect(fold.style.marginInline).toBe('-2px');
-    expect(fold.querySelector<HTMLElement>('[data-plan-card]')!.parentElement!.style.padding).toBe(
-      '2px',
-    );
+    expect(fold.style.margin).toBe('0px -2px');
+    expect((fold.firstElementChild as HTMLElement).style.padding).toBe('6px 2px');
   });
 });
 

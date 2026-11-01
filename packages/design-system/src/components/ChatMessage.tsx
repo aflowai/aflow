@@ -105,7 +105,7 @@ export const ChatMessageList = forwardRef<HTMLDivElement, ChatMessageListProps>(
     return (
       <div
         ref={ref}
-        className={`ds-scroll-subtle ${className}`}
+        className={className}
         style={{
           display: 'flex',
           flexDirection: 'column',

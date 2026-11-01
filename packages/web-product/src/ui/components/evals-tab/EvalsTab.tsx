@@ -221,11 +221,7 @@ export function EvalsTab({ spaceId, workflowSlug }: { spaceId: string; workflowS
             />
           </TabPanel>
 
-          <TabPanel
-            id="cases"
-            style={{ overflow: 'auto', ...evalsPanelStyle }}
-            className="ds-scroll-subtle"
-          >
+          <TabPanel id="cases" style={{ overflow: 'auto', ...evalsPanelStyle }}>
             <DatasetSection
               spaceId={spaceId}
               workflowSlug={workflowSlug}

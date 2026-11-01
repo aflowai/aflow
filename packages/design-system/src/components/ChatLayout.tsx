@@ -274,12 +274,7 @@ export function ChatLayout({ header, children, composer }: ChatLayoutProps) {
     <div ref={wrapperRef} style={wrapperStyle}>
       {header}
       <div style={innerStyle}>
-        <div
-          ref={setMessagesNode}
-          onScroll={onScroll}
-          style={messagesStyle}
-          className="ds-scroll-subtle"
-        >
+        <div ref={setMessagesNode} onScroll={onScroll} style={messagesStyle}>
           <div ref={contentRef} style={contentConstraintStyle}>
             <ChatScrollContext.Provider value={scrollState}>{children}</ChatScrollContext.Provider>
           </div>

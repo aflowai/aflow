@@ -1,5 +1,5 @@
 import type { TimelineItemStatus } from '@aflow/design-system';
-import type { PlanBoardColumn, PlanRootState } from '@aflow/schemas';
+import type { PlanBoardColumn, PlanNodeStatus, PlanRootState } from '@aflow/schemas';
 import type {
   WorkflowRunSurfaceState,
   WorkflowSurfaceGraph,
@@ -211,22 +211,23 @@ export function orbForTaskStatus(
 
 /**
  * A plan's state (Plan 332 D3) → orb. A queued plan waits its turn as a
- * scheduled task does, and a closed plan and one with no steps have nothing
- * moving and nothing asked, so all three are inert.
+ * scheduled task does, and one with no steps has nothing moving and nothing
+ * asked, so both are inert. A closed plan reads as how it closed: completed
+ * when done, inert when dropped.
  */
-export function orbForPlanState(state: PlanRootState): OrbKind {
+export function orbForPlanState(state: PlanRootState, status?: PlanNodeStatus): OrbKind {
   switch (state) {
     case 'in_flight':
       return 'running';
     case 'needs_you':
       return 'paused';
     case 'queued':
+    case 'empty':
       return 'inert';
     case 'finished':
       return 'completed';
     case 'closed':
-    case 'empty':
-      return 'inert';
+      return status === 'done' ? 'completed' : 'inert';
   }
 }
 

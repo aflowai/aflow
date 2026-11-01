@@ -30,6 +30,11 @@ describe('orbForPlanState', () => {
       expect(orbForPlanState(state), state).toBe(expected[state]);
     }
   });
+
+  it('reads a closed plan as how it closed', () => {
+    expect(orbForPlanState('closed', 'done')).toBe('completed');
+    expect(orbForPlanState('closed', 'dropped')).toBe('inert');
+  });
 });
 
 describe('orbForPlanStep', () => {
