@@ -42,7 +42,7 @@ vi.mock('../cybernetic/harness/sessionWakeup.js', () => ({
 }));
 
 const { armPullRequestOnPublication } = await import('./arm.js');
-const { deliverEndedWait } = await import('../waits/waitDelivery.js');
+const { deliverEndedWait, runWaitDeliveryCycle } = await import('../waits/waitDelivery.js');
 
 const TENANT = 'a0000000-0000-4000-8000-000000000339';
 const SPACE = '5e1d0000-0000-4000-8000-000000000339';
@@ -207,5 +207,51 @@ describe("the owner's wait on its pull request's event", () => {
     });
     expect(gone).toBe('session_gone');
     expect((await readPullRequestWatch(redis, WATCH))?.ownerSessionId).toBeUndefined();
+  });
+});
+
+describe("an event that fires while the owner's last one is delivered", () => {
+  const changed = (change: 'checks_green' | 'conflicting') =>
+    emitPullRequestChanged(redis, {
+      tenantId: TENANT,
+      spaceId: SPACE,
+      subject: SUBJECT,
+      change,
+      url: URL,
+      headSha: 'c'.repeat(40),
+    });
+  const later = () => new Promise((resolve) => setTimeout(resolve, 5));
+  const logger = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
+  const ctx = { maxBatch: 10, budgetExhausted: () => false, mode: 'enabled' as const };
+
+  it('is queued for delivery with the next wait, and survives a delivery that throws', async () => {
+    await armed();
+    await changed('checks_green');
+    const [first] = await claimEndedWaits(redis, Date.now(), 10);
+    if (!first) throw new Error('the event did not end the wait');
+    await later();
+    await changed('conflicting');
+
+    expect(await deliverEndedWait(deps, first)).toBe('woke');
+
+    // The next wait caught up on the second event: it holds no hash entry, and
+    // waits in the delivery set rather than in a caller that could lose it.
+    expect(await readSubjectWaits(redis, WAITERS)).toEqual([]);
+    mockQueueMessage.mockReset().mockRejectedValueOnce(new Error('room unreachable'));
+    const failed = await runWaitDeliveryCycle(
+      { harnessDeps: deps, logger, now: () => Date.now() },
+      ctx,
+    );
+    expect(failed).toMatchObject({ candidates: 1, failed: 1 });
+
+    mockQueueMessage.mockResolvedValue({ seq: 2 });
+    const delivered = await runWaitDeliveryCycle(
+      { harnessDeps: deps, logger, now: () => Date.now() },
+      ctx,
+    );
+    expect(delivered).toMatchObject({ candidates: 1, processed: 1 });
+    expect(postedBody()).toContain('conflicting');
+    // And the owner holds a wait again.
+    expect(await readSubjectWaits(redis, WAITERS)).toHaveLength(1);
   });
 });

@@ -352,7 +352,13 @@ export async function sessionHasDeclaredWait(
 export type RegisterWaitResult =
   | { state: 'waiting' }
   /** The event it catches up on had fired already: the waiter is woken at once, by this call. */
-  | { state: 'woken'; outcome: WaitOutcome };
+  | { state: 'woken'; outcome: WaitOutcome }
+  /**
+   * The event it catches up on had fired already, and the wait was claimed
+   * into the delivery set, due at once: the next delivery cycle tells the
+   * waiter, under the same lease and retry as any other ended wait.
+   */
+  | { state: 'queued'; outcome: WaitOutcome };
 
 /**
  * Add the wait to its subject's hash with the number of events its subject
@@ -372,11 +378,14 @@ return redis.call('ZRANGEBYSCORE', KEYS[3], ARGV[6], '+inf')
 
 /**
  * Register a wait. Where an event it catches up on was recorded already, the
- * wait ends here and the caller tells the waiter at once.
+ * wait ends here and the caller tells the waiter at once. With
+ * `queueCatchUp`, such a wait is claimed into the delivery set in the same
+ * script instead, so no caller holds an ended wait that a throw could lose.
  */
 export async function registerWait(
   redis: Redis,
   registration: WaitRegistration,
+  options: { queueCatchUp?: boolean } = {},
 ): Promise<RegisterWaitResult> {
   const waitersKey = WAIT_WAITERS_KEY(registration);
   const caughtUp = await redis.eval(
@@ -406,6 +415,13 @@ export async function registerWait(
     parseRecordedEvents(caughtUp),
   );
   if (outcome === null) return { state: 'waiting' };
+  if (options.queueCatchUp === true) {
+    const queued = await claimWait(redis, WAIT_WAITERS_KEY(registration), registration, {
+      ended: { registration, outcome },
+      leaseUntilMs: 0,
+    });
+    return queued ? { state: 'queued', outcome } : { state: 'waiting' };
+  }
   const claimed = await claimWait(redis, WAIT_WAITERS_KEY(registration), registration);
   // Not claimed: the fired subject's reader took it between the two calls, and
   // delivers it as any other woken wait.

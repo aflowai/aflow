@@ -51,7 +51,8 @@ function pastLastEvent(ended: EndedWait): number | undefined {
  * A wait the platform declared for a pull request's owner (Plan 339 D4) is
  * renewed after each delivery, so the owner hears every change. A window that
  * closes on it posts nothing: the owner did not ask for it. Where the new wait
- * catches up on an event at once, that outcome is delivered here too.
+ * catches up on an event at once, its registration queues it in the delivery
+ * set, so a later cycle delivers it under the same lease and retry.
  */
 async function deliverOwnerWait(deps: HarnessDeps, ended: EndedWait): Promise<WaitDelivery> {
   const { registration } = ended;
@@ -62,10 +63,8 @@ async function deliverOwnerWait(deps: HarnessDeps, ended: EndedWait): Promise<Wa
     await disownPullRequestWatch(deps.redis, registration, registration.sessionId);
     return delivered;
   }
-  const held = await holdAgainForOwner(deps, registration, pastLastEvent(ended));
-  if (held.state === 'declared' && held.wait.state === 'ended') {
-    await deliverOwnerWait(deps, { registration: held.registration, outcome: held.wait.outcome });
-  }
+  // A throw here puts this wait back, and its redelivery declares the next one.
+  await holdAgainForOwner(deps, registration, pastLastEvent(ended));
   return delivered;
 }
 

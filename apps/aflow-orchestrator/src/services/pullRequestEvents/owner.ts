@@ -58,7 +58,7 @@ export type OwnerHold =
  * owner holds already is left alone. An owner that has ended is forgotten.
  *
  * `since` catches up: an event recorded at or after it ends the new wait at
- * once, and the caller delivers it. A delivery passes the time just past the
+ * once, and the registration queues it for the delivery cycle. A delivery passes the time just past the
  * last event it delivered, so an event that fired between the claim and this
  * declaration is not lost.
  */
@@ -92,6 +92,9 @@ export async function holdForOwner(
     subject: watch.subject,
     ...(options.since !== undefined ? { since: options.since } : {}),
     owner: { onEvent: ownerOnEvent(watch) },
+    // No caller awaits the outcome, so one it catches up on is queued for the
+    // delivery cycle in the registration's own script, and a throw loses nothing.
+    queueCatchUp: true,
   };
   const wait = await declareWait(
     deps.redis,
@@ -101,7 +104,18 @@ export async function holdForOwner(
   return {
     state: 'declared',
     wait,
-    registration: { ...declared, waitId: wait.waitId, declaredAt: nowMs, closesAt: wait.closesAt },
+    registration: {
+      tenantId: declared.tenantId,
+      spaceId: declared.spaceId,
+      sessionId: declared.sessionId,
+      kind: declared.kind,
+      subject: declared.subject,
+      ...(declared.since !== undefined ? { since: declared.since } : {}),
+      owner: declared.owner,
+      waitId: wait.waitId,
+      declaredAt: nowMs,
+      closesAt: wait.closesAt,
+    },
   };
 }
 

@@ -537,7 +537,8 @@ export class ScheduleEvaluator {
       claimedRunId = runId;
     }
 
-    if (!(await shepherdSweepWanted(this.sqlClient, this.redis, schedule))) {
+    const sweepDeps = { sql: this.sqlClient, db: this.db, redis: this.redis };
+    if (!(await shepherdSweepWanted(sweepDeps, schedule))) {
       await this.skipOccurrence(schedule, null);
       return false;
     }

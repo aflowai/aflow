@@ -5,19 +5,26 @@
  * next sweep. With none open it reads one empty range, starts nothing and
  * spends none of the schedule's firing cap.
  */
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import RedisMock from 'ioredis-mock';
 import type { Redis } from 'ioredis';
 import type postgres from 'postgres';
 import { armPullRequestWatch, clearPullRequestWatch } from '@aflow/redis';
 import { declareWait } from '@aflow/cybernetic-runtime';
+
+const { acting } = vi.hoisted(() => ({ acting: vi.fn() }));
+vi.mock('@aflow/cybernetic-runtime', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@aflow/cybernetic-runtime')>()),
+  isActingConversation: (_db: unknown, _tenantId: string, sessionId: string) =>
+    acting(sessionId) as Promise<boolean>,
+}));
 import {
   SHEPHERD_SCHEDULE_CRON_DEFAULT,
   SHEPHERD_SLUG,
   SHEPHERD_SWEEP_INTERVAL_MS,
 } from '@aflow/schemas';
-import { ScheduleEvaluator } from '../ScheduleEvaluator.js';
-import { shepherdSweepDue, shepherdSweepWanted } from './sweep.js';
+const { ScheduleEvaluator } = await import('../ScheduleEvaluator.js');
+const { shepherdSweepDue, shepherdSweepWanted } = await import('./sweep.js');
 
 const TENANT = 'a0000000-0000-4000-8000-000000000339';
 const SPACE = 'b0000000-0000-4000-8000-000000000339';
@@ -122,12 +129,16 @@ beforeEach(async () => {
   statements = [];
   transactions = 0;
   agentSlug = SHEPHERD_SLUG;
+  acting.mockReset().mockResolvedValue(true);
 });
+
+const ownerActs = (sessionId: string) => acting(sessionId) as Promise<boolean>;
+const deps = (sql: postgres.Sql = sqlClient()) => ({ sql, db: {} as never, redis });
 
 describe('the due check ahead of a shepherd sweep', () => {
   it('is not due while no loop pull request is open in the space, whatever another space has open', async () => {
     await open(1, OTHER_SPACE);
-    expect(await shepherdSweepDue(redis, SPACE_REF, T0)).toEqual({
+    expect(await shepherdSweepDue(redis, ownerActs, SPACE_REF, T0)).toEqual({
       due: false,
       open: 0,
       unattended: 0,
@@ -136,23 +147,50 @@ describe('the due check ahead of a shepherd sweep', () => {
 
   it('is due for an open pull request nobody holds, and not once it has merged', async () => {
     const subject = await open(7);
-    expect(await shepherdSweepDue(redis, SPACE_REF, T0)).toEqual({
+    expect(await shepherdSweepDue(redis, ownerActs, SPACE_REF, T0)).toEqual({
       due: true,
       open: 1,
       unattended: 1,
     });
     await clearPullRequestWatch(redis, { ...SPACE_REF, subject });
-    expect((await shepherdSweepDue(redis, SPACE_REF, T0)).due).toBe(false);
+    expect((await shepherdSweepDue(redis, ownerActs, SPACE_REF, T0)).due).toBe(false);
   });
 
   it('passes over a pull request its owner holds', async () => {
     const subject = await open(7, SPACE, WAITER);
     await waitOn(subject, 24 * 60 * 60, true);
-    expect(await shepherdSweepDue(redis, SPACE_REF, T0)).toEqual({
+    expect(await shepherdSweepDue(redis, ownerActs, SPACE_REF, T0)).toEqual({
       due: false,
       open: 1,
       unattended: 0,
     });
+  });
+
+  it('tends a pull request whose owner has failed, though the platform renews its wait', async () => {
+    const subject = await open(7, SPACE, WAITER);
+    await waitOn(subject, 24 * 60 * 60, true);
+    acting.mockResolvedValue(false);
+    expect(await shepherdSweepDue(redis, ownerActs, SPACE_REF, T0)).toEqual({
+      due: true,
+      open: 1,
+      unattended: 1,
+    });
+    expect(acting).toHaveBeenCalledWith(WAITER);
+  });
+
+  it("tends an ended owner's pull request at once, not once its wait's window closes", async () => {
+    const subject = await open(7, SPACE, WAITER);
+    await waitOn(subject, 24 * 60 * 60, true);
+    expect((await shepherdSweepDue(redis, ownerActs, SPACE_REF, T0)).due).toBe(false);
+    acting.mockResolvedValue(false);
+    // An hour later, the owner wait has 23 hours left, and the sweep tends it.
+    expect((await shepherdSweepDue(redis, ownerActs, SPACE_REF, T0 + 60 * 60 * 1000)).due).toBe(
+      true,
+    );
+    // Its owner wait counts as no short window either, whenever it closes.
+    expect(
+      (await shepherdSweepDue(redis, ownerActs, SPACE_REF, T0 + 23.5 * 60 * 60 * 1000)).due,
+    ).toBe(true);
   });
 
   it('passes over a pull request whose waiter is woken before the next sweep, and not one whose waiter sleeps past it (D5)', async () => {
@@ -160,24 +198,46 @@ describe('the due check ahead of a shepherd sweep', () => {
     const late = await open(8);
     await waitOn(soon, SHEPHERD_SWEEP_INTERVAL_MS / 1000 / 4);
     await waitOn(late, (SHEPHERD_SWEEP_INTERVAL_MS / 1000) * 3);
-    expect(await shepherdSweepDue(redis, SPACE_REF, T0)).toEqual({
+    expect(await shepherdSweepDue(redis, ownerActs, SPACE_REF, T0)).toEqual({
       due: true,
       open: 2,
       unattended: 1,
     });
     await waitOn(late, SHEPHERD_SWEEP_INTERVAL_MS / 1000 / 2);
-    expect((await shepherdSweepDue(redis, SPACE_REF, T0)).due).toBe(false);
+    expect((await shepherdSweepDue(redis, ownerActs, SPACE_REF, T0)).due).toBe(false);
   });
 });
 
 describe('the gate on a schedule firing', () => {
   it('lets every firing of another agent, or of no agent, start without reading anything', async () => {
     agentSlug = 'daily-report';
-    expect(await shepherdSweepWanted(sqlClient(), redis, shepherdRow(), T0)).toBe(true);
+    expect(await shepherdSweepWanted(deps(), shepherdRow(), T0)).toBe(true);
     statements = [];
     const resident = { ...shepherdRow(), target_kind: 'platform-role', target_agent_id: null };
-    expect(await shepherdSweepWanted(sqlClient(), redis, resident, T0)).toBe(true);
+    expect(await shepherdSweepWanted(deps(), resident, T0)).toBe(true);
     expect(statements).toEqual([]);
+  });
+
+  it('lets the firing start where the due check fails, so the schedule is neither stuck nor in error', async () => {
+    const failing = {
+      unsafe: () => Promise.reject(new Error('connection reset')),
+      begin: () => Promise.reject(new Error('connection reset')),
+    } as unknown as postgres.Sql;
+    expect(await shepherdSweepWanted(deps(failing), shepherdRow(), T0)).toBe(true);
+
+    const subject = await open(7, SPACE, WAITER);
+    await waitOn(subject, 24 * 60 * 60, true);
+    acting.mockRejectedValue(new Error('sessions unreadable'));
+    expect(await shepherdSweepWanted(deps(), shepherdRow(), T0)).toBe(true);
+
+    const evaluator = new ScheduleEvaluator({
+      redis,
+      sqlClient: sqlClient(),
+      db: {} as never,
+      mode: 'observe',
+    }) as unknown as { recordOccurrence(row: unknown): Promise<boolean> };
+    expect(await evaluator.recordOccurrence(shepherdRow())).toBe(true);
+    expect(transactions).toBe(1);
   });
 
   it('records a day of idle hourly sweeps as skipped: no run starts and the firing cap is not spent', async () => {

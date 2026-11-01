@@ -62,6 +62,29 @@ export async function isLiveConversation(
   tenantId: string,
   sessionId: string,
 ): Promise<boolean> {
+  return conversationNotIn(db, tenantId, sessionId, CONVERSATION_ENDED_STATUSES);
+}
+
+/**
+ * Whether `sessionId` is a Helmsman conversation that can act now: one that
+ * has neither ended nor failed. A failed conversation still holds its work
+ * for a retry, but nothing acts on that work until the retry comes, so work
+ * that waits on someone to act treats it as no one.
+ */
+export async function isActingConversation(
+  db: PostgresJsDatabase,
+  tenantId: string,
+  sessionId: string,
+): Promise<boolean> {
+  return conversationNotIn(db, tenantId, sessionId, [...CONVERSATION_ENDED_STATUSES, 'FAILED']);
+}
+
+async function conversationNotIn(
+  db: PostgresJsDatabase,
+  tenantId: string,
+  sessionId: string,
+  statuses: readonly SessionStatus[],
+): Promise<boolean> {
   const rows = await withTenantSchema(db, createTenantContext(tenantId as TenantId), (tx) =>
     tx
       .select({
@@ -78,7 +101,7 @@ export async function isLiveConversation(
   return (
     row.targetKind === CONVERSATION_TARGET_KIND &&
     row.targetSystemRole === CONVERSATION_SYSTEM_ROLE &&
-    !CONVERSATION_ENDED_STATUSES.includes(row.status as SessionStatus)
+    !statuses.includes(row.status as SessionStatus)
   );
 }
 

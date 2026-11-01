@@ -47,11 +47,17 @@ export interface DeclareWaitInput {
   since?: number;
   /** Set where the platform declares the wait for the subject's owner (Plan 339 D4). */
   owner?: { onEvent: string };
+  /**
+   * An event it catches up on queues the ended wait for the delivery cycle,
+   * rather than handing it to the caller. For a declaration no person awaits.
+   */
+  queueCatchUp?: boolean;
 }
 
 export type DeclaredWait =
   | { waitId: string; closesAt: number; state: 'waiting' }
-  | { waitId: string; closesAt: number; state: 'ended'; outcome: WaitOutcome };
+  | { waitId: string; closesAt: number; state: 'ended'; outcome: WaitOutcome }
+  | { waitId: string; closesAt: number; state: 'queued'; outcome: WaitOutcome };
 
 export class WaitDeclarationError extends Error {
   constructor(message: string) {
@@ -103,15 +109,17 @@ export async function declareWait(
     ...(input.since !== undefined ? { since: input.since } : {}),
     ...(input.owner !== undefined ? { owner: input.owner } : {}),
   };
-  const registered = await registerWait(redis, registration);
-  return registered.state === 'woken'
-    ? {
-        waitId: registration.waitId,
-        closesAt: registration.closesAt,
-        state: 'ended',
-        outcome: registered.outcome,
-      }
-    : { waitId: registration.waitId, closesAt: registration.closesAt, state: 'waiting' };
+  const registered = await registerWait(redis, registration, {
+    ...(input.queueCatchUp === true ? { queueCatchUp: true } : {}),
+  });
+  const { waitId, closesAt } = registration;
+  if (registered.state === 'waiting') return { waitId, closesAt, state: 'waiting' };
+  return {
+    waitId,
+    closesAt,
+    state: registered.state === 'woken' ? 'ended' : 'queued',
+    outcome: registered.outcome,
+  };
 }
 
 /**
