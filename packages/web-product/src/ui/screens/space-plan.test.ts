@@ -1151,6 +1151,73 @@ describe('SpacePlanPage — the rail', () => {
     expect([...shown.querySelectorAll('button')].map(buttonName)).toEqual(['Close', 'Reopen']);
   });
 
+  it('renders the goal, criteria and outcome as markdown: a list, a link and a code span', async () => {
+    recorded.details[LANDED] = detail(
+      fullNode(LANDED, 'P3.2 operator writes', {
+        status: 'done',
+        goal: 'Render the rail:\n\n- read [the plan](https://x.test/plan)\n- call `MarkdownRenderer`',
+        criteria: 'The rail shows **rendered** text.',
+        outcome: 'Merged with `RailMarkdown`.',
+        closedAt: at(10, 22),
+      }),
+    );
+    await render();
+
+    await click(card(LANDED));
+
+    const goal = rail().querySelector('[data-plan-goal]')!;
+    expect([...goal.querySelectorAll('.md-content li')].map((li) => li.textContent)).toEqual([
+      'read the plan',
+      'call MarkdownRenderer',
+    ]);
+    expect(goal.querySelector('.md-content a')?.getAttribute('href')).toBe('https://x.test/plan');
+    expect(goal.querySelector('.md-content code')?.textContent).toBe('MarkdownRenderer');
+    expect(goal.textContent).not.toContain('](');
+    expect(rail().querySelector('[data-plan-criteria] .md-content strong')?.textContent).toBe(
+      'rendered',
+    );
+    expect(rail().querySelector('[data-plan-outcome] .md-content code')?.textContent).toBe(
+      'RailMarkdown',
+    );
+  });
+
+  it('renders the working note’s headings and lists inside the rail’s width, and keeps Now plain', async () => {
+    const withNote: SpaceFixture = {
+      ...PLAN,
+      roots: PLAN.roots.map((r) => ({
+        ...r,
+        children: r.children.map((c) =>
+          c.nodeId === ARTICLE ? { ...c, noteHead: '## Proposed: write *it* later' } : c,
+        ),
+      })),
+    };
+    recorded.details[ARTICLE] = detail(
+      fullNode(ARTICLE, 'Write the help article', {
+        parentId: R322,
+        note: '## Proposed: write *it* later\n\n### Steps\n\n1. Draft it\n2. Review it',
+      }),
+    );
+    await render({ data: withNote });
+
+    await click(card(ARTICLE));
+
+    expect(rail().querySelector('[data-plan-rail-section="Now"]')?.textContent).toBe(
+      'Now## Proposed: write *it* later',
+    );
+    const section = rail().querySelector('[data-plan-rail-section="Working note"]')!;
+    await click(button(section, 'Show note'));
+    const note = section.querySelector<HTMLElement>('[data-plan-note]')!;
+    expect(note.querySelector('h2')?.textContent).toBe('Proposed: write it later');
+    expect(note.querySelector('h3')?.textContent).toBe('Steps');
+    expect([...note.querySelectorAll('ol li')].map((li) => li.textContent)).toEqual([
+      'Draft it',
+      'Review it',
+    ]);
+    expect(note.style.minWidth).toBe('0px');
+    expect(note.style.maxWidth).toBe('100%');
+    expect(note.style.overflowX).toBe('auto');
+  });
+
   it('collapses Dropped to a strip while the rail is open', async () => {
     await render();
     expect(column('dropped').getAttribute('data-collapsed')).toBe(null);
