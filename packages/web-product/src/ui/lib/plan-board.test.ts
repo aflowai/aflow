@@ -5,9 +5,11 @@
  * derive from their rows (Plan 332 D7).
  */
 import { describe, expect, it } from 'vitest';
+import { PLAN_NODE_LIVE_CHECK_HEAD } from '@aflow/schemas';
 import type {
   PlanLaneItem,
   PlanNode,
+  PlanNodeCard,
   PlanOverviewLanes,
   PlanRootRow,
   PlanRootState,
@@ -35,6 +37,7 @@ import {
   planTag,
   planListSections,
   planPhases,
+  planRailOpen,
   planRowMoveTargets,
   planRowProgress,
   planViewQuery,
@@ -68,6 +71,9 @@ function node(nodeId: string, extra: Partial<PlanTreeNode> = {}): PlanTreeNode {
   };
 }
 
+/** A tally whose steps have not all closed. */
+const OPEN_STEPS = { steps: 9, done: 1, dropped: 1 };
+
 describe('planCards', () => {
   const root = node('root', {
     children: [
@@ -86,7 +92,7 @@ describe('planCards', () => {
   });
 
   it('lists every node under the root in walk order, never the root, with its column, reason and phase', () => {
-    const cards = planCards(root);
+    const cards = planCards(root, OPEN_STEPS);
 
     expect(cards.map((c) => [c.node.nodeId, c.column, c.reason, c.phase?.nodeId])).toEqual([
       ['P3 — board', 'up_next', undefined, undefined],
@@ -117,7 +123,7 @@ describe('planCards', () => {
   });
 
   it('filters by phase — the phase and what sits under it', () => {
-    const cards = planCards(root);
+    const cards = planCards(root, OPEN_STEPS);
     const ids = (filters: Parameters<typeof planCardMatches>[1]) =>
       cards.filter((c) => planCardMatches(c, filters)).map((c) => c.node.nodeId);
 
@@ -147,14 +153,16 @@ describe('planCards', () => {
   });
 });
 
+const NO_STEPS = { steps: 0, done: 0, dropped: 0 };
+
 describe('a blocked root with no steps (Plan 338 D5)', () => {
   const root = node('proposal', { status: 'blocked' });
 
   it('stands in its own board’s Pending approval column, the only card', () => {
-    expect(planCards(root).map((c) => [c.node.nodeId, c.column, c.reason])).toEqual([
+    expect(planCards(root, NO_STEPS).map((c) => [c.node.nodeId, c.column, c.reason])).toEqual([
       ['proposal', 'needs_you', 'blocked'],
     ]);
-    expect(planCards(node('approved')).length).toBe(0);
+    expect(planCards(node('approved'), NO_STEPS).length).toBe(0);
   });
 
   it('reads Pending approval in the header, counted as 1 pending, with no step closed', () => {
@@ -175,6 +183,92 @@ describe('a blocked root with no steps (Plan 338 D5)', () => {
       progress: '0 of 0 closed',
       counts: [{ column: 'needs_you', label: '1 pending' }],
     });
+  });
+});
+
+describe('a blocked root whose steps have all closed (Plan 339 D6)', () => {
+  const root = node('proposal', {
+    status: 'blocked',
+    children: [node('shipped', { status: 'done' }), node('let go', { status: 'dropped' })],
+  });
+  const closed = { steps: 2, done: 1, dropped: 1 };
+
+  it('stands in no Pending approval column: the root asks for nothing', () => {
+    expect(planCards(root, closed).some((c) => c.node.nodeId === 'proposal')).toBe(false);
+    expect(planCards(root, closed).every((c) => c.column !== 'needs_you')).toBe(true);
+  });
+
+  it('reads Finished in the header with no step pending, as a plan to close', () => {
+    expect(
+      planHeader({
+        rootId: 'proposal',
+        state: 'finished',
+        steps: 2,
+        needsYou: 0,
+        inFlight: 0,
+        upNext: 0,
+        done: 1,
+        dropped: 1,
+        doneByDay: [],
+      }),
+    ).toMatchObject({ state: 'Finished', progress: '2 of 2 closed' });
+  });
+
+  it('still leads its column while a step under it is open', () => {
+    expect(
+      planCards(root, { steps: 3, done: 1, dropped: 1 }).map((c) => [c.node.nodeId, c.column]),
+    ).toContainEqual(['proposal', 'needs_you']);
+  });
+});
+
+describe('the rail’s Approve (Plan 339 D6)', () => {
+  const waitsOn = {
+    reason: 'design_document',
+    decision: 'Approve Plan 340’s design document.',
+  } as const;
+  const asking: PlanNodeCard = {
+    change: { today: 'Today.', after: 'After.' },
+    why: ['Why.'],
+    affects: [],
+    risks: [],
+    questions: [],
+    notDoing: [],
+    waitsOn,
+  };
+  const { waitsOn: _none, ...silent } = asking;
+
+  it('appears on a blocked step whose card names the decision, with that decision', () => {
+    expect(planRailOpen('blocked', { status: 'blocked', card: asking })).toEqual({
+      label: 'Approve',
+      waitsOn,
+    });
+  });
+
+  it('never appears on a step whose card names no waiting reason, which offers Resume', () => {
+    expect(planRailOpen('blocked', { status: 'blocked', card: silent })).toEqual({
+      label: 'Resume',
+    });
+    expect(planRailOpen('blocked', { status: 'blocked' })).toEqual({ label: 'Resume' });
+    expect(planRailOpen('blocked', { status: 'blocked', note: 'Proposed: worth doing' })).toEqual({
+      label: 'Resume',
+    });
+  });
+
+  it('keeps Approve on a live check, whose open write closes it rather than resuming it', () => {
+    const note = `${PLAN_NODE_LIVE_CHECK_HEAD}waits on a person to read the connected folder's head.`;
+    expect(planRailOpen('blocked', { status: 'blocked', note })).toEqual({ label: 'Approve' });
+    expect(planRailOpen('blocked', { status: 'blocked', note, card: silent })).toEqual({
+      label: 'Approve',
+    });
+  });
+
+  it('never appears off a blocked step, or before the step’s own read answers', () => {
+    expect(planRailOpen('decide', { status: 'active', card: asking })).toBeUndefined();
+    expect(planRailOpen('stranded', { status: 'blocked', card: asking })).toBeUndefined();
+    expect(planRailOpen(undefined, { status: 'active', card: asking })).toBeUndefined();
+    expect(planRailOpen('blocked', undefined)).toBeUndefined();
+    // A read that finds the step open again offers neither.
+    expect(planRailOpen('blocked', { status: 'active', card: asking })).toBeUndefined();
   });
 });
 

@@ -343,7 +343,8 @@ export type PlanDoneDay = z.infer<typeof PlanDoneDaySchema>;
  * under Needs you; `in_flight` — one stands under In flight; `queued` — it has
  * open steps, all under Up next; `finished` — it has steps and every one is
  * closed; `empty` — it has none. `finished` is not a status: the root stays
- * open until the operator closes it.
+ * open until the operator closes it. A root whose steps have all closed reads
+ * `finished` whatever its own open status, `blocked` included (Plan 339 D6).
  */
 export const PlanRootStateSchema = z.enum([
   'closed',
@@ -628,19 +629,36 @@ export function planBoardCards(root: PlanTreeNode): PlanBoardCard[] {
   return cards;
 }
 
-/**
- * Whether a plan's root itself waits on a person (Plan 338 D5). A node's own
- * `blocked` status makes it a waiting node wherever states derive, so a
- * blocked root reads `needs_you` and counts under it, with or without steps.
- * The root is still no step: `steps` does not count it.
- */
-export function planRootWaits(root: { status: PlanNodeStatus }): boolean {
-  return root.status === 'blocked';
+/** A plan's steps as its root's state reads them: how many, and how many have closed. */
+export type PlanRootStepCounts = Pick<PlanRootCounts, 'steps' | 'done' | 'dropped'>;
+
+/** Whether a plan has steps and every one of them has closed, done or dropped. */
+export function planStepsAllClosed(counts: PlanRootStepCounts): boolean {
+  return counts.steps > 0 && counts.done + counts.dropped >= counts.steps;
 }
 
-/** A blocked root as the board's `needs_you` column shows it; undefined for any other root. */
-export function planRootCard(root: PlanTreeNode): PlanBoardCard | undefined {
-  return planRootWaits(root) ? { column: 'needs_you', reason: 'blocked', node: root } : undefined;
+/**
+ * Whether a plan's root itself waits on a person (Plan 338 D5). A blocked
+ * root reads `needs_you` and counts under it while it has no steps or an open
+ * one. The root is still no step: `steps` does not count it. A root whose
+ * steps have all closed never waits, whatever status it was created with: it
+ * reads `finished` and offers Close plan (Plan 339 D6).
+ */
+export function planRootWaits(
+  root: { status: PlanNodeStatus },
+  steps: PlanRootStepCounts,
+): boolean {
+  return root.status === 'blocked' && !planStepsAllClosed(steps);
+}
+
+/** A waiting root as the board's `needs_you` column shows it; undefined for any other root. */
+export function planRootCard(
+  root: PlanTreeNode,
+  steps: PlanRootStepCounts,
+): PlanBoardCard | undefined {
+  return planRootWaits(root, steps)
+    ? { column: 'needs_you', reason: 'blocked', node: root }
+    : undefined;
 }
 
 // ============================================================================

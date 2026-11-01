@@ -4,7 +4,9 @@
 
 **Builds on:** Plan 331 (D3.3, the asked-once rule, and the resident), Plan 332 (the overview, the column rule of D4, the open question of §8), Plan 337 (the decision card, written here by hand because 337 P3 is not merged), Plan 333 (D2's writing rules).
 
-**Leaves alone:** every plan status and the column rule that places a step, the asked-once record and the note line it writes, the stream walk, the Action Center's resolve paths, `human.action_center.focus`, the session URL.
+**Leaves alone:** every plan status and the column rule that places a step, the asked-once record and the note line it writes, the stream walk, the Action Center's resolve paths, the session URL.
+
+**Changes `human.action_center.focus`:** P2 widens it to the ids the section lists. `ACTION_CENTER_FOCUS_ITEM_ID_PREFIXES` (`packages/schemas/src/operations/human.ts`) adds the five attention prefixes `plan-ask`, `plan-decision`, `workflow-task`, `workflow-write-approval` and `workflow-oauth-consent` to `proposal`, `step`, `gate` and `settings`. The schema's `itemId` pattern and the orchestrator's bare-id check both read that list. The orchestrator handler copies the kind and title the cached attention block lists for a non-proposal id onto the step output as `listed`. The chat renders every non-proposal focus as an `InlineFocusedItem` card with the item's kind, title and state. The card holds no answer control. It links a plan step to its node on the plan page and points every other item to Pending in the Workbench.
 
 ## Decision card
 
@@ -174,7 +176,7 @@ The figure for one live space is not recorded yet. No stack ran where P2 was bui
 
 **Not consumed.** These lines are not `attention_items` rows. A turn does not consume them, and they show until the item resolves.
 
-**Staleness.** A gate or a consent does not bump the attention generation. The cache's 60-second lifetime bounds how long its count can lag (F11).
+**Staleness.** A session's pause and its resolution bump the attention generation. The projection worker decides from the session row, not from the events it flushes (`movesSessionGate`, `ProjectionWorker.ts`). It reads the row's prior status and current step under `FOR UPDATE` in the upsert's transaction. It bumps after the row is durable, and only when the row enters `PAUSED`, leaves it, or stays paused at another step. A workflow run's pause, resume and end bump it through `emitRunUpdated` (`runEvents.ts`). A compute-egress request bumps nothing, so its count can lag by the cache's 60-second lifetime (F11).
 
 _Rejected:_ item bodies in the context. A gate's request or a plan step's note costs thousands of tokens, and the Helmsman only points.
 
@@ -341,7 +343,7 @@ _Delivered (P2)._ The items below were built.
 
 - A parent paused `subflow_waiting` holds its child's ref, and `pausedStepSource` lists it by the child's request. The count reads that request's kind from the paused child holding the same ref, down the chain to a depth of 10. A chain whose child row is gone, holds another ref or runs deeper is not counted.
 - A consent run counts among the newest 200 runs paused `needs_oauth_consent`, the window `workflowOAuthConsentSource` cuts before it drops a run with no consent. A run whose resume contract is stored outside its ref counts unread, so a stored contract with no consent still counts.
-- A gate or a consent does not bump the attention generation, so its count can lag by the cache's 60 seconds (F11).
+- A compute-egress request does not bump the attention generation, so its count can lag by the cache's 60 seconds (F11). A session's pause or its resolution bumps it at the row's `PAUSED` edge, and a workflow run's transition bumps it through `emitRunUpdated`.
 - The section counts the five sources this plan names. Session invitations, browser handoffs and integration-host requests also sit in the approvals and inputs lanes, and they are not counted.
 
 **Open:** the measured tokens of one live space in D2, and the phase exit on the live stack.

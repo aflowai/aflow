@@ -287,7 +287,7 @@ export function PlanBoard({
   narrow,
 }: PlanBoardProps) {
   const [droppedOpen, setDroppedOpen] = useState(false);
-  const cards = planCards(root).filter((card) => planCardMatches(card, filters));
+  const cards = planCards(root, tally).filter((card) => planCardMatches(card, filters));
   const inColumn = (column: PlanBoardColumn) => cards.filter((card) => card.column === column);
   const groups = planDoneGroups(tally.doneByDay, today);
   const folds = planDoneFolds(groups, inColumn('done'), planBoardFiltered(filters), doneReadSince);

@@ -52,7 +52,7 @@ import {
   type PlanOpResult,
   type PlanReadContext,
 } from './operations.js';
-import { askedRevision, isAsked, planAsk, claimAsk } from './asks.js';
+import { askedRevision, isAsked, planAsk, claimAsk, planRootStepsAllClosed } from './asks.js';
 import { bySiblingOrder } from './tree.js';
 
 /** How many of a node's own rounds a firing reads, newest first. */
@@ -929,7 +929,9 @@ async function decideActive(
       ((opened.node.status === 'active' || opened.node.status === 'waiting') &&
         opened.node.note?.includes(PLAN_NODE_MERGE_WAIT_LINE))) &&
     opened.node.kind !== 'decide' &&
-    input.rootNodeId === undefined
+    input.rootNodeId === undefined &&
+    // A root whose steps have all closed asks for no approval (Plan 339 D6).
+    !(opened.node.parentId === null && (await planRootStepsAllClosed(ctx, opened.node)))
   ) {
     const record = await askedRevision(ctx, opened.node.nodeId);
     if (!isAsked(opened.node, record)) {

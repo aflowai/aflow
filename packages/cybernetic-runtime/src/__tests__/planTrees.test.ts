@@ -47,7 +47,7 @@ import {
   type PlanBoardOptions,
 } from '../plan/board.js';
 import { planGoalHead } from '../plan/store.js';
-import { listWaitingNodes } from '../plan/asks.js';
+import { findWaitingNode, listWaitingNodes } from '../plan/asks.js';
 import { findActiveStreamNode, mergeLinkLabel } from '../plan/stream.js';
 import { orderPlanTree } from '../plan/tree.js';
 import { InMemoryPlanNodeStore } from './planStoreFake.js';
@@ -698,7 +698,7 @@ describe('readPlanBoard — scoped to one root', () => {
 });
 
 describe('planRootState — a plan’s state (Plan 332 D3)', () => {
-  const none = { steps: 0, needsYou: 0, inFlight: 0, upNext: 0 };
+  const none = { steps: 0, needsYou: 0, inFlight: 0, upNext: 0, done: 0, dropped: 0 };
 
   it('reads each state by its rule, the first that holds deciding', () => {
     expect(planRootState('done', { ...none, steps: 3, needsYou: 1 })).toBe('closed');
@@ -715,9 +715,16 @@ describe('planRootState — a plan’s state (Plan 332 D3)', () => {
   });
 
   it('reads a plan both needing the operator and in flight as needs_you', () => {
-    expect(planRootState('active', { steps: 2, needsYou: 1, inFlight: 1, upNext: 0 })).toBe(
+    expect(planRootState('active', { ...none, steps: 2, needsYou: 1, inFlight: 1 })).toBe(
       'needs_you',
     );
+  });
+
+  it('reads a root whose steps have all closed as finished, whatever its open status (Plan 339 D6)', () => {
+    for (const status of ['active', 'waiting', 'blocked'] as const) {
+      expect(planRootState(status, { ...none, steps: 3, done: 2, dropped: 1 })).toBe('finished');
+    }
+    expect(planRootState('blocked', { ...none, steps: 3, done: 2, upNext: 1 })).toBe('needs_you');
   });
 
   it('reads a blocked root as needs_you with or without steps, and a waiting one by its steps', () => {
@@ -748,6 +755,78 @@ describe('readPlanOverview — the plans as rows', () => {
     const plan = await board(root.nodeId);
     expect(plan.tally).toMatchObject({ state: 'needs_you', steps: 0, needsYou: 1 });
     expect(await listWaitingNodes(ctx())).toMatchObject([{ nodeId: root.nodeId }]);
+  });
+
+  it.each([
+    ['active', {}],
+    ['a proposal', { proposed: 'Worth doing' }],
+    [
+      'a decision',
+      {
+        card: {
+          change: { today: 'Today.', after: 'After.' },
+          why: ['Why.'],
+          affects: [],
+          risks: [],
+          questions: [],
+          notDoing: [],
+          waitsOn: { reason: 'design_document', decision: 'Approve the design document.' },
+        },
+      },
+    ],
+  ] as const)(
+    'reads a root created %s whose steps have all closed as finished, and never asks for approval (Plan 339 D6)',
+    async (_created, input) => {
+      const root = await node('Plan 339 · approval is a gate', input);
+      const shipped = await node('P1 — shipped', { parentId: root.nodeId });
+      const letGo = await node('P2 — let go', { parentId: root.nodeId, position: 1 });
+      await close(shipped, 'done');
+      await close(letGo, 'dropped');
+
+      const read = await rows();
+      expect(read.roots).toMatchObject([
+        { nodeId: root.nodeId, state: 'finished', counts: { steps: 2, needsYou: 0, done: 1 } },
+      ]);
+      expect(read.lanes.needsYou).toEqual({ items: [], total: 0 });
+      const plan = await board(root.nodeId);
+      expect(plan.tally).toMatchObject({ state: 'finished', steps: 2, needsYou: 0 });
+      // No Action Center item asks to approve it, and no resident wake asks about it.
+      expect(await listWaitingNodes(ctx())).toEqual([]);
+      expect(await findWaitingNode(ctx(), root.nodeId)).toBe(null);
+    },
+  );
+
+  it('lists waiting roots with one walk and at most one overview read, however many it lists', async () => {
+    for (let i = 0; i < 4; i++) {
+      const open = await node(`waiting ${String(i)}`, { proposed: 'Worth doing', position: i });
+      await node(`open step ${String(i)}`, { parentId: open.nodeId });
+      const finished = await node(`finished ${String(i)}`, { proposed: 'Done', position: 10 + i });
+      await close(await node(`closed step ${String(i)}`, { parentId: finished.nodeId }), 'done');
+    }
+    const walk = vi.spyOn(store, 'walk');
+    const overview = vi.spyOn(store, 'readOverview');
+
+    const listed = await listWaitingNodes(ctx());
+    expect(listed.map((n) => n.title).sort()).toEqual([
+      'waiting 0',
+      'waiting 1',
+      'waiting 2',
+      'waiting 3',
+    ]);
+    expect(walk).toHaveBeenCalledTimes(1);
+    expect(overview).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads no overview for a list with no waiting root', async () => {
+    const overview = vi.spyOn(store, 'readOverview');
+    const step = await node('a blocked step', { parentId: (await node('plan')).nodeId });
+    await updatePlanNode(ctx(), {
+      nodeId: step.nodeId,
+      expectedRevision: step.revision,
+      status: 'blocked',
+    });
+    expect((await listWaitingNodes(ctx())).map((n) => n.nodeId)).toEqual([step.nodeId]);
+    expect(overview).not.toHaveBeenCalled();
   });
 
   it('derives every state on the server from the plan’s own steps', async () => {

@@ -31,13 +31,6 @@ const KIND_BY_PREFIX: ReadonlyArray<readonly [prefix: string, label: string]> = 
   ['settings:', 'Settings request'],
 ];
 
-const LISTED_KIND_LABEL: Record<NonNullable<InlineProposalFocusPayload['listed']>['kind'], string> =
-  {
-    plan_step: 'Plan step',
-    run_gate: 'Run gate',
-    consent: 'Connection',
-  };
-
 const STATE: Record<ActionCenterItemStatus, { label: string; variant: BadgeVariant }> = {
   open: { label: PLAN_STATE_LABELS.workbenchSection, variant: 'warning' },
   resolving: { label: 'Resolving', variant: 'running' },
@@ -52,10 +45,8 @@ const GONE = {
   variant: 'neutral',
 } as const;
 
-function kindLabel(itemId: string, listed: InlineFocusedItemProps['listed']): string {
-  const byPrefix = KIND_BY_PREFIX.find(([prefix]) => itemId.startsWith(prefix));
-  if (byPrefix) return byPrefix[1];
-  return listed ? LISTED_KIND_LABEL[listed.kind] : 'Request';
+function kindLabel(itemId: string): string {
+  return KIND_BY_PREFIX.find(([prefix]) => itemId.startsWith(prefix))?.[1] ?? 'Request';
 }
 
 /** The plan node a plan step's id names, where it names one. */
@@ -122,7 +113,7 @@ export function InlineFocusedItem({ itemId, reason, listed }: InlineFocusedItemP
         <Column gap="xs">
           <Row gap="sm" align="center">
             <Text size="xs" color="muted">
-              {kindLabel(itemId, listed)}
+              {kindLabel(itemId)}
             </Text>
             {state ? (
               <Badge variant={state.variant}>{state.label}</Badge>

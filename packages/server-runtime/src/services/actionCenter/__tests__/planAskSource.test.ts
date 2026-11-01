@@ -276,7 +276,7 @@ it('returns carrier failures after a committed live-check approval', async () =>
   vi.spyOn(store, 'pageLinks').mockRejectedValueOnce(new Error('findings unavailable'));
   const result = await source.resolve(actor, item, { kind: 'approve' }, item.origin);
   expect(result.carrierFailure).toBe(
-    `Carrier failed for closed node ${node.nodeId}. Read its linked findings and propose a blocked carrier.`,
+    `Carrier failed for closed node ${node.nodeId}. Read its linked findings and create a step that carries them.`,
   );
   expect(store.nodes.get(node.nodeId)?.status).toBe('done');
   redis.disconnect();
