@@ -23,6 +23,7 @@ import {
   MAX_FIRINGS_CAP,
   READINESS_EXTERNAL_TEXT_MAX,
   SHEPHERD_SCHEDULE_CRON_DEFAULT,
+  SHEPHERD_SLUG,
   SKILL_STARTER_SCHEDULE_VARIABLE,
   type HostMergePosture,
   type PostInstallTask,
@@ -63,8 +64,6 @@ export const CODING_LOOP_READINGS: readonly ReadinessReading[] = [
   'coding_harness',
   'shepherd_schedule',
 ];
-
-const SHEPHERD_SLUG = 'local-pr-shepherd';
 
 /** What a schedule's template resolves to its own id at each firing. */
 const SCHEDULE_OWN_ID = { $schedule: 'id' } as const;

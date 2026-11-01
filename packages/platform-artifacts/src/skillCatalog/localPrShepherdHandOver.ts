@@ -3,6 +3,7 @@ import {
   SHEPHERD_HAND_OVER_TARGET,
   SHEPHERD_HANDOFF_PINS,
   SHEPHERD_LEASE_ROOT,
+  type WorkflowRunDecideRule,
 } from '@aflow/schemas';
 import { COMMISSION_CHANGE } from './commissionChange.js';
 import {
@@ -81,8 +82,54 @@ const HAND_OVER_PATH = {
 };
 
 export const NAME_HAND_OVER_CASE_TASK = 'name-hand-over-case';
+export const READ_BRANCH_OWNER_TASK = 'read-branch-owner';
+export const JUDGE_HAND_OVER_OWNER_TASK = 'judge-hand-over-owner';
 export const CLAIM_HAND_OVER_TASK = 'claim-hand-over';
 export const HAND_OVER_TO_AGENT_TASK = 'hand-over-to-agent';
+
+/** The judgement that lets a case be claimed and handed to a new conversation. */
+export const HAND_OVER_TO_NEW_CONVERSATION = 'hand_over';
+
+const HAND_OVER_DEFERRED = 'defer';
+
+/**
+ * Plan 339 D4: a pull request has one owner, the conversation the loop records
+ * for it, and the hand-over defers to that record. Its events go to that
+ * conversation, so while it can act — it has neither ended nor failed — the
+ * case is its own and is not handed over. A hand-over would start a second
+ * conversation on the branch, and two publications on one branch refuse each
+ * other. The claim is not taken, so a pass after the owner has ended or failed
+ * hands the case over. A failed owner is no one here, as it is to the sweep
+ * that starts the pass: a pass the sweep starts for it would otherwise defer
+ * every case it finds. The conversation a hand-over starts becomes the owner
+ * once it publishes the branch.
+ */
+export const HAND_OVER_OWNER_RULES: readonly WorkflowRunDecideRule[] = [
+  {
+    when: { allOf: ['state.headRef != null', 'state.owner == null'] },
+    decision: HAND_OVER_DEFERRED,
+    reason:
+      "Whether this pull request's owner can act could not be read, so no other conversation is started on it. A later pass reads it again.",
+  },
+  {
+    when: { expression: 'state.owner.runs[0] != null' },
+    decision: HAND_OVER_DEFERRED,
+    reason:
+      "The Helmsman conversation the loop records as this pull request's owner has neither ended nor failed, so the case is that conversation's. It hears the pull request's events itself. No second conversation is started on the branch, because two publications on one branch refuse each other.",
+  },
+];
+
+export const HAND_OVER_OWNER_OTHERWISE = {
+  decision: HAND_OVER_TO_NEW_CONVERSATION,
+  reason:
+    'No owner of this pull request can act, so the case is handed to a new Helmsman conversation. That conversation owns the pull request once it publishes the branch.',
+};
+
+const NAMED_A_CASE = `tasks.${NAME_HAND_OVER_CASE_TASK}.status == 'succeeded'`;
+const HANDS_OVER = {
+  expression: `tasks.${JUDGE_HAND_OVER_OWNER_TASK}.output.decision == '${HAND_OVER_TO_NEW_CONVERSATION}'`,
+  onMissingRef: SKIP,
+};
 
 const ENDED_ON_HAND_OVER = { anyOf: [...DECIDED_HAND_OVER, MERGE_REFUSED], onMissingRef: SKIP };
 
@@ -164,6 +211,7 @@ const BRIEF = {
     optionalPart('; the last remedy `', handoffText('priorRemedy'), '`'),
     optionalPart('; the remedy question answered `', handoffText('priorClassification'), '`'),
     optionalPart('; the last publication run `', handoffText('priorPublication'), '`'),
+    '\n\nTwo rules hold whatever you decide. Start every commission on this branch fresh, with no `continueFrom`. A kept coding session belongs to the conversation or the run that made it, so the machine refuses it to this one. Never publish the branch as it stands while CI is red on its head and the head has not moved, because the checks would run again on a commit CI has judged.',
   ],
 };
 
@@ -189,12 +237,65 @@ export const HAND_OVER_TASKS = [
   },
 
   {
+    taskId: READ_BRANCH_OWNER_TASK,
+    name: "Read whether the pull request's owner can act",
+    goal: "Where the pass ended on a case it hands over, list the publications of the pull request's branch that its recorded owner started, whatever their status, while that conversation has neither ended nor failed. The owner's events tell it of the case, and no second conversation is started on the branch.",
+    type: 'operation' as const,
+    operation: 'workflow.run.list',
+    when: {
+      allOf: [
+        NAMED_A_CASE,
+        'tasks.read-pr.output.data.headRef != null',
+        'tasks.read-pr.output.data.url != null',
+      ],
+      onMissingRef: SKIP,
+    },
+    // A read that failed binds as absent, which the judgement reads as an
+    // owner not known to be gone: nothing is handed over on it.
+    optional: true,
+    retryability: 'safe' as const,
+    inputBindings: { headRef: out('read-pr', 'data.headRef'), url: out('read-pr', 'data.url') },
+    context: ctx('workflow.run.list'),
+    inputTemplate: {
+      slug: PUBLISH_LOCAL_CHANGES.bundle.workflow.slug,
+      input: { field: 'branch', equals: bind('headRef') },
+      startedByActingOwnerOf: bind('url'),
+      status: ['running', 'paused', 'completed', 'failed', 'cancelled'],
+      limit: 1,
+    },
+  },
+
+  {
+    taskId: JUDGE_HAND_OVER_OWNER_TASK,
+    name: 'Judge whether the case goes to a new conversation',
+    goal: "Decide whether the case goes to a new Helmsman conversation. It does not where the pull request's recorded owner can act, or where that could not be read: the case is that conversation's, and two publications on one branch refuse each other.",
+    type: 'operation' as const,
+    operation: 'workflow.run.decide',
+    when: { expression: NAMED_A_CASE, onMissingRef: SKIP },
+    retryability: 'safe' as const,
+    inputBindings: {
+      headRef: out('read-pr', 'data.headRef'),
+      owner: out(READ_BRANCH_OWNER_TASK),
+    },
+    context: ctx('workflow.run.decide'),
+    inputTemplate: {
+      state: { headRef: bind('headRef'), owner: bind('owner') },
+      rules: HAND_OVER_OWNER_RULES,
+      otherwise: HAND_OVER_OWNER_OTHERWISE,
+    },
+    promoteOutputs: [
+      { kind: 'output_path' as const, path: 'decision', toState: 'handOver' },
+      { kind: 'output_path' as const, path: 'reason', toState: 'handOverReason' },
+    ],
+  },
+
+  {
     taskId: CLAIM_HAND_OVER_TASK,
     name: 'Claim the hand-over of this case',
-    goal: 'Where the pass ended on a case its rules cannot act on — a rule that hands its case over, or a merge GitHub refused on the head — record that the case is handed to the agent: created only where nothing is recorded for it, so a case is handed over once however many passes find it. A pull request’s case is its head and the case’s name, so a push that moves the head is a new case, and so is another case on the same head.',
+    goal: 'Where the pass ended on a case its rules cannot act on — a rule that hands its case over, or a merge GitHub refused on the head — and no owner of the pull request can act, record that the case is handed to the agent: created only where nothing is recorded for it, so a case is handed over once however many passes find it. A pull request’s case is its head and the case’s name, so a push that moves the head is a new case, and so is another case on the same head.',
     type: 'operation' as const,
     operation: 'memory.store.put',
-    when: ENDED_ON_HAND_OVER,
+    when: HANDS_OVER,
     // Refused where the case was handed over already — the claim doing its
     // job — or where the store could not answer: nothing is handed over twice.
     optional: true,

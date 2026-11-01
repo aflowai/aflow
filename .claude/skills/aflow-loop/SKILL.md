@@ -20,8 +20,12 @@ it commissions the coding harness on the repository's host binding from `origin/
 publication runs the folder's checks and Local Code Review, pushes, and opens the pull
 request. Who merges it depends on the folder's merge posture
 (`docs/dev/driving-work-through-the-loop.md`, The pieces): under `never`, the default, the
-operator merges; under `when-green` the scheduled Local PR Shepherd merges a green pull
-request whose review approved its head, on the operator's approval. Never open a loop pull
+operator merges; under `when-green` the Local PR Shepherd merges a green pull request
+whose review approved its head, on the operator's approval. The conversation whose
+publication opened the pull request owns it: each `pull_request.changed` wakes it, and it
+runs a shepherd pass aimed at the pull request. A later publication by another conversation
+takes the pull request over only where its owner has ended or failed. The hourly schedule sweeps only the pull
+requests no conversation holds (Plan 339 D4). Never open a loop pull
 request by hand: the shepherd sees only the ones a publication opened. The session's job is
 to brief, watch, judge, report the pull request, wait for the merge, close it out, and keep
 the stack current.
@@ -61,7 +65,7 @@ has armed it; until then a node moves only when a Helmsman is told to take it.
    review, not the previous run's, before giving the operator the link.
 5. **The merge** depends on the folder's merge posture (`host.binding.inspect` shows it).
    Under `never`, the default, the merge is the operator's: report the pull request and
-   what its review returned, then wait. Under `when-green`, the scheduled shepherd merges
+   what its review returned, then wait. Under `when-green`, the shepherd merges
    by squash once the required checks pass on the head, the publication's review approved
    that head and no person requests changes, each merge on the operator's approval; a
    verdict of `comment` it leaves to the operator. Read the shepherd's last `decide` output

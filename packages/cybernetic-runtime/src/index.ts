@@ -11,7 +11,11 @@ export * from './attentionBuilder.js';
 export * from './pendingAttention.js';
 export * from './attentionList.js';
 export * from './runsByInput.js';
-export { endsConversationOwnership } from './conversationOwnership.js';
+export {
+  endsConversationOwnership,
+  isActingConversation,
+  isLiveConversation,
+} from './conversationOwnership.js';
 export { consumeAttentionReadByTurn } from './attentionTurn.js';
 export * from './ratificationHelpers.js';
 export * from './metricsAggregator.js';

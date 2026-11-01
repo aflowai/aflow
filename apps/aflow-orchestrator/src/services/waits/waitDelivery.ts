@@ -10,7 +10,9 @@
  * a process that dies mid-delivery leaves it for a later cycle.
  */
 import {
+  disownPullRequestWatch,
   markSessionDeclaredWait,
+  readPullRequestWatch,
   rearmEndedWait,
   settleEndedWait,
   type EndedWait,
@@ -31,10 +33,56 @@ import { backgroundTaskControlPlane, WAIT_OUTCOME_ACTOR_ID, type TenantId } from
 import { queueMessageForNextTurn } from '../SessionOrchestrator/helpers/queuedMessage.js';
 import { wakeSessionForWait } from '../cybernetic/harness/sessionWakeup.js';
 import type { HarnessDeps } from '../cybernetic/harness/types.js';
+import { holdAgainForOwner } from '../pullRequestEvents/owner.js';
 
 export const WAIT_DELIVERY_TASK_ID = 'orchestrator.wait_delivery';
 
-export type WaitDelivery = 'woke' | 'told' | 'session_gone' | 'retry';
+/**
+ * `renewed` is an owner's wait whose window closed: nothing is posted, and the
+ * next one is declared. `not_owner` is a wait kept for a conversation that no
+ * longer owns its pull request: nothing is posted, and none is declared.
+ */
+export type WaitDelivery = 'woke' | 'told' | 'session_gone' | 'retry' | 'renewed' | 'not_owner';
+
+/**
+ * Where the next owner wait counts from. After an event, just past the last
+ * one told. After a window closed, from its close: the closed wait left the
+ * subject's hash when it was claimed, so an event recorded since reached no
+ * one, and the next wait catches up on it.
+ */
+function nextWaitSince(ended: EndedWait): number {
+  const { outcome } = ended;
+  if (outcome.endedBy !== 'event') return ended.registration.closesAt;
+  const last = outcome.laterEvents?.at(-1) ?? outcome.event;
+  return last.firedAt + 1;
+}
+
+/**
+ * A wait the platform declared for a pull request's owner (Plan 339 D4) is
+ * renewed after each delivery, so the owner hears every change. A window that
+ * closes on it posts nothing: the owner did not ask for it. Where the new wait
+ * catches up on an event at once, its registration queues it in the delivery
+ * set, so a later cycle delivers it under the same lease and retry.
+ *
+ * A pull request has one owner. A wait whose conversation the watch no longer
+ * names, while it names another, is told nothing. A watch that is gone, the
+ * pull request merged or closed, still lets its last owner hear the event.
+ */
+async function deliverOwnerWait(deps: HarnessDeps, ended: EndedWait): Promise<WaitDelivery> {
+  const { registration } = ended;
+  const recorded = (await readPullRequestWatch(deps.redis, registration))?.ownerSessionId;
+  if (recorded !== undefined && recorded !== registration.sessionId) return 'not_owner';
+  const delivered =
+    ended.outcome.endedBy === 'window_closed' ? 'renewed' : await deliverToWaiter(deps, ended);
+  if (delivered === 'retry') return delivered;
+  if (delivered === 'session_gone') {
+    await disownPullRequestWatch(deps.redis, registration, registration.sessionId);
+    return delivered;
+  }
+  // A throw here puts this wait back, and its redelivery declares the next one.
+  await holdAgainForOwner(deps, registration, nextWaitSince(ended));
+  return delivered;
+}
 
 /**
  * Tell one waiter that its wait ended. The room post is keyed by the wait, so
@@ -50,6 +98,12 @@ export type WaitDelivery = 'woke' | 'told' | 'session_gone' | 'retry';
  * its next turn.
  */
 export async function deliverEndedWait(deps: HarnessDeps, ended: EndedWait): Promise<WaitDelivery> {
+  return ended.registration.owner !== undefined
+    ? deliverOwnerWait(deps, ended)
+    : deliverToWaiter(deps, ended);
+}
+
+async function deliverToWaiter(deps: HarnessDeps, ended: EndedWait): Promise<WaitDelivery> {
   const { registration, outcome } = ended;
   const tenantId = registration.tenantId as TenantId;
   const post = () =>

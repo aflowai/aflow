@@ -703,11 +703,44 @@ const DEFINITIONS: readonly BackgroundTaskDefinitionInput[] = [
       'A failed occurrence stays due. The dispatch lease retries failed board reads before starting a run.',
     sites: [
       'apps/aflow-orchestrator/src/services/ScheduleEvaluator.ts',
+      'apps/aflow-orchestrator/src/services/scheduleSkip.ts',
       'apps/aflow-orchestrator/src/services/residentDueCheck.ts',
       'packages/cybernetic-runtime/src/plan/resident.ts',
       'packages/cybernetic-runtime/src/plan/stream.ts',
     ],
     note: 'Runs inside the schedule discovery and dispatch runners with their claims and budgets. Events identify one space directly and never enumerate spaces.',
+  },
+  {
+    id: 'orchestrator.shepherd_sweep_due_check',
+    service: 'orchestrator',
+    ownerDomain: 'plans',
+    purpose:
+      "Read the space's open loop pull requests before a Local PR Shepherd firing starts its agent.",
+    invariant:
+      'A shepherd firing starts no run while no loop pull request is open, or while every open one is held by its owner or by a waiter whose window closes before the next sweep.',
+    criticality: 'feature',
+    trigger: 'candidate',
+    scope: 'per_instance',
+    substrate: 'postgres-due',
+    baseCadenceMs: 15_000,
+    maxBatch: 100,
+    maxCycleMs: 60_000,
+    idleOperationBudgetPerMinute: 0,
+    hotPathProducerBudget: {
+      maxAdditionalNetworkRoundTrips: 0,
+      description:
+        "The publication's arm, each saved poll and the pull request's clear write the space's index in the transaction that writes the watch.",
+    },
+    featureGate: 'SCHEDULES_ENABLED',
+    disablePolicy: 'safe',
+    recovery:
+      'Disabled or failing, a firing starts the shepherd as it did before the check. A skipped firing keeps its firing cap and moves to the next cron time.',
+    sites: [
+      'apps/aflow-orchestrator/src/services/ScheduleEvaluator.ts',
+      'apps/aflow-orchestrator/src/services/scheduleSkip.ts',
+      'apps/aflow-orchestrator/src/services/pullRequestEvents/sweep.ts',
+    ],
+    note: "Runs inside the schedule discovery runner, on a cron firing of a schedule whose target is the Local PR Shepherd agent. It reads one range of the space's own index, then each open pull request's watch and waiter hash. A space with no loop pull request open reads one empty range (Plan 339 D4, D5).",
   },
   {
     id: 'orchestrator.wait_delivery',
@@ -765,11 +798,12 @@ const DEFINITIONS: readonly BackgroundTaskDefinitionInput[] = [
     disablePolicy: 'safe',
     recovery:
       'A poll that fails leaves the candidate due at the next cadence. A missed event leaves a waiter to its window, which wakes it and tells it so. A candidate whose clear was lost, or whose polls keep failing, expires fourteen days after its last successful poll.',
-    note: "Each poll is conditional: the task keeps each answer's ETag and sends it back as If-None-Match, so an unchanged pull request answers 304, which GitHub says does not count against the primary rate limit. Three reads per pull request — the pull request, its head's check runs and its reviews — and a fourth, the head's combined status, where the check runs are none or more than one page. The 60-second cadence is proposed and still to be measured (Plan 339 P2). One range read per cycle when nothing is armed.",
+    note: "Each poll is conditional: the task keeps each answer's ETag and sends it back as If-None-Match, so an unchanged pull request answers 304, which GitHub says does not count against the primary rate limit. Three reads per pull request — the pull request, its head's check runs and its reviews — and a fourth, the head's combined status, where the check runs are none or more than one page. The 60-second cadence is proposed and still to be measured (Plan 339 P2). One range read per cycle when nothing is armed. The arm also records the pull request's owner, the live Helmsman conversation that started the publication, and declares its wait on the pull request; the wait delivery renews it (Plan 339 D4).",
     sites: [
       'apps/aflow-orchestrator/src/services/pullRequestEvents/source.ts',
       'apps/aflow-orchestrator/src/services/pullRequestEvents/github.ts',
       'apps/aflow-orchestrator/src/services/pullRequestEvents/arm.ts',
+      'apps/aflow-orchestrator/src/services/pullRequestEvents/owner.ts',
       'packages/redis/src/pullRequestWatch.ts',
     ],
   },

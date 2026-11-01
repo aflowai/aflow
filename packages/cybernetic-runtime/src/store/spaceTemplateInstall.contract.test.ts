@@ -659,7 +659,7 @@ describe('Coding with GitHub', () => {
     const absent = await read();
     expect(absent.item?.state).toBe('needs_setup');
     expect(absent.task).toMatchObject({
-      schedule: { agentId: SHEPHERD_ID, cronExpression: '*/5 * * * *', maxFirings: 50 },
+      schedule: { agentId: SHEPHERD_ID, cronExpression: '0 * * * *', maxFirings: 50 },
     });
 
     store.facts = { shepherd, schedules: [schedule] };

@@ -63,7 +63,8 @@ export async function handleWorkflowWait(
       waitId: declared.waitId,
       kind,
       subject,
-      state: declared.state,
+      // `workflow.wait` never queues a catch-up: its caller is told here.
+      state: declared.state === 'ended' ? 'ended' : 'waiting',
       closesAt: new Date(declared.closesAt).toISOString(),
       ...(declared.state === 'ended' ? { outcome: declared.outcome } : {}),
     };
