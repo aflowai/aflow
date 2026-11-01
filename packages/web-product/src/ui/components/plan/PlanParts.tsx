@@ -26,6 +26,7 @@ import {
 import type { PlanBoardColumn, PlanNodeRun, PlanRootState } from '@aflow/schemas';
 import { PLAN_NEXT_LABEL, pullRequestChipLabel, runKindLabel } from '../../lib/plan-board.js';
 import { spaceRoute } from '../../lib/space-routes.js';
+import { MarkdownRenderer } from '../markdown-renderer.js';
 import { StatusOrb } from '../workflow-run-surface/StatusOrb.js';
 import { useNowTicker } from '../workflow-run-surface/useNowTicker.js';
 import { Pill } from '../workflow-run-surface/WorkflowRunSurfaceParts.js';
@@ -169,6 +170,37 @@ export function RailSection({ label, children }: { label: string; children: Reac
 
 /** A rail section's text, in the inspector's prose. */
 export const railProse = { lineHeight: 1.55, whiteSpace: 'pre-wrap' } as const;
+
+const railMarkdownStyle = {
+  color: 'var(--color-text-secondary)',
+  fontSize: 'var(--font-size-base)',
+  lineHeight: 1.55,
+  minWidth: 0,
+} as const;
+
+const railMarkdownFrame = { minWidth: 0, maxWidth: '100%', overflowX: 'auto' } as const;
+
+/**
+ * A node's own text on the rail, which its writer may put in markdown. A wide
+ * table or code block scrolls inside the rail rather than widening it. Text the
+ * engine writes one entry per line, a note or an outcome, asks for `lineBreaks`
+ * so each entry keeps its own line.
+ */
+export function RailMarkdown({
+  content,
+  lineBreaks = false,
+  ...data
+}: {
+  content: string;
+  lineBreaks?: boolean;
+  [dataAttribute: `data-${string}`]: boolean | undefined;
+}) {
+  return (
+    <div {...data} style={railMarkdownFrame}>
+      <MarkdownRenderer content={content} style={railMarkdownStyle} lineBreaks={lineBreaks} />
+    </div>
+  );
+}
 
 /**
  * Whether a row or card is pointed at or holds focus, which reveals its quiet
