@@ -7,6 +7,7 @@ import {
   type WorkflowRunRow,
   type WorkflowRunTaskRow,
 } from '@aflow/database';
+import { ACTION_CENTER_ITEM_ID_PREFIX } from '@aflow/schemas';
 import {
   readPausedTaskWriteApproval,
   resolvePausedRunWriteApproval,
@@ -22,7 +23,7 @@ import {
 } from '../types.js';
 import { buildWriteApprovalCard, writeApprovalOperationId } from './pausedStepSource.js';
 
-const ITEM_ID_PREFIX = 'workflow-write-approval:';
+const ITEM_ID_PREFIX = ACTION_CENTER_ITEM_ID_PREFIX.workflowWriteApproval;
 const LIST_LIMIT = 200;
 
 interface PausedOperationTask {

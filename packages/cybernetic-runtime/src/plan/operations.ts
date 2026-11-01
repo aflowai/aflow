@@ -1164,6 +1164,18 @@ async function readPlanNode(
 // ============================================================================
 
 /**
+ * The `decide` nodes of a walk of the open tree, in tree order, at most
+ * `PLAN_OPEN_DECISIONS_LIMIT`: what the Action Center lists, and what the
+ * Helmsman's attention block counts from its own walk (Plan 338 D2).
+ */
+export function selectOpenDecisions(nodes: readonly PlanNodeSummary[]): PlanNodeSummary[] {
+  return orderPlanTree(nodes)
+    .map((placed) => placed.node)
+    .filter((node) => node.kind === 'decide')
+    .slice(0, PLAN_OPEN_DECISIONS_LIMIT);
+}
+
+/**
  * The space's open `decide` nodes, in tree order, whose every ancestor is open
  * too: a decision under a closed branch left the plan with it. Read through
  * the walk every read of the plan takes, so its bounds hold here as well.
@@ -1173,10 +1185,7 @@ export async function listOpenDecisions(ctx: PlanReadContext): Promise<PlanNode[
     statuses: OPEN_PLAN_NODE_STATUSES,
     ...PLAN_TREE_WALK_BOUNDS,
   });
-  const decisions = orderPlanTree(walk.nodes)
-    .map((placed) => placed.node)
-    .filter((node) => node.kind === 'decide')
-    .slice(0, PLAN_OPEN_DECISIONS_LIMIT);
+  const decisions = selectOpenDecisions(walk.nodes);
   const nodes = await Promise.all(decisions.map((d) => ctx.store.find(ctx.spaceId, d.nodeId)));
   // Re-judged on the full read: a node closed between the walk and here is not asked.
   return nodes.filter(

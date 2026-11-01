@@ -1,6 +1,6 @@
 # Plan 338 — The operator learns what waits on them
 
-**Status:** P0 merged. P1 built: the listing rule, the merge-wait flag, the two caps in the schema, the sidebar count, the label table and the help articles. P2 to P4 are not built.
+**Status:** P0 merged. P1 built: the listing rule, the merge-wait flag, the two caps in the schema, the sidebar count, the label table and the help articles. P2 built: the counts, the section and the ceiling test. P3 and P4 are not built.
 
 **Builds on:** Plan 331 (D3.3, the asked-once rule, and the resident), Plan 332 (the overview, the column rule of D4, the open question of §8), Plan 337 (the decision card, written here by hand because 337 P3 is not merged), Plan 333 (D2's writing rules).
 
@@ -160,7 +160,17 @@ The kinds are fixed. Plan steps are items with origin `plan_ask` or `plan_decisi
 
 **The source of the counts.** The builder runs in the orchestrator (`apps/aflow-orchestrator/src/services/SessionOrchestrator/helpers/agentTurn.ts`), not the server. It counts plan steps from the walk `loadActivePlanTree` already makes, as two sets that match the sidebar's two origins. One is the nodes D1's predicate keeps, imported from `asks.ts`, and it leaves out `decide` nodes. The other is the open `decide` nodes under open branches, by the rule `listOpenDecisions` lists by (`plan/operations.ts`). Each set stops at its source's cap of 50. Where either set holds 50, the count gains a "+", by the sidebar's rule. The walk sees every waiting node, but the builder marks the cap and not the cut, so it reads as the sidebar reads. For one state of the tree, the Helmsman's plan-step count and the sidebar's count therefore agree, digits and "+" alike. Two limits bound that claim. The sidebar's count can lag the tree by one rebuild (F8). The list route returns at most 200 items (`routes/action-center.ts`), so the claim holds where the space holds 200 open items or fewer. It counts gates and consents with count queries over the tables their sources read (`pausedStepSource.ts`, `workflowHumanTaskSource.ts`, `workflowWriteApprovalSource.ts`, `workflowOAuthConsentSource.ts`, `computeEgressSource.ts`). It does not call the aggregator.
 
-**The ceiling.** The section holds at most 500 tokens by `estimateStringTokens` (`packages/schemas/src/runtime/tokenEstimate.ts`). A test renders five lines with 120-character titles and the longest item ids, and fails above 500. P2 records the measured number of one live space here. The 120-character cut is a prompt budget, measured, and not a write validation.
+**The ceiling.** The section holds at most 500 tokens by `estimateStringTokens` (`packages/schemas/src/runtime/tokenEstimate.ts`). A test renders five lines with 120-character titles and the longest item ids, and fails above 500. The 120-character cut is a prompt budget, measured, and not a write validation.
+
+**The measurement.** These figures come from `estimateStringTokens` over the rendered section.
+
+| Section                                                                           | Characters | Tokens |
+| --------------------------------------------------------------------------------- | ---------- | ------ |
+| The ceiling test: five plan-step lines, 120-character titles, a 64-character slug | 1,682      | 481    |
+| The example above: 3 plan steps, 1 run gate, 0 consents, one line                 | 301        | 86     |
+| Nothing waits: `Waiting on a person: 0 plan steps, 0 run gates, 0 consents.`      | 59         | 17     |
+
+The figure for one live space is not recorded yet. No stack ran where P2 was built, so no live space could be read. The P2 exit records it.
 
 **Not consumed.** These lines are not `attention_items` rows. A turn does not consume them, and they show until the item resolves.
 
@@ -317,6 +327,24 @@ _Delivered (P1)._ The items below were built.
 **Open:** the phase exit on the live stack.
 
 **P2 — The Helmsman knows what waits (D2).** It holds the counts, the section and the ceiling test, and records the measured tokens in D2. _Exit:_ asked "is anything waiting on me?", a Helmsman names the count and points at the plan link without a tool call.
+
+_Delivered (P2)._ The items below were built.
+
+- **The section.** `waitingOnPerson.ts` in `@aflow/cybernetic-runtime` holds the data, the reads and the rendering. `buildHelmsmanAttention` gathers it into `waitingOnPerson`, and `renderAttentionContext` renders it after the plan. The heading counts plan steps, run gates and consents. Up to five lines follow, newest first. Each line holds a title cut to 120 characters, the item's `[itemId: …]` and, for a plan step, `/s/<slug>/plan?node=<nodeId>`. A count that fails to read is named as unread, never shown as zero.
+- **The plan-step count.** `loadActivePlanTree` returns the tree and the waiting steps from its one walk. `selectWaitingNodes` (`asks.ts`) and `selectOpenDecisions` (`operations.ts`) are the rules the two plan sources list by, and the builder calls the same functions. `pendingPlanStepCount` in `@aflow/schemas` turns the two sets into the count, and the sidebar's `planPendingCount` reads it too.
+- **The gate and consent counts.** `readWaitingGates` reads the five sources' tables in one transaction. It returns a count per kind and the newest five rows of each, and it never calls the aggregator. Postgres reads a paused request's kind from the payload its ref holds inline. So a conversation waiting for its next message counts as no gate. A consent that a workflow run owns counts once, under the run.
+- **Shared with the sources.** `ACTION_CENTER_ITEM_ID_PREFIX` names each source's id prefix. `humanRequestTitle`, `oauthConsentTitle`, `writeApprovalTitle`, `pausedRequestTitle` and `computeEgressTitle` give each item its title. The sources build their items from these, and the section names an item by the same id and title.
+- **The builder's size.** `attentionBuilder.ts` stood two lines under its large-file tolerance. The anomaly reads move unchanged to `attentionAnomalies.ts`, which makes room for the section.
+- **Tests.** `waitingOnPerson.test.ts` covers the ceiling, the pointer line, the count at 49, 50 and 52 waiting nodes against the sidebar's rule, the absence of any summary or note, and the drop after an approval. `waitingOnPersonGates.pg.test.ts` covers the gate and consent counts against Postgres and the drop after an approval.
+
+**Where the counts may differ from the Action Center.** These are deliberate, and each is small.
+
+- A human task counts where the harness stamped its hydration for the pause it stands at. A pause from before Plan 170 with no hydration is not counted.
+- A request whose payload is stored outside its ref counts as a run gate. Only an executor's large request is stored that way.
+- A gate or a consent does not bump the attention generation, so its count can lag by the cache's 60 seconds (F11).
+- The section counts the five sources this plan names. Session invitations, browser handoffs and integration-host requests also sit in the approvals and inputs lanes, and they are not counted.
+
+**Open:** the measured tokens of one live space in D2, and the phase exit on the live stack.
 
 **P3 — The Workbench's default (D3), the measurement first.** It records the measured reads of both columns of D3's table first. It then builds the lazy sections, the remembered state and the two reads onto the cache. _Exit:_ the operator reads the numbers and keeps or changes the recommendation. The dock then opens as decided.
 

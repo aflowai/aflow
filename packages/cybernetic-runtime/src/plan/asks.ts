@@ -152,6 +152,15 @@ function newestFirst(a: PlanNodeSummary, b: PlanNodeSummary): number {
 }
 
 /**
+ * The waiting nodes of a walk of the open tree, as the Action Center lists
+ * them: at most `PLAN_OPEN_ASKS_LIMIT`, newest first. The Helmsman's attention
+ * block counts the same selection from its own walk (Plan 338 D2).
+ */
+export function selectWaitingNodes(nodes: readonly PlanNodeSummary[]): PlanNodeSummary[] {
+  return nodes.filter(isWaitingPlanNode).sort(newestFirst).slice(0, PLAN_OPEN_ASKS_LIMIT);
+}
+
+/**
  * The space's nodes that wait on a person, under open branches only — what its
  * Action Center lists. At most `PLAN_OPEN_ASKS_LIMIT`, newest first. The ask
  * record does not gate it: a node is listed the moment it is blocked, whether
@@ -162,10 +171,7 @@ export async function listWaitingNodes(ctx: PlanReadContext): Promise<PlanNode[]
     statuses: OPEN_PLAN_NODE_STATUSES,
     ...PLAN_TREE_WALK_BOUNDS,
   });
-  const listed = walk.nodes
-    .filter(isWaitingPlanNode)
-    .sort(newestFirst)
-    .slice(0, PLAN_OPEN_ASKS_LIMIT);
+  const listed = selectWaitingNodes(walk.nodes);
   const nodes = await Promise.all(listed.map((n) => ctx.store.find(ctx.spaceId, n.nodeId)));
   // Re-judged on the full read: a node written between the walk and here is not listed.
   return nodes.filter(waitingNode);

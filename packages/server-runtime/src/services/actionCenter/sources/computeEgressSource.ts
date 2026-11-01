@@ -1,6 +1,11 @@
 import { and, eq, inArray, or } from 'drizzle-orm';
 import { egressApprovalRequests } from '@aflow/database';
-import { type ActionCenterItemOrigin, type ActionCenterRequester } from '@aflow/schemas';
+import {
+  ACTION_CENTER_ITEM_ID_PREFIX,
+  computeEgressTitle,
+  type ActionCenterItemOrigin,
+  type ActionCenterRequester,
+} from '@aflow/schemas';
 import {
   type ActionCenterResolveOutcome,
   type ActionCenterScope,
@@ -10,7 +15,7 @@ import {
   ActionCenterResolveError,
 } from '../types.js';
 
-const EGRESS_ITEM_ID_PREFIX = 'settings:egress-';
+const EGRESS_ITEM_ID_PREFIX = ACTION_CENTER_ITEM_ID_PREFIX.computeEgress;
 const EGRESS_RECORD_KIND = 'egress_request';
 
 type Row = typeof egressApprovalRequests.$inferSelect;
@@ -182,9 +187,7 @@ function toActionCenterItem(row: Row, scope: ActionCenterScope): ActionCenterSou
     spaceId: scope.spaceId,
     kind: 'human_approval',
     origin,
-    title: isTenantScope
-      ? `Compute egress (tenant): ${String(row.requestedHosts.length)} host(s)`
-      : `Compute egress: ${String(row.requestedHosts.length)} host(s)`,
+    title: computeEgressTitle(isTenantScope ? 'tenant' : 'space', row.requestedHosts.length),
     summary,
     requestedAt: row.requestedAt.toISOString(),
     requestedBy,

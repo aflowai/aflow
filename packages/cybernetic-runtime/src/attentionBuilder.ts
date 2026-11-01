@@ -43,6 +43,17 @@ import {
 import { createPlanNodeStore } from './plan/store.js';
 import { isReadersWork } from './conversationOwnership.js';
 import {
+  readWaitingGates,
+  renderWaitingOnPerson,
+  waitingOnPersonFrom,
+  type WaitingOnPerson,
+} from './waitingOnPerson.js';
+import {
+  countPendingAnomalies,
+  loadAnomalyDetails,
+  type PendingAnomalyDetail,
+} from './attentionAnomalies.js';
+import {
   ATTENTION_ITEM_SURFACE_LIMIT,
   pendingAttentionFor,
   summarizePendingAttention,
@@ -118,14 +129,6 @@ export interface PendingProposalDetail {
   };
 }
 
-export interface PendingAnomalyDetail {
-  id: string;
-  kind: string;
-  severity: string;
-  summary: string;
-  reportedAt: string;
-}
-
 export interface SkillAttentionEntry {
   /** Skill slug — joins with `SpaceContext.skills[*].slug`. */
   slug: string;
@@ -161,6 +164,8 @@ export interface DegradedSkillEntry {
 export interface HelmsmanAttentionContext {
   /** The space's open plan tree (Plan 322 D4) — read before anything else. */
   activePlan?: PlanAttention;
+  /** What waits on a person, to point at (Plan 338 D2). Not consumed: an item shows until it resolves. */
+  waitingOnPerson?: WaitingOnPerson;
   activeWorkflowRuns: ActiveWorkflowRunSummary[];
   pendingAttention?: PendingAttention;
   /** Active applet instances, last action first, capped; ended/archived never appear. */
@@ -229,15 +234,6 @@ interface StagedChangeDoc {
   proposal?: { summary?: string; confidence?: string };
   evidence?: { diagnosis?: { issueCategory?: string } };
   lastRatificationError?: { reason?: string; op?: string; detail?: string; at?: string };
-}
-
-interface AnomalyDoc {
-  id?: string;
-  kind?: string;
-  severity?: string;
-  summary?: string;
-  reportedAt?: string;
-  acknowledged?: boolean;
 }
 
 /**
@@ -597,97 +593,6 @@ function deriveSkillValiditySurfaces(resolvedSkills: ResolvedSkill[]): SkillSurf
   return { degraded, qualityFlags };
 }
 
-async function countPendingAnomalies(
-  db: PostgresJsDatabase,
-  tenantId: string,
-  spaceId: string,
-): Promise<number> {
-  const tenantContext = createTenantContext(tenantId as TenantId);
-
-  const rows = await withTenantSchema(db, tenantContext, async (tx) =>
-    tx
-      .select({ inlineContent: memoryDocs.inlineContent })
-      .from(memoryDocs)
-      .where(
-        and(
-          eq(memoryDocs.spaceId, spaceId),
-          sql`${memoryDocs.path} LIKE '/coach/anomalies/%'`,
-          isNull(memoryDocs.deletedAt),
-        ),
-      ),
-  );
-
-  let pending = 0;
-  for (const row of rows) {
-    if (!row.inlineContent) {
-      // Missing body — count conservatively as pending so the operator
-      // still sees something. Better than silently dropping.
-      pending += 1;
-      continue;
-    }
-    try {
-      const doc = JSON.parse(row.inlineContent) as { acknowledged?: boolean };
-      if (doc.acknowledged !== true) pending += 1;
-    } catch {
-      // Malformed — count as pending so the operator sees it and can
-      // either fix or remove it.
-      pending += 1;
-    }
-  }
-
-  return pending;
-}
-
-async function loadAnomalyDetails(
-  db: PostgresJsDatabase,
-  tenantId: string,
-  spaceId: string,
-  limit: number,
-): Promise<PendingAnomalyDetail[]> {
-  const tenantContext = createTenantContext(tenantId as TenantId);
-
-  const rows = await withTenantSchema(db, tenantContext, async (tx) =>
-    tx
-      .select({
-        path: memoryDocs.path,
-        inlineContent: memoryDocs.inlineContent,
-      })
-      .from(memoryDocs)
-      .where(
-        and(
-          eq(memoryDocs.spaceId, spaceId),
-          sql`${memoryDocs.path} LIKE '/coach/anomalies/%'`,
-          isNull(memoryDocs.deletedAt),
-        ),
-      )
-      .orderBy(sql`${memoryDocs.createdAt} DESC`)
-      .limit(limit),
-  );
-
-  const details: PendingAnomalyDetail[] = [];
-  for (const row of rows) {
-    if (!row.inlineContent) continue;
-    try {
-      const doc = JSON.parse(row.inlineContent) as AnomalyDoc;
-      if (doc.acknowledged === true) continue;
-      const pathMatch = /\/coach\/anomalies\/([^/]+)\.json$/.exec(row.path);
-      const id = doc.id ?? pathMatch?.[1] ?? 'unknown';
-
-      details.push({
-        id,
-        kind: doc.kind ?? 'unknown',
-        severity: doc.severity ?? 'unknown',
-        summary: doc.summary ?? '(no summary)',
-        reportedAt: doc.reportedAt ?? new Date().toISOString(),
-      });
-    } catch {
-      // Skip malformed docs
-    }
-  }
-
-  return details;
-}
-
 // ============================================================================
 // Public API
 // ============================================================================
@@ -734,7 +639,8 @@ export async function buildHelmsmanAttention(params: {
     // Run all queries in parallel for performance
     const planStore = createPlanNodeStore(db, tenantId);
     const [
-      activePlan,
+      activePlanRead,
+      waitingGates,
       runRows,
       pendingItems,
       activeAppletScan,
@@ -747,6 +653,16 @@ export async function buildHelmsmanAttention(params: {
     ] = await Promise.all([
       loadActivePlanTree(planStore, spaceId).catch((err: unknown) => {
         getCyberneticLogger().warn('helmsmanAttention: plan-load failed', {
+          error: err instanceof Error ? err.message : String(err),
+          tenantId,
+          spaceId,
+        });
+        return undefined;
+      }),
+      // A gate or a consent does not bump the cache's generation, so its
+      // count lags by at most the cache's lifetime (Plan 338 D2).
+      readWaitingGates({ db, tenantId, spaceId }).catch((err: unknown) => {
+        getCyberneticLogger().warn('helmsmanAttention: waiting-gate count failed', {
           error: err instanceof Error ? err.message : String(err),
           tenantId,
           spaceId,
@@ -791,6 +707,7 @@ export async function buildHelmsmanAttention(params: {
     ]);
 
     const skillScan = deriveSkillValiditySurfaces(resolvedSkills);
+    const activePlan = activePlanRead?.tree;
 
     const placements = await placeInPlan(planStore, spaceId, [
       ...runRows.map((run) => run.planNodeId),
@@ -818,6 +735,7 @@ export async function buildHelmsmanAttention(params: {
 
     const result: HelmsmanAttentionContext = {
       ...(activePlan !== undefined ? { activePlan } : {}),
+      waitingOnPerson: waitingOnPersonFrom(activePlanRead?.waiting, waitingGates),
       activeWorkflowRuns,
       ...(pendingAttention !== undefined ? { pendingAttention } : {}),
       ...(activeAppletScan.applets.length > 0
@@ -918,6 +836,9 @@ export function renderAttentionContext(
     otherRuns: runs.length - ownRuns.length,
     otherItems: items.others,
   });
+  if (attention.waitingOnPerson !== undefined) {
+    lines.push(...renderWaitingOnPerson(attention.waitingOnPerson), '');
+  }
 
   const shownUnplacedRuns = ownRuns.filter((run) => run.plan === undefined);
   if (shownUnplacedRuns.length > 0) {

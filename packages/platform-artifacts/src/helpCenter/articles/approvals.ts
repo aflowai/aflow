@@ -6,7 +6,7 @@ export const APPROVALS_ARTICLES: readonly HelpArticleInput[] = [
     theme: 'approvals',
     question: 'Where do I find approvals and other things waiting for me?',
     summary:
-      "Everything in a space that needs a person collects in the Workbench beside the chat: approvals for writes and other actions, questions a run is waiting on, decisions the space's plan leaves to you, account sign-ins an integration needs, and proposals from agents such as the Coach. While anything is pending, a yellow indicator appears in the header of the space's other pages; choosing it opens Chat with the Workbench. The Helmsman can also bring an approval into the chat so you answer it where you are talking. Work that waits on an item stays paused until it is answered.",
+      "Everything in a space that needs a person collects in the Workbench beside the chat: approvals for writes and other actions, questions a run is waiting on, decisions the space's plan leaves to you, account sign-ins an integration needs, and proposals from agents such as the Coach. While anything is pending, a yellow indicator appears in the header of the space's other pages; choosing it opens Chat with the Workbench. The Helmsman can also bring an approval into the chat so you answer it where you are talking. Ask it what is waiting on you, and it counts the pending plan steps, run approvals and sign-ins, and points you at each one. Work that waits on an item stays paused until it is answered.",
     body: `## Where
 
 - **Chat** — the **Workbench** sits beside the conversation. On a phone, switch between **Chat** and **Workbench** at the top; the Workbench shows how many items need you.
