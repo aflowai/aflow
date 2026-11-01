@@ -26,6 +26,7 @@ import {
   Column,
   Dialog,
   Heading,
+  Icon,
   PageContainer,
   Row,
   Text,
@@ -286,7 +287,12 @@ export function SpacePlanPage(): React.ReactNode {
   const onRevise = (request: PlanNodeReviseRequest) => answered(reviseNode.mutateAsync(request));
   const onPlace = (request: PlanNodePlaceRequest) => answered(placeNode.mutateAsync(request));
 
-  const header = <Heading level={2}>Plan</Heading>;
+  const header = (
+    <Row gap="sm" align="center">
+      <Icon name="flag" size="md" />
+      <Heading level={2}>Planning board</Heading>
+    </Row>
+  );
   const page = (body: React.ReactNode) => (
     <PageContainer>
       <Column gap="lg">
@@ -478,7 +484,7 @@ export function SpacePlanPage(): React.ReactNode {
               {root.title}
             </Text>
             <Row gap="sm" align="center" wrap data-plan-tally={root.nodeId}>
-              <PlanStateOrb state={tally.state} size={PLAN_ORB_SIZE.header} />
+              <PlanStateOrb state={tally.state} status={root.status} size={PLAN_ORB_SIZE.header} />
               <Badge variant={PLAN_STATE_BADGE[tally.state]}>{planLine.state}</Badge>
               <Row gap="xs" align="center">
                 <ProgressMeter done={tally.done + tally.dropped} total={tally.steps} />

@@ -3,27 +3,28 @@
 /**
  * The plan page's shared pieces (Plan 332 P6), so the list, the lanes, the
  * board and the rail say the same thing the same way: a plan's or a step's
- * state as the run surface's orb (Plan 332 P7), a run on a step as the run
- * surface's row, progress as a meter, a pull request as the PR it is, the
- * step the loop takes next by name, a folding group heading, and **Move up** / **Move
- * down** as quiet icon controls that show where the row or card is pointed
- * at, focused or selected — reordering is rare (J3), so it is never the
- * loudest thing on a row. Each piece is styled inline on the design system's
+ * state as the run surface's orb (Plan 332 P7) and as the surface it stands
+ * on, a run on a step as the run surface's row, progress as a meter, a pull
+ * request as the PR it is, the step the loop takes next by name, a folding
+ * group heading, and reordering by drag, with Alt+ArrowUp and Alt+ArrowDown
+ * from the keyboard. Each piece is styled inline on the design system's
  * tokens, as the skill designer's outline and inspector are.
  */
-import { useState, type CSSProperties, type FocusEvent, type ReactNode } from 'react';
+import { useRef, useState, type CSSProperties, type FocusEvent, type ReactNode } from 'react';
 import Link from 'next/link';
 import {
   AnimatedHeight,
   Badge,
   Column,
   Icon,
-  IconButton,
   Text,
-  Tooltip,
+  useDragReorder,
   useMediaQuery,
+  type DragReorderItemProps,
+  type DragReorderMove,
+  type DropSide,
 } from '@aflow/design-system';
-import type { PlanBoardColumn, PlanNodeRun, PlanRootState } from '@aflow/schemas';
+import type { PlanBoardColumn, PlanNodeRun, PlanNodeStatus, PlanRootState } from '@aflow/schemas';
 import { PLAN_NEXT_LABEL, pullRequestChipLabel, runKindLabel } from '../../lib/plan-board.js';
 import { spaceRoute } from '../../lib/space-routes.js';
 import { MarkdownRenderer } from '../markdown-renderer.js';
@@ -61,21 +62,40 @@ export const hoverTransition: CSSProperties = {
 /** The width in pixels of the selected card's ring, drawn outside the card. */
 export const SELECTED_RING = 2;
 
+/** Where an item stands, as its surface says it. */
+export type PlanItemTone = 'pending' | 'running' | 'neutral';
+
+/** A step's tone: pending where it needs the operator, running where a run is on it. */
+export function planStepTone(column: PlanBoardColumn, running: boolean): PlanItemTone {
+  if (column === 'needs_you') return 'pending';
+  return running ? 'running' : 'neutral';
+}
+
+/** A plan's tone, as its state names it. */
+export function planRootTone(state: PlanRootState): PlanItemTone {
+  if (state === 'needs_you') return 'pending';
+  return state === 'in_flight' ? 'running' : 'neutral';
+}
+
+const TONE_SURFACE: Record<PlanItemTone, string> = {
+  pending: 'var(--color-status-paused-bg)',
+  running: 'var(--color-status-running-bg)',
+  neutral: 'var(--color-surface-2)',
+};
+
 /**
- * A step's card or lane row, its surface saying where it stands: tinted as a
- * pause where it needs the operator, as a run where one is on it, neutral
- * otherwise. Pointed at, the hover tint lies over that surface rather than
+ * A plan's row, a step's card or a lane row, its surface saying where it
+ * stands: tinted as a pause where it needs the operator, as a run where one is
+ * on it, neutral otherwise. Pointed at, the hover tint lies over that surface rather than
  * replacing it, and the selected one is ringed. The surface is translucent, so
  * it blurs the canvas's dots under it as a design-system card does.
  */
 export function planItemSurface({
-  column,
-  running,
+  tone,
   selected,
   hovered,
 }: {
-  column: PlanBoardColumn;
-  running: boolean;
+  tone: PlanItemTone;
   selected: boolean;
   hovered: boolean;
 }): CSSProperties {
@@ -86,12 +106,7 @@ export function planItemSurface({
     backdropFilter: 'blur(12px)',
     transition:
       'background-color var(--transition-duration-fast) var(--transition-timing-default), box-shadow var(--transition-duration-fast) var(--transition-timing-default)',
-    backgroundColor:
-      column === 'needs_you'
-        ? 'var(--color-status-paused-bg)'
-        : running
-          ? 'var(--color-status-running-bg)'
-          : 'var(--color-surface-2)',
+    backgroundColor: TONE_SURFACE[tone],
     backgroundImage: hovered ? `linear-gradient(${HOVER_TINT}, ${HOVER_TINT})` : 'none',
     ...(selected
       ? {
@@ -99,23 +114,6 @@ export function planItemSurface({
         }
       : {}),
     cursor: 'pointer',
-  };
-}
-
-/**
- * The designer outline's row: filled and barred in the interactive colour
- * when current, tinted while pointed at otherwise.
- */
-export function selectableStyle(current: boolean, hovered = false): CSSProperties {
-  return {
-    ...hoverTransition,
-    background: current
-      ? 'var(--color-surface-3, var(--color-surface-2))'
-      : hovered
-        ? HOVER_TINT
-        : 'transparent',
-    borderLeft: `2px solid ${current ? 'var(--color-interactive-default)' : 'transparent'}`,
-    color: current ? 'var(--color-text-primary)' : 'var(--color-text-secondary)',
   };
 }
 
@@ -241,9 +239,13 @@ export function useReveal(): {
 
 /**
  * An orb's size by its place. An orb's core is about 60% of its box, so below a
- * 28px box its state does not read. The rail's header is larger.
+ * 28px box its state does not read. A plan's row and a lane row carry it at
+ * their side, where it can be larger than a line of text.
  */
-export const PLAN_ORB_SIZE = { row: 28, header: 28, rail: 36 } as const;
+export const PLAN_ORB_SIZE = { item: 48, header: 28, rail: 36 } as const;
+
+/** How far an orb of something set aside, a dropped step or plan, recedes. */
+const SET_ASIDE_ORB_OPACITY = 0.4;
 
 /**
  * An orb that shows a state the words beside it name (Plan 332 P6). It is
@@ -252,12 +254,12 @@ export const PLAN_ORB_SIZE = { row: 28, header: 28, rail: 36 } as const;
 function StateOrb({
   kind,
   size,
-  hidden,
+  setAside,
   data,
 }: {
   kind: OrbKind;
   size: number;
-  hidden: boolean;
+  setAside: boolean;
   data: Record<`data-${string}`, string>;
 }) {
   return (
@@ -267,8 +269,7 @@ function StateOrb({
       style={{
         display: 'inline-flex',
         flexShrink: 0,
-        opacity: hidden ? 0 : 1,
-        transition: 'opacity var(--transition-duration-fast) var(--transition-timing-default)',
+        opacity: setAside ? SET_ASIDE_ORB_OPACITY : 1,
       }}
     >
       <StatusOrb kind={kind} size={size} />
@@ -279,19 +280,19 @@ function StateOrb({
 /** A plan's state as its orb; the words beside it name the state. */
 export function PlanStateOrb({
   state,
-  size = PLAN_ORB_SIZE.row,
-  hidden = false,
+  status,
+  size = PLAN_ORB_SIZE.item,
 }: {
   state: PlanRootState;
+  /** The root's own status, which says how a closed plan closed. */
+  status: PlanNodeStatus;
   size?: number;
-  /** Controls stand in the orb's place, so it gives way to them. */
-  hidden?: boolean;
 }) {
   return (
     <StateOrb
-      kind={orbForPlanState(state)}
+      kind={orbForPlanState(state, status)}
       size={size}
-      hidden={hidden}
+      setAside={state === 'closed' && status === 'dropped'}
       data={{ 'data-state': state }}
     />
   );
@@ -301,7 +302,7 @@ export function PlanStateOrb({
 export function PlanStepOrb({
   column,
   runInFlight,
-  size = PLAN_ORB_SIZE.row,
+  size = PLAN_ORB_SIZE.item,
 }: {
   column: PlanBoardColumn;
   runInFlight: boolean;
@@ -311,7 +312,7 @@ export function PlanStepOrb({
     <StateOrb
       kind={orbForPlanStep(column, { runInFlight })}
       size={size}
-      hidden={false}
+      setAside={column === 'dropped'}
       data={{ 'data-column': column }}
     />
   );
@@ -459,82 +460,81 @@ export interface PlanMovable {
   revision: number;
 }
 
+/** One item the operator can reorder: its open siblings, and which dragged nodes it takes beside it. */
+export interface PlanReorderItem extends PlanMovable {
+  /** The nearest open siblings above and below, which Alt+ArrowUp and Alt+ArrowDown move it past. */
+  moves: { above?: { nodeId: string }; below?: { nodeId: string } };
+  /** Whether the node being dragged may land beside this one: an open sibling of it. */
+  accepts: (draggedId: string) => boolean;
+}
+
+/** The space between two items in a list, which a drop line sits in the middle of. */
+export const PLAN_ITEM_GAP = 8;
+
 /**
- * **Move up** and **Move down** (Plan 332 D6), on an Up next card and on an
- * open row of the plan list: each puts the node before or after its nearest
- * open sibling on screen, and shows only where there is one. The write is
- * pinned to the revision the page read. The controls are quiet icons that
- * show while `shown` holds (the host pointed at, focused or selected) or a
- * move is pending. A refusal is its own element, so the host says it where
- * it reads, and it is never hidden with the controls.
+ * Reordering by drag (Plan 332 D6), on an open row of the plan list and on an
+ * Up next card, through the design system's drag reorder. Each move is
+ * written against the revision the page read, one at a time, and a refusal is
+ * said under the item it names.
  */
-export function useMoveControls(
-  node: PlanMovable,
-  moves: { above?: { nodeId: string }; below?: { nodeId: string } } | undefined,
-  onPlace: PlanNodePlacer,
-  shown: boolean,
-  direction: 'row' | 'column' = 'row',
-): { controls: ReactNode; error: ReactNode } {
+export function usePlanReorder(onPlace: PlanNodePlacer): {
+  itemProps: (item: PlanReorderItem) => DragReorderItemProps;
+  dropSide: (nodeId: string) => DropSide | undefined;
+  refusal: (nodeId: string) => ReactNode;
+} {
   const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const above = moves?.above;
-  const below = moves?.below;
-  if (above === undefined && below === undefined) return { controls: null, error: null };
-  const place = async (anchor: { before: string } | { after: string }) => {
+  const [refused, setRefused] = useState<{ nodeId: string; message: string } | null>(null);
+  const revisions = useRef(new Map<string, number>());
+  const place = async ({ id, anchor }: DragReorderMove) => {
+    const revision = revisions.current.get(id);
+    if (revision === undefined) return;
     setPending(true);
-    setError(null);
-    const answer = await onPlace({
-      nodeId: node.nodeId,
-      expectedRevision: node.revision,
-      ...anchor,
-    });
+    setRefused(null);
+    const answer = await onPlace({ nodeId: id, expectedRevision: revision, ...anchor });
     setPending(false);
-    if (!answer.ok) setError(answer.message);
+    if (!answer.ok) setRefused({ nodeId: id, message: answer.message });
   };
-  const control = (label: string, icon: 'caret-up' | 'caret-down', send: () => void) => (
-    <Tooltip content={label} side="top">
-      <IconButton
-        size="sm"
-        variant="ghost"
-        aria-label={label}
-        icon={<Icon name={icon} size={14} weight="bold" />}
-        disabled={pending}
-        onClick={(event) => {
-          event.stopPropagation();
-          send();
-        }}
-      />
-    </Tooltip>
+  const drag = useDragReorder(
+    (move) => {
+      void place(move);
+    },
+    { disabled: pending },
   );
   return {
-    controls: (
-      <span
-        role="group"
-        aria-label="Order"
-        data-plan-move={node.nodeId}
-        {...(pending ? { 'data-pending': 'true' } : {})}
+    itemProps: (item) => {
+      revisions.current.set(item.nodeId, item.revision);
+      return drag.itemProps({
+        id: item.nodeId,
+        previousId: item.moves.above?.nodeId,
+        nextId: item.moves.below?.nodeId,
+        accepts: item.accepts,
+      });
+    },
+    dropSide: drag.dropSide,
+    refusal: (nodeId) =>
+      refused?.nodeId === nodeId ? (
+        <Text size="xs" tone="danger" role="alert">
+          {refused.message}
+        </Text>
+      ) : null,
+  };
+}
+
+/**
+ * A list of items that grows and shrinks as they come and go. The box is
+ * widened by the selected item's ring and padded by it and by half a gap, so
+ * the ring and a drop line on the first or last item lie inside its clip.
+ */
+export function ItemsBody({ children }: { children: ReactNode }) {
+  return (
+    <AnimatedHeight style={{ margin: `0 -${String(SELECTED_RING)}px` }}>
+      <div
         style={{
-          display: 'inline-flex',
-          flexDirection: direction,
-          alignItems: 'center',
-          opacity: shown || pending ? 1 : 0,
+          padding: `${String(PLAN_ITEM_GAP / 2 + SELECTED_RING)}px ${String(SELECTED_RING)}px`,
         }}
       >
-        {above !== undefined &&
-          control('Move up', 'caret-up', () => {
-            void place({ before: above.nodeId });
-          })}
-        {below !== undefined &&
-          control('Move down', 'caret-down', () => {
-            void place({ after: below.nodeId });
-          })}
-      </span>
-    ),
-    error:
-      error === null ? null : (
-        <Text size="xs" tone="danger" role="alert">
-          {error}
-        </Text>
-      ),
-  };
+        {children}
+      </div>
+    </AnimatedHeight>
+  );
 }

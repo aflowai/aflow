@@ -79,18 +79,12 @@ export function SplitPane({
     ...asideBorderStyle(bordered, stacked, asidePlacement),
   };
 
-  const asidePane = aside ? (
-    <div style={asideStyle} className="ds-scroll-subtle">
-      {aside}
-    </div>
-  ) : null;
+  const asidePane = aside ? <div style={asideStyle}>{aside}</div> : null;
 
   return (
     <div style={containerStyle}>
       {asidePlacement === 'start' && asidePane}
-      <div style={mainStyle} className="ds-scroll-subtle">
-        {children}
-      </div>
+      <div style={mainStyle}>{children}</div>
       {asidePlacement === 'end' && asidePane}
     </div>
   );
