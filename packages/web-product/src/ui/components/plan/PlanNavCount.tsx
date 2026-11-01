@@ -25,8 +25,8 @@ const srOnly: CSSProperties = {
  * already hold, so it adds no HTTP read where either is mounted.
  */
 export function usePlanPendingCount(spaceId: string | null): PlanPendingCount {
-  const { items } = useActionCenter(spaceId);
-  return useMemo(() => planPendingCount(items), [items]);
+  const { items, listIsWhole } = useActionCenter(spaceId);
+  return useMemo(() => planPendingCount(items, { whole: listIsWhole }), [items, listIsWhole]);
 }
 
 /**

@@ -1,5 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { IdempotencyKey, StepDefinition, StepExecutionId } from '@aflow/schemas';
+import {
+  ACTION_CENTER_FOCUS_CARD,
+  ACTION_CENTER_FOCUS_ITEM_ID_PREFIXES,
+  actionCenterFocusCard,
+  type IdempotencyKey,
+  type StepDefinition,
+  type StepExecutionId,
+} from '@aflow/schemas';
 
 const mockAddStepResult = vi.fn();
 const mockPublishActionCenterFocus = vi.fn();
@@ -234,6 +241,55 @@ describe('handleHumanActionCenterFocusInline — Plan 156 §5.6.2', () => {
     expect(mockPublishActionCenterFocus).not.toHaveBeenCalled();
     const result = mockAddStepResult.mock.calls[0]![1] as { status: string; error: unknown };
     expect(result.status).toBe('FAILED');
+  });
+});
+
+describe('the note says what the focused card can do', () => {
+  it('tells the agent to wait for an answer only where the card answers in chat', async () => {
+    const result = await focus('space-hhh', { itemId: 'proposal:p-1' });
+    const { note } = decodeInline(result.outputRef!) as { note: string };
+    expect(note).toContain('answer controls');
+    expect(note).toContain('End your turn and wait for their decision');
+  });
+
+  it.each(['plan-ask:node-1', 'plan-decision:node-2'])(
+    'sends the operator of %s to the plan page, never to the card',
+    async (itemId) => {
+      const result = await focus('space-hhh', { itemId });
+      const { note } = decodeInline(result.outputRef!) as { note: string };
+      expect(note).toContain('The card has no answer control.');
+      expect(note).toContain('plan page');
+      expect(note).toContain('Never ask them to answer the card itself.');
+      expect(note).not.toContain('wait for their decision');
+    },
+  );
+
+  it.each([
+    'step:exec-1',
+    'gate:g-1',
+    'settings:egress-1',
+    'workflow-task:run-1:task-1',
+    'workflow-write-approval:run-1:2',
+    'workflow-oauth-consent:run-1',
+  ])('sends the operator of %s to Pending in the Workbench, never to the card', async (itemId) => {
+    const result = await focus('space-hhh', { itemId });
+    const { note } = decodeInline(result.outputRef!) as { note: string };
+    expect(note).toContain('The card has no answer control.');
+    expect(note).toContain('under Pending in the Workbench');
+    expect(note).toContain('Never ask them to answer the card itself.');
+    expect(note).not.toContain('plan page');
+    expect(note).not.toContain('wait for their decision');
+  });
+
+  it('names a card for every prefix the focus takes', () => {
+    for (const prefix of ACTION_CENTER_FOCUS_ITEM_ID_PREFIXES) {
+      expect(actionCenterFocusCard(`${prefix}:x`)).toBe(ACTION_CENTER_FOCUS_CARD[prefix]);
+    }
+    expect(
+      ACTION_CENTER_FOCUS_ITEM_ID_PREFIXES.filter(
+        (p) => ACTION_CENTER_FOCUS_CARD[p] === 'answers_in_chat',
+      ),
+    ).toEqual(['proposal']);
   });
 });
 

@@ -145,6 +145,13 @@ export interface UseApiQueryOptions {
    * again — the retry policy only fixes the observers present when it started.
    */
   retryOnMount?: boolean;
+  /**
+   * TanStack's `structuralSharing` as a function: it combines the cached data
+   * with each write to the key, a fetch's result and `setQueryData` alike.
+   * It replaces TanStack's default sharing, so return `replaceEqualDeep`'s
+   * result to keep unchanged parts stable.
+   */
+  structuralSharing?: (prev: unknown, next: unknown) => unknown;
 }
 
 export function useApiQuery<TData = unknown>(
@@ -192,6 +199,7 @@ export function useApiQuery<TData = unknown>(
     ...(opts.enabled !== undefined ? { enabled: opts.enabled } : {}),
     ...(opts.refetchInterval !== undefined ? { refetchInterval: opts.refetchInterval } : {}),
     ...(opts.retryOnMount !== undefined ? { retryOnMount: opts.retryOnMount } : {}),
+    ...(opts.structuralSharing !== undefined ? { structuralSharing: opts.structuralSharing } : {}),
     // Retry policy — including the 429 schedule — is set on the QueryClient
     // default, where TanStack runs it once per query rather than once per
     // mounted observer. Reasserting it here would override that.

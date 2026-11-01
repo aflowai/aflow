@@ -53,9 +53,19 @@ interface BrokerEntry {
   reconnectTimer: ReturnType<typeof setTimeout> | null;
   teardownTimer: ReturnType<typeof setTimeout> | null;
   listeners: ListenerSets;
+  /** The stream now in use. See `currentStream`. */
+  stream: number;
 }
 
 const registry = new Map<string, BrokerEntry>();
+// Module-wide rather than per entry, so an entry made again after a release
+// never reuses a number a cached list may still hold.
+let lastStream = 0;
+
+function nextStream(entry: BrokerEntry): void {
+  lastStream += 1;
+  entry.stream = lastStream;
+}
 let warnedThisTick = false;
 
 function devCheckStreamCount(): void {
@@ -82,6 +92,7 @@ function devCheckStreamCount(): void {
 function setStatus(entry: BrokerEntry, partial: Partial<ConnectionStatus>): void {
   const next: ConnectionStatus = { ...entry.status, ...partial };
   if (next.isConnected === entry.status.isConnected && next.error === entry.status.error) return;
+  if (next.isConnected !== entry.status.isConnected) nextStream(entry);
   entry.status = next;
   for (const listener of entry.listeners.status) {
     try {
@@ -171,6 +182,9 @@ function connect(entry: BrokerEntry): void {
 
   const client = getRealtimeClient();
   setStatus(entry, { isConnected: client.getStatus().isConnected, error: null });
+  // A new subscription sends its own snapshot, and the one it replaces may have
+  // missed events.
+  nextStream(entry);
   entry.wsStatusUnsub = client.subscribeStatus((s) => {
     setStatus(entry, { isConnected: s.isConnected, error: s.lastError ?? null });
   });
@@ -244,6 +258,7 @@ function getOrCreateEntry(spaceId: string, context: BrokerContext): BrokerEntry 
     reconnectAttempt: 0,
     reconnectTimer: null,
     teardownTimer: null,
+    stream: 0,
     listeners: {
       snapshot: new Set(),
       update: new Set(),
@@ -339,6 +354,17 @@ export function subscribeStatus(spaceId: string, listener: StatusCallback): () =
 export function getStatusSnapshot(spaceId: string): ConnectionStatus {
   const entry = registry.get(spaceId);
   return entry?.status ?? { isConnected: false, error: null };
+}
+
+/**
+ * The stream a space's events arrive on now, or null while it is down. The
+ * number changes wherever the stream may have missed an event: a disconnect, a
+ * reconnect and a new subscription each take a new one. Two reads under one
+ * number therefore lie on one unbroken stream.
+ */
+export function currentStream(spaceId: string): number | null {
+  const entry = registry.get(spaceId);
+  return entry?.status.isConnected === true ? entry.stream : null;
 }
 
 export function reconnect(spaceId: string): void {

@@ -7,6 +7,7 @@ import {
   ACTION_CENTER_FOCUS_ITEM_ID_PREFIXES,
   ACTION_CENTER_ITEM_ID_PREFIX,
   PLAN_STATE_LABELS,
+  actionCenterFocusCard,
 } from '@aflow/schemas';
 import type { InlineProposalFocusPayload } from '@aflow/run-view';
 import { useApi, useSpace } from '../providers.js';
@@ -68,8 +69,9 @@ function kindLabel(itemId: string): string {
   return prefix !== undefined ? KIND_LABEL[prefix] : 'Request';
 }
 
-/** The plan node a plan step's id names, where it names one. */
+/** The plan node a plan step's id names, where its card links to the plan page. */
 function planNodeOf(itemId: string): string | null {
+  if (actionCenterFocusCard(itemId) !== 'plan_page') return null;
   for (const prefix of PLAN_NODE_PREFIXES) {
     if (itemId.startsWith(prefix)) {
       const nodeId = itemId.slice(prefix.length);

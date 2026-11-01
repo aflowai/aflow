@@ -22,6 +22,7 @@ vi.mock('@aflow/cybernetic-runtime', async (original) => ({
 import { askedKey, createPlanNode, updatePlanNode } from '@aflow/cybernetic-runtime';
 import type { ActionCenterContext } from '../types.js';
 import { createPlanAskSource } from '../sources/planAskSource.js';
+import { createPlanDecisionSource } from '../sources/planDecisionSource.js';
 
 const scope = {
   tenantId: 'a0000000-0000-4000-8000-000000000338' as never,
@@ -110,29 +111,115 @@ describe('the item summary', () => {
     expect(planItemSummary('Look:\n```ts\nconst a = 1;')).toBe('Look:\n```ts\nconst a = 1;');
   });
 
-  it('cuts a long text with no fence open at the cut at 2,000 characters', () => {
-    const text = `${prose(10)}\n\`\`\`\ncode\n\`\`\`\n${prose(3_000)}`;
-    expect(planItemSummary(text)).toBe(text.slice(0, 2_000));
+  it('keeps a text of exactly 2,000 characters whole, with no mark', () => {
+    expect(planItemSummary(prose(2_000))).toBe(prose(2_000));
   });
 
-  it('closes a fence the cut leaves open, within 2,000 characters', () => {
+  it('cuts a long text with no fence open at the cut and ends it with an ellipsis', () => {
+    const text = `${prose(10)}\n\`\`\`\ncode\n\`\`\`\n${prose(3_000)}`;
+    expect(planItemSummary(text)).toBe(`${text.slice(0, 1_998)}…`);
+  });
+
+  it('cuts prose before an inline construct the cut would leave open, as a title is cut', () => {
+    const text = `${prose(1_990)} [a link](https://example.com/${prose(50)}) ${prose(100)}`;
+    expect(planItemSummary(text)).toBe(`${prose(1_990)}…`);
+  });
+
+  it('moves the cut back to a safe point that lies within the last 80 characters', () => {
+    const text = `${prose(1_950)} \`${prose(1_000)}`;
+    expect(planItemSummary(text)).toBe(`${prose(1_950)}…`);
+  });
+
+  it.each([
+    ['a stray backtick', '`', '\\`'],
+    ['a "<" followed by a letter', '<b', '\\<b'],
+    ['an intra-word "*"', 'snake*case', 'snake\\*case'],
+    ['an unbalanced "["', '[', '\\['],
+  ])('cuts a paragraph holding %s past the tail at the limit and escapes it', (_, raw, escaped) => {
+    const words = 'word '.repeat(600);
+    const text = `${'word '.repeat(20)}${raw} ${words}`;
+    const summary = planItemSummary(text);
+    expect(summary.length).toBeLessThanOrEqual(2_000);
+    expect(summary.endsWith('…')).toBe(true);
+    const kept = summary.slice(0, -1).replace(escaped, raw);
+    expect(text.startsWith(kept)).toBe(true);
+    expect(kept.length).toBeGreaterThanOrEqual(1_998 - 80);
+    expect(summary).toContain(escaped);
+  });
+
+  it('puts the ellipsis on a line of its own below a closing fence', () => {
+    const text = `${prose(1_950)}\n\`\`\`\ncode\n\`\`\`\n*${'x'.repeat(3_000)}`;
+    expect(planItemSummary(text)).toBe(`${prose(1_950)}\n\`\`\`\ncode\n\`\`\`\n…`);
+  });
+
+  it('closes a fence the cut leaves open and puts the ellipsis below it, within 2,000 characters', () => {
     const text = `${prose(100)}\n~~~~python\n${'x = 1\n'.repeat(600)}~~~~\nAfter the code.`;
     const summary = planItemSummary(text);
-    expect(summary).toHaveLength(2_000);
-    expect(summary.endsWith('\n~~~~')).toBe(true);
-    expect(summary.slice(0, -'\n~~~~'.length)).toBe(text.slice(0, 2_000 - '\n~~~~'.length));
+    expect(summary.length).toBeLessThanOrEqual(2_000);
+    expect(summary.length).toBeGreaterThan(1_990);
+    expect(summary.endsWith('\n~~~~\n…')).toBe(true);
+    expect(text.startsWith(summary.slice(0, -'\n~~~~\n…'.length))).toBe(true);
   });
 
   it('closes a backtick fence with a run as long as the one that opened it', () => {
     const text = `\`\`\`\`\n${'y'.repeat(3_000)}`;
     const summary = planItemSummary(text);
     expect(summary).toHaveLength(2_000);
-    expect(summary.endsWith('\n````')).toBe(true);
+    expect(summary.endsWith('\n````\n…')).toBe(true);
   });
 
   it('reads a closing run shorter than the opening one as code, not as the close', () => {
     const text = `\`\`\`\`\n\`\`\`\n${'y'.repeat(3_000)}`;
-    expect(planItemSummary(text).endsWith('\n````')).toBe(true);
+    expect(planItemSummary(text).endsWith('\n````\n…')).toBe(true);
+  });
+});
+
+describe('the two plan sources cut alike', () => {
+  /** A waiting node's item and an open decision's item over one overlong text. */
+  async function bothItems(text: string) {
+    const waiting = await createPlanNode(
+      { ...scope, redis, store },
+      { kind: 'execute', title: 'Merge', goal: 'g', criteria: 'c' },
+    );
+    if (!waiting.ok) throw new Error(waiting.message);
+    const noted = await updatePlanNode(
+      { ...scope, redis, store },
+      {
+        nodeId: waiting.node.nodeId,
+        expectedRevision: waiting.node.revision,
+        note: `${PLAN_NODE_MERGE_WAIT_LINE}\n${text}`,
+      },
+    );
+    if (!noted.ok) throw new Error(noted.message);
+    const choice = await createPlanNode(
+      { ...scope, redis, store },
+      {
+        kind: 'decide',
+        title: 'Which way',
+        goal: `${PLAN_NODE_MERGE_WAIT_LINE}\n${text}`,
+        criteria: 'c',
+      },
+    );
+    if (!choice.ok) throw new Error(choice.message);
+    const [ask] = await source().listOpen(scope);
+    const [decision] = await createPlanDecisionSource({
+      redis,
+      db: {} as never,
+      payloadStore: {} as never,
+    }).listOpen(scope);
+    if (!ask || !decision) throw new Error('Both sources should list their node');
+    return { ask, decision };
+  }
+
+  it.each([
+    ['prose', 'p'.repeat(3_000)],
+    ['an inline construct across the cut', `${'p'.repeat(1_900)} **bold ${'b'.repeat(500)}**`],
+    ['an open fence', `\`\`\`ts\n${'const a = 1;\n'.repeat(300)}\`\`\``],
+  ])('cuts %s at the same place, with the same mark', async (_name, text) => {
+    const { ask, decision } = await bothItems(text);
+    expect(ask.summary).toBe(decision.summary);
+    expect(ask.summary.length).toBeLessThanOrEqual(2_000);
+    expect(ask.summary.endsWith('…')).toBe(true);
   });
 });
 

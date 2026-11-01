@@ -52,7 +52,7 @@ vi.mock('../../hooks/action-center-broker.js', () => ({
   subscribeResolve: () => () => undefined,
   subscribeStreamError: () => () => undefined,
   subscribeStatus: () => () => undefined,
-  getStatusSnapshot: () => 'connected',
+  currentStream: () => 1,
 }));
 
 vi.mock('../cybernetic-provider.js', () => ({ useOptionalCybernetic: () => null }));

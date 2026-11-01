@@ -11,6 +11,13 @@ import { useResumeOnUnblock } from './use-resume-on-unblock.js';
 import { readProposalReadFailure } from '../lib/proposal-read-failure.js';
 import { partitionLanes, type ActionCenterLanes } from './use-action-center-lanes.js';
 import type { ActionCenterItem, CoachProposalExtension } from './use-action-center-types.js';
+import {
+  isWhole,
+  itemsStructuralSharing,
+  snapshotPayload,
+  withItems,
+  type ItemsPayload,
+} from './action-center-cache.js';
 
 // Re-export the types so existing imports
 // (`import type { ActionCenterItem } from './use-action-center.js'`)
@@ -76,6 +83,16 @@ export interface ActionCenterResolveResult {
 export interface UseActionCenterResult {
   /** Open items, sorted by requestedAt desc. Pre-grouped lanes via getters. */
   items: ActionCenterItem[];
+
+  /**
+   * Whether the route's limit has not cut `items`: true once the stream's
+   * snapshot has replaced the REST list. The snapshot holds what each source
+   * lists, and each source caps its own read. A REST refetch keeps the flag
+   * while the stream that sent the snapshot stays up, unless the route has cut
+   * that read. A refetch that lands after a reconnect but before the new
+   * snapshot drops it.
+   */
+  listIsWhole: boolean;
 
   /** Convenience lanes — derived from `items`. */
   lanes: {
@@ -195,10 +212,6 @@ function itemsQueryKey(spaceId: string): QueryKey {
   return ['space', spaceId, 'action-center'];
 }
 
-interface ItemsPayload {
-  items?: ActionCenterItem[];
-}
-
 // Re-export the lane partition helper that lives in its own React-free
 // file (so tests can import it without dragging in TanStack Query).
 // Consumers that need just the helper can import from either path.
@@ -218,11 +231,16 @@ export function useActionCenter(spaceId: string | null): UseActionCenterResult {
   // `setQueryData` on every broker event so subsequent re-renders come
   // from the cache, not the network.
   const queryKey = useMemo(() => (spaceId ? itemsQueryKey(spaceId) : ['__none__']), [spaceId]);
+  const structuralSharing = useMemo(
+    () => itemsStructuralSharing(() => (spaceId ? broker.currentStream(spaceId) : null)),
+    [spaceId],
+  );
   const itemsQuery = useApiQuery<ItemsPayload>({
     key: queryKey,
     path: spaceId ? `/spaces/${spaceId}/action-center` : '/spaces',
     staleTime: 30_000,
     enabled: spaceId !== null,
+    structuralSharing,
     ...(spaceId ? { spaceId } : {}),
   });
 
@@ -285,12 +303,17 @@ export function useActionCenter(spaceId: string | null): UseActionCenterResult {
     // late-resolving fetch could still slip through; the IIFE shape
     // closes it without blocking the broker event loop.
     const unsubSnapshot = broker.subscribeSnapshot(spaceId, (items) => {
+      // Read before the await: the list rests on the stream that sent it.
+      const stream = broker.currentStream(spaceId);
       void (async () => {
         await queryClientRef.current.cancelQueries({
           queryKey: itemsQueryKey(spaceId),
           exact: true,
         });
-        queryClientRef.current.setQueryData<ItemsPayload>(itemsQueryKey(spaceId), { items });
+        queryClientRef.current.setQueryData<ItemsPayload>(
+          itemsQueryKey(spaceId),
+          snapshotPayload(items, stream),
+        );
         lastReconcileAtRef.current = Date.now();
       })();
     });
@@ -300,7 +323,7 @@ export function useActionCenter(spaceId: string | null): UseActionCenterResult {
     const unsubUpdate = broker.subscribeItemsUpdate(spaceId, (updates) => {
       queryClientRef.current.setQueryData<ItemsPayload>(itemsQueryKey(spaceId), (prev) => {
         const prevItems = prev?.items ?? [];
-        return { items: mergeItems(prevItems, updates) };
+        return withItems(prev, mergeItems(prevItems, updates));
       });
     });
 
@@ -309,7 +332,10 @@ export function useActionCenter(spaceId: string | null): UseActionCenterResult {
       queryClientRef.current.setQueryData<ItemsPayload>(itemsQueryKey(spaceId), (prev) => {
         const prevItems = prev?.items ?? [];
         const idSet = new Set(ids);
-        return { items: prevItems.filter((it) => !idSet.has(it.id)) };
+        return withItems(
+          prev,
+          prevItems.filter((it) => !idSet.has(it.id)),
+        );
       });
     });
 
@@ -372,6 +398,7 @@ export function useActionCenter(spaceId: string | null): UseActionCenterResult {
   // ---- derived items/lanes/counts -----------------------------------------
 
   const items = useMemo<ActionCenterItem[]>(() => itemsQuery.data?.items ?? [], [itemsQuery.data]);
+  const listIsWhole = isWhole(itemsQuery.data);
 
   const lanes = useMemo<ActionCenterLanes>(() => partitionLanes(items), [items]);
 
@@ -487,11 +514,15 @@ export function useActionCenter(spaceId: string | null): UseActionCenterResult {
             const prevItems = prev?.items ?? [];
             if (resolution.kind === 'reassign') {
               const routed = (resolvedBody?.item ?? null) as ActionCenterItem | null;
-              return {
-                items: routed ? prevItems.map((it) => (it.id === itemId ? routed : it)) : prevItems,
-              };
+              return withItems(
+                prev,
+                routed ? prevItems.map((it) => (it.id === itemId ? routed : it)) : prevItems,
+              );
             }
-            return { items: prevItems.filter((it) => it.id !== itemId) };
+            return withItems(
+              prev,
+              prevItems.filter((it) => it.id !== itemId),
+            );
           });
           setResolveStateById((s) => ({ ...s, [itemId]: 'idle' }));
           return { ok: true, ...(setupChecklist !== undefined ? { setupChecklist } : {}) };
@@ -518,7 +549,7 @@ export function useActionCenter(spaceId: string | null): UseActionCenterResult {
           const latest = body.latestItem as ActionCenterItem;
           queryClientRef.current.setQueryData<ItemsPayload>(itemsQueryKey(spaceId), (prev) => {
             const prevItems = prev?.items ?? [];
-            return { items: mergeItems(prevItems, [latest]) };
+            return withItems(prev, mergeItems(prevItems, [latest]));
           });
         }
         setResolveStateById((s) => ({ ...s, [itemId]: 'error' }));
@@ -587,6 +618,7 @@ export function useActionCenter(spaceId: string | null): UseActionCenterResult {
 
   return {
     items,
+    listIsWhole,
     lanes,
     counts,
     status,
