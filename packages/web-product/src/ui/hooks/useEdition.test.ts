@@ -57,7 +57,12 @@ describe('an answered /users/me', () => {
       edition: {
         id: 'community-local',
         surfaces: [],
-        lanes: { codeLane: 'absent', hostLane: 'present', browserLane: 'present' },
+        lanes: {
+          codeLane: 'absent',
+          hostLane: 'present',
+          browserLane: 'present',
+          channelLane: 'present',
+        },
       },
     });
     expect(edition.lanes).toEqual({
@@ -65,6 +70,7 @@ describe('an answered /users/me', () => {
       codeLane: 'absent',
       hostLane: 'present',
       browserLane: 'present',
+      channelLane: 'present',
     });
   });
 
@@ -79,6 +85,7 @@ describe('an answered /users/me', () => {
       codeLane: 'absent',
       hostLane: 'absent',
       browserLane: 'absent',
+      channelLane: 'absent',
     });
   });
 });

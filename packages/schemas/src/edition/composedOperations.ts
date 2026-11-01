@@ -16,7 +16,7 @@ import type { EditionDescriptor } from './descriptor.js';
 /** The descriptor fields lane composition rests on. */
 export type ComposedLanes = Pick<
   EditionDescriptor,
-  'edition' | 'codeLane' | 'hostLane' | 'browserLane'
+  'edition' | 'codeLane' | 'hostLane' | 'browserLane' | 'channelLane'
 >;
 
 /** Whether the deployment composes an executor for `stepType` at all. */
@@ -24,6 +24,7 @@ export function isStepTypeComposed(stepType: string, lanes: ComposedLanes): bool
   if (stepType === 'code') return lanes.codeLane === 'present';
   if (stepType === 'host') return lanes.hostLane === 'present';
   if (stepType === 'browser') return lanes.browserLane === 'present';
+  if (stepType === 'channel') return lanes.channelLane === 'present';
   // A model on this computer runs only where the platform does.
   if (stepType === 'model') return lanes.edition === 'community-local';
   return true;
@@ -48,6 +49,7 @@ export function isOperationComposed(operationId: string, lanes: ComposedLanes): 
 const LANE_PHRASES: Readonly<Record<string, string>> = {
   browser: 'the browser lane, a browser on a paired machine',
   model: 'models on this computer, which only the local edition runs',
+  channel: 'the channel lane, an optional app set up with `yarn channel:slack setup`',
 };
 
 /**

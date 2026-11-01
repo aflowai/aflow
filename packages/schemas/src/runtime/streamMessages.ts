@@ -848,6 +848,7 @@ export const EXECUTOR_JOB_STEP_TYPES = [
   'code',
   'host',
   'browser',
+  'channel',
 ] as const satisfies readonly StepType[];
 
 export const ConsumerGroups = {

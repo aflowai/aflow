@@ -10,12 +10,17 @@ const boot = vi.hoisted(() => {
     log,
     redis: { call: vi.fn() },
     asserted: vi.fn<(redis: unknown) => Promise<{ outcome: 'asserted' | 'absent' }>>(),
+    channelAsserted: vi.fn<(redis: unknown) => Promise<{ outcome: 'asserted' | 'absent' }>>(),
     serve: vi.fn(() => Promise.resolve({ log })),
   };
 });
 
 vi.mock('../env.js', () => ({}));
-vi.mock('@aflow/schemas', () => ({ resolveEditionDescriptor: () => ({}) }));
+vi.mock('@aflow/schemas', () => ({
+  channelLaneComposed: () =>
+    process.env['PHOENIX_CHANNEL_REDIS_PASSWORD'] === undefined ? 'absent' : 'present',
+  resolveEditionDescriptor: () => ({}),
+}));
 vi.mock('@aflow/redis', () => ({ getRedisConnection: () => boot.redis }));
 vi.mock('@aflow/server-runtime', () => ({
   closeOnSignal: vi.fn(),
@@ -24,6 +29,7 @@ vi.mock('@aflow/server-runtime', () => ({
 }));
 vi.mock('@aflow/server-runtime/bootstrap', () => ({
   assertHostGrantOnRunningServer: boot.asserted,
+  assertChannelGrantOnRunningServer: boot.channelAsserted,
 }));
 
 import { start } from '../start.js';
@@ -34,6 +40,7 @@ const STALE_STAND_IN = 'stand-in';
 beforeEach(() => {
   vi.stubEnv('PHOENIX_HOST_REDIS_PASSWORD', STALE_STAND_IN);
   boot.asserted.mockResolvedValue({ outcome: 'asserted' });
+  boot.channelAsserted.mockResolvedValue({ outcome: 'asserted' });
 });
 
 afterEach(() => {
@@ -89,6 +96,22 @@ describe('the server’s start', () => {
     await new Promise((resolve) => setImmediate(resolve));
 
     expect(boot.asserted).not.toHaveBeenCalled();
+  });
+
+  it('asserts the channel grant only where a channel app was set up', async () => {
+    start(composition);
+    await vi.waitFor(() => {
+      expect(boot.asserted).toHaveBeenCalledTimes(1);
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(boot.channelAsserted).not.toHaveBeenCalled();
+
+    vi.stubEnv('PHOENIX_CHANNEL_REDIS_PASSWORD', 'channel-stand-in');
+    start(composition);
+    await vi.waitFor(() => {
+      expect(boot.channelAsserted).toHaveBeenCalledTimes(1);
+    });
+    expect(boot.channelAsserted.mock.calls).toEqual([[boot.redis]]);
   });
 
   it('keeps serving when Redis refuses the assertion, and logs what that leaves refused', async () => {

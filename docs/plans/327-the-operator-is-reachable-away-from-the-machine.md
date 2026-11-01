@@ -1,13 +1,5 @@
 # Plan 327 — The operator is reachable away from the machine
 
-**Status:** Design, reviewed against the code on main at `b4426a4a`. No phase is built.
-
-**Builds on:** Plan 331 (the resident Helmsman, which watches the space and decides when the operator must act), Plan 324 (how the Helmsman finds an operation without carrying it), Plan 253 (the write approval card and its grant), the host lane (an executor that ships outside the image and is composed only where it is configured), and `yarn mcp:setup` (a local client of the API that holds its own key).
-
-**Leaves alone:** the orchestrator, session hot state, the run lifecycle, the Action Center's items and its resolve boundary, every tenant table, and `user.notification.email`.
-
-**How to read the review notes.** Each decision ends with a review note: confirmed, amended or questioned, with the code it rests on. A note that says "line N" names the line in this document at `b4426a4a`. Where a decision is amended, its text above the note already reads as amended.
-
 ## Decision card
 
 **What changes**
@@ -24,7 +16,8 @@
 
 - `packages/schemas`: the `channel` step type and stream, `channel.message.send`, `channelLaneComposed`, the ownership rule and the import guard.
 - `packages/redis`: a refusal in `addStepJob` for a `channel` step when the channel lane is absent. No other lane changes.
-- `packages/server-runtime`: the channel lane's Redis credential, `PHOENIX_CHANNEL_REDIS_PASSWORD`, minted and applied as the host lane's is.
+- `apps/aflow-orchestrator`: its dispatch paths answer every lane refusal as they answered the coding lane's. No lifecycle changes.
+- `packages/server-runtime` and `apps/server`: the channel lane's Redis identity, `channelexec`, applied as the host lane's is. Its credential, `PHOENIX_CHANNEL_REDIS_PASSWORD`, is minted by the channel setup.
 - `packages/database`: one tenant migration that adds the `channel.message` capability group to the system profiles.
 - `packages/platform-artifacts`: the Helmsman's placement of the operation, and a help article on setting up Slack.
 - `apps/aflow-channel-slack`: a new optional app that holds the Slack connection and its own local store.
@@ -46,7 +39,7 @@
 **Not done on purpose**
 
 - No hook fires when a run stops. No background task looks for things to send.
-- The orchestrator, session hot state, the run lifecycle and every tenant table stay as they are.
+- The orchestrator's run lifecycle, session hot state and every tenant table stay as they are.
 - `channel.message.ask` is not built. A paused wake would let a second wake of the space start.
 - A plan decision or a plan ask cannot be decided from the phone until the trust level (D5) exists.
 - Missed Slack messages are not recovered. History catch-up is P3.
@@ -55,6 +48,14 @@
 
 - The operator accepts or amends D1 to D7 from this card and the decisions under it.
 - Each phase meets its exit in §5, and the proofs in §6 pass.
+
+**Status:** Design, reviewed against the code on main at `b4426a4a`. P0 is built, and its as-built notes are in §5. P1 to P3 are not built.
+
+**Builds on:** Plan 331 (the resident Helmsman, which watches the space and decides when the operator must act), Plan 324 (how the Helmsman finds an operation without carrying it), Plan 253 (the write approval card and its grant), the host lane (an executor that ships outside the image and is composed only where it is configured), and `yarn mcp:setup` (a local client of the API that holds its own key).
+
+**Leaves alone:** the orchestrator's run lifecycle, session hot state, the Action Center's items and its resolve boundary, every tenant table, and `user.notification.email`. P0 widened the orchestrator's lane refusal checks to every lane refusal, and the P0 notes say why.
+
+**How to read the review notes.** Each decision ends with a review note: confirmed, amended or questioned, with the code it rests on. A note that says "line N" names the line in this document at `b4426a4a`. Where a decision is amended, its text above the note already reads as amended.
 
 ## 1. Problem
 
@@ -122,12 +123,12 @@ When `itemId` is given, the app reads the item through the API (`GET /v1/spaces/
 
 The table keys on the item's origin as well as its kind. The app's key is not an interactive sign-in, and some sources refuse every resolver that is not one.
 
-| Item                                                                   | On the phone                                                      |
-| ---------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| `human_input` from a paused step (origin `step`), with a flat schema   | Buttons for an enum or a boolean. A thread reply for a string.    |
-| `human_approval` from a paused step (origin `step`)                    | Approve or deny.                                                  |
-| `write_approval`, target `api`, tier `low` or `medium`, with a preview | Approve or deny, with the preview Plan 253 already computes.      |
-| Every other item, a plan decision and a plan ask included              | The card says what waits and that it needs the operator at Aflow. |
+| Item                                                                                                     | On the phone                                                      |
+| -------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| `human_input` from a paused step (origin `step`), with a flat schema                                     | Buttons for an enum or a boolean. A thread reply for a string.    |
+| `human_approval` from a paused step (origin `step`)                                                      | Approve or deny.                                                  |
+| `write_approval`, target `api`, tier `low` or `medium`, with a preview, origin `step` or `workflow_task` | Approve or deny, with the preview Plan 253 already computes.      |
+| Every other item, a plan decision and a plan ask included                                                | The card says what waits and that it needs the operator at Aflow. |
 
 A tap on an item that is no longer open gets the resolve route's own answer, and the card says the item was already decided. Free text never approves anything.
 
@@ -186,7 +187,7 @@ The app keeps its records in a local store of its own, beside its configuration 
 - `inbound`: each Slack event id (unique), when it was sent, when it arrived, and its outcome.
 - `thread`: each Slack thread and the session it continues.
 - `card`: each card's Slack message reference and the item it shows.
-- `sent`: each step execution's `messageRef` and text, for D2's idempotency and repeat rule.
+- `sent`: each send's run, step, `messageRef` and text, for D2's idempotency and repeat rule.
 
 Removing the app and its store leaves nothing behind in the platform.
 
@@ -255,7 +256,7 @@ _Exit:_ in a Helmsman conversation in the app, the operator says "send me a mess
 
 **P1 — Cards.** `itemId`, the D3 table, the tap that resolves, and the card edited after.
 
-_Exit:_ a skill run parks on a medium-tier write approval. A Helmsman sends its item. The operator approves it from the phone, and the run resumes. A second tap is answered "already decided". A high-tier approval sent the same way shows no buttons. A plan decision sent the same way shows no buttons and says it needs the operator at Aflow.
+_Exit:_ an API task in a skill run parks on a medium-tier write approval. `workflowWriteApprovalSource` shows it as a `write_approval` item of origin `workflow_task`. A Helmsman sends that item. The operator approves it from the phone, and the paused task runs again. A second tap is answered "already decided". A high-tier approval sent the same way shows no buttons. A plan decision sent the same way shows no buttons and says it needs the operator at Aflow.
 
 **P2 — Conversation.** D4: a direct message starts a conversation, a thread continues it, and the answer is relayed.
 
@@ -266,9 +267,25 @@ _Exit:_ "status?" sent from the phone gets the Helmsman's answer in its thread. 
 **Review.**
 
 - **P0 — re-cut.** Line 127 left out the Redis identity, the dispatch refusal and the import guard. Line 129's exit asks for D7's proofs, which need all three, so they move into P0. The exit now names the credential, not the file (D1). It also proves D2's repeat rule.
-- **P1 — confirmed, with one exit added.** A skill run's write approval is a `workflow_task` item. Its source reads only the resolver's user id, so it accepts the app's key (`packages/server-runtime/src/services/actionCenter/sources/workflowWriteApprovalSource.ts`). The added exit proves the plan-item row of the D3 table.
+- **P1 — confirmed, with one exit added.** A skill run's write approval is a `write_approval` item of origin `workflow_task`, built by `buildWriteApprovalCard` (`packages/server-runtime/src/services/actionCenter/sources/workflowWriteApprovalSource.ts`). Its resolve reads only the resolver's user id, so it accepts the app's key. An approval runs the paused task again, so the exit says that rather than "the run resumes". The added exit proves the plan-item row of the D3 table.
 - **P2 — confirmed.** The exit stands. D4's amendment changes the calls, not what is proven.
 - **P3 — confirmed.** The trust level matters more than line 139 implies. Without it, nothing the resident asks through the plan board can be decided from the phone (D3 review). It should be the first P3 item decided.
+
+**P0 as built.**
+
+- **The lane.** `channel` is in `StepTypeSchema` and `EXECUTOR_JOB_STEP_TYPES`, so its stream is `aflow:jobs:channel`. `channelLaneComposed` answers `present` only where `PHOENIX_CHANNEL_REDIS_PASSWORD` is set. The descriptor, the client summary and `ComposedLanes` carry `channelLane`, and `isStepTypeComposed` has its case.
+- **The credential is minted by the channel setup, not at first boot.** The host credential is minted at every appliance's first boot. A channel credential minted the same way would compose the lane on every install and break "absent means absent". `yarn channel:slack setup` appends it to the platform's `instance.env`, and the stack composes the lane on its next start. In the appliance, bootstrap cuts it into the worker's `wrapping-key.env` where present, so the orchestrator composes the lane as the API does.
+- **The Redis identity.** `channelexec` holds `aflow:jobs:channel` and the executor runtime's own key families, each one the host grant also holds. It holds no other lane's stream, no write-approval grant and no browser hand-off. `instance-init` writes it into the ACL file, a full start applies it, and every server start asserts its grant.
+- **The refusal.** `addStepJob` throws `ChannelLaneAbsentError` (`LANE_NOT_COMPOSED`, `permission`, not retryable) for a `channel` step where the lane is absent. Every other step type passes through unchanged.
+- **The orchestrator changed, by one class.** Its dispatch paths caught `CodeLaneDisabledError` by name, so a channel refusal would have reached the agent as an internal error. `LaneRefusalError` is now the base of both refusals, and the four checks name it. The run lifecycle is unchanged.
+- **The operation.** `channel.message.send` takes `{ text }` only, strict. It is registered with the `whenToUse` and `whenNotToUse` D2 names, in the bundle `operator_messages`, and discoverable for the Helmsman. Migration 236 adds `channel.message` to the system profiles.
+- **Idempotency is keyed on the run and the logical execution.** On a session's step the logical execution is the step execution, which a retry keeps. On a workflow task a retry is a new step execution, and the logical execution is what stays the same. That id is `task:<taskId>` in every run of the task, so the run is part of the key. Without it, each later run of a workflow task returned the first run's `messageRef` and sent nothing.
+- **A post that drew no answer is not retried.** A transport failure, the fifteen-second timeout, an HTTP 5xx or an answer whose body cannot be read may follow Slack's acceptance of `chat.postMessage`. The step fails with `CHANNEL_DELIVERY_UNKNOWN`, not retryable, and says Slack may have posted it. The app records the send without a `messageRef`, so a later attempt at the step, or the same text again in the run, fails the same way and posts nothing. A transport failure or a 5xx on `conversations.open` posts nothing and stays retryable. An HTTP 429 is a refusal and stays retryable.
+- **A send is claimed before it leaves.** The runtime runs channel sends four at a time, so parallel tool calls from one turn can carry the same text. The check for a prior send and the record of this one are one synchronous step in the store. Of two sends that arrive together, the second fails with `CHANNEL_MESSAGE_REPEATED` and posts nothing. A send that fails before it posts releases its claim, so a retry may post. Sent records past the 30-day retention are pruned on every claim as well as when the store opens.
+- **Settings → Channels does not exist yet.** The not-linked error does not name it, though D2 asks for it. It names `yarn channel:slack setup` and the help article `/help/slack-channel`, which are how an operator links in P0. The operation's pitfall names setup too.
+- **The app** keeps `link` and `sent` in `~/.aflow/channel-slack.store.json`, mode 0600, with its own migration ledger. `inbound`, `thread` and `card` arrive with P1 and P2. Socket Mode handles direct messages for linking only. A linked operator who writes to the bot gets one fixed reply, because conversation is P2. The app reads the link code when it starts, so a code from a later setup run links only after the app restarts. Setup and the help article say so.
+- **D7's proofs.** `packages/schemas/src/edition/channelSlackAbsence.test.ts` fails on any file outside the app that imports it. The same file shows that nothing a build reads names the app once the cut's own transforms remove it. The app is not in the root `tsconfig.json` references, so `tsc -b` needs nothing from it. `ownershipGuard.test.ts` excuses an absent `optional-pack` path only where an edition absence guard names it, so the suite passes with the app deleted and still fails on a mistyped or stale pack path. `channelLaneDispatchGate.test.ts` and `helmsmanSurface.test.ts` hold the third proof.
+- **Not proven here.** The P0 exit needs a Slack workspace and a phone, and no live send ran in this build. It stays open until the operator runs it.
 
 ## 6. How it is proven
 
@@ -276,6 +293,8 @@ _Exit:_ "status?" sent from the phone gets the Helmsman's answer in its thread. 
 - **Absent is absent.** D7's three proofs.
 - **The recipient is never chosen.** No `channel.*` operation accepts a user, chat or channel id, and a guard test fails on one that does.
 - **A retry posts once.** A step retried after its message was posted returns the first `messageRef`.
+- **Each run posts its own.** A second run of the same workflow task posts again, and a retried step within that run posts nothing.
+- **A lost answer posts once.** A timeout after Slack took the post fails not retryable, and neither a retry nor a resend of the text posts again.
 - **A repeat fails.** A second send of the same text in the same run fails, and the first is the only message posted.
 - **Free text approves nothing.** "yes" typed in a card's thread leaves the item open, and the app points to the button.
 - **The ceiling holds.** Every item outside the D3 table renders with no buttons, a plan decision and a plan ask included.

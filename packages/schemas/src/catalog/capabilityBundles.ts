@@ -234,6 +234,13 @@ export const CAPABILITY_BUNDLES: readonly CapabilityBundle[] = [
     capabilityGroupIds: ['browser.page', 'browser.profile'],
   },
   {
+    id: 'operator_messages',
+    label: 'Messages to the operator',
+    hint: 'Send the operator a message on the channel they linked, such as Slack, when they must act and may be away from the machine.',
+    tier: 'on_demand',
+    capabilityGroupIds: ['channel.message'],
+  },
+  {
     id: 'local_models',
     label: 'Models on this computer',
     hint: 'Read why the model on this computer is slow or not answering, and propose the fix for the operator to approve: download, delete, load, unload, or the window its requests get.',

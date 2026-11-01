@@ -106,7 +106,7 @@ the wrong shape, change the plan rather than quietly diverging from it.
 | [324](324-helmsman-finds-capabilities-without-carrying-them.md)             | Helmsman finds capabilities without carrying them               |
 | [325](325-the-product-answers-questions-about-itself.md)                    | The product answers questions about itself                      |
 | [326](326-codex-runs-on-this-computer.md)                                   | Codex runs on this computer                                     |
-| [327](327-the-operator-is-reachable-away-from-the-machine.md)               | The operator is reachable away from the machine                 |
+| [327](327-the-operator-is-reachable-away-from-the-machine.md)               | The operator is reachable away from the machine (P0 built)      |
 | [328](328-a-harness-is-a-runner-with-a-coding-agent.md)                     | A harness is a Runner with a coding agent                       |
 | [329](329-planning-is-a-skill.md)                                           | Planning is a skill                                             |
 | [330](330-default-spaces-quick-start.md)                                    | Default spaces: a quick start installs with the product         |

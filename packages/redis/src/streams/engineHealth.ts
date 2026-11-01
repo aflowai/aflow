@@ -142,6 +142,13 @@ function missingExecutorMessage(stepType: StepType): string {
       '`yarn workspace @aflow/aflow-executor-host start` on that machine.'
     );
   }
+  if (stepType === 'channel') {
+    return (
+      'No channel app is connected. The Slack channel runs as its own app beside the stack, ' +
+      'so a message is sent only while it runs — `yarn channel:slack start` on the machine it ' +
+      'was set up on.'
+    );
+  }
   return `No executor available for step type: ${stepType}. Ensure the ${stepType} executor is running.`;
 }
 

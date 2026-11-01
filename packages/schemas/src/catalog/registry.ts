@@ -22,6 +22,7 @@ import { HostOperationRegistrations } from '../operations/hostRegistrations.js';
 import { BrowserPageActionRegistrations } from '../operations/browser.js';
 import { BrowserObservationRegistrations } from '../operations/browserObservation.js';
 import { BrowserWindowRegistrations } from '../operations/browserWindow.js';
+import { ChannelOperationRegistrations } from '../operations/channel.js';
 import { AgentOperationRegistrations } from '../operations/agentControl.js';
 import { PlatformOperationRegistrations } from '../operations/platform.js';
 import { GuardrailOperationRegistrations } from '../operations/guardrailOps.js';
@@ -62,6 +63,7 @@ const ALL_REGISTRATIONS: OperationRegistration[] = [
   ...BrowserPageActionRegistrations,
   ...BrowserObservationRegistrations,
   ...BrowserWindowRegistrations,
+  ...ChannelOperationRegistrations,
   ...AgentOperationRegistrations,
   ...PlatformOperationRegistrations,
   ...GuardrailOperationRegistrations,

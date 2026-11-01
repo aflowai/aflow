@@ -43,7 +43,7 @@ interface MeEditionResponse {
   edition?: {
     id?: string;
     surfaces?: string[];
-    lanes?: { codeLane?: string; hostLane?: string; browserLane?: string };
+    lanes?: { codeLane?: string; hostLane?: string; browserLane?: string; channelLane?: string };
   };
 }
 
@@ -77,6 +77,7 @@ export function toEdition(data: MeEditionResponse | undefined): Edition {
       codeLane: toLane(edition.lanes?.codeLane),
       hostLane: toLane(edition.lanes?.hostLane),
       browserLane: toLane(edition.lanes?.browserLane),
+      channelLane: toLane(edition.lanes?.channelLane),
     },
     isLoading: false,
   };

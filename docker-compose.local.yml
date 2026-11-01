@@ -332,8 +332,10 @@ services:
     command: [
         # The unset covers the other way in: an operator who supplied the secret
         # through `.env.local` has it exported here already, and sourcing a file
-        # that does not mention it leaves that export standing.
-        '. /var/lib/aflow/worker/wrapping-key.env && export CREDENTIAL_ENCRYPTION_KEY REDIS_PASSWORD && unset PHOENIX_INSTANCE_SECRET && exec node scripts/prod-launcher.mjs',
+        # that does not mention it leaves that export standing. The channel
+        # credential is in the cut only where a channel app was set up, and an
+        # exported name the file never set stays out of the environment.
+        '. /var/lib/aflow/worker/wrapping-key.env && export CREDENTIAL_ENCRYPTION_KEY REDIS_PASSWORD PHOENIX_CHANNEL_REDIS_PASSWORD && unset PHOENIX_INSTANCE_SECRET && exec node scripts/prod-launcher.mjs',
       ]
     depends_on:
       bootstrap:

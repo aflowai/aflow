@@ -8,7 +8,7 @@ import type {
   TimerItem,
   WorkflowExecutionRef,
 } from '@aflow/schemas';
-import { CodeLaneDisabledError, errorContext } from '@aflow/schemas';
+import { LaneRefusalError, errorContext } from '@aflow/schemas';
 import { addStepResult } from '@aflow/redis';
 import { isInlineOperation } from '../helpers/inlineOperations.js';
 import { dispatchInlineOp } from '../handlers/dispatchInlineOp.js';
@@ -147,7 +147,7 @@ async function lookAgainForTaskExecutor(
       now,
     );
   } catch (error) {
-    if (!(error instanceof CodeLaneDisabledError)) {
+    if (!(error instanceof LaneRefusalError)) {
       getOrchestratorLogger().error(
         `[SessionOrchestrator] Look for the ${job.stepType} executor of task ${workflowExecution.taskId} failed; its timer is left for redelivery`,
         error instanceof Error ? error : undefined,

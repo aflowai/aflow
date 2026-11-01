@@ -35,6 +35,7 @@ COPY apps/aflow-executor-ui/package.json apps/aflow-executor-ui/
 COPY apps/aflow-executor-compute/package.json apps/aflow-executor-compute/
 COPY apps/aflow-executor-mcp/package.json apps/aflow-executor-mcp/
 COPY apps/aflow-executor-host/package.json apps/aflow-executor-host/
+COPY apps/aflow-channel-slack/package.json apps/aflow-channel-slack/
 COPY apps/aflow-mcp/package.json apps/aflow-mcp/
 COPY packages/web-product/package.json packages/web-product/
 COPY apps/web-local/package.json apps/web-local/
@@ -133,9 +134,10 @@ COPY --from=builder /app/apps/aflow-executor-mock/package.json apps/aflow-execut
 COPY --from=builder /app/apps/aflow-executor-ui/package.json apps/aflow-executor-ui/
 COPY --from=builder /app/apps/aflow-executor-compute/package.json apps/aflow-executor-compute/
 COPY --from=builder /app/apps/aflow-executor-mcp/package.json apps/aflow-executor-mcp/
-# Manifest only. The lockfile names this workspace so the production install
-# must resolve it, but it ships outside the image and has no dist copy below.
+# Manifests only. The lockfile names these workspaces so the production install
+# must resolve them, but they ship outside the image and have no dist copy below.
 COPY --from=builder /app/apps/aflow-executor-host/package.json apps/aflow-executor-host/
+COPY --from=builder /app/apps/aflow-channel-slack/package.json apps/aflow-channel-slack/
 COPY --from=builder /app/apps/aflow-mcp/package.json apps/aflow-mcp/
 COPY --from=builder /app/packages/web-product/package.json packages/web-product/
 COPY --from=builder /app/apps/web-local/package.json apps/web-local/

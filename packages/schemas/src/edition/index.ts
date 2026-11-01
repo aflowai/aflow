@@ -1,5 +1,6 @@
 export * from './descriptor.js';
 export * from './composedOperations.js';
+export * from './channelLaneRefusal.js';
 export * from './spaceCapabilityDefault.js';
 export * from './ownership.js';
 export * from './ownershipLookup.js';
