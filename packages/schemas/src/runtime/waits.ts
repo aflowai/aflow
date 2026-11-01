@@ -13,14 +13,12 @@ import type { EntityEventEnvelope } from './entityEvents.js';
  * - `plan.node.status_changed`: a plan node's status changed. Subject: the node id.
  * - `pull_request.changed`: a loop pull request changed. Subject: `owner/repo#number`.
  * - `gate.resolved`: an Action Center item was resolved. Subject: the item id.
- * - `folder.head_moved`: a connected folder's head moved. Subject: the folder's binding id.
  */
 export const WAIT_EVENT_KINDS = [
   'run.ended',
   'plan.node.status_changed',
   'pull_request.changed',
   'gate.resolved',
-  'folder.head_moved',
 ] as const;
 export const WaitEventKindSchema = z.enum(WAIT_EVENT_KINDS);
 export type WaitEventKind = z.infer<typeof WaitEventKindSchema>;
@@ -141,7 +139,6 @@ const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'cancelled']);
 const WAIT_KIND_OF_ENTITY_EVENT = {
   'entity.pull_request.changed': 'pull_request.changed',
   'entity.gate.resolved': 'gate.resolved',
-  'entity.folder.head_moved': 'folder.head_moved',
 } as const satisfies Partial<Record<EntityEventEnvelope['eventType'], WaitEventKind>>;
 
 /**
@@ -180,8 +177,7 @@ export function waitEventOfEntityEvent(event: EntityEventEnvelope): WaitEvent | 
   }
   if (
     event.eventType === 'entity.pull_request.changed' ||
-    event.eventType === 'entity.gate.resolved' ||
-    event.eventType === 'entity.folder.head_moved'
+    event.eventType === 'entity.gate.resolved'
   ) {
     const subject = text('subject');
     if (subject === undefined) return null;

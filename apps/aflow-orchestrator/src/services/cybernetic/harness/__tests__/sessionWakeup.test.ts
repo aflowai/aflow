@@ -102,6 +102,7 @@ const mockAddStepResult = vi.fn();
 const mockClaimEventDrivenTurn = vi.fn();
 const mockReturnEventDrivenTurn = vi.fn();
 const mockScheduleShardTimer = vi.fn();
+const mockSessionHasDeclaredWait = vi.fn();
 vi.mock('@aflow/redis', async () => {
   const { mayWake } = await vi.importActual<typeof import('@aflow/redis')>('@aflow/redis');
   return {
@@ -113,6 +114,7 @@ vi.mock('@aflow/redis', async () => {
     claimEventDrivenTurn: (...args: unknown[]) => mockClaimEventDrivenTurn(...args),
     returnEventDrivenTurn: (...args: unknown[]) => mockReturnEventDrivenTurn(...args),
     scheduleShardTimer: (...args: unknown[]) => mockScheduleShardTimer(...args),
+    sessionHasDeclaredWait: (...args: unknown[]) => mockSessionHasDeclaredWait(...args),
     updateStepState: vi.fn(),
     updateSessionState: vi.fn(),
     markSessionDirty: vi.fn(),
@@ -155,6 +157,7 @@ import {
   deliverSessionWakeup,
   runWakeupEventId,
   wakeSessionForRunWakeups,
+  wakeSessionForWait,
 } from '../sessionWakeup.js';
 
 const TENANT = 'a0000000-0000-0000-0000-000000000001' as never;
@@ -213,6 +216,7 @@ beforeEach(() => {
   mockLoadRun.mockResolvedValue({ runId: RUN, spaceId: 'space-1' });
   mockHasUnreadRunWakeups.mockResolvedValue(true);
   mockHasUnreadWaitOutcomes.mockResolvedValue(false);
+  mockSessionHasDeclaredWait.mockResolvedValue(true);
   mockResumeClaimsForStep.mockResolvedValue([]);
   mockClaimEventDrivenTurn.mockResolvedValue({ taken: true });
   mockDispatchResume.mockResolvedValue({ firstSeen: true });
@@ -475,6 +479,19 @@ describe('waking a session resting at its prompt', () => {
     expect(mockDispatchResume).toHaveBeenCalledOnce();
   });
 
+  it('reads the room for no wait outcome where the session has declared no wait', async () => {
+    restingAtPrompt();
+    mockHasUnreadRunWakeups.mockResolvedValue(false);
+    mockSessionHasDeclaredWait.mockResolvedValue(false);
+    mockHasUnreadWaitOutcomes.mockResolvedValue(true);
+
+    await expect(wakeSessionForRunWakeups(deps, TENANT, SESSION)).resolves.toBe('read');
+
+    expect(mockSessionHasDeclaredWait).toHaveBeenCalledWith(expect.anything(), TENANT, SESSION);
+    expect(mockHasUnreadWaitOutcomes).not.toHaveBeenCalled();
+    expect(mockDispatchResume).not.toHaveBeenCalled();
+  });
+
   it('leaves a session parked on a blocking start alone', async () => {
     mockGetSessionStateSafe.mockResolvedValue({
       ok: true,
@@ -618,6 +635,40 @@ describe('a wakeup whose envelope cannot be read', () => {
 
     storeHolding({ 'gs://bucket/wakeup-envelope': envelope });
     await expect(wakeSessionForRunWakeups(deps, TENANT, SESSION)).resolves.toBe('woke');
+    expect(mockDispatchResume).toHaveBeenCalledOnce();
+  });
+});
+
+describe('waking a session for a wait that ended', () => {
+  it('sends its own claimed wake again, so a delivery that died before its send still wakes it', async () => {
+    restingAtPrompt();
+    mockResumeClaimsForStep.mockResolvedValue(['wait-wake:wait-1']);
+
+    await expect(wakeSessionForWait(deps, TENANT, SESSION, 'wait-1')).resolves.toBe('coalesced');
+
+    expect(mockClaimEventDrivenTurn).not.toHaveBeenCalled();
+    expect(mockDispatchResume).toHaveBeenCalledOnce();
+    expect(mockDispatchResume.mock.calls[0]![2]).toMatchObject({
+      sessionId: SESSION,
+      stepExecutionId: PROMPT_STEP,
+      idempotencyKey: 'wait-wake:wait-1',
+    });
+  });
+
+  it('sends nothing where another party already advances the boundary', async () => {
+    restingAtPrompt();
+    mockResumeClaimsForStep.mockResolvedValue(['wake:room-message-1']);
+
+    await expect(wakeSessionForWait(deps, TENANT, SESSION, 'wait-1')).resolves.toBe('coalesced');
+
+    expect(mockDispatchResume).not.toHaveBeenCalled();
+  });
+
+  it('wakes a session resting at its prompt with no claim on its step', async () => {
+    restingAtPrompt();
+
+    await expect(wakeSessionForWait(deps, TENANT, SESSION, 'wait-1')).resolves.toBe('woke');
+
     expect(mockDispatchResume).toHaveBeenCalledOnce();
   });
 });

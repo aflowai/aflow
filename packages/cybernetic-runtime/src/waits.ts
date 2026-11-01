@@ -77,7 +77,7 @@ export async function declareWait(
   const subject = WaitSubjectSchema.safeParse(input.subject);
   if (!subject.success) {
     throw new WaitDeclarationError(
-      'A wait names its subject: the run, node, pull request, item or folder binding it waits on.',
+      'A wait names its subject: the run, node, pull request or item it waits on.',
     );
   }
   if (

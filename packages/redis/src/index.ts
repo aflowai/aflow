@@ -516,6 +516,9 @@ export {
   claimClosedWindows,
   rearmEndedWait,
   settleEndedWait,
+  WAIT_SESSION_MARK_KEY,
+  markSessionDeclaredWait,
+  sessionHasDeclaredWait,
   type RegisterWaitResult,
   type EndedWait,
 } from './waits.js';

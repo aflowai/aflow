@@ -243,6 +243,41 @@ export async function readRecordedWaitEvent(
   return parseEvents(await redis.zrange(WAIT_FIRED_KEY(ref), -1, -1))[0] ?? null;
 }
 
+/**
+ * Marks a conversation that has declared a wait, so a turn that comes to rest
+ * reads the room for an unread outcome only there. Every outcome is posted
+ * inside the longest window from its declaration, plus the time its delivery
+ * takes, and a delivery that posts one sets the mark again.
+ */
+export function WAIT_SESSION_MARK_KEY(tenantId: string, sessionId: string): string {
+  return `waits:session:${tenantId}:${sessionId}`;
+}
+
+const WAIT_SESSION_MARK_TTL_SECONDS = WAIT_WINDOW_MAX_SECONDS + 3600;
+
+/** Mark a conversation as one a wait outcome may reach. */
+export async function markSessionDeclaredWait(
+  redis: Redis,
+  tenantId: string,
+  sessionId: string,
+): Promise<void> {
+  await redis.set(
+    WAIT_SESSION_MARK_KEY(tenantId, sessionId),
+    '1',
+    'EX',
+    WAIT_SESSION_MARK_TTL_SECONDS,
+  );
+}
+
+/** Whether a conversation has declared a wait whose outcome may still reach it. */
+export async function sessionHasDeclaredWait(
+  redis: Redis,
+  tenantId: string,
+  sessionId: string,
+): Promise<boolean> {
+  return (await redis.exists(WAIT_SESSION_MARK_KEY(tenantId, sessionId))) === 1;
+}
+
 export type RegisterWaitResult =
   | { state: 'waiting' }
   /** The event it catches up on had fired already: the waiter is woken at once, by this call. */
@@ -265,6 +300,12 @@ export async function registerWait(
     .expire(waitersKey, WAIT_WINDOW_MAX_SECONDS + 3600)
     .zadd(WAIT_WINDOWS_KEY, String(registration.closesAt), windowMember(registration))
     .zrangebyscore(WAIT_FIRED_KEY(registration), String(waitsFrom(registration)), '+inf')
+    .set(
+      WAIT_SESSION_MARK_KEY(registration.tenantId, registration.sessionId),
+      '1',
+      'EX',
+      WAIT_SESSION_MARK_TTL_SECONDS,
+    )
     .exec();
   const outcome = eventOutcome(registration, parseEvents(results?.[3]?.[1]));
   if (outcome === null) return { state: 'waiting' };

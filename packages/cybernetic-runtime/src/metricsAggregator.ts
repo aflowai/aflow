@@ -271,7 +271,6 @@ export async function aggregateMetricsBucket(
       case 'entity.session.status':
       case 'entity.pull_request.changed':
       case 'entity.gate.resolved':
-      case 'entity.folder.head_moved':
         break;
 
       case 'entity.mode.transition': {

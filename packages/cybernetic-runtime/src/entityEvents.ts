@@ -68,7 +68,7 @@ async function emitWaitKind(
   params: {
     tenantId: string;
     spaceId: string;
-    eventType: 'entity.pull_request.changed' | 'entity.gate.resolved' | 'entity.folder.head_moved';
+    eventType: 'entity.pull_request.changed' | 'entity.gate.resolved';
     subject: string;
     payload: Record<string, unknown>;
     summary: string;
@@ -130,20 +130,5 @@ export async function emitGateResolved(
     subject: params.itemId,
     payload: { resolution: params.resolution },
     summary: `Action Center item resolved: ${params.resolution}`,
-  });
-}
-
-/** A connected folder's head moved. */
-export async function emitFolderHeadMoved(
-  redis: RedisClient | null | undefined,
-  params: { tenantId: string; spaceId: string; bindingId: string; head: string },
-): Promise<boolean> {
-  return emitWaitKind(redis, {
-    tenantId: params.tenantId,
-    spaceId: params.spaceId,
-    eventType: 'entity.folder.head_moved',
-    subject: params.bindingId,
-    payload: { head: params.head },
-    summary: `Folder head moved to ${params.head}`,
   });
 }

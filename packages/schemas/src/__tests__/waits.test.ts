@@ -27,13 +27,12 @@ function entity(eventType: EntityEventEnvelope['eventType'], payload: Record<str
 }
 
 describe('the wait event kinds', () => {
-  it('are the five of D1', () => {
+  it('are the four of D1 with an emitter', () => {
     expect(WAIT_EVENT_KINDS).toEqual([
       'run.ended',
       'plan.node.status_changed',
       'pull_request.changed',
       'gate.resolved',
-      'folder.head_moved',
     ]);
   });
 });
@@ -82,11 +81,6 @@ describe('waitEventOfEntityEvent', () => {
         entity('entity.gate.resolved', { subject: 'item', resolution: 'approve' }),
       ),
     ).toMatchObject({ kind: 'gate.resolved', subject: 'item' });
-    expect(
-      waitEventOfEntityEvent(
-        entity('entity.folder.head_moved', { subject: 'binding', head: 'abc' }),
-      ),
-    ).toMatchObject({ kind: 'folder.head_moved', subject: 'binding', detail: { head: 'abc' } });
     expect(waitEventOfEntityEvent(entity('entity.gate.resolved', {}))).toBeNull();
   });
 

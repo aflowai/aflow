@@ -11,6 +11,7 @@ import {
   mayWake,
   returnEventDrivenTurn,
   scheduleShardTimer,
+  sessionHasDeclaredWait,
   type SessionEvent,
   type SessionHotState,
   type StepHotState,
@@ -196,7 +197,16 @@ export async function wakeSessionForRunWakeups(
   try {
     unread =
       (await hasUnreadRunWakeups(deps.db, deps.payloadStore, tenantId, sessionId, step.inputRef)) ||
-      (await hasUnreadWaitOutcomes(deps.db, deps.payloadStore, tenantId, sessionId, step.inputRef));
+      // Only a session that has declared a wait can hold an outcome, so the
+      // room is read for one only where the session's wait mark stands.
+      ((await sessionHasDeclaredWait(deps.redis, tenantId, sessionId)) &&
+        (await hasUnreadWaitOutcomes(
+          deps.db,
+          deps.payloadStore,
+          tenantId,
+          sessionId,
+          step.inputRef,
+        )));
   } catch (err) {
     if (options.armWakeOnStoreError !== true) throw err;
     // A session resting at its prompt has no turn boundary coming to read the
@@ -284,19 +294,8 @@ export async function wakeSessionForWait(
   const step = stepExecutionId ? await getStepState(deps.redis, tenantId, stepExecutionId) : null;
   if (!stepExecutionId || !step || !mayWake(state, step)) return 'deferred';
 
-  const claims = await resumeClaimsForStep(deps.db, { tenantId, sessionId, stepExecutionId });
-  if (claims.length > 0) return 'coalesced';
-
-  const slot = await claimEventDrivenTurn(
-    deps.redis,
-    tenantId,
-    sessionId,
-    EVENT_DRIVEN_TURNS_PER_MINUTE,
-  );
-  if (!slot.taken) return 'rate_limited';
-
   const wakeKey = `wait-wake:${waitId}`;
-  const { firstSeen } = await dispatchResume(deps.db, deps.redis, {
+  const resume = {
     tenantId,
     sessionId: sessionId as SessionId,
     stepExecutionId: stepExecutionId as StepExecutionId,
@@ -306,7 +305,26 @@ export async function wakeSessionForWait(
       ? state.traceId
       : wakeKey) as TraceId,
     activatedByPerson: attendedAsActingRun(state),
-  });
+  };
+
+  const claims = await resumeClaimsForStep(deps.db, { tenantId, sessionId, stepExecutionId });
+  if (claims.length > 0) {
+    // Someone is already advancing this boundary. When it is this wait's own
+    // claim, a delivery before this one claimed it and may have died before
+    // its send, so sending again is what wakes the session.
+    if (claims.includes(wakeKey)) await dispatchResume(deps.db, deps.redis, resume);
+    return 'coalesced';
+  }
+
+  const slot = await claimEventDrivenTurn(
+    deps.redis,
+    tenantId,
+    sessionId,
+    EVENT_DRIVEN_TURNS_PER_MINUTE,
+  );
+  if (!slot.taken) return 'rate_limited';
+
+  const { firstSeen } = await dispatchResume(deps.db, deps.redis, resume);
   if (!firstSeen) {
     await returnEventDrivenTurn(deps.redis, tenantId, sessionId);
     return 'coalesced';

@@ -23,6 +23,7 @@ import {
   rearmEndedWait,
   recordWaitEvent,
   registerWait,
+  sessionHasDeclaredWait,
   settleEndedWait,
 } from '../waits.js';
 import { appendEntityEvent } from '../entityEvents.js';
@@ -241,6 +242,17 @@ describe('a wait claimed for delivery', () => {
 
     expect(await claimDueDeliveries(redis, T0, 10)).toEqual([claimed]);
     expect(await claimDueDeliveries(redis, T0, 10)).toEqual([]);
+  });
+});
+
+describe('the mark of a conversation that has declared a wait', () => {
+  it('stands once the conversation declares one, and only for it', async () => {
+    expect(await sessionHasDeclaredWait(redis, TENANT, 'session-1')).toBe(false);
+
+    await registerWait(redis, wait());
+
+    expect(await sessionHasDeclaredWait(redis, TENANT, 'session-1')).toBe(true);
+    expect(await sessionHasDeclaredWait(redis, TENANT, 'session-2')).toBe(false);
   });
 });
 

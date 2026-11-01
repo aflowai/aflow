@@ -9,7 +9,12 @@
  * else. A claimed wait stays in the delivery set until it is settled here, so
  * a process that dies mid-delivery leaves it for a later cycle.
  */
-import { rearmEndedWait, settleEndedWait, type EndedWait } from '@aflow/redis';
+import {
+  markSessionDeclaredWait,
+  rearmEndedWait,
+  settleEndedWait,
+  type EndedWait,
+} from '@aflow/redis';
 import {
   claimEndedWaits,
   describeWaitOutcome,
@@ -71,6 +76,9 @@ export async function deliverEndedWait(deps: HarnessDeps, ended: EndedWait): Pro
     posted = await post();
     if (posted === undefined) return 'session_gone';
   }
+  // The outcome may be read by a turn that settles later than the mark set at
+  // the declaration would last.
+  await markSessionDeclaredWait(deps.redis, tenantId, registration.sessionId);
   const woken = await wakeSessionForWait(
     deps,
     tenantId,

@@ -76,10 +76,9 @@ export const EntityEventTypeSchema = z.enum([
 
   // Wait kinds of their own (Plan 339 D1). Each payload carries the wait
   // subject as `subject`, beside what the kind adds: a pull request's
-  // `change` (`PullRequestChangeSchema`), a gate's resolution, a folder's head.
+  // `change` (`PullRequestChangeSchema`) or a gate's resolution.
   'entity.pull_request.changed',
   'entity.gate.resolved',
-  'entity.folder.head_moved',
 
   // Skill authoring (naming convention; payload carries stage + via)
   'entity.skill.authored',
