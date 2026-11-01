@@ -5,15 +5,14 @@
  * rows across every open plan — **Needs you** with each step's reason,
  * **In flight** with the runs on it, **Up next** with the one step the loop
  * takes next per plan — each tagged with its plan. A row opens the shared
- * rail for its step; a blocked step's **Approve** sends the open write from
- * the row itself, against the revision the lanes read, so the step moves on
- * without its plan being opened. Up next carries no reorder: ordering steps
+ * rail for its step, where a blocked step's **Approve** appears with the
+ * decision it asks (Plan 339 D6). A row offers no Approve of its own, since it
+ * carries no card to name that decision. Up next carries no reorder: ordering steps
  * is the board's (D6). A row reads plan, step with its orb, where it stands,
  * then age and action. A run on a step reads as the run surface's row
  * (Plan 332 P7). A row's surface says where its step stands, as a board
  * card's does, and the selected one is ringed as the selected card is.
  */
-import { useState } from 'react';
 import { AnimatedHeight, Badge, Button, Column, Row, Text } from '@aflow/design-system';
 import type { PlanLaneItem, PlanOverviewLanes } from '@aflow/schemas';
 import {
@@ -28,7 +27,6 @@ import {
   planTag,
   type PlanLaneId,
 } from '../../lib/plan-board.js';
-import type { PlanNodeOpener } from './PlanNodeOpenControl.js';
 import {
   GroupLabel,
   MetaSep,
@@ -87,39 +85,6 @@ function RowState({
   );
 }
 
-/** **Approve** on a blocked row: the open write against the revision the lanes read. */
-function ApproveFromRow({ item, onOpen }: { item: PlanLaneItem; onOpen: PlanNodeOpener }) {
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const approve = async () => {
-    setPending(true);
-    setError(null);
-    const answer = await onOpen({ nodeId: item.nodeId, expectedRevision: item.revision });
-    setPending(false);
-    if (!answer.ok) setError(answer.message);
-  };
-  return (
-    <Column gap="xs" data-plan-lane-approve={item.nodeId}>
-      <Button
-        size="sm"
-        variant="primary"
-        loading={pending}
-        disabled={pending}
-        onClick={() => {
-          void approve();
-        }}
-      >
-        Approve
-      </Button>
-      {error !== null && (
-        <Text size="xs" tone="danger" role="alert">
-          {error}
-        </Text>
-      )}
-    </Column>
-  );
-}
-
 /**
  * One step on a lane, in D10's order: its plan's code, then the step (its
  * phase and title), where it stands (the reason, its runs, its PR) and its
@@ -134,7 +99,6 @@ function LaneRow({
   spaceSlug,
   onSelect,
   onDecide,
-  onOpen,
 }: {
   lane: PlanLaneId;
   item: PlanLaneItem;
@@ -143,7 +107,6 @@ function LaneRow({
   spaceSlug: string;
   onSelect: (item: PlanLaneItem) => void;
   onDecide: (item: PlanLaneItem) => void;
-  onOpen: PlanNodeOpener;
 }) {
   const { hovered, hoverProps } = useHover();
   const running = lane === 'in_flight' && laneRunInFlight(item);
@@ -258,14 +221,6 @@ function LaneRow({
         <Text size="xs" variant="muted" data-plan-lane-age>
           {planAge(item.updatedAt, now)}
         </Text>
-        {lane === 'needs_you' && item.reason === 'blocked' && (
-          // Keyed by revision: a row read again at a new revision starts afresh.
-          <ApproveFromRow
-            key={`${item.nodeId}:${String(item.revision)}`}
-            item={item}
-            onOpen={onOpen}
-          />
-        )}
         {lane === 'needs_you' && item.reason === 'decide' && (
           <Button
             size="sm"
@@ -291,7 +246,6 @@ export interface PlanOverviewProps {
   onSelect: (item: PlanLaneItem) => void;
   /** A decision's **Decide**: the rail, its decide form open. */
   onDecide: (item: PlanLaneItem) => void;
-  onOpen: PlanNodeOpener;
 }
 
 export function PlanOverview({
@@ -301,7 +255,6 @@ export function PlanOverview({
   spaceSlug,
   onSelect,
   onDecide,
-  onOpen,
 }: PlanOverviewProps) {
   return (
     <Column gap="lg" data-plan-overview>
@@ -341,7 +294,6 @@ export function PlanOverview({
                         spaceSlug={spaceSlug}
                         onSelect={onSelect}
                         onDecide={onDecide}
-                        onOpen={onOpen}
                       />
                     ))}
                   </ul>

@@ -8,12 +8,17 @@
  */
 import {
   isClosedPlanNodeStatus,
+  PLAN_NODE_LIVE_CHECK_HEAD,
   PLAN_NODE_NOTE_HEAD_MAX_CHARS,
   PLAN_STATE_LABELS,
   planBoardCards,
   planRootCard,
   planBoardColumn,
+  planNodeApprovalAsked,
   type PlanBoardCard,
+  type PlanNodeCard,
+  type PlanNodeStatus,
+  type PlanNodeWaitsOn,
   type PlanBoardColumn,
   type PlanBoardPlacement,
   type PlanDoneDay,
@@ -59,11 +64,54 @@ export type PlanCard = PlanBoardCard;
  * Every node under `root` in the walk's order — parents before children,
  * siblings by position — so each column, Up next included, lists its cards in
  * the order the loop reaches them. A blocked root leads its `needs_you` column,
- * because it waits on a person itself (Plan 338 D5).
+ * because it waits on a person itself (Plan 338 D5), until every step has
+ * closed (Plan 339 D6). The tally counts the steps a done window left out of
+ * the tree, so it says whether they all have.
  */
-export function planCards(root: PlanTreeNode): PlanCard[] {
-  const rootCard = planRootCard(root);
+export function planCards(
+  root: PlanTreeNode,
+  tally: Pick<PlanRootTally, 'steps' | 'done' | 'dropped'>,
+): PlanCard[] {
+  const rootCard = planRootCard(root, tally);
   return rootCard !== undefined ? [rootCard, ...planBoardCards(root)] : planBoardCards(root);
+}
+
+/** Each reason a step waits on the operator, as the rail names it above Approve. */
+export const WAIT_REASON_LABEL: Record<PlanNodeWaitsOn['reason'], string> = {
+  design_decision: 'a design decision',
+  design_document: 'a new plan’s design document',
+  decision_change: 'a change to a plan’s decision',
+  authority: 'policy, egress, write authority or confinement',
+  operator_question: 'a question for you',
+};
+
+/**
+ * The label of the rail's open control on a blocked step, and the decision the
+ * step asks where its card names one. The control is the same on every label:
+ * its instructions field, and Revise beside it.
+ */
+export type PlanRailOpen = { label: 'Approve'; waitsOn?: PlanNodeWaitsOn } | { label: 'Resume' };
+
+/**
+ * The rail's open write on a step under Needs you as `blocked` (Plan 339 D6).
+ * Approve appears where the step's card names the decision it asks
+ * (`waitsOn`), and with that decision. A live check keeps Approve whatever its
+ * card holds, because its open write is no resume: it closes the check done as
+ * the operator's read of the folder's head (Plan 331 D8). Any other blocked
+ * step, such as a stop, offers Resume, the same open write asking no decision.
+ * Until the step's own read answers, the rail offers neither.
+ */
+export function planRailOpen(
+  reason: PlanNeedsYouReason | undefined,
+  node:
+    | { status: PlanNodeStatus; card?: PlanNodeCard | undefined; note?: string | undefined }
+    | undefined,
+): PlanRailOpen | undefined {
+  if (reason !== 'blocked' || node?.status !== 'blocked') return undefined;
+  const waitsOn = planNodeApprovalAsked(node);
+  if (waitsOn !== undefined) return { label: 'Approve', waitsOn };
+  if (node.note?.includes(PLAN_NODE_LIVE_CHECK_HEAD) === true) return { label: 'Approve' };
+  return { label: 'Resume' };
 }
 
 const PHASE_CODE = /^([A-Z]{1,3}\d+[a-z]?(?:\.\d+)*)\b/;

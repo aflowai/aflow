@@ -28,7 +28,10 @@ the stack current.
 
 Board markers: `active` nodes in position order are the approved queue; `blocked` waits on
 a person; `waiting` waits on a run; a proposal is created `blocked` and only a person moves
-it. A node reopened from `done` keeps "Reopened; it was done: <outcome>" at the head of its
+it. A node's first status follows `work` on `plan.node.create` (Plan 339 D6): approved
+work starts `active`, and a node starts `blocked` only for a decision its card names in
+`waitsOn`, which is where the rail's Approve appears. A root whose steps have all closed
+reads finished and asks for no approval. A node reopened from `done` keeps "Reopened; it was done: <outcome>" at the head of its
 note. A node that asks the operator for a decision carries a `card` (Plan 337): what
 changes, why, what it affects, risks, open questions with a recommended answer, and what is
 not done. A commissioned plan document opens with the same card, and the Helmsman links the

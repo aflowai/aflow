@@ -401,7 +401,6 @@ export function SpacePlanPage(): React.ReactNode {
         onDecide={(item) => {
           openRow(item.nodeId, 'done');
         }}
-        onOpen={onOpen}
       />,
       rail,
       dismiss,
@@ -419,7 +418,7 @@ export function SpacePlanPage(): React.ReactNode {
     }
     const root = board.root;
     const tally = board.tally;
-    const cards = planCards(root);
+    const cards = planCards(root, tally);
     const selectedCard: PlanCard | undefined = cards.find((c) => c.node.nodeId === nodeParam);
     const formOpen =
       choosing !== null && choosing.nodeId === selectedCard?.node.nodeId ? choosing.choosing : null;

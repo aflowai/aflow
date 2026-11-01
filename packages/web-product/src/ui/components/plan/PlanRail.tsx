@@ -7,7 +7,9 @@
  * newest run links and its findings, each a page of the node detail — with
  * **Now**, the note's first line, above the goal and the whole note folded
  * under **Working note** (Plan 332 D5), and holds the operator's own controls:
- * close an open node (P3.2), **Approve** a blocked one, **Reopen** a closed one,
+ * close an open node (P3.2), **Approve** a blocked one whose card names the
+ * decision it asks, with that decision, or a live check (Plan 339 D6),
+ * **Resume** any other blocked one, through the same control, **Reopen** a closed one,
  * and for a stranded one reopen the closed step above it (Plan 332 D6). A
  * blocked step's Approve carries the operator's instructions, **Revise** sends
  * them back for a rewrite, and **Discuss** opens the space chat about the step
@@ -47,7 +49,9 @@ import {
   PLAN_BOARD_COLUMNS,
   phaseLabel,
   planDetailRailNode,
+  planRailOpen,
   reviewRoundsLabel,
+  WAIT_REASON_LABEL,
   runKindLabel,
   runLinkStatus,
   shortTime,
@@ -413,6 +417,7 @@ export function PlanRail({
   const inFlight = (detail.data?.runs ?? []).filter((run) => run.nodeId === node.nodeId);
   const runsTotal = detail.data?.linksTotal ?? node.counts.runs;
   const open = !isClosedStatus(full?.status ?? node.status);
+  const railOpen = planRailOpen(reason, full);
   const railRead = freshRead(detail);
   // A lane row carries no children; the rail's own read lists them.
   const openUnder = [...node.children, ...(detail.data?.children ?? [])].some(
@@ -632,15 +637,25 @@ export function PlanRail({
         gap="sm"
         style={{ borderTop: '1px solid var(--color-border-subtle)', paddingTop: 'var(--space-md)' }}
       >
-        {reason === 'blocked' && (
-          <PlanNodeOpenControl
-            nodeId={node.nodeId}
-            verb="approve"
-            label="Approve"
-            read={railRead}
-            onOpen={onOpen}
-            onRevise={onRevise}
-          />
+        {railOpen !== undefined && (
+          <Column gap="xs">
+            {railOpen.label === 'Approve' && railOpen.waitsOn !== undefined && (
+              <Column gap="xs" data-plan-approve-decision>
+                <Text size="xs" weight="medium">
+                  {`Asks you · ${WAIT_REASON_LABEL[railOpen.waitsOn.reason]}`}
+                </Text>
+                <Text size="sm">{railOpen.waitsOn.decision}</Text>
+              </Column>
+            )}
+            <PlanNodeOpenControl
+              nodeId={node.nodeId}
+              verb="approve"
+              label={railOpen.label}
+              read={railRead}
+              onOpen={onOpen}
+              onRevise={onRevise}
+            />
+          </Column>
         )}
         {reason === 'stranded' && closedAncestor !== undefined && (
           <PlanNodeOpenControl

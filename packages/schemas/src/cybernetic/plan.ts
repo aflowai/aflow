@@ -64,6 +64,89 @@ const PlanNodePositionSchema = z
   .describe('Order among siblings, lowest first.');
 
 // ============================================================================
+// Plan 339 D6 — a node's first status is data: approval is a decision gate
+// ============================================================================
+
+/**
+ * What a new node is, for its first status. Approved work in the queue starts
+ * `active`. A node starts `blocked` only for a decision that is the
+ * operator's, and then its card names that decision (`waitsOn`).
+ */
+export const PLAN_NODE_FIRST_STATUS_RULE = {
+  approved_phase: {
+    status: 'active',
+    description: 'A phase of a plan the operator approved or wrote.',
+  },
+  defect_fix: {
+    status: 'active',
+    description: 'A defect fix: CI red, a regression or a loop defect.',
+  },
+  findings_follow_up: {
+    status: 'active',
+    description: 'A follow-up for findings a review carried.',
+  },
+  design_decision: {
+    status: 'blocked',
+    description: 'A design decision.',
+  },
+  design_document: {
+    status: 'blocked',
+    description: 'The design document of a new plan.',
+  },
+  decision_change: {
+    status: 'blocked',
+    description: 'A change to a decision in a plan document.',
+  },
+  authority: {
+    status: 'blocked',
+    description: 'Anything that touches policy, egress, write authority or confinement.',
+  },
+  operator_question: {
+    status: 'blocked',
+    description: 'A question the card marks as the operator’s.',
+  },
+} as const satisfies Record<string, { status: 'active' | 'blocked'; description: string }>;
+
+export type PlanNodeWork = keyof typeof PLAN_NODE_FIRST_STATUS_RULE;
+const PLAN_NODE_WORKS = Object.keys(PLAN_NODE_FIRST_STATUS_RULE) as [
+  PlanNodeWork,
+  ...PlanNodeWork[],
+];
+export type PlanNodeWaitReason = {
+  [K in PlanNodeWork]: (typeof PLAN_NODE_FIRST_STATUS_RULE)[K]['status'] extends 'blocked'
+    ? K
+    : never;
+}[PlanNodeWork];
+const PLAN_NODE_WAIT_REASONS = PLAN_NODE_WORKS.filter(
+  (work) => PLAN_NODE_FIRST_STATUS_RULE[work].status === 'blocked',
+) as [PlanNodeWaitReason, ...PlanNodeWaitReason[]];
+
+/** The rule as one line a field description carries: each kind of work, and the status it starts in. */
+function firstStatusRuleLine(works: readonly PlanNodeWork[]): string {
+  return works
+    .map(
+      (work) =>
+        `\`${work}\` (${PLAN_NODE_FIRST_STATUS_RULE[work].status}): ${PLAN_NODE_FIRST_STATUS_RULE[work].description}`,
+    )
+    .join(' ');
+}
+
+export const PlanNodeWorkSchema = z
+  .enum(PLAN_NODE_WORKS)
+  .describe(
+    `What the node is, which sets its first status. ${firstStatusRuleLine(PLAN_NODE_WORKS)} A blocked kind needs the card's \`waitsOn\` with the same reason.`,
+  );
+
+export const PlanNodeWaitReasonSchema = z
+  .enum(PLAN_NODE_WAIT_REASONS)
+  .describe(`Why the node waits on the operator. ${firstStatusRuleLine(PLAN_NODE_WAIT_REASONS)}`);
+
+/** The status a node of this kind of work starts in. */
+export function planNodeFirstStatus(work: PlanNodeWork): 'active' | 'blocked' {
+  return PLAN_NODE_FIRST_STATUS_RULE[work].status;
+}
+
+// ============================================================================
 // Plan 337 D1 — the card a node that asks for a decision carries
 // ============================================================================
 
@@ -74,7 +157,7 @@ export const PLAN_NODE_CARD_LIST_MAX_ITEMS = 50;
 export const PLAN_NODE_CARD_MAX_CHARS = PLAN_NODE_PROSE_MAX_CHARS;
 
 export const PLAN_NODE_CARD_KEYS_MESSAGE =
-  'A card holds change, why, affects, risks, questions and notDoing, and nothing else. Done when is the node’s criteria, so the card does not repeat it.';
+  'A card holds change, why, affects, risks, questions, notDoing and waitsOn, and nothing else. Done when is the node’s criteria, so the card does not repeat it.';
 
 const PlanNodeCardItemSchema = z.string().trim().min(1).max(PLAN_NODE_CARD_ITEM_MAX_CHARS);
 const PlanNodeCardListSchema = z.array(PlanNodeCardItemSchema).max(PLAN_NODE_CARD_LIST_MAX_ITEMS);
@@ -103,6 +186,16 @@ export const PlanNodeCardSchema = z
       .max(PLAN_NODE_CARD_LIST_MAX_ITEMS)
       .describe('Open questions, each with the answer you recommend.'),
     notDoing: PlanNodeCardListSchema.describe('Not done on purpose.'),
+    waitsOn: z
+      .object({
+        reason: PlanNodeWaitReasonSchema,
+        decision: PlanNodeCardItemSchema.describe('The decision the operator is asked for.'),
+      })
+      .strict()
+      .optional()
+      .describe(
+        'Only on a node that waits on the operator: why, and the decision it asks. The rail offers Approve only with it.',
+      ),
   })
   .strict({ message: PLAN_NODE_CARD_KEYS_MESSAGE })
   .superRefine((card, ctx) => {
@@ -135,6 +228,20 @@ export type StoredPlanNodeCard = { card: PlanNodeCard } | { refusal: string };
 export function readStoredPlanNodeCard(stored: unknown): StoredPlanNodeCard {
   const parsed = PlanNodeCardSchema.safeParse(stored);
   return parsed.success ? { card: parsed.data } : { refusal: parsed.error.message };
+}
+
+export type PlanNodeWaitsOn = NonNullable<PlanNodeCard['waitsOn']>;
+
+/**
+ * The decision a node asks the operator for (Plan 339 D6): its card's
+ * `waitsOn`, while it is `blocked`. Any other node asks for none, so the rail
+ * offers it no Approve.
+ */
+export function planNodeApprovalAsked(node: {
+  status: PlanNodeStatus;
+  card?: PlanNodeCard | undefined;
+}): PlanNodeWaitsOn | undefined {
+  return node.status === 'blocked' ? node.card?.waitsOn : undefined;
 }
 
 /** What `plan.node.create` and `plan.node.update` say of the card they write. */
@@ -264,6 +371,17 @@ export const PLAN_NODE_PROPOSAL_AND_LIVE_CHECK_MESSAGE =
   'A node is created as a proposal or as a live check, not both: a live check is not new scope, a proposal is.';
 export const PLAN_NODE_LIVE_CHECK_KIND_MESSAGE = 'A live check must have kind `investigate`.';
 
+export function planNodeWorkNeedsWaitMessage(work: PlanNodeWork): string {
+  return `\`${work}\` starts blocked on the operator: pass a \`card\` whose \`waitsOn\` has reason "${work}" and the decision it asks.`;
+}
+
+export function planNodeWorkActiveMessage(work: PlanNodeWork): string {
+  return `\`${work}\` is approved work and starts active, so its card names no \`waitsOn\`. Leave \`waitsOn\` out, or name the blocked kind of work it waits for.`;
+}
+
+export const PLAN_NODE_WAITS_ON_WORK_MESSAGE =
+  'The card’s `waitsOn.reason` and `work` name the same kind of work.';
+
 export const PlanNodeCreateSchema = z
   .object({
     parentId: z.string().uuid().optional().describe('Omit for a root.'),
@@ -273,6 +391,7 @@ export const PlanNodeCreateSchema = z
     criteria: PlanNodeProseSchema.describe('How to tell the node is done.'),
     note: PlanNodeNoteSchema.optional(),
     position: PlanNodePositionSchema.optional(),
+    work: PlanNodeWorkSchema.optional(),
     card: PlanNodeCardSchema.optional().describe(PLAN_NODE_CARD_WRITE_DESCRIPTION),
     proposed: PlanNodeProseSchema.optional().describe(
       'Why this work is proposed. The node is created blocked, its note’s first line `Proposed: <why>`, and nothing starts from it until a person approves it. A resident wake creates nothing else.',
@@ -297,7 +416,40 @@ export const PlanNodeCreateSchema = z
         message: PLAN_NODE_LIVE_CHECK_KIND_MESSAGE,
       });
     }
+    const waitsOn = create.card?.waitsOn;
+    if (create.work === undefined) return;
+    if (planNodeFirstStatus(create.work) === 'blocked' && waitsOn === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['card', 'waitsOn'],
+        message: planNodeWorkNeedsWaitMessage(create.work),
+      });
+    } else if (planNodeFirstStatus(create.work) === 'active' && waitsOn !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['card', 'waitsOn'],
+        message: planNodeWorkActiveMessage(create.work),
+      });
+    } else if (waitsOn !== undefined && waitsOn.reason !== create.work) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['card', 'waitsOn', 'reason'],
+        message: PLAN_NODE_WAITS_ON_WORK_MESSAGE,
+      });
+    }
   });
+
+/**
+ * A new node's first status (Plan 339 D6). A proposal and a live check start
+ * `blocked` on their own rule (Plan 331 D5, D8). Any other node starts as the
+ * rule says of its card's `waitsOn`: `blocked` with one, `active` without.
+ */
+export function planNodeCreatedStatus(
+  create: Pick<PlanNodeCreate, 'proposed' | 'liveCheck' | 'card'>,
+): 'active' | 'blocked' {
+  if (create.proposed !== undefined || create.liveCheck !== undefined) return 'blocked';
+  return create.card?.waitsOn !== undefined ? 'blocked' : 'active';
+}
 export type PlanNodeCreate = z.infer<typeof PlanNodeCreateSchema>;
 
 export const PLAN_NODE_DONE_NEEDS_OUTCOME_MESSAGE =
