@@ -11,6 +11,7 @@ import type { ExecutorContext, StepResult } from '@aflow/executor-runtime';
 import { ChannelMessageSendOutputSchema, toAgentToolError } from '@aflow/schemas';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import type { AflowApi } from '../aflowApi.js';
 import {
   CHANNEL_DELIVERY_UNKNOWN_CODE,
   CHANNEL_MESSAGE_REPEATED_CODE,
@@ -57,10 +58,17 @@ function fakeSlack(): FakeSlack {
       }
       return Promise.resolve({ channel, ts: `17000000${String(slack.posts.length)}.000100` });
     },
+    updateMessage: () => Promise.resolve(),
     openSocketModeUrl: () => Promise.resolve('wss://example.invalid'),
   };
   return slack;
 }
+
+/** A send of text alone never reads an item. */
+const noApi: AflowApi = {
+  readItem: () => Promise.reject(new Error('a text send read an item')),
+  resolveItem: () => Promise.reject(new Error('a text send resolved an item')),
+};
 
 let dir: string;
 let store: ChannelStore;
@@ -77,7 +85,7 @@ beforeEach(() => {
     linkedAt: new Date().toISOString(),
   });
   slack = fakeSlack();
-  handler = new ChannelMessageSendHandler({ store, slack });
+  handler = new ChannelMessageSendHandler({ store, slack, api: noApi });
 });
 
 afterEach(() => {
@@ -138,6 +146,7 @@ describe('channel.message.send', () => {
   it('keeps the retry rule across a restart, because the record is in the store', async () => {
     const first = await send({ text: 'Approve the push.' });
     handler = new ChannelMessageSendHandler({
+      api: noApi,
       store: ChannelStore.open(join(dir, 'store.json')),
       slack,
     });
@@ -235,6 +244,7 @@ describe('channel.message.send', () => {
     async (_case, answer) => {
       const posts: string[] = [];
       handler = new ChannelMessageSendHandler({
+        api: noApi,
         store,
         slack: createSlackClient({
           botToken: 'xoxb-test',
@@ -267,6 +277,7 @@ describe('channel.message.send', () => {
     let openFails = true;
     const posts: string[] = [];
     handler = new ChannelMessageSendHandler({
+      api: noApi,
       store,
       slack: createSlackClient({
         botToken: 'xoxb-test',
@@ -355,6 +366,7 @@ describe('channel.message.send', () => {
   it('refuses every send before anyone linked', async () => {
     const empty = mkdtempSync(join(tmpdir(), 'channel-slack-unlinked-'));
     handler = new ChannelMessageSendHandler({
+      api: noApi,
       store: ChannelStore.open(join(empty, 'store.json')),
       slack,
     });

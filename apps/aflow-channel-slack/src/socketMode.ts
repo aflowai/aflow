@@ -1,12 +1,13 @@
 /**
- * Slack Socket Mode, as far as P0 needs it: direct messages to the bot, for
- * linking.
+ * Slack Socket Mode, as far as the app needs it: direct messages to the bot,
+ * for linking and for replies in a card's thread, and taps on a card's buttons.
  *
  * Socket Mode needs no public URL, which is why an app on the operator's own
  * machine can receive anything at all. Every envelope is acknowledged at once,
  * so Slack does not redeliver it. A `disconnect` or a dropped socket opens a
  * fresh URL and connects again.
  */
+import type { CardTap } from './cardActions.js';
 import type { SlackClient } from './slack.js';
 
 export interface DirectMessage {
@@ -14,6 +15,8 @@ export interface DirectMessage {
   slackTeamId?: string;
   channel: string;
   text: string;
+  /** The message this one replies under, when it was sent in a thread. */
+  threadTs?: string;
 }
 
 export interface SocketModeLog {
@@ -38,12 +41,39 @@ export function directMessageOf(envelope: unknown): DirectMessage | undefined {
     return undefined;
   }
   const team = payload?.['team_id'];
+  const threadTs = event['thread_ts'];
   return {
     slackUserId: user,
     channel,
     text,
     ...(typeof team === 'string' ? { slackTeamId: team } : {}),
+    ...(typeof threadTs === 'string' && threadTs !== event['ts'] ? { threadTs } : {}),
   };
+}
+
+/** A tap on a button of a message the bot posted, from an `interactive` envelope. */
+export function cardTapOf(envelope: unknown): CardTap | undefined {
+  if (typeof envelope !== 'object' || envelope === null) return undefined;
+  const record = envelope as Record<string, unknown>;
+  if (record['type'] !== 'interactive') return undefined;
+  const payload = record['payload'] as Record<string, unknown> | undefined;
+  if (payload?.['type'] !== 'block_actions') return undefined;
+  const user = (payload['user'] as { id?: unknown } | undefined)?.id;
+  const channel = (payload['channel'] as { id?: unknown } | undefined)?.id;
+  const messageTs = (payload['container'] as { message_ts?: unknown } | undefined)?.message_ts;
+  const actions = payload['actions'];
+  const actionId = Array.isArray(actions)
+    ? (actions[0] as { action_id?: unknown } | undefined)?.action_id
+    : undefined;
+  if (
+    typeof user !== 'string' ||
+    typeof channel !== 'string' ||
+    typeof messageTs !== 'string' ||
+    typeof actionId !== 'string'
+  ) {
+    return undefined;
+  }
+  return { slackUserId: user, channel, messageTs, actionId };
 }
 
 const RECONNECT_FIRST_MS = 1_000;
@@ -56,6 +86,7 @@ export interface SocketModeConnection {
 export function startSocketMode(options: {
   slack: SlackClient;
   onDirectMessage: (message: DirectMessage) => Promise<void>;
+  onCardTap: (tap: CardTap) => Promise<void>;
   log: SocketModeLog;
   WebSocketImpl?: typeof WebSocket;
 }): SocketModeConnection {
@@ -107,6 +138,15 @@ export function startSocketMode(options: {
       }
       const envelopeId = record['envelope_id'];
       if (typeof envelopeId === 'string') ws.send(JSON.stringify({ envelope_id: envelopeId }));
+      const tap = cardTapOf(envelope);
+      if (tap !== undefined) {
+        options.onCardTap(tap).catch((error: unknown) => {
+          options.log.warn('A tap on a card could not be answered', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+        return;
+      }
       const message = directMessageOf(envelope);
       if (message === undefined) return;
       options.onDirectMessage(message).catch((error: unknown) => {

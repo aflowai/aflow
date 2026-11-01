@@ -7,11 +7,13 @@
  * tenant schema. One operator and a few small record sets need no shared
  * database, and removing the app and this file leaves nothing in the platform.
  *
- * P0 keeps two record sets: `link`, the one Slack user this app serves, and
- * `sent`, each send's `messageRef` and text, which make a retried step post once
- * and a repeated message fail. A send is keyed on its run and its step, because
- * a workflow task's step carries the same name in every run of it. A code that linked once is kept so it cannot link
- * a second time.
+ * It keeps three record sets. `link` is the one Slack user this app serves.
+ * `sent` holds each send's `messageRef`, text and item, which make a retried
+ * step post once and a repeated message fail. A send is keyed on its run and
+ * its step, because a workflow task's step carries the same name in every run
+ * of it. `card` holds each card posted, the item it shows and the controls it
+ * offered, which is all a tap may resolve. A code that linked once is kept so
+ * it cannot link a second time.
  *
  * Every write replaces the whole file through a rename, and every write is
  * synchronous, so one process never interleaves two of them.
@@ -20,6 +22,7 @@ import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
+import { ActionCenterResolutionSchema } from '@aflow/schemas';
 import { z } from 'zod';
 
 export const LinkRecordSchema = z.object({
@@ -39,11 +42,45 @@ export const SentRecordSchema = z.object({
   executionId: z.string().min(1),
   runId: z.string().min(1),
   text: z.string(),
+  /** The Action Center item sent as a card with the text. Part of what a repeat matches. */
+  itemId: z.string().min(1).optional(),
   /** Null when the post left but Slack's answer never came, so it may have posted. */
   messageRef: z.string().min(1).nullable(),
   sentAt: z.string().min(1),
 });
 export type SentRecord = z.infer<typeof SentRecordSchema>;
+
+export const CardControlSchema = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1),
+  style: z.enum(['primary', 'danger']).optional(),
+  resolution: ActionCenterResolutionSchema,
+  decided: z.string().min(1),
+});
+
+/**
+ * A card the app posted (Plan 327 D6), and the only source of what a tap on it
+ * may do. A tap names a control by id, and the resolution comes from here, so
+ * a tap can never ask for more than the card offered when it was posted.
+ */
+export const CardRecordSchema = z.object({
+  channel: z.string().min(1),
+  ts: z.string().min(1),
+  itemId: z.string().min(1),
+  spaceId: z.string().min(1),
+  /** The item's origin as the app read it, which the resolve compares. */
+  origin: z.record(z.unknown()),
+  title: z.string(),
+  row: z.enum(['choices', 'text_reply', 'approval', 'write_approval', 'at_aflow']),
+  controls: z.array(CardControlSchema),
+  /** The card's blocks above its controls, which an edit keeps. */
+  head: z.array(z.record(z.unknown())),
+  text: z.string(),
+  postedAt: z.string().min(1),
+  /** What the card says once it is decided, or once a tap learned it was. */
+  outcome: z.object({ note: z.string().min(1), at: z.string().min(1) }).nullable(),
+});
+export type CardRecord = z.infer<typeof CardRecordSchema>;
 
 const StoreDataSchema = z.object({
   /** The ledger: every migration id applied, in order. */
@@ -51,6 +88,7 @@ const StoreDataSchema = z.object({
   link: LinkRecordSchema.nullable(),
   usedLinkCodes: z.array(z.string()),
   sent: z.array(SentRecordSchema),
+  cards: z.array(CardRecordSchema),
 });
 type StoreData = z.infer<typeof StoreDataSchema>;
 
@@ -64,6 +102,10 @@ const MIGRATIONS: readonly Migration[] = [
   {
     id: '0001-link-and-sent',
     apply: (data) => ({ ...data, link: null, usedLinkCodes: [], sent: [] }),
+  },
+  {
+    id: '0002-cards',
+    apply: (data) => ({ ...data, cards: [] }),
   },
 ];
 
@@ -93,6 +135,8 @@ export class ChannelStore {
   private data: StoreData;
   /** Sends claimed and not yet settled. Process memory: a restart settles none. */
   private readonly claims = new Set<SentRecord>();
+  /** Cards with a tap or reply at the API. Process memory, as the send claims are. */
+  private readonly cardClaims = new Set<string>();
 
   private constructor(
     private readonly path: string,
@@ -173,7 +217,12 @@ export class ChannelStore {
   claimSend(claim: Omit<SentRecord, 'messageRef'>, now: Date = new Date()): SendClaim {
     const prior =
       this.sentFor(claim.runId, claim.executionId) ??
-      this.data.sent.find((record) => record.runId === claim.runId && record.text === claim.text);
+      this.data.sent.find(
+        (record) =>
+          record.runId === claim.runId &&
+          record.text === claim.text &&
+          record.itemId === claim.itemId,
+      );
     if (prior !== undefined) return { claimed: false, prior };
     const record: SentRecord = { ...claim, messageRef: null };
     this.prune(now);
@@ -200,10 +249,44 @@ export class ChannelStore {
     this.persist();
   }
 
+  addCard(card: CardRecord): void {
+    this.data.cards.push(card);
+    this.persist();
+  }
+
+  /** The card posted as this Slack message, if the app posted one. */
+  cardAt(channel: string, ts: string): CardRecord | undefined {
+    return this.data.cards.find((card) => card.channel === channel && card.ts === ts);
+  }
+
+  /** Records what the card now says, so a later tap or reply reads it. */
+  settleCard(card: CardRecord, note: string, at: Date): void {
+    card.outcome = { note, at: at.toISOString() };
+    this.persist();
+  }
+
+  /**
+   * Takes the card for one tap or reply at a time, in one synchronous step. A
+   * second tap that lands while the first is with the API is not sent.
+   */
+  claimCard(card: CardRecord): boolean {
+    const key = `${card.channel}:${card.ts}`;
+    if (this.cardClaims.has(key)) return false;
+    this.cardClaims.add(key);
+    return true;
+  }
+
+  releaseCard(card: CardRecord): void {
+    this.cardClaims.delete(`${card.channel}:${card.ts}`);
+  }
+
   private prune(now: Date): void {
     this.data.sent = this.data.sent.filter(
       (record) =>
         this.claims.has(record) || now.getTime() - Date.parse(record.sentAt) < SENT_RETENTION_MS,
+    );
+    this.data.cards = this.data.cards.filter(
+      (card) => now.getTime() - Date.parse(card.postedAt) < SENT_RETENTION_MS,
     );
   }
 
