@@ -42,13 +42,13 @@ it.each([true, false])(
     state.mockResolvedValue({ trigger: 'schedule', planResident });
     attest.mockImplementation(async (_db, _tenant, _space, _url, _node, readers) => {
       await readers.readBinding('github', 'getPullRequest', { pull_number: '1' });
-      return true;
+      return { merged: true, evidence: '', reason: '' };
     });
     update.mockImplementation(async (context) => {
       expect(context.resident).toBe(true);
-      expect(await context.readMergedPullRequest('https://github.com/o/r/pull/1', nodeId)).toBe(
-        true,
-      );
+      expect(
+        await context.readMergedPullRequest('https://github.com/o/r/pull/1', nodeId),
+      ).toMatchObject({ merged: true });
       return { ok: true, node: { nodeId } };
     });
     expect(await executePlanNodeUpdate(ctx, deps)).toMatchObject({ status: 'SUCCEEDED' });

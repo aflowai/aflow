@@ -6,6 +6,7 @@
  * turn of any session in the space reads the tree as it now stands.
  */
 import { createHash, randomUUID } from 'node:crypto';
+import type { readMergedPullRequest } from './mergedPullRequest.js';
 import type { Redis } from 'ioredis';
 import {
   isClosedPlanNodeStatus,
@@ -146,7 +147,7 @@ export interface PlanWriteContext extends PlanReadContext {
    * blocked, and never moves a blocked node on — approving scope is a person's.
    */
   resident?: boolean;
-  readMergedPullRequest?: (url: string, nodeId: string) => Promise<boolean>;
+  readMergedPullRequest?: (url: string, nodeId: string) => ReturnType<typeof readMergedPullRequest>;
 }
 
 /** The columns a write is judged by; `openedAt` is stamped after, never compared. */
@@ -476,13 +477,17 @@ async function writePlanNode(
       ? await ctx.store.newestLink(ctx.spaceId, current.nodeId, 'pull_request')
       : null;
   if (ctx.resident === true && input.status === 'done') {
-    let merged = false;
+    let attestation = {
+      merged: false,
+      reason: 'No pull request is linked to this step.',
+      evidence:
+        'Pull request: not linked\nMerge commit: not reported\nMerged by: not reported\nMerged at: not reported\nMerge delivers recorded commit or branch: not attested',
+    };
     try {
       if (pullRequest !== null && !ctx.readMergedPullRequest)
         throw new Error('Merge attestation reader unavailable');
-      merged =
-        pullRequest !== null &&
-        (await ctx.readMergedPullRequest?.(pullRequest.ref, current.nodeId)) === true;
+      if (pullRequest !== null && ctx.readMergedPullRequest)
+        attestation = await ctx.readMergedPullRequest(pullRequest.ref, current.nodeId);
     } catch {
       return {
         ok: false,
@@ -492,16 +497,23 @@ async function writePlanNode(
         details: { nodeId: current.nodeId },
       };
     }
-    if (!merged) {
+    if (!attestation.merged) {
       let waiting = current;
-      const line = PLAN_NODE_MERGE_WAIT_LINE;
-      const note = current.note ? `${current.note}\n${line}` : line;
+      const line = `${PLAN_NODE_MERGE_WAIT_LINE} ${attestation.reason}\n\n${attestation.evidence}`;
+      const previous = current.note?.indexOf(PLAN_NODE_MERGE_WAIT_LINE) ?? -1;
+      const context = previous >= 0 ? current.note!.slice(0, previous).trimEnd() : current.note;
+      const note = context ? `${context}\n${line}` : line;
       if (!current.note?.includes(line)) {
         const updated = await ctx.store.updateAtRevision(
           ctx.spaceId,
           current.nodeId,
           current.revision,
-          note.length <= PLAN_NODE_PROSE_MAX_CHARS ? { note } : { status: 'blocked' },
+          {
+            note:
+              note.length <= PLAN_NODE_PROSE_MAX_CHARS
+                ? note
+                : `${line}\n${context ?? ''}`.slice(0, PLAN_NODE_PROSE_MAX_CHARS),
+          },
         );
         if (!updated) return stale(current, input);
         waiting = updated;

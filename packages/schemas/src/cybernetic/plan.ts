@@ -324,8 +324,7 @@ export type PlanNodeSummary = z.infer<typeof PlanNodeSummarySchema>;
 export const PLAN_NODE_BLOCKED_HEAD = 'Blocked: ';
 export const PLAN_NODE_PROPOSED_HEAD = 'Proposed: ';
 export const PLAN_NODE_ASK_HEAD = 'Waiting on you: ';
-export const PLAN_NODE_MERGE_WAIT_LINE =
-  'Waiting on you: judge this merge because the scheduled close lacks a publication pull request that GitHub reports merged.';
+export const PLAN_NODE_MERGE_WAIT_LINE = 'Waiting on you: judge this merge.';
 export const PLAN_NODE_LIVE_CHECK_HEAD = `${PLAN_NODE_BLOCKED_HEAD}live check — `;
 
 /** Whether a note holds the merge-wait line: its node waits on a person to judge a merge. */

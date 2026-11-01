@@ -37,6 +37,8 @@ beforeEach(() => {
   );
   readBinding.mockResolvedValue({
     merged: true,
+    merged_by: { login: 'operator' },
+    merged_at: '2026-11-01T10:00:00Z',
     html_url: URL,
     merge_commit_sha: MERGE,
     head: { sha: SHA, ref: 'aflow/work', repo: { full_name: 'aflowai/aflow' } },
@@ -45,7 +47,7 @@ beforeEach(() => {
 
 describe('scheduled merge attestation', () => {
   it('reads GitHub through the binding on every close against the node publication record', async () => {
-    expect(await read()).toBe(true);
+    expect(await read()).toMatchObject({ merged: true });
     expect(task).toHaveBeenCalledWith(db, 'tenant', 'publication', 'commit');
     expect(readBinding).toHaveBeenCalledWith('github-default', 'getPullRequest', {
       owner: 'aflowai',
@@ -53,16 +55,18 @@ describe('scheduled merge attestation', () => {
       pull_number: '160',
     });
     readBinding.mockResolvedValueOnce({ merged: false, html_url: URL });
-    expect(await read()).toBe(false);
+    expect(await read()).toMatchObject({ merged: false });
   });
   it('accepts canonical owner and repository case', async () => {
-    expect(await read(URL.replace('aflowai/aflow', 'AflowAI/Aflow') + '/')).toBe(true);
+    expect(await read(URL.replace('aflowai/aflow', 'AflowAI/Aflow') + '/')).toMatchObject({
+      merged: true,
+    });
   });
   it.each([{ merged: true, html_url: URL + '1' }])(
     'refuses a mismatched GitHub answer %j',
     async (answer) => {
       readBinding.mockResolvedValue(answer);
-      expect(await read()).toBe(false);
+      expect(await read()).toMatchObject({ merged: false });
     },
   );
   it('rejects unrelated merged pull requests even with planted links', async () => {
@@ -73,14 +77,14 @@ describe('scheduled merge attestation', () => {
       head: { sha: 'c'.repeat(40), ref: 'unrelated', repo: { full_name: 'aflowai/aflow' } },
     });
     readBinding.mockResolvedValueOnce({ status: 'diverged' });
-    expect(await read()).toBe(false);
+    expect(await read()).toMatchObject({ merged: false });
   });
   it.each(['ahead', 'identical'])(
     'accepts a recorded commit reachable from the merge (%s)',
     async (status) => {
       readBinding.mockResolvedValueOnce({ merged: true, html_url: URL, merge_commit_sha: MERGE });
       readBinding.mockResolvedValueOnce({ status });
-      expect(await read()).toBe(true);
+      expect(await read()).toMatchObject({ merged: true });
       expect(readBinding).toHaveBeenLastCalledWith('github-default', 'compareCommits', {
         owner: 'aflowai',
         repo: 'aflow',
@@ -97,19 +101,23 @@ describe('scheduled merge attestation', () => {
       head: { sha: 'c'.repeat(40), ref: 'aflow/work', repo: { full_name: 'aflowai/aflow' } },
     };
     readBinding.mockResolvedValueOnce(answer);
-    expect(await read()).toBe(true);
+    expect(await read()).toMatchObject({ merged: true });
     readBinding.mockResolvedValueOnce({
       ...answer,
       head: { ...answer.head, repo: { full_name: 'other/aflow' } },
     });
     readBinding.mockResolvedValueOnce({ status: 'diverged' });
-    expect(await read()).toBe(false);
+    expect(await read()).toMatchObject({ merged: false });
   });
-  it('refuses absent publication records and arbitrary hosts without a binding call', async () => {
-    expect(await read(URL.replace('github.com', 'example.com'))).toBe(false);
+  it('refuses absent publication records and arbitrary hosts', async () => {
+    expect(await read(URL.replace('github.com', 'example.com'))).toMatchObject({ merged: false });
     execute.mockResolvedValueOnce([]);
-    expect(await read()).toBe(false);
-    expect(readBinding).not.toHaveBeenCalled();
+    expect(await read()).toMatchObject({ merged: false });
+    expect(readBinding).not.toHaveBeenCalledWith(
+      expect.anything(),
+      'compareCommits',
+      expect.anything(),
+    );
   });
   it('refuses an agent task posing as a publication commit', async () => {
     task.mockImplementation(async (_db, _tenant, _run, taskId) => ({
@@ -117,8 +125,12 @@ describe('scheduled merge attestation', () => {
       operationId: taskId === 'commit' ? 'agent.turn' : 'api.http.call',
       outputRef: taskId === 'commit' ? 'forged' : 'pr-record',
     }));
-    expect(await read()).toBe(false);
-    expect(readBinding).not.toHaveBeenCalled();
+    expect(await read()).toMatchObject({ merged: false });
+    expect(readBinding).not.toHaveBeenCalledWith(
+      expect.anything(),
+      'compareCommits',
+      expect.anything(),
+    );
   });
 });
 
@@ -144,6 +156,44 @@ it('refuses an agent link to a PR absent from the platform publication output', 
   retrieve.mockImplementation(async (ref) =>
     ref === 'pr-record' ? { prUrl: URL + '1' } : { commit: { sha: SHA, branch: 'aflow/work' } },
   );
-  expect(await read()).toBe(false);
-  expect(readBinding).not.toHaveBeenCalled();
+  expect(await read()).toMatchObject({ merged: false });
+  expect(readBinding).not.toHaveBeenCalledWith(
+    expect.anything(),
+    'compareCommits',
+    expect.anything(),
+  );
+});
+
+it('carries GitHub evidence and names the failed delivery fact', async () => {
+  readBinding.mockResolvedValueOnce({
+    merged: true,
+    html_url: URL,
+    merge_commit_sha: MERGE,
+    merged_by: { login: 'operator' },
+    merged_at: '2026-11-01T10:00:00Z',
+    head: { sha: 'c'.repeat(40), ref: 'unrelated' },
+  });
+  readBinding.mockResolvedValueOnce({ status: 'diverged' });
+  const answer = await read();
+  expect(answer).toMatchObject({
+    merged: false,
+    reason: 'The merge does not deliver the recorded commit or branch.',
+  });
+  for (const line of [
+    `Pull request: #160 ${URL}`,
+    `Merge commit: ${MERGE}`,
+    'Merged by: operator',
+    'Merged at: 2026-11-01T10:00:00Z',
+    `Recorded publication commit: ${SHA}`,
+    'Recorded publication branch: aflow/work',
+    'Merge delivers recorded commit or branch: not attested',
+  ])
+    expect(answer.evidence.split('\n')).toContain('- ' + line);
+});
+
+it('accepts a recorded branch delivered by squash without a recorded commit', async () => {
+  retrieve.mockImplementation(async (ref) =>
+    ref === 'pr-record' ? { prUrl: URL } : { commit: { branch: 'aflow/work' } },
+  );
+  expect(await read()).toMatchObject({ merged: true });
 });

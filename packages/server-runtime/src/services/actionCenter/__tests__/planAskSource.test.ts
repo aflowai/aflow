@@ -281,3 +281,25 @@ it('returns carrier failures after a committed live-check approval', async () =>
   expect(store.nodes.get(node.nodeId)?.status).toBe('done');
   redis.disconnect();
 });
+
+it('shows the failed merge fact and every evidence line in the item', async () => {
+  const { node, redis } = await fixture();
+  const evidence = [
+    '- Pull request: #261 https://github.com/aflowai/aflow/pull/261',
+    '- Merge commit: 5613af16',
+    '- Merged by: operator',
+    '- Merged at: 2026-11-01T10:00:00Z',
+    '- Recorded publication commit: abcdef12',
+    '- Recorded publication branch: aflow/work',
+    '- Merge delivers recorded commit or branch: not attested',
+  ];
+  const reason = 'The merge does not deliver the recorded commit or branch.';
+  const summary = planAskItem({
+    ...node,
+    status: 'active',
+    note: `Operator context\n${PLAN_NODE_MERGE_WAIT_LINE} ${reason}\n\n${evidence.join('\n')}`,
+  }).summary;
+  expect(summary).toContain(reason);
+  for (const line of evidence) expect(summary).toContain(line);
+  redis.disconnect();
+});
