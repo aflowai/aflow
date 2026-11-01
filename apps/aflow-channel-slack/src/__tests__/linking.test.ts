@@ -10,10 +10,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { ChannelSlackConfig } from '../config.js';
 import {
-  LINKED_OPERATOR_REPLY,
+  CODE_ALREADY_USED_REPLY,
   LINKED_REPLY,
   STRANGER_REPLY,
-  answerDirectMessage,
+  LINK_REPLIES,
+  linkOnMessage,
+  type LinkVerdict,
 } from '../linking.js';
 import { directMessageOf } from '../socketMode.js';
 import type { SlackClient } from '../slack.js';
@@ -69,6 +71,16 @@ function dm(user: string, text: string) {
   return { slackUserId: user, slackTeamId: 'T1', channel: `D-${user}`, text };
 }
 
+/** Links on the message and posts its verdict's reply, as `answerInbound` does. */
+async function answerDirectMessage(
+  message: ReturnType<typeof dm>,
+  deps: Parameters<typeof linkOnMessage>[1] & { slack: SlackClient },
+): Promise<LinkVerdict> {
+  const verdict = linkOnMessage(message, deps);
+  if (verdict !== 'operator') await deps.slack.postMessage(message.channel, LINK_REPLIES[verdict]);
+  return verdict;
+}
+
 describe('linking', () => {
   it('links the Slack user who sends the code to the key’s user', async () => {
     const outcome = await answerDirectMessage(dm('U-OPERATOR', 'k7qm 2xrd'), {
@@ -122,13 +134,21 @@ describe('linking', () => {
     expect(readFileSync(storePath, 'utf8')).not.toContain(secret);
   });
 
-  it('tells the linked operator that answering from Slack is not here yet', async () => {
+  it('hands any other message from the linked operator on, and posts nothing itself', async () => {
     const deps = { store, config: config(), slack, now: () => NOW };
     await answerDirectMessage(dm('U-OPERATOR', CODE), deps);
     const outcome = await answerDirectMessage(dm('U-OPERATOR', 'status?'), deps);
 
     expect(outcome).toBe('operator');
-    expect(replies.at(-1)?.text).toBe(LINKED_OPERATOR_REPLY);
+    expect(replies).toEqual([{ channel: 'D-U-OPERATOR', text: LINKED_REPLY }]);
+  });
+
+  it('answers the code sent again by the linked operator, so it never reaches the Helmsman', async () => {
+    const deps = { store, config: config(), slack, now: () => NOW };
+    await answerDirectMessage(dm('U-OPERATOR', CODE), deps);
+
+    expect(await answerDirectMessage(dm('U-OPERATOR', CODE), deps)).toBe('code_used');
+    expect(replies.at(-1)?.text).toBe(CODE_ALREADY_USED_REPLY);
   });
 
   it('prints codes the app reads back, whatever the case or spacing typed', () => {
@@ -142,7 +162,7 @@ describe('the store', () => {
   it('lives at mode 0600 and records its migrations', () => {
     expect(statSync(storePath).mode & 0o777).toBe(0o600);
     const data = JSON.parse(readFileSync(storePath, 'utf8')) as { migrations: string[] };
-    expect(data.migrations).toEqual(['0001-link-and-sent', '0002-cards']);
+    expect(data.migrations).toEqual(['0001-link-and-sent', '0002-cards', '0003-conversations']);
   });
 
   it('reopens what it wrote', () => {
@@ -157,18 +177,30 @@ describe('the store', () => {
 });
 
 describe('Socket Mode envelopes', () => {
-  const envelope = (event: Record<string, unknown>) => ({
+  const envelope = (event: Record<string, unknown>, eventId: string | null = 'Ev1') => ({
     type: 'events_api',
     envelope_id: 'e-1',
-    payload: { team_id: 'T1', event },
+    payload: { team_id: 'T1', ...(eventId === null ? {} : { event_id: eventId }), event },
+  });
+  const hi = { type: 'message', channel_type: 'im', user: 'U1', channel: 'D1', text: 'hi' };
+
+  it('passes an ordinary direct message from a person, with its event id and timestamp', () => {
+    expect(directMessageOf(envelope({ ...hi, ts: '1793523600.000100' }))).toEqual({
+      eventId: 'Ev1',
+      slackUserId: 'U1',
+      slackTeamId: 'T1',
+      channel: 'D1',
+      ts: '1793523600.000100',
+      text: 'hi',
+    });
   });
 
-  it('passes an ordinary direct message from a person', () => {
-    expect(
-      directMessageOf(
-        envelope({ type: 'message', channel_type: 'im', user: 'U1', channel: 'D1', text: 'hi' }),
-      ),
-    ).toEqual({ slackUserId: 'U1', slackTeamId: 'T1', channel: 'D1', text: 'hi' });
+  it('names a message with no event id by its channel and timestamp, the same on every delivery', () => {
+    expect(directMessageOf(envelope({ ...hi, ts: '1.5' }, null))?.eventId).toBe('D1:1.5');
+  });
+
+  it('drops a message with no timestamp, which cannot be told from its redelivery', () => {
+    expect(directMessageOf(envelope(hi))).toBeUndefined();
   });
 
   it.each([
@@ -184,6 +216,7 @@ describe('Socket Mode envelopes', () => {
           user: 'U1',
           channel: 'D1',
           text: 'hi',
+          ts: '1.0',
           ...override,
         }),
       ),

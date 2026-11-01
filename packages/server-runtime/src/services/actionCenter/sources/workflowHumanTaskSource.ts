@@ -9,6 +9,7 @@ import {
   type WorkflowRunTaskRow,
 } from '@aflow/database';
 import {
+  ACTION_CENTER_ITEM_ID_PREFIX,
   type ActionCenterItemKind,
   type ActionCenterItemOrigin,
   type WorkflowTask,
@@ -29,7 +30,7 @@ import {
   ActionCenterResolveError,
 } from '../types.js';
 
-const ITEM_ID_PREFIX = 'workflow-task:';
+const ITEM_ID_PREFIX = ACTION_CENTER_ITEM_ID_PREFIX.workflowHumanTask;
 const LIST_LIMIT = 200;
 
 interface PausedHumanTaskRow {

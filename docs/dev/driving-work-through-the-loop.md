@@ -447,7 +447,10 @@ lists it.
   fix in hand — labels its pull request `hands-off`; the shepherd then writes nothing on
   it. A publication or commission in flight on the branch, whoever started it, holds it
   back too. The pull request's owner moves it on its events (Plan 339 D4). The owner is the
-  Helmsman conversation that started the publication that opened it. The platform holds a
+  Helmsman conversation that started the publication that opened it. A pull request has one
+  owner: a later publication by another conversation takes it over only where the owner has
+  ended or failed, so a conversation a hand-over started hears the next event once it
+  publishes the branch. The platform holds a
   wait on `pull_request.changed` for that conversation and renews it after each delivery.
   Each event wakes the owner, which runs a pass aimed at the pull request. A case the pass
   cannot act on is not handed to a new conversation while the owner has neither ended nor

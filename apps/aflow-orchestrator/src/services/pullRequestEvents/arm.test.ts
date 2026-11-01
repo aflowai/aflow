@@ -10,6 +10,7 @@ import {
   PULL_REQUEST_WATCH_KEY,
   countPullRequestWatches,
   listSpacePullRequestSubjects,
+  readPullRequestWatch,
 } from '@aflow/redis';
 import { PLAN_STREAM_PUBLICATION_SLUG, RUN_PULL_REQUEST_URL_OUTPUT } from '@aflow/schemas';
 import type { WorkflowRunDetail } from '@aflow/cybernetic-runtime';
@@ -90,9 +91,7 @@ describe('a completed publication', () => {
     expect(await armPullRequestOnPublication(deps, TENANT, startedRun(), 'completed', T0)).toBe(
       'armed',
     );
-    expect(JSON.parse((await redis.get(PULL_REQUEST_WATCH_KEY(REF))) ?? 'null')).toMatchObject({
-      ownerSessionId: STARTER,
-    });
+    expect(await readPullRequestWatch(redis, REF)).toMatchObject({ ownerSessionId: STARTER });
     expect(await listSpacePullRequestSubjects(redis, REF, 10)).toEqual([REF.subject]);
   });
 

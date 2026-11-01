@@ -259,6 +259,32 @@ export type HumanChatAskOutput = z.infer<typeof HumanChatAskOutputSchema>;
 // human.action_center.focus — surface an existing item in the active chat
 // ============================================================================
 
+/**
+ * The prefixes a focus `itemId` may carry, one per Action Center source an
+ * agent can name. The input pattern and the orchestrator's bare-id
+ * diagnostic both read this list, so a prefix added here reaches both.
+ */
+export const ACTION_CENTER_FOCUS_ITEM_ID_PREFIXES = [
+  'proposal',
+  'step',
+  'gate',
+  'settings',
+  'plan-ask',
+  'plan-decision',
+  'workflow-task',
+  'workflow-write-approval',
+  'workflow-oauth-consent',
+] as const;
+
+const FOCUS_ITEM_ID_PREFIX_PATTERN = new RegExp(
+  `^(${ACTION_CENTER_FOCUS_ITEM_ID_PREFIXES.join('|')}):`,
+);
+
+/** Whether an id starts with a prefix the focus takes, whatever follows it. */
+export function hasActionCenterFocusPrefix(itemId: string): boolean {
+  return FOCUS_ITEM_ID_PREFIX_PATTERN.test(itemId);
+}
+
 export const HumanActionCenterFocusInputSchema = z.object({
   /**
    * Action Center item id. MUST come from a listing operation
@@ -267,7 +293,11 @@ export const HumanActionCenterFocusInputSchema = z.object({
    *
    * The prefix discriminates the source: `proposal:` (Coach
    * proposals), `step:` (paused HITL steps), `gate:` (orchestrator
-   * synthetic gates), `settings:` (record-backed items). A bare UUID
+   * synthetic gates), `settings:` (record-backed items), `plan-ask:`
+   * and `plan-decision:` (plan steps), `workflow-task:`,
+   * `workflow-write-approval:` and `workflow-oauth-consent:` (paused
+   * workflow runs). The Helmsman's attention block writes the ids it
+   * lists with these prefixes (Plan 338 D2), so each must parse here. A bare UUID
    * here is the most common hallucination from agents that don't
    * read the catalog usage hints; rejecting it loudly via Zod
    * surfaces a clear error in the tool result, which the agent can
@@ -279,8 +309,8 @@ export const HumanActionCenterFocusInputSchema = z.object({
     .min(1)
     .max(256)
     .regex(
-      /^(proposal|step|gate|settings):.+/,
-      'itemId must be the prefixed id returned by a listing op (e.g. "proposal:<uuid>" from proposal.list, "step:<uuid>" from a paused HITL step). A bare UUID is never a valid Action Center item id — call proposal.list (or the relevant listing) and pass the `id` field verbatim. If no such item exists yet, switch to human.chat.ask instead.',
+      new RegExp(`${FOCUS_ITEM_ID_PREFIX_PATTERN.source}.+`),
+      'itemId must be the prefixed id returned by a listing op (e.g. "proposal:<uuid>" from proposal.list, "step:<uuid>" from a paused HITL step, "plan-ask:<nodeId>" from your attention block). A bare UUID is never a valid Action Center item id — call proposal.list (or the relevant listing) and pass the `id` field verbatim. If no such item exists yet, switch to human.chat.ask instead.',
     ),
   /**
    * Optional reason copy surfaced to the operator ("Coach is asking you to
@@ -307,6 +337,17 @@ export const HumanActionCenterFocusOutputSchema = z.object({
    * turn and wait for their decision; they will resume this session."
    */
   note: z.string().optional(),
+  /**
+   * The item as the attention block listed it, where the handler found it
+   * there: its kind and its title. The operator's card shows this title
+   * when the live item cannot be read.
+   */
+  listed: z
+    .object({
+      kind: z.enum(['plan_step', 'run_gate', 'consent']),
+      title: z.string(),
+    })
+    .optional(),
 });
 export type HumanActionCenterFocusOutput = z.infer<typeof HumanActionCenterFocusOutputSchema>;
 
@@ -362,13 +403,13 @@ export const HumanOperationRegistrations: OperationRegistration[] = [
     mutates: false,
     usage: {
       oneLine: 'Point the chat at an existing Action Center item — id MUST come from a listing op.',
-      whenToUse: ['You hold an itemId a listing or a paused gate returned'],
+      whenToUse: ['You hold an itemId a listing, a paused gate or your attention block returned'],
       whenNotToUse: [
         "You don't have an id from a listing — DO NOT invent one. Use human.chat.ask",
         'The thing you want is a workflow run resume — that flows through the workflow.run.resume path',
       ],
       pitfalls: [
-        'Bare UUIDs are rejected at parse time; ids are prefixed (proposal:/step:/gate:/settings:)',
+        'Bare UUIDs are rejected at parse time. Ids are prefixed (proposal:, step:, gate:, settings:, plan-ask:, plan-decision:, workflow-task:, workflow-write-approval:, workflow-oauth-consent:)',
         '`acknowledged: true` is a publish receipt, not a delivery / resolution confirmation',
       ],
       minimalExampleInput: {

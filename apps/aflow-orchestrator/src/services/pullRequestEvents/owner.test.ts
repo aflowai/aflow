@@ -6,7 +6,7 @@
  * tells it to run a shepherd pass aimed at the pull request. An owner that
  * has ended is forgotten, and the fallback sweep tends the pull request.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import RedisMock from 'ioredis-mock';
 import type { Redis } from 'ioredis';
 import { readPullRequestWatch, readSubjectWaits } from '@aflow/redis';
@@ -22,7 +22,8 @@ import {
 } from '@aflow/schemas';
 import type { HarnessDeps } from '../cybernetic/harness/types.js';
 
-const { buildResult, live, mockQueueMessage, mockWake } = vi.hoisted(() => ({
+const { acting, buildResult, live, mockQueueMessage, mockWake } = vi.hoisted(() => ({
+  acting: vi.fn(),
   buildResult: vi.fn(),
   live: vi.fn(),
   mockQueueMessage: vi.fn(),
@@ -32,6 +33,8 @@ vi.mock('@aflow/cybernetic-runtime', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@aflow/cybernetic-runtime')>()),
   buildWorkflowRunResult: buildResult,
   isLiveConversation: live,
+  isActingConversation: (_db: unknown, _tenantId: string, sessionId: string) =>
+    acting(sessionId) as Promise<boolean>,
   rehydratePausedRunIfAbsent: () => Promise.resolve(null),
 }));
 vi.mock('../SessionOrchestrator/helpers/queuedMessage.js', () => ({
@@ -47,6 +50,7 @@ const { deliverEndedWait, runWaitDeliveryCycle } = await import('../waits/waitDe
 const TENANT = 'a0000000-0000-4000-8000-000000000339';
 const SPACE = '5e1d0000-0000-4000-8000-000000000339';
 const OWNER = 'c0ffee00-0000-4000-8000-000000000339';
+const HANDED_OVER = 'b0b00000-0000-4000-8000-000000000339';
 const SUBJECT = 'aflowai/aflow#276';
 const URL = 'https://github.com/AflowAI/Aflow/pull/276';
 const T0 = 1_800_000_000_000;
@@ -82,8 +86,13 @@ beforeEach(async () => {
   deps = { redis, db: {}, payloadStore: {} } as unknown as HarnessDeps;
   buildResult.mockReset().mockResolvedValue({ output: { [RUN_PULL_REQUEST_URL_OUTPUT]: URL } });
   live.mockReset().mockResolvedValue(true);
+  acting.mockReset().mockResolvedValue(true);
   mockQueueMessage.mockReset().mockResolvedValue({ seq: 1 });
   mockWake.mockReset().mockResolvedValue('woke');
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('the owner of a loop pull request', () => {
@@ -115,9 +124,106 @@ describe('the owner of a loop pull request', () => {
 
   it('keeps the owner a later publication of the branch does not name', async () => {
     await armed();
-    live.mockResolvedValue(false);
+    // The later publication's starter is no live conversation.
+    live.mockImplementation((_db: unknown, _tenantId: string, sessionId: string) =>
+      Promise.resolve(sessionId === OWNER),
+    );
     await armed('5e55e55e-0000-4000-8000-000000000339');
     expect((await readPullRequestWatch(redis, WATCH))?.ownerSessionId).toBe(OWNER);
+  });
+
+  it('stays the owner while it can act, whoever else publishes the branch', async () => {
+    await armed();
+    await armed(HANDED_OVER);
+
+    expect((await readPullRequestWatch(redis, WATCH))?.ownerSessionId).toBe(OWNER);
+    const waits = await readSubjectWaits(redis, WAITERS);
+    expect(waits.map((wait) => wait.sessionId)).toEqual([OWNER]);
+  });
+
+  it('is forgotten once it has ended, though its wait is still open, when the pull request is armed again', async () => {
+    await armed();
+    expect(await readSubjectWaits(redis, WAITERS)).toHaveLength(1);
+    live.mockResolvedValue(false);
+
+    await armed(null);
+
+    expect((await readPullRequestWatch(redis, WATCH))?.ownerSessionId).toBeUndefined();
+  });
+});
+
+describe('a conversation a hand-over started', () => {
+  it('owns the pull request once it publishes the branch, and hears its next pull_request.changed', async () => {
+    // The owner fails: live, so it is not forgotten, but it can no longer act.
+    // The sweep's pass hands a case to a new conversation, which publishes a fix.
+    await armed();
+    acting.mockImplementation((sessionId: string) => Promise.resolve(sessionId !== OWNER));
+
+    await armed(HANDED_OVER);
+
+    expect((await readPullRequestWatch(redis, WATCH))?.ownerSessionId).toBe(HANDED_OVER);
+    // One owner hears the pull request: the failed owner's wait is dropped.
+    const waits = await readSubjectWaits(redis, WAITERS);
+    expect(waits.map((wait) => wait.sessionId)).toEqual([HANDED_OVER]);
+
+    await emitPullRequestChanged(redis, {
+      tenantId: TENANT,
+      spaceId: SPACE,
+      subject: SUBJECT,
+      change: 'changes_requested',
+      url: URL,
+      headSha: 'd'.repeat(40),
+    });
+    const ended = await claimEndedWaits(redis, Date.now(), 10);
+    expect(ended.map((wait) => wait.registration.sessionId)).toEqual([HANDED_OVER]);
+
+    expect(await deliverEndedWait(deps, ended[0]!)).toBe('woke');
+    const [, , message] = mockQueueMessage.mock.calls.at(-1) as [
+      unknown,
+      unknown,
+      { sessionId: string; body: string },
+    ];
+    expect(message.sessionId).toBe(HANDED_OVER);
+    expect(message.body).toContain('changes_requested');
+    expect((await readSubjectWaits(redis, WAITERS)).map((wait) => wait.sessionId)).toEqual([
+      HANDED_OVER,
+    ]);
+  });
+
+  it('owns the pull request once it publishes the branch after the owner has ended', async () => {
+    await armed();
+    live.mockImplementation((_db: unknown, _tenantId: string, sessionId: string) =>
+      Promise.resolve(sessionId !== OWNER),
+    );
+    acting.mockImplementation((sessionId: string) => Promise.resolve(sessionId !== OWNER));
+
+    await armed(HANDED_OVER);
+
+    expect((await readPullRequestWatch(redis, WATCH))?.ownerSessionId).toBe(HANDED_OVER);
+    expect((await readSubjectWaits(redis, WAITERS)).map((wait) => wait.sessionId)).toEqual([
+      HANDED_OVER,
+    ]);
+  });
+
+  it('tells an earlier owner nothing from a wait it still had in delivery', async () => {
+    await armed();
+    await emitPullRequestChanged(redis, {
+      tenantId: TENANT,
+      spaceId: SPACE,
+      subject: SUBJECT,
+      change: 'conflicting',
+      url: URL,
+      headSha: 'c'.repeat(40),
+    });
+    const [stale] = await claimEndedWaits(redis, Date.now(), 10);
+    if (!stale) throw new Error('the event did not end the wait');
+    acting.mockImplementation((sessionId: string) => Promise.resolve(sessionId !== OWNER));
+    await armed(HANDED_OVER);
+    mockQueueMessage.mockClear();
+
+    expect(await deliverEndedWait(deps, stale)).toBe('not_owner');
+    expect(mockQueueMessage).not.toHaveBeenCalled();
+    expect((await readPullRequestWatch(redis, WATCH))?.ownerSessionId).toBe(HANDED_OVER);
   });
 });
 
@@ -159,6 +265,38 @@ describe("the owner's wait on its pull request's event", () => {
     expect(mockQueueMessage).not.toHaveBeenCalled();
     expect(mockWake).not.toHaveBeenCalled();
     expect(await readSubjectWaits(redis, WAITERS)).toHaveLength(1);
+  });
+
+  it('delivers an event recorded between the window closing and the next wait', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(T0);
+    await armed();
+    const closedAt = T0 + 24 * 60 * 60 * 1000 + 1_000;
+    vi.setSystemTime(closedAt);
+    const [closed] = await claimEndedWaits(redis, closedAt, 10);
+    if (!closed || closed.outcome.endedBy !== 'window_closed') throw new Error('no window closed');
+
+    // No wait holds the subject now: the closed one left its hash when it was claimed.
+    vi.setSystemTime(closedAt + 1_000);
+    await emitPullRequestChanged(redis, {
+      tenantId: TENANT,
+      spaceId: SPACE,
+      subject: SUBJECT,
+      change: 'checks_green',
+      url: URL,
+      headSha: 'c'.repeat(40),
+    });
+    vi.setSystemTime(closedAt + 2_000);
+    expect(await deliverEndedWait(deps, closed)).toBe('renewed');
+    expect(mockQueueMessage).not.toHaveBeenCalled();
+
+    // The renewed wait counts from the close, so it caught up on the event.
+    const logger = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
+    const ctx = { maxBatch: 10, budgetExhausted: () => false, mode: 'enabled' as const };
+    expect(
+      await runWaitDeliveryCycle({ harnessDeps: deps, logger, now: () => Date.now() }, ctx),
+    ).toMatchObject({ candidates: 1, processed: 1 });
+    expect(postedBody()).toContain('checks_green');
   });
 
   it('forgets an owner that has ended: no next wait, and the pull request is no conversation’s', async () => {

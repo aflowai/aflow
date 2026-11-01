@@ -1963,6 +1963,33 @@ describe('Plan 156 §5.6.1 — inline HITL message lifecycle', () => {
     expect(matches).toHaveLength(1);
   });
 
+  it('carries the listed title of a focus on a non-proposal item, whichever path mounts the card first', () => {
+    const listed = { kind: 'plan_step', title: 'Pending approval: Ship the release' };
+    const inlineRef = `inline:${Buffer.from(
+      JSON.stringify({ acknowledged: true, itemId: 'plan-ask:node-1', listed }),
+    ).toString('base64')}`;
+    const stepSucceeded = {
+      ...makeEvent('StepSucceeded', { payloadRef: inlineRef }, { stepExecutionId: 'exec-6' }),
+      metadata: { operationId: 'human.action_center.focus' },
+    } as SessionEvent;
+
+    const replayed = runViewReducer(initialRunViewState, {
+      type: 'SSE_EVENT',
+      event: stepSucceeded,
+    });
+    expect(replayed.messages[0]?.richContent).toEqual({ itemId: 'plan-ask:node-1', listed });
+
+    let live: RunViewState = runViewReducer(initialRunViewState, {
+      type: 'INLINE_PROPOSAL_FOCUS',
+      itemId: 'plan-ask:node-1',
+      timestamp: '2026-05-22T14:00:00.000Z',
+    });
+    live = runViewReducer(live, { type: 'SSE_EVENT', event: stepSucceeded });
+    const cards = live.messages.filter((m) => m.semanticType === 'inline_proposal_focus');
+    expect(cards).toHaveLength(1);
+    expect(cards[0]?.richContent).toMatchObject({ itemId: 'plan-ask:node-1', listed });
+  });
+
   it('dedupes INLINE_PROPOSAL_FOCUS by itemId (SSE reconnect resending the same focus)', () => {
     let s: RunViewState = initialRunViewState;
     s = runViewReducer(s, {

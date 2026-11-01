@@ -3,26 +3,28 @@
 /**
  * The space's plans as a list (Plan 332 D2), below **Overview**, which returns
  * to the lanes across every plan (D1): open plans in position order —
- * the order the loop takes them — each with its state, its progress and its
- * non-zero counts of steps needing the operator and in flight, with **Move up**
- * and **Move down** quiet in the row's orb until it is pointed at or focused;
- * then **Finished**, open plans whose every step is closed, each with a quiet
- * **Close plan**; then **Closed**, folded. The selected row is filled and
- * barred as the skill designer's outline bars its current item, and scrolls
- * into view. The list fills the page's left pane, as the outline does.
- * Below 900px it is a disclosure above the content.
+ * the order the loop takes them, which dragging a row changes — each with its
+ * state, its progress and its non-zero counts of steps needing the operator
+ * and in flight; then **Finished**, open plans whose every step is closed,
+ * each with a quiet **Close plan**; then **Closed**, folded. Each row stands
+ * on a surface that says its state, as a lane row does, and the selected one
+ * is ringed and scrolls into view. The list fills the page's left pane, as the
+ * skill designer's outline does. Below 900px it is a disclosure above the
+ * content.
  */
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import {
-  AnimatedHeight,
   Button,
   Column,
+  DropIndicator,
   Icon,
   Panel,
   Row,
   Text,
   Textarea,
   type BadgeVariant,
+  type DragReorderItemProps,
+  type DropSide,
 } from '@aflow/design-system';
 import type { PlanNodeDetailOutput, PlanRootRow, PlanRootState } from '@aflow/schemas';
 import { useApiQuery } from '../../hooks/useApiQuery.js';
@@ -38,15 +40,18 @@ import { isClosedStatus, usePinnedNode, type PlanNodeCloser } from './PlanNodeCl
 import {
   Disclosure,
   GroupLabel,
+  ItemsBody,
   MetaSep,
+  PLAN_ITEM_GAP,
   PLAN_ORB_SIZE,
   PlanStateOrb,
   ProgressMeter,
-  selectableStyle,
+  planItemSurface,
+  planRootTone,
   srOnly,
   useHover,
-  useMoveControls,
-  useReveal,
+  usePlanReorder,
+  type PlanReorderItem,
 } from './PlanParts.js';
 import { freshRead, planNodePath } from './PlanRail.js';
 
@@ -218,15 +223,22 @@ export function PlanRootCloseControl({
   );
 }
 
-const listStyle: CSSProperties = { listStyle: 'none', margin: 0, padding: 0 };
+const listStyle: CSSProperties = {
+  listStyle: 'none',
+  margin: 0,
+  padding: 0,
+  display: 'flex',
+  flexDirection: 'column',
+  gap: PLAN_ITEM_GAP,
+};
 
-/** A row: the state orb's gutter, the main area that is its hit target, a quiet action at its end. */
+/** A row: the state orb at its side, the main area that is its hit target, a quiet action at its end. */
 const rowGrid: CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: `${String(PLAN_ORB_SIZE.row)}px minmax(0, 1fr) auto`,
+  gridTemplateColumns: `${String(PLAN_ORB_SIZE.item)}px minmax(0, 1fr) auto`,
   alignItems: 'center',
-  columnGap: 'var(--space-2)',
-  padding: 'var(--space-1-5) var(--space-2)',
+  columnGap: 'var(--space-2-5)',
+  padding: 'var(--space-2) var(--space-2-5)',
 };
 
 const rowButton: CSSProperties = {
@@ -288,18 +300,15 @@ function rowStateLine(row: PlanRootRow): string {
  * One plan in the list, read in one order: what the plan is (its title),
  * where it stands (its state, named and as its orb, and its steps
  * closed of all), and what needs the operator (the count at the end, the one
- * filled element of the row). The orb's place doubles as the row's reorder
- * handle: on an open row pointed at or focused, Move up and Move down show
- * there instead.
+ * filled element of the row). An open row is dragged to reorder it.
  */
 function PlanRowView({
   row,
   selected,
   onSelect,
   rowRef,
-  hostProps,
-  gutter,
-  gutterShown = false,
+  reorderProps,
+  dropSide,
   trailing,
   below,
 }: {
@@ -307,12 +316,10 @@ function PlanRowView({
   selected: boolean;
   onSelect: (rootId: string) => void;
   rowRef: (element: HTMLLIElement | null) => void;
-  /** What tells the row's reveal it is pointed at or focused. */
-  hostProps?: ReturnType<typeof useReveal>['hostProps'];
-  /** Controls that show in the orb's place on a row pointed at or focused. */
-  gutter?: ReactNode;
-  /** The controls show, so the orb gives way to them. */
-  gutterShown?: boolean;
+  /** What makes an open row draggable and a place to drop one. */
+  reorderProps?: DragReorderItemProps;
+  /** Where a row dragged over this one would land. */
+  dropSide?: DropSide | undefined;
   /** A quiet action at the row's end. */
   trailing?: ReactNode;
   /** What opens under the row: a refusal, a form. */
@@ -322,23 +329,23 @@ function PlanRowView({
   const needsYou = row.counts?.needsYou ?? 0;
   const inFlight = row.counts?.inFlight ?? 0;
   const hover = useHover();
+  const running = row.state === 'in_flight';
   return (
     <li
       ref={rowRef}
+      className={running ? 'ds-enter-rise ds-card--running' : 'ds-enter-rise'}
       data-plan-row={row.nodeId}
       data-state={row.state}
       {...(selected ? { 'aria-current': 'true' as const } : {})}
-      {...hostProps}
-      onMouseEnter={() => {
-        hover.hoverProps.onMouseEnter();
-        hostProps?.onMouseEnter();
+      {...reorderProps}
+      {...hover.hoverProps}
+      style={{
+        ...rowGrid,
+        ...planItemSurface({ tone: planRootTone(row.state), selected, hovered: hover.hovered }),
+        ...(reorderProps?.['data-dragging'] !== undefined ? { opacity: 0.5 } : {}),
       }}
-      onMouseLeave={() => {
-        hover.hoverProps.onMouseLeave();
-        hostProps?.onMouseLeave();
-      }}
-      style={{ ...rowGrid, ...selectableStyle(selected, hover.hovered) }}
     >
+      <DropIndicator gap={PLAN_ITEM_GAP} side={dropSide} />
       <button
         type="button"
         aria-pressed={selected}
@@ -406,20 +413,9 @@ function PlanRowView({
           </span>
         )}
       </button>
-      {/* After the row's button in reading and tab order; the grid draws it first. */}
-      <span
-        style={{
-          gridRow: 1,
-          gridColumn: 1,
-          display: 'grid',
-          alignSelf: 'stretch',
-          placeItems: 'center',
-        }}
-      >
-        <span style={{ gridArea: '1 / 1' }}>
-          <PlanStateOrb state={row.state} hidden={gutter !== undefined && gutterShown} />
-        </span>
-        {gutter !== undefined && <span style={{ gridArea: '1 / 1' }}>{gutter}</span>}
+      {/* After the row's button in reading order; the grid draws it first. */}
+      <span style={{ gridRow: 1, gridColumn: 1, display: 'inline-flex' }}>
+        <PlanStateOrb state={row.state} status={row.status} />
       </span>
       {trailing !== undefined && (
         <span style={{ gridRow: 1, gridColumn: 3, display: 'inline-flex', alignItems: 'center' }}>
@@ -442,27 +438,26 @@ interface RowPlacement {
   rowRef: (element: HTMLLIElement | null) => void;
 }
 
-/** An open plan: Move up and Move down in the orb's place, a refusal under the row. */
+/** An open plan: dragged among the open plans to reorder it, a refusal under the row. */
 function OpenPlanRow({
   open,
-  onPlace,
+  reorder,
   ...placement
-}: RowPlacement & { open: readonly PlanRootRow[]; onPlace: PlanNodePlacer }) {
-  const reveal = useReveal();
-  const shown = reveal.shown || placement.selected;
-  const move = useMoveControls(
-    placement.row,
-    planRowMoveTargets(open, placement.row.nodeId),
-    onPlace,
-    shown,
-    'column',
-  );
+}: RowPlacement & { open: readonly PlanRootRow[]; reorder: ReturnType<typeof usePlanReorder> }) {
+  const { row } = placement;
+  const item: PlanReorderItem = {
+    nodeId: row.nodeId,
+    revision: row.revision,
+    moves: planRowMoveTargets(open, row.nodeId),
+    // Every open plan is a sibling of every other: all are roots.
+    accepts: (draggedId) => open.some((r) => r.nodeId === draggedId),
+  };
   return (
     <PlanRowView
       {...placement}
-      hostProps={reveal.hostProps}
-      {...(move.controls !== null ? { gutter: move.controls, gutterShown: shown } : {})}
-      below={move.error}
+      reorderProps={reorder.itemProps(item)}
+      dropSide={reorder.dropSide(row.nodeId)}
+      below={reorder.refusal(row.nodeId)}
     />
   );
 }
@@ -570,6 +565,7 @@ export function PlanList({
 
   const overview = selectedId === undefined;
   const overviewHover = useHover();
+  const reorder = usePlanReorder(onPlace);
   const body = (
     <Column gap="md">
       <button
@@ -586,31 +582,39 @@ export function PlanList({
           ...rowButton,
           ...rowGrid,
           width: '100%',
-          ...selectableStyle(overview, overviewHover.hovered),
+          ...planItemSurface({
+            tone: 'neutral',
+            selected: overview,
+            hovered: overviewHover.hovered,
+          }),
         }}
       >
-        <Icon name="squares-four" size="xs" />
+        <span style={{ display: 'inline-flex', justifyContent: 'center' }}>
+          <Icon name="squares-four" size="sm" />
+        </span>
         <Text size="sm" weight={overview ? 'semibold' : 'medium'}>
           Overview
         </Text>
       </button>
       <Column gap="xs" data-plan-list-section="open">
         <GroupLabel>{`Open · ${String(open.length)}`}</GroupLabel>
-        <ul style={listStyle} aria-label="Open plans">
-          {open.map((row) => {
-            const { key, ...placement } = placementOf(row);
-            return <OpenPlanRow key={key} {...placement} open={open} onPlace={onPlace} />;
-          })}
-        </ul>
-        {open.length === 0 && (
-          <Text size="sm" variant="muted">
-            No open plan
-          </Text>
-        )}
+        <ItemsBody>
+          <ul style={listStyle} aria-label="Open plans">
+            {open.map((row) => {
+              const { key, ...placement } = placementOf(row);
+              return <OpenPlanRow key={key} {...placement} open={open} reorder={reorder} />;
+            })}
+          </ul>
+          {open.length === 0 && (
+            <Text size="sm" variant="muted">
+              No open plan
+            </Text>
+          )}
+        </ItemsBody>
       </Column>
       <Column gap="xs" data-plan-list-section="finished">
         <GroupLabel>{`Finished · ${String(finished.length)}`}</GroupLabel>
-        <AnimatedHeight>
+        <ItemsBody>
           {finished.length > 0 && (
             <ul style={listStyle} aria-label="Finished plans">
               {finished.map((row) => {
@@ -621,7 +625,7 @@ export function PlanList({
               })}
             </ul>
           )}
-        </AnimatedHeight>
+        </ItemsBody>
       </Column>
       <Column gap="xs" data-plan-list-section="closed">
         <Disclosure
@@ -632,7 +636,7 @@ export function PlanList({
         >
           {`Closed · ${String(closed.length)}`}
         </Disclosure>
-        <AnimatedHeight>
+        <ItemsBody>
           {closedShown && closed.length > 0 && (
             <ul style={listStyle} aria-label="Closed plans">
               {closed.map((row) => {
@@ -641,7 +645,7 @@ export function PlanList({
               })}
             </ul>
           )}
-        </AnimatedHeight>
+        </ItemsBody>
       </Column>
     </Column>
   );

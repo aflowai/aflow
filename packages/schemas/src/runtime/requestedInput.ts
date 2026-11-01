@@ -280,6 +280,73 @@ export const WriteApprovalRequestPayloadSchema = z.discriminatedUnion('target', 
 ]);
 export type WriteApprovalRequestPayload = z.infer<typeof WriteApprovalRequestPayloadSchema>;
 
+// ============================================================================
+// The title an Action Center item gives a paused request
+// ============================================================================
+//
+// One wording wherever the request is read: the Action Center's sources build
+// their items with it, and the Helmsman's attention block names the same item
+// by the same title (Plan 338 D2).
+
+/** The title of a step's or a task's request for input or for an approval. */
+export function humanRequestTitle(kind: 'input' | 'approval', title: unknown): string {
+  if (typeof title === 'string') return title;
+  return kind === 'input' ? 'Information requested' : 'Approval requested';
+}
+
+/** The title of an OAuth consent pause: "Connect <provider>". */
+export function oauthConsentTitle(consent: { resourceKey?: string; bindingId?: string }): string {
+  return `Connect ${consent.resourceKey || consent.bindingId || 'this integration'}`;
+}
+
+function siteOf(origin: string): string {
+  try {
+    return new URL(origin).host;
+  } catch {
+    return origin;
+  }
+}
+
+/** The title of a write approval, whichever target it gates. */
+export function writeApprovalTitle(request: WriteApprovalRequestPayload): string {
+  switch (request.target) {
+    case 'browser':
+      return `Approve in the browser: ${browserApprovalActionPhrase(request)} on ${siteOf(request.pageOrigin)}`;
+    case 'local_model':
+      return `Approve on this computer: ${localModelChangePhrase(request)}`;
+    case 'api':
+      return `Approve write: ${request.operationLabel ?? request.endpointName ?? `${request.method} ${request.endpointId}`}`;
+  }
+}
+
+/**
+ * The title of a paused request by its `kind`, as the Action Center item for
+ * it is titled. Undefined for a payload no Action Center source turns into an
+ * item, such as a conversation waiting for its next message.
+ */
+export function pausedRequestTitle(payload: unknown): string | undefined {
+  if (typeof payload !== 'object' || payload === null) return undefined;
+  const request = payload as Record<string, unknown>;
+  switch (request['kind']) {
+    case 'input':
+    case 'approval':
+      return humanRequestTitle(request['kind'], request['title']);
+    case 'oauth_consent':
+      return oauthConsentTitle({
+        ...(typeof request['resourceKey'] === 'string'
+          ? { resourceKey: request['resourceKey'] }
+          : {}),
+        ...(typeof request['bindingId'] === 'string' ? { bindingId: request['bindingId'] } : {}),
+      });
+    case 'write_approval': {
+      const parsed = WriteApprovalRequestPayloadSchema.safeParse(request);
+      return parsed.success ? writeApprovalTitle(parsed.data) : undefined;
+    }
+    default:
+      return undefined;
+  }
+}
+
 /**
  * The approver's decision, keyed by `(tenant, run, requestHash)`. The executor
  * re-dispatches, recomputes the `requestHash` of the resolved request, and

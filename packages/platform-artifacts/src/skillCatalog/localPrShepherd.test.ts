@@ -890,7 +890,7 @@ function answer(taskId: string, input: Record<string, unknown>, s: Scenario): An
     }
     case 'read-branch-owner': {
       const query = WorkflowRunListInputSchema.parse(input);
-      expect(query.drivenByActingConversation).toBe(true);
+      expect(query.startedByActingOwnerOf).toBe(PULL_REQUEST_URL);
       expect(query.input).toEqual({ field: 'branch', equals: BRANCH });
       if (s.branchOwner === 'fails') return { ok: false };
       return ok({
@@ -4049,7 +4049,7 @@ describe("Plan 339 P3 — the node card's four lines", () => {
   const briefOf = (p: Pass) =>
     String(FlowScheduleCreateInputSchema.parse(p.inputs.get('hand-over-to-agent')).input?.input);
 
-  it('hands no case over on a branch whose owning conversation can act, and hands it over once that conversation has ended or failed', () => {
+  it("hands no case over while the pull request's recorded owner can act, and hands it over once that owner has ended or failed", () => {
     const handOvers = new Map<string, Record<string, unknown>>();
     const owned = pass({ ...CONFLICTING, handOvers, branchOwner: 'acting' });
     expect(owned.decision).toBe('leave');
@@ -4059,12 +4059,12 @@ describe("Plan 339 P3 — the node card's four lines", () => {
     expect(owned.statuses.get('claim-hand-over')).toBe('skipped');
     expect(owned.ran).not.toContain('hand-over-to-agent');
     for (const action of ACTIONS) expect(owned.ran).not.toContain(action);
-    // The owner is read from every publication of the branch a conversation that can act started.
+    // The owner is the one the pull request's record names: its publications of the branch, while it can act.
     const query = WorkflowRunListInputSchema.parse(owned.inputs.get('read-branch-owner'));
     expect(query).toMatchObject({
       slug: PUBLISH_LOCAL_CHANGES.bundle.workflow.slug,
       input: { field: 'branch', equals: BRANCH },
-      drivenByActingConversation: true,
+      startedByActingOwnerOf: PULL_REQUEST_URL,
       status: ['running', 'paused', 'completed', 'failed', 'cancelled'],
     });
 

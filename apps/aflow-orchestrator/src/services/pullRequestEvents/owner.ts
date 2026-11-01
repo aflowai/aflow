@@ -2,17 +2,21 @@
  * The owner of a loop pull request, and the wait the platform keeps for it
  * (Plan 339 D4).
  *
- * The owner is the Helmsman conversation that started the publication that
- * opened the pull request. While that conversation has not ended, it holds one
- * wait on the pull request's `pull_request.changed`, declared for it here. The
- * event wakes it with what to do: run a shepherd pass aimed at the pull
- * request. Each delivery declares the next wait, so the owner hears every
- * change until the pull request merges or closes. An owner that has ended is
- * forgotten, and the fallback sweep tends the pull request.
+ * The owner is the one conversation the pull request's watch records: the
+ * Helmsman conversation that started the publication that opened it, or a
+ * later publisher of the branch that took it over from an owner that could no
+ * longer act. The hand-over reads the same record. While that conversation
+ * has not ended, it holds one wait on the pull request's
+ * `pull_request.changed`, declared for it here. The event wakes it with what
+ * to do: run a shepherd pass aimed at the pull request. Each delivery
+ * declares the next wait, so the owner hears every change until the pull
+ * request merges or closes. An owner that has ended is forgotten, and the
+ * fallback sweep tends the pull request.
  */
 import type { Redis } from 'ioredis';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import {
+  cancelWait,
   disownPullRequestWatch,
   readPullRequestWatch,
   readSubjectWaits,
@@ -55,7 +59,8 @@ export type OwnerHold =
 
 /**
  * Make sure the watch's owner holds its wait on the pull request. A wait the
- * owner holds already is left alone. An owner that has ended is forgotten.
+ * owner holds already is left alone. An owner that has ended is forgotten,
+ * whatever wait it still holds. A wait kept for an earlier owner is dropped.
  *
  * `since` catches up: an event recorded at or after it ends the new wait at
  * once, and the registration queues it for the delivery cycle. A delivery passes the time just past the
@@ -69,6 +74,11 @@ export async function holdForOwner(
 ): Promise<OwnerHold> {
   const owner = watch.ownerSessionId;
   if (owner === undefined) return { state: 'no_owner' };
+  // Read before the waits: a wait an ended owner still holds holds nothing.
+  if (!(await isLiveConversation(deps.db, watch.tenantId, owner))) {
+    await disownPullRequestWatch(deps.redis, watch, owner);
+    return { state: 'ended' };
+  }
   const subject = {
     tenantId: watch.tenantId,
     spaceId: watch.spaceId,
@@ -76,12 +86,13 @@ export async function holdForOwner(
     subject: watch.subject,
   };
   const waits = await readSubjectWaits(deps.redis, subject);
+  // One owner hears the pull request: a wait kept for an owner it has had
+  // before is dropped.
+  for (const wait of waits) {
+    if (wait.owner !== undefined && wait.sessionId !== owner) await cancelWait(deps.redis, wait);
+  }
   if (waits.some((wait) => wait.sessionId === owner && wait.owner !== undefined)) {
     return { state: 'held' };
-  }
-  if (!(await isLiveConversation(deps.db, watch.tenantId, owner))) {
-    await disownPullRequestWatch(deps.redis, watch, owner);
-    return { state: 'ended' };
   }
   const nowMs = options.nowMs ?? Date.now();
   const declared = {

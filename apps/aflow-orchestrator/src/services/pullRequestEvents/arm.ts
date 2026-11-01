@@ -3,13 +3,17 @@
  * pull request event source (Plan 339 D2). Armed at the publication run's
  * end, after its terminal write, from the pull request its output names.
  *
- * The conversation that started the publication owns the pull request (D4),
- * where it is a Helmsman conversation that has not ended. It is given its
- * wait on the pull request here.
+ * A pull request has one owner (D4). The conversation that started the
+ * publication owns it where it is a Helmsman conversation that has not ended,
+ * and where no owner is recorded or the recorded one can no longer act. So a
+ * conversation a hand-over started owns the pull request once it publishes
+ * the branch, and hears its next event. The owner is given its wait on the
+ * pull request here.
  */
-import { armPullRequestWatch } from '@aflow/redis';
+import { armPullRequestWatch, readPullRequestWatch } from '@aflow/redis';
 import {
   buildWorkflowRunResult,
+  isActingConversation,
   isLiveConversation,
   type WorkflowRunDetail,
 } from '@aflow/cybernetic-runtime';
@@ -55,19 +59,27 @@ export async function armPullRequestOnPublication(
   if (typeof url !== 'string' || ref === null) return 'no_pull_request';
   const subject = pullRequestSubject(ref.owner, ref.repo, ref.number);
   const ownerSessionId = await liveStarter(deps, tenantId, run, subject);
+  const replacingOwner =
+    ownerSessionId !== undefined
+      ? await ownerUnableToAct(deps, tenantId, { spaceId: run.spaceId, subject }, ownerSessionId)
+      : undefined;
   const bindingId = publicationBindingId(run);
-  const watch = await armPullRequestWatch(deps.redis, {
-    tenantId,
-    spaceId: run.spaceId,
-    owner: ref.owner,
-    repo: ref.repo,
-    number: ref.number,
-    subject,
-    url,
-    armedAt: nowMs,
-    ...(bindingId !== undefined ? { bindingId } : {}),
-    ...(ownerSessionId !== undefined ? { ownerSessionId } : {}),
-  });
+  const watch = await armPullRequestWatch(
+    deps.redis,
+    {
+      tenantId,
+      spaceId: run.spaceId,
+      owner: ref.owner,
+      repo: ref.repo,
+      number: ref.number,
+      subject,
+      url,
+      armedAt: nowMs,
+      ...(bindingId !== undefined ? { bindingId } : {}),
+      ...(ownerSessionId !== undefined ? { ownerSessionId } : {}),
+    },
+    replacingOwner !== undefined ? { replacingOwner } : {},
+  );
   try {
     await holdForOwner(deps, watch, { nowMs });
   } catch (err) {
@@ -96,6 +108,30 @@ async function liveStarter(
   } catch (err) {
     getOrchestratorLogger().warn(
       `[pr-arm] reading the owner of ${subject} failed; it is armed with none, and the sweep tends it: ${errorText(err)}`,
+    );
+    return undefined;
+  }
+}
+
+/**
+ * The recorded owner of the pull request, where it is another conversation
+ * that can no longer act: ended, failed or gone. The arm's publisher takes the
+ * pull request over from it. A read that fails names none, so the recorded
+ * owner stays.
+ */
+async function ownerUnableToAct(
+  deps: HarnessDeps,
+  tenantId: string,
+  ref: { spaceId: string; subject: string },
+  publisher: string,
+): Promise<string | undefined> {
+  try {
+    const recorded = (await readPullRequestWatch(deps.redis, { tenantId, ...ref }))?.ownerSessionId;
+    if (recorded === undefined || recorded === publisher) return undefined;
+    return (await isActingConversation(deps.db, tenantId, recorded)) ? undefined : recorded;
+  } catch (err) {
+    getOrchestratorLogger().warn(
+      `[pr-arm] reading whether the owner of ${ref.subject} can act failed; it stays its owner: ${errorText(err)}`,
     );
     return undefined;
   }

@@ -23,7 +23,8 @@ request. Who merges it depends on the folder's merge posture
 operator merges; under `when-green` the Local PR Shepherd merges a green pull request
 whose review approved its head, on the operator's approval. The conversation whose
 publication opened the pull request owns it: each `pull_request.changed` wakes it, and it
-runs a shepherd pass aimed at the pull request. The hourly schedule sweeps only the pull
+runs a shepherd pass aimed at the pull request. A later publication by another conversation
+takes the pull request over only where its owner has ended or failed. The hourly schedule sweeps only the pull
 requests no conversation holds (Plan 339 D4). Never open a loop pull
 request by hand: the shepherd sees only the ones a publication opened. The session's job is
 to brief, watch, judge, report the pull request, wait for the merge, close it out, and keep

@@ -8,8 +8,8 @@
  * rail for its step, where a blocked step's **Approve** appears with the
  * decision it asks (Plan 339 D6). A row offers no Approve of its own, since it
  * carries no card to name that decision. Up next carries no reorder: ordering steps
- * is the board's (D6). A row reads plan, step with its orb, where it stands,
- * then age and action. A run on a step reads as the run surface's row
+ * is the board's (D6). A row reads its step's orb at its side, then plan and
+ * step, where it stands, then age and action. A run on a step reads as the run surface's row
  * (Plan 332 P7). A row's surface says where its step stands, as a board
  * card's does, and the selected one is ringed as the selected card is.
  */
@@ -28,14 +28,15 @@ import {
   type PlanLaneId,
 } from '../../lib/plan-board.js';
 import {
-  GroupLabel,
   MetaSep,
   NextMarker,
+  PLAN_ORB_SIZE,
   PlanRunLine,
   PlanStepOrb,
   PullRequestChip,
   SELECTED_RING,
   planItemSurface,
+  planStepTone,
   useHover,
 } from './PlanParts.js';
 
@@ -121,23 +122,15 @@ function LaneRow({
       }}
       style={{
         display: 'grid',
-        gridTemplateColumns: '72px minmax(0, 1fr) auto',
-        alignItems: 'start',
+        gridTemplateColumns: `${String(PLAN_ORB_SIZE.item)}px minmax(0, 1fr) auto`,
+        alignItems: 'center',
         columnGap: 'var(--space-3)',
         padding: 'var(--space-2) var(--space-2-5)',
         border: '1px solid transparent',
-        ...planItemSurface({ column: lane, running, selected, hovered }),
+        ...planItemSurface({ tone: planStepTone(lane, running), selected, hovered }),
       }}
     >
-      <Text
-        size="xs"
-        variant="mono"
-        truncate
-        style={{ paddingTop: 3, color: 'var(--color-text-muted)' }}
-        data-plan-lane-plan
-      >
-        {planTag(item.rootTitle)}
-      </Text>
+      <PlanStepOrb column={lane} runInFlight={laneRunInFlight(item)} />
       <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-1)', minWidth: 0 }}>
         {/* The row's button for the keyboard; a click anywhere on the row opens the rail. */}
         <button
@@ -161,9 +154,15 @@ function LaneRow({
             cursor: 'pointer',
           }}
         >
-          <span style={{ alignSelf: 'center' }}>
-            <PlanStepOrb column={lane} runInFlight={laneRunInFlight(item)} />
-          </span>
+          <Text
+            size="xs"
+            variant="mono"
+            style={{ flexShrink: 0, color: 'var(--color-text-muted)' }}
+            data-plan-lane-plan
+          >
+            {planTag(item.rootTitle)}
+          </Text>
+          <MetaSep />
           {item.phaseTitle !== undefined && (
             <>
               <Text size="xs" variant="muted" data-plan-lane-phase>
@@ -263,7 +262,9 @@ export function PlanOverview({
         const more = planLaneMore(lane);
         return (
           <Column key={id} gap="sm" data-plan-lane={id}>
-            <GroupLabel>{`${label} · ${planLaneCount(lane, lanes)}`}</GroupLabel>
+            <Text size="base" weight="semibold" data-plan-lane-title>
+              {`${label} · ${planLaneCount(lane, lanes)}`}
+            </Text>
             {/* A lane grows and shrinks as steps come and go. It is widened and padded by
                 the ring, so the selected row's ring lies inside the clip. */}
             <AnimatedHeight style={{ marginInline: -SELECTED_RING }}>

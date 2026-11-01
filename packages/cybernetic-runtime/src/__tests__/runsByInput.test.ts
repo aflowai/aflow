@@ -150,11 +150,12 @@ describe('workflow.run.list — the runs that succeeded in named tasks', () => {
     expect(parameters[index]).toContain(2);
   });
 
-  it('lists only the runs of a Helmsman conversation that can act where the query asks for them, a failed one excluded', async () => {
+  it("lists only the runs the pull request's recorded owner started, while it can act, a failed one excluded", async () => {
+    const owner = '00000000-0000-4000-8000-0000000000aa';
     const owned = WorkflowRunListInputSchema.parse({
       slug: 'publish-local-changes',
       input: { field: 'branch', equals: 'aflow/x' },
-      drivenByActingConversation: true,
+      startedByActingOwnerOf: 'https://github.com/AflowAI/Aflow/pull/276',
       limit: 1,
     });
     const { db, queries, parameters } = fakeDb([]);
@@ -164,16 +165,45 @@ describe('workflow.run.list — the runs that succeeded in named tasks', () => {
       spaceId: SPACE_ID,
       sessionId: SESSION_ID,
       query: owned,
+      pullRequestOwner: owner,
     });
     const index = queries.findIndex((query) => query.includes('FROM workflow_runs r'));
     const statement = queries[index]!;
     const where = statement.slice(statement.indexOf('WHERE'));
+    expect(where).toContain('r.session_id =');
     expect(where).toContain('"sessions"."target_system_role"');
     expect(where).toContain('not in');
-    expect(parameters[index]).toEqual(expect.arrayContaining(['SUCCEEDED', 'CANCELLED', 'FAILED']));
+    expect(parameters[index]).toEqual(
+      expect.arrayContaining([owner, 'SUCCEEDED', 'CANCELLED', 'FAILED']),
+    );
+
+    // A pull request the loop records no owner for has no owner's runs, and nothing is read.
+    const { db: unowned, queries: none } = fakeDb([]);
+    expect(
+      await listRunsByInput({
+        db: unowned,
+        tenantId: TENANT_ID,
+        spaceId: SPACE_ID,
+        sessionId: SESSION_ID,
+        query: owned,
+        pullRequestOwner: null,
+      }),
+    ).toEqual({ runs: [], hasMore: false });
+    expect(none.some((query) => query.includes('FROM workflow_runs r'))).toBe(false);
+
+    // The caller reads the owner. A query naming the filter without it is refused.
+    await expect(
+      listRunsByInput({
+        db: unowned,
+        tenantId: TENANT_ID,
+        spaceId: SPACE_ID,
+        sessionId: SESSION_ID,
+        query: owned,
+      }),
+    ).rejects.toThrow(/read the owner/);
 
     const { db: unfiltered, queries: plain } = fakeDb([]);
-    const { drivenByActingConversation: _filter, ...everyone } = owned;
+    const { startedByActingOwnerOf: _filter, ...everyone } = owned;
     await listRunsByInput({
       db: unfiltered,
       tenantId: TENANT_ID,
@@ -185,11 +215,18 @@ describe('workflow.run.list — the runs that succeeded in named tasks', () => {
     expect(read.slice(read.indexOf('WHERE'))).not.toContain('target_system_role');
   });
 
-  it('refuses the acting-conversation filter beside a pull request selector', () => {
+  it('refuses the owner filter beside a pull request selector, or naming no pull request', () => {
     expect(
       WorkflowRunListInputSchema.safeParse({
         servingNodeOfPullRequest: 'https://github.com/o/r/pull/1',
-        drivenByActingConversation: true,
+        startedByActingOwnerOf: 'https://github.com/o/r/pull/1',
+      }).success,
+    ).toBe(false);
+    expect(
+      WorkflowRunListInputSchema.safeParse({
+        slug: 'publish-local-changes',
+        input: { field: 'branch', equals: 'aflow/x' },
+        startedByActingOwnerOf: 'aflow/x',
       }).success,
     ).toBe(false);
   });

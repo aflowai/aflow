@@ -6,9 +6,11 @@ import {
   type OperationId,
   type IdempotencyKey,
   HumanActionCenterFocusInputSchema,
+  hasActionCenterFocusPrefix,
   type HumanActionCenterFocusOutput,
 } from '@aflow/schemas';
 import { addStepResult, publishActionCenterFocus } from '@aflow/redis';
+import { getAttentionCache, type HelmsmanAttentionContext } from '@aflow/cybernetic-runtime';
 import type { PayloadStore } from '@aflow/payload-store';
 import { encodeInlineOpOutputRef } from './helpers.js';
 import type { FlowExecutionContext } from '../../types.js';
@@ -54,7 +56,7 @@ export async function handleHumanActionCenterFocusInline(
       const issues = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
       const sawBareItemId =
         typeof (raw as { itemId?: unknown }).itemId === 'string' &&
-        !/^(proposal|step|gate|settings):/.test((raw as { itemId: string }).itemId);
+        !hasActionCenterFocusPrefix((raw as { itemId: string }).itemId);
       const correction = sawBareItemId
         ? 'Correction: that itemId is not from a listing op. Call proposal.list (or another Action Center listing) and pass the `id` field VERBATIM (it will already be prefixed like "proposal:<uuid>"). If no matching item exists yet, use `human.chat.ask` to author a fresh question instead — do not retry this tool with a fabricated id.'
         : 'Correction: re-read the tool input schema and call again with valid fields.';
@@ -78,12 +80,17 @@ export async function handleHumanActionCenterFocusInline(
       ...(input.reason ? { reason: input.reason } : {}),
     });
 
+    const listed = input.itemId.startsWith('proposal:')
+      ? undefined
+      : await listedInAttention(redis, context.tenantId, context.spaceId, input.itemId);
+
     const note = `Operator now sees item ${input.itemId} inline in chat. End your turn and wait for their decision — when they resolve it, the resume will land in your next turn and you can continue from there.`;
 
     const output: HumanActionCenterFocusOutput = {
       acknowledged: true,
       itemId: input.itemId,
       note,
+      ...(listed !== undefined ? { listed } : {}),
     };
     const outputRef = await encodeInlineOpOutputRef(
       payloadStore,
@@ -141,4 +148,31 @@ export async function handleHumanActionCenterFocusInline(
       finishedAtMs: Date.now(),
     });
   }
+}
+
+/**
+ * The item as the space's cached attention block lists it, where it does. The
+ * block is the listing the agent read the id from, so its title is the one
+ * the agent named. A missed or unreadable cache yields nothing, and the
+ * operator's card then reads the live item alone.
+ */
+async function listedInAttention(
+  redis: Redis,
+  tenantId: string,
+  spaceId: string,
+  itemId: string,
+): Promise<HumanActionCenterFocusOutput['listed']> {
+  const { value } = await getAttentionCache(redis, tenantId, spaceId);
+  if (value === null) return undefined;
+  let attention: Partial<Pick<HelmsmanAttentionContext, 'waitingOnPerson'>> | null;
+  try {
+    attention = JSON.parse(value) as Partial<
+      Pick<HelmsmanAttentionContext, 'waitingOnPerson'>
+    > | null;
+  } catch {
+    return undefined;
+  }
+  const items = attention?.waitingOnPerson?.items;
+  const item = Array.isArray(items) ? items.find((entry) => entry.itemId === itemId) : undefined;
+  return item !== undefined ? { kind: item.kind, title: item.title } : undefined;
 }

@@ -217,7 +217,6 @@ export function OperationChips({ value, onChange, filterStepTypes, compact }: Op
           flexDirection: 'column',
           gap: 'var(--space-2)',
         }}
-        className="ds-scroll-subtle"
       >
         {grouped.length === 0 ? (
           <Text variant="muted" size="xs">

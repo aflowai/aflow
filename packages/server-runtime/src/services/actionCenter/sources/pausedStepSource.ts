@@ -14,6 +14,7 @@ import {
   type BrowserWriteApprovalRequestPayload,
   type WriteApprovalExtension,
   type WriteApprovalRequestPayload,
+  ACTION_CENTER_ITEM_ID_PREFIX,
   BROWSER_PAGE_ACT_OPERATION_ID,
   MODEL_RUNTIME_CHANGE_OPERATION_ID,
   localModelChangePhrase,
@@ -21,6 +22,9 @@ import {
   type ResolverPolicy,
   browserApprovalActionPhrase,
   derivePauseToken,
+  humanRequestTitle,
+  oauthConsentTitle,
+  writeApprovalTitle,
   WriteApprovalRequestPayloadSchema,
 } from '@aflow/schemas';
 import type { SessionService } from '../../sessions.js';
@@ -34,7 +38,7 @@ import {
 } from '../types.js';
 import { deriveResolverPolicy } from '@aflow/schemas';
 
-const STEP_ITEM_ID_PREFIX = 'step:';
+const STEP_ITEM_ID_PREFIX = ACTION_CENTER_ITEM_ID_PREFIX.pausedStep;
 const GATE_ITEM_ID_PREFIX = 'gate:';
 
 export interface PausedStepSourceDeps extends ActionCenterSourceDeps {
@@ -392,14 +396,12 @@ async function buildItemFromSession(
   const kind: ActionCenterItemKind = rawKind === 'input' ? 'human_input' : 'human_approval';
 
   // Title / summary from the payload.
-  let title: string;
+  const title = humanRequestTitle(rawKind, payload['title']);
   let summary: string;
   if (rawKind === 'input') {
-    title = typeof payload['title'] === 'string' ? payload['title'] : 'Information requested';
     const prompt = typeof payload['prompt'] === 'string' ? payload['prompt'] : '';
     summary = prompt.slice(0, 2_000) || 'A skill is waiting for your input.';
   } else {
-    title = typeof payload['title'] === 'string' ? payload['title'] : 'Approval requested';
     summary =
       typeof payload['description'] === 'string'
         ? payload['description'].slice(0, 2_000)
@@ -516,7 +518,7 @@ function buildOAuthConsentItem(
       : undefined;
 
   const providerLabel = resourceKey || bindingId || 'this integration';
-  const title = `Connect ${providerLabel}`;
+  const title = oauthConsentTitle({ resourceKey, bindingId });
   const summary =
     reason === 'expired'
       ? `Your connection to ${providerLabel} has expired. Reconnect to let the skill continue.`
@@ -669,10 +671,9 @@ interface WriteApprovalShown {
 }
 
 function apiWriteApprovalShown(req: ApiWriteApprovalRequestPayload): WriteApprovalShown {
-  const label = req.operationLabel ?? req.endpointName ?? `${req.method} ${req.endpointId}`;
   const tierNote = WRITE_TIER_LABEL[req.writeRiskTier] ?? req.writeRiskTier;
   return {
-    title: `Approve write: ${label}`,
+    title: writeApprovalTitle(req),
     summary: `A skill wants to call ${req.method} ${req.urlHost} (${req.apiId}/${req.endpointId}) — ${tierNote}. Approve to let it send, or deny to stop it.`,
     extension: {
       kind: 'write_approval',
@@ -693,23 +694,14 @@ function apiWriteApprovalShown(req: ApiWriteApprovalRequestPayload): WriteApprov
   };
 }
 
-function siteOf(origin: string): string {
-  try {
-    return new URL(origin).host;
-  } catch {
-    return origin;
-  }
-}
-
 function browserApprovalShown(req: BrowserWriteApprovalRequestPayload): WriteApprovalShown {
-  const site = siteOf(req.pageOrigin);
   const doing = browserApprovalActionPhrase(req);
   const asked =
     req.askedBy.kind === 'rule'
       ? `The operator's rule \`${req.askedBy.rule}\` asks before actions on this site.`
       : `Browser profile \`${req.profileId}\` asks before every action.`;
   return {
-    title: `Approve in the browser: ${doing} on ${site}`,
+    title: writeApprovalTitle(req),
     summary:
       `An agent wants to ${doing} on “${req.pageTitle}” (${req.pageOrigin}). ${asked} ` +
       'Approve to let it do this once, or deny to stop it.',
@@ -743,7 +735,7 @@ function localModelApprovalShown(req: LocalModelWriteApprovalRequestPayload): Wr
     ? ' This conversation runs on it, so its next turn loads it again.'
     : '';
   return {
-    title: `Approve on this computer: ${doing}`,
+    title: writeApprovalTitle(req),
     summary:
       `Helmsman wants to ${doing} on ${req.runtimeUrl}. ${req.impact.notes.join(' ')}${ends}${own} ` +
       'Approve to let it do this once, or deny to stop it.',

@@ -13,7 +13,7 @@ import {
 import dynamic from 'next/dynamic';
 import { useParams } from 'next/navigation';
 import { QueryClientProvider, useQueryClient } from '@tanstack/react-query';
-import { ToastProvider } from '@aflow/design-system';
+import { ToastProvider, useScrollbarReveal } from '@aflow/design-system';
 import { ThemeProvider } from '../providers/theme.js';
 import { NavigationProvider } from './navigation-provider.js';
 import {
@@ -416,6 +416,12 @@ function QueryProvider({ children }: { children: ReactNode }) {
 // Combined Providers
 // =============================================================================
 
+/** Shows a scroll container's scrollbar while it scrolls (`base.css` hides it otherwise). */
+function ScrollbarReveal() {
+  useScrollbarReveal();
+  return null;
+}
+
 export function Providers({
   children,
   recovery,
@@ -427,6 +433,7 @@ export function Providers({
 }) {
   return (
     <ThemeProvider>
+      <ScrollbarReveal />
       <ToastProvider>
         <QueryProvider>
           <ActiveSpaceStateProvider>

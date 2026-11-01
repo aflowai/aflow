@@ -165,6 +165,38 @@ export const PLAN_OPEN_DECISIONS_LIMIT = 50;
  */
 export const ACTION_CENTER_LIST_LIMIT = 200;
 
+/** The count of plan steps that wait on a person, as the sidebar and the Helmsman both show it. */
+export interface PlanPendingCount {
+  /** Waiting nodes and open decisions together. */
+  count: number;
+  /**
+   * Whether either set holds as many as its source lists at most, or the list
+   * it was read from may have cut. It says the count may have cut, not that it has.
+   */
+  mayBeCut: boolean;
+  /** "3", or "50+" where the count may have cut. */
+  label: string;
+}
+
+/**
+ * The plan-step count from its two sets: the waiting nodes (`plan_ask`) and
+ * the open decisions (`plan_decision`), each as long as its source lists. The
+ * sidebar reads the sets off the Action Center list, and the Helmsman's block
+ * off the plan walk, so one tree reads the same on both (Plan 338 D1, D2).
+ */
+export function pendingPlanStepCount(sets: {
+  asks: number;
+  decisions: number;
+  listMayBeCut?: boolean;
+}): PlanPendingCount {
+  const count = sets.asks + sets.decisions;
+  const mayBeCut =
+    sets.asks >= PLAN_OPEN_ASKS_LIMIT ||
+    sets.decisions >= PLAN_OPEN_DECISIONS_LIMIT ||
+    sets.listMayBeCut === true;
+  return { count, mayBeCut, label: mayBeCut ? `${String(count)}+` : String(count) };
+}
+
 /** The most characters an Action Center item's summary holds. */
 const PLAN_ITEM_SUMMARY_MAX_CHARS = 2_000;
 

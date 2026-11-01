@@ -6,6 +6,8 @@ import {
   type WorkflowRunRow,
 } from '@aflow/database';
 import {
+  ACTION_CENTER_ITEM_ID_PREFIX,
+  oauthConsentTitle,
   type ActionCenterItemOrigin,
   type OAuthConsentExtension,
   type OAuthConsentPauseCause,
@@ -21,7 +23,7 @@ import {
   ActionCenterResolveError,
 } from '../types.js';
 
-const ITEM_ID_PREFIX = 'workflow-oauth-consent:';
+const ITEM_ID_PREFIX = ACTION_CENTER_ITEM_ID_PREFIX.workflowOAuthConsent;
 const LIST_LIMIT = 200;
 
 /**
@@ -151,7 +153,7 @@ async function buildItemFromRun(
   if (!consent) return null;
 
   const providerLabel = consent.resourceKey || consent.bindingId || 'this integration';
-  const title = `Connect ${providerLabel}`;
+  const title = oauthConsentTitle(consent);
   const summary =
     consent.reason === 'expired'
       ? `Your connection to ${providerLabel} has expired. Reconnect to let the skill continue.`

@@ -17,6 +17,7 @@ import type {
 import { HitlInline } from './HitlInline.js';
 import { RunWakeupCard } from './RunWakeupCard.js';
 import { InlineFocusedProposal } from './InlineFocusedProposal.js';
+import { InlineFocusedItem } from './InlineFocusedItem.js';
 import { SubflowClusterHeader } from './SubflowClusterHeader.js';
 import { useMessageAuthor } from './MessageAuthorContext.js';
 import { ThinkingBody } from './ThinkingBody.js';
@@ -176,8 +177,9 @@ export function MessageWithCopy({
   if (msg.semanticType === 'inline_proposal_focus' && msg.richContent) {
     const focusPayload = msg.richContent as InlineProposalFocusPayload;
     if (!focusPayload.itemId.startsWith('proposal:')) {
-      // Legacy/non-proposal focus items have no inline renderer anymore.
-      // Fall through to the default text-rendering path below.
+      // Every other id the focus accepts names an item with no body this chat
+      // can act on, so the card names it, says its state and points to where
+      // it is acted on. The focus tells the agent the operator sees it here.
       return (
         <div
           className={`chat-message-wrapper ${isSubflow ? 'chat-message-wrapper--subflow' : ''}`}
@@ -192,13 +194,10 @@ export function MessageWithCopy({
             timestamp={formatTime(msg.timestamp)}
             senderName={msg.senderName ?? 'System'}
           >
-            <ContentRenderer
-              content={msg.content}
-              richContent={null}
-              mediaItems={msg.mediaItems}
-              payloadRef={msg.payloadRef}
-              semanticType={msg.semanticType}
-              stepExecutionId={msg.stepExecutionId}
+            <InlineFocusedItem
+              itemId={focusPayload.itemId}
+              {...(focusPayload.reason ? { reason: focusPayload.reason } : {})}
+              {...(focusPayload.listed ? { listed: focusPayload.listed } : {})}
             />
           </ChatMessage>
         </div>

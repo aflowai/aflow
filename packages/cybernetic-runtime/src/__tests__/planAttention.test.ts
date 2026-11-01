@@ -282,7 +282,7 @@ describe('the plan section of the attention block', () => {
     for (let i = 0; i < PLAN_ATTENTION_NODE_LIMIT + extra; i++) {
       await create({ title: `node ${String(i)}`, position: i });
     }
-    const tree = await loadActivePlanTree(fakeStore.current, SPACE);
+    const { tree } = await loadActivePlanTree(fakeStore.current, SPACE);
     expect(tree?.nodes).toHaveLength(PLAN_ATTENTION_NODE_LIMIT);
     expect(tree?.total).toBe(PLAN_ATTENTION_NODE_LIMIT + extra);
     expect(await turnAttention()).toContain(
@@ -300,7 +300,7 @@ describe('the plan section of the attention block', () => {
       });
     }
 
-    const tree = await loadActivePlanTree(fakeStore.current, SPACE);
+    const { tree } = await loadActivePlanTree(fakeStore.current, SPACE);
     expect(tree).toMatchObject({
       total: PLAN_TREE_DEPTH_LIMIT + 1,
       truncated: { bound: 'depth', value: PLAN_TREE_DEPTH_LIMIT },
@@ -631,7 +631,9 @@ describe('work under the plan — one answer to "what now" (Plan 322 P1)', () =>
   it('keeps the plain heading for a space whose runs serve no node', async () => {
     fakeLedger.runs = [activeRun('run-free', 'ticker-market-digest', COLD_SESSION)];
     const lines = (await turnAttention()).split('\n');
-    expect(lines[0]).toBe('Active workflow runs:');
+    expect(lines.find((line) => line.startsWith('Active workflow runs'))).toBe(
+      'Active workflow runs:',
+    );
     expect(lines.join('\n')).not.toMatch(OTHER_LINE);
   });
 });

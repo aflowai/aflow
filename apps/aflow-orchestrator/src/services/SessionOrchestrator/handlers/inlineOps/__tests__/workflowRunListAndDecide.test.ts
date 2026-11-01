@@ -24,8 +24,10 @@ vi.mock('@aflow/database', async () => {
 });
 
 const mockAddStepResult = vi.fn();
+const mockReadWatch = vi.fn();
 vi.mock('@aflow/redis', () => ({
   addStepResult: (...args: unknown[]) => mockAddStepResult(...args),
+  readPullRequestWatch: (...args: unknown[]) => mockReadWatch(...args),
 }));
 
 vi.mock('../../../../lib/orchestratorLogger.js', () => ({
@@ -134,6 +136,33 @@ describe('workflow.run.list', () => {
       }),
     );
     expect(result()).toMatchObject({ status: 'SUCCEEDED' });
+  });
+
+  it("reads the owner a pull request's watch records, the one its events go to, for the owner filter", async () => {
+    mockListRunsByInput.mockResolvedValue({ runs: [], hasMore: false });
+    const owner = '77777777-2222-3333-4444-555555555555';
+    mockReadWatch.mockResolvedValueOnce({ ownerSessionId: owner });
+    const query = {
+      slug: 'publish-local-changes',
+      input: { field: 'branch', equals: 'aflow/x' },
+      startedByActingOwnerOf: 'https://github.com/AflowAI/Aflow/pull/276',
+    };
+    await handleWorkflowCrudInline(args('workflow.run.list', query));
+    expect(mockReadWatch).toHaveBeenCalledWith(expect.anything(), {
+      tenantId: 'a0000000-0000-0000-0000-000000000001',
+      spaceId: '41be431d-6011-495b-a4f2-6de539a6a0df',
+      subject: 'aflowai/aflow#276',
+    });
+    expect(mockListRunsByInput).toHaveBeenLastCalledWith(
+      expect.objectContaining({ pullRequestOwner: owner }),
+    );
+
+    // A pull request no conversation owns, or one the loop does not watch, names none.
+    mockReadWatch.mockResolvedValueOnce(null);
+    await handleWorkflowCrudInline(args('workflow.run.list', query));
+    expect(mockListRunsByInput).toHaveBeenLastCalledWith(
+      expect.objectContaining({ pullRequestOwner: null }),
+    );
   });
 
   it('refuses a page past 100 without reading', async () => {

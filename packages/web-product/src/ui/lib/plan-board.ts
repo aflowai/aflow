@@ -325,6 +325,14 @@ export function planMoveTargets(
   };
 }
 
+/** Whether `otherId` is an open sibling of `nodeId`: a step it can be placed beside. */
+export function planIsOpenSibling(root: PlanTreeNode, nodeId: string, otherId: string): boolean {
+  if (nodeId === otherId) return false;
+  const parent = pathTo(root, nodeId).at(-2);
+  const other = parent?.children.find((s) => s.nodeId === otherId);
+  return other !== undefined && !isClosedPlanNodeStatus(other.status);
+}
+
 // ============================================================================
 // The overview's lanes (Plan 332 D1, D7)
 // ============================================================================

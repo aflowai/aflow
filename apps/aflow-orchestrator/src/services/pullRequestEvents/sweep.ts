@@ -4,14 +4,15 @@
  * The shepherd's schedule is a fallback sweep for the pull requests no
  * conversation holds. A firing reads the space's open loop pull requests and
  * starts the shepherd only where one of them is unattended. A pull request is
- * attended where an owner that can act holds the wait the platform keeps for
- * it, or where another waiter's window closes before the next sweep: that
- * waiter is woken first, and reads the pull request itself. An owner that has
- * ended or failed attends nothing, whatever wait it still holds.
+ * attended where the owner its watch records can act and holds the wait the
+ * platform keeps for it, or where another waiter's window closes before the
+ * next sweep: that waiter is woken first, and reads the pull request itself.
+ * An owner that has ended or failed attends nothing, whatever wait it still
+ * holds.
  *
  * Its cost grows with the space's open loop pull requests: one range read,
- * then two key reads for each, and one session read for each owner wait. With
- * none open it reads one empty range.
+ * then three key reads for each, and one session read for the owner's wait.
+ * With none open it reads one empty range.
  */
 import type { Redis } from 'ioredis';
 import type postgres from 'postgres';
@@ -39,16 +40,21 @@ export type OwnerActs = (sessionId: string) => Promise<boolean>;
 
 /**
  * Why a pull request does or does not need the sweep. An owner wait counts
- * only where its owner can act: the platform renews it on every window close,
- * so a failed or ended owner would otherwise hold its pull request for good.
+ * only where it is the wait of the owner the watch records, and that owner
+ * can act: the platform renews it on every window close, so a failed or ended
+ * owner would otherwise hold its pull request for good. A wait kept for an
+ * owner the pull request has had before hears nothing, so it holds nothing.
  */
 export async function sweepAttention(
   waits: readonly WaitRegistration[],
+  recordedOwner: string | undefined,
   ownerActs: OwnerActs,
   nowMs: number,
   intervalMs: number = SHEPHERD_SWEEP_INTERVAL_MS,
 ): Promise<SweepAttention> {
-  const owners = waits.filter((wait) => wait.owner !== undefined);
+  const owners = waits.filter(
+    (wait) => wait.owner !== undefined && wait.sessionId === recordedOwner,
+  );
   for (const wait of owners) {
     if (await ownerActs(wait.sessionId)) return 'owner';
   }
@@ -81,7 +87,10 @@ export async function shepherdSweepDue(
     if (watch === null) continue;
     open++;
     const waits = await readSubjectWaits(redis, { ...space, kind: PULL_REQUEST_CHANGED, subject });
-    if ((await sweepAttention(waits, ownerActs, nowMs, intervalMs)) === 'unattended') {
+    if (
+      (await sweepAttention(waits, watch.ownerSessionId, ownerActs, nowMs, intervalMs)) ===
+      'unattended'
+    ) {
       unattended++;
     }
   }
