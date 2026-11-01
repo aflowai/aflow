@@ -84,7 +84,7 @@ export const ChannelOperationRegistrations: OperationRegistration[] = [
       ],
       pitfalls: [
         'The message goes to the person this run works for, and only when they linked Slack with `yarn channel:slack setup`. Any other run fails.',
-        'Sending the same text twice in one run fails. Say something new, or stop.',
+        'Sending the same text with the same `itemId` twice in one run fails, and so does the same text twice with no `itemId`. Say something new, or stop.',
         'The send is synchronous: a result means the channel accepted the message, not that the operator read it.',
         'An `itemId` must name an open item in this space. Buttons appear only for an approval or a simple question from a paused step, or a low or medium API write approval. Every other item tells the operator to open Aflow.',
       ],
