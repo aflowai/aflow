@@ -36,8 +36,14 @@ import {
   HostProcessStopInputSchema,
 } from '@aflow/schemas';
 
-import { mergeConflictPaths } from '../baseMerge.js';
-import { scanCommitRange } from '../commitScan.js';
+import {
+  commitParents,
+  mergeBaseIntoCommit,
+  mergeConflictPaths,
+  pushMergeIdentityArgs,
+} from '../baseMerge.js';
+import { advanceLocalBranch } from '../branchCommit.js';
+import { scanCommitRange, scanPushedMerge } from '../commitScan.js';
 import { createChatterStripper } from '../egressRefusals.js';
 import { EnvPolicyError } from '../envPolicy.js';
 import { explainFailedStart } from '../executableHint.js';
@@ -135,6 +141,27 @@ function pushFailureText(result: SandboxedRunResult): string {
   return said !== '' ? said : `git exited with ${String(result.exitCode)} and said nothing.`;
 }
 
+/**
+ * The push's argv with its one refspec replaced by the one the gate cleared,
+ * where the gate merged a moved base: the push then sends the merge.
+ */
+function pushedArgv(
+  argv: readonly string[],
+  named: string | undefined,
+  cleared: string | undefined,
+): string[] {
+  if (named === undefined || cleared === undefined) return [...argv];
+  const at = argv.lastIndexOf(named);
+  if (at === -1) {
+    throw new HostBindingError(
+      `The push's refspec \`${named}\` is not on its command, so the merge the push made ` +
+        'cannot take its place. Nothing was pushed.',
+      'push_refused',
+    );
+  }
+  return [...argv.slice(0, at), cleared, ...argv.slice(at + 1)];
+}
+
 async function execProcess(
   ctx: ExecutorContext,
   policyPath: string,
@@ -196,11 +223,22 @@ async function execProcess(
           holds: (commit, ancestor) =>
             isAncestor(binding.root, ancestor, commit).catch(() => false),
           conflicts: (base, sha) => mergeConflictPaths(binding.root, base, sha),
+          merge: async (sha, base, message) =>
+            await mergeBaseIntoCommit(
+              binding.root,
+              sha,
+              base,
+              await pushMergeIdentityArgs(binding.root),
+              message,
+            ),
+          parents: (commit) => commitParents(binding.root, commit),
           scanSecrets: (range) => scanCommitRange(binding.root, range),
+          scanMerge: (range) => scanPushedMerge(binding.root, range),
         },
         approvalFor: (requestHash) => approvals(ctx.tenantId, ctx.runId, requestHash),
       });
     }
+    const command = pushedArgv(input.command, push?.refspecs[0], clearance?.refspec);
 
     // Live standard error carries the adapter's own narration alongside the
     // command's, and a viewer reading the sandbox describe its sockets cannot
@@ -244,7 +282,11 @@ async function execProcess(
         detach: input.detach,
       });
     } else {
-      result = await runUnconfined({ ...supervision, binding, argv: input.command });
+      result = await runUnconfined({
+        ...supervision,
+        binding,
+        argv: command,
+      });
     }
     // Whatever the last chunk left unterminated.
     live.push(visible.flush());
@@ -267,6 +309,20 @@ async function execProcess(
       );
     }
 
+    // The remote now holds the merge: the folder's branch follows it, so the
+    // next publication onto the branch appends to what `origin` holds.
+    const merged = clearance?.baseMerge;
+    const localBranch =
+      merged === undefined || clearance?.refspec === undefined
+        ? undefined
+        : await advanceLocalBranch(
+            binding.root,
+            clearance.refspec
+              .slice(clearance.refspec.indexOf(':') + 1)
+              .replace(/^refs\/heads\//, ''),
+            merged.branchCommit,
+            merged.commit,
+          ).catch(() => 'failed' as const);
     detached = result.detached;
     // A refusal nobody can attribute is a refusal nobody can act on. Only a
     // confined command has a boundary that could be the reason it never started.
@@ -282,7 +338,7 @@ async function execProcess(
     return await successWithData(ctx, {
       processId: result.processId,
       bindingId: binding.id,
-      command: input.command.join(' '),
+      command: command.join(' '),
       ...(result.detached === true ? { detached: true } : {}),
       confined,
       exitCode: result.exitCode,
@@ -295,6 +351,10 @@ async function execProcess(
       ...(note !== undefined ? { boundaryNote: note } : {}),
       ...(clearance?.checkedUnder !== undefined ? { checkedUnder: clearance.checkedUnder } : {}),
       ...(clearance?.rescanned !== undefined ? { rescanned: clearance.rescanned } : {}),
+      ...(merged !== undefined
+        ? { baseMerge: { ...merged, ...(localBranch !== undefined ? { localBranch } : {}) } }
+        : {}),
+      ...(clearance?.checkedMerge !== undefined ? { checkedMerge: clearance.checkedMerge } : {}),
     });
   } catch (error) {
     return await failure(ctx, error);

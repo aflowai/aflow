@@ -319,8 +319,22 @@ describe('a push carries the receipt of the folder’s checks passing', () => {
     try {
       const { status, captured } = await push('moved-on', { receipt: checkReceipt() });
       expect(status).toBe('SUCCEEDED');
-      expect(captured.output?.['rescanned']).toBe(`${moved}..${tip}`);
-      expect(await onOrigin('moved-on')).toBe(true);
+      // The push merged the moved base and sent the merge, on the receipt for `tip`.
+      const merge = await execFileAsync('git', [
+        '-C',
+        join(dir, 'remote.git'),
+        'rev-parse',
+        'aflow/moved-on',
+      ]).then(({ stdout }) => stdout.trim());
+      expect(await git('rev-list', '--parents', '--no-walk', merge)).toBe(
+        `${merge} ${tip} ${moved}`,
+      );
+      expect(captured.output?.['rescanned']).toBe(`${moved}..${merge}`);
+      expect(captured.output?.['checkedMerge']).toEqual({
+        checked: tip,
+        base: moved,
+        commit: merge,
+      });
 
       await expectRefused(
         'unheld-base',

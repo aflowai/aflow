@@ -23,6 +23,7 @@ import {
   HostHarnessPreviewFlagSchema,
   HOST_HARNESS_PREVIEW_OUTPUT_SHAPE,
 } from './hostFolderPreview.js';
+import { HostPushBaseMergeSchema, HostPushCheckedMergeSchema } from './hostPushMerge.js';
 
 /**
  * What a branch name and a branch prefix may be, in one place.
@@ -572,6 +573,8 @@ export const HostProcessExecOutputSchema = z.object({
     'The range the push scanned itself, where `origin` moved on since its receipt or the ' +
       'executor restarted since issuing it.',
   ),
+  baseMerge: HostPushBaseMergeSchema.optional(),
+  checkedMerge: HostPushCheckedMergeSchema.optional(),
   boundaryNote: z
     .string()
     .optional()
