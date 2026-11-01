@@ -332,7 +332,7 @@ const ENTRY_INPUT_CONTRACT = {
 
 const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'publish-local-changes',
-  version: 50,
+  version: 51,
   name: 'Publish Local Changes',
   tagline:
     'Commit a patch onto a branch of a connected repository, then push it and open the pull request — asking the operator first unless the folder says otherwise.',
@@ -624,7 +624,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
         {
           taskId: 'recheck-commit',
           name: "Run the folder's checks again, after tests ran out of time",
-          goal: "Run the folder's checks once more on this run's commit, where nothing failed on their first run but tests running out of their time — `testTimeouts` names them — which a machine under load does to a passing commit. This run's result is the one the push carries; a failure here fails the publication.",
+          goal: "Run the folder's checks once more on this run's commit, where nothing failed on their first run but running out of their time — `testTimeouts` says where — which a machine under load does to a passing commit. The checks first wait until the machine's load average is below its core count, ten minutes at most, and `quietWait` records how long they waited. This run's result is the one the push carries. A failure here fails the publication.",
           failureInstruction: `${CHECK_FAILED} They were run a second time because tests ran out of their time on the first, and this second run failed as well.`,
           type: 'operation' as const,
           operation: 'host.commit.check',
@@ -640,8 +640,11 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           maxAttempts: 1,
           inputBindings: CHECK_INPUT_BINDINGS,
           context: CHECK_CONTEXT,
-          inputTemplate: CHECK_INPUT_TEMPLATE,
+          // The load that ran the first run out of time fails a second run
+          // started at once in the same way, so this one waits for it to fall.
+          inputTemplate: { ...CHECK_INPUT_TEMPLATE, waitForQuiet: true },
           outputProjection: {
+            quietWait: { path: 'quietWait', onMissing: 'error' as const },
             clearedSha: { path: 'clearedSha', onMissing: 'error' as const },
             passed: { path: 'passed', onMissing: 'error' as const },
             summary: { path: 'summary', onMissing: 'error' as const },

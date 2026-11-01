@@ -10,6 +10,7 @@ import { join } from 'node:path';
 
 import {
   FOLDER_PREVIEW_READY_WITHIN_DEFAULT_SECONDS,
+  HOST_CHECK_QUIET_WAIT_MAX_MS,
   HOST_CHECKS_TIMEOUT_DEFAULT_MS,
 } from '@aflow/schemas';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -213,6 +214,30 @@ describe('resolveHostTimeout for a check', () => {
 
       expect(await run).toMatchObject({ success: true, value: 'checks passed' });
     });
+  });
+
+  it('adds the wait for a quiet machine to a check asked to wait, outside the checks’ own time', async () => {
+    const policyPath = await policyWith({
+      branchPrefix: 'aflow/',
+      checks: ['node', 'check.mjs'],
+      checksTimeoutMs: 600_000,
+    });
+    expect(
+      await resolveFor(
+        ctxFor('host.commit.check', {
+          bindingId: 'hb_app',
+          sha: SHA,
+          base: BASE,
+          waitForQuiet: true,
+        }),
+        policyPath,
+      ),
+    ).toBe(
+      600_000 +
+        HOST_CHECK_QUIET_WAIT_MAX_MS +
+        HOST_CHECK_CHECKOUT_MARGIN_MS +
+        HOST_OUTER_TIMEOUT_MARGIN_MS,
+    );
   });
 
   it('gives checks with no time chosen the default', async () => {

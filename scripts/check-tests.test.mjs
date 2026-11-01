@@ -23,6 +23,7 @@ import {
   CHECK_TEST_RESULTS_ENV,
   CHECK_TEST_TIMEOUT_MS,
   checkTestOptions,
+  OUTSIDE_EVERY_TEST_FILE,
   summarizeTestRun,
   testsTimedOutAlone,
 } from './check-tests.mjs';
@@ -187,6 +188,44 @@ describe('a run lost to time alone', () => {
       [],
     );
     expect(testsTimedOutAlone({ tests: [{ ...timedOut, errors: [] }], errors: [] })).toEqual([]);
+  });
+
+  it('is one where no failing test is named and the run itself ran out of time, whatever it printed', () => {
+    const passed = {
+      name: 'a.test.ts › passes',
+      timeoutMs: CHECK_TEST_TIMEOUT_MS,
+      state: 'passed',
+      errors: [],
+    };
+    // What a machine under load does to a run: workers that do not start, and
+    // calls to them that go unanswered, with not one test failing.
+    const lostToLoad = {
+      tests: [passed],
+      errors: [
+        { file: 'b.test.ts', message: '[vitest-pool]: Timeout starting forks runner.' },
+        { file: 'c.test.ts', message: '[vitest-pool]: Timeout starting forks runner.' },
+        { message: '[vitest-worker]: Timeout calling "onTaskUpdate" with "[]"' },
+        { message: '[birpc] timeout on calling "onCollected"' },
+      ],
+    };
+    expect(testsTimedOutAlone(lostToLoad)).toEqual([
+      'b.test.ts',
+      'c.test.ts',
+      OUTSIDE_EVERY_TEST_FILE,
+    ]);
+    // A test that failed on its own, or an error that is no time-out, is a failure.
+    expect(
+      testsTimedOutAlone({
+        ...lostToLoad,
+        errors: [...lostToLoad.errors, { message: 'Worker exited unexpectedly' }],
+      }),
+    ).toEqual([]);
+    expect(
+      testsTimedOutAlone({
+        ...lostToLoad,
+        tests: [{ ...passed, state: 'failed', errors: ['expected 1 to be 2'] }],
+      }),
+    ).toEqual([]);
   });
 
   it('is summarised from what Vitest reports, files relative to the repository', () => {
