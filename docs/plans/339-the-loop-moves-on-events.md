@@ -159,9 +159,9 @@ A person relayed every node change because work waited on approval by default. T
 - Active, for approved work in the queue: a phase of a plan the operator approved or wrote (`approved_phase`), a defect fix such as CI red, a regression or a loop defect (`defect_fix`), or a follow-up for findings a review carried (`findings_follow_up`).
 - Blocked, only for a decision that is the operator's: a design decision (`design_decision`), a new plan's design document (`design_document`), a change to a decision in a plan document (`decision_change`), anything that touches policy, egress, write authority or confinement (`authority`), or a question the card marks as the operator's (`operator_question`).
 
-A blocked kind needs the card's `waitsOn`, and the schema refuses one without it. A node whose card names `waitsOn` starts blocked, its note opening with `Waiting on you:` and the decision. The carrier a done-close writes for open findings (Plan 331 D6) reads the same rule and starts active.
+A blocked kind needs the card's `waitsOn`, and the schema refuses one without it. A node whose card names `waitsOn` starts blocked, its note opening with `Waiting on you:` and the decision. The carrier a done-close writes for open findings (Plan 331 D6) reads the same rule and starts active. Where a resident wake wrote the close, the carrier stays blocked and proposed, so a resident wake never creates active work.
 
-**Rule 2 — the card carries the reason a node waits.** `waitsOn` names the reason and the decision it asks. The rail offers **Approve** only on a blocked step whose card names it, and shows the decision above it. A node whose card names no waiting reason never shows Approve. A blocked step that names none, such as a stop, offers **Resume**, the same open write with no decision asked. A lane row of the overview offers no Approve, because it carries no card.
+**Rule 2 — the card carries the reason a node waits.** `waitsOn` names the reason and the decision it asks. The rail offers **Approve** only on a blocked step whose card names it, and shows the decision above it. A node whose card names no waiting reason never shows Approve. A live check keeps **Approve** whatever its card holds, because its open write is no resume: it closes the check done as the operator’s read of the folder’s head. Any other blocked step that names none, such as a stop, offers **Resume**, the same open write with no decision asked. Every label is the same control, so Resume keeps the instructions field and **Revise** beside it. A lane row of the overview offers no Approve, because it carries no card.
 
 **Rule 3 — a finished root asks for nothing.** A root whose steps have all closed reads `finished` and offers Close plan, whatever status it was created with. It stands in no Needs you column or lane. The Action Center lists no item for it, and no resident wake asks about it.
 
@@ -169,7 +169,7 @@ This amends Plan 322 D2, which names a node's first status, and Plan 331 D5, whi
 
 _Rejected:_ the default-blocked rail of today. Every blocked step showed Approve, whatever it waited on, and a blocked root read as waiting after its work had finished. The operator approved work they had already approved, and the loop stopped at each such step until a person came. An approval that asks no decision is a relay, which is what this plan removes.
 
-_Not done on purpose:_ a resident wake still creates only blocked work, and a defect fix it finds is a proposal. Whether it may start one active is a change to write authority, so the rule itself makes it the operator's decision. A proposal written without `waitsOn` stays blocked and offers Resume rather than Approve. The Action Center item's own **Approve** label is left as it stands.
+_Not done on purpose:_ a resident wake still creates only blocked work, and a defect fix it finds is a proposal. Whether it may start one active is a change to write authority, so the rule itself makes it the operator's decision. A proposal written without `waitsOn` stays blocked and offers Resume rather than Approve, and keeps Revise. The Action Center item's own **Approve** label is left as it stands.
 
 ## 4. What it affects
 
@@ -200,7 +200,7 @@ _P1 as built:_ `mergeBaseIntoCommit` (`baseMerge.ts`) writes the merge's tree wi
 
 **P4 — Approval as a decision gate (D6).** _Exit:_ on the operator's space, a day of the loop's work in which no step that asks no decision waits on the operator, and no finished plan asks for approval.
 
-_P4 as built:_ the three rules of D6, each with its test. `planFirstStatus.test.ts` starts each approved kind of work active and each decision blocked, and refuses a decision whose card names none. `plan-board.test.ts` and `space-plan.test.ts` show Approve only with the decision the card names. `planTrees.test.ts` and `planStream.test.ts` read a root whose steps have all closed as `finished`, with no Action Center item and no ask. The live exit is open.
+_P4 as built:_ the three rules of D6, each with its test. `planFirstStatus.test.ts` starts each approved kind of work active and each decision blocked, and refuses a decision whose card names none. `plan-board.test.ts` and `space-plan.test.ts` show Approve only with the decision the card names. `planTrees.test.ts` and `planStream.test.ts` read a root whose steps have all closed as `finished`, with no Action Center item and no ask. The Action Center learns which roots have finished from one overview read, made only where a blocked root is listed, never from a walk for each item. `planStream.test.ts` keeps the carrier of a resident wake’s done-close blocked. The live exit is open.
 
 ## 6. How it is proven
 

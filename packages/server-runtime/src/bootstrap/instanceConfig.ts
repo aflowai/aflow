@@ -36,7 +36,11 @@ import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { z } from 'zod';
-import { LOCAL_EDITION_OWNER_ID, LOCAL_EDITION_TENANT_ID } from '@aflow/schemas';
+import {
+  CHANNEL_REDIS_PASSWORD_ENV,
+  LOCAL_EDITION_OWNER_ID,
+  LOCAL_EDITION_TENANT_ID,
+} from '@aflow/schemas';
 
 export const INSTANCE_CONFIG_FILENAME = 'instance.env';
 
@@ -135,6 +139,11 @@ interface ConfigAudience {
   filename: string;
   keys: readonly ManagedKey[];
   /**
+   * Values this file does not establish but carries where something else wrote
+   * them. Each is cut through only when present.
+   */
+  optionalKeys?: readonly string[];
+  /**
    * Owner-only unless the reader runs as a different user than the writer.
    * Stated per audience rather than defaulted, because getting it wrong is a
    * server that will not start or a secret readable by more than needs it.
@@ -151,6 +160,11 @@ const CONFIG_AUDIENCES = {
     // authenticates to the API — so a compromised one must not be able to act
     // as the owner. They do all speak to Redis, which now asks who they are.
     keys: ['CREDENTIAL_ENCRYPTION_KEY', 'REDIS_PASSWORD'],
+    // Written by the channel setup only where a channel app was set up, and its
+    // presence is what composes the channel lane (Plan 327). Without it the
+    // orchestrator refuses every channel dispatch. The worker already holds the
+    // default password, so this widens nothing it can reach.
+    optionalKeys: [CHANNEL_REDIS_PASSWORD_ENV],
     mode: 0o600,
   },
   web: {
@@ -322,9 +336,10 @@ async function writeAudienceFiles(
 ): Promise<Record<string, string>> {
   const written: Record<string, string> = {};
 
-  for (const [audience, { directoryVar, filename, keys, mode }] of Object.entries(
-    CONFIG_AUDIENCES,
-  )) {
+  for (const [audience, audienceConfig] of Object.entries(CONFIG_AUDIENCES)) {
+    const { directoryVar, filename, keys, mode } = audienceConfig;
+    const optionalKeys: readonly string[] =
+      'optionalKeys' in audienceConfig ? audienceConfig.optionalKeys : [];
     const directory = env[directoryVar]?.trim();
     if (directory === undefined || directory === '') continue;
 
@@ -337,6 +352,10 @@ async function writeAudienceFiles(
         );
       }
       subset[key] = value;
+    }
+    for (const key of optionalKeys) {
+      const value = values[key]?.trim();
+      if (value !== undefined && value !== '') subset[key] = value;
     }
 
     const path = join(directory, filename);

@@ -120,6 +120,11 @@ export const OWNERSHIP_MANIFEST: readonly OwnershipRule[] = [
     why: 'Pairs with a machine the operator runs. A hosted deployment has no computer to reach, which is why the surface is edition-gated rather than merely unconfigured.',
   },
   {
+    path: 'apps/aflow-channel-slack/',
+    owner: 'optional-pack',
+    why: 'Reaches the operator on Slack away from the machine (Plan 327). An install sets it up or does without it, and one without it has no channel lane. Not `local`: a Slack channel can serve the hosted edition too. `channelSlackAbsence.test.ts` fails on any other file that imports it.',
+  },
+  {
     path: 'apps/aflow-executor-code/',
     owner: 'cloud',
     why: 'The managed coding lane. Needs egress, a full toolchain and credentials Aflow operates; §2.2 keeps it private.',

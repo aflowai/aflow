@@ -2583,6 +2583,31 @@ describe('resident review regressions', () => {
     expect(store.nodes.size).toBe(4);
   });
 
+  it('keeps the carrier of a resident wake’s done-close blocked, so a wake creates no active work (Plan 339 D6)', async () => {
+    const root = await created();
+    const node = await created({ parentId: root.nodeId });
+    await linkPlanNode(session(), { nodeId: node.nodeId, kind: 'pull_request', ref: PR });
+    await linkPlanNode(session(), { nodeId: node.nodeId, kind: 'finding', ref: 'review:open-1' });
+    const closed = await updatePlanNode(
+      { ...session(), resident: true, readMergedPullRequest: async () => true },
+      { nodeId: node.nodeId, expectedRevision: node.revision, status: 'done', outcome: 'Met' },
+    );
+    expect(closed).toMatchObject({
+      ok: true,
+      node: { status: 'done' },
+      carrier: {
+        status: 'blocked',
+        note: expect.stringMatching(/^Proposed: Carries the findings/),
+      },
+    });
+    if (!closed.ok || !closed.carrier) throw new Error('No carrier');
+    // It waits on a person, and no wake commissions it.
+    expect((await listWaitingNodes(session())).map((n) => n.nodeId)).toContain(
+      closed.carrier.nodeId,
+    );
+    expect((await wake()).decisions.some((d) => d.answer.decision === 'continue')).toBe(false);
+  });
+
   it('closes from GitHub without an earlier merge record and preserves concurrent person writes', async () => {
     const root = await created();
     const node = await created({ parentId: root.nodeId });

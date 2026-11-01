@@ -452,6 +452,7 @@ export function getDefaultPendingTimeoutMs(stepType: StepType): number {
     case 'store':
     case 'host':
     case 'browser':
+    case 'channel':
     case 'plan':
     case 'model':
       return PENDING_TIMEOUT_MS_DEFAULT;

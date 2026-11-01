@@ -15,6 +15,7 @@
     "build": "yarn workspaces foreach -A --topological run build",
     "build:since": "yarn workspaces foreach --since -t run build",
     "catalog:export": "NODE_OPTIONS='--conditions=ts-source' node scripts/with-stack-env.mjs tsx scripts/export-operation-catalog.ts",
+    "channel:slack": "yarn workspace @aflow/aflow-channel-slack cli",
     "check:packages": "node scripts/check-package-staleness.mjs",
     "clean": "yarn workspaces foreach -A run clean && rm -rf node_modules",
     "compute:build-ml": "docker build -t phoenix-python-ml:latest -f docker/Dockerfile.python-ml .",

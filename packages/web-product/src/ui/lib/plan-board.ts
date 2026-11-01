@@ -8,6 +8,7 @@
  */
 import {
   isClosedPlanNodeStatus,
+  PLAN_NODE_LIVE_CHECK_HEAD,
   PLAN_NODE_NOTE_HEAD_MAX_CHARS,
   PLAN_STATE_LABELS,
   planBoardCards,
@@ -84,23 +85,33 @@ export const WAIT_REASON_LABEL: Record<PlanNodeWaitsOn['reason'], string> = {
   operator_question: 'a question for you',
 };
 
-/** What the rail offers a blocked step: Approve with the decision it asks, or Resume. */
-export type PlanRailOpen = { verb: 'approve'; waitsOn: PlanNodeWaitsOn } | { verb: 'resume' };
+/**
+ * The label of the rail's open control on a blocked step, and the decision the
+ * step asks where its card names one. The control is the same on every label:
+ * its instructions field, and Revise beside it.
+ */
+export type PlanRailOpen = { label: 'Approve'; waitsOn?: PlanNodeWaitsOn } | { label: 'Resume' };
 
 /**
  * The rail's open write on a step under Needs you as `blocked` (Plan 339 D6).
- * Approve appears only where the step's card names the decision it asks
- * (`waitsOn`), and with that decision. A blocked step whose card names none,
- * such as a stop, offers Resume, the same open write asking no decision. Until
- * the step's own read answers, the rail offers neither.
+ * Approve appears where the step's card names the decision it asks
+ * (`waitsOn`), and with that decision. A live check keeps Approve whatever its
+ * card holds, because its open write is no resume: it closes the check done as
+ * the operator's read of the folder's head (Plan 331 D8). Any other blocked
+ * step, such as a stop, offers Resume, the same open write asking no decision.
+ * Until the step's own read answers, the rail offers neither.
  */
 export function planRailOpen(
   reason: PlanNeedsYouReason | undefined,
-  node: { status: PlanNodeStatus; card?: PlanNodeCard | undefined } | undefined,
+  node:
+    | { status: PlanNodeStatus; card?: PlanNodeCard | undefined; note?: string | undefined }
+    | undefined,
 ): PlanRailOpen | undefined {
   if (reason !== 'blocked' || node?.status !== 'blocked') return undefined;
   const waitsOn = planNodeApprovalAsked(node);
-  return waitsOn !== undefined ? { verb: 'approve', waitsOn } : { verb: 'resume' };
+  if (waitsOn !== undefined) return { label: 'Approve', waitsOn };
+  if (node.note?.includes(PLAN_NODE_LIVE_CHECK_HEAD) === true) return { label: 'Approve' };
+  return { label: 'Resume' };
 }
 
 const PHASE_CODE = /^([A-Z]{1,3}\d+[a-z]?(?:\.\d+)*)\b/;

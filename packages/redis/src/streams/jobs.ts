@@ -3,6 +3,7 @@ import {
   StepJobMessageSchema,
   StreamKeys,
   ConsumerGroups,
+  channelLaneRefusal,
   codeLaneBreakerRefusal,
   type StepJobMessage,
   type StepType,
@@ -20,7 +21,8 @@ import type { PendingEntry } from './types.js';
 /**
  * Add a step job to the appropriate job stream.
  * Throws NoExecutorAvailableError if no executor is registered for this step type.
- * Throws CodeLaneDisabledError if the step type's breaker is open here.
+ * Throws CodeLaneDisabledError if the step type's breaker is open here, and
+ * ChannelLaneAbsentError for a channel step where no channel lane is composed.
  */
 export async function addStepJob(
   redis: Redis,
@@ -39,6 +41,12 @@ export async function addStepJob(
     `operation ${validatedJob.operationId}`,
   );
   if (laneRefusal) throw laneRefusal;
+
+  // A channel step where no channel app is set up is refused rather than parked:
+  // nothing is installed that could ever claim it. Every other absent lane still
+  // parks below, as it always has (Plan 327 D7).
+  const channelRefusal = channelLaneRefusal(validatedJob.stepType, validatedJob.operationId);
+  if (channelRefusal) throw channelRefusal;
 
   // Check if an executor is available (default: true)
   if (options.checkExecutorAvailable !== false) {

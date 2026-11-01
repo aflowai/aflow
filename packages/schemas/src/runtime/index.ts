@@ -12,6 +12,7 @@ export * from './sideEffects.js';
 export * from './permissions.js';
 export * from './retryPolicy.js';
 export * from './errors.js';
+export * from './laneRefusal.js';
 export * from './codeLaneBreaker.js';
 export * from './userFacingError.js';
 export * from './errorMessageDisplay.js';

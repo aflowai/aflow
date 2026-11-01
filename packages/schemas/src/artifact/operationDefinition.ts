@@ -42,6 +42,7 @@ export const StepTypeSchema = z.enum([
   'browser',
   'plan',
   'model', // 323: the model runtime on this computer, local edition only
+  'channel', // 327: messages to the operator, served by an optional channel app
 ]);
 
 export type StepType = z.infer<typeof StepTypeSchema>;

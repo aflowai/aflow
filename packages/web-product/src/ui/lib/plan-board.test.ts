@@ -5,6 +5,7 @@
  * derive from their rows (Plan 332 D7).
  */
 import { describe, expect, it } from 'vitest';
+import { PLAN_NODE_LIVE_CHECK_HEAD } from '@aflow/schemas';
 import type {
   PlanLaneItem,
   PlanNode,
@@ -238,16 +239,27 @@ describe('the rail’s Approve (Plan 339 D6)', () => {
 
   it('appears on a blocked step whose card names the decision, with that decision', () => {
     expect(planRailOpen('blocked', { status: 'blocked', card: asking })).toEqual({
-      verb: 'approve',
+      label: 'Approve',
       waitsOn,
     });
   });
 
-  it('never appears on a step whose card names no waiting reason', () => {
+  it('never appears on a step whose card names no waiting reason, which offers Resume', () => {
     expect(planRailOpen('blocked', { status: 'blocked', card: silent })).toEqual({
-      verb: 'resume',
+      label: 'Resume',
     });
-    expect(planRailOpen('blocked', { status: 'blocked' })).toEqual({ verb: 'resume' });
+    expect(planRailOpen('blocked', { status: 'blocked' })).toEqual({ label: 'Resume' });
+    expect(planRailOpen('blocked', { status: 'blocked', note: 'Proposed: worth doing' })).toEqual({
+      label: 'Resume',
+    });
+  });
+
+  it('keeps Approve on a live check, whose open write closes it rather than resuming it', () => {
+    const note = `${PLAN_NODE_LIVE_CHECK_HEAD}waits on a person to read the connected folder's head.`;
+    expect(planRailOpen('blocked', { status: 'blocked', note })).toEqual({ label: 'Approve' });
+    expect(planRailOpen('blocked', { status: 'blocked', note, card: silent })).toEqual({
+      label: 'Approve',
+    });
   });
 
   it('never appears off a blocked step, or before the step’s own read answers', () => {

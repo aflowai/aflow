@@ -68,10 +68,50 @@ describe('ownership manifest', () => {
     // A cut tree cannot resolve the rules the cut removed, so only a tree that
     // has not been cut is held to all of them. In this repository that is
     // every rule.
+    // An optional pack may be deleted from an install that does without it,
+    // and the platform must still pass its tests then (Plan 327 D7). Its
+    // absence guard stays behind and names the path, which a mistyped or
+    // stale rule has nothing to match.
     const cut = cutWasPerformed(tracked);
     const dead = OWNERSHIP_MANIFEST.filter(
-      (rule) => (!cut || survivesCoreCut(rule.owner)) && !resolves(rule),
+      (rule) =>
+        (!cut || survivesCoreCut(rule.owner)) &&
+        !resolves(rule) &&
+        !(rule.owner === 'optional-pack' && absenceGuardsNaming(rule.path).length > 0),
     ).map((rule) => rule.path);
     expect(dead).toEqual([]);
   });
+
+  it('excuses an absent optional pack only where an absence guard names it', () => {
+    const packs = OWNERSHIP_MANIFEST.filter((rule) => rule.owner === 'optional-pack');
+    expect(packs.length).toBeGreaterThan(0);
+    for (const pack of packs) {
+      expect(absenceGuardsNaming(pack.path), pack.path).not.toEqual([]);
+    }
+    expect(absenceGuardsNaming('apps/aflow-channel-slakc/')).toEqual([]);
+  });
 });
+
+const EDITION_GUARD_DIR = 'packages/schemas/src/edition/';
+
+/**
+ * The edition guards other than this one that name a path. An optional pack's
+ * absence test lives here and survives the pack's deletion.
+ */
+function absenceGuardsNaming(path: string): string[] {
+  const needle = path.replace(/\/$/, '');
+  let out: string;
+  try {
+    out = execFileSync('git', ['grep', '-l', '-F', needle, '--', `${EDITION_GUARD_DIR}*.test.ts`], {
+      cwd: repoRoot,
+      encoding: 'utf-8',
+    });
+  } catch (err) {
+    // `git grep` exits 1 when nothing matches.
+    if ((err as { status?: number }).status === 1) return [];
+    throw err;
+  }
+  return out
+    .split('\n')
+    .filter((file) => file !== '' && file !== `${EDITION_GUARD_DIR}ownershipGuard.test.ts`);
+}

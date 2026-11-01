@@ -8,8 +8,8 @@
  * **Now**, the note's first line, above the goal and the whole note folded
  * under **Working note** (Plan 332 D5), and holds the operator's own controls:
  * close an open node (P3.2), **Approve** a blocked one whose card names the
- * decision it asks, with that decision (Plan 339 D6), **Resume** a blocked one
- * that names none, **Reopen** a closed one,
+ * decision it asks, with that decision, or a live check (Plan 339 D6),
+ * **Resume** any other blocked one, through the same control, **Reopen** a closed one,
  * and for a stranded one reopen the closed step above it (Plan 332 D6). A
  * blocked step's Approve carries the operator's instructions, **Revise** sends
  * them back for a rewrite, and **Discuss** opens the space chat about the step
@@ -641,30 +641,25 @@ export function PlanRail({
         gap="sm"
         style={{ borderTop: '1px solid var(--color-border-subtle)', paddingTop: 'var(--space-md)' }}
       >
-        {railOpen?.verb === 'approve' && (
-          <Column gap="xs" data-plan-approve-decision>
-            <Text size="xs" weight="medium">
-              {`Asks you · ${WAIT_REASON_LABEL[railOpen.waitsOn.reason]}`}
-            </Text>
-            <Text size="sm">{railOpen.waitsOn.decision}</Text>
+        {railOpen !== undefined && (
+          <Column gap="xs">
+            {railOpen.label === 'Approve' && railOpen.waitsOn !== undefined && (
+              <Column gap="xs" data-plan-approve-decision>
+                <Text size="xs" weight="medium">
+                  {`Asks you · ${WAIT_REASON_LABEL[railOpen.waitsOn.reason]}`}
+                </Text>
+                <Text size="sm">{railOpen.waitsOn.decision}</Text>
+              </Column>
+            )}
             <PlanNodeOpenControl
               nodeId={node.nodeId}
               verb="approve"
-              label="Approve"
+              label={railOpen.label}
               read={railRead}
               onOpen={onOpen}
               onRevise={onRevise}
             />
           </Column>
-        )}
-        {railOpen?.verb === 'resume' && (
-          <PlanNodeOpenControl
-            nodeId={node.nodeId}
-            verb="resume"
-            label="Resume"
-            read={railRead}
-            onOpen={onOpen}
-          />
         )}
         {reason === 'stranded' && closedAncestor !== undefined && (
           <PlanNodeOpenControl

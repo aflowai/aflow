@@ -17,11 +17,15 @@ const boot = vi.hoisted(() => ({
     vi.fn<
       (redis: unknown, input: { defaultPassword: string; hostPassword: string }) => Promise<void>
     >(),
+  channelApplied: vi.fn<(redis: unknown, channelPassword: string) => Promise<void>>(),
   instanceValues: {} as Record<string, string>,
 }));
 
 vi.mock('../env.js', () => ({}));
-vi.mock('@aflow/schemas', () => ({ resolveEditionDescriptor: () => ({}) }));
+vi.mock('@aflow/schemas', () => ({
+  CHANNEL_REDIS_PASSWORD_ENV: 'PHOENIX_CHANNEL_REDIS_PASSWORD',
+  resolveEditionDescriptor: () => ({}),
+}));
 vi.mock('@aflow/database', () => ({
   createDatabase: () => ({ sql: {}, db: {}, close: () => Promise.resolve() }),
   getDatabaseConfig: () => ({}),
@@ -42,6 +46,7 @@ vi.mock('@aflow/server-runtime/bootstrap', () => ({
   findLocalAuthConfigViolations: () => [],
   loadRedisAclIntoRunningServer: boot.aclOutcome,
   applyHostIdentityToRunningServer: boot.applied,
+  applyChannelIdentityToRunningServer: boot.channelApplied,
   localOwner: () => ({ userId: 'owner' }),
 }));
 
@@ -62,6 +67,7 @@ beforeEach(() => {
   boot.instanceValues = { PHOENIX_HOST_REDIS_PASSWORD: FRESH_STAND_IN, REDIS_PASSWORD: 'd' };
   boot.aclOutcome.mockResolvedValue({ outcome: 'skipped', reason: null });
   boot.applied.mockResolvedValue(undefined);
+  boot.channelApplied.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -102,6 +108,25 @@ describe('the full start, on a Redis without an ACL file', () => {
   });
 });
 
+describe('the channel identity, on a Redis without an ACL file', () => {
+  it('is applied with the credential the channel setup wrote to instance.env', async () => {
+    boot.instanceValues = {
+      ...boot.instanceValues,
+      PHOENIX_CHANNEL_REDIS_PASSWORD: 'channel-stand-in',
+    };
+
+    await fullStart();
+
+    expect(boot.channelApplied).toHaveBeenCalledWith(boot.redis, 'channel-stand-in');
+  });
+
+  it('is not created where no channel app was set up', async () => {
+    await fullStart();
+
+    expect(boot.channelApplied).not.toHaveBeenCalled();
+  });
+});
+
 describe('the full start, on a Redis that loaded its ACL file', () => {
   it('leaves the host identity to the file', async () => {
     boot.aclOutcome.mockResolvedValue({ outcome: 'loaded' });
@@ -109,5 +134,6 @@ describe('the full start, on a Redis that loaded its ACL file', () => {
     await fullStart();
 
     expect(boot.applied).not.toHaveBeenCalled();
+    expect(boot.channelApplied).not.toHaveBeenCalled();
   });
 });

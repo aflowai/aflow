@@ -16,7 +16,7 @@
  * is any value that is not an explicit yes: a deployment that has never heard of
  * the lane must not be running it, and a typo must not be what turns it on.
  */
-import type { AflowError } from './errors.js';
+import { LaneRefusalError } from './laneRefusal.js';
 
 export const CODE_LANE_ENABLED_ENV = 'CODE_LANE_ENABLED';
 
@@ -51,22 +51,13 @@ export function isCodeLaneEnabled(env: Record<string, string | undefined> = proc
  * `toAgentToolError` needs to make an agent answer `signal_blocked` instead of
  * re-calling a lane that will never say yes.
  */
-export class CodeLaneDisabledError extends Error {
+export class CodeLaneDisabledError extends LaneRefusalError {
+  readonly code = CODE_LANE_DISABLED_CODE;
   readonly stepType = CODE_LANE_STEP_TYPE;
 
   constructor(context?: string) {
     super(context ? `${CODE_LANE_DISABLED_MESSAGE} (${context})` : CODE_LANE_DISABLED_MESSAGE);
     this.name = 'CodeLaneDisabledError';
-  }
-
-  toAflowError(): AflowError {
-    return {
-      code: CODE_LANE_DISABLED_CODE,
-      message: this.message,
-      classification: 'permission',
-      retryable: false,
-      timestamp: new Date().toISOString(),
-    };
   }
 }
 

@@ -2,7 +2,11 @@ import { chmod, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { LOCAL_EDITION_OWNER_ID, LOCAL_EDITION_TENANT_ID } from '@aflow/schemas';
+import {
+  CHANNEL_REDIS_PASSWORD_ENV,
+  LOCAL_EDITION_OWNER_ID,
+  LOCAL_EDITION_TENANT_ID,
+} from '@aflow/schemas';
 import {
   INSTANCE_CONFIG_FILENAME,
   InvalidInstanceValueError,
@@ -238,6 +242,30 @@ describe('ensureInstanceConfig', () => {
         `CREDENTIAL_ENCRYPTION_KEY='${result.values['CREDENTIAL_ENCRYPTION_KEY'] ?? ''}'`,
       );
       expect(cut).not.toContain('PHOENIX_INSTANCE_SECRET');
+    });
+
+    // The orchestrator composes the channel lane from this credential's
+    // presence, so a worker cut without it refuses every channel dispatch.
+    it('carries the channel credential to the worker where a channel app was set up', async () => {
+      await writeFile(
+        join(dir, INSTANCE_CONFIG_FILENAME),
+        `${CHANNEL_REDIS_PASSWORD_ENV}='${'c'.repeat(64)}'\n`,
+      );
+      const result = await ensureInstanceConfig(dir, audienceEnv());
+
+      expect(await readFile(cutOf(result, 'worker'), 'utf-8')).toContain(
+        `${CHANNEL_REDIS_PASSWORD_ENV}='${'c'.repeat(64)}'`,
+      );
+      expect(await readFile(cutOf(result, 'web'), 'utf-8')).not.toContain(
+        CHANNEL_REDIS_PASSWORD_ENV,
+      );
+    });
+
+    it('cuts no channel credential where no channel app was set up', async () => {
+      const result = await ensureInstanceConfig(dir, audienceEnv());
+      expect(await readFile(cutOf(result, 'worker'), 'utf-8')).not.toContain(
+        CHANNEL_REDIS_PASSWORD_ENV,
+      );
     });
 
     it('gives the web process the instance secret and nothing else', async () => {

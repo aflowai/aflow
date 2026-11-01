@@ -161,6 +161,10 @@ export const HELMSMAN_DISCOVERY_PRESET: readonly string[] = [
   // issue names one, and runs only once the operator approves its card.
   'model.runtime.status',
   'model.runtime.change',
+  // A message to the operator on the channel they linked (Plan 327), only where
+  // a channel lane is composed. Discoverable and never pinned: it is for the
+  // operator who must act and may be away, not for every turn.
+  'channel.message.send',
   'mcp.server.list',
   'mcp.server.get',
   'mcp.server.upsert',

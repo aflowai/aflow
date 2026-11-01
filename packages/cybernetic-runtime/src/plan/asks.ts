@@ -169,9 +169,36 @@ export async function planRootStepsAllClosed(
   });
 }
 
-/** A waiting node that still asks: any but a root whose steps have all closed. */
-async function stillAsks(ctx: PlanReadContext, node: PlanNode): Promise<boolean> {
-  return node.parentId !== null || !(await planRootStepsAllClosed(ctx, node));
+/**
+ * The open roots whose steps have all closed, from one overview read of the
+ * space: the read the board's lanes place from, which counts each root's
+ * closed steps. A root a bound cut short may hold an open step it did not
+ * read, so it is never among them. One read answers for every root, so an
+ * Action Center read walks the plan once however many roots it lists.
+ */
+async function finishedRoots(ctx: PlanReadContext): Promise<Set<string>> {
+  const { placed } = await ctx.store.readOverview(ctx.spaceId, PLAN_TREE_WALK_BOUNDS, (read) => {
+    const finished = new Set<string>();
+    for (const root of read.nodes) {
+      if (root.depth !== 0) continue;
+      const counted = read.counted.get(root.nodeId);
+      if (counted === undefined || counted.cut || counted.deeper) continue;
+      const open = read.nodes.some((n) => n.depth > 0 && n.rootId === root.nodeId);
+      const { done, dropped } = counted;
+      if (!open && planStepsAllClosed({ steps: done + dropped, done, dropped })) {
+        finished.add(root.nodeId);
+      }
+    }
+    return { placed: finished, pullRequestsOf: [], runsOf: [], runsPerNode: 0 };
+  });
+  return placed;
+}
+
+/** The waiting nodes that still ask: all but a root whose steps have all closed. */
+async function stillAsking(ctx: PlanReadContext, nodes: PlanNode[]): Promise<PlanNode[]> {
+  if (!nodes.some((node) => node.parentId === null)) return nodes;
+  const finished = await finishedRoots(ctx);
+  return nodes.filter((node) => !finished.has(node.nodeId));
 }
 
 /** Newest first by `updatedAt`, a tie by id, so the cut keeps the same nodes on every read. */
@@ -197,9 +224,7 @@ export async function listWaitingNodes(ctx: PlanReadContext): Promise<PlanNode[]
     .slice(0, PLAN_OPEN_ASKS_LIMIT);
   const nodes = await Promise.all(listed.map((n) => ctx.store.find(ctx.spaceId, n.nodeId)));
   // Re-judged on the full read: a node written between the walk and here is not listed.
-  const waiting = nodes.filter(waitingNode);
-  const asks = await Promise.all(waiting.map((node) => stillAsks(ctx, node)));
-  return waiting.filter((_, index) => asks[index]);
+  return stillAsking(ctx, nodes.filter(waitingNode));
 }
 
 /** One waiting node by id, by the rule `listWaitingNodes` lists by; null for any other. */
@@ -216,5 +241,5 @@ export async function findWaitingNode(
     parentId = parent.parentId;
   }
   if (parentId !== null) return null;
-  return (await stillAsks(ctx, node)) ? node : null;
+  return (await stillAsking(ctx, [node]))[0] ?? null;
 }

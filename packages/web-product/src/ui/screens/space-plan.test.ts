@@ -27,6 +27,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   PLAN_NODE_APPROVED_HEAD,
+  PLAN_NODE_LIVE_CHECK_HEAD,
   PLAN_NODE_OPEN_WHY_MAX_CHARS,
   PlanNodeOpenSchema,
   planNodeOperatorLine,
@@ -1438,8 +1439,9 @@ describe('SpacePlanPage — the operator’s writes from the rail', () => {
     await render({ data: withStatus(ARTICLE, 'blocked') });
     await click(card(ARTICLE));
     // A stop asks no decision, so its card names none and the rail offers Resume (Plan 339 D6).
-    await click(button(rail(), 'Resume'));
-    const field = rail().querySelector('[data-plan-open-form] input')!;
+    const field = rail().querySelector<HTMLInputElement>(
+      '[data-plan-open-form] input[type="number"]',
+    )!;
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(
         field,
@@ -1448,6 +1450,7 @@ describe('SpacePlanPage — the operator’s writes from the rail', () => {
       field.dispatchEvent(new Event('input', { bubbles: true }));
     });
     await click(button(rail(), 'Resume'));
+    expect(recorded.mutateAsync).toHaveBeenCalledTimes(1);
     expect(recorded.mutateAsync).toHaveBeenCalledWith({
       nodeId: ARTICLE,
       expectedRevision: 4,
@@ -1625,6 +1628,56 @@ describe('SpacePlanPage — approve, reopen and order (Plan 332 P2)', () => {
     await click(button(rail(), 'Approve'));
     await click(button(openForm(), 'Approve'));
     expect(document.body.textContent).toContain(carrierFailure);
+  });
+
+  it('keeps Approve on a live check with no waiting reason, since its open write closes the check (Plan 339 D6)', async () => {
+    recorded.details[BLOCKED] = detail(
+      fullNode(BLOCKED, 'P1 — the loop takes the next node', {
+        parentId: R331,
+        status: 'blocked',
+        revision: 3,
+        note: `${PLAN_NODE_LIVE_CHECK_HEAD}waits on a person to read the connected folder's head.`,
+      }),
+    );
+    await render({ data: P2_PLAN });
+    await click(card(BLOCKED));
+
+    expect(buttonTexts(rail())).toContain('Approve');
+    expect(buttonTexts(rail())).not.toContain('Resume');
+    expect(openForm().querySelector('textarea')?.getAttribute('aria-label')).toBe(
+      'Instructions for the work (optional)',
+    );
+    await click(button(openForm(), 'Approve'));
+    expect(recorded.sent).toEqual([
+      { path: `/spaces/${SPACE_ID}/plan/nodes/${BLOCKED}/open`, body: { expectedRevision: 3 } },
+    ]);
+  });
+
+  it('keeps Revise and the instructions on a blocked proposal with no waiting reason (Plan 339 D6)', async () => {
+    recorded.details[BLOCKED] = detail(
+      fullNode(BLOCKED, 'P1 — the loop takes the next node', {
+        parentId: R331,
+        status: 'blocked',
+        revision: 3,
+        note: 'Proposed: worth doing next.',
+      }),
+    );
+    await render({ data: P2_PLAN });
+    await click(card(BLOCKED));
+
+    expect(buttonTexts(openForm())).toEqual(['Resume', 'Revise']);
+    expect(openForm().querySelector('textarea')?.getAttribute('aria-label')).toBe(
+      'Instructions for the work (optional)',
+    );
+    expect(openForm().textContent).toContain('Resume starts the work');
+    await type(openForm(), 'Split it: the schema first.');
+    await click(button(openForm(), 'Revise'));
+    expect(recorded.sent).toEqual([
+      {
+        path: `/spaces/${SPACE_ID}/plan/nodes/${BLOCKED}/revise`,
+        body: { expectedRevision: 3, why: 'Split it: the schema first.' },
+      },
+    ]);
   });
 
   it('offers Approve on a blocked step beside its close controls, and none on a decision', async () => {
@@ -2733,8 +2786,8 @@ describe('SpacePlanPage — the overview across plans (Plan 332 P4)', () => {
       'Approval',
     ]);
     expect(rail().querySelector('[data-plan-rail-phase]')?.textContent).toBe('P3');
-    // A stop names no decision in a card: the rail offers Resume, not Approve (Plan 339 D6).
-    expect(buttonTexts(rail())).toEqual(['Close', 'Resume', 'Mark done', 'Drop']);
+    // A stop names no decision in a card: the rail offers Resume, not Approve, and keeps Revise (Plan 339 D6).
+    expect(buttonTexts(rail())).toEqual(['Close', 'Resume', 'Revise', 'Mark done', 'Drop']);
 
     await click(button(rail(), 'Close'));
     expect(nav.pushed.at(-1)).toBe('/s/work/plan');

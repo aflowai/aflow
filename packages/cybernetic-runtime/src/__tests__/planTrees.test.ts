@@ -796,6 +796,39 @@ describe('readPlanOverview — the plans as rows', () => {
     },
   );
 
+  it('lists waiting roots with one walk and at most one overview read, however many it lists', async () => {
+    for (let i = 0; i < 4; i++) {
+      const open = await node(`waiting ${String(i)}`, { proposed: 'Worth doing', position: i });
+      await node(`open step ${String(i)}`, { parentId: open.nodeId });
+      const finished = await node(`finished ${String(i)}`, { proposed: 'Done', position: 10 + i });
+      await close(await node(`closed step ${String(i)}`, { parentId: finished.nodeId }), 'done');
+    }
+    const walk = vi.spyOn(store, 'walk');
+    const overview = vi.spyOn(store, 'readOverview');
+
+    const listed = await listWaitingNodes(ctx());
+    expect(listed.map((n) => n.title).sort()).toEqual([
+      'waiting 0',
+      'waiting 1',
+      'waiting 2',
+      'waiting 3',
+    ]);
+    expect(walk).toHaveBeenCalledTimes(1);
+    expect(overview).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads no overview for a list with no waiting root', async () => {
+    const overview = vi.spyOn(store, 'readOverview');
+    const step = await node('a blocked step', { parentId: (await node('plan')).nodeId });
+    await updatePlanNode(ctx(), {
+      nodeId: step.nodeId,
+      expectedRevision: step.revision,
+      status: 'blocked',
+    });
+    expect((await listWaitingNodes(ctx())).map((n) => n.nodeId)).toEqual([step.nodeId]);
+    expect(overview).not.toHaveBeenCalled();
+  });
+
   it('derives every state on the server from the plan’s own steps', async () => {
     const closed = await node('closed', { position: 0 });
     await node('open under closed', { parentId: closed.nodeId });

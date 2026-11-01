@@ -47,6 +47,29 @@ describe('resolveEditionDescriptor', () => {
     ).toBe('present');
   });
 
+  it('composes the channel lane from the channel credential alone, never by default', () => {
+    expect(resolveEditionDescriptor({}).channelLane).toBe('absent');
+    expect(resolveEditionDescriptor({ PHOENIX_EDITION: 'community-local' }).channelLane).toBe(
+      'absent',
+    );
+    // The host credential every appliance mints at first boot composes no channel.
+    expect(
+      resolveEditionDescriptor({
+        PHOENIX_EDITION: 'community-local',
+        PHOENIX_HOST_REDIS_PASSWORD: 'pw',
+      }).channelLane,
+    ).toBe('absent');
+    expect(resolveEditionDescriptor({ PHOENIX_CHANNEL_REDIS_PASSWORD: ' ' }).channelLane).toBe(
+      'absent',
+    );
+    expect(
+      resolveEditionDescriptor({
+        PHOENIX_EDITION: 'community-local',
+        PHOENIX_CHANNEL_REDIS_PASSWORD: 'pw',
+      }).channelLane,
+    ).toBe('present');
+  });
+
   it('composes the browser lane exactly where the host lane is', () => {
     for (const env of [
       {},

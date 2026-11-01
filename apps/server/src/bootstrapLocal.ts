@@ -8,13 +8,14 @@
 import './env.js';
 import { randomBytes } from 'node:crypto';
 import { createDatabase, getDatabaseConfig } from '@aflow/database';
-import { resolveEditionDescriptor } from '@aflow/schemas';
+import { CHANNEL_REDIS_PASSWORD_ENV, resolveEditionDescriptor } from '@aflow/schemas';
 import {
   bootstrapLocalEdition,
   ensureInstanceConfig,
   findLocalAuthConfigViolations,
   loadRedisAclIntoRunningServer,
   applyHostIdentityToRunningServer,
+  applyChannelIdentityToRunningServer,
   localOwner,
 } from '@aflow/server-runtime/bootstrap';
 import { closeRedisConnection, getRedisConnection } from '@aflow/redis';
@@ -41,6 +42,24 @@ async function applyHostIdentity(values: Record<string, string | undefined>): Pr
   } catch (error) {
     console.warn(
       `[bootstrap] could not apply the host identity to the running Redis: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
+/**
+ * The channel identity, where a channel app was set up, by the host identity's
+ * rule: a Redis with no ACL file holds it in memory only, and this full start
+ * has just read the durable credential.
+ */
+async function applyChannelIdentity(values: Record<string, string | undefined>): Promise<void> {
+  const channelPassword = values[CHANNEL_REDIS_PASSWORD_ENV]?.trim();
+  if (channelPassword === undefined || channelPassword === '') return;
+  try {
+    await applyChannelIdentityToRunningServer(getRedisConnection(), channelPassword);
+    console.log('[bootstrap] applied the channel identity to the running Redis');
+  } catch (error) {
+    console.warn(
+      `[bootstrap] could not apply the channel identity to the running Redis: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
 }
@@ -121,7 +140,10 @@ async function main(): Promise<void> {
         `[bootstrap] the running Redis refused the ACL reload and keeps its previous grants: ${aclOutcome.reason}`,
       );
     }
-    if (aclOutcome.outcome === 'skipped') await applyHostIdentity(instanceValues);
+    if (aclOutcome.outcome === 'skipped') {
+      await applyHostIdentity(instanceValues);
+      await applyChannelIdentity(instanceValues);
+    }
   } finally {
     await close();
     // The ACL reload above opens the shared connection, and a one-shot command

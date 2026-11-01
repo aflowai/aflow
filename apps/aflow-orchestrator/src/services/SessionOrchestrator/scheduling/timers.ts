@@ -10,7 +10,7 @@ import {
   type StepResultMessage,
   type StepJobMessage,
   type AflowError,
-  CodeLaneDisabledError,
+  LaneRefusalError,
   toFailedRunDisplay,
   SNOOZE_OPERATION_ID,
   StreamKeys,
@@ -780,7 +780,7 @@ export function createProcessDueTimers(bindings: SessionOrchestratorBindings) {
           // A retry timer re-enters dispatch, so it meets the same gates a first
           // attempt does — including a lane breaker that opened after the step
           // was first scheduled.
-          if (error instanceof CodeLaneDisabledError) {
+          if (error instanceof LaneRefusalError) {
             const failure: AflowError = error.toAflowError();
             logOrchestratorError(
               `[SessionOrchestrator] Timer re-dispatch refused (${failure.code}): ${timer.stepType}`,
@@ -849,7 +849,7 @@ export function createProcessDueTimers(bindings: SessionOrchestratorBindings) {
             // A look re-enters dispatch, so it meets the lane breaker as a
             // retry does — one opened while the step waited refuses it, and the
             // refusal goes to the agent rather than back onto the timer.
-            if (!(error instanceof CodeLaneDisabledError)) throw error;
+            if (!(error instanceof LaneRefusalError)) throw error;
             const refusal: AflowError = error.toAflowError();
             logOrchestratorError(
               `[SessionOrchestrator] Timer re-dispatch refused (${refusal.code}): ${job.stepType}`,

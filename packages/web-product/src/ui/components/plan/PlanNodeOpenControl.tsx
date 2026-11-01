@@ -2,8 +2,8 @@
 
 /**
  * The operator's open write in the board's rail (Plan 332 D6): **Approve** on
- * a blocked step whose card names the decision it asks (Plan 339 D6),
- * **Resume** on a blocked step that names none, **Reopen** on a closed one,
+ * a blocked step whose card names the decision it asks or on a live check,
+ * **Resume** on any other blocked step (Plan 339 D6), **Reopen** on a closed one,
  * and **Reopen <parent>** on a step
  * stranded under a closed one — each back to `active`, with an optional reason
  * the engine writes into the note. Like the close form, it writes against the
@@ -12,8 +12,8 @@
  *
  * On a blocked step the form is open from the start (Plan 337 P4): its field
  * is the operator's instructions for the work, which the next brief opens
- * with, and **Revise** beside **Approve** sends the same words back as a
- * request to rewrite the proposal, the step left blocked. On a step with a
+ * with, and **Revise** beside **Approve** or **Resume** sends the same words
+ * back as a request to rewrite the proposal, the step left blocked. On a step with a
  * card, Approve also offers an answer to each open question. The answers and
  * the instructions go out as the one `why` of one open write (Plan 337 D3).
  */
@@ -61,7 +61,7 @@ export function PlanNodeOpenControl({
 }: {
   /** The node the write opens: the rail's own, or the closed step above a stranded one. */
   nodeId: string;
-  verb: 'approve' | 'resume' | 'reopen';
+  verb: 'approve' | 'reopen';
   /** The button: **Approve**, **Resume**, **Reopen**, or **Reopen** and the step it names. */
   label: string;
   read: PlanNodeRead;
@@ -186,12 +186,7 @@ export function PlanNodeOpenControl({
     }
     await answered(onOpen({ nodeId, ...parsed.data }));
   };
-  const field =
-    verb === 'approve'
-      ? PLAN_APPROVE_FIELD_LABEL
-      : verb === 'resume'
-        ? 'Why it resumes (optional)'
-        : 'Why it is reopened (optional)';
+  const field = verb === 'approve' ? PLAN_APPROVE_FIELD_LABEL : 'Why it is reopened (optional)';
   const words = (
     <Textarea
       aria-label={field}
@@ -247,8 +242,7 @@ export function PlanNodeOpenControl({
             </Column>
           ))}
           <Text size="xs" variant="muted" data-plan-approve-answers-hint>
-            An empty answer takes the recommended answer. Approve writes each question and its
-            answer into the note, on the Approved: line.
+            {`An empty answer takes the recommended answer. ${label} writes each question and its answer into the note, on the Approved: line.`}
           </Text>
         </Column>
       )}
@@ -260,8 +254,8 @@ export function PlanNodeOpenControl({
           {words}
           <Text size="xs" variant="muted" data-plan-approve-hint>
             {(questions.length > 0
-              ? 'Approve starts the work. Its brief opens with the answers, and then with these words.'
-              : 'Approve starts the work, and its brief opens with these words.') +
+              ? `${label} starts the work. Its brief opens with the answers, and then with these words.`
+              : `${label} starts the work, and its brief opens with these words.`) +
               (onRevise !== undefined
                 ? ' Revise keeps the step blocked and asks the Helmsman to rewrite it from these words.'
                 : '')}
@@ -278,7 +272,7 @@ export function PlanNodeOpenControl({
           setSpend(event.target.value);
         }}
       />
-      {verb !== 'approve' && words}
+      {verb === 'reopen' && words}
       <Text size="xs" variant="muted">
         Leave the ceiling blank to keep it. Opening starts a fresh spend window.
       </Text>

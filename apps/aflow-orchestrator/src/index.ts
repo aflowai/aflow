@@ -129,6 +129,7 @@ async function main(): Promise<void> {
     codeLane: edition.codeLane,
     hostLane: edition.hostLane,
     browserLane: edition.browserLane,
+    channelLane: edition.channelLane,
   });
 
   const controlPlane = installBackgroundTaskControlPlane({

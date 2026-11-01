@@ -361,7 +361,7 @@ async function proposeCarrier(
   if (!read) return undefined;
   const { findings, more } = read;
   const inserted = await ctx.store.insert(ctx.spaceId, {
-    ...carrierNode(closed, findings, more),
+    ...carrierNode(closed, findings, more, { resident: ctx.resident === true }),
     createdBy: ctx.createdBy ?? null,
   });
   // The parent the closed node sat under is gone since its close: there is nowhere to propose it.

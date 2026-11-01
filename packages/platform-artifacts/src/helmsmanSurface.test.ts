@@ -26,13 +26,40 @@ const HOSTED: ComposedLanes = {
   codeLane: 'present',
   hostLane: 'absent',
   browserLane: 'absent',
+  channelLane: 'present',
 };
 const APPLIANCE: ComposedLanes = {
   edition: 'community-local',
   codeLane: 'absent',
   hostLane: 'present',
   browserLane: 'present',
+  channelLane: 'present',
 };
+
+describe('composeHelmsmanSurface — the channel lane (Plan 327 D7)', () => {
+  it.each([
+    ['the local edition', APPLIANCE],
+    ['the hosted edition', HOSTED],
+  ])(
+    'offers channel.message.send in neither tier of %s while no channel app is set up',
+    (_edition, lanes) => {
+      const composed = composeHelmsmanSurface(registryDefaults(), {
+        ...lanes,
+        channelLane: 'absent',
+      });
+      expect(composed.coreOperations).not.toContain('channel.message.send');
+      expect(composed.promotableOperations).not.toContain('channel.message.send');
+    },
+  );
+
+  it('places it discoverable, never pinned, once the lane is composed', () => {
+    for (const lanes of [APPLIANCE, HOSTED]) {
+      const composed = composeHelmsmanSurface(registryDefaults(), lanes);
+      expect(composed.promotableOperations).toContain('channel.message.send');
+      expect(composed.coreOperations).not.toContain('channel.message.send');
+    }
+  });
+});
 
 describe('composeHelmsmanSurface', () => {
   it('returns the registry default for a hosted edition composing every lane, less the models on this computer', () => {
