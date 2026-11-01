@@ -7,8 +7,8 @@
  * the pause type. A consent a workflow run owns is the run's alone. A paused
  * workflow task is a human task where its hydration is stamped for the pause
  * or its definition resolves to a human task, and a write approval where it
- * holds the run's pause and asks for one. Gated on DATABASE_URL like every pg
- * test.
+ * holds the run's pause and asks for one. The suite runs only where
+ * DATABASE_URL names a Postgres database, and it skips without one.
  *
  * The sources live in `@aflow/server-runtime`, which depends on this package,
  * so this suite cannot call their `listOpen`. Each fixture pins one source
@@ -32,9 +32,6 @@
  *   run's `task_paused` payload, each whose request is a write approval.
  * - `computeEgressSource`: pending egress requests, tenant-wide or this
  *   space's.
- *
- * This suite has never run. No environment it has met has set DATABASE_URL,
- * so its numbers are reasoned from the rules above and have not been measured.
  */
 import { randomUUID } from 'node:crypto';
 import { afterAll, describe, expect, it, vi } from 'vitest';

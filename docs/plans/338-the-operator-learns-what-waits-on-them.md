@@ -339,8 +339,8 @@ _Delivered (P2)._ The items below were built.
 
 **Where the counts may differ from the Action Center.** These are deliberate, and each is small.
 
-- A human task counts where the harness stamped its hydration for the pause it stands at. A pause from before Plan 170 with no hydration is not counted.
-- A request whose payload is stored outside its ref counts as a run gate. Only an executor's large request is stored that way.
+- A parent paused `subflow_waiting` holds its child's ref, and `pausedStepSource` lists it by the child's request. The count reads that request's kind from the paused child holding the same ref, down the chain to a depth of 10. A chain whose child row is gone, holds another ref or runs deeper is not counted.
+- A consent run counts among the newest 200 runs paused `needs_oauth_consent`, the window `workflowOAuthConsentSource` cuts before it drops a run with no consent. A run whose resume contract is stored outside its ref counts unread, so a stored contract with no consent still counts.
 - A gate or a consent does not bump the attention generation, so its count can lag by the cache's 60 seconds (F11).
 - The section counts the five sources this plan names. Session invitations, browser handoffs and integration-host requests also sit in the approvals and inputs lanes, and they are not counted.
 
