@@ -1,4 +1,4 @@
-import type { Redis } from 'ioredis';
+import type { ChainableCommander, Redis } from 'ioredis';
 import { StreamKeys, type RecoveryEventEnvelope } from '@aflow/schemas';
 import { appendRecoveryEventsToPipeline } from '../recoveryStream.js';
 import type { SessionHotState } from './schemas.js';
@@ -37,6 +37,51 @@ export async function setSessionState(
   pipeline.del(key);
   pipeline.hset(key, serialized);
   pipeline.expire(key, ttlSeconds);
+  syncSessionCandidates(pipeline, state, nowMs);
+  await pipeline.exec();
+}
+
+const SET_SESSION_STATE_IF_ABSENT_SCRIPT = `
+if redis.call('EXISTS', KEYS[1]) == 1 then return 0 end
+for i = 2, #ARGV, 2 do
+  redis.call('HSET', KEYS[1], ARGV[i], ARGV[i + 1])
+end
+redis.call('EXPIRE', KEYS[1], ARGV[1])
+return 1
+`;
+
+/**
+ * Write a session's state only where no hash holds it, as one script: a
+ * writer that came back first is newer than `state`, and overwriting it would
+ * roll back what it holds — `lastMessageSeq` above all. Returns whether this
+ * call wrote it.
+ */
+export async function setSessionStateIfAbsent(
+  redis: Redis,
+  state: SessionHotState,
+  ttlSeconds: number = HOT_STATE_TTL_SECONDS,
+): Promise<boolean> {
+  const key = StreamKeys.sessionStateKey(state.tenantId, state.sessionId);
+  const fields = Object.entries(serializeForHash(state)).flat();
+  const written = await redis.eval(
+    SET_SESSION_STATE_IF_ABSENT_SCRIPT,
+    1,
+    key,
+    String(ttlSeconds),
+    ...fields,
+  );
+  if (written !== 1) return false;
+  const pipeline = redis.multi();
+  syncSessionCandidates(pipeline, state, Date.now());
+  await pipeline.exec();
+  return true;
+}
+
+function syncSessionCandidates(
+  pipeline: ChainableCommander,
+  state: SessionHotState,
+  nowMs: number,
+): void {
   syncQueuedSessionCandidate(
     pipeline,
     state.tenantId,
@@ -57,7 +102,6 @@ export async function setSessionState(
     state.status,
     nowMs,
   );
-  await pipeline.exec();
 }
 
 export type GetSessionStateSafeResult =

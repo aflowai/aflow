@@ -13,7 +13,9 @@ import {
   CODE_ALREADY_USED_REPLY,
   LINKED_REPLY,
   STRANGER_REPLY,
-  answerDirectMessage,
+  LINK_REPLIES,
+  linkOnMessage,
+  type LinkVerdict,
 } from '../linking.js';
 import { directMessageOf } from '../socketMode.js';
 import type { SlackClient } from '../slack.js';
@@ -67,6 +69,16 @@ afterEach(() => {
 
 function dm(user: string, text: string) {
   return { slackUserId: user, slackTeamId: 'T1', channel: `D-${user}`, text };
+}
+
+/** Links on the message and posts its verdict's reply, as `answerInbound` does. */
+async function answerDirectMessage(
+  message: ReturnType<typeof dm>,
+  deps: Parameters<typeof linkOnMessage>[1] & { slack: SlackClient },
+): Promise<LinkVerdict> {
+  const verdict = linkOnMessage(message, deps);
+  if (verdict !== 'operator') await deps.slack.postMessage(message.channel, LINK_REPLIES[verdict]);
+  return verdict;
 }
 
 describe('linking', () => {

@@ -1,5 +1,7 @@
 import { randomUUID } from 'crypto';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Redis } from 'ioredis';
+import { emitGateResolved } from '@aflow/cybernetic-runtime';
 import { createTenantContext, hitlActionAudit, withTenantSchema } from '@aflow/database';
 import { recordActionCenterResolved, recordHitlGateLatency } from '@aflow/observability';
 import type {
@@ -56,10 +58,12 @@ export interface BuildAggregatorOptions {
   db: PostgresJsDatabase;
   sources: ActionCenterSource[];
   decisionPlane: DecisionPlaneStore;
+  /** Where a resolved item announces `gate.resolved` to its waiters (Plan 339 D1). */
+  redis?: Redis;
 }
 
 export function buildAggregator(opts: BuildAggregatorOptions): ActionCenterAggregator {
-  const { db, sources, decisionPlane } = opts;
+  const { db, sources, decisionPlane, redis } = opts;
   const spaceScoped = sources.filter((s) => s.rowScope === 'space');
   const actorScoped = sources.filter((s) => s.rowScope === 'actor');
 
@@ -242,6 +246,14 @@ export function buildAggregator(opts: BuildAggregatorOptions): ActionCenterAggre
         resolution,
         outcome.reportedOperationId ?? outcome.dispatchedOperationId,
       );
+      if (redis) {
+        await emitGateResolved(redis, {
+          tenantId: ctx.tenantId,
+          spaceId: ctx.spaceId,
+          itemId,
+          resolution: resolution.kind,
+        });
+      }
 
       try {
         const requestedAtMs = new Date(item.requestedAt).getTime();

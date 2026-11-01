@@ -7,7 +7,9 @@ import {
   type RoomExchangeEntry,
   type RoomSpeaker,
   type TenantId,
+  WAIT_OUTCOME_ACTOR_ID,
 } from '@aflow/schemas';
+import type { PayloadStore } from '@aflow/payload-store';
 
 /**
  * What people have said in the room, most recent last.
@@ -74,6 +76,45 @@ export async function readRoomExchange(
   // is waiting on — then back into reading order.
   entries.sort((a, b) => a.messageSeq - b.messageSeq);
   return { entries, latestSpeaker };
+}
+
+/**
+ * Whether the room holds a wait's outcome the turn that ran on
+ * `turnInputRef` did not read.
+ *
+ * Every turn is handed the recent window of the room, so what a turn read is
+ * what its input carried: an outcome in the window now and not in that input
+ * was posted after the input was built, while the turn was in flight. Nothing
+ * else wakes the conversation for it once that turn comes to rest.
+ */
+export async function hasUnreadWaitOutcomes(
+  db: PostgresJsDatabase,
+  payloadStore: Pick<PayloadStore, 'retrieve'>,
+  tenantId: TenantId,
+  sessionId: string,
+  turnInputRef: string | undefined,
+): Promise<boolean> {
+  const { entries } = await readRoomExchange(db, tenantId, sessionId);
+  const outcomes = entries.filter((entry) => entry.actorUserId === WAIT_OUTCOME_ACTOR_ID);
+  if (outcomes.length === 0) return false;
+  const read = new Set<number>();
+  if (turnInputRef !== undefined) {
+    const input: unknown = await payloadStore.retrieve(turnInputRef).catch(() => undefined);
+    const handed =
+      input !== null && typeof input === 'object'
+        ? (input as Record<string, unknown>)['newRoomMessages']
+        : undefined;
+    if (Array.isArray(handed)) {
+      for (const entry of handed as unknown[]) {
+        const messageSeq =
+          entry !== null && typeof entry === 'object'
+            ? (entry as Record<string, unknown>)['messageSeq']
+            : undefined;
+        if (typeof messageSeq === 'number') read.add(messageSeq);
+      }
+    }
+  }
+  return outcomes.some((entry) => !read.has(entry.messageSeq));
 }
 
 /** Who a session-lifecycle event says was speaking, when it says so at all. */

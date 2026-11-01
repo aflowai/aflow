@@ -11,7 +11,7 @@ import type { ExecutorContext, StepResult } from '@aflow/executor-runtime';
 import { ChannelMessageSendOutputSchema, toAgentToolError } from '@aflow/schemas';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import type { AflowApi } from '../aflowApi.js';
+import { createAflowApi, type AflowApi } from '../aflowApi.js';
 import {
   CHANNEL_DELIVERY_UNKNOWN_CODE,
   CHANNEL_MESSAGE_REPEATED_CODE,
@@ -64,10 +64,16 @@ function fakeSlack(): FakeSlack {
   return slack;
 }
 
-/** A send of text alone never reads an item. */
+const refuse = (what: string) => () => Promise.reject(new Error(`a text send ${what}`));
+
+/** A send of text alone calls no route of Aflow's. */
 const noApi: AflowApi = {
-  readItem: () => Promise.reject(new Error('a text send read an item')),
-  resolveItem: () => Promise.reject(new Error('a text send resolved an item')),
+  readItem: refuse('read an item'),
+  resolveItem: refuse('resolved an item'),
+  homeSpace: refuse('read the home space'),
+  startConversation: refuse('started a conversation'),
+  resumeConversation: refuse('resumed a conversation'),
+  latestEvents: refuse('read a session’s events'),
 };
 
 let dir: string;
@@ -120,6 +126,20 @@ async function send(
 function errorCode(result: StepResult): string | undefined {
   return result.status === 'FAILED' ? result.error.code : undefined;
 }
+
+describe('the fake Aflow a text send runs against', () => {
+  // The app's type-check leaves its tests out, so this is what reports a route
+  // added to `AflowApi` and missing here.
+  it('holds every route the app’s real API client holds', () => {
+    const real = createAflowApi({
+      apiUrl: 'http://127.0.0.1:3000',
+      apiKey: 'key',
+      fetchImpl: () => Promise.reject(new Error('no call')),
+    });
+
+    expect(Object.keys(noApi).sort()).toEqual(Object.keys(real).sort());
+  });
+});
 
 describe('channel.message.send', () => {
   it('posts the text to the linked operator and returns its messageRef', async () => {

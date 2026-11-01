@@ -43,6 +43,36 @@ export const HOST_CHECK_TEST_TIMEOUTS_MAX = 20;
 /** The longest step name a check's report may give as the one that failed. */
 export const HOST_CHECK_FAILING_GUARD_MAX_CHARS = 1000;
 
+/**
+ * The longest a check asked to wait for a quiet machine waits before it runs
+ * anyway. A machine under load for longer than this is not going to quieten
+ * for the check, and a publication waiting on it has waited long enough.
+ */
+export const HOST_CHECK_QUIET_WAIT_MAX_MS = 10 * 60_000;
+
+export const HostCommitCheckQuietWaitSchema = z.object({
+  waitedMs: z
+    .number()
+    .int()
+    .nonnegative()
+    .describe('How long the check waited before it ran, in milliseconds.'),
+  quiet: z
+    .boolean()
+    .describe(
+      'True where the one-minute load average fell below the core count. False where ' +
+        '`HOST_CHECK_QUIET_WAIT_MAX_MS` passed first and the checks ran on a loaded machine.',
+    ),
+  loadAverage: z
+    .number()
+    .nonnegative()
+    .describe('The one-minute load average when the wait ended.'),
+  cores: z
+    .number()
+    .int()
+    .positive()
+    .describe('The core count the load average was measured against.'),
+});
+
 export const HostCommitCheckInputSchema = z.object({
   bindingId: HostBindingRef,
   sha: HostCommitShaSchema.describe(
@@ -54,6 +84,15 @@ export const HostCommitCheckInputSchema = z.object({
       '`pushRange`, where `origin`’s base branch stood. The checks see it as ' +
       '`AFLOW_CHECK_BASE`, a full sha, so a repository’s own script can read what changed.',
   ),
+  waitForQuiet: z
+    .boolean()
+    .optional()
+    .describe(
+      'True to wait, before the checks run, until the machine’s one-minute load average is ' +
+        'below its core count or `HOST_CHECK_QUIET_WAIT_MAX_MS` has passed. A publication ' +
+        'passes it on its second run, after the first lost only tests to their time. The ' +
+        'result records the wait as `quietWait`.',
+    ),
 });
 
 export const HostCommitCheckOutputSchema = z.object({
@@ -119,11 +158,17 @@ export const HostCommitCheckOutputSchema = z.object({
     .max(HOST_CHECK_TEST_TIMEOUTS_MAX)
     .optional()
     .describe(
-      'The tests that ran out of their time, each as `<file> › <suite> › <test>`, present only ' +
-        'where the checks exited on their own and reported, in the file `AFLOW_CHECK_REPORT` ' +
-        'names, that nothing else failed — what a machine under load does to a passing commit. ' +
-        'At most `HOST_CHECK_TEST_TIMEOUTS_MAX`; the summary counts the rest.',
+      'What ran out of its time, each a test as `<file> › <suite> › <test>`, or a test file ' +
+        'or the run itself where no test was named. Present only where the checks exited on ' +
+        'their own and reported, in the file `AFLOW_CHECK_REPORT` names, that nothing else ' +
+        'failed — what a machine under load does to a passing commit. At most ' +
+        '`HOST_CHECK_TEST_TIMEOUTS_MAX`; the summary counts the rest.',
     ),
+  quietWait: HostCommitCheckQuietWaitSchema.optional().describe(
+    'How the check waited for a quiet machine before it ran, present only where the input ' +
+      'asked with `waitForQuiet`: how long it waited, and whether the load fell or the wait ' +
+      'ran out. The summary says the same.',
+  ),
   failingGuard: z
     .string()
     .min(1)

@@ -77,8 +77,12 @@ export const ENDED_NOTES: Readonly<Record<string, string>> = {
     'The conversation was cancelled at Aflow. Send a new direct message to start another.',
 };
 
-/** Under Slack's 40,000 characters once `&`, `<` and `>` are escaped. */
-const MAX_RELAYED = 30_000;
+/**
+ * Slack's limit on a message's text. The answer is measured once `&`, `<` and
+ * `>` are escaped, because an escape is up to five characters long.
+ */
+const SLACK_TEXT_LIMIT = 40_000;
+const CUT_NOTE = '… The full answer is in the conversation at Aflow.';
 const WATCH_POLL_MS = 2_000;
 /** How long one turn may take before the thread stops watching it. */
 const WATCH_LIMIT_MS = 30 * 60 * 1000;
@@ -126,12 +130,18 @@ export function lateText(text: string, record: InboundRecord, ranAt: Date): stri
   );
 }
 
-function relayed(answer: string): string {
-  const cut =
-    answer.length <= MAX_RELAYED
-      ? answer
-      : `${answer.slice(0, MAX_RELAYED)}… The full answer is in the conversation at Aflow.`;
-  return escapeMrkdwn(cut);
+/** The answer escaped, and cut to Slack's limit between whole characters and whole escapes. */
+export function relayed(answer: string): string {
+  const whole = escapeMrkdwn(answer);
+  if (whole.length <= SLACK_TEXT_LIMIT) return whole;
+  const room = SLACK_TEXT_LIMIT - CUT_NOTE.length;
+  let cut = '';
+  for (const char of answer) {
+    const piece = escapeMrkdwn(char);
+    if (cut.length + piece.length > room) break;
+    cut += piece;
+  }
+  return `${cut}${CUT_NOTE}`;
 }
 
 function lateBlocks(record: InboundRecord): SlackBlock[] {
@@ -316,30 +326,15 @@ export class Conversations {
     const thread = store.threadAt(record.channel, record.threadTs);
 
     if (thread === undefined) {
-      const home = await api.homeSpace();
-      if (!home.ok) {
-        await say(refusalText(home));
-        return { outcome: refusalOutcome(home) };
+      if (!store.claimThread(record.channel, record.threadTs)) {
+        await say(STILL_ANSWERING);
+        return { outcome: 'busy' };
       }
-      const started = await api.startConversation(home.spaceId, text, key);
-      if (!started.ok) {
-        await say(refusalText(started));
-        return { outcome: refusalOutcome(started) };
+      try {
+        return await this.start(record, text, key);
+      } finally {
+        store.releaseThread(record.channel, record.threadTs);
       }
-      const at = this.now().toISOString();
-      const fresh: ThreadRecord = {
-        channel: record.channel,
-        threadTs: record.threadTs,
-        sessionId: started.sessionId,
-        spaceId: home.spaceId,
-        status: 'answering',
-        pausedStepExecutionId: null,
-        relayedStepExecutionId: null,
-        startedAt: at,
-        updatedAt: at,
-      };
-      store.addThread(fresh);
-      return { outcome: 'started', watching: this.watch(fresh) };
     }
 
     if (thread.status === 'ended') {
@@ -363,20 +358,61 @@ export class Conversations {
     }
     store.updateThread(
       thread,
-      { status: 'answering', pausedStepExecutionId: null, relayedStepExecutionId: step },
+      {
+        status: 'answering',
+        pausedStepExecutionId: null,
+        relayedStepExecutionId: step,
+        resumedStepExecutionId: step,
+      },
       this.now(),
     );
     return { outcome: 'continued', watching: this.watch(thread) };
   }
 
-  /** The pause a reply may resume, read from the session when the thread does not hold it. */
+  /** Starts the conversation for a thread this message holds the claim on. */
+  private async start(record: InboundRecord, text: string, key: string): Promise<ConverseResult> {
+    const { store, api } = this.deps;
+    const say = (line: string) => this.say(record.channel, record.threadTs, line);
+    const home = await api.homeSpace();
+    if (!home.ok) {
+      await say(refusalText(home));
+      return { outcome: refusalOutcome(home) };
+    }
+    const started = await api.startConversation(home.spaceId, text, key);
+    if (!started.ok) {
+      await say(refusalText(started));
+      return { outcome: refusalOutcome(started) };
+    }
+    const at = this.now().toISOString();
+    const fresh: ThreadRecord = {
+      channel: record.channel,
+      threadTs: record.threadTs,
+      sessionId: started.sessionId,
+      spaceId: home.spaceId,
+      status: 'answering',
+      pausedStepExecutionId: null,
+      relayedStepExecutionId: null,
+      resumedStepExecutionId: null,
+      startedAt: at,
+      updatedAt: at,
+    };
+    store.addThread(fresh);
+    return { outcome: 'started', watching: this.watch(fresh) };
+  }
+
+  /**
+   * The pause a reply may resume, read from the session when the thread does not
+   * hold it. A pause the thread already resumed is not one: the Helmsman is
+   * still answering it.
+   */
   private async lastPause(thread: ThreadRecord): Promise<string | undefined> {
     const page = await this.deps.api.latestEvents(thread.spaceId, thread.sessionId);
     if (!page.ok) return undefined;
     const last = lastTurnEvent(page.events);
-    return last?.eventType === 'SessionPaused' && asksTheOperator(last)
-      ? last.stepExecutionId
-      : undefined;
+    if (last?.eventType !== 'SessionPaused' || !asksTheOperator(last)) return undefined;
+    return last.stepExecutionId === thread.resumedStepExecutionId
+      ? undefined
+      : last.stepExecutionId;
   }
 
   /** Watches every thread that was waiting on an answer when the app stopped. */
@@ -392,7 +428,19 @@ export class Conversations {
     const key = `${thread.channel}:${thread.threadTs}`;
     if (this.watching.has(key)) return Promise.resolve('already_watching');
     this.watching.add(key);
-    return this.poll(thread).finally(() => this.watching.delete(key));
+    return this.poll(thread)
+      .catch((error: unknown) => {
+        // A thread left answering refuses every reply until a restart watches it again.
+        if (thread.status === 'answering') {
+          this.deps.store.updateThread(
+            thread,
+            { status: 'waiting', pausedStepExecutionId: null },
+            this.now(),
+          );
+        }
+        throw error;
+      })
+      .finally(() => this.watching.delete(key));
   }
 
   private async poll(thread: ThreadRecord): Promise<WatchOutcome> {
@@ -429,7 +477,8 @@ export class Conversations {
         }
         if (!toldAboutAflow) {
           toldAboutAflow = true;
-          await say(WAITS_AT_AFLOW);
+          // Only a notice: the watch goes on to relay the answer when the post fails.
+          await say(WAITS_AT_AFLOW).catch(() => undefined);
         }
       }
       if (this.now().getTime() >= deadline) {

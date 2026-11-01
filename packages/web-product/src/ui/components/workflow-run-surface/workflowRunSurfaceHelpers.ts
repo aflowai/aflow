@@ -210,8 +210,9 @@ export function orbForTaskStatus(
 }
 
 /**
- * A plan's state (Plan 332 D3) → orb. A closed plan and one with no steps
- * have nothing moving and nothing asked, so both are inert.
+ * A plan's state (Plan 332 D3) → orb. A queued plan waits its turn as a
+ * scheduled task does, and a closed plan and one with no steps have nothing
+ * moving and nothing asked, so all three are inert.
  */
 export function orbForPlanState(state: PlanRootState): OrbKind {
   switch (state) {
@@ -220,7 +221,7 @@ export function orbForPlanState(state: PlanRootState): OrbKind {
     case 'needs_you':
       return 'paused';
     case 'queued':
-      return 'idle';
+      return 'inert';
     case 'finished':
       return 'completed';
     case 'closed':
@@ -232,7 +233,8 @@ export function orbForPlanState(state: PlanRootState): OrbKind {
 /**
  * A plan step → orb, by the board's column (`planBoardColumn`) and whether a
  * run is on it now. A `waiting` step whose run has ended stands under In
- * flight, but nothing moves it until the loop returns, so it reads idle. The
+ * flight, but nothing moves it until the loop returns, so it reads idle. A
+ * queued step waits its turn as a scheduled task does, so it reads inert. The
  * board carries no ended run's outcome, so no step reads failed.
  */
 export function orbForPlanStep(column: PlanBoardColumn, opts: { runInFlight: boolean }): OrbKind {
@@ -242,7 +244,7 @@ export function orbForPlanStep(column: PlanBoardColumn, opts: { runInFlight: boo
     case 'in_flight':
       return opts.runInFlight ? 'running' : 'idle';
     case 'up_next':
-      return 'idle';
+      return 'inert';
     case 'done':
       return 'completed';
     case 'dropped':

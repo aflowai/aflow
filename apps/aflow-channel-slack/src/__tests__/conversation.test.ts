@@ -24,7 +24,10 @@ import {
   MOVED_ON,
   NOT_THE_KEY_OWNER,
   STILL_ANSWERING,
+  WAITS_AT_AFLOW,
+  relayed,
   type ConversationResult,
+  type WatchOutcome,
 } from '../conversation.js';
 import { answerInbound, answerTap, type InboundResult } from '../inbound.js';
 import { CODE_ALREADY_USED_REPLY, STRANGER_REPLY } from '../linking.js';
@@ -57,6 +60,7 @@ let store: ChannelStore;
 let slack: RecordingSlack;
 let aflow: FakeAflow;
 let conversations: Conversations;
+let linkMessage: ReturnType<typeof directMessage>;
 
 function deps() {
   const api = createAflowApi({
@@ -91,7 +95,8 @@ beforeEach(async () => {
   slack = recordingSlack();
   aflow = fakeAflow();
   conversations = newConversations();
-  await answerInbound(directMessage(OPERATOR, CODE, NOW, { eventId: 'Ev-link' }), deps());
+  linkMessage = directMessage(OPERATOR, CODE, NOW, { eventId: 'Ev-link' });
+  await answerInbound(linkMessage, deps());
   slack.posts.length = 0;
 });
 
@@ -309,6 +314,14 @@ describe('a redelivered event', () => {
     expect(slack.posts).toHaveLength(2);
   });
 
+  it('does nothing when it is the link code: no second reply is posted', async () => {
+    expect((await send(linkMessage)).outcome).toBe('duplicate');
+    expect((await send({ ...linkMessage, eventId: 'Ev-link-other-id' })).outcome).toBe('duplicate');
+
+    expect(slack.posts).toEqual([]);
+    expect(store.link()?.slackUserId).toBe(OPERATOR);
+  });
+
   it('never sends the link code to the Helmsman', async () => {
     const result = await send(directMessage(OPERATOR, CODE, NOW, { eventId: 'Ev-link-again' }));
 
@@ -342,6 +355,144 @@ describe('a redelivered event', () => {
     expect(slack.posts.filter((post) => post.text.startsWith('The Helmsman answers'))).toHaveLength(
       1,
     );
+  });
+});
+
+describe('a thread whose watch stopped before the answer came', () => {
+  function threadOf(message: ReturnType<typeof directMessage>) {
+    const thread = store.threadAt(message.channel, message.ts);
+    if (thread === undefined) throw new Error('no thread');
+    return thread;
+  }
+
+  it('resumes no pause it has already resumed, so a reply while the Helmsman answers is held', async () => {
+    const status = directMessage(OPERATOR, 'status?', NOW);
+    aflow.holdAnswers = true;
+    // The watch limit is zero here, so each watch gives up at once.
+    expect((await send(status)).outcome).toBe('started');
+    aflow.answerHeld();
+    expect(
+      (await send(directMessage(OPERATOR, 'go on', NOW, { threadTs: status.ts }))).outcome,
+    ).toBe('continued');
+    expect(threadOf(status).status).toBe('waiting');
+
+    const early = await send(directMessage(OPERATOR, 'and?', NOW, { threadTs: status.ts }));
+    const again = await send(directMessage(OPERATOR, 'and?', NOW, { threadTs: status.ts }));
+
+    expect([early.outcome, again.outcome]).toEqual(['busy', 'busy']);
+    expect(aflow.resumes).toHaveLength(1);
+    expect(aflow.refusals).toEqual([]);
+    expect(slack.posts.map((post) => post.text)).not.toContain(MOVED_ON);
+    expect(slack.posts.at(-1)?.text).toBe(STILL_ANSWERING);
+
+    // Once the Helmsman answers, the next reply resumes the new pause.
+    aflow.answerHeld();
+    expect(
+      (await send(directMessage(OPERATOR, 'thanks', NOW, { threadTs: status.ts }))).outcome,
+    ).toBe('continued');
+    expect(aflow.resumes).toHaveLength(2);
+  });
+
+  it('starts one session when two messages for one new thread arrive together', async () => {
+    const status = directMessage(OPERATOR, 'status?', NOW);
+    const reply = directMessage(OPERATOR, 'and the deploy?', NOW, { threadTs: status.ts });
+
+    const [first, second] = await Promise.all([
+      answerInbound(status, deps()),
+      answerInbound(reply, deps()),
+    ]);
+    if ('watching' in first) await first.watching;
+
+    expect(first.outcome).toBe('started');
+    expect(second.outcome).toBe('busy');
+    expect(aflow.starts).toHaveLength(1);
+    expect(aflow.sessions.size).toBe(1);
+    expect(slack.posts.map((post) => post.text)).toContain(STILL_ANSWERING);
+  });
+
+  it('keeps watching when the notice that it waits at Aflow fails to post', async () => {
+    const status = directMessage(OPERATOR, 'status?', NOW);
+    const post = slack.postMessage;
+    slack.postMessage = (channel, text, options) =>
+      text === WAITS_AT_AFLOW
+        ? Promise.reject(new Error('Slack is down'))
+        : post(channel, text, options);
+    aflow.holdAnswers = true;
+    let polls = 0;
+    const patient = new Conversations({
+      store,
+      slack,
+      api: deps().api,
+      aflowUserId: OWNER,
+      now: () => NOW,
+      pollMs: 0,
+      watchLimitMs: 60 * MINUTE,
+      sleep: () => {
+        polls += 1;
+        const [session] = [...aflow.sessions.values()];
+        if (polls === 1) aflow.pauseAtAflow(session?.id ?? '');
+        if (polls === 2) aflow.answerHeld();
+        return Promise.resolve();
+      },
+    });
+
+    const started = await answerInbound(status, { ...deps(), conversations: patient });
+    const watched: WatchOutcome | undefined =
+      'watching' in started ? await started.watching : undefined;
+
+    expect(watched).toBe('answered');
+    expect(slack.posts.at(-1)?.text).toBe('The Helmsman answers: status?');
+    aflow.holdAnswers = false;
+    expect(
+      (await send(directMessage(OPERATOR, 'go on', NOW, { threadTs: status.ts }))).outcome,
+    ).toBe('continued');
+  });
+
+  it('leaves the thread open to a reply when the watch fails', async () => {
+    const status = directMessage(OPERATOR, 'status?', NOW);
+    const api = deps().api;
+    let reads = 0;
+    const failing = new Conversations({
+      store,
+      slack,
+      api: {
+        ...api,
+        latestEvents: (spaceId, sessionId) =>
+          (reads += 1) === 1
+            ? Promise.reject(new Error('the watch broke'))
+            : api.latestEvents(spaceId, sessionId),
+      },
+      aflowUserId: OWNER,
+      now: () => NOW,
+    });
+    aflow.holdAnswers = true;
+
+    const started = await answerInbound(status, { ...deps(), conversations: failing });
+    if ('watching' in started) await expect(started.watching).rejects.toThrow('the watch broke');
+    expect(threadOf(status).status).toBe('waiting');
+
+    aflow.holdAnswers = false;
+    aflow.answerHeld();
+    expect(
+      (await send(directMessage(OPERATOR, 'go on', NOW, { threadTs: status.ts }))).outcome,
+    ).toBe('continued');
+  });
+});
+
+describe('a relayed answer', () => {
+  const NOTE = '… The full answer is in the conversation at Aflow.';
+
+  it('is posted whole when it fits Slack’s 40,000 characters once escaped', () => {
+    expect(relayed('a < b & c')).toBe('a &lt; b &amp; c');
+    expect(relayed('&'.repeat(8_000))).toBe('&amp;'.repeat(8_000));
+  });
+
+  it('is cut to fit once escaped, between whole escapes, even when dense in `&`', () => {
+    const text = relayed('&'.repeat(30_000));
+
+    expect(text.length).toBeLessThanOrEqual(40_000);
+    expect(text.endsWith(NOTE)).toBe(true);
+    expect(text.slice(0, -NOTE.length)).toMatch(/^(&amp;)+$/);
   });
 });
 

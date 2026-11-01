@@ -109,6 +109,8 @@ export const InboundRecordSchema = z.object({
   ageMs: z.number().int().nonnegative(),
   outcome: z.enum([
     'received',
+    'linked',
+    'code_used',
     'card_reply',
     'started',
     'continued',
@@ -152,6 +154,12 @@ export const ThreadRecordSchema = z.object({
    * a restart never posts one answer twice.
    */
   relayedStepExecutionId: z.string().min(1).nullable(),
+  /**
+   * The pause a reply last resumed. The session's events name it as the newest
+   * pause until the Helmsman answers, so a reply that reads the pause from them
+   * skips this one rather than resume it a second time.
+   */
+  resumedStepExecutionId: z.string().min(1).nullable(),
   startedAt: z.string().min(1),
   updatedAt: z.string().min(1),
 });
@@ -220,6 +228,8 @@ export class ChannelStore {
   private readonly cardClaims = new Set<string>();
   /** Late messages whose question has a tap at work. Process memory, as above. */
   private readonly lateClaims = new Set<string>();
+  /** New threads whose conversation is starting. Process memory, as above. */
+  private readonly threadClaims = new Set<string>();
 
   private constructor(
     private readonly path: string,
@@ -415,6 +425,22 @@ export class ChannelStore {
     );
   }
 
+  /**
+   * Takes a thread with no conversation for the one message that starts it, in
+   * one synchronous step. False when the thread has a conversation, or another
+   * message is starting one, so one thread never maps to two sessions.
+   */
+  claimThread(channel: string, threadTs: string): boolean {
+    const key = `${channel}:${threadTs}`;
+    if (this.threadAt(channel, threadTs) !== undefined || this.threadClaims.has(key)) return false;
+    this.threadClaims.add(key);
+    return true;
+  }
+
+  releaseThread(channel: string, threadTs: string): void {
+    this.threadClaims.delete(`${channel}:${threadTs}`);
+  }
+
   addThread(thread: ThreadRecord): void {
     this.data.threads.push(thread);
     this.persist();
@@ -423,7 +449,10 @@ export class ChannelStore {
   updateThread(
     thread: ThreadRecord,
     patch: Partial<
-      Pick<ThreadRecord, 'status' | 'pausedStepExecutionId' | 'relayedStepExecutionId'>
+      Pick<
+        ThreadRecord,
+        'status' | 'pausedStepExecutionId' | 'relayedStepExecutionId' | 'resumedStepExecutionId'
+      >
     >,
     at: Date,
   ): void {

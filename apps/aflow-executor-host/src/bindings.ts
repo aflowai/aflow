@@ -36,6 +36,14 @@ import { type HarnessProfile, HarnessProfileSchema } from './harnessProfiles.js'
 import { type LocalMcpServer, LocalMcpServerSchema } from './localMcpServers.js';
 import { describePolicyIssues } from './policyIssues.js';
 
+/**
+ * How many folder checks a machine runs at once when the operator chose no
+ * number. A check runs a repository's whole test suite on half the cores, so
+ * two at once beside the coding agents take every core the machine has, and
+ * a test waiting on a timer then fails having failed at nothing.
+ */
+export const HOST_CHECK_CONCURRENCY_DEFAULT = 1;
+
 export const HostBindingModeSchema = z.enum(['read', 'readwrite']);
 export type HostBindingMode = z.infer<typeof HostBindingModeSchema>;
 
@@ -115,6 +123,12 @@ export const HostPolicySchema = z.object({
    */
   maxConcurrentHarnessRuns: z.number().int().min(1).optional(),
   /**
+   * How many folder checks run here at once, beside the coding agents and
+   * outside their count, written only when the operator chose a number:
+   * absent, `HOST_CHECK_CONCURRENCY_DEFAULT` is read each time.
+   */
+  maxConcurrentChecks: z.number().int().min(1).optional(),
+  /**
    * Whether this machine is held awake while its executor has work, written
    * only when the operator chose: absent, `HOST_KEEP_AWAKE_DEFAULT` is read
    * each time, so a change of default reaches a machine that never chose.
@@ -177,6 +191,8 @@ export interface LoadedHostPolicy {
   defaultHarness?: string;
   /** The operator's number, or the default when they chose none. */
   maxConcurrentHarnessRuns: number;
+  /** The operator's number of checks at once, or the default when they chose none. */
+  maxConcurrentChecks: number;
   /** The operator's choice, or the default when they made none. */
   keepAwake: HostKeepAwakeMode;
   mcpServers: Map<string, LocalMcpServer>;
@@ -230,6 +246,7 @@ export async function loadHostPolicy(
       : {}),
     maxConcurrentHarnessRuns:
       parsed.data.maxConcurrentHarnessRuns ?? HOST_HARNESS_CONCURRENCY_DEFAULT,
+    maxConcurrentChecks: parsed.data.maxConcurrentChecks ?? HOST_CHECK_CONCURRENCY_DEFAULT,
     keepAwake: parsed.data.keepAwake ?? HOST_KEEP_AWAKE_DEFAULT,
     mcpServers: new Map(parsed.data.mcpServers.map((m) => [m.id, m])),
     toolPaths: parsed.data.toolPaths,

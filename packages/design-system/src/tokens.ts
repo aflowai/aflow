@@ -316,7 +316,7 @@ export const tokens = {
           "bg": "#212121"
         },
         "running": {
-          "fg": "#c979ff",
+          "fg": "#c7b9d4",
           "bg": "#211729d4"
         },
         "paused": {

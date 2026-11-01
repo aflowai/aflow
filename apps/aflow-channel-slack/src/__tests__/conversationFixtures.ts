@@ -40,6 +40,8 @@ export interface FakeAflow {
   answerHeld(): void;
   /** Moves the session's pause on, as a reply from the web app would. */
   movePause(sessionId: string): void;
+  /** Pauses the session on something only Aflow can answer, such as an approval. */
+  pauseAtAflow(sessionId: string): void;
 }
 
 const MESSAGE_KEY = 'ai.agent.chatInput.helmsman';
@@ -96,6 +98,20 @@ export function fakeAflow(): FakeAflow {
     movePause(sessionId) {
       const session = aflow.sessions.get(sessionId);
       if (session !== undefined) pause(session, 'a message sent at Aflow');
+    },
+    pauseAtAflow(sessionId) {
+      const session = aflow.sessions.get(sessionId);
+      if (session === undefined) return;
+      const step = randomUUID();
+      session.pausedStep = step;
+      session.events.push({
+        eventId: randomUUID(),
+        eventType: 'SessionPaused',
+        sessionId: session.id,
+        stepExecutionId: step,
+        timestamp: tick(),
+        metadata: { missingVariables: [{ variableId: 'approval' }] },
+      });
     },
     fetch: (input, init) => {
       const url = new URL(String(input));
