@@ -13,6 +13,7 @@ import { positiveMsEnv } from '@aflow/lib';
 import {
   FOLDER_PREVIEW_READY_WITHIN_DEFAULT_SECONDS,
   type HostFolderPreview,
+  HOST_CHECK_QUIET_WAIT_MAX_MS,
   HostCommitCheckInputSchema,
   HostHarnessRunInputSchema,
   HostProcessExecInputSchema,
@@ -72,9 +73,10 @@ async function checkDeadlineMs(raw: unknown, policyPath: string): Promise<number
   );
   if (binding === undefined) return undefined;
   const { argv, timeoutMs } = checksOf(binding);
-  return argv === undefined
-    ? undefined
-    : timeoutMs + HOST_CHECK_CHECKOUT_MARGIN_MS + HOST_OUTER_TIMEOUT_MARGIN_MS;
+  if (argv === undefined) return undefined;
+  // The wait for a quiet machine comes before the checks and is not theirs.
+  const quietWaitMs = parsed.data.waitForQuiet === true ? HOST_CHECK_QUIET_WAIT_MAX_MS : 0;
+  return timeoutMs + quietWaitMs + HOST_CHECK_CHECKOUT_MARGIN_MS + HOST_OUTER_TIMEOUT_MARGIN_MS;
 }
 
 async function streamCeilingMs(

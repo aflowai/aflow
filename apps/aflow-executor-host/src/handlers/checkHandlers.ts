@@ -17,7 +17,7 @@ import {
   successWithData,
   validationError,
 } from '@aflow/executor-runtime';
-import { HostCommitCheckInputSchema } from '@aflow/schemas';
+import { buildOperationId, HostCommitCheckInputSchema } from '@aflow/schemas';
 
 import {
   executionPermitted,
@@ -33,8 +33,11 @@ import { issueCheckReceipt } from '../checkReceipt.js';
 import { checkOutcome, runFolderChecks, skippedCheck } from '../commitCheck.js';
 import { checksOf } from '../folderChecks.js';
 import { createLiveOutputFeed } from '../liveOutput.js';
+import { describeQuietWait, type QuietWait, waitForQuietMachine } from '../quietMachine.js';
 import { noSandboxMessage, reapWithdrawn, sandboxReadiness } from '../sandboxedRun.js';
 import { isGitRepository, resolveCommit, WorktreeError } from '../worktree.js';
+
+export const COMMIT_CHECK_OPERATION = buildOperationId('host', 'commit', 'check');
 
 async function check(ctx: ExecutorContext, policyPath: string): Promise<StepResult> {
   const parsed = HostCommitCheckInputSchema.safeParse(await ctx.readPayload(ctx.job.inputRef));
@@ -69,6 +72,22 @@ async function check(ctx: ExecutorContext, policyPath: string): Promise<StepResu
   }
 
   const live = createLiveOutputFeed((channel, delta) => ctx.emitLiveDelta(channel, delta));
+  let quietWait: QuietWait | undefined;
+  if (input.waitForQuiet === true) {
+    // Inside the check lane's slot: a check waiting for the load to fall
+    // should not see another check start and raise it.
+    quietWait = await waitForQuietMachine({
+      signal: ctx.signal,
+      onWaiting: (loadAverage, cores) => {
+        live.push(
+          `waiting for the machine to quieten: load average ${loadAverage.toFixed(1)} on ${String(cores)} cores\n`,
+        );
+      },
+      onPoll: () => ctx.reportProgress?.(),
+    });
+    live.push(`${describeQuietWait(quietWait)}\n`);
+    ctx.signal.throwIfAborted();
+  }
   const run = await runFolderChecks({
     binding,
     argv,
@@ -83,7 +102,15 @@ async function check(ctx: ExecutorContext, policyPath: string): Promise<StepResu
   });
   live.flush();
   const outputRef = await ctx.writePayload('logs', run.output);
-  const outcome = checkOutcome({ bindingId: binding.id, argv, timeoutMs, sha, run, outputRef });
+  const outcome = checkOutcome({
+    bindingId: binding.id,
+    argv,
+    timeoutMs,
+    sha,
+    run,
+    outputRef,
+    ...(quietWait !== undefined ? { quietWait } : {}),
+  });
   const receipt = issueCheckReceipt({
     bindingId: binding.id,
     sha,
@@ -103,7 +130,7 @@ export function createHostCommitCheckHandler(policyPath: string): {
   execute: (ctx: ExecutorContext) => Promise<StepResult>;
 } {
   return {
-    handles: new Set(['host.commit.check']),
+    handles: new Set([COMMIT_CHECK_OPERATION]),
     execute: async (ctx: ExecutorContext): Promise<StepResult> => {
       try {
         return await check(ctx, policyPath);

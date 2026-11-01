@@ -51,10 +51,12 @@ describe('host.commit.check takes a folder and two commits, and nothing to run',
   });
 
   it('carries no command a caller could set, and drops one sent anyway', () => {
+    // `waitForQuiet` says when the checks start, never what runs or for how long.
     expect(Object.keys(HostCommitCheckInputSchema.shape).sort()).toEqual([
       'base',
       'bindingId',
       'sha',
+      'waitForQuiet',
     ]);
     const parsed = HostCommitCheckInputSchema.parse({
       bindingId: 'hb_app',

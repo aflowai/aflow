@@ -30,6 +30,7 @@ import { createChatterStripper } from './egressRefusals.js';
 import { makeAgentScratch, makeScratch } from './executorScratch.js';
 import { formatMinutes } from './folderChecks.js';
 import { runUnderFolderPosture } from './folderRun.js';
+import { describeQuietWait, type QuietWait } from './quietMachine.js';
 import type { SandboxedRunResult } from './sandboxedRun.js';
 import { sandboxPostureOf } from './sandboxPosture.js';
 import { checkoutWidening } from './sandboxPolicy.js';
@@ -316,6 +317,8 @@ export function checkOutcome(params: {
   readonly sha: string;
   readonly run: FolderCheckRun;
   readonly outputRef: string;
+  /** How the check waited for a quiet machine first, where it was asked to. */
+  readonly quietWait?: QuietWait;
 }): HostCommitCheckOutput {
   const { result } = params.run;
   const passed = !result.timedOut && result.exitCode === 0;
@@ -344,10 +347,10 @@ export function checkOutcome(params: {
     const more = testTimeouts.length - HOST_CHECK_TEST_TIMEOUTS_MAX;
     summary =
       `${command} exited ${String(result.exitCode)} on ${short} after ${seconds(result.durationMs)}, ` +
-      `and nothing failed but ${String(testTimeouts.length)} test${testTimeouts.length === 1 ? '' : 's'} ` +
-      `running out of time: ${named}${more > 0 ? `; and ${String(more)} more` : ''}. A machine under ` +
-      'load does this to a passing commit, which is why a publication runs the checks once more ' +
-      `after a first run that ends so.${printed}`;
+      `and nothing failed but running out of time, in ${String(testTimeouts.length)} place${testTimeouts.length === 1 ? '' : 's'}: ` +
+      `${named}${more > 0 ? `; and ${String(more)} more` : ''}. A machine under ` +
+      'load does this to a passing commit, which is why a publication runs the checks once more, ' +
+      `once the machine is quiet, after a first run that ends so.${printed}`;
   } else {
     const ending =
       result.exitCode === null
@@ -356,6 +359,7 @@ export function checkOutcome(params: {
     const at = params.run.failingGuard !== undefined ? ` at \`${params.run.failingGuard}\`` : '';
     summary = `${command} ${ending} on ${short} after ${seconds(result.durationMs)}: the check failed${at}.${printed}`;
   }
+  if (params.quietWait !== undefined) summary = `${describeQuietWait(params.quietWait)} ${summary}`;
   return {
     passed,
     checks: [...params.argv],
@@ -366,6 +370,7 @@ export function checkOutcome(params: {
     tail,
     summary,
     sandbox: params.run.sandbox,
+    ...(params.quietWait !== undefined ? { quietWait: params.quietWait } : {}),
     ...(params.run.skippedListenerTests !== undefined
       ? { skippedListenerTests: params.run.skippedListenerTests }
       : {}),
