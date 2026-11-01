@@ -95,8 +95,6 @@ describe('a waiter registered after its event fired', () => {
 
     const second = lateWait();
     expect(await registerWait(redis, second)).toEqual({ state: 'waiting' });
-    // The old event's subject is read again by a later event, and still ends nothing.
-    await recordWaitEvent(redis, { tenantId: TENANT, spaceId: SPACE }, green);
     expect(await claimFiredWaits(redis, 10)).toEqual([]);
 
     const merged = { ...green, firedAt: second.declaredAt + 1, detail: { change: 'merged' } };
@@ -242,6 +240,98 @@ describe('a wait claimed for delivery', () => {
 
     expect(await claimDueDeliveries(redis, T0, 10)).toEqual([claimed]);
     expect(await claimDueDeliveries(redis, T0, 10)).toEqual([]);
+  });
+});
+
+describe('an event recorded after its waiter registered', () => {
+  it('wakes the waiter though its clock says it fired before the declaration', async () => {
+    const registration = wait({ declaredAt: T0 + 10_000, closesAt: T0 + 70_000 });
+    await registerWait(redis, registration);
+    // Stamped by a clock behind the waiter's, recorded after it registered.
+    const behind = { ...green, firedAt: T0 + 1_000 };
+
+    await recordWaitEvent(redis, { tenantId: TENANT, spaceId: SPACE }, behind);
+
+    expect(await claimFiredWaits(redis, 10, T0)).toEqual([
+      { registration, outcome: { endedBy: 'event', event: behind } },
+    ]);
+  });
+
+  it('is told in the order the events were recorded', async () => {
+    const registration = wait({ declaredAt: T0 + 10_000, closesAt: T0 + 70_000 });
+    await registerWait(redis, registration);
+    const first = { ...green, firedAt: T0 + 20_000 };
+    const second = { ...green, firedAt: T0 + 2_000, detail: { change: 'merged' } };
+
+    await recordWaitEvent(redis, { tenantId: TENANT, spaceId: SPACE }, first);
+    await recordWaitEvent(redis, { tenantId: TENANT, spaceId: SPACE }, second);
+
+    expect(await claimFiredWaits(redis, 10, T0)).toEqual([
+      { registration, outcome: { endedBy: 'event', event: first, laterEvents: [second] } },
+    ]);
+  });
+});
+
+describe('claiming the waits a fired subject ends', () => {
+  it('claims no more waits than its limit, and leaves the subject armed with the rest', async () => {
+    const waits = [wait(), wait(), wait()];
+    for (const registration of waits) await registerWait(redis, registration);
+    await recordWaitEvent(redis, { tenantId: TENANT, spaceId: SPACE }, green);
+
+    const first = await claimFiredWaits(redis, 2, T0);
+    expect(first).toHaveLength(2);
+    expect(await redis.zcard(WAIT_FIRED_SUBJECTS_KEY)).toBe(1);
+
+    const rest = await claimFiredWaits(redis, 10, T0);
+    expect(rest).toHaveLength(1);
+    expect([...first, ...rest].map((ended) => ended.registration.waitId).sort()).toEqual(
+      waits.map((registration) => registration.waitId).sort(),
+    );
+    expect(await redis.zcard(WAIT_FIRED_SUBJECTS_KEY)).toBe(0);
+  });
+
+  it('leaves a subject armed by a reader that died before it removed it, for the next cycle to remove', async () => {
+    const registration = wait();
+    await registerWait(redis, registration);
+    await recordWaitEvent(redis, { tenantId: TENANT, spaceId: SPACE }, green);
+    const armed = await redis.zrange(WAIT_FIRED_SUBJECTS_KEY, 0, -1, 'WITHSCORES');
+    await claimFiredWaits(redis, 10, T0);
+    // The reader claimed the wait and died before it removed the subject.
+    await redis.zadd(WAIT_FIRED_SUBJECTS_KEY, armed[1]!, armed[0]!);
+
+    expect(await claimFiredWaits(redis, 10, T0)).toEqual([]);
+    expect(await redis.zcard(WAIT_FIRED_SUBJECTS_KEY)).toBe(0);
+    expect(await claimDueDeliveries(redis, T0 + WAIT_DELIVERY_LEASE_MS, 10)).toEqual([
+      { registration, outcome: { endedBy: 'event', event: green } },
+    ]);
+  });
+
+  it('keeps a subject armed where an event was recorded on it while its waits were claimed', async () => {
+    await registerWait(redis, wait());
+    await recordWaitEvent(redis, { tenantId: TENANT, spaceId: SPACE }, green);
+    // Registered after green and waiting from later, so green does not end it.
+    await registerWait(redis, wait({ since: T0 + 30_000 }));
+    const late = { ...green, firedAt: T0 + 40_000, detail: { change: 'merged' } };
+    let raced = false;
+    const racing = new Proxy(redis, {
+      get(target, property, receiver) {
+        if (property === 'eval' && !raced) {
+          return async (...args: Parameters<Redis['eval']>) => {
+            raced = true;
+            await recordWaitEvent(redis, { tenantId: TENANT, spaceId: SPACE }, late);
+            return target.eval(...args);
+          };
+        }
+        const value: unknown = Reflect.get(target, property, receiver);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+
+    expect(await claimFiredWaits(racing, 10, T0)).toHaveLength(1);
+    expect(await redis.zcard(WAIT_FIRED_SUBJECTS_KEY)).toBe(1);
+    expect(await claimFiredWaits(redis, 10, T0)).toMatchObject([
+      { outcome: { endedBy: 'event', event: late } },
+    ]);
   });
 });
 

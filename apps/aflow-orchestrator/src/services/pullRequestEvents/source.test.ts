@@ -326,6 +326,37 @@ describe('a change whose event did not land', () => {
   });
 });
 
+describe('a merge that lands beside an older change that does not', () => {
+  it('clears the watch, so the merged pull request is polled no more', async () => {
+    await arm();
+    const green = fakeGitHub({
+      [PULL]: { etag: '"p1"', body: pull() },
+      [CHECKS]: { etag: '"c1"', body: { total_count: 1, check_runs: passing(1) } },
+      [REVIEWS]: { etag: '"r1"', body: [] },
+    });
+    const refuseGreen = vi.fn(
+      async (_redis: unknown, params: { change: string }) => params.change !== 'checks_green',
+    );
+    expect(await cycle(green.get, refuseGreen as never)).toMatchObject({ failed: 1 });
+    expect(await countPullRequestWatches(redis)).toBe(1);
+
+    clock += PULL_REQUEST_POLL_CADENCE_MS;
+    const merged = fakeGitHub({
+      [PULL]: { etag: '"p2"', body: pull({ state: 'closed', merged: true }) },
+    });
+    expect(await cycle(merged.get, refuseGreen as never)).toMatchObject({ failed: 1 });
+    expect(refuseGreen.mock.calls.slice(1).map(([, params]) => params.change)).toEqual([
+      'checks_green',
+      'merged',
+    ]);
+    expect(await countPullRequestWatches(redis)).toBe(0);
+
+    clock += PULL_REQUEST_POLL_CADENCE_MS;
+    await cycle(merged.get, refuseGreen as never);
+    expect(merged.requests).toHaveLength(1);
+  });
+});
+
 describe('a watch whose polls keep failing', () => {
   it('keeps its lifetime as it stands, and is dropped once that lapses', async () => {
     await arm();

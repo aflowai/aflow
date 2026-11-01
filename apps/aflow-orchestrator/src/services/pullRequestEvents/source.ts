@@ -340,16 +340,30 @@ export async function runPullRequestEventsCycle(
       }
       const read: PullRequestWatch = { ...polled.watch };
       delete read.unsent;
-      // The poll's reads are saved with the changes that did not land, so the
-      // next poll sends those again and not the ones that landed. GitHub
-      // answered, so this poll did not fail, and the save renews the watch.
-      if (unsent.length > 0) {
+      // A merge or a close that landed ends the watch even where an older
+      // change did not land: nothing changes on the pull request after it, so
+      // a watch kept for the older change would be polled for as long as
+      // GitHub answers. The older change is not sent again.
+      const terminalLanded = (['merged', 'closed'] as const).some(
+        (change) => changes.includes(change) && !unsent.includes(change),
+      );
+      if (terminalLanded) {
+        await clearPullRequestWatch(deps.redis, watch);
+        if (unsent.length > 0) {
+          failed++;
+          deps.logger.warn('[pull-request-events] cleared with changes that did not land', {
+            subject: watch.subject,
+            unsent,
+          });
+          continue;
+        }
+      } else if (unsent.length > 0) {
+        // The poll's reads are saved with the changes that did not land, so the
+        // next poll sends those again and not the ones that landed. GitHub
+        // answered, so this poll did not fail, and the save renews the watch.
         failed++;
         await savePullRequestWatch(deps.redis, { ...read, unsent }, now() + cadenceMs);
         continue;
-      }
-      if (changes.includes('merged') || changes.includes('closed')) {
-        await clearPullRequestWatch(deps.redis, watch);
       } else {
         await savePullRequestWatch(deps.redis, read, now() + cadenceMs);
       }

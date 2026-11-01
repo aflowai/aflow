@@ -179,6 +179,36 @@ describe('the wait delivery cycle', () => {
     expect(delivered.map((ended) => ended.registration.waitId)).toEqual([declared.waitId]);
   });
 
+  it('claims no more waits than its batch from one subject, and says there is more', async () => {
+    for (let i = 0; i < 3; i++) {
+      await declareWait(redis, {
+        tenantId: TENANT,
+        spaceId: SPACE,
+        sessionId: SESSION,
+        kind: 'pull_request.changed',
+        subject: 'aflowai/aflow#276',
+        windowSeconds: 3600,
+      });
+    }
+    await emitPullRequestChanged(redis, {
+      tenantId: TENANT,
+      spaceId: SPACE,
+      subject: 'aflowai/aflow#276',
+      change: 'merged',
+      url: 'https://github.com/aflowai/aflow/pull/276',
+      headSha: 'abc123',
+    });
+    const { deliver, delivered } = deliverer();
+    const small = { ...ctx, maxBatch: 2 };
+
+    const first = await runWaitDeliveryCycle({ harnessDeps, logger, deliver }, small);
+    const second = await runWaitDeliveryCycle({ harnessDeps, logger, deliver }, small);
+
+    expect(first).toEqual({ candidates: 2, processed: 2, failed: 0, hasMore: true });
+    expect(second).toMatchObject({ candidates: 1, processed: 1, hasMore: false });
+    expect(new Set(delivered.map((ended) => ended.registration.waitId)).size).toBe(3);
+  });
+
   it('ends no wait in observe mode', async () => {
     await declareWait(
       redis,
