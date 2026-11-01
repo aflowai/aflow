@@ -9,7 +9,7 @@ Production background discovery must be event- or candidate-driven. A task may n
 work by scanning the Redis keyspace, reading a whole dirty set, or enumerating tenant schemas;
 idle cost may not grow with logical shards, tenants, stored keys, or connected subscribers.
 
-**49 registered tasks** across 8 services.
+**50 registered tasks** across 8 services.
 2 task(s) still carry a residual poll — a periodic datastore read that
 exists only because an event or candidate path is incomplete.
 
@@ -62,6 +62,7 @@ Datastore operations per minute with zero due work, grouped by what each scope m
 | `orchestrator.schedule_evaluator` | orchestrator | feature | candidate | per_instance | 15s | 4 | safe |
 | `orchestrator.session_metadata` | orchestrator | feature | candidate | per_instance | 5s | 12 | safe |
 | `orchestrator.shard_acquisition` | orchestrator | correctness | candidate | per_instance | 30s | 0 | never |
+| `orchestrator.shepherd_sweep_due_check` | orchestrator | feature | candidate | per_instance | 15s | 0 | safe |
 | `orchestrator.step_stall_watchdog` | orchestrator | correctness | candidate | shard_owner | 30s | 2 | never |
 | `orchestrator.stream_retention` | orchestrator | operational | candidate | per_instance | 1m | 1 | safe |
 | `orchestrator.timer_dispatch` | orchestrator | correctness | candidate | shard_owner | 1s | 120 | never |
@@ -846,9 +847,9 @@ Datastore operations per minute with zero due work, grouped by what each scope m
 | Feature gate | — |
 | Disable policy | safe |
 | Residual poll | — |
-| Source | `apps/aflow-orchestrator/src/services/pullRequestEvents/source.ts`<br>`apps/aflow-orchestrator/src/services/pullRequestEvents/github.ts`<br>`apps/aflow-orchestrator/src/services/pullRequestEvents/arm.ts`<br>`packages/redis/src/pullRequestWatch.ts` |
+| Source | `apps/aflow-orchestrator/src/services/pullRequestEvents/source.ts`<br>`apps/aflow-orchestrator/src/services/pullRequestEvents/github.ts`<br>`apps/aflow-orchestrator/src/services/pullRequestEvents/arm.ts`<br>`apps/aflow-orchestrator/src/services/pullRequestEvents/owner.ts`<br>`packages/redis/src/pullRequestWatch.ts` |
 
-> Each poll is conditional: the task keeps each answer's ETag and sends it back as If-None-Match, so an unchanged pull request answers 304, which GitHub says does not count against the primary rate limit. Three reads per pull request — the pull request, its head's check runs and its reviews — and a fourth, the head's combined status, where the check runs are none or more than one page. The 60-second cadence is proposed and still to be measured (Plan 339 P2). One range read per cycle when nothing is armed.
+> Each poll is conditional: the task keeps each answer's ETag and sends it back as If-None-Match, so an unchanged pull request answers 304, which GitHub says does not count against the primary rate limit. Three reads per pull request — the pull request, its head's check runs and its reviews — and a fourth, the head's combined status, where the check runs are none or more than one page. The 60-second cadence is proposed and still to be measured (Plan 339 P2). One range read per cycle when nothing is armed. The arm also records the pull request's owner, the live Helmsman conversation that started the publication, and declares its wait on the pull request; the wait delivery renews it (Plan 339 D4).
 
 ### `orchestrator.resident_due_check`
 
@@ -874,7 +875,7 @@ Datastore operations per minute with zero due work, grouped by what each scope m
 | Feature gate | SCHEDULES_ENABLED |
 | Disable policy | safe |
 | Residual poll | — |
-| Source | `apps/aflow-orchestrator/src/services/ScheduleEvaluator.ts`<br>`apps/aflow-orchestrator/src/services/residentDueCheck.ts`<br>`packages/cybernetic-runtime/src/plan/resident.ts`<br>`packages/cybernetic-runtime/src/plan/stream.ts` |
+| Source | `apps/aflow-orchestrator/src/services/ScheduleEvaluator.ts`<br>`apps/aflow-orchestrator/src/services/scheduleSkip.ts`<br>`apps/aflow-orchestrator/src/services/residentDueCheck.ts`<br>`packages/cybernetic-runtime/src/plan/resident.ts`<br>`packages/cybernetic-runtime/src/plan/stream.ts` |
 
 > Runs inside the schedule discovery and dispatch runners with their claims and budgets. Events identify one space directly and never enumerate spaces.
 
@@ -1017,6 +1018,34 @@ Datastore operations per minute with zero due work, grouped by what each scope m
 | Source | `apps/aflow-orchestrator/src/services/ShardManager.ts` |
 
 > One acquire Lua per shard runs only while capacity is free; a full instance short-circuits.
+
+### `orchestrator.shepherd_sweep_due_check`
+
+**Purpose.** Read the space's open loop pull requests before a Local PR Shepherd firing starts its agent.
+
+**Invariant.** A shepherd firing starts no run while no loop pull request is open, or while every open one is held by its owner or by a waiter whose window closes before the next sweep.
+
+**Recovery.** Disabled or failing, a firing starts the shepherd as it did before the check. A skipped firing keeps its firing cap and moves to the next cron time.
+
+| Field | Value |
+| ----- | ----- |
+| Service | orchestrator |
+| Owner domain | plans |
+| Criticality | feature |
+| Trigger | candidate |
+| Execution scope | per_instance |
+| Substrate | postgres-due |
+| Base cadence | 15s |
+| Max batch | 100 |
+| Max cycle | 60000 ms |
+| Idle datastore ops/min | 0 |
+| Hot-path producer budget | 0 added RTT — The publication's arm, each saved poll and the pull request's clear write the space's index in the transaction that writes the watch. |
+| Feature gate | SCHEDULES_ENABLED |
+| Disable policy | safe |
+| Residual poll | — |
+| Source | `apps/aflow-orchestrator/src/services/ScheduleEvaluator.ts`<br>`apps/aflow-orchestrator/src/services/scheduleSkip.ts`<br>`apps/aflow-orchestrator/src/services/pullRequestEvents/sweep.ts` |
+
+> Runs inside the schedule discovery runner, on a cron firing of a schedule whose target is the Local PR Shepherd agent. It reads one range of the space's own index, then each open pull request's watch and waiter hash. A space with no loop pull request open reads one empty range (Plan 339 D4, D5).
 
 ### `orchestrator.step_stall_watchdog`
 

@@ -13,7 +13,10 @@ import { planResidentScheduleInput } from '@aflow/schemas';
 
 const sessions = vi.hoisted(() => new Map<string, { status: string }>());
 const due = vi.hoisted(() => vi.fn(async () => true));
-vi.mock('../residentDueCheck.js', () => ({ residentOccurrenceDue: due }));
+vi.mock('../residentDueCheck.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../residentDueCheck.js')>()),
+  residentOccurrenceDue: due,
+}));
 vi.mock('@aflow/redis', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@aflow/redis')>()),
   getSessionState: (_redis: unknown, _tenantId: string, sessionId: string) =>

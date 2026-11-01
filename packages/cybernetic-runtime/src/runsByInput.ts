@@ -9,7 +9,11 @@ import {
   type WorkflowRunListOutput,
   type WorkflowRunListSucceededTask,
 } from '@aflow/schemas';
-import { drivenByLiveConversationSql, isReadersWork } from './conversationOwnership.js';
+import {
+  drivenByActingConversationSql,
+  drivenByLiveConversationSql,
+  isReadersWork,
+} from './conversationOwnership.js';
 import { PLAN_TREE_WALK_BOUNDS } from './plan/operations.js';
 import { loadConversationPlanRoots, placeInPlan } from './plan/attention.js';
 import { createPlanNodeStore } from './plan/store.js';
@@ -24,6 +28,12 @@ interface RunsQueryParams {
   query: WorkflowRunListInput;
   /** Reads the outputs `succeeded` compares; only a query naming an output needs it. */
   payloadStore?: Pick<PayloadStore, 'retrieve'>;
+  /**
+   * The owner the loop records for the pull request `startedByActingOwnerOf`
+   * names, read by the caller from the pull request's watch. Null where it
+   * records none. Only a query naming that filter needs it.
+   */
+  pullRequestOwner?: string | null;
 }
 
 /**
@@ -39,6 +49,8 @@ interface RunsQueryParams {
  *   narrows them to runs that succeeded in each named task; an output it
  *   names is read from the payload that task recorded, newest run first,
  *   through at most {@link WORKFLOW_RUN_LIST_LIMIT_MAX} candidates.
+ *   `startedByActingOwnerOf` narrows them to the runs the pull request's
+ *   recorded owner started, while that conversation can act (Plan 339 D4).
  * - `servingNodeOfPullRequest`: the runs of any workflow serving the plan
  *   nodes that hold a `pull_request` link to that URL, or any node under them
  *   (Plan 322 P2). It reads the plan as the run ledger joins it — a skill
@@ -56,10 +68,23 @@ export async function listRunsByInput(params: RunsQueryParams): Promise<Workflow
     throw new Error('workflow.run.list names a slug with an input, or a pull request');
   }
   const { slug, input, succeeded = [] } = query;
+  let startedByOwner = sql``;
+  if (query.startedByActingOwnerOf !== undefined) {
+    const owner = params.pullRequestOwner;
+    if (owner === undefined) {
+      throw new Error(
+        "workflow.run.list lists a pull request owner's runs only where its caller read the owner",
+      );
+    }
+    // A pull request no conversation owns has no owner's runs.
+    if (owner === null) return { runs: [], hasMore: false };
+    startedByOwner = sql` AND r.session_id = ${owner} AND ${drivenByActingConversationSql(sql`r.session_id`)}`;
+  }
   return listRunsWhere(
     params,
     sql`r.workflow_slug = ${slug}
         AND (r.metadata -> 'parentTaskInputs' -> 'inputs' -> ${input.field}) = ${JSON.stringify(input.equals)}::jsonb
+        ${startedByOwner}
         ${sql.join(
           succeeded.map((task) => sql` AND EXISTS (${succeededTaskRow(task, sql`1`)})`),
           sql``,

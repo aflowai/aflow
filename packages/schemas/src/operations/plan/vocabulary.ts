@@ -50,8 +50,8 @@ const PLAN_ITEM_CUT_MARK = '…';
 /**
  * A plan step's Action Center item title: "Pending approval · <title>", at
  * most `PLAN_ITEM_TITLE_MAX_CHARS`. The client renders it as inline markdown,
- * so a title too long to fit is cut before the syntax that would stand open
- * at the cut, never inside it, and ends with an ellipsis.
+ * so a title too long to fit leaves no syntax open at the cut, and ends with
+ * an ellipsis. `inlineMarkdownCut` says how.
  */
 export function planItemTitle(wait: PlanItemWait, title: string): string {
   const head = `${PLAN_STATE_LABELS.itemTitle[wait]} · `;
@@ -65,33 +65,52 @@ const EMPHASIS_CHARS = new Set(['*', '_', '~']);
 const WORD_CHAR = /[\p{L}\p{N}]/u;
 
 /**
- * The longest prefix of inline markdown, at most `budget` characters, that
- * ends where no construct stands open: outside a code span, a link's text
- * and destination, an autolink, a backslash escape and every emphasis run.
- * It errs toward cutting early. A literal `*` the scan reads as an opener
- * moves the cut back before it, which costs words and never shows markup.
+ * The most characters a markdown-safe cut gives up to end where no construct
+ * stands open. Past it, the cut falls at the budget and the openers left
+ * open there are escaped, so one stray backtick cannot empty a paragraph.
  */
-function inlineMarkdownCut(text: string, budget: number): string {
+const INLINE_CUT_TAIL_CHARS = 80;
+
+/** An opener the scan has not seen closed: where it begins and how many characters it runs. */
+interface OpenConstruct {
+  at: number;
+  run: number;
+}
+
+/** A scan of inline markdown up to `limit` characters. */
+interface InlineScan {
+  /** The last offset, at most `limit`, where no construct stands open. */
+  safe: number;
+  /** The openers that stand open where the scan ends. */
+  open: OpenConstruct[];
+}
+
+function scanInlineMarkdown(text: string, limit: number): InlineScan {
   let safe = 0;
-  let codeRun = 0;
-  let brackets = 0;
-  let destination = 0;
-  let angle = false;
-  const emphasis: string[] = [];
+  let code: OpenConstruct | undefined;
+  const brackets: number[] = [];
+  let destination: { at: number; depth: number } | undefined;
+  let angle: number | undefined;
+  const emphasis: Array<OpenConstruct & { ch: string }> = [];
+  const noneOpen = () =>
+    code === undefined &&
+    brackets.length === 0 &&
+    destination === undefined &&
+    angle === undefined &&
+    emphasis.length === 0;
   let i = 0;
-  while (i < text.length && i <= budget) {
-    if (codeRun === 0 && brackets === 0 && destination === 0 && !angle && emphasis.length === 0)
-      safe = i;
+  while (i < text.length && i <= limit) {
+    if (noneOpen()) safe = i;
     const ch = text[i]!;
     if (ch === '`') {
       let run = 1;
       while (text[i + run] === '`') run++;
-      if (codeRun === 0) codeRun = run;
-      else if (run === codeRun) codeRun = 0;
+      if (code === undefined) code = { at: i, run };
+      else if (run === code.run) code = undefined;
       i += run;
       continue;
     }
-    if (codeRun > 0) {
+    if (code !== undefined) {
       i++;
       continue;
     }
@@ -99,25 +118,25 @@ function inlineMarkdownCut(text: string, budget: number): string {
       i += 2;
       continue;
     }
-    if (angle) {
-      if (ch === '>') angle = false;
+    if (angle !== undefined) {
+      if (ch === '>') angle = undefined;
       i++;
       continue;
     }
-    if (destination > 0) {
-      if (ch === '(') destination++;
-      else if (ch === ')') destination--;
+    if (destination !== undefined) {
+      if (ch === '(') destination.depth++;
+      else if (ch === ')' && --destination.depth === 0) destination = undefined;
       i++;
       continue;
     }
     if (ch === '<' && /[A-Za-z/!?]/.test(text[i + 1] ?? '')) {
-      angle = true;
+      angle = i;
     } else if (ch === '[') {
-      brackets++;
-    } else if (ch === ']' && brackets > 0) {
-      brackets--;
+      brackets.push(i);
+    } else if (ch === ']' && brackets.length > 0) {
+      const opener = brackets.pop()!;
       if (text[i + 1] === '(') {
-        destination = 1;
+        destination = { at: opener, depth: 1 };
         i += 2;
         continue;
       }
@@ -133,26 +152,64 @@ function inlineMarkdownCut(text: string, budget: number): string {
         leftFlanking && (ch !== '_' || before === undefined || !WORD_CHAR.test(before));
       const canClose =
         rightFlanking && (ch !== '_' || after === undefined || !WORD_CHAR.test(after));
-      const opener = emphasis.lastIndexOf(ch);
+      let opener = emphasis.length - 1;
+      while (opener >= 0 && emphasis[opener]!.ch !== ch) opener--;
       if (canClose && opener >= 0) emphasis.length = opener;
-      else if (canOpen) emphasis.push(ch);
+      else if (canOpen) emphasis.push({ ch, at: i, run });
       i += run;
       continue;
     }
     i++;
   }
-  if (
-    i <= budget &&
-    codeRun === 0 &&
-    brackets === 0 &&
-    destination === 0 &&
-    !angle &&
-    emphasis.length === 0
-  )
-    safe = i;
-  // A cut between the halves of a surrogate pair would leave half a character.
-  if (safe > 0 && /[\uD800-\uDBFF]/.test(text[safe - 1]!)) safe--;
-  return text.slice(0, Math.min(safe, budget));
+  if (i <= limit && noneOpen()) safe = i;
+  const open: OpenConstruct[] = [
+    ...(code === undefined ? [] : [code]),
+    ...brackets.map((at) => ({ at, run: 1 })),
+    ...(destination === undefined ? [] : [{ at: destination.at, run: 1 }]),
+    ...(angle === undefined ? [] : [{ at: angle, run: 1 }]),
+    ...emphasis.map(({ at, run }) => ({ at, run })),
+  ];
+  return { safe, open };
+}
+
+/** `text` with a backslash before each character of every opener it leaves open, so each reads as text. */
+function escapeOpenConstructs(text: string): string {
+  let escaped = text;
+  for (;;) {
+    const { open } = scanInlineMarkdown(escaped, escaped.length);
+    const first = open.reduce<OpenConstruct | undefined>(
+      (earliest, o) => (earliest === undefined || o.at < earliest.at ? o : earliest),
+      undefined,
+    );
+    if (first === undefined) return escaped;
+    // Escaping one opener changes what the text after it pairs with, so the scan runs again.
+    const opener = escaped.slice(first.at, first.at + first.run).replace(/./g, (c) => `\\${c}`);
+    escaped = `${escaped.slice(0, first.at)}${opener}${escaped.slice(first.at + first.run)}`;
+  }
+}
+
+/** A cut between the halves of a surrogate pair would leave half a character. */
+function withoutHalfPair(cut: string): string {
+  return /[\uD800-\uDBFF]$/.test(cut) ? cut.slice(0, -1) : cut;
+}
+
+/**
+ * A prefix of inline markdown, at most `budget` characters, that leaves no
+ * code span, link, autolink or emphasis run open. It ends at the last point
+ * where none stands open, where that lies in the last
+ * `INLINE_CUT_TAIL_CHARS` of the budget. Otherwise it cuts at the budget and
+ * escapes each opener left open there. A stray `*`, `` ` ``, `[` or `<` then
+ * costs a backslash, never more than the tail.
+ */
+function inlineMarkdownCut(text: string, budget: number): string {
+  const { safe } = scanInlineMarkdown(text, budget);
+  if (safe >= budget - INLINE_CUT_TAIL_CHARS) return withoutHalfPair(text.slice(0, safe));
+  let end = budget;
+  for (;;) {
+    const escaped = escapeOpenConstructs(withoutHalfPair(text.slice(0, end)));
+    if (escaped.length <= budget) return escaped;
+    end -= escaped.length - budget;
+  }
 }
 
 /** The most blocked and merge-wait nodes the space's Action Center lists at once, newest first. */
@@ -241,8 +298,7 @@ function lastBlockStart(text: string): number {
  * ellipsis a cut title ends with. The client renders it as block markdown,
  * so a cut inside a fenced code block closes the fence and puts the ellipsis
  * on the line after it. Otherwise the rest of the card would render as code.
- * A cut in prose falls before any inline construct it would leave open, as a
- * title's does.
+ * A cut in prose leaves no inline construct open, as a title's does.
  */
 export function planItemSummary(text: string): string {
   if (text.length <= PLAN_ITEM_SUMMARY_MAX_CHARS) return text;

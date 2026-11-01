@@ -84,12 +84,23 @@ export const SHEPHERD_HAND_OVER_TARGET = {
  */
 export const SHEPHERD_TURN_DOCUMENT = 'turn.json';
 
+/** The Local PR Shepherd's slug: its agent's and its workflow's alike. */
+export const SHEPHERD_SLUG = 'local-pr-shepherd';
+
 /**
- * How often a schedule starts the shepherd's agent unless the operator names
- * another interval: every five minutes, which the rate budget of §5 P0.2 of
- * Plan 321 allows for twenty-five pull requests at the generic retry's ceiling.
+ * How often the shepherd's schedule fires unless the operator names another
+ * interval: hourly. The schedule is the fallback sweep of Plan 339 D4. A pull
+ * request's owner runs a pass on the pull request's own events, so the sweep
+ * serves only the pull requests no conversation holds.
  */
-export const SHEPHERD_SCHEDULE_CRON_DEFAULT = '*/5 * * * *';
+export const SHEPHERD_SCHEDULE_CRON_DEFAULT = '0 * * * *';
+
+/**
+ * The interval {@link SHEPHERD_SCHEDULE_CRON_DEFAULT} names. A waiter whose
+ * window closes inside it is woken before the next sweep, so the sweep passes
+ * its pull request over (Plan 339 D5).
+ */
+export const SHEPHERD_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
 
 /**
  * A lease older than this is stale whatever its run says: a pass that holds
@@ -101,7 +112,7 @@ export const SHEPHERD_LEASE_STALE_AFTER_MS = 12 * 60 * 60 * 1000;
 /**
  * How long GitHub must have refused to list a repository's open pull requests,
  * on every pass since the first that could not, before the case is handed to
- * the agent: three passes at the default interval. One failed listing is read
+ * the agent: the second failing pass at the default interval. One failed listing is read
  * again by the next pass, and a conversation started on it would be one that
  * pass made unnecessary.
  */

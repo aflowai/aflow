@@ -446,10 +446,22 @@ lists it.
   Local Publish. A stream that wants its branch left alone — a person working on it, a
   fix in hand — labels its pull request `hands-off`; the shepherd then writes nothing on
   it. A publication or commission in flight on the branch, whoever started it, holds it
-  back too. On a schedule (the Local PR Shepherd agent, `*/5 * * * *` by default), each
-  pass tends the next of the loop's pull requests in turn, and two passes on one meet at
-  its branch's lease — the schedule does not hold a firing back while the last pass runs,
-  so overlapping passes are expected and the lease is what serialises them. The schedule renews itself: created with input
+  back too. The pull request's owner moves it on its events (Plan 339 D4). The owner is the
+  Helmsman conversation that started the publication that opened it. A pull request has one
+  owner: a later publication by another conversation takes it over only where the owner has
+  ended or failed, so a conversation a hand-over started hears the next event once it
+  publishes the branch. The platform holds a
+  wait on `pull_request.changed` for that conversation and renews it after each delivery.
+  Each event wakes the owner, which runs a pass aimed at the pull request. A case the pass
+  cannot act on is not handed to a new conversation while the owner has neither ended nor
+  failed, since two publications on one branch refuse each other. A failed owner holds the
+  branch for nobody: the sweep tends its pull request and a pass hands its cases over. An
+  owner that has ended is forgotten. The
+  schedule (the Local PR Shepherd agent, `0 * * * *` by default) is the fallback sweep for
+  the pull requests no conversation holds. A firing starts nothing while no loop pull
+  request is open, or while each open one is held by its owner or by a waiter whose window
+  closes before the next firing (D5). A firing that starts tends the next of the loop's pull
+  requests in turn, and two passes on one meet at its branch's lease. The schedule renews itself: created with input
   `{ input: 'tend', config: { scheduleId: { $schedule: 'id' } } }`, each pass is handed
   the schedule that started it, and a pass within `SCHEDULE_RENEWAL_WINDOW` (5) firings of
   its `maxFirings` creates the successor (`agent.schedule.create` with `renews`), which

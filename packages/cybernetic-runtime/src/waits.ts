@@ -45,11 +45,19 @@ export interface DeclareWaitInput {
    * once. Without it, only an event after the declaration ends the wait.
    */
   since?: number;
+  /** Set where the platform declares the wait for the subject's owner (Plan 339 D4). */
+  owner?: { onEvent: string };
+  /**
+   * An event it catches up on queues the ended wait for the delivery cycle,
+   * rather than handing it to the caller. For a declaration no person awaits.
+   */
+  queueCatchUp?: boolean;
 }
 
 export type DeclaredWait =
   | { waitId: string; closesAt: number; state: 'waiting' }
-  | { waitId: string; closesAt: number; state: 'ended'; outcome: WaitOutcome };
+  | { waitId: string; closesAt: number; state: 'ended'; outcome: WaitOutcome }
+  | { waitId: string; closesAt: number; state: 'queued'; outcome: WaitOutcome };
 
 export class WaitDeclarationError extends Error {
   constructor(message: string) {
@@ -99,16 +107,19 @@ export async function declareWait(
     declaredAt: nowMs,
     closesAt: nowMs + input.windowSeconds * 1000,
     ...(input.since !== undefined ? { since: input.since } : {}),
+    ...(input.owner !== undefined ? { owner: input.owner } : {}),
   };
-  const registered = await registerWait(redis, registration);
-  return registered.state === 'woken'
-    ? {
-        waitId: registration.waitId,
-        closesAt: registration.closesAt,
-        state: 'ended',
-        outcome: registered.outcome,
-      }
-    : { waitId: registration.waitId, closesAt: registration.closesAt, state: 'waiting' };
+  const registered = await registerWait(redis, registration, {
+    ...(input.queueCatchUp === true ? { queueCatchUp: true } : {}),
+  });
+  const { waitId, closesAt } = registration;
+  if (registered.state === 'waiting') return { waitId, closesAt, state: 'waiting' };
+  return {
+    waitId,
+    closesAt,
+    state: registered.state === 'woken' ? 'ended' : 'queued',
+    outcome: registered.outcome,
+  };
 }
 
 /**
@@ -148,7 +159,9 @@ export function describeWaitOutcome(registration: WaitRegistration, outcome: Wai
       (later.length > 0
         ? `Later events on the subject before you were told: ${later.map(describe).join('; ')}. `
         : '') +
-      'Act on it by your own rules.'
+      (registration.owner !== undefined
+        ? `You own the subject, so the platform declared this wait for you. ${registration.owner.onEvent}`
+        : 'Act on it by your own rules.')
     );
   }
   return (

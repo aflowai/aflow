@@ -348,7 +348,7 @@ describe('item 5 — the shepherd schedule', () => {
       state: 'needs_setup',
       schedule: {
         agentId: SHEPHERD,
-        cronExpression: '*/5 * * * *',
+        cronExpression: '0 * * * *',
         maxFirings: 50,
         inputTemplate: { input: 'tend', config: { scheduleId: { $schedule: 'id' } } },
       },

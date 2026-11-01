@@ -78,6 +78,31 @@ describe('PLAN_STATE_LABELS', () => {
       expect(cut.startsWith(`${head}snake_case and \\*literal zzz`)).toBe(true);
     });
 
+    it.each([
+      ['a stray backtick', '`', '\\`'],
+      ['a "<" followed by a letter', '<b', '\\<b'],
+      ['an intra-word "*"', 'snake*case', 'snake\\*case'],
+      ['a code span the ceiling falls in', '``a code span', '\\`\\`a code span'],
+    ])(
+      'cuts at the ceiling and escapes %s that opens before the last 80 characters',
+      (_, raw, escaped) => {
+        const title = `${raw} ${'w '.repeat(200)}`;
+        const cut = planItemTitle('blocked', title);
+        expect(cut.length).toBeLessThanOrEqual(256);
+        expect(cut.startsWith(`${head}${escaped} w w`)).toBe(true);
+        const kept = cut.slice(head.length, -1).replace(escaped, raw);
+        expect(title.startsWith(kept)).toBe(true);
+        expect(kept.length).toBeGreaterThanOrEqual(256 - head.length - 1 - 80);
+      },
+    );
+
+    it('escapes what an escaped opener exposes', () => {
+      const title = `\`*lean ${'w '.repeat(200)}`;
+      const cut = planItemTitle('blocked', title);
+      expect(cut.startsWith(`${head}\\\`\\*lean w`)).toBe(true);
+      expect(cut.length).toBeLessThanOrEqual(256);
+    });
+
     it('does not cut a surrogate pair in half', () => {
       const budget = 256 - head.length - 1;
       // One letter first, where the budget is even, puts the ceiling inside a pair.

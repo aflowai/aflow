@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { parsePullRequestRef } from '../../runtime/waits.js';
 import { WorkflowRunStatusSchema } from './enums.js';
 
 // --- workflow.run.list ---
@@ -103,6 +104,17 @@ export const WorkflowRunListInputSchema = z
       .describe(
         `Tasks every listed run succeeded in — and, where \`output\` is named, recorded that value at that path: a publication that pushed one commit is \`[{ taskId: 'push' }, { taskId: 'commit', output: { path: 'commit.sha', equals: <sha> } }]\`. Where any names \`output\`, the newest ${String(WORKFLOW_RUN_LIST_LIMIT_MAX)} runs that succeeded in every named task are read for it, and \`hasMore\` says where more were not. Named with \`slug\` and \`input\`.`,
       ),
+    startedByActingOwnerOf: z
+      .string()
+      .min(1)
+      .max(2000)
+      .refine((ref) => parsePullRequestRef(ref) !== null, {
+        message: 'Name the pull request as owner/repo#number or by its GitHub link.',
+      })
+      .optional()
+      .describe(
+        'A pull request, as owner/repo#number or by its GitHub link. Lists only the runs started by the conversation the loop records as its owner, and only while that conversation can act — it has neither ended nor failed. None where the loop records no owner. Named with `slug` and `input`.',
+      ),
     status: z
       .array(WorkflowRunListStatusSchema)
       .min(1)
@@ -125,7 +137,9 @@ export const WorkflowRunListInputSchema = z
     const byInput = query.slug !== undefined && query.input !== undefined;
     const byNode = query.servingNodeOfPullRequest !== undefined;
     const partial = (query.slug === undefined) !== (query.input === undefined);
-    if (byInput === byNode || partial || (byNode && query.succeeded !== undefined)) {
+    const byNodeWithInputFilter =
+      byNode && (query.succeeded !== undefined || query.startedByActingOwnerOf !== undefined);
+    if (byInput === byNode || partial || byNodeWithInputFilter) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: WORKFLOW_RUN_LIST_SELECTOR_MESSAGE });
     }
   });

@@ -125,9 +125,31 @@ describe('the item summary', () => {
     expect(planItemSummary(text)).toBe(`${prose(1_990)}…`);
   });
 
+  it('moves the cut back to a safe point that lies within the last 80 characters', () => {
+    const text = `${prose(1_950)} \`${prose(1_000)}`;
+    expect(planItemSummary(text)).toBe(`${prose(1_950)}…`);
+  });
+
+  it.each([
+    ['a stray backtick', '`', '\\`'],
+    ['a "<" followed by a letter', '<b', '\\<b'],
+    ['an intra-word "*"', 'snake*case', 'snake\\*case'],
+    ['an unbalanced "["', '[', '\\['],
+  ])('cuts a paragraph holding %s past the tail at the limit and escapes it', (_, raw, escaped) => {
+    const words = 'word '.repeat(600);
+    const text = `${'word '.repeat(20)}${raw} ${words}`;
+    const summary = planItemSummary(text);
+    expect(summary.length).toBeLessThanOrEqual(2_000);
+    expect(summary.endsWith('…')).toBe(true);
+    const kept = summary.slice(0, -1).replace(escaped, raw);
+    expect(text.startsWith(kept)).toBe(true);
+    expect(kept.length).toBeGreaterThanOrEqual(1_998 - 80);
+    expect(summary).toContain(escaped);
+  });
+
   it('puts the ellipsis on a line of its own below a closing fence', () => {
-    const text = `\`\`\`\ncode\n\`\`\`\n*${'x'.repeat(3_000)}`;
-    expect(planItemSummary(text)).toBe('```\ncode\n```\n…');
+    const text = `${prose(1_950)}\n\`\`\`\ncode\n\`\`\`\n*${'x'.repeat(3_000)}`;
+    expect(planItemSummary(text)).toBe(`${prose(1_950)}\n\`\`\`\ncode\n\`\`\`\n…`);
   });
 
   it('closes a fence the cut leaves open and puts the ellipsis below it, within 2,000 characters', () => {

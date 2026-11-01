@@ -83,6 +83,18 @@ export const WaitRegistrationSchema = z.object({
    * before already included. Without it, the wait counts from `declaredAt`.
    */
   since: z.number().int().nonnegative().optional(),
+  /**
+   * Set where the platform declared the wait for the subject's owner, and the
+   * conversation did not declare it itself (Plan 339 D4). Its delivery
+   * declares the next one, and a window that closes on it tells the owner
+   * nothing.
+   */
+  owner: z
+    .object({
+      /** What the owner does on the event, as the room message tells it. */
+      onEvent: z.string().min(1).max(2000),
+    })
+    .optional(),
 });
 export type WaitRegistration = z.infer<typeof WaitRegistrationSchema>;
 
