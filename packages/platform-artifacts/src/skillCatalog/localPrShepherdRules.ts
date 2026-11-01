@@ -135,10 +135,33 @@ export const MERGE_RULES: readonly WorkflowRunDecideRule[] = [
   ),
   // Read from the publication's run, never the pull request's body, which any
   // collaborator can edit.
-  greenAnd(
-    'state.publicationReview.reviewed.at != state.pr.data.headSha',
-    "No publication's Local Code Review is on record for this head — no publication of the branch pushed it, which another hand did, or the publication that pushed it ran no review of it: the merge is the operator's.",
-  ),
+  // A head the publication's push sent as the merge of a moved base (Plan 339
+  // D3) is reviewed where the review is of the commit that merge was made
+  // from: the two rules hold together only where the review is of neither.
+  {
+    when: {
+      allOf: [
+        GREEN,
+        'state.publicationReview.reviewed.at != state.pr.data.headSha',
+        'state.publicationMerge.baseMerge.commit != state.pr.data.headSha',
+      ],
+    },
+    decision: 'leave',
+    reason:
+      "No publication's Local Code Review is on record for this head — no publication of the branch pushed it, as its commit or as the merge of a moved base, which another hand did, or the publication that pushed it ran no review of it: the merge is the operator's.",
+  },
+  {
+    when: {
+      allOf: [
+        GREEN,
+        'state.publicationReview.reviewed.at != state.pr.data.headSha',
+        'state.publicationReview.reviewed.at != state.publicationMerge.baseMerge.branchCommit',
+      ],
+    },
+    decision: 'leave',
+    reason:
+      "The publication that pushed this head as the merge of a moved base has no Local Code Review on record of the commit that merge was made from: the merge is the operator's.",
+  },
   // `workflow.run.detail` reads a task that waited on a run from that run as
   // it stands, so a review retried in place counts by its final attempt.
   ...[

@@ -53,6 +53,29 @@ const REVIEW_TASK = 'review-commit';
 export const PUBLICATION_PUSH_TASK = 'push';
 export const PUBLICATION_COMMIT_TASK = 'commit';
 export const PUBLICATION_PUSHED_SHA_PATH = 'commit.sha';
+/**
+ * Where `push`'s output names the merge it sent, where `origin`'s base had
+ * moved and merged cleanly (Plan 339 D3): the head is then that merge, not
+ * `commit.sha`, and `baseMerge.branchCommit` is the commit the publication
+ * made and reviewed.
+ */
+export const PUBLICATION_PUSHED_MERGE_PATH = 'baseMerge.commit';
+
+/** The publication whose verdict the merge reads: the one that pushed the head as its commit, else as a base merge. */
+const PUBLICATION_RUN_ID = {
+  $firstOf: [bind('pushedRunId'), bind('mergedRunId')],
+};
+const PUBLICATION_RUN_BINDINGS = {
+  pushedRunId: out('read-publication', 'runs[0].id'),
+  mergedRunId: out('read-merged-publication', 'runs[0].id'),
+};
+const PUBLICATION_FOUND = {
+  anyOf: [
+    'tasks.read-publication.output.runs[0].id != null',
+    'tasks.read-merged-publication.output.runs[0].id != null',
+  ],
+  onMissingRef: SKIP,
+};
 
 export const MERGE_READ_TASKS = [
   {
@@ -152,17 +175,56 @@ export const MERGE_READ_TASKS = [
   },
 
   {
+    taskId: 'read-merged-publication',
+    name: 'Find the publication that pushed the head as a base merge',
+    goal: "Find the space's finished publication of the pull request's branch whose push sent the head as the merge of a moved base into the commit it made and reviewed. It is read where no publication pushed the head as its own commit.",
+    type: 'operation' as const,
+    operation: 'workflow.run.list',
+    when: OURS_WHEN_GREEN,
+    optional: true,
+    retryability: 'safe' as const,
+    inputBindings: { ...HEAD_REF, headSha: out('read-pr', 'data.headSha') },
+    context: ctx('workflow.run.list'),
+    inputTemplate: {
+      slug: PUBLISH_LOCAL_CHANGES.bundle.workflow.slug,
+      input: { field: 'branch', equals: bind('headRef') },
+      succeeded: [
+        {
+          taskId: PUBLICATION_PUSH_TASK,
+          output: { path: PUBLICATION_PUSHED_MERGE_PATH, equals: bind('headSha') },
+        },
+      ],
+      status: ['completed', 'failed', 'cancelled'],
+      limit: 1,
+    },
+  },
+
+  {
+    taskId: 'read-publication-merge',
+    name: "Read the base merge the publication's push sent",
+    goal: 'Read, from the same publication run as the review, the base merge its push recorded, if any: the merge commit it sent and the commit it made and reviewed. A head that is that merge counts as reviewed where the review is of that commit.',
+    type: 'operation' as const,
+    operation: 'workflow.run.detail',
+    when: PUBLICATION_FOUND,
+    optional: true,
+    retryability: 'safe' as const,
+    inputBindings: PUBLICATION_RUN_BINDINGS,
+    context: ctx('workflow.run.detail'),
+    inputTemplate: { runId: PUBLICATION_RUN_ID, compact: true, taskOutput: PUBLICATION_PUSH_TASK },
+  },
+
+  {
     taskId: 'read-publication-review',
     name: "Read the publication's review and override",
     goal: "Read the pushed head's publication review, its reviewed commit, and its overrideCheck and pushDecision from result.output, trusted only from that publication run. Read the verdict from the review run's final attempt, including a review retried in place.",
     type: 'operation' as const,
     operation: 'workflow.run.detail',
-    when: { expression: 'tasks.read-publication.output.runs[0].id != null', onMissingRef: SKIP },
+    when: PUBLICATION_FOUND,
     optional: true,
     retryability: 'safe' as const,
-    inputBindings: { runId: out('read-publication', 'runs[0].id') },
+    inputBindings: PUBLICATION_RUN_BINDINGS,
     context: ctx('workflow.run.detail'),
-    inputTemplate: { runId: bind('runId'), compact: true, taskOutput: REVIEW_TASK },
+    inputTemplate: { runId: PUBLICATION_RUN_ID, compact: true, taskOutput: REVIEW_TASK },
   },
 ];
 
