@@ -32,6 +32,7 @@ import {
 import { notifyWaiters } from './waiters.js';
 import { releaseScheduleCreates } from '../../SessionOrchestrator/handlers/inlineOps/scheduleCreateBudget.js';
 import { linkEndedRunToPlanNode, wakeResidentOnRunEnd } from './planLinks.js';
+import { armPullRequestOnPublication } from '../../pullRequestEvents/arm.js';
 import type { HarnessDeps } from './types.js';
 
 export async function pauseRunForTask(
@@ -428,6 +429,14 @@ export async function completeRun(
   } catch (err) {
     log.warn(
       `[completeRun] linking the run to plan node ${run.planNodeId ?? '(none)'} failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+
+  try {
+    await armPullRequestOnPublication(deps, tenantIdStr, run, terminalStatus);
+  } catch (err) {
+    log.warn(
+      `[completeRun] arming the pull request of publication ${runId} failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
     );
   }
 

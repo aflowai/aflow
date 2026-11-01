@@ -35,6 +35,11 @@ import {
   withTenantSchema,
 } from '@aflow/database';
 import { getCyberneticLogger } from './logger.js';
+import {
+  BUBBLED_PAUSE_TYPE,
+  GATE_REQUEST_KIND_BY_OPERATION,
+  GATE_REQUEST_KIND_BY_PAUSE_TYPE,
+} from './sessionGate.js';
 import { selectAskingNodes } from './plan/asks.js';
 import { selectOpenDecisions, type PlanReadContext } from './plan/operations.js';
 
@@ -245,10 +250,6 @@ function itemRows(rows: readonly Row[], key: string): Row[] {
   return rows.filter((row) => row[key] !== null && row[key] !== undefined);
 }
 
-/** The operations the user executor answers with a request for input and for an approval. */
-const USER_INPUT_OPERATION_ID = 'user.interaction.ask';
-const USER_APPROVAL_OPERATION_ID = 'user.interaction.approve';
-
 /** The step type of the API executor, whose every operation passes its write gate. */
 const WRITE_APPROVAL_STEP_TYPE = 'api';
 
@@ -267,18 +268,18 @@ function asksWriteApproval(operation: string): boolean {
 }
 
 /**
- * A request's kind from its own pause, where the ref holds it outside: the
- * paused step's operation for the user executor's two requests, and the pause
- * type the orchestrator stamps for a consent or a write approval. The pause
- * type outlives a resume, which is why the step's operation is read first.
+ * A request's kind from its own pause, where the ref holds it outside, read
+ * as `gateRequestKind` reads it: the paused step's operation first, then the
+ * pause type the orchestrator stamps for a consent or a write approval.
  */
 function pauseRequestKind(operationId: SQL, pauseType: SQL): SQL {
-  return sql`(CASE
-    WHEN ${operationId} = ${USER_INPUT_OPERATION_ID} THEN 'input'
-    WHEN ${operationId} = ${USER_APPROVAL_OPERATION_ID} THEN 'approval'
-    WHEN ${pauseType} = 'oauth_consent' THEN 'oauth_consent'
-    WHEN ${pauseType} = 'approval' THEN 'write_approval'
-  END)`;
+  const byOperation = Object.entries(GATE_REQUEST_KIND_BY_OPERATION).map(
+    ([operation, kind]) => sql`WHEN ${operationId} = ${operation} THEN ${kind}::text`,
+  );
+  const byPauseType = Object.entries(GATE_REQUEST_KIND_BY_PAUSE_TYPE).map(
+    ([type, kind]) => sql`WHEN ${pauseType} = ${type} THEN ${kind}::text`,
+  );
+  return sql`(CASE ${sql.join([...byOperation, ...byPauseType], sql` `)} END)`;
 }
 
 /** A session id from snapshot text, or null where the text is no UUID, so the cast cannot throw. */
@@ -339,7 +340,7 @@ export const PAUSED_SESSIONS_SQL = (spaceId: string): SQL => sql`
         ON c.session_id = ${sessionIdOf(sql`p.child_id`)}
        AND c.requested_input_ref = p.ref
       WHERE NOT p.inline
-        AND p.pause_type = 'subflow_waiting'
+        AND p.pause_type = ${BUBBLED_PAUSE_TYPE}
         AND ${pauseRequestKind(sql`p.operation_id`, sql`p.pause_type`)} IS NULL
       UNION ALL
       SELECT b.step_id, b.ref, ${pauseColumns(sql`c`)}, b.depth + 1
@@ -347,7 +348,7 @@ export const PAUSED_SESSIONS_SQL = (spaceId: string): SQL => sql`
       JOIN sessions c
         ON c.session_id = ${sessionIdOf(sql`b.child_id`)}
        AND c.requested_input_ref = b.ref
-      WHERE b.pause_type = 'subflow_waiting'
+      WHERE b.pause_type = ${BUBBLED_PAUSE_TYPE}
         AND ${pauseRequestKind(sql`b.operation_id`, sql`b.pause_type`)} IS NULL
         AND b.depth < ${BUBBLED_PAUSE_DEPTH_LIMIT}
     ), origin AS (

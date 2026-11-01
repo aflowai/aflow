@@ -59,6 +59,9 @@ import { ScheduleEvaluator } from './services/ScheduleEvaluator.js';
 import { startDelegationDrainLoop } from './services/SessionOrchestrator/handlers/delegationPendingDrain.js';
 import { sweepDelegationSupervision } from './services/SessionOrchestrator/handlers/delegationSupervisionSweep.js';
 import { createStreamRetentionTask } from './services/streamRetention.js';
+import { createWaitDeliveryTask } from './services/waits/waitDelivery.js';
+import { createPullRequestEventsTask } from './services/pullRequestEvents/source.js';
+import { createGitHubConditionalGet } from './services/pullRequestEvents/github.js';
 import { createSessionMetadataTask } from './services/sessionMetadataTask.js';
 import { fetchAgentDef } from './services/SessionOrchestrator/helpers/fetchAgentDef.js';
 import { createWorkflowRunSweeper } from './services/cybernetic/workflowRunSweeperLoop.js';
@@ -510,6 +513,16 @@ async function main(): Promise<void> {
   const workflowRunSweeper = createWorkflowRunSweeper({ sqlClient, harnessDeps, wakeHold });
   workflowRunSweeper.start();
 
+  const waitDelivery = createWaitDeliveryTask({ harnessDeps, logger });
+  waitDelivery.start();
+
+  const pullRequestEvents = createPullRequestEventsTask({
+    redis,
+    get: createGitHubConditionalGet({ db }),
+    logger,
+  });
+  pullRequestEvents.start();
+
   const evalBatchWorker = createEvalBatchWorker(
     { sqlClient, harnessDeps },
     { instanceId: CONSUMER_NAME },
@@ -568,6 +581,8 @@ async function main(): Promise<void> {
       await streamRetention.stop();
       await sessionMetadata.stop();
       await workflowRunSweeper.stop();
+      await waitDelivery.stop();
+      await pullRequestEvents.stop();
       await workflowTaskProgressConsumer.stop();
       await workflowHarnessAdvanceConsumer.stop();
       await scheduleEvaluator.stop();

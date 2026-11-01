@@ -24,6 +24,24 @@ const REPORTER = fileURLToPath(new URL('./check-test-reporter.mjs', import.meta.
 /** What Vitest says of a test or a hook stopped at its time, whatever the time was. */
 const TIMEOUT_MESSAGE = /^(?:Test|Hook) timed out in \d+ms\./;
 
+/**
+ * What Vitest itself says of anything else stopped at its time: a worker that
+ * did not start, a call between the run and a worker that went unanswered, a
+ * worker that did not answer, a hook phase that did not end. A loaded machine
+ * does all of these, and none names a test. Each is matched from the start of
+ * the message, so an error that merely mentions a time-out is no time-out.
+ */
+const RUN_TIMEOUT_MESSAGES = [
+  /^\[vitest-pool\]: Timeout starting \S+ runner\./,
+  /^\[vitest-pool-runner\]: Timeout waiting for worker to respond/,
+  /^\[vitest-worker\]: Timeout calling "[^"]+"/,
+  /^\[birpc\] timeout on calling "[^"]+"/,
+  /^The \S+ phase of "[^"]+" hook timed out after \d+ms\./,
+];
+
+/** Where an error that names no test file belongs, as `testsTimedOutAlone` lists it. */
+export const OUTSIDE_EVERY_TEST_FILE = 'outside every test file';
+
 /** The Vitest options the check's test run takes beside its files. */
 export function checkTestOptions() {
   return [
@@ -65,18 +83,26 @@ export function summarizeTestRun(testModules, unhandledErrors, repository) {
 /**
  * The tests a failed run lost to their time, where that is all it lost: every
  * failing test failed only by running out of time, and every error outside a
- * test was a hook doing the same, named by its file. Empty where anything else
- * failed, or nothing did.
+ * test ran out of time too — a hook, a worker or a call to one — named by its
+ * file. A run that names no failing test and lost only to time is named by
+ * those files alone: it is classified by its errors, never by whether a test
+ * was named. Empty where anything else failed, or nothing did.
  */
 export function testsTimedOutAlone(summary) {
   const failed = summary.tests.filter((test) => test.state === 'failed');
-  const timedOut = (message) => TIMEOUT_MESSAGE.test(message);
   if (failed.length === 0 && summary.errors.length === 0) return [];
-  if (failed.some((test) => test.errors.length === 0 || !test.errors.every(timedOut))) return [];
-  if (!summary.errors.every((error) => timedOut(error.message))) return [];
+  const testTimedOut = (message) => TIMEOUT_MESSAGE.test(message);
+  if (failed.some((test) => test.errors.length === 0 || !test.errors.every(testTimedOut))) {
+    return [];
+  }
+  const runTimedOut = (message) =>
+    testTimedOut(message) || RUN_TIMEOUT_MESSAGES.some((pattern) => pattern.test(message));
+  if (!summary.errors.every((error) => runTimedOut(error.message))) return [];
   return [
-    ...failed.map((test) => test.name),
-    ...summary.errors.map((error) => error.file ?? 'outside every test file'),
+    ...new Set([
+      ...failed.map((test) => test.name),
+      ...summary.errors.map((error) => error.file ?? OUTSIDE_EVERY_TEST_FILE),
+    ]),
   ];
 }
 

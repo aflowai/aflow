@@ -54,6 +54,10 @@ import type {
   WorkflowLedgerGetOutputSchema as WorkflowLedgerGetOutputSchemaT,
 } from './ledgerGet.js';
 import type {
+  WorkflowWaitInputSchema as WorkflowWaitInputSchemaT,
+  WorkflowWaitOutputSchema as WorkflowWaitOutputSchemaT,
+} from './wait.js';
+import type {
   WorkflowCampaignStartInputSchema as WorkflowCampaignStartInputSchemaT,
   WorkflowCampaignStartOutputSchema as WorkflowCampaignStartOutputSchemaT,
   WorkflowCampaignGetInputSchema as WorkflowCampaignGetInputSchemaT,
@@ -99,6 +103,8 @@ interface WorkflowRegistrationSchemas {
   WorkflowLearnOutputSchema: typeof WorkflowLearnOutputSchemaT;
   WorkflowLedgerGetInputSchema: typeof WorkflowLedgerGetInputSchemaT;
   WorkflowLedgerGetOutputSchema: typeof WorkflowLedgerGetOutputSchemaT;
+  WorkflowWaitInputSchema: typeof WorkflowWaitInputSchemaT;
+  WorkflowWaitOutputSchema: typeof WorkflowWaitOutputSchemaT;
   WorkflowCampaignStartInputSchema: typeof WorkflowCampaignStartInputSchemaT;
   WorkflowCampaignStartOutputSchema: typeof WorkflowCampaignStartOutputSchemaT;
   WorkflowCampaignGetInputSchema: typeof WorkflowCampaignGetInputSchemaT;
@@ -147,6 +153,8 @@ export function createWorkflowOperationRegistrations(
     WorkflowLearnOutputSchema,
     WorkflowLedgerGetInputSchema,
     WorkflowLedgerGetOutputSchema,
+    WorkflowWaitInputSchema,
+    WorkflowWaitOutputSchema,
     WorkflowCampaignStartInputSchema,
     WorkflowCampaignStartOutputSchema,
     WorkflowCampaignGetInputSchema,
@@ -1052,6 +1060,46 @@ export function createWorkflowOperationRegistrations(
       accessMode: 'read',
       inputZod: WorkflowLedgerGetInputSchema,
       outputZod: WorkflowLedgerGetOutputSchema,
+    },
+
+    // --- workflow.wait (Plan 339 D1) ---
+    {
+      stepType: 'workflow',
+      group: null,
+      verb: 'wait',
+      name: 'Wait on an Event',
+      actionLabel: 'Waiting on an event\u2026',
+      semanticDescription:
+        'Wait on one event and be woken by it. Name its kind, its subject and a window, never a ' +
+        'cadence. You are woken when the event arrives or the window closes, and told which.',
+      tags: ['workflow', 'wait', 'event'],
+      idempotency: 'non_idempotent',
+      mutates: false,
+      usage: {
+        oneLine: 'Wait on an event by its kind and subject, and be woken by it.',
+        whenToUse: [
+          'You expect a signal — a pull request green, merged or conflicting, a node moving, a gate resolved — and would otherwise ask again later',
+          'A pull request the loop opened: kind pull_request.changed, subject owner/repo#number, since the time its publication ended',
+        ],
+        whenNotToUse: [
+          'A run you start yourself: workflow.run.start already wakes you when it ends',
+          'Polling on a cadence: a schedule asks again whether or not anything happened, and a wait does not',
+        ],
+        pitfalls: [
+          'Without since, only an event after the declaration ends the wait, and each event fires once, on a change: one that may have fired since you last read the subject is missed unless you pass since, the time you last read it',
+          'state ended means the event had fired already: act on outcome now rather than end the turn',
+          'A window that closes with no event wakes you too: read the subject yourself before you act',
+          'The wait delivers the event and decides nothing: act on it by your own rules',
+        ],
+        minimalExampleInput: {
+          kind: 'pull_request.changed',
+          subject: 'aflowai/aflow#276',
+          windowSeconds: 3600,
+        },
+      },
+      accessMode: 'read',
+      inputZod: WorkflowWaitInputSchema,
+      outputZod: WorkflowWaitOutputSchema,
     },
   ];
 }

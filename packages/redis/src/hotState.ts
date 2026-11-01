@@ -77,6 +77,7 @@ export {
   type GetSessionStateSafeResult,
   type SalvagedCorruptFields,
   setSessionState,
+  setSessionStateIfAbsent,
   getSessionStateSafe,
   isSessionCorrupt,
   salvageCorruptStateFields,

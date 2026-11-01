@@ -37,6 +37,7 @@ import { handleWorkflowRunDecide } from './run/decide.js';
 import { handleWorkflowEvaluate } from './evaluate.js';
 import { handleWorkflowLearn } from './learn.js';
 import { handleWorkflowLedgerGet } from './ledgerGet.js';
+import { handleWorkflowWait } from './wait.js';
 import { handleWorkflowCampaignStart } from './campaign/start.js';
 import { handleWorkflowCampaignGet, handleWorkflowCampaignList } from './campaign/read.js';
 import { handleWorkflowCampaignUpdate } from './campaign/update.js';
@@ -112,6 +113,9 @@ export async function handleWorkflowCrudInline(args: InlineHandlerArgs): Promise
         break;
       case 'workflow.ledger.get':
         await handleWorkflowLedgerGet(args, input as unknown as WorkflowLedgerGetInput, startTime);
+        break;
+      case 'workflow.wait':
+        await handleWorkflowWait(args, input, startTime);
         break;
       case 'workflow.campaign.start':
         await handleWorkflowCampaignStart(

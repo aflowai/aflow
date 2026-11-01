@@ -7,6 +7,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SessionHotState } from '@aflow/redis';
+import { BUBBLED_PAUSE_TYPE, gateRequestKind } from '@aflow/cybernetic-runtime';
 
 const TENANT = 'a0000000-0000-4000-8000-000000000915';
 const SPACE = '5e1d0000-0000-4000-8000-000000000915';
@@ -303,7 +304,7 @@ describe("a session row's gate and its resolution move the space's attention gen
     expect(movesSessionGate({ status: 'RUNNING' }, { status: 'SUCCEEDED' })).toBe(false);
   });
 
-  it('reads the gate types and the user executor operations as gates, and every other pause as none', () => {
+  it('reads the gate types, the user executor operations and a bubbled pause as gates, and every other pause as none', () => {
     const pausedOn = (pauseType: string, operationId?: string) => ({
       status: 'PAUSED',
       currentStepExecutionId: 'step-1',
@@ -315,17 +316,159 @@ describe("a session row's gate and its resolution move the space's attention gen
       pausedOn('oauth_consent'),
       pausedOn('user_input', 'user.interaction.ask'),
       pausedOn('user_input', 'user.interaction.approve'),
+      pausedOn('subflow_waiting', 'agent.control.delegate'),
     ]) {
       expect(movesSessionGate({ status: 'RUNNING' }, gate)).toBe(true);
+      expect(movesSessionGate(gate, { status: 'WAITING_ON_CHILD' })).toBe(true);
     }
     for (const pause of [
       pausedOn('user_input', 'ai.agent.turn'),
-      pausedOn('subflow_waiting', 'agent.control.delegate'),
       pausedOn('interrupted'),
       pausedOn('budget_exceeded'),
     ]) {
       expect(movesSessionGate({ status: 'RUNNING' }, pause)).toBe(false);
       expect(movesSessionGate(pause, { status: 'RUNNING' })).toBe(false);
     }
+  });
+
+  it("moves it once a parent row holds its child's bubbled pause, and once it leaves it", async () => {
+    hot.row = { ...hot.row, status: 'WAITING_ON_CHILD', currentStepExecutionId: 'step-1' };
+    hot.parkedOperationId = 'agent.control.delegate';
+    await project(
+      session('PAUSED', { currentStepExecutionId: 'step-1', pauseType: 'subflow_waiting' }),
+      ['SessionPaused'],
+    );
+    expect(hot.bumps).toEqual([SPACE]);
+
+    hot.row = {
+      status: 'PAUSED',
+      currentStepExecutionId: 'step-1',
+      pauseType: 'subflow_waiting',
+      operationId: 'agent.control.delegate',
+    };
+    await project(
+      session('WAITING_ON_CHILD', {
+        currentStepExecutionId: 'step-1',
+        pauseType: 'subflow_waiting',
+      }),
+      ['SessionResumed'],
+    );
+    expect(hot.bumps).toEqual([SPACE, SPACE]);
+  });
+});
+
+/**
+ * A pause bubbled up a delegation chain: the Runner pauses at an ask, and the
+ * Driver and the Helmsman each hold it paused `subflow_waiting`. The count
+ * lists every level, so each row's flush must move the generation. The rows
+ * flush in any order, and the block may be rebuilt between any two flushes.
+ */
+describe('a bubbled pause and the cached count', () => {
+  interface Row {
+    status: string;
+    currentStepExecutionId: string;
+    pauseType?: string;
+    operationId: string;
+    ref?: string;
+    childId?: string;
+  }
+
+  const REF = 'payload:ask';
+  const paused: Record<string, Row> = {
+    runner: {
+      status: 'PAUSED',
+      currentStepExecutionId: 'runner-step',
+      pauseType: 'user_input',
+      operationId: 'user.interaction.ask',
+      ref: REF,
+    },
+    driver: {
+      status: 'PAUSED',
+      currentStepExecutionId: 'driver-step',
+      pauseType: BUBBLED_PAUSE_TYPE,
+      operationId: 'agent.control.delegate',
+      ref: REF,
+      childId: 'runner',
+    },
+    helmsman: {
+      status: 'PAUSED',
+      currentStepExecutionId: 'helmsman-step',
+      pauseType: BUBBLED_PAUSE_TYPE,
+      operationId: 'agent.control.delegate',
+      ref: REF,
+      childId: 'driver',
+    },
+  };
+  const running: Record<string, Row> = {
+    runner: {
+      status: 'RUNNING',
+      currentStepExecutionId: 'runner-next',
+      operationId: 'ai.agent.turn',
+    },
+    driver: {
+      status: 'WAITING_ON_CHILD',
+      currentStepExecutionId: 'driver-step',
+      pauseType: BUBBLED_PAUSE_TYPE,
+      operationId: 'agent.control.delegate',
+    },
+    helmsman: {
+      status: 'WAITING_ON_CHILD',
+      currentStepExecutionId: 'helmsman-step',
+      pauseType: BUBBLED_PAUSE_TYPE,
+      operationId: 'agent.control.delegate',
+    },
+  };
+
+  /** The run gates as `PAUSED_SESSIONS_SQL` counts them: each paused row by its own request, or by the one its chain bubbled up. */
+  function runGates(rows: ReadonlyMap<string, Row>): number {
+    let total = 0;
+    for (const row of rows.values()) {
+      if (row.status !== 'PAUSED' || row.ref === undefined) continue;
+      let at: Row | undefined = row;
+      let kind = gateRequestKind(at.operationId, at.pauseType);
+      while (kind === null && at?.pauseType === BUBBLED_PAUSE_TYPE) {
+        const child: Row | undefined = at.childId ? rows.get(at.childId) : undefined;
+        at = child?.ref === row.ref ? child : undefined;
+        kind = at ? gateRequestKind(at.operationId, at.pauseType) : null;
+      }
+      if (kind === 'input' || kind === 'approval' || kind === 'write_approval') total++;
+    }
+    return total;
+  }
+
+  /** Flushes rows in order, rebuilding the block after each, and returns the counts it cached. */
+  function flush(rows: Map<string, Row>, order: string[], next: Record<string, Row>): number[] {
+    let generation = 0;
+    let cached: { generation: number; count: number } | null = null;
+    const counts: number[] = [];
+    for (const id of order) {
+      const prior = rows.get(id);
+      const row = next[id];
+      if (!row) throw new Error(`no row for ${id}`);
+      rows.set(id, row);
+      if (movesSessionGate(prior, row)) generation++;
+      if (cached?.generation !== generation) cached = { generation, count: runGates(rows) };
+      expect(cached.count).toBe(runGates(rows));
+      counts.push(cached.count);
+    }
+    return counts;
+  }
+
+  const orders = [
+    ['runner', 'driver', 'helmsman'],
+    ['helmsman', 'driver', 'runner'],
+    ['driver', 'runner', 'helmsman'],
+  ];
+
+  it.each(orders)('holds every level once the pause has flushed, %s first', (...order) => {
+    const rows = new Map(Object.entries(running));
+    const counts = flush(rows, order, paused);
+    expect(counts.at(-1)).toBe(3);
+  });
+
+  it.each(orders)('holds no level once the resume has flushed, %s first', (...order) => {
+    const rows = new Map(Object.entries(paused));
+    const counts = flush(rows, order, running);
+    expect(counts.at(-1)).toBe(0);
   });
 });

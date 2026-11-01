@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
+import RedisMock from 'ioredis-mock';
+import type { Redis } from 'ioredis';
+import { readRecordedWaitEvent } from '@aflow/redis';
 import type { ActionCenterItem, ActionCenterResolution } from '@aflow/schemas';
 import type { ActionCenterSourceItem } from '../types.js';
 import { inMemoryDecisionPlane } from './inMemoryDecisionPlane.js';
@@ -205,5 +208,31 @@ describe('buildAggregator', () => {
     expect(out.item.resolution).toEqual({ kind: 'approve', comment: 'lgtm' });
     expect(out.reportedOperationId).toBe('mcp.tool.call');
     expect(out.carrierFailure).toBe('Read the closed node findings.');
+  });
+
+  it('announces gate.resolved for the item it resolved, so a waiter on it wakes (Plan 339 D1)', async () => {
+    const redis = new RedisMock() as unknown as Redis;
+    await redis.flushall();
+    const agg = buildAggregator({
+      db: dbStub as never,
+      redis,
+      decisionPlane: inMemoryDecisionPlane().store,
+      sources: [makeStubSource('a', [item()])],
+    });
+
+    await agg.resolve(ctx(), 'step:abc', { kind: 'approve' });
+
+    expect(
+      await readRecordedWaitEvent(redis, {
+        tenantId: 't-1',
+        spaceId: SPACE_ID,
+        kind: 'gate.resolved',
+        subject: 'step:abc',
+      }),
+    ).toMatchObject({
+      kind: 'gate.resolved',
+      subject: 'step:abc',
+      detail: { resolution: 'approve' },
+    });
   });
 });

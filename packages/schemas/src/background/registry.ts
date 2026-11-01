@@ -710,6 +710,70 @@ const DEFINITIONS: readonly BackgroundTaskDefinitionInput[] = [
     note: 'Runs inside the schedule discovery and dispatch runners with their claims and budgets. Events identify one space directly and never enumerate spaces.',
   },
   {
+    id: 'orchestrator.wait_delivery',
+    service: 'orchestrator',
+    ownerDomain: 'cybernetic',
+    purpose:
+      'Wake each waiter of the wait primitive when its event arrives or its window closes, and tell it which ended the wait.',
+    invariant:
+      'A declared wait ends exactly once: by its event, or by its window closing with no event. A wait that catches up on an event already recorded is woken at once by its own declaration.',
+    criticality: 'feature',
+    trigger: 'candidate',
+    scope: 'per_instance',
+    substrate: 'redis-zset',
+    baseCadenceMs: 5_000,
+    maxBatch: 50,
+    maxCycleMs: 30_000,
+    idleOperationBudgetPerMinute: 36,
+    hotPathProducerBudget: {
+      maxAdditionalNetworkRoundTrips: 0,
+      description:
+        'A wait event records itself inside the transaction that appends its entity event, and arms its subject only where a waiter holds it; a declaration is the step it runs in.',
+    },
+    disablePolicy: 'safe',
+    recovery:
+      'A claimed wait stays in the delivery set under a lease until its delivery settles it. A wait whose delivery fails is put back due at once, and one whose deliverer died is delivered again once the lease lapses. The room post is keyed by the wait, so a second delivery posts nothing twice.',
+    note: 'Three range reads per cycle when nothing is due — the deliveries due, the fired subjects and the windows due — flat in tenants, spaces, waits and stored keys. A woken waiter is told in its conversation and woken the way a run it started wakes it, at the event-driven turn rate.',
+    sites: [
+      'apps/aflow-orchestrator/src/services/waits/waitDelivery.ts',
+      'packages/cybernetic-runtime/src/waits.ts',
+      'packages/redis/src/waits.ts',
+      'packages/redis/src/entityEvents.ts',
+    ],
+  },
+  {
+    id: 'orchestrator.pull_request_events',
+    service: 'orchestrator',
+    ownerDomain: 'plans',
+    purpose:
+      'Poll the pull requests the loop has open and emit pull_request.changed when one goes green, merges, conflicts or has changes requested.',
+    invariant:
+      'Only a pull request a publication opened is polled, until it merges or closes. With none open the task makes no GitHub request.',
+    criticality: 'feature',
+    trigger: 'candidate',
+    scope: 'per_instance',
+    substrate: 'redis-zset',
+    baseCadenceMs: 60_000,
+    maxBatch: 20,
+    maxCycleMs: 30_000,
+    idleOperationBudgetPerMinute: 1,
+    hotPathProducerBudget: {
+      maxAdditionalNetworkRoundTrips: 0,
+      description:
+        "The publication's run-end hook arms the candidate after the run's terminal write; nothing joins a step's path.",
+    },
+    disablePolicy: 'safe',
+    recovery:
+      'A poll that fails leaves the candidate due at the next cadence. A missed event leaves a waiter to its window, which wakes it and tells it so. A candidate whose clear was lost, or whose polls keep failing, expires fourteen days after its last successful poll.',
+    note: "Each poll is conditional: the task keeps each answer's ETag and sends it back as If-None-Match, so an unchanged pull request answers 304, which GitHub says does not count against the primary rate limit. Three reads per pull request — the pull request, its head's check runs and its reviews — and a fourth, the head's combined status, where the check runs are none or more than one page. The 60-second cadence is proposed and still to be measured (Plan 339 P2). One range read per cycle when nothing is armed.",
+    sites: [
+      'apps/aflow-orchestrator/src/services/pullRequestEvents/source.ts',
+      'apps/aflow-orchestrator/src/services/pullRequestEvents/github.ts',
+      'apps/aflow-orchestrator/src/services/pullRequestEvents/arm.ts',
+      'packages/redis/src/pullRequestWatch.ts',
+    ],
+  },
+  {
     id: 'orchestrator.completion_schedule_recorder',
     service: 'orchestrator',
     ownerDomain: 'schedules',

@@ -269,6 +269,8 @@ export async function aggregateMetricsBucket(
       case 'entity.plan.updated':
       case 'entity.session.described':
       case 'entity.session.status':
+      case 'entity.pull_request.changed':
+      case 'entity.gate.resolved':
         break;
 
       case 'entity.mode.transition': {

@@ -23,10 +23,12 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   HOST_CHECK_OUTPUT_TAIL_BYTES,
+  HOST_CHECK_QUIET_WAIT_MAX_MS,
   HOST_CHECK_TAIL_BYTES,
   HostCommitCheckOutputSchema,
 } from '@aflow/schemas';
 
+import { QUIET_POLL_MS } from '../quietMachine.js';
 import type { SandboxedRunInput, SandboxedRunResult } from '../sandboxedRun.js';
 import { compileSandboxPolicy } from '../sandboxPolicy.js';
 import { checkoutGitDir } from '../worktree.js';
@@ -56,6 +58,7 @@ vi.mock('../sandboxedRun.js', async (importOriginal) => {
     runSandboxed: async (input: SandboxedRunInput): Promise<SandboxedRunResult> => {
       if (realSandbox) return await actual.runSandboxed(input);
       handed.push(input);
+      events.push('ran the checks');
       const [program, ...args] = input.argv;
       const startedAt = Date.now();
       return await new Promise((resolve) => {
@@ -92,6 +95,36 @@ vi.mock('../sandboxedRun.js', async (importOriginal) => {
           });
         });
       });
+    },
+  };
+});
+
+/** The load averages the quiet wait reads in turn, and what happened in what order. */
+let machineLoads: number[] = [0];
+const events: string[] = [];
+const MACHINE_CORES = 8;
+
+vi.mock('../quietMachine.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../quietMachine.js')>();
+  return {
+    ...actual,
+    waitForQuietMachine: async (options: Parameters<typeof actual.waitForQuietMachine>[0]) => {
+      let clock = 0;
+      let reads = 0;
+      const wait = await actual.waitForQuietMachine({
+        ...options,
+        machine: {
+          loadAverage: () => machineLoads[Math.min(reads++, machineLoads.length - 1)] ?? 0,
+          cores: () => MACHINE_CORES,
+        },
+        now: () => clock,
+        sleep: (ms) => {
+          clock += ms;
+          return Promise.resolve();
+        },
+      });
+      events.push(`waited ${String(wait.waitedMs)}`);
+      return wait;
     },
   };
 });
@@ -256,6 +289,8 @@ async function checkouts(repo: string): Promise<string> {
 
 beforeEach(() => {
   handed.length = 0;
+  events.length = 0;
+  machineLoads = [0];
   realSandbox = false;
   sandboxMissing = false;
 });
@@ -598,7 +633,7 @@ describe('host.commit.check — a run lost only to tests running out of time', (
     expect(output.passed).toBe(false);
     expect(output.clearedSha).toBeUndefined();
     expect(output.testTimeouts).toEqual(TIMED_OUT);
-    expect(output.summary).toContain('nothing failed but 2 tests running out of time');
+    expect(output.summary).toContain('nothing failed but running out of time, in 2 places');
     expect(output.summary).toContain(TIMED_OUT.join('; '));
     expect(output.summary).toContain('a publication runs the checks once more');
     expect(output.receipt).toBeDefined();
@@ -627,6 +662,69 @@ describe('host.commit.check — a run lost only to tests running out of time', (
     const world = await fixture({ branchPrefix: 'aflow/', checks: FAILING });
     const output = HostCommitCheckOutputSchema.parse((await check(world)).captured.output);
     expect(output.testTimeouts).toBeUndefined();
+  });
+
+  it('is claimed where no test is named and the run ran out of time, whatever the tail holds', async () => {
+    const lostToLoad = ['apps/x/src/a.test.ts', 'outside every test file'];
+    // The end of what it printed holds warnings only, as a loaded run's does.
+    const warning = 'MaxListenersExceededWarning: Possible EventEmitter memory leak detected.';
+    const world = await fixture({
+      branchPrefix: 'aflow/',
+      checks: nodeCheck(
+        `${reportScript(JSON.stringify({ failingGuard: 'tests (512 files, 4 workers)', testTimeouts: lostToLoad }))}\n` +
+          `for (let i = 0; i < 200; i += 1) console.error(${JSON.stringify(warning)});\n` +
+          'process.exit(1);',
+      ),
+    });
+    const output = HostCommitCheckOutputSchema.parse((await check(world)).captured.output);
+    expect(output.tail).toContain('MaxListenersExceededWarning');
+    expect(output.tail).not.toContain(' › ');
+    expect(output.testTimeouts).toEqual(lostToLoad);
+    expect(output.summary).toContain('nothing failed but running out of time, in 2 places');
+  });
+});
+
+describe('host.commit.check — run again once the machine is quiet', () => {
+  const recheck = (world: Fixture) => check(world, { waitForQuiet: true });
+
+  it('waits while the load average is at or above the core count, then genuinely runs the checks and records the wait', async () => {
+    machineLoads = [39, 20, MACHINE_CORES, 5];
+    const world = await fixture({ branchPrefix: 'aflow/', checks: REPORTING });
+    const { result, captured } = await recheck(world);
+    expect(result.status).toBe('SUCCEEDED');
+    expect(events).toEqual([`waited ${String(3 * QUIET_POLL_MS)}`, 'ran the checks']);
+    expect(handed).toHaveLength(1);
+    const output = HostCommitCheckOutputSchema.parse(captured.output);
+    expect(output.passed).toBe(true);
+    expect(output.quietWait).toEqual({
+      waitedMs: 3 * QUIET_POLL_MS,
+      quiet: true,
+      loadAverage: 5,
+      cores: MACHINE_CORES,
+    });
+    expect(output.summary).toMatch(/^The checks waited 45 s for the machine to quieten/);
+    expect(output.receipt).toBeDefined();
+    expect(captured.deltas.join('')).toContain('waiting for the machine to quieten');
+  });
+
+  it('runs the checks after ten minutes on a machine that never quietens, and says so', async () => {
+    machineLoads = [39];
+    const world = await fixture({ branchPrefix: 'aflow/', checks: REPORTING });
+    const output = HostCommitCheckOutputSchema.parse((await recheck(world)).captured.output);
+    expect(events).toEqual([`waited ${String(HOST_CHECK_QUIET_WAIT_MAX_MS)}`, 'ran the checks']);
+    expect(output.quietWait).toMatchObject({
+      waitedMs: HOST_CHECK_QUIET_WAIT_MAX_MS,
+      quiet: false,
+    });
+    expect(output.summary).toContain('then ran on a loaded machine');
+  });
+
+  it('does not wait, nor record a wait, where the input did not ask', async () => {
+    machineLoads = [39];
+    const world = await fixture({ branchPrefix: 'aflow/', checks: REPORTING });
+    const output = HostCommitCheckOutputSchema.parse((await check(world)).captured.output);
+    expect(events).toEqual(['ran the checks']);
+    expect(output.quietWait).toBeUndefined();
   });
 });
 

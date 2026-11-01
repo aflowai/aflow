@@ -2,8 +2,8 @@ import { randomUUID } from 'node:crypto';
 import type { Redis } from 'ioredis';
 import type postgres from 'postgres';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import type { PauseType, TenantId } from '@aflow/schemas';
-import { CanonicalOperationIds, StreamKeys, targetToColumns } from '@aflow/schemas';
+import type { TenantId } from '@aflow/schemas';
+import { StreamKeys, targetToColumns } from '@aflow/schemas';
 import type { ManifestService } from './ManifestService.js';
 import { recordProjectionLag } from '@aflow/observability';
 import { eq, sql } from 'drizzle-orm';
@@ -23,7 +23,12 @@ import {
   type SessionEvent,
 } from '@aflow/redis';
 import { createLeasedWorkConsumer, type LeasedWorkResult } from '@aflow/lib';
-import { bumpAttentionGeneration, endsConversationOwnership } from '@aflow/cybernetic-runtime';
+import {
+  bumpAttentionGeneration,
+  endsConversationOwnership,
+  mayHoldSessionGate,
+  type SessionGateColumns,
+} from '@aflow/cybernetic-runtime';
 import {
   createTenantContext,
   withTenantSchema,
@@ -158,44 +163,15 @@ export function movesSessionStatus(
   return event?.eventType.startsWith('Session') === true;
 }
 
-/** The columns of a session row that say whether, and at which step, it waits on a person. */
-export interface SessionGateColumns {
-  status: string | null;
-  currentStepExecutionId?: string | null | undefined;
-  /** The pause type the orchestrator stamped on the session's hot state. */
-  pauseType?: string | null | undefined;
-  /** The operation of the step the session is parked on. */
-  operationId?: string | null | undefined;
-}
-
-/** The user executor's operations, each a request a person answers. */
-const GATE_OPERATION_IDS: ReadonlySet<string> = new Set([
-  CanonicalOperationIds.USER_INTERACTION_ASK,
-  CanonicalOperationIds.USER_INTERACTION_APPROVE,
-]);
-
-/** The pause types the orchestrator stamps for a consent and for a write approval. */
-const GATE_PAUSE_TYPES: ReadonlySet<string> = new Set<PauseType>(['oauth_consent', 'approval']);
-
-/**
- * Whether a row stands paused on a gate the attention block counts, read as
- * `PAUSED_SESSIONS_SQL` reads a request's kind. The step's operation is read
- * first because a pause type outlives the resume it was stamped for, so a user
- * executor's request can still carry the `user_input` of the chat turn before it.
- */
-function isGatePause(columns: SessionGateColumns | undefined): boolean {
-  if (columns?.status !== 'PAUSED') return false;
-  if (columns.operationId != null && GATE_OPERATION_IDS.has(columns.operationId)) return true;
-  return columns.pauseType != null && GATE_PAUSE_TYPES.has(columns.pauseType);
-}
-
 /**
  * Whether writing `next` over `prior` moves the space's gates: the row enters
- * a gate pause, leaves it, or stands at a gate on another step. A conversation
- * waiting for its next message (`user_input`) and a parent waiting on its
- * child (`subflow_waiting`) are no gate, so a chat turn moves nothing. The
- * attention block counts the space's gates from these rows, so only such a
- * write moves its cache generation. The row decides, not the events flushed
+ * a pause the count can hold as a gate, leaves it, or stands at one on another
+ * step. `mayHoldSessionGate` is the rule the count reads too, so a parent
+ * holding its child's bubbled pause (`subflow_waiting`) moves it at each level
+ * of the chain. A conversation waiting for its next message (`user_input`) is
+ * no gate, so a chat turn moves nothing. The attention block counts the
+ * space's gates from these rows, so only such a write moves its cache
+ * generation. The row decides, not the events flushed
  * with it: the live projection can flush a pause the row it wrote does not
  * hold yet, and a bump then would let the block be rebuilt and cached without
  * that gate.
@@ -204,8 +180,8 @@ export function movesSessionGate(
   prior: SessionGateColumns | undefined,
   next: SessionGateColumns,
 ): boolean {
-  const wasGate = isGatePause(prior);
-  const isGate = isGatePause(next);
+  const wasGate = mayHoldSessionGate(prior);
+  const isGate = mayHoldSessionGate(next);
   if (wasGate !== isGate) return true;
   return (
     isGate && (prior?.currentStepExecutionId ?? null) !== (next.currentStepExecutionId ?? null)

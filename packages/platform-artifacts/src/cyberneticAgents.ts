@@ -765,6 +765,8 @@ function buildCyberneticHelmsman(): CapabilityFlowDefinition {
               'workflow.run.resume',
               'workflow.run.cancel',
               'workflow.run.detail',
+              // Wait on an event instead of asking again on a schedule (Plan 339 D1).
+              'workflow.wait',
               // Surface a proposal's detail (the pending list is in attention).
               'proposal.get',
               // HITL + operator-facing output.

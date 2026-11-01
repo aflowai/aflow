@@ -54,7 +54,7 @@ import {
 import { HOST_HARNESS_CONCURRENCY_DEFAULT, HOST_KEEP_AWAKE_DEFAULT } from '@aflow/schemas';
 
 import { executableResolves } from './probeEnv.js';
-import { executionPermitted, loadHostPolicy } from './bindings.js';
+import { executionPermitted, HOST_CHECK_CONCURRENCY_DEFAULT, loadHostPolicy } from './bindings.js';
 import { discoverChrome } from './browser/chromeDiscovery.js';
 import { createChromeLauncher } from './browser/chromeProcess.js';
 import { BrowserDriver } from './browser/driver.js';
@@ -69,7 +69,8 @@ import { createBrowserHandler } from './handlers/browserHandler.js';
 import { redisApprovalStore } from './browser/approvalStore.js';
 import { removeWorktree } from './worktree.js';
 import { createKeepAwake, describeKeepAwake } from './keepAwake.js';
-import { HARNESS_RUN_OPERATION, removeOrphanedCheckouts } from './handlers/harnessHandlers.js';
+import { removeOrphanedCheckouts } from './handlers/harnessHandlers.js';
+import { limitHostLanes } from './laneLimits.js';
 import {
   BROWSER_STEP_TYPE,
   STEP_TYPE,
@@ -234,13 +235,14 @@ async function main(): Promise<void> {
   }
   timings.step('cleanup');
 
-  // A policy that cannot be read yet runs no harness at all, so the default
-  // stands until the watch below reads one.
-  runtime.limitOperation(
-    HARNESS_RUN_OPERATION,
-    await loadHostPolicy(policyPath)
-      .then((policy) => policy.maxConcurrentHarnessRuns)
-      .catch(() => HOST_HARNESS_CONCURRENCY_DEFAULT),
+  // A policy that cannot be read yet runs no harness and no check at all, so
+  // the defaults stand until the watch below reads one.
+  limitHostLanes(
+    runtime,
+    await loadHostPolicy(policyPath).catch(() => ({
+      maxConcurrentHarnessRuns: HOST_HARNESS_CONCURRENCY_DEFAULT,
+      maxConcurrentChecks: HOST_CHECK_CONCURRENCY_DEFAULT,
+    })),
   );
 
   const keepAwakeMode = await loadHostPolicy(policyPath)
@@ -458,7 +460,7 @@ async function main(): Promise<void> {
   const onPolicyChange = (): void => {
     void loadHostPolicy(policyPath)
       .then(async (policy) => {
-        runtime.limitOperation(HARNESS_RUN_OPERATION, policy.maxConcurrentHarnessRuns);
+        limitHostLanes(runtime, policy);
         keepAwake.setMode(policy.keepAwake);
         await followPolicy({
           reapHostWork: async () => {

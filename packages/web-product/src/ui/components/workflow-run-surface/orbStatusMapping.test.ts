@@ -21,7 +21,7 @@ describe('orbForPlanState', () => {
     const expected: Record<PlanRootState, OrbKind> = {
       in_flight: 'running',
       needs_you: 'paused',
-      queued: 'idle',
+      queued: 'inert',
       finished: 'completed',
       closed: 'inert',
       empty: 'inert',
@@ -59,7 +59,7 @@ describe('orbForPlanStep', () => {
     }
     expect(Object.fromEntries([...seen].map(([status, set]) => [status, [...set].sort()]))).toEqual(
       {
-        active: ['in_flight:running', 'needs_you:paused', 'up_next:idle'],
+        active: ['in_flight:running', 'needs_you:paused', 'up_next:inert'],
         waiting: ['in_flight:idle', 'in_flight:running', 'needs_you:paused'],
         blocked: ['needs_you:paused'],
         done: ['done:completed'],

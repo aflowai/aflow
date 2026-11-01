@@ -1095,6 +1095,18 @@ const TIMED_OUT_TEST =
   'apps/aflow-executor-api/src/handlers/api/saveResponse.test.ts › a saveTo download allows a body above the inline default';
 const CHECK_TAIL =
   'ok   large-files guard (2.0 s)\nFAIL tsc apps/aflow-executor-host/tsconfig.json (41.3 s)\n';
+/** How a check asked to wait for a quiet machine waited: four minutes, until the load fell. */
+const QUIET_WAIT = { waitedMs: 240_000, quiet: true, loadAverage: 7.2, cores: 10 };
+
+/** What the executor adds to a check's result where the input asked it to wait first. */
+function asWaited(
+  output: Record<string, unknown>,
+  input: Record<string, unknown>,
+): Record<string, unknown> {
+  return input['waitForQuiet'] === true
+    ? HostCommitCheckOutputSchema.parse({ ...output, quietWait: QUIET_WAIT })
+    : output;
+}
 
 /** What `host.commit.check` returns for each ending, before the task's own projection. */
 function checkResult(check: Check): Record<string, unknown> {
@@ -1353,9 +1365,9 @@ function rawOutput(
             commit: scenario.commit ?? COMMIT,
           };
     case 'check-commit':
-      return checkResult(scenario.check ?? 'passed');
+      return asWaited(checkResult(scenario.check ?? 'passed'), input);
     case 'recheck-commit':
-      return checkResult(scenario.recheck ?? 'passed');
+      return asWaited(checkResult(scenario.recheck ?? 'passed'), input);
     case 'scan-commit':
       return scanResult(scenario.scan ?? 'clean');
     case 'read-folder':
@@ -2677,11 +2689,13 @@ describe("Publish Local Changes — the folder's checks run before anything leav
       sha: HEAD,
       base: ORIGIN_BASE,
     });
-    // The command is the folder's: nothing the run passes can name one.
+    // The command is the folder's: nothing the run passes can name one. The
+    // one other field says only when the checks start.
     expect(Object.keys(HostCommitCheckInputSchema.shape).sort()).toEqual([
       'base',
       'bindingId',
       'sha',
+      'waitForQuiet',
     ]);
   });
 
@@ -2707,10 +2721,18 @@ describe("Publish Local Changes — the folder's checks run before anything leav
       expect(projects('check-commit', ending), ending).toBe(true);
     }
     // The second run is the last: anything but passing fails it, and the run.
+    const rechecks = (ending: Check): boolean =>
+      projectTaskOutput(
+        taskOrThrow('recheck-commit').outputProjection ?? {},
+        asWaited(checkResult(ending), { waitForQuiet: true }),
+        null,
+      ).ok;
     for (const ending of ['failed', 'timed-out', 'test-timeouts'] as const) {
-      expect(projects('recheck-commit', ending), ending).toBe(false);
+      expect(rechecks(ending), ending).toBe(false);
     }
-    expect(projects('recheck-commit', 'passed')).toBe(true);
+    expect(rechecks('passed')).toBe(true);
+    // A second run that records no wait did not wait, and is not taken as one.
+    expect(projects('recheck-commit', 'passed')).toBe(false);
   });
 
   describe('a run of the checks lost only to tests running out of time', () => {
@@ -2737,11 +2759,17 @@ describe("Publish Local Changes — the folder's checks run before anything leav
       expect(outcome.ran.indexOf('scan-commit')).toBeGreaterThan(
         outcome.ran.indexOf('recheck-commit'),
       );
-      expect(outcome.inputs.get('recheck-commit')).toEqual(outcome.inputs.get('check-commit'));
+      expect(outcome.inputs.get('check-commit')).toEqual({
+        bindingId: 'folder-1',
+        sha: HEAD,
+        base: ORIGIN_BASE,
+      });
+      // The same commit and base, run again once the machine is quiet.
       expect(outcome.inputs.get('recheck-commit')).toEqual({
         bindingId: 'folder-1',
         sha: HEAD,
         base: ORIGIN_BASE,
+        waitForQuiet: true,
       });
       expect(outcome.pushed).toBe(true);
       expect(outcome.inputs.get('push')?.['check']).toEqual({ receipt: CHECK_RECEIPT.passed });
@@ -2765,7 +2793,9 @@ describe("Publish Local Changes — the folder's checks run before anything leav
         passed: true,
         clearedSha: HEAD,
         receipt: CHECK_RECEIPT.passed,
+        quietWait: QUIET_WAIT,
       });
+      expect(outcome.outputs.get('check-commit')).not.toHaveProperty('quietWait');
       expect(taskOrThrow('recheck-commit').name).toBe(
         "Run the folder's checks again, after tests ran out of time",
       );

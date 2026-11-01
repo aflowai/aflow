@@ -43,6 +43,7 @@ export * from './capabilityProfile.js';
 export * from './errorReport.js';
 export * from './spaceContext.js';
 export * from './entityEvents.js';
+export * from './waits.js';
 export * from './entityMetrics.js';
 export * from './validatorRegistry.js';
 export * from './contractError.js';

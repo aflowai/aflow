@@ -212,9 +212,14 @@ scripts/verify-commit.mjs`), and Local Publish runs it after the commit and befo
    workspaces whose source names a touched file's repository path, whole
    (`scripts/verify-commit.mjs`, not `verify-commit`), in a string literal runs too, counted
    and named in the same line as the tests imports reach. The script names the step
-   that failed in its report, and the check's summary carries it. A run lost only to tests
-   running out of their time is run again by the publication itself as `recheck-commit`,
-   with no retry from the conversation, and a failure there is read on that task. Any other
+   that failed in its report, and the check's summary carries it. A machine runs one check
+   at a time (`maxConcurrentChecks` in its host policy, 1 unless the operator set another),
+   beside its coding agents and outside their count. A run lost only to running out of
+   time — tests, hooks or the test run's own workers, a named test or not — is run again
+   by the publication itself as `recheck-commit`, with no retry from the conversation. That
+   second run first waits until the one-minute load average is below the core count, ten
+   minutes at most, and records the wait as `quietWait`. A failure there is read on that
+   task. Any other
    failure fails the publication at `checks-failed` with the end of what the checks printed
    and nothing pushed, which is the conversation's to take up: read whether the change or
    the machine failed, then commission the fix onto the branch or put the machine right.
