@@ -32,6 +32,12 @@ export interface RouteRefusal {
   message: string;
   /** True when the same request may succeed if sent again. */
   retryable: boolean;
+  /**
+   * True when the request may have reached Aflow and been acted on: a timeout
+   * or a broken connection after it left, or a 5xx. False when Aflow answered a
+   * refusal, or when no connection was made.
+   */
+  outcomeUnknown: boolean;
   latestItem?: ActionCenterItem;
 }
 
@@ -59,6 +65,32 @@ function itemPath(spaceId: string, itemId: string): string {
   return `/v1/spaces/${encodeURIComponent(spaceId)}/action-center/${encodeURIComponent(itemId)}`;
 }
 
+/** Failures in which no connection was made, so no request left. */
+const CONNECT_FAILURES: ReadonlySet<string> = new Set([
+  'ECONNREFUSED',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'EADDRNOTAVAIL',
+  'UND_ERR_CONNECT_TIMEOUT',
+]);
+
+/**
+ * True only when the failure proves no connection was made. `fetch` wraps the
+ * socket's error in `cause`, and one that tried several addresses wraps one
+ * error per address. Any other failure may have come after the request left.
+ */
+export function neverConnected(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  const record = error as { code?: unknown; cause?: unknown; errors?: unknown };
+  if (typeof record.code === 'string' && CONNECT_FAILURES.has(record.code)) return true;
+  if (Array.isArray(record.errors) && record.errors.length > 0) {
+    return record.errors.every(neverConnected);
+  }
+  return record.cause !== undefined && neverConnected(record.cause);
+}
+
 function refusalOf(status: number, body: unknown): RouteRefusal {
   const record = typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : {};
   const latest = ActionCenterItemSchema.safeParse(record['latestItem']);
@@ -71,6 +103,8 @@ function refusalOf(status: number, body: unknown): RouteRefusal {
         ? record['message']
         : `Aflow answered HTTP ${String(status)}.`,
     retryable: status === 429 || status >= 500,
+    // A 500 can follow a resolve that was applied, as DISPATCH_FAILED does.
+    outcomeUnknown: status >= 500,
     ...(latest.success ? { latestItem: latest.data } : {}),
   };
 }
@@ -107,6 +141,7 @@ export function createAflowApi(options: {
         error: 'UNREACHABLE',
         message: `Aflow did not answer: ${error instanceof Error ? error.message : 'unknown error'}.`,
         retryable: true,
+        outcomeUnknown: !neverConnected(error),
       };
     }
   }
@@ -124,6 +159,7 @@ export function createAflowApi(options: {
           error: 'UNREADABLE_ITEM',
           message: `Aflow sent item ${itemId} in a shape this app does not read.`,
           retryable: false,
+          outcomeUnknown: false,
         };
       }
       return {

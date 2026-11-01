@@ -130,6 +130,7 @@ export function fakeApi(...items: ActionCenterItem[]): FakeApi {
           error: 'NOT_FOUND',
           message: `Action Center item ${itemId} not found.`,
           retryable: false,
+          outcomeUnknown: false,
         });
       }
       return Promise.resolve({ ok: true, item, origin: item.origin as ObservedOrigin });
@@ -149,6 +150,7 @@ export function fakeApi(...items: ActionCenterItem[]): FakeApi {
           error: 'NOT_FOUND',
           message: `Action Center item ${itemId} not found.`,
           retryable: false,
+          outcomeUnknown: false,
         });
       }
       if (item.status !== 'open' || JSON.stringify(item.origin) !== JSON.stringify(origin)) {
@@ -158,6 +160,7 @@ export function fakeApi(...items: ActionCenterItem[]): FakeApi {
           error: 'STALE_ACTION_CENTER_ITEM',
           message: `Origin CAS mismatch for ${itemId} — reload before resolving.`,
           retryable: false,
+          outcomeUnknown: false,
           latestItem: item,
         });
       }

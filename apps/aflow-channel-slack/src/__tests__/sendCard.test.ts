@@ -149,6 +149,7 @@ describe('a send with an itemId', () => {
         error: 'UNREACHABLE',
         message: 'Aflow did not answer.',
         retryable: true,
+        outcomeUnknown: false,
       });
     const failed = await sendStep(handler, { text: 'Look.', itemId: MEDIUM });
 

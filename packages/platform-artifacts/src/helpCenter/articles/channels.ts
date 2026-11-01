@@ -18,12 +18,12 @@ An agent can send you a Slack message when you must act and may be away from the
 An agent can send an Action Center item with its message. It arrives as a card under the text. Some cards can be decided from Slack:
 
 - **An approval a run is paused on** shows **Approve** and **Deny**.
-- **A question a run is paused on** shows a button per answer when it asks for yes or no or for one of a few choices. When it asks for text, reply in the card's thread, and your reply is the answer.
+- **A question a run is paused on** shows a button per answer when it asks for yes or no or for one of a few choices. When it asks for text, reply in the card's thread, and your reply is the answer as you typed it. A mention of a person arrives as their Slack member ID, such as \`@U024BE7LH\`.
 - **An API write that waits on your approval**, at the low or medium risk tier, shows **Approve** and **Deny** with the call: its method, its host and the request body with secrets removed.
 
 Every other card shows no buttons and says it needs you at Aflow. That includes a high-risk write, a browser action, a plan decision and a question the Helmsman asks about the plan. Open the Action Center in Aflow to decide those.
 
-A tap decides the item as the Action Center would, and the card then says what you decided. If the item was already decided, the app says so and the tap changes nothing. If Aflow does not take a text answer, the app says why in the thread and the item stays open, so you can reply again. A reply in the thread of a card with buttons decides nothing, even "yes". Tap the button instead.
+A tap decides the item as the Action Center would, and the card then says what you decided. If the item was already decided, the app says so and the tap changes nothing. If Aflow does not take a text answer, the app says why in the thread and the item stays open, so you can reply again. If Aflow could not be reached, the app says nothing was decided, and you can try again. If the app cannot tell whether your decision reached Aflow, it says the item may already be decided. Open the item in the Action Center and check it before you answer again. A reply in the thread of a card with buttons decides nothing, even "yes". Tap the button instead.
 
 Talking to Aflow from Slack comes in a later release.
 

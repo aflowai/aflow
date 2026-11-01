@@ -14,6 +14,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   CARD_BUSY,
+  CHECK_BEFORE_ANSWERING,
+  NOT_SENT_TRY_AGAIN,
+  OUTCOME_UNKNOWN,
   REPLY_CARD_SETTLED,
   REPLY_DECIDES_NOTHING,
   REPLY_AGAIN,
@@ -182,14 +185,37 @@ describe('a tap on a card', () => {
       error: 'UNREACHABLE',
       message: 'Aflow did not answer.',
       retryable: true,
+      outcomeUnknown: false,
     };
 
     expect(await tap(card, 'approve')).toBe('not_sent');
     expect(slack.updates).toEqual([]);
     expect(slack.posts.at(-1)).toMatchObject({ threadTs: card.ts });
+    expect(slack.posts.at(-1)?.text).toContain(NOT_SENT_TRY_AGAIN);
 
     expect(await tap(card, 'approve')).toBe('resolved');
   });
+
+  it.each([
+    ['a timeout after the request left', 0, 'UNREACHABLE', 'Aflow did not answer: timed out.'],
+    ['a 500 DISPATCH_FAILED', 500, 'DISPATCH_FAILED', 'The resume could not be dispatched.'],
+  ])(
+    'says the decision may have reached Aflow after %s, and asks for a check before answering again',
+    async (_case, status, error, message) => {
+      const card = await sendCard(approval);
+      api.nextAnswer = { ok: false, status, error, message, retryable: true, outcomeUnknown: true };
+
+      expect(await tap(card, 'approve')).toBe('outcome_unknown');
+
+      expect(slack.updates).toEqual([]);
+      expect(store.cardAt(card.channel, card.ts)?.outcome).toBeNull();
+      const said = slack.posts.at(-1);
+      expect(said?.threadTs).toBe(card.ts);
+      expect(said?.text).toContain(OUTCOME_UNKNOWN);
+      expect(said?.text).toContain(CHECK_BEFORE_ANSWERING);
+      expect(said?.text).not.toContain('nothing was decided');
+    },
+  );
 
   it('takes the controls off a card the route refuses, and says it needs Aflow', async () => {
     const card = await sendCard(approval);
@@ -199,6 +225,7 @@ describe('a tap on a card', () => {
       error: 'FORBIDDEN',
       message: 'You may not resolve this item.',
       retryable: false,
+      outcomeUnknown: false,
     };
 
     expect(await tap(card, 'approve')).toBe('refused');
@@ -254,11 +281,25 @@ describe('free text in a card’s thread', () => {
   it('answers a question that asks for text, and the card says what and by whom', async () => {
     const card = await sendCard(question);
 
-    expect(await reply(card, '  v1.4.0 <final>  ')).toBe('resolved');
+    expect(await reply(card, '  v1.4.0 &lt;final&gt;  ')).toBe('resolved');
 
     expect(api.resolves[0]?.resolution).toEqual({ kind: 'submit', payload: 'v1.4.0 <final>' });
     expect(textOf(slack.updates[0]?.blocks)).toContain(
       `Answered “v1.4.0 &lt;final&gt;” by <@${OPERATOR}> from Slack.`,
+    );
+  });
+
+  it('sends an answer holding &, a URL and a mention as the operator typed it, not as Slack sent it', async () => {
+    const card = await sendCard(question);
+    const wire =
+      'R&amp;D build, see <https://example.com/runs?id=7&amp;tab=log> and ask <@U024BE7LH>';
+    const typed = 'R&D build, see https://example.com/runs?id=7&tab=log and ask @U024BE7LH';
+
+    expect(await reply(card, wire)).toBe('resolved');
+
+    expect(api.resolves[0]?.resolution).toEqual({ kind: 'submit', payload: typed });
+    expect(textOf(slack.updates[0]?.blocks)).toContain(
+      `Answered “R&amp;D build, see https://example.com/runs?id=7&amp;tab=log and ask @U024BE7LH” by <@${OPERATOR}> from Slack.`,
     );
   });
 
@@ -270,6 +311,7 @@ describe('free text in a card’s thread', () => {
       error: 'INVALID_RESOLUTION',
       message: 'The answer must be at most 8 characters <semver>.',
       retryable: false,
+      outcomeUnknown: false,
     };
 
     expect(await reply(card, 'version one point four')).toBe('invalid_answer');

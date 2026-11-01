@@ -14,13 +14,20 @@
  * a question that asks for text. On any other card it leaves the item open,
  * and the app points to the button or to Aflow. An answer the route refuses as
  * invalid (422) leaves the card open with the route's reason, so the operator
- * can reply again.
+ * can reply again. The answer is sent as the operator typed it, not in Slack's
+ * wire encoding.
+ *
+ * A failure that may succeed if sent again leaves the card open. When no
+ * connection was made, nothing was decided, and the app says so. When the
+ * request may have reached Aflow, the app says the item may have been decided
+ * and asks the operator to look at it before answering again.
  */
 import type { ActionCenterResolution } from '@aflow/schemas';
 
 import type { AflowApi, ResolvedItem, RouteRefusal } from './aflowApi.js';
 import { escapeMrkdwn, outcomeFoot } from './cards.js';
 import type { SlackBlock, SlackClient } from './slack.js';
+import { typedTextOf } from './slackText.js';
 import type { CardRecord, ChannelStore } from './store.js';
 
 export interface CardTap {
@@ -52,8 +59,23 @@ export const CARD_BUSY =
 
 export const REPLY_AGAIN = 'Reply again in this thread to answer.';
 
+export const NOT_SENT_TRY_AGAIN = 'This did not reach Aflow, so nothing was decided:';
+
+export const OUTCOME_UNKNOWN =
+  'This may or may not have reached Aflow, so the item may already be decided:';
+
+export const CHECK_BEFORE_ANSWERING =
+  'Open the item in the Action Center at Aflow and check it before you answer again.';
+
 export type CardOutcome =
-  'resolved' | 'already_decided' | 'refused' | 'invalid_answer' | 'not_sent' | 'busy' | 'ignored';
+  | 'resolved'
+  | 'already_decided'
+  | 'refused'
+  | 'invalid_answer'
+  | 'not_sent'
+  | 'outcome_unknown'
+  | 'busy'
+  | 'ignored';
 
 export type ReplyOutcome = CardOutcome | 'not_a_card' | 'pointed' | 'settled';
 
@@ -76,13 +98,12 @@ function noteFor(
   answer: ResolvedItem | RouteRefusal,
   decided: string,
   slackUserId: string,
-): string | undefined {
+): string {
   if (answer.ok) return `${decided} by <@${slackUserId}> from Slack.`;
   // The route answers a decided item with a stale origin (409), or with no item at all (404).
   if (answer.status === 409 || answer.status === 404) {
     return `Already decided. This tap changed nothing. Aflow answered: ${escapeMrkdwn(answer.message)}`;
   }
-  if (answer.retryable) return undefined;
   return (
     `Aflow refused this decision: ${escapeMrkdwn(answer.message)} ` +
     'Open the Action Center there to decide it.'
@@ -92,7 +113,15 @@ function noteFor(
 function outcomeOf(answer: ResolvedItem | RouteRefusal): CardOutcome {
   if (answer.ok) return 'resolved';
   if (answer.status === 409 || answer.status === 404) return 'already_decided';
-  return answer.retryable ? 'not_sent' : 'refused';
+  if (!answer.retryable) return 'refused';
+  return answer.outcomeUnknown ? 'outcome_unknown' : 'not_sent';
+}
+
+function retryAdvice(answer: RouteRefusal): string {
+  const message = escapeMrkdwn(answer.message);
+  return answer.outcomeUnknown
+    ? `${OUTCOME_UNKNOWN} ${message} ${CHECK_BEFORE_ANSWERING}`
+    : `${NOT_SENT_TRY_AGAIN} ${message} Try again.`;
 }
 
 /**
@@ -123,16 +152,11 @@ async function decide(
       );
       return 'invalid_answer';
     }
-    const note = noteFor(answer, decided, slackUserId);
-    if (note === undefined) {
-      const message = answer.ok ? '' : escapeMrkdwn(answer.message);
-      await deps.slack.postMessage(
-        card.channel,
-        `This did not reach Aflow, so nothing was decided: ${message} Try again.`,
-        { threadTs: card.ts },
-      );
+    if (!answer.ok && answer.retryable) {
+      await deps.slack.postMessage(card.channel, retryAdvice(answer), { threadTs: card.ts });
       return outcomeOf(answer);
     }
+    const note = noteFor(answer, decided, slackUserId);
     deps.store.settleCard(card, note, deps.now?.() ?? new Date());
     const blocks: SlackBlock[] = [...(card.head as SlackBlock[]), ...outcomeFoot(note)];
     await deps.slack.updateMessage(card.channel, card.ts, card.text, blocks);
@@ -172,7 +196,7 @@ export async function answerCardReply(reply: CardReply, deps: CardDeps): Promise
     await say(REPLY_CARD_SETTLED);
     return 'settled';
   }
-  const answer = reply.text.trim();
+  const answer = typedTextOf(reply.text).trim();
   if (card.row !== 'text_reply' || answer === '') {
     await say(card.controls.length > 0 ? REPLY_DECIDES_NOTHING : REPLY_NEEDS_AFLOW);
     return 'pointed';
