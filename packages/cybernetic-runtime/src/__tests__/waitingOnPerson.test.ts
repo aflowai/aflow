@@ -168,6 +168,37 @@ describe('the section names the item and the place', () => {
     );
   });
 
+  it('escapes a double quote in a title, so the quoted title ends where the title does', async () => {
+    const step = blocked('Run "Ship the release" again');
+    fakeGates.current = {
+      gates: {
+        runGates: 1,
+        consents: 0,
+        newest: [
+          {
+            kind: 'run_gate',
+            itemId: 'step:5e1d0000-0000-4000-8000-0000000000bb',
+            title: 'Approve task "send \\ invoice"',
+            requestedAt: '2099-01-01T00:00:00.000Z',
+          },
+        ],
+      },
+      spaceSlug: SLUG,
+    };
+    const lines = await section();
+    expect(lines[1]).toBe(
+      '- run gate "Approve task \\"send \\\\ invoice\\"" [itemId: step:5e1d0000-0000-4000-8000-0000000000bb]',
+    );
+    expect(lines[2]).toBe(
+      `- plan step "${planItemTitle('blocked', step.title).replaceAll('"', '\\"')}" [itemId: ${ACTION_CENTER_ITEM_ID_PREFIX.planAsk}${step.nodeId}] /s/${SLUG}/plan?node=${step.nodeId}`,
+    );
+    for (const line of lines.slice(1)) {
+      const quoted = /^- [a-z ]+ ("(?:[^"\\]|\\.)*") \[itemId: /.exec(line)?.[1];
+      expect(quoted).toBeDefined();
+      expect(line.slice(line.indexOf(quoted!) + quoted!.length)).toMatch(/^ \[itemId: /);
+    }
+  });
+
   it('says so when nothing waits, and lists nothing', async () => {
     expect(await section()).toEqual([
       'Waiting on a person: 0 plan steps, 0 run gates, 0 consents.',
@@ -248,19 +279,20 @@ describe('the ceiling', () => {
   it(`holds five lines at the longest title and id within ${String(WAITING_ON_PERSON_TOKEN_CEILING)} tokens`, () => {
     const longestSlug = 'a'.repeat(64);
     const nodeId = 'ffffffff-ffff-4fff-bfff-ffffffffffff';
-    // Every line at its longest: the plan-step line, which adds the link to
-    // its id, against the longest gate id, a human task's at a 64-character task id.
+    // Every line at its longest: a title of quotes, each escaped to two
+    // characters, and the plan-step line, which adds the link to its id,
+    // against the longest gate id, a human task's at a 64-character task id.
     const planStepLine = {
       kind: 'plan_step' as const,
       itemId: `${ACTION_CENTER_ITEM_ID_PREFIX.planDecision}${nodeId}`,
-      title: waitingItemTitle('W'.repeat(400)),
+      title: waitingItemTitle('"'.repeat(400)),
       requestedAt: '2026-11-01T00:00:00.000Z',
       planNodeId: nodeId,
     };
     const gateLine = {
       kind: 'run_gate' as const,
       itemId: `${ACTION_CENTER_ITEM_ID_PREFIX.workflowHumanTask}${nodeId}:${'t'.repeat(64)}`,
-      title: waitingItemTitle('W'.repeat(400)),
+      title: waitingItemTitle('"'.repeat(400)),
       requestedAt: '2026-11-01T00:00:00.000Z',
     };
     const render = (item: typeof planStepLine | typeof gateLine) =>
@@ -276,6 +308,9 @@ describe('the ceiling', () => {
     }).join('\n');
 
     expect(planStepLine.title).toHaveLength(WAITING_ON_PERSON_TITLE_MAX_CHARS);
+    // The escapes count toward the cut, which falls between whole escapes.
+    const quoted = /"((?:[^"\\]|\\.)*)" \[itemId: /.exec(render(longest))?.[1];
+    expect(quoted).toBe(`${'\\"'.repeat((WAITING_ON_PERSON_TITLE_MAX_CHARS - 2) / 2)}…`);
     expect(text.split('\n')).toHaveLength(WAITING_ON_PERSON_LINE_LIMIT + 1);
     expect(estimateStringTokens(text)).toBeLessThanOrEqual(WAITING_ON_PERSON_TOKEN_CEILING);
   });

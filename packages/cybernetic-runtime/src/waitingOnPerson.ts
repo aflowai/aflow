@@ -164,14 +164,14 @@ export function waitingPlanSteps(nodes: readonly PlanNodeSummary[]): WaitingPlan
 // ============================================================================
 
 /** Padded standard base64, the only text `decode(…, 'base64')` takes without throwing. */
-const BASE64_TEXT = '^([A-Za-z0-9+/]{4})*([A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$';
+export const BASE64_TEXT = '^([A-Za-z0-9+/]{4})*([A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$';
 
 /**
  * Bytes, as lowercase hex, that `convert_from(…, 'UTF8')` takes without
  * throwing: well-formed UTF-8 with no NUL, no surrogate and nothing past
  * U+10FFFF.
  */
-const UTF8_HEX =
+export const UTF8_HEX =
   '^(0[1-9a-f]|[1-7][0-9a-f]' +
   '|(c[2-9a-f]|d[0-9a-f])[89ab][0-9a-f]' +
   '|e0[ab][0-9a-f][89ab][0-9a-f]' +
@@ -258,7 +258,7 @@ const BUBBLED_PAUSE_DEPTH_LIMIT = 10;
  * Paused sessions, as `pausedStepSource` reads them, each by the request its
  * ref holds: input, an approval or a write approval is a run gate, and an
  * OAuth consent is a consent unless a workflow run owns the pause, which
- * `consentRuns` counts instead. A request held inline is read by its own
+ * `CONSENT_RUNS_SQL` counts instead. A request held inline is read by its own
  * `kind`, so a conversation waiting for its next message is no item. An
  * executor's request is always held outside the ref, so its kind is read from
  * the pause (`pauseRequestKind`). A child's pause bubbled to its parent
@@ -269,8 +269,7 @@ const BUBBLED_PAUSE_DEPTH_LIMIT = 10;
  * is read from the listed session itself, as the source reads it. Any other
  * pause is no item.
  */
-async function pausedSessions(tx: PostgresJsDatabase, spaceId: string): Promise<Row[]> {
-  return (await tx.execute(sql`
+export const PAUSED_SESSIONS_SQL = (spaceId: string): SQL => sql`
     WITH RECURSIVE paused AS (
       SELECT s.current_step_execution_id::text AS step_id,
              s.started_at,
@@ -341,8 +340,7 @@ async function pausedSessions(tx: PostgresJsDatabase, spaceId: string): Promise<
     SELECT step_id, started_at, payload, request_kind, kind, total
     FROM ranked
     WHERE rank <= ${WAITING_ON_PERSON_LINE_LIMIT}
-  `)) as unknown as Row[];
-}
+  `;
 
 /** The workflow sources each list at most this many rows, so the count reads no more. */
 const PAUSED_TASK_SCAN_LIMIT = 200;
@@ -353,8 +351,7 @@ const PAUSED_TASK_SCAN_LIMIT = 200;
  * is decided by `classifyPausedTask`, since the human-task rule reads the
  * run's definition.
  */
-async function pausedTaskRows(tx: PostgresJsDatabase, spaceId: string): Promise<Row[]> {
-  return (await tx.execute(sql`
+export const PAUSED_TASKS_SQL = (spaceId: string): SQL => sql`
     WITH paused AS (
       SELECT r.run_id, r.workflow_slug, r.workflow_revision, r.pause_version, r.started_at,
              t.task_id, t.output_ref,
@@ -391,8 +388,7 @@ async function pausedTaskRows(tx: PostgresJsDatabase, spaceId: string): Promise<
     FROM windowed
     WHERE human_rank <= ${PAUSED_TASK_SCAN_LIMIT}
        OR (holds_pause AND holder_rank <= ${PAUSED_TASK_SCAN_LIMIT})
-  `)) as unknown as Row[];
-}
+  `;
 
 /** The paused task's definition at the run's revision, each revision read once. */
 function taskDefinitionLookup(
@@ -471,8 +467,7 @@ function classifyPausedTask(row: Row, task: WorkflowTask | undefined): PausedTas
  * resume contract carries the consent it waits on. The source cuts before it
  * drops a run with no consent, so the count does too.
  */
-async function consentRuns(tx: PostgresJsDatabase, spaceId: string): Promise<Row[]> {
-  return (await tx.execute(sql`
+export const CONSENT_RUNS_SQL = (spaceId: string): SQL => sql`
     WITH listed AS (
       SELECT run_id, started_at, paused_payload_ref
       FROM workflow_runs
@@ -497,16 +492,10 @@ async function consentRuns(tx: PostgresJsDatabase, spaceId: string): Promise<Row
     SELECT run_id, started_at, payload -> 'oauthConsent' AS consent, total
     FROM ranked
     WHERE rank <= ${WAITING_ON_PERSON_LINE_LIMIT}
-  `)) as unknown as Row[];
-}
+  `;
 
 /** Pending compute-egress requests, tenant-wide or this space's, as `computeEgressSource` reads them. */
-async function egressRequests(
-  tx: PostgresJsDatabase,
-  tenantId: string,
-  spaceId: string,
-): Promise<Row[]> {
-  return (await tx.execute(sql`
+export const EGRESS_REQUESTS_SQL = (tenantId: string, spaceId: string): SQL => sql`
     SELECT request_id::text AS request_id, requested_at, scope,
            cardinality(requested_hosts) AS hosts,
            count(*) OVER ()::int AS total
@@ -516,7 +505,14 @@ async function egressRequests(
       AND (scope = 'tenant' OR (scope = 'space' AND space_id = ${spaceId}::uuid))
     ORDER BY requested_at DESC
     LIMIT ${WAITING_ON_PERSON_LINE_LIMIT}
-  `)) as unknown as Row[];
+  `;
+
+/** The space's slug, for the plan link. */
+export const SPACE_SLUG_SQL = (spaceId: string): SQL =>
+  sql`SELECT slug FROM spaces WHERE id = ${spaceId}::uuid LIMIT 1`;
+
+async function rows(tx: PostgresJsDatabase, query: SQL): Promise<Row[]> {
+  return (await tx.execute(query)) as unknown as Row[];
 }
 
 function sessionItems(rows: readonly Row[]): WaitingItem[] {
@@ -622,13 +618,11 @@ export async function readWaitingGates(params: {
     db,
     createTenantContext(tenantId as TenantId),
     async (tx) => ({
-      sessions: await pausedSessions(tx, spaceId),
-      tasks: await pausedTaskRows(tx, spaceId),
-      consents: await consentRuns(tx, spaceId),
-      egress: await egressRequests(tx, tenantId, spaceId),
-      slug: (await tx.execute(
-        sql`SELECT slug FROM spaces WHERE id = ${spaceId}::uuid LIMIT 1`,
-      )) as unknown as Row[],
+      sessions: await rows(tx, PAUSED_SESSIONS_SQL(spaceId)),
+      tasks: await rows(tx, PAUSED_TASKS_SQL(spaceId)),
+      consents: await rows(tx, CONSENT_RUNS_SQL(spaceId)),
+      egress: await rows(tx, EGRESS_REQUESTS_SQL(tenantId, spaceId)),
+      slug: await rows(tx, SPACE_SLUG_SQL(spaceId)),
     }),
   );
 
@@ -686,12 +680,30 @@ function counted(label: string, count: number, mayBeCut = false): string {
   return `${shown} ${label}${count === 1 && !mayBeCut ? '' : 's'}`;
 }
 
+/**
+ * A title in double quotes, each quote and backslash in it escaped, so the
+ * quoted title ends where the title does. The escapes count toward
+ * `WAITING_ON_PERSON_TITLE_MAX_CHARS`, so a title full of quotes holds the
+ * section to its ceiling. A cut falls between whole escapes and whole code
+ * points.
+ */
+function quotedTitle(title: string): string {
+  const escaped = title.replace(/["\\]/g, '\\$&');
+  if (escaped.length <= WAITING_ON_PERSON_TITLE_MAX_CHARS) return `"${escaped}"`;
+  let kept = '';
+  for (const piece of escaped.match(/\\.|[\uD800-\uDBFF][\uDC00-\uDFFF]|[\s\S]/g) ?? []) {
+    if (kept.length + piece.length > WAITING_ON_PERSON_TITLE_MAX_CHARS - 1) break;
+    kept += piece;
+  }
+  return `"${kept.trimEnd()}…"`;
+}
+
 function renderWaitingLine(item: WaitingItem, spaceSlug: string | undefined): string {
   const link =
     item.planNodeId !== undefined && spaceSlug !== undefined
       ? ` /s/${spaceSlug}/plan?node=${item.planNodeId}`
       : '';
-  return `- ${KIND_LABEL[item.kind]} "${item.title}" [itemId: ${item.itemId}]${link}`;
+  return `- ${KIND_LABEL[item.kind]} ${quotedTitle(item.title)} [itemId: ${item.itemId}]${link}`;
 }
 
 /**
