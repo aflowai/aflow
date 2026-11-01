@@ -16,12 +16,14 @@ import { REPLY_DECIDES_NOTHING } from '../cardActions.js';
 import type { ChannelSlackConfig } from '../config.js';
 import {
   ANSWER_NOT_POSTED,
+  CHECK_AT_AFLOW,
   CONVERSATION_ENDED,
   Conversations,
   LATE_ALREADY_DECIDED,
   LATE_DISCARD_ACTION,
   LATE_QUESTION,
   LATE_RUN_ACTION,
+  MAYBE_SENT,
   MOVED_ON,
   NOT_THE_KEY_OWNER,
   STILL_ANSWERING,
@@ -478,6 +480,154 @@ describe('a thread whose watch stopped before the answer came', () => {
     expect(
       (await send(directMessage(OPERATOR, 'go on', NOW, { threadTs: status.ts }))).outcome,
     ).toBe('continued');
+  });
+});
+
+describe('two replies that arrive together on a waiting thread', () => {
+  it('resumes the pause with one, and tells the other the Helmsman is still answering', async () => {
+    const status = directMessage(OPERATOR, 'status?', NOW);
+    await send(status);
+    const [session] = [...aflow.sessions.values()];
+    const pausedAt = session?.pausedStep;
+
+    const [first, second] = await Promise.all([
+      answerInbound(directMessage(OPERATOR, 'go on', NOW, { threadTs: status.ts }), deps()),
+      answerInbound(
+        directMessage(OPERATOR, 'and the deploy?', NOW, { threadTs: status.ts }),
+        deps(),
+      ),
+    ]);
+    if ('watching' in first) await first.watching;
+
+    expect([first.outcome, second.outcome]).toEqual(['continued', 'busy']);
+    expect(aflow.resumes).toHaveLength(1);
+    expect(aflow.resumes[0]?.body).toEqual({
+      stepExecutionId: pausedAt,
+      input: { input: 'go on' },
+    });
+    expect(aflow.refusals).toEqual([]);
+    const texts = slack.posts.map((post) => post.text);
+    expect(texts).toContain(STILL_ANSWERING);
+    expect(texts).not.toContain(MOVED_ON);
+    expect(texts.at(-1)).toBe('The Helmsman answers: go on');
+
+    // The refused reply can be sent again once the answer is here.
+    expect(
+      (
+        await send(
+          directMessage(OPERATOR, 'and the deploy?', NOW, {
+            threadTs: status.ts,
+            eventId: 'Ev-deploy-again',
+          }),
+        )
+      ).outcome,
+    ).toBe('continued');
+    expect(aflow.resumes).toHaveLength(2);
+  });
+});
+
+describe('a resume whose outcome is unknown', () => {
+  const TIMEOUT = 'The request timed out after it left.';
+
+  /** An API whose resume reaches Aflow, and whose answer never comes back. */
+  function timingOutApi() {
+    const api = deps().api;
+    return {
+      ...api,
+      resumeConversation: async (...args: Parameters<typeof api.resumeConversation>) => {
+        await api.resumeConversation(...args);
+        return {
+          ok: false as const,
+          status: 0,
+          error: 'Timeout',
+          message: TIMEOUT,
+          retryable: true,
+          outcomeUnknown: true,
+        };
+      },
+    };
+  }
+
+  const answers = () =>
+    slack.posts.filter((post) => post.text === 'The Helmsman answers: go on').length;
+
+  it('says it may have been sent, and relays the answer once when it comes', async () => {
+    const status = directMessage(OPERATOR, 'status?', NOW);
+    await send(status);
+    aflow.holdAnswers = true;
+    let polls = 0;
+    const timingOut = new Conversations({
+      store,
+      slack,
+      api: timingOutApi(),
+      aflowUserId: OWNER,
+      now: () => NOW,
+      pollMs: 0,
+      watchLimitMs: 60 * MINUTE,
+      sleep: () => {
+        if ((polls += 1) === 2) aflow.answerHeld();
+        return Promise.resolve();
+      },
+    });
+
+    const reply = await answerInbound(
+      directMessage(OPERATOR, 'go on', NOW, { threadTs: status.ts }),
+      { ...deps(), conversations: timingOut },
+    );
+    const watched = 'watching' in reply ? await reply.watching : undefined;
+
+    expect(reply.outcome).toBe('outcome_unknown');
+    expect(watched).toBe('answered');
+    expect(slack.posts.map((post) => post.text)).toContain(
+      `${MAYBE_SENT} ${TIMEOUT} ${CHECK_AT_AFLOW}`,
+    );
+    expect(answers()).toBe(1);
+    expect(slack.posts.at(-1)?.text).toBe('The Helmsman answers: go on');
+
+    // A restart finds nothing left to post, and the next reply resumes the new pause.
+    await Promise.all(newConversations().resumeWatching());
+    expect(answers()).toBe(1);
+    aflow.holdAnswers = false;
+    expect(
+      (await send(directMessage(OPERATOR, 'thanks', NOW, { threadTs: status.ts }))).outcome,
+    ).toBe('continued');
+    expect(aflow.resumes).toHaveLength(2);
+    expect(aflow.refusals).toEqual([]);
+  });
+
+  it('leaves a record a restarted watch picks up, and the answer is posted once', async () => {
+    const status = directMessage(OPERATOR, 'status?', NOW);
+    await send(status);
+    aflow.holdAnswers = true;
+    // This app's watch never wakes again, as one whose process stopped.
+    const stopped = new Conversations({
+      store,
+      slack,
+      api: timingOutApi(),
+      aflowUserId: OWNER,
+      now: () => NOW,
+      sleep: () => new Promise<void>(() => undefined),
+      watchLimitMs: 60 * MINUTE,
+    });
+    const reply = await answerInbound(
+      directMessage(OPERATOR, 'go on', NOW, { threadTs: status.ts }),
+      { ...deps(), conversations: stopped },
+    );
+    expect(reply.outcome).toBe('outcome_unknown');
+    expect(store.threadAt(status.channel, status.ts)?.status).toBe('answering');
+
+    // A reply before the answer is refused, and nothing resumes the old pause.
+    const early = await send(directMessage(OPERATOR, 'and?', NOW, { threadTs: status.ts }));
+    expect(early.outcome).toBe('busy');
+    expect(aflow.resumes).toHaveLength(1);
+
+    aflow.answerHeld();
+    store = ChannelStore.open(storePath, NOW);
+    await Promise.all(newConversations().resumeWatching());
+    await Promise.all(newConversations().resumeWatching());
+
+    expect(answers()).toBe(1);
+    expect(store.threadAt(status.channel, status.ts)?.status).toBe('waiting');
   });
 });
 

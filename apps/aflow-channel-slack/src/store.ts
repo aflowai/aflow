@@ -229,7 +229,7 @@ export class ChannelStore {
   private readonly cardClaims = new Set<string>();
   /** Late messages whose question has a tap at work. Process memory, as above. */
   private readonly lateClaims = new Set<string>();
-  /** New threads whose conversation is starting. Process memory, as above. */
+  /** Threads with a message starting or resuming their conversation. Process memory, as above. */
   private readonly threadClaims = new Set<string>();
 
   private constructor(
@@ -427,13 +427,14 @@ export class ChannelStore {
   }
 
   /**
-   * Takes a thread with no conversation for the one message that starts it, in
-   * one synchronous step. False when the thread has a conversation, or another
-   * message is starting one, so one thread never maps to two sessions.
+   * Takes a thread for the one message that starts or continues its
+   * conversation, in one synchronous step. False while another message holds
+   * it, so one thread never maps to two sessions and two replies never resume
+   * one pause.
    */
   claimThread(channel: string, threadTs: string): boolean {
     const key = `${channel}:${threadTs}`;
-    if (this.threadAt(channel, threadTs) !== undefined || this.threadClaims.has(key)) return false;
+    if (this.threadClaims.has(key)) return false;
     this.threadClaims.add(key);
     return true;
   }

@@ -21,6 +21,11 @@
  *   it.
  * - **An unknown outcome is not sent again.** A start or a resume that may have
  *   reached Aflow says so, and asks the operator to check before sending again.
+ *   A resume that may have landed is watched as one that did, so its answer is
+ *   posted once if it comes.
+ * - **One message per thread at a time.** A message claims its thread before it
+ *   starts or resumes the conversation. Of two that arrive together, one is
+ *   sent and the other is told the Helmsman is still answering.
  */
 import type { AflowApi, ConversationEvent, RouteRefusal } from './aflowApi.js';
 import type { CardTap } from './cardActions.js';
@@ -327,45 +332,60 @@ export class Conversations {
 
   /** Starts the conversation for the record's thread, or continues it. */
   private async converse(record: InboundRecord, text: string): Promise<ConverseResult> {
-    const { store, api } = this.deps;
+    const { store } = this.deps;
     const say = (line: string) => this.say(record.channel, record.threadTs, line);
     if (store.link()?.aflowUserId !== this.deps.aflowUserId) {
       await say(NOT_THE_KEY_OWNER);
       return { outcome: 'refused' };
     }
-    const key = `slack-event:${record.eventId}`;
     const thread = store.threadAt(record.channel, record.threadTs);
-
-    if (thread === undefined) {
-      if (!store.claimThread(record.channel, record.threadTs)) {
-        await say(STILL_ANSWERING);
-        return { outcome: 'busy' };
-      }
-      try {
-        return await this.start(record, text, key);
-      } finally {
-        store.releaseThread(record.channel, record.threadTs);
-      }
-    }
-
-    if (thread.status === 'ended') {
+    if (thread?.status === 'ended') {
       await say(CONVERSATION_ENDED);
       return { outcome: 'ended' };
     }
-    let step: string | undefined;
-    if (thread.status === 'waiting') {
-      step = thread.pausedStepExecutionId ?? undefined;
-      if (step === undefined) {
-        const turn = await this.openTurn(thread);
-        if (turn.kind === 'ended') return this.ended(thread, say);
-        if (turn.kind === 'pause') step = turn.step;
-      }
+    // One message at a time per thread, so two replies never resume one pause.
+    if (thread?.status === 'answering' || !store.claimThread(record.channel, record.threadTs)) {
+      await say(STILL_ANSWERING);
+      return { outcome: 'busy' };
+    }
+    const key = `slack-event:${record.eventId}`;
+    try {
+      return thread === undefined
+        ? await this.start(record, text, key)
+        : await this.resume(thread, text, key, say);
+    } finally {
+      store.releaseThread(record.channel, record.threadTs);
+    }
+  }
+
+  /** Continues a waiting thread's conversation, for a reply that holds the thread's claim. */
+  private async resume(
+    thread: ThreadRecord,
+    text: string,
+    key: string,
+    say: (line: string) => Promise<unknown>,
+  ): Promise<ConverseResult> {
+    const { store, api } = this.deps;
+    let step = thread.pausedStepExecutionId ?? undefined;
+    if (step === undefined) {
+      const turn = await this.openTurn(thread);
+      if (turn.kind === 'ended') return this.ended(thread, say);
+      if (turn.kind === 'pause') step = turn.step;
     }
     if (step === undefined) {
       await say(STILL_ANSWERING);
       return { outcome: 'busy' };
     }
     const resumed = await api.resumeConversation(thread.spaceId, thread.sessionId, step, text, key);
+    if (!resumed.ok && resumed.outcomeUnknown) {
+      // The resume may have landed, so the thread watches for its answer as
+      // for one that did, and never resumes this pause again. It is recorded
+      // before the notice, so a restart watches it too.
+      this.answering(thread, step);
+      // Only a notice: the watch goes on when the post fails.
+      await say(refusalText(resumed)).catch(() => undefined);
+      return { outcome: 'outcome_unknown', watching: this.watch(thread) };
+    }
     if (!resumed.ok) {
       // The next reply reads the pause again rather than trust this one. A 409
       // says the pause is closed, resumed outside this thread or moved on, so
@@ -384,7 +404,13 @@ export class Conversations {
       await say(resumed.status === 409 ? MOVED_ON : refusalText(resumed));
       return { outcome: refusalOutcome(resumed) };
     }
-    store.updateThread(
+    this.answering(thread, step);
+    return { outcome: 'continued', watching: this.watch(thread) };
+  }
+
+  /** Records that the Helmsman answers the reply to `step`, so a watch posts a later pause only. */
+  private answering(thread: ThreadRecord, step: string): void {
+    this.deps.store.updateThread(
       thread,
       {
         status: 'answering',
@@ -394,7 +420,6 @@ export class Conversations {
       },
       this.now(),
     );
-    return { outcome: 'continued', watching: this.watch(thread) };
   }
 
   /** Starts the conversation for a thread this message holds the claim on. */
