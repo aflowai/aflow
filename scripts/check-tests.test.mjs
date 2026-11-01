@@ -206,12 +206,18 @@ describe('a run lost to time alone', () => {
         { file: 'c.test.ts', message: '[vitest-pool]: Timeout starting forks runner.' },
         { message: '[vitest-worker]: Timeout calling "onTaskUpdate" with "[]"' },
         { message: '[birpc] timeout on calling "onCollected"' },
+        { message: '[vitest-pool-runner]: Timeout waiting for worker to respond' },
+        {
+          file: 'd.test.ts',
+          message: 'The beforeAll phase of "setup" hook timed out after 30000ms.',
+        },
       ],
     };
     expect(testsTimedOutAlone(lostToLoad)).toEqual([
       'b.test.ts',
       'c.test.ts',
       OUTSIDE_EVERY_TEST_FILE,
+      'd.test.ts',
     ]);
     // A test that failed on its own, or an error that is no time-out, is a failure.
     expect(
@@ -226,6 +232,20 @@ describe('a run lost to time alone', () => {
         tests: [{ ...passed, state: 'failed', errors: ['expected 1 to be 2'] }],
       }),
     ).toEqual([]);
+    // An error that merely mentions a time-out is not one Vitest reported of the run.
+    for (const message of [
+      'connect ETIMEDOUT 127.0.0.1:6379',
+      'Connection timeout',
+      'Request timed out after 5000ms',
+      'expected timeout to be 30000',
+      'Error: Test timed out in 30000ms.',
+      'fetch failed: [birpc] timeout on calling "onCollected"',
+    ]) {
+      expect(
+        testsTimedOutAlone({ ...lostToLoad, errors: [{ file: 'e.test.ts', message }] }),
+      ).toEqual([]);
+      expect(testsTimedOutAlone({ tests: [passed], errors: [{ message }] })).toEqual([]);
+    }
   });
 
   it('is summarised from what Vitest reports, files relative to the repository', () => {

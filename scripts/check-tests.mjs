@@ -25,11 +25,19 @@ const REPORTER = fileURLToPath(new URL('./check-test-reporter.mjs', import.meta.
 const TIMEOUT_MESSAGE = /^(?:Test|Hook) timed out in \d+ms\./;
 
 /**
- * What Vitest says of anything else stopped at its time: a worker that did not
- * start, a call between the run and a worker that went unanswered, a worker
- * that did not end. A loaded machine does all of these, and none names a test.
+ * What Vitest itself says of anything else stopped at its time: a worker that
+ * did not start, a call between the run and a worker that went unanswered, a
+ * worker that did not answer, a hook phase that did not end. A loaded machine
+ * does all of these, and none names a test. Each is matched from the start of
+ * the message, so an error that merely mentions a time-out is no time-out.
  */
-const RUN_TIMEOUT_MESSAGE = /\btim(?:eout|ed out)\b/i;
+const RUN_TIMEOUT_MESSAGES = [
+  /^\[vitest-pool\]: Timeout starting \S+ runner\./,
+  /^\[vitest-pool-runner\]: Timeout waiting for worker to respond/,
+  /^\[vitest-worker\]: Timeout calling "[^"]+"/,
+  /^\[birpc\] timeout on calling "[^"]+"/,
+  /^The \S+ phase of "[^"]+" hook timed out after \d+ms\./,
+];
 
 /** Where an error that names no test file belongs, as `testsTimedOutAlone` lists it. */
 export const OUTSIDE_EVERY_TEST_FILE = 'outside every test file';
@@ -87,7 +95,8 @@ export function testsTimedOutAlone(summary) {
   if (failed.some((test) => test.errors.length === 0 || !test.errors.every(testTimedOut))) {
     return [];
   }
-  const runTimedOut = (message) => testTimedOut(message) || RUN_TIMEOUT_MESSAGE.test(message);
+  const runTimedOut = (message) =>
+    testTimedOut(message) || RUN_TIMEOUT_MESSAGES.some((pattern) => pattern.test(message));
   if (!summary.errors.every((error) => runTimedOut(error.message))) return [];
   return [
     ...new Set([
