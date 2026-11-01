@@ -19,9 +19,8 @@ export const STRANGER_REPLY =
 export const LINKED_REPLY =
   'Linked. Aflow sends you its messages here when you must act and may be away from the machine.';
 
-export const LINKED_OPERATOR_REPLY =
-  'Aflow sends you its messages here, and a card’s buttons decide its item from here. Talking ' +
-  'to Aflow from Slack comes in a later release, so open Aflow to ask it something.';
+export const CODE_ALREADY_USED_REPLY =
+  'This code has already linked this account, so it changed nothing. It was not sent to the Helmsman.';
 
 /** A code as typed: case, spaces and dashes do not matter. */
 export function normalizeLinkCode(text: string): string {
@@ -38,10 +37,16 @@ function matchesCode(text: string, config: ChannelSlackConfig, now: Date): strin
   return same ? offered : undefined;
 }
 
+/**
+ * Links on the code, refuses a stranger, and posts nothing for any other
+ * message from the linked operator: `operator` hands it on to the caller. A
+ * code the operator sends again, a redelivered one included, is answered here
+ * and never reaches the Helmsman.
+ */
 export async function answerDirectMessage(
-  message: DirectMessage,
+  message: Pick<DirectMessage, 'slackUserId' | 'slackTeamId' | 'channel' | 'text'>,
   deps: { store: ChannelStore; config: ChannelSlackConfig; slack: SlackClient; now?: () => Date },
-): Promise<'linked' | 'operator' | 'stranger'> {
+): Promise<'linked' | 'code_used' | 'operator' | 'stranger'> {
   const now = deps.now?.() ?? new Date();
   const code = matchesCode(message.text, deps.config, now);
   if (code !== undefined) {
@@ -58,8 +63,9 @@ export async function answerDirectMessage(
     }
   }
   if (deps.store.link()?.slackUserId === message.slackUserId) {
-    await deps.slack.postMessage(message.channel, LINKED_OPERATOR_REPLY);
-    return 'operator';
+    if (code === undefined) return 'operator';
+    await deps.slack.postMessage(message.channel, CODE_ALREADY_USED_REPLY);
+    return 'code_used';
   }
   await deps.slack.postMessage(message.channel, STRANGER_REPLY);
   return 'stranger';

@@ -8,8 +8,11 @@
  * - a user API key for the instance owner, minted with the instance secret as
  *   `yarn mcp:setup` mints its own, expiring after a year and listed under
  *   Settings → API Keys. The app reads a card's Action Center item and resolves
- *   it with this key, through the routes the web app calls, and calls nothing
- *   else with it. The D3 table in the app is its ceiling;
+ *   it with this key, through the routes the web app calls. It also holds the
+ *   operator's Helmsman conversations with it: it reads the tenant and its
+ *   spaces to find the home space, and starts, resumes and reads a session
+ *   through the session routes. It calls nothing else with it. The D3 table in
+ *   the app is its ceiling on items;
  * - the channel lane's Redis credential, which it also writes into the
  *   platform's `instance.env`, because that credential is what composes the
  *   lane (D1). The stack composes it on its next start.
@@ -278,7 +281,7 @@ export async function main() {
   const expires = typeof expiresAt === 'string' ? expiresAt.slice(0, 10) : 'never';
   say(`wrote ${file} (mode 0600).`);
   say(
-    `${minted ? 'minted' : 'kept'} the key "${KEY_NAME}" for the instance owner, expiring ${expires}, listed under Settings → API Keys. The app reads and decides the Action Center items it sends as cards with it.`,
+    `${minted ? 'minted' : 'kept'} the key "${KEY_NAME}" for the instance owner, expiring ${expires}, listed under Settings → API Keys. The app reads and decides the Action Center items it sends as cards with it, and holds your conversations with the Helmsman.`,
   );
   if (credential.created) {
     say(

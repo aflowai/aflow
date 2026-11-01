@@ -7,13 +7,16 @@
  * tenant schema. One operator and a few small record sets need no shared
  * database, and removing the app and this file leaves nothing in the platform.
  *
- * It keeps three record sets. `link` is the one Slack user this app serves.
+ * It keeps five record sets. `link` is the one Slack user this app serves.
  * `sent` holds each send's `messageRef`, text and item, which make a retried
  * step post once and a repeated message fail. A send is keyed on its run and
  * its step, because a workflow task's step carries the same name in every run
  * of it. `card` holds each card posted, the item it shows and the controls it
- * offered, which is all a tap may resolve. A code that linked once is kept so
- * it cannot link a second time.
+ * offered, which is all a tap may resolve. `inbound` holds each Slack event
+ * the operator sent, so a redelivered one does nothing, with when it was sent,
+ * when it arrived and what came of it. `thread` holds each Slack thread and the
+ * Helmsman session it continues. A code that linked once is kept so it cannot
+ * link a second time.
  *
  * Every write replaces the whole file through a rename, and every write is
  * synchronous, so one process never interleaves two of them.
@@ -78,9 +81,81 @@ export const CardRecordSchema = z.object({
   text: z.string(),
   postedAt: z.string().min(1),
   /** What the card says once it is decided, or once a tap learned it was. */
-  outcome: z.object({ note: z.string().min(1), at: z.string().min(1) }).nullable(),
+  outcome: z
+    .object({
+      note: z.string().min(1),
+      at: z.string().min(1),
+      /** True when the card went out of date while its item stayed open at Aflow. */
+      stillOpen: z.boolean().optional(),
+    })
+    .nullable(),
 });
 export type CardRecord = z.infer<typeof CardRecordSchema>;
+
+/**
+ * One Slack event from the linked operator (Plan 327 D4, D6). Its id is unique,
+ * so a redelivered event finds its record and does nothing. Only the
+ * operator's own events are recorded, and a stranger's leave no record.
+ */
+export const InboundRecordSchema = z.object({
+  eventId: z.string().min(1),
+  channel: z.string().min(1),
+  /** The message's own Slack timestamp. */
+  ts: z.string().min(1),
+  /** The thread the message opened or replied in. */
+  threadTs: z.string().min(1),
+  sentAt: z.string().min(1),
+  arrivedAt: z.string().min(1),
+  ageMs: z.number().int().nonnegative(),
+  outcome: z.enum([
+    'received',
+    'card_reply',
+    'started',
+    'continued',
+    'busy',
+    'ended',
+    'held_late',
+    'ran_late',
+    'discarded',
+    'not_sent',
+    'outcome_unknown',
+    'refused',
+  ]),
+  /** The "Run it now?" question a late message got. */
+  promptTs: z.string().min(1).optional(),
+  /** A late message's text, kept only until the operator runs or discards it. */
+  heldText: z.string().optional(),
+  decidedAt: z.string().min(1).optional(),
+});
+export type InboundRecord = z.infer<typeof InboundRecordSchema>;
+export type InboundOutcome = InboundRecord['outcome'];
+
+/** A Slack thread and the Helmsman session it continues (Plan 327 D4). */
+export const ThreadRecordSchema = z.object({
+  channel: z.string().min(1),
+  threadTs: z.string().min(1),
+  sessionId: z.string().min(1),
+  spaceId: z.string().min(1),
+  /**
+   * `answering` while the app waits for the Helmsman's reply, `waiting` once it
+   * paused for the operator, `ended` once the session finished.
+   */
+  status: z.enum(['answering', 'waiting', 'ended']),
+  /**
+   * The paused step the last `SessionPaused` named, which a reply resumes.
+   * Null while the Helmsman answers, or when the app does not know the pause.
+   */
+  pausedStepExecutionId: z.string().min(1).nullable(),
+  /**
+   * The pause whose answer the app last posted. A pause counts as the next
+   * answer only when it names another step, so a watch that starts again after
+   * a restart never posts one answer twice.
+   */
+  relayedStepExecutionId: z.string().min(1).nullable(),
+  startedAt: z.string().min(1),
+  updatedAt: z.string().min(1),
+});
+export type ThreadRecord = z.infer<typeof ThreadRecordSchema>;
 
 const StoreDataSchema = z.object({
   /** The ledger: every migration id applied, in order. */
@@ -89,6 +164,8 @@ const StoreDataSchema = z.object({
   usedLinkCodes: z.array(z.string()),
   sent: z.array(SentRecordSchema),
   cards: z.array(CardRecordSchema),
+  inbound: z.array(InboundRecordSchema),
+  threads: z.array(ThreadRecordSchema),
 });
 type StoreData = z.infer<typeof StoreDataSchema>;
 
@@ -106,6 +183,10 @@ const MIGRATIONS: readonly Migration[] = [
   {
     id: '0002-cards',
     apply: (data) => ({ ...data, cards: [] }),
+  },
+  {
+    id: '0003-conversations',
+    apply: (data) => ({ ...data, inbound: [], threads: [] }),
   },
 ];
 
@@ -137,6 +218,8 @@ export class ChannelStore {
   private readonly claims = new Set<SentRecord>();
   /** Cards with a tap or reply at the API. Process memory, as the send claims are. */
   private readonly cardClaims = new Set<string>();
+  /** Late messages whose question has a tap at work. Process memory, as above. */
+  private readonly lateClaims = new Set<string>();
 
   private constructor(
     private readonly path: string,
@@ -260,8 +343,8 @@ export class ChannelStore {
   }
 
   /** Records what the card now says, so a later tap or reply reads it. */
-  settleCard(card: CardRecord, note: string, at: Date): void {
-    card.outcome = { note, at: at.toISOString() };
+  settleCard(card: CardRecord, note: string, at: Date, stillOpen = false): void {
+    card.outcome = { note, at: at.toISOString(), ...(stillOpen ? { stillOpen } : {}) };
     this.persist();
   }
 
@@ -280,6 +363,79 @@ export class ChannelStore {
     this.cardClaims.delete(`${card.channel}:${card.ts}`);
   }
 
+  /**
+   * Records an event from the operator before anything acts on it, in one
+   * synchronous step. False when the event, or the same Slack message under
+   * another event id, is already recorded: a redelivery does nothing.
+   */
+  claimInbound(record: InboundRecord, now: Date = new Date()): boolean {
+    const seen = this.data.inbound.some(
+      (entry) =>
+        entry.eventId === record.eventId ||
+        (entry.channel === record.channel && entry.ts === record.ts),
+    );
+    if (seen) return false;
+    this.prune(now);
+    this.data.inbound.push(record);
+    this.persist();
+    return true;
+  }
+
+  /** Records what came of an event. A held text is dropped unless the patch keeps it. */
+  settleInbound(
+    record: InboundRecord,
+    patch: Pick<InboundRecord, 'outcome'> & Partial<InboundRecord>,
+  ): void {
+    if (!('heldText' in patch)) delete record.heldText;
+    Object.assign(record, patch);
+    this.persist();
+  }
+
+  /** The late message whose "Run it now?" question is this Slack message. */
+  inboundAtPrompt(channel: string, promptTs: string): InboundRecord | undefined {
+    return this.data.inbound.find(
+      (entry) => entry.channel === channel && entry.promptTs === promptTs,
+    );
+  }
+
+  /** Takes a late message for one tap at a time, as `claimCard` takes a card. */
+  claimLate(record: InboundRecord): boolean {
+    if (this.lateClaims.has(record.eventId)) return false;
+    this.lateClaims.add(record.eventId);
+    return true;
+  }
+
+  releaseLate(record: InboundRecord): void {
+    this.lateClaims.delete(record.eventId);
+  }
+
+  threadAt(channel: string, threadTs: string): ThreadRecord | undefined {
+    return this.data.threads.find(
+      (thread) => thread.channel === channel && thread.threadTs === threadTs,
+    );
+  }
+
+  addThread(thread: ThreadRecord): void {
+    this.data.threads.push(thread);
+    this.persist();
+  }
+
+  updateThread(
+    thread: ThreadRecord,
+    patch: Partial<
+      Pick<ThreadRecord, 'status' | 'pausedStepExecutionId' | 'relayedStepExecutionId'>
+    >,
+    at: Date,
+  ): void {
+    Object.assign(thread, patch, { updatedAt: at.toISOString() });
+    this.persist();
+  }
+
+  /** Threads whose answer the app was waiting on, so a restart watches them again. */
+  threadsAnswering(): ThreadRecord[] {
+    return this.data.threads.filter((thread) => thread.status === 'answering');
+  }
+
   private prune(now: Date): void {
     this.data.sent = this.data.sent.filter(
       (record) =>
@@ -287,6 +443,14 @@ export class ChannelStore {
     );
     this.data.cards = this.data.cards.filter(
       (card) => now.getTime() - Date.parse(card.postedAt) < SENT_RETENTION_MS,
+    );
+    this.data.inbound = this.data.inbound.filter(
+      (entry) => now.getTime() - Date.parse(entry.arrivedAt) < SENT_RETENTION_MS,
+    );
+    this.data.threads = this.data.threads.filter(
+      (thread) =>
+        thread.status === 'answering' ||
+        now.getTime() - Date.parse(thread.updatedAt) < SENT_RETENTION_MS,
     );
   }
 

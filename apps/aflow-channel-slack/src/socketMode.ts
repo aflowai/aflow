@@ -1,19 +1,25 @@
 /**
  * Slack Socket Mode, as far as the app needs it: direct messages to the bot,
- * for linking and for replies in a card's thread, and taps on a card's buttons.
+ * for linking, for replies in a card's thread and for conversations with the
+ * Helmsman, and taps on the buttons of a message the bot posted.
  *
  * Socket Mode needs no public URL, which is why an app on the operator's own
- * machine can receive anything at all. Every envelope is acknowledged at once,
- * so Slack does not redeliver it. A `disconnect` or a dropped socket opens a
- * fresh URL and connects again.
+ * machine can receive anything at all. Every envelope is acknowledged at once.
+ * Slack can still deliver an event twice, around a dropped socket, and the
+ * app's `inbound` record answers the second one. A `disconnect` or a dropped
+ * socket opens a fresh URL and connects again.
  */
 import type { CardTap } from './cardActions.js';
 import type { SlackClient } from './slack.js';
 
 export interface DirectMessage {
+  /** Slack's id for the event, the same on every redelivery of it. */
+  eventId: string;
   slackUserId: string;
   slackTeamId?: string;
   channel: string;
+  /** The message's own timestamp, which also says when it was sent. */
+  ts: string;
   text: string;
   /** The message this one replies under, when it was sent in a thread. */
   threadTs?: string;
@@ -37,17 +43,27 @@ export function directMessageOf(envelope: unknown): DirectMessage | undefined {
   const user = event['user'];
   const channel = event['channel'];
   const text = event['text'];
-  if (typeof user !== 'string' || typeof channel !== 'string' || typeof text !== 'string') {
+  const ts = event['ts'];
+  if (
+    typeof user !== 'string' ||
+    typeof channel !== 'string' ||
+    typeof text !== 'string' ||
+    typeof ts !== 'string'
+  ) {
     return undefined;
   }
   const team = payload?.['team_id'];
   const threadTs = event['thread_ts'];
+  const eventId = payload?.['event_id'];
   return {
+    // A message keeps its channel and timestamp on every delivery, so they stand in for a missing id.
+    eventId: typeof eventId === 'string' && eventId !== '' ? eventId : `${channel}:${ts}`,
     slackUserId: user,
     channel,
+    ts,
     text,
     ...(typeof team === 'string' ? { slackTeamId: team } : {}),
-    ...(typeof threadTs === 'string' && threadTs !== event['ts'] ? { threadTs } : {}),
+    ...(typeof threadTs === 'string' && threadTs !== ts ? { threadTs } : {}),
   };
 }
 

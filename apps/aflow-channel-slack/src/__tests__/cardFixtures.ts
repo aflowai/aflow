@@ -175,6 +175,11 @@ export function fakeApi(...items: ActionCenterItem[]): FakeApi {
       const answered: ResolvedItem = { ok: true, item: resolved };
       return Promise.resolve(answered);
     },
+    // A card test holds no conversation; `conversationFixtures.ts` serves those routes.
+    homeSpace: () => Promise.reject(new Error('no conversation in a card test')),
+    startConversation: () => Promise.reject(new Error('no conversation in a card test')),
+    resumeConversation: () => Promise.reject(new Error('no conversation in a card test')),
+    latestEvents: () => Promise.reject(new Error('no conversation in a card test')),
   };
   return api;
 }

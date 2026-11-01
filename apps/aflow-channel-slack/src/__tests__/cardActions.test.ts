@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   CARD_BUSY,
   CHECK_BEFORE_ANSWERING,
+  ITEM_CHANGED,
   NOT_SENT_TRY_AGAIN,
   OUTCOME_UNKNOWN,
   REPLY_CARD_SETTLED,
@@ -22,6 +23,9 @@ import {
   REPLY_AGAIN,
   REPLY_NEEDS_AFLOW,
   TAP_ALREADY_DECIDED,
+  TAP_CARD_OUTDATED,
+  TAP_NO_CARD,
+  TAP_NOT_OFFERED,
   answerCardReply,
   answerCardTap,
 } from '../cardActions.js';
@@ -162,12 +166,69 @@ describe('a tap on a card', () => {
     expect(buttonsOf(edit?.blocks)).toEqual([]);
   });
 
-  it('resolves nothing for a button the card did not offer', async () => {
+  it('says the item changed, and never "already decided", when a 409 finds it still open', async () => {
+    const card = await sendCard(approval);
+    // The step paused again: the item is open under an origin the card did not read.
+    const moved = { ...approval, origin: { ...STEP_ORIGIN, pauseVersion: 1 } } as ActionCenterItem;
+    api.items.set(approval.id, moved);
+
+    expect(await tap(card, 'approve')).toBe('item_changed');
+
+    expect(api.items.get(approval.id)?.status).toBe('open');
+    const edit = slack.updates[0];
+    expect(textOf(edit?.blocks)).toContain(ITEM_CHANGED);
+    expect(textOf(edit?.blocks)).not.toContain('Already decided');
+    expect(buttonsOf(edit?.blocks)).toEqual([]);
+
+    expect(await tap(card, 'approve')).toBe('item_changed');
+    expect(api.resolves).toHaveLength(1);
+    expect(slack.posts.at(-1)?.text).toBe(`${TAP_CARD_OUTDATED} ${ITEM_CHANGED}`);
+  });
+
+  it('reads the item again when a 409 carries none, and says what it found', async () => {
+    const card = await sendCard(approval);
+    const stale = {
+      ok: false as const,
+      status: 409,
+      error: 'STALE_ACTION_CENTER_ITEM',
+      message: 'The item moved on.',
+      retryable: false,
+      outcomeUnknown: false,
+    };
+    api.nextAnswer = stale;
+
+    expect(await tap(card, 'approve')).toBe('item_changed');
+    expect(api.reads.at(-1)).toMatchObject({ itemId: approval.id });
+
+    const other = await sendCard(question, 'exec-2');
+    api.items.delete(question.id);
+    api.nextAnswer = stale;
+    expect(await reply(other, 'v2')).toBe('already_decided');
+    expect(textOf(slack.updates.at(-1)?.blocks)).toContain('Already decided.');
+  });
+
+  it('answers a tap on a message it holds no card record for, and resolves nothing', async () => {
+    const outcome = await answerCardTap(
+      { slackUserId: OPERATOR, channel: 'D-1', messageTs: '1699999999.000', actionId: 'approve' },
+      deps,
+    );
+
+    expect(outcome).toBe('no_card');
+    expect(api.resolves).toEqual([]);
+    expect(slack.posts.at(-1)).toEqual({
+      channel: 'D-1',
+      text: TAP_NO_CARD,
+      threadTs: '1699999999.000',
+    });
+  });
+
+  it('resolves nothing for a button the card did not offer, and says so', async () => {
     const card = await sendCard(planAsk);
     expect(card.controls).toEqual([]);
 
     expect(await tap(card, 'approve')).toBe('ignored');
     expect(api.resolves).toEqual([]);
+    expect(slack.posts.at(-1)).toMatchObject({ text: TAP_NOT_OFFERED, threadTs: card.ts });
   });
 
   it('resolves nothing for a tap from anyone but the linked operator', async () => {
