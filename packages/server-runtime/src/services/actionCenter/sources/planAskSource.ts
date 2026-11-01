@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  ACTION_CENTER_ITEM_ID_PREFIX,
   PLAN_NODE_UPDATE_OPERATION_ID,
   planItemSummary,
   planItemTitle,
@@ -26,7 +27,7 @@ import { PLAN_WRITE_OPERATOR_ONLY } from '../../../lib/planWriteAuthority.js';
 
 export function planAskItem(node: PlanNode): ActionCenterSourceItem {
   return {
-    id: `plan-ask:${node.nodeId}`,
+    id: `${ACTION_CENTER_ITEM_ID_PREFIX.planAsk}${node.nodeId}`,
     spaceId: node.spaceId,
     kind: 'human_approval',
     origin: { type: 'plan_ask', nodeId: node.nodeId, revision: node.revision },
@@ -59,8 +60,11 @@ export function createPlanAskSource(deps: ActionCenterSourceDeps): ActionCenterS
       return (await listWaitingNodes(context(scope))).map(planAskItem);
     },
     async getById(ctx, id) {
-      if (!id.startsWith('plan-ask:')) return null;
-      const parsed = z.string().uuid().safeParse(id.slice('plan-ask:'.length));
+      if (!id.startsWith(ACTION_CENTER_ITEM_ID_PREFIX.planAsk)) return null;
+      const parsed = z
+        .string()
+        .uuid()
+        .safeParse(id.slice(ACTION_CENTER_ITEM_ID_PREFIX.planAsk.length));
       if (!parsed.success) return null;
       const node = await findWaitingNode(context(ctx), parsed.data);
       return node ? planAskItem(node) : null;

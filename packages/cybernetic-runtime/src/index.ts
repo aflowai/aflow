@@ -210,6 +210,7 @@ export * from './waits.js';
 
 // Phase 3 — attention cache
 export * from './attentionCache.js';
+export * from './sessionGate.js';
 export * from './attentionCacheSubscriber.js';
 
 export * from './skillValidity/skillValidity.js';

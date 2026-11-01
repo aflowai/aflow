@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  ACTION_CENTER_ITEM_ID_PREFIX,
   PLAN_NODE_PROSE_MAX_CHARS,
   PLAN_NODE_UPDATE_OPERATION_ID,
   planItemSummary,
@@ -29,7 +30,7 @@ import {
 } from '../types.js';
 import { PLAN_WRITE_OPERATOR_ONLY } from '../../../lib/planWriteAuthority.js';
 
-const ITEM_ID_PREFIX = 'plan-decision:';
+const ITEM_ID_PREFIX = ACTION_CENTER_ITEM_ID_PREFIX.planDecision;
 
 const NodeIdSchema = z.string().uuid();
 

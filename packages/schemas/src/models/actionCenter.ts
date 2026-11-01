@@ -329,6 +329,28 @@ export const ActionCenterItemKindSchema = z.enum([
 ]);
 export type ActionCenterItemKind = z.infer<typeof ActionCenterItemKindSchema>;
 
+/**
+ * How each source's item id begins. A source reads its own items back by the
+ * prefix, and the Helmsman's attention block writes the same ids from the rows
+ * the sources read (Plan 338 D2), so `human.action_center.focus` finds them.
+ */
+export const ACTION_CENTER_ITEM_ID_PREFIX = {
+  pausedStep: 'step:',
+  workflowHumanTask: 'workflow-task:',
+  workflowWriteApproval: 'workflow-write-approval:',
+  workflowOAuthConsent: 'workflow-oauth-consent:',
+  computeEgress: 'settings:egress-',
+  planAsk: 'plan-ask:',
+  planDecision: 'plan-decision:',
+} as const;
+
+/** The title of a pending compute-egress request. */
+export function computeEgressTitle(scope: 'tenant' | 'space', hostCount: number): string {
+  return scope === 'tenant'
+    ? `Compute egress (tenant): ${String(hostCount)} host(s)`
+    : `Compute egress: ${String(hostCount)} host(s)`;
+}
+
 export const ActionCenterRequesterSchema = z.object({
   kind: z.enum(['agent', 'gate', 'coach', 'workflow', 'system']),
   /** Display label, e.g. "Helmsman", "Coach", "MCP gate: stripe", "Workflow: kaggle-experiment". */

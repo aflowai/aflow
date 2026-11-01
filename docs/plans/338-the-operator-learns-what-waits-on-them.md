@@ -1,10 +1,12 @@
 # Plan 338 — The operator learns what waits on them
 
-**Status:** P0 merged. P1 built: the listing rule, the merge-wait flag, the two caps in the schema, the sidebar count, the label table and the help articles. P2 to P4 are not built.
+**Status:** P0 merged. P1 built: the listing rule, the merge-wait flag, the two caps in the schema, the sidebar count, the label table and the help articles. P2 built: the counts, the section and the ceiling test. P3 and P4 are not built.
 
 **Builds on:** Plan 331 (D3.3, the asked-once rule, and the resident), Plan 332 (the overview, the column rule of D4, the open question of §8), Plan 337 (the decision card, written here by hand because 337 P3 is not merged), Plan 333 (D2's writing rules).
 
-**Leaves alone:** every plan status and the column rule that places a step, the asked-once record and the note line it writes, the stream walk, the Action Center's resolve paths, `human.action_center.focus`, the session URL.
+**Leaves alone:** every plan status and the column rule that places a step, the asked-once record and the note line it writes, the stream walk, the Action Center's resolve paths, the session URL.
+
+**Changes `human.action_center.focus`:** P2 widens it to the ids the section lists. `ACTION_CENTER_FOCUS_ITEM_ID_PREFIXES` (`packages/schemas/src/operations/human.ts`) adds the five attention prefixes `plan-ask`, `plan-decision`, `workflow-task`, `workflow-write-approval` and `workflow-oauth-consent` to `proposal`, `step`, `gate` and `settings`. The schema's `itemId` pattern and the orchestrator's bare-id check both read that list. The orchestrator handler copies the kind and title the cached attention block lists for a non-proposal id onto the step output as `listed`. The chat renders every non-proposal focus as an `InlineFocusedItem` card with the item's kind, title and state. The card holds no answer control. It links a plan step to its node on the plan page and points every other item to Pending in the Workbench.
 
 ## Decision card
 
@@ -160,11 +162,21 @@ The kinds are fixed. Plan steps are items with origin `plan_ask` or `plan_decisi
 
 **The source of the counts.** The builder runs in the orchestrator (`apps/aflow-orchestrator/src/services/SessionOrchestrator/helpers/agentTurn.ts`), not the server. It counts plan steps from the walk `loadActivePlanTree` already makes, as two sets that match the sidebar's two origins. One is the nodes D1's predicate keeps, imported from `asks.ts`, and it leaves out `decide` nodes. The other is the open `decide` nodes under open branches, by the rule `listOpenDecisions` lists by (`plan/operations.ts`). Each set stops at its source's cap of 50. Where either set holds 50, the count gains a "+", by the sidebar's rule. The walk sees every waiting node, but the builder marks the cap and not the cut, so it reads as the sidebar reads. For one state of the tree, the Helmsman's plan-step count and the sidebar's count therefore agree, digits and "+" alike. Two limits bound that claim. The sidebar's count can lag the tree by one rebuild (F8). The list route returns at most 200 items (`routes/action-center.ts`), so the claim holds where the space holds 200 open items or fewer. It counts gates and consents with count queries over the tables their sources read (`pausedStepSource.ts`, `workflowHumanTaskSource.ts`, `workflowWriteApprovalSource.ts`, `workflowOAuthConsentSource.ts`, `computeEgressSource.ts`). It does not call the aggregator.
 
-**The ceiling.** The section holds at most 500 tokens by `estimateStringTokens` (`packages/schemas/src/runtime/tokenEstimate.ts`). A test renders five lines with 120-character titles and the longest item ids, and fails above 500. P2 records the measured number of one live space here. The 120-character cut is a prompt budget, measured, and not a write validation.
+**The ceiling.** The section holds at most 500 tokens by `estimateStringTokens` (`packages/schemas/src/runtime/tokenEstimate.ts`). A test renders five lines with 120-character titles and the longest item ids, and fails above 500. The 120-character cut is a prompt budget, measured, and not a write validation.
+
+**The measurement.** These figures come from `estimateStringTokens` over the rendered section.
+
+| Section                                                                           | Characters | Tokens |
+| --------------------------------------------------------------------------------- | ---------- | ------ |
+| The ceiling test: five plan-step lines, 120-character titles, a 64-character slug | 1,682      | 481    |
+| The example above: 3 plan steps, 1 run gate, 0 consents, one line                 | 301        | 86     |
+| Nothing waits: `Waiting on a person: 0 plan steps, 0 run gates, 0 consents.`      | 59         | 17     |
+
+The figure for one live space is not recorded yet. No stack ran where P2 was built, so no live space could be read. The P2 exit records it.
 
 **Not consumed.** These lines are not `attention_items` rows. A turn does not consume them, and they show until the item resolves.
 
-**Staleness.** A gate or a consent does not bump the attention generation. The cache's 60-second lifetime bounds how long its count can lag (F11).
+**Staleness.** A session's pause and its resolution bump the attention generation. The projection worker decides from the session row, not from the events it flushes (`movesSessionGate`, `ProjectionWorker.ts`). It reads the row's prior status, current step, pause type and parked operation under `FOR UPDATE` in the upsert's transaction. It bumps after the row is durable, and only when the row enters a pause the count can hold as a gate, leaves it, or stands at one on another step. `mayHoldSessionGate` (`sessionGate.ts`) names that rule, and `PAUSED_SESSIONS_SQL` reads the same one. A gate pause is the user executor's ask or approve, or a pause typed `oauth_consent` or `approval`. A parent paused `subflow_waiting` holds its child's bubbled pause, and the count lists it at each level of the chain, so its pause and its resume bump too. A chat turn waiting for its next message (`user_input`) and every other pause type move nothing. A workflow run's pause, resume and end bump it through `emitRunUpdated` (`runEvents.ts`). A compute-egress request bumps nothing, so its count can lag by the cache's 60-second lifetime (F11).
 
 _Rejected:_ item bodies in the context. A gate's request or a plan step's note costs thousands of tokens, and the Helmsman only points.
 
@@ -317,6 +329,24 @@ _Delivered (P1)._ The items below were built.
 **Open:** the phase exit on the live stack.
 
 **P2 — The Helmsman knows what waits (D2).** It holds the counts, the section and the ceiling test, and records the measured tokens in D2. _Exit:_ asked "is anything waiting on me?", a Helmsman names the count and points at the plan link without a tool call.
+
+_Delivered (P2)._ The items below were built.
+
+- **The section.** `waitingOnPerson.ts` in `@aflow/cybernetic-runtime` holds the data, the reads and the rendering. `buildHelmsmanAttention` gathers it into `waitingOnPerson`, and `renderAttentionContext` renders it after the plan. The heading counts plan steps, run gates and consents. Up to five lines follow, newest first. Each line holds a title cut to 120 characters, the item's `[itemId: …]` and, for a plan step, `/s/<slug>/plan?node=<nodeId>`. A count that fails to read is named as unread, never shown as zero.
+- **The plan-step count.** `loadActivePlanTree` returns the tree and the waiting steps from its one walk. `selectWaitingNodes` (`asks.ts`) and `selectOpenDecisions` (`operations.ts`) are the rules the two plan sources list by, and the builder calls the same functions. `pendingPlanStepCount` in `@aflow/schemas` turns the two sets into the count, and the sidebar's `planPendingCount` reads it too.
+- **The gate and consent counts.** `readWaitingGates` reads the five sources' tables in one transaction. It returns a count per kind and the newest five rows of each, and it never calls the aggregator. Postgres reads a paused request's kind from the payload its ref holds inline. So a conversation waiting for its next message counts as no gate. A consent that a workflow run owns counts once, under the run.
+- **Shared with the sources.** `ACTION_CENTER_ITEM_ID_PREFIX` names each source's id prefix. `humanRequestTitle`, `oauthConsentTitle`, `writeApprovalTitle`, `pausedRequestTitle` and `computeEgressTitle` give each item its title. The sources build their items from these, and the section names an item by the same id and title.
+- **The builder's size.** `attentionBuilder.ts` stood two lines under its large-file tolerance. The anomaly reads move unchanged to `attentionAnomalies.ts`, which makes room for the section.
+- **Tests.** `waitingOnPerson.test.ts` covers the ceiling, the pointer line, the count at 49, 50 and 52 waiting nodes against the sidebar's rule, the absence of any summary or note, and the drop after an approval. `waitingOnPersonGates.pg.test.ts` covers the gate and consent counts against Postgres and the drop after an approval.
+
+**Where the counts may differ from the Action Center.** These are deliberate, and each is small.
+
+- A parent paused `subflow_waiting` holds its child's ref, and `pausedStepSource` lists it by the child's request. The count reads that request's kind from the paused child holding the same ref, down the chain to a depth of 10. A chain whose child row is gone, holds another ref or runs deeper is not counted.
+- A consent run counts among the newest 200 runs paused `needs_oauth_consent`, the window `workflowOAuthConsentSource` cuts before it drops a run with no consent. A run whose resume contract is stored outside its ref counts unread, so a stored contract with no consent still counts.
+- A compute-egress request does not bump the attention generation, so its count can lag by the cache's 60 seconds (F11). A session's pause or its resolution bumps it at the row's `PAUSED` edge, and a workflow run's transition bumps it through `emitRunUpdated`.
+- The section counts the five sources this plan names. Session invitations, browser handoffs and integration-host requests also sit in the approvals and inputs lanes, and they are not counted.
+
+**Open:** the measured tokens of one live space in D2, and the phase exit on the live stack.
 
 **P3 — The Workbench's default (D3), the measurement first.** It records the measured reads of both columns of D3's table first. It then builds the lazy sections, the remembered state and the two reads onto the cache. _Exit:_ the operator reads the numbers and keeps or changes the recommendation. The dock then opens as decided.
 
