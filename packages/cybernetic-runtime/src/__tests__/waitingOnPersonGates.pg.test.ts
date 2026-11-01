@@ -172,6 +172,7 @@ describeDb('readWaitingGates — counts over the tables the sources read (real D
       tx.insert(sessions).values({
         sessionId,
         targetKind: 'platform-role',
+        targetSystemRole: 'cybernetic-helmsman',
         agentVersion: '1',
         status: 'PAUSED',
         spaceId,
