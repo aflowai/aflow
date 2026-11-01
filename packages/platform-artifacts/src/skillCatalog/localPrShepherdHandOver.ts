@@ -93,33 +93,36 @@ export const HAND_OVER_TO_NEW_CONVERSATION = 'hand_over';
 const HAND_OVER_DEFERRED = 'defer';
 
 /**
- * Plan 339 D4: a branch whose owning conversation is live is that
+ * Plan 339 D4: a branch whose owning conversation can act is that
  * conversation's. The owner is the Helmsman conversation that started a
- * publication of the branch, and has not ended. A hand-over would start a
- * second conversation on the branch, and two publications on one branch
- * refuse each other, so the case is not handed over while the owner lives.
- * The owner hears the pull request's events itself. The claim is not taken,
- * so a pass after the owner has ended hands the case over.
+ * publication of the branch, and can act while it has neither ended nor
+ * failed. A hand-over would start a second conversation on the branch, and two
+ * publications on one branch refuse each other, so the case is not handed
+ * over while the owner can act. The owner hears the pull request's events
+ * itself. The claim is not taken, so a pass after the owner has ended or
+ * failed hands the case over. A failed owner is no one here, as it is to the
+ * sweep that starts the pass: a pass the sweep starts for it would otherwise
+ * defer every case it finds.
  */
 export const HAND_OVER_OWNER_RULES: readonly WorkflowRunDecideRule[] = [
   {
     when: { allOf: ['state.headRef != null', 'state.owner == null'] },
     decision: HAND_OVER_DEFERRED,
     reason:
-      "Whether a live conversation drives this pull request's branch could not be read, so no other conversation is started on it. A later pass reads it again.",
+      "Whether a conversation that can act drives this pull request's branch could not be read, so no other conversation is started on it. A later pass reads it again.",
   },
   {
     when: { expression: 'state.owner.runs[0] != null' },
     decision: HAND_OVER_DEFERRED,
     reason:
-      "A Helmsman conversation that has not ended started a publication of this branch, so the branch is that conversation's. It hears the pull request's events itself. No second conversation is started on the branch, because two publications on one branch refuse each other.",
+      "A Helmsman conversation that has neither ended nor failed started a publication of this branch, so the branch is that conversation's. It hears the pull request's events itself. No second conversation is started on the branch, because two publications on one branch refuse each other.",
   },
 ];
 
 export const HAND_OVER_OWNER_OTHERWISE = {
   decision: HAND_OVER_TO_NEW_CONVERSATION,
   reason:
-    'No live conversation drives this branch, so the case is handed to a new Helmsman conversation.',
+    'No conversation that can act drives this branch, so the case is handed to a new Helmsman conversation.',
 };
 
 const NAMED_A_CASE = `tasks.${NAME_HAND_OVER_CASE_TASK}.status == 'succeeded'`;
@@ -235,8 +238,8 @@ export const HAND_OVER_TASKS = [
 
   {
     taskId: READ_BRANCH_OWNER_TASK,
-    name: "Read whether a live conversation drives the pull request's branch",
-    goal: "Where the pass ended on a case it hands over, list the publications of the pull request's branch that a Helmsman conversation started and has not ended, whatever their status. Such a conversation owns the branch, and no second one is started on it.",
+    name: "Read whether a conversation that can act drives the pull request's branch",
+    goal: "Where the pass ended on a case it hands over, list the publications of the pull request's branch that a Helmsman conversation started, whatever their status, where that conversation has neither ended nor failed. Such a conversation owns the branch, and no second one is started on it.",
     type: 'operation' as const,
     operation: 'workflow.run.list',
     when: {
@@ -252,7 +255,7 @@ export const HAND_OVER_TASKS = [
     inputTemplate: {
       slug: PUBLISH_LOCAL_CHANGES.bundle.workflow.slug,
       input: { field: 'branch', equals: bind('headRef') },
-      drivenByLiveConversation: true,
+      drivenByActingConversation: true,
       status: ['running', 'paused', 'completed', 'failed', 'cancelled'],
       limit: 1,
     },
@@ -261,7 +264,7 @@ export const HAND_OVER_TASKS = [
   {
     taskId: JUDGE_HAND_OVER_OWNER_TASK,
     name: 'Judge whether the case goes to a new conversation',
-    goal: "Decide whether the case goes to a new Helmsman conversation. It does not where a live conversation drives the pull request's branch, or where that could not be read: the branch is that conversation's, and two publications on one branch refuse each other.",
+    goal: "Decide whether the case goes to a new Helmsman conversation. It does not where a conversation that can act drives the pull request's branch, or where that could not be read: the branch is that conversation's, and two publications on one branch refuse each other.",
     type: 'operation' as const,
     operation: 'workflow.run.decide',
     when: { expression: NAMED_A_CASE, onMissingRef: SKIP },
@@ -285,7 +288,7 @@ export const HAND_OVER_TASKS = [
   {
     taskId: CLAIM_HAND_OVER_TASK,
     name: 'Claim the hand-over of this case',
-    goal: 'Where the pass ended on a case its rules cannot act on — a rule that hands its case over, or a merge GitHub refused on the head — and no live conversation drives the branch, record that the case is handed to the agent: created only where nothing is recorded for it, so a case is handed over once however many passes find it. A pull request’s case is its head and the case’s name, so a push that moves the head is a new case, and so is another case on the same head.',
+    goal: 'Where the pass ended on a case its rules cannot act on — a rule that hands its case over, or a merge GitHub refused on the head — and no conversation that can act drives the branch, record that the case is handed to the agent: created only where nothing is recorded for it, so a case is handed over once however many passes find it. A pull request’s case is its head and the case’s name, so a push that moves the head is a new case, and so is another case on the same head.',
     type: 'operation' as const,
     operation: 'memory.store.put',
     when: HANDS_OVER,

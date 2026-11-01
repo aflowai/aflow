@@ -450,8 +450,10 @@ lists it.
   Helmsman conversation that started the publication that opened it. The platform holds a
   wait on `pull_request.changed` for that conversation and renews it after each delivery.
   Each event wakes the owner, which runs a pass aimed at the pull request. A case the pass
-  cannot act on is not handed to a new conversation while the owner lives, since two
-  publications on one branch refuse each other. An owner that has ended is forgotten. The
+  cannot act on is not handed to a new conversation while the owner has neither ended nor
+  failed, since two publications on one branch refuse each other. A failed owner holds the
+  branch for nobody: the sweep tends its pull request and a pass hands its cases over. An
+  owner that has ended is forgotten. The
   schedule (the Local PR Shepherd agent, `0 * * * *` by default) is the fallback sweep for
   the pull requests no conversation holds. A firing starts nothing while no loop pull
   request is open, or while each open one is held by its owner or by a waiter whose window

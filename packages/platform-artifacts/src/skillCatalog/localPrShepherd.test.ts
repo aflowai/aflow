@@ -319,10 +319,11 @@ interface Scenario {
   /** The schedule that would start the Helmsman's conversation is refused. */
   handOverFails?: true;
   /**
-   * A Helmsman conversation that has not ended started a publication of the
-   * branch (`live`), or the read of it failed (`fails`). None where unnamed.
+   * A Helmsman conversation that has neither ended nor failed started a
+   * publication of the branch (`acting`), or the read of it failed (`fails`).
+   * None where unnamed.
    */
-  branchOwner?: 'live' | 'fails';
+  branchOwner?: 'acting' | 'fails';
   /** How many of the loop's open pull requests the list holds; one where unnamed. */
   listed?: number;
 }
@@ -889,12 +890,12 @@ function answer(taskId: string, input: Record<string, unknown>, s: Scenario): An
     }
     case 'read-branch-owner': {
       const query = WorkflowRunListInputSchema.parse(input);
-      expect(query.drivenByLiveConversation).toBe(true);
+      expect(query.drivenByActingConversation).toBe(true);
       expect(query.input).toEqual({ field: 'branch', equals: BRANCH });
       if (s.branchOwner === 'fails') return { ok: false };
       return ok({
         runs:
-          s.branchOwner === 'live'
+          s.branchOwner === 'acting'
             ? [
                 {
                   id: 'owner-run',
@@ -4048,9 +4049,9 @@ describe("Plan 339 P3 — the node card's four lines", () => {
   const briefOf = (p: Pass) =>
     String(FlowScheduleCreateInputSchema.parse(p.inputs.get('hand-over-to-agent')).input?.input);
 
-  it('hands no case over on a branch whose owning conversation is live, and hands it over once that conversation has ended', () => {
+  it('hands no case over on a branch whose owning conversation can act, and hands it over once that conversation has ended or failed', () => {
     const handOvers = new Map<string, Record<string, unknown>>();
-    const owned = pass({ ...CONFLICTING, handOvers, branchOwner: 'live' });
+    const owned = pass({ ...CONFLICTING, handOvers, branchOwner: 'acting' });
     expect(owned.decision).toBe('leave');
     const judged = owned.outputs.get('judge-hand-over-owner');
     expect(judged?.['decision']).toBe('defer');
@@ -4058,12 +4059,12 @@ describe("Plan 339 P3 — the node card's four lines", () => {
     expect(owned.statuses.get('claim-hand-over')).toBe('skipped');
     expect(owned.ran).not.toContain('hand-over-to-agent');
     for (const action of ACTIONS) expect(owned.ran).not.toContain(action);
-    // The owner is read from every publication of the branch a live conversation started.
+    // The owner is read from every publication of the branch a conversation that can act started.
     const query = WorkflowRunListInputSchema.parse(owned.inputs.get('read-branch-owner'));
     expect(query).toMatchObject({
       slug: PUBLISH_LOCAL_CHANGES.bundle.workflow.slug,
       input: { field: 'branch', equals: BRANCH },
-      drivenByLiveConversation: true,
+      drivenByActingConversation: true,
       status: ['running', 'paused', 'completed', 'failed', 'cancelled'],
     });
 

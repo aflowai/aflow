@@ -875,7 +875,7 @@ Datastore operations per minute with zero due work, grouped by what each scope m
 | Feature gate | SCHEDULES_ENABLED |
 | Disable policy | safe |
 | Residual poll | — |
-| Source | `apps/aflow-orchestrator/src/services/ScheduleEvaluator.ts`<br>`apps/aflow-orchestrator/src/services/residentDueCheck.ts`<br>`packages/cybernetic-runtime/src/plan/resident.ts`<br>`packages/cybernetic-runtime/src/plan/stream.ts` |
+| Source | `apps/aflow-orchestrator/src/services/ScheduleEvaluator.ts`<br>`apps/aflow-orchestrator/src/services/scheduleSkip.ts`<br>`apps/aflow-orchestrator/src/services/residentDueCheck.ts`<br>`packages/cybernetic-runtime/src/plan/resident.ts`<br>`packages/cybernetic-runtime/src/plan/stream.ts` |
 
 > Runs inside the schedule discovery and dispatch runners with their claims and budgets. Events identify one space directly and never enumerate spaces.
 
@@ -1039,13 +1039,13 @@ Datastore operations per minute with zero due work, grouped by what each scope m
 | Max batch | 100 |
 | Max cycle | 60000 ms |
 | Idle datastore ops/min | 0 |
-| Hot-path producer budget | 0 added RTT — The publication's arm and the pull request's clear write the space's index in the transaction that writes the watch. |
+| Hot-path producer budget | 0 added RTT — The publication's arm, each saved poll and the pull request's clear write the space's index in the transaction that writes the watch. |
 | Feature gate | SCHEDULES_ENABLED |
 | Disable policy | safe |
 | Residual poll | — |
-| Source | `apps/aflow-orchestrator/src/services/ScheduleEvaluator.ts`<br>`apps/aflow-orchestrator/src/services/pullRequestEvents/sweep.ts` |
+| Source | `apps/aflow-orchestrator/src/services/ScheduleEvaluator.ts`<br>`apps/aflow-orchestrator/src/services/scheduleSkip.ts`<br>`apps/aflow-orchestrator/src/services/pullRequestEvents/sweep.ts` |
 
-> Runs inside the schedule discovery runner, on a firing of a schedule whose target is the Local PR Shepherd agent. It reads one range of the space's own index, then each open pull request's watch and waiter hash. A space with no loop pull request open reads one empty range (Plan 339 D4, D5).
+> Runs inside the schedule discovery runner, on a cron firing of a schedule whose target is the Local PR Shepherd agent. It reads one range of the space's own index, then each open pull request's watch and waiter hash. A space with no loop pull request open reads one empty range (Plan 339 D4, D5).
 
 ### `orchestrator.step_stall_watchdog`
 

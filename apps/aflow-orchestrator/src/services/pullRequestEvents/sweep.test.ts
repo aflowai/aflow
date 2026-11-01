@@ -5,11 +5,18 @@
  * next sweep. With none open it reads one empty range, starts nothing and
  * spends none of the schedule's firing cap.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import RedisMock from 'ioredis-mock';
 import type { Redis } from 'ioredis';
 import type postgres from 'postgres';
-import { armPullRequestWatch, clearPullRequestWatch } from '@aflow/redis';
+import {
+  armPullRequestWatch,
+  clearPullRequestWatch,
+  PULL_REQUEST_WATCH_SPACE_KEY,
+  PULL_REQUEST_WATCH_TTL_SECONDS,
+  readPullRequestWatch,
+  savePullRequestWatch,
+} from '@aflow/redis';
 import { declareWait } from '@aflow/cybernetic-runtime';
 
 const { acting } = vi.hoisted(() => ({ acting: vi.fn() }));
@@ -132,6 +139,10 @@ beforeEach(async () => {
   acting.mockReset().mockResolvedValue(true);
 });
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 const ownerActs = (sessionId: string) => acting(sessionId) as Promise<boolean>;
 const deps = (sql: postgres.Sql = sqlClient()) => ({ sql, db: {} as never, redis });
 
@@ -154,6 +165,35 @@ describe('the due check ahead of a shepherd sweep', () => {
     });
     await clearPullRequestWatch(redis, { ...SPACE_REF, subject });
     expect((await shepherdSweepDue(redis, ownerActs, SPACE_REF, T0)).due).toBe(false);
+  });
+
+  it("stays due for a watch its polls keep alive, past the space index's lifetime from the arm", async () => {
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(T0);
+    const subject = await open(7);
+    vi.setSystemTime(T0 + PULL_REQUEST_WATCH_TTL_SECONDS * 1000 - DAY_MS);
+    const watch = await readPullRequestWatch(redis, { ...SPACE_REF, subject });
+    expect(watch).not.toBeNull();
+    await savePullRequestWatch(redis, watch!, Date.now() + 60_000);
+
+    const now = T0 + PULL_REQUEST_WATCH_TTL_SECONDS * 1000 + DAY_MS;
+    vi.setSystemTime(now);
+    expect(await shepherdSweepDue(redis, ownerActs, SPACE_REF, now)).toEqual({
+      due: true,
+      open: 1,
+      unattended: 1,
+    });
+  });
+
+  it('sees a watch the space index does not hold once a poll saves it', async () => {
+    const subject = await open(7);
+    await redis.zrem(PULL_REQUEST_WATCH_SPACE_KEY(SPACE_REF), subject);
+    expect((await shepherdSweepDue(redis, ownerActs, SPACE_REF, T0)).due).toBe(false);
+
+    const watch = await readPullRequestWatch(redis, { ...SPACE_REF, subject });
+    await savePullRequestWatch(redis, watch!, T0 + 60_000);
+    expect((await shepherdSweepDue(redis, ownerActs, SPACE_REF, T0)).due).toBe(true);
   });
 
   it('passes over a pull request its owner holds', async () => {
@@ -216,6 +256,42 @@ describe('the gate on a schedule firing', () => {
     const resident = { ...shepherdRow(), target_kind: 'platform-role', target_agent_id: null };
     expect(await shepherdSweepWanted(deps(), resident, T0)).toBe(true);
     expect(statements).toEqual([]);
+  });
+
+  it('lets a one-shot shepherd schedule fire with no loop pull request open, since a skip would strand it', async () => {
+    const once = {
+      ...shepherdRow(),
+      kind: 'one_shot',
+      cron_expression: null,
+      scheduled_at: '2026-11-01T10:00:00Z',
+    };
+    expect(await shepherdSweepWanted(deps(), once, T0)).toBe(true);
+    expect(statements).toEqual([]);
+
+    const evaluator = new ScheduleEvaluator({
+      redis,
+      sqlClient: sqlClient(),
+      db: {} as never,
+      mode: 'observe',
+    }) as unknown as { recordOccurrence(row: unknown): Promise<boolean> };
+    expect(await evaluator.recordOccurrence(once)).toBe(true);
+    expect(statements.some(({ query }) => query.includes("'skipped'"))).toBe(false);
+  });
+
+  it("counts a skipped sweep under its own metadata key, not the resident heartbeat's", async () => {
+    const evaluator = new ScheduleEvaluator({
+      redis,
+      sqlClient: sqlClient(),
+      db: {} as never,
+      mode: 'observe',
+    }) as unknown as { recordOccurrence(row: unknown): Promise<boolean> };
+    expect(await evaluator.recordOccurrence(shepherdRow())).toBe(false);
+
+    const skip = statements.find(({ query }) => query.includes("'skipped'"));
+    expect(skip?.query).toContain("'{sweep}'");
+    expect(skip?.query).not.toContain('overlap');
+    expect(skip?.query).not.toContain('inFlightSessionId');
+    expect(skip?.params[1]).toBe('no_unattended_pull_request');
   });
 
   it('lets the firing start where the due check fails, so the schedule is neither stuck nor in error', async () => {

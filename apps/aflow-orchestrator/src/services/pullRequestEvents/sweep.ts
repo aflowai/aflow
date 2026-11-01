@@ -95,6 +95,7 @@ export interface SweepSchedule {
   tenant_id: string;
   space_id: string;
   action: string;
+  kind: string;
   target_kind: string | null;
   target_agent_id: string | null;
 }
@@ -106,11 +107,13 @@ export interface SweepDeps {
 }
 
 /**
- * Whether a firing of this schedule should start its run. Only a firing that
- * starts the Local PR Shepherd agent is checked, and it starts nothing where
- * no open loop pull request is unattended. Disabled or failing, the check
- * lets every firing start, as firings did before it: a check that threw would
- * otherwise leave the schedule due and in error, firing never.
+ * Whether a firing of this schedule should start its run. Only a cron firing
+ * that starts the Local PR Shepherd agent is checked, and it starts nothing
+ * where no open loop pull request is unattended. A one-shot schedule always
+ * fires: a skip moves a schedule to its next cron time, and a one-shot has
+ * none, so a skipped one would neither fire nor retire. Disabled or failing,
+ * the check lets every firing start, as firings did before it: a check that
+ * threw would otherwise leave the schedule due and in error, firing never.
  */
 export async function shepherdSweepWanted(
   deps: SweepDeps,
@@ -134,6 +137,7 @@ async function sweepWanted(
 ): Promise<boolean> {
   if (
     schedule.action !== 'start_run' ||
+    schedule.kind !== 'cron' ||
     schedule.target_kind !== 'custom-agent' ||
     schedule.target_agent_id === null
   ) {

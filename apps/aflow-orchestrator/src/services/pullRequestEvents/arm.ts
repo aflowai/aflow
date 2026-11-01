@@ -20,6 +20,7 @@ import {
   pullRequestSubject,
 } from '@aflow/schemas';
 import type { HarnessDeps } from '../cybernetic/harness/types.js';
+import { getOrchestratorLogger } from '../../lib/orchestratorLogger.js';
 import { holdForOwner } from './owner.js';
 
 /** The folder a publication was started on, as its validated inputs recorded it. */
@@ -52,11 +53,8 @@ export async function armPullRequestOnPublication(
   const url = result?.output?.[RUN_PULL_REQUEST_URL_OUTPUT];
   const ref = typeof url === 'string' ? parsePullRequestRef(url) : null;
   if (typeof url !== 'string' || ref === null) return 'no_pull_request';
-  const starter = run.sessionId;
-  const ownerSessionId =
-    typeof starter === 'string' && (await isLiveConversation(deps.db, tenantId, starter))
-      ? starter
-      : undefined;
+  const subject = pullRequestSubject(ref.owner, ref.repo, ref.number);
+  const ownerSessionId = await liveStarter(deps, tenantId, run, subject);
   const bindingId = publicationBindingId(run);
   const watch = await armPullRequestWatch(deps.redis, {
     tenantId,
@@ -64,12 +62,45 @@ export async function armPullRequestOnPublication(
     owner: ref.owner,
     repo: ref.repo,
     number: ref.number,
-    subject: pullRequestSubject(ref.owner, ref.repo, ref.number),
+    subject,
     url,
     armedAt: nowMs,
     ...(bindingId !== undefined ? { bindingId } : {}),
     ...(ownerSessionId !== undefined ? { ownerSessionId } : {}),
   });
-  await holdForOwner(deps, watch, { nowMs });
+  try {
+    await holdForOwner(deps, watch, { nowMs });
+  } catch (err) {
+    getOrchestratorLogger().warn(
+      `[pr-arm] declaring the owner's wait on ${subject} failed; the sweep tends it: ${errorText(err)}`,
+    );
+  }
   return 'armed';
+}
+
+/**
+ * The conversation that started the publication, where it is a Helmsman
+ * conversation that has not ended. A read that fails names no owner: the pull
+ * request is still armed and indexed, and the sweep tends it.
+ */
+async function liveStarter(
+  deps: HarnessDeps,
+  tenantId: string,
+  run: WorkflowRunDetail,
+  subject: string,
+): Promise<string | undefined> {
+  const starter = run.sessionId;
+  if (typeof starter !== 'string') return undefined;
+  try {
+    return (await isLiveConversation(deps.db, tenantId, starter)) ? starter : undefined;
+  } catch (err) {
+    getOrchestratorLogger().warn(
+      `[pr-arm] reading the owner of ${subject} failed; it is armed with none, and the sweep tends it: ${errorText(err)}`,
+    );
+    return undefined;
+  }
+}
+
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }

@@ -150,14 +150,14 @@ describe('workflow.run.list — the runs that succeeded in named tasks', () => {
     expect(parameters[index]).toContain(2);
   });
 
-  it('lists only the runs a live Helmsman conversation holds where the query asks for them', async () => {
+  it('lists only the runs of a Helmsman conversation that can act where the query asks for them, a failed one excluded', async () => {
     const owned = WorkflowRunListInputSchema.parse({
       slug: 'publish-local-changes',
       input: { field: 'branch', equals: 'aflow/x' },
-      drivenByLiveConversation: true,
+      drivenByActingConversation: true,
       limit: 1,
     });
-    const { db, queries } = fakeDb([]);
+    const { db, queries, parameters } = fakeDb([]);
     await listRunsByInput({
       db,
       tenantId: TENANT_ID,
@@ -165,13 +165,15 @@ describe('workflow.run.list — the runs that succeeded in named tasks', () => {
       sessionId: SESSION_ID,
       query: owned,
     });
-    const statement = queries.find((query) => query.includes('FROM workflow_runs r'))!;
+    const index = queries.findIndex((query) => query.includes('FROM workflow_runs r'));
+    const statement = queries[index]!;
     const where = statement.slice(statement.indexOf('WHERE'));
     expect(where).toContain('"sessions"."target_system_role"');
     expect(where).toContain('not in');
+    expect(parameters[index]).toEqual(expect.arrayContaining(['SUCCEEDED', 'CANCELLED', 'FAILED']));
 
     const { db: unfiltered, queries: plain } = fakeDb([]);
-    const { drivenByLiveConversation: _filter, ...everyone } = owned;
+    const { drivenByActingConversation: _filter, ...everyone } = owned;
     await listRunsByInput({
       db: unfiltered,
       tenantId: TENANT_ID,
@@ -183,11 +185,11 @@ describe('workflow.run.list — the runs that succeeded in named tasks', () => {
     expect(read.slice(read.indexOf('WHERE'))).not.toContain('target_system_role');
   });
 
-  it('refuses the live-conversation filter beside a pull request selector', () => {
+  it('refuses the acting-conversation filter beside a pull request selector', () => {
     expect(
       WorkflowRunListInputSchema.safeParse({
         servingNodeOfPullRequest: 'https://github.com/o/r/pull/1',
-        drivenByLiveConversation: true,
+        drivenByActingConversation: true,
       }).success,
     ).toBe(false);
   });

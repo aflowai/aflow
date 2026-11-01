@@ -14,6 +14,16 @@ const CONVERSATION_SYSTEM_ROLE: AgentSystemRole = 'cybernetic-helmsman';
  */
 export const CONVERSATION_ENDED_STATUSES: readonly SessionStatus[] = ['SUCCEEDED', 'CANCELLED'];
 
+/**
+ * The statuses in which a conversation cannot act: ended, or failed. Work that
+ * waits on someone to act treats such a conversation as no one, so its pull
+ * request is tended and its branch's cases are handed over until a retry.
+ */
+export const CONVERSATION_NOT_ACTING_STATUSES: readonly SessionStatus[] = [
+  ...CONVERSATION_ENDED_STATUSES,
+  'FAILED',
+];
+
 /** Whether a session in `status` is a Helmsman conversation that no longer owns its work. */
 export function endsConversationOwnership(
   target: SessionAgentTarget,
@@ -36,6 +46,23 @@ export function endsConversationOwnership(
  * run's next transition.
  */
 export function drivenByLiveConversationSql(runSessionId: SQL | AnyPgColumn): SQL<boolean> {
+  return drivenByConversationNotInSql(runSessionId, CONVERSATION_ENDED_STATUSES);
+}
+
+/**
+ * Whether the run is held by a Helmsman conversation that can act now: one
+ * that has neither ended nor failed, by the rule {@link isActingConversation}
+ * reads. A run whose session has no row yet is held, as in
+ * {@link drivenByLiveConversationSql}.
+ */
+export function drivenByActingConversationSql(runSessionId: SQL | AnyPgColumn): SQL<boolean> {
+  return drivenByConversationNotInSql(runSessionId, CONVERSATION_NOT_ACTING_STATUSES);
+}
+
+function drivenByConversationNotInSql(
+  runSessionId: SQL | AnyPgColumn,
+  statuses: readonly SessionStatus[],
+): SQL<boolean> {
   return sql<boolean>`case
     when ${runSessionId} is null then false
     when ${sessions.sessionId} is null then true
@@ -43,7 +70,7 @@ export function drivenByLiveConversationSql(runSessionId: SQL | AnyPgColumn): SQ
       ${sessions.targetKind} = ${CONVERSATION_TARGET_KIND}
         and ${sessions.targetSystemRole} = ${CONVERSATION_SYSTEM_ROLE}
         and ${sessions.status} not in (${sql.join(
-          CONVERSATION_ENDED_STATUSES.map((status) => sql`${status}`),
+          statuses.map((status) => sql`${status}`),
           sql`, `,
         )}),
       false
@@ -76,7 +103,7 @@ export async function isActingConversation(
   tenantId: string,
   sessionId: string,
 ): Promise<boolean> {
-  return conversationNotIn(db, tenantId, sessionId, [...CONVERSATION_ENDED_STATUSES, 'FAILED']);
+  return conversationNotIn(db, tenantId, sessionId, CONVERSATION_NOT_ACTING_STATUSES);
 }
 
 async function conversationNotIn(

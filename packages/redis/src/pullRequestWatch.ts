@@ -98,7 +98,8 @@ export function PULL_REQUEST_WATCH_LEASE_KEY(ref: WatchRef): string {
 /**
  * One space's watched pull requests by subject, scored by when each was armed.
  * The shepherd sweep's due check reads it, so a firing in a space with no loop
- * pull request open reads one empty range.
+ * pull request open reads one empty range. Every arm and every saved poll
+ * renews it, so it lives as long as the newest watch in the space.
  */
 export function PULL_REQUEST_WATCH_SPACE_KEY(ref: Pick<WatchRef, 'tenantId' | 'spaceId'>): string {
   return `pr_watch:space:${ref.tenantId}:${ref.spaceId}`;
@@ -222,7 +223,12 @@ export async function clearPullRequestWatch(redis: Redis, ref: WatchRef): Promis
     .exec();
 }
 
-/** Save what a poll read and when the pull request is next due, and give up the claim on it. */
+/**
+ * Save what a poll read and when the pull request is next due, and give up the
+ * claim on it. The space's index is renewed with the watch, and holds its
+ * member again where it had none, so the sweep's due check sees every watch a
+ * poll keeps alive.
+ */
 export async function savePullRequestWatch(
   redis: Redis,
   watch: PullRequestWatch,
@@ -232,6 +238,8 @@ export async function savePullRequestWatch(
     .multi()
     .set(PULL_REQUEST_WATCH_KEY(watch), JSON.stringify(watch), 'EX', PULL_REQUEST_WATCH_TTL_SECONDS)
     .zadd(PULL_REQUEST_WATCH_DUE_KEY, String(nextPollAtMs), dueMember(watch))
+    .zadd(PULL_REQUEST_WATCH_SPACE_KEY(watch), String(watch.armedAt), watch.subject)
+    .expire(PULL_REQUEST_WATCH_SPACE_KEY(watch), PULL_REQUEST_WATCH_TTL_SECONDS)
     .del(PULL_REQUEST_WATCH_LEASE_KEY(watch))
     .exec();
 }

@@ -3,6 +3,7 @@ import { PgDialect } from 'drizzle-orm/pg-core';
 import { workflowRuns } from '@aflow/database';
 import type { SessionAgentTarget, SessionStatus } from '@aflow/schemas';
 import {
+  drivenByActingConversationSql,
   drivenByLiveConversationSql,
   endsConversationOwnership,
   isReadersWork,
@@ -41,6 +42,22 @@ describe('a conversation owns its runs until it succeeds or is cancelled', () =>
       drivenByLiveConversationSql(workflowRuns.sessionId),
     );
     expect(params).toEqual(['platform-role', 'cybernetic-helmsman', 'SUCCEEDED', 'CANCELLED']);
+  });
+
+  it('counts a failed conversation as one that cannot act, though it still holds its runs', () => {
+    const { params, sql } = new PgDialect().sqlToQuery(
+      drivenByActingConversationSql(workflowRuns.sessionId),
+    );
+    expect(params).toEqual([
+      'platform-role',
+      'cybernetic-helmsman',
+      'SUCCEEDED',
+      'CANCELLED',
+      'FAILED',
+    ]);
+    expect(sql.replace(/\s+/g, ' ')).toContain(
+      'when "workflow_runs"."session_id" is null then false when "sessions"."session_id" is null then true',
+    );
   });
 
   it('holds a run whose session has no row yet, and no run no session drove', () => {

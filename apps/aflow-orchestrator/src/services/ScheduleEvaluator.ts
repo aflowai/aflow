@@ -19,6 +19,7 @@
 import type { Redis } from 'ioredis';
 import { isResidentHeartbeat, residentOccurrenceDue } from './residentDueCheck.js';
 import { shepherdSweepWanted } from './pullRequestEvents/sweep.js';
+import { skipScheduleOccurrence, type OccurrenceSkip } from './scheduleSkip.js';
 import { getOrchestratorLogger, logOrchestratorError } from '../lib/orchestratorLogger.js';
 import {
   undeclaredConfigProblem,
@@ -521,7 +522,7 @@ export class ScheduleEvaluator {
           runId,
         ))
       ) {
-        await this.skipOccurrence(schedule, null);
+        await this.skipOccurrence(schedule, { gate: 'overlap', inFlight: null });
         return false;
       }
       const claim = await claimResidentWake(
@@ -531,7 +532,7 @@ export class ScheduleEvaluator {
         runId,
       );
       if (!claim.taken) {
-        await this.skipOccurrence(schedule, claim.inFlight);
+        await this.skipOccurrence(schedule, { gate: 'overlap', inFlight: claim.inFlight });
         return false;
       }
       claimedRunId = runId;
@@ -539,7 +540,7 @@ export class ScheduleEvaluator {
 
     const sweepDeps = { sql: this.sqlClient, db: this.db, redis: this.redis };
     if (!(await shepherdSweepWanted(sweepDeps, schedule))) {
-      await this.skipOccurrence(schedule, null);
+      await this.skipOccurrence(schedule, { gate: 'sweep' });
       return false;
     }
 
@@ -591,45 +592,8 @@ export class ScheduleEvaluator {
     });
   }
 
-  /**
-   * Idle and overlapping heartbeats preserve the firing cap, since only
-   * model wakes can renew it. Moving from now prevents a catch-up backlog.
-   */
-  private async skipOccurrence(schedule: DueScheduleRow, inFlight: string | null): Promise<void> {
-    const nextFireAt =
-      schedule.cron_expression !== null
-        ? getNextCronFireTime(schedule.cron_expression, schedule.timezone)
-        : null;
-    await this.sqlClient.unsafe(
-      `UPDATE "${schedule.tenant_schema}".agent_schedules
-          SET next_fire_at = $1::timestamptz,
-              metadata = jsonb_set(
-                coalesce(metadata, '{}'::jsonb),
-                '{overlap}',
-                jsonb_build_object(
-                  'skipped', coalesce((metadata -> 'overlap' ->> 'skipped')::int, 0) + 1,
-                  'lastSkippedAt', to_jsonb(NOW()),
-                  'inFlightSessionId', to_jsonb($2::text)
-                )
-              ),
-              updated_at = NOW()
-        WHERE id = $3::uuid
-          AND firing_count = $4::int
-          AND status = $5
-          AND next_fire_at IS NOT DISTINCT FROM $6::timestamptz`,
-      [
-        nextFireAt,
-        inFlight,
-        schedule.id,
-        schedule.firing_count,
-        schedule.status,
-        schedule.next_fire_at_text,
-      ],
-    );
-    getOrchestratorLogger().info(
-      `[ScheduleEvaluator] Skipped an occurrence of "${schedule.name}": ${inFlight === null ? 'the board waits' : `wake ${inFlight} has not ended`}`,
-      { scheduleId: schedule.id, tenantId: schedule.tenant_id },
-    );
+  private async skipOccurrence(schedule: DueScheduleRow, skip: OccurrenceSkip): Promise<void> {
+    await skipScheduleOccurrence(this.sqlClient, schedule, skip);
   }
 
   /** Advance past an occurrence that will never be dispatched, recording why. */

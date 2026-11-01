@@ -703,6 +703,7 @@ const DEFINITIONS: readonly BackgroundTaskDefinitionInput[] = [
       'A failed occurrence stays due. The dispatch lease retries failed board reads before starting a run.',
     sites: [
       'apps/aflow-orchestrator/src/services/ScheduleEvaluator.ts',
+      'apps/aflow-orchestrator/src/services/scheduleSkip.ts',
       'apps/aflow-orchestrator/src/services/residentDueCheck.ts',
       'packages/cybernetic-runtime/src/plan/resident.ts',
       'packages/cybernetic-runtime/src/plan/stream.ts',
@@ -728,7 +729,7 @@ const DEFINITIONS: readonly BackgroundTaskDefinitionInput[] = [
     hotPathProducerBudget: {
       maxAdditionalNetworkRoundTrips: 0,
       description:
-        "The publication's arm and the pull request's clear write the space's index in the transaction that writes the watch.",
+        "The publication's arm, each saved poll and the pull request's clear write the space's index in the transaction that writes the watch.",
     },
     featureGate: 'SCHEDULES_ENABLED',
     disablePolicy: 'safe',
@@ -736,9 +737,10 @@ const DEFINITIONS: readonly BackgroundTaskDefinitionInput[] = [
       'Disabled or failing, a firing starts the shepherd as it did before the check. A skipped firing keeps its firing cap and moves to the next cron time.',
     sites: [
       'apps/aflow-orchestrator/src/services/ScheduleEvaluator.ts',
+      'apps/aflow-orchestrator/src/services/scheduleSkip.ts',
       'apps/aflow-orchestrator/src/services/pullRequestEvents/sweep.ts',
     ],
-    note: "Runs inside the schedule discovery runner, on a firing of a schedule whose target is the Local PR Shepherd agent. It reads one range of the space's own index, then each open pull request's watch and waiter hash. A space with no loop pull request open reads one empty range (Plan 339 D4, D5).",
+    note: "Runs inside the schedule discovery runner, on a cron firing of a schedule whose target is the Local PR Shepherd agent. It reads one range of the space's own index, then each open pull request's watch and waiter hash. A space with no loop pull request open reads one empty range (Plan 339 D4, D5).",
   },
   {
     id: 'orchestrator.wait_delivery',
