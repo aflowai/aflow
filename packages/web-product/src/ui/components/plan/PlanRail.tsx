@@ -14,7 +14,8 @@
  * (Plan 337 P4). A step with a decision card shows the card's sections above
  * its goal, and the goal folds. **Read the plan** opens the step's newest plan
  * document (Plan 337 P2). The goal, criteria, note and outcome render as
- * markdown, as their writers put them (Plan 332). It is
+ * markdown, as their writers put them (Plan 332). The note and the outcome
+ * keep each line the engine writes on its own line. It is
  * the page's inspector, headed, sectioned and set as the skill designer's is.
  */
 import { useState } from 'react';
@@ -527,7 +528,7 @@ export function PlanRail({
               {noteOpen ? 'Hide note' : 'Show note'}
             </Button>
           </Row>
-          {noteOpen && <RailMarkdown content={full.note} data-plan-note />}
+          {noteOpen && <RailMarkdown content={full.note} lineBreaks data-plan-note />}
         </RailSection>
       )}
       {full?.outcome !== undefined && (
@@ -540,7 +541,7 @@ export function PlanRail({
               padding: 'var(--space-2)',
             }}
           >
-            <RailMarkdown content={full.outcome} />
+            <RailMarkdown content={full.outcome} lineBreaks />
           </div>
         </RailSection>
       )}

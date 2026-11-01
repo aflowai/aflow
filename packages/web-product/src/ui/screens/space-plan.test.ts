@@ -1218,6 +1218,64 @@ describe('SpacePlanPage — the rail', () => {
     expect(note.style.overflowX).toBe('auto');
   });
 
+  /** A paragraph's lines as a reader sees them, split at each line break. */
+  function paragraphLines(p: Element): string[] {
+    const lines = [''];
+    for (const child of p.childNodes) {
+      if (child.nodeName === 'BR') lines.push('');
+      else lines[lines.length - 1] += child.textContent;
+    }
+    return lines.map((line) => line.trim());
+  }
+
+  it('keeps each line of the note on its own line, as the engine writes it, and renders the markdown inside a line', async () => {
+    recorded.details[ARTICLE] = detail(
+      fullNode(ARTICLE, 'Write the help article', {
+        parentId: R322,
+        note: 'Reopened: see [the review](https://x.test/review)\nBlocked: `yarn verify` fails on main\nWaiting on the merge.\n- draft it\n- review it',
+      }),
+    );
+    await render();
+
+    await click(card(ARTICLE));
+    const section = rail().querySelector('[data-plan-rail-section="Working note"]')!;
+    await click(button(section, 'Show note'));
+    const note = section.querySelector('[data-plan-note]')!;
+
+    const paragraph = note.querySelector('.md-content p')!;
+    expect(paragraphLines(paragraph)).toEqual([
+      'Reopened: see the review',
+      'Blocked: yarn verify fails on main',
+      'Waiting on the merge.',
+    ]);
+    expect(paragraph.querySelector('a')?.getAttribute('href')).toBe('https://x.test/review');
+    expect(paragraph.querySelector('code')?.textContent).toBe('yarn verify');
+    expect([...note.querySelectorAll('li')].map((li) => li.textContent)).toEqual([
+      'draft it',
+      'review it',
+    ]);
+  });
+
+  it('keeps each line of the outcome on its own line, as the engine writes it', async () => {
+    recorded.details[LANDED] = detail(
+      fullNode(LANDED, 'P3.2 operator writes', {
+        status: 'done',
+        outcome: 'Merged as `abc1234`.\nThe operator approved the live check.',
+        closedAt: at(10, 22),
+      }),
+    );
+    await render();
+
+    await click(card(LANDED));
+
+    const paragraph = rail().querySelector('[data-plan-outcome] .md-content p')!;
+    expect(paragraphLines(paragraph)).toEqual([
+      'Merged as abc1234.',
+      'The operator approved the live check.',
+    ]);
+    expect(paragraph.querySelector('code')?.textContent).toBe('abc1234');
+  });
+
   it('collapses Dropped to a strip while the rail is open', async () => {
     await render();
     expect(column('dropped').getAttribute('data-collapsed')).toBe(null);

@@ -182,18 +182,22 @@ const railMarkdownFrame = { minWidth: 0, maxWidth: '100%', overflowX: 'auto' } a
 
 /**
  * A node's own text on the rail, which its writer may put in markdown. A wide
- * table or code block scrolls inside the rail rather than widening it.
+ * table or code block scrolls inside the rail rather than widening it. Text the
+ * engine writes one entry per line, a note or an outcome, asks for `lineBreaks`
+ * so each entry keeps its own line.
  */
 export function RailMarkdown({
   content,
+  lineBreaks = false,
   ...data
 }: {
   content: string;
+  lineBreaks?: boolean;
   [dataAttribute: `data-${string}`]: boolean | undefined;
 }) {
   return (
     <div {...data} style={railMarkdownFrame}>
-      <MarkdownRenderer content={content} style={railMarkdownStyle} />
+      <MarkdownRenderer content={content} style={railMarkdownStyle} lineBreaks={lineBreaks} />
     </div>
   );
 }
