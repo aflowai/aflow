@@ -502,9 +502,10 @@ async function writePlanNode(
       const previous = current.note?.indexOf(PLAN_NODE_MERGE_WAIT_LINE) ?? -1;
       const before = previous >= 0 ? current.note!.slice(0, previous) : '';
       const after = previous >= 0 ? current.note!.slice(previous) : '';
-      const refusal = after.match(
-        /^[^\n]*(?:\n\n(?:- )?Pull request:[^\n]*(?:\n(?:- )?(?:GitHub reports merged|Merge commit|Merged by|Merged at|Recorded publication commit|Recorded publication branch|Merge delivers recorded commit or branch):[^\n]*)*)?/,
-      );
+      const refusal =
+        /^[^\n]*(?:\n\n(?:- )?Pull request:[^\n]*(?:\n(?:- )?(?:GitHub reports merged|Merge commit|Merged by|Merged at|Recorded publication commit|Recorded publication branch|Merge delivers recorded commit or branch):[^\n]*)*)?/.exec(
+          after,
+        );
       const note =
         previous >= 0
           ? `${before}${line}${after.slice(refusal?.[0].length ?? 0)}`
