@@ -44,8 +44,8 @@ export type PlanItemWait = keyof (typeof PLAN_STATE_LABELS)['itemTitle'];
 /** The most characters an Action Center item's title holds. */
 const PLAN_ITEM_TITLE_MAX_CHARS = 256;
 
-/** What ends a title cut to fit, so the reader sees that it goes on. */
-const PLAN_ITEM_TITLE_CUT_MARK = '…';
+/** What ends a title or summary cut to fit, so the reader sees that it goes on. */
+const PLAN_ITEM_CUT_MARK = '…';
 
 /**
  * A plan step's Action Center item title: "Pending approval · <title>", at
@@ -56,8 +56,8 @@ const PLAN_ITEM_TITLE_CUT_MARK = '…';
 export function planItemTitle(wait: PlanItemWait, title: string): string {
   const head = `${PLAN_STATE_LABELS.itemTitle[wait]} · `;
   if (head.length + title.length <= PLAN_ITEM_TITLE_MAX_CHARS) return `${head}${title}`;
-  const budget = PLAN_ITEM_TITLE_MAX_CHARS - head.length - PLAN_ITEM_TITLE_CUT_MARK.length;
-  return `${head}${inlineMarkdownCut(title, budget).trimEnd()}${PLAN_ITEM_TITLE_CUT_MARK}`;
+  const budget = PLAN_ITEM_TITLE_MAX_CHARS - head.length - PLAN_ITEM_CUT_MARK.length;
+  return `${head}${inlineMarkdownCut(title, budget).trimEnd()}${PLAN_ITEM_CUT_MARK}`;
 }
 
 const MARKDOWN_ESCAPABLE = /[!-/:-@[-`{-~]/;
@@ -221,18 +221,49 @@ function openFence(text: string): string | undefined {
 }
 
 /**
+ * Where the last block of a markdown text with no fence open begins: past the
+ * last blank line or fence line. Inline markdown does not cross either.
+ */
+function lastBlockStart(text: string): number {
+  let start = 0;
+  let offset = 0;
+  const lines = text.split('\n');
+  for (const line of lines.slice(0, -1)) {
+    offset += line.length + 1;
+    if (line.trim() === '' || FENCE_LINE.test(line)) start = offset;
+  }
+  return start;
+}
+
+/**
  * A plan item's markdown text as its summary, at most
- * `PLAN_ITEM_SUMMARY_MAX_CHARS`. The client renders it as block markdown, so
- * a cut inside a fenced code block closes the fence after the cut. Otherwise
- * the fence would stay open and the rest of the card would render as code.
+ * `PLAN_ITEM_SUMMARY_MAX_CHARS`. A text too long to fit ends with the
+ * ellipsis a cut title ends with. The client renders it as block markdown,
+ * so a cut inside a fenced code block closes the fence and puts the ellipsis
+ * on the line after it. Otherwise the rest of the card would render as code.
+ * A cut in prose falls before any inline construct it would leave open, as a
+ * title's does.
  */
 export function planItemSummary(text: string): string {
-  let budget = PLAN_ITEM_SUMMARY_MAX_CHARS;
+  if (text.length <= PLAN_ITEM_SUMMARY_MAX_CHARS) return text;
+  // One character more than the mark: the mark may need a line of its own.
+  let budget = PLAN_ITEM_SUMMARY_MAX_CHARS - PLAN_ITEM_CUT_MARK.length - 1;
   for (;;) {
-    const cut = text.slice(0, budget);
-    const fence = cut.length < text.length ? openFence(cut) : undefined;
-    if (fence === undefined) return cut;
-    const closed = `${cut}${cut.endsWith('\n') ? '' : '\n'}${fence}`;
+    let cut = text.slice(0, budget);
+    // A cut between the halves of a surrogate pair would leave half a character.
+    if (/[\uD800-\uDBFF]$/.test(cut)) cut = cut.slice(0, -1);
+    const fence = openFence(cut);
+    if (fence === undefined) {
+      const start = lastBlockStart(cut);
+      const tail = cut.slice(start);
+      const kept = `${cut.slice(0, start)}${inlineMarkdownCut(tail, tail.length)}`.trimEnd();
+      // A fence's closing line holds nothing after its run, so the mark goes below it.
+      const lastLine = kept.slice(kept.lastIndexOf('\n') + 1);
+      return FENCE_LINE.test(lastLine)
+        ? `${kept}\n${PLAN_ITEM_CUT_MARK}`
+        : `${kept}${PLAN_ITEM_CUT_MARK}`;
+    }
+    const closed = `${cut}${cut.endsWith('\n') ? '' : '\n'}${fence}\n${PLAN_ITEM_CUT_MARK}`;
     if (closed.length <= PLAN_ITEM_SUMMARY_MAX_CHARS) return closed;
     budget -= closed.length - PLAN_ITEM_SUMMARY_MAX_CHARS;
   }

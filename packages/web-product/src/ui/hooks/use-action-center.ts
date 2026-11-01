@@ -77,6 +77,12 @@ export interface UseActionCenterResult {
   /** Open items, sorted by requestedAt desc. Pre-grouped lanes via getters. */
   items: ActionCenterItem[];
 
+  /**
+   * Whether `items` is every open item: true once the stream's snapshot has
+   * replaced the REST list, which the route may have cut at its limit.
+   */
+  listIsWhole: boolean;
+
   /** Convenience lanes — derived from `items`. */
   lanes: {
     /** `human_approval` items (paused-step gates, compute egress, etc.). */
@@ -197,6 +203,17 @@ function itemsQueryKey(spaceId: string): QueryKey {
 
 interface ItemsPayload {
   items?: ActionCenterItem[];
+  /**
+   * True where the list came from the stream's snapshot, which carries every
+   * open item. The REST list may be cut at the route's limit, so it never counts as whole.
+   * Merges and removals keep the flag of the list they edit.
+   */
+  whole?: boolean;
+}
+
+/** The cached payload with its items replaced, keeping where the list came from. */
+function withItems(prev: ItemsPayload | undefined, items: ActionCenterItem[]): ItemsPayload {
+  return prev?.whole === true ? { items, whole: true } : { items };
 }
 
 // Re-export the lane partition helper that lives in its own React-free
@@ -290,7 +307,10 @@ export function useActionCenter(spaceId: string | null): UseActionCenterResult {
           queryKey: itemsQueryKey(spaceId),
           exact: true,
         });
-        queryClientRef.current.setQueryData<ItemsPayload>(itemsQueryKey(spaceId), { items });
+        queryClientRef.current.setQueryData<ItemsPayload>(itemsQueryKey(spaceId), {
+          items,
+          whole: true,
+        });
         lastReconcileAtRef.current = Date.now();
       })();
     });
@@ -300,7 +320,7 @@ export function useActionCenter(spaceId: string | null): UseActionCenterResult {
     const unsubUpdate = broker.subscribeItemsUpdate(spaceId, (updates) => {
       queryClientRef.current.setQueryData<ItemsPayload>(itemsQueryKey(spaceId), (prev) => {
         const prevItems = prev?.items ?? [];
-        return { items: mergeItems(prevItems, updates) };
+        return withItems(prev, mergeItems(prevItems, updates));
       });
     });
 
@@ -309,7 +329,10 @@ export function useActionCenter(spaceId: string | null): UseActionCenterResult {
       queryClientRef.current.setQueryData<ItemsPayload>(itemsQueryKey(spaceId), (prev) => {
         const prevItems = prev?.items ?? [];
         const idSet = new Set(ids);
-        return { items: prevItems.filter((it) => !idSet.has(it.id)) };
+        return withItems(
+          prev,
+          prevItems.filter((it) => !idSet.has(it.id)),
+        );
       });
     });
 
@@ -372,6 +395,7 @@ export function useActionCenter(spaceId: string | null): UseActionCenterResult {
   // ---- derived items/lanes/counts -----------------------------------------
 
   const items = useMemo<ActionCenterItem[]>(() => itemsQuery.data?.items ?? [], [itemsQuery.data]);
+  const listIsWhole = itemsQuery.data?.whole === true;
 
   const lanes = useMemo<ActionCenterLanes>(() => partitionLanes(items), [items]);
 
@@ -487,11 +511,15 @@ export function useActionCenter(spaceId: string | null): UseActionCenterResult {
             const prevItems = prev?.items ?? [];
             if (resolution.kind === 'reassign') {
               const routed = (resolvedBody?.item ?? null) as ActionCenterItem | null;
-              return {
-                items: routed ? prevItems.map((it) => (it.id === itemId ? routed : it)) : prevItems,
-              };
+              return withItems(
+                prev,
+                routed ? prevItems.map((it) => (it.id === itemId ? routed : it)) : prevItems,
+              );
             }
-            return { items: prevItems.filter((it) => it.id !== itemId) };
+            return withItems(
+              prev,
+              prevItems.filter((it) => it.id !== itemId),
+            );
           });
           setResolveStateById((s) => ({ ...s, [itemId]: 'idle' }));
           return { ok: true, ...(setupChecklist !== undefined ? { setupChecklist } : {}) };
@@ -518,7 +546,7 @@ export function useActionCenter(spaceId: string | null): UseActionCenterResult {
           const latest = body.latestItem as ActionCenterItem;
           queryClientRef.current.setQueryData<ItemsPayload>(itemsQueryKey(spaceId), (prev) => {
             const prevItems = prev?.items ?? [];
-            return { items: mergeItems(prevItems, [latest]) };
+            return withItems(prev, mergeItems(prevItems, [latest]));
           });
         }
         setResolveStateById((s) => ({ ...s, [itemId]: 'error' }));
@@ -587,6 +615,7 @@ export function useActionCenter(spaceId: string | null): UseActionCenterResult {
 
   return {
     items,
+    listIsWhole,
     lanes,
     counts,
     status,

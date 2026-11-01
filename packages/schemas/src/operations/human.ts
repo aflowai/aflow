@@ -285,6 +285,54 @@ export function hasActionCenterFocusPrefix(itemId: string): boolean {
   return FOCUS_ITEM_ID_PREFIX_PATTERN.test(itemId);
 }
 
+/** What the chat card a focus raises lets the operator do. */
+export type ActionCenterFocusCard = 'answers_in_chat' | 'plan_page' | 'workbench';
+
+/**
+ * The card each focused kind gets in the chat, by its id's prefix. Only a
+ * proposal's card carries answer controls. A plan step's card links to the
+ * plan page, and every other card sends the operator to Pending in the
+ * Workbench. Keyed by the focus prefixes, so a prefix added there does not
+ * compile until it says what its card does.
+ */
+export const ACTION_CENTER_FOCUS_CARD = {
+  proposal: 'answers_in_chat',
+  'plan-ask': 'plan_page',
+  'plan-decision': 'plan_page',
+  step: 'workbench',
+  gate: 'workbench',
+  settings: 'workbench',
+  'workflow-task': 'workbench',
+  'workflow-write-approval': 'workbench',
+  'workflow-oauth-consent': 'workbench',
+} as const satisfies Record<
+  (typeof ACTION_CENTER_FOCUS_ITEM_ID_PREFIXES)[number],
+  ActionCenterFocusCard
+>;
+
+/** The card a focused id gets; undefined where the id carries no focus prefix. */
+export function actionCenterFocusCard(itemId: string): ActionCenterFocusCard | undefined {
+  const prefix = ACTION_CENTER_FOCUS_ITEM_ID_PREFIXES.find((p) => itemId.startsWith(`${p}:`));
+  return prefix !== undefined ? ACTION_CENTER_FOCUS_CARD[prefix] : undefined;
+}
+
+/**
+ * The focus result's note: what the operator's card can do, and what the
+ * agent does next. A card with no answer control says so, so the agent never
+ * asks the operator to answer the card itself. An id with no focus prefix
+ * gets the Workbench card, as the chat renders it.
+ */
+export function actionCenterFocusNote(itemId: string): string {
+  switch (actionCenterFocusCard(itemId) ?? 'workbench') {
+    case 'answers_in_chat':
+      return `Operator now sees item ${itemId} inline in chat, with its answer controls. End your turn and wait for their decision. When they resolve it, the resume will land in your next turn and you can continue from there.`;
+    case 'plan_page':
+      return `Operator now sees a card for item ${itemId} in chat. The card has no answer control. It links to the step on the plan page, and they answer it there or under Pending in the Workbench. Never ask them to answer the card itself. Their answer is written to the plan, not returned to this tool.`;
+    case 'workbench':
+      return `Operator now sees a card for item ${itemId} in chat. The card has no answer control. It tells them to act on the item under Pending in the Workbench. Never ask them to answer the card itself. Their answer is not returned to this tool.`;
+  }
+}
+
 export const HumanActionCenterFocusInputSchema = z.object({
   /**
    * Action Center item id. MUST come from a listing operation
@@ -330,11 +378,11 @@ export const HumanActionCenterFocusOutputSchema = z.object({
   acknowledged: z.boolean(),
   itemId: z.string(),
   /**
-   * Contextual next-step hint for the agent. The handler populates this
-   * verbatim on every success so the agent learns the right follow-up
-   * behaviour at the moment of action, not via a separate prompt section.
-   * Typical content: "The operator now sees the card in chat — end your
-   * turn and wait for their decision; they will resume this session."
+   * Contextual next-step hint for the agent, from `actionCenterFocusNote`.
+   * The handler populates this on every success so the agent learns the
+   * follow-up at the moment of action, not via a separate prompt section.
+   * It says what the operator's card can do: a proposal's card answers in
+   * chat, and every other card points to the plan page or to Pending.
    */
   note: z.string().optional(),
   /**
@@ -411,6 +459,7 @@ export const HumanOperationRegistrations: OperationRegistration[] = [
       pitfalls: [
         'Bare UUIDs are rejected at parse time. Ids are prefixed (proposal:, step:, gate:, settings:, plan-ask:, plan-decision:, workflow-task:, workflow-write-approval:, workflow-oauth-consent:)',
         '`acknowledged: true` is a publish receipt, not a delivery / resolution confirmation',
+        'Only a proposal’s card has answer controls. Every other card points the operator to the plan page or to Pending, as the result’s `note` says',
       ],
       minimalExampleInput: {
         itemId: 'proposal:7f2d3a16-9b51-4e7f-a3c5-3bf3a3f04d10',

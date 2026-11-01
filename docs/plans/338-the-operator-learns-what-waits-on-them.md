@@ -326,6 +326,13 @@ _Delivered (P1)._ The items below were built.
 
 - **Preview.** The review sees the items rendered on two pages. The first is the chat page with the Workbench open, `/s/<slug>/chat?workbench=1`, with a blocked step under **Pending**. The second is the Action Center as the header of another page shows it, such as `/s/<slug>/plan`: the bell with its count, which opens the first page, and the sidebar's Plan count. A space with one blocked step whose title holds markdown shows the item with its title rendered.
 
+_Follow-up (P1), from the reviews of PRs #266 and #275._
+
+- **The summary's cut.** `planItemSummary` ends a cut summary with the ellipsis a cut title ends with, so a long decision no longer ends silently. A cut in prose falls before any inline construct it would leave open, by the title's rule. A cut inside a fence closes the fence and puts the ellipsis on the line below it. Both plan sources call it, so a waiting node and a decision over one text cut at one place.
+- **The "+" mark.** The Action Center cache records whether its list came from the stream's snapshot, which carries every open item (`whole` on the cached payload, `listIsWhole` on `useActionCenter`). `planPendingCount` marks a cut at either source's cap always. It marks a list of 200 items only where the REST read stands, which the route may have cut. So a snapshot of 200 items or more shows no false "+".
+- **The focus note.** `ACTION_CENTER_FOCUS_CARD` in `operations/human.ts` names, by prefix, what the focused card can do. Only a proposal's card answers in chat. A plan step's card links to the plan page, and every other card points to Pending in the Workbench. `actionCenterFocusNote` writes the tool result's note from it, and `InlineFocusedItem` links to the plan by the same table. The agent is told to end its turn and wait only for a proposal. For every other card it is told the card has no answer control.
+- **Tests.** `planAskSourceWaiting.test.ts` cuts prose, an inline construct and a fence through both sources and compares the two summaries. `planDecisionSource.test.ts` covers a goal cut with the ellipsis. `plan-pending-count.test.ts` covers no "+" on a snapshot of 250 items and a "+" at each source's cap. `humanActionCenterFocus.test.ts` covers the note for each prefix.
+
 **Open:** the phase exit on the live stack.
 
 **P2 — The Helmsman knows what waits (D2).** It holds the counts, the section and the ceiling test, and records the measured tokens in D2. _Exit:_ asked "is anything waiting on me?", a Helmsman names the count and points at the plan link without a tool call.

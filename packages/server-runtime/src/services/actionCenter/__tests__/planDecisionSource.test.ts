@@ -157,7 +157,16 @@ describe('planDecisionSource — the item', () => {
     expect(item?.title.endsWith('…')).toBe(true);
     expect(item?.title).not.toContain('`');
     expect(item?.summary.length).toBeLessThanOrEqual(2_000);
-    expect(item?.summary.endsWith('\n```')).toBe(true);
+    expect(item?.summary.endsWith('\n```\n…')).toBe(true);
+  });
+
+  it('ends a summary cut in the goal with the ellipsis a cut title ends with', async () => {
+    mockListOpenDecisions.mockResolvedValue([decision({ goal: 'g'.repeat(3_000) })]);
+
+    const [item] = await source().listOpen({ tenantId: TENANT_ID as never, spaceId: SPACE_ID });
+
+    expect(item?.summary).toBe(`${'g'.repeat(1_998)}…`);
+    expect(item?.summary).not.toContain('Decided when');
   });
 
   it('shows a viewer the decision without a way to answer it', async () => {

@@ -16,11 +16,14 @@ export type { PlanPendingCount };
 
 /**
  * Open items whose origin is `plan_ask` or `plan_decision`, whatever their
- * audience. The list carries no total, so a list as long as the route returns
- * may have cut as well.
+ * audience. Each source lists at most its cap, so a set at its cap may have
+ * cut, whichever list holds it. The REST list carries no total, so a REST list
+ * as long as the route returns may have cut as well. The stream's snapshot
+ * carries every open item, so its length says nothing about a cut.
  */
 export function planPendingCount(
   items: ReadonlyArray<Pick<ActionCenterItem, 'origin'>>,
+  list: { whole: boolean },
 ): PlanPendingCount {
   let asks = 0;
   let decisions = 0;
@@ -31,6 +34,6 @@ export function planPendingCount(
   return pendingPlanStepCount({
     asks,
     decisions,
-    listMayBeCut: items.length >= ACTION_CENTER_LIST_LIMIT,
+    listMayBeCut: !list.whole && items.length >= ACTION_CENTER_LIST_LIMIT,
   });
 }

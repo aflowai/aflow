@@ -6,6 +6,7 @@ import {
   type OperationId,
   type IdempotencyKey,
   HumanActionCenterFocusInputSchema,
+  actionCenterFocusNote,
   hasActionCenterFocusPrefix,
   type HumanActionCenterFocusOutput,
 } from '@aflow/schemas';
@@ -84,12 +85,10 @@ export async function handleHumanActionCenterFocusInline(
       ? undefined
       : await listedInAttention(redis, context.tenantId, context.spaceId, input.itemId);
 
-    const note = `Operator now sees item ${input.itemId} inline in chat. End your turn and wait for their decision — when they resolve it, the resume will land in your next turn and you can continue from there.`;
-
     const output: HumanActionCenterFocusOutput = {
       acknowledged: true,
       itemId: input.itemId,
-      note,
+      note: actionCenterFocusNote(input.itemId),
       ...(listed !== undefined ? { listed } : {}),
     };
     const outputRef = await encodeInlineOpOutputRef(
