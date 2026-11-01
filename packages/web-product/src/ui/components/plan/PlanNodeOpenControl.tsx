@@ -2,7 +2,9 @@
 
 /**
  * The operator's open write in the board's rail (Plan 332 D6): **Approve** on
- * a blocked step, **Reopen** on a closed one, and **Reopen <parent>** on a step
+ * a blocked step whose card names the decision it asks (Plan 339 D6),
+ * **Resume** on a blocked step that names none, **Reopen** on a closed one,
+ * and **Reopen <parent>** on a step
  * stranded under a closed one — each back to `active`, with an optional reason
  * the engine writes into the note. Like the close form, it writes against the
  * revision the rail's own read showed when the form opened, and says when the
@@ -59,8 +61,8 @@ export function PlanNodeOpenControl({
 }: {
   /** The node the write opens: the rail's own, or the closed step above a stranded one. */
   nodeId: string;
-  verb: 'approve' | 'reopen';
-  /** The button: **Approve**, **Reopen**, or **Reopen** and the step it names. */
+  verb: 'approve' | 'resume' | 'reopen';
+  /** The button: **Approve**, **Resume**, **Reopen**, or **Reopen** and the step it names. */
   label: string;
   read: PlanNodeRead;
   onOpen: PlanNodeOpener;
@@ -184,7 +186,12 @@ export function PlanNodeOpenControl({
     }
     await answered(onOpen({ nodeId, ...parsed.data }));
   };
-  const field = verb === 'approve' ? PLAN_APPROVE_FIELD_LABEL : 'Why it is reopened (optional)';
+  const field =
+    verb === 'approve'
+      ? PLAN_APPROVE_FIELD_LABEL
+      : verb === 'resume'
+        ? 'Why it resumes (optional)'
+        : 'Why it is reopened (optional)';
   const words = (
     <Textarea
       aria-label={field}
@@ -271,7 +278,7 @@ export function PlanNodeOpenControl({
           setSpend(event.target.value);
         }}
       />
-      {verb === 'reopen' && words}
+      {verb !== 'approve' && words}
       <Text size="xs" variant="muted">
         Leave the ceiling blank to keep it. Opening starts a fresh spend window.
       </Text>

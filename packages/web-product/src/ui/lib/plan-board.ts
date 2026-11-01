@@ -13,7 +13,11 @@ import {
   planBoardCards,
   planRootCard,
   planBoardColumn,
+  planNodeApprovalAsked,
   type PlanBoardCard,
+  type PlanNodeCard,
+  type PlanNodeStatus,
+  type PlanNodeWaitsOn,
   type PlanBoardColumn,
   type PlanBoardPlacement,
   type PlanDoneDay,
@@ -59,11 +63,44 @@ export type PlanCard = PlanBoardCard;
  * Every node under `root` in the walk's order — parents before children,
  * siblings by position — so each column, Up next included, lists its cards in
  * the order the loop reaches them. A blocked root leads its `needs_you` column,
- * because it waits on a person itself (Plan 338 D5).
+ * because it waits on a person itself (Plan 338 D5), until every step has
+ * closed (Plan 339 D6). The tally counts the steps a done window left out of
+ * the tree, so it says whether they all have.
  */
-export function planCards(root: PlanTreeNode): PlanCard[] {
-  const rootCard = planRootCard(root);
+export function planCards(
+  root: PlanTreeNode,
+  tally: Pick<PlanRootTally, 'steps' | 'done' | 'dropped'>,
+): PlanCard[] {
+  const rootCard = planRootCard(root, tally);
   return rootCard !== undefined ? [rootCard, ...planBoardCards(root)] : planBoardCards(root);
+}
+
+/** Each reason a step waits on the operator, as the rail names it above Approve. */
+export const WAIT_REASON_LABEL: Record<PlanNodeWaitsOn['reason'], string> = {
+  design_decision: 'a design decision',
+  design_document: 'a new plan’s design document',
+  decision_change: 'a change to a plan’s decision',
+  authority: 'policy, egress, write authority or confinement',
+  operator_question: 'a question for you',
+};
+
+/** What the rail offers a blocked step: Approve with the decision it asks, or Resume. */
+export type PlanRailOpen = { verb: 'approve'; waitsOn: PlanNodeWaitsOn } | { verb: 'resume' };
+
+/**
+ * The rail's open write on a step under Needs you as `blocked` (Plan 339 D6).
+ * Approve appears only where the step's card names the decision it asks
+ * (`waitsOn`), and with that decision. A blocked step whose card names none,
+ * such as a stop, offers Resume, the same open write asking no decision. Until
+ * the step's own read answers, the rail offers neither.
+ */
+export function planRailOpen(
+  reason: PlanNeedsYouReason | undefined,
+  node: { status: PlanNodeStatus; card?: PlanNodeCard | undefined } | undefined,
+): PlanRailOpen | undefined {
+  if (reason !== 'blocked' || node?.status !== 'blocked') return undefined;
+  const waitsOn = planNodeApprovalAsked(node);
+  return waitsOn !== undefined ? { verb: 'approve', waitsOn } : { verb: 'resume' };
 }
 
 const PHASE_CODE = /^([A-Z]{1,3}\d+[a-z]?(?:\.\d+)*)\b/;

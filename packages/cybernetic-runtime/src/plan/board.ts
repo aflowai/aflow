@@ -12,6 +12,7 @@ import {
   planBoardCards,
   planBoardColumn,
   planRootWaits,
+  planStepsAllClosed,
   type PlanBoardPlacement,
   type PlanLane,
   type PlanLaneItem,
@@ -175,15 +176,18 @@ function nextNodeIdOf(root: PlanTreeNode): string | undefined {
  * has work in flight reads `needs_you`; its row carries both counts. Every
  * step closed is `finished`, never a status: the root stays open until the
  * operator closes it, because a node is done against its own criteria, not
- * its children's (Plan 322 D2). A blocked root reads `needs_you` whatever its
- * steps, because it waits on a person itself (Plan 338 D5).
+ * its children's (Plan 322 D2). A blocked root reads `needs_you` while it has
+ * no steps or an open one, because it waits on a person itself (Plan 338 D5).
+ * Once every step has closed, it reads `finished` and asks for no approval
+ * (Plan 339 D6).
  */
 export function planRootState(
   rootStatus: PlanNodeStatus,
-  counts: Pick<PlanRootCounts, 'steps' | 'needsYou' | 'inFlight' | 'upNext'>,
+  counts: Pick<PlanRootCounts, 'steps' | 'needsYou' | 'inFlight' | 'upNext' | 'done' | 'dropped'>,
 ): PlanRootState {
   if (isClosedPlanNodeStatus(rootStatus)) return 'closed';
-  if (planRootWaits({ status: rootStatus }) || counts.needsYou > 0) return 'needs_you';
+  if (planStepsAllClosed(counts)) return 'finished';
+  if (planRootWaits({ status: rootStatus }, counts) || counts.needsYou > 0) return 'needs_you';
   if (counts.inFlight > 0) return 'in_flight';
   if (counts.upNext > 0) return 'queued';
   return counts.steps > 0 ? 'finished' : 'empty';
@@ -201,9 +205,10 @@ function tallyOf(root: PlanTreeNode, dayOf: (iso: string) => string): PlanRootTa
     }
   }
   const nextNodeId = nextNodeIdOf(root);
+  const stepCounts = { steps: cards.length, done: counts.done, dropped: counts.dropped };
   const counted: PlanRootCounts = {
     steps: cards.length,
-    needsYou: counts.needs_you + (planRootWaits(root) ? 1 : 0),
+    needsYou: counts.needs_you + (planRootWaits(root, stepCounts) ? 1 : 0),
     inFlight: counts.in_flight,
     upNext: counts.up_next,
     done: counts.done,
@@ -366,7 +371,22 @@ export function buildPlanOverview(
     const columns = { needs_you: 0, in_flight: 0, up_next: 0 };
     const placements = new Map<string, PlanBoardPlacement>();
     let lastWrittenAt = later(root.updatedAt, counted?.closedWrittenAt);
-    if (planRootWaits(root)) {
+    const done = counted?.done ?? 0;
+    const dropped = counted?.dropped ?? 0;
+    const truncated: PlanNodeListTruncation | undefined =
+      counted?.cut === true
+        ? { bound: 'nodes', value: bounds.maxNodes }
+        : counted?.deeper === true
+          ? { bound: 'depth', value: bounds.maxDepth }
+          : undefined;
+    // Steps the read did not reach may be open, so a plan read short is never all closed.
+    const rootWaits = planRootWaits(
+      root,
+      truncated !== undefined
+        ? { steps: 1, done: 0, dropped: 0 }
+        : { steps: steps.length + done + dropped, done, dropped },
+    );
+    if (rootWaits) {
       columns.needs_you++;
       needsYou.push(laneItem(root, root, { column: 'needs_you', reason: 'blocked' }));
     }
@@ -402,8 +422,6 @@ export function buildPlanOverview(
       upNext.push(laneItem(nextStep, root, nextPlacement));
     }
 
-    const done = counted?.done ?? 0;
-    const dropped = counted?.dropped ?? 0;
     const counts: PlanRootCounts = {
       steps: steps.length + done + dropped,
       needsYou: columns.needs_you,
@@ -412,12 +430,6 @@ export function buildPlanOverview(
       done,
       dropped,
     };
-    const truncated: PlanNodeListTruncation | undefined =
-      counted?.cut === true
-        ? { bound: 'nodes', value: bounds.maxNodes }
-        : counted?.deeper === true
-          ? { bound: 'depth', value: bounds.maxDepth }
-          : undefined;
     const state = planRootState(root.status, counts);
     return {
       nodeId: root.nodeId,
@@ -426,7 +438,12 @@ export function buildPlanOverview(
       position: root.position,
       revision: root.revision,
       // Steps the read did not reach may be open: never finished.
-      state: truncated !== undefined && state === 'finished' ? 'queued' : state,
+      state:
+        truncated !== undefined && state === 'finished'
+          ? rootWaits
+            ? 'needs_you'
+            : 'queued'
+          : state,
       counts,
       ...(truncated !== undefined ? { truncated } : {}),
       lastWrittenAt,

@@ -22,6 +22,7 @@ import {
   PLAN_TREE_DEPTH_LIMIT,
   planNoteHoldsMergeWait,
   planNoteWaitLine,
+  planStepsAllClosed,
   type PlanNode,
   type PlanNodeSummary,
   type PlanNodeUpdate,
@@ -146,6 +147,33 @@ function waitingNode(node: PlanNode | null): node is PlanNode {
   );
 }
 
+/**
+ * Whether a root's steps have all closed, so it asks for no approval whatever
+ * its status (Plan 339 D6). A walk a bound cut short may have missed an open
+ * step, so it answers no.
+ */
+export async function planRootStepsAllClosed(
+  ctx: Pick<PlanReadContext, 'store' | 'spaceId'>,
+  root: Pick<PlanNode, 'nodeId'>,
+): Promise<boolean> {
+  const walk = await ctx.store.walk(ctx.spaceId, {
+    rootId: root.nodeId,
+    ...PLAN_TREE_WALK_BOUNDS,
+  });
+  if (walk.truncated !== undefined) return false;
+  const steps = walk.nodes.filter((node) => node.nodeId !== root.nodeId);
+  return planStepsAllClosed({
+    steps: steps.length,
+    done: steps.filter((step) => step.status === 'done').length,
+    dropped: steps.filter((step) => step.status === 'dropped').length,
+  });
+}
+
+/** A waiting node that still asks: any but a root whose steps have all closed. */
+async function stillAsks(ctx: PlanReadContext, node: PlanNode): Promise<boolean> {
+  return node.parentId !== null || !(await planRootStepsAllClosed(ctx, node));
+}
+
 /** Newest first by `updatedAt`, a tie by id, so the cut keeps the same nodes on every read. */
 function newestFirst(a: PlanNodeSummary, b: PlanNodeSummary): number {
   return b.updatedAt.localeCompare(a.updatedAt) || a.nodeId.localeCompare(b.nodeId);
@@ -155,7 +183,8 @@ function newestFirst(a: PlanNodeSummary, b: PlanNodeSummary): number {
  * The space's nodes that wait on a person, under open branches only — what its
  * Action Center lists. At most `PLAN_OPEN_ASKS_LIMIT`, newest first. The ask
  * record does not gate it: a node is listed the moment it is blocked, whether
- * or not a wake has asked about it, and after its record lapses.
+ * or not a wake has asked about it, and after its record lapses. A root whose
+ * steps have all closed is not listed, whatever its status (Plan 339 D6).
  */
 export async function listWaitingNodes(ctx: PlanReadContext): Promise<PlanNode[]> {
   const walk = await ctx.store.walk(ctx.spaceId, {
@@ -168,7 +197,9 @@ export async function listWaitingNodes(ctx: PlanReadContext): Promise<PlanNode[]
     .slice(0, PLAN_OPEN_ASKS_LIMIT);
   const nodes = await Promise.all(listed.map((n) => ctx.store.find(ctx.spaceId, n.nodeId)));
   // Re-judged on the full read: a node written between the walk and here is not listed.
-  return nodes.filter(waitingNode);
+  const waiting = nodes.filter(waitingNode);
+  const asks = await Promise.all(waiting.map((node) => stillAsks(ctx, node)));
+  return waiting.filter((_, index) => asks[index]);
 }
 
 /** One waiting node by id, by the rule `listWaitingNodes` lists by; null for any other. */
@@ -184,5 +215,6 @@ export async function findWaitingNode(
     if (!parent || isClosedPlanNodeStatus(parent.status)) return null;
     parentId = parent.parentId;
   }
-  return parentId === null ? node : null;
+  if (parentId !== null) return null;
+  return (await stillAsks(ctx, node)) ? node : null;
 }

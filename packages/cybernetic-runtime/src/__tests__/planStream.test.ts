@@ -1010,9 +1010,11 @@ describe('resident asking and proposing', () => {
       }),
     ).resolves.toMatchObject({
       ok: true,
-      carrierFailure: `Carrier failed for closed node ${step.nodeId}. Read its linked findings and propose a blocked carrier.`,
+      carrierFailure: `Carrier failed for closed node ${step.nodeId}. Read its linked findings and create a step that carries them.`,
     });
-    expect([...store.nodes.values()].some((node) => node.note?.startsWith('Proposed:'))).toBe(true);
+    expect(
+      [...store.nodes.values()].some((node) => node.note?.startsWith('Carries the findings')),
+    ).toBe(true);
   });
 
   it.each(['blocked', 'waiting'] as const)(
@@ -1100,6 +1102,21 @@ describe('resident asking and proposing', () => {
       expect((await current(check.nodeId)).closedAt).toBeUndefined();
     },
   );
+
+  it('asks about a blocked root while a step is open, and never once its steps have all closed (Plan 339 D6)', async () => {
+    const finished = await created({ proposed: 'Worth doing', position: 0 });
+    const step = await created({ parentId: finished.nodeId });
+    await write(step.nodeId, { status: 'done', outcome: 'Met.' });
+    const open = await created({ proposed: 'Also worth doing', position: 1 });
+    await created({ parentId: open.nodeId });
+    const before = (await current(finished.nodeId)).revision;
+
+    const answered = await wake();
+    expect(answered.decisions).toMatchObject([
+      { root: { nodeId: open.nodeId }, answer: { decision: 'ask' } },
+    ]);
+    expect((await current(finished.nodeId)).revision).toBe(before);
+  });
 
   it.each([0, 1, 100, PLAN_NODE_PROSE_MAX_CHARS - 2, PLAN_NODE_PROSE_MAX_CHARS])(
     'preserves every character of an operator note of length %i when asking',
@@ -1491,7 +1508,7 @@ describe('resident asking and proposing', () => {
     expect((await current(node.nodeId)).status).toBe('blocked');
   });
 
-  it('proposes a carrier on done-close and recognises it after approval with a reason', async () => {
+  it('starts a carrier active on done-close and recognises it on a later close', async () => {
     const root = await created();
     const step = await created({ parentId: root.nodeId });
     await linkPlanNode(session(), {
@@ -1510,22 +1527,13 @@ describe('resident asking and proposing', () => {
       ok: true,
       carrier: {
         parentId: root.nodeId,
-        status: 'blocked',
+        status: 'active',
         goal: expect.stringContaining('review:open-1'),
       },
     });
     if (!close.ok || !close.carrier) throw new Error('No carrier');
-    await wake();
-    await wake({}, 'second-wake');
-    expect(await listWaitingNodes(session())).toHaveLength(1);
-    const carrier = await current(close.carrier.nodeId);
-    expect(
-      await openPlanNode(session(), {
-        nodeId: carrier.nodeId,
-        expectedRevision: carrier.revision,
-        why: 'Approved for the next round',
-      }),
-    ).toMatchObject({ ok: true });
+    // A follow-up for carried findings is approved work: it waits on no one (Plan 339 D6).
+    expect(await listWaitingNodes(session())).toHaveLength(0);
     await openPlanNode(session(), {
       nodeId: step.nodeId,
       expectedRevision: (await current(step.nodeId)).revision,
@@ -2561,7 +2569,7 @@ describe('resident review regressions', () => {
         status: 'done',
         outcome: 'Met',
       }),
-    ).toMatchObject({ ok: true, carrier: { status: 'blocked' } });
+    ).toMatchObject({ ok: true, carrier: { status: 'active' } });
     await write(node.nodeId, { status: 'active', parentId: other.nodeId });
     const reopened = await current(node.nodeId);
     expect(
@@ -2672,7 +2680,7 @@ describe('resident review regressions', () => {
         status: 'done',
         outcome: 'Met',
       }),
-    ).toMatchObject({ ok: true, carrier: { status: 'blocked' } });
+    ).toMatchObject({ ok: true, carrier: { status: 'active' } });
     expect(siblings).not.toHaveBeenCalled();
     expect(find).toHaveBeenCalledTimes(1);
     expect(timestamp).toHaveBeenCalledExactlyOnceWith(SPACE, node.nodeId);

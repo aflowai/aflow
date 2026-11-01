@@ -581,6 +581,23 @@ function fullNode(nodeId: string, title: string, extra: Partial<PlanNode> = {}):
   };
 }
 
+/** What a blocked step asks the operator, in its card (Plan 339 D6): the rail's Approve needs it. */
+const WAITS_ON = {
+  reason: 'design_document',
+  decision: 'Approve the help article’s design document.',
+} as const;
+
+/** A card that names the decision its blocked step asks, and nothing more. */
+const ASKING_CARD: PlanNodeCard = {
+  change: { today: 'The help is silent.', after: 'The help answers.' },
+  why: ['Operators ask.'],
+  affects: [],
+  risks: [],
+  questions: [],
+  notDoing: [],
+  waitsOn: WAITS_ON,
+};
+
 function detail(node: PlanNode, extra: Partial<PlanNodeDetailOutput> = {}): Answer {
   const data: PlanNodeDetailOutput = {
     node,
@@ -1382,11 +1399,15 @@ describe('SpacePlanPage — the operator’s writes from the rail', () => {
         status: 'blocked',
         revision: 4,
         note: 'Proposed from the merged plan document; awaits the operator’s approval.',
+        card: ASKING_CARD,
       }),
     );
     await render({ data: withStatus(ARTICLE, 'blocked') });
     await click(card(ARTICLE));
 
+    expect(rail().querySelector('[data-plan-approve-decision]')?.textContent).toContain(
+      WAITS_ON.decision,
+    );
     await type(rail(), '  Go ahead.  ');
     await click(button(rail(), 'Approve'));
 
@@ -1416,7 +1437,9 @@ describe('SpacePlanPage — the operator’s writes from the rail', () => {
     );
     await render({ data: withStatus(ARTICLE, 'blocked') });
     await click(card(ARTICLE));
-    const field = rail().querySelector('input')!;
+    // A stop asks no decision, so its card names none and the rail offers Resume (Plan 339 D6).
+    await click(button(rail(), 'Resume'));
+    const field = rail().querySelector('[data-plan-open-form] input')!;
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(
         field,
@@ -1424,7 +1447,7 @@ describe('SpacePlanPage — the operator’s writes from the rail', () => {
       );
       field.dispatchEvent(new Event('input', { bubbles: true }));
     });
-    await click(button(rail(), 'Approve'));
+    await click(button(rail(), 'Resume'));
     expect(recorded.mutateAsync).toHaveBeenCalledWith({
       nodeId: ARTICLE,
       expectedRevision: 4,
@@ -1447,6 +1470,7 @@ describe('SpacePlanPage — the operator’s writes from the rail', () => {
         parentId: R322,
         status: 'blocked',
         revision: 4,
+        card: ASKING_CARD,
       }),
     );
     await render({ data: withStatus(ARTICLE, 'blocked') });
@@ -1473,12 +1497,13 @@ describe('SpacePlanPage — the operator’s writes from the rail', () => {
     );
     await render({ data: withStatus(ARTICLE, 'blocked') });
     await click(card(ARTICLE));
-    expect(button(rail(), 'Approve')).toBeTruthy();
+    const labels = () => [...rail().querySelectorAll('button')].map((b) => b.textContent);
+    expect(button(rail(), 'Resume')).toBeTruthy();
+    expect(labels()).not.toContain('Approve');
 
     await click(card(BOARD));
-    expect([...rail().querySelectorAll('button')].map((b) => b.textContent)).not.toContain(
-      'Approve',
-    );
+    expect(labels()).not.toContain('Approve');
+    expect(labels()).not.toContain('Resume');
   });
 
   it('holds the write until the step is read, and offers none on a step the read finds closed', async () => {
@@ -1575,6 +1600,7 @@ describe('SpacePlanPage — approve, reopen and order (Plan 332 P2)', () => {
         parentId: R331,
         status: 'blocked',
         revision: 3,
+        card: ASKING_CARD,
       }),
     );
     recorded.details[CLOSED] = detail(
@@ -1604,7 +1630,15 @@ describe('SpacePlanPage — approve, reopen and order (Plan 332 P2)', () => {
   it('offers Approve on a blocked step beside its close controls, and none on a decision', async () => {
     await render({ data: P2_PLAN });
     await click(card(BLOCKED));
-    expect(buttonTexts(rail())).toEqual(['Close', 'Approve', 'Revise', 'Mark done', 'Drop']);
+    // A carded step folds its goal under the card, so Show goal comes before Approve.
+    expect(buttonTexts(rail())).toEqual([
+      'Close',
+      'Show goal',
+      'Approve',
+      'Revise',
+      'Mark done',
+      'Drop',
+    ]);
 
     nav.search = `plan=${R322}`;
     await render({ data: PLAN });
@@ -1666,6 +1700,7 @@ describe('SpacePlanPage — approve, reopen and order (Plan 332 P2)', () => {
       parentId: R331,
       status: 'blocked',
       revision: 4,
+      card: ASKING_CARD,
     });
     recorded.detailRefetch.mockImplementation(() => {
       recorded.details[BLOCKED] = detail(revised);
@@ -1736,6 +1771,7 @@ describe('SpacePlanPage — approve, reopen and order (Plan 332 P2)', () => {
         parentId: R331,
         status: 'blocked',
         revision: 4,
+        card: ASKING_CARD,
       }),
     );
     await render({ data: P2_PLAN });
@@ -2671,37 +2707,13 @@ describe('SpacePlanPage — the overview across plans (Plan 332 P4)', () => {
     expect(lane('needs_you').textContent).toContain('Nothing pending');
   });
 
-  it('approves a blocked step from its row through the open write, against the lanes’ revision, without opening its plan', async () => {
+  it('offers no Approve on a row: only the rail names the decision a step asks (Plan 339 D6)', async () => {
     await render({ data: OVERVIEW });
 
-    await click(button(laneRow(LANE_STOP), 'Approve'));
-
-    expect(recorded.sent).toEqual([
-      { path: `/spaces/${SPACE_ID}/plan/nodes/${LANE_STOP}/open`, body: { expectedRevision: 4 } },
-    ]);
-    expect(mutationFor('/open')?.invalidate).toEqual([['space', SPACE_ID, 'plan']]);
-    expect(nav.pushed).toEqual([]);
-    expect(boardShown()).toBe(null);
-    // Approve is the blocked row's alone: not a decision's, not a stranded step's.
-    expect(buttonTexts(laneRow(DECISION))).not.toContain('Approve');
-    expect(buttonTexts(laneRow(LANE_STRANDED))).not.toContain('Approve');
-  });
-
-  it('says a refused approve on its row and reads the overview again when the step moved', async () => {
-    recorded.mutateAsync.mockRejectedValue(
-      Object.assign(new Error('This step changed since the plan was read: it is at revision 5.'), {
-        status: 409,
-      }),
-    );
-    await render({ data: OVERVIEW });
-
-    await click(button(laneRow(LANE_STOP), 'Approve'));
-
-    expect(laneRow(LANE_STOP).querySelector('[role="alert"]')?.textContent).toContain(
-      'it is at revision 5',
-    );
-    expect(recorded.rowsRefetch).toHaveBeenCalledTimes(1);
-    expect(recorded.refetch).not.toHaveBeenCalled();
+    for (const row of [LANE_STOP, DECISION, LANE_STRANDED]) {
+      expect(buttonTexts(laneRow(row))).not.toContain('Approve');
+    }
+    expect(recorded.sent).toEqual([]);
   });
 
   it('opens the shared rail over the overview from a row, puts the step in the URL alone, and takes it out on Close', async () => {
@@ -2721,7 +2733,8 @@ describe('SpacePlanPage — the overview across plans (Plan 332 P4)', () => {
       'Approval',
     ]);
     expect(rail().querySelector('[data-plan-rail-phase]')?.textContent).toBe('P3');
-    expect(buttonTexts(rail())).toEqual(['Close', 'Approve', 'Revise', 'Mark done', 'Drop']);
+    // A stop names no decision in a card: the rail offers Resume, not Approve (Plan 339 D6).
+    expect(buttonTexts(rail())).toEqual(['Close', 'Resume', 'Mark done', 'Drop']);
 
     await click(button(rail(), 'Close'));
     expect(nav.pushed.at(-1)).toBe('/s/work/plan');
@@ -3031,6 +3044,7 @@ describe('SpacePlanPage — the decision card on the rail (Plan 337 P2)', () => 
       { question: 'Does Approve accept every recommendation?', recommended: 'Yes.' },
     ],
     notDoing: [],
+    waitsOn: { reason: 'operator_question', decision: 'Answer the two open questions.' },
   };
   const DOC_URL =
     'https://github.com/aflowai/aflow/blob/93ce25659c0c/docs/plans/337-plans-the-operator-can-decide-from.md';
