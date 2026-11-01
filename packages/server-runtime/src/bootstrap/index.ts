@@ -13,5 +13,8 @@ export {
   loadRedisAclIntoRunningServer,
   applyHostIdentityToRunningServer,
   assertHostGrantOnRunningServer,
+  applyChannelIdentityToRunningServer,
+  assertChannelGrantOnRunningServer,
+  CHANNEL_REDIS_USER,
 } from './redisAcl.js';
 export { findLocalAuthConfigViolations, localOwner } from '../plugins/localInstanceAuth.js';

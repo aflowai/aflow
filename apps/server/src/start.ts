@@ -16,8 +16,11 @@ import {
   serve,
   type ServerComposition,
 } from '@aflow/server-runtime';
-import { assertHostGrantOnRunningServer } from '@aflow/server-runtime/bootstrap';
-import { resolveEditionDescriptor } from '@aflow/schemas';
+import {
+  assertChannelGrantOnRunningServer,
+  assertHostGrantOnRunningServer,
+} from '@aflow/server-runtime/bootstrap';
+import { channelLaneComposed, resolveEditionDescriptor } from '@aflow/schemas';
 
 type ServerLog = Awaited<ReturnType<typeof serve>>['log'];
 
@@ -57,6 +60,24 @@ async function assertHostGrant(log: ServerLog): Promise<void> {
   }
 }
 
+/** The channel lane's grant, asserted on every start by the host grant's rule. */
+async function assertChannelGrant(log: ServerLog): Promise<void> {
+  if (channelLaneComposed() === 'absent') return;
+  try {
+    const { outcome } = await assertChannelGrantOnRunningServer(getRedisConnection());
+    if (outcome === 'absent') {
+      log.warn(
+        'The running Redis has no channel identity, so the channel app cannot connect. ' +
+          'A full start creates it.',
+      );
+      return;
+    }
+    log.info('Asserted the channel grant on the running Redis');
+  } catch (err) {
+    log.error({ err }, 'Could not assert the channel grant on the running Redis');
+  }
+}
+
 export function start(composition: ServerComposition): void {
   const port = process.env['PORT'] ? Number(process.env['PORT']) : 3000;
   const host = resolveListenHost(resolveEditionDescriptor());
@@ -65,6 +86,7 @@ export function start(composition: ServerComposition): void {
     .then(async (app) => {
       closeOnSignal(app, (code) => process.exit(code));
       await assertHostGrant(app.log);
+      await assertChannelGrant(app.log);
     })
     .catch((err: unknown) => {
       // The logger belongs to an app that may never have been built.

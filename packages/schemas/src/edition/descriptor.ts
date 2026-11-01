@@ -158,6 +158,32 @@ export function browserLaneComposed(env: NodeJS.ProcessEnv = process.env): Brows
   return hostLaneComposed(env);
 }
 
+/**
+ * The Redis credential of the channel lane's own identity (Plan 327 D1).
+ *
+ * Not minted at first boot, unlike the host credential: the lane's setup
+ * (`yarn channel:slack setup`) writes it into the instance file. An install
+ * nobody set a channel up on therefore holds none, and composes no channel lane.
+ */
+export const CHANNEL_REDIS_PASSWORD_ENV = 'PHOENIX_CHANNEL_REDIS_PASSWORD';
+
+/**
+ * Whether a deployment carries a channel lane — `channel.*` served by an
+ * optional app that reaches the operator away from the machine.
+ *
+ * Keyed on the platform's own environment rather than on the app's file, for
+ * the reason the host lane is: the server and the orchestrator read the
+ * descriptor, and in the appliance they cannot see a file in the operator's
+ * home directory.
+ */
+export const ChannelLaneSchema = z.enum(['present', 'absent']);
+export type ChannelLane = z.infer<typeof ChannelLaneSchema>;
+
+export function channelLaneComposed(env: NodeJS.ProcessEnv = process.env): ChannelLane {
+  const credential = env[CHANNEL_REDIS_PASSWORD_ENV]?.trim();
+  return credential !== undefined && credential !== '' ? 'present' : 'absent';
+}
+
 export const ComputeAvailabilitySchema = z.object({
   composed: ComputeRuntimeSchema,
   executor: z.enum(['up', 'down', 'unknown']),
@@ -173,6 +199,7 @@ export const EditionDescriptorSchema = z.object({
   codeLane: CodeLaneSchema,
   hostLane: HostLaneSchema,
   browserLane: BrowserLaneSchema,
+  channelLane: ChannelLaneSchema,
 });
 export type EditionDescriptor = z.infer<typeof EditionDescriptorSchema>;
 
@@ -195,6 +222,7 @@ export const EditionSummarySchema = z.object({
     codeLane: CodeLaneSchema,
     hostLane: HostLaneSchema,
     browserLane: BrowserLaneSchema,
+    channelLane: ChannelLaneSchema,
   }),
 });
 export type EditionSummary = z.infer<typeof EditionSummarySchema>;
@@ -321,6 +349,7 @@ export function resolveEditionDescriptor(env: NodeJS.ProcessEnv = process.env): 
       codeLane: codeLaneComposed(env),
       hostLane: hostLaneComposed(env),
       browserLane: browserLaneComposed(env),
+      channelLane: channelLaneComposed(env),
     });
   }
 
@@ -389,6 +418,7 @@ export function resolveEditionDescriptor(env: NodeJS.ProcessEnv = process.env): 
     codeLane: codeLaneComposed(env),
     hostLane: hostLaneComposed(env),
     browserLane: browserLaneComposed(env),
+    channelLane: channelLaneComposed(env),
   });
 }
 

@@ -11,12 +11,14 @@ const HOSTED: ComposedLanes = {
   codeLane: 'present',
   hostLane: 'absent',
   browserLane: 'absent',
+  channelLane: 'absent',
 };
 const APPLIANCE: ComposedLanes = {
   edition: 'community-local',
   codeLane: 'absent',
   hostLane: 'present',
   browserLane: 'present',
+  channelLane: 'absent',
 };
 
 describe('isOperationComposed', () => {
@@ -50,6 +52,17 @@ describe('isOperationComposed', () => {
     expect(isStepTypeComposed('browser', { ...APPLIANCE, browserLane: 'absent' })).toBe(false);
     expect(isOperationComposed('browser.page.open', APPLIANCE)).toBe(true);
     expect(isOperationComposed('browser.page.open', HOSTED)).toBe(false);
+  });
+
+  it('composes the channel lane exactly where channelLane is present, in either edition', () => {
+    expect(isOperationComposed('channel.message.send', APPLIANCE)).toBe(false);
+    expect(isOperationComposed('channel.message.send', HOSTED)).toBe(false);
+    expect(
+      isOperationComposed('channel.message.send', { ...APPLIANCE, channelLane: 'present' }),
+    ).toBe(true);
+    expect(isOperationComposed('channel.message.send', { ...HOSTED, channelLane: 'present' })).toBe(
+      true,
+    );
   });
 
   it('answers on the step type, so a bare step type answers the same way', () => {

@@ -48,6 +48,9 @@ export default [
             'apps/aflow-executor-host/src/browser/harnessRelay.mjs',
             // Run with `node` whether the executor runs compiled or from source.
             'apps/aflow-executor-host/src/openSandboxLauncher.mjs',
+            // An application's own scripts, such as the Slack channel app's setup,
+            // which is plain JavaScript so it shares `yarn mcp:setup`'s key minting.
+            'apps/*/scripts/*.mjs',
           ],
           // Cap must exceed total allowDefaultProject matches or ESLint fails (see tail-run-events.ts).
           maximumDefaultProjectFileMatchCount_THIS_WILL_SLOW_DOWN_LINTING: 104,

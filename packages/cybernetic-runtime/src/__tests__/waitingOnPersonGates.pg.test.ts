@@ -8,7 +8,8 @@
  * workflow task is a human task where its hydration is stamped for the pause
  * or its definition resolves to a human task, and a write approval where it
  * holds the run's pause and asks for one. The suite runs only where
- * DATABASE_URL names a Postgres database, and it skips without one.
+ * DATABASE_URL names a Postgres database whose tenant schema holds the tables
+ * it reads, and it skips otherwise.
  *
  * The sources live in `@aflow/server-runtime`, which depends on this package,
  * so this suite cannot call their `listOpen`. Each fixture pins one source
@@ -34,7 +35,7 @@
  *   space's.
  */
 import { randomUUID } from 'node:crypto';
-import { afterAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { eq, inArray } from 'drizzle-orm';
 import {
   createDatabase,
@@ -42,6 +43,7 @@ import {
   egressApprovalRequests,
   sessions,
   spaces,
+  tenantIdToSchemaName,
   withTenantSchema,
   workflowRuns,
   workflowRunTasks,
@@ -75,6 +77,7 @@ vi.mock('@aflow/database', async () => {
 
 const DATABASE_URL = process.env['DATABASE_URL'];
 const TENANT_ID = 'a0000000-0000-0000-0000-000000000001' as TenantId;
+const TENANT_SCHEMA = tenantIdToSchemaName(TENANT_ID);
 const SPACE_ID = randomUUID();
 const SLUG = `waiting-${SPACE_ID.slice(0, 8)}`;
 
@@ -116,7 +119,26 @@ describeDb('readWaitingGates — counts over the tables the sources read (real D
     return new Date(clock);
   }
 
+  let tablesPresent = false;
+
+  beforeAll(async () => {
+    const rows = await handle.sql<{ present: number }[]>`
+      SELECT count(*)::int AS present FROM information_schema.tables
+      WHERE (table_schema = ${TENANT_SCHEMA}
+              AND table_name IN ('spaces', 'sessions', 'workflow_runs', 'workflow_run_tasks'))
+         OR (table_schema = 'public' AND table_name = 'egress_approval_requests')`;
+    tablesPresent = rows[0]?.present === 5;
+  });
+
+  beforeEach((test) => {
+    if (!tablesPresent) test.skip();
+  });
+
   afterAll(async () => {
+    if (!tablesPresent) {
+      await handle.close();
+      return;
+    }
     await withTenantSchema(handle.db, tenant, async (tx) => {
       if (sessionIds.length > 0)
         await tx.delete(sessions).where(inArray(sessions.sessionId, sessionIds));

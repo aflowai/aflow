@@ -7,7 +7,8 @@
  * No Postgres server was available on the machine this suite was written on.
  * So nothing here proves that Postgres parses these queries or that they
  * return the numbers `waitingOnPersonGates.pg.test.ts` expects. That suite
- * proves both wherever DATABASE_URL is set, as CI sets it.
+ * proves both wherever DATABASE_URL names a database whose tenant schema holds
+ * the tables it reads. CI migrates no tenant schema, so it skips there.
  *
  * What this suite proves is narrower. Each query renders, through drizzle's
  * own Postgres dialect, to the exact text and parameters the code sends. Every

@@ -48,6 +48,7 @@ apps/
   aflow-executor-compute/  # Sandboxed code execution executor (Docker containers)
   aflow-executor-mcp/      # MCP tool executor
   aflow-executor-host/     # Paired host executor — coding harnesses and commands on the operator's machine
+  aflow-channel-slack/     # Optional Slack channel app — the channel lane's executor and Socket Mode listener (Plan 327)
   aflow-executor-mock/     # Dev-only mock executor for contract testing
   aflow-mcp/               # MCP server (Streamable HTTP transport)
 packages/

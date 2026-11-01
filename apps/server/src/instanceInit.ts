@@ -16,6 +16,8 @@ import './env.js';
 import { chmod, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import { CHANNEL_REDIS_PASSWORD_ENV } from '@aflow/schemas';
+
 import {
   REDIS_ACL_FILENAME,
   ensureInstanceConfig,
@@ -51,7 +53,17 @@ async function main(): Promise<void> {
   // Group-readable for the same reason as the Redis config cut: the server
   // reads this as a different uid, and a file only the writer can open aborts
   // its startup rather than degrading.
-  await writeFile(aclPath, renderRedisAcl({ defaultPassword, hostPassword }), { mode: 0o640 });
+  // The channel identity exists only where a channel app was set up (Plan 327).
+  const channelPassword = config.values[CHANNEL_REDIS_PASSWORD_ENV];
+  await writeFile(
+    aclPath,
+    renderRedisAcl({
+      defaultPassword,
+      hostPassword,
+      ...(channelPassword === undefined ? {} : { channelPassword }),
+    }),
+    { mode: 0o640 },
+  );
   await chmod(aclPath, 0o640);
   console.log(`[instance-init] wrote the Redis ACL to ${aclPath}`);
 }

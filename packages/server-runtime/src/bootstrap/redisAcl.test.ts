@@ -159,3 +159,64 @@ describe('redis acl', () => {
     expect(hostLine).not.toContain('d'.repeat(32));
   });
 });
+
+describe('redis acl — the channel lane (Plan 327)', () => {
+  const withChannel = renderRedisAcl({
+    defaultPassword: 'd'.repeat(32),
+    hostPassword: 'h'.repeat(32),
+    channelPassword: 'c'.repeat(32),
+  });
+  const channelLine = withChannel.split('\n').find((l) => l.startsWith('user channelexec')) ?? '';
+  const hostRules = new Set(hostLine.split(' '));
+
+  it('carries no channel identity where no channel app was set up', () => {
+    expect(acl).not.toContain('channelexec');
+    expect(
+      renderRedisAcl({
+        defaultPassword: 'd'.repeat(32),
+        hostPassword: 'h'.repeat(32),
+        channelPassword: ' ',
+      }),
+    ).not.toContain('channelexec');
+  });
+
+  it('gives the channel app its own credential, apart from the other two', () => {
+    expect(channelLine.startsWith('user channelexec resetpass on >' + 'c'.repeat(32))).toBe(true);
+    expect(channelLine).not.toContain('d'.repeat(32));
+    expect(channelLine).not.toContain('h'.repeat(32));
+  });
+
+  it('claims the channel stream and no other lane', () => {
+    const keys = channelLine.split(' ').filter((rule) => rule.startsWith('~aflow:jobs:'));
+    expect(keys).toEqual(['~' + StreamKeys.jobStream('channel')]);
+  });
+
+  it('holds only executor-runtime families the host grant also holds, and none of its machine records', () => {
+    const families = channelLine
+      .split(' ')
+      .filter(
+        (rule) =>
+          (rule.startsWith('~') || rule.startsWith('&') || rule.startsWith('%')) &&
+          rule !== '~aflow:jobs:channel',
+      );
+    for (const family of families) expect(hostRules.has(family), family).toBe(true);
+    for (const absent of [
+      'write-approval',
+      'browser',
+      'host-inventory',
+      'host-machines',
+      'handoff',
+      'approval-spent',
+    ]) {
+      expect(channelLine, absent).not.toContain(absent);
+    }
+    expect(channelLine).not.toContain('~*');
+    expect(channelLine).not.toContain('aflow:control');
+  });
+
+  it('subtracts the same key-independent commands the host grant does', () => {
+    const commands = (line: string) =>
+      line.split(' ').filter((rule) => rule.startsWith('+') || rule.startsWith('-'));
+    expect(commands(channelLine)).toEqual(commands(hostLine));
+  });
+});

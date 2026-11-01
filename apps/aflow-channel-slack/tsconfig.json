@@ -1,0 +1,20 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "composite": true,
+    "declaration": true,
+    "declarationMap": true
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.test.ts", "src/__tests__/**"],
+  "references": [
+    { "path": "../../packages/executor-runtime" },
+    { "path": "../../packages/lib" },
+    { "path": "../../packages/network-safety" },
+    { "path": "../../packages/payload-store" },
+    { "path": "../../packages/redis" },
+    { "path": "../../packages/schemas" }
+  ]
+}
