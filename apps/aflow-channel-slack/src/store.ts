@@ -155,9 +155,10 @@ export const ThreadRecordSchema = z.object({
    */
   relayedStepExecutionId: z.string().min(1).nullable(),
   /**
-   * The pause a reply last resumed. The session's events name it as the newest
-   * pause until the Helmsman answers, so a reply that reads the pause from them
-   * skips this one rather than resume it a second time.
+   * The pause a reply last resumed, or the one a resume found closed with a
+   * 409. The session's events name it as the newest pause until the Helmsman
+   * answers, so a reply that reads the pause from them skips this one rather
+   * than resume it a second time.
    */
   resumedStepExecutionId: z.string().min(1).nullable(),
   startedAt: z.string().min(1),

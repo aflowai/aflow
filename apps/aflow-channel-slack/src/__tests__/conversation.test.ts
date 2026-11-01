@@ -15,6 +15,7 @@ import { CONVERSATION_START_MODE, HELMSMAN_TARGET, createAflowApi } from '../afl
 import { REPLY_DECIDES_NOTHING } from '../cardActions.js';
 import type { ChannelSlackConfig } from '../config.js';
 import {
+  ANSWER_NOT_POSTED,
   CONVERSATION_ENDED,
   Conversations,
   LATE_ALREADY_DECIDED,
@@ -31,6 +32,7 @@ import {
 } from '../conversation.js';
 import { answerInbound, answerTap, type InboundResult } from '../inbound.js';
 import { CODE_ALREADY_USED_REPLY, STRANGER_REPLY } from '../linking.js';
+import { SlackApiError } from '../slack.js';
 import { ChannelStore } from '../store.js';
 import { buttonsOf, makeItem, OPERATOR, OWNER, SPACE, recordingSlack } from './cardFixtures.js';
 import type { RecordingSlack } from './cardFixtures.js';
@@ -476,6 +478,131 @@ describe('a thread whose watch stopped before the answer came', () => {
     expect(
       (await send(directMessage(OPERATOR, 'go on', NOW, { threadTs: status.ts }))).outcome,
     ).toBe('continued');
+  });
+});
+
+describe('a waiting thread whose session ended at Aflow', () => {
+  async function waitingThread() {
+    const status = directMessage(OPERATOR, 'status?', NOW);
+    await send(status);
+    const [session] = [...aflow.sessions.values()];
+    if (session === undefined) throw new Error('no session');
+    return { status, session };
+  }
+
+  it('says the conversation ended when the resume finds it ended, and every later reply says so', async () => {
+    const { status, session } = await waitingThread();
+    aflow.endSession(session.id, 'SessionCancelled');
+
+    const reply = await send(directMessage(OPERATOR, 'go on', NOW, { threadTs: status.ts }));
+    const later = await send(directMessage(OPERATOR, 'hello?', NOW, { threadTs: status.ts }));
+
+    expect([reply.outcome, later.outcome]).toEqual(['ended', 'ended']);
+    expect(store.threadAt(status.channel, status.ts)?.status).toBe('ended');
+    expect(slack.posts.slice(-2).map((post) => post.text)).toEqual([
+      CONVERSATION_ENDED,
+      CONVERSATION_ENDED,
+    ]);
+    expect(slack.posts.map((post) => post.text)).not.toContain(STILL_ANSWERING);
+    expect(slack.posts.map((post) => post.text)).not.toContain(MOVED_ON);
+    expect(aflow.resumes).toHaveLength(1);
+    expect(aflow.starts).toHaveLength(1);
+  });
+
+  it('says the conversation ended when the thread reads the pause from the session', async () => {
+    const { status, session } = await waitingThread();
+    const thread = store.threadAt(status.channel, status.ts);
+    if (thread === undefined) throw new Error('no thread');
+    // A watch that gave up leaves the thread waiting with no pause it holds.
+    store.updateThread(thread, { pausedStepExecutionId: null }, NOW);
+    aflow.endSession(session.id, 'SessionCompleted');
+
+    const reply = await send(directMessage(OPERATOR, 'go on', NOW, { threadTs: status.ts }));
+
+    expect(reply.outcome).toBe('ended');
+    expect(slack.posts.at(-1)?.text).toBe(CONVERSATION_ENDED);
+    expect(aflow.resumes).toEqual([]);
+    expect(store.threadAt(status.channel, status.ts)?.status).toBe('ended');
+  });
+});
+
+describe('a pause resumed outside this thread', () => {
+  it('gets the moved-on notice once, and later replies wait for the answer', async () => {
+    const status = directMessage(OPERATOR, 'status?', NOW);
+    await send(status);
+    const [session] = [...aflow.sessions.values()];
+    aflow.holdAnswers = true;
+    aflow.resumeAtAflow(session?.id ?? '');
+
+    const first = await send(directMessage(OPERATOR, 'go on', NOW, { threadTs: status.ts }));
+    const second = await send(directMessage(OPERATOR, 'go on?', NOW, { threadTs: status.ts }));
+    const third = await send(directMessage(OPERATOR, 'and?', NOW, { threadTs: status.ts }));
+
+    expect([first.outcome, second.outcome, third.outcome]).toEqual(['refused', 'busy', 'busy']);
+    expect(slack.posts.filter((post) => post.text === MOVED_ON)).toHaveLength(1);
+    expect(slack.posts.at(-1)?.text).toBe(STILL_ANSWERING);
+    expect(aflow.resumes).toHaveLength(1);
+
+    // Once the Helmsman answers at Aflow, the next reply resumes the new pause.
+    aflow.holdAnswers = false;
+    aflow.answerHeld();
+    expect(
+      (await send(directMessage(OPERATOR, 'thanks', NOW, { threadTs: status.ts }))).outcome,
+    ).toBe('continued');
+  });
+});
+
+describe('an answer Slack refuses to post', () => {
+  function refuseAnswers(errors: SlackApiError[]): void {
+    const post = slack.postMessage;
+    slack.postMessage = (channel, text, options) => {
+      const error = text.startsWith('The Helmsman answers') ? errors.shift() : undefined;
+      return error === undefined ? post(channel, text, options) : Promise.reject(error);
+    };
+  }
+
+  it('tells the thread the answer was not posted when Slack refused it outright', async () => {
+    refuseAnswers([new SlackApiError('chat.postMessage', 'msg_too_long', false)]);
+    const status = directMessage(OPERATOR, 'status?', NOW);
+
+    const started = await answerInbound(status, deps());
+    const watched = 'watching' in started ? await started.watching : undefined;
+
+    expect(watched).toBe('answered');
+    expect(slack.posts.map((post) => post.text)).toEqual([ANSWER_NOT_POSTED]);
+    expect(slack.posts[0]?.threadTs).toBe(status.ts);
+    // The pause stays open, so a reply continues the conversation.
+    expect(
+      (await send(directMessage(OPERATOR, 'go on', NOW, { threadTs: status.ts }))).outcome,
+    ).toBe('continued');
+  });
+
+  it('posts the answer once more when Slack named the refusal retryable', async () => {
+    refuseAnswers([new SlackApiError('chat.postMessage', 'ratelimited', true)]);
+
+    await send(directMessage(OPERATOR, 'status?', NOW));
+
+    expect(slack.posts.map((post) => post.text)).toEqual(['The Helmsman answers: status?']);
+  });
+
+  it('tells the thread when the second post is refused too', async () => {
+    refuseAnswers([
+      new SlackApiError('chat.postMessage', 'ratelimited', true),
+      new SlackApiError('chat.postMessage', 'ratelimited', true),
+    ]);
+
+    await send(directMessage(OPERATOR, 'status?', NOW));
+
+    expect(slack.posts.map((post) => post.text)).toEqual([ANSWER_NOT_POSTED]);
+  });
+
+  it('posts nothing again when the post may have landed', async () => {
+    refuseAnswers([new SlackApiError('chat.postMessage', 'request_timeout', true, true)]);
+
+    const started = await answerInbound(directMessage(OPERATOR, 'status?', NOW), deps());
+
+    if ('watching' in started) await expect(started.watching).rejects.toThrow('request_timeout');
+    expect(slack.posts).toEqual([]);
   });
 });
 

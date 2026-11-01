@@ -25,7 +25,7 @@
 import type { AflowApi, ConversationEvent, RouteRefusal } from './aflowApi.js';
 import type { CardTap } from './cardActions.js';
 import { escapeMrkdwn } from './cards.js';
-import type { SlackBlock, SlackClient } from './slack.js';
+import { SlackApiError, type SlackBlock, type SlackClient } from './slack.js';
 import type { DirectMessage } from './socketMode.js';
 import { typedTextOf } from './slackText.js';
 import type { ChannelStore, InboundOutcome, InboundRecord, ThreadRecord } from './store.js';
@@ -62,6 +62,9 @@ export const CHECK_AT_AFLOW =
 
 export const MOVED_ON =
   'The conversation moved on at Aflow, so this was not sent. Send it again to continue from there.';
+
+export const ANSWER_NOT_POSTED =
+  'The Helmsman answered, but Slack refused to post the answer here. Read it in the conversation at Aflow. A reply here continues it.';
 
 export const NOT_THE_KEY_OWNER =
   'The Slack account linked here is linked to another Aflow user than the one this app acts for, so nothing was sent. Run `yarn channel:slack setup` and link again.';
@@ -205,6 +208,14 @@ function asksTheOperator(event: ConversationEvent): boolean {
   return event.agentResponse !== undefined || event.asksForReply;
 }
 
+/** True when Slack answered a refusal, so the post provably put nothing in the thread. */
+function postedNothing(error: unknown): error is SlackApiError {
+  return error instanceof SlackApiError && !error.outcomeUnknown;
+}
+
+/** What a reply finds at Aflow: a pause it may resume, an ended session, or neither. */
+type OpenTurn = { kind: 'pause'; step: string } | { kind: 'ended' } | { kind: 'none' };
+
 export class Conversations {
   private readonly watching = new Set<string>();
 
@@ -341,18 +352,35 @@ export class Conversations {
       await say(CONVERSATION_ENDED);
       return { outcome: 'ended' };
     }
-    const step =
-      thread.status === 'waiting'
-        ? (thread.pausedStepExecutionId ?? (await this.lastPause(thread)))
-        : undefined;
+    let step: string | undefined;
+    if (thread.status === 'waiting') {
+      step = thread.pausedStepExecutionId ?? undefined;
+      if (step === undefined) {
+        const turn = await this.openTurn(thread);
+        if (turn.kind === 'ended') return this.ended(thread, say);
+        if (turn.kind === 'pause') step = turn.step;
+      }
+    }
     if (step === undefined) {
       await say(STILL_ANSWERING);
       return { outcome: 'busy' };
     }
     const resumed = await api.resumeConversation(thread.spaceId, thread.sessionId, step, text, key);
     if (!resumed.ok) {
-      // The next reply reads the pause again rather than trust this one.
-      store.updateThread(thread, { pausedStepExecutionId: null }, this.now());
+      // The next reply reads the pause again rather than trust this one. A 409
+      // says the pause is closed, resumed outside this thread or moved on, so
+      // the next reply skips it as one this thread resumed.
+      store.updateThread(
+        thread,
+        {
+          pausedStepExecutionId: null,
+          ...(resumed.status === 409 ? { resumedStepExecutionId: step } : {}),
+        },
+        this.now(),
+      );
+      if (!resumed.retryable && (await this.openTurn(thread)).kind === 'ended') {
+        return this.ended(thread, say);
+      }
       await say(resumed.status === 409 ? MOVED_ON : refusalText(resumed));
       return { outcome: refusalOutcome(resumed) };
     }
@@ -401,18 +429,35 @@ export class Conversations {
   }
 
   /**
-   * The pause a reply may resume, read from the session when the thread does not
-   * hold it. A pause the thread already resumed is not one: the Helmsman is
-   * still answering it.
+   * The session's newest turn, read when the thread does not hold the pause. A
+   * pause the thread already resumed is not open: the Helmsman is still
+   * answering it.
    */
-  private async lastPause(thread: ThreadRecord): Promise<string | undefined> {
+  private async openTurn(thread: ThreadRecord): Promise<OpenTurn> {
     const page = await this.deps.api.latestEvents(thread.spaceId, thread.sessionId);
-    if (!page.ok) return undefined;
+    if (!page.ok) return { kind: 'none' };
     const last = lastTurnEvent(page.events);
-    if (last?.eventType !== 'SessionPaused' || !asksTheOperator(last)) return undefined;
-    return last.stepExecutionId === thread.resumedStepExecutionId
-      ? undefined
-      : last.stepExecutionId;
+    if (last === undefined) return { kind: 'none' };
+    if (last.eventType !== 'SessionPaused') return { kind: 'ended' };
+    const step = last.stepExecutionId;
+    if (!asksTheOperator(last) || step === undefined || step === thread.resumedStepExecutionId) {
+      return { kind: 'none' };
+    }
+    return { kind: 'pause', step };
+  }
+
+  /** Records that the session ended at Aflow, and tells the thread. */
+  private async ended(
+    thread: ThreadRecord,
+    say: (line: string) => Promise<unknown>,
+  ): Promise<ConverseResult> {
+    this.deps.store.updateThread(
+      thread,
+      { status: 'ended', pausedStepExecutionId: null },
+      this.now(),
+    );
+    await say(CONVERSATION_ENDED);
+    return { outcome: 'ended' };
   }
 
   /** Watches every thread that was waiting on an answer when the app stopped. */
@@ -472,7 +517,11 @@ export class Conversations {
             this.now(),
           );
           const answer = last.agentResponse;
-          await say(answer === undefined ? 'The Helmsman waits for your reply.' : relayed(answer));
+          await this.relay(
+            thread,
+            answer === undefined ? 'The Helmsman waits for your reply.' : relayed(answer),
+            sleep,
+          );
           return 'answered';
         }
         if (!toldAboutAflow) {
@@ -487,6 +536,37 @@ export class Conversations {
         return 'gave_up';
       }
       await sleep(this.deps.pollMs ?? WATCH_POLL_MS);
+    }
+  }
+
+  /**
+   * Posts the answer into the thread. A post Slack refused put nothing there,
+   * so the answer is posted once more when Slack named the refusal retryable,
+   * and the thread is told it was not posted when that fails too. A post that
+   * may have landed is never repeated.
+   */
+  private async relay(
+    thread: ThreadRecord,
+    text: string,
+    sleep: (ms: number) => Promise<void>,
+  ): Promise<void> {
+    const say = (line: string) => this.say(thread.channel, thread.threadTs, line);
+    try {
+      await say(text);
+      return;
+    } catch (error) {
+      if (!postedNothing(error)) throw error;
+      if (!error.retryable) {
+        await say(ANSWER_NOT_POSTED);
+        return;
+      }
+    }
+    await sleep(this.deps.pollMs ?? WATCH_POLL_MS);
+    try {
+      await say(text);
+    } catch (error) {
+      if (!postedNothing(error)) throw error;
+      await say(ANSWER_NOT_POSTED);
     }
   }
 }
