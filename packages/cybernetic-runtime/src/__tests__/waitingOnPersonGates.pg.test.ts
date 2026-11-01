@@ -111,6 +111,9 @@ function pausedSnapshot(
 
 describeDb('readWaitingGates — counts over the tables the sources read (real DB)', () => {
   const handle = createDatabase({ connectionString: DATABASE_URL ?? '' });
+  // The tenant migrations open their own transactions, which a pooled client
+  // refuses with UNSAFE_TRANSACTION while it leaves the transaction open.
+  const schemaHandle = createDatabase({ connectionString: DATABASE_URL ?? '', maxConnections: 1 });
   const tenant = createTenantContext(TENANT_ID);
   let clock = Date.parse('2026-11-01T00:00:00.000Z');
 
@@ -126,7 +129,7 @@ describeDb('readWaitingGates — counts over the tables the sources read (real D
     await handle.sql`
       INSERT INTO public.tenants (tenant_id, schema_name, name, status)
       VALUES (${TENANT_ID}, ${TENANT_SCHEMA}, 'Waiting gates suite', 'suspended')`;
-    await createTenantSchema(handle.sql, TENANT_ID);
+    await createTenantSchema(schemaHandle.sql, TENANT_ID);
     const rows = await handle.sql<{ present: number }[]>`
       SELECT count(*)::int AS present FROM information_schema.tables
       WHERE (table_schema = ${TENANT_SCHEMA}
@@ -141,11 +144,11 @@ describeDb('readWaitingGates — counts over the tables the sources read (real D
 
   afterAll(async () => {
     try {
-      await dropTenantSchema(handle.sql, TENANT_ID);
+      await dropTenantSchema(schemaHandle.sql, TENANT_ID);
       // Its egress requests go with it, by the foreign key.
       await handle.sql`DELETE FROM public.tenants WHERE tenant_id = ${TENANT_ID}`;
     } finally {
-      await handle.close();
+      await Promise.all([handle.close(), schemaHandle.close()]);
     }
   }, 60_000);
 
