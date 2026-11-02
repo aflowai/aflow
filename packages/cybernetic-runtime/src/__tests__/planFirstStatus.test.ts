@@ -608,6 +608,30 @@ describe('a node’s first status (Plan 339 D6)', () => {
     });
   });
 
+  it('refuses moving a blocked ask under a plan whose P0 is reopened, or ahead of P0', async () => {
+    const { root } = await mergedP0();
+    const p1 = await ask(root.nodeId);
+    if (!p1.ok) throw new Error(p1.message);
+    const other = await mergedP0At(5);
+    const landed = await refusedUntilP0Closes(other.p0, p1.node.nodeId, (revision) =>
+      updatePlanNode(ctx(), {
+        nodeId: p1.node.nodeId,
+        expectedRevision: revision,
+        parentId: other.root.nodeId,
+      }),
+    );
+    if (!landed.ok) throw new Error(landed.message);
+    expect(landed.node).toMatchObject({ parentId: other.root.nodeId, status: 'blocked' });
+    const before = store.nodes.get(p1.node.nodeId)!;
+    const placed = await updatePlanNode(ctx(), {
+      nodeId: p1.node.nodeId,
+      expectedRevision: landed.node.revision,
+      position: 1,
+    });
+    expect(placed).toMatchObject({ ok: false, code: 'PLAN_NODE_DESIGN_NOT_MERGED' });
+    expect(store.nodes.get(p1.node.nodeId)).toEqual(before);
+  });
+
   it.each(['done', 'dropped'] as const)(
     'refuses reopening a %s ask while P0 is reopened, through an update or plan.node.open',
     async (closedAs) => {
