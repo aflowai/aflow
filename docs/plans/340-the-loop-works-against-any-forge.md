@@ -1,6 +1,6 @@
 # Plan 340 — The loop works against any forge
 
-**Status:** P0, this document, awaits the operator's approval. P1 to P4 are not built.
+**Status:** P0 merged at `93310bda`. P1 built: the forge seam, with GitHub as its only provider (§5, P1 as built). P2 to P4 are not built.
 
 **Builds on:** Plan 339 (the pull request event source and the shepherd on events), Plan 321 (the Local PR Shepherd and its rules), Plan 315 (the local loop and its publication), Plan 222 (the repo coordinate and its host), Plan 337 (the decision card), Plan 333 (D2's writing rules).
 
@@ -105,10 +105,10 @@ These 17 files hold 234 references in all. Eleven sibling files hold none:
 
 Two more files sit beneath the skills. They shape GitHub's replies into the records the shepherd's rules compare, so they belong to GitHub's provider:
 
-| File                                                         | Refs | What they are                                                                                         |
-| ------------------------------------------------------------ | ---- | ----------------------------------------------------------------------------------------------------- |
-| `apps/aflow-executor-api/src/handlers/api/githubShepherd.ts` | 70   | The response presets. They read 35 response fields from the replies of nine endpoints.                |
-| `packages/schemas/src/operations/pullRequestShepherd.ts`     | 27   | The preset records' shapes, with descriptions that name GitHub's fields, endpoints and review states. |
+| File                                                                                   | Refs | What they are                                                                                         |
+| -------------------------------------------------------------------------------------- | ---- | ----------------------------------------------------------------------------------------------------- |
+| The API executor's `githubShepherd.ts`, moved by P1 to `forge/github/shepherdReads.ts` | 70   | The response presets. They read 35 response fields from the replies of nine endpoints.                |
+| `packages/schemas/src/operations/pullRequestShepherd.ts`                               | 27   | The preset records' shapes, with descriptions that name GitHub's fields, endpoints and review states. |
 
 The shepherd's rules consume a handful of facts:
 
@@ -199,7 +199,53 @@ Each phase lands on its own.
 
 **P1 — The seam, extracted from what exists.** The vocabulary is drawn from the code that exists, with GitHub as its provider. _Exit:_ every existing test is green, the loop's behaviour on GitHub is unchanged, and the guard test of D3 fails on a GitHub field name outside GitHub's provider.
 
+**P1 as built.** The seam sits wherever a skill or the poller once spelled a forge's call. The vocabulary and each provider live here:
+
+- `packages/schemas/src/forge/vocabulary.ts` holds the acts in `FORGE_ACTS`: the nine of D1, then the reads the shepherd makes one call at a time. It also holds the records the shepherd's rules compare. A schema of D1's facts waits for P2, because no P1 code reads or writes one.
+- `SkillForge` in `packages/platform-artifacts/src/forge/vocabulary.ts` holds a call for every act but naming the provider. Its type fails to compile on an act with no call, and `vocabulary.test.ts` fails on a call that is no act.
+- `packages/schemas/src/forge/providers.ts` names the provider from a repo coordinate's host. This is the ninth act.
+- `packages/platform-artifacts/src/forge/vocabulary.ts` is the skills' side of the seam. Local Publish and the shepherd build every forge task from its acts.
+- `packages/platform-artifacts/src/forge/github/` builds each act as the GitHub call it was. GitHub's API definition moved there unchanged (D4).
+- `apps/aflow-executor-api/src/handlers/api/forge/github/shepherdReads.ts` shapes GitHub's answers into the vocabulary's records. It was `githubShepherd.ts`.
+- `apps/aflow-orchestrator/src/services/forge/github/` holds the poller's GitHub reads, moved out of `source.ts`. It also holds the conditional reader that was `pullRequestEvents/github.ts`.
+- `packages/schemas/src/forge/github.ts` holds GitHub's response transforms, its check-run conclusions and the field names that are GitHub's alone. The GitHub half of `pullRequestShepherd.ts` moved there and to the vocabulary.
+
+The event source names a pull request's provider from the host of its address. That one name selects both the reader that parses the forge's answers and the conditional GET that carries them. A skill is built once, before any folder is read. So each skill is built against the provider the coordinate's default host names.
+
+No behaviour changed. The skill catalog, the bundles and the connector catalog serialise byte for byte as they did at `93310bda`. The existing shepherd, publication and event source tests pass with their assertions unchanged. Tests of a moved module changed their import paths only.
+
+The guard is `packages/platform-artifacts/src/forge/forgeSeam.test.ts`. It reads its terms from GitHub's provider:
+
+- the field names the provider declares, each of which it must also find in the provider
+- the endpoint ids of GitHub's API definition
+- the names of GitHub's response transforms
+- every name a module of the provider exports
+
+The guard fails on any of these in a `localPrShepherd*` or `publishLocalChanges*` file, in the poller, or in the orchestrator's `index.ts`. A `mergeable_state` planted in `localPrShepherdRules.ts` fails it.
+
+P1 leaves two things as they were. The skills' prose still names GitHub, because the guard reads names and not prose. The records keep the field names the rules already read, so `headSha` stays `headSha`.
+
 **P2 — The GitLab provider and its definition.** _Exit:_ the provider opens, reads and merges a merge request on a GitLab project the operator names. Each fact of D1 is shown against that project.
+
+**P2 as planned.** P2 adds GitLab as a second provider in the places P1 made for one. It is to be built in these steps:
+
+1. GitLab joins `FORGE_PROVIDERS`, with `gitlab.com` and the operator's own host as its hosts. The coordinate's host field already carries a self-hosted host (D5).
+2. P2 reads the coordinate of the operator's project first. Where its owner holds nested groups, the coordinate's owner widens to hold them.
+3. A GitLab API definition sits beside GitHub's, with the merge request, pipeline, approval and note endpoints the acts call (D4). GitHub's definition stays as it is.
+4. GitLab's provider answers each act in each layer, beside GitHub's. Merge requests read as change requests, pipeline jobs as checks, and approvals as reviews (D2).
+5. The folder's host names the provider when a task runs, by the ninth act. One skill then serves both forges, and no skill is copied per forge (D2).
+6. GitLab's refusal of a merge on a moved base maps to the vocabulary's base-moved refusal. A test names GitLab's refusal beside GitHub's.
+7. The guard holds GitLab's field names, endpoint ids and exports as it holds GitHub's.
+
+P2 is proven against the GitLab project the operator names. A merge request is put in each known state, and each fact of D1 is read from it through the provider:
+
+- mergeable, and not mergeable on a conflict
+- checks green, and red on a failing pipeline job
+- a review that requests changes
+- merged, with its merge commit
+- the head
+
+A fact that reads wrong in any state fails P2, and the mapping of pipelines or approvals is fixed before the provider is settled. The prose that names GitHub is worded by each provider before a GitLab folder runs a skill.
 
 **P3 — The event source on the seam.** _Exit:_ the source emits `pull_request.changed` for a GitLab merge request as it does for a GitHub pull request. It reads no provider's shape itself.
 

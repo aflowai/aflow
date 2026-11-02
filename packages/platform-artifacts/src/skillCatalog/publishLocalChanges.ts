@@ -22,6 +22,7 @@ import {
   COMMIT_MESSAGE_VALUE,
   commitMessageTasks,
 } from './publishLocalChangesMessage.js';
+import { FORGE } from './localPrShepherdWiring.js';
 import { overrideTasks } from './publishLocalChangesOverride.js';
 import {
   BASE,
@@ -124,33 +125,9 @@ const PATCH_SCHEMA = {
   description: `A diff the operator hands over, within the ${String(RUN_INPUTS_KB)} KB a run's inputs carry together. A commission's change goes as its \`patchRef\`, which names the whole diff at any size.`,
 };
 
-/** GitHub's rule for an owner: letters, digits and single hyphens between them, at most 39. */
-const GITHUB_OWNER_PATTERN = '^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$';
-
-/**
- * GitHub's rule for a repository: letters, digits, `.`, `_` and `-`, at most
- * 100. `.` and `..` are refused because they collapse `/repos/{owner}/{repo}`
- * onto another endpoint.
- */
-const GITHUB_REPO_PATTERN = '^(?!\\.{1,2}$)[A-Za-z0-9._-]{1,100}$';
-
-const OWNER_SCHEMA = {
-  type: 'string',
-  minLength: 1,
-  maxLength: 39,
-  pattern: GITHUB_OWNER_PATTERN,
-  description:
-    'The owner name alone — `aflowai` for github.com/aflowai/aflow — not a URL or `owner/repo`. Letters, digits and single hyphens between them, 1 to 39 characters: no dot, and no hyphen at the start, at the end or twice in a row.',
-};
-
-const REPO_SCHEMA = {
-  type: 'string',
-  minLength: 1,
-  maxLength: 100,
-  pattern: GITHUB_REPO_PATTERN,
-  description:
-    'The repository name alone — `aflow` for github.com/aflowai/aflow — not a URL or `owner/repo`. Letters, digits, `.`, `_` and `-`, 1 to 100 characters, and neither `.` nor `..`.',
-};
+/** A repository's owner and name, by the forge's own rules for each. */
+const OWNER_SCHEMA = FORGE.coordinate.owner;
+const REPO_SCHEMA = FORGE.coordinate.repo;
 
 const BASE_SHA_SCHEMA = {
   type: 'string',
@@ -338,23 +315,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
     'Commit a patch onto a branch of a connected repository, then push it and open the pull request — asking the operator first unless the folder says otherwise.',
   description: PUBLISH_DESCRIPTION,
   tags: ['coding', 'publish', 'git', 'local', 'developer-tools'],
-  capabilityHints: [
-    {
-      apiId: 'github',
-      description:
-        "GitHub REST API — read the repository before the push, then find the open pull request for the pushed branch and rewrite its description, or open one where there is none; where an override names the hands-off label or a shepherd rule, read that pull request's labels and the shepherd's pinned handoff comment to verify it.",
-      requiredEndpoints: [
-        'getRepository',
-        'listPullRequests',
-        'getIssueComment',
-        'createPullRequest',
-        'updatePullRequest',
-      ],
-      authKind: 'bearer',
-      setupNote:
-        'Bind the GitHub connector for the space (a fine-grained personal access token or a GitHub App installation token with repository and pull-request access) before the first run. Sent as Authorization: Bearer.',
-    },
-  ],
+  capabilityHints: [FORGE.capabilityHints.publish],
   bundle: {
     workflow: {
       slug: 'publish-local-changes',
@@ -734,18 +695,11 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
               integrations: [],
             },
           },
-          inputTemplate: {
-            apiId: 'github',
-            endpointId: 'getRepository',
-            params: {
-              owner: { $bind: 'owner' },
-              repo: { $bind: 'repo' },
-            },
-            response: { format: 'json' },
-          },
-          outputProjection: {
-            repository: { path: 'data.full_name', onMissing: 'error' as const },
-          },
+          inputTemplate: FORGE.readRepository({
+            owner: { $bind: 'owner' },
+            repo: { $bind: 'repo' },
+          }),
+          outputProjection: FORGE.repositoryProjection,
         },
 
         {
@@ -1045,25 +999,15 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
               integrations: [],
             },
           },
-          inputTemplate: {
-            apiId: 'github',
-            endpointId: 'listPullRequests',
-            params: {
-              owner: { $bind: 'owner' },
-              repo: { $bind: 'repo' },
-              // GitHub filters on the head only in its `owner:branch` form.
-              head: { $concat: [{ $bind: 'owner' }, ':', { $bind: 'branch' }] },
-              // A pull request from the branch into another base is not this
-              // publication's, and reporting it would open none into `base`.
-              base: { $bind: 'base' },
-              state: 'open',
-            },
-            response: { format: 'json' },
-          },
-          outputProjection: {
-            prNumber: { path: 'data[0].number', onMissing: 'null' as const },
-            prUrl: { path: 'data[0].html_url', onMissing: 'null' as const },
-          },
+          inputTemplate: FORGE.listChangeRequests.ofBranch({
+            owner: { $bind: 'owner' },
+            repo: { $bind: 'repo' },
+            branch: { $bind: 'branch' },
+            // A pull request from the branch into another base is not this
+            // publication's, and reporting it would open none into `base`.
+            base: { $bind: 'base' },
+          }),
+          outputProjection: FORGE.branchListingProjection,
           outputContract: {
             schema: {
               type: 'object',
@@ -1118,23 +1062,14 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
               integrations: [],
             },
           },
-          inputTemplate: {
-            apiId: 'github',
-            endpointId: 'updatePullRequest',
-            params: {
-              owner: { $bind: 'owner' },
-              repo: { $bind: 'repo' },
-              pull_number: { $bind: 'prNumber' },
-              body: {
-                title: { $bind: 'title' },
-                body: { $bind: 'body' },
-              },
-            },
-            response: { format: 'json' },
-          },
-          outputProjection: {
-            prNumber: { path: 'data.number', onMissing: 'error' as const },
-          },
+          inputTemplate: FORGE.updateChangeRequest({
+            owner: { $bind: 'owner' },
+            repo: { $bind: 'repo' },
+            number: { $bind: 'prNumber' },
+            title: { $bind: 'title' },
+            body: { $bind: 'body' },
+          }),
+          outputProjection: FORGE.updatedProjection,
         },
 
         {
@@ -1166,26 +1101,15 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
               integrations: [],
             },
           },
-          inputTemplate: {
-            apiId: 'github',
-            endpointId: 'createPullRequest',
-            params: {
-              owner: { $bind: 'owner' },
-              repo: { $bind: 'repo' },
-              body: {
-                title: { $bind: 'title' },
-                head: { $bind: 'branch' },
-                base: { $bind: 'base' },
-                body: { $bind: 'body' },
-                draft: false,
-              },
-            },
-            response: { format: 'json' },
-          },
-          outputProjection: {
-            prNumber: { path: 'data.number', onMissing: 'error' as const },
-            prUrl: { path: 'data.html_url', onMissing: 'error' as const },
-          },
+          inputTemplate: FORGE.openChangeRequest({
+            owner: { $bind: 'owner' },
+            repo: { $bind: 'repo' },
+            branch: { $bind: 'branch' },
+            base: { $bind: 'base' },
+            title: { $bind: 'title' },
+            body: { $bind: 'body' },
+          }),
+          outputProjection: FORGE.openedProjection,
           outputContract: {
             schema: {
               type: 'object',

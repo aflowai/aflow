@@ -23,7 +23,7 @@ import {
   JOB_LOG_READ_WINDOW_BYTES,
   jobLogTail,
   SHEPHERD_RECORD_PRESETS,
-} from './githubShepherd.js';
+} from './forge/github/shepherdReads.js';
 import { ApiExecutionError } from './types.js';
 
 /**

@@ -1,4 +1,5 @@
 import {
+  holdsPlanNodeWait,
   isPersonTrigger,
   PlanNodeCreateInputSchema,
   PlanNodeDependInputSchema,
@@ -6,11 +7,14 @@ import {
   PlanNodeLinkInputSchema,
   PlanNodeUpdateInputSchema,
   StepJobMessageSchema,
+  type HeldWait,
+  type PlanNode,
   type PlanNodeCreateOutput,
   type PlanNodeDependOutput,
   type PlanNodeLearnOutput,
   type PlanNodeLinkOutput,
   type PlanNodeUpdateOutput,
+  type WaitRegistration,
 } from '@aflow/schemas';
 import {
   createPlanNode,
@@ -21,12 +25,20 @@ import {
   restrictedPlanWriteAuthority,
   type PlanWriteContext,
 } from '@aflow/cybernetic-runtime';
+import { getDatabase } from '@aflow/database';
 import { getSessionState, type SessionHotState } from '@aflow/redis';
 import { dispatchOrWaitOnExecutor } from '../../../scheduling/executorWait.js';
 import { sessionUser } from '../sessionUser.js';
+import { requireSpaceId } from '../spaceScope.js';
 import type { InlineHandlerArgs } from '../types.js';
 import { emitStepSuccess } from '../helpers.js';
 import { emitPlanError, parsePlanInput, planReadContext } from './shared.js';
+import {
+  endPlanNodeHold,
+  holdForPlanNode,
+  restorePlanNodeHold,
+  type PlanNodeHoldTarget,
+} from '../../../../waits/planNode.js';
 
 async function readSessionState(args: InlineHandlerArgs): Promise<SessionHotState | null> {
   return getSessionState(args.redis, args.context.tenantId, args.context.runId).catch(() => null);
@@ -58,6 +70,73 @@ function operatorConversation(
   return state !== null && isPersonTrigger(state.trigger) ? args.context.runId : undefined;
 }
 
+function holdTarget(args: InlineHandlerArgs, nodeId: string): PlanNodeHoldTarget {
+  return {
+    tenantId: args.context.tenantId,
+    spaceId: requireSpaceId(args.context),
+    sessionId: args.context.runId,
+    nodeId,
+  };
+}
+
+function holdDeps(args: InlineHandlerArgs) {
+  return { redis: args.redis, db: getDatabase() };
+}
+
+function warnHold(message: string, nodeId: string, error: unknown): void {
+  console.warn(`[plan-node-wait] ${message}`, {
+    nodeId,
+    error: error instanceof Error ? error.message : String(error),
+  });
+}
+
+/**
+ * Release the wait this conversation holds on the node before a status write
+ * by it is recorded. The write's own event then finds no wait of its own to
+ * end, so the conversation is not woken about what it did.
+ */
+async function releaseBeforeWrite(
+  args: InlineHandlerArgs,
+  nodeId: string,
+): Promise<WaitRegistration[]> {
+  if (args.workflowExecution !== undefined) return [];
+  try {
+    return await endPlanNodeHold(holdDeps(args), holdTarget(args, nodeId));
+  } catch (error) {
+    warnHold('the wait was not released before the write', nodeId, error);
+    return [];
+  }
+}
+
+/** A write that did not land holds again what it released. */
+async function restoreAfterRefusal(
+  args: InlineHandlerArgs,
+  nodeId: string,
+  released: readonly WaitRegistration[],
+): Promise<void> {
+  try {
+    await restorePlanNodeHold(holdDeps(args), holdTarget(args, nodeId), released);
+  } catch (error) {
+    warnHold('the write did not land, and its released wait was not held again', nodeId, error);
+  }
+}
+
+/**
+ * The wait a write that set a node blocked or waiting holds for the
+ * conversation that made it (Plan 339 D4's discipline, for plan nodes). The
+ * write has committed, so a failed hold leaves the result without a wait
+ * rather than failing it.
+ */
+async function holdAfterWrite(args: InlineHandlerArgs, node: PlanNode): Promise<HeldWait | null> {
+  if (args.workflowExecution !== undefined || !holdsPlanNodeWait(node.status)) return null;
+  try {
+    return await holdForPlanNode(holdDeps(args), holdTarget(args, node.nodeId));
+  } catch (error) {
+    warnHold('the write landed, but its wait was not held', node.nodeId, error);
+    return null;
+  }
+}
+
 export async function handlePlanNodeCreate(
   args: InlineHandlerArgs,
   startTime: number,
@@ -73,7 +152,11 @@ export async function handlePlanNodeCreate(
     await emitPlanError(args, result, startTime);
     return;
   }
-  const output: PlanNodeCreateOutput = { node: result.node };
+  const wait = await holdAfterWrite(args, result.node);
+  const output: PlanNodeCreateOutput = {
+    node: result.node,
+    ...(wait !== null ? { wait } : {}),
+  };
   await emitStepSuccess(args, output, startTime);
 }
 
@@ -87,40 +170,57 @@ export async function handlePlanNodeUpdate(
   const context = writeContext(args, state);
   if (context.resident && input.status === 'done') {
     const credentialOwnerId = await sessionUser(args);
-    await dispatchOrWaitOnExecutor(
-      args.redis,
-      StepJobMessageSchema.parse({
-        tenantId: args.context.tenantId,
-        ...(args.workflowExecution
-          ? { workflowExecution: args.workflowExecution }
-          : { sessionId: args.context.runId }),
-        spaceId: context.spaceId,
-        stepExecutionId: args.stepExecutionId,
-        parentStepExecutionId: args.parentStepExecutionId,
-        stepId: args.stepDef.stepId,
-        stepType: 'api',
-        operationId: args.stepDef.operation,
-        idempotencyKey: args.idempotencyKey,
-        inputRef: args.resolvedInputRef,
-        traceId: args.context.traceId,
-        attempt: args.attempt,
-        scheduledAtMs: args.scheduledAtMs,
-        credentialOwnerId,
-      }),
-    );
+    // The API executor records the close, so the release precedes the dispatch.
+    const released = await releaseBeforeWrite(args, input.nodeId);
+    try {
+      await dispatchOrWaitOnExecutor(
+        args.redis,
+        StepJobMessageSchema.parse({
+          tenantId: args.context.tenantId,
+          ...(args.workflowExecution
+            ? { workflowExecution: args.workflowExecution }
+            : { sessionId: args.context.runId }),
+          spaceId: context.spaceId,
+          stepExecutionId: args.stepExecutionId,
+          parentStepExecutionId: args.parentStepExecutionId,
+          stepId: args.stepDef.stepId,
+          stepType: 'api',
+          operationId: args.stepDef.operation,
+          idempotencyKey: args.idempotencyKey,
+          inputRef: args.resolvedInputRef,
+          traceId: args.context.traceId,
+          attempt: args.attempt,
+          scheduledAtMs: args.scheduledAtMs,
+          credentialOwnerId,
+        }),
+      );
+    } catch (error) {
+      await restoreAfterRefusal(args, input.nodeId, released);
+      throw error;
+    }
     return;
   }
   const conversationId = operatorConversation(args, state);
-  const result = await updatePlanNode(
-    { ...context, ...(conversationId !== undefined ? { conversationId } : {}) },
-    input,
-  );
+  const released = input.status !== undefined ? await releaseBeforeWrite(args, input.nodeId) : [];
+  let result: Awaited<ReturnType<typeof updatePlanNode>>;
+  try {
+    result = await updatePlanNode(
+      { ...context, ...(conversationId !== undefined ? { conversationId } : {}) },
+      input,
+    );
+  } catch (error) {
+    await restoreAfterRefusal(args, input.nodeId, released);
+    throw error;
+  }
   if (!result.ok) {
+    await restoreAfterRefusal(args, input.nodeId, released);
     await emitPlanError(args, result, startTime);
     return;
   }
+  const wait = input.status !== undefined ? await holdAfterWrite(args, result.node) : null;
   const output: PlanNodeUpdateOutput = {
     node: result.node,
+    ...(wait !== null ? { wait } : {}),
     ...(result.carrier ? { carrier: result.carrier } : {}),
     ...(result.carrierFailure ? { carrierFailure: result.carrierFailure } : {}),
     ...(result.linkFailure ? { linkFailure: result.linkFailure } : {}),

@@ -21,7 +21,7 @@ import {
   PlanNodePlaceRefusalDetailsSchema,
   PlanNodeReviseInputSchema,
   PlanNodeRefusalDetailsSchema,
-  PlanNodeUpdateOutputSchema,
+  PlanNodeOperatorWriteOutputSchema,
   PlanNodeWriteRefusalSchema,
   PlanBoardOutputSchema,
   PlanBoardQuerySchema,
@@ -157,7 +157,7 @@ const PLAN_READ_AUTHZ = {
 const PlanWriteParamsSchema = z.object({ spaceId: z.string().uuid(), nodeId: z.string().uuid() });
 
 const PLAN_WRITE_RESPONSES = {
-  200: PlanNodeUpdateOutputSchema,
+  200: PlanNodeOperatorWriteOutputSchema,
   403: z.object({ error: z.string(), message: z.string() }),
   404: PlanNodeWriteRefusalSchema,
   409: PlanNodeWriteRefusalSchema,
