@@ -14,7 +14,7 @@ import { bind, runInput } from './localPrShepherdWiring.js';
 
 const REVIEW_TASK = `Review the changes in a revision range of this repository and report what is wrong with them. This checkout is an isolated copy of the connected folder detached at the commit the range ends at — the commit this review judges — so every file on disk is that file as the range leaves it, and a check run here runs on the change. The range's base names only where the diff starts; it is never what is checked out. Only committed work is visible here.
 
-The review request arrives as the inputs of this task: \`range\` is the revision range to review, \`focus\` is the lens to weight when it is present, and \`depth\` is \`brief\`, \`standard\` or \`deep\` — absent means \`standard\`.
+The review request arrives as the inputs of this task: \`range\` is the revision range to review, \`focus\` is the lens to weight when it is present, and \`depth\` is \`brief\`, \`standard\` or \`deep\` — absent means \`standard\`. Apply the forms in \`criteria\` to each changed file under \`docs/plans/\`, and grade each unmet form point at its \`severityWhenUnmet\`.
 
 How to review:
 

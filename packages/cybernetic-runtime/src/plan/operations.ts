@@ -459,9 +459,11 @@ async function writePlanNode(
   const card = input.card ?? current.card;
   const position =
     input.position ?? (landsUnder === current.parentId ? current.position : undefined);
-  // Only the write that approves the ask meets the gate: an active phase stays writable after P0 reopens.
-  const approves = current.status === 'blocked' && status === 'active';
-  const notMerged = approves
+  // A write that leaves blocked or reopens a closed node meets the gate: an active phase stays writable after P0 reopens.
+  const reaches =
+    status !== current.status &&
+    (current.status === 'blocked' || isClosedPlanNodeStatus(current.status));
+  const notMerged = reaches
     ? await designApprovalRefusal(ctx, {
         nodeId: current.nodeId,
         ...(card !== undefined ? { card } : {}),

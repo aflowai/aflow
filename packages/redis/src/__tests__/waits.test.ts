@@ -403,3 +403,54 @@ describe('the entity event stream feeds the waits', () => {
     expect(await redis.zcard(WAIT_FIRED_SUBJECTS_KEY)).toBe(0);
   });
 });
+
+describe('the wait a plan node write holds for its writer', () => {
+  const NODE = '7a1e0000-0000-4000-8000-000000000339';
+
+  function planUpdated(status: string, previousStatus: string, at: number): EntityEventEnvelope {
+    return {
+      eventId: `9a7b3c2d-1e0f-4a5b-8c6d-${String(at).slice(-12)}`,
+      eventType: 'entity.plan.updated',
+      spaceId: SPACE,
+      tenantId: TENANT,
+      timestamp: at,
+      payload: { nodeId: NODE, revision: 2, status, previousStatus },
+      summary: `Plan node moved from ${previousStatus} to ${status}`,
+    };
+  }
+
+  it('is not ended by the write that set the node blocked, and is ended by the next change', async () => {
+    const written = T0 + 1_000;
+    await appendEntityEvent(redis, {
+      tenantId: TENANT,
+      spaceId: SPACE,
+      event: planUpdated('blocked', 'active', written),
+    });
+    const held = wait({
+      kind: 'plan.node.status_changed',
+      subject: NODE,
+      declaredAt: written,
+      since: written + 1,
+      closesAt: written + 60_000,
+      owner: { onEvent: 'Act on the node.' },
+    });
+
+    expect(await registerWait(redis, held)).toEqual({ state: 'waiting' });
+    expect(await claimFiredWaits(redis, 10)).toEqual([]);
+
+    // Its clock says it fired with the write, before `since`: it was recorded after the wait.
+    await appendEntityEvent(redis, {
+      tenantId: TENANT,
+      spaceId: SPACE,
+      event: planUpdated('active', 'blocked', written),
+    });
+    const ended = await claimFiredWaits(redis, 10);
+
+    expect(ended).toHaveLength(1);
+    expect(ended[0]?.registration.waitId).toBe(held.waitId);
+    expect(ended[0]?.outcome).toMatchObject({
+      endedBy: 'event',
+      event: { subject: NODE, detail: { status: 'active', previousStatus: 'blocked' } },
+    });
+  });
+});

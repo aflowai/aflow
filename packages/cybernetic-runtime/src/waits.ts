@@ -46,7 +46,7 @@ export interface DeclareWaitInput {
    */
   since?: number;
   /** Set where the platform declares the wait for the subject's owner (Plan 339 D4). */
-  owner?: { onEvent: string };
+  owner?: WaitRegistration['owner'];
   /**
    * An event it catches up on queues the ended wait for the delivery cycle,
    * rather than handing it to the caller. For a declaration no person awaits.
@@ -160,7 +160,7 @@ export function describeWaitOutcome(registration: WaitRegistration, outcome: Wai
         ? `Later events on the subject before you were told: ${later.map(describe).join('; ')}. `
         : '') +
       (registration.owner !== undefined
-        ? `You own the subject, so the platform declared this wait for you. ${registration.owner.onEvent}`
+        ? `${registration.owner.lead ?? 'You own the subject, so the platform declared this wait for you.'} ${registration.owner.onEvent}`
         : 'Act on it by your own rules.')
     );
   }

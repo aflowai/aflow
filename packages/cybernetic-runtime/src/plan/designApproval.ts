@@ -3,7 +3,8 @@
  * (Plan 339 D6), so that ask is written only once the document exists: the
  * plan's P0, its first step not dropped, has closed done with its design
  * document linked. The gate meets only the write that moves the node out of
- * blocked: the create that lands the ask, or the update that turns it active.
+ * blocked or reopens it: the create that lands the ask, an update from blocked
+ * to any other open status, or an update from done or dropped to an open one.
  * It judges the node as that write lands it: its card, resent or stored, and
  * P0 among the siblings the write leaves.
  */
@@ -83,8 +84,8 @@ async function designDocumentMerged(
 }
 
 /**
- * The refusal of a create, or an update from blocked to active, that lands an
- * open node asking for `design_approval`,
+ * The refusal of a create, or an update leaving blocked or reopening a closed
+ * node, that lands an open node asking for `design_approval`,
  * through its `work` or its card's `waitsOn`, before P0's design document has
  * merged.
  */

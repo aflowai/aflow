@@ -96,12 +96,42 @@ export const WaitRegistrationSchema = z.object({
    */
   owner: z
     .object({
+      /**
+       * Why the platform declared the wait for this conversation, as the room
+       * message leads with it. Without it, the message says the conversation
+       * owns the subject.
+       */
+      lead: z.string().min(1).max(500).optional(),
       /** What the owner does on the event, as the room message tells it. */
       onEvent: z.string().min(1).max(2000),
     })
     .optional(),
 });
 export type WaitRegistration = z.infer<typeof WaitRegistrationSchema>;
+
+/**
+ * A wait the platform holds for the conversation that made a write, as the
+ * write's result names it: the event that ends it, on what, and until when.
+ */
+export const HeldWaitSchema = z.object({
+  waitId: z.string().uuid(),
+  kind: WaitEventKindSchema,
+  subject: WaitSubjectSchema,
+  windowSeconds: z.number().int().min(WAIT_WINDOW_MIN_SECONDS).max(WAIT_WINDOW_MAX_SECONDS),
+  closesAt: z.string().datetime(),
+});
+export type HeldWait = z.infer<typeof HeldWaitSchema>;
+
+/**
+ * The plan node statuses a write sets that hold a `plan.node.status_changed`
+ * wait for the writing conversation: the node waits on someone else, and its
+ * writer is woken when its status changes.
+ */
+export const PLAN_NODE_HELD_STATUSES = ['blocked', 'waiting'] as const;
+
+export function holdsPlanNodeWait(status: string): boolean {
+  return (PLAN_NODE_HELD_STATUSES as readonly string[]).includes(status);
+}
 
 /** What ended a wait: the event it waited on, or its window closing first. */
 export const WaitOutcomeSchema = z.discriminatedUnion('endedBy', [

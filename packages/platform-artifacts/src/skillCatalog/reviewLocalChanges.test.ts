@@ -681,7 +681,12 @@ describe('Review Local Changes — the plan form, as data the review reads', () 
     expect(JSON.stringify(PLAN_DOCUMENT_FORM)).not.toMatch(/code|repositor|test|docs\/|file/i);
   });
 
-  it('leaves the review’s prose as it was: the brief names no plan document', () => {
-    expect(call.task).not.toMatch(/docs\/plans|plan document|criteria/i);
+  it('names the criteria input in the brief once: apply it under docs/plans/, grade at severityWhenUnmet', () => {
+    const sentence =
+      'Apply the forms in `criteria` to each changed file under `docs/plans/`, and grade each unmet form point at its `severityWhenUnmet`.';
+    expect(call.task.split(sentence)).toHaveLength(2);
+    expect(call.task.replace(` ${sentence}`, '')).not.toMatch(
+      /docs\/plans|plan document|criteria/i,
+    );
   });
 });

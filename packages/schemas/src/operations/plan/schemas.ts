@@ -33,6 +33,7 @@ import {
   type PlanNodeStatus,
   type PlanNodeSummary,
 } from '../../cybernetic/plan.js';
+import { HeldWaitSchema } from '../../runtime/waits.js';
 
 export const PLAN_NODE_CREATE_OPERATION_ID = buildOperationId('plan', 'node', 'create');
 export const PLAN_NODE_UPDATE_OPERATION_ID = buildOperationId('plan', 'node', 'update');
@@ -64,7 +65,14 @@ export const PLAN_NODE_LEARNINGS_LIMIT = 50;
 export const PlanNodeCreateInputSchema = PlanNodeCreateSchema;
 export type PlanNodeCreateInput = z.infer<typeof PlanNodeCreateInputSchema>;
 
-export const PlanNodeCreateOutputSchema = z.object({ node: PlanNodeSchema });
+const PlanNodeHeldWaitField = HeldWaitSchema.optional().describe(
+  "Where this write set the node blocked or waiting: the wait the platform holds for this conversation. A change of the node's status wakes this conversation with the node, its new status and its note. End the turn rather than poll the node.",
+);
+
+export const PlanNodeCreateOutputSchema = z.object({
+  node: PlanNodeSchema,
+  wait: PlanNodeHeldWaitField,
+});
 export type PlanNodeCreateOutput = z.infer<typeof PlanNodeCreateOutputSchema>;
 
 export const PlanNodeUpdateInputSchema = PlanNodeUpdateSchema;
@@ -87,8 +95,16 @@ export const PlanNodeUpdateOutputSchema = z.object({
   carrier: PlanNodeSchema.optional().describe(
     'Where this update closed the node done with findings linked to it: the node proposed under the same parent to carry them, blocked until a person approves it.',
   ),
+  wait: PlanNodeHeldWaitField,
 });
 export type PlanNodeUpdateOutput = z.infer<typeof PlanNodeUpdateOutputSchema>;
+
+/**
+ * An operator's write through the REST routes. No conversation makes it, so
+ * no wait is held for it.
+ */
+export const PlanNodeOperatorWriteOutputSchema = PlanNodeUpdateOutputSchema.omit({ wait: true });
+export type PlanNodeOperatorWriteOutput = z.infer<typeof PlanNodeOperatorWriteOutputSchema>;
 
 /**
  * `error.details` for `PLAN_NODE_STALE` and `PLAN_NODE_UNCHANGED`: what a retry

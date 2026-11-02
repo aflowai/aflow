@@ -21,6 +21,7 @@ import {
 import {
   createPlanNode,
   linkPlanNode,
+  openPlanNode,
   updatePlanNode,
   type PlanWriteContext,
 } from '../plan/operations.js';
@@ -522,6 +523,61 @@ describe('a node’s first status (Plan 339 D6)', () => {
     });
     expect(dropped).toMatchObject({ ok: true, node: { status: 'dropped' } });
   });
+
+  it('refuses a stored ask leaving blocked through waiting while P0 is reopened', async () => {
+    const { root, p0 } = await mergedP0();
+    const p1 = await ask(root.nodeId);
+    if (!p1.ok) throw new Error(p1.message);
+    const reopened = await updatePlanNode(ctx(), {
+      nodeId: p0.nodeId,
+      expectedRevision: p0.revision,
+      status: 'active',
+    });
+    expect(reopened.ok).toBe(true);
+    const waiting = await updatePlanNode(ctx(), {
+      nodeId: p1.node.nodeId,
+      expectedRevision: p1.node.revision,
+      status: 'waiting',
+    });
+    expect(waiting).toMatchObject({ ok: false, code: 'PLAN_NODE_DESIGN_NOT_MERGED' });
+    expect(store.nodes.get(p1.node.nodeId)?.status).toBe('blocked');
+  });
+
+  it.each(['done', 'dropped'] as const)(
+    'refuses reopening a %s ask while P0 is reopened, through an update or plan.node.open',
+    async (closedAs) => {
+      const { root, p0 } = await mergedP0();
+      const p1 = await ask(root.nodeId);
+      if (!p1.ok) throw new Error(p1.message);
+      const closed = await updatePlanNode(ctx(), {
+        nodeId: p1.node.nodeId,
+        expectedRevision: p1.node.revision,
+        status: closedAs,
+        outcome: 'Closed before P0 reopened.',
+      });
+      if (!closed.ok) throw new Error(closed.message);
+      const reopened = await updatePlanNode(ctx(), {
+        nodeId: p0.nodeId,
+        expectedRevision: p0.revision,
+        status: 'active',
+      });
+      expect(reopened.ok).toBe(true);
+      const revision = closed.node.revision;
+      for (const status of ['active', 'blocked', 'waiting'] as const) {
+        expect(
+          await updatePlanNode(ctx(), {
+            nodeId: p1.node.nodeId,
+            expectedRevision: revision,
+            status,
+          }),
+        ).toMatchObject({ ok: false, code: 'PLAN_NODE_DESIGN_NOT_MERGED' });
+      }
+      expect(
+        await openPlanNode(ctx(), { nodeId: p1.node.nodeId, expectedRevision: revision }),
+      ).toMatchObject({ ok: false, code: 'PLAN_NODE_DESIGN_NOT_MERGED' });
+      expect(store.nodes.get(p1.node.nodeId)?.status).toBe(closedAs);
+    },
+  );
 
   /** A plan whose phase after P0 the operator has approved, its card still naming the ask. */
   async function approvedPhase() {
