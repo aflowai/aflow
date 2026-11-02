@@ -167,80 +167,80 @@ export const PLAN_NODE_CARD_KEYS_MESSAGE =
 const PlanNodeCardItemSchema = z.string().trim().min(1).max(PLAN_NODE_CARD_ITEM_MAX_CHARS);
 const PlanNodeCardListSchema = z.array(PlanNodeCardItemSchema).max(PLAN_NODE_CARD_LIST_MAX_ITEMS);
 
-export const PlanNodeCardSchema = z
-  .object({
-    change: z
-      .object({ today: PlanNodeCardItemSchema, after: PlanNodeCardItemSchema })
-      .strict()
-      .describe('What changes: how it is today, and how it is after.'),
-    why: PlanNodeCardListSchema.min(1).describe('Why: the reasons, at least one.'),
-    affects: PlanNodeCardListSchema.describe('What it affects: packages, surfaces, people.'),
-    risks: z
-      .array(
-        z
-          .object({ risk: PlanNodeCardItemSchema, mitigation: PlanNodeCardItemSchema.optional() })
-          .strict(),
-      )
-      .max(PLAN_NODE_CARD_LIST_MAX_ITEMS),
-    questions: z
-      .array(
-        z
-          .object({ question: PlanNodeCardItemSchema, recommended: PlanNodeCardItemSchema })
-          .strict(),
-      )
-      .max(PLAN_NODE_CARD_LIST_MAX_ITEMS)
-      .describe('Open questions, each with the answer you recommend.'),
-    notDoing: PlanNodeCardListSchema.describe('Not done on purpose.'),
-    waitsOn: z
-      .object({
-        reason: PlanNodeWaitReasonSchema,
-        decision: PlanNodeCardItemSchema.describe('The decision the operator is asked for.'),
-      })
-      .strict()
-      .optional()
-      .describe(
-        'Only on a node that waits on the operator: why, and the decision it asks. The rail offers Approve only with it.',
-      ),
-  })
-  .strict({ message: PLAN_NODE_CARD_KEYS_MESSAGE })
-  .superRefine((card, ctx) => {
-    const length = JSON.stringify(card).length;
-    if (length > PLAN_NODE_CARD_MAX_CHARS) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: `This card holds ${String(length)} characters serialised, and a card holds at most ${String(PLAN_NODE_CARD_MAX_CHARS)}. Shorten its items: the plan document holds the full record.`,
-      });
-    }
-  })
-  .describe(
-    'The decision card the operator decides from. Every section is required, and a list may be empty where you found none. One or two short sentences an item. Done when is the node’s criteria.',
-  );
+/**
+ * Why a stored card's node waits. A card stored before Plan 339 D6 may name
+ * `design_document`, the design document of a new plan, which a write no
+ * longer names.
+ */
+const PlanNodeStoredWaitReasonSchema = z.union([
+  PlanNodeWaitReasonSchema,
+  z.literal('design_document'),
+]);
+
+function planNodeCardSchema<Reason extends z.ZodTypeAny>(reason: Reason) {
+  return z
+    .object({
+      change: z
+        .object({ today: PlanNodeCardItemSchema, after: PlanNodeCardItemSchema })
+        .strict()
+        .describe('What changes: how it is today, and how it is after.'),
+      why: PlanNodeCardListSchema.min(1).describe('Why: the reasons, at least one.'),
+      affects: PlanNodeCardListSchema.describe('What it affects: packages, surfaces, people.'),
+      risks: z
+        .array(
+          z
+            .object({ risk: PlanNodeCardItemSchema, mitigation: PlanNodeCardItemSchema.optional() })
+            .strict(),
+        )
+        .max(PLAN_NODE_CARD_LIST_MAX_ITEMS),
+      questions: z
+        .array(
+          z
+            .object({ question: PlanNodeCardItemSchema, recommended: PlanNodeCardItemSchema })
+            .strict(),
+        )
+        .max(PLAN_NODE_CARD_LIST_MAX_ITEMS)
+        .describe('Open questions, each with the answer you recommend.'),
+      notDoing: PlanNodeCardListSchema.describe('Not done on purpose.'),
+      waitsOn: z
+        .object({
+          reason,
+          decision: PlanNodeCardItemSchema.describe('The decision the operator is asked for.'),
+        })
+        .strict()
+        .optional()
+        .describe(
+          'Only on a node that waits on the operator: why, and the decision it asks. The rail offers Approve only with it.',
+        ),
+    })
+    .strict({ message: PLAN_NODE_CARD_KEYS_MESSAGE })
+    .superRefine((card, ctx) => {
+      const length = JSON.stringify(card).length;
+      if (length > PLAN_NODE_CARD_MAX_CHARS) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `This card holds ${String(length)} characters serialised, and a card holds at most ${String(PLAN_NODE_CARD_MAX_CHARS)}. Shorten its items: the plan document holds the full record.`,
+        });
+      }
+    })
+    .describe(
+      'The decision card the operator decides from. Every section is required, and a list may be empty where you found none. One or two short sentences an item. Done when is the node’s criteria.',
+    );
+}
+
+export const PlanNodeCardSchema = planNodeCardSchema(PlanNodeWaitReasonSchema);
 export type PlanNodeCard = z.infer<typeof PlanNodeCardSchema>;
+
+/** A card as a node carries it: a write's card, or one stored before Plan 339 D6. */
+export const PlanNodeStoredCardSchema = planNodeCardSchema(PlanNodeStoredWaitReasonSchema);
+export type PlanNodeStoredCard = z.infer<typeof PlanNodeStoredCardSchema>;
 
 /** A card the schema accepts, in its section order: how a write puts it in a patch. */
 export function planNodeCardInOrder(card: PlanNodeCard): PlanNodeCard {
   return PlanNodeCardSchema.parse(card);
 }
 
-export type StoredPlanNodeCard = { card: PlanNodeCard } | { refusal: string };
-
-/**
- * A card stored before Plan 339 D6 named the design document's ask
- * `design_document`. That ask is `design_approval` now, so a stored card keeps
- * its decision and the rail keeps its Approve.
- */
-const STORED_WAIT_REASONS: Readonly<Partial<Record<string, PlanNodeWaitReason>>> = {
-  design_document: 'design_approval',
-};
-
-function withStoredWaitReason(stored: unknown): unknown {
-  if (typeof stored !== 'object' || stored === null || !('waitsOn' in stored)) return stored;
-  const waitsOn: unknown = stored.waitsOn;
-  if (typeof waitsOn !== 'object' || waitsOn === null || !('reason' in waitsOn)) return stored;
-  const reason =
-    typeof waitsOn.reason === 'string' ? STORED_WAIT_REASONS[waitsOn.reason] : undefined;
-  return reason === undefined ? stored : { ...stored, waitsOn: { ...waitsOn, reason } };
-}
+export type StoredPlanNodeCard = { card: PlanNodeStoredCard } | { refusal: string };
 
 /**
  * A stored card as a node read returns it. A `jsonb` column returns keys in
@@ -249,11 +249,11 @@ function withStoredWaitReason(stored: unknown): unknown {
  * card and returns the refusal, so the node still passes its output schema.
  */
 export function readStoredPlanNodeCard(stored: unknown): StoredPlanNodeCard {
-  const parsed = PlanNodeCardSchema.safeParse(withStoredWaitReason(stored));
+  const parsed = PlanNodeStoredCardSchema.safeParse(stored);
   return parsed.success ? { card: parsed.data } : { refusal: parsed.error.message };
 }
 
-export type PlanNodeWaitsOn = NonNullable<PlanNodeCard['waitsOn']>;
+export type PlanNodeWaitsOn = NonNullable<PlanNodeStoredCard['waitsOn']>;
 
 /**
  * The decision a node asks the operator for (Plan 339 D6): its card's
@@ -262,7 +262,7 @@ export type PlanNodeWaitsOn = NonNullable<PlanNodeCard['waitsOn']>;
  */
 export function planNodeApprovalAsked(node: {
   status: PlanNodeStatus;
-  card?: PlanNodeCard | undefined;
+  card?: PlanNodeStoredCard | undefined;
 }): PlanNodeWaitsOn | undefined {
   return node.status === 'blocked' ? node.card?.waitsOn : undefined;
 }
@@ -295,7 +295,7 @@ export const PlanNodeSchema = z
     /** How the criteria were met (done) or why the node was let go (dropped). */
     outcome: z.string().max(PLAN_NODE_PROSE_MAX_CHARS).optional(),
     note: z.string().max(PLAN_NODE_PROSE_MAX_CHARS).optional(),
-    card: PlanNodeCardSchema.optional(),
+    card: PlanNodeStoredCardSchema.optional(),
     /** Name it as `expectedRevision` on the next update. */
     revision: z.number().int().min(1),
     position: z.number().int().min(0),

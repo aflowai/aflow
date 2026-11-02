@@ -9,7 +9,7 @@ import {
   primaryKey,
   type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
-import type { PlanNodeCard } from '@aflow/schemas';
+import type { PlanNodeStoredCard } from '@aflow/schemas';
 
 // ============================================================================
 
@@ -51,8 +51,8 @@ export const planNodes = pgTable(
      */
     openedAt: timestamp('opened_at', { withTimezone: true }),
     spendCents: integer('spend_cents'),
-    /** `PlanNodeCard` (Plan 337 D1), validated whole at write; read and written whole. */
-    card: jsonb('card').$type<PlanNodeCard>(),
+    /** `PlanNodeStoredCard` (Plan 337 D1), validated whole at write; read and written whole. */
+    card: jsonb('card').$type<PlanNodeStoredCard>(),
   },
   (table) => [
     index('plan_nodes_space_status_idx').on(table.spaceId, table.status),

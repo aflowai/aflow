@@ -4,6 +4,10 @@
  * decision the shepherd makes is read off typed fields rather than GitHub's
  * whole objects, and nothing it reads is cut to an inline summary first.
  *
+ * This is GitHub's provider of the forge vocabulary in the API executor (Plan
+ * 340 D2): the records it returns are the vocabulary's, and GitHub's field
+ * names are read here and nowhere the skills or the poller see.
+ *
  * Each throws on a body that is not the shape GitHub answers with, which the
  * caller turns into a failed step: a read that cannot be read is never a guess.
  */
@@ -33,7 +37,7 @@ import {
   SHEPHERD_RESPONSE_PRESETS,
   type ShepherdHandoffRead,
 } from '@aflow/schemas';
-import { NOTHING_SKIPPED, type SkippedPrefix } from './bodyTail.js';
+import { NOTHING_SKIPPED, type SkippedPrefix } from '../../bodyTail.js';
 
 type Json = Record<string, unknown>;
 

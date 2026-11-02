@@ -274,7 +274,7 @@ export async function createPlanNode(
           ? `${PLAN_NODE_ASK_HEAD}${waitsOn.decision.replace(/\s*\n\s*/g, ' ')}`
           : undefined;
   if (ctx.resident === true && head === undefined) return residentCreates();
-  const notMerged = await designApprovalRefusal(ctx, input.work, parentId);
+  const notMerged = await designApprovalRefusal(ctx, input, parentId);
   if (notMerged !== undefined) return notMerged;
   const given = input.note !== undefined && input.note !== '' ? input.note : null;
   const note = head === undefined ? given : given === null ? head : `${head}\n${given}`;

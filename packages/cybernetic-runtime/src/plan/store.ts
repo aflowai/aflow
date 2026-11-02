@@ -431,7 +431,7 @@ async function retryingDeadlocks<T>(write: () => Promise<T>): Promise<T> {
 const REFUSED_CARDS_WARNED_MAX = 10_000;
 const refusedCardsWarned = new Set<string>();
 
-function storedCard(row: PlanNodeRow): PlanNodeCard | undefined {
+function storedCard(row: PlanNodeRow): NonNullable<PlanNodeRow['card']> | undefined {
   if (row.card == null) return undefined;
   const read = readStoredPlanNodeCard(row.card);
   if ('card' in read) return read.card;

@@ -17,7 +17,7 @@ import {
 } from '@aflow/schemas';
 import { readBodyTail } from './bodyTail.js';
 import { DEFAULT_INLINE_RESPONSE_BYTES } from './config.js';
-import { JOB_LOG_READ_WINDOW_BYTES, jobLogTail } from './githubShepherd.js';
+import { JOB_LOG_READ_WINDOW_BYTES, jobLogTail } from './forge/github/shepherdReads.js';
 import { processResponse } from './response.js';
 import type { ResolvedCall } from './types.js';
 

@@ -4,9 +4,9 @@
  * **Decide** lands in the outcome. An answer on **Approve** lands in the note
  * as one `Approved: …` line. No write path carries the card's answers apart.
  */
-import type { PlanNodeCard } from '@aflow/schemas';
+import type { PlanNodeStoredCard } from '@aflow/schemas';
 
-type CardQuestion = PlanNodeCard['questions'][number];
+type CardQuestion = PlanNodeStoredCard['questions'][number];
 
 /** An end of a sentence, a closing quote or bracket after it allowed. */
 const CLOSED = /[.!?…]["'”’)\]]*$/;
@@ -22,7 +22,7 @@ export function planCardAnswerLine(question: string, answer: string): string {
 }
 
 /** What **Decide** opens with on a carded decision: each question and its recommended answer. */
-export function planCardDecidePrefill(card: PlanNodeCard | undefined): string {
+export function planCardDecidePrefill(card: PlanNodeStoredCard | undefined): string {
   return (card?.questions ?? [])
     .map((q) => planCardAnswerLine(q.question, q.recommended))
     .join('\n');

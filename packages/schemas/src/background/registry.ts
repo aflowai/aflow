@@ -801,7 +801,9 @@ const DEFINITIONS: readonly BackgroundTaskDefinitionInput[] = [
     note: "Each poll is conditional: the task keeps each answer's ETag and sends it back as If-None-Match, so an unchanged pull request answers 304, which GitHub says does not count against the primary rate limit. Three reads per pull request — the pull request, its head's check runs and its reviews — and a fourth, the head's combined status, where the check runs are none or more than one page. The 60-second cadence is proposed and still to be measured (Plan 339 P2). One range read per cycle when nothing is armed. The arm also records the pull request's owner, the live Helmsman conversation that started the publication, and declares its wait on the pull request; the wait delivery renews it (Plan 339 D4).",
     sites: [
       'apps/aflow-orchestrator/src/services/pullRequestEvents/source.ts',
-      'apps/aflow-orchestrator/src/services/pullRequestEvents/github.ts',
+      'apps/aflow-orchestrator/src/services/forge/index.ts',
+      'apps/aflow-orchestrator/src/services/forge/github/conditionalGet.ts',
+      'apps/aflow-orchestrator/src/services/forge/github/pullRequestReads.ts',
       'apps/aflow-orchestrator/src/services/pullRequestEvents/arm.ts',
       'apps/aflow-orchestrator/src/services/pullRequestEvents/owner.ts',
       'packages/redis/src/pullRequestWatch.ts',

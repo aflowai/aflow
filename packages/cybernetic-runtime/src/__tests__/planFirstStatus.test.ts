@@ -11,10 +11,10 @@ import type { Redis as RedisType } from 'ioredis';
 import {
   PLAN_NODE_ASK_HEAD,
   PlanNodeCreateInputSchema,
+  planNodeApprovalAsked,
   planNodeFirstStatus,
   readStoredPlanNodeCard,
   type PlanNodeCard,
-  type PlanNodeWaitsOn,
   type PlanNodeCreateInput,
   type PlanNodeWaitReason,
   type PlanNodeWork,
@@ -227,11 +227,63 @@ describe('a node’s first status (Plan 339 D6)', () => {
     });
   });
 
-  it('reads a stored card whose wait names design_document as asking for design_approval', () => {
+  it('refuses a card that asks for design_approval with no work named, until P0 merged', async () => {
+    const root = await create({ title: 'Plan 340 · the loop works against any forge' });
+    await create({ parentId: root.nodeId, title: 'P0', work: 'design_document' });
+    const decision = 'Approve Plan 340’s merged design document.';
+    const result = await createPlanNode(
+      ctx(),
+      PlanNodeCreateInputSchema.parse({
+        parentId: root.nodeId,
+        kind: 'decide',
+        title: 'P1 — the forge seam',
+        goal: 'Approve the design.',
+        criteria: 'The operator approved it.',
+        card: card({ reason: 'design_approval', decision }),
+      }),
+    );
+    expect(result).toMatchObject({ ok: false, code: 'PLAN_NODE_DESIGN_NOT_MERGED' });
+    expect(store.nodes.size).toBe(2);
+  });
+
+  it('asks for design_approval only on P0’s design document, not on another done step', async () => {
+    const root = await create({ title: 'Plan 340 · the loop works against any forge' });
+    await create({ parentId: root.nodeId, title: 'P0', work: 'design_document' });
+    const other = await create({ parentId: root.nodeId, title: 'A side note' });
+    await linkPlanNode(ctx(), { nodeId: other.nodeId, kind: 'document', ref: 'docs/notes.md' });
+    const closed = await updatePlanNode(ctx(), {
+      nodeId: other.nodeId,
+      expectedRevision: other.revision,
+      status: 'done',
+      outcome: 'Written.',
+    });
+    expect(closed.ok).toBe(true);
+    const decision = 'Approve Plan 340’s merged design document.';
+    const result = await createPlanNode(
+      ctx(),
+      PlanNodeCreateInputSchema.parse({
+        parentId: root.nodeId,
+        kind: 'decide',
+        title: 'P1 — the forge seam',
+        goal: 'Approve the design.',
+        criteria: 'The operator approved it.',
+        work: 'design_approval',
+        card: card({ reason: 'design_approval', decision }),
+      }),
+    );
+    expect(result).toMatchObject({ ok: false, code: 'PLAN_NODE_DESIGN_NOT_MERGED' });
+  });
+
+  it('reads a stored card whose wait names design_document as itself, and refuses it on write', () => {
     const decision = 'Approve the design document.';
-    const stored = card({ reason: 'design_document', decision } as unknown as PlanNodeWaitsOn);
-    expect(readStoredPlanNodeCard(stored)).toEqual({
-      card: card({ reason: 'design_approval', decision }),
+    const stored = card({
+      reason: 'design_document',
+      decision,
+    } as unknown as PlanNodeCard['waitsOn']);
+    expect(readStoredPlanNodeCard(stored)).toEqual({ card: stored });
+    expect(planNodeApprovalAsked({ status: 'blocked', card: stored })).toEqual({
+      reason: 'design_document',
+      decision,
     });
     expect(
       PlanNodeCreateInputSchema.safeParse({

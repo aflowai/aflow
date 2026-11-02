@@ -1,40 +1,38 @@
 /**
  * The phase after P0 asks the operator to approve P0's merged design document
- * (Plan 339 D6), so it is created only once that document exists: a step
- * beside it has closed done with its document linked.
+ * (Plan 339 D6), so that ask is created only once the document exists: the
+ * plan's P0, its first step, has closed done with its design document linked.
  */
-import type { PlanNodeWork } from '@aflow/schemas';
+import type { PlanNodeCreateInput } from '@aflow/schemas';
 import type { PlanOpError, PlanReadContext } from './operations.js';
 
-const SIBLINGS_PAGE = 100;
-
-async function designDocumentMerged(ctx: PlanReadContext, parentId: string): Promise<boolean> {
-  for (let offset = 0; ; offset += SIBLINGS_PAGE) {
-    const page = await ctx.store.listChildren(ctx.spaceId, parentId, SIBLINGS_PAGE, offset);
-    for (const sibling of page.children) {
-      if (sibling.status !== 'done') continue;
-      if ((await ctx.store.newestLink(ctx.spaceId, sibling.nodeId, 'document')) !== null) {
-        return true;
-      }
-    }
-    if (page.children.length === 0 || offset + page.children.length >= page.total) return false;
-  }
+async function designDocumentMerged(ctx: PlanReadContext, planId: string): Promise<boolean> {
+  const { children } = await ctx.store.listChildren(ctx.spaceId, planId, 1);
+  const p0 = children[0];
+  if (p0?.status !== 'done') return false;
+  return (await ctx.store.newestLink(ctx.spaceId, p0.nodeId, 'document')) !== null;
 }
 
-/** The refusal of a `design_approval` create before its design document has merged. */
+/**
+ * The refusal of a create that asks for `design_approval`, through its `work`
+ * or its card's `waitsOn`, before P0's design document has merged.
+ */
 export async function designApprovalRefusal(
   ctx: PlanReadContext,
-  work: PlanNodeWork | undefined,
+  input: Pick<PlanNodeCreateInput, 'work' | 'card'>,
   parentId: string | null,
 ): Promise<PlanOpError | undefined> {
-  if (work !== 'design_approval') return undefined;
+  const asks =
+    input.work === 'design_approval' || input.card?.waitsOn?.reason === 'design_approval';
+  if (!asks) return undefined;
   if (parentId !== null && (await designDocumentMerged(ctx, parentId))) return undefined;
   return {
     ok: false,
     code: 'PLAN_NODE_DESIGN_NOT_MERGED',
     message:
-      '`design_approval` asks the operator to approve a merged design document, and no step beside this one ' +
-      'has closed done with its document linked, so nothing was written. Let P0 run active until its document ' +
-      'merges, close it done and link the document at its merge sha, then create the phase that asks.',
+      '`design_approval` asks the operator to approve a merged design document, and the plan’s P0, its first ' +
+      'step, has not closed done with its design document linked, so nothing was written. Let P0 run active ' +
+      'until its document merges, close it done and link the document at its merge sha, then create the phase ' +
+      'that asks.',
   };
 }

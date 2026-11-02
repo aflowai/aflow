@@ -5,6 +5,7 @@ import {
   type ShepherdMergeOutcome,
   type WorkflowRunDecideRule,
 } from '@aflow/schemas';
+import { FORGE } from './localPrShepherdWiring.js';
 
 // --- The rules ---------------------------------------------------------------
 
@@ -613,15 +614,6 @@ export const REMEDY_TAKEN_RULES: readonly WorkflowRunDecideRule[] = [
   })),
 ];
 
-/**
- * GitHub's answer, with 405, to a merge whose base branch moved between the
- * pull request's read and the merge — another pull request merged first. The
- * wording is matched exactly: a 405 can also mean a conflict or a rule the
- * base requires, which no re-attempt clears, and wording GitHub changes falls
- * back to the ordinary refusal rather than a re-attempt that repeats forever.
- */
-export const BASE_MOVED_MESSAGE = 'Base branch was modified. Review and try the merge again.';
-
 /** The refusal kind under which the merge is attempted again and handed back, never left. */
 export const MERGE_REFUSAL_BASE_MOVED = 'base_moved';
 
@@ -630,14 +622,16 @@ export const MERGE_REFUSAL_BASE_MOVED = 'base_moved';
  * benign: the base moved, while the head — read again after the refusal — is
  * still the one pinned and its checks, the base's required ones among them,
  * passed. Anything else, a re-read that failed included, is `head_invalid`
- * and recorded against the head as before.
+ * and recorded against the head as before. The forge's provider words which
+ * refusal is the base moving: its exact wording falls back to the ordinary
+ * refusal where the forge changes it, rather than a re-attempt that repeats
+ * forever.
  */
 export const MERGE_REFUSAL_RULES: readonly WorkflowRunDecideRule[] = [
   {
     when: {
       anyOf: [
-        'state.merge.statusCode != 405',
-        `state.merge.data.message != '${BASE_MOVED_MESSAGE}'`,
+        ...FORGE.merge.otherThanBaseMoved('state.merge'),
         'state.pr.statusCode != 200',
         'state.pr.data.headSha != state.pinnedHead',
         "state.checks.data.state != 'passing'",
@@ -679,7 +673,7 @@ export const MERGE_OUTCOME_RULES: readonly WorkflowRunDecideRule[] = [
       'The merge was not made: the operator declined it, or the request could not be sent. No merge of this head is asked for again.',
   },
   {
-    when: { expression: 'state.merge.statusCode == 200' },
+    when: { expression: FORGE.merge.merged('state.merge') },
     decision: 'merged' satisfies ShepherdMergeOutcome,
     reason: 'GitHub merged the pull request by squash, on the head the pass read.',
   },
@@ -689,7 +683,7 @@ export const MERGE_OUTCOME_RULES: readonly WorkflowRunDecideRule[] = [
     reason: `GitHub refused the merge pinned to this head. No merge of this head is asked for again.${HANDED_OVER_HEAD}`,
   },
   {
-    when: { expression: 'state.mergeAgain.statusCode == 200' },
+    when: { expression: FORGE.merge.merged('state.mergeAgain') },
     decision: 'merged' satisfies ShepherdMergeOutcome,
     reason:
       'GitHub refused the first request because the base branch moved after the pass read it, and merged the pull request by squash on the re-attempt, on the same head.',

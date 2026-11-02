@@ -770,7 +770,7 @@ describe('readPlanOverview — the plans as rows', () => {
           risks: [],
           questions: [],
           notDoing: [],
-          waitsOn: { reason: 'design_approval', decision: 'Approve the design document.' },
+          waitsOn: { reason: 'design_decision', decision: 'Choose the design.' },
         },
       },
     ],
