@@ -221,6 +221,94 @@ describe('a loop pull request the publication armed', () => {
   });
 });
 
+describe('a head whose checks fail', () => {
+  const failing = { status: 'completed', conclusion: 'failure' };
+  const changesOf = (emit: ReturnType<typeof vi.fn>) =>
+    emit.mock.calls.map((call) => (call[1] as { change: string; headSha: string }).change);
+
+  async function anHourOfCycles(get: GitHubConditionalGet, emit: ReturnType<typeof vi.fn>) {
+    const start = clock;
+    for (let elapsed = 0; elapsed <= HOUR_MS; elapsed += PULL_REQUEST_POLL_CADENCE_MS) {
+      clock = start + elapsed;
+      await cycle(get, emit as never);
+    }
+  }
+
+  it('emits checks_failed once when green turns red on the same head, and not again while it stands', async () => {
+    await arm();
+    const answers: Record<string, { etag: string; body: unknown }> = {
+      [PULL]: { etag: '"p1"', body: pull() },
+      [CHECKS]: { etag: '"c1"', body: { total_count: 1, check_runs: passing(1) } },
+      [REVIEWS]: { etag: '"r1"', body: [] },
+    };
+    const github = fakeGitHub(answers);
+    const emit = vi.fn(async () => true);
+
+    await cycle(github.get, emit as never);
+    expect(changesOf(emit)).toEqual(['checks_green']);
+
+    answers[CHECKS] = {
+      etag: '"c2"',
+      body: { total_count: 2, check_runs: [...passing(1), failing] },
+    };
+    clock += PULL_REQUEST_POLL_CADENCE_MS;
+    await anHourOfCycles(github.get, emit);
+
+    expect(changesOf(emit)).toEqual(['checks_green', 'checks_failed']);
+    expect(emit).toHaveBeenLastCalledWith(
+      redis,
+      expect.objectContaining({ change: 'checks_failed', headSha: 'abc123' }),
+    );
+    // The red reading is conditional too: every later poll sends its ETag back.
+    const checkReads = github.requests.filter((r) => r.path.startsWith(CHECKS));
+    expect(checkReads.slice(2).every((r) => r.etag === '"c2"')).toBe(true);
+    expect(github.requests.map((r) => r.path)).not.toContain(STATUS);
+  });
+
+  it('emits checks_failed once for a new head that goes red directly', async () => {
+    await arm();
+    const answers: Record<string, { etag: string; body: unknown }> = {
+      [PULL]: { etag: '"p1"', body: pull() },
+      [CHECKS]: { etag: '"c1"', body: { total_count: 1, check_runs: passing(1) } },
+      [REVIEWS]: { etag: '"r1"', body: [] },
+    };
+    const github = fakeGitHub(answers);
+    const emit = vi.fn(async () => true);
+    await cycle(github.get, emit as never);
+
+    const NEW_CHECKS = '/repos/aflowai/aflow/commits/def456/check-runs';
+    answers[PULL] = { etag: '"p2"', body: pull({ head: { sha: 'def456' } }) };
+    answers[NEW_CHECKS] = { etag: '"d1"', body: { total_count: 1, check_runs: [failing] } };
+    clock += PULL_REQUEST_POLL_CADENCE_MS;
+    await anHourOfCycles(github.get, emit);
+
+    expect(changesOf(emit)).toEqual(['checks_green', 'checks_failed']);
+    expect(emit).toHaveBeenLastCalledWith(
+      redis,
+      expect.objectContaining({ change: 'checks_failed', headSha: 'def456' }),
+    );
+  });
+
+  it('reads failure from the combined status where the head has no check runs', async () => {
+    await arm();
+    const github = fakeGitHub({
+      [PULL]: { etag: '"p1"', body: pull() },
+      [CHECKS]: { etag: '"c1"', body: { total_count: 0, check_runs: [] } },
+      [STATUS]: {
+        etag: '"s1"',
+        body: { state: 'failure', total_count: 1, statuses: [{ state: 'failure' }] },
+      },
+      [REVIEWS]: { etag: '"r1"', body: [] },
+    });
+    const emit = vi.fn(async () => true);
+
+    await anHourOfCycles(github.get, emit);
+
+    expect(changesOf(emit)).toEqual(['checks_failed']);
+    expect(github.requests.find((r) => r.path === STATUS && r.etag === '"s1"')).toBeDefined();
+  });
+});
+
 describe('checks a repository reports outside one page of check runs', () => {
   it('reads green from the combined status where the head has no check runs', async () => {
     await arm();
@@ -398,6 +486,16 @@ describe('what a poll reads', () => {
         snapshot({ checks: 'green', pull: { ...before.pull, headSha: 'b' } }),
       ),
     ).toEqual(['checks_green']);
+  });
+
+  it('names checks failing once while a head stays red, and again on a new head or a failed re-run', () => {
+    const red = snapshot({ checks: 'red' });
+    expect(pullRequestChanges(snapshot({ checks: 'green' }), red)).toEqual(['checks_failed']);
+    expect(pullRequestChanges(red, red)).toEqual([]);
+    expect(
+      pullRequestChanges(red, snapshot({ checks: 'red', pull: { ...red.pull, headSha: 'b' } })),
+    ).toEqual(['checks_failed']);
+    expect(pullRequestChanges(snapshot({ checks: 'pending' }), red)).toEqual(['checks_failed']);
   });
 
   it('names a conflict and a request for changes once each', () => {

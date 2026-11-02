@@ -47,6 +47,8 @@ export function ownerOnEvent(watch: Pick<PullRequestWatch, 'number' | 'bindingId
     `Run a Local PR Shepherd pass aimed at it: \`workflow.run.start\` with slug \`${SHEPHERD_SLUG}\`, ` +
     `${folder} and \`pullNumber: '${String(watch.number)}'\`, with \`wait: 'none'\`. ` +
     "The pass merges a green head where the folder's merge posture allows, and commissions the merge round on a conflict. " +
+    'On a red head the pass commissions the fix round, and publishes only a head the fix moved. ' +
+    'Never publish a red, unmoved head as it stands. ' +
     "Once the pull request has merged, close its plan step, and move the folder where the folder's merge is not the operator's."
   );
 }

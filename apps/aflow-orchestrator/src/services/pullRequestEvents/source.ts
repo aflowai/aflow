@@ -1,7 +1,8 @@
 /**
  * The pull request event source (Plan 339 D2): polls only the pull requests
  * the loop has open, and emits `pull_request.changed` when one's checks go
- * green, it merges, it conflicts, a review asks for changes, or it closes.
+ * green or fail, it merges, it conflicts, a review asks for changes, or it
+ * closes.
  *
  * Candidate-driven under Plan 180. The publication that opens a pull request
  * arms it (`arm.ts`); its merge or its close clears it here. A cycle with no
@@ -153,8 +154,12 @@ export function parseChangesRequested(body: unknown): boolean {
 }
 
 /**
- * What changed between two polls, by the four changes of D1 and a close. The
- * first poll compares with nothing, so what already holds is reported once.
+ * What changed between two polls, by the four changes of D1, a failed head and
+ * a close. The first poll compares with nothing, so what already holds is
+ * reported once. Green and failed are each reported once per head: a head read
+ * the same on the poll before reports nothing new. A re-run that leaves the
+ * head pending and then fails again reports it once more, because a failure
+ * no one hears leaves the owner's wait quiet and the sweep counts it attended.
  */
 export function pullRequestChanges(
   before: PullRequestSnapshot | undefined,
@@ -164,8 +169,11 @@ export function pullRequestChanges(
   if (after.pull.state === 'closed') return before?.pull.state === 'closed' ? [] : ['closed'];
   const changes: PullRequestChange[] = [];
   const sameHead = before?.pull.headSha === after.pull.headSha;
-  if (after.checks === 'green' && !(sameHead && before?.checks === 'green')) {
+  if (after.checks === 'green' && !(sameHead && before.checks === 'green')) {
     changes.push('checks_green');
+  }
+  if (after.checks === 'red' && !(sameHead && before.checks === 'red')) {
+    changes.push('checks_failed');
   }
   if (after.pull.mergeableState === 'dirty' && before?.pull.mergeableState !== 'dirty') {
     changes.push('conflicting');

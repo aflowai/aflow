@@ -24,11 +24,14 @@ export const WaitEventKindSchema = z.enum(WAIT_EVENT_KINDS);
 export type WaitEventKind = z.infer<typeof WaitEventKindSchema>;
 
 /**
- * Which change a `pull_request.changed` event names. `closed` is a close
- * without a merge: like `merged`, it ends the loop's watch on the pull request.
+ * Which change a `pull_request.changed` event names. `checks_failed` fires
+ * when CI concludes failure on a head, once while the head stays red. `closed`
+ * is a close without a merge: like `merged`, it ends the loop's watch on the
+ * pull request.
  */
 export const PULL_REQUEST_CHANGES = [
   'checks_green',
+  'checks_failed',
   'merged',
   'conflicting',
   'changes_requested',
