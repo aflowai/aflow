@@ -225,13 +225,31 @@ export function planNodeCardInOrder(card: PlanNodeCard): PlanNodeCard {
 export type StoredPlanNodeCard = { card: PlanNodeCard } | { refusal: string };
 
 /**
+ * A card stored before Plan 339 D6 named the design document's ask
+ * `design_document`. That ask is `design_approval` now, so a stored card keeps
+ * its decision and the rail keeps its Approve.
+ */
+const STORED_WAIT_REASONS: Readonly<Partial<Record<string, PlanNodeWaitReason>>> = {
+  design_document: 'design_approval',
+};
+
+function withStoredWaitReason(stored: unknown): unknown {
+  if (typeof stored !== 'object' || stored === null || !('waitsOn' in stored)) return stored;
+  const waitsOn: unknown = stored.waitsOn;
+  if (typeof waitsOn !== 'object' || waitsOn === null || !('reason' in waitsOn)) return stored;
+  const reason =
+    typeof waitsOn.reason === 'string' ? STORED_WAIT_REASONS[waitsOn.reason] : undefined;
+  return reason === undefined ? stored : { ...stored, waitsOn: { ...waitsOn, reason } };
+}
+
+/**
  * A stored card as a node read returns it. A `jsonb` column returns keys in
  * its own order, and a reader takes the card in D1's order. A card written
  * before a schema change may fail the schema now. The read then carries no
  * card and returns the refusal, so the node still passes its output schema.
  */
 export function readStoredPlanNodeCard(stored: unknown): StoredPlanNodeCard {
-  const parsed = PlanNodeCardSchema.safeParse(stored);
+  const parsed = PlanNodeCardSchema.safeParse(withStoredWaitReason(stored));
   return parsed.success ? { card: parsed.data } : { refusal: parsed.error.message };
 }
 

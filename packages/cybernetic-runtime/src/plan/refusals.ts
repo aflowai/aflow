@@ -98,6 +98,18 @@ export function unchanged(current: PlanNode, input: PlanNodeUpdateInput): PlanOp
   };
 }
 
+export function createdNoteTooLong(noteLength: number): PlanOpError {
+  return {
+    ok: false,
+    code: 'PLAN_NODE_NOTE_TOO_LONG',
+    message:
+      `A node created blocked has its first line say what it waits on, above the note, which would then hold ` +
+      `${String(noteLength)} characters; a note holds at most ${String(PLAN_NODE_PROSE_MAX_CHARS)}, so nothing was ` +
+      'written. Pass a shorter `note`, or none.',
+    details: { noteLength, noteMaxChars: PLAN_NODE_PROSE_MAX_CHARS },
+  };
+}
+
 export function reopenedNoteTooLong(current: PlanNode, noteLength: number): PlanOpError {
   const headLength = reopenedNote(current, null)?.length ?? 0;
   const room = PLAN_NODE_PROSE_MAX_CHARS - headLength - 1;

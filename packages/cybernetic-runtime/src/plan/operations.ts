@@ -77,7 +77,9 @@ import {
 import type { PlanNodePatch, PlanNodeStore } from './store.js';
 import type { PlanPlaceAnchor } from './placement.js';
 import { carrierNode, PLAN_CARRIER_FINDINGS_LIMIT } from './carrier.js';
+import { designApprovalRefusal } from './designApproval.js';
 import {
+  createdNoteTooLong,
   notFound,
   openHasNoOutcome,
   operatorNoteTooLong,
@@ -114,6 +116,7 @@ export type PlanOpErrorCode =
   | 'PLAN_NODE_ATTESTATION_UNAVAILABLE'
   | 'PLAN_NODE_RESIDENT_SCOPE'
   | 'PLAN_NODE_LIVE_CHECK_PERSON'
+  | 'PLAN_NODE_DESIGN_NOT_MERGED'
   | 'PLAN_LEARNING_NOT_FOUND';
 
 export interface PlanOpError {
@@ -250,18 +253,6 @@ function residentUnblocks(current: PlanNode): PlanOpError {
   };
 }
 
-function createdNoteTooLong(noteLength: number): PlanOpError {
-  return {
-    ok: false,
-    code: 'PLAN_NODE_NOTE_TOO_LONG',
-    message:
-      `A node created blocked has its first line say what it waits on, above the note, which would then hold ` +
-      `${String(noteLength)} characters; a note holds at most ${String(PLAN_NODE_PROSE_MAX_CHARS)}, so nothing was ` +
-      'written. Pass a shorter `note`, or none.',
-    details: { noteLength, noteMaxChars: PLAN_NODE_PROSE_MAX_CHARS },
-  };
-}
-
 /**
  * A node starts as `planNodeCreatedStatus` says (Plan 339 D6): approved work
  * `active`, and `blocked` only for a proposal (Plan 331 D5), a live check (D8)
@@ -283,6 +274,8 @@ export async function createPlanNode(
           ? `${PLAN_NODE_ASK_HEAD}${waitsOn.decision.replace(/\s*\n\s*/g, ' ')}`
           : undefined;
   if (ctx.resident === true && head === undefined) return residentCreates();
+  const notMerged = await designApprovalRefusal(ctx, input.work, parentId);
+  if (notMerged !== undefined) return notMerged;
   const given = input.note !== undefined && input.note !== '' ? input.note : null;
   const note = head === undefined ? given : given === null ? head : `${head}\n${given}`;
   if (note !== null && note.length > PLAN_NODE_PROSE_MAX_CHARS) {
