@@ -23,6 +23,7 @@ import {
   createPlanNode,
   linkPlanNode,
   openPlanNode,
+  placePlanNode,
   updatePlanNode,
   type PlanWriteContext,
 } from '../plan/operations.js';
@@ -630,6 +631,44 @@ describe('a node’s first status (Plan 339 D6)', () => {
     });
     expect(placed).toMatchObject({ ok: false, code: 'PLAN_NODE_DESIGN_NOT_MERGED' });
     expect(store.nodes.get(p1.node.nodeId)).toEqual(before);
+  });
+
+  it('refuses plan.node.place moving a blocked ask while P0 is reopened, or ahead of P0', async () => {
+    const { root, p0 } = await mergedP0At(5);
+    const p1 = await ask(root.nodeId, 8);
+    const p2 = await ask(root.nodeId, 9);
+    if (!p1.ok || !p2.ok) throw new Error('The asks were refused.');
+    const reopened = await updatePlanNode(ctx(), {
+      nodeId: p0.nodeId,
+      expectedRevision: p0.revision,
+      status: 'active',
+    });
+    if (!reopened.ok) throw new Error(reopened.message);
+    const before = store.nodes.get(p2.node.nodeId)!;
+    const place = (anchor: { before: string } | { after: string }) =>
+      placePlanNode(ctx(), {
+        nodeId: p2.node.nodeId,
+        expectedRevision: before.revision,
+        ...anchor,
+      });
+    const refused = { ok: false, code: 'PLAN_NODE_DESIGN_NOT_MERGED' };
+    expect(await place({ before: p0.nodeId })).toMatchObject(refused);
+    expect(await place({ before: p1.node.nodeId })).toMatchObject(refused);
+    expect(store.nodes.get(p2.node.nodeId)).toEqual(before);
+    const closed = await updatePlanNode(ctx(), {
+      nodeId: p0.nodeId,
+      expectedRevision: reopened.node.revision,
+      status: 'done',
+      outcome: 'Merged again after review.',
+    });
+    if (!closed.ok) throw new Error(closed.message);
+    expect(await place({ before: p0.nodeId })).toMatchObject(refused);
+    expect(store.nodes.get(p2.node.nodeId)).toEqual(before);
+    const landed = await place({ after: p0.nodeId });
+    expect(landed).toMatchObject({ ok: true, node: { status: 'blocked' } });
+    if (!landed.ok) throw new Error(landed.message);
+    // P0 at 5 and the other ask at 8 leave room, so the move lands between them.
+    expect(landed.node.position).toBe(6);
   });
 
   it.each(['done', 'dropped'] as const)(

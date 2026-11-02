@@ -169,6 +169,7 @@ A blocked kind needs the card's `waitsOn`, and the schema refuses one without it
 - An update that moves a blocked ask to any other open status, active or waiting.
 - A reopen: an update or `plan.node.open` that moves a done or dropped ask to any open status.
 - An update that moves a blocked ask to another parent or position.
+- A `plan.node.place` that moves a blocked ask among its siblings.
 
 The engine refuses each of them until the plan’s P0 has closed done with its design document linked. P0 is the first step not dropped under the plan’s root, however deep the asking node sits. A write on a phase already active lands, so an approved phase stays writable after P0 reopens. A write that closes the asking node lands too. A note on a blocked ask whose card already names the reason lands as well. The gate judges the node as the write lands it. It reads the card the write sends, or the stored card where the write sends none. It finds P0 among the siblings the write leaves, a node placed ahead of P0 included. A card's wait names only a blocked kind of work, so no card waits on `design_document`. Migration 237 rewrote each stored card that did to `design_decision`, keeping its decision and the rail's Approve. A node whose card names `waitsOn` starts blocked, its note opening with `Waiting on you:` and the decision. The carrier a done-close writes for open findings (Plan 331 D6) reads the same rule and starts active. Where a resident wake wrote the close, the carrier stays blocked and proposed, so a resident wake never creates active work.
 

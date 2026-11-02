@@ -76,7 +76,7 @@ import {
 import type { PlanNodePatch, PlanNodeStore } from './store.js';
 import type { PlanPlaceAnchor } from './placement.js';
 import { carrierNode, PLAN_CARRIER_FINDINGS_LIMIT } from './carrier.js';
-import { designApprovalRefusal } from './designApproval.js';
+import { designApprovalPlaceRefusal, designApprovalRefusal } from './designApproval.js';
 import {
   createdNoteTooLong,
   dependencyCycle,
@@ -797,6 +797,11 @@ export async function placePlanNode(
   const { nodeId, expectedRevision } = request;
   const anchor: PlanPlaceAnchor =
     'before' in request ? { before: request.before } : { after: request.after };
+  const current = await ctx.store.find(ctx.spaceId, nodeId);
+  const notMerged = current
+    ? await designApprovalPlaceRefusal(ctx, current, expectedRevision, anchor)
+    : undefined;
+  if (notMerged !== undefined) return notMerged;
   const placed = await ctx.store.placeAtRevision(ctx.spaceId, nodeId, expectedRevision, anchor);
   const asked: PlanNodeUpdateInput = { nodeId, expectedRevision };
   switch (placed.outcome) {
