@@ -1,6 +1,6 @@
 /**
  * A node's first status is data (Plan 339 D6): approved work in the queue
- * starts active, as a new plan's P0 does, and a node starts blocked only for
+ * starts active, as a new plan's P0 does. A node starts blocked only for
  * a decision that is the operator's, its card naming that decision. The rule
  * is read through the create schema and the engine, as the Helmsman's and the
  * resident's writes go.
@@ -106,10 +106,7 @@ describe('a node’s first status (Plan 339 D6)', () => {
 
   const decisions: { reason: PlanNodeWaitReason; decision: string }[] = [
     { reason: 'design_decision', decision: 'Choose where the wait primitive lives.' },
-    {
-      reason: 'design_approval',
-      decision: 'Read and approve Plan 340’s merged design document.',
-    },
+    { reason: 'design_approval', decision: 'Approve Plan 340’s merged design document.' },
     { reason: 'decision_change', decision: 'Amend Plan 322 D2.' },
     { reason: 'authority', decision: 'Let the resident push without asking.' },
     { reason: 'operator_question', decision: 'Answer the open question on the card.' },
@@ -160,14 +157,14 @@ describe('a node’s first status (Plan 339 D6)', () => {
     ).toBe(false);
   });
 
-  it('starts a new plan’s P0 active and asks the operator at the phase after it', async () => {
+  it('starts a new plan’s P0 active and asks at the phase after it', async () => {
     const root = await create({ title: 'Plan 340 · the loop works against any forge' });
     const p0 = await create({
       parentId: root.nodeId,
       title: 'P0 — the design document',
       work: 'design_document',
     });
-    const decision = 'Read and approve Plan 340’s merged design document.';
+    const decision = 'Approve Plan 340’s merged design document.';
     const p1 = await create({
       parentId: root.nodeId,
       title: 'P1 — the forge seam',

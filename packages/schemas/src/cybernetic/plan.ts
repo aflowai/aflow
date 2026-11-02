@@ -69,8 +69,7 @@ const PlanNodePositionSchema = z
 
 /**
  * What a new node is, for its first status. Approved work in the queue starts
- * `active`, and so does a new plan’s P0, whose design document is written and
- * reviewed before the operator reads it. A node starts `blocked` only for a
+ * `active`, as a new plan’s P0 does. A node starts `blocked` only for a
  * decision that is the operator’s, and then its card names that decision
  * (`waitsOn`).
  */
@@ -89,8 +88,7 @@ export const PLAN_NODE_FIRST_STATUS_RULE = {
   },
   design_document: {
     status: 'active',
-    description:
-      'A new plan’s P0, its design document, written and reviewed before the operator is asked.',
+    description: 'A new plan’s P0: its design document.',
   },
   design_decision: {
     status: 'blocked',
@@ -98,8 +96,7 @@ export const PLAN_NODE_FIRST_STATUS_RULE = {
   },
   design_approval: {
     status: 'blocked',
-    description:
-      'A new plan’s first phase after P0, which waits for the operator to read and approve the merged design document.',
+    description: 'After P0: the operator reads and approves the merged design document.',
   },
   decision_change: {
     status: 'blocked',
