@@ -2,6 +2,7 @@ import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq } from 'drizzle-orm';
 import { createTenantContext, withTenantSchema, workflowRuns } from '@aflow/database';
 import type {
+  BenchmarkAttemptResult,
   JudgeCriterionSelection,
   RunEvaluationDecision,
   RunEvaluationEnvelope,
@@ -19,13 +20,16 @@ export type RunEvaluationEnvelopeWrite =
       summary?: RunEvaluationSummary;
       judgeSelection?: JudgeCriterionSelection[];
       errorMessage?: string;
+      benchmark?: BenchmarkAttemptResult;
     }
   | { kind: 'outcome'; outcomeEvaluation: RunOutcomeEvaluation };
 
 /**
  * The ONLY code path that writes `workflow_runs.evaluation_json`. A decision
  * write replaces the decision slots and preserves the outcome slot; an
- * outcome write does the reverse. A stored 'ran' decision is final except to
+ * outcome write does the reverse. A decision write that carries no benchmark
+ * attempt keeps the stored one, so a re-fired post-run hook cannot erase an
+ * official benchmark result (Plan 341 D6). A stored 'ran' decision is final except to
  * a 'ran' under a different suiteContentHash — re-fired hooks and late error
  * writes never clobber a completed evaluation.
  */
@@ -57,6 +61,7 @@ export async function writeRunEvaluationEnvelope(
       ) {
         return { written: false };
       }
+      const benchmark = write.benchmark ?? existing?.benchmark;
       next = {
         decision: write.decision,
         decidedAt: new Date().toISOString(),
@@ -66,6 +71,7 @@ export async function writeRunEvaluationEnvelope(
         ...(write.summary !== undefined ? { summary: write.summary } : {}),
         ...(write.judgeSelection !== undefined ? { judgeSelection: write.judgeSelection } : {}),
         ...(write.errorMessage !== undefined ? { errorMessage: write.errorMessage } : {}),
+        ...(benchmark !== undefined ? { benchmark } : {}),
         ...(existing?.outcomeEvaluation !== undefined
           ? { outcomeEvaluation: existing.outcomeEvaluation }
           : {}),

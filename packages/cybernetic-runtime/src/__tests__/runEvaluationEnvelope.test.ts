@@ -144,4 +144,43 @@ describe('writeRunEvaluationEnvelope', () => {
     expect(envelope?.decision).toBe('operator_cancelled');
     expect(envelope?.outcomeEvaluation).toEqual({ outcomeResults: [], allMet: false });
   });
+
+  const benchmark = {
+    benchmark: 'swe-bench-pro',
+    instanceId: 'instance_example__repo-abc123',
+    arm: 'loop',
+    passed: false,
+    failureClass: 'harness_error',
+    tokens: null,
+    costUsd: null,
+    wallTimeMs: 1_000,
+    patchBytes: 10,
+    harnessRevision: 'a1b2c3d',
+  } as const;
+
+  it('a benchmark attempt lands in its own slot beside the decision', async () => {
+    const res = await writeRunEvaluationEnvelope(db, TENANT, {
+      runId: RUN_ID,
+      write: { kind: 'decision', decision: 'error', errorMessage: 'no verdict', benchmark },
+    });
+    expect(res.written).toBe(true);
+    expect(parseRunEvaluationEnvelope(store.value)).toMatchObject({
+      decision: 'error',
+      benchmark,
+    });
+  });
+
+  it('a later decision write carrying no benchmark attempt keeps the stored one', async () => {
+    await writeRunEvaluationEnvelope(db, TENANT, {
+      runId: RUN_ID,
+      write: { kind: 'decision', decision: 'error', errorMessage: 'no verdict', benchmark },
+    });
+    await writeRunEvaluationEnvelope(db, TENANT, {
+      runId: RUN_ID,
+      write: { kind: 'decision', decision: 'no_suite' },
+    });
+    const envelope = parseRunEvaluationEnvelope(store.value);
+    expect(envelope?.decision).toBe('no_suite');
+    expect(envelope?.benchmark).toEqual(benchmark);
+  });
 });

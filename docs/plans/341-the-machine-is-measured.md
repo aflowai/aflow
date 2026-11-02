@@ -1,6 +1,6 @@
 # Plan 341 — The machine is measured
 
-**Status:** P0, this document, awaits the operator's approval. P1 to P4 are not built.
+**Status:** P0 is approved. P1's harness runner and evaluation writer are built, and its pilot has not run. P2 to P4 are not built.
 
 **Builds on:** Plan 269 (the eval plane: one evaluation substrate, `workflow_runs.evaluation_json`, frozen replays), Plan 329 (planning is a skill), Plan 183 and Plan 234 (the learning loop), Plan 315 (the local loop), Plan 337 (the decision card), Plan 333 (D2's writing rules). Plans 269, 329, 183 and 234 predate the published archive, which starts at Plan 315, so they are cited by number and not quoted.
 
@@ -171,6 +171,14 @@ Each phase lands on its own.
 **P0 — This document and its index row.** _Exit:_ the operator approves it, or amends it and then approves it.
 
 **P1 — The pilot (D3).** It lands the harness runner and the evaluation writer, and proves them on eight tasks. _Exit:_ the results table is in this document, and the mechanics are proven end to end on all eight tasks.
+
+The machinery is built, and the pilot has not run. Its pieces are these:
+
+- The harness runner is `yarn bench:swe-pro`, a development script beside the loop's own measurement. It clones a task's repository at its base commit, captures the patch against that commit, pulls the task image and runs the official harness with local Docker.
+- `attempt` runs arm (a) whole. Arms (b) and (c) run between `materialize` and `grade`, with the folder bound to Proving Ground through the host lane.
+- The evaluation writer is `writeBenchmarkAttemptEvaluation` in `@aflow/cybernetic-runtime`. It writes through `writeRunEvaluationEnvelope` into the envelope's `benchmark` slot.
+- A verdict records `ran` with a score of 1 or 0. An attempt the harness gave no verdict on records `error`, so a broken pipeline cannot lower a pass rate.
+- Tenant, run, work root and harness checkout are flags with no default.
 
 **P2 — Scale (D4).** _Exit:_ pass rates with intervals for all three arms are in this document.
 
