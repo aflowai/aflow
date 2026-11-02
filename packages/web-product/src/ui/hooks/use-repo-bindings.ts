@@ -64,8 +64,7 @@ async function errorMessage(res: Response, fallback: string): Promise<string> {
   return fallback;
 }
 
-/** `enabled: false` reads only what the cache already holds and never fetches. */
-export function useRepoBindings(spaceId: string, { enabled = true }: { enabled?: boolean } = {}) {
+export function useRepoBindings(spaceId: string) {
   const { apiUrl, headers, authFetch } = useApi();
   const queryClient = useQueryClient();
 
@@ -73,7 +72,7 @@ export function useRepoBindings(spaceId: string, { enabled = true }: { enabled?:
     key: ['space', spaceId, 'integrations', 'repo-bindings'],
     path: '/integrations/repo-bindings',
     ...(spaceId ? { spaceId } : {}),
-    enabled: enabled && !!spaceId,
+    enabled: !!spaceId,
     staleTime: 30_000,
   });
 
@@ -84,7 +83,6 @@ export function useRepoBindings(spaceId: string, { enabled = true }: { enabled?:
     [listQuery.data],
   );
   const isLoading = listQuery.isLoading;
-  const isSuccess = listQuery.isSuccess;
   const error = listQuery.error?.message ?? null;
 
   const invalidate = useCallback((): void => {
@@ -120,5 +118,5 @@ export function useRepoBindings(spaceId: string, { enabled = true }: { enabled?:
     [apiUrl, headers, authFetch, invalidate],
   );
 
-  return { repoBindings, isLoading, isSuccess, error, saveRepoBinding, archiveRepoBinding };
+  return { repoBindings, isLoading, error, saveRepoBinding, archiveRepoBinding };
 }

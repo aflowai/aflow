@@ -22,13 +22,11 @@ export interface DisconnectInput {
   resourceKey: string;
 }
 
-/** `enabled: false` reads only what the cache already holds and never fetches. */
-export function useOAuthConnections({ enabled = true }: { enabled?: boolean } = {}) {
+export function useOAuthConnections() {
   const query = useApiQuery<{ connections: OAuthConnection[] }>({
     key: [...OAUTH_CONNECTIONS_KEY],
     path: '/users/me/oauth-connections',
     staleTime: 30_000,
-    enabled,
   });
 
   const connections = useMemo(() => query.data?.connections ?? [], [query.data]);
@@ -45,7 +43,6 @@ export function useOAuthConnections({ enabled = true }: { enabled?: boolean } = 
   return {
     connections,
     isLoading: query.isLoading,
-    isSuccess: query.isSuccess,
     error: query.error,
     refetch: query.refetch,
     disconnect,

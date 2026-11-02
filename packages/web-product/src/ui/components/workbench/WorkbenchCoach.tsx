@@ -7,7 +7,10 @@ import type { UseActionCenterResult } from '../../hooks/use-action-center.js';
 import { useCoachSurface } from '../../hooks/use-coach-surface.js';
 import { useSpaceEntityEvents } from '../../hooks/use-space-entity-events.js';
 import { ActionCenterItemCard } from '../actionCenter/ActionCenterLane.js';
-import { coachReviewFromEntityEvents } from '../../lib/coach-review-events.js';
+import {
+  coachReviewFromEntityEvents,
+  type CoachReviewInProgress,
+} from '../../lib/coach-review-events.js';
 import { spaceRoute } from '../../lib/space-routes.js';
 import { groupBySource } from '../../lib/proposal-provenance.js';
 import {
@@ -34,15 +37,21 @@ export function WorkbenchCoach({
   state,
   spaceId,
   spaceSlug,
+  heldReview = null,
 }: {
   state: UseActionCenterResult;
   spaceId: string;
   spaceSlug: string;
+  /** The review the folded header shows, which stands until the active-surface read lands. */
+  heldReview?: CoachReviewInProgress | null;
 }) {
   const coach = useCoachSurface(spaceId);
   const fold = useWorkbenchSectionFold();
   const proposals = coachReviewProposals(state);
-  const active = coach.lifecycle !== 'idle';
+  const held = !coach.lifecycleRead && heldReview !== null;
+  const lifecycle = held ? 'reviewing' : coach.lifecycle;
+  const coachSessionId = held ? heldReview.coachSessionId : coach.coachSessionId;
+  const active = lifecycle !== 'idle';
 
   return (
     <>
@@ -55,8 +64,8 @@ export function WorkbenchCoach({
           }
           trailing={
             <CoachStatus
-              lifecycle={coach.lifecycle}
-              coachSessionId={coach.coachSessionId}
+              lifecycle={lifecycle}
+              coachSessionId={coachSessionId}
               spaceSlug={spaceSlug}
             />
           }
@@ -87,7 +96,9 @@ export function WorkbenchCoach({
  * stream has seen start and not end, the stream the board's run feed holds.
  * The Coach's completion ends it, and so does its session's status event when
  * the session fails, is cancelled, stalls or pauses. A stall, or a review
- * that began before the stream, shows once expanded.
+ * that began before the stream, shows once expanded. An expand keeps the
+ * header's **Reviewing** until the active-surface read lands, so the section
+ * never shows Idle in the meantime.
  */
 export function WorkbenchCoachFold({
   state,
@@ -116,7 +127,7 @@ export function WorkbenchCoachFold({
         ) : null
       }
     >
-      <WorkbenchCoach state={state} spaceId={spaceId} spaceSlug={spaceSlug} />
+      <WorkbenchCoach state={state} spaceId={spaceId} spaceSlug={spaceSlug} heldReview={review} />
     </WorkbenchLazySection>
   );
 }

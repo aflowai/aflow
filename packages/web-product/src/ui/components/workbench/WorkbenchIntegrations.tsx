@@ -146,27 +146,17 @@ export function countIntegrationsNeedingSetup(
 }
 
 /**
- * The folded Integrations header's count, from what the board already holds.
- * The Action Center's connections lane is always held. The readiness reads are
- * held only once Integrations has been expanded, so they join the count then.
- * Nothing here fetches.
+ * The folded Integrations header's count: the Action Center's connection
+ * requests, which the board holds and its stream keeps current. The readiness
+ * reads stay out. Nothing refreshes them while the section is folded, so a
+ * count joined from them would hold a setup the operator has since done.
  */
 export function FoldedIntegrationsSetupCount({
-  spaceId,
   connectionRequests,
 }: {
-  spaceId: string;
   connectionRequests: readonly ActionCenterItem[];
 }) {
-  const held = useSpaceIntegrations(spaceId, { enabled: false });
-  return (
-    <IntegrationsSetupCount
-      count={countIntegrationsNeedingSetup(
-        held.isSuccess ? held.integrations : [],
-        connectionRequests,
-      )}
-    />
-  );
+  return <IntegrationsSetupCount count={countIntegrationsNeedingSetup([], connectionRequests)} />;
 }
 
 function IntegrationsSetupCount({ count }: { count: number }) {

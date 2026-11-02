@@ -70,20 +70,12 @@ const API_STATUS_VIEW: Record<ApiStatus, { readiness: IntegrationReadiness; deta
  * live connection, credential, and OAuth state by the same three functions the
  * integrations page renders its cards from. This hook composes them; it does not
  * restate them, so a change to what "ready" means lands on both surfaces at once.
- *
- * `enabled: false` reads only what the cache already holds and never fetches.
- * `isSuccess` then says whether every source is held, because readiness
- * computed from a partial set is wrong rather than incomplete.
  */
-export function useSpaceIntegrations(
-  spaceId: string,
-  { enabled = true }: { enabled?: boolean } = {},
-) {
-  const api = useIntegrations(spaceId, { enabled });
-  const mcp = useMcpServers(spaceId, { enabled });
-  const repo = useRepoBindings(spaceId, { enabled });
-  const oauth = useOAuthConnections({ enabled });
-  const connections = oauth.connections;
+export function useSpaceIntegrations(spaceId: string) {
+  const api = useIntegrations(spaceId);
+  const mcp = useMcpServers(spaceId);
+  const repo = useRepoBindings(spaceId);
+  const { connections } = useOAuthConnections();
 
   const credentialsByKey = useMemo(
     () => new Map(api.credentials.map((c) => [c.credentialKey, c])),
@@ -215,7 +207,6 @@ export function useSpaceIntegrations(
   return {
     integrations,
     isLoading: api.isLoading || mcp.isLoading || repo.isLoading,
-    isSuccess: api.isSuccess && mcp.isSuccess && repo.isSuccess && oauth.isSuccess,
   };
 }
 

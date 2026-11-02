@@ -50,8 +50,8 @@ import { WorkbenchRecentConversations } from './WorkbenchRecentConversations.js'
  * page holds and with no read or timer of its own. Skills shows its live runs
  * from the run feed (1) holds. Schedules counts the Action Center's notices
  * that an agent set one up. Integrations counts the Action Center's connection
- * requests, joined by the readiness reads once an expand has left them in the
- * cache. The Coach shows its proposals and a review the entity-events stream
+ * requests alone, because nothing refreshes the readiness reads while it is
+ * folded. The Coach shows its proposals and a review the entity-events stream
  * has seen start. Applets and Agents ask nothing of the operator, so their
  * headers carry nothing. The workflow list is read on open, because recent
  * conversations names runs by it.
@@ -167,10 +167,7 @@ export function Workbench({
             title="Integrations"
             icon="plugs-connected"
             meta={
-              <FoldedIntegrationsSetupCount
-                spaceId={spaceId}
-                connectionRequests={actionCenter.lanes.connections}
-              />
+              <FoldedIntegrationsSetupCount connectionRequests={actionCenter.lanes.connections} />
             }
           >
             <WorkbenchIntegrations

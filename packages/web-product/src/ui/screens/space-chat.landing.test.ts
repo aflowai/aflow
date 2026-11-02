@@ -42,6 +42,7 @@ const net = vi.hoisted(() => ({
   coach: null as Record<string, unknown> | null,
   actionItems: [] as Array<Record<string, unknown>>,
   integrations: false,
+  surfaceGate: null as Promise<void> | null,
   listeners: new Map<string, Array<(event: unknown, cursor: string) => void>>(),
 }));
 
@@ -127,9 +128,18 @@ function respond(path: string): unknown {
 
 const FAILED = Symbol('failed');
 
+// A test that sets `surfaceGate` holds the active-surface read until it opens.
+function response(path: string): Promise<unknown> {
+  const gate = net.surfaceGate;
+  if (gate && path.endsWith('/cybernetic/active-surface')) {
+    return gate.then(() => answer(path));
+  }
+  return answer(path);
+}
+
 // Anything the page asks for that this file does not describe answers 404,
 // which every read on the page already treats as "nothing there".
-function response(path: string) {
+function answer(path: string): Promise<unknown> {
   const value = respond(path);
   if (value === FAILED) {
     return Promise.resolve({
@@ -259,6 +269,7 @@ beforeEach(() => {
   net.coach = null;
   net.actionItems = [];
   net.integrations = false;
+  net.surfaceGate = null;
   net.listeners = new Map();
   // The realtime brokers are module-level and refcounted, and a released topic
   // lingers for a teardown grace, so the next page would find it still held.
@@ -638,7 +649,7 @@ describe('what a folded header carries (D3)', () => {
     expect(net.reads.some((r) => r.includes('/oauth-connections'))).toBe(false);
   });
 
-  it('keeps the expanded Integrations count on the folded header, with no read once folded', async () => {
+  it('counts only the connection requests once Integrations folds again, with no read', async () => {
     net.integrations = true;
     net.actionItems = [githubConsent()];
     await land('');
@@ -650,8 +661,30 @@ describe('what a folded header carries (D3)', () => {
     await click(toggle('Integrations', true));
     const reads = net.reads.length;
     await settle();
-    expect(header('Integrations')?.textContent).toContain('2 need setup');
+    expect(header('Integrations')?.textContent).toContain('1 needs setup');
     expect(net.reads.slice(reads)).toEqual([]);
+  });
+
+  it('drops the count on the folded Integrations header when its connection request resolves', async () => {
+    net.integrations = true;
+    net.actionItems = [githubConsent()];
+    await land('');
+    await click(toggle('Integrations', false));
+    await click(toggle('Integrations', true));
+    expect(header('Integrations')?.textContent).toContain('1 needs setup');
+
+    const reads = net.reads.length;
+    const listeners = net.listeners.get('space.action_center') ?? [];
+    expect(listeners.length).toBeGreaterThan(0);
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({ kind: 'resolve', itemIds: ['consent-github'] }, 'ac-1');
+      }
+      await Promise.resolve();
+    });
+    await settle();
+    expect(header('Integrations')?.textContent).not.toContain('setup');
+    expect(net.reads.slice(reads).filter((r) => r.includes('/integrations/'))).toEqual([]);
   });
 
   it('shows a review the entity-events stream starts, with its session, and drops it when it ends', async () => {
@@ -700,6 +733,29 @@ describe('what a folded header carries (D3)', () => {
     await click(toggle ?? null);
     expect(net.reads).toContain(`/api/spaces/${SPACE}/cybernetic/active-surface`);
     expect(container.textContent).toContain('Stalled');
+  });
+
+  it('keeps the folded header’s Reviewing on expand until the active-surface read lands', async () => {
+    net.coach = coach('stalled');
+    let open = () => undefined as void;
+    net.surfaceGate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    await land('');
+    await entityEvent('entity.coach.activated');
+    expect(header('Coach review')?.textContent).toContain('Reviewing');
+
+    await click(toggle('Coach review', false));
+    expect(net.reads).toContain(`/api/spaces/${SPACE}/cybernetic/active-surface`);
+    expect(toggle('Coach review', true)).not.toBeNull();
+    expect(container.textContent).toContain('Reviewing');
+    expect(container.querySelector(`a[href*="${COACH}"]`)).not.toBeNull();
+    expect(container.textContent).not.toContain('Idle');
+
+    open();
+    await settle();
+    expect(container.textContent).toContain('Stalled');
+    expect(container.textContent).not.toContain('Reviewing');
   });
 });
 

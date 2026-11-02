@@ -101,8 +101,7 @@ export interface ApiDefinitionDetail {
   updatedAt?: string;
 }
 
-/** `enabled: false` reads only what the cache already holds and never fetches. */
-export function useIntegrations(spaceId: string, { enabled = true }: { enabled?: boolean } = {}) {
+export function useIntegrations(spaceId: string) {
   // `authFetch` routes through the same 401 → login redirect that
   // useApiQuery's apiFetch uses. Plain `fetch` here would silently
   // fail on session expiry and leave the user staring at a broken
@@ -114,21 +113,21 @@ export function useIntegrations(spaceId: string, { enabled = true }: { enabled?:
     key: ['space', spaceId, 'integrations', 'definitions'],
     path: '/integrations/definitions',
     ...(spaceId ? { spaceId } : {}),
-    enabled: enabled && !!spaceId,
+    enabled: !!spaceId,
     staleTime: 30_000,
   });
   const bindsQuery = useApiQuery<{ bindings?: ApiBindingSummary[] }>({
     key: ['space', spaceId, 'integrations', 'bindings'],
     path: '/integrations/bindings',
     ...(spaceId ? { spaceId } : {}),
-    enabled: enabled && !!spaceId,
+    enabled: !!spaceId,
     staleTime: 30_000,
   });
   const credsQuery = useApiQuery<{ credentials?: IntegrationCredentialMeta[] }>({
     key: ['space', spaceId, 'integrations', 'credentials'],
     path: '/integrations/credentials',
     ...(spaceId ? { spaceId } : {}),
-    enabled: enabled && !!spaceId,
+    enabled: !!spaceId,
     staleTime: 30_000,
   });
 
@@ -136,7 +135,6 @@ export function useIntegrations(spaceId: string, { enabled = true }: { enabled?:
   const bindings = useMemo(() => bindsQuery.data?.bindings ?? [], [bindsQuery.data]);
   const credentials = useMemo(() => credsQuery.data?.credentials ?? [], [credsQuery.data]);
   const isLoading = defsQuery.isLoading || bindsQuery.isLoading || credsQuery.isLoading;
-  const isSuccess = defsQuery.isSuccess && bindsQuery.isSuccess && credsQuery.isSuccess;
   const error =
     defsQuery.error?.message ?? bindsQuery.error?.message ?? credsQuery.error?.message ?? null;
 
@@ -321,7 +319,6 @@ export function useIntegrations(spaceId: string, { enabled = true }: { enabled?:
     bindings,
     credentials,
     isLoading,
-    isSuccess,
     error,
     refresh,
     saveCredential,
