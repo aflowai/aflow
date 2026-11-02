@@ -4,6 +4,7 @@ import {
   useState,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   Suspense,
@@ -11,7 +12,14 @@ import {
   type CSSProperties,
 } from 'react';
 import { useSearchParams, useRouter, usePathname } from 'next/navigation';
-import { ChatLayout, EmptyState, Icon, Text, useBreakpoint } from '@aflow/design-system';
+import {
+  ChatLayout,
+  EmptyState,
+  Icon,
+  Text,
+  breakpoints,
+  useBreakpoint,
+} from '@aflow/design-system';
 import { useApi, useSpace, useSpaceFromRoute } from '../components/providers.js';
 import { CyberneticProvider } from '../components/cybernetic-provider.js';
 import { AgentModelSettings } from '../components/cybernetic/AgentModelSettings.js';
@@ -43,7 +51,14 @@ import { ViewOnlyNotice } from '../components/room/ViewOnlyNotice.js';
 import { useCatchUp } from '../hooks/use-catch-up.js';
 import { useRoomPost } from '../hooks/use-room-post.js';
 import { useSessionPresence } from '../hooks/use-session-presence.js';
-import { useCurrentUser } from '../components/user-avatar.js';
+import { useCurrentUserState } from '../components/user-avatar.js';
+import {
+  browserStorage,
+  readCollapsedConversations,
+  rememberWorkbenchState,
+  workbenchOpenOnLanding,
+  writeCollapsedConversations,
+} from '../lib/workbench-dock-memory.js';
 import '../components/chat/chat-entrance.css';
 import { RunCompletionBanner } from '../components/chat/RunCompletionBanner.js';
 import { McpElicitationCard } from '../components/chat/McpElicitationCard.js';
@@ -59,6 +74,12 @@ import { useChatSessionRuns } from '../components/chat/use-chat-session.js';
 import { useChatRunGating } from '../components/chat/use-chat-run-gating.js';
 import { useChatSubmit } from '../components/chat/use-chat-submit.js';
 import type { Flow, ConversationItem, WorkflowRunSurfaceState } from '../lib/types.js';
+
+// `useBreakpoint` answers "phone" on its first render everywhere, so the dock's
+// landing reads the viewport itself.
+function onPhoneViewport(): boolean {
+  return window.innerWidth < breakpoints.sm;
+}
 
 export function ChatPage() {
   return (
@@ -121,15 +142,12 @@ function ChatPageInner() {
     clearConversation();
   }, [clearConversation]);
 
-  const { currentRun, setCurrentRun, urlSessionPending, urlSessionFailed } = useChatSessionRuns(
-    selectedFlow,
-    spaceId,
-    sessionIdFromUrl,
-    {
-      autoResumeLatest: false,
+  const { user: currentUser, settled: currentUserSettled } = useCurrentUserState();
+  const { currentRun, setCurrentRun, urlSessionPending, urlSessionFailed, landingPending } =
+    useChatSessionRuns(selectedFlow, spaceId, sessionIdFromUrl, {
+      landing: { readerId: currentUser?.userId ?? null, readerSettled: currentUserSettled },
       onUrlSessionAdopted,
-    },
-  );
+    });
 
   /**
    * The session to open, taken from the URL when there is one.
@@ -179,9 +197,62 @@ function ChatPageInner() {
     router,
     searchParams,
   ]);
-  // One flag owns the companion's visibility on every breakpoint. Landing is
-  // always Chat; the greeting link, header toggle, and attention badges open it.
-  const [consoleOpen, setConsoleOpen] = useState(false);
+  // One flag owns the companion's visibility on every breakpoint. It starts
+  // closed for the server render and the phone, and the landing below opens it
+  // on a desktop by `workbenchOpenOnLanding` (Plan 338 D3).
+  const [consoleOpen, setConsoleOpenState] = useState(false);
+  const askedOpenRef = useRef(searchParams.get('workbench') !== null);
+  const landedOnRef = useRef<{ id: string | null } | null>(null);
+  const consoleOpenRef = useRef(consoleOpen);
+  consoleOpenRef.current = consoleOpen;
+  const activeSessionIdRef = useRef(activeSessionId);
+  activeSessionIdRef.current = activeSessionId;
+
+  // Every open and close the operator makes goes through here. On a desktop
+  // it is remembered for the conversation it was made in. A new chat has no
+  // id to remember it by, so it is carried over when the chat becomes one.
+  const setConsoleOpen = useCallback((next: boolean | ((open: boolean) => boolean)) => {
+    const open = typeof next === 'function' ? next(consoleOpenRef.current) : next;
+    consoleOpenRef.current = open;
+    setConsoleOpenState(open);
+    const id = activeSessionIdRef.current;
+    if (!id || onPhoneViewport()) return;
+    const storage = browserStorage();
+    writeCollapsedConversations(
+      storage,
+      rememberWorkbenchState(readCollapsedConversations(storage), id, open),
+    );
+  }, []);
+
+  // The landing: decided once the conversation it lands on is known, again on
+  // each navigation to another, and never while the chat lands (D4).
+  useLayoutEffect(() => {
+    if (landingPending) return;
+    const prev = landedOnRef.current;
+    landedOnRef.current = { id: activeSessionId };
+    if (prev?.id === activeSessionId) return;
+    if (prev?.id === null && activeSessionId !== null && !sessionIdFromUrl) {
+      // A new chat has just become this conversation: the dock stays as the
+      // operator left it, and that choice is now this conversation's.
+      if (!consoleOpenRef.current && !onPhoneViewport()) {
+        const storage = browserStorage();
+        writeCollapsedConversations(
+          storage,
+          rememberWorkbenchState(readCollapsedConversations(storage), activeSessionId, false),
+        );
+      }
+      return;
+    }
+    const askedOpen = prev === null && askedOpenRef.current;
+    setConsoleOpenState(
+      workbenchOpenOnLanding({
+        conversationId: activeSessionId,
+        collapsed: readCollapsedConversations(browserStorage()),
+        phone: onPhoneViewport(),
+        askedOpen,
+      }),
+    );
+  }, [activeSessionId, landingPending, sessionIdFromUrl]);
   // One at a time: two agent panels open together would each hold their own
   // copy of the directives and the slower save would overwrite the other's.
   const [openSettingsPanel, setOpenSettingsPanel] = useState<
@@ -198,10 +269,11 @@ function ChatPageInner() {
   const [workbenchFocus, setWorkbenchFocus] = useState(0);
 
   // `?workbench=1` (the global bell, workbench deep links) opens the
-  // companion once, then drops out of the URL so reloads land on Chat.
+  // companion once, then drops out of the URL so a reload lands by the
+  // remembered state.
   useEffect(() => {
     if (!searchParams.get('workbench')) return;
-    setConsoleOpen(true);
+    setConsoleOpenState(true);
     const params = new URLSearchParams(searchParams.toString());
     params.delete('workbench');
     const qs = params.toString();
@@ -238,7 +310,6 @@ function ChatPageInner() {
     isLoadingOlder,
   } = useRunReducer(activeSessionId, selectedFlow?.name);
 
-  const currentUser = useCurrentUser();
   const presence = useSessionPresence(currentRun?.sessionId ?? null);
   const catchUp = useCatchUp(currentRun?.sessionId ?? null);
   const { post: postToRoom } = useRoomPost(currentRun?.sessionId ?? null, spaceId);
@@ -423,7 +494,13 @@ function ChatPageInner() {
   // one that has not arrived. Saying otherwise puts the "start a conversation"
   // states in front of it and then deletes them when it lands.
   const openingNamedSession = sessionIdFromUrl !== null;
-  const emptyChat = allItems.length === 0 && !currentRun && !openingNamedSession;
+  // The same holds while the chat decides whether it lands on the reader's
+  // last conversation (D4): the greeting would paint, then give way to it.
+  // Only while an agent will answer, so a space without one still says so.
+  const awaitingLanding =
+    landingPending && (selectedFlow !== null || flowsLoading || flowWillResolve);
+  const openingConversation = openingNamedSession || awaitingLanding;
+  const emptyChat = allItems.length === 0 && !currentRun && !openingConversation;
 
   // The stage: the object the room is gathered around, derived from the same
   // items every participant folds — no state, everyone converges.
@@ -438,7 +515,7 @@ function ChatPageInner() {
   // conversation, so on a deep link it paints the wrong thing and then has to
   // be replaced — measured as the mount's largest shift cluster, and as the LCP
   // element, on a session that had 60 messages waiting behind it.
-  const showHelmsmanOrb = !openingNamedSession && (resolvingFlow || greetingReady);
+  const showHelmsmanOrb = !openingConversation && (resolvingFlow || greetingReady);
 
   const centeredOrbStyle: CSSProperties = {
     flex: 1,
@@ -779,7 +856,7 @@ function ChatPageInner() {
           </div>
           <FirstRunQuickStartCard activeSpaceId={activeSpace?.id} emptyChat={greetingReady} />
         </div>
-      ) : !selectedFlow && !openingNamedSession ? (
+      ) : !selectedFlow && !openingConversation ? (
         <EmptyState
           icon={<Icon name="warning" size={48} weight="thin" />}
           title="No assistant yet"
@@ -878,8 +955,8 @@ function ChatPageInner() {
   // Phones: the workbench is a mode, not an overlay — the header (with the
   // Chat | Workbench toggle) stays put and the pane swaps beneath it.
   //
-  // Desktop: the Workbench side dock, collapsed to its badge rail on landing
-  // so a fresh chat stays chat-first.
+  // Desktop: the Workbench side dock, open or collapsed to its badge rail as
+  // the landing decided (`workbenchOpenOnLanding`).
   const shell: ReactNode = isMobile ? (
     !consoleOpen ? (
       mainContent

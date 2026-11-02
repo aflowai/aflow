@@ -9,7 +9,11 @@ import {
   type IntegrationReadiness,
   type SpaceIntegration,
 } from '../../hooks/use-space-integrations.js';
-import { WorkbenchEmptyRow, WorkbenchSection } from './WorkbenchSection.js';
+import {
+  WorkbenchEmptyRow,
+  WorkbenchSection,
+  WorkbenchSectionPending,
+} from './WorkbenchSection.js';
 
 const KIND_LABEL: Record<SpaceIntegration['kind'], string> = {
   api: 'API',
@@ -64,7 +68,8 @@ export function WorkbenchIntegrations({
   const { integrations, isLoading } = useSpaceIntegrations(spaceId);
 
   const empty = integrations.length === 0;
-  if (empty && isLoading) return null;
+  if (empty && isLoading)
+    return <WorkbenchSectionPending title="Integrations" icon="plugs-connected" />;
 
   const families = FAMILY_ORDER.map((family) => ({
     family,

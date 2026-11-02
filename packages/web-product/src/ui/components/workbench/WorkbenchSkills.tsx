@@ -7,7 +7,12 @@ import { useApiQuery } from '../../hooks/useApiQuery.js';
 import { spaceRoute } from '../../lib/space-routes.js';
 import type { SpaceWorkflowRunSummary } from '../../hooks/use-space-workflow-runs.js';
 import { WorkbenchRunRow } from './WorkbenchRunRow.js';
-import { WorkbenchEmptyRow, WorkbenchLink, WorkbenchSection } from './WorkbenchSection.js';
+import {
+  WorkbenchEmptyRow,
+  WorkbenchLink,
+  WorkbenchSection,
+  WorkbenchSectionPending,
+} from './WorkbenchSection.js';
 import { useRoomActivity } from '../../hooks/use-room-activity.js';
 
 export interface WorkbenchSkill {
@@ -64,7 +69,7 @@ export function WorkbenchSkills({
   }, [skills, activeBySlug]);
 
   const empty = skills.length === 0;
-  if (empty && loading) return null;
+  if (empty && loading) return <WorkbenchSectionPending title="Skills" icon="skill" />;
 
   return (
     <WorkbenchSection

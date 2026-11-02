@@ -103,6 +103,35 @@ describe('PLAN_STATE_LABELS', () => {
       expect(cut.length).toBeLessThanOrEqual(256);
     });
 
+    it.each([1, 2, 3, 4])(
+      'cuts at the ceiling without splitting a backslash from what it escapes (%i spaces)',
+      (spaces) => {
+        // The stray backtick keeps a construct open, so the cut falls at the
+        // ceiling, among escaped stars. One of these leads puts it between a
+        // backslash and its star.
+        const title = `\`${' '.repeat(spaces)}${'\\*'.repeat(200)}`;
+        const cut = planItemTitle('blocked', title);
+        expect(cut.length).toBeLessThanOrEqual(256);
+        const kept = cut.slice(head.length, -1);
+        expect(kept.startsWith('\\`')).toBe(true);
+        // An even run of trailing backslashes pairs with itself. An odd one
+        // leaves the last backslash alone before the ellipsis.
+        const trailing = /\\*$/.exec(kept)?.[0].length ?? 0;
+        expect(trailing % 2).toBe(0);
+        expect(kept.endsWith('\\*')).toBe(true);
+        expect(title.startsWith(kept.replace('\\`', '`'))).toBe(true);
+      },
+    );
+
+    it('keeps an escaped backslash whole at the ceiling', () => {
+      const title = `\` ${'\\\\'.repeat(200)}`;
+      for (const pad of ['', ' ']) {
+        const kept = planItemTitle('blocked', `${pad}${title}`).slice(head.length, -1);
+        const trailing = /\\*$/.exec(kept)?.[0].length ?? 0;
+        expect(trailing % 2).toBe(0);
+      }
+    });
+
     it('does not cut a surrogate pair in half', () => {
       const budget = 256 - head.length - 1;
       // One letter first, where the budget is even, puts the ceiling inside a pair.

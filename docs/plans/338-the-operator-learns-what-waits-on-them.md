@@ -1,6 +1,6 @@
 # Plan 338 — The operator learns what waits on them
 
-**Status:** P0 merged. P1 built: the listing rule, the merge-wait flag, the two caps in the schema, the sidebar count, the label table and the help articles. P2 built: the counts, the section and the ceiling test. P3 and P4 are not built.
+**Status:** P0 merged. P1 built: the listing rule, the merge-wait flag, the two caps in the schema, the sidebar count, the label table and the help articles. P2 built: the counts, the section and the ceiling test. P3 built: the measured reads, the folded sections, the dock open by default with a per-conversation memory, and the landing on the last conversation (D4's rule and window). P4's shortcut is not built.
 
 **Builds on:** Plan 331 (D3.3, the asked-once rule, and the resident), Plan 332 (the overview, the column rule of D4, the open question of §8), Plan 337 (the decision card, written here by hand because 337 P3 is not merged), Plan 333 (D2's writing rules).
 
@@ -209,6 +209,29 @@ _Rejected:_ calling the aggregator from the orchestrator. The aggregator lives i
 
 P3 also moves the two raw `fetch` reads onto `useApiQuery`, so a second open reads the cache (`CLAUDE.md`, _Client server-state_).
 
+**The measured reads.** No stack ran where P3 was built, so these come from `space-chat.landing.test.ts`. It renders the whole chat page in jsdom on a desktop width and replaces only the network, the realtime client and the router. It counts every HTTP read and every realtime subscription. The page's own reads include the session list, the agents and the Action Center. The space holds the Helmsman and one conversation of the reader's, unless a row says it holds none. "Before" is the code at `9928b8c3`. "After" is this phase.
+
+| Mount                                                        | Before: HTTP reads, subscriptions | After: HTTP reads, subscriptions |
+| ------------------------------------------------------------ | --------------------------------- | -------------------------------- |
+| New chat, dock closed (the landing before)                   | 11, 1                             | —                                |
+| New chat, dock open at landing, the conversation 7 hours old | —                                 | 15, 2                            |
+| New chat in a space with no conversation, dock open          | —                                 | 14, 2                            |
+| The dock opened by hand on a new chat                        | +16 new, +2 new, 5 shared         | +4 new, +1 new, 4 shared         |
+| A named conversation (`?session=`), dock closed              | 15, 4                             | 15, 4                            |
+| A named conversation, dock open at landing                   | —                                 | 20, 4                            |
+| The dock opened by hand in a named conversation              | +17 new, +1 new, 5 shared         | +5 new, +0 new, 4 shared         |
+| The dock opened by hand in a space with no conversation      | +15 new, +2 new, 5 shared         | +3 new, +1 new, 4 shared         |
+
+The delta of the default is the "after" rows against the closed rows. A new chat now lands with 4 more reads and 1 more subscription than it did. A named conversation that lands open costs 5 more reads and no subscription. Opened by hand before, the same dock cost 16 or 17 reads and up to 2 subscriptions.
+
+The 5 new reads in a conversation are the budget's 5: the directives (`GET /spaces/:id`), the cascade, the active workflow runs, the session invitations and one presence read. A new chat has no cascade. A space with no conversation has no presence read. The subscription is the entity-events stream, which a named conversation's page already holds. The 4 shared keys are the Action Center, `/users/me`, the members and the Helmsman's session list. The budget names 3 shared. `/users/me` is the fourth, and a shared key costs no request. The local edition's space gate already holds the space-detail key, so there the directives read is shared too. The harness does not mount the gate and counts it new. The open-by-default cost is within the budget's 5 new reads and 1 subscription.
+
+**What the code does.** The rule is `workbenchOpenOnLanding` (`lib/workbench-dock-memory.ts`). A new chat lands with the dock open. A conversation lands with the dock open unless this browser remembers that the operator folded it there. The memory is a list of those conversations' ids in `localStorage`, newest first, at most 200. Each open and each fold the operator makes is written for the conversation it was made in. A fold made in a new chat carries to the conversation the chat becomes. A phone keeps the chat first, and `?workbench=1` still opens the dock. The page decides once the landing of D4 has decided, so the dock does not open for a new chat and then fold for the conversation the chat returns to.
+
+This departs from (c) as written. (c) keeps one last state per browser. The commission for P3 asked that a new conversation always open and that a fold stay with its conversation, so the memory is per conversation. An operator who folds the dock in one conversation still lands open on the next new chat.
+
+**The folds.** `WorkbenchLazySection` (`WorkbenchSection.tsx`) renders a header alone and mounts the section only on expand. Its header carries the toggle, and the section's own header carries it once mounted. **Pending**, proposals from sources other than the Coach and recent conversations mount on open. **Schedules**, **Skills**, **Applets**, **Agents**, **Integrations** and **Coach review** are folded. Schedules is not named above. It reads `/schedules/chat`, and that read would put a new chat at 6 new reads, past the budget. The folded Coach header counts the Coach's proposals from the Action Center the board holds. Recent conversations names a run's workflow from the workflows list in the cache, and shows its slug until Skills has read the list. `CyberneticProvider` reads the directives through `useSpaceDetailQuery`, and `EntityChatInspector` reads the cascade through `useApiQuery` under `['session', id, 'cascade']`.
+
 _Rejected:_ (a) without memory. It overrules an operator who closed it on purpose, on every landing.
 
 _Rejected:_ (b). The peek is a second rendering of the first item, beside the card that resolves it. The badge already carries the count.
@@ -234,6 +257,15 @@ Otherwise the chat lands new, as today.
 **The URL stays canonical.** The conversation's URL is `/s/<slug>/chat?session=<id>`, and resuming writes it with `router.replace` (F15). Back and forward keep the history the operator made, and the landing adds no entry. The commission named `/s/<slug>/sessions/<id>` as the canonical form. That route is the run's detail page (F15), and it does not change.
 
 **New chat.** The header's **New chat** stays (`ChatHeader.tsx`). It gains the shortcut Ctrl+Shift+O, or ⌘+Shift+O on a Mac. P4 checks it against the composer's keys.
+
+**What the code does.** It builds the second option. `useChatSessionRuns` takes `landing: { readerId, readerSettled }` in place of `autoResumeLatest`. When the arrival URL names no session, it lands by `pickLandingConversation` (`lib/chat-landing.ts`). That picks the newest listed session the reader created, whose status is not `SUCCEEDED`, `FAILED`, `CANCELLED` or `STALLED`, and whose `lastActivityAt` lies within `CHAT_RESUME_WINDOW_MS`, six hours. With none, the chat lands new.
+
+- **The source.** The list is the selected agent's session list, the Helmsman's by default, which the chat already reads at mount, so the landing adds no request. The reader is `/users/me`, which the page already reads. The browser stores no conversation id, as (c) would. The list holds the space's newest 10 sessions, so a reader whose conversation others' newer ones have pushed out lands new.
+- **Once per mount.** The landing decides once, for the first agent the chat selects. An arrival URL that names a session spends it. So **New chat** after a resumed landing, or after a deep link, stays new, and switching agents still starts a new conversation.
+- **The URL.** Resuming sets the conversation, and the page's URL sync writes `/s/<slug>/chat?session=<id>` with `router.replace`. A reload or a shared link names the conversation, and the landing adds no history entry.
+- **A missing conversation.** A `?session=` the list does not hold is read directly. A read that fails clears the parameter and lands on a new chat, with no error shown. The landing does not then resume another conversation, because the URL named one.
+- **While it decides.** The page shows neither the greeting nor the empty states until the landing has decided, as it does for a named session. A space with no agent to answer still shows **No assistant yet**.
+- **Not built.** The Ctrl+Shift+O shortcut is not built. **New chat** stays one click away.
 
 _Rejected:_ (a). It is the round trip the operator described.
 
@@ -357,4 +389,17 @@ _Delivered (P2)._ The items below were built.
 
 **P3 — The Workbench's default (D3), the measurement first.** It records the measured reads of both columns of D3's table first. It then builds the lazy sections, the remembered state and the two reads onto the cache. _Exit:_ the operator reads the numbers and keeps or changes the recommendation. The dock then opens as decided.
 
-**P4 — Where the chat lands (D4).** It holds the resume rule, the window constant and the shortcut. It builds the read or the hook extension that D4 names. _Exit:_ on the live stack, the operator moves from the Plan page to Chat and back, and lands in the conversation they left.
+_Delivered (P3)._ The commission for P3 took D4's resume rule and window into this phase. The items below were built.
+
+- **The measure.** D3 records the reads before and after, from `space-chat.landing.test.ts`. The open-by-default cost is within D3's budget, so the default shipped.
+- **The folds and the cache.** Six sections fold behind `WorkbenchLazySection`. The directives and the cascade read through the query cache. D3 says which mount on open.
+- **The default.** `workbenchOpenOnLanding` opens the dock on a new chat, and a fold the operator makes stays with its conversation in this browser. D3 says how.
+- **The landing.** `pickLandingConversation` and the `landing` option of `useChatSessionRuns` return the reader to their last conversation within six hours. D4 says how.
+- **The escape pair (from the review of PR #287).** `inlineMarkdownCut`'s escape path cut at the raw budget, so a cut between a backslash and the character it escapes left a lone backslash before the ellipsis. `outsideEscapePair` (`vocabulary.ts`) now moves that cut back one character. An even run of backslashes pairs with itself and keeps its cut.
+- **Help.** `approvals.ts` says the Workbench opens on a new chat, keeps a fold per conversation, and folds its inventory. It also says where **Chat** lands. `automation.ts` says **Schedules** starts folded.
+- **Tests.** `workbench-dock-memory.test.ts` covers a new conversation landing open, a remembered fold for an existing one, the phone and the memory's limit. `chat-landing.test.ts` covers the window's edge, an ended conversation and another member's. `space-chat.landing.test.ts` renders the page. It covers the dock open on a new chat, a remembered fold, a fold written by hand and the phone. It also covers the 5 reads an open dock adds and Integrations read only on expand. For the landing it covers a conversation 2 hours old resumed by replace, one 7 hours old, another member's, and a missing `?session=` falling back to a new chat. `planStateLabels.test.ts` cuts a title at the ceiling among escaped stars and among escaped backslashes.
+- **Preview.** The chat page, `/s/<slug>/chat`, shows both. A new chat lands with the Workbench open, **Pending** on top and the inventory folded. In a space where the reader spoke in the last six hours, `/s/<slug>/chat` returns to that conversation and the address gains `?session=<id>`.
+
+**Open:** the measured reads on the live stack, and the phase exits of P3 and P4 there.
+
+**P4 — Where the chat lands (D4).** It holds the resume rule, the window constant and the shortcut. It builds the read or the hook extension that D4 names. _Exit:_ on the live stack, the operator moves from the Plan page to Chat and back, and lands in the conversation they left. P3 built the rule, the window and the hook extension. The shortcut is left.

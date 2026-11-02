@@ -7,7 +7,7 @@ import { useCoachSurface } from '../../hooks/use-coach-surface.js';
 import { ActionCenterItemCard } from '../actionCenter/ActionCenterLane.js';
 import { spaceRoute } from '../../lib/space-routes.js';
 import { groupBySource } from '../../lib/proposal-provenance.js';
-import { WorkbenchLink, WorkbenchSection } from './WorkbenchSection.js';
+import { WorkbenchLink, WorkbenchSection, useWorkbenchSectionFold } from './WorkbenchSection.js';
 
 /**
  * Coach (Plan 228 §3.2b), and the proposals other sources made beside it.
@@ -16,9 +16,11 @@ import { WorkbenchLink, WorkbenchSection } from './WorkbenchSection.js';
  * being mixed into Helmsman or the blocking needs-attention lane. It shows a
  * light lifecycle status (reviewing / stalled) and a **review queue** of
  * proposals to ratify/reject — rendered `accent`, not `warning`, to read as
- * "review when you can", not "blocking". Hidden when Coach is idle with
- * nothing to review. Every proposal sits under its Source line: a Coach
- * review here, any other source under a heading of its own.
+ * "review when you can", not "blocking". Outside a fold it is hidden when
+ * Coach is idle with nothing to review. Under a fold (the Workbench mounts it
+ * only on expand, Plan 338 D3) it always renders, because the operator asked.
+ * Every proposal sits under its Source line: a Coach review here, any other
+ * source under a heading of its own (`WorkbenchProposalSources`).
  */
 export function WorkbenchCoach({
   state,
@@ -30,14 +32,13 @@ export function WorkbenchCoach({
   spaceSlug: string;
 }) {
   const coach = useCoachSurface(spaceId);
-  const groups = groupBySource(state.lanes.coachProposals, proposalHeading);
-  const proposals = groups.find((group) => group.heading === COACH_REVIEW)?.items ?? [];
-  const otherSources = groups.filter((group) => group.heading !== COACH_REVIEW);
+  const fold = useWorkbenchSectionFold();
+  const proposals = coachReviewProposals(state);
   const active = coach.lifecycle !== 'idle';
 
   return (
     <>
-      {(proposals.length > 0 || active) && (
+      {(proposals.length > 0 || active || fold) && (
         <WorkbenchSection
           title={COACH_REVIEW}
           icon="stethoscope"
@@ -59,11 +60,43 @@ export function WorkbenchCoach({
             <ProposalItems items={proposals} state={state} spaceSlug={spaceSlug} />
           ) : (
             <Text size="sm" variant="muted">
-              Watching — no proposals to review right now.
+              {active
+                ? 'Watching — no proposals to review right now.'
+                : 'Idle — no proposals to review.'}
             </Text>
           )}
         </WorkbenchSection>
       )}
+    </>
+  );
+}
+
+/** The Coach's own proposals, which the folded Coach header counts without a read. */
+export function coachReviewProposals(state: UseActionCenterResult): ActionCenterItem[] {
+  return (
+    groupBySource(state.lanes.coachProposals, proposalHeading).find(
+      (group) => group.heading === COACH_REVIEW,
+    )?.items ?? []
+  );
+}
+
+/**
+ * Proposals from every source other than the Coach, each under its Source
+ * line. They come from the Action Center the board already holds, so they
+ * render without a fold.
+ */
+export function WorkbenchProposalSources({
+  state,
+  spaceSlug,
+}: {
+  state: UseActionCenterResult;
+  spaceSlug: string;
+}) {
+  const otherSources = groupBySource(state.lanes.coachProposals, proposalHeading).filter(
+    (group) => group.heading !== COACH_REVIEW,
+  );
+  return (
+    <>
       {otherSources.map((group) => (
         <WorkbenchSection
           key={group.heading}
@@ -78,7 +111,7 @@ export function WorkbenchCoach({
   );
 }
 
-const COACH_REVIEW = 'Coach review';
+export const COACH_REVIEW = 'Coach review';
 
 /** The section a proposal sits under: its Source line. */
 function proposalHeading(item: ActionCenterItem): string {
