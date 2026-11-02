@@ -22,6 +22,7 @@
 **What it affects**
 
 - A new measurement space, Proving Ground, separate from Full Circle.
+- A new harness runner and evaluation writer in Proving Ground, landed in P1.
 - The loop skills, measured and not changed.
 - This plan document, which holds a results table per phase.
 - The host folder bindings and the compute where task images run.
@@ -35,10 +36,10 @@
 
 **Open questions**
 
-- Which host runs the task Docker images? Answer (the operator, 2026-11-02): the Mac, one at a time under the check lane's load rule, for the pilot. The GCP compute worker if the pilot shows the Mac is too slow.
-- What caps one task's spend? Answer (the operator, 2026-11-02): a cap in tokens and wall time at twice the pilot's measured median per task.
-- How is arm (c) isolated from arms (a) and (b) so no learning leaks across arms? Answer (the operator, 2026-11-02): a separate space per arm, or learnings scoped to the arm's run set.
-- Which cost figures count? Answer (the operator, 2026-11-02): model tokens only for the first table. CI minutes and compute join once the pass rates are read.
+- Which host runs the task Docker images? Answer: the Mac, one at a time under the check lane's load rule, for the pilot. The GCP compute worker if the pilot shows the Mac is too slow.
+- What caps one task's spend? Answer: a cap in tokens and wall time at twice the pilot's measured median per task.
+- How is arm (c) isolated from arms (a) and (b) so no learning leaks across arms? Answer: a separate space per arm, or learnings scoped to the arm's run set.
+- Which cost figures count? Answer: model tokens only for the first table. CI minutes and compute join once the pass rates are read.
 
 **Not done on purpose**
 
@@ -155,11 +156,13 @@ _Rejected:_ designing Plan 342 now. Plan 341's numbers do not exist yet to shape
 
 - A new space, Proving Ground, and its host folder bindings, one per task (D5).
 - The compute choice per task image: the Mac for the pilot, or the hosted compute worker (D5).
+- A harness runner in Proving Ground. It captures each task's patch and runs the official SWE-bench Pro Docker harness on it (D3, D5).
+- An evaluation writer in Proving Ground. It writes the official result through Plan 269's one writer (D6).
 - The evaluation envelope, written once per task attempt through Plan 269's one writer (D6).
 - This document's results tables, one per phase (D6).
 - The loop skills, measured and not changed (D7).
 
-No package source changes.
+The loop's skills are unchanged. The measurement machinery is new: the harness runner and the evaluation writer named above.
 
 ## 4. Phases
 
@@ -167,7 +170,7 @@ Each phase lands on its own.
 
 **P0 — This document and its index row.** _Exit:_ the operator approves it, or amends it and then approves it.
 
-**P1 — The pilot (D3).** _Exit:_ the results table is in this document, and the mechanics are proven end to end on all eight tasks.
+**P1 — The pilot (D3).** It lands the harness runner and the evaluation writer, and proves them on eight tasks. _Exit:_ the results table is in this document, and the mechanics are proven end to end on all eight tasks.
 
 **P2 — Scale (D4).** _Exit:_ pass rates with intervals for all three arms are in this document.
 
