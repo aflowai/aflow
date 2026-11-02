@@ -27,6 +27,7 @@ const net = vi.hoisted(() => ({
   replaced: [] as string[],
   pushed: [] as string[],
   sessions: [] as Array<Record<string, unknown>>,
+  failSessionList: false,
 }));
 
 const router = {
@@ -66,7 +67,7 @@ function respond(path: string): unknown {
       ],
     };
   }
-  if (path.includes('/sessions?')) return { sessions: net.sessions };
+  if (path.includes('/sessions?')) return net.failSessionList ? FAILED : { sessions: net.sessions };
   const direct = net.sessions.find((s) => path.endsWith(`/sessions/${String(s['sessionId'])}`));
   if (direct) return direct;
   if (path.includes('/action-center')) return { items: [] };
@@ -74,10 +75,22 @@ function respond(path: string): unknown {
   return undefined;
 }
 
+const FAILED = Symbol('failed');
+
 // Anything the page asks for that this file does not describe answers 404,
 // which every read on the page already treats as "nothing there".
 function response(path: string) {
   const value = respond(path);
+  if (value === FAILED) {
+    return Promise.resolve({
+      ok: false,
+      status: 500,
+      statusText: '',
+      headers: { get: () => null },
+      text: () => Promise.resolve(''),
+      json: () => Promise.resolve({}),
+    });
+  }
   const body = value === undefined ? '' : JSON.stringify(value);
   return Promise.resolve({
     ok: value !== undefined,
@@ -176,6 +189,7 @@ beforeEach(async () => {
   net.replaced = [];
   net.pushed = [];
   net.sessions = [];
+  net.failSessionList = false;
   // Fresh modules per test: the realtime brokers are module-level and
   // refcounted, so a second page in one registry would find its topics held.
   vi.resetModules();
@@ -330,7 +344,7 @@ describe('what the open dock reads (D3 budget)', () => {
 });
 
 describe('where /chat lands (D4)', () => {
-  it('returns to the reader’s conversation active within the window, by replace', async () => {
+  it('returns a bare arrival to the reader’s conversation active within the window, by replace', async () => {
     net.sessions = [
       conversation({ lastActivityAt: new Date(Date.now() - 2 * HOUR).toISOString() }),
     ];
@@ -363,6 +377,33 @@ describe('where /chat lands (D4)', () => {
     expect(lastUrl()).toBe('/s/demo/chat');
     // The URL named a conversation, so the landing does not then resume another.
     expect(net.replaced.some((url) => url.includes(SESSION))).toBe(false);
+    expect(greetingReady()).toBe(true);
+    expect(dockOpen()).toBe(true);
+  });
+
+  it('opens what a rehearsal link names, with its persona and baseline pin intact', async () => {
+    net.sessions = [conversation()];
+    await land('sim=sim-1&persona=persona-1&baseline=3');
+    expect(net.replaced.some((url) => url.includes('session='))).toBe(false);
+    const search = new URLSearchParams(net.search);
+    expect(search.get('sim')).toBe('sim-1');
+    expect(search.get('persona')).toBe('persona-1');
+    expect(search.get('baseline')).toBe('3');
+    expect(greetingReady()).toBe(true);
+    expect(dockOpen()).toBe(true);
+  });
+
+  it('opens a new chat with the agent a link names, rather than resume', async () => {
+    net.sessions = [conversation()];
+    await land('agentId=h');
+    expect(net.replaced.some((url) => url.includes('session='))).toBe(false);
+    expect(greetingReady()).toBe(true);
+  });
+
+  it('lands on a usable new chat when the session list fails to read', async () => {
+    net.failSessionList = true;
+    await land('');
+    expect(net.reads.some((r) => r.includes('/sessions?'))).toBe(true);
     expect(greetingReady()).toBe(true);
     expect(dockOpen()).toBe(true);
   });

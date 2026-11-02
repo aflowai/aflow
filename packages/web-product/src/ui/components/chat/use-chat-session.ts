@@ -14,9 +14,10 @@ export function useChatSessionRuns(
     /**
      * Land on the reader's last conversation when the URL names none (Plan 338
      * D4), by `pickLandingConversation` over the list this hook already reads.
-     * It applies once per mount, to the first agent the chat selects, and
-     * never where the URL named a session — one that fails to resolve lands on
-     * a new chat. Omitted, the chat always lands new.
+     * It applies once per mount, to the first agent the chat selects. The page
+     * passes it only for a bare arrival (`isBareChatArrival`), and a session
+     * the URL names later still ends it. A list that fails to read lands on a
+     * new chat. Omitted, the chat always lands new.
      */
     landing?: {
       /** The reader. Only a conversation they opened is resumed. */
@@ -118,6 +119,13 @@ export function useChatSessionRuns(
   }
 
   const currentSessionId = currentRun?.sessionId ?? null;
+
+  // A list that failed to read has nothing to land on, so the chat lands new
+  // rather than hold its greeting and the Workbench back for ever.
+  const listErrored = selectedFlow !== null && listQuery.isError;
+  useEffect(() => {
+    if (landingLive && listErrored) setLandingSpent(true);
+  }, [landingLive, listErrored]);
 
   useEffect(() => {
     if (!selectedFlow || !listedSessions) return;

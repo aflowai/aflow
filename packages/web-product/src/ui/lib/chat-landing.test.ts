@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { CHAT_RESUME_WINDOW_MS, pickLandingConversation } from './chat-landing.js';
+import {
+  CHAT_INTENT_PARAMS,
+  CHAT_RESUME_WINDOW_MS,
+  isBareChatArrival,
+  pickLandingConversation,
+} from './chat-landing.js';
 import type { Session } from './types.js';
 
 const NOW = Date.parse('2026-11-02T12:00:00.000Z');
@@ -63,5 +68,19 @@ describe('pickLandingConversation', () => {
 
   it('lands new with no conversation at all', () => {
     expect(pickLandingConversation([], READER, NOW)).toBe(null);
+  });
+});
+
+describe('isBareChatArrival', () => {
+  it('holds for an arrival with no query, or only parameters the chat does not read', () => {
+    expect(isBareChatArrival(new URLSearchParams(''))).toBe(true);
+    expect(isBareChatArrival(new URLSearchParams('utm_source=mail'))).toBe(true);
+  });
+
+  it('fails for every parameter the chat reads', () => {
+    for (const name of CHAT_INTENT_PARAMS) {
+      expect(isBareChatArrival(new URLSearchParams(`${name}=x`))).toBe(false);
+    }
+    expect(isBareChatArrival(new URLSearchParams('sim=s&persona=p&baseline=2'))).toBe(false);
   });
 });

@@ -30,6 +30,7 @@ import { EntityChatInspector } from '../components/entity-chat-inspector.js';
 import { WorkbenchDock } from '../components/chat/WorkbenchDock.js';
 import { useActionCenter } from '../hooks/use-action-center.js';
 import { rehearsalRunInput } from '../lib/rehearsal.js';
+import { isBareChatArrival } from '../lib/chat-landing.js';
 import { useFlows } from '../hooks/use-flows.js';
 import { useFlowDetail } from '../hooks/use-flow-detail.js';
 import { useRunReducer } from '../hooks/use-run-reducer.js';
@@ -143,9 +144,19 @@ function ChatPageInner() {
   }, [clearConversation]);
 
   const { user: currentUser, settled: currentUserSettled } = useCurrentUserState();
+  // Read once from the arrival URL: `?draft=` and `?workbench=` drop out of it
+  // after the first render, and the arrival that carried them was not bare.
+  const [bareArrival] = useState(() => isBareChatArrival(searchParams));
   const { currentRun, setCurrentRun, urlSessionPending, urlSessionFailed, landingPending } =
     useChatSessionRuns(selectedFlow, spaceId, sessionIdFromUrl, {
-      landing: { readerId: currentUser?.userId ?? null, readerSettled: currentUserSettled },
+      ...(bareArrival
+        ? {
+            landing: {
+              readerId: currentUser?.userId ?? null,
+              readerSettled: currentUserSettled,
+            },
+          }
+        : {}),
       onUrlSessionAdopted,
     });
 

@@ -60,7 +60,10 @@ export function CyberneticProvider({
   // other holder of the key on the page (the local edition's space gate).
   const detail = useSpaceDetailQuery(space?.id ?? null);
   const directives = (detail.data?.directives ?? null) as EntityDirectives | null;
-  const directivesError = !directives && (detail.isError || detail.isSuccess);
+  // A read that answered without directives keeps its success while Retry
+  // reads again, so the error screen gives way to the spinner for as long as
+  // any read is in flight.
+  const directivesError = !directives && !detail.isFetching && (detail.isError || detail.isSuccess);
   const refetchDetail = detail.refetch;
   const retryDirectives = useCallback(() => {
     void refetchDetail();
