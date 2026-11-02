@@ -37,7 +37,13 @@ export const PullRequestReadStateSchema = z.object({
 });
 export type PullRequestReadState = z.infer<typeof PullRequestReadStateSchema>;
 
-export const PullRequestChecksStateSchema = z.enum(['green', 'red', 'pending', 'none']);
+/**
+ * `red` is a check run that concluded failure: what a shepherd pass acts on.
+ * `stopped` is a head concluded short of green with no failed check run — a
+ * run cancelled, stale or waiting on an action, or a failure only the commit
+ * statuses report. A pass waits on it, so it fires no event.
+ */
+export const PullRequestChecksStateSchema = z.enum(['green', 'red', 'stopped', 'pending', 'none']);
 export type PullRequestChecksState = z.infer<typeof PullRequestChecksStateSchema>;
 
 export const PullRequestWatchSchema = z.object({
