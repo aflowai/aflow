@@ -22,12 +22,15 @@ import {
   pullRequestSubject,
 } from '@aflow/schemas';
 import type { BackgroundTaskLogger } from '@aflow/lib';
-import type { ConditionalAnswer, GitHubConditionalGet } from './github.js';
+import type { ConditionalAnswer } from '../forge/vocabulary.js';
+import type { GitHubConditionalGet } from '../forge/github/conditionalGet.js';
 import {
-  PULL_REQUEST_POLL_CADENCE_MS,
   parseChangesRequested,
   parseChecksState,
   parseCombinedStatus,
+} from '../forge/github/pullRequestReads.js';
+import {
+  PULL_REQUEST_POLL_CADENCE_MS,
   pullRequestChanges,
   runPullRequestEventsCycle,
 } from './source.js';

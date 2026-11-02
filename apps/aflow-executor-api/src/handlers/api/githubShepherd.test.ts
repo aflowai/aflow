@@ -34,7 +34,7 @@ import {
   loopRequiredProtection,
   loopRequiredRules,
   loopReviews,
-} from './githubShepherd.js';
+} from './forge/github/shepherdReads.js';
 import {
   applyRecordTransformPreset,
   applyTextTransformPreset,

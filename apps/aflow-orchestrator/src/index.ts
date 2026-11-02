@@ -61,7 +61,7 @@ import { sweepDelegationSupervision } from './services/SessionOrchestrator/handl
 import { createStreamRetentionTask } from './services/streamRetention.js';
 import { createWaitDeliveryTask } from './services/waits/waitDelivery.js';
 import { createPullRequestEventsTask } from './services/pullRequestEvents/source.js';
-import { createGitHubConditionalGet } from './services/pullRequestEvents/github.js';
+import { createForgeConditionalGet } from './services/forge/index.js';
 import { createSessionMetadataTask } from './services/sessionMetadataTask.js';
 import { fetchAgentDef } from './services/SessionOrchestrator/helpers/fetchAgentDef.js';
 import { createWorkflowRunSweeper } from './services/cybernetic/workflowRunSweeperLoop.js';
@@ -518,7 +518,7 @@ async function main(): Promise<void> {
 
   const pullRequestEvents = createPullRequestEventsTask({
     redis,
-    get: createGitHubConditionalGet({ db }),
+    get: createForgeConditionalGet({ db }),
     logger,
   });
   pullRequestEvents.start();

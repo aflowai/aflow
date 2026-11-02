@@ -4,7 +4,7 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { createGitHubConditionalGet, GitHubReadError } from './github.js';
+import { createGitHubConditionalGet, GitHubReadError } from './conditionalGet.js';
 
 function answer(status: number, body: unknown, etag?: string): Response {
   return new Response(status === 304 ? null : JSON.stringify(body), {

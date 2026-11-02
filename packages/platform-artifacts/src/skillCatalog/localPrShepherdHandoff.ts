@@ -6,14 +6,13 @@ import {
   SHEPHERD_LEASE_ROOT,
   SHEPHERD_MERGE_OUTCOME_FIELDS,
   SHEPHERD_MERGE_OUTCOME_LINE,
-  SHEPHERD_RESPONSE_PRESETS,
 } from '@aflow/schemas';
 import { fromCommission, REMEDY, REMEDY_CHANGE_TASK } from './localPrShepherdRemedies.js';
 import {
   bind,
   ctx,
-  github,
-  GITHUB_READ_PROJECTION,
+  FORGE,
+  FORGE_READ_PROJECTION,
   HANDOFF_READS,
   handoffBindings,
   handoffText,
@@ -51,31 +50,14 @@ export const HANDOFF_PIN_PATH = {
 const PINNED_AUTHOR = { author: out('read-handoff-pin', 'dataJson.author') };
 
 /**
- * `loop_handoff:<author>:<number>` — the record trusted only from the pinned
- * author, and only on this pull request; with no pin, no author, and nothing
- * trusted.
+ * The handoff is trusted only from the pinned author, and only on this pull
+ * request; with no pin, no author, and nothing trusted.
  */
-const HANDOFF_PRESET = {
-  $concat: [
-    `${SHEPHERD_RESPONSE_PRESETS.handoff}:`,
-    { $firstOf: [{ $text: [bind('author')] }, ''] },
-    ':',
-    { $text: [bind('number')] },
-  ],
-};
-
-/**
- * The same, with the attempt state the pin kept — `:<attempts>:<checkRunId>`
- * — wherever a pin holds one: the newest page is read with a pin only after
- * its comment answered 404, and a deleted record is not a first pass.
- */
-const HANDOFF_PRESET_CARRIED = {
-  $concat: [
-    ...HANDOFF_PRESET.$concat,
-    optionalPart(':', text('carriedAttempts'), ':', {
-      $firstOf: [text('carriedCheckRun'), ''],
-    }),
-  ],
+const HANDOFF_TRUST = {
+  owner: bind('owner'),
+  repo: bind('repo'),
+  author: bind('author'),
+  number: bind('number'),
 };
 
 /** The handoff this pass wrote, from whichever write it was: posted, or rewritten. */
@@ -219,12 +201,12 @@ const HANDOFF_BINDINGS = {
   requiredUnmet: out('read-pr-checks', 'data.required.summary'),
   mergeOutcome: out('record-merge', 'decision'),
   mergeReason: out('record-merge', 'reason'),
-  mergeCommit: out('merge', 'data.sha'),
+  mergeCommit: out('merge', FORGE.merge.commitPath),
   mergeStatus: out('merge', 'statusCode'),
-  mergeMessage: out('merge', 'data.message'),
-  mergeAgainCommit: out('merge-again', 'data.sha'),
+  mergeMessage: out('merge', FORGE.refusalMessagePath),
+  mergeAgainCommit: out('merge-again', FORGE.merge.commitPath),
   mergeAgainStatus: out('merge-again', 'statusCode'),
-  mergeAgainMessage: out('merge-again', 'data.message'),
+  mergeAgainMessage: out('merge-again', FORGE.refusalMessagePath),
   handOverSchedule: out('hand-over-to-agent', 'scheduleId'),
   ...leaseBindings('leaseCheckRun', 'lease.inlineJson.checkRunId'),
   ...leaseBindings('leaseHeadSha', 'lease.inlineJson.headSha'),
@@ -331,11 +313,7 @@ export const HANDOFF_READ_TASKS = [
       commentId: out('read-handoff-pin', 'dataJson.commentId'),
     },
     context: ctx('api.http.call'),
-    inputTemplate: github(
-      'getIssueComment',
-      { owner: bind('owner'), repo: bind('repo'), comment_id: bind('commentId') },
-      HANDOFF_PRESET,
-    ),
+    inputTemplate: FORGE.readHandoff({ ...HANDOFF_TRUST, comment: bind('commentId') }),
     outputProjection: {
       statusCode: { path: 'statusCode', onMissing: 'error' as const },
       data: { path: 'data', onMissing: 'error' as const },
@@ -370,18 +348,15 @@ export const HANDOFF_READ_TASKS = [
       page: out('read-pr', 'data.commentPages'),
     },
     context: ctx('api.http.call'),
-    inputTemplate: github(
-      'listIssueComments',
-      {
-        owner: bind('owner'),
-        repo: bind('repo'),
-        issue_number: bind('number'),
-        per_page: 100,
-        page: bind('page'),
-      },
-      HANDOFF_PRESET_CARRIED,
-    ),
-    outputProjection: GITHUB_READ_PROJECTION,
+    // With the attempt state the pin kept, wherever a pin holds one: the
+    // newest page is read with a pin only after its comment answered 404, and
+    // a deleted record is not a first pass.
+    inputTemplate: FORGE.findHandoff({
+      ...HANDOFF_TRUST,
+      page: bind('page'),
+      carried: { attempts: bind('carriedAttempts'), checkRun: bind('carriedCheckRun') },
+    }),
+    outputProjection: FORGE_READ_PROJECTION,
   },
 ];
 
@@ -400,11 +375,11 @@ export const HANDOFF_WRITE_TASKS = [
     maxAttempts: 1,
     inputBindings: { ...HANDOFF_BINDINGS, ...NUMBER },
     context: ctx('api.http.call'),
-    inputTemplate: github('createIssueComment', {
+    inputTemplate: FORGE.postHandoff({
       owner: bind('owner'),
       repo: bind('repo'),
-      issue_number: bind('number'),
-      body: { body: HANDOFF_BODY },
+      number: bind('number'),
+      body: HANDOFF_BODY,
     }),
   },
 
@@ -422,11 +397,11 @@ export const HANDOFF_WRITE_TASKS = [
       ...handoffBindings('commentId', 'data.commentId'),
     },
     context: ctx('api.http.call'),
-    inputTemplate: github('updateIssueComment', {
+    inputTemplate: FORGE.updateHandoff({
       owner: bind('owner'),
       repo: bind('repo'),
-      comment_id: handoffValue('commentId'),
-      body: { body: HANDOFF_BODY },
+      comment: handoffValue('commentId'),
+      body: HANDOFF_BODY,
     }),
   },
 
@@ -447,8 +422,8 @@ export const HANDOFF_WRITE_TASKS = [
     inputBindings: {
       ...ATTEMPT_STATE_BINDINGS,
       ...NUMBER,
-      ...writtenBindings('commentId', 'data.id'),
-      ...writtenBindings('author', 'data.user.login'),
+      ...writtenBindings('commentId', FORGE.handoffWritten.idPath),
+      ...writtenBindings('author', FORGE.handoffWritten.authorPath),
     },
     context: ctx('memory.store.put'),
     inputTemplate: {
