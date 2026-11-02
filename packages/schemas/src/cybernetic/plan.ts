@@ -167,12 +167,6 @@ export const PLAN_NODE_CARD_KEYS_MESSAGE =
 const PlanNodeCardItemSchema = z.string().trim().min(1).max(PLAN_NODE_CARD_ITEM_MAX_CHARS);
 const PlanNodeCardListSchema = z.array(PlanNodeCardItemSchema).max(PLAN_NODE_CARD_LIST_MAX_ITEMS);
 
-// `design_document` is a historical value kept for stored cards, refused on new writes.
-const PlanNodeCardWaitReasonSchema = z.union([
-  PlanNodeWaitReasonSchema,
-  z.literal('design_document').describe('The design document of a new plan.'),
-]);
-
 export const PlanNodeCardSchema = z
   .object({
     change: z
@@ -199,7 +193,7 @@ export const PlanNodeCardSchema = z
     notDoing: PlanNodeCardListSchema.describe('Not done on purpose.'),
     waitsOn: z
       .object({
-        reason: PlanNodeCardWaitReasonSchema,
+        reason: PlanNodeWaitReasonSchema,
         decision: PlanNodeCardItemSchema.describe('The decision the operator is asked for.'),
       })
       .strict()

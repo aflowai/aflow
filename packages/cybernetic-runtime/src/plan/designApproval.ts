@@ -2,14 +2,33 @@
  * The phase after P0 asks the operator to approve P0's merged design document
  * (Plan 339 D6), so that ask is written only once the document exists: the
  * plan's P0, its first step not dropped, has closed done with its design
- * document linked. A new ask names `design_approval`, so an agent's or a
- * service's write naming `design_document` as its wait is refused. A person's
- * own write lands as its card says.
+ * document linked. The gate judges the node as the write lands it: its card,
+ * resent or stored, and P0 among the siblings the write leaves.
  */
-import { PLAN_TREE_DEPTH_LIMIT, type PlanNodeCreateInput } from '@aflow/schemas';
-import type { PlanOpError, PlanReadContext, PlanWriteContext } from './operations.js';
+import {
+  PLAN_TREE_DEPTH_LIMIT,
+  isClosedPlanNodeStatus,
+  type PlanNodeCard,
+  type PlanNodeStatus,
+  type PlanNodeWork,
+} from '@aflow/schemas';
+import type { PlanOpError, PlanReadContext } from './operations.js';
+import { bySiblingOrder } from './tree.js';
 
 const P0_PAGE = 50;
+
+/** A node as a create or an update leaves it. */
+export interface PlanNodeLanding {
+  /** Absent on a create: the node has no id until it is inserted. */
+  nodeId?: string;
+  work?: PlanNodeWork;
+  /** The card the write sends, or the stored card where it sends none. */
+  card?: PlanNodeCard;
+  status: PlanNodeStatus;
+  parentId: string | null;
+  /** Absent: after its last sibling. */
+  position?: number;
+}
 
 /** The root above `nodeId`, itself where it is one, or null where a node on the way is gone. */
 async function planRootOf(ctx: PlanReadContext, nodeId: string): Promise<string | null> {
@@ -23,48 +42,59 @@ async function planRootOf(ctx: PlanReadContext, nodeId: string): Promise<string 
   return null;
 }
 
-/** The root's first child by position that is not dropped. */
-async function p0Of(ctx: PlanReadContext, rootId: string) {
+/** The root's first stored child by position that is not dropped, the written node left out. */
+async function storedP0Of(ctx: PlanReadContext, rootId: string, nodeId: string | undefined) {
   for (let offset = 0; ; offset += P0_PAGE) {
     const { children, total } = await ctx.store.listChildren(ctx.spaceId, rootId, P0_PAGE, offset);
-    const p0 = children.find((child) => child.status !== 'dropped');
+    const p0 = children.find((child) => child.nodeId !== nodeId && child.status !== 'dropped');
     if (p0 !== undefined) return p0;
     if (children.length === 0 || offset + children.length >= total) return undefined;
   }
 }
 
-async function designDocumentMerged(ctx: PlanReadContext, parentId: string): Promise<boolean> {
-  const rootId = await planRootOf(ctx, parentId);
+/**
+ * Whether the written node stands ahead of `stored` once it lands. A create
+ * at the same position is taken as ahead, since its id is drawn on insert.
+ */
+function landsAhead(
+  landing: PlanNodeLanding,
+  stored: { nodeId: string; position: number },
+): boolean {
+  if (landing.position === undefined) return false;
+  if (landing.nodeId === undefined) return landing.position <= stored.position;
+  return bySiblingOrder({ nodeId: landing.nodeId, position: landing.position }, stored) < 0;
+}
+
+async function designDocumentMerged(
+  ctx: PlanReadContext,
+  landing: PlanNodeLanding & { parentId: string },
+): Promise<boolean> {
+  const rootId = await planRootOf(ctx, landing.parentId);
   if (rootId === null) return false;
-  const p0 = await p0Of(ctx, rootId);
-  if (p0?.status !== 'done') return false;
-  return (await ctx.store.newestLink(ctx.spaceId, p0.nodeId, 'document')) !== null;
+  const stored = await storedP0Of(ctx, rootId, landing.nodeId);
+  // The asking node lands open, so where it stands first P0 has not closed.
+  if (landing.parentId === rootId && (stored === undefined || landsAhead(landing, stored))) {
+    return false;
+  }
+  if (stored?.status !== 'done') return false;
+  return (await ctx.store.newestLink(ctx.spaceId, stored.nodeId, 'document')) !== null;
 }
 
 /**
- * The refusal of a create or an update that asks for `design_approval`,
+ * The refusal of a write that lands an open node asking for `design_approval`,
  * through its `work` or its card's `waitsOn`, before P0's design document has
- * merged, or whose card waits on `design_document` where no person writes it.
- * `parentId` is the node's parent once the write lands.
+ * merged.
  */
 export async function designApprovalRefusal(
-  ctx: PlanReadContext & Pick<PlanWriteContext, 'actorKind'>,
-  input: Partial<Pick<PlanNodeCreateInput, 'work' | 'card'>>,
-  parentId: string | null,
+  ctx: PlanReadContext,
+  landing: PlanNodeLanding,
 ): Promise<PlanOpError | undefined> {
-  if (input.card?.waitsOn?.reason === 'design_document' && ctx.actorKind !== 'human') {
-    return {
-      ok: false,
-      code: 'PLAN_NODE_DESIGN_DOCUMENT_WAIT',
-      message:
-        'A new plan’s P0 starts active, so a new card’s `waitsOn` names no `design_document`, and nothing was ' +
-        'written. Leave `waitsOn` out of P0. The phase after it asks with `design_approval` once P0’s document merges.',
-    };
-  }
   const asks =
-    input.work === 'design_approval' || input.card?.waitsOn?.reason === 'design_approval';
-  if (!asks) return undefined;
-  if (parentId !== null && (await designDocumentMerged(ctx, parentId))) return undefined;
+    landing.work === 'design_approval' || landing.card?.waitsOn?.reason === 'design_approval';
+  if (!asks || isClosedPlanNodeStatus(landing.status)) return undefined;
+  const { parentId } = landing;
+  if (parentId !== null && (await designDocumentMerged(ctx, { ...landing, parentId })))
+    return undefined;
   return {
     ok: false,
     code: 'PLAN_NODE_DESIGN_NOT_MERGED',

@@ -117,7 +117,6 @@ export type PlanOpErrorCode =
   | 'PLAN_NODE_RESIDENT_SCOPE'
   | 'PLAN_NODE_LIVE_CHECK_PERSON'
   | 'PLAN_NODE_DESIGN_NOT_MERGED'
-  | 'PLAN_NODE_DESIGN_DOCUMENT_WAIT'
   | 'PLAN_LEARNING_NOT_FOUND';
 
 export interface PlanOpError {
@@ -275,7 +274,14 @@ export async function createPlanNode(
           ? `${PLAN_NODE_ASK_HEAD}${waitsOn.decision.replace(/\s*\n\s*/g, ' ')}`
           : undefined;
   if (ctx.resident === true && head === undefined) return residentCreates();
-  const notMerged = await designApprovalRefusal(ctx, input, parentId);
+  const status = planNodeCreatedStatus(input);
+  const notMerged = await designApprovalRefusal(ctx, {
+    ...(input.work !== undefined ? { work: input.work } : {}),
+    ...(input.card !== undefined ? { card: input.card } : {}),
+    status,
+    parentId,
+    ...(input.position !== undefined ? { position: input.position } : {}),
+  });
   if (notMerged !== undefined) return notMerged;
   const given = input.note !== undefined && input.note !== '' ? input.note : null;
   const note = head === undefined ? given : given === null ? head : `${head}\n${given}`;
@@ -292,7 +298,7 @@ export async function createPlanNode(
     ...(input.card !== undefined ? { card: input.card } : {}),
     ...(input.position !== undefined ? { position: input.position } : {}),
     createdBy: ctx.createdBy ?? null,
-    status: planNodeCreatedStatus(input),
+    status,
   });
   if (inserted.outcome === 'inserted') {
     return nodeWritten(ctx, { ok: true as const, node: inserted.node });
@@ -470,11 +476,17 @@ async function writePlanNode(
       details: { nodeId: current.nodeId },
     };
   }
-  const notMerged = await designApprovalRefusal(
-    ctx,
-    input,
-    input.parentId !== undefined ? input.parentId : current.parentId,
-  );
+  const landsUnder = input.parentId !== undefined ? input.parentId : current.parentId;
+  const card = input.card ?? current.card;
+  const position =
+    input.position ?? (landsUnder === current.parentId ? current.position : undefined);
+  const notMerged = await designApprovalRefusal(ctx, {
+    nodeId: current.nodeId,
+    ...(card !== undefined ? { card } : {}),
+    status,
+    parentId: landsUnder,
+    ...(position !== undefined ? { position } : {}),
+  });
   if (notMerged !== undefined) return notMerged;
 
   const pullRequest =
