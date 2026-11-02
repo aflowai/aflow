@@ -69,8 +69,10 @@ const PlanNodePositionSchema = z
 
 /**
  * What a new node is, for its first status. Approved work in the queue starts
- * `active`. A node starts `blocked` only for a decision that is the
- * operator's, and then its card names that decision (`waitsOn`).
+ * `active`, and so does a new plan’s P0, whose design document is written and
+ * reviewed before the operator reads it. A node starts `blocked` only for a
+ * decision that is the operator’s, and then its card names that decision
+ * (`waitsOn`).
  */
 export const PLAN_NODE_FIRST_STATUS_RULE = {
   approved_phase: {
@@ -85,13 +87,19 @@ export const PLAN_NODE_FIRST_STATUS_RULE = {
     status: 'active',
     description: 'A follow-up for findings a review carried.',
   },
+  design_document: {
+    status: 'active',
+    description:
+      'A new plan’s P0, its design document, written and reviewed before the operator is asked.',
+  },
   design_decision: {
     status: 'blocked',
     description: 'A design decision.',
   },
-  design_document: {
+  design_approval: {
     status: 'blocked',
-    description: 'The design document of a new plan.',
+    description:
+      'A new plan’s first phase after P0, which waits for the operator to read and approve the merged design document.',
   },
   decision_change: {
     status: 'blocked',
@@ -375,7 +383,7 @@ export function planNodeWorkNeedsWaitMessage(work: PlanNodeWork): string {
 }
 
 export function planNodeWorkActiveMessage(work: PlanNodeWork): string {
-  return `\`${work}\` is approved work and starts active, so its card names no \`waitsOn\`. Leave \`waitsOn\` out, or name the blocked kind of work it waits for.`;
+  return `\`${work}\` starts active, so its card names no \`waitsOn\`. Leave \`waitsOn\` out, or name the blocked kind of work it waits for.`;
 }
 
 export const PLAN_NODE_WAITS_ON_WORK_MESSAGE =

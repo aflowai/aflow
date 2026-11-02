@@ -1,8 +1,9 @@
 /**
  * A node's first status is data (Plan 339 D6): approved work in the queue
- * starts active, and a node starts blocked only for a decision that is the
- * operator's, its card naming that decision. The rule is read through the
- * create schema and the engine, as the Helmsman's and the resident's writes go.
+ * starts active, as a new plan's P0 does, and a node starts blocked only for
+ * a decision that is the operator's, its card naming that decision. The rule
+ * is read through the create schema and the engine, as the Helmsman's and the
+ * resident's writes go.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import Redis from 'ioredis-mock';
@@ -78,6 +79,7 @@ beforeEach(async () => {
 describe('a node’s first status (Plan 339 D6)', () => {
   const approved: { work: PlanNodeWork; title: string }[] = [
     { work: 'approved_phase', title: 'P2 — a phase of an approved plan' },
+    { work: 'design_document', title: 'P0 — the design document of a new plan' },
     { work: 'defect_fix', title: 'Fix CI red on main' },
     { work: 'findings_follow_up', title: 'Carry the review’s open findings' },
   ];
@@ -104,7 +106,10 @@ describe('a node’s first status (Plan 339 D6)', () => {
 
   const decisions: { reason: PlanNodeWaitReason; decision: string }[] = [
     { reason: 'design_decision', decision: 'Choose where the wait primitive lives.' },
-    { reason: 'design_document', decision: 'Approve Plan 340’s design document.' },
+    {
+      reason: 'design_approval',
+      decision: 'Read and approve Plan 340’s merged design document.',
+    },
     { reason: 'decision_change', decision: 'Amend Plan 322 D2.' },
     { reason: 'authority', decision: 'Let the resident push without asking.' },
     { reason: 'operator_question', decision: 'Answer the open question on the card.' },
@@ -153,5 +158,39 @@ describe('a node’s first status (Plan 339 D6)', () => {
       PlanNodeCreateInputSchema.safeParse({ ...base, work: 'design_decision', card: card(asked) })
         .success,
     ).toBe(false);
+  });
+
+  it('starts a new plan’s P0 active and asks the operator at the phase after it', async () => {
+    const root = await create({ title: 'Plan 340 · the loop works against any forge' });
+    const p0 = await create({
+      parentId: root.nodeId,
+      title: 'P0 — the design document',
+      work: 'design_document',
+    });
+    const decision = 'Read and approve Plan 340’s merged design document.';
+    const p1 = await create({
+      parentId: root.nodeId,
+      title: 'P1 — the forge seam',
+      position: 1,
+      work: 'design_approval',
+      card: card({ reason: 'design_approval', decision }),
+    });
+    expect(p0).toMatchObject({ status: 'active' });
+    expect(p0.note).toBeUndefined();
+    expect(p1).toMatchObject({
+      status: 'blocked',
+      note: `${PLAN_NODE_ASK_HEAD}${decision}`,
+    });
+  });
+
+  it('starts a P0 the operator writes by hand as its card says, as before', async () => {
+    const decision = 'Approve the design document.';
+    const written = await create({ title: 'P0 — written by hand' });
+    const asking = await create({
+      title: 'P0 — written by hand, asking',
+      card: card({ reason: 'decision_change', decision }),
+    });
+    expect(written.status).toBe('active');
+    expect(asking).toMatchObject({ status: 'blocked', note: `${PLAN_NODE_ASK_HEAD}${decision}` });
   });
 });

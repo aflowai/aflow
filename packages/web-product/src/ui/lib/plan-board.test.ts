@@ -223,7 +223,7 @@ describe('a blocked root whose steps have all closed (Plan 339 D6)', () => {
 
 describe('the rail’s Approve (Plan 339 D6)', () => {
   const waitsOn = {
-    reason: 'design_document',
+    reason: 'design_approval',
     decision: 'Approve Plan 340’s design document.',
   } as const;
   const asking: PlanNodeCard = {
