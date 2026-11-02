@@ -18,7 +18,6 @@
  */
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type postgres from 'postgres';
-import type { Redis } from 'ioredis';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
@@ -381,7 +380,7 @@ const localProfileManagementRoutes: FastifyPluginAsync = (fastify) => {
       const removed = await unlessRefused(reply, () =>
         removeLocalProfile(db(), {
           sql,
-          redis: fastify.appContext.redis as Redis | null | undefined,
+          redis: fastify.appContext.redis,
           tenantId: tenant.tenantId,
           userId: request.params.userId,
           onCacheError: (err) => {

@@ -130,7 +130,7 @@ export async function handleWorkflowEvaluate(
       docRepo,
       dirRepo,
       workflowDocPath(slug),
-      updated as unknown as Record<string, unknown>,
+      updated,
       'json',
       spaceId,
       'overwrite',
@@ -171,7 +171,7 @@ export async function handleWorkflowEvaluate(
   if (input.runId && completedRunHere) {
     const db = getDatabase();
     fireCyberneticPostRunHooksStandalone({
-      tenantId: args.context.tenantId as string,
+      tenantId: args.context.tenantId,
       spaceId,
       workflowSlug: slug,
       runId: input.runId,

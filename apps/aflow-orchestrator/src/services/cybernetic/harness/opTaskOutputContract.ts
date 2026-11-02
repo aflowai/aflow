@@ -119,7 +119,7 @@ export async function applyOpTaskOutputContract(
   //    `_poll`-stamped terminal payload — raw + reserved stamp).
   let rawOutput: unknown;
   try {
-    rawOutput = await deps.payloadStore.retrieve(outcome.outputRef as never);
+    rawOutput = await deps.payloadStore.retrieve(outcome.outputRef);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (projection) {
@@ -154,7 +154,7 @@ export async function applyOpTaskOutputContract(
     const hasEcho = Object.values(projection).some((spec) => 'fromInput' in spec);
     if (hasEcho && taskRow.inputRef) {
       try {
-        const fetched = await deps.payloadStore.retrieve(taskRow.inputRef as never);
+        const fetched = await deps.payloadStore.retrieve(taskRow.inputRef);
         // A non-record payload is a deterministic data-shape problem — fall
         // through with null so the declared echo fails loud (PROJECTION_FAILED).
         resolvedInput = isRecord(fetched) ? fetched : null;

@@ -222,7 +222,7 @@ export async function emitTaskUpdate(
   await emitWorkflowProgress(
     { db: deps.db, redis: deps.redis },
     {
-      tenantId: args.tenantId as string,
+      tenantId: args.tenantId,
       runId: args.runId,
       event: {
         kind: 'WorkflowTaskUpdate',
@@ -412,7 +412,7 @@ export async function writeAttentionItem(
   kind: AttentionItemKind,
   payload: Record<string, unknown>,
 ): Promise<void> {
-  await addAttentionItemInTransaction(tx, tenantId as string, {
+  await addAttentionItemInTransaction(tx, tenantId, {
     spaceId: run.spaceId,
     kind,
     relatedRunId: run.runId,

@@ -41,7 +41,7 @@ export async function withTenantSchema<T>(
     const tTx2 = Date.now();
 
     // Execute the callback
-    const result = await callback(tx as unknown as PostgresJsDatabase);
+    const result = await callback(tx);
     const tTx3 = Date.now();
 
     if (tTx3 - tTx0 > getPerformanceLogThresholds().slowQueryMs) {

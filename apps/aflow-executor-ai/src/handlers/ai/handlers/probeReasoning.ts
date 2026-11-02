@@ -13,8 +13,6 @@ import type {
   AiModelProbeReasoningInput,
   ReasoningProbeResult,
   ReasoningProbeRung,
-  StepExecutionId,
-  TenantId,
 } from '@aflow/schemas';
 import {
   probeReasoningLadder,
@@ -118,9 +116,9 @@ export async function handleProbeReasoning(
       model,
       getAdapter: () => client.getAdapter(model.id, model.provider),
       attribution: {
-        tenantId: ctx.job.tenantId as TenantId,
+        tenantId: ctx.job.tenantId,
         runId: ctx.runId,
-        stepExecutionId: ctx.job.stepExecutionId as StepExecutionId,
+        stepExecutionId: ctx.job.stepExecutionId,
         attempt: ctx.job.attempt,
       },
     });

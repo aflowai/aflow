@@ -187,7 +187,7 @@ export const flowsRoutes: FastifyPluginAsync = async (fastify) => {
           }
 
           const platformItems: AgentListItem[] = platformRoles.map((entry) => {
-            const def = entry.definition as unknown as Record<string, unknown>;
+            const def = entry.definition;
             const meta = (def['metadata'] ?? {}) as Record<string, unknown>;
             const name =
               (typeof meta['name'] === 'string' ? meta['name'] : undefined) ?? entry.systemRole;
@@ -450,9 +450,7 @@ export const flowsRoutes: FastifyPluginAsync = async (fastify) => {
         try {
           const stateVars = definition['stateVariables'];
           if (Array.isArray(stateVars) && stateVars.length > 0) {
-            inputContract = deriveFlowInputContract(
-              definition as unknown as AgentDefinition,
-            ) as unknown as Record<string, unknown>;
+            inputContract = deriveFlowInputContract(definition as unknown as AgentDefinition);
           }
         } catch {
           // Non-blocking: inputContract is an enhancement
@@ -950,7 +948,7 @@ export const flowsRoutes: FastifyPluginAsync = async (fastify) => {
           context.db as PostgresJsDatabase,
           createTenantContext(tenant.tenantId),
         );
-        const versions = await repo.listVersions(resolved.target.agentId as never);
+        const versions = await repo.listVersions(resolved.target.agentId);
         reply.send({
           agentId: resolved.target.agentId,
           versions: versions.map((v) => ({

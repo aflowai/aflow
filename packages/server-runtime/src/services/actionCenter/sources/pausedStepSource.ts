@@ -339,7 +339,7 @@ async function loadRequestedInputPayload(
 ): Promise<Record<string, unknown> | null> {
   if (!ref) return null;
   try {
-    const raw = await deps.payloadStore.retrieve(ref as never);
+    const raw = await deps.payloadStore.retrieve(ref);
     if (raw && typeof raw === 'object') return raw as Record<string, unknown>;
   } catch {
     /* malformed or missing payload */

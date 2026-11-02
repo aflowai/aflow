@@ -64,7 +64,7 @@ export async function handleWorkflowGet(
   // names, enums) BEFORE starting a run, rather than discovering it by failing
   // the CAMPAIGN_REQUIRED gate.
   const skill = await resolveSkillForWorkflow(
-    { db, tenantId: args.context.tenantId as string, spaceId },
+    { db, tenantId: args.context.tenantId, spaceId },
     slug,
   );
   if (skill?.manifest.campaign !== undefined) {

@@ -40,13 +40,7 @@ export function computeRunSummary(entries: TimelineEntry[]): RunSummary {
         (evt.eventType === 'SessionSucceeded' || evt.eventType === 'SessionCompleted') &&
         evt.usageSummary
       ) {
-        const us = evt.usageSummary as {
-          totalPromptTokens: number;
-          totalCompletionTokens: number;
-          totalTokens: number;
-          totalCostUsd: number;
-          models: string[];
-        };
+        const us = evt.usageSummary;
         // Use server-side aggregate but still count steps
         for (const e2 of entries) {
           if (e2.kind !== 'step') continue;

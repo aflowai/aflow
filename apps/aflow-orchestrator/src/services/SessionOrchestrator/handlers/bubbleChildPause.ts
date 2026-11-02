@@ -432,11 +432,11 @@ async function routeAsTypedToolResult(args: TypedToolResultArgs): Promise<void> 
       childStatus: 'PAUSED',
       stepId: parentStepState.stepId,
       stepType: parentStepState.stepType,
-      attempt: (parentStepState.attempt as number | undefined) ?? 1,
+      attempt: parentStepState.attempt ?? 1,
     },
   };
-  await appendSessionEvent(redis, tenantId, parentRunId as SessionId, resumeEvent);
-  await markSessionDirty(redis, tenantId, parentRunId as SessionId);
+  await appendSessionEvent(redis, tenantId, parentRunId, resumeEvent);
+  await markSessionDirty(redis, tenantId, parentRunId);
 
   // Emit step result — routes through applyResult → onSuccess normally
   await addStepResult(redis, {
@@ -449,11 +449,11 @@ async function routeAsTypedToolResult(args: TypedToolResultArgs): Promise<void> 
     stepType: (parentStepState.stepType as StepType | undefined) ?? 'agent',
     operationId: ((parentStepState.operationId as OperationId | undefined) ??
       'agent.control.delegate') as OperationId,
-    attempt: (parentStepState.attempt as number | undefined) ?? 1,
+    attempt: parentStepState.attempt ?? 1,
     idempotencyKey: `pause-return:${parentRunId}:${childRunId}` as IdempotencyKey,
     status: 'SUCCEEDED',
     outputRef,
-    resolvedInputRef: (parentStepState.inputRef as string | undefined) ?? '',
+    resolvedInputRef: parentStepState.inputRef ?? '',
     durationMs: 0,
     traceId: ((parentState.traceId as TraceId | undefined) ?? '') as TraceId,
     finishedAtMs: Date.now(),
@@ -594,7 +594,7 @@ async function routeAsParentInputPause(args: ParentInputPauseArgs): Promise<void
       traceId: (parentState.traceId ?? '') as TraceId,
       stepDef: parentStepDef,
       stepExecutionId: parentStepExecutionId as StepExecutionId,
-      attempt: (parentStepState.attempt as number | undefined) ?? 1,
+      attempt: parentStepState.attempt ?? 1,
       runState: parentState,
     },
     childMissingVars,

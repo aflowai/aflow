@@ -64,7 +64,7 @@ export async function resolvePausedContractRef(
 ): Promise<ResolvedPausedContract | null> {
   let payload: unknown;
   try {
-    payload = await args.payloadStore.retrieve(args.contractRef as never);
+    payload = await args.payloadStore.retrieve(args.contractRef);
   } catch {
     return null;
   }

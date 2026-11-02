@@ -7,9 +7,6 @@ import {
   WORKFLOW_TASK_LIVE_DELTA_EVENT_TYPE,
   type StepJobMessage,
   type PayloadRef,
-  type TenantId,
-  type StepExecutionId,
-  type OperationId,
   type StepDefinition,
   type OperationDefinition,
   type LiveDeltaChannel,
@@ -39,7 +36,7 @@ export async function buildExecutionContext(
   slotController?: SlotController,
 ): Promise<ExecutorContext> {
   const payloadStore = deps.payloadStore;
-  const tenantId = job.tenantId as TenantId;
+  const tenantId = job.tenantId;
 
   const stepDefinition = deps.resolveStepDefinition
     ? await deps.resolveStepDefinition(job.stepId)
@@ -134,7 +131,7 @@ export async function buildExecutionContext(
     tenantId,
     ...(job.spaceId !== undefined ? { spaceId: job.spaceId } : {}),
     runId: executionRunId,
-    stepExecutionId: job.stepExecutionId as StepExecutionId,
+    stepExecutionId: job.stepExecutionId,
     logicalExecutionId: deriveLogicalExecutionId(job),
     ...(job.startingConversationId !== undefined
       ? { startingConversationId: job.startingConversationId }
@@ -142,7 +139,7 @@ export async function buildExecutionContext(
     attempt: job.attempt,
     idempotencyKey: job.idempotencyKey,
     traceId: job.traceId,
-    operationId: job.operationId as OperationId,
+    operationId: job.operationId,
     ...(job.callerModel !== undefined ? { callerModel: job.callerModel } : {}),
     ...(job.preferredHarness !== undefined ? { preferredHarness: job.preferredHarness } : {}),
     ...(job.browserGranted !== undefined ? { browserGranted: job.browserGranted } : {}),
@@ -160,7 +157,7 @@ export async function buildExecutionContext(
       const payloadKind = kind === 'input_request' ? ('requested_input' as const) : kind;
       const contentType =
         options?.contentType !== undefined ? { contentType: options.contentType } : {};
-      const stepExecutionId = job.stepExecutionId as StepExecutionId;
+      const stepExecutionId = job.stepExecutionId;
       if (Buffer.isBuffer(data)) {
         return payloadStore.storeBytes({
           tenantId,
@@ -187,7 +184,7 @@ export async function buildExecutionContext(
       const outputRef = payloadStore.buildRef({
         tenantId,
         runId: executionRunId,
-        stepExecutionId: job.stepExecutionId as StepExecutionId,
+        stepExecutionId: job.stepExecutionId,
         attempt: job.attempt,
         kind: 'output',
       });
@@ -230,7 +227,7 @@ export async function buildExecutionContext(
       const resolvedInputRef = await payloadStore.store({
         tenantId,
         runId: executionRunId,
-        stepExecutionId: job.stepExecutionId as StepExecutionId,
+        stepExecutionId: job.stepExecutionId,
         attempt: job.attempt,
         kind: 'resolved_input',
         data: result.resolved,

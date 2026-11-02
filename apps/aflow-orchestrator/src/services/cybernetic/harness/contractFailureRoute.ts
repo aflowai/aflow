@@ -487,7 +487,7 @@ async function decodeContractErrors(deps: HarnessDeps, errorRef: string): Promis
         payload = value as Record<string, unknown>;
       }
     } else {
-      const fetched = await deps.payloadStore.retrieve(errorRef as never);
+      const fetched = await deps.payloadStore.retrieve(errorRef);
       if (fetched && typeof fetched === 'object' && !Array.isArray(fetched)) {
         payload = fetched as Record<string, unknown>;
       } else if (typeof fetched === 'string') {

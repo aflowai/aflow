@@ -24,9 +24,7 @@ function rowToCandidate(row: CoachCandidateLearningRow): CandidateLearning {
     runId: row.runId,
     learning: row.learningJson as WorkflowLearning,
     status: row.status as CandidateLearningStatus,
-    ...(row.compactEvalOutcome
-      ? { compactEvalOutcome: row.compactEvalOutcome as CompactEvalOutcome }
-      : {}),
+    ...(row.compactEvalOutcome ? { compactEvalOutcome: row.compactEvalOutcome } : {}),
     ...(row.refs ? { refs: row.refs as CandidateLearning['refs'] } : {}),
     createdAt: row.createdAt.toISOString(),
     ...(row.reviewedAt ? { reviewedAt: row.reviewedAt.toISOString() } : {}),

@@ -22,7 +22,7 @@ export async function readWriteApprovalRequest(
   requestedInputRef: string,
 ): Promise<WriteApprovalRequestPayload | null> {
   try {
-    const raw = await payloadStore.retrieve(requestedInputRef as never);
+    const raw = await payloadStore.retrieve(requestedInputRef);
     if (typeof raw !== 'object' || raw === null) return null;
     if ((raw as Record<string, unknown>)['kind'] !== 'write_approval') return null;
     const parsed = WriteApprovalRequestPayloadSchema.safeParse(raw);

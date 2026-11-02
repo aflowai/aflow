@@ -61,7 +61,7 @@ function buildJsonSummary(value: unknown): Record<string, unknown> {
     const firstItem: unknown = value[0];
     const keys =
       firstItem !== undefined && typeof firstItem === 'object' && firstItem !== null
-        ? Object.keys(firstItem as Record<string, unknown>)
+        ? Object.keys(firstItem)
         : undefined;
     return {
       _type: 'array',
@@ -71,14 +71,14 @@ function buildJsonSummary(value: unknown): Record<string, unknown> {
     };
   }
   if (value !== null && typeof value === 'object') {
-    const keys = Object.keys(value as Record<string, unknown>);
+    const keys = Object.keys(value);
     const sample: Record<string, unknown> = {};
     for (const key of keys.slice(0, 5)) {
       const v = (value as Record<string, unknown>)[key];
       if (Array.isArray(v)) {
         sample[key] = `[Array(${String(v.length)})]`;
       } else if (v !== null && typeof v === 'object') {
-        sample[key] = `{Object(${String(Object.keys(v as Record<string, unknown>).length)} keys)}`;
+        sample[key] = `{Object(${String(Object.keys(v).length)} keys)}`;
       } else {
         sample[key] = v;
       }

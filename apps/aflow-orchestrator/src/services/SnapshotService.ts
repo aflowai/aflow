@@ -69,7 +69,7 @@ function canonicalStringify(obj: unknown): string {
   return JSON.stringify(obj, (_key, value: unknown) => {
     if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
       const sorted: Record<string, unknown> = {};
-      for (const k of Object.keys(value as Record<string, unknown>).sort()) {
+      for (const k of Object.keys(value).sort()) {
         sorted[k] = (value as Record<string, unknown>)[k];
       }
       return sorted;
@@ -214,7 +214,7 @@ export function createSnapshotService(deps: SnapshotServiceDeps): SnapshotServic
     for (const stepExecId of activeStepIds) {
       const stepState = await getStepState(redis, tenantId, stepExecId);
       if (stepState) {
-        stepHotStates[stepExecId] = stepState as unknown as Record<string, unknown>;
+        stepHotStates[stepExecId] = stepState;
       }
     }
 

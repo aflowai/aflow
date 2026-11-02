@@ -91,7 +91,7 @@ function fixture(personaId: string): GoldenCaseContent['fixture'] {
       },
     ],
     clockAnchor: CLOCK_ANCHOR,
-  } as GoldenCaseContent['fixture'];
+  };
 }
 
 /**
@@ -208,7 +208,7 @@ function judge(
       // buying a verdict on an empty pack.
       reads: reads ?? [{ kind: 'reply' as const }],
     },
-  } as GoldenCaseContent['rubrics'][number];
+  };
 }
 
 /** Every case starts here; a case earns `regression` by holding across batches. */

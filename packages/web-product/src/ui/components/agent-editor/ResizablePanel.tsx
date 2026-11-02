@@ -95,11 +95,11 @@ export function ResizablePanel({
         style={handleStyle}
         onMouseDown={handleMouseDown}
         onMouseEnter={(e) => {
-          (e.currentTarget as HTMLDivElement).style.background = 'var(--color-interactive-default)';
+          e.currentTarget.style.background = 'var(--color-interactive-default)';
         }}
         onMouseLeave={(e) => {
           if (!isDragging.current) {
-            (e.currentTarget as HTMLDivElement).style.background = 'transparent';
+            e.currentTarget.style.background = 'transparent';
           }
         }}
         title="Drag to resize"

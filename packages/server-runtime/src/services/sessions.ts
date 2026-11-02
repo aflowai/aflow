@@ -855,7 +855,7 @@ async function hydrateRequestedInput(
   placement?: string;
 } | null> {
   try {
-    const data = (await store.retrieve(ref as never)) as Record<string, unknown>;
+    const data = (await store.retrieve(ref)) as Record<string, unknown>;
     const result: {
       prompt?: string;
       missingVariables?: RequiredInputInfo['missingVariables'];
@@ -1340,18 +1340,14 @@ function createRealSessionService(ctx: AppContext): SessionService {
 
       const workflowWaiters =
         state.status === 'PAUSED'
-          ? await loadParkedStepWaitersForSession(
-              dbTyped,
-              request.tenantId as string,
-              request.sessionId as string,
-            )
+          ? await loadParkedStepWaitersForSession(dbTyped, request.tenantId, request.sessionId)
           : [];
       const isWorkflowDelegationWait = workflowWaiters.length > 0;
 
       // Idempotent: interrupt already requested — surface current status.
       if (state.interruptRequested) {
         return {
-          status: state.status as SessionStatus,
+          status: state.status,
           message: 'Interrupt already requested',
         };
       }
@@ -1453,7 +1449,7 @@ function createRealSessionService(ctx: AppContext): SessionService {
             sessionId: redisState.sessionId as SessionId,
             target: redisState.target,
             agentVersion: redisState.agentVersion,
-            status: redisState.status as SessionStatus,
+            status: redisState.status,
             createdAt: new Date(redisState.createdAt).toISOString(),
             updatedAt: new Date(redisState.lastUpdatedAt).toISOString(),
             lastActivityAt: new Date(
@@ -1539,7 +1535,7 @@ function createRealSessionService(ctx: AppContext): SessionService {
       if (query.targetAgentId !== undefined) listOptions.targetAgentId = query.targetAgentId;
       if (query.targetSystemRole !== undefined)
         listOptions.targetSystemRole = query.targetSystemRole;
-      if (query.status !== undefined) listOptions.status = query.status as DbSessionStatus;
+      if (query.status !== undefined) listOptions.status = query.status;
       if (query.spaceId !== undefined) listOptions.spaceId = query.spaceId;
       if (query.createdBy !== undefined) listOptions.createdBy = query.createdBy;
       let runs = await runRepo.list(listOptions);
@@ -1766,10 +1762,7 @@ function createRealSessionService(ctx: AppContext): SessionService {
           const outputRef = latestSucceeded?.data?.['outputRef'];
           if (typeof outputRef === 'string') {
             try {
-              const output = (await payloadStore.retrieve(outputRef as never)) as Record<
-                string,
-                unknown
-              >;
+              const output = (await payloadStore.retrieve(outputRef)) as Record<string, unknown>;
               const decision = output?.['decision'] as Record<string, unknown> | undefined;
               if (decision?.['action']) {
                 const calls = decision['calls'] as Array<{ stepId?: string }> | undefined;
@@ -1871,7 +1864,7 @@ function createRealSessionService(ctx: AppContext): SessionService {
         if (childSessionIds.size > 0) {
           delegationTree = [];
           for (const childId of childSessionIds) {
-            const childState = await getSessionStateSafe(redis, tenantId, childId as SessionId);
+            const childState = await getSessionStateSafe(redis, tenantId, childId);
             if (childState.ok) {
               const entry: DelegationTreeEntry = {
                 childSessionId: childId,

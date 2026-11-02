@@ -33,7 +33,7 @@ export async function routeInferredCauseToObservation(
   try {
     const result = await persistObservation({
       db,
-      tenantId: args.context.tenantId as string,
+      tenantId: args.context.tenantId,
       spaceId,
       coachSessionId: args.context.runId,
       workflowSlug: input.targetSlug,

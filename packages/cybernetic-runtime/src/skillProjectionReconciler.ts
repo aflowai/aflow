@@ -897,7 +897,7 @@ export function deriveCapabilityDependencies(workflow: Workflow): SkillCapabilit
   return [...depMap.values()].map((entry) => ({
     ...entry.dep,
     taskIds: [...entry.taskIds],
-  })) as SkillCapabilityDependency[];
+  }));
 }
 
 // ============================================================================

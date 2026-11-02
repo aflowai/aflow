@@ -999,7 +999,6 @@ export const MemoryContextForgetOutputSchema = z.object({
 export type MemoryContextForgetOutput = z.infer<typeof MemoryContextForgetOutputSchema>;
 
 export const MemoryContextListInputSchema = z.object({});
-export type MemoryContextListInput = z.infer<typeof MemoryContextListInputSchema>;
 
 export const MemoryContextListEntrySchema = z.object({
   entryId: z.string().describe('Pass this to memory.context.forget to remove the entry.'),

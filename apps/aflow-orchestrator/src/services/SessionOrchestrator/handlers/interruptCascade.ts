@@ -70,7 +70,7 @@ export async function cascadeInterruptToChildren(
     //    state. A child whose currentStep is PAUSED on user.input.request
     //    will see this flag at its next wake-up.
     try {
-      await writeState(deps.redis, tenantId, childId as SessionId, {
+      await writeState(deps.redis, tenantId, childId, {
         interruptRequested: true,
       });
     } catch (flagErr) {

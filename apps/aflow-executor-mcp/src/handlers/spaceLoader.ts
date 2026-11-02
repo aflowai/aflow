@@ -161,9 +161,9 @@ async function loadSpaceData(
       auth: row['authJson'],
       connectionPolicy: row['connectionPolicyJson'] ?? {},
       subscribeListChanged: row['subscribeListChanged'] === 1,
-      samplingPolicy: (row['samplingPolicy'] as string | undefined) ?? 'off',
-      ownerScope: row['ownerScope'] as string | undefined,
-      clientScope: row['clientScope'] as string | undefined,
+      samplingPolicy: row['samplingPolicy'] ?? 'off',
+      ownerScope: row['ownerScope'],
+      clientScope: row['clientScope'],
       ...(row['pinnedOrigin'] ? { pinnedOrigin: row['pinnedOrigin'] } : {}),
       ...(row['cachedTools'] ? { cachedTools: row['cachedTools'] } : {}),
       ...(row['cachedToolsAt']

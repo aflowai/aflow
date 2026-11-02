@@ -16,7 +16,7 @@ async function readOAuthConsentRequest(
   requestedInputRef: string,
 ): Promise<OAuthConsentRequestPayload | null> {
   try {
-    const raw = await payloadStore.retrieve(requestedInputRef as never);
+    const raw = await payloadStore.retrieve(requestedInputRef);
     if (typeof raw !== 'object' || raw === null) return null;
     if ((raw as Record<string, unknown>)['kind'] !== 'oauth_consent') return null;
     const parsed = OAuthConsentRequestPayloadSchema.safeParse(raw);

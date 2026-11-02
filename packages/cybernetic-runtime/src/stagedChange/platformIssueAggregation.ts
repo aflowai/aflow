@@ -58,7 +58,7 @@ export async function findOpenPlatformIssueForSubject(args: {
     const full = await args.docRepo.getByPath(summary.path, args.spaceId);
     if (!full?.inlineContent) continue;
     const parsed = tryParseStagedChangeDoc(full.inlineContent, {
-      tenantId: args.tenantId as string,
+      tenantId: args.tenantId,
       spaceId: args.spaceId,
       docPath: summary.path,
       reader: 'platformIssueAggregation',

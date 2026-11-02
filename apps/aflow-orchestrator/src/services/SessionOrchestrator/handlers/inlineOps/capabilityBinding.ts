@@ -164,7 +164,7 @@ export async function handleCapabilityBindingInline(args: InlineHandlerArgs): Pr
     const synthesizedEndpoints = synthesizeEndpoints(defParse.data.endpoints);
     const newEndpointIds = synthesizedEndpoints.map((ep) => ep.endpointId);
     const existingGrants = await loadSkillGrantReferencesForApiId(
-      { db, tenantId: tenantId as string, spaceId },
+      { db, tenantId: tenantId, spaceId },
       apiId,
     );
     const validations = runCapabilityBindingProposalValidations(newEndpointIds, existingGrants);

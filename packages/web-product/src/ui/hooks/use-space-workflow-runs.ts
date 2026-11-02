@@ -94,7 +94,7 @@ export function useSpaceWorkflowRuns(
     runs: query.data?.runs ?? [],
     counts: query.data?.counts ?? { running: 0, paused: 0 },
     isLoading: query.isLoading,
-    error: query.error as Error | null,
+    error: query.error,
     refetch: () => void query.refetch(),
   };
 }

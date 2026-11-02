@@ -116,7 +116,7 @@ export async function applyReplaceOutputResolution(
   const schemaProps = expectedSchema['properties'];
   const allowedKeys =
     schemaProps && typeof schemaProps === 'object' && !Array.isArray(schemaProps)
-      ? new Set(Object.keys(schemaProps as Record<string, unknown>))
+      ? new Set(Object.keys(schemaProps))
       : null;
   const filteredExisting: Record<string, unknown> = {};
   if (allowedKeys) {

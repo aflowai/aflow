@@ -1,4 +1,4 @@
-import type { ReactNode, HTMLAttributes, CSSProperties } from 'react';
+import type { ReactNode, HTMLAttributes } from 'react';
 import { AnimatedHeight } from './AnimatedHeight.js';
 
 // =============================================================================
@@ -49,7 +49,7 @@ export function Timeline({
     .filter(Boolean)
     .join(' ');
   const mergedStyle = hasProgress
-    ? ({ ...style, ['--ds-timeline-progress' as string]: String(clamped) } as CSSProperties)
+    ? { ...style, ['--ds-timeline-progress' as string]: String(clamped) }
     : style;
   return (
     <div className={rootClass} style={mergedStyle} {...props}>

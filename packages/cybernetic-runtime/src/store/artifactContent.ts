@@ -70,7 +70,7 @@ export function skillBundleContentDoc(rawBundle: unknown): Record<string, unknow
   bundle.workflow.tasks = materializedTasks;
   const doc = buildSkillWorkflowDoc(bundle, HASH_IDENTITY);
   const parsed = WorkflowSchema.safeParse(doc);
-  return skillDocContent(parsed.success ? (parsed.data as Record<string, unknown>) : doc);
+  return skillDocContent(parsed.success ? parsed.data : doc);
 }
 
 export function skillBundleContentHash(rawBundle: unknown): string {

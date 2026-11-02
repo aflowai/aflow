@@ -249,10 +249,7 @@ export function useIntegrations(spaceId: string) {
         // a generic failure, so the operator learns which repos still depend on it.
         const data: unknown = await res.json().catch(() => null);
         const message =
-          data &&
-          typeof data === 'object' &&
-          'error' in data &&
-          typeof (data as { error: unknown }).error === 'string'
+          data && typeof data === 'object' && 'error' in data && typeof data.error === 'string'
             ? (data as { error: string }).error
             : 'Failed to delete definition';
         throw new Error(message);
@@ -276,10 +273,7 @@ export function useIntegrations(spaceId: string) {
         // operator learns which repos still resolve through this connection.
         const data: unknown = await res.json().catch(() => null);
         const message =
-          data &&
-          typeof data === 'object' &&
-          'error' in data &&
-          typeof (data as { error: unknown }).error === 'string'
+          data && typeof data === 'object' && 'error' in data && typeof data.error === 'string'
             ? (data as { error: string }).error
             : 'Failed to delete binding';
         throw new Error(message);

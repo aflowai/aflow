@@ -1,4 +1,3 @@
-import type { OperationId } from '@aflow/schemas';
 import { getOrchestratorLogger } from '../../../../lib/orchestratorLogger.js';
 import {
   getOperationCatalog,
@@ -101,7 +100,7 @@ export async function handleCatalogExportInline(args: InlineHandlerArgs): Promis
       parentStepExecutionId: parentStepExecutionId ?? null,
       stepId: stepDef.stepId,
       stepType: stepDef.stepType,
-      operationId: operationId as OperationId,
+      operationId: operationId,
       attempt,
       idempotencyKey,
       status: 'SUCCEEDED',
@@ -133,7 +132,7 @@ export async function handleCatalogExportInline(args: InlineHandlerArgs): Promis
       parentStepExecutionId: parentStepExecutionId ?? null,
       stepId: stepDef.stepId,
       stepType: stepDef.stepType,
-      operationId: operationId as OperationId,
+      operationId: operationId,
       attempt,
       idempotencyKey,
       status: 'FAILED',

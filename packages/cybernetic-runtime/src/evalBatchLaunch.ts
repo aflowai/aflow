@@ -268,7 +268,7 @@ export async function launchEvalBatch(params: {
       slug,
       revision: workflow.revision,
       spaceId,
-      workflow: workflow as unknown as Record<string, unknown>,
+      workflow: workflow,
       actor: 'system:eval-batch-launch',
       onDrift: workflow.origin === 'platform' ? 'overwrite' : 'throw',
     });
@@ -285,7 +285,7 @@ export async function launchEvalBatch(params: {
     throw err;
   }
 
-  const skill = await resolveSkillForWorkflow({ db, tenantId: tenantId as string, spaceId }, slug);
+  const skill = await resolveSkillForWorkflow({ db, tenantId: tenantId, spaceId }, slug);
   const totalTrials = bundle.cases.length * trialsPerCase;
   const maxConcurrentTrials = resolveBatchDispatchCap(
     skill?.manifest.concurrency?.maxConcurrentRuns,
@@ -293,7 +293,7 @@ export async function launchEvalBatch(params: {
     bundle.cases.some((c) => c.case.fixture.tier === 'live'),
   );
 
-  const directives = await loadSpaceDirectives(db, tenantId as string, spaceId);
+  const directives = await loadSpaceDirectives(db, tenantId, spaceId);
   // A task delegating to a custom agent is measured on THAT agent's model, and
   // it is only discoverable through the agent's own definition.
   // The judge resolves at SPACE scope — grading carries no credential owner —
@@ -340,7 +340,7 @@ export async function launchEvalBatch(params: {
   );
   const apiContractHash = await resolveApiContractHash(db, tenantId, spaceId, boundApiIds);
   const agentTaskModels = agentTaskModelsFrom(resolvedAgentTasks);
-  const productionSuite = await loadEvalSuite(db, tenantId as string, spaceId, slug);
+  const productionSuite = await loadEvalSuite(db, tenantId, spaceId, slug);
   const provenanceManifest: EvalBatchProvenanceManifest = EvalBatchProvenanceManifestSchema.parse({
     workflow: {
       slug,

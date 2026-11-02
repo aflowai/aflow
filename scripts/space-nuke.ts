@@ -292,7 +292,7 @@ async function main(): Promise<void> {
         // postgres-js types the tx handle as `TransactionSql` (its `Omit`
         // drops the call signatures); it's callable at runtime, so re-type
         // as `Sql` for the cascade's tagged-template SQL.
-        return cascadeDeleteSpace(tx as unknown as postgres.Sql, schemaName, t.id);
+        return cascadeDeleteSpace(tx, schemaName, t.id);
       })) as Record<string, number>;
       const elapsed = Date.now() - start;
       const subtotal: number = Object.values(counts).reduce((a, b) => a + b, 0);

@@ -20,7 +20,7 @@ import { flowToNodes, flowToEdges, type AgentDefinition } from '../../lib/flow-t
 import { getStepIssues, type ValidationResult } from '../../lib/flow-validation.js';
 
 const nodeTypes: NodeTypes = {
-  stepNode: StepNode as unknown as NodeTypes['stepNode'],
+  stepNode: StepNode,
 };
 
 interface FlowCanvasProps {

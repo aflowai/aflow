@@ -1,5 +1,3 @@
-import type { SkillBundleId } from '@aflow/schemas';
-
 import type { AuthoredSkillBundle } from '../skillBundleCatalog.js';
 
 /**
@@ -9,7 +7,7 @@ import type { AuthoredSkillBundle } from '../skillBundleCatalog.js';
  * here would be a second way to reach the same route.
  */
 export const FILM_SHOT_BATCH: AuthoredSkillBundle = {
-  bundleId: 'film-production' as SkillBundleId,
+  bundleId: 'film-production',
   revision: -4,
   name: 'Film Production',
   tagline:

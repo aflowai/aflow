@@ -840,7 +840,7 @@ export const spaceCrudRoutes: FastifyPluginAsync = async (fastify) => {
                   renamedBy: request.authUser?.userId ?? null,
                 });
               }
-              return { kind: 'rows', rows: rows as Array<Record<string, unknown>> };
+              return { kind: 'rows', rows: rows };
             } catch (err) {
               const message = databaseErrorText(err);
               if (

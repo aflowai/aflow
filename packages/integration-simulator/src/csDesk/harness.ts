@@ -111,7 +111,7 @@ export async function callDesk(
     if (!declared)
       throw new Error(`${call.endpointId} wrote to undeclared "${mutation.collection}"`);
     if (mutation.op === 'delete') continue;
-    const compiledRow = compileSchema(declared.schema as Record<string, unknown>);
+    const compiledRow = compileSchema(declared.schema);
     if (!compiledRow.ok) throw new Error(compiledRow.detail);
     if (!compiledRow.validate(mutation.body)) {
       throw new Error(

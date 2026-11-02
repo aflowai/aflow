@@ -1,7 +1,5 @@
 import {
-  type StepId,
   type IdempotencyKey,
-  type StepResultMessage,
   type RunAccessGrant,
   type AflowError,
   errorContext,
@@ -109,7 +107,7 @@ export function createStartRun(bindings: SessionOrchestratorBindings) {
       }
     }
 
-    const startStepId = agentDef.startStepId as StepId;
+    const startStepId = agentDef.startStepId;
     const stepDef = getStepDefinition(agentDef, startStepId);
     const idempotencyKey = `${runId}:${stepExecutionId}:1` as IdempotencyKey;
 
@@ -566,7 +564,7 @@ export function createStartRun(bindings: SessionOrchestratorBindings) {
     }
 
     await relayWorkflowTaskActivity(
-      params.tenantId as string,
+      params.tenantId,
       runId,
       stepDef.operation,
       stepDef.name ?? startStepId,
@@ -703,7 +701,7 @@ export function createStartRun(bindings: SessionOrchestratorBindings) {
             error: errorPayload,
             traceId: params.traceId,
             finishedAtMs: Date.now(),
-          } as StepResultMessage,
+          },
           messageId: `synthetic:enqueue-failed:${stepExecutionId}`,
         });
         return { runId, status: 'FAILED' as SessionStatus };

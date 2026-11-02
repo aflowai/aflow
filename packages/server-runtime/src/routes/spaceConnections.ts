@@ -60,23 +60,10 @@ function describeTools(
   return rows;
 }
 
-interface ApiBindingRowLite {
-  bindingId: string;
-  apiId: string;
-  name: string;
-  enabled: number;
-}
 interface ApiDefinitionRowLite {
   apiId: string;
   name: string;
   definitionJson: unknown;
-  enabled: number;
-}
-interface McpBindingRowLite {
-  bindingId: string;
-  serverId: string;
-  name: string;
-  cachedTools: unknown;
   enabled: number;
 }
 interface McpDefinitionRowLite {
@@ -134,7 +121,7 @@ export async function loadSpaceConnections(
     db,
     tenantCtx,
     async (tx) => ({
-      apiBindingRows: (await tx
+      apiBindingRows: await tx
         .select({
           bindingId: apiBindings.bindingId,
           apiId: apiBindings.apiId,
@@ -142,8 +129,8 @@ export async function loadSpaceConnections(
           enabled: apiBindings.enabled,
         })
         .from(apiBindings)
-        .where(eq(apiBindings.spaceId, spaceId))) as ApiBindingRowLite[],
-      apiDefRows: (await tx
+        .where(eq(apiBindings.spaceId, spaceId)),
+      apiDefRows: await tx
         .select({
           apiId: apiDefinitions.apiId,
           name: apiDefinitions.name,
@@ -151,8 +138,8 @@ export async function loadSpaceConnections(
           enabled: apiDefinitions.enabled,
         })
         .from(apiDefinitions)
-        .where(eq(apiDefinitions.spaceId, spaceId))) as ApiDefinitionRowLite[],
-      mcpBindingRows: (await tx
+        .where(eq(apiDefinitions.spaceId, spaceId)),
+      mcpBindingRows: await tx
         .select({
           bindingId: mcpServerBindings.bindingId,
           serverId: mcpServerBindings.serverId,
@@ -161,8 +148,8 @@ export async function loadSpaceConnections(
           enabled: mcpServerBindings.enabled,
         })
         .from(mcpServerBindings)
-        .where(eq(mcpServerBindings.spaceId, spaceId))) as McpBindingRowLite[],
-      mcpDefRows: (await tx
+        .where(eq(mcpServerBindings.spaceId, spaceId)),
+      mcpDefRows: await tx
         .select({
           serverId: mcpServerDefinitions.serverId,
           name: mcpServerDefinitions.name,
@@ -170,7 +157,7 @@ export async function loadSpaceConnections(
           enabled: mcpServerDefinitions.enabled,
         })
         .from(mcpServerDefinitions)
-        .where(eq(mcpServerDefinitions.spaceId, spaceId))) as McpDefinitionRowLite[],
+        .where(eq(mcpServerDefinitions.spaceId, spaceId)),
     }),
   );
 

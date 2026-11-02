@@ -169,7 +169,7 @@ export async function computeGraduationCandidates(
   spaceId: string,
   workflowSlug: string,
 ): Promise<EvalGraduationCandidate[]> {
-  const directives = await loadSpaceDirectives(db, tenantId as string, spaceId);
+  const directives = await loadSpaceDirectives(db, tenantId, spaceId);
   const graduationConsecutiveBatches = resolveGraduationConsecutiveBatches(
     directives?.learningPolicy,
   );

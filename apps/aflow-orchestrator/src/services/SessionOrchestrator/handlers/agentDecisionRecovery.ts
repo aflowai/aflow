@@ -61,10 +61,7 @@ function isInteractiveAgent(
   agentRoleOverride: 'assistant' | 'subagent' | undefined,
   trigger: string | undefined,
 ): boolean {
-  const policies = resolveAgentPoliciesFromConfig(
-    stepDef.config as Record<string, unknown> | undefined,
-    { agentRoleOverride, trigger },
-  );
+  const policies = resolveAgentPoliciesFromConfig(stepDef.config, { agentRoleOverride, trigger });
   return policies.agentRole === 'assistant' && policies.requestInputPolicy !== 'never';
 }
 
@@ -188,7 +185,7 @@ export async function recoverInvalidAgentDecision(
     version: newRetryCount,
   });
 
-  await updateSessionState(redis, result.tenantId as TenantId, result.sessionId as SessionId, {
+  await updateSessionState(redis, result.tenantId, result.sessionId, {
     runtimeState: {
       ...currentRuntimeState,
       variables: vars,

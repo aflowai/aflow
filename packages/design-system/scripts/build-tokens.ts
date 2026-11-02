@@ -365,12 +365,12 @@ function generateTS(tokens: Tokens): string {
   for (const category of colorCategories) {
     const vals = tokens.color.light[category as keyof ColorTheme];
     if (category === 'status') {
-      for (const statusName of Object.keys(vals as Record<string, StatusTokens>)) {
+      for (const statusName of Object.keys(vals)) {
         lines.push(`  | "status.${statusName}.fg"`);
         lines.push(`  | "status.${statusName}.bg"`);
       }
     } else {
-      for (const subKey of Object.keys(vals as Record<string, string>)) {
+      for (const subKey of Object.keys(vals)) {
         lines.push(`  | "${category}.${subKey}"`);
       }
     }

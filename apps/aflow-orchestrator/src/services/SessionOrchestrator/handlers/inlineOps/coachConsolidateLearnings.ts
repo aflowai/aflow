@@ -14,7 +14,7 @@ export async function handleConsolidateLearnings(
   const db = getDatabase();
   const { consolidateCoachLearnings } = await import('@aflow/cybernetic-runtime');
 
-  const applied = await consolidateCoachLearnings(db, args.context.tenantId as string, {
+  const applied = await consolidateCoachLearnings(db, args.context.tenantId, {
     spaceId,
     resolvedBy: args.context.runId,
     actions: input.actions,

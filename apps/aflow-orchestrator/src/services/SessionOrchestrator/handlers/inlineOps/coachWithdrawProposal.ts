@@ -141,7 +141,7 @@ export async function handleWithdrawProposal(
     docRepo,
     dirRepo,
     `${docDir}/${sc.id}.json`,
-    updated as unknown as Record<string, unknown>,
+    updated,
     'json',
     spaceId,
     'overwrite',
@@ -189,12 +189,10 @@ async function proposedInCallersConversation(
   const sessionId = args.context.runId as string;
   if (sc.coachSessionId === sessionId) return 'own';
   try {
-    const lookup = await loadConversationLookup(
-      getDatabase(),
-      args.context.tenantId as string,
-      spaceId,
-      [...proposalAuthorIds(sc), sessionId],
-    );
+    const lookup = await loadConversationLookup(getDatabase(), args.context.tenantId, spaceId, [
+      ...proposalAuthorIds(sc),
+      sessionId,
+    ]);
     return isProposalOfConversation(sc, sessionId, lookup) ? 'own' : 'other';
   } catch (err) {
     logOrchestratorError(

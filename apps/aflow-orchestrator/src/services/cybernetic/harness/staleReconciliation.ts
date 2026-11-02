@@ -18,7 +18,7 @@ import {
   loadWorkflowTaskByWorkerSession,
 } from '@aflow/cybernetic-runtime';
 import type { TenantId } from '@aflow/schemas';
-import type { SessionId, StepExecutionId } from '@aflow/schemas';
+import type { StepExecutionId } from '@aflow/schemas';
 import { getOrchestratorLogger, logOrchestratorError } from '../../../lib/orchestratorLogger.js';
 import { dispatchNextOrTerminate } from './dispatch.js';
 import { recordTaskOutcome } from './dispatchRecord.js';
@@ -213,11 +213,7 @@ export async function reconcileStaleRunForTenant(
         continue;
       }
 
-      const sessionState = await getSessionState(
-        deps.redis,
-        tenantId,
-        row.workerSessionId as SessionId,
-      );
+      const sessionState = await getSessionState(deps.redis, tenantId, row.workerSessionId);
 
       // Branch 1: hot state missing — orphan rescue.
       if (!sessionState) {

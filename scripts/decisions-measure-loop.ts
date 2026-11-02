@@ -369,7 +369,7 @@ async function collect(): Promise<void> {
 
 function withoutBar(question: DecisionQuestion): DecisionQuestion {
   const { minConfidence: _bar, ...rest } = question;
-  return rest as DecisionQuestion;
+  return rest;
 }
 
 function stateOf(c: Case): unknown {

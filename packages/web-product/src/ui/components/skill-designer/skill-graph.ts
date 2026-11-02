@@ -486,7 +486,7 @@ function applyBranchFans(
       record.edge.label = conditionEdgeLabel(record.task, compacted);
     }
     const node = nodes.find((n) => n.id === source);
-    if (node && node.data.nodeKind === 'task') {
+    if (node?.data.nodeKind === 'task') {
       node.data.branchSubjects = fanSubjects.map((s) => s.replace(/^output\./, ''));
     }
   }

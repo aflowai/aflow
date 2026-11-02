@@ -35,7 +35,7 @@ export async function getPreferredSpaceSlug(): Promise<string | null> {
   const raw = store.get(cookieNameIn(store))?.value ?? store.get(PREFERRED_SPACE_COOKIE)?.value;
   if (!raw) return null;
   const parsed = SpaceSlugSchema.safeParse(raw);
-  return parsed.success ? (parsed.data as string) : null;
+  return parsed.success ? parsed.data : null;
 }
 
 /**

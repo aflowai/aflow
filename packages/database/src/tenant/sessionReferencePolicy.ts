@@ -220,7 +220,7 @@ const SESSION_COLUMN_PATTERN = /(session|run)_id|_session$/;
  * introspecting the drizzle tables rather than mirroring a hand-written list.
  */
 export function deriveSessionReferenceColumns(
-  tables: Record<string, unknown> = tenantSchema as unknown as Record<string, unknown>,
+  tables: Record<string, unknown> = tenantSchema,
 ): DerivedSessionColumn[] {
   const found: DerivedSessionColumn[] = [];
   for (const value of Object.values(tables)) {
@@ -243,7 +243,7 @@ export function deriveSessionReferenceColumns(
  * a hand-written list.
  */
 export function derivePayloadRefColumns(
-  tables: Record<string, unknown> = tenantSchema as unknown as Record<string, unknown>,
+  tables: Record<string, unknown> = tenantSchema,
 ): DerivedSessionColumn[] {
   const found: DerivedSessionColumn[] = [];
   for (const value of Object.values(tables)) {

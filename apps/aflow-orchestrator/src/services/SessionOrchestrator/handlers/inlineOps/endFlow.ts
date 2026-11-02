@@ -1,12 +1,6 @@
 import type { Redis } from 'ioredis';
 import { getOrchestratorLogger } from '../../../../lib/orchestratorLogger.js';
-import type {
-  StepExecutionId,
-  OperationId,
-  StepType,
-  StepDefinition,
-  IdempotencyKey,
-} from '@aflow/schemas';
+import type { StepExecutionId, OperationId, StepDefinition, IdempotencyKey } from '@aflow/schemas';
 import { addStepResult } from '@aflow/redis';
 import type { PayloadStore } from '@aflow/payload-store';
 import { encodeInlineOpOutputRef } from './helpers.js';
@@ -70,7 +64,7 @@ export async function handleEndFlowInline(
       stepExecutionId,
       parentStepExecutionId: parentStepExecutionId ?? null,
       stepId: stepDef.stepId,
-      stepType: 'agent' as StepType,
+      stepType: 'agent',
       operationId: 'agent.control.end' as OperationId,
       attempt,
       idempotencyKey,
@@ -100,7 +94,7 @@ export async function handleEndFlowInline(
       stepExecutionId,
       parentStepExecutionId: parentStepExecutionId ?? null,
       stepId: stepDef.stepId,
-      stepType: 'agent' as StepType,
+      stepType: 'agent',
       operationId: 'agent.control.end' as OperationId,
       attempt,
       idempotencyKey,

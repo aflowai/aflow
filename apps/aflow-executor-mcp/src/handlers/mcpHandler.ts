@@ -583,7 +583,7 @@ export class McpHandler implements StepHandler {
       const tools = (result.tools ?? []).map((t) => ({
         name: t.name,
         ...(t.description ? { description: t.description } : {}),
-        ...(t.inputSchema ? { inputSchema: t.inputSchema as Record<string, unknown> } : {}),
+        ...(t.inputSchema ? { inputSchema: t.inputSchema } : {}),
       }));
       return await successWithData(ctx, { tools });
     } catch (err) {
@@ -732,7 +732,7 @@ export class McpHandler implements StepHandler {
       tools = (result.tools ?? []).map((t) => ({
         name: t.name,
         ...(t.description ? { description: t.description } : {}),
-        ...(t.inputSchema ? { inputSchema: t.inputSchema as Record<string, unknown> } : {}),
+        ...(t.inputSchema ? { inputSchema: t.inputSchema } : {}),
       }));
     } catch (err) {
       await this.pool.remove(key);
@@ -1177,11 +1177,9 @@ export class McpHandler implements StepHandler {
     });
     const client = new Client(
       { name: 'phoenix-mcp-executor', version: '1.0.0' },
-      Object.keys(clientCapabilities).length > 0
-        ? ({ capabilities: clientCapabilities } as ConstructorParameters<typeof Client>[1])
-        : undefined,
+      Object.keys(clientCapabilities).length > 0 ? { capabilities: clientCapabilities } : undefined,
     );
-    await client.connect(transport as Parameters<Client['connect']>[0]);
+    await client.connect(transport);
 
     const serverInfo = client.getServerVersion();
     const capabilities = client.getServerCapabilities();
@@ -1190,8 +1188,8 @@ export class McpHandler implements StepHandler {
       client,
       transport,
       lastUsedMs: Date.now(),
-      ...(serverInfo ? { serverInfo: serverInfo as unknown as Record<string, unknown> } : {}),
-      ...(capabilities ? { capabilities: capabilities as unknown as Record<string, unknown> } : {}),
+      ...(serverInfo ? { serverInfo: serverInfo } : {}),
+      ...(capabilities ? { capabilities: capabilities } : {}),
     };
 
     if (this.deps.redis && this.deps.redisSubscriber && this.deps.executorInstanceId) {
@@ -1245,7 +1243,7 @@ export class McpHandler implements StepHandler {
       if (params.mode === 'url') {
         normalized['url'] = params.url;
       } else {
-        normalized['requestedSchema'] = params.requestedSchema as Record<string, unknown>;
+        normalized['requestedSchema'] = params.requestedSchema;
       }
       const parsed = McpElicitationRequestSchema.safeParse(normalized);
       if (!parsed.success) {
@@ -1356,7 +1354,7 @@ export class McpHandler implements StepHandler {
         const tools = (result.tools ?? []).map((t) => ({
           name: t.name,
           ...(t.description ? { description: t.description } : {}),
-          ...(t.inputSchema ? { inputSchema: t.inputSchema as Record<string, unknown> } : {}),
+          ...(t.inputSchema ? { inputSchema: t.inputSchema } : {}),
         }));
         const cachedToolsAt = new Date().toISOString();
         const sessionMetadata: McpSessionMetadata = {

@@ -61,14 +61,14 @@ export async function handlePlanNodeNext(
   if (!input) return;
   const reads = createPlanStreamReads(
     { db: getDatabase(), payloadStore: args.payloadStore },
-    args.context.tenantId as string,
+    args.context.tenantId,
   );
   const ctx: PlanStreamContext = {
     ...planReadContext(args),
     reads,
     redis: args.redis,
-    tenantId: args.context.tenantId as string,
-    holder: args.context.runId as string,
+    tenantId: args.context.tenantId,
+    holder: args.context.runId,
   };
   const result =
     input.rootNodeId !== undefined
@@ -79,5 +79,5 @@ export async function handlePlanNodeNext(
     return;
   }
   if (input.rootNodeId === undefined) await renewWakeSchedule(args, ctx.spaceId);
-  await emitStepSuccess(args, result.output as unknown as Record<string, unknown>, startTime);
+  await emitStepSuccess(args, result.output, startTime);
 }

@@ -90,7 +90,7 @@ function convertContextPatch(
       op: 'update_task_context_spec',
       taskId,
       contextSpec: parse.data,
-    } as StagedChangeOp;
+    };
   }
 
   if (op.op !== 'add' && op.op !== 'replace' && op.op !== 'remove') {
@@ -120,7 +120,7 @@ function convertContextPatch(
       op: 'update_task_context_spec',
       taskId,
       contextSpec: parse.data,
-    } as StagedChangeOp;
+    };
   } catch (err) {
     const detail =
       err instanceof JsonPatchError
@@ -171,7 +171,7 @@ function convertRoutesPatch(
         unsupported: `${op.op} ${op.path} would leave task "${taskId}" with invalid routes: ${parse.error.message}`,
       };
     }
-    return { op: 'update_task_routes', taskId, routes: parse.data } as StagedChangeOp;
+    return { op: 'update_task_routes', taskId, routes: parse.data };
   } catch (err) {
     const detail =
       err instanceof JsonPatchError
@@ -231,7 +231,7 @@ function convertTaskPatch(
         unsupported: `${op.op} ${op.path} changes task "${taskId}"'s inputBindings, and the assembler cannot derive its inputContract from them: ${rederived.unsupported} The composed task's contract must be recomposed, so recompose the skill to make this change.`,
       };
     }
-    return { op: 'replace_task', taskId, task: rederived.task } as StagedChangeOp;
+    return { op: 'replace_task', taskId, task: rederived.task };
   } catch (err) {
     const detail =
       err instanceof JsonPatchError
@@ -404,7 +404,7 @@ function convertOne(
       ...(value.stopOnOutcomesMet !== undefined
         ? { stopOnOutcomesMet: value.stopOnOutcomesMet }
         : {}),
-    } as StagedChangeOp;
+    };
   }
 
   if (segments[0] === 'stateVariables' || segments[0] === 'output') {
@@ -421,7 +421,7 @@ function convertOne(
           unsupported: `add /tasks/- requires a complete task body; the value did not pass WorkflowTaskSchema: ${parse.error.message}`,
         };
       }
-      return { op: 'add_task', task: parse.data } as StagedChangeOp;
+      return { op: 'add_task', task: parse.data };
     }
 
     // /tasks/{i}/... — indexed task ops.
@@ -440,7 +440,7 @@ function convertOne(
 
     // remove /tasks/{i}
     if (op.op === 'remove' && segments.length === 2) {
-      return { op: 'remove_task', taskId } as StagedChangeOp;
+      return { op: 'remove_task', taskId };
     }
 
     // replace /tasks/{i}/goal
@@ -450,7 +450,7 @@ function convertOne(
           unsupported: `replace ${op.path} requires a string value (the new goal).`,
         };
       }
-      return { op: 'update_task_goal', taskId, newGoal: op.value } as StagedChangeOp;
+      return { op: 'update_task_goal', taskId, newGoal: op.value };
     }
 
     // add/replace /tasks/{i}/context or nested add/replace/remove under it.
@@ -516,7 +516,7 @@ function convertOne(
       op: 'update_outcome_threshold',
       outcomeId,
       newTarget: op.value,
-    } as StagedChangeOp;
+    };
   }
 
   return {
@@ -576,14 +576,14 @@ function convertManifestOne(
         unsupported: `${op.op} ${op.path} requires a valid SkillGoal: ${parsed.error.message}`,
       };
     }
-    return { op: 'update_goal', goal: parsed.data } as StagedChangeOp;
+    return { op: 'update_goal', goal: parsed.data };
   }
 
   // -- /campaign/fields/{key} (whole field add/update/remove, or nested) --
   if (segments[0] === 'campaign' && segments[1] === 'fields' && segments.length >= 3) {
     const fieldKey = segments[2]!;
     if (op.op === 'remove' && segments.length === 3) {
-      return { op: 'campaign.field.remove', fieldKey } as StagedChangeOp;
+      return { op: 'campaign.field.remove', fieldKey };
     }
     const existingField = shadow.campaign?.fields[fieldKey];
     let nextFieldRaw: unknown;
@@ -604,8 +604,8 @@ function convertManifestOne(
     // nested edit of an existing field) it is an update.
     const isAdd = op.op === 'add' && segments.length === 3 && existingField === undefined;
     return isAdd
-      ? ({ op: 'campaign.field.add', fieldKey, field: parsed.data } as StagedChangeOp)
-      : ({ op: 'campaign.field.update', fieldKey, field: parsed.data } as StagedChangeOp);
+      ? { op: 'campaign.field.add', fieldKey, field: parsed.data }
+      : { op: 'campaign.field.update', fieldKey, field: parsed.data };
   }
 
   return {

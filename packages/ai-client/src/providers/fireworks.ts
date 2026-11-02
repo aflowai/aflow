@@ -184,7 +184,7 @@ function applyFireworksReasoningExtras<
   if (Object.keys(extras).length === 0) {
     return params;
   }
-  return { ...params, ...extras } as T;
+  return { ...params, ...extras };
 }
 
 /**

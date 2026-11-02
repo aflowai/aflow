@@ -91,9 +91,7 @@ export function buildAggregator(opts: BuildAggregatorOptions): ActionCenterAggre
           resolverUserId: ctx.actorUserId,
           resolutionKind: resolution.kind,
           ...(latencyMs !== null ? { latencyMs } : {}),
-          ...(item.gateContext
-            ? { gateContext: item.gateContext as unknown as Record<string, unknown> }
-            : {}),
+          ...(item.gateContext ? { gateContext: item.gateContext } : {}),
         });
       });
     } catch (err) {

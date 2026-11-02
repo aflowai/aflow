@@ -1,5 +1,3 @@
-import type { SkillBundleId } from '@aflow/schemas';
-
 import type { AuthoredSkillBundle } from '../skillBundleCatalog.js';
 import { ARXIV_CONNECTOR } from '../connectorCatalog/arxiv.js';
 import { SEMANTIC_SCHOLAR_CONNECTOR } from '../connectorCatalog/semanticscholar.js';
@@ -10,7 +8,7 @@ import { LITERATURE_SCAN_CARD_SEED } from './literatureScanArtifactSeed.js';
 const SEMANTIC_SCHOLAR_KEY_CREDENTIAL = 'semantic-scholar-api-key';
 
 export const LITERATURE_SCAN: AuthoredSkillBundle = {
-  bundleId: 'literature-scan' as SkillBundleId,
+  bundleId: 'literature-scan',
   revision: 2,
   name: 'Literature Scan',
   tagline:

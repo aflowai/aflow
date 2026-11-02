@@ -118,7 +118,7 @@ export async function handleWorkflowPatch(
 
   const campaign = touchesDef
     ? await resolveCampaignManifestParams(
-        { db: getDatabase(), tenantId: args.context.tenantId as string, spaceId },
+        { db: getDatabase(), tenantId: args.context.tenantId, spaceId },
         slug,
       )
     : undefined;
@@ -189,7 +189,7 @@ export async function handleWorkflowPatch(
       docRepo,
       dirRepo,
       workflowDocPath(slug),
-      updated as unknown as Record<string, unknown>,
+      updated,
       'json',
       spaceId,
       'overwrite',
@@ -199,12 +199,9 @@ export async function handleWorkflowPatch(
     let activeRunWarning: string | undefined;
     {
       const dbMetadata = getDatabase();
-      const activeRuns = await listActiveRuns(
-        dbMetadata,
-        args.context.tenantId as string,
-        spaceId,
-        { limit: 1 },
-      );
+      const activeRuns = await listActiveRuns(dbMetadata, args.context.tenantId, spaceId, {
+        limit: 1,
+      });
       if (activeRuns.length > 0) {
         const activeRun = activeRuns[0]!;
         activeRunWarning =
@@ -255,7 +252,7 @@ export async function handleWorkflowPatch(
   let manifest: SkillManifest | null = null;
   if (manifestRfcOps.length > 0) {
     const skill = await resolveSkillForWorkflow(
-      { db: getDatabase(), tenantId: args.context.tenantId as string, spaceId },
+      { db: getDatabase(), tenantId: args.context.tenantId, spaceId },
       slug,
     );
     manifest = skill?.manifest ?? null;
@@ -311,7 +308,7 @@ export async function handleWorkflowPatch(
   const db = getDatabase();
   const snapshot = await loadProposalValidationSnapshot({
     db,
-    tenantId: args.context.tenantId as string,
+    tenantId: args.context.tenantId,
     spaceId,
   });
   const validations = runWorkflowProposalValidations(validatedPatched, snapshot, campaign);
@@ -320,7 +317,7 @@ export async function handleWorkflowPatch(
   // reason stays the agent's own words.
   let activeRunWarning: string | undefined;
   {
-    const activeRuns = await listActiveRuns(db, args.context.tenantId as string, spaceId, {
+    const activeRuns = await listActiveRuns(db, args.context.tenantId, spaceId, {
       limit: 1,
     });
     if (activeRuns.length > 0) {
@@ -404,7 +401,7 @@ export async function handleWorkflowPatch(
     docRepo,
     dirRepo,
     `${proposalDir}/${proposalId}.json`,
-    stagedChange as unknown as Record<string, unknown>,
+    stagedChange,
     'json',
     spaceId,
     'create',

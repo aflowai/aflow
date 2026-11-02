@@ -370,7 +370,7 @@ export async function applySkillComposeBundle(
   const workflowDoc = buildSkillWorkflowDoc(bundle, {
     id: crypto.randomUUID(),
     status: 'approved',
-    origin: (opts?.origin ?? 'operator') as string,
+    origin: opts?.origin ?? 'operator',
     revision: 1,
     createdAt: now,
     updatedAt: now,

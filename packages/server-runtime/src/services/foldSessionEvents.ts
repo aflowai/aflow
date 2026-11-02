@@ -1,10 +1,5 @@
 import type { ApiSessionEvent } from '@aflow/schemas';
-import {
-  runViewReducer,
-  initialRunViewState,
-  type RunViewState,
-  type SessionEvent as ReducerSessionEvent,
-} from '@aflow/run-view';
+import { runViewReducer, initialRunViewState, type RunViewState } from '@aflow/run-view';
 
 export interface SnapshotFoldResult {
   /** Materialized RunViewState after folding all events. */
@@ -29,14 +24,14 @@ export function foldEventsToSnapshot(
   for (const event of durableEvents) {
     state = runViewReducer(state, {
       type: 'SSE_EVENT',
-      event: event as ReducerSessionEvent,
+      event: event,
     });
   }
 
   for (const event of catchupEvents) {
     state = runViewReducer(state, {
       type: 'SSE_EVENT',
-      event: event as ReducerSessionEvent,
+      event: event,
     });
   }
 

@@ -350,7 +350,7 @@ export function ProducesEditor({
   );
 
   const setProduces = (next: typeof declared) => {
-    actions.patchTask(task.taskId, { produces: next as WorkflowTask['produces'] });
+    actions.patchTask(task.taskId, { produces: next });
   };
   const declarePort = (key: string, semantics: string) => {
     setProduces([

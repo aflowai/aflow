@@ -1,12 +1,6 @@
 import type { Redis } from 'ioredis';
 import { getOrchestratorLogger } from '../../../../lib/orchestratorLogger.js';
-import type {
-  StepExecutionId,
-  StepType,
-  OperationId,
-  StepDefinition,
-  IdempotencyKey,
-} from '@aflow/schemas';
+import type { StepExecutionId, OperationId, StepDefinition, IdempotencyKey } from '@aflow/schemas';
 import { buildDefinitionSchemaBundle, isDefinitionType } from '@aflow/schemas';
 import { addStepResult } from '@aflow/redis';
 import type { PayloadStore } from '@aflow/payload-store';
@@ -62,7 +56,7 @@ export async function handleGetDefinitionSchemaInline(
         stepExecutionId,
         parentStepExecutionId: parentStepExecutionId ?? null,
         stepId: stepDef.stepId,
-        stepType: 'agent' as StepType,
+        stepType: 'agent',
         operationId: 'agent.manage.get_definition_schema' as OperationId,
         attempt,
         idempotencyKey,
@@ -120,7 +114,7 @@ export async function handleGetDefinitionSchemaInline(
       stepExecutionId,
       parentStepExecutionId: parentStepExecutionId ?? null,
       stepId: stepDef.stepId,
-      stepType: 'agent' as StepType,
+      stepType: 'agent',
       operationId: 'agent.manage.get_definition_schema' as OperationId,
       attempt,
       idempotencyKey,
@@ -152,7 +146,7 @@ export async function handleGetDefinitionSchemaInline(
       stepExecutionId,
       parentStepExecutionId: parentStepExecutionId ?? null,
       stepId: stepDef.stepId,
-      stepType: 'agent' as StepType,
+      stepType: 'agent',
       operationId: 'agent.manage.get_definition_schema' as OperationId,
       attempt,
       idempotencyKey,

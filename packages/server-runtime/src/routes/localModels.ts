@@ -73,7 +73,7 @@ export const localModelRoutes: FastifyPluginAsync = async (fastify) => {
     const runtime = await resolveSpaceLocalRuntime({
       db: db(),
       redis: redis(),
-      tenantId: tenant.tenantId as string,
+      tenantId: tenant.tenantId,
       userId: request.authUser?.userId as string,
       spaceId,
     });
@@ -84,7 +84,7 @@ export const localModelRoutes: FastifyPluginAsync = async (fastify) => {
       });
       return null;
     }
-    return { runtime, tenantId: tenant.tenantId as string };
+    return { runtime, tenantId: tenant.tenantId };
   }
 
   app.get(

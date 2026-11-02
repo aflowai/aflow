@@ -70,13 +70,13 @@ function emptySuite(): CyberneticEvalSuite {
     trajectoryCriteria: [],
     taskCriteria: {},
     weights: { goal: 0.4, task: 0.4, trajectory: 0.2 },
-  } as CyberneticEvalSuite;
+  };
 }
 
 function stripSource(c: EvalCriterion): EvalCriterion {
-  const { source: _s, ...rest } = c as EvalCriterion & { source?: unknown };
+  const { source: _s, ...rest } = c;
   void _s;
-  return rest as EvalCriterion;
+  return rest;
 }
 
 /** Name-keyed diff → eval-criterion ops (provenance is set server-side). */
@@ -85,7 +85,7 @@ function suiteToOps(base: CyberneticEvalSuite, draft: CyberneticEvalSuite, slug:
   const tiers: EvalTier[] = [
     { scope: 'goal' },
     { scope: 'trajectory' },
-    ...[...taskIds].map((taskId) => ({ scope: 'task', taskId }) as EvalTier),
+    ...[...taskIds].map((taskId): EvalTier => ({ scope: 'task', taskId })),
   ];
   const ops: EvalOp[] = [];
   for (const tier of tiers) {

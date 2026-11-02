@@ -132,7 +132,7 @@ export function serveBrowserRequests(
             'seconds after it was made, too old to act on, and did nothing. Run the command again.',
         };
       } else {
-        result = { ...(await answer({ ...request, id })), id } as BrowserWindowResult;
+        result = { ...(await answer({ ...request, id })), id };
       }
     } catch (error) {
       result = { id, kind: 'refused', message: errorText(error) };

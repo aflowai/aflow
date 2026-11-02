@@ -867,7 +867,7 @@ export async function handleWorkflowRunResume(
           runId: run.runId,
           taskId: reExecutedTask.taskId,
           attempt: reExecutedTask.attempt,
-          helmsmanSessionId: callingSessionId as never,
+          helmsmanSessionId: callingSessionId,
         });
       } catch (dispatchErr) {
         const failingTaskId = reExecutedTask.taskId;

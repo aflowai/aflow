@@ -19,7 +19,6 @@ import type {
   TenantId,
   TraceId,
   IdempotencyKey,
-  StepResultMessage,
 } from '@aflow/schemas';
 import {
   addStepResult,
@@ -134,12 +133,12 @@ export async function resumeParentOnChildComplete(
         childStatus,
       },
     };
-    await appendSessionEvent(redis, tenantId as TenantId, parentRunId, resumedEvent);
-    await markSessionDirty(redis, tenantId as TenantId, parentRunId);
+    await appendSessionEvent(redis, tenantId, parentRunId, resumedEvent);
+    await markSessionDirty(redis, tenantId, parentRunId);
   } else {
     // Other children still running — keep session in WAITING_ON_CHILD but
     // clear the child-input pause fields in case this was the paused child.
-    await updateSessionState(redis, tenantId as TenantId, parentRunId, {
+    await updateSessionState(redis, tenantId, parentRunId, {
       delegationPauseSource: 'child_running',
       pausedChildSessionId: undefined,
       childPausedStepExecutionId: undefined,
@@ -258,7 +257,7 @@ export async function resumeParentOnChildComplete(
       ...baseResult,
       status: 'SUCCEEDED',
       outputRef,
-    } as StepResultMessage);
+    });
   } else {
     // Build a descriptive error message for the parent agent.
     // Include: agent name + session ID (for debugging) + error reason.
@@ -335,7 +334,7 @@ export async function resumeParentOnChildComplete(
       status: 'FAILED',
       errorRef,
       error: errorData,
-    } as StepResultMessage);
+    });
   }
 
   getOrchestratorLogger().debug(
@@ -445,7 +444,7 @@ async function forwardCompletedChildOutputs(
 
   // Write merged index back to parent's runtime state, preserving all existing
   // runtimeState fields (version, schemaVersion, updatedAtMs).
-  await updateSessionState(redis, tenantId as TenantId, parentRunId, {
+  await updateSessionState(redis, tenantId, parentRunId, {
     runtimeState: {
       ...parentRuntime,
       version: parentRuntime.version + 1,

@@ -9,6 +9,7 @@ import {
   createAIClient,
   inferProviderForModelRef,
   type AIClient,
+  type GenerateJsonRequest,
   type GenerateTextResponse,
   type LocalMachine,
 } from '@aflow/ai-client';
@@ -106,7 +107,9 @@ function admitted(
   return {
     ...client,
     generateText: holding(client.generateText.bind(client)),
-    generateJson: holding(client.generateJson.bind(client)) as AIClient['generateJson'],
+    generateJson<T>(request: GenerateJsonRequest<T>) {
+      return holding((r: GenerateJsonRequest<T>) => client.generateJson<T>(r))(request);
+    },
     generateEmbedding: holding(client.generateEmbedding.bind(client)),
     decide: holding(client.decide.bind(client)),
     generateTextStream(request) {

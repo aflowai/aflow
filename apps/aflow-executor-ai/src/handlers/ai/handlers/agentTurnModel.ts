@@ -4,7 +4,6 @@
 import { z } from 'zod';
 import type { ExecutorContext } from '@aflow/executor-runtime';
 import type { AgentTurnDecision } from '@aflow/schemas';
-import type { TenantId, StepExecutionId } from '@aflow/schemas';
 import type { AIClient, ChatMessage, ProviderReasoning } from '@aflow/ai-client';
 import type { AgentTurnInput } from '../schema.js';
 import type { HandlerDeps } from './types.js';
@@ -433,9 +432,9 @@ async function streamAndCollect(
     ...(p.cacheStrategy ? { cacheStrategy: p.cacheStrategy } : {}),
     ...(p.timeoutMs !== undefined ? { timeoutMs: p.timeoutMs } : {}),
     ...(p.reasoning ? { reasoning: p.reasoning } : {}),
-    tenantId: ctx.job.tenantId as TenantId,
+    tenantId: ctx.job.tenantId,
     runId: ctx.runId,
-    stepExecutionId: ctx.job.stepExecutionId as StepExecutionId,
+    stepExecutionId: ctx.job.stepExecutionId,
     attempt: ctx.job.attempt,
     signal: ctx.signal,
     onStreamProgress: ctx.reportProgress,
@@ -658,7 +657,7 @@ function buildResultFromResponse(
     // streaming path leaves it undefined, in which case this is a no-op.
     const decision: AgentTurnDecision =
       response.thinking !== undefined
-        ? ({ ...mappingResult.decision, thinking: response.thinking } as AgentTurnDecision)
+        ? { ...mappingResult.decision, thinking: response.thinking }
         : mappingResult.decision;
 
     return {
@@ -737,9 +736,9 @@ async function runGenerateJsonPath(
     ...(params.maxTokens !== undefined ? { maxTokens: params.maxTokens } : {}),
     ...(reasoning ? { reasoning } : {}),
     ...googleTimeout,
-    tenantId: ctx.job.tenantId as TenantId,
+    tenantId: ctx.job.tenantId,
     runId: ctx.runId,
-    stepExecutionId: ctx.job.stepExecutionId as StepExecutionId,
+    stepExecutionId: ctx.job.stepExecutionId,
     attempt: ctx.job.attempt,
     signal: ctx.signal,
     onStreamProgress: ctx.reportProgress,

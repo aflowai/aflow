@@ -175,7 +175,7 @@ export class SurfaceHandler implements StepHandler {
     // Build prompts
     const systemPrompt = buildSurfaceSystemPrompt(
       catalogVersion,
-      input.allowedComponents as string[] | undefined,
+      input.allowedComponents,
       DS_ICON_NAMES,
       hasPreloadedData,
     );

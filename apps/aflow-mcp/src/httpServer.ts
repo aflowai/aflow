@@ -118,7 +118,7 @@ export function createMcpHttpServer(deps: {
 
     // Cast needed: StreamableHTTPServerTransport has optional onclose/onerror but
     // Transport interface has them as required in strict mode.
-    void mcpServer.connect(transport as Parameters<typeof mcpServer.connect>[0]);
+    void mcpServer.connect(transport);
 
     return mcpSession;
   }

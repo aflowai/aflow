@@ -193,7 +193,7 @@ export function ConnectProviderDialog({
               placeholder={keyField?.placeholder ?? ''}
               value={key}
               onChange={(e) => {
-                setKey((e.target as HTMLInputElement).value);
+                setKey(e.target.value);
               }}
             />
             {keyField?.helpText && (

@@ -86,7 +86,7 @@ export function registerCredentialRoutes(fastify: FastifyInstance): void {
       const tenant = await request.requireTenant();
       const space = await request.requireSpace();
       const db = getDb(fastify);
-      const { credentialKey } = request.params as { credentialKey: string };
+      const { credentialKey } = request.params;
       const { value, label, description } = request.body;
 
       if (!db) throw new Error('Database not configured');
@@ -114,7 +114,7 @@ export function registerCredentialRoutes(fastify: FastifyInstance): void {
 
       const redis = getRedis(fastify);
       if (redis) {
-        publishApiCatalogInvalidation(redis, tenant.tenantId as string, space.spaceId, {
+        publishApiCatalogInvalidation(redis, tenant.tenantId, space.spaceId, {
           kind: 'credential',
         });
       }
@@ -141,7 +141,7 @@ export function registerCredentialRoutes(fastify: FastifyInstance): void {
       const tenant = await request.requireTenant();
       const space = await request.requireSpace();
       const db = getDb(fastify);
-      const { credentialKey } = request.params as { credentialKey: string };
+      const { credentialKey } = request.params;
 
       if (!db) throw new Error('Database not configured');
 
@@ -167,7 +167,7 @@ export function registerCredentialRoutes(fastify: FastifyInstance): void {
 
       const redis = getRedis(fastify);
       if (redis) {
-        publishApiCatalogInvalidation(redis, tenant.tenantId as string, space.spaceId, {
+        publishApiCatalogInvalidation(redis, tenant.tenantId, space.spaceId, {
           kind: 'credential',
         });
       }

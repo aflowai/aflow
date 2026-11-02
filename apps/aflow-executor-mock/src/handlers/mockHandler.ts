@@ -21,7 +21,7 @@ function extractMockDirective(input: unknown): MockDirective | undefined {
   const record = input as Record<string, unknown>;
   const raw = record['__mock'];
   if (typeof raw !== 'object' || raw === null) return undefined;
-  return raw as MockDirective;
+  return raw;
 }
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {

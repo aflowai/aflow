@@ -257,7 +257,7 @@ export const spaceLlmReadinessRoutes: FastifyPluginAsync = async (fastify) => {
       ];
       const previews = await previewCredentialResolution(db, {
         tenantId: tenant.tenantId,
-        userId: authUser.userId as string,
+        userId: authUser.userId,
         spaceId,
         providerIds,
       });
@@ -275,8 +275,8 @@ export const spaceLlmReadinessRoutes: FastifyPluginAsync = async (fastify) => {
           ? await resolveSpaceLocalRuntime({
               db,
               redis: fastify.appContext.redis as Redis | undefined,
-              tenantId: tenant.tenantId as string,
-              userId: authUser.userId as string,
+              tenantId: tenant.tenantId,
+              userId: authUser.userId,
               spaceId,
             })
           : null;

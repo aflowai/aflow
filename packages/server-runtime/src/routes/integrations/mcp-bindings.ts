@@ -106,7 +106,7 @@ export function registerMcpBindingRoutes(fastify: FastifyInstance): void {
       const tenant = await request.requireTenant();
       const space = await request.requireSpace();
       const db = getDb(fastify);
-      const { bindingId } = request.params as { bindingId: string };
+      const { bindingId } = request.params;
 
       if (!db) {
         reply.code(404).send({ error: 'Database not configured' });
@@ -186,7 +186,7 @@ export function registerMcpBindingRoutes(fastify: FastifyInstance): void {
       try {
         await upsertMcpServerBinding({
           db,
-          tenantId: tenant.tenantId as string,
+          tenantId: tenant.tenantId,
           spaceId: space.spaceId,
           redis: getRedis(fastify),
           binding,
@@ -230,13 +230,13 @@ export function registerMcpBindingRoutes(fastify: FastifyInstance): void {
       const tenant = await request.requireTenant();
       const space = await request.requireSpace();
       const db = getDb(fastify);
-      const { bindingId } = request.params as { bindingId: string };
+      const { bindingId } = request.params;
 
       if (!db) throw new Error('Database not configured');
 
       const deleted = await deleteMcpServerBinding({
         db,
-        tenantId: tenant.tenantId as string,
+        tenantId: tenant.tenantId,
         spaceId: space.spaceId,
         redis: getRedis(fastify),
         bindingId,

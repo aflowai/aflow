@@ -323,7 +323,7 @@ async function handleSendStreamingMessage(
       id: rpcId,
       error: A2A_ERRORS.INVALID_PARAMS,
     };
-    reply.send(resp as unknown as Record<string, unknown>);
+    reply.send(resp);
     return;
   }
 
@@ -338,7 +338,7 @@ async function handleSendStreamingMessage(
         message: 'Missing configuration.agentId',
       },
     };
-    reply.send(resp as unknown as Record<string, unknown>);
+    reply.send(resp);
     return;
   }
   const agentId: string = rawAgentId;
@@ -353,7 +353,7 @@ async function handleSendStreamingMessage(
         message: `Unknown agent identifier "${agentId}" — not a UUID, platform role, or slug in this space`,
       },
     };
-    reply.send(resp as unknown as Record<string, unknown>);
+    reply.send(resp);
     return;
   }
 

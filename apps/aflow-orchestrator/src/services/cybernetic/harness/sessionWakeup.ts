@@ -151,7 +151,7 @@ export async function deliverSessionWakeup(
     : await rehydratePausedRun(deps.redis, deps.db, args.tenantId, args.sessionId);
 
   if (recorded && hot) {
-    await appendSessionEvent(deps.redis, args.tenantId, args.sessionId as SessionId, event);
+    await appendSessionEvent(deps.redis, args.tenantId, args.sessionId, event);
   }
   if (!hot) return { eventId, recorded, delivery: 'deferred' };
   const delivery = await wakeSessionForRunWakeups(deps, args.tenantId, args.sessionId, {

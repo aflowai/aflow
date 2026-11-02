@@ -396,7 +396,7 @@ function hashSchema(schema: Record<string, unknown>): string {
 function sortedReplacer(_key: string, value: unknown): unknown {
   if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
     const sorted: Record<string, unknown> = {};
-    const keys = Object.keys(value as Record<string, unknown>).sort();
+    const keys = Object.keys(value).sort();
     for (const k of keys) sorted[k] = (value as Record<string, unknown>)[k];
     return sorted;
   }

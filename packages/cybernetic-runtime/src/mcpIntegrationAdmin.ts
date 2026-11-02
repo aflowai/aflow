@@ -183,12 +183,12 @@ export async function listMcpServerDefinitionRows(
   if (opts.enabled !== undefined) {
     conditions.push(eq(mcpServerDefinitions.enabled, opts.enabled ? 1 : 0));
   }
-  return (await withTenantSchema(opts.db, tenantContextOf(opts.tenantId), async (tx) =>
+  return await withTenantSchema(opts.db, tenantContextOf(opts.tenantId), async (tx) =>
     tx
       .select()
       .from(mcpServerDefinitions)
       .where(and(...conditions)),
-  )) as McpServerDefinitionRow[];
+  );
 }
 
 export async function getMcpServerDefinitionRow(
@@ -381,7 +381,7 @@ export async function upsertMcpServerBinding(
     tenantId,
     spaceId,
     kind: 'mcp',
-    hosts: collectMcpBindingHosts(binding.auth as unknown as Record<string, unknown>),
+    hosts: collectMcpBindingHosts(binding.auth),
     grantRefs: [
       { artifactType: 'mcp_binding', artifactKey: binding.bindingId },
       { artifactType: 'mcp_definition', artifactKey: binding.serverId },

@@ -1,5 +1,5 @@
 import { getOrchestratorLogger } from '../../../../lib/orchestratorLogger.js';
-import type { OperationId, AgentSlug, AgentId } from '@aflow/schemas';
+import type { AgentSlug, AgentId } from '@aflow/schemas';
 import { AgentSlugSchema } from '@aflow/schemas';
 import { addStepResult } from '@aflow/redis';
 import { encodeInlineOpOutputRef } from './helpers.js';
@@ -139,7 +139,7 @@ export async function handleAgentCrudInline(args: InlineHandlerArgs): Promise<vo
           ...(agent.description ? { description: agent.description } : {}),
           version: latestVersion?.version ?? '',
           definition: defJson,
-          tags: (metadata['tags'] as string[] | undefined) ?? [],
+          tags: metadata['tags'] ?? [],
           spaceId: agent.spaceId,
           ...(agent.archivedAt ? { archivedAt: agent.archivedAt.toISOString() } : {}),
           createdAt: agent.createdAt.toISOString(),
@@ -268,9 +268,7 @@ export async function handleAgentCrudInline(args: InlineHandlerArgs): Promise<vo
         }
 
         const { validateAgentDefinition } = await import('@aflow/schemas');
-        const result = validateAgentDefinition(
-          definition as Parameters<typeof validateAgentDefinition>[0],
-        );
+        const result = validateAgentDefinition(definition);
 
         outputData = {
           valid: result.valid,
@@ -304,7 +302,7 @@ export async function handleAgentCrudInline(args: InlineHandlerArgs): Promise<vo
       parentStepExecutionId: parentStepExecutionId ?? null,
       stepId: stepDef.stepId,
       stepType: stepDef.stepType,
-      operationId: operationId as OperationId,
+      operationId: operationId,
       attempt,
       idempotencyKey,
       status: 'SUCCEEDED',
@@ -334,7 +332,7 @@ export async function handleAgentCrudInline(args: InlineHandlerArgs): Promise<vo
       parentStepExecutionId: parentStepExecutionId ?? null,
       stepId: stepDef.stepId,
       stepType: stepDef.stepType,
-      operationId: operationId as OperationId,
+      operationId: operationId,
       attempt,
       idempotencyKey,
       status: 'FAILED',

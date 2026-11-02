@@ -55,7 +55,7 @@ export function registerMcpServerRoutes(fastify: FastifyInstance): void {
 
       const rows = await listMcpServerDefinitionRows({
         db,
-        tenantId: tenant.tenantId as string,
+        tenantId: tenant.tenantId,
         spaceId: space.spaceId,
       });
 
@@ -84,7 +84,7 @@ export function registerMcpServerRoutes(fastify: FastifyInstance): void {
       const tenant = await request.requireTenant();
       const space = await request.requireSpace();
       const db = getDb(fastify);
-      const { serverId } = request.params as { serverId: string };
+      const { serverId } = request.params;
 
       if (!db) {
         reply.code(404).send({ error: 'Database not configured' });
@@ -93,7 +93,7 @@ export function registerMcpServerRoutes(fastify: FastifyInstance): void {
 
       const row = await getMcpServerDefinitionRow({
         db,
-        tenantId: tenant.tenantId as string,
+        tenantId: tenant.tenantId,
         spaceId: space.spaceId,
         serverId,
       });
@@ -149,7 +149,7 @@ export function registerMcpServerRoutes(fastify: FastifyInstance): void {
       try {
         await upsertMcpServerDefinition({
           db,
-          tenantId: tenant.tenantId as string,
+          tenantId: tenant.tenantId,
           spaceId: space.spaceId,
           redis: getRedis(fastify),
           definition: body,
@@ -187,13 +187,13 @@ export function registerMcpServerRoutes(fastify: FastifyInstance): void {
       const tenant = await request.requireTenant();
       const space = await request.requireSpace();
       const db = getDb(fastify);
-      const { serverId } = request.params as { serverId: string };
+      const { serverId } = request.params;
 
       if (!db) throw new Error('Database not configured');
 
       await deleteMcpServerDefinition({
         db,
-        tenantId: tenant.tenantId as string,
+        tenantId: tenant.tenantId,
         spaceId: space.spaceId,
         redis: getRedis(fastify),
         serverId,
@@ -243,14 +243,14 @@ export function registerMcpServerRoutes(fastify: FastifyInstance): void {
       const tenant = await request.requireTenant();
       const space = await request.requireSpace();
       const db = getDb(fastify);
-      const { serverId } = request.params as { serverId: string };
+      const { serverId } = request.params;
 
       if (!db) throw new Error('Database not configured');
 
       try {
         const result = await setMcpPrivateNetwork({
           db,
-          tenantId: tenant.tenantId as string,
+          tenantId: tenant.tenantId,
           spaceId: space.spaceId,
           redis: getRedis(fastify),
           serverId,

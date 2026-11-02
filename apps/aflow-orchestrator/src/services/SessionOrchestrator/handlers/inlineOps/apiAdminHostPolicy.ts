@@ -43,7 +43,7 @@ export async function enforceApiAdminHostPolicy(opts: {
 }): Promise<void> {
   await enforceIntegrationHostPolicy({
     db: opts.db,
-    tenantId: opts.context.tenantId as string,
+    tenantId: opts.context.tenantId,
     spaceId: opts.spaceId,
     kind: 'api',
     hosts: opts.hosts,
@@ -62,9 +62,7 @@ export function patchedDefinitionHostSource(
       : {}),
     ...(updatedDef['suggestedEgressPolicy']
       ? {
-          suggestedEgressPolicy: updatedDef['suggestedEgressPolicy'] as {
-            additionalHosts?: string[];
-          },
+          suggestedEgressPolicy: updatedDef['suggestedEgressPolicy'],
         }
       : {}),
     ...(Array.isArray(updatedDef['endpoints'])

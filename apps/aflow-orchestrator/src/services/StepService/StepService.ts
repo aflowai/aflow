@@ -243,7 +243,7 @@ export async function waitForInput(
     status: 'PAUSED',
     currentStepId: ctx.stepDef.stepId,
     currentStepExecutionId: ctx.stepExecutionId,
-    pauseReason: 'input_required' as SessionHotState['pauseReason'],
+    pauseReason: 'input_required',
     requestedInputRef,
     ...(opts?.pauseType ? { pauseType: opts.pauseType } : {}),
     ...(opts?.pauseType

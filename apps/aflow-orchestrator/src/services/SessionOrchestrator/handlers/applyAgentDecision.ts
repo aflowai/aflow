@@ -25,7 +25,6 @@ import type {
   SessionId,
   StepExecutionId,
   StepId,
-  StepType,
   OperationId,
   TraceId,
   AgentDefinition,
@@ -393,7 +392,7 @@ export async function applyAgentDecision(params: ApplyAgentDecisionParams): Prom
         // block_with_retry: append feedback to agent history, re-schedule turn
         const MAX_GUARDRAIL_RETRIES = 2;
         const retryCountKey = `ai.agent.guardrailRetryCount.${result.stepId}`;
-        const retryCount = readInlineVar(currentRuntimeState, retryCountKey, 0 as number);
+        const retryCount = readInlineVar(currentRuntimeState, retryCountKey, 0);
 
         if (retryCount >= MAX_GUARDRAIL_RETRIES) {
           // Max retries exceeded — escalate to human
@@ -453,15 +452,10 @@ export async function applyAgentDecision(params: ApplyAgentDecisionParams): Prom
             version: currentRuntimeState.version + 1,
             updatedAtMs: now,
           };
-          await updateSessionState(
-            redis,
-            result.tenantId as TenantId,
-            result.sessionId as SessionId,
-            {
-              runtimeState: currentRuntimeState,
-              usageSummary: updatedUsageSummary,
-            },
-          );
+          await updateSessionState(redis, result.tenantId, result.sessionId, {
+            runtimeState: currentRuntimeState,
+            usageSummary: updatedUsageSummary,
+          });
 
           // Re-schedule the agent turn
           await scheduleStep({
@@ -1215,15 +1209,15 @@ export async function applyAgentDecision(params: ApplyAgentDecisionParams): Prom
     const MAX_TOTAL_TOOL_FAILURES = 12;
     const failuresVarKey = `ai.agent.toolFailures.${result.stepId}`;
     const totalFailuresVarKey = `ai.agent.toolTotalFailures.${result.stepId}`;
-    const toolFailures = readInlineVar(
+    const toolFailures = readInlineVar<Record<string, number>>(
       currentRuntimeState,
       failuresVarKey,
-      {} as Record<string, number>,
+      {},
     );
-    const toolTotalFailures = readInlineVar(
+    const toolTotalFailures = readInlineVar<Record<string, number>>(
       currentRuntimeState,
       totalFailuresVarKey,
-      {} as Record<string, number>,
+      {},
     );
     const requestedToolIds = sigCalls.map((c) => c.toolId);
     // A tool is "failing" if it hit the consecutive-identical-error limit OR the
@@ -1470,7 +1464,7 @@ export async function applyAgentDecision(params: ApplyAgentDecisionParams): Prom
       version: currentRuntimeState.version + 1,
       updatedAtMs: now,
     };
-    await updateSessionState(redis, result.tenantId as TenantId, result.sessionId as SessionId, {
+    await updateSessionState(redis, result.tenantId, result.sessionId, {
       runtimeState: currentRuntimeState,
       usageSummary: updatedUsageSummary,
     });
@@ -1622,7 +1616,7 @@ export async function applyAgentDecision(params: ApplyAgentDecisionParams): Prom
               `virtual_api_${stepIdSlug(apiId)}_${stepIdSlug(endpointId)}_${crypto.randomUUID().slice(0, 8)}` as StepId;
             const syntheticApiCallDef: StepDefinition = {
               stepId: syntheticStepId,
-              stepType: 'api' as StepType,
+              stepType: 'api',
               operation: 'api.http.call' as OperationId,
               name: `↪ API ${apiId}.${endpointId}${bindingId ? ` (${bindingId})` : ''}`,
               config: {},
@@ -1756,7 +1750,7 @@ export async function applyAgentDecision(params: ApplyAgentDecisionParams): Prom
 
             const syntheticMcpStep: StepDefinition = {
               stepId: mcpStepId,
-              stepType: (isLocal ? 'host' : 'mcp') as StepType,
+              stepType: isLocal ? 'host' : 'mcp',
               operation: (isLocal ? 'host.mcp.call' : 'mcp.tool.call') as OperationId,
               name: isLocal
                 ? `↪ ${serverId}.${toolName} (this computer)`
@@ -1925,7 +1919,7 @@ export async function applyAgentDecision(params: ApplyAgentDecisionParams): Prom
                 `virtual_agent_${call.toolId}_${crypto.randomUUID().slice(0, 8)}` as StepId;
               const syntheticDelegateDef: StepDefinition = {
                 stepId: syntheticStepId,
-                stepType: 'agent' as StepType,
+                stepType: 'agent',
                 operation: 'agent.control.delegate' as OperationId,
                 name: `↪ ${call.toolId}`,
                 config: {},
@@ -1975,7 +1969,7 @@ export async function applyAgentDecision(params: ApplyAgentDecisionParams): Prom
                 `virtual_${call.toolId.replace(/\./g, '_')}_${crypto.randomUUID().slice(0, 8)}` as StepId;
               const syntheticRunStepDef: StepDefinition = {
                 stepId: syntheticStepId,
-                stepType: 'agent' as StepType,
+                stepType: 'agent',
                 operation: 'agent.control.run_step' as OperationId,
                 name: `↪ ${call.toolId}`,
                 config: {},

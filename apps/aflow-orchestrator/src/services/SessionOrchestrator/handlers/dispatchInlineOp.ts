@@ -6,12 +6,7 @@ import { handleSkillSearch } from './inlineOps/skillDiscovery.js';
  */
 import type { Redis } from 'ioredis';
 import { handleDraftGetInline, handleDraftPatchInline } from './inlineOps/taskDraft.js';
-import type {
-  StepExecutionId,
-  IdempotencyKey,
-  OperationId,
-  WorkflowExecutionRef,
-} from '@aflow/schemas';
+import type { StepExecutionId, IdempotencyKey, WorkflowExecutionRef } from '@aflow/schemas';
 import type { StepDefinition } from '@aflow/schemas';
 import { SNOOZE_OPERATION_ID } from '@aflow/schemas';
 import type { PayloadStore } from '@aflow/payload-store';
@@ -914,7 +909,7 @@ export async function dispatchInlineOp(
       parentStepExecutionId: parentStepExecutionId ?? null,
       stepId: stepDef.stepId,
       stepType: stepDef.stepType,
-      operationId: stepDef.operation as OperationId,
+      operationId: stepDef.operation,
       attempt,
       idempotencyKey,
       status: 'FAILED',

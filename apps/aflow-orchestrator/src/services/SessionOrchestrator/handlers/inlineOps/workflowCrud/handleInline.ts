@@ -16,7 +16,6 @@ import type {
   WorkflowCampaignListInput,
   WorkflowCampaignUpdateInput,
   WorkflowCampaignEndInput,
-  WorkflowCampaignRefreshInput,
 } from '@aflow/schemas';
 import { WorkflowRunFailInputSchema } from '@aflow/schemas';
 import { WorkflowArchivedError } from '@aflow/cybernetic-runtime';
@@ -153,11 +152,7 @@ export async function handleWorkflowCrudInline(args: InlineHandlerArgs): Promise
         );
         break;
       case 'workflow.campaign.refresh':
-        await handleWorkflowCampaignRefresh(
-          args,
-          input as unknown as WorkflowCampaignRefreshInput,
-          startTime,
-        );
+        await handleWorkflowCampaignRefresh(args, input, startTime);
         break;
       default:
         await emitStepError(

@@ -43,10 +43,10 @@ export function buildCsDeskSimulation(): Simulation {
     personas: CS_DESK_PERSONAS.map((p) => ({ ...p })),
     defaultPersonaId: 'cus_sa_amal',
     disclosePersona: true,
-    collections: CS_DESK_COLLECTIONS.map((c) => ({ ...c })) as Simulation['collections'],
+    collections: CS_DESK_COLLECTIONS.map((c) => ({ ...c })),
     rules: [],
     handlers: CS_DESK_HANDLERS,
     effects: {},
     policy: { unmatched: 'error', maxGeneratedCallsPerRun: 0 },
-  } as Simulation;
+  };
 }

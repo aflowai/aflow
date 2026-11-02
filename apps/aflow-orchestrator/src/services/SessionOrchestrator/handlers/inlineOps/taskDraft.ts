@@ -75,7 +75,7 @@ export async function handleDraftPatchInline(args: InlineHandlerArgs): Promise<v
         attempt: args.attempt,
       },
       mutationId,
-      operations: operations as never,
+      operations: operations,
       ...(expectedRevision !== undefined ? { expectedRevision } : {}),
     });
     await emitStepSuccess(args, { ...receipt }, startTime);

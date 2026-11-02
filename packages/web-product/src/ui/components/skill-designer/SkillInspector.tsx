@@ -549,17 +549,17 @@ function ActivationInspector({
   const setAct = (patch: Record<string, unknown>) => {
     if (!actions) return;
     const cur = act ?? { triggerPatterns: [], activationHint: '', priority: 50 };
-    actions.patchWorkflow({ activation: { ...cur, ...patch } as Workflow['activation'] });
+    actions.patchWorkflow({ activation: { ...cur, ...patch } });
   };
   const setIteration = (patch: Record<string, unknown>) => {
     if (!actions) return;
     const cur = workflow.iteration ?? { auto: true };
-    actions.patchWorkflow({ iteration: { ...cur, ...patch } as Workflow['iteration'] });
+    actions.patchWorkflow({ iteration: { ...cur, ...patch } });
   };
   const setBudget = (patch: Record<string, unknown>) => {
     if (!actions) return;
     actions.patchWorkflow({
-      budget: { ...(workflow.budget ?? {}), ...patch } as Workflow['budget'],
+      budget: { ...(workflow.budget ?? {}), ...patch },
     });
   };
   const num = (v: string): number | undefined => (v.trim() === '' ? undefined : Number(v) || 0);

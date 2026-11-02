@@ -11,7 +11,7 @@ import { requireSpaceId } from '../spaceScope.js';
 
 export function planReadContext(args: InlineHandlerArgs): PlanReadContext {
   return {
-    store: createPlanNodeStore(getDatabase(), args.context.tenantId as string),
+    store: createPlanNodeStore(getDatabase(), args.context.tenantId),
     spaceId: requireSpaceId(args.context),
   };
 }

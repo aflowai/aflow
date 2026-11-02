@@ -305,8 +305,8 @@ async function emitParentStalledEvent(args: {
     },
   };
   try {
-    await appendSessionEvent(redis, tenantId as TenantId, parentRunId, event);
-    await markSessionDirty(redis, tenantId as TenantId, parentRunId);
+    await appendSessionEvent(redis, tenantId, parentRunId, event);
+    await markSessionDirty(redis, tenantId, parentRunId);
   } catch (err) {
     logOrchestratorError(
       `[delegation-drain] Failed to emit SessionStalled on parent ${parentRunId}:`,

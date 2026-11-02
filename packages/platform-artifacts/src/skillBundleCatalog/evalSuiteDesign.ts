@@ -1,5 +1,3 @@
-import type { SkillBundleId } from '@aflow/schemas';
-
 import type { AuthoredSkillBundle } from '../skillBundleCatalog.js';
 
 /**
@@ -8,7 +6,7 @@ import type { AuthoredSkillBundle } from '../skillBundleCatalog.js';
  * and an API binding here would name a world the target skill does not call.
  */
 export const EVAL_SUITE_DESIGN: AuthoredSkillBundle = {
-  bundleId: 'eval-authoring' as SkillBundleId,
+  bundleId: 'eval-authoring',
   revision: 0,
   name: 'Eval Suite Design',
   tagline: 'Scaffold the golden eval suite for a skill, grounded in its simulated world.',

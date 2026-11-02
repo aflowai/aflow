@@ -208,7 +208,7 @@ async function cancelPausedChild(
     logOrchestratorError(
       `[notifyWaiters] could not cancel run=${args.runId} after it paused under task=${task.taskId} of run=${task.runId}: ${err instanceof Error ? err.message : String(err)}`,
       err,
-      { tenantId: args.tenantId as string, runId: args.runId, parentRunId: task.runId },
+      { tenantId: args.tenantId, runId: args.runId, parentRunId: task.runId },
     );
   }
 }
@@ -254,7 +254,7 @@ async function answerWorkflowTask(
     stepExecutionId: waiter.waiterStepExecutionId as StepExecutionId,
     parentStepExecutionId: null,
     stepId: task.taskId as StepId,
-    stepType: 'workflow' as StepType,
+    stepType: 'workflow',
     operationId: 'workflow.run.start' as OperationId,
     attempt: task.attempt,
     idempotencyKey: `notify-waiter:${waiter.id}:${args.outcome}` as IdempotencyKey,
@@ -309,7 +309,7 @@ async function wakeWaiter(
     const rehydrated = await rehydrateParkedStep(
       deps.redis,
       deps.db,
-      args.tenantId as string,
+      args.tenantId,
       waiter.waiterSessionId,
       waiterStepExecutionId,
     );
@@ -325,7 +325,7 @@ async function wakeWaiter(
       `[notifyWaiters] waiter=${waiter.id} session=${waiter.waiterSessionId} has no step state and could not be rehydrated — the parked caller cannot be woken`,
       new Error('waiter step state unrecoverable'),
       {
-        tenantId: args.tenantId as string,
+        tenantId: args.tenantId,
         runId: args.runId,
         waiterId: waiter.id,
         sessionId: waiter.waiterSessionId,
@@ -368,18 +368,13 @@ async function wakeWaiter(
         ...(args.handoffPayload ? { handoffPayload: args.handoffPayload } : {}),
       },
     };
-    await appendSessionEvent(
-      deps.redis,
-      args.tenantId,
-      waiter.waiterSessionId as SessionId,
-      resumeEvent,
-    );
+    await appendSessionEvent(deps.redis, args.tenantId, waiter.waiterSessionId, resumeEvent);
   }
   await updateSessionState(deps.redis, args.tenantId, waiter.waiterSessionId, {
     waitingOnWorkflowRunId: undefined,
     ...(cancelled ? { interruptRequested: true } : {}),
   });
-  await markSessionDirty(deps.redis, args.tenantId, waiter.waiterSessionId as SessionId);
+  await markSessionDirty(deps.redis, args.tenantId, waiter.waiterSessionId);
 
   // Synthesize a result that wakes the waiter's step. The waiter's step
   // is `workflow.run.start` (or .resume). Status SUCCEEDED so the
@@ -574,12 +569,12 @@ async function loadTerminalRunDetail(
   try {
     const spaceId =
       args.runDetail?.spaceId ??
-      (await loadRunByRunIdAcrossSpaces(deps.db, args.tenantId as string, args.runId))?.spaceId;
+      (await loadRunByRunIdAcrossSpaces(deps.db, args.tenantId, args.runId))?.spaceId;
     if (!spaceId) return null;
     return await buildWorkflowRunDetail(
       deps.db,
       deps.payloadStore,
-      args.tenantId as string,
+      args.tenantId,
       spaceId,
       args.runId,
     );

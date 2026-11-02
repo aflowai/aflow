@@ -233,7 +233,7 @@ function deadline(timeoutMs: number): () => boolean {
 
 function describe(value: unknown): string {
   if (value !== null && typeof value === 'object' && 'message' in value) {
-    return String((value as { message: unknown }).message);
+    return String(value.message);
   }
   return String(value);
 }

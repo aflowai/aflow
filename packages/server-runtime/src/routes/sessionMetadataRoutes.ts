@@ -24,7 +24,6 @@ import {
   SessionIdSchema,
   SessionMetadataDetailSchema,
   normalizeSessionLabel,
-  type SessionId,
   type SessionMetadata,
   type TenantId,
 } from '@aflow/schemas';
@@ -284,7 +283,7 @@ export function registerSessionMetadataRoutes(fastify: FastifyInstance): void {
       // for a fresh one has to say the established one is no longer settled —
       // otherwise this action rewrites the summary and nothing else.
       await markSessionTitleRefreshable(db, tenant.tenantId, sessionId);
-      await requestSessionMetadataNow(redis, tenant.tenantId, sessionId as SessionId);
+      await requestSessionMetadataNow(redis, tenant.tenantId, sessionId);
       reply.status(202).send({ accepted: true });
     },
   );

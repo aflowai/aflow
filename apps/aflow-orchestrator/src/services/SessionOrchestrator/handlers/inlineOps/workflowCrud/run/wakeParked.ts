@@ -35,7 +35,7 @@ export async function wakeParkedStepWithFailure(
     parentStepExecutionId: null,
     stepId: stepDef.stepId,
     stepType: stepDef.stepType,
-    operationId: stepDef.operation as never,
+    operationId: stepDef.operation,
     attempt,
     idempotencyKey,
     status: 'FAILED',

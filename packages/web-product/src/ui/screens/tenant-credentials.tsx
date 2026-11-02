@@ -524,7 +524,7 @@ export function TenantCredentialsPage() {
                     onChange={(e) => {
                       setFormSecrets((prev) => ({
                         ...prev,
-                        [field.fieldId]: (e.target as HTMLInputElement).value,
+                        [field.fieldId]: e.target.value,
                       }));
                     }}
                   />
@@ -552,7 +552,7 @@ export function TenantCredentialsPage() {
                     onChange={(e) => {
                       setFormConfig((prev) => ({
                         ...prev,
-                        [field.fieldId]: (e.target as HTMLInputElement).value,
+                        [field.fieldId]: e.target.value,
                       }));
                     }}
                   />
@@ -571,7 +571,7 @@ export function TenantCredentialsPage() {
                 placeholder="e.g. Company shared key"
                 value={formLabel}
                 onChange={(e) => {
-                  setFormLabel((e.target as HTMLInputElement).value);
+                  setFormLabel(e.target.value);
                 }}
               />
             </Field>

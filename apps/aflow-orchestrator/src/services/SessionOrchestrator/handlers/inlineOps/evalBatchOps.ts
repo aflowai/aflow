@@ -90,7 +90,7 @@ export async function handleEvalBatchRunInline(args: InlineHandlerArgs): Promise
       input,
       createdByUserId,
       probeJudgeCredential: (model) =>
-        probeSpaceJudgeCredential(getDatabase(), tenantId as string, spaceId, model),
+        probeSpaceJudgeCredential(getDatabase(), tenantId, spaceId, model),
     });
     if (!result.ok) {
       await emitStepError(args, result.code, result.message, startTime, 'validation');

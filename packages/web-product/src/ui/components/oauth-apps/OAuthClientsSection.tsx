@@ -337,7 +337,7 @@ export function OAuthClientsSection({
               placeholder="Select an issuer"
               value={form.issuerKey}
               onChange={(e) => {
-                selectIssuer((e.target as HTMLSelectElement).value);
+                selectIssuer(e.target.value);
               }}
             >
               {issuers.map((issuer) => (
@@ -359,7 +359,7 @@ export function OAuthClientsSection({
                   onChange={(e) => {
                     setForm((p) => ({
                       ...p,
-                      customIssuerKey: (e.target as HTMLInputElement).value,
+                      customIssuerKey: e.target.value,
                     }));
                   }}
                 />
@@ -372,7 +372,7 @@ export function OAuthClientsSection({
                   onChange={(e) => {
                     setForm((p) => ({
                       ...p,
-                      authorizationServer: (e.target as HTMLInputElement).value,
+                      authorizationServer: e.target.value,
                     }));
                   }}
                 />
@@ -389,7 +389,7 @@ export function OAuthClientsSection({
               placeholder="OAuth application client ID"
               value={form.clientId}
               onChange={(e) => {
-                setForm((p) => ({ ...p, clientId: (e.target as HTMLInputElement).value }));
+                setForm((p) => ({ ...p, clientId: e.target.value }));
               }}
             />
           </Field>
@@ -401,7 +401,7 @@ export function OAuthClientsSection({
               placeholder="OAuth application client secret"
               value={form.clientSecret}
               onChange={(e) => {
-                setForm((p) => ({ ...p, clientSecret: (e.target as HTMLInputElement).value }));
+                setForm((p) => ({ ...p, clientSecret: e.target.value }));
               }}
             />
             <Text size="xs" variant="muted">
@@ -415,7 +415,7 @@ export function OAuthClientsSection({
               placeholder="Comma- or space-separated"
               value={form.scopesText}
               onChange={(e) => {
-                setForm((p) => ({ ...p, scopesText: (e.target as HTMLInputElement).value }));
+                setForm((p) => ({ ...p, scopesText: e.target.value }));
               }}
             />
           </Field>
@@ -426,7 +426,7 @@ export function OAuthClientsSection({
               placeholder="e.g. Acme Google Workspace app"
               value={form.label}
               onChange={(e) => {
-                setForm((p) => ({ ...p, label: (e.target as HTMLInputElement).value }));
+                setForm((p) => ({ ...p, label: e.target.value }));
               }}
             />
           </Field>
@@ -470,7 +470,7 @@ export function OAuthClientsSection({
               placeholder="New OAuth application client secret"
               value={rotateSecret}
               onChange={(e) => {
-                setRotateSecretValue((e.target as HTMLInputElement).value);
+                setRotateSecretValue(e.target.value);
               }}
             />
             <Text size="xs" variant="muted">

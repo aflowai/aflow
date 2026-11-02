@@ -56,7 +56,6 @@ import {
   type ApiDefinition,
   type EgressPolicy,
   type RepoBindingCreateInput,
-  type SuggestedEgressPolicyDraft,
 } from '@aflow/schemas';
 import {
   collectRepoDesignationHosts,
@@ -322,7 +321,7 @@ async function resolveConnectionForCreate(args: {
 
   const initialEgress = mergeSuggestedEgressIntoBaseline(
     { allowedHosts: apiHost ? [apiHost] : [] },
-    definition.suggestedEgressPolicy as SuggestedEgressPolicyDraft | undefined,
+    definition.suggestedEgressPolicy,
   ) as EgressPolicy;
 
   await withTenantSchema(db, tenantContext, async (tx) => {
@@ -437,7 +436,7 @@ export function registerRepoBindingRoutes(fastify: FastifyInstance): void {
       const tenant = await request.requireTenant();
       const space = await request.requireSpace();
       const db = getDb(fastify);
-      const { repoDesignationId } = request.params as { repoDesignationId: string };
+      const { repoDesignationId } = request.params;
 
       if (!db) {
         reply.code(404).send({ error: 'Database not configured' });
@@ -553,8 +552,8 @@ export function registerRepoBindingRoutes(fastify: FastifyInstance): void {
       try {
         await enforceIntegrationHostPolicy({
           db,
-          tenantId: tenant.tenantId as string,
-          spaceId: space.spaceId as string,
+          tenantId: tenant.tenantId,
+          spaceId: space.spaceId,
           kind: 'api',
           hosts: collectRepoDesignationHosts({ gitHost: coordinate.host }),
           grantRefs: [
@@ -582,8 +581,8 @@ export function registerRepoBindingRoutes(fastify: FastifyInstance): void {
         db,
         redis: getRedis(fastify),
         tenantContext,
-        tenantId: tenant.tenantId as string,
-        spaceId: space.spaceId as string,
+        tenantId: tenant.tenantId,
+        spaceId: space.spaceId,
         coordinateHost: coordinate.host,
         body,
       });
@@ -672,7 +671,7 @@ export function registerRepoBindingRoutes(fastify: FastifyInstance): void {
       const tenant = await request.requireTenant();
       const space = await request.requireSpace();
       const db = getDb(fastify);
-      const { repoDesignationId } = request.params as { repoDesignationId: string };
+      const { repoDesignationId } = request.params;
 
       if (!db) throw new Error('Database not configured');
 

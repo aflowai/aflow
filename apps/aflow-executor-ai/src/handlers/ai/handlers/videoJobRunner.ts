@@ -24,8 +24,6 @@ import {
   type AsyncReplayGuarantee,
   type MediaBoundEntity,
   type MediaRenderedFormat,
-  type StepExecutionId,
-  type TenantId,
 } from '@aflow/schemas';
 import type { AsyncJobRepository } from '@aflow/database';
 import {
@@ -452,9 +450,9 @@ async function driveJob(lane: VideoLane, record: AsyncJobRecord): Promise<StepRe
       // an earlier attempt, and a dedupe key derived from this attempt would
       // not match the submit the provider already accepted.
       clientRequestId: record.clientRequestId,
-      tenantId: ctx.job.tenantId as TenantId,
+      tenantId: ctx.job.tenantId,
       runId: ctx.runId,
-      stepExecutionId: ctx.job.stepExecutionId as StepExecutionId,
+      stepExecutionId: ctx.job.stepExecutionId,
       attempt: ctx.job.attempt,
     });
     if (!(await repository.markSubmitted(jobKey, submitted.providerJobId))) {

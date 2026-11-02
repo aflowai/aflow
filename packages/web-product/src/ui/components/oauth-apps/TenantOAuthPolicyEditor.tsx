@@ -94,8 +94,7 @@ export function TenantOAuthPolicyEditor({ policy, onSave }: TenantOAuthPolicyEdi
                 onChange={(e) => {
                   setDraft((p) => ({
                     ...p,
-                    defaultOwnerScope: (e.target as HTMLSelectElement)
-                      .value as TenantOAuthPolicy['defaultOwnerScope'],
+                    defaultOwnerScope: e.target.value as TenantOAuthPolicy['defaultOwnerScope'],
                   }));
                 }}
               >
@@ -114,8 +113,7 @@ export function TenantOAuthPolicyEditor({ policy, onSave }: TenantOAuthPolicyEdi
                 onChange={(e) => {
                   setDraft((p) => ({
                     ...p,
-                    defaultClientScope: (e.target as HTMLSelectElement)
-                      .value as TenantOAuthPolicy['defaultClientScope'],
+                    defaultClientScope: e.target.value as TenantOAuthPolicy['defaultClientScope'],
                   }));
                 }}
               >

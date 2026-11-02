@@ -1,5 +1,3 @@
-import type { SkillBundleId } from '@aflow/schemas';
-
 import type { AuthoredSkillBundle } from '../skillBundleCatalog.js';
 import {
   ALPACA_ACCOUNT_READ_API_DEFINITION,
@@ -183,7 +181,7 @@ same window. Raw daily P&L is not a signal anywhere.
 `;
 
 export const ALPACA_THESIS_TRADING: AuthoredSkillBundle = {
-  bundleId: 'alpaca-thesis-trading' as SkillBundleId,
+  bundleId: 'alpaca-thesis-trading',
   revision: 2,
   name: 'Alpaca Thesis Trading',
   tagline:

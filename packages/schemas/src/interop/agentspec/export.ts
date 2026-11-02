@@ -331,7 +331,7 @@ function exportStepToNode(
                   id: `llm.${step.stepId}`,
                   name: 'llm-config',
                   model_id: config['model'] as string,
-                } as AgentSpecLlmConfig)
+                } satisfies AgentSpecLlmConfig)
               : undefined,
           ),
         },
@@ -351,7 +351,7 @@ function exportStepToNode(
                 id: `llm.${step.stepId}`,
                 name: 'llm-config',
                 model_id: config['model'] as string,
-              } as AgentSpecLlmConfig)
+              } satisfies AgentSpecLlmConfig)
             : undefined,
         ),
       };

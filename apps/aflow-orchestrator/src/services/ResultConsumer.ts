@@ -22,7 +22,7 @@ import type { ShardManager } from './ShardManager.js';
 import type { WakeHold } from './wakeHold.js';
 import { isSlowBlockingRead } from '@aflow/lib';
 import { buildAflowContext } from '@aflow/observability';
-import { errorContextFromUnknown, type StepResultMessage, type TenantId } from '@aflow/schemas';
+import { errorContextFromUnknown, type StepResultMessage } from '@aflow/schemas';
 import { getOrchestratorLogger } from '../lib/orchestratorLogger.js';
 import { failRun } from './SessionOrchestrator/handlers/failRun.js';
 import {
@@ -569,7 +569,7 @@ async function routeWorkflowTaskResultToHarness(
   }
 
   await onWorkflowTaskComplete(harnessDeps, {
-    tenantId: result.tenantId as TenantId,
+    tenantId: result.tenantId,
     workflowExecution: {
       runId: ref.runId,
       taskId: ref.taskId,

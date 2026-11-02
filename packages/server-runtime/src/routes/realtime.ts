@@ -524,7 +524,7 @@ activity over one long-lived connection per tab.
           ? Buffer.concat(raw).toString()
           : raw instanceof Buffer
             ? raw.toString()
-            : new TextDecoder().decode(raw as ArrayBuffer);
+            : new TextDecoder().decode(raw);
 
         let parsedJson: unknown;
         try {
@@ -547,7 +547,7 @@ activity over one long-lived connection per tab.
             typeof parsedJson === 'object' &&
             parsedJson !== null &&
             'requestId' in parsedJson &&
-            typeof (parsedJson as { requestId: unknown }).requestId === 'string'
+            typeof parsedJson.requestId === 'string'
               ? (parsedJson as { requestId: string }).requestId
               : undefined;
           conn.send({

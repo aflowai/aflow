@@ -18,12 +18,7 @@ import {
   upsertJoinedParticipant,
   withTenantSchema,
 } from '@aflow/database';
-import {
-  SessionIdSchema,
-  SessionMemberSchema,
-  SessionRosterEntrySchema,
-  type SessionId,
-} from '@aflow/schemas';
+import { SessionIdSchema, SessionMemberSchema, SessionRosterEntrySchema } from '@aflow/schemas';
 import { disambiguateLabels, resolveUserLabels, rosterUserLabel } from '@aflow/cybernetic-runtime';
 import { publishActionCenterWake } from '@aflow/redis';
 import { BadRequestError, ForbiddenError, NotFoundError } from '../lib/errors.js';
@@ -241,7 +236,7 @@ export function registerSessionParticipantRoutes(fastify: FastifyInstance): void
         try {
           await postRoomMessageDirect(fastify.appContext.redis, db, {
             tenantId: tenant.tenantId,
-            sessionId: sessionId as SessionId,
+            sessionId: sessionId,
             actorUserId: actor.userId,
             ...(actor.displayName ? { actorDisplayName: actor.displayName } : {}),
             body: 'joined the session',

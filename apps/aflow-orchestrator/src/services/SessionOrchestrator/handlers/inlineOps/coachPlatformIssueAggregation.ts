@@ -23,7 +23,7 @@ export async function recordProposalInSessionLedger(
   proposalId: string,
 ): Promise<void> {
   try {
-    const ledgerKey = coachProposalsLedgerKey(args.context.tenantId as string, args.context.runId);
+    const ledgerKey = coachProposalsLedgerKey(args.context.tenantId, args.context.runId);
     await args.redis.sadd(ledgerKey, proposalId);
     await args.redis.expire(ledgerKey, SESSION_PROPOSAL_LEDGER_TTL_SECONDS);
   } catch {
@@ -83,7 +83,7 @@ export async function tryAggregatePlatformIssue(
     deps.docRepo,
     deps.dirRepo,
     existing.docPath,
-    updated as unknown as Record<string, unknown>,
+    updated,
     'json',
     deps.spaceId,
     'upsert',

@@ -4,12 +4,7 @@
 import type { ExecutorContext, StepResult } from '@aflow/executor-runtime';
 import { failureWithError } from '@aflow/executor-runtime';
 import { validationError } from '@aflow/executor-runtime';
-import type {
-  TenantId,
-  StepExecutionId,
-  AiImageGenerateInput,
-  MediaBoundEntity,
-} from '@aflow/schemas';
+import type { AiImageGenerateInput, MediaBoundEntity } from '@aflow/schemas';
 import { IMAGE_MODELS } from '@aflow/schemas';
 import { getAIClientForContext } from '../aiClient.js';
 import { DEFAULT_AI_MODELS } from '@aflow/ai-client';
@@ -137,9 +132,9 @@ export async function handleImageGenerate(
     const response = await adapter.generateImage({
       ...renderFields,
       model,
-      tenantId: ctx.job.tenantId as TenantId,
+      tenantId: ctx.job.tenantId,
       runId: ctx.runId,
-      stepExecutionId: ctx.job.stepExecutionId as StepExecutionId,
+      stepExecutionId: ctx.job.stepExecutionId,
       attempt: ctx.job.attempt,
     });
 

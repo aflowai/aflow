@@ -346,7 +346,7 @@ async function decodeOutputRef(
       );
     }
     try {
-      const fetched = await payloadStore.retrieve(outputRef as never);
+      const fetched = await payloadStore.retrieve(outputRef);
       if (fetched === null || fetched === undefined) return null;
       // PayloadStore returns parsed objects (Redis/GCS), strings, or Buffers.
       if (typeof fetched === 'object' && !Array.isArray(fetched) && !Buffer.isBuffer(fetched)) {

@@ -575,7 +575,7 @@ async function handleProposeWorkflowChange(
   if (workflowForValidations) {
     const snapshot = await loadProposalValidationSnapshot({
       db,
-      tenantId: args.context.tenantId as string,
+      tenantId: args.context.tenantId,
       spaceId,
     });
     validations = runWorkflowProposalValidations(workflowForValidations, snapshot, campaignParams);
@@ -650,7 +650,7 @@ async function handleProposeWorkflowChange(
     docRepo,
     dirRepo,
     `${proposalDir}/${id}.json`,
-    stagedChange as unknown as Record<string, unknown>,
+    stagedChange,
     'json',
     spaceId,
     'create',
@@ -764,7 +764,7 @@ async function handleFlagPattern(
     docRepo,
     dirRepo,
     `${proposalDirForRoute(flagRoute)}/${id}.json`,
-    stagedChange as unknown as Record<string, unknown>,
+    stagedChange,
     'json',
     spaceId,
     'create',
@@ -884,7 +884,7 @@ async function handleProposeArtifactUpdate(
     docRepo,
     dirRepo,
     `${proposalDirForRoute(route)}/${id}.json`,
-    stagedChange as unknown as Record<string, unknown>,
+    stagedChange,
     'json',
     spaceId,
     'create',
@@ -968,7 +968,7 @@ async function handleProposeAnomaly(
     docRepo,
     dirRepo,
     `/coach/anomalies/${id}.json`,
-    anomalyReport as unknown as Record<string, unknown>,
+    anomalyReport,
     'json',
     spaceId,
     'create',
@@ -1037,7 +1037,7 @@ async function handleRecordObservation(
   try {
     const result = await persistObservation({
       db,
-      tenantId: args.context.tenantId as string,
+      tenantId: args.context.tenantId,
       spaceId,
       coachSessionId: args.context.runId,
       workflowSlug,
@@ -1510,7 +1510,7 @@ async function handleResolveLearning(
   }
 
   const result = await resolveLearning({
-    tenantId: args.context.tenantId as string,
+    tenantId: args.context.tenantId,
     spaceId,
     learningId: input.learningId,
     action: input.action,
@@ -1598,7 +1598,7 @@ async function handleReviewFinalize(
     if (sc.coachSessionId !== coachSessionId && !ledgerIdSet.has(proposalId)) {
       wrongSessionProposals.push({
         id: proposalId,
-        foundCoachSessionId: (sc.coachSessionId as string | null | undefined) ?? null,
+        foundCoachSessionId: sc.coachSessionId ?? null,
       });
       continue;
     }

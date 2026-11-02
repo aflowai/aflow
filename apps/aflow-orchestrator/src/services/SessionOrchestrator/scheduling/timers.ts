@@ -390,9 +390,9 @@ export function createProcessDueTimers(bindings: SessionOrchestratorBindings) {
       const now = Date.now();
       const syntheticResult: StepResultMessage = {
         messageVersion: 1,
-        tenantId: timer.tenantId as TenantId,
+        tenantId: timer.tenantId,
         sessionId,
-        stepExecutionId: timer.stepExecutionId as StepExecutionId,
+        stepExecutionId: timer.stepExecutionId,
         parentStepExecutionId:
           stepState.parentStepExecutionId != null
             ? (stepState.parentStepExecutionId as StepExecutionId)
@@ -437,7 +437,7 @@ export function createProcessDueTimers(bindings: SessionOrchestratorBindings) {
                 retryable: true,
                 timestamp: new Date(now).toISOString(),
               },
-        traceId: timer.traceId as TraceId,
+        traceId: timer.traceId,
         finishedAtMs: now,
       };
       // A redelivery after a landed disposition whose ack was lost re-fails

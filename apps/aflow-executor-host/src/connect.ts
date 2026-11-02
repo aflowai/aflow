@@ -360,7 +360,7 @@ async function main(): Promise<void> {
             mode: writable ? 'readwrite' : 'read',
             allowsExecution,
             singleFile: info.isFile(),
-          } as HostBinding,
+          },
           'connect',
           new AbortController().signal,
         );

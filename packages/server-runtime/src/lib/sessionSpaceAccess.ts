@@ -11,7 +11,7 @@ import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq } from 'drizzle-orm';
 import { createTenantContext, sessions, withTenantSchema, workflowRuns } from '@aflow/database';
 import { getSessionStateSafe } from '@aflow/redis';
-import type { SessionId, TenantId } from '@aflow/schemas';
+import type { TenantId } from '@aflow/schemas';
 
 /**
  * Tri-state so callers can tell "this session is not in your tenant" (deny)
@@ -30,7 +30,7 @@ export async function resolveSessionSpaceId(
   let foundInHotState = false;
 
   if (redis) {
-    const result = await getSessionStateSafe(redis, tenantId, sessionId as SessionId);
+    const result = await getSessionStateSafe(redis, tenantId, sessionId);
     if (result.ok) {
       // `spaceId` is optional in hot state, so a record without one is not
       // evidence that the session has no space — only the durable row is.

@@ -107,7 +107,7 @@ export function createRetryRun(bindings: SessionOrchestratorBindings) {
       if (!parentAgentStepId) {
         for (const s of agentDef.steps) {
           if (s.operation === 'ai.agent.turn') {
-            parentAgentStepId = s.stepId as StepId;
+            parentAgentStepId = s.stepId;
             break;
           }
         }
@@ -282,7 +282,7 @@ export function createRetryRun(bindings: SessionOrchestratorBindings) {
         ...(runState.spaceId ? { spaceId: runState.spaceId } : {}),
       },
       stepId: targetStepId,
-      inputRef: params.inputRef ?? failedStepState?.inputRef ?? runState.inputRef ?? ('' as never),
+      inputRef: params.inputRef ?? failedStepState?.inputRef ?? runState.inputRef ?? '',
       ...(retryToolResults ? { lastToolResults: retryToolResults } : {}),
     });
 

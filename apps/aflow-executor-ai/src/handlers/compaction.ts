@@ -467,7 +467,7 @@ export async function triggerCompaction(
   if (previousArtifactRef) {
     try {
       previousArtifact = (await config.payloadStore.retrieve(
-        previousArtifactRef as never,
+        previousArtifactRef,
       )) as CompactionArtifact;
     } catch {
       // Previous artifact not found — treat as fresh compaction

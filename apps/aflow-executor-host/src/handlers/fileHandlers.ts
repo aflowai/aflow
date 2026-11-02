@@ -77,9 +77,7 @@ async function failure(ctx: ExecutorContext, error: unknown): Promise<StepResult
   // Node's fs errors embed the absolute host path, which the relative-path
   // binding otherwise never reveals. Report the code, not the message.
   const code =
-    typeof error === 'object' && error !== null && 'code' in error
-      ? String((error as { code: unknown }).code)
-      : 'unknown';
+    typeof error === 'object' && error !== null && 'code' in error ? String(error.code) : 'unknown';
   ctx.log.error('host file operation failed', { code, error });
   return await failureWithError(
     ctx,

@@ -54,7 +54,7 @@ export async function dispatchAllOrCollectFailures(
     component: 'WorkflowRunHarness:dispatchAllOrCollectFailures',
     runId: args.runId,
   });
-  const reservation = await reserveTaskSlots(deps.db, args.tenantId as string, {
+  const reservation = await reserveTaskSlots(deps.db, args.tenantId, {
     runId: args.runId,
     readyTaskIds: args.readyTasks.map((task) => task.taskId),
   });

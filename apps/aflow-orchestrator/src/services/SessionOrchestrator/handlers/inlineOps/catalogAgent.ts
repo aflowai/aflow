@@ -66,7 +66,7 @@ export async function handleCatalogAgentInline(args: InlineHandlerArgs): Promise
         }
 
         const platformItems: CatalogAgentItem[] = platformRoles.map((entry) => {
-          const defJson = entry.definition as unknown as Record<string, unknown>;
+          const defJson = entry.definition;
           const metadata = (defJson['metadata'] as Record<string, unknown> | undefined) ?? {};
           return {
             target: { kind: 'platform-role', systemRole: entry.systemRole as SystemRole },
@@ -157,13 +157,13 @@ export async function handleCatalogAgentInline(args: InlineHandlerArgs): Promise
 
         outputData = {
           target: resolved.target,
-          name: (metadata['name'] as string | undefined) ?? '',
-          description: (metadata['description'] as string | undefined) ?? '',
+          name: metadata['name'] ?? '',
+          description: metadata['description'] ?? '',
           version: resolved.version,
           system: resolved.isPlatform,
-          tags: (metadata['tags'] as string[] | undefined) ?? [],
+          tags: metadata['tags'] ?? [],
           inputContract: inputVars,
-          supportedModes: (defJson['supportedModes'] as string[] | undefined) ?? [],
+          supportedModes: defJson['supportedModes'] ?? [],
         };
         break;
       }

@@ -321,7 +321,7 @@ export function validateAgentOutput(
   const formatted = filtered.map(formatAjvError);
   const actualDesc =
     typeof output === 'object' && output !== null
-      ? `Actual fields: [${Object.keys(output as Record<string, unknown>).join(', ')}]`
+      ? `Actual fields: [${Object.keys(output).join(', ')}]`
       : `Actual type: ${typeof output}`;
   return {
     ok: false,

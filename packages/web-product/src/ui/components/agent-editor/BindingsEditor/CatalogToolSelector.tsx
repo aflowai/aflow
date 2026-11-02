@@ -369,7 +369,7 @@ export function CatalogToolSelector({ value, onChange, operations }: CatalogTool
                               <Checkbox
                                 checked={checked}
                                 onChange={() => {
-                                  toggleCoreOp(op.operationId as string);
+                                  toggleCoreOp(op.operationId);
                                 }}
                                 size="sm"
                               />

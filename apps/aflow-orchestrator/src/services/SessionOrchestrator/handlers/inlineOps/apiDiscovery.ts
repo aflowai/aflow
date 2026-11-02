@@ -1,12 +1,6 @@
 import type { Redis } from 'ioredis';
 import { getOrchestratorLogger } from '../../../../lib/orchestratorLogger.js';
-import type {
-  StepExecutionId,
-  OperationId,
-  StepDefinition,
-  TenantId,
-  IdempotencyKey,
-} from '@aflow/schemas';
+import type { StepExecutionId, StepDefinition, TenantId, IdempotencyKey } from '@aflow/schemas';
 import { addStepResult } from '@aflow/redis';
 import type { PayloadStore } from '@aflow/payload-store';
 import { encodeInlineOpOutputRef } from './helpers.js';
@@ -126,7 +120,7 @@ export async function loadApiDefinitionsFromDb(
           status: ready ? ('ready' as const) : ('needs_setup' as const),
           callMode,
           endpoints,
-          tags: (r.tags as string[] | undefined) ?? [],
+          tags: r.tags ?? [],
         };
       });
   } catch (err) {
@@ -229,7 +223,7 @@ export async function handleListApiDefinitionsInline(
       parentStepExecutionId: parentStepExecutionId ?? null,
       stepId: stepDef.stepId,
       stepType: stepDef.stepType,
-      operationId: stepDef.operation as OperationId,
+      operationId: stepDef.operation,
       attempt,
       idempotencyKey,
       status: 'SUCCEEDED',
@@ -261,7 +255,7 @@ export async function handleListApiDefinitionsInline(
       parentStepExecutionId: parentStepExecutionId ?? null,
       stepId: stepDef.stepId,
       stepType: stepDef.stepType,
-      operationId: stepDef.operation as OperationId,
+      operationId: stepDef.operation,
       attempt,
       idempotencyKey,
       status: 'FAILED',

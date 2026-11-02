@@ -35,7 +35,7 @@ export async function buildSessionCatchupEvents(
   spaceId: string,
   redis?: Redis | null,
 ): Promise<{ events: ApiSessionEvent[]; runsTruncated: boolean; tasksTruncated: number }> {
-  const allWaiters = await loadPendingWaitersForSession(db, tenantId, sessionId as string);
+  const allWaiters = await loadPendingWaitersForSession(db, tenantId, sessionId);
   if (allWaiters.length === 0) {
     return { events: [], runsTruncated: false, tasksTruncated: 0 };
   }

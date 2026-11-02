@@ -13,7 +13,6 @@ import {
   getAllowedAgentDecisionActions,
   normalizeDisallowedPauseDecision,
 } from '@aflow/schemas';
-import type { TenantId, StepExecutionId } from '@aflow/schemas';
 import type {
   AIClient,
   ChatMessage,
@@ -535,9 +534,9 @@ export async function parseGenerateJsonAgentDecision(
 
     try {
       await deps.payloadStore.store({
-        tenantId: ctx.job.tenantId as TenantId,
+        tenantId: ctx.job.tenantId,
         runId: ctx.runId,
-        stepExecutionId: ctx.job.stepExecutionId as StepExecutionId,
+        stepExecutionId: ctx.job.stepExecutionId,
         attempt: ctx.job.attempt,
         kind: 'logs',
         data: {
@@ -579,9 +578,9 @@ export async function parseGenerateJsonAgentDecision(
       rawJsonSchema: agentDecisionJsonSchema,
       strictJsonSchema: false,
       temperature: 0,
-      tenantId: ctx.job.tenantId as TenantId,
+      tenantId: ctx.job.tenantId,
       runId: ctx.runId,
-      stepExecutionId: ctx.job.stepExecutionId as StepExecutionId,
+      stepExecutionId: ctx.job.stepExecutionId,
       attempt: ctx.job.attempt,
     });
 
@@ -743,9 +742,9 @@ export async function repairPersistableAgentDecision(
     rawJsonSchema: agentDecisionJsonSchema,
     strictJsonSchema: false,
     temperature: 0,
-    tenantId: ctx.job.tenantId as TenantId,
+    tenantId: ctx.job.tenantId,
     runId: ctx.runId,
-    stepExecutionId: ctx.job.stepExecutionId as StepExecutionId,
+    stepExecutionId: ctx.job.stepExecutionId,
     attempt: ctx.job.attempt,
   });
 
