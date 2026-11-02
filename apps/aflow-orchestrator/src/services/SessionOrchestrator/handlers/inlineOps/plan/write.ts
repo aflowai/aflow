@@ -170,27 +170,34 @@ export async function handlePlanNodeUpdate(
   const context = writeContext(args, state);
   if (context.resident && input.status === 'done') {
     const credentialOwnerId = await sessionUser(args);
-    await dispatchOrWaitOnExecutor(
-      args.redis,
-      StepJobMessageSchema.parse({
-        tenantId: args.context.tenantId,
-        ...(args.workflowExecution
-          ? { workflowExecution: args.workflowExecution }
-          : { sessionId: args.context.runId }),
-        spaceId: context.spaceId,
-        stepExecutionId: args.stepExecutionId,
-        parentStepExecutionId: args.parentStepExecutionId,
-        stepId: args.stepDef.stepId,
-        stepType: 'api',
-        operationId: args.stepDef.operation,
-        idempotencyKey: args.idempotencyKey,
-        inputRef: args.resolvedInputRef,
-        traceId: args.context.traceId,
-        attempt: args.attempt,
-        scheduledAtMs: args.scheduledAtMs,
-        credentialOwnerId,
-      }),
-    );
+    // The API executor records the close, so the release precedes the dispatch.
+    const released = await releaseBeforeWrite(args, input.nodeId);
+    try {
+      await dispatchOrWaitOnExecutor(
+        args.redis,
+        StepJobMessageSchema.parse({
+          tenantId: args.context.tenantId,
+          ...(args.workflowExecution
+            ? { workflowExecution: args.workflowExecution }
+            : { sessionId: args.context.runId }),
+          spaceId: context.spaceId,
+          stepExecutionId: args.stepExecutionId,
+          parentStepExecutionId: args.parentStepExecutionId,
+          stepId: args.stepDef.stepId,
+          stepType: 'api',
+          operationId: args.stepDef.operation,
+          idempotencyKey: args.idempotencyKey,
+          inputRef: args.resolvedInputRef,
+          traceId: args.context.traceId,
+          attempt: args.attempt,
+          scheduledAtMs: args.scheduledAtMs,
+          credentialOwnerId,
+        }),
+      );
+    } catch (error) {
+      await restoreAfterRefusal(args, input.nodeId, released);
+      throw error;
+    }
     return;
   }
   const conversationId = operatorConversation(args, state);

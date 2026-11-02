@@ -20,6 +20,8 @@ import type { BackgroundTaskLogger } from '@aflow/lib';
 
 const {
   mockAddStepResult,
+  mockAddStepJob,
+  mockGetSessionState,
   mockCreatePlanNode,
   mockUpdatePlanNode,
   mockIsLive,
@@ -28,6 +30,8 @@ const {
   mockWake,
 } = vi.hoisted(() => ({
   mockAddStepResult: vi.fn(),
+  mockAddStepJob: vi.fn(),
+  mockGetSessionState: vi.fn(),
   mockCreatePlanNode: vi.fn(),
   mockUpdatePlanNode: vi.fn(),
   mockIsLive: vi.fn(),
@@ -39,7 +43,8 @@ const {
 vi.mock('@aflow/redis', async (original) => ({
   ...(await original<typeof import('@aflow/redis')>()),
   addStepResult: (...args: unknown[]) => mockAddStepResult(...args),
-  getSessionState: vi.fn(() => Promise.resolve({ planResident: false, trigger: 'chat' })),
+  addStepJob: (...args: unknown[]) => mockAddStepJob(...args),
+  getSessionState: (...args: unknown[]) => mockGetSessionState(...args),
   getSessionStateSafe: vi.fn(() => Promise.resolve({ ok: true, state: {} })),
   getRunAccessGrant: vi.fn(() => Promise.resolve(null)),
   updateStepState: vi.fn(),
@@ -186,6 +191,17 @@ async function update(status: PlanNode['status'], expectedRevision: number): Pro
   );
 }
 
+/** A resident's close, which the handler dispatches to the API executor. */
+async function residentClose(): Promise<void> {
+  await handlePlanNodeInline(
+    makeArgs(
+      'plan.node.update',
+      { nodeId: NODE_ID, expectedRevision: 2, status: 'done', outcome: 'Met' },
+      { scheduledAtMs: 1 },
+    ),
+  );
+}
+
 async function deliveryCycle() {
   return runWaitDeliveryCycle(
     { harnessDeps: { redis, db: {} } as unknown as HarnessDeps, logger },
@@ -199,6 +215,8 @@ beforeEach(async () => {
   redis = new RedisMock() as unknown as Redis;
   await redis.flushall();
   mockIsLive.mockResolvedValue(true);
+  mockGetSessionState.mockResolvedValue({ planResident: false, trigger: 'chat' });
+  mockAddStepJob.mockResolvedValue(undefined);
   mockQueueMessage.mockResolvedValue({ eventId: 'e-1', messageSeq: 3 });
   mockWake.mockResolvedValue('woke');
 });
@@ -294,6 +312,66 @@ describe('a plan node write holds a wait for its writer', () => {
     const posted = mockQueueMessage.mock.calls[0]?.[2] as { body: string; sessionId: string };
     expect(posted.sessionId).toBe(SESSION);
     expect(posted.body).toContain(`(${NODE_ID}) is now active`);
+  });
+
+  it("holds its wait again from the cancelled one's start after a status write that throws", async () => {
+    engineWrites('blocked', 'active', 2);
+    await update('blocked', 1);
+    const [cancelled] = await heldWaits();
+    let heldDuringWrite: WaitRegistration[] | undefined;
+    mockUpdatePlanNode.mockImplementationOnce(async () => {
+      heldDuringWrite = await heldWaits();
+      throw new Error('the database connection closed');
+    });
+
+    await update('dropped', 2);
+
+    expect(heldDuringWrite).toEqual([]);
+    expect(lastResult().status).toBe('FAILED');
+    const held = await heldWaits();
+    expect(held).toHaveLength(1);
+    expect(held[0]?.waitId).not.toBe(cancelled?.waitId);
+    expect(held[0]?.sessionId).toBe(SESSION);
+    expect(held[0]?.since).toBe(cancelled?.since);
+  });
+
+  it('releases its wait before a resident close is dispatched, so the close wakes no one', async () => {
+    engineWrites('blocked', 'active', 2);
+    await update('blocked', 1);
+    mockGetSessionState.mockResolvedValue({ planResident: true, trigger: 'schedule' });
+    let heldAtDispatch: WaitRegistration[] | undefined;
+    mockAddStepJob.mockImplementationOnce(async () => {
+      heldAtDispatch = await heldWaits();
+    });
+
+    await residentClose();
+
+    expect(heldAtDispatch).toEqual([]);
+    expect(mockAddStepJob).toHaveBeenCalledWith(
+      redis,
+      expect.objectContaining({ stepType: 'api', operationId: 'plan.node.update' }),
+    );
+    expect(mockUpdatePlanNode).toHaveBeenCalledTimes(1);
+    // The API executor records the close.
+    await recordStatus('done', 'blocked', 3);
+    expect(await deliveryCycle()).toEqual({ candidates: 0 });
+    expect(mockQueueMessage).not.toHaveBeenCalled();
+  });
+
+  it("holds its wait again from the cancelled one's start when a resident close is not dispatched", async () => {
+    engineWrites('blocked', 'active', 2);
+    await update('blocked', 1);
+    const [cancelled] = await heldWaits();
+    mockGetSessionState.mockResolvedValue({ planResident: true, trigger: 'schedule' });
+    mockAddStepJob.mockRejectedValueOnce(new Error('the api lane breaker is open'));
+
+    await residentClose();
+
+    expect(mockAddStepJob).toHaveBeenCalledTimes(1);
+    expect(lastResult().status).toBe('FAILED');
+    const held = await heldWaits();
+    expect(held).toHaveLength(1);
+    expect(held[0]?.since).toBe(cancelled?.since);
   });
 
   it('holds no wait for a workflow task', async () => {
