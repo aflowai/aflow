@@ -89,7 +89,7 @@ export function applyActivityDelta(state: RunViewState, action: LiveDeltaAction)
     partial,
     consumedBytes: Math.max(base.consumedBytes, offset + deltaBytes),
     lastActivityAtMs: marked ?? prior?.lastActivityAtMs ?? base.lastActivityAtMs,
-    settled: prior?.settled || state.endedSteps[stepExecutionId],
+    settled: prior?.settled === true || state.endedSteps[stepExecutionId] === true,
   };
 
   return { ...state, harnessActivity: { ...state.harnessActivity, [stepExecutionId]: entry } };
@@ -107,7 +107,7 @@ export function settleHarnessActivity(state: RunViewState, event: SessionEvent):
   if (stepExecutionId === undefined) return state;
   if (
     (event.eventType === 'StepScheduled' || event.eventType === 'StepStarted') &&
-    state.endedSteps[stepExecutionId]
+    state.endedSteps[stepExecutionId] === true
   ) {
     const { [stepExecutionId]: _restarted, ...endedSteps } = state.endedSteps;
     return { ...state, endedSteps };
@@ -117,7 +117,7 @@ export function settleHarnessActivity(state: RunViewState, event: SessionEvent):
     (event.eventType === 'StepFailed' && event.metadata?.willRetry !== true);
   if (!ends) return state;
   let next = state;
-  if (!state.endedSteps[stepExecutionId]) {
+  if (state.endedSteps[stepExecutionId] !== true) {
     next = { ...next, endedSteps: { ...next.endedSteps, [stepExecutionId]: true } };
   }
   const held = next.harnessActivity[stepExecutionId];
@@ -136,7 +136,7 @@ export function settleHarnessActivity(state: RunViewState, event: SessionEvent):
 export function recordSessionStep(state: RunViewState, event: SessionEvent): RunViewState {
   const stepExecutionId = event.stepExecutionId;
   if (stepExecutionId === undefined || !event.eventType.startsWith('Step')) return state;
-  if (state.sessionSteps[stepExecutionId]) return state;
+  if (state.sessionSteps[stepExecutionId] === true) return state;
   return { ...state, sessionSteps: { ...state.sessionSteps, [stepExecutionId]: true } };
 }
 
@@ -171,7 +171,8 @@ export function settleOnRest(state: RunViewState, event: SessionEvent): RunViewS
     });
   }
 
-  const stops = (id: string, feed: HarnessActivityState) => !feed.settled && state.sessionSteps[id];
+  const stops = (id: string, feed: HarnessActivityState) =>
+    !feed.settled && state.sessionSteps[id] === true;
   let harnessActivity = state.harnessActivity;
   if (Object.entries(harnessActivity).some(([id, feed]) => stops(id, feed))) {
     harnessActivity = Object.fromEntries(
@@ -216,7 +217,7 @@ export function hydrateHarnessActivity(
   const feeds = { ...live, ...snapshot.harnessActivity };
   for (const [stepExecutionId, feed] of Object.entries(live)) {
     if (stepExecutionId in snapshot.harnessActivity || feed.settled) continue;
-    if (snapshot.endedSteps[stepExecutionId]) {
+    if (snapshot.endedSteps[stepExecutionId] === true) {
       feeds[stepExecutionId] = { ...feed, settled: true };
     }
   }
