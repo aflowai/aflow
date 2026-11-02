@@ -16,15 +16,17 @@
 **Why**
 
 - A GitLab folder meets a dead end after the push. The publication cannot open a merge request, the shepherd cannot read or merge one, and the event source polls nothing.
-- GitHub's endpoints and response shapes sit inside six skill and poller files, 134 references in all at `610b911b`.
+- GitHub's endpoints and response shapes sit inside 17 skill and poller files, 234 references in all at `610b911b`.
+- Two files beneath the skills shape GitHub's replies for the shepherd. They hold 97 references more.
 - The shepherd's rules consume a handful of facts, not GitHub's shapes. A seam over those facts is small.
 - The repo coordinate already keeps a host, so the folder already says which forge it lives on.
 
 **What it affects**
 
-- `@aflow/platform-artifacts`: Local Publish (`publishLocalChanges.ts`) and the Local PR Shepherd (`localPrShepherd.ts`, `localPrShepherdRules.ts`, `localPrShepherdMerge.ts`).
-- `apps/aflow-orchestrator`: the pull request event source (`pullRequestEvents/github.ts`, `pullRequestEvents/source.ts`).
-- `@aflow/schemas`: the forge vocabulary's shapes, and the coordinate's host as the provider's key.
+- `@aflow/platform-artifacts`: Local Publish (`publishLocalChanges.ts` and two of its sibling files) and the Local PR Shepherd (`localPrShepherd.ts` and ten of its sibling files), as §2 lists them.
+- `apps/aflow-orchestrator`: the pull request event source (`pullRequestEvents/github.ts`, `pullRequestEvents/source.ts`) and the `index.ts` that builds it.
+- `apps/aflow-executor-api`: the shepherd's response presets (`githubShepherd.ts`).
+- `@aflow/schemas`: the forge vocabulary's shapes, the shepherd's preset records (`pullRequestShepherd.ts`), and the coordinate's host as the provider's key.
 - The API definitions: GitHub's stays as it is, and GitLab gains one of its own.
 - The operator, who names a GitLab credential and a GitLab project to prove the loop against.
 
@@ -64,17 +66,49 @@ The loop is written in GitHub's words. Its skills and its poller call GitHub's e
 
 ## 2. What the code shows today
 
-The counts are GitHub-specific references per file, measured at `610b911b`.
+The counts are GitHub-specific references per file, measured at `610b911b`. The method is this:
 
-| File                             | Refs | What they are                                                                                                   |
-| -------------------------------- | ---- | --------------------------------------------------------------------------------------------------------------- |
-| `publishLocalChanges.ts`         | 20   | The GitHub API definition it ships, five endpoint ids, and the calls that find, update and open a pull request. |
-| `localPrShepherd.ts`             | 39   | Fourteen endpoint ids, the read calls, and the response fields it reshapes.                                     |
-| `localPrShepherdRules.ts`        | 20   | Response shapes only. It calls no endpoint.                                                                     |
-| `localPrShepherdMerge.ts`        | 21   | The merge, its reads of required checks and reviews, and the merge reply.                                       |
-| `pullRequestEvents/github.ts`    | 14   | The space's GitHub binding, `api.github.com`, and GitHub's headers.                                             |
-| `pullRequestEvents/source.ts`    | 20   | Four endpoint paths and the raw fields it parses from them.                                                     |
-| `sweep.ts`, `arm.ts`, `owner.ts` | 0    | Nothing forge-specific.                                                                                         |
+- A reference is an identifier, a literal, a comment, an endpoint id or path, an API definition or binding name, or a response field name read.
+- Each distinct reference counts once per file, however often it recurs.
+- A field that a transform preset names counts where the file reads it from a GitHub read.
+- A GitHub term such as check run counts once per file, whatever names carry it.
+- The words "pull request" alone do not count. A generic HTTP status does not count either.
+
+The skill and poller files that D3 holds to the vocabulary are these. Skill files sit in `packages/platform-artifacts/src/skillCatalog/`, and poller files in `apps/aflow-orchestrator/src/services/pullRequestEvents/`.
+
+| File                                   | Refs | What they are                                                                                                   |
+| -------------------------------------- | ---- | --------------------------------------------------------------------------------------------------------------- |
+| `publishLocalChanges.ts`               | 20   | The GitHub API definition it ships, five endpoint ids, and the calls that find, update and open a pull request. |
+| `publishLocalChangesOverride.ts`       | 15   | Two endpoint ids, their parameters, and the preset fields that read the hands-off label and the handoff.        |
+| `publishLocalChangesRepository.ts`     | 4    | Prose that names the folder's origin as a GitHub repository.                                                    |
+| `localPrShepherd.ts`                   | 39   | Fourteen endpoint ids, the read calls, and the response fields it reshapes.                                     |
+| `localPrShepherdRules.ts`              | 20   | Response shapes only. It calls no endpoint.                                                                     |
+| `localPrShepherdMerge.ts`              | 21   | The merge, its reads of required checks and reviews, and the merge reply.                                       |
+| `localPrShepherdHandoff.ts`            | 26   | Four issue-comment endpoint ids and their parameters, the comment's id and author login, and the merge reply.   |
+| `localPrShepherdHandOver.ts`           | 25   | Fourteen response fields it carries to the Helmsman, and the prose that quotes GitHub's answers.                |
+| `localPrShepherdWiring.ts`             | 10   | The `github` task builder, its `'github'` API id, the read projection, and the preset fields every read binds.  |
+| `localPrShepherdRemedies.ts`           | 6    | The head, base, failing checks and jobs it briefs from, and GitHub's rule on runs after a base moves.           |
+| `localPrShepherdAbandon.ts`            | 4    | The head sha and the failing check run it claims on, and the `pulls/` record path.                              |
+| `localPrShepherdTurn.ts`               | 4    | GitHub's `updated_at` order, and GitHub's refusal to list pull requests.                                        |
+| `localPrShepherdLease.ts`              | 3    | The head sha and the failing check run the lease holds.                                                         |
+| `localPrShepherdDecisions.ts`          | 1    | GitHub Actions, named as a cause of a failure.                                                                  |
+| `pullRequestEvents/github.ts`          | 14   | The space's GitHub binding, `api.github.com`, and GitHub's headers.                                             |
+| `pullRequestEvents/source.ts`          | 20   | Four endpoint paths and the raw fields it parses from them.                                                     |
+| `apps/aflow-orchestrator/src/index.ts` | 2    | The GitHub reader it builds the event source with.                                                              |
+
+These 17 files hold 234 references in all. Eleven sibling files hold none:
+
+- The shepherd's `localPrShepherdRenewal.ts`.
+- Local Publish's `publishLocalChangesAfterReview.ts`, `publishLocalChangesDecisions.ts`, `publishLocalChangesFixRound.ts` and `publishLocalChangesGate.ts`.
+- Local Publish's `publishLocalChangesMessage.ts`, `publishLocalChangesProse.ts` and `publishLocalChangesReview.ts`.
+- The poller's `sweep.ts`, `arm.ts` and `owner.ts`.
+
+Two more files sit beneath the skills. They shape GitHub's replies into the records the shepherd's rules compare, so they belong to GitHub's provider:
+
+| File                                                         | Refs | What they are                                                                                         |
+| ------------------------------------------------------------ | ---- | ----------------------------------------------------------------------------------------------------- |
+| `apps/aflow-executor-api/src/handlers/api/githubShepherd.ts` | 70   | The response presets. They read 35 response fields from the replies of nine endpoints.                |
+| `packages/schemas/src/operations/pullRequestShepherd.ts`     | 27   | The preset records' shapes, with descriptions that name GitHub's fields, endpoints and review states. |
 
 The shepherd's rules consume a handful of facts:
 
@@ -101,10 +135,17 @@ The repo coordinate (`packages/schemas/src/models/repoCoordinate.ts`) already ke
 
 The loop speaks one vocabulary to any forge. It holds these acts:
 
-- Open a change request.
+- List the open change requests of a repository.
 - Read a change request's state as a handful of facts: mergeable, checks green, review requested changes, merged with its merge commit, and head.
+- Open a change request.
+- Update a change request's title and body.
 - Merge a change request.
+- Read the handoff comment on a change request.
+- Post the handoff comment on a change request.
+- Update the handoff comment on a change request.
 - Name the provider for a folder from the repo coordinate's host.
+
+These are the acts the loop performs today. Local Publish lists, opens and updates. The shepherd lists, reads and merges, and it keeps its handoff in a comment.
 
 The facts are the ones §2 lists, named for what the rules decide on rather than for GitHub's fields. Merged and its merge commit join them, though no rule reads them today. A forge whose merge reply says less needs them to report a merge.
 
@@ -144,6 +185,7 @@ _Rejected:_ a webhook into the machine. The machine sits on a private network an
 
 - `@aflow/platform-artifacts`: Local Publish and the Local PR Shepherd call the vocabulary rather than GitHub's endpoints (D1, D3). The GitHub API definition moves under its provider (D4).
 - `apps/aflow-orchestrator`: the event source polls through the vocabulary (P3). `pullRequestEvents/github.ts` becomes part of GitHub's provider.
+- `apps/aflow-executor-api`: the shepherd's response presets (`githubShepherd.ts`) become part of GitHub's provider (D2).
 - `@aflow/schemas`: the vocabulary's shapes, and the provider named from the coordinate's host (D1).
 - A GitLab API definition beside GitHub's (D4).
 - Stored data: a named credential per forge (D5). The event source's candidate records gain the folder's host where they lack it.
