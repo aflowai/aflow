@@ -98,6 +98,29 @@ export function unchanged(current: PlanNode, input: PlanNodeUpdateInput): PlanOp
   };
 }
 
+export function residentCreates(): PlanOpError {
+  return {
+    ok: false,
+    code: 'PLAN_NODE_RESIDENT_SCOPE',
+    message:
+      'A resident wake proposes work and never approves its own scope, so nothing was written. Create the node ' +
+      'with `proposed` saying why it is worth doing — it is created blocked until a person approves it — or, for ' +
+      'a merged node whose criteria need the change running on the stack, with `liveCheck`.',
+  };
+}
+
+export function residentUnblocks(current: PlanNode): PlanOpError {
+  return {
+    ok: false,
+    code: 'PLAN_NODE_RESIDENT_SCOPE',
+    message:
+      `Plan node "${current.title}" is ${current.status}, and only a person approves, closes or reopens it — Approve on the plan ` +
+      'page or in the Action Center. A resident wake writes what the node waits on in its note and leaves its ' +
+      'status as it stands; nothing was written.',
+    details: { nodeId: current.nodeId, status: current.status },
+  };
+}
+
 export function createdNoteTooLong(noteLength: number): PlanOpError {
   return {
     ok: false,
