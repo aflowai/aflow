@@ -8,6 +8,8 @@ import {
   PLAN_NODE_UPDATE_FIELDS,
   PLAN_TREE_DEPTH_LIMIT,
   type PlanNode,
+  type PlanNodeDependency,
+  type PlanNodeDependInput,
   type PlanNodeRefusalDetails,
   type PlanNodeStatus,
   type PlanNodeUpdateInput,
@@ -237,5 +239,60 @@ export function operatorNoteTooLong(
       noteLength,
       noteMaxChars: PLAN_NODE_PROSE_MAX_CHARS,
     },
+  };
+}
+
+function dependencyRefusalDetails(current: PlanNode): Record<string, unknown> {
+  const details: PlanNodeRefusalDetails = {
+    nodeId: current.nodeId,
+    revision: current.revision,
+    status: current.status,
+    updatedAt: current.updatedAt,
+    differingFields: [],
+  };
+  return details;
+}
+
+export function dependencyStale(current: PlanNode, input: PlanNodeDependInput): PlanOpError {
+  return {
+    ok: false,
+    code: 'PLAN_NODE_STALE',
+    message:
+      `Plan node "${current.title}" is at revision ${String(current.revision)}; this change to what it waits on was ` +
+      `decided against revision ${String(input.expectedRevision)}, so nothing was written. Read the node with ` +
+      `plan.node.get — its dependencies are there — and write again against revision ${String(current.revision)}.`,
+    details: dependencyRefusalDetails(current),
+  };
+}
+
+export function dependencyUnchanged(
+  current: PlanNode,
+  input: PlanNodeDependInput,
+  held: PlanNodeDependency | null,
+): PlanOpError {
+  const stands =
+    held === null
+      ? `does not wait on "${input.dependsOnId}"`
+      : `already waits on "${input.dependsOnId}" being ${held.condition}`;
+  return {
+    ok: false,
+    code: 'PLAN_NODE_UNCHANGED',
+    message:
+      `Plan node "${current.title}" ${stands}, so nothing was written and it stays at revision ` +
+      `${String(current.revision)}. plan.node.get lists what it waits on.`,
+    details: dependencyRefusalDetails(current),
+  };
+}
+
+export function dependencyCycle(input: PlanNodeDependInput, path: readonly string[]): PlanOpError {
+  const loop = path.map((id) => `"${id}"`).join(' waits on ');
+  return {
+    ok: false,
+    code: 'PLAN_NODE_DEPENDENCY_CYCLE',
+    message:
+      `Plan node "${input.nodeId}" cannot wait on "${input.dependsOnId}": ${loop}, so none of them could ever ` +
+      'start. Nothing was written. Remove one edge of that loop with plan.node.depend and `remove: true`, or ' +
+      'wait on another node.',
+    details: { nodeId: input.nodeId, dependsOnId: input.dependsOnId, path: [...path] },
   };
 }
