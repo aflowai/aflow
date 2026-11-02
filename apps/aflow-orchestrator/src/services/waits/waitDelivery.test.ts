@@ -7,17 +7,28 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import RedisMock from 'ioredis-mock';
 import type { Redis } from 'ioredis';
-import { claimEndedWaits, declareWait, emitPullRequestChanged } from '@aflow/cybernetic-runtime';
-import { WAIT_DELIVERY_LEASE_MS, type EndedWait } from '@aflow/redis';
+import {
+  claimEndedWaits,
+  declareWait,
+  emitPlanUpdated,
+  emitPullRequestChanged,
+} from '@aflow/cybernetic-runtime';
+import { readSubjectWaits, WAIT_DELIVERY_LEASE_MS, type EndedWait } from '@aflow/redis';
+import { PlanNodeUpdateOutputSchema, WAIT_WINDOW_MAX_SECONDS, type PlanNode } from '@aflow/schemas';
 import type { BackgroundTaskLogger } from '@aflow/lib';
 import type { HarnessDeps } from '../cybernetic/harness/types.js';
 import { deliverEndedWait, runWaitDeliveryCycle, type WaitDelivery } from './waitDelivery.js';
+import { holdForPlanNode } from './planNode.js';
 
-const { mockQueueMessage, mockWake, mockRehydrateIfAbsent } = vi.hoisted(() => ({
-  mockQueueMessage: vi.fn(),
-  mockWake: vi.fn(),
-  mockRehydrateIfAbsent: vi.fn(),
-}));
+const { mockQueueMessage, mockWake, mockRehydrateIfAbsent, mockIsLive, mockFindNode } = vi.hoisted(
+  () => ({
+    mockQueueMessage: vi.fn(),
+    mockWake: vi.fn(),
+    mockRehydrateIfAbsent: vi.fn(),
+    mockIsLive: vi.fn(),
+    mockFindNode: vi.fn(),
+  }),
+);
 
 vi.mock('../SessionOrchestrator/helpers/queuedMessage.js', () => ({
   queueMessageForNextTurn: (...args: unknown[]) => mockQueueMessage(...args),
@@ -28,6 +39,8 @@ vi.mock('../cybernetic/harness/sessionWakeup.js', () => ({
 vi.mock('@aflow/cybernetic-runtime', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@aflow/cybernetic-runtime')>()),
   rehydratePausedRunIfAbsent: (...args: unknown[]) => mockRehydrateIfAbsent(...args),
+  isLiveConversation: (...args: unknown[]) => mockIsLive(...args),
+  createPlanNodeStore: () => ({ find: (...args: unknown[]) => mockFindNode(...args) }),
 }));
 
 const TENANT = 'a0000000-0000-4000-8000-000000000339';
@@ -310,5 +323,175 @@ describe('delivering one ended wait', () => {
     expect(delivery).toBe('session_gone');
     expect(mockQueueMessage).toHaveBeenCalledTimes(1);
     expect(mockWake).not.toHaveBeenCalled();
+  });
+});
+
+describe('the wait a plan node write holds for its writer', () => {
+  const NODE = '7a1e0000-0000-4000-8000-000000000339';
+  const NOTE = 'Waiting on: the operator approves the plan.\nCommission on approval.';
+  const target = { tenantId: TENANT, spaceId: SPACE, sessionId: SESSION, nodeId: NODE };
+
+  function node(status: PlanNode['status']): PlanNode {
+    return {
+      nodeId: NODE,
+      spaceId: SPACE,
+      parentId: null,
+      kind: 'execute',
+      title: 'P0 — the first phase',
+      goal: 'Land the first phase.',
+      criteria: 'The phase is merged.',
+      status,
+      note: NOTE,
+      revision: 3,
+      position: 0,
+      createdAt: new Date(T0).toISOString(),
+      updatedAt: new Date(T0).toISOString(),
+    };
+  }
+
+  /** The write that set the node blocked: its status change, then the hold it declares. */
+  async function blockedWrite() {
+    await emitPlanUpdated(redis, {
+      tenantId: TENANT,
+      spaceId: SPACE,
+      nodeId: NODE,
+      revision: 2,
+      status: 'blocked',
+      previousStatus: 'active',
+    });
+    const held = await holdForPlanNode({ redis, db: harnessDeps.db }, target);
+    if (held === null) throw new Error('no wait was held');
+    return held;
+  }
+
+  async function approve(status: 'active' | 'done') {
+    await emitPlanUpdated(redis, {
+      tenantId: TENANT,
+      spaceId: SPACE,
+      nodeId: NODE,
+      revision: 3,
+      status,
+      previousStatus: 'blocked',
+    });
+  }
+
+  beforeEach(() => {
+    mockQueueMessage.mockReset();
+    mockWake.mockReset();
+    mockIsLive.mockReset();
+    mockFindNode.mockReset();
+    mockIsLive.mockResolvedValue(true);
+    mockQueueMessage.mockResolvedValue({ eventId: 'e-1', messageSeq: 3 });
+    mockWake.mockResolvedValue('woke');
+  });
+
+  it('is named in the blocked write’s result: its kind, its subject and its window', async () => {
+    const before = Date.now();
+    const held = await blockedWrite();
+
+    expect(held).toMatchObject({
+      kind: 'plan.node.status_changed',
+      subject: NODE,
+      windowSeconds: WAIT_WINDOW_MAX_SECONDS,
+    });
+    expect(Date.parse(held.closesAt)).toBeGreaterThanOrEqual(
+      before + WAIT_WINDOW_MAX_SECONDS * 1000,
+    );
+    const result = PlanNodeUpdateOutputSchema.parse({ node: node('blocked'), wait: held });
+    expect(result.wait).toEqual(held);
+    const waits = await readSubjectWaits(redis, {
+      tenantId: TENANT,
+      spaceId: SPACE,
+      kind: 'plan.node.status_changed',
+      subject: NODE,
+    });
+    expect(waits.map((wait) => [wait.waitId, wait.sessionId])).toEqual([[held.waitId, SESSION]]);
+  });
+
+  it('is not ended by the write that declared it', async () => {
+    await blockedWrite();
+
+    expect(await runWaitDeliveryCycle({ harnessDeps, logger }, ctx)).toEqual({ candidates: 0 });
+    expect(mockQueueMessage).not.toHaveBeenCalled();
+  });
+
+  it.each(['active', 'done'] as const)(
+    'wakes the resting creator within one delivery cycle when the node is set %s, naming the node',
+    async (status) => {
+      const held = await blockedWrite();
+      mockFindNode.mockResolvedValue(node(status));
+      await approve(status);
+
+      const cycle = await runWaitDeliveryCycle({ harnessDeps, logger }, ctx);
+
+      expect(cycle).toMatchObject({ candidates: 1, processed: 1 });
+      expect(mockFindNode).toHaveBeenCalledWith(SPACE, NODE);
+      expect(mockQueueMessage).toHaveBeenCalledTimes(1);
+      const posted = mockQueueMessage.mock.calls[0]?.[2] as { body: string; sessionId: string };
+      expect(posted).toMatchObject({ sessionId: SESSION, deliveryKey: `wait:${held.waitId}` });
+      expect(posted.body).toContain(`Plan node "P0 — the first phase" (${NODE}) is now ${status}`);
+      expect(posted.body).toContain(NOTE);
+      expect(mockWake).toHaveBeenCalledWith(harnessDeps, TENANT, SESSION, held.waitId);
+      expect(await runWaitDeliveryCycle({ harnessDeps, logger }, ctx)).toEqual({ candidates: 0 });
+    },
+  );
+
+  it('tells a creator that has ended nothing, and forgets it', async () => {
+    await blockedWrite();
+    mockIsLive.mockResolvedValue(false);
+    await approve('active');
+
+    const cycle = await runWaitDeliveryCycle({ harnessDeps, logger }, ctx);
+
+    expect(cycle).toMatchObject({ candidates: 1, processed: 1 });
+    expect(mockQueueMessage).not.toHaveBeenCalled();
+    expect(mockWake).not.toHaveBeenCalled();
+    expect(await runWaitDeliveryCycle({ harnessDeps, logger }, ctx)).toEqual({ candidates: 0 });
+  });
+
+  it('holds no wait for a conversation that has ended', async () => {
+    mockIsLive.mockResolvedValue(false);
+
+    expect(await holdForPlanNode({ redis, db: harnessDeps.db }, target)).toBeNull();
+  });
+
+  it('is refreshed, not duplicated, by a second blocked write from the same conversation', async () => {
+    const first = await blockedWrite();
+    const second = await holdForPlanNode({ redis, db: harnessDeps.db }, target);
+    mockFindNode.mockResolvedValue(node('active'));
+
+    const waits = await readSubjectWaits(redis, {
+      tenantId: TENANT,
+      spaceId: SPACE,
+      kind: 'plan.node.status_changed',
+      subject: NODE,
+    });
+    expect(second?.waitId).not.toBe(first.waitId);
+    expect(waits.map((wait) => wait.waitId)).toEqual([second?.waitId]);
+
+    await approve('active');
+    const cycle = await runWaitDeliveryCycle({ harnessDeps, logger }, ctx);
+
+    expect(cycle).toMatchObject({ candidates: 1, processed: 1 });
+    expect(mockQueueMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('posts nothing when its window closes, and holds the next wait', async () => {
+    const held = await blockedWrite();
+    const closed = Date.parse(held.closesAt);
+
+    const cycle = await runWaitDeliveryCycle({ harnessDeps, logger, now: () => closed }, ctx);
+
+    expect(cycle).toMatchObject({ candidates: 1, processed: 1 });
+    expect(mockQueueMessage).not.toHaveBeenCalled();
+    const waits = await readSubjectWaits(redis, {
+      tenantId: TENANT,
+      spaceId: SPACE,
+      kind: 'plan.node.status_changed',
+      subject: NODE,
+    });
+    expect(waits).toHaveLength(1);
+    expect(waits[0]?.waitId).not.toBe(held.waitId);
+    expect(waits[0]?.since).toBe(closed);
   });
 });

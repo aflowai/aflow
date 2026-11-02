@@ -1,4 +1,5 @@
 import {
+  holdsPlanNodeWait,
   isPersonTrigger,
   PlanNodeCreateInputSchema,
   PlanNodeDependInputSchema,
@@ -6,6 +7,8 @@ import {
   PlanNodeLinkInputSchema,
   PlanNodeUpdateInputSchema,
   StepJobMessageSchema,
+  type HeldWait,
+  type PlanNode,
   type PlanNodeCreateOutput,
   type PlanNodeDependOutput,
   type PlanNodeLearnOutput,
@@ -21,12 +24,15 @@ import {
   restrictedPlanWriteAuthority,
   type PlanWriteContext,
 } from '@aflow/cybernetic-runtime';
+import { getDatabase } from '@aflow/database';
 import { getSessionState, type SessionHotState } from '@aflow/redis';
 import { dispatchOrWaitOnExecutor } from '../../../scheduling/executorWait.js';
 import { sessionUser } from '../sessionUser.js';
+import { requireSpaceId } from '../spaceScope.js';
 import type { InlineHandlerArgs } from '../types.js';
 import { emitStepSuccess } from '../helpers.js';
 import { emitPlanError, parsePlanInput, planReadContext } from './shared.js';
+import { endPlanNodeHold, holdForPlanNode } from '../../../../waits/planNode.js';
 
 async function readSessionState(args: InlineHandlerArgs): Promise<SessionHotState | null> {
   return getSessionState(args.redis, args.context.tenantId, args.context.runId).catch(() => null);
@@ -58,6 +64,34 @@ function operatorConversation(
   return state !== null && isPersonTrigger(state.trigger) ? args.context.runId : undefined;
 }
 
+/**
+ * The wait a write that set a node blocked or waiting holds for the
+ * conversation that made it (Plan 339 D4's discipline, for plan nodes). A
+ * write by that conversation that moves the node on drops it. The write has
+ * committed, so a failed hold leaves the result without a wait rather than
+ * failing it.
+ */
+async function holdAfterWrite(args: InlineHandlerArgs, node: PlanNode): Promise<HeldWait | null> {
+  if (args.workflowExecution !== undefined) return null;
+  const target = {
+    tenantId: args.context.tenantId as string,
+    spaceId: requireSpaceId(args.context),
+    sessionId: args.context.runId as string,
+    nodeId: node.nodeId,
+  };
+  try {
+    const deps = { redis: args.redis, db: getDatabase() };
+    if (holdsPlanNodeWait(node.status)) return await holdForPlanNode(deps, target);
+    await endPlanNodeHold(deps, target);
+  } catch (error) {
+    console.warn('[plan-node-wait] the write landed, but its wait was not held', {
+      nodeId: node.nodeId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  return null;
+}
+
 export async function handlePlanNodeCreate(
   args: InlineHandlerArgs,
   startTime: number,
@@ -73,7 +107,13 @@ export async function handlePlanNodeCreate(
     await emitPlanError(args, result, startTime);
     return;
   }
-  const output: PlanNodeCreateOutput = { node: result.node };
+  const wait = holdsPlanNodeWait(result.node.status)
+    ? await holdAfterWrite(args, result.node)
+    : null;
+  const output: PlanNodeCreateOutput = {
+    node: result.node,
+    ...(wait !== null ? { wait } : {}),
+  };
   await emitStepSuccess(args, output as unknown as Record<string, unknown>, startTime);
 }
 
@@ -119,8 +159,10 @@ export async function handlePlanNodeUpdate(
     await emitPlanError(args, result, startTime);
     return;
   }
+  const wait = input.status !== undefined ? await holdAfterWrite(args, result.node) : null;
   const output: PlanNodeUpdateOutput = {
     node: result.node,
+    ...(wait !== null ? { wait } : {}),
     ...(result.carrier ? { carrier: result.carrier } : {}),
     ...(result.carrierFailure ? { carrierFailure: result.carrierFailure } : {}),
     ...(result.linkFailure ? { linkFailure: result.linkFailure } : {}),
