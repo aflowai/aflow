@@ -227,7 +227,7 @@ P1 leaves two things as they were. The skills' prose still names GitHub, because
 
 **P2 — The GitLab provider and its definition.** _Exit:_ the provider opens, reads and merges a merge request on a GitLab project the operator names. Each fact of D1 is shown against that project.
 
-**P2 as built.** P2 adds GitLab as a second provider in the places P1 made for one. It is built in these steps:
+**P2 as planned.** P2 adds GitLab as a second provider in the places P1 made for one. It is to be built in these steps:
 
 1. GitLab joins `FORGE_PROVIDERS`, with `gitlab.com` and the operator's own host as its hosts. The coordinate's host field already carries a self-hosted host (D5).
 2. P2 reads the coordinate of the operator's project first. Where its owner holds nested groups, the coordinate's owner widens to hold them.

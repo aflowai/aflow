@@ -41,6 +41,14 @@ describe('forgeEventProviderFor', () => {
     expect(provider.get).toBe(all.github);
   });
 
+  it('polls a watch whose url is the subject form through its repository on the default host', () => {
+    const all = gets();
+    const provider = forgeEventProviderFor(all, 'aflowai/aflow#12');
+    expect(provider.reader).toBe(GITHUB_EVENT_READER);
+    expect(provider.get).toBe(all.github);
+    expect(forgeEventReaderFor('aflowai/aflow#12')).toBe(GITHUB_EVENT_READER);
+  });
+
   it("hands a host GitHub does not answer for neither GitHub's reader nor its GET", () => {
     const all = gets();
     expect(() =>
