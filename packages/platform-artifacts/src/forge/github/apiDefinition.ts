@@ -14,7 +14,7 @@
  * @packageDocumentation
  */
 import type { BundledApiDefinition } from '@aflow/schemas';
-import { GITHUB_CONNECTOR } from '../connectorCatalog/github.js';
+import { GITHUB_CONNECTOR } from '../../connectorCatalog/github.js';
 
 const def = GITHUB_CONNECTOR.definition;
 

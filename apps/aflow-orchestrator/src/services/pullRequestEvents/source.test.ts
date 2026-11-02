@@ -22,12 +22,14 @@ import {
   pullRequestSubject,
 } from '@aflow/schemas';
 import type { BackgroundTaskLogger } from '@aflow/lib';
-import type { ConditionalAnswer, GitHubConditionalGet } from './github.js';
+import type { ConditionalAnswer, ForgeConditionalGet } from '../forge/vocabulary.js';
 import {
-  PULL_REQUEST_POLL_CADENCE_MS,
   parseChangesRequested,
   parseChecksState,
   parseCombinedStatus,
+} from '../forge/github/pullRequestReads.js';
+import {
+  PULL_REQUEST_POLL_CADENCE_MS,
   pullRequestChanges,
   runPullRequestEventsCycle,
 } from './source.js';
@@ -59,7 +61,7 @@ beforeEach(async () => {
 /** A GitHub that answers each path from a table, honours If-None-Match, and counts requests. */
 function fakeGitHub(answers: Record<string, { etag: string; body: unknown }>) {
   const requests: Array<{ path: string; etag?: string }> = [];
-  const get: GitHubConditionalGet = async ({ path, etag }) => {
+  const get: ForgeConditionalGet = async ({ path, etag }) => {
     requests.push({ path, ...(etag !== undefined ? { etag } : {}) });
     const route = Object.keys(answers)
       .sort((x, y) => y.length - x.length)
@@ -102,8 +104,11 @@ async function arm(): Promise<void> {
   });
 }
 
-async function cycle(get: GitHubConditionalGet, emit = vi.fn(async () => true)) {
-  return runPullRequestEventsCycle({ redis, get, logger, now: () => clock, emit }, ctx);
+async function cycle(get: ForgeConditionalGet, emit = vi.fn(async () => true)) {
+  return runPullRequestEventsCycle(
+    { redis, gets: { github: get }, logger, now: () => clock, emit },
+    ctx,
+  );
 }
 
 describe('with no loop pull request open', () => {
@@ -182,7 +187,10 @@ describe('a loop pull request the publication armed', () => {
       [REVIEWS]: { etag: '"r1"', body: [] },
     });
 
-    await runPullRequestEventsCycle({ redis, get: github.get, logger, now: () => clock }, ctx);
+    await runPullRequestEventsCycle(
+      { redis, gets: { github: github.get }, logger, now: () => clock },
+      ctx,
+    );
 
     expect(
       await readRecordedWaitEvent(redis, {
@@ -231,7 +239,7 @@ describe('a head whose checks fail', () => {
   const changesOf = (emit: ReturnType<typeof vi.fn>) =>
     emit.mock.calls.map((call) => (call[1] as { change: string; headSha: string }).change);
 
-  async function anHourOfCycles(get: GitHubConditionalGet, emit: ReturnType<typeof vi.fn>) {
+  async function anHourOfCycles(get: ForgeConditionalGet, emit: ReturnType<typeof vi.fn>) {
     const start = clock;
     for (let elapsed = 0; elapsed <= HOUR_MS; elapsed += PULL_REQUEST_POLL_CADENCE_MS) {
       clock = start + elapsed;
@@ -511,7 +519,7 @@ describe('a watch whose polls keep failing', () => {
     const key = PULL_REQUEST_WATCH_KEY({ tenantId: TENANT, spaceId: SPACE, subject: SUBJECT });
     await redis.pexpire(key, 300);
     let requests = 0;
-    const failing: GitHubConditionalGet = async () => {
+    const failing: ForgeConditionalGet = async () => {
       requests++;
       throw new Error('GitHub answered 502');
     };

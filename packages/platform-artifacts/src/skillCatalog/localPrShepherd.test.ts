@@ -70,8 +70,8 @@ import {
   PUBLICATION_PUSHED_MERGE_PATH,
   PUBLICATION_PUSHED_SHA_PATH,
 } from './localPrShepherdMerge.js';
+import { BASE_MOVED_MESSAGE } from '../forge/github/skillForge.js';
 import {
-  BASE_MOVED_MESSAGE,
   DECIDED_HAND_OVER,
   HAND_OVER_CASE_OTHERWISE,
   HAND_OVER_CASE_RULES,

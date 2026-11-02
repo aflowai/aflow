@@ -5,7 +5,6 @@ import {
   SHEPHERD_SCHEDULE_CRON_DEFAULT,
   SKILL_STARTER_SCHEDULE_VARIABLE,
   SHEPHERD_LEASE_STALE_AFTER_MS,
-  SHEPHERD_RESPONSE_PRESETS,
   SHEPHERD_UNLISTED_PERSISTS_AFTER_MS,
   SCHEDULE_RENEWAL_WINDOW,
   type SkillCatalogEntry,
@@ -47,20 +46,18 @@ import {
   bind,
   ctx,
   DECIDED_FIX,
-  github,
-  GITHUB_READ_PROJECTION,
+  FORGE,
+  FORGE_READ_PROJECTION,
   HEAD_REF,
   handoffBindings,
   handoffValue,
   LEASE_TAKERS,
   OURS,
-  optionalPart,
   out,
   outputFields,
   REPOSITORY,
   runInput,
   SKIP,
-  text,
 } from './localPrShepherdWiring.js';
 import { RENEWAL_TASKS, SCHEDULE_ID_SCHEMA, SCHEDULE_INPUT } from './localPrShepherdRenewal.js';
 import {
@@ -110,10 +107,10 @@ function failureLog(slot: 1 | 2 | 3) {
       jobId: out('read-failure', `data.jobs[${String(slot - 1)}].id`),
     },
     context: ctx('api.http.call'),
-    inputTemplate: github('getJobLogs', {
+    inputTemplate: FORGE.readJobLog({
       owner: bind('owner'),
       repo: bind('repo'),
-      job_id: bind('jobId'),
+      job: bind('jobId'),
     }),
   };
 }
@@ -247,32 +244,7 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
     "Tend the pull requests the loop opened: read their CI, fix and publish a red check through Local Publish, and merge a green one where the folder's merge posture allows — never approving or closing.",
   description: `One pass over the pull requests Local Publish opened from a connected folder. It reads the folder, the loop's open pull requests under its publish prefix, the head's check runs, its own handoff comment and the space's work in flight on the branch, and decides by rules — \`fix\`, \`merge\`, \`wait\`, \`abandon\` or \`leave\`, with the reason. A red check no rule holds back is fixed: the remedy question reads the failing jobs' logs and picks re-running the jobs, a fix commission, a dependency bump or a merge round, and anything it is not sure of is the fix commission. The fix is commissioned on the branch with its base merged in and published through Local Publish, which asks the operator exactly where it would when started by hand. Every pass leaves its record in the handoff comment.`,
   tags: ['coding', 'github', 'pull-requests', 'ci', 'local', 'developer-tools'],
-  capabilityHints: [
-    {
-      apiId: 'github',
-      description:
-        "GitHub REST API — list and read the loop's pull requests, their check runs, reviews and comments, the base branch's required checks, a failing run's jobs and the end of a job's log, re-run failed jobs, write the handoff comment, and merge where the folder's posture allows.",
-      requiredEndpoints: [
-        'listPullRequests',
-        'getPullRequest',
-        'listCheckRuns',
-        'listIssueComments',
-        'getIssueComment',
-        'listWorkflowRunJobs',
-        'getJobLogs',
-        'reRunFailedJobs',
-        'createIssueComment',
-        'updateIssueComment',
-        'getBranchRules',
-        'getBranch',
-        'listPullRequestReviews',
-        'mergePullRequest',
-      ],
-      authKind: 'bearer',
-      setupNote:
-        "Bind the GitHub connector for the space with a token that reads pull requests, checks, branches and Actions and writes comments — and merges pull requests, where a folder's merge posture is `when-green`. A job's log is served from a signed URL on Azure blob storage, which `getJobLogs` follows without the token; the binding allows no host but api.github.com.",
-    },
-  ],
+  capabilityHints: [FORGE.capabilityHints.shepherd],
   bundle: {
     workflow: {
       slug: 'local-pr-shepherd',
@@ -426,25 +398,13 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
             lastTended: LAST_TENDED,
           },
           context: ctx('api.http.call'),
-          inputTemplate: github(
-            'listPullRequests',
-            {
-              owner: bind('owner'),
-              repo: bind('repo'),
-              state: 'open',
-              sort: 'updated',
-              direction: 'desc',
-              per_page: 100,
-            },
-            {
-              $concat: [
-                `${SHEPHERD_RESPONSE_PRESETS.pullRequests}:`,
-                bind('prefix'),
-                optionalPart(':', text('lastTended')),
-              ],
-            },
-          ),
-          outputProjection: GITHUB_READ_PROJECTION,
+          inputTemplate: FORGE.listChangeRequests.loop({
+            owner: bind('owner'),
+            repo: bind('repo'),
+            prefix: bind('prefix'),
+            lastTended: bind('lastTended'),
+          }),
+          outputProjection: FORGE_READ_PROJECTION,
         },
 
         {
@@ -467,16 +427,13 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
             listed: out('list-prs', 'data.pullRequests[0].number'),
           },
           context: ctx('api.http.call'),
-          inputTemplate: github(
-            'getPullRequest',
-            {
-              owner: bind('owner'),
-              repo: bind('repo'),
-              pull_number: { $firstOf: [bind('aimed'), bind('listed')] },
-            },
-            { $concat: [`${SHEPHERD_RESPONSE_PRESETS.pullRequest}:`, bind('prefix')] },
-          ),
-          outputProjection: GITHUB_READ_PROJECTION,
+          inputTemplate: FORGE.readChangeRequest({
+            owner: bind('owner'),
+            repo: bind('repo'),
+            number: { $firstOf: [bind('aimed'), bind('listed')] },
+            prefix: bind('prefix'),
+          }),
+          outputProjection: FORGE_READ_PROJECTION,
         },
 
         REMEMBER_TURN_TASK,
@@ -499,17 +456,13 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
             required: out(REQUIRED_CHECKS_TASK, 'data.encoded'),
           },
           context: ctx('api.http.call'),
-          inputTemplate: github(
-            'listCheckRuns',
-            { owner: bind('owner'), repo: bind('repo'), ref: bind('sha'), per_page: 100 },
-            {
-              $firstOf: [
-                { $concat: [`${SHEPHERD_RESPONSE_PRESETS.checkRuns}:`, bind('required')] },
-                SHEPHERD_RESPONSE_PRESETS.checkRuns,
-              ],
-            },
-          ),
-          outputProjection: GITHUB_READ_PROJECTION,
+          inputTemplate: FORGE.readChecks({
+            owner: bind('owner'),
+            repo: bind('repo'),
+            head: bind('sha'),
+            required: bind('required'),
+          }),
+          outputProjection: FORGE_READ_PROJECTION,
         },
 
         {
@@ -527,15 +480,12 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
           retryability: 'safe' as const,
           inputBindings: { ...REPOSITORY, ...BASE_REF },
           context: ctx('api.http.call'),
-          inputTemplate: github('getBranch', {
+          inputTemplate: FORGE.readBranchHead({
             owner: bind('owner'),
             repo: bind('repo'),
             branch: bind('baseRef'),
           }),
-          outputProjection: {
-            statusCode: { path: 'statusCode', onMissing: 'error' as const },
-            sha: { path: 'data.commit.sha', onMissing: 'null' as const },
-          },
+          outputProjection: FORGE.branchHeadProjection,
         },
 
         ...HANDOFF_READ_TASKS,
@@ -670,11 +620,11 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
           retryability: 'safe' as const,
           inputBindings: { ...REPOSITORY, runId: out('read-pr-checks', 'data.firstFailing.runId') },
           context: ctx('api.http.call'),
-          inputTemplate: github(
-            'listWorkflowRunJobs',
-            { owner: bind('owner'), repo: bind('repo'), run_id: bind('runId'), per_page: 100 },
-            SHEPHERD_RESPONSE_PRESETS.failingJobs,
-          ),
+          inputTemplate: FORGE.readFailingJobs({
+            owner: bind('owner'),
+            repo: bind('repo'),
+            run: bind('runId'),
+          }),
         },
 
         failureLog(1),
@@ -792,10 +742,10 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
           maxAttempts: 1,
           inputBindings: { ...REPOSITORY, runId: out('read-pr-checks', 'data.firstFailing.runId') },
           context: ctx('api.http.call'),
-          inputTemplate: github('reRunFailedJobs', {
+          inputTemplate: FORGE.rerunFailedJobs({
             owner: bind('owner'),
             repo: bind('repo'),
-            run_id: bind('runId'),
+            run: bind('runId'),
           }),
         },
 

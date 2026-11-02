@@ -5,7 +5,7 @@ import {
   normalizeBindingInput,
 } from '@aflow/schemas';
 import { bundledApiDefinitionFromConnector } from '../skillBundleCatalog/connectorApiDefinitions.js';
-import { GITHUB_API_DEFINITION } from '../skillBundleCatalog/githubApiDefinitions.js';
+import { GITHUB_API_DEFINITION } from '../forge/github/apiDefinition.js';
 import { GITHUB_CONNECTOR } from './github.js';
 import { getConnectorCatalogEntry, listConnectorCatalog } from './index.js';
 
