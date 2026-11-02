@@ -29,9 +29,6 @@ import type { ForgeConditionalGet } from '../vocabulary.js';
 export const GITHUB_API_ORIGIN = 'https://api.github.com';
 const GITHUB_API_HOST = 'api.github.com';
 
-/** One conditional GET of a path under api.github.com, for a space. */
-export type GitHubConditionalGet = ForgeConditionalGet;
-
 export class GitHubReadError extends Error {
   constructor(message: string) {
     super(message);
@@ -104,7 +101,7 @@ export function createGitHubConditionalGet(deps: {
   fetchImpl?: FetchLike;
   readToken?: (tenantId: string, spaceId: string) => Promise<string>;
   now?: () => number;
-}): GitHubConditionalGet {
+}): ForgeConditionalGet {
   const fetchImpl: FetchLike = deps.fetchImpl ?? ((url, init) => fetch(url, init));
   const readToken = deps.readToken ?? ((t, s) => readSpaceGitHubToken(deps.db, t, s));
   const now = deps.now ?? Date.now;

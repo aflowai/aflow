@@ -24,6 +24,18 @@ describe('the forge provider named from a host', () => {
   });
 
   it('holds the nine acts of D1', () => {
-    expect(Object.keys(FORGE_ACTS)).toHaveLength(9);
+    expect(Object.keys(FORGE_ACTS)).toEqual(
+      expect.arrayContaining([
+        'listChangeRequests',
+        'readChangeRequest',
+        'openChangeRequest',
+        'updateChangeRequest',
+        'mergeChangeRequest',
+        'readHandoff',
+        'postHandoff',
+        'updateHandoff',
+        'nameProvider',
+      ]),
+    );
   });
 });

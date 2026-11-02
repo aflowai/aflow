@@ -22,7 +22,7 @@ import {
   RequiredCheckNamesSchema,
   ShepherdHandoffReadSchema,
 } from '@aflow/schemas';
-import { NOTHING_SKIPPED } from './bodyTail.js';
+import { NOTHING_SKIPPED } from '../../bodyTail.js';
 import {
   JOB_LOG_READ_WINDOW_BYTES,
   jobLogTail,
@@ -34,17 +34,17 @@ import {
   loopRequiredProtection,
   loopRequiredRules,
   loopReviews,
-} from './forge/github/shepherdReads.js';
+} from './shepherdReads.js';
 import {
   applyRecordTransformPreset,
   applyTextTransformPreset,
   isRecordTransformPreset,
   isTextTransformPreset,
   textPresetTailWindow,
-} from './transforms.js';
-import { withoutCredentials } from './execution.js';
-import { credentialHeaderNames } from './headers.js';
-import { ApiExecutionError } from './types.js';
+} from '../../transforms.js';
+import { withoutCredentials } from '../../execution.js';
+import { credentialHeaderNames } from '../../headers.js';
+import { ApiExecutionError } from '../../types.js';
 
 /** The repository the loop pushes to and opens its pull requests on. */
 const REPO = { id: 101, full_name: 'aflowai/aflow' };

@@ -1,6 +1,6 @@
 /**
- * The forge vocabulary (Plan 340 D1): the acts the loop asks of any forge, the
- * facts it reads a change request as, and the records its rules compare.
+ * The forge vocabulary (Plan 340 D1): the acts the loop asks of any forge and
+ * the records its rules compare.
  *
  * Local Publish, the Local PR Shepherd and the pull request event source speak
  * these words only. A provider per forge answers them (D2) and is the one place
@@ -21,10 +21,16 @@ export type ForgeProviderId = z.infer<typeof ForgeProviderIdSchema>;
  * The acts the loop performs on a forge, each in words. Local Publish lists,
  * opens and updates. The shepherd lists, reads and merges, and it keeps its
  * handoff in a comment. The event source reads.
+ *
+ * The nine acts of D1 come first. The reads, the search and the re-run after
+ * them are the parts of a change request's state the shepherd reads one call
+ * at a time. Every act but `nameProvider` is a call of the skills'
+ * `SkillForge`, and a test in `@aflow/platform-artifacts` fails where the two
+ * name different acts.
  */
 export const FORGE_ACTS = {
   listChangeRequests: 'List the open change requests of a repository.',
-  readChangeRequest: "Read a change request's state as the facts of `ChangeRequestFactsSchema`.",
+  readChangeRequest: "Read a change request's state as the record the shepherd's rules compare.",
   openChangeRequest: 'Open a change request from a branch into a base branch.',
   updateChangeRequest: "Update a change request's title and body.",
   mergeChangeRequest: 'Merge a change request by squash, pinned to the head the pass read.',
@@ -32,40 +38,18 @@ export const FORGE_ACTS = {
   postHandoff: "Post the shepherd's handoff comment on a change request.",
   updateHandoff: "Update the shepherd's handoff comment on a change request.",
   nameProvider: "Name the provider for a folder from the repo coordinate's host.",
+  readRepository: 'Read a repository, to show the credential can see it.',
+  readChecks: "Read the checks on a change request's head.",
+  readBranchHead: 'Read the commit a branch points at.',
+  readRequiredRules: "Read the check names a branch's rules require.",
+  readRequiredChecks: "Read the check names a branch's protection requires.",
+  readReviews: "Read one page of the people's reviews of a change request.",
+  readFailingJobs: "Read the jobs of a failing check's CI run that failed.",
+  readJobLog: "Read the end of one failing job's log.",
+  rerunFailedJobs: 'Run the failed jobs of a CI run again.',
+  findHandoff: "Find the shepherd's handoff on one page of a change request's conversation.",
 } as const;
 export type ForgeAct = keyof typeof FORGE_ACTS;
-
-/** How a change request's checks stand on its head. */
-export const ChangeRequestChecksSchema = z.enum(['green', 'red', 'stopped', 'pending', 'none']);
-export type ChangeRequestChecks = z.infer<typeof ChangeRequestChecksSchema>;
-
-/**
- * A change request's state as the facts the rules decide on. Every provider
- * reads these from its own forge's answers. Merged and its merge commit are
- * here though no rule reads them today: a forge whose merge reply says less
- * needs them to report a merge.
- */
-export const ChangeRequestFactsSchema = z.object({
-  head: z.string().min(1).describe('The commit the change request’s branch points at.'),
-  mergeable: z
-    .boolean()
-    .nullable()
-    .describe(
-      'Whether the head merges into its base as the base stands. Null while the forge has not computed it, so null is unknown, never yes.',
-    ),
-  checks: ChangeRequestChecksSchema.describe(
-    '`green` only where every check on the head passed. `red` where one failed.',
-  ),
-  changesRequested: z
-    .boolean()
-    .describe('Whether a person’s standing review on the change request requests changes.'),
-  merged: z.boolean(),
-  mergeCommit: z
-    .string()
-    .nullable()
-    .describe('The commit the merge made, where the change request merged.'),
-});
-export type ChangeRequestFacts = z.infer<typeof ChangeRequestFactsSchema>;
 
 // ============================================================================
 // The records the shepherd's rules compare

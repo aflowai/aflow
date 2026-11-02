@@ -201,7 +201,8 @@ Each phase lands on its own.
 
 **P1 as built.** The seam sits wherever a skill or the poller once spelled a forge's call. The vocabulary and each provider live here:
 
-- `packages/schemas/src/forge/vocabulary.ts` holds the nine acts of D1 and the facts a change request is read as (`ChangeRequestFactsSchema`). It also holds the records the shepherd's rules compare.
+- `packages/schemas/src/forge/vocabulary.ts` holds the acts in `FORGE_ACTS`: the nine of D1, then the reads the shepherd makes one call at a time. It also holds the records the shepherd's rules compare. A schema of D1's facts waits for P2, because no P1 code reads or writes one.
+- `SkillForge` in `packages/platform-artifacts/src/forge/vocabulary.ts` holds a call for every act but naming the provider. Its type fails to compile on an act with no call, and `vocabulary.test.ts` fails on a call that is no act.
 - `packages/schemas/src/forge/providers.ts` names the provider from a repo coordinate's host. This is the ninth act.
 - `packages/platform-artifacts/src/forge/vocabulary.ts` is the skills' side of the seam. Local Publish and the shepherd build every forge task from its acts.
 - `packages/platform-artifacts/src/forge/github/` builds each act as the GitHub call it was. GitHub's API definition moved there unchanged (D4).
@@ -209,7 +210,7 @@ Each phase lands on its own.
 - `apps/aflow-orchestrator/src/services/forge/github/` holds the poller's GitHub reads, moved out of `source.ts`. It also holds the conditional reader that was `pullRequestEvents/github.ts`.
 - `packages/schemas/src/forge/github.ts` holds GitHub's response transforms, its check-run conclusions and the field names that are GitHub's alone. The GitHub half of `pullRequestShepherd.ts` moved there and to the vocabulary.
 
-The event source names a pull request's provider from the host of its address. A skill is built once, before any folder is read. So each skill is built against the provider the coordinate's default host names.
+The event source names a pull request's provider from the host of its address. That one name selects both the reader that parses the forge's answers and the conditional GET that carries them. A skill is built once, before any folder is read. So each skill is built against the provider the coordinate's default host names.
 
 No behaviour changed. The skill catalog, the bundles and the connector catalog serialise byte for byte as they did at `93310bda`. The existing shepherd, publication and event source tests pass with their assertions unchanged. Tests of a moved module changed their import paths only.
 
@@ -236,7 +237,7 @@ P1 leaves two things as they were. The skills' prose still names GitHub, because
 6. GitLab's refusal of a merge on a moved base maps to the vocabulary's base-moved refusal. A test names GitLab's refusal beside GitHub's.
 7. The guard holds GitLab's field names, endpoint ids and exports as it holds GitHub's.
 
-P2 is proven against the GitLab project the operator names. A merge request is put in each known state, and each fact of `ChangeRequestFactsSchema` is read from it through the provider:
+P2 is proven against the GitLab project the operator names. A merge request is put in each known state, and each fact of D1 is read from it through the provider:
 
 - mergeable, and not mergeable on a conflict
 - checks green, and red on a failing pipeline job

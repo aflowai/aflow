@@ -29,12 +29,12 @@ import {
   type BackgroundTaskRunner,
 } from '@aflow/lib';
 import { backgroundTaskControlPlane, type PullRequestChange } from '@aflow/schemas';
-import { forgeEventReaderFor } from '../forge/index.js';
-import type {
-  ForgeConditionalGet,
-  ForgeEventReader,
-  PullRequestSnapshot,
-} from '../forge/vocabulary.js';
+import {
+  forgeEventProviderFor,
+  forgeEventReaderFor,
+  type ForgeConditionalGets,
+} from '../forge/index.js';
+import type { ForgeEventReader, PullRequestSnapshot } from '../forge/vocabulary.js';
 
 export const PULL_REQUEST_EVENTS_TASK_ID = 'orchestrator.pull_request_events';
 
@@ -81,7 +81,8 @@ export function pullRequestChanges(
 
 export interface PullRequestEventsDeps {
   redis: Redis;
-  get: ForgeConditionalGet;
+  /** Each provider's conditional GET: a change request is read through its own provider's. */
+  gets: ForgeConditionalGets;
   logger: BackgroundTaskLogger;
   now?: () => number;
   cadenceMs?: number;
@@ -111,8 +112,8 @@ export async function runPullRequestEventsCycle(
   for (const watch of watches) {
     if (ctx.budgetExhausted()) break;
     try {
-      const forge = forgeEventReaderFor(watch.url);
-      const polled = await forge.poll(deps.get, watch, ctx.signal);
+      const { reader: forge, get } = forgeEventProviderFor(deps.gets, watch.url);
+      const polled = await forge.poll(get, watch, ctx.signal);
       const found = pullRequestChanges(forge.snapshotOf(watch), polled.snapshot, forge);
       const changes = [...new Set([...(watch.unsent ?? []), ...found])];
       const unsent: PullRequestChange[] = [];

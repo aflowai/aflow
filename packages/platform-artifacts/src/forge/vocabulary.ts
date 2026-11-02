@@ -9,7 +9,13 @@
  * `$firstOf` the task resolves when it runs — so an act is a call built
  * once, when the skill is, and filled in by the run.
  */
-import type { CapabilityHint, ForgeProviderId } from '@aflow/schemas';
+import type { CapabilityHint, ForgeAct, ForgeProviderId } from '@aflow/schemas';
+
+/**
+ * The acts of `FORGE_ACTS` a skill asks a forge for: all but naming the
+ * provider, which `skillForgeFor` does before a forge is asked anything.
+ */
+export type SkillForgeAct = Exclude<ForgeAct, 'nameProvider'>;
 
 /** A template value a task resolves when it runs. */
 export type TemplateValue = unknown;
@@ -38,9 +44,12 @@ export interface ForgeHandoffTrust extends ForgeChangeRequestRef {
 
 /**
  * The calls each act becomes, the fields read from what the forge answers,
- * and the conditions over its answers that only the forge can word.
+ * and the conditions over its answers that only the forge can word. It holds
+ * a call for every {@link SkillForgeAct}, so an act added to `FORGE_ACTS`
+ * fails to compile until a provider answers it. `vocabulary.test.ts` fails
+ * where a call here is not an act there.
  */
-export interface SkillForge {
+export interface SkillForge extends Record<SkillForgeAct, unknown> {
   readonly provider: ForgeProviderId;
 
   /** What the skills declare they need of the forge's API, for the Store. */
