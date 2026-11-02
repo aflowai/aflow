@@ -31,7 +31,9 @@ const net = vi.hoisted(() => ({
   failSessionList: false,
   agents: [] as Array<Record<string, unknown>>,
   runs: [] as Array<Record<string, unknown>>,
+  workflows: [] as Array<Record<string, unknown>>,
   coach: null as Record<string, unknown> | null,
+  listeners: new Map<string, Array<(event: unknown, cursor: string) => void>>(),
 }));
 
 const HELMSMAN = {
@@ -76,8 +78,18 @@ function respond(path: string): unknown {
     return { runs: net.runs, counts: { running: 0, paused: 0 }, nextCursor: null };
   }
   if (path.endsWith('/cybernetic/active-surface')) {
-    return net.coach ? { spaceId: SPACE, coach: net.coach } : undefined;
+    return net.coach
+      ? {
+          spaceId: SPACE,
+          capturedFrom: 'live',
+          helmsman: { sessionId: null, lifecycle: 'unknown' },
+          surfacedRuns: [],
+          recentTransitions: [],
+          coach: net.coach,
+        }
+      : undefined;
   }
+  if (path.includes('/workflows?archived=true')) return { workflows: net.workflows };
   if (path.includes('/sessions?')) return net.failSessionList ? FAILED : { sessions: net.sessions };
   const direct = net.sessions.find((s) => path.endsWith(`/sessions/${String(s['sessionId'])}`));
   if (direct) return direct;
@@ -156,9 +168,22 @@ vi.mock('../components/providers.js', () => ({
 
 vi.mock('../lib/realtimeClient.js', () => {
   const client = {
-    subscribe: (topic: unknown) => {
+    subscribe: (
+      topic: { kind: string },
+      listener: { onEvent?: (event: unknown, cursor: string) => void },
+    ) => {
       net.topics.push(JSON.stringify(topic));
-      return { unsubscribe: () => undefined, updatePresence: () => undefined };
+      const onEvent = listener.onEvent;
+      if (onEvent) {
+        net.listeners.set(topic.kind, [...(net.listeners.get(topic.kind) ?? []), onEvent]);
+      }
+      return {
+        unsubscribe: () => {
+          const rest = (net.listeners.get(topic.kind) ?? []).filter((l) => l !== onEvent);
+          net.listeners.set(topic.kind, rest);
+        },
+        updatePresence: () => undefined,
+      };
     },
     subscribeStatus: () => () => undefined,
     getStatus: () => ({ isConnected: true }),
@@ -203,7 +228,9 @@ beforeEach(async () => {
   net.failSessionList = false;
   net.agents = [HELMSMAN];
   net.runs = [];
+  net.workflows = [];
   net.coach = null;
+  net.listeners = new Map();
   // Fresh modules per test: the realtime brokers are module-level and
   // refcounted, so a second page in one registry would find its topics held.
   vi.resetModules();
@@ -342,9 +369,11 @@ describe('what the open dock reads (D3 budget)', () => {
         '/api/sessions/presence?sessionIds=:session',
         '/api/spaces/:space/workflow-runs?status=running,paused&limit=50',
         '/api/spaces/:space/cascades/:session',
-        '/api/spaces/:space/cybernetic/active-surface',
+        '/api/spaces/:space/workflows?archived=true',
       ].sort(),
     );
+    // Each of the six was read before this phase whenever the dock opened.
+    // None is the Coach's state, which no folded header reads.
     // The page already holds the entity-events stream for a conversation.
     expect(net.topics.slice(page.topics)).toEqual([]);
   });
@@ -353,9 +382,9 @@ describe('what the open dock reads (D3 budget)', () => {
     await land('');
     expect(dockOpen()).toBe(true);
     expect(net.reads.some((r) => r.includes('/integrations/'))).toBe(false);
-    expect(net.reads.some((r) => r.includes('/workflows?archived=true'))).toBe(false);
     expect(net.reads.some((r) => r.includes('/applets'))).toBe(false);
     expect(net.reads.some((r) => r.includes('/anomalies'))).toBe(false);
+    expect(net.reads.some((r) => r.includes('/active-surface'))).toBe(false);
 
     const integrations = [...container.querySelectorAll('button[aria-expanded]')].find(
       (b) => b.textContent === 'Integrations',
@@ -402,14 +431,43 @@ describe('what a folded header carries (D3)', () => {
     };
   }
 
-  it('badges the live skill runs on the folded Skills header, without reading the skills', async () => {
+  let eventSeq = 0;
+  async function entityEvent(eventType: string) {
+    eventSeq += 1;
+    const event = {
+      eventId: `e-${String(eventSeq)}`,
+      eventType,
+      spaceId: SPACE,
+      tenantId: 't',
+      timestamp: Date.now(),
+      causedBySessionId: COACH,
+      payload: {},
+      summary: eventType,
+    };
+    const listeners = net.listeners.get('space.entity_events') ?? [];
+    expect(listeners.length).toBeGreaterThan(0);
+    await act(async () => {
+      for (const listener of listeners) listener(event, `c-${String(eventSeq)}`);
+      await Promise.resolve();
+    });
+    await settle();
+  }
+
+  it('badges the live skill runs on the folded Skills header', async () => {
     net.runs = [run('r1', 'running'), run('r2', 'running'), run('r3', 'paused')];
     await land('');
     expect(dockOpen()).toBe(true);
     const skills = header('Skills');
     expect(skills?.querySelector('[title="2 running"]')).not.toBeNull();
     expect(skills?.querySelector('[title="1 paused"]')).not.toBeNull();
-    expect(net.reads.some((r) => r.includes('/workflows?archived=true'))).toBe(false);
+  });
+
+  it('leaves a platform workflow’s run off the folded Skills header, as the list does', async () => {
+    net.workflows = [{ slug: 'weekly-roundup', name: 'Weekly roundup', system: true }];
+    net.runs = [run('r1', 'running')];
+    await land('');
+    expect(net.reads).toContain(`/api/spaces/${SPACE}/workflows?archived=true`);
+    expect(header('Skills')?.querySelector('[title$="running"]')).toBeNull();
   });
 
   it('shows no badge on the folded Skills header with no live run', async () => {
@@ -417,28 +475,37 @@ describe('what a folded header carries (D3)', () => {
     expect(header('Skills')?.querySelector('[title$="running"], [title$="paused"]')).toBeNull();
   });
 
-  it('keeps a reviewing Coach on the folded Coach header, with its session', async () => {
+  it('shows a review the entity-events stream starts, with its session, and drops it when it ends', async () => {
     net.coach = coach('reviewing');
     await land('');
+    expect(header('Coach review')?.textContent).not.toContain('Reviewing');
+
+    await entityEvent('entity.coach.activated');
     const coachHeader = header('Coach review');
     expect(coachHeader?.textContent).toContain('Reviewing');
     expect(coachHeader?.querySelector('a')?.getAttribute('href')).toContain(COACH);
+
+    await entityEvent('entity.coach.completed');
+    expect(header('Coach review')?.textContent).not.toContain('Reviewing');
+    expect(net.reads.some((r) => r.includes('/active-surface'))).toBe(false);
     expect(net.reads.some((r) => r.includes('/anomalies'))).toBe(false);
   });
 
-  it('keeps a stalled Coach on the folded Coach header', async () => {
+  it('reads the Coach’s state only once the operator expands the section', async () => {
     net.coach = coach('stalled');
     await land('');
-    expect(header('Coach review')?.textContent).toContain('Stalled');
-  });
+    const reads = net.reads.length;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await settle();
+    expect(net.reads.slice(reads)).toEqual([]);
+    expect(header('Coach review')?.textContent).not.toContain('Stalled');
 
-  it('shows no state on the folded Coach header while the Coach is idle', async () => {
-    net.coach = coach('idle');
-    await land('');
-    const coachHeader = header('Coach review');
-    expect(coachHeader).not.toBeNull();
-    expect(coachHeader?.textContent).not.toContain('Reviewing');
-    expect(coachHeader?.textContent).not.toContain('Stalled');
+    const toggle = [...container.querySelectorAll('button[aria-expanded]')].find(
+      (b) => b.textContent === 'Coach review',
+    );
+    await click(toggle ?? null);
+    expect(net.reads).toContain(`/api/spaces/${SPACE}/cybernetic/active-surface`);
+    expect(container.textContent).toContain('Stalled');
   });
 });
 

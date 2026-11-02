@@ -1,11 +1,13 @@
 'use client';
 
+import { useMemo } from 'react';
 import { Badge, Column, Row, Text } from '@aflow/design-system';
 import type { ActionCenterItem } from '../../hooks/use-action-center-types.js';
 import type { UseActionCenterResult } from '../../hooks/use-action-center.js';
 import { useCoachSurface } from '../../hooks/use-coach-surface.js';
-import { useCoachStateUnstreamed } from '../../hooks/use-active-surface.js';
+import { useSpaceEntityEvents } from '../../hooks/use-space-entity-events.js';
 import { ActionCenterItemCard } from '../actionCenter/ActionCenterLane.js';
+import { coachReviewFromEntityEvents } from '../../lib/coach-review-events.js';
 import { spaceRoute } from '../../lib/space-routes.js';
 import { groupBySource } from '../../lib/proposal-provenance.js';
 import {
@@ -79,9 +81,11 @@ export function WorkbenchCoach({
 
 /**
  * The Coach section as the Workbench mounts it: folded until the operator
- * expands it (Plan 338 D3). The folded header still carries what showed the
- * section on its own before it folded. That is the count of the Coach's
- * proposals and its state while it reviews or has stalled.
+ * expands it (Plan 338 D3). The folded header reads only what the page holds,
+ * with no read and no timer of its own. It counts the Coach's proposals from
+ * the Action Center. It shows **Reviewing** for a review the entity-events
+ * stream has seen start and not end, the stream the board's run feed holds.
+ * A stall, or a review that began before the stream, shows once expanded.
  */
 export function WorkbenchCoachFold({
   state,
@@ -92,7 +96,8 @@ export function WorkbenchCoachFold({
   spaceId: string;
   spaceSlug: string;
 }) {
-  const coach = useCoachStateUnstreamed(spaceId);
+  const { events } = useSpaceEntityEvents(spaceId || null);
+  const review = useMemo(() => coachReviewFromEntityEvents(events), [events]);
   const proposals = coachReviewProposals(state).length;
   return (
     <WorkbenchLazySection
@@ -100,10 +105,10 @@ export function WorkbenchCoachFold({
       icon="stethoscope"
       meta={proposals > 0 ? <Badge variant="accent">{String(proposals)}</Badge> : null}
       trailing={
-        coach ? (
+        review ? (
           <CoachStatus
-            lifecycle={coach.lifecycle}
-            coachSessionId={coach.coachSessionId ?? null}
+            lifecycle="reviewing"
+            coachSessionId={review.coachSessionId}
             spaceSlug={spaceSlug}
           />
         ) : null

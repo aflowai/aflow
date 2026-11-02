@@ -4,10 +4,8 @@ import { useApi } from '../components/providers.js';
 import * as coachSurfaceBroker from './coach-surface-broker.js';
 import { useResumeOnUnblock } from './use-resume-on-unblock.js';
 import { useSessionEventListener } from './use-session-events.js';
-import { useSpaceEntityEventListener } from './use-space-entity-events.js';
 import { useApiQuery } from './useApiQuery.js';
 import type {
-  ActiveSurfaceCoach,
   ActiveSurfaceRun,
   ActiveSurfaceRunLifecycle,
   ActiveSurfaceSnapshot,
@@ -414,49 +412,4 @@ export function useActiveSurface(
     refresh,
     helmsmanActivity,
   };
-}
-
-/**
- * The Coach's state for a header that holds no Coach stream: the folded Coach
- * section of the Workbench (Plan 338 D3). It reads the unscoped snapshot under
- * the key `useActiveSurface` keeps, so the expanded section reads the cache.
- * The entity-events stream the open Workbench already holds says when the
- * Coach starts or ends a review. The snapshot's own deadline says when a stall
- * ages out. So the header follows the Coach without a subscription of its own.
- */
-export function useCoachStateUnstreamed(spaceId: string): ActiveSurfaceCoach | null {
-  const queryClient = useQueryClient();
-  const queryKey = useMemo(() => activeSurfaceQueryKey(spaceId, null), [spaceId]);
-  const surfaceQuery = useApiQuery<ActiveSurfaceSnapshot>({
-    key: queryKey,
-    path: `/spaces/${spaceId}/cybernetic/active-surface`,
-    staleTime: 0,
-    spaceId,
-    enabled: spaceId !== '',
-  });
-
-  useSpaceEntityEventListener(spaceId || null, (event) => {
-    if (
-      event.eventType === 'entity.coach.activated' ||
-      event.eventType === 'entity.coach.completed'
-    ) {
-      void queryClient.invalidateQueries({ queryKey });
-    }
-  });
-
-  const changeAt = surfaceQuery.data?.nextTimeDerivedChangeAt;
-  useEffect(() => {
-    if (!changeAt) return;
-    const timer = setTimeout(
-      () => {
-        void queryClient.invalidateQueries({ queryKey });
-      },
-      Math.max(0, Date.parse(changeAt) - Date.now()),
-    );
-    return () => {
-      clearTimeout(timer);
-    };
-  }, [changeAt, queryClient, queryKey]);
-
-  return surfaceQuery.data?.coach ?? null;
 }

@@ -49,8 +49,11 @@ interface WorkflowListItem {
  * open is a cost on every landing. Only (1) and (3) mount then. Each section
  * of (2), and the Coach's, is folded and mounts only when the operator expands
  * it (Plan 338 D3, where the reads are counted). A folded header still shows
- * what would have put the section in front of the operator: the live runs on
- * Skills, from the run feed (1) holds, and the Coach's proposals and state.
+ * what would have put the section in front of the operator, from what the
+ * page holds and with no read or timer of its own: the live runs on Skills,
+ * from the run feed (1) holds, and the Coach's proposals and a review the
+ * entity-events stream has seen start. The workflow list is read on open,
+ * because recent conversations names runs by it.
  */
 export function Workbench({
   spaceId,
@@ -71,22 +74,22 @@ export function Workbench({
 
   // Every workflow's name, the platform's own included: a conversation's
   // commission or publication is a run of a system workflow, which the skill
-  // list leaves out. Read from the cache only — the list is Skills' read, made
-  // when that section opens — so until then a run is named by its slug.
-  const cachedWorkflows = useWorkflowList(spaceId, false);
+  // list leaves out. The board reads the list on open, because recent
+  // conversations and the folded Skills header both need it.
+  const workflowList = useWorkflowList(spaceId);
   const workflowNames = useMemo(
-    () => new Map((cachedWorkflows.data?.workflows ?? []).map((w) => [w.slug, w.name] as const)),
-    [cachedWorkflows.data],
+    () => new Map((workflowList.data?.workflows ?? []).map((w) => [w.slug, w.name] as const)),
+    [workflowList.data],
   );
   // The live runs Skills lists once expanded, from the feed the board already
-  // holds. A platform workflow's run is left out once the cached list names it
-  // as one. Until then it counts here too.
+  // holds, less the platform's own workflows. A list that fails to read
+  // leaves every run counted, so the header never hides a live run.
   const skillRuns = useMemo(() => {
     const system = new Set(
-      (cachedWorkflows.data?.workflows ?? []).filter((w) => w.system).map((w) => w.slug),
+      (workflowList.data?.workflows ?? []).filter((w) => w.system).map((w) => w.slug),
     );
     return runsState.runs.filter((r) => !system.has(r.workflowSlug));
-  }, [runsState.runs, cachedWorkflows.data]);
+  }, [runsState.runs, workflowList.data]);
 
   // What each paused run is waiting on, said as a person. Derived from the
   // open items rather than the run row, so the label and the card that
@@ -174,23 +177,23 @@ export function Workbench({
   );
 }
 
-/** The space's workflows, archived included. `enabled: false` reads the cache alone. */
-function useWorkflowList(spaceId: string, enabled: boolean) {
+/** The space's workflows, archived included, under one key the board and Skills share. */
+function useWorkflowList(spaceId: string) {
   return useApiQuery<{ workflows: WorkflowListItem[] }>({
     key: ['space', spaceId, 'workflows', 'all'],
     path: `/spaces/${spaceId}/workflows?archived=true`,
     spaceId,
     staleTime: 30_000,
-    enabled: enabled && !!spaceId,
+    enabled: !!spaceId,
   });
 }
 
-/** The Skills section with its own read, so the read waits for the fold to open. */
+/** The Skills section, reading the list the board has already read. */
 function WorkbenchSkillList({
   spaceId,
   ...rest
 }: Omit<ComponentProps<typeof WorkbenchSkills>, 'skills' | 'loading'>) {
-  const skillsQuery = useWorkflowList(spaceId, true);
+  const skillsQuery = useWorkflowList(spaceId);
   const skills = useMemo<WorkbenchSkill[]>(
     () =>
       (skillsQuery.data?.workflows ?? [])

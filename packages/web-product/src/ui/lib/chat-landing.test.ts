@@ -1,7 +1,9 @@
+import { SessionStatusSchema } from '@aflow/schemas';
 import { describe, expect, it } from 'vitest';
 import {
   CHAT_INTENT_PARAMS,
   CHAT_RESUME_WINDOW_MS,
+  ENDED_STATUSES,
   isBareChatArrival,
   pickLandingConversation,
 } from './chat-landing.js';
@@ -50,12 +52,17 @@ describe('pickLandingConversation', () => {
   });
 
   it('never resumes an ended conversation', () => {
-    for (const status of ['SUCCEEDED', 'FAILED', 'CANCELLED', 'STALLED']) {
+    for (const status of ['SUCCEEDED', 'FAILED', 'CANCELLED', 'CANCELLING', 'STALLED']) {
       expect(pickLandingConversation([session('a', { status })], READER, NOW)).toBe(null);
     }
     for (const status of ['QUEUED', 'RUNNING', 'PAUSED', 'WAITING_ON_CHILD']) {
       expect(pickLandingConversation([session('a', { status })], READER, NOW)?.sessionId).toBe('a');
     }
+  });
+
+  it('places every status of the session enum', () => {
+    const resumable = SessionStatusSchema.options.filter((s) => !ENDED_STATUSES.has(s));
+    expect(resumable.sort()).toEqual(['PAUSED', 'QUEUED', 'RUNNING', 'WAITING_ON_CHILD']);
   });
 
   it('resumes only the reader’s own conversation', () => {

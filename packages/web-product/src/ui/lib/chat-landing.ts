@@ -1,3 +1,4 @@
+import { SessionStatusSchema, type SessionStatus } from '@aflow/schemas';
 import type { Session } from './types.js';
 
 /**
@@ -6,13 +7,26 @@ import type { Session } from './types.js';
  */
 export const CHAT_RESUME_WINDOW_MS = 6 * 60 * 60 * 1000;
 
+/**
+ * Whether each session status has ended the conversation. The record is keyed
+ * by the enum, so a status added there fails to compile until it is placed.
+ */
+const ENDED_BY_STATUS: Record<SessionStatus, boolean> = {
+  QUEUED: false,
+  RUNNING: false,
+  PAUSED: false,
+  WAITING_ON_CHILD: false,
+  SUCCEEDED: true,
+  FAILED: true,
+  CANCELLED: true,
+  CANCELLING: true,
+  STALLED: true,
+};
+
 /** A conversation in one of these states has ended, and the landing never resumes it. */
-const ENDED_STATUSES: ReadonlySet<string> = new Set([
-  'SUCCEEDED',
-  'FAILED',
-  'CANCELLED',
-  'STALLED',
-]);
+export const ENDED_STATUSES: ReadonlySet<string> = new Set(
+  SessionStatusSchema.options.filter((status) => ENDED_BY_STATUS[status]),
+);
 
 /**
  * Every query parameter the chat page reads. Each one carries an intent the
