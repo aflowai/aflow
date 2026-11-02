@@ -167,11 +167,7 @@ export const PLAN_NODE_CARD_KEYS_MESSAGE =
 const PlanNodeCardItemSchema = z.string().trim().min(1).max(PLAN_NODE_CARD_ITEM_MAX_CHARS);
 const PlanNodeCardListSchema = z.array(PlanNodeCardItemSchema).max(PLAN_NODE_CARD_LIST_MAX_ITEMS);
 
-/**
- * Why a card's node waits: a blocked kind of work, or `design_document`, the
- * design document of a new plan, which a card written before Plan 339 D6
- * names. A new ask after P0 names `design_approval`.
- */
+// `design_document` is a historical value kept for stored cards, refused on new writes.
 const PlanNodeCardWaitReasonSchema = z.union([
   PlanNodeWaitReasonSchema,
   z.literal('design_document').describe('The design document of a new plan.'),

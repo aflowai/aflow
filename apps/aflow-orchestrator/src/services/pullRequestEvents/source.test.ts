@@ -91,7 +91,7 @@ const STATUS = '/repos/aflowai/aflow/commits/abc123/status';
 const passing = (n: number) =>
   Array.from({ length: n }, () => ({ status: 'completed', conclusion: 'success' }));
 
-async function arm(): Promise<void> {
+async function arm(url = 'https://github.com/aflowai/aflow/pull/276'): Promise<void> {
   await armPullRequestWatch(redis, {
     tenantId: TENANT,
     spaceId: SPACE,
@@ -99,7 +99,7 @@ async function arm(): Promise<void> {
     repo: 'aflow',
     number: 276,
     subject: SUBJECT,
-    url: 'https://github.com/aflowai/aflow/pull/276',
+    url,
     armedAt: clock,
   });
 }
@@ -510,6 +510,41 @@ describe('a merge that lands beside an older change that does not', () => {
     clock += PULL_REQUEST_POLL_CADENCE_MS;
     await cycle(merged.get, refuseGreen as never);
     expect(merged.requests).toHaveLength(1);
+  });
+});
+
+describe("the provider a watch's url names", () => {
+  const answers = {
+    [PULL]: { etag: '"p1"', body: pull() },
+    [CHECKS]: {
+      etag: '"c1"',
+      body: { check_runs: [{ status: 'completed', conclusion: 'success' }] },
+    },
+    [REVIEWS]: { etag: '"r1"', body: [] },
+  };
+
+  it('polls a watch whose url is the subject form through GitHub', async () => {
+    await arm(SUBJECT);
+    const github = fakeGitHub(answers);
+    const emit = vi.fn(async () => true);
+
+    expect(await cycle(github.get, emit)).toMatchObject({ candidates: 1, processed: 1, failed: 0 });
+    expect(github.requests.map((r) => r.path)).toEqual([
+      PULL,
+      `${CHECKS}?per_page=100`,
+      `${REVIEWS}?per_page=100`,
+    ]);
+    expect(emit).toHaveBeenCalledWith(redis, expect.objectContaining({ change: 'checks_green' }));
+  });
+
+  it("hands a watch on gitlab.com neither GitHub's reader nor its GET", async () => {
+    await arm('https://gitlab.com/aflowai/aflow/-/merge_requests/276');
+    const github = fakeGitHub(answers);
+    const emit = vi.fn(async () => true);
+
+    expect(await cycle(github.get, emit)).toMatchObject({ candidates: 1, failed: 1 });
+    expect(github.requests).toHaveLength(0);
+    expect(emit).not.toHaveBeenCalled();
   });
 });
 

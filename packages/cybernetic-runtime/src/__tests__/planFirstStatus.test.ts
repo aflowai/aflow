@@ -413,4 +413,59 @@ describe('a node’s first status (Plan 339 D6)', () => {
     expect(written.status).toBe('active');
     expect(asking).toMatchObject({ status: 'blocked', note: `${PLAN_NODE_ASK_HEAD}${decision}` });
   });
+
+  it('lands a person’s own P0 whose card waits on design_document, blocked as its card says', async () => {
+    const root = await create({ title: 'Plan 340 · the loop works against any forge' });
+    const decision = 'Approve the design document.';
+    const p0 = await create({
+      parentId: root.nodeId,
+      title: 'P0 — written by hand',
+      card: card({ reason: 'design_document', decision }),
+    });
+    expect(p0).toMatchObject({ status: 'blocked', note: `${PLAN_NODE_ASK_HEAD}${decision}` });
+    expect(planNodeApprovalAsked(p0)).toEqual({ reason: 'design_document', decision });
+  });
+
+  it('refuses an agent’s create or update whose card waits on design_document', async () => {
+    const agent = (): PlanWriteContext => ({ ...ctx(), actorKind: 'agent' });
+    const root = await create({ title: 'Plan 340 · the loop works against any forge' });
+    const waiting = card({ reason: 'design_document', decision: 'Approve the design document.' });
+    const created = await createPlanNode(
+      agent(),
+      PlanNodeCreateInputSchema.parse({
+        parentId: root.nodeId,
+        kind: 'execute',
+        title: 'P0',
+        goal: 'Write the design document.',
+        criteria: 'It merged.',
+        card: waiting,
+      }),
+    );
+    expect(created).toMatchObject({ ok: false, code: 'PLAN_NODE_DESIGN_DOCUMENT_WAIT' });
+    expect([...store.nodes.values()].filter((n) => n.parentId === root.nodeId)).toEqual([]);
+
+    const p1 = await create({ parentId: root.nodeId, title: 'P1 — the forge seam' });
+    const updated = await updatePlanNode(agent(), {
+      nodeId: p1.nodeId,
+      expectedRevision: p1.revision,
+      card: waiting,
+    });
+    expect(updated).toMatchObject({ ok: false, code: 'PLAN_NODE_DESIGN_DOCUMENT_WAIT' });
+    expect(store.nodes.get(p1.nodeId)?.card).toBeUndefined();
+  });
+
+  it('keeps a stored design_document card and its Approve through an agent’s write that leaves the card', async () => {
+    const root = await create({ title: 'Plan 340 · the loop works against any forge' });
+    const waitsOn = {
+      reason: 'design_document',
+      decision: 'Approve the design document.',
+    } as const;
+    const p0 = await create({ parentId: root.nodeId, title: 'P0', card: card(waitsOn) });
+    const noted = await updatePlanNode(
+      { ...ctx(), actorKind: 'agent' },
+      { nodeId: p0.nodeId, expectedRevision: p0.revision, title: 'P0 — the design document' },
+    );
+    expect(noted).toMatchObject({ ok: true, node: { status: 'blocked', card: { waitsOn } } });
+    if (noted.ok) expect(planNodeApprovalAsked(noted.node)).toEqual(waitsOn);
+  });
 });

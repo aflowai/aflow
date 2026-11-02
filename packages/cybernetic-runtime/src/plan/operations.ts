@@ -117,6 +117,7 @@ export type PlanOpErrorCode =
   | 'PLAN_NODE_RESIDENT_SCOPE'
   | 'PLAN_NODE_LIVE_CHECK_PERSON'
   | 'PLAN_NODE_DESIGN_NOT_MERGED'
+  | 'PLAN_NODE_DESIGN_DOCUMENT_WAIT'
   | 'PLAN_LEARNING_NOT_FOUND';
 
 export interface PlanOpError {

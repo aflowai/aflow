@@ -2,10 +2,12 @@
  * The phase after P0 asks the operator to approve P0's merged design document
  * (Plan 339 D6), so that ask is written only once the document exists: the
  * plan's P0, its first step not dropped, has closed done with its design
- * document linked.
+ * document linked. A new ask names `design_approval`, so an agent's or a
+ * service's write naming `design_document` as its wait is refused. A person's
+ * own write lands as its card says.
  */
 import { PLAN_TREE_DEPTH_LIMIT, type PlanNodeCreateInput } from '@aflow/schemas';
-import type { PlanOpError, PlanReadContext } from './operations.js';
+import type { PlanOpError, PlanReadContext, PlanWriteContext } from './operations.js';
 
 const P0_PAGE = 50;
 
@@ -42,13 +44,23 @@ async function designDocumentMerged(ctx: PlanReadContext, parentId: string): Pro
 /**
  * The refusal of a create or an update that asks for `design_approval`,
  * through its `work` or its card's `waitsOn`, before P0's design document has
- * merged. `parentId` is the node's parent once the write lands.
+ * merged, or whose card waits on `design_document` where no person writes it.
+ * `parentId` is the node's parent once the write lands.
  */
 export async function designApprovalRefusal(
-  ctx: PlanReadContext,
+  ctx: PlanReadContext & Pick<PlanWriteContext, 'actorKind'>,
   input: Partial<Pick<PlanNodeCreateInput, 'work' | 'card'>>,
   parentId: string | null,
 ): Promise<PlanOpError | undefined> {
+  if (input.card?.waitsOn?.reason === 'design_document' && ctx.actorKind !== 'human') {
+    return {
+      ok: false,
+      code: 'PLAN_NODE_DESIGN_DOCUMENT_WAIT',
+      message:
+        'A new plan’s P0 starts active, so a new card’s `waitsOn` names no `design_document`, and nothing was ' +
+        'written. Leave `waitsOn` out of P0. The phase after it asks with `design_approval` once P0’s document merges.',
+    };
+  }
   const asks =
     input.work === 'design_approval' || input.card?.waitsOn?.reason === 'design_approval';
   if (!asks) return undefined;
