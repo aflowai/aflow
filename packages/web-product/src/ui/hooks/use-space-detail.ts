@@ -30,14 +30,19 @@ interface UseSpaceDetailReturn {
   error: string | null;
 }
 
-export function useSpaceDetail(spaceId: string | null): UseSpaceDetailReturn {
-  const { data, isLoading, error } = useApiQuery<SpaceDetail>({
+/** The space-detail query itself, for a caller that needs its states or a refetch. */
+export function useSpaceDetailQuery(spaceId: string | null) {
+  return useApiQuery<SpaceDetail>({
     key: ['space', spaceId ?? '__none__', 'detail'],
     path: spaceId ? `/spaces/${spaceId}` : '/spaces',
     staleTime: 30_000,
     enabled: spaceId !== null,
     ...(spaceId ? { spaceId } : {}),
   });
+}
+
+export function useSpaceDetail(spaceId: string | null): UseSpaceDetailReturn {
+  const { data, isLoading, error } = useSpaceDetailQuery(spaceId);
 
   return {
     space: data ?? null,

@@ -24,7 +24,8 @@ import {
   TabPanel,
 } from '@aflow/design-system';
 import type { CascadeDetail, CascadeNode } from '@aflow/schemas';
-import { useApi, useSpace } from './providers.js';
+import { useSpace } from './providers.js';
+import { useApiQuery } from '../hooks/useApiQuery.js';
 import { resolveSpaceSlug } from '../lib/space-routes.js';
 import { useAutoScrollToBottom } from '../hooks/use-auto-scroll.js';
 import { useConnectionNotice } from '../hooks/use-connection-notice.js';
@@ -56,7 +57,6 @@ export function EntityChatInspector(props: {
   const { rootSessionId, focusTab, focusTabBumper, onSeed, onRevealChat, attentionCount } = props;
   const { spaceId, registerImperativeRefresh } = useCybernetic();
   const { events, isConnected } = useSpaceEntityEvents(spaceId);
-  const { apiUrl, headers } = useApi();
   const { spaces, activeSpace } = useSpace();
   const spaceSlug = resolveSpaceSlug(spaces, spaceId, activeSpace);
 
@@ -82,7 +82,21 @@ export function EntityChatInspector(props: {
   // fallback, which is a drop that never happened.
   const showReconnecting = useConnectionNotice(isConnected, spaceId !== '') === 'reconnecting';
 
-  const [cascadeDetail, setCascadeDetail] = useState<CascadeDetail | null>(null);
+  // A 404 means "no cascade children yet", not an error: the query keeps no
+  // data for it and the root session's timeline carries the UI.
+  const cascadeQuery = useApiQuery<CascadeDetail>({
+    key: ['session', rootSessionId ?? 'none', 'cascade'],
+    path: `/spaces/${spaceId}/cascades/${rootSessionId ?? ''}`,
+    spaceId,
+    staleTime: 10_000,
+    enabled: rootSessionId !== null && spaceId !== '',
+  });
+  const cascadeDetail = rootSessionId ? (cascadeQuery.data ?? null) : null;
+  const refetchCascade = cascadeQuery.refetch;
+  const reloadCascade = useCallback(async () => {
+    if (!rootSessionId) return;
+    await refetchCascade();
+  }, [rootSessionId, refetchCascade]);
   const {
     scrollRef: timelineScrollRef,
     contentRef: timelineContentRef,
@@ -90,29 +104,6 @@ export function EntityChatInspector(props: {
     isPinned: timelineIsPinned,
     scrollToBottom: scrollTimelineToBottom,
   } = useAutoScrollToBottom();
-
-  const reloadCascade = useCallback(async () => {
-    if (!rootSessionId) {
-      setCascadeDetail(null);
-      return;
-    }
-    try {
-      const res = await fetch(`${apiUrl}/spaces/${spaceId}/cascades/${rootSessionId}`, {
-        headers: { ...headers(), 'X-Space-ID': spaceId },
-      });
-      // A 404 just means "no cascade children yet" — not an error. Keep the
-      // prior tree (if any) and let the root session's timeline carry the UI.
-      if (!res.ok) return;
-      const body = (await res.json()) as CascadeDetail;
-      setCascadeDetail(body);
-    } catch {
-      // Network hiccup — next entity event will retry.
-    }
-  }, [apiUrl, headers, spaceId, rootSessionId]);
-
-  useEffect(() => {
-    void reloadCascade();
-  }, [reloadCascade]);
 
   useEffect(() => {
     return registerImperativeRefresh(reloadCascade);

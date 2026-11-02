@@ -9,7 +9,12 @@ import { useApiQuery } from '../../hooks/useApiQuery.js';
 import { formatUnread, useRoomActivity } from '../../hooks/use-room-activity.js';
 import { spaceRoute } from '../../lib/space-routes.js';
 import { formatAgo } from './WorkbenchRunRow.js';
-import { WorkbenchEmptyRow, WorkbenchLink, WorkbenchSection } from './WorkbenchSection.js';
+import {
+  WorkbenchEmptyRow,
+  WorkbenchLink,
+  WorkbenchSection,
+  WorkbenchSectionPending,
+} from './WorkbenchSection.js';
 
 interface AppletsListResponse {
   applets: AppletInstanceSummary[];
@@ -89,7 +94,8 @@ export function WorkbenchApplets({
   const activity = useRoomActivity(spaceId, roomIds);
 
   const empty = groups.length === 0;
-  if (empty && query.isLoading) return null;
+  if (empty && query.isLoading)
+    return <WorkbenchSectionPending title="Applets" icon="squares-four" />;
 
   return (
     <WorkbenchSection

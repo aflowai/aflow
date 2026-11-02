@@ -7,7 +7,11 @@ import { ListingAvatar, Row, Text, Tooltip } from '@aflow/design-system';
 import { useFlows } from '../../hooks/use-flows.js';
 import { spaceRoute } from '../../lib/space-routes.js';
 import type { Flow } from '../../lib/types.js';
-import { WorkbenchEmptyRow, WorkbenchSection } from './WorkbenchSection.js';
+import {
+  WorkbenchEmptyRow,
+  WorkbenchSection,
+  WorkbenchSectionPending,
+} from './WorkbenchSection.js';
 
 /**
  * Who else works here (Plan 293 §9.4) — the space's operator-authored agents.
@@ -61,7 +65,7 @@ export function WorkbenchAgents({
   const agents = useMemo(() => flows.filter((flow) => !flow.systemRole && !flow.system), [flows]);
 
   const empty = agents.length === 0;
-  if (empty && isLoading) return null;
+  if (empty && isLoading) return <WorkbenchSectionPending title="Agents" icon="robot" />;
 
   return (
     <WorkbenchSection

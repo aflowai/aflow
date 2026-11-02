@@ -7,23 +7,21 @@ import { useApiQuery } from '../../hooks/useApiQuery.js';
 import { useActionCenter } from '../../hooks/use-action-center.js';
 import { useSpaceWorkflowRuns } from '../../hooks/use-space-workflow-runs.js';
 import { WorkbenchNeedsAttention, waitingOnLabel } from './WorkbenchNeedsAttention.js';
-import { WorkbenchSchedules } from './WorkbenchSchedules.js';
+import { FoldedSchedulesNotice, WorkbenchSchedules } from './WorkbenchSchedules.js';
 import { useSpacePeople } from '../../hooks/use-space-people.js';
-import { WorkbenchCoach } from './WorkbenchCoach.js';
-import { WorkbenchSkills, type WorkbenchSkill } from './WorkbenchSkills.js';
+import { WorkbenchCoachFold, WorkbenchProposalSources } from './WorkbenchCoach.js';
+import { WorkbenchLazySection } from './WorkbenchSection.js';
+import {
+  LiveRunBadges,
+  WorkbenchSkills,
+  skillRuns,
+  skillsFromWorkflows,
+  type WorkbenchWorkflow,
+} from './WorkbenchSkills.js';
 import { WorkbenchApplets } from './WorkbenchApplets.js';
 import { WorkbenchAgents } from './WorkbenchAgents.js';
-import { WorkbenchIntegrations } from './WorkbenchIntegrations.js';
+import { FoldedIntegrationsSetupCount, WorkbenchIntegrations } from './WorkbenchIntegrations.js';
 import { WorkbenchRecentConversations } from './WorkbenchRecentConversations.js';
-
-interface WorkflowListItem {
-  slug: string;
-  name: string;
-  mode?: string;
-  system?: boolean;
-  purgedAt?: string | null;
-  archivedAt?: string | null;
-}
 
 /**
  * The Space Workbench (Plan 228): a space-wide board of what's happening in the
@@ -43,6 +41,20 @@ interface WorkflowListItem {
  * (3) off the bottom and the operator loses their history the moment the space
  * gets interesting. So the inventory scrolls and **recent conversations is
  * pinned to the floor of the pane**, capped and scrolling inside itself.
+ *
+ * The chat opens this board by default on a new chat, so what it mounts on
+ * open is a cost on every landing. Only (1) and (3) mount then. Each section
+ * of (2), and the Coach's, is folded and mounts only when the operator expands
+ * it (Plan 338 D3, where the reads are counted). A folded header still shows
+ * what would have put the section in front of the operator, from what the
+ * page holds and with no read or timer of its own. Skills shows its live runs
+ * from the run feed (1) holds. Schedules counts the Action Center's notices
+ * that an agent set one up. Integrations counts the Action Center's connection
+ * requests alone, because nothing refreshes the readiness reads while it is
+ * folded. The Coach shows its proposals and a review the entity-events stream
+ * has seen start. Applets and Agents ask nothing of the operator, so their
+ * headers carry nothing. The workflow list is read on open, because recent
+ * conversations names runs by it.
  */
 export function Workbench({
   spaceId,
@@ -61,34 +73,23 @@ export function Workbench({
   const runsState = useSpaceWorkflowRuns(spaceId);
   const actionCenter = useActionCenter(spaceId);
 
-  const skillsQuery = useApiQuery<{ workflows: WorkflowListItem[] }>({
-    key: ['space', spaceId, 'workflows', 'all'],
-    path: `/spaces/${spaceId}/workflows?archived=true`,
-    spaceId,
-    staleTime: 30_000,
-    enabled: !!spaceId,
-  });
-
-  const skills = useMemo<WorkbenchSkill[]>(
-    () =>
-      (skillsQuery.data?.workflows ?? [])
-        .filter((w) => !w.system && !w.purgedAt)
-        .map((w) => ({
-          slug: w.slug,
-          name: w.name,
-          ...(w.mode ? { mode: w.mode } : {}),
-          archivedAt: w.archivedAt ?? null,
-        })),
-    [skillsQuery.data],
-  );
-
   // Every workflow's name, the platform's own included: a conversation's
   // commission or publication is a run of a system workflow, which the skill
-  // list above leaves out.
+  // list leaves out. The board reads the list on open, because recent
+  // conversations and the folded Skills header both need it.
+  const workflowList = useWorkflowList(spaceId);
   const workflowNames = useMemo(
-    () => new Map((skillsQuery.data?.workflows ?? []).map((w) => [w.slug, w.name] as const)),
-    [skillsQuery.data],
+    () => new Map((workflowList.data?.workflows ?? []).map((w) => [w.slug, w.name] as const)),
+    [workflowList.data],
   );
+  // The skills Skills lists once expanded, and their live runs from the feed
+  // the board already holds. The folded header badges these same runs, so it
+  // and the list read one rule.
+  const skills = useMemo(
+    () => skillsFromWorkflows(workflowList.data?.workflows ?? []),
+    [workflowList.data],
+  );
+  const liveSkillRuns = useMemo(() => skillRuns(runsState.runs, skills), [runsState.runs, skills]);
 
   // What each paused run is waiting on, said as a person. Derived from the
   // open items rather than the run row, so the label and the card that
@@ -115,36 +116,67 @@ export function Workbench({
       <div style={{ flex: '1 1 auto', minHeight: 0, overflow: 'auto', scrollbarWidth: 'thin' }}>
         <Column gap="2xl" style={{ padding: 'var(--space-3) var(--space-2)' }}>
           <WorkbenchNeedsAttention state={actionCenter} spaceId={spaceId} />
-          <WorkbenchSchedules state={actionCenter} spaceId={spaceId} spaceSlug={spaceSlug} />
-          <WorkbenchSkills
-            skills={skills}
-            spaceId={spaceId}
-            spaceSlug={spaceSlug}
-            activeRuns={runsState.runs}
-            waitingOnByRun={waitingOnByRun}
-            loading={skillsQuery.isLoading}
-            onRun={(skill) => {
-              seed(`Run the "${skill.name}" skill. `);
-            }}
-            {...(onRevealChat ? { onRevealChat } : {})}
-          />
-          <WorkbenchApplets
-            spaceId={spaceId}
-            spaceSlug={spaceSlug}
-            {...(onRevealChat ? { onRevealChat } : {})}
-          />
+          <WorkbenchProposalSources state={actionCenter} spaceSlug={spaceSlug} />
+          {/* Folded below this line (Plan 338 D3): each section mounts, and
+              reads, only when the operator expands it. */}
+          <WorkbenchLazySection
+            title="Schedules"
+            icon="clock"
+            meta={<FoldedSchedulesNotice state={actionCenter} />}
+          >
+            <WorkbenchSchedules state={actionCenter} spaceId={spaceId} spaceSlug={spaceSlug} />
+          </WorkbenchLazySection>
+          <WorkbenchLazySection
+            title="Skills"
+            icon="skill"
+            meta={<LiveRunBadges runs={liveSkillRuns} />}
+          >
+            <WorkbenchSkills
+              spaceId={spaceId}
+              spaceSlug={spaceSlug}
+              skills={skills}
+              loading={workflowList.isLoading}
+              activeRuns={liveSkillRuns}
+              waitingOnByRun={waitingOnByRun}
+              onRun={(skill) => {
+                seed(`Run the "${skill.name}" skill. `);
+              }}
+              {...(onRevealChat ? { onRevealChat } : {})}
+            />
+          </WorkbenchLazySection>
+          <WorkbenchLazySection title="Applets" icon="squares-four">
+            <WorkbenchApplets
+              spaceId={spaceId}
+              spaceSlug={spaceSlug}
+              {...(onRevealChat ? { onRevealChat } : {})}
+            />
+          </WorkbenchLazySection>
           {/* Below the capabilities and above the substrate: an agent is someone
               who works here rather than something the space can do, so it does
               not belong among Skills — but it is still inventory, not plumbing. */}
-          <WorkbenchAgents
-            spaceId={spaceId}
-            spaceSlug={spaceSlug}
-            {...(onRevealChat ? { onRevealChat } : {})}
-          />
+          <WorkbenchLazySection title="Agents" icon="robot">
+            <WorkbenchAgents
+              spaceId={spaceId}
+              spaceSlug={spaceSlug}
+              {...(onRevealChat ? { onRevealChat } : {})}
+            />
+          </WorkbenchLazySection>
           {/* Last of the inventory: an integration is the substrate the other
               two run on, not work in its own right, so it sits below them. */}
-          <WorkbenchIntegrations spaceId={spaceId} spaceSlug={spaceSlug} />
-          <WorkbenchCoach state={actionCenter} spaceId={spaceId} spaceSlug={spaceSlug} />
+          <WorkbenchLazySection
+            title="Integrations"
+            icon="plugs-connected"
+            meta={
+              <FoldedIntegrationsSetupCount connectionRequests={actionCenter.lanes.connections} />
+            }
+          >
+            <WorkbenchIntegrations
+              spaceId={spaceId}
+              spaceSlug={spaceSlug}
+              connectionRequests={actionCenter.lanes.connections}
+            />
+          </WorkbenchLazySection>
+          <WorkbenchCoachFold state={actionCenter} spaceId={spaceId} spaceSlug={spaceSlug} />
         </Column>
       </div>
       {/* The floor of the pane. It sizes itself (see the component) rather than
@@ -159,4 +191,15 @@ export function Workbench({
       />
     </Column>
   );
+}
+
+/** The space's workflows, archived included, under the key other pages read it by. */
+function useWorkflowList(spaceId: string) {
+  return useApiQuery<{ workflows: WorkbenchWorkflow[] }>({
+    key: ['space', spaceId, 'workflows', 'all'],
+    path: `/spaces/${spaceId}/workflows?archived=true`,
+    spaceId,
+    staleTime: 30_000,
+    enabled: !!spaceId,
+  });
 }

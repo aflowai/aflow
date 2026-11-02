@@ -5,6 +5,7 @@ import type { EntityDirectives } from '@aflow/schemas';
 import { Spinner, Button, Text, Column } from '@aflow/design-system';
 import { useSpace } from './providers.js';
 import { getRealtimeClient } from '../lib/realtimeClient.js';
+import { useSpaceDetailQuery } from '../hooks/use-space-detail.js';
 
 // ============================================================================
 // CyberneticProvider — live directives for a cybernetic space.
@@ -55,37 +56,19 @@ export function CyberneticProvider({
   const { spaces, isLoading: spacesLoading } = useSpace();
   const space = spaces.find((s) => s.id === spaceId);
 
-  const [directives, setDirectives] = useState<EntityDirectives | null>(null);
-  const [directivesError, setDirectivesError] = useState<boolean>(false);
-  const [reloadNonce, setReloadNonce] = useState(0);
-  const [isConnected, setIsConnected] = useState(false);
-
+  // The space-detail key, so a second mount reads the cache, and so does any
+  // other holder of the key on the page (the local edition's space gate).
+  const detail = useSpaceDetailQuery(space?.id ?? null);
+  const directives = (detail.data?.directives ?? null) as EntityDirectives | null;
+  // A read that answered without directives keeps its success while Retry
+  // reads again, so the error screen gives way to the spinner for as long as
+  // any read is in flight.
+  const directivesError = !directives && !detail.isFetching && (detail.isError || detail.isSuccess);
+  const refetchDetail = detail.refetch;
   const retryDirectives = useCallback(() => {
-    setDirectivesError(false);
-    setDirectives(null);
-    setReloadNonce((n) => n + 1);
-  }, []);
-
-  useEffect(() => {
-    if (!space) return;
-    let cancelled = false;
-    fetch(`/api/spaces/${space.id}`)
-      .then((r) => r.json() as Promise<{ directives?: EntityDirectives }>)
-      .then((data) => {
-        if (cancelled) return;
-        if (data.directives) {
-          setDirectives(data.directives);
-        } else {
-          setDirectivesError(true);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setDirectivesError(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [space, reloadNonce]);
+    void refetchDetail();
+  }, [refetchDetail]);
+  const [isConnected, setIsConnected] = useState(false);
 
   useEffect(() => {
     if (!space) return;

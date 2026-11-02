@@ -209,3 +209,8 @@ export function useSpaceIntegrations(spaceId: string) {
     isLoading: api.isLoading || mcp.isLoading || repo.isLoading,
   };
 }
+
+/** The integrations waiting on the operator: the ones the board counts as needing setup. */
+export function integrationNeedsSetup(integration: SpaceIntegration): boolean {
+  return integration.readiness === 'attention' || integration.readiness === 'error';
+}

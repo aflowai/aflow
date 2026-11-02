@@ -1,13 +1,24 @@
 'use client';
 
+import { useMemo } from 'react';
 import { Badge, Column, Row, Text } from '@aflow/design-system';
 import type { ActionCenterItem } from '../../hooks/use-action-center-types.js';
 import type { UseActionCenterResult } from '../../hooks/use-action-center.js';
 import { useCoachSurface } from '../../hooks/use-coach-surface.js';
+import { useSpaceEntityEvents } from '../../hooks/use-space-entity-events.js';
 import { ActionCenterItemCard } from '../actionCenter/ActionCenterLane.js';
+import {
+  coachReviewFromEntityEvents,
+  type CoachReviewInProgress,
+} from '../../lib/coach-review-events.js';
 import { spaceRoute } from '../../lib/space-routes.js';
 import { groupBySource } from '../../lib/proposal-provenance.js';
-import { WorkbenchLink, WorkbenchSection } from './WorkbenchSection.js';
+import {
+  WorkbenchLazySection,
+  WorkbenchLink,
+  WorkbenchSection,
+  useWorkbenchSectionFold,
+} from './WorkbenchSection.js';
 
 /**
  * Coach (Plan 228 §3.2b), and the proposals other sources made beside it.
@@ -16,28 +27,35 @@ import { WorkbenchLink, WorkbenchSection } from './WorkbenchSection.js';
  * being mixed into Helmsman or the blocking needs-attention lane. It shows a
  * light lifecycle status (reviewing / stalled) and a **review queue** of
  * proposals to ratify/reject — rendered `accent`, not `warning`, to read as
- * "review when you can", not "blocking". Hidden when Coach is idle with
- * nothing to review. Every proposal sits under its Source line: a Coach
- * review here, any other source under a heading of its own.
+ * "review when you can", not "blocking". Outside a fold it is hidden when
+ * Coach is idle with nothing to review. Under a fold (the Workbench mounts it
+ * only on expand, Plan 338 D3) it always renders, because the operator asked.
+ * Every proposal sits under its Source line: a Coach review here, any other
+ * source under a heading of its own (`WorkbenchProposalSources`).
  */
 export function WorkbenchCoach({
   state,
   spaceId,
   spaceSlug,
+  heldReview = null,
 }: {
   state: UseActionCenterResult;
   spaceId: string;
   spaceSlug: string;
+  /** The review the folded header shows, which stands until the active-surface read lands. */
+  heldReview?: CoachReviewInProgress | null;
 }) {
   const coach = useCoachSurface(spaceId);
-  const groups = groupBySource(state.lanes.coachProposals, proposalHeading);
-  const proposals = groups.find((group) => group.heading === COACH_REVIEW)?.items ?? [];
-  const otherSources = groups.filter((group) => group.heading !== COACH_REVIEW);
-  const active = coach.lifecycle !== 'idle';
+  const fold = useWorkbenchSectionFold();
+  const proposals = coachReviewProposals(state);
+  const held = !coach.lifecycleRead && heldReview !== null;
+  const lifecycle = held ? 'reviewing' : coach.lifecycle;
+  const coachSessionId = held ? heldReview.coachSessionId : coach.coachSessionId;
+  const active = lifecycle !== 'idle';
 
   return (
     <>
-      {(proposals.length > 0 || active) && (
+      {(proposals.length > 0 || active || fold) && (
         <WorkbenchSection
           title={COACH_REVIEW}
           icon="stethoscope"
@@ -46,8 +64,8 @@ export function WorkbenchCoach({
           }
           trailing={
             <CoachStatus
-              lifecycle={coach.lifecycle}
-              coachSessionId={coach.coachSessionId}
+              lifecycle={lifecycle}
+              coachSessionId={coachSessionId}
               spaceSlug={spaceSlug}
             />
           }
@@ -59,11 +77,87 @@ export function WorkbenchCoach({
             <ProposalItems items={proposals} state={state} spaceSlug={spaceSlug} />
           ) : (
             <Text size="sm" variant="muted">
-              Watching — no proposals to review right now.
+              {active
+                ? 'Watching — no proposals to review right now.'
+                : 'Idle — no proposals to review.'}
             </Text>
           )}
         </WorkbenchSection>
       )}
+    </>
+  );
+}
+
+/**
+ * The Coach section as the Workbench mounts it: folded until the operator
+ * expands it (Plan 338 D3). The folded header reads only what the page holds,
+ * with no read and no timer of its own. It counts the Coach's proposals from
+ * the Action Center. It shows **Reviewing** for a review the entity-events
+ * stream has seen start and not end, the stream the board's run feed holds.
+ * The Coach's completion ends it, and so does its session's status event when
+ * the session fails, is cancelled, stalls or pauses. A stall, or a review
+ * that began before the stream, shows once expanded. An expand keeps the
+ * header's **Reviewing** until the active-surface read lands, so the section
+ * never shows Idle in the meantime.
+ */
+export function WorkbenchCoachFold({
+  state,
+  spaceId,
+  spaceSlug,
+}: {
+  state: UseActionCenterResult;
+  spaceId: string;
+  spaceSlug: string;
+}) {
+  const { events } = useSpaceEntityEvents(spaceId || null);
+  const review = useMemo(() => coachReviewFromEntityEvents(events), [events]);
+  const proposals = coachReviewProposals(state).length;
+  return (
+    <WorkbenchLazySection
+      title={COACH_REVIEW}
+      icon="stethoscope"
+      meta={proposals > 0 ? <Badge variant="accent">{String(proposals)}</Badge> : null}
+      trailing={
+        review ? (
+          <CoachStatus
+            lifecycle="reviewing"
+            coachSessionId={review.coachSessionId}
+            spaceSlug={spaceSlug}
+          />
+        ) : null
+      }
+    >
+      <WorkbenchCoach state={state} spaceId={spaceId} spaceSlug={spaceSlug} heldReview={review} />
+    </WorkbenchLazySection>
+  );
+}
+
+/** The Coach's own proposals, which the folded Coach header counts without a read. */
+export function coachReviewProposals(state: UseActionCenterResult): ActionCenterItem[] {
+  return (
+    groupBySource(state.lanes.coachProposals, proposalHeading).find(
+      (group) => group.heading === COACH_REVIEW,
+    )?.items ?? []
+  );
+}
+
+/**
+ * Proposals from every source other than the Coach, each under its Source
+ * line. They come from the Action Center the board already holds, so they
+ * render without a fold.
+ */
+export function WorkbenchProposalSources({
+  state,
+  spaceSlug,
+}: {
+  state: UseActionCenterResult;
+  spaceSlug: string;
+}) {
+  const otherSources = groupBySource(state.lanes.coachProposals, proposalHeading).filter(
+    (group) => group.heading !== COACH_REVIEW,
+  );
+  return (
+    <>
       {otherSources.map((group) => (
         <WorkbenchSection
           key={group.heading}
@@ -78,7 +172,7 @@ export function WorkbenchCoach({
   );
 }
 
-const COACH_REVIEW = 'Coach review';
+export const COACH_REVIEW = 'Coach review';
 
 /** The section a proposal sits under: its Source line. */
 function proposalHeading(item: ActionCenterItem): string {

@@ -152,6 +152,8 @@ export interface UseCoachSurfaceResult {
   // ---- Coach state from the active-surface aggregator ----
   lifecycle: ActiveSurfaceCoachLifecycle;
   coachSessionId: string | null;
+  /** Whether the active-surface read has landed. Until it has, `lifecycle` is the `idle` default. */
+  lifecycleRead: boolean;
 
   // ---- Lists ----
   anomalies: CoachAnomalySummary[];
@@ -472,6 +474,7 @@ export function useCoachSurface(
   const coachState = activeSurface.snapshot?.coach;
   const lifecycle: ActiveSurfaceCoachLifecycle = coachState?.lifecycle ?? 'idle';
   const coachSessionId = coachState?.coachSessionId ?? null;
+  const lifecycleRead = activeSurface.status !== 'loading';
 
   const counts = useMemo(
     () => ({ pendingAnomalies: coachState?.pendingAnomalies ?? 0 }),
@@ -499,6 +502,7 @@ export function useCoachSurface(
   return {
     lifecycle,
     coachSessionId,
+    lifecycleRead,
     anomalies,
     counts,
     status,
