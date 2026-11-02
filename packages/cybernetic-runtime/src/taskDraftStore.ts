@@ -489,7 +489,7 @@ export async function patchTaskDraft(args: {
     // the new ref and terminal cleanup can never reach it.
     if (payloadRef) {
       try {
-        await payloadStore.delete(payloadRef as never);
+        await payloadStore.delete(payloadRef);
       } catch {
         // A leaked body must not replace the error the caller needs to see.
       }
@@ -579,7 +579,7 @@ export async function discardTaskDraft(args: {
     let raw = doc.inlineContent;
     if (raw === null && doc.payloadRef) {
       try {
-        const body = await args.payloadStore.retrieve(doc.payloadRef as never);
+        const body = await args.payloadStore.retrieve(doc.payloadRef);
         raw = typeof body === 'string' ? body : JSON.stringify(body);
       } catch {
         raw = null;
@@ -591,7 +591,7 @@ export async function discardTaskDraft(args: {
     if (doc.payloadRef) refs.add(doc.payloadRef);
     for (const ref of refs) {
       try {
-        await args.payloadStore.delete(ref as never);
+        await args.payloadStore.delete(ref);
       } catch {
         // A body that cannot be deleted must not keep the row alive: the row is
         // what makes the draft readable, and leaving it is the worse leak.

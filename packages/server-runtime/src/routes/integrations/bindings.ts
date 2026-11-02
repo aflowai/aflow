@@ -118,7 +118,7 @@ export function registerBindingRoutes(fastify: FastifyInstance): void {
       const tenant = await request.requireTenant();
       const space = await request.requireSpace();
       const db = getDb(fastify);
-      const { bindingId } = request.params as { bindingId: string };
+      const { bindingId } = request.params;
 
       if (!db) {
         reply.code(404).send({ error: 'Database not configured' });
@@ -136,13 +136,13 @@ export function registerBindingRoutes(fastify: FastifyInstance): void {
 
       // Fallback: if not found by bindingId, try interpreting it as an apiId
       if (rows.length === 0) {
-        rows = (await withTenantSchema(db, tenantContext, async (tx) => {
+        rows = await withTenantSchema(db, tenantContext, async (tx) => {
           return tx
             .select()
             .from(apiBindings)
             .where(and(eq(apiBindings.apiId, bindingId), eq(apiBindings.spaceId, space.spaceId)))
             .limit(1);
-        })) as ApiBindingRow[];
+        });
       }
 
       if (rows.length === 0) {
@@ -254,7 +254,7 @@ export function registerBindingRoutes(fastify: FastifyInstance): void {
           definitionBaseUrl = defRows[0]?.baseUrl ?? undefined;
           const defJson = defRows[0]?.definitionJson as Record<string, unknown> | null;
           if (defJson?.['suggestedEgressPolicy']) {
-            suggestedEgressPolicy = defJson['suggestedEgressPolicy'] as SuggestedEgressPolicy;
+            suggestedEgressPolicy = defJson['suggestedEgressPolicy'];
           }
           definitionCallMode = defJson?.['callMode'] as string | undefined;
           definitionBaseUrlTemplate = defJson?.['baseUrlTemplate'] as string | undefined;
@@ -340,7 +340,7 @@ export function registerBindingRoutes(fastify: FastifyInstance): void {
         await assertBindingFulfillmentWritable({
           db,
           tenantCtx: tenantContext,
-          spaceId: space.spaceId as string,
+          spaceId: space.spaceId,
           bindingId: body.bindingId,
           apiId: body.apiId,
           fulfillment: effectiveFulfillment,
@@ -377,11 +377,11 @@ export function registerBindingRoutes(fastify: FastifyInstance): void {
       try {
         await enforceIntegrationHostPolicy({
           db,
-          tenantId: tenant.tenantId as string,
-          spaceId: space.spaceId as string,
+          tenantId: tenant.tenantId,
+          spaceId: space.spaceId,
           kind: 'api',
           hosts: collectApiBindingHosts({
-            auth: auth as unknown as Record<string, unknown>,
+            auth: auth,
             egressPolicy,
           }),
           grantRefs: [
@@ -403,8 +403,8 @@ export function registerBindingRoutes(fastify: FastifyInstance): void {
       if (auth.type === 'oauth2_authorization_code' && auth.clientScope !== 'platform') {
         const guardError = await withTenantSchema(db, tenantContext, async (tx) =>
           checkOAuthClientRegistered(tx, auth.clientScope, auth.issuerKey, {
-            tenantId: tenant.tenantId as string,
-            spaceId: space.spaceId as string,
+            tenantId: tenant.tenantId,
+            spaceId: space.spaceId,
           }),
         );
         if (guardError) {
@@ -474,7 +474,7 @@ export function registerBindingRoutes(fastify: FastifyInstance): void {
 
       const redis = getRedis(fastify);
       if (redis) {
-        publishApiCatalogInvalidation(redis, tenant.tenantId as string, space.spaceId, {
+        publishApiCatalogInvalidation(redis, tenant.tenantId, space.spaceId, {
           kind: 'binding',
           apiId: body.apiId,
         });
@@ -503,7 +503,7 @@ export function registerBindingRoutes(fastify: FastifyInstance): void {
       const tenant = await request.requireTenant();
       const space = await request.requireSpace();
       const db = getDb(fastify);
-      const { bindingId } = request.params as { bindingId: string };
+      const { bindingId } = request.params;
 
       if (!db) throw new Error('Database not configured');
 
@@ -551,7 +551,7 @@ export function registerBindingRoutes(fastify: FastifyInstance): void {
 
       const redis = getRedis(fastify);
       if (redis) {
-        publishApiCatalogInvalidation(redis, tenant.tenantId as string, space.spaceId, {
+        publishApiCatalogInvalidation(redis, tenant.tenantId, space.spaceId, {
           kind: 'binding',
         });
       }

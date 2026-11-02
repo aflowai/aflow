@@ -59,12 +59,10 @@ function isNoOp(target: Record<string, unknown>, patch: Record<string, unknown>)
 function applyAction(wf: Workflow, action: Action): Workflow {
   switch (action.t) {
     case 'patchWorkflow':
-      return isNoOp(wf as unknown as Record<string, unknown>, action.patch)
-        ? wf
-        : { ...wf, ...action.patch };
+      return isNoOp(wf, action.patch) ? wf : { ...wf, ...action.patch };
     case 'patchTask': {
       const target = wf.tasks.find((t) => t.taskId === action.taskId);
-      if (!target || isNoOp(target as unknown as Record<string, unknown>, action.patch)) return wf;
+      if (!target || isNoOp(target, action.patch)) return wf;
       return {
         ...wf,
         tasks: wf.tasks.map((t) => (t.taskId === action.taskId ? { ...t, ...action.patch } : t)),
@@ -98,7 +96,7 @@ function applyAction(wf: Workflow, action: Action): Workflow {
         name: 'New task',
         goal: 'Describe what this task should do.',
         agent: 'cybernetic-runner',
-      } as WorkflowTask;
+      };
       return { ...wf, tasks: [...wf.tasks, next] };
     }
     case 'removeTask':

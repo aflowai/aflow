@@ -468,7 +468,7 @@ async function dispatchBundleUpdate(
         spaceId: ids.spaceId,
         name: template.name,
         ...(template.description !== undefined ? { description: template.description } : {}),
-        scope: { tenantId: ids.tenantId as string, spaceId: ids.spaceId },
+        scope: { tenantId: ids.tenantId, spaceId: ids.spaceId },
         authJson: placeholderAuthJson,
         egressPolicy: template.egressPolicy,
         conflictPolicy: 'skip',
@@ -541,7 +541,7 @@ async function dispatchBundleUpdate(
         spaceId: ids.spaceId,
         name: template.name,
         ...(template.description !== undefined ? { description: template.description } : {}),
-        scope: { tenantId: ids.tenantId as string, spaceId: ids.spaceId },
+        scope: { tenantId: ids.tenantId, spaceId: ids.spaceId },
         authJson: placeholderAuthJson,
         subscribeListChanged: template.subscribeListChanged,
         samplingPolicy: template.samplingPolicy,
@@ -613,7 +613,7 @@ async function dispatchBundleUpdate(
   if (absentArtifactSeeds.length > 0) {
     await applyArtifactSeeds({
       bundle: { bundleId: bundle.bundleId, artifactSeed: absentArtifactSeeds },
-      tenantId: ids.tenantId as string,
+      tenantId: ids.tenantId,
       spaceId: ids.spaceId,
       tx,
       payloadStore: ids.payloadStore,
@@ -635,7 +635,7 @@ async function dispatchBundleUpdate(
   // one already there is the space's, its folder included.
   const agentResult = await applyBundledAgents({
     agents: bundle.agents ?? [],
-    tenantId: ids.tenantId as string,
+    tenantId: ids.tenantId,
     spaceId: ids.spaceId,
     tx,
   });
@@ -651,7 +651,7 @@ async function dispatchBundleUpdate(
     bundle,
     redis: ids.redis,
     githubAnswers: ids.githubAnswers,
-    tenantId: ids.tenantId as string,
+    tenantId: ids.tenantId,
     spaceId: ids.spaceId,
     tx,
     repo,
@@ -951,19 +951,19 @@ function publishUpdateInvalidations(
     case 'bundle': {
       const bundle = entry.payload;
       if (bundle.apiDefinitions.length > 0) {
-        publishApiCatalogInvalidation(redis, tenantId as string, spaceId, { kind: 'definition' });
+        publishApiCatalogInvalidation(redis, tenantId, spaceId, { kind: 'definition' });
       }
       if (bundle.apiBindingTemplates.length > 0) {
-        publishApiCatalogInvalidation(redis, tenantId as string, spaceId, { kind: 'binding' });
+        publishApiCatalogInvalidation(redis, tenantId, spaceId, { kind: 'binding' });
       }
       for (const definition of bundle.mcpDefinitions) {
-        publishMcpCatalogInvalidation(redis, tenantId as string, spaceId, {
+        publishMcpCatalogInvalidation(redis, tenantId, spaceId, {
           kind: 'definition',
           serverId: definition.serverId,
         });
       }
       for (const template of bundle.mcpBindingTemplates) {
-        publishMcpCatalogInvalidation(redis, tenantId as string, spaceId, {
+        publishMcpCatalogInvalidation(redis, tenantId, spaceId, {
           kind: 'binding',
           serverId: template.serverId,
           bindingId: template.bindingId,

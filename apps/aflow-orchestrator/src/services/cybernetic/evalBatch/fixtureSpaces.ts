@@ -163,7 +163,7 @@ export async function createTrialFixtureSpace(
     slug: params.workflowSlug,
     revision: params.workflow.revision,
     spaceId,
-    workflow: params.workflow as unknown as Record<string, unknown>,
+    workflow: params.workflow,
     actor: FIXTURE_ACTOR,
     onDrift: 'overwrite',
   });

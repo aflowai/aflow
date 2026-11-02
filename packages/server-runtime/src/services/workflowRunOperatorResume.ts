@@ -23,7 +23,7 @@ export function operatorResumeHarnessHooks(
   return {
     applyFailureMode: async (_deps, tenantId, runId, failedTaskId) => {
       await enqueueWorkflowHarnessAdvance(redis, {
-        tenantId: tenantId as string,
+        tenantId: tenantId,
         workflowRunId: runId,
         spaceId,
         failedTaskId,
@@ -31,14 +31,14 @@ export function operatorResumeHarnessHooks(
     },
     dispatchNextOrTerminate: async (_deps, tenantId, runId) => {
       await enqueueWorkflowHarnessAdvance(redis, {
-        tenantId: tenantId as string,
+        tenantId: tenantId,
         workflowRunId: runId,
         spaceId,
       });
     },
     dispatchRetriedTask: async (_deps, tenantId, runId, taskId) => {
       await enqueueWorkflowHarnessAdvance(redis, {
-        tenantId: tenantId as string,
+        tenantId: tenantId,
         workflowRunId: runId,
         spaceId,
         action: 'retry_dispatch',

@@ -219,11 +219,9 @@ export const hostBindingRoutes: FastifyPluginAsync = async (fastify) => {
     run: (tx: PostgresJsDatabase) => Promise<T>,
   ): Promise<T> {
     const db = fastify.appContext.db as PostgresJsDatabase;
-    return (await withTenantSchema(
-      db,
-      createTenantContext(tenantId as never),
-      async (tx: unknown) => run(tx as PostgresJsDatabase),
-    )) as T;
+    return await withTenantSchema(db, createTenantContext(tenantId as never), async (tx: unknown) =>
+      run(tx as PostgresJsDatabase),
+    );
   }
 
   app.get(

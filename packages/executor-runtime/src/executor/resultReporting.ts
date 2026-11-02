@@ -7,8 +7,6 @@ import {
   type PayloadRef,
   type AflowError,
   type StepType,
-  type TenantId,
-  type StepExecutionId,
   type SimulatedFulfillmentReport,
 } from '@aflow/schemas';
 import { ackStepJob, addStepResult } from '@aflow/redis';
@@ -81,9 +79,9 @@ export async function emitFailure(
   costJson?: Record<string, unknown>,
 ): Promise<void> {
   const errorRef = await deps.payloadStore.store({
-    tenantId: job.tenantId as TenantId,
+    tenantId: job.tenantId,
     runId: deriveExecutionRunId(job),
-    stepExecutionId: job.stepExecutionId as StepExecutionId,
+    stepExecutionId: job.stepExecutionId,
     attempt: job.attempt,
     kind: 'error',
     data: error,

@@ -186,13 +186,13 @@ export const ArtifactRenderer = memo(function ArtifactRenderer({
         }
 
         case 'phoenix:action': {
-          onAction?.(msg as Record<string, unknown>);
+          onAction?.(msg);
           break;
         }
 
         case PHOENIX_APPLET_MEDIA_MESSAGE_TYPE: {
           if (onMediaRequest) {
-            onMediaRequest(msg as Record<string, unknown>);
+            onMediaRequest(msg);
             break;
           }
           const requestId = msg['requestId'];
@@ -209,7 +209,7 @@ export const ArtifactRenderer = memo(function ArtifactRenderer({
         }
 
         case PHOENIX_APPLET_MEDIA_RELEASE_MESSAGE_TYPE: {
-          onMediaRelease?.(msg as Record<string, unknown>);
+          onMediaRelease?.(msg);
           break;
         }
       }

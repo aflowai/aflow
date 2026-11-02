@@ -1,9 +1,4 @@
-import {
-  SkillBundleSchema,
-  type SkillBundle,
-  type SkillBundleId,
-  type SkillBundleInput,
-} from '@aflow/schemas';
+import { SkillBundleSchema, type SkillBundle, type SkillBundleInput } from '@aflow/schemas';
 import { getSkillCatalogEntry } from './skillCatalog.js';
 import { SCHEDULE_INPUT } from './skillCatalog/localPrShepherdRenewal.js';
 import { TEST_TWO_SKILL_BUNDLE, TEST_SETUP_BUNDLE } from './skillBundleCatalog/testFixtures.js';
@@ -53,7 +48,7 @@ export function publishedBundleVersion(
 const KAGGLE_API_TOKEN_CREDENTIAL_KEY = 'kaggle-api-token';
 
 const KAGGLE_COMPETITION_BUNDLE: AuthoredSkillBundle = {
-  bundleId: 'kaggle-competition' as SkillBundleId,
+  bundleId: 'kaggle-competition',
   revision: 2,
   name: 'Kaggle Competition',
   tagline: 'Iterate toward a target leaderboard score on a Kaggle competition.',
@@ -171,7 +166,7 @@ const KAGGLE_COMPETITION_BUNDLE: AuthoredSkillBundle = {
 // ============================================================================
 
 const CODING_PR_LOOP_BUNDLE: AuthoredSkillBundle = {
-  bundleId: 'coding-pr-loop' as SkillBundleId,
+  bundleId: 'coding-pr-loop',
   revision: 3,
   name: 'Coding PR Loop',
   tagline: 'Open, review, and iterate pull requests on your repo with a coding agent.',
@@ -209,7 +204,7 @@ Then run a coding skill: ask to open a PR for a change → review it → fix →
 // ============================================================================
 
 const LOCAL_COMMISSION_BUNDLE: AuthoredSkillBundle = {
-  bundleId: 'local-commission' as SkillBundleId,
+  bundleId: 'local-commission',
   revision: 0,
   name: 'Local Commission',
   tagline: "Have the machine's own coding agent make a change in a connected repository.",
@@ -235,7 +230,7 @@ const LOCAL_COMMISSION_BUNDLE: AuthoredSkillBundle = {
 // ============================================================================
 
 const LOCAL_CODE_REVIEW_BUNDLE: AuthoredSkillBundle = {
-  bundleId: 'local-code-review' as SkillBundleId,
+  bundleId: 'local-code-review',
   revision: 0,
   name: 'Local Code Review',
   tagline: 'Review committed changes in a connected repository with the installed coding agent.',
@@ -261,7 +256,7 @@ const LOCAL_CODE_REVIEW_BUNDLE: AuthoredSkillBundle = {
 // ============================================================================
 
 const LOCAL_PUBLISH_BUNDLE: AuthoredSkillBundle = {
-  bundleId: 'local-publish' as SkillBundleId,
+  bundleId: 'local-publish',
   revision: 3,
   name: 'Local Publish',
   tagline:
@@ -280,7 +275,7 @@ const LOCAL_PUBLISH_BUNDLE: AuthoredSkillBundle = {
   skillCatalogIds: ['publish-local-changes'],
   // A publication from an `unless-unreviewed` folder starts Review Local
   // Changes on what its push would add, so that skill has to be in the space.
-  prerequisiteBundleIds: ['local-code-review' as SkillBundleId],
+  prerequisiteBundleIds: ['local-code-review'],
   // The GitHub definition ships so the pull-request call has an API to resolve
   // and the post-install manifest can surface its credential row; the
   // connection itself is the operator's, bound in Integrations.
@@ -297,7 +292,7 @@ const LOCAL_PUBLISH_BUNDLE: AuthoredSkillBundle = {
 // ============================================================================
 
 const LOCAL_PR_SHEPHERD_BUNDLE: AuthoredSkillBundle = {
-  bundleId: 'local-shepherd' as SkillBundleId,
+  bundleId: 'local-shepherd',
   revision: 5,
   name: 'Local PR Shepherd',
   tagline:
@@ -312,7 +307,7 @@ const LOCAL_PR_SHEPHERD_BUNDLE: AuthoredSkillBundle = {
   tags: ['coding', 'github', 'ci', 'local', 'developer-tools'],
   skillCatalogIds: ['local-pr-shepherd'],
   // Every fix is published by Local Publish, which has to be in the space.
-  prerequisiteBundleIds: ['local-publish' as SkillBundleId],
+  prerequisiteBundleIds: ['local-publish'],
   apiDefinitions: [GITHUB_API_DEFINITION],
   apiBindingTemplates: [],
   memorySeed: [],
@@ -348,7 +343,7 @@ const LOCAL_LOOP_PARTS = [
 
 const CODING_LOOP_BUNDLE: AuthoredSkillBundle = {
   ...LOCAL_PR_SHEPHERD_BUNDLE,
-  bundleId: 'coding-loop' as SkillBundleId,
+  bundleId: 'coding-loop',
   revision: 11,
   name: 'Coding Loop',
   tagline: 'Commission, review, publish and shepherd changes on your own machine.',

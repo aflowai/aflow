@@ -415,10 +415,7 @@ export async function buildLabelQueueSubjectViews(params: {
   const suiteBySlug = new Map<string, CyberneticEvalSuite | null>();
   const loadSuite = async (workflowSlug: string): Promise<CyberneticEvalSuite | null> => {
     if (!suiteBySlug.has(workflowSlug)) {
-      suiteBySlug.set(
-        workflowSlug,
-        await loadEvalSuite(db, tenantId as string, spaceId, workflowSlug),
-      );
+      suiteBySlug.set(workflowSlug, await loadEvalSuite(db, tenantId, spaceId, workflowSlug));
     }
     return suiteBySlug.get(workflowSlug) ?? null;
   };
@@ -426,7 +423,7 @@ export async function buildLabelQueueSubjectViews(params: {
   let judgeModel: string | undefined;
   const loadJudgeModel = async (): Promise<string> => {
     if (judgeModel === undefined) {
-      const directives = await loadSpaceDirectives(db, tenantId as string, spaceId);
+      const directives = await loadSpaceDirectives(db, tenantId, spaceId);
       judgeModel = resolveRoleModel(directives?.modelDefaults, 'judge');
     }
     return judgeModel;

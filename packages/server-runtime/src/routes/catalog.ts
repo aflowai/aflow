@@ -289,7 +289,7 @@ export const catalogRoutes: FastifyPluginAsync = async (fastify) => {
       },
     },
     async (request, reply) => {
-      const { role } = request.params as { role: 'helmsman' };
+      const { role } = request.params;
       const { HELMSMAN_DISCOVERY_PRESET } = await import('@aflow/platform-artifacts');
       reply.send({ role, allowedOperationIds: [...HELMSMAN_DISCOVERY_PRESET] });
     },
@@ -356,7 +356,7 @@ export const catalogRoutes: FastifyPluginAsync = async (fastify) => {
       },
     },
     async (request, reply) => {
-      const { role } = request.params as { role: 'helmsman' };
+      const { role } = request.params;
       const { resolveHelmsmanCapabilities, estimateOperationTokens } =
         await import('@aflow/platform-artifacts');
       const { processEditionDescriptor, RUN_OUTPUT_READ_OPERATION_ID } =
@@ -431,7 +431,7 @@ export const catalogRoutes: FastifyPluginAsync = async (fastify) => {
           reasoning: m.reasoning
             ? clean({ supported: [...m.reasoning.supported], default: m.reasoning.default })
             : undefined,
-        }) as z.infer<typeof ModelSchema>;
+        });
       };
 
       // Get models, optionally filtered by provider. A model whose provider

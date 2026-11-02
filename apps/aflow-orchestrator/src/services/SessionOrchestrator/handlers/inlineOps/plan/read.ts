@@ -32,7 +32,7 @@ export async function handlePlanNodeGet(args: InlineHandlerArgs, startTime: numb
     learnings: result.learnings,
     learningsTotal: result.learningsTotal,
   };
-  await emitStepSuccess(args, output as unknown as Record<string, unknown>, startTime);
+  await emitStepSuccess(args, output, startTime);
 }
 
 export async function handlePlanNodeList(
@@ -50,5 +50,5 @@ export async function handlePlanNodeList(
     nodes: result.nodes,
     ...(result.truncated !== undefined ? { truncated: result.truncated } : {}),
   };
-  await emitStepSuccess(args, output as unknown as Record<string, unknown>, startTime);
+  await emitStepSuccess(args, output, startTime);
 }

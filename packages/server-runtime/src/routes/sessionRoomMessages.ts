@@ -264,7 +264,7 @@ export function registerSessionRoomMessageRoutes(
 
         const result = await sessionService.postRoomMessage({
           tenantId: tenant.tenantId,
-          sessionId: sessionId as SessionId,
+          sessionId: sessionId,
           body: request.body.body,
           actorContext,
           ...(request.body.wake ? { wakeHelmsman: true } : {}),

@@ -4,8 +4,6 @@
 import type { ExecutorContext, StepResult } from '@aflow/executor-runtime';
 import { successWithData } from '@aflow/executor-runtime';
 import type { AiConversationRecord } from '@aflow/schemas';
-import type { TenantId, StepExecutionId } from '@aflow/schemas';
-import type { ToolDefinition } from '@aflow/ai-client';
 import type { AiGenerateInput } from '../schema.js';
 import { DEFAULT_AI_MODELS } from '@aflow/ai-client';
 import { getAIClientForContext } from '../aiClient.js';
@@ -24,7 +22,7 @@ export async function handleGenerate(
     let messages;
     if (params.historyRef) {
       try {
-        const history = await ctx.readPayload<AiConversationRecord>(params.historyRef as never);
+        const history = await ctx.readPayload<AiConversationRecord>(params.historyRef);
         if (history.messages) {
           messages = buildMessagesFromHistory(history, params.prompt, params.systemPrompt);
         } else {
@@ -53,11 +51,11 @@ export async function handleGenerate(
       temperature: params.temperature,
       maxTokens: params.maxTokens,
       stopSequences: params.stopSequences,
-      tools: params.tools as ToolDefinition[] | undefined,
+      tools: params.tools,
       toolChoice: params.toolChoice,
-      tenantId: ctx.job.tenantId as TenantId,
+      tenantId: ctx.job.tenantId,
       runId: ctx.runId,
-      stepExecutionId: ctx.job.stepExecutionId as StepExecutionId,
+      stepExecutionId: ctx.job.stepExecutionId,
       attempt: ctx.job.attempt,
     });
 

@@ -44,7 +44,7 @@ export async function handleWorkflowCampaignGet(
     scoreSummary: summarizeScoreSeries(campaign, series),
     recentSeries: recentSeriesTail(series),
   };
-  await emitStepSuccess(args, output as unknown as Record<string, unknown>, startTime);
+  await emitStepSuccess(args, output, startTime);
 }
 
 export async function handleWorkflowCampaignList(
@@ -69,5 +69,5 @@ export async function handleWorkflowCampaignList(
     views.push(await buildCampaignView(db, tenantIdStr, campaign));
   }
   const output: WorkflowCampaignListOutput = { campaigns: views };
-  await emitStepSuccess(args, output as unknown as Record<string, unknown>, startTime);
+  await emitStepSuccess(args, output, startTime);
 }

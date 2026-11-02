@@ -502,7 +502,7 @@ function gradeOutput(
   const check = expectation.check;
   if ('type' in check) {
     // ThresholdCriterion | ContainsCriterion — reuse the production evaluator.
-    let criterion: EvalCriterion = check as EvalCriterion;
+    let criterion: EvalCriterion = check;
     if (check.type === 'threshold') {
       const materialized = materializeThresholdCheck(check, run.campaignConfig ?? {});
       if (!materialized.ok) {
@@ -673,7 +673,7 @@ function gradeTrajectory(
       durationMs: run.tasks.reduce((sum, t) => sum + (t.durationMs ?? 0), 0),
       costCents: run.tasks.reduce((sum, t) => sum + (t.costCents ?? 0), 0),
     };
-    const evaluated = evaluateCriterion(check as EvalCriterion, { aggregateMetrics });
+    const evaluated = evaluateCriterion(check, { aggregateMetrics });
     if (!evaluated) {
       return result(index, 'trajectory', false, 'trace bound could not be evaluated');
     }

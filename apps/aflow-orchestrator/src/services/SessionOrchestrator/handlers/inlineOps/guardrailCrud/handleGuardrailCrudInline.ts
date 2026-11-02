@@ -210,7 +210,7 @@ export async function handleGuardrailCrudInline(args: InlineHandlerArgs): Promis
           targetKey: `legacy-flow:${flowId}`,
         });
 
-        outputData = compiled as unknown as Record<string, unknown>;
+        outputData = compiled;
         break;
       }
 

@@ -184,7 +184,7 @@ async function findActionCenterItemIdForPausedRun(
 
   let payload: Record<string, unknown> | null = null;
   try {
-    const raw = await payloadStore.retrieve(result.requestedInputRef as never);
+    const raw = await payloadStore.retrieve(result.requestedInputRef);
     if (raw && typeof raw === 'object') {
       payload = raw as Record<string, unknown>;
     }

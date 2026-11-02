@@ -259,7 +259,7 @@ export class ChannelStore {
       migrated = {
         ...migration.apply(migrated),
         migrations: [...migrated.migrations, migration.id],
-      } as typeof migrated;
+      };
     }
     const parsed = StoreDataSchema.safeParse(migrated);
     if (!parsed.success) {

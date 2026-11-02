@@ -302,21 +302,21 @@ function publishUninstallInvalidations(
 ): void {
   for (const integration of plan.integrations) {
     if (integration.sourceKind === 'api') {
-      publishApiCatalogInvalidation(redis, tenantId as string, spaceId, {
+      publishApiCatalogInvalidation(redis, tenantId, spaceId, {
         kind: 'definition',
         apiId: integration.integrationId,
       });
-      publishApiCatalogInvalidation(redis, tenantId as string, spaceId, {
+      publishApiCatalogInvalidation(redis, tenantId, spaceId, {
         kind: 'binding',
         apiId: integration.integrationId,
       });
     } else {
-      publishMcpCatalogInvalidation(redis, tenantId as string, spaceId, {
+      publishMcpCatalogInvalidation(redis, tenantId, spaceId, {
         kind: 'definition',
         serverId: integration.integrationId,
       });
       for (const bindingId of integration.bindingIds) {
-        publishMcpCatalogInvalidation(redis, tenantId as string, spaceId, {
+        publishMcpCatalogInvalidation(redis, tenantId, spaceId, {
           kind: 'binding',
           serverId: integration.integrationId,
           bindingId,
@@ -326,12 +326,12 @@ function publishUninstallInvalidations(
   }
   for (const binding of plan.standaloneBindingDisables) {
     if (binding.sourceKind === 'api') {
-      publishApiCatalogInvalidation(redis, tenantId as string, spaceId, {
+      publishApiCatalogInvalidation(redis, tenantId, spaceId, {
         kind: 'binding',
         apiId: binding.integrationId,
       });
     } else {
-      publishMcpCatalogInvalidation(redis, tenantId as string, spaceId, {
+      publishMcpCatalogInvalidation(redis, tenantId, spaceId, {
         kind: 'binding',
         serverId: binding.integrationId,
         bindingId: binding.bindingId,

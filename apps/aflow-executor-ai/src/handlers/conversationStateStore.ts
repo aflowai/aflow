@@ -212,7 +212,7 @@ function describePayloadShape(value: unknown): string {
   if (typeof value === 'string') return `a string of length ${String(value.length)}`;
   if (Array.isArray(value)) return `an array of length ${String(value.length)}`;
   if (value !== null && typeof value === 'object') {
-    return `an object with keys [${Object.keys(value as Record<string, unknown>).join(', ')}]`;
+    return `an object with keys [${Object.keys(value).join(', ')}]`;
   }
   return typeof value;
 }
@@ -246,7 +246,7 @@ export class ConversationStateStore {
       let retrieved: unknown;
       let notFound = false;
       try {
-        retrieved = await config.payloadStore.retrieve(conversationStateRef as never);
+        retrieved = await config.payloadStore.retrieve(conversationStateRef);
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
         notFound =
@@ -479,7 +479,7 @@ export class ConversationStateStore {
     // so we never silently shorten committed history on transient store errors.
     const batchResults = await Promise.allSettled(
       distinctRefs.map(async (ref) => {
-        const payload = await this.config.payloadStore.retrieve(ref as never);
+        const payload = await this.config.payloadStore.retrieve(ref);
         const batch = Array.isArray(payload)
           ? (payload as AiMessageAtomV1[])
           : [payload as AiMessageAtomV1];

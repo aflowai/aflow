@@ -2,10 +2,8 @@ import type { Redis } from 'ioredis';
 import type {
   StepExecutionId,
   OperationId,
-  StepType,
   StepDefinition,
   IdempotencyKey,
-  JsonSchemaObject,
   IntegrationToolDescriptor,
 } from '@aflow/schemas';
 import {
@@ -277,11 +275,11 @@ export async function handleGetSchemaInline(
 
       const operations = catalog.operations.map((op) => {
         const { requiredParams, optionalParams } = extractParamNames(
-          op.inputSchema as Record<string, unknown>,
+          op.inputSchema,
           op.internalFields?.input,
         );
         // Get the full descriptor for risk modifiers (not on catalog entry)
-        const descriptor = getOperation(op.operationId as OperationId);
+        const descriptor = getOperation(op.operationId);
         const caution = descriptor
           ? buildCaution({
               riskModifiers: descriptor.riskModifiers,
@@ -368,10 +366,7 @@ export async function handleGetSchemaInline(
         }
 
         // Prune schema boilerplate ($schema, additionalProperties, redundant descriptions)
-        opInputSchema = pruneSchemaForAgent(opInputSchema as JsonSchemaObject) as Record<
-          string,
-          unknown
-        >;
+        opInputSchema = pruneSchemaForAgent(opInputSchema);
 
         // Lean descriptor: operationId + description + pruned schema + usage (no hashes, no redundant fields)
         const { minimalExampleInput: _, ...usageWithoutExample } = op.usage;
@@ -425,7 +420,7 @@ export async function handleGetSchemaInline(
       stepExecutionId,
       parentStepExecutionId: parentStepExecutionId ?? null,
       stepId: stepDef.stepId,
-      stepType: 'catalog' as StepType,
+      stepType: 'catalog',
       operationId: 'catalog.tool.list' as OperationId,
       attempt,
       idempotencyKey,
@@ -454,7 +449,7 @@ export async function handleGetSchemaInline(
       stepExecutionId,
       parentStepExecutionId: parentStepExecutionId ?? null,
       stepId: stepDef.stepId,
-      stepType: 'catalog' as StepType,
+      stepType: 'catalog',
       operationId: 'catalog.tool.list' as OperationId,
       attempt,
       idempotencyKey,

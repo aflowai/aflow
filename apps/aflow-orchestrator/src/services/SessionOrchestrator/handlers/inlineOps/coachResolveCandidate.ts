@@ -43,7 +43,7 @@ export async function handleResolveCandidate(
 
   const results: LearnerLearningResolveCandidateOutput['results'] = [];
   for (const resolution of input.resolutions) {
-    const outcome = await resolveCandidateByNaturalKey(db, args.context.tenantId as string, {
+    const outcome = await resolveCandidateByNaturalKey(db, args.context.tenantId, {
       runId: resolution.runId,
       learningId: resolution.learningId,
       status: resolution.resolution,
@@ -59,11 +59,10 @@ export async function handleResolveCandidate(
       outcome.entry?.status === 'reviewed-promoted'
     ) {
       const { entryId, campaignId, skillSlug, learning } = outcome.entry;
-      const existing = await findCoachLearningByPromotedFromEntry(
-        db,
-        args.context.tenantId as string,
-        { spaceId, candidateLedgerEntryId: entryId },
-      );
+      const existing = await findCoachLearningByPromotedFromEntry(db, args.context.tenantId, {
+        spaceId,
+        candidateLedgerEntryId: entryId,
+      });
       if (!existing) {
         // Campaign candidates auto-record at campaign scope; process
         // candidates stage a skill-scope learning for operator ratification.

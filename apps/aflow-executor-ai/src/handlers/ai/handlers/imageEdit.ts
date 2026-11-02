@@ -4,7 +4,7 @@
 import type { ExecutorContext, StepResult } from '@aflow/executor-runtime';
 import { failureWithError } from '@aflow/executor-runtime';
 import { validationError } from '@aflow/executor-runtime';
-import type { TenantId, StepExecutionId, AiImageEditInput, MediaBoundEntity } from '@aflow/schemas';
+import type { AiImageEditInput, MediaBoundEntity } from '@aflow/schemas';
 import { getAIClientForContext } from '../aiClient.js';
 import { DEFAULT_AI_MODELS } from '@aflow/ai-client';
 import type { HandlerDeps } from './types.js';
@@ -87,9 +87,9 @@ export async function handleImageEdit(
     const response = await adapter.editImage({
       ...renderFields,
       model,
-      tenantId: ctx.job.tenantId as TenantId,
+      tenantId: ctx.job.tenantId,
       runId: ctx.runId,
-      stepExecutionId: ctx.job.stepExecutionId as StepExecutionId,
+      stepExecutionId: ctx.job.stepExecutionId,
       attempt: ctx.job.attempt,
     });
 

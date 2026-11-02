@@ -62,6 +62,27 @@ export default [
       // TypeScript handles undefined-variable checking; no-undef doesn't understand TS globals
       'no-undef': 'off',
 
+      // `void x;` marks a binding as deliberately unused or forces a layout read.
+      // From 8.72 the rule reports every `void` that does not wrap a call.
+      '@typescript-eslint/no-meaningless-void-operator': 'off',
+      // `String(x as string | number)` narrows a `{}` for no-base-to-string. The
+      // receiver accepts `{}`, so this rule calls the cast unnecessary and the two contradict.
+      '@typescript-eslint/no-unnecessary-type-assertion': [
+        'error',
+        {
+          typesToIgnore: [
+            'string | number',
+            'string | number | boolean',
+            'string | number | boolean | undefined',
+            'string | number | boolean | null | undefined',
+            'string | number | boolean | bigint | symbol',
+            'string | number | boolean | bigint | symbol | null | undefined',
+            'string | number | bigint | symbol | null | undefined',
+            'number | boolean | bigint | symbol',
+          ],
+        },
+      ],
+
       // Ban `any` - prefer `unknown` + schema parsing
       '@typescript-eslint/no-explicit-any': 'error',
       '@typescript-eslint/no-unsafe-argument': 'error',
@@ -157,6 +178,8 @@ export default [
       '@typescript-eslint/prefer-nullish-coalescing': 'off',
       '@typescript-eslint/dot-notation': 'off',
       '@typescript-eslint/require-await': 'off',
+      // Errors on every file without strictNullChecks rather than skipping it
+      '@typescript-eslint/no-useless-default-assignment': 'off',
       // Plain JS / implicit-any params; + is fine — rule is for typed codebases
       '@typescript-eslint/restrict-plus-operands': 'off',
     },

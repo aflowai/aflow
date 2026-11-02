@@ -102,7 +102,7 @@ export async function readSessionMetadata(
       tx.select(METADATA_COLUMNS).from(sessions).where(eq(sessions.sessionId, sessionId)).limit(1),
   );
   const row = rows[0];
-  return row ? toStored(row as MetadataRow) : null;
+  return row ? toStored(row) : null;
 }
 
 /**

@@ -43,5 +43,5 @@ export async function handleWorkflowCampaignStart(
     campaign: result.campaign,
     created: result.created,
   };
-  await emitStepSuccess(args, output as unknown as Record<string, unknown>, startTime);
+  await emitStepSuccess(args, output, startTime);
 }

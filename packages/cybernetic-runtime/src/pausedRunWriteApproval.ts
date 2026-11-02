@@ -43,7 +43,7 @@ export async function readPausedTaskWriteApproval(
   if (task.status !== 'paused' || task.outputRef !== ref) return null;
   let raw: unknown;
   try {
-    raw = await payloadStore.retrieve(ref as never);
+    raw = await payloadStore.retrieve(ref);
   } catch {
     return null;
   }

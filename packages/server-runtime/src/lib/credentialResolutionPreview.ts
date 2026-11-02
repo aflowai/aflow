@@ -67,7 +67,7 @@ export async function previewCredentialResolution(
           ),
         );
     });
-    typedRows = rows as Array<typeof providerCredentials.$inferSelect>;
+    typedRows = rows;
   } catch {
     // Table may not exist yet (migration not applied) — report nothing resolved.
     return previews;
@@ -76,7 +76,7 @@ export async function previewCredentialResolution(
   const expectedScopeId: Record<CredentialScope, string> = {
     user: userId,
     space: spaceId,
-    tenant: tenantId as string,
+    tenant: tenantId,
   };
   const visibleRows = typedRows.filter(
     (r) => expectedScopeId[r.scope as CredentialScope] === r.scopeId,

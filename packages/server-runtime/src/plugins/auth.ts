@@ -933,7 +933,7 @@ export const authPlugin = fp(
         const provider = identityProviderKey();
         const providerSub = claims.sub;
 
-        const profile = verification.readProfile(claims as unknown as Record<string, unknown>);
+        const profile = verification.readProfile(claims);
         const picture = profile.pictureUrl;
         const displayName = profile.displayName;
         const email = profile.email;
@@ -945,7 +945,7 @@ export const authPlugin = fp(
         let verificationAnswer: Promise<boolean> | undefined;
         const isEmailVerified = (): Promise<boolean> => {
           verificationAnswer ??= verification.isEmailVerified({
-            claims: claims as unknown as Record<string, unknown>,
+            claims: claims,
             email: normalizedEmail,
             accessToken: token,
             subject: `${provider}:${providerSub}`,

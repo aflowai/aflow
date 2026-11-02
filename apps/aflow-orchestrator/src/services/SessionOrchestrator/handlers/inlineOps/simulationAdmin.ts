@@ -14,7 +14,6 @@ import {
   SimulationSchema,
   SimulationUpsertInputSchema,
   type ApiEndpoint,
-  type OperationId,
   type SimulationBaseline,
   type SimulationDeleteOutput,
   type SimulationGetOutput,
@@ -346,7 +345,7 @@ async function deleteSimulation(
 
 export async function handleSimulationOpInline(args: InlineHandlerArgs): Promise<void> {
   const startTime = Date.now();
-  const operationId = args.stepDef.operation as OperationId;
+  const operationId = args.stepDef.operation;
   const logger = getOrchestratorLogger();
 
   try {

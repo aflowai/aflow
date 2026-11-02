@@ -248,7 +248,7 @@ async function loadConsentPayload(
   ownerScope: 'user' | 'space' | 'tenant';
 } | null> {
   try {
-    const raw = await payloadStore.retrieve(ref as never);
+    const raw = await payloadStore.retrieve(ref);
     const parsed = OAuthConsentRequestPayloadSchema.safeParse(raw);
     if (!parsed.success) return null;
     return {

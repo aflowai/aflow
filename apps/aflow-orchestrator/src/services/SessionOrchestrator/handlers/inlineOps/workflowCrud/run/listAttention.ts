@@ -14,7 +14,7 @@ export async function handleWorkflowRunListAttention(
   const { listAttentionForConversation } = await import('@aflow/cybernetic-runtime');
   const listed = await listAttentionForConversation({
     db: getDatabase(),
-    tenantId: args.context.tenantId as string,
+    tenantId: args.context.tenantId,
     spaceId,
     sessionId: args.context.runId,
     scope: input.scope,
@@ -50,5 +50,5 @@ export async function handleWorkflowRunListAttention(
     ...(listed.truncated !== undefined ? { truncated: listed.truncated } : {}),
   };
 
-  await emitStepSuccess(args, output as unknown as Record<string, unknown>, startTime);
+  await emitStepSuccess(args, output, startTime);
 }

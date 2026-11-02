@@ -1,6 +1,5 @@
 import { and, eq, isNull, or, sql } from 'drizzle-orm';
 import { getOrchestratorLogger } from '../../../../lib/orchestratorLogger.js';
-import type { OperationId } from '@aflow/schemas';
 import {
   defaultSpaceDirectives,
   defaultsToSafeProfile,
@@ -314,7 +313,7 @@ export async function handleSpaceCrudInline(args: InlineHandlerArgs): Promise<vo
       parentStepExecutionId: parentStepExecutionId ?? null,
       stepId: stepDef.stepId,
       stepType: stepDef.stepType,
-      operationId: operationId as OperationId,
+      operationId: operationId,
       attempt,
       idempotencyKey,
       status: 'SUCCEEDED',
@@ -344,7 +343,7 @@ export async function handleSpaceCrudInline(args: InlineHandlerArgs): Promise<vo
       parentStepExecutionId: parentStepExecutionId ?? null,
       stepId: stepDef.stepId,
       stepType: stepDef.stepType,
-      operationId: operationId as OperationId,
+      operationId: operationId,
       attempt,
       idempotencyKey,
       status: 'FAILED',

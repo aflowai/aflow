@@ -2,7 +2,6 @@ import type { Redis } from 'ioredis';
 import type {
   StepExecutionId,
   OperationId,
-  StepType,
   StepDefinition,
   IdempotencyKey,
   ApiEndpoint,
@@ -473,7 +472,7 @@ export async function handleCatalogSearchInline(
 
           const candidates: AgentSearchCandidate[] = [];
           for (const entry of platformRoles) {
-            const def = entry.definition as unknown as Record<string, unknown>;
+            const def = entry.definition;
             const meta = (def['metadata'] ?? {}) as Record<string, unknown>;
             const nameRaw = meta['name'];
             const descRaw = meta['description'];
@@ -778,7 +777,7 @@ export async function handleCatalogSearchInline(
       stepExecutionId,
       parentStepExecutionId: parentStepExecutionId ?? null,
       stepId: stepDef.stepId,
-      stepType: 'catalog' as StepType,
+      stepType: 'catalog',
       operationId: 'catalog.tool.search' as OperationId,
       attempt,
       idempotencyKey,
@@ -806,7 +805,7 @@ export async function handleCatalogSearchInline(
       stepExecutionId,
       parentStepExecutionId: parentStepExecutionId ?? null,
       stepId: stepDef.stepId,
-      stepType: 'catalog' as StepType,
+      stepType: 'catalog',
       operationId: 'catalog.tool.search' as OperationId,
       attempt,
       idempotencyKey,

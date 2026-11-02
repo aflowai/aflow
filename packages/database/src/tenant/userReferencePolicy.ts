@@ -168,7 +168,7 @@ const NOT_A_USER_REFERENCE = new Set([
  * and it is only knowable from the schema.
  */
 export function deriveUserReferenceColumns(
-  tables: Record<string, unknown> = tenantSchema as unknown as Record<string, unknown>,
+  tables: Record<string, unknown> = tenantSchema,
 ): DerivedUserColumn[] {
   const found: DerivedUserColumn[] = [];
   for (const value of Object.values(tables)) {

@@ -88,7 +88,7 @@ export function registerDefinitionRoutes(fastify: FastifyInstance): void {
       const tenant = await request.requireTenant();
       const space = await request.requireSpace();
       const db = getDb(fastify);
-      const { apiId } = request.params as { apiId: string };
+      const { apiId } = request.params;
 
       if (!db) {
         reply.code(404).send({ error: 'Database not configured' });
@@ -208,8 +208,8 @@ export function registerDefinitionRoutes(fastify: FastifyInstance): void {
       try {
         await enforceIntegrationHostPolicy({
           db,
-          tenantId: tenant.tenantId as string,
-          spaceId: space.spaceId as string,
+          tenantId: tenant.tenantId,
+          spaceId: space.spaceId,
           kind: 'api',
           hosts: collectApiDefinitionHosts(def),
           grantRefs: [{ artifactType: 'api_definition', artifactKey: def.apiId }],
@@ -249,7 +249,7 @@ export function registerDefinitionRoutes(fastify: FastifyInstance): void {
 
       const redis = getRedis(fastify);
       if (redis) {
-        publishApiCatalogInvalidation(redis, tenant.tenantId as string, space.spaceId, {
+        publishApiCatalogInvalidation(redis, tenant.tenantId, space.spaceId, {
           kind: 'definition',
           apiId: body.apiId,
         });
@@ -278,7 +278,7 @@ export function registerDefinitionRoutes(fastify: FastifyInstance): void {
       const tenant = await request.requireTenant();
       const space = await request.requireSpace();
       const db = getDb(fastify);
-      const { apiId } = request.params as { apiId: string };
+      const { apiId } = request.params;
 
       if (!db) throw new Error('Database not configured');
 
@@ -310,7 +310,7 @@ export function registerDefinitionRoutes(fastify: FastifyInstance): void {
 
       const redis = getRedis(fastify);
       if (redis) {
-        publishApiCatalogInvalidation(redis, tenant.tenantId as string, space.spaceId, {
+        publishApiCatalogInvalidation(redis, tenant.tenantId, space.spaceId, {
           kind: 'definition',
           apiId,
         });

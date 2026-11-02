@@ -43,7 +43,6 @@ export const EvalDatasetGetOutputSchema = z.object({
 export type EvalDatasetGetOutput = z.infer<typeof EvalDatasetGetOutputSchema>;
 
 export const EvalDatasetListInputSchema = z.object({});
-export type EvalDatasetListInput = z.infer<typeof EvalDatasetListInputSchema>;
 
 export const GoldenDatasetSummarySchema = GoldenDatasetSchema.extend({
   activeCaseCount: z.number().int().nonnegative(),

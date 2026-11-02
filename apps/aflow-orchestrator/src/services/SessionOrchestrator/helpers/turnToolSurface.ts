@@ -85,7 +85,7 @@ export async function resolveTurnToolSurface(
         for (const coreAgentId of catalogConfig.coreAgents) {
           const entry = getPlatformAgentBySystemRole(coreAgentId);
           if (entry) {
-            const def = entry.definition as unknown as Record<string, unknown>;
+            const def = entry.definition;
             const meta = (def['metadata'] ?? {}) as Record<string, unknown>;
             coreAgentMetas.push({
               agentId: entry.systemRole,

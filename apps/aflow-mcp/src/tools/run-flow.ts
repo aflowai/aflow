@@ -168,7 +168,7 @@ export function registerRunFlowTool(
             : input.agent_slug
               ? { agentSlug: input.agent_slug }
               : {}),
-          agentConfig: input.agent_config as Record<string, unknown> | undefined,
+          agentConfig: input.agent_config,
           conversationId: input.conversation_id,
           input: mergedInput,
           timeoutMs,

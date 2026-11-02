@@ -129,7 +129,7 @@ function extractUnknownEventType(error: unknown): string | null {
     error !== null &&
     typeof error === 'object' &&
     'issues' in error &&
-    Array.isArray((error as { issues: unknown }).issues)
+    Array.isArray(error.issues)
   ) {
     const issues = (error as { issues: Array<Record<string, unknown>> }).issues;
     for (const issue of issues) {

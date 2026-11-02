@@ -97,7 +97,7 @@ function byokFactory(db: PostgresJsDatabase): ByokAiClientFactory {
 function byokContext(ctx: ExecutorContext): ByokClientContext {
   const job = ctx.job as { spaceId?: string; credentialOwnerId?: string };
   return {
-    tenantId: ctx.tenantId as string,
+    tenantId: ctx.tenantId,
     spaceId: job.spaceId ?? '',
     ...(job.credentialOwnerId ? { credentialOwnerId: job.credentialOwnerId } : {}),
   };

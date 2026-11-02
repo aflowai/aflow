@@ -365,7 +365,7 @@ export async function handleImportOpenApi(
       `);
     });
 
-    publishApiCatalogInvalidation(redis, context.tenantId as string, spaceId, {
+    publishApiCatalogInvalidation(redis, context.tenantId, spaceId, {
       kind: 'definition',
       apiId,
     });

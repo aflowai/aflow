@@ -14,7 +14,6 @@ import {
   ClientMessageIdSchema,
   SimulationRunInputSchema,
   SessionMetadataSchema,
-  type SessionId,
   type StepExecutionId,
   type SessionAgentTarget,
 } from '@aflow/schemas';
@@ -415,7 +414,7 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
               reply.status(409).send({
                 error: 'Conflict',
                 message: `Custom agent ${customAgentId} is archived`,
-                existingSessionId: '00000000-0000-0000-0000-000000000000' as SessionId,
+                existingSessionId: '00000000-0000-0000-0000-000000000000',
               });
               return;
             }
@@ -657,7 +656,7 @@ No large payloads embedded — use refs with GET /v1/payloads?ref= to hydrate.`,
       }
       const { eventsLimit, walkStepHistory } = request.query;
 
-      const debug = await sessionService.getSessionDebug(tenant.tenantId, sessionId as SessionId, {
+      const debug = await sessionService.getSessionDebug(tenant.tenantId, sessionId, {
         ...(eventsLimit !== undefined && { eventsLimit }),
         ...(walkStepHistory === 'true' && { walkStepHistory: true }),
       });
@@ -711,10 +710,7 @@ Useful for "what does the engine think right now?" debugging.`,
         return;
       }
 
-      const state = await sessionService.getSessionStateView(
-        tenant.tenantId,
-        sessionId as SessionId,
-      );
+      const state = await sessionService.getSessionStateView(tenant.tenantId, sessionId);
 
       if (!state) {
         reply.status(404).send({
@@ -780,7 +776,7 @@ Event-level pages: \`GET /sessions/:id/events?limit=<n>&before=<cursor>\`.`,
         return;
       }
 
-      const session = await sessionService.getSessionById(tenant.tenantId, sessionId as SessionId);
+      const session = await sessionService.getSessionById(tenant.tenantId, sessionId);
       if (!session) {
         reply.status(404).send({
           error: 'NotFound',
@@ -796,7 +792,7 @@ Event-level pages: \`GET /sessions/:id/events?limit=<n>&before=<cursor>\`.`,
           payloadStore,
         },
         tenant.tenantId,
-        sessionId as SessionId,
+        sessionId,
         space.spaceId,
         request.query.limit === undefined ? {} : { limit: request.query.limit },
       );
@@ -843,7 +839,7 @@ Event-level pages: \`GET /sessions/:id/events?limit=<n>&before=<cursor>\`.`,
         return;
       }
 
-      const session = await sessionService.getSessionById(tenant.tenantId, sessionId as SessionId);
+      const session = await sessionService.getSessionById(tenant.tenantId, sessionId);
 
       if (!session) {
         reply.status(404).send({
@@ -907,7 +903,7 @@ Event-level pages: \`GET /sessions/:id/events?limit=<n>&before=<cursor>\`.`,
       }
 
       const { getSessionStateSafe } = await import('@aflow/redis');
-      const result = await getSessionStateSafe(redis, tenant.tenantId, sessionId as SessionId);
+      const result = await getSessionStateSafe(redis, tenant.tenantId, sessionId);
       if (!result.ok) {
         reply.status(404).send({ error: 'NotFound', message: `Session ${sessionId} not found` });
         return;
@@ -946,10 +942,7 @@ Event-level pages: \`GET /sessions/:id/events?limit=<n>&before=<cursor>\`.`,
       }
 
       try {
-        const data = (await payloadStore.retrieve(chatHistoryRef as never)) as Record<
-          string,
-          unknown
-        >;
+        const data = (await payloadStore.retrieve(chatHistoryRef)) as Record<string, unknown>;
         // Payload shape is dynamic; ?? [] is defensive
         // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
         const messages = (data['modelMessages'] as unknown[]) ?? [];
@@ -1032,8 +1025,8 @@ Event-level pages: \`GET /sessions/:id/events?limit=<n>&before=<cursor>\`.`,
 
         const result = await sessionService.resumeSession({
           tenantId: tenant.tenantId,
-          sessionId: sessionId as SessionId,
-          stepExecutionId: body.stepExecutionId as StepExecutionId,
+          sessionId: sessionId,
+          stepExecutionId: body.stepExecutionId,
           input: body.input,
           inputRef: body.inputRef,
           idempotencyKey,
@@ -1119,7 +1112,7 @@ Event-level pages: \`GET /sessions/:id/events?limit=<n>&before=<cursor>\`.`,
 
         const result = await sessionService.retrySession({
           tenantId: tenant.tenantId,
-          sessionId: sessionId as SessionId,
+          sessionId: sessionId,
           input: body.input,
           inputRef: body.inputRef,
           ...(body.stepExecutionId
@@ -1182,7 +1175,7 @@ Event-level pages: \`GET /sessions/:id/events?limit=<n>&before=<cursor>\`.`,
       // A non-existent session must 404 like the session GET does — a 200
       // with `grant: null` made the events broker surface a confusing
       // `subscribe_denied` for sessions that were simply never created.
-      const session = await sessionService.getSessionById(tenant.tenantId, sessionId as SessionId);
+      const session = await sessionService.getSessionById(tenant.tenantId, sessionId);
       if (!session) {
         reply.status(404).send({
           error: 'NotFound',
@@ -1196,7 +1189,7 @@ Event-level pages: \`GET /sessions/:id/events?limit=<n>&before=<cursor>\`.`,
       }
 
       const { getRunAccessGrant } = await import('@aflow/redis');
-      const grant = await getRunAccessGrant(redis, tenant.tenantId, sessionId as SessionId);
+      const grant = await getRunAccessGrant(redis, tenant.tenantId, sessionId);
       reply.send({ grant: grant ?? null });
     },
   );
@@ -1245,7 +1238,7 @@ Event-level pages: \`GET /sessions/:id/events?limit=<n>&before=<cursor>\`.`,
       try {
         const result = await sessionService.cancelSession({
           tenantId: tenant.tenantId,
-          sessionId: sessionId as SessionId,
+          sessionId: sessionId,
         });
 
         request.log.info({ sessionId }, 'Session cancellation requested');
@@ -1315,7 +1308,7 @@ Event-level pages: \`GET /sessions/:id/events?limit=<n>&before=<cursor>\`.`,
       try {
         const result = await sessionService.interruptSession({
           tenantId: tenant.tenantId,
-          sessionId: sessionId as SessionId,
+          sessionId: sessionId,
         });
 
         request.log.info({ sessionId }, 'Session interruption requested');

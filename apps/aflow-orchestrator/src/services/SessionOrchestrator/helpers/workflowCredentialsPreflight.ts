@@ -203,10 +203,7 @@ export async function checkWorkflowCapabilityPreflight(
   if (required.length === 0) {
     return { ok: true, missingCapabilities: [] };
   }
-  const missing = await checkMissingCapabilities(
-    { db, tenantId: tenantId as string, spaceId },
-    required,
-  );
+  const missing = await checkMissingCapabilities({ db, tenantId: tenantId, spaceId }, required);
   return { ok: missing.length === 0, missingCapabilities: missing };
 }
 

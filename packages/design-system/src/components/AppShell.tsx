@@ -550,14 +550,14 @@ export function SidebarNavItem({
       aria-label={showLabel ? undefined : label}
       onMouseEnter={(e: React.MouseEvent<HTMLElement>) => {
         if (!active && hoverBg) {
-          (e.currentTarget as HTMLElement).style.backgroundColor = hoverBg;
-          (e.currentTarget as HTMLElement).style.color = 'var(--color-content-primary)';
+          e.currentTarget.style.backgroundColor = hoverBg;
+          e.currentTarget.style.color = 'var(--color-content-primary)';
         }
       }}
       onMouseLeave={(e: React.MouseEvent<HTMLElement>) => {
         if (!active) {
-          (e.currentTarget as HTMLElement).style.backgroundColor = 'transparent';
-          (e.currentTarget as HTMLElement).style.color = 'var(--color-content-secondary)';
+          e.currentTarget.style.backgroundColor = 'transparent';
+          e.currentTarget.style.color = 'var(--color-content-secondary)';
         }
       }}
     >

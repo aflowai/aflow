@@ -61,7 +61,7 @@ export function registerApiOauthRoutes(fastify: FastifyInstance): void {
       const tenant = await request.requireTenant();
       const space = await request.requireSpace();
       const db = getDb(fastify);
-      const { bindingId } = request.params as { bindingId: string };
+      const { bindingId } = request.params;
 
       if (!db) {
         reply.code(404).send({ error: 'Database not configured' });

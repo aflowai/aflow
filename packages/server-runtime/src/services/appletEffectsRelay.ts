@@ -323,7 +323,7 @@ async function lookupDisplayName(db: PostgresJsDatabase, userId: string): Promis
 
 function statusCodeOf(err: unknown): number | undefined {
   if (typeof err === 'object' && err !== null && 'statusCode' in err) {
-    const value = (err as { statusCode: unknown }).statusCode;
+    const value = err.statusCode;
     if (typeof value === 'number') return value;
   }
   return undefined;

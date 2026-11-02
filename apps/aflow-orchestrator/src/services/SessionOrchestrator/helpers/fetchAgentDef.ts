@@ -37,7 +37,7 @@ export async function fetchAgentDef(
   // a real PayloadStore ref (not a `pending:<runId>` placeholder) by this
   // point in the run lifecycle.
   if (target.kind === 'inline-agent') {
-    const stored = await payloadStore.retrieve(target.definitionRef as never);
+    const stored = await payloadStore.retrieve(target.definitionRef);
     try {
       return AgentDefinitionSchema.parse(stored);
     } catch (err) {

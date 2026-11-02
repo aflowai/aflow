@@ -475,10 +475,10 @@ export async function applyStepSucceeded(params: ApplyStepSucceededParams): Prom
 
       if (result.outputRef && matchedToolCallId) {
         const indexVarKey = '_tool_outputs';
-        const currentIndex = readInlineVar(
+        const currentIndex = readInlineVar<Record<string, string | ToolOutputEntry>>(
           updatedState,
           indexVarKey,
-          {} as Record<string, string | ToolOutputEntry>,
+          {},
         );
         // Detect available output fields for virtual path listing
         const fields = resolvedOutput != null ? detectOutputFields(resolvedOutput) : [];
@@ -580,11 +580,7 @@ export async function applyStepSucceeded(params: ApplyStepSucceededParams): Prom
       toolResultsForAgent = [toolResult];
 
       const failuresVarKey = `ai.agent.toolFailures.${nextStepId}`;
-      const toolFailures = readInlineVar(
-        updatedState,
-        failuresVarKey,
-        {} as Record<string, number>,
-      );
+      const toolFailures = readInlineVar<Record<string, number>>(updatedState, failuresVarKey, {});
       if (toolFailures[attributionStepId] != null && toolFailures[attributionStepId] > 0) {
         const resetFailures = { ...toolFailures };
         delete resetFailures[attributionStepId];

@@ -23,7 +23,6 @@ import type {
   AuthzConfig,
   SpaceRole,
   SpaceAccessAttributes,
-  TenantRole as AuthzTenantRole,
 } from '@aflow/authz';
 import { termsApply } from '../lib/termsApplicability.js';
 
@@ -429,7 +428,7 @@ export const authzPlugin = fp(
           const ctx: PermissionCheckContext = {
             userId: request.authUser.userId,
             tenantId: tenant.tenantId,
-            tenantRole: tenant.tenantRole as AuthzTenantRole,
+            tenantRole: tenant.tenantRole,
             redis: appCtx.redis,
             config: authzConfig,
             loadSpaceRole: makeLoadSpaceRole(db),
@@ -553,7 +552,7 @@ export const authzPlugin = fp(
       const ctx: PermissionCheckContext = {
         userId: request.authUser.userId,
         tenantId: tenant.tenantId,
-        tenantRole: tenant.tenantRole as AuthzTenantRole,
+        tenantRole: tenant.tenantRole,
         redis: appCtx.redis,
         config: authzConfig,
         loadSpaceRole: makeLoadSpaceRole(db),

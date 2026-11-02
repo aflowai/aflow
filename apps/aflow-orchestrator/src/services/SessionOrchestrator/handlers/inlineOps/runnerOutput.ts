@@ -1,4 +1,4 @@
-import type { OperationId, McpCredentialBlock, BlockerKind } from '@aflow/schemas';
+import type { McpCredentialBlock, BlockerKind } from '@aflow/schemas';
 import { materializeDraftForSubmit } from './taskDraft.js';
 import { formatDraftRepairProgress } from '@aflow/schemas';
 import { SUBAGENT_HANDOFF_PAYLOAD_KIND, BlockerKindSchema } from '@aflow/schemas';
@@ -558,7 +558,7 @@ export async function handleSignalBlockedInline(args: InlineHandlerArgs): Promis
       parentStepExecutionId: args.parentStepExecutionId ?? null,
       stepId: stepDef.stepId,
       stepType: stepDef.stepType,
-      operationId: stepDef.operation as OperationId,
+      operationId: stepDef.operation,
       attempt: args.attempt,
       idempotencyKey: args.idempotencyKey,
       status: 'PAUSED',

@@ -239,7 +239,7 @@ export const adminCapabilityProfileRoutes: FastifyPluginAsync = async (fastify) 
       const tenant = await request.requireTenant();
       const db = fastify.appContext.db as PostgresJsDatabase;
       const tenantCtx = createTenantContext(tenant.tenantId);
-      const { profileId } = request.params as { profileId: string };
+      const { profileId } = request.params;
 
       const rows = await withTenantSchema(db, tenantCtx, async (tx) =>
         tx.select().from(capabilityProfiles).where(eq(capabilityProfiles.id, profileId)).limit(1),
@@ -272,7 +272,7 @@ export const adminCapabilityProfileRoutes: FastifyPluginAsync = async (fastify) 
       const tenant = await request.requireTenant();
       const db = fastify.appContext.db as PostgresJsDatabase;
       const tenantCtx = createTenantContext(tenant.tenantId);
-      const { profileId } = request.params as { profileId: string };
+      const { profileId } = request.params;
       const body = request.body;
 
       const rows = await withTenantSchema(db, tenantCtx, async (tx) => {
@@ -345,7 +345,7 @@ export const adminCapabilityProfileRoutes: FastifyPluginAsync = async (fastify) 
       const tenant = await request.requireTenant();
       const db = fastify.appContext.db as PostgresJsDatabase;
       const tenantCtx = createTenantContext(tenant.tenantId);
-      const { profileId } = request.params as { profileId: string };
+      const { profileId } = request.params;
 
       const result = await withTenantSchema(db, tenantCtx, async (tx) => {
         const existing = await tx
@@ -410,7 +410,7 @@ export const adminCapabilityProfileRoutes: FastifyPluginAsync = async (fastify) 
       const tenant = await request.requireTenant();
       const db = fastify.appContext.db as PostgresJsDatabase;
       const tenantCtx = createTenantContext(tenant.tenantId);
-      const { spaceId } = request.params as { spaceId: string };
+      const { spaceId } = request.params;
 
       const rows = await withTenantSchema(db, tenantCtx, async (tx) =>
         tx
@@ -468,7 +468,7 @@ export const adminCapabilityProfileRoutes: FastifyPluginAsync = async (fastify) 
       }
       const db = fastify.appContext.db as PostgresJsDatabase;
       const tenantCtx = createTenantContext(tenant.tenantId);
-      const { spaceId } = request.params as { spaceId: string };
+      const { spaceId } = request.params;
       const { profileId } = request.body;
 
       const result = await withTenantSchema(db, tenantCtx, async (tx) => {
@@ -525,7 +525,7 @@ export const adminCapabilityProfileRoutes: FastifyPluginAsync = async (fastify) 
       const tenant = await request.requireTenant();
       const db = fastify.appContext.db as PostgresJsDatabase;
       const tenantCtx = createTenantContext(tenant.tenantId);
-      const { spaceId } = request.params as { spaceId: string };
+      const { spaceId } = request.params;
 
       await withTenantSchema(db, tenantCtx, async (tx) =>
         tx

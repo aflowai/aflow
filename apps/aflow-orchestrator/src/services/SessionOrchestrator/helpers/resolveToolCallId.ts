@@ -29,10 +29,10 @@ export function toolCallIdFromRuntimeMap(
   stepExecutionId: string,
 ): string | undefined {
   if (!runtimeState) return undefined;
-  const map = readInlineVar(
+  const map = readInlineVar<Record<string, string>>(
     runtimeState,
     TOOL_CALL_ID_BY_STEP_EXECUTION_VAR,
-    {} as Record<string, string>,
+    {},
   );
   return map[stepExecutionId];
 }
@@ -75,10 +75,10 @@ export async function persistToolCallIdByStepExecutionMap(
   if (!stateAfterSchedule?.runtimeState) return;
   const vars = { ...stateAfterSchedule.runtimeState.variables };
   const merged = {
-    ...readInlineVar(
+    ...readInlineVar<Record<string, string>>(
       stateAfterSchedule.runtimeState,
       TOOL_CALL_ID_BY_STEP_EXECUTION_VAR,
-      {} as Record<string, string>,
+      {},
     ),
     ...updates,
   };

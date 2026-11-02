@@ -59,7 +59,7 @@ export const Th = forwardRef<HTMLTableCellElement, ThProps>(function Th(
   const s: React.CSSProperties = {
     textAlign: 'left',
     padding: '6px 8px',
-    fontWeight: 'var(--font-weight-medium)' as unknown as number,
+    fontWeight: 'var(--font-weight-medium)',
     color: 'var(--color-content-secondary)',
     fontSize: 'var(--font-size-xs)',
     whiteSpace: 'nowrap',

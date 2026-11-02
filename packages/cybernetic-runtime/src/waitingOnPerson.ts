@@ -553,7 +553,7 @@ export const SPACE_SLUG_SQL = (spaceId: string): SQL =>
   sql`SELECT slug FROM spaces WHERE id = ${spaceId}::uuid LIMIT 1`;
 
 async function rows(tx: PostgresJsDatabase, query: SQL): Promise<Row[]> {
-  return (await tx.execute(query)) as unknown as Row[];
+  return await tx.execute(query);
 }
 
 function sessionItems(rows: readonly Row[]): WaitingItem[] {

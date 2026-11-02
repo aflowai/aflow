@@ -167,7 +167,7 @@ export async function maybeFailWorkflowRunnerComplete(
       version: stored.updatedState.version + 1,
       updatedAtMs: now,
     };
-    await updateSessionState(redis, result.tenantId as TenantId, result.sessionId as SessionId, {
+    await updateSessionState(redis, result.tenantId, result.sessionId, {
       runtimeState: nextRuntimeState,
     });
     persisted = true;

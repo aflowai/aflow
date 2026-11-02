@@ -1283,7 +1283,7 @@ function schemaFor(tenantId: string): string {
 }
 
 function encodeInput(resolvedInput: Record<string, unknown>): PayloadRef {
-  if (Object.keys(resolvedInput).length === 0) return 'inline:e30=' as PayloadRef;
+  if (Object.keys(resolvedInput).length === 0) return 'inline:e30=';
   return `inline:${Buffer.from(JSON.stringify(resolvedInput)).toString('base64')}`;
 }
 

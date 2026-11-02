@@ -193,7 +193,7 @@ function sanitizeAnthropicInputSchema(
     return {
       type: 'object',
       additionalProperties: true,
-    } as Anthropic.Tool['input_schema'];
+    };
   }
 
   if (!params['type']) {

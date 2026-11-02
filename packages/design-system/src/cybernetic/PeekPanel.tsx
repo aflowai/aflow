@@ -191,7 +191,7 @@ export function PeekPanel({
     width: currentWidth,
     background: 'var(--color-surface-2)',
     borderLeft: '1px solid var(--color-border-subtle)',
-    zIndex: 'var(--z-overlay)' as unknown as number,
+    zIndex: 'var(--z-overlay)',
     display: 'flex',
     flexDirection: 'column',
     overflow: 'hidden',

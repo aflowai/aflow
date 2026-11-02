@@ -278,7 +278,7 @@ function ProfileFields({
           value={name}
           placeholder="e.g. Sam"
           onChange={(e) => {
-            onName((e.target as HTMLInputElement).value);
+            onName(e.target.value);
           }}
         />
       </Field>

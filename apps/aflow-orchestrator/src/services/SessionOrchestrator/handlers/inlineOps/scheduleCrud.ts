@@ -226,7 +226,7 @@ async function handleCreate(
 
   let targetRunId = input['targetRunId'] as string | undefined;
   if (targetRunId === 'self') {
-    targetRunId = context.runId as string;
+    targetRunId = context.runId;
   }
 
   const action = (input['action'] as string) || 'start_run';
@@ -515,7 +515,7 @@ async function handleCreate(
         lastError: null,
         createdBy: definitionCreatedBy(context),
         createdBySessionId: authority.sessionId,
-        metadata: (input['metadata'] ?? {}) as Record<string, unknown>,
+        metadata: input['metadata'] ?? {},
         creatorUserId: grant.grantedToUserId,
         creatorTenantRole: grant.tenantRole,
         creatorSpaceRole: grant.spaceRole,

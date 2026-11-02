@@ -68,7 +68,7 @@ export async function handleWorkflowPut(
   }
 
   const campaign = await resolveCampaignManifestParams(
-    { db: getDatabase(), tenantId: args.context.tenantId as string, spaceId },
+    { db: getDatabase(), tenantId: args.context.tenantId, spaceId },
     slug,
   );
 
@@ -126,7 +126,7 @@ export async function handleWorkflowPut(
     docRepo,
     dirRepo,
     workflowDocPath(slug),
-    workflow as unknown as Record<string, unknown>,
+    workflow,
     'json',
     spaceId,
     'create',

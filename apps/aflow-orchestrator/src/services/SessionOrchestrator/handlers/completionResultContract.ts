@@ -192,7 +192,7 @@ export async function rescheduleMalformedCompletionResult(
   // Persist-or-abort: rescheduling on unpersisted retry state would loop the
   // agent unboundedly, so a persist failure propagates to the result consumer
   // instead of scheduling the turn.
-  await updateSessionState(redis, result.tenantId as TenantId, result.sessionId as SessionId, {
+  await updateSessionState(redis, result.tenantId, result.sessionId, {
     runtimeState: {
       ...currentRuntimeState,
       variables: vars,

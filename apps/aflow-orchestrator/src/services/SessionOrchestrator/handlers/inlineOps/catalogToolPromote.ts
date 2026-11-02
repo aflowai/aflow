@@ -3,7 +3,6 @@ import type {
   AgentToolSpec,
   IdempotencyKey,
   IntegrationDescriptor,
-  OperationId,
   RunAccessGrant,
   StepDefinition,
   StepExecutionId,
@@ -356,7 +355,7 @@ export async function handleCatalogToolPromoteInline(
         return;
       }
       const vtKey = 'ai.agent._virtualTools';
-      const currentVt = readInlineVar(runtimeState, vtKey, {} as Record<string, VirtualToolEntry>);
+      const currentVt = readInlineVar<Record<string, VirtualToolEntry>>(runtimeState, vtKey, {});
       const turnKey = Object.keys(runtimeState.variables).find((k) =>
         k.startsWith('ai.agent.turnNumber.'),
       );
@@ -402,10 +401,10 @@ export async function handleCatalogToolPromoteInline(
     let capWarning: { capacity: number; total: number; evictionLikely: number } | undefined;
     if (promoted.length > 0 && runtimeState) {
       const vt =
-        readInlineVar(
+        readInlineVar<Record<string, VirtualToolEntry>>(
           runtimeState,
           'ai.agent._virtualTools',
-          {} as Record<string, VirtualToolEntry>,
+          {},
         ) ?? {};
       const merged = new Set<string>([...Object.keys(vt), ...promoted]);
       if (merged.size > MAX_VIRTUAL_TOOLS) {
@@ -439,7 +438,7 @@ export async function handleCatalogToolPromoteInline(
       parentStepExecutionId: parentStepExecutionId ?? null,
       stepId: stepDef.stepId,
       stepType: stepDef.stepType,
-      operationId: stepDef.operation as OperationId,
+      operationId: stepDef.operation,
       attempt,
       idempotencyKey,
       status: 'SUCCEEDED',
@@ -786,7 +785,7 @@ async function emitFailure(
     parentStepExecutionId: parentStepExecutionId ?? null,
     stepId: stepDef.stepId,
     stepType: stepDef.stepType,
-    operationId: stepDef.operation as OperationId,
+    operationId: stepDef.operation,
     attempt,
     idempotencyKey,
     status: 'FAILED',

@@ -58,7 +58,7 @@ export interface SaveRepoBindingInput {
 async function errorMessage(res: Response, fallback: string): Promise<string> {
   const data: unknown = await res.json().catch(() => null);
   if (data && typeof data === 'object' && 'error' in data) {
-    const e = (data as { error: unknown }).error;
+    const e = data.error;
     if (typeof e === 'string' && e.length > 0) return e;
   }
   return fallback;

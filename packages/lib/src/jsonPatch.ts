@@ -153,7 +153,7 @@ function extractErrorFields(err: unknown): {
 export function readJsonPointer(doc: unknown, pointer: string): unknown {
   if (pointer === '') return doc;
   try {
-    return jsonpatch.getValueByPointer(doc as object, pointer) as unknown;
+    return jsonpatch.getValueByPointer(doc, pointer) as unknown;
   } catch {
     return undefined;
   }

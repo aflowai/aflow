@@ -278,9 +278,9 @@ class AuditServiceImpl {
             userAgent: event.request?.userAgent ?? null,
             category: event.category,
             outcome: event.outcome,
-            actorContext: event.actor as Record<string, unknown>,
-            target: event.target ? (event.target as Record<string, unknown>) : null,
-            requestMetadata: event.request ? (event.request as Record<string, unknown>) : null,
+            actorContext: event.actor,
+            target: event.target ? event.target : null,
+            requestMetadata: event.request ? event.request : null,
           });
         } catch (err) {
           // A transient failure does not spend the budget: it is the

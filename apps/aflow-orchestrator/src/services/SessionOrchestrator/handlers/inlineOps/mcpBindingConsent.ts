@@ -247,10 +247,9 @@ function parseBindingRow(row: Record<string, unknown>): McpServerBinding | null 
       ? { toolAccessPolicy: row['toolAccessPolicyJson'] ?? row['tool_access_policy_json'] }
       : {}),
     subscribeListChanged: (row['subscribeListChanged'] ?? row['subscribe_list_changed']) === 1,
-    samplingPolicy:
-      ((row['samplingPolicy'] ?? row['sampling_policy']) as string | undefined) ?? 'off',
-    ownerScope: (row['ownerScope'] ?? row['owner_scope']) as string | undefined,
-    clientScope: (row['clientScope'] ?? row['client_scope']) as string | undefined,
+    samplingPolicy: row['samplingPolicy'] ?? row['sampling_policy'] ?? 'off',
+    ownerScope: row['ownerScope'] ?? row['owner_scope'],
+    clientScope: row['clientScope'] ?? row['client_scope'],
     ...((row['pinnedOrigin'] ?? row['pinned_origin'])
       ? { pinnedOrigin: row['pinnedOrigin'] ?? row['pinned_origin'] }
       : {}),

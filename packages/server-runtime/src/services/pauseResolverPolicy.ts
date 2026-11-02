@@ -6,7 +6,7 @@ export async function loadPausePayload(
 ): Promise<Record<string, unknown> | null> {
   if (!payloadStore || !ref) return null;
   try {
-    const raw = await payloadStore.retrieve(ref as never);
+    const raw = await payloadStore.retrieve(ref);
     if (raw && typeof raw === 'object') return raw as Record<string, unknown>;
   } catch {
     /* malformed or missing payload */

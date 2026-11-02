@@ -75,7 +75,7 @@ export async function decodeTaskOutput(
   }
   if (!payloadStore) return null;
   try {
-    const fetched = await payloadStore.retrieve(outputRef as never);
+    const fetched = await payloadStore.retrieve(outputRef);
     if (fetched === null || fetched === undefined) return null;
     if (typeof fetched === 'object' && !Array.isArray(fetched) && !Buffer.isBuffer(fetched)) {
       return fetched as Record<string, unknown>;

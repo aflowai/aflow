@@ -806,7 +806,7 @@ export class EvalBatchEngine {
           let client;
           try {
             ({ client } = await this.getByokFactory().getClientForModel(resolution.model, {
-              tenantId: tenantId as string,
+              tenantId: tenantId,
               spaceId: batch.spaceId,
             }));
           } catch (err) {
@@ -843,7 +843,7 @@ export class EvalBatchEngine {
             scopeKey: entry.scopeKey,
             criterion: entry.criterion,
             evidence,
-            tenantId: tenantId as string,
+            tenantId: tenantId,
             runId: snapshot.run.runId,
           });
           budget.stageCost.cents += dispatched.costCents;
@@ -862,7 +862,7 @@ export class EvalBatchEngine {
     goldenCase: GoldenCase,
   ): Promise<CyberneticEvalSuite | null> {
     if (!goldenCase.rubrics.some((r) => r.kind === 'suite_criterion')) return null;
-    return loadEvalSuite(this.deps.db, tenantId as string, batch.spaceId, batch.workflowSlug);
+    return loadEvalSuite(this.deps.db, tenantId, batch.spaceId, batch.workflowSlug);
   }
 
   /** `subjectModelRefs === null` = unparseable manifest — the caller must refuse the dispatch. */
@@ -870,7 +870,7 @@ export class EvalBatchEngine {
     tenantId: TenantId,
     batch: EvalBatchRow,
   ): Promise<{ spaceJudgeModel: string; subjectModelRefs: string[] | null }> {
-    const directives = await loadSpaceDirectives(this.deps.db, tenantId as string, batch.spaceId);
+    const directives = await loadSpaceDirectives(this.deps.db, tenantId, batch.spaceId);
     return {
       spaceJudgeModel: resolveRoleModel(directives?.modelDefaults, 'judge'),
       subjectModelRefs: subjectModelRefsFromManifest(batch.provenanceManifestJson),

@@ -1,13 +1,7 @@
 import type { Redis } from 'ioredis';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { getTaskRow } from '@aflow/cybernetic-runtime';
-import type {
-  IdempotencyKey,
-  OperationId,
-  SessionId,
-  TimerItem,
-  WorkflowExecutionRef,
-} from '@aflow/schemas';
+import type { IdempotencyKey, SessionId, TimerItem, WorkflowExecutionRef } from '@aflow/schemas';
 import { LaneRefusalError, errorContext } from '@aflow/schemas';
 import { addStepResult } from '@aflow/redis';
 import { isInlineOperation } from '../helpers/inlineOperations.js';
@@ -66,7 +60,7 @@ export async function processWorkflowCorrelatedTimer(
         {
           stepId: timer.stepId,
           stepType: timer.stepType,
-          operation: timer.operationId as OperationId,
+          operation: timer.operationId,
           config: {},
           tags: ['dynamic', `_taskId:${workflowExecution.taskId}`],
           optional: false,

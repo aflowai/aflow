@@ -91,7 +91,7 @@ function Toaster({ toasts, onDismiss }: { toasts: ToastItem[]; onDismiss: (id: n
 
   const stackStyle: CSSProperties = {
     position: 'fixed',
-    zIndex: 'var(--z-toast)' as unknown as number,
+    zIndex: 'var(--z-toast)',
     display: 'flex',
     flexDirection: 'column',
     gap: 'var(--space-2)',

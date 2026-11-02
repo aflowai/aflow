@@ -212,7 +212,7 @@ function route<S extends z.ZodTypeAny>(
 ): Route {
   return {
     schema,
-    run: async (call, driver, input) => await run(call, driver, input as z.infer<S>),
+    run: async (call, driver, input) => await run(call, driver, input),
   };
 }
 

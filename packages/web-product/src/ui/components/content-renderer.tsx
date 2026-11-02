@@ -84,7 +84,7 @@ function renderStructuredData(
               artifactId: meta['artifactId'] as string | undefined,
               versionId: meta['versionId'] as string | undefined,
               draftId: meta['draftId'] as string | undefined,
-              kind: meta['kind'] as string | undefined,
+              kind: meta['kind'],
               name: meta['name'] as string | undefined,
               catalogVersion: meta['catalogVersion'] as string | undefined,
             }}

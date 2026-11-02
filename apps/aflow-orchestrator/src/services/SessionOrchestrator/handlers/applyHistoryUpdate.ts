@@ -81,7 +81,7 @@ async function applyAgentTurnHistoryV1(
   runId: string,
 ): Promise<NonNullable<SessionHotState['runtimeState']>> {
   try {
-    const stepOutput = (await payloadStore.retrieve(outputRef as never)) as Record<string, unknown>;
+    const stepOutput = (await payloadStore.retrieve(outputRef)) as Record<string, unknown>;
 
     const conversationStateRef = stepOutput['conversationStateRef'] as string | undefined;
 
@@ -160,10 +160,7 @@ async function applyLegacyHistoryUpdate(
     let stepInput: Record<string, unknown> | undefined;
     if (stepState.inputRef) {
       try {
-        stepInput = (await payloadStore.retrieve(stepState.inputRef as never)) as Record<
-          string,
-          unknown
-        >;
+        stepInput = (await payloadStore.retrieve(stepState.inputRef)) as Record<string, unknown>;
         const userContent = (stepInput['prompt'] ??
           stepInput['goal'] ??
           stepInput['message'] ??
@@ -185,10 +182,7 @@ async function applyLegacyHistoryUpdate(
 
     // Read step output to get the assistant message
     try {
-      const stepOutput = (await payloadStore.retrieve(outputRef as never)) as Record<
-        string,
-        unknown
-      >;
+      const stepOutput = (await payloadStore.retrieve(outputRef)) as Record<string, unknown>;
       const content = (stepOutput['content'] ?? '') as string;
       if (content) {
         conversation.messages.push(createMessage('assistant', content));

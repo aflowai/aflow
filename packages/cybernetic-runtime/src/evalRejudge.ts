@@ -227,10 +227,8 @@ export async function executeRejudgeForCriterion(params: {
       (r) => r.kind === 'suite_criterion' && rubricCriterionId(r) === criterionId,
     ),
   );
-  const suite = needsSuite
-    ? await loadEvalSuite(db, tenantId as string, spaceId, head.workflowSlug)
-    : null;
-  const directives = await loadSpaceDirectives(db, tenantId as string, spaceId);
+  const suite = needsSuite ? await loadEvalSuite(db, tenantId, spaceId, head.workflowSlug) : null;
+  const directives = await loadSpaceDirectives(db, tenantId, spaceId);
 
   const existingRecords = await collectJudgeVerdictRecords(db, tenantId, {
     spaceId,
@@ -322,7 +320,7 @@ export async function executeRejudgeForCriterion(params: {
         model: plan.model,
         criterion: plan.criterion,
         evidence,
-        tenantId: tenantId as string,
+        tenantId: tenantId,
         attributionId: plan.subject.runId,
       });
       const folded = foldJudgeVerdict(alignJudgeEntries(plan.criterion.rubric, verdict));

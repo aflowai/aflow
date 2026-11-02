@@ -231,8 +231,7 @@ function toEntity(row: MemoryEntryRow): MemoryEntry {
     expiresAt: row.expiresAt ?? undefined,
     embedding: row.embedding as number[] | undefined,
     embeddingModel: row.embeddingModel ?? undefined,
-    embeddingStatus:
-      (row.embeddingStatus as 'pending' | 'ready' | 'failed' | 'disabled' | null) ?? undefined,
+    embeddingStatus: row.embeddingStatus ?? undefined,
     embeddedAt: row.embeddedAt ?? undefined,
     embedError: row.embedError as Record<string, unknown> | undefined,
     contentHash: row.contentHash ?? undefined,
@@ -397,7 +396,7 @@ export function createMemoryRepository(
           namespace: row['namespace'] as string,
           key: row['key'] as string,
           value: row['value'],
-          metadata: row['metadata'] as Record<string, unknown> | null,
+          metadata: row['metadata'],
           sessionId: row['session_id'] as string | null,
           userId: row['user_id'] as string | null,
           spaceId: row['space_id'] as string | null,
@@ -407,12 +406,12 @@ export function createMemoryRepository(
           createdAt: row['created_at'] as Date,
           updatedAt: row['updated_at'] as Date,
           expiresAt: row['expires_at'] as Date | null,
-          embedding: row['embedding'] as number[] | null,
+          embedding: row['embedding'],
           embeddingModel: row['embedding_model'] as string | null,
           embeddingStatus: (row['embedding_status'] ?? 'pending') as
             'pending' | 'ready' | 'failed' | 'disabled',
           embeddedAt: row['embedded_at'] as Date | null,
-          embedError: row['embed_error'] as Record<string, unknown> | null,
+          embedError: row['embed_error'],
           contentHash: row['content_hash'] as string | null,
         };
 

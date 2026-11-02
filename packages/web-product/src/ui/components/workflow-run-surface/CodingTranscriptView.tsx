@@ -104,7 +104,7 @@ function ThinkingBlock({ text }: { text: string }) {
 
 function commandOf(input: unknown): string | undefined {
   if (typeof input === 'object' && input !== null && 'command' in input) {
-    const command = (input as { command: unknown }).command;
+    const command = input.command;
     return typeof command === 'string' ? command : undefined;
   }
   return undefined;

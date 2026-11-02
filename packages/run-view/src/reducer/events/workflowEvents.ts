@@ -4,9 +4,7 @@ import type {
   InlineSurfaceItem,
   SessionEvent,
   WorkflowRunSurfaceState,
-  WorkflowSurfaceRunStatus,
   WorkflowSurfaceTaskState,
-  WorkflowSurfaceTaskStatus,
 } from '../../types.js';
 import { THINKING_CLASS_OPS } from '../../op-labels.js';
 import type { RunViewState } from '../state.js';
@@ -38,7 +36,7 @@ export function applyWorkflowEvents(
           : {
               runId,
               slug: payload.slug,
-              status: payload.status as WorkflowSurfaceRunStatus,
+              status: payload.status,
               pauseVersion: payload.pauseVersion,
               startedAt: payload.startedAt,
               tasks: {},
@@ -48,11 +46,11 @@ export function applyWorkflowEvents(
       const tasksTruncated = event.metadata?.tasksTruncated === true;
       // If the run is already frozen, drop subsequent updates.
       if (!baseline.isFrozen) {
-        const isTerminal = TERMINAL_RUN_STATUSES.has(payload.status as WorkflowSurfaceRunStatus);
+        const isTerminal = TERMINAL_RUN_STATUSES.has(payload.status);
         const runState: WorkflowRunSurfaceState = {
           ...baseline,
           slug: payload.slug,
-          status: payload.status as WorkflowSurfaceRunStatus,
+          status: payload.status,
           pauseVersion: payload.pauseVersion,
           startedAt: payload.startedAt,
           isFrozen: isTerminal,
@@ -141,7 +139,7 @@ export function applyWorkflowEvents(
           : {
               runId,
               slug: '',
-              status: 'running' as WorkflowSurfaceRunStatus,
+              status: 'running',
               pauseVersion: 0,
               startedAt: payload.startedAt ?? event.timestamp,
               tasks: {},
@@ -149,7 +147,7 @@ export function applyWorkflowEvents(
               needsHydration: true,
             };
       const prev = run.tasks[taskId];
-      const incomingStatus = payload.status as WorkflowSurfaceTaskStatus;
+      const incomingStatus = payload.status;
       const isTerminal = TERMINAL_TASK_STATUSES.has(incomingStatus);
       const incoming: WorkflowSurfaceTaskState = {
         taskId,

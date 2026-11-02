@@ -3,13 +3,7 @@
  */
 import type { ExecutorContext, StepResult } from '@aflow/executor-runtime';
 import { failureWithError, successWithData } from '@aflow/executor-runtime';
-import {
-  type AiDecideInput,
-  type AiDecideOutput,
-  DECISION_NO_MODEL,
-  type TenantId,
-  type StepExecutionId,
-} from '@aflow/schemas';
+import { type AiDecideInput, type AiDecideOutput, DECISION_NO_MODEL } from '@aflow/schemas';
 import {
   decisionRequestQuestions,
   resolveDecisionAnswers,
@@ -73,9 +67,9 @@ export async function handleDecide(
       state: params.state,
       questions,
       ...(images.length > 0 ? { images } : {}),
-      tenantId: ctx.job.tenantId as TenantId,
+      tenantId: ctx.job.tenantId,
       runId: ctx.runId,
-      stepExecutionId: ctx.job.stepExecutionId as StepExecutionId,
+      stepExecutionId: ctx.job.stepExecutionId,
       attempt: ctx.job.attempt,
     });
 

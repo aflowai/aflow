@@ -504,9 +504,9 @@ export function createAIClient(config: AIClientConfig): AIClient {
 
       usageRecorder.record({
         id: `usage_${String(Date.now())}_${Math.random().toString(36).slice(2, 11)}`,
-        tenantId: request.tenantId as string,
-        runId: request.runId as string,
-        stepExecutionId: request.stepExecutionId as string,
+        tenantId: request.tenantId,
+        runId: request.runId,
+        stepExecutionId: request.stepExecutionId,
         attempt: request.attempt ?? 1,
         provider: resolved.provider,
         model: request.model,
@@ -595,9 +595,9 @@ export function createAIClient(config: AIClientConfig): AIClient {
           // Record usage
           usageRecorder.record({
             id: `usage_${String(Date.now())}_${Math.random().toString(36).slice(2, 11)}`,
-            tenantId: request.tenantId as string,
-            runId: request.runId as string,
-            stepExecutionId: request.stepExecutionId as string,
+            tenantId: request.tenantId,
+            runId: request.runId,
+            stepExecutionId: request.stepExecutionId,
             attempt: request.attempt ?? 1,
             provider: resolved.provider,
             model: request.model,
@@ -657,9 +657,9 @@ export function createAIClient(config: AIClientConfig): AIClient {
 
       usageRecorder.record({
         id: `usage_${String(Date.now())}_${Math.random().toString(36).slice(2, 11)}`,
-        tenantId: request.tenantId as string,
-        runId: request.runId as string,
-        stepExecutionId: request.stepExecutionId as string,
+        tenantId: request.tenantId,
+        runId: request.runId,
+        stepExecutionId: request.stepExecutionId,
         attempt: request.attempt ?? 1,
         provider: resolved.provider,
         model: request.model,
@@ -704,9 +704,9 @@ export function createAIClient(config: AIClientConfig): AIClient {
 
       usageRecorder.record({
         id: `usage_${String(Date.now())}_${Math.random().toString(36).slice(2, 11)}`,
-        tenantId: request.tenantId as string,
-        runId: request.runId as string,
-        stepExecutionId: request.stepExecutionId as string,
+        tenantId: request.tenantId,
+        runId: request.runId,
+        stepExecutionId: request.stepExecutionId,
         attempt: request.attempt ?? 1,
         provider: resolved.provider,
         model: request.model,
@@ -763,9 +763,9 @@ export function createAIClient(config: AIClientConfig): AIClient {
 
       usageRecorder.record({
         id: `usage_${String(Date.now())}_${Math.random().toString(36).slice(2, 11)}`,
-        tenantId: request.tenantId as string,
-        runId: request.runId as string,
-        stepExecutionId: request.stepExecutionId as string,
+        tenantId: request.tenantId,
+        runId: request.runId,
+        stepExecutionId: request.stepExecutionId,
         attempt: request.attempt ?? 1,
         provider: resolved.provider,
         model: request.model,

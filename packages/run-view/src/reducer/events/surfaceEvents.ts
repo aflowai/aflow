@@ -1,10 +1,4 @@
-import type {
-  Message,
-  SessionEvent,
-  StateValueRef,
-  WorkflowRunSurfaceState,
-  WorkflowSurfaceRunStatus,
-} from '../../types.js';
+import type { Message, SessionEvent, StateValueRef, WorkflowRunSurfaceState } from '../../types.js';
 import { extractDisplayContent } from '../../content-extraction.js';
 import type { RunViewState } from '../state.js';
 import { toISOTimestamp, ensureSurfaceMounted, freezePreviousSurfaceForRun } from '../helpers.js';
@@ -214,15 +208,12 @@ export function applySurfaceEvents(
             ? {
                 ...runs[runId],
                 slug: runs[runId].slug || pc.slug,
-                status:
-                  runs[runId].status === 'running'
-                    ? runs[runId].status
-                    : (pc.status as WorkflowSurfaceRunStatus),
+                status: runs[runId].status === 'running' ? runs[runId].status : pc.status,
               }
             : {
                 runId,
                 slug: pc.slug,
-                status: pc.status as WorkflowSurfaceRunStatus,
+                status: pc.status,
                 pauseVersion: 0,
                 startedAt: event.timestamp,
                 tasks: {},

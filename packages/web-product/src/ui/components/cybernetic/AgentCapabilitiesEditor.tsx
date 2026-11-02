@@ -341,12 +341,7 @@ export function AgentCapabilitiesEditor({
             ) : (
               <CapabilityBundleEditor
                 bundles={offeredBundles}
-                placements={
-                  (loaded.capabilityDiscovery.bundlePlacements ?? {}) as Record<
-                    string,
-                    BundlePlacement
-                  >
-                }
+                placements={loaded.capabilityDiscovery.bundlePlacements ?? {}}
                 showHints={showHints}
                 operationPlacements={directives.capabilityDiscovery.operationPlacements ?? {}}
                 onOperationPlace={(id, placement) => {

@@ -1,12 +1,4 @@
-import type {
-  OperationId,
-  SessionId,
-  StepType,
-  StepId,
-  TraceId,
-  IdempotencyKey,
-  ActorContext,
-} from '@aflow/schemas';
+import type { OperationId, SessionId, TraceId, IdempotencyKey, ActorContext } from '@aflow/schemas';
 import { getOrchestratorLogger } from '../../../../lib/orchestratorLogger.js';
 import {
   ActorContextSchema,
@@ -435,7 +427,7 @@ export async function handleDelegateInline(args: InlineHandlerArgs): Promise<voi
         stepExecutionId,
         parentStepExecutionId: parentStepExecutionId ?? null,
         stepId: stepDef.stepId,
-        stepType: 'agent' as StepType,
+        stepType: 'agent',
         operationId: 'agent.control.delegate' as OperationId,
         attempt,
         idempotencyKey,
@@ -452,9 +444,9 @@ export async function handleDelegateInline(args: InlineHandlerArgs): Promise<voi
           tenantId: context.tenantId,
           sessionId: context.runId, // parent session — timeout acts on parent
           stepExecutionId,
-          stepId: stepDef.stepId as StepId,
+          stepId: stepDef.stepId,
           operationId: 'agent.control.delegate' as OperationId,
-          stepType: 'agent' as StepType,
+          stepType: 'agent',
           reason: 'timeout',
           attempt,
           inputRef: resolvedInputRef,
@@ -483,7 +475,7 @@ export async function handleDelegateInline(args: InlineHandlerArgs): Promise<voi
         stepExecutionId,
         parentStepExecutionId: parentStepExecutionId ?? null,
         stepId: stepDef.stepId,
-        stepType: 'agent' as StepType,
+        stepType: 'agent',
         operationId: 'agent.control.delegate' as OperationId,
         attempt,
         idempotencyKey,
@@ -512,7 +504,7 @@ export async function handleDelegateInline(args: InlineHandlerArgs): Promise<voi
       stepExecutionId,
       parentStepExecutionId: parentStepExecutionId ?? null,
       stepId: stepDef.stepId,
-      stepType: 'agent' as StepType,
+      stepType: 'agent',
       operationId: 'agent.control.delegate' as OperationId,
       attempt,
       idempotencyKey,

@@ -108,7 +108,7 @@ interface AnthropicBlock {
 }
 
 function anthropicBlocks(message: Anthropic.MessageParam): AnthropicBlock[] {
-  return Array.isArray(message.content) ? (message.content as AnthropicBlock[]) : [];
+  return Array.isArray(message.content) ? message.content : [];
 }
 
 function multisetDiff(

@@ -72,5 +72,5 @@ export async function handleWorkflowRunCancel(
     cancelledTaskIds: result.cancelledTaskIds,
     interruptedSessions: result.interruptedSessions,
   };
-  await emitStepSuccess(args, output as unknown as Record<string, unknown>, startTime);
+  await emitStepSuccess(args, output, startTime);
 }

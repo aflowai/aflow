@@ -1,4 +1,3 @@
-import type { TenantId } from '@aflow/schemas';
 import {
   buildResumeContract,
   deriveEffectiveOutputSchema,
@@ -89,7 +88,7 @@ export async function validateRunnerOutputContractAtHarness(
   if (derivedFrom && derivedFrom.length > 0) {
     try {
       const derived = await deriveEffectiveOutputSchema({
-        tenantId: tenantId as TenantId,
+        tenantId: tenantId,
         spaceId: run.spaceId,
         runId: workflowExecution.runId,
         task: {
@@ -127,7 +126,7 @@ export async function validateRunnerOutputContractAtHarness(
   // Retrieve the output payload.
   let output: unknown;
   try {
-    output = await deps.payloadStore.retrieve(outputRef as never);
+    output = await deps.payloadStore.retrieve(outputRef);
   } catch (err) {
     log.warn(
       `[wfRunnerOutputContract] payloadStore.retrieve failed; passing through: ${err instanceof Error ? err.message : String(err)}`,

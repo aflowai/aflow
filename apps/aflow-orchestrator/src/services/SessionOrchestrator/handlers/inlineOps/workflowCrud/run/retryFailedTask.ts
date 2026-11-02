@@ -217,7 +217,7 @@ export async function handleRetryFailedTask(ctx: HandleRetryFailedTaskCtx): Prom
       runId: run.runId,
       taskId: resolution.taskId,
       attempt: retriedAttempt,
-      helmsmanSessionId: callingSessionId as never,
+      helmsmanSessionId: callingSessionId,
     });
   } catch (err) {
     // The atomic commit already landed; the task row is `running` with

@@ -211,7 +211,7 @@ export function isStateRef(value: unknown): value is { $ref: string } {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     return false;
   }
-  const keys = Object.keys(value as Record<string, unknown>);
+  const keys = Object.keys(value);
   if (keys.length !== 1 || keys[0] !== '$ref') {
     return false;
   }
@@ -238,7 +238,7 @@ export function normalizeMangledRef(value: unknown): { $ref: string } | null {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     return null;
   }
-  const keys = Object.keys(value as Record<string, unknown>);
+  const keys = Object.keys(value);
   if (keys.length !== 1) {
     return null;
   }
@@ -542,7 +542,7 @@ async function walkAndResolve(
         try {
           const parsed: unknown = JSON.parse(trimmed);
           if (isStateRef(parsed)) {
-            const refString = (parsed as { $ref: string }).$ref;
+            const refString = parsed.$ref;
             const resolved = refString.startsWith('output.')
               ? await resolveOutputRef(refString, runtimeState, payloadStore)
               : await resolveStateRef(refString, runtimeState, payloadStore);

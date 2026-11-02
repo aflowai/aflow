@@ -3,7 +3,6 @@ import { successWithData, failureWithError } from '@aflow/executor-runtime';
 import { internalError, validationError } from '@aflow/executor-runtime';
 import type { AgentTurnDecision, AiMessageV1, ToolSurface } from '@aflow/schemas';
 import { createAgentDecisionInvalidError } from '@aflow/schemas';
-import type { TenantId, StepExecutionId } from '@aflow/schemas';
 import { AIClientError, DEFAULT_AI_MODELS } from '@aflow/ai-client';
 import type { AIClient, ChatMessage } from '@aflow/ai-client';
 import {
@@ -492,9 +491,9 @@ async function storeRejectedDecisionLog(
 ): Promise<void> {
   try {
     await deps.payloadStore.store({
-      tenantId: ctx.job.tenantId as TenantId,
+      tenantId: ctx.job.tenantId,
       runId: ctx.runId,
-      stepExecutionId: ctx.job.stepExecutionId as StepExecutionId,
+      stepExecutionId: ctx.job.stepExecutionId,
       attempt: ctx.job.attempt,
       kind: 'logs',
       data: {
@@ -566,7 +565,7 @@ async function finishAgentTurn(
   toolSurface?: ToolSurface,
 ): Promise<StepResult> {
   store.recordAssistantResponse(
-    decision as unknown as Record<string, unknown>,
+    decision,
     params.turnNumber,
     toolCallSignatures,
     continuity?.providerReasoning,

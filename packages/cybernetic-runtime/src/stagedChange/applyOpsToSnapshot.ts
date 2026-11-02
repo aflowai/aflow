@@ -604,7 +604,7 @@ function applyWorkflowOp(workflow: Workflow, op: StagedChangeOp): void {
     }
 
     case 'block_workflow': {
-      workflow.status = 'abandoned' as typeof workflow.status;
+      workflow.status = 'abandoned';
       (workflow as Record<string, unknown>)['blockReason'] = op.reason;
       break;
     }

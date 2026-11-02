@@ -121,7 +121,7 @@ async function handleChange(args: InlineHandlerArgs, startTime: number): Promise
   }
 
   const outcome = await applyLocalModelAction(
-    { db: getDatabase(), redis: args.redis, tenantId: tenantId as string, runtime },
+    { db: getDatabase(), redis: args.redis, tenantId: tenantId, runtime },
     change,
   );
   if (outcome.ok) {

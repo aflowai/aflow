@@ -36,7 +36,7 @@ export function createInterruptRun(bindings: SessionOrchestratorBindings) {
 
     const workflowWaiters = await loadParkedStepWaitersForSession(
       db,
-      params.tenantId as string,
+      params.tenantId,
       params.runId,
     );
     const isWorkflowDelegationWait = workflowWaiters.length > 0;
@@ -98,7 +98,7 @@ export function createInterruptRun(bindings: SessionOrchestratorBindings) {
         getOrchestratorLogger().info(
           `[interruptRun] No in-flight step to force-complete; interrupt flag set for run ${params.runId}`,
         );
-        resultStatus = runState.status as SessionStatus;
+        resultStatus = runState.status;
       }
     }
 

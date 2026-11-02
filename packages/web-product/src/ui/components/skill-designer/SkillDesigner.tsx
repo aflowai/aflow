@@ -54,12 +54,12 @@ import { useEvalDraft } from './useEvalDraft.js';
 import { CoachPanel, useCoachCounts } from './CoachPanel.js';
 
 const nodeTypes: NodeTypes = {
-  skillGoal: SkillGoalNode as unknown as NodeTypes['skillGoal'],
-  skillActivation: SkillActivationNode as unknown as NodeTypes['skillActivation'],
-  skillTask: SkillTaskNode as unknown as NodeTypes['skillTask'],
-  skillOutcomes: SkillOutcomesNode as unknown as NodeTypes['skillOutcomes'],
-  skillCampaign: SkillCampaignNode as unknown as NodeTypes['skillCampaign'],
-  skillSource: SkillSourceNode as unknown as NodeTypes['skillSource'],
+  skillGoal: SkillGoalNode,
+  skillActivation: SkillActivationNode,
+  skillTask: SkillTaskNode,
+  skillOutcomes: SkillOutcomesNode,
+  skillCampaign: SkillCampaignNode,
+  skillSource: SkillSourceNode,
 };
 
 const ANCHORS = new Set([GOAL_NODE_ID, ACTIVATION_NODE_ID, OUTCOMES_NODE_ID, CAMPAIGN_NODE_ID]);

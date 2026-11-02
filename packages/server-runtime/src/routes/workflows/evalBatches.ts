@@ -319,7 +319,7 @@ export function registerEvalBatchRoutes(fastify: FastifyInstance): void {
         probeJudgeCredential: async (model) => {
           try {
             await createByokAiClientFactory(getDb(fastify)).getClientForModel(model, {
-              tenantId: tenant.tenantId as string,
+              tenantId: tenant.tenantId,
               spaceId: space.spaceId,
             });
             return { ok: true };
@@ -483,7 +483,7 @@ export function registerEvalBatchRoutes(fastify: FastifyInstance): void {
         retrievePayload: (ref) => payloadStore.retrieve(ref),
         resolveClient: async (model) => {
           const { client } = await byokFactory.getClientForModel(model, {
-            tenantId: tenant.tenantId as string,
+            tenantId: tenant.tenantId,
             spaceId: space.spaceId,
           });
           return client;

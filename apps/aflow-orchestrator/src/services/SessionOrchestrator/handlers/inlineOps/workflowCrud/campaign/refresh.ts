@@ -86,5 +86,5 @@ export async function handleWorkflowCampaignRefresh(
 
   const clearedTaskIds = await clearCampaignMemoEntries(db, tenantIdStr, campaignId, input.taskIds);
   const output: WorkflowCampaignRefreshOutput = { campaignId, clearedTaskIds };
-  await emitStepSuccess(args, output as unknown as Record<string, unknown>, startTime);
+  await emitStepSuccess(args, output, startTime);
 }

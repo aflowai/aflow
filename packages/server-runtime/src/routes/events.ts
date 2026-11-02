@@ -99,21 +99,14 @@ Live tail uses the realtime WebSocket \`session.events\` topic (Plan 170).
         return handlePollingMode(
           sessionService,
           tenant.tenantId,
-          sessionId as SessionId,
+          sessionId,
           lastEventId,
           limit,
           reply,
         );
       }
 
-      return handleBackwardMode(
-        sessionService,
-        tenant.tenantId,
-        sessionId as SessionId,
-        before,
-        limit,
-        reply,
-      );
+      return handleBackwardMode(sessionService, tenant.tenantId, sessionId, before, limit, reply);
     },
   );
 };

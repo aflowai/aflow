@@ -669,9 +669,7 @@ async function fetchRef(root: string, remote: string, ref: string): Promise<stri
 /** Git's first line of complaint about reaching a remote, or why it gave none. */
 function remoteFailure(error: unknown, otherwise: string): string {
   const stderr =
-    typeof error === 'object' && error !== null && 'stderr' in error
-      ? String((error as { stderr: unknown }).stderr)
-      : '';
+    typeof error === 'object' && error !== null && 'stderr' in error ? String(error.stderr) : '';
   return (
     stderr
       .split('\n')

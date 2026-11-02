@@ -37,7 +37,7 @@ async function applyAppletSeed(
   const result = await applyArtifactSeeds({
     payloadStore: ids.payloadStore,
     bundle: { bundleId: entry.catalogId as SkillBundleId, artifactSeed: [seed] },
-    tenantId: ids.tenantId as string,
+    tenantId: ids.tenantId,
     spaceId: ids.spaceId,
     tx,
   });

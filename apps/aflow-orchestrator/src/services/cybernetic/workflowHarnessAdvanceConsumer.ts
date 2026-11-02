@@ -20,11 +20,7 @@ async function dispatchInterruptRetry(
 ): Promise<void> {
   if (!message.taskId) return;
   const { loadRunByRunIdAcrossSpaces } = await import('./harness/helpers.js');
-  const run = await loadRunByRunIdAcrossSpaces(
-    harnessDeps.db,
-    tenantId as string,
-    message.workflowRunId,
-  );
+  const run = await loadRunByRunIdAcrossSpaces(harnessDeps.db, tenantId, message.workflowRunId);
   if (!run?.sessionId) return;
   const task = run.tasks.find((t) => t.taskId === message.taskId);
   if (task?.status !== 'running') return;

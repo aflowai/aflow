@@ -98,12 +98,7 @@ export async function handleWorkflowRunStart(
 
   const parentRun =
     args.workflowExecution !== undefined
-      ? await loadRunById(
-          db,
-          args.context.tenantId as string,
-          spaceId,
-          args.workflowExecution.runId,
-        )
+      ? await loadRunById(db, args.context.tenantId, spaceId, args.workflowExecution.runId)
       : null;
   // The session whose authority and identity the run inherits. A workflow
   // task's own session id is synthetic and holds neither, so a child started
@@ -130,10 +125,7 @@ export async function handleWorkflowRunStart(
   const planNodeId = input.planNodeId ?? parentRun?.planNodeId;
   if (
     input.planNodeId !== undefined &&
-    !(await createPlanNodeStore(db, args.context.tenantId as string).find(
-      spaceId,
-      input.planNodeId,
-    ))
+    !(await createPlanNodeStore(db, args.context.tenantId).find(spaceId, input.planNodeId))
   ) {
     await emitStepError(
       args,
@@ -206,7 +198,7 @@ export async function handleWorkflowRunStart(
   // Resolve the skill once (reused for campaign resolution below) — its
   // manifest carries the campaign contract that scopes the operator-cancel gate.
   const skill = await resolveSkillForWorkflow(
-    { db, tenantId: args.context.tenantId as string, spaceId },
+    { db, tenantId: args.context.tenantId, spaceId },
     slug,
   );
 
@@ -216,15 +208,9 @@ export async function handleWorkflowRunStart(
   // no continuing identity — each run is an independent invocation, so a prior
   // operator cancel must not block the next one.
   if (!input.acknowledgeOperatorCancel && skill?.manifest.campaign !== undefined) {
-    const [mostRecentRun] = await listRecentRuns(
-      db,
-      args.context.tenantId as string,
-      spaceId,
-      slug,
-      {
-        limit: 1,
-      },
-    );
+    const [mostRecentRun] = await listRecentRuns(db, args.context.tenantId, spaceId, slug, {
+      limit: 1,
+    });
     if (mostRecentRun?.status === 'cancelled' && mostRecentRun.cancelledBy === 'operator') {
       await emitStepError(
         args,
@@ -268,7 +254,7 @@ export async function handleWorkflowRunStart(
         db,
         redis: args.redis,
         payloadStore: args.payloadStore,
-        tenantId: args.context.tenantId as string,
+        tenantId: args.context.tenantId,
         spaceId,
         workflowSlug: slug,
         diagnostics: validity.diagnostics,
@@ -614,7 +600,7 @@ export async function handleWorkflowRunStart(
       slug,
       revision: workflow.revision,
       spaceId,
-      workflow: workflow as unknown as Record<string, unknown>,
+      workflow: workflow,
       actor: 'system:run-start',
       onDrift: workflow.origin === 'platform' ? 'overwrite' : 'throw',
     });

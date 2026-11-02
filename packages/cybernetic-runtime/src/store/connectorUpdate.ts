@@ -138,7 +138,7 @@ export async function updateApiConnectorEntry(opts: {
   const outcome = await withTenantSchema(db, tenantCtx, async (tx) => {
     await writeApiDefinition({
       definition,
-      spaceId: spaceId as string,
+      spaceId: spaceId,
       conflictPolicy: 'overwrite',
       tx,
     });
@@ -155,10 +155,10 @@ export async function updateApiConnectorEntry(opts: {
       await writePlaceholderBinding({
         bindingId,
         apiId,
-        spaceId: spaceId as string,
+        spaceId: spaceId,
         name: definition.name,
         description: 'Default binding (credentials + variables pending — add at /integrations).',
-        scope: { tenantId: tenantId as string, spaceId: spaceId as string },
+        scope: { tenantId: tenantId, spaceId: spaceId },
         authJson: placeholder.authJson,
         egressPolicy: baselineEgress,
         conflictPolicy: 'skip',
@@ -172,10 +172,7 @@ export async function updateApiConnectorEntry(opts: {
       placeholderAuthJson: placeholder.authJson,
       extractCredentialKeys,
     });
-    const mergedEgress = unionAllowedHosts(
-      row.egress_policy_json ?? {},
-      baselineEgress as Record<string, unknown>,
-    );
+    const mergedEgress = unionAllowedHosts(row.egress_policy_json ?? {}, baselineEgress);
     await tx.execute(sql`
       UPDATE api_bindings SET
         auth_json = ${JSON.stringify(merged.authJson)}::jsonb,
@@ -248,7 +245,7 @@ export async function updateMcpConnectorEntry(opts: {
       serverId,
       definition,
       source: 'platform',
-      spaceId: spaceId as string,
+      spaceId: spaceId,
       conflictPolicy: 'overwrite',
       tx,
     });
@@ -269,10 +266,10 @@ export async function updateMcpConnectorEntry(opts: {
       await writePlaceholderMcpBinding({
         bindingId,
         serverId,
-        spaceId: spaceId as string,
+        spaceId: spaceId,
         name: definition.name,
         description: 'Default binding (credentials pending — add at /integrations).',
-        scope: { tenantId: tenantId as string, spaceId: spaceId as string },
+        scope: { tenantId: tenantId, spaceId: spaceId },
         authJson: placeholderAuth,
         subscribeListChanged: true,
         samplingPolicy: 'off',
@@ -306,7 +303,7 @@ export async function updateMcpConnectorEntry(opts: {
 
     const setupState = await deriveMcpConnectorSetupState({
       tx,
-      spaceId: spaceId as string,
+      spaceId: spaceId,
       bindingId,
       serverId,
       name: definition.name,

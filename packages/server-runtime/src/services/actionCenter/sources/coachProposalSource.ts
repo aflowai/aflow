@@ -184,7 +184,7 @@ async function convertFailureToError(
     case 'USE_DISMISS_FOR_PLATFORM_ISSUE':
       return new ActionCenterResolveError(
         'INVALID_RESOLUTION',
-        typeof failure['detail'] === 'string' ? failure['detail'] : (failure['code'] as string),
+        typeof failure['detail'] === 'string' ? failure['detail'] : failure['code'],
         'permanent',
       );
     case 'APPLY_FAILED':

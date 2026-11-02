@@ -220,7 +220,7 @@ export function registerSimulationRoutes(fastify: FastifyInstance): void {
         reply.code(404).send({ error: 'Database not configured' });
         return;
       }
-      const { simulationId } = request.params as { simulationId: string };
+      const { simulationId } = request.params;
       const tenantContext = createTenantContext(tenant.tenantId);
 
       const { rows, bindings, baselines } = await withTenantSchema(
@@ -370,11 +370,8 @@ export function registerSimulationRoutes(fastify: FastifyInstance): void {
         reply.code(404).send({ error: 'Database not configured' });
         return;
       }
-      const { simulationId } = request.params as { simulationId: string };
-      const body = request.body as {
-        simulation: Record<string, unknown>;
-        expectedRevision: number;
-      };
+      const { simulationId } = request.params;
+      const body = request.body;
 
       // The path owns the id. `revision`, `createdAt` and `updatedAt` are
       // dropped rather than defaulted here: the store assigns all three, and a
@@ -402,7 +399,7 @@ export function registerSimulationRoutes(fastify: FastifyInstance): void {
           db,
           tenantCtx: createTenantContext(tenant.tenantId),
           tenantId: tenant.tenantId,
-          spaceId: space.spaceId as string,
+          spaceId: space.spaceId,
           simulation: parsed.data,
           expectedRevision: body.expectedRevision,
         });
@@ -462,7 +459,7 @@ export function registerSimulationRoutes(fastify: FastifyInstance): void {
         reply.send({ runs: [] });
         return;
       }
-      const { simulationId } = request.params as { simulationId: string };
+      const { simulationId } = request.params;
       const { limit } = request.query as { limit?: number };
       const tenantContext = createTenantContext(tenant.tenantId);
 
@@ -573,7 +570,7 @@ export function registerSimulationRoutes(fastify: FastifyInstance): void {
         return;
       }
 
-      const { simulationId } = request.params as { simulationId: string };
+      const { simulationId } = request.params;
       const query = request.query as {
         runId: string;
         worldVersion?: number;
@@ -588,7 +585,7 @@ export function registerSimulationRoutes(fastify: FastifyInstance): void {
             redis,
             payloadStore,
             tenantId: tenant.tenantId,
-            spaceId: space.spaceId as string,
+            spaceId: space.spaceId,
           },
           {
             simulationId,
@@ -694,7 +691,7 @@ export function registerSimulationRoutes(fastify: FastifyInstance): void {
         reply.code(404).send({ error: 'Database not configured' });
         return;
       }
-      const { simulationId } = request.params as { simulationId: string };
+      const { simulationId } = request.params;
       const body = request.body as {
         entities: Record<string, Array<Record<string, unknown>>>;
         description?: string;
@@ -765,7 +762,7 @@ export function registerSimulationRoutes(fastify: FastifyInstance): void {
         reply.code(404).send({ error: 'World storage is not configured on this deployment.' });
         return;
       }
-      const { simulationId } = request.params as { simulationId: string };
+      const { simulationId } = request.params;
       const body = request.body as {
         runId: string;
         expectedVersion: number;
@@ -834,7 +831,7 @@ export function registerSimulationRoutes(fastify: FastifyInstance): void {
         reply.code(404).send({ error: 'Database not configured' });
         return;
       }
-      const { simulationId } = request.params as { simulationId: string };
+      const { simulationId } = request.params;
       const body = request.body as { fromVersion: number; description?: string };
       const spaceId = space.spaceId as string;
       const simulation = await loadSimulation(db, tenant.tenantId, spaceId, simulationId);

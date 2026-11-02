@@ -57,7 +57,7 @@ export async function persistCoachLearning(
     return { ok: false, error: parsed.error.message };
   }
 
-  await insertCoachLearning(db, args.context.tenantId as string, {
+  await insertCoachLearning(db, args.context.tenantId, {
     spaceId,
     learning: parsed.data,
   });
@@ -109,7 +109,7 @@ export async function handleRecordLearning(
   if (input.scope.kind === 'campaign') {
     const reviewContext = await loadCoachReviewContext({
       db,
-      tenantId: args.context.tenantId as string,
+      tenantId: args.context.tenantId,
       spaceId,
       coachSessionId: args.context.runId,
     });
@@ -191,7 +191,7 @@ export async function handleRecordLearning(
   if (input.promotedFrom) {
     try {
       const { resolveCandidate } = await import('@aflow/cybernetic-runtime');
-      await resolveCandidate(db, args.context.tenantId as string, {
+      await resolveCandidate(db, args.context.tenantId, {
         entryId: input.promotedFrom.candidateLedgerEntryId,
         status: 'reviewed-promoted',
         spaceId,

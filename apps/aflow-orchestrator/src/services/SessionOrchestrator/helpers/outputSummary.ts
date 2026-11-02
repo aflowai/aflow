@@ -695,7 +695,7 @@ function carriesByReferenceData(output: unknown): boolean {
     outputFiles != null &&
     typeof outputFiles === 'object' &&
     !Array.isArray(outputFiles) &&
-    Object.keys(outputFiles as Record<string, unknown>).length > 0
+    Object.keys(outputFiles).length > 0
   ) {
     return true;
   }

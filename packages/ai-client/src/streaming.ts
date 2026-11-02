@@ -303,7 +303,7 @@ export function wrapStreamingResponse<T extends object>(
         summaryRef,
       };
     }
-    return response as T & { streamRef?: PayloadRef; summaryRef?: PayloadRef };
+    return response;
   });
 
   return {

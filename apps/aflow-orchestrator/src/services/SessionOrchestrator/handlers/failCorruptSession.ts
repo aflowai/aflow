@@ -7,7 +7,7 @@ import {
   type SessionHotState,
   type SalvagedCorruptFields,
 } from '@aflow/redis';
-import type { TenantId, SessionAgentTarget, SystemRole, AgentId } from '@aflow/schemas';
+import type { SessionAgentTarget, SystemRole, AgentId } from '@aflow/schemas';
 import { getOrchestratorLogger } from '../../../lib/orchestratorLogger.js';
 import { failRun } from './failRun.js';
 
@@ -73,26 +73,21 @@ export async function failCorruptSessionAndCascade(
     : PLACEHOLDER_TARGET;
   const minimalState: SessionHotState = {
     sessionId: runId,
-    tenantId: tenantId as TenantId,
+    tenantId: tenantId,
     target: salvagedTarget,
     agentVersion: salvaged.agentVersion ?? PLACEHOLDER_AGENT_VERSION,
     status: 'RUNNING',
     createdAt: Date.now(),
     lastUpdatedAt: Date.now(),
-    ...(salvaged.parentSessionId
-      ? { parentSessionId: salvaged.parentSessionId as SessionHotState['parentSessionId'] }
-      : {}),
+    ...(salvaged.parentSessionId ? { parentSessionId: salvaged.parentSessionId } : {}),
     ...(salvaged.parentStepExecutionId
       ? {
-          parentStepExecutionId:
-            salvaged.parentStepExecutionId as SessionHotState['parentStepExecutionId'],
+          parentStepExecutionId: salvaged.parentStepExecutionId,
         }
       : {}),
-    ...(salvaged.spaceId ? { spaceId: salvaged.spaceId as SessionHotState['spaceId'] } : {}),
-    ...(salvaged.traceId ? { traceId: salvaged.traceId as SessionHotState['traceId'] } : {}),
-    ...(salvaged.createdBy
-      ? { createdBy: salvaged.createdBy as SessionHotState['createdBy'] }
-      : {}),
+    ...(salvaged.spaceId ? { spaceId: salvaged.spaceId } : {}),
+    ...(salvaged.traceId ? { traceId: salvaged.traceId } : {}),
+    ...(salvaged.createdBy ? { createdBy: salvaged.createdBy } : {}),
   };
   await setSessionState(redis, minimalState);
 

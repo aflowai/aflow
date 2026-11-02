@@ -1023,7 +1023,7 @@ function StepConnect({
                       placeholder={m.placeholder}
                       value={keys[provider] ?? ''}
                       onChange={(e) => {
-                        const value = (e.target as HTMLInputElement).value;
+                        const value = e.target.value;
                         setKeys((prev) => ({ ...prev, [provider]: value }));
                         setStates((prev) => ({ ...prev, [provider]: { phase: 'idle' } }));
                       }}

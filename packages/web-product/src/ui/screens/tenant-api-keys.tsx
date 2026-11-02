@@ -372,7 +372,7 @@ function CreateApiKeyDialog({
             placeholder="e.g. CI/CD pipeline, Local development"
             value={name}
             onChange={(e) => {
-              setName((e.target as HTMLInputElement).value);
+              setName(e.target.value);
             }}
           />
         </Field>

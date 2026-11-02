@@ -59,5 +59,5 @@ export async function handleWorkflowCampaignEnd(
   }
 
   const output: WorkflowCampaignEndOutput = { campaign: result.campaign };
-  await emitStepSuccess(args, output as unknown as Record<string, unknown>, startTime);
+  await emitStepSuccess(args, output, startTime);
 }

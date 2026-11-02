@@ -1,7 +1,7 @@
 import type { Redis } from 'ioredis';
 import { updateSessionState } from '@aflow/redis';
 import type { SessionHotState } from '@aflow/redis';
-import type { AgentDefinition, AgentTurnDecision, SessionId, TenantId } from '@aflow/schemas';
+import type { AgentDefinition, AgentTurnDecision } from '@aflow/schemas';
 import { AGENT_SIGNAL_BLOCKED_OPERATION_ID } from '@aflow/schemas';
 
 /**
@@ -43,7 +43,7 @@ export async function clearStaleCredentialBlock(
 ): Promise<void> {
   if (!runHotState.pendingCredentialBlock) return;
   if (decisionEmitsSignalBlocked(decision, agentDef)) return;
-  await updateSessionState(redis, ids.tenantId as TenantId, ids.sessionId as SessionId, {
+  await updateSessionState(redis, ids.tenantId, ids.sessionId, {
     pendingCredentialBlock: undefined,
   });
 }

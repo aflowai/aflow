@@ -1,4 +1,4 @@
-import { StreamKeys, type StepType } from '@aflow/schemas';
+import { StreamKeys } from '@aflow/schemas';
 import {
   getSessionStateSafe,
   getStepState,
@@ -86,7 +86,7 @@ export function createForceCompleteInFlightStep(deps: SessionOrchestratorFactory
       sessionId: runId,
       stepId: stepState.stepId,
       stepExecutionId: stepExecId,
-      stepType: stepState.stepType as StepType,
+      stepType: stepState.stepType,
       attempt: stepState.attempt,
       metadata: {
         errorCode,

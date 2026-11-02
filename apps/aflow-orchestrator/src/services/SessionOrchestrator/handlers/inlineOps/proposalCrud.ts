@@ -198,9 +198,5 @@ async function handleProposalGet(
     return;
   }
 
-  await emitStepSuccess(
-    args,
-    { proposal: read.staged as unknown as Record<string, unknown> },
-    startTime,
-  );
+  await emitStepSuccess(args, { proposal: read.staged }, startTime);
 }

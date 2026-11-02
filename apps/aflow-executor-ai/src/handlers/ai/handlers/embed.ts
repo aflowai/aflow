@@ -3,7 +3,6 @@
  */
 import type { ExecutorContext, StepResult } from '@aflow/executor-runtime';
 import { successWithData } from '@aflow/executor-runtime';
-import type { TenantId, StepExecutionId } from '@aflow/schemas';
 import { DEFAULT_AI_MODELS } from '@aflow/ai-client';
 import type { AiEmbedInput } from '../schema.js';
 import { getAIClientForContext } from '../aiClient.js';
@@ -23,9 +22,9 @@ export async function handleEmbed(
       model,
       input: params.text,
       dimensions: params.dimensions,
-      tenantId: ctx.job.tenantId as TenantId,
+      tenantId: ctx.job.tenantId,
       runId: ctx.runId,
-      stepExecutionId: ctx.job.stepExecutionId as StepExecutionId,
+      stepExecutionId: ctx.job.stepExecutionId,
       attempt: ctx.job.attempt,
     });
 

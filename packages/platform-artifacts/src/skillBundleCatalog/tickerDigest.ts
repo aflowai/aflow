@@ -1,5 +1,3 @@
-import type { SkillBundleId } from '@aflow/schemas';
-
 import type { AuthoredSkillBundle } from '../skillBundleCatalog.js';
 import { POLYGON_CONNECTOR } from '../connectorCatalog/polygon.js';
 import { NEWSAPI_CONNECTOR } from '../connectorCatalog/newsapi.js';
@@ -10,7 +8,7 @@ const POLYGON_API_KEY_CREDENTIAL = 'polygon-api-key';
 const NEWSAPI_KEY_CREDENTIAL = 'newsapi-api-key';
 
 export const TICKER_DIGEST: AuthoredSkillBundle = {
-  bundleId: 'ticker-digest' as SkillBundleId,
+  bundleId: 'ticker-digest',
   revision: 2,
   name: 'Ticker Digest',
   tagline: 'One-ticker market digest: price trend, sourced news, watch items, inline card.',

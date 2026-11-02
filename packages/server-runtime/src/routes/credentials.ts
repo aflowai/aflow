@@ -272,7 +272,7 @@ export const credentialRoutes: FastifyPluginAsync = async (fastify) => {
             : scopeFilter;
           return tx.select().from(providerCredentials).where(conditions);
         });
-        typedRows = rows as Array<typeof providerCredentials.$inferSelect>;
+        typedRows = rows;
       } catch {
         // Table may not exist yet (migration 23 not applied)
         reply.send({ credentials: [] });
@@ -345,7 +345,7 @@ export const credentialRoutes: FastifyPluginAsync = async (fastify) => {
       let scopeId: string;
       switch (scope) {
         case 'user':
-          scopeId = userId as string;
+          scopeId = userId;
           break;
         case 'space': {
           const space = await request.requireSpace();
@@ -353,7 +353,7 @@ export const credentialRoutes: FastifyPluginAsync = async (fastify) => {
             reply.status(403).send({ error: 'Space-scoped credentials require space admin role' });
             return;
           }
-          scopeId = space.spaceId as string;
+          scopeId = space.spaceId;
           break;
         }
         case 'tenant':
@@ -363,7 +363,7 @@ export const credentialRoutes: FastifyPluginAsync = async (fastify) => {
               .send({ error: 'Tenant-scoped credentials require tenant admin role' });
             return;
           }
-          scopeId = tenant.tenantId as string;
+          scopeId = tenant.tenantId;
           break;
         default:
           reply.status(400).send({ error: `Invalid scope: ${scope as string}` });
@@ -431,7 +431,7 @@ export const credentialRoutes: FastifyPluginAsync = async (fastify) => {
         });
 
         const row = rows[0];
-        invalidateCredentialCache(fastify, tenant.tenantId as string);
+        invalidateCredentialCache(fastify, tenant.tenantId);
         await wakeDocsWaitingForEmbedding(db, tenant.tenantId, {
           providerId,
           scope,
@@ -493,7 +493,7 @@ export const credentialRoutes: FastifyPluginAsync = async (fastify) => {
       let scopeId: string;
       switch (scope) {
         case 'user':
-          scopeId = userId as string;
+          scopeId = userId;
           break;
         case 'space': {
           const space = await request.requireSpace();
@@ -501,7 +501,7 @@ export const credentialRoutes: FastifyPluginAsync = async (fastify) => {
             reply.status(403).send({ error: 'Space-scoped credentials require space admin role' });
             return;
           }
-          scopeId = space.spaceId as string;
+          scopeId = space.spaceId;
           break;
         }
         case 'tenant':
@@ -511,7 +511,7 @@ export const credentialRoutes: FastifyPluginAsync = async (fastify) => {
               .send({ error: 'Tenant-scoped credentials require tenant admin role' });
             return;
           }
-          scopeId = tenant.tenantId as string;
+          scopeId = tenant.tenantId;
           break;
         default:
           reply.status(400).send({ error: `Invalid scope: ${scope as string}` });
@@ -594,7 +594,7 @@ export const credentialRoutes: FastifyPluginAsync = async (fastify) => {
           return;
         }
 
-        invalidateCredentialCache(fastify, tenant.tenantId as string);
+        invalidateCredentialCache(fastify, tenant.tenantId);
         // Where a provider secret is delivered is security-relevant state, and it
         // was previously changeable without a trace. The allowlist above bounds
         // WHERE it can point; this records WHO moved it and WHEN.
@@ -669,7 +669,7 @@ export const credentialRoutes: FastifyPluginAsync = async (fastify) => {
       let scopeId: string;
       switch (scope) {
         case 'user':
-          scopeId = userId as string;
+          scopeId = userId;
           break;
         case 'space': {
           const space = await request.requireSpace();
@@ -677,7 +677,7 @@ export const credentialRoutes: FastifyPluginAsync = async (fastify) => {
             reply.status(403).send({ error: 'Space-scoped credentials require space admin role' });
             return;
           }
-          scopeId = space.spaceId as string;
+          scopeId = space.spaceId;
           break;
         }
         case 'tenant':
@@ -687,7 +687,7 @@ export const credentialRoutes: FastifyPluginAsync = async (fastify) => {
               .send({ error: 'Tenant-scoped credentials require tenant admin role' });
             return;
           }
-          scopeId = tenant.tenantId as string;
+          scopeId = tenant.tenantId;
           break;
         default:
           reply.status(400).send({ error: `Invalid scope: ${scope as string}` });
@@ -715,7 +715,7 @@ export const credentialRoutes: FastifyPluginAsync = async (fastify) => {
           return;
         }
 
-        invalidateCredentialCache(fastify, tenant.tenantId as string);
+        invalidateCredentialCache(fastify, tenant.tenantId);
         reply.status(204).send(null);
       } catch (error) {
         reply.log.error({ err: error }, 'Credential delete failed');
@@ -777,7 +777,7 @@ export const credentialRoutes: FastifyPluginAsync = async (fastify) => {
       let scopeId: string;
       switch (scope) {
         case 'user':
-          scopeId = userId as string;
+          scopeId = userId;
           break;
         case 'space': {
           const space = await request.requireSpace();
@@ -785,7 +785,7 @@ export const credentialRoutes: FastifyPluginAsync = async (fastify) => {
             reply.status(403).send({ error: 'Space-scoped credentials require space admin role' });
             return;
           }
-          scopeId = space.spaceId as string;
+          scopeId = space.spaceId;
           break;
         }
         case 'tenant':
@@ -795,7 +795,7 @@ export const credentialRoutes: FastifyPluginAsync = async (fastify) => {
               .send({ error: 'Tenant-scoped credentials require tenant admin role' });
             return;
           }
-          scopeId = tenant.tenantId as string;
+          scopeId = tenant.tenantId;
           break;
         default:
           reply.status(422).send({ error: 'BadScope', message: `Invalid scope: ${String(scope)}` });
@@ -866,7 +866,7 @@ export const credentialRoutes: FastifyPluginAsync = async (fastify) => {
             ),
           );
       });
-      invalidateCredentialCache(fastify, tenant.tenantId as string);
+      invalidateCredentialCache(fastify, tenant.tenantId);
 
       reply.send({
         verified: outcome.ok,
@@ -909,8 +909,8 @@ export const credentialRoutes: FastifyPluginAsync = async (fastify) => {
 
       const previews = await previewCredentialResolution(db, {
         tenantId: tenant.tenantId,
-        userId: request.authUser!.userId as string,
-        spaceId: space.spaceId as string,
+        userId: request.authUser!.userId,
+        spaceId: space.spaceId,
         providerIds: [providerId],
       });
       reply.send(previews.get(providerId) ?? emptyResolutionPreview(providerId));

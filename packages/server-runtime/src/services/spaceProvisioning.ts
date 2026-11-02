@@ -216,7 +216,7 @@ export async function insertSpaceRecord(
   const spaceId = (spaceRow as Record<string, unknown>)['id'] as string;
   await assignDefaultCapabilityProfile(tx, { tenant, edition: params.edition, userId, spaceId });
 
-  return spaceRow as Record<string, unknown>;
+  return spaceRow;
 }
 
 function spaceRowValues(params: {

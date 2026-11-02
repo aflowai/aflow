@@ -395,7 +395,7 @@ function stripInternalFields(schema: JsonSchemaObject, internalFields: string[])
     ...schema,
     properties: filtered,
     ...(filteredRequired.length > 0 ? { required: filteredRequired } : {}),
-  } as JsonSchemaObject;
+  };
 }
 
 /**

@@ -744,8 +744,7 @@ export function createOpenAIAdapter(
           const params = {
             model: request.model,
             messages,
-            response_format:
-              responseFormat as ChatCompletionCreateParamsNonStreaming['response_format'],
+            response_format: responseFormat,
           } as ChatCompletionCreateParamsNonStreaming;
           if (request.maxTokens !== undefined) {
             params.max_completion_tokens = request.maxTokens;
@@ -801,7 +800,7 @@ export function createOpenAIAdapter(
         const parseParams: Parameters<typeof client.chat.completions.parse>[0] = {
           model: request.model,
           messages,
-          response_format: responseFormat as ReturnType<typeof zodResponseFormat>,
+          response_format: responseFormat,
         };
 
         if (request.maxTokens !== undefined) {
@@ -838,7 +837,7 @@ export function createOpenAIAdapter(
         }
 
         return {
-          data: choice.message.parsed as T,
+          data: choice.message.parsed,
           rawContent: choice.message.content ?? '',
           finishReason: fromOpenAIFinishReason(choice.finish_reason),
           usage: {
@@ -1032,7 +1031,7 @@ export function createOpenAIAdapter(
       try {
         // Sora uses the /v1/videos endpoints. Native in openai v6 (was a shim before).
         const params: OpenAI.VideoCreateParams = {
-          model: request.model as OpenAI.VideoModel,
+          model: request.model,
           prompt: request.prompt,
         };
         if (request.durationSeconds) {

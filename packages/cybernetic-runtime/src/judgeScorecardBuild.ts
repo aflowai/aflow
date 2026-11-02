@@ -196,7 +196,7 @@ export async function buildJudgeScorecardsForBatch(
     spaceId: params.spaceId,
     batchIds: group.batchIds,
   });
-  const directives = await loadSpaceDirectives(db, tenantId as string, params.spaceId);
+  const directives = await loadSpaceDirectives(db, tenantId, params.spaceId);
   return computeJudgeScorecards({
     labels,
     verdicts,

@@ -44,9 +44,7 @@ function inferSchemaFromSamples(values: unknown[]): Record<string, unknown> {
   }
 
   return {
-    anyOf: primitiveTypes.map((type) =>
-      type === 'null' ? ({ type: 'null' } as Record<string, unknown>) : { type },
-    ),
+    anyOf: primitiveTypes.map((type) => (type === 'null' ? { type: 'null' } : { type })),
   };
 }
 

@@ -36,7 +36,7 @@ function writeContext(args: InlineHandlerArgs, state: SessionHotState | null): P
   return {
     ...planReadContext(args),
     redis: args.redis,
-    tenantId: args.context.tenantId as string,
+    tenantId: args.context.tenantId,
     actorKind: 'agent',
     resident: restrictedPlanWriteAuthority(state),
   };
@@ -74,7 +74,7 @@ export async function handlePlanNodeCreate(
     return;
   }
   const output: PlanNodeCreateOutput = { node: result.node };
-  await emitStepSuccess(args, output as unknown as Record<string, unknown>, startTime);
+  await emitStepSuccess(args, output, startTime);
 }
 
 export async function handlePlanNodeUpdate(
@@ -125,7 +125,7 @@ export async function handlePlanNodeUpdate(
     ...(result.carrierFailure ? { carrierFailure: result.carrierFailure } : {}),
     ...(result.linkFailure ? { linkFailure: result.linkFailure } : {}),
   };
-  await emitStepSuccess(args, output as unknown as Record<string, unknown>, startTime);
+  await emitStepSuccess(args, output, startTime);
 }
 
 export async function handlePlanNodeDepend(
@@ -143,7 +143,7 @@ export async function handlePlanNodeDepend(
     node: result.node,
     ...(result.dependency !== undefined ? { dependency: result.dependency } : {}),
   };
-  await emitStepSuccess(args, output as unknown as Record<string, unknown>, startTime);
+  await emitStepSuccess(args, output, startTime);
 }
 
 export async function handlePlanNodeLearn(
@@ -160,7 +160,7 @@ export async function handlePlanNodeLearn(
     return;
   }
   const output: PlanNodeLearnOutput = { learning: result.learning, superseded: result.superseded };
-  await emitStepSuccess(args, output as unknown as Record<string, unknown>, startTime);
+  await emitStepSuccess(args, output, startTime);
 }
 
 export async function handlePlanNodeLink(
@@ -175,5 +175,5 @@ export async function handlePlanNodeLink(
     return;
   }
   const output: PlanNodeLinkOutput = { link: result.link };
-  await emitStepSuccess(args, output as unknown as Record<string, unknown>, startTime);
+  await emitStepSuccess(args, output, startTime);
 }

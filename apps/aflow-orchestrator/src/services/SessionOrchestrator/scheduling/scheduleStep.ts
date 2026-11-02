@@ -2,7 +2,6 @@ import {
   type AgentDefinition,
   type StepExecutionId,
   type IdempotencyKey,
-  type StepResultMessage,
   type AflowError,
   errorContext,
   getOperation,
@@ -319,7 +318,7 @@ export function createScheduleStep(bindings: SessionOrchestratorBindings) {
             error: errorPayload,
             traceId: context.traceId,
             finishedAtMs: Date.now(),
-          } as StepResultMessage,
+          },
           messageId: `synthetic:grant-denied:${stepExecutionId}`,
         });
         return stepExecutionId;
@@ -588,7 +587,7 @@ export function createScheduleStep(bindings: SessionOrchestratorBindings) {
     );
 
     await relayWorkflowTaskActivity(
-      context.tenantId as string,
+      context.tenantId,
       context.runId,
       stepDef.operation,
       stepDef.name ?? stepId,
@@ -642,7 +641,7 @@ export function createScheduleStep(bindings: SessionOrchestratorBindings) {
           error: errorPayload,
           traceId: context.traceId,
           finishedAtMs: Date.now(),
-        } as StepResultMessage,
+        },
         messageId: `synthetic:input-validation-failed:${stepExecutionId}`,
       });
       return stepExecutionId;
@@ -786,7 +785,7 @@ export function createScheduleStep(bindings: SessionOrchestratorBindings) {
             error: errorPayload,
             traceId: context.traceId,
             finishedAtMs: Date.now(),
-          } as StepResultMessage,
+          },
           messageId: `synthetic:enqueue-failed:${stepExecutionId}`,
         });
         return stepExecutionId;

@@ -619,8 +619,7 @@ export function createOllamaAdapter(config: ProviderConfig): AIProviderAdapter {
 
     async generateJson<T>(request: GenerateJsonRequest<T>): Promise<GenerateJsonResponse<T>> {
       const schema =
-        request.rawJsonSchema ??
-        (zodToJsonSchema(request.schema, { $refStrategy: 'none' }) as Record<string, unknown>);
+        request.rawJsonSchema ?? zodToJsonSchema(request.schema, { $refStrategy: 'none' });
       const messages = toOllamaMessages(request.messages);
 
       let chunk: OllamaChatChunk | undefined;

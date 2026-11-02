@@ -1,5 +1,5 @@
 import type { Redis } from 'ioredis';
-import type { StepExecutionId, OperationId, StepDefinition, IdempotencyKey } from '@aflow/schemas';
+import type { StepExecutionId, StepDefinition, IdempotencyKey } from '@aflow/schemas';
 import {
   applyToolFilter,
   MCP_TOOLS_STALE_AFTER_MS,
@@ -222,7 +222,7 @@ export async function handleMcpToolDiscoverInline(
 
     const flowId = context.agentDefinition.flowId as string | undefined;
     const binding = resolveBindingByScope<BindingCandidate>(candidates, {
-      tenantId: context.tenantId as string,
+      tenantId: context.tenantId,
       spaceId,
       ...(flowId ? { flowId } : {}),
     });
@@ -283,7 +283,7 @@ export async function handleMcpToolDiscoverInline(
       parentStepExecutionId: parentStepExecutionId ?? null,
       stepId: stepDef.stepId,
       stepType: stepDef.stepType,
-      operationId: stepDef.operation as OperationId,
+      operationId: stepDef.operation,
       attempt,
       idempotencyKey,
       status: 'SUCCEEDED',
@@ -343,7 +343,7 @@ async function emitFailure(
     parentStepExecutionId: parentStepExecutionId ?? null,
     stepId: stepDef.stepId,
     stepType: stepDef.stepType,
-    operationId: stepDef.operation as OperationId,
+    operationId: stepDef.operation,
     attempt,
     idempotencyKey,
     status: 'FAILED',

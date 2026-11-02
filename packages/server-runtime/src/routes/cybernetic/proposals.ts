@@ -427,7 +427,7 @@ export const proposalRoutes: FastifyPluginAsync = async (fastify) => {
             `Proposal is stale against the current workflow — ` +
             `${String(result.stale.conflicts.length)} precondition(s) no longer hold. ` +
             `Regenerate the proposal or Apply anyway (force=true) with operator confirmation.`,
-          conflicts: result.stale.conflicts as unknown as Array<Record<string, unknown>>,
+          conflicts: result.stale.conflicts,
         });
       }
       if (result.code === 'RATIFICATION_APPLY_FAILED') {

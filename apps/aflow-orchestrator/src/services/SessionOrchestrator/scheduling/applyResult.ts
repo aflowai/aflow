@@ -1,9 +1,4 @@
 import {
-  type TenantId,
-  type StepExecutionId,
-  type StepId,
-  type OperationId,
-  type TraceId,
   type StepDefinition,
   type AflowError,
   calculateRetryDelay,
@@ -201,7 +196,7 @@ export function createApplyResult(bindings: SessionOrchestratorBindings) {
 
     const stepUpdates: Partial<StepHotState> & { stepExecutionId: string } = {
       stepExecutionId: result.stepExecutionId,
-      status: result.status as StepHotState['status'],
+      status: result.status,
       endedAt: now,
       outputRef: result.outputRef ?? undefined,
       errorRef: result.errorRef ?? undefined,
@@ -253,19 +248,17 @@ export function createApplyResult(bindings: SessionOrchestratorBindings) {
           }
         }
 
-        const stepDef =
-          agentDef.steps.find((s) => s.stepId === result.stepId) ??
-          ({
-            stepId: result.stepId as StepId,
-            stepType: result.stepType,
-            operation: result.operationId,
-            name: result.stepId,
-            config: {},
-            tags: [],
-            optional: false,
-            onSuccess: { next: [] },
-            onFailure: { next: [] },
-          } as StepDefinition);
+        const stepDef = agentDef.steps.find((s) => s.stepId === result.stepId) ?? {
+          stepId: result.stepId,
+          stepType: result.stepType,
+          operation: result.operationId,
+          name: result.stepId,
+          config: {},
+          tags: [],
+          optional: false,
+          onSuccess: { next: [] },
+          onFailure: { next: [] },
+        };
         // For PAUSED results, prefer deriving required variables from the step definition
         // (especially for user.interaction.ask) so the UI can resume by variableId.
         const pauseRequiredVars: Array<{
@@ -377,12 +370,12 @@ export function createApplyResult(bindings: SessionOrchestratorBindings) {
           await stepServiceWaitForInput(
             { redis, payloadStore },
             {
-              tenantId: result.tenantId as TenantId,
+              tenantId: result.tenantId,
               runId: result.sessionId,
               agentDef,
-              traceId: result.traceId as TraceId,
+              traceId: result.traceId,
               stepDef,
-              stepExecutionId: result.stepExecutionId as StepExecutionId,
+              stepExecutionId: result.stepExecutionId,
               attempt: result.attempt,
               runState,
             },
@@ -460,7 +453,7 @@ export function createApplyResult(bindings: SessionOrchestratorBindings) {
         // steps created by applyAgentDecision). Fall back to a minimal def so the
         // result can still be processed and routed.
         const stepDef = agentDef.steps.find((s) => s.stepId === result.stepId) ?? {
-          stepId: result.stepId as StepId,
+          stepId: result.stepId,
           stepType: result.stepType,
           operation: result.operationId,
           name: result.stepId,
@@ -518,12 +511,12 @@ export function createApplyResult(bindings: SessionOrchestratorBindings) {
           await stepServiceFailStep(
             { redis, payloadStore },
             {
-              tenantId: result.tenantId as TenantId,
+              tenantId: result.tenantId,
               runId: result.sessionId,
               agentDef,
-              traceId: result.traceId as TraceId,
+              traceId: result.traceId,
               stepDef,
-              stepExecutionId: result.stepExecutionId as StepExecutionId,
+              stepExecutionId: result.stepExecutionId,
               attempt: result.attempt,
               runState: runState,
             },
@@ -547,8 +540,8 @@ export function createApplyResult(bindings: SessionOrchestratorBindings) {
             tenantId: result.tenantId,
             sessionId: result.sessionId,
             stepExecutionId: result.stepExecutionId,
-            stepId: result.stepId as StepId,
-            operationId: result.operationId as OperationId,
+            stepId: result.stepId,
+            operationId: result.operationId,
             stepType: result.stepType,
             reason: 'retry',
             attempt: result.attempt + 1,
@@ -571,12 +564,12 @@ export function createApplyResult(bindings: SessionOrchestratorBindings) {
           | undefined;
 
         const failStepCtx = {
-          tenantId: result.tenantId as TenantId,
+          tenantId: result.tenantId,
           runId: result.sessionId,
           agentDef,
-          traceId: result.traceId as TraceId,
+          traceId: result.traceId,
           stepDef,
-          stepExecutionId: result.stepExecutionId as StepExecutionId,
+          stepExecutionId: result.stepExecutionId,
           attempt: result.attempt,
           runState: runState,
         };
@@ -666,7 +659,7 @@ export function createApplyResult(bindings: SessionOrchestratorBindings) {
                   // a marker (reason-only) so the pause reclassifies.
                 }
               }
-              await updateSessionState(redis, result.tenantId as TenantId, result.sessionId, {
+              await updateSessionState(redis, result.tenantId, result.sessionId, {
                 pendingCredentialBlock: credentialBlock ?? {
                   reason: errorObj?.message ?? 'MCP credential or binding could not be resolved.',
                 },
@@ -689,20 +682,20 @@ export function createApplyResult(bindings: SessionOrchestratorBindings) {
               const failuresVarKey = `ai.agent.toolFailures.${failureNextStepId}`;
               const failureMsgsVarKey = `ai.agent.toolFailureMessages.${failureNextStepId}`;
               const totalFailuresVarKey = `ai.agent.toolTotalFailures.${failureNextStepId}`;
-              const toolFailures = readInlineVar(
+              const toolFailures = readInlineVar<Record<string, number>>(
                 runtimeState,
                 failuresVarKey,
-                {} as Record<string, number>,
+                {},
               );
-              const toolFailureMessages = readInlineVar(
+              const toolFailureMessages = readInlineVar<Record<string, string>>(
                 runtimeState,
                 failureMsgsVarKey,
-                {} as Record<string, string>,
+                {},
               );
-              const toolTotalFailures = readInlineVar(
+              const toolTotalFailures = readInlineVar<Record<string, number>>(
                 runtimeState,
                 totalFailuresVarKey,
-                {} as Record<string, number>,
+                {},
               );
               const prevCount = toolFailures[attributionStepId] ?? 0;
               const prevMessage = toolFailureMessages[attributionStepId];
@@ -747,7 +740,7 @@ export function createApplyResult(bindings: SessionOrchestratorBindings) {
                 version: runtimeState.version + 1,
                 updatedAtMs: now,
               };
-              await updateSessionState(redis, result.tenantId as TenantId, result.sessionId, {
+              await updateSessionState(redis, result.tenantId, result.sessionId, {
                 runtimeState: updatedRuntimeState,
               });
             }

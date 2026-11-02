@@ -33,7 +33,6 @@ import {
   type OAuthConsentOwnerScope,
   type PostInstallTask,
   type SpaceId,
-  type SuggestedEgressPolicyDraft,
   type TenantId,
 } from '@aflow/schemas';
 import {
@@ -100,8 +99,8 @@ export function publishApiConnectorInstallInvalidations(
   spaceId: SpaceId,
   apiId: string,
 ): void {
-  publishApiCatalogInvalidation(redis, tenantId as string, spaceId, { kind: 'definition', apiId });
-  publishApiCatalogInvalidation(redis, tenantId as string, spaceId, { kind: 'binding', apiId });
+  publishApiCatalogInvalidation(redis, tenantId, spaceId, { kind: 'definition', apiId });
+  publishApiCatalogInvalidation(redis, tenantId, spaceId, { kind: 'binding', apiId });
 }
 
 export function publishMcpConnectorInstallInvalidations(
@@ -111,11 +110,11 @@ export function publishMcpConnectorInstallInvalidations(
   serverId: string,
   bindingId: string,
 ): void {
-  publishMcpCatalogInvalidation(redis, tenantId as string, spaceId, {
+  publishMcpCatalogInvalidation(redis, tenantId, spaceId, {
     kind: 'definition',
     serverId,
   });
-  publishMcpCatalogInvalidation(redis, tenantId as string, spaceId, {
+  publishMcpCatalogInvalidation(redis, tenantId, spaceId, {
     kind: 'binding',
     serverId,
     bindingId,
@@ -247,8 +246,8 @@ export async function buildApiConnectorPlaceholderAuth(opts: {
   if (opts.enforceOAuthClientRegistered && clientScope !== 'platform') {
     const guardError = await withTenantSchema(db, createTenantContext(tenantId), async (tx) =>
       checkOAuthClientRegistered(tx, clientScope, issuerKey, {
-        tenantId: tenantId as string,
-        spaceId: spaceId as string,
+        tenantId: tenantId,
+        spaceId: spaceId,
       }),
     );
     if (guardError) {
@@ -280,7 +279,7 @@ export function deriveApiConnectorInitialEgress(definition: ApiDefinition): Egre
       : null;
   return mergeSuggestedEgressIntoBaseline(
     { allowedHosts: host ? [host] : [] },
-    definition.suggestedEgressPolicy as SuggestedEgressPolicyDraft | undefined,
+    definition.suggestedEgressPolicy,
   ) as EgressPolicy;
 }
 
@@ -415,7 +414,7 @@ export async function installApiConnectorEntry(opts: {
     await withTenantSchema(db, tenantContext, async (tx) => {
       await writeApiDefinition({
         definition,
-        spaceId: spaceId as string,
+        spaceId: spaceId,
         conflictPolicy: 'fail',
         tx,
       });
@@ -423,23 +422,23 @@ export async function installApiConnectorEntry(opts: {
         await writeMintedSimulation({
           simulationId,
           definition,
-          spaceId: spaceId as string,
+          spaceId: spaceId,
           tx,
         });
         // The empty world is a real baseline version, not the absence of one —
         // a run pinning a never-seeded simulation must pin something that can
         // never later acquire rows.
-        await ensureSimulationBaselineIn(tx, { spaceId: spaceId as string, simulationId });
+        await ensureSimulationBaselineIn(tx, { spaceId: spaceId, simulationId });
       }
       await writePlaceholderBinding({
         bindingId,
         apiId,
-        spaceId: spaceId as string,
+        spaceId: spaceId,
         name: definition.name,
         description: isSimulated
           ? 'Simulated binding — answered by a declared world, with no host and no credential.'
           : 'Default binding (credentials + variables pending — add at /integrations).',
-        scope: { tenantId: tenantId as string, spaceId: spaceId as string },
+        scope: { tenantId: tenantId, spaceId: spaceId },
         authJson: placeholderAuth,
         egressPolicy: initialEgress,
         ...(simulationId !== undefined
@@ -645,17 +644,17 @@ export async function installMcpConnectorEntry(opts: {
         serverId,
         definition,
         source: 'platform',
-        spaceId: spaceId as string,
+        spaceId: spaceId,
         conflictPolicy: 'fail',
         tx,
       });
       await writePlaceholderMcpBinding({
         bindingId,
         serverId,
-        spaceId: spaceId as string,
+        spaceId: spaceId,
         name: definition.name,
         description: 'Default binding (credentials pending — add at /integrations).',
-        scope: { tenantId: tenantId as string, spaceId: spaceId as string },
+        scope: { tenantId: tenantId, spaceId: spaceId },
         authJson,
         subscribeListChanged: true,
         samplingPolicy: 'off',
@@ -669,7 +668,7 @@ export async function installMcpConnectorEntry(opts: {
       // outstanding, not what this install attempted.
       return deriveMcpConnectorSetupState({
         tx,
-        spaceId: spaceId as string,
+        spaceId: spaceId,
         bindingId,
         serverId,
         name: definition.name,

@@ -1,6 +1,5 @@
 import { getOrchestratorLogger } from '../../../../lib/orchestratorLogger.js';
 import { and, eq } from 'drizzle-orm';
-import type { OperationId, SuggestedEgressPolicy } from '@aflow/schemas';
 import {
   normalizeBindingInput,
   resolveBaseUrl,
@@ -124,7 +123,7 @@ export async function handleApiAdminOpInline(args: InlineHandlerArgs): Promise<v
           `);
           return { def, created: priorJson === undefined, priorEndpoints };
         });
-        publishApiCatalogInvalidation(redis, context.tenantId as string, spaceId, {
+        publishApiCatalogInvalidation(redis, context.tenantId, spaceId, {
           kind: 'definition',
           apiId,
         });
@@ -199,7 +198,7 @@ export async function handleApiAdminOpInline(args: InlineHandlerArgs): Promise<v
           `);
         });
 
-        publishApiCatalogInvalidation(redis, context.tenantId as string, spaceId, {
+        publishApiCatalogInvalidation(redis, context.tenantId, spaceId, {
           kind: 'definition',
           apiId,
         });
@@ -218,7 +217,7 @@ export async function handleApiAdminOpInline(args: InlineHandlerArgs): Promise<v
             sql`DELETE FROM api_bindings WHERE api_id = ${apiId} AND space_id = ${spaceId}::uuid`,
           );
         });
-        publishApiCatalogInvalidation(redis, context.tenantId as string, spaceId, {
+        publishApiCatalogInvalidation(redis, context.tenantId, spaceId, {
           kind: 'definition',
           apiId,
         });
@@ -249,7 +248,7 @@ export async function handleApiAdminOpInline(args: InlineHandlerArgs): Promise<v
           name: row.name,
           ...(row.description ? { description: row.description } : {}),
           endpoints,
-          tags: (row.tags as string[] | undefined) ?? [],
+          tags: row.tags ?? [],
           createdAt: new Date(row.createdAt).toISOString(),
           updatedAt: new Date(row.updatedAt).toISOString(),
         };
@@ -261,7 +260,7 @@ export async function handleApiAdminOpInline(args: InlineHandlerArgs): Promise<v
         const apiIdForBinding = input['apiId'] as string;
         const { sql } = await import('drizzle-orm');
         const scope = input['scope'] as Record<string, unknown>;
-        scope['tenantId'] = context.tenantId as string;
+        scope['tenantId'] = context.tenantId;
         scope['spaceId'] = spaceId;
 
         // Look up definition for baseUrl + baseUrlTemplate + suggestedEgressPolicy + callMode.
@@ -354,7 +353,7 @@ export async function handleApiAdminOpInline(args: InlineHandlerArgs): Promise<v
           rawAuth: input['auth'] as Record<string, unknown> | undefined,
           rawEgressPolicy: input['egressPolicy'] as Record<string, unknown> | undefined,
           definitionBaseUrl,
-          suggestedEgressPolicy: suggestedEgressPolicy as SuggestedEgressPolicy | undefined,
+          suggestedEgressPolicy: suggestedEgressPolicy,
           existingEgressPolicy,
           existingAuth,
           definitionBaseUrlTemplate,
@@ -377,7 +376,7 @@ export async function handleApiAdminOpInline(args: InlineHandlerArgs): Promise<v
           context,
           spaceId,
           hosts: collectApiBindingHosts({
-            auth: auth as unknown as Record<string, unknown>,
+            auth: auth,
             egressPolicy,
           }),
           grantRefs: [
@@ -454,7 +453,7 @@ export async function handleApiAdminOpInline(args: InlineHandlerArgs): Promise<v
               enabled = EXCLUDED.enabled, updated_at = NOW()
           `);
         });
-        publishApiCatalogInvalidation(redis, context.tenantId as string, spaceId, {
+        publishApiCatalogInvalidation(redis, context.tenantId, spaceId, {
           kind: 'binding',
           apiId: apiIdForBinding,
         });
@@ -525,7 +524,7 @@ export async function handleApiAdminOpInline(args: InlineHandlerArgs): Promise<v
             sql`DELETE FROM api_bindings WHERE binding_id = ${bindingId} AND space_id = ${spaceId}::uuid`,
           );
         });
-        publishApiCatalogInvalidation(redis, context.tenantId as string, spaceId, {
+        publishApiCatalogInvalidation(redis, context.tenantId, spaceId, {
           kind: 'binding',
         });
         outputData = { bindingId, deleted: true };
@@ -569,10 +568,10 @@ export async function handleApiAdminOpInline(args: InlineHandlerArgs): Promise<v
           apiId: row.apiId,
           name: row.name,
           ...(row.description ? { description: row.description } : {}),
-          scope: row.scopeJson as Record<string, unknown>,
+          scope: row.scopeJson,
           auth: authJson,
           credentialKeys: extractCredentialKeys(authJson),
-          egressPolicy: row.egressPolicyJson as Record<string, unknown>,
+          egressPolicy: row.egressPolicyJson,
           enabled: row.enabled === 1,
           createdAt: new Date(row.createdAt).toISOString(),
           updatedAt: new Date(row.updatedAt).toISOString(),
@@ -823,7 +822,7 @@ export async function handleApiAdminOpInline(args: InlineHandlerArgs): Promise<v
       parentStepExecutionId: parentStepExecutionId ?? null,
       stepId: stepDef.stepId,
       stepType: stepDef.stepType,
-      operationId: operationId as OperationId,
+      operationId: operationId,
       attempt,
       idempotencyKey,
       status: 'SUCCEEDED',
@@ -856,7 +855,7 @@ export async function handleApiAdminOpInline(args: InlineHandlerArgs): Promise<v
       parentStepExecutionId: parentStepExecutionId ?? null,
       stepId: stepDef.stepId,
       stepType: stepDef.stepType,
-      operationId: operationId as OperationId,
+      operationId: operationId,
       attempt,
       idempotencyKey,
       status: 'FAILED',

@@ -116,13 +116,13 @@ async function runInspectGate(
       directives = EntityDirectivesSchema.parse({
         version: 1,
         responsibility: 'fallback',
-      } as unknown);
+      });
     }
   } catch {
     directives = EntityDirectivesSchema.parse({
       version: 1,
       responsibility: 'fallback',
-    } as unknown);
+    });
   }
 
   const exploration = directives.learningPolicy.coachEvidenceExploration;
@@ -223,7 +223,7 @@ async function handleInspectList(
   }
 
   const result = await buildIndex(db, tenantIdStr, target);
-  await emitStepSuccess(args, result as unknown as Record<string, unknown>, startTime);
+  await emitStepSuccess(args, result, startTime);
 }
 
 // ============================================================================
@@ -338,7 +338,7 @@ async function handleInspectRead(
     // degrades gracefully when the ledger is missing.
   }
 
-  await emitStepSuccess(args, out as unknown as Record<string, unknown>, startTime);
+  await emitStepSuccess(args, out, startTime);
 }
 
 export function inspectLedgerKey(args: InlineHandlerArgs): string {
@@ -662,7 +662,7 @@ async function dereferenceTaskPayload(
   try {
     // payloadStore.retrieve accepts a PayloadRef (string) — the same
     // branded type the executor wrote.
-    const content = await payloadStore.retrieve(ref as never);
+    const content = await payloadStore.retrieve(ref);
     // Surface the ref alongside the content so the Coach can cite the
     // exact ref in evidence.artifactRefs.
     return { payloadRef: ref, content };

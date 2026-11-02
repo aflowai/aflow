@@ -308,7 +308,7 @@ export async function handleMcpServerAdminInline(args: InlineHandlerArgs): Promi
       input,
       {
         db: getDatabase(),
-        tenantId: args.context.tenantId as string,
+        tenantId: args.context.tenantId,
         spaceId,
         redis: args.redis,
       },

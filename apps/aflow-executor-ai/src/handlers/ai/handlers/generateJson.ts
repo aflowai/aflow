@@ -5,7 +5,6 @@ import { z } from 'zod';
 import type { ExecutorContext, StepResult } from '@aflow/executor-runtime';
 import { successWithData, failureWithError } from '@aflow/executor-runtime';
 import { validationError } from '@aflow/executor-runtime';
-import type { TenantId, StepExecutionId } from '@aflow/schemas';
 import { DEFAULT_AI_MODELS } from '@aflow/ai-client';
 import type { AiGenerateJsonInput } from '../schema.js';
 import { getAIClientForContext } from '../aiClient.js';
@@ -32,9 +31,9 @@ export async function handleGenerateJson(
       rawJsonSchema: params.outputSchema,
       temperature: params.temperature,
       maxTokens: params.maxTokens,
-      tenantId: ctx.job.tenantId as TenantId,
+      tenantId: ctx.job.tenantId,
       runId: ctx.runId,
-      stepExecutionId: ctx.job.stepExecutionId as StepExecutionId,
+      stepExecutionId: ctx.job.stepExecutionId,
       attempt: ctx.job.attempt,
     });
 

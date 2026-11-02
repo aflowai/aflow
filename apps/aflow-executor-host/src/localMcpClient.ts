@@ -240,7 +240,7 @@ export async function listLocalTools(
       // The protocol requires a schema, so it is carried straight through — a
       // tool the agent may call needs the server's own argument shape, not one
       // derived here.
-      inputSchema: tool.inputSchema as Record<string, unknown>,
+      inputSchema: tool.inputSchema,
     }));
   });
 }

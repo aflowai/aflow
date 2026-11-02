@@ -800,7 +800,7 @@ function VariableChangeRow({ change }: { change: { key: string; value?: unknown 
 function summarizeVariableValue(value: unknown): string {
   if (Array.isArray(value)) return `Array(${value.length})`;
   if (typeof value === 'object' && value !== null) {
-    const keys = Object.keys(value as Record<string, unknown>);
+    const keys = Object.keys(value);
     if (keys.length <= 3) return `{ ${keys.join(', ')} }`;
     return `{ ${keys.slice(0, 3).join(', ')}, … } (${keys.length})`;
   }

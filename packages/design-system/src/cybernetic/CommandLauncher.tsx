@@ -87,7 +87,7 @@ export function CommandLauncher({ open, onClose, actions, onSelect }: CommandLau
     position: 'fixed',
     inset: 0,
     background: 'rgba(0, 0, 0, 0.5)',
-    zIndex: 'var(--z-modal)' as unknown as number,
+    zIndex: 'var(--z-modal)',
     display: 'flex',
     justifyContent: 'center',
     paddingTop: '20vh',

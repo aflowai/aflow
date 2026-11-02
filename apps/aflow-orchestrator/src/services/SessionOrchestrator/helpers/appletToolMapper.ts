@@ -11,7 +11,6 @@ import type {
   OperationId,
   StepDefinition,
   StepId,
-  StepType,
   AppletDefinition,
   AppletFocus,
   AppletInstance,
@@ -255,7 +254,7 @@ export function buildLoweredAppletStep(
     `virtual_applet_${toolId.replace(/\./g, '_')}_${crypto.randomUUID().slice(0, 8)}` as StepId;
   const stepDef: StepDefinition = {
     stepId,
-    stepType: 'ui' as StepType,
+    stepType: 'ui',
     operation: 'ui.applet.act' as OperationId,
     name: `↪ ${toolId}`,
     config: {},

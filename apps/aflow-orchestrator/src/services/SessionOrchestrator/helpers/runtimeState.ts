@@ -384,7 +384,7 @@ function truncateForPreview(value: unknown, maxBytes: number): unknown {
     }
     if (typeof val === 'object') {
       if (depth >= MAX_DEPTH) {
-        const keys = Object.keys(val as Record<string, unknown>);
+        const keys = Object.keys(val);
         return `{${keys.slice(0, 3).join(', ')}${keys.length > 3 ? `, … +${keys.length - 3} more` : ''}}`;
       }
       const obj = val as Record<string, unknown>;

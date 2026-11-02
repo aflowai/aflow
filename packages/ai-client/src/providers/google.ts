@@ -803,7 +803,7 @@ export function createGoogleAdapter(config: ProviderConfig): AIProviderAdapter {
         } else {
           // Convert from Zod — use $refStrategy "none" to avoid $ref references.
           jsonSchema = sanitizeJsonSchemaForGemini(
-            zodToJsonSchema(request.schema, { $refStrategy: 'none' }) as Record<string, unknown>,
+            zodToJsonSchema(request.schema, { $refStrategy: 'none' }),
           );
         }
 

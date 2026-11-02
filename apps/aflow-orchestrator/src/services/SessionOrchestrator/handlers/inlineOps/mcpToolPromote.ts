@@ -1,7 +1,6 @@
 import type { Redis } from 'ioredis';
 import type {
   StepExecutionId,
-  OperationId,
   StepDefinition,
   IdempotencyKey,
   AgentToolSpec,
@@ -209,7 +208,7 @@ export async function handleMcpToolPromoteInline(
           cachedTools: b.cachedTools,
           enabled: ((b.enabled as number | undefined) ?? 1) === 1,
           scope: {
-            tenantId: (scopeJson['tenantId'] as string | undefined) ?? (context.tenantId as string),
+            tenantId: (scopeJson['tenantId'] as string | undefined) ?? context.tenantId,
             spaceId: b.spaceId,
             ...(flowId ? { flowId } : {}),
           },
@@ -225,7 +224,7 @@ export async function handleMcpToolPromoteInline(
 
     const flowIdForScope = context.agentDefinition.flowId as string | undefined;
     const binding = resolveBindingByScope<BindingCandidate>(scopedCandidates, {
-      tenantId: context.tenantId as string,
+      tenantId: context.tenantId,
       spaceId,
       ...(flowIdForScope ? { flowId: flowIdForScope } : {}),
     });
@@ -299,11 +298,7 @@ export async function handleMcpToolPromoteInline(
       const runtimeState = sessionState?.runtimeState;
       if (runtimeState) {
         const vtKey = 'ai.agent._virtualTools';
-        const currentVt = readInlineVar(
-          runtimeState,
-          vtKey,
-          {} as Record<string, VirtualToolEntry>,
-        );
+        const currentVt = readInlineVar<Record<string, VirtualToolEntry>>(runtimeState, vtKey, {});
         const turnKey = Object.keys(runtimeState.variables).find((k) =>
           k.startsWith('ai.agent.turnNumber.'),
         );
@@ -365,7 +360,7 @@ export async function handleMcpToolPromoteInline(
       parentStepExecutionId: parentStepExecutionId ?? null,
       stepId: stepDef.stepId,
       stepType: stepDef.stepType,
-      operationId: stepDef.operation as OperationId,
+      operationId: stepDef.operation,
       attempt,
       idempotencyKey,
       status: 'SUCCEEDED',
@@ -425,7 +420,7 @@ async function emitFailure(
     parentStepExecutionId: parentStepExecutionId ?? null,
     stepId: stepDef.stepId,
     stepType: stepDef.stepType,
-    operationId: stepDef.operation as OperationId,
+    operationId: stepDef.operation,
     attempt,
     idempotencyKey,
     status: 'FAILED',

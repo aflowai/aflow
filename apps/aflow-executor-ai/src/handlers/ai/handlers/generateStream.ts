@@ -3,9 +3,7 @@
  */
 import type { ExecutorContext, StepResult } from '@aflow/executor-runtime';
 import { successWithData } from '@aflow/executor-runtime';
-import type { TenantId, StepExecutionId } from '@aflow/schemas';
 import { DEFAULT_AI_MODELS, createStreamWriter, type StreamWriterConfig } from '@aflow/ai-client';
-import type { ToolDefinition } from '@aflow/ai-client';
 import type { AiGenerateStreamInput } from '../schema.js';
 import { getAIClientForContext } from '../aiClient.js';
 import { buildMessages, buildUsageBreakdown } from '../helpers.js';
@@ -28,19 +26,19 @@ export async function handleGenerateStream(
       temperature: params.temperature,
       maxTokens: params.maxTokens,
       stopSequences: params.stopSequences,
-      tools: params.tools as ToolDefinition[] | undefined,
+      tools: params.tools,
       toolChoice: params.toolChoice,
-      tenantId: ctx.job.tenantId as TenantId,
+      tenantId: ctx.job.tenantId,
       runId: ctx.runId,
-      stepExecutionId: ctx.job.stepExecutionId as StepExecutionId,
+      stepExecutionId: ctx.job.stepExecutionId,
       attempt: ctx.job.attempt,
     });
 
     const streamWriterConfig: StreamWriterConfig = {
       payloadStore: deps.payloadStore,
-      tenantId: ctx.job.tenantId as TenantId,
+      tenantId: ctx.job.tenantId,
       runId: ctx.runId,
-      stepExecutionId: ctx.job.stepExecutionId as StepExecutionId,
+      stepExecutionId: ctx.job.stepExecutionId,
       attempt: ctx.job.attempt,
     };
 

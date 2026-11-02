@@ -229,18 +229,18 @@ async function handleUpsert(
     updates['targetKind'] = targetCols.targetKind;
     updates['targetSystemRole'] = targetCols.targetSystemRole;
     updates['targetAgentId'] = targetCols.targetAgentId;
-    if (input['description'] !== undefined) updates['description'] = input['description'] as string;
+    if (input['description'] !== undefined) updates['description'] = input['description'];
     if (input['filterExpression'] !== undefined)
-      updates['filterExpression'] = input['filterExpression'] as string;
+      updates['filterExpression'] = input['filterExpression'];
     if (input['inputMapping'] !== undefined) updates['inputMapping'] = input['inputMapping'];
     if (input['signatureHeader'] !== undefined)
-      updates['signatureHeader'] = input['signatureHeader'] as string;
+      updates['signatureHeader'] = input['signatureHeader'];
     if (input['deliveryIdHeader'] !== undefined)
-      updates['deliveryIdHeader'] = input['deliveryIdHeader'] as string;
+      updates['deliveryIdHeader'] = input['deliveryIdHeader'];
     if (input['timestampHeader'] !== undefined)
-      updates['timestampHeader'] = input['timestampHeader'] as string;
+      updates['timestampHeader'] = input['timestampHeader'];
     if (input['replayWindowSeconds'] !== undefined)
-      updates['replayWindowSeconds'] = input['replayWindowSeconds'] as number;
+      updates['replayWindowSeconds'] = input['replayWindowSeconds'];
 
     const rows = await withTenantSchema(db, tenantCtx, async (tx) => {
       return tx

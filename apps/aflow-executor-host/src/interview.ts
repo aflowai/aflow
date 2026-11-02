@@ -43,7 +43,7 @@ export interface Prompter {
  * in a script should behave, not block forever on a prompt nobody will see.
  */
 export function createPrompter(): Prompter {
-  const interactive = process.stdin.isTTY === true && process.stdout.isTTY === true;
+  const interactive = process.stdin.isTTY && process.stdout.isTTY;
   const rl = interactive
     ? createInterface({ input: process.stdin, output: process.stdout })
     : undefined;

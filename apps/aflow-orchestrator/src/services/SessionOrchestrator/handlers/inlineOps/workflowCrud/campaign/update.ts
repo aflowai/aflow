@@ -42,5 +42,5 @@ export async function handleWorkflowCampaignUpdate(
     campaign: result.campaign,
     changedKeys: result.changedKeys,
   };
-  await emitStepSuccess(args, output as unknown as Record<string, unknown>, startTime);
+  await emitStepSuccess(args, output, startTime);
 }

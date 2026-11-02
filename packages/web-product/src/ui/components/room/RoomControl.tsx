@@ -94,7 +94,7 @@ export function RoomControl({
         placement="bottom-end"
         width={280}
         trigger={({ ref, toggle: open, open: isOpen }) => (
-          <span ref={ref as React.Ref<HTMLSpanElement>} style={{ display: 'inline-flex' }}>
+          <span ref={ref} style={{ display: 'inline-flex' }}>
             <Button
               variant={isOpen || draft.length > 0 ? 'secondary' : 'ghost'}
               size="sm"
@@ -147,7 +147,7 @@ export function RoomControl({
       placement="bottom-end"
       width={280}
       trigger={({ ref, toggle, open }) => (
-        <span ref={ref as React.Ref<HTMLSpanElement>} style={{ display: 'inline-flex' }}>
+        <span ref={ref} style={{ display: 'inline-flex' }}>
           <Button
             variant={open ? 'secondary' : 'ghost'}
             size="sm"

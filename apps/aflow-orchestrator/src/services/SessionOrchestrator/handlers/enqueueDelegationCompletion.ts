@@ -1,7 +1,7 @@
 import type { Redis } from 'ioredis';
 import { upsertPendingDelegationCompletion, getSessionState } from '@aflow/redis';
 import type { PayloadStore } from '@aflow/payload-store';
-import type { AgentDefinition, SessionId, SessionAgentTarget } from '@aflow/schemas';
+import type { AgentDefinition, SessionAgentTarget } from '@aflow/schemas';
 import { logOrchestratorError } from '../../../lib/orchestratorLogger.js';
 import {
   reconcileParentDelegationForChild,
@@ -101,7 +101,7 @@ export async function enqueuePendingAndReconcile(
       // Not a delegated session — nothing to enqueue, nothing to reconcile.
       return 'no_parent_linkage';
     }
-    parentRunId = childState.parentSessionId as SessionId;
+    parentRunId = childState.parentSessionId;
     parentStepExecutionId = childState.parentStepExecutionId;
   }
 

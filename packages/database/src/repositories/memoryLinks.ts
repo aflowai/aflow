@@ -176,9 +176,7 @@ function liveDocPredicate(alias: string): ReturnType<typeof sql.raw> {
 }
 
 function asString(value: unknown): string {
-  return typeof value === 'object' && value !== null
-    ? JSON.stringify(value)
-    : String(value as string | number);
+  return typeof value === 'object' && value !== null ? JSON.stringify(value) : String(value);
 }
 
 function asStringOrUndefined(value: unknown): string | undefined {

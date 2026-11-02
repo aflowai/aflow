@@ -1140,7 +1140,7 @@ export async function buildAgentTurnInput(
         (v.startsWith('gs://') || v.startsWith('inline:'))
       ) {
         try {
-          const data = await payloadStore.retrieve(v as never);
+          const data = await payloadStore.retrieve(v);
           contextBlocks.push({ key: k, content: data });
         } catch {
           contextBlocks.push({ key: k, content: v });
@@ -1199,7 +1199,7 @@ export async function buildAgentTurnInput(
   const wasInterrupted = readInlineVar(
     runtimeState,
     `ai.agent.wasInterrupted.${stepDef.stepId}`,
-    false as boolean,
+    false,
   );
   if (wasInterrupted) {
     finalContextBlocks.splice(loopWarning ? 2 : 1, 0, {

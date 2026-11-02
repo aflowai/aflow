@@ -51,9 +51,9 @@ export async function handleWorkflowWait(
 
   try {
     const declared = await declareWait(args.redis, {
-      tenantId: args.context.tenantId as string,
+      tenantId: args.context.tenantId,
       spaceId,
-      sessionId: args.context.runId as string,
+      sessionId: args.context.runId,
       kind,
       subject,
       windowSeconds,
@@ -68,7 +68,7 @@ export async function handleWorkflowWait(
       closesAt: new Date(declared.closesAt).toISOString(),
       ...(declared.state === 'ended' ? { outcome: declared.outcome } : {}),
     };
-    await emitStepSuccess(args, output as unknown as Record<string, unknown>, startTime);
+    await emitStepSuccess(args, output, startTime);
   } catch (err) {
     if (err instanceof WaitDeclarationError) {
       await emitStepError(args, 'INVALID_WAIT', err.message, startTime, 'validation');
