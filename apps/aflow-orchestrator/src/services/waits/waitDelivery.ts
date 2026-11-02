@@ -20,6 +20,7 @@ import {
 import {
   claimEndedWaits,
   describeWaitOutcome,
+  isLiveConversation,
   rehydratePausedRunIfAbsent,
 } from '@aflow/cybernetic-runtime';
 import {
@@ -29,11 +30,24 @@ import {
   type BackgroundTaskLogger,
   type BackgroundTaskRunner,
 } from '@aflow/lib';
-import { backgroundTaskControlPlane, WAIT_OUTCOME_ACTOR_ID, type TenantId } from '@aflow/schemas';
+import {
+  backgroundTaskControlPlane,
+  holdsPlanNodeWait,
+  WAIT_OUTCOME_ACTOR_ID,
+  type TenantId,
+} from '@aflow/schemas';
 import { queueMessageForNextTurn } from '../SessionOrchestrator/helpers/queuedMessage.js';
 import { wakeSessionForWait } from '../cybernetic/harness/sessionWakeup.js';
 import type { HarnessDeps } from '../cybernetic/harness/types.js';
 import { holdAgainForOwner } from '../pullRequestEvents/owner.js';
+import {
+  describePlanNodeChange,
+  endPlanNodeHold,
+  holdForPlanNode,
+  planNodeHoldTarget,
+  PLAN_NODE_STATUS_CHANGED,
+  readHeldPlanNode,
+} from './planNode.js';
 
 export const WAIT_DELIVERY_TASK_ID = 'orchestrator.wait_delivery';
 
@@ -98,13 +112,49 @@ async function deliverOwnerWait(deps: HarnessDeps, ended: EndedWait): Promise<Wa
  * its next turn.
  */
 export async function deliverEndedWait(deps: HarnessDeps, ended: EndedWait): Promise<WaitDelivery> {
-  return ended.registration.owner !== undefined
-    ? deliverOwnerWait(deps, ended)
-    : deliverToWaiter(deps, ended);
+  if (ended.registration.owner === undefined) return deliverToWaiter(deps, ended);
+  return ended.registration.kind === PLAN_NODE_STATUS_CHANGED
+    ? deliverPlanNodeHold(deps, ended)
+    : deliverOwnerWait(deps, ended);
 }
 
-async function deliverToWaiter(deps: HarnessDeps, ended: EndedWait): Promise<WaitDelivery> {
+/**
+ * A wait the platform held for the conversation that set a plan node blocked
+ * or waiting. A conversation that has ended is forgotten, and told nothing.
+ * A status change tells the conversation the node, its new status and its
+ * standing note, and ends the hold.
+ *
+ * A window that closes reads the node. Where it still stands blocked or
+ * waiting, nothing is posted and the next wait is declared. Where it is gone,
+ * or its status has moved on, the change event was lost, and the conversation
+ * is told as an event would tell it.
+ */
+async function deliverPlanNodeHold(deps: HarnessDeps, ended: EndedWait): Promise<WaitDelivery> {
   const { registration, outcome } = ended;
+  const target = planNodeHoldTarget(registration);
+  if (!(await isLiveConversation(deps.db, registration.tenantId, registration.sessionId))) {
+    await endPlanNodeHold(deps, target);
+    return 'session_gone';
+  }
+  const node = await readHeldPlanNode(deps.db, registration);
+  if (outcome.endedBy === 'window_closed' && node !== null && holdsPlanNodeWait(node.status)) {
+    // A throw here puts this wait back, and its redelivery declares the next one.
+    await holdForPlanNode(deps, target, { since: registration.closesAt });
+    return 'renewed';
+  }
+  const body =
+    describeWaitOutcome(registration, outcome) +
+    '\n\n' +
+    describePlanNodeChange(registration.subject, outcome, node);
+  return deliverToWaiter(deps, ended, body);
+}
+
+async function deliverToWaiter(
+  deps: HarnessDeps,
+  ended: EndedWait,
+  body: string = describeWaitOutcome(ended.registration, ended.outcome),
+): Promise<WaitDelivery> {
+  const { registration } = ended;
   const tenantId = registration.tenantId as TenantId;
   const post = () =>
     queueMessageForNextTurn(deps.db, deps.redis, {
@@ -113,7 +163,7 @@ async function deliverToWaiter(deps: HarnessDeps, ended: EndedWait): Promise<Wai
       deliveryKey: `wait:${registration.waitId}`,
       actorUserId: WAIT_OUTCOME_ACTOR_ID,
       actorDisplayName: 'Wait',
-      body: describeWaitOutcome(registration, outcome),
+      body,
     });
   let posted = await post();
   if (posted === undefined) {
