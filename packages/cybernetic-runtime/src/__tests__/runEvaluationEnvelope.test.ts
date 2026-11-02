@@ -29,7 +29,7 @@ vi.mock('@aflow/database', () => ({
     }),
 }));
 
-const { writeRunEvaluationEnvelope, parseRunEvaluationEnvelope } =
+const { benchmarkVerdict, writeRunEvaluationEnvelope, parseRunEvaluationEnvelope } =
   await import('../runEvaluationEnvelope.js');
 
 const TENANT = '00000000-0000-0000-0000-000000000001';
@@ -150,37 +150,120 @@ describe('writeRunEvaluationEnvelope', () => {
     instanceId: 'instance_example__repo-abc123',
     arm: 'loop',
     passed: false,
-    failureClass: 'harness_error',
+    failureClass: 'tests_failed',
     tokens: null,
     costUsd: null,
     wallTimeMs: 1_000,
     patchBytes: 10,
     harnessRevision: 'a1b2c3d',
   } as const;
+  const unscored = { ...benchmark, failureClass: 'harness_error' } as const;
 
-  it('a benchmark attempt lands in its own slot beside the decision', async () => {
-    const res = await writeRunEvaluationEnvelope(db, TENANT, {
+  it('a suite verdict and a benchmark verdict on one run keep each other, in either order', async () => {
+    await writeRunEvaluationEnvelope(db, TENANT, { runId: RUN_ID, write: ranWrite('sha256:aaa') });
+    await writeRunEvaluationEnvelope(db, TENANT, {
       runId: RUN_ID,
-      write: { kind: 'decision', decision: 'error', errorMessage: 'no verdict', benchmark },
+      write: { kind: 'benchmark', benchmark },
     });
-    expect(res.written).toBe(true);
     expect(parseRunEvaluationEnvelope(store.value)).toMatchObject({
-      decision: 'error',
+      decision: 'ran',
+      suiteContentHash: 'sha256:aaa',
+      summary: { verdict: 'pass', scores: { overall: 1 } },
+      benchmark,
+    });
+
+    store.value = null;
+    await writeRunEvaluationEnvelope(db, TENANT, {
+      runId: RUN_ID,
+      write: { kind: 'benchmark', benchmark },
+    });
+    await writeRunEvaluationEnvelope(db, TENANT, { runId: RUN_ID, write: ranWrite('sha256:aaa') });
+    expect(parseRunEvaluationEnvelope(store.value)).toMatchObject({
+      decision: 'ran',
+      summary: { verdict: 'pass' },
       benchmark,
     });
   });
 
-  it('a later decision write carrying no benchmark attempt keeps the stored one', async () => {
+  it('a benchmark write onto a run with no decision sets no decision', async () => {
     await writeRunEvaluationEnvelope(db, TENANT, {
       runId: RUN_ID,
-      write: { kind: 'decision', decision: 'error', errorMessage: 'no verdict', benchmark },
-    });
-    await writeRunEvaluationEnvelope(db, TENANT, {
-      runId: RUN_ID,
-      write: { kind: 'decision', decision: 'no_suite' },
+      write: { kind: 'benchmark', benchmark },
     });
     const envelope = parseRunEvaluationEnvelope(store.value);
-    expect(envelope?.decision).toBe('no_suite');
     expect(envelope?.benchmark).toEqual(benchmark);
+    expect(envelope?.decision).toBeUndefined();
+    expect(envelope?.summary).toBeUndefined();
+  });
+
+  it('a scored benchmark verdict is final for its harness revision, and an unscored one is not', async () => {
+    await writeRunEvaluationEnvelope(db, TENANT, {
+      runId: RUN_ID,
+      write: { kind: 'benchmark', benchmark: unscored },
+    });
+    expect(
+      await writeRunEvaluationEnvelope(db, TENANT, {
+        runId: RUN_ID,
+        write: { kind: 'benchmark', benchmark },
+      }),
+    ).toEqual({ written: true });
+    expect(
+      await writeRunEvaluationEnvelope(db, TENANT, {
+        runId: RUN_ID,
+        write: { kind: 'benchmark', benchmark: { ...benchmark, passed: true, failureClass: null } },
+      }),
+    ).toEqual({ written: false });
+    expect(
+      await writeRunEvaluationEnvelope(db, TENANT, {
+        runId: RUN_ID,
+        write: { kind: 'benchmark', benchmark: { ...benchmark, harnessRevision: 'ffffff0' } },
+      }),
+    ).toEqual({ written: true });
+  });
+
+  it('refuses a benchmark write naming another task or arm than the run holds', async () => {
+    await writeRunEvaluationEnvelope(db, TENANT, {
+      runId: RUN_ID,
+      write: { kind: 'benchmark', benchmark },
+    });
+    await expect(
+      writeRunEvaluationEnvelope(db, TENANT, {
+        runId: RUN_ID,
+        write: { kind: 'benchmark', benchmark: { ...benchmark, instanceId: 'instance_other' } },
+      }),
+    ).rejects.toThrow(/cannot record/);
+    await expect(
+      writeRunEvaluationEnvelope(db, TENANT, {
+        runId: RUN_ID,
+        write: { kind: 'benchmark', benchmark: { ...benchmark, arm: 'bare_harness' } },
+      }),
+    ).rejects.toThrow(/cannot record/);
+  });
+});
+
+describe('benchmarkVerdict', () => {
+  it('counts a harness that gave no verdict as unscored, never as a fail', () => {
+    const base = {
+      benchmark: 'swe-bench-pro',
+      instanceId: 'i',
+      arm: 'loop',
+      tokens: null,
+      costUsd: null,
+      wallTimeMs: 0,
+      patchBytes: 0,
+      harnessRevision: 'r',
+    } as const;
+    expect(benchmarkVerdict({ ...base, passed: true, failureClass: null })).toBe('pass');
+    expect(benchmarkVerdict({ ...base, passed: false, failureClass: 'tests_failed' })).toBe('fail');
+    expect(benchmarkVerdict({ ...base, passed: false, failureClass: 'agent_timeout' })).toBe(
+      'fail',
+    );
+    for (const failureClass of [
+      'materialize_failed',
+      'image_unavailable',
+      'harness_error',
+    ] as const) {
+      expect(benchmarkVerdict({ ...base, passed: false, failureClass })).toBe('unscored');
+    }
   });
 });

@@ -2,13 +2,15 @@
  * Plan 341 P1 — the SWE-bench Pro harness runner and evaluation writer, as a
  * command line.
  *
+ *   yarn bench:swe-pro designate --tenant <tenantId> --space <spaceId>
  *   yarn bench:swe-pro materialize --task <task.json> --work-root <dir> [--repo-url <url>]
  *   yarn bench:swe-pro attempt --task <task.json> --work-root <dir> --harness <dir>
- *       [--arm bare_harness] [--agent-timeout-min <n>] [--repo-url <url>]
- *       [--tenant <tenantId> --run <runId>] [-- <agent command>...]
+ *       [--agent-timeout-min <n>] [--repo-url <url>]
+ *       [--tenant <tenantId> --space <spaceId>] [-- <agent command>...]
  *   yarn bench:swe-pro grade --task <task.json> --folder <dir> --work-root <dir> --harness <dir>
- *       --arm <bare_harness|loop|loop_with_learning> --wall-ms <n> [--tokens <n>] [--cost-usd <x>]
- *       [--tenant <tenantId> --run <runId>]
+ *       --arm <bare_harness|loop|loop_with_learning> --agent-outcome <ok|failed|timeout>
+ *       --wall-ms <n> [--tokens <n>] [--cost-usd <x>]
+ *       [--tenant <tenantId> --space <spaceId> [--run <runId>]]
  *
  * `--task` names one record of the published SWE-bench Pro set as JSON.
  * `--harness` names a checkout of the official harness (scaleapi/SWE-bench_Pro-os).
@@ -19,24 +21,35 @@
  * in the folder with the task text on standard input, and grades the patch.
  * The loop's arms run between `materialize` and `grade`: the folder is bound
  * to the measurement space through the host lane (D5), the loop works it, and
- * `grade` takes the tokens, cost and wall time its run reported.
+ * `grade` takes the outcome, tokens, cost and wall time its run reported.
  *
- * With `--tenant` and `--run`, the attempt is recorded on that workflow run
- * through the one evaluation writer (D6). Nothing here defaults a space,
- * tenant or folder, so the measurement space names its own.
+ * `designate` marks a space as the measurement space. With `--tenant` and
+ * `--space`, an attempt is recorded on a workflow run in that space through
+ * the one evaluation writer (D6). `attempt` creates the bare-harness arm's
+ * run itself. `grade` records on the loop's run named by `--run`, or creates
+ * a bare-harness run where none is named. The space and any named run are
+ * confirmed before the attempt starts. Nothing here defaults a space, tenant
+ * or folder, so the measurement space names its own.
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
-import { writeBenchmarkAttemptEvaluation } from '@aflow/cybernetic-runtime';
+import {
+  assertBenchmarkRun,
+  assertMeasurementSpace,
+  createBareHarnessRun,
+  designateMeasurementSpace,
+  writeBenchmarkAttemptEvaluation,
+} from '@aflow/cybernetic-runtime';
 import { closeConnection, getDatabase } from '@aflow/database';
 import { BenchmarkArmSchema, BenchmarkAttemptResultSchema } from '@aflow/schemas';
-import type { BenchmarkAttemptResult } from '@aflow/schemas';
+import type { BenchmarkArm, BenchmarkAttemptResult } from '@aflow/schemas';
 
 import {
   createCommandAgent,
   gradeAttempt,
   materializeTask,
+  parseAgentOutcome,
   parseTask,
   runAttempt,
 } from './swe-bench-pro.mjs';
@@ -101,41 +114,87 @@ function readTask(): ReturnType<typeof parseTask> {
   }
 }
 
-function recordTarget(): { tenantId: string; runId: string } | undefined {
+interface RecordTarget {
+  tenantId: string;
+  spaceId: string;
+  /** The loop's run to record on. Absent, the runner creates a bare-harness run. */
+  runId?: string;
+}
+
+/**
+ * Where the attempt is recorded, confirmed before any work starts. A run the
+ * operator names must be a benchmark run in the measurement space. A run the
+ * runner creates needs that space to be the measurement space.
+ */
+async function recordTarget(arm: BenchmarkArm): Promise<RecordTarget | undefined> {
   const tenantId = flag('tenant');
+  const spaceId = flag('space');
   const runId = flag('run');
-  if (tenantId === undefined && runId === undefined) return undefined;
-  if (tenantId === undefined || runId === undefined) {
-    fail('Recording an attempt needs both --tenant and --run.');
+  if (tenantId === undefined && spaceId === undefined && runId === undefined) return undefined;
+  if (tenantId === undefined || spaceId === undefined) {
+    fail('Recording an attempt needs both --tenant and --space.');
   }
-  return { tenantId, runId };
+  if (command === 'attempt' && runId !== undefined) {
+    fail('`attempt` creates the run it records on, so it takes no --run.');
+  }
+  if (runId === undefined && arm !== 'bare_harness') {
+    fail(`Recording a ${arm} attempt needs --run, the loop's run that worked the folder.`);
+  }
+  const db = getDatabase();
+  if (runId === undefined) {
+    await assertMeasurementSpace(db, tenantId, { spaceId });
+    return { tenantId, spaceId };
+  }
+  await assertBenchmarkRun(db, tenantId, {
+    runId,
+    spaceId,
+    instanceId: readTask().instanceId,
+    arm,
+  });
+  return { tenantId, spaceId, runId };
 }
 
 async function report(
   attempt: BenchmarkAttemptResult,
   gradeDir: string,
-  target: { tenantId: string; runId: string } | undefined,
+  target: RecordTarget | undefined,
+  span: { startedAt: Date; completedAt: Date },
 ): Promise<void> {
   const parsed = BenchmarkAttemptResultSchema.parse(attempt);
   writeFileSync(join(gradeDir, 'attempt.json'), `${JSON.stringify(parsed, null, 2)}\n`);
   console.log(JSON.stringify(parsed, null, 2));
   if (target === undefined) return;
-  try {
-    const { written } = await writeBenchmarkAttemptEvaluation(getDatabase(), target.tenantId, {
-      runId: target.runId,
-      attempt: parsed,
-    });
-    console.error(
-      written
-        ? `Recorded on run ${target.runId}.`
-        : `Run ${target.runId} took no write: it is not in this tenant, or holds this verdict already.`,
-    );
-  } finally {
-    await closeConnection();
-  }
+  const db = getDatabase();
+  const runId =
+    target.runId ??
+    (
+      await createBareHarnessRun(db, target.tenantId, {
+        spaceId: target.spaceId,
+        attempt: parsed,
+        ...span,
+      })
+    ).runId;
+  const { written } = await writeBenchmarkAttemptEvaluation(db, target.tenantId, {
+    runId,
+    spaceId: target.spaceId,
+    attempt: parsed,
+  });
+  console.error(
+    written
+      ? `Recorded on run ${runId}.`
+      : `Run ${runId} took no write: it holds this verdict from this harness revision already.`,
+  );
 }
 
 async function main(): Promise<void> {
+  if (command === 'designate') {
+    const tenantId = required('tenant');
+    const spaceId = required('space');
+    await designateMeasurementSpace(getDatabase(), tenantId, { spaceId });
+    console.error(`Space ${spaceId} is the measurement space for SWE-bench Pro.`);
+    return;
+  }
+
   if (command === 'materialize') {
     const task = readTask();
     const repoUrl = flag('repo-url');
@@ -151,13 +210,17 @@ async function main(): Promise<void> {
     const task = readTask();
     const workRoot = required('work-root');
     const harnessDir = resolve(required('harness'));
-    const target = recordTarget();
-    const arm = BenchmarkArmSchema.parse(flag('arm') ?? 'bare_harness');
+    if (flag('arm') !== undefined) {
+      fail('`attempt` runs the bare-harness arm only. Grade a loop arm with `grade`.');
+    }
+    const arm: BenchmarkArm = 'bare_harness';
+    const target = await recordTarget(arm);
     const timeoutMin = count('agent-timeout-min') ?? DEFAULT_AGENT_TIMEOUT_MIN;
     const repoUrl = flag('repo-url');
     const runAgent = createCommandAgent(agentArgv.length > 0 ? agentArgv : DEFAULT_AGENT, {
       timeoutMs: timeoutMin * 60_000,
     });
+    const startedAt = new Date();
     const result = await runAttempt(task, {
       arm,
       workRoot,
@@ -165,9 +228,13 @@ async function main(): Promise<void> {
       runAgent,
       ...(repoUrl === undefined ? {} : { repoUrl }),
     });
+    const completedAt = new Date();
     const gradeDir = join(resolve(workRoot), `${task.instanceId}.grade`);
     mkdirSync(gradeDir, { recursive: true });
-    await report(result.attempt as BenchmarkAttemptResult, gradeDir, target);
+    await report(result.attempt as BenchmarkAttemptResult, gradeDir, target, {
+      startedAt,
+      completedAt,
+    });
     return;
   }
 
@@ -175,7 +242,14 @@ async function main(): Promise<void> {
     const task = readTask();
     const workRoot = resolve(required('work-root'));
     const arm = BenchmarkArmSchema.parse(required('arm'));
-    const target = recordTarget();
+    let outcome: ReturnType<typeof parseAgentOutcome>;
+    try {
+      outcome = parseAgentOutcome(required('agent-outcome'));
+    } catch (error) {
+      fail(error instanceof Error ? error.message : String(error));
+    }
+    const wallTimeMs = Math.round(count('wall-ms') ?? fail('grade needs --wall-ms.'));
+    const target = await recordTarget(arm);
     const gradeDir = join(workRoot, `${task.instanceId}.grade`);
     const result = await gradeAttempt(task, {
       arm,
@@ -183,21 +257,26 @@ async function main(): Promise<void> {
       harnessDir: resolve(required('harness')),
       gradeDir,
       agent: {
-        ok: true,
-        timedOut: false,
+        ...outcome,
         tokens: optionalRound(count('tokens')),
         costUsd: count('cost-usd') ?? null,
-        wallTimeMs: Math.round(count('wall-ms') ?? fail('grade needs --wall-ms.')),
+        wallTimeMs,
       },
     });
-    await report(result.attempt as BenchmarkAttemptResult, gradeDir, target);
+    const completedAt = new Date();
+    await report(result.attempt as BenchmarkAttemptResult, gradeDir, target, {
+      startedAt: new Date(completedAt.getTime() - wallTimeMs),
+      completedAt,
+    });
     return;
   }
 
   fail(command === undefined ? 'Name a command.' : `There is no command \`${command}\`.`);
 }
 
-main().catch((error: unknown) => {
-  console.error(error instanceof Error ? error.message : error);
-  process.exit(1);
-});
+main()
+  .catch((error: unknown) => {
+    console.error(error instanceof Error ? error.message : error);
+    process.exitCode = 1;
+  })
+  .finally(() => closeConnection());

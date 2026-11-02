@@ -17,6 +17,7 @@ import {
   createCommandAgent,
   gradePatch,
   materializeTask,
+  parseAgentOutcome,
   parseTask,
   readAgentUsage,
   runAttempt,
@@ -167,6 +168,7 @@ function stubbedHarness({ pull = 0, harness = 0, verdict = 'pass' }) {
     }
     if (command === 'python3') {
       if (harness !== 0) return { code: harness, stdout: '', stderr: 'Traceback', timedOut: false };
+      if (verdict === 'unwritten') return { code: 0, stdout: '', stderr: '', timedOut: false };
       const outputDir = args.find((arg) => arg.startsWith('--output_dir=')).slice(13);
       const patches = JSON.parse(
         readFileSync(args.find((arg) => arg.startsWith('--patch_path=')).slice(13), 'utf8'),
@@ -240,6 +242,16 @@ describe('the official harness, with Docker stubbed', () => {
       failureClass: 'harness_error',
     });
     const silent = stubbedHarness({ verdict: 'none' });
+    expect(await gradePatch(fixtureTask(), 'p', options(silent.stub))).toMatchObject({
+      passed: null,
+      failureClass: 'harness_error',
+    });
+  });
+
+  it('reads no verdict an earlier grading left in the output folder', async () => {
+    const earlier = stubbedHarness({});
+    expect(await gradePatch(fixtureTask(), 'p', options(earlier.stub))).toEqual({ passed: true });
+    const silent = stubbedHarness({ verdict: 'unwritten' });
     expect(await gradePatch(fixtureTask(), 'p', options(silent.stub))).toMatchObject({
       passed: null,
       failureClass: 'harness_error',
@@ -326,6 +338,21 @@ describe('the failure class', () => {
         patch: '',
       }),
     ).toBe('harness_error');
+  });
+
+  it('carries a loop run that failed or timed out through grading, never as an agent that finished', () => {
+    expect(parseAgentOutcome('ok')).toEqual({ ok: true, timedOut: false });
+    for (const [value, failureClass] of [
+      ['failed', 'agent_failed'],
+      ['timeout', 'agent_timeout'],
+    ]) {
+      const outcome = parseAgentOutcome(value);
+      expect(classifyAttempt({ grade: { passed: false }, agent: outcome, patch: '' })).toBe(
+        failureClass,
+      );
+    }
+    expect(() => parseAgentOutcome(undefined)).toThrow(/one of ok, failed, timeout/);
+    expect(() => parseAgentOutcome('crashed')).toThrow(/one of ok, failed, timeout/);
   });
 });
 

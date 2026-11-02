@@ -175,10 +175,13 @@ Each phase lands on its own.
 The machinery is built, and the pilot has not run. Its pieces are these:
 
 - The harness runner is `yarn bench:swe-pro`, a development script beside the loop's own measurement. It clones a task's repository at its base commit, captures the patch against that commit, pulls the task image and runs the official harness with local Docker.
-- `attempt` runs arm (a) whole. Arms (b) and (c) run between `materialize` and `grade`, with the folder bound to Proving Ground through the host lane.
-- The evaluation writer is `writeBenchmarkAttemptEvaluation` in `@aflow/cybernetic-runtime`. It writes through `writeRunEvaluationEnvelope` into the envelope's `benchmark` slot.
-- A verdict records `ran` with a score of 1 or 0. An attempt the harness gave no verdict on records `error`, so a broken pipeline cannot lower a pass rate.
-- Tenant, run, work root and harness checkout are flags with no default.
+- `designate` marks Proving Ground as the measurement space, under `benchmarkMeasurement` in the space's metadata.
+- `attempt` runs arm (a) whole. It creates the attempt's workflow run in Proving Ground, marked under `benchmarkAttempt` in the run's metadata.
+- Arms (b) and (c) run between `materialize` and `grade`, with the folder bound to Proving Ground through the host lane. `grade` records on the loop's run named by `--run`, and takes the loop's outcome as `--agent-outcome`.
+- The evaluation writer is `writeBenchmarkAttemptEvaluation` in `@aflow/cybernetic-runtime`. It refuses a run outside the measurement space before any write. It also refuses an eval-batch trial and a run marked as another attempt.
+- The writer writes through `writeRunEvaluationEnvelope` into the envelope's `benchmark` slot only. A production suite's `decision` and `summary` on the same run stay as the suite wrote them.
+- `benchmarkVerdict` reads the slot as `pass`, `fail` or `unscored`. An attempt the harness gave no verdict on is `unscored`, so a broken pipeline cannot lower a pass rate.
+- Tenant, space, work root and harness checkout are flags with no default.
 
 **P2 — Scale (D4).** _Exit:_ pass rates with intervals for all three arms are in this document.
 

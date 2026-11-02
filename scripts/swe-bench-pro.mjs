@@ -314,6 +314,9 @@ export async function gradePatch(task, patch, options) {
   const samplePath = join(resolve(gradeDir), 'sample.jsonl');
   const patchPath = join(resolve(gradeDir), 'patches.json');
   const outputDir = join(resolve(gradeDir), 'harness-output');
+  // An earlier grading in this folder left its own eval_results.json. A
+  // harness that writes nothing this time would otherwise hand that one back.
+  await rm(outputDir, { recursive: true, force: true });
   await writeFile(samplePath, `${JSON.stringify(task.raw)}\n`);
   await writeFile(
     patchPath,
@@ -344,6 +347,28 @@ export async function gradePatch(task, patch, options) {
     };
   }
   return { passed: verdict };
+}
+
+/** How the agent that worked a folder ended, as `grade --agent-outcome` names it. */
+export const AGENT_OUTCOMES = /** @type {const} */ ({
+  ok: { ok: true, timedOut: false },
+  failed: { ok: false, timedOut: false },
+  timeout: { ok: false, timedOut: true },
+});
+
+/**
+ * The agent's outcome for an arm the runner did not start. It has no default:
+ * a loop run that failed must not grade as an agent that finished.
+ *
+ * @param {string | undefined} value
+ */
+export function parseAgentOutcome(value) {
+  const allowed = Object.keys(AGENT_OUTCOMES).join(', ');
+  if (value === undefined) throw new Error(`The agent's outcome is one of ${allowed}.`);
+  if (!Object.hasOwn(AGENT_OUTCOMES, value)) {
+    throw new Error(`The agent's outcome is one of ${allowed}, not ${value}.`);
+  }
+  return AGENT_OUTCOMES[/** @type {keyof typeof AGENT_OUTCOMES} */ (value)];
 }
 
 /**

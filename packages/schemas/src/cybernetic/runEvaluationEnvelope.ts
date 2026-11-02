@@ -77,8 +77,9 @@ export type BenchmarkArm = z.infer<typeof BenchmarkArmSchema>;
 
 /**
  * Why a benchmark attempt did not pass. `tests_failed` is the official
- * harness's verdict. `image_unavailable` and `harness_error` mean the harness
- * gave no verdict, so the attempt is unscored rather than failed.
+ * harness's verdict. `materialize_failed`, `image_unavailable` and
+ * `harness_error` mean the harness gave no verdict, so the attempt is
+ * unscored rather than failed.
  */
 export const BenchmarkFailureClassSchema = z.enum([
   'materialize_failed',
@@ -113,6 +114,28 @@ export const BenchmarkAttemptResultSchema = z.object({
 });
 export type BenchmarkAttemptResult = z.infer<typeof BenchmarkAttemptResultSchema>;
 
+/**
+ * Plan 341 D5 — what marks a space as the measurement space, under the
+ * `benchmarkMeasurement` key of `spaces.metadata`. The benchmark writer
+ * records an attempt only on a run in a space that carries it.
+ */
+export const BenchmarkMeasurementSpaceMarkerSchema = z.object({
+  benchmark: z.literal('swe-bench-pro'),
+});
+export type BenchmarkMeasurementSpaceMarker = z.infer<typeof BenchmarkMeasurementSpaceMarkerSchema>;
+
+/**
+ * Plan 341 D6 — what marks a workflow run as one benchmark task attempt,
+ * under the `benchmarkAttempt` key of `workflow_runs.metadata`. The runner
+ * stamps it on the run it creates for the bare-harness arm.
+ */
+export const BenchmarkRunMarkerSchema = z.object({
+  benchmark: z.literal('swe-bench-pro'),
+  instanceId: z.string().min(1),
+  arm: BenchmarkArmSchema,
+});
+export type BenchmarkRunMarker = z.infer<typeof BenchmarkRunMarkerSchema>;
+
 export const RunEvaluationEnvelopeSchema = z.object({
   /**
    * Present on every terminal run (the post-run hook always writes it,
@@ -127,7 +150,11 @@ export const RunEvaluationEnvelopeSchema = z.object({
   summary: RunEvaluationSummarySchema.optional(),
   judgeSelection: z.array(JudgeCriterionSelectionSchema).optional(),
   outcomeEvaluation: RunOutcomeEvaluationSchema.optional(),
-  /** Present on a benchmark task attempt (Plan 341 D6). */
+  /**
+   * Present on a benchmark task attempt (Plan 341 D6). The official harness's
+   * verdict lives here and only here. It never fills `summary`, which stays
+   * the production suite's, so neither verdict overwrites the other.
+   */
   benchmark: BenchmarkAttemptResultSchema.optional(),
   /** Present when decision = 'error'. */
   errorMessage: z.string().optional(),
