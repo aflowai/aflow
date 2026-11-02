@@ -4,12 +4,15 @@
  * Every `setInterval` call and every `refetchInterval` a query is handed in the
  * shared product and the local application must belong to an entry below. Each
  * entry names one timer the way the background-work registry names a service's
- * loop, and says why no event the page holds can replace it. A timer missing
- * from the list fails, and so does an entry whose timer has gone.
+ * loop, and says why no event the page holds can replace it. A `setInterval`
+ * the background-work registry already declares as a scan exception is read
+ * from that declaration, so its reason and bound live in one place. A timer
+ * missing from both fails, and so does an entry whose timer has gone.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { dirname, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, extname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { BACKGROUND_SCAN_EXCEPTIONS } from '@aflow/schemas';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
@@ -33,7 +36,7 @@ interface TabTimer {
   readonly bound: string;
 }
 
-const TAB_TIMERS: readonly TabTimer[] = [
+const LOCAL_TAB_TIMERS: readonly TabTimer[] = [
   {
     id: 'web.eval_batch_live_refetch',
     site: 'packages/web-product/src/ui/components/evals-tab/EvalsTab.tsx',
@@ -83,35 +86,6 @@ const TAB_TIMERS: readonly TabTimer[] = [
       "Every 15 seconds, half the orchestrator's 30-second lease, while a chat screen's connection notice is mounted.",
   },
   {
-    id: 'web.session_presence_heartbeat',
-    site: 'packages/web-product/src/ui/hooks/use-session-presence.ts',
-    mechanism: 'setInterval',
-    count: 1,
-    reason:
-      "It sends and reads nothing. The heartbeat keeps the tab's presence entry alive, so its absence is the signal that the viewer left. It also carries whether the tab is still typing.",
-    bound:
-      'One per open session per tab, every 15 seconds inside the 45-second presence TTL. It stops with the subscription.',
-  },
-  {
-    id: 'web.oauth_popup_close_watch',
-    site: 'packages/web-product/src/ui/lib/oauthConsentPopup.ts',
-    mechanism: 'setInterval',
-    count: 1,
-    reason:
-      'The browser fires no event when the user closes a window the page opened. Reading popup.closed is the only way to learn it, and it calls no API.',
-    bound:
-      'One per consent popup, every 600 milliseconds. It stops when the popup closes or the component unmounts.',
-  },
-  {
-    id: 'web.realtime_socket_ping',
-    site: 'packages/web-product/src/ui/lib/realtimeClient.ts',
-    mechanism: 'setInterval',
-    count: 1,
-    reason:
-      'A protocol keepalive on the one realtime socket, which reads nothing. It keeps an idle socket open through proxies and lets a dead one show.',
-    bound: 'One per tab, every 25 seconds while the socket is open.',
-  },
-  {
     id: 'web.api_query_refetch_interval',
     site: 'packages/web-product/src/ui/hooks/useApiQuery.ts',
     mechanism: 'refetchInterval',
@@ -121,6 +95,32 @@ const TAB_TIMERS: readonly TabTimer[] = [
     bound: 'None of its own. Each caller is an entry with its own bound.',
   },
 ];
+
+/** `use-session-presence.ts` -> `web.use_session_presence`. */
+function registeredTimerId(site: string): string {
+  const stem = basename(site, extname(site))
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .replace(/-/g, '_')
+    .toLowerCase();
+  return `web.${stem}`;
+}
+
+const REGISTERED_TAB_TIMERS: readonly TabTimer[] = BACKGROUND_SCAN_EXCEPTIONS.filter((exception) =>
+  ROOTS.some((root) => exception.site.startsWith(`${root}/`)),
+).flatMap((exception) =>
+  exception.discovery
+    .filter((claim) => claim.rule === 'setInterval')
+    .map((claim) => ({
+      id: registeredTimerId(exception.site),
+      site: exception.site,
+      mechanism: 'setInterval' as const,
+      count: claim.count,
+      reason: exception.reason,
+      bound: exception.bound,
+    })),
+);
+
+const TAB_TIMERS: readonly TabTimer[] = [...LOCAL_TAB_TIMERS, ...REGISTERED_TAB_TIMERS];
 
 function sourceFiles(dir: string): string[] {
   if (!existsSync(dir)) return [];
@@ -137,10 +137,11 @@ function sourceFiles(dir: string): string[] {
 }
 
 /**
- * A `setInterval` call, bare or through an object, and a `refetchInterval`
- * named as a property or a shorthand. Read from the syntax tree, so a comment,
- * a string, a `typeof setInterval` or a read of `opts.refetchInterval` is not a
- * timer.
+ * A `setInterval` call, bare, through an object or through an element access,
+ * and a `refetchInterval` named as a property, a shorthand, a string key or a
+ * computed key. Read from the syntax tree, so a comment, a string value, a
+ * `typeof setInterval` or a read of `opts.refetchInterval` or
+ * `opts['refetchInterval']` is not a timer.
  */
 function timersIn(file: string): TabTimerMechanism[] {
   const source = ts.createSourceFile(
@@ -152,22 +153,47 @@ function timersIn(file: string): TabTimerMechanism[] {
   );
   const found: TabTimerMechanism[] = [];
   const visit = (node: ts.Node): void => {
-    if (ts.isIdentifier(node)) {
-      const parent = node.parent;
-      if (node.text === 'setInterval') {
-        const callee =
-          ts.isPropertyAccessExpression(parent) && parent.name === node ? parent : node;
-        const call = callee.parent;
-        if (ts.isCallExpression(call) && call.expression === callee) found.push('setInterval');
-      } else if (node.text === 'refetchInterval') {
-        const isRead = ts.isPropertyAccessExpression(parent) && parent.name === node;
-        if (!isRead) found.push('refetchInterval');
+    const name = ts.isIdentifier(node) || ts.isStringLiteralLike(node) ? node.text : undefined;
+    if (name === 'setInterval') {
+      const callee = setIntervalCallee(node);
+      const call = callee?.parent;
+      if (call && ts.isCallExpression(call) && call.expression === callee) {
+        found.push('setInterval');
       }
+    } else if (name === 'refetchInterval' && isRefetchIntervalKey(node)) {
+      found.push('refetchInterval');
     }
     ts.forEachChild(node, visit);
   };
   visit(source);
   return found;
+}
+
+/** The expression a call would name: `setInterval`, `x.setInterval` or `x['setInterval']`. */
+function setIntervalCallee(node: ts.Node): ts.Node | undefined {
+  const parent = node.parent;
+  if (ts.isIdentifier(node)) {
+    return ts.isPropertyAccessExpression(parent) && parent.name === node ? parent : node;
+  }
+  return ts.isElementAccessExpression(parent) && parent.argumentExpression === node
+    ? parent
+    : undefined;
+}
+
+function isRefetchIntervalKey(node: ts.Node): boolean {
+  const parent = node.parent;
+  if (ts.isIdentifier(node)) {
+    return !(ts.isPropertyAccessExpression(parent) && parent.name === node);
+  }
+  if (ts.isComputedPropertyName(parent)) return true;
+  return (
+    (ts.isPropertyAssignment(parent) ||
+      ts.isPropertySignature(parent) ||
+      ts.isPropertyDeclaration(parent) ||
+      ts.isMethodDeclaration(parent) ||
+      ts.isBindingElement(parent)) &&
+    parent.name === node
+  );
 }
 
 function key(site: string, mechanism: TabTimerMechanism): string {
@@ -225,8 +251,9 @@ describe('tab timers', () => {
     expect(
       mismatches,
       "A tab reads on events or on the operator's action, never on a timer. Read on an event " +
-        'the page already holds. A timer that has to stay needs an entry in TAB_TIMERS with the ' +
-        'reason no event can replace it. An entry for one timer in a file does not cover a second.',
+        'the page already holds. A timer that has to stay needs an entry in LOCAL_TAB_TIMERS, or ' +
+        'for a setInterval a scan exception in the background-work registry, with the reason no ' +
+        'event can replace it. An entry for one timer in a file does not cover a second.',
     ).toEqual([]);
   });
 });
