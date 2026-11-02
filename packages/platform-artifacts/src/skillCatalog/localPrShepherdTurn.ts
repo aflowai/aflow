@@ -5,7 +5,7 @@ import { bind, ctx, NUMBER, out, REPOSITORY, SKIP } from './localPrShepherdWirin
 /**
  * Turns over the loop's pull requests (Plan 321 P2): a pass aimed at none
  * tends one, so passes on a schedule tend the one after the last one tended.
- * Ordered by GitHub's `updated_at` instead, the pull request a pass had just
+ * Ordered by when each was last updated instead, the pull request a pass had just
  * written its handoff on could stay first, and every other wait behind it.
  * The turn only advises: a pass that cannot read it tends the newest, and two
  * passes that read the same turn meet at the branch's lease.

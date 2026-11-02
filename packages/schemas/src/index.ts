@@ -21,6 +21,9 @@ export * from './runtime/index.js';
 // Operation schemas (canonical input/output for each operation)
 export * from './operations/index.js';
 
+// The forge vocabulary and its providers (Plan 340)
+export * from './forge/index.js';
+
 // Utilities (schema conversion, OpenAPI generation)
 export * from './utils/index.js';
 

@@ -3,6 +3,7 @@
  * a task's output, a run input, a bound name, and the reads and lease takers
  * that more than one of them binds through.
  */
+import { skillForgeFor } from '../forge/index.js';
 
 export function ctx(operation: string) {
   return {
@@ -130,11 +131,17 @@ export function leaseValue(name: string) {
 }
 
 /**
- * A GitHub read's output as everything after it reads it: GitHub's status and
- * the body its preset shaped. The call's headers, timings and refs are not
- * kept, so no task binding the whole output carries them on.
+ * The forge the loop's skills speak to (Plan 340 D1), named from the repo
+ * coordinate's default host. Every forge call a task makes is one of its acts.
  */
-export const GITHUB_READ_PROJECTION = {
+export const FORGE = skillForgeFor();
+
+/**
+ * A forge read's output as everything after it reads it: the forge's status
+ * and the record its provider shaped. The call's headers, timings and refs are
+ * not kept, so no task binding the whole output carries them on.
+ */
+export const FORGE_READ_PROJECTION = {
   statusCode: { path: 'statusCode', onMissing: 'error' as const },
   data: { path: 'data', onMissing: 'null' as const },
 };
@@ -178,20 +185,4 @@ export function outputFields(
     });
   }
   return { bindings, value };
-}
-
-export function github(
-  endpointId: string,
-  params: Record<string, unknown>,
-  transformPresetId?: unknown,
-) {
-  return {
-    apiId: 'github',
-    endpointId,
-    params,
-    response: {
-      format: 'json',
-      ...(transformPresetId !== undefined ? { transformPresetId } : {}),
-    },
-  };
 }

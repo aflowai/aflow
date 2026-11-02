@@ -1,8 +1,4 @@
-import {
-  SHEPHERD_HANDS_OFF_LABEL,
-  SHEPHERD_RESPONSE_PRESETS,
-  type WorkflowRunDecideRule,
-} from '@aflow/schemas';
+import { SHEPHERD_HANDS_OFF_LABEL, type WorkflowRunDecideRule } from '@aflow/schemas';
 import { HANDOFF_PIN_PATH } from './localPrShepherdHandoff.js';
 import {
   AFTER_REVIEW_BINDINGS,
@@ -10,7 +6,7 @@ import {
   SETTLE_AFTER_REVIEW_TASK,
 } from './publishLocalChangesAfterReview.js';
 import { SHEPHERD_BUDGET_SPENT } from './localPrShepherdRules.js';
-import { bind, ctx, github, out, runInput, SKIP } from './localPrShepherdWiring.js';
+import { bind, ctx, FORGE, out, runInput, SKIP } from './localPrShepherdWiring.js';
 import { BASE, REPOSITORY } from './publishLocalChangesRepository.js';
 import { REVIEW_TASK_IDS, reviewBindings, reviewValue } from './publishLocalChangesReview.js';
 
@@ -195,17 +191,13 @@ export function overrideTasks(checksCleared: { anyOf: string[]; onMissingRef: ty
         prefix: out('read-push-approval', 'branchPolicy.branchPrefix'),
       },
       context: ctx('api.http.call'),
-      inputTemplate: github(
-        'listPullRequests',
-        {
-          owner: bind('owner'),
-          repo: bind('repo'),
-          head: { $concat: [bind('owner'), ':', bind('branch')] },
-          base: bind('base'),
-          state: 'open',
-        },
-        { $concat: [`${SHEPHERD_RESPONSE_PRESETS.pullRequests}:`, bind('prefix')] },
-      ),
+      inputTemplate: FORGE.listChangeRequests.ofBranch({
+        owner: bind('owner'),
+        repo: bind('repo'),
+        branch: bind('branch'),
+        base: bind('base'),
+        prefix: bind('prefix'),
+      }),
     },
 
     {
@@ -255,18 +247,13 @@ export function overrideTasks(checksCleared: { anyOf: string[]; onMissingRef: ty
         commentId: out('read-override-pin', 'dataJson.commentId'),
       },
       context: ctx('api.http.call'),
-      inputTemplate: github(
-        'getIssueComment',
-        { owner: bind('owner'), repo: bind('repo'), comment_id: bind('commentId') },
-        {
-          $concat: [
-            `${SHEPHERD_RESPONSE_PRESETS.handoff}:`,
-            { $firstOf: [{ $text: [bind('author')] }, ''] },
-            ':',
-            { $text: [bind('number')] },
-          ],
-        },
-      ),
+      inputTemplate: FORGE.readHandoff({
+        owner: bind('owner'),
+        repo: bind('repo'),
+        comment: bind('commentId'),
+        author: bind('author'),
+        number: bind('number'),
+      }),
       outputProjection: {
         statusCode: { path: 'statusCode', onMissing: 'error' as const },
         data: { path: 'data', onMissing: 'error' as const },
