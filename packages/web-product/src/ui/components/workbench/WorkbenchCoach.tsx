@@ -85,7 +85,9 @@ export function WorkbenchCoach({
  * with no read and no timer of its own. It counts the Coach's proposals from
  * the Action Center. It shows **Reviewing** for a review the entity-events
  * stream has seen start and not end, the stream the board's run feed holds.
- * A stall, or a review that began before the stream, shows once expanded.
+ * The Coach's completion ends it, and so does its session's status event when
+ * the session fails, is cancelled, stalls or pauses. A stall, or a review
+ * that began before the stream, shows once expanded.
  */
 export function WorkbenchCoachFold({
   state,

@@ -378,6 +378,44 @@ describe('what the open dock reads (D3 budget)', () => {
     expect(net.topics.slice(page.topics)).toEqual([]);
   });
 
+  it.each([
+    ['a new chat', ''],
+    ['a named conversation', `session=${SESSION}`],
+  ])('reads nothing on a clock once open on %s', async (_, search) => {
+    vi.useFakeTimers({
+      toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'],
+      shouldAdvanceTime: true,
+    });
+    try {
+      net.sessions = [conversation()];
+      net.workflows = [{ slug: 'weekly-roundup', name: 'Weekly roundup' }];
+      net.runs = [
+        {
+          runId: 'r1',
+          status: 'running',
+          workflowSlug: 'weekly-roundup',
+          startedAt: new Date().toISOString(),
+        },
+      ];
+      await land(search);
+      expect(dockOpen()).toBe(true);
+      const reads = net.reads.length;
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60 * 60_000);
+      });
+      await settle();
+      // The composer's orchestrator health read is the page's one reviewed
+      // timer (D3): a stopped orchestrator sends no event. The dock reads
+      // nothing on a clock.
+      const onClock = net.reads.slice(reads);
+      expect(onClock.filter((r) => r !== '/api/health/orchestrator')).toEqual([]);
+      expect(onClock.length).toBeLessThanOrEqual(240);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('reads Integrations only once the operator expands it', async () => {
     await land('');
     expect(dockOpen()).toBe(true);
@@ -432,7 +470,7 @@ describe('what a folded header carries (D3)', () => {
   }
 
   let eventSeq = 0;
-  async function entityEvent(eventType: string) {
+  async function entityEvent(eventType: string, payload: Record<string, unknown> = {}) {
     eventSeq += 1;
     const event = {
       eventId: `e-${String(eventSeq)}`,
@@ -441,7 +479,7 @@ describe('what a folded header carries (D3)', () => {
       tenantId: 't',
       timestamp: Date.now(),
       causedBySessionId: COACH,
-      payload: {},
+      payload,
       summary: eventType,
     };
     const listeners = net.listeners.get('space.entity_events') ?? [];
@@ -454,12 +492,36 @@ describe('what a folded header carries (D3)', () => {
   }
 
   it('badges the live skill runs on the folded Skills header', async () => {
+    net.workflows = [{ slug: 'weekly-roundup', name: 'Weekly roundup' }];
     net.runs = [run('r1', 'running'), run('r2', 'running'), run('r3', 'paused')];
     await land('');
     expect(dockOpen()).toBe(true);
     const skills = header('Skills');
     expect(skills?.querySelector('[title="2 running"]')).not.toBeNull();
     expect(skills?.querySelector('[title="1 paused"]')).not.toBeNull();
+  });
+
+  it('badges on the folded Skills header only the runs the expanded list shows', async () => {
+    net.workflows = [
+      { slug: 'weekly-roundup', name: 'Weekly roundup' },
+      { slug: 'old-digest', name: 'Old digest', purgedAt: new Date().toISOString() },
+    ];
+    net.runs = [
+      run('r1', 'running'),
+      { ...run('r2', 'running'), workflowSlug: 'old-digest' },
+      { ...run('r3', 'paused'), workflowSlug: 'not-in-the-list' },
+    ];
+    await land('');
+    const skills = header('Skills');
+    expect(skills?.querySelector('[title="1 running"]')).not.toBeNull();
+    expect(skills?.querySelector('[title$="paused"]')).toBeNull();
+
+    const toggle = [...container.querySelectorAll('button[aria-expanded]')].find(
+      (b) => b.textContent === 'Skills',
+    );
+    await click(toggle ?? null);
+    expect(container.textContent).toContain('Weekly roundup');
+    expect(container.textContent).not.toContain('Old digest');
   });
 
   it('leaves a platform workflow’s run off the folded Skills header, as the list does', async () => {
@@ -490,6 +552,21 @@ describe('what a folded header carries (D3)', () => {
     expect(net.reads.some((r) => r.includes('/active-surface'))).toBe(false);
     expect(net.reads.some((r) => r.includes('/anomalies'))).toBe(false);
   });
+
+  it.each(['FAILED', 'CANCELLED', 'STALLED'])(
+    'drops a review whose Coach session moves to %s, which sends no completion',
+    async (status) => {
+      await land('');
+      await entityEvent('entity.coach.activated');
+      await entityEvent('entity.session.status', { sessionId: COACH, status: 'RUNNING' });
+      expect(header('Coach review')?.textContent).toContain('Reviewing');
+
+      await entityEvent('entity.session.status', { sessionId: COACH, status });
+      expect(header('Coach review')?.textContent).not.toContain('Reviewing');
+      expect(header('Coach review')?.querySelector('a')).toBeNull();
+      expect(net.reads.some((r) => r.includes('/active-surface'))).toBe(false);
+    },
+  );
 
   it('reads the Coach’s state only once the operator expands the section', async () => {
     net.coach = coach('stalled');

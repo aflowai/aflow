@@ -22,6 +22,41 @@ export interface WorkbenchSkill {
   archivedAt?: string | null;
 }
 
+/** A workflow as the space's workflow list returns it. */
+export interface WorkbenchWorkflow {
+  slug: string;
+  name: string;
+  mode?: string;
+  system?: boolean;
+  purgedAt?: string | null;
+  archivedAt?: string | null;
+}
+
+/**
+ * The skills the Skills section lists: the space's workflows less the
+ * platform's own and the purged. The folded header badges the runs of these
+ * and no others (`skillRuns`), so the header and the list agree.
+ */
+export function skillsFromWorkflows(workflows: readonly WorkbenchWorkflow[]): WorkbenchSkill[] {
+  return workflows
+    .filter((w) => !w.system && !w.purgedAt)
+    .map((w) => ({
+      slug: w.slug,
+      name: w.name,
+      ...(w.mode ? { mode: w.mode } : {}),
+      archivedAt: w.archivedAt ?? null,
+    }));
+}
+
+/** The live runs the Skills section shows: those whose workflow is a listed skill. */
+export function skillRuns(
+  runs: readonly SpaceWorkflowRunSummary[],
+  skills: readonly WorkbenchSkill[],
+): SpaceWorkflowRunSummary[] {
+  const listed = new Set(skills.map((s) => s.slug));
+  return runs.filter((r) => listed.has(r.workflowSlug));
+}
+
 /**
  * Skills (Plan 228 §3.3) — the single home for the agent's skills **and their
  * runs** (Runner). Each skill is a row; skills with a live run float to the top

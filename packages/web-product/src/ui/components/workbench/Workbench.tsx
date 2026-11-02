@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, type ComponentProps } from 'react';
+import { useMemo } from 'react';
 import { Column } from '@aflow/design-system';
 
 import { useApiQuery } from '../../hooks/useApiQuery.js';
@@ -11,20 +11,17 @@ import { WorkbenchSchedules } from './WorkbenchSchedules.js';
 import { useSpacePeople } from '../../hooks/use-space-people.js';
 import { WorkbenchCoachFold, WorkbenchProposalSources } from './WorkbenchCoach.js';
 import { WorkbenchLazySection } from './WorkbenchSection.js';
-import { LiveRunBadges, WorkbenchSkills, type WorkbenchSkill } from './WorkbenchSkills.js';
+import {
+  LiveRunBadges,
+  WorkbenchSkills,
+  skillRuns,
+  skillsFromWorkflows,
+  type WorkbenchWorkflow,
+} from './WorkbenchSkills.js';
 import { WorkbenchApplets } from './WorkbenchApplets.js';
 import { WorkbenchAgents } from './WorkbenchAgents.js';
 import { WorkbenchIntegrations } from './WorkbenchIntegrations.js';
 import { WorkbenchRecentConversations } from './WorkbenchRecentConversations.js';
-
-interface WorkflowListItem {
-  slug: string;
-  name: string;
-  mode?: string;
-  system?: boolean;
-  purgedAt?: string | null;
-  archivedAt?: string | null;
-}
 
 /**
  * The Space Workbench (Plan 228): a space-wide board of what's happening in the
@@ -81,15 +78,14 @@ export function Workbench({
     () => new Map((workflowList.data?.workflows ?? []).map((w) => [w.slug, w.name] as const)),
     [workflowList.data],
   );
-  // The live runs Skills lists once expanded, from the feed the board already
-  // holds, less the platform's own workflows. A list that fails to read
-  // leaves every run counted, so the header never hides a live run.
-  const skillRuns = useMemo(() => {
-    const system = new Set(
-      (workflowList.data?.workflows ?? []).filter((w) => w.system).map((w) => w.slug),
-    );
-    return runsState.runs.filter((r) => !system.has(r.workflowSlug));
-  }, [runsState.runs, workflowList.data]);
+  // The skills Skills lists once expanded, and their live runs from the feed
+  // the board already holds. The folded header badges these same runs, so it
+  // and the list read one rule.
+  const skills = useMemo(
+    () => skillsFromWorkflows(workflowList.data?.workflows ?? []),
+    [workflowList.data],
+  );
+  const liveSkillRuns = useMemo(() => skillRuns(runsState.runs, skills), [runsState.runs, skills]);
 
   // What each paused run is waiting on, said as a person. Derived from the
   // open items rather than the run row, so the label and the card that
@@ -125,12 +121,14 @@ export function Workbench({
           <WorkbenchLazySection
             title="Skills"
             icon="skill"
-            meta={<LiveRunBadges runs={skillRuns} />}
+            meta={<LiveRunBadges runs={liveSkillRuns} />}
           >
-            <WorkbenchSkillList
+            <WorkbenchSkills
               spaceId={spaceId}
               spaceSlug={spaceSlug}
-              activeRuns={runsState.runs}
+              skills={skills}
+              loading={workflowList.isLoading}
+              activeRuns={liveSkillRuns}
               waitingOnByRun={waitingOnByRun}
               onRun={(skill) => {
                 seed(`Run the "${skill.name}" skill. `);
@@ -177,36 +175,13 @@ export function Workbench({
   );
 }
 
-/** The space's workflows, archived included, under one key the board and Skills share. */
+/** The space's workflows, archived included, under the key other pages read it by. */
 function useWorkflowList(spaceId: string) {
-  return useApiQuery<{ workflows: WorkflowListItem[] }>({
+  return useApiQuery<{ workflows: WorkbenchWorkflow[] }>({
     key: ['space', spaceId, 'workflows', 'all'],
     path: `/spaces/${spaceId}/workflows?archived=true`,
     spaceId,
     staleTime: 30_000,
     enabled: !!spaceId,
   });
-}
-
-/** The Skills section, reading the list the board has already read. */
-function WorkbenchSkillList({
-  spaceId,
-  ...rest
-}: Omit<ComponentProps<typeof WorkbenchSkills>, 'skills' | 'loading'>) {
-  const skillsQuery = useWorkflowList(spaceId);
-  const skills = useMemo<WorkbenchSkill[]>(
-    () =>
-      (skillsQuery.data?.workflows ?? [])
-        .filter((w) => !w.system && !w.purgedAt)
-        .map((w) => ({
-          slug: w.slug,
-          name: w.name,
-          ...(w.mode ? { mode: w.mode } : {}),
-          archivedAt: w.archivedAt ?? null,
-        })),
-    [skillsQuery.data],
-  );
-  return (
-    <WorkbenchSkills {...rest} spaceId={spaceId} skills={skills} loading={skillsQuery.isLoading} />
-  );
 }
