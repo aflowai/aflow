@@ -227,6 +227,7 @@ import { applyMigration233 } from './migration233.js';
 import { applyMigration234 } from './migration234.js';
 import { applyMigration235 } from './migration235.js';
 import { applyMigration236 } from './migration236.js';
+import { applyMigration237 } from './migration237.js';
 
 /** Migrations 1–33 — skipped when schema_migrations already records version 34. */
 export const PRE_TAXONOMY_MIGRATIONS: readonly TenantMigrationFn[] = [
@@ -459,6 +460,7 @@ export const POST_TAXONOMY_MIGRATIONS: readonly TenantMigrationFn[] = [
   applyMigration234,
   applyMigration235,
   applyMigration236,
+  applyMigration237,
 ];
 
 export { applyMigration001 } from './migration001.js';
@@ -687,3 +689,4 @@ export { applyMigration233 } from './migration233.js';
 export { applyMigration234 } from './migration234.js';
 export { applyMigration235 } from './migration235.js';
 export { applyMigration236 } from './migration236.js';
+export { applyMigration237 } from './migration237.js';
