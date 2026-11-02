@@ -77,7 +77,9 @@ import {
 import type { PlanNodePatch, PlanNodeStore } from './store.js';
 import type { PlanPlaceAnchor } from './placement.js';
 import { carrierNode, PLAN_CARRIER_FINDINGS_LIMIT } from './carrier.js';
+import { designApprovalRefusal } from './designApproval.js';
 import {
+  createdNoteTooLong,
   notFound,
   openHasNoOutcome,
   operatorNoteTooLong,
@@ -85,6 +87,8 @@ import {
   refusalDetails,
   reopenedNote,
   reopenedNoteTooLong,
+  residentCreates,
+  residentUnblocks,
   sameColumn,
   stale,
   unchanged,
@@ -114,6 +118,7 @@ export type PlanOpErrorCode =
   | 'PLAN_NODE_ATTESTATION_UNAVAILABLE'
   | 'PLAN_NODE_RESIDENT_SCOPE'
   | 'PLAN_NODE_LIVE_CHECK_PERSON'
+  | 'PLAN_NODE_DESIGN_NOT_MERGED'
   | 'PLAN_LEARNING_NOT_FOUND';
 
 export interface PlanOpError {
@@ -227,41 +232,6 @@ export function liveCheckHead(check: PlanNodeLiveCheck): string {
   return `${PLAN_NODE_LIVE_CHECK_HEAD}waits on a person to read the connected folder's head holding ${holding} (host.binding.inspect with \`holds\`); the merged step closed on its merge.`;
 }
 
-function residentCreates(): PlanOpError {
-  return {
-    ok: false,
-    code: 'PLAN_NODE_RESIDENT_SCOPE',
-    message:
-      'A resident wake proposes work and never approves its own scope, so nothing was written. Create the node ' +
-      'with `proposed` saying why it is worth doing — it is created blocked until a person approves it — or, for ' +
-      'a merged node whose criteria need the change running on the stack, with `liveCheck`.',
-  };
-}
-
-function residentUnblocks(current: PlanNode): PlanOpError {
-  return {
-    ok: false,
-    code: 'PLAN_NODE_RESIDENT_SCOPE',
-    message:
-      `Plan node "${current.title}" is ${current.status}, and only a person approves, closes or reopens it — Approve on the plan ` +
-      'page or in the Action Center. A resident wake writes what the node waits on in its note and leaves its ' +
-      'status as it stands; nothing was written.',
-    details: { nodeId: current.nodeId, status: current.status },
-  };
-}
-
-function createdNoteTooLong(noteLength: number): PlanOpError {
-  return {
-    ok: false,
-    code: 'PLAN_NODE_NOTE_TOO_LONG',
-    message:
-      `A node created blocked has its first line say what it waits on, above the note, which would then hold ` +
-      `${String(noteLength)} characters; a note holds at most ${String(PLAN_NODE_PROSE_MAX_CHARS)}, so nothing was ` +
-      'written. Pass a shorter `note`, or none.',
-    details: { noteLength, noteMaxChars: PLAN_NODE_PROSE_MAX_CHARS },
-  };
-}
-
 /**
  * A node starts as `planNodeCreatedStatus` says (Plan 339 D6): approved work
  * `active`, and `blocked` only for a proposal (Plan 331 D5), a live check (D8)
@@ -283,6 +253,15 @@ export async function createPlanNode(
           ? `${PLAN_NODE_ASK_HEAD}${waitsOn.decision.replace(/\s*\n\s*/g, ' ')}`
           : undefined;
   if (ctx.resident === true && head === undefined) return residentCreates();
+  const status = planNodeCreatedStatus(input);
+  const notMerged = await designApprovalRefusal(ctx, {
+    ...(input.work !== undefined ? { work: input.work } : {}),
+    ...(input.card !== undefined ? { card: input.card } : {}),
+    status,
+    parentId,
+    ...(input.position !== undefined ? { position: input.position } : {}),
+  });
+  if (notMerged !== undefined) return notMerged;
   const given = input.note !== undefined && input.note !== '' ? input.note : null;
   const note = head === undefined ? given : given === null ? head : `${head}\n${given}`;
   if (note !== null && note.length > PLAN_NODE_PROSE_MAX_CHARS) {
@@ -298,7 +277,7 @@ export async function createPlanNode(
     ...(input.card !== undefined ? { card: input.card } : {}),
     ...(input.position !== undefined ? { position: input.position } : {}),
     createdBy: ctx.createdBy ?? null,
-    status: planNodeCreatedStatus(input),
+    status,
   });
   if (inserted.outcome === 'inserted') {
     return nodeWritten(ctx, { ok: true as const, node: inserted.node });
@@ -476,6 +455,18 @@ async function writePlanNode(
       details: { nodeId: current.nodeId },
     };
   }
+  const landsUnder = input.parentId !== undefined ? input.parentId : current.parentId;
+  const card = input.card ?? current.card;
+  const position =
+    input.position ?? (landsUnder === current.parentId ? current.position : undefined);
+  const notMerged = await designApprovalRefusal(ctx, {
+    nodeId: current.nodeId,
+    ...(card !== undefined ? { card } : {}),
+    status,
+    parentId: landsUnder,
+    ...(position !== undefined ? { position } : {}),
+  });
+  if (notMerged !== undefined) return notMerged;
 
   const pullRequest =
     ctx.resident === true && input.status === 'done'

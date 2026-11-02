@@ -79,7 +79,7 @@ export function planCards(
 /** Each reason a step waits on the operator, as the rail names it above Approve. */
 export const WAIT_REASON_LABEL: Record<PlanNodeWaitsOn['reason'], string> = {
   design_decision: 'a design decision',
-  design_document: 'a new plan’s design document',
+  design_approval: 'a merged design document to read and approve',
   decision_change: 'a change to a plan’s decision',
   authority: 'policy, egress, write authority or confinement',
   operator_question: 'a question for you',

@@ -601,7 +601,7 @@ function fullNode(nodeId: string, title: string, extra: Partial<PlanNode> = {}):
 
 /** What a blocked step asks the operator, in its card (Plan 339 D6): the rail's Approve needs it. */
 const WAITS_ON = {
-  reason: 'design_document',
+  reason: 'design_approval',
   decision: 'Approve the help article’s design document.',
 } as const;
 
