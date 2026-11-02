@@ -2,8 +2,10 @@
  * The phase after P0 asks the operator to approve P0's merged design document
  * (Plan 339 D6), so that ask is written only once the document exists: the
  * plan's P0, its first step not dropped, has closed done with its design
- * document linked. The gate judges the node as the write lands it: its card,
- * resent or stored, and P0 among the siblings the write leaves.
+ * document linked. The gate meets only the write that moves the node out of
+ * blocked: the create that lands the ask, or the update that turns it active.
+ * It judges the node as that write lands it: its card, resent or stored, and
+ * P0 among the siblings the write leaves.
  */
 import {
   PLAN_TREE_DEPTH_LIMIT,
@@ -81,7 +83,8 @@ async function designDocumentMerged(
 }
 
 /**
- * The refusal of a write that lands an open node asking for `design_approval`,
+ * The refusal of a create, or an update from blocked to active, that lands an
+ * open node asking for `design_approval`,
  * through its `work` or its card's `waitsOn`, before P0's design document has
  * merged.
  */

@@ -22,9 +22,12 @@ import {
   UI_NOT_SEEN_PREVIEW_UNAVAILABLE,
 } from './localBrowserRule.js';
 import {
+  PLAN_DOCUMENT_FORM,
+  REVIEW_CRITERIA,
   REVIEW_FINDING_SCHEMA,
   REVIEW_LOCAL_CHANGES,
   REVIEW_PREVIEW_PARAGRAPH,
+  REVIEW_SEVERITIES,
 } from './reviewLocalChanges.js';
 import { runSkillTasks, type TaskAnswer } from '../__tests__/runSkillTasks.js';
 import { skillGuidance } from '../__tests__/skillGuidance.js';
@@ -110,7 +113,7 @@ describe('Review Local Changes — the first harness inside a skill', () => {
     const required = (wf.runInputs ?? []).filter((i) => i.required).map((i) => i.id);
     expect(required).toEqual(['bindingId', 'at']);
     expect(task?.inputBindings?.['bindingId']).toMatchObject({ kind: 'run_input' });
-    expect(Object.keys(template?.inputs ?? {})).toEqual(['range', 'focus', 'depth']);
+    expect(Object.keys(template?.inputs ?? {})).toEqual(['range', 'focus', 'depth', 'criteria']);
     expect(template?.outputSchema).not.toHaveProperty('x-reviewRequest');
     expect(reviewBrief()).toContain('inputs of this task');
   });
@@ -637,5 +640,48 @@ describe('Review Local Changes — needs_setup where the review had no browser (
     const findings = (wf.stateVariables ?? []).find((v) => v.variableId === 'findings');
     expect(findings?.writers).toBe('append');
     expect(findings?.description).toContain('`needs_setup`');
+  });
+});
+
+describe('Review Local Changes — the plan form, as data the review reads', () => {
+  const call = HostHarnessRunInputSchema.parse(
+    substituteTemplateBinds(
+      task?.inputTemplate ?? {},
+      { bindingId: 'hb_repo', from: 'main', at: 'HEAD' },
+      new Set(Object.keys(task?.inputBindings ?? {})),
+    ),
+  );
+  const severityOf = (fragment: string) =>
+    PLAN_DOCUMENT_FORM.requires.find((c) => c.requires.includes(fragment))?.severityWhenUnmet;
+
+  it('hands the harness the plan form beside the range, scoped to plan documents by path', () => {
+    expect(call.inputs?.['criteria']).toEqual(REVIEW_CRITERIA);
+    expect(REVIEW_CRITERIA).toEqual([
+      expect.objectContaining({
+        appliesTo: expect.stringContaining('under docs/plans/, by its path'),
+      }),
+    ]);
+    expect(REVIEW_CRITERIA[0]?.requires).toEqual(PLAN_DOCUMENT_FORM.requires);
+  });
+
+  it('grades each part of the form at the severity the plan form sets', () => {
+    expect(severityOf('problem section')).toBe('major');
+    expect(severityOf('alternative it rejected')).toBe('major');
+    expect(severityOf('exit a reader can check')).toBe('major');
+    expect(severityOf('proof section')).toBe('major');
+    expect(severityOf('recommendation')).toBe('minor');
+    expect(severityOf('leaves alone')).toBe('minor');
+    expect(severityOf('status line')).toBe('major');
+    for (const criterion of PLAN_DOCUMENT_FORM.requires) {
+      expect(Object.keys(REVIEW_SEVERITIES)).toContain(criterion.severityWhenUnmet);
+    }
+  });
+
+  it('says what a plan holds whatever its domain, naming no code, repository or test', () => {
+    expect(JSON.stringify(PLAN_DOCUMENT_FORM)).not.toMatch(/code|repositor|test|docs\/|file/i);
+  });
+
+  it('leaves the review’s prose as it was: the brief names no plan document', () => {
+    expect(call.task).not.toMatch(/docs\/plans|plan document|criteria/i);
   });
 });

@@ -459,13 +459,17 @@ async function writePlanNode(
   const card = input.card ?? current.card;
   const position =
     input.position ?? (landsUnder === current.parentId ? current.position : undefined);
-  const notMerged = await designApprovalRefusal(ctx, {
-    nodeId: current.nodeId,
-    ...(card !== undefined ? { card } : {}),
-    status,
-    parentId: landsUnder,
-    ...(position !== undefined ? { position } : {}),
-  });
+  // Only the write that approves the ask meets the gate: an active phase stays writable after P0 reopens.
+  const approves = current.status === 'blocked' && status === 'active';
+  const notMerged = approves
+    ? await designApprovalRefusal(ctx, {
+        nodeId: current.nodeId,
+        ...(card !== undefined ? { card } : {}),
+        status,
+        parentId: landsUnder,
+        ...(position !== undefined ? { position } : {}),
+      })
+    : undefined;
   if (notMerged !== undefined) return notMerged;
 
   const pullRequest =

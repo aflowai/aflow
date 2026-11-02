@@ -62,6 +62,47 @@ export const REVIEW_SEVERITY_ONTOLOGY = Object.entries(REVIEW_SEVERITIES)
   .map(([severity, meaning]) => `${severity}: ${meaning}`)
   .join(' ');
 
+/** One thing a document of some form must hold, and the severity of a finding where it does not. */
+export interface ReviewCriterion {
+  requires: string;
+  severityWhenUnmet: ReviewSeverity;
+}
+
+/**
+ * What a plan document holds, whatever its domain. The form names
+ * no domain's artifacts, so the review of a plan for any domain reads it alike.
+ */
+export const PLAN_DOCUMENT_FORM = {
+  form: 'A plan document',
+  requires: [
+    {
+      requires: 'A problem section that states what is wrong today, in the operator’s terms.',
+      severityWhenUnmet: 'major',
+    },
+    {
+      requires: 'Each decision names an alternative it rejected and why that alternative lost.',
+      severityWhenUnmet: 'major',
+    },
+    { requires: 'Each phase names an exit a reader can check.', severityWhenUnmet: 'major' },
+    { requires: 'A proof section that says how the plan is proven.', severityWhenUnmet: 'major' },
+    { requires: 'Each open question carries a recommendation.', severityWhenUnmet: 'minor' },
+    { requires: 'A list of what the plan leaves alone.', severityWhenUnmet: 'minor' },
+    {
+      requires: 'A status line that agrees with the phase entries.',
+      severityWhenUnmet: 'major',
+    },
+  ] satisfies ReviewCriterion[],
+};
+
+/**
+ * The criteria the review reads beside its range, each scoped to the changed
+ * files it judges. A plan document is chosen by its path alone, never by
+ * what its text says.
+ */
+export const REVIEW_CRITERIA = [
+  { appliesTo: 'Each changed file under docs/plans/, by its path alone.', ...PLAN_DOCUMENT_FORM },
+];
+
 /** The most findings one review returns. */
 export const REVIEW_FINDINGS_MAX = 50;
 
@@ -333,6 +374,7 @@ const REVIEW_TASKS = [
         },
         focus: bind('focus'),
         depth: bind('depth'),
+        criteria: REVIEW_CRITERIA,
       },
       ...RULE_INPUTS,
       outputSchema: RESULT_SCHEMA,
@@ -353,7 +395,7 @@ const REVIEW_TASKS = [
 
 const REVIEW_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'review-local-changes',
-  version: 13,
+  version: 14,
   name: 'Review Local Changes',
   tagline:
     "Review committed changes in a connected repository with the machine's own coding agent.",
