@@ -120,6 +120,7 @@ the wrong shape, change the plan rather than quietly diverging from it.
 | [338](338-the-operator-learns-what-waits-on-them.md)                        | The operator learns what waits on them                          |
 | [339](339-the-loop-moves-on-events.md)                                      | The loop moves on events                                        |
 | [340](340-the-loop-works-against-any-forge.md)                              | The loop works against any forge (P1 built)                     |
+| [341](341-the-machine-is-measured.md)                                       | The machine is measured                                         |
 
 ## What a plan is not
 
