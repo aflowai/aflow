@@ -12,6 +12,13 @@ import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WORKBENCH_COLLAPSED_STORAGE_KEY } from '../lib/workbench-dock-memory.js';
+import { __resetForTests as resetActionCenterBroker } from '../hooks/action-center-broker.js';
+import { __resetForTests as resetCoachSurfaceBroker } from '../hooks/coach-surface-broker.js';
+import { __resetForTests as resetEntityEventsBroker } from '../hooks/entity-events-broker.js';
+import { __resetForTests as resetMediaBytesBroker } from '../hooks/media-bytes-broker.js';
+import { __resetForTests as resetSessionEventsBroker } from '../hooks/session-events-broker.js';
+import { ThemeProvider } from '../providers/theme.js';
+import { ChatPage } from './space-chat.js';
 
 const SPACE = '00000000-0000-4000-8000-000000000338';
 const USER = '00000000-0000-4000-8000-0000000000aa';
@@ -216,7 +223,7 @@ let root: Root;
 let client: QueryClient;
 let renderPage: () => void;
 
-beforeEach(async () => {
+beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   Object.defineProperty(window, 'innerWidth', { value: 1440, configurable: true });
   window.matchMedia = ((query: string) => ({
@@ -253,11 +260,13 @@ beforeEach(async () => {
   net.actionItems = [];
   net.integrations = false;
   net.listeners = new Map();
-  // Fresh modules per test: the realtime brokers are module-level and
-  // refcounted, so a second page in one registry would find its topics held.
-  vi.resetModules();
-  const { ChatPage } = await import('./space-chat.js');
-  const { ThemeProvider } = await import('../providers/theme.js');
+  // The realtime brokers are module-level and refcounted, and a released topic
+  // lingers for a teardown grace, so the next page would find it still held.
+  resetActionCenterBroker();
+  resetCoachSurfaceBroker();
+  resetEntityEventsBroker();
+  resetMediaBytesBroker();
+  resetSessionEventsBroker();
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   container = document.createElement('div');
   document.body.appendChild(container);
