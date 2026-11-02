@@ -7,7 +7,7 @@ import { useApiQuery } from '../../hooks/useApiQuery.js';
 import { useActionCenter } from '../../hooks/use-action-center.js';
 import { useSpaceWorkflowRuns } from '../../hooks/use-space-workflow-runs.js';
 import { WorkbenchNeedsAttention, waitingOnLabel } from './WorkbenchNeedsAttention.js';
-import { WorkbenchSchedules } from './WorkbenchSchedules.js';
+import { FoldedSchedulesNotice, WorkbenchSchedules } from './WorkbenchSchedules.js';
 import { useSpacePeople } from '../../hooks/use-space-people.js';
 import { WorkbenchCoachFold, WorkbenchProposalSources } from './WorkbenchCoach.js';
 import { WorkbenchLazySection } from './WorkbenchSection.js';
@@ -20,7 +20,7 @@ import {
 } from './WorkbenchSkills.js';
 import { WorkbenchApplets } from './WorkbenchApplets.js';
 import { WorkbenchAgents } from './WorkbenchAgents.js';
-import { WorkbenchIntegrations } from './WorkbenchIntegrations.js';
+import { FoldedIntegrationsSetupCount, WorkbenchIntegrations } from './WorkbenchIntegrations.js';
 import { WorkbenchRecentConversations } from './WorkbenchRecentConversations.js';
 
 /**
@@ -47,10 +47,14 @@ import { WorkbenchRecentConversations } from './WorkbenchRecentConversations.js'
  * of (2), and the Coach's, is folded and mounts only when the operator expands
  * it (Plan 338 D3, where the reads are counted). A folded header still shows
  * what would have put the section in front of the operator, from what the
- * page holds and with no read or timer of its own: the live runs on Skills,
- * from the run feed (1) holds, and the Coach's proposals and a review the
- * entity-events stream has seen start. The workflow list is read on open,
- * because recent conversations names runs by it.
+ * page holds and with no read or timer of its own. Skills shows its live runs
+ * from the run feed (1) holds. Schedules counts the Action Center's notices
+ * that an agent set one up. Integrations counts the Action Center's connection
+ * requests, joined by the readiness reads once an expand has left them in the
+ * cache. The Coach shows its proposals and a review the entity-events stream
+ * has seen start. Applets and Agents ask nothing of the operator, so their
+ * headers carry nothing. The workflow list is read on open, because recent
+ * conversations names runs by it.
  */
 export function Workbench({
   spaceId,
@@ -115,7 +119,11 @@ export function Workbench({
           <WorkbenchProposalSources state={actionCenter} spaceSlug={spaceSlug} />
           {/* Folded below this line (Plan 338 D3): each section mounts, and
               reads, only when the operator expands it. */}
-          <WorkbenchLazySection title="Schedules" icon="clock">
+          <WorkbenchLazySection
+            title="Schedules"
+            icon="clock"
+            meta={<FoldedSchedulesNotice state={actionCenter} />}
+          >
             <WorkbenchSchedules state={actionCenter} spaceId={spaceId} spaceSlug={spaceSlug} />
           </WorkbenchLazySection>
           <WorkbenchLazySection
@@ -155,8 +163,21 @@ export function Workbench({
           </WorkbenchLazySection>
           {/* Last of the inventory: an integration is the substrate the other
               two run on, not work in its own right, so it sits below them. */}
-          <WorkbenchLazySection title="Integrations" icon="plugs-connected">
-            <WorkbenchIntegrations spaceId={spaceId} spaceSlug={spaceSlug} />
+          <WorkbenchLazySection
+            title="Integrations"
+            icon="plugs-connected"
+            meta={
+              <FoldedIntegrationsSetupCount
+                spaceId={spaceId}
+                connectionRequests={actionCenter.lanes.connections}
+              />
+            }
+          >
+            <WorkbenchIntegrations
+              spaceId={spaceId}
+              spaceSlug={spaceSlug}
+              connectionRequests={actionCenter.lanes.connections}
+            />
           </WorkbenchLazySection>
           <WorkbenchCoachFold state={actionCenter} spaceId={spaceId} spaceSlug={spaceSlug} />
         </Column>

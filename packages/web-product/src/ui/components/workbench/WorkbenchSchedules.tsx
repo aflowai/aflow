@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Column } from '@aflow/design-system';
+import { Column, Text } from '@aflow/design-system';
 
 import type { UseActionCenterResult } from '../../hooks/use-action-center.js';
 import { chatSchedulesKey, useChatSchedules } from '../../hooks/use-space-schedules.js';
@@ -33,6 +33,23 @@ import {
  * it only tells this section to read the schedules again, because the notice
  * arrives live and the schedules read does not.
  */
+/**
+ * The folded Schedules header's signal that an agent set up a schedule. It
+ * counts the trigger_armed notices in the Action Center the board already
+ * holds, because the schedules read waits for the operator to expand the
+ * section. A notice can outlive its schedule, so this says what an agent did
+ * and leaves what still runs to the expanded list.
+ */
+export function FoldedSchedulesNotice({ state }: { state: UseActionCenterResult }) {
+  const count = state.lanes.notices.filter((item) => item.kind === 'trigger_armed').length;
+  if (count === 0) return null;
+  return (
+    <Text size="xs" variant="muted">
+      {count} set up by an agent
+    </Text>
+  );
+}
+
 export function WorkbenchSchedules({
   state,
   spaceId,

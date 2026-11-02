@@ -33,6 +33,8 @@ const net = vi.hoisted(() => ({
   runs: [] as Array<Record<string, unknown>>,
   workflows: [] as Array<Record<string, unknown>>,
   coach: null as Record<string, unknown> | null,
+  actionItems: [] as Array<Record<string, unknown>>,
+  integrations: false,
   listeners: new Map<string, Array<(event: unknown, cursor: string) => void>>(),
 }));
 
@@ -93,7 +95,25 @@ function respond(path: string): unknown {
   if (path.includes('/sessions?')) return net.failSessionList ? FAILED : { sessions: net.sessions };
   const direct = net.sessions.find((s) => path.endsWith(`/sessions/${String(s['sessionId'])}`));
   if (direct) return direct;
-  if (path.includes('/action-center')) return { items: [] };
+  if (path.includes('/action-center')) {
+    const kind = new URLSearchParams(path.split('?')[1] ?? '').get('kind');
+    return { items: net.actionItems.filter((item) => !kind || item['kind'] === kind) };
+  }
+  if (net.integrations) {
+    if (path.endsWith('/integrations/mcp/servers')) {
+      return { definitions: [{ serverId: 'docs', name: 'Docs' }] };
+    }
+    if (path.endsWith('/integrations/mcp/bindings')) {
+      return {
+        bindings: [{ serverId: 'docs', authType: 'bearer', credentialKeys: [], enabled: true }],
+      };
+    }
+    if (path.endsWith('/integrations/definitions')) return { definitions: [] };
+    if (path.endsWith('/integrations/bindings')) return { bindings: [] };
+    if (path.endsWith('/integrations/credentials')) return { credentials: [] };
+    if (path.endsWith('/integrations/repo-bindings')) return { repoBindings: [] };
+    if (path.endsWith('/users/me/oauth-connections')) return { connections: [] };
+  }
   if (path.endsWith(`/spaces/${SPACE}`)) return { id: SPACE, directives: {} };
   return undefined;
 }
@@ -230,6 +250,8 @@ beforeEach(async () => {
   net.runs = [];
   net.workflows = [];
   net.coach = null;
+  net.actionItems = [];
+  net.integrations = false;
   net.listeners = new Map();
   // Fresh modules per test: the realtime brokers are module-level and
   // refcounted, so a second page in one registry would find its topics held.
@@ -535,6 +557,92 @@ describe('what a folded header carries (D3)', () => {
   it('shows no badge on the folded Skills header with no live run', async () => {
     await land('');
     expect(header('Skills')?.querySelector('[title$="running"], [title$="paused"]')).toBeNull();
+  });
+
+  function actionItem(id: string, kind: string, fields: Record<string, unknown>) {
+    return {
+      id,
+      spaceId: SPACE,
+      kind,
+      title: id,
+      summary: '',
+      requestedAt: new Date(Date.now() - HOUR).toISOString(),
+      requestedBy: { kind: 'agent', label: 'Helmsman' },
+      priority: 'normal',
+      relatesTo: [],
+      allowedActions: ['dismiss'],
+      audience: 'you',
+      status: 'open',
+      ...fields,
+    };
+  }
+
+  const githubConsent = () =>
+    actionItem('consent-github', 'needs_oauth_consent', {
+      origin: {
+        type: 'step',
+        runId: 'run-1',
+        stepExecutionId: 'step-1',
+        sessionId: SESSION,
+        pauseVersion: 1,
+        operationId: 'api.github.call',
+      },
+      allowedActions: ['connect'],
+      extension: {
+        kind: 'oauth_consent',
+        integrationKind: 'api',
+        resourceKey: 'github',
+        bindingId: 'binding-1',
+        ownerScope: 'user',
+        reason: 'never_connected',
+      },
+    });
+
+  const toggle = (title: string, expanded: boolean) =>
+    [...container.querySelectorAll(`button[aria-expanded="${String(expanded)}"]`)].find(
+      (b) => b.textContent === title,
+    ) ?? null;
+
+  it('says on the folded Schedules header that an agent set one up, with no read', async () => {
+    net.actionItems = [
+      actionItem('armed-1', 'trigger_armed', {
+        origin: { type: 'trigger_armed', scheduleId: 'sch-1', createdAt: new Date().toISOString() },
+      }),
+    ];
+    await land('');
+    expect(dockOpen()).toBe(true);
+    expect(header('Schedules')?.textContent).toContain('1 set up by an agent');
+    expect(net.reads.some((r) => r.includes('/schedules'))).toBe(false);
+  });
+
+  it('shows nothing on the folded Schedules header with no notice', async () => {
+    await land('');
+    expect(header('Schedules')?.textContent).not.toContain('set up by an agent');
+  });
+
+  it('counts the connection requests on the folded Integrations header, with no read', async () => {
+    net.actionItems = [githubConsent()];
+    await land('');
+    expect(dockOpen()).toBe(true);
+    expect(header('Integrations')?.textContent).toContain('1 needs setup');
+    expect(net.reads.some((r) => r.includes('/integrations/'))).toBe(false);
+    expect(net.reads.some((r) => r.includes('/oauth-connections'))).toBe(false);
+  });
+
+  it('keeps the expanded Integrations count on the folded header, with no read once folded', async () => {
+    net.integrations = true;
+    net.actionItems = [githubConsent()];
+    await land('');
+    expect(header('Integrations')?.textContent).toContain('1 needs setup');
+
+    await click(toggle('Integrations', false));
+    expect(toggle('Integrations', true)?.parentElement?.textContent).toContain('2 need setup');
+
+    await click(toggle('Integrations', true));
+    const reads = net.reads.length;
+    await settle();
+    expect(header('Integrations')?.textContent).toContain('2 need setup');
+    expect(net.reads.slice(reads)).toEqual([]);
   });
 
   it('shows a review the entity-events stream starts, with its session, and drops it when it ends', async () => {

@@ -130,8 +130,9 @@ export interface UseApiQueryOptions {
   /** Suspend the query (don't fetch). Mirrors TanStack semantics. */
   enabled?: boolean;
   /**
-   * Refetch interval in ms. Use sparingly — SSE is the live channel.
-   * Polling is reserved for endpoints with no event stream.
+   * Refetch interval in ms. A tab reads on events or on the operator's
+   * action, so a caller that passes this needs an entry in
+   * `tabTimers.test.ts` saying why no event can replace it.
    */
   refetchInterval?: number;
   /**
