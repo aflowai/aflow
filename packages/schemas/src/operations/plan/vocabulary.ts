@@ -194,18 +194,32 @@ function withoutHalfPair(cut: string): string {
 }
 
 /**
+ * Where to cut `text` at or before `end` without parting a backslash from the
+ * character it escapes. An odd run of backslashes before `end` leaves the last
+ * one escaping `text[end]`, and cut there it would render as a lone backslash.
+ * An even run pairs with itself, so the cut stands.
+ */
+function outsideEscapePair(text: string, end: number): number {
+  let run = 0;
+  while (run < end && text[end - 1 - run] === '\\') run++;
+  return run % 2 === 1 && MARKDOWN_ESCAPABLE.test(text[end] ?? '') ? end - 1 : end;
+}
+
+/**
  * A prefix of inline markdown, at most `budget` characters, that leaves no
  * code span, link, autolink or emphasis run open. It ends at the last point
  * where none stands open, where that lies in the last
  * `INLINE_CUT_TAIL_CHARS` of the budget. Otherwise it cuts at the budget and
  * escapes each opener left open there. A stray `*`, `` ` ``, `[` or `<` then
- * costs a backslash, never more than the tail.
+ * costs a backslash, never more than the tail. That cut never falls inside an
+ * escape pair such as `\*`.
  */
 function inlineMarkdownCut(text: string, budget: number): string {
   const { safe } = scanInlineMarkdown(text, budget);
   if (safe >= budget - INLINE_CUT_TAIL_CHARS) return withoutHalfPair(text.slice(0, safe));
   let end = budget;
   for (;;) {
+    end = outsideEscapePair(text, end);
     const escaped = escapeOpenConstructs(withoutHalfPair(text.slice(0, end)));
     if (escaped.length <= budget) return escaped;
     end -= escaped.length - budget;

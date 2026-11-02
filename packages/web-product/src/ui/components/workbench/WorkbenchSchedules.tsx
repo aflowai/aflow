@@ -2,12 +2,17 @@
 
 import { useEffect, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Column } from '@aflow/design-system';
+import { Column, Text } from '@aflow/design-system';
 
 import type { UseActionCenterResult } from '../../hooks/use-action-center.js';
 import { chatSchedulesKey, useChatSchedules } from '../../hooks/use-space-schedules.js';
 import { ScheduleCard } from '../schedule-card.js';
-import { WorkbenchSection } from './WorkbenchSection.js';
+import {
+  WorkbenchEmptyRow,
+  WorkbenchSection,
+  WorkbenchSectionPending,
+  useWorkbenchSectionFold,
+} from './WorkbenchSection.js';
 
 /**
  * The active schedules an agent set up in chat, each folded to one line: its
@@ -20,12 +25,31 @@ import { WorkbenchSection } from './WorkbenchSection.js';
  * work waiting on this person, and a schedule that only runs on its own would
  * inflate it into a queue nobody can empty. The operator still has to learn
  * that an agent scheduled a run, so it is shown, plainly, next to the section
- * that does claim attention, and it disappears when there is nothing to say.
+ * that does claim attention. The Workbench folds it (Plan 338 D3), so it reads
+ * the schedules only once the operator opens it. Outside a fold it disappears
+ * when there is nothing to say.
  *
  * The trigger_armed notice still reaches the Action Center's notices lane. Here
  * it only tells this section to read the schedules again, because the notice
  * arrives live and the schedules read does not.
  */
+/**
+ * The folded Schedules header's signal that an agent set up a schedule. It
+ * counts the trigger_armed notices in the Action Center the board already
+ * holds, because the schedules read waits for the operator to expand the
+ * section. A notice can outlive its schedule, so this says what an agent did
+ * and leaves what still runs to the expanded list.
+ */
+export function FoldedSchedulesNotice({ state }: { state: UseActionCenterResult }) {
+  const count = state.lanes.notices.filter((item) => item.kind === 'trigger_armed').length;
+  if (count === 0) return null;
+  return (
+    <Text size="xs" variant="muted">
+      {count} set up by an agent
+    </Text>
+  );
+}
+
 export function WorkbenchSchedules({
   state,
   spaceId,
@@ -35,7 +59,8 @@ export function WorkbenchSchedules({
   spaceId: string;
   spaceSlug: string;
 }) {
-  const { data } = useChatSchedules(spaceId);
+  const { data, isLoading } = useChatSchedules(spaceId);
+  const fold = useWorkbenchSectionFold();
   const schedules = data?.schedules ?? [];
 
   const queryClient = useQueryClient();
@@ -47,7 +72,11 @@ export function WorkbenchSchedules({
     void queryClient.invalidateQueries({ queryKey: chatSchedulesKey(spaceId) });
   }, [noticeIds, queryClient, spaceId]);
 
-  if (schedules.length === 0) return null;
+  if (schedules.length === 0 && isLoading)
+    return <WorkbenchSectionPending title="Schedules" icon="clock" />;
+  // Folded, the header already shows, so an empty list says so instead of
+  // taking the header away the moment the operator opened it.
+  if (schedules.length === 0 && !fold) return null;
 
   return (
     <WorkbenchSection
@@ -55,11 +84,15 @@ export function WorkbenchSchedules({
       icon="clock"
       link={{ href: `/s/${spaceSlug}/triggers`, label: 'Schedules' }}
     >
-      <Column gap="xs">
-        {schedules.map((schedule) => (
-          <ScheduleCard key={schedule.id} schedule={schedule} variant="compact" />
-        ))}
-      </Column>
+      {schedules.length === 0 ? (
+        <WorkbenchEmptyRow label="No schedules set up in chat" />
+      ) : (
+        <Column gap="xs">
+          {schedules.map((schedule) => (
+            <ScheduleCard key={schedule.id} schedule={schedule} variant="compact" />
+          ))}
+        </Column>
+      )}
     </WorkbenchSection>
   );
 }

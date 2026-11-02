@@ -7,7 +7,12 @@ import { useApiQuery } from '../../hooks/useApiQuery.js';
 import { spaceRoute } from '../../lib/space-routes.js';
 import type { SpaceWorkflowRunSummary } from '../../hooks/use-space-workflow-runs.js';
 import { WorkbenchRunRow } from './WorkbenchRunRow.js';
-import { WorkbenchEmptyRow, WorkbenchLink, WorkbenchSection } from './WorkbenchSection.js';
+import {
+  WorkbenchEmptyRow,
+  WorkbenchLink,
+  WorkbenchSection,
+  WorkbenchSectionPending,
+} from './WorkbenchSection.js';
 import { useRoomActivity } from '../../hooks/use-room-activity.js';
 
 export interface WorkbenchSkill {
@@ -15,6 +20,41 @@ export interface WorkbenchSkill {
   name: string;
   mode?: string;
   archivedAt?: string | null;
+}
+
+/** A workflow as the space's workflow list returns it. */
+export interface WorkbenchWorkflow {
+  slug: string;
+  name: string;
+  mode?: string;
+  system?: boolean;
+  purgedAt?: string | null;
+  archivedAt?: string | null;
+}
+
+/**
+ * The skills the Skills section lists: the space's workflows less the
+ * platform's own and the purged. The folded header badges the runs of these
+ * and no others (`skillRuns`), so the header and the list agree.
+ */
+export function skillsFromWorkflows(workflows: readonly WorkbenchWorkflow[]): WorkbenchSkill[] {
+  return workflows
+    .filter((w) => !w.system && !w.purgedAt)
+    .map((w) => ({
+      slug: w.slug,
+      name: w.name,
+      ...(w.mode ? { mode: w.mode } : {}),
+      archivedAt: w.archivedAt ?? null,
+    }));
+}
+
+/** The live runs the Skills section shows: those whose workflow is a listed skill. */
+export function skillRuns(
+  runs: readonly SpaceWorkflowRunSummary[],
+  skills: readonly WorkbenchSkill[],
+): SpaceWorkflowRunSummary[] {
+  const listed = new Set(skills.map((s) => s.slug));
+  return runs.filter((r) => listed.has(r.workflowSlug));
 }
 
 /**
@@ -64,7 +104,7 @@ export function WorkbenchSkills({
   }, [skills, activeBySlug]);
 
   const empty = skills.length === 0;
-  if (empty && loading) return null;
+  if (empty && loading) return <WorkbenchSectionPending title="Skills" icon="skill" />;
 
   return (
     <WorkbenchSection
@@ -97,6 +137,29 @@ export function WorkbenchSkills({
         </Column>
       )}
     </WorkbenchSection>
+  );
+}
+
+/**
+ * How many of `runs` are paused and how many running, as a skill row shows
+ * them. The folded Skills header shows the same badges for the space.
+ */
+export function LiveRunBadges({ runs }: { runs: readonly SpaceWorkflowRunSummary[] }) {
+  const pausedCount = runs.filter((r) => r.status === 'paused').length;
+  const runningCount = runs.filter((r) => r.status === 'running').length;
+  return (
+    <>
+      {pausedCount > 0 && (
+        <Badge variant="paused" title={`${String(pausedCount)} paused`}>
+          {String(pausedCount)}
+        </Badge>
+      )}
+      {runningCount > 0 && (
+        <Badge variant="running" title={`${String(runningCount)} running`}>
+          {String(runningCount)}
+        </Badge>
+      )}
+    </>
   );
 }
 
@@ -149,9 +212,6 @@ function WorkbenchSkillRow({
   );
   const activity = useRoomActivity(spaceId, roomIds);
 
-  const pausedCount = active.filter((r) => r.status === 'paused').length;
-  const runningCount = active.filter((r) => r.status === 'running').length;
-
   return (
     <div
       style={{
@@ -199,16 +259,7 @@ function WorkbenchSkillRow({
           </Text>
         </button>
         {skill.archivedAt && <Badge variant="neutral">Archived</Badge>}
-        {pausedCount > 0 && (
-          <Badge variant="paused" title={`${String(pausedCount)} paused`}>
-            {String(pausedCount)}
-          </Badge>
-        )}
-        {runningCount > 0 && (
-          <Badge variant="running" title={`${String(runningCount)} running`}>
-            {String(runningCount)}
-          </Badge>
-        )}
+        <LiveRunBadges runs={active} />
         <Tooltip content="Open skill">
           <IconButton
             icon={<Icon name="eye" size="sm" />}

@@ -3,13 +3,19 @@
 import { Column, ListingAvatar, Row, Text, Tooltip } from '@aflow/design-system';
 
 import { spaceRoute } from '../../lib/space-routes.js';
+import type { ActionCenterItem } from '../../hooks/use-action-center-types.js';
 import {
+  integrationNeedsSetup,
   useSpaceIntegrations,
   type IntegrationFamily,
   type IntegrationReadiness,
   type SpaceIntegration,
 } from '../../hooks/use-space-integrations.js';
-import { WorkbenchEmptyRow, WorkbenchSection } from './WorkbenchSection.js';
+import {
+  WorkbenchEmptyRow,
+  WorkbenchSection,
+  WorkbenchSectionPending,
+} from './WorkbenchSection.js';
 
 const KIND_LABEL: Record<SpaceIntegration['kind'], string> = {
   api: 'API',
@@ -57,14 +63,18 @@ const READINESS_DOT: Record<IntegrationReadiness, string> = {
 export function WorkbenchIntegrations({
   spaceId,
   spaceSlug,
+  connectionRequests,
 }: {
   spaceId: string;
   spaceSlug: string;
+  /** The Action Center's connections lane, which the board already holds. */
+  connectionRequests: readonly ActionCenterItem[];
 }) {
   const { integrations, isLoading } = useSpaceIntegrations(spaceId);
 
   const empty = integrations.length === 0;
-  if (empty && isLoading) return null;
+  if (empty && isLoading)
+    return <WorkbenchSectionPending title="Integrations" icon="plugs-connected" />;
 
   const families = FAMILY_ORDER.map((family) => ({
     family,
@@ -72,20 +82,14 @@ export function WorkbenchIntegrations({
   })).filter((group) => group.items.length > 0);
   const captioned = families.length > 1;
 
-  const needsAttention = integrations.filter(
-    (i) => i.readiness === 'attention' || i.readiness === 'error',
-  ).length;
-
   return (
     <WorkbenchSection
       title="Integrations"
       icon="plugs-connected"
       meta={
-        needsAttention > 0 ? (
-          <Text size="xs" style={{ color: 'var(--color-warning-default)' }}>
-            {needsAttention} need{needsAttention === 1 ? 's' : ''} setup
-          </Text>
-        ) : null
+        <IntegrationsSetupCount
+          count={countIntegrationsNeedingSetup(integrations, connectionRequests)}
+        />
       }
       // Both doors are the integrations surface rather than the store, because
       // connecting is promoting an API / adding an MCP server / binding a repo,
@@ -120,6 +124,47 @@ export function WorkbenchIntegrations({
         </Column>
       )}
     </WorkbenchSection>
+  );
+}
+
+/**
+ * How many integrations wait on the operator. One count serves the expanded
+ * header and the folded one. It joins the integrations whose readiness asks for
+ * setup with the ones the Action Center asks the operator to connect. An
+ * integration in both counts once, keyed as `useSpaceIntegrations` keys it.
+ */
+export function countIntegrationsNeedingSetup(
+  integrations: readonly SpaceIntegration[],
+  connectionRequests: readonly ActionCenterItem[],
+): number {
+  const keys = new Set(integrations.filter(integrationNeedsSetup).map((i) => i.key));
+  for (const item of connectionRequests) {
+    const ext = item.extension;
+    keys.add(ext?.kind === 'oauth_consent' ? `${ext.integrationKind}:${ext.resourceKey}` : item.id);
+  }
+  return keys.size;
+}
+
+/**
+ * The folded Integrations header's count: the Action Center's connection
+ * requests, which the board holds and its stream keeps current. The readiness
+ * reads stay out. Nothing refreshes them while the section is folded, so a
+ * count joined from them would hold a setup the operator has since done.
+ */
+export function FoldedIntegrationsSetupCount({
+  connectionRequests,
+}: {
+  connectionRequests: readonly ActionCenterItem[];
+}) {
+  return <IntegrationsSetupCount count={countIntegrationsNeedingSetup([], connectionRequests)} />;
+}
+
+function IntegrationsSetupCount({ count }: { count: number }) {
+  if (count === 0) return null;
+  return (
+    <Text size="xs" style={{ color: 'var(--color-warning-default)' }}>
+      {count} need{count === 1 ? 's' : ''} setup
+    </Text>
   );
 }
 

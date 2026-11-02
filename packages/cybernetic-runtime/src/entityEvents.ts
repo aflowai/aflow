@@ -95,7 +95,7 @@ async function emitWaitKind(
   }
 }
 
-/** A loop pull request changed: its checks went green, it merged, it conflicts, or a review asked for changes. */
+/** A loop pull request changed: its checks went green or failed, it merged, it conflicts, a review asked for changes, or it closed. */
 export async function emitPullRequestChanged(
   redis: RedisClient | null | undefined,
   params: {

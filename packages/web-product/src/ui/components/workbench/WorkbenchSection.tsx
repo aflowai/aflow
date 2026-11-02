@@ -1,8 +1,87 @@
 'use client';
 
-import type { CSSProperties, ReactNode } from 'react';
-import { Column, Icon, Row, Text } from '@aflow/design-system';
+import {
+  createContext,
+  useContext,
+  useMemo,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from 'react';
+import { Column, Icon, Row, Spinner, Text } from '@aflow/design-system';
 import type { IconName } from '@aflow/design-system';
+
+interface SectionFold {
+  expanded: boolean;
+  toggle: () => void;
+}
+
+const SectionFoldContext = createContext<SectionFold | null>(null);
+
+/** Whether the section rendering this sits under a fold — so it renders even while empty. */
+export function useWorkbenchSectionFold(): SectionFold | null {
+  return useContext(SectionFoldContext);
+}
+
+/**
+ * A section that reads nothing until the operator expands it (Plan 338 D3).
+ * Collapsed, it renders its header alone, from what the board already holds.
+ * Expanded, it mounts `children`, whose own `WorkbenchSection` header carries
+ * the same toggle. Opening the Workbench therefore costs only the sections that
+ * are not folded.
+ */
+export function WorkbenchLazySection({
+  title,
+  icon,
+  meta,
+  trailing,
+  children,
+}: {
+  title: string;
+  icon?: IconName;
+  /** Shown on the collapsed header. It must come from data already held. */
+  meta?: ReactNode;
+  /** Section-level status on the collapsed header, as `WorkbenchSection` places it. */
+  trailing?: ReactNode;
+  children: ReactNode;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const fold = useMemo<SectionFold>(
+    () => ({
+      expanded,
+      toggle: () => {
+        setExpanded((e) => !e);
+      },
+    }),
+    [expanded],
+  );
+  return (
+    <SectionFoldContext.Provider value={fold}>
+      {expanded ? (
+        children
+      ) : (
+        <WorkbenchSection title={title} {...(icon ? { icon } : {})} meta={meta} trailing={trailing}>
+          {null}
+        </WorkbenchSection>
+      )}
+    </SectionFoldContext.Provider>
+  );
+}
+
+/**
+ * What a section renders while its first read is in flight. Outside a fold it
+ * renders nothing, as before. Under one it keeps the header the operator just
+ * clicked, so the section does not vanish until its read lands.
+ */
+export function WorkbenchSectionPending({ title, icon }: { title: string; icon?: IconName }) {
+  const fold = useWorkbenchSectionFold();
+  if (!fold) return null;
+  return (
+    <WorkbenchSection title={title} {...(icon ? { icon } : {})} trailing={<Spinner size="sm" />}>
+      {null}
+    </WorkbenchSection>
+  );
+}
 
 /**
  * The chrome every Workbench section wears. The board is read by scanning one
@@ -29,17 +108,56 @@ export function WorkbenchSection({
   style?: CSSProperties;
   children: ReactNode;
 }) {
+  const fold = useContext(SectionFoldContext);
+  const heading = (
+    <>
+      {fold && (
+        <Icon
+          name="caret-right"
+          size="xs"
+          style={{
+            flexShrink: 0,
+            color: 'var(--color-content-muted)',
+            transform: fold.expanded ? 'rotate(90deg)' : 'none',
+            transition:
+              'transform var(--transition-duration-fast) var(--transition-timing-default)',
+          }}
+        />
+      )}
+      {icon && <Icon name={icon} size="sm" style={{ color: 'var(--color-content-muted)' }} />}
+      <Text
+        size="sm"
+        weight="semibold"
+        style={{ textTransform: 'uppercase', letterSpacing: '0.04em' }}
+      >
+        {title}
+      </Text>
+    </>
+  );
   return (
     <Column gap="sm" style={style}>
       <Row gap="xs" align="center" style={{ flexShrink: 0 }}>
-        {icon && <Icon name={icon} size="sm" style={{ color: 'var(--color-content-muted)' }} />}
-        <Text
-          size="sm"
-          weight="semibold"
-          style={{ textTransform: 'uppercase', letterSpacing: '0.04em' }}
-        >
-          {title}
-        </Text>
+        {fold ? (
+          <button
+            type="button"
+            onClick={fold.toggle}
+            aria-expanded={fold.expanded}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 'var(--space-1)',
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              color: 'var(--color-text-primary)',
+              padding: 0,
+            }}
+          >
+            {heading}
+          </button>
+        ) : (
+          heading
+        )}
         {meta}
         <div style={{ flex: 1 }} />
         {trailing}

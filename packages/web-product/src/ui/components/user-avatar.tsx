@@ -45,7 +45,16 @@ function isUserProfile(obj: unknown): obj is Omit<UserProfile, 'isAdmin' | 'isOw
 }
 
 export function useCurrentUser(): UserProfile | null {
-  const { data } = useApiQuery<MeResponse>({
+  return useCurrentUserState().user;
+}
+
+/**
+ * The reader and whether the read has settled. `settled` with no user means
+ * the read failed or named nobody, so a caller waiting on the reader can stop
+ * waiting rather than wait for ever.
+ */
+export function useCurrentUserState(): { user: UserProfile | null; settled: boolean } {
+  const { data, isError, isSuccess } = useApiQuery<MeResponse>({
     key: ['users', 'me'],
     path: '/users/me',
     staleTime: 5 * 60_000,
@@ -56,7 +65,7 @@ export function useCurrentUser(): UserProfile | null {
     retryOnMount: false,
   });
 
-  return useMemo<UserProfile | null>(() => {
+  const user = useMemo<UserProfile | null>(() => {
     if (!data) return null;
     const u = data.user;
     if (!isUserProfile(u)) return null;
@@ -65,6 +74,8 @@ export function useCurrentUser(): UserProfile | null {
     const isOwner = active.some((t) => t.role === 'owner');
     return { ...u, isAdmin, isOwner };
   }, [data]);
+  const settled = isError || isSuccess;
+  return useMemo(() => ({ user, settled }), [user, settled]);
 }
 
 export function UserAvatar({ user, size = 24 }: { user: UserProfile | null; size?: number }) {
