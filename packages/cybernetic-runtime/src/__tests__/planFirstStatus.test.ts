@@ -13,6 +13,7 @@ import {
   PlanNodeCreateInputSchema,
   PlanNodeUpdateSchema,
   planNodeFirstStatus,
+  type PlanNode,
   type PlanNodeCard,
   type PlanNodeCreateInput,
   type PlanNodeWaitReason,
@@ -541,6 +542,70 @@ describe('a node’s first status (Plan 339 D6)', () => {
     });
     expect(waiting).toMatchObject({ ok: false, code: 'PLAN_NODE_DESIGN_NOT_MERGED' });
     expect(store.nodes.get(p1.node.nodeId)?.status).toBe('blocked');
+  });
+
+  /** Reopens P0, runs `write` against the stored node, then closes P0 done again and reruns it. */
+  async function refusedUntilP0Closes(
+    p0: PlanNode,
+    nodeId: string,
+    write: (revision: number) => ReturnType<typeof updatePlanNode>,
+  ) {
+    const reopened = await updatePlanNode(ctx(), {
+      nodeId: p0.nodeId,
+      expectedRevision: p0.revision,
+      status: 'active',
+    });
+    if (!reopened.ok) throw new Error(reopened.message);
+    const before = store.nodes.get(nodeId)!;
+    expect(await write(before.revision)).toMatchObject({
+      ok: false,
+      code: 'PLAN_NODE_DESIGN_NOT_MERGED',
+    });
+    expect(store.nodes.get(nodeId)).toEqual(before);
+    const closed = await updatePlanNode(ctx(), {
+      nodeId: p0.nodeId,
+      expectedRevision: reopened.node.revision,
+      status: 'done',
+      outcome: 'Merged again after review.',
+    });
+    if (!closed.ok) throw new Error(closed.message);
+    return write(before.revision);
+  }
+
+  it('refuses an update moving an active node into a blocked design_approval ask until P0 closes', async () => {
+    const { root, p0 } = await mergedP0();
+    const p1 = await create({ parentId: root.nodeId, title: 'P1 — approve the design' });
+    expect(p1.status).toBe('active');
+    const landed = await refusedUntilP0Closes(p0, p1.nodeId, (revision) =>
+      updatePlanNode(ctx(), {
+        nodeId: p1.nodeId,
+        expectedRevision: revision,
+        status: 'blocked',
+        card: card({ reason: 'design_approval', decision: 'Approve Plan 340’s design.' }),
+      }),
+    );
+    expect(landed).toMatchObject({ ok: true, node: { status: 'blocked' } });
+  });
+
+  it('refuses changing a blocked node’s card to a design_approval ask until P0 closes', async () => {
+    const { root, p0 } = await mergedP0();
+    const p1 = await create({
+      parentId: root.nodeId,
+      title: 'P1 — approve the design',
+      card: card({ reason: 'decision_change', decision: 'Change the forge decision.' }),
+    });
+    expect(p1.status).toBe('blocked');
+    const landed = await refusedUntilP0Closes(p0, p1.nodeId, (revision) =>
+      updatePlanNode(ctx(), {
+        nodeId: p1.nodeId,
+        expectedRevision: revision,
+        card: card({ reason: 'design_approval', decision: 'Approve Plan 340’s design.' }),
+      }),
+    );
+    expect(landed).toMatchObject({
+      ok: true,
+      node: { status: 'blocked', card: { waitsOn: { reason: 'design_approval' } } },
+    });
   });
 
   it.each(['done', 'dropped'] as const)(
