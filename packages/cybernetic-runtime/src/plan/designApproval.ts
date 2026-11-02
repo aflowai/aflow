@@ -2,17 +2,27 @@
  * The phase after P0 asks the operator to approve P0's merged design document
  * (Plan 339 D6), so that ask is written only once the document exists: the
  * plan's P0, its first step not dropped, has closed done with its design
- * document linked. The gate judges the node as the write lands it: its card,
- * resent or stored, and P0 among the siblings the write leaves.
+ * document linked. The gate meets only the write that moves the node out of
+ * blocked, reopens it, or lands or moves a blocked ask: the create that lands
+ * the ask, an update from blocked to any other open status, an update from
+ * done or dropped to an open one, an update that moves a node into blocked with the reason on
+ * its card, an update that changes a blocked node's card to the reason, or an
+ * update or a plan.node.place that moves a blocked ask to another parent or position.
+ * It judges the node as that write lands it: its card, resent or stored, and
+ * P0 among the siblings the write leaves.
  */
 import {
+  PLAN_NODE_POSITION_MAX,
   PLAN_TREE_DEPTH_LIMIT,
   isClosedPlanNodeStatus,
+  type PlanNode,
   type PlanNodeCard,
   type PlanNodeStatus,
+  type PlanNodeSummary,
   type PlanNodeWork,
 } from '@aflow/schemas';
 import type { PlanOpError, PlanReadContext } from './operations.js';
+import { placeAmongSiblings, type PlanPlaceAnchor } from './placement.js';
 import { bySiblingOrder } from './tree.js';
 
 const P0_PAGE = 50;
@@ -81,7 +91,8 @@ async function designDocumentMerged(
 }
 
 /**
- * The refusal of a write that lands an open node asking for `design_approval`,
+ * The refusal of a create, or an update leaving blocked, reopening a closed
+ * node, or landing or moving a blocked ask, that lands an open node asking for `design_approval`,
  * through its `work` or its card's `waitsOn`, before P0's design document has
  * merged.
  */
@@ -104,4 +115,39 @@ export async function designApprovalRefusal(
       'run active until its document merges, close it done and link the document at its merge sha, then write ' +
       'the phase that asks.',
   };
+}
+
+/**
+ * The refusal of a plan.node.place that moves a blocked node whose card names
+ * `design_approval`, judged against the siblings the placement leaves. A place
+ * the store would not write (stale, not a sibling, unchanged) is left to it.
+ */
+export async function designApprovalPlaceRefusal(
+  ctx: PlanReadContext,
+  node: PlanNode,
+  expectedRevision: number,
+  anchor: PlanPlaceAnchor,
+): Promise<PlanOpError | undefined> {
+  if (node.revision !== expectedRevision || node.status !== 'blocked') return undefined;
+  if (node.card?.waitsOn?.reason !== 'design_approval') return undefined;
+  const siblings: PlanNodeSummary[] = [];
+  for (let offset = 0; ; offset += P0_PAGE) {
+    const page = await ctx.store.listChildren(ctx.spaceId, node.parentId, P0_PAGE, offset);
+    siblings.push(...page.children);
+    if (page.children.length === 0 || siblings.length >= page.total) break;
+  }
+  if (placeAmongSiblings(siblings, node.nodeId, anchor).outcome !== 'placed') return undefined;
+  const others = siblings.filter((sibling) => sibling.nodeId !== node.nodeId);
+  const anchorId = 'before' in anchor ? anchor.before : anchor.after;
+  const anchorAt = others.findIndex((sibling) => sibling.nodeId === anchorId);
+  const p0At = others.findIndex((sibling) => sibling.status !== 'dropped');
+  const ahead = p0At === -1 || anchorAt + ('before' in anchor ? 0 : 1) <= p0At;
+  // Before or past every stored position, so the gate reads the node's place against P0 exactly.
+  return designApprovalRefusal(ctx, {
+    nodeId: node.nodeId,
+    card: node.card,
+    status: node.status,
+    parentId: node.parentId,
+    position: ahead ? -1 : PLAN_NODE_POSITION_MAX + 1,
+  });
 }

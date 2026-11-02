@@ -51,7 +51,6 @@ import {
   type PlanNodeOpen,
   type PlanNodePlaceRefusalDetails,
   type PlanNodeRevise,
-  type PlanNodeRefusalDetails,
   type PlanNodeStatus,
   type PlanNodeSummary,
   type PlanNodeUpdateInput,
@@ -77,9 +76,12 @@ import {
 import type { PlanNodePatch, PlanNodeStore } from './store.js';
 import type { PlanPlaceAnchor } from './placement.js';
 import { carrierNode, PLAN_CARRIER_FINDINGS_LIMIT } from './carrier.js';
-import { designApprovalRefusal } from './designApproval.js';
+import { designApprovalPlaceRefusal, designApprovalRefusal } from './designApproval.js';
 import {
   createdNoteTooLong,
+  dependencyCycle,
+  dependencyStale,
+  dependencyUnchanged,
   notFound,
   openHasNoOutcome,
   operatorNoteTooLong,
@@ -459,13 +461,28 @@ async function writePlanNode(
   const card = input.card ?? current.card;
   const position =
     input.position ?? (landsUnder === current.parentId ? current.position : undefined);
-  const notMerged = await designApprovalRefusal(ctx, {
-    nodeId: current.nodeId,
-    ...(card !== undefined ? { card } : {}),
-    status,
-    parentId: landsUnder,
-    ...(position !== undefined ? { position } : {}),
-  });
+  // A write that leaves blocked, reopens a closed node, lands a blocked design_approval ask or moves one
+  // meets the gate. An active phase stays writable after P0 reopens.
+  const moves =
+    (input.parentId !== undefined && input.parentId !== current.parentId) ||
+    (input.position !== undefined && input.position !== current.position);
+  const reaches =
+    (status !== current.status &&
+      (current.status === 'blocked' || isClosedPlanNodeStatus(current.status))) ||
+    (status === 'blocked' &&
+      card?.waitsOn?.reason === 'design_approval' &&
+      (moves ||
+        current.status !== 'blocked' ||
+        current.card?.waitsOn?.reason !== 'design_approval'));
+  const notMerged = reaches
+    ? await designApprovalRefusal(ctx, {
+        nodeId: current.nodeId,
+        ...(card !== undefined ? { card } : {}),
+        status,
+        parentId: landsUnder,
+        ...(position !== undefined ? { position } : {}),
+      })
+    : undefined;
   if (notMerged !== undefined) return notMerged;
 
   const pullRequest =
@@ -780,6 +797,11 @@ export async function placePlanNode(
   const { nodeId, expectedRevision } = request;
   const anchor: PlanPlaceAnchor =
     'before' in request ? { before: request.before } : { after: request.after };
+  const current = await ctx.store.find(ctx.spaceId, nodeId);
+  const notMerged = current
+    ? await designApprovalPlaceRefusal(ctx, current, expectedRevision, anchor)
+    : undefined;
+  if (notMerged !== undefined) return notMerged;
   const placed = await ctx.store.placeAtRevision(ctx.spaceId, nodeId, expectedRevision, anchor);
   const asked: PlanNodeUpdateInput = { nodeId, expectedRevision };
   switch (placed.outcome) {
@@ -1306,61 +1328,6 @@ export async function linkEndedRun(ctx: PlanWriteContext, run: EndedPlanRun): Pr
 // ============================================================================
 // plan.node.depend — compare-and-set on the waiting node's revision (Plan 322 P2)
 // ============================================================================
-
-function dependencyRefusalDetails(current: PlanNode): Record<string, unknown> {
-  const details: PlanNodeRefusalDetails = {
-    nodeId: current.nodeId,
-    revision: current.revision,
-    status: current.status,
-    updatedAt: current.updatedAt,
-    differingFields: [],
-  };
-  return details;
-}
-
-function dependencyStale(current: PlanNode, input: PlanNodeDependInput): PlanOpError {
-  return {
-    ok: false,
-    code: 'PLAN_NODE_STALE',
-    message:
-      `Plan node "${current.title}" is at revision ${String(current.revision)}; this change to what it waits on was ` +
-      `decided against revision ${String(input.expectedRevision)}, so nothing was written. Read the node with ` +
-      `plan.node.get — its dependencies are there — and write again against revision ${String(current.revision)}.`,
-    details: dependencyRefusalDetails(current),
-  };
-}
-
-function dependencyUnchanged(
-  current: PlanNode,
-  input: PlanNodeDependInput,
-  held: PlanNodeDependency | null,
-): PlanOpError {
-  const stands =
-    held === null
-      ? `does not wait on "${input.dependsOnId}"`
-      : `already waits on "${input.dependsOnId}" being ${held.condition}`;
-  return {
-    ok: false,
-    code: 'PLAN_NODE_UNCHANGED',
-    message:
-      `Plan node "${current.title}" ${stands}, so nothing was written and it stays at revision ` +
-      `${String(current.revision)}. plan.node.get lists what it waits on.`,
-    details: dependencyRefusalDetails(current),
-  };
-}
-
-function dependencyCycle(input: PlanNodeDependInput, path: readonly string[]): PlanOpError {
-  const loop = path.map((id) => `"${id}"`).join(' waits on ');
-  return {
-    ok: false,
-    code: 'PLAN_NODE_DEPENDENCY_CYCLE',
-    message:
-      `Plan node "${input.nodeId}" cannot wait on "${input.dependsOnId}": ${loop}, so none of them could ever ` +
-      'start. Nothing was written. Remove one edge of that loop with plan.node.depend and `remove: true`, or ' +
-      'wait on another node.',
-    details: { nodeId: input.nodeId, dependsOnId: input.dependsOnId, path: [...path] },
-  };
-}
 
 /**
  * Sets, changes or removes one edge: `input.nodeId` waits on
