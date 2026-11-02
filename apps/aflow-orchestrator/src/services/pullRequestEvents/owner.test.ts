@@ -249,6 +249,10 @@ describe("the owner's wait on its pull request's event", () => {
     expect(body).toContain("`bindingId: 'hb_aflow'`");
     expect(body).toContain("`pullNumber: '276'`");
     expect(body).toContain('close its plan step');
+    expect(body).toContain(
+      'On a red head the pass takes the remedy its rules choose, and publishes only a head that remedy moved.',
+    );
+    expect(body).not.toContain('commissions the fix round');
     expect(body).toContain('Never publish a red, unmoved head as it stands');
     const next = await readSubjectWaits(redis, WAITERS);
     expect(next).toHaveLength(1);

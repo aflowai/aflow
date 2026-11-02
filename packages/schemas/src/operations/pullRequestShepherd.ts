@@ -373,6 +373,24 @@ export const CheckRunsStateSchema = z.enum([
 ]);
 export type CheckRunsState = z.infer<typeof CheckRunsStateSchema>;
 
+/**
+ * The check run conclusions that fail a head: the only ones a shepherd pass
+ * acts on. The pull request event source reads red from these alone, so it
+ * fires `checks_failed` only on a head the pass reads as `failing`.
+ */
+export const CHECK_RUN_FAILED_CONCLUSIONS: ReadonlySet<string> = new Set([
+  'failure',
+  'timed_out',
+  'startup_failure',
+]);
+
+/** Conclusions of a run stopped short of a verdict. A pass waits on them, so they are not red. */
+export const CHECK_RUN_STOPPED_CONCLUSIONS: ReadonlySet<string> = new Set([
+  'cancelled',
+  'action_required',
+  'stale',
+]);
+
 export const FailingCheckRunSchema = z.object({
   /** As text, so a handoff that wrote it compares equal to it. */
   id: z.string(),

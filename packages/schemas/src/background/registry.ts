@@ -779,7 +779,7 @@ const DEFINITIONS: readonly BackgroundTaskDefinitionInput[] = [
     service: 'orchestrator',
     ownerDomain: 'plans',
     purpose:
-      'Poll the pull requests the loop has open and emit pull_request.changed when one goes green, merges, conflicts or has changes requested.',
+      'Poll the pull requests the loop has open and emit pull_request.changed when its checks go green or a check run fails, it merges, it conflicts, a review asks for changes, or it closes.',
     invariant:
       'Only a pull request a publication opened is polled, until it merges or closes. With none open the task makes no GitHub request.',
     criticality: 'feature',

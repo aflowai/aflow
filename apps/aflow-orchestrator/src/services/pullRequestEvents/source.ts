@@ -1,8 +1,8 @@
 /**
  * The pull request event source (Plan 339 D2): polls only the pull requests
  * the loop has open, and emits `pull_request.changed` when one's checks go
- * green or fail, it merges, it conflicts, a review asks for changes, or it
- * closes.
+ * green or a check run fails, it merges, it conflicts, a review asks for
+ * changes, or it closes.
  *
  * Candidate-driven under Plan 180. The publication that opens a pull request
  * arms it (`arm.ts`); its merge or its close clears it here. A cycle with no
@@ -27,7 +27,11 @@ import {
   type BackgroundTaskLogger,
   type BackgroundTaskRunner,
 } from '@aflow/lib';
-import { backgroundTaskControlPlane, type PullRequestChange } from '@aflow/schemas';
+import {
+  backgroundTaskControlPlane,
+  CHECK_RUN_FAILED_CONCLUSIONS,
+  type PullRequestChange,
+} from '@aflow/schemas';
 import type { ConditionalAnswer, GitHubConditionalGet } from './github.js';
 
 export const PULL_REQUEST_EVENTS_TASK_ID = 'orchestrator.pull_request_events';
@@ -70,11 +74,18 @@ export function parsePullState(body: unknown): PullRequestReadState {
 
 const PASSING_CONCLUSIONS = new Set(['success', 'neutral', 'skipped']);
 
-/** Green only where every check run has completed and none failed; `none` where there are none. */
+/**
+ * Red where a check run concluded failure, by the shepherd's own conclusions,
+ * so the source fires `checks_failed` only on a head a pass reads as failing.
+ * A run still going keeps the head pending. A run that concluded neither
+ * passing nor failed — cancelled, say — reads `stopped`, which a pass waits
+ * on. Green only where every run passed, and `none` where there are none.
+ */
 export function parseChecksState(body: unknown): PullRequestChecksState {
   const runs = record(body)['check_runs'];
   if (!Array.isArray(runs) || runs.length === 0) return 'none';
   let pending = false;
+  let stopped = false;
   for (const run of runs) {
     const entry = record(run);
     if (entry['status'] !== 'completed') {
@@ -82,9 +93,13 @@ export function parseChecksState(body: unknown): PullRequestChecksState {
       continue;
     }
     const conclusion = entry['conclusion'];
-    if (typeof conclusion !== 'string' || !PASSING_CONCLUSIONS.has(conclusion)) return 'red';
+    if (typeof conclusion === 'string' && CHECK_RUN_FAILED_CONCLUSIONS.has(conclusion)) {
+      return 'red';
+    }
+    if (typeof conclusion !== 'string' || !PASSING_CONCLUSIONS.has(conclusion)) stopped = true;
   }
-  return pending ? 'pending' : 'green';
+  if (pending) return 'pending';
+  return stopped ? 'stopped' : 'green';
 }
 
 /** Whether a check-runs answer holds fewer runs than the head has: it stops at one page. */
@@ -95,7 +110,12 @@ export function checkRunsTruncated(body: unknown): boolean {
   return typeof total === 'number' && Array.isArray(runs) && total > runs.length;
 }
 
-/** The combined commit status of a head: `none` where no status was reported on it. */
+/**
+ * The combined commit status of a head: `none` where no status was reported on
+ * it. A failed status reads `stopped`, never `red`. A shepherd pass reads only
+ * check runs, so it cannot act on a failure the statuses alone report: that
+ * failure is the operator's.
+ */
 export function parseCombinedStatus(body: unknown): PullRequestChecksState {
   const answer = record(body);
   const statuses = answer['statuses'];
@@ -108,20 +128,23 @@ export function parseCombinedStatus(body: unknown): PullRequestChecksState {
   }
   const state = answer['state'];
   if (state === 'success') return 'green';
-  if (state === 'failure' || state === 'error') return 'red';
+  if (state === 'failure' || state === 'error') return 'stopped';
   return 'pending';
 }
 
 /**
- * Whether the check runs alone say what the head's checks are. A run read red
- * or pending decides it. Green does not where the answer stopped at one page,
- * and no runs say nothing: CI may report through commit statuses instead.
+ * Whether the check runs alone say what the head's checks are. A run read red,
+ * stopped or pending decides it. Green does not where the answer stopped at
+ * one page, and no runs say nothing: CI may report through commit statuses
+ * instead.
  */
 function checkRunsDecide(checks: {
   state: PullRequestChecksState;
   truncated?: boolean | undefined;
 }): boolean {
-  if (checks.state === 'red' || checks.state === 'pending') return true;
+  if (checks.state === 'red' || checks.state === 'stopped' || checks.state === 'pending') {
+    return true;
+  }
   return checks.state === 'green' && checks.truncated !== true;
 }
 
@@ -160,6 +183,7 @@ export function parseChangesRequested(body: unknown): boolean {
  * the same on the poll before reports nothing new. A re-run that leaves the
  * head pending and then fails again reports it once more, because a failure
  * no one hears leaves the owner's wait quiet and the sweep counts it attended.
+ * So does a failure after a stopped run: the pass waited on the stop.
  */
 export function pullRequestChanges(
   before: PullRequestSnapshot | undefined,

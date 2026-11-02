@@ -8,6 +8,8 @@
  * caller turns into a failed step: a read that cannot be read is never a guess.
  */
 import {
+  CHECK_RUN_FAILED_CONCLUSIONS,
+  CHECK_RUN_STOPPED_CONCLUSIONS,
   type CheckRunsState,
   type CheckRunsSummary,
   decodeRequiredChecks,
@@ -220,9 +222,6 @@ export function loopPullRequest(body: unknown, arg: string | undefined): LoopPul
   };
 }
 
-const FAILED_CONCLUSIONS = new Set(['failure', 'timed_out', 'startup_failure']);
-const STOPPED_CONCLUSIONS = new Set(['cancelled', 'action_required', 'stale']);
-
 /** `/actions/runs/<id>/` in a check run's details URL: the Actions run it is a job of. */
 function actionsRunId(detailsUrl: unknown): number | undefined {
   if (typeof detailsUrl !== 'string') return undefined;
@@ -248,7 +247,9 @@ export function loopCheckRuns(body: unknown, arg?: string): CheckRunsSummary {
   const unread = totalCount > runs.length;
   const failing: FailingCheckRun[] = runs
     .filter(
-      (run) => run['status'] === 'completed' && FAILED_CONCLUSIONS.has(String(run['conclusion'])),
+      (run) =>
+        run['status'] === 'completed' &&
+        CHECK_RUN_FAILED_CONCLUSIONS.has(String(run['conclusion'])),
     )
     .map((run) => {
       const runId = actionsRunId(run['details_url']);
@@ -261,7 +262,7 @@ export function loopCheckRuns(body: unknown, arg?: string): CheckRunsSummary {
     })
     .sort((a, b) => Number(a.id) - Number(b.id));
   const pending = runs.some((run) => run['status'] !== 'completed');
-  const stopped = runs.some((run) => STOPPED_CONCLUSIONS.has(String(run['conclusion'])));
+  const stopped = runs.some((run) => CHECK_RUN_STOPPED_CONCLUSIONS.has(String(run['conclusion'])));
   const state: CheckRunsState =
     failing.length > 0
       ? 'failing'
@@ -522,14 +523,14 @@ function onPullRequest(comment: Json, number: string): boolean {
 export function loopFailingJobs(body: unknown): FailingJobs {
   const jobs = list(record(body, 'the jobs')['jobs'], 'jobs')
     .map((value) => record(value, 'a job'))
-    .filter((job) => FAILED_CONCLUSIONS.has(String(job['conclusion'])))
+    .filter((job) => CHECK_RUN_FAILED_CONCLUSIONS.has(String(job['conclusion'])))
     .map((job) => ({
       id: count(job['id'], 'a job id'),
       name: text(job['name'], 'a job name'),
       conclusion: String(job['conclusion']),
       failedSteps: list(job['steps'] ?? [], 'its steps')
         .map((step) => record(step, 'a step'))
-        .filter((step) => FAILED_CONCLUSIONS.has(String(step['conclusion'])))
+        .filter((step) => CHECK_RUN_FAILED_CONCLUSIONS.has(String(step['conclusion'])))
         .map((step) => text(step['name'], 'a step name')),
     }))
     .sort((a, b) => a.id - b.id);

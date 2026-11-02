@@ -25,7 +25,9 @@ export type WaitEventKind = z.infer<typeof WaitEventKindSchema>;
 
 /**
  * Which change a `pull_request.changed` event names. `checks_failed` fires
- * when CI concludes failure on a head, once while the head stays red. `closed`
+ * when a check run on a head concludes failure, once while the head stays red.
+ * A stopped run or a failed commit status fires nothing: a shepherd pass waits
+ * on both. `closed`
  * is a close without a merge: like `merged`, it ends the loop's watch on the
  * pull request.
  */
