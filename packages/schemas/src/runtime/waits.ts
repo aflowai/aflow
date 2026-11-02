@@ -96,6 +96,12 @@ export const WaitRegistrationSchema = z.object({
    */
   owner: z
     .object({
+      /**
+       * Why the platform declared the wait for this conversation, as the room
+       * message leads with it. Without it, the message says the conversation
+       * owns the subject.
+       */
+      lead: z.string().min(1).max(500).optional(),
       /** What the owner does on the event, as the room message tells it. */
       onEvent: z.string().min(1).max(2000),
     })

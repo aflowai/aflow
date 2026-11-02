@@ -11,6 +11,8 @@
  * credential key, and the space's credential under that key is decrypted. The
  * read goes to api.github.com only, and only where the binding allows GET to
  * that host.
+ *
+ * Part of GitHub's provider of the forge vocabulary (Plan 340 D2).
  */
 import { and, eq } from 'drizzle-orm';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
@@ -21,27 +23,11 @@ import {
   decryptCredentialAsync,
   withTenantSchema,
 } from '@aflow/database';
-import { AuthProfileSchema, type TenantId } from '@aflow/schemas';
+import { AuthProfileSchema, GITHUB_API_ID, type TenantId } from '@aflow/schemas';
+import type { ForgeConditionalGet } from '../vocabulary.js';
 
 export const GITHUB_API_ORIGIN = 'https://api.github.com';
 const GITHUB_API_HOST = 'api.github.com';
-const GITHUB_API_ID = 'github';
-
-export interface ConditionalAnswer {
-  status: number;
-  etag: string | null;
-  body: unknown;
-}
-
-/** One conditional GET of a path under api.github.com, for a space. */
-export type GitHubConditionalGet = (args: {
-  tenantId: string;
-  spaceId: string;
-  /** Starts with `/`, e.g. `/repos/o/r/pulls/1`. */
-  path: string;
-  etag?: string;
-  signal?: AbortSignal;
-}) => Promise<ConditionalAnswer>;
 
 export class GitHubReadError extends Error {
   constructor(message: string) {
@@ -115,7 +101,7 @@ export function createGitHubConditionalGet(deps: {
   fetchImpl?: FetchLike;
   readToken?: (tenantId: string, spaceId: string) => Promise<string>;
   now?: () => number;
-}): GitHubConditionalGet {
+}): ForgeConditionalGet {
   const fetchImpl: FetchLike = deps.fetchImpl ?? ((url, init) => fetch(url, init));
   const readToken = deps.readToken ?? ((t, s) => readSpaceGitHubToken(deps.db, t, s));
   const now = deps.now ?? Date.now;

@@ -6,9 +6,12 @@
  * The write that sets the status declares it, for the conversation that made
  * the write, and its result names it. The node's next status change wakes that
  * conversation with the node, its new status and its standing note. One wait
- * is held per node and conversation: a later write that sets the status again
- * replaces it. A window that closes on it posts nothing and declares the next
- * one. A conversation that has ended is forgotten, whatever it still holds.
+ * is held per node and conversation. A status write by that conversation
+ * releases its wait before the write is recorded, so the write's own event
+ * wakes no one, and a write that sets the status again holds a new one. A
+ * window that closes on a node still held declares the next wait. One that
+ * closes on a node gone or moved on tells the conversation as a change does. A
+ * conversation that has ended is forgotten, whatever it still holds.
  */
 import type { Redis } from 'ioredis';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
@@ -24,6 +27,10 @@ import {
 } from '@aflow/schemas';
 
 export const PLAN_NODE_STATUS_CHANGED: WaitEventKind = 'plan.node.status_changed';
+
+/** Why the conversation holds the wait, as the room message leads with it. */
+export const PLAN_NODE_HOLD_LEAD =
+  'Your write set this node blocked or waiting, so the platform declared this wait for you.';
 
 /** What the conversation is told to do when the node's status changes. */
 export const PLAN_NODE_ON_EVENT =
@@ -86,7 +93,7 @@ export async function holdForPlanNode(
       sessionId: target.sessionId,
       windowSeconds: WAIT_WINDOW_MAX_SECONDS,
       since: options.since ?? nowMs + 1,
-      owner: { onEvent: PLAN_NODE_ON_EVENT },
+      owner: { lead: PLAN_NODE_HOLD_LEAD, onEvent: PLAN_NODE_ON_EVENT },
       // No caller awaits the outcome, so one it catches up on is queued for
       // the delivery cycle in the registration's own script.
       queueCatchUp: true,
@@ -104,14 +111,37 @@ export async function holdForPlanNode(
 }
 
 /**
- * Drop the wait a conversation holds on a node: its own write moved the node
- * on, and a wake for that write would tell it what it did.
+ * Drop the waits a conversation holds on a node, and return those this call
+ * removed. A wait the delivery cycle has claimed already is left to it.
+ *
+ * A status write by the holding conversation calls this before the write is
+ * recorded. Its own status change then wakes no one, so it is not told what
+ * it did.
  */
 export async function endPlanNodeHold(
   deps: Pick<PlanNodeHoldDeps, 'redis'>,
   target: PlanNodeHoldTarget,
+): Promise<WaitRegistration[]> {
+  const removed: WaitRegistration[] = [];
+  for (const wait of await heldBy(deps.redis, target)) {
+    if (await cancelWait(deps.redis, wait)) removed.push(wait);
+  }
+  return removed;
+}
+
+/**
+ * Hold again the waits a write released before it was refused or threw. The
+ * new wait counts from the earliest released one, so a change recorded while
+ * none was held still reaches the conversation.
+ */
+export async function restorePlanNodeHold(
+  deps: PlanNodeHoldDeps,
+  target: PlanNodeHoldTarget,
+  released: readonly WaitRegistration[],
 ): Promise<void> {
-  for (const wait of await heldBy(deps.redis, target)) await cancelWait(deps.redis, wait);
+  if (released.length === 0) return;
+  const since = Math.min(...released.map((wait) => wait.since ?? wait.declaredAt));
+  await holdForPlanNode(deps, target, { since });
 }
 
 export function planNodeHoldTarget(registration: WaitRegistration): PlanNodeHoldTarget {

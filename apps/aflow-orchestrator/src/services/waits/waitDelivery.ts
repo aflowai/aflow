@@ -30,7 +30,12 @@ import {
   type BackgroundTaskLogger,
   type BackgroundTaskRunner,
 } from '@aflow/lib';
-import { backgroundTaskControlPlane, WAIT_OUTCOME_ACTOR_ID, type TenantId } from '@aflow/schemas';
+import {
+  backgroundTaskControlPlane,
+  holdsPlanNodeWait,
+  WAIT_OUTCOME_ACTOR_ID,
+  type TenantId,
+} from '@aflow/schemas';
 import { queueMessageForNextTurn } from '../SessionOrchestrator/helpers/queuedMessage.js';
 import { wakeSessionForWait } from '../cybernetic/harness/sessionWakeup.js';
 import type { HarnessDeps } from '../cybernetic/harness/types.js';
@@ -116,9 +121,13 @@ export async function deliverEndedWait(deps: HarnessDeps, ended: EndedWait): Pro
 /**
  * A wait the platform held for the conversation that set a plan node blocked
  * or waiting. A conversation that has ended is forgotten, and told nothing.
- * A window that closes on it posts nothing and declares the next one. A
- * status change tells the conversation the node, its new status and its
+ * A status change tells the conversation the node, its new status and its
  * standing note, and ends the hold.
+ *
+ * A window that closes reads the node. Where it still stands blocked or
+ * waiting, nothing is posted and the next wait is declared. Where it is gone,
+ * or its status has moved on, the change event was lost, and the conversation
+ * is told as an event would tell it.
  */
 async function deliverPlanNodeHold(deps: HarnessDeps, ended: EndedWait): Promise<WaitDelivery> {
   const { registration, outcome } = ended;
@@ -127,12 +136,12 @@ async function deliverPlanNodeHold(deps: HarnessDeps, ended: EndedWait): Promise
     await endPlanNodeHold(deps, target);
     return 'session_gone';
   }
-  if (outcome.endedBy === 'window_closed') {
+  const node = await readHeldPlanNode(deps.db, registration);
+  if (outcome.endedBy === 'window_closed' && node !== null && holdsPlanNodeWait(node.status)) {
     // A throw here puts this wait back, and its redelivery declares the next one.
     await holdForPlanNode(deps, target, { since: registration.closesAt });
     return 'renewed';
   }
-  const node = await readHeldPlanNode(deps.db, registration);
   const body =
     describeWaitOutcome(registration, outcome) +
     '\n\n' +

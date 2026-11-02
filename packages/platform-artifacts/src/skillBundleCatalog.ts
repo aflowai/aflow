@@ -14,7 +14,7 @@ import { LITERATURE_SCAN } from './skillBundleCatalog/literatureScan.js';
 import { FILM_SHOT_BATCH } from './skillBundleCatalog/filmShotBatch.js';
 import { EVAL_SUITE_DESIGN } from './skillBundleCatalog/evalSuiteDesign.js';
 import { KAGGLE_API_DEFINITION } from './skillBundleCatalog/kaggleApiDefinitions.js';
-import { GITHUB_API_DEFINITION } from './skillBundleCatalog/githubApiDefinitions.js';
+import { GITHUB_API_DEFINITION } from './forge/github/apiDefinition.js';
 
 /**
  * A bundle as authored: `revision` in place of the version the Store

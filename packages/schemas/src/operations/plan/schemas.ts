@@ -100,6 +100,13 @@ export const PlanNodeUpdateOutputSchema = z.object({
 export type PlanNodeUpdateOutput = z.infer<typeof PlanNodeUpdateOutputSchema>;
 
 /**
+ * An operator's write through the REST routes. No conversation makes it, so
+ * no wait is held for it.
+ */
+export const PlanNodeOperatorWriteOutputSchema = PlanNodeUpdateOutputSchema.omit({ wait: true });
+export type PlanNodeOperatorWriteOutput = z.infer<typeof PlanNodeOperatorWriteOutputSchema>;
+
+/**
  * `error.details` for `PLAN_NODE_STALE` and `PLAN_NODE_UNCHANGED`: what a retry
  * needs and no more. A refusal travels inline on the results stream, so it
  * never carries the node's prose; `plan.node.get` reads that.

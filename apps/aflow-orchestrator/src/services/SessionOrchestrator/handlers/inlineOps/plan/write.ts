@@ -14,6 +14,7 @@ import {
   type PlanNodeLearnOutput,
   type PlanNodeLinkOutput,
   type PlanNodeUpdateOutput,
+  type WaitRegistration,
 } from '@aflow/schemas';
 import {
   createPlanNode,
@@ -32,7 +33,12 @@ import { requireSpaceId } from '../spaceScope.js';
 import type { InlineHandlerArgs } from '../types.js';
 import { emitStepSuccess } from '../helpers.js';
 import { emitPlanError, parsePlanInput, planReadContext } from './shared.js';
-import { endPlanNodeHold, holdForPlanNode } from '../../../../waits/planNode.js';
+import {
+  endPlanNodeHold,
+  holdForPlanNode,
+  restorePlanNodeHold,
+  type PlanNodeHoldTarget,
+} from '../../../../waits/planNode.js';
 
 async function readSessionState(args: InlineHandlerArgs): Promise<SessionHotState | null> {
   return getSessionState(args.redis, args.context.tenantId, args.context.runId).catch(() => null);
@@ -64,32 +70,71 @@ function operatorConversation(
   return state !== null && isPersonTrigger(state.trigger) ? args.context.runId : undefined;
 }
 
-/**
- * The wait a write that set a node blocked or waiting holds for the
- * conversation that made it (Plan 339 D4's discipline, for plan nodes). A
- * write by that conversation that moves the node on drops it. The write has
- * committed, so a failed hold leaves the result without a wait rather than
- * failing it.
- */
-async function holdAfterWrite(args: InlineHandlerArgs, node: PlanNode): Promise<HeldWait | null> {
-  if (args.workflowExecution !== undefined) return null;
-  const target = {
+function holdTarget(args: InlineHandlerArgs, nodeId: string): PlanNodeHoldTarget {
+  return {
     tenantId: args.context.tenantId as string,
     spaceId: requireSpaceId(args.context),
     sessionId: args.context.runId as string,
-    nodeId: node.nodeId,
+    nodeId,
   };
+}
+
+function holdDeps(args: InlineHandlerArgs) {
+  return { redis: args.redis, db: getDatabase() };
+}
+
+function warnHold(message: string, nodeId: string, error: unknown): void {
+  console.warn(`[plan-node-wait] ${message}`, {
+    nodeId,
+    error: error instanceof Error ? error.message : String(error),
+  });
+}
+
+/**
+ * Release the wait this conversation holds on the node before a status write
+ * by it is recorded. The write's own event then finds no wait of its own to
+ * end, so the conversation is not woken about what it did.
+ */
+async function releaseBeforeWrite(
+  args: InlineHandlerArgs,
+  nodeId: string,
+): Promise<WaitRegistration[]> {
+  if (args.workflowExecution !== undefined) return [];
   try {
-    const deps = { redis: args.redis, db: getDatabase() };
-    if (holdsPlanNodeWait(node.status)) return await holdForPlanNode(deps, target);
-    await endPlanNodeHold(deps, target);
+    return await endPlanNodeHold(holdDeps(args), holdTarget(args, nodeId));
   } catch (error) {
-    console.warn('[plan-node-wait] the write landed, but its wait was not held', {
-      nodeId: node.nodeId,
-      error: error instanceof Error ? error.message : String(error),
-    });
+    warnHold('the wait was not released before the write', nodeId, error);
+    return [];
   }
-  return null;
+}
+
+/** A write that did not land holds again what it released. */
+async function restoreAfterRefusal(
+  args: InlineHandlerArgs,
+  nodeId: string,
+  released: readonly WaitRegistration[],
+): Promise<void> {
+  try {
+    await restorePlanNodeHold(holdDeps(args), holdTarget(args, nodeId), released);
+  } catch (error) {
+    warnHold('the write did not land, and its released wait was not held again', nodeId, error);
+  }
+}
+
+/**
+ * The wait a write that set a node blocked or waiting holds for the
+ * conversation that made it (Plan 339 D4's discipline, for plan nodes). The
+ * write has committed, so a failed hold leaves the result without a wait
+ * rather than failing it.
+ */
+async function holdAfterWrite(args: InlineHandlerArgs, node: PlanNode): Promise<HeldWait | null> {
+  if (args.workflowExecution !== undefined || !holdsPlanNodeWait(node.status)) return null;
+  try {
+    return await holdForPlanNode(holdDeps(args), holdTarget(args, node.nodeId));
+  } catch (error) {
+    warnHold('the write landed, but its wait was not held', node.nodeId, error);
+    return null;
+  }
 }
 
 export async function handlePlanNodeCreate(
@@ -107,9 +152,7 @@ export async function handlePlanNodeCreate(
     await emitPlanError(args, result, startTime);
     return;
   }
-  const wait = holdsPlanNodeWait(result.node.status)
-    ? await holdAfterWrite(args, result.node)
-    : null;
+  const wait = await holdAfterWrite(args, result.node);
   const output: PlanNodeCreateOutput = {
     node: result.node,
     ...(wait !== null ? { wait } : {}),
@@ -151,11 +194,19 @@ export async function handlePlanNodeUpdate(
     return;
   }
   const conversationId = operatorConversation(args, state);
-  const result = await updatePlanNode(
-    { ...context, ...(conversationId !== undefined ? { conversationId } : {}) },
-    input,
-  );
+  const released = input.status !== undefined ? await releaseBeforeWrite(args, input.nodeId) : [];
+  let result: Awaited<ReturnType<typeof updatePlanNode>>;
+  try {
+    result = await updatePlanNode(
+      { ...context, ...(conversationId !== undefined ? { conversationId } : {}) },
+      input,
+    );
+  } catch (error) {
+    await restoreAfterRefusal(args, input.nodeId, released);
+    throw error;
+  }
   if (!result.ok) {
+    await restoreAfterRefusal(args, input.nodeId, released);
     await emitPlanError(args, result, startTime);
     return;
   }

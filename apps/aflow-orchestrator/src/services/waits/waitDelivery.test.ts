@@ -18,7 +18,7 @@ import { PlanNodeUpdateOutputSchema, WAIT_WINDOW_MAX_SECONDS, type PlanNode } fr
 import type { BackgroundTaskLogger } from '@aflow/lib';
 import type { HarnessDeps } from '../cybernetic/harness/types.js';
 import { deliverEndedWait, runWaitDeliveryCycle, type WaitDelivery } from './waitDelivery.js';
-import { holdForPlanNode } from './planNode.js';
+import { holdForPlanNode, PLAN_NODE_HOLD_LEAD, PLAN_NODE_ON_EVENT } from './planNode.js';
 
 const { mockQueueMessage, mockWake, mockRehydrateIfAbsent, mockIsLive, mockFindNode } = vi.hoisted(
   () => ({
@@ -476,13 +476,27 @@ describe('the wait a plan node write holds for its writer', () => {
     expect(mockQueueMessage).toHaveBeenCalledTimes(1);
   });
 
-  it('posts nothing when its window closes, and holds the next wait', async () => {
+  it('leads with the write that holds it, not with ownership of the node', async () => {
+    await blockedWrite();
+    mockFindNode.mockResolvedValue(node('active'));
+    await approve('active');
+
+    await runWaitDeliveryCycle({ harnessDeps, logger }, ctx);
+
+    const posted = mockQueueMessage.mock.calls[0]?.[2] as { body: string };
+    expect(posted.body).toContain(`${PLAN_NODE_HOLD_LEAD} ${PLAN_NODE_ON_EVENT}`);
+    expect(posted.body).not.toContain('You own the subject');
+  });
+
+  it('posts nothing when its window closes on a node still blocked, and holds the next wait', async () => {
     const held = await blockedWrite();
     const closed = Date.parse(held.closesAt);
+    mockFindNode.mockResolvedValue(node('blocked'));
 
     const cycle = await runWaitDeliveryCycle({ harnessDeps, logger, now: () => closed }, ctx);
 
     expect(cycle).toMatchObject({ candidates: 1, processed: 1 });
+    expect(mockFindNode).toHaveBeenCalledWith(SPACE, NODE);
     expect(mockQueueMessage).not.toHaveBeenCalled();
     const waits = await readSubjectWaits(redis, {
       tenantId: TENANT,
@@ -494,4 +508,32 @@ describe('the wait a plan node write holds for its writer', () => {
     expect(waits[0]?.waitId).not.toBe(held.waitId);
     expect(waits[0]?.since).toBe(closed);
   });
+
+  it.each([
+    ['moved on with its event lost', () => node('active'), `(${NODE}) is now active`],
+    ['removed', () => null, `Plan node ${NODE} no longer exists.`],
+  ])(
+    'tells the conversation when its window closes on a node %s, and holds no next wait',
+    async (_, found, told) => {
+      const held = await blockedWrite();
+      const closed = Date.parse(held.closesAt);
+      mockFindNode.mockResolvedValue(found());
+
+      const cycle = await runWaitDeliveryCycle({ harnessDeps, logger, now: () => closed }, ctx);
+
+      expect(cycle).toMatchObject({ candidates: 1, processed: 1 });
+      expect(mockQueueMessage).toHaveBeenCalledTimes(1);
+      const posted = mockQueueMessage.mock.calls[0]?.[2] as { body: string; sessionId: string };
+      expect(posted).toMatchObject({ sessionId: SESSION, deliveryKey: `wait:${held.waitId}` });
+      expect(posted.body).toContain(told);
+      expect(mockWake).toHaveBeenCalledWith(harnessDeps, TENANT, SESSION, held.waitId);
+      const waits = await readSubjectWaits(redis, {
+        tenantId: TENANT,
+        spaceId: SPACE,
+        kind: 'plan.node.status_changed',
+        subject: NODE,
+      });
+      expect(waits).toEqual([]);
+    },
+  );
 });

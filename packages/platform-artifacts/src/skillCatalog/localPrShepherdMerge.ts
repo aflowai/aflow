@@ -1,9 +1,7 @@
 import {
-  PULL_REQUEST_REVIEWS_PER_PAGE,
   SHEPHERD_HANDOFF_PINS,
   SHEPHERD_LEASE_ROOT,
   SHEPHERD_MERGE_OUTCOME_DOCS,
-  SHEPHERD_RESPONSE_PRESETS,
 } from '@aflow/schemas';
 import {
   MERGE_HANDED_BACK,
@@ -18,8 +16,8 @@ import {
   bind,
   ctx,
   DECIDED_MERGE,
-  github,
-  GITHUB_READ_PROJECTION,
+  FORGE,
+  FORGE_READ_PROJECTION,
   HEAD_REF,
   LEASE_TAKERS,
   NUMBER,
@@ -89,12 +87,12 @@ export const MERGE_READ_TASKS = [
     retryability: 'safe' as const,
     inputBindings: { ...REPOSITORY, ...BASE_REF },
     context: ctx('api.http.call'),
-    inputTemplate: github(
-      'getBranchRules',
-      { owner: bind('owner'), repo: bind('repo'), branch: bind('baseRef'), per_page: 100 },
-      SHEPHERD_RESPONSE_PRESETS.requiredRules,
-    ),
-    outputProjection: GITHUB_READ_PROJECTION,
+    inputTemplate: FORGE.readRequiredRules({
+      owner: bind('owner'),
+      repo: bind('repo'),
+      branch: bind('baseRef'),
+    }),
+    outputProjection: FORGE_READ_PROJECTION,
   },
 
   {
@@ -115,12 +113,13 @@ export const MERGE_READ_TASKS = [
       ruleset: out('read-required-rules', 'data.encoded'),
     },
     context: ctx('api.http.call'),
-    inputTemplate: github(
-      'getBranch',
-      { owner: bind('owner'), repo: bind('repo'), branch: bind('baseRef') },
-      { $concat: [`${SHEPHERD_RESPONSE_PRESETS.requiredProtection}:`, bind('ruleset')] },
-    ),
-    outputProjection: GITHUB_READ_PROJECTION,
+    inputTemplate: FORGE.readRequiredChecks({
+      owner: bind('owner'),
+      repo: bind('repo'),
+      branch: bind('baseRef'),
+      rules: bind('ruleset'),
+    }),
+    outputProjection: FORGE_READ_PROJECTION,
   },
 
   {
@@ -134,18 +133,12 @@ export const MERGE_READ_TASKS = [
     retryability: 'safe' as const,
     inputBindings: { ...REPOSITORY, ...NUMBER },
     context: ctx('api.http.call'),
-    inputTemplate: github(
-      'listPullRequestReviews',
-      {
-        owner: bind('owner'),
-        repo: bind('repo'),
-        pull_number: bind('number'),
-        per_page: PULL_REQUEST_REVIEWS_PER_PAGE,
-        page: 1,
-      },
-      SHEPHERD_RESPONSE_PRESETS.reviews,
-    ),
-    outputProjection: GITHUB_READ_PROJECTION,
+    inputTemplate: FORGE.readReviews({
+      owner: bind('owner'),
+      repo: bind('repo'),
+      number: bind('number'),
+    }),
+    outputProjection: FORGE_READ_PROJECTION,
   },
 
   {
@@ -277,11 +270,11 @@ const MERGE_REQUEST_BINDINGS = {
   headSha: out('read-pr', 'data.headSha'),
 };
 
-const MERGE_REQUEST = github('mergePullRequest', {
+const MERGE_REQUEST = FORGE.mergeChangeRequest({
   owner: bind('owner'),
   repo: bind('repo'),
-  pull_number: bind('number'),
-  body: { merge_method: 'squash', sha: bind('headSha') },
+  number: bind('number'),
+  head: bind('headSha'),
 });
 
 export const MERGE_TASKS = [
@@ -340,7 +333,7 @@ export const MERGE_TASKS = [
     type: 'operation' as const,
     operation: 'api.http.call',
     when: {
-      allOf: [...CLAIMED_HEAD.allOf, 'tasks.merge.output.statusCode == 405'],
+      allOf: [...CLAIMED_HEAD.allOf, FORGE.merge.refused('tasks.merge.output')],
       onMissingRef: SKIP,
     },
     optional: true,
@@ -351,12 +344,13 @@ export const MERGE_TASKS = [
       prefix: out('read-folder', 'branchPolicy.branchPrefix'),
     },
     context: ctx('api.http.call'),
-    inputTemplate: github(
-      'getPullRequest',
-      { owner: bind('owner'), repo: bind('repo'), pull_number: bind('number') },
-      { $concat: [`${SHEPHERD_RESPONSE_PRESETS.pullRequest}:`, bind('prefix')] },
-    ),
-    outputProjection: GITHUB_READ_PROJECTION,
+    inputTemplate: FORGE.readChangeRequest({
+      owner: bind('owner'),
+      repo: bind('repo'),
+      number: bind('number'),
+      prefix: bind('prefix'),
+    }),
+    outputProjection: FORGE_READ_PROJECTION,
   },
 
   {
@@ -366,7 +360,7 @@ export const MERGE_TASKS = [
     type: 'operation' as const,
     operation: 'workflow.run.decide',
     when: {
-      allOf: [...CLAIMED_HEAD.allOf, 'tasks.merge.output.statusCode != 200'],
+      allOf: [...CLAIMED_HEAD.allOf, FORGE.merge.notMerged('tasks.merge.output')],
       onMissingRef: SKIP,
     },
     retryability: 'safe' as const,
@@ -460,8 +454,8 @@ export const MERGE_TASKS = [
     inputBindings: {
       ...MERGE_OUTCOME_BINDINGS,
       outcome: out('record-merge', 'decision'),
-      mergeCommit: out('merge', 'data.sha'),
-      mergeAgainCommit: out('merge-again', 'data.sha'),
+      mergeCommit: out('merge', FORGE.merge.commitPath),
+      mergeAgainCommit: out('merge-again', FORGE.merge.commitPath),
       runId: { kind: 'run_id' as const },
     },
     context: ctx('memory.store.put'),

@@ -35,7 +35,7 @@ import {
 import type {
   PlanBoardOutput,
   PlanNodeListTruncation,
-  PlanNodeUpdateOutput,
+  PlanNodeOperatorWriteOutput,
   PlanOverviewOutput,
 } from '@aflow/schemas';
 import { useSpaceFromRoute } from '../components/providers.js';
@@ -231,7 +231,7 @@ export function SpacePlanPage(): React.ReactNode {
     router.push(query.length > 0 ? `${pathname}?${query}` : pathname, { scroll: false });
   };
 
-  const closeNode = useApiMutation<PlanNodeCloseRequest, PlanNodeUpdateOutput>({
+  const closeNode = useApiMutation<PlanNodeCloseRequest, PlanNodeOperatorWriteOutput>({
     path: ({ nodeId }) => `/spaces/${spaceId}/plan/nodes/${nodeId}`,
     method: 'PATCH',
     serialize: ({ nodeId: _nodeId, ...body }) => JSON.stringify(body),
@@ -242,7 +242,7 @@ export function SpacePlanPage(): React.ReactNode {
 
   // Approve, Reopen and Move (Plan 332 D6). Each re-reads the plan on
   // success itself rather than waiting for the space's entity event.
-  const openNode = useApiMutation<PlanNodeOpenRequest, PlanNodeUpdateOutput>({
+  const openNode = useApiMutation<PlanNodeOpenRequest, PlanNodeOperatorWriteOutput>({
     path: ({ nodeId }) => `/spaces/${spaceId}/plan/nodes/${nodeId}/open`,
     method: 'PATCH',
     serialize: ({ nodeId: _nodeId, ...body }) => JSON.stringify(body),
@@ -250,14 +250,14 @@ export function SpacePlanPage(): React.ReactNode {
     onError: () => undefined,
   });
   // Revise (Plan 337 P4): the step stays blocked, the operator's note above its note.
-  const reviseNode = useApiMutation<PlanNodeReviseRequest, PlanNodeUpdateOutput>({
+  const reviseNode = useApiMutation<PlanNodeReviseRequest, PlanNodeOperatorWriteOutput>({
     path: ({ nodeId }) => `/spaces/${spaceId}/plan/nodes/${nodeId}/revise`,
     method: 'PATCH',
     serialize: ({ nodeId: _nodeId, ...body }) => JSON.stringify(body),
     invalidate: [spacePlanKey(spaceId)],
     onError: () => undefined,
   });
-  const placeNode = useApiMutation<PlanNodePlaceRequest, PlanNodeUpdateOutput>({
+  const placeNode = useApiMutation<PlanNodePlaceRequest, PlanNodeOperatorWriteOutput>({
     path: ({ nodeId }) => `/spaces/${spaceId}/plan/nodes/${nodeId}/place`,
     method: 'PATCH',
     serialize: ({ nodeId: _nodeId, ...body }) => JSON.stringify(body),
@@ -266,7 +266,9 @@ export function SpacePlanPage(): React.ReactNode {
   });
 
   const [carrierFailure, setCarrierFailure] = useState<string>();
-  const answered = async (write: Promise<PlanNodeUpdateOutput>): Promise<PlanNodeCloseAnswer> => {
+  const answered = async (
+    write: Promise<PlanNodeOperatorWriteOutput>,
+  ): Promise<PlanNodeCloseAnswer> => {
     try {
       const result = await write;
       if (result.carrierFailure) setCarrierFailure(result.carrierFailure);
