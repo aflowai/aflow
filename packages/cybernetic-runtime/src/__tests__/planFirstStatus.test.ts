@@ -274,12 +274,9 @@ describe('a node’s first status (Plan 339 D6)', () => {
     expect(result).toMatchObject({ ok: false, code: 'PLAN_NODE_DESIGN_NOT_MERGED' });
   });
 
-  it('reads a stored card whose wait names design_document as itself, and refuses it on write', () => {
+  it('reads a card whose wait names design_document as itself, through the one card schema', () => {
     const decision = 'Approve the design document.';
-    const stored = card({
-      reason: 'design_document',
-      decision,
-    } as unknown as PlanNodeCard['waitsOn']);
+    const stored = card({ reason: 'design_document', decision });
     expect(readStoredPlanNodeCard(stored)).toEqual({ card: stored });
     expect(planNodeApprovalAsked({ status: 'blocked', card: stored })).toEqual({
       reason: 'design_document',
@@ -288,12 +285,122 @@ describe('a node’s first status (Plan 339 D6)', () => {
     expect(
       PlanNodeCreateInputSchema.safeParse({
         kind: 'execute',
-        title: 'A new ask under the old reason',
+        title: 'An ask under the earlier reason',
         goal: 'A goal.',
         criteria: 'Criteria.',
         card: stored,
       }).success,
-    ).toBe(false);
+    ).toBe(true);
+  });
+
+  it('refuses an update that puts a design_approval ask on a node until P0 merged', async () => {
+    const root = await create({ title: 'Plan 340 · the loop works against any forge' });
+    const p0 = await create({ parentId: root.nodeId, title: 'P0', work: 'design_document' });
+    const p1 = await create({ parentId: root.nodeId, title: 'P1 — the forge seam' });
+    const asking = { reason: 'design_approval', decision: 'Approve Plan 340’s design.' } as const;
+    const ask = async () => {
+      const now = store.nodes.get(p1.nodeId)!;
+      return updatePlanNode(ctx(), {
+        nodeId: p1.nodeId,
+        expectedRevision: now.revision,
+        card: card(asking),
+      });
+    };
+
+    expect(await ask()).toMatchObject({ ok: false, code: 'PLAN_NODE_DESIGN_NOT_MERGED' });
+    expect(store.nodes.get(p1.nodeId)?.card).toBeUndefined();
+
+    await linkPlanNode(ctx(), { nodeId: p0.nodeId, kind: 'document', ref: 'docs/plans/340.md' });
+    const closed = await updatePlanNode(ctx(), {
+      nodeId: p0.nodeId,
+      expectedRevision: p0.revision,
+      status: 'done',
+      outcome: 'Merged after review.',
+    });
+    expect(closed.ok).toBe(true);
+    expect(await ask()).toMatchObject({ ok: true, node: { card: { waitsOn: asking } } });
+  });
+
+  it('refuses an update that moves a design_approval ask under a plan whose P0 has not merged', async () => {
+    const { root } = await mergedP0();
+    const decision = 'Approve Plan 340’s merged design document.';
+    const p1 = await create({
+      parentId: root.nodeId,
+      title: 'P1 — the forge seam',
+      card: card({ reason: 'design_approval', decision }),
+    });
+    const other = await create({ title: 'Plan 341 · another plan' });
+    await create({ parentId: other.nodeId, title: 'P0', work: 'design_document' });
+    const moved = await updatePlanNode(ctx(), {
+      nodeId: p1.nodeId,
+      expectedRevision: p1.revision,
+      parentId: other.nodeId,
+      card: card({ reason: 'design_approval', decision }),
+    });
+    expect(moved).toMatchObject({ ok: false, code: 'PLAN_NODE_DESIGN_NOT_MERGED' });
+  });
+
+  it('asks for design_approval below the plan root once the root’s P0 merged', async () => {
+    const { root } = await mergedP0();
+    const phase = await create({ parentId: root.nodeId, title: 'P1 — the forge seam' });
+    const result = await createPlanNode(
+      ctx(),
+      PlanNodeCreateInputSchema.parse({
+        parentId: phase.nodeId,
+        kind: 'decide',
+        title: 'Approve the design',
+        goal: 'Approve the design.',
+        criteria: 'The operator approved it.',
+        work: 'design_approval',
+        card: card({ reason: 'design_approval', decision: 'Approve Plan 340’s design.' }),
+      }),
+    );
+    expect(result).toMatchObject({ ok: true, node: { status: 'blocked' } });
+  });
+
+  it('takes P0 as the first step not dropped, so a replaced P0 opens the ask once it merged', async () => {
+    const root = await create({ title: 'Plan 340 · the loop works against any forge' });
+    const first = await create({
+      parentId: root.nodeId,
+      title: 'P0 — first try',
+      work: 'design_document',
+      position: 0,
+    });
+    const dropped = await updatePlanNode(ctx(), {
+      nodeId: first.nodeId,
+      expectedRevision: first.revision,
+      status: 'dropped',
+      outcome: 'Replaced.',
+    });
+    expect(dropped.ok).toBe(true);
+    const p0 = await create({
+      parentId: root.nodeId,
+      title: 'P0 — the design document',
+      work: 'design_document',
+      position: 1,
+    });
+    await linkPlanNode(ctx(), { nodeId: p0.nodeId, kind: 'document', ref: 'docs/plans/340.md' });
+    const closed = await updatePlanNode(ctx(), {
+      nodeId: p0.nodeId,
+      expectedRevision: p0.revision,
+      status: 'done',
+      outcome: 'Merged after review.',
+    });
+    expect(closed.ok).toBe(true);
+    const result = await createPlanNode(
+      ctx(),
+      PlanNodeCreateInputSchema.parse({
+        parentId: root.nodeId,
+        kind: 'decide',
+        title: 'P1 — approve the design',
+        goal: 'Approve the design.',
+        criteria: 'The operator approved it.',
+        position: 2,
+        work: 'design_approval',
+        card: card({ reason: 'design_approval', decision: 'Approve Plan 340’s design.' }),
+      }),
+    );
+    expect(result).toMatchObject({ ok: true, node: { status: 'blocked' } });
   });
 
   it('starts a P0 the operator writes by hand as its card says, as before', async () => {

@@ -9,7 +9,7 @@
  */
 import type { ReactNode } from 'react';
 import { Text } from '@aflow/design-system';
-import type { PlanNodeStoredCard } from '@aflow/schemas';
+import type { PlanNodeCard } from '@aflow/schemas';
 import { RailMarkdown, RailSection } from './PlanParts.js';
 
 const cardListStyle = {
@@ -66,7 +66,7 @@ export function PlanCardSections({
   criteria,
   criteriaLabel,
 }: {
-  card: PlanNodeStoredCard;
+  card: PlanNodeCard;
   criteria: string;
   /** **Done when**, or **Decided when** on a decide node, as the rail labels criteria. */
   criteriaLabel: string;

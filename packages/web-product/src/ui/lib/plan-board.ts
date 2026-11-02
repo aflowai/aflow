@@ -16,7 +16,7 @@ import {
   planBoardColumn,
   planNodeApprovalAsked,
   type PlanBoardCard,
-  type PlanNodeStoredCard,
+  type PlanNodeCard,
   type PlanNodeStatus,
   type PlanNodeWaitsOn,
   type PlanBoardColumn,
@@ -105,7 +105,7 @@ export type PlanRailOpen = { label: 'Approve'; waitsOn?: PlanNodeWaitsOn } | { l
 export function planRailOpen(
   reason: PlanNeedsYouReason | undefined,
   node:
-    | { status: PlanNodeStatus; card?: PlanNodeStoredCard | undefined; note?: string | undefined }
+    | { status: PlanNodeStatus; card?: PlanNodeCard | undefined; note?: string | undefined }
     | undefined,
 ): PlanRailOpen | undefined {
   if (reason !== 'blocked' || node?.status !== 'blocked') return undefined;

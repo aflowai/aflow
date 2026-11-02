@@ -469,6 +469,12 @@ async function writePlanNode(
       details: { nodeId: current.nodeId },
     };
   }
+  const notMerged = await designApprovalRefusal(
+    ctx,
+    input,
+    input.parentId !== undefined ? input.parentId : current.parentId,
+  );
+  if (notMerged !== undefined) return notMerged;
 
   const pullRequest =
     ctx.resident === true && input.status === 'done'
