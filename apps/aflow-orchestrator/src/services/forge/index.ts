@@ -5,7 +5,12 @@
  * the forge's answers and the conditional GET that carries them.
  */
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { type ForgeProviderId, requireForgeProvider } from '@aflow/schemas';
+import {
+  type ForgeProviderId,
+  parsePullRequestRef,
+  parseRepoCoordinate,
+  requireForgeProvider,
+} from '@aflow/schemas';
 import { createGitHubConditionalGet } from './github/conditionalGet.js';
 import { GITHUB_EVENT_READER } from './github/pullRequestReads.js';
 import type { ForgeConditionalGet, ForgeEventReader } from './vocabulary.js';
@@ -23,13 +28,27 @@ const EVENT_READERS: Readonly<Record<ForgeProviderId, ForgeEventReader>> = {
   github: GITHUB_EVENT_READER,
 };
 
+/**
+ * The host of the repository `url` names. An address names it by its own
+ * host. A watch may carry the subject form `owner/repo#N` in its place, which
+ * names its repository as the watch's own reading of it does: on the repo
+ * coordinate's default host.
+ */
+function repositoryHost(url: string): string {
+  const ref = /^[a-z][a-z0-9+.-]*:\/\//i.test(url.trim()) ? null : parsePullRequestRef(url);
+  if (ref === null) return new URL(url).host;
+  const repository = parseRepoCoordinate(`${ref.owner}/${ref.repo}`);
+  if (repository === null) throw new Error(`No repository resolves from ${url}.`);
+  return repository.host;
+}
+
 function providerOf(url: string | undefined): ForgeProviderId {
-  return requireForgeProvider(url === undefined ? undefined : new URL(url).host);
+  return requireForgeProvider(url === undefined ? undefined : repositoryHost(url));
 }
 
 /**
  * The reader and the conditional GET of the change request at `url`, both of
- * the provider its host names. With no address, the repo coordinate's default
+ * the provider its repository's host names. With no address, the repo coordinate's default
  * host names it. A host no provider answers for throws.
  */
 export function forgeEventProviderFor(
