@@ -18,6 +18,7 @@ const USER = '00000000-0000-4000-8000-0000000000aa';
 const OTHER = '00000000-0000-4000-8000-0000000000cc';
 const SESSION = '00000000-0000-4000-8000-0000000000bb';
 const GONE = '00000000-0000-4000-8000-0000000000dd';
+const COACH = '00000000-0000-4000-8000-0000000000ee';
 const HOUR = 3_600_000;
 
 const net = vi.hoisted(() => ({
@@ -28,7 +29,17 @@ const net = vi.hoisted(() => ({
   pushed: [] as string[],
   sessions: [] as Array<Record<string, unknown>>,
   failSessionList: false,
+  agents: [] as Array<Record<string, unknown>>,
+  runs: [] as Array<Record<string, unknown>>,
+  coach: null as Record<string, unknown> | null,
 }));
+
+const HELMSMAN = {
+  agentId: 'h',
+  name: 'Helmsman',
+  latestVersion: '1',
+  systemRole: 'cybernetic-helmsman',
+};
 
 const router = {
   replace: (url: string) => {
@@ -60,12 +71,12 @@ function respond(path: string): unknown {
   if (path.endsWith('/users/me')) {
     return { user: { userId: USER, email: 'a@example.com', displayName: 'A' } };
   }
-  if (path.endsWith('/agents')) {
-    return {
-      agents: [
-        { agentId: 'h', name: 'Helmsman', latestVersion: '1', systemRole: 'cybernetic-helmsman' },
-      ],
-    };
+  if (path.endsWith('/agents')) return { agents: net.agents };
+  if (path.includes('/workflow-runs?')) {
+    return { runs: net.runs, counts: { running: 0, paused: 0 }, nextCursor: null };
+  }
+  if (path.endsWith('/cybernetic/active-surface')) {
+    return net.coach ? { spaceId: SPACE, coach: net.coach } : undefined;
   }
   if (path.includes('/sessions?')) return net.failSessionList ? FAILED : { sessions: net.sessions };
   const direct = net.sessions.find((s) => path.endsWith(`/sessions/${String(s['sessionId'])}`));
@@ -190,6 +201,9 @@ beforeEach(async () => {
   net.pushed = [];
   net.sessions = [];
   net.failSessionList = false;
+  net.agents = [HELMSMAN];
+  net.runs = [];
+  net.coach = null;
   // Fresh modules per test: the realtime brokers are module-level and
   // refcounted, so a second page in one registry would find its topics held.
   vi.resetModules();
@@ -298,6 +312,13 @@ describe('the Workbench dock on landing (D3)', () => {
     expect(window.localStorage.getItem(WORKBENCH_COLLAPSED_STORAGE_KEY)).toBe('[]');
   });
 
+  it('opens on a new chat in a space with no agent to answer', async () => {
+    net.agents = [];
+    await land('');
+    expect(container.textContent).toContain('No assistant yet');
+    expect(dockOpen()).toBe(true);
+  });
+
   it('keeps the chat first on a phone', async () => {
     Object.defineProperty(window, 'innerWidth', { value: 390, configurable: true });
     await land('');
@@ -307,7 +328,7 @@ describe('the Workbench dock on landing (D3)', () => {
 });
 
 describe('what the open dock reads (D3 budget)', () => {
-  it('reads five things a collapsed dock does not, and nothing per folded section', async () => {
+  it('reads six things a collapsed dock does not, and nothing per folded section', async () => {
     net.sessions = [conversation()];
     window.localStorage.setItem(WORKBENCH_COLLAPSED_STORAGE_KEY, JSON.stringify([SESSION]));
     await land(`session=${SESSION}`);
@@ -321,6 +342,7 @@ describe('what the open dock reads (D3 budget)', () => {
         '/api/sessions/presence?sessionIds=:session',
         '/api/spaces/:space/workflow-runs?status=running,paused&limit=50',
         '/api/spaces/:space/cascades/:session',
+        '/api/spaces/:space/cybernetic/active-surface',
       ].sort(),
     );
     // The page already holds the entity-events stream for a conversation.
@@ -340,6 +362,83 @@ describe('what the open dock reads (D3 budget)', () => {
     );
     await click(integrations ?? null);
     expect(net.reads).toContain('/api/integrations/definitions');
+  });
+});
+
+describe('what a folded header carries (D3)', () => {
+  const header = (title: string) =>
+    [...container.querySelectorAll('button[aria-expanded="false"]')].find(
+      (b) => b.textContent === title,
+    )?.parentElement ?? null;
+
+  function run(runId: string, status: string) {
+    return {
+      runId,
+      status,
+      workflowSlug: 'weekly-roundup',
+      workflowRevision: 1,
+      startedAt: new Date(Date.now() - HOUR).toISOString(),
+      completedAt: null,
+      durationMs: null,
+      totalCostCents: null,
+      totalTokens: null,
+      evalScore: null,
+      evalVerdict: null,
+      taskCount: 1,
+      pausedReason: null,
+      initiatedByUserId: USER,
+      sessionId: null,
+      rootSessionId: null,
+    };
+  }
+
+  function coach(lifecycle: string) {
+    return {
+      lifecycle,
+      coachSessionId: COACH,
+      pendingProposals: 0,
+      pendingPlatformIssues: 0,
+      pendingAnomalies: 0,
+    };
+  }
+
+  it('badges the live skill runs on the folded Skills header, without reading the skills', async () => {
+    net.runs = [run('r1', 'running'), run('r2', 'running'), run('r3', 'paused')];
+    await land('');
+    expect(dockOpen()).toBe(true);
+    const skills = header('Skills');
+    expect(skills?.querySelector('[title="2 running"]')).not.toBeNull();
+    expect(skills?.querySelector('[title="1 paused"]')).not.toBeNull();
+    expect(net.reads.some((r) => r.includes('/workflows?archived=true'))).toBe(false);
+  });
+
+  it('shows no badge on the folded Skills header with no live run', async () => {
+    await land('');
+    expect(header('Skills')?.querySelector('[title$="running"], [title$="paused"]')).toBeNull();
+  });
+
+  it('keeps a reviewing Coach on the folded Coach header, with its session', async () => {
+    net.coach = coach('reviewing');
+    await land('');
+    const coachHeader = header('Coach review');
+    expect(coachHeader?.textContent).toContain('Reviewing');
+    expect(coachHeader?.querySelector('a')?.getAttribute('href')).toContain(COACH);
+    expect(net.reads.some((r) => r.includes('/anomalies'))).toBe(false);
+  });
+
+  it('keeps a stalled Coach on the folded Coach header', async () => {
+    net.coach = coach('stalled');
+    await land('');
+    expect(header('Coach review')?.textContent).toContain('Stalled');
+  });
+
+  it('shows no state on the folded Coach header while the Coach is idle', async () => {
+    net.coach = coach('idle');
+    await land('');
+    const coachHeader = header('Coach review');
+    expect(coachHeader).not.toBeNull();
+    expect(coachHeader?.textContent).not.toContain('Reviewing');
+    expect(coachHeader?.textContent).not.toContain('Stalled');
   });
 });
 

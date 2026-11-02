@@ -105,6 +105,29 @@ export function WorkbenchSkills({
   );
 }
 
+/**
+ * How many of `runs` are paused and how many running, as a skill row shows
+ * them. The folded Skills header shows the same badges for the space.
+ */
+export function LiveRunBadges({ runs }: { runs: readonly SpaceWorkflowRunSummary[] }) {
+  const pausedCount = runs.filter((r) => r.status === 'paused').length;
+  const runningCount = runs.filter((r) => r.status === 'running').length;
+  return (
+    <>
+      {pausedCount > 0 && (
+        <Badge variant="paused" title={`${String(pausedCount)} paused`}>
+          {String(pausedCount)}
+        </Badge>
+      )}
+      {runningCount > 0 && (
+        <Badge variant="running" title={`${String(runningCount)} running`}>
+          {String(runningCount)}
+        </Badge>
+      )}
+    </>
+  );
+}
+
 function statusRank(status: string): number {
   if (status === 'paused') return 0;
   if (status === 'running') return 1;
@@ -154,9 +177,6 @@ function WorkbenchSkillRow({
   );
   const activity = useRoomActivity(spaceId, roomIds);
 
-  const pausedCount = active.filter((r) => r.status === 'paused').length;
-  const runningCount = active.filter((r) => r.status === 'running').length;
-
   return (
     <div
       style={{
@@ -204,16 +224,7 @@ function WorkbenchSkillRow({
           </Text>
         </button>
         {skill.archivedAt && <Badge variant="neutral">Archived</Badge>}
-        {pausedCount > 0 && (
-          <Badge variant="paused" title={`${String(pausedCount)} paused`}>
-            {String(pausedCount)}
-          </Badge>
-        )}
-        {runningCount > 0 && (
-          <Badge variant="running" title={`${String(runningCount)} running`}>
-            {String(runningCount)}
-          </Badge>
-        )}
+        <LiveRunBadges runs={active} />
         <Tooltip content="Open skill">
           <IconButton
             icon={<Icon name="eye" size="sm" />}

@@ -235,10 +235,31 @@ function ChatPageInner() {
     );
   }, []);
 
-  // The landing: decided once the conversation it lands on is known, again on
-  // each navigation to another, and never while the chat lands (D4).
+  // Chat always resolves to a default agent (URL agent, the space default,
+  // else Helmsman) — it never asks the user to pick a "flow". While that
+  // resolution is in flight we hold a calm placeholder instead of a picker.
+  const helmsmanFlow = useMemo(
+    () => flows.find((f) => f.systemRole === 'cybernetic-helmsman'),
+    [flows],
+  );
+  const flowWillResolve = useMemo(() => {
+    if (agentIdFromUrl) return flows.some((f) => f.agentId === agentIdFromUrl);
+    const defaultAgentId = activeSpace?.defaultAgentId;
+    if (defaultAgentId && flows.some((f) => f.agentId === defaultAgentId)) return true;
+    return Boolean(helmsmanFlow);
+  }, [agentIdFromUrl, flows, activeSpace?.defaultAgentId, helmsmanFlow]);
+  // The landing of D4 waits on an agent's session list. With no agent to
+  // answer there is no list, so the chat has landed on a new chat.
+  const awaitingLanding =
+    landingPending && (selectedFlow !== null || flowsLoading || flowWillResolve);
+  // The agents are read only once the route has named the space, so until then
+  // nobody knows yet whether an agent will answer.
+  const dockAwaitsLanding = awaitingLanding || (landingPending && !spaceId);
+
+  // The dock's landing: decided once the conversation it lands on is known,
+  // again on each navigation to another, and never while the chat lands (D4).
   useLayoutEffect(() => {
-    if (landingPending) return;
+    if (dockAwaitsLanding) return;
     const prev = landedOnRef.current;
     landedOnRef.current = { id: activeSessionId };
     if (prev?.id === activeSessionId) return;
@@ -263,7 +284,7 @@ function ChatPageInner() {
         askedOpen,
       }),
     );
-  }, [activeSessionId, landingPending, sessionIdFromUrl]);
+  }, [activeSessionId, dockAwaitsLanding, sessionIdFromUrl]);
   // One at a time: two agent panels open together would each hold their own
   // copy of the directives and the slower save would overwrite the other's.
   const [openSettingsPanel, setOpenSettingsPanel] = useState<
@@ -486,19 +507,6 @@ function ChatPageInner() {
     ],
   );
 
-  // Chat always resolves to a default agent (URL agent, the space default,
-  // else Helmsman) — it never asks the user to pick a "flow". While that
-  // resolution is in flight we hold a calm placeholder instead of a picker.
-  const helmsmanFlow = useMemo(
-    () => flows.find((f) => f.systemRole === 'cybernetic-helmsman'),
-    [flows],
-  );
-  const flowWillResolve = useMemo(() => {
-    if (agentIdFromUrl) return flows.some((f) => f.agentId === agentIdFromUrl);
-    const defaultAgentId = activeSpace?.defaultAgentId;
-    if (defaultAgentId && flows.some((f) => f.agentId === defaultAgentId)) return true;
-    return Boolean(helmsmanFlow);
-  }, [agentIdFromUrl, flows, activeSpace?.defaultAgentId, helmsmanFlow]);
   const resolvingFlow = !selectedFlow && (flowsLoading || flowWillResolve);
   const isHelmsmanFlow = selectedFlow?.systemRole === 'cybernetic-helmsman';
   // A conversation the URL already names is not an empty chat — it is a full
@@ -507,9 +515,6 @@ function ChatPageInner() {
   const openingNamedSession = sessionIdFromUrl !== null;
   // The same holds while the chat decides whether it lands on the reader's
   // last conversation (D4): the greeting would paint, then give way to it.
-  // Only while an agent will answer, so a space without one still says so.
-  const awaitingLanding =
-    landingPending && (selectedFlow !== null || flowsLoading || flowWillResolve);
   const openingConversation = openingNamedSession || awaitingLanding;
   const emptyChat = allItems.length === 0 && !currentRun && !openingConversation;
 

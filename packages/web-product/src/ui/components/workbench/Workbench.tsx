@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, type ComponentProps } from 'react';
-import { Badge, Column } from '@aflow/design-system';
+import { Column } from '@aflow/design-system';
 
 import { useApiQuery } from '../../hooks/useApiQuery.js';
 import { useActionCenter } from '../../hooks/use-action-center.js';
@@ -9,14 +9,9 @@ import { useSpaceWorkflowRuns } from '../../hooks/use-space-workflow-runs.js';
 import { WorkbenchNeedsAttention, waitingOnLabel } from './WorkbenchNeedsAttention.js';
 import { WorkbenchSchedules } from './WorkbenchSchedules.js';
 import { useSpacePeople } from '../../hooks/use-space-people.js';
-import {
-  COACH_REVIEW,
-  WorkbenchCoach,
-  WorkbenchProposalSources,
-  coachReviewProposals,
-} from './WorkbenchCoach.js';
+import { WorkbenchCoachFold, WorkbenchProposalSources } from './WorkbenchCoach.js';
 import { WorkbenchLazySection } from './WorkbenchSection.js';
-import { WorkbenchSkills, type WorkbenchSkill } from './WorkbenchSkills.js';
+import { LiveRunBadges, WorkbenchSkills, type WorkbenchSkill } from './WorkbenchSkills.js';
 import { WorkbenchApplets } from './WorkbenchApplets.js';
 import { WorkbenchAgents } from './WorkbenchAgents.js';
 import { WorkbenchIntegrations } from './WorkbenchIntegrations.js';
@@ -52,8 +47,10 @@ interface WorkflowListItem {
  *
  * The chat opens this board by default on a new chat, so what it mounts on
  * open is a cost on every landing. Only (1) and (3) mount then. Each section
- * of (2), and the Coach's, is folded and reads nothing until the operator
- * expands it (Plan 338 D3, where the reads are counted).
+ * of (2), and the Coach's, is folded and mounts only when the operator expands
+ * it (Plan 338 D3, where the reads are counted). A folded header still shows
+ * what would have put the section in front of the operator: the live runs on
+ * Skills, from the run feed (1) holds, and the Coach's proposals and state.
  */
 export function Workbench({
   spaceId,
@@ -81,7 +78,15 @@ export function Workbench({
     () => new Map((cachedWorkflows.data?.workflows ?? []).map((w) => [w.slug, w.name] as const)),
     [cachedWorkflows.data],
   );
-  const coachProposals = coachReviewProposals(actionCenter).length;
+  // The live runs Skills lists once expanded, from the feed the board already
+  // holds. A platform workflow's run is left out once the cached list names it
+  // as one. Until then it counts here too.
+  const skillRuns = useMemo(() => {
+    const system = new Set(
+      (cachedWorkflows.data?.workflows ?? []).filter((w) => w.system).map((w) => w.slug),
+    );
+    return runsState.runs.filter((r) => !system.has(r.workflowSlug));
+  }, [runsState.runs, cachedWorkflows.data]);
 
   // What each paused run is waiting on, said as a person. Derived from the
   // open items rather than the run row, so the label and the card that
@@ -114,7 +119,11 @@ export function Workbench({
           <WorkbenchLazySection title="Schedules" icon="clock">
             <WorkbenchSchedules state={actionCenter} spaceId={spaceId} spaceSlug={spaceSlug} />
           </WorkbenchLazySection>
-          <WorkbenchLazySection title="Skills" icon="skill">
+          <WorkbenchLazySection
+            title="Skills"
+            icon="skill"
+            meta={<LiveRunBadges runs={skillRuns} />}
+          >
             <WorkbenchSkillList
               spaceId={spaceId}
               spaceSlug={spaceSlug}
@@ -148,15 +157,7 @@ export function Workbench({
           <WorkbenchLazySection title="Integrations" icon="plugs-connected">
             <WorkbenchIntegrations spaceId={spaceId} spaceSlug={spaceSlug} />
           </WorkbenchLazySection>
-          <WorkbenchLazySection
-            title={COACH_REVIEW}
-            icon="stethoscope"
-            meta={
-              coachProposals > 0 ? <Badge variant="accent">{String(coachProposals)}</Badge> : null
-            }
-          >
-            <WorkbenchCoach state={actionCenter} spaceId={spaceId} spaceSlug={spaceSlug} />
-          </WorkbenchLazySection>
+          <WorkbenchCoachFold state={actionCenter} spaceId={spaceId} spaceSlug={spaceSlug} />
         </Column>
       </div>
       {/* The floor of the pane. It sizes itself (see the component) rather than

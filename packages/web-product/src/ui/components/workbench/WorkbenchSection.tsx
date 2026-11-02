@@ -34,12 +34,15 @@ export function WorkbenchLazySection({
   title,
   icon,
   meta,
+  trailing,
   children,
 }: {
   title: string;
   icon?: IconName;
   /** Shown on the collapsed header. It must come from data already held. */
   meta?: ReactNode;
+  /** Section-level status on the collapsed header, as `WorkbenchSection` places it. */
+  trailing?: ReactNode;
   children: ReactNode;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -57,7 +60,7 @@ export function WorkbenchLazySection({
       {expanded ? (
         children
       ) : (
-        <WorkbenchSection title={title} {...(icon ? { icon } : {})} meta={meta}>
+        <WorkbenchSection title={title} {...(icon ? { icon } : {})} meta={meta} trailing={trailing}>
           {null}
         </WorkbenchSection>
       )}

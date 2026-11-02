@@ -4,10 +4,16 @@ import { Badge, Column, Row, Text } from '@aflow/design-system';
 import type { ActionCenterItem } from '../../hooks/use-action-center-types.js';
 import type { UseActionCenterResult } from '../../hooks/use-action-center.js';
 import { useCoachSurface } from '../../hooks/use-coach-surface.js';
+import { useCoachStateUnstreamed } from '../../hooks/use-active-surface.js';
 import { ActionCenterItemCard } from '../actionCenter/ActionCenterLane.js';
 import { spaceRoute } from '../../lib/space-routes.js';
 import { groupBySource } from '../../lib/proposal-provenance.js';
-import { WorkbenchLink, WorkbenchSection, useWorkbenchSectionFold } from './WorkbenchSection.js';
+import {
+  WorkbenchLazySection,
+  WorkbenchLink,
+  WorkbenchSection,
+  useWorkbenchSectionFold,
+} from './WorkbenchSection.js';
 
 /**
  * Coach (Plan 228 §3.2b), and the proposals other sources made beside it.
@@ -68,6 +74,43 @@ export function WorkbenchCoach({
         </WorkbenchSection>
       )}
     </>
+  );
+}
+
+/**
+ * The Coach section as the Workbench mounts it: folded until the operator
+ * expands it (Plan 338 D3). The folded header still carries what showed the
+ * section on its own before it folded. That is the count of the Coach's
+ * proposals and its state while it reviews or has stalled.
+ */
+export function WorkbenchCoachFold({
+  state,
+  spaceId,
+  spaceSlug,
+}: {
+  state: UseActionCenterResult;
+  spaceId: string;
+  spaceSlug: string;
+}) {
+  const coach = useCoachStateUnstreamed(spaceId);
+  const proposals = coachReviewProposals(state).length;
+  return (
+    <WorkbenchLazySection
+      title={COACH_REVIEW}
+      icon="stethoscope"
+      meta={proposals > 0 ? <Badge variant="accent">{String(proposals)}</Badge> : null}
+      trailing={
+        coach ? (
+          <CoachStatus
+            lifecycle={coach.lifecycle}
+            coachSessionId={coach.coachSessionId ?? null}
+            spaceSlug={spaceSlug}
+          />
+        ) : null
+      }
+    >
+      <WorkbenchCoach state={state} spaceId={spaceId} spaceSlug={spaceSlug} />
+    </WorkbenchLazySection>
   );
 }
 
