@@ -61,10 +61,10 @@ export function offListAgentModelRefs(
  * The set a given role may be assigned from.
  *
  * One resolver still decides what a tenant permits; what differs is which
- * models the PLATFORM recommends for a role. The small models the Clerk exists
- * to use are deliberately absent from the foreground lineup, so holding the
- * Clerk to that lineup refuses every economical model the picker offers and
- * leaves only the expensive ones the role exists to avoid. A tenant that named
+ * models the PLATFORM recommends for a role. The foreground lineup carries one
+ * model per provider, so it lacks several small models the Clerk exists to use
+ * (`flash-lite`, `gpt-mini`). Holding the Clerk to that lineup would refuse
+ * economical models the picker offers. A tenant that named
  * its own set stays authoritative for every role alike: the recommendation is
  * what an unset allowlist means, never an exemption from one.
  */

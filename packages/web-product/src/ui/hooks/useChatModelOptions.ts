@@ -52,8 +52,8 @@ export interface ModelOptionsState {
   modelOptions: ModelOption[];
   /**
    * What the Clerk may be assigned explicitly: the agent options plus the
-   * curated economical models, which are deliberately absent from the
-   * agent-role shortlist. That shortlist is a chat-tier recommendation and was
+   * curated economical models, several of which the agent-role shortlist does
+   * not carry. That shortlist is a chat-tier recommendation and was
    * never a ceiling on background upkeep — but where a tenant named its own
    * set, that set IS a ceiling and narrows these too.
    */

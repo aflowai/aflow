@@ -4,6 +4,7 @@ import {
   isRecommendedAgentModelRef,
   DEFAULT_CYBERNETIC_MODEL,
   CLERK_MODEL_CANDIDATES,
+  DirectiveModelDefaultsSchema,
 } from '@aflow/schemas';
 import { MODEL_SELECTIONS } from '@aflow/lib';
 import { createDefaultModelCatalog } from './catalog.js';
@@ -60,6 +61,28 @@ describe('agent model allowlist ↔ catalog contract', () => {
 
   it('the platform default cybernetic model is allowlisted', () => {
     expect(isRecommendedAgentModelRef(DEFAULT_CYBERNETIC_MODEL)).toBe(true);
+  });
+
+  it('recommends the cost tier of each provider, with glm-flash first', () => {
+    expect(RECOMMENDED_AGENT_MODELS.map((m) => m.alias)).toEqual([
+      'glm-flash',
+      'haiku',
+      'flash',
+      'luna',
+    ]);
+    expect(RECOMMENDED_AGENT_MODELS.filter((m) => m.recommended).map((m) => m.alias)).toEqual([
+      'glm-flash',
+    ]);
+    const providers = RECOMMENDED_AGENT_MODELS.map((m) => m.credentialProviderId);
+    expect(new Set(providers).size, 'one entry per provider').toBe(providers.length);
+  });
+
+  it('a space created without a model starts on glm-flash', () => {
+    expect(DEFAULT_CYBERNETIC_MODEL).toBe('glm-flash');
+    expect(DirectiveModelDefaultsSchema.parse({}).default).toBe('glm-flash');
+    expect(catalog.getModel(DirectiveModelDefaultsSchema.parse({}).default)?.id).toBe(
+      'accounts/fireworks/models/glm-5p3-flash',
+    );
   });
 
   it('every Clerk candidate is a live model on the provider that lists it', () => {

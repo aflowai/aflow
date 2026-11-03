@@ -44,7 +44,7 @@ export type DirectiveResourceBudget = z.infer<typeof DirectiveResourceBudgetSche
 // ============================================================================
 
 /** Platform default when a cybernetic space has no model configured. */
-export const DEFAULT_CYBERNETIC_MODEL = 'glm-pro';
+export const DEFAULT_CYBERNETIC_MODEL = 'glm-flash';
 
 /** Clerk assignment mode: resolve the curated economical model for the space default's provider. */
 export const CLERK_AUTO = 'auto' as const;
@@ -61,7 +61,7 @@ export const CLERK_SPACE_DEFAULT = 'space_default' as const;
  * `DEFAULT_CYBERNETIC_MODEL`.
  *
  * Values are model aliases or ids accepted by `@aflow/ai-client`'s catalog
- * (e.g. `'glm-pro'`, `'sonnet'`, `'haiku'`, `'gpt-mini'`, `'flash'`).
+ * (e.g. `'glm-flash'`, `'sonnet'`, `'haiku'`, `'gpt-mini'`, `'flash'`).
  */
 export const DirectiveModelDefaultsSchema = z.object({
   /** Recommended model for all roles. Used when no role-specific override is set. */

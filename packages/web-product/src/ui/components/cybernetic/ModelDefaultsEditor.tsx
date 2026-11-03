@@ -354,7 +354,7 @@ export function ModelDefaultsEditor({
 
   // The Clerk's row is not an override row. Every other role falls back to the
   // space default and its empty value says so; the Clerk's empty value means
-  // `auto`, and rendering "Use default (glm-pro)" over it would describe the
+  // `auto`, and rendering "Use default (glm-flash)" over it would describe the
   // opposite of what leaving it alone does.
   const clerkOptions = clerkModelOptions ?? modelOptions;
   const clerkStored = modelDefaults.clerk;

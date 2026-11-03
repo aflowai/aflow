@@ -884,7 +884,7 @@ export const builtInModels: ModelDefinition[] = [
     aliases: ['glm-pro', 'glm-5.3'],
     // Thinking-only: reasoning_effort 'none' is a 400, so there is no `off` rung
     // and `off` clamps to `low`. Left to its own default the model reasons
-    // harder than its top rung, and this is the platform's default agent model.
+    // harder than its top rung, which every agent turn would pay for.
     reasoning: { supported: ['low', 'medium', 'high'], default: 'low' },
   },
   {
