@@ -75,7 +75,7 @@ export interface ModelOptionsState {
   modelOptionsError: string | null;
 }
 
-interface CatalogModel {
+export interface CatalogModel {
   modelId: string;
   provider: string;
   displayName: string;
@@ -84,6 +84,58 @@ interface CatalogModel {
   deprecated?: boolean;
   traits?: { outputType?: string };
   reasoning?: { supported: DirectiveReasoningEffort[]; default?: DirectiveReasoningEffort };
+}
+
+/** What `/tenant/agent-models` answers: the assignable set, and whose set it is. */
+export interface AgentModelPolicy {
+  modelIds: string[];
+  source: 'tenant' | 'platform';
+}
+
+/**
+ * The agent-role options: the chat catalog narrowed to the tenant's set, plus
+ * every model a space still holds. A held model outside the set carries whose
+ * set left it out, and the picker words it by that.
+ */
+export function agentModelOptions(
+  models: readonly CatalogModel[],
+  policy: AgentModelPolicy | undefined,
+  keepRefs: readonly string[],
+): ModelOption[] {
+  if (!policy) return [];
+  const allowedSet = new Set(policy.modelIds);
+  const keepSet = new Set(keepRefs);
+  // A retired id counts as naming this model, so a space still holding one
+  // keeps its own assignment listed rather than dropping to a blank select.
+  const matches = (m: CatalogModel, refs: ReadonlySet<string>): boolean =>
+    refs.has(m.modelId) ||
+    (m.aliases ?? []).some((a) => refs.has(a)) ||
+    (m.retiredRefs ?? []).some((r) => refs.has(r));
+
+  return (
+    models
+      .filter((m) => !m.deprecated && m.traits?.outputType !== 'embedding')
+      // A model the tenant has since excluded stays listed while a space still
+      // holds it: narrowing the set blocks new assignments but leaves existing
+      // ones running, and dropping the option would render that space's own
+      // model as a blank select nobody could read or deliberately change.
+      .filter((m) => matches(m, allowedSet) || matches(m, keepSet))
+      .map((m) => {
+        const isAllowed = matches(m, allowedSet);
+        return {
+          id: m.modelId,
+          ref: m.aliases?.[0] ?? m.modelId,
+          provider: m.provider,
+          displayName: m.displayName,
+          aliases: m.aliases ?? [],
+          retiredRefs: m.retiredRefs ?? [],
+          reasoningEfforts: m.reasoning?.supported ?? [],
+          allowed: isAllowed,
+          offListBy: isAllowed ? null : policy.source,
+        };
+      })
+      .sort((a, b) => a.displayName.localeCompare(b.displayName))
+  );
 }
 
 /**
@@ -112,7 +164,7 @@ export function useChatModelOptions(keepRefs: readonly string[] = []): ModelOpti
     staleTime: 300_000,
   });
 
-  const policy = useApiQuery<{ modelIds: string[]; source: 'tenant' | 'platform' }>({
+  const policy = useApiQuery<AgentModelPolicy>({
     key: ['tenant', 'agent-models'],
     path: '/tenant/agent-models',
     staleTime: 60_000,
@@ -120,44 +172,15 @@ export function useChatModelOptions(keepRefs: readonly string[] = []): ModelOpti
 
   const keepKey = [...keepRefs].sort().join('\u0000');
 
-  const modelOptions = useMemo<ModelOption[]>(() => {
-    const allowed = policy.data?.modelIds;
-    if (!allowed) return [];
-    const source = policy.data?.source ?? 'platform';
-    const allowedSet = new Set(allowed);
-    const keepSet = new Set(keepKey ? keepKey.split('\u0000') : []);
-    // A retired id counts as naming this model, so a space still holding one
-    // keeps its own assignment listed rather than dropping to a blank select.
-    const matches = (m: CatalogModel, refs: ReadonlySet<string>): boolean =>
-      refs.has(m.modelId) ||
-      (m.aliases ?? []).some((a) => refs.has(a)) ||
-      (m.retiredRefs ?? []).some((r) => refs.has(r));
-
-    return (
-      (catalog.data?.models ?? [])
-        .filter((m) => !m.deprecated && m.traits?.outputType !== 'embedding')
-        // A model the tenant has since excluded stays listed while a space still
-        // holds it: narrowing the set blocks new assignments but leaves existing
-        // ones running, and dropping the option would render that space's own
-        // model as a blank select nobody could read or deliberately change.
-        .filter((m) => matches(m, allowedSet) || matches(m, keepSet))
-        .map((m) => {
-          const isAllowed = matches(m, allowedSet);
-          return {
-            id: m.modelId,
-            ref: m.aliases?.[0] ?? m.modelId,
-            provider: m.provider,
-            displayName: m.displayName,
-            aliases: m.aliases ?? [],
-            retiredRefs: m.retiredRefs ?? [],
-            reasoningEfforts: m.reasoning?.supported ?? [],
-            allowed: isAllowed,
-            offListBy: isAllowed ? null : source,
-          };
-        })
-        .sort((a, b) => a.displayName.localeCompare(b.displayName))
-    );
-  }, [catalog.data, policy.data, keepKey]);
+  const modelOptions = useMemo<ModelOption[]>(
+    () =>
+      agentModelOptions(
+        catalog.data?.models ?? [],
+        policy.data,
+        keepKey ? keepKey.split('\u0000') : [],
+      ),
+    [catalog.data, policy.data, keepKey],
+  );
 
   const clerkModelOptions = useMemo<ModelOption[]>(() => {
     const allowed = policy.data?.modelIds;

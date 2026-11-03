@@ -18,6 +18,13 @@ import { useApi, useSpace } from './providers.js';
 import { useChatModelOptions } from '../hooks/useChatModelOptions.js';
 import { useApiMutation } from '../hooks/useApiQuery.js';
 import { deferProviderSetup } from './provider-setup-deferral.js';
+import {
+  planAfterModelStep,
+  readyNote,
+  type AfterModelStep,
+  type ReadyStanding,
+} from './onboarding-connect-plan.js';
+import type { SpaceLlmReadiness } from '../hooks/useSpaceLlmReadiness.js';
 
 // =============================================================================
 // Constants
@@ -397,7 +404,11 @@ export interface ModelSelection {
   roleOverrides: Partial<Record<AgentRole, string>>;
 }
 
-/** Unique credential providers implied by a model selection. */
+/**
+ * Credential providers of the recommended models in a selection. A held model
+ * outside the recommendation names none here, so `planAfterModelStep` reads
+ * the rest from the space's readiness.
+ */
 function providersForSelection(selection: ModelSelection): AgentModelProviderId[] {
   const refs = [selection.defaultRef, ...Object.values(selection.roleOverrides)];
   const providers = new Set<AgentModelProviderId>();
@@ -448,7 +459,7 @@ function StepModel({
   space: CreateSpaceResult;
   /** Re-entry (Back from the connect step) restores the saved selection. */
   initial: ModelSelection | null;
-  onDone: (selection: ModelSelection) => void;
+  onDone: (selection: ModelSelection, next: AfterModelStep) => void;
 }) {
   const { headers, authFetch } = useApi();
   // Only models this tenant permits: offering one it excludes would fail the
@@ -528,12 +539,29 @@ function StepModel({
     return body?.error ?? `Could not connect to Ollama on this computer (${put.status}).`;
   };
 
+  const readReadiness = async (spaceId: string): Promise<SpaceLlmReadiness | null> => {
+    try {
+      const res = await authFetch(`/api/spaces/${spaceId}/llm-readiness`, {
+        headers: { ...headers(), 'X-Space-ID': spaceId },
+      });
+      return res.ok ? ((await res.json()) as SpaceLlmReadiness) : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const finish = async (chosen: ModelSelection) => {
+    const readiness = await readReadiness(space.id);
+    onDone(chosen, planAfterModelStep(providersForSelection(chosen), readiness));
+  };
+
   const handleContinue = async () => {
     // Nothing to save when no model was offered or chosen: the space keeps
     // whatever creation assigned it, which the server already held to the
     // tenant's set.
     if (defaultRef === '') {
-      onDone({ defaultRef: '', roleOverrides: {} });
+      setSaving(true);
+      await finish({ defaultRef: '', roleOverrides: {} });
       return;
     }
     setSaving(true);
@@ -574,7 +602,7 @@ function StepModel({
           return;
         }
       }
-      onDone(selection);
+      await finish(selection);
     } catch {
       setError('Network error — please try again.');
       setSaving(false);
@@ -1178,25 +1206,38 @@ function GuideCard({
 
 function StepReady({
   space,
-  keysConnected,
+  standing,
   onEnter,
   onOpenChatWithDraft,
   onOpenStore,
+  onChooseModel,
+  onOpenComputer,
 }: {
   space: CreateSpaceResult;
-  keysConnected: boolean;
+  standing: ReadyStanding;
   onEnter: () => void;
   onOpenChatWithDraft: (draft: string) => void;
   onOpenStore: () => void;
+  onChooseModel: () => void;
+  onOpenComputer: () => void;
 }) {
+  const note = readyNote(standing);
+  // A space that holds a dropped model or a stopped runtime is created, not
+  // ready, and the heading says only what holds.
+  const blocked = standing.kind === 'unknown_models' || standing.kind === 'local_runtime';
   return (
     <div>
       <FadeSlide delay={0.1}>
         <div style={{ textAlign: 'center', marginBottom: 'var(--space-5)' }}>
           <Icon
-            name="check-circle"
+            name={blocked ? 'warning-circle' : 'check-circle'}
             size="xl"
-            style={{ color: 'var(--color-status-succeeded)', marginBottom: 'var(--space-2)' }}
+            style={{
+              color: blocked
+                ? 'var(--color-status-attention, var(--color-text-muted))'
+                : 'var(--color-status-succeeded)',
+              marginBottom: 'var(--space-2)',
+            }}
           />
           <h2
             style={{
@@ -1207,9 +1248,9 @@ function StepReady({
               color: 'var(--color-text-primary)',
             }}
           >
-            {space.name} is ready!
+            {blocked ? `${space.name} is created` : `${space.name} is ready!`}
           </h2>
-          {!keysConnected && (
+          {note && (
             <p
               style={{
                 margin: 'var(--space-2) auto 0',
@@ -1217,8 +1258,18 @@ function StepReady({
                 color: 'var(--color-text-muted)',
               }}
             >
-              No key connected yet — your workspace will guide you when you start chatting.
+              {note.text}
             </p>
+          )}
+          {note?.action && (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={note.action === 'choose_model' ? onChooseModel : onOpenComputer}
+              style={{ marginTop: 'var(--space-3)' }}
+            >
+              {note.action === 'choose_model' ? 'Choose another model' : 'Open This Computer'}
+            </Button>
           )}
         </div>
       </FadeSlide>
@@ -1320,7 +1371,8 @@ export function OnboardingFlow({ resumeFor }: { resumeFor?: CreateSpaceResult })
   const [step, setStep] = useState<Step>(resumeFor ? 'name' : 'welcome');
   const [createdSpace, setCreatedSpace] = useState<CreateSpaceResult | null>(resumeFor ?? null);
   const [selection, setSelection] = useState<ModelSelection | null>(null);
-  const [keysConnected, setKeysConnected] = useState(false);
+  const [standing, setStanding] = useState<ReadyStanding>({ kind: 'no_key' });
+  const [neededProviders, setNeededProviders] = useState<AgentModelProviderId[]>([]);
 
   // Deliberately NO space-list refresh here: SpaceGate unmounts this wizard
   // the moment accessibleSpaces becomes non-empty, which would kill the
@@ -1336,14 +1388,13 @@ export function OnboardingFlow({ resumeFor }: { resumeFor?: CreateSpaceResult })
     // Leaving a resumed flow without connecting anything means the workspace
     // still cannot run, and the gate that opened this would open it again on
     // the navigation below.
-    if (resumeFor && !keysConnected) deferProviderSetup();
+    if (resumeFor && standing.kind !== 'runnable') deferProviderSetup();
     setActiveSpaceId(createdSpace.id);
     // Full reload to re-mount with the new space context
     window.location.href = path;
   };
 
   const stepOrder = resumeFor ? RESUMED_STEP_ORDER : STEP_ORDER.slice(1);
-  const neededProviders = selection ? providersForSelection(selection) : [];
 
   return (
     <div style={containerStyle}>
@@ -1385,15 +1436,15 @@ export function OnboardingFlow({ resumeFor }: { resumeFor?: CreateSpaceResult })
           <StepModel
             space={createdSpace}
             initial={selection}
-            onDone={(sel) => {
+            onDone={(sel, next) => {
               setSelection(sel);
-              // A model on this computer has no key to connect.
-              if (sel.defaultRef !== '' && providersForSelection(sel).length === 0) {
-                setKeysConnected(true);
-                setStep('ready');
+              if (next.step === 'connect') {
+                setNeededProviders(next.providers);
+                setStep('connect');
                 return;
               }
-              setStep('connect');
+              setStanding(next.standing);
+              setStep('ready');
             }}
           />
         )}
@@ -1402,11 +1453,11 @@ export function OnboardingFlow({ resumeFor }: { resumeFor?: CreateSpaceResult })
             space={createdSpace}
             providers={neededProviders}
             onDone={() => {
-              setKeysConnected(true);
+              setStanding({ kind: 'runnable' });
               setStep('ready');
             }}
             onSkip={() => {
-              setKeysConnected(false);
+              setStanding({ kind: 'no_key' });
               setStep('ready');
             }}
             onBack={() => {
@@ -1417,7 +1468,13 @@ export function OnboardingFlow({ resumeFor }: { resumeFor?: CreateSpaceResult })
         {step === 'ready' && createdSpace && (
           <StepReady
             space={createdSpace}
-            keysConnected={keysConnected}
+            standing={standing}
+            onChooseModel={() => {
+              setStep('model');
+            }}
+            onOpenComputer={() => {
+              enterWorkspace(`/s/${createdSpace.slug}/computer`);
+            }}
             onEnter={() => {
               enterWorkspace(`/s/${createdSpace.slug}/chat`);
             }}
