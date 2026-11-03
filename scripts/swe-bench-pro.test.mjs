@@ -5,7 +5,15 @@
  * stubbed, its verdict read and its failures classified.
  */
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -37,6 +45,15 @@ const GIT_ENV = {
 
 function git(cwd, ...args) {
   return execFileSync('git', args, { cwd, env: { ...process.env, ...GIT_ENV }, encoding: 'utf8' });
+}
+
+function holdsCommit(cwd, commit) {
+  try {
+    execFileSync('git', ['cat-file', '-e', `${commit}^{commit}`], { cwd, stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** `runCommand` with the fixture's git identity, so a commit in a test needs no global config. */
@@ -101,6 +118,58 @@ describe('the fixture task', () => {
     expect(() => readFileSync(join(folder, 'later.py'))).toThrow();
   });
 
+  it('carries history up to the base commit only, so no ref reaches the gold fix', async () => {
+    const goldFix = git(upstream, 'rev-parse', 'main').trim();
+    git(upstream, 'tag', 'v1.0', goldFix);
+    git(upstream, 'update-ref', 'refs/pull/7/head', goldFix);
+    const folder = await materializeTask(fixtureTask(), {
+      workRoot: join(scratch, 'work'),
+      repoUrl: upstream,
+      exec,
+    });
+
+    expect(git(folder, 'remote').trim()).toBe('');
+    const refs = git(folder, 'for-each-ref', '--format=%(refname)').trim().split('\n');
+    for (const ref of [...refs.filter(Boolean), 'HEAD']) {
+      expect(() => git(folder, 'merge-base', '--is-ancestor', ref, baseCommit)).not.toThrow();
+    }
+    expect(git(folder, 'rev-list', '--all').trim()).toBe(
+      git(folder, 'rev-list', baseCommit).trim(),
+    );
+    expect(holdsCommit(folder, goldFix)).toBe(false);
+  });
+
+  it('checks out a base commit that lives only on a pull-request ref', async () => {
+    git(upstream, 'switch', '--quiet', '--detach', baseCommit);
+    writeFileSync(join(upstream, 'pr.py'), 'print("on the pull request")\n');
+    git(upstream, 'add', '.');
+    git(upstream, 'commit', '--quiet', '-m', 'on the pull request');
+    const prBase = git(upstream, 'rev-parse', 'HEAD').trim();
+    git(upstream, 'update-ref', 'refs/pull/9/head', prBase);
+    git(upstream, 'switch', '--quiet', 'main');
+    const goldFix = git(upstream, 'rev-parse', 'main').trim();
+
+    const folder = await materializeTask(fixtureTask({ base_commit: prBase }), {
+      workRoot: join(scratch, 'work'),
+      repoUrl: upstream,
+      exec,
+    });
+
+    expect(git(folder, 'rev-parse', 'HEAD').trim()).toBe(prBase);
+    expect(readFileSync(join(folder, 'pr.py'), 'utf8')).toContain('on the pull request');
+    expect(git(folder, 'rev-list', '--all').trim().split('\n')).toEqual([prBase, baseCommit]);
+    expect(holdsCommit(folder, goldFix)).toBe(false);
+  });
+
+  it('leaves no folder behind when the base commit does not fetch', async () => {
+    const workRoot = join(scratch, 'work');
+    const task = fixtureTask({ base_commit: 'f'.repeat(40) });
+    await expect(
+      materializeTask(task, { workRoot, repoUrl: upstream, exec }),
+    ).rejects.toMatchObject({ failureClass: 'materialize_failed' });
+    expect(existsSync(join(workRoot, task.instanceId))).toBe(false);
+  });
+
   it('refuses to reuse a folder an earlier attempt worked', async () => {
     const options = { workRoot: join(scratch, 'work'), repoUrl: upstream, exec };
     await materializeTask(fixtureTask(), options);
@@ -157,7 +226,6 @@ describe('patch capture', () => {
       repoUrl: upstream,
       exec,
     });
-    git(folder, 'remote', 'remove', 'origin');
     expect(git(folder, 'remote').trim()).toBe('');
     // As the rounds commit: on a branch nothing has checked out, round by round.
     git(folder, 'switch', '--quiet', '-c', 'bench/calc-0001');

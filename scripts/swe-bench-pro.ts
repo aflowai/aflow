@@ -19,6 +19,8 @@
  * operator starts, the simplest thing that proves the mechanics. `attempt` is
  * the bare-harness arm whole: it materializes the task, runs the agent command
  * in the folder with the task text on standard input, and grades the patch.
+ * `materialize` leaves a folder whose history ends at the base commit. It has
+ * no remote and no tag, so no ref in it reaches a later commit or the gold fix.
  * The loop's arms run between `materialize` and `grade`: the folder is bound
  * to the measurement space through the host lane (D5), the loop works it, and
  * `grade` takes the outcome, tokens, cost and wall time its run reported.

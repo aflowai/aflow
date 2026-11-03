@@ -134,12 +134,19 @@ export function taskFolder(workRoot, task) {
 }
 
 /**
- * Clone the task's repository and detach it at the base commit (D3).
+ * Fetch the task's repository up to its base commit and detach it there (D3).
  *
  * D5 leaves open how the repository reaches the machine. This takes the
- * simplest road: a plain clone from GitHub, or from `repoUrl` when the caller
+ * simplest road: the repository on GitHub, or `repoUrl` when the caller
  * names a mirror or a fixture. The folder is new on every attempt, so no
  * attempt reads another's work.
+ *
+ * The folder holds the base commit and its ancestors only. A clone would
+ * carry the default branch and the tags, and with them the commits after the
+ * base, the gold fix among them. So the folder is a new repository that
+ * fetches the base commit by its id, with no tags and no remote. No ref in it
+ * reaches past the base, and no later object is in it. Protocol v2 is named
+ * because a server takes a request for an unadvertised commit only over v2.
  */
 export async function materializeTask(task, { workRoot, repoUrl, exec = runCommand }) {
   const folder = taskFolder(workRoot, task);
@@ -156,19 +163,35 @@ export async function materializeTask(task, { workRoot, repoUrl, exec = runComma
   }
   await mkdir(resolve(workRoot), { recursive: true });
   const source = repoUrl ?? `https://github.com/${task.repo}.git`;
-  const clone = await exec('git', ['clone', '--quiet', '--no-checkout', source, folder]);
-  if (clone.code !== 0) {
-    throw new AttemptStepError(
-      'materialize_failed',
-      `git clone ${source} failed.\n${tail(clone.stderr)}`,
+  // A failed step leaves no folder behind, as a failed clone did, so the attempt can run again.
+  const failed = async (message) => {
+    await rm(folder, { recursive: true, force: true });
+    return new AttemptStepError('materialize_failed', message);
+  };
+  const init = await exec('git', ['init', '--quiet', folder]);
+  if (init.code !== 0) throw await failed(`git init ${folder} failed.\n${tail(init.stderr)}`);
+  // `--git-dir` keeps the process's own directory, so a relative `repoUrl` names what it named.
+  const fetch = await exec('git', [
+    `--git-dir=${join(folder, '.git')}`,
+    '-c',
+    'protocol.version=2',
+    'fetch',
+    '--quiet',
+    '--no-tags',
+    '--no-write-fetch-head',
+    source,
+    task.baseCommit,
+  ]);
+  if (fetch.code !== 0) {
+    throw await failed(
+      `The base commit ${task.baseCommit} does not fetch from ${source}.\n${tail(fetch.stderr)}`,
     );
   }
   const checkout = await exec('git', ['checkout', '--quiet', '--detach', task.baseCommit], {
     cwd: folder,
   });
   if (checkout.code !== 0) {
-    throw new AttemptStepError(
-      'materialize_failed',
+    throw await failed(
       `The base commit ${task.baseCommit} does not check out.\n${tail(checkout.stderr)}`,
     );
   }
