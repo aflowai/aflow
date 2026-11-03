@@ -137,6 +137,14 @@ interface ModelDefaultsEditorProps {
   renderLocalStatus?: (role: ModelRole) => ReactNode;
 }
 
+// A tenant following the platform recommendation never restricted anything, so
+// a held model the platform stopped recommending must not read as the tenant's
+// own exclusion.
+const offListSuffix = (opt: ModelOption): string => {
+  if (opt.allowed) return '';
+  return opt.offListBy === 'tenant' ? ' — no longer permitted' : ' — no longer recommended';
+};
+
 const gb = (bytes: number): string => `${(bytes / 1e9).toFixed(1)} GB`;
 /** The window the platform's agents need (`MIN_USEFUL_WINDOW_TOKENS` in @aflow/ai-client). */
 const AGENT_WINDOW_TOKENS = 32_768;
@@ -229,8 +237,8 @@ export function ModelDefaultsEditor({
         >
           {isOverride ? <option value="">{placeholder}</option> : null}
           {modelOptions.map((opt) => {
-            // A model the tenant no longer permits is listed only to show what
-            // a role already runs, so it stays selectable on that role alone —
+            // A model off the assignable set is listed only to show what a
+            // role already runs, so it stays selectable on that role alone —
             // offering it to the others would be a new assignment, which is
             // exactly what narrowing the set blocks.
             const isCurrentForRole = optionValueForRef(modelDefaults[role] ?? '') === opt.ref;
@@ -238,7 +246,7 @@ export function ModelDefaultsEditor({
               <option key={opt.id} value={opt.ref} disabled={!opt.allowed && !isCurrentForRole}>
                 {opt.displayName}
                 {opt.aliases.length > 0 ? ` (${opt.aliases[0]})` : ''}
-                {opt.allowed ? '' : ' — no longer permitted'}
+                {offListSuffix(opt)}
               </option>
             );
           })}
@@ -407,7 +415,7 @@ export function ModelDefaultsEditor({
               <option key={opt.id} value={opt.ref} disabled={!opt.allowed}>
                 {opt.displayName}
                 {opt.aliases.length > 0 ? ` (${opt.aliases[0]})` : ''}
-                {opt.allowed ? '' : ' — no longer permitted'}
+                {offListSuffix(opt)}
               </option>
             ))}
           </Select>

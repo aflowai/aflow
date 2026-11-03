@@ -41,11 +41,18 @@ export interface ModelOption {
    */
   reasoningEfforts: DirectiveReasoningEffort[];
   /**
-   * False when this model is only listed because a space still holds it — the
-   * tenant no longer permits assigning it, and the picker must say so rather
-   * than offering it as an ordinary choice.
+   * False when this model is only listed because a space still holds it — it
+   * can no longer be newly assigned, and the picker must say so rather than
+   * offering it as an ordinary choice.
    */
   allowed: boolean;
+  /**
+   * Whose set left this model out, when `allowed` is false. A tenant that never
+   * named an allowlist follows the platform recommendation, so a model dropped
+   * from that list is one the platform stopped recommending, not one the
+   * tenant restricted, and the picker words the two differently.
+   */
+  offListBy: 'tenant' | 'platform' | null;
 }
 
 export interface ModelOptionsState {
@@ -116,6 +123,7 @@ export function useChatModelOptions(keepRefs: readonly string[] = []): ModelOpti
   const modelOptions = useMemo<ModelOption[]>(() => {
     const allowed = policy.data?.modelIds;
     if (!allowed) return [];
+    const source = policy.data?.source ?? 'platform';
     const allowedSet = new Set(allowed);
     const keepSet = new Set(keepKey ? keepKey.split('\u0000') : []);
     // A retired id counts as naming this model, so a space still holding one
@@ -133,16 +141,20 @@ export function useChatModelOptions(keepRefs: readonly string[] = []): ModelOpti
         // ones running, and dropping the option would render that space's own
         // model as a blank select nobody could read or deliberately change.
         .filter((m) => matches(m, allowedSet) || matches(m, keepSet))
-        .map((m) => ({
-          id: m.modelId,
-          ref: m.aliases?.[0] ?? m.modelId,
-          provider: m.provider,
-          displayName: m.displayName,
-          aliases: m.aliases ?? [],
-          retiredRefs: m.retiredRefs ?? [],
-          reasoningEfforts: m.reasoning?.supported ?? [],
-          allowed: matches(m, allowedSet),
-        }))
+        .map((m) => {
+          const isAllowed = matches(m, allowedSet);
+          return {
+            id: m.modelId,
+            ref: m.aliases?.[0] ?? m.modelId,
+            provider: m.provider,
+            displayName: m.displayName,
+            aliases: m.aliases ?? [],
+            retiredRefs: m.retiredRefs ?? [],
+            reasoningEfforts: m.reasoning?.supported ?? [],
+            allowed: isAllowed,
+            offListBy: isAllowed ? null : source,
+          };
+        })
         .sort((a, b) => a.displayName.localeCompare(b.displayName))
     );
   }, [catalog.data, policy.data, keepKey]);
@@ -180,6 +192,7 @@ export function useChatModelOptions(keepRefs: readonly string[] = []): ModelOpti
         retiredRefs: m.retiredRefs ?? [],
         reasoningEfforts: m.reasoning?.supported ?? [],
         allowed: true,
+        offListBy: null,
       }));
 
     return [...modelOptions, ...extra].sort((a, b) => a.displayName.localeCompare(b.displayName));
@@ -198,6 +211,7 @@ export function useChatModelOptions(keepRefs: readonly string[] = []): ModelOpti
           retiredRefs: m.retiredRefs ?? [],
           reasoningEfforts: [],
           allowed: true,
+          offListBy: null,
         })),
     [decisionCatalog.data],
   );

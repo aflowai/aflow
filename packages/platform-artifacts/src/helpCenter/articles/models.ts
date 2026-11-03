@@ -13,7 +13,7 @@ export const MODELS_ARTICLES: readonly HelpArticleInput[] = [
 
 ## Steps
 
-1. Pick the provider of the model you want: OpenAI, Anthropic, Google AI, OpenRouter, Fireworks AI or xAI.
+1. Pick the provider of the model you want. The recommended models are GLM-5.3 Flash (\`glm-flash\`, Fireworks AI), Claude Haiku 4.5 (\`haiku\`, Anthropic), Gemini 3.8 Flash (\`flash\`, Google AI) and GPT-6 Luna (\`luna\`, OpenAI). The dialog also takes OpenRouter and xAI keys, but no recommended model runs on them. An agent runs on an xAI model only after a tenant admin adds one under **Tenant Admin → Models**.
 2. Paste the API key. The dialog links to the provider's site for getting one.
 3. Choose **Save & test**. The key is saved, then checked against the provider, and a key that fails the check is reported on the spot.
 
@@ -128,7 +128,7 @@ On the settings page, changes are saved with **Apply changes**. In the composer 
 
 ## Which models are offered
 
-**Tenant Admin → Models** decides which models a space can assign. **Following platform recommendations** tracks the recommended set as it changes; turning models on or off makes a **Custom set**, and **Reset to recommended** returns to the platform's set. Narrowing the set blocks new assignments only: a space already running an excluded model keeps it until someone changes it.
+**Tenant Admin → Models** decides which models a space can assign. **Following platform recommendations** tracks the recommended set as it changes; turning models on or off makes a **Custom set**, and **Reset to recommended** returns to the platform's set. Narrowing the set blocks new assignments only: a space already running an excluded model keeps it until someone changes it. The picker marks such a model **no longer permitted** when a **Custom set** left it out, and **no longer recommended** when the platform's set dropped it.
 
 A model you pick needs a key for its provider before the agents can run on it.`,
     editions: ['enterprise', 'community-local'],

@@ -18,7 +18,7 @@ describe('canonical comparison', () => {
   });
 
   it('admits a directive alias against an allowlist stored as ids', () => {
-    // The gate's original bug: default directives hold `glm-flash`, the Settings
+    // The gate's original bug: default directives held `glm-pro`, the Settings
     // page saves catalog ids, and comparing the strings refused the same model.
     const allowed = allowedModelIds([GLM_ID], 'enterprise');
     expect(isModelIdAllowed('glm-flash', allowed)).toBe(true);
