@@ -124,7 +124,7 @@ _Rejected:_
 
 P4 is also where a need for recursive planning would first show. So no planning hierarchy is built before P4 shows it is needed.
 
-_Rejected:_ building recursive planning first.
+_Rejected:_ building recursive planning first. No measurement has yet shown a task the loop fails for want of it. Building it first would spend effort on a need P4 may never show.
 
 ### D5 — Where it runs
 
@@ -223,6 +223,8 @@ _Rejected:_
 - A rounds loop inside the benchmark runner. Its decisions would live in a script, where the board and the Coach cannot read them (D6).
 - Moving the rounds out of Publish Local Changes. That changes a loop skill to serve the measurement, which D7 rules out.
 - A model deciding the rounds. The publication decides them by rules because no measured model cleared the bar (Plan 316 §7), and a second judge would make the arms differ by more than the process.
+- Capping the rounds' brief input below Commission Change's limit. It narrows an input to fit a downstream cap, which CLAUDE.md forbids. It also made a task with a longer brief unreviewable.
+- Capping the composed brief by construction, so that a bounded accepted brief always fits. It lost for the same reason. It narrows the input rather than bounding what the fix round adds.
 
 **P3 — The learning arm in order (D4).** _Exit:_ the learning gain, with forgetting read, is in this document.
 
