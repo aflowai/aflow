@@ -14,6 +14,8 @@ import {
   TEMPLATE_BIND_KEY,
   TEMPLATE_CONCAT_KEY,
   TEMPLATE_FIRST_OF_KEY,
+  TEMPLATE_JSON_BYTES_KEY,
+  TEMPLATE_LENGTH_KEY,
   TEMPLATE_TEXT_KEY,
   templateContainsSubstitution,
   type TemplateOperatorKey,
@@ -28,6 +30,13 @@ import { parseOutputPath } from './outputPath.js';
 import { resolveSchemaPath } from './outputPathSchema.js';
 import { bindingStaticSchema } from './bindingStaticSchema.js';
 import { getResumeAjv } from '../resumeAjv.js';
+import {
+  schemaAcceptsNull,
+  schemaAdmitsInteger,
+  schemaAdmitsString,
+  schemaTypeIs,
+  STRING_SCHEMA,
+} from './schemaAdmits.js';
 
 // ============================================================================
 // Types
@@ -1215,6 +1224,20 @@ function validateTemplateOpInput(
       return;
     }
 
+    // `$length` counts a string's characters, so its operand is a string.
+    // `$jsonBytes` counts any value's bytes. Both yield an integer.
+    if (node.operator === TEMPLATE_LENGTH_KEY || node.operator === TEMPLATE_JSON_BYTES_KEY) {
+      checkNode(
+        node.operands[0],
+        node.operator === TEMPLATE_LENGTH_KEY ? STRING_SCHEMA : {},
+        `${operandsPath}[0]`,
+      );
+      if (schemaAdmitsInteger(schemaNode)) return;
+      const detail = `Operation task "${task.taskId}" inputTemplate position "${path || '(root)'}" holds a "${node.operator}" node, which yields an integer, and "${task.operation ?? ''}" takes no integer there.`;
+      errors.push({ kind: 'op_input_incompatible', taskIds: [task.taskId], field: path, detail });
+      return;
+    }
+
     node.operands.forEach((operand, i) => {
       const operandPath = `${operandsPath}[${String(i)}]`;
       if (typeof operand === 'string') return;
@@ -1269,31 +1292,6 @@ function validateTemplateOpInput(
   checkNode(template, opInputSchema, '');
 }
 
-/** Whether a JSON Schema property admits `null`. */
-function schemaAcceptsNull(prop: Record<string, unknown>): boolean {
-  const ty = prop['type'];
-  if (ty === 'null') return true;
-  if (Array.isArray(ty) && ty.includes('null')) return true;
-  if (prop['nullable'] === true) return true; // OpenAPI-style
-  const en = prop['enum'];
-  if (Array.isArray(en) && en.includes(null)) return true;
-  for (const combinator of ['anyOf', 'oneOf'] as const) {
-    const branches = prop[combinator];
-    if (Array.isArray(branches)) {
-      if (branches.some((b) => isRecord(b) && schemaAcceptsNull(b))) return true;
-    }
-  }
-  return false;
-}
-
-/** Whether a JSON Schema property is typed exactly/only as `t`. */
-function schemaTypeIs(prop: Record<string, unknown>, t: string): boolean {
-  const ty = prop['type'];
-  if (typeof ty === 'string') return ty === t;
-  if (Array.isArray(ty)) return ty.length > 0 && ty.every((x) => x === t);
-  return false;
-}
-
 /** Validate a concrete literal value against a JSON Schema via Ajv (resumeAjv pattern). */
 function validateLiteralAgainstSchema(
   schema: Record<string, unknown>,
@@ -1317,23 +1315,6 @@ function validateLiteralAgainstSchema(
     // false-reject; the coverage check covers the structural case.
     return null;
   }
-}
-
-const STRING_SCHEMA: Record<string, unknown> = { type: 'string' };
-
-/** Whether a position's schema can admit some string; a construct this cannot read admits one. */
-function schemaAdmitsString(schema: Record<string, unknown>): boolean {
-  for (const combinator of ['anyOf', 'oneOf'] as const) {
-    const branches = schema[combinator];
-    if (Array.isArray(branches)) {
-      return branches.some((branch) => !isRecord(branch) || schemaAdmitsString(branch));
-    }
-  }
-  const ty = schema['type'];
-  if (typeof ty === 'string') return ty === 'string';
-  if (Array.isArray(ty)) return ty.includes('string');
-  if (Object.keys(recordOf(schema['properties'])).length > 0) return false;
-  return true;
 }
 
 function describeLiteral(value: unknown): string {

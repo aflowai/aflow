@@ -1,6 +1,10 @@
-import type { SkillCatalogEntry, WorkflowRunDecideRule } from '@aflow/schemas';
+import {
+  MAX_PARENT_INPUTS_SERIALIZED_BYTES,
+  type SkillCatalogEntry,
+  type WorkflowRunDecideRule,
+} from '@aflow/schemas';
 import { COMMISSION_BRIEF_MAX_LENGTH, COMMISSION_CHANGE } from './commissionChange.js';
-import { bind, ctx, out, runInput, SKIP } from './localPrShepherdWiring.js';
+import { bind, ctx, out, runInput, SKIP, text } from './localPrShepherdWiring.js';
 import { entryContract } from './localBrowserRule.js';
 import { aboveMinorRules, minorRules } from './publishLocalChangesAfterReview.js';
 import { COMMISSION_RUN_ID_SCHEMA } from './publishLocalChangesMessage.js';
@@ -31,7 +35,9 @@ import { REVIEW_LOCAL_CHANGES, REVIEW_SUMMARY_MAX_LENGTH } from './reviewLocalCh
  *   model is asked.
  * - A fix round is Commission Change on the branch, briefed from the brief
  *   and the review's summary, as the conversation briefs one after a
- *   publication.
+ *   publication. A rule first counts that fix brief in characters and its
+ *   inputs in bytes, so a fix round that would not fit stops the rounds by
+ *   name rather than as a refused start.
  *
  * Rejected:
  *
@@ -60,6 +66,7 @@ export const READ_COMMISSION_TASK_ID = 'read-commission';
 export const commitTaskId = (round: number) => `commit-${String(round)}`;
 export const reviewTaskId = (round: number) => `review-${String(round)}`;
 export const decideTaskId = (round: number) => `decide-${String(round)}`;
+export const fitTaskId = (round: number) => `fit-${String(round)}`;
 export const fixTaskId = (round: number) => `fix-${String(round)}`;
 export const RECORD_STOP_TASK_ID = 'record-stop';
 
@@ -119,16 +126,56 @@ export const FIX_BRIEF_OPENING =
 export const FIX_BRIEF_REVIEW = '\n\nThe review:\n\n';
 
 /**
- * The longest brief the rounds take: Commission Change's own limit, less the
- * fix opening, the separator and the longest review summary. A fix brief
- * composed from any brief they accept therefore fits what Commission Change
- * accepts, so `fix_failed` never means a brief too long.
+ * The most a fix round adds to the brief: the fix opening, the separator and
+ * the longest review summary. The rounds take any brief Commission Change
+ * takes. A brief of at most `COMMISSION_BRIEF_MAX_LENGTH` less this always
+ * leaves room for the review. A longer brief fits where the review's summary
+ * is short enough, and `fit-<n>` counts that before the fix round starts.
  */
-export const REVIEW_ROUNDS_BRIEF_MAX_LENGTH =
-  COMMISSION_BRIEF_MAX_LENGTH -
-  FIX_BRIEF_OPENING.length -
-  FIX_BRIEF_REVIEW.length -
-  REVIEW_SUMMARY_MAX_LENGTH;
+export const FIX_BRIEF_ADDED_MAX_LENGTH =
+  FIX_BRIEF_OPENING.length + FIX_BRIEF_REVIEW.length + REVIEW_SUMMARY_MAX_LENGTH;
+
+/** The fix round's brief, composed from the brief and the review's summary. */
+const FIX_BRIEF = {
+  $concat: [FIX_BRIEF_OPENING, bind('brief'), FIX_BRIEF_REVIEW, text('reviewSummary')],
+};
+
+/** The fix round's inputs to Commission Change, as the fix task starts it. */
+const FIX_INPUTS = {
+  bindingId: bind('bindingId'),
+  task: FIX_BRIEF,
+  // The branch is local: its name is the only base that holds the earlier
+  // rounds, and no remote is fetched for it.
+  base: bind('branch'),
+  harness: bind('harness'),
+};
+
+export const FIX_BRIEF_FITS = 'fits';
+export const FIX_BRIEF_TOO_LONG = 'too_long';
+
+/**
+ * Whether a fix round's start fits what it is checked against: Commission
+ * Change's limit on its `task`, in characters, and the cap on a run's inputs
+ * together, in bytes. A brief with many characters past ASCII can exceed the
+ * byte cap while it stays inside the character limit.
+ */
+export const FIX_BRIEF_FIT_RULES: readonly WorkflowRunDecideRule[] = [
+  {
+    when: { expression: `state.length > ${String(COMMISSION_BRIEF_MAX_LENGTH)}` },
+    decision: FIX_BRIEF_TOO_LONG,
+    reason: `The fix brief holds more than the ${String(COMMISSION_BRIEF_MAX_LENGTH)} characters Commission Change accepts, so the fix round does not start.`,
+  },
+  {
+    when: { expression: `state.inputBytes > ${String(MAX_PARENT_INPUTS_SERIALIZED_BYTES)}` },
+    decision: FIX_BRIEF_TOO_LONG,
+    reason: `The fix round's inputs, its brief among them, come to more than the ${String(MAX_PARENT_INPUTS_SERIALIZED_BYTES)} bytes a run's inputs may take, so the fix round does not start.`,
+  },
+];
+
+export const FIX_BRIEF_FIT_OTHERWISE = {
+  decision: FIX_BRIEF_FITS,
+  reason: 'The fix brief fits what Commission Change accepts.',
+};
 
 const REVIEW_SKILL = {
   catalogId: REVIEW_LOCAL_CHANGES.catalogId,
@@ -157,8 +204,8 @@ const ROUNDS_RUN_INPUTS = [
   {
     id: 'brief',
     required: true,
-    description: `The brief that commission ran on, as it was passed. A fix round is briefed with it and with the review’s summary. It holds at most ${String(REVIEW_ROUNDS_BRIEF_MAX_LENGTH)} characters, so every fix brief fits what Commission Change accepts.`,
-    schema: { type: 'string', minLength: 1, maxLength: REVIEW_ROUNDS_BRIEF_MAX_LENGTH },
+    description: `The brief that commission ran on, as it was passed. It takes any brief Commission Change takes, up to ${String(COMMISSION_BRIEF_MAX_LENGTH)} characters. A fix round is briefed with it and with the review’s summary. Where that fix brief would pass what Commission Change accepts, the rounds stop at \`fix_brief_too_long\`.`,
+    schema: { type: 'string', minLength: 1, maxLength: COMMISSION_BRIEF_MAX_LENGTH },
   },
   {
     id: 'branch',
@@ -203,8 +250,10 @@ const READ_COMMISSION_TASK = {
   inputContract: entryContract(ROUNDS_RUN_INPUTS),
   context: ctx('workflow.run.detail'),
   inputTemplate: { runId: bind('commission'), compact: true },
-  // A commission that changed nothing reports no patch: the rounds then have
-  // nothing to review, and every task after this one skips.
+  // A commission that changed nothing reports no patch, and one that did not
+  // complete reports none either. The rounds then have nothing to review, and
+  // every task after this one skips. The stop record tells the two apart by
+  // the status.
   outputProjection: {
     status: { path: 'run.status', onMissing: 'error' as const },
     patchRef: { path: 'result.output.patchRef', onMissing: 'null' as const },
@@ -241,7 +290,19 @@ function commitTask(round: number) {
     type: 'operation' as const,
     operation: 'host.file.patch',
     dependsOn: round === 1 ? [source] : [source, decideTaskId(round - 1)],
-    when: { expression: `tasks.${source}.output.patchRef != null`, onMissingRef: SKIP },
+    when:
+      round === 1
+        ? {
+            allOf: [
+              `tasks.${source}.output.status == 'completed'`,
+              `tasks.${source}.output.patchRef != null`,
+            ],
+            onMissingRef: SKIP,
+          }
+        : { expression: `tasks.${source}.output.patchRef != null`, onMissingRef: SKIP },
+    // A refused commit reports no commit, as a conflict does: the round's
+    // review skips, and the stop record names the round.
+    optional: true,
     // A second attempt would commit the patch a second time.
     retryability: 'unsafe' as const,
     maxAttempts: 1,
@@ -389,46 +450,72 @@ function decideTask(round: number) {
   };
 }
 
-function fixTask(round: number) {
+/** What a fix round's inputs are composed from: the measure and the start bind the same. */
+function fixBindings(review: string) {
+  return {
+    bindingId: runInput('bindingId'),
+    branch: runInput('branch'),
+    brief: runInput('brief'),
+    harness: runInput('harness'),
+    reviewSummary: out(review, 'reviewSummary'),
+  };
+}
+
+function fitTask(round: number) {
   const decide = decideTaskId(round - 1);
   const review = reviewTaskId(round - 1);
   return {
-    taskId: fixTaskId(round),
-    name: `Commission fix round ${String(round)}`,
-    goal: `Where round ${String(round - 1)} decided \`fix_before_merge\`, run Commission Change on the local branch, briefed with the brief and the review's summary, and wait for its patch.`,
+    taskId: fitTaskId(round),
+    name: `Measure fix round ${String(round)}'s brief`,
+    goal: `Where round ${String(round - 1)} decided \`fix_before_merge\`, count the characters of the fix brief composed from the fix opening, the brief and that review's summary, and the bytes of the fix round's inputs. Decide whether they fit what Commission Change accepts. No model is asked.`,
     type: 'operation' as const,
-    operation: 'workflow.run.start',
+    operation: 'workflow.run.decide',
     dependsOn: [decide, review],
     when: {
       expression: `tasks.${decide}.output.decision == 'fix_before_merge'`,
       onMissingRef: SKIP,
     },
+    retryability: 'safe' as const,
+    maxAttempts: 1,
+    inputBindings: fixBindings(review),
+    context: ctx('workflow.run.decide'),
+    inputTemplate: {
+      state: { length: { $length: [FIX_BRIEF] }, inputBytes: { $jsonBytes: [FIX_INPUTS] } },
+      rules: FIX_BRIEF_FIT_RULES,
+      otherwise: FIX_BRIEF_FIT_OTHERWISE,
+    },
+    outputProjection: {
+      decision: { path: 'decision', onMissing: 'error' as const },
+      reason: { path: 'reason', onMissing: 'error' as const },
+    },
+  };
+}
+
+function fixTask(round: number) {
+  const fit = fitTaskId(round);
+  const review = reviewTaskId(round - 1);
+  return {
+    taskId: fixTaskId(round),
+    name: `Commission fix round ${String(round)}`,
+    goal: `Where round ${String(round - 1)} decided \`fix_before_merge\` and its fix brief fits, run Commission Change on the local branch, briefed with the brief and the review's summary, and wait for its patch.`,
+    type: 'operation' as const,
+    operation: 'workflow.run.start',
+    dependsOn: [fit, review],
+    when: {
+      expression: `tasks.${fit}.output.decision == '${FIX_BRIEF_FITS}'`,
+      onMissingRef: SKIP,
+    },
     // A fix that could not run ends the rounds with the head the last review
-    // read. The brief's cap keeps this fix brief inside the commission's limit.
+    // read.
     optional: true,
     retryability: 'unsafe' as const,
     maxAttempts: 1,
-    inputBindings: {
-      bindingId: runInput('bindingId'),
-      branch: runInput('branch'),
-      brief: runInput('brief'),
-      harness: runInput('harness'),
-      reviewSummary: out(review, 'reviewSummary'),
-    },
+    inputBindings: fixBindings(review),
     context: ctx('workflow.run.start'),
     inputTemplate: {
       slug: COMMISSION_SKILL.slug,
       catalogId: COMMISSION_SKILL.catalogId,
-      inputs: {
-        bindingId: bind('bindingId'),
-        task: {
-          $concat: [FIX_BRIEF_OPENING, bind('brief'), FIX_BRIEF_REVIEW, bind('reviewSummary')],
-        },
-        // The branch is local: its name is the only base that holds the
-        // earlier rounds, and no remote is fetched for it.
-        base: bind('branch'),
-        harness: bind('harness'),
-      },
+      inputs: FIX_INPUTS,
       wait: 'until_complete',
     },
     outputProjection: {
@@ -451,19 +538,24 @@ export const STOP_REASONS = {
   taken_as_it_stands: 'The rounds rule took the patch as it stands after this round’s review.',
   round_limit:
     'This round’s review decided a fix, and the limit on rounds allows no further one. Its findings stand open.',
+  fix_brief_too_long: `This fix round’s brief, the brief and the review’s summary together, ran too long for Commission Change, so the fix round did not start. It held more than ${String(COMMISSION_BRIEF_MAX_LENGTH)} characters, or its inputs came to more than ${String(MAX_PARENT_INPUTS_SERIALIZED_BYTES)} bytes.`,
   fix_failed: 'This fix round did not complete: it failed, was refused, timed out or paused.',
   fix_no_patch: 'This fix round completed with no patch, so nothing was left to review.',
-  commit_failed: 'This round’s patch did not apply on the local branch, so it was not reviewed.',
+  commit_failed:
+    'This round’s patch made no commit on the local branch: it did not apply, or the commit was refused. It was not reviewed.',
   review_failed:
     'This round’s review returned no findings: it failed, was cancelled or paused. The rounds rule decided nothing on it.',
-  no_patch: 'The commission reported no patch, so no round was reviewed.',
+  commission_not_completed:
+    'The commission’s run did not complete: it failed, was cancelled, or is still running or paused. No round was reviewed.',
+  no_patch: 'The commission completed and reported no patch, so no round was reviewed.',
 } as const;
 export type StopReason = keyof typeof STOP_REASONS;
 
 /**
  * What a driver grades after the rounds stop at `round` for `why`. Every
- * stop leaves a `headSha`: a reviewed head, the commission's own commit in
- * round 1, or the base where no commit landed.
+ * stop after a completed commission leaves a `headSha`: a reviewed head, the
+ * commission's own commit in round 1, or the base where no commit landed. A
+ * commission that did not complete may report no base at all.
  */
 export function gradeHead(why: StopReason, round: number): string {
   const lastReviewed = `Grade \`headSha\`, the head round ${String(round - 1)}’s review read.`;
@@ -471,6 +563,7 @@ export function gradeHead(why: StopReason, round: number): string {
     case 'taken_as_it_stands':
     case 'round_limit':
       return 'Grade `headSha`, the head this round’s review read.';
+    case 'fix_brief_too_long':
     case 'fix_failed':
     case 'fix_no_patch':
       return lastReviewed;
@@ -482,6 +575,8 @@ export function gradeHead(why: StopReason, round: number): string {
       return round === 1
         ? 'Grade `headSha`, the commission’s own commit, which no review read.'
         : `${lastReviewed} This round’s commit sits on the branch past it.`;
+    case 'commission_not_completed':
+      return 'No round ran, so the rounds leave nothing to grade. `headSha` holds the commission’s base only where its run reported one.';
     case 'no_patch':
       return '`headSha` is the base and grades as an empty patch.';
   }
@@ -511,14 +606,16 @@ function patchState(round: number): string {
   return round === 1 ? 'commissionPatch' : `fix${String(round)}Patch`;
 }
 
-/** What the stop decision reads, by its state name: every round's patch, commit, decision and fix outcome. */
+/** What the stop decision reads, by its state name: the commission's status, and every round's patch, commit, decision, fix brief fit and fix outcome. */
 function stopBindings() {
   const bindings: Record<string, ReturnType<typeof out>> = {
+    commissionStatus: out(READ_COMMISSION_TASK_ID, 'status'),
     commissionPatch: out(READ_COMMISSION_TASK_ID, 'patchRef'),
   };
   for (let round = 1; round <= REVIEW_ROUNDS_MAX; round += 1) {
     const n = String(round);
     if (round > 1) {
+      bindings[`fit${n}`] = out(fitTaskId(round), 'decision');
       bindings[`fix${n}Patch`] = out(fixTaskId(round), 'patchRef');
       bindings[`fix${n}Outcome`] = out(fixTaskId(round), 'outcome');
     }
@@ -530,8 +627,8 @@ function stopBindings() {
 
 /**
  * One rule for each way each round can end. They are exclusive, so their
- * order decides nothing. The default is the commission with no patch, the one
- * end no rule names.
+ * order decides nothing. The default is the completed commission with no
+ * patch, the one end no rule names.
  */
 export const STOP_RULES: readonly WorkflowRunDecideRule[] = Array.from(
   { length: REVIEW_ROUNDS_MAX },
@@ -540,10 +637,24 @@ export const STOP_RULES: readonly WorkflowRunDecideRule[] = Array.from(
     const n = String(round);
     const patch = `state.${patchState(round)}`;
     const rules: WorkflowRunDecideRule[] = [];
+    const completed = "state.commissionStatus == 'completed'";
+    if (round === 1) {
+      rules.push(
+        stopRule(round, 'commission_not_completed', ["state.commissionStatus != 'completed'"]),
+      );
+    }
     if (round > 1) {
       const decidedFix = `state.decision${String(round - 1)} == 'fix_before_merge'`;
       rules.push(
-        stopRule(round, 'fix_failed', [decidedFix, `state.fix${n}Outcome != 'completed'`]),
+        stopRule(round, 'fix_brief_too_long', [
+          decidedFix,
+          `state.fit${n} == '${FIX_BRIEF_TOO_LONG}'`,
+        ]),
+        stopRule(round, 'fix_failed', [
+          decidedFix,
+          `state.fit${n} == '${FIX_BRIEF_FITS}'`,
+          `state.fix${n}Outcome != 'completed'`,
+        ]),
         stopRule(round, 'fix_no_patch', [
           decidedFix,
           `state.fix${n}Outcome == 'completed'`,
@@ -552,7 +663,11 @@ export const STOP_RULES: readonly WorkflowRunDecideRule[] = Array.from(
       );
     }
     rules.push(
-      stopRule(round, 'commit_failed', [`${patch} != null`, `state.commit${n} == null`]),
+      stopRule(round, 'commit_failed', [
+        ...(round === 1 ? [completed] : []),
+        `${patch} != null`,
+        `state.commit${n} == null`,
+      ]),
       stopRule(round, 'review_failed', [`state.commit${n} != null`, `state.decision${n} == null`]),
       stopRule(round, 'taken_as_it_stands', [`state.decision${n} == 'publish_as_is'`]),
     );
@@ -574,7 +689,7 @@ function recordStopTask(roundTaskIds: string[]) {
   return {
     taskId: RECORD_STOP_TASK_ID,
     name: 'Record where the rounds stopped',
-    goal: 'Decide by rules which round ended the rounds and why: the rounds rule took the patch, the limit ended them, or a commit, a review or a fix round broke. No model is asked.',
+    goal: 'Decide by rules which round ended the rounds and why: the rounds rule took the patch, or the limit ended them. Otherwise the commission did not complete, a fix brief ran too long, or a commit, a review or a fix round broke. No model is asked.',
     type: 'operation' as const,
     operation: 'workflow.run.decide',
     dependsOn: roundTaskIds,
@@ -597,7 +712,7 @@ function recordStopTask(roundTaskIds: string[]) {
 
 function roundTasks(round: number) {
   return [
-    ...(round === 1 ? [] : [fixTask(round)]),
+    ...(round === 1 ? [] : [fitTask(round), fixTask(round)]),
     commitTask(round),
     reviewTask(round),
     decideTask(round),
@@ -613,10 +728,11 @@ const ROUNDS_TASKS = [...ROUND_TASKS, recordStopTask(ROUND_TASKS.map((task) => t
 
 const REVIEW_ROUNDS_PITFALLS: string[] = [
   'What it needs: the folder, the completed Commission Change as `commission`, the `brief` that commission ran on, and a `branch` name the folder does not hold yet. The folder must allow writes, and it needs no remote.',
-  `The \`brief\` holds at most ${String(REVIEW_ROUNDS_BRIEF_MAX_LENGTH)} characters, and the start refuses a longer one. That cap leaves room for the fix opening and the longest review summary, so every fix brief fits what Commission Change accepts. A \`fix_failed\` stop therefore never means a brief too long.`,
+  `The \`brief\` takes any brief Commission Change takes. A fix round adds at most ${String(FIX_BRIEF_ADDED_MAX_LENGTH)} characters to it: the fix opening and the review’s summary. Where the fix brief would pass Commission Change’s limit in characters, or the fix round’s inputs the cap in bytes, the rounds stop at \`fix_brief_too_long\` before the fix starts. A \`fix_failed\` stop therefore never means a brief too long.`,
+  'A `commission` that failed, was cancelled or is still running stops the rounds at `commission_not_completed`. Only a completed commission with no patch stops them at `no_patch`.',
   'It never pushes, opens no pull request and runs no publication. Where the change is meant to land, publish it with Publish Local Changes instead.',
   'The final patch is `git diff <baseSha>..<headSha>` in the folder, on `branch`. The folder’s working tree is left as the commission found it, so a patch read from the working tree is empty.',
-  'Every stop leaves a `headSha` to grade, and `stoppedAt.reason` names which head it is. After a decided round it is the last head a review read. Where round 1’s review decided nothing, it is the commission’s own commit, which no review read. Where no commit landed, it is the base, and it grades as an empty patch.',
+  'Every stop after a completed commission leaves a `headSha` to grade, and `stoppedAt.reason` names which head it is. After a decided round it is the last head a review read. Where round 1’s review decided nothing, it is the commission’s own commit, which no review read. Where no commit landed, it is the base, and it grades as an empty patch.',
   `It reviews at most ${String(REVIEW_ROUNDS_MAX)} times. Read how the rounds ended from \`stoppedAt\`, not from \`decision\`. A fix round that broke leaves \`decision\` at \`fix_before_merge\`, as the limit does. Only a \`stoppedAt.why\` of \`round_limit\` means the limit ended them.`,
 ];
 
@@ -719,7 +835,7 @@ const REVIEW_ROUNDS: SkillCatalogEntry = {
           variableId: 'stoppedAt',
           name: 'Stopped at',
           description:
-            'Which round ended the rounds, and why: its `round`, `why` and `reason`. The `reason` also names which head `headSha` holds. A `why` of `taken_as_it_stands` or `round_limit` is an end the rounds rule chose. `fix_failed`, `fix_no_patch`, `commit_failed` and `review_failed` name a step of that round that broke. `no_patch` means the commission had no patch.',
+            'Which round ended the rounds, and why: its `round`, `why` and `reason`. The `reason` also names which head `headSha` holds. Only `taken_as_it_stands` and `round_limit` are ends the rounds rule chose. `no_patch` means the completed commission had no patch. Every other `why` names what broke: the commission, a fix brief too long, or a fix, commit or review of that round.',
           required: false,
           sensitive: false,
           immutable: false,
@@ -738,7 +854,7 @@ const REVIEW_ROUNDS: SkillCatalogEntry = {
       output: {
         primary: 'headSha',
         guidance:
-          'The final patch is the diff from baseSha to headSha on branch, in the folder. Every stop leaves a headSha to grade. Report stoppedAt for which round ended the rounds, why, and which head headSha holds. Report verdict and decision as they stand, and rounds for what each round found. Only a stoppedAt.why of round_limit means the limit on rounds ended them. Nothing was pushed.',
+          'The final patch is the diff from baseSha to headSha on branch, in the folder. Every stop after a completed commission leaves a headSha to grade. Report stoppedAt for which round ended the rounds, why, and which head headSha holds. Report verdict and decision as they stand, and rounds for what each round found. Only a stoppedAt.why of round_limit means the limit on rounds ended them. Nothing was pushed.',
       },
       iteration: { auto: false, maxConsecutiveRuns: 1, stopOnOutcomesMet: true, cooldownMs: 0 },
     },
@@ -771,7 +887,7 @@ const REVIEW_ROUNDS: SkillCatalogEntry = {
       priority: 40,
     },
     rationale:
-      "The publication's rounds without the publication: host.file.patch commits each round's patch on a local branch with no pushBase, workflow.run.start runs Review Local Changes and Commission Change as runs of their own, and workflow.run.decide applies the rounds rule from the publication's own rule builders. The graph is unrolled to REVIEW_ROUNDS_MAX rounds, each gated on the decision before it, so every round's review, decision and fix is a task of the run. A last workflow.run.decide records which round stopped the rounds and why, so a broken fix round never reads as the limit.",
+      "The publication's rounds without the publication: host.file.patch commits each round's patch on a local branch with no pushBase, workflow.run.start runs Review Local Changes and Commission Change as runs of their own, and workflow.run.decide applies the rounds rule from the publication's own rule builders. The graph is unrolled to REVIEW_ROUNDS_MAX rounds, each gated on the decision before it, so every round's review, decision and fix is a task of the run. Before each fix round, a workflow.run.decide counts the fix brief with $length and its inputs with $jsonBytes, so a fix round that would not fit stops the rounds by name. Every commit task is optional, so a refused commit stops them through the stop record. A last workflow.run.decide records which round stopped the rounds and why, so a broken fix round never reads as the limit.",
   },
 };
 

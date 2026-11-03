@@ -329,6 +329,76 @@ describe('$text', () => {
   );
 });
 
+describe('$length', () => {
+  const declared = new Set(['brief', 'summary', 'count']);
+
+  it('counts the characters of a string, composed or bound, as JSON Schema counts them', () => {
+    const template = {
+      length: { $length: [{ $concat: ['a', { $bind: 'brief' }, { $bind: 'summary' }] }] },
+    };
+    expect(substituteTemplateBinds(template, { brief: 'bc', summary: 'de' }, declared)).toEqual({
+      length: 5,
+    });
+    // One astral character is two UTF-16 units and one character.
+    expect(
+      substituteTemplateBinds(
+        { length: { $length: [{ $bind: 'brief' }] } },
+        { brief: '😀' },
+        declared,
+      ),
+    ).toEqual({ length: 1 });
+  });
+
+  it('is absent where the value is null or absent', () => {
+    const template = { length: { $length: [{ $bind: 'brief' }] } };
+    expect(substituteTemplateBinds(template, { brief: null }, declared)).toEqual({});
+    expect(substituteTemplateBinds(template, {}, declared)).toEqual({});
+  });
+
+  it('refuses a value that is not a string, naming the operand', () => {
+    try {
+      substituteTemplateBinds(
+        { length: { $length: [{ $bind: 'count' }] } },
+        { count: 3 },
+        declared,
+      );
+      expect.unreachable();
+    } catch (err) {
+      expect(err).toBeInstanceOf(TemplateSubstitutionError);
+      expect((err as TemplateSubstitutionError).path).toBe('length.$length[0]');
+    }
+  });
+
+  it.each([[{ $length: [] }], [{ $length: ['a', 'b'] }], [{ $length: 'a' }]])(
+    'flags %j as malformed: it takes exactly one operand',
+    (node) => {
+      expect(analyzeInputTemplate({ v: node }).malformed[0]?.reason).toContain(
+        'exactly one operand',
+      );
+    },
+  );
+});
+
+describe('$jsonBytes', () => {
+  const declared = new Set(['brief', 'absent']);
+
+  it('counts the UTF-8 bytes of a value written as JSON, omitted keys left out', () => {
+    const inputs = { task: { $concat: ['a', { $bind: 'brief' }] }, gone: { $bind: 'absent' } };
+    const result = substituteTemplateBinds(
+      { bytes: { $jsonBytes: [inputs] } },
+      { brief: '😀\n' },
+      declared,
+    );
+    expect(result).toEqual({ bytes: Buffer.byteLength(JSON.stringify({ task: 'a😀\n' }), 'utf8') });
+  });
+
+  it('is absent where the value is absent, and counts null as JSON writes it', () => {
+    const template = { bytes: { $jsonBytes: [{ $bind: 'brief' }] } };
+    expect(substituteTemplateBinds(template, {}, declared)).toEqual({});
+    expect(substituteTemplateBinds(template, { brief: null }, declared)).toEqual({ bytes: 4 });
+  });
+});
+
 // ---------------------------------------------------------------------------
 // WorkflowTaskSchema parse-time teachers
 // ---------------------------------------------------------------------------

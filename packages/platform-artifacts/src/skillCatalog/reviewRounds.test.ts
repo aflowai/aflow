@@ -13,6 +13,7 @@ import {
 } from '@aflow/cybernetic-runtime';
 import {
   HostFilePatchInputSchema,
+  MAX_PARENT_INPUTS_SERIALIZED_BYTES,
   NEEDS_SETUP_FINDING_KIND,
   substituteTemplateBinds,
   WorkflowRunDecideInputSchema,
@@ -20,12 +21,13 @@ import {
   WorkflowRunStartInputSchema,
   type WorkflowTask,
 } from '@aflow/schemas';
-import { COMMISSION_CHANGE } from './commissionChange.js';
+import { COMMISSION_BRIEF_MAX_LENGTH, COMMISSION_CHANGE } from './commissionChange.js';
 import { PUBLISH_LOCAL_CHANGES } from './publishLocalChanges.js';
 import { AFTER_REVIEW_SETTLE_RULES } from './publishLocalChangesAfterReview.js';
 import { REVIEW_LOCAL_CHANGES, REVIEW_SUMMARY_MAX_LENGTH } from './reviewLocalChanges.js';
 import {
   FIRST_ROUND_MINOR_REASON,
+  FIX_BRIEF_ADDED_MAX_LENGTH,
   FIX_BRIEF_OPENING,
   FIX_BRIEF_REVIEW,
   LATER_ROUND_REASON,
@@ -33,7 +35,6 @@ import {
   NITS_ONLY_FIRST_REASON,
   NOT_APPROVED_FIRST_REASON,
   REVIEW_ROUNDS,
-  REVIEW_ROUNDS_BRIEF_MAX_LENGTH,
   REVIEW_ROUNDS_MAX,
   REVIEW_ROUNDS_OTHERWISE,
   REVIEW_ROUNDS_RULES,
@@ -84,6 +85,10 @@ interface Scenario {
   reviews: Review[];
   /** The commission reported no patch. */
   emptyCommission?: boolean;
+  /** The commission's run status, where it is not `completed`. Such a run reports no output. */
+  commissionStatus?: string;
+  /** The rounds whose commit `host.file.patch` refuses with an error. */
+  refusedCommits?: number[];
   /** How each fix round ends, by round. A round not named returns a patch. */
   fixes?: Partial<Record<number, 'failed' | 'refused' | 'no_patch'>>;
   /** The rounds whose patch does not apply on the branch. */
@@ -122,6 +127,9 @@ function rawOutput(task: WorkflowTask, scenario: Scenario, input: Record<string,
   const id = task.taskId;
   if (id === 'read-commission') {
     expect(WorkflowRunDetailInputSchema.parse(input).runId).toBe(COMMISSION_RUN);
+    if (scenario.commissionStatus !== undefined) {
+      return { run: { runId: COMMISSION_RUN, status: scenario.commissionStatus } };
+    }
     return {
       run: { runId: COMMISSION_RUN, status: 'completed' },
       result: {
@@ -139,6 +147,8 @@ function rawOutput(task: WorkflowTask, scenario: Scenario, input: Record<string,
     expect(parsed.patchRef).toBe(patchRefOf(round));
     expect(parsed.commit?.branch).toBe(RUN_INPUTS.branch);
     expect(parsed.commit?.baseSha).toBe(round === 1 ? BASE : headOf(round - 1));
+    // A refusal is an error, and the step reports no output.
+    if (scenario.refusedCommits?.includes(round) === true) return {};
     if (scenario.conflicts?.includes(round) === true) {
       return { state: 'conflict', filesChanged: 0, files: [], conflicts: ['calc.py'] };
     }
@@ -168,7 +178,7 @@ function rawOutput(task: WorkflowTask, scenario: Scenario, input: Record<string,
       },
     };
   }
-  if (id.startsWith('decide-') || id === 'record-stop') {
+  if (id.startsWith('decide-') || id.startsWith('fit-') || id === 'record-stop') {
     return { ...decideByRules(WorkflowRunDecideInputSchema.parse(input)) };
   }
   if (id.startsWith('fix-')) {
@@ -177,9 +187,12 @@ function rawOutput(task: WorkflowTask, scenario: Scenario, input: Record<string,
     const inputs = parsed.inputs as Record<string, unknown>;
     expect(inputs['base']).toBe(RUN_INPUTS.branch);
     const task = inputs['task'] as string;
-    // Commission Change refuses a task past its limit, and the start fails.
+    // Commission Change refuses a task past its limit, counted in characters as
+    // JSON Schema counts them, and the start fails.
     const fix =
-      task.length > COMMISSION_TASK_SCHEMA.maxLength ? 'refused' : scenario.fixes?.[round];
+      Array.from(task).length > COMMISSION_TASK_SCHEMA.maxLength
+        ? 'refused'
+        : scenario.fixes?.[round];
     if (fix === 'refused') return {};
     if (fix === 'failed') return { runId: `fix-run-${String(round)}`, outcome: 'failed' };
     if (fix === 'no_patch') {
@@ -301,10 +314,15 @@ describe('Review Rounds — the contract', () => {
     expect(unreachable).toEqual([]);
   });
 
-  it('is the commission read, then a commit, a review and a decision per round, with a fix before every round after the first, then the stop record', () => {
+  it('is the commission read, then a commit, a review and a decision per round, with a measured fix before every round after the first, then the stop record', () => {
     const rounds = Array.from({ length: REVIEW_ROUNDS_MAX }, (_, i) => {
       const n = String(i + 1);
-      return [...(i === 0 ? [] : [`fix-${n}`]), `commit-${n}`, `review-${n}`, `decide-${n}`];
+      return [
+        ...(i === 0 ? [] : [`fit-${n}`, `fix-${n}`]),
+        `commit-${n}`,
+        `review-${n}`,
+        `decide-${n}`,
+      ];
     }).flat();
     expect(tasks.map((task) => task.taskId)).toEqual(['read-commission', ...rounds, 'record-stop']);
   });
@@ -465,6 +483,7 @@ describe('Review Rounds — rounds on a patch with no remote', () => {
       'commit-1',
       'review-1',
       'decide-1',
+      'fit-2',
       'fix-2',
       'commit-2',
       'review-2',
@@ -579,11 +598,44 @@ describe('Review Rounds — rounds on a patch with no remote', () => {
     for (const rule of rules) expect(rule.value.reason).toContain('`headSha`');
   });
 
+  it.each([1, 2])(
+    'records a round %i commit that host.file.patch refused as what stopped, and still names the head',
+    (round) => {
+      const { ran, state } = run({ reviews: [minorFirst, minorFirst], refusedCommits: [round] });
+      expect(ran).toContain(`commit-${String(round)}`);
+      expect(ran).not.toContain(`review-${String(round)}`);
+      expect(ran.at(-1)).toBe('record-stop');
+      expect(state).toMatchObject({
+        headSha: round === 1 ? BASE : headOf(1),
+        stoppedAt: stoppedAt(round, 'commit_failed'),
+      });
+    },
+  );
+
   it('reviews nothing where the commission reported no patch', () => {
     const { ran, state } = run({ reviews: [], emptyCommission: true });
     expect(ran).toEqual(['read-commission', 'record-stop']);
     expect(state['headSha']).toBe(BASE);
     expect(state['stoppedAt']).toEqual(stoppedAt(1, 'no_patch'));
+  });
+
+  it.each(['failed', 'cancelled', 'running', 'paused'])(
+    'tells a commission whose run is %s from one that reported no patch',
+    (status) => {
+      const { ran, state } = run({ reviews: [minorFirst], commissionStatus: status });
+      expect(ran).toEqual(['read-commission', 'record-stop']);
+      expect(state['headSha'] ?? null).toBeNull();
+      expect(state['stoppedAt']).toEqual(stoppedAt(1, 'commission_not_completed'));
+    },
+  );
+
+  it('reviews nothing from a commission that did not complete, even where it reports a patch', () => {
+    const { ran } = run({ reviews: [minorFirst], commissionStatus: 'failed' });
+    expect(ran).not.toContain('commit-1');
+    const commit = tasks.find((t) => t.taskId === 'commit-1');
+    expect(commit?.when).toMatchObject({
+      allOf: expect.arrayContaining(["tasks.read-commission.output.status == 'completed'"]),
+    });
   });
 
   it("names every stop reason in the stop record's rules or its default", () => {
@@ -623,26 +675,92 @@ describe("Review Rounds — the loop's call path", () => {
     }
   });
 
-  it('caps the brief so the fix opening, the brief and the longest review summary fit what Commission Change accepts', () => {
+  it('takes any brief Commission Change takes, and bounds what a fix round adds to it', () => {
     const input = wf.runInputs?.find((i) => i.id === 'brief');
-    expect(input?.schema).toMatchObject({ maxLength: REVIEW_ROUNDS_BRIEF_MAX_LENGTH });
-    expect(
-      FIX_BRIEF_OPENING.length +
-        REVIEW_ROUNDS_BRIEF_MAX_LENGTH +
-        FIX_BRIEF_REVIEW.length +
-        REVIEW_SUMMARY_MAX_LENGTH,
-    ).toBe(COMMISSION_TASK_SCHEMA.maxLength);
+    expect(input?.schema).toMatchObject({ maxLength: COMMISSION_BRIEF_MAX_LENGTH });
+    expect(COMMISSION_BRIEF_MAX_LENGTH).toBe(COMMISSION_TASK_SCHEMA.maxLength);
+    expect(FIX_BRIEF_ADDED_MAX_LENGTH).toBe(
+      FIX_BRIEF_OPENING.length + FIX_BRIEF_REVIEW.length + REVIEW_SUMMARY_MAX_LENGTH,
+    );
   });
 
-  it('runs a fix round from a brief and a review summary both at their limits', () => {
-    const brief = 'x'.repeat(REVIEW_ROUNDS_BRIEF_MAX_LENGTH);
+  const minor = { verdict: 'approve' as const, findings: [finding('minor')] };
+
+  it('runs a fix round from a brief that leaves room for the longest review summary, with that summary', () => {
+    const brief = 'x'.repeat(COMMISSION_BRIEF_MAX_LENGTH - FIX_BRIEF_ADDED_MAX_LENGTH);
     const reviewSummary = 'y'.repeat(REVIEW_SUMMARY_MAX_LENGTH);
-    const minor = { verdict: 'approve' as const, findings: [finding('minor')] };
     const { inputs, state } = run({ reviews: [minor, minor], brief, reviewSummary });
     const start = WorkflowRunStartInputSchema.parse(inputs.get('fix-2'));
     const task = (start.inputs as Record<string, string>)['task'] ?? '';
     expect(task).toBe(FIX_BRIEF_OPENING + brief + FIX_BRIEF_REVIEW + reviewSummary);
     expect(task).toHaveLength(COMMISSION_TASK_SCHEMA.maxLength);
     expect(state['stoppedAt']).toEqual(stoppedAt(2, 'taken_as_it_stands'));
+  });
+
+  it('runs a fix round from a brief past that room where the review summary is short enough', () => {
+    const reviewSummary = 'review 1';
+    const brief = 'x'.repeat(
+      COMMISSION_BRIEF_MAX_LENGTH -
+        FIX_BRIEF_OPENING.length -
+        FIX_BRIEF_REVIEW.length -
+        reviewSummary.length,
+    );
+    const { ran, inputs, state } = run({ reviews: [minor, minor], brief, reviewSummary });
+    expect(inputs.get('fit-2')?.['state']).toMatchObject({ length: COMMISSION_BRIEF_MAX_LENGTH });
+    expect(ran).toContain('fix-2');
+    expect(state['stoppedAt']).toEqual(stoppedAt(2, 'taken_as_it_stands'));
+  });
+
+  it.each([
+    ['a brief at its own limit', 'x'.repeat(COMMISSION_BRIEF_MAX_LENGTH), 'review 1'],
+    [
+      'a brief one character past the room the summary leaves',
+      'x'.repeat(
+        COMMISSION_BRIEF_MAX_LENGTH -
+          FIX_BRIEF_OPENING.length -
+          FIX_BRIEF_REVIEW.length -
+          REVIEW_SUMMARY_MAX_LENGTH +
+          1,
+      ),
+      'y'.repeat(REVIEW_SUMMARY_MAX_LENGTH),
+    ],
+  ])(
+    'stops at fix_brief_too_long, starting no fix round, for %s',
+    (_name, brief, reviewSummary) => {
+      const { ran, state } = run({ reviews: [minor, minor], brief, reviewSummary });
+      expect(ran).toContain('fit-2');
+      expect(ran).not.toContain('fix-2');
+      expect(state).toMatchObject({
+        headSha: headOf(1),
+        decision: 'fix_before_merge',
+        stoppedAt: stoppedAt(2, 'fix_brief_too_long'),
+      });
+    },
+  );
+
+  it('counts the fix brief in characters and its inputs in bytes, as the start checks them', () => {
+    const brief = '😀'.repeat(1000);
+    const { ran, inputs } = run({ reviews: [minor, minor], brief, reviewSummary: 'review 1' });
+    expect(ran).toContain('fix-2');
+    const start = WorkflowRunStartInputSchema.parse(inputs.get('fix-2'));
+    expect(inputs.get('fit-2')?.['state']).toEqual({
+      length: 1000 + FIX_BRIEF_OPENING.length + FIX_BRIEF_REVIEW.length + 'review 1'.length,
+      inputBytes: Buffer.byteLength(JSON.stringify(start.inputs), 'utf8'),
+    });
+  });
+
+  it('stops at fix_brief_too_long where the fix brief fits in characters and its inputs pass the cap in bytes', () => {
+    // Each of these is one character and four bytes.
+    const brief = '😀'.repeat(8200);
+    const { ran, inputs, state } = run({
+      reviews: [minor, minor],
+      brief,
+      reviewSummary: 'review 1',
+    });
+    const measured = inputs.get('fit-2')?.['state'] as { length: number; inputBytes: number };
+    expect(measured.length).toBeLessThanOrEqual(COMMISSION_BRIEF_MAX_LENGTH);
+    expect(measured.inputBytes).toBeGreaterThan(MAX_PARENT_INPUTS_SERIALIZED_BYTES);
+    expect(ran).not.toContain('fix-2');
+    expect(state['stoppedAt']).toEqual(stoppedAt(2, 'fix_brief_too_long'));
   });
 });
