@@ -9,6 +9,7 @@ import { PUBLISH_LOCAL_CHANGES } from './publishLocalChanges.js';
 import { LOCAL_PR_SHEPHERD } from './localPrShepherd.js';
 import { REVIEW_LOCAL_CHANGES } from './reviewLocalChanges.js';
 import { REVIEW_PULL_REQUEST } from './reviewPullRequest.js';
+import { REVIEW_ROUNDS } from './reviewRounds.js';
 import { TICKER_MARKET_DIGEST } from './tickerMarketDigest.js';
 import { WEB_RESEARCH_BRIEF } from './webResearchBrief.js';
 import { LITERATURE_SCAN } from './literatureScan.js';
@@ -28,6 +29,7 @@ const RAW_SKILLS: readonly SkillCatalogEntry[] = [
   REVIEW_LOCAL_CHANGES,
   PUBLISH_LOCAL_CHANGES,
   LOCAL_PR_SHEPHERD,
+  REVIEW_ROUNDS,
   TICKER_MARKET_DIGEST,
   WEB_RESEARCH_BRIEF,
   LITERATURE_SCAN,

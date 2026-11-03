@@ -27,12 +27,14 @@ describe('Coding Loop Store contract', () => {
   });
 
   it('offers one local coding bundle and one version', () => {
+    // Beside the loop's parts, the measurement space's review rounds (Plan 341
+    // P2), unlisted and outside the Coding Loop.
     expect(
       listSkillBundles({ includeHidden: true })
         .filter((bundle) => bundle.tags.includes('local') && bundle.tags.includes('coding'))
         .map((bundle) => bundle.bundleId)
         .sort(),
-    ).toEqual([...CODING_LOOP_PART_IDS, 'coding-loop'].sort());
+    ).toEqual([...CODING_LOOP_PART_IDS, 'coding-loop', 'local-review-rounds'].sort());
     const local = listSkillBundles().filter(
       (bundle) => bundle.tags.includes('local') && bundle.tags.includes('coding'),
     );
