@@ -78,7 +78,7 @@ export function tenantDefaultModelId(allowed: ReadonlySet<string>): string | und
  * Replace role assignments the caller never made.
  *
  * `modelDefaults.default` carries a Zod default, so a create request that never
- * mentions a model still arrives naming `glm-pro`. A tenant that excludes it
+ * mentions a model still arrives naming `glm-flash`. A tenant that excludes it
  * would otherwise fail every ordinary space creation with a teaching error
  * about a choice the caller never made. `chosenRoles` are the roles present in
  * the request as it arrived on the wire, before validation filled anything in —

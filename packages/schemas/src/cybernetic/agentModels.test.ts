@@ -32,12 +32,20 @@ describe('isAllowedAgentModelRef', () => {
   });
 
   it('refuses a model outside the tenant set even when the platform recommends it', () => {
-    expect(isAllowedAgentModelRef('claude-sonnet-5-5', ['gemini-3.8-flash'])).toBe(false);
+    expect(isAllowedAgentModelRef('claude-haiku-4-5', ['gemini-3.8-flash'])).toBe(false);
   });
 
   it('admits the platform set when the tenant never chose', () => {
-    expect(isAllowedAgentModelRef('claude-sonnet-5-5', null)).toBe(true);
-    expect(isAllowedAgentModelRef('grok', null)).toBe(true);
+    expect(isAllowedAgentModelRef('claude-haiku-4-5', null)).toBe(true);
+    expect(isAllowedAgentModelRef('luna', null)).toBe(true);
+  });
+
+  it('recommends the cost tier of each provider, not its mid or frontier tier', () => {
+    expect(isAllowedAgentModelRef('glm-flash', null)).toBe(true);
+    expect(isAllowedAgentModelRef('flash', null)).toBe(true);
+    for (const ref of ['glm-pro', 'sonnet', 'pro', 'gpt', 'kimi-pro', 'grok', 'gpt-nano']) {
+      expect(isAllowedAgentModelRef(ref, null), ref).toBe(false);
+    }
   });
 });
 

@@ -8,20 +8,20 @@ import {
 } from './agentModelPolicy.js';
 import { offListAgentModelRefs } from '../routes/spacesShared.js';
 
-const GLM_ID = 'accounts/fireworks/models/glm-5p3';
+const GLM_ID = 'accounts/fireworks/models/glm-5p3-flash';
 
 describe('canonical comparison', () => {
   it('resolves an alias and an id to the same model', () => {
     expect(canonicalModelId('luna')).toBe('gpt-6-luna');
     expect(canonicalModelId('gpt-6-luna')).toBe('gpt-6-luna');
-    expect(canonicalModelId('glm-pro')).toBe(GLM_ID);
+    expect(canonicalModelId('glm-flash')).toBe(GLM_ID);
   });
 
   it('admits a directive alias against an allowlist stored as ids', () => {
-    // The gate's original bug: default directives hold `glm-pro`, the Settings
+    // The gate's original bug: default directives held `glm-pro`, the Settings
     // page saves catalog ids, and comparing the strings refused the same model.
     const allowed = allowedModelIds([GLM_ID], 'enterprise');
-    expect(isModelIdAllowed('glm-pro', allowed)).toBe(true);
+    expect(isModelIdAllowed('glm-flash', allowed)).toBe(true);
     expect(isModelIdAllowed(GLM_ID, allowed)).toBe(true);
   });
 
@@ -41,7 +41,12 @@ describe('canonical comparison', () => {
   });
 
   it('falls back to the platform recommendations when the tenant never chose', () => {
-    expect(isModelIdAllowed('claude-sonnet-5-5', allowedModelIds(null, 'enterprise'))).toBe(true);
+    const recommended = allowedModelIds(null, 'enterprise');
+    expect(isModelIdAllowed('claude-haiku-4-5', recommended)).toBe(true);
+    expect(isModelIdAllowed(GLM_ID, recommended)).toBe(true);
+    // The recommendation names each provider's cost tier, so a tenant that never
+    // chose cannot move a space onto a mid or frontier tier.
+    expect(isModelIdAllowed('claude-sonnet-5-5', recommended)).toBe(false);
   });
 });
 
@@ -61,11 +66,11 @@ describe('withTenantDefaultModels', () => {
   const NONE: ReadonlySet<string> = new Set();
 
   it('rehomes a default the caller never named', () => {
-    // Space creation carries `glm-pro` from a Zod default even when the caller
+    // Space creation carries `glm-flash` from a Zod default even when the caller
     // never named a model; without this every create would 400 for a tenant
     // that excludes GLM.
     const allowed = allowedModelIds(['gemini-3.8-flash'], 'enterprise');
-    const out = withTenantDefaultModels({ modelDefaults: { default: 'glm-pro' } }, allowed, NONE);
+    const out = withTenantDefaultModels({ modelDefaults: { default: 'glm-flash' } }, allowed, NONE);
     expect(out.modelDefaults?.['default']).toBe('gemini-3.8-flash');
   });
 
@@ -74,11 +79,11 @@ describe('withTenantDefaultModels', () => {
     // not choose; the gate refuses the request instead.
     const allowed = allowedModelIds(['gemini-3.8-flash'], 'enterprise');
     const out = withTenantDefaultModels(
-      { modelDefaults: { default: 'glm-pro' } },
+      { modelDefaults: { default: 'glm-flash' } },
       allowed,
       new Set(['default']),
     );
-    expect(out.modelDefaults?.['default']).toBe('glm-pro');
+    expect(out.modelDefaults?.['default']).toBe('glm-flash');
   });
 
   it('leaves a deliberately chosen other model alone for the gate to refuse', () => {
@@ -93,20 +98,20 @@ describe('withTenantDefaultModels', () => {
 
   it('leaves an allowed default untouched', () => {
     const allowed = allowedModelIds([GLM_ID], 'enterprise');
-    const out = withTenantDefaultModels({ modelDefaults: { default: 'glm-pro' } }, allowed, NONE);
-    expect(out.modelDefaults?.['default']).toBe('glm-pro');
+    const out = withTenantDefaultModels({ modelDefaults: { default: 'glm-flash' } }, allowed, NONE);
+    expect(out.modelDefaults?.['default']).toBe('glm-flash');
   });
 
   it('rehomes only the roles the caller left unnamed', () => {
     const allowed = allowedModelIds(['gpt-6-luna'], 'enterprise');
     const out = withTenantDefaultModels(
-      { modelDefaults: { default: 'glm-pro', runner: 'glm-pro', coach: 'gpt-6-luna' } },
+      { modelDefaults: { default: 'glm-flash', runner: 'glm-flash', coach: 'gpt-6-luna' } },
       allowed,
       new Set(['runner']),
     );
     expect(out.modelDefaults).toEqual({
       default: 'gpt-6-luna',
-      runner: 'glm-pro',
+      runner: 'glm-flash',
       coach: 'gpt-6-luna',
     });
   });
@@ -117,9 +122,8 @@ describe('the Clerk against the same gate', () => {
 
   it('lets every value its picker can produce be saved', () => {
     // Each of these was refused before the gate learned the role: the two
-    // modes resolve to no model at all, and the small models the Clerk exists
-    // to use are absent from the foreground lineup. What survived was only the
-    // expensive models the role exists to avoid.
+    // modes resolve to no model at all, and several small models the Clerk
+    // exists to use are absent from the foreground lineup.
     for (const value of ['auto', 'space_default', 'glm-flash', 'haiku', 'gpt-mini']) {
       expect(offListAgentModelRefs({ modelDefaults: { clerk: value } }, recommended)).toEqual([]);
     }
@@ -137,9 +141,9 @@ describe('the Clerk against the same gate', () => {
   });
 
   it('does not widen any other role', () => {
-    expect(
-      offListAgentModelRefs({ modelDefaults: { helmsman: 'glm-flash' } }, recommended),
-    ).toEqual(['glm-flash']);
+    expect(offListAgentModelRefs({ modelDefaults: { helmsman: 'gpt-mini' } }, recommended)).toEqual(
+      ['gpt-mini'],
+    );
   });
 
   it('leaves a Clerk mode alone when filling tenant defaults', () => {
