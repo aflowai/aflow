@@ -1,6 +1,6 @@
 # Plan 341 — The machine is measured
 
-**Status:** P0 is approved. P1's harness runner and evaluation writer are built, and its pilot has not run. The pilot's arm (b) is one commission without review rounds (F7). P2's review rounds serve arm (b) from P2 on. They are built, and P2 has not run. P3 and P4 are not built.
+**Status:** P0 is approved. P1's harness runner and evaluation writer are built, and its pilot has not run. The pilot's arm (b) is one commission without review rounds (D3). P2's review rounds serve arm (b) from P2 on. They are built, and P2 has not run. P3 and P4 are not built.
 
 **Builds on:** Plan 269 (the eval plane: one evaluation substrate, `workflow_runs.evaluation_json`, frozen replays), Plan 329 (planning is a skill), Plan 183 and Plan 234 (the learning loop), Plan 315 (the local loop), Plan 337 (the decision card), Plan 333 (D2's writing rules). Plans 269, 329, 183 and 234 predate the published archive, which starts at Plan 315, so they are cited by number and not quoted.
 
@@ -95,7 +95,7 @@ _Rejected:_ a judge-scored rubric. Plan 269 holds judges advisory until measured
 
 ### D3 — A pilot before any scale
 
-P1 runs eight tasks drawn at random from the standardized set with a fixed seed. It runs one seed and arms (a) and (b) only. Its arm (b) is one commission without review rounds, because the rounds land in P2 (F7). It measures these figures:
+P1 runs eight tasks drawn at random from the standardized set with a fixed seed. It runs one seed and arms (a) and (b) only. Its arm (b) is one commission without review rounds, because the rounds land in P2. Its patch is taken as the commission left it. It measures these figures:
 
 - Pass rate per arm.
 - Tokens and cost per task per arm.
@@ -111,7 +111,10 @@ It proves the mechanics:
 
 The pilot's job is the price of a task and a working pipeline, not a conclusion.
 
-_Rejected:_ starting at 50 to 100 tasks. A mechanics failure at that size wastes the spend.
+_Rejected:_
+
+- Starting at 50 to 100 tasks. A mechanics failure at that size wastes the spend.
+- Running the pilot's arm (b) with review rounds, by building the rounds first. The pilot's job is the price of a task and a working pipeline. The rounds did not exist, and building them before any measurement would have delayed the pilot's spend without informing it.
 
 ### D4 — Scale after the pilot
 
@@ -176,7 +179,7 @@ Each phase lands on its own.
 
 P1's machinery is the harness runner and the evaluation writer. It is built, and the pilot has not run. It holds no review rounds, so P1 does not run D2's arm (b) whole.
 
-F7: the pilot's arm (b) runs as one commission without review rounds. Its patch is taken as the commission left it. Its number measures a node and one commission, not the loop's rounds. The rounds land in P2 and serve arm (b) from P2 on.
+D3 sets the pilot's arm (b) as one commission without review rounds. Its patch is taken as the commission left it. Its number measures a node and one commission, not the loop's rounds. The rounds land in P2 and serve arm (b) from P2 on.
 
 The machinery's pieces are these:
 
@@ -202,9 +205,11 @@ P2 lands the review rounds, and they are built. They serve arm (b) from P2 on, a
 - Each review is Review Local Changes, started as a run of its own, as the publication starts it. It reads `baseSha..<head>`.
 - Each decision is `workflow.run.decide` over the publication's own rule builders, with its decision names. Round 1 with a minor or worse takes a fix round. Later rounds with minors or nits take the patch as it stands. A major or a blocker always takes its fix. No model is asked.
 - A fix round is Commission Change on the local branch, briefed with the brief and the review's summary.
+- The skill caps the brief below Commission Change's own limit. The cap leaves room for the fix opening and the longest review summary, so every fix brief fits. A `fix_failed` stop therefore never means a brief too long.
 - The rounds stop at three reviews, the operator's limit.
 - A last `workflow.run.decide` records `stoppedAt`: the round that ended the rounds, and why. `taken_as_it_stands` and `round_limit` are ends the rounds rule chose. `fix_failed`, `fix_no_patch`, `commit_failed` and `review_failed` name a step that broke. `no_patch` means the commission had no patch. The last round's `decision` cannot say this, because a broken fix round leaves it at `fix_before_merge`, as the limit does.
-- The run records every round as a task, with each review as a run of its own. Each decision states its reason. The `rounds` output holds each round's verdict, findings, review run and head. The final `headSha` is the last head a review read and the rule decided.
+- The run records every round as a task, with each review as a run of its own. Each decision states its reason. The `rounds` output holds each round's verdict, findings, review run and head. After a decided round, the final `headSha` is the last head a review read and the rule decided.
+- Every stop leaves a `headSha`, and `stoppedAt.reason` names which head it is. Where round 1's review decided nothing, it is the commission's own commit, which no review read. Where no commit landed, it is `baseSha`, and it grades as an empty patch.
 - The driver grades that head with `grade --ref <headSha> --run <the rounds run>`, so the attempt's verdict lands on the run that shows its rounds.
 
 The publication's rule differs in two cases and stays as it is. A reader of arm (b)'s results reads the loop's process through both:

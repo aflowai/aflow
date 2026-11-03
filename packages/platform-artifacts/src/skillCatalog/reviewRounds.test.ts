@@ -23,7 +23,7 @@ import {
 import { COMMISSION_CHANGE } from './commissionChange.js';
 import { PUBLISH_LOCAL_CHANGES } from './publishLocalChanges.js';
 import { AFTER_REVIEW_SETTLE_RULES } from './publishLocalChangesAfterReview.js';
-import { REVIEW_LOCAL_CHANGES } from './reviewLocalChanges.js';
+import { REVIEW_LOCAL_CHANGES, REVIEW_SUMMARY_MAX_LENGTH } from './reviewLocalChanges.js';
 import {
   FIRST_ROUND_MINOR_REASON,
   FIX_BRIEF_OPENING,
@@ -33,10 +33,12 @@ import {
   NITS_ONLY_FIRST_REASON,
   NOT_APPROVED_FIRST_REASON,
   REVIEW_ROUNDS,
+  REVIEW_ROUNDS_BRIEF_MAX_LENGTH,
   REVIEW_ROUNDS_MAX,
   REVIEW_ROUNDS_OTHERWISE,
   REVIEW_ROUNDS_RULES,
   STOP_REASONS,
+  stopReason,
   type StopReason,
 } from './reviewRounds.js';
 import { SKILL_BUNDLE_CATALOG } from '../skillBundleCatalog.js';
@@ -88,13 +90,15 @@ interface Scenario {
   conflicts?: number[];
   /** The run's brief, where it is not the default. */
   brief?: string;
+  /** Every review's summary, where it is not the default. */
+  reviewSummary?: string;
 }
 
 const briefOf = (scenario: Scenario) => scenario.brief ?? RUN_INPUTS.brief;
 const stoppedAt = (round: number, why: StopReason) => ({
   round,
   why,
-  reason: STOP_REASONS[why],
+  reason: stopReason(why, round),
 });
 /** What Commission Change accepts as its `task`. */
 const COMMISSION_TASK_SCHEMA = COMMISSION_CHANGE.bundle.workflow.runInputs?.find(
@@ -158,7 +162,7 @@ function rawOutput(task: WorkflowTask, scenario: Scenario, input: Record<string,
       result: {
         output: {
           verdict: review.verdict,
-          reviewSummary: `review ${String(round)}`,
+          reviewSummary: scenario.reviewSummary ?? `review ${String(round)}`,
           findings: review.findings,
         },
       },
@@ -544,10 +548,41 @@ describe('Review Rounds — rounds on a patch with no remote', () => {
     });
   });
 
+  it("names the commission's own commit as the head to grade where round 1's review decided nothing", () => {
+    const { ran, state } = run({ reviews: [] });
+    expect(ran).toContain('review-1');
+    expect(ran).not.toContain('decide-1');
+    expect(state).toMatchObject({
+      headSha: headOf(1),
+      stoppedAt: stoppedAt(1, 'review_failed'),
+    });
+    expect(state['rounds']).toBeUndefined();
+    expect(stopReason('review_failed', 1)).toContain('the commission’s own commit');
+  });
+
+  it("names the base as the head to grade where the commission's patch did not apply in round 1", () => {
+    const { ran, state } = run({ reviews: [minorFirst], conflicts: [1] });
+    expect(ran).not.toContain('review-1');
+    expect(state).toMatchObject({
+      headSha: BASE,
+      stoppedAt: stoppedAt(1, 'commit_failed'),
+    });
+    expect(stopReason('commit_failed', 1)).toContain('`headSha` is the base');
+  });
+
+  it('names which head to grade in the reason of every stop the rules can record', () => {
+    const rules = (
+      tasks.find((t) => t.taskId === 'record-stop')?.inputTemplate as {
+        rules: Array<{ value: { reason: string } }>;
+      }
+    ).rules;
+    for (const rule of rules) expect(rule.value.reason).toContain('`headSha`');
+  });
+
   it('reviews nothing where the commission reported no patch', () => {
     const { ran, state } = run({ reviews: [], emptyCommission: true });
     expect(ran).toEqual(['read-commission', 'record-stop']);
-    expect(state['headSha']).toBeUndefined();
+    expect(state['headSha']).toBe(BASE);
     expect(state['stoppedAt']).toEqual(stoppedAt(1, 'no_patch'));
   });
 
@@ -588,15 +623,26 @@ describe("Review Rounds — the loop's call path", () => {
     }
   });
 
-  it('refuses a fix brief past what Commission Change accepts, and records the fix round as what stopped', () => {
-    // A brief at its own limit leaves no room for the fix opening and the review.
-    const brief = 'x'.repeat(COMMISSION_TASK_SCHEMA.maxLength);
+  it('caps the brief so the fix opening, the brief and the longest review summary fit what Commission Change accepts', () => {
+    const input = wf.runInputs?.find((i) => i.id === 'brief');
+    expect(input?.schema).toMatchObject({ maxLength: REVIEW_ROUNDS_BRIEF_MAX_LENGTH });
+    expect(
+      FIX_BRIEF_OPENING.length +
+        REVIEW_ROUNDS_BRIEF_MAX_LENGTH +
+        FIX_BRIEF_REVIEW.length +
+        REVIEW_SUMMARY_MAX_LENGTH,
+    ).toBe(COMMISSION_TASK_SCHEMA.maxLength);
+  });
+
+  it('runs a fix round from a brief and a review summary both at their limits', () => {
+    const brief = 'x'.repeat(REVIEW_ROUNDS_BRIEF_MAX_LENGTH);
+    const reviewSummary = 'y'.repeat(REVIEW_SUMMARY_MAX_LENGTH);
     const minor = { verdict: 'approve' as const, findings: [finding('minor')] };
-    const { inputs, state } = run({ reviews: [minor, minor], brief });
+    const { inputs, state } = run({ reviews: [minor, minor], brief, reviewSummary });
     const start = WorkflowRunStartInputSchema.parse(inputs.get('fix-2'));
     const task = (start.inputs as Record<string, string>)['task'] ?? '';
-    expect(task.startsWith(FIX_BRIEF_OPENING + brief + FIX_BRIEF_REVIEW)).toBe(true);
-    expect(task.length).toBeGreaterThan(COMMISSION_TASK_SCHEMA.maxLength);
-    expect(state['stoppedAt']).toEqual(stoppedAt(2, 'fix_failed'));
+    expect(task).toBe(FIX_BRIEF_OPENING + brief + FIX_BRIEF_REVIEW + reviewSummary);
+    expect(task).toHaveLength(COMMISSION_TASK_SCHEMA.maxLength);
+    expect(state['stoppedAt']).toEqual(stoppedAt(2, 'taken_as_it_stands'));
   });
 });

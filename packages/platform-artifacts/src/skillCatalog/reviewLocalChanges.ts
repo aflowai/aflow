@@ -169,6 +169,9 @@ export const REVIEW_FINDING_SCHEMA = {
   },
 };
 
+/** The longest summary a review returns. A fix round's brief carries it whole. */
+export const REVIEW_SUMMARY_MAX_LENGTH = 16000;
+
 const RESULT_SCHEMA = {
   type: 'object',
   required: ['verdict', 'summary', 'findings'],
@@ -183,7 +186,7 @@ const RESULT_SCHEMA = {
     summary: {
       type: 'string',
       minLength: 1,
-      maxLength: 16000,
+      maxLength: REVIEW_SUMMARY_MAX_LENGTH,
       description:
         'What the range does and what the review found, written so a person holding only this text can act on it: every finding named inline — its severity, its `file:line`, one sentence of what is wrong — blockers first, then every check that was run with its outcome. The evidence behind each finding and the fix it suggests stay in `findings`.',
     },

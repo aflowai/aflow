@@ -4,7 +4,7 @@ import { bind, ctx, out, runInput, SKIP } from './localPrShepherdWiring.js';
 import { entryContract } from './localBrowserRule.js';
 import { aboveMinorRules, minorRules } from './publishLocalChangesAfterReview.js';
 import { COMMISSION_RUN_ID_SCHEMA } from './publishLocalChangesMessage.js';
-import { REVIEW_LOCAL_CHANGES } from './reviewLocalChanges.js';
+import { REVIEW_LOCAL_CHANGES, REVIEW_SUMMARY_MAX_LENGTH } from './reviewLocalChanges.js';
 
 /**
  * Review Rounds (Plan 341 P2): the loop's review, fix rounds and rounds-rule
@@ -118,6 +118,18 @@ export const FIX_BRIEF_OPENING =
   'This is a fix round. The branch this checkout starts at holds a change made for the brief below, and a review of that change found what its summary below says. Fix every finding the summary names, blockers and majors first, and keep to what the brief asks. A finding of kind `needs_setup` is setup on the machine, not a defect of the change: leave it. Run the checks the brief names again before you return.\n\nThe brief:\n\n';
 export const FIX_BRIEF_REVIEW = '\n\nThe review:\n\n';
 
+/**
+ * The longest brief the rounds take: Commission Change's own limit, less the
+ * fix opening, the separator and the longest review summary. A fix brief
+ * composed from any brief they accept therefore fits what Commission Change
+ * accepts, so `fix_failed` never means a brief too long.
+ */
+export const REVIEW_ROUNDS_BRIEF_MAX_LENGTH =
+  COMMISSION_BRIEF_MAX_LENGTH -
+  FIX_BRIEF_OPENING.length -
+  FIX_BRIEF_REVIEW.length -
+  REVIEW_SUMMARY_MAX_LENGTH;
+
 const REVIEW_SKILL = {
   catalogId: REVIEW_LOCAL_CHANGES.catalogId,
   slug: REVIEW_LOCAL_CHANGES.bundle.workflow.slug,
@@ -145,9 +157,8 @@ const ROUNDS_RUN_INPUTS = [
   {
     id: 'brief',
     required: true,
-    description:
-      'The brief that commission ran on, as it was passed. A fix round is briefed with it and with the review’s summary.',
-    schema: { type: 'string', minLength: 1, maxLength: COMMISSION_BRIEF_MAX_LENGTH },
+    description: `The brief that commission ran on, as it was passed. A fix round is briefed with it and with the review’s summary. It holds at most ${String(REVIEW_ROUNDS_BRIEF_MAX_LENGTH)} characters, so every fix brief fits what Commission Change accepts.`,
+    schema: { type: 'string', minLength: 1, maxLength: REVIEW_ROUNDS_BRIEF_MAX_LENGTH },
   },
   {
     id: 'branch',
@@ -201,7 +212,12 @@ const READ_COMMISSION_TASK = {
     title: { path: 'result.output.summary.title', onMissing: 'null' as const },
     paragraph: { path: 'result.output.summary.paragraph', onMissing: 'null' as const },
   },
-  promoteOutputs: [{ kind: 'output_path' as const, path: 'baseSha', toState: 'baseSha' }],
+  // The base is the head to grade until a commit lands: with no commit, the
+  // graded patch is empty.
+  promoteOutputs: [
+    { kind: 'output_path' as const, path: 'baseSha', toState: 'baseSha' },
+    { kind: 'output_path' as const, path: 'baseSha', toState: 'headSha' },
+  ],
 };
 
 /** Where a round's patch, its base and its summary come from: the commission read, or the round's fix. */
@@ -258,11 +274,20 @@ function commitTask(round: number) {
       state: { path: 'state', onMissing: 'error' as const },
       branch: { path: 'commit.branch', onMissing: 'null' as const },
       sha: { path: 'commit.sha', onMissing: 'null' as const },
+      commit: { path: 'commit', onMissing: 'null' as const },
     },
     // Only the first round makes the branch, so only it names it: a later
-    // commit that did not land would write null over it.
+    // commit that did not land would write null over it. Its commit is the
+    // commission's own head, the head to grade where its review decides
+    // nothing. `commit.sha` reads as absent when no commit landed, so the
+    // base stays the head then.
     ...(round === 1
-      ? { promoteOutputs: [{ kind: 'output_path' as const, path: 'branch', toState: 'branch' }] }
+      ? {
+          promoteOutputs: [
+            { kind: 'output_path' as const, path: 'branch', toState: 'branch' },
+            { kind: 'output_path' as const, path: 'commit.sha', toState: 'headSha' },
+          ],
+        }
       : {}),
   };
 }
@@ -351,8 +376,9 @@ function decideTask(round: number) {
       round: { fromInput: 'state' },
     },
     // The run's head, verdict and findings are the last decided round's, so
-    // the head the run reports is always one a review read and the rule
-    // decided. A fix whose review did not finish stays on the branch past it.
+    // once a round is decided the head the run reports is one a review read
+    // and the rule decided. A fix whose review did not finish stays on the
+    // branch past it.
     promoteOutputs: [
       { kind: 'output_path' as const, path: 'decision', toState: 'decision' },
       { kind: 'output_path' as const, path: 'round.headSha', toState: 'headSha' },
@@ -377,8 +403,8 @@ function fixTask(round: number) {
       expression: `tasks.${decide}.output.decision == 'fix_before_merge'`,
       onMissingRef: SKIP,
     },
-    // A fix that could not run, or a brief over the commission's limit, ends
-    // the rounds with the head the last review read.
+    // A fix that could not run ends the rounds with the head the last review
+    // read. The brief's cap keeps this fix brief inside the commission's limit.
     optional: true,
     retryability: 'unsafe' as const,
     maxAttempts: 1,
@@ -419,34 +445,64 @@ function fixTask(round: number) {
 /**
  * Why the rounds stopped, each a label `stoppedAt.why` carries. Only
  * `taken_as_it_stands` and `round_limit` are ends the rounds rule chose. The
- * rest are a step that broke, and the run's head is the last reviewed one.
+ * rest are a step that broke. `stopReason` adds which head to grade.
  */
 export const STOP_REASONS = {
   taken_as_it_stands: 'The rounds rule took the patch as it stands after this round’s review.',
   round_limit:
     'This round’s review decided a fix, and the limit on rounds allows no further one. Its findings stand open.',
-  fix_failed:
-    'This fix round did not complete: it failed, was refused, timed out or paused. The head is the last one a review read.',
-  fix_no_patch:
-    'This fix round completed with no patch, so nothing was left to review. The head is the last one a review read.',
-  commit_failed:
-    'This round’s patch did not apply on the local branch, so it was not reviewed. The head is the last one a review read.',
+  fix_failed: 'This fix round did not complete: it failed, was refused, timed out or paused.',
+  fix_no_patch: 'This fix round completed with no patch, so nothing was left to review.',
+  commit_failed: 'This round’s patch did not apply on the local branch, so it was not reviewed.',
   review_failed:
     'This round’s review returned no findings: it failed, was cancelled or paused. The rounds rule decided nothing on it.',
   no_patch: 'The commission reported no patch, so no round was reviewed.',
 } as const;
 export type StopReason = keyof typeof STOP_REASONS;
 
+/**
+ * What a driver grades after the rounds stop at `round` for `why`. Every
+ * stop leaves a `headSha`: a reviewed head, the commission's own commit in
+ * round 1, or the base where no commit landed.
+ */
+export function gradeHead(why: StopReason, round: number): string {
+  const lastReviewed = `Grade \`headSha\`, the head round ${String(round - 1)}’s review read.`;
+  switch (why) {
+    case 'taken_as_it_stands':
+    case 'round_limit':
+      return 'Grade `headSha`, the head this round’s review read.';
+    case 'fix_failed':
+    case 'fix_no_patch':
+      return lastReviewed;
+    case 'commit_failed':
+      return round === 1
+        ? 'No commit holds the commission’s patch, so `headSha` is the base and grades as an empty patch. The patch stays at the commission’s `patchRef`.'
+        : lastReviewed;
+    case 'review_failed':
+      return round === 1
+        ? 'Grade `headSha`, the commission’s own commit, which no review read.'
+        : `${lastReviewed} This round’s commit sits on the branch past it.`;
+    case 'no_patch':
+      return '`headSha` is the base and grades as an empty patch.';
+  }
+}
+
+/** The reason `stoppedAt` carries: why the rounds stopped, and what to grade. */
+export function stopReason(why: StopReason, round: number): string {
+  return `${STOP_REASONS[why]} ${gradeHead(why, round)}`;
+}
+
 function stopRule(round: number, why: StopReason, comparisons: string[]): WorkflowRunDecideRule {
   const [only] = comparisons;
+  const reason = stopReason(why, round);
   return {
     when:
       comparisons.length === 1 && only !== undefined
         ? { expression: only }
         : { allOf: comparisons },
     decision: why,
-    reason: STOP_REASONS[why],
-    value: { round, why, reason: STOP_REASONS[why] },
+    reason,
+    value: { round, why, reason },
   };
 }
 
@@ -509,8 +565,8 @@ export const STOP_RULES: readonly WorkflowRunDecideRule[] = Array.from(
 
 export const STOP_OTHERWISE = {
   decision: 'no_patch',
-  reason: STOP_REASONS.no_patch,
-  value: { round: 1, why: 'no_patch', reason: STOP_REASONS.no_patch },
+  reason: stopReason('no_patch', 1),
+  value: { round: 1, why: 'no_patch', reason: stopReason('no_patch', 1) },
 };
 
 function recordStopTask(roundTaskIds: string[]) {
@@ -557,8 +613,10 @@ const ROUNDS_TASKS = [...ROUND_TASKS, recordStopTask(ROUND_TASKS.map((task) => t
 
 const REVIEW_ROUNDS_PITFALLS: string[] = [
   'What it needs: the folder, the completed Commission Change as `commission`, the `brief` that commission ran on, and a `branch` name the folder does not hold yet. The folder must allow writes, and it needs no remote.',
+  `The \`brief\` holds at most ${String(REVIEW_ROUNDS_BRIEF_MAX_LENGTH)} characters, and the start refuses a longer one. That cap leaves room for the fix opening and the longest review summary, so every fix brief fits what Commission Change accepts. A \`fix_failed\` stop therefore never means a brief too long.`,
   'It never pushes, opens no pull request and runs no publication. Where the change is meant to land, publish it with Publish Local Changes instead.',
   'The final patch is `git diff <baseSha>..<headSha>` in the folder, on `branch`. The folder’s working tree is left as the commission found it, so a patch read from the working tree is empty.',
+  'Every stop leaves a `headSha` to grade, and `stoppedAt.reason` names which head it is. After a decided round it is the last head a review read. Where round 1’s review decided nothing, it is the commission’s own commit, which no review read. Where no commit landed, it is the base, and it grades as an empty patch.',
   `It reviews at most ${String(REVIEW_ROUNDS_MAX)} times. Read how the rounds ended from \`stoppedAt\`, not from \`decision\`. A fix round that broke leaves \`decision\` at \`fix_before_merge\`, as the limit does. Only a \`stoppedAt.why\` of \`round_limit\` means the limit ended them.`,
 ];
 
@@ -607,7 +665,7 @@ const REVIEW_ROUNDS: SkillCatalogEntry = {
           variableId: 'headSha',
           name: 'Head',
           description:
-            'The commit the last decided round reviewed. The final patch is the diff from `baseSha` to it. A fix whose review did not finish may sit on the branch past it.',
+            'The commit to grade. The final patch is the diff from `baseSha` to it. After a decided round it is the commit that round reviewed, and a fix whose review did not finish may sit on the branch past it. Where round 1’s review decided nothing, it is the commission’s own commit. Where no commit landed, it is `baseSha`, and the patch is empty.',
           required: false,
           sensitive: false,
           immutable: false,
@@ -661,7 +719,7 @@ const REVIEW_ROUNDS: SkillCatalogEntry = {
           variableId: 'stoppedAt',
           name: 'Stopped at',
           description:
-            'Which round ended the rounds, and why: its `round`, `why` and `reason`. A `why` of `taken_as_it_stands` or `round_limit` is an end the rounds rule chose. `fix_failed`, `fix_no_patch`, `commit_failed` and `review_failed` name a step of that round that broke. `no_patch` means the commission had no patch.',
+            'Which round ended the rounds, and why: its `round`, `why` and `reason`. The `reason` also names which head `headSha` holds. A `why` of `taken_as_it_stands` or `round_limit` is an end the rounds rule chose. `fix_failed`, `fix_no_patch`, `commit_failed` and `review_failed` name a step of that round that broke. `no_patch` means the commission had no patch.',
           required: false,
           sensitive: false,
           immutable: false,
@@ -680,7 +738,7 @@ const REVIEW_ROUNDS: SkillCatalogEntry = {
       output: {
         primary: 'headSha',
         guidance:
-          'The final patch is the diff from baseSha to headSha on branch, in the folder. Report stoppedAt for which round ended the rounds and why. Report verdict and decision as they stand, and rounds for what each round found. Only a stoppedAt.why of round_limit means the limit on rounds ended them. Nothing was pushed.',
+          'The final patch is the diff from baseSha to headSha on branch, in the folder. Every stop leaves a headSha to grade. Report stoppedAt for which round ended the rounds, why, and which head headSha holds. Report verdict and decision as they stand, and rounds for what each round found. Only a stoppedAt.why of round_limit means the limit on rounds ended them. Nothing was pushed.',
       },
       iteration: { auto: false, maxConsecutiveRuns: 1, stopOnOutcomesMet: true, cooldownMs: 0 },
     },

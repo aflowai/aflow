@@ -23,8 +23,8 @@
  * to the measurement space through the host lane (D5), the loop works it, and
  * `grade` takes the outcome, tokens, cost and wall time its run reported.
  * The loop's review rounds run without a publication (`review-rounds`, Plan
- * 341 P2): they commit each round on a local branch and report the last
- * reviewed head as `headSha`. `grade --ref <headSha> --run <its run id>`
+ * 341 P2): they commit each round on a local branch and report the head to
+ * grade as `headSha`, whichever way they stop. `grade --ref <headSha> --run <its run id>`
  * grades that head and records the attempt on the run that holds the rounds.
  *
  * `designate` marks a space as the measurement space. With `--tenant` and
