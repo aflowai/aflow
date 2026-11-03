@@ -170,21 +170,14 @@ describe('the fixture task', () => {
     expect(existsSync(join(workRoot, task.instanceId))).toBe(false);
   });
 
-  it('refuses a base commit that git would read as an option, and runs no git command', async () => {
-    const workRoot = join(scratch, 'work');
-    const marker = join(scratch, 'upload-pack-ran');
-    const task = fixtureTask({ base_commit: `--upload-pack=touch ${marker}` });
-    const calls = [];
-    const recording = (command, args, options) => {
-      calls.push({ command, args });
-      return exec(command, args, options);
-    };
-    await expect(
-      materializeTask(task, { workRoot, repoUrl: upstream, exec: recording }),
-    ).rejects.toMatchObject({ failureClass: 'materialize_failed' });
-    expect(calls).toEqual([]);
-    expect(existsSync(marker)).toBe(false);
-    expect(existsSync(join(workRoot, task.instanceId))).toBe(false);
+  it('refuses a base commit that git would read as an option, before any step reads it', () => {
+    expect(() => fixtureTask({ base_commit: '--upload-pack=touch ran' })).toThrow(
+      /not a full commit id/,
+    );
+  });
+
+  it('refuses a SHA-256 base commit, which the SHA-1 folder cannot hold', () => {
+    expect(() => fixtureTask({ base_commit: 'a'.repeat(64) })).toThrow(/not a full commit id/);
   });
 
   it('passes the source and the base commit to git fetch after `--`', async () => {
@@ -239,6 +232,28 @@ describe('patch capture', () => {
     git(fresh, 'checkout', '--quiet', '--detach', baseCommit);
     writeFileSync(join(scratch, 'agent.patch'), patch);
     expect(() => git(fresh, 'apply', '--check', join(scratch, 'agent.patch'))).not.toThrow();
+  });
+
+  it('passes the base commit to git after the end of its options', async () => {
+    const task = fixtureTask();
+    const folder = await materializeTask(task, {
+      workRoot: join(scratch, 'work'),
+      repoUrl: upstream,
+      exec,
+    });
+    const calls = [];
+    const recording = (command, args, options) => {
+      calls.push(args);
+      return exec(command, args, options);
+    };
+    await capturePatch(folder, task.baseCommit, { exec: recording });
+    await capturePatch(folder, task.baseCommit, { exec: recording, ref: baseCommit });
+    expect(calls.find((args) => args[0] === 'read-tree')).toEqual(['read-tree', '--', baseCommit]);
+    for (const args of calls.filter((call) => call[0] === 'diff')) {
+      const end = args.indexOf('--end-of-options');
+      expect(end).toBeGreaterThan(0);
+      expect(args.indexOf(baseCommit)).toBe(end + 1);
+    }
   });
 
   it('captures an empty patch when the agent changed nothing', async () => {
@@ -453,6 +468,36 @@ describe('one attempt end to end, with Docker stubbed', () => {
     );
     expect(sent[0]).toMatchObject({ prefix: 'loop' });
     expect(sent[0].patch).toContain('+    return a + b');
+  });
+
+  it('grades no task whose base commit git would read as an option, and runs no git command', async () => {
+    mkdirSync(join(scratch, 'harness'));
+    const folder = await materializeTask(fixtureTask(), {
+      workRoot: join(scratch, 'work'),
+      repoUrl: upstream,
+      exec,
+    });
+    const marker = join(scratch, 'option-ran');
+    const raw = {
+      instance_id: 'instance_fixture__calc-0001',
+      repo: 'fixture/calc',
+      base_commit: `--output=${marker}`,
+      problem_statement: 'add() subtracts.',
+      dockerhub_tag: 'fixture.calc-0001',
+    };
+    const { calls, stub } = stubbedHarness({});
+    const grade = async () =>
+      gradeAttempt(parseTask(raw), {
+        arm: 'loop',
+        folder,
+        harnessDir: join(scratch, 'harness'),
+        gradeDir: join(scratch, 'work', 'instance_fixture__calc-0001.grade'),
+        agent: { ok: true, timedOut: false, tokens: null, costUsd: null, wallTimeMs: 1 },
+        exec: stub,
+      });
+    await expect(grade()).rejects.toThrow(/not a full commit id/);
+    expect(calls).toEqual([]);
+    expect(existsSync(marker)).toBe(false);
   });
 
   it('records a repository that does not clone as a materialize failure, with no grade', async () => {

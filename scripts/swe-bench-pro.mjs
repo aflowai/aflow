@@ -85,6 +85,9 @@ function tail(text, lines = 20) {
 
 const INSTANCE_ID = /^[\w.-]+$/;
 
+/** A full SHA-1 commit id. A folder is initialised as a SHA-1 repository, so it holds no other kind. */
+const COMMIT_ID = /^[0-9a-f]{40}$/;
+
 /**
  * One task as the published SWE-bench Pro set holds it. The raw record is
  * kept whole, because the official harness reads its own fields from it.
@@ -105,10 +108,16 @@ export function parseTask(raw) {
   if (!INSTANCE_ID.test(instanceId)) {
     throw new Error(`The instance id \`${instanceId}\` cannot name a folder.`);
   }
+  // The base commit reaches git as an argument in every step that reads it. Only a full commit
+  // id passes, so no record can hand git an option such as `--upload-pack=`.
+  const baseCommit = field('base_commit');
+  if (!COMMIT_ID.test(baseCommit)) {
+    throw new Error(`The base commit ${JSON.stringify(baseCommit)} is not a full commit id.`);
+  }
   return {
     instanceId,
     repo: field('repo'),
-    baseCommit: field('base_commit'),
+    baseCommit,
     problemStatement: field('problem_statement'),
     dockerhubTag: field('dockerhub_tag'),
     requirements: typeof record['requirements'] === 'string' ? record['requirements'] : undefined,
@@ -133,9 +142,6 @@ export function taskFolder(workRoot, task) {
   return join(resolve(workRoot), task.instanceId);
 }
 
-/** A full commit id, SHA-1 or SHA-256. */
-const COMMIT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
-
 /**
  * Fetch the task's repository up to its base commit and detach it there (D3).
  *
@@ -152,14 +158,6 @@ const COMMIT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
  * because a server takes a request for an unadvertised commit only over v2.
  */
 export async function materializeTask(task, { workRoot, repoUrl, exec = runCommand }) {
-  // The base commit comes from the task record and reaches git as an argument. Only a full
-  // commit id passes, so no record can hand git an option such as `--upload-pack=`.
-  if (!COMMIT_ID.test(task.baseCommit)) {
-    throw new AttemptStepError(
-      'materialize_failed',
-      `The base commit ${JSON.stringify(task.baseCommit)} is not a full commit id.`,
-    );
-  }
   const folder = taskFolder(workRoot, task);
   if (
     await stat(folder).then(
@@ -174,7 +172,7 @@ export async function materializeTask(task, { workRoot, repoUrl, exec = runComma
   }
   await mkdir(resolve(workRoot), { recursive: true });
   const source = repoUrl ?? `https://github.com/${task.repo}.git`;
-  // A failed step leaves no folder behind, as a failed clone did, so the attempt can run again.
+  // A failed step leaves no folder behind, so the attempt can run again.
   const failed = async (message) => {
     await rm(folder, { recursive: true, force: true });
     return new AttemptStepError('materialize_failed', message);
@@ -223,10 +221,21 @@ export async function materializeTask(task, { workRoot, repoUrl, exec = runComma
  * final patch is `<base>..<headSha>` and the working tree holds none of it.
  */
 export async function capturePatch(folder, baseCommit, { exec = runCommand, ref } = {}) {
+  // In `git diff` the `--` opens the pathspecs, so `--end-of-options` is what ends the options.
   if (ref !== undefined) {
     const diff = await exec(
       'git',
-      ['diff', '--binary', '--no-color', baseCommit, ref, '--', '.', ...SCRATCH_PATHSPECS],
+      [
+        'diff',
+        '--binary',
+        '--no-color',
+        '--end-of-options',
+        baseCommit,
+        ref,
+        '--',
+        '.',
+        ...SCRATCH_PATHSPECS,
+      ],
       { cwd: folder },
     );
     if (diff.code !== 0) throw new Error(`git diff ${ref} failed.\n${tail(diff.stderr)}`);
@@ -236,7 +245,7 @@ export async function capturePatch(folder, baseCommit, { exec = runCommand, ref 
   const env = { GIT_INDEX_FILE: join(scratch, 'index') };
   try {
     const steps = [
-      ['read-tree', baseCommit],
+      ['read-tree', '--', baseCommit],
       ['add', '--all', '--', '.', ...SCRATCH_PATHSPECS],
     ];
     for (const args of steps) {
@@ -245,7 +254,17 @@ export async function capturePatch(folder, baseCommit, { exec = runCommand, ref 
     }
     const diff = await exec(
       'git',
-      ['diff', '--cached', '--binary', '--no-color', baseCommit, '--', '.', ...SCRATCH_PATHSPECS],
+      [
+        'diff',
+        '--cached',
+        '--binary',
+        '--no-color',
+        '--end-of-options',
+        baseCommit,
+        '--',
+        '.',
+        ...SCRATCH_PATHSPECS,
+      ],
       { cwd: folder, env },
     );
     if (diff.code !== 0) throw new Error(`git diff failed.\n${tail(diff.stderr)}`);
