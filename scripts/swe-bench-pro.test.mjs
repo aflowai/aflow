@@ -170,6 +170,38 @@ describe('the fixture task', () => {
     expect(existsSync(join(workRoot, task.instanceId))).toBe(false);
   });
 
+  it('refuses a base commit that git would read as an option, and runs no git command', async () => {
+    const workRoot = join(scratch, 'work');
+    const marker = join(scratch, 'upload-pack-ran');
+    const task = fixtureTask({ base_commit: `--upload-pack=touch ${marker}` });
+    const calls = [];
+    const recording = (command, args, options) => {
+      calls.push({ command, args });
+      return exec(command, args, options);
+    };
+    await expect(
+      materializeTask(task, { workRoot, repoUrl: upstream, exec: recording }),
+    ).rejects.toMatchObject({ failureClass: 'materialize_failed' });
+    expect(calls).toEqual([]);
+    expect(existsSync(marker)).toBe(false);
+    expect(existsSync(join(workRoot, task.instanceId))).toBe(false);
+  });
+
+  it('passes the source and the base commit to git fetch after `--`', async () => {
+    const calls = [];
+    const recording = (command, args, options) => {
+      calls.push({ command, args });
+      return exec(command, args, options);
+    };
+    await materializeTask(fixtureTask(), {
+      workRoot: join(scratch, 'work'),
+      repoUrl: upstream,
+      exec: recording,
+    });
+    const fetch = calls.find((call) => call.args.includes('fetch'));
+    expect(fetch.args.slice(-3)).toEqual(['--', upstream, baseCommit]);
+  });
+
   it('refuses to reuse a folder an earlier attempt worked', async () => {
     const options = { workRoot: join(scratch, 'work'), repoUrl: upstream, exec };
     await materializeTask(fixtureTask(), options);

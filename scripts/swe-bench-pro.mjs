@@ -133,6 +133,9 @@ export function taskFolder(workRoot, task) {
   return join(resolve(workRoot), task.instanceId);
 }
 
+/** A full commit id, SHA-1 or SHA-256. */
+const COMMIT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+
 /**
  * Fetch the task's repository up to its base commit and detach it there (D3).
  *
@@ -149,6 +152,14 @@ export function taskFolder(workRoot, task) {
  * because a server takes a request for an unadvertised commit only over v2.
  */
 export async function materializeTask(task, { workRoot, repoUrl, exec = runCommand }) {
+  // The base commit comes from the task record and reaches git as an argument. Only a full
+  // commit id passes, so no record can hand git an option such as `--upload-pack=`.
+  if (!COMMIT_ID.test(task.baseCommit)) {
+    throw new AttemptStepError(
+      'materialize_failed',
+      `The base commit ${JSON.stringify(task.baseCommit)} is not a full commit id.`,
+    );
+  }
   const folder = taskFolder(workRoot, task);
   if (
     await stat(folder).then(
@@ -179,6 +190,7 @@ export async function materializeTask(task, { workRoot, repoUrl, exec = runComma
     '--quiet',
     '--no-tags',
     '--no-write-fetch-head',
+    '--',
     source,
     task.baseCommit,
   ]);
