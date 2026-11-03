@@ -278,11 +278,18 @@ describe('createBareHarnessRun', () => {
         },
       },
     ]);
+    expect(writerCalls).toEqual([
+      {
+        tenantId: TENANT,
+        params: { runId, write: { kind: 'decision', decision: 'no_suite' } },
+      },
+    ]);
 
     const start = ledgerCalls[0]?.params as { metadata: unknown };
     state.runs.set(runId, { spaceId: SPACE, evalBatchId: null, metadata: start.metadata });
     await writeBenchmarkAttemptEvaluation(db, TENANT, { runId, spaceId: SPACE, attempt: bare });
-    expect(writerCalls).toHaveLength(1);
+    expect(writerCalls).toHaveLength(2);
+    expect(writerCalls[1]).toMatchObject({ params: { runId, write: { kind: 'benchmark' } } });
   });
 
   it('records an agent that timed out as a failed run', async () => {

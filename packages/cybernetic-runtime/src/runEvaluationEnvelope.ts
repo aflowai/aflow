@@ -1,6 +1,6 @@
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq } from 'drizzle-orm';
-import { createTenantContext, withTenantSchema, workflowRuns } from '@aflow/database';
+import { createTenantContext, spaces, withTenantSchema, workflowRuns } from '@aflow/database';
 import type {
   BenchmarkAttemptResult,
   BenchmarkFailureClass,
@@ -53,18 +53,24 @@ export function benchmarkVerdict(attempt: BenchmarkAttemptResult): 'pass' | 'fai
  * 'ran' decision is final except to a 'ran' under a different
  * suiteContentHash — re-fired hooks and late error writes never clobber a
  * completed evaluation. A stored scored benchmark verdict is final for its
- * harness revision, and a run never changes which task it attempted.
+ * harness revision, and a run never changes which task it attempted. A
+ * declined benchmark write returns the verdict the run holds.
+ *
+ * A benchmark write is refused on a run in a space with directives that has
+ * recorded no decision. The envelope repair selects only NULL envelopes, so a
+ * benchmark-only envelope would hide a run that still owes its Plan 269
+ * decision.
  */
 export async function writeRunEvaluationEnvelope(
   db: PostgresJsDatabase,
   tenantId: string,
   params: { runId: string; write: RunEvaluationEnvelopeWrite },
-): Promise<{ written: boolean }> {
+): Promise<{ written: boolean; storedBenchmark?: BenchmarkAttemptResult }> {
   const { runId, write } = params;
   const tenantCtx = createTenantContext(tenantId as TenantId);
   return withTenantSchema(db, tenantCtx, async (tx) => {
     const rows = await tx
-      .select({ evaluationJson: workflowRuns.evaluationJson })
+      .select({ evaluationJson: workflowRuns.evaluationJson, spaceId: workflowRuns.spaceId })
       .from(workflowRuns)
       .where(eq(workflowRuns.runId, runId))
       .limit(1)
@@ -101,9 +107,7 @@ export async function writeRunEvaluationEnvelope(
       const stored = existing?.benchmark;
       if (
         stored !== undefined &&
-        (stored.benchmark !== write.benchmark.benchmark ||
-          stored.instanceId !== write.benchmark.instanceId ||
-          stored.arm !== write.benchmark.arm)
+        (stored.instanceId !== write.benchmark.instanceId || stored.arm !== write.benchmark.arm)
       ) {
         throw new Error(
           `Run ${runId} holds the ${stored.arm} attempt at ${stored.instanceId}, so it cannot record the ${write.benchmark.arm} attempt at ${write.benchmark.instanceId}.`,
@@ -114,7 +118,19 @@ export async function writeRunEvaluationEnvelope(
         benchmarkVerdict(stored) !== 'unscored' &&
         stored.harnessRevision === write.benchmark.harnessRevision
       ) {
-        return { written: false };
+        return { written: false, storedBenchmark: stored };
+      }
+      if (existing?.decision === undefined) {
+        const space = await tx
+          .select({ directives: spaces.directives })
+          .from(spaces)
+          .where(eq(spaces.id, row.spaceId))
+          .limit(1);
+        if (space[0]?.directives != null) {
+          throw new Error(
+            `Run ${runId} has recorded no evaluation decision yet, so it cannot record a benchmark verdict. The post-run hook or the envelope repair records that decision. Grade the attempt again after that.`,
+          );
+        }
       }
       next = { ...(existing ?? {}), benchmark: write.benchmark };
     } else {

@@ -192,7 +192,9 @@ export async function assertBenchmarkRun(
  * Plan 341 D6 — create the workflow run for one bare-harness attempt, in the
  * measurement space, once the attempt has ended. The run is written terminal
  * at once, because no orchestrator drives it and a running run with no driver
- * would be read as stalled.
+ * would be read as stalled. No post-run hook fires for it either, so it
+ * records its Plan 269 decision here. No suite evaluates a bare-harness run,
+ * so that decision is `no_suite`.
  */
 export async function createBareHarnessRun(
   db: PostgresJsDatabase,
@@ -247,6 +249,10 @@ export async function createBareHarnessRun(
         }
       : { runId, completedAt: params.completedAt, status: 'completed', ...totals },
   );
+  await writeRunEvaluationEnvelope(db, tenantId, {
+    runId,
+    write: { kind: 'decision', decision: 'no_suite' },
+  });
   return { runId };
 }
 
@@ -260,7 +266,7 @@ export async function writeBenchmarkAttemptEvaluation(
   db: PostgresJsDatabase,
   tenantId: string,
   params: { runId: string; spaceId: string; attempt: BenchmarkAttemptResult },
-): Promise<{ written: boolean }> {
+): Promise<{ written: boolean; storedBenchmark?: BenchmarkAttemptResult }> {
   const write = benchmarkEvaluationWrite(params.attempt);
   await assertBenchmarkRun(db, tenantId, {
     runId: params.runId,

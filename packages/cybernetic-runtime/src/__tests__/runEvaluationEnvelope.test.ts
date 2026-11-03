@@ -1,33 +1,48 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const store: { value: unknown; found: boolean } = { value: null, found: true };
+const SPACE_ID = '00000000-0000-0000-0000-0000000000b1';
+const store: { value: unknown; found: boolean; directives: unknown } = {
+  value: null,
+  found: true,
+  directives: null,
+};
 const updateCalls: unknown[] = [];
 
-vi.mock('@aflow/database', () => ({
-  workflowRuns: { runId: 'run_id', evaluationJson: 'evaluation_json' },
-  createTenantContext: (tenantId: string) => ({ tenantId }),
-  withTenantSchema: async (_db: unknown, _ctx: unknown, cb: (tx: unknown) => unknown) =>
-    cb({
-      select: () => ({
-        from: () => ({
-          where: () => ({
-            limit: () => ({
-              for: () => Promise.resolve(store.found ? [{ evaluationJson: store.value }] : []),
+vi.mock('@aflow/database', () => {
+  const spaces = { id: 'id', directives: 'directives' };
+  return {
+    spaces,
+    workflowRuns: { runId: 'run_id', evaluationJson: 'evaluation_json', spaceId: 'space_id' },
+    createTenantContext: (tenantId: string) => ({ tenantId }),
+    withTenantSchema: async (_db: unknown, _ctx: unknown, cb: (tx: unknown) => unknown) =>
+      cb({
+        select: () => ({
+          from: (table: unknown) => ({
+            where: () => ({
+              limit: () =>
+                table === spaces
+                  ? Promise.resolve([{ directives: store.directives }])
+                  : {
+                      for: () =>
+                        Promise.resolve(
+                          store.found ? [{ evaluationJson: store.value, spaceId: SPACE_ID }] : [],
+                        ),
+                    },
             }),
           }),
         }),
-      }),
-      update: () => ({
-        set: (v: { evaluationJson: unknown }) => ({
-          where: () => {
-            store.value = v.evaluationJson;
-            updateCalls.push(v.evaluationJson);
-            return Promise.resolve();
-          },
+        update: () => ({
+          set: (v: { evaluationJson: unknown }) => ({
+            where: () => {
+              store.value = v.evaluationJson;
+              updateCalls.push(v.evaluationJson);
+              return Promise.resolve();
+            },
+          }),
         }),
       }),
-    }),
-}));
+  };
+});
 
 const { benchmarkVerdict, writeRunEvaluationEnvelope, parseRunEvaluationEnvelope } =
   await import('../runEvaluationEnvelope.js');
@@ -52,6 +67,7 @@ const ranWrite = (hash: string) =>
 beforeEach(() => {
   store.value = null;
   store.found = true;
+  store.directives = null;
   updateCalls.length = 0;
 });
 
@@ -185,7 +201,7 @@ describe('writeRunEvaluationEnvelope', () => {
     });
   });
 
-  it('a benchmark write onto a run with no decision sets no decision', async () => {
+  it('a benchmark write onto a run in a space with no directives sets no decision', async () => {
     await writeRunEvaluationEnvelope(db, TENANT, {
       runId: RUN_ID,
       write: { kind: 'benchmark', benchmark },
@@ -194,6 +210,30 @@ describe('writeRunEvaluationEnvelope', () => {
     expect(envelope?.benchmark).toEqual(benchmark);
     expect(envelope?.decision).toBeUndefined();
     expect(envelope?.summary).toBeUndefined();
+  });
+
+  it('refuses a benchmark write onto a run that still owes its decision, leaving the envelope NULL for the repair', async () => {
+    store.directives = { goals: [] };
+    await expect(
+      writeRunEvaluationEnvelope(db, TENANT, {
+        runId: RUN_ID,
+        write: { kind: 'benchmark', benchmark },
+      }),
+    ).rejects.toThrow(/has recorded no evaluation decision yet/);
+    expect(store.value).toBeNull();
+    expect(updateCalls).toHaveLength(0);
+
+    await writeRunEvaluationEnvelope(db, TENANT, {
+      runId: RUN_ID,
+      write: { kind: 'decision', decision: 'error', errorMessage: 'hook died' },
+    });
+    expect(
+      await writeRunEvaluationEnvelope(db, TENANT, {
+        runId: RUN_ID,
+        write: { kind: 'benchmark', benchmark },
+      }),
+    ).toEqual({ written: true });
+    expect(parseRunEvaluationEnvelope(store.value)).toMatchObject({ decision: 'error', benchmark });
   });
 
   it('a scored benchmark verdict is final for its harness revision, and an unscored one is not', async () => {
@@ -212,7 +252,7 @@ describe('writeRunEvaluationEnvelope', () => {
         runId: RUN_ID,
         write: { kind: 'benchmark', benchmark: { ...benchmark, passed: true, failureClass: null } },
       }),
-    ).toEqual({ written: false });
+    ).toEqual({ written: false, storedBenchmark: benchmark });
     expect(
       await writeRunEvaluationEnvelope(db, TENANT, {
         runId: RUN_ID,

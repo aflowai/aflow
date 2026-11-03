@@ -37,6 +37,7 @@ import { join, resolve } from 'node:path';
 import {
   assertBenchmarkRun,
   assertMeasurementSpace,
+  benchmarkVerdict,
   createBareHarnessRun,
   designateMeasurementSpace,
   writeBenchmarkAttemptEvaluation,
@@ -174,16 +175,22 @@ async function report(
         ...span,
       })
     ).runId;
-  const { written } = await writeBenchmarkAttemptEvaluation(db, target.tenantId, {
+  const { written, storedBenchmark } = await writeBenchmarkAttemptEvaluation(db, target.tenantId, {
     runId,
     spaceId: target.spaceId,
     attempt: parsed,
   });
+  if (written) {
+    console.error(`Recorded on run ${runId}.`);
+    return;
+  }
+  const stored = storedBenchmark === undefined ? 'a verdict' : benchmarkVerdict(storedBenchmark);
   console.error(
-    written
-      ? `Recorded on run ${runId}.`
-      : `Run ${runId} took no write: it holds this verdict from this harness revision already.`,
+    `The new verdict ${benchmarkVerdict(parsed)} was not stored. Run ${runId} already holds ${stored} from harness revision ${parsed.harnessRevision}, and that verdict is final.`,
   );
+  if (storedBenchmark !== undefined) {
+    console.error(`The stored attempt:\n${JSON.stringify(storedBenchmark, null, 2)}`);
+  }
 }
 
 async function main(): Promise<void> {

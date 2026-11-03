@@ -38,7 +38,7 @@
 
 - Which host runs the task Docker images? Answer: the Mac, one at a time under the check lane's load rule, for the pilot. The GCP compute worker if the pilot shows the Mac is too slow.
 - What caps one task's spend? Answer: a cap in tokens and wall time at twice the pilot's measured median per task.
-- How is arm (c) isolated from arms (a) and (b) so no learning leaks across arms? Answer: a separate space per arm, or learnings scoped to the arm's run set.
+- How is arm (c) isolated from arms (a) and (b) so no learning leaks across arms? Answer: learnings scoped to the arm's run set. It is the lighter of the two options, and every arm stays in Proving Ground as D5 names it. A separate space per arm is the fallback if the scoping leaks.
 - Which cost figures count? Answer: model tokens only for the first table. CI minutes and compute join once the pass rates are read.
 
 **Not done on purpose**
@@ -180,6 +180,9 @@ The machinery is built, and the pilot has not run. Its pieces are these:
 - Arms (b) and (c) run between `materialize` and `grade`, with the folder bound to Proving Ground through the host lane. `grade` records on the loop's run named by `--run`, and takes the loop's outcome as `--agent-outcome`.
 - The evaluation writer is `writeBenchmarkAttemptEvaluation` in `@aflow/cybernetic-runtime`. It refuses a run outside the measurement space before any write. It also refuses an eval-batch trial and a run marked as another attempt.
 - The writer writes through `writeRunEvaluationEnvelope` into the envelope's `benchmark` slot only. A production suite's `decision` and `summary` on the same run stay as the suite wrote them.
+- A bare-harness run records the decision `no_suite` when the runner creates it, because no post-run hook fires for it.
+- The writer refuses a loop run in a space with directives that has recorded no decision yet. The envelope repair finds only NULL envelopes, so the run would otherwise never record its Plan 269 decision.
+- A declined write prints the verdict the run holds and says the new verdict was not stored.
 - `benchmarkVerdict` reads the slot as `pass`, `fail` or `unscored`. An attempt the harness gave no verdict on is `unscored`, so a broken pipeline cannot lower a pass rate.
 - Tenant, space, work root and harness checkout are flags with no default.
 
@@ -191,11 +194,11 @@ The machinery is built, and the pilot has not run. Its pieces are these:
 
 ## 5. How it is proven
 
-The pilot's mechanics proof is the case. One benchmark task runs end to end:
+The pilot's mechanics proof is the case. Each of the eight pilot tasks of D3 runs end to end:
 
 - Its repository and image work as a folder the loop can work.
 - The patch is captured.
 - The official harness runs on the patch.
 - The pass or fail is recorded as a platform record.
 
-A measurement that cannot show that chain for one task has failed, whatever the pass rate says.
+A measurement that cannot show that chain for all eight tasks has failed, whatever the pass rate says.
