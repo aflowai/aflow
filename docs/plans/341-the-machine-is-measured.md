@@ -1,6 +1,6 @@
 # Plan 341 — The machine is measured
 
-**Status:** P0, this document, awaits the operator's approval. P1 to P4 are not built.
+**Status:** P0 is approved. P1's harness runner and evaluation writer are built, and its pilot has not run. P2 to P4 are not built.
 
 **Builds on:** Plan 269 (the eval plane: one evaluation substrate, `workflow_runs.evaluation_json`, frozen replays), Plan 329 (planning is a skill), Plan 183 and Plan 234 (the learning loop), Plan 315 (the local loop), Plan 337 (the decision card), Plan 333 (D2's writing rules). Plans 269, 329, 183 and 234 predate the published archive, which starts at Plan 315, so they are cited by number and not quoted.
 
@@ -38,7 +38,7 @@
 
 - Which host runs the task Docker images? Answer: the Mac, one at a time under the check lane's load rule, for the pilot. The GCP compute worker if the pilot shows the Mac is too slow.
 - What caps one task's spend? Answer: a cap in tokens and wall time at twice the pilot's measured median per task.
-- How is arm (c) isolated from arms (a) and (b) so no learning leaks across arms? Answer: a separate space per arm, or learnings scoped to the arm's run set.
+- How is arm (c) isolated from arms (a) and (b) so no learning leaks across arms? Answer: learnings scoped to the arm's run set. It is the lighter of the two options, and every arm stays in Proving Ground as D5 names it. A separate space per arm is the fallback if the scoping leaks.
 - Which cost figures count? Answer: model tokens only for the first table. CI minutes and compute join once the pass rates are read.
 
 **Not done on purpose**
@@ -172,6 +172,20 @@ Each phase lands on its own.
 
 **P1 — The pilot (D3).** It lands the harness runner and the evaluation writer, and proves them on eight tasks. _Exit:_ the results table is in this document, and the mechanics are proven end to end on all eight tasks.
 
+The machinery is built, and the pilot has not run. Its pieces are these:
+
+- The harness runner is `yarn bench:swe-pro`, a development script beside the loop's own measurement. It clones a task's repository at its base commit, captures the patch against that commit, pulls the task image and runs the official harness with local Docker.
+- `designate` marks Proving Ground as the measurement space, under `benchmarkMeasurement` in the space's metadata.
+- `attempt` runs arm (a) whole. It creates the attempt's workflow run in Proving Ground, marked under `benchmarkAttempt` in the run's metadata.
+- Arms (b) and (c) run between `materialize` and `grade`, with the folder bound to Proving Ground through the host lane. `grade` records on the loop's run named by `--run`, and takes the loop's outcome as `--agent-outcome`.
+- The evaluation writer is `writeBenchmarkAttemptEvaluation` in `@aflow/cybernetic-runtime`. It refuses a run outside the measurement space before any write. It also refuses an eval-batch trial and a run marked as another attempt.
+- The writer writes through `writeRunEvaluationEnvelope` into the envelope's `benchmark` slot only. A production suite's `decision` and `summary` on the same run stay as the suite wrote them.
+- A bare-harness run records the decision `no_suite` when the runner creates it, because no post-run hook fires for it.
+- The writer refuses a loop run in a space with directives that has recorded no decision yet. The envelope repair finds only NULL envelopes, so the run would otherwise never record its Plan 269 decision.
+- A declined write prints the verdict the run holds and says the new verdict was not stored.
+- `benchmarkVerdict` reads the slot as `pass`, `fail` or `unscored`. An attempt the harness gave no verdict on is `unscored`, so a broken pipeline cannot lower a pass rate.
+- Tenant, space, work root and harness checkout are flags with no default.
+
 **P2 — Scale (D4).** _Exit:_ pass rates with intervals for all three arms are in this document.
 
 **P3 — The learning arm in order (D4).** _Exit:_ the learning gain, with forgetting read, is in this document.
@@ -180,11 +194,11 @@ Each phase lands on its own.
 
 ## 5. How it is proven
 
-The pilot's mechanics proof is the case. One benchmark task runs end to end:
+The pilot's mechanics proof is the case. Each of the eight pilot tasks of D3 runs end to end:
 
 - Its repository and image work as a folder the loop can work.
 - The patch is captured.
 - The official harness runs on the patch.
 - The pass or fail is recorded as a platform record.
 
-A measurement that cannot show that chain for one task has failed, whatever the pass rate says.
+A measurement that cannot show that chain for all eight tasks has failed, whatever the pass rate says.

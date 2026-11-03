@@ -11,6 +11,7 @@
     "background-work:baseline": "NODE_OPTIONS='--conditions=ts-source' node scripts/with-stack-env.mjs tsx scripts/background-work-baseline.ts",
     "background-work:docs": "NODE_OPTIONS='--conditions=ts-source' node scripts/with-stack-env.mjs tsx scripts/generate-background-work-docs.ts",
     "background-work:inventory": "NODE_OPTIONS='--conditions=ts-source' node scripts/with-stack-env.mjs tsx scripts/background-work-inventory.ts",
+    "bench:swe-pro": "NODE_OPTIONS='--conditions=ts-source' node scripts/with-stack-env.mjs tsx scripts/swe-bench-pro.ts",
     "bootstrap:local": "NODE_OPTIONS='--conditions=ts-source' yarn workspace @aflow/server bootstrap:local",
     "build": "yarn workspaces foreach -A --topological run build",
     "build:since": "yarn workspaces foreach --since -t run build",

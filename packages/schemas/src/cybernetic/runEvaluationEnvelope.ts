@@ -68,6 +68,74 @@ export const RunOutcomeEvaluationSchema = z.object({
 });
 export type RunOutcomeEvaluation = z.infer<typeof RunOutcomeEvaluationSchema>;
 
+/**
+ * Plan 341 D2 — the arms one benchmark task is attempted under: the bare
+ * coding harness, the loop, and the loop with learnings and memory on.
+ */
+export const BenchmarkArmSchema = z.enum(['bare_harness', 'loop', 'loop_with_learning']);
+export type BenchmarkArm = z.infer<typeof BenchmarkArmSchema>;
+
+/**
+ * Why a benchmark attempt did not pass. `tests_failed` is the official
+ * harness's verdict. `materialize_failed`, `image_unavailable` and
+ * `harness_error` mean the harness gave no verdict, so the attempt is
+ * unscored rather than failed.
+ */
+export const BenchmarkFailureClassSchema = z.enum([
+  'materialize_failed',
+  'agent_failed',
+  'agent_timeout',
+  'empty_patch',
+  'image_unavailable',
+  'harness_error',
+  'tests_failed',
+]);
+export type BenchmarkFailureClass = z.infer<typeof BenchmarkFailureClassSchema>;
+
+/**
+ * Plan 341 D6 — one benchmark task attempt as its official harness graded it.
+ * `passed` is the harness's hidden-test verdict and nothing else: no judge
+ * scores a benchmark task.
+ */
+export const BenchmarkAttemptResultSchema = z.object({
+  benchmark: z.literal('swe-bench-pro'),
+  instanceId: z.string().min(1),
+  arm: BenchmarkArmSchema,
+  passed: z.boolean(),
+  failureClass: BenchmarkFailureClassSchema.nullable(),
+  /** Model tokens the attempt spent; null where the agent reported none. */
+  tokens: z.number().int().nonnegative().nullable(),
+  costUsd: z.number().nonnegative().nullable(),
+  wallTimeMs: z.number().int().nonnegative(),
+  patchBytes: z.number().int().nonnegative(),
+  /** The official harness checkout's revision the verdict came from. */
+  harnessRevision: z.string().min(1),
+  detail: z.string().max(8000).optional(),
+});
+export type BenchmarkAttemptResult = z.infer<typeof BenchmarkAttemptResultSchema>;
+
+/**
+ * Plan 341 D5 — what marks a space as the measurement space, under the
+ * `benchmarkMeasurement` key of `spaces.metadata`. The benchmark writer
+ * records an attempt only on a run in a space that carries it.
+ */
+export const BenchmarkMeasurementSpaceMarkerSchema = z.object({
+  benchmark: z.literal('swe-bench-pro'),
+});
+export type BenchmarkMeasurementSpaceMarker = z.infer<typeof BenchmarkMeasurementSpaceMarkerSchema>;
+
+/**
+ * Plan 341 D6 — what marks a workflow run as one benchmark task attempt,
+ * under the `benchmarkAttempt` key of `workflow_runs.metadata`. The runner
+ * stamps it on the run it creates for the bare-harness arm.
+ */
+export const BenchmarkRunMarkerSchema = z.object({
+  benchmark: z.literal('swe-bench-pro'),
+  instanceId: z.string().min(1),
+  arm: BenchmarkArmSchema,
+});
+export type BenchmarkRunMarker = z.infer<typeof BenchmarkRunMarkerSchema>;
+
 export const RunEvaluationEnvelopeSchema = z.object({
   /**
    * Present on every terminal run (the post-run hook always writes it,
@@ -82,6 +150,12 @@ export const RunEvaluationEnvelopeSchema = z.object({
   summary: RunEvaluationSummarySchema.optional(),
   judgeSelection: z.array(JudgeCriterionSelectionSchema).optional(),
   outcomeEvaluation: RunOutcomeEvaluationSchema.optional(),
+  /**
+   * Present on a benchmark task attempt (Plan 341 D6). The official harness's
+   * verdict lives here and only here. It never fills `summary`, which stays
+   * the production suite's, so neither verdict overwrites the other.
+   */
+  benchmark: BenchmarkAttemptResultSchema.optional(),
   /** Present when decision = 'error'. */
   errorMessage: z.string().optional(),
 });

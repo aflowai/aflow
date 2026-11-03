@@ -25,6 +25,7 @@ export * from './evalRunnerCoverage.js';
 export * from './evalRunnerCampaignResolution.js';
 export * from './evalRunnerJudgeSelection.js';
 export * from './runEvaluationEnvelope.js';
+export * from './benchmarkEvaluation.js';
 export * from './prompts/judge.js';
 export * from './judgeCall.js';
 export * from './judgeVersion.js';
