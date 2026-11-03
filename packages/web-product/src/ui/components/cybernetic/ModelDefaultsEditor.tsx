@@ -140,7 +140,7 @@ interface ModelDefaultsEditorProps {
 // A tenant following the platform recommendation never restricted anything, so
 // a held model the platform stopped recommending must not read as the tenant's
 // own exclusion.
-const offListSuffix = (opt: ModelOption): string => {
+export const offListSuffix = (opt: ModelOption): string => {
   if (opt.allowed) return '';
   return opt.offListBy === 'tenant' ? ' — no longer permitted' : ' — no longer recommended';
 };
