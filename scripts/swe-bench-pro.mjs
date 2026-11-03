@@ -177,7 +177,7 @@ export async function materializeTask(task, { workRoot, repoUrl, exec = runComma
     await rm(folder, { recursive: true, force: true });
     return new AttemptStepError('materialize_failed', message);
   };
-  const init = await exec('git', ['init', '--quiet', folder]);
+  const init = await exec('git', ['init', '--quiet', '--object-format=sha1', folder]);
   if (init.code !== 0) throw await failed(`git init ${folder} failed.\n${tail(init.stderr)}`);
   // `--git-dir` keeps the process's own directory, so a relative `repoUrl` names what it named.
   const fetch = await exec('git', [
@@ -460,6 +460,10 @@ export function classifyAttempt({ grade, agent, patch }) {
  */
 export async function gradeAttempt(task, options) {
   const { arm, folder, harnessDir, gradeDir, agent, ref, exec = runCommand } = options;
+  // A task record may reach here unparsed, so git reads no base commit that is not a full id.
+  if (!COMMIT_ID.test(task.baseCommit)) {
+    throw new Error(`The base commit ${JSON.stringify(task.baseCommit)} is not a full commit id.`);
+  }
   const patch = await capturePatch(folder, task.baseCommit, { exec, ref });
   await mkdir(gradeDir, { recursive: true });
   const patchFile = join(gradeDir, `${task.instanceId}.patch`);

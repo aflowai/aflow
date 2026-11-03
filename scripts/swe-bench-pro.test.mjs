@@ -478,16 +478,11 @@ describe('one attempt end to end, with Docker stubbed', () => {
       exec,
     });
     const marker = join(scratch, 'option-ran');
-    const raw = {
-      instance_id: 'instance_fixture__calc-0001',
-      repo: 'fixture/calc',
-      base_commit: `--output=${marker}`,
-      problem_statement: 'add() subtracts.',
-      dockerhub_tag: 'fixture.calc-0001',
-    };
+    // parseTask refuses this base commit, so the record skips it to reach gradeAttempt's own refusal.
+    const task = { ...fixtureTask(), baseCommit: `--output=${marker}` };
     const { calls, stub } = stubbedHarness({});
     const grade = async () =>
-      gradeAttempt(parseTask(raw), {
+      gradeAttempt(task, {
         arm: 'loop',
         folder,
         harnessDir: join(scratch, 'harness'),
