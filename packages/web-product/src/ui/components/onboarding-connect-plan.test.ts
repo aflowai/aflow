@@ -8,7 +8,7 @@
  * still could not answer.
  */
 import { describe, expect, it } from 'vitest';
-import { planAfterModelStep } from './onboarding-connect-plan';
+import { planAfterModelStep, readyNote, type ReadyStanding } from './onboarding-connect-plan.js';
 import type { SpaceLlmReadiness } from '../hooks/useSpaceLlmReadiness.js';
 
 const BASE: SpaceLlmReadiness = {
@@ -62,28 +62,119 @@ describe('the step after the model step', () => {
     });
   });
 
-  it('marks keys connected and skips the step only for a space that can run', () => {
-    expect(planAfterModelStep([], BASE)).toEqual({ step: 'ready', keysConnected: true });
+  it('marks the space runnable and skips the step only for a space that can run', () => {
+    expect(planAfterModelStep([], BASE)).toEqual({
+      step: 'ready',
+      standing: { kind: 'runnable' },
+    });
   });
 
-  it('does not mark keys connected on a space it cannot read', () => {
-    expect(planAfterModelStep([], null)).toEqual({ step: 'ready', keysConnected: false });
+  it('says readiness is unread, not that a key is missing, on a space it cannot read', () => {
+    expect(planAfterModelStep([], null)).toEqual({ step: 'ready', standing: { kind: 'unread' } });
   });
 
-  it('does not mark keys connected on a space no key entry can fix', () => {
+  it('names a dropped model ahead of the runtime, where no key entry can fix either', () => {
     const plan = planAfterModelStep([], {
       ...BASE,
       ready: false,
       unknownModelRoles: [{ role: 'default', model: 'gone-model' }],
       missingProviders: [{ providerId: 'ollama', roles: ['runner'] }],
     });
-    expect(plan).toEqual({ step: 'ready', keysConnected: false });
+    expect(plan).toEqual({
+      step: 'ready',
+      standing: {
+        kind: 'unknown_models',
+        roles: [{ role: 'default', model: 'gone-model' }],
+      },
+    });
+  });
+
+  it('sends an error on this computer to its own page, with its cause and remedy', () => {
+    const plan = planAfterModelStep([], {
+      ...BASE,
+      ready: false,
+      localIssues: [
+        {
+          code: 'window_tight',
+          severity: 'warning',
+          cause: 'The machine will swap.',
+          remedy: { kind: 'instruction', text: 'Close other apps.' },
+        },
+        {
+          code: 'runtime_unreachable',
+          severity: 'error',
+          cause: 'Ollama does not answer.',
+          remedy: { kind: 'instruction', text: 'Start Ollama.' },
+        },
+      ],
+    });
+    expect(plan).toEqual({
+      step: 'ready',
+      standing: { kind: 'local_runtime', message: 'Ollama does not answer. Start Ollama.' },
+    });
+  });
+
+  it('reports an unconnected runtime on this computer as the runtime, not a key', () => {
+    const plan = planAfterModelStep([], {
+      ...BASE,
+      ready: false,
+      missingProviders: [{ providerId: 'ollama', roles: ['default'] }],
+    });
+    expect(plan).toMatchObject({ step: 'ready', standing: { kind: 'local_runtime' } });
+  });
+
+  it('does not mark runnable a space that is not ready for a reason readiness does not name', () => {
+    expect(planAfterModelStep([], { ...BASE, ready: false })).toEqual({
+      step: 'ready',
+      standing: { kind: 'not_ready' },
+    });
   });
 
   it('keeps the connect step for a recommended model, where readiness shows it covered', () => {
     expect(planAfterModelStep(['google'], BASE)).toEqual({
       step: 'connect',
       providers: ['google'],
+    });
+  });
+});
+
+describe("the ready step's note", () => {
+  it('says nothing for a space that can run', () => {
+    expect(readyNote({ kind: 'runnable' })).toBeNull();
+  });
+
+  it('names a missing key only where the operator skipped one', () => {
+    const noted = (
+      [
+        { kind: 'unknown_models', roles: [{ role: 'default', model: 'gone-model' }] },
+        { kind: 'local_runtime', message: 'Ollama does not answer. Start Ollama.' },
+        { kind: 'not_ready' },
+        { kind: 'unread' },
+      ] satisfies ReadyStanding[]
+    ).map((standing) => readyNote(standing)?.text ?? '');
+    for (const text of noted) expect(text).not.toMatch(/key/i);
+    expect(readyNote({ kind: 'no_key' })?.text).toMatch(/No key connected/);
+  });
+
+  it('sends a dropped model to the model choice, naming the model and its roles', () => {
+    expect(
+      readyNote({
+        kind: 'unknown_models',
+        roles: [
+          { role: 'default', model: 'gone-model' },
+          { role: 'coach', model: 'gone-model' },
+        ],
+      }),
+    ).toEqual({
+      text: 'The model gone-model is no longer available. Choose another model for default, coach before your agents can run.',
+      action: 'choose_model',
+    });
+  });
+
+  it("sends the runtime on this computer to its own page, in readiness's words", () => {
+    expect(readyNote({ kind: 'local_runtime', message: 'Ollama does not answer.' })).toEqual({
+      text: 'Ollama does not answer.',
+      action: 'open_computer',
     });
   });
 });
