@@ -15,6 +15,7 @@ import {
   classifyAttempt,
   capturePatch,
   createCommandAgent,
+  gradeAttempt,
   gradePatch,
   materializeTask,
   parseAgentOutcome,
@@ -147,6 +148,32 @@ describe('patch capture', () => {
       exec,
     });
     expect(await capturePatch(folder, task.baseCommit, { exec })).toBe('');
+  });
+
+  it("captures the review rounds' head from a local branch in a folder with no remote, where the working tree holds none of it", async () => {
+    const task = fixtureTask();
+    const folder = await materializeTask(task, {
+      workRoot: join(scratch, 'work'),
+      repoUrl: upstream,
+      exec,
+    });
+    git(folder, 'remote', 'remove', 'origin');
+    expect(git(folder, 'remote').trim()).toBe('');
+    // As the rounds commit: on a branch nothing has checked out, round by round.
+    git(folder, 'switch', '--quiet', '-c', 'bench/calc-0001');
+    writeFileSync(join(folder, 'calc.py'), 'def add(a, b):\n    return a + b\n');
+    git(folder, 'commit', '--quiet', '-am', 'Make add() add');
+    writeFileSync(join(folder, 'test_calc.py'), 'from calc import add\n');
+    git(folder, 'add', 'test_calc.py');
+    git(folder, 'commit', '--quiet', '-m', 'Fix what review round 1 found');
+    const head = git(folder, 'rev-parse', 'HEAD').trim();
+    git(folder, 'checkout', '--quiet', '--detach', baseCommit);
+
+    expect(await capturePatch(folder, task.baseCommit, { exec })).toBe('');
+    const patch = await capturePatch(folder, task.baseCommit, { exec, ref: head });
+    expect(patch).toContain('+    return a + b');
+    expect(patch).toContain('+++ b/test_calc.py');
+    expect(patch).not.toContain('later.py');
   });
 });
 
@@ -292,6 +319,40 @@ describe('one attempt end to end, with Docker stubbed', () => {
       harnessRevision: 'unversioned',
     });
     expect(readFileSync(result.patchFile, 'utf8')).toContain('+    return a + b');
+  });
+
+  it("grades a loop arm's review-rounds head, named by its commit, and hands the harness that patch", async () => {
+    mkdirSync(join(scratch, 'harness'));
+    const task = fixtureTask();
+    const folder = await materializeTask(task, {
+      workRoot: join(scratch, 'work'),
+      repoUrl: upstream,
+      exec,
+    });
+    git(folder, 'switch', '--quiet', '-c', 'bench/calc-0001');
+    writeFileSync(join(folder, 'calc.py'), 'def add(a, b):\n    return a + b\n');
+    git(folder, 'commit', '--quiet', '-am', 'Make add() add');
+    const head = git(folder, 'rev-parse', 'HEAD').trim();
+    git(folder, 'checkout', '--quiet', '--detach', baseCommit);
+    const { stub } = stubbedHarness({});
+
+    const result = await gradeAttempt(task, {
+      arm: 'loop',
+      folder,
+      ref: head,
+      harnessDir: join(scratch, 'harness'),
+      gradeDir: join(scratch, 'work', `${task.instanceId}.grade`),
+      agent: { ok: true, timedOut: false, tokens: null, costUsd: null, wallTimeMs: 1 },
+      exec: stub,
+    });
+
+    expect(result.attempt).toMatchObject({ arm: 'loop', passed: true, failureClass: null });
+    expect(readFileSync(result.patchFile, 'utf8')).toContain('+    return a + b');
+    const sent = JSON.parse(
+      readFileSync(join(scratch, 'work', `${task.instanceId}.grade`, 'patches.json'), 'utf8'),
+    );
+    expect(sent[0]).toMatchObject({ prefix: 'loop' });
+    expect(sent[0].patch).toContain('+    return a + b');
   });
 
   it('records a repository that does not clone as a materialize failure, with no grade', async () => {

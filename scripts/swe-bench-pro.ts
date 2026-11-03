@@ -9,7 +9,7 @@
  *       [--tenant <tenantId> --space <spaceId>] [-- <agent command>...]
  *   yarn bench:swe-pro grade --task <task.json> --folder <dir> --work-root <dir> --harness <dir>
  *       --arm <bare_harness|loop|loop_with_learning> --agent-outcome <ok|failed|timeout>
- *       --wall-ms <n> [--tokens <n>] [--cost-usd <x>]
+ *       --wall-ms <n> [--tokens <n>] [--cost-usd <x>] [--ref <commit>]
  *       [--tenant <tenantId> --space <spaceId> [--run <runId>]]
  *
  * `--task` names one record of the published SWE-bench Pro set as JSON.
@@ -22,6 +22,12 @@
  * The loop's arms run between `materialize` and `grade`: the folder is bound
  * to the measurement space through the host lane (D5), the loop works it, and
  * `grade` takes the outcome, tokens, cost and wall time its run reported.
+ * The loop's review rounds run without a publication (`review-rounds`, Plan
+ * 341 P2): they commit each round on a local branch. Every stop after a
+ * completed commission reports the head to grade as `headSha`, and
+ * `stoppedAt.reason` names which head it is. A commission that did not
+ * complete may leave nothing to grade. `grade --ref <headSha> --run <its run id>`
+ * grades that head and records the attempt on the run that holds the rounds.
  *
  * `designate` marks a space as the measurement space. With `--tenant` and
  * `--space`, an attempt is recorded on a workflow run in that space through
@@ -258,8 +264,10 @@ async function main(): Promise<void> {
     const wallTimeMs = Math.round(count('wall-ms') ?? fail('grade needs --wall-ms.'));
     const target = await recordTarget(arm);
     const gradeDir = join(workRoot, `${task.instanceId}.grade`);
+    const ref = flag('ref');
     const result = await gradeAttempt(task, {
       arm,
+      ...(ref === undefined ? {} : { ref }),
       folder: resolve(required('folder')),
       harnessDir: resolve(required('harness')),
       gradeDir,

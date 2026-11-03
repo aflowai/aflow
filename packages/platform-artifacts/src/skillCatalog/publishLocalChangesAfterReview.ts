@@ -49,10 +49,14 @@ const FINDINGS_PER_RULE = Math.floor(RULE_COMPARISONS_MAX / ABOVE_MINOR.length);
 
 const at = (index: number) => `state.findings[${String(index)}]`;
 
-/** A blocker or a major at each index, a rule's worth of indices at a time. */
-const ABOVE_MINOR_RULES: readonly WorkflowRunDecideRule[] = Array.from(
-  { length: Math.ceil(REVIEW_FINDINGS_MAX / FINDINGS_PER_RULE) },
-  (_, rule) => {
+/**
+ * A blocker or a major at each index, a rule's worth of indices at a time,
+ * each deciding `fix_before_merge` for `reason`. The review rounds that run
+ * without a publication (`reviewRounds.ts`) read the same rules under a
+ * reason of their own.
+ */
+export function aboveMinorRules(reason: string): readonly WorkflowRunDecideRule[] {
+  return Array.from({ length: Math.ceil(REVIEW_FINDINGS_MAX / FINDINGS_PER_RULE) }, (_, rule) => {
     const first = rule * FINDINGS_PER_RULE;
     const last = Math.min(first + FINDINGS_PER_RULE, REVIEW_FINDINGS_MAX);
     const indices = Array.from({ length: last - first }, (_, i) => first + i);
@@ -63,10 +67,10 @@ const ABOVE_MINOR_RULES: readonly WorkflowRunDecideRule[] = Array.from(
         ),
       },
       decision: 'fix_before_merge',
-      reason: FIRST_ROUND_REASON,
+      reason,
     };
-  },
-);
+  });
+}
 
 /**
  * A minor at each index, unless it is the review's `needs_setup` finding
@@ -74,9 +78,8 @@ const ABOVE_MINOR_RULES: readonly WorkflowRunDecideRule[] = Array.from(
  * round on the branch can, so it never takes one. It always follows every
  * finding of the reviewer's, so these indices read all of theirs.
  */
-const MINOR_RULES: readonly WorkflowRunDecideRule[] = Array.from(
-  { length: REVIEW_FINDINGS_MAX },
-  (_, index) => ({
+export function minorRules(reason: string): readonly WorkflowRunDecideRule[] {
+  return Array.from({ length: REVIEW_FINDINGS_MAX }, (_, index) => ({
     when: {
       allOf: [
         `${at(index)}.severity == 'minor'`,
@@ -84,12 +87,15 @@ const MINOR_RULES: readonly WorkflowRunDecideRule[] = Array.from(
       ],
     },
     decision: 'fix_before_merge',
-    reason: FIRST_ROUND_REASON,
-  }),
-);
+    reason,
+  }));
+}
 
 /** Every index a review can return a finding at: a blocker or a major first, then a minor. */
-const FIRST_ROUND_RULES: readonly WorkflowRunDecideRule[] = [...ABOVE_MINOR_RULES, ...MINOR_RULES];
+const FIRST_ROUND_RULES: readonly WorkflowRunDecideRule[] = [
+  ...aboveMinorRules(FIRST_ROUND_REASON),
+  ...minorRules(FIRST_ROUND_REASON),
+];
 
 export const AFTER_REVIEW_SETTLE_RULES: readonly WorkflowRunDecideRule[] = [
   {

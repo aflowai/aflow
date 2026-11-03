@@ -1,6 +1,6 @@
 # Plan 341 — The machine is measured
 
-**Status:** P0 is approved. P1's harness runner and evaluation writer are built, and its pilot has not run. P2 to P4 are not built.
+**Status:** P0 is approved. P1's harness runner and evaluation writer are built, and its pilot has not run. The pilot's arm (b) is one commission without review rounds (D3). P2's review rounds serve arm (b) from P2 on. They are built, and P2 has not run. P3 and P4 are not built.
 
 **Builds on:** Plan 269 (the eval plane: one evaluation substrate, `workflow_runs.evaluation_json`, frozen replays), Plan 329 (planning is a skill), Plan 183 and Plan 234 (the learning loop), Plan 315 (the local loop), Plan 337 (the decision card), Plan 333 (D2's writing rules). Plans 269, 329, 183 and 234 predate the published archive, which starts at Plan 315, so they are cited by number and not quoted.
 
@@ -23,6 +23,7 @@
 
 - A new measurement space, Proving Ground, separate from Full Circle.
 - A new harness runner and evaluation writer in Proving Ground, landed in P1.
+- A new platform skill, Review Rounds, landed in P2. It runs arm (b)'s review rounds from P2 on.
 - The loop skills, measured and not changed.
 - This plan document, which holds a results table per phase.
 - The host folder bindings and the compute where task images run.
@@ -94,7 +95,7 @@ _Rejected:_ a judge-scored rubric. Plan 269 holds judges advisory until measured
 
 ### D3 — A pilot before any scale
 
-P1 runs eight tasks drawn at random from the standardized set with a fixed seed. It runs one seed and arms (a) and (b) only. It measures these figures:
+P1 runs eight tasks drawn at random from the standardized set with a fixed seed. It runs one seed and arms (a) and (b) only. Its arm (b) is one commission without review rounds, because the rounds land in P2. Its patch is taken as the commission left it. It measures these figures:
 
 - Pass rate per arm.
 - Tokens and cost per task per arm.
@@ -110,7 +111,10 @@ It proves the mechanics:
 
 The pilot's job is the price of a task and a working pipeline, not a conclusion.
 
-_Rejected:_ starting at 50 to 100 tasks. A mechanics failure at that size wastes the spend.
+_Rejected:_
+
+- Starting at 50 to 100 tasks. A mechanics failure at that size wastes the spend.
+- Running the pilot's arm (b) with review rounds, by building the rounds first. The pilot's job is the price of a task and a working pipeline. The rounds did not exist, and building them before any measurement would have delayed the pilot's spend without informing it.
 
 ### D4 — Scale after the pilot
 
@@ -120,7 +124,7 @@ _Rejected:_ starting at 50 to 100 tasks. A mechanics failure at that size wastes
 
 P4 is also where a need for recursive planning would first show. So no planning hierarchy is built before P4 shows it is needed.
 
-_Rejected:_ building recursive planning first.
+_Rejected:_ building recursive planning first. No measurement has yet shown a task the loop fails for want of it. Building it first would spend effort on a need P4 may never show.
 
 ### D5 — Where it runs
 
@@ -158,11 +162,12 @@ _Rejected:_ designing Plan 342 now. Plan 341's numbers do not exist yet to shape
 - The compute choice per task image: the Mac for the pilot, or the hosted compute worker (D5).
 - A harness runner in Proving Ground. It captures each task's patch and runs the official SWE-bench Pro Docker harness on it (D3, D5).
 - An evaluation writer in Proving Ground. It writes the official result through Plan 269's one writer (D6).
+- A platform skill, Review Rounds, in an unlisted bundle Proving Ground installs. It runs arm (b)'s review rounds with nothing pushed, from P2 on (D2, D5).
 - The evaluation envelope, written once per task attempt through Plan 269's one writer (D6).
 - This document's results tables, one per phase (D6).
 - The loop skills, measured and not changed (D7).
 
-The loop's skills are unchanged. The measurement machinery is new: the harness runner and the evaluation writer named above.
+The loop's skills are unchanged. The measurement machinery is new: the harness runner and the evaluation writer from P1, and the Review Rounds skill from P2.
 
 ## 4. Phases
 
@@ -172,7 +177,11 @@ Each phase lands on its own.
 
 **P1 — The pilot (D3).** It lands the harness runner and the evaluation writer, and proves them on eight tasks. _Exit:_ the results table is in this document, and the mechanics are proven end to end on all eight tasks.
 
-The machinery is built, and the pilot has not run. Its pieces are these:
+P1's machinery is the harness runner and the evaluation writer. It is built, and the pilot has not run. It holds no review rounds, so P1 does not run D2's arm (b) whole.
+
+D3 sets the pilot's arm (b) as one commission without review rounds. Its patch is taken as the commission left it. Its number measures a node and one commission, not the loop's rounds. The rounds land in P2 and serve arm (b) from P2 on.
+
+The machinery's pieces are these:
 
 - The harness runner is `yarn bench:swe-pro`, a development script beside the loop's own measurement. It clones a task's repository at its base commit, captures the patch against that commit, pulls the task image and runs the official harness with local Docker.
 - `designate` marks Proving Ground as the measurement space, under `benchmarkMeasurement` in the space's metadata.
@@ -187,6 +196,35 @@ The machinery is built, and the pilot has not run. Its pieces are these:
 - Tenant, space, work root and harness checkout are flags with no default.
 
 **P2 — Scale (D4).** _Exit:_ pass rates with intervals for all three arms are in this document.
+
+P2 lands the review rounds, and they are built. They serve arm (b) from P2 on, and arm (c) when it runs. The rounds are the operator's: a review, its fix rounds and the rounds rule, run on a folder's patch with nothing pushed. D5 keeps the publication out of the measurement, so the rounds cannot live inside Publish Local Changes. Its pieces are these:
+
+- The mechanism is a platform skill, Review Rounds (`review-rounds`), in the unlisted bundle `local-review-rounds`. Proving Ground installs it. The Coding Loop does not carry it, so Full Circle's loop is unchanged.
+- A commission goes in by its run id, with the brief it ran on and a new branch name. The skill reads the commission's `patchRef`, `baseSha` and `summary` from its run.
+- Each round commits on a local branch with `host.file.patch` and no `pushBase`. Nothing is fetched or pushed, and the folder needs no remote.
+- Each review is Review Local Changes, started as a run of its own, as the publication starts it. It reads `baseSha..<head>`.
+- Each decision is `workflow.run.decide` over the publication's own rule builders, with its decision names. Round 1 with a minor or worse takes a fix round. Later rounds with minors or nits take the patch as it stands. A major or a blocker always takes its fix. No model is asked.
+- A fix round is Commission Change on the local branch, briefed with the brief and the review's summary.
+- The skill takes any brief Commission Change takes. It does not narrow the brief to fit a fix round. A fix round adds a bounded opening, a separator and the review's summary, which Review Local Changes bounds.
+- Before each fix round, a `workflow.run.decide` counts the fix brief's characters with the `$length` template operator. It counts the fix round's inputs in bytes with `$jsonBytes`. A fix brief past Commission Change's limit, or inputs past the 32 KB cap, stop the rounds at `fix_brief_too_long`. A `fix_failed` stop therefore never means a brief too long.
+- The rounds stop at three reviews, the operator's limit.
+- A last `workflow.run.decide` records `stoppedAt`: the round that ended the rounds, and why. `taken_as_it_stands` and `round_limit` are ends the rounds rule chose. `fix_brief_too_long` means a fix brief would not fit. `fix_failed`, `fix_no_patch`, `commit_failed` and `review_failed` name a step that broke. A commit task is optional, so a refused commit stops the rounds at `commit_failed` as a conflict does. `commission_not_completed` means the commission failed, was cancelled or is still running. `no_patch` means the completed commission had no patch. The last round's `decision` cannot say this, because a broken fix round leaves it at `fix_before_merge`, as the limit does.
+- The run records every round as a task, with each review as a run of its own. Each decision states its reason. The `rounds` output holds each round's verdict, findings, review run and head. After a decided round, the final `headSha` is the last head a review read and the rule decided.
+- Every stop after a completed commission leaves a `headSha`, and `stoppedAt.reason` names which head it is. Where round 1's review decided nothing, it is the commission's own commit, which no review read. Where no commit landed, it is `baseSha`, and it grades as an empty patch.
+- The driver grades that head with `grade --ref <headSha> --run <the rounds run>`, so the attempt's verdict lands on the run that shows its rounds.
+
+The publication's rule differs in two cases and stays as it is. A reader of arm (b)'s results reads the loop's process through both:
+
+- After its fix round, the publication publishes an approving review's major, because its push gate then asks the operator. No operator stands behind a benchmark patch, so here the major takes its fix.
+- After its fix round, the publication fixes a review that does not approve and has no blocker or major. Here that review is taken as it stands, its minors and nits recorded open.
+
+_Rejected:_
+
+- A rounds loop inside the benchmark runner. Its decisions would live in a script, where the board and the Coach cannot read them (D6).
+- Moving the rounds out of Publish Local Changes. That changes a loop skill to serve the measurement, which D7 rules out.
+- A model deciding the rounds. The publication decides them by rules because no measured model cleared the bar (Plan 316 §7), and a second judge would make the arms differ by more than the process.
+- Capping the rounds' brief input below Commission Change's limit. It narrows an input to fit a downstream cap, which CLAUDE.md forbids. It also made a task with a longer brief unreviewable.
+- Capping the composed brief by construction, so that a bounded accepted brief always fits. It lost for the same reason. It narrows the input rather than bounding what the fix round adds.
 
 **P3 — The learning arm in order (D4).** _Exit:_ the learning gain, with forgetting read, is in this document.
 

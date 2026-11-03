@@ -327,6 +327,38 @@ const LOCAL_PR_SHEPHERD_BUNDLE: AuthoredSkillBundle = {
   helmsmanHints: [],
 };
 
+// ============================================================================
+// local-review-rounds — the loop's review rounds without a publication
+// ============================================================================
+
+/**
+ * Plan 341 D5: the measurement space runs the loop with no publication, so its
+ * driver starts these rounds where the loop would publish. Unlisted and kept
+ * out of the Coding Loop, so a space working the loop's own changes never
+ * holds a second way to finish a commission.
+ */
+const LOCAL_REVIEW_ROUNDS_BUNDLE: AuthoredSkillBundle = {
+  bundleId: 'local-review-rounds',
+  revision: 0,
+  name: 'Local Review Rounds',
+  tagline: "Review and fix a commission's patch in rounds on a local branch, with nothing pushed.",
+  description: `Installs **Review Rounds** — the loop's review rounds and the rounds rule, run on a commission's patch in a connected folder with no publication.
+
+**What it installs**:
+- The **Review Rounds** skill — it commits the commission's patch on a local branch, has Review Local Changes read the branch, and decides by the rounds rule whether Commission Change makes a fix round. The run records every round's verdict, findings and decision, and ends with the branch's head. Nothing is pushed, and the folder needs no remote.
+
+**After install**: connect the repository as a folder that allows writes. Then start the skill with a completed commission's run id, the brief it ran on and a new branch name.`,
+  tags: ['coding', 'review', 'local', 'benchmark'],
+  skillCatalogIds: ['review-rounds'],
+  // Each round starts Review Local Changes, and each fix round Commission Change.
+  prerequisiteBundleIds: ['local-commission', 'local-code-review'],
+  apiDefinitions: [],
+  apiBindingTemplates: [],
+  memorySeed: [],
+  helmsmanHints: [],
+  unlisted: true,
+};
+
 export const CODING_LOOP_PART_IDS = [
   'local-commission',
   'local-code-review',
@@ -382,6 +414,7 @@ const RAW_BUNDLES: readonly AuthoredSkillBundle[] = [
   CODING_PR_LOOP_BUNDLE,
   ...LOCAL_LOOP_PARTS.map((part) => ({ ...part, unlisted: true })),
   CODING_LOOP_BUNDLE,
+  LOCAL_REVIEW_ROUNDS_BUNDLE,
   TICKER_DIGEST,
   WEB_RESEARCH_BRIEF,
   LITERATURE_SCAN,

@@ -298,6 +298,33 @@ describe('inputTemplate — operator nodes', () => {
     expect(validateWorkflowGraph([producer, bound('label')])).toEqual([]);
   });
 
+  it('checks a `$length` node as the integer it yields, over a string operand', () => {
+    const counted = (value: unknown): unknown[] =>
+      validateWorkflowGraph([
+        opTask('record', 'workflow.learn', {
+          inputs: { name: 'n' },
+          inputTemplate: { slug: value, learnings: [] },
+        }),
+      ]).map((e) => [e.kind, e.field]);
+    // `slug` takes a string, so an integer does not suit it.
+    expect(counted({ $length: [{ $bind: 'name' }] })).toEqual([['op_input_incompatible', 'slug']]);
+    expect(counted({ $concat: ['run-', { $length: [{ $bind: 'name' }] }] })).toEqual([
+      ['op_input_incompatible', 'slug.$concat[1]'],
+    ]);
+
+    const decide = (operand: unknown): unknown[] =>
+      validateWorkflowGraph([
+        opTask('measure', 'workflow.run.decide', {
+          inputTemplate: {
+            state: { length: { $length: [operand] } },
+            rules: [{ when: { expression: 'state.length > 3' }, decision: 'long', reason: 'r' }],
+            otherwise: { decision: 'short', reason: 'r' },
+          },
+        }),
+      ]).map((e) => [e.kind, e.field]);
+    expect(decide('abcd')).toEqual([]);
+  });
+
   it('leaves a malformed operator node to the structural rule', () => {
     const t = opTask('record', 'workflow.learn', {
       inputTemplate: { slug: { $concat: ['only'] }, learnings: [] },

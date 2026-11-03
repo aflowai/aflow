@@ -282,7 +282,7 @@ export function createWorkflowOperationRegistrations(
           'A single patch may not mix metadata (budget/status) with definition (tasks/goal/campaign)',
           'Identity campaign fields are immutable — their schema cannot be reshaped, only relabeled',
           'A task a route enables gets its guard and its dependency on the source from that route; give it no when of its own, and remove its route before removing it',
-          'Several inputs feeding one request body go through inputTemplate, not inputs: each input is an inputBindings entry and the template places it with { "$bind": "<key>" } (also $concat, $firstOf, $text); the substituted template is exactly the op input, and a $bind naming neither an inputBindings entry nor an inputs key is refused',
+          'Several inputs feeding one request body go through inputTemplate, not inputs: each input is an inputBindings entry and the template places it with { "$bind": "<key>" } (also $concat, $firstOf, $text, $length, $jsonBytes); the substituted template is exactly the op input, and a $bind naming neither an inputBindings entry nor an inputs key is refused',
           'Operations that run only as workflow steps, such as ai.decision.decide, are found with catalog.tool.search workflowSteps: true; a when that reads tasks.<id>.output.<path> is refused when the producer does not emit that path',
         ],
         minimalExampleInput: {

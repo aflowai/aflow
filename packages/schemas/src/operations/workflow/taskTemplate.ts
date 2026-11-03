@@ -20,12 +20,36 @@ export const TEMPLATE_FIRST_OF_KEY = '$firstOf';
  */
 export const TEMPLATE_TEXT_KEY = '$text';
 
+/**
+ * `{ "$length": [value] }` — how many characters one string holds, counted as
+ * JSON Schema's `maxLength` counts them. It is absent where the value is
+ * absent or null. A rule reads it to learn whether a composed string fits an
+ * input's limit before a task passes the string on.
+ */
+export const TEMPLATE_LENGTH_KEY = '$length';
+
+/**
+ * `{ "$jsonBytes": [value] }` — how many UTF-8 bytes one value takes written
+ * as JSON, as a run's inputs cap counts them. It is absent where the value is
+ * absent. A rule reads it to learn whether a composed input fits a byte cap.
+ */
+export const TEMPLATE_JSON_BYTES_KEY = '$jsonBytes';
+
 const TEMPLATE_OPERATOR_KEYS = [
   TEMPLATE_CONCAT_KEY,
   TEMPLATE_FIRST_OF_KEY,
   TEMPLATE_TEXT_KEY,
+  TEMPLATE_LENGTH_KEY,
+  TEMPLATE_JSON_BYTES_KEY,
 ] as const;
 export type TemplateOperatorKey = (typeof TEMPLATE_OPERATOR_KEYS)[number];
+
+/** The operators that take exactly one operand. */
+const SINGLE_OPERAND_KEYS: ReadonlySet<TemplateOperatorKey> = new Set([
+  TEMPLATE_TEXT_KEY,
+  TEMPLATE_LENGTH_KEY,
+  TEMPLATE_JSON_BYTES_KEY,
+]);
 
 /** A template node that carries an operator key: its operands where well formed, why not where not. */
 export type TemplateOperatorNode =
@@ -59,7 +83,7 @@ function malformedOperator(
     return `an operator node must have exactly the single key "${key}" (found keys: ${keys.sort().join(', ')})`;
   }
   const operands = rec[key];
-  if (key === TEMPLATE_TEXT_KEY) {
+  if (SINGLE_OPERAND_KEYS.has(key)) {
     return Array.isArray(operands) && operands.length === 1
       ? undefined
       : `"${key}" takes an array of exactly one operand`;
@@ -226,7 +250,7 @@ interface SubstituteCtx {
  *   - A malformed bind node (extra keys / non-string value) throws.
  *   - The substituted root must remain a JSON object (op inputs are
  *     objects); a root bind node that resolves absent or non-object throws.
- *   - `$concat`, `$firstOf` and `$text` nodes compute one value from their
+ *   - `$concat`, `$firstOf`, `$text`, `$length` and `$jsonBytes` nodes compute one value from their
  *     operands, each operand substituted by these same rules.
  */
 export function substituteTemplateBinds(
@@ -335,6 +359,24 @@ function substituteOperator(
       undefined,
       `"${TEMPLATE_TEXT_KEY}" at "${path || '(root)'}" writes a string, number or boolean as text, and its operand resolved to ${Array.isArray(operand) ? 'an array' : 'an object'}`,
     );
+  }
+
+  if (operator === TEMPLATE_LENGTH_KEY) {
+    const [operand] = operands;
+    if (operand === OMIT || operand === null || operand === undefined) return OMIT;
+    // Code points, not UTF-16 units, as JSON Schema's maxLength counts.
+    if (typeof operand === 'string') return Array.from(operand).length;
+    throw new TemplateSubstitutionError(
+      `${operandsPath}[0]`,
+      undefined,
+      `"${TEMPLATE_LENGTH_KEY}" at "${path || '(root)'}" counts the characters of a string, and its operand resolved to ${Array.isArray(operand) ? 'an array' : typeof operand}`,
+    );
+  }
+
+  if (operator === TEMPLATE_JSON_BYTES_KEY) {
+    const [operand] = operands;
+    if (operand === OMIT || operand === undefined) return OMIT;
+    return new TextEncoder().encode(JSON.stringify(operand)).length;
   }
 
   if (operands.includes(OMIT)) return OMIT;

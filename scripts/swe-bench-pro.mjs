@@ -181,8 +181,22 @@ export async function materializeTask(task, { workRoot, repoUrl, exec = runComma
  *
  * It stages into an index of its own, so the folder's index is as the agent
  * left it — the loop's review may still read it.
+ *
+ * With `ref`, the patch is the diff from the base commit to that commit
+ * instead. The loop's review rounds (the `review-rounds` skill) commit each
+ * round on a local branch and leave the working tree as it was, so their
+ * final patch is `<base>..<headSha>` and the working tree holds none of it.
  */
-export async function capturePatch(folder, baseCommit, { exec = runCommand } = {}) {
+export async function capturePatch(folder, baseCommit, { exec = runCommand, ref } = {}) {
+  if (ref !== undefined) {
+    const diff = await exec(
+      'git',
+      ['diff', '--binary', '--no-color', baseCommit, ref, '--', '.', ...SCRATCH_PATHSPECS],
+      { cwd: folder },
+    );
+    if (diff.code !== 0) throw new Error(`git diff ${ref} failed.\n${tail(diff.stderr)}`);
+    return diff.stdout;
+  }
   const scratch = await mkdtemp(join(tmpdir(), 'swe-bench-pro-index-'));
   const env = { GIT_INDEX_FILE: join(scratch, 'index') };
   try {
@@ -391,8 +405,8 @@ export function classifyAttempt({ grade, agent, patch }) {
  * so the loop's arm grades here as the bare harness's does.
  */
 export async function gradeAttempt(task, options) {
-  const { arm, folder, harnessDir, gradeDir, agent, exec = runCommand } = options;
-  const patch = await capturePatch(folder, task.baseCommit, { exec });
+  const { arm, folder, harnessDir, gradeDir, agent, ref, exec = runCommand } = options;
+  const patch = await capturePatch(folder, task.baseCommit, { exec, ref });
   await mkdir(gradeDir, { recursive: true });
   const patchFile = join(gradeDir, `${task.instanceId}.patch`);
   await writeFile(patchFile, patch);
