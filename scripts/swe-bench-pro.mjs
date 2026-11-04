@@ -452,19 +452,193 @@ export function classifyAttempt({ grade, agent, patch }) {
   return 'tests_failed';
 }
 
+/** The workflow slugs of the loop's runs that hold a patch to grade. */
+export const COMMISSION_SLUG = 'commission-change';
+export const REVIEW_ROUNDS_SLUG = 'review-rounds';
+
+/** How a unified diff opens: git's own header, or a plain one. */
+const UNIFIED_DIFF_START = /^(?:diff --git |--- )/;
+
+/** A run in one of these has stopped, so its output is final. */
+const ENDED_RUN_STATUSES = new Set(['completed', 'failed', 'cancelled']);
+
 /**
- * Capture and grade the patch an agent left in a task folder, and report the
- * attempt as the evaluation writer records it (`BenchmarkAttemptResult`).
- * The arm that worked the folder reports its own tokens, cost and wall time,
- * so the loop's arm grades here as the bare harness's does.
+ * The loop's patch, read from the run that produced it (Plan 341 P2).
+ *
+ * The loop leaves the bound folder as it found it. Commission Change works a
+ * scratch copy and stores its diff as the harness step's `patchRef`, so a
+ * commission run's patch is the payload that ref names. The review rounds
+ * commit on a local branch of the folder, so a rounds run's patch is
+ * `<base>..<headSha>` there. Either way the run says where the patch is, and
+ * no one applies it to the folder first.
+ *
+ * A run that ended with no patch grades as an empty patch. `readRunPatch`
+ * reads the run's output whole first, because an output left out would read
+ * here as no patch. A run still going,
+ * or one that worked another base, is refused, because its patch is not this
+ * attempt's.
+ *
+ * @param {{ baseCommit: string }} task
+ * @param {{ runId: string, slug: string, status: string, output: Record<string, unknown> }} run
+ * @param {{ folder?: string, readPatch: (patchRef: string) => Promise<unknown>, exec?: typeof runCommand }} options
+ * @returns {Promise<string>}
+ */
+export async function readLoopPatch(task, run, { folder, readPatch, exec = runCommand }) {
+  if (!ENDED_RUN_STATUSES.has(run.status)) {
+    throw new Error(`Run ${run.runId} is ${run.status}. Grade it once it has ended.`);
+  }
+  const text = (name) => {
+    const value = run.output[name];
+    return typeof value === 'string' && value !== '' ? value : undefined;
+  };
+  const baseSha = text('baseSha');
+  if (baseSha !== undefined && baseSha !== task.baseCommit) {
+    throw new Error(
+      `Run ${run.runId} worked from ${baseSha}, not from the task's base commit ${task.baseCommit}.`,
+    );
+  }
+  if (run.slug === COMMISSION_SLUG) {
+    const patchRef = text('patchRef');
+    if (patchRef === undefined) return '';
+    if (baseSha === undefined) {
+      throw new Error(`Run ${run.runId} reports a patch but no \`baseSha\` it was taken from.`);
+    }
+    const patch = await readPatch(patchRef);
+    if (typeof patch !== 'string' || !UNIFIED_DIFF_START.test(patch)) {
+      throw new Error(`The \`patchRef\` of run ${run.runId} names no diff.`);
+    }
+    return patch;
+  }
+  if (run.slug === REVIEW_ROUNDS_SLUG) {
+    const headSha = text('headSha');
+    if (headSha === undefined) return '';
+    // The head reaches git as an argument, so only a full commit id passes.
+    if (!COMMIT_ID.test(headSha)) {
+      throw new Error(`The \`headSha\` of run ${run.runId} is not a full commit id.`);
+    }
+    if (folder === undefined) {
+      throw new Error(
+        `Run ${run.runId} committed its rounds in the task folder. Name that folder with --folder.`,
+      );
+    }
+    return capturePatch(folder, task.baseCommit, { exec, ref: headSha });
+  }
+  throw new Error(
+    `Run ${run.runId} is a ${run.slug} run. A loop arm's patch is on a ${COMMISSION_SLUG} or ${REVIEW_ROUNDS_SLUG} run.`,
+  );
+}
+
+/**
+ * The loop arm's patch, read from the run `--run` names in the measurement
+ * space. The run is loaded and its output built as the platform builds it.
+ * Its `patchRef` is read from the payload store the services share, so no
+ * patch passes through the operator's hands.
+ *
+ * The platform builds a run's output best-effort: a task output the store
+ * cannot read is left out, so a lost `patchRef` would read as no patch. A
+ * run grades as an empty patch only once every succeeded task's stored
+ * output has been read, and a run with any output unread is refused.
+ *
+ * The `patchRef` is data on the run, so only an object ref of kind `patch`
+ * of this tenant reaches the store. Each platform call is passed in, so the
+ * command line supplies the platform's own and the tests supply stand-ins.
+ *
+ * @template {{
+ *   runId: string,
+ *   workflowSlug: string,
+ *   status: string,
+ *   tasks: ReadonlyArray<{ taskId: string, status: string, outputRef: string | null }>,
+ * }} Run
+ * @param {{ baseCommit: string }} task
+ * @param {{ tenantId: string, spaceId: string, runId: string }} target
+ * @param {{
+ *   folder?: string,
+ *   loadRun: (runId: string) => Promise<Run | null>,
+ *   buildResult: (run: Run) => Promise<{ output?: Record<string, unknown> | null } | undefined>,
+ *   retrieve: (patchRef: string) => Promise<unknown>,
+ *   parsePayloadRef: (ref: string) => { form: string, payloadKind?: string, tenantId?: string } | null,
+ *   exec?: typeof runCommand,
+ * }} options
+ * @returns {Promise<string>}
+ */
+export async function readRunPatch(
+  task,
+  target,
+  { folder, loadRun, buildResult, retrieve, parsePayloadRef, exec = runCommand },
+) {
+  const run = await loadRun(target.runId);
+  if (run === null) throw new Error(`Run ${target.runId} is not in space ${target.spaceId}.`);
+  await readEveryTaskOutput(run, retrieve);
+  const result = await buildResult(run);
+  if (result === undefined) {
+    throw new Error(`The output of run ${target.runId} cannot be read, so its patch is unknown.`);
+  }
+  return readLoopPatch(
+    task,
+    { runId: run.runId, slug: run.workflowSlug, status: run.status, output: result.output ?? {} },
+    {
+      ...(folder === undefined ? {} : { folder }),
+      exec,
+      readPatch: async (patchRef) => {
+        const parsed = parsePayloadRef(patchRef);
+        if (
+          parsed?.form !== 'object' ||
+          parsed.payloadKind !== 'patch' ||
+          parsed.tenantId !== target.tenantId
+        ) {
+          throw new Error(`The \`patchRef\` of run ${target.runId} names no diff of this tenant.`);
+        }
+        try {
+          return await retrieve(patchRef);
+        } catch (error) {
+          throw new Error(
+            `The patch of run ${target.runId} cannot be read. Stored diffs expire, and this one may be gone. ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      },
+    },
+  );
+}
+
+/**
+ * Read the stored output of each succeeded task of a run, and refuse the run
+ * if any of them cannot be read. The output build reads them again, but it
+ * leaves out what it cannot read, so only this read says one is missing.
+ *
+ * @param {{ runId: string, tasks: ReadonlyArray<{ taskId: string, status: string, outputRef: string | null }> }} run
+ * @param {(ref: string) => Promise<unknown>} retrieve
+ */
+async function readEveryTaskOutput(run, retrieve) {
+  for (const task of run.tasks) {
+    if (task.status !== 'succeeded' || !task.outputRef) continue;
+    const unread = `The output of task ${task.taskId} of run ${run.runId} cannot be read, so the run's patch is unknown.`;
+    let output;
+    try {
+      output = await retrieve(task.outputRef);
+    } catch (error) {
+      throw new Error(`${unread} ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (output === null || typeof output !== 'object' || Array.isArray(output)) {
+      throw new Error(`${unread} The store holds no output object at its ref.`);
+    }
+  }
+}
+
+/**
+ * Grade an attempt's patch and report the attempt as the evaluation writer
+ * records it (`BenchmarkAttemptResult`). With `patch`, that patch is graded,
+ * as a loop arm's run reported it (`readLoopPatch`). Without it, the patch is
+ * captured from the agent's changes in `folder`, as the bare harness left
+ * them. The arm reports its own tokens, cost and wall time, so the loop's arm
+ * grades here as the bare harness's does.
  */
 export async function gradeAttempt(task, options) {
-  const { arm, folder, harnessDir, gradeDir, agent, ref, exec = runCommand } = options;
+  const { arm, folder, harnessDir, gradeDir, agent, exec = runCommand } = options;
   // A task record may reach here unparsed, so git reads no base commit that is not a full id.
   if (!COMMIT_ID.test(task.baseCommit)) {
     throw new Error(`The base commit ${JSON.stringify(task.baseCommit)} is not a full commit id.`);
   }
-  const patch = await capturePatch(folder, task.baseCommit, { exec, ref });
+  const patch = options.patch ?? (await capturePatch(folder, task.baseCommit, { exec }));
   await mkdir(gradeDir, { recursive: true });
   const patchFile = join(gradeDir, `${task.instanceId}.patch`);
   await writeFile(patchFile, patch);
