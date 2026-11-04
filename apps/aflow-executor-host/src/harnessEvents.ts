@@ -42,6 +42,63 @@ export interface HarnessEventReader {
    * rather than taking one (Plan 326 D2). Undefined until it says.
    */
   conversationId(): string | undefined;
+  /**
+   * What the harness reported it spent, read from its own usage report:
+   * Claude Code's `result` event and Codex's `turn.completed` events. A count
+   * the harness did not report is null, never a guess.
+   */
+  usage(): HarnessUsage;
+}
+
+/**
+ * Tokens and cost as a harness reports them. Claude Code's tokens are its
+ * four counters, cache reads and writes included. Codex counts cached input
+ * inside its input, so its tokens are input plus output. Codex reports no
+ * cost.
+ */
+export interface HarnessUsage {
+  tokens: number | null;
+  costUsd: number | null;
+}
+
+/** The usage of two turns of one run. A count either turn lacks is unknown for both. */
+export function addHarnessUsage(a: HarnessUsage, b: HarnessUsage): HarnessUsage {
+  return {
+    tokens: a.tokens === null || b.tokens === null ? null : a.tokens + b.tokens,
+    costUsd: a.costUsd === null || b.costUsd === null ? null : a.costUsd + b.costUsd,
+  };
+}
+
+const CLAUDE_TOKEN_COUNTERS = [
+  'input_tokens',
+  'output_tokens',
+  'cache_creation_input_tokens',
+  'cache_read_input_tokens',
+] as const;
+
+function countOf(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function claudeUsageOf(event: Record<string, unknown>): HarnessUsage {
+  const usage = event['usage'];
+  const counted = isRecord(usage)
+    ? CLAUDE_TOKEN_COUNTERS.map((key) => countOf(usage[key])).filter(
+        (value): value is number => value !== undefined,
+      )
+    : [];
+  return {
+    tokens: counted.length === 0 ? null : counted.reduce((sum, value) => sum + value, 0),
+    costUsd: countOf(event['total_cost_usd']) ?? null,
+  };
+}
+
+function codexTokensOf(event: Record<string, unknown>): number | null {
+  const usage = event['usage'];
+  if (!isRecord(usage)) return null;
+  const input = countOf(usage['input_tokens']);
+  const output = countOf(usage['output_tokens']);
+  return input === undefined || output === undefined ? null : input + output;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -204,6 +261,10 @@ export function createHarnessEventReader(
   const toolCalls = new Map<string, { name: string; command: boolean }>();
   let lastIntent = '';
   let conversation: string | undefined;
+  // Claude Code's result event totals the whole run, so the last one stands.
+  // Codex reports each turn, so its turns add up.
+  let claudeUsage: HarnessUsage | undefined;
+  let codexTokens: number | null | undefined;
   // A Codex item is reported when it starts and again when it completes. The
   // call is narrated once, at whichever of the two arrives first.
   const narratedItems = new Set<string>();
@@ -302,6 +363,7 @@ export function createHarnessEventReader(
       case 'result': {
         const text = event['result'];
         if (typeof text === 'string') resultText = text;
+        claudeUsage = claudeUsageOf(event);
         onLine({ kind: 'status', at: at(), text: describeResult(event) });
         return;
       }
@@ -425,9 +487,13 @@ export function createHarnessEventReader(
         if (isRecord(item)) readCodexItem(item, event['type'] === 'item.completed');
         return;
       }
-      case 'turn.completed':
+      case 'turn.completed': {
+        const turn = codexTokensOf(event);
+        if (codexTokens === undefined) codexTokens = turn;
+        else if (codexTokens !== null) codexTokens = turn === null ? null : codexTokens + turn;
         onLine({ kind: 'status', at: at(), text: describeUsage(event) });
         return;
+      }
       case 'turn.failed':
       case 'error': {
         const message = errorMessageOf(event['error']) ?? errorMessageOf(event['message']);
@@ -482,6 +548,10 @@ export function createHarnessEventReader(
     },
     conversationId(): string | undefined {
       return conversation;
+    },
+    usage(): HarnessUsage {
+      if (output === 'codex-jsonl') return { tokens: codexTokens ?? null, costUsd: null };
+      return claudeUsage ?? { tokens: null, costUsd: null };
     },
   };
 }

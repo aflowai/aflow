@@ -10,6 +10,7 @@ import type { HarnessActivityLine } from '@aflow/schemas';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  addHarnessUsage,
   createHarnessEventReader,
   summarizeToolResult,
   summarizeToolUse,
@@ -169,6 +170,63 @@ describe('reading a Claude Code event stream', () => {
     expect(lines).toHaveLength(0);
     reader.flush();
     expect(lines).toHaveLength(1);
+  });
+});
+
+describe("the harness's own usage report", () => {
+  function usageOf(events: readonly Record<string, unknown>[]): ReturnType<typeof read> & {
+    usage: ReturnType<ReturnType<typeof createHarnessEventReader>['usage']>;
+  } {
+    const lines: HarnessActivityLine[] = [];
+    const reader = createHarnessEventReader('claude-stream-json', (line) => lines.push(line), 0);
+    reader.push(`${events.map((e) => JSON.stringify(e)).join('\n')}\n`);
+    reader.flush();
+    return { lines, answer: reader.answer(), usage: reader.usage() };
+  }
+
+  it("reads Claude Code's tokens and cost as numbers from its result event", () => {
+    const result = {
+      ...EVENTS.at(-1),
+      usage: {
+        input_tokens: 12,
+        output_tokens: 840,
+        cache_creation_input_tokens: 9_100,
+        cache_read_input_tokens: 51_300,
+      },
+    };
+    const { usage } = usageOf([...EVENTS.slice(0, -1), result]);
+    expect(usage).toEqual({ tokens: 12 + 840 + 9_100 + 51_300, costUsd: 0.3484555 });
+  });
+
+  it('reads the cost unrounded, where the status line rounds it', () => {
+    const { usage, lines } = usageOf(EVENTS);
+    expect(usage.costUsd).toBe(0.3484555);
+    expect(lines.at(-1)?.text).toContain('$0.3485');
+  });
+
+  it('reports null for a count the result event does not carry', () => {
+    expect(usageOf(EVENTS).usage).toEqual({ tokens: null, costUsd: 0.3484555 });
+  });
+
+  it('reports nothing spent as unknown for a run cut short before its result', () => {
+    expect(usageOf(EVENTS.slice(0, 3)).usage).toEqual({ tokens: null, costUsd: null });
+  });
+
+  it('reports a plain-text harness as unknown', () => {
+    const reader = createHarnessEventReader('text', () => undefined, 0);
+    reader.push('Done.\n');
+    reader.flush();
+    expect(reader.usage()).toEqual({ tokens: null, costUsd: null });
+  });
+
+  it('sums the turns of one run, and a turn with no report makes the sum unknown', () => {
+    expect(addHarnessUsage({ tokens: 10, costUsd: 0.25 }, { tokens: 5, costUsd: 0.5 })).toEqual({
+      tokens: 15,
+      costUsd: 0.75,
+    });
+    expect(addHarnessUsage({ tokens: 10, costUsd: 0.25 }, { tokens: null, costUsd: null })).toEqual(
+      { tokens: null, costUsd: null },
+    );
   });
 });
 
@@ -496,5 +554,23 @@ describe('reading a Codex event stream', () => {
       { type: 'turn.failed', error: { message: 'usage limit reached' } },
     ]);
     expect(lines.at(-1)).toMatchObject({ kind: 'status', text: 'Failed: usage limit reached' });
+  });
+
+  it("reads Codex's tokens as input plus output, summed over its turns, with no cost", () => {
+    const turn = {
+      type: 'turn.completed',
+      usage: { input_tokens: 43790, cached_input_tokens: 41088, output_tokens: 89 },
+    };
+    expect(readCodex(CODEX_EVENTS).reader.usage()).toEqual({ tokens: 43790 + 89, costUsd: null });
+    expect(readCodex([turn, turn]).reader.usage()).toEqual({
+      tokens: 2 * (43790 + 89),
+      costUsd: null,
+    });
+  });
+
+  it('reports Codex tokens as unknown when a turn reports no usage', () => {
+    const turn = { type: 'turn.completed', usage: { input_tokens: 10, output_tokens: 2 } };
+    expect(readCodex([turn, { type: 'turn.completed' }]).reader.usage().tokens).toBeNull();
+    expect(readCodex([{ type: 'turn.started' }]).reader.usage().tokens).toBeNull();
   });
 });

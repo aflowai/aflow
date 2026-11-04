@@ -45,6 +45,21 @@ export function benchmarkVerdict(attempt: BenchmarkAttemptResult): 'pass' | 'fai
 }
 
 /**
+ * The run row's totals for one benchmark attempt: the tokens and cost the
+ * attempt carries, so the row's `total_tokens` and `total_cost_cents` and the
+ * benchmark slot hold the same numbers. A count the attempt lacks is NULL.
+ */
+export function benchmarkRunTotals(attempt: BenchmarkAttemptResult): {
+  totalTokens: number | null;
+  totalCostCents: number | null;
+} {
+  return {
+    totalTokens: attempt.tokens,
+    totalCostCents: attempt.costUsd === null ? null : Math.round(attempt.costUsd * 100),
+  };
+}
+
+/**
  * The ONLY code path that writes `workflow_runs.evaluation_json`. Each write
  * kind owns its slots and preserves the others: a decision write owns the
  * decision slots, an outcome write the outcome slot, and a benchmark write the
@@ -54,7 +69,9 @@ export function benchmarkVerdict(attempt: BenchmarkAttemptResult): 'pass' | 'fai
  * suiteContentHash — re-fired hooks and late error writes never clobber a
  * completed evaluation. A stored scored benchmark verdict is final for its
  * harness revision, and a run never changes which task it attempted. A
- * declined benchmark write returns the verdict the run holds.
+ * declined benchmark write returns the verdict the run holds. A benchmark
+ * write also sets the row's `total_tokens` and `total_cost_cents` to the
+ * attempt's numbers, so arm totals read from the rows alone.
  *
  * A benchmark write is refused on a run in a space with directives that has
  * recorded no decision. The envelope repair selects only NULL envelopes, so a
@@ -137,9 +154,14 @@ export async function writeRunEvaluationEnvelope(
       next = { ...(existing ?? {}), outcomeEvaluation: write.outcomeEvaluation };
     }
 
+    // A benchmark verdict lands with the attempt's totals in the same write, so
+    // the row and its benchmark slot never disagree on what the attempt spent.
     await tx
       .update(workflowRuns)
-      .set({ evaluationJson: next })
+      .set({
+        evaluationJson: next,
+        ...(write.kind === 'benchmark' ? benchmarkRunTotals(write.benchmark) : {}),
+      })
       .where(eq(workflowRuns.runId, runId));
     return { written: true };
   });

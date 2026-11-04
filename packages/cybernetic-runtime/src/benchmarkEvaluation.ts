@@ -15,6 +15,7 @@ import {
 
 import { completeRun, recordRunStart } from './ledger/runs.js';
 import {
+  benchmarkRunTotals,
   writeRunEvaluationEnvelope,
   type RunEvaluationEnvelopeWrite,
 } from './runEvaluationEnvelope.js';
@@ -229,9 +230,10 @@ export async function createBareHarnessRun(
     attempt.failureClass === 'agent_failed' ||
     attempt.failureClass === 'agent_timeout' ||
     attempt.failureClass === 'materialize_failed';
+  const { totalTokens, totalCostCents } = benchmarkRunTotals(attempt);
   const totals = {
-    ...(attempt.tokens !== null ? { totalTokens: attempt.tokens } : {}),
-    ...(attempt.costUsd !== null ? { totalCostCents: Math.round(attempt.costUsd * 100) } : {}),
+    ...(totalTokens !== null ? { totalTokens } : {}),
+    ...(totalCostCents !== null ? { totalCostCents } : {}),
   };
   await completeRun(
     db,

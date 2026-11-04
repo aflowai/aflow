@@ -9,8 +9,9 @@
  *       [--tenant <tenantId> --space <spaceId>] [-- <agent command>...]
  *   yarn bench:swe-pro grade --task <task.json> --work-root <dir> --harness <dir>
  *       --arm <bare_harness|loop|loop_with_learning> --agent-outcome <ok|failed|timeout>
- *       --wall-ms <n> [--tokens <n>] [--cost-usd <x>] [--folder <dir>]
+ *       --wall-ms <n> [--folder <dir>]
  *       [--tenant <tenantId> --space <spaceId> [--run <runId>]]
+ *       [--tokens <n>] [--cost-usd <x>]   (bare_harness only)
  *
  * `--task` names one record of the published SWE-bench Pro set as JSON.
  * `--harness` names a checkout of the official harness (scaleapi/SWE-bench_Pro-os).
@@ -23,7 +24,10 @@
  * no remote and no tag, so no ref in it reaches a later commit or the gold fix.
  * The loop's arms run between `materialize` and `grade`: the folder is bound
  * to the measurement space through the host lane (D5), the loop works it, and
- * `grade` takes the outcome, tokens, cost and wall time its run reported.
+ * `grade` takes the outcome and wall time its run reported. A loop arm's
+ * tokens and cost are read from the usage each harness reported on the run
+ * and on every run it started (`readRunUsage`), so `grade` refuses them as
+ * flags there.
  * The loop leaves the folder as it found it, so `grade` reads a loop arm's
  * patch from the run `--run` names and grades it as it stands. A Commission
  * Change run holds its patch at its `patchRef`. A Review Rounds run (Plan 341
@@ -52,13 +56,14 @@ import {
   createBareHarnessRun,
   designateMeasurementSpace,
   loadRunById,
+  startedRunOf,
   writeBenchmarkAttemptEvaluation,
 } from '@aflow/cybernetic-runtime';
-import { closeConnection, getDatabase } from '@aflow/database';
+import { closeConnection, getDatabase, resolveWorkflowForRunRevision } from '@aflow/database';
 import { resolvePayloadStore } from '@aflow/payload-store';
 import { createRedisConnection, getRedisConfig, quitRedisWithTimeout } from '@aflow/redis';
 import { BenchmarkArmSchema, BenchmarkAttemptResultSchema, parsePayloadRef } from '@aflow/schemas';
-import type { BenchmarkArm, BenchmarkAttemptResult } from '@aflow/schemas';
+import type { BenchmarkArm, BenchmarkAttemptResult, TenantId } from '@aflow/schemas';
 
 import {
   createCommandAgent,
@@ -67,6 +72,7 @@ import {
   parseAgentOutcome,
   parseTask,
   readRunPatch,
+  readRunUsage,
   runAttempt,
 } from './swe-bench-pro.mjs';
 
@@ -171,31 +177,50 @@ async function recordTarget(arm: BenchmarkArm): Promise<RecordTarget | undefined
 }
 
 /**
- * The loop arm's patch, read from the run that holds it through the
- * platform's own run load, output build and payload store (`readRunPatch`).
+ * The loop arm's patch and spend, read from the runs that hold them through
+ * the platform's own run load, output build, workflow resolution and payload
+ * store (`readRunPatch`, `readRunUsage`).
  */
-async function loopPatch(
+async function loopRecord(
   task: ReturnType<typeof parseTask>,
   target: RecordTarget & { runId: string },
   folder: string | undefined,
-): Promise<string> {
+): Promise<{ patch: string; usage: Awaited<ReturnType<typeof readRunUsage>> }> {
   const db = getDatabase();
   const redis = createRedisConnection(getRedisConfig());
   try {
     const resolved = resolvePayloadStore({ redis });
     if (resolved === null)
       fail("No payload store is configured, so the run's patch cannot be read.");
-    return await readRunPatch(task, target, {
+    const loadRun = (runId: string) => loadRunById(db, target.tenantId, target.spaceId, runId);
+    const retrieve = (ref: string) => resolved.store.retrieve(ref);
+    const patch = await readRunPatch(task, target, {
       ...(folder === undefined ? {} : { folder }),
-      loadRun: (runId: string) => loadRunById(db, target.tenantId, target.spaceId, runId),
+      loadRun,
       buildResult: (run) =>
         buildWorkflowRunResult(
           { db, payloadStore: resolved.store },
           { tenantId: target.tenantId, run, scope: 'partial' },
         ),
-      retrieve: (patchRef: string) => resolved.store.retrieve(patchRef),
+      retrieve,
       parsePayloadRef,
     });
+    const usage = await readRunUsage(target, {
+      loadRun,
+      workflowTasks: async (run) =>
+        (
+          await resolveWorkflowForRunRevision(
+            db,
+            target.tenantId as TenantId,
+            target.spaceId,
+            run.workflowSlug,
+            run.workflowRevision,
+          )
+        ).workflow.tasks,
+      retrieve,
+      startedRunOf,
+    });
+    return { patch, usage };
   } finally {
     await quitRedisWithTimeout(redis);
   }
@@ -307,13 +332,25 @@ async function main(): Promise<void> {
     const folderFlag = flag('folder');
     const folder = folderFlag === undefined ? undefined : resolve(folderFlag);
     let patch: string | undefined;
+    let spent = { tokens: optionalRound(count('tokens')), costUsd: count('cost-usd') ?? null };
     if (arm !== 'bare_harness') {
       if (target?.runId === undefined) {
         fail(
           `Grading a ${arm} attempt needs --tenant, --space and --run, because the loop's patch is on its run.`,
         );
       }
-      patch = await loopPatch(task, { ...target, runId: target.runId }, folder);
+      if (flag('tokens') !== undefined || flag('cost-usd') !== undefined) {
+        fail(
+          `A ${arm} attempt takes no --tokens or --cost-usd. They are read from the usage its harnesses reported on its runs.`,
+        );
+      }
+      const record = await loopRecord(task, { ...target, runId: target.runId }, folder);
+      patch = record.patch;
+      spent = { tokens: record.usage.tokens, costUsd: record.usage.costUsd };
+      console.error(
+        `Read the spend of runs ${record.usage.runIds.join(', ')}: ${String(spent.tokens ?? 'unknown')} tokens, ${spent.costUsd === null ? 'unknown cost' : `$${String(spent.costUsd)}`}.`,
+      );
+      for (const reason of record.usage.unknown) console.error(`Not counted: ${reason}.`);
     } else if (folder === undefined) {
       fail('Grading a bare_harness attempt needs --folder, the folder the agent worked.');
     }
@@ -325,8 +362,7 @@ async function main(): Promise<void> {
       gradeDir,
       agent: {
         ...outcome,
-        tokens: optionalRound(count('tokens')),
-        costUsd: count('cost-usd') ?? null,
+        ...spent,
         wallTimeMs,
       },
     });

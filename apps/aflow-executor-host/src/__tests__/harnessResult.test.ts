@@ -233,12 +233,14 @@ describe('the wire contract', () => {
       exitCode: 0,
       timedOut: false,
       durationMs: 10,
+      usage: { tokens: 1200, costUsd: 0.0123 },
       truncated: false,
       applies: 'empty',
       headMoved: false,
       blockedDomains: [],
     });
     expect(output.result).toEqual({ verdict: 'sound' });
+    expect(output.usage).toEqual({ tokens: 1200, costUsd: 0.0123 });
     // The name a card shows comes from the result, not from reading the step's
     // input back — a call that named no harness has no id there at all.
     expect(output.harness).toEqual({ id: 'claude', label: 'Claude Code', selectedBy: 'default' });

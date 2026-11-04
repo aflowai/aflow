@@ -991,6 +991,7 @@ function answer(taskId: string, input: Record<string, unknown>, s: Scenario): An
         exitCode: 0,
         timedOut: false,
         durationMs: 1,
+        usage: { tokens: 1, costUsd: 0.01 },
         truncated: false,
         applies: 'clean',
         headMoved: false,
