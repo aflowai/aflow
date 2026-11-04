@@ -260,9 +260,26 @@ whether writes are allowed. Bindings are declared on the machine, in a file no
 job can write, and an operation cannot widen one — a path outside a binding is
 refused rather than resolved.
 
-Get a code from the workspace — **Settings → This Computer → Connect a folder**
-— then run one command in the folder you want it to reach. The code lasts a few
-minutes, works once, and can do nothing but connect folders to that space.
+**This needs a clone of this repository**, with Node 22 and Yarn 4, on the
+machine that holds the folders. The host executor ships outside the image, so the
+release bundle does not carry it. Every command in this section and the ones
+below runs from that clone. The appliance stays the running stack, so the clone
+needs `yarn install` and not `yarn start`:
+
+```bash
+git clone https://github.com/aflowai/aflow.git && cd aflow
+corepack enable
+yarn install
+```
+
+Get a code from the workspace — **This Computer** in the sidebar, then **Connect
+a folder** and **Get a code** — and run the command the page shows. **Copy
+command** copies it. The code lasts a few minutes, works once, and can do nothing
+but connect folders to that space.
+
+The setup list of a coding space writes this command as `aflow connect <code>`
+followed by flags. No command named `aflow` is installed. Run the command the
+page shows, with the same flags.
 
 ```bash
 # From your aflow checkout — `yarn workspace` resolves from there.
@@ -353,8 +370,8 @@ Pairing establishes who the machine is; the bindings say what it may reach.
 They are deliberately separate, so connecting one project does not imply
 trusting every future one.
 
-A folder is reachable only where both halves agree. The workspace connects it in
-**Settings → This Computer**, the machine offers it in its policy file, and what
+A folder is reachable only where both halves agree. The workspace connects it on
+**This Computer**, in the sidebar, the machine offers it in its policy file, and what
 applies is the intersection — so an appliance cannot invent access to a folder
 the machine never offered, and a folder the machine offers is unused until a
 workspace connects it. Pairing prints both mismatches, because a name typed
@@ -417,6 +434,12 @@ uncommitted work is untouched, two runs cannot collide, and the result is a diff
 to review rather than an edit already made. The clone's branches and tags are its
 own, so nothing the agent does with git moves the repository's. Nothing is
 committed, pushed or applied.
+
+Like connecting a folder, this runs from a clone of this repository, with Node 22
+and Yarn 4. The README's
+[walkthrough](../../README.md#from-install-to-your-first-approved-pull-request)
+takes it from install to a first approved pull request, every command and screen
+in order.
 
 ```bash
 # What is installed here, and what is allowed to run:
