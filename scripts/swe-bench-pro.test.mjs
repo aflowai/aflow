@@ -166,6 +166,111 @@ describe('the fixture task', () => {
     expect(holdsCommit(folder, goldFix)).toBe(false);
   });
 
+  describe('from a server that refuses an unadvertised commit', () => {
+    /**
+     * Local git serves any commit by id over protocol v2. GitHub and most
+     * servers check what is asked for, so this stand-in drops the protocol
+     * request and serves protocol v0, which refuses a commit no ref names.
+     */
+    function strictServer() {
+      const script = join(scratch, 'upload-pack-v0.sh');
+      writeFileSync(script, '#!/bin/sh\nunset GIT_PROTOCOL\nexec git upload-pack "$@"\n', {
+        mode: 0o755,
+      });
+      const calls = [];
+      const strict = (command, args, options) => {
+        calls.push(args);
+        const at = args.indexOf('fetch');
+        const served =
+          at === -1
+            ? args
+            : [...args.slice(0, at + 1), `--upload-pack=${script}`, ...args.slice(at + 1)];
+        return exec(command, served, options);
+      };
+      return { strict, calls };
+    }
+
+    /** A base one commit below the head of pull request 9, with the gold fix on pull request 12. */
+    function pullRequestOnlyBase() {
+      git(upstream, 'switch', '--quiet', '--detach', baseCommit);
+      writeFileSync(join(upstream, 'pr.py'), 'print("the base")\n');
+      git(upstream, 'add', '.');
+      git(upstream, 'commit', '--quiet', '-m', 'the base, on the pull request only');
+      const prBase = git(upstream, 'rev-parse', 'HEAD').trim();
+      writeFileSync(join(upstream, 'pr.py'), 'print("past the base")\n');
+      git(upstream, 'commit', '--quiet', '-am', 'the pull request head');
+      const prHead = git(upstream, 'rev-parse', 'HEAD').trim();
+      git(upstream, 'update-ref', 'refs/pull/9/head', prHead);
+      writeFileSync(join(upstream, 'pr.py'), 'print("the gold fix")\n');
+      git(upstream, 'commit', '--quiet', '-am', 'the gold fix');
+      const goldFix = git(upstream, 'rev-parse', 'HEAD').trim();
+      git(upstream, 'update-ref', 'refs/pull/12/head', goldFix);
+      git(upstream, 'switch', '--quiet', 'main');
+      return { prBase, prHead, goldFix };
+    }
+
+    it('the stand-in server refuses the base by its id', () => {
+      const { prBase } = pullRequestOnlyBase();
+      const { strict } = strictServer();
+      const probe = join(scratch, 'probe');
+      git(scratch, 'init', '--quiet', probe);
+      return strict('git', [
+        `--git-dir=${join(probe, '.git')}`,
+        'fetch',
+        '--quiet',
+        '--',
+        upstream,
+        prBase,
+      ]).then((result) => {
+        expect(result.code).not.toBe(0);
+        expect(result.stderr).toMatch(/unadvertised object/);
+      });
+    });
+
+    it('checks out a base reachable only from a pull-request ref, and prunes past it', async () => {
+      const { prBase, prHead, goldFix } = pullRequestOnlyBase();
+      const { strict, calls } = strictServer();
+
+      const folder = await materializeTask(fixtureTask({ base_commit: prBase }), {
+        workRoot: join(scratch, 'work'),
+        repoUrl: upstream,
+        exec: strict,
+      });
+
+      expect(git(folder, 'rev-parse', 'HEAD').trim()).toBe(prBase);
+      expect(readFileSync(join(folder, 'pr.py'), 'utf8')).toContain('the base');
+      expect(git(folder, 'for-each-ref', '--format=%(refname)').trim()).toBe('');
+      expect(git(folder, 'remote').trim()).toBe('');
+      expect(git(folder, 'rev-list', '--all').trim().split('\n')).toEqual([prBase, baseCommit]);
+      expect(holdsCommit(folder, prHead)).toBe(false);
+      expect(holdsCommit(folder, goldFix)).toBe(false);
+      const fetches = calls.filter((args) => args.includes('fetch'));
+      expect(fetches.map((args) => args.slice(-3))).toEqual([
+        ['--', upstream, prBase],
+        ['--', upstream, '+refs/pull/*/head:refs/materialize/pull/*'],
+      ]);
+    });
+
+    it('leaves no folder behind when no pull-request ref reaches the base', async () => {
+      pullRequestOnlyBase();
+      git(upstream, 'switch', '--quiet', '--detach', baseCommit);
+      writeFileSync(join(upstream, 'orphan.py'), 'print("on no ref")\n');
+      git(upstream, 'add', '.');
+      git(upstream, 'commit', '--quiet', '-m', 'on no ref');
+      const unreachable = git(upstream, 'rev-parse', 'HEAD').trim();
+      git(upstream, 'switch', '--quiet', 'main');
+      const { strict } = strictServer();
+      const workRoot = join(scratch, 'work');
+      const task = fixtureTask({ base_commit: unreachable });
+
+      const refused = materializeTask(task, { workRoot, repoUrl: upstream, exec: strict });
+
+      await expect(refused).rejects.toMatchObject({ failureClass: 'materialize_failed' });
+      await expect(refused).rejects.toThrow(/From the pull-request refs: no pull-request ref/);
+      expect(existsSync(join(workRoot, task.instanceId))).toBe(false);
+    });
+  });
+
   it('leaves no folder behind when the base commit does not fetch', async () => {
     const workRoot = join(scratch, 'work');
     const task = fixtureTask({ base_commit: 'f'.repeat(40) });
