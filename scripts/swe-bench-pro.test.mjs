@@ -658,6 +658,15 @@ describe("a loop arm's patch, read from its run", () => {
     runId: 'run-commission',
     workflowSlug: COMMISSION_SLUG,
     status: 'completed',
+    tasks: [],
+    ...over,
+  });
+  const outputRef = (task) =>
+    `gs://redis-store/tenants/t1/runs/r1/steps/${task}/attempt/1/output.json`;
+  const taskRow = (taskId, over = {}) => ({
+    taskId,
+    status: 'succeeded',
+    outputRef: outputRef(taskId),
     ...over,
   });
 
@@ -692,10 +701,59 @@ describe("a loop arm's patch, read from its run", () => {
     expect(calls.retrieved).toEqual([patchRef]);
   });
 
-  it('grades a run whose built output is empty as an empty patch, reading no payload', async () => {
-    const { calls, options } = platform({ result: { output: null } });
+  it('grades a run that ended with no patch as an empty patch, once every task output is read', async () => {
+    const { calls, options } = platform({
+      run: row({
+        status: 'failed',
+        tasks: [
+          taskRow('inspect'),
+          taskRow('commission', { status: 'failed', outputRef: null }),
+          taskRow('skipped', { status: 'skipped' }),
+        ],
+      }),
+      result: { output: null },
+      retrieve: async () => ({ ready: true }),
+    });
     expect(await readRunPatch(fixtureTask(), target, options)).toBe('');
-    expect(calls.retrieved).toEqual([]);
+    expect(calls.retrieved).toEqual([outputRef('inspect')]);
+  });
+
+  it.each([
+    [
+      'the store cannot read',
+      async () => {
+        throw new Error('payload not found');
+      },
+      /payload not found/,
+    ],
+    ['the store holds no object for', async () => 'not an object', /no output object at its ref/],
+    ['the store holds null for', async () => null, /no output object at its ref/],
+  ])(
+    'refuses a run with a task output %s, where the built output shows no patch',
+    async (_name, readOutput, reason) => {
+      const { calls, options } = platform({
+        run: row({ tasks: [taskRow('inspect'), taskRow('commission')] }),
+        // The platform's build leaves out an output it cannot read, so the run looks patchless.
+        result: { output: { summary: 'Make add() add' } },
+        retrieve: async (ref) => (ref === outputRef('commission') ? readOutput() : { ready: true }),
+      });
+      const refusal = readRunPatch(fixtureTask(), target, options);
+      await expect(refusal).rejects.toThrow(
+        "The output of task commission of run run-commission cannot be read, so the run's patch is unknown.",
+      );
+      await expect(refusal).rejects.toThrow(reason);
+      expect(calls.built).toEqual([]);
+      expect(calls.retrieved).toEqual([outputRef('inspect'), outputRef('commission')]);
+    },
+  );
+
+  it('grades a run whose task outputs all read and whose output names its patch', async () => {
+    const { calls, options } = platform({
+      run: row({ tasks: [taskRow('commission')] }),
+      retrieve: async (ref) => (ref === patchRef ? stored : { patchRef, baseSha: baseCommit }),
+    });
+    expect(await readRunPatch(fixtureTask(), target, options)).toBe(stored);
+    expect(calls.retrieved).toEqual([outputRef('commission'), patchRef]);
   });
 
   it('reads the review rounds head from the folder the run names', async () => {

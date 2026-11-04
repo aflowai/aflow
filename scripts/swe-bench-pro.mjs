@@ -472,7 +472,9 @@ const ENDED_RUN_STATUSES = new Set(['completed', 'failed', 'cancelled']);
  * `<base>..<headSha>` there. Either way the run says where the patch is, and
  * no one applies it to the folder first.
  *
- * A run that ended with no patch grades as an empty patch. A run still going,
+ * A run that ended with no patch grades as an empty patch. `readRunPatch`
+ * reads the run's output whole first, because an output left out would read
+ * here as no patch. A run still going,
  * or one that worked another base, is refused, because its patch is not this
  * attempt's.
  *
@@ -532,11 +534,21 @@ export async function readLoopPatch(task, run, { folder, readPatch, exec = runCo
  * Its `patchRef` is read from the payload store the services share, so no
  * patch passes through the operator's hands.
  *
+ * The platform builds a run's output best-effort: a task output the store
+ * cannot read is left out, so a lost `patchRef` would read as no patch. A
+ * run grades as an empty patch only once every succeeded task's stored
+ * output has been read, and a run with any output unread is refused.
+ *
  * The `patchRef` is data on the run, so only an object ref of kind `patch`
  * of this tenant reaches the store. Each platform call is passed in, so the
  * command line supplies the platform's own and the tests supply stand-ins.
  *
- * @template {{ runId: string, workflowSlug: string, status: string }} Run
+ * @template {{
+ *   runId: string,
+ *   workflowSlug: string,
+ *   status: string,
+ *   tasks: ReadonlyArray<{ taskId: string, status: string, outputRef: string | null }>,
+ * }} Run
  * @param {{ baseCommit: string }} task
  * @param {{ tenantId: string, spaceId: string, runId: string }} target
  * @param {{
@@ -556,6 +568,7 @@ export async function readRunPatch(
 ) {
   const run = await loadRun(target.runId);
   if (run === null) throw new Error(`Run ${target.runId} is not in space ${target.spaceId}.`);
+  await readEveryTaskOutput(run, retrieve);
   const result = await buildResult(run);
   if (result === undefined) {
     throw new Error(`The output of run ${target.runId} cannot be read, so its patch is unknown.`);
@@ -585,6 +598,30 @@ export async function readRunPatch(
       },
     },
   );
+}
+
+/**
+ * Read the stored output of each succeeded task of a run, and refuse the run
+ * if any of them cannot be read. The output build reads them again, but it
+ * leaves out what it cannot read, so only this read says one is missing.
+ *
+ * @param {{ runId: string, tasks: ReadonlyArray<{ taskId: string, status: string, outputRef: string | null }> }} run
+ * @param {(ref: string) => Promise<unknown>} retrieve
+ */
+async function readEveryTaskOutput(run, retrieve) {
+  for (const task of run.tasks) {
+    if (task.status !== 'succeeded' || !task.outputRef) continue;
+    const unread = `The output of task ${task.taskId} of run ${run.runId} cannot be read, so the run's patch is unknown.`;
+    let output;
+    try {
+      output = await retrieve(task.outputRef);
+    } catch (error) {
+      throw new Error(`${unread} ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (output === null || typeof output !== 'object' || Array.isArray(output)) {
+      throw new Error(`${unread} The store holds no output object at its ref.`);
+    }
+  }
 }
 
 /**

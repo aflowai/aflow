@@ -190,6 +190,7 @@ The machinery's pieces are these:
 - Arms (b) and (c) run between `materialize` and `grade`, with the folder bound to Proving Ground through the host lane. `grade` records on the loop's run named by `--run`, and takes the loop's outcome as `--agent-outcome`.
 - The loop leaves the bound folder as it found it, so `grade` reads a loop arm's patch from the run `--run` names. A Commission Change run holds its patch at its `patchRef`, read from the payload store the services share. A Review Rounds run holds it as `<baseSha>..<headSha>` in the folder. Nothing is applied to the folder by hand before grading.
 - `grade` refuses a run still going, a run that worked another base and a run of any other skill. A run that ended with no patch grades as an empty patch.
+- `grade` reads every succeeded task's stored output before it grades a run as an empty patch. The platform's output build leaves out an output it cannot read, so a run with an unread output is refused and gets no grade.
 - The evaluation writer is `writeBenchmarkAttemptEvaluation` in `@aflow/cybernetic-runtime`. It refuses a run outside the measurement space before any write. It also refuses an eval-batch trial and a run marked as another attempt.
 - The writer writes through `writeRunEvaluationEnvelope` into the envelope's `benchmark` slot only. A production suite's `decision` and `summary` on the same run stay as the suite wrote them.
 - A bare-harness run records the decision `no_suite` when the runner creates it, because no post-run hook fires for it.
