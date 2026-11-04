@@ -3,9 +3,6 @@ contact_links:
   - name: Question or installation help
     url: https://github.com/aflowai/aflow/discussions/categories/q-a
     about: Getting Aflow running, or working out how to do something with it.
-  - name: Discussions
-    url: https://github.com/aflowai/aflow/discussions
-    about: Ideas, show-and-tell, and anything that is not yet an issue.
   - name: README
     url: https://github.com/aflowai/aflow#readme
     about: The quick start, the install paths, and where the docs live.
