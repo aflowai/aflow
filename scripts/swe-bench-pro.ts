@@ -66,7 +66,7 @@ import {
   materializeTask,
   parseAgentOutcome,
   parseTask,
-  readLoopPatch,
+  readRunPatch,
   runAttempt,
 } from './swe-bench-pro.mjs';
 
@@ -171,57 +171,31 @@ async function recordTarget(arm: BenchmarkArm): Promise<RecordTarget | undefined
 }
 
 /**
- * The loop arm's patch, read from the run that holds it. The run's output is
- * read as the platform reads it, and its `patchRef` from the payload store the
- * services share, so no patch passes through the operator's hands.
+ * The loop arm's patch, read from the run that holds it through the
+ * platform's own run load, output build and payload store (`readRunPatch`).
  */
-async function readRunPatch(
+async function loopPatch(
   task: ReturnType<typeof parseTask>,
   target: RecordTarget & { runId: string },
   folder: string | undefined,
 ): Promise<string> {
   const db = getDatabase();
-  const run = await loadRunById(db, target.tenantId, target.spaceId, target.runId);
-  if (run === null) fail(`Run ${target.runId} is not in space ${target.spaceId}.`);
   const redis = createRedisConnection(getRedisConfig());
   try {
     const resolved = resolvePayloadStore({ redis });
     if (resolved === null)
       fail("No payload store is configured, so the run's patch cannot be read.");
-    const result = await buildWorkflowRunResult(
-      { db, payloadStore: resolved.store },
-      { tenantId: target.tenantId, run, scope: 'partial' },
-    );
-    if (result === undefined) {
-      fail(`The output of run ${target.runId} cannot be read, so its patch is unknown.`);
-    }
-    return await readLoopPatch(
-      task,
-      { runId: run.runId, slug: run.workflowSlug, status: run.status, output: result.output ?? {} },
-      {
-        ...(folder === undefined ? {} : { folder }),
-        readPatch: async (patchRef: string) => {
-          // The ref is data on the run, so only a diff of this tenant reaches the store.
-          const parsed = parsePayloadRef(patchRef);
-          if (
-            parsed?.form !== 'object' ||
-            parsed.payloadKind !== 'patch' ||
-            parsed.tenantId !== target.tenantId
-          ) {
-            throw new Error(
-              `The \`patchRef\` of run ${target.runId} names no diff of this tenant.`,
-            );
-          }
-          try {
-            return await resolved.store.retrieve(patchRef as PayloadRef);
-          } catch (error) {
-            throw new Error(
-              `The patch of run ${target.runId} cannot be read. Stored diffs expire, and this one may be gone. ${error instanceof Error ? error.message : String(error)}`,
-            );
-          }
-        },
-      },
-    );
+    return await readRunPatch(task, target, {
+      ...(folder === undefined ? {} : { folder }),
+      loadRun: (runId: string) => loadRunById(db, target.tenantId, target.spaceId, runId),
+      buildResult: (run) =>
+        buildWorkflowRunResult(
+          { db, payloadStore: resolved.store },
+          { tenantId: target.tenantId, run, scope: 'partial' },
+        ),
+      retrieve: (patchRef: string) => resolved.store.retrieve(patchRef as PayloadRef),
+      parsePayloadRef,
+    });
   } finally {
     await quitRedisWithTimeout(redis);
   }
@@ -339,7 +313,7 @@ async function main(): Promise<void> {
           `Grading a ${arm} attempt needs --tenant, --space and --run, because the loop's patch is on its run.`,
         );
       }
-      patch = await readRunPatch(task, { ...target, runId: target.runId }, folder);
+      patch = await loopPatch(task, { ...target, runId: target.runId }, folder);
     } else if (folder === undefined) {
       fail('Grading a bare_harness attempt needs --folder, the folder the agent worked.');
     }

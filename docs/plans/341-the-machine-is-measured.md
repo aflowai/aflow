@@ -188,7 +188,7 @@ The machinery's pieces are these:
 - `designate` marks Proving Ground as the measurement space, under `benchmarkMeasurement` in the space's metadata.
 - `attempt` runs arm (a) whole. It creates the attempt's workflow run in Proving Ground, marked under `benchmarkAttempt` in the run's metadata.
 - Arms (b) and (c) run between `materialize` and `grade`, with the folder bound to Proving Ground through the host lane. `grade` records on the loop's run named by `--run`, and takes the loop's outcome as `--agent-outcome`.
-- The loop leaves the bound folder as it found it, so `grade` reads a loop arm's patch from the run `--run` names (P2 N3, F4). A Commission Change run holds its patch at its `patchRef`, read from the payload store the services share. A Review Rounds run holds it as `<baseSha>..<headSha>` in the folder. Nothing is applied to the folder by hand before grading.
+- The loop leaves the bound folder as it found it, so `grade` reads a loop arm's patch from the run `--run` names. A Commission Change run holds its patch at its `patchRef`, read from the payload store the services share. A Review Rounds run holds it as `<baseSha>..<headSha>` in the folder. Nothing is applied to the folder by hand before grading.
 - `grade` refuses a run still going, a run that worked another base and a run of any other skill. A run that ended with no patch grades as an empty patch.
 - The evaluation writer is `writeBenchmarkAttemptEvaluation` in `@aflow/cybernetic-runtime`. It refuses a run outside the measurement space before any write. It also refuses an eval-batch trial and a run marked as another attempt.
 - The writer writes through `writeRunEvaluationEnvelope` into the envelope's `benchmark` slot only. A production suite's `decision` and `summary` on the same run stay as the suite wrote them.
@@ -197,6 +197,8 @@ The machinery's pieces are these:
 - A declined write prints the verdict the run holds and says the new verdict was not stored.
 - `benchmarkVerdict` reads the slot as `pass`, `fail` or `unscored`. An attempt the harness gave no verdict on is `unscored`, so a broken pipeline cannot lower a pass rate.
 - Tenant, space, work root and harness checkout are flags with no default.
+
+_Rejected:_ applying each commission's patch to the bound folder before `grade` captures it there. That puts a hand step between the run and its verdict. A missed or partial apply would grade a patch the run never stored, and nothing would refuse it.
 
 **P2 — Scale (D4).** _Exit:_ pass rates with intervals for all three arms are in this document.
 

@@ -32,10 +32,12 @@ import {
   parseTask,
   readAgentUsage,
   readLoopPatch,
+  readRunPatch,
   runAttempt,
   runCommand,
   taskText,
 } from './swe-bench-pro.mjs';
+import { parsePayloadRef } from '../packages/schemas/src/runtime/payloadRef.ts';
 
 const GIT_ENV = {
   GIT_AUTHOR_NAME: 'Fixture',
@@ -645,6 +647,136 @@ describe('one attempt end to end, with Docker stubbed', () => {
     });
     expect(result.attempt).toMatchObject({ passed: false, failureClass: 'materialize_failed' });
     expect(calls.some((call) => call.command === 'docker')).toBe(false);
+  });
+});
+
+describe("a loop arm's patch, read from its run", () => {
+  const target = { tenantId: 't1', spaceId: 'space-pg', runId: 'run-commission' };
+  const patchRef = 'gs://redis-store/tenants/t1/runs/r1/steps/s1/attempt/1/patch.json';
+  const stored = 'diff --git a/calc.py b/calc.py\n';
+  const row = (over = {}) => ({
+    runId: 'run-commission',
+    workflowSlug: COMMISSION_SLUG,
+    status: 'completed',
+    ...over,
+  });
+
+  /** Stand-ins for the platform's run load, output build and store read, recording each call. */
+  function platform({ run = row(), result, retrieve } = {}) {
+    const calls = { loaded: [], built: [], retrieved: [] };
+    return {
+      calls,
+      options: {
+        loadRun: async (runId) => {
+          calls.loaded.push(runId);
+          return run;
+        },
+        buildResult: async (loaded) => {
+          calls.built.push(loaded);
+          return result === undefined ? { output: { patchRef, baseSha: baseCommit } } : result;
+        },
+        retrieve: async (ref) => {
+          calls.retrieved.push(ref);
+          return retrieve === undefined ? stored : retrieve(ref);
+        },
+        parsePayloadRef,
+      },
+    };
+  }
+
+  it('loads the named run, builds its output and reads its `patchRef` from the store', async () => {
+    const { calls, options } = platform();
+    expect(await readRunPatch(fixtureTask(), target, options)).toBe(stored);
+    expect(calls.loaded).toEqual(['run-commission']);
+    expect(calls.built).toEqual([row()]);
+    expect(calls.retrieved).toEqual([patchRef]);
+  });
+
+  it('grades a run whose built output is empty as an empty patch, reading no payload', async () => {
+    const { calls, options } = platform({ result: { output: null } });
+    expect(await readRunPatch(fixtureTask(), target, options)).toBe('');
+    expect(calls.retrieved).toEqual([]);
+  });
+
+  it('reads the review rounds head from the folder the run names', async () => {
+    const task = fixtureTask();
+    const folder = await materializeTask(task, {
+      workRoot: join(scratch, 'work'),
+      repoUrl: upstream,
+      exec,
+    });
+    git(folder, 'switch', '--quiet', '-c', 'bench/calc-0001');
+    writeFileSync(join(folder, 'calc.py'), 'def add(a, b):\n    return a + b\n');
+    git(folder, 'commit', '--quiet', '-am', 'Make add() add');
+    const head = git(folder, 'rev-parse', 'HEAD').trim();
+    const { calls, options } = platform({
+      run: row({ runId: 'run-rounds', workflowSlug: REVIEW_ROUNDS_SLUG }),
+      result: { output: { baseSha: baseCommit, headSha: head } },
+    });
+    const patch = await readRunPatch(
+      task,
+      { ...target, runId: 'run-rounds' },
+      { ...options, folder, exec },
+    );
+    expect(patch).toContain('+    return a + b');
+    expect(calls.retrieved).toEqual([]);
+  });
+
+  it('refuses a run that is not in the space, before its output is built', async () => {
+    const { calls, options } = platform({ run: null });
+    await expect(readRunPatch(fixtureTask(), target, options)).rejects.toThrow(
+      'Run run-commission is not in space space-pg.',
+    );
+    expect(calls.built).toEqual([]);
+    expect(calls.retrieved).toEqual([]);
+  });
+
+  it('refuses a run whose output cannot be built, before the store is read', async () => {
+    const { calls, options } = platform();
+    options.buildResult = async () => undefined;
+    await expect(readRunPatch(fixtureTask(), target, options)).rejects.toThrow(
+      /output of run run-commission cannot be read/,
+    );
+    expect(calls.retrieved).toEqual([]);
+  });
+
+  it.each([
+    ['an inline ref', 'inline:e30='],
+    ['a ref the parser does not read', 'gs://b/p'],
+    [
+      'an object ref of another kind',
+      'gs://redis-store/tenants/t1/runs/r1/steps/s1/attempt/1/output.json',
+    ],
+    [
+      'a diff of another tenant',
+      'gs://redis-store/tenants/t2/runs/r1/steps/s1/attempt/1/patch.json',
+    ],
+  ])('refuses %s as a `patchRef`, before the store is read', async (_name, ref) => {
+    const { calls, options } = platform({
+      result: { output: { patchRef: ref, baseSha: baseCommit } },
+    });
+    await expect(readRunPatch(fixtureTask(), target, options)).rejects.toThrow(
+      'The `patchRef` of run run-commission names no diff of this tenant.',
+    );
+    expect(calls.retrieved).toEqual([]);
+  });
+
+  it('says a stored diff may have expired when the store cannot read it', async () => {
+    const { options } = platform({
+      retrieve: async () => {
+        throw new Error('payload not found');
+      },
+    });
+    await expect(readRunPatch(fixtureTask(), target, options)).rejects.toThrow(
+      /patch of run run-commission cannot be read\. Stored diffs expire, and this one may be gone\. payload not found/,
+    );
+  });
+
+  it('refuses a stored payload that is not a diff', async () => {
+    const { options } = platform({ retrieve: async () => ({ not: 'a diff' }) });
+    await expect(readRunPatch(fixtureTask(), target, options)).rejects.toThrow(
+      'The `patchRef` of run run-commission names no diff.',
+    );
   });
 });
 

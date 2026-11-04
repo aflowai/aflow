@@ -527,6 +527,67 @@ export async function readLoopPatch(task, run, { folder, readPatch, exec = runCo
 }
 
 /**
+ * The loop arm's patch, read from the run `--run` names in the measurement
+ * space. The run is loaded and its output built as the platform builds it.
+ * Its `patchRef` is read from the payload store the services share, so no
+ * patch passes through the operator's hands.
+ *
+ * The `patchRef` is data on the run, so only an object ref of kind `patch`
+ * of this tenant reaches the store. Each platform call is passed in, so the
+ * command line supplies the platform's own and the tests supply stand-ins.
+ *
+ * @template {{ runId: string, workflowSlug: string, status: string }} Run
+ * @param {{ baseCommit: string }} task
+ * @param {{ tenantId: string, spaceId: string, runId: string }} target
+ * @param {{
+ *   folder?: string,
+ *   loadRun: (runId: string) => Promise<Run | null>,
+ *   buildResult: (run: Run) => Promise<{ output?: Record<string, unknown> | null } | undefined>,
+ *   retrieve: (patchRef: string) => Promise<unknown>,
+ *   parsePayloadRef: (ref: string) => { form: string, payloadKind?: string, tenantId?: string } | null,
+ *   exec?: typeof runCommand,
+ * }} options
+ * @returns {Promise<string>}
+ */
+export async function readRunPatch(
+  task,
+  target,
+  { folder, loadRun, buildResult, retrieve, parsePayloadRef, exec = runCommand },
+) {
+  const run = await loadRun(target.runId);
+  if (run === null) throw new Error(`Run ${target.runId} is not in space ${target.spaceId}.`);
+  const result = await buildResult(run);
+  if (result === undefined) {
+    throw new Error(`The output of run ${target.runId} cannot be read, so its patch is unknown.`);
+  }
+  return readLoopPatch(
+    task,
+    { runId: run.runId, slug: run.workflowSlug, status: run.status, output: result.output ?? {} },
+    {
+      ...(folder === undefined ? {} : { folder }),
+      exec,
+      readPatch: async (patchRef) => {
+        const parsed = parsePayloadRef(patchRef);
+        if (
+          parsed?.form !== 'object' ||
+          parsed.payloadKind !== 'patch' ||
+          parsed.tenantId !== target.tenantId
+        ) {
+          throw new Error(`The \`patchRef\` of run ${target.runId} names no diff of this tenant.`);
+        }
+        try {
+          return await retrieve(patchRef);
+        } catch (error) {
+          throw new Error(
+            `The patch of run ${target.runId} cannot be read. Stored diffs expire, and this one may be gone. ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      },
+    },
+  );
+}
+
+/**
  * Grade an attempt's patch and report the attempt as the evaluation writer
  * records it (`BenchmarkAttemptResult`). With `patch`, that patch is graded,
  * as a loop arm's run reported it (`readLoopPatch`). Without it, the patch is
