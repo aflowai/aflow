@@ -71,7 +71,9 @@ vi.mock('../ledger/runs.js', () => ({
   }),
 }));
 
-vi.mock('../runEvaluationEnvelope.js', () => ({
+vi.mock('../runEvaluationEnvelope.js', async (importOriginal) => ({
+  benchmarkRunTotals: (await importOriginal<typeof import('../runEvaluationEnvelope.js')>())
+    .benchmarkRunTotals,
   writeRunEvaluationEnvelope: vi.fn(async (_db: unknown, tenantId: string, params: unknown) => {
     writerCalls.push({ tenantId, params });
     return { written: true };

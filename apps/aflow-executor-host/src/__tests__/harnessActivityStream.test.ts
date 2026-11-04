@@ -58,6 +58,12 @@ const EVENTS: readonly Record<string, unknown>[] = [
     num_turns: 2,
     duration_ms: 6000,
     total_cost_usd: 0.25,
+    usage: {
+      input_tokens: 9,
+      output_tokens: 410,
+      cache_creation_input_tokens: 3_000,
+      cache_read_input_tokens: 20_000,
+    },
     result: ANSWER,
   },
 ];
@@ -188,6 +194,21 @@ describe.runIf(sandboxReadiness().ready)('a harness step that prints an event st
       expect(output['stdout']).toBe(ANSWER);
       expect(String(output['stdout'])).not.toContain('tool_use');
       expect(String(output['stdout'])).not.toContain('"type"');
+    },
+  );
+
+  it.skipIf(confined.skip)(
+    confined.title("carries the harness's own usage report on the result as numbers"),
+    { tags: ['listener'], timeout: 120_000 },
+    async () => {
+      const streaming = await run('streaming');
+      expect(streaming.output['usage']).toEqual({
+        tokens: 9 + 410 + 3_000 + 20_000,
+        costUsd: 0.25,
+      });
+      // A harness that prints plain text reports nothing, so nothing is guessed.
+      const talking = await run('talking');
+      expect(talking.output['usage']).toEqual({ tokens: null, costUsd: null });
     },
   );
 

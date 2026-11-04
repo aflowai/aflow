@@ -27,22 +27,38 @@ function envelopeField(task: WorkflowTask, envelopePath: 'runId' | 'outcome'): s
   return undefined;
 }
 
+function startOutputOf(task: WorkflowTask, recorded: unknown): Record<string, unknown> | undefined {
+  if (task.operation !== START_OPERATION) return undefined;
+  if (recorded === null || typeof recorded !== 'object' || Array.isArray(recorded)) {
+    return undefined;
+  }
+  return recorded as Record<string, unknown>;
+}
+
+/**
+ * The run a recorded task output says the task started, read through the
+ * task's own projection, whatever that run's ending. Undefined for a task
+ * that starts no run, or whose projection keeps no run id.
+ */
+export function startedRunOf(task: WorkflowTask, recorded: unknown): string | undefined {
+  const output = startOutputOf(task, recorded);
+  const runField = envelopeField(task, 'runId');
+  if (output === undefined || runField === undefined) return undefined;
+  const runId = output[runField];
+  return typeof runId === 'string' && runId !== '' ? runId : undefined;
+}
+
 /**
  * The run a recorded task output says the task waited on, where that run
  * ended failed — the only ending a retry in place can follow. Undefined for
  * any other task or ending.
  */
 export function failedChildRunOf(task: WorkflowTask, recorded: unknown): string | undefined {
-  if (task.operation !== START_OPERATION) return undefined;
-  if (recorded === null || typeof recorded !== 'object' || Array.isArray(recorded)) {
-    return undefined;
-  }
-  const output = recorded as Record<string, unknown>;
-  const runField = envelopeField(task, 'runId');
+  const output = startOutputOf(task, recorded);
+  const runId = startedRunOf(task, recorded);
   const outcomeField = envelopeField(task, 'outcome');
-  if (runField === undefined || outcomeField === undefined) return undefined;
-  const runId = output[runField];
-  return typeof runId === 'string' && output[outcomeField] === 'failed' ? runId : undefined;
+  if (output === undefined || runId === undefined || outcomeField === undefined) return undefined;
+  return output[outcomeField] === 'failed' ? runId : undefined;
 }
 
 /**

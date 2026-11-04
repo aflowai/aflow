@@ -7,6 +7,7 @@ const store: { value: unknown; found: boolean; directives: unknown } = {
   directives: null,
 };
 const updateCalls: unknown[] = [];
+const updateSets: Array<Record<string, unknown>> = [];
 
 vi.mock('@aflow/database', () => {
   const spaces = { id: 'id', directives: 'directives' };
@@ -32,10 +33,11 @@ vi.mock('@aflow/database', () => {
           }),
         }),
         update: () => ({
-          set: (v: { evaluationJson: unknown }) => ({
+          set: (v: { evaluationJson: unknown } & Record<string, unknown>) => ({
             where: () => {
               store.value = v.evaluationJson;
               updateCalls.push(v.evaluationJson);
+              updateSets.push(v);
               return Promise.resolve();
             },
           }),
@@ -69,6 +71,7 @@ beforeEach(() => {
   store.found = true;
   store.directives = null;
   updateCalls.length = 0;
+  updateSets.length = 0;
 });
 
 describe('writeRunEvaluationEnvelope', () => {
@@ -259,6 +262,46 @@ describe('writeRunEvaluationEnvelope', () => {
         write: { kind: 'benchmark', benchmark: { ...benchmark, harnessRevision: 'ffffff0' } },
       }),
     ).toEqual({ written: true });
+  });
+
+  it("lands a benchmark attempt's tokens and cost on the run row with the verdict, in one write", async () => {
+    const spent = { ...benchmark, tokens: 61_252, costUsd: 0.1678 };
+    await writeRunEvaluationEnvelope(db, TENANT, {
+      runId: RUN_ID,
+      write: { kind: 'benchmark', benchmark: spent },
+    });
+    expect(updateSets).toHaveLength(1);
+    expect(updateSets[0]).toMatchObject({ totalTokens: 61_252, totalCostCents: 17 });
+    expect(parseRunEvaluationEnvelope(updateSets[0]?.['evaluationJson'])?.benchmark).toMatchObject({
+      tokens: 61_252,
+      costUsd: 0.1678,
+    });
+  });
+
+  it('writes NULL totals for an attempt whose spend is unknown, and no totals for a decision', async () => {
+    await writeRunEvaluationEnvelope(db, TENANT, {
+      runId: RUN_ID,
+      write: { kind: 'benchmark', benchmark },
+    });
+    expect(updateSets[0]).toMatchObject({ totalTokens: null, totalCostCents: null });
+    await writeRunEvaluationEnvelope(db, TENANT, {
+      runId: RUN_ID,
+      write: { kind: 'decision', decision: 'no_suite' },
+    });
+    expect(updateSets[1]).not.toHaveProperty('totalTokens');
+    expect(updateSets[1]).not.toHaveProperty('totalCostCents');
+  });
+
+  it('leaves the row totals alone when a stored verdict declines the write', async () => {
+    await writeRunEvaluationEnvelope(db, TENANT, {
+      runId: RUN_ID,
+      write: { kind: 'benchmark', benchmark: { ...benchmark, tokens: 5, costUsd: 0.01 } },
+    });
+    await writeRunEvaluationEnvelope(db, TENANT, {
+      runId: RUN_ID,
+      write: { kind: 'benchmark', benchmark: { ...benchmark, tokens: 9, costUsd: 0.09 } },
+    });
+    expect(updateSets).toHaveLength(1);
   });
 
   it('refuses a benchmark write naming another task or arm than the run holds', async () => {

@@ -115,7 +115,7 @@ import {
   type HarnessSession,
 } from '../harnessSessions.js';
 import { createChatterStripper } from '../egressRefusals.js';
-import { createHarnessEventReader } from '../harnessEvents.js';
+import { addHarnessUsage, createHarnessEventReader, type HarnessUsage } from '../harnessEvents.js';
 import { isRealDirectory } from '../checkoutDependencies.js';
 import {
   borrowedReads,
@@ -888,6 +888,8 @@ async function runHarness(
     // the last turn's answer is the one that comes back — the same rule the
     // run result itself follows.
     let spoken: string | undefined;
+    // Every turn spends, so the run's usage is the sum of its turns' reports.
+    let usage: HarnessUsage | undefined;
     const startedAt = Date.now();
     // The feed of the whole run, across every turn: a retry is more of the same
     // step, and a reader watching one card should not have the earlier turns
@@ -1066,6 +1068,7 @@ async function runHarness(
         emit(visible.flush());
         events.flush();
         spoken = events.answer();
+        usage = usage === undefined ? events.usage() : addHarnessUsage(usage, events.usage());
         const reported = events.conversationId();
         if (reported !== undefined) {
           conversationId = reported;
@@ -1288,6 +1291,7 @@ async function runHarness(
       exitCode: result.exitCode,
       timedOut: result.timedOut,
       durationMs: result.durationMs,
+      usage: usage ?? { tokens: null, costUsd: null },
       // An event stream is neither the answer nor diagnostics — it is the feed,
       // and it was already emitted as one. What the result carries is what the
       // harness said.

@@ -23,6 +23,7 @@ import {
   HostHarnessPreviewFlagSchema,
   HOST_HARNESS_PREVIEW_OUTPUT_SHAPE,
 } from './hostFolderPreview.js';
+import { HOST_HARNESS_RUN_END_SHAPE } from './hostHarnessRunEnd.js';
 import { HostPushBaseMergeSchema, HostPushCheckedMergeSchema } from './hostPushMerge.js';
 
 /**
@@ -1275,9 +1276,7 @@ export const HostHarnessRunOutputSchema = z.object({
       'True when `patch` is only the start of the diff; `patchRef` holds all of it, and ' +
         '`filesChanged` counts every file.',
     ),
-  exitCode: z.number().int().nullable(),
-  timedOut: z.boolean(),
-  durationMs: z.number().int().nonnegative(),
+  ...HOST_HARNESS_RUN_END_SHAPE,
   stdout: z
     .string()
     .optional()

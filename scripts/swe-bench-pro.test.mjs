@@ -33,6 +33,7 @@ import {
   readAgentUsage,
   readLoopPatch,
   readRunPatch,
+  readRunUsage,
   runAttempt,
   runCommand,
   taskText,
@@ -984,6 +985,238 @@ describe("a loop arm's patch, read from its run", () => {
     await expect(readRunPatch(fixtureTask(), target, options)).rejects.toThrow(
       'The `patchRef` of run run-commission names no diff.',
     );
+  });
+});
+
+describe("a loop arm's tokens and cost, read from the usage its harnesses reported", () => {
+  const target = { tenantId: 't1', spaceId: 'space-pg', runId: 'run-rounds' };
+  const ref = (runId, taskId) =>
+    `gs://redis-store/tenants/t1/runs/${runId}/steps/${taskId}/attempt/1/output.json`;
+  const succeeded = (runId, taskId) => ({
+    taskId,
+    status: 'succeeded',
+    outputRef: ref(runId, taskId),
+  });
+  const harnessTask = (taskId) => ({ taskId, operation: 'host.harness.run' });
+  const startTask = (taskId, runField) => ({
+    taskId,
+    operation: 'workflow.run.start',
+    outputProjection: { [runField]: { path: 'runId', onMissing: 'error' } },
+  });
+  const harnessOutput = (tokens, costUsd) => ({
+    exitCode: 0,
+    // The status line rounds the cost. The numbers are read from `usage`, never from it.
+    stdout: `Finished in 12.8s · 3 turns · $${costUsd === null ? '?' : costUsd.toFixed(4)}`,
+    usage: { tokens, costUsd },
+  });
+
+  /**
+   * A rounds run that took a commission, had one review and one fix round:
+   * three harness runs across four workflow runs.
+   */
+  function loop({ outputs = {}, runs = {}, definitions = {} } = {}) {
+    const allRuns = {
+      'run-rounds': {
+        runId: 'run-rounds',
+        workflowSlug: REVIEW_ROUNDS_SLUG,
+        status: 'completed',
+        metadata: {
+          parentTaskInputs: { taskId: 'read-commission', inputs: { commission: 'run-c1' } },
+        },
+        tasks: [
+          succeeded('run-rounds', 'read-commission'),
+          succeeded('run-rounds', 'review-1'),
+          succeeded('run-rounds', 'fix-1'),
+          { taskId: 'review-2', status: 'skipped', outputRef: null },
+        ],
+      },
+      'run-c1': {
+        runId: 'run-c1',
+        workflowSlug: COMMISSION_SLUG,
+        status: 'completed',
+        tasks: [succeeded('run-c1', 'inspect'), succeeded('run-c1', 'commission')],
+      },
+      'run-review': {
+        runId: 'run-review',
+        workflowSlug: 'review-local-changes',
+        status: 'completed',
+        tasks: [succeeded('run-review', 'review')],
+      },
+      'run-c2': {
+        runId: 'run-c2',
+        workflowSlug: COMMISSION_SLUG,
+        status: 'completed',
+        tasks: [succeeded('run-c2', 'commission')],
+      },
+      ...runs,
+    };
+    const allDefinitions = {
+      'review-rounds': [
+        { taskId: 'read-commission', operation: 'workflow.run.detail' },
+        startTask('review-1', 'reviewRunId'),
+        startTask('fix-1', 'commissionRunId'),
+        startTask('review-2', 'reviewRunId'),
+      ],
+      'commission-change': [
+        { taskId: 'inspect', operation: 'host.file.list' },
+        harnessTask('commission'),
+      ],
+      'review-local-changes': [harnessTask('review')],
+      ...definitions,
+    };
+    const allOutputs = {
+      [ref('run-rounds', 'read-commission')]: { status: 'completed', runId: 'run-c1' },
+      [ref('run-rounds', 'review-1')]: { reviewRunId: 'run-review', outcome: 'completed' },
+      [ref('run-rounds', 'fix-1')]: { commissionRunId: 'run-c2', outcome: 'completed' },
+      [ref('run-c1', 'inspect')]: { files: [] },
+      [ref('run-c1', 'commission')]: harnessOutput(40_000, 0.1678),
+      [ref('run-review', 'review')]: harnessOutput(15_000, 0.05),
+      [ref('run-c2', 'commission')]: harnessOutput(5_000, 0.0213),
+      ...outputs,
+    };
+    const calls = { loaded: [] };
+    return {
+      calls,
+      options: {
+        loadRun: async (runId) => {
+          calls.loaded.push(runId);
+          return allRuns[runId] ?? null;
+        },
+        workflowTasks: async (run) => allDefinitions[run.workflowSlug] ?? [],
+        retrieve: async (outputRef) => {
+          if (!(outputRef in allOutputs)) throw new Error(`no payload at ${outputRef}`);
+          return allOutputs[outputRef];
+        },
+        // The platform reads a started run's id through the task's projection.
+        startedRunOf: (task, output) => {
+          const field = Object.entries(task.outputProjection ?? { runId: { path: 'runId' } }).find(
+            ([, spec]) => spec.path === 'runId',
+          )?.[0];
+          return field === undefined ? undefined : output?.[field];
+        },
+      },
+    };
+  }
+
+  it('sums the usage of every harness run the loop made, across the runs it started and the commission it took', async () => {
+    const { calls, options } = loop();
+    const usage = await readRunUsage(target, options);
+    expect(usage).toEqual({
+      tokens: 40_000 + 15_000 + 5_000,
+      costUsd: 0.2391,
+      runIds: ['run-rounds', 'run-c1', 'run-review', 'run-c2'],
+      unknown: [],
+    });
+    expect(typeof usage.tokens).toBe('number');
+    expect(typeof usage.costUsd).toBe('number');
+    expect(calls.loaded).toEqual(['run-rounds', 'run-c1', 'run-review', 'run-c2']);
+  });
+
+  it("reads a commission run's spend on its own", async () => {
+    const { options } = loop();
+    expect(await readRunUsage({ ...target, runId: 'run-c1' }, options)).toEqual({
+      tokens: 40_000,
+      costUsd: 0.1678,
+      runIds: ['run-c1'],
+      unknown: [],
+    });
+  });
+
+  it('reports the tokens as unknown where one harness reported none, and keeps the cost', async () => {
+    const { options } = loop({
+      outputs: { [ref('run-review', 'review')]: harnessOutput(null, 0.05) },
+    });
+    const usage = await readRunUsage(target, options);
+    expect(usage.tokens).toBeNull();
+    expect(usage.costUsd).toBe(0.2391);
+    expect(usage.unknown).toEqual([
+      'the harness of task review of run run-review reported no tokens',
+    ]);
+  });
+
+  it('reports a harness output with no usage at all as unknown, never as zero', async () => {
+    const { options } = loop({ outputs: { [ref('run-c2', 'commission')]: { exitCode: 0 } } });
+    const usage = await readRunUsage(target, options);
+    expect(usage).toMatchObject({ tokens: null, costUsd: null });
+  });
+
+  it('reports both as unknown where a harness task failed with no output to read', async () => {
+    const { options } = loop({
+      runs: {
+        'run-c2': {
+          runId: 'run-c2',
+          workflowSlug: COMMISSION_SLUG,
+          status: 'failed',
+          tasks: [{ taskId: 'commission', status: 'failed', outputRef: null }],
+        },
+      },
+    });
+    const usage = await readRunUsage(target, options);
+    expect(usage).toMatchObject({ tokens: null, costUsd: null });
+    expect(usage.unknown).toEqual([
+      'task commission of run run-c2 ended failed with no output to read',
+    ]);
+  });
+
+  it('refuses a run the loop started that is still going', async () => {
+    const { options } = loop({
+      runs: {
+        'run-review': {
+          runId: 'run-review',
+          workflowSlug: 'review-local-changes',
+          status: 'running',
+          tasks: [],
+        },
+      },
+    });
+    await expect(readRunUsage(target, options)).rejects.toThrow(
+      'Run run-review is running, so what it spent is not final yet.',
+    );
+  });
+
+  it('refuses a run that is not in the space', async () => {
+    const { options } = loop();
+    await expect(readRunUsage({ ...target, runId: 'run-missing' }, options)).rejects.toThrow(
+      'Run run-missing is not in space space-pg.',
+    );
+  });
+
+  it('refuses a rounds run that names no commission', async () => {
+    const { options } = loop({
+      runs: {
+        'run-rounds': {
+          runId: 'run-rounds',
+          workflowSlug: REVIEW_ROUNDS_SLUG,
+          status: 'completed',
+          metadata: {},
+          tasks: [],
+        },
+      },
+    });
+    await expect(readRunUsage(target, options)).rejects.toThrow(/names no `commission` input/);
+  });
+
+  it('records the numbers it read on the attempt the writer stores', async () => {
+    const { options } = loop();
+    const usage = await readRunUsage(target, options);
+    const { attempt } = await gradeAttempt(fixtureTask(), {
+      arm: 'loop',
+      patch: '',
+      harnessDir: join(scratch, 'harness'),
+      gradeDir: join(scratch, 'grade'),
+      agent: {
+        ok: true,
+        timedOut: false,
+        tokens: usage.tokens,
+        costUsd: usage.costUsd,
+        wallTimeMs: 1,
+      },
+      exec: async (command, args) =>
+        command === 'git' && args.includes('rev-parse')
+          ? { code: 0, stdout: 'a1b2c3d\n', stderr: '', timedOut: false }
+          : { code: 1, stdout: '', stderr: 'docker is stubbed', timedOut: false },
+    });
+    expect(attempt).toMatchObject({ arm: 'loop', tokens: 60_000, costUsd: 0.2391 });
   });
 });
 

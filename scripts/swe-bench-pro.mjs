@@ -729,13 +729,153 @@ async function readEveryTaskOutput(run, retrieve) {
   }
 }
 
+/** The operation that runs a coding harness, whose output holds the harness's usage. */
+export const HARNESS_OPERATION = 'host.harness.run';
+/** The operation that starts a run of its own, whose spend the loop's run includes. */
+const START_OPERATION = 'workflow.run.start';
+
+/**
+ * The loop's tokens and cost, read from the usage each harness reported on
+ * the run's records (Plan 341 D6). Every `host.harness.run` task of the run
+ * holds the harness's own report as `usage`, and the sum of them is what the
+ * loop spent. The walk follows every run a task of it started, so a rounds
+ * run counts its reviews and its fix rounds. A rounds run also counts the
+ * commission it took, named by its `commission` input, because arm (b) spends
+ * that commission too.
+ *
+ * A count is null wherever one harness run reported none, or a task that may
+ * have run left no output to read. A total that leaves out a run would read
+ * as a cheaper loop, so the total is unknown instead, and `unknown` says why.
+ * A run that is still going is refused, because its spend is not final.
+ *
+ * Each platform call is passed in: the run load, the workflow tasks a run
+ * ran, the store read and the platform's own read of a started run's id.
+ *
+ * @template {{
+ *   runId: string,
+ *   workflowSlug: string,
+ *   status: string,
+ *   metadata?: unknown,
+ *   tasks: ReadonlyArray<{ taskId: string, status: string, outputRef: string | null }>,
+ * }} Run
+ * @template {{ taskId: string, operation?: string | undefined }} Task
+ * @param {{ spaceId: string, runId: string }} target
+ * @param {{
+ *   loadRun: (runId: string) => Promise<Run | null>,
+ *   workflowTasks: (run: Run) => Promise<ReadonlyArray<Task>>,
+ *   retrieve: (ref: string) => Promise<unknown>,
+ *   startedRunOf: (task: Task, output: unknown) => string | undefined,
+ * }} options
+ * @returns {Promise<{ tokens: number | null, costUsd: number | null, runIds: string[], unknown: string[] }>}
+ */
+export async function readRunUsage(target, { loadRun, workflowTasks, retrieve, startedRunOf }) {
+  let tokens = 0;
+  let costUsd = 0;
+  const unknownTokens = [];
+  const unknownCost = [];
+  const runIds = [];
+  const queue = [target.runId];
+  const seen = new Set();
+  while (queue.length > 0) {
+    const runId = /** @type {string} */ (queue.shift());
+    if (seen.has(runId)) continue;
+    seen.add(runId);
+    const run = await loadRun(runId);
+    if (run === null) throw new Error(`Run ${runId} is not in space ${target.spaceId}.`);
+    if (!ENDED_RUN_STATUSES.has(run.status)) {
+      throw new Error(`Run ${runId} is ${run.status}, so what it spent is not final yet.`);
+    }
+    runIds.push(runId);
+    if (run.workflowSlug === REVIEW_ROUNDS_SLUG) {
+      const commission = commissionOf(run);
+      if (commission === undefined) {
+        throw new Error(`Run ${runId} names no \`commission\` input, so its spend is unknown.`);
+      }
+      queue.push(commission);
+    }
+    const definitions = new Map((await workflowTasks(run)).map((task) => [task.taskId, task]));
+    for (const row of run.tasks) {
+      const task = definitions.get(row.taskId);
+      const operation = task?.operation;
+      if (
+        task === undefined ||
+        (operation !== HARNESS_OPERATION && operation !== START_OPERATION)
+      ) {
+        continue;
+      }
+      // A skipped task and a task blocked behind a failure never ran.
+      if (row.status === 'skipped' || row.status === 'blocked') continue;
+      const where = `task ${row.taskId} of run ${runId}`;
+      if (row.status !== 'succeeded' || !row.outputRef) {
+        unknownTokens.push(`${where} ended ${row.status} with no output to read`);
+        unknownCost.push(`${where} ended ${row.status} with no output to read`);
+        continue;
+      }
+      const output = await retrieve(row.outputRef);
+      if (operation === START_OPERATION) {
+        const started = startedRunOf(task, output);
+        if (started === undefined) {
+          unknownTokens.push(`${where} names no run it started`);
+          unknownCost.push(`${where} names no run it started`);
+        } else queue.push(started);
+        continue;
+      }
+      const usage = usageOf(output);
+      if (usage.tokens === null) unknownTokens.push(`the harness of ${where} reported no tokens`);
+      else tokens += usage.tokens;
+      if (usage.costUsd === null) unknownCost.push(`the harness of ${where} reported no cost`);
+      else costUsd += usage.costUsd;
+    }
+  }
+  return {
+    tokens: unknownTokens.length === 0 ? tokens : null,
+    // Summed in floating point, so rounded to the micro-dollar a harness reports.
+    costUsd: unknownCost.length === 0 ? Math.round(costUsd * 1e6) / 1e6 : null,
+    runIds,
+    unknown: [...new Set([...unknownTokens, ...unknownCost])],
+  };
+}
+
+/** @param {{ metadata?: unknown }} run */
+function commissionOf(run) {
+  const metadata = run.metadata;
+  if (metadata === null || typeof metadata !== 'object') return undefined;
+  const inputs = /** @type {{ parentTaskInputs?: { inputs?: Record<string, unknown> } }} */ (
+    metadata
+  ).parentTaskInputs?.inputs;
+  const commission = inputs?.['commission'];
+  return typeof commission === 'string' && commission !== '' ? commission : undefined;
+}
+
+/**
+ * The `usage` a harness task's output holds, as `host.harness.run` reports it.
+ * @param {unknown} output
+ * @returns {{ tokens: number | null, costUsd: number | null }}
+ */
+function usageOf(output) {
+  const usage =
+    output !== null && typeof output === 'object' && !Array.isArray(output)
+      ? /** @type {Record<string, unknown>} */ (output)['usage']
+      : undefined;
+  if (usage === null || typeof usage !== 'object') return { tokens: null, costUsd: null };
+  const count = (value) =>
+    typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+  const record = /** @type {Record<string, unknown>} */ (usage);
+  const tokens = count(record['tokens']);
+  return {
+    tokens: tokens !== null && Number.isInteger(tokens) ? tokens : null,
+    costUsd: count(record['costUsd']),
+  };
+}
+
 /**
  * Grade an attempt's patch and report the attempt as the evaluation writer
  * records it (`BenchmarkAttemptResult`). With `patch`, that patch is graded,
  * as a loop arm's run reported it (`readLoopPatch`). Without it, the patch is
  * captured from the agent's changes in `folder`, as the bare harness left
- * them. The arm reports its own tokens, cost and wall time, so the loop's arm
- * grades here as the bare harness's does.
+ * them. The caller passes the agent's tokens, cost and wall time. The bare
+ * harness's come from its JSON result (`readAgentUsage`). A loop arm's come
+ * from the usage its harnesses reported on its runs (`readRunUsage`).
  */
 export async function gradeAttempt(task, options) {
   const { arm, folder, harnessDir, gradeDir, agent, exec = runCommand } = options;
