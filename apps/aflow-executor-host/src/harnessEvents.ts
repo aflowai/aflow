@@ -17,7 +17,7 @@
  * plain text, or one whose stream went wrong mid-run, still shows something
  * rather than going silent.
  */
-import type { HarnessActivityLine } from '@aflow/schemas';
+import type { HarnessActivityLine, HostHarnessUsage } from '@aflow/schemas';
 
 import type { HarnessOutputFormat } from './harnessProfiles.js';
 
@@ -56,10 +56,7 @@ export interface HarnessEventReader {
  * inside its input, so its tokens are input plus output. Codex reports no
  * cost.
  */
-export interface HarnessUsage {
-  tokens: number | null;
-  costUsd: number | null;
-}
+export type HarnessUsage = HostHarnessUsage;
 
 /** The usage of two turns of one run. A count either turn lacks is unknown for both. */
 export function addHarnessUsage(a: HarnessUsage, b: HarnessUsage): HarnessUsage {
