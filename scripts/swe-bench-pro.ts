@@ -58,7 +58,7 @@ import { closeConnection, getDatabase } from '@aflow/database';
 import { resolvePayloadStore } from '@aflow/payload-store';
 import { createRedisConnection, getRedisConfig, quitRedisWithTimeout } from '@aflow/redis';
 import { BenchmarkArmSchema, BenchmarkAttemptResultSchema, parsePayloadRef } from '@aflow/schemas';
-import type { BenchmarkArm, BenchmarkAttemptResult, PayloadRef } from '@aflow/schemas';
+import type { BenchmarkArm, BenchmarkAttemptResult } from '@aflow/schemas';
 
 import {
   createCommandAgent,
@@ -193,7 +193,7 @@ async function loopPatch(
           { db, payloadStore: resolved.store },
           { tenantId: target.tenantId, run, scope: 'partial' },
         ),
-      retrieve: (patchRef: string) => resolved.store.retrieve(patchRef as PayloadRef),
+      retrieve: (patchRef: string) => resolved.store.retrieve(patchRef),
       parsePayloadRef,
     });
   } finally {
