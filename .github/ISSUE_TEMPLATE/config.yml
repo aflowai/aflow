@@ -3,6 +3,9 @@ contact_links:
   - name: Question or installation help
     url: https://github.com/aflowai/aflow/discussions/categories/q-a
     about: Getting Aflow running, or working out how to do something with it.
+  - name: README
+    url: https://github.com/aflowai/aflow#readme
+    about: The quick start, the install paths, and where the docs live.
   - name: Security vulnerability
     url: https://github.com/aflowai/aflow/security/policy
     about: Reported privately. A public issue is disclosure.
