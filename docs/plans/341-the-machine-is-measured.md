@@ -183,7 +183,8 @@ D3 sets the pilot's arm (b) as one commission without review rounds. Its patch i
 
 The machinery's pieces are these:
 
-- The harness runner is `yarn bench:swe-pro`, a development script beside the loop's own measurement. It clones a task's repository at its base commit, captures the patch against that commit, pulls the task image and runs the official harness with local Docker.
+- The harness runner is `yarn bench:swe-pro`, a development script beside the loop's own measurement. It fetches a task's repository up to its base commit, captures the patch against that commit, pulls the task image and runs the official harness with local Docker.
+- A materialized folder's history ends at the base commit. It has no remote and no tag, so no ref in it reaches a later commit or the gold fix.
 - `designate` marks Proving Ground as the measurement space, under `benchmarkMeasurement` in the space's metadata.
 - `attempt` runs arm (a) whole. It creates the attempt's workflow run in Proving Ground, marked under `benchmarkAttempt` in the run's metadata.
 - Arms (b) and (c) run between `materialize` and `grade`, with the folder bound to Proving Ground through the host lane. `grade` records on the loop's run named by `--run`, and takes the loop's outcome as `--agent-outcome`.
