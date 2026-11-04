@@ -156,6 +156,13 @@ export function taskFolder(workRoot, task) {
  * fetches the base commit by its id, with no tags and no remote. No ref in it
  * reaches past the base, and no later object is in it. Protocol v2 is named
  * because a server takes a request for an unadvertised commit only over v2.
+ *
+ * A server may still refuse an unadvertised commit, and some SWE-bench Pro
+ * base commits are reachable only from a pull-request ref. When the fetch by
+ * id is refused, the folder fetches every `refs/pull/<n>/head` instead. Once
+ * the base is checked out, it deletes those refs and prunes every object the
+ * base does not reach. It then counts what the folder holds, and fails the
+ * attempt unless the history ends at the base.
  */
 export async function materializeTask(task, { workRoot, repoUrl, exec = runCommand }) {
   const folder = taskFolder(workRoot, task);
@@ -180,22 +187,35 @@ export async function materializeTask(task, { workRoot, repoUrl, exec = runComma
   const init = await exec('git', ['init', '--quiet', '--object-format=sha1', folder]);
   if (init.code !== 0) throw await failed(`git init ${folder} failed.\n${tail(init.stderr)}`);
   // `--git-dir` keeps the process's own directory, so a relative `repoUrl` names what it named.
-  const fetch = await exec('git', [
-    `--git-dir=${join(folder, '.git')}`,
-    '-c',
-    'protocol.version=2',
-    'fetch',
-    '--quiet',
-    '--no-tags',
-    '--no-write-fetch-head',
-    '--',
-    source,
-    task.baseCommit,
-  ]);
-  if (fetch.code !== 0) {
-    throw await failed(
-      `The base commit ${task.baseCommit} does not fetch from ${source}.\n${tail(fetch.stderr)}`,
-    );
+  const fetchFromSource = (refspec) =>
+    exec('git', [
+      `--git-dir=${join(folder, '.git')}`,
+      '-c',
+      'protocol.version=2',
+      'fetch',
+      '--quiet',
+      '--no-tags',
+      '--no-write-fetch-head',
+      '--',
+      source,
+      refspec,
+    ]);
+  const byId = await fetchFromSource(task.baseCommit);
+  const fromPullRequests =
+    byId.code === 0 ? undefined : await fetchFromSource(PULL_REQUEST_REFSPEC);
+  if (fromPullRequests !== undefined) {
+    const held = await exec('git', ['cat-file', '-e', `${task.baseCommit}^{commit}`], {
+      cwd: folder,
+    });
+    if (fromPullRequests.code !== 0 || held.code !== 0) {
+      throw await failed(
+        [
+          `The base commit ${task.baseCommit} does not fetch from ${source}.`,
+          `By its id: ${tail(byId.stderr) || 'refused'}`,
+          `From the pull-request refs: ${tail(fromPullRequests.stderr) || 'no pull-request ref reaches it'}`,
+        ].join('\n'),
+      );
+    }
   }
   const checkout = await exec('git', ['checkout', '--quiet', '--detach', task.baseCommit], {
     cwd: folder,
@@ -205,7 +225,92 @@ export async function materializeTask(task, { workRoot, repoUrl, exec = runComma
       `The base commit ${task.baseCommit} does not check out.\n${tail(checkout.stderr)}`,
     );
   }
+  if (fromPullRequests !== undefined) {
+    const pruned =
+      (await prunePastBase(folder, exec)) ??
+      (await confirmHistoryEndsAtBase(folder, task.baseCommit, exec));
+    if (pruned !== undefined) throw await failed(pruned);
+  }
   return folder;
+}
+
+/** Where the fallback fetch keeps the pull-request heads until the base is checked out. */
+const PULL_REQUEST_NAMESPACE = 'refs/materialize/pull/';
+const PULL_REQUEST_REFSPEC = `+refs/pull/*/head:${PULL_REQUEST_NAMESPACE}*`;
+
+/**
+ * Delete the fetched pull-request refs and every object only they reached.
+ * The gold fix may sit on one of them, so none may stay in the folder.
+ *
+ * @returns {Promise<string | undefined>} what failed, or nothing
+ */
+async function prunePastBase(folder, exec) {
+  const listed = await exec(
+    'git',
+    ['for-each-ref', '--format=delete %(refname)', PULL_REQUEST_NAMESPACE],
+    { cwd: folder },
+  );
+  if (listed.code !== 0) return `git for-each-ref failed.\n${tail(listed.stderr)}`;
+  const steps = [
+    { args: ['update-ref', '--stdin'], input: listed.stdout },
+    { args: ['reflog', 'expire', '--expire=now', '--all'] },
+    { args: ['gc', '--quiet', '--prune=now'] },
+  ];
+  for (const { args, input } of steps) {
+    const result = await exec('git', args, {
+      cwd: folder,
+      ...(input === undefined ? {} : { input }),
+    });
+    if (result.code !== 0) {
+      return `git ${args[0]} failed while it pruned the commits past the base.\n${tail(result.stderr)}`;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Confirm the prune has cut the history at the base, rather than trust
+ * `git gc`. No ref or reflog may reach a commit the base does not reach. The
+ * store may hold no object the base does not reach, so its object count must
+ * equal the count of objects the base reaches. A duplicate across packs makes
+ * the store's count larger, so the comparison fails safe.
+ *
+ * @returns {Promise<string | undefined>} what failed, or nothing
+ */
+async function confirmHistoryEndsAtBase(folder, baseCommit, exec) {
+  const count = async (args) => {
+    const result = await exec('git', args, { cwd: folder });
+    const value = Number(result.stdout.trim());
+    return result.code === 0 && result.stdout.trim() !== '' && Number.isSafeInteger(value)
+      ? value
+      : undefined;
+  };
+  const past = await count(['rev-list', '--count', '--all', '--reflog', '--not', baseCommit]);
+  if (past === undefined) return 'git rev-list failed while it counted the commits past the base.';
+  if (past !== 0) {
+    return `After the prune, the folder's refs still reach ${past} commits past the base ${baseCommit}.`;
+  }
+  const reached = await count(['rev-list', '--count', '--objects', baseCommit]);
+  if (reached === undefined) return 'git rev-list failed while it counted the objects of the base.';
+  const listed = await exec('git', ['count-objects', '-v'], { cwd: folder });
+  if (listed.code !== 0) return `git count-objects failed.\n${tail(listed.stderr)}`;
+  const field = (name) => {
+    const match = new RegExp(`^${name}: (\\d+)$`, 'm').exec(listed.stdout);
+    return match?.[1] === undefined ? undefined : Number(match[1]);
+  };
+  const loose = field('count');
+  const packed = field('in-pack');
+  if (loose === undefined || packed === undefined) {
+    return `git count-objects printed no object count.\n${tail(listed.stdout)}`;
+  }
+  const stored = loose + packed;
+  if (stored !== reached) {
+    return [
+      `After the prune, the folder stores ${stored} objects and the base ${baseCommit} reaches ${reached}.`,
+      'An object past the base may remain, so the attempt does not use the folder.',
+    ].join(' ');
+  }
+  return undefined;
 }
 
 /**
