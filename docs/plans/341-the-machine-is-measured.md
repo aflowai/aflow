@@ -185,7 +185,7 @@ The machinery's pieces are these:
 
 - The harness runner is `yarn bench:swe-pro`, a development script beside the loop's own measurement. It fetches a task's repository up to its base commit, captures the patch against that commit, pulls the task image and runs the official harness with local Docker.
 - A materialized folder's history ends at the base commit. It has no remote and no tag, so no ref in it reaches a later commit or the gold fix.
-- `materialize` fetches the base commit by its id, so a base that only a pull-request ref reaches checks out with no mirror (F1). Where a server refuses that fetch, `materialize` fetches every `refs/pull/<n>/head` instead. It then deletes those refs and prunes every object past the base.
+- `materialize` fetches the base commit by its id, so a base that only a pull-request ref reaches checks out with no mirror. Where a server refuses that fetch, `materialize` fetches every `refs/pull/<n>/head` instead. It then deletes those refs and prunes every object past the base. It counts what the folder still holds, and fails the attempt where a ref reaches past the base or an object remains that the base does not reach.
 - `designate` marks Proving Ground as the measurement space, under `benchmarkMeasurement` in the space's metadata.
 - `attempt` runs arm (a) whole. It creates the attempt's workflow run in Proving Ground, marked under `benchmarkAttempt` in the run's metadata.
 - Arms (b) and (c) run between `materialize` and `grade`, with the folder bound to Proving Ground through the host lane. `grade` records on the loop's run named by `--run`, and takes the loop's outcome as `--agent-outcome`.

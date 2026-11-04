@@ -161,7 +161,8 @@ export function taskFolder(workRoot, task) {
  * base commits are reachable only from a pull-request ref. When the fetch by
  * id is refused, the folder fetches every `refs/pull/<n>/head` instead. Once
  * the base is checked out, it deletes those refs and prunes every object the
- * base does not reach, so the history again ends at the base.
+ * base does not reach. It then counts what the folder holds, and fails the
+ * attempt unless the history ends at the base.
  */
 export async function materializeTask(task, { workRoot, repoUrl, exec = runCommand }) {
   const folder = taskFolder(workRoot, task);
@@ -225,7 +226,9 @@ export async function materializeTask(task, { workRoot, repoUrl, exec = runComma
     );
   }
   if (fromPullRequests !== undefined) {
-    const pruned = await prunePastBase(folder, exec);
+    const pruned =
+      (await prunePastBase(folder, exec)) ??
+      (await confirmHistoryEndsAtBase(folder, task.baseCommit, exec));
     if (pruned !== undefined) throw await failed(pruned);
   }
   return folder;
@@ -261,6 +264,51 @@ async function prunePastBase(folder, exec) {
     if (result.code !== 0) {
       return `git ${args[0]} failed while it pruned the commits past the base.\n${tail(result.stderr)}`;
     }
+  }
+  return undefined;
+}
+
+/**
+ * Confirm the prune has cut the history at the base, rather than trust
+ * `git gc`. No ref or reflog may reach a commit the base does not reach. The
+ * store may hold no object the base does not reach, so its object count must
+ * equal the count of objects the base reaches. A duplicate across packs makes
+ * the store's count larger, so the comparison fails safe.
+ *
+ * @returns {Promise<string | undefined>} what failed, or nothing
+ */
+async function confirmHistoryEndsAtBase(folder, baseCommit, exec) {
+  const count = async (args) => {
+    const result = await exec('git', args, { cwd: folder });
+    const value = Number(result.stdout.trim());
+    return result.code === 0 && result.stdout.trim() !== '' && Number.isSafeInteger(value)
+      ? value
+      : undefined;
+  };
+  const past = await count(['rev-list', '--count', '--all', '--reflog', '--not', baseCommit]);
+  if (past === undefined) return 'git rev-list failed while it counted the commits past the base.';
+  if (past !== 0) {
+    return `After the prune, the folder's refs still reach ${past} commits past the base ${baseCommit}.`;
+  }
+  const reached = await count(['rev-list', '--count', '--objects', baseCommit]);
+  if (reached === undefined) return 'git rev-list failed while it counted the objects of the base.';
+  const listed = await exec('git', ['count-objects', '-v'], { cwd: folder });
+  if (listed.code !== 0) return `git count-objects failed.\n${tail(listed.stderr)}`;
+  const field = (name) => {
+    const match = new RegExp(`^${name}: (\\d+)$`, 'm').exec(listed.stdout);
+    return match?.[1] === undefined ? undefined : Number(match[1]);
+  };
+  const loose = field('count');
+  const packed = field('in-pack');
+  if (loose === undefined || packed === undefined) {
+    return `git count-objects printed no object count.\n${tail(listed.stdout)}`;
+  }
+  const stored = loose + packed;
+  if (stored !== reached) {
+    return [
+      `After the prune, the folder stores ${stored} objects and the base ${baseCommit} reaches ${reached}.`,
+      'An object past the base may remain, so the attempt does not use the folder.',
+    ].join(' ');
   }
   return undefined;
 }

@@ -251,6 +251,50 @@ describe('the fixture task', () => {
       ]);
     });
 
+    /** The strict server, with one git step after the fetch replaced by a success that does nothing. */
+    function skipping(strict, step) {
+      return (command, args, options) =>
+        args[0] === step
+          ? Promise.resolve({ code: 0, stdout: '', stderr: '', timedOut: false })
+          : strict(command, args, options);
+    }
+
+    it('fails the attempt when the prune leaves an object past the base', async () => {
+      const { prBase } = pullRequestOnlyBase();
+      const { strict } = strictServer();
+      const workRoot = join(scratch, 'work');
+      const task = fixtureTask({ base_commit: prBase });
+
+      // With no `gc`, the refs go but the gold fix's objects stay in the store.
+      const kept = materializeTask(task, {
+        workRoot,
+        repoUrl: upstream,
+        exec: skipping(strict, 'gc'),
+      });
+
+      await expect(kept).rejects.toMatchObject({ failureClass: 'materialize_failed' });
+      await expect(kept).rejects.toThrow(/An object past the base may remain/);
+      expect(existsSync(join(workRoot, task.instanceId))).toBe(false);
+    });
+
+    it('fails the attempt when a ref still reaches past the base', async () => {
+      const { prBase } = pullRequestOnlyBase();
+      const { strict } = strictServer();
+      const workRoot = join(scratch, 'work');
+      const task = fixtureTask({ base_commit: prBase });
+
+      // With no `update-ref`, the pull-request refs stay and `gc` keeps what they reach.
+      const kept = materializeTask(task, {
+        workRoot,
+        repoUrl: upstream,
+        exec: skipping(strict, 'update-ref'),
+      });
+
+      await expect(kept).rejects.toMatchObject({ failureClass: 'materialize_failed' });
+      await expect(kept).rejects.toThrow(/still reach 2 commits past the base/);
+      expect(existsSync(join(workRoot, task.instanceId))).toBe(false);
+    });
+
     it('leaves no folder behind when no pull-request ref reaches the base', async () => {
       pullRequestOnlyBase();
       git(upstream, 'switch', '--quiet', '--detach', baseCommit);
