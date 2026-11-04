@@ -1,0 +1,43 @@
+name: Usage feedback
+description: How Aflow went for you — what worked, and what stopped you
+labels: [feedback]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A few lines are enough. A defect with steps to reproduce fits better as a bug report.
+  - type: dropdown
+    id: install
+    attributes:
+      label: How you run Aflow
+      options:
+        - Release bundle (published image)
+        - Built from the repository (docker-compose.local.yml)
+        - Development stack (yarn start)
+    validations:
+      required: true
+  - type: input
+    id: use
+    attributes:
+      label: What you use it for
+      description: The job you gave Aflow, in one line.
+      placeholder: A daily triage agent over the team inbox
+  - type: textarea
+    id: worked
+    attributes:
+      label: What worked
+      description: The parts you would keep as they are.
+  - type: textarea
+    id: blocked
+    attributes:
+      label: What blocked you
+      description: Where you stopped, gave up, or reached for something else.
+    validations:
+      required: true
+  - type: input
+    id: fix-first
+    attributes:
+      label: One thing to fix first
+      description: If only one change landed, which one.
+    validations:
+      required: true

@@ -7,21 +7,21 @@ body:
       value: |
         An idea that is still taking shape fits better in [Discussions](https://github.com/aflowai/aflow/discussions/categories/ideas). A change to behaviour, a schema or the architecture is built from a numbered plan — [`docs/plans/README.md`](https://github.com/aflowai/aflow/blob/main/docs/plans/README.md) — and this issue is where to agree it needs one.
   - type: textarea
-    id: problem
+    id: job
     attributes:
       label: What you are trying to do
       description: The task or workflow, and where Aflow stops you today.
     validations:
       required: true
   - type: textarea
-    id: proposal
+    id: today
     attributes:
-      label: What would solve it
+      label: What you do today
+      description: Any workaround in use now, and what it costs.
+  - type: textarea
+    id: wish
+    attributes:
+      label: What you wish existed
       description: The behaviour you would like. A sketch is enough.
     validations:
       required: true
-  - type: textarea
-    id: alternatives
-    attributes:
-      label: What you do instead
-      description: Any workaround in use now, and what it costs.
