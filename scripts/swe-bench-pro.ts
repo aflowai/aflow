@@ -7,9 +7,9 @@
  *   yarn bench:swe-pro attempt --task <task.json> --work-root <dir> --harness <dir>
  *       [--agent-timeout-min <n>] [--repo-url <url>]
  *       [--tenant <tenantId> --space <spaceId>] [-- <agent command>...]
- *   yarn bench:swe-pro grade --task <task.json> --folder <dir> --work-root <dir> --harness <dir>
+ *   yarn bench:swe-pro grade --task <task.json> --work-root <dir> --harness <dir>
  *       --arm <bare_harness|loop|loop_with_learning> --agent-outcome <ok|failed|timeout>
- *       --wall-ms <n> [--tokens <n>] [--cost-usd <x>] [--ref <commit>]
+ *       --wall-ms <n> [--tokens <n>] [--cost-usd <x>] [--folder <dir>]
  *       [--tenant <tenantId> --space <spaceId> [--run <runId>]]
  *
  * `--task` names one record of the published SWE-bench Pro set as JSON.
@@ -24,12 +24,14 @@
  * The loop's arms run between `materialize` and `grade`: the folder is bound
  * to the measurement space through the host lane (D5), the loop works it, and
  * `grade` takes the outcome, tokens, cost and wall time its run reported.
- * The loop's review rounds run without a publication (`review-rounds`, Plan
- * 341 P2): they commit each round on a local branch. Every stop after a
- * completed commission reports the head to grade as `headSha`, and
- * `stoppedAt.reason` names which head it is. A commission that did not
- * complete may leave nothing to grade. `grade --ref <headSha> --run <its run id>`
- * grades that head and records the attempt on the run that holds the rounds.
+ * The loop leaves the folder as it found it, so `grade` reads a loop arm's
+ * patch from the run `--run` names and grades it as it stands. A Commission
+ * Change run holds its patch at its `patchRef`. A Review Rounds run (Plan 341
+ * P2) commits each round on a local branch of the folder and reports the head
+ * to grade as `headSha`, so its patch is `<base>..<headSha>` in `--folder`.
+ * A run that ended with no patch grades as an empty patch. A loop arm
+ * therefore grades only with `--tenant`, `--space` and `--run`. The bare
+ * harness grades the changes it left in `--folder`.
  *
  * `designate` marks a space as the measurement space. With `--tenant` and
  * `--space`, an attempt is recorded on a workflow run in that space through
@@ -46,13 +48,17 @@ import {
   assertBenchmarkRun,
   assertMeasurementSpace,
   benchmarkVerdict,
+  buildWorkflowRunResult,
   createBareHarnessRun,
   designateMeasurementSpace,
+  loadRunById,
   writeBenchmarkAttemptEvaluation,
 } from '@aflow/cybernetic-runtime';
 import { closeConnection, getDatabase } from '@aflow/database';
-import { BenchmarkArmSchema, BenchmarkAttemptResultSchema } from '@aflow/schemas';
-import type { BenchmarkArm, BenchmarkAttemptResult } from '@aflow/schemas';
+import { resolvePayloadStore } from '@aflow/payload-store';
+import { createRedisConnection, getRedisConfig, quitRedisWithTimeout } from '@aflow/redis';
+import { BenchmarkArmSchema, BenchmarkAttemptResultSchema, parsePayloadRef } from '@aflow/schemas';
+import type { BenchmarkArm, BenchmarkAttemptResult, PayloadRef } from '@aflow/schemas';
 
 import {
   createCommandAgent,
@@ -60,6 +66,7 @@ import {
   materializeTask,
   parseAgentOutcome,
   parseTask,
+  readLoopPatch,
   runAttempt,
 } from './swe-bench-pro.mjs';
 
@@ -161,6 +168,63 @@ async function recordTarget(arm: BenchmarkArm): Promise<RecordTarget | undefined
     arm,
   });
   return { tenantId, spaceId, runId };
+}
+
+/**
+ * The loop arm's patch, read from the run that holds it. The run's output is
+ * read as the platform reads it, and its `patchRef` from the payload store the
+ * services share, so no patch passes through the operator's hands.
+ */
+async function readRunPatch(
+  task: ReturnType<typeof parseTask>,
+  target: RecordTarget & { runId: string },
+  folder: string | undefined,
+): Promise<string> {
+  const db = getDatabase();
+  const run = await loadRunById(db, target.tenantId, target.spaceId, target.runId);
+  if (run === null) fail(`Run ${target.runId} is not in space ${target.spaceId}.`);
+  const redis = createRedisConnection(getRedisConfig());
+  try {
+    const resolved = resolvePayloadStore({ redis });
+    if (resolved === null)
+      fail("No payload store is configured, so the run's patch cannot be read.");
+    const result = await buildWorkflowRunResult(
+      { db, payloadStore: resolved.store },
+      { tenantId: target.tenantId, run, scope: 'partial' },
+    );
+    if (result === undefined) {
+      fail(`The output of run ${target.runId} cannot be read, so its patch is unknown.`);
+    }
+    return await readLoopPatch(
+      task,
+      { runId: run.runId, slug: run.workflowSlug, status: run.status, output: result.output ?? {} },
+      {
+        ...(folder === undefined ? {} : { folder }),
+        readPatch: async (patchRef: string) => {
+          // The ref is data on the run, so only a diff of this tenant reaches the store.
+          const parsed = parsePayloadRef(patchRef);
+          if (
+            parsed?.form !== 'object' ||
+            parsed.payloadKind !== 'patch' ||
+            parsed.tenantId !== target.tenantId
+          ) {
+            throw new Error(
+              `The \`patchRef\` of run ${target.runId} names no diff of this tenant.`,
+            );
+          }
+          try {
+            return await resolved.store.retrieve(patchRef as PayloadRef);
+          } catch (error) {
+            throw new Error(
+              `The patch of run ${target.runId} cannot be read. Stored diffs expire, and this one may be gone. ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
+        },
+      },
+    );
+  } finally {
+    await quitRedisWithTimeout(redis);
+  }
 }
 
 async function report(
@@ -266,11 +330,23 @@ async function main(): Promise<void> {
     const wallTimeMs = Math.round(count('wall-ms') ?? fail('grade needs --wall-ms.'));
     const target = await recordTarget(arm);
     const gradeDir = join(workRoot, `${task.instanceId}.grade`);
-    const ref = flag('ref');
+    const folderFlag = flag('folder');
+    const folder = folderFlag === undefined ? undefined : resolve(folderFlag);
+    let patch: string | undefined;
+    if (arm !== 'bare_harness') {
+      if (target?.runId === undefined) {
+        fail(
+          `Grading a ${arm} attempt needs --tenant, --space and --run, because the loop's patch is on its run.`,
+        );
+      }
+      patch = await readRunPatch(task, { ...target, runId: target.runId }, folder);
+    } else if (folder === undefined) {
+      fail('Grading a bare_harness attempt needs --folder, the folder the agent worked.');
+    }
     const result = await gradeAttempt(task, {
       arm,
-      ...(ref === undefined ? {} : { ref }),
-      folder: resolve(required('folder')),
+      ...(patch === undefined ? {} : { patch }),
+      ...(folder === undefined ? {} : { folder }),
       harnessDir: resolve(required('harness')),
       gradeDir,
       agent: {

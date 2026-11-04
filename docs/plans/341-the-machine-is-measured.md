@@ -188,6 +188,8 @@ The machinery's pieces are these:
 - `designate` marks Proving Ground as the measurement space, under `benchmarkMeasurement` in the space's metadata.
 - `attempt` runs arm (a) whole. It creates the attempt's workflow run in Proving Ground, marked under `benchmarkAttempt` in the run's metadata.
 - Arms (b) and (c) run between `materialize` and `grade`, with the folder bound to Proving Ground through the host lane. `grade` records on the loop's run named by `--run`, and takes the loop's outcome as `--agent-outcome`.
+- The loop leaves the bound folder as it found it, so `grade` reads a loop arm's patch from the run `--run` names (P2 N3, F4). A Commission Change run holds its patch at its `patchRef`, read from the payload store the services share. A Review Rounds run holds it as `<baseSha>..<headSha>` in the folder. Nothing is applied to the folder by hand before grading.
+- `grade` refuses a run still going, a run that worked another base and a run of any other skill. A run that ended with no patch grades as an empty patch.
 - The evaluation writer is `writeBenchmarkAttemptEvaluation` in `@aflow/cybernetic-runtime`. It refuses a run outside the measurement space before any write. It also refuses an eval-batch trial and a run marked as another attempt.
 - The writer writes through `writeRunEvaluationEnvelope` into the envelope's `benchmark` slot only. A production suite's `decision` and `summary` on the same run stay as the suite wrote them.
 - A bare-harness run records the decision `no_suite` when the runner creates it, because no post-run hook fires for it.
@@ -212,7 +214,7 @@ P2 lands the review rounds, and they are built. They serve arm (b) from P2 on, a
 - A last `workflow.run.decide` records `stoppedAt`: the round that ended the rounds, and why. `taken_as_it_stands` and `round_limit` are ends the rounds rule chose. `fix_brief_too_long` means a fix brief would not fit. `fix_failed`, `fix_no_patch`, `commit_failed` and `review_failed` name a step that broke. A commit task is optional, so a refused commit stops the rounds at `commit_failed` as a conflict does. `commission_not_completed` means the commission failed, was cancelled or is still running. `no_patch` means the completed commission had no patch. The last round's `decision` cannot say this, because a broken fix round leaves it at `fix_before_merge`, as the limit does.
 - The run records every round as a task, with each review as a run of its own. Each decision states its reason. The `rounds` output holds each round's verdict, findings, review run and head. After a decided round, the final `headSha` is the last head a review read and the rule decided.
 - Every stop after a completed commission leaves a `headSha`, and `stoppedAt.reason` names which head it is. Where round 1's review decided nothing, it is the commission's own commit, which no review read. Where no commit landed, it is `baseSha`, and it grades as an empty patch.
-- The driver grades that head with `grade --ref <headSha> --run <the rounds run>`, so the attempt's verdict lands on the run that shows its rounds.
+- The driver grades that head with `grade --run <the rounds run> --folder <the task folder>`. `grade` reads `headSha` from the run, so the attempt's verdict lands on the run that shows its rounds.
 
 The publication's rule differs in two cases and stays as it is. A reader of arm (b)'s results reads the loop's process through both:
 

@@ -20,6 +20,8 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  COMMISSION_SLUG,
+  REVIEW_ROUNDS_SLUG,
   classifyAttempt,
   capturePatch,
   createCommandAgent,
@@ -29,6 +31,7 @@ import {
   parseAgentOutcome,
   parseTask,
   readAgentUsage,
+  readLoopPatch,
   runAttempt,
   runCommand,
   taskText,
@@ -436,7 +439,7 @@ describe('one attempt end to end, with Docker stubbed', () => {
     expect(readFileSync(result.patchFile, 'utf8')).toContain('+    return a + b');
   });
 
-  it("grades a loop arm's review-rounds head, named by its commit, and hands the harness that patch", async () => {
+  it("grades the review-rounds head the loop's run names, and hands the harness that patch", async () => {
     mkdirSync(join(scratch, 'harness'));
     const task = fixtureTask();
     const folder = await materializeTask(task, {
@@ -451,10 +454,25 @@ describe('one attempt end to end, with Docker stubbed', () => {
     git(folder, 'checkout', '--quiet', '--detach', baseCommit);
     const { stub } = stubbedHarness({});
 
+    const patch = await readLoopPatch(
+      task,
+      {
+        runId: 'run-rounds',
+        slug: REVIEW_ROUNDS_SLUG,
+        status: 'completed',
+        output: { baseSha: baseCommit, headSha: head, branch: 'bench/calc-0001' },
+      },
+      {
+        folder,
+        readPatch: async () => {
+          throw new Error('a rounds run holds its patch in the folder');
+        },
+        exec,
+      },
+    );
     const result = await gradeAttempt(task, {
       arm: 'loop',
-      folder,
-      ref: head,
+      patch,
       harnessDir: join(scratch, 'harness'),
       gradeDir: join(scratch, 'work', `${task.instanceId}.grade`),
       agent: { ok: true, timedOut: false, tokens: null, costUsd: null, wallTimeMs: 1 },
@@ -468,6 +486,124 @@ describe('one attempt end to end, with Docker stubbed', () => {
     );
     expect(sent[0]).toMatchObject({ prefix: 'loop' });
     expect(sent[0].patch).toContain('+    return a + b');
+  });
+
+  it("grades a commission's patch read from its run's `patchRef`, with the bound folder left untouched", async () => {
+    mkdirSync(join(scratch, 'harness'));
+    const task = fixtureTask();
+    const folder = await materializeTask(task, {
+      workRoot: join(scratch, 'work'),
+      repoUrl: upstream,
+      exec,
+    });
+    // Commission Change works a scratch copy and stores its diff. The bound folder never sees it.
+    const copy = await materializeTask(task, {
+      workRoot: join(scratch, 'commission-scratch'),
+      repoUrl: upstream,
+      exec,
+    });
+    writeFileSync(join(copy, 'calc.py'), 'def add(a, b):\n    return a + b\n');
+    const stored = await capturePatch(copy, task.baseCommit, { exec });
+    const patchRef = 'gs://redis-store/tenants/t1/runs/r1/steps/s1/attempt/1/patch.json';
+    const read = [];
+    const { stub } = stubbedHarness({});
+
+    const patch = await readLoopPatch(
+      task,
+      {
+        runId: 'run-commission',
+        slug: COMMISSION_SLUG,
+        status: 'completed',
+        output: { patchRef, baseSha: baseCommit, summary: 'Make add() add' },
+      },
+      {
+        readPatch: async (ref) => {
+          read.push(ref);
+          return stored;
+        },
+      },
+    );
+    const gradeDir = join(scratch, 'work', `${task.instanceId}.grade`);
+    const result = await gradeAttempt(task, {
+      arm: 'loop',
+      patch,
+      harnessDir: join(scratch, 'harness'),
+      gradeDir,
+      agent: { ok: true, timedOut: false, tokens: 1200, costUsd: 0.1, wallTimeMs: 5 },
+      exec: stub,
+    });
+
+    expect(read).toEqual([patchRef]);
+    expect(result.attempt).toMatchObject({
+      arm: 'loop',
+      passed: true,
+      failureClass: null,
+      patchBytes: Buffer.byteLength(stored),
+    });
+    const sent = JSON.parse(readFileSync(join(gradeDir, 'patches.json'), 'utf8'));
+    expect(sent[0]).toMatchObject({ prefix: 'loop', patch: stored });
+    expect(sent[0].patch).toContain('+    return a + b');
+    expect(git(folder, 'status', '--porcelain')).toBe('');
+    expect(await capturePatch(folder, task.baseCommit, { exec })).toBe('');
+  });
+
+  it('grades a commission run that ended with no patch as an empty patch, reading no payload', async () => {
+    const task = fixtureTask();
+    const readPatch = async () => {
+      throw new Error('no payload to read');
+    };
+    const run = (over) => ({
+      runId: 'run-commission',
+      slug: COMMISSION_SLUG,
+      status: 'failed',
+      output: { baseSha: baseCommit },
+      ...over,
+    });
+    expect(await readLoopPatch(task, run({}), { readPatch })).toBe('');
+    expect(await readLoopPatch(task, run({ status: 'completed', output: {} }), { readPatch })).toBe(
+      '',
+    );
+  });
+
+  it("refuses a run whose patch is not this attempt's, before any payload is read", async () => {
+    const task = fixtureTask();
+    const read = [];
+    const readPatch = async (ref) => {
+      read.push(ref);
+      return 'diff --git a/x b/x\n';
+    };
+    const output = { patchRef: 'gs://b/p', baseSha: baseCommit };
+    const run = (over) => ({
+      runId: 'run-1',
+      slug: COMMISSION_SLUG,
+      status: 'completed',
+      output,
+      ...over,
+    });
+
+    await expect(readLoopPatch(task, run({ status: 'running' }), { readPatch })).rejects.toThrow(
+      /is running/,
+    );
+    await expect(
+      readLoopPatch(task, run({ output: { ...output, baseSha: 'f'.repeat(40) } }), { readPatch }),
+    ).rejects.toThrow(/not from the task's base commit/);
+    await expect(
+      readLoopPatch(task, run({ output: { patchRef: 'gs://b/p' } }), { readPatch }),
+    ).rejects.toThrow(/no `baseSha`/);
+    await expect(
+      readLoopPatch(task, run({ slug: 'publish-local-changes' }), { readPatch }),
+    ).rejects.toThrow(/commission-change or review-rounds run/);
+    await expect(
+      readLoopPatch(
+        task,
+        run({ slug: REVIEW_ROUNDS_SLUG, output: { baseSha: baseCommit, headSha: '--output=x' } }),
+        { readPatch, folder: scratch },
+      ),
+    ).rejects.toThrow(/not a full commit id/);
+    expect(read).toEqual([]);
+    await expect(
+      readLoopPatch(task, run({}), { readPatch: async () => ({ not: 'a diff' }) }),
+    ).rejects.toThrow(/names no diff/);
   });
 
   it('grades no task whose base commit git would read as an option, and runs no git command', async () => {

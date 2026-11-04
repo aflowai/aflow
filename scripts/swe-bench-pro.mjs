@@ -452,19 +452,95 @@ export function classifyAttempt({ grade, agent, patch }) {
   return 'tests_failed';
 }
 
+/** The workflow slugs of the loop's runs that hold a patch to grade. */
+export const COMMISSION_SLUG = 'commission-change';
+export const REVIEW_ROUNDS_SLUG = 'review-rounds';
+
+/** How a unified diff opens: git's own header, or a plain one. */
+const UNIFIED_DIFF_START = /^(?:diff --git |--- )/;
+
+/** A run in one of these has stopped, so its output is final. */
+const ENDED_RUN_STATUSES = new Set(['completed', 'failed', 'cancelled']);
+
 /**
- * Capture and grade the patch an agent left in a task folder, and report the
- * attempt as the evaluation writer records it (`BenchmarkAttemptResult`).
- * The arm that worked the folder reports its own tokens, cost and wall time,
- * so the loop's arm grades here as the bare harness's does.
+ * The loop's patch, read from the run that produced it (Plan 341 P2).
+ *
+ * The loop leaves the bound folder as it found it. Commission Change works a
+ * scratch copy and stores its diff as the harness step's `patchRef`, so a
+ * commission run's patch is the payload that ref names. The review rounds
+ * commit on a local branch of the folder, so a rounds run's patch is
+ * `<base>..<headSha>` there. Either way the run says where the patch is, and
+ * no one applies it to the folder first.
+ *
+ * A run that ended with no patch grades as an empty patch. A run still going,
+ * or one that worked another base, is refused, because its patch is not this
+ * attempt's.
+ *
+ * @param {{ baseCommit: string }} task
+ * @param {{ runId: string, slug: string, status: string, output: Record<string, unknown> }} run
+ * @param {{ folder?: string, readPatch: (patchRef: string) => Promise<unknown>, exec?: typeof runCommand }} options
+ * @returns {Promise<string>}
+ */
+export async function readLoopPatch(task, run, { folder, readPatch, exec = runCommand }) {
+  if (!ENDED_RUN_STATUSES.has(run.status)) {
+    throw new Error(`Run ${run.runId} is ${run.status}. Grade it once it has ended.`);
+  }
+  const text = (name) => {
+    const value = run.output[name];
+    return typeof value === 'string' && value !== '' ? value : undefined;
+  };
+  const baseSha = text('baseSha');
+  if (baseSha !== undefined && baseSha !== task.baseCommit) {
+    throw new Error(
+      `Run ${run.runId} worked from ${baseSha}, not from the task's base commit ${task.baseCommit}.`,
+    );
+  }
+  if (run.slug === COMMISSION_SLUG) {
+    const patchRef = text('patchRef');
+    if (patchRef === undefined) return '';
+    if (baseSha === undefined) {
+      throw new Error(`Run ${run.runId} reports a patch but no \`baseSha\` it was taken from.`);
+    }
+    const patch = await readPatch(patchRef);
+    if (typeof patch !== 'string' || !UNIFIED_DIFF_START.test(patch)) {
+      throw new Error(`The \`patchRef\` of run ${run.runId} names no diff.`);
+    }
+    return patch;
+  }
+  if (run.slug === REVIEW_ROUNDS_SLUG) {
+    const headSha = text('headSha');
+    if (headSha === undefined) return '';
+    // The head reaches git as an argument, so only a full commit id passes.
+    if (!COMMIT_ID.test(headSha)) {
+      throw new Error(`The \`headSha\` of run ${run.runId} is not a full commit id.`);
+    }
+    if (folder === undefined) {
+      throw new Error(
+        `Run ${run.runId} committed its rounds in the task folder. Name that folder with --folder.`,
+      );
+    }
+    return capturePatch(folder, task.baseCommit, { exec, ref: headSha });
+  }
+  throw new Error(
+    `Run ${run.runId} is a ${run.slug} run. A loop arm's patch is on a ${COMMISSION_SLUG} or ${REVIEW_ROUNDS_SLUG} run.`,
+  );
+}
+
+/**
+ * Grade an attempt's patch and report the attempt as the evaluation writer
+ * records it (`BenchmarkAttemptResult`). With `patch`, that patch is graded,
+ * as a loop arm's run reported it (`readLoopPatch`). Without it, the patch is
+ * captured from the agent's changes in `folder`, as the bare harness left
+ * them. The arm reports its own tokens, cost and wall time, so the loop's arm
+ * grades here as the bare harness's does.
  */
 export async function gradeAttempt(task, options) {
-  const { arm, folder, harnessDir, gradeDir, agent, ref, exec = runCommand } = options;
+  const { arm, folder, harnessDir, gradeDir, agent, exec = runCommand } = options;
   // A task record may reach here unparsed, so git reads no base commit that is not a full id.
   if (!COMMIT_ID.test(task.baseCommit)) {
     throw new Error(`The base commit ${JSON.stringify(task.baseCommit)} is not a full commit id.`);
   }
-  const patch = await capturePatch(folder, task.baseCommit, { exec, ref });
+  const patch = options.patch ?? (await capturePatch(folder, task.baseCommit, { exec }));
   await mkdir(gradeDir, { recursive: true });
   const patchFile = join(gradeDir, `${task.instanceId}.patch`);
   await writeFile(patchFile, patch);
