@@ -31,7 +31,7 @@ import { useAutoScrollToBottom } from '../hooks/use-auto-scroll.js';
 import { useConnectionNotice } from '../hooks/use-connection-notice.js';
 import { useCybernetic } from './cybernetic-provider.js';
 import { useSpaceEntityEvents } from '../hooks/use-space-entity-events.js';
-import { Workbench } from './workbench/index.js';
+import { Workbench, WorkbenchFoldsContext, useWorkbenchFolds } from './workbench/index.js';
 import { CascadeFeed } from './cascade-feed.js';
 import { CascadeSessionTimeline } from './cascade-session-timeline.js';
 import { AgentChatHistory } from './chat/AgentChatHistory.js';
@@ -74,6 +74,9 @@ export function EntityChatInspector(props: {
     if (!VALID_TABS.has(next as InspectorTab)) return;
     setTabState(next as InspectorTab);
   }, []);
+
+  // Held here, above the TabPanel that unmounts the Workbench on a tab switch.
+  const workbenchFolds = useWorkbenchFolds(spaceId);
 
   // Live is the resting state and says nothing; only a stream that has stayed
   // down long enough to make the pane stale earns a word. The composer says the
@@ -224,12 +227,14 @@ export function EntityChatInspector(props: {
               padding: 0,
             }}
           >
-            <Workbench
-              spaceId={spaceId}
-              spaceSlug={spaceSlug ?? ''}
-              {...(onSeed ? { onSeed } : {})}
-              {...(onRevealChat ? { onRevealChat } : {})}
-            />
+            <WorkbenchFoldsContext.Provider value={workbenchFolds}>
+              <Workbench
+                spaceId={spaceId}
+                spaceSlug={spaceSlug ?? ''}
+                {...(onSeed ? { onSeed } : {})}
+                {...(onRevealChat ? { onRevealChat } : {})}
+              />
+            </WorkbenchFoldsContext.Provider>
           </TabPanel>
 
           <TabPanel
@@ -265,7 +270,7 @@ export function EntityChatInspector(props: {
                 {rootSessionId && (
                   <Column gap="sm" style={{ padding: 'var(--space-2)' }}>
                     <Text size="sm" weight="medium">
-                      This turn
+                      This conversation
                     </Text>
                     {/* Passive subscriber inside the chat
                         context. The chat-page's `useRunReducer` drives the SSE

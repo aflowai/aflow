@@ -45,7 +45,7 @@ export function FoldedSchedulesNotice({ state }: { state: UseActionCenterResult 
   if (count === 0) return null;
   return (
     <Text size="xs" variant="muted">
-      {count} set up by an agent
+      {count} set up by an agent lately
     </Text>
   );
 }
@@ -82,10 +82,10 @@ export function WorkbenchSchedules({
     <WorkbenchSection
       title="Schedules"
       icon="clock"
-      link={{ href: `/s/${spaceSlug}/triggers`, label: 'Schedules' }}
+      link={{ href: `/s/${spaceSlug}/triggers`, label: 'Triggers' }}
     >
       {schedules.length === 0 ? (
-        <WorkbenchEmptyRow label="No schedules set up in chat" />
+        <WorkbenchEmptyRow label="No active schedules set up in chat" />
       ) : (
         <Column gap="xs">
           {schedules.map((schedule) => (

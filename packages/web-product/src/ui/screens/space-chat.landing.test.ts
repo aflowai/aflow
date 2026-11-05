@@ -17,6 +17,7 @@ import { __resetForTests as resetCoachSurfaceBroker } from '../hooks/coach-surfa
 import { __resetForTests as resetEntityEventsBroker } from '../hooks/entity-events-broker.js';
 import { __resetForTests as resetMediaBytesBroker } from '../hooks/media-bytes-broker.js';
 import { __resetForTests as resetSessionEventsBroker } from '../hooks/session-events-broker.js';
+import { __resetForTests as resetWorkbenchFolds } from '../components/workbench/WorkbenchSection.js';
 import { ThemeProvider } from '../providers/theme.js';
 import { ChatPage } from './space-chat.js';
 
@@ -276,6 +277,7 @@ beforeEach(() => {
   resetActionCenterBroker();
   resetCoachSurfaceBroker();
   resetEntityEventsBroker();
+  resetWorkbenchFolds();
   resetMediaBytesBroker();
   resetSessionEventsBroker();
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -472,6 +474,42 @@ describe('what the open dock reads (D3 budget)', () => {
     await click(integrations ?? null);
     expect(net.reads).toContain('/api/integrations/definitions');
   });
+
+  it('keeps an expanded section open across a switch to another inspector tab and back', async () => {
+    await land('');
+    const fold = (expanded: boolean) =>
+      [...container.querySelectorAll(`button[aria-expanded="${String(expanded)}"]`)].find(
+        (b) => b.textContent === 'Integrations',
+      ) ?? null;
+    const tab = (label: string) =>
+      [...container.querySelectorAll('[role="tab"]')].find((t) =>
+        t.textContent?.startsWith(label),
+      ) ?? null;
+    await click(fold(false));
+    expect(fold(true)).not.toBeNull();
+
+    await click(tab('Session timeline'));
+    expect(fold(true)).toBeNull();
+    await click(tab('Workbench'));
+    expect(fold(true)).not.toBeNull();
+  });
+
+  it('keeps an expanded section open after the page unmounts and the space comes back', async () => {
+    await land('');
+    const fold = (expanded: boolean) =>
+      [...container.querySelectorAll(`button[aria-expanded="${String(expanded)}"]`)].find(
+        (b) => b.textContent === 'Integrations',
+      ) ?? null;
+    await click(fold(false));
+    expect(fold(true)).not.toBeNull();
+
+    act(() => {
+      root.unmount();
+    });
+    root = createRoot(container);
+    await land('');
+    expect(fold(true)).not.toBeNull();
+  });
 });
 
 describe('what a folded header carries (D3)', () => {
@@ -631,7 +669,7 @@ describe('what a folded header carries (D3)', () => {
     ];
     await land('');
     expect(dockOpen()).toBe(true);
-    expect(header('Schedules')?.textContent).toContain('1 set up by an agent');
+    expect(header('Schedules')?.textContent).toContain('1 set up by an agent lately');
     expect(net.reads.some((r) => r.includes('/schedules'))).toBe(false);
   });
 
