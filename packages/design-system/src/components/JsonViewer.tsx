@@ -240,7 +240,7 @@ function JsonNode({ data, depth, initialCollapsed, collapseDepth, keyName }: Jso
         {isCollapsed ? (
           <span style={{ color: 'var(--color-text-muted)' }}>
             {' '}
-            {entries.length} keys {'}'}
+            {entries.length} {entries.length === 1 ? 'key' : 'keys'} {'}'}
           </span>
         ) : (
           <>

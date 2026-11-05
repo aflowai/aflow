@@ -18,6 +18,39 @@ interface SectionFold {
 
 const SectionFoldContext = createContext<SectionFold | null>(null);
 
+interface WorkbenchFolds {
+  isExpanded: (title: string) => boolean;
+  toggle: (title: string) => void;
+}
+
+export const WorkbenchFoldsContext = createContext<WorkbenchFolds | null>(null);
+
+/**
+ * Which folded sections the operator opened, per space. The inspector's tab
+ * panel unmounts the Workbench on a tab switch, so its owner calls this above
+ * the panel and provides the result through `WorkbenchFoldsContext`: coming
+ * back to the tab finds the same sections open.
+ */
+export function useWorkbenchFolds(spaceId: string): WorkbenchFolds {
+  const [openBySpace, setOpenBySpace] = useState<Readonly<Record<string, readonly string[]>>>({});
+  const open = openBySpace[spaceId];
+  return useMemo<WorkbenchFolds>(
+    () => ({
+      isExpanded: (title) => open?.includes(title) ?? false,
+      toggle: (title) => {
+        setOpenBySpace((prev) => {
+          const current = prev[spaceId] ?? [];
+          const next = current.includes(title)
+            ? current.filter((t) => t !== title)
+            : [...current, title];
+          return { ...prev, [spaceId]: next };
+        });
+      },
+    }),
+    [open, spaceId],
+  );
+}
+
 /** Whether the section rendering this sits under a fold — so it renders even while empty. */
 export function useWorkbenchSectionFold(): SectionFold | null {
   return useContext(SectionFoldContext);
@@ -45,15 +78,18 @@ export function WorkbenchLazySection({
   trailing?: ReactNode;
   children: ReactNode;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const folds = useContext(WorkbenchFoldsContext);
+  const [localExpanded, setLocalExpanded] = useState(false);
+  const expanded = folds ? folds.isExpanded(title) : localExpanded;
   const fold = useMemo<SectionFold>(
     () => ({
       expanded,
       toggle: () => {
-        setExpanded((e) => !e);
+        if (folds) folds.toggle(title);
+        else setLocalExpanded((e) => !e);
       },
     }),
-    [expanded],
+    [expanded, folds, title],
   );
   return (
     <SectionFoldContext.Provider value={fold}>

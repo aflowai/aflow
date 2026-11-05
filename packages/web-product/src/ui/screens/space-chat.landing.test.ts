@@ -472,6 +472,25 @@ describe('what the open dock reads (D3 budget)', () => {
     await click(integrations ?? null);
     expect(net.reads).toContain('/api/integrations/definitions');
   });
+
+  it('keeps an expanded section open across a switch to another inspector tab and back', async () => {
+    await land('');
+    const fold = (expanded: boolean) =>
+      [...container.querySelectorAll(`button[aria-expanded="${String(expanded)}"]`)].find(
+        (b) => b.textContent === 'Integrations',
+      ) ?? null;
+    const tab = (label: string) =>
+      [...container.querySelectorAll('[role="tab"]')].find((t) =>
+        t.textContent?.startsWith(label),
+      ) ?? null;
+    await click(fold(false));
+    expect(fold(true)).not.toBeNull();
+
+    await click(tab('Session timeline'));
+    expect(fold(true)).toBeNull();
+    await click(tab('Workbench'));
+    expect(fold(true)).not.toBeNull();
+  });
 });
 
 describe('what a folded header carries (D3)', () => {
@@ -631,7 +650,7 @@ describe('what a folded header carries (D3)', () => {
     ];
     await land('');
     expect(dockOpen()).toBe(true);
-    expect(header('Schedules')?.textContent).toContain('1 set up by an agent');
+    expect(header('Schedules')?.textContent).toContain('1 set up by an agent lately');
     expect(net.reads.some((r) => r.includes('/schedules'))).toBe(false);
   });
 
