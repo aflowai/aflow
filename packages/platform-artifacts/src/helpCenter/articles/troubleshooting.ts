@@ -6,14 +6,14 @@ export const TROUBLESHOOTING_ARTICLES: readonly HelpArticleInput[] = [
     theme: 'troubleshooting',
     question: 'A run failed or seems stuck. How do I find out why and get it going again?',
     summary:
-      "When a conversation fails, the chat shows the error and the step it happened in, with Retry, New run and Inspect; Inspect opens the session timeline, where every step and its result is listed. A run that is paused is usually waiting for you: an approval, an answer, or a missing connection, each shown as an item in the Workbench or as an Approve or Submit row on the run's page. A conversation marked Idle has finished its turn and waits for your next message. For a skill, the Runs tab lists every run with its status; Open shows which task failed or is waiting.",
+      "When a conversation fails, the chat shows the error and the step it happened in, with Retry, New run and Inspect; Inspect opens the Workbench, whose Timeline tab lists every step and its result. A run that is paused is usually waiting for you: an approval, an answer, or a missing connection, each shown as an item in the Workbench or as an Approve or Submit row on the run's page. A conversation marked Idle has finished its turn and waits for your next message. For a skill, the Runs tab lists every run with its status; Open shows which task failed or is waiting.",
     body: `## A conversation failed
 
 The chat ends with a card showing the error and, when known, **Step:** with the step that failed.
 
 - **Retry** runs the failed session again.
 - **New run** starts a fresh conversation.
-- **Inspect** opens the inspector; **Session timeline** lists every step with its result.
+- **Inspect** opens the Workbench. Its **Timeline** tab lists every step of the conversation with its result.
 
 If the error is about a model key, a banner above the composer names the provider: add the key, or choose a model from a provider you already have.
 

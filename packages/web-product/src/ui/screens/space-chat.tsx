@@ -295,7 +295,7 @@ function ChatPageInner() {
     value: '',
     nonce: 0,
   });
-  // Bumped to pull the companion onto the Workbench tab — an approval parked
+  // Bumped to pull the companion onto the Space tab — an approval parked
   // while the operator sits on another tab is otherwise unreachable without
   // them knowing to go looking.
   const [workbenchFocus, setWorkbenchFocus] = useState(0);
