@@ -6,21 +6,21 @@ export const APPROVALS_ARTICLES: readonly HelpArticleInput[] = [
     theme: 'approvals',
     question: 'Where do I find approvals and other things waiting for me?',
     summary:
-      "Everything in a space that needs a person collects in the Workbench beside the chat: approvals for writes and other actions, questions a run is waiting on, decisions the space's plan leaves to you, account sign-ins an integration needs, and proposals from agents such as the Coach. While anything is pending, a yellow indicator appears in the header of the space's other pages; choosing it opens Chat with the Workbench. The Helmsman can also bring an item into the chat. A question the Helmsman itself asks, and a Coach proposal it brings forward, can be answered right there. For any other item, such as an approval, a plan step or a sign-in, its card shows the item's kind, title and state, and you answer it where the item lives: on the Plan page or under Needs you in the Workbench. Ask it what is waiting on you, and it counts the pending plan steps, run approvals and sign-ins, and points you at each one. Work that waits on an item stays paused until it is answered.",
+      "Everything in a space that needs a person collects in the Workbench beside the chat: approvals for writes and other actions, questions a run is waiting on, decisions the space's plan leaves to you, account sign-ins an integration needs, and proposals from agents such as the Coach. While anything is pending, a yellow indicator appears in the header of the space's other pages; choosing it opens Chat with the Workbench. The Helmsman can also bring an item into the chat. A question the Helmsman itself asks, and a Coach proposal it brings forward, can be answered right there. For any other item, such as an approval, a plan step or a sign-in, its card shows the item's kind, title and state, and you answer it where the item lives: on the Plan page or under Pending in the Workbench. Ask it what is waiting on you, and it counts the pending plan steps, run approvals and sign-ins, and points you at each one. Work that waits on an item stays paused until it is answered.",
     body: `## Where
 
-- **Chat** — the **Workbench** sits beside the conversation. It is open when you start a new chat. In a conversation where you folded it to its strip, it stays folded when you come back to that conversation. Below **Needs you**, the sections **Schedules**, **Skills**, **Applets**, **Agents**, **Integrations** and **Coach review** start folded: choose a heading to open it. A folded **Skills** heading still counts the running and paused runs of the skills it lists. A folded **Schedules** heading says how many schedules an agent has set up. A folded **Integrations** heading counts the integrations the Action Center asks you to connect. Open the section to count every integration that needs setup. A folded **Coach review** heading still counts its proposals. It also says **Reviewing** for a review the Coach starts while the Workbench is open, until that review ends, fails, is cancelled or stalls. Open **Coach review** to see a review that started earlier or has stalled. On a phone, switch between **Chat** and **Workbench** at the top; the Workbench shows how many items need you.
+- **Chat** — the **Workbench** sits beside the conversation. It is open when you start a new chat. In a conversation where you folded it to its strip, it stays folded when you come back to that conversation. Below **Pending**, the sections **Schedules**, **Skills**, **Applets**, **Agents**, **Integrations** and **Coach review** start folded: choose a heading to open it. A folded **Skills** heading still counts the running and paused runs of the skills it lists. A folded **Schedules** heading says how many schedules an agent has set up. A folded **Integrations** heading counts the integrations the Action Center asks you to connect. Open the section to count every integration that needs setup. A folded **Coach review** heading still counts its proposals. It also says **Reviewing** for a review the Coach starts while the Workbench is open, until that review ends, fails, is cancelled or stalls. Open **Coach review** to see a review that started earlier or has stalled. On a phone, switch between **Chat** and **Workbench** at the top; the Workbench shows how many items need you.
 - **Opening Chat** — **Chat** with nothing else in its address returns you to your last conversation with the agent it opens on: the space's default agent, or the Helmsman where the space names none. It looks only among that agent's 10 newest conversations in the space, and resumes one you started, used in the last six hours, that has not ended. Otherwise it starts a new chat. A link that names a conversation, an agent, a rehearsal, a draft or the Workbench opens what it names instead. The address names the conversation (\`?session=…\`), so a reload or a shared link opens the same one. **New chat** in the header starts a fresh one.
 - **Every other page in the space** — a yellow indicator in the page header while one or more items are pending. Choosing it opens **Chat** with the **Workbench**.
-- **In the conversation** — the Helmsman can bring an item into the chat. A question the Helmsman itself asks, and a Coach proposal it brings forward, can be answered in the chat. For any other item, such as an approval, a plan step or a sign-in, its card shows the item's kind, title and state, and it points to where you answer it: the step on the **Plan** page for a plan step, or **Needs you** in the **Workbench** for anything else.
+- **In the conversation** — the Helmsman can bring an item into the chat. A question the Helmsman itself asks, and a Coach proposal it brings forward, can be answered in the chat. For any other item, such as an approval, a plan step or a sign-in, its card shows the item's kind, title and state, and it points to where you answer it: the step on the **Plan** page for a plan step, or **Pending** in the **Workbench** for anything else.
 
 ## What appears
 
-**Needs you** holds items that are blocking work now:
+**Pending** holds items that are blocking work now:
 
 - **Approvals**: a write the agent wants to make, an approval a skill asks for as one of its steps, or another action that asks first. A write approval card has **Approve**, **Deny** and an optional reason.
-- **Plan steps**: a step of the space's plan that waits on you, from the moment it is blocked. **Needs approval · …** is a blocked step, with **Approve** to start it and **Drop** to leave it out. **Needs review · …** is a merge waiting for you to judge it, with **Close done** and **Drop**. At most 50 are listed, the newest first, and the **Plan** page holds the rest.
-- **Inputs**: a question a run is waiting for you to answer, and a decision the space's plan leaves to you — a step of kind **decide**, titled **Needs a decision · …**. Write your choice and choose **Decide**; it is recorded as the step's outcome and the step is marked done, as it would be on the **Plan** page. If the Helmsman changed the question after you opened it, your answer is refused and the card shows the question as it now stands.
+- **Plan steps**: a step of the space's plan that waits on you, from the moment it is blocked. **Pending approval · …** is a blocked step, with **Approve** to start it and **Drop** to leave it out. **Pending review · …** is a merge waiting for you to judge it, with **Close done** and **Drop**. At most 50 are listed, the newest first, and the **Plan** page holds the rest.
+- **Inputs**: a question a run is waiting for you to answer, and a decision the space's plan leaves to you — a step of kind **decide**, titled **Pending decision · …**. Write your choice and choose **Decide**; it is recorded as the step's outcome and the step is marked done, as it would be on the **Plan** page. If the Helmsman changed the question after you opened it, your answer is refused and the card shows the question as it now stands.
 - **Connections**: a **Connect** or **Reconnect** card when an integration needs you to sign in with an account, or a sign-in has expired.
 
 Proposals are changes an agent wants to make to skills, evaluations or integrations. Each sits in a section named for its source. **Coach review** holds the Coach's proposals, and every other source, such as **Helmsman patch**, has a section of its own. Proposals do not block a run. They wait for you to **Ratify**, **Reject** or **Dismiss** them.
@@ -31,7 +31,7 @@ A request addressed to another person stays visible, says who it is waiting on, 
 
 ## What happens after you answer
 
-The work that was waiting on the item continues from where it stopped; nothing needs to be restarted. **Needs you** is hidden when nothing needs you, and the indicator goes back to its resting colour.`,
+The work that was waiting on the item continues from where it stopped; nothing needs to be restarted. **Pending** is hidden when nothing is pending, and the indicator goes back to its resting colour.`,
     editions: ['enterprise', 'community-local'],
     anchors: {
       routes: ['s/[space]/chat'],
@@ -50,9 +50,8 @@ The work that was waiting on the item continues from where it stopped; nothing n
       'inbox',
       'pending',
       'notifications',
-      'needs you',
-      'needs approval',
-      'needs review',
+      'pending approval',
+      'pending review',
       'workbench',
       'waiting',
       'blocked',
@@ -67,7 +66,7 @@ The work that was waiting on the item continues from where it stopped; nothing n
       'Every endpoint of an API integration carries a risk tier. Before the agent, or a step of a running skill, makes a write call, the space checks that tier against its Write Policy: by default, low-risk writes run unattended, while medium-risk writes (external sends, hard-to-undo changes) and high-risk writes (money movement, destructive changes at scale) wait for a person to approve them in the Workbench. Nothing is sent until you approve. Denying stops that call and tells the agent why. Space admins change the defaults per tier under Settings → Write Policy.',
     body: `## Where
 
-Approve or deny under **Needs you** in the Workbench. Change the rules under **Settings → Write Policy**.
+Approve or deny under **Pending** in the Workbench. Change the rules under **Settings → Write Policy**.
 
 ## Why it is waiting
 

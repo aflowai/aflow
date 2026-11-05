@@ -1964,7 +1964,7 @@ describe('Plan 156 §5.6.1 — inline HITL message lifecycle', () => {
   });
 
   it('carries the listed title of a focus on a non-proposal item, whichever path mounts the card first', () => {
-    const listed = { kind: 'plan_step', title: 'Needs approval: Ship the release' };
+    const listed = { kind: 'plan_step', title: 'Pending approval: Ship the release' };
     const inlineRef = `inline:${Buffer.from(
       JSON.stringify({ acknowledged: true, itemId: 'plan-ask:node-1', listed }),
     ).toString('base64')}`;

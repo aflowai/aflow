@@ -314,8 +314,6 @@ _Rejected:_ (c). A browser's memory outlives the conversation. A session ended e
 
 The Workbench section holds connections and inputs as well as approvals (F6). One word that fits them all is **Pending**, and each card says its own kind.
 
-**Superseded on these labels.** An operator read **Pending** as "not started", so the `needs_you` column, the plan state and the Workbench section now read **Needs you**. The empty lane reads **Nothing needs you**. Item titles read **Needs approval · …**, **Needs review · …** and **Needs a decision · …**, because the server writes one title for every reader. `in_flight` reads **In flight**, because the column also holds a `waiting` step whose run has ended. The header count keeps **3 pending**.
-
 **Verbs stay on the controls.** **Approve**, **Decide**, **Drop**, **Reopen** and **Close done** are actions, and they keep their names.
 
 **Icons over text.** A dense row shows the dot in the state's colour, with the label as its accessible name. A header shows the orb. The plan page keeps its dots (F19). P1 does not put an orb on every row, because each orb is an SVG the page loads.

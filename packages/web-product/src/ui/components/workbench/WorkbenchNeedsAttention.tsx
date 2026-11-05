@@ -13,7 +13,7 @@ import { WorkbenchSection } from './WorkbenchSection.js';
 import { ItemTitleText } from '../actionCenter/ItemText.js';
 
 /**
- * Needs you (Plan 228 §3.1, named by Plan 338 D5): human-in-the-loop items that are blocking
+ * Pending (Plan 228 §3.1, named by Plan 338 D5): human-in-the-loop items that are blocking
  * work right now — a connection to authorize, an approval, an input. Coach
  * proposals are deliberately NOT here (they're a distinct, non-blocking review
  * surface — see WorkbenchCoach); the operator never chats with Coach, so

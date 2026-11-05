@@ -21,7 +21,7 @@ export type PlanNodeStatus = z.infer<typeof PlanNodeStatusSchema>;
 
 /** What a node's `status` field says of the two open holds, where the agent reads and writes it. */
 export const PLAN_NODE_STATUS_DESCRIPTION =
-  "`blocked` waits on a person and `waiting` waits on a run. A hold on the operator's approval or decision is `blocked`, which puts the node in the operator's Needs you column.";
+  "`blocked` waits on a person and `waiting` waits on a run. A hold on the operator's approval is `blocked`, which puts the node in the operator's `needs_you` column. A decision lives on a `decide` node, whose hold is the decision itself.";
 
 export const OPEN_PLAN_NODE_STATUSES: readonly PlanNodeStatus[] = ['active', 'waiting', 'blocked'];
 export const CLOSED_PLAN_NODE_STATUSES: readonly PlanNodeStatus[] = ['done', 'dropped'];

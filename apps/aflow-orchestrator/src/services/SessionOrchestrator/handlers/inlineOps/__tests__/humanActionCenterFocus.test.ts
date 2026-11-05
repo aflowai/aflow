@@ -271,18 +271,15 @@ describe('the note says what the focused card can do', () => {
     'workflow-task:run-1:task-1',
     'workflow-write-approval:run-1:2',
     'workflow-oauth-consent:run-1',
-  ])(
-    'sends the operator of %s to Needs you in the Workbench, never to the card',
-    async (itemId) => {
-      const result = await focus('space-hhh', { itemId });
-      const { note } = decodeInline(result.outputRef!) as { note: string };
-      expect(note).toContain('The card has no answer control.');
-      expect(note).toContain('under Needs you in the Workbench');
-      expect(note).toContain('Never ask them to answer the card itself.');
-      expect(note).not.toContain('plan page');
-      expect(note).not.toContain('wait for their decision');
-    },
-  );
+  ])('sends the operator of %s to Pending in the Workbench, never to the card', async (itemId) => {
+    const result = await focus('space-hhh', { itemId });
+    const { note } = decodeInline(result.outputRef!) as { note: string };
+    expect(note).toContain('The card has no answer control.');
+    expect(note).toContain('under Pending in the Workbench');
+    expect(note).toContain('Never ask them to answer the card itself.');
+    expect(note).not.toContain('plan page');
+    expect(note).not.toContain('wait for their decision');
+  });
 
   it('names a card for every prefix the focus takes', () => {
     for (const prefix of ACTION_CENTER_FOCUS_ITEM_ID_PREFIXES) {
@@ -302,7 +299,7 @@ describe('a focus on an item the attention block lists', () => {
       {
         kind: 'plan_step',
         itemId: 'plan-ask:node-1',
-        title: 'Needs approval: Ship the release',
+        title: 'Pending approval: Ship the release',
         requestedAt: '2026-11-01T10:00:00.000Z',
         planNodeId: 'node-1',
       },
@@ -313,7 +310,7 @@ describe('a focus on an item the attention block lists', () => {
     expect(result.status).toBe('SUCCEEDED');
     expect(decodeInline(result.outputRef!)).toMatchObject({
       itemId: 'plan-ask:node-1',
-      listed: { kind: 'plan_step', title: 'Needs approval: Ship the release' },
+      listed: { kind: 'plan_step', title: 'Pending approval: Ship the release' },
     });
   });
 

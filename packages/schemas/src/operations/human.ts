@@ -327,9 +327,9 @@ export function actionCenterFocusNote(itemId: string): string {
     case 'answers_in_chat':
       return `Operator now sees item ${itemId} inline in chat, with its answer controls. End your turn and wait for their decision. When they resolve it, the resume will land in your next turn and you can continue from there.`;
     case 'plan_page':
-      return `Operator now sees a card for item ${itemId} in chat. The card has no answer control. It links to the step on the plan page, and they answer it there or under Needs you in the Workbench. Never ask them to answer the card itself. Their answer is written to the plan, not returned to this tool.`;
+      return `Operator now sees a card for item ${itemId} in chat. The card has no answer control. It links to the step on the plan page, and they answer it there or under Pending in the Workbench. Never ask them to answer the card itself. Their answer is written to the plan, not returned to this tool.`;
     case 'workbench':
-      return `Operator now sees a card for item ${itemId} in chat. The card has no answer control. It tells them to act on the item under Needs you in the Workbench. Never ask them to answer the card itself. Their answer is not returned to this tool.`;
+      return `Operator now sees a card for item ${itemId} in chat. The card has no answer control. It tells them to act on the item under Pending in the Workbench. Never ask them to answer the card itself. Their answer is not returned to this tool.`;
   }
 }
 

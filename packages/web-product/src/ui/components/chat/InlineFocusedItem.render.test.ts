@@ -76,7 +76,7 @@ function render(props: Parameters<typeof InlineFocusedItem>[0]): void {
 describe('InlineFocusedItem', () => {
   it('shows a plan step by its live title and state, with the link to its place on the plan', () => {
     query.result = {
-      data: { id: 'plan-ask:node-1', title: 'Needs approval: Ship the release', status: 'open' },
+      data: { id: 'plan-ask:node-1', title: 'Pending approval: Ship the release', status: 'open' },
       error: null,
       isError: false,
     };
@@ -84,13 +84,13 @@ describe('InlineFocusedItem', () => {
 
     expect(query.paths).toContain('/spaces/space-1/action-center/plan-ask%3Anode-1');
     expect(container.textContent).toContain('Plan step');
-    expect(container.textContent).toContain('Needs approval: Ship the release');
-    expect(container.textContent).toContain('Needs you');
+    expect(container.textContent).toContain('Pending approval: Ship the release');
+    expect(container.textContent).toContain('Pending');
     expect(container.textContent).toContain('This blocks the release.');
     expect(container.querySelector('a')?.getAttribute('href')).toBe('/s/main/plan?node=node-1');
   });
 
-  it('shows the listed title and says the item no longer needs you where its source has dropped it', () => {
+  it('shows the listed title and says the item is no longer pending where its source has dropped it', () => {
     query.result = { data: undefined, error: { status: 404 }, isError: true };
     render({
       itemId: 'workflow-task:run-1:task-1',
@@ -99,8 +99,8 @@ describe('InlineFocusedItem', () => {
 
     expect(container.textContent).toContain('Run task');
     expect(container.textContent).toContain('Review the draft');
-    expect(container.textContent).toContain('No longer needs you');
-    expect(container.textContent).toContain('Act on it under Needs you in the Workbench.');
+    expect(container.textContent).toContain('No longer pending');
+    expect(container.textContent).toContain('Act on it under Pending in the Workbench.');
   });
 
   it.each([

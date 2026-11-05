@@ -77,7 +77,7 @@ function item(id: string, origin: ActionCenterItem['origin']): ActionCenterItem 
     spaceId: SPACE,
     kind: origin.type === 'plan_decision' ? 'human_input' : 'human_approval',
     origin,
-    title: `Needs approval · **${id}**`,
+    title: `Pending approval · **${id}**`,
     summary: 'Waiting on you: approve it.',
     requestedAt: '2026-10-31T10:00:00.000Z',
     requestedBy: { kind: 'agent', label: 'Helmsman · plan' },

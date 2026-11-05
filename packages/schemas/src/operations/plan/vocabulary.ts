@@ -10,9 +10,8 @@ import type { PlanBoardColumn, PlanNeedsYouReason } from './schemas.js';
 export const PLAN_STATE_LABELS = {
   /** A board column, and the overview lane of the same id. */
   column: {
-    needs_you: 'Needs you',
-    /** A step a run is on, and a `waiting` step whose run has ended. */
-    in_flight: 'In flight',
+    needs_you: 'Pending',
+    in_flight: 'Running',
     up_next: 'Queued',
     done: 'Done',
     dropped: 'Dropped',
@@ -24,23 +23,19 @@ export const PLAN_STATE_LABELS = {
     stranded: 'Under a closed step',
   } satisfies Record<PlanNeedsYouReason, string>,
   /** A plan whose step stands in the `needs_you` column. */
-  planNeedsYou: 'Needs you',
+  planNeedsYou: 'Pending approval',
   /** What follows the count of `needs_you` steps in a plan's header: "3 pending". */
   pendingCountNoun: 'pending',
   /** The `needs_you` lane with no step in it. */
-  pendingEmpty: 'Nothing needs you',
-  /**
-   * What a plan step's Action Center item is titled before the step's own
-   * title. The server writes one title for every reader, so it says "Needs",
-   * not "Needs your".
-   */
+  pendingEmpty: 'Nothing pending',
+  /** What a plan step's Action Center item is titled before the step's own title. */
   itemTitle: {
-    blocked: 'Needs approval',
-    merge_wait: 'Needs review',
-    decide: 'Needs a decision',
+    blocked: 'Pending approval',
+    merge_wait: 'Pending review',
+    decide: 'Pending decision',
   },
   /** The Workbench section that holds approvals, inputs and connections. */
-  workbenchSection: 'Needs you',
+  workbenchSection: 'Pending',
 } as const;
 
 /** What a plan step's Action Center item waits on: an approval of a blocked step, a merge to judge, or a decision. */
@@ -53,7 +48,7 @@ const PLAN_ITEM_TITLE_MAX_CHARS = 256;
 const PLAN_ITEM_CUT_MARK = '…';
 
 /**
- * A plan step's Action Center item title: "Needs approval · <title>", at
+ * A plan step's Action Center item title: "Pending approval · <title>", at
  * most `PLAN_ITEM_TITLE_MAX_CHARS`. The client renders it as inline markdown,
  * so a title too long to fit leaves no syntax open at the cut, and ends with
  * an ellipsis. `inlineMarkdownCut` says how.
