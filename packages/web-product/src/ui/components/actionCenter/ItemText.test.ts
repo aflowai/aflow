@@ -4,7 +4,7 @@
 /**
  * A plan step's text arrives as markdown, and the Action Center renders it so
  * (Plan 338, the operator's note on P1): the item card and every row of the
- * Workbench's Pending section render a plan item's title and summary as
+ * Workbench's Needs you section render a plan item's title and summary as
  * markdown, and leave another source's plain text as it is.
  */
 import { act, createElement } from 'react';
@@ -56,7 +56,7 @@ function item(id: string, overrides: Partial<ActionCenterItem>): ActionCenterIte
 
 const items = [
   item('plan-ask:1', {
-    title: 'Pending approval · Ship **the board** with `PLAN_LANES`',
+    title: 'Needs approval · Ship **the board** with `PLAN_LANES`',
     summary: 'Waiting on you: read [the brief](https://example.com/brief).\n\n- first\n- second',
   }),
   item('plan-decision:2', {
@@ -65,7 +65,7 @@ const items = [
     title: 'Decide: *which way*',
     allowedActions: [],
   }),
-  item('plan-ask:3', { title: 'Pending review · Merge **P2**', audience: 'someone_else' }),
+  item('plan-ask:3', { title: 'Needs review · Merge **P2**', audience: 'someone_else' }),
   item('step:4', {
     origin: {
       type: 'step',
@@ -112,8 +112,8 @@ afterEach(() => {
 
 const text = () => container.textContent ?? '';
 
-it('names the section Pending', () => {
-  expect(text()).toContain('Pending');
+it('names the section Needs you', () => {
+  expect(text()).toContain('Needs you');
   expect(text()).not.toContain('Needs attention');
 });
 
@@ -126,13 +126,13 @@ it('renders a plan item’s title and summary on its card as markdown', () => {
     'first',
     'second',
   ]);
-  expect(text()).toContain('Pending approval · Ship the board with PLAN_LANES');
+  expect(text()).toContain('Needs approval · Ship the board with PLAN_LANES');
 });
 
 it('renders the view-only and someone-else rows’ titles as markdown too', () => {
   expect(container.querySelector('em')?.textContent).toBe('which way');
   expect(text()).toContain('Decide: which way');
-  expect(text()).toContain('Pending review · Merge P2');
+  expect(text()).toContain('Needs review · Merge P2');
   expect(text()).not.toContain('*which way*');
   expect(text()).not.toContain('**P2**');
 });
@@ -143,5 +143,5 @@ it('leaves another source’s plain text as written', () => {
 });
 
 it('names the view-only row’s dot by its state', () => {
-  expect(container.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe('Pending');
+  expect(container.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe('Needs you');
 });

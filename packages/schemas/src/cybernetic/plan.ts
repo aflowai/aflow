@@ -19,6 +19,10 @@ export type PlanNodeKind = z.infer<typeof PlanNodeKindSchema>;
 export const PlanNodeStatusSchema = z.enum(['active', 'waiting', 'blocked', 'done', 'dropped']);
 export type PlanNodeStatus = z.infer<typeof PlanNodeStatusSchema>;
 
+/** What a node's `status` field says of the two open holds, where the agent reads and writes it. */
+export const PLAN_NODE_STATUS_DESCRIPTION =
+  "`blocked` waits on a person and `waiting` waits on a run. A hold on the operator's approval or decision is `blocked`, which puts the node in the operator's Needs you column.";
+
 export const OPEN_PLAN_NODE_STATUSES: readonly PlanNodeStatus[] = ['active', 'waiting', 'blocked'];
 export const CLOSED_PLAN_NODE_STATUSES: readonly PlanNodeStatus[] = ['done', 'dropped'];
 
@@ -273,7 +277,7 @@ export const PlanNodeSchema = z
     title: z.string(),
     goal: z.string().max(PLAN_NODE_PROSE_MAX_CHARS),
     criteria: z.string().max(PLAN_NODE_PROSE_MAX_CHARS),
-    status: PlanNodeStatusSchema,
+    status: PlanNodeStatusSchema.describe(PLAN_NODE_STATUS_DESCRIPTION),
     /** How the criteria were met (done) or why the node was let go (dropped). */
     outcome: z.string().max(PLAN_NODE_PROSE_MAX_CHARS).optional(),
     note: z.string().max(PLAN_NODE_PROSE_MAX_CHARS).optional(),
@@ -298,7 +302,7 @@ export const PlanNodeSummarySchema = z
     parentId: z.string().uuid().nullable(),
     kind: PlanNodeKindSchema,
     title: z.string(),
-    status: PlanNodeStatusSchema,
+    status: PlanNodeStatusSchema.describe(PLAN_NODE_STATUS_DESCRIPTION),
     revision: z.number().int().min(1),
     position: z.number().int().min(0),
     /** The note's first line. */
@@ -487,7 +491,7 @@ export const PlanNodeUpdateSchema = z
       .int()
       .min(1)
       .describe('The revision the change was decided against.'),
-    status: PlanNodeStatusSchema.optional(),
+    status: PlanNodeStatusSchema.optional().describe(PLAN_NODE_STATUS_DESCRIPTION),
     note: PlanNodeNoteSchema.optional(),
     goal: PlanNodeProseSchema.optional(),
     criteria: PlanNodeProseSchema.optional(),

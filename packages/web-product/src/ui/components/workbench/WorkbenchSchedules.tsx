@@ -21,7 +21,7 @@ import {
  * will fire again. An expired one-shot, a chain at its end and a superseded
  * renewal never reach this section, so it stays as tall as what still runs.
  *
- * Kept out of Pending deliberately: that section's badge is a count of
+ * Kept out of Needs you deliberately: that section's badge is a count of
  * work waiting on this person, and a schedule that only runs on its own would
  * inflate it into a queue nobody can empty. The operator still has to learn
  * that an agent scheduled a run, so it is shown, plainly, next to the section

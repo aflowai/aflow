@@ -14,8 +14,8 @@ import {
 describe('PLAN_STATE_LABELS', () => {
   it('names each state as D5’s table does', () => {
     expect(PLAN_STATE_LABELS.column).toEqual({
-      needs_you: 'Pending',
-      in_flight: 'Running',
+      needs_you: 'Needs you',
+      in_flight: 'In flight',
       up_next: 'Queued',
       done: 'Done',
       dropped: 'Dropped',
@@ -26,25 +26,25 @@ describe('PLAN_STATE_LABELS', () => {
       stranded: 'Under a closed step',
     });
     expect(PLAN_STATE_LABELS).toMatchObject({
-      planNeedsYou: 'Pending approval',
+      planNeedsYou: 'Needs you',
       pendingCountNoun: 'pending',
-      pendingEmpty: 'Nothing pending',
-      workbenchSection: 'Pending',
+      pendingEmpty: 'Nothing needs you',
+      workbenchSection: 'Needs you',
     });
   });
 
   it('titles an item from the table, cut to the item title’s length', () => {
-    expect(planItemTitle('blocked', 'Ship it')).toBe('Pending approval · Ship it');
-    expect(planItemTitle('merge_wait', 'Merge')).toBe('Pending review · Merge');
-    expect(planItemTitle('decide', 'Which way')).toBe('Pending decision · Which way');
+    expect(planItemTitle('blocked', 'Ship it')).toBe('Needs approval · Ship it');
+    expect(planItemTitle('merge_wait', 'Merge')).toBe('Needs review · Merge');
+    expect(planItemTitle('decide', 'Which way')).toBe('Needs a decision · Which way');
     expect(planItemTitle('blocked', 'x'.repeat(400))).toHaveLength(256);
     expect(planItemTitle('blocked', 'x'.repeat(400)).endsWith('…')).toBe(true);
-    const fits = `Pending approval · ${'y'.repeat(256 - 'Pending approval · '.length)}`;
-    expect(planItemTitle('blocked', fits.slice('Pending approval · '.length))).toBe(fits);
+    const fits = `Needs approval · ${'y'.repeat(256 - 'Needs approval · '.length)}`;
+    expect(planItemTitle('blocked', fits.slice('Needs approval · '.length))).toBe(fits);
   });
 
   describe('a title cut to fit', () => {
-    const head = 'Pending approval · ';
+    const head = 'Needs approval · ';
     /** Pads before `tail` so the full title runs `over` characters past the ceiling. */
     const pastCeiling = (tail: string, over = 20) =>
       `${'w '.repeat(Math.ceil((256 - head.length - tail.length + over) / 2))}${tail}`;

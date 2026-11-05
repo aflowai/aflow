@@ -121,7 +121,7 @@ describe('planDecisionSource — the item', () => {
       id: `plan-decision:${NODE_ID}`,
       kind: 'human_input',
       origin: { type: 'plan_decision', nodeId: NODE_ID, revision: 3 },
-      title: 'Pending decision · Where the decide answer is recorded',
+      title: 'Needs a decision · Where the decide answer is recorded',
       uiHints: { mode: 'textarea', submitLabel: 'Decide' },
       resolutionSchema: { type: 'string', minLength: 1 },
       resolverAuthority: { kind: 'space' },
@@ -153,7 +153,7 @@ describe('planDecisionSource — the item', () => {
     const [item] = await source().listOpen({ tenantId: TENANT_ID as never, spaceId: SPACE_ID });
 
     expect(item?.title.length).toBeLessThanOrEqual(256);
-    expect(item?.title.startsWith('Pending decision · ')).toBe(true);
+    expect(item?.title.startsWith('Needs a decision · ')).toBe(true);
     expect(item?.title.endsWith('…')).toBe(true);
     expect(item?.title).not.toContain('`');
     expect(item?.summary.length).toBeLessThanOrEqual(2_000);

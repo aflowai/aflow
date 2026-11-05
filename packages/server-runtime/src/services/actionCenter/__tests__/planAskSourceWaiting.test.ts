@@ -71,7 +71,7 @@ it('lists a blocked root with no steps and no wake, titled from the table, and a
       kind: 'human_approval',
       origin: { type: 'plan_ask', nodeId: node.nodeId, revision: node.revision },
       // The node's markdown reaches the client as written, for it to render.
-      title: 'Pending approval · Approve **the next step**',
+      title: 'Needs approval · Approve **the next step**',
       uiHints: { approveLabel: 'Approve', rejectLabel: 'Drop' },
     },
   ]);
@@ -83,7 +83,7 @@ it('lists a blocked root with no steps and no wake, titled from the table, and a
   expect(await source().listOpen(scope)).toEqual([]);
 });
 
-it('titles a merge wait Pending review and keeps Close done on its control', async () => {
+it('titles a merge wait Needs review and keeps Close done on its control', async () => {
   const created = await createPlanNode(
     { ...scope, redis, store },
     { kind: 'execute', title: 'Merge', goal: 'g', criteria: 'c' },
@@ -99,7 +99,7 @@ it('titles a merge wait Pending review and keeps Close done on its control', asy
   );
   expect(written.ok).toBe(true);
   expect(await source().listOpen(scope)).toMatchObject([
-    { title: 'Pending review · Merge', uiHints: { approveLabel: 'Close done' } },
+    { title: 'Needs review · Merge', uiHints: { approveLabel: 'Close done' } },
   ]);
 });
 

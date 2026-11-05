@@ -109,8 +109,8 @@ describe('planCards', () => {
 
   it('orders the columns by what they ask of the reader, Needs you first', () => {
     expect(PLAN_BOARD_COLUMNS.map((c) => [c.id, c.label])).toEqual([
-      ['needs_you', 'Pending'],
-      ['in_flight', 'Running'],
+      ['needs_you', 'Needs you'],
+      ['in_flight', 'In flight'],
       ['up_next', 'Queued'],
       ['done', 'Done'],
       ['dropped', 'Dropped'],
@@ -158,14 +158,14 @@ const NO_STEPS = { steps: 0, done: 0, dropped: 0 };
 describe('a blocked root with no steps (Plan 338 D5)', () => {
   const root = node('proposal', { status: 'blocked' });
 
-  it('stands in its own board’s Pending approval column, the only card', () => {
+  it('stands in its own board’s Needs you column, the only card', () => {
     expect(planCards(root, NO_STEPS).map((c) => [c.node.nodeId, c.column, c.reason])).toEqual([
       ['proposal', 'needs_you', 'blocked'],
     ]);
     expect(planCards(node('approved'), NO_STEPS).length).toBe(0);
   });
 
-  it('reads Pending approval in the header, counted as 1 pending, with no step closed', () => {
+  it('reads Needs you in the header, counted as 1 pending, with no step closed', () => {
     expect(
       planHeader({
         rootId: 'proposal',
@@ -179,7 +179,7 @@ describe('a blocked root with no steps (Plan 338 D5)', () => {
         doneByDay: [],
       }),
     ).toEqual({
-      state: 'Pending approval',
+      state: 'Needs you',
       progress: '0 of 0 closed',
       counts: [{ column: 'needs_you', label: '1 pending' }],
     });
@@ -193,7 +193,7 @@ describe('a blocked root whose steps have all closed (Plan 339 D6)', () => {
   });
   const closed = { steps: 2, done: 1, dropped: 1 };
 
-  it('stands in no Pending approval column: the root asks for nothing', () => {
+  it('stands in no Needs you column: the root asks for nothing', () => {
     expect(planCards(root, closed).some((c) => c.node.nodeId === 'proposal')).toBe(false);
     expect(planCards(root, closed).every((c) => c.column !== 'needs_you')).toBe(true);
   });
@@ -287,7 +287,7 @@ describe('planHeader', () => {
         doneByDay: [],
       }),
     ).toEqual({
-      state: 'Pending approval',
+      state: 'Needs you',
       progress: '5 of 10 closed',
       counts: [
         { column: 'needs_you', label: '1 pending' },
