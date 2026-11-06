@@ -57,9 +57,10 @@ has armed it; until then a node moves only when a Helmsman is told to take it.
    the operator's: round 1 with a minor or worse gets a fix round; after round 1,
    minors and nits publish as is; a major or a blocker always gets a fix round; a stream
    with majors every round stops at the operator's limit, and the branch holds local
-   while a design pass settles what the reviews kept re-finding. When the publication's
-   decision step holds minors past round 1, the Helmsman republishes with `override`,
-   which raises a gate only the operator may approve.
+   while a design pass settles what the reviews kept re-finding. The publication reads
+   this rule from its table (`ROUNDS_RULE`) with no model asked, so it does not hold
+   minors past round 1. `override` stays for genuine exceptions, and raises a gate only
+   the operator may approve.
 4. **A gate** is read before it is touched (`aflow-operate`, Gates). The one the loop
    raises most is the override gate; its premise is "minors only" — check the run's own
    review, not the previous run's, before giving the operator the link.

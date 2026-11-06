@@ -30,6 +30,7 @@ export * from './hostPushMerge.js';
 export * from './hostCommitCheck.js';
 export * from './hostCommitScan.js';
 export * from './hostCommitDescribe.js';
+export * from './roundsRule.js';
 export * from './hostRegistrations.js';
 export * from './pullRequestShepherd.js';
 export * from './browser.js';

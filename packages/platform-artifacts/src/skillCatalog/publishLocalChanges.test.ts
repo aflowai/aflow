@@ -15,6 +15,8 @@ import {
 } from '@aflow/cybernetic-runtime';
 import {
   AfterReviewOverrideSchema,
+  AiDecideInputSchema,
+  AiDecideOutputSchema,
   HOST_CHECKS_TIMEOUT_DEFAULT_MS,
   HOST_HARNESS_CONCURRENCY_DEFAULT,
   HOST_KEEP_AWAKE_DEFAULT,
@@ -53,6 +55,13 @@ import {
   PullRequestFindingsSchema,
   PullRequestGapsSchema,
   pullRequestReviewRecord,
+  ROUNDS_RULE_FIRST_MINOR_REASON,
+  ROUNDS_RULE_LATER_REASON,
+  ROUNDS_RULE_MAJOR_REASON,
+  ROUNDS_RULE_NITS_ONLY_REASON,
+  roundsRuleRound,
+  roundsRuleRow,
+  roundsRuleSeverest,
   RUN_PULL_REQUEST_URL_OUTPUT,
   substituteTemplateBinds,
   toJsonSchemaSync,
@@ -77,17 +86,26 @@ import {
 import { PUBLISH_AS_IT_STANDS } from './publishLocalChangesProse.js';
 import { FIX_ROUND_BRIEF_FINDINGS } from './publishLocalChangesFixRound.js';
 import { REPOSITORY_UNKNOWN_FAILURE } from './publishLocalChangesRepository.js';
-import { AFTER_REVIEW_QUESTION, AFTER_REVIEW_ROUTES } from './publishLocalChangesDecisions.js';
+import {
+  AFTER_REVIEW_QUESTION,
+  AFTER_REVIEW_QUESTION_NAME,
+  AFTER_REVIEW_ROUTES,
+  type AfterReviewRoute,
+} from './publishLocalChangesDecisions.js';
 import { SKILL_CATALOG } from './index.js';
 import { LOCAL_PR_SHEPHERD } from './localPrShepherd.js';
 import { HANDOFF_PIN_PATH } from './localPrShepherdHandoff.js';
 import {
-  AFTER_FIX_ROUND_REASON,
   AFTER_REVIEW_SETTLE_OTHERWISE,
   AFTER_REVIEW_SETTLE_RULES,
-  FIRST_ROUND_REASON,
-  NITS_ONLY_REASON,
-  NOT_APPROVED_REASON,
+  DECIDE_AFTER_REVIEW_TASK_ID,
+  GRADE_FINDINGS_OTHERWISE,
+  GRADE_FINDINGS_RULES,
+  GRADE_FINDINGS_TASK_ID,
+  MODEL_FIX_REASON,
+  MODEL_PUBLISH_REASON,
+  MODEL_UNDECIDED_REASON,
+  RULE_AFTER_REVIEW_TASK_ID,
 } from './publishLocalChangesAfterReview.js';
 import {
   BRIEF_MAX_TURNS,
@@ -207,7 +225,7 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     expect(validity.status).toBe('valid');
   });
 
-  it("is thirty-five tasks — where the commit message comes from, the commission found, a named one checked against it and the stop on one that differs, its summary read, the folder read, the repository settled and the stop where none is, commit, check, the stop on a failed check, scan, what decides the approval, the review's depth, the review and its one retry, its findings decided by the rounds rule, the check of an override and the stop on its refusal, the pull request composed, the push gate, the fix round handed its branch, approve, push, the pull request found, rewritten or opened, and the review read back", () => {
+  it("is thirty-eight tasks — where the commit message comes from, the commission found, a named one checked against it and the stop on one that differs, its summary read, the folder read, the repository settled and the stop where none is, commit, check, the stop on a failed check, scan, what decides the approval, the review's depth, the review and its one retry, its findings graded, looked up in the rounds rule, asked of the decision model only where no row covers them and recorded, the check of an override and the stop on its refusal, the pull request composed, the push gate, the fix round handed its branch, approve, push, the pull request found, rewritten or opened, and the review read back", () => {
     expect(wf.tasks.map((t) => t.taskId)).toEqual([
       'message-from',
       'find-commission',
@@ -227,6 +245,9 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       'decide-review-depth',
       'review-commit',
       'retry-review',
+      'grade-findings',
+      'rule-after-review',
+      'decide-after-review',
       'settle-after-review',
       'claim-override',
       'read-override-pr',
@@ -278,7 +299,16 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       'decide-review-depth': ['commit', 'read-push-approval', 'scan-commit'],
       'review-commit': ['read-push-approval', 'scan-commit', 'decide-review-depth'],
       'retry-review': ['review-commit', 'decide-review-depth'],
-      'settle-after-review': ['review-commit', 'retry-review'],
+      'grade-findings': ['review-commit', 'retry-review'],
+      'rule-after-review': ['review-commit', 'retry-review', 'grade-findings'],
+      'decide-after-review': ['review-commit', 'retry-review', 'rule-after-review'],
+      'settle-after-review': [
+        'review-commit',
+        'retry-review',
+        'grade-findings',
+        'rule-after-review',
+        'decide-after-review',
+      ],
       'claim-override': ['review-commit', 'retry-review', 'settle-after-review'],
       'read-override-pr': ['claim-override', 'read-push-approval'],
       'read-override-pin': ['read-override-pr'],
@@ -360,6 +390,9 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       'decide-review-depth': 'workflow.run.decide',
       'review-commit': 'workflow.run.start',
       'retry-review': 'workflow.run.start',
+      'grade-findings': 'workflow.run.decide',
+      'rule-after-review': 'workflow.run.decide',
+      'decide-after-review': 'ai.decision.decide',
       'settle-after-review': 'workflow.run.decide',
       'claim-override': 'workflow.run.decide',
       'read-override-pr': 'api.http.call',
@@ -1227,6 +1260,45 @@ interface Scenario {
    * it first ended — a review that failed and was retried in place.
    */
   reviewNow?: Review;
+  /**
+   * What the decision model answers about a review the rounds rule leaves
+   * open, and how sure it is; `fails`, a decision step that fails. Absent is
+   * an answer below the bar.
+   */
+  afterReviewAnswer?: { value: AfterReviewRoute; confidence: number } | 'fails';
+}
+
+/** The decision model's answer, as `ai.decision.decide` returns it for the question it was asked. */
+function modelAnswer(
+  answer: Scenario['afterReviewAnswer'],
+  input: Record<string, unknown>,
+): Record<string, unknown> {
+  const asked = AiDecideInputSchema.parse(input);
+  const question = asked.questions?.[AFTER_REVIEW_QUESTION_NAME];
+  if (question?.type !== 'choice' || question.minConfidence === undefined) {
+    throw new Error('the after-review question is a choice with a bar');
+  }
+  const { value, confidence } =
+    answer === undefined || answer === 'fails'
+      ? { value: 'fix_before_merge', confidence: 0.5 }
+      : answer;
+  const decided = confidence >= question.minConfidence;
+  return AiDecideOutputSchema.parse({
+    answers: {
+      [AFTER_REVIEW_QUESTION_NAME]: {
+        type: 'choice',
+        value,
+        decidedValue: decided ? value : null,
+        confidence,
+        probabilities: { [value]: confidence },
+        decided,
+      },
+    },
+    model: 'jev-1',
+    calibration: 'calibrated',
+    usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+    latencyMs: 1,
+  });
 }
 
 /**
@@ -1429,6 +1501,8 @@ function rawOutput(
     case 'resolve-repository':
     case 'check-commission':
     case 'decide-review-depth':
+    case 'grade-findings':
+    case 'rule-after-review':
     case 'settle-after-review':
     case 'claim-override':
     case 'verify-override':
@@ -1436,6 +1510,8 @@ function rawOutput(
     case 'hand-fix-round':
     case 'hand-fix-round-merging':
       return { ...decideByRules(WorkflowRunDecideInputSchema.parse(input)) };
+    case 'decide-after-review':
+      return modelAnswer(scenario.afterReviewAnswer, input);
     case 'find-commission': {
       const query = WorkflowRunListInputSchema.parse(input);
       const recorded = query.succeeded?.[0]?.output?.equals;
@@ -1641,6 +1717,11 @@ function publish(scenario: Scenario): Outcome {
         (task.taskId === 'retry-review' &&
           (scenario.retryReview ?? scenario.review) === 'not-started')
       ) {
+        statuses.set(task.taskId, 'failed');
+        if (task.optional === true) failedOptional.add(task.taskId);
+        continue;
+      }
+      if (task.taskId === 'decide-after-review' && scenario.afterReviewAnswer === 'fails') {
         statuses.set(task.taskId, 'failed');
         if (task.optional === true) failedOptional.add(task.taskId);
         continue;
@@ -2581,6 +2662,8 @@ describe('Publish Local Changes — a branch is published as it stands', () => {
       'read-push-approval',
       'decide-review-depth',
       'review-commit',
+      'grade-findings',
+      'rule-after-review',
       'settle-after-review',
       'claim-override',
       'verify-override',
@@ -3238,8 +3321,10 @@ describe('Publish Local Changes — a failed check stops the run, and no decisio
     });
   }
 
-  it('asks a decision model nothing, over the checks or the review', () => {
-    expect(wf.tasks.filter((t) => t.operation === 'ai.decision.decide')).toEqual([]);
+  it('asks a decision model nothing over the checks, and only a review the rounds rule leaves open', () => {
+    expect(
+      wf.tasks.filter((t) => t.operation === 'ai.decision.decide').map((t) => t.taskId),
+    ).toEqual(['decide-after-review']);
     for (const task of wf.tasks) {
       expect(JSON.stringify(task), task.taskId).not.toMatch(/decide-after-check|next_step/);
     }
@@ -3477,56 +3562,122 @@ describe("Publish Local Changes — the rounds rule decides a review's findings,
     expect(outcome.state['prUrl'], label).toBeUndefined();
   }
 
-  describe('every branch of the rule', () => {
-    it('a verdict short of approve is fix_before_merge, whatever it found and whatever the round', () => {
-      for (const review of ['request_changes', 'comment'] as const) {
-        for (const [found, findings] of [
-          ['nothing', []],
-          ['nits alone', [NAME, NIT_TOO]],
-          ['minors', MINORS],
-          ['a blocker and a major', FINDINGS],
+  /** Whether the run asked the decision model anything. */
+  const askedModel = (outcome: Outcome) => outcome.ran.includes(DECIDE_AFTER_REVIEW_TASK_ID);
+
+  describe('every row of the rule', () => {
+    it('a blocker or a major is fix_before_merge at every round and under every verdict, with no model call', () => {
+      for (const review of ['approve', 'comment', 'request_changes'] as const) {
+        for (const [severity, findings] of [
+          ['a blocker', [SLIP, RACE]],
+          ['a major', [NAME, LEAK]],
         ] as const) {
           for (const round of ['absent', 1, 2, 5] as const) {
-            const label = `${review}, ${found}, round ${String(round)}`;
+            const label = `${review}, ${severity}, round ${String(round)}`;
             const outcome = reviewedWith({ review, findings, round });
-            expectSettled(outcome, 'fix_before_merge', NOT_APPROVED_REASON, label);
+            expectSettled(outcome, 'fix_before_merge', ROUNDS_RULE_MAJOR_REASON, label);
             expectKeptLocal(outcome, label);
+            expect(askedModel(outcome), label).toBe(false);
           }
         }
       }
     });
 
-    it('approve with no finding above a nit is publish_as_is, whatever the round, and pushes without asking', () => {
-      for (const [found, findings] of [
-        ['nothing', []],
-        ['nits alone', [NAME, NIT_TOO]],
-        ['as many nits as a review can return', nits(REVIEW_FINDINGS_MAX)],
+    it("a minor on the slice's first publication is fix_before_merge under approve or comment — the one round", () => {
+      for (const review of ['approve', 'comment'] as const) {
+        for (const round of ['absent', 1] as const) {
+          const label = `${review}, round ${String(round)}`;
+          const outcome = reviewedWith({ review, findings: MINORS, round });
+          expectSettled(outcome, 'fix_before_merge', ROUNDS_RULE_FIRST_MINOR_REASON, label);
+          expectKeptLocal(outcome, label);
+          expect(askedModel(outcome), label).toBe(false);
+          // Every finding is handed on, for the fix round's publication to mark.
+          expect(outcome.state['findings'], label).toHaveLength(MINORS.length);
+        }
+      }
+    });
+
+    it('once a fix round has run, minors and nits alone are publish_as_is under every verdict, with no model call, and the pull request lists them open', () => {
+      for (const review of ['approve', 'comment'] as const) {
+        for (const round of [2, 3, 7] as const) {
+          const label = `${review}, round ${String(round)}`;
+          const outcome = reviewedWith({ review, findings: [SLIP, STALE, NAME], round });
+          expectSettled(outcome, 'publish_as_is', ROUNDS_RULE_LATER_REASON, label);
+          expect(askedModel(outcome), label).toBe(false);
+          expect(outcome, label).toMatchObject({ asked: false, pushed: true });
+          expect(outcome.state, label).toMatchObject({
+            pushDecision: 'push',
+            prUrl: 'https://github.com/aflowai/aflow/pull/7',
+          });
+          // Carried: the composition is handed every finding, records them open, and hands them on.
+          const described = HostCommitDescribeInputSchema.parse(outcome.inputs.get('describe-pr'));
+          expect(
+            described.review?.findings?.map((f) => f.claim),
+            label,
+          ).toEqual([SLIP, STALE, NAME].map((f) => f.claim));
+          expect(PullRequestFindingsSchema.parse(outcome.state['findings']), label).toEqual(
+            [SLIP, STALE, NAME].map(({ severity, file, line, claim }) => ({
+              severity,
+              file,
+              ...(line === undefined ? {} : { line }),
+              claim,
+              state: 'open',
+            })),
+          );
+          const opened = outcome.inputs.get('open-pr') as { params: { body: { body: unknown } } };
+          expect(opened.params.body.body, label).toBe(outcome.outputs.get('describe-pr')?.['body']);
+        }
+      }
+    });
+
+    it('aflow/ux-wait-notices: rounds 2 to 6 of `comment` reviews of minors and nits publish as they stand, where the model held them', () => {
+      for (const [round, findings] of [
+        [2, [SLIP, STALE, NAME]],
+        [3, [SLIP, STALE, NAME]],
+        [4, [NAME, NIT_TOO]],
+        [5, [SLIP, NAME]],
+        [6, [STALE]],
       ] as const) {
-        for (const round of ['absent', 1, 2] as const) {
+        const label = `round ${String(round)}`;
+        const outcome = reviewedWith({ review: 'comment', findings, round });
+        expectSettled(outcome, 'publish_as_is', ROUNDS_RULE_LATER_REASON, label);
+        expect(askedModel(outcome), label).toBe(false);
+        expect(outcome, label).toMatchObject({ asked: false, pushed: true });
+      }
+    });
+
+    it('aflow/ux-schedules: the majors held at round 3 are held at round 4 too, whatever the verdict, and only an override publishes them', () => {
+      for (const [round, review] of [
+        [3, 'request_changes'],
+        [4, 'comment'],
+        [4, 'request_changes'],
+      ] as const) {
+        const label = `round ${String(round)}, ${review}`;
+        const outcome = reviewedWith({ review, findings: [LEAK, SLIP], round });
+        expectSettled(outcome, 'fix_before_merge', ROUNDS_RULE_MAJOR_REASON, label);
+        expectKeptLocal(outcome, label);
+        expect(askedModel(outcome), label).toBe(false);
+      }
+    });
+
+    it('approve over nothing above a nit is publish_as_is on the first publication, and over nothing at every round: the approve path as it was', () => {
+      for (const [found, findings, rounds] of [
+        ['nothing', [], ['absent', 1, 2, 5]],
+        ['nits alone', [NAME, NIT_TOO], ['absent', 1]],
+        ['as many nits as a review can return', nits(REVIEW_FINDINGS_MAX), ['absent', 1]],
+      ] as const) {
+        for (const round of rounds) {
           const label = `${found}, round ${String(round)}`;
           const outcome = reviewedWith({ review: 'approve', findings, round });
-          expectSettled(
-            outcome,
-            'publish_as_is',
-            round === 2 ? AFTER_FIX_ROUND_REASON : NITS_ONLY_REASON,
-            label,
-          );
+          expectSettled(outcome, 'publish_as_is', ROUNDS_RULE_NITS_ONLY_REASON, label);
+          expect(askedModel(outcome), label).toBe(false);
           expect(outcome, label).toMatchObject({ asked: false, pushed: true });
           expect(outcome.state['pushDecision'], label).toBe('push');
         }
       }
-      expect(NITS_ONLY_REASON).toBe('nits-only review: the rounds rule ends the rounds');
-    });
-
-    it("approve with minors on the slice's first publication is fix_before_merge — the one round", () => {
-      for (const round of ['absent', 1] as const) {
-        const label = `round ${String(round)}`;
-        const outcome = reviewedWith({ review: 'approve', findings: MINORS, round });
-        expectSettled(outcome, 'fix_before_merge', FIRST_ROUND_REASON, label);
-        expectKeptLocal(outcome, label);
-        // Every finding is handed on, for the fix round's publication to mark.
-        expect(outcome.state['findings'], label).toHaveLength(MINORS.length);
-      }
+      expect(ROUNDS_RULE_NITS_ONLY_REASON).toBe(
+        'nits-only review: the rounds rule ends the rounds',
+      );
     });
 
     it("never takes a fix round for the review's needs_setup finding, hands it on to none, and still takes one for a real minor beside it (Plan 320 D21)", () => {
@@ -3538,7 +3689,8 @@ describe("Publish Local Changes — the rounds rule decides a review's findings,
         evidence: 'The range changes `src/web/Checkout.vue`, which matches the folder’s `uiPaths`.',
       } as Finding;
       const alone = reviewedWith({ review: 'approve', findings: [NAME, setup] });
-      expectSettled(alone, 'publish_as_is', NITS_ONLY_REASON, 'needs_setup alone');
+      expectSettled(alone, 'publish_as_is', ROUNDS_RULE_NITS_ONLY_REASON, 'needs_setup alone');
+      expect(alone.outputs.get(GRADE_FINDINGS_TASK_ID)?.['decision']).toBe('nit');
       expect(alone).toMatchObject({ asked: false, pushed: true });
       expect(alone.state['pushDecision']).toBe('push');
       expect(PullRequestFindingsSchema.parse(alone.state['findings']).map((f) => f.claim)).toEqual([
@@ -3549,7 +3701,12 @@ describe("Publish Local Changes — the rounds rule decides a review's findings,
       expect(described.review?.findings?.at(-1)).toMatchObject({ kind: NEEDS_SETUP_FINDING_KIND });
 
       const beside = reviewedWith({ review: 'approve', findings: [SLIP, setup] });
-      expectSettled(beside, 'fix_before_merge', FIRST_ROUND_REASON, 'a minor beside it');
+      expectSettled(
+        beside,
+        'fix_before_merge',
+        ROUNDS_RULE_FIRST_MINOR_REASON,
+        'a minor beside it',
+      );
       expect(PullRequestFindingsSchema.parse(beside.state['findings']).map((f) => f.claim)).toEqual(
         [SLIP.claim],
       );
@@ -3574,87 +3731,118 @@ describe("Publish Local Changes — the rounds rule decides a review's findings,
       expect(skillGuidance(PUBLISH_LOCAL_CHANGES)).toContain(FIX_ROUND_BRIEF_FINDINGS);
     });
 
-    it('approve with minors once a fix round has run is publish_as_is: pushed without asking, the minors carried open on the pull request', () => {
-      for (const round of [2, 3] as const) {
-        const label = `round ${String(round)}`;
-        const outcome = reviewedWith({ review: 'approve', findings: [SLIP, STALE, NAME], round });
-        expectSettled(outcome, 'publish_as_is', AFTER_FIX_ROUND_REASON, label);
-        expect(outcome, label).toMatchObject({ asked: false, pushed: true });
-        expect(outcome.state, label).toMatchObject({
-          pushDecision: 'push',
-          prUrl: 'https://github.com/aflowai/aflow/pull/7',
-        });
-        // Carried: the composition is handed every finding, records them open, and hands them on.
-        const described = HostCommitDescribeInputSchema.parse(outcome.inputs.get('describe-pr'));
-        expect(
-          described.review?.findings?.map((f) => f.claim),
-          label,
-        ).toEqual([SLIP, STALE, NAME].map((f) => f.claim));
-        expect(PullRequestFindingsSchema.parse(outcome.state['findings']), label).toEqual(
-          [SLIP, STALE, NAME].map(({ severity, file, line, claim }) => ({
-            severity,
-            file,
-            ...(line === undefined ? {} : { line }),
-            claim,
-            state: 'open',
-          })),
-        );
-        const opened = outcome.inputs.get('open-pr') as { params: { body: { body: unknown } } };
-        expect(opened.params.body.body, label).toBe(outcome.outputs.get('describe-pr')?.['body']);
-      }
-    });
-
-    it('approve over a blocker or a major takes the round as minors do, and after it the gate asks the operator, whose answer decides', () => {
-      for (const [severity, findings] of [
-        ['a blocker', [SLIP, RACE]],
-        ['a major', [NAME, LEAK]],
-      ] as const) {
-        const first = reviewedWith({ review: 'approve', findings });
-        expectSettled(first, 'fix_before_merge', FIRST_ROUND_REASON, severity);
-        expectKeptLocal(first, severity);
-
-        const after = reviewedWith({ review: 'approve', findings, round: 2 });
-        expectSettled(after, 'publish_as_is', AFTER_FIX_ROUND_REASON, severity);
-        expect(after, severity).toMatchObject({ asked: true, pushed: true });
-        expect(after.state['pushDecision'], severity).toBe('ask');
-        expect(after.state['pushReason'], severity).toContain('a blocker or a major');
-        const declined = reviewedWith({
-          review: 'approve',
-          findings,
-          round: 2,
-          decision: 'declined',
-        });
-        expect(declined, severity).toMatchObject({ asked: true, pushed: false });
-        for (const taskId of PR_TASKS) expect(declined.ran, severity).not.toContain(taskId);
-      }
-    });
-
-    it('reads every severity above a nit at every place a review can put a finding, and a missing round as the first', () => {
-      const decide = (state: Record<string, unknown>) =>
+    it('names the severest finding at every place a review can put one, a needs_setup minor counting as none', () => {
+      const grade = (findings: readonly Record<string, unknown>[]) =>
         decideByRules({
-          state,
-          rules: [...AFTER_REVIEW_SETTLE_RULES],
-          otherwise: AFTER_REVIEW_SETTLE_OTHERWISE,
+          state: { findings },
+          rules: [...GRADE_FINDINGS_RULES],
+          otherwise: GRADE_FINDINGS_OTHERWISE,
         }).decision;
       for (const severity of ['minor', 'major', 'blocker'] as const) {
         for (const at of [0, REVIEW_FINDINGS_MAX - 1]) {
           const findings = nits(REVIEW_FINDINGS_MAX).map((nit, i) =>
             i === at ? { ...nit, severity } : nit,
           );
-          const label = `${severity} at ${String(at)}`;
-          expect(decide({ verdict: 'approve', findings }), label).toBe('fix_before_merge');
-          expect(decide({ verdict: 'approve', findings, round: null }), label).toBe(
-            'fix_before_merge',
-          );
-          expect(decide({ verdict: 'approve', findings, round: 1 }), label).toBe(
-            'fix_before_merge',
-          );
-          expect(decide({ verdict: 'approve', findings, round: 2 }), label).toBe('publish_as_is');
+          expect(grade(findings), `${severity} at ${String(at)}`).toBe(severity);
+          expect(roundsRuleSeverest(findings)).toBe(severity);
         }
       }
+      const setupMinor = { ...SLIP, kind: NEEDS_SETUP_FINDING_KIND };
+      for (const findings of [[], [NAME], [NAME, setupMinor], [setupMinor], [SLIP, LEAK, RACE]]) {
+        expect(grade(findings), JSON.stringify(findings)).toBe(roundsRuleSeverest(findings));
+      }
       expect(Object.keys(REVIEW_SEVERITIES)).toEqual(['blocker', 'major', 'minor', 'nit']);
-      // A verdict that is not there is no approval.
-      expect(decide({ findings: [] })).toBe('fix_before_merge');
+    });
+  });
+
+  describe('a case no row covers reaches the decision model, and only such a case', () => {
+    const UNCOVERED_CASES = [
+      ['round 1, comment over nits', { review: 'comment', findings: [NAME], round: 1 }],
+      ['round 1, comment over nothing', { review: 'comment', findings: [], round: 'absent' }],
+      ['round 1, request_changes over nothing', { review: 'request_changes', findings: [] }],
+      ['round 3, comment over nothing', { review: 'comment', findings: [], round: 3 }],
+    ] as const;
+
+    it('asks the space’s decision model, named by no step, the review’s question at its bar', () => {
+      const decide = taskOrThrow(DECIDE_AFTER_REVIEW_TASK_ID);
+      expect(decide.operation).toBe('ai.decision.decide');
+      expect(decide.optional).toBe(true);
+      expect(decide.when).toEqual({
+        expression: `tasks.${RULE_AFTER_REVIEW_TASK_ID}.output.decision == 'uncovered'`,
+        onMissingRef: 'skip',
+      });
+      const template = decide.inputTemplate as Record<string, unknown>;
+      expect(template).not.toHaveProperty('model');
+      expect(template['questions']).toEqual({
+        [AFTER_REVIEW_QUESTION_NAME]: { ...AFTER_REVIEW_QUESTION, minConfidence: 0.8 },
+      });
+      expect(JSON.stringify(PUSH_GATE_RULES)).not.toContain('undecided');
+      const decisions = new Set([
+        ...AFTER_REVIEW_SETTLE_RULES.map((rule) => rule.decision),
+        AFTER_REVIEW_SETTLE_OTHERWISE.decision,
+      ]);
+      expect([...decisions].sort()).toEqual([...AFTER_REVIEW_ROUTES].sort());
+    });
+
+    for (const [name, scenario] of UNCOVERED_CASES) {
+      it(`${name}: takes the model's answer above its bar, and holds the branch below it or where the step fails`, () => {
+        const ruled = reviewedWith(scenario);
+        expect(ruled.outputs.get(RULE_AFTER_REVIEW_TASK_ID)?.['decision']).toBe('uncovered');
+
+        for (const [answer, decision, reason] of [
+          [{ value: 'publish_as_is', confidence: 0.9 }, 'publish_as_is', MODEL_PUBLISH_REASON],
+          [{ value: 'fix_before_merge', confidence: 0.9 }, 'fix_before_merge', MODEL_FIX_REASON],
+          [{ value: 'publish_as_is', confidence: 0.6 }, 'fix_before_merge', MODEL_UNDECIDED_REASON],
+          ['fails', 'fix_before_merge', MODEL_UNDECIDED_REASON],
+        ] as const) {
+          const label = `${name}, ${JSON.stringify(answer)}`;
+          const outcome = reviewedWith({ ...scenario, afterReviewAnswer: answer });
+          expect(askedModel(outcome), label).toBe(true);
+          expectSettled(outcome, decision, reason, label);
+          if (answer === 'fails') {
+            // The step is optional: its failure is recorded, and the run goes on to hold the branch.
+            expect(
+              [...outcome.statuses].filter(([, status]) => status === 'failed'),
+              label,
+            ).toEqual([[DECIDE_AFTER_REVIEW_TASK_ID, 'failed']]);
+            expect(outcome, label).toMatchObject({ asked: false, pushed: false });
+            expect(outcome.state['pushDecision'], label).toBe('keep_local');
+          } else if (decision === 'fix_before_merge') {
+            expectKeptLocal(outcome, label);
+          }
+        }
+      });
+    }
+
+    it('a publish_as_is the model gives over a review that found nothing and did not approve still asks the operator', () => {
+      const outcome = reviewedWith({
+        review: 'comment',
+        findings: [],
+        afterReviewAnswer: { value: 'publish_as_is', confidence: 0.95 },
+      });
+      expectSettled(outcome, 'publish_as_is', MODEL_PUBLISH_REASON, 'comment over nothing');
+      expect(outcome).toMatchObject({ asked: true, pushed: true });
+      expect(outcome.state['pushDecision']).toBe('ask');
+    });
+
+    it('never asks the model of a case a row covers, at any round', () => {
+      for (const review of ['approve', 'comment', 'request_changes'] as const) {
+        for (const findings of [[], [NAME], MINORS, [SLIP, LEAK], FINDINGS]) {
+          for (const round of ['absent', 1, 2, 4] as const) {
+            const covered = roundsRuleRow({
+              round: roundsRuleRound(round === 'absent' ? null : round),
+              severest: roundsRuleSeverest(findings),
+              verdict: review,
+            });
+            const outcome = reviewedWith({ review, findings, round });
+            const label = `${review}, ${String(findings.length)} findings, round ${String(round)}`;
+            expect(askedModel(outcome), label).toBe(covered === null);
+            if (covered !== null) {
+              expectSettled(outcome, covered.decision, covered.reason, label);
+            }
+          }
+        }
+      }
     });
   });
 
@@ -3670,34 +3858,34 @@ describe("Publish Local Changes — the rounds rule decides a review's findings,
       expect(skillGuidance(PUBLISH_LOCAL_CHANGES)).toContain('`round`');
     });
 
-    it('reaches the rule from the run input alone, beside the verdict and the findings', () => {
-      expect(taskOrThrow('settle-after-review').inputBindings).toEqual({
+    it('reaches the table from the run input alone, beside the verdict and the severest finding, and reads a missing round as the first', () => {
+      const facts = {
         verdict: { kind: 'task_output', taskId: 'review-commit', path: 'verdict' },
         retriedVerdict: { kind: 'task_output', taskId: 'retry-review', path: 'verdict' },
-        findings: { kind: 'task_output', taskId: 'review-commit', path: 'findings' },
-        retriedFindings: { kind: 'task_output', taskId: 'retry-review', path: 'findings' },
         round: { kind: 'run_input', path: 'round' },
+        severest: { kind: 'task_output', taskId: GRADE_FINDINGS_TASK_ID, path: 'decision' },
+      };
+      expect(taskOrThrow(RULE_AFTER_REVIEW_TASK_ID).inputBindings).toEqual(facts);
+      expect(taskOrThrow('settle-after-review').inputBindings).toEqual({
+        ...facts,
+        answer: {
+          kind: 'task_output',
+          taskId: DECIDE_AFTER_REVIEW_TASK_ID,
+          path: `answers.${AFTER_REVIEW_QUESTION_NAME}.decidedValue`,
+        },
       });
       const outcome = reviewedWith({ review: 'approve', findings: MINORS, round: 2 });
-      expect(outcome.inputs.get('settle-after-review')).toMatchObject({
-        state: { verdict: 'approve', findings: MINORS, round: 2 },
+      expect(outcome.inputs.get(RULE_AFTER_REVIEW_TASK_ID)).toMatchObject({
+        state: { verdict: 'approve', severest: 'minor', round: 2 },
+      });
+      const first = reviewedWith({ review: 'approve', findings: MINORS });
+      expect(first.inputs.get(RULE_AFTER_REVIEW_TASK_ID)).toMatchObject({
+        state: { verdict: 'approve', severest: 'minor', round: 1 },
       });
     });
   });
 
-  describe('no model decides, and nothing is left undecided', () => {
-    it('asks no decision model and has no undecided path anywhere — not in the rule, the gate or the record', () => {
-      expect(wf.tasks.some((task) => task.operation === 'ai.decision.decide')).toBe(false);
-      expect(taskById.has('decide-after-review')).toBe(false);
-      expect(JSON.stringify(wf)).not.toMatch(/undecided|decide-after-review/);
-      expect(JSON.stringify(PUSH_GATE_RULES)).not.toContain('undecided');
-      const decisions = new Set([
-        ...AFTER_REVIEW_SETTLE_RULES.map((rule) => rule.decision),
-        AFTER_REVIEW_SETTLE_OTHERWISE.decision,
-      ]);
-      expect([...decisions].sort()).toEqual([...AFTER_REVIEW_ROUTES].sort());
-    });
-
+  describe('the push gate follows the decision', () => {
     it('never pauses a cleared range under `unless-unreviewed` over findings no more severe than minor: every verdict, every round', () => {
       for (const review of ['approve', 'request_changes', 'comment'] as const) {
         for (const findings of [[], [NAME], MINORS, [SLIP, STALE]]) {
@@ -4036,13 +4224,15 @@ describe("Publish Local Changes — the rounds rule decides a review's findings,
   // does, or as the answer itself, which leaves the push to refuse on its own
   // predicate.
   for (const declineAs of ['skip', 'answer'] as const) {
-    it(`a decline recorded as ${declineAs === 'skip' ? 'a skip' : 'an answer'} pushes nothing over a blocker after the fix round`, () => {
+    it(`a decline recorded as ${declineAs === 'skip' ? 'a skip' : 'an answer'} pushes nothing over a blocker the operator's word set aside`, () => {
       const outcome = reviewedWith({
-        review: 'approve',
+        review: 'request_changes',
         round: 2,
         decision: 'declined',
         declineAs,
+        inputs: { override: { by: 'operator', reason: 'The operator said to publish it.' } },
       });
+      expect(outcome.state['afterReview']).toBe('publish_as_is');
       expect(outcome.asked).toBe(true);
       expect(outcome.pushed).toBe(false);
       expect(outcome.state['prUrl']).toBeUndefined();

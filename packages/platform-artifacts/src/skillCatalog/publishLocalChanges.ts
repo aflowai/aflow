@@ -10,6 +10,7 @@ import {
 } from '@aflow/schemas';
 import {
   AFTER_REVIEW_BINDINGS,
+  AFTER_REVIEW_TASKS,
   AFTER_REVIEW_VALUE,
   SETTLE_AFTER_REVIEW_TASK,
 } from './publishLocalChangesAfterReview.js';
@@ -315,7 +316,7 @@ const ENTRY_INPUT_CONTRACT = {
 
 const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'publish-local-changes',
-  version: 51,
+  version: 52,
   name: 'Publish Local Changes',
   tagline:
     'Commit a patch onto a branch of a connected repository, then push it and open the pull request — asking the operator first unless the folder says otherwise.',
@@ -432,7 +433,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           id: 'round',
           required: false,
           description:
-            "Which publication of this slice this is: 1, the default, for its first; one more than the publication before it for each publication of a fix round on the same branch. The rounds rule decides the review's findings on it — on the first, an approving review with a minor or worse takes a fix round (`fix_before_merge`); after that round, the same review publishes as is, its findings carried open. Count it from the publications of this branch that ran; never guess it.",
+            "Which publication of this slice this is: 1, the default, for its first; one more than the publication before it for each publication of a fix round on the same branch. The rounds rule decides the review's findings on it. On the first, a minor takes a fix round (`fix_before_merge`). After that round, minors and nits publish as is, carried open. A major takes a fix round at any round. Count it from the publications of this branch that ran; never guess it.",
           schema: ROUND_SCHEMA,
         },
         {
@@ -754,7 +755,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
         DECIDE_REVIEW_DEPTH_TASK,
         ...REVIEW_TASKS,
 
-        SETTLE_AFTER_REVIEW_TASK,
+        ...AFTER_REVIEW_TASKS,
 
         ...overrideTasks(CHECKS_CLEARED),
 
@@ -1169,7 +1170,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           variableId: 'afterReview',
           name: 'After the review',
           description:
-            "What the rounds rule decided about the review's findings, as the pull request records it, and what the push gate followed: fix_before_merge — nothing pushed, the branch kept local — for a verdict short of approve, or a minor or worse in round 1; publish_as_is — pushed, asking only over a blocker or a major — for nits alone, or after round 1. Null where the review did not finish. On fix_before_merge the fix round, the conversation's or the shepherd's, takes `fixRound`.",
+            "What the rounds rule decided about the review's findings, as the pull request records it, and what the push gate followed. fix_before_merge, nothing pushed: a major at any round, or a minor in round 1. publish_as_is, pushed: minors and nits after round 1, or an approving review of nits or nothing. A case no row covers is the decision model's. Null where the review did not finish. On fix_before_merge the fix round takes `fixRound`.",
           required: false,
           sensitive: false,
           immutable: false,
