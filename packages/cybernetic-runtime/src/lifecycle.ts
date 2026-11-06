@@ -1,4 +1,8 @@
-import type { ActiveSurfaceLifecycleReasonCode, ActiveSurfaceRunLifecycle } from '@aflow/schemas';
+import type {
+  ActiveSurfaceLifecycleReasonCode,
+  ActiveSurfaceRunLifecycle,
+  TerminalRunStatus,
+} from '@aflow/schemas';
 
 /** Default scheduler-stall threshold — 5 minutes. */
 export const LIFECYCLE_DEFAULT_STALE_THRESHOLD_MS = 5 * 60 * 1000;
@@ -9,8 +13,8 @@ export const LIFECYCLE_DEFAULT_STALE_THRESHOLD_MS = 5 * 60 * 1000;
  * may live in the adapter itself.
  */
 export interface LifecycleSignals {
-  /** `'completed' | 'failed' | 'cancelled'` for terminal runs/sessions; null otherwise. */
-  terminal: 'completed' | 'failed' | 'cancelled' | null;
+  /** The terminal status of a run, or of a session mapped onto it; null otherwise. */
+  terminal: TerminalRunStatus | null;
   /** Redis `interruptRequested` flag from the relevant session. */
   interruptRequested: boolean;
   /**

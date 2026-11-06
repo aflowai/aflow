@@ -37,7 +37,6 @@ vi.mock('../pauseResume.js', () => ({
 const mockLoadRun = vi.fn();
 vi.mock('../helpers.js', () => ({
   loadRunByRunIdAcrossSpaces: (...a: unknown[]) => mockLoadRun(...a),
-  isTerminalRunStatus: (s: string) => s === 'completed' || s === 'failed' || s === 'cancelled',
 }));
 
 import { reconcileOrphanedRunsForTenant } from '../orphanedRunReconciliation.js';

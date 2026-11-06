@@ -34,7 +34,7 @@ import type {
   WorkflowRunWakeupPauseContext,
 } from '@aflow/schemas';
 import type { SessionEvent } from '@aflow/redis';
-import { buildWakeupCancellation } from '@aflow/schemas';
+import { buildWakeupCancellation, isTerminalRunStatus } from '@aflow/schemas';
 import { getOrchestratorLogger, logOrchestratorError } from '../../../lib/orchestratorLogger.js';
 import { emitTerminalRunUpdate, loadRunByRunIdAcrossSpaces } from './helpers.js';
 import { deliverSessionWakeup } from './sessionWakeup.js';
@@ -78,10 +78,9 @@ export async function notifyWaiters(deps: HarnessDeps, args: NotifyWaitersArgs):
 
   // On a TERMINAL transition, build the run-detail DTO ONCE and reuse it
   // for everything this notification carries: the operator's resolved
-  const terminalDetail =
-    args.outcome === 'completed' || args.outcome === 'failed' || args.outcome === 'cancelled'
-      ? await loadTerminalRunDetail(deps, args)
-      : null;
+  const terminalDetail = isTerminalRunStatus(args.outcome)
+    ? await loadTerminalRunDetail(deps, args)
+    : null;
   const runResult = terminalDetail?.result;
 
   await emitTerminalRunUpdate(deps, args, runResult).catch((err: unknown) => {
@@ -185,7 +184,7 @@ async function pausedForOperator(deps: HarnessDeps, args: NotifyWaitersArgs): Pr
 }
 
 function isRunEnding(outcome: NotifyWaitersArgs['outcome']): boolean {
-  return outcome === 'completed' || outcome === 'failed' || outcome === 'cancelled';
+  return isTerminalRunStatus(outcome);
 }
 
 /**

@@ -1,3 +1,4 @@
+import { isTerminalRunStatus } from '@aflow/schemas';
 import { isDispatchOverdue } from '../ledger/dispatchArming.js';
 import { LIVE_TASK_STATUSES, SCHEDULED_TASK_STATUSES } from '../ledger/concurrencySlots.js';
 import type { WorkflowRunDetail } from './types.js';
@@ -63,7 +64,7 @@ export function deriveRunLiveness(
   const staleThresholdMs = opts?.staleThresholdMs ?? DEFAULT_STALE_THRESHOLD_MS;
 
   // Terminal runs don't have liveness — but handle gracefully
-  if (run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled') {
+  if (isTerminalRunStatus(run.status)) {
     return {
       liveness: 'idle',
       reason: `Run is terminal (${run.status}).`,

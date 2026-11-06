@@ -16,6 +16,8 @@ import type {
 } from '@aflow/run-view';
 import { HitlInline } from './HitlInline.js';
 import { RunWakeupCard } from './RunWakeupCard.js';
+import { WaitOutcomeNotice } from './WaitOutcomeNotice.js';
+import { isWaitOutcomeMessage } from './waitOutcomeLine.js';
 import { InlineFocusedProposal } from './InlineFocusedProposal.js';
 import { InlineFocusedItem } from './InlineFocusedItem.js';
 import { SubflowClusterHeader } from './SubflowClusterHeader.js';
@@ -144,6 +146,14 @@ export function MessageWithCopy({
   }, [msg, apiUrl, headers]);
 
   const isSubflow = Boolean(msg.subflowSource);
+
+  if (isWaitOutcomeMessage(msg)) {
+    return (
+      <div className="chat-message-wrapper" data-chat-message>
+        <WaitOutcomeNotice body={msg.content} timestamp={formatTime(msg.timestamp)} />
+      </div>
+    );
+  }
 
   if (msg.semanticType === 'run_wakeup' && msg.richContent) {
     return (

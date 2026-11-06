@@ -6,10 +6,10 @@ import type {
   WorkflowRunSurfaceState,
   WorkflowSurfaceTaskState,
 } from '../../types.js';
+import { isTerminalRunStatus } from '@aflow/schemas';
 import { THINKING_CLASS_OPS } from '../../op-labels.js';
 import type { RunViewState } from '../state.js';
 import {
-  TERMINAL_RUN_STATUSES,
   TERMINAL_TASK_STATUSES,
   shouldAcceptTaskUpdate,
   bumpSurfaceRevision,
@@ -46,7 +46,7 @@ export function applyWorkflowEvents(
       const tasksTruncated = event.metadata?.tasksTruncated === true;
       // If the run is already frozen, drop subsequent updates.
       if (!baseline.isFrozen) {
-        const isTerminal = TERMINAL_RUN_STATUSES.has(payload.status);
+        const isTerminal = isTerminalRunStatus(payload.status);
         const runState: WorkflowRunSurfaceState = {
           ...baseline,
           slug: payload.slug,

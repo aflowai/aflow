@@ -10,6 +10,7 @@
  * next call, so callers chain watches with zero thought.
  */
 
+import { isTerminalRunStatus } from '@aflow/schemas';
 import type { Session } from '../auth/SessionStore.js';
 import { ApiError } from './ApiClient.js';
 import {
@@ -101,7 +102,6 @@ export const MAX_WATCH_TIMEOUT_SECONDS = 240;
 const DEFAULT_POLL_INTERVAL_MS = 2500;
 
 const SESSION_TERMINAL_STATUSES = ['SUCCEEDED', 'FAILED', 'CANCELLED'];
-const RUN_TERMINAL_STATUSES = ['completed', 'failed', 'cancelled'];
 
 function lightSignal(run: SessionRunStatusView): string {
   return [run.status, run.updatedAt ?? '', run.currentStepId ?? ''].join('|');
@@ -336,7 +336,7 @@ export class Watcher {
 
         // A paused run needs an operator/agent decision and a terminal run is
         // final — either concludes the watch regardless of `until`.
-        if (status === 'paused' || RUN_TERMINAL_STATUSES.includes(status)) {
+        if (status === 'paused' || isTerminalRunStatus(status)) {
           return this.buildRunResult(args, until, timeoutSeconds, snapshot, true);
         }
       } catch (err) {

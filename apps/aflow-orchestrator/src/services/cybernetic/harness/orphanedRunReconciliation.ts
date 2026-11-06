@@ -25,11 +25,11 @@ import {
   readSchedulerCursorVersion,
   DEFAULT_STALLED_AFTER_MS,
 } from '@aflow/cybernetic-runtime';
-import type { TenantId } from '@aflow/schemas';
+import { isTerminalRunStatus, type TenantId } from '@aflow/schemas';
 import { getOrchestratorLogger, logOrchestratorError } from '../../../lib/orchestratorLogger.js';
 import { dispatchNextOrTerminate } from './dispatch.js';
 import { completeRun, type RunEnding } from './pauseResume.js';
-import { isTerminalRunStatus, loadRunByRunIdAcrossSpaces } from './helpers.js';
+import { loadRunByRunIdAcrossSpaces } from './helpers.js';
 import type { HarnessDeps } from './types.js';
 
 const RECONCILE_DEFAULT_BATCH = 100;

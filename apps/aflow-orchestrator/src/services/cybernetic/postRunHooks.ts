@@ -40,7 +40,7 @@ import type {
 import { createTenantContext, withTenantSchema, spaces } from '@aflow/database';
 import { createByokAiClientFactory } from '@aflow/credential-resolver';
 import { eq } from 'drizzle-orm';
-import { EntityDirectivesSchema } from '@aflow/schemas';
+import { EntityDirectivesSchema, isTerminalRunStatus } from '@aflow/schemas';
 import { appendEntityEvent, readLocalMachine, runtimeAdmission } from '@aflow/redis';
 import type { PayloadStore } from '@aflow/payload-store';
 import { randomUUID } from 'node:crypto';
@@ -304,9 +304,7 @@ export async function fireCyberneticPostRunHooksStandalone(
             }
           : null,
         learnings,
-        ...(run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled'
-          ? { runTerminalStatus: run.status }
-          : {}),
+        ...(isTerminalRunStatus(run.status) ? { runTerminalStatus: run.status } : {}),
       });
       campaignEnded = scored.campaignEnded;
     } catch (err) {

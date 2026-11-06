@@ -1,6 +1,6 @@
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq, and, asc, desc, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
-import type { TenantId } from '@aflow/schemas';
+import { TERMINAL_RUN_STATUSES, type TenantId } from '@aflow/schemas';
 import {
   createTenantContext,
   withTenantSchema,
@@ -273,7 +273,7 @@ export async function listTerminalRunLearningsForCampaign(
       .where(
         and(
           eq(workflowRuns.campaignId, campaignId),
-          inArray(workflowRuns.status, ['completed', 'failed', 'cancelled']),
+          inArray(workflowRuns.status, [...TERMINAL_RUN_STATUSES]),
           sql`${workflowRuns.learningsJson} IS NOT NULL`,
           excludeEvalBatchRuns(),
         ),
@@ -298,7 +298,7 @@ export async function listRecentlyTerminalRuns(
       .where(
         and(
           eq(workflowRuns.spaceId, spaceId),
-          inArray(workflowRuns.status, ['completed', 'failed', 'cancelled']),
+          inArray(workflowRuns.status, [...TERMINAL_RUN_STATUSES]),
           sql`${workflowRuns.completedAt} >= ${cutoff.toISOString()}`,
           excludeEvalBatchRuns(),
         ),
@@ -852,7 +852,7 @@ export async function listRunsMissingEvaluationEnvelope(
       )
       .where(
         and(
-          inArray(workflowRuns.status, ['completed', 'failed', 'cancelled']),
+          inArray(workflowRuns.status, [...TERMINAL_RUN_STATUSES]),
           sql`${workflowRuns.evaluationJson} IS NULL`,
         ),
       )

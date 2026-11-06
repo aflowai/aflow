@@ -1,5 +1,10 @@
 import type { TimelineItemStatus } from '@aflow/design-system';
-import type { PlanBoardColumn, PlanNodeStatus, PlanRootState } from '@aflow/schemas';
+import {
+  isTerminalRunStatus,
+  type PlanBoardColumn,
+  type PlanNodeStatus,
+  type PlanRootState,
+} from '@aflow/schemas';
 import type {
   WorkflowRunSurfaceState,
   WorkflowSurfaceGraph,
@@ -16,12 +21,6 @@ export const ACTIVE_OP_STALE_THRESHOLD_MS = STALLED_THRESHOLD_MS;
 export const THINKING_GRACE_MS = 7_000;
 
 export type PillTone = 'success' | 'warning' | 'destructive' | 'info' | 'muted';
-
-export const TERMINAL_RUN_STATUSES = new Set<WorkflowSurfaceRunStatus>([
-  'completed',
-  'failed',
-  'cancelled',
-]);
 
 /** Task statuses that count as "done" for the run-level progress meter. */
 export const TERMINAL_TASK_STATUSES: ReadonlySet<WorkflowSurfaceTaskStatus> = new Set([
@@ -97,7 +96,7 @@ export function deriveEffectiveRunStatus(
   state: WorkflowRunSurfaceState,
   rows: TimelineRow[],
 ): WorkflowSurfaceRunStatus {
-  if (TERMINAL_RUN_STATUSES.has(state.status)) return state.status;
+  if (isTerminalRunStatus(state.status)) return state.status;
   // Pinned pause-time cards should show their literal status.
   if (state.isFrozen) return state.status;
   // Without a full graph we can't prove the run has no pending tasks —
