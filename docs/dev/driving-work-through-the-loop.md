@@ -143,12 +143,16 @@ its outcome as it is marked done, and no firing commissions it (`wait`, `awaitin
    its `reviewRunId` names whichever review counts. The depth is `decide-review-depth`'s,
    by rules over what the commit changes. Whether the findings want a fix round the publication
    decides by the rounds rule, records, and gates its push on (Plan 315 D22).
-   `settle-after-review` decides it by rules, with no model asked: a verdict short of
-   `approve` is `fix_before_merge`; an `approve` over nits alone, or none, is
-   `publish_as_is`; an `approve` over a minor or worse is `fix_before_merge` on the slice's
-   first publication and `publish_as_is` once its fix round has run — the publication's
-   `round` input, 1 by default, which you pass one higher on each publication of a fix
-   round. The run's `afterReview` and its pull request record the decision, and
+   `rule-after-review` looks the case up in the rounds rule's table (`ROUNDS_RULE`,
+   `@aflow/schemas`) over the round, the severest finding and the verdict, with no model
+   asked. A blocker or a major is `fix_before_merge` at any round. On the slice's first
+   publication a minor under `approve` or `comment` is `fix_before_merge`. Once its fix
+   round has run, minors and nits alone are `publish_as_is`. An `approve` over nothing, or
+   over nits on the first publication, is `publish_as_is`. Only a case no row covers
+   reaches `decide-after-review`, the space's decision model, and an answer below its bar
+   holds the branch. `settle-after-review` records the decision. The round is the
+   publication's `round` input, 1 by default, which you pass one higher on each
+   publication of a fix round. The run's `afterReview` and its pull request record the decision, and
    `decide-push` follows it — `fix_before_merge` pushes nothing and completes the run,
    `publish_as_is` pushes on its own over minor findings and nits but pauses at
    `approve-push` over a blocker or a major, over a review that found nothing and did

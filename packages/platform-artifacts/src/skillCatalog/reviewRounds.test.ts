@@ -15,6 +15,9 @@ import {
   HostFilePatchInputSchema,
   MAX_PARENT_INPUTS_SERIALIZED_BYTES,
   NEEDS_SETUP_FINDING_KIND,
+  roundsRuleRound,
+  roundsRuleRow,
+  roundsRuleSeverest,
   substituteTemplateBinds,
   WorkflowRunDecideInputSchema,
   WorkflowRunDetailInputSchema,
@@ -361,21 +364,32 @@ describe('Review Rounds — the contract', () => {
     expect(loop?.skillCatalogIds).not.toContain(REVIEW_ROUNDS.catalogId);
   });
 
-  it("leaves the publication's own rounds untouched", () => {
+  it("decides as the publication's table wherever a row of it covers the case", () => {
     const settle = PUBLISH_LOCAL_CHANGES.bundle.workflow.tasks.find(
       (t) => t.taskId === 'settle-after-review',
     );
     expect((settle?.inputTemplate as { rules: unknown }).rules).toEqual(AFTER_REVIEW_SETTLE_RULES);
-    // The publication publishes an approving major after its fix round, where its push gate asks.
-    const majorAfterFix = { verdict: 'approve', findings: [finding('major')], round: 2 };
-    expect(
-      decideByRules({
-        state: majorAfterFix,
-        rules: [...AFTER_REVIEW_SETTLE_RULES],
-        otherwise: { decision: 'publish_as_is', reason: 'x' },
-      }).decision,
-    ).toBe('publish_as_is');
-    expect(decide(majorAfterFix).decision).toBe('fix_before_merge');
+    let compared = 0;
+    for (const verdict of ['approve', 'comment', 'request_changes']) {
+      const cases: Severity[][] = [[], ['nit'], ['minor', 'nit'], ['major'], ['nit', 'blocker']];
+      for (const severities of cases) {
+        for (const round of [1, 2, 3]) {
+          const findings = severities.map((severity) => finding(severity));
+          const row = roundsRuleRow({
+            round: roundsRuleRound(round),
+            severest: roundsRuleSeverest(findings),
+            verdict,
+          });
+          if (row === null) continue;
+          compared += 1;
+          expect(
+            decide({ verdict, findings, round }).decision,
+            `${verdict}, ${severities.join('+')}, round ${String(round)}`,
+          ).toBe(row.decision);
+        }
+      }
+    }
+    expect(compared).toBeGreaterThan(30);
   });
 });
 

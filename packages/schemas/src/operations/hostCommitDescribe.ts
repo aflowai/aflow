@@ -93,14 +93,16 @@ export const AFTER_REVIEW_DECISIONS = ['fix_before_merge', 'publish_as_is'] as c
 export const AfterReviewSchema = z
   .enum(AFTER_REVIEW_DECISIONS)
   .describe(
-    "What the publication decided about its review's findings, by the rounds rule, and what " +
-      'its push gate follows: `fix_before_merge`, a fix round on the branch before it merges — ' +
-      'nothing is pushed and the branch stays local — for a review that did not approve, and ' +
-      "for an approving one with a minor or worse on the slice's first publication; " +
-      '`publish_as_is`, they merge as they stand, for an approving review of nits alone or ' +
-      'none, and for an approving one once a fix round of the slice has run — the push goes ' +
-      'without asking over findings no more severe than minor, and waits for the operator ' +
-      'over a blocker or a major. The fix round is the conversation’s, or the shepherd’s.',
+    "What the publication decided about its review's findings, by the rounds rule's table " +
+      '(`ROUNDS_RULE`), and what its push gate follows. `fix_before_merge` is a fix round on ' +
+      'the branch before it merges: nothing is pushed and the branch stays local. It is ' +
+      "decided for a blocker or a major at any round, and for a minor on the slice's first " +
+      'publication. `publish_as_is` merges them as they stand. It is decided for minors and ' +
+      'nits once a fix round of the slice has run, and for an approving review of nothing, ' +
+      'or of nits on the first publication. A case no row covers is the decision model’s. ' +
+      'The push goes without asking over findings no more severe than minor, and waits for ' +
+      'the operator over a blocker or a major. The fix round is the conversation’s, or the ' +
+      'shepherd’s.',
   );
 export type AfterReview = z.infer<typeof AfterReviewSchema>;
 
@@ -217,7 +219,8 @@ export const HostCommitDescribeInputSchema = z.object({
     ),
   afterReview: AfterReviewSchema.optional().describe(
     "The decision on the review's findings, settled by the rounds rule over the verdict, the " +
-      "severities and the publication's `round`. Absent where the review did not finish.",
+      "severest finding and the publication's `round`, or by the decision model where no row " +
+      'covers them. Absent where the review did not finish.',
   ),
   override: AfterReviewOverrideSchema.optional(),
   check: CheckRunSchema.optional().describe("The folder's checks on the commit, as they ran."),
