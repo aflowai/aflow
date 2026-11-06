@@ -38,6 +38,38 @@ describe('describeWaitOutcomeNotice', () => {
     ).toBe('Wait for plan step “Ship the release” ended: it is now active.');
   });
 
+  it('names the status the body names where the node moved again before delivery', () => {
+    expect(
+      describeWaitOutcomeNotice(
+        'Your wait 23e0cfeb-0000-4000-8000-000000000339 on plan.node.status_changed on node-1 has ended: ' +
+          'the event arrived at 2026-11-06T08:00:00.000Z (status: active, previousStatus: blocked). ' +
+          'Later events on the subject before you were told: 2026-11-06T08:01:00.000Z (status: done, previousStatus: active). ' +
+          'Act on it by your own rules.' +
+          '\n\nPlan node "Ship the release" (node-1) is now done, at revision 5.\nIt has no note.',
+      ),
+    ).toBe('Wait for plan step “Ship the release” ended: it is now done.');
+  });
+
+  it('names the status a plan step moved to when its window closed on a lost event', () => {
+    expect(
+      describeWaitOutcomeNotice(
+        'Your wait 23e0cfeb-0000-4000-8000-000000000339 on plan.node.status_changed on node-1 has ended: ' +
+          'its window closed at 2026-11-06T08:00:00.000Z with no event. Read the subject yourself before you act.' +
+          '\n\nPlan node "Ship the release" (node-1) is now active, at revision 4.\nIt has no note.',
+      ),
+    ).toBe('Wait for plan step “Ship the release” ended: it is now active.');
+  });
+
+  it('says a plan step no longer exists when the body says so', () => {
+    expect(
+      describeWaitOutcomeNotice(
+        'Your wait 23e0cfeb-0000-4000-8000-000000000339 on plan.node.status_changed on node-1 has ended: ' +
+          'its window closed at 2026-11-06T08:00:00.000Z with no event. Read the subject yourself before you act.' +
+          '\n\nPlan node node-1 no longer exists.',
+      ),
+    ).toBe('Wait for a plan step ended: it no longer exists.');
+  });
+
   it('says the time ran out when the window closed', () => {
     expect(
       describeWaitOutcomeNotice(

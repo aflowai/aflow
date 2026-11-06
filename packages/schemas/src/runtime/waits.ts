@@ -168,14 +168,32 @@ export interface WaitOutcomeMessage {
   kind: WaitEventKind;
   subject: string;
   endedBy: WaitOutcome['endedBy'];
-  /** The first event's `change`, `status` and `resolution`, where it names them. */
+  /**
+   * The ending event's `change`, `status` and `resolution`, where it names
+   * them. For a plan node, `status` is the latest status the message names.
+   */
   detail: Partial<Record<'change' | 'status' | 'resolution', string>>;
   /** The plan node's title, where the message names the node. */
   planNodeTitle?: string;
+  /** Set where the message says the plan node no longer exists. */
+  planNodeGone?: true;
 }
 
 const WAIT_OUTCOME_HEAD =
   /^Your wait \S+ on ([a-z_.]+) on (.+?) has ended: (the event arrived|its window closed) at /;
+
+/** The node as the plan-node delivery read it (`describePlanNodeChange` in the orchestrator). */
+const PLAN_NODE_NOW = /^Plan node "(.+)" \(\S+\) is now ([a-z_]+), at revision /m;
+const PLAN_NODE_GONE = /^Plan node \S+ no longer exists\.$/m;
+
+/** Every value an event names for `key`, the ending event's first. */
+function eventValues(body: string, key: string): string[] {
+  const values: string[] = [];
+  for (const match of body.matchAll(new RegExp(`[(,] ?${key}: ([a-z_]+)(?=[,)])`, 'g'))) {
+    if (match[1] !== undefined) values.push(match[1]);
+  }
+  return values;
+}
 
 /**
  * Read a wait's room message as `describeWaitOutcome` (`@aflow/cybernetic-runtime`)
@@ -191,18 +209,26 @@ export function readWaitOutcomeMessage(body: string): WaitOutcomeMessage | null 
   const detail: WaitOutcomeMessage['detail'] = {};
   if (endedBy === 'event') {
     for (const key of ['change', 'status', 'resolution'] as const) {
-      // The first match is the first event's: later events follow it.
-      const value = new RegExp(`[(,] ?${key}: ([a-z_]+)(?=[,)])`).exec(body)?.[1];
+      const value = eventValues(body, key)[0];
       if (value !== undefined) detail[key] = value;
     }
   }
-  const planNodeTitle = /^Plan node "(.+)" \(\S+\) is now /m.exec(body)?.[1];
+  if (kind.data !== 'plan.node.status_changed') {
+    return { kind: kind.data, subject, endedBy, detail };
+  }
+  // The node may have moved again before delivery. Its status as read then
+  // wins, and the last event's status stands in where the node is not named.
+  const now = PLAN_NODE_NOW.exec(body);
+  const latest = now?.[2] ?? (endedBy === 'event' ? eventValues(body, 'status').at(-1) : undefined);
+  delete detail.status;
+  if (latest !== undefined) detail.status = latest;
   return {
     kind: kind.data,
     subject,
     endedBy,
     detail,
-    ...(planNodeTitle !== undefined ? { planNodeTitle } : {}),
+    ...(now?.[1] !== undefined ? { planNodeTitle: now[1] } : {}),
+    ...(PLAN_NODE_GONE.test(body) ? { planNodeGone: true as const } : {}),
   };
 }
 

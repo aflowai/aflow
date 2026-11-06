@@ -77,6 +77,26 @@ function body(): HTMLElement {
   return controlled!;
 }
 
+/**
+ * Press a key on the focused element. jsdom does not run a button's keyboard
+ * activation, so this runs it as the HTML standard does: Enter clicks on
+ * keydown, Space on keyup, and a cancelled key clicks nothing.
+ */
+function press(key: 'Enter' | ' '): void {
+  const target = document.activeElement;
+  if (!(target instanceof HTMLButtonElement)) throw new Error('no button has focus');
+  act(() => {
+    const down = target.dispatchEvent(
+      new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }),
+    );
+    if (key === 'Enter' && down) target.click();
+    const up = target.dispatchEvent(
+      new KeyboardEvent('keyup', { key, bubbles: true, cancelable: true }),
+    );
+    if (key === ' ' && down && up) target.click();
+  });
+}
+
 describe('a wait outcome in the chat', () => {
   it('folds to one line that names the pull request, with the instruction hidden', () => {
     expect(container.querySelector('[data-wait-notice]')?.getAttribute('data-wait-notice')).toBe(
@@ -118,5 +138,19 @@ describe('a wait outcome in the chat', () => {
     expect(button.tabIndex).toBe(0);
     button.focus();
     expect(document.activeElement).toBe(button);
+
+    press('Enter');
+    expect(toggle().getAttribute('aria-expanded')).toBe('true');
+    expect(body().hidden).toBe(false);
+
+    press(' ');
+    expect(toggle().getAttribute('aria-expanded')).toBe('false');
+    expect(body().hidden).toBe(true);
+
+    press(' ');
+    expect(toggle().getAttribute('aria-expanded')).toBe('true');
+
+    press('Enter');
+    expect(toggle().getAttribute('aria-expanded')).toBe('false');
   });
 });

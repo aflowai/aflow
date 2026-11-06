@@ -57,7 +57,24 @@ function phrase(
   return key !== undefined && Object.hasOwn(words, key) ? (words[key] ?? otherwise) : otherwise;
 }
 
+/**
+ * A plan node's wait tells the node as it stands, even where the window
+ * closed, because a window that closes on a node that moved on means the
+ * change event was lost. The line says what the body says.
+ */
+function planNodeNews(message: WaitOutcomeMessage): string | undefined {
+  if (message.planNodeGone === true) return 'it no longer exists';
+  const { status } = message.detail;
+  return status !== undefined ? `it is now ${status}` : undefined;
+}
+
 function whatHappened(message: WaitOutcomeMessage): string {
+  if (message.kind === 'plan.node.status_changed') {
+    return (
+      planNodeNews(message) ??
+      (message.endedBy === 'window_closed' ? 'its time ran out with no news' : 'its status changed')
+    );
+  }
   if (message.endedBy === 'window_closed') return 'its time ran out with no news';
   const { change, status, resolution } = message.detail;
   switch (message.kind) {
@@ -65,8 +82,6 @@ function whatHappened(message: WaitOutcomeMessage): string {
       return phrase(PULL_REQUEST_CHANGE, change, 'it changed');
     case 'run.ended':
       return phrase(RUN_STATUS, status, 'it ended');
-    case 'plan.node.status_changed':
-      return status !== undefined ? `it is now ${status}` : 'its status changed';
     case 'gate.resolved':
       return phrase(RESOLUTION, resolution, 'it was resolved');
   }

@@ -82,6 +82,21 @@ describe('readWaitOutcomeMessage reads what describeWaitOutcome writes', () => {
     expect(readWaitOutcomeMessage(words)?.detail).toEqual({ status: 'done' });
   });
 
+  it('reads the latest status of a plan node that moved again before delivery', () => {
+    const words = describeWaitOutcome(registration('plan.node.status_changed', 'node-1'), {
+      endedBy: 'event',
+      event: event('plan.node.status_changed', 'node-1', {
+        status: 'active',
+        previousStatus: 'blocked',
+      }),
+      laterEvents: [
+        event('plan.node.status_changed', 'node-1', { status: 'done', previousStatus: 'active' }),
+      ],
+    });
+
+    expect(readWaitOutcomeMessage(words)?.detail).toEqual({ status: 'done' });
+  });
+
   it('reads how a gate was resolved', () => {
     const words = describeWaitOutcome(registration('gate.resolved', 'item-1'), {
       endedBy: 'event',

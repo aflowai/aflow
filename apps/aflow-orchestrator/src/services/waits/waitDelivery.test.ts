@@ -446,6 +446,26 @@ describe('the wait a plan node write holds for its writer', () => {
     },
   );
 
+  it('names the latest status where the node moved again before delivery', async () => {
+    await blockedWrite();
+    mockFindNode.mockResolvedValue(node('done'));
+    await approve('active');
+    await emitPlanUpdated(redis, {
+      tenantId: TENANT,
+      spaceId: SPACE,
+      nodeId: NODE,
+      revision: 4,
+      status: 'done',
+      previousStatus: 'active',
+    });
+
+    await runWaitDeliveryCycle({ harnessDeps, logger }, ctx);
+
+    const posted = mockQueueMessage.mock.calls[0]?.[2] as { body: string };
+    expect(posted.body).toContain(`(${NODE}) is now done`);
+    expect(readWaitOutcomeMessage(posted.body)?.detail).toEqual({ status: 'done' });
+  });
+
   it('tells a creator that has ended nothing, and forgets it', async () => {
     await blockedWrite();
     mockIsLive.mockResolvedValue(false);
@@ -520,11 +540,21 @@ describe('the wait a plan node write holds for its writer', () => {
   });
 
   it.each([
-    ['moved on with its event lost', () => node('active'), `(${NODE}) is now active`],
-    ['removed', () => null, `Plan node ${NODE} no longer exists.`],
+    [
+      'moved on with its event lost',
+      () => node('active'),
+      `(${NODE}) is now active`,
+      { detail: { status: 'active' }, planNodeTitle: 'P0 — the first phase' },
+    ],
+    [
+      'removed',
+      () => null,
+      `Plan node ${NODE} no longer exists.`,
+      { detail: {}, planNodeGone: true },
+    ],
   ])(
     'tells the conversation when its window closes on a node %s, and holds no next wait',
-    async (_, found, told) => {
+    async (_, found, told, read) => {
       const held = await blockedWrite();
       const closed = Date.parse(held.closesAt);
       mockFindNode.mockResolvedValue(found());
@@ -536,6 +566,10 @@ describe('the wait a plan node write holds for its writer', () => {
       const posted = mockQueueMessage.mock.calls[0]?.[2] as { body: string; sessionId: string };
       expect(posted).toMatchObject({ sessionId: SESSION, deliveryKey: `wait:${held.waitId}` });
       expect(posted.body).toContain(told);
+      expect(readWaitOutcomeMessage(posted.body)).toMatchObject({
+        endedBy: 'window_closed',
+        ...read,
+      });
       expect(mockWake).toHaveBeenCalledWith(harnessDeps, TENANT, SESSION, held.waitId);
       const waits = await readSubjectWaits(redis, {
         tenantId: TENANT,
