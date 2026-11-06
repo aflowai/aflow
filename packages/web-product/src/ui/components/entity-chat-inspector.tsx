@@ -3,8 +3,8 @@
 /**
  * Cybernetic Workbench pane — the chat's right dock for cybernetic spaces.
  *
- * The lead tab is the space-wide Workbench; the rest (Session timeline, Session
- * context) are scoped to the active session. The timeline leads with the root
+ * The lead tab, Space, is space-wide. The two after the divider (Timeline,
+ * Context) are scoped to the active session. The timeline leads with the root
  * session's own RunTimeline and overlays the cascade tree when delegation
  * produces child sessions. A missing cascade is normal (no delegation yet) and
  * is treated as "zero children", not an error.
@@ -31,12 +31,12 @@ import { useAutoScrollToBottom } from '../hooks/use-auto-scroll.js';
 import { useConnectionNotice } from '../hooks/use-connection-notice.js';
 import { useCybernetic } from './cybernetic-provider.js';
 import { useSpaceEntityEvents } from '../hooks/use-space-entity-events.js';
-import { Workbench } from './workbench/index.js';
+import { Workbench, WorkbenchFoldsContext, useWorkbenchFolds } from './workbench/index.js';
 import { CascadeFeed } from './cascade-feed.js';
 import { CascadeSessionTimeline } from './cascade-session-timeline.js';
 import { AgentChatHistory } from './chat/AgentChatHistory.js';
 
-// "activity" = the Workbench, the day-to-day surface. "timeline" and "chat" are
+// "activity" = the Space tab, the day-to-day surface. "timeline" and "chat" are
 // session-scoped debug views. The wire ids are load-bearing: `focusTab` names
 // them from the chat page.
 type InspectorTab = 'activity' | 'timeline' | 'chat';
@@ -47,7 +47,7 @@ export function EntityChatInspector(props: {
   rootSessionId: string | null;
   focusTab?: InspectorTab;
   focusTabBumper?: number;
-  /** Actionable Action Center items, badged on the Workbench tab. */
+  /** Actionable Action Center items, badged on the Space tab. */
   attentionCount?: number;
   /** Prefill the composer + start a new chat (Workbench quick-starts). */
   onSeed?: (seed: string) => void;
@@ -60,9 +60,9 @@ export function EntityChatInspector(props: {
   const { spaces, activeSpace } = useSpace();
   const spaceSlug = resolveSpaceSlug(spaces, spaceId, activeSpace);
 
-  // The Workbench is what the pane is for; the other two answer a question the
+  // The Space tab is what the pane is for; the other two answer a question the
   // operator went looking for. So opening the pane always lands on the
-  // Workbench rather than resuming wherever a past debugging trip ended.
+  // Space tab rather than resuming wherever a past debugging trip ended.
   const [tab, setTabState] = useState<InspectorTab>(focusTab ?? DEFAULT_TAB);
   useEffect(() => {
     setTabState(DEFAULT_TAB);
@@ -74,6 +74,9 @@ export function EntityChatInspector(props: {
     if (!VALID_TABS.has(next as InspectorTab)) return;
     setTabState(next as InspectorTab);
   }, []);
+
+  // Held here, above the TabPanel that unmounts the Workbench on a tab switch.
+  const workbenchFolds = useWorkbenchFolds(spaceId);
 
   // Live is the resting state and says nothing; only a stream that has stayed
   // down long enough to make the pane stale earns a word. The composer says the
@@ -163,7 +166,7 @@ export function EntityChatInspector(props: {
           <TabList style={{ padding: '0 var(--space-1)', flexShrink: 0 }}>
             <Tab id="activity">
               <Row gap="2" align="center" style={{ display: 'inline-flex' }}>
-                <span>Workbench</span>
+                <span>Space</span>
                 {attentionCount !== undefined && attentionCount > 0 && (
                   <span
                     aria-label={`${String(attentionCount)} awaiting you`}
@@ -186,8 +189,21 @@ export function EntityChatInspector(props: {
                 )}
               </Row>
             </Tab>
-            <Tab id="timeline">Session timeline</Tab>
-            <Tab id="chat">Session context</Tab>
+            {/* Space is space-wide. The tabs past this line are this conversation's. */}
+            <span
+              aria-hidden
+              data-inspector-tab-divider=""
+              style={{
+                alignSelf: 'center',
+                width: 1,
+                height: 16,
+                margin: '0 var(--space-1)',
+                backgroundColor: 'var(--color-border-subtle)',
+                flexShrink: 0,
+              }}
+            />
+            <Tab id="timeline">Timeline</Tab>
+            <Tab id="chat">Context</Tab>
             {showReconnecting && (
               <Tooltip content="Live updates dropped — retrying. What you see may be behind.">
                 <Row
@@ -224,12 +240,14 @@ export function EntityChatInspector(props: {
               padding: 0,
             }}
           >
-            <Workbench
-              spaceId={spaceId}
-              spaceSlug={spaceSlug ?? ''}
-              {...(onSeed ? { onSeed } : {})}
-              {...(onRevealChat ? { onRevealChat } : {})}
-            />
+            <WorkbenchFoldsContext.Provider value={workbenchFolds}>
+              <Workbench
+                spaceId={spaceId}
+                spaceSlug={spaceSlug ?? ''}
+                {...(onSeed ? { onSeed } : {})}
+                {...(onRevealChat ? { onRevealChat } : {})}
+              />
+            </WorkbenchFoldsContext.Provider>
           </TabPanel>
 
           <TabPanel
@@ -243,7 +261,7 @@ export function EntityChatInspector(props: {
             >
               <Column ref={timelineContentRef} gap="md" style={{ padding: 'var(--space-1)' }}>
                 {/* Session-scoped only — space-wide recents live in the
-                    Workbench tab (Plan 228 §6). */}
+                    Space tab (Plan 228 §6). */}
                 <Row gap="sm" align="center" wrap>
                   <Button variant="ghost" size="sm" onClick={() => void reloadCascade()}>
                     Refresh
@@ -265,7 +283,7 @@ export function EntityChatInspector(props: {
                 {rootSessionId && (
                   <Column gap="sm" style={{ padding: 'var(--space-2)' }}>
                     <Text size="sm" weight="medium">
-                      This turn
+                      This conversation
                     </Text>
                     {/* Passive subscriber inside the chat
                         context. The chat-page's `useRunReducer` drives the SSE

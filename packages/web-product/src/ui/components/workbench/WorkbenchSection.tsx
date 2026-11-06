@@ -4,6 +4,7 @@ import {
   createContext,
   useContext,
   useMemo,
+  useReducer,
   useState,
   type CSSProperties,
   type ReactNode,
@@ -17,6 +18,51 @@ interface SectionFold {
 }
 
 const SectionFoldContext = createContext<SectionFold | null>(null);
+
+interface WorkbenchFolds {
+  isExpanded: (title: string) => boolean;
+  toggle: (title: string) => void;
+}
+
+export const WorkbenchFoldsContext = createContext<WorkbenchFolds | null>(null);
+
+/**
+ * Which folded sections the operator opened, per space. The record lives at
+ * module level, so it outlives its owner within the page session. The
+ * inspector's tab panel unmounts the Workbench on a tab switch, and a move to a
+ * space whose detail is not cached unmounts the owner itself. A reload loses
+ * the record, and nothing writes it to storage.
+ */
+const openSectionsBySpace = new Map<string, readonly string[]>();
+
+/**
+ * The fold record of one space. Its owner calls this above the tab panel and
+ * provides the result through `WorkbenchFoldsContext`, so a return to the tab,
+ * or to the space, finds the same sections open.
+ */
+export function useWorkbenchFolds(spaceId: string): WorkbenchFolds {
+  const [, rerender] = useReducer((n: number) => n + 1, 0);
+  const open = openSectionsBySpace.get(spaceId);
+  return useMemo<WorkbenchFolds>(
+    () => ({
+      isExpanded: (title) => open?.includes(title) ?? false,
+      toggle: (title) => {
+        const current = openSectionsBySpace.get(spaceId) ?? [];
+        const next = current.includes(title)
+          ? current.filter((t) => t !== title)
+          : [...current, title];
+        openSectionsBySpace.set(spaceId, next);
+        rerender();
+      },
+    }),
+    [open, spaceId],
+  );
+}
+
+/** Forgets every space's open sections, as a reload does. */
+export function __resetForTests(): void {
+  openSectionsBySpace.clear();
+}
 
 /** Whether the section rendering this sits under a fold — so it renders even while empty. */
 export function useWorkbenchSectionFold(): SectionFold | null {
@@ -45,15 +91,18 @@ export function WorkbenchLazySection({
   trailing?: ReactNode;
   children: ReactNode;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const folds = useContext(WorkbenchFoldsContext);
+  const [localExpanded, setLocalExpanded] = useState(false);
+  const expanded = folds ? folds.isExpanded(title) : localExpanded;
   const fold = useMemo<SectionFold>(
     () => ({
       expanded,
       toggle: () => {
-        setExpanded((e) => !e);
+        if (folds) folds.toggle(title);
+        else setLocalExpanded((e) => !e);
       },
     }),
-    [expanded],
+    [expanded, folds, title],
   );
   return (
     <SectionFoldContext.Provider value={fold}>

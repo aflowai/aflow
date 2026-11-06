@@ -186,7 +186,10 @@ function JsonNode({ data, depth, initialCollapsed, collapseDepth, keyName }: Jso
         {keyName && <JsonKey name={keyName} />}
         <span>[</span>
         {isCollapsed ? (
-          <span style={{ color: 'var(--color-text-muted)' }}> {data.length} items ]</span>
+          <span style={{ color: 'var(--color-text-muted)' }}>
+            {' '}
+            {data.length} {data.length === 1 ? 'item' : 'items'} ]
+          </span>
         ) : (
           <>
             {(data as unknown[]).map((item, index) => (
@@ -240,7 +243,7 @@ function JsonNode({ data, depth, initialCollapsed, collapseDepth, keyName }: Jso
         {isCollapsed ? (
           <span style={{ color: 'var(--color-text-muted)' }}>
             {' '}
-            {entries.length} keys {'}'}
+            {entries.length} {entries.length === 1 ? 'key' : 'keys'} {'}'}
           </span>
         ) : (
           <>
