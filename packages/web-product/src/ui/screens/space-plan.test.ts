@@ -309,14 +309,26 @@ vi.mock('../hooks/use-plan-live-refresh.js', () => ({
   },
 }));
 
-vi.mock('../hooks/use-space-entity-events.js', () => ({
-  useSpaceEntityEventListener: (
-    _spaceId: string | null,
-    handler: (event: { eventType: string; causedBySessionId?: string }) => void,
-  ) => {
-    recorded.entityListeners.add(handler);
-  },
-}));
+// Subscribed while mounted and reading the latest handler, as the real hook is.
+vi.mock('../hooks/use-space-entity-events.js', async () => {
+  const { useEffect, useRef } = await import('react');
+  type Listener = (event: { eventType: string; causedBySessionId?: string }) => void;
+  return {
+    useSpaceEntityEventListener: (_spaceId: string | null, handler: Listener) => {
+      const handlerRef = useRef(handler);
+      handlerRef.current = handler;
+      useEffect(() => {
+        const listener: Listener = (event) => {
+          handlerRef.current(event);
+        };
+        recorded.entityListeners.add(listener);
+        return () => {
+          recorded.entityListeners.delete(listener);
+        };
+      }, []);
+    },
+  };
+});
 
 vi.mock('@tanstack/react-query', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@tanstack/react-query')>()),
@@ -2049,6 +2061,9 @@ describe('SpacePlanPage — approve, reopen and order (Plan 332 P2)', () => {
       ),
     ).toEqual(['Order the loop', 'Conversation']);
 
+    // One listener serves every linked conversation.
+    expect(recorded.entityListeners.size).toBe(1);
+
     // A name written while the rail is open refreshes that conversation's label.
     recorded.conversationTitles['c0000000-0000-4000-8000-000000000338'] = 'Pick the next node';
     await act(async () => {
@@ -2059,9 +2074,8 @@ describe('SpacePlanPage — approve, reopen and order (Plan 332 P2)', () => {
         });
       }
     });
-    // The listener is recorded once per render, so the one key may repeat.
-    expect([...new Set(recorded.invalidated.map((key) => JSON.stringify(key)))]).toEqual([
-      JSON.stringify(['session', 'c0000000-0000-4000-8000-000000000338', 'metadata']),
+    expect(recorded.invalidated).toEqual([
+      ['session', 'c0000000-0000-4000-8000-000000000338', 'metadata'],
     ]);
     await render({ data: P2_PLAN });
     expect(

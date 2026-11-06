@@ -7,7 +7,7 @@
  * dock lands, which conversation `/chat` lands on, and what the open dock
  * reads. Every HTTP read and realtime subscription the page makes is counted.
  */
-import { act, createElement } from 'react';
+import { act, createElement, StrictMode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -408,6 +408,30 @@ describe('the Workbench dock on landing (D3)', () => {
       /^Space/,
     );
     expect(window.localStorage.getItem(WORKBENCH_COLLAPSED_STORAGE_KEY)).toBe('[]');
+  });
+
+  it('leaves a folded conversation folded when StrictMode re-runs an arrival with the Workbench', async () => {
+    net.sessions = [conversation()];
+    window.localStorage.setItem(WORKBENCH_COLLAPSED_STORAGE_KEY, JSON.stringify([SESSION]));
+    renderPage = () => {
+      root.render(
+        createElement(
+          StrictMode,
+          null,
+          createElement(
+            QueryClientProvider,
+            { client },
+            createElement(ThemeProvider, null, createElement(ChatPage)),
+          ),
+        ),
+      );
+    };
+    await land(`session=${SESSION}&workbench=1`);
+    expect(dockOpen()).toBe(true);
+    expect(lastUrl()).toBe(`/s/demo/chat?session=${SESSION}`);
+    expect(
+      JSON.parse(window.localStorage.getItem(WORKBENCH_COLLAPSED_STORAGE_KEY) ?? '[]'),
+    ).toEqual([SESSION]);
   });
 
   it('switches a phone to the Workbench when the bell is chosen on Chat', async () => {

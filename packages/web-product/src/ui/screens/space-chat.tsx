@@ -304,13 +304,21 @@ function ChatPageInner() {
   // companion on its Space tab each time it appears, then drops out of the URL
   // so a reload lands by the remembered state. On arrival the landing owns
   // what is remembered. The bell chosen on this page is the operator's own
-  // open, so it is remembered as the dock's own control is.
+  // open, so it is remembered as the dock's own control is. A request is
+  // handled once, so a StrictMode re-run of this effect cannot take the
+  // arrival's request for the bell's and remember it.
   const workbenchRequested = Boolean(searchParams.get('workbench'));
   const workbenchArrivalRef = useRef(true);
+  const workbenchHandledRef = useRef(false);
   useEffect(() => {
     const arrival = workbenchArrivalRef.current;
     workbenchArrivalRef.current = false;
-    if (!workbenchRequested) return;
+    if (!workbenchRequested) {
+      workbenchHandledRef.current = false;
+      return;
+    }
+    if (workbenchHandledRef.current) return;
+    workbenchHandledRef.current = true;
     if (arrival) setConsoleOpenState(true);
     else setConsoleOpen(true);
     setWorkbenchFocus((n) => n + 1);
