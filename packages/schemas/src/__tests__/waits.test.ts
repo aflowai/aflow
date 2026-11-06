@@ -116,7 +116,9 @@ function waitOutcomeBody(kind: string, subject: string, events: readonly string[
   return (
     `Your wait 23e0cfeb-0000-4000-8000-000000000339 on ${kind} on ${subject} has ended: ` +
     `the event arrived at ${first}. ` +
-    (later.length > 0 ? `Later events on the subject before you were told: ${later.join('; ')}. ` : '') +
+    (later.length > 0
+      ? `Later events on the subject before you were told: ${later.join('; ')}. `
+      : '') +
     'You own the subject, so the platform declared this wait for you. ' +
     // Words after the list that look like an event's never count as one.
     'Act on it at 2026-11-06T09:00:00.000Z (change: closed, status: completed, resolution: dismiss).'
