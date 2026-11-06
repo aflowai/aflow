@@ -26,11 +26,11 @@ vi.mock('../hooks/use-space-entity-events.js', () => ({
   useSpaceEntityEvents: () => ({ events: [], isConnected: true }),
 }));
 vi.mock('./workbench/index.js', async () => {
-  const { createContext } = await import('react');
+  const folds = await import('./workbench/WorkbenchSection.js');
   return {
     Workbench: () => null,
-    WorkbenchFoldsContext: createContext(null),
-    useWorkbenchFolds: () => ({ isExpanded: () => false, toggle: () => undefined }),
+    WorkbenchFoldsContext: folds.WorkbenchFoldsContext,
+    useWorkbenchFolds: folds.useWorkbenchFolds,
   };
 });
 vi.mock('./cascade-feed.js', () => ({ CascadeFeed: () => null }));
