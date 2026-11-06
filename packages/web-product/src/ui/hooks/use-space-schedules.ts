@@ -36,8 +36,11 @@ export function useUpcomingSchedules(spaceId: string) {
 /**
  * The space's schedules, as the Triggers page lists them.
  *
- * Cursor-paginated, and this takes the first page. A `nextCursor` coming back
- * says more exist, which the page says out loud rather than dropping.
+ * Cursor-paginated, and this takes the first page. The server puts every row
+ * that can still run before the expired ones, so expired renewals cannot push
+ * an upcoming schedule off this page. The Workbench's count line relies on
+ * that. A `nextCursor` coming back says more exist, which the page says out
+ * loud rather than dropping.
  */
 export function useSpaceSchedules(spaceId: string) {
   return useApiQuery<{ schedules: ScheduleRow[]; nextCursor?: string | null }>({

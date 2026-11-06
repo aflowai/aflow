@@ -23,7 +23,8 @@ import {
  * section, so it stays as tall as what still runs. The server lists the
  * soonest few and counts the rest, and a line under the list names that count.
  * Nothing caps how many schedules an operator creates, so the cut never hides
- * a schedule silently.
+ * a schedule silently. The line sends the operator to Triggers, whose read
+ * lists every row that can still run before any expired one.
  *
  * Kept out of Pending deliberately: that section's badge is a count of
  * work waiting on this person, and a schedule that only runs on its own would

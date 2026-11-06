@@ -2,7 +2,7 @@ import { resolvePrincipalActorKind } from '../../utils/actorContext.js';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { eq, and, desc, sql } from 'drizzle-orm';
+import { eq, and, sql } from 'drizzle-orm';
 import {
   getDatabase,
   withTenantSchema,
@@ -15,6 +15,7 @@ import {
   ListSchedulesQuerySchema,
   UpdateScheduleBodySchema,
 } from './schemas.js';
+import { decodeScheduleListCursor, readScheduleListPage } from './list.js';
 import { readUpcomingSchedules } from './upcoming.js';
 import { rowToResponse } from './helpers.js';
 
@@ -279,44 +280,24 @@ export function registerScheduleRoutes(fastify: FastifyInstance): void {
       const space = await request.requireSpace();
       const tenant = await request.requireTenant();
       const { status, flowId, kind, limit, cursor } = request.query;
-
-      const db = getDatabase();
-      const tenantCtx = createTenantContext(tenant.tenantId);
-
-      const conditions = [eq(agentSchedules.spaceId, space.spaceId)];
-      if (status) {
-        conditions.push(eq(agentSchedules.status, status));
-      } else {
-        conditions.push(sql`${agentSchedules.status} != 'deleted'`);
+      const at = cursor === undefined ? null : decodeScheduleListCursor(cursor);
+      if (cursor !== undefined && at === null) {
+        return reply.status(400).send({
+          error: 'Bad Request',
+          message: 'cursor is not a nextCursor this list returned',
+        });
       }
-      if (flowId) {
-        const UUID_SHAPE_SCHED2 = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-        if (UUID_SHAPE_SCHED2.test(flowId)) {
-          conditions.push(eq(agentSchedules.targetAgentId, flowId));
-        } else {
-          conditions.push(eq(agentSchedules.targetSystemRole, flowId));
-        }
-      }
-      if (kind) conditions.push(eq(agentSchedules.kind, kind));
-      if (cursor) conditions.push(sql`${agentSchedules.id} < ${cursor}`);
 
-      const rows = await withTenantSchema(db, tenantCtx, async (tx) => {
-        return tx
-          .select()
-          .from(agentSchedules)
-          .where(and(...conditions))
-          .orderBy(desc(agentSchedules.createdAt))
-          .limit(limit + 1);
-      });
-
-      const hasMore = rows.length > limit;
-      const pageRows = hasMore ? rows.slice(0, limit) : rows;
-      const schedules = pageRows.map(rowToResponse);
-      const lastItem = pageRows[pageRows.length - 1];
-
+      const page = await readScheduleListPage(
+        getDatabase(),
+        tenant.tenantId,
+        space.spaceId,
+        { status, flowId, kind, limit },
+        at,
+      );
       return reply.send({
-        schedules,
-        nextCursor: hasMore && lastItem ? lastItem.id : null,
+        schedules: page.rows.map(rowToResponse),
+        nextCursor: page.nextCursor,
       });
     },
   );
