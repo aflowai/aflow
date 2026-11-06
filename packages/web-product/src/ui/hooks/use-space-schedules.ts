@@ -13,21 +13,21 @@ export function spaceSchedulesKey(spaceId: string): QueryKey {
  * Under the space's schedules key, so a write that refreshes the Triggers page
  * refreshes the Workbench's section too.
  */
-export function chatSchedulesKey(spaceId: string): QueryKey {
-  return [...spaceSchedulesKey(spaceId), 'chat'];
+export function upcomingSchedulesKey(spaceId: string): QueryKey {
+  return [...spaceSchedulesKey(spaceId), 'upcoming'];
 }
 
 /**
- * The active schedules an agent set up in chat lately, each as the newest
- * renewal of its chain, newest arrival first. The server picks them from the
- * chains the Action Center's trigger_armed notices announce, and leaves out
- * every chain that will not fire again. A page of the whole list cannot serve
- * here: a renewing schedule's renewals push its original off the page.
+ * The space's schedules that will fire again, soonest first, whoever created
+ * them. An operator-created schedule runs on its own as much as an agent-armed
+ * one, so both are listed. A page of the whole list cannot serve here, because
+ * expired renewals and one-shots fill it. The server lists a capped number and
+ * counts them all in `total`, so the section can say what the cap leaves out.
  */
-export function useChatSchedules(spaceId: string) {
-  return useApiQuery<{ schedules: ScheduleRow[] }>({
-    key: chatSchedulesKey(spaceId),
-    path: '/schedules/chat',
+export function useUpcomingSchedules(spaceId: string) {
+  return useApiQuery<{ schedules: ScheduleRow[]; total: number }>({
+    key: upcomingSchedulesKey(spaceId),
+    path: '/schedules/upcoming',
     spaceId,
     enabled: spaceId.length > 0,
   });
@@ -36,8 +36,11 @@ export function useChatSchedules(spaceId: string) {
 /**
  * The space's schedules, as the Triggers page lists them.
  *
- * Cursor-paginated, and this takes the first page. A `nextCursor` coming back
- * says more exist, which the page says out loud rather than dropping.
+ * Cursor-paginated, and this takes the first page. The server puts every row
+ * that can still run before the expired ones, so expired renewals cannot push
+ * an upcoming schedule off this page. The Workbench's count line relies on
+ * that. A `nextCursor` coming back says more exist, which the page says out
+ * loud rather than dropping.
  */
 export function useSpaceSchedules(spaceId: string) {
   return useApiQuery<{ schedules: ScheduleRow[]; nextCursor?: string | null }>({

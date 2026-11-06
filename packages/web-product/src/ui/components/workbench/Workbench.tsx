@@ -61,9 +61,12 @@ export function Workbench({
   spaceSlug,
   onSeed,
   onRevealChat,
+  currentSessionId,
 }: {
   spaceId: string;
   spaceSlug: string;
+  /** The conversation the Workbench sits beside, when one is open. */
+  currentSessionId?: string | null | undefined;
   /** Seed the composer + start a new chat (Plan 228 §5.3). */
   onSeed?: (seed: string) => void;
   /** Phone: leave Workbench mode after opening a session into the chat. */
@@ -124,7 +127,12 @@ export function Workbench({
             icon="clock"
             meta={<FoldedSchedulesNotice state={actionCenter} />}
           >
-            <WorkbenchSchedules state={actionCenter} spaceId={spaceId} spaceSlug={spaceSlug} />
+            <WorkbenchSchedules
+              state={actionCenter}
+              spaceId={spaceId}
+              spaceSlug={spaceSlug}
+              currentSessionId={currentSessionId}
+            />
           </WorkbenchLazySection>
           <WorkbenchLazySection
             title="Skills"
