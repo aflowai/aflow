@@ -195,6 +195,8 @@ _Not done on purpose:_ a resident wake still creates only blocked work, and a de
 - `docs/dev/driving-work-through-the-loop.md`: what the loop waits on, and what the operator no longer relays.
 - `docs/architecture/background-work.md`: generated again from the registry.
 - D6: `@aflow/schemas` (the first-status rule, the card's `waitsOn`, `planStepsAllClosed` and the root's waiting rule), `@aflow/cybernetic-runtime` (`createPlanNode`, the carrier, the board's state and the Action Center's waiting list), and `@aflow/web-product` (the rail's Approve and Resume, the overview's rows).
+- Follow-up, the chat folds a wait's outcome: `@aflow/web-product` (the chat's one-line notice, its full-text button and the narrow-width rule in `chat-messages.css`), and `@aflow/schemas` (`readWaitOutcomeMessage`, which reads the line's facts back from the words `describeWaitOutcome` writes).
+- The terminal run statuses: seven packages kept local copies of `completed`, `failed` and `cancelled`. Each now imports `TERMINAL_RUN_STATUSES`, `TerminalRunStatus` or `isTerminalRunStatus` from `@aflow/schemas`. They are `apps/aflow-orchestrator`, `apps/aflow-mcp` (the watcher), `@aflow/cybernetic-runtime`, `@aflow/server-runtime`, `@aflow/run-view`, `@aflow/web-product` and `@aflow/platform-artifacts` (the shepherd merge skill). Behaviour is unchanged.
 
 ## 5. Phases
 
@@ -228,7 +230,7 @@ _Decision:_ the chat reads the line's facts back from the words `describeWaitOut
 
 _As built:_ the chat renders a room message from `WAIT_OUTCOME_ACTOR_ID` as one line, such as "Wait for pull request aflowai/aflow#315 ended: its checks passed." The line names what the wait was for and what ended it. A button behind it shows the full text. The keyboard reaches it, and the button toggles on Enter and Space by its own key handlers. `readWaitOutcomeMessage` in `@aflow/schemas` reads the line's facts back from the words `describeWaitOutcome` writes, and a test pins the two together. A plan node's line names the status its body names. Where an event ended the wait, that status is the one the last event told, not the first event's. A node that moved again before delivery thus reads as its last change set it. Where the window closed on a node that moved on, the body and the line name the status read from the node. Where the node is gone, the line says it no longer exists. Only the status line that opens the node's section sets that status or that absence, never a line of the node's note. A gate's line knows each Action Center resolution kind, and a run's line knows each terminal status, by type. Words it does not recognise fold to "A wait ended." The message the agent receives is unchanged.
 
-_Correction:_ the rule in `chat-messages.css` that drops the notice's avatar-column margin below 640px landed with merge commit e1fae35. That commit's message wrongly says the code was unchanged in that round.
+_Correction:_ the rule in `chat-messages.css` that drops the notice's avatar-column margin below 640px is part of this follow-up, and the pull request that lands it holds the rule. One round of that pull request said in its message that the code was unchanged, and that was wrong.
 
 ## 6. How it is proven
 
