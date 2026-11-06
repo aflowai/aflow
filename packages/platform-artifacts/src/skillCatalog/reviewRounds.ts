@@ -86,14 +86,13 @@ export const NITS_ONLY_FIRST_REASON =
  * round in every round. After the first round, minors and nits are taken as
  * they stand. In the first round a review short of approve, or a minor, takes
  * a fix round. A `needs_setup` finding counts as none, as in the publication.
- * The publication's own rule differs in two places, and stays as it is:
+ * The publication reads the same rule from its table (`ROUNDS_RULE`), and
+ * differs in the cases no row of it covers, which it asks a decision model:
  *
- * - After a fix round it publishes an approving review's major, because its
- *   push gate then asks the operator. Here no operator stands behind a push,
- *   so the major takes its fix, bounded by `REVIEW_ROUNDS_MAX`.
- * - After a fix round it fixes a review that does not approve and names no
- *   blocker or major. Here that review is taken as it stands, its minors and
- *   nits recorded open.
+ * - A first review short of approve that names nothing above a nit. Here it
+ *   takes a fix round.
+ * - A later review short of approve that names nothing. Here it is taken as
+ *   it stands.
  */
 export const REVIEW_ROUNDS_RULES: readonly WorkflowRunDecideRule[] = [
   ...aboveMinorRules(MAJOR_ALWAYS_REASON),

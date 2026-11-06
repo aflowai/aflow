@@ -9,14 +9,14 @@ import { REVIEW_SEVERITY_ONTOLOGY } from './reviewLocalChanges.js';
  * of decision quality on the loop's own history (`yarn decisions:measure-loop`,
  * Plan 316 §7) asks them the same way each time.
  *
- * Neither is the skill's. A failed check fails the run, and its question is
- * asked by the measurement alone until it has labelled
- * `operator_install_mismatch` cases (Plan 316 §7). The decision after a review
- * is the rounds rule's (`publishLocalChangesAfterReview.ts`): no model
- * measured on it cleared the bar on an approving review with minors, so the
- * skill asks none, and its question stays here only for the measurement.
+ * A failed check fails the run, and its question is asked by the measurement
+ * alone until it has labelled `operator_install_mismatch` cases (Plan 316 §7).
+ * The decision after a review is the rounds rule's table where a row covers
+ * the case (`ROUNDS_RULE`, `@aflow/schemas`). The skill asks the review's
+ * question only of a case no row covers, at the bar measured on Jev.
  */
 export const AFTER_CHECK_MIN_CONFIDENCE = 0.8;
+export const AFTER_REVIEW_MIN_CONFIDENCE = 0.8;
 
 export const AFTER_CHECK_ROUTES = [
   'recheck_on_timeout',
@@ -51,8 +51,10 @@ export const AFTER_CHECK_QUESTION = {
 /**
  * The cases the measurement asks it of: a review that did not approve,
  * whatever it found, and an approving one with a minor or worse among its
- * findings. Its wording is unchanged from when the skill asked it, so a new
- * measurement compares with the old.
+ * findings. The skill asks it only of a case the rounds rule's table leaves
+ * open, each of which is a review that did not approve. Its wording is
+ * unchanged from when the skill first asked it, so a new measurement compares
+ * with the old.
  */
 export const AFTER_REVIEW_QUESTION = {
   type: 'choice',
