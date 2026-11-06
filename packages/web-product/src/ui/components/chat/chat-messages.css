@@ -468,6 +468,12 @@
     margin: var(--space-1) var(--space-2-5);
   }
 
+  /* The message pads its content var(--space-3) here, and the toggle pads
+     its line var(--space-2), so this margin puts the line on that edge. */
+  .chat-wait-notice {
+    margin: var(--space-1) var(--space-2);
+  }
+
   .chat-delivery-indicator {
     padding: 0 calc(var(--space-1) + var(--space-5)) var(--space-1) var(--space-5);
   }

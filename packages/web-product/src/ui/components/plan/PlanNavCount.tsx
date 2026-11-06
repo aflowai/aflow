@@ -7,7 +7,8 @@ import { useActionCenter } from '../../hooks/use-action-center.js';
 import { planPendingCount, type PlanPendingCount } from '../../lib/plan-pending-count.js';
 
 // Kept here rather than imported from the plan page's parts: the shell mounts this on every page.
-const srOnly: CSSProperties = {
+// The Chat entry's count reads it too, so the two counts hide their words alike.
+export const navCountSrOnly: CSSProperties = {
   position: 'absolute',
   width: 1,
   height: 1,
@@ -40,7 +41,7 @@ export function PlanNavCount({ pending }: { pending: PlanPendingCount }): ReactE
   return (
     <Badge variant="warning" title={name} data-plan-nav-count={pending.label}>
       {pending.label}
-      <span style={srOnly}> {PLAN_STATE_LABELS.pendingCountNoun}</span>
+      <span style={navCountSrOnly}> {PLAN_STATE_LABELS.pendingCountNoun}</span>
     </Badge>
   );
 }
