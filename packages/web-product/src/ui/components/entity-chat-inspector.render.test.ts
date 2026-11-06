@@ -25,7 +25,14 @@ vi.mock('./cybernetic-provider.js', () => ({
 vi.mock('../hooks/use-space-entity-events.js', () => ({
   useSpaceEntityEvents: () => ({ events: [], isConnected: true }),
 }));
-vi.mock('./workbench/index.js', () => ({ Workbench: () => null }));
+vi.mock('./workbench/index.js', async () => {
+  const folds = await import('./workbench/WorkbenchSection.js');
+  return {
+    Workbench: () => null,
+    WorkbenchFoldsContext: folds.WorkbenchFoldsContext,
+    useWorkbenchFolds: folds.useWorkbenchFolds,
+  };
+});
 vi.mock('./cascade-feed.js', () => ({ CascadeFeed: () => null }));
 vi.mock('./cascade-session-timeline.js', () => ({ CascadeSessionTimeline: () => null }));
 vi.mock('./chat/AgentChatHistory.js', () => ({ AgentChatHistory: () => null }));

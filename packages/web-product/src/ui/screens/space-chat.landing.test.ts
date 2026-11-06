@@ -488,9 +488,9 @@ describe('what the open dock reads (D3 budget)', () => {
     await click(fold(false));
     expect(fold(true)).not.toBeNull();
 
-    await click(tab('Session timeline'));
+    await click(tab('Timeline'));
     expect(fold(true)).toBeNull();
-    await click(tab('Workbench'));
+    await click(tab('Space'));
     expect(fold(true)).not.toBeNull();
   });
 
