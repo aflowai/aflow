@@ -32,7 +32,7 @@ function event(kind: WaitEvent['kind'], subject: string, detail: WaitEvent['deta
 }
 
 describe('readWaitOutcomeMessage reads what describeWaitOutcome writes', () => {
-  it('reads the first change of a pull request, past the later ones and the owner instruction', () => {
+  it('reads the latest change of a pull request, past the owner instruction', () => {
     const pull = 'aflowai/aflow#276';
     const words = describeWaitOutcome(
       registration('pull_request.changed', pull, {
@@ -54,8 +54,38 @@ describe('readWaitOutcomeMessage reads what describeWaitOutcome writes', () => {
       kind: 'pull_request.changed',
       subject: pull,
       endedBy: 'event',
-      detail: { change: 'checks_green' },
+      detail: { change: 'merged' },
     });
+  });
+
+  it('reads the change of a pull request with no later event', () => {
+    const pull = 'aflowai/aflow#276';
+    const words = describeWaitOutcome(registration('pull_request.changed', pull), {
+      endedBy: 'event',
+      event: event('pull_request.changed', pull, { change: 'checks_green', headSha: 'abc123' }),
+    });
+
+    expect(readWaitOutcomeMessage(words)?.detail).toEqual({ change: 'checks_green' });
+  });
+
+  it('reads the latest status of a run with a later terminal event', () => {
+    const words = describeWaitOutcome(registration('run.ended', 'run-1'), {
+      endedBy: 'event',
+      event: event('run.ended', 'run-1', { status: 'failed' }),
+      laterEvents: [event('run.ended', 'run-1', { status: 'cancelled' })],
+    });
+
+    expect(readWaitOutcomeMessage(words)?.detail).toEqual({ status: 'cancelled' });
+  });
+
+  it('reads the latest resolution of a gate with a later one', () => {
+    const words = describeWaitOutcome(registration('gate.resolved', 'item-1'), {
+      endedBy: 'event',
+      event: event('gate.resolved', 'item-1', { resolution: 'reassign' }),
+      laterEvents: [event('gate.resolved', 'item-1', { resolution: 'approve' })],
+    });
+
+    expect(readWaitOutcomeMessage(words)?.detail).toEqual({ resolution: 'approve' });
   });
 
   it('reads the status a run ended with', () => {

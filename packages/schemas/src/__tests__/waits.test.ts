@@ -8,6 +8,7 @@ import {
   WAIT_EVENT_KINDS,
   parsePullRequestRef,
   pullRequestSubject,
+  readWaitOutcomeMessage,
   waitEventOfEntityEvent,
   type EntityEventEnvelope,
 } from '../index.js';
@@ -103,5 +104,69 @@ describe('a pull request subject', () => {
       number: 276,
     });
     expect(parsePullRequestRef('https://github.com/aflowai/aflow/issues/276')).toBeNull();
+  });
+});
+
+/**
+ * A wait's room message as `describeWaitOutcome` words it, its events given
+ * oldest first. The last one is the body's status line.
+ */
+function waitOutcomeBody(kind: string, subject: string, events: readonly string[]): string {
+  const [first, ...later] = events;
+  return (
+    `Your wait 23e0cfeb-0000-4000-8000-000000000339 on ${kind} on ${subject} has ended: ` +
+    `the event arrived at ${first}. ` +
+    (later.length > 0 ? `Later events on the subject before you were told: ${later.join('; ')}. ` : '') +
+    'You own the subject, so the platform declared this wait for you. ' +
+    // Words after the list that look like an event's never count as one.
+    'Act on it at 2026-11-06T09:00:00.000Z (change: closed, status: completed, resolution: dismiss).'
+  );
+}
+
+describe('readWaitOutcomeMessage folds to the status line the body ends its events with', () => {
+  it('says a pull request merged where checks_green came first', () => {
+    const statusLine = '2026-11-06T08:01:00.000Z (change: merged)';
+    const body = waitOutcomeBody('pull_request.changed', 'aflowai/aflow#276', [
+      '2026-11-06T08:00:00.000Z (change: checks_green, url: https://github.com/aflowai/aflow/pull/276, headSha: abc123)',
+      statusLine,
+    ]);
+
+    const folded = readWaitOutcomeMessage(body)?.detail;
+    expect(folded).toEqual({ change: 'merged' });
+    expect(statusLine).toContain(`change: ${folded?.change}`);
+  });
+
+  it('says how a run ended where a later terminal event followed', () => {
+    const statusLine = '2026-11-06T08:01:00.000Z (status: cancelled)';
+    const body = waitOutcomeBody('run.ended', 'run-1', [
+      '2026-11-06T08:00:00.000Z (status: failed)',
+      statusLine,
+    ]);
+
+    const folded = readWaitOutcomeMessage(body)?.detail;
+    expect(folded).toEqual({ status: 'cancelled' });
+    expect(statusLine).toContain(`status: ${folded?.status}`);
+  });
+
+  it('says how a gate was resolved where a later resolution followed', () => {
+    const statusLine = '2026-11-06T08:02:00.000Z (resolution: approve, actor: person-2)';
+    const body = waitOutcomeBody('gate.resolved', 'item-1', [
+      '2026-11-06T08:00:00.000Z (resolution: reassign, actor: person-1)',
+      '2026-11-06T08:01:00.000Z (resolution: reject)',
+      statusLine,
+    ]);
+
+    const folded = readWaitOutcomeMessage(body)?.detail;
+    expect(folded).toEqual({ resolution: 'approve' });
+    expect(statusLine).toContain(`resolution: ${folded?.resolution}`);
+  });
+
+  it('reads the one event where no later event followed', () => {
+    const statusLine = '2026-11-06T08:00:00.000Z (change: checks_green, headSha: abc123)';
+    const body = waitOutcomeBody('pull_request.changed', 'aflowai/aflow#276', [statusLine]);
+
+    const folded = readWaitOutcomeMessage(body)?.detail;
+    expect(folded).toEqual({ change: 'checks_green' });
+    expect(statusLine).toContain(`change: ${folded?.change}`);
   });
 });

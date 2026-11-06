@@ -171,8 +171,10 @@ export interface WaitOutcomeMessage {
   subject: string;
   endedBy: WaitOutcome['endedBy'];
   /**
-   * The ending event's `change`, `status` and `resolution`, where it names
-   * them. For a plan node, `status` is the latest status the message names.
+   * The `change`, `status` and `resolution` of the latest event the message
+   * lists, where it names them: the event the body's last status line tells.
+   * For a plan node, `status` is the node's status as the delivery read it,
+   * where the message names the node.
    */
   detail: Partial<Record<'change' | 'status' | 'resolution', string>>;
   /** The plan node's title, where the message names the node. */
@@ -199,13 +201,29 @@ function planNodeStatusLine(body: string): string {
   return body.slice(start + 2).split('\n', 1)[0] ?? '';
 }
 
-/** Every value an event names for `key`, the ending event's first. */
-function eventValues(body: string, key: string): string[] {
-  const values: string[] = [];
-  for (const match of body.matchAll(new RegExp(`[(,] ?${key}: ([a-z_]+)(?=[,)])`, 'g'))) {
-    if (match[1] !== undefined) values.push(match[1]);
-  }
-  return values;
+/**
+ * The time that opens each event `describeWaitOutcome` lists: the ending
+ * event after the head, each later one after the list's lead or a `; `.
+ */
+const EVENT_FIRED_AT =
+  /(?<=the event arrived at |before you were told: |; )\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z/g;
+
+/** The value one event's detail names for `key`. */
+function eventValue(event: string, key: string): string | undefined {
+  return new RegExp(`[(,] ?${key}: ([a-z_]+)(?=[,)])`).exec(event)?.[1];
+}
+
+/**
+ * The words of each event the message lists, oldest first: the ending event,
+ * then the later ones. Each runs from its time to the end of its detail, so
+ * the words after the list never count as an event's.
+ */
+function listedEvents(body: string): string[] {
+  const starts = [...body.matchAll(EVENT_FIRED_AT)].map((match) => match.index);
+  return starts.map((start, i) => {
+    const event = body.slice(start, starts[i + 1] ?? body.length);
+    return /^\S+ \(.*?\)(?=; |\. |$)/s.exec(event)?.[0] ?? '';
+  });
 }
 
 /**
@@ -221,21 +239,21 @@ export function readWaitOutcomeMessage(body: string): WaitOutcomeMessage | null 
   const endedBy = head[3] === 'the event arrived' ? 'event' : 'window_closed';
   const detail: WaitOutcomeMessage['detail'] = {};
   if (endedBy === 'event') {
+    // More events may have fired before delivery. The body's last status line
+    // tells the latest of them, so every kind reads that one.
+    const latest = listedEvents(body).at(-1) ?? '';
     for (const key of ['change', 'status', 'resolution'] as const) {
-      const value = eventValues(body, key)[0];
+      const value = eventValue(latest, key);
       if (value !== undefined) detail[key] = value;
     }
   }
   if (kind.data !== 'plan.node.status_changed') {
     return { kind: kind.data, subject, endedBy, detail };
   }
-  // The node may have moved again before delivery. Its status as read then
-  // wins, and the last event's status stands in where the node is not named.
+  // The node's status as the delivery read it wins over the latest event's.
   const statusLine = planNodeStatusLine(body);
   const now = PLAN_NODE_NOW.exec(statusLine);
-  const latest = now?.[2] ?? (endedBy === 'event' ? eventValues(body, 'status').at(-1) : undefined);
-  delete detail.status;
-  if (latest !== undefined) detail.status = latest;
+  if (now?.[2] !== undefined) detail.status = now[2];
   return {
     kind: kind.data,
     subject,

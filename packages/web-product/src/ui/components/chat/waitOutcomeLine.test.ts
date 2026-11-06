@@ -19,6 +19,39 @@ describe('describeWaitOutcomeNotice', () => {
     expect(line).not.toContain('workflow.run.start');
   });
 
+  it('says a pull request merged where checks passed first, as its last status line says', () => {
+    const statusLine = '2026-11-06T08:01:00.000Z (change: merged)';
+    const line = describeWaitOutcomeNotice(
+      'Your wait 23e0cfeb-0000-4000-8000-000000000339 on pull_request.changed on aflowai/aflow#315 has ended: ' +
+        'the event arrived at 2026-11-06T08:00:00.000Z (change: checks_green, headSha: abc123). ' +
+        `Later events on the subject before you were told: ${statusLine}. Act on it by your own rules.`,
+    );
+    expect(line).toBe('Wait for pull request aflowai/aflow#315 ended: it merged.');
+    expect(statusLine).toContain('change: merged');
+  });
+
+  it('names the latest way a run ended, as its last status line says', () => {
+    const statusLine = '2026-11-06T08:01:00.000Z (status: cancelled)';
+    const line = describeWaitOutcomeNotice(
+      'Your wait 23e0cfeb-0000-4000-8000-000000000339 on run.ended on run-1 has ended: ' +
+        'the event arrived at 2026-11-06T08:00:00.000Z (status: failed). ' +
+        `Later events on the subject before you were told: ${statusLine}. Act on it by your own rules.`,
+    );
+    expect(line).toBe('Wait for a run ended: it was cancelled.');
+    expect(statusLine).toContain('status: cancelled');
+  });
+
+  it('names the latest resolution of an Action Center item, as its last status line says', () => {
+    const statusLine = '2026-11-06T08:01:00.000Z (resolution: approve)';
+    const line = describeWaitOutcomeNotice(
+      'Your wait 23e0cfeb-0000-4000-8000-000000000339 on gate.resolved on item-1 has ended: ' +
+        'the event arrived at 2026-11-06T08:00:00.000Z (resolution: reassign). ' +
+        `Later events on the subject before you were told: ${statusLine}. Act on it by your own rules.`,
+    );
+    expect(line).toBe('Wait for an Action Center item ended: it was approved.');
+    expect(statusLine).toContain('resolution: approve');
+  });
+
   it('names how a run ended', () => {
     expect(
       describeWaitOutcomeNotice(
