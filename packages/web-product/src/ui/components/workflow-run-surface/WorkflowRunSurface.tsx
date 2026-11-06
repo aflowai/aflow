@@ -10,6 +10,7 @@ import {
   Timeline,
   TimelineItem,
 } from '@aflow/design-system';
+import { isTerminalRunStatus } from '@aflow/schemas';
 import type { WorkflowRunSurfaceState } from '../../lib/types.js';
 import { resolveTaskIcon } from '../../lib/op-labels.js';
 import { useWorkflowRunRehydration } from './useWorkflowRunRehydration.js';
@@ -29,7 +30,6 @@ import {
   runPill,
   taskTimelineStatus,
   taskTimeLabel,
-  TERMINAL_RUN_STATUSES,
   TERMINAL_TASK_STATUSES,
   topoSortRows,
 } from './workflowRunSurfaceHelpers.js';
@@ -158,7 +158,7 @@ export function WorkflowRunSurface({
   // fully-settled run doesn't read "executing" while the terminal
   // WorkflowRunUpdate is still in flight.
   const effectiveStatus = deriveEffectiveRunStatus(state, orderedRows);
-  const completed = TERMINAL_RUN_STATUSES.has(effectiveStatus);
+  const completed = isTerminalRunStatus(effectiveStatus);
   const pill = runPill(effectiveStatus);
   const title = state.workflowTitle ?? state.slug;
 

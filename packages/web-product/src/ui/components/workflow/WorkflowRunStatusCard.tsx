@@ -12,6 +12,7 @@ import {
   Icon,
   JsonViewer,
 } from '@aflow/design-system';
+import { isTerminalRunStatus } from '@aflow/schemas';
 
 import { useSpace } from '../providers.js';
 import { FeedbackPicker } from '../feedback/FeedbackPicker.js';
@@ -312,7 +313,7 @@ export function WorkflowRunStatusCard({ data }: { data: unknown }) {
 function RunCompleteCard({ data }: { data: RunCompleteData }) {
   const { activeSpaceId } = useSpace();
   const [feedbackDismissed, setFeedbackDismissed] = useState(false);
-  const isTerminal = ['completed', 'failed', 'cancelled'].includes(data.status);
+  const isTerminal = isTerminalRunStatus(data.status);
 
   return (
     <Card style={{ backgroundColor: 'var(--color-surface-0)' }}>

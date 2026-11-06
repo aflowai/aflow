@@ -18,11 +18,11 @@ import type {
   WaiterNotifiedOutcome,
   WorkflowRunCancellation,
 } from '@aflow/schemas';
+import { isTerminalRunStatus } from '@aflow/schemas';
 import { getOrchestratorLogger } from '../../../lib/orchestratorLogger.js';
 import { fireCyberneticPostRunHooksStandalone } from '../postRunHooks.js';
 import {
   advanceSchedulerCursor,
-  isTerminalRunStatus,
   isTerminalTaskStatus,
   loadRunByRunIdAcrossSpaces,
   resolveWorkflowForRun,

@@ -26,7 +26,12 @@ import {
 } from '@aflow/schemas';
 import { resolveWorkflowForRunRevision, readSessionUsage } from '@aflow/database';
 import type { SessionUsage } from '@aflow/database';
-import type { SessionId, StepExecutionId, TenantId } from '@aflow/schemas';
+import {
+  isTerminalRunStatus,
+  type SessionId,
+  type StepExecutionId,
+  type TenantId,
+} from '@aflow/schemas';
 import { loadRunById, type WorkflowTaskRow } from './ledger.js';
 import { loadPendingWaiters } from './ledger.js';
 import { resolveUserLabels } from './userLabels.js';
@@ -365,8 +370,7 @@ export async function buildWorkflowRunDetail(
   // runs only. Best-effort — a result failure never blocks the detail read.
   let runResult: WorkflowRunResult | undefined;
   try {
-    const isTerminal =
-      run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled';
+    const isTerminal = isTerminalRunStatus(run.status);
     runResult = await buildWorkflowRunResult(
       { db, payloadStore },
       {

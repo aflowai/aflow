@@ -8,6 +8,7 @@ import type {
   WorkflowLearning,
   CompactEvalOutcome,
   CandidateLearning,
+  TerminalRunStatus,
 } from '@aflow/schemas';
 import {
   compareWithThresholdOperator,
@@ -146,7 +147,7 @@ export interface MaterializeRunScoreParams {
    * completion-default score: a campaign run that produced no real score still
    * gets one from its outcome. See {@link materializeRunScore}.
    */
-  runTerminalStatus?: 'completed' | 'failed' | 'cancelled';
+  runTerminalStatus?: TerminalRunStatus;
 }
 
 export interface MaterializeRunScoreResult {

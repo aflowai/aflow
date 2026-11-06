@@ -24,8 +24,13 @@ import type {
   Workflow,
   WorkflowHumanTaskHydration,
   WorkflowRunResult,
+  TerminalRunStatus,
 } from '@aflow/schemas';
-import { StepOutputPresentationSchema, type StepOutputPresentation } from '@aflow/schemas';
+import {
+  StepOutputPresentationSchema,
+  isTerminalRunStatus,
+  type StepOutputPresentation,
+} from '@aflow/schemas';
 import {
   resolveWorkflowForRunRevision,
   MissingPinnedRevisionError,
@@ -64,7 +69,6 @@ export async function computeReadyView(
 }
 
 const TERMINAL_TASK_STATUSES = new Set(['succeeded', 'failed', 'blocked', 'skipped', 'cancelled']);
-const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'cancelled']);
 
 export function isTerminalTaskStatus(status: string): boolean {
   return TERMINAL_TASK_STATUSES.has(status);
@@ -81,12 +85,8 @@ export function isRestingTaskStatus(status: string): boolean {
   return TERMINAL_TASK_STATUSES.has(status) || status === 'paused';
 }
 
-export function isTerminalRunStatus(status: string): boolean {
-  return TERMINAL_RUN_STATUSES.has(status);
-}
-
 export function terminalStatusToAttentionKind(
-  terminalStatus: 'completed' | 'failed' | 'cancelled',
+  terminalStatus: TerminalRunStatus,
 ): AttentionItemKind {
   switch (terminalStatus) {
     case 'completed':
@@ -125,7 +125,7 @@ export async function loadRunByRunIdAcrossSpaces(
 
 export function outcomeToRunStatus(
   outcome: NotifyWaitersArgs['outcome'],
-): 'completed' | 'failed' | 'cancelled' | 'paused' | null {
+): TerminalRunStatus | 'paused' | null {
   switch (outcome) {
     case 'completed':
       return 'completed';
@@ -154,19 +154,8 @@ export function outcomeToRunStatus(
  * completion means the DB winner is `completed`/`failed`, and the UI must
  * be told that, not `cancelled`.
  */
-export function runTerminalStatusToOutcome(
-  status: string,
-): 'completed' | 'failed' | 'cancelled' | null {
-  switch (status) {
-    case 'completed':
-      return 'completed';
-    case 'failed':
-      return 'failed';
-    case 'cancelled':
-      return 'cancelled';
-    default:
-      return null;
-  }
+export function runTerminalStatusToOutcome(status: string): TerminalRunStatus | null {
+  return isTerminalRunStatus(status) ? status : null;
 }
 
 export async function emitTaskUpdate(

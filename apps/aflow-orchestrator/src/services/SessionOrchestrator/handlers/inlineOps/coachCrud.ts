@@ -13,7 +13,7 @@ import type {
   CyberneticEvalSuite,
   SkillManifest,
 } from '@aflow/schemas';
-import { WorkflowSchema, CyberneticEvalSuiteSchema } from '@aflow/schemas';
+import { WorkflowSchema, CyberneticEvalSuiteSchema, isTerminalRunStatus } from '@aflow/schemas';
 import type {
   LearnerProposeWorkflowChangeInput,
   LearnerProposeWithdrawInput,
@@ -1274,9 +1274,7 @@ async function handleReviewRequest(
 
   if (!resolvedRunId) {
     const recent = await listRecentRuns(db, tenantIdStr, spaceId, workflowSlug, { limit: 20 });
-    const mostRecentTerminal = recent.find(
-      (r) => r.status === 'completed' || r.status === 'failed' || r.status === 'cancelled',
-    );
+    const mostRecentTerminal = recent.find((r) => isTerminalRunStatus(r.status));
     if (!mostRecentTerminal) {
       await emitStepError(
         args,

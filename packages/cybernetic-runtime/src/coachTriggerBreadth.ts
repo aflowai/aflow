@@ -13,7 +13,7 @@ import type {
   TenantId,
   TrajectoryLearningEntry,
 } from '@aflow/schemas';
-import { resolveCampaignTargetBar } from '@aflow/schemas';
+import { TERMINAL_RUN_STATUSES, resolveCampaignTargetBar } from '@aflow/schemas';
 import {
   createTenantContext,
   withTenantSchema,
@@ -191,7 +191,7 @@ export async function loadBreadthEvidence(
             and(
               eq(workflowRuns.spaceId, params.spaceId),
               eq(workflowRuns.workflowSlug, params.workflowSlug),
-              inArray(workflowRuns.status, ['completed', 'failed', 'cancelled']),
+              inArray(workflowRuns.status, [...TERMINAL_RUN_STATUSES]),
             ),
           )
           .orderBy(desc(workflowRuns.startedAt), desc(workflowRuns.runId))

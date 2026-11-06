@@ -275,7 +275,7 @@ export const TERMINAL_RUN_STATUSES = [
 ] as const satisfies readonly WorkflowRunStatus[];
 export type TerminalRunStatus = (typeof TERMINAL_RUN_STATUSES)[number];
 
-function isTerminalRunStatus(status: string): status is TerminalRunStatus {
+export function isTerminalRunStatus(status: string): status is TerminalRunStatus {
   return (TERMINAL_RUN_STATUSES as readonly string[]).includes(status);
 }
 
