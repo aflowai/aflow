@@ -26,6 +26,7 @@ import { UserAvatar, useCurrentUser } from './user-avatar.js';
 import { ProfileMenu } from './profile-menu.js';
 import { useEdition, useHasSurface } from '../hooks/useEdition.js';
 import { PlanNavCount, usePlanPendingCount } from './plan/PlanNavCount.js';
+import { ChatNavCount, useActionCenterPendingCount } from './actionCenter/ChatNavCount.js';
 import { type ReactNode, useEffect } from 'react';
 
 interface NavItem {
@@ -36,8 +37,9 @@ interface NavItem {
 }
 
 /** Primary destinations shown in every space. In the sidebar: Chat renders
- *  first, Skills is interleaved next (for cybernetic spaces), then Integrations,
- *  Store, Memory, Settings, and finally People (admin-only). */
+ *  first and Plan second — with the Workbench inside Chat, the operator's three
+ *  daily surfaces — then Skills, Integrations, Store, Memory, Triggers, This
+ *  Computer (local edition), Settings, and finally People (admin-only). */
 /**
  * A tuple, not a list, because the code below destructures the four by name. Typed
  * as an open array each one is possibly-undefined, which the application's looser
@@ -68,6 +70,9 @@ function Sidebar() {
   // The Plan entry's count (Plan 338 D1) reads the Action Center list the bell
   // and the chat already hold, so it adds no request where either is mounted.
   const planPending = usePlanPendingCount(activeSpace?.id ?? null);
+  // The Chat entry's count is the bell's: everything in the Action Center that
+  // waits on this operator, read from the same list.
+  const actionCenterPending = useActionCenterPendingCount(activeSpace?.id ?? null);
   // The host lane ships outside the image and needs a machine paired to this
   // instance, which a hosted space does not have — "host execution belongs to
   // the local edition, where the machine and the instance are the same
@@ -309,6 +314,30 @@ function Sidebar() {
               href: chatHref,
               active: isPrimaryNavActive(pathname, chatItem.path, chatHref),
               icon: chatItem.icon,
+              // The count sits inside the Chat link, so choosing it opens Chat as
+              // the label does. Mid-switch the active space can still be the
+              // previous one, whose count must not stand beside this space's link.
+              ...(activeSpace?.slug === slug && actionCenterPending > 0
+                ? { trailing: <ChatNavCount count={actionCenterPending} /> }
+                : {}),
+            });
+
+            // Plan — the trees the Helmsman works through. Every edition: the
+            // plan is the Helmsman's, and the Helmsman runs wherever a space does.
+            // Second, right after Chat: Chat (with the Workbench inside it) and
+            // Plan are where the operator works every day.
+            const planHref = spaceRoute(slug, '/plan');
+            entries.push({
+              key: 'plan',
+              label: 'Plan',
+              href: planHref,
+              active: isPrimaryNavActive(pathname, '/plan', planHref),
+              icon: 'flag',
+              // Mid-switch the active space can still be the previous one, whose
+              // count must not stand beside this space's link.
+              ...(activeSpace?.slug === slug && planPending.count > 0
+                ? { trailing: <PlanNavCount pending={planPending} /> }
+                : {}),
             });
 
             // Skills — for cybernetic spaces
@@ -351,22 +380,6 @@ function Sidebar() {
               href: memoryHref,
               active: isPrimaryNavActive(pathname, memoryItem.path, memoryHref),
               icon: memoryItem.icon,
-            });
-
-            // Plan — the trees the Helmsman works through. Every edition: the
-            // plan is the Helmsman's, and the Helmsman runs wherever a space does.
-            const planHref = spaceRoute(slug, '/plan');
-            entries.push({
-              key: 'plan',
-              label: 'Plan',
-              href: planHref,
-              active: isPrimaryNavActive(pathname, '/plan', planHref),
-              icon: 'flag',
-              // Mid-switch the active space can still be the previous one, whose
-              // count must not stand beside this space's link.
-              ...(activeSpace?.slug === slug && planPending.count > 0
-                ? { trailing: <PlanNavCount pending={planPending} /> }
-                : {}),
             });
 
             // Triggers — everything armed to start work here on its own. A clock
