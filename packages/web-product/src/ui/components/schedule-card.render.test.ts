@@ -32,6 +32,7 @@ vi.mock('../hooks/useApiQuery.js', () => ({
 }));
 
 vi.mock('./providers.js', () => ({
+  useSpace: () => ({ activeSpace: null }),
   useSpaceFromRoute: () => ({ id: SPACE_ID, slug: 'home' }),
 }));
 

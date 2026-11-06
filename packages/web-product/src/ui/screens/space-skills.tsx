@@ -19,6 +19,7 @@ import type { Workflow, SkillValidity, SkillCampaignContract } from '@aflow/sche
 import { useCybernetic } from '../components/cybernetic-provider.js';
 import { useNavigation } from '../components/navigation-provider.js';
 import { useApi } from '../components/providers.js';
+import { SpaceActionBell } from '../components/app-page-header.js';
 import { useApiQuery } from '../hooks/useApiQuery.js';
 import { spaceRoute } from '../lib/space-routes.js';
 import { SkillDesigner } from '../components/skill-designer/SkillDesigner.js';
@@ -247,33 +248,43 @@ export function SkillsPage() {
 
   if (skills.length === 0) {
     return (
-      <Column
-        style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 'var(--space-md)' }}
-      >
-        <EmptyState
-          icon={<Icon name="skill" size={48} color="var(--color-accent-default)" />}
-          title="No skills yet"
-          description="Describe one to Helmsman, start from a template, or install one from the Store."
-        />
-        <Row gap="sm">
-          <Button
-            variant="primary"
-            onClick={() => {
-              setNewOpen(true);
-            }}
-          >
-            <Icon name="plus" size="xs" /> New skill
-          </Button>
-          <Button
-            variant="secondary"
-            onClick={() => {
-              push(spaceRoute(spaceSlug, '/store?kind=skill'));
-            }}
-          >
-            Browse skill store
-          </Button>
+      <Column style={{ flex: 1, minHeight: 0 }}>
+        <Row justify="end" style={{ padding: 'var(--space-sm) var(--space-md)' }}>
+          <SpaceActionBell />
         </Row>
-        {newSkillDialog}
+        <Column
+          style={{
+            flex: 1,
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 'var(--space-md)',
+          }}
+        >
+          <EmptyState
+            icon={<Icon name="skill" size={48} color="var(--color-accent-default)" />}
+            title="No skills yet"
+            description="Describe one to Helmsman, start from a template, or install one from the Store."
+          />
+          <Row gap="sm">
+            <Button
+              variant="primary"
+              onClick={() => {
+                setNewOpen(true);
+              }}
+            >
+              <Icon name="plus" size="xs" /> New skill
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                push(spaceRoute(spaceSlug, '/store?kind=skill'));
+              }}
+            >
+              Browse skill store
+            </Button>
+          </Row>
+          {newSkillDialog}
+        </Column>
       </Column>
     );
   }
@@ -362,6 +373,9 @@ export function SkillsPage() {
             </div>
           </div>
         )}
+        <div style={wf ? undefined : { marginLeft: 'auto' }}>
+          <SpaceActionBell />
+        </div>
       </div>
 
       {!wf ? (

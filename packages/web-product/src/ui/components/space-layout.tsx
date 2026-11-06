@@ -18,6 +18,7 @@ import { SpaceSlugSchema } from '@aflow/schemas';
 import { PreferredSpacePersist } from './preferred-space-persist.js';
 import { SpaceAccessGate } from './space-access-gate.js';
 import { SpaceSlugHistoryRedirect } from './space-slug-history-redirect.js';
+import { SpacePageTitle } from './space-page-title.js';
 
 export async function SpaceLayout({
   children,
@@ -38,6 +39,7 @@ export async function SpaceLayout({
     <>
       <SpaceSlugHistoryRedirect slug={parsed.data} />
       <PreferredSpacePersist slug={parsed.data} />
+      <SpacePageTitle />
       <SpaceAccessGate slug={parsed.data}>{children}</SpaceAccessGate>
     </>
   );

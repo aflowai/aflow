@@ -117,7 +117,19 @@ export function useConversationMetadata(
   spaceId: string | null,
   sessionId: string | null,
 ): SessionMetadataDetailPayload['metadata'] | null {
-  const queryClient = useQueryClient();
+  useConversationsDescribedRefresh(spaceId, sessionId === null ? [] : [sessionId]);
+  return useConversationMetadataRead(spaceId, sessionId);
+}
+
+/**
+ * The same read without a listener of its own, for a surface that labels
+ * several conversations and refreshes them all through one
+ * `useConversationsDescribedRefresh`.
+ */
+export function useConversationMetadataRead(
+  spaceId: string | null,
+  sessionId: string | null,
+): SessionMetadataDetailPayload['metadata'] | null {
   const query = useApiQuery<SessionMetadataDetailPayload>({
     key: ['session', sessionId ?? 'none', 'metadata'],
     path: `/sessions/${sessionId ?? ''}/metadata`,
@@ -125,12 +137,22 @@ export function useConversationMetadata(
     ...(spaceId ? { spaceId } : {}),
     staleTime: 30_000,
   });
+  return query.data?.metadata ?? null;
+}
 
+/**
+ * One space-channel listener that refreshes the metadata read of each named
+ * conversation when the background job names it.
+ */
+export function useConversationsDescribedRefresh(
+  spaceId: string | null,
+  sessionIds: readonly string[],
+): void {
+  const queryClient = useQueryClient();
   useSpaceEntityEventListener(spaceId, (event) => {
     if (event.eventType !== 'entity.session.described') return;
-    if (sessionId === null || event.causedBySessionId !== sessionId) return;
+    const sessionId = event.causedBySessionId;
+    if (!sessionId || !sessionIds.includes(sessionId)) return;
     void queryClient.invalidateQueries({ queryKey: ['session', sessionId, 'metadata'] });
   });
-
-  return query.data?.metadata ?? null;
 }

@@ -117,12 +117,7 @@ export function ChatHeader({
   // conversation's own name, and it is absent until there is one: an untitled
   // header keeps the space prefix from trailing a separator into nothing.
   return (
-    <AppPageHeader
-      actions={actionButtons}
-      bordered={false}
-      showActionBell={false}
-      {...(title ? { title } : {})}
-    >
+    <AppPageHeader actions={actionButtons} bordered={false} {...(title ? { title } : {})}>
       {mobileIdentity}
     </AppPageHeader>
   );

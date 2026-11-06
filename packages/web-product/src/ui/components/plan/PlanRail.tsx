@@ -43,6 +43,10 @@ import {
   type PlanTreeNode,
 } from '@aflow/schemas';
 import { useApiQuery } from '../../hooks/useApiQuery.js';
+import {
+  useConversationMetadataRead,
+  useConversationsDescribedRefresh,
+} from '../../hooks/use-session-metadata.js';
 import { spaceRoute } from '../../lib/space-routes.js';
 import {
   NEEDS_YOU_REASON_LABEL,
@@ -390,6 +394,11 @@ export function PlanRail({
     ),
   });
   const conversationLinks = conversations.data?.links ?? [];
+  // One listener for every linked conversation, not one per link.
+  useConversationsDescribedRefresh(
+    spaceId,
+    conversationLinks.map((link) => link.ref),
+  );
   // The plan document behind the step (Plan 337 D2): links come newest first,
   // so a page of one is the newest.
   const documents = useApiQuery<PlanNodeDetailOutput>({
@@ -620,8 +629,9 @@ export function PlanRail({
                   <Link
                     href={spaceRoute(spaceSlug, `/chat?session=${encodeURIComponent(link.ref)}`)}
                     style={linkStyle}
+                    data-plan-conversation={link.ref}
                   >
-                    Conversation
+                    <ConversationLinkTitle spaceId={spaceId} sessionId={link.ref} />
                   </Link>
                   <Text size="xs" variant="muted">
                     {shortTime(link.createdAt)}
@@ -736,4 +746,10 @@ export function PlanRailFromDetail({
       {...controls}
     />
   );
+}
+
+/** A conversation link's label: the conversation's own name, or `Conversation` until it has one. */
+function ConversationLinkTitle({ spaceId, sessionId }: { spaceId: string; sessionId: string }) {
+  const title = useConversationMetadataRead(spaceId, sessionId)?.title?.trim();
+  return <>{title ? title : 'Conversation'}</>;
 }
