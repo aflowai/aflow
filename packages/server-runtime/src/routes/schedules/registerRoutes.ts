@@ -339,8 +339,12 @@ export function registerScheduleRoutes(fastify: FastifyInstance): void {
     async (request, reply) => {
       const space = await request.requireSpace();
       const tenant = await request.requireTenant();
-      const rows = await readUpcomingSchedules(getDatabase(), tenant.tenantId, space.spaceId);
-      return reply.send({ schedules: rows.map(rowToResponse) });
+      const { schedules, total } = await readUpcomingSchedules(
+        getDatabase(),
+        tenant.tenantId,
+        space.spaceId,
+      );
+      return reply.send({ schedules: schedules.map(rowToResponse), total });
     },
   );
 

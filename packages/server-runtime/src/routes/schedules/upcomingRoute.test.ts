@@ -22,7 +22,14 @@ const MINUTE = 60_000;
  */
 const table = vi.hoisted(() => ({
   rows: [] as unknown[],
-  reads: [] as Array<{ where: unknown; orderBy: unknown[]; limit: number | undefined }>,
+  /** What a count of every upcoming schedule answers. */
+  total: 0,
+  reads: [] as Array<{
+    fields: unknown;
+    where: unknown;
+    orderBy: unknown[];
+    limit: number | undefined;
+  }>,
   tenants: [] as unknown[],
   databases: [] as unknown[],
 }));
@@ -31,12 +38,14 @@ const DATABASE = vi.hoisted(() => ({ name: 'the server database' }));
 
 vi.mock('@aflow/database', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@aflow/database')>();
-  function select() {
-    const read: { where: unknown; orderBy: unknown[]; limit: number | undefined } = {
-      where: undefined,
-      orderBy: [],
-      limit: undefined,
-    };
+  function select(fields?: unknown) {
+    const read: { fields: unknown; where: unknown; orderBy: unknown[]; limit: number | undefined } =
+      {
+        fields,
+        where: undefined,
+        orderBy: [],
+        limit: undefined,
+      };
     table.reads.push(read);
     const query = {
       from: () => query,
@@ -44,6 +53,12 @@ vi.mock('@aflow/database', async (importOriginal) => {
         read.where = condition;
         return query;
       },
+      // A count read ends at its condition and answers one row.
+      then: (resolve: (rows: unknown[]) => unknown, reject: (error: unknown) => unknown) =>
+        Promise.resolve(fields === undefined ? table.rows : [{ total: table.total }]).then(
+          resolve,
+          reject,
+        ),
       orderBy: (...columns: unknown[]) => {
         read.orderBy = columns;
         return query;
@@ -161,6 +176,7 @@ async function buildApp(): Promise<FastifyInstance> {
 
 beforeEach(async () => {
   table.rows = [];
+  table.total = 0;
   table.reads = [];
   table.tenants = [];
   table.databases = [];
@@ -171,7 +187,10 @@ afterEach(async () => {
   await app.close();
 });
 
-async function getUpcoming(): Promise<{ status: number; body: { schedules: unknown[] } }> {
+async function getUpcoming(): Promise<{
+  status: number;
+  body: { schedules: unknown[]; total: number };
+}> {
   const res = await app.inject({ method: 'GET', url: '/v1/schedules/upcoming' });
   return { status: res.statusCode, body: res.json() };
 }
@@ -207,7 +226,10 @@ describe('GET /v1/schedules/upcoming', () => {
       schedules: [rowToResponse(operatorShepherd), rowToResponse(agentReport)].map((row) =>
         JSON.parse(JSON.stringify(row)),
       ),
+      total: 2,
     });
+    // A short page holds every upcoming schedule, so nothing is counted.
+    expect(table.reads).toHaveLength(1);
   });
 
   it('asks only for active schedules with a next firing ahead and no end behind', async () => {
@@ -231,5 +253,25 @@ describe('GET /v1/schedules/upcoming', () => {
     );
     expect(order?.[0]).toBe('"agent_schedules"."next_fire_at" asc');
     expect(read?.limit).toBe(UPCOMING_SCHEDULE_LIST_LIMIT);
+  });
+
+  it('counts every upcoming schedule under the same condition when the cap fills', async () => {
+    table.rows = Array.from({ length: UPCOMING_SCHEDULE_LIST_LIMIT }, (_, i) =>
+      schedule(`7247eee7-0000-4000-8000-${String(i).padStart(12, '0')}`, {
+        nextFireAt: new Date(Date.now() + (i + 1) * MINUTE),
+      }),
+    );
+    table.total = UPCOMING_SCHEDULE_LIST_LIMIT + 14;
+
+    const { body } = await getUpcoming();
+
+    expect(body.schedules).toHaveLength(UPCOMING_SCHEDULE_LIST_LIMIT);
+    expect(body.total).toBe(UPCOMING_SCHEDULE_LIST_LIMIT + 14);
+    expect(table.reads).toHaveLength(2);
+    const [list, counted] = table.reads.map((read) =>
+      new PgDialect().sqlToQuery(read.where as SQL),
+    );
+    expect(counted).toEqual(list);
+    expect(table.reads[1]?.limit).toBeUndefined();
   });
 });

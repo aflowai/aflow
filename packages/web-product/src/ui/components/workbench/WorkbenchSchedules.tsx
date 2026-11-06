@@ -20,7 +20,10 @@ import {
  * whoever created it, soonest first. An operator-created schedule runs on its
  * own as much as an agent-armed one, so it belongs here too. An expired
  * one-shot, a chain at its end and a superseded renewal never reach this
- * section, so it stays as tall as what still runs.
+ * section, so it stays as tall as what still runs. The server lists the
+ * soonest few and counts the rest, and a line under the list names that count.
+ * Nothing caps how many schedules an operator creates, so the cut never hides
+ * a schedule silently.
  *
  * Kept out of Pending deliberately: that section's badge is a count of
  * work waiting on this person, and a schedule that only runs on its own would
@@ -65,6 +68,7 @@ export function WorkbenchSchedules({
   const { data, isLoading } = useUpcomingSchedules(spaceId);
   const fold = useWorkbenchSectionFold();
   const schedules = data?.schedules ?? [];
+  const unlisted = Math.max(0, (data?.total ?? schedules.length) - schedules.length);
 
   const queryClient = useQueryClient();
   const noticeIds = state.lanes.notices.map((item) => item.id).join(',');
@@ -100,6 +104,11 @@ export function WorkbenchSchedules({
               currentSessionId={currentSessionId}
             />
           ))}
+          {unlisted > 0 ? (
+            <Text size="sm" variant="muted">
+              {`${String(unlisted)} more upcoming on Triggers`}
+            </Text>
+          ) : null}
         </Column>
       )}
     </WorkbenchSection>

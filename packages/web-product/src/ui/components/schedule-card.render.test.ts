@@ -24,10 +24,17 @@ const DAY = 24 * 60 * MINUTE;
 
 const queried: { key: unknown; path: string }[] = [];
 let schedules: ScheduleRow[] = [];
+/** What the upcoming read counts, where it counts more than it lists. */
+let upcomingTotal: number | undefined;
 
 vi.mock('../hooks/useApiQuery.js', () => ({
   useApiQuery: (opts: { key: unknown; path: string }) => {
     queried.push({ key: opts.key, path: opts.path });
+    if (opts.path === '/schedules/upcoming')
+      return {
+        data: { schedules, total: upcomingTotal ?? schedules.length },
+        isLoading: false,
+      };
     if (opts.path.startsWith('/schedules')) return { data: { schedules }, isLoading: false };
     return { data: { endpoints: [] }, isLoading: false };
   },
@@ -120,6 +127,7 @@ beforeEach(() => {
   root = createRoot(container);
   queryClient = new QueryClient();
   queried.length = 0;
+  upcomingTotal = undefined;
   vi.mocked(ScheduleCard).mockClear();
 });
 
@@ -323,6 +331,22 @@ describe("the Workbench's Schedules section", () => {
       'Weekly backup',
       'next in 4 min',
     ]);
+  });
+
+  it('says how many upcoming schedules the cap leaves out', () => {
+    schedules = [upcoming, operatorMade];
+    upcomingTotal = 9;
+    renderWorkbench();
+
+    expect(cards()).toHaveLength(2);
+    expect(container.textContent).toContain('7 more upcoming on Triggers');
+  });
+
+  it('adds no count line when the list holds every upcoming schedule', () => {
+    schedules = [upcoming, operatorMade];
+    renderWorkbench();
+
+    expect(container.textContent).not.toContain('more upcoming');
   });
 
   it('says no schedule is upcoming when opened under its fold with none', () => {
