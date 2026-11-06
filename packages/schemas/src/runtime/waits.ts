@@ -160,6 +160,52 @@ export type WaitOutcome = z.infer<typeof WaitOutcomeSchema>;
  */
 export const WAIT_OUTCOME_ACTOR_ID = '00000000-0000-4000-8000-000000000339';
 
+/**
+ * What a wait's room message names, read back from its words so the chat can
+ * fold it to one line for a person. The agent reads the message whole.
+ */
+export interface WaitOutcomeMessage {
+  kind: WaitEventKind;
+  subject: string;
+  endedBy: WaitOutcome['endedBy'];
+  /** The first event's `change`, `status` and `resolution`, where it names them. */
+  detail: Partial<Record<'change' | 'status' | 'resolution', string>>;
+  /** The plan node's title, where the message names the node. */
+  planNodeTitle?: string;
+}
+
+const WAIT_OUTCOME_HEAD =
+  /^Your wait \S+ on ([a-z_.]+) on (.+?) has ended: (the event arrived|its window closed) at /;
+
+/**
+ * Read a wait's room message as `describeWaitOutcome` (`@aflow/cybernetic-runtime`)
+ * words it. Null for words it does not recognise.
+ */
+export function readWaitOutcomeMessage(body: string): WaitOutcomeMessage | null {
+  const head = WAIT_OUTCOME_HEAD.exec(body);
+  if (head === null) return null;
+  const kind = WaitEventKindSchema.safeParse(head[1]);
+  const subject = head[2];
+  if (!kind.success || subject === undefined) return null;
+  const endedBy = head[3] === 'the event arrived' ? 'event' : 'window_closed';
+  const detail: WaitOutcomeMessage['detail'] = {};
+  if (endedBy === 'event') {
+    for (const key of ['change', 'status', 'resolution'] as const) {
+      // The first match is the first event's: later events follow it.
+      const value = new RegExp(`[(,] ?${key}: ([a-z_]+)(?=[,)])`).exec(body)?.[1];
+      if (value !== undefined) detail[key] = value;
+    }
+  }
+  const planNodeTitle = /^Plan node "(.+)" \(\S+\) is now /m.exec(body)?.[1];
+  return {
+    kind: kind.data,
+    subject,
+    endedBy,
+    detail,
+    ...(planNodeTitle !== undefined ? { planNodeTitle } : {}),
+  };
+}
+
 /** The subject of a pull request: `owner/repo#number`, owner and repo lower-cased. */
 export function pullRequestSubject(owner: string, repo: string, number: number): string {
   return `${owner.toLowerCase()}/${repo.toLowerCase()}#${String(number)}`;

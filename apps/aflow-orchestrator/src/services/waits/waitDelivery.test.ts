@@ -14,7 +14,12 @@ import {
   emitPullRequestChanged,
 } from '@aflow/cybernetic-runtime';
 import { readSubjectWaits, WAIT_DELIVERY_LEASE_MS, type EndedWait } from '@aflow/redis';
-import { PlanNodeUpdateOutputSchema, WAIT_WINDOW_MAX_SECONDS, type PlanNode } from '@aflow/schemas';
+import {
+  PlanNodeUpdateOutputSchema,
+  readWaitOutcomeMessage,
+  WAIT_WINDOW_MAX_SECONDS,
+  type PlanNode,
+} from '@aflow/schemas';
 import type { BackgroundTaskLogger } from '@aflow/lib';
 import type { HarnessDeps } from '../cybernetic/harness/types.js';
 import { deliverEndedWait, runWaitDeliveryCycle, type WaitDelivery } from './waitDelivery.js';
@@ -431,6 +436,11 @@ describe('the wait a plan node write holds for its writer', () => {
       expect(posted).toMatchObject({ sessionId: SESSION, deliveryKey: `wait:${held.waitId}` });
       expect(posted.body).toContain(`Plan node "P0 — the first phase" (${NODE}) is now ${status}`);
       expect(posted.body).toContain(NOTE);
+      expect(readWaitOutcomeMessage(posted.body)).toMatchObject({
+        kind: 'plan.node.status_changed',
+        detail: { status },
+        planNodeTitle: 'P0 — the first phase',
+      });
       expect(mockWake).toHaveBeenCalledWith(harnessDeps, TENANT, SESSION, held.waitId);
       expect(await runWaitDeliveryCycle({ harnessDeps, logger }, ctx)).toEqual({ candidates: 0 });
     },

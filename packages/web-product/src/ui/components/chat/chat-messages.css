@@ -218,6 +218,61 @@
   border-top-color: var(--color-border-subtle);
 }
 
+/* A wait's outcome — one muted line in the content column, the agent's full
+   text folded behind it. */
+.chat-wait-notice {
+  margin: var(--space-1) calc(var(--space-5) + 28px + var(--space-3));
+  min-width: 0;
+}
+
+.chat-wait-notice__toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-1) var(--space-2);
+  background: none;
+  border: none;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  text-align: left;
+  transition: background-color 0.15s var(--transition-timing-default);
+}
+
+.chat-wait-notice__toggle:hover {
+  background: color-mix(in srgb, var(--color-text-primary) 8%, transparent);
+}
+
+.chat-wait-notice__toggle:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 1px;
+}
+
+.chat-wait-notice__line {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-wait-notice__time {
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.chat-wait-notice__body {
+  margin-top: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  border-left: 1px solid var(--color-border-subtle);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 /* Truncatable individual messages inside an interim group */
 .chat-interim-msg {
   position: relative;
