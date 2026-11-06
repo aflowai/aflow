@@ -106,37 +106,19 @@ export interface SessionMetadataDetailPayload {
 }
 
 /**
- * The open conversation's own name and synopsis.
+ * A conversation's own name and synopsis, for the chat header and the plan
+ * rail's conversation links.
  *
  * A separate read from the list because a deep link can open a conversation
  * older than the recent window, and because the header wants the diagnostic
  * the list rows have no room for. Refreshed off the space channel, so the name
- * appears in the header the moment the background job writes it.
+ * appears the moment the background job writes it.
  */
 export function useConversationMetadata(
   spaceId: string | null,
   sessionId: string | null,
 ): SessionMetadataDetailPayload['metadata'] | null {
   const queryClient = useQueryClient();
-  const metadata = useConversationMetadataRead(spaceId, sessionId);
-
-  useSpaceEntityEventListener(spaceId, (event) => {
-    if (event.eventType !== 'entity.session.described') return;
-    if (sessionId === null || event.causedBySessionId !== sessionId) return;
-    void queryClient.invalidateQueries({ queryKey: ['session', sessionId, 'metadata'] });
-  });
-
-  return metadata;
-}
-
-/**
- * The same read without the space channel, for a surface that only labels a
- * conversation. A name written meanwhile shows once the entry goes stale.
- */
-export function useConversationMetadataRead(
-  spaceId: string | null,
-  sessionId: string | null,
-): SessionMetadataDetailPayload['metadata'] | null {
   const query = useApiQuery<SessionMetadataDetailPayload>({
     key: ['session', sessionId ?? 'none', 'metadata'],
     path: `/sessions/${sessionId ?? ''}/metadata`,
@@ -144,5 +126,12 @@ export function useConversationMetadataRead(
     ...(spaceId ? { spaceId } : {}),
     staleTime: 30_000,
   });
+
+  useSpaceEntityEventListener(spaceId, (event) => {
+    if (event.eventType !== 'entity.session.described') return;
+    if (sessionId === null || event.causedBySessionId !== sessionId) return;
+    void queryClient.invalidateQueries({ queryKey: ['session', sessionId, 'metadata'] });
+  });
+
   return query.data?.metadata ?? null;
 }

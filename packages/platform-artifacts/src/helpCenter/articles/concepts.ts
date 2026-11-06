@@ -112,7 +112,7 @@ The Coach reviews completed runs. From what it sees it proposes changes to a ski
     body: `## Where
 
 - **Skills →** a skill **→ Runs** lists that skill's runs with status, start time, duration, cost and eval result. **Open** shows one run task by task; **Session** opens **Run Details**.
-- In **Chat**, the inspector beside the conversation has a **Session timeline** of every step and a **Session context** tab.
+- In **Chat**, the Workbench beside the conversation has a **Space** tab for the whole space, then a **Timeline** of every step in this conversation and a **Context** tab.
 
 ## Sessions
 

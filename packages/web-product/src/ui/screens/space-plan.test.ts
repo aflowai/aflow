@@ -104,6 +104,9 @@ const recorded = vi.hoisted(() => ({
   liveRefresh: [] as Array<string | null>,
   /** How many times a CollapsibleSide has mounted. */
   sideMounts: 0,
+  /** Every listener on the space channel, and each query key it invalidated. */
+  entityListeners: new Set<(event: { eventType: string; causedBySessionId?: string }) => void>(),
+  invalidated: [] as unknown[][],
 }));
 
 vi.mock('@aflow/design-system', async () => {
@@ -304,6 +307,25 @@ vi.mock('../hooks/use-plan-live-refresh.js', () => ({
   usePlanLiveRefresh: (spaceId: string | null) => {
     recorded.liveRefresh.push(spaceId);
   },
+}));
+
+vi.mock('../hooks/use-space-entity-events.js', () => ({
+  useSpaceEntityEventListener: (
+    _spaceId: string | null,
+    handler: (event: { eventType: string; causedBySessionId?: string }) => void,
+  ) => {
+    recorded.entityListeners.add(handler);
+  },
+}));
+
+vi.mock('@tanstack/react-query', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@tanstack/react-query')>()),
+  useQueryClient: () => ({
+    invalidateQueries: ({ queryKey }: { queryKey: unknown[] }) => {
+      recorded.invalidated.push(queryKey);
+      return Promise.resolve();
+    },
+  }),
 }));
 
 vi.mock('../hooks/useApiQuery.js', () => ({
@@ -779,6 +801,8 @@ beforeEach(() => {
   recorded.findings = {};
   recorded.conversations = {};
   recorded.conversationTitles = {};
+  recorded.entityListeners = new Set();
+  recorded.invalidated = [];
   recorded.documents = {};
   recorded.runPages = {};
   recorded.linkQueries = [];
@@ -2024,6 +2048,27 @@ describe('SpacePlanPage — approve, reopen and order (Plan 332 P2)', () => {
         (a) => a.textContent,
       ),
     ).toEqual(['Order the loop', 'Conversation']);
+
+    // A name written while the rail is open refreshes that conversation's label.
+    recorded.conversationTitles['c0000000-0000-4000-8000-000000000338'] = 'Pick the next node';
+    await act(async () => {
+      for (const listener of recorded.entityListeners) {
+        listener({
+          eventType: 'entity.session.described',
+          causedBySessionId: 'c0000000-0000-4000-8000-000000000338',
+        });
+      }
+    });
+    // The listener is recorded once per render, so the one key may repeat.
+    expect([...new Set(recorded.invalidated.map((key) => JSON.stringify(key)))]).toEqual([
+      JSON.stringify(['session', 'c0000000-0000-4000-8000-000000000338', 'metadata']),
+    ]);
+    await render({ data: P2_PLAN });
+    expect(
+      [...rail().querySelectorAll('[data-plan-rail-section="Discuss"] li a')].map(
+        (a) => a.textContent,
+      ),
+    ).toEqual(['Order the loop', 'Pick the next node']);
   });
 
   it('holds an open form to the revision it opened on when the live read moves past it', async () => {

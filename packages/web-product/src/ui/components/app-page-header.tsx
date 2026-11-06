@@ -1,7 +1,7 @@
 'use client';
 
 import { PageHeader, type PageHeaderProps } from '@aflow/design-system';
-import { useRouter } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { SpaceSelector } from './space-selector.js';
 import { useSpace } from './providers.js';
 import { ActionIndicator } from './actionCenter/ActionIndicator';
@@ -26,13 +26,22 @@ export function SpaceActionBell() {
 
 function ActionBell({ spaceId, spaceSlug }: { spaceId: string; spaceSlug: string }) {
   const router = useRouter();
+  const pathname = usePathname();
   // The bell leads to where items resolve: the Workbench.
-  const bellHref = spaceRoute(spaceSlug, '/chat?workbench=1');
+  const chatPath = spaceRoute(spaceSlug, '/chat');
   return (
     <ActionIndicator
       spaceId={spaceId}
       onClick={() => {
-        router.push(bellHref);
+        if (pathname !== chatPath) {
+          router.push(`${chatPath}?workbench=1`);
+          return;
+        }
+        // On Chat the request joins the address in place, so the open
+        // conversation stays and Back does not step through the request.
+        const params = new URLSearchParams(window.location.search);
+        params.set('workbench', '1');
+        router.replace(`${chatPath}?${params.toString()}`);
       }}
     />
   );

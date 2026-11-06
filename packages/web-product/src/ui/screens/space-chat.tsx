@@ -295,23 +295,31 @@ function ChatPageInner() {
     value: '',
     nonce: 0,
   });
-  // Bumped to pull the companion onto the Workbench tab — an approval parked
+  // Bumped to pull the companion onto the Space tab — an approval parked
   // while the operator sits on another tab is otherwise unreachable without
   // them knowing to go looking.
   const [workbenchFocus, setWorkbenchFocus] = useState(0);
 
   // `?workbench=1` (the global bell, workbench deep links) opens the
-  // companion once, then drops out of the URL so a reload lands by the
-  // remembered state.
+  // companion on its Space tab each time it appears, then drops out of the URL
+  // so a reload lands by the remembered state. On arrival the landing owns
+  // what is remembered. The bell chosen on this page is the operator's own
+  // open, so it is remembered as the dock's own control is.
+  const workbenchRequested = Boolean(searchParams.get('workbench'));
+  const workbenchArrivalRef = useRef(true);
   useEffect(() => {
-    if (!searchParams.get('workbench')) return;
-    setConsoleOpenState(true);
+    const arrival = workbenchArrivalRef.current;
+    workbenchArrivalRef.current = false;
+    if (!workbenchRequested) return;
+    if (arrival) setConsoleOpenState(true);
+    else setConsoleOpen(true);
+    setWorkbenchFocus((n) => n + 1);
     const params = new URLSearchParams(searchParams.toString());
     params.delete('workbench');
     const qs = params.toString();
     router.replace(qs ? `${pathname}?${qs}` : pathname);
-    // Mount-only by design: consume once from the arrival URL.
-  }, []);
+    // Keyed on the request alone: a change to another param is not a new one.
+  }, [workbenchRequested]);
 
   // `?draft=` seeds the composer once (onboarding prompt chips, deep links),
   // then drops out of the URL so reloads don't re-seed.

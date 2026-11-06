@@ -383,6 +383,45 @@ describe('the Workbench dock on landing (D3)', () => {
     expect(window.localStorage.getItem(WORKBENCH_COLLAPSED_STORAGE_KEY)).toBe('[]');
   });
 
+  it('opens the Workbench on its Space tab when the bell is chosen on Chat', async () => {
+    net.sessions = [conversation()];
+    await land(`session=${SESSION}`);
+    const tab = (label: string) =>
+      [...container.querySelectorAll('[role="tab"]')].find((t) =>
+        t.textContent?.startsWith(label),
+      ) ?? null;
+    await click(tab('Timeline'));
+    await click(collapseButton());
+    expect(dockOpen()).toBe(false);
+
+    const bell = container.querySelector('button[aria-label^="Action Center"]');
+    expect(bell).not.toBeNull();
+    // The bell reads the address the browser holds, which this router does not write.
+    window.history.replaceState(null, '', `/s/demo/chat?${net.search}`);
+    net.replaced = [];
+    await click(bell);
+    expect(net.pushed).toEqual([]);
+    expect(net.replaced[0]).toBe(`/s/demo/chat?session=${SESSION}&workbench=1`);
+    expect(lastUrl()).toBe(`/s/demo/chat?session=${SESSION}`);
+    expect(dockOpen()).toBe(true);
+    expect(container.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toMatch(
+      /^Space/,
+    );
+    expect(window.localStorage.getItem(WORKBENCH_COLLAPSED_STORAGE_KEY)).toBe('[]');
+  });
+
+  it('switches a phone to the Workbench when the bell is chosen on Chat', async () => {
+    Object.defineProperty(window, 'innerWidth', { value: 390, configurable: true });
+    await land('');
+    expect(container.querySelector('[role="tablist"]')).toBeNull();
+    window.history.replaceState(null, '', `/s/demo/chat?${net.search}`);
+    await click(document.querySelector('button[aria-label^="Action Center"]'));
+    expect(net.pushed).toEqual([]);
+    expect(container.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toMatch(
+      /^Space/,
+    );
+  });
+
   it('opens on a new chat in a space with no agent to answer', async () => {
     net.agents = [];
     await land('');
@@ -488,9 +527,9 @@ describe('what the open dock reads (D3 budget)', () => {
     await click(fold(false));
     expect(fold(true)).not.toBeNull();
 
-    await click(tab('Session timeline'));
+    await click(tab('Timeline'));
     expect(fold(true)).toBeNull();
-    await click(tab('Workbench'));
+    await click(tab('Space'));
     expect(fold(true)).not.toBeNull();
   });
 
