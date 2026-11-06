@@ -18,9 +18,10 @@
  * it.
  */
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import {
   Badge,
+  Button,
   Card,
   CardBody,
   Column,
@@ -38,7 +39,35 @@ import { spaceSchedulesKey, useSpaceSchedules } from '../hooks/use-space-schedul
 import { useSpaceFromRoute } from '../components/providers.js';
 import { SpaceActionBell } from '../components/app-page-header.js';
 
-import { ScheduleCard } from '../components/schedule-card.js';
+import { ScheduleCard, scheduleState, type ScheduleRow } from '../components/schedule-card.js';
+
+/** The expired schedules shown before the Show older expander, newest first. */
+const EXPIRED_SHOWN = 5;
+
+/** When an expired schedule ended: its last firing, else its end, else its creation. */
+function endedAt(row: ScheduleRow): string {
+  return row.lastFiredAt ?? row.expiresAt ?? row.createdAt;
+}
+
+/**
+ * The rows that can still run, active first and soonest next, and the expired
+ * ones, the most recent first. A renewing cron leaves one expired row behind
+ * per renewal, so the expired list grows without end and is cut by default.
+ */
+function splitSchedules(rows: readonly ScheduleRow[]): {
+  current: ScheduleRow[];
+  expired: ScheduleRow[];
+} {
+  const current: ScheduleRow[] = [];
+  const expired: ScheduleRow[] = [];
+  for (const row of rows) (scheduleState(row) === 'expired' ? expired : current).push(row);
+  current.sort((a, b) => {
+    if (a.status !== b.status) return a.status === 'active' ? -1 : 1;
+    return (a.nextFireAt ?? '').localeCompare(b.nextFireAt ?? '');
+  });
+  expired.sort((a, b) => endedAt(b).localeCompare(endedAt(a)));
+  return { current, expired };
+}
 
 interface WebhookRow {
   id: string;
@@ -98,14 +127,10 @@ export function TriggersPage(): React.ReactNode {
   const hooks = hookData?.endpoints ?? [];
   // Active first: what is armed is the question this page exists to answer, and
   // a finished one-shot is history rather than news.
-  const ordered = useMemo(
-    () =>
-      [...rows].sort((a, b) => {
-        if (a.status !== b.status) return a.status === 'active' ? -1 : 1;
-        return (a.nextFireAt ?? '').localeCompare(b.nextFireAt ?? '');
-      }),
-    [rows],
-  );
+  const { current, expired } = useMemo(() => splitSchedules(rows), [rows]);
+  const [showOlder, setShowOlder] = useState(false);
+  const olderCount = Math.max(0, expired.length - EXPIRED_SHOWN);
+  const ordered = [...current, ...(showOlder ? expired : expired.slice(0, EXPIRED_SHOWN))];
 
   if (isLoading) {
     return (
@@ -129,7 +154,7 @@ export function TriggersPage(): React.ReactNode {
           </Text>
         </Column>
 
-        {ordered.length === 0 && hooks.length === 0 ? (
+        {rows.length === 0 && hooks.length === 0 ? (
           <Card>
             <CardBody>
               <Column gap="xs">
@@ -143,7 +168,7 @@ export function TriggersPage(): React.ReactNode {
           </Card>
         ) : (
           <Column gap="lg">
-            {ordered.length > 0 && (
+            {rows.length > 0 && (
               <Column gap="sm">
                 <Heading level={3}>On a schedule</Heading>
                 <Column gap="sm">
@@ -152,6 +177,7 @@ export function TriggersPage(): React.ReactNode {
                       key={row.id}
                       schedule={row}
                       variant="page"
+                      spaceSlug={routeSpace?.slug}
                       onToggleStatus={(schedule) => {
                         void setStatus.mutateAsync({
                           id: schedule.id,
@@ -163,6 +189,27 @@ export function TriggersPage(): React.ReactNode {
                       }}
                     />
                   ))}
+                  {olderCount > 0 ? (
+                    <Row>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        aria-expanded={showOlder}
+                        leftIcon={
+                          <Icon
+                            name="caret-right"
+                            size="xs"
+                            style={{ transform: showOlder ? 'rotate(90deg)' : 'none' }}
+                          />
+                        }
+                        onClick={() => {
+                          setShowOlder((open) => !open);
+                        }}
+                      >
+                        {showOlder ? 'Hide older' : `Show older (${String(olderCount)})`}
+                      </Button>
+                    </Row>
+                  ) : null}
                   {data?.nextCursor ? (
                     <HelperText>
                       {`Showing the first ${String(rows.length)}. More schedules exist than fit this page.`}

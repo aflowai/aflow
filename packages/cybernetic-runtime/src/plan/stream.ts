@@ -42,6 +42,7 @@ import {
   type PlanStreamSpend,
   type PlanStreamStopCause,
   type PlanStreamWaitCause,
+  isTerminalRunStatus,
 } from '@aflow/schemas';
 import { isFindingsCarrier } from './carrier.js';
 import {
@@ -239,8 +240,6 @@ export interface PlanStreamFacts {
   spend?: PlanNodeSpendRead;
   spendCents: number;
 }
-
-const ENDED = new Set(['completed', 'failed', 'cancelled']);
 
 function at(iso: string): number {
   return Date.parse(iso);
@@ -533,7 +532,7 @@ function attemptsUsed(facts: PlanStreamFacts): number {
       ? facts.pullRequestLink.createdAt
       : facts.node.updatedAt;
   return startedAfter(facts.rounds, since).filter(
-    (run) => run.slug === PLAN_STREAM_COMMISSION_SLUG && ENDED.has(run.status),
+    (run) => run.slug === PLAN_STREAM_COMMISSION_SLUG && isTerminalRunStatus(run.status),
   ).length;
 }
 

@@ -5,7 +5,6 @@ import type {
   UserFacingError,
   WorkflowSurfaceTaskState,
   WorkflowSurfaceTaskStatus,
-  WorkflowSurfaceRunStatus,
   WorkflowSurfaceItemEntry,
   WorkflowRunSurfaceState,
 } from '../types.js';
@@ -17,17 +16,6 @@ export function toISOTimestamp(ts: string): string {
 }
 
 // ---------------------------------------------------------------------------
-
-/**
- * Terminal run statuses — once reached, the surface card freezes and
- * further updates for the run are ignored. `paused` is NOT terminal;
- * the run can resume.
- */
-export const TERMINAL_RUN_STATUSES: ReadonlySet<WorkflowSurfaceRunStatus> = new Set([
-  'completed',
-  'failed',
-  'cancelled',
-]);
 
 /**
  * Numeric ranks for task-status regression checks. Higher rank wins on

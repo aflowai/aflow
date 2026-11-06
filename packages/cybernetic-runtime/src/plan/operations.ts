@@ -57,6 +57,7 @@ import {
   type PlanBoardOutput,
   type PlanLaneItem,
   type PlanOverviewOutput,
+  type TerminalRunStatus,
 } from '@aflow/schemas';
 import { isFindingsCarrier } from './carrier.js';
 import { askedRevision, claimAsk, isAsked } from './asks.js';
@@ -1292,7 +1293,7 @@ export interface EndedPlanRun {
   nodeId: string;
   runId: string;
   slug: string;
-  status: 'completed' | 'failed' | 'cancelled';
+  status: TerminalRunStatus;
   /** The pull request the run opened or found open, as its promoted output names it. */
   pullRequestUrl?: string;
 }

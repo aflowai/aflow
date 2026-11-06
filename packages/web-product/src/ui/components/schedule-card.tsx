@@ -11,6 +11,7 @@
 
 import { Badge, Card, CardBody, Column, Icon, IconButton, Row, Text } from '@aflow/design-system';
 
+import { spaceRoute } from '../lib/space-routes.js';
 import { describeCron, describeWork } from '../lib/triggers-describe.js';
 
 export interface ScheduleRow {
@@ -29,7 +30,14 @@ export interface ScheduleRow {
   target: { kind: string; systemRole?: string; agentId?: string } | null;
   inputTemplate?: Record<string, unknown>;
   lastError: string | null;
-  /** Present when an agent set it up during a conversation. */
+  /** The armed session a firing wakes, when the schedule targets one. */
+  targetRunId: string | null;
+  /** The session the last firing created or resumed. */
+  lastRunId: string | null;
+  /**
+   * Present when an agent set it up during a conversation. A marker only: that
+   * conversation is where it was made, not what runs.
+   */
   createdByRunId: string | null;
   /** The schedule this one renews, which an agent set up already. */
   renewsScheduleId: string | null;
@@ -110,22 +118,86 @@ function compactWhen(row: ScheduleRow): string {
   return row.nextFireAt ? `next ${untilNext(row.nextFireAt)}` : 'not scheduled';
 }
 
-export type ScheduleCardProps =
-  | {
-      schedule: ScheduleRow;
-      /** The Triggers page: everything about it, with Pause and Delete. */
-      variant: 'page';
-      onToggleStatus: (schedule: ScheduleRow) => void;
-      onDelete: (schedule: ScheduleRow) => void;
-    }
-  | {
-      schedule: ScheduleRow;
-      /**
-       * A narrow column: the name and when it runs next on one line, with the
-       * recurrence, the work and when it last ran folded under it.
-       */
-      variant: 'compact';
-    };
+/**
+ * The session a row opens: the armed session its firing wakes, else the one its
+ * last firing ran. The conversation that created it is never one of them,
+ * because a firing does not run there unless it is also the target.
+ */
+export function scheduleRunSession(
+  row: ScheduleRow,
+): { kind: 'target' | 'last'; sessionId: string } | null {
+  if (row.targetRunId !== null) return { kind: 'target', sessionId: row.targetRunId };
+  if (row.lastRunId !== null) return { kind: 'last', sessionId: row.lastRunId };
+  return null;
+}
+
+/**
+ * The line that names the session a firing runs. A link opens it in a new tab
+ * with a label that says which session it is. Where that session is the
+ * conversation the operator is reading, the line says so and links nowhere,
+ * so it cannot read as a link to some other run.
+ */
+function ScheduleRunLink({
+  row,
+  spaceSlug,
+  currentSessionId,
+  size,
+}: {
+  row: ScheduleRow;
+  spaceSlug: string | undefined;
+  currentSessionId: string | null | undefined;
+  size: 'xs' | 'sm';
+}) {
+  const run = scheduleRunSession(row);
+  if (run === null) return null;
+  if (run.sessionId === currentSessionId) {
+    return (
+      <Text variant="muted" size={size}>
+        {run.kind === 'target' ? 'Wakes this conversation' : 'Last ran in this conversation'}
+      </Text>
+    );
+  }
+  return (
+    <a
+      href={spaceRoute(spaceSlug, `/sessions/${encodeURIComponent(run.sessionId)}`)}
+      target="_blank"
+      rel="noreferrer"
+      style={{
+        fontSize: size === 'xs' ? 'var(--font-size-xs)' : 'var(--font-size-sm)',
+        color: 'var(--color-accent-default)',
+        alignSelf: 'flex-start',
+      }}
+    >
+      {run.kind === 'target' ? 'Open the armed session ↗' : 'Open the last run ↗'}
+    </a>
+  );
+}
+
+interface ScheduleCardLinkProps {
+  /** The space the sessions live in, for the run link's address. */
+  spaceSlug?: string | undefined;
+  /** The conversation the operator is reading, which the run link never opens. */
+  currentSessionId?: string | null | undefined;
+}
+
+export type ScheduleCardProps = ScheduleCardLinkProps &
+  (
+    | {
+        schedule: ScheduleRow;
+        /** The Triggers page: everything about it, with Pause and Delete. */
+        variant: 'page';
+        onToggleStatus: (schedule: ScheduleRow) => void;
+        onDelete: (schedule: ScheduleRow) => void;
+      }
+    | {
+        schedule: ScheduleRow;
+        /**
+         * A narrow column: the name and when it runs next on one line, with the
+         * recurrence, the work and when it last ran folded under it.
+         */
+        variant: 'compact';
+      }
+  );
 
 export function ScheduleCard(props: ScheduleCardProps): React.ReactNode {
   const row = props.schedule;
@@ -164,6 +236,12 @@ export function ScheduleCard(props: ScheduleCardProps): React.ReactNode {
             <Text variant="muted" size="xs">
               {whenLast(row)}
             </Text>
+            <ScheduleRunLink
+              row={row}
+              spaceSlug={props.spaceSlug}
+              currentSessionId={props.currentSessionId}
+              size="xs"
+            />
             {row.lastError !== null && (
               <Text size="xs" style={{ color: 'var(--color-danger-default)' }}>
                 {`Last run failed: ${row.lastError}`}
@@ -203,6 +281,12 @@ export function ScheduleCard(props: ScheduleCardProps): React.ReactNode {
                 {`Last run failed: ${row.lastError}`}
               </Text>
             )}
+            <ScheduleRunLink
+              row={row}
+              spaceSlug={props.spaceSlug}
+              currentSessionId={props.currentSessionId}
+              size="sm"
+            />
           </Column>
           <Row gap="md" align="center" style={{ flexShrink: 0 }}>
             {/* Fixed and non-shrinking: squeezed by a long

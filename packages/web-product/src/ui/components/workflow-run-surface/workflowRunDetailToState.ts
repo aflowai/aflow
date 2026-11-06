@@ -1,5 +1,5 @@
 import type { WorkflowResumeContract, WorkflowRunResult } from '@aflow/schemas';
-import { WorkflowResumeContractSchema } from '@aflow/schemas';
+import { WorkflowResumeContractSchema, isTerminalRunStatus } from '@aflow/schemas';
 import type {
   WorkflowRunSurfaceState,
   WorkflowSurfaceGraph,
@@ -79,8 +79,6 @@ function parseResumeContract(contract: unknown): WorkflowResumeContract | undefi
   return parsed.success ? parsed.data : undefined;
 }
 
-export const TERMINAL_RUN_STATUSES = new Set<string>(['completed', 'failed', 'cancelled']);
-
 /**
  * Convert the detail DTO into reducer surface state. `nowMs` stamps
  * `lastMutatedAtMs` on every task so stalled-detection clocks rows from the
@@ -146,7 +144,7 @@ export function workflowRunDetailToSurfaceState(
     ...(detail.workflowGraph ? { workflowGraph: detail.workflowGraph } : {}),
     ...(detail.result ? { result: detail.result } : {}),
     ...(detail.result?.output ? { outputs: detail.result.output } : {}),
-    isFrozen: TERMINAL_RUN_STATUSES.has(status),
+    isFrozen: isTerminalRunStatus(status),
     needsHydration: false,
   };
 }

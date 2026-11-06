@@ -77,7 +77,7 @@ function deriveSessionLifecycle(
 ): { lifecycle: ActiveSurfaceRunLifecycle; reasonCode?: ActiveSurfaceLifecycleReasonCode } {
   const status = hot?.status ?? row.status;
 
-  const terminal: 'completed' | 'failed' | 'cancelled' | null =
+  const terminal: LifecycleSignals['terminal'] =
     status === 'SUCCEEDED'
       ? 'completed'
       : status === 'FAILED'

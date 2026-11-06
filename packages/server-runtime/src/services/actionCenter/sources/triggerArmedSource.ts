@@ -50,13 +50,12 @@ export interface ChatScheduleChain {
 /**
  * The chat schedules that are news, newest first, each with its newest renewal.
  *
- * The Action Center's trigger_armed notices and the Workbench's Schedules
- * section both read through this, so a card cannot vanish while its notice
- * stays. A renewing schedule writes a renewal every few dozen firings, so a
- * read that visits every renewal grows with each one. The query keeps to
- * arrivals and stops at the lane's limit. It then reads each arrival's newest
- * renewal through `original_schedule_id` and its index, one probe per arrival,
- * however long the chain. The probe passes over deleted renewals, as the
+ * The Action Center's trigger_armed notices read through this. A renewing
+ * schedule writes a renewal every few dozen firings, so a read that visits
+ * every renewal grows with each one. The query keeps to arrivals and stops at
+ * the lane's limit. It then reads each arrival's newest renewal through
+ * `original_schedule_id` and its index, one probe per arrival, however long
+ * the chain. The probe passes over deleted renewals, as the
  * schedules list does, so a live renewal after a deleted one is still found.
  * selectChatScheduleNews still decides which arrivals are news.
  */
@@ -112,32 +111,6 @@ export async function readChatScheduleChains(
   });
 }
 
-/** Active, not past its end, and with a next firing still ahead of `now`. */
-function firesAgain(row: ScheduleRow, now: number): boolean {
-  return (
-    row.status === 'active' &&
-    row.nextFireAt !== null &&
-    row.nextFireAt.getTime() > now &&
-    (row.expiresAt === null || row.expiresAt.getTime() > now)
-  );
-}
-
-/**
- * The Workbench's Schedules section: of the chains the notices announce, the
- * ones whose newest renewal will fire again, as that renewal. A one-shot that
- * has run, a chain at its end and a superseded renewal are left out. The
- * notices keep the whole news window, and only this section narrows.
- */
-export async function readActiveChatSchedules(
-  db: PostgresJsDatabase,
-  tenantId: TenantId,
-  spaceId: string,
-  now: number = Date.now(),
-): Promise<ScheduleRow[]> {
-  const chains = await readChatScheduleChains(db, tenantId, spaceId, now);
-  return chains.map((chain) => chain.current).filter((row) => firesAgain(row, now));
-}
-
 /**
  * A trigger an agent armed, surfaced once so the operator learns it exists.
  *
@@ -150,8 +123,10 @@ export async function readActiveChatSchedules(
  * they connected the folders and set the space's capabilities. Stopping one is a
  * button on the Triggers page, not an approval gate here.
  *
- * Only agent-armed ones. A schedule the operator created themselves needs no
- * telling; announcing it would train them to dismiss the notice that matters.
+ * Only agent-armed ones get a notice. A schedule the operator created needs no
+ * announcing, and announcing it would train them to dismiss the notice that
+ * matters. The Workbench's Schedules section lists every upcoming schedule
+ * whoever created it, through `readUpcomingSchedules`.
  */
 export function createTriggerArmedSource(deps: ActionCenterSourceDeps): ActionCenterSource {
   return {

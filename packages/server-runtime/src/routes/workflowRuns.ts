@@ -10,6 +10,7 @@ import {
   WorkflowRunPauseOutputSchema,
   WorkflowRunCancelOperatorInputSchema,
   WorkflowRunCancelOperatorOutputSchema,
+  TERMINAL_RUN_STATUSES,
 } from '@aflow/schemas';
 import { buildWorkflowRunDetail } from '@aflow/cybernetic-runtime';
 import { readLatestSessionPosition } from '@aflow/redis';
@@ -34,7 +35,6 @@ const ErrorSchema = z.object({ error: z.string(), message: z.string() });
 
 /** Statuses treated as "live" for the space feed's priority zone. */
 const ACTIVE_RUN_STATUSES = ['running', 'paused'] as const;
-const TERMINAL_RUN_STATUSES = ['completed', 'failed', 'cancelled'] as const;
 const KNOWN_RUN_STATUSES = new Set<string>([...ACTIVE_RUN_STATUSES, ...TERMINAL_RUN_STATUSES]);
 
 const RUN_STATUS_COLUMNS = {

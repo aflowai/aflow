@@ -124,6 +124,8 @@ A session's status reads:
 - **Idle** — paused. A conversation is idle between turns: the Helmsman has answered and waits for you.
 - **Completed**, **Failed**, **Cancelled**, **Stalled**.
 
+A conversation can wait on something, such as a run, a pull request, a plan step or an Action Center item. When the wait ends, the platform tells the Helmsman in the conversation, and the chat shows it as one line: **Wait for pull request … ended: its checks passed.** Choose the line, or press Enter or Space on it, to read the full text the Helmsman received, its instructions included.
+
 ## Runs of a skill
 
 A run is one execution of a skill, from its first task to its outcome. The run page shows each task, its status and its output, with **View execution** for the detail. While a run is in progress it offers **Pause**, **Resume** and **Cancel**. A task that needs a person shows **Approve** or **Submit** in place.

@@ -2,6 +2,7 @@ import {
   SHEPHERD_HANDOFF_PINS,
   SHEPHERD_LEASE_ROOT,
   SHEPHERD_MERGE_OUTCOME_DOCS,
+  TERMINAL_RUN_STATUSES,
 } from '@aflow/schemas';
 import {
   MERGE_HANDED_BACK,
@@ -162,7 +163,7 @@ export const MERGE_READ_TASKS = [
           output: { path: PUBLICATION_PUSHED_SHA_PATH, equals: bind('headSha') },
         },
       ],
-      status: ['completed', 'failed', 'cancelled'],
+      status: [...TERMINAL_RUN_STATUSES],
       limit: 1,
     },
   },
@@ -187,7 +188,7 @@ export const MERGE_READ_TASKS = [
           output: { path: PUBLICATION_PUSHED_MERGE_PATH, equals: bind('headSha') },
         },
       ],
-      status: ['completed', 'failed', 'cancelled'],
+      status: [...TERMINAL_RUN_STATUSES],
       limit: 1,
     },
   },

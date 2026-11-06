@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import type { EntityEventEnvelope } from './entityEvents.js';
+import type { ActionCenterResolution } from '../models/actionCenter.js';
+import type { WorkflowRunStatus } from '../operations/workflow/enums.js';
 
 // ============================================================================
 // The wait primitive (Plan 339 D1)
@@ -160,6 +162,108 @@ export type WaitOutcome = z.infer<typeof WaitOutcomeSchema>;
  */
 export const WAIT_OUTCOME_ACTOR_ID = '00000000-0000-4000-8000-000000000339';
 
+/**
+ * What a wait's room message names, read back from its words so the chat can
+ * fold it to one line for a person. The agent reads the message whole.
+ */
+export interface WaitOutcomeMessage {
+  kind: WaitEventKind;
+  subject: string;
+  endedBy: WaitOutcome['endedBy'];
+  /**
+   * The `change`, `status` and `resolution` of the latest event the message
+   * lists, where it names them: the event the body's last status line tells.
+   * For a plan node, `status` is the node's status as the delivery read it,
+   * where the message names the node.
+   */
+  detail: Partial<Record<'change' | 'status' | 'resolution', string>>;
+  /** The plan node's title, where the message names the node. */
+  planNodeTitle?: string;
+  /** Set where the message says the plan node no longer exists. */
+  planNodeGone?: true;
+}
+
+const WAIT_OUTCOME_HEAD =
+  /^Your wait \S+ on ([a-z_.]+) on (.+?) has ended: (the event arrived|its window closed) at /;
+
+/**
+ * The node as the plan-node delivery read it (`describePlanNodeChange` in the
+ * orchestrator). Each matches only the status line that opens the node's
+ * section, never a line of the node's free-text note below it.
+ */
+const PLAN_NODE_NOW = /^Plan node "(.+)" \(\S+\) is now ([a-z_]+), at revision \d+\.$/;
+const PLAN_NODE_GONE = /^Plan node \S+ no longer exists\.$/;
+
+/** The first line after the wait's own paragraph, where the node's section starts. */
+function planNodeStatusLine(body: string): string {
+  const start = body.indexOf('\n\n');
+  if (start === -1) return '';
+  return body.slice(start + 2).split('\n', 1)[0] ?? '';
+}
+
+/**
+ * The time that opens each event `describeWaitOutcome` lists: the ending
+ * event after the head, each later one after the list's lead or a `; `.
+ */
+const EVENT_FIRED_AT =
+  /(?<=the event arrived at |before you were told: |; )\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z/g;
+
+/** The value one event's detail names for `key`. */
+function eventValue(event: string, key: string): string | undefined {
+  return new RegExp(`[(,] ?${key}: ([a-z_]+)(?=[,)])`).exec(event)?.[1];
+}
+
+/**
+ * The words of each event the message lists, oldest first: the ending event,
+ * then the later ones. Each runs from its time to the end of its detail, so
+ * the words after the list never count as an event's.
+ */
+function listedEvents(body: string): string[] {
+  const starts = [...body.matchAll(EVENT_FIRED_AT)].map((match) => match.index);
+  return starts.map((start, i) => {
+    const event = body.slice(start, starts[i + 1] ?? body.length);
+    return /^\S+ \(.*?\)(?=; |\. |$)/s.exec(event)?.[0] ?? '';
+  });
+}
+
+/**
+ * Read a wait's room message as `describeWaitOutcome` (`@aflow/cybernetic-runtime`)
+ * words it. Null for words it does not recognise.
+ */
+export function readWaitOutcomeMessage(body: string): WaitOutcomeMessage | null {
+  const head = WAIT_OUTCOME_HEAD.exec(body);
+  if (head === null) return null;
+  const kind = WaitEventKindSchema.safeParse(head[1]);
+  const subject = head[2];
+  if (!kind.success || subject === undefined) return null;
+  const endedBy = head[3] === 'the event arrived' ? 'event' : 'window_closed';
+  const detail: WaitOutcomeMessage['detail'] = {};
+  if (endedBy === 'event') {
+    // More events may have fired before delivery. The body's last status line
+    // tells the latest of them, so every kind reads that one.
+    const latest = listedEvents(body).at(-1) ?? '';
+    for (const key of ['change', 'status', 'resolution'] as const) {
+      const value = eventValue(latest, key);
+      if (value !== undefined) detail[key] = value;
+    }
+  }
+  if (kind.data !== 'plan.node.status_changed') {
+    return { kind: kind.data, subject, endedBy, detail };
+  }
+  // The node's status as the delivery read it wins over the latest event's.
+  const statusLine = planNodeStatusLine(body);
+  const now = PLAN_NODE_NOW.exec(statusLine);
+  if (now?.[2] !== undefined) detail.status = now[2];
+  return {
+    kind: kind.data,
+    subject,
+    endedBy,
+    detail,
+    ...(now?.[1] !== undefined ? { planNodeTitle: now[1] } : {}),
+    ...(PLAN_NODE_GONE.test(statusLine) ? { planNodeGone: true as const } : {}),
+  };
+}
+
 /** The subject of a pull request: `owner/repo#number`, owner and repo lower-cased. */
 export function pullRequestSubject(owner: string, repo: string, number: number): string {
   return `${owner.toLowerCase()}/${repo.toLowerCase()}#${String(number)}`;
@@ -181,7 +285,20 @@ export function parsePullRequestRef(
   return { owner: owner.toLowerCase(), repo: repo.toLowerCase(), number: Number(number) };
 }
 
-const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'cancelled']);
+/** The run statuses a `run.ended` event names. */
+export const TERMINAL_RUN_STATUSES = [
+  'completed',
+  'failed',
+  'cancelled',
+] as const satisfies readonly WorkflowRunStatus[];
+export type TerminalRunStatus = (typeof TERMINAL_RUN_STATUSES)[number];
+
+export function isTerminalRunStatus(status: string): status is TerminalRunStatus {
+  return (TERMINAL_RUN_STATUSES as readonly string[]).includes(status);
+}
+
+/** The resolution a `gate.resolved` event names: the kind the operator resolved the item with. */
+export type GateResolution = ActionCenterResolution['kind'];
 
 const WAIT_KIND_OF_ENTITY_EVENT = {
   'entity.pull_request.changed': 'pull_request.changed',
@@ -204,7 +321,7 @@ export function waitEventOfEntityEvent(event: EntityEventEnvelope): WaitEvent | 
   if (event.eventType === 'entity.run.updated') {
     const runId = text('runId');
     const status = text('status');
-    if (runId === undefined || status === undefined || !TERMINAL_RUN_STATUSES.has(status)) {
+    if (runId === undefined || status === undefined || !isTerminalRunStatus(status)) {
       return null;
     }
     return { kind: 'run.ended', subject: runId, firedAt: event.timestamp, detail: { status } };

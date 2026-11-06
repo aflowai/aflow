@@ -1,10 +1,10 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
+import { isTerminalRunStatus } from '@aflow/schemas';
 import type { WorkflowRunSurfaceState } from '../../lib/types.js';
 import {
   workflowRunDetailToSurfaceState,
-  TERMINAL_RUN_STATUSES,
   type WorkflowRunDetailResponse,
 } from './workflowRunDetailToState.js';
 
@@ -140,7 +140,7 @@ export function useWorkflowRunRehydration({
 
         const status = detail.run.status;
         const hydrated = workflowRunDetailToSurfaceState(detail, Date.now());
-        const emptyOnRunningRun = detail.tasks.length === 0 && !TERMINAL_RUN_STATUSES.has(status);
+        const emptyOnRunningRun = detail.tasks.length === 0 && !isTerminalRunStatus(status);
         if (emptyOnRunningRun) {
           // Apply what we got, but keep retrying. The reducer's
           // HYDRATE clears needsHydration regardless, so the *next*

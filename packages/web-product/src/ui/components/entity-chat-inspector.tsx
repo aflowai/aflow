@@ -244,6 +244,7 @@ export function EntityChatInspector(props: {
               <Workbench
                 spaceId={spaceId}
                 spaceSlug={spaceSlug ?? ''}
+                currentSessionId={rootSessionId}
                 {...(onSeed ? { onSeed } : {})}
                 {...(onRevealChat ? { onRevealChat } : {})}
               />

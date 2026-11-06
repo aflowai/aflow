@@ -12,7 +12,11 @@ import {
   type ResidentWakeOutcome,
   type WorkflowRunDetail,
 } from '@aflow/cybernetic-runtime';
-import { PlanNodeLinkCreateSchema, RUN_PULL_REQUEST_URL_OUTPUT } from '@aflow/schemas';
+import {
+  PlanNodeLinkCreateSchema,
+  RUN_PULL_REQUEST_URL_OUTPUT,
+  type TerminalRunStatus,
+} from '@aflow/schemas';
 import type { HarnessDeps } from './types.js';
 
 /** The pull request the run holds, when its promoted output names one a link can carry. */
@@ -38,7 +42,7 @@ export async function linkEndedRunToPlanNode(
   deps: HarnessDeps,
   tenantId: string,
   run: WorkflowRunDetail,
-  status: 'completed' | 'failed' | 'cancelled',
+  status: TerminalRunStatus,
 ): Promise<void> {
   if (run.planNodeId === undefined) return;
   const served = { ...run, planNodeId: run.planNodeId };

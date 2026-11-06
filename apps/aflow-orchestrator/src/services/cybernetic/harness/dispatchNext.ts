@@ -2,12 +2,11 @@
  * Ready-task scheduling wave — skip loop, dispatch successors, run terminal check.
  */
 import { recordTaskSkipped as ledgerRecordTaskSkipped } from '@aflow/cybernetic-runtime';
-import type { TenantId, SessionId } from '@aflow/schemas';
+import { isTerminalRunStatus, type TenantId, type SessionId } from '@aflow/schemas';
 import { getOrchestratorLogger, logOrchestratorError } from '../../../lib/orchestratorLogger.js';
 import {
   computeReadyView,
   emitTaskUpdate,
-  isTerminalRunStatus,
   isTerminalTaskStatus,
   loadRunByRunIdAcrossSpaces,
   resolveWorkflowForRun,

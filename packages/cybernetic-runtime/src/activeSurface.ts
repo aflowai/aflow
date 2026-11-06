@@ -14,6 +14,7 @@ import {
   type ActiveSurfaceWorkflowGraph,
   type EntityEventEnvelope,
   type EntityOperatingMode,
+  isTerminalRunStatus,
   type SkillManifest,
   SkillManifestSchema,
   type TenantId,
@@ -76,8 +77,6 @@ const MAX_DESCENDANT_SESSIONS = 256;
 
 /** Recent entity events read for breadcrumb + helmsman summary. */
 const RECENT_EVENT_SCAN_COUNT = 50;
-
-const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'cancelled']);
 
 /** Cap on breadcrumb entries returned. */
 const RECENT_TRANSITIONS_LIMIT = 5;
@@ -199,8 +198,8 @@ export async function buildActiveSurface(
     // Split rows by status so live and terminal runs use the appropriate
     // enrichment path. Live needs hot-state signals + workflow JSON drift
     // check; terminal just needs the recorded task list.
-    const liveRows = runRowsRaw.filter((r) => !TERMINAL_RUN_STATUSES.has(r.status));
-    const terminalRows = runRowsRaw.filter((r) => TERMINAL_RUN_STATUSES.has(r.status));
+    const liveRows = runRowsRaw.filter((r) => !isTerminalRunStatus(r.status));
+    const terminalRows = runRowsRaw.filter((r) => isTerminalRunStatus(r.status));
 
     const [enrichedActive, enrichedTerminal] = await Promise.all([
       Promise.all(
@@ -314,7 +313,7 @@ export async function buildActiveSurface(
       // nothing. While any of them is present the surface cannot be told it
       // changed, so it re-derives instead.
       hasUnannouncedInputs:
-        runRowsRaw.some((row) => !TERMINAL_RUN_STATUSES.has(row.status)) ||
+        runRowsRaw.some((row) => !isTerminalRunStatus(row.status)) ||
         helmsman.lifecycle !== 'unknown' ||
         coach.pendingProposals > 0 ||
         coach.pendingPlatformIssues > 0 ||
@@ -527,10 +526,9 @@ function deriveRunLifecycle(
 ): { lifecycle: ActiveSurfaceRunLifecycle; reasonCode?: ActiveSurfaceLifecycleReasonCode } {
   // Terminal runs are surfaced via `enrichTerminalRun`; this path only sees
   // running/paused. Defensive coverage in case the ledger query widens.
-  const terminal: 'completed' | 'failed' | 'cancelled' | null =
-    raw.status === 'completed' || raw.status === 'failed' || raw.status === 'cancelled'
-      ? raw.status
-      : null;
+  const terminal: LifecycleSignals['terminal'] = isTerminalRunStatus(raw.status)
+    ? raw.status
+    : null;
 
   const liveTasks = raw.liveTasks;
   const scheduledTasks = raw.scheduledTasks;
@@ -809,7 +807,7 @@ function deriveNextTimeDerivedChangeAt(args: {
   if (args.hasUnannouncedInputs) candidates.push(now + UNANNOUNCED_INPUT_RECHECK_MS);
 
   for (const row of rows) {
-    if (TERMINAL_RUN_STATUSES.has(row.status)) {
+    if (isTerminalRunStatus(row.status)) {
       const endedAt = row.completedAt?.getTime();
       if (endedAt !== undefined) candidates.push(endedAt + RECENTLY_TERMINAL_WINDOW_MS);
       continue;
@@ -935,7 +933,7 @@ async function deriveHelmsmanLifecycle(
 
   const status = hotState?.status ?? session.status;
 
-  const terminal: 'completed' | 'failed' | 'cancelled' | null =
+  const terminal: LifecycleSignals['terminal'] =
     status === 'SUCCEEDED'
       ? 'completed'
       : status === 'FAILED'

@@ -22,6 +22,7 @@ import {
   RUN_PULL_REQUEST_URL_OUTPUT,
   parsePullRequestRef,
   pullRequestSubject,
+  type TerminalRunStatus,
 } from '@aflow/schemas';
 import type { HarnessDeps } from '../cybernetic/harness/types.js';
 import { getOrchestratorLogger } from '../../lib/orchestratorLogger.js';
@@ -44,7 +45,7 @@ export async function armPullRequestOnPublication(
   deps: HarnessDeps,
   tenantId: string,
   run: WorkflowRunDetail,
-  status: 'completed' | 'failed' | 'cancelled',
+  status: TerminalRunStatus,
   nowMs: number = Date.now(),
 ): Promise<PublicationArmOutcome> {
   if (run.workflowSlug !== PLAN_STREAM_PUBLICATION_SLUG || status !== 'completed') {
