@@ -15,6 +15,7 @@ import {
 } from '@aflow/design-system';
 import type { HostMergePosture, HostPushApproval } from '@aflow/schemas';
 import { useSpace, useSpaceFromRoute } from '../components/providers.js';
+import { SpaceActionBell } from '../components/app-page-header.js';
 import { useEdition } from '../hooks/useEdition.js';
 import { useApiQuery, useApiMutation } from '../hooks/useApiQuery.js';
 import { HostBrowserProfiles } from '../components/host/HostBrowserProfiles.js';
@@ -140,7 +141,10 @@ export function SpaceHostBindingsPage() {
     <PageContainer>
       <Column gap="lg">
         <Column gap="xs">
-          <Heading level={2}>This Computer</Heading>
+          <Row gap="sm" align="center" justify="between">
+            <Heading level={2}>This Computer</Heading>
+            <SpaceActionBell />
+          </Row>
           <Text variant="muted">
             Folders on your machine that this workspace can reach, the coding agent and browser its
             agents use there, and the models that run on it.

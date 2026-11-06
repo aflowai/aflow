@@ -18,6 +18,7 @@
  * Below 900px the list is a disclosure and the rail a dialog.
  */
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import {
   Badge,
@@ -39,7 +40,9 @@ import type {
   PlanOverviewOutput,
 } from '@aflow/schemas';
 import { useSpaceFromRoute } from '../components/providers.js';
+import { SpaceActionBell } from '../components/app-page-header.js';
 import { useApiMutation, useApiQuery } from '../hooks/useApiQuery.js';
+import { spaceRoute } from '../lib/space-routes.js';
 import { spacePlanKey, usePlanLiveRefresh } from '../hooks/use-plan-live-refresh.js';
 import { PlanBoard, type PlanNodePlaceRequest } from '../components/plan/PlanBoard.js';
 import { PLAN_STATE_BADGE, PlanList, PlanRootCloseControl } from '../components/plan/PlanList.js';
@@ -295,10 +298,17 @@ export function SpacePlanPage(): React.ReactNode {
       <Heading level={2}>Planning board</Heading>
     </Row>
   );
+  /** The header with the bell at its far end, where the page stacks. */
+  const headerRow = (
+    <Row gap="sm" align="center" justify="between">
+      {header}
+      <SpaceActionBell />
+    </Row>
+  );
   const page = (body: React.ReactNode) => (
     <PageContainer>
       <Column gap="lg">
-        {header}
+        {headerRow}
         {carrierFailure && (
           <Text role="alert" tone="danger">
             {carrierFailure}
@@ -318,7 +328,17 @@ export function SpacePlanPage(): React.ReactNode {
     );
   }
   if (rows.roots.length === 0) {
-    return page(<Text variant="muted">No plan yet</Text>);
+    return page(
+      <Column gap="xs" data-plan-empty>
+        <Text variant="muted">No plan yet</Text>
+        <Text size="sm">
+          Open a chat and ask the Helmsman for work, and the plan grows from there.{' '}
+          <Link href={spaceRoute(spaceSlug, '/chat')} style={{ color: 'var(--color-text-link)' }}>
+            Open chat
+          </Link>
+        </Text>
+      </Column>,
+    );
   }
 
   const list = (
@@ -582,7 +602,7 @@ export function SpacePlanPage(): React.ReactNode {
     return (
       <PageContainer maxWidth="none">
         <Column gap="md">
-          {header}
+          {headerRow}
           {list}
           {content}
           {listNotes}
@@ -607,6 +627,9 @@ export function SpacePlanPage(): React.ReactNode {
           </Text>
         )}
         {listNotes}
+        <div style={{ marginLeft: 'auto' }}>
+          <SpaceActionBell />
+        </div>
       </Row>
       <div
         style={{

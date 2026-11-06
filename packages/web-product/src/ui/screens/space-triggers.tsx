@@ -36,6 +36,7 @@ import {
 import { useApiMutation, useApiQuery } from '../hooks/useApiQuery.js';
 import { spaceSchedulesKey, useSpaceSchedules } from '../hooks/use-space-schedules.js';
 import { useSpaceFromRoute } from '../components/providers.js';
+import { SpaceActionBell } from '../components/app-page-header.js';
 
 import { ScheduleCard } from '../components/schedule-card.js';
 
@@ -118,7 +119,10 @@ export function TriggersPage(): React.ReactNode {
     <PageContainer>
       <Column gap="lg">
         <Column gap="xs">
-          <Heading level={2}>Triggers</Heading>
+          <Row gap="sm" align="center" justify="between">
+            <Heading level={2}>Triggers</Heading>
+            <SpaceActionBell />
+          </Row>
           <Text variant="muted">
             What starts work in this space without anybody asking. A triggered run reaches exactly
             what an interactive one reaches.

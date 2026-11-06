@@ -83,6 +83,8 @@ const recorded = vi.hoisted(() => ({
   findings: {} as Record<string, Answer>,
   /** The conversations linked on each node, by id. */
   conversations: {} as Record<string, Answer>,
+  /** Each conversation's own name, by session id. */
+  conversationTitles: {} as Record<string, string | null>,
   /** The newest plan document linked on each node, by id. */
   documents: {} as Record<string, Answer>,
   runPages: {} as Record<string, Answer>,
@@ -293,6 +295,7 @@ vi.stubGlobal(
 );
 
 vi.mock('../components/providers.js', () => ({
+  useSpace: () => ({ activeSpace: null }),
   useSpaceFromRoute: () => ({ id: SPACE_ID, slug: 'work', slugFromRoute: 'work' }),
 }));
 
@@ -313,6 +316,16 @@ vi.mock('../hooks/useApiQuery.js', () => ({
     // A disabled query reads nothing.
     if (options.enabled === false) {
       return { data: undefined, error: null, isFetchedAfterMount: false, refetch: vi.fn() };
+    }
+    if (options.key[0] === 'session') {
+      const sessionId = options.key[1] as string;
+      return {
+        data:
+          sessionId in recorded.conversationTitles
+            ? { metadata: { title: recorded.conversationTitles[sessionId] } }
+            : undefined,
+        error: null,
+      };
     }
     const [, , , kind, nodeId, sub, linkKind, cursor] = options.key as string[];
     const space = recorded.board.data as SpaceFixture | undefined;
@@ -765,6 +778,7 @@ beforeEach(() => {
   recorded.liveRefresh = [];
   recorded.findings = {};
   recorded.conversations = {};
+  recorded.conversationTitles = {};
   recorded.documents = {};
   recorded.runPages = {};
   recorded.linkQueries = [];
@@ -995,6 +1009,10 @@ describe('SpacePlanPage — the board', () => {
   it('says when the space has no plan, and when the plan could not be read', async () => {
     await render({ data: { roots: [], tallies: [] } });
     expect(container.textContent).toContain('No plan yet');
+    // The first step: a chat, where asking for work grows the plan.
+    expect(container.querySelector('[data-plan-empty] a')?.getAttribute('href')).toBe(
+      '/s/work/chat',
+    );
 
     root.unmount();
     root = createRoot(container);
@@ -1967,10 +1985,19 @@ describe('SpacePlanPage — approve, reopen and order (Plan 332 P2)', () => {
             label: 'conversation',
             createdAt: at(10, 23),
           },
+          {
+            nodeId: BLOCKED,
+            kind: 'session',
+            ref: 'c0000000-0000-4000-8000-000000000338',
+            label: 'conversation',
+            createdAt: at(10, 22),
+          },
         ],
-        linksTotal: 1,
+        linksTotal: 2,
       },
     };
+    recorded.conversationTitles['c0000000-0000-4000-8000-000000000337'] = 'Order the loop';
+    recorded.conversationTitles['c0000000-0000-4000-8000-000000000338'] = null;
     await render({ data: P2_PLAN });
     await click(card(BLOCKED));
 
@@ -1987,7 +2014,16 @@ describe('SpacePlanPage — approve, reopen and order (Plan 332 P2)', () => {
       [...rail().querySelectorAll('[data-plan-rail-section="Discuss"] li a')].map((a) =>
         a.getAttribute('href'),
       ),
-    ).toEqual(['/s/work/chat?session=c0000000-0000-4000-8000-000000000337']);
+    ).toEqual([
+      '/s/work/chat?session=c0000000-0000-4000-8000-000000000337',
+      '/s/work/chat?session=c0000000-0000-4000-8000-000000000338',
+    ]);
+    // Each conversation by its own name, and the generic word where it has none.
+    expect(
+      [...rail().querySelectorAll('[data-plan-rail-section="Discuss"] li a')].map(
+        (a) => a.textContent,
+      ),
+    ).toEqual(['Order the loop', 'Conversation']);
   });
 
   it('holds an open form to the revision it opened on when the live read moves past it', async () => {

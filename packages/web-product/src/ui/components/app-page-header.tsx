@@ -13,8 +13,29 @@ export interface AppPageHeaderProps extends PageHeaderProps {
    * Off for tenant/account routes that exist outside a space.
    */
   showSpace?: boolean;
-  /** Suppress the global bell (the chat page carries its own affordances). */
-  showActionBell?: boolean;
+}
+
+/**
+ * The Action Center bell for the active space, with its count. A space page
+ * whose header is not an `AppPageHeader` sets this in its own header.
+ */
+export function SpaceActionBell() {
+  const { activeSpace } = useSpace();
+  return activeSpace ? <ActionBell spaceId={activeSpace.id} spaceSlug={activeSpace.slug} /> : null;
+}
+
+function ActionBell({ spaceId, spaceSlug }: { spaceId: string; spaceSlug: string }) {
+  const router = useRouter();
+  // The bell leads to where items resolve: the Workbench.
+  const bellHref = spaceRoute(spaceSlug, '/chat?workbench=1');
+  return (
+    <ActionIndicator
+      spaceId={spaceId}
+      onClick={() => {
+        router.push(bellHref);
+      }}
+    />
+  );
 }
 
 /**
@@ -22,26 +43,9 @@ export interface AppPageHeaderProps extends PageHeaderProps {
  * prefix and the global Action Center bell into the actions slot. Drop-in
  * replacement for `PageHeader` from design-system.
  */
-export function AppPageHeader({
-  showSpace = true,
-  showActionBell = true,
-  ...props
-}: AppPageHeaderProps) {
+export function AppPageHeader({ showSpace = true, ...props }: AppPageHeaderProps) {
   const { activeSpace } = useSpace();
-  const router = useRouter();
-
-  // The bell leads to where items resolve: the Workbench.
-  const bellHref = activeSpace ? spaceRoute(activeSpace.slug, '/chat?workbench=1') : null;
-
-  const bell =
-    showSpace && showActionBell && activeSpace && bellHref ? (
-      <ActionIndicator
-        spaceId={activeSpace.id}
-        onClick={() => {
-          router.push(bellHref);
-        }}
-      />
-    ) : null;
+  const bell = showSpace && activeSpace ? <SpaceActionBell /> : null;
 
   const actions =
     bell || props.actions ? (

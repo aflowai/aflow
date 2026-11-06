@@ -118,13 +118,7 @@ export function useConversationMetadata(
   sessionId: string | null,
 ): SessionMetadataDetailPayload['metadata'] | null {
   const queryClient = useQueryClient();
-  const query = useApiQuery<SessionMetadataDetailPayload>({
-    key: ['session', sessionId ?? 'none', 'metadata'],
-    path: `/sessions/${sessionId ?? ''}/metadata`,
-    enabled: sessionId !== null && (spaceId ?? '').length > 0,
-    ...(spaceId ? { spaceId } : {}),
-    staleTime: 30_000,
-  });
+  const metadata = useConversationMetadataRead(spaceId, sessionId);
 
   useSpaceEntityEventListener(spaceId, (event) => {
     if (event.eventType !== 'entity.session.described') return;
@@ -132,5 +126,23 @@ export function useConversationMetadata(
     void queryClient.invalidateQueries({ queryKey: ['session', sessionId, 'metadata'] });
   });
 
+  return metadata;
+}
+
+/**
+ * The same read without the space channel, for a surface that only labels a
+ * conversation. A name written meanwhile shows once the entry goes stale.
+ */
+export function useConversationMetadataRead(
+  spaceId: string | null,
+  sessionId: string | null,
+): SessionMetadataDetailPayload['metadata'] | null {
+  const query = useApiQuery<SessionMetadataDetailPayload>({
+    key: ['session', sessionId ?? 'none', 'metadata'],
+    path: `/sessions/${sessionId ?? ''}/metadata`,
+    enabled: sessionId !== null && (spaceId ?? '').length > 0,
+    ...(spaceId ? { spaceId } : {}),
+    staleTime: 30_000,
+  });
   return query.data?.metadata ?? null;
 }
