@@ -250,6 +250,12 @@ const ENTRY_INPUT_CONTRACT = {
       path: 'title',
       schema: TITLE_SCHEMA,
     },
+    retitle: {
+      kind: 'run_input' as const,
+      bindAs: 'retitle',
+      path: 'retitle',
+      schema: TITLE_SCHEMA,
+    },
     summary: {
       kind: 'run_input' as const,
       bindAs: 'summary',
@@ -398,7 +404,14 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           id: 'title',
           required: false,
           description:
-            "A title for the pull request, only where a person wants to say it themselves. Omitted, the title is the slice's: the subject of the branch's first commit.",
+            "A title for the pull request this run opens, only where a person wants to say it themselves. Omitted, the title is the slice's: the subject of the branch's first commit. A pull request already open keeps its title whatever this says.",
+          schema: TITLE_SCHEMA,
+        },
+        {
+          id: 'retitle',
+          required: false,
+          description:
+            "A new title for the branch's pull request already open, only where a person asks to rename it. Omitted, that pull request keeps its title while its body is rewritten. A run that opens the pull request takes `title`, not this.",
           schema: TITLE_SCHEMA,
         },
         {
@@ -619,7 +632,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           name: 'Scan the commit for secrets',
           goal: "Read every line the push would add — this run's commit and every commit under it that `origin`'s base branch does not hold — the headers and message of each of those commits, and the pull request's title and summary for what looks like a secret: a private key, a cloud or service token, a random-looking value under a secret-looking name. Before anything leaves the machine.",
           failureInstruction:
-            "What the push would carry holds what looks like a secret, named above by file, line and rule — or by `<sha> (headers)` or `<sha> (message)` for a commit's headers or message, `pull request title` or `pull request summary` for those — never by its value. The branch stayed on the machine and nothing was pushed. Take the secret out and rotate it if it was real. Where it is in this run's change or its commit's headers or message, commission the change again and publish it on a fresh branch: this branch still holds the commit with the secret, and anything appended to it would push that commit too. Where it is only in the title or the summary, publish again on a fresh branch without it. Where it is in a commit of the folder's own that `origin` does not have yet, or in that commit's headers or message, that commit has to be rewritten before anything built on it is pushed.",
+            "What the push would carry holds what looks like a secret, named above by file, line and rule — or by `<sha> (headers)` or `<sha> (message)` for a commit's headers or message, `pull request title`, `pull request new title` or `pull request summary` for those — never by its value. The branch stayed on the machine and nothing was pushed. Take the secret out and rotate it if it was real. Where it is in this run's change or its commit's headers or message, commission the change again and publish it on a fresh branch: this branch still holds the commit with the secret, and anything appended to it would push that commit too. Where it is only in the title or the summary, publish again on a fresh branch without it. Where it is in a commit of the folder's own that `origin` does not have yet, or in that commit's headers or message, that commit has to be rewritten before anything built on it is pushed.",
           type: 'operation' as const,
           operation: 'host.commit.scan',
           // After the checks, and their second run where there is one: a
@@ -637,6 +650,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             bindingId: { kind: 'run_input' as const, path: 'bindingId' },
             range: { kind: 'task_output' as const, taskId: 'commit', path: 'commit.pushRange' },
             title: { kind: 'run_input' as const, path: 'title' },
+            retitle: { kind: 'run_input' as const, path: 'retitle' },
             summary: { kind: 'run_input' as const, path: 'summary' },
           },
           context: {
@@ -655,6 +669,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             // summary drops its key rather than scanning an empty text.
             texts: {
               'pull request title': { $bind: 'title' },
+              'pull request new title': { $bind: 'retitle' },
               'pull request summary': { $bind: 'summary' },
             },
           },
@@ -1032,7 +1047,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
         {
           taskId: 'update-pr',
           name: "Rewrite the pull request's description",
-          goal: "Rewrite the body of the branch's open pull request through the GitHub REST API — and its title, where one was passed — to the text composed from the branch as it now stands, so an appended push does not leave an earlier publication's description on it.",
+          goal: "Rewrite the body of the branch's open pull request through the GitHub REST API — and its title, only where `retitle` was passed — to the text composed from the branch as it now stands, so an appended push does not leave an earlier publication's description on it.",
           failureInstruction:
             "The push went through and the branch's pull request carries it, but GitHub did not take its new description, so it still describes the branch as an earlier publication left it. Rewrite it on GitHub, or publish this branch as it stands to compose it again.",
           type: 'operation' as const,
@@ -1045,12 +1060,13 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           // The same text sent twice leaves the same pull request.
           retryability: 'safe' as const,
           maxAttempts: 2,
-          // The title only where a person passed one: a title edited on
-          // GitHub since is theirs, and the slice's would overwrite it.
+          // The title is set when the pull request opens, and a later round
+          // keeps it even where its caller passed `title` again. Only
+          // `retitle` renames it, so a fix commit's subject never lands there.
           inputBindings: {
             ...REPOSITORY,
             prNumber: { kind: 'task_output' as const, taskId: 'find-pr', path: 'prNumber' },
-            title: { kind: 'run_input' as const, path: 'title' },
+            title: { kind: 'run_input' as const, path: 'retitle' },
             body: { kind: 'task_output' as const, taskId: 'describe-pr', path: 'body' },
           },
           context: {

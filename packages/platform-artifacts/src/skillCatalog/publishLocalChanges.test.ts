@@ -929,7 +929,7 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     });
     // What a brief passes reaches GitHub only through the composition, which
     // reads it for secrets with the rest — the title of an existing pull
-    // request apart, rewritten only where a person passed one.
+    // request apart, rewritten only where a person passed `retitle`.
     const briefInputs = new Set(['summary', 'findings', 'gaps']);
     for (const taskId of ['find-pr', 'update-pr', 'open-pr']) {
       const fromBrief = Object.values(taskOrThrow(taskId).inputBindings ?? {}).filter(
@@ -939,9 +939,10 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     }
     expect(taskOrThrow('update-pr').inputBindings?.['title']).toEqual({
       kind: 'run_input',
-      path: 'title',
+      path: 'retitle',
     });
     expect(runInputOrThrow('title').required).toBe(false);
+    expect(runInputOrThrow('retitle').required).toBe(false);
     expect(runInputOrThrow('summary').required).toBe(false);
   });
 
@@ -2131,6 +2132,7 @@ describe('Publish Local Changes — the commit is scanned for secrets before any
       bindingId: { kind: 'run_input', path: 'bindingId' },
       range: { kind: 'task_output', taskId: 'commit', path: 'commit.pushRange' },
       title: { kind: 'run_input', path: 'title' },
+      retitle: { kind: 'run_input', path: 'retitle' },
       summary: { kind: 'run_input', path: 'summary' },
     });
     const template = scan.inputTemplate;
@@ -2156,6 +2158,17 @@ describe('Publish Local Changes — the commit is scanned for secrets before any
       bindingId: 'folder-1',
       range: `${ORIGIN_BASE}..${HEAD}`,
       texts: { 'pull request title': 'Fix it' },
+    });
+    // A new title for an open pull request goes out with the push too.
+    const retitled = substituteTemplateBinds(
+      template,
+      { bindingId: 'folder-1', range: COMMIT.pushRange, retitle: 'Renamed' },
+      declared,
+    );
+    expect(HostCommitScanInputSchema.parse(retitled)).toEqual({
+      bindingId: 'folder-1',
+      range: `${ORIGIN_BASE}..${HEAD}`,
+      texts: { 'pull request new title': 'Renamed' },
     });
     // A commit the checks did not clear is never scanned: nothing after them runs.
     expect(scan.when).toEqual({
@@ -2212,7 +2225,9 @@ describe('Publish Local Changes — the commit is scanned for secrets before any
     expect(failure).toContain(
       "`<sha> (headers)` or `<sha> (message)` for a commit's headers or message",
     );
-    expect(failure).toContain('`pull request title` or `pull request summary`');
+    expect(failure).toContain(
+      '`pull request title`, `pull request new title` or `pull request summary`',
+    );
     expect(failure).toContain('never by its value');
     expect(failure).toContain('The branch stayed on the machine and nothing was pushed.');
     expect(failure).toContain('publish it on a fresh branch');
@@ -3108,16 +3123,61 @@ describe('Publish Local Changes — the pull request describes the branch as a w
       pushReason: "The folder's push approval is `never`, over a range the scan cleared.",
     });
 
-    const titled = publish({
+    const retitled = publish({
       pushApproval: 'never',
       review: 'approve',
       decision: 'approved',
       existingPrInto: 'main',
       commit: appended,
+      inputs: { ...GITHUB_INPUTS, round: 2, retitle: 'Their title' },
+    });
+    expect(retitled.inputs.get('update-pr')?.['params']).toMatchObject({
+      body: { title: 'Their title', body: `Composed from \`${ORIGIN_BASE}..${HEAD}\`.` },
+    });
+  });
+
+  it("keeps an existing pull request's title on a fix round, even where `title` is passed again", () => {
+    const previousHead = 'b'.repeat(40);
+    const appended = {
+      ...COMMIT,
+      message: 'Fix the finding',
+      baseSha: previousHead,
+      appended: true,
+      range: `${previousHead}..${HEAD}`,
+    };
+    for (const inputs of [
+      { ...GITHUB_INPUTS, round: 2 },
+      { ...GITHUB_INPUTS, round: 2, title: 'Fix the finding' },
+    ]) {
+      const outcome = publish({
+        pushApproval: 'never',
+        review: 'approve',
+        decision: 'approved',
+        existingPrInto: 'main',
+        commit: appended,
+        inputs,
+      });
+      expect(outcome.statuses.get('update-pr')).toBe('succeeded');
+      expect(outcome.ran).not.toContain('open-pr');
+      const params = outcome.inputs.get('update-pr')?.['params'] as
+        { body: Record<string, unknown> } | undefined;
+      expect(params?.body).toEqual({ body: `Composed from \`${ORIGIN_BASE}..${HEAD}\`.` });
+    }
+  });
+
+  it('titles a first publication from the slice, or from the title passed, as it opens', () => {
+    const slice = publish({ pushApproval: 'never', review: 'approve', decision: 'approved' });
+    expect(slice.inputs.get('open-pr')?.['params']).toMatchObject({
+      body: { title: SLICE_TITLE },
+    });
+    const titled = publish({
+      pushApproval: 'never',
+      review: 'approve',
+      decision: 'approved',
       inputs: { ...GITHUB_INPUTS, title: 'Their title' },
     });
-    expect(titled.inputs.get('update-pr')?.['params']).toMatchObject({
-      body: { title: 'Their title', body: `Composed from \`${ORIGIN_BASE}..${HEAD}\`.` },
+    expect(titled.inputs.get('open-pr')?.['params']).toMatchObject({
+      body: { title: 'Their title' },
     });
   });
 
