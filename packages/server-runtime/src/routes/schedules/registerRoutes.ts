@@ -15,7 +15,7 @@ import {
   ListSchedulesQuerySchema,
   UpdateScheduleBodySchema,
 } from './schemas.js';
-import { readActiveChatSchedules } from '../../services/actionCenter/sources/triggerArmedSource.js';
+import { readUpcomingSchedules } from './upcoming.js';
 import { rowToResponse } from './helpers.js';
 
 /**
@@ -321,9 +321,9 @@ export function registerScheduleRoutes(fastify: FastifyInstance): void {
     },
   );
 
-  // GET /v1/schedules/chat — The active schedules an agent set up in chat lately
+  // GET /v1/schedules/upcoming — The schedules that will fire again, whoever created them
   app.get(
-    '/chat',
+    '/upcoming',
     {
       config: {
         authzExempt: {
@@ -333,14 +333,13 @@ export function registerScheduleRoutes(fastify: FastifyInstance): void {
       },
       schema: {
         tags: ['schedules'],
-        summary:
-          'List the active schedules an agent set up in chat lately, each as the newest renewal of its chain',
+        summary: 'List the schedules that will fire again, soonest first, whoever created them',
       },
     },
     async (request, reply) => {
       const space = await request.requireSpace();
       const tenant = await request.requireTenant();
-      const rows = await readActiveChatSchedules(getDatabase(), tenant.tenantId, space.spaceId);
+      const rows = await readUpcomingSchedules(getDatabase(), tenant.tenantId, space.spaceId);
       return reply.send({ schedules: rows.map(rowToResponse) });
     },
   );

@@ -13,21 +13,20 @@ export function spaceSchedulesKey(spaceId: string): QueryKey {
  * Under the space's schedules key, so a write that refreshes the Triggers page
  * refreshes the Workbench's section too.
  */
-export function chatSchedulesKey(spaceId: string): QueryKey {
-  return [...spaceSchedulesKey(spaceId), 'chat'];
+export function upcomingSchedulesKey(spaceId: string): QueryKey {
+  return [...spaceSchedulesKey(spaceId), 'upcoming'];
 }
 
 /**
- * The active schedules an agent set up in chat lately, each as the newest
- * renewal of its chain, newest arrival first. The server picks them from the
- * chains the Action Center's trigger_armed notices announce, and leaves out
- * every chain that will not fire again. A page of the whole list cannot serve
- * here: a renewing schedule's renewals push its original off the page.
+ * The space's schedules that will fire again, soonest first, whoever created
+ * them. An operator-created schedule runs on its own as much as an agent-armed
+ * one, so both are listed. A page of the whole list cannot serve here, because
+ * expired renewals and one-shots fill it.
  */
-export function useChatSchedules(spaceId: string) {
+export function useUpcomingSchedules(spaceId: string) {
   return useApiQuery<{ schedules: ScheduleRow[] }>({
-    key: chatSchedulesKey(spaceId),
-    path: '/schedules/chat',
+    key: upcomingSchedulesKey(spaceId),
+    path: '/schedules/upcoming',
     spaceId,
     enabled: spaceId.length > 0,
   });

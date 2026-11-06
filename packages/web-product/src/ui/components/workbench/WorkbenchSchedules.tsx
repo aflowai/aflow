@@ -5,7 +5,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Column, Text } from '@aflow/design-system';
 
 import type { UseActionCenterResult } from '../../hooks/use-action-center.js';
-import { chatSchedulesKey, useChatSchedules } from '../../hooks/use-space-schedules.js';
+import { upcomingSchedulesKey, useUpcomingSchedules } from '../../hooks/use-space-schedules.js';
 import { ScheduleCard } from '../schedule-card.js';
 import {
   WorkbenchEmptyRow,
@@ -15,19 +15,18 @@ import {
 } from './WorkbenchSection.js';
 
 /**
- * The active schedules an agent set up in chat, each folded to one line: its
- * name and when it runs next. The server picks them from the chains the
- * trigger_armed notices announce, and keeps only those whose newest renewal
- * will fire again. An expired one-shot, a chain at its end and a superseded
- * renewal never reach this section, so it stays as tall as what still runs.
+ * The space's upcoming schedules, each folded to one line: its name and when it
+ * runs next. The server lists every active schedule with a next firing ahead,
+ * whoever created it, soonest first. An operator-created schedule runs on its
+ * own as much as an agent-armed one, so it belongs here too. An expired
+ * one-shot, a chain at its end and a superseded renewal never reach this
+ * section, so it stays as tall as what still runs.
  *
  * Kept out of Pending deliberately: that section's badge is a count of
  * work waiting on this person, and a schedule that only runs on its own would
- * inflate it into a queue nobody can empty. The operator still has to learn
- * that an agent scheduled a run, so it is shown, plainly, next to the section
- * that does claim attention. The Workbench folds it (Plan 338 D3), so it reads
- * the schedules only once the operator opens it. Outside a fold it disappears
- * when there is nothing to say.
+ * inflate it into a queue nobody can empty. The Workbench folds it (Plan 338
+ * D3), so it reads the schedules only once the operator opens it. Outside a
+ * fold it disappears when there is nothing to say.
  *
  * The trigger_armed notice still reaches the Action Center's notices lane. Here
  * it only tells this section to read the schedules again, because the notice
@@ -38,7 +37,8 @@ import {
  * counts the trigger_armed notices in the Action Center the board already
  * holds, because the schedules read waits for the operator to expand the
  * section. A notice can outlive its schedule, so this says what an agent did
- * and leaves what still runs to the expanded list.
+ * and leaves what still runs to the expanded list. That list holds
+ * operator-created schedules too, so its length and this count differ.
  */
 export function FoldedSchedulesNotice({ state }: { state: UseActionCenterResult }) {
   const count = state.lanes.notices.filter((item) => item.kind === 'trigger_armed').length;
@@ -54,12 +54,15 @@ export function WorkbenchSchedules({
   state,
   spaceId,
   spaceSlug,
+  currentSessionId,
 }: {
   state: UseActionCenterResult;
   spaceId: string;
   spaceSlug: string;
+  /** The conversation beside the Workbench, which a run link never opens. */
+  currentSessionId?: string | null | undefined;
 }) {
-  const { data, isLoading } = useChatSchedules(spaceId);
+  const { data, isLoading } = useUpcomingSchedules(spaceId);
   const fold = useWorkbenchSectionFold();
   const schedules = data?.schedules ?? [];
 
@@ -69,7 +72,7 @@ export function WorkbenchSchedules({
   useEffect(() => {
     if (seenNoticeIds.current === noticeIds) return;
     seenNoticeIds.current = noticeIds;
-    void queryClient.invalidateQueries({ queryKey: chatSchedulesKey(spaceId) });
+    void queryClient.invalidateQueries({ queryKey: upcomingSchedulesKey(spaceId) });
   }, [noticeIds, queryClient, spaceId]);
 
   if (schedules.length === 0 && isLoading)
@@ -85,11 +88,17 @@ export function WorkbenchSchedules({
       link={{ href: `/s/${spaceSlug}/triggers`, label: 'Triggers' }}
     >
       {schedules.length === 0 ? (
-        <WorkbenchEmptyRow label="No active schedules set up in chat" />
+        <WorkbenchEmptyRow label="No upcoming schedules" />
       ) : (
         <Column gap="xs">
           {schedules.map((schedule) => (
-            <ScheduleCard key={schedule.id} schedule={schedule} variant="compact" />
+            <ScheduleCard
+              key={schedule.id}
+              schedule={schedule}
+              variant="compact"
+              spaceSlug={spaceSlug}
+              currentSessionId={currentSessionId}
+            />
           ))}
         </Column>
       )}

@@ -1,7 +1,7 @@
 /**
- * GET /v1/schedules/chat is all the Workbench's Schedules section reads, so
- * what it answers is what the section shows: the requesting space's chains,
- * each as its newest renewal, and only the ones that will fire again.
+ * GET /v1/schedules/upcoming is all the Workbench's Schedules section reads, so
+ * what it answers is what the section shows: the requesting space's schedules
+ * that will fire again, whoever created them.
  */
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
@@ -17,13 +17,12 @@ const ARMING_SESSION = 'f0000000-0000-4000-8000-000000000011';
 const MINUTE = 60_000;
 
 /**
- * `pairs` stands for what the chain query picks, one arrival and its newest
- * renewal per chain, and `rows` for the schedules the second read loads.
+ * `rows` stands for what the database answers, and `reads` records the
+ * condition, the order and the limit each read asked for.
  */
 const table = vi.hoisted(() => ({
-  pairs: [] as Array<{ arrival_id: string; current_id: string }>,
   rows: [] as unknown[],
-  executed: [] as unknown[],
+  reads: [] as Array<{ where: unknown; orderBy: unknown[]; limit: number | undefined }>,
   tenants: [] as unknown[],
   databases: [] as unknown[],
 }));
@@ -32,7 +31,30 @@ const DATABASE = vi.hoisted(() => ({ name: 'the server database' }));
 
 vi.mock('@aflow/database', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@aflow/database')>();
-  const query = { from: () => query, where: () => Promise.resolve(table.rows) };
+  function select() {
+    const read: { where: unknown; orderBy: unknown[]; limit: number | undefined } = {
+      where: undefined,
+      orderBy: [],
+      limit: undefined,
+    };
+    table.reads.push(read);
+    const query = {
+      from: () => query,
+      where: (condition: unknown) => {
+        read.where = condition;
+        return query;
+      },
+      orderBy: (...columns: unknown[]) => {
+        read.orderBy = columns;
+        return query;
+      },
+      limit: (n: number) => {
+        read.limit = n;
+        return Promise.resolve(table.rows);
+      },
+    };
+    return query;
+  }
   return {
     ...actual,
     getDatabase: () => DATABASE,
@@ -42,19 +64,14 @@ vi.mock('@aflow/database', async (importOriginal) => {
     },
     withTenantSchema: (db: unknown, _ctx: unknown, fn: (tx: unknown) => Promise<unknown>) => {
       table.databases.push(db);
-      return fn({
-        select: () => query,
-        execute: (statement: unknown) => {
-          table.executed.push(statement);
-          return Promise.resolve(table.pairs);
-        },
-      });
+      return fn({ select });
     },
   };
 });
 
 const { registerScheduleRoutes } = await import('./registerRoutes.js');
 const { rowToResponse } = await import('./helpers.js');
+const { UPCOMING_SCHEDULE_LIST_LIMIT } = await import('./upcoming.js');
 
 function schedule(id: string, overrides: Partial<AgentScheduleRow>): AgentScheduleRow {
   const at = new Date(Date.now() - 60 * MINUTE);
@@ -101,37 +118,16 @@ function schedule(id: string, overrides: Partial<AgentScheduleRow>): AgentSchedu
   };
 }
 
-function chain(arrival: AgentScheduleRow, current: AgentScheduleRow = arrival): void {
-  table.pairs.push({ arrival_id: arrival.id, current_id: current.id });
-  table.rows.push(arrival, current);
-}
-
-/** A shepherd armed in chat, renewed once: the first is expired, the renewal fires. */
-const shepherd = schedule('5247eee7-0000-4000-8000-000000000001', {
-  status: 'expired',
-  nextFireAt: null,
-  firingCount: 50,
-  createdAt: new Date(Date.now() - 2 * 24 * 60 * MINUTE),
-});
-const shepherdRenewal = schedule('6247eee7-0000-4000-8000-000000000002', {
-  firingCount: 3,
-  renewsScheduleId: shepherd.id,
-  originalScheduleId: shepherd.id,
-  createdAt: new Date(Date.now() - 30 * MINUTE),
+/** The Local PR Shepherd as the operator created it: no session armed it. */
+const operatorShepherd = schedule('5247eee7-0000-4000-8000-000000000001', {
+  createdBy: null,
+  createdBySessionId: null,
+  creatorUserId: 'd0000000-0000-4000-8000-0000000000d1',
+  nextFireAt: new Date(Date.now() + MINUTE),
 });
 
-/** A one-shot armed in chat an hour ago, which has run and is over. */
-const firedOneShot = schedule('7247eee7-0000-4000-8000-000000000003', {
-  name: 'Send the release note',
-  kind: 'one_shot',
-  cronExpression: null,
-  scheduledAt: new Date(Date.now() - 30 * MINUTE),
-  status: 'expired',
-  nextFireAt: null,
-  firingCount: 1,
-  maxFirings: 1,
-  lastFiredAt: new Date(Date.now() - 30 * MINUTE),
-});
+/** A daily report an agent armed in chat. */
+const agentReport = schedule('6247eee7-0000-4000-8000-000000000002', { name: 'Daily report' });
 
 let app: FastifyInstance;
 
@@ -164,9 +160,8 @@ async function buildApp(): Promise<FastifyInstance> {
 }
 
 beforeEach(async () => {
-  table.pairs = [];
   table.rows = [];
-  table.executed = [];
+  table.reads = [];
   table.tenants = [];
   table.databases = [];
   app = await buildApp();
@@ -176,62 +171,65 @@ afterEach(async () => {
   await app.close();
 });
 
-async function getChat(): Promise<{ status: number; body: { schedules: unknown[] } }> {
-  const res = await app.inject({ method: 'GET', url: '/v1/schedules/chat' });
+async function getUpcoming(): Promise<{ status: number; body: { schedules: unknown[] } }> {
+  const res = await app.inject({ method: 'GET', url: '/v1/schedules/upcoming' });
   return { status: res.statusCode, body: res.json() };
 }
 
-describe('GET /v1/schedules/chat', () => {
+/** The read's condition as Postgres receives it, its text flattened to one line. */
+function readCondition(): { sql: string; params: unknown[] } {
+  const query = new PgDialect().sqlToQuery(table.reads[0]?.where as SQL);
+  return { sql: query.sql.replace(/\s+/g, ' '), params: query.params };
+}
+
+describe('GET /v1/schedules/upcoming', () => {
   it("reads the requesting tenant's schema and the requesting space only", async () => {
-    await getChat();
+    await getUpcoming();
 
     expect(table.databases).toEqual([DATABASE]);
     expect(table.tenants).toEqual([TENANT]);
-    const query = new PgDialect().sqlToQuery(table.executed[0] as SQL);
-    expect(query.params).toContain(SPACE);
-    expect(query.sql).not.toContain(SPACE);
+    const { sql: text, params } = readCondition();
+    expect(params).toContain(SPACE);
+    expect(text).not.toContain(SPACE);
   });
 
-  it("answers { schedules } with each chain's newest renewal, newest arrival first, as rowToResponse maps it", async () => {
-    chain(shepherd, shepherdRenewal);
-    const daily = schedule('8247eee7-0000-4000-8000-000000000004', { name: 'Daily report' });
-    chain(daily);
+  it('asks for schedules whatever their creator, so an operator-created one is listed', async () => {
+    table.rows = [operatorShepherd, agentReport];
 
-    const { status, body } = await getChat();
+    const { status, body } = await getUpcoming();
 
+    const { sql: text } = readCondition();
+    expect(text).not.toContain('created_by_session_id');
+    expect(text).not.toContain('created_by');
+    expect(text).not.toContain('creator_user_id');
     expect(status).toBe(200);
     expect(body).toEqual({
-      schedules: [rowToResponse(daily), rowToResponse(shepherdRenewal)].map((row) =>
+      schedules: [rowToResponse(operatorShepherd), rowToResponse(agentReport)].map((row) =>
         JSON.parse(JSON.stringify(row)),
       ),
     });
   });
 
-  it('never answers with an expired one-shot', async () => {
-    chain(firedOneShot);
-    chain(shepherd, shepherdRenewal);
+  it('asks only for active schedules with a next firing ahead and no end behind', async () => {
+    await getUpcoming();
 
-    const { body } = await getChat();
-
-    const ids = body.schedules.map((row) => (row as { id: string }).id);
-    expect(ids).toEqual([shepherdRenewal.id]);
-    expect(ids).not.toContain(firedOneShot.id);
+    const { sql: text, params } = readCondition();
+    expect(text).toContain('"agent_schedules"."status" = $');
+    expect(params).toContain('active');
+    expect(text).toContain('"agent_schedules"."next_fire_at" > $');
+    expect(text).toMatch(
+      /\("agent_schedules"."expires_at" is null or "agent_schedules"."expires_at" > \$\d+\)/,
+    );
   });
 
-  it('leaves out a chain whose newest renewal will not fire again', async () => {
-    chain(shepherd);
-    chain(schedule('9247eee7-0000-4000-8000-000000000005', { status: 'paused' }));
-    chain(
-      schedule('a247eee7-0000-4000-8000-000000000006', {
-        expiresAt: new Date(Date.now() - MINUTE),
-      }),
-    );
-    chain(
-      schedule('b247eee7-0000-4000-8000-000000000007', {
-        nextFireAt: new Date(Date.now() - MINUTE),
-      }),
-    );
+  it('orders the soonest first and stops at the section limit', async () => {
+    await getUpcoming();
 
-    expect((await getChat()).body).toEqual({ schedules: [] });
+    const read = table.reads[0];
+    const order = read?.orderBy.map((column) =>
+      new PgDialect().sqlToQuery(column as SQL).sql.replace(/\s+/g, ' '),
+    );
+    expect(order?.[0]).toBe('"agent_schedules"."next_fire_at" asc');
+    expect(read?.limit).toBe(UPCOMING_SCHEDULE_LIST_LIMIT);
   });
 });
