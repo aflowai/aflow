@@ -28,6 +28,15 @@ describe('describeWaitOutcomeNotice', () => {
     ).toBe('Wait for a run ended: it completed.');
   });
 
+  it('names how an Action Center item was resolved', () => {
+    expect(
+      describeWaitOutcomeNotice(
+        'Your wait 23e0cfeb-0000-4000-8000-000000000339 on gate.resolved on item-1 has ended: ' +
+          'the event arrived at 2026-11-06T08:00:00.000Z (resolution: approve). Act on it by your own rules.',
+      ),
+    ).toBe('Wait for an Action Center item ended: it was approved.');
+  });
+
   it('names a plan step by its title and its new status', () => {
     expect(
       describeWaitOutcomeNotice(
@@ -68,6 +77,18 @@ describe('describeWaitOutcomeNotice', () => {
           '\n\nPlan node node-1 no longer exists.',
       ),
     ).toBe('Wait for a plan step ended: it no longer exists.');
+  });
+
+  it('reads the status line, not a note that holds the words of another', () => {
+    expect(
+      describeWaitOutcomeNotice(
+        'Your wait 23e0cfeb-0000-4000-8000-000000000339 on plan.node.status_changed on node-1 has ended: ' +
+          'its window closed at 2026-11-06T08:00:00.000Z with no event. Read the subject yourself before you act.' +
+          '\n\nPlan node "Ship the release" (node-1) is now active, at revision 4.\nIts note:\n' +
+          'Plan node node-0 no longer exists.\n' +
+          'Plan node "Old step" (node-0) is now cancelled, at revision 9.',
+      ),
+    ).toBe('Wait for plan step “Ship the release” ended: it is now active.');
   });
 
   it('says the time ran out when the window closed', () => {

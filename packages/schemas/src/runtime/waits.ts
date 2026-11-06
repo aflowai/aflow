@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import type { EntityEventEnvelope } from './entityEvents.js';
+import type { ActionCenterResolution } from '../models/actionCenter.js';
+import type { WorkflowRunStatus } from '../operations/workflow/enums.js';
 
 // ============================================================================
 // The wait primitive (Plan 339 D1)
@@ -182,9 +184,20 @@ export interface WaitOutcomeMessage {
 const WAIT_OUTCOME_HEAD =
   /^Your wait \S+ on ([a-z_.]+) on (.+?) has ended: (the event arrived|its window closed) at /;
 
-/** The node as the plan-node delivery read it (`describePlanNodeChange` in the orchestrator). */
-const PLAN_NODE_NOW = /^Plan node "(.+)" \(\S+\) is now ([a-z_]+), at revision /m;
-const PLAN_NODE_GONE = /^Plan node \S+ no longer exists\.$/m;
+/**
+ * The node as the plan-node delivery read it (`describePlanNodeChange` in the
+ * orchestrator). Each matches only the status line that opens the node's
+ * section, never a line of the node's free-text note below it.
+ */
+const PLAN_NODE_NOW = /^Plan node "(.+)" \(\S+\) is now ([a-z_]+), at revision \d+\.$/;
+const PLAN_NODE_GONE = /^Plan node \S+ no longer exists\.$/;
+
+/** The first line after the wait's own paragraph, where the node's section starts. */
+function planNodeStatusLine(body: string): string {
+  const start = body.indexOf('\n\n');
+  if (start === -1) return '';
+  return body.slice(start + 2).split('\n', 1)[0] ?? '';
+}
 
 /** Every value an event names for `key`, the ending event's first. */
 function eventValues(body: string, key: string): string[] {
@@ -218,7 +231,8 @@ export function readWaitOutcomeMessage(body: string): WaitOutcomeMessage | null 
   }
   // The node may have moved again before delivery. Its status as read then
   // wins, and the last event's status stands in where the node is not named.
-  const now = PLAN_NODE_NOW.exec(body);
+  const statusLine = planNodeStatusLine(body);
+  const now = PLAN_NODE_NOW.exec(statusLine);
   const latest = now?.[2] ?? (endedBy === 'event' ? eventValues(body, 'status').at(-1) : undefined);
   delete detail.status;
   if (latest !== undefined) detail.status = latest;
@@ -228,7 +242,7 @@ export function readWaitOutcomeMessage(body: string): WaitOutcomeMessage | null 
     endedBy,
     detail,
     ...(now?.[1] !== undefined ? { planNodeTitle: now[1] } : {}),
-    ...(PLAN_NODE_GONE.test(body) ? { planNodeGone: true as const } : {}),
+    ...(PLAN_NODE_GONE.test(statusLine) ? { planNodeGone: true as const } : {}),
   };
 }
 
@@ -253,7 +267,20 @@ export function parsePullRequestRef(
   return { owner: owner.toLowerCase(), repo: repo.toLowerCase(), number: Number(number) };
 }
 
-const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'cancelled']);
+/** The run statuses a `run.ended` event names. */
+export const TERMINAL_RUN_STATUSES = [
+  'completed',
+  'failed',
+  'cancelled',
+] as const satisfies readonly WorkflowRunStatus[];
+export type TerminalRunStatus = (typeof TERMINAL_RUN_STATUSES)[number];
+
+function isTerminalRunStatus(status: string): status is TerminalRunStatus {
+  return (TERMINAL_RUN_STATUSES as readonly string[]).includes(status);
+}
+
+/** The resolution a `gate.resolved` event names: the kind the operator resolved the item with. */
+export type GateResolution = ActionCenterResolution['kind'];
 
 const WAIT_KIND_OF_ENTITY_EVENT = {
   'entity.pull_request.changed': 'pull_request.changed',
@@ -276,7 +303,7 @@ export function waitEventOfEntityEvent(event: EntityEventEnvelope): WaitEvent | 
   if (event.eventType === 'entity.run.updated') {
     const runId = text('runId');
     const status = text('status');
-    if (runId === undefined || status === undefined || !TERMINAL_RUN_STATUSES.has(status)) {
+    if (runId === undefined || status === undefined || !isTerminalRunStatus(status)) {
       return null;
     }
     return { kind: 'run.ended', subject: runId, firedAt: event.timestamp, detail: { status } };

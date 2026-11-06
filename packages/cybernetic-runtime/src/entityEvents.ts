@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { appendEntityEvent } from '@aflow/redis';
-import type { PullRequestChange } from '@aflow/schemas';
+import type { GateResolution, PullRequestChange } from '@aflow/schemas';
 
 type RedisClient = Parameters<typeof appendEntityEvent>[0];
 
@@ -121,7 +121,7 @@ export async function emitPullRequestChanged(
 /** An Action Center item was resolved. */
 export async function emitGateResolved(
   redis: RedisClient | null | undefined,
-  params: { tenantId: string; spaceId: string; itemId: string; resolution: string },
+  params: { tenantId: string; spaceId: string; itemId: string; resolution: GateResolution },
 ): Promise<boolean> {
   return emitWaitKind(redis, {
     tenantId: params.tenantId,

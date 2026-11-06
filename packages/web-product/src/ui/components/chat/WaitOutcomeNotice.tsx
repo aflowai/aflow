@@ -1,6 +1,6 @@
 'use client';
 
-import { useId, useState } from 'react';
+import { useId, useRef, useState, type KeyboardEvent } from 'react';
 import { Icon } from '@aflow/design-system';
 import { describeWaitOutcomeNotice } from './waitOutcomeLine.js';
 
@@ -12,6 +12,28 @@ import { describeWaitOutcomeNotice } from './waitOutcomeLine.js';
 export function WaitOutcomeNotice({ body, timestamp }: { body: string; timestamp: string }) {
   const [expanded, setExpanded] = useState(false);
   const bodyId = useId();
+  const spaceHeld = useRef(false);
+  const toggle = () => {
+    setExpanded((prev) => !prev);
+  };
+  // The keys toggle the notice here, as a button's activation does, and
+  // cancel that activation, so a key toggles it once in every browser.
+  const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      if (!event.repeat) toggle();
+    } else if (event.key === ' ') {
+      event.preventDefault();
+      spaceHeld.current = true;
+    }
+  };
+  const onKeyUp = (event: KeyboardEvent<HTMLButtonElement>) => {
+    if (event.key !== ' ') return;
+    event.preventDefault();
+    if (!spaceHeld.current) return;
+    spaceHeld.current = false;
+    toggle();
+  };
   return (
     <div className="chat-wait-notice" data-wait-notice={expanded ? 'expanded' : 'folded'}>
       <button
@@ -19,8 +41,11 @@ export function WaitOutcomeNotice({ body, timestamp }: { body: string; timestamp
         className="chat-wait-notice__toggle"
         aria-expanded={expanded}
         aria-controls={bodyId}
-        onClick={() => {
-          setExpanded((prev) => !prev);
+        onClick={toggle}
+        onKeyDown={onKeyDown}
+        onKeyUp={onKeyUp}
+        onBlur={() => {
+          spaceHeld.current = false;
         }}
       >
         <Icon name="clock" size="xs" />

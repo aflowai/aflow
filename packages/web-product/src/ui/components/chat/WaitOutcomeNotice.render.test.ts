@@ -78,23 +78,21 @@ function body(): HTMLElement {
 }
 
 /**
- * Press a key on the focused element. jsdom does not run a button's keyboard
- * activation, so this runs it as the HTML standard does: Enter clicks on
- * keydown, Space on keyup, and a cancelled key clicks nothing.
+ * Press a key on the focused element: its keydown, then its keyup, and no
+ * click. jsdom does not run a button's keyboard activation, so the notice
+ * toggles here only where its own key handlers toggle it.
  */
 function press(key: 'Enter' | ' '): void {
   const target = document.activeElement;
   if (!(target instanceof HTMLButtonElement)) throw new Error('no button has focus');
+  const clicks = vi.fn();
+  target.addEventListener('click', clicks);
   act(() => {
-    const down = target.dispatchEvent(
-      new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }),
-    );
-    if (key === 'Enter' && down) target.click();
-    const up = target.dispatchEvent(
-      new KeyboardEvent('keyup', { key, bubbles: true, cancelable: true }),
-    );
-    if (key === ' ' && down && up) target.click();
+    target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+    target.dispatchEvent(new KeyboardEvent('keyup', { key, bubbles: true, cancelable: true }));
   });
+  target.removeEventListener('click', clicks);
+  expect(clicks).not.toHaveBeenCalled();
 }
 
 describe('a wait outcome in the chat', () => {
@@ -151,6 +149,36 @@ describe('a wait outcome in the chat', () => {
     expect(toggle().getAttribute('aria-expanded')).toBe('true');
 
     press('Enter');
+    expect(toggle().getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('cancels the button’s own activation, so a browser that clicks on the key toggles it once', () => {
+    const button = toggle();
+    button.focus();
+    const cancelled = (type: 'keydown' | 'keyup', key: string) => {
+      let event: KeyboardEvent | undefined;
+      act(() => {
+        event = new KeyboardEvent(type, { key, bubbles: true, cancelable: true });
+        button.dispatchEvent(event);
+      });
+      return event?.defaultPrevented;
+    };
+
+    expect(cancelled('keydown', 'Enter')).toBe(true);
+    expect(cancelled('keyup', 'Enter')).toBe(false);
+    expect(cancelled('keydown', ' ')).toBe(true);
+    expect(cancelled('keyup', ' ')).toBe(true);
+    expect(toggle().getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('does not toggle on a Space released without its press on the button', () => {
+    toggle().focus();
+    act(() => {
+      toggle().dispatchEvent(
+        new KeyboardEvent('keyup', { key: ' ', bubbles: true, cancelable: true }),
+      );
+    });
+
     expect(toggle().getAttribute('aria-expanded')).toBe('false');
   });
 });

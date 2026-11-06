@@ -100,10 +100,10 @@ describe('readWaitOutcomeMessage reads what describeWaitOutcome writes', () => {
   it('reads how a gate was resolved', () => {
     const words = describeWaitOutcome(registration('gate.resolved', 'item-1'), {
       endedBy: 'event',
-      event: event('gate.resolved', 'item-1', { resolution: 'approved' }),
+      event: event('gate.resolved', 'item-1', { resolution: 'approve' }),
     });
 
-    expect(readWaitOutcomeMessage(words)?.detail).toEqual({ resolution: 'approved' });
+    expect(readWaitOutcomeMessage(words)?.detail).toEqual({ resolution: 'approve' });
   });
 
   it('reads a window that closed with no event', () => {

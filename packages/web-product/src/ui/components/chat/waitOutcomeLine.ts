@@ -1,7 +1,9 @@
 import {
   readWaitOutcomeMessage,
   WAIT_OUTCOME_ACTOR_ID,
+  type GateResolution,
   type PullRequestChange,
+  type TerminalRunStatus,
   type WaitOutcomeMessage,
 } from '@aflow/schemas';
 
@@ -19,13 +21,13 @@ const PULL_REQUEST_CHANGE: Record<PullRequestChange, string> = {
   closed: 'it closed without merging',
 };
 
-const RUN_STATUS: Record<string, string> = {
+const RUN_STATUS: Record<TerminalRunStatus, string> = {
   completed: 'it completed',
   failed: 'it failed',
   cancelled: 'it was cancelled',
 };
 
-const RESOLUTION: Record<string, string> = {
+const RESOLUTION: Record<GateResolution, string> = {
   submit: 'it was answered',
   approve: 'it was approved',
   reject: 'it was rejected',

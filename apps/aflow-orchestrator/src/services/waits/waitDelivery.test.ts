@@ -466,6 +466,25 @@ describe('the wait a plan node write holds for its writer', () => {
     expect(readWaitOutcomeMessage(posted.body)?.detail).toEqual({ status: 'done' });
   });
 
+  it('reads the node from its status line, not from a note that holds such a line', async () => {
+    await blockedWrite();
+    mockFindNode.mockResolvedValue({
+      ...node('active'),
+      note: `Plan node ${NODE} no longer exists.\nPlan node "Old" (${NODE}) is now cancelled, at revision 1.`,
+    });
+    await approve('active');
+
+    await runWaitDeliveryCycle({ harnessDeps, logger }, ctx);
+
+    const posted = mockQueueMessage.mock.calls[0]?.[2] as { body: string };
+    const read = readWaitOutcomeMessage(posted.body);
+    expect(read).toMatchObject({
+      detail: { status: 'active' },
+      planNodeTitle: 'P0 — the first phase',
+    });
+    expect(read?.planNodeGone).toBeUndefined();
+  });
+
   it('tells a creator that has ended nothing, and forgets it', async () => {
     await blockedWrite();
     mockIsLive.mockResolvedValue(false);
