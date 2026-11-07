@@ -28,6 +28,7 @@ function event(
     metadata?: Record<string, unknown>;
     usage?: Record<string, unknown>;
     exec?: string;
+    stepType?: string;
   } = {},
 ): SessionEvent {
   seq += 1;
@@ -39,7 +40,7 @@ function event(
     timestamp: new Date(1_700_000_000_000 + seq * 1000).toISOString(),
     sequenceNumber: seq,
     eventVersion: 1,
-    data: { stepId, stepType: 'ai' },
+    data: { stepId, stepType: extra.stepType ?? 'ai' },
     metadata: { stepName: stepId, operationId, ...(extra.metadata ?? {}) },
     ...(extra.usage ? { usage: extra.usage } : {}),
   } as unknown as SessionEvent;
@@ -139,6 +140,38 @@ describe('the turn fold', () => {
     const status = container.querySelector('[data-turn-tools-fold] [data-turn-tools-status]');
     expect(status?.getAttribute('data-turn-tools-status')).toBe('paused');
     expect(status?.textContent).toBe('Awaiting input');
+  });
+
+  it('shows a tool call waiting on its executor on the closed fold line', () => {
+    render(true, [
+      ...turnWithTools(['StepSucceeded', 'StepSucceeded']).slice(0, 4),
+      event('StepScheduled', 'shell', 'host.shell.run', { stepType: 'host' }),
+      event('StepWaitingOnExecutor', 'shell', 'host.shell.run', { stepType: 'host' }),
+    ]);
+    const status = container.querySelector('[data-turn-tools-fold] [data-turn-tools-status]');
+    expect(status?.getAttribute('data-turn-tools-status')).toBe('waiting_on_executor');
+    expect(status?.textContent).toBe('Waiting for the host executor');
+  });
+
+  it('shows a retrying tool call on the closed fold line', () => {
+    render(true, [
+      ...turnWithTools(['StepSucceeded', 'StepSucceeded']).slice(0, 4),
+      event('StepScheduled', 'write', 'memory.write'),
+      event('StepFailed', 'write', 'memory.write', { metadata: { willRetry: true } }),
+    ]);
+    const status = container.querySelector('[data-turn-tools-fold] [data-turn-tools-status]');
+    expect(status?.getAttribute('data-turn-tools-status')).toBe('retrying');
+    expect(status?.textContent).toBe('Retrying…');
+  });
+
+  it('shows a paused tool call over one waiting on its executor', () => {
+    render(true, [
+      ...turnWithTools(['StepPaused', 'StepSucceeded']).slice(0, 4),
+      event('StepScheduled', 'shell', 'host.shell.run', { stepType: 'host' }),
+      event('StepWaitingOnExecutor', 'shell', 'host.shell.run', { stepType: 'host' }),
+    ]);
+    const status = container.querySelector('[data-turn-tools-fold] [data-turn-tools-status]');
+    expect(status?.getAttribute('data-turn-tools-status')).toBe('paused');
   });
 
   it('shows no status on the fold line of a turn whose tool calls are all clear', () => {

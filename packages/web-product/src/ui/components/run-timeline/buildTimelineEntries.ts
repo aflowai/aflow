@@ -568,10 +568,25 @@ export function turnToolsSummary(turn: StepGroup, tools: readonly StepGroup[]): 
 }
 
 /**
- * The tool row whose status the closed fold shows, so a failed or paused call
- * stays visible at a glance. A failed call outranks a paused one. A turn whose
- * calls are all clear has none.
+ * The statuses a closed fold shows, highest first. A failed call outranks a
+ * paused one, which outranks a call that is retrying or waiting on its executor.
+ */
+const TURN_TOOLS_FLAG_RANK: ReadonlyArray<StepGroup['status']> = [
+  'failed',
+  'paused',
+  'retrying',
+  'waiting_on_executor',
+];
+
+/**
+ * The tool row whose status the closed fold shows, so a call that failed,
+ * paused or stalled stays visible at a glance. A turn whose calls are all
+ * clear has none.
  */
 export function turnToolsFlagged(tools: readonly StepGroup[]): StepGroup | undefined {
-  return tools.find((g) => g.status === 'failed') ?? tools.find((g) => g.status === 'paused');
+  for (const status of TURN_TOOLS_FLAG_RANK) {
+    const flagged = tools.find((g) => g.status === status);
+    if (flagged) return flagged;
+  }
+  return undefined;
 }

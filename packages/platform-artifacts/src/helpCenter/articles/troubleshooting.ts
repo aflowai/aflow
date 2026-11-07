@@ -13,7 +13,7 @@ The chat ends with a card showing the error and, when known, **Step:** with the 
 
 - **Retry** runs the failed session again.
 - **New run** starts a fresh conversation.
-- **Inspect** opens the Workbench. Its **Timeline** tab lists every step of the conversation with its result. Each agent turn folds its tool calls under one line: choose it to show them. A folded line shows **Failed** where one of its tool calls failed.
+- **Inspect** opens the Workbench. Its **Timeline** tab lists every step of the conversation with its result. Each agent turn folds its tool calls under one line: choose it to show them. A folded line shows **Failed** where one of its tool calls failed. Where a call waits on an executor that has not taken it, the line names the wait, such as **Waiting for the host executor**.
 
 If the error is about a model key, a banner above the composer names the provider: add the key, or choose a model from a provider you already have.
 

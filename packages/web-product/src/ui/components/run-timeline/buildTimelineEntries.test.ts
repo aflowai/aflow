@@ -224,6 +224,22 @@ describe('the fold under each agent turn', () => {
     expect(turnToolsFlagged([paused, failed])?.stepId).toBe('draft');
   });
 
+  it('flags a call retrying or waiting on its executor below a paused or failed one', () => {
+    const entries = twoTurns();
+    const [search, draft] = turnToolGroups(entries).get(stepGroupKey(firstTurn(entries))) ?? [];
+    if (!search || !draft) throw new Error('expected two tool rows');
+    const waiting = { ...search, status: 'waiting_on_executor' as const };
+    const retrying = { ...search, status: 'retrying' as const };
+    expect(turnToolsFlagged([waiting, draft])?.status).toBe('waiting_on_executor');
+    expect(turnToolsFlagged([retrying, draft])?.status).toBe('retrying');
+    expect(turnToolsFlagged([waiting, { ...draft, status: 'paused' as const }])?.stepId).toBe(
+      'draft',
+    );
+    expect(turnToolsFlagged([retrying, { ...draft, status: 'failed' as const }])?.stepId).toBe(
+      'draft',
+    );
+  });
+
   it('leaves a tool row whose turn the history cut in no fold', () => {
     expect(turnToolGroups(twoTurns().slice(1)).size).toBe(0);
   });
