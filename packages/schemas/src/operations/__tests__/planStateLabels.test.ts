@@ -14,7 +14,7 @@ import {
 describe('PLAN_STATE_LABELS', () => {
   it('names each state as D5’s table does', () => {
     expect(PLAN_STATE_LABELS.column).toEqual({
-      needs_you: 'Pending',
+      needs_you: 'Pending approval',
       in_flight: 'Running',
       up_next: 'Queued',
       done: 'Done',
