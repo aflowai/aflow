@@ -113,8 +113,8 @@ function ExecutionList({
 /**
  * One turn's tool rows behind a single line that counts them and says what
  * the turn and its tools spent. Closed, the line also shows the status of a
- * call that failed, paused, is retrying or waits on its executor, as its row would. Open, it shows the rows as the flat
- * list shows them.
+ * call that failed, paused, is retrying or waits on its executor, as its row
+ * would. Open, it shows the rows as the flat list shows them.
  */
 function TurnToolsFold({ turn, tools }: { turn: StepGroup; tools: StepGroup[] }) {
   const [expanded, setExpanded] = useState(false);

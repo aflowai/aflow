@@ -988,7 +988,7 @@ describe('the More fold, the Plan section and the Skills count', () => {
     expect(inMore('Integrations')).toBe(false);
   });
 
-  it('keeps a section open under More there when its header signal turns on, until the next mount', async () => {
+  it('keeps a section under More while it is open there, even when its header signal turns on', async () => {
     net.plan = {
       roots: [],
       lanes: {
