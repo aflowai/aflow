@@ -53,11 +53,14 @@ export function createPausedStepSource(deps: PausedStepSourceDeps): ActionCenter
 
     async listOpen(scope: ActionCenterScope): Promise<ActionCenterSourceItem[]> {
       const rows = await listPausedSessions(deps, scope);
+      const payloads = await mapWithConcurrency(rows, PAYLOAD_READ_CONCURRENCY, (row) =>
+        loadRequestedInputPayload(deps, row.requestedInputRef),
+      );
       const items: ActionCenterSourceItem[] = [];
-      for (const row of rows) {
-        const item = await buildItemFromSession(deps, scope, row);
+      rows.forEach((row, i) => {
+        const item = buildItemFromPayload(scope, row, payloads[i] ?? null);
         if (item) items.push(item);
-      }
+      });
       return items;
     },
 
@@ -212,8 +215,8 @@ function isHarnessRoutedRun(snapshot: unknown): boolean {
 }
 
 /**
- * Cap on paused-session rows pulled per list call. Set conservatively
- * higher than the route's per-request `limit` (default 200, max 500) so
+ * Cap on paused-session rows pulled per list call. Set to the route's
+ * maximum per-request `limit` (default 200, max 500), above the default, so
  * the in-memory sort by `requestedAt` (done by the aggregator after this
  * source returns) sees a representative window.
  *
@@ -226,8 +229,32 @@ function isHarnessRoutedRun(snapshot: unknown): boolean {
  * either (a) over-fetch + sort in memory, or (b) add a `paused_at`
  * column to `sessions`. (a) is the immediate, no-migration fix; (b) is
  * a follow-up.
+ *
+ * Every row costs one payload read, so this is also the hard cap on payload
+ * reads per list: one page can never show more paused items than it.
  */
-const PAUSED_SESSION_QUERY_CAP = 1_000;
+export const PAUSED_SESSION_QUERY_CAP = 500;
+
+/** Payload reads in flight at once while the list is built. */
+export const PAYLOAD_READ_CONCURRENCY = 16;
+
+/** Map in input order, with at most `concurrency` calls of `fn` pending. */
+async function mapWithConcurrency<T, R>(
+  inputs: readonly T[],
+  concurrency: number,
+  fn: (input: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(inputs.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < inputs.length) {
+      const index = next++;
+      results[index] = await fn(inputs[index]!);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, inputs.length) }, worker));
+  return results;
+}
 
 async function listPausedSessions(
   deps: ActionCenterSourceDeps,
@@ -363,9 +390,16 @@ async function buildItemFromSession(
   row: PausedSessionSlim,
 ): Promise<ActionCenterSourceItem | null> {
   if (!row.currentStepExecutionId || !row.requestedInputRef) return null;
-
   const payload = await loadRequestedInputPayload(deps, row.requestedInputRef);
-  if (!payload) return null;
+  return buildItemFromPayload(scope, row, payload);
+}
+
+function buildItemFromPayload(
+  scope: ActionCenterScope,
+  row: PausedSessionSlim,
+  payload: Record<string, unknown> | null,
+): ActionCenterSourceItem | null {
+  if (!row.currentStepExecutionId || !row.requestedInputRef || !payload) return null;
 
   // Discriminate by payload.kind — set by the user executor handler
   // (apps/aflow-executor-user/src/handlers/userInputHandler.ts) for input/
