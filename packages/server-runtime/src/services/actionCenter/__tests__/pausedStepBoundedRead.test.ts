@@ -80,7 +80,14 @@ interface Harness {
   maxInFlight: () => number;
 }
 
-function harness(stored: FakeSessionRow[], readDelayMs = 0): Harness {
+/** The route's maximum `limit`: the most rows one page can show. */
+const ROUTE_MAX_LIMIT = 500;
+
+function harness(
+  stored: FakeSessionRow[],
+  readDelayMs = 0,
+  requestedAtByRef: ReadonlyMap<string, string> = new Map(),
+): Harness {
   const sqlLimits: number[] = [];
   mockWithTenantSchema.mockImplementation(async (_db, _ctx, cb: (tx: unknown) => unknown) => {
     const builder = {
@@ -108,7 +115,13 @@ function harness(stored: FakeSessionRow[], readDelayMs = 0): Harness {
       else await Promise.resolve();
       inFlight--;
       const i = Number((ref as string).slice('ref-'.length));
-      return { kind: kindOf(i), title: `Pause ${i}`, prompt: `Prompt ${i}` } as never;
+      const requestedAt = requestedAtByRef.get(ref as string);
+      return {
+        kind: kindOf(i),
+        title: `Pause ${i}`,
+        prompt: `Prompt ${i}`,
+        ...(requestedAt ? { requestedAt } : {}),
+      } as never;
     },
   };
 
@@ -148,6 +161,24 @@ describe('pausedStepSource — bounded payload read per open', () => {
       expect(item.kind).toBe(kindOf(i) === 'input' ? 'human_input' : 'human_approval');
       expect(item.title).toBe(`Pause ${i}`);
     }
+  });
+
+  it('reads a recent pause on an early session ordered beyond the first page of rows', async () => {
+    const stored = rows(PAUSED_SESSION_QUERY_CAP);
+    // Rows are ordered by startedAt descending, so this session started early.
+    const early = ROUTE_MAX_LIMIT + 151;
+    expect(kindOf(early)).toBe('input');
+    const recent = new Date(Date.UTC(2026, 5, 1)).toISOString();
+    const h = harness(stored, 0, new Map([[`ref-${early}`, recent]]));
+
+    const items = await createPausedStepSource(h.deps).listOpen(SCOPE);
+
+    expect(PAUSED_SESSION_QUERY_CAP).toBeGreaterThan(ROUTE_MAX_LIMIT);
+    expect(h.reads).toContain(`ref-${early}`);
+    const item = items.find((i) => i.id === `step:step-${early}`);
+    expect(item?.requestedAt).toBe(recent);
+    const newest = [...items].sort((a, b) => (a.requestedAt < b.requestedAt ? 1 : -1))[0];
+    expect(newest?.id).toBe(`step:step-${early}`);
   });
 
   it('keeps no more than the concurrency bound of payload reads in flight', async () => {

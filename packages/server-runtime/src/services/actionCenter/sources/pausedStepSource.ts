@@ -215,8 +215,8 @@ function isHarnessRoutedRun(snapshot: unknown): boolean {
 }
 
 /**
- * Cap on paused-session rows pulled per list call. Set to the route's
- * maximum per-request `limit` (default 200, max 500), above the default, so
+ * Cap on paused-session rows pulled per list call. Set conservatively
+ * higher than the route's per-request `limit` (default 200, max 500) so
  * the in-memory sort by `requestedAt` (done by the aggregator after this
  * source returns) sees a representative window.
  *
@@ -230,10 +230,11 @@ function isHarnessRoutedRun(snapshot: unknown): boolean {
  * column to `sessions`. (a) is the immediate, no-migration fix; (b) is
  * a follow-up.
  *
- * Every row costs one payload read, so this is also the hard cap on payload
- * reads per list: one page can never show more paused items than it.
+ * Every admitted row costs one payload read, so this cap bounds the payload
+ * reads per open. It does not bound the visible list: the aggregator sorts
+ * the admitted rows by `requestedAt` and the route's `limit` picks the page.
  */
-export const PAUSED_SESSION_QUERY_CAP = 500;
+export const PAUSED_SESSION_QUERY_CAP = 1_000;
 
 /** Payload reads in flight at once while the list is built. */
 export const PAYLOAD_READ_CONCURRENCY = 16;
@@ -284,7 +285,7 @@ async function listPausedSessions(
       )
       // `startedAt` is a coarse proxy for pause recency (see PAUSED_SESSION_QUERY_CAP);
       // the authoritative `requestedAt` lives in each row's payload and the
-      // aggregator re-sorts on it after buildItemFromSession reads it.
+      // aggregator re-sorts on it after listOpen reads every row's payload.
       .orderBy(desc(sessions.startedAt))
       .limit(PAUSED_SESSION_QUERY_CAP);
     return rows;
