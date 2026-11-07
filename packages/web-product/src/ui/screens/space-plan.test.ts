@@ -1171,7 +1171,7 @@ describe('SpacePlanPage — the rail', () => {
     await click(card(DECISION));
     expect(
       [...rail().querySelectorAll('[data-badge]')].map((b) => b.textContent).slice(0, 2),
-    ).toEqual(['Pending', 'Decision']);
+    ).toEqual(['Pending approval', 'Decision']);
   });
 
   it('pages every run of the step under All runs', async () => {
@@ -2868,7 +2868,7 @@ describe('SpacePlanPage — the overview across plans (Plan 332 P4)', () => {
     expect(laneRowIds('needs_you')).toEqual([LANE_STOP, DECISION, LANE_STRANDED]);
     expect(laneRowIds('in_flight')).toEqual([BOARD]);
     expect(laneRowIds('up_next')).toEqual([ARTICLE]);
-    expect(lane('needs_you').textContent).toContain('Pending · 57');
+    expect(lane('needs_you').textContent).toContain('Pending approval · 57');
 
     const stop = laneRow(LANE_STOP);
     expect(stop.querySelector('[data-plan-lane-plan]')?.textContent).toBe('Plan 322');
@@ -2943,7 +2943,7 @@ describe('SpacePlanPage — the overview across plans (Plan 332 P4)', () => {
       'The lanes read the first 2000 steps across plans, closed ones included; some may be missing',
     );
     // A lane cut short never reads as complete: neither its count nor its emptiness.
-    expect(lane('needs_you').textContent).toContain('Pending · 0+');
+    expect(lane('needs_you').textContent).toContain('Pending approval · 0+');
     expect(lane('needs_you').textContent).toContain('None among the steps read');
     expect(lane('needs_you').textContent).not.toContain('Nothing pending');
   });
@@ -2961,7 +2961,7 @@ describe('SpacePlanPage — the overview across plans (Plan 332 P4)', () => {
     });
 
     expect(container.querySelector('[data-plan-lanes-truncated]')).toBe(null);
-    expect(lane('needs_you').textContent).toContain('Pending · 0');
+    expect(lane('needs_you').textContent).toContain('Pending approval · 0');
     expect(lane('needs_you').textContent).not.toContain('0+');
     expect(lane('needs_you').textContent).toContain('Nothing pending');
   });
@@ -2988,7 +2988,7 @@ describe('SpacePlanPage — the overview across plans (Plan 332 P4)', () => {
     expect(laneRow(LANE_STOP).getAttribute('aria-current')).toBe('true');
     expect(container.querySelector('[data-plan-overview]')).not.toBe(null);
     expect([...rail().querySelectorAll('[data-badge]')].map((b) => b.textContent)).toEqual([
-      'Pending',
+      'Pending approval',
       'Approval',
     ]);
     expect(rail().querySelector('[data-plan-rail-phase]')?.textContent).toBe('P3');
@@ -3141,7 +3141,7 @@ describe('SpacePlanPage — state as orbs, and motion (Plan 332 P7)', () => {
     };
     const neutral = 'var(--color-surface-2)';
     const running = 'var(--color-status-running-bg)';
-    expect(read(DECISION)).toEqual(['var(--color-status-paused-bg)', 'Pending']);
+    expect(read(DECISION)).toEqual(['var(--color-status-paused-bg)', 'Pending approval']);
     expect(card(DECISION).textContent).toContain('Decision');
     // A run on the step itself, and one on a step under it, both read running and carry the ring.
     expect(read(BOARD)).toEqual([running, 'Running']);
@@ -3158,12 +3158,28 @@ describe('SpacePlanPage — state as orbs, and motion (Plan 332 P7)', () => {
     expect(container.querySelector('[data-plan-board] [data-plan-orb]')).toBe(null);
   });
 
+  it('labels the first three columns Pending approval, Running and Queued (Plan 338 Q9)', async () => {
+    await render();
+
+    const named = ['needs_you', 'in_flight', 'up_next'].map((id) => [
+      column(id).getAttribute('aria-label'),
+      column(id)
+        .querySelector('[data-plan-column-header]')
+        ?.getAttribute('data-plan-column-header'),
+    ]);
+    expect(named).toEqual([
+      ['Pending approval', 'Pending approval'],
+      ['Running', 'Running'],
+      ['Queued', 'Queued'],
+    ]);
+  });
+
   it('reads the rail’s state by its orb and its words', async () => {
     await render();
 
     await click(card(DECISION));
     expect(orbKind(rail())).toBe('paused');
-    expect(rail().querySelector('[data-badge]')?.textContent).toBe('Pending');
+    expect(rail().querySelector('[data-badge]')?.textContent).toBe('Pending approval');
 
     await click(card(LANDED));
     expect(orbKind(rail())).toBe('completed');

@@ -10,7 +10,7 @@ import type { PlanBoardColumn, PlanNeedsYouReason } from './schemas.js';
 export const PLAN_STATE_LABELS = {
   /** A board column, and the overview lane of the same id. */
   column: {
-    needs_you: 'Pending',
+    needs_you: 'Pending approval',
     in_flight: 'Running',
     up_next: 'Queued',
     done: 'Done',
