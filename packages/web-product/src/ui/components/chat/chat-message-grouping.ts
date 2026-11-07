@@ -31,8 +31,23 @@ function isWorkflowRunDetailOutput(data: unknown): boolean {
   );
 }
 
-/** Check whether a message tagged `isInterim` is actually safe to collapse. */
+/**
+ * Verdicts by message identity. The run-view reducer keeps a message's object
+ * for as long as it is unchanged, so a live token frame or a page of older
+ * history classifies only the messages it touched.
+ */
+const collapsibleVerdicts = new WeakMap<Message, boolean>();
+
 function isCollapsibleInterim(msg: Message): boolean {
+  const known = collapsibleVerdicts.get(msg);
+  if (known !== undefined) return known;
+  const verdict = classifyCollapsibleInterim(msg);
+  collapsibleVerdicts.set(msg, verdict);
+  return verdict;
+}
+
+/** Check whether a message tagged `isInterim` is actually safe to collapse. */
+function classifyCollapsibleInterim(msg: Message): boolean {
   if (!msg.isInterim) return false;
   // Agent messages communicate progress/pivots — always show inline.
   if (msg.id.startsWith('agent-msg-')) return false;
@@ -268,5 +283,55 @@ function annotateClusters(items: RenderItem[]): RenderItem[] {
     const showSubflowHeader = Boolean(src) && src !== lastSubflowSource;
     lastSubflowSource = src;
     return { ...ri, showSubflowHeader };
+  });
+}
+
+function renderItemKey(ri: RenderItem): string {
+  switch (ri.kind) {
+    case 'message':
+      return `message:${ri.message.id}`;
+    case 'run-separator':
+      return `separator:${ri.item.id}`;
+    case 'workflow_run_surface':
+      return `surface:${ri.runId}:${ri.anchorStepExecutionId ?? ''}`;
+    case 'interim-group':
+      return `group:${ri.id}`;
+    case 'inline_artifact':
+    case 'inline_surface':
+    case 'inline_applet':
+      return `${ri.kind}:${ri.itemId}`;
+  }
+}
+
+function sameField(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+  return a.every((value, i) => value === b[i]);
+}
+
+function sameRenderItem(a: RenderItem, b: RenderItem): boolean {
+  const left = a as Record<string, unknown>;
+  const right = b as Record<string, unknown>;
+  const keys = Object.keys(left);
+  if (keys.length !== Object.keys(right).length) return false;
+  return keys.every((key) => sameField(left[key], right[key]));
+}
+
+/**
+ * `next`, holding the previous object for every item whose fields are the same
+ * values. Grouping builds new items, and new arrays inside interim groups, on
+ * every pass. Reusing the unchanged ones keeps the props of the memoized rows
+ * they feed equal by identity.
+ */
+export function reuseUnchangedRenderItems(
+  previous: readonly RenderItem[],
+  next: RenderItem[],
+): RenderItem[] {
+  if (previous.length === 0) return next;
+  const held = new Map<string, RenderItem>();
+  for (const ri of previous) held.set(renderItemKey(ri), ri);
+  return next.map((ri) => {
+    const prior = held.get(renderItemKey(ri));
+    return prior !== undefined && sameRenderItem(prior, ri) ? prior : ri;
   });
 }
