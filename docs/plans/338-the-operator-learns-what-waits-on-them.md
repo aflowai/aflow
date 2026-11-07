@@ -46,7 +46,7 @@
 
 - Does a stranded step, open under a closed parent, become an item? Recommended: no. Approving it changes nothing (Plan 332 §1). The Plan page keeps it under its own reason.
 - Does the attention block list items that belong to another conversation? Recommended: yes, as titles and ids to point at. The Helmsman only points, and pointing resolves nothing.
-- Does the Workbench remember its state per space or per browser? Settled in D3. The dock's fold stays with its conversation in this browser. Which sections are open is kept per space for the page session, and a reload loses it. D3 says why not in `localStorage`.
+- Does the Workbench remember its state per space or per browser? Recommended: per browser, in `localStorage`, and per space where the record is keyed by space. Settled in D3. `aflow.chat.workbenchCollapsed` keeps the dock's fold with its conversation in this browser. `aflow.workbench.heldSections` keeps, per space, which sections have held content, so a section that has held content stays out of **More**. Which sections are open is kept per space for the page session, and a reload loses it. D3 says why that record stays out of `localStorage`.
 - Does the chat resume a conversation that another member of the space opened? Recommended: no. It resumes only the reader's own.
 
 **Not done on purpose**
