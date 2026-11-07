@@ -52,14 +52,87 @@ function renderPinnedStateForSummarizer(pinned: PinnedState): string {
 // Message serialization for summarizer input
 // ============================================================================
 
+/** One message of the compaction range, with the turn it was sent in. */
+export interface TranscriptEntry {
+  turnNumber: number;
+  sourceKind?: string;
+  message: AiMessageV1;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function textOf(value: unknown, fallback: string): string {
+  return typeof value === 'string' && value.length > 0 ? value : fallback;
+}
+
 /**
- * Serialize messages into a readable transcript for the summarizer.
- * Preserves $ref paths, error details, and key metadata.
+ * A tool result as the summarizer needs it: which tool, how it ended, where
+ * the full result can be read again, and what the agent was shown. The
+ * envelope's bookkeeping fields stay out — pretty-printed, they outweighed
+ * the content and buried it.
  */
-function serializeMessagesForSummarizer(messages: AiMessageV1[]): string {
+function renderToolResult(envelope: Record<string, unknown>): string {
+  const header = [
+    `RESULT ${textOf(envelope['toolName'], 'tool')}`,
+    textOf(envelope['status'], 'unknown'),
+  ];
+  if (typeof envelope['outputPath'] === 'string') {
+    header.push(`re-readable at ${envelope['outputPath']}/data`);
+  }
+  if (typeof envelope['outputRef'] === 'string') {
+    header.push(`$ref ${envelope['outputRef']}`);
+  }
+  const lines = [`(${header.join(' · ')})`];
+  const error = envelope['error'];
+  if (isRecord(error)) {
+    lines.push(`error: ${textOf(error['message'], textOf(error['error'], 'unknown'))}`);
+  }
+  const wrote = envelope['wroteVariables'];
+  if (Array.isArray(wrote) && wrote.length > 0) {
+    const keys = wrote.flatMap((v) => (isRecord(v) ? [textOf(v['variableKey'], '?')] : []));
+    lines.push(`wrote: ${keys.map((k) => `state.${k}`).join(', ')}`);
+  }
+  if (typeof envelope['summary'] === 'string' && envelope['summary'].length > 0) {
+    lines.push(envelope['summary']);
+  }
+  return lines.join('\n');
+}
+
+/**
+ * An assistant decision without what the transcript already shows: its
+ * message is the text part, and its calls are the tool-call lines.
+ */
+function renderDecision(json: Record<string, unknown>): string | undefined {
+  const { message: _message, calls: _calls, args: _args, toolId: _toolId, ...rest } = json;
+  const keys = Object.keys(rest);
+  if (keys.length === 0 || (keys.length === 1 && keys[0] === 'action')) {
+    return typeof rest['action'] === 'string' ? `(decision: ${rest['action']})` : undefined;
+  }
+  return `(decision: ${JSON.stringify(rest)})`;
+}
+
+/**
+ * Serialize the range into a turn-labelled transcript for the summarizer.
+ * Preserves $ref paths, re-read paths, error details and key metadata, and
+ * marks clear-to-ref notes as stubs, so the summary can say what was read,
+ * what was decided and what is still pending.
+ */
+function serializeTranscript(entries: readonly TranscriptEntry[]): string {
   const lines: string[] = [];
-  for (const msg of messages) {
-    const roleLabel = msg.role.toUpperCase();
+  let lastTurn: number | undefined;
+  for (const { turnNumber, sourceKind, message: msg } of entries) {
+    if (turnNumber !== lastTurn) {
+      lines.push(`=== Turn ${String(turnNumber)} ===`);
+      lastTurn = turnNumber;
+    }
+    const roleLabel =
+      sourceKind === 'cleared_summary'
+        ? 'CLEARED RESULT STUB'
+        : msg.role === 'tool'
+          ? 'TOOL'
+          : msg.role.toUpperCase();
     const prefix = msg.name ? `[${roleLabel}: ${msg.name}]` : `[${roleLabel}]`;
 
     const contentParts: string[] = [];
@@ -67,7 +140,15 @@ function serializeMessagesForSummarizer(messages: AiMessageV1[]): string {
       if (part.kind === 'text') {
         contentParts.push(part.text);
       } else if (part.kind === 'json') {
-        contentParts.push(JSON.stringify(part.json, null, 2));
+        const json = part.json;
+        if (isRecord(json) && json['kind'] === 'tool_result') {
+          contentParts.push(renderToolResult(json));
+        } else if (isRecord(json) && msg.role === 'assistant') {
+          const decision = renderDecision(json);
+          if (decision !== undefined) contentParts.push(decision);
+        } else if (!(isRecord(json) && json['kind'] === 'cleared_observation')) {
+          contentParts.push(JSON.stringify(json));
+        }
       } else if (part.kind === 'ref') {
         contentParts.push(`[ref: ${part.ref}${part.summary ? ` — ${part.summary}` : ''}]`);
       } else {
@@ -80,7 +161,7 @@ function serializeMessagesForSummarizer(messages: AiMessageV1[]): string {
     if (msg.toolCalls && msg.toolCalls.length > 0) {
       const tcSummaries = msg.toolCalls.map(
         (tc) =>
-          `  → ${tc.name}(${typeof tc.argumentsJson === 'string' ? tc.argumentsJson : JSON.stringify(tc.argumentsJson)})`,
+          `  → CALL ${tc.name}(${typeof tc.argumentsJson === 'string' ? tc.argumentsJson : JSON.stringify(tc.argumentsJson)})`,
       );
       contentParts.push(tcSummaries.join('\n'));
     }
@@ -95,29 +176,40 @@ function serializeMessagesForSummarizer(messages: AiMessageV1[]): string {
 // ============================================================================
 
 /**
+ * Rules both prompts share. They name the three things a resumed agent needs
+ * from a summary: what it read, what it decided, what it left pending.
+ */
+function sharedRules(maxTokens: number): string {
+  return `- **Keep what was read**: for every source the agent read, name it (tool and path or query) and state the facts the agent took from it. Copy every re-read path ("re-readable at …") and every {"$ref": "…"} verbatim, so the agent can read the full result again instead of repeating the call.
+- **Keep what was decided**: every decision the agent or a person made, with its reason and any value it fixed. A decision a later turn reversed appears once, as reversed.
+- **Keep what is left pending**: every open item, unanswered question, promised step and call whose result had not arrived. Say which turn raised each one.
+- **Preserve specific values**: exact numbers, identifiers, file paths, error messages and parameter values. Never write "the results were good" — write "XGBoost RMSLE: 0.11255".
+- **Preserve error details**: the exact error and its cause, so the agent does not repeat the mistake.
+- **Treat stubs as pointers**: a CLEARED RESULT STUB stands for a result removed earlier. Keep its tool, its arguments and its read path. Do not invent its content.
+- **Be concise but complete**: target ~${String(maxTokens)} tokens. Every sentence carries information.`;
+}
+
+/**
  * Build the summarization prompt for fresh compaction (first time).
  */
 export function buildSummarizationPrompt(
-  messages: AiMessageV1[],
+  entries: readonly TranscriptEntry[],
   pinnedState: PinnedState,
   template: SummaryTemplate,
   compressedTurnRange: [number, number],
 ): string {
-  const transcript = serializeMessagesForSummarizer(messages);
+  const transcript = serializeTranscript(entries);
   const sectionInstructions = renderSectionInstructions(template);
   const pinnedBlock = renderPinnedStateForSummarizer(pinnedState);
 
   return `You are a conversation summarizer for an AI agent workflow system.
 
 ## Task
-Summarize the following conversation transcript (turns ${String(compressedTurnRange[0])}–${String(compressedTurnRange[1])}) into structured sections. This summary will replace the original messages in the agent's context window, so it must preserve all information the agent needs to continue working effectively.
+Summarize the following conversation transcript (turns ${String(compressedTurnRange[0])}–${String(compressedTurnRange[1])}) into structured sections. This summary replaces the original messages in the agent's context window. The agent continues its work from the summary and the most recent turns alone, so the summary must hold everything it needs from these turns.
 
 ## Critical rules
-1. **Preserve specific values**: Include exact numbers, metrics, file paths, error messages, and parameter values. Never generalize "the model achieved good results" — say "XGBoost RMSLE: 0.11255".
-2. **Preserve all $ref paths**: Any reference like {"$ref": "output.abc123/content"} MUST appear verbatim in the summary. These are live data references the agent needs.
-3. **Preserve error details**: Include exact error messages and what caused them. The agent must not repeat past mistakes.
-4. **Be concise but complete**: Target ~${String(template.maxTokens)} tokens. Every sentence should carry information.
-5. **Do NOT duplicate pinned state**: The following facts are already captured separately and should NOT be repeated in the summary:
+${sharedRules(template.maxTokens)}
+- **Do NOT duplicate pinned state**: the following facts are already captured separately and should NOT be repeated in the summary:
 
 ${pinnedBlock}
 
@@ -136,13 +228,13 @@ ${transcript}`;
  * Updates existing sections rather than re-summarizing from scratch.
  */
 export function buildMergePrompt(
-  newMessages: AiMessageV1[],
+  newEntries: readonly TranscriptEntry[],
   pinnedState: PinnedState,
   previousSummary: string,
   template: SummaryTemplate,
   newTurnRange: [number, number],
 ): string {
-  const transcript = serializeMessagesForSummarizer(newMessages);
+  const transcript = serializeTranscript(newEntries);
   const sectionInstructions = renderSectionInstructions(template);
   const pinnedBlock = renderPinnedStateForSummarizer(pinnedState);
 
@@ -152,11 +244,10 @@ export function buildMergePrompt(
 Update an existing conversation summary with new turns (${String(newTurnRange[0])}–${String(newTurnRange[1])}). Do NOT re-summarize the existing summary from scratch — merge the new information into the existing sections.
 
 ## Critical rules
-1. **Merge, don't re-summarize**: Add new accomplishments to "What Was Accomplished", update "Current Focus" to reflect the latest state, append new mistakes to "Mistakes & Lessons Learned", etc.
-2. **Preserve specific values**: Include exact numbers, metrics, $ref paths, error messages, parameter values.
-3. **Preserve all $ref paths**: Any {"$ref": "..."} must appear verbatim.
-4. **Be concise**: The merged summary should not grow unboundedly. If an accomplishment is superseded by a better result, update the entry rather than appending.
-5. **Do NOT duplicate pinned state**:
+- **Merge, don't re-summarize**: add what the new turns read, decided and did to the matching sections. Remove a pending item the new turns resolved, and record how it was resolved. Keep every pending item they did not resolve.
+${sharedRules(template.maxTokens)}
+- **Do not grow without bound**: if a result supersedes an earlier one, update the entry rather than appending.
+- **Do NOT duplicate pinned state**:
 
 ${pinnedBlock}
 

@@ -1,0 +1,152 @@
+# Plan 343 — A run keeps what it read
+
+**Status:** built. The tiers below are what `apps/aflow-executor-ai` runs.
+
+**Builds on:** Plan 196's retention plan, which defined the tiers, and Plan 189, which defined clear-to-ref notes. Both predate the published archive, which starts at Plan 315. This document restates Plan 196's §4 as it now stands and keeps its section numbers, so the `§4.x` references in `exchangeClearing.ts`, `retentionPolicy.ts`, `conversationStateStore.ts`, `compaction.ts` and `agentTurn.ts` land here.
+
+**Leaves alone:** the working budget and its trigger points, the protection classes, the note format, resurrection detection and the summarizer model.
+
+## Decision card
+
+**What changes**
+
+- Today: a long run turns its own older results into stubs every turn once history holds 200 atoms, and compaction then summarises the stubs.
+- After: clearing takes only large results of finished runs outside the recency floor. The run itself and every small result leave history only through compaction.
+
+**Why**
+
+- In one long conversation, history held exactly 200 atoms for four turns in a row. The forced pass cleared exchanges at every one of them.
+- 619 exchanges were cleared over the conversation, and 54 of them were read again after clearing.
+- The fifth compaction took 200 atoms to 7, but most of those atoms were already stubs. The summary could not keep facts the stubs no longer held.
+- An 800-byte result could be replaced by a stub nearly its size, because the net-savings bar was twice the note's own size.
+
+**What it affects**
+
+- `apps/aflow-executor-ai`: the retention policy, both clearing paths, compaction range selection, the summarizer prompt and the turn's retention ladder.
+- `@aflow/schemas`: the default summary sections.
+- Every agent conversation, the Helmsman's included.
+
+**Risks**
+
+- A single run may outgrow the hard budget while its summarizer is down. Nothing clears the run then. Mitigation: the turn logs `agent_turn_structural_bound_unrelieved`, and the next turn compacts again.
+- Compaction costs a summarizer call where clearing cost none. Mitigation: it fires at the same pressure bar as before, and at the structural cap.
+- A result just under the size threshold stays verbatim longer. Mitigation: compaction takes it with its turn once it is older than the floor.
+
+**Open questions**
+
+- Is flash-lite good enough for the new template? Recommended: keep it until a compaction of a real run shows a lost fact.
+
+**Not done on purpose**
+
+- `MAX_ATOMS_STRUCTURAL` stays 200. It bounds state size and assembly cost, and reaching it now triggers compaction instead of clearing.
+- The summarizer model does not change. No measured failure of flash-lite has been shown.
+- Notes written before this change stay as they are.
+
+**Done when**
+
+- No turn clears an exchange because of the atom count.
+- No exchange created since the latest user input is cleared on either path.
+- No result under the size threshold becomes a stub.
+- A run of tool calls compacts to a summary that keeps what was read, what was decided and what is left pending.
+
+## 1. The problem
+
+Three defects added up. The forced structural pass had no recency guard beyond the current turn, so at the 200-atom cap it cleared the oldest exchanges each turn. Compaction selected whole turns and dropped any turn holding part of an exchange outside its range. A turn holds one call's result and the next call, so an unbroken run of tool calls could never compact until clearing had broken the chain into standalone stubs. The summarizer then received stubs, pretty-printed envelopes and no turn numbers.
+
+## 2. Decisions
+
+**D1 — one recency floor on every path.** `RECENT_TURNS_FLOOR` is 8, in `retentionPolicy.ts`. Tier-2 clearing, Tier-4 forced clearing and compaction all read it as `keepRecentTurns`. Rejected: a separate floor for the forced pass. Two floors let the forced pass take what the agent was still using.
+
+**D2 — the current run is never cleared.** The current run starts at the latest `user_input` atom (§4.10). An exchange whose first atom sits after it is never a clearing candidate. Compaction relieves the run instead. Rejected: clearing the run's large results after compaction. Compaction already takes them with their turns, and their read paths survive as active refs.
+
+**D3 — only large results clear to a ref.** `LARGE_RESULT_MIN_TOKENS` is 2,000 tokens, about 7 KB. Every result of a cleared exchange must reach it. `MIN_CLEAR_NET_SAVINGS_TOKENS` is 1,500, the absolute floor under the old twice-the-note rule. Rejected: a per-exchange total. It would stub a small result that shares an exchange with a large one.
+
+**D4 — the cap triggers compaction.** `MAX_ATOMS_STRUCTURAL` stays a fixed state-size bound. Reaching it triggers compaction, and `forceClearExcess` takes only a token excess. Rejected: a budget-derived atom bound. Atoms vary from a few tokens to thousands, so an atom count says nothing a token budget does not already say.
+
+**D5 — compaction selects atoms, not turns.** An exchange with any atom outside the range leaves it whole. The rest of its turn stays in. Rejected: turn snapping, which is the defect in §1.
+
+**D6 — the summary is a session summary.** The default sections are Objective, What Was Read, What Was Decided, What Was Done, Left Pending and Mistakes & Lessons Learned. The transcript is labelled by turn and names each result's tool, status and re-read path. Rejected: a larger summarizer model. Nothing measured shows flash-lite losing facts from a raw transcript.
+
+## 3. What it affects
+
+The state schema does not change. `history.maxAtomsStructural` keeps its default, and `compaction.lastCompactedTurn` is still written. Compaction no longer reads that watermark as a guard, because a compacted atom has left history and cannot be selected again.
+
+## 4. The retention tiers
+
+### §4.1 Tier-0 pins
+
+Pinned atoms are never cleared or compacted. They are the opening `user_input` atoms, the latest `user_input`, the latest `compaction_restore` and every atom of the current turn. `computePinnedAtomIds` derives the set at evaluation time.
+
+### §4.2 Low pressure
+
+Below `clearHighWater` (0.55 of the working budget) nothing is cleared. Verbatim, cache-stable history wins.
+
+### §4.3 Tier-2 clearing and the savings ledger
+
+Above `clearHighWater`, `clearUnderPressure` clears greedily until estimated pressure reaches `clearLowWater` (0.4). Candidates are ranked by protection class, then by net savings, then oldest first. A candidate must save more than `minClearNetSavings`: twice its note, and never less than `MIN_CLEAR_NET_SAVINGS_TOKENS`.
+
+A candidate must hold all of these:
+
+- It carries a tool result and has not been cleared before.
+- None of its atoms is pinned.
+- Every turn it spans is older than `RECENT_TURNS_FLOOR`.
+- It was created before the current run started (§4.10).
+- Every one of its results measures at least `LARGE_RESULT_MIN_TOKENS` as sent (§4.4).
+
+### §4.4 Clear-to-ref notes and the size threshold
+
+A cleared exchange becomes one in-position note of at most `noteMaxTokens` (200). The note names each call, its arguments and its status, and the read pointer to the stored result where a read op is on the surface. A result under `LARGE_RESULT_MIN_TOKENS` is never replaced by a note. It leaves history only through compaction, with its turn.
+
+### §4.4a Idempotency classes
+
+The protection class comes from the catalog's `idempotency` for the envelope's `operationId`. Idempotent results clear first, then unknown, then non-idempotent, then failed. Resurrected exchanges clear last.
+
+### §4.5 Note placement
+
+A note is a user-role atom placed at the cleared assistant turn's slot.
+
+### §4.6 Resurrection
+
+A new call matching a cleared call's arguments, or a read of a cleared output's path, marks its exchange resurrected. The counters are logged with every clearing pass.
+
+### §4.7 Tier-4 structural bound
+
+After Tier-2, the turn runs compaction when any of these holds:
+
+- Pressure after clearing exceeds `compactHighWater` (0.7 of the working budget).
+- History holds more atoms than `MAX_ATOMS_STRUCTURAL` (200).
+- Pressure after clearing exceeds the hard budget.
+
+Then, only if pressure still exceeds the hard budget, `forceClearExcess` clears the oldest candidates of §4.3 until the estimated saving covers the excess. A failed forced write fails the step, retryable. If the cap or the hard budget still binds, the turn logs `agent_turn_structural_bound_unrelieved`. No turn clears an exchange because of the atom count.
+
+### §4.8 Tier-3 compaction
+
+Compaction selects every unpinned atom older than `RECENT_TURNS_FLOOR`, the current run's included. An exchange with any atom outside that set leaves the range whole. It needs `minCompactableTurns` (3) content turns. The range's atoms are archived and replaced by one restore atom, placed in the last compacted atom's slot.
+
+The restore holds verified state and the summary. Verified state is the objective, the latest sub-goal, written variables and active refs. Active refs include each compacted result's read path and each swept note's pointer. The restore lists the newest 40 refs. The summarizer is `compactionSummaryModel` (flash-lite). Its transcript is labelled by turn, and it shows each result's tool, status, re-read path and summary. It shows each decision's text and calls, and marks notes as stubs.
+
+### §4.9 Honest degrade
+
+When no read op is on the turn's tool surface, notes and restores omit the read promise. Clearing then protects each exchange one class harder.
+
+### §4.10 The current run
+
+The current run is everything after the latest `user_input` atom. A history without one is a single run. No exchange of the current run is a clearing candidate on either path. Pressure inside the run is relieved by compaction of its turns older than the floor.
+
+## 5. Phases
+
+One phase, built. Its exit is the Done-when list above, each item held by a test.
+
+## 6. How it is proven
+
+`currentRunRetention.test.ts` holds the cases that fail if the change is wrong:
+
+- The recency floor holds on the pressure path and on the forced path.
+- Neither path takes an exchange created since the latest `user_input`.
+- Inside the current run the turn compacts from raw results and creates no stub, above the compaction bar and over the hard budget alike.
+- An 800-byte result is never stubbed, and a large one still clears to a note with its read pointer.
+- An over-cap history at low pressure is compacted, and no exchange is cleared.
+- The summarizer prompt asks for what was read, decided and left pending, and its transcript carries those facts.
+- An unbroken chain of tool calls compacts up to the floor, and keeps the straddling exchange whole.
+
+`retentionSafetyBound.test.ts`, `retentionPressure.test.ts` and `compactionAlignment.test.ts` hold the pins, the class order, the archive trace and the fail-closed forced write.

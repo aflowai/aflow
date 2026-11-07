@@ -675,10 +675,21 @@ async function finishAgentTurn(
     }
 
     let remainingPressureTokens = Math.max(0, pressureTokens - estimatedTokensFreed);
-    if (
+
+    // Tier-3 (§4.8) runs before any forced clearing. Clearing never takes the
+    // current run or a small result, so compaction is what relieves them. It
+    // is also the only remedy at the structural cap (§4.7): no turn clears an
+    // exchange because of the atom count.
+    const compactionTrigger =
       workingBudget > 0 &&
       remainingPressureTokens / workingBudget > RETENTION_POLICY.compactHighWater
-    ) {
+        ? 'pressure'
+        : store.structuralAtomExcess() > 0
+          ? 'structural_cap'
+          : remainingPressureTokens > hardBudget
+            ? 'hard_budget'
+            : undefined;
+    if (compactionTrigger !== undefined) {
       try {
         const compactResult = await runCompaction();
         if (compactResult) {
@@ -696,6 +707,7 @@ async function finishAgentTurn(
             turnNumber: params.turnNumber,
             compactionNumber: compactResult.compactionNumber,
             tokensSaved: compactResult.tokensSaved,
+            trigger: compactionTrigger,
             workingBudget,
           });
         }
@@ -703,18 +715,19 @@ async function finishAgentTurn(
         // Compaction is best-effort — log warning, continue
         ctx.log.warn('agent_turn_compaction_failed', {
           turnNumber: params.turnNumber,
+          trigger: compactionTrigger,
           error: compactErr instanceof Error ? compactErr.message : String(compactErr),
         });
       }
     }
 
-    const atomExcess = store.structuralAtomExcess();
+    // Tier-4 token bound (§4.7): only a prompt over the hard budget forces
+    // clearing, and it takes only what Tier-2 may take.
     const tokenExcess = remainingPressureTokens - hardBudget;
-    if (atomExcess > 0 || tokenExcess > 0) {
+    if (tokenExcess > 0) {
       try {
         const forced = await store.forceClearExcess({
-          excessAtoms: Math.max(atomExcess, 0),
-          excessTokens: Math.max(tokenExcess, 0),
+          excessTokens: tokenExcess,
           availableReadOpId,
         });
         if (forced) {
@@ -739,46 +752,6 @@ async function finishAgentTurn(
             effectiveBudget: hardBudget,
           });
         }
-
-        const remainingAtomExcess = store.structuralAtomExcess();
-        const remainingTokenExcess = remainingPressureTokens - hardBudget;
-        if (remainingAtomExcess > 0 || remainingTokenExcess > 0) {
-          // Text-heavy histories have no clearable exchanges — compaction owns
-          // the unpinned middle (§4.7 step 2).
-          const compactResult = await runCompaction();
-          if (compactResult) {
-            conversationStateRef = compactResult.conversationStateRef;
-            remainingPressureTokens = Math.max(
-              0,
-              remainingPressureTokens - compactResult.tokensSaved,
-            );
-            compactionSummary = {
-              compactionNumber: compactResult.compactionNumber,
-              tokensSaved: (compactionSummary?.tokensSaved ?? 0) + compactResult.tokensSaved,
-              summaryModel: compactionModel,
-            };
-            ctx.log.info('agent_turn_forced_compaction', {
-              turnNumber: params.turnNumber,
-              compactionNumber: compactResult.compactionNumber,
-              tokensSaved: compactResult.tokensSaved,
-              effectiveBudget: hardBudget,
-            });
-          }
-          // §4.3: pressure is recomputed after every mutation — the unrelieved
-          // signal judges the POST-compaction numbers.
-          const unrelievedTokenExcess = remainingPressureTokens - hardBudget;
-          if (store.structuralAtomExcess() > 0 || unrelievedTokenExcess > 0) {
-            ctx.log.warn('agent_turn_structural_bound_unrelieved', {
-              tenantId: ctx.job.tenantId,
-              runId: ctx.runId,
-              stepExecutionId: ctx.job.stepExecutionId,
-              turnNumber: params.turnNumber,
-              atomCount: store.getState().history.atoms.length,
-              maxAtomsStructural: store.getState().history.maxAtomsStructural,
-              remainingTokenExcess: Math.max(unrelievedTokenExcess, 0),
-            });
-          }
-        }
       } catch (forcedErr) {
         const msg = forcedErr instanceof Error ? forcedErr.message : String(forcedErr);
         ctx.log.error('agent_turn_forced_shedding_failed', {
@@ -796,6 +769,21 @@ async function finishAgentTurn(
           ),
         );
       }
+    }
+
+    // §4.3: pressure is recomputed after every mutation — the unrelieved
+    // signal judges the numbers after compaction and forced clearing.
+    const unrelievedTokenExcess = remainingPressureTokens - hardBudget;
+    if (store.structuralAtomExcess() > 0 || unrelievedTokenExcess > 0) {
+      ctx.log.warn('agent_turn_structural_bound_unrelieved', {
+        tenantId: ctx.job.tenantId,
+        runId: ctx.runId,
+        stepExecutionId: ctx.job.stepExecutionId,
+        turnNumber: params.turnNumber,
+        atomCount: store.getState().history.atoms.length,
+        maxAtomsStructural: store.getState().history.maxAtomsStructural,
+        remainingTokenExcess: Math.max(unrelievedTokenExcess, 0),
+      });
     }
   } catch (storeErr) {
     ctx.log.error('Failed to store conversation state — failing step for retry', {

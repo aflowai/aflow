@@ -70,11 +70,11 @@ import {
   type Exchange,
   type ResurrectionDetection,
   PROTECTION_CLASS,
+  clearableExchanges,
   exchangeKeyForAtom,
   exchangeProtectionClass,
   earliestCreatedAtMs,
   estimateExchangeClearingTokens,
-  estimateExchangeNetTokenSavings,
   clearedExchangeNoteMessage,
   clearedCallEntries,
   detectResurrections,
@@ -799,7 +799,6 @@ export class ConversationStateStore {
     if (pressureTokens / workingBudget <= RETENTION_POLICY.clearHighWater) return undefined;
 
     const noteOptions: ClearNoteOptions = { availableReadOpId };
-    const currentTurn = this.state.turnNumber; // already incremented by storeTurn()
     const hydratedById = this.hydratedAtomsById();
     const sentById = this.sentAtomsById();
     const exchanges = this.groupExchanges(hydratedById);
@@ -816,10 +815,6 @@ export class ConversationStateStore {
     }
     const resurrectedKeys = new Set(this.state.clearing?.resurrectedExchanges ?? []);
 
-    // Idempotency guard — never re-archive an already-cleared exchange.
-    const alreadyClearedExchanges = new Set<string>(this.state.clearing?.clearedExchanges ?? []);
-    const pinned = this.pinnedAtomIds();
-
     // §4.9: a note without a working re-read pointer protects its exchange one
     // class harder — clearing is more expensive when re-access is not teachable.
     const degradeBoost = availableReadOpId !== undefined ? 0 : 1;
@@ -830,15 +825,7 @@ export class ConversationStateStore {
       netSavings: number;
       newestTurn: number;
     }> = [];
-    for (const ex of exchanges.values()) {
-      if (!ex.hasToolResult) continue;
-      if (alreadyClearedExchanges.has(ex.key)) continue;
-      if (ex.atomRefs.some((a) => pinned.has(a.atomId))) continue;
-
-      // Tier-1 verbatim recency: retain the whole exchange if any part is recent.
-      const turns = [...ex.turns];
-      if (turns.some((tn) => currentTurn - tn <= RETENTION_POLICY.keepRecentTurns)) continue;
-
+    for (const ex of this.clearableExchanges(exchanges, sentById)) {
       const { noteTokens, netSavings } = estimateExchangeClearingTokens(
         ex,
         hydratedById,
@@ -856,7 +843,7 @@ export class ConversationStateStore {
               PROTECTION_CLASS.resurrected,
             ),
         netSavings,
-        newestTurn: Math.max(...turns),
+        newestTurn: Math.max(...ex.turns),
       });
     }
     if (candidates.length === 0) return await this.persistDetectionOnly(detection);
@@ -908,46 +895,48 @@ export class ConversationStateStore {
     };
   }
 
+  /**
+   * Tier-4 token bound (§4.7): clears the oldest clearable exchanges until the
+   * estimated saving covers the token excess over the hard budget. It takes
+   * only what Tier-2 may take — the recency floor, the current run and the size
+   * threshold bind here too — so the remedy for the rest is compaction. The
+   * atom count never drives it: an over-cap history is compacted, not cleared.
+   */
   async forceClearExcess(target: {
-    excessAtoms: number;
     excessTokens: number;
     /** §4.9 honest degrade — the read op on this turn's tool surface, if any. */
     availableReadOpId: string | undefined;
   }): Promise<(ClearExchangesResult & { estimatedTokensFreed: number }) | undefined> {
-    if (target.excessAtoms <= 0 && target.excessTokens <= 0) return undefined;
+    if (target.excessTokens <= 0) return undefined;
 
     const noteOptions: ClearNoteOptions = { availableReadOpId: target.availableReadOpId };
     const hydratedById = this.hydratedAtomsById();
     const sentById = this.sentAtomsById();
     const exchanges = this.groupExchanges(hydratedById);
-    const alreadyClearedExchanges = new Set<string>(this.state.clearing?.clearedExchanges ?? []);
-    const pinned = this.pinnedAtomIds();
 
-    const candidates = [...exchanges.values()]
+    const candidates = this.clearableExchanges(exchanges, sentById)
+      .map((ex) => ({
+        ex,
+        estimate: estimateExchangeClearingTokens(ex, hydratedById, sentById, noteOptions),
+      }))
       .filter(
-        (ex) =>
-          ex.hasToolResult &&
-          !alreadyClearedExchanges.has(ex.key) &&
-          !ex.atomRefs.some((a) => pinned.has(a.atomId)),
+        ({ estimate }) =>
+          estimate.netSavings > RETENTION_POLICY.minClearNetSavings(estimate.noteTokens),
       )
       .sort((a, b) => {
-        const newestA = Math.max(...a.turns);
-        const newestB = Math.max(...b.turns);
+        const newestA = Math.max(...a.ex.turns);
+        const newestB = Math.max(...b.ex.turns);
         if (newestA !== newestB) return newestA - newestB;
-        return earliestCreatedAtMs(a) - earliestCreatedAtMs(b);
+        return earliestCreatedAtMs(a.ex) - earliestCreatedAtMs(b.ex);
       });
 
     // §4.3: the bound is re-evaluated after each forced exchange.
     const selected: Exchange[] = [];
-    let atomsFreed = 0;
     let tokensFreed = 0;
-    for (const ex of candidates) {
-      const atomsDone = target.excessAtoms <= 0 || atomsFreed >= target.excessAtoms;
-      const tokensDone = target.excessTokens <= 0 || tokensFreed >= target.excessTokens;
-      if (atomsDone && tokensDone) break;
+    for (const { ex, estimate } of candidates) {
+      if (tokensFreed >= target.excessTokens) break;
       selected.push(ex);
-      atomsFreed += ex.atomRefs.length - 1; // one note replaces the whole exchange
-      tokensFreed += estimateExchangeNetTokenSavings(ex, hydratedById, sentById, noteOptions);
+      tokensFreed += estimate.netSavings;
     }
 
     if (selected.length === 0) return undefined;
@@ -985,6 +974,20 @@ export class ConversationStateStore {
   /** The turn currently being executed — its atoms are pinned (§4.1). */
   private executedTurnNumber(): number {
     return this.currentTurnNumber ?? Math.max(this.state.turnNumber - 1, 0);
+  }
+
+  /** The exchanges either clearing path may take (§4.3), in history order. */
+  private clearableExchanges(
+    exchanges: Map<string, Exchange>,
+    sentById: Map<string, AiMessageAtomV1>,
+  ): Exchange[] {
+    return clearableExchanges(exchanges.values(), {
+      atoms: this.state.history.atoms,
+      currentTurn: this.state.turnNumber, // already incremented by storeTurn()
+      pinned: this.pinnedAtomIds(),
+      alreadyCleared: new Set(this.state.clearing?.clearedExchanges ?? []),
+      sentById,
+    });
   }
 
   /**

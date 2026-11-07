@@ -207,7 +207,12 @@ function sanitizeToChat(messages: ChatMessage[]): ChatMessage[] {
 
 describe('computePinnedAtomIds (§4.1)', () => {
   it('pins all turn-0 user_input atoms', () => {
-    const atoms = [userAtom(0, 'a'), { ...userAtom(0, 'b'), atomId: 'user-0b' }, userAtom(3)];
+    const atoms = [
+      userAtom(0, 'a'),
+      { ...userAtom(0, 'b'), atomId: 'user-0b' },
+      userAtom(3),
+      userAtom(4),
+    ];
     const pinned = computePinnedAtomIds(atoms, 5);
     expect(pinned.has('user-0')).toBe(true);
     expect(pinned.has('user-0b')).toBe(true);
@@ -219,9 +224,21 @@ describe('computePinnedAtomIds (§4.1)', () => {
     delete (a as { turnNumber?: number }).turnNumber;
     const b = { ...userAtom(2), atomId: 'second-user' } as AiMessageAtomV1;
     delete (b as { turnNumber?: number }).turnNumber;
-    const pinned = computePinnedAtomIds([a, b]);
+    const c = { ...userAtom(3), atomId: 'third-user' } as AiMessageAtomV1;
+    delete (c as { turnNumber?: number }).turnNumber;
+    const pinned = computePinnedAtomIds([a, b, c]);
     expect(pinned.has('first-user')).toBe(true);
     expect(pinned.has('second-user')).toBe(false);
+  });
+
+  it('pins the latest user_input — the request the current run answers', () => {
+    const pinned = computePinnedAtomIds(
+      [userAtom(0), userAtom(4), assistantTextAtom(5), userAtom(9), assistantTextAtom(10)],
+      20,
+    );
+    expect(pinned.has('user-0')).toBe(true);
+    expect(pinned.has('user-4')).toBe(false);
+    expect(pinned.has('user-9')).toBe(true);
   });
 
   it('pins only the LATEST compaction_restore atom', () => {
@@ -279,33 +296,51 @@ describe('Tier-4 safety bound (§4.7)', () => {
     for (const id of before) expect(after).toContain(id);
   });
 
-  it('a 300-atom conversation never evicts pinned atoms under maximal forced pressure', async () => {
-    const atoms = threeHundredAtoms();
-    const { store, storeFn } = await makeStoreAndAssemble(atoms, 150);
+  /**
+   * A finished run of large-result exchanges at turns 1..n, then the request
+   * that starts the current run at turn n+1. The conversation is at turn n+2.
+   */
+  function finishedRunAtoms(n: number): AiMessageAtomV1[] {
+    const atoms: AiMessageAtomV1[] = [userAtom(0, OPENING_INSTRUCTION), restoreAtom(10)];
+    for (let t = 1; t <= n; t++) {
+      const base = `ex${String(t).padStart(3, '0')}`;
+      atoms.push(assistantToolAtom(t, base, 'memory.store.query'));
+      atoms.push(toolResultAtom(t, base, 'memory.store.query', 'x'.repeat(9000)));
+    }
+    atoms.push(userAtom(n + 1, 'next request'));
+    return atoms;
+  }
+
+  it('never evicts pinned atoms or the recent turns under maximal forced pressure', async () => {
+    const atoms = finishedRunAtoms(149);
+    const { store, storeFn } = await makeStoreAndAssemble(atoms, 151);
     const beforeIds = new Set(store.getState().history.atoms.map((a) => a.atomId));
 
-    // Demand more than is clearable — every unpinned exchange must go.
+    // Demand more than is clearable — every clearable exchange must go.
     const result = await store.forceClearExcess({
-      excessAtoms: 10_000,
-      excessTokens: 0,
+      excessTokens: 100_000_000,
       availableReadOpId: MEMORY_READ_OPERATION_ID,
     });
     expect(result).toBeDefined();
-    // 148 unpinned exchanges cleared; the turn-149 exchange is pinned (current turn).
-    expect(result!.clearedExchangeCount).toBe(148);
-    expect(result!.atomsSummarized).toBe(296);
+    // Exchanges 1..142 are older than the recency floor; 143..149 are not.
+    const floor = RETENTION_POLICY.keepRecentTurns;
+    const clearable = 151 - floor - 1;
+    expect(result!.clearedExchangeCount).toBe(clearable);
+    expect(result!.atomsSummarized).toBe(clearable * 2);
 
     const after = store.getState().history.atoms;
     const afterIds = new Set(after.map((a) => a.atomId));
-    // Pinned anchors survive: the opening instruction, the latest restore atom,
-    // and the current turn's exchange.
+    // Pinned anchors survive: the opening instruction, the latest restore atom
+    // and the request of the current run.
     expect(afterIds.has('user-0')).toBe(true);
     expect(afterIds.has('restore-1')).toBe(true);
-    expect(afterIds.has('asst-ex149')).toBe(true);
-    expect(afterIds.has('res-ex149')).toBe(true);
+    expect(afterIds.has('user-150')).toBe(true);
+    // The recency floor binds the forced pass as it binds Tier-2.
+    for (let t = clearable + 1; t <= 149; t++) {
+      expect(afterIds.has(`asst-ex${String(t).padStart(3, '0')}`)).toBe(true);
+    }
     // One in-position note per cleared exchange.
-    expect(after.filter((a) => a.sourceKind === 'cleared_summary')).toHaveLength(148);
-    expect(after).toHaveLength(300 - 296 + 148);
+    expect(after.filter((a) => a.sourceKind === 'cleared_summary')).toHaveLength(clearable);
 
     // Guard: every removed atom is archived — removal always leaves a trace.
     const archiveCall = storeFn.mock.calls.find(
@@ -316,28 +351,21 @@ describe('Tier-4 safety bound (§4.7)', () => {
       (archiveCall![0] as { data: Array<{ atomId: string }> }).data.map((a) => a.atomId),
     );
     const removed = [...beforeIds].filter((id) => !afterIds.has(id));
-    expect(removed).toHaveLength(296);
+    expect(removed).toHaveLength(clearable * 2);
     for (const id of removed) expect(archivedIds.has(id)).toBe(true);
   });
 
-  it('clears exactly enough oldest exchanges to relieve the atom excess', async () => {
-    const atoms = threeHundredAtoms();
-    const { store } = await makeStoreAndAssemble(atoms, 150);
-    const excess = store.structuralAtomExcess();
-    expect(excess).toBe(100);
+  it('never clears an exchange because the atom count is over the cap', async () => {
+    const atoms = finishedRunAtoms(149);
+    const { store } = await makeStoreAndAssemble(atoms, 151);
+    expect(store.structuralAtomExcess()).toBeGreaterThan(0);
 
     const result = await store.forceClearExcess({
-      excessAtoms: excess,
       excessTokens: 0,
       availableReadOpId: MEMORY_READ_OPERATION_ID,
     });
-    // Each 2-atom exchange nets 1 atom (note replaces it) → 100 exchanges.
-    expect(result!.clearedExchangeCount).toBe(100);
-    expect(store.structuralAtomExcess()).toBeLessThanOrEqual(0);
-    // Oldest cleared first: exchange 1 gone, exchange 120 retained.
-    const afterIds = new Set(store.getState().history.atoms.map((a) => a.atomId));
-    expect(afterIds.has('asst-ex001')).toBe(false);
-    expect(afterIds.has('asst-ex120')).toBe(true);
+    expect(result).toBeUndefined();
+    expect(store.getState().history.atoms).toHaveLength(atoms.length);
   });
 
   it('token-bound forced clearing stops once estimated savings cover the deficit', async () => {
@@ -345,11 +373,11 @@ describe('Tier-4 safety bound (§4.7)', () => {
     for (let t = 1; t <= 8; t++) {
       const base = `tok${String(t)}`;
       atoms.push(assistantToolAtom(t, base, 'memory.store.query'));
-      atoms.push(toolResultAtom(t, base, 'memory.store.query', 'x'.repeat(4000)));
+      atoms.push(toolResultAtom(t, base, 'memory.store.query', 'x'.repeat(9000)));
     }
-    const { store } = await makeStoreAndAssemble(atoms, 9);
+    atoms.push(userAtom(9, 'next request'));
+    const { store } = await makeStoreAndAssemble(atoms, 20);
     const result = await store.forceClearExcess({
-      excessAtoms: 0,
       excessTokens: 500,
       availableReadOpId: MEMORY_READ_OPERATION_ID,
     });
@@ -361,7 +389,7 @@ describe('Tier-4 safety bound (§4.7)', () => {
   });
 
   it('forced shedding fails CLOSED when the archive write fails', async () => {
-    const atoms = threeHundredAtoms();
+    const atoms = finishedRunAtoms(149);
     const retrieve = vi.fn().mockResolvedValue(atoms);
     const storeFn = vi.fn().mockImplementation((params: { stepExecutionId: string }) => {
       if (params.stepExecutionId.includes('-archive-')) {
@@ -371,14 +399,13 @@ describe('Tier-4 safety bound (§4.7)', () => {
     });
     const store = new ConversationStateStore(
       { ...baseConfig, payloadStore: { retrieve, store: storeFn } as unknown as PayloadStore },
-      makeState(atoms, 150),
+      makeState(atoms, 151),
     );
     await store.assembleRequest('sys', []);
     const before = store.getState().history.atoms.length;
     await expect(
       store.forceClearExcess({
-        excessAtoms: 100,
-        excessTokens: 0,
+        excessTokens: 10_000,
         availableReadOpId: MEMORY_READ_OPERATION_ID,
       }),
     ).rejects.toThrow('gcs unavailable');
@@ -553,20 +580,31 @@ describe('handleAgentTurn Tier-4 ladder (§4.7)', () => {
           ? Promise.reject(new Error('gcs unavailable'))
           : mem.store(params),
     };
-    // Over-cap history of OLD tool exchanges — both opportunistic clearing
-    // (best-effort, swallowed) and forced clearing (fail-closed) hit the
-    // failing archive write.
+    // A finished run of large results and a prompt over the hard budget. The
+    // summarizer is down, so compaction (best-effort) relieves nothing, and
+    // both opportunistic clearing (best-effort, swallowed) and forced clearing
+    // (fail-closed) hit the failing archive write.
     const atoms: AiMessageAtomV1[] = [userAtom(0, OPENING_INSTRUCTION)];
     for (let t = 1; t <= 110; t++) {
       const base = `fx${String(t).padStart(3, '0')}`;
       atoms.push(assistantToolAtom(t, base, 'memory.store.query'));
-      atoms.push(toolResultAtom(t, base, 'memory.store.query'));
+      atoms.push(toolResultAtom(t, base, 'memory.store.query', 'x'.repeat(9000)));
     }
-    const stateRef = await seedConversation(failingStore, atoms, 111);
+    atoms.push(userAtom(111, 'next request'));
+    const stateRef = await seedConversation(failingStore, atoms, 112);
 
     const writes: Array<{ kind: string; data: unknown }> = [];
     const ctx = makeCtx(writes);
-    vi.mocked(getAIClientForContext).mockResolvedValue(mockClient());
+    const client = mockClient();
+    vi.mocked(client.generateJson).mockResolvedValue({
+      data: { action: 'pause_for_input', message: 'ok' },
+      rawContent: '{"action":"pause_for_input","message":"ok"}',
+      model: 'test-model',
+      provider: 'openai',
+      usage: { promptTokens: 400_000, completionTokens: 5, totalTokens: 400_005 },
+    } as never);
+    vi.mocked(client.generateText).mockRejectedValue(new Error('summarizer unavailable'));
+    vi.mocked(getAIClientForContext).mockResolvedValue(client);
     const deps: HandlerDeps = {
       payloadStore: failingStore,
       handleError: vi.fn().mockImplementation((_c, _l, e: unknown) => {
@@ -577,7 +615,7 @@ describe('handleAgentTurn Tier-4 ladder (§4.7)', () => {
 
     const result = await handleAgentTurn(
       ctx,
-      baseAgentInput({ conversationStateRef: stateRef, turnNumber: 111 }),
+      baseAgentInput({ conversationStateRef: stateRef, turnNumber: 112 }),
       deps,
     );
     expect(result.status).toBe('FAILED');
@@ -657,15 +695,6 @@ describe('founding incident shape — pinned opener, bridge never fires', () => 
       store.recordAssistantResponse({ action: 'complete', message: `done ${String(turn)}` }, turn);
       const turnResult = await store.storeTurn();
       stateRef = turnResult.conversationStateRef;
-      const excess = store.structuralAtomExcess();
-      if (excess > 0) {
-        const forced = await store.forceClearExcess({
-          excessAtoms: excess,
-          excessTokens: 0,
-          availableReadOpId: MEMORY_READ_OPERATION_ID,
-        });
-        if (forced) stateRef = forced.conversationStateRef;
-      }
     }
   });
 });
@@ -721,9 +750,10 @@ describe('same-turn Tier-2 + Tier-4 clearing (payload-key isolation)', () => {
     for (let t = 1; t <= 12; t++) {
       const base = `dx${String(t).padStart(2, '0')}`;
       atoms.push(assistantToolAtom(t, base, 'memory.store.query'));
-      atoms.push(toolResultAtom(t, base, 'memory.store.query', 'x'.repeat(7000)));
+      atoms.push(toolResultAtom(t, base, 'memory.store.query', 'x'.repeat(9000)));
     }
-    const stateRef = await seedConversation(mem, atoms, 13);
+    atoms.push(userAtom(13, 'next request'));
+    const stateRef = await seedConversation(mem, atoms, 23);
 
     const store = await ConversationStateStore.loadOrCreate(
       {
@@ -731,12 +761,12 @@ describe('same-turn Tier-2 + Tier-4 clearing (payload-key isolation)', () => {
         tenantId: 'tenant-test',
         runId: 'run-test',
         stepId: 'agent-1',
-        stepExecutionId: 'exec-13',
+        stepExecutionId: 'exec-23',
         attempt: 1,
       },
       stateRef,
     );
-    store.setTurnNumber(13);
+    store.setTurnNumber(23);
     await store.assembleRequest('sys', []);
 
     const tier2 = await store.clearUnderPressure({
@@ -747,8 +777,7 @@ describe('same-turn Tier-2 + Tier-4 clearing (payload-key isolation)', () => {
     expect(tier2!.clearedExchangeCount).toBeGreaterThan(0);
 
     const tier4 = await store.forceClearExcess({
-      excessAtoms: 4,
-      excessTokens: 0,
+      excessTokens: 4_000,
       availableReadOpId: MEMORY_READ_OPERATION_ID,
     });
     expect(tier4!.clearedExchangeCount).toBeGreaterThan(0);

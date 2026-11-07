@@ -6,14 +6,17 @@ import type {
   StepExecutionId,
   AiConversationStateV1,
   AiMessageAtomV1,
-  AiMessageV1,
   PinnedState,
   SummaryTemplate,
   CompactionArtifact,
 } from '@aflow/schemas';
 import { SummaryTemplateSchema, contentHash, textMessage } from '@aflow/schemas';
 import type { AIClient } from '@aflow/ai-client';
-import { buildSummarizationPrompt, buildMergePrompt } from './compaction-prompts.js';
+import {
+  buildSummarizationPrompt,
+  buildMergePrompt,
+  type TranscriptEntry,
+} from './compaction-prompts.js';
 import {
   extractNoteReadPointers,
   exchangeKeyForAtom,
@@ -173,6 +176,28 @@ function sweepClearedNotePointers(rangeAtoms: AiMessageAtomV1[]): ActiveRef[] {
   return refs;
 }
 
+/**
+ * A result compacted with its turn stays re-readable at the path a
+ * clear-to-ref note would have taught (§4.4), so what was read survives
+ * compaction. Only the range's results: the rest are still in history.
+ */
+function compactedResultPointers(rangeAtoms: AiMessageAtomV1[]): ActiveRef[] {
+  const refs: ActiveRef[] = [];
+  for (const atom of rangeAtoms) {
+    if (atom.sourceKind !== 'tool_result') continue;
+    const envelope = toolResultEnvelopeOfAtom(atom);
+    if (!envelope?.outputPath || envelope.outputRef?.startsWith(envelope.outputPath)) continue;
+    refs.push({
+      ref: `${envelope.outputPath}/data`,
+      description: truncateDescription(
+        `${envelope.toolName}: ${envelope.summary ?? envelope.status.toLowerCase()}`,
+      ),
+      fromTurn: atom.turnNumber ?? 0,
+    });
+  }
+  return refs;
+}
+
 /** Truncate a description string to avoid bloating the restore atom. */
 function truncateDescription(text: string, maxLen = RETENTION_POLICY.noteDigestMaxChars): string {
   if (text.length <= maxLen) return text;
@@ -186,127 +211,92 @@ function truncateDescription(text: string, maxLen = RETENTION_POLICY.noteDigestM
 interface CompactionRange {
   fromTurn: number;
   toTurn: number;
-  /**
-   * Earliest CONTENT turn — superseded restore atoms sit at the previous
-   * range's fromTurn, so the re-compaction idempotency guard must key on
-   * content turns or a second compaction could never fire.
-   */
-  contentFromTurn: number;
-  /** Atoms in the compaction range (to be archived and summarized). */
+  /** Atoms in the compaction range (to be archived and summarized), in history order. */
   atoms: AiMessageAtomV1[];
-  /** The range's messages as the agent was shown them (for summarizer input). */
-  messages: AiMessageV1[];
+  /** The range's content as the agent was shown it, each entry with its turn (summarizer input). */
+  entries: TranscriptEntry[];
 }
 
 /**
- * Identify the compaction range: middle zone atoms eligible for compression.
- * Returns undefined if no compaction is needed or the range is too small.
- * The pin set replaces the 82-era `keepFirstTurns` anchor heuristic (§4.1).
+ * Identify the compaction range: every atom older than the recency floor that
+ * is not pinned, the current run's included (§4.10). Returns undefined when
+ * the range holds too few content turns to be worth a summarizer call. The pin
+ * set replaces the 82-era `keepFirstTurns` anchor heuristic (§4.1).
+ *
+ * Selection is per atom, not per turn. A tool chain links every turn to the
+ * next — a turn holds the previous call's result and the next call — so a
+ * per-turn range that drops a turn for one straddling exchange drops the
+ * whole chain with it, and a run of tool calls could never compact. Per atom,
+ * a straddling exchange leaves the range alone and its turn's other atoms stay
+ * in. Compacted atoms leave history, so nothing is compacted twice.
  */
 function identifyCompactionRange(
   allAtoms: AiMessageAtomV1[],
   shownAtoms: AiMessageAtomV1[],
   currentTurn: number,
   pinnedAtomIds: Set<string>,
-  lastCompactedTurn?: number,
 ): CompactionRange | undefined {
-  // Group atoms by turnNumber
-  const turnGroups = new Map<number, AiMessageAtomV1[]>();
-  for (const atom of allAtoms) {
-    if (atom.turnNumber === undefined || atom.turnNumber === null) continue;
-    const group = turnGroups.get(atom.turnNumber);
-    if (group) {
-      group.push(atom);
-    } else {
-      turnGroups.set(atom.turnNumber, [atom]);
-    }
-  }
-
-  const turnNumbers = [...turnGroups.keys()].sort((a, b) => a - b);
-  if (turnNumbers.length === 0) return undefined;
-
-  // Identify compactable turns (middle zone)
   // Previous compaction_restore atoms ARE included — the new restore supersedes them.
-  const compactableTurns: number[] = [];
-  for (const tn of turnNumbers) {
+  const inRange = new Set<string>();
+  for (const atom of allAtoms) {
+    if (atom.turnNumber === undefined) continue;
     // Tier-1 verbatim recency (§4.3) — shared with clearing.
-    if (currentTurn - tn <= RETENTION_POLICY.keepRecentTurns) continue;
-    const group = turnGroups.get(tn)!;
-    if (group.some((a) => pinnedAtomIds.has(a.atomId))) continue;
-    // Skip if already compacted (idempotency) — but only for non-restore atoms
-    const isRestoreAtom = group.every((a) => a.sourceKind === 'compaction_restore');
-    if (lastCompactedTurn !== undefined && tn <= lastCompactedTurn && !isRestoreAtom) continue;
-
-    compactableTurns.push(tn);
+    if (currentTurn - atom.turnNumber <= RETENTION_POLICY.keepRecentTurns) continue;
+    if (pinnedAtomIds.has(atom.atomId)) continue;
+    inRange.add(atom.atomId);
   }
 
-  // Exchanges span turns (assistant tool_use in turn N, results in N+1), so a
-  // turn-granular range could strand a tool_use or orphan its results. Snap to
-  // exchange boundaries: a turn leaves the range when any of its atoms belongs
-  // to an exchange with atoms outside it (pinned, recent, pre-turn-stamp).
-  // Removing a turn can re-straddle another exchange — iterate to a fixed point.
-  const inRange = new Set(compactableTurns);
+  // Never strand a tool_use or orphan its results: an exchange with any atom
+  // outside the range (pinned, recent, pre-turn-stamp) leaves it whole. Each
+  // atom belongs to one exchange, so one pass reaches the fixed point.
   const atomById = new Map(allAtoms.map((a) => [a.atomId, a]));
-  const exchangeTurnSets = new Map<string, Set<number | undefined>>();
+  const exchangeAtoms = new Map<string, AiMessageAtomV1[]>();
   for (const atom of allAtoms) {
     const key = exchangeKeyForAtom(atom, atomById);
     if (key.startsWith('standalone:')) continue;
-    let turns = exchangeTurnSets.get(key);
-    if (!turns) {
-      turns = new Set();
-      exchangeTurnSets.set(key, turns);
-    }
-    turns.add(atom.turnNumber);
+    const members = exchangeAtoms.get(key);
+    if (members) members.push(atom);
+    else exchangeAtoms.set(key, [atom]);
   }
-  let snapped = true;
-  while (snapped) {
-    snapped = false;
-    for (const turns of exchangeTurnSets.values()) {
-      const memberTurns = [...turns];
-      const inside = memberTurns.filter((t): t is number => t !== undefined && inRange.has(t));
-      if (inside.length === 0 || inside.length === memberTurns.length) continue;
-      for (const t of inside) inRange.delete(t);
-      snapped = true;
-    }
+  for (const members of exchangeAtoms.values()) {
+    if (members.every((a) => inRange.has(a.atomId))) continue;
+    for (const a of members) inRange.delete(a.atomId);
   }
-  const rangeTurns = compactableTurns.filter((tn) => inRange.has(tn));
 
-  // Filter out turns that ONLY have restore atoms — we include them for removal
-  // but don't count them towards the minimum. Need enough real content turns
-  // to justify the summarizer overhead.
-  const contentTurns = rangeTurns.filter((tn) => {
-    const group = turnGroups.get(tn)!;
-    return !group.every((a) => a.sourceKind === 'compaction_restore');
-  });
-
-  if (contentTurns.length < RETENTION_POLICY.minCompactableTurns) return undefined;
-
-  const fromTurn = Math.min(...rangeTurns);
-  const toTurn = Math.max(...rangeTurns);
-  const contentFromTurn = Math.min(...contentTurns);
+  const atoms = allAtoms.filter((a) => inRange.has(a.atomId));
+  // Restore atoms are removed with the range but do not count toward the
+  // minimum — enough real content turns must justify the summarizer call.
+  const contentTurns = new Set(
+    atoms.filter((a) => a.sourceKind !== 'compaction_restore').map((a) => a.turnNumber!),
+  );
+  if (contentTurns.size < RETENTION_POLICY.minCompactableTurns) return undefined;
 
   const shownById = new Map(shownAtoms.map((a) => [a.atomId, a.message]));
-  const atoms: AiMessageAtomV1[] = [];
-  const messages: AiMessageV1[] = [];
-  for (const tn of rangeTurns) {
-    const group = turnGroups.get(tn)!;
-    for (const atom of group) {
-      atoms.push(atom);
-      // Don't feed previous compaction_restore atoms to the summarizer —
-      // they're metadata, not real conversation. The previous summary
-      // is passed separately via the merge prompt.
-      if (atom.sourceKind !== 'compaction_restore') {
-        messages.push(shownById.get(atom.atomId) ?? atom.message);
-      }
-    }
+  const entries: TranscriptEntry[] = [];
+  for (const atom of atoms) {
+    // Previous compaction_restore atoms are metadata, not conversation — the
+    // previous summary is passed separately via the merge prompt.
+    if (atom.sourceKind === 'compaction_restore') continue;
+    entries.push({
+      turnNumber: atom.turnNumber!,
+      sourceKind: atom.sourceKind,
+      message: shownById.get(atom.atomId) ?? atom.message,
+    });
   }
 
-  return { fromTurn, toTurn, contentFromTurn, atoms, messages };
+  const turns = atoms.map((a) => a.turnNumber!);
+  return { fromTurn: Math.min(...turns), toTurn: Math.max(...turns), atoms, entries };
 }
 
 // ============================================================================
 // Compaction Restore Atom
 // ============================================================================
+
+/**
+ * How many active refs the restore lists. Each line costs about 50 tokens on
+ * every turn, and older refs also appear in the summary's What Was Read.
+ */
+const RESTORE_ACTIVE_REFS_MAX = 40;
 
 function createCompactionRestoreAtom(
   pinnedState: PinnedState,
@@ -314,6 +304,7 @@ function createCompactionRestoreAtom(
   compressedTurnRange: [number, number],
   compactionNumber: number,
   currentTurnNumber: number,
+  placement: { turnNumber: number; createdAtMs: number },
   availableReadOpId?: string,
 ): AiMessageAtomV1 {
   const parts: string[] = [];
@@ -332,7 +323,19 @@ function createCompactionRestoreAtom(
   }
   if (pinnedState.activeRefs && pinnedState.activeRefs.length > 0) {
     parts.push('- Active refs:');
-    for (const ref of pinnedState.activeRefs) {
+    // The restore is sent every turn and the refs carry forward through each
+    // compaction, so it renders the newest. The artifact keeps them all.
+    const shown = [...pinnedState.activeRefs]
+      .sort((a, b) => b.fromTurn - a.fromTurn)
+      .slice(0, RESTORE_ACTIVE_REFS_MAX)
+      .reverse();
+    const omitted = pinnedState.activeRefs.length - shown.length;
+    if (omitted > 0) {
+      parts.push(
+        `  - (${String(omitted)} older refs not listed — the summary names the reads they came from)`,
+      );
+    }
+    for (const ref of shown) {
       // §4.8/§4.9: a /run/outputs ref keeps the read affordance ONLY when the
       // agent actually holds a callable read op — teaching a specific op name
       // the turn can't call would be a dishonest (and now ceiling-rejected)
@@ -375,8 +378,11 @@ function createCompactionRestoreAtom(
     sourceId: `compaction:${String(compactionNumber)}`,
     sourceKind: 'compaction_restore',
     message: textMessage('user', text),
-    createdAtMs: Date.now(),
-    turnNumber: compressedTurnRange[0], // Place at the start of compressed range
+    // The restore takes the last compacted atom's slot, so a later re-sort by
+    // (turn, createdAt) keeps it there — after a pinned atom kept inside the
+    // range, before a straddling exchange kept at its end.
+    createdAtMs: placement.createdAtMs,
+    turnNumber: placement.turnNumber,
   };
 }
 
@@ -431,35 +437,28 @@ export async function triggerCompaction(
 ): Promise<(CompactionResult & { updatedState: AiConversationStateV1 }) | undefined> {
   const currentTurn = state.turnNumber;
 
-  // 1. Idempotency guard: check watermark
-  const lastCompactedTurn = state.compaction?.lastCompactedTurn;
+  // 1. Only atoms still in history, in history order. Clearing appends its
+  // notes to the hydrated set out of position, and a compacted atom has left
+  // history, so this is also what keeps a compaction from running twice.
+  const hydratedById = new Map(hydratedAtoms.map((a) => [a.atomId, a]));
+  const historyAtoms = state.history.atoms.flatMap((ref) => {
+    const atom = hydratedById.get(ref.atomId);
+    return atom ? [atom] : [];
+  });
 
   // The summarizer reads, and the saving is measured against, history as
   // assembleRequest sends it: observations reduced and stamps removed. The
   // archive keeps the atoms as stored.
-  const shownAtoms = atomsAsSent(hydratedAtoms);
+  const shownAtoms = atomsAsSent(historyAtoms);
 
   // 2. Identify compaction range
   const pinnedAtomIds = new Set<string>();
-  const atomById = new Map(hydratedAtoms.map((a) => [a.atomId, a]));
-  for (const id of computePinnedAtomIds(hydratedAtoms, Math.max(currentTurn - 1, 0))) {
-    if (atomById.get(id)?.sourceKind !== 'compaction_restore') pinnedAtomIds.add(id);
+  for (const id of computePinnedAtomIds(historyAtoms, Math.max(currentTurn - 1, 0))) {
+    if (hydratedById.get(id)?.sourceKind !== 'compaction_restore') pinnedAtomIds.add(id);
   }
-  const range = identifyCompactionRange(
-    hydratedAtoms,
-    shownAtoms,
-    currentTurn,
-    pinnedAtomIds,
-    lastCompactedTurn,
-  );
+  const range = identifyCompactionRange(historyAtoms, shownAtoms, currentTurn, pinnedAtomIds);
 
   if (!range) return undefined; // Nothing to compact
-
-  // Idempotency: ensure we're not re-compacting content turns (the superseded
-  // restore atom legitimately sits inside the previous range).
-  if (lastCompactedTurn !== undefined && range.contentFromTurn <= lastCompactedTurn) {
-    return undefined;
-  }
 
   // 3. Load the previous artifact (incremental merge + activeRef carry-forward)
   const previousArtifactRef = state.compaction?.artifactRef;
@@ -482,6 +481,7 @@ export async function triggerCompaction(
     previousArtifact?.pinnedState.activeRefs,
     pinnedState.activeRefs,
     sweepClearedNotePointers(range.atoms),
+    compactedResultPointers(range.atoms),
   );
   if (mergedRefs.length > 0) pinnedState.activeRefs = mergedRefs;
 
@@ -493,11 +493,11 @@ export async function triggerCompaction(
   const summaryMaxTokens = template.maxTokens;
 
   const prompt = previousSummary
-    ? buildMergePrompt(range.messages, pinnedState, previousSummary, template, [
+    ? buildMergePrompt(range.entries, pinnedState, previousSummary, template, [
         range.fromTurn,
         range.toTurn,
       ])
-    : buildSummarizationPrompt(range.messages, pinnedState, template, [
+    : buildSummarizationPrompt(range.entries, pinnedState, template, [
         range.fromTurn,
         range.toTurn,
       ]);
@@ -549,12 +549,14 @@ export async function triggerCompaction(
   });
 
   // 8. Create compaction_restore atom
+  const lastCompacted = range.atoms[range.atoms.length - 1]!;
   const restoreAtom = createCompactionRestoreAtom(
     pinnedState,
     summaryMarkdown,
     [range.fromTurn, range.toTurn],
     compactionNumber,
     currentTurn,
+    { turnNumber: lastCompacted.turnNumber!, createdAtMs: lastCompacted.createdAtMs },
     config.availableReadOpId,
   );
 
@@ -569,12 +571,9 @@ export async function triggerCompaction(
     persist: true,
   });
 
-  // 9. Rewrite conversation state
-  // Remove compacted atoms, replace with restore atom
+  // 9. Rewrite conversation state: the restore atom replaces the range in
+  // the last compacted atom's position.
   const compactedAtomIds = new Set(range.atoms.map((a) => a.atomId));
-  const keptAtomRefs = state.history.atoms.filter((a) => !compactedAtomIds.has(a.atomId));
-
-  // Build atom ref for restore atom
   const restoreAtomRef = {
     atomId: restoreAtom.atomId,
     ref: restoreBatchRef,
@@ -584,21 +583,10 @@ export async function triggerCompaction(
     createdAtMs: restoreAtom.createdAtMs,
     turnNumber: restoreAtom.turnNumber,
   };
-
-  // Insert restore atom at the correct position (before recent turns)
-  const newAtoms = [];
-  let restoreInserted = false;
-  for (const atomRef of keptAtomRefs) {
-    const tn = atomRef.turnNumber ?? -1;
-    if (!restoreInserted && tn > range.toTurn) {
-      newAtoms.push(restoreAtomRef);
-      restoreInserted = true;
-    }
-    newAtoms.push(atomRef);
-  }
-  if (!restoreInserted) {
-    // All remaining atoms are from before the range — append restore at end
-    newAtoms.push(restoreAtomRef);
+  const newAtoms: AiConversationStateV1['history']['atoms'] = [];
+  for (const atomRef of state.history.atoms) {
+    if (!compactedAtomIds.has(atomRef.atomId)) newAtoms.push(atomRef);
+    else if (atomRef.atomId === lastCompacted.atomId) newAtoms.push(restoreAtomRef);
   }
 
   state.history.atoms = newAtoms;
@@ -622,8 +610,8 @@ export async function triggerCompaction(
   });
 
   // Estimate tokens saved
-  const compactedTokens = range.messages.reduce(
-    (sum, msg) => sum + estimateStringTokens(JSON.stringify(msg)),
+  const compactedTokens = range.entries.reduce(
+    (sum, entry) => sum + estimateStringTokens(JSON.stringify(entry.message)),
     0,
   );
   const restoreTokens = estimateStringTokens(

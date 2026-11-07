@@ -13,7 +13,7 @@ import {
   textMessage,
 } from '@aflow/schemas';
 import { buildOutline, type OutlineNode } from '@aflow/memory-paths';
-import { RETENTION_POLICY } from './retentionPolicy.js';
+import { RETENTION_POLICY, currentRunStartIndex } from './retentionPolicy.js';
 import { clearedObservationOf, renderToolObservations } from './toolObservations.js';
 import {
   ESTIMATED_CHARS_PER_TOKEN,
@@ -118,6 +118,47 @@ export function exchangeProtectionClass(
     );
   }
   return cls;
+}
+
+/**
+ * The exchanges either clearing path may take (§4.3). An exchange qualifies
+ * only when all of these hold:
+ * - it carries a tool result and has not been cleared before
+ * - none of its atoms is pinned (§4.1)
+ * - every turn it spans is older than the recency floor (Tier-1)
+ * - it was created before the current run started (§4.10)
+ * - every one of its results, as sent, reaches the size threshold (§4.4)
+ */
+export function clearableExchanges(
+  exchanges: Iterable<Exchange>,
+  ctx: {
+    atoms: readonly AtomRef[];
+    currentTurn: number;
+    pinned: ReadonlySet<string>;
+    alreadyCleared: ReadonlySet<string>;
+    sentById: Map<string, AiMessageAtomV1>;
+  },
+): Exchange[] {
+  const runStart = currentRunStartIndex(ctx.atoms);
+  const positionById = new Map(ctx.atoms.map((atom, index) => [atom.atomId, index]));
+  const isLarge = (ref: AtomRef): boolean => {
+    if (ref.sourceKind !== 'tool_result') return true;
+    const sent = ctx.sentById.get(ref.atomId);
+    return (
+      sent !== undefined &&
+      estimateMessageTokens(sent.message) >= RETENTION_POLICY.largeResultMinTokens
+    );
+  };
+  return [...exchanges].filter((ex) => {
+    if (!ex.hasToolResult || ctx.alreadyCleared.has(ex.key)) return false;
+    if (ex.atomRefs.some((a) => ctx.pinned.has(a.atomId))) return false;
+    const turns = [...ex.turns];
+    if (turns.some((tn) => ctx.currentTurn - tn <= RETENTION_POLICY.keepRecentTurns)) return false;
+    const firstPosition = Math.min(
+      ...ex.atomRefs.map((a) => positionById.get(a.atomId) ?? Number.POSITIVE_INFINITY),
+    );
+    return firstPosition <= runStart && ex.atomRefs.every(isLarge);
+  });
 }
 
 export function earliestCreatedAtMs(ex: Exchange): number {
@@ -257,16 +298,6 @@ export function estimateExchangeClearingTokens(
   const note = clearedExchangeNoteMessage(ex, hydratedById, noteOptions);
   const noteTokens = estimateMessageTokens(renderToolObservations([note])[0]!);
   return { removedTokens, noteTokens, netSavings: removedTokens - noteTokens };
-}
-
-/** Estimated tokens freed by clearing an exchange (atoms removed − note added). */
-export function estimateExchangeNetTokenSavings(
-  ex: Exchange,
-  hydratedById: Map<string, AiMessageAtomV1>,
-  sentById: Map<string, AiMessageAtomV1>,
-  noteOptions: ClearNoteOptions,
-): number {
-  return estimateExchangeClearingTokens(ex, hydratedById, sentById, noteOptions).netSavings;
 }
 
 /** Bounded snippet of a tool call's arguments — enough to answer "what did we ask?". */
