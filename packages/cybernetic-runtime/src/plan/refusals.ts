@@ -93,7 +93,7 @@ export function waitingWithoutRun(current: PlanNode): PlanOpError {
     ok: false,
     code: 'PLAN_NODE_WAITING_NEEDS_RUN',
     message:
-      `Plan node "${current.title}" has no run in flight on it or on an open node under it, and a waiting node waits on a run, ` +
+      `Plan node "${current.title}" has no run in flight on it or on an active node under it, and a waiting node waits on a run, ` +
       'so nothing was written. To hold it on the operator, set status "blocked" with a note saying what it waits ' +
       'on. To wait on work, start the run against this node first, then set status "waiting".',
     details: { nodeId: current.nodeId, status: current.status },

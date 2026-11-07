@@ -12,6 +12,8 @@ import {
   planBoardCards,
   planBoardColumn,
   planRootWaits,
+  planRunServes,
+  planTreeRunsServing,
   planStepsAllClosed,
   type PlanBoardPlacement,
   type PlanLane,
@@ -123,19 +125,13 @@ function boardNode(node: PlanNodeSummary, reads: PlanBoardReads): PlanTreeNode {
   };
 }
 
-/** A run in flight serves an active node at or under `node`. */
-function servesActiveBelow(node: PlanTreeNode): boolean {
-  if (node.status === 'active' && node.counts.inFlightRuns > 0) return true;
-  return node.children.some(servesActiveBelow);
-}
-
 /**
  * A parent's progress and activity are its children's: progress, those done
  * of those not dropped; activity, in flight where a run serves the parent or
- * any active node under it — runs serve the steps under a root or phase,
- * rarely the parent itself. A run still serving a done or dropped child moves
- * no work the parent waits on, so it leaves the parent idle, though that
- * child's own card reads in flight.
+ * any active node under it (`planRunServes`) — runs serve the steps under a
+ * root or phase, rarely the parent itself. A run still serving a blocked,
+ * waiting, done or dropped child moves no work the parent waits on, so it
+ * leaves the parent idle, though that child's own card reads in flight.
  */
 function withChildren(node: PlanTreeNode): PlanTreeNode {
   const children = node.children.map(withChildren);
@@ -144,8 +140,7 @@ function withChildren(node: PlanTreeNode): PlanTreeNode {
   return {
     ...node,
     children,
-    activity:
-      node.counts.inFlightRuns > 0 || children.some(servesActiveBelow) ? 'in_flight' : 'idle',
+    activity: planTreeRunsServing({ ...node, children }) > 0 ? 'in_flight' : 'idle',
     progress: {
       done: counted.filter((child) => child.status === 'done').length,
       total: counted.length,
@@ -292,9 +287,9 @@ function servedFromBelow(steps: readonly PlanOverviewNode[]): Set<string> {
   const byId = new Map(steps.map((step) => [step.nodeId, step]));
   const served = new Set<string>();
   for (const step of steps) {
-    if (step.status !== 'active' || step.inFlightRuns === 0) continue;
+    if (step.inFlightRuns === 0) continue;
     let above = step.openParentId !== null ? byId.get(step.openParentId) : undefined;
-    while (above !== undefined && !served.has(above.nodeId)) {
+    while (above !== undefined && planRunServes(above.nodeId, step) && !served.has(above.nodeId)) {
       served.add(above.nodeId);
       above = above.openParentId !== null ? byId.get(above.openParentId) : undefined;
     }

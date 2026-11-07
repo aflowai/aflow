@@ -15,6 +15,7 @@ import {
   planRootCard,
   planBoardColumn,
   planNodeApprovalAsked,
+  planTreeRunsServing,
   type PlanBoardCard,
   type PlanNodeCard,
   type PlanNodeStatus,
@@ -247,13 +248,22 @@ export function planViewQuery(
 
 /**
  * What holds a `waiting` step, which is the loop's on a run: the run still
- * going, or ended with the loop yet to advance the step. Undefined otherwise.
+ * going, on it or on an active step under it, or ended with the loop yet to
+ * advance the step. Undefined otherwise. It reads the runs the waiting rule
+ * admits the write on (`planTreeRunsServing`), so the line and the rule agree.
  */
 export function waitingLine(node: PlanTreeNode): string | undefined {
   if (node.status !== 'waiting') return undefined;
-  const running = node.counts.inFlightRuns;
+  const running = planTreeRunsServing(node);
   if (running === 0) return 'Its run ended; the loop advances it when it returns';
-  return running === 1 ? 'A run is on it' : `${String(running)} runs are on it`;
+  const own = node.counts.inFlightRuns;
+  const below = running - own;
+  if (below === 0) return running === 1 ? 'A run is on it' : `${String(running)} runs are on it`;
+  if (own === 0)
+    return below === 1
+      ? 'A run is on a step under it'
+      : `${String(below)} runs are on steps under it`;
+  return `${String(running)} runs are on it and on steps under it`;
 }
 
 /** The root's children with steps of their own: what the Phase filter offers. */

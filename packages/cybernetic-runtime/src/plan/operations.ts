@@ -33,6 +33,8 @@ import {
   PLAN_NODE_ASK_HEAD,
   planNodeCardInOrder,
   planNodeCreatedStatus,
+  planRunServes,
+  planRunsServing,
   type CoachLearning,
   type PlanNode,
   type PlanNodeCreateInput,
@@ -489,16 +491,19 @@ async function writePlanNode(
   if (notMerged !== undefined) return notMerged;
   // Only a write into waiting is judged: a node already waiting with no run stands as it is.
   if (input.status === 'waiting' && current.status !== 'waiting') {
-    // A run on a done or dropped node under it is no live work, and the board does not count it in flight.
+    // Live work is what the board counts in flight for the node (`planRunServes`): a run on
+    // a blocked, waiting, done or dropped node under it is not.
     const subtree = await ctx.store.walk(ctx.spaceId, {
       rootId: current.nodeId,
       ...PLAN_TREE_WALK_BOUNDS,
     });
-    const live = subtree.nodes
-      .filter((n) => n.nodeId === current.nodeId || !isClosedPlanNodeStatus(n.status))
-      .map((n) => n.nodeId);
-    const inFlight = await ctx.store.inFlightRunCountsOf(ctx.spaceId, live);
-    if (![...inFlight.values()].some((count) => count > 0)) return waitingWithoutRun(current);
+    const serving = subtree.nodes.filter((n) => planRunServes(current.nodeId, n));
+    const inFlight = await ctx.store.inFlightRunCountsOf(
+      ctx.spaceId,
+      serving.map((n) => n.nodeId),
+    );
+    if (planRunsServing(current.nodeId, serving, (id) => inFlight.get(id) ?? 0) === 0)
+      return waitingWithoutRun(current);
   }
 
   const pullRequest =
@@ -1201,12 +1206,12 @@ async function readPlanNode(
   };
   if (placement === undefined) return { ok: true, ...read };
   const [closedAncestor, inFlight] = placement;
-  // The board's rule: the node's own runs count whatever its status, a run
-  // under it only where it serves an active node.
-  const servesIt = (n: { nodeId: string; status: string }) =>
-    (inFlight.get(n.nodeId) ?? 0) > 0 && (n.nodeId === nodeId || n.status === 'active');
-  const activity =
-    servesIt(node) || subtree.nodes.some(servesIt) ? ('in_flight' as const) : ('idle' as const);
+  const served = planRunsServing(
+    nodeId,
+    subtree.nodes.some((n) => n.nodeId === nodeId) ? subtree.nodes : [node, ...subtree.nodes],
+    (id) => inFlight.get(id) ?? 0,
+  );
+  const activity = served > 0 ? ('in_flight' as const) : ('idle' as const);
   return {
     ok: true,
     ...read,
