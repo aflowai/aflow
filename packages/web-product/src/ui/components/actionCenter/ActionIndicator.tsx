@@ -4,6 +4,7 @@ import { IndicatorButton } from '@aflow/design-system';
 import { useOptionalCybernetic } from '../cybernetic-provider.js';
 import { useActiveSurface } from '../../hooks/use-active-surface.js';
 import { useActionCenter, type UseActionCenterResult } from '../../hooks/use-action-center.js';
+import { coachProposalCount } from '../../hooks/use-action-center-lanes.js';
 
 export interface ActionIndicatorProps {
   spaceId: string;
@@ -13,7 +14,7 @@ export interface ActionIndicatorProps {
   onClick: () => void;
 }
 
-type CoachLifecycle = 'idle' | 'reviewing' | 'stalled';
+export type CoachLifecycle = 'idle' | 'reviewing' | 'stalled';
 
 export function ActionIndicator(props: ActionIndicatorProps) {
   // Splitting on provider presence at the component boundary keeps each
@@ -70,7 +71,11 @@ function Shell({
   const total = actionCenter.counts.actionable;
   const tone = total > 0 || (hasCoach && lifecycle === 'stalled') ? 'warning' : 'idle';
   const pulse = hasCoach && lifecycle === 'reviewing';
-  const label = labelFor(total, hasCoach ? lifecycle : null);
+  const label = indicatorLabel(
+    total,
+    coachProposalCount(actionCenter.lanes),
+    hasCoach ? lifecycle : null,
+  );
   return (
     <IndicatorButton
       icon="bell"
@@ -83,17 +88,27 @@ function Shell({
   );
 }
 
-function labelFor(total: number, lifecycle: CoachLifecycle | null): string {
+/**
+ * The count leaves Coach proposals out, so a zero count is not an empty
+ * Action Center while they wait. The hint names them without counting them.
+ */
+export function indicatorLabel(
+  total: number,
+  coachProposals: number,
+  lifecycle: CoachLifecycle | null,
+): string {
+  const nothingCounted =
+    coachProposals > 0 ? 'Coach proposals wait in Coach review' : 'no pending actions';
   if (lifecycle === 'stalled') {
     return total > 0
       ? `Action Center — ${String(total)} pending · Coach stalled`
-      : 'Coach is stalled — investigate (no pending actions)';
+      : `Coach is stalled — investigate (${nothingCounted})`;
   }
   if (total > 0) {
     return lifecycle === 'reviewing'
       ? `Action Center — ${String(total)} pending · Coach reviewing`
       : `Action Center — ${String(total)} pending`;
   }
-  if (lifecycle === 'reviewing') return 'Coach is reviewing — no pending actions';
-  return 'Action Center — no pending actions';
+  if (lifecycle === 'reviewing') return `Coach is reviewing — ${nothingCounted}`;
+  return `Action Center — ${nothingCounted}`;
 }

@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import type { ActionCenterItem } from './use-action-center-types.js';
-import { partitionLanes } from './use-action-center-lanes.js';
+import {
+  attentionCount,
+  coachProposalCount,
+  isCoachProposal,
+  partitionLanes,
+} from './use-action-center-lanes.js';
 
 function item(
   kind: ActionCenterItem['kind'],
@@ -131,5 +136,105 @@ describe('partitionLanes — Plan 156 §7A.2 Coach lane split', () => {
     expect(lanes.coachProposals).toHaveLength(1);
     expect(lanes.inputs).toHaveLength(1);
     expect(lanes.platformIssues).toHaveLength(1);
+  });
+});
+
+function proposal(
+  id: string,
+  requester: ActionCenterItem['requestedBy']['kind'],
+  label: string,
+): ActionCenterItem {
+  return item('ratification', {
+    id,
+    origin: {
+      type: 'proposal',
+      proposalId: id,
+      proposalRevision: 0,
+      resolutionRoute: 'tenant_ratification',
+    },
+    requestedBy: { kind: requester, label },
+  });
+}
+
+describe('attentionCount — the bell and the Chat count', () => {
+  const ownAttention = [
+    item('human_approval', { id: 'step:gate' }),
+    item('write_approval', { id: 'step:write' }),
+    item('session_invitation', { id: 'invite:1' }),
+    item('human_input', { id: 'step:ask' }),
+    item('browser_handoff', { id: 'handoff:1' }),
+    item('needs_oauth_consent', { id: 'consent:1' }),
+    item('human_approval', {
+      id: 'settings:egress-1',
+      origin: { type: 'settings', recordKind: 'egress', recordId: 'e1', recordVersion: 1 },
+    }),
+  ];
+
+  it('counts every item that waits on the operator when no Coach proposal is open', () => {
+    expect(attentionCount(partitionLanes(ownAttention))).toBe(7);
+  });
+
+  it('leaves Coach proposals out of the count and keeps them in their lane', () => {
+    const lanes = partitionLanes([
+      ...ownAttention,
+      proposal('proposal:coach-1', 'coach', 'Coach review'),
+      proposal('proposal:coach-2', 'coach', 'Coach review'),
+    ]);
+    expect(attentionCount(lanes)).toBe(7);
+    expect(lanes.coachProposals.map((it) => it.id)).toEqual([
+      'proposal:coach-1',
+      'proposal:coach-2',
+    ]);
+  });
+
+  it('counts zero when only Coach proposals are open', () => {
+    const lanes = partitionLanes([proposal('proposal:coach-1', 'coach', 'Coach review')]);
+    expect(attentionCount(lanes)).toBe(0);
+  });
+
+  it('still counts proposals from sources other than the Coach', () => {
+    const lanes = partitionLanes([
+      proposal('proposal:coach-1', 'coach', 'Coach review'),
+      proposal('proposal:patch-1', 'agent', 'Helmsman patch'),
+      proposal('proposal:compose-1', 'workflow', 'Skill compose'),
+      proposal('proposal:operator-1', 'system', 'Operator'),
+    ]);
+    expect(attentionCount(lanes)).toBe(3);
+  });
+
+  it('leaves notices, platform issues and Coach activity out of the count', () => {
+    const lanes = partitionLanes([
+      item('trigger_armed', { id: 'schedule:1' }),
+      item('platform_issue', { id: 'proposal:platform' }),
+      item('coach_activity', { id: 'coach-activity:1' }),
+    ]);
+    expect(attentionCount(lanes)).toBe(0);
+  });
+});
+
+describe('coachProposalCount — the proposals the count leaves out', () => {
+  it('counts open Coach proposals and no proposal from another source', () => {
+    const lanes = partitionLanes([
+      item('human_approval', { id: 'step:gate' }),
+      proposal('proposal:coach-1', 'coach', 'Coach review'),
+      proposal('proposal:coach-2', 'coach', 'Coach review'),
+      proposal('proposal:patch-1', 'agent', 'Helmsman patch'),
+    ]);
+    expect(coachProposalCount(lanes)).toBe(2);
+    expect(attentionCount(lanes)).toBe(2);
+  });
+
+  it('counts zero when no Coach proposal is open', () => {
+    expect(coachProposalCount(partitionLanes([item('human_input', { id: 'step:ask' })]))).toBe(0);
+  });
+});
+
+describe('isCoachProposal', () => {
+  it('names a proposal the Coach requested and nothing else', () => {
+    expect(isCoachProposal(proposal('proposal:c', 'coach', 'Coach review'))).toBe(true);
+    expect(isCoachProposal(proposal('proposal:a', 'agent', 'Helmsman patch'))).toBe(false);
+    expect(
+      isCoachProposal(item('human_approval', { requestedBy: { kind: 'coach', label: 'Coach' } })),
+    ).toBe(false);
   });
 });
