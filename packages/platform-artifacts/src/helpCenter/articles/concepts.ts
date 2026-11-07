@@ -112,7 +112,7 @@ The Coach reviews completed runs. From what it sees it proposes changes to a ski
     body: `## Where
 
 - **Skills →** a skill **→ Runs** lists that skill's runs with status, start time, duration, cost and eval result. **Open** shows one run task by task; **Session** opens **Run Details**.
-- In **Chat**, the Workbench beside the conversation has a **Space** tab for the whole space, then a **Timeline** of every step in this conversation and a **Context** tab.
+- In **Chat**, the Workbench beside the conversation has a **Space** tab for the whole space, then a **Timeline** of every step in this conversation and a **Context** tab. The **Timeline** folds the tool calls of each agent turn under that turn. The fold reads how many tool calls the turn made and what the turn and its tool calls spent, such as **12 tool calls · 48.2k tok · $0.031**. Choose it to show the tool calls.
 
 ## Sessions
 

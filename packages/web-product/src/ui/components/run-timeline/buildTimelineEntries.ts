@@ -517,3 +517,52 @@ function isStepRelatedEvent(eventType: string): boolean {
   // SessionPaused with a stepExecutionId is also step-related (agent request_input)
   return eventType.startsWith('Step') || eventType === 'SessionPaused';
 }
+
+// =============================================================================
+// Turn folds — presentation only
+// =============================================================================
+
+/** What a turn's fold says before it opens: its tool calls, and what the turn and its tools spent. */
+export interface TurnToolsSummary {
+  toolCalls: number;
+  totalTokens: number;
+  totalCostUsd: number;
+  /** Every step that called a model ran on this computer, so a cost of nothing is not a missing one. */
+  ranLocally: boolean;
+}
+
+/**
+ * The tool rows each agent turn dispatched, keyed by the turn's group key.
+ * A tool row whose turn the entries do not hold, because its history was cut,
+ * is in no fold and keeps its place.
+ */
+export function turnToolGroups(entries: TimelineEntry[]): Map<string, StepGroup[]> {
+  const turns = new Set<string>();
+  for (const entry of entries) {
+    if (entry.kind === 'step' && entry.group.operationId === AGENT_TURN_OPERATION) {
+      turns.add(stepGroupKey(entry.group));
+    }
+  }
+  const byTurn = new Map<string, StepGroup[]>();
+  for (const entry of entries) {
+    if (entry.kind !== 'step') continue;
+    const key = entry.group.parentTurnKey;
+    if (key == null || !turns.has(key)) continue;
+    const tools = byTurn.get(key) ?? [];
+    tools.push(entry.group);
+    byTurn.set(key, tools);
+  }
+  return byTurn;
+}
+
+/** The turn's own model call and every tool row under it, summed. */
+export function turnToolsSummary(turn: StepGroup, tools: readonly StepGroup[]): TurnToolsSummary {
+  const steps = [turn, ...tools];
+  const providers = steps.flatMap((g) => (g.costInfo?.provider ? [g.costInfo.provider] : []));
+  return {
+    toolCalls: tools.length,
+    totalTokens: steps.reduce((sum, g) => sum + (g.costInfo?.totalTokens ?? 0), 0),
+    totalCostUsd: steps.reduce((sum, g) => sum + (g.costInfo?.totalCostUsd ?? 0), 0),
+    ranLocally: providers.length > 0 && providers.every((p) => p === LOCAL_PROVIDER),
+  };
+}

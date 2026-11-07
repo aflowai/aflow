@@ -18,6 +18,7 @@ import {
   WorkbenchLink,
   WorkbenchSection,
   useWorkbenchSectionFold,
+  useWorkbenchSectionHeld,
 } from './WorkbenchSection.js';
 
 /**
@@ -52,6 +53,7 @@ export function WorkbenchCoach({
   const lifecycle = held ? 'reviewing' : coach.lifecycle;
   const coachSessionId = held ? heldReview.coachSessionId : coach.coachSessionId;
   const active = lifecycle !== 'idle';
+  useWorkbenchSectionHeld(proposals.length > 0 || active);
 
   return (
     <>
@@ -104,13 +106,14 @@ export function WorkbenchCoachFold({
   state,
   spaceId,
   spaceSlug,
+  review,
 }: {
   state: UseActionCenterResult;
   spaceId: string;
   spaceSlug: string;
+  /** The review the entity-events stream has seen start and not end (`useCoachReviewInProgress`). */
+  review: CoachReviewInProgress | null;
 }) {
-  const { events } = useSpaceEntityEvents(spaceId || null);
-  const review = useMemo(() => coachReviewFromEntityEvents(events), [events]);
   const proposals = coachReviewProposals(state).length;
   return (
     <WorkbenchLazySection
@@ -130,6 +133,12 @@ export function WorkbenchCoachFold({
       <WorkbenchCoach state={state} spaceId={spaceId} spaceSlug={spaceSlug} heldReview={review} />
     </WorkbenchLazySection>
   );
+}
+
+/** A Coach review the entity-events stream the board holds has seen start and not end. */
+export function useCoachReviewInProgress(spaceId: string): CoachReviewInProgress | null {
+  const { events } = useSpaceEntityEvents(spaceId || null);
+  return useMemo(() => coachReviewFromEntityEvents(events), [events]);
 }
 
 /** The Coach's own proposals, which the folded Coach header counts without a read. */

@@ -2,8 +2,14 @@ import { describe, expect, it } from 'vitest';
 
 import type { SessionEvent } from '@aflow/web-product/ui';
 
-import { buildTimelineEntries, computeRunSummary, stepGroupKey } from './buildTimelineEntries';
-import { stepStatusLabel } from './displayHelpers';
+import {
+  buildTimelineEntries,
+  computeRunSummary,
+  stepGroupKey,
+  turnToolGroups,
+  turnToolsSummary,
+} from './buildTimelineEntries';
+import { stepStatusLabel, turnToolsLabel } from './displayHelpers';
 import type { StepGroup, TimelineEntry } from './types';
 
 let seq = 0;
@@ -150,5 +156,70 @@ describe('a run on a model on this computer', () => {
   it('did not when any call went to a hosted model', () => {
     expect(computeRunSummary([step('ollama', 0), step('anthropic', 0.02)]).ranLocally).toBe(false);
     expect(computeRunSummary([]).ranLocally).toBe(false);
+  });
+});
+
+describe('the fold under each agent turn', () => {
+  const withUsage = (e: SessionEvent, usage: Record<string, unknown>): SessionEvent =>
+    ({ ...e, usage }) as unknown as SessionEvent;
+
+  function twoTurns(): TimelineEntry[] {
+    return buildTimelineEntries([
+      event('StepScheduled', 'agent-1', 'ai.agent.turn'),
+      withUsage(
+        event('StepSucceeded', 'agent-1', 'ai.agent.turn', { agentAction: 'invoke_steps' }),
+        { provider: 'anthropic', totalTokens: 1200, totalCostUsd: 0.02 },
+      ),
+      event('StepScheduled', 'search', 'catalog.tool.search'),
+      event('StepSucceeded', 'search', 'catalog.tool.search'),
+      event('StepScheduled', 'draft', 'ai.text.generate'),
+      withUsage(event('StepSucceeded', 'draft', 'ai.text.generate'), {
+        provider: 'anthropic',
+        totalTokens: 300,
+        totalCostUsd: 0.005,
+      }),
+      event('StepScheduled', 'agent-1', 'ai.agent.turn', {}, '2'),
+      event('StepSucceeded', 'agent-1', 'ai.agent.turn', { agentAction: 'complete' }, '2'),
+    ]);
+  }
+
+  function firstTurn(entries: TimelineEntry[]): StepGroup {
+    const group = entries.flatMap((e) => (e.kind === 'step' ? [e.group] : []))[0];
+    if (!group) throw new Error('expected a turn');
+    return group;
+  }
+
+  it("holds each turn's tool rows under the turn's key, and no turn without tools", () => {
+    const entries = twoTurns();
+    const byTurn = turnToolGroups(entries);
+    const key = stepGroupKey(firstTurn(entries));
+
+    expect([...byTurn.keys()]).toEqual([key]);
+    expect(byTurn.get(key)?.map((g) => g.stepId)).toEqual(['search', 'draft']);
+  });
+
+  it("counts the turn's tool calls and sums what the turn and its tools spent", () => {
+    const entries = twoTurns();
+    const turn = firstTurn(entries);
+    const summary = turnToolsSummary(turn, turnToolGroups(entries).get(stepGroupKey(turn)) ?? []);
+
+    expect(summary.toolCalls).toBe(2);
+    expect(summary.totalTokens).toBe(1500);
+    expect(summary.totalCostUsd).toBeCloseTo(0.025);
+    expect(summary.ranLocally).toBe(false);
+    expect(turnToolsLabel(summary)).toBe('2 tool calls · 1.5k tok · $0.025');
+  });
+
+  it('leaves a tool row whose turn the history cut in no fold', () => {
+    expect(turnToolGroups(twoTurns().slice(1)).size).toBe(0);
+  });
+
+  it('says what a turn reported and nothing it did not', () => {
+    expect(
+      turnToolsLabel({ toolCalls: 1, totalTokens: 0, totalCostUsd: 0, ranLocally: false }),
+    ).toBe('1 tool call');
+    expect(
+      turnToolsLabel({ toolCalls: 3, totalTokens: 900, totalCostUsd: 0, ranLocally: true }),
+    ).toBe('3 tool calls · 900 tok · local');
   });
 });

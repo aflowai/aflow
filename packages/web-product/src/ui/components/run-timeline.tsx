@@ -9,7 +9,7 @@
  * - Lazy-loaded payload details (only when expanded)
  */
 
-import { useState, useMemo, type ReactNode } from 'react';
+import { Fragment, useState, useMemo, type ReactNode } from 'react';
 
 import {
   Text,
@@ -30,6 +30,8 @@ import {
   computeRunSummary,
   resolveDelegateRole,
   stepGroupKey,
+  turnToolGroups,
+  turnToolsSummary,
 } from './run-timeline/buildTimelineEntries';
 import {
   eventColor,
@@ -39,11 +41,17 @@ import {
   subflowEventColor,
   subflowEventIcon,
   subflowEventLabel,
+  turnToolsLabel,
 } from './run-timeline/displayHelpers';
 import { ev } from './run-timeline/eventAccessor';
 import { RunSummaryBar, type RunSummary } from './run-timeline/RunSummaryBar';
 import { StepGroupCard } from './run-timeline/StepGroupCard';
-import type { RunTimelineProps, SubflowEntry, TimelineEntry } from './run-timeline/types';
+import type {
+  RunTimelineProps,
+  StepGroup,
+  SubflowEntry,
+  TimelineEntry,
+} from './run-timeline/types';
 import './run-timeline.css';
 
 export type { RunTimelineProps } from './run-timeline/types';
@@ -52,29 +60,92 @@ function ExecutionList({
   entries,
   summary,
   historyEdge,
+  foldTurnTools = false,
 }: {
   entries: TimelineEntry[];
   summary: RunSummary;
   historyEdge?: ReactNode;
+  foldTurnTools?: boolean;
 }) {
+  const toolsByTurn = useMemo(
+    () => (foldTurnTools ? turnToolGroups(entries) : new Map<string, StepGroup[]>()),
+    [entries, foldTurnTools],
+  );
   return (
     <Column gap="1">
       <RunSummaryBar summary={summary} />
       {historyEdge}
-      {entries.map((entry) =>
-        entry.kind === 'flow' ? (
-          <FlowEventRow key={entry.event.eventId} event={entry.event} />
-        ) : entry.kind === 'subflow' ? (
-          <SubflowEventCard key={entry.entry.event.eventId} entry={entry.entry} />
-        ) : entry.group.parentTurnKey != null ? (
-          <div key={stepGroupKey(entry.group)} className="rt-tool-indent">
+      {entries.map((entry) => {
+        if (entry.kind === 'flow') {
+          return <FlowEventRow key={entry.event.eventId} event={entry.event} />;
+        }
+        if (entry.kind === 'subflow') {
+          return <SubflowEventCard key={entry.entry.event.eventId} entry={entry.entry} />;
+        }
+        const key = stepGroupKey(entry.group);
+        const parent = entry.group.parentTurnKey;
+        // A folded tool row renders under its turn, not at its own place.
+        if (parent != null && toolsByTurn.has(parent)) return null;
+        if (parent != null) {
+          return (
+            <div key={key} className="rt-tool-indent">
+              <StepGroupCard group={entry.group} />
+            </div>
+          );
+        }
+        const tools = toolsByTurn.get(key);
+        if (!tools) return <StepGroupCard key={key} group={entry.group} />;
+        return (
+          <Fragment key={key}>
             <StepGroupCard group={entry.group} />
-          </div>
-        ) : (
-          <StepGroupCard key={stepGroupKey(entry.group)} group={entry.group} />
-        ),
-      )}
+            <TurnToolsFold turn={entry.group} tools={tools} />
+          </Fragment>
+        );
+      })}
     </Column>
+  );
+}
+
+/**
+ * One turn's tool rows behind a single line that counts them and says what
+ * the turn and its tools spent. Open, it shows the rows as the flat list
+ * shows them.
+ */
+function TurnToolsFold({ turn, tools }: { turn: StepGroup; tools: StepGroup[] }) {
+  const [expanded, setExpanded] = useState(false);
+  const label = turnToolsLabel(turnToolsSummary(turn, tools));
+  return (
+    <div className="rt-tool-indent" data-turn-tools-fold={stepGroupKey(turn)}>
+      <button
+        type="button"
+        aria-expanded={expanded}
+        onClick={() => {
+          setExpanded((v) => !v);
+        }}
+        style={{
+          all: 'unset',
+          cursor: 'pointer',
+          boxSizing: 'border-box',
+          width: '100%',
+          padding: 'var(--space-1) var(--space-2)',
+          borderRadius: 'var(--radius-md)',
+        }}
+      >
+        <Row gap="2" align="center">
+          <Icon name={expanded ? 'caret-down' : 'caret-right'} size="xs" />
+          <Text variant="muted" size="xs">
+            {label}
+          </Text>
+        </Row>
+      </button>
+      {expanded && (
+        <Column gap="1">
+          {tools.map((group) => (
+            <StepGroupCard key={stepGroupKey(group)} group={group} />
+          ))}
+        </Column>
+      )}
+    </div>
   );
 }
 
@@ -84,6 +155,7 @@ export function RunTimeline({
   withTabs = true,
   loading = false,
   historyEdge,
+  foldTurnTools = false,
 }: RunTimelineProps) {
   const entries = useMemo(() => buildTimelineEntries(events), [events]);
   const summary = useMemo(() => computeRunSummary(entries), [entries]);
@@ -120,7 +192,14 @@ export function RunTimeline({
   }
 
   if (!withTabs) {
-    return <ExecutionList entries={entries} summary={summary} historyEdge={historyEdge} />;
+    return (
+      <ExecutionList
+        entries={entries}
+        summary={summary}
+        historyEdge={historyEdge}
+        foldTurnTools={foldTurnTools}
+      />
+    );
   }
 
   return (
@@ -131,7 +210,12 @@ export function RunTimeline({
       </TabList>
 
       <TabPanel id="execution">
-        <ExecutionList entries={entries} summary={summary} historyEdge={historyEdge} />
+        <ExecutionList
+          entries={entries}
+          summary={summary}
+          historyEdge={historyEdge}
+          foldTurnTools={foldTurnTools}
+        />
       </TabPanel>
 
       <TabPanel id="state">
