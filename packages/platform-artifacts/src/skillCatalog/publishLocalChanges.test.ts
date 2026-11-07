@@ -83,6 +83,7 @@ import {
   STANDARD_REASON,
   UNMEASURED_REASON,
 } from './publishLocalChangesReview.js';
+import { COMMIT_CONFLICT, COMMIT_EMPTY } from './publishLocalChangesCommitStops.js';
 import { PUBLISH_AS_IT_STANDS } from './publishLocalChangesProse.js';
 import { FIX_ROUND_BRIEF_FINDINGS } from './publishLocalChangesFixRound.js';
 import { REPOSITORY_UNKNOWN_FAILURE } from './publishLocalChangesRepository.js';
@@ -225,7 +226,7 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     expect(validity.status).toBe('valid');
   });
 
-  it("is thirty-eight tasks — where the commit message comes from, the commission found, a named one checked against it and the stop on one that differs, its summary read, the folder read, the repository settled and the stop where none is, commit, check, the stop on a failed check, scan, what decides the approval, the review's depth, the review and its one retry, its findings graded, looked up in the rounds rule, asked of the decision model only where no row covers them and recorded, the check of an override and the stop on its refusal, the pull request composed, the push gate, the fix round handed its branch, approve, push, the pull request found, rewritten or opened, and the review read back", () => {
+  it("is forty tasks — where the commit message comes from, the commission found, a named one checked against it and the stop on one that differs, its summary read, the folder read, the repository settled and the stop where none is, commit, the stops on a patch that does not apply and on one that touches no file, check, the stop on a failed check, scan, what decides the approval, the review's depth, the review and its one retry, its findings graded, looked up in the rounds rule, asked of the decision model only where no row covers them and recorded, the check of an override and the stop on its refusal, the pull request composed, the push gate, the fix round handed its branch, approve, push, the pull request found, rewritten or opened, and the review read back", () => {
     expect(wf.tasks.map((t) => t.taskId)).toEqual([
       'message-from',
       'find-commission',
@@ -236,6 +237,8 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       'resolve-repository',
       'repository-unknown',
       'commit',
+      'commit-conflict',
+      'commit-empty',
       'check-commit',
       'checks-failed',
       'recheck-commit',
@@ -290,6 +293,8 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
         'resolve-repository',
         'repository-unknown',
       ],
+      'commit-conflict': ['commit'],
+      'commit-empty': ['commit'],
       'check-commit': ['commit'],
       'checks-failed': ['check-commit'],
       'recheck-commit': ['commit', 'check-commit'],
@@ -381,6 +386,8 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       'resolve-repository': 'workflow.run.decide',
       'repository-unknown': 'workflow.run.fail',
       commit: 'host.file.patch',
+      'commit-conflict': 'workflow.run.fail',
+      'commit-empty': 'workflow.run.fail',
       'check-commit': 'host.commit.check',
       'checks-failed': 'workflow.run.fail',
       'recheck-commit': 'host.commit.check',
@@ -1245,6 +1252,8 @@ interface Scenario {
   existingPrInto?: string;
   /** The commit as `host.file.patch` reports it, where not `COMMIT`. */
   commit?: Record<string, unknown>;
+  /** What `host.file.patch` returns, whole, where the patch made no commit: a `conflict` or `empty` ending. */
+  commitEnding?: Record<string, unknown>;
   /** Run inputs beside the ones every publication is started with. */
   inputs?: Record<string, unknown>;
   /** The composed text holds what looks like a secret, so the composition is refused. */
@@ -1419,6 +1428,7 @@ function rawOutput(
 ): Record<string, unknown> {
   switch (taskId) {
     case 'commit':
+      if (scenario.commitEnding !== undefined) return scenario.commitEnding;
       if (scenario.asItStands === true) {
         return HostFilePatchOutputSchema.parse({
           state: 'applied',
@@ -2006,7 +2016,7 @@ describe('Publish Local Changes — the folder decides whether the push asks', (
     expect(outcome).toMatchObject({
       asked: false,
       pushed: false,
-      ran: ['message-from', 'read-folder', 'resolve-repository', 'commit'],
+      ran: ['message-from', 'read-folder', 'resolve-repository', 'commit', 'commit-conflict'],
       state: {},
     });
   });
@@ -2761,6 +2771,184 @@ describe('Publish Local Changes — a branch is published as it stands', () => {
     });
     expect(asked.success).toBe(false);
     expect(asked.error?.issues[0]?.message).toContain('a branch as it stands');
+  });
+});
+
+describe('Publish Local Changes — a commit that makes nothing fails the run, never completes it', () => {
+  /** git's account where the branch's head already holds the patch, as the executor joins it. */
+  const ALREADY_APPLIED =
+    'error: src/a.ts: already exists in working directory; error: src/b.ts: patch does not apply';
+  /** git's account where the base moved under the patch. */
+  const BASE_MOVED = 'error: patch failed: src/b.ts:12; error: src/b.ts: patch does not apply';
+
+  function conflict(detail?: string): Record<string, unknown> {
+    return HostFilePatchOutputSchema.parse({
+      state: 'conflict',
+      filesChanged: 0,
+      files: ['src/a.ts', 'src/b.ts'],
+      conflicts: ['src/a.ts', 'src/b.ts'],
+      ...(detail === undefined ? {} : { detail }),
+    });
+  }
+
+  const EMPTY = HostFilePatchOutputSchema.parse({
+    state: 'empty',
+    filesChanged: 0,
+    files: [],
+    conflicts: [],
+  });
+
+  /** A run completes only where every task that failed is optional. */
+  function completed(outcome: Outcome): boolean {
+    return [...outcome.statuses].every(
+      ([taskId, status]) => status !== 'failed' || taskOrThrow(taskId).optional === true,
+    );
+  }
+
+  function endingIn(commitEnding: Record<string, unknown>, extra: Partial<Scenario> = {}) {
+    return publish({
+      pushApproval: 'never',
+      review: 'approve',
+      decision: 'approved',
+      commitEnding,
+      ...extra,
+    });
+  }
+
+  it('routes every state of the commit task to a task, and each that makes no commit to a stop', () => {
+    const gatedOn = (state: string) =>
+      wf.tasks
+        .filter((t) => {
+          const when = t.when as { expression?: string } | undefined;
+          return when?.expression === `tasks.commit.output.state == '${state}'`;
+        })
+        .map((t) => t.taskId);
+    const states = HostFilePatchOutputSchema.shape.state.options;
+    expect(states).toEqual(['applied', 'conflict', 'empty']);
+    expect(gatedOn('applied')).toEqual(['check-commit']);
+    expect(gatedOn('conflict')).toEqual(['commit-conflict']);
+    expect(gatedOn('empty')).toEqual(['commit-empty']);
+    for (const taskId of ['commit-conflict', 'commit-empty']) {
+      const stop = taskOrThrow(taskId);
+      expect(stop.operation, taskId).toBe('workflow.run.fail');
+      expect(stop.optional, taskId).not.toBe(true);
+      expect(stop.dependsOn, taskId).toEqual(['commit']);
+      expect((stop.failureInstruction ?? '').length, taskId).toBeGreaterThan(0);
+      expect((stop.failureInstruction ?? '').length, taskId).toBeLessThanOrEqual(4000);
+    }
+  });
+
+  const endings: [string, Record<string, unknown>, string][] = [
+    ['a conflict git gave no account of', conflict(), 'commit-conflict'],
+    ['a patch the branch already holds', conflict(ALREADY_APPLIED), 'commit-conflict'],
+    ['a base that moved under the patch', conflict(BASE_MOVED), 'commit-conflict'],
+    ['a change that touches no file', EMPTY, 'commit-empty'],
+  ];
+  for (const posture of ['always', 'never', 'unless-unreviewed'] as const) {
+    for (const [what, ending, stop] of endings) {
+      it(`${posture}, ${what}: fails the run at \`${stop}\`, and nothing after the commit runs`, () => {
+        const outcome = endingIn(ending, { pushApproval: posture });
+        expect(completed(outcome)).toBe(false);
+        expect(outcome.statuses.get(stop)).toBe('failed');
+        expect(outcome.ran).toEqual([
+          'message-from',
+          'read-folder',
+          'resolve-repository',
+          'commit',
+          stop,
+        ]);
+        expect(outcome.asked).toBe(false);
+        expect(outcome.pushed).toBe(false);
+        expect(outcome.state).toEqual({});
+      });
+    }
+  }
+
+  it("carries git's account of the conflict into the reason, and says so where git gave none", () => {
+    expect(endingIn(conflict(ALREADY_APPLIED)).inputs.get('commit-conflict')).toEqual({
+      reason: `The patch did not apply on \`aflow/x\`, and nothing was committed. git said: ${ALREADY_APPLIED}`,
+    });
+    expect(endingIn(conflict()).inputs.get('commit-conflict')).toEqual({
+      reason:
+        'The patch did not apply on `aflow/x`, and nothing was committed. git named nothing it could not place.',
+    });
+    expect(endingIn(EMPTY).inputs.get('commit-empty')).toEqual({
+      reason: 'The change touched no file, so nothing was committed on `aflow/x`.',
+    });
+  });
+
+  it('names, for a patch the branch already holds, the publication as it stands at its head', () => {
+    const failure = taskOrThrow('commit-conflict').failureInstruction ?? '';
+    expect(failure).toContain('nothing was committed and no branch was created or moved');
+    expect(failure).toContain('already exists in the working directory');
+    expect(failure).toContain('the patch does not apply');
+    expect(failure).toContain("the branch's head already carries this change");
+    expect(failure).toContain('never send the patch again');
+    expect(failure).toContain(
+      "`baseSha` the branch's head, which is this run's own `baseSha` where it appended to the branch",
+    );
+    expect(failure).toContain('no `patchRef`, `patch`, `mergeFrom` or `commitMessage`');
+    // A conflict reports no commit, so the remedy cannot name one.
+    expect(conflict(ALREADY_APPLIED)['commit']).toBeUndefined();
+    expect(failure).not.toContain('`commit.sha`');
+
+    // The path exists: the round that re-sent its patch, then the run the text names.
+    const resent = endingIn(conflict(ALREADY_APPLIED), {
+      inputs: { baseSha: STRANDED },
+    });
+    expect(completed(resent)).toBe(false);
+    expect(resent.statuses.get('commit-conflict')).toBe('failed');
+    const again = publish({
+      pushApproval: 'never',
+      review: 'approve',
+      decision: 'approved',
+      asItStands: true,
+      inputs: { branch: 'aflow/x', baseSha: STRANDED },
+    });
+    expect((again.inputs.get('commit') ?? {})['commit']).toEqual({
+      branch: 'aflow/x',
+      baseSha: STRANDED,
+      pushBase: 'main',
+      pushAreas: REVIEW_DEPTH_AREAS,
+    });
+    expect(completed(again)).toBe(true);
+    expect(again.pushed).toBe(true);
+  });
+
+  it('names, for a base that moved under the patch, the merge round by its inputs', () => {
+    const failure = taskOrThrow('commit-conflict').failureInstruction ?? '';
+    const asItStands = failure.indexOf('no `patchRef`');
+    const mergeRound = failure.indexOf(
+      'Otherwise the base moved under the patch, and the remedy is the merge round.',
+    );
+    expect(asItStands).toBeGreaterThan(-1);
+    expect(mergeRound).toBeGreaterThan(asItStands);
+    expect(failure).toContain(
+      'Commission the fix from this branch with `mergeFrom: origin/<base>`',
+    );
+    expect(failure).toContain('the sha it reports in `merge.from` as `mergeFrom`');
+    const commissionInputs = new Set(
+      (COMMISSION_CHANGE.bundle.workflow.runInputs ?? []).map((input) => input.id),
+    );
+    expect(commissionInputs.has('mergeFrom')).toBe(true);
+    for (const id of ['patchRef', 'baseSha', 'mergeFrom']) {
+      expect(runInputOrThrow(id).id).toBe(id);
+    }
+  });
+
+  it('names, for a change that touches no file, the commission to read and the branch as it stands', () => {
+    const failure = taskOrThrow('commit-empty').failureInstruction ?? '';
+    expect(failure).toContain('nothing was committed and no branch was created or moved');
+    expect(failure).toContain("Read the commission's result for why");
+    expect(failure).toContain('commission it again');
+    expect(failure).toContain('never send the patch again');
+    expect(failure).toContain('no `patchRef`, `patch`, `mergeFrom` or `commitMessage`');
+  });
+
+  it('writes both stops to the house rules: no semicolon', () => {
+    for (const text of [COMMIT_CONFLICT, COMMIT_EMPTY]) {
+      expect(text.replace(/`[^`]*`/g, '')).not.toContain(';');
+    }
   });
 });
 

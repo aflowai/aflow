@@ -26,10 +26,16 @@ export const CHECKS_STOPPED =
  * How a commit this skill already made is published again, by the inputs that
  * take the run's no-change path — the remedy every refusal that leaves the
  * commit sound names, so none sends the caller back to the patch, which is
- * refused on a branch the commit has already moved.
+ * refused on a branch the commit has already moved. A run whose commit task
+ * made no commit reports no `commit.sha`, so it names the head another way.
  */
-export const PUBLISH_AS_IT_STANDS =
-  "To publish this branch as it stands, start Publish Local Changes again with `bindingId`, `round` and `findings` as this run had them — and `owner`, `repo` and `base` where it was given them — `branch` this branch, `baseSha` the `commit.sha` this run's commit task reported, and no `patchRef`, `patch`, `mergeFrom` or `commitMessage`: nothing is committed, the branch is published at its head — even where it has moved on from that sha — and the checks, the scan, the review and the push run on it again.";
+export function publishAsItStands(baseSha: string): string {
+  return `To publish this branch as it stands, start Publish Local Changes again with \`bindingId\`, \`round\` and \`findings\` as this run had them — and \`owner\`, \`repo\` and \`base\` where it was given them — \`branch\` this branch, \`baseSha\` ${baseSha}, and no \`patchRef\`, \`patch\`, \`mergeFrom\` or \`commitMessage\`: nothing is committed, the branch is published at its head — even where it has moved on from that sha — and the checks, the scan, the review and the push run on it again.`;
+}
+
+export const PUBLISH_AS_IT_STANDS = publishAsItStands(
+  "the `commit.sha` this run's commit task reported",
+);
 
 /** What the Helmsman needs once it has chosen the skill: carried as the skill's usage pitfalls. */
 export const PUBLISH_PITFALLS: string[] = [
