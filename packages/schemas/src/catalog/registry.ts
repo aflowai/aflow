@@ -156,6 +156,9 @@ function buildRegistry(): Map<string, OperationDescriptor> {
       ...(reg.agentCollapsedFields != null
         ? { agentCollapsedFields: reg.agentCollapsedFields }
         : {}),
+      ...(reg.decisionSignatureArgs != null
+        ? { decisionSignatureArgs: reg.decisionSignatureArgs }
+        : {}),
       idempotency: reg.idempotency,
       usage: reg.usage,
       inputZod: reg.inputZod,

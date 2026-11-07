@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildCallSignature } from '../applyAgentDecision.js';
+import { buildCallSignature } from '../callSignature.js';
 
 /**
  * The loop detector pauses a run after the same call repeats 5 times. It reads

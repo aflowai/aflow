@@ -49,6 +49,13 @@ import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { routeRunnerTerminalToHarness } from '../../cybernetic/WorkflowRunHarness.js';
 import { wakeForRunWakeupsAtSettle } from './settleRunWakeups.js';
 import { pauseForGuardrailEscalation } from './guardrailEscalationPause.js';
+import {
+  buildCallSignature,
+  countRepeatedCall,
+  hasDeclaredSignature,
+  HARD_PAUSE_IDENTICAL_CONSECUTIVE,
+  type ResolveCallOperation,
+} from './callSignature.js';
 import { clearStaleCredentialBlock } from './credentialBlockScope.js';
 import { buildStepCompletedRecoveryEvents } from '../helpers/recoveryEmitter.js';
 import type { ScheduleStepParams } from '../types.js';
@@ -145,33 +152,6 @@ function makeStepSucceededEvent(
       ...extraMeta,
     },
   };
-}
-
-/**
- * Arguments a tool requires to DIFFER on every call, so that a replay can be
- * told from a fresh attempt. They are the opposite of identity: including them
- * in the loop signature makes every repeat look novel.
- *
- * A Runner sent the identical draft_patch 130 times, each with a fresh
- * `mutationId`, and the repeat detector counted one consecutive call every
- * time. Extend this set when a new op adds a replay key.
- */
-const REPLAY_KEY_ARG_NAMES: ReadonlySet<string> = new Set(['mutationId']);
-
-function withoutReplayKeys(args: unknown): Record<string, unknown> {
-  const record = (args as Record<string, unknown> | undefined) ?? {};
-  const entries = Object.entries(record).filter(([k]) => !REPLAY_KEY_ARG_NAMES.has(k));
-  return Object.fromEntries(entries);
-}
-
-/** What the loop detector compares one turn's tool calls against the last. */
-export function buildCallSignature(
-  calls: ReadonlyArray<{ toolId: string; args?: unknown }>,
-): string {
-  return calls
-    .map((c) => `${c.toolId}:${JSON.stringify(withoutReplayKeys(c.args))}`)
-    .sort()
-    .join('|');
 }
 
 function fallbackStepDef(result: ApplyAgentDecisionParams['result']): StepDefinition {
@@ -1080,12 +1060,9 @@ export async function applyAgentDecision(params: ApplyAgentDecisionParams): Prom
     // ── Loop detection ──────────────────────────────────────────────────────
     // Track recent tool call signatures. If the same pattern repeats
     // consecutively, warn the model first so it can self-correct. Only force
-    // a pause after the exact same action repeats 5 times in a row. This keeps
+    // a pause after the same action repeats 5 times in a row. This keeps
     // legitimate retries working while still protecting against stale-input or
     // history-sync bugs that make the agent see the same turn repeatedly.
-    const SOFT_WARNING_IDENTICAL_CONSECUTIVE = 3;
-    const HARD_PAUSE_IDENTICAL_CONSECUTIVE = 5;
-    const SIGNATURE_WINDOW = 8;
     const loopVarKey = `ai.agent.recentCallSignatures.${result.stepId}`;
     const loopWarningVarKey = `ai.agent.loopWarning.${result.stepId}`;
 
@@ -1093,25 +1070,15 @@ export async function applyAgentDecision(params: ApplyAgentDecisionParams): Prom
       decision.action === 'invoke_step'
         ? [{ toolId: decision.toolId, args: decision.args }]
         : decision.calls.map((c) => ({ toolId: c.toolId, args: c.args }));
-    const callSignature = buildCallSignature(sigCalls);
+    const resolveCallOperation: ResolveCallOperation = (toolId) =>
+      agentDef.steps.find((s) => s.stepId === toolId)?.operation ?? toolId;
+    const callSignature = buildCallSignature(sigCalls, resolveCallOperation);
+    const repeatsReadsOfOneTarget = hasDeclaredSignature(sigCalls, resolveCallOperation);
 
-    const recentSignatures: string[] = readInlineVar(
-      currentRuntimeState,
-      loopVarKey,
-      [] as string[],
+    const { recentSignatures, consecutiveCount, verdict } = countRepeatedCall(
+      readInlineVar(currentRuntimeState, loopVarKey, [] as string[]),
+      callSignature,
     );
-
-    recentSignatures.push(callSignature);
-    if (recentSignatures.length > SIGNATURE_WINDOW) {
-      recentSignatures.splice(0, recentSignatures.length - SIGNATURE_WINDOW);
-    }
-
-    // Count how many of the most recent entries match the current signature
-    let consecutiveCount = 0;
-    for (let i = recentSignatures.length - 1; i >= 0; i--) {
-      if (recentSignatures[i] === callSignature) consecutiveCount++;
-      else break;
-    }
 
     // Persist updated signatures and refresh any pending loop warning that
     // should be surfaced to the next agent turn.
@@ -1121,22 +1088,21 @@ export async function applyAgentDecision(params: ApplyAgentDecisionParams): Prom
       version: recentSignatures.length,
     });
     delete newVarsWithSig[loopWarningVarKey];
-    if (
-      consecutiveCount >= SOFT_WARNING_IDENTICAL_CONSECUTIVE &&
-      consecutiveCount < HARD_PAUSE_IDENTICAL_CONSECUTIVE
-    ) {
+    if (verdict === 'warning' || verdict === 'final_warning') {
       const remainingBeforePause = HARD_PAUSE_IDENTICAL_CONSECUTIVE - consecutiveCount;
-      const isFinalWarning = remainingBeforePause === 1;
       writeInlineVar(
         newVarsWithSig,
         loopWarningVarKey,
         {
           repeatedActionCount: consecutiveCount,
           repeatedActionSignature: callSignature,
-          severity: isFinalWarning ? 'final_warning' : 'warning',
-          message:
-            `You have invoked the exact same tool call ${String(consecutiveCount)} times in a row. ` +
-            'Do not repeat it again unless the input has materially changed.',
+          severity: verdict,
+          message: repeatsReadsOfOneTarget
+            ? `You have read the same target ${String(consecutiveCount)} times in a row. ` +
+              'Reads of one target count as one call whatever their jsonPath, view or range. ' +
+              'Read the whole section you need in one call instead of one item at a time.'
+            : `You have invoked the exact same tool call ${String(consecutiveCount)} times in a row. ` +
+              'Do not repeat it again unless the input has materially changed.',
           instruction:
             remainingBeforePause > 1
               ? `Choose a meaningfully different next action. ${String(remainingBeforePause)} more identical repeats will pause the run for user input.`
@@ -1158,7 +1124,7 @@ export async function applyAgentDecision(params: ApplyAgentDecisionParams): Prom
       variables: newVarsWithSig,
     };
 
-    if (consecutiveCount >= HARD_PAUSE_IDENTICAL_CONSECUTIVE) {
+    if (verdict === 'pause') {
       console.warn(
         `[SessionOrchestrator] Loop detected for run ${result.sessionId}: ` +
           `agent invoked "${callSignature}" ${String(consecutiveCount)} times consecutively. ` +

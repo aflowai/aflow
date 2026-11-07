@@ -112,6 +112,15 @@ export interface OperationRegistration {
    * only shape information the model has for that argument.
    */
   agentCollapsedFields?: Record<string, string | Record<string, unknown>>;
+  /**
+   * Dotted argument paths that identify one call of this operation to the
+   * repeated-call detector. Arguments not listed are the shape of the call,
+   * not its identity: two reads of one document through different `jsonPath`
+   * windows are the same decision repeated.
+   *
+   * Absent means every argument except replay keys identifies the call.
+   */
+  decisionSignatureArgs?: readonly string[];
 
   /** Idempotency classification for retry/agent reasoning */
   idempotency: IdempotencyKind;
@@ -269,6 +278,8 @@ export interface OperationDescriptor {
   internalFields?: { input?: string[]; output?: string[] };
   /** See `OperationDescriptor.agentCollapsedFields`. */
   agentCollapsedFields?: Record<string, string | Record<string, unknown>>;
+  /** See `OperationRegistration.decisionSignatureArgs`. */
+  decisionSignatureArgs?: readonly string[];
   /** Idempotency classification */
   idempotency: IdempotencyKind;
   /** Usage hints */

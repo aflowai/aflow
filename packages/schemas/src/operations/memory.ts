@@ -455,6 +455,14 @@ const memoryReadOptionsShape = {
 
 const PIN_FIELDS = ['version', 'expectedContentHash'] as const;
 
+/**
+ * What identifies a memory.store.get call to the repeated-call detector: the
+ * document read, spelled nested or flat as the input preprocess accepts it.
+ * The read options in `memoryReadOptionsShape` choose a window onto that
+ * document, so reading it one `jsonPath` at a time is one read repeated.
+ */
+const STORE_GET_SIGNATURE_ARGS = ['target.path', 'target.id', 'path', 'id'] as const;
+
 export const MemoryGetInputSchema = z.preprocess(
   (val, ctx) => {
     if (!val || typeof val !== 'object') return val;
@@ -1100,6 +1108,7 @@ export const MemoryOperationRegistrations: OperationRegistration[] = [
         'Character window — UTF-16 code units, NOT bytes, despite the field name (kept for compatibility). { start: number, end: number }.',
       itemRange: 'JSON array window. { start: number, count: number (max 200) }.',
     },
+    decisionSignatureArgs: STORE_GET_SIGNATURE_ARGS,
     idempotency: 'idempotent',
     mutates: false,
     usage: {
@@ -1146,6 +1155,7 @@ export const MemoryOperationRegistrations: OperationRegistration[] = [
       'with jsonPath and window arrays with itemRange { start, count }; for text, use lineRange ' +
       "or byteRange. Reads this run's outputs only — general memory documents need memory.store.get.",
     tags: ['memory', 'read'],
+    decisionSignatureArgs: ['path'],
     idempotency: 'idempotent',
     mutates: false,
     usage: {
