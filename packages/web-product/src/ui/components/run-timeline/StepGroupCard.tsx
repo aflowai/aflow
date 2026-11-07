@@ -10,11 +10,11 @@ import { useApi } from '../providers.js';
 import {
   COMMAND_OUTPUT_OPERATIONS,
   CommandOutputStepCard,
-  HARNESS_RUN_OPERATION,
   HarnessStepCard,
   useHarnessName,
   useHarnessResult,
 } from '../harness-activity-card.js';
+import { HARNESS_RUN_OPERATION } from '@aflow/run-view';
 import { AGENT_TURN_OPERATION } from './buildTimelineEntries';
 import { ev } from './eventAccessor';
 import {

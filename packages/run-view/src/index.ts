@@ -16,7 +16,18 @@ export {
   type MediaItem,
 } from './content-extraction.js';
 
-export { THINKING_CLASS_OPS } from './op-labels.js';
+export { HARNESS_RUN_OPERATION, THINKING_CLASS_OPS } from './op-labels.js';
+
+export {
+  MOUNT_INLINE_REF_MAX,
+  projectRunForMount,
+  projectTaskForMount,
+  runSurfaceNeedsDetailRead,
+  runSurfaceOutputs,
+  splitRunResult,
+  workflowRunDetailToSurfaceState,
+  type WorkflowRunDetailResponse,
+} from './workflowRunDetail.js';
 
 export type {
   Message,

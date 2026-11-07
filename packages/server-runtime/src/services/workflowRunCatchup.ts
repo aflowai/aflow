@@ -6,7 +6,12 @@ import {
   buildWorkflowRunDetail,
   loadPendingWaitersForSession,
 } from '@aflow/cybernetic-runtime';
-import type { ApiSessionEvent, SessionId, WorkflowRunTaskStatus } from '@aflow/schemas';
+import type {
+  ApiSessionEvent,
+  SessionId,
+  WorkflowRunDetailOutput,
+  WorkflowRunTaskStatus,
+} from '@aflow/schemas';
 
 /** Max number of active runs emitted in a single subscribe catch-up burst. */
 export const MAX_CATCHUP_RUNS = 10;
@@ -26,6 +31,9 @@ export const MAX_CATCHUP_TASKS_PER_RUN = 25;
  *
  * Empty array if the session has no active waiters — no extra work; the
  * regular stream continues as today.
+ *
+ * `details` holds the run details the events were built from, keyed by run
+ * id, so the mount snapshot can hydrate those runs without reading them again.
  */
 export async function buildSessionCatchupEvents(
   db: PostgresJsDatabase,
@@ -34,10 +42,16 @@ export async function buildSessionCatchupEvents(
   sessionId: SessionId,
   spaceId: string,
   redis?: Redis | null,
-): Promise<{ events: ApiSessionEvent[]; runsTruncated: boolean; tasksTruncated: number }> {
+): Promise<{
+  events: ApiSessionEvent[];
+  runsTruncated: boolean;
+  tasksTruncated: number;
+  details: Map<string, WorkflowRunDetailOutput>;
+}> {
+  const details = new Map<string, WorkflowRunDetailOutput>();
   const allWaiters = await loadPendingWaitersForSession(db, tenantId, sessionId);
   if (allWaiters.length === 0) {
-    return { events: [], runsTruncated: false, tasksTruncated: 0 };
+    return { events: [], runsTruncated: false, tasksTruncated: 0, details };
   }
 
   const runsTruncated = allWaiters.length > MAX_CATCHUP_RUNS;
@@ -49,6 +63,7 @@ export async function buildSessionCatchupEvents(
   for (const waiter of waiters) {
     const detail = await buildWorkflowRunDetail(db, payloadStore, tenantId, spaceId, waiter.runId);
     if (!detail) continue; // run vanished between waiter row and now — skip
+    details.set(detail.run.runId, detail);
 
     const runTaskCount = detail.tasks.length;
     const truncatedThisRun = runTaskCount > MAX_CATCHUP_TASKS_PER_RUN;
@@ -157,7 +172,7 @@ export async function buildSessionCatchupEvents(
     }
   }
 
-  return { events, runsTruncated, tasksTruncated };
+  return { events, runsTruncated, tasksTruncated, details };
 }
 
 function isTerminalTaskStatus(status: WorkflowRunTaskStatus): boolean {

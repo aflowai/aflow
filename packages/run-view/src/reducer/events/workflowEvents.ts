@@ -9,6 +9,7 @@ import type {
 import { isTerminalRunStatus } from '@aflow/schemas';
 import { THINKING_CLASS_OPS } from '../../op-labels.js';
 import type { RunViewState } from '../state.js';
+import { splitRunResult } from '../../workflowRunDetail.js';
 import {
   TERMINAL_TASK_STATUSES,
   shouldAcceptTaskUpdate,
@@ -64,10 +65,10 @@ export function applyWorkflowEvents(
           ...(payload.completedAt ? { completedAt: payload.completedAt } : {}),
           // Structured run result on terminal transitions. `result.output`
           // supersedes the incrementally-accumulated `outputs` bag (same
-          // promotion source, fully re-derived at terminal time); the
-          // baseline spread preserves prior `outputs` when absent.
-          ...(payload.result ? { result: payload.result } : {}),
-          ...(payload.result?.output ? { outputs: payload.result.output } : {}),
+          // promotion source, fully re-derived at terminal time) and moves
+          // there, so the state holds the bag once. The baseline spread
+          // preserves prior `outputs` when absent.
+          ...splitRunResult(payload.result),
         };
         // The rich pause contract is BFF-hydrated and only meaningful while
         // paused; a live resume/terminal transition spreads the prior one
@@ -182,6 +183,7 @@ export function applyWorkflowEvents(
         ...(prev?.inputRef ? { inputRef: prev.inputRef } : {}),
         ...(prev?.outputRef ? { outputRef: prev.outputRef } : {}),
         ...(prev?.errorRef ? { errorRef: prev.errorRef } : {}),
+        ...(prev?.refsElided ? { refsElided: prev.refsElided } : {}),
         /* eslint-enable @typescript-eslint/no-unnecessary-condition */
         ...(payload.startedAt ? { startedAt: payload.startedAt } : {}),
         ...(payload.completedAt ? { completedAt: payload.completedAt } : {}),

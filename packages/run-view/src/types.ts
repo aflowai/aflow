@@ -317,6 +317,12 @@ export interface WorkflowSurfaceTaskState {
   inputRef?: string;
   outputRef?: string;
   errorRef?: string;
+  /**
+   * The mount snapshot left out at least one of this task's large inline
+   * refs, because the card reads it only when the operator opens the
+   * execution. The full run detail still carries the ref.
+   */
+  refsElided?: true;
   lastMutatedAtMs: number;
   activeOp?: string;
   activeStepName?: string;
@@ -390,14 +396,17 @@ export interface WorkflowRunSurfaceState {
   /**
    * Live promoted run-level state (sanitized) — accumulated from
    * `WorkflowTaskUpdate.promotedState` as promoting tasks succeed, then
-   * reconciled with `result.output` on the terminal `WorkflowRunUpdate` /
-   * BFF hydration. Renders the surface's "Output" rows mid-run.
+   * replaced by `result.output` on the terminal `WorkflowRunUpdate` /
+   * BFF hydration. Renders the surface's "Output" rows. Read it through
+   * `runSurfaceOutputs`, which also answers for a state that carries the bag
+   * only on `result.output`.
    */
   outputs?: Record<string, unknown>;
   /**
-   * Structured run result (goal, output values, score vs target, outcome
-   * checks, summary, guidance) — set by the terminal `WorkflowRunUpdate`
-   * and by BFF hydration. Same object Helmsman receives in its tool result.
+   * Structured run result (goal, score vs target, outcome checks, summary,
+   * guidance) — set by the terminal `WorkflowRunUpdate` and by BFF
+   * hydration. The reducer moves `result.output` to `outputs` and leaves it
+   * off here, so the bag is held once and the snapshot serializes it once.
    */
   result?: WorkflowRunResult;
   /**
