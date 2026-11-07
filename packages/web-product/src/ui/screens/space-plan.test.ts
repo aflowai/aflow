@@ -3158,7 +3158,7 @@ describe('SpacePlanPage — state as orbs, and motion (Plan 332 P7)', () => {
     expect(container.querySelector('[data-plan-board] [data-plan-orb]')).toBe(null);
   });
 
-  it('labels the first three columns Pending approval, Running and Queued (Plan 338 Q9)', async () => {
+  it('labels the first three columns Pending approval, Running and Queued (Plan 338 D5)', async () => {
     await render();
 
     const named = ['needs_you', 'in_flight', 'up_next'].map((id) => [
