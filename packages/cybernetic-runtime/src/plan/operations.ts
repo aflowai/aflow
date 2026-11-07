@@ -489,8 +489,16 @@ async function writePlanNode(
   if (notMerged !== undefined) return notMerged;
   // Only a write into waiting is judged: a node already waiting with no run stands as it is.
   if (input.status === 'waiting' && current.status !== 'waiting') {
-    const served = await ctx.store.listRunsServing(ctx.spaceId, [], 1, current.nodeId);
-    if (served.total === 0) return waitingWithoutRun(current);
+    // A run on a done or dropped node under it is no live work, and the board does not count it in flight.
+    const subtree = await ctx.store.walk(ctx.spaceId, {
+      rootId: current.nodeId,
+      ...PLAN_TREE_WALK_BOUNDS,
+    });
+    const live = subtree.nodes
+      .filter((n) => n.nodeId === current.nodeId || !isClosedPlanNodeStatus(n.status))
+      .map((n) => n.nodeId);
+    const inFlight = await ctx.store.inFlightRunCountsOf(ctx.spaceId, live);
+    if (![...inFlight.values()].some((count) => count > 0)) return waitingWithoutRun(current);
   }
 
   const pullRequest =

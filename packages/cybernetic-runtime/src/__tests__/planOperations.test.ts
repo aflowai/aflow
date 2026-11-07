@@ -739,6 +739,30 @@ describe('updatePlanNode — a waiting node waits on a run', () => {
     expect(phaseWaiting).toMatchObject({ ok: true, node: { status: 'waiting' } });
   });
 
+  it('refuses waiting where the only run in flight serves a done or dropped node under it', async () => {
+    for (const closed of ['done', 'dropped'] as const) {
+      const phase = await created({ title: `phase over a ${closed} step` });
+      const step = store.seed(SPACE, {
+        parentId: phase.nodeId,
+        title: `${closed} step`,
+        status: closed,
+        outcome: 'Closed before the phase was read.',
+      });
+      runOn(step, 'running');
+      const refused = await updatePlanNode(session('session-a'), {
+        nodeId: phase.nodeId,
+        expectedRevision: 1,
+        status: 'waiting',
+      });
+      expect(refused).toMatchObject({
+        ok: false,
+        code: 'PLAN_NODE_WAITING_NEEDS_RUN',
+        details: { nodeId: phase.nodeId, status: 'active' },
+      });
+      expect(store.nodes.get(phase.nodeId)).toMatchObject({ status: 'active', revision: 1 });
+    }
+  });
+
   it('writes blocked with no run, as before', async () => {
     const node = await created();
     const held = await updatePlanNode(session('session-a'), {
