@@ -20,7 +20,8 @@ export function upcomingSchedulesKey(spaceId: string): QueryKey {
 /**
  * The space's schedules that will fire again, soonest first, whoever created
  * them. An operator-created schedule runs on its own as much as an agent-armed
- * one, so both are listed. A page of the whole list cannot serve here, because
+ * one, so both are listed. A schedule whose firing is due or past is listed
+ * first, because it has not fired yet. A page of the whole list cannot serve here, because
  * expired renewals and one-shots fill it. The server lists a capped number and
  * counts them all in `total`, so the section can say what the cap leaves out.
  */

@@ -38,6 +38,33 @@ const DATABASE = vi.hoisted(() => ({ name: 'the server database' }));
 
 vi.mock('@aflow/database', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@aflow/database')>();
+  const { PgDialect: Dialect } = await import('drizzle-orm/pg-core');
+  /** Sorts rows by each `"column" asc|desc` term, as Postgres does, nulls last on asc. */
+  function ordered(rows: unknown[], columns: unknown[]): unknown[] {
+    const terms = columns.map((column) => {
+      const text = new Dialect().sqlToQuery(column as SQL).sql.trim();
+      const match = /"(\w+)" (asc|desc)$/.exec(text);
+      if (!match?.[1]) throw new Error(`unreadable order term: ${text}`);
+      const field = match[1].replace(/_(\w)/g, (_, c: string) => c.toUpperCase());
+      return { field, sign: match[2] === 'desc' ? -1 : 1 };
+    });
+    const value = (row: unknown, field: string): number | string | null => {
+      const raw = (row as Record<string, unknown>)[field];
+      if (raw instanceof Date) return raw.getTime();
+      return typeof raw === 'number' || typeof raw === 'string' ? raw : null;
+    };
+    return [...rows].sort((a, b) => {
+      for (const { field, sign } of terms) {
+        const left = value(a, field);
+        const right = value(b, field);
+        if (left === right) continue;
+        if (left === null) return sign;
+        if (right === null) return -sign;
+        return (left < right ? -1 : 1) * sign;
+      }
+      return 0;
+    });
+  }
   function select(fields?: unknown) {
     const read: { fields: unknown; where: unknown; orderBy: unknown[]; limit: number | undefined } =
       {
@@ -63,9 +90,10 @@ vi.mock('@aflow/database', async (importOriginal) => {
         read.orderBy = columns;
         return query;
       },
+      // A listing read answers its rows in the order it asked for.
       limit: (n: number) => {
         read.limit = n;
-        return Promise.resolve(table.rows);
+        return Promise.resolve(ordered(table.rows, read.orderBy).slice(0, n));
       },
     };
     return query;
@@ -232,16 +260,43 @@ describe('GET /v1/schedules/upcoming', () => {
     expect(table.reads).toHaveLength(1);
   });
 
-  it('asks only for active schedules with a next firing ahead and no end behind', async () => {
+  it('asks only for active schedules with a next firing and no end behind', async () => {
     await getUpcoming();
 
     const { sql: text, params } = readCondition();
     expect(text).toContain('"agent_schedules"."status" = $');
     expect(params).toContain('active');
-    expect(text).toContain('"agent_schedules"."next_fire_at" > $');
+    expect(text).toContain('"agent_schedules"."next_fire_at" is not null');
     expect(text).toMatch(
       /\("agent_schedules"."expires_at" is null or "agent_schedules"."expires_at" > \$\d+\)/,
     );
+  });
+
+  it('keeps an active schedule whose next firing is due or past, so it is listed first', async () => {
+    const due = schedule('8247eee7-0000-4000-8000-000000000003', {
+      name: 'Due now',
+      nextFireAt: new Date(Date.now()),
+    });
+    const late = schedule('8247eee7-0000-4000-8000-000000000004', {
+      name: 'Late by ten minutes',
+      nextFireAt: new Date(Date.now() - 10 * MINUTE),
+    });
+    // The database holds the future row first, so only the read's order puts the due rows ahead.
+    table.rows = [operatorShepherd, due, late];
+
+    const { body } = await getUpcoming();
+
+    // The read once asked for a next firing after now, which left a due row out.
+    // With no bound on next_fire_at, a firing at or before now stays in.
+    const { sql: text } = readCondition();
+    expect(text).not.toMatch(/"next_fire_at" [<>]=? \$/);
+    const ids = body.schedules.map((row) => (row as { id: string }).id);
+    expect(ids.indexOf(due.id)).toBe(1);
+    expect(ids.indexOf(late.id)).toBe(0);
+    expect(body.schedules).toEqual(
+      [late, due, operatorShepherd].map((row) => JSON.parse(JSON.stringify(rowToResponse(row)))),
+    );
+    expect(body.total).toBe(3);
   });
 
   it('orders the soonest first and stops at the section limit', async () => {
