@@ -82,8 +82,14 @@ export function isCoachProposal(item: ActionCenterItem): boolean {
   return item.origin.type === 'proposal' && item.requestedBy.kind === 'coach';
 }
 
+/** Open Coach proposals, the ones the attention count leaves out. */
+export function coachProposalCount(lanes: Pick<ActionCenterLanes, 'coachProposals'>): number {
+  return lanes.coachProposals.filter(isCoachProposal).length;
+}
+
 /**
- * The attention badge's count, which the bell and the Chat entry both show.
+ * The attention badge's count, which the bell, the Chat entry and the
+ * Workbench badges show.
  * Coach proposals stay in their lane and in the Workbench but do not count:
  * the operator does not use the Coach and does not want its proposals counted
  * as their attention.
@@ -93,6 +99,7 @@ export function attentionCount(lanes: ActionCenterLanes): number {
     lanes.approvals.length +
     lanes.inputs.length +
     lanes.connections.length +
-    lanes.coachProposals.filter((it) => !isCoachProposal(it)).length
+    lanes.coachProposals.length -
+    coachProposalCount(lanes)
   );
 }

@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import type { ActionCenterItem } from './use-action-center-types.js';
-import { attentionCount, isCoachProposal, partitionLanes } from './use-action-center-lanes.js';
+import {
+  attentionCount,
+  coachProposalCount,
+  isCoachProposal,
+  partitionLanes,
+} from './use-action-center-lanes.js';
 
 function item(
   kind: ActionCenterItem['kind'],
@@ -204,6 +209,23 @@ describe('attentionCount — the bell and the Chat count', () => {
       item('coach_activity', { id: 'coach-activity:1' }),
     ]);
     expect(attentionCount(lanes)).toBe(0);
+  });
+});
+
+describe('coachProposalCount — the proposals the count leaves out', () => {
+  it('counts open Coach proposals and no proposal from another source', () => {
+    const lanes = partitionLanes([
+      item('human_approval', { id: 'step:gate' }),
+      proposal('proposal:coach-1', 'coach', 'Coach review'),
+      proposal('proposal:coach-2', 'coach', 'Coach review'),
+      proposal('proposal:patch-1', 'agent', 'Helmsman patch'),
+    ]);
+    expect(coachProposalCount(lanes)).toBe(2);
+    expect(attentionCount(lanes)).toBe(2);
+  });
+
+  it('counts zero when no Coach proposal is open', () => {
+    expect(coachProposalCount(partitionLanes([item('human_input', { id: 'step:ask' })]))).toBe(0);
   });
 });
 
