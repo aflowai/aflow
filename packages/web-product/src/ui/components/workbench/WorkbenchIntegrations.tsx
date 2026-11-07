@@ -15,6 +15,7 @@ import {
   WorkbenchEmptyRow,
   WorkbenchSection,
   WorkbenchSectionPending,
+  useWorkbenchSectionHeld,
 } from './WorkbenchSection.js';
 
 const KIND_LABEL: Record<SpaceIntegration['kind'], string> = {
@@ -73,6 +74,7 @@ export function WorkbenchIntegrations({
   const { integrations, isLoading } = useSpaceIntegrations(spaceId);
 
   const empty = integrations.length === 0;
+  useWorkbenchSectionHeld(!empty);
   if (empty && isLoading)
     return <WorkbenchSectionPending title="Integrations" icon="plugs-connected" />;
 

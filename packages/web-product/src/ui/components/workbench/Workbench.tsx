@@ -1,16 +1,42 @@
 'use client';
 
-import { useMemo } from 'react';
-import { Column } from '@aflow/design-system';
+import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Column, Text } from '@aflow/design-system';
 
 import { useApiQuery } from '../../hooks/useApiQuery.js';
 import { useActionCenter } from '../../hooks/use-action-center.js';
 import { useSpaceWorkflowRuns } from '../../hooks/use-space-workflow-runs.js';
+import { planPendingCount } from '../../lib/plan-pending-count.js';
+import { browserStorage } from '../../lib/workbench-dock-memory.js';
+import {
+  placeWorkbenchSections,
+  readHeldSections,
+  rememberHeldSection,
+} from '../../lib/workbench-held-sections.js';
 import { WorkbenchNeedsAttention, waitingOnLabel } from './WorkbenchNeedsAttention.js';
 import { FoldedSchedulesNotice, WorkbenchSchedules } from './WorkbenchSchedules.js';
 import { useSpacePeople } from '../../hooks/use-space-people.js';
-import { WorkbenchCoachFold, WorkbenchProposalSources } from './WorkbenchCoach.js';
-import { WorkbenchLazySection } from './WorkbenchSection.js';
+import {
+  COACH_REVIEW,
+  WorkbenchCoachFold,
+  WorkbenchProposalSources,
+  coachReviewProposals,
+  useCoachReviewInProgress,
+} from './WorkbenchCoach.js';
+import {
+  FoldedPlanPendingCount,
+  WORKBENCH_PLAN,
+  WorkbenchPlan,
+  planBoardLink,
+} from './WorkbenchPlan.js';
+import {
+  WorkbenchFoldsContext,
+  WorkbenchHeldContext,
+  WORKBENCH_MORE,
+  WorkbenchLazySection,
+  WorkbenchMoreFold,
+  useWorkbenchFoldsOrOwn,
+} from './WorkbenchSection.js';
 import {
   LiveRunBadges,
   WorkbenchSkills,
@@ -52,9 +78,15 @@ import { WorkbenchRecentConversations } from './WorkbenchRecentConversations.js'
  * that an agent set one up. Integrations counts the Action Center's connection
  * requests alone, because nothing refreshes the readiness reads while it is
  * folded. The Coach shows its proposals and a review the entity-events stream
- * has seen start. Applets and Agents ask nothing of the operator, so their
+ * has seen start. Plan counts the plan steps pending on the operator from the
+ * Action Center, as the sidebar does, and links to the board. Skills counts
+ * the skills. Applets and Agents ask nothing of the operator, so their
  * headers carry nothing. The workflow list is read on open, because recent
  * conversations names runs by it.
+ *
+ * A folded section that has never held content in the space sits behind one
+ * More fold at the bottom of the inventory (`workbench-held-sections.ts`), so
+ * an empty section does not cost the height of a full one.
  */
 export function Workbench({
   spaceId,
@@ -111,6 +143,147 @@ export function Workbench({
     return byRun;
   }, [actionCenter.items, personFor]);
 
+  const planPending = useMemo(
+    () => planPendingCount(actionCenter.items, { whole: actionCenter.listIsWhole }),
+    [actionCenter.items, actionCenter.listIsWhole],
+  );
+  const coachReview = useCoachReviewInProgress(spaceId);
+  const scheduleNotices = actionCenter.lanes.notices.some((item) => item.kind === 'trigger_armed');
+
+  // Every folded section, in the pane's order, with whether what the board
+  // already holds shows it has content now. The rest of what decides its place
+  // is the record of what it has held (`useHeldSections`).
+  const sections: WorkbenchFoldedSection[] = [
+    {
+      // Under what is pending: a plan step that waits on the operator is
+      // pending too, and its fold is where the plan's other live steps are.
+      title: WORKBENCH_PLAN,
+      holdsContent: planPending.count > 0,
+      node: (
+        <WorkbenchLazySection
+          title={WORKBENCH_PLAN}
+          icon="flag"
+          meta={<FoldedPlanPendingCount pending={planPending} />}
+          link={planBoardLink(spaceSlug)}
+        >
+          <WorkbenchPlan spaceId={spaceId} spaceSlug={spaceSlug} pending={planPending} />
+        </WorkbenchLazySection>
+      ),
+    },
+    {
+      title: 'Schedules',
+      holdsContent: scheduleNotices,
+      node: (
+        <WorkbenchLazySection
+          title="Schedules"
+          icon="clock"
+          meta={<FoldedSchedulesNotice state={actionCenter} />}
+        >
+          <WorkbenchSchedules
+            state={actionCenter}
+            spaceId={spaceId}
+            spaceSlug={spaceSlug}
+            currentSessionId={currentSessionId}
+          />
+        </WorkbenchLazySection>
+      ),
+    },
+    {
+      title: 'Skills',
+      holdsContent: skills.length > 0,
+      node: (
+        <WorkbenchLazySection
+          title="Skills"
+          icon="skill"
+          meta={
+            <>
+              <FoldedSkillsCount count={skills.length} />
+              <LiveRunBadges runs={liveSkillRuns} />
+            </>
+          }
+        >
+          <WorkbenchSkills
+            spaceId={spaceId}
+            spaceSlug={spaceSlug}
+            skills={skills}
+            loading={workflowList.isLoading}
+            activeRuns={liveSkillRuns}
+            waitingOnByRun={waitingOnByRun}
+            onRun={(skill) => {
+              seed(`Run the "${skill.name}" skill. `);
+            }}
+            {...(onRevealChat ? { onRevealChat } : {})}
+          />
+        </WorkbenchLazySection>
+      ),
+    },
+    {
+      title: 'Applets',
+      holdsContent: false,
+      node: (
+        <WorkbenchLazySection title="Applets" icon="squares-four">
+          <WorkbenchApplets
+            spaceId={spaceId}
+            spaceSlug={spaceSlug}
+            {...(onRevealChat ? { onRevealChat } : {})}
+          />
+        </WorkbenchLazySection>
+      ),
+    },
+    {
+      // Below the capabilities and above the substrate: an agent is someone
+      // who works here rather than something the space can do, so it does
+      // not belong among Skills — but it is still inventory, not plumbing.
+      title: 'Agents',
+      holdsContent: false,
+      node: (
+        <WorkbenchLazySection title="Agents" icon="robot">
+          <WorkbenchAgents
+            spaceId={spaceId}
+            spaceSlug={spaceSlug}
+            {...(onRevealChat ? { onRevealChat } : {})}
+          />
+        </WorkbenchLazySection>
+      ),
+    },
+    {
+      // Last of the inventory: an integration is the substrate the other
+      // two run on, not work in its own right, so it sits below them.
+      title: 'Integrations',
+      holdsContent: actionCenter.lanes.connections.length > 0,
+      node: (
+        <WorkbenchLazySection
+          title="Integrations"
+          icon="plugs-connected"
+          meta={
+            <FoldedIntegrationsSetupCount connectionRequests={actionCenter.lanes.connections} />
+          }
+        >
+          <WorkbenchIntegrations
+            spaceId={spaceId}
+            spaceSlug={spaceSlug}
+            connectionRequests={actionCenter.lanes.connections}
+          />
+        </WorkbenchLazySection>
+      ),
+    },
+    {
+      title: COACH_REVIEW,
+      holdsContent: coachReviewProposals(actionCenter).length > 0 || coachReview !== null,
+      node: (
+        <WorkbenchCoachFold
+          state={actionCenter}
+          spaceId={spaceId}
+          spaceSlug={spaceSlug}
+          review={coachReview}
+        />
+      ),
+    },
+  ];
+  const folds = useWorkbenchFoldsOrOwn();
+  const { placement, recordHeld } = useHeldSections(spaceId, sections, folds);
+  const { inPlace, more } = placement;
+
   return (
     <Column gap="none" style={{ flex: 1, minHeight: 0 }}>
       {/* `flex: 1 1 auto` — basis `auto`, not 0, so the inventory's real content
@@ -121,70 +294,22 @@ export function Workbench({
           <WorkbenchNeedsAttention state={actionCenter} spaceId={spaceId} />
           <WorkbenchProposalSources state={actionCenter} spaceSlug={spaceSlug} />
           {/* Folded below this line (Plan 338 D3): each section mounts, and
-              reads, only when the operator expands it. */}
-          <WorkbenchLazySection
-            title="Schedules"
-            icon="clock"
-            meta={<FoldedSchedulesNotice state={actionCenter} />}
-          >
-            <WorkbenchSchedules
-              state={actionCenter}
-              spaceId={spaceId}
-              spaceSlug={spaceSlug}
-              currentSessionId={currentSessionId}
-            />
-          </WorkbenchLazySection>
-          <WorkbenchLazySection
-            title="Skills"
-            icon="skill"
-            meta={<LiveRunBadges runs={liveSkillRuns} />}
-          >
-            <WorkbenchSkills
-              spaceId={spaceId}
-              spaceSlug={spaceSlug}
-              skills={skills}
-              loading={workflowList.isLoading}
-              activeRuns={liveSkillRuns}
-              waitingOnByRun={waitingOnByRun}
-              onRun={(skill) => {
-                seed(`Run the "${skill.name}" skill. `);
-              }}
-              {...(onRevealChat ? { onRevealChat } : {})}
-            />
-          </WorkbenchLazySection>
-          <WorkbenchLazySection title="Applets" icon="squares-four">
-            <WorkbenchApplets
-              spaceId={spaceId}
-              spaceSlug={spaceSlug}
-              {...(onRevealChat ? { onRevealChat } : {})}
-            />
-          </WorkbenchLazySection>
-          {/* Below the capabilities and above the substrate: an agent is someone
-              who works here rather than something the space can do, so it does
-              not belong among Skills — but it is still inventory, not plumbing. */}
-          <WorkbenchLazySection title="Agents" icon="robot">
-            <WorkbenchAgents
-              spaceId={spaceId}
-              spaceSlug={spaceSlug}
-              {...(onRevealChat ? { onRevealChat } : {})}
-            />
-          </WorkbenchLazySection>
-          {/* Last of the inventory: an integration is the substrate the other
-              two run on, not work in its own right, so it sits below them. */}
-          <WorkbenchLazySection
-            title="Integrations"
-            icon="plugs-connected"
-            meta={
-              <FoldedIntegrationsSetupCount connectionRequests={actionCenter.lanes.connections} />
-            }
-          >
-            <WorkbenchIntegrations
-              spaceId={spaceId}
-              spaceSlug={spaceSlug}
-              connectionRequests={actionCenter.lanes.connections}
-            />
-          </WorkbenchLazySection>
-          <WorkbenchCoachFold state={actionCenter} spaceId={spaceId} spaceSlug={spaceSlug} />
+              reads, only when the operator expands it. A section that has
+              never held content sits behind More instead. */}
+          <WorkbenchFoldsContext.Provider value={folds}>
+            <WorkbenchHeldContext.Provider value={recordHeld}>
+              {inPlace.map((section) => (
+                <Fragment key={section.title}>{section.node}</Fragment>
+              ))}
+              {more.length > 0 && (
+                <WorkbenchMoreFold titles={more.map((section) => section.title)}>
+                  {more.map((section) => (
+                    <Fragment key={section.title}>{section.node}</Fragment>
+                  ))}
+                </WorkbenchMoreFold>
+              )}
+            </WorkbenchHeldContext.Provider>
+          </WorkbenchFoldsContext.Provider>
         </Column>
       </div>
       {/* The floor of the pane. It sizes itself (see the component) rather than
@@ -198,6 +323,95 @@ export function Workbench({
         {...(onRevealChat ? { onRevealChat } : {})}
       />
     </Column>
+  );
+}
+
+interface WorkbenchFoldedSection {
+  title: string;
+  /** What the board already holds shows the section has content now. */
+  holdsContent: boolean;
+  node: ReactNode;
+}
+
+/**
+ * Where each folded section stands, and where a section that has held content
+ * is recorded. The record is read from storage once per space. A section
+ * whose header signal shows content is recorded and keeps its place after the
+ * signal goes. A section the operator has open under More stays there while
+ * it is open, whatever its signal or its content says. Once they close it, it
+ * follows its header signal again, so a count or a badge that turns on brings
+ * it to its place. What its content records reaches storage only, so a
+ * section without a header signal moves to its place on the next mount.
+ */
+function useHeldSections(
+  spaceId: string,
+  sections: readonly WorkbenchFoldedSection[],
+  folds: { isExpanded: (title: string) => boolean },
+): {
+  placement: { inPlace: WorkbenchFoldedSection[]; more: WorkbenchFoldedSection[] };
+  recordHeld: (title: string) => void;
+} {
+  const [state, setState] = useState<HeldState>(() => freshHeldState(spaceId));
+  const known = state.spaceId === spaceId ? state : freshHeldState(spaceId);
+  // A section is open under More only while More is open too: behind a
+  // closed More fold the operator reads its title alone.
+  const moreOpen = folds.isExpanded(WORKBENCH_MORE);
+  const { keptUnderMore, ...placement } = placeWorkbenchSections(
+    sections,
+    known.held,
+    known.keptUnderMore,
+    (title) => moreOpen && folds.isExpanded(title),
+  );
+  const current = keptUnderMore === known.keptUnderMore ? known : { ...known, keptUnderMore };
+  if (current !== state) setState(current);
+
+  const signalled = sections
+    .filter((section) => section.holdsContent && !current.held.has(section.title))
+    .map((section) => section.title)
+    .join('\n');
+  useEffect(() => {
+    if (signalled === '') return;
+    const titles = signalled.split('\n');
+    for (const title of titles) rememberHeldSection(browserStorage(), spaceId, title);
+    setState((prev) =>
+      prev.spaceId === spaceId ? { ...prev, held: new Set([...prev.held, ...titles]) } : prev,
+    );
+  }, [signalled, spaceId]);
+
+  const recordHeld = useCallback(
+    (title: string) => {
+      rememberHeldSection(browserStorage(), spaceId, title);
+    },
+    [spaceId],
+  );
+  return { placement, recordHeld };
+}
+
+interface HeldState {
+  spaceId: string;
+  held: ReadonlySet<string>;
+  keptUnderMore: ReadonlySet<string>;
+}
+
+function freshHeldState(spaceId: string): HeldState {
+  return {
+    spaceId,
+    held: new Set(readHeldSections(browserStorage(), spaceId)),
+    keptUnderMore: new Set(),
+  };
+}
+
+/**
+ * The folded Skills header's count of the space's skills, from the workflow
+ * list the board reads on open. It counts what the expanded list shows, so
+ * the two never disagree.
+ */
+export function FoldedSkillsCount({ count }: { count: number }) {
+  if (count === 0) return null;
+  return (
+    <Text size="xs" variant="muted">
+      {`${String(count)} ${count === 1 ? 'skill' : 'skills'}`}
+    </Text>
   );
 }
 

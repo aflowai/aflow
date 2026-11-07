@@ -3,6 +3,7 @@
 import {
   createContext,
   useContext,
+  useEffect,
   useMemo,
   useReducer,
   useState,
@@ -15,6 +16,8 @@ import type { IconName } from '@aflow/design-system';
 interface SectionFold {
   expanded: boolean;
   toggle: () => void;
+  /** Records that the section under this fold has held content in the space. */
+  markHeld?: () => void;
 }
 
 const SectionFoldContext = createContext<SectionFold | null>(null);
@@ -59,6 +62,28 @@ export function useWorkbenchFolds(spaceId: string): WorkbenchFolds {
   );
 }
 
+/**
+ * The fold record the Workbench places its sections by: its owner's where one
+ * is provided, else one that lives as long as this mount. The Workbench
+ * provides the result to its sections, so it and they read one record.
+ */
+export function useWorkbenchFoldsOrOwn(): WorkbenchFolds {
+  const provided = useContext(WorkbenchFoldsContext);
+  const [open, setOpen] = useState<readonly string[]>([]);
+  const own = useMemo<WorkbenchFolds>(
+    () => ({
+      isExpanded: (title) => open.includes(title),
+      toggle: (title) => {
+        setOpen((current) =>
+          current.includes(title) ? current.filter((t) => t !== title) : [...current, title],
+        );
+      },
+    }),
+    [open],
+  );
+  return provided ?? own;
+}
+
 /** Forgets every space's open sections, as a reload does. */
 export function __resetForTests(): void {
   openSectionsBySpace.clear();
@@ -67,6 +92,25 @@ export function __resetForTests(): void {
 /** Whether the section rendering this sits under a fold — so it renders even while empty. */
 export function useWorkbenchSectionFold(): SectionFold | null {
   return useContext(SectionFoldContext);
+}
+
+/**
+ * Where a section that has held content is recorded. The Workbench provides
+ * it, and a section outside the Workbench records nothing.
+ */
+export const WorkbenchHeldContext = createContext<((title: string) => void) | null>(null);
+
+/**
+ * A section under a fold calls this with whether it holds content now. Once
+ * it has, the section stands in its place rather than behind More the next
+ * time the Workbench mounts. A section the operator has open under More stays
+ * there while it is open, so it does not jump out from under them.
+ */
+export function useWorkbenchSectionHeld(holdsContent: boolean): void {
+  const markHeld = useContext(SectionFoldContext)?.markHeld;
+  useEffect(() => {
+    if (holdsContent) markHeld?.();
+  }, [holdsContent, markHeld]);
 }
 
 /**
@@ -81,6 +125,7 @@ export function WorkbenchLazySection({
   icon,
   meta,
   trailing,
+  link,
   children,
 }: {
   title: string;
@@ -89,9 +134,12 @@ export function WorkbenchLazySection({
   meta?: ReactNode;
   /** Section-level status on the collapsed header, as `WorkbenchSection` places it. */
   trailing?: ReactNode;
+  /** The full surface behind this section, on the collapsed header. */
+  link?: { href: string; label: string };
   children: ReactNode;
 }) {
   const folds = useContext(WorkbenchFoldsContext);
+  const recordHeld = useContext(WorkbenchHeldContext);
   const [localExpanded, setLocalExpanded] = useState(false);
   const expanded = folds ? folds.isExpanded(title) : localExpanded;
   const fold = useMemo<SectionFold>(
@@ -101,19 +149,87 @@ export function WorkbenchLazySection({
         if (folds) folds.toggle(title);
         else setLocalExpanded((e) => !e);
       },
+      ...(recordHeld
+        ? {
+            markHeld: () => {
+              recordHeld(title);
+            },
+          }
+        : {}),
     }),
-    [expanded, folds, title],
+    [expanded, folds, recordHeld, title],
   );
   return (
     <SectionFoldContext.Provider value={fold}>
       {expanded ? (
         children
       ) : (
-        <WorkbenchSection title={title} {...(icon ? { icon } : {})} meta={meta} trailing={trailing}>
+        <WorkbenchSection
+          title={title}
+          {...(icon ? { icon } : {})}
+          meta={meta}
+          trailing={trailing}
+          {...(link ? { link } : {})}
+        >
           {null}
         </WorkbenchSection>
       )}
     </SectionFoldContext.Provider>
+  );
+}
+
+export const WORKBENCH_MORE = 'More';
+
+/**
+ * The one fold at the bottom of the pane that holds every section that has
+ * never held content in the space. Its header names them, so the operator
+ * can tell what sits behind it without opening it. Open, it shows each one's
+ * header as the pane shows a folded section, and each one still mounts, and
+ * reads, only when the operator expands it.
+ */
+export function WorkbenchMoreFold({
+  titles,
+  children,
+}: {
+  /** The sections behind the fold, in the order the pane lists them. */
+  titles: readonly string[];
+  children: ReactNode;
+}) {
+  const folds = useContext(WorkbenchFoldsContext);
+  const [localExpanded, setLocalExpanded] = useState(false);
+  const expanded = folds ? folds.isExpanded(WORKBENCH_MORE) : localExpanded;
+  const fold = useMemo<SectionFold>(
+    () => ({
+      expanded,
+      toggle: () => {
+        if (folds) folds.toggle(WORKBENCH_MORE);
+        else setLocalExpanded((e) => !e);
+      },
+    }),
+    [expanded, folds],
+  );
+  return (
+    <div data-workbench-more>
+      <SectionFoldContext.Provider value={fold}>
+        <WorkbenchSection
+          title={WORKBENCH_MORE}
+          meta={
+            expanded ? null : (
+              <Text size="xs" variant="muted" truncate style={{ minWidth: 0 }}>
+                {titles.join(' · ')}
+              </Text>
+            )
+          }
+        >
+          {null}
+        </WorkbenchSection>
+      </SectionFoldContext.Provider>
+      {expanded && (
+        <Column gap="2xl" style={{ marginTop: 'var(--space-4)' }}>
+          {children}
+        </Column>
+      )}
+    </div>
   );
 }
 

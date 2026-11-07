@@ -12,6 +12,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WORKBENCH_COLLAPSED_STORAGE_KEY } from '../lib/workbench-dock-memory.js';
+import { WORKBENCH_HELD_STORAGE_KEY } from '../lib/workbench-held-sections.js';
 import { __resetForTests as resetActionCenterBroker } from '../hooks/action-center-broker.js';
 import { __resetForTests as resetCoachSurfaceBroker } from '../hooks/coach-surface-broker.js';
 import { __resetForTests as resetEntityEventsBroker } from '../hooks/entity-events-broker.js';
@@ -43,6 +44,7 @@ const net = vi.hoisted(() => ({
   coach: null as Record<string, unknown> | null,
   actionItems: [] as Array<Record<string, unknown>>,
   integrations: false,
+  plan: null as Record<string, unknown> | null,
   surfaceGate: null as Promise<void> | null,
   listeners: new Map<string, Array<(event: unknown, cursor: string) => void>>(),
 }));
@@ -123,6 +125,7 @@ function respond(path: string): unknown {
     if (path.endsWith('/integrations/repo-bindings')) return { repoBindings: [] };
     if (path.endsWith('/users/me/oauth-connections')) return { connections: [] };
   }
+  if (path.endsWith(`/spaces/${SPACE}/plan`)) return net.plan ?? undefined;
   if (path.endsWith(`/spaces/${SPACE}`)) return { id: SPACE, directives: {} };
   return undefined;
 }
@@ -270,6 +273,7 @@ beforeEach(() => {
   net.coach = null;
   net.actionItems = [];
   net.integrations = false;
+  net.plan = null;
   net.surfaceGate = null;
   net.listeners = new Map();
   // The realtime brokers are module-level and refcounted, and a released topic
@@ -342,6 +346,24 @@ function conversation(overrides: Record<string, unknown> = {}) {
     createdBy: USER,
     ...overrides,
   };
+}
+
+const FOLDED_SECTIONS = [
+  'Plan',
+  'Schedules',
+  'Skills',
+  'Applets',
+  'Agents',
+  'Integrations',
+  'Coach review',
+];
+
+/** This browser has seen every folded section hold content in the space, so none sits behind More. */
+function rememberEverySectionHeld() {
+  window.localStorage.setItem(
+    WORKBENCH_HELD_STORAGE_KEY,
+    JSON.stringify([{ spaceId: SPACE, sections: FOLDED_SECTIONS }]),
+  );
 }
 
 async function click(el: Element | null) {
@@ -462,6 +484,8 @@ describe('the Workbench dock on landing (D3)', () => {
 });
 
 describe('what the open dock reads (D3 budget)', () => {
+  beforeEach(rememberEverySectionHeld);
+
   it('reads six things a collapsed dock does not, and nothing per folded section', async () => {
     net.sessions = [conversation()];
     window.localStorage.setItem(WORKBENCH_COLLAPSED_STORAGE_KEY, JSON.stringify([SESSION]));
@@ -576,6 +600,8 @@ describe('what the open dock reads (D3 budget)', () => {
 });
 
 describe('what a folded header carries (D3)', () => {
+  beforeEach(rememberEverySectionHeld);
+
   const header = (title: string) =>
     [...container.querySelectorAll('button[aria-expanded="false"]')].find(
       (b) => b.textContent === title,
@@ -857,6 +883,216 @@ describe('what a folded header carries (D3)', () => {
     await settle();
     expect(container.textContent).toContain('Stalled');
     expect(container.textContent).not.toContain('Reviewing');
+  });
+});
+
+describe('the More fold, the Plan section and the Skills count', () => {
+  const PLAN_ROOT = '00000000-0000-4000-8000-000000000a01';
+  const ASKING = '00000000-0000-4000-8000-000000000a02';
+  const RUNNING = '00000000-0000-4000-8000-000000000a03';
+
+  const toggle = (title: string, expanded?: boolean) =>
+    [
+      ...container.querySelectorAll(
+        expanded === undefined
+          ? 'button[aria-expanded]'
+          : `button[aria-expanded="${String(expanded)}"]`,
+      ),
+    ].find((b) => b.textContent === title) ?? null;
+  const moreFold = () => container.querySelector('[data-workbench-more]');
+  const inMore = (title: string) => {
+    const el = toggle(title);
+    return el !== null && (moreFold()?.contains(el) ?? false);
+  };
+
+  function laneItem(nodeId: string, title: string, extra: Record<string, unknown> = {}) {
+    return {
+      nodeId,
+      title,
+      kind: 'step',
+      status: 'active',
+      revision: 1,
+      updatedAt: new Date(Date.now() - HOUR).toISOString(),
+      rootId: PLAN_ROOT,
+      rootTitle: 'Plan 340 · Workbench',
+      ...extra,
+    };
+  }
+
+  function planAsk(nodeId: string) {
+    return {
+      id: `plan-ask:${nodeId}`,
+      spaceId: SPACE,
+      kind: 'approval',
+      title: 'Pending approval · Ship it',
+      summary: '',
+      requestedAt: new Date(Date.now() - HOUR).toISOString(),
+      requestedBy: { kind: 'agent', label: 'Helmsman' },
+      priority: 'normal',
+      relatesTo: [],
+      allowedActions: ['dismiss'],
+      audience: 'you',
+      status: 'open',
+      origin: { type: 'plan_ask', nodeId, revision: 1 },
+    };
+  }
+
+  it('puts every section that has never held content behind one More fold', async () => {
+    await land('');
+    expect(dockOpen()).toBe(true);
+    const more = [...container.querySelectorAll('button[aria-expanded]')].filter(
+      (b) => b.textContent === 'More',
+    );
+    expect(more).toHaveLength(1);
+    expect(moreFold()?.textContent).toContain('Applets');
+    expect(moreFold()?.textContent).toContain('Coach review');
+    expect(toggle('Applets')).toBeNull();
+
+    await click(toggle('More', false));
+    for (const title of FOLDED_SECTIONS) expect(inMore(title)).toBe(true);
+    // Opening More mounts no section, so it reads nothing of theirs.
+    expect(net.reads.some((r) => r.includes('/applets'))).toBe(false);
+    expect(net.reads.some((r) => r.endsWith('/plan'))).toBe(false);
+  });
+
+  it('keeps a section whose folded header shows content in its place, with its count', async () => {
+    net.workflows = [
+      { slug: 'weekly-roundup', name: 'Weekly roundup' },
+      { slug: 'digest', name: 'Digest' },
+    ];
+    await land('');
+    const skills = toggle('Skills', false);
+    expect(skills).not.toBeNull();
+    expect(inMore('Skills')).toBe(false);
+    expect(skills?.parentElement?.textContent).toContain('2 skills');
+    expect(moreFold()?.textContent).not.toContain('Skills');
+    expect(moreFold()?.textContent).toContain('Applets');
+  });
+
+  it('records a section that held content under More, and stands it in place on the next mount', async () => {
+    net.integrations = true;
+    await land('');
+    await click(toggle('More', false));
+    await click(toggle('Integrations', false));
+    expect(container.textContent).toContain('Docs');
+    // It does not move while the operator reads it.
+    expect(inMore('Integrations')).toBe(true);
+    expect(window.localStorage.getItem(WORKBENCH_HELD_STORAGE_KEY)).toContain('Integrations');
+
+    act(() => {
+      root.unmount();
+    });
+    root = createRoot(container);
+    await land('');
+    expect(toggle('Integrations')).not.toBeNull();
+    expect(inMore('Integrations')).toBe(false);
+  });
+
+  it('keeps a section under More while it is open there, even when its header signal turns on', async () => {
+    net.plan = {
+      roots: [],
+      lanes: {
+        needsYou: { items: [], total: 0 },
+        inFlight: { items: [], total: 0 },
+        upNext: { items: [], total: 0 },
+      },
+    };
+    await land('');
+    await click(toggle('More', false));
+    await click(toggle('Plan', false));
+    expect(inMore('Plan')).toBe(true);
+
+    const listeners = net.listeners.get('space.action_center') ?? [];
+    expect(listeners.length).toBeGreaterThan(0);
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({ kind: 'insert', items: [planAsk(ASKING)] }, 'ac-1');
+      }
+      await Promise.resolve();
+    });
+    await settle();
+    expect(inMore('Plan')).toBe(true);
+    expect(window.localStorage.getItem(WORKBENCH_HELD_STORAGE_KEY)).toContain('Plan');
+
+    act(() => {
+      root.unmount();
+    });
+    root = createRoot(container);
+    await land('');
+    expect(inMore('Plan')).toBe(false);
+  });
+
+  it('returns a section opened and then closed under More to its place when its header signal turns on', async () => {
+    net.plan = {
+      roots: [],
+      lanes: {
+        needsYou: { items: [], total: 0 },
+        inFlight: { items: [], total: 0 },
+        upNext: { items: [], total: 0 },
+      },
+    };
+    await land('');
+    await click(toggle('More', false));
+    await click(toggle('Plan', false));
+    await click(toggle('Plan', true));
+    expect(inMore('Plan')).toBe(true);
+
+    const listeners = net.listeners.get('space.action_center') ?? [];
+    expect(listeners.length).toBeGreaterThan(0);
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({ kind: 'insert', items: [planAsk(ASKING)] }, 'ac-1');
+      }
+      await Promise.resolve();
+    });
+    await settle();
+    expect(inMore('Plan')).toBe(false);
+    const plan = toggle('Plan', false)?.parentElement ?? null;
+    expect(plan?.querySelector('[title="1 pending"]')?.textContent).toBe('1');
+  });
+
+  it('shows no More fold once every section has held content', async () => {
+    rememberEverySectionHeld();
+    await land('');
+    expect(moreFold()).toBeNull();
+    expect(toggle('More')).toBeNull();
+  });
+
+  it('counts the pending plan steps on the folded Plan header and links the board, with no read', async () => {
+    net.actionItems = [planAsk(ASKING)];
+    await land('');
+    const plan = toggle('Plan', false)?.parentElement ?? null;
+    expect(inMore('Plan')).toBe(false);
+    expect(plan?.querySelector('[title="1 pending"]')?.textContent).toBe('1');
+    expect(plan?.querySelector('a')?.getAttribute('href')).toBe('/s/demo/plan');
+    expect(net.reads.some((r) => r.endsWith('/plan'))).toBe(false);
+  });
+
+  it('lists the steps pending on the operator and those in flight, each linked to the plan page', async () => {
+    net.actionItems = [planAsk(ASKING)];
+    net.plan = {
+      roots: [],
+      lanes: {
+        needsYou: { items: [laneItem(ASKING, 'Ship it', { reason: 'blocked' })], total: 1 },
+        inFlight: { items: [laneItem(RUNNING, 'Build the fold')], total: 1 },
+        upNext: { items: [laneItem(PLAN_ROOT, 'Queued step')], total: 1 },
+      },
+    };
+    await land('');
+    await click(toggle('Plan', false));
+    expect(net.reads).toContain(`/api/spaces/${SPACE}/plan`);
+
+    const step = (nodeId: string) =>
+      container.querySelector(`[data-workbench-plan-step="${nodeId}"] a`);
+    expect(step(ASKING)?.textContent).toBe('Ship it');
+    expect(step(ASKING)?.getAttribute('href')).toBe(
+      `/s/demo/plan?plan=${PLAN_ROOT}&node=${ASKING}`,
+    );
+    expect(step(RUNNING)?.textContent).toBe('Build the fold');
+    expect(step(RUNNING)?.getAttribute('href')).toBe(
+      `/s/demo/plan?plan=${PLAN_ROOT}&node=${RUNNING}`,
+    );
+    expect(container.textContent).not.toContain('Queued step');
   });
 });
 

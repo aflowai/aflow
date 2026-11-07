@@ -88,6 +88,7 @@ function LiveTimeline({ sessionId, passive }: { sessionId: string; passive: bool
       <RunTimeline
         events={events}
         withTabs={false}
+        foldTurnTools
         loading={history.isPending}
         historyEdge={
           /* A live session is truncated by the same page as a finished one. */
@@ -130,6 +131,7 @@ function HistoricalTimeline({ sessionId }: { sessionId: string }) {
     <RunTimeline
       events={query.items}
       withTabs={false}
+      foldTurnTools
       historyEdge={
         query.hasOlder ? (
           <TruncatedHistoryEdge
