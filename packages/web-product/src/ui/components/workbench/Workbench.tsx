@@ -354,7 +354,8 @@ function useHeldSections(
   const [state, setState] = useState<HeldState>(() => freshHeldState(spaceId));
   const known = state.spaceId === spaceId ? state : freshHeldState(spaceId);
   // A section is open under More only while More is open too: behind a
-  // closed More fold the operator reads its title alone.
+  // closed More fold the operator reads its title alone. Closing More also
+  // folds what was open under it, so a section it releases mounts folded.
   const moreOpen = folds.isExpanded(WORKBENCH_MORE);
   const { keptUnderMore, ...placement } = placeWorkbenchSections(
     sections,

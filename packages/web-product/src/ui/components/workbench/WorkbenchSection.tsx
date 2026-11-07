@@ -25,6 +25,8 @@ const SectionFoldContext = createContext<SectionFold | null>(null);
 interface WorkbenchFolds {
   isExpanded: (title: string) => boolean;
   toggle: (title: string) => void;
+  /** Folds each of these sections that is open, and leaves the rest as they are. */
+  collapse: (titles: readonly string[]) => void;
 }
 
 export const WorkbenchFoldsContext = createContext<WorkbenchFolds | null>(null);
@@ -57,6 +59,15 @@ export function useWorkbenchFolds(spaceId: string): WorkbenchFolds {
         openSectionsBySpace.set(spaceId, next);
         rerender();
       },
+      collapse: (titles) => {
+        const current = openSectionsBySpace.get(spaceId) ?? [];
+        if (!titles.some((title) => current.includes(title))) return;
+        openSectionsBySpace.set(
+          spaceId,
+          current.filter((t) => !titles.includes(t)),
+        );
+        rerender();
+      },
     }),
     [open, spaceId],
   );
@@ -76,6 +87,13 @@ export function useWorkbenchFoldsOrOwn(): WorkbenchFolds {
       toggle: (title) => {
         setOpen((current) =>
           current.includes(title) ? current.filter((t) => t !== title) : [...current, title],
+        );
+      },
+      collapse: (titles) => {
+        setOpen((current) =>
+          titles.some((title) => current.includes(title))
+            ? current.filter((t) => !titles.includes(t))
+            : current,
         );
       },
     }),
@@ -185,7 +203,9 @@ export const WORKBENCH_MORE = 'More';
  * never held content in the space. Its header names them, so the operator
  * can tell what sits behind it without opening it. Open, it shows each one's
  * header as the pane shows a folded section, and each one still mounts, and
- * reads, only when the operator expands it.
+ * reads, only when the operator expands it. Closing it folds every section
+ * open under it. A section it releases to its place then mounts folded, so
+ * it reads nothing where the operator did not open it.
  */
 export function WorkbenchMoreFold({
   titles,
@@ -202,11 +222,15 @@ export function WorkbenchMoreFold({
     () => ({
       expanded,
       toggle: () => {
-        if (folds) folds.toggle(WORKBENCH_MORE);
-        else setLocalExpanded((e) => !e);
+        if (!folds) {
+          setLocalExpanded((e) => !e);
+          return;
+        }
+        if (expanded) folds.collapse(titles);
+        folds.toggle(WORKBENCH_MORE);
       },
     }),
-    [expanded, folds],
+    [expanded, folds, titles],
   );
   return (
     <div data-workbench-more>

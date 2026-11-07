@@ -1027,6 +1027,48 @@ describe('the More fold, the Plan section and the Skills count', () => {
     expect(inMore('Plan')).toBe(false);
   });
 
+  it('folds a section open under More when More closes, so it stands in its place folded and reads nothing', async () => {
+    net.plan = {
+      roots: [],
+      lanes: {
+        needsYou: { items: [], total: 0 },
+        inFlight: { items: [], total: 0 },
+        upNext: { items: [], total: 0 },
+      },
+    };
+    await land('');
+    await click(toggle('More', false));
+    await click(toggle('Plan', false));
+    expect(inMore('Plan')).toBe(true);
+
+    const listeners = net.listeners.get('space.action_center') ?? [];
+    expect(listeners.length).toBeGreaterThan(0);
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({ kind: 'insert', items: [planAsk(ASKING)] }, 'ac-1');
+      }
+      await Promise.resolve();
+    });
+    await settle();
+    expect(inMore('Plan')).toBe(true);
+    const planReads = net.reads.filter((r) => r.endsWith('/plan')).length;
+    expect(planReads).toBeGreaterThan(0);
+
+    await click(toggle('More', true));
+    expect(inMore('Plan')).toBe(false);
+    expect(toggle('Plan', true)).toBeNull();
+    const plan = toggle('Plan', false)?.parentElement ?? null;
+    expect(plan?.querySelector('[title="1 pending"]')?.textContent).toBe('1');
+    await settle();
+    expect(net.reads.filter((r) => r.endsWith('/plan')).length).toBe(planReads);
+
+    // Opened again, More shows its remaining sections folded too.
+    await click(toggle('More', false));
+    for (const title of FOLDED_SECTIONS.filter((t) => t !== 'Plan')) {
+      expect(toggle(title, false)).not.toBeNull();
+    }
+  });
+
   it('returns a section opened and then closed under More to its place when its header signal turns on', async () => {
     net.plan = {
       roots: [],
