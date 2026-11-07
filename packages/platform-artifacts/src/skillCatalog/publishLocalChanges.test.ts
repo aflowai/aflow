@@ -2778,15 +2778,20 @@ describe('Publish Local Changes — a commit that makes nothing fails the run, n
   /** git's account where the branch's head already holds the patch, as the executor joins it. */
   const ALREADY_APPLIED =
     'error: src/a.ts: already exists in working directory; error: src/b.ts: patch does not apply';
-  /** git's account where the base moved under the patch. */
-  const BASE_MOVED = 'error: patch failed: src/b.ts:12; error: src/b.ts: patch does not apply';
+  /** git's account where a hunk does not fit the commit the run named. */
+  const HUNK_MISFIT = 'error: patch failed: src/b.ts:12; error: src/b.ts: patch does not apply';
+  /** git's account where the patch edits a file the commit the run named lacks. */
+  const FILE_MISSING = 'error: src/c.ts: No such file or directory';
+  /** The executor's own account where git gave none. */
+  const NO_GIT_ACCOUNT = 'The patch does not apply to the folder as it stands.';
 
+  /** A `clean` apply with no `mergeFrom` marks no file, so it names no conflicts. */
   function conflict(detail?: string): Record<string, unknown> {
     return HostFilePatchOutputSchema.parse({
       state: 'conflict',
       filesChanged: 0,
       files: ['src/a.ts', 'src/b.ts'],
-      conflicts: ['src/a.ts', 'src/b.ts'],
+      conflicts: [],
       ...(detail === undefined ? {} : { detail }),
     });
   }
@@ -2841,7 +2846,9 @@ describe('Publish Local Changes — a commit that makes nothing fails the run, n
   const endings: [string, Record<string, unknown>, string][] = [
     ['a conflict git gave no account of', conflict(), 'commit-conflict'],
     ['a patch the branch already holds', conflict(ALREADY_APPLIED), 'commit-conflict'],
-    ['a base that moved under the patch', conflict(BASE_MOVED), 'commit-conflict'],
+    ['a hunk that does not fit the commit named', conflict(HUNK_MISFIT), 'commit-conflict'],
+    ['a file the commit named lacks', conflict(FILE_MISSING), 'commit-conflict'],
+    ["the executor's own account", conflict(NO_GIT_ACCOUNT), 'commit-conflict'],
     ['a change that touches no file', EMPTY, 'commit-empty'],
   ];
   for (const posture of ['always', 'never', 'unless-unreviewed'] as const) {
@@ -2915,25 +2922,95 @@ describe('Publish Local Changes — a commit that makes nothing fails the run, n
     expect(again.pushed).toBe(true);
   });
 
-  it('names, for a base that moved under the patch, the merge round by its inputs', () => {
+  it('never says the base moved, because a clean apply lands only at the commit the run names', () => {
     const failure = taskOrThrow('commit-conflict').failureInstruction ?? '';
-    const asItStands = failure.indexOf('no `patchRef`');
-    const mergeRound = failure.indexOf(
-      'Otherwise the base moved under the patch, and the remedy is the merge round.',
-    );
-    expect(asItStands).toBeGreaterThan(-1);
-    expect(mergeRound).toBeGreaterThan(asItStands);
+    // A moved branch is refused as a stale base before any apply, so a
+    // conflict cannot be the merge round's case.
+    expect(failure).toContain('The base did not move under the patch');
+    expect(failure).not.toContain('the base moved under the patch');
+    expect(failure).not.toContain('the merge round');
+    expect(failure).not.toContain('`mergeFrom: origin/<base>`');
+  });
+
+  /** Which part of the instruction each conflict shape the executor can produce is answered by. */
+  const shapes: [string, string, string[]][] = [
+    [
+      'a patch the branch already holds',
+      ALREADY_APPLIED,
+      ["ask first whether the branch's head already carries this change"],
+    ],
+    [
+      'a hunk that does not fit the commit named',
+      HUNK_MISFIT,
+      [
+        "ask first whether the branch's head already carries this change",
+        "Otherwise git's detail names the files and hunks that do not fit the commit this run applied the patch at.",
+      ],
+    ],
+    [
+      'a file the commit named lacks',
+      FILE_MISSING,
+      [
+        "Otherwise git's detail names the files and hunks that do not fit the commit this run applied the patch at.",
+      ],
+    ],
+    [
+      "the executor's own account",
+      NO_GIT_ACCOUNT,
+      [
+        "ask first whether the branch's head already carries this change",
+        "Otherwise git's detail names the files and hunks that do not fit the commit this run applied the patch at.",
+      ],
+    ],
+  ];
+  for (const [what, detail, answeredBy] of shapes) {
+    it(`answers ${what} with a remedy the detail selects`, () => {
+      const failure = taskOrThrow('commit-conflict').failureInstruction ?? '';
+      const reason = String(endingIn(conflict(detail)).inputs.get('commit-conflict')?.['reason']);
+      expect(reason).toContain(`git said: ${detail}`);
+      for (const part of answeredBy) expect(failure).toContain(part);
+      if (/already exists in|patch does not apply/.test(detail)) {
+        expect(failure).toContain('already exists in the working directory');
+        expect(failure).toContain('that the patch does not apply');
+      }
+    });
+  }
+
+  it('gives a run that appended to a branch the inputs to compare, and the commission again where they match', () => {
+    const failure = taskOrThrow('commit-conflict').failureInstruction ?? '';
     expect(failure).toContain(
-      'Commission the fix from this branch with `mergeFrom: origin/<base>`',
+      'Where this run appended to an existing branch, the patch was applied at its head, which is the `baseSha` given, merged with any `mergeFrom` given.',
     );
-    expect(failure).toContain('the sha it reports in `merge.from` as `mergeFrom`');
-    const commissionInputs = new Set(
-      (COMMISSION_CHANGE.bundle.workflow.runInputs ?? []).map((input) => input.id),
+    expect(failure).toContain(
+      'Compare those with the `baseSha` and `merge.from` the commission reported.',
     );
-    expect(commissionInputs.has('mergeFrom')).toBe(true);
+    expect(failure).toContain(
+      "Where they differ, publish the same `patchRef` again with the commission's values.",
+    );
+    expect(failure).toContain('so commission the change again from this branch');
     for (const id of ['patchRef', 'baseSha', 'mergeFrom']) {
       expect(runInputOrThrow(id).id).toBe(id);
     }
+  });
+
+  it('tells a run that was making a new branch that no branch exists to merge forward, and to re-decide from the detail', () => {
+    const failure = taskOrThrow('commit-conflict').failureInstruction ?? '';
+    const appended = failure.indexOf('Where this run appended to an existing branch');
+    const fresh = failure.indexOf(
+      'Where this run was making a new branch, the branch is new and was not created, so there is no branch to merge forward.',
+    );
+    expect(appended).toBeGreaterThan(-1);
+    expect(fresh).toBeGreaterThan(appended);
+    const newBranch = failure.slice(fresh);
+    expect(newBranch).toContain(
+      "The patch was applied at the `baseSha` given, or at the folder's HEAD where none was given. Re-decide from the detail.",
+    );
+    expect(newBranch).toContain(
+      "Where no `baseSha` was given, or it is not the one the commission reported, publish the same `patchRef` again with the commission's `baseSha`.",
+    );
+    expect(newBranch).toContain('Otherwise commission the change again.');
+    expect(newBranch).not.toContain('`mergeFrom`');
+    expect(newBranch).not.toContain('from this branch');
   });
 
   it('names, for a change that touches no file, the commission to read and the branch as it stands', () => {
