@@ -151,6 +151,35 @@ describe('planCards', () => {
     ).toBe('A run is on it');
     expect(waitingLine(node('a'))).toBeUndefined();
   });
+
+  it('names a run on an active step under a waiting step as what holds it, as the waiting rule counts it', () => {
+    const counts = { runs: 0, pullRequests: 0, findings: 0, documents: 0, inFlightRuns: 0 };
+    const running = { ...counts, inFlightRuns: 1 };
+    const phase = (child: PlanTreeNode) =>
+      node('phase', {
+        status: 'waiting',
+        counts,
+        children: [node('wrapper', { children: [child] })],
+      });
+
+    expect(waitingLine(phase(node('step', { counts: running })))).toBe(
+      'A run is on a step under it',
+    );
+    expect(
+      waitingLine(
+        node('phase', {
+          status: 'waiting',
+          counts: running,
+          children: [node('step', { counts: running })],
+        }),
+      ),
+    ).toBe('2 runs are on it and on steps under it');
+    for (const status of ['blocked', 'waiting', 'done', 'dropped'] as const) {
+      expect(waitingLine(phase(node('step', { status, counts: running })))).toBe(
+        'Its run ended; the loop advances it when it returns',
+      );
+    }
+  });
 });
 
 const NO_STEPS = { steps: 0, done: 0, dropped: 0 };

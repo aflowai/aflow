@@ -683,6 +683,132 @@ describe('updatePlanNode — only a closed node has an outcome', () => {
   });
 });
 
+describe('updatePlanNode — a waiting node waits on a run', () => {
+  function runOn(node: PlanNode, status: string): void {
+    store.runs.push({
+      runId: `run-on-${node.nodeId}`,
+      slug: 'commission-local-change',
+      status,
+      nodeId: node.nodeId,
+      spaceId: SPACE,
+      startedAt: '2026-10-05T08:00:00.000Z',
+    });
+  }
+
+  it('refuses waiting with no run in flight, says to block or start the run, and writes nothing', async () => {
+    const node = await created();
+    runOn(node, 'completed');
+    const refused = await updatePlanNode(session('session-a'), {
+      nodeId: node.nodeId,
+      expectedRevision: 1,
+      status: 'waiting',
+      note: 'Held by the operator until the design is read.',
+    });
+    expect(refused).toMatchObject({
+      ok: false,
+      code: 'PLAN_NODE_WAITING_NEEDS_RUN',
+      details: { nodeId: node.nodeId, status: 'active' },
+    });
+    const message = refused.ok ? '' : refused.message;
+    expect(message).toContain(`Plan node "${node.title}" has no run in flight`);
+    expect(message).toContain('a waiting node waits on a run');
+    expect(message).toContain('nothing was written');
+    expect(message).toContain('set status "blocked"');
+    expect(message).toContain('start the run against this node');
+    expect(store.nodes.get(node.nodeId)).toMatchObject({ status: 'active', revision: 1 });
+    expect(store.nodes.get(node.nodeId)).not.toHaveProperty('note');
+  });
+
+  it('writes waiting on a node a run in flight serves, itself or under it', async () => {
+    const node = await created();
+    runOn(node, 'running');
+    const waiting = await updatePlanNode(session('session-a'), {
+      nodeId: node.nodeId,
+      expectedRevision: 1,
+      status: 'waiting',
+    });
+    expect(waiting).toMatchObject({ ok: true, node: { status: 'waiting', revision: 2 } });
+
+    const phase = await created({ title: 'phase' });
+    runOn(await created({ parentId: phase.nodeId, title: 'step' }), 'paused');
+    const phaseWaiting = await updatePlanNode(session('session-a'), {
+      nodeId: phase.nodeId,
+      expectedRevision: 1,
+      status: 'waiting',
+    });
+    expect(phaseWaiting).toMatchObject({ ok: true, node: { status: 'waiting' } });
+  });
+
+  it('refuses waiting where the only run in flight serves a done or dropped node under it', async () => {
+    for (const closed of ['done', 'dropped'] as const) {
+      const phase = await created({ title: `phase over a ${closed} step` });
+      const step = store.seed(SPACE, {
+        parentId: phase.nodeId,
+        title: `${closed} step`,
+        status: closed,
+        outcome: 'Closed before the phase was read.',
+      });
+      runOn(step, 'running');
+      const refused = await updatePlanNode(session('session-a'), {
+        nodeId: phase.nodeId,
+        expectedRevision: 1,
+        status: 'waiting',
+      });
+      expect(refused).toMatchObject({
+        ok: false,
+        code: 'PLAN_NODE_WAITING_NEEDS_RUN',
+        details: { nodeId: phase.nodeId, status: 'active' },
+      });
+      expect(store.nodes.get(phase.nodeId)).toMatchObject({ status: 'active', revision: 1 });
+    }
+  });
+
+  it('refuses waiting where the only run in flight serves a blocked or waiting node under it', async () => {
+    for (const held of ['blocked', 'waiting'] as const) {
+      const phase = await created({ title: `phase over a ${held} step` });
+      const step = store.seed(SPACE, {
+        parentId: phase.nodeId,
+        title: `${held} step`,
+        status: held,
+      });
+      runOn(step, 'running');
+      const refused = await updatePlanNode(session('session-a'), {
+        nodeId: phase.nodeId,
+        expectedRevision: 1,
+        status: 'waiting',
+      });
+      expect(refused).toMatchObject({
+        ok: false,
+        code: 'PLAN_NODE_WAITING_NEEDS_RUN',
+        details: { nodeId: phase.nodeId, status: 'active' },
+      });
+      expect(refused.ok ? '' : refused.message).toContain('on an active node under it');
+      expect(store.nodes.get(phase.nodeId)).toMatchObject({ status: 'active', revision: 1 });
+    }
+  });
+
+  it('writes blocked with no run, as before', async () => {
+    const node = await created();
+    const held = await updatePlanNode(session('session-a'), {
+      nodeId: node.nodeId,
+      expectedRevision: 1,
+      status: 'blocked',
+      note: 'Waiting on you: read the design.',
+    });
+    expect(held).toMatchObject({ ok: true, node: { status: 'blocked', revision: 2 } });
+  });
+
+  it('leaves a node already waiting with no run writable', async () => {
+    const node = store.seed(SPACE, { title: 'held', status: 'waiting' });
+    const noted = await updatePlanNode(session('session-a'), {
+      nodeId: node.nodeId,
+      expectedRevision: node.revision,
+      note: 'Still held.',
+    });
+    expect(noted).toMatchObject({ ok: true, node: { status: 'waiting', note: 'Still held.' } });
+  });
+});
+
 describe('updatePlanNode — an update that changes nothing is refused', () => {
   it('refuses every update whose fields equal the node’s, with the node, and bumps nothing', async () => {
     const parent = await created({ title: 'parent' });
