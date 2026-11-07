@@ -45,6 +45,7 @@ const net = vi.hoisted(() => ({
   actionItems: [] as Array<Record<string, unknown>>,
   integrations: false,
   plan: null as Record<string, unknown> | null,
+  schedules: [] as Array<Record<string, unknown>>,
   surfaceGate: null as Promise<void> | null,
   listeners: new Map<string, Array<(event: unknown, cursor: string) => void>>(),
 }));
@@ -124,6 +125,9 @@ function respond(path: string): unknown {
     if (path.endsWith('/integrations/credentials')) return { credentials: [] };
     if (path.endsWith('/integrations/repo-bindings')) return { repoBindings: [] };
     if (path.endsWith('/users/me/oauth-connections')) return { connections: [] };
+  }
+  if (path.endsWith('/schedules/upcoming') && net.schedules.length > 0) {
+    return { schedules: net.schedules, total: net.schedules.length };
   }
   if (path.endsWith(`/spaces/${SPACE}/plan`)) return net.plan ?? undefined;
   if (path.endsWith(`/spaces/${SPACE}`)) return { id: SPACE, directives: {} };
@@ -274,6 +278,7 @@ beforeEach(() => {
   net.actionItems = [];
   net.integrations = false;
   net.plan = null;
+  net.schedules = [];
   net.surfaceGate = null;
   net.listeners = new Map();
   // The realtime brokers are module-level and refcounted, and a released topic
@@ -1049,6 +1054,52 @@ describe('the More fold, the Plan section and the Skills count', () => {
     expect(inMore('Plan')).toBe(false);
     const plan = toggle('Plan', false)?.parentElement ?? null;
     expect(plan?.querySelector('[title="1 pending"]')?.textContent).toBe('1');
+  });
+
+  it('lists a due schedule from the upcoming read under More, records it, and stands Schedules in place next time', async () => {
+    net.schedules = [
+      {
+        id: 'late',
+        name: 'Nightly sweep',
+        description: null,
+        kind: 'cron',
+        cronExpression: '0 9 * * *',
+        timezone: 'UTC',
+        scheduledAt: null,
+        status: 'active',
+        nextFireAt: new Date(Date.now() - 12 * 60_000).toISOString(),
+        lastFiredAt: null,
+        firingCount: 0,
+        maxFirings: null,
+        target: null,
+        inputTemplate: {},
+        lastError: null,
+        targetRunId: null,
+        lastRunId: null,
+        createdByRunId: null,
+        renewsScheduleId: null,
+        expiresAt: null,
+        createdAt: new Date(Date.now() - HOUR).toISOString(),
+      },
+    ];
+    await land('');
+    expect(net.reads.some((r) => r.includes('/schedules'))).toBe(false);
+    await click(toggle('More', false));
+    await click(toggle('Schedules', false));
+    expect(net.reads.some((r) => r.endsWith('/schedules/upcoming'))).toBe(true);
+    const line = container.querySelector('[aria-label="Nightly sweep"] summary');
+    expect(line?.textContent).toContain('due 12 min ago');
+    expect(line?.textContent).not.toContain('next');
+    expect(inMore('Schedules')).toBe(true);
+    expect(window.localStorage.getItem(WORKBENCH_HELD_STORAGE_KEY)).toContain('Schedules');
+
+    act(() => {
+      root.unmount();
+    });
+    root = createRoot(container);
+    await land('');
+    expect(toggle('Schedules')).not.toBeNull();
+    expect(inMore('Schedules')).toBe(false);
   });
 
   it('shows no More fold once every section has held content', async () => {

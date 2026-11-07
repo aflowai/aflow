@@ -17,9 +17,10 @@ import {
 
 /**
  * The space's upcoming schedules, each folded to one line: its name and when it
- * runs next. The server lists every active schedule with a next firing ahead,
- * whoever created it, soonest first. An operator-created schedule runs on its
- * own as much as an agent-armed one, so it belongs here too. An expired
+ * runs next. The server lists every active schedule with a next firing,
+ * whoever created it, soonest first. A firing that is due or past leads the
+ * list, and its line says how late it is. An operator-created schedule runs
+ * on its own as much as an agent-armed one, so it belongs here too. An expired
  * one-shot, a chain at its end and a superseded renewal never reach this
  * section, so it stays as tall as what still runs. The server lists the
  * soonest few and counts the rest, and a line under the list names that count.

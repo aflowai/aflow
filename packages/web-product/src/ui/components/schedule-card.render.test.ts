@@ -202,6 +202,13 @@ describe('the Triggers page', () => {
 
     expect(words(card('Weekly backup'))).not.toContain('set up in chat');
   });
+
+  it('says how late a due schedule is in its timing column', () => {
+    schedules = [schedule('late', { name: 'Nightly sweep', nextFireAt: at(-12 * MINUTE) })];
+    renderPage();
+
+    expect(words(card('Nightly sweep'))).toContain('due 12 min ago');
+  });
 });
 
 /** The expired rows a renewing shepherd leaves, one per renewal, newest first by index. */
@@ -417,6 +424,39 @@ describe("the Workbench's Schedules section", () => {
       'expired',
     ]);
     expect(fired.textContent).not.toMatch(/next/);
+  });
+
+  it('lists a due schedule first and says on its line that it is due, with no "next"', () => {
+    const due = schedule('due', { name: 'Local PR Shepherd', nextFireAt: at(-20_000) });
+    const late = schedule('late', { name: 'Nightly sweep', nextFireAt: at(-12 * MINUTE) });
+    const hoursLate = schedule('hours', {
+      name: 'Morning digest',
+      nextFireAt: at(-3 * 60 * MINUTE),
+    });
+    schedules = [hoursLate, late, due, upcoming];
+    renderWorkbench();
+
+    expect(cards().map((el) => el.getAttribute('aria-label'))).toEqual([
+      'Morning digest',
+      'Nightly sweep',
+      'Local PR Shepherd',
+      'Daily report',
+    ]);
+    const line = (name: string) => words(card(name).querySelector('summary') as HTMLElement);
+    expect(line('Local PR Shepherd')).toEqual(['Local PR Shepherd', 'due now']);
+    expect(line('Nightly sweep')).toEqual(['Nightly sweep', 'due 12 min ago']);
+    expect(line('Morning digest')).toEqual(['Morning digest', 'due 3 h ago']);
+    expect(line('Daily report')).toEqual(['Daily report', 'next in 4 min']);
+  });
+
+  it('never reads a firing seconds ahead as zero minutes away', () => {
+    schedules = [schedule('soon', { name: 'Soon', nextFireAt: at(20_000) })];
+    renderWorkbench();
+
+    expect(words(card('Soon').querySelector('summary') as HTMLElement)).toEqual([
+      'Soon',
+      'next in 1 min',
+    ]);
   });
 
   it('shows a renewal the upcoming read returns as the live schedule it is', () => {
