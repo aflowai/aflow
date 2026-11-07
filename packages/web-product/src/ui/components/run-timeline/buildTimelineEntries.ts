@@ -580,8 +580,8 @@ const TURN_TOOLS_FLAG_RANK: ReadonlyArray<StepGroup['status']> = [
 
 /**
  * The tool row whose status the closed fold shows, so a call that failed,
- * paused or stalled stays visible at a glance. A turn whose calls are all
- * clear has none.
+ * paused, is retrying or is waiting on its executor stays visible at a
+ * glance. A turn whose calls are all clear has none.
  */
 export function turnToolsFlagged(tools: readonly StepGroup[]): StepGroup | undefined {
   for (const status of TURN_TOOLS_FLAG_RANK) {

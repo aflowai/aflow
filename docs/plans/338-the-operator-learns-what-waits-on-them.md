@@ -29,9 +29,11 @@
 - `@aflow/server-runtime`: `planAskSource.ts` lists and resolves by the new rule, and the item title changes. The schedules routes list every upcoming schedule and order the Triggers page's rows, and `triggerArmedSource.ts` keeps the notices alone.
 - `@aflow/schemas`: one table of state labels beside the plan column ids, and the two plan caps.
 - `@aflow/web-product`: the sidebar's Plan count, the Workbench's default state and lazy sections, the chat's landing, the labels on the Plan page and in the Workbench, and the two reads onto the query cache. The schedules round adds the upcoming list with its count line, the expired rows behind **Show older** and the schedule cards' session links.
+- `@aflow/web-product`, the Workbench round: the Plan section in `WorkbenchPlan.tsx`, the More fold in `Workbench.tsx` and `WorkbenchSection.tsx`, and the held-section record in `lib/workbench-held-sections.ts`. Each section's own file records that it held content, and `WorkbenchSkills.tsx` counts the skills. The Timeline's turn fold is in `run-timeline.tsx`, the `run-timeline/` helpers and `cascade-session-timeline.tsx`.
 - `@aflow/platform-artifacts`: the help articles `concepts.ts`, `approvals.ts` and `automation.ts`.
+- `@aflow/platform-artifacts`, the Workbench round: the help articles `approvals.ts`, `concepts.ts` and `troubleshooting.ts`.
 - `docs/plans/332-the-plan-page-serves-the-operators-jobs.md`: §8 answered, and D5's rejection pointed here.
-- Stored data: none.
+- Stored data: no migration and no new table. The browser stores two records in `localStorage`. `aflow.chat.workbenchCollapsed` keeps the dock's fold per conversation. `aflow.workbench.heldSections` keeps which Workbench sections have held content, per space, for at most 100 spaces.
 
 **Risks**
 
