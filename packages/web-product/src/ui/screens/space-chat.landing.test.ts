@@ -988,6 +988,40 @@ describe('the More fold, the Plan section and the Skills count', () => {
     expect(inMore('Integrations')).toBe(false);
   });
 
+  it('keeps a section open under More there when its header signal turns on, until the next mount', async () => {
+    net.plan = {
+      roots: [],
+      lanes: {
+        needsYou: { items: [], total: 0 },
+        inFlight: { items: [], total: 0 },
+        upNext: { items: [], total: 0 },
+      },
+    };
+    await land('');
+    await click(toggle('More', false));
+    await click(toggle('Plan', false));
+    expect(inMore('Plan')).toBe(true);
+
+    const listeners = net.listeners.get('space.action_center') ?? [];
+    expect(listeners.length).toBeGreaterThan(0);
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({ kind: 'insert', items: [planAsk(ASKING)] }, 'ac-1');
+      }
+      await Promise.resolve();
+    });
+    await settle();
+    expect(inMore('Plan')).toBe(true);
+    expect(window.localStorage.getItem(WORKBENCH_HELD_STORAGE_KEY)).toContain('Plan');
+
+    act(() => {
+      root.unmount();
+    });
+    root = createRoot(container);
+    await land('');
+    expect(inMore('Plan')).toBe(false);
+  });
+
   it('shows no More fold once every section has held content', async () => {
     rememberEverySectionHeld();
     await land('');

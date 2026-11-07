@@ -30,9 +30,11 @@ import {
   planBoardLink,
 } from './WorkbenchPlan.js';
 import {
+  WorkbenchFoldsContext,
   WorkbenchHeldContext,
   WorkbenchLazySection,
   WorkbenchMoreFold,
+  useWorkbenchFoldsOrOwn,
 } from './WorkbenchSection.js';
 import {
   LiveRunBadges,
@@ -277,8 +279,9 @@ export function Workbench({
       ),
     },
   ];
-  const { held, recordHeld } = useHeldSections(spaceId, sections);
-  const { inPlace, more } = workbenchPlacement(sections, held);
+  const folds = useWorkbenchFoldsOrOwn();
+  const { placement, recordHeld } = useHeldSections(spaceId, sections, folds);
+  const { inPlace, more } = placement;
 
   return (
     <Column gap="none" style={{ flex: 1, minHeight: 0 }}>
@@ -292,18 +295,20 @@ export function Workbench({
           {/* Folded below this line (Plan 338 D3): each section mounts, and
               reads, only when the operator expands it. A section that has
               never held content sits behind More instead. */}
-          <WorkbenchHeldContext.Provider value={recordHeld}>
-            {inPlace.map((section) => (
-              <Fragment key={section.title}>{section.node}</Fragment>
-            ))}
-            {more.length > 0 && (
-              <WorkbenchMoreFold titles={more.map((section) => section.title)}>
-                {more.map((section) => (
-                  <Fragment key={section.title}>{section.node}</Fragment>
-                ))}
-              </WorkbenchMoreFold>
-            )}
-          </WorkbenchHeldContext.Provider>
+          <WorkbenchFoldsContext.Provider value={folds}>
+            <WorkbenchHeldContext.Provider value={recordHeld}>
+              {inPlace.map((section) => (
+                <Fragment key={section.title}>{section.node}</Fragment>
+              ))}
+              {more.length > 0 && (
+                <WorkbenchMoreFold titles={more.map((section) => section.title)}>
+                  {more.map((section) => (
+                    <Fragment key={section.title}>{section.node}</Fragment>
+                  ))}
+                </WorkbenchMoreFold>
+              )}
+            </WorkbenchHeldContext.Provider>
+          </WorkbenchFoldsContext.Provider>
         </Column>
       </div>
       {/* The floor of the pane. It sizes itself (see the component) rather than
@@ -328,24 +333,32 @@ interface WorkbenchFoldedSection {
 }
 
 /**
- * The sections that have held content in this space, read from storage once
- * per space. A section whose header signal shows content is recorded and
- * keeps its place after the signal goes. A section that records content once
- * expanded is written to storage only, so it moves out of More on the next
- * mount rather than while the operator reads it.
+ * Where each folded section stands, and where a section that has held content
+ * is recorded. The record is read from storage once per space. A section
+ * whose header signal shows content is recorded and keeps its place after the
+ * signal goes. A section the operator opens under More is kept there for the
+ * rest of this mount, whatever its signal or its content says. Its record
+ * reaches storage only, so it moves to its place on the next mount rather
+ * than while the operator reads it.
  */
 function useHeldSections(
   spaceId: string,
   sections: readonly WorkbenchFoldedSection[],
-): { held: ReadonlySet<string>; recordHeld: (title: string) => void } {
-  const [state, setState] = useState<{ spaceId: string; held: ReadonlySet<string> }>(() => ({
-    spaceId,
-    held: new Set(readHeldSections(browserStorage(), spaceId)),
-  }));
+  folds: { isExpanded: (title: string) => boolean },
+): {
+  placement: { inPlace: WorkbenchFoldedSection[]; more: WorkbenchFoldedSection[] };
+  recordHeld: (title: string) => void;
+} {
+  const [state, setState] = useState<HeldState>(() => freshHeldState(spaceId));
+  const known = state.spaceId === spaceId ? state : freshHeldState(spaceId);
+  const placement = workbenchPlacement(sections, known.held, known.keptUnderMore);
+  const opened = placement.more
+    .map((section) => section.title)
+    .filter((title) => folds.isExpanded(title) && !known.keptUnderMore.has(title));
   const current =
-    state.spaceId === spaceId
-      ? state
-      : { spaceId, held: new Set(readHeldSections(browserStorage(), spaceId)) };
+    opened.length === 0
+      ? known
+      : { ...known, keptUnderMore: new Set([...known.keptUnderMore, ...opened]) };
   if (current !== state) setState(current);
 
   const signalled = sections
@@ -357,7 +370,7 @@ function useHeldSections(
     const titles = signalled.split('\n');
     for (const title of titles) rememberHeldSection(browserStorage(), spaceId, title);
     setState((prev) =>
-      prev.spaceId === spaceId ? { spaceId, held: new Set([...prev.held, ...titles]) } : prev,
+      prev.spaceId === spaceId ? { ...prev, held: new Set([...prev.held, ...titles]) } : prev,
     );
   }, [signalled, spaceId]);
 
@@ -367,7 +380,21 @@ function useHeldSections(
     },
     [spaceId],
   );
-  return { held: current.held, recordHeld };
+  return { placement, recordHeld };
+}
+
+interface HeldState {
+  spaceId: string;
+  held: ReadonlySet<string>;
+  keptUnderMore: ReadonlySet<string>;
+}
+
+function freshHeldState(spaceId: string): HeldState {
+  return {
+    spaceId,
+    held: new Set(readHeldSections(browserStorage(), spaceId)),
+    keptUnderMore: new Set(),
+  };
 }
 
 /**

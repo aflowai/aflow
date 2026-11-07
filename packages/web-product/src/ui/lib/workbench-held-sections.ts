@@ -69,16 +69,21 @@ export function rememberHeldSection(
 /**
  * The sections in their place, and those behind More, each in the order
  * given. A section stands in its place where it holds something now or has
- * held something before.
+ * held something before. A section in `keptUnderMore` stays behind More
+ * whatever it holds: the operator has had it open there, and it moves only on
+ * the Workbench's next mount.
  */
 export function workbenchPlacement<T extends { title: string; holdsContent: boolean }>(
   sections: readonly T[],
   held: ReadonlySet<string>,
+  keptUnderMore: ReadonlySet<string>,
 ): { inPlace: T[]; more: T[] } {
   const inPlace: T[] = [];
   const more: T[] = [];
   for (const section of sections) {
-    (section.holdsContent || held.has(section.title) ? inPlace : more).push(section);
+    const placed =
+      !keptUnderMore.has(section.title) && (section.holdsContent || held.has(section.title));
+    (placed ? inPlace : more).push(section);
   }
   return { inPlace, more };
 }

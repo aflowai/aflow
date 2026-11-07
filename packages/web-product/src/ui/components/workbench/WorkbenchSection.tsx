@@ -62,6 +62,28 @@ export function useWorkbenchFolds(spaceId: string): WorkbenchFolds {
   );
 }
 
+/**
+ * The fold record the Workbench places its sections by: its owner's where one
+ * is provided, else one that lives as long as this mount. The Workbench
+ * provides the result to its sections, so it and they read one record.
+ */
+export function useWorkbenchFoldsOrOwn(): WorkbenchFolds {
+  const provided = useContext(WorkbenchFoldsContext);
+  const [open, setOpen] = useState<readonly string[]>([]);
+  const own = useMemo<WorkbenchFolds>(
+    () => ({
+      isExpanded: (title) => open.includes(title),
+      toggle: (title) => {
+        setOpen((current) =>
+          current.includes(title) ? current.filter((t) => t !== title) : [...current, title],
+        );
+      },
+    }),
+    [open],
+  );
+  return provided ?? own;
+}
+
 /** Forgets every space's open sections, as a reload does. */
 export function __resetForTests(): void {
   openSectionsBySpace.clear();
@@ -81,8 +103,8 @@ export const WorkbenchHeldContext = createContext<((title: string) => void) | nu
 /**
  * A section under a fold calls this with whether it holds content now. Once
  * it has, the section stands in its place rather than behind More the next
- * time the Workbench mounts. A section open under More therefore does not
- * jump out from under the operator.
+ * time the Workbench mounts. A section the operator has open under More stays
+ * there until then, so it does not jump out from under them.
  */
 export function useWorkbenchSectionHeld(holdsContent: boolean): void {
   const markHeld = useContext(SectionFoldContext)?.markHeld;

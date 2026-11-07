@@ -70,15 +70,27 @@ describe('workbenchPlacement', () => {
     const { inPlace, more } = workbenchPlacement(
       [section('Plan'), section('Skills', true), section('Applets'), section('Coach review')],
       new Set(['Plan']),
+      new Set(),
     );
     expect(inPlace.map((s) => s.title)).toEqual(['Plan', 'Skills']);
     expect(more.map((s) => s.title)).toEqual(['Applets', 'Coach review']);
+  });
+
+  it('keeps a section open under More there, whatever it holds or has held', () => {
+    const { inPlace, more } = workbenchPlacement(
+      [section('Plan', true), section('Skills', true), section('Applets')],
+      new Set(['Plan', 'Applets']),
+      new Set(['Plan', 'Applets']),
+    );
+    expect(inPlace.map((s) => s.title)).toEqual(['Skills']);
+    expect(more.map((s) => s.title)).toEqual(['Plan', 'Applets']);
   });
 
   it('puts nothing behind More once every section has held content', () => {
     const { more } = workbenchPlacement(
       [section('Skills'), section('Applets')],
       new Set(['Skills', 'Applets']),
+      new Set(),
     );
     expect(more).toEqual([]);
   });
