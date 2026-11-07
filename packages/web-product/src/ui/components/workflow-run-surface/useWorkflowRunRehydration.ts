@@ -4,9 +4,10 @@ import { useEffect, useRef } from 'react';
 import { isTerminalRunStatus } from '@aflow/schemas';
 import type { WorkflowRunSurfaceState } from '../../lib/types.js';
 import {
+  runSurfaceNeedsDetailRead,
   workflowRunDetailToSurfaceState,
   type WorkflowRunDetailResponse,
-} from './workflowRunDetailToState.js';
+} from '@aflow/run-view';
 
 interface UseWorkflowRunRehydrationArgs {
   runId: string;
@@ -58,14 +59,13 @@ export function useWorkflowRunRehydration({
   }, [onHydrate]);
 
   // The live SSE event stream — including SSE catch-up replay — does not
-  // carry `workflowGraph` / `graphFidelity`. Only the BFF endpoint resolves
-  // the workflow definition and emits those fields, so any state populated
-  // purely from live events lacks the forward-DAG render data even after
-  // `needsHydration` has been cleared by a live `WorkflowRunUpdate`. Fire
-  // the BFF fetch when the graph hasn't been resolved yet — `settledRef`
-  // makes this one-shot per key.
-  const needsHydration =
-    state === undefined || state.needsHydration || state.graphFidelity === undefined;
+  // carry `workflowGraph` / `graphFidelity`. Only the BFF endpoint and the
+  // mount snapshot, which hydrates the cards it mounts, resolve the workflow
+  // definition. A state populated purely from live events lacks the
+  // forward-DAG render data even after `needsHydration` has been cleared by a
+  // live `WorkflowRunUpdate`, so fire the BFF fetch when the graph hasn't
+  // been resolved yet — `settledRef` makes this one-shot per key.
+  const needsHydration = runSurfaceNeedsDetailRead(state);
 
   useEffect(() => {
     if (!enabled || !needsHydration || !spaceId) return;

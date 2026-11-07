@@ -2,7 +2,12 @@
 
 import { useCallback, useEffect, useReducer } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { runViewReducer, initialRunViewState } from '@aflow/run-view';
+import {
+  initialRunViewState,
+  runViewReducer,
+  workflowRunDetailToSurfaceState,
+  type WorkflowRunDetailResponse,
+} from '@aflow/run-view';
 import type { SessionEvent } from '../../lib/types.js';
 import { useApiQuery } from '../../hooks/useApiQuery.js';
 import { useSessionEventListener, useSessionLiveDeltas } from '../../hooks/use-session-events.js';
@@ -10,10 +15,6 @@ import { HarnessActivityProvider } from '../harness-activity-card.js';
 import { WorkflowRunSurface } from './WorkflowRunSurface.js';
 import { useWorkflowRunUsageRefresh } from './useWorkflowRunUsageRefresh.js';
 import { useWorkflowRunPauseRefresh } from './useWorkflowRunPauseRefresh.js';
-import {
-  workflowRunDetailToSurfaceState,
-  type WorkflowRunDetailResponse,
-} from './workflowRunDetailToState.js';
 
 interface WorkflowRunSurfaceContainerProps {
   runId: string;

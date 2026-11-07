@@ -10,6 +10,7 @@ import {
   Timeline,
   TimelineItem,
 } from '@aflow/design-system';
+import { runSurfaceOutputs } from '@aflow/run-view';
 import { isTerminalRunStatus } from '@aflow/schemas';
 import type { WorkflowRunSurfaceState } from '../../lib/types.js';
 import { resolveTaskIcon } from '../../lib/op-labels.js';
@@ -368,8 +369,8 @@ export function WorkflowRunSurface({
                       />
                     )}
                     {task.taskType === 'operation' &&
-                      (task.inputRef ?? task.outputRef ?? task.errorRef) && (
-                        <TaskExecutionDetails task={task} />
+                      (task.inputRef ?? task.outputRef ?? task.errorRef ?? task.refsElided) && (
+                        <TaskExecutionDetails task={task} runId={runId} spaceId={spaceId} />
                       )}
                     {/* Agent tasks only: operation/human tasks carry a
                         synthetic workerSessionId (the step-execution id) —
@@ -388,7 +389,11 @@ export function WorkflowRunSurface({
       {/* First-class run output — live promoted values mid-run; score /
           outcome checks / closing summary once terminal. Self-gates on
           having anything to show. */}
-      <RunOutputSection outputs={state.outputs} result={state.result} completed={completed} />
+      <RunOutputSection
+        outputs={runSurfaceOutputs(state)}
+        result={state.result}
+        completed={completed}
+      />
 
       {spaceId && (
         <WorkflowRunControls

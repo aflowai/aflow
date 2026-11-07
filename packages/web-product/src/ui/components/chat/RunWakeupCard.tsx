@@ -1,14 +1,13 @@
 'use client';
 
 import { Icon } from '@aflow/design-system';
-import type { RunWakeupPayload } from '@aflow/run-view';
+import type { RunWakeupPayload, WorkflowRunDetailResponse } from '@aflow/run-view';
 import { useApiQuery } from '../../hooks/useApiQuery.js';
 import { isInlinePayloadRef } from '../../lib/fetch-payload.js';
 import { spaceRoute } from '../../lib/space-routes.js';
 import { useSpace } from '../providers.js';
 import { StatusOrb } from '../workflow-run-surface/StatusOrb.js';
 import { Pill } from '../workflow-run-surface/WorkflowRunSurfaceParts.js';
-import type { WorkflowRunDetailResponse } from '../workflow-run-surface/workflowRunDetailToState.js';
 import {
   describeRunWakeup,
   readInlineRunWakeupEnvelope,

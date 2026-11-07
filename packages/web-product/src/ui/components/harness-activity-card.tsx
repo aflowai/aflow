@@ -49,8 +49,6 @@ import {
 } from './host/HostOutputCard.js';
 import './harness-activity-card.css';
 
-export const HARNESS_RUN_OPERATION = 'host.harness.run';
-
 /** Host steps whose live output folds under them as `output` lines. */
 export const COMMAND_OUTPUT_OPERATIONS: ReadonlySet<string> = new Set([
   'host.commit.check',

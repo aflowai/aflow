@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { Icon, JsonViewer, Spinner } from '@aflow/design-system';
+import { HARNESS_RUN_OPERATION, type WorkflowRunDetailResponse } from '@aflow/run-view';
+import { useApiQuery } from '../../hooks/useApiQuery.js';
 import { useApi } from '../providers.js';
 import { fetchPayload } from '../../lib/fetch-payload.js';
 import type { WorkflowSurfaceTaskState } from '../../lib/types.js';
@@ -11,7 +13,6 @@ import { CodingTranscriptView } from './CodingTranscriptView.js';
 import {
   COMMAND_OUTPUT_OPERATIONS,
   CommandOutputStepCard,
-  HARNESS_RUN_OPERATION,
   HarnessStepCard,
   useHarnessName,
   useHarnessResult,
@@ -281,18 +282,20 @@ export function HarnessTaskActivity({ task }: { task: WorkflowSurfaceTaskState }
   );
 }
 
-export function TaskExecutionDetails({ task }: { task: WorkflowSurfaceTaskState }) {
+export function TaskExecutionDetails({
+  task,
+  runId,
+  spaceId,
+}: {
+  task: WorkflowSurfaceTaskState;
+  /** The run and space the task belongs to — where an elided ref is read from. */
+  runId?: string | undefined;
+  spaceId?: string | null | undefined;
+}) {
   const [expanded, setExpanded] = useState(false);
   const toggle = useCallback(() => {
     setExpanded((v) => !v);
   }, []);
-
-  const duration = formatDurationFromTimestamps(task.startedAt, task.completedAt);
-  const headerParts = [
-    ...(task.operationId ? [task.operationId] : []),
-    `attempt ${String(task.attempt)}`,
-    ...(duration ? [duration] : []),
-  ];
 
   return (
     <div style={{ marginTop: 'var(--space-1)' }}>
@@ -324,49 +327,179 @@ export function TaskExecutionDetails({ task }: { task: WorkflowSurfaceTaskState 
         <Icon name={expanded ? 'caret-down' : 'caret-right'} size="xs" />
         <span>{expanded ? 'Hide execution' : 'View execution'}</span>
       </button>
-      {expanded && (
-        <div
+      {expanded &&
+        (task.refsElided && runId !== undefined && spaceId ? (
+          <ElidedExecutionPanel task={task} runId={runId} spaceId={spaceId} />
+        ) : (
+          <ExecutionPanel task={task} />
+        ))}
+    </div>
+  );
+}
+
+/**
+ * The execution panel of a task whose large refs the mount snapshot left out.
+ *
+ * They are read from the run detail, through the cache entry that
+ * `WorkflowRunSurfaceContainer` and the run-wakeup card read, and only once the
+ * operator opens the panel. The chat's own run card does not read that entry.
+ */
+function ElidedExecutionPanel({
+  task,
+  runId,
+  spaceId,
+}: {
+  task: WorkflowSurfaceTaskState;
+  runId: string;
+  spaceId: string;
+}) {
+  const { data, error, isLoading, refetch } = useApiQuery<WorkflowRunDetailResponse>({
+    key: ['space', spaceId, 'workflow-run', runId],
+    path: `/spaces/${spaceId}/workflow-runs/${runId}`,
+    spaceId,
+    staleTime: 30_000,
+  });
+  if (isLoading) {
+    return (
+      <div style={{ marginTop: 'var(--space-1)' }}>
+        <Spinner size="sm" />
+      </div>
+    );
+  }
+  if (!data) {
+    return (
+      <ExecutionPanel
+        task={task}
+        notice={{
+          tone: 'error',
+          text: `Could not read this task's payloads: ${error?.message ?? 'the run detail did not load'}`,
+          onRetry: () => void refetch(),
+        }}
+      />
+    );
+  }
+  const full = data.tasks.find((t) => t.taskId === task.taskId && t.attempt === task.attempt);
+  if (!full) {
+    return (
+      <ExecutionPanel
+        task={task}
+        notice={{
+          tone: 'muted',
+          text: `The run detail holds no record of attempt ${String(task.attempt)}, so its payloads cannot be shown.`,
+        }}
+      />
+    );
+  }
+  const inputRef = task.inputRef ?? full.inputRef;
+  const outputRef = task.outputRef ?? full.outputRef;
+  const errorRef = task.errorRef ?? full.errorRef;
+  const withRefs: WorkflowSurfaceTaskState = {
+    ...task,
+    ...(inputRef ? { inputRef } : {}),
+    ...(outputRef ? { outputRef } : {}),
+    ...(errorRef ? { errorRef } : {}),
+  };
+  return <ExecutionPanel task={withRefs} />;
+}
+
+interface ExecutionPanelNotice {
+  tone: 'error' | 'muted';
+  text: string;
+  onRetry?: () => void;
+}
+
+function ExecutionNotice({ notice }: { notice: ExecutionPanelNotice }) {
+  return (
+    <div
+      role={notice.tone === 'error' ? 'alert' : 'status'}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 'var(--space-2)',
+        flexWrap: 'wrap',
+        fontSize: 'var(--font-size-xs)',
+        color: notice.tone === 'error' ? 'var(--color-status-failed)' : 'var(--color-text-muted)',
+        ...(notice.tone === 'muted' ? { fontStyle: 'italic' } : {}),
+      }}
+    >
+      <span>{notice.text}</span>
+      {notice.onRetry && (
+        <button
+          type="button"
+          onClick={notice.onRetry}
           style={{
-            marginTop: 'var(--space-1)',
-            padding: 'var(--space-2)',
-            borderRadius: 'var(--radius-md)',
-            border: '1px solid var(--color-border-subtle)',
-            background: 'var(--color-surface-2)',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 'var(--space-2)',
+            padding: 0,
+            border: 'none',
+            background: 'transparent',
+            color: 'var(--color-text-secondary)',
+            fontSize: 'var(--font-size-xs)',
+            textDecoration: 'underline',
+            cursor: 'pointer',
           }}
         >
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 'var(--space-2)',
-              flexWrap: 'wrap',
-              fontSize: 'var(--font-size-xs)',
-              color: 'var(--color-text-secondary)',
-              fontFamily: 'var(--font-family-mono)',
-            }}
-          >
-            <span>{headerParts.join(' · ')}</span>
-            {task.failure && (
-              <Pill
-                label={`${task.failure.code} [${task.failure.classification}]`}
-                tone="destructive"
-                title={task.failureReason ?? task.failure.code}
-              />
-            )}
-          </div>
-          {task.inputRef && <PayloadSection label="Input" payloadRef={task.inputRef} />}
-          {task.outputRef && <PayloadSection label="Output" payloadRef={task.outputRef} />}
-          {task.errorRef && <PayloadSection label="Error" payloadRef={task.errorRef} />}
-          {task.operationId?.startsWith('code.agent.') && (
-            <TranscriptSection
-              {...(task.outputRef ? { outputRef: task.outputRef } : {})}
-              {...(task.errorRef ? { errorRef: task.errorRef } : {})}
-            />
-          )}
-        </div>
+          Retry
+        </button>
+      )}
+    </div>
+  );
+}
+
+function ExecutionPanel({
+  task,
+  notice,
+}: {
+  task: WorkflowSurfaceTaskState;
+  notice?: ExecutionPanelNotice;
+}) {
+  const duration = formatDurationFromTimestamps(task.startedAt, task.completedAt);
+  const headerParts = [
+    ...(task.operationId ? [task.operationId] : []),
+    `attempt ${String(task.attempt)}`,
+    ...(duration ? [duration] : []),
+  ];
+
+  return (
+    <div
+      style={{
+        marginTop: 'var(--space-1)',
+        padding: 'var(--space-2)',
+        borderRadius: 'var(--radius-md)',
+        border: '1px solid var(--color-border-subtle)',
+        background: 'var(--color-surface-2)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 'var(--space-2)',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 'var(--space-2)',
+          flexWrap: 'wrap',
+          fontSize: 'var(--font-size-xs)',
+          color: 'var(--color-text-secondary)',
+          fontFamily: 'var(--font-family-mono)',
+        }}
+      >
+        <span>{headerParts.join(' · ')}</span>
+        {task.failure && (
+          <Pill
+            label={`${task.failure.code} [${task.failure.classification}]`}
+            tone="destructive"
+            title={task.failureReason ?? task.failure.code}
+          />
+        )}
+      </div>
+      {notice && <ExecutionNotice notice={notice} />}
+      {task.inputRef && <PayloadSection label="Input" payloadRef={task.inputRef} />}
+      {task.outputRef && <PayloadSection label="Output" payloadRef={task.outputRef} />}
+      {task.errorRef && <PayloadSection label="Error" payloadRef={task.errorRef} />}
+      {task.operationId?.startsWith('code.agent.') && (
+        <TranscriptSection
+          {...(task.outputRef ? { outputRef: task.outputRef } : {})}
+          {...(task.errorRef ? { errorRef: task.errorRef } : {})}
+        />
       )}
     </div>
   );

@@ -313,6 +313,63 @@ describe('WorkflowRunUpdate handler', () => {
     expect(next.workflowRuns[RUN_ID].needsHydration).toBe(true);
   });
 
+  it('holds a terminal result.output once, on `outputs`, for a live or a catch-up update', () => {
+    const output = { report: 'r'.repeat(2_000), prUrl: 'https://example.test/pr/1' };
+    const terminal = (metadata?: Record<string, unknown>) =>
+      makeEvent(
+        'WorkflowRunUpdate',
+        {
+          workflowRunUpdate: {
+            runId: RUN_ID,
+            slug: 'demo-workflow',
+            status: 'completed',
+            pauseVersion: 1,
+            startedAt: '2026-05-12T10:00:00.000Z',
+            result: { output, summary: 'shipped', primaryOutput: 'prUrl' },
+          },
+        },
+        metadata ? { metadata } : {},
+      );
+    const live = apply(initialRunViewState, runUpdateEvent({ status: 'running' }), terminal());
+    const catchup = apply(initialRunViewState, terminal({ catchup: true }));
+    for (const next of [live, catchup]) {
+      const run = next.workflowRuns[RUN_ID];
+      expect(run.outputs).toEqual(output);
+      expect(run.result).toEqual({ summary: 'shipped', primaryOutput: 'prUrl' });
+      expect(JSON.stringify(run).split('r'.repeat(2_000)).length - 1).toBe(1);
+    }
+  });
+
+  it('keeps a task marked `refsElided` across a later update that carries no refs', () => {
+    const seeded: RunViewState = {
+      ...initialRunViewState,
+      workflowRuns: {
+        [RUN_ID]: {
+          runId: RUN_ID,
+          slug: 'demo-workflow',
+          status: 'running',
+          pauseVersion: 1,
+          startedAt: '2026-05-12T10:00:00.000Z',
+          tasks: {
+            t1: {
+              taskId: 't1',
+              label: 'T1',
+              status: 'running',
+              attempt: 1,
+              refsElided: true,
+              lastMutatedAtMs: 1,
+            },
+          },
+          graphFidelity: 'full',
+          isFrozen: false,
+          needsHydration: false,
+        },
+      },
+    };
+    const next = apply(seeded, taskUpdateEvent({ taskId: 't1', label: 'T1', status: 'succeeded' }));
+    expect(next.workflowRuns[RUN_ID].tasks['t1']?.refsElided).toBe(true);
+  });
+
   it('freezes the run on terminal status (`completed` / `failed` / `cancelled`)', () => {
     const seeded = apply(initialRunViewState, runUpdateEvent({ status: 'running' }));
     expect(seeded.workflowRuns[RUN_ID].isFrozen).toBe(false);

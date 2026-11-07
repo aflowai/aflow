@@ -1,11 +1,13 @@
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { Redis } from 'ioredis';
 import type { PayloadStore } from '@aflow/payload-store';
-import type { ApiSessionEvent, TenantId, SessionId } from '@aflow/schemas';
+import type { ApiSessionEvent, TenantId, SessionId, WorkflowRunDetailOutput } from '@aflow/schemas';
+import { buildWorkflowRunDetail } from '@aflow/cybernetic-runtime';
 import { getSessionStateSafe, type SessionHotState } from '@aflow/redis';
 import type { RunViewState } from '@aflow/run-view';
 import { deriveSessionBlockedOn } from './deriveSessionBlockedOn.js';
 import { foldEventsToSnapshot } from './foldSessionEvents.js';
+import { hydrateSnapshotRuns } from './hydrateSnapshotRuns.js';
 import { readSimulatedBindings } from './readSimulatedBindings.js';
 import { createSessionTailService } from './sessionTail.js';
 import { buildSessionCatchupEvents } from './workflowRunCatchup.js';
@@ -198,6 +200,7 @@ export async function buildSessionSnapshot(
   // surface updates as the workflow runs progress. Mirrors the SSE
   // handler's wrap at `events.ts:519`.
   let catchupEvents: ApiSessionEvent[] = [];
+  let catchupDetails = new Map<string, WorkflowRunDetailOutput>();
   let catchupFailed = false;
   try {
     const catchup = await buildSessionCatchupEvents(
@@ -209,6 +212,7 @@ export async function buildSessionSnapshot(
       deps.redis,
     );
     catchupEvents = catchup.events;
+    catchupDetails = catchup.details;
   } catch (err) {
     console.warn('[buildSessionSnapshot] catch-up failed; returning durable-only snapshot', err);
     catchupFailed = true;
@@ -217,8 +221,20 @@ export async function buildSessionSnapshot(
   const folded = foldEventsToSnapshot(page.events, catchupEvents);
   const withSimulated = withDurableSimulatedBindings(folded.snapshot, durableSimulatedBindings);
 
+  // 5. The run state each card would otherwise read on mount. The catch-up
+  // already read the waited-on runs, so only the others are read here. The
+  // reads are bounded by SNAPSHOT_HYDRATION_DEADLINE_MS, and a run they miss
+  // is read by its card after mount.
+  const withRuns = await hydrateSnapshotRuns(
+    withSimulated,
+    async (runId) =>
+      catchupDetails.get(runId) ??
+      (await buildWorkflowRunDetail(deps.db, deps.payloadStore, tenantId, spaceId, runId)),
+    Date.now(),
+  );
+
   return {
-    snapshot: overlayBlockedOnFromHotState(withSimulated, hotState),
+    snapshot: overlayBlockedOnFromHotState(withRuns, hotState),
     tailCursor: page.nextCursor === '' ? null : page.nextCursor,
     olderCursor: page.olderCursor ?? null,
     hasOlder: page.hasOlder,
