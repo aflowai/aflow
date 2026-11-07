@@ -7,7 +7,11 @@ import {
   type WorkflowRunDetailResponse,
 } from '@aflow/run-view';
 import { foldEventsToSnapshot } from './foldSessionEvents.js';
-import { hydrateSnapshotRuns, runsNeedingDetail } from './hydrateSnapshotRuns.js';
+import {
+  SNAPSHOT_HYDRATION_DEADLINE_MS,
+  hydrateSnapshotRuns,
+  runsNeedingDetail,
+} from './hydrateSnapshotRuns.js';
 
 /**
  * A conversation with the shape of the one the snapshot was measured on:
@@ -397,6 +401,65 @@ describe('hydrateSnapshotRuns — the mount snapshot carries each run once', () 
     expect(cardsNeedingRead(snapshot)).toBe(1);
     expect(runSurfaceNeedsDetailRead(snapshot.workflowRuns[failing!])).toBe(true);
     expect(runSurfaceOutputs(snapshot.workflowRuns[failing!]!)).toEqual(fixtureRunOutput(0));
+  });
+
+  it('answers by the deadline, leaving a slow detail to its card and hydrating the fast ones', async () => {
+    vi.useFakeTimers();
+    try {
+      const [slow] = FIXTURE_MOUNTED_RUN_IDS;
+      const pending = hydrateSnapshotRuns(
+        folded(),
+        (runId) =>
+          runId === slow
+            ? new Promise<WorkflowRunDetailResponse>(() => undefined)
+            : Promise.resolve(fixtureRunDetail(runId)),
+        0,
+        SNAPSHOT_HYDRATION_DEADLINE_MS,
+      );
+      let settled = false;
+      void pending.then(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(SNAPSHOT_HYDRATION_DEADLINE_MS - 1);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      const snapshot = await pending;
+      expect(cardsNeedingRead(snapshot)).toBe(1);
+      expect(runSurfaceNeedsDetailRead(snapshot.workflowRuns[slow!])).toBe(true);
+      expect(runSurfaceOutputs(snapshot.workflowRuns[slow!]!)).toEqual(fixtureRunOutput(0));
+      for (const runId of FIXTURE_MOUNTED_RUN_IDS.slice(1)) {
+        expect(snapshot.workflowRuns[runId]!.graphFidelity).toBe('full');
+      }
+      const wire = JSON.stringify(responseBody(snapshot));
+      FIXTURE_RUN_IDS.forEach((_runId, runIndex) => {
+        const report = fixtureRunOutput(runIndex)['report'] as string;
+        expect(occurrences(wire, report)).toBe(1);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('answers as soon as every detail is read, without waiting out the deadline', async () => {
+    vi.useFakeTimers();
+    try {
+      const pending = hydrateSnapshotRuns(
+        folded(),
+        async (runId) => fixtureRunDetail(runId),
+        0,
+        60_000,
+      );
+      let settled = false;
+      void pending.then(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(true);
+      expect(cardsNeedingRead(await pending)).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('gives a frozen card the graph so it mounts without a read', async () => {

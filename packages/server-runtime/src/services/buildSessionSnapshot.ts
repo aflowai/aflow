@@ -222,7 +222,9 @@ export async function buildSessionSnapshot(
   const withSimulated = withDurableSimulatedBindings(folded.snapshot, durableSimulatedBindings);
 
   // 5. The run state each card would otherwise read on mount. The catch-up
-  // already read the waited-on runs, so only the others are read here.
+  // already read the waited-on runs, so only the others are read here. The
+  // reads are bounded by SNAPSHOT_HYDRATION_DEADLINE_MS, and a run they miss
+  // is read by its card after mount.
   const withRuns = await hydrateSnapshotRuns(
     withSimulated,
     async (runId) =>

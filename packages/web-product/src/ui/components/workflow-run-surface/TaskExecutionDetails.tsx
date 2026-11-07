@@ -340,8 +340,9 @@ export function TaskExecutionDetails({
 /**
  * The execution panel of a task whose large refs the mount snapshot left out.
  *
- * They are read from the run detail, through the same cache entry the run's own
- * card and the run-wakeup card read, and only once the operator opens the panel.
+ * They are read from the run detail, through the cache entry that
+ * `WorkflowRunSurfaceContainer` and the run-wakeup card read, and only once the
+ * operator opens the panel. The chat's own run card does not read that entry.
  */
 function ElidedExecutionPanel({
   task,
@@ -352,7 +353,7 @@ function ElidedExecutionPanel({
   runId: string;
   spaceId: string;
 }) {
-  const { data, isLoading } = useApiQuery<WorkflowRunDetailResponse>({
+  const { data, error, isLoading, refetch } = useApiQuery<WorkflowRunDetailResponse>({
     key: ['space', spaceId, 'workflow-run', runId],
     path: `/spaces/${spaceId}/workflow-runs/${runId}`,
     spaceId,
@@ -365,10 +366,33 @@ function ElidedExecutionPanel({
       </div>
     );
   }
-  const full = data?.tasks.find((t) => t.taskId === task.taskId && t.attempt === task.attempt);
-  const inputRef = task.inputRef ?? full?.inputRef;
-  const outputRef = task.outputRef ?? full?.outputRef;
-  const errorRef = task.errorRef ?? full?.errorRef;
+  if (!data) {
+    return (
+      <ExecutionPanel
+        task={task}
+        notice={{
+          tone: 'error',
+          text: `Could not read this task's payloads: ${error?.message ?? 'the run detail did not load'}`,
+          onRetry: () => void refetch(),
+        }}
+      />
+    );
+  }
+  const full = data.tasks.find((t) => t.taskId === task.taskId && t.attempt === task.attempt);
+  if (!full) {
+    return (
+      <ExecutionPanel
+        task={task}
+        notice={{
+          tone: 'muted',
+          text: `The run detail holds no record of attempt ${String(task.attempt)}, so its payloads cannot be shown.`,
+        }}
+      />
+    );
+  }
+  const inputRef = task.inputRef ?? full.inputRef;
+  const outputRef = task.outputRef ?? full.outputRef;
+  const errorRef = task.errorRef ?? full.errorRef;
   const withRefs: WorkflowSurfaceTaskState = {
     ...task,
     ...(inputRef ? { inputRef } : {}),
@@ -378,7 +402,55 @@ function ElidedExecutionPanel({
   return <ExecutionPanel task={withRefs} />;
 }
 
-function ExecutionPanel({ task }: { task: WorkflowSurfaceTaskState }) {
+interface ExecutionPanelNotice {
+  tone: 'error' | 'muted';
+  text: string;
+  onRetry?: () => void;
+}
+
+function ExecutionNotice({ notice }: { notice: ExecutionPanelNotice }) {
+  return (
+    <div
+      role={notice.tone === 'error' ? 'alert' : 'status'}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 'var(--space-2)',
+        flexWrap: 'wrap',
+        fontSize: 'var(--font-size-xs)',
+        color: notice.tone === 'error' ? 'var(--color-status-failed)' : 'var(--color-text-muted)',
+        ...(notice.tone === 'muted' ? { fontStyle: 'italic' } : {}),
+      }}
+    >
+      <span>{notice.text}</span>
+      {notice.onRetry && (
+        <button
+          type="button"
+          onClick={notice.onRetry}
+          style={{
+            padding: 0,
+            border: 'none',
+            background: 'transparent',
+            color: 'var(--color-text-secondary)',
+            fontSize: 'var(--font-size-xs)',
+            textDecoration: 'underline',
+            cursor: 'pointer',
+          }}
+        >
+          Retry
+        </button>
+      )}
+    </div>
+  );
+}
+
+function ExecutionPanel({
+  task,
+  notice,
+}: {
+  task: WorkflowSurfaceTaskState;
+  notice?: ExecutionPanelNotice;
+}) {
   const duration = formatDurationFromTimestamps(task.startedAt, task.completedAt);
   const headerParts = [
     ...(task.operationId ? [task.operationId] : []),
@@ -419,6 +491,7 @@ function ExecutionPanel({ task }: { task: WorkflowSurfaceTaskState }) {
           />
         )}
       </div>
+      {notice && <ExecutionNotice notice={notice} />}
       {task.inputRef && <PayloadSection label="Input" payloadRef={task.inputRef} />}
       {task.outputRef && <PayloadSection label="Output" payloadRef={task.outputRef} />}
       {task.errorRef && <PayloadSection label="Error" payloadRef={task.errorRef} />}

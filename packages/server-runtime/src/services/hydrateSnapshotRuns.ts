@@ -15,6 +15,15 @@ import {
  */
 export const MAX_SNAPSHOT_HYDRATED_RUNS = 10;
 
+/**
+ * How long a snapshot waits on its hydrated-run reads. A read still running
+ * then is left to its card, which reads the run after mount, so one slow
+ * detail cannot hold back the chat's first paint.
+ */
+export const SNAPSHOT_HYDRATION_DEADLINE_MS = 750;
+
+const MISSED_DEADLINE = Symbol('missed-deadline');
+
 export type LoadRunDetail = (runId: string) => Promise<WorkflowRunDetailResponse | null>;
 
 /**
@@ -57,25 +66,49 @@ function withGraph(
  * in its mount shape (`projectRunForMount`): the output bag once, and only the
  * task refs the card reads on mount.
  *
- * Best-effort per run. A run whose detail cannot be read keeps the folded
- * state, and its card reads the detail itself.
+ * Best-effort per run, and bounded by `deadlineMs`. A run whose detail fails,
+ * or is not read by the deadline, keeps the folded state, and its card reads
+ * the detail itself.
  */
 export async function hydrateSnapshotRuns(
   snapshot: RunViewState,
   loadDetail: LoadRunDetail,
   nowMs: number,
+  deadlineMs: number = SNAPSHOT_HYDRATION_DEADLINE_MS,
 ): Promise<RunViewState> {
   const runIds = runsNeedingDetail(snapshot);
-  const details = await Promise.all(
-    runIds.map(async (runId) => {
-      try {
-        return await loadDetail(runId);
-      } catch (err) {
-        console.warn(`[buildSessionSnapshot] run ${runId} detail failed; its card reads it`, err);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<typeof MISSED_DEADLINE>((resolve) => {
+    timer = setTimeout(() => {
+      resolve(MISSED_DEADLINE);
+    }, deadlineMs);
+  });
+  let details: Array<WorkflowRunDetailResponse | null>;
+  try {
+    details = await Promise.all(
+      runIds.map(async (runId) => {
+        const read = (async () => {
+          try {
+            return await loadDetail(runId);
+          } catch (err) {
+            console.warn(
+              `[buildSessionSnapshot] run ${runId} detail failed; its card reads it`,
+              err,
+            );
+            return null;
+          }
+        })();
+        const detail = await Promise.race([read, deadline]);
+        if (detail !== MISSED_DEADLINE) return detail;
+        console.warn(
+          `[buildSessionSnapshot] run ${runId} detail missed the ${String(deadlineMs)} ms deadline; its card reads it`,
+        );
         return null;
-      }
-    }),
-  );
+      }),
+    );
+  } finally {
+    clearTimeout(timer);
+  }
 
   let state = snapshot;
   const hydratedByRun = new Map<string, WorkflowRunSurfaceState>();

@@ -233,4 +233,69 @@ describe('a run card mounted from the snapshot', () => {
     // The panel shows the payload the detail's ref carries, folded by the viewer.
     expect(container.textContent).toContain('{ 1 key }');
   });
+
+  async function openElidedExecution(): Promise<void> {
+    mount(
+      snapshotRun({
+        tasks: {
+          verify: {
+            taskId: 'verify',
+            label: 'Verify the change',
+            status: 'succeeded',
+            attempt: 2,
+            taskType: 'operation',
+            operationId: 'host.command.run',
+            refsElided: true,
+            lastMutatedAtMs: 0,
+          },
+        },
+        workflowGraph: { taskIds: ['verify'], edges: [] },
+      }),
+    );
+    const open = [...container.querySelectorAll('button')].find(
+      (b) => b.textContent === 'View execution',
+    );
+    await act(async () => {
+      open?.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  }
+
+  it('says so in the panel when the run detail read fails', async () => {
+    fetchSpy.mockImplementation(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ error: 'run detail unavailable' }), {
+          status: 500,
+          headers: { 'content-type': 'application/json' },
+        }),
+      ),
+    );
+    await openElidedExecution();
+    expect(runDetailReads()).toBe(1);
+    const alert = container.querySelector('[role="alert"]');
+    expect(alert?.textContent).toContain("Could not read this task's payloads");
+    expect(alert?.textContent).toContain('Retry');
+  });
+
+  it('says so in the panel when the run detail holds no record of the attempt', async () => {
+    fetchSpy.mockImplementation(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            run: { runId: RUN_ID },
+            tasks: [{ taskId: 'verify', attempt: 1, outputRef: 'inline:output:e30=' }],
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ),
+      ),
+    );
+    await openElidedExecution();
+    expect(runDetailReads()).toBe(1);
+    expect(container.querySelector('[role="status"]')?.textContent).toContain(
+      'no record of attempt 2',
+    );
+  });
 });
