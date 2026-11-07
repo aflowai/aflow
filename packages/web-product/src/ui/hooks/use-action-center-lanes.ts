@@ -72,3 +72,27 @@ export function partitionLanes(items: readonly ActionCenterItem[]): ActionCenter
   }
   return { approvals, coachProposals, inputs, platformIssues, connections, notices };
 }
+
+/**
+ * A proposal the Coach made. The server names the requester from the
+ * proposal's source, so a Helmsman patch or an operator's own proposal is
+ * not one of these.
+ */
+export function isCoachProposal(item: ActionCenterItem): boolean {
+  return item.origin.type === 'proposal' && item.requestedBy.kind === 'coach';
+}
+
+/**
+ * The attention badge's count, which the bell and the Chat entry both show.
+ * Coach proposals stay in their lane and in the Workbench but do not count:
+ * the operator does not use the Coach and does not want its proposals counted
+ * as their attention.
+ */
+export function attentionCount(lanes: ActionCenterLanes): number {
+  return (
+    lanes.approvals.length +
+    lanes.inputs.length +
+    lanes.connections.length +
+    lanes.coachProposals.filter((it) => !isCoachProposal(it)).length
+  );
+}

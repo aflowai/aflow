@@ -9,7 +9,11 @@ import { useApiQuery } from './useApiQuery.js';
 import * as broker from './action-center-broker.js';
 import { useResumeOnUnblock } from './use-resume-on-unblock.js';
 import { readProposalReadFailure } from '../lib/proposal-read-failure.js';
-import { partitionLanes, type ActionCenterLanes } from './use-action-center-lanes.js';
+import {
+  attentionCount,
+  partitionLanes,
+  type ActionCenterLanes,
+} from './use-action-center-lanes.js';
 import type { ActionCenterItem, CoachProposalExtension } from './use-action-center-types.js';
 import {
   isWhole,
@@ -60,7 +64,8 @@ export interface ActionCenterCounts {
   highPriority: number;
   /**
    * Items a human can act on right now (approvals + inputs + connections +
-   * coach proposals). Attention badges use this, never `total` — informational
+   * proposals from any source but the Coach), from `attentionCount`.
+   * Attention badges use this, never `total` — informational
    * kinds (coach_activity, trigger_armed, platform_issue) would show counts with
    * nothing to do.
    */
@@ -412,11 +417,7 @@ export function useActionCenter(spaceId: string | null): UseActionCenterResult {
   const counts = useMemo<ActionCenterCounts>(() => {
     const tally: ActionCenterCounts = {
       total: mine.length,
-      actionable:
-        mineLanes.approvals.length +
-        mineLanes.inputs.length +
-        mineLanes.connections.length +
-        mineLanes.coachProposals.length,
+      actionable: attentionCount(mineLanes),
       byKind: {
         human_input: 0,
         human_approval: 0,
