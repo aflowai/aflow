@@ -70,8 +70,8 @@ export function rememberHeldSection(
  * The sections in their place, and those behind More, each in the order
  * given. A section stands in its place where it holds something now or has
  * held something before. A section in `keptUnderMore` stays behind More
- * whatever it holds: the operator has had it open there, and it moves only on
- * the Workbench's next mount.
+ * whatever it holds: the operator has it open there, and it moves once they
+ * close it or on the Workbench's next mount.
  */
 export function workbenchPlacement<T extends { title: string; holdsContent: boolean }>(
   sections: readonly T[],
@@ -86,4 +86,25 @@ export function workbenchPlacement<T extends { title: string; holdsContent: bool
     (placed ? inPlace : more).push(section);
   }
   return { inPlace, more };
+}
+
+/**
+ * One render's placement, and the sections kept under More for the next one.
+ * A section stays kept while the operator has it open under More, so it does
+ * not jump out from under them. Once they close it, it follows its header
+ * signal and the record of what it has held again. `isOpen` says whether the
+ * operator has a section open where they can read it.
+ */
+export function placeWorkbenchSections<T extends { title: string; holdsContent: boolean }>(
+  sections: readonly T[],
+  held: ReadonlySet<string>,
+  keptUnderMore: ReadonlySet<string>,
+  isOpen: (title: string) => boolean,
+): { inPlace: T[]; more: T[]; keptUnderMore: ReadonlySet<string> } {
+  const stillOpen = new Set([...keptUnderMore].filter(isOpen));
+  const { inPlace, more } = workbenchPlacement(sections, held, stillOpen);
+  const kept = new Set([...stillOpen, ...more.map((s) => s.title).filter(isOpen)]);
+  const unchanged =
+    kept.size === keptUnderMore.size && [...kept].every((title) => keptUnderMore.has(title));
+  return { inPlace, more, keptUnderMore: unchanged ? keptUnderMore : kept };
 }

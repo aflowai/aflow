@@ -9,9 +9,9 @@ import { useSpaceWorkflowRuns } from '../../hooks/use-space-workflow-runs.js';
 import { planPendingCount } from '../../lib/plan-pending-count.js';
 import { browserStorage } from '../../lib/workbench-dock-memory.js';
 import {
+  placeWorkbenchSections,
   readHeldSections,
   rememberHeldSection,
-  workbenchPlacement,
 } from '../../lib/workbench-held-sections.js';
 import { WorkbenchNeedsAttention, waitingOnLabel } from './WorkbenchNeedsAttention.js';
 import { FoldedSchedulesNotice, WorkbenchSchedules } from './WorkbenchSchedules.js';
@@ -32,6 +32,7 @@ import {
 import {
   WorkbenchFoldsContext,
   WorkbenchHeldContext,
+  WORKBENCH_MORE,
   WorkbenchLazySection,
   WorkbenchMoreFold,
   useWorkbenchFoldsOrOwn,
@@ -336,10 +337,11 @@ interface WorkbenchFoldedSection {
  * Where each folded section stands, and where a section that has held content
  * is recorded. The record is read from storage once per space. A section
  * whose header signal shows content is recorded and keeps its place after the
- * signal goes. A section the operator opens under More is kept there for the
- * rest of this mount, whatever its signal or its content says. Its record
- * reaches storage only, so it moves to its place on the next mount rather
- * than while the operator reads it.
+ * signal goes. A section the operator has open under More stays there while
+ * it is open, whatever its signal or its content says. Once they close it, it
+ * follows its header signal again, so a count or a badge that turns on brings
+ * it to its place. What its content records reaches storage only, so a
+ * section without a header signal moves to its place on the next mount.
  */
 function useHeldSections(
   spaceId: string,
@@ -351,14 +353,16 @@ function useHeldSections(
 } {
   const [state, setState] = useState<HeldState>(() => freshHeldState(spaceId));
   const known = state.spaceId === spaceId ? state : freshHeldState(spaceId);
-  const placement = workbenchPlacement(sections, known.held, known.keptUnderMore);
-  const opened = placement.more
-    .map((section) => section.title)
-    .filter((title) => folds.isExpanded(title) && !known.keptUnderMore.has(title));
-  const current =
-    opened.length === 0
-      ? known
-      : { ...known, keptUnderMore: new Set([...known.keptUnderMore, ...opened]) };
+  // A section is open under More only while More is open too: behind a
+  // closed More fold the operator reads its title alone.
+  const moreOpen = folds.isExpanded(WORKBENCH_MORE);
+  const { keptUnderMore, ...placement } = placeWorkbenchSections(
+    sections,
+    known.held,
+    known.keptUnderMore,
+    (title) => moreOpen && folds.isExpanded(title),
+  );
+  const current = keptUnderMore === known.keptUnderMore ? known : { ...known, keptUnderMore };
   if (current !== state) setState(current);
 
   const signalled = sections

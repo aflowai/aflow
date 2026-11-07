@@ -79,10 +79,24 @@ afterEach(() => {
   container.remove();
 });
 
-function render(foldTurnTools: boolean) {
+function render(foldTurnTools: boolean, timeline: SessionEvent[] = events) {
   act(() => {
-    root.render(createElement(RunTimeline, { events, withTabs: false, foldTurnTools }));
+    root.render(createElement(RunTimeline, { events: timeline, withTabs: false, foldTurnTools }));
   });
+}
+
+/** One turn whose two tool calls end as given. */
+function turnWithTools(ends: [string, string]): SessionEvent[] {
+  return [
+    event('StepScheduled', 'agent-9', 'ai.agent.turn'),
+    event('StepSucceeded', 'agent-9', 'ai.agent.turn', {
+      metadata: { agentAction: 'invoke_steps' },
+    }),
+    event('StepScheduled', 'fetch', 'search.web.fetch'),
+    event(ends[0], 'fetch', 'search.web.fetch'),
+    event('StepScheduled', 'write', 'memory.write'),
+    event(ends[1], 'write', 'memory.write'),
+  ];
 }
 
 const rows = () =>
@@ -105,6 +119,33 @@ describe('the turn fold', () => {
       container.querySelector<HTMLButtonElement>('[data-turn-tools-fold] button')?.click();
     });
     expect(rows()).toEqual(['agent-1', 'search', 'read', 'agent-1']);
+  });
+
+  it('shows a failed tool call on the closed fold line, and hides it once the rows show', () => {
+    render(true, turnWithTools(['StepPaused', 'StepFailed']));
+    const fold = container.querySelector('[data-turn-tools-fold]');
+    const status = fold?.querySelector('[data-turn-tools-status]');
+    expect(status?.getAttribute('data-turn-tools-status')).toBe('failed');
+    expect(fold?.querySelector('button')?.textContent).toBe('2 tool callsFailed');
+
+    act(() => {
+      fold?.querySelector<HTMLButtonElement>('button')?.click();
+    });
+    expect(fold?.querySelector('[data-turn-tools-status]')).toBeNull();
+  });
+
+  it('shows a paused tool call on the closed fold line', () => {
+    render(true, turnWithTools(['StepSucceeded', 'StepPaused']));
+    const status = container.querySelector('[data-turn-tools-fold] [data-turn-tools-status]');
+    expect(status?.getAttribute('data-turn-tools-status')).toBe('paused');
+    expect(status?.textContent).toBe('Awaiting input');
+  });
+
+  it('shows no status on the fold line of a turn whose tool calls are all clear', () => {
+    render(true, turnWithTools(['StepSucceeded', 'StepSucceeded']));
+    const fold = container.querySelector('[data-turn-tools-fold]');
+    expect(fold?.querySelector('[data-turn-tools-status]')).toBeNull();
+    expect(fold?.querySelector('button')?.textContent).toBe('2 tool calls');
   });
 
   it('keeps the flat list where the caller does not fold', () => {

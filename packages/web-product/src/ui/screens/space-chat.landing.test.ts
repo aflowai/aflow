@@ -1022,6 +1022,35 @@ describe('the More fold, the Plan section and the Skills count', () => {
     expect(inMore('Plan')).toBe(false);
   });
 
+  it('returns a section opened and then closed under More to its place when its header signal turns on', async () => {
+    net.plan = {
+      roots: [],
+      lanes: {
+        needsYou: { items: [], total: 0 },
+        inFlight: { items: [], total: 0 },
+        upNext: { items: [], total: 0 },
+      },
+    };
+    await land('');
+    await click(toggle('More', false));
+    await click(toggle('Plan', false));
+    await click(toggle('Plan', true));
+    expect(inMore('Plan')).toBe(true);
+
+    const listeners = net.listeners.get('space.action_center') ?? [];
+    expect(listeners.length).toBeGreaterThan(0);
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({ kind: 'insert', items: [planAsk(ASKING)] }, 'ac-1');
+      }
+      await Promise.resolve();
+    });
+    await settle();
+    expect(inMore('Plan')).toBe(false);
+    const plan = toggle('Plan', false)?.parentElement ?? null;
+    expect(plan?.querySelector('[title="1 pending"]')?.textContent).toBe('1');
+  });
+
   it('shows no More fold once every section has held content', async () => {
     rememberEverySectionHeld();
     await land('');

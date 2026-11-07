@@ -104,7 +104,7 @@ export const WorkbenchHeldContext = createContext<((title: string) => void) | nu
  * A section under a fold calls this with whether it holds content now. Once
  * it has, the section stands in its place rather than behind More the next
  * time the Workbench mounts. A section the operator has open under More stays
- * there until then, so it does not jump out from under them.
+ * there while it is open, so it does not jump out from under them.
  */
 export function useWorkbenchSectionHeld(holdsContent: boolean): void {
   const markHeld = useContext(SectionFoldContext)?.markHeld;

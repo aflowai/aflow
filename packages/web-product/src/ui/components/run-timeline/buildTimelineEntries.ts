@@ -566,3 +566,12 @@ export function turnToolsSummary(turn: StepGroup, tools: readonly StepGroup[]): 
     ranLocally: providers.length > 0 && providers.every((p) => p === LOCAL_PROVIDER),
   };
 }
+
+/**
+ * The tool row whose status the closed fold shows, so a failed or paused call
+ * stays visible at a glance. A failed call outranks a paused one. A turn whose
+ * calls are all clear has none.
+ */
+export function turnToolsFlagged(tools: readonly StepGroup[]): StepGroup | undefined {
+  return tools.find((g) => g.status === 'failed') ?? tools.find((g) => g.status === 'paused');
+}

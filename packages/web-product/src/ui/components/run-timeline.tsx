@@ -31,6 +31,7 @@ import {
   resolveDelegateRole,
   stepGroupKey,
   turnToolGroups,
+  turnToolsFlagged,
   turnToolsSummary,
 } from './run-timeline/buildTimelineEntries';
 import {
@@ -38,6 +39,9 @@ import {
   eventIcon,
   formatTime,
   friendlyEventLabel,
+  stepStatusColor,
+  stepStatusIcon,
+  stepStatusLabel,
   subflowEventColor,
   subflowEventIcon,
   subflowEventLabel,
@@ -108,12 +112,14 @@ function ExecutionList({
 
 /**
  * One turn's tool rows behind a single line that counts them and says what
- * the turn and its tools spent. Open, it shows the rows as the flat list
- * shows them.
+ * the turn and its tools spent. Closed, the line also shows a failed or a
+ * paused call's status, as its row would. Open, it shows the rows as the flat
+ * list shows them.
  */
 function TurnToolsFold({ turn, tools }: { turn: StepGroup; tools: StepGroup[] }) {
   const [expanded, setExpanded] = useState(false);
   const label = turnToolsLabel(turnToolsSummary(turn, tools));
+  const flagged = turnToolsFlagged(tools);
   return (
     <div className="rt-tool-indent" data-turn-tools-fold={stepGroupKey(turn)}>
       <button
@@ -136,6 +142,19 @@ function TurnToolsFold({ turn, tools }: { turn: StepGroup; tools: StepGroup[] })
           <Text variant="muted" size="xs">
             {label}
           </Text>
+          {!expanded && flagged && (
+            <Row
+              gap="1"
+              align="center"
+              data-turn-tools-status={flagged.status}
+              style={{ color: stepStatusColor(flagged.status) }}
+            >
+              <Icon name={stepStatusIcon(flagged.status)} size="xs" />
+              <Text size="xs" style={{ color: stepStatusColor(flagged.status) }}>
+                {stepStatusLabel(flagged.status, flagged.pauseKind, flagged.stepType)}
+              </Text>
+            </Row>
+          )}
         </Row>
       </button>
       {expanded && (

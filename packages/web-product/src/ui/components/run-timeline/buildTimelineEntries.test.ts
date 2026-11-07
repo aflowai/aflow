@@ -7,6 +7,7 @@ import {
   computeRunSummary,
   stepGroupKey,
   turnToolGroups,
+  turnToolsFlagged,
   turnToolsSummary,
 } from './buildTimelineEntries';
 import { stepStatusLabel, turnToolsLabel } from './displayHelpers';
@@ -208,6 +209,19 @@ describe('the fold under each agent turn', () => {
     expect(summary.totalCostUsd).toBeCloseTo(0.025);
     expect(summary.ranLocally).toBe(false);
     expect(turnToolsLabel(summary)).toBe('2 tool calls · 1.5k tok · $0.025');
+  });
+
+  it('flags a failed call over a paused one, and nothing on an all-clear turn', () => {
+    const entries = twoTurns();
+    const tools = turnToolGroups(entries).get(stepGroupKey(firstTurn(entries))) ?? [];
+    expect(turnToolsFlagged(tools)).toBeUndefined();
+
+    const [search, draft] = tools;
+    if (!search || !draft) throw new Error('expected two tool rows');
+    const paused = { ...search, status: 'paused' as const };
+    const failed = { ...draft, status: 'failed' as const };
+    expect(turnToolsFlagged([paused, draft])?.stepId).toBe('search');
+    expect(turnToolsFlagged([paused, failed])?.stepId).toBe('draft');
   });
 
   it('leaves a tool row whose turn the history cut in no fold', () => {

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   WORKBENCH_HELD_SPACES_LIMIT,
   WORKBENCH_HELD_STORAGE_KEY,
+  placeWorkbenchSections,
   readHeldSections,
   rememberHeldSection,
   workbenchPlacement,
@@ -84,6 +85,62 @@ describe('workbenchPlacement', () => {
     );
     expect(inPlace.map((s) => s.title)).toEqual(['Skills']);
     expect(more.map((s) => s.title)).toEqual(['Plan', 'Applets']);
+  });
+
+  it('keeps a section under More while the operator has it open, whatever its signal', () => {
+    const open = (title: string) => title === 'Plan';
+    const first = placeWorkbenchSections([section('Plan')], new Set(), new Set(), open);
+    expect(first.more.map((s) => s.title)).toEqual(['Plan']);
+    expect([...first.keptUnderMore]).toEqual(['Plan']);
+
+    const signalled = placeWorkbenchSections(
+      [section('Plan', true)],
+      new Set(['Plan']),
+      first.keptUnderMore,
+      open,
+    );
+    expect(signalled.inPlace).toEqual([]);
+    expect(signalled.more.map((s) => s.title)).toEqual(['Plan']);
+    expect(signalled.keptUnderMore).toBe(first.keptUnderMore);
+  });
+
+  it('returns a section opened and then closed under More to its place when its signal turns on', () => {
+    const opened = placeWorkbenchSections(
+      [section('Plan'), section('Applets')],
+      new Set(),
+      new Set(),
+      (title) => title === 'Plan',
+    );
+    expect([...opened.keptUnderMore]).toEqual(['Plan']);
+
+    const closed = placeWorkbenchSections(
+      [section('Plan'), section('Applets')],
+      new Set(),
+      opened.keptUnderMore,
+      () => false,
+    );
+    expect(closed.more.map((s) => s.title)).toEqual(['Plan', 'Applets']);
+    expect([...closed.keptUnderMore]).toEqual([]);
+
+    const signalled = placeWorkbenchSections(
+      [section('Plan', true), section('Applets')],
+      new Set(),
+      closed.keptUnderMore,
+      () => false,
+    );
+    expect(signalled.inPlace.map((s) => s.title)).toEqual(['Plan']);
+    expect(signalled.more.map((s) => s.title)).toEqual(['Applets']);
+  });
+
+  it('never keeps a section open in its place under More', () => {
+    const { inPlace, keptUnderMore } = placeWorkbenchSections(
+      [section('Skills', true)],
+      new Set(),
+      new Set(),
+      () => true,
+    );
+    expect(inPlace.map((s) => s.title)).toEqual(['Skills']);
+    expect([...keptUnderMore]).toEqual([]);
   });
 
   it('puts nothing behind More once every section has held content', () => {
