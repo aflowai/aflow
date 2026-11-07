@@ -731,6 +731,14 @@ describe('a node’s first status (Plan 339 D6)', () => {
       note: 'Commissioned the forge seam.',
     });
     expect(noted).toMatchObject({ ok: true, node: { note: 'Commissioned the forge seam.' } });
+    store.runs.push({
+      runId: `run-on-${nodeId}`,
+      slug: 'commission-local-change',
+      status: 'running',
+      nodeId,
+      spaceId: SPACE,
+      startedAt: '2026-10-04T10:00:00.000Z',
+    });
     const statused = await updatePlanNode(ctx(), {
       nodeId,
       expectedRevision: revision(),

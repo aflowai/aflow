@@ -353,7 +353,13 @@ describe('findActiveStreamNode', () => {
   it('stops at a waiting node too, and the firing decides it by the rules an active one takes', async () => {
     const { root, first } = await stream();
     await created({ parentId: first.nodeId, title: 'P2b.a' });
+    const served = await run(first, PLAN_STREAM_COMMISSION_SLUG, 'running');
     await write(first.nodeId, { status: 'waiting' });
+    // The firing reads a waiting node with no run left, as an active one with none.
+    store.runs.splice(
+      store.runs.findIndex((r) => r.runId === served),
+      1,
+    );
     const walked = await store.walk(SPACE, { rootId: root.nodeId, maxDepth: 64, maxNodes: 2000 });
     expect(findActiveStreamNode(walked.nodes, root.nodeId)?.nodeId).toBe(first.nodeId);
     expect(await fire(root.nodeId)).toMatchObject({
@@ -1021,9 +1027,8 @@ describe('resident asking and proposing', () => {
     'proposes for an exhausted root beside unrelated %s work',
     async (status) => {
       const held = await created();
+      if (status === 'waiting') await run(held, PLAN_STREAM_COMMISSION_SLUG, 'running');
       await write(held.nodeId, { status });
-      if (status === 'waiting')
-        await run(await current(held.nodeId), PLAN_STREAM_COMMISSION_SLUG, 'running');
       if (status === 'blocked') {
         const asked = await wake();
         const answer = asked.decisions[0]?.answer;
@@ -2992,8 +2997,10 @@ describe('settled P2 rules', () => {
     await write(child.nodeId, { status: 'done', outcome: 'Met' });
     const held = await created({ parentId: root.nodeId, proposed: 'Wait' });
     expect(await wake()).not.toHaveProperty('propose');
+    const heldRun = await run(held, PLAN_STREAM_COMMISSION_SLUG, 'running');
     await write(held.nodeId, { status: 'waiting' });
     expect(await wake()).not.toHaveProperty('propose');
+    store.runs.find((r) => r.runId === heldRun)!.status = 'completed';
     await write(held.nodeId, { status: 'done', outcome: 'Met' });
     const actionable = await created();
     const deferred = await created();

@@ -95,6 +95,7 @@ import {
   sameColumn,
   stale,
   unchanged,
+  waitingWithoutRun,
 } from './refusals.js';
 
 /** How far any read of a space's plan walks the tree. */
@@ -122,6 +123,7 @@ export type PlanOpErrorCode =
   | 'PLAN_NODE_RESIDENT_SCOPE'
   | 'PLAN_NODE_LIVE_CHECK_PERSON'
   | 'PLAN_NODE_DESIGN_NOT_MERGED'
+  | 'PLAN_NODE_WAITING_NEEDS_RUN'
   | 'PLAN_LEARNING_NOT_FOUND';
 
 export interface PlanOpError {
@@ -485,6 +487,11 @@ async function writePlanNode(
       })
     : undefined;
   if (notMerged !== undefined) return notMerged;
+  // Only a write into waiting is judged: a node already waiting with no run stands as it is.
+  if (input.status === 'waiting' && current.status !== 'waiting') {
+    const served = await ctx.store.listRunsServing(ctx.spaceId, [], 1, current.nodeId);
+    if (served.total === 0) return waitingWithoutRun(current);
+  }
 
   const pullRequest =
     ctx.resident === true && input.status === 'done'

@@ -88,6 +88,18 @@ export function openHasNoOutcome(current: PlanNode, status: PlanNodeStatus): Pla
   };
 }
 
+export function waitingWithoutRun(current: PlanNode): PlanOpError {
+  return {
+    ok: false,
+    code: 'PLAN_NODE_WAITING_NEEDS_RUN',
+    message:
+      `Plan node "${current.title}" has no run in flight on it or under it, and a waiting node waits on a run, ` +
+      'so nothing was written. To hold it on the operator, set status "blocked" with a note saying what it waits ' +
+      'on. To wait on work, start the run against this node first, then set status "waiting".',
+    details: { nodeId: current.nodeId, status: current.status },
+  };
+}
+
 export function unchanged(current: PlanNode, input: PlanNodeUpdateInput): PlanOpError {
   return {
     ok: false,
