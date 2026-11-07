@@ -232,16 +232,38 @@ describe('GET /v1/schedules/upcoming', () => {
     expect(table.reads).toHaveLength(1);
   });
 
-  it('asks only for active schedules with a next firing ahead and no end behind', async () => {
+  it('asks only for active schedules with a next firing and no end behind', async () => {
     await getUpcoming();
 
     const { sql: text, params } = readCondition();
     expect(text).toContain('"agent_schedules"."status" = $');
     expect(params).toContain('active');
-    expect(text).toContain('"agent_schedules"."next_fire_at" > $');
+    expect(text).toContain('"agent_schedules"."next_fire_at" is not null');
     expect(text).toMatch(
       /\("agent_schedules"."expires_at" is null or "agent_schedules"."expires_at" > \$\d+\)/,
     );
+  });
+
+  it('keeps an active schedule whose next firing is due or past, so it is listed first', async () => {
+    const due = schedule('8247eee7-0000-4000-8000-000000000003', {
+      name: 'Due now',
+      nextFireAt: new Date(Date.now()),
+    });
+    const late = schedule('8247eee7-0000-4000-8000-000000000004', {
+      name: 'Late by ten minutes',
+      nextFireAt: new Date(Date.now() - 10 * MINUTE),
+    });
+    table.rows = [late, due, operatorShepherd];
+
+    const { body } = await getUpcoming();
+
+    // No bound on next_fire_at leaves a firing at or before now out.
+    const { sql: text } = readCondition();
+    expect(text).not.toMatch(/"next_fire_at" [<>]=? \$/);
+    expect(body.schedules).toEqual(
+      [late, due, operatorShepherd].map((row) => JSON.parse(JSON.stringify(rowToResponse(row)))),
+    );
+    expect(body.total).toBe(3);
   });
 
   it('orders the soonest first and stops at the section limit', async () => {

@@ -61,23 +61,37 @@ export function scheduleState(row: ScheduleRow): ScheduleState {
   return 'expired';
 }
 
-/** "in 4 min", "in 3 h", a date further out, or "due now". */
-function untilNext(nextFireAt: string): string {
+/** "5 min ago", "3 h ago" or "2 d ago" for a span of at least one minute. */
+function ago(minutes: number): string {
+  if (minutes < 60) return `${String(minutes)} min ago`;
+  if (minutes < 60 * 24) return `${String(Math.round(minutes / 60))} h ago`;
+  return `${String(Math.round(minutes / (60 * 24)))} d ago`;
+}
+
+/**
+ * "in 4 min", "in 3 h" or a date further out. A firing at or before now is
+ * due. It reads "due now", and one a minute or more late says how late, as
+ * "due 12 min ago". A schedule hours late is not the same news as one due this
+ * second.
+ */
+function untilNext(nextFireAt: string): { due: boolean; text: string } {
   const at = new Date(nextFireAt);
-  const minutes = Math.round((at.getTime() - Date.now()) / 60_000);
-  if (minutes < 0) return 'due now';
-  if (minutes < 60) return `in ${String(minutes)} min`;
-  if (minutes < 60 * 24) return `in ${String(Math.round(minutes / 60))} h`;
-  return at.toLocaleString();
+  const ms = at.getTime() - Date.now();
+  if (ms <= 0) {
+    const late = Math.floor(-ms / 60_000);
+    return { due: true, text: late < 1 ? 'due now' : `due ${ago(late)}` };
+  }
+  const minutes = Math.max(1, Math.round(ms / 60_000));
+  if (minutes < 60) return { due: false, text: `in ${String(minutes)} min` };
+  if (minutes < 60 * 24) return { due: false, text: `in ${String(Math.round(minutes / 60))} h` };
+  return { due: false, text: at.toLocaleString() };
 }
 
 /** "just now", "5 min ago", "3 h ago" or "2 d ago". */
 function sinceLast(lastFiredAt: string): string {
   const minutes = Math.round((Date.now() - new Date(lastFiredAt).getTime()) / 60_000);
   if (minutes < 1) return 'just now';
-  if (minutes < 60) return `${String(minutes)} min ago`;
-  if (minutes < 60 * 24) return `${String(Math.round(minutes / 60))} h ago`;
-  return `${String(Math.round(minutes / (60 * 24)))} d ago`;
+  return ago(minutes);
 }
 
 function whenNext(row: ScheduleRow): string {
@@ -86,7 +100,7 @@ function whenNext(row: ScheduleRow): string {
   // confident lie: it will not run, whatever the clock says.
   if (hasExpired(row)) return 'expired';
   if (!row.nextFireAt) return 'not scheduled';
-  return untilNext(row.nextFireAt);
+  return untilNext(row.nextFireAt).text;
 }
 
 /**
@@ -109,13 +123,16 @@ function recurrence(row: ScheduleRow): string {
 
 /**
  * What a folded card says beside the name: "next in 4 min" for one that will
- * run. A schedule that will not run never gets a time it would run at, so it
- * says its state instead.
+ * run, and "due now" or "due 12 min ago" for one whose firing has come. A
+ * schedule that will not run never gets a time it would run at, so it says its
+ * state instead.
  */
 function compactWhen(row: ScheduleRow): string {
   const state = scheduleState(row);
   if (state !== 'active') return state;
-  return row.nextFireAt ? `next ${untilNext(row.nextFireAt)}` : 'not scheduled';
+  if (!row.nextFireAt) return 'not scheduled';
+  const next = untilNext(row.nextFireAt);
+  return next.due ? next.text : `next ${next.text}`;
 }
 
 /**

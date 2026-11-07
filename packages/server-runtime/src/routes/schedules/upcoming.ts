@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, isNull, or, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, isNotNull, isNull, or, sql } from 'drizzle-orm';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import {
   agentSchedules,
@@ -24,9 +24,12 @@ export interface UpcomingSchedules {
 
 /**
  * The space's schedules that will fire again, soonest first: active, with a
- * next firing ahead of `now` and no end before it. Who created a schedule plays
- * no part. An operator-created one runs on its own as much as an agent-armed
- * one does.
+ * next firing and no end before `now`. Who created a schedule plays no part.
+ * An operator-created one runs on its own as much as an agent-armed one does.
+ *
+ * A next firing at or before `now` stays listed, and it sorts first. The
+ * evaluator has not claimed that firing yet, so the schedule is due, not gone.
+ * A fired one-shot and a chain at its end leave `active`, which keeps them out.
  *
  * A renewal expires its predecessor when it is written, so a chain shows once,
  * as its newest renewal, with no walk of the chain.
@@ -41,7 +44,7 @@ export async function readUpcomingSchedules(
   const upcoming = and(
     eq(agentSchedules.spaceId, spaceId),
     eq(agentSchedules.status, 'active'),
-    gt(agentSchedules.nextFireAt, at),
+    isNotNull(agentSchedules.nextFireAt),
     or(isNull(agentSchedules.expiresAt), gt(agentSchedules.expiresAt, at)),
   );
   return withTenantSchema(db, createTenantContext(tenantId), async (tx) => {
