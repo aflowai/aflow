@@ -1,5 +1,6 @@
 import type { AiMessageV1, PinnedState, SummaryTemplate } from '@aflow/schemas';
 import { DEFAULT_SUMMARY_SECTIONS } from '@aflow/schemas';
+import { splitActiveRefOwners, type ActiveRef } from './activeRefOwnership.js';
 
 // ============================================================================
 // Template rendering
@@ -22,10 +23,16 @@ function renderSectionInstructions(template: SummaryTemplate): string {
   return lines.join('\n');
 }
 
+function renderRef(ref: ActiveRef): string {
+  return `- ${ref.ref} — ${ref.description} (from turn ${String(ref.fromTurn)})`;
+}
+
 /**
- * Render pinned state as a "do not duplicate" block for the summarizer.
+ * Render what the restore carries beside the summary: a "do not duplicate"
+ * block. Its refs are the restore's own list, so the block is bounded by the
+ * same newest-N rule and the two never disagree.
  */
-function renderPinnedStateForSummarizer(pinned: PinnedState): string {
+function renderPinnedStateForSummarizer(pinned: PinnedState, listed: readonly ActiveRef[]): string {
   const parts: string[] = [];
   if (pinned.objective) {
     parts.push(`- Objective: ${pinned.objective}`);
@@ -33,19 +40,35 @@ function renderPinnedStateForSummarizer(pinned: PinnedState): string {
   if (pinned.activeSubGoal) {
     parts.push(`- Active sub-goal: ${pinned.activeSubGoal}`);
   }
-  if (pinned.activeRefs && pinned.activeRefs.length > 0) {
-    for (const ref of pinned.activeRefs) {
-      parts.push(
-        `- Active ref: ${ref.ref} — ${ref.description} (from turn ${String(ref.fromTurn)})`,
-      );
-    }
-  }
   if (pinned.writtenVariables && pinned.writtenVariables.length > 0) {
     for (const v of pinned.writtenVariables) {
       parts.push(`- Variable: ${v.variableKey}${v.summary ? ` — ${v.summary}` : ''}`);
     }
   }
+  if (listed.length > 0) {
+    parts.push('- The restore list (paths the summary leaves out):');
+    for (const ref of listed) parts.push(`  ${renderRef(ref)}`);
+  }
   return parts.length > 0 ? parts.join('\n') : '(none)';
+}
+
+/**
+ * The paths the summary must carry because the restore list does not (§4.8).
+ * A merge leaves out a path the existing summary already holds, because the
+ * merge keeps it there. The block then holds only paths that have just left
+ * the restore list, so it does not grow across compactions.
+ */
+function renderSummaryCarriedRefs(
+  carried: readonly ActiveRef[],
+  previousSummary: string | undefined,
+): string {
+  const handed = carried.filter((ref) => !previousSummary?.includes(ref.ref));
+  if (handed.length === 0) return '';
+  return `
+- **Carry these paths**: the restore list no longer names them, so the summary is the only place the agent finds them. Copy each into What Was Read verbatim, with what was read there.
+
+${handed.map(renderRef).join('\n')}
+`;
 }
 
 // ============================================================================
@@ -180,7 +203,7 @@ function serializeTranscript(entries: readonly TranscriptEntry[]): string {
  * from a summary: what it read, what it decided, what it left pending.
  */
 function sharedRules(maxTokens: number): string {
-  return `- **Keep what was read**: for every source the agent read, name it (tool and path or query) and state the facts the agent took from it. Copy every re-read path ("re-readable at …") and every {"$ref": "…"} verbatim, so the agent can read the full result again instead of repeating the call.
+  return `- **Keep what was read**: for every source the agent read, name it (tool and path or query) and state the facts the agent took from it. Copy every re-read path ("re-readable at …") and every {"$ref": "…"} verbatim, so the agent can read the full result again instead of repeating the call. The one exception is a path the restore list below names. The restore sends that path, so the summary states the facts and leaves the path out.
 - **Keep what was decided**: every decision the agent or a person made, with its reason and any value it fixed. A decision a later turn reversed appears once, as reversed.
 - **Keep what is left pending**: every open item, unanswered question, promised step and call whose result had not arrived. Say which turn raised each one.
 - **Preserve specific values**: exact numbers, identifiers, file paths, error messages and parameter values. Never write "the results were good" — write "XGBoost RMSLE: 0.11255".
@@ -200,7 +223,8 @@ export function buildSummarizationPrompt(
 ): string {
   const transcript = serializeTranscript(entries);
   const sectionInstructions = renderSectionInstructions(template);
-  const pinnedBlock = renderPinnedStateForSummarizer(pinnedState);
+  const owners = splitActiveRefOwners(pinnedState.activeRefs);
+  const pinnedBlock = renderPinnedStateForSummarizer(pinnedState, owners.restoreListed);
 
   return `You are a conversation summarizer for an AI agent workflow system.
 
@@ -209,7 +233,7 @@ Summarize the following conversation transcript (turns ${String(compressedTurnRa
 
 ## Critical rules
 ${sharedRules(template.maxTokens)}
-- **Do NOT duplicate pinned state**: the following facts are already captured separately and should NOT be repeated in the summary:
+${renderSummaryCarriedRefs(owners.summaryCarried, undefined)}- **Do NOT duplicate pinned state**: the restore sends these facts and paths beside the summary. Do not repeat them:
 
 ${pinnedBlock}
 
@@ -236,7 +260,8 @@ export function buildMergePrompt(
 ): string {
   const transcript = serializeTranscript(newEntries);
   const sectionInstructions = renderSectionInstructions(template);
-  const pinnedBlock = renderPinnedStateForSummarizer(pinnedState);
+  const owners = splitActiveRefOwners(pinnedState.activeRefs);
+  const pinnedBlock = renderPinnedStateForSummarizer(pinnedState, owners.restoreListed);
 
   return `You are a conversation summarizer for an AI agent workflow system.
 
@@ -246,8 +271,8 @@ Update an existing conversation summary with new turns (${String(newTurnRange[0]
 ## Critical rules
 - **Merge, don't re-summarize**: add what the new turns read, decided and did to the matching sections. Remove a pending item the new turns resolved, and record how it was resolved. Keep every pending item they did not resolve.
 ${sharedRules(template.maxTokens)}
-- **Do not grow without bound**: if a result supersedes an earlier one, update the entry rather than appending.
-- **Do NOT duplicate pinned state**:
+- **Do not grow without bound**: if a result supersedes an earlier one, update the entry rather than appending. Never remove a re-read path or $ref the existing summary holds.
+${renderSummaryCarriedRefs(owners.summaryCarried, previousSummary)}- **Do NOT duplicate pinned state**: the restore sends these facts and paths beside the summary. Do not repeat them:
 
 ${pinnedBlock}
 

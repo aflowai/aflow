@@ -412,7 +412,7 @@ describe('Tier-4 safety bound (§4.7)', () => {
 });
 
 // ============================================================================
-// §4.7 step 2 — text-heavy over-cap history routes to forced compaction
+// §4.7 — a text-heavy over-cap history reaches the structural_cap compaction trigger
 // ============================================================================
 
 function makeCtx(writes: Array<{ kind: string; data: unknown }>): ExecutorContext {
@@ -496,7 +496,7 @@ async function seedConversation(
 }
 
 describe('handleAgentTurn Tier-4 ladder (§4.7)', () => {
-  it('text-heavy over-cap history routes to forced compaction, not a drop', async () => {
+  it('text-heavy over-cap history reaches the structural_cap compaction trigger, not a drop', async () => {
     const mem = createMemoryPayloadStore();
     // 210 text atoms, turns 0..209 — no tool exchanges, nothing for Tier-2.
     const atoms: AiMessageAtomV1[] = [userAtom(0, OPENING_INSTRUCTION)];
@@ -531,6 +531,10 @@ describe('handleAgentTurn Tier-4 ladder (§4.7)', () => {
     };
     expect(output.conversationStateRef).toBeDefined();
     expect(output.contextEngineering?.compaction).toBeDefined();
+    expect(ctx.log.info).toHaveBeenCalledWith(
+      'agent_turn_compaction',
+      expect.objectContaining({ trigger: 'structural_cap' }),
+    );
 
     const finalState = (await mem.retrieve(
       output.conversationStateRef as never,

@@ -23,7 +23,7 @@
 **What it affects**
 
 - `apps/aflow-executor-ai`: the retention policy, both clearing paths, compaction range selection, the summarizer prompt and the turn's retention ladder.
-- `@aflow/schemas`: the default summary sections, and the conversation state's compaction block.
+- `@aflow/schemas`: the default summary sections, the conversation state's compaction block, and the `inputOrigin` on a message atom and its history ref.
 - Every agent conversation, the Helmsman's included.
 
 **Risks**
@@ -46,7 +46,8 @@
 **Done when**
 
 - No turn clears an exchange because of the atom count.
-- No exchange created since the latest user input is cleared, except by the hard-budget pass.
+- No exchange created since the latest direct request is cleared, except by the hard-budget pass. A run wakeup or a room message moves neither the run nor its pin.
+- Every compacted read path reaches the agent through the restore list or the summary.
 - No result under the size threshold becomes a stub, except by the hard-budget pass.
 - A prompt still over the hard budget after compaction is cleared oldest first, the recency floor and the current run included. The current turn's pinned atoms stay.
 - A run of tool calls compacts to a summary that keeps what was read, what was decided and what is left pending.
@@ -63,7 +64,9 @@ When the conversation was condensed into a summary, the summary was written from
 
 **D1 — one recency floor, and one path that may breach it.** `RECENT_TURNS_FLOOR` is 8, in `retentionPolicy.ts`. Tier-2 clearing and compaction read it as `keepRecentTurns`. The hard-budget pass (§4.7) is the only path that may clear inside it. Rejected: a second, shorter floor for a forced pass. Two floors let a forced pass take what the agent was still using.
 
-**D2 — pressure clearing never takes the current run.** The current run starts at the latest `user_input` atom (§4.10). An exchange whose first atom sits after it is never a Tier-2 candidate. Compaction relieves the run instead. Rejected: clearing the run's large results after compaction at any pressure. Compaction already takes them with their turns, and their read paths survive as active refs.
+**D2 — pressure clearing never takes the current run.** The current run starts at the latest direct request (§4.10). An exchange whose first atom sits after it is never a Tier-2 candidate. Compaction relieves the run instead. Rejected: clearing the run's large results after compaction at any pressure. Compaction already takes them with their turns, and their read paths survive as active refs.
+
+**D2b — a report never starts a run.** A run wakeup or a room message is a `user_input` atom stamped with its `inputOrigin`. A `user_input` atom without one is a direct request, and only a direct request moves the current run's start and its pin. Rejected: reading the origin from the source id's prefix. The history refs retention reads carry no source id, and a prefix match ties retention to how two writers spell their ids.
 
 **D2a — two forced passes with two candidate sets.** The structural-cap pass honours the floor and the current run. Its remedy is compaction of the older range, and it clears nothing. The hard-budget pass runs after pressure clearing and compaction, when the prompt is still over the hard budget. It may clear any exchange without a pinned atom, oldest first, the floor and the current run included. Rejected: one candidate set for both. A single run whose last 8 turns exceed the hard budget would then shrink by nothing, and the provider would refuse the request.
 
@@ -71,19 +74,23 @@ When the conversation was condensed into a summary, the summary was written from
 
 **D4 — the cap triggers compaction.** `MAX_ATOMS_STRUCTURAL` stays a fixed state-size bound. Reaching it triggers compaction, and `forceClearExcess`, the hard-budget pass, takes only a token excess. Rejected: a budget-derived atom bound. Atoms vary from a few tokens to thousands, so an atom count says nothing a token budget does not already say.
 
-**D5 — compaction selects atoms, not turns.** An exchange with any atom outside the range leaves it whole. The rest of its turn stays in. Rejected: turn snapping, which is the defect in §1.
+**D5 — compaction selects atoms, not turns.** An exchange with any atom outside the range leaves it whole. The rest of its turn stays in. Rejected: selecting whole turns. A turn holds one call and the result of the call before it, so every turn of a tool chain shares an exchange with the next. A range that drops each turn holding a straddling exchange then drops the whole chain, and a run of tool calls never compacts.
 
 **D6 — the summary is a session summary.** The default sections are Objective, What Was Read, What Was Decided, What Was Done, Left Pending and Mistakes & Lessons Learned. The transcript is labelled by turn and names each result's tool, status and re-read path. Rejected: a larger summarizer model. Nothing measured shows flash-lite losing facts from a raw transcript.
+
+**D7 — each read path has one owner.** The restore lists the newest 40 active refs, and the summary carries every other path. `splitActiveRefOwners` makes that split for both the restore and the summarizer prompt, so they never disagree. Rejected: telling the summarizer to leave out every active ref. The restore lists only 40, so an older path then reached the agent nowhere.
 
 ## 3. What it affects
 
 `history.maxAtomsStructural` keeps its default. `compaction.lastCompactedTurn` leaves the conversation state schema, and compaction no longer writes it. Nothing read it: a compacted atom has left history and cannot be selected again. A stored state that still carries the field parses, because the schema strips unknown keys.
 
+A message atom and its history ref gain an optional `inputOrigin`, `run_wakeup` or `room_message`. A state stored before it reads every `user_input` atom as a direct request, as retention read them until now.
+
 ## 4. The retention tiers
 
 ### §4.1 Tier-0 pins
 
-Pinned atoms are never cleared or compacted. They are the opening `user_input` atoms, the latest `user_input`, the latest `compaction_restore` and every atom of the current turn. `computePinnedAtomIds` derives the set at evaluation time.
+Pinned atoms are never cleared or compacted. They are the opening `user_input` atoms, the latest direct request (§4.10), the latest `compaction_restore` and every atom of the current turn. `computePinnedAtomIds` derives the set at evaluation time.
 
 ### §4.2 Low pressure
 
@@ -127,7 +134,7 @@ After Tier-2, the turn runs compaction when any of these holds. The log names th
 
 The working budget never exceeds the hard budget, so `hard_budget` is tested first. Tested after `pressure`, it could never be named.
 
-The structural-cap pass is compaction alone. It honours the recency floor and the current run, and it clears nothing. A cap compaction cannot relieve stays logged until a later compaction relieves it.
+The structural-cap pass is compaction alone, and it clears nothing. Its compaction honours the recency floor. It never clears the current run, but its compaction may take the current run's atoms older than the floor (§4.8). A cap compaction cannot relieve stays logged until a later compaction relieves it.
 
 The hard-budget pass runs only if pressure still exceeds the hard budget after compaction. `forceClearExcess` takes its own candidate set, `hardBudgetClearableExchanges`: every uncleared exchange with a tool result and no pinned atom. The recency floor, the current run and the size threshold do not bind it, so the current turn's pinned atoms are all that stay. It clears oldest first until the estimated saving covers the excess, and any clear that saves tokens counts. It is the only path that clears inside the floor. A failed forced write fails the step, retryable. If the cap or the hard budget still binds, the turn logs `agent_turn_structural_bound_unrelieved`. No turn clears an exchange because of the atom count.
 
@@ -135,7 +142,7 @@ The hard-budget pass runs only if pressure still exceeds the hard budget after c
 
 Compaction selects every unpinned atom older than `RECENT_TURNS_FLOOR`, the current run's included. An exchange with any atom outside that set leaves the range whole. It needs `minCompactableTurns` (3) content turns. The range's atoms are archived and replaced by one restore atom, placed in the last compacted atom's slot.
 
-The restore holds verified state and the summary. Verified state is the objective, the latest sub-goal, written variables and active refs. Active refs include each compacted result's read path and each swept note's pointer. The restore lists the newest 40 refs. The summarizer is `compactionSummaryModel` (flash-lite). Its transcript is labelled by turn, and it shows each result's tool, status, re-read path and summary. It shows each decision's text and calls, and marks notes as stubs.
+The restore holds verified state and the summary. Verified state is the objective, the latest sub-goal, written variables and active refs. Active refs include each compacted result's read path and each swept note's pointer. The restore lists the newest 40 refs, and the summary carries the rest (D7). The summarizer prompt names the restore's 40 as paths the summary leaves out. It names every other path as one the summary must copy verbatim. A merge leaves out a path its existing summary already holds, so that list holds only paths that have just left the restore. The summarizer is `compactionSummaryModel` (flash-lite). Its transcript is labelled by turn, and it shows each result's tool, status, re-read path and summary. It shows each decision's text and calls, and marks notes as stubs.
 
 ### §4.9 Honest degrade
 
@@ -143,7 +150,7 @@ When no read op is on the turn's tool surface, notes and restores omit the read 
 
 ### §4.10 The current run
 
-The current run is everything after the latest `user_input` atom. A history without one has no current run, so `currentRunStartIndex` returns -1 and Tier-2 excludes nothing on this account. No exchange of the current run is a Tier-2 candidate. Pressure inside the run is relieved by compaction of its turns older than the floor. Only the hard-budget pass (§4.7) may clear an exchange of the current run.
+The current run is everything after the latest direct request: a `user_input` atom without an `inputOrigin`. A run wakeup or a room message arrives while a request is in flight. It never moves the start or the pin, so the request's own turns stay out of Tier-2 and the request stays out of compaction. A history without a direct request has no current run, so `currentRunStartIndex` returns -1 and Tier-2 excludes nothing on this account. No exchange of the current run is a Tier-2 candidate. Pressure inside the run is relieved by compaction of its turns older than the floor. Only the hard-budget pass (§4.7) may clear an exchange of the current run.
 
 ## 5. Phases
 
@@ -163,5 +170,7 @@ One phase, built. Its exit is the Done-when list above, each item held by a test
 - The summarizer prompt asks for what was read, decided and left pending, and its transcript carries those facts.
 - A run of tool calls compacted by the turn sends the next request a restore with that summary and every compacted read path, with no stub.
 - An unbroken chain of tool calls compacts up to the floor, and keeps the straddling exchange whole.
+- A run wakeup and a room message mid-request leave the current run starting at the request. Pressure clearing takes none of its turns, and compaction keeps the request.
+- Every compacted read path has one owner, the restore list or the summary. A merge hands over only the paths that have left the restore list.
 
 `retentionSafetyBound.test.ts` holds the pins under maximal hard-budget pressure, the archive trace and the fail-closed forced write. `retentionPressure.test.ts` and `compactionAlignment.test.ts` hold the class order and the compaction alignment.

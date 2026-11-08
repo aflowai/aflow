@@ -26,8 +26,12 @@ import {
   MIN_CLEAR_NET_SAVINGS_TOKENS,
   RECENT_TURNS_FLOOR,
   RETENTION_POLICY,
+  computePinnedAtomIds,
   currentRunStartIndex,
 } from './retentionPolicy.js';
+import { RESTORE_ACTIVE_REFS_MAX } from './activeRefOwnership.js';
+import { buildMergePrompt } from './compaction-prompts.js';
+import { appendRunWakeups } from './runWakeupsInTurn.js';
 import type { HandlerDeps } from './ai/handlers/types.js';
 import type { AgentTurnInput } from './ai/schema.js';
 import { handleAgentTurn } from './ai/handlers/agentTurn.js';
@@ -114,6 +118,16 @@ function resultAtom(
   };
 }
 
+/** A user_input atom nobody asked the agent for: a run reporting back, or the room. */
+function reportAtom(turnNumber: number, origin: 'run_wakeup' | 'room_message'): AiMessageAtomV1 {
+  return {
+    ...userAtom(turnNumber, origin === 'run_wakeup' ? '{"workflowRunWakeup":{}}' : 'Ana: fyi'),
+    atomId: `${origin}-${String(turnNumber)}`,
+    sourceId: `${origin}:${String(turnNumber)}`,
+    inputOrigin: origin,
+  };
+}
+
 /** One call per turn from `from` to `to`, each result landing in the next turn. */
 function chain(prefix: string, from: number, to: number, chars = LARGE): AiMessageAtomV1[] {
   const atoms: AiMessageAtomV1[] = [];
@@ -145,6 +159,7 @@ function stateOf(atoms: AiMessageAtomV1[], turnNumber: number, ref: string): AiC
         ref,
         role: a.role,
         sourceKind: a.sourceKind,
+        ...(a.inputOrigin !== undefined ? { inputOrigin: a.inputOrigin } : {}),
         hash: 'h',
         createdAtMs: a.createdAtMs,
         ...(a.turnNumber !== undefined ? { turnNumber: a.turnNumber } : {}),
@@ -856,5 +871,184 @@ describe('the structural cap triggers compaction, never clearing', () => {
       expect(kept.has(`res-c${String(t)}`)).toBe(true);
     }
     expect(kept.has('user-62')).toBe(true);
+  });
+});
+
+// ============================================================================
+// A wakeup or a room message mid-request (§4.10)
+// ============================================================================
+
+describe('a wakeup mid-request does not expose the request to clearing or compaction', () => {
+  // A finished run at 1..7, the request at 8 and its run 8..39. A run wakeup
+  // lands at 33 and a room message at 34, both while the request is in
+  // flight. Now turn 41, so the request's turns up to 32 are older than the floor.
+  const withReports = () => [
+    userAtom(0, 'open'),
+    ...chain('p', 1, 6),
+    userAtom(8, 'the request'),
+    ...chain('c', 8, 39),
+    reportAtom(33, 'run_wakeup'),
+    reportAtom(34, 'room_message'),
+  ];
+
+  it('keeps the current run starting at the request, and the pin on it', () => {
+    const atoms = sortedByTurn(withReports());
+
+    expect(currentRunStartIndex(atoms)).toBe(atoms.findIndex((a) => a.atomId === 'user-8'));
+    const pinned = computePinnedAtomIds(atoms, 40);
+    expect(pinned.has('user-8')).toBe(true);
+    expect(pinned.has('run_wakeup-33')).toBe(false);
+    expect(pinned.has('room_message-34')).toBe(false);
+  });
+
+  it('pressure clearing takes the finished run and none of the request’s turns', async () => {
+    const { store } = await assembledStore(withReports(), 41);
+
+    await clearBy('pressure', store);
+
+    const cleared = store.getState().clearing?.clearedExchanges ?? [];
+    expect(cleared.length).toBeGreaterThan(0);
+    expect(cleared.every((key) => key.startsWith('p'))).toBe(true);
+    const kept = idsOf(store);
+    for (let t = 8; t <= 39; t++) {
+      expect(kept.has(`asst-c${String(t)}`)).toBe(true);
+      expect(kept.has(`res-c${String(t)}`)).toBe(true);
+    }
+  });
+
+  it('compaction keeps the request itself out of the summary', async () => {
+    const mem = createMemoryPayloadStore();
+    const atoms = sortedByTurn(withReports());
+    const state = stateOf(atoms, 41, await seed(mem, atoms));
+
+    expect(await compactOnce(mem, state)).toBeDefined();
+
+    const kept = new Set(state.history.atoms.map((a) => a.atomId));
+    expect(kept.has('user-8')).toBe(true);
+    // Compaction still relieves the run from its turns older than the floor (D2).
+    expect(kept.has('asst-c9')).toBe(false);
+  });
+
+  it('the store marks a wakeup and a room message by origin, and a direct request by none', async () => {
+    const mem = createMemoryPayloadStore();
+    const store = new ConversationStateStore(
+      {
+        payloadStore: mem,
+        tenantId: TENANT,
+        runId: RUN,
+        stepId: 'agent-1',
+        stepExecutionId: 'exec-1',
+        attempt: 1,
+      },
+      stateOf([], 0, 'unused'),
+    );
+    store.setTurnNumber(0);
+    store.appendUserInput({ userInputId: 'ask-1', text: 'the request', createdAtMs: 1 });
+    appendRunWakeups(store, [
+      {
+        eventId: 'e1',
+        envelope: { runId: 'run-a', outcome: 'completed', waiterId: 'waiter-a' },
+      },
+    ]);
+    store.appendRoomMessages([
+      {
+        messageSeq: 1,
+        actorUserId: '00000000-0000-4000-8000-000000000001',
+        body: 'fyi',
+      },
+    ]);
+    await store.storeTurn();
+
+    const refs = store.getState().history.atoms;
+    expect(refs.map((a) => a.inputOrigin)).toEqual([undefined, 'run_wakeup', 'room_message']);
+    expect(currentRunStartIndex(refs)).toBe(0);
+    expect(computePinnedAtomIds(refs).has(refs[0]!.atomId)).toBe(true);
+  });
+});
+
+// ============================================================================
+// One owner for each read path (§4.8)
+// ============================================================================
+
+/** The lines between two markers of the summarizer prompt. */
+function promptBlock(prompt: string, from: string, to: string): string {
+  const start = prompt.indexOf(from);
+  if (start === -1) return '';
+  const end = prompt.indexOf(to, start + from.length);
+  return prompt.slice(start + from.length, end === -1 ? undefined : end);
+}
+
+const pathsIn = (text: string): string[] =>
+  [...text.matchAll(/\/run\/outputs\/\w+\/data/g)].map((m) => m[0]);
+
+const CARRY = '**Carry these paths**';
+const LISTED = 'The restore list (paths the summary leaves out):';
+
+describe('each compacted read path has one owner: the restore list or the summary', () => {
+  it('lists the newest refs in the restore, and tells the summarizer to carry every other', async () => {
+    const mem = createMemoryPayloadStore();
+    // 60 compacted results, more than the restore lists.
+    const atoms = sortedByTurn([userAtom(0, 'open'), ...chain('c', 1, 70)]);
+    const state = stateOf(atoms, 80, await seed(mem, atoms));
+    const client = summarizer();
+
+    expect(await compactOnce(mem, state, client)).toBeDefined();
+
+    const prompt = vi.mocked(client.generateText).mock.calls[0]![0].messages[0]!.content as string;
+    const carried = pathsIn(promptBlock(prompt, CARRY, '**Do NOT duplicate pinned state**'));
+    const listedInPrompt = pathsIn(promptBlock(prompt, LISTED, '## Output format'));
+    const artifact = (await mem.retrieve(
+      state.compaction!.artifactRef as never,
+    )) as CompactionArtifact;
+    const every = artifact.pinnedState.activeRefs!.map((r) => r.ref);
+    expect(every.length).toBeGreaterThan(RESTORE_ACTIVE_REFS_MAX);
+
+    // The pinned block is bounded by the restore's own rule.
+    expect(listedInPrompt).toHaveLength(RESTORE_ACTIVE_REFS_MAX);
+
+    // The restore lists exactly the refs the prompt said it lists.
+    const restoreRef = state.history.atoms.find((a) => a.sourceKind === 'compaction_restore')!;
+    const batch = (await mem.retrieve(restoreRef.ref as never)) as AiMessageAtomV1[];
+    const restore = batch
+      .find((a) => a.atomId === restoreRef.atomId)!
+      .message.parts.map((p) => (p.kind === 'text' ? p.text : ''))
+      .join('\n');
+    const listedInRestore = pathsIn(restore);
+    expect(listedInRestore.sort()).toEqual([...listedInPrompt].sort());
+    expect(restore).toContain(
+      `(${String(every.length - RESTORE_ACTIVE_REFS_MAX)} older refs not listed — the summary carries their paths)`,
+    );
+
+    // Every path has exactly one owner: never both, never neither.
+    for (const path of every) {
+      const owners = Number(listedInPrompt.includes(path)) + Number(carried.includes(path));
+      expect(owners, path).toBe(1);
+    }
+  });
+
+  it('a merge hands over only the paths that left the restore list, so its block does not grow', () => {
+    const refs = Array.from({ length: RESTORE_ACTIVE_REFS_MAX + 10 }, (_, i) => ({
+      ref: `/run/outputs/r${String(i)}_0/data`,
+      description: `read ${String(i)}`,
+      fromTurn: i,
+    }));
+    // The existing summary already carries the five oldest.
+    const previousSummary = `## What Was Read\n${refs
+      .slice(0, 5)
+      .map((r) => `- ${r.ref}`)
+      .join('\n')}`;
+
+    const prompt = buildMergePrompt(
+      [],
+      { activeRefs: refs },
+      previousSummary,
+      { sections: [], maxTokens: 1500 } as never,
+      [1, 2],
+    );
+
+    const carried = pathsIn(promptBlock(prompt, CARRY, '**Do NOT duplicate pinned state**'));
+    expect(carried).toEqual(refs.slice(5, 10).map((r) => r.ref));
+    const listed = pathsIn(promptBlock(prompt, LISTED, '## Section structure'));
+    expect(listed).toEqual(refs.slice(10).map((r) => r.ref));
   });
 });

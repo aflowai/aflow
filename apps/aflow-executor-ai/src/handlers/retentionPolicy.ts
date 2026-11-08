@@ -105,16 +105,26 @@ export function turnBudgets(modelContextWindow: number | undefined): TurnBudgets
 export interface PinnableAtom {
   atomId: string;
   sourceKind?: string | undefined;
+  inputOrigin?: string | undefined;
   turnNumber?: number | undefined;
+}
+
+/**
+ * A user_input atom the agent was asked directly. A run wakeup or a room
+ * message is a user_input atom too, but it reports on the request in flight
+ * rather than replacing it.
+ */
+function isDirectRequest(atom: PinnableAtom): boolean {
+  return atom.sourceKind === 'user_input' && atom.inputOrigin === undefined;
 }
 
 /**
  * Tier-0 pin set (§4.1), derived structurally at evaluation time — never a
  * stored flag. Pinned: the opening user_input atom(s) (every turn-0 user_input,
- * or the first user_input when turn numbers are absent), the latest user_input
- * (the request the current run answers), the latest compaction_restore atom,
- * and every atom of the current turn. Pinning binds clearing, compaction range
- * selection, and the Tier-4 safety bound.
+ * or the first user_input when turn numbers are absent), the latest direct
+ * request (the request the current run answers, §4.10), the latest
+ * compaction_restore atom, and every atom of the current turn. Pinning binds
+ * clearing, compaction range selection, and the Tier-4 safety bound.
  */
 export function computePinnedAtomIds(
   atoms: readonly PinnableAtom[],
@@ -122,14 +132,14 @@ export function computePinnedAtomIds(
 ): Set<string> {
   const pinned = new Set<string>();
   let firstUserInputId: string | undefined;
-  let latestUserInputId: string | undefined;
+  let latestRequestId: string | undefined;
   let latestRestoreId: string | undefined;
   let sawTurnZeroUserInput = false;
 
   for (const atom of atoms) {
+    if (isDirectRequest(atom)) latestRequestId = atom.atomId;
     if (atom.sourceKind === 'user_input') {
       firstUserInputId ??= atom.atomId;
-      latestUserInputId = atom.atomId;
       if (atom.turnNumber === 0) {
         pinned.add(atom.atomId);
         sawTurnZeroUserInput = true;
@@ -150,8 +160,8 @@ export function computePinnedAtomIds(
   if (!sawTurnZeroUserInput && firstUserInputId !== undefined) {
     pinned.add(firstUserInputId);
   }
-  if (latestUserInputId !== undefined) {
-    pinned.add(latestUserInputId);
+  if (latestRequestId !== undefined) {
+    pinned.add(latestRequestId);
   }
   if (latestRestoreId !== undefined) {
     pinned.add(latestRestoreId);
@@ -160,16 +170,21 @@ export function computePinnedAtomIds(
 }
 
 /**
- * Where the current run starts (§4.10): the position of the latest user_input
- * atom in the committed list, or -1 when there is none and so no current run.
- * An exchange whose first atom sits after this position was created by the
- * current run. Pressure clearing never takes it, because the run is still
+ * Where the current run starts (§4.10): the position of the latest direct
+ * request in the committed list, or -1 when there is none and so no current
+ * run. An exchange whose first atom sits after this position was created by
+ * the current run. Pressure clearing never takes it, because the run is still
  * acting on what it read. Compaction relieves the run instead. Only the
  * hard-budget pass may clear it (§4.7).
+ *
+ * Invariant: a run wakeup or a room message never moves the start. It arrives
+ * while a request is in flight, so moving the start would expose that
+ * request's own turns to pressure clearing, and moving its pin would let
+ * compaction fold the request into the summary.
  */
 export function currentRunStartIndex(atoms: readonly PinnableAtom[]): number {
   for (let i = atoms.length - 1; i >= 0; i--) {
-    if (atoms[i]!.sourceKind === 'user_input') return i;
+    if (isDirectRequest(atoms[i]!)) return i;
   }
   return -1;
 }

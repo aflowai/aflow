@@ -15,6 +15,7 @@ export function appendRunWakeups(
       userInputId: `run-wakeup:${entry.eventId}`,
       text: JSON.stringify({ workflowRunWakeup: entry.envelope }),
       createdAtMs: Date.now(),
+      origin: 'run_wakeup',
     });
   }
 }

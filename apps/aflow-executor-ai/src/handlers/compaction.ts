@@ -25,6 +25,7 @@ import {
 import { estimateStringTokens } from './tokenEstimate.js';
 import { RETENTION_POLICY, computePinnedAtomIds } from './retentionPolicy.js';
 import { atomsAsSent } from './toolObservations.js';
+import { splitActiveRefOwners, type ActiveRef } from './activeRefOwnership.js';
 
 // ============================================================================
 // Types
@@ -138,8 +139,6 @@ export function extractPinnedState(atoms: AiMessageAtomV1[], flowName?: string):
     ...(writtenVarsMap.size > 0 ? { writtenVariables: [...writtenVarsMap.values()] } : {}),
   };
 }
-
-type ActiveRef = NonNullable<PinnedState['activeRefs']>[number];
 
 /** Merge activeRef groups, deduplicating by ref string and keeping the latest turn. */
 function mergeActiveRefs(...groups: Array<readonly ActiveRef[] | undefined>): ActiveRef[] {
@@ -292,12 +291,6 @@ function identifyCompactionRange(
 // Compaction Restore Atom
 // ============================================================================
 
-/**
- * How many active refs the restore lists. Each line costs about 50 tokens on
- * every turn, and older refs also appear in the summary's What Was Read.
- */
-const RESTORE_ACTIVE_REFS_MAX = 40;
-
 function createCompactionRestoreAtom(
   pinnedState: PinnedState,
   summaryMarkdown: string,
@@ -324,15 +317,12 @@ function createCompactionRestoreAtom(
   if (pinnedState.activeRefs && pinnedState.activeRefs.length > 0) {
     parts.push('- Active refs:');
     // The restore is sent every turn and the refs carry forward through each
-    // compaction, so it renders the newest. The artifact keeps them all.
-    const shown = [...pinnedState.activeRefs]
-      .sort((a, b) => b.fromTurn - a.fromTurn)
-      .slice(0, RESTORE_ACTIVE_REFS_MAX)
-      .reverse();
-    const omitted = pinnedState.activeRefs.length - shown.length;
-    if (omitted > 0) {
+    // compaction, so it lists the newest. The summarizer was told to carry the
+    // rest, and the artifact keeps them all.
+    const { restoreListed: shown, summaryCarried } = splitActiveRefOwners(pinnedState.activeRefs);
+    if (summaryCarried.length > 0) {
       parts.push(
-        `  - (${String(omitted)} older refs not listed — the summary names the reads they came from)`,
+        `  - (${String(summaryCarried.length)} older refs not listed — the summary carries their paths)`,
       );
     }
     for (const ref of shown) {

@@ -233,6 +233,16 @@ export type AiMessageV1 = z.infer<typeof AiMessageV1Schema>;
 // ============================================================================
 
 /**
+ * Where a `user_input` atom came from when nobody asked the agent for it
+ * directly: a run the session started reporting back, or what someone said in
+ * the room. A `user_input` atom without an origin is a direct request. Only a
+ * direct request starts a run, so a report that arrives mid-request leaves
+ * that request's run and its pin where they are.
+ */
+export const AiUserInputOriginSchema = z.enum(['run_wakeup', 'room_message']);
+export type AiUserInputOrigin = z.infer<typeof AiUserInputOriginSchema>;
+
+/**
  * An atomic message unit stored in the conversation state.
  * Each atom has a stable sourceId for idempotent append.
  */
@@ -252,6 +262,8 @@ export const AiMessageAtomV1Schema = z.object({
     'cleared_summary',
     'compaction_restore',
   ]),
+  /** Set only on a `user_input` atom that is not a direct request. */
+  inputOrigin: AiUserInputOriginSchema.optional(),
   /** The actual message content */
   message: AiMessageV1Schema,
   /** Creation timestamp (epoch ms) */
@@ -367,6 +379,8 @@ export const AiConversationStateV1Schema = z.object({
                 'compaction_restore',
               ])
               .optional(),
+            /** Denormalized from the atom, so retention finds the current run from refs alone. */
+            inputOrigin: AiUserInputOriginSchema.optional(),
             /** Content hash for dedup/diffing */
             hash: z.string(),
             /** Creation timestamp */
@@ -463,7 +477,7 @@ export const DEFAULT_SUMMARY_SECTIONS: Array<{
   {
     heading: 'What Was Read',
     prompt:
-      'Each source the agent read: the tool and its path or query, the facts taken from it with exact values, and its re-read path or $ref verbatim.',
+      'Each source the agent read: the tool and its path or query, the facts taken from it with exact values, and its re-read path or $ref verbatim unless the restore list carries it.',
     required: true,
   },
   {

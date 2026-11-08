@@ -17,6 +17,7 @@ import type {
   StepExecutionId,
   RoomExchangeEntry,
   RoomSpeaker,
+  AiUserInputOrigin,
 } from '@aflow/schemas';
 import {
   type AiClearingStateV1,
@@ -112,6 +113,8 @@ export interface NewUserInput {
   createdAtMs: number;
   /** Who said it, when a person did. */
   author?: RoomSpeaker | undefined;
+  /** Absent for a direct request, the only input that starts a run (§4.10). */
+  origin?: AiUserInputOrigin | undefined;
 }
 
 /**
@@ -387,7 +390,7 @@ export class ConversationStateStore {
     if (this.state.seenSourceIds[sourceId]) return; // Already seen
 
     const message = textMessage('user', attributeToSpeaker(input.text, input.author));
-    const atom = this.createAtom('user_input', sourceId, message);
+    const atom = this.createAtom('user_input', sourceId, message, input.origin);
     this.pendingAtoms.push(atom);
     this.state.seenSourceIds[sourceId] = true;
   }
@@ -407,7 +410,7 @@ export class ConversationStateStore {
       if (this.state.seenSourceIds[sourceId]) continue;
 
       const message = textMessage('user', attributeToSpeaker(entry.body, entry));
-      const atom = this.createAtom('user_input', sourceId, message);
+      const atom = this.createAtom('user_input', sourceId, message, 'room_message');
       this.pendingAtoms.push(atom);
       this.state.seenSourceIds[sourceId] = true;
     }
@@ -756,6 +759,7 @@ export class ConversationStateStore {
           ref: batchRef,
           role: atom.role,
           sourceKind: atom.sourceKind,
+          ...(atom.inputOrigin !== undefined ? { inputOrigin: atom.inputOrigin } : {}),
           hash: contentHash(serialized),
           createdAtMs: atom.createdAtMs,
           ...(atom.turnNumber !== undefined ? { turnNumber: atom.turnNumber } : {}),
@@ -826,7 +830,14 @@ export class ConversationStateStore {
       netSavings: number;
       newestTurn: number;
     }> = [];
-    for (const ex of this.clearableExchanges(exchanges, sentById)) {
+    const clearable = clearableExchanges(exchanges.values(), {
+      atoms: this.state.history.atoms,
+      currentTurn: this.state.turnNumber, // already incremented by storeTurn()
+      pinned: this.pinnedAtomIds(),
+      alreadyCleared: new Set(this.state.clearing?.clearedExchanges ?? []),
+      sentById,
+    });
+    for (const ex of clearable) {
       const { noteTokens, netSavings } = estimateExchangeClearingTokens(
         ex,
         hydratedById,
@@ -974,20 +985,6 @@ export class ConversationStateStore {
   /** The turn currently being executed — its atoms are pinned (§4.1). */
   private executedTurnNumber(): number {
     return this.currentTurnNumber ?? Math.max(this.state.turnNumber - 1, 0);
-  }
-
-  /** The exchanges pressure clearing may take (§4.3), in history order. */
-  private clearableExchanges(
-    exchanges: Map<string, Exchange>,
-    sentById: Map<string, AiMessageAtomV1>,
-  ): Exchange[] {
-    return clearableExchanges(exchanges.values(), {
-      atoms: this.state.history.atoms,
-      currentTurn: this.state.turnNumber, // already incremented by storeTurn()
-      pinned: this.pinnedAtomIds(),
-      alreadyCleared: new Set(this.state.clearing?.clearedExchanges ?? []),
-      sentById,
-    });
   }
 
   /**
@@ -1178,6 +1175,7 @@ export class ConversationStateStore {
       'user_input' | 'assistant_turn' | 'tool_result' | 'cleared_summary' | 'compaction_restore',
     sourceId: string,
     message: AiMessageV1,
+    inputOrigin?: AiUserInputOrigin,
   ): AiMessageAtomV1 {
     return {
       schemaVersion: 1,
@@ -1185,6 +1183,7 @@ export class ConversationStateStore {
       role: message.role,
       sourceId,
       sourceKind,
+      ...(inputOrigin !== undefined ? { inputOrigin } : {}),
       message,
       createdAtMs: Date.now(),
       ...(this.currentTurnNumber !== undefined ? { turnNumber: this.currentTurnNumber } : {}),
