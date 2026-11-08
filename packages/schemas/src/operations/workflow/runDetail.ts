@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { WorkflowRunStatusSchema } from './enums.js';
+import { WorkflowRunStatusSchema, WorkflowRunTaskStatusSchema } from './enums.js';
 import {
   WorkflowHumanActionPreviewSchema,
   WorkflowHumanDecisionSchema,
@@ -35,18 +35,6 @@ export const WorkflowRunDetailInputSchema = z.object({
     ),
 });
 export type WorkflowRunDetailInput = z.infer<typeof WorkflowRunDetailInputSchema>;
-
-export const WorkflowRunTaskStatusSchema = z.enum([
-  'scheduled',
-  'running',
-  'succeeded',
-  'failed',
-  'paused',
-  'blocked',
-  'skipped',
-  'cancelled',
-]);
-export type WorkflowRunTaskStatus = z.infer<typeof WorkflowRunTaskStatusSchema>;
 
 export const WorkflowTaskPriorFailureSchema = z.object({
   attempt: z.number().int().positive(),

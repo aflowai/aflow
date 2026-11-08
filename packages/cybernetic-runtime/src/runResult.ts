@@ -356,13 +356,15 @@ export async function buildWorkflowRunResult(
     const outcomes = evaluateDeterministicOutcomes(workflow.outcomes, safeBag, campaign.config);
     if (outcomes) result.outcomes = outcomes;
     if (learnings) result.learnings = learnings;
-    if (declaration?.primary && !primaryOutput) {
-      const stoppedBy = await buildStoppedBy(
-        payloadStore,
+    // Read the raw bag: a primary the sanitiser removed was produced, so
+    // nothing stopped the run short of it.
+    if (declaration?.primary && bag[declaration.primary] === undefined) {
+      const stoppedBy = await buildStoppedBy(payloadStore, {
         workflow,
-        run.tasks,
-        declaration.primary,
-      );
+        run,
+        primary: declaration.primary,
+        bag,
+      });
       if (stoppedBy) result.stoppedBy = stoppedBy;
     }
   }

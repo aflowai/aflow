@@ -119,11 +119,20 @@ function run(status: string, tasks: WorkflowTaskRow[]): WorkflowRunDetail {
   };
 }
 
-async function resultOf(detail: WorkflowRunDetail, scope: 'partial' | 'full' = 'full') {
+async function resultOf(
+  detail: WorkflowRunDetail,
+  scope: 'partial' | 'full' = 'full',
+  workflow: Workflow = WORKFLOW,
+) {
   return buildWorkflowRunResult(
     { db: DB, payloadStore: PAYLOAD_STORE },
-    { tenantId: TENANT, run: detail, workflow: WORKFLOW, scope },
+    { tenantId: TENANT, run: detail, workflow, scope },
   );
+}
+
+/** WORKFLOW with `docs` ahead of it in workflow order, off the path to `open-pr`. */
+function withSideTask(side: Record<string, unknown>): Workflow {
+  return { ...WORKFLOW, tasks: [{ taskId: 'docs', ...side }, ...WORKFLOW.tasks] } as Workflow;
 }
 
 beforeAll(() => {
@@ -209,5 +218,154 @@ describe('buildWorkflowRunResult — the task that stopped the run', () => {
       'partial',
     );
     expect(result?.stoppedBy).toBeUndefined();
+  });
+});
+
+describe('buildWorkflowRunResult — tasks that did not stop the run', () => {
+  it('passes over an optional task that failed while the run completed', async () => {
+    const workflow = {
+      ...WORKFLOW,
+      tasks: [
+        WORKFLOW.tasks[0],
+        { taskId: 'lint', dependsOn: ['commit'], optional: true },
+        ...WORKFLOW.tasks
+          .slice(1)
+          .map((t) => (t.taskId === 'check' ? { ...t, dependsOn: ['commit', 'lint'] } : t)),
+      ],
+    } as Workflow;
+    const result = await resultOf(
+      run('completed', [
+        row('commit', 'succeeded', 1, { outputRef: 'ref:commit:conflict' }),
+        row('lint', 'failed', 3, { failureReason: 'eslint exited 2' }),
+        row('check', 'skipped', 4),
+        row('push', 'skipped', 4),
+        row('open-pr', 'skipped', 4),
+      ]),
+      'full',
+      workflow,
+    );
+    expect(result?.stoppedBy).toEqual({
+      taskId: 'commit',
+      status: 'succeeded',
+      detail: 'state: conflict — src/a.ts: patch does not apply',
+    });
+  });
+
+  it('names the failed task on the path, not an earlier failure off it', async () => {
+    const result = await resultOf(
+      run('failed', [
+        row('docs', 'failed', 1, { failureReason: 'docs build exited 1' }),
+        row('commit', 'succeeded', 2, { outputRef: 'ref:commit:applied' }),
+        row('check', 'failed', 3, { failureReason: 'yarn test exited 1' }),
+        row('push', 'blocked', 3),
+        row('open-pr', 'blocked', 3),
+      ]),
+      'full',
+      withSideTask({}),
+    );
+    expect(result?.stoppedBy).toEqual({
+      taskId: 'check',
+      status: 'failed',
+      detail: 'yarn test exited 1',
+    });
+  });
+
+  it('names the failure off the path that the run names when it blocked the path', async () => {
+    const result = await resultOf(
+      {
+        ...run('failed', [
+          row('docs', 'failed', 1, { failureReason: 'docs build exited 1' }),
+          row('commit', 'succeeded', 1, { outputRef: 'ref:commit:applied' }),
+          row('check', 'blocked', 2),
+          row('push', 'blocked', 2),
+          row('open-pr', 'blocked', 2),
+        ]),
+        failureJson: {
+          reason: 'task_failed',
+          message: 'The run ended on task docs.',
+          taskIds: ['docs'],
+        },
+      },
+      'full',
+      withSideTask({ failureMode: 'cancel_siblings' }),
+    );
+    expect(result?.stoppedBy).toEqual({
+      taskId: 'docs',
+      status: 'failed',
+      detail: 'docs build exited 1',
+    });
+  });
+
+  it("carries the run's own failure where no task row holds the cause", async () => {
+    const result = await resultOf({
+      ...run('failed', [
+        row('commit', 'succeeded', 1, { outputRef: 'ref:commit:applied' }),
+        row('check', 'succeeded', 2),
+      ]),
+      failureJson: {
+        reason: 'workflow_run_orphaned',
+        message: 'The run lost its dispatcher.',
+      },
+    });
+    expect(result?.stoppedBy).toEqual({
+      taskId: null,
+      status: 'failed',
+      detail: 'The run lost its dispatcher.',
+    });
+  });
+
+  it('reports no stop where sanitisation removed a primary that was produced', async () => {
+    const workflow = {
+      ...WORKFLOW,
+      stateVariables: [{ variableId: 'prUrl', sensitive: true }],
+    } as Workflow;
+    const result = await resultOf(
+      run('completed', [
+        row('commit', 'succeeded', 1, { outputRef: 'ref:commit:applied' }),
+        row('check', 'succeeded', 2),
+        row('push', 'succeeded', 3),
+        row('open-pr', 'succeeded', 4, { outputRef: 'ref:open-pr' }),
+      ]),
+      'full',
+      workflow,
+    );
+    expect(result?.primaryOutput).toBeUndefined();
+    expect(result?.stoppedBy).toBeUndefined();
+  });
+
+  it('keeps an output field that fills a sensitive variable out of the detail', async () => {
+    const workflow = {
+      ...WORKFLOW,
+      tasks: WORKFLOW.tasks.map((t) =>
+        t.taskId === 'commit'
+          ? {
+              ...t,
+              promoteOutputs: [{ kind: 'output_path', path: 'detail', toState: 'conflictDetail' }],
+            }
+          : t,
+      ),
+      stateVariables: [
+        ...WORKFLOW.stateVariables,
+        { variableId: 'conflictDetail', sensitive: true },
+      ],
+    } as Workflow;
+    const result = await resultOf(
+      run('completed', [
+        row('commit', 'succeeded', 1, {
+          outputRef: 'ref:commit:conflict',
+          summary: 'Conflict in src/a.ts: patch does not apply',
+        }),
+        row('check', 'skipped', 2),
+        row('push', 'skipped', 2),
+        row('open-pr', 'skipped', 2),
+      ]),
+      'full',
+      workflow,
+    );
+    expect(result?.stoppedBy).toEqual({
+      taskId: 'commit',
+      status: 'succeeded',
+      detail: 'state: conflict — Conflict in [redacted]',
+    });
   });
 });

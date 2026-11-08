@@ -616,7 +616,8 @@ export function createWorkflowOperationRegistrations(
         pitfalls: [
           'pauseVersion in the contract is freshly injected; always call detail before resume.',
           'A terminal run that ended without its primary output names the task that stopped it in ' +
-            '`result.stoppedBy`, with its status and detail. Read that before any task row.',
+            '`result.stoppedBy`, with its status and detail. A null `taskId` there means the run ' +
+            'failed or was cancelled on its own account. Read that before any task row.',
           'Only pass `present: true` when you intend to show the user; bare observation calls should omit it to avoid card spam.',
         ],
         minimalExampleInput: { runId: '00000000-0000-0000-0000-000000000000' },

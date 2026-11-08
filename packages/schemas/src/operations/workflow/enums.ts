@@ -21,6 +21,18 @@ export const WorkflowRunStatusSchema = z.enum([
 ]);
 export type WorkflowRunStatus = z.infer<typeof WorkflowRunStatusSchema>;
 
+export const WorkflowRunTaskStatusSchema = z.enum([
+  'scheduled',
+  'running',
+  'succeeded',
+  'failed',
+  'paused',
+  'blocked',
+  'skipped',
+  'cancelled',
+]);
+export type WorkflowRunTaskStatus = z.infer<typeof WorkflowRunTaskStatusSchema>;
+
 export const WorkflowLearningCategorySchema = z.enum([
   'worked',
   'failed',

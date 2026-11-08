@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { WorkflowRunTaskStatusSchema } from './enums.js';
 import { WorkflowLearningSchema } from './learning.js';
 
 // ============================================================================
@@ -168,19 +169,31 @@ export const WorkflowRunResultArtifactSchema = z.object({
 export type WorkflowRunResultArtifact = z.infer<typeof WorkflowRunResultArtifactSchema>;
 
 /**
- * The task that stopped a terminal run short of its declared primary output.
- * Present only where `workflow.output.primary` is declared and absent from
- * `output`. A run that ended green carries it too, where a task succeeded with
- * an outcome that its successors skip on.
+ * What stopped a terminal run short of its declared primary output. Present
+ * only where `workflow.output.primary` is declared and no task produced it. A
+ * primary that was produced and then withheld as sensitive is not a stop. A
+ * run that ended green carries it too, where a task succeeded with an outcome
+ * that its successors skip on.
  */
 export const WorkflowRunResultStoppedBySchema = z.object({
-  taskId: z.string().describe('The task that stopped the run.'),
-  status: z.string().describe('Its row status: failed, blocked, cancelled or succeeded.'),
+  taskId: z
+    .string()
+    .nullable()
+    .describe(
+      'The required task on the way to the primary output that stopped the run. Null when the ' +
+        'run failed or was cancelled on its own account, with no task row holding the cause.',
+    ),
+  status: WorkflowRunTaskStatusSchema.describe(
+    'The task row status: failed, blocked or cancelled for a task that stopped, or succeeded ' +
+      'for a task whose outcome skipped its successors. With a null taskId it is the run ' +
+      'status: failed or cancelled.',
+  ),
   detail: z
     .string()
     .optional()
     .describe(
-      'Its own account: the failure reason, or the `state` and `detail` of a succeeded output.',
+      'Its own account: the failure reason, the `state` and `detail` of a succeeded output, or ' +
+        "the run's failure message or cancel reason. Sensitive values are redacted.",
     ),
 });
 export type WorkflowRunResultStoppedBy = z.infer<typeof WorkflowRunResultStoppedBySchema>;
@@ -217,7 +230,7 @@ export const WorkflowRunResultSchema = z.object({
   /** Non-mutating recommendation to the calling agent (e.g. "fix the skill, don't change the API"). */
   advisory: WorkflowRunResultAdvisorySchema.optional(),
   learnings: WorkflowRunResultLearningsSchema.optional(),
-  /** The task that stopped the run short of `workflow.output.primary`. */
+  /** The task, or the run itself, that stopped the run short of `workflow.output.primary`. */
   stoppedBy: WorkflowRunResultStoppedBySchema.optional(),
 });
 export type WorkflowRunResult = z.infer<typeof WorkflowRunResultSchema>;
