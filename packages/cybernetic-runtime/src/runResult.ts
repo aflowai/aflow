@@ -55,6 +55,7 @@ import { selectActiveLearningSet, resolveActiveSetBudget } from './activeLearnin
 import { loadSpaceDirectives } from './modelResolution.js';
 import { resolveSkillForWorkflow } from './skill.js';
 import { getCyberneticLogger } from './logger.js';
+import { buildStoppedBy } from './runStoppedBy.js';
 import type { WorkflowRunDetail, WorkflowTaskRow } from './ledger/types.js';
 
 /**
@@ -355,6 +356,15 @@ export async function buildWorkflowRunResult(
     const outcomes = evaluateDeterministicOutcomes(workflow.outcomes, safeBag, campaign.config);
     if (outcomes) result.outcomes = outcomes;
     if (learnings) result.learnings = learnings;
+    if (declaration?.primary && !primaryOutput) {
+      const stoppedBy = await buildStoppedBy(
+        payloadStore,
+        workflow,
+        run.tasks,
+        declaration.primary,
+      );
+      if (stoppedBy) result.stoppedBy = stoppedBy;
+    }
   }
 
   return Object.keys(result).length > 0 ? result : undefined;

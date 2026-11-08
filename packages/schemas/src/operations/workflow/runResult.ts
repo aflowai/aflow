@@ -168,6 +168,24 @@ export const WorkflowRunResultArtifactSchema = z.object({
 export type WorkflowRunResultArtifact = z.infer<typeof WorkflowRunResultArtifactSchema>;
 
 /**
+ * The task that stopped a terminal run short of its declared primary output.
+ * Present only where `workflow.output.primary` is declared and absent from
+ * `output`. A run that ended green carries it too, where a task succeeded with
+ * an outcome that its successors skip on.
+ */
+export const WorkflowRunResultStoppedBySchema = z.object({
+  taskId: z.string().describe('The task that stopped the run.'),
+  status: z.string().describe('Its row status: failed, blocked, cancelled or succeeded.'),
+  detail: z
+    .string()
+    .optional()
+    .describe(
+      'Its own account: the failure reason, or the `state` and `detail` of a succeeded output.',
+    ),
+});
+export type WorkflowRunResultStoppedBy = z.infer<typeof WorkflowRunResultStoppedBySchema>;
+
+/**
  * Structured "what did this run produce" summary, built once at run-terminal
  * time by `buildWorkflowRunResult` (`@aflow/cybernetic-runtime`) and
  * carried on three surfaces so they can never disagree:
@@ -199,5 +217,7 @@ export const WorkflowRunResultSchema = z.object({
   /** Non-mutating recommendation to the calling agent (e.g. "fix the skill, don't change the API"). */
   advisory: WorkflowRunResultAdvisorySchema.optional(),
   learnings: WorkflowRunResultLearningsSchema.optional(),
+  /** The task that stopped the run short of `workflow.output.primary`. */
+  stoppedBy: WorkflowRunResultStoppedBySchema.optional(),
 });
 export type WorkflowRunResult = z.infer<typeof WorkflowRunResultSchema>;
