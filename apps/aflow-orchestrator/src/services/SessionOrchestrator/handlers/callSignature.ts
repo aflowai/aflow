@@ -1,3 +1,4 @@
+import { MEMORY_READ_BUDGET_CHARS } from '@aflow/memory-paths';
 import { getOperation } from '@aflow/schemas';
 
 /**
@@ -114,4 +115,19 @@ export function countRepeatedCall(
       consecutiveCount === HARD_PAUSE_IDENTICAL_CONSECUTIVE - 1 ? 'final_warning' : 'warning';
   }
   return { recentSignatures, consecutiveCount, verdict };
+}
+
+/**
+ * The warning for consecutive reads of one target that differ only outside the
+ * declared signature. It says how to read more in one call, because a read
+ * without maxBytes returns a bounded window and repeating it is the loop.
+ */
+export function repeatedReadWarning(consecutiveCount: number): string {
+  return (
+    `You have read the same target ${String(consecutiveCount)} times in a row. ` +
+    'Reads that differ only in jsonPath or view count as one call. ' +
+    `A read without maxBytes returns at most ${MEMORY_READ_BUDGET_CHARS.toLocaleString('en-US')} characters. ` +
+    'To read a section whole, pass an explicit maxBytes large enough to hold it. ' +
+    'To page a larger target, read it window by window with byteRange, lineRange or itemRange.'
+  );
 }

@@ -54,6 +54,7 @@ import {
   countRepeatedCall,
   hasDeclaredSignature,
   HARD_PAUSE_IDENTICAL_CONSECUTIVE,
+  repeatedReadWarning,
   type ResolveCallOperation,
 } from './callSignature.js';
 import { clearStaleCredentialBlock } from './credentialBlockScope.js';
@@ -1098,9 +1099,7 @@ export async function applyAgentDecision(params: ApplyAgentDecisionParams): Prom
           repeatedActionSignature: callSignature,
           severity: verdict,
           message: repeatsReadsOfOneTarget
-            ? `You have read the same target ${String(consecutiveCount)} times in a row. ` +
-              'Reads of one target count as one call whatever their jsonPath, view or range. ' +
-              'Read the whole section you need in one call instead of one item at a time.'
+            ? repeatedReadWarning(consecutiveCount)
             : `You have invoked the exact same tool call ${String(consecutiveCount)} times in a row. ` +
               'Do not repeat it again unless the input has materially changed.',
           instruction:

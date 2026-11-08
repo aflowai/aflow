@@ -456,12 +456,30 @@ const memoryReadOptionsShape = {
 const PIN_FIELDS = ['version', 'expectedContentHash'] as const;
 
 /**
- * What identifies a memory.store.get call to the repeated-call detector: the
- * document read, spelled nested or flat as the input preprocess accepts it.
- * The read options in `memoryReadOptionsShape` choose a window onto that
- * document, so reading it one `jsonPath` at a time is one read repeated.
+ * The window arguments of `memoryReadOptionsShape`. Each window returns
+ * different bytes of one target, so paging a large target window by window is
+ * a sequence of distinct reads, not one read repeated.
  */
-const STORE_GET_SIGNATURE_ARGS = ['target.path', 'target.id', 'path', 'id'] as const;
+const READ_WINDOW_SIGNATURE_ARGS = ['byteRange', 'lineRange', 'itemRange', 'maxBytes'] as const;
+
+/**
+ * What identifies a memory.store.get call to the repeated-call detector: the
+ * document and version read, spelled nested or flat as the input preprocess
+ * accepts them, and the window read. `jsonPath` and `view` stay out, so
+ * reading one document one `jsonPath` at a time is one read repeated.
+ */
+const STORE_GET_SIGNATURE_ARGS = [
+  'target.path',
+  'target.id',
+  'target.version',
+  'path',
+  'id',
+  'version',
+  ...READ_WINDOW_SIGNATURE_ARGS,
+] as const;
+
+/** memory.run_output.get: the output path and the window read, as for memory.store.get. */
+const RUN_OUTPUT_GET_SIGNATURE_ARGS = ['path', ...READ_WINDOW_SIGNATURE_ARGS] as const;
 
 export const MemoryGetInputSchema = z.preprocess(
   (val, ctx) => {
@@ -1155,7 +1173,7 @@ export const MemoryOperationRegistrations: OperationRegistration[] = [
       'with jsonPath and window arrays with itemRange { start, count }; for text, use lineRange ' +
       "or byteRange. Reads this run's outputs only — general memory documents need memory.store.get.",
     tags: ['memory', 'read'],
-    decisionSignatureArgs: ['path'],
+    decisionSignatureArgs: RUN_OUTPUT_GET_SIGNATURE_ARGS,
     idempotency: 'idempotent',
     mutates: false,
     usage: {

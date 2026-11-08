@@ -5,6 +5,7 @@ import {
   countRepeatedCall,
   hasDeclaredSignature,
   HARD_PAUSE_IDENTICAL_CONSECUTIVE,
+  repeatedReadWarning,
   SIGNATURE_WINDOW,
   SOFT_WARNING_IDENTICAL_CONSECUTIVE,
   signatureArgs,
@@ -91,20 +92,129 @@ describe('repeat detector on reads of one stored target', () => {
   });
 });
 
+describe('windowed reads of one stored target', () => {
+  const WINDOW = 15_000;
+
+  const storeWindows: Record<string, (i: number) => Record<string, unknown>> = {
+    byteRange: (i) => ({ byteRange: { start: i * WINDOW, end: (i + 1) * WINDOW } }),
+    lineRange: (i) => ({ lineRange: { startLine: i * 200, endLine: (i + 1) * 200 } }),
+    itemRange: (i) => ({ jsonPath: 'tasks', itemRange: { start: i * 50, count: 50 } }),
+    maxBytes: (i) => ({ maxBytes: (i + 1) * 20_000 }),
+  };
+
+  for (const [windowArg, windowAt] of Object.entries(storeWindows)) {
+    it(`runs a paging of one document by ${windowArg} to completion`, () => {
+      const turns = Array.from({ length: SIGNATURE_WINDOW + 4 }, (_, i) => [
+        {
+          toolId: MEMORY_READ_OPERATION_ID,
+          args: { target: { path: RUN_DETAIL_PATH }, view: 'content', ...windowAt(i) },
+        },
+      ]);
+      const counts = runTurns(turns);
+      expect(counts.map((c) => c.verdict).every((v) => v === 'none')).toBe(true);
+      expect(counts.map((c) => c.consecutiveCount).every((n) => n === 1)).toBe(true);
+    });
+  }
+
+  it('runs a paging of one truncated run output to completion', () => {
+    const turns = Array.from({ length: SIGNATURE_WINDOW + 4 }, (_, i) => [
+      {
+        toolId: RUN_OUTPUT_READ_OPERATION_ID,
+        args: {
+          path: RUN_DETAIL_PATH,
+          view: 'content',
+          lineRange: { startLine: i * 200, endLine: (i + 1) * 200 },
+        },
+      },
+    ]);
+    expect(runTurns(turns).every((c) => c.verdict === 'none')).toBe(true);
+  });
+
+  it('still pauses a repeat of one window', () => {
+    const read: SignatureCall = {
+      toolId: MEMORY_READ_OPERATION_ID,
+      args: { target: { path: RUN_DETAIL_PATH }, byteRange: { start: 0, end: WINDOW } },
+    };
+    const loop = runTurns(Array.from({ length: HARD_PAUSE_IDENTICAL_CONSECUTIVE }, () => [read]));
+    expect(loop.at(-1)?.verdict).toBe('pause');
+  });
+
+  it('pauses a jsonPath loop inside one window', () => {
+    const loop = runTurns(
+      Array.from({ length: HARD_PAUSE_IDENTICAL_CONSECUTIVE }, (_, i) => [
+        {
+          toolId: MEMORY_READ_OPERATION_ID,
+          args: {
+            target: { path: RUN_DETAIL_PATH },
+            maxBytes: 4096,
+            jsonPath: `tasks[${String(i)}]`,
+          },
+        },
+      ]),
+    );
+    expect(loop.at(-1)?.verdict).toBe('pause');
+  });
+
+  it('treats successive versions of one document as distinct reads', () => {
+    const versions = (nested: boolean) =>
+      runTurns(
+        Array.from({ length: HARD_PAUSE_IDENTICAL_CONSECUTIVE }, (_, i) => [
+          {
+            toolId: MEMORY_READ_OPERATION_ID,
+            args: nested
+              ? { target: { path: '/notes/plan.md', version: i + 1 }, view: 'content' }
+              : { path: '/notes/plan.md', version: i + 1, view: 'content' },
+          },
+        ]),
+      );
+    expect(versions(true).every((c) => c.verdict === 'none')).toBe(true);
+    expect(versions(false).every((c) => c.verdict === 'none')).toBe(true);
+  });
+});
+
+describe('repeated-read warning', () => {
+  it('names the default window and the arguments that read past it', () => {
+    const text = repeatedReadWarning(SOFT_WARNING_IDENTICAL_CONSECUTIVE);
+    expect(text).toContain('3 times in a row');
+    expect(text).toContain('15,000 characters');
+    expect(text).toContain('explicit maxBytes');
+    expect(text).toContain('byteRange, lineRange or itemRange');
+  });
+});
+
 describe('declared per-operation signature', () => {
-  it('ignores every declared read-shape argument', () => {
+  it('ignores jsonPath and view, and keeps every window argument', () => {
     const bare = signatureArgs(MEMORY_READ_OPERATION_ID, { target: { path: RUN_DETAIL_PATH } });
-    const shaped = signatureArgs(MEMORY_READ_OPERATION_ID, {
-      target: { path: RUN_DETAIL_PATH },
-      jsonPath: 'tasks[7]',
-      view: 'outline',
+    expect(
+      signatureArgs(MEMORY_READ_OPERATION_ID, {
+        target: { path: RUN_DETAIL_PATH },
+        jsonPath: 'tasks[7]',
+        view: 'outline',
+      }),
+    ).toEqual(bare);
+    expect(bare).toEqual({ 'target.path': RUN_DETAIL_PATH });
+
+    const windowed = {
       byteRange: { start: 0, end: 10 },
       lineRange: { startLine: 0, endLine: 5 },
       itemRange: { start: 3, count: 1 },
       maxBytes: 4096,
-    });
-    expect(shaped).toEqual(bare);
-    expect(shaped).toEqual({ 'target.path': RUN_DETAIL_PATH });
+    };
+    expect(
+      signatureArgs(MEMORY_READ_OPERATION_ID, {
+        target: { path: RUN_DETAIL_PATH, version: 2 },
+        jsonPath: 'tasks',
+        ...windowed,
+      }),
+    ).toEqual({ 'target.path': RUN_DETAIL_PATH, 'target.version': 2, ...windowed });
+    expect(
+      signatureArgs(RUN_OUTPUT_READ_OPERATION_ID, {
+        path: RUN_DETAIL_PATH,
+        jsonPath: 'tasks',
+        view: 'content',
+        ...windowed,
+      }),
+    ).toEqual({ path: RUN_DETAIL_PATH, ...windowed });
   });
 
   it('keeps target.id where the call sends one', () => {
