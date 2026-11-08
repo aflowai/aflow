@@ -314,6 +314,65 @@ describe('buildWorkflowRunResult — tasks that did not stop the run', () => {
     });
   });
 
+  it("carries the operator's cancel reason, not a task the cancel reached", async () => {
+    const result = await resultOf({
+      ...run('cancelled', [
+        row('commit', 'succeeded', 1, { outputRef: 'ref:commit:applied' }),
+        row('check', 'cancelled', 2, { failureReason: 'Run cancelled' }),
+        row('push', 'cancelled', 2),
+        row('open-pr', 'cancelled', 2),
+      ]),
+      cancelledBy: 'operator',
+      cancelReason: 'Wrong base branch',
+    });
+    expect(result?.stoppedBy).toEqual({
+      taskId: null,
+      status: 'cancelled',
+      detail: 'cancelled by operator: Wrong base branch',
+    });
+  });
+
+  it('redacts a sensitive number and a sensitive object quoted in a failure reason', async () => {
+    const workflow = {
+      ...WORKFLOW,
+      tasks: WORKFLOW.tasks.map((t) =>
+        t.taskId === 'commit'
+          ? {
+              ...t,
+              promoteOutputs: [
+                { kind: 'output_path', path: 'pin', toState: 'pin' },
+                { kind: 'output_path', path: 'account', toState: 'account' },
+              ],
+            }
+          : t,
+      ),
+      stateVariables: [
+        ...WORKFLOW.stateVariables,
+        { variableId: 'pin', sensitive: true },
+        { variableId: 'account', sensitive: true },
+      ],
+    } as Workflow;
+    const account = { user: 'deploy-bot', token: 'tok-93a1' };
+    OUTPUTS['ref:commit:secrets'] = { state: 'applied', pin: 482913, account };
+    const result = await resultOf(
+      run('failed', [
+        row('commit', 'succeeded', 1, { outputRef: 'ref:commit:secrets' }),
+        row('check', 'failed', 2, {
+          failureReason: `pin 482913 refused for ${JSON.stringify(account)}`,
+        }),
+        row('push', 'blocked', 2),
+        row('open-pr', 'blocked', 2),
+      ]),
+      'full',
+      workflow,
+    );
+    expect(result?.stoppedBy).toEqual({
+      taskId: 'check',
+      status: 'failed',
+      detail: 'pin [redacted] refused for [redacted]',
+    });
+  });
+
   it('reports no stop where sanitisation removed a primary that was produced', async () => {
     const workflow = {
       ...WORKFLOW,

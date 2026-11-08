@@ -4,8 +4,8 @@
  * A run can end green while its headline output never arrived: a task
  * succeeded with an outcome its successors' `when` conditions skip on, such
  * as a commit that conflicted. `result.stoppedBy` names that task, or the
- * run's own failure where no task row holds the cause, so a caller reads one
- * result rather than every task row.
+ * run's own cancel or failure where no task row holds the cause, so a caller
+ * reads one result rather than every task row.
  */
 import type { PayloadStore } from '@aflow/payload-store';
 import {
@@ -23,7 +23,10 @@ const MAX_DETAIL_CHARS = 8_000;
 
 const REDACTED = '[redacted]';
 
-type StoppingRun = Pick<WorkflowRunDetail, 'status' | 'failureJson' | 'cancelReason' | 'tasks'>;
+type StoppingRun = Pick<
+  WorkflowRunDetail,
+  'status' | 'failureJson' | 'cancelledBy' | 'cancelReason' | 'tasks'
+>;
 type StoppingWorkflow = Pick<Workflow, 'tasks' | 'stateVariables'>;
 
 /** What the run named: a task row, or the run itself where no row holds the cause. */
@@ -62,12 +65,14 @@ function namedByRunFailure(failureJson: unknown): Set<string> {
 }
 
 /**
- * Only a required task on the way to a producer of the primary output can
- * stop it: an optional task's failure counts as a satisfied dependency, and a
- * task off that path withholds nothing from it. A failed one comes first. A
- * blocked or cancelled one comes next, behind any task the run's failure
- * names, because a `cancel_siblings` failure off the path blocks the tasks on
- * it. A failed or cancelled run with none of these stopped on its own
+ * A cancelled run stopped on its own account: the cancel cascades into the
+ * task rows, so a cancelled task names the cascade rather than its cause.
+ * Otherwise only a required task on the way to a producer of the primary
+ * output can stop it: an optional task's failure counts as a satisfied
+ * dependency, and a task off that path withholds nothing from it. A failed
+ * one comes first. A blocked or cancelled one comes next, behind any task the
+ * run's failure names, because a `cancel_siblings` failure off the path
+ * blocks the tasks on it. A failed run with none of these stopped on its own
  * account. A run that completed names the latest task that succeeded toward
  * the producer.
  */
@@ -76,6 +81,7 @@ export function findStopper(
   run: StoppingRun,
   primary: string,
 ): RunStopper | undefined {
+  if (run.status === 'cancelled') return { kind: 'run', status: 'cancelled' };
   const rowByTaskId = new Map(run.tasks.map((r) => [r.taskId, r]));
   const onPath = inOrder(workflow, producerAncestry(workflow, primary)).filter(
     (t) => t.optional !== true,
@@ -95,9 +101,7 @@ export function findStopper(
     const named = rowWith(inOrder(workflow, namedByRunFailure(run.failureJson)), 'failed');
     return { kind: 'task', row: named ?? halted };
   }
-  if (run.status === 'failed' || run.status === 'cancelled') {
-    return { kind: 'run', status: run.status };
-  }
+  if (run.status === 'failed') return { kind: 'run', status: 'failed' };
   const latest = latestSucceededTowardProducer(workflow, rowByTaskId, primary);
   return latest ? { kind: 'task', row: latest } : undefined;
 }
@@ -188,13 +192,39 @@ async function describeTaskEnding(
 }
 
 function describeRunEnding(run: StoppingRun): string | undefined {
-  if (run.status === 'cancelled') return text(run.cancelReason);
-  return text(extractRunFailureReason(run.failureJson));
+  if (run.status !== 'cancelled') return text(extractRunFailureReason(run.failureJson));
+  const actor = text(run.cancelledBy);
+  const reason = text(run.cancelReason);
+  if (actor === undefined) return reason;
+  return reason === undefined ? `cancelled by ${actor}` : `cancelled by ${actor}: ${reason}`;
+}
+
+/**
+ * The spellings a sensitive value takes when a reason quotes it: a string as
+ * itself, and a number, boolean or object as its JSON text. An object's
+ * leaves are spelled too, as a message usually quotes one field of it.
+ */
+function sensitiveSpellings(value: unknown): string[] {
+  if (typeof value === 'string') return text(value) === undefined ? [] : [value];
+  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
+    return [String(value)];
+  }
+  if (value === null || typeof value !== 'object') return [];
+  const leaves = Object.values(value).flatMap(sensitiveSpellings);
+  let serialised: string | undefined;
+  try {
+    serialised = JSON.stringify(value);
+  } catch {
+    serialised = undefined;
+  }
+  return serialised === undefined ? leaves : [serialised, ...leaves];
 }
 
 function redact(detail: string, sensitiveValues: readonly string[]): string {
+  // Longest first, so an object's JSON text is replaced whole before its leaves.
+  const spellings = [...new Set(sensitiveValues)].sort((a, b) => b.length - a.length);
   let out = detail;
-  for (const value of sensitiveValues) out = out.split(value).join(REDACTED);
+  for (const value of spellings) out = out.split(value).join(REDACTED);
   return out;
 }
 
@@ -225,8 +255,7 @@ export async function buildStoppedBy(
   );
   const sensitiveValues = Object.entries(bag)
     .filter(([key]) => sensitiveIds.has(key))
-    .map(([, value]) => value)
-    .filter((value): value is string => text(value) !== undefined);
+    .flatMap(([, value]) => sensitiveSpellings(value));
 
   let head: Pick<WorkflowRunResultStoppedBy, 'taskId' | 'status'>;
   let detail: string | undefined;

@@ -181,7 +181,7 @@ export const WorkflowRunResultStoppedBySchema = z.object({
     .nullable()
     .describe(
       'The required task on the way to the primary output that stopped the run. Null when the ' +
-        'run failed or was cancelled on its own account, with no task row holding the cause.',
+        'run was cancelled, or failed on its own account with no task row holding the cause.',
     ),
   status: WorkflowRunTaskStatusSchema.describe(
     'The task row status: failed, blocked or cancelled for a task that stopped, or succeeded ' +
@@ -193,7 +193,8 @@ export const WorkflowRunResultStoppedBySchema = z.object({
     .optional()
     .describe(
       'Its own account: the failure reason, the `state` and `detail` of a succeeded output, or ' +
-        "the run's failure message or cancel reason. Sensitive values are redacted.",
+        "the run's failure message, or who cancelled the run and why. Sensitive values are " +
+        'redacted.',
     ),
 });
 export type WorkflowRunResultStoppedBy = z.infer<typeof WorkflowRunResultStoppedBySchema>;
