@@ -12,6 +12,7 @@ import {
   WorkbenchSection,
   WorkbenchSectionPending,
   useWorkbenchSectionFold,
+  useWorkbenchSectionHeld,
 } from './WorkbenchSection.js';
 
 /**
@@ -71,6 +72,7 @@ export function WorkbenchSchedules({
   const fold = useWorkbenchSectionFold();
   const schedules = data?.schedules ?? [];
   const unlisted = Math.max(0, (data?.total ?? schedules.length) - schedules.length);
+  useWorkbenchSectionHeld(schedules.length > 0);
 
   const queryClient = useQueryClient();
   const noticeIds = state.lanes.notices.map((item) => item.id).join(',');

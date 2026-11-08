@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useState, type ReactNode } from 'react';
+import { memo, useCallback, useState, type ReactNode } from 'react';
 import { ChatMessage, Icon, IconButton, Text } from '@aflow/design-system';
 import { formatTime } from '../run-timeline/displayHelpers.js';
 import { ContentRenderer } from '../content-renderer.js';
@@ -69,7 +69,12 @@ function DeliveryIndicator({
   );
 }
 
-export function MessageWithCopy({
+/**
+ * Memoized on the message's identity. The run-view reducer keeps that identity
+ * for every message a re-hydrate carries unchanged, so a page of older history
+ * renders only the messages it adds.
+ */
+export const MessageWithCopy = memo(function MessageWithCopy({
   message: msg,
   userAvatar,
   showSubflowHeader,
@@ -297,4 +302,4 @@ export function MessageWithCopy({
       />
     </div>
   );
-}
+});

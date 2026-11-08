@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   HostFilePatchInputSchema,
-  HostFilePatchOutputSchema,
   HostHarnessRunInputSchema,
   HostHarnessRunOutputSchema,
 } from '../host.js';
+import { HostFilePatchOutputSchema } from '../hostFilePatchOutput.js';
 import { HostOperationRegistrations } from '../hostRegistrations.js';
 import { toJsonSchemaSync } from '../../utils/jsonSchema.js';
 

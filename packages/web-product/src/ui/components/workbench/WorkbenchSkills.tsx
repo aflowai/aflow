@@ -12,6 +12,7 @@ import {
   WorkbenchLink,
   WorkbenchSection,
   WorkbenchSectionPending,
+  useWorkbenchSectionHeld,
 } from './WorkbenchSection.js';
 import { useRoomActivity } from '../../hooks/use-room-activity.js';
 
@@ -104,6 +105,7 @@ export function WorkbenchSkills({
   }, [skills, activeBySlug]);
 
   const empty = skills.length === 0;
+  useWorkbenchSectionHeld(!empty);
   if (empty && loading) return <WorkbenchSectionPending title="Skills" icon="skill" />;
 
   return (

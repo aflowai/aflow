@@ -42,6 +42,8 @@ import {
   HostCommitDescribeOutputSchema,
   HostFilePatchInputSchema,
   HostFilePatchOutputSchema,
+  HostPatchConflictRemedySchema,
+  type HostPatchConflictRemedy,
   HostPushAreasSchema,
   HOST_BINARY_FILE_LINES,
   isEvalPlaneOperation,
@@ -83,8 +85,12 @@ import {
   STANDARD_REASON,
   UNMEASURED_REASON,
 } from './publishLocalChangesReview.js';
-import { COMMIT_CONFLICT, COMMIT_EMPTY } from './publishLocalChangesCommitStops.js';
-import { PUBLISH_AS_IT_STANDS } from './publishLocalChangesProse.js';
+import {
+  COMMIT_CONFLICT,
+  COMMIT_EMPTY,
+  CONFLICT_REMEDIES,
+} from './publishLocalChangesCommitStops.js';
+import { PUBLISH_AS_IT_STANDS, publishAsItStands } from './publishLocalChangesProse.js';
 import { FIX_ROUND_BRIEF_FINDINGS } from './publishLocalChangesFixRound.js';
 import { REPOSITORY_UNKNOWN_FAILURE } from './publishLocalChangesRepository.js';
 import {
@@ -2786,13 +2792,17 @@ describe('Publish Local Changes — a commit that makes nothing fails the run, n
   const NO_GIT_ACCOUNT = 'The patch does not apply to the folder as it stands.';
 
   /** A `clean` apply with no `mergeFrom` marks no file, so it names no conflicts. */
-  function conflict(detail?: string): Record<string, unknown> {
+  function conflict(
+    detail?: string,
+    remedy: HostPatchConflictRemedy = { kind: 'fit_branch_head', at: HEAD, branchExisted: true },
+  ): Record<string, unknown> {
     return HostFilePatchOutputSchema.parse({
       state: 'conflict',
       filesChanged: 0,
       files: ['src/a.ts', 'src/b.ts'],
       conflicts: [],
       ...(detail === undefined ? {} : { detail }),
+      remedy,
     });
   }
 
@@ -2871,40 +2881,65 @@ describe('Publish Local Changes — a commit that makes nothing fails the run, n
     }
   }
 
-  it("carries git's account of the conflict into the reason, and says so where git gave none", () => {
+  const REMEDY_KINDS = HostPatchConflictRemedySchema.shape.kind.options;
+  const remedyFor = (kind: HostPatchConflictRemedy['kind']): HostPatchConflictRemedy => ({
+    kind,
+    at: STRANDED,
+    branchExisted: kind === 'publish_as_it_stands' || kind === 'fit_branch_head',
+  });
+
+  it("carries git's account and the executor's remedy into the reason", () => {
     expect(endingIn(conflict(ALREADY_APPLIED)).inputs.get('commit-conflict')).toEqual({
-      reason: `The patch did not apply on \`aflow/x\`, and nothing was committed. git said: ${ALREADY_APPLIED}`,
+      reason: `The patch did not apply on \`aflow/x\`, and nothing was committed. git said: ${ALREADY_APPLIED} The remedy is \`fit_branch_head\`, at \`${HEAD}\`.`,
     });
-    expect(endingIn(conflict()).inputs.get('commit-conflict')).toEqual({
-      reason:
-        'The patch did not apply on `aflow/x`, and nothing was committed. git named nothing it could not place.',
-    });
+    for (const kind of REMEDY_KINDS) {
+      expect(endingIn(conflict(undefined, remedyFor(kind))).inputs.get('commit-conflict')).toEqual({
+        reason: `The patch did not apply on \`aflow/x\`, and nothing was committed. git named nothing it could not place. The remedy is \`${kind}\`, at \`${STRANDED}\`.`,
+      });
+    }
     expect(endingIn(EMPTY).inputs.get('commit-empty')).toEqual({
       reason: 'The change touched no file, so nothing was committed on `aflow/x`.',
     });
   });
 
-  it('names, for a patch the branch already holds, the publication as it stands at its head', () => {
+  for (const posture of ['always', 'never', 'unless-unreviewed'] as const) {
+    for (const kind of REMEDY_KINDS) {
+      it(`${posture}, remedy \`${kind}\`: fails the run at \`commit-conflict\``, () => {
+        const outcome = endingIn(conflict(undefined, remedyFor(kind)), { pushApproval: posture });
+        expect(completed(outcome)).toBe(false);
+        expect(outcome.statuses.get('commit-conflict')).toBe('failed');
+        expect(outcome.pushed).toBe(false);
+      });
+    }
+  }
+
+  it('answers every remedy kind the executor computes, and only those', () => {
+    expect(Object.keys(CONFLICT_REMEDIES)).toEqual([...REMEDY_KINDS]);
     const failure = taskOrThrow('commit-conflict').failureInstruction ?? '';
+    expect(failure).toBe(COMMIT_CONFLICT);
     expect(failure).toContain('nothing was committed and no branch was created or moved');
-    expect(failure).toContain('already exists in the working directory');
-    expect(failure).toContain('the patch does not apply');
-    expect(failure).toContain("the branch's head already carries this change");
-    expect(failure).toContain('never send the patch again');
-    expect(failure).toContain(
-      "`baseSha` the branch's head, which is this run's own `baseSha` where it appended to the branch",
-    );
-    expect(failure).toContain('no `patchRef`, `patch`, `mergeFrom` or `commitMessage`');
+    for (const kind of REMEDY_KINDS) {
+      expect(failure).toContain(`\`${kind}\`: ${CONFLICT_REMEDIES[kind]}`);
+    }
+    // Readings of git's text that the executor does not make are gone: the
+    // remedy is the executor's, so the instruction reads no detail itself.
+    expect(failure).not.toContain('already exists in the working directory');
+    expect(failure).not.toContain('Re-decide from the detail');
+    expect(failure).not.toContain("the commission's values");
+  });
+
+  it('publishes a branch whose head holds the change as it stands at that head, which the executor accepts', () => {
+    const entry = CONFLICT_REMEDIES.publish_as_it_stands;
+    expect(entry).toContain(publishAsItStands("`at`, the branch's head the reason names"));
+    expect(entry).toContain('Never send the patch again');
     // A conflict reports no commit, so the remedy cannot name one.
     expect(conflict(ALREADY_APPLIED)['commit']).toBeUndefined();
-    expect(failure).not.toContain('`commit.sha`');
+    expect(entry).not.toContain('`commit.sha`');
 
-    // The path exists: the round that re-sent its patch, then the run the text names.
-    const resent = endingIn(conflict(ALREADY_APPLIED), {
+    const resent = endingIn(conflict(ALREADY_APPLIED, remedyFor('publish_as_it_stands')), {
       inputs: { baseSha: STRANDED },
     });
     expect(completed(resent)).toBe(false);
-    expect(resent.statuses.get('commit-conflict')).toBe('failed');
     const again = publish({
       pushApproval: 'never',
       review: 'approve',
@@ -2922,95 +2957,31 @@ describe('Publish Local Changes — a commit that makes nothing fails the run, n
     expect(again.pushed).toBe(true);
   });
 
-  it('never says the base moved, because a clean apply lands only at the commit the run names', () => {
-    const failure = taskOrThrow('commit-conflict').failureInstruction ?? '';
-    // A moved branch is refused as a stale base before any apply, so a
-    // conflict cannot be the merge round's case.
-    expect(failure).toContain('The base did not move under the patch');
-    expect(failure).not.toContain('the base moved under the patch');
-    expect(failure).not.toContain('the merge round');
-    expect(failure).not.toContain('`mergeFrom: origin/<base>`');
+  it('never sends a run on an existing branch to another `baseSha`, which the executor refuses as `stale_base`', () => {
+    const entry = CONFLICT_REMEDIES.fit_branch_head;
+    expect(entry).toContain(
+      'A new run on this branch naming a `baseSha` other than `at` is refused as `stale_base` before any apply.',
+    );
+    expect(entry).toContain('commission the change again from this branch');
+    expect(entry).not.toContain('publish the same `patchRef` again with it');
+    expect(entry).not.toContain('To publish this branch as it stands');
   });
 
-  /** Which part of the instruction each conflict shape the executor can produce is answered by. */
-  const shapes: [string, string, string[]][] = [
-    [
-      'a patch the branch already holds',
-      ALREADY_APPLIED,
-      ["ask first whether the branch's head already carries this change"],
-    ],
-    [
-      'a hunk that does not fit the commit named',
-      HUNK_MISFIT,
-      [
-        "ask first whether the branch's head already carries this change",
-        "Otherwise git's detail names the files and hunks that do not fit the commit this run applied the patch at.",
-      ],
-    ],
-    [
-      'a file the commit named lacks',
-      FILE_MISSING,
-      [
-        "Otherwise git's detail names the files and hunks that do not fit the commit this run applied the patch at.",
-      ],
-    ],
-    [
-      "the executor's own account",
-      NO_GIT_ACCOUNT,
-      [
-        "ask first whether the branch's head already carries this change",
-        "Otherwise git's detail names the files and hunks that do not fit the commit this run applied the patch at.",
-      ],
-    ],
-  ];
-  for (const [what, detail, answeredBy] of shapes) {
-    it(`answers ${what} with a remedy the detail selects`, () => {
-      const failure = taskOrThrow('commit-conflict').failureInstruction ?? '';
-      const reason = String(endingIn(conflict(detail)).inputs.get('commit-conflict')?.['reason']);
-      expect(reason).toContain(`git said: ${detail}`);
-      for (const part of answeredBy) expect(failure).toContain(part);
-      if (/already exists in|patch does not apply/.test(detail)) {
-        expect(failure).toContain('already exists in the working directory');
-        expect(failure).toContain('that the patch does not apply');
-      }
-    });
-  }
-
-  it('gives a run that appended to a branch the inputs to compare, and the commission again where they match', () => {
-    const failure = taskOrThrow('commit-conflict').failureInstruction ?? '';
-    expect(failure).toContain(
-      'Where this run appended to an existing branch, the patch was applied at its head, which is the `baseSha` given, merged with any `mergeFrom` given.',
-    );
-    expect(failure).toContain(
-      'Compare those with the `baseSha` and `merge.from` the commission reported.',
-    );
-    expect(failure).toContain(
-      "Where they differ, publish the same `patchRef` again with the commission's values.",
-    );
-    expect(failure).toContain('so commission the change again from this branch');
-    for (const id of ['patchRef', 'baseSha', 'mergeFrom']) {
-      expect(runInputOrThrow(id).id).toBe(id);
+  it('never offers a run that was making a new branch a publication as it stands, which the executor refuses', () => {
+    for (const kind of ['nothing_to_commit', 'fit_another_base'] as const) {
+      const entry = CONFLICT_REMEDIES[kind];
+      expect(entry, kind).toContain('This run was making a new branch');
+      expect(entry, kind).not.toContain('To publish this branch as it stands');
+      // `mergeFrom` merges only into a branch that exists.
+      expect(entry, kind).not.toContain('`mergeFrom`');
     }
-  });
-
-  it('tells a run that was making a new branch that no branch exists to merge forward, and to re-decide from the detail', () => {
-    const failure = taskOrThrow('commit-conflict').failureInstruction ?? '';
-    const appended = failure.indexOf('Where this run appended to an existing branch');
-    const fresh = failure.indexOf(
-      'Where this run was making a new branch, the branch is new and was not created, so there is no branch to merge forward.',
+    expect(CONFLICT_REMEDIES.nothing_to_commit).toContain(
+      'No branch exists, so a publication of it as it stands is refused.',
     );
-    expect(appended).toBeGreaterThan(-1);
-    expect(fresh).toBeGreaterThan(appended);
-    const newBranch = failure.slice(fresh);
-    expect(newBranch).toContain(
-      "The patch was applied at the `baseSha` given, or at the folder's HEAD where none was given. Re-decide from the detail.",
+    expect(CONFLICT_REMEDIES.fit_another_base).toContain(
+      'A new branch starts at any `baseSha` named',
     );
-    expect(newBranch).toContain(
-      "Where no `baseSha` was given, or it is not the one the commission reported, publish the same `patchRef` again with the commission's `baseSha`.",
-    );
-    expect(newBranch).toContain('Otherwise commission the change again.');
-    expect(newBranch).not.toContain('`mergeFrom`');
-    expect(newBranch).not.toContain('from this branch');
+    for (const id of ['patchRef', 'baseSha']) expect(runInputOrThrow(id).id).toBe(id);
   });
 
   it('names, for a change that touches no file, the commission to read and the branch as it stands', () => {

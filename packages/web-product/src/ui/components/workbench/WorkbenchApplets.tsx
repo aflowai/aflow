@@ -14,6 +14,7 @@ import {
   WorkbenchLink,
   WorkbenchSection,
   WorkbenchSectionPending,
+  useWorkbenchSectionHeld,
 } from './WorkbenchSection.js';
 
 interface AppletsListResponse {
@@ -94,6 +95,7 @@ export function WorkbenchApplets({
   const activity = useRoomActivity(spaceId, roomIds);
 
   const empty = groups.length === 0;
+  useWorkbenchSectionHeld(!empty);
   if (empty && query.isLoading)
     return <WorkbenchSectionPending title="Applets" icon="squares-four" />;
 

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { memo, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Icon, Text } from '@aflow/design-system';
 import type { Message } from '../../lib/types.js';
 import { MessageWithCopy } from './MessageWithCopy.js';
@@ -29,7 +29,7 @@ function buildInterimSummary(messages: Message[]): string {
 /** Max collapsed height (px) for individual messages inside an interim group. */
 const INTERIM_MSG_MAX_HEIGHT = 120;
 
-function TruncatableInterimMessage({
+const TruncatableInterimMessage = memo(function TruncatableInterimMessage({
   message,
   userAvatar,
 }: {
@@ -69,9 +69,9 @@ function TruncatableInterimMessage({
       )}
     </div>
   );
-}
+});
 
-export function CollapsibleInterimGroup({
+export const CollapsibleInterimGroup = memo(function CollapsibleInterimGroup({
   messages,
   userAvatar,
   subflowSource,
@@ -144,4 +144,4 @@ export function CollapsibleInterimGroup({
   // a positioning container that paints a continuous 2px bridge at the chain's
   // x position, extending slightly above/below to overlap adjacent borders.
   return subflowSource ? <div className="chat-interim-group-bridge">{box}</div> : box;
-}
+});

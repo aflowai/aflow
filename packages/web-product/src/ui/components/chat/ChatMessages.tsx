@@ -34,7 +34,11 @@ import { UserAvatar, useCurrentUser } from '../user-avatar.js';
 import { ParticipantBadge } from '../room/ParticipantBadge.js';
 import type { ConversationItem, RequiredInput } from '../../lib/types.js';
 import type { ActivitySignal } from '../../hooks/use-activity-bubble.js';
-import { groupConversationItems } from './chat-message-grouping.js';
+import {
+  groupConversationItems,
+  reuseUnchangedRenderItems,
+  type RenderItem,
+} from './chat-message-grouping.js';
 import { MessageWithCopy } from './MessageWithCopy.js';
 import { TranscriptEntranceProvider } from './TranscriptEntranceContext.js';
 import { TruncatedHistoryEdge } from '../truncated-history-edge.js';
@@ -285,17 +289,22 @@ export function ChatMessages({
   onCancelQueuedSend,
 }: ChatMessagesProps) {
   const user = useCurrentUser();
-  const userAvatar = user ? (
-    <ParticipantBadge
-      name={user.displayName || 'You'}
-      avatarUrl={user.avatarUrl}
-      role={undefined}
-      driving={false}
-      overlapping={false}
-      size={CHAT_AVATAR_SIZE}
-    />
-  ) : (
-    <UserAvatar user={user} size={CHAT_AVATAR_SIZE} />
+  // Held across renders because every memoized message row receives it.
+  const userAvatar = useMemo(
+    () =>
+      user ? (
+        <ParticipantBadge
+          name={user.displayName || 'You'}
+          avatarUrl={user.avatarUrl}
+          role={undefined}
+          driving={false}
+          overlapping={false}
+          size={CHAT_AVATAR_SIZE}
+        />
+      ) : (
+        <UserAvatar user={user} size={CHAT_AVATAR_SIZE} />
+      ),
+    [user],
   );
 
   // Sticky-bottom scroll state from `ChatLayout` (it owns the scroll container).
@@ -334,7 +343,14 @@ export function ChatMessages({
     if (landed) restoreAnchor();
   }, [isLoadingOlder, items, restoreAnchor]);
 
-  const renderItems = useMemo(() => groupConversationItems(items), [items]);
+  const shownRenderItemsRef = useRef<RenderItem[]>([]);
+  const renderItems = useMemo(
+    () => reuseUnchangedRenderItems(shownRenderItemsRef.current, groupConversationItems(items)),
+    [items],
+  );
+  useLayoutEffect(() => {
+    shownRenderItemsRef.current = renderItems;
+  }, [renderItems]);
 
   const firstUnread = useMemo(
     () => findFirstUnread(items, seenMessageSeq ?? null, user?.userId),

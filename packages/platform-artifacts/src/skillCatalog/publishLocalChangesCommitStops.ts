@@ -1,3 +1,5 @@
+import type { HostPatchConflictRemedy } from '@aflow/schemas';
+
 import { bind, ctx, out, runInput, SKIP } from './localPrShepherdWiring.js';
 import { publishAsItStands } from './publishLocalChangesProse.js';
 
@@ -13,27 +15,37 @@ const AS_IT_STANDS_AT_HEAD = publishAsItStands(
 );
 
 /**
- * `clean` mode applies a patch only at the commit the run names: an existing
- * branch whose head is not `baseSha` is refused as a stale base before any
- * apply, and a new branch starts at `baseSha` or the folder's HEAD. So a
- * conflict never means the base moved under the patch. Either the branch's
- * head already holds the patch, or the run named a commit the patch was not
- * made against.
+ * What each remedy the executor computes on a conflict lets the caller do
+ * (`HostPatchConflictRemedySchema`). The executor decides the kind from its
+ * own refusal rules, so this text predicts no outcome of its own. Keyed by
+ * kind, so a test can hold each entry to the rule it rests on.
  */
+export const CONFLICT_REMEDIES: Record<HostPatchConflictRemedy['kind'], string> = {
+  publish_as_it_stands:
+    'The branch existed, and its head `at` already holds this change. Never send the patch again. ' +
+    publishAsItStands("`at`, the branch's head the reason names"),
+  nothing_to_commit:
+    'This run was making a new branch, and `at` already holds this change. A commit at `at` would change nothing. ' +
+    'No branch exists, so a publication of it as it stands is refused. Report that `at` already holds the change.',
+  fit_branch_head:
+    'The branch existed, and its head `at` does not hold this change. ' +
+    'A new run on this branch naming a `baseSha` other than `at` is refused as `stale_base` before any apply. ' +
+    "Where the commission reported `baseSha` `at` and a `merge.from` other than this run's `mergeFrom`, publish the same `patchRef` again with that `mergeFrom`. " +
+    'Otherwise commission the change again from this branch, so its patch is made against `at`.',
+  fit_another_base:
+    'This run was making a new branch, and `at` does not hold this change. ' +
+    'A new branch starts at any `baseSha` named, so a new run is not refused for its base. ' +
+    'Where the commission reported a `baseSha` other than `at`, publish the same `patchRef` again with it. ' +
+    'Otherwise commission the change again.',
+};
+
 export const COMMIT_CONFLICT =
-  "The patch did not apply, so nothing was committed and no branch was created or moved. Nothing left the machine. The reason above quotes what git could not place. Where it says a file already exists in the working directory, or that the patch does not apply, ask first whether the branch's head already carries this change. It does where an earlier publication of this branch committed the same patch. Then never send the patch again, because the branch already holds it. " +
-  AS_IT_STANDS_AT_HEAD +
-  " Otherwise git's detail names the files and hunks that do not fit the commit this run applied the patch at. " +
-  'The base did not move under the patch, because an existing branch whose head is not `baseSha` is refused before any apply. ' +
-  'Either this run named the wrong commit, or the patch was not made against it. ' +
-  'Where this run appended to an existing branch, the patch was applied at its head, which is the `baseSha` given, merged with any `mergeFrom` given. ' +
-  'Compare those with the `baseSha` and `merge.from` the commission reported. ' +
-  "Where they differ, publish the same `patchRef` again with the commission's values. " +
-  'Where they match, the patch does not fit the commit it was made against, so commission the change again from this branch. ' +
-  'Where this run was making a new branch, the branch is new and was not created, so there is no branch to merge forward. ' +
-  "The patch was applied at the `baseSha` given, or at the folder's HEAD where none was given. Re-decide from the detail. " +
-  "Where no `baseSha` was given, or it is not the one the commission reported, publish the same `patchRef` again with the commission's `baseSha`. " +
-  "Where the folder's HEAD already carries the change, this patch needs no new branch. Otherwise commission the change again.";
+  'The patch did not apply, so nothing was committed and no branch was created or moved. Nothing left the machine. ' +
+  'The reason quotes what git could not place, and names the remedy the executor computed and `at`, the commit the patch was applied at. ' +
+  'Act on that remedy alone. ' +
+  Object.entries(CONFLICT_REMEDIES)
+    .map(([kind, text]) => `\`${kind}\`: ${text}`)
+    .join(' ');
 
 export const COMMIT_EMPTY =
   "The change touched no file, so nothing was committed and no branch was created or moved. Nothing left the machine. Either the commission that reported this `patchRef` changed nothing, or the `patch` handed over is empty. Read the commission's result for why. Where the change was never made, commission it again. Where an earlier publication of this branch already committed it, never send the patch again. " +
@@ -59,6 +71,8 @@ export const COMMIT_STOP_TASKS = [
     inputBindings: {
       branch: runInput('branch'),
       detail: out('commit', 'detail'),
+      remedy: out('commit', 'remedy.kind'),
+      at: out('commit', 'remedy.at'),
     },
     context: ctx('workflow.run.fail'),
     inputTemplate: {
@@ -73,6 +87,11 @@ export const COMMIT_STOP_TASKS = [
               'git named nothing it could not place.',
             ],
           },
+          ' The remedy is `',
+          bind('remedy'),
+          '`, at `',
+          bind('at'),
+          '`.',
         ],
       },
     },

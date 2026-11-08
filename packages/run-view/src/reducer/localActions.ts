@@ -2,6 +2,7 @@ import type { Message, WorkflowRunSurfaceState, WorkflowSurfaceTaskState } from 
 import { INITIAL_STATE, type RunViewState, type RunViewAction } from './state.js';
 import { shouldAcceptTaskUpdate, bumpSurfaceRevision } from './helpers.js';
 import { hydrateHarnessActivity } from './events/harnessActivity.js';
+import { reuseUnchangedMessages } from './messageIdentity.js';
 
 export function applyLocalAction(state: RunViewState, action: RunViewAction): RunViewState | null {
   switch (action.type) {
@@ -11,6 +12,7 @@ export function applyLocalAction(state: RunViewState, action: RunViewAction): Ru
     case 'HYDRATE_SNAPSHOT':
       return {
         ...action.snapshot,
+        messages: reuseUnchangedMessages(state.messages, action.snapshot.messages),
         harnessActivity: hydrateHarnessActivity(state.harnessActivity, action.snapshot),
       };
 
