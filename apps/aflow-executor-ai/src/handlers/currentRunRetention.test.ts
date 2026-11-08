@@ -187,6 +187,7 @@ async function assembledStore(atoms: AiMessageAtomV1[], turnNumber: number) {
 const idsOf = (store: ConversationStateStore) =>
   new Set(store.getState().history.atoms.map((a) => a.atomId));
 
+/** `forced` is the hard-budget pass. */
 type ClearPath = 'pressure' | 'forced';
 
 async function clearBy(path: ClearPath, store: ConversationStateStore) {
@@ -217,7 +218,7 @@ describe('retention constants', () => {
     expect(RETENTION_POLICY.minClearNetSavings(1_000)).toBe(2_000);
   });
 
-  it('starts the current run at the latest user_input, or at the start of history without one', () => {
+  it('starts the current run at the latest user_input, and returns -1 for a history without one', () => {
     const atoms = sortedByTurn([userAtom(0, 'open'), ...chain('p', 1, 3), userAtom(5, 'next')]);
     expect(currentRunStartIndex(atoms)).toBe(atoms.findIndex((a) => a.atomId === 'user-5'));
     expect(currentRunStartIndex(chain('p', 1, 3))).toBe(-1);
@@ -228,66 +229,112 @@ describe('retention constants', () => {
 // Recency floor — both clearing paths
 // ============================================================================
 
-describe('the recency floor binds both clearing paths', () => {
-  it.each<ClearPath>(['pressure', 'forced'])(
-    '%s clearing never takes an exchange inside the floor, even from a finished run',
-    async (path) => {
-      // A finished run at turns 1..19, the next request at 20, now turn 22.
-      const atoms = [userAtom(0, 'open'), ...chain('p', 1, 18), userAtom(20, 'next request')];
-      const { store } = await assembledStore(atoms, 22);
+describe('the recency floor binds pressure clearing, and only the hard-budget pass breaches it', () => {
+  // A finished run at turns 1..19, the next request at 20, now turn 22.
+  const finishedRun = () => [
+    userAtom(0, 'open'),
+    ...chain('p', 1, 18),
+    userAtom(20, 'next request'),
+  ];
+  // Exchange pN spans turns N and N+1, so the newest Tier-2 may clear ends
+  // one turn before the floor.
+  const newestClearable = 22 - RECENT_TURNS_FLOOR - 2;
 
-      const result = await clearBy(path, store);
+  it('pressure clearing never takes an exchange inside the floor, even from a finished run', async () => {
+    const { store } = await assembledStore(finishedRun(), 22);
 
-      // Exchange pN spans turns N and N+1, so the newest it may clear ends
-      // one turn before the floor.
-      const newestClearable = 22 - RECENT_TURNS_FLOOR - 2;
-      const cleared = store.getState().clearing?.clearedExchanges ?? [];
-      expect(result?.clearedExchangeCount).toBeGreaterThan(0);
-      expect(cleared).toContain(`p${String(newestClearable)}`);
-      const kept = idsOf(store);
-      for (let t = newestClearable + 1; t <= 18; t++) {
-        expect(cleared).not.toContain(`p${String(t)}`);
-        expect(kept.has(`asst-p${String(t)}`)).toBe(true);
-        expect(kept.has(`res-p${String(t)}`)).toBe(true);
-      }
-    },
-  );
+    const result = await clearBy('pressure', store);
+
+    const cleared = store.getState().clearing?.clearedExchanges ?? [];
+    expect(result?.clearedExchangeCount).toBeGreaterThan(0);
+    expect(cleared).toContain(`p${String(newestClearable)}`);
+    const kept = idsOf(store);
+    for (let t = newestClearable + 1; t <= 18; t++) {
+      expect(cleared).not.toContain(`p${String(t)}`);
+      expect(kept.has(`asst-p${String(t)}`)).toBe(true);
+      expect(kept.has(`res-p${String(t)}`)).toBe(true);
+    }
+  });
+
+  it('the hard-budget pass clears inside the floor, oldest first', async () => {
+    const { store } = await assembledStore(finishedRun(), 22);
+
+    await store.forceClearExcess({
+      excessTokens: 10_000_000,
+      availableReadOpId: MEMORY_READ_OPERATION_ID,
+    });
+
+    const cleared = store.getState().clearing?.clearedExchanges ?? [];
+    for (let t = 1; t <= 18; t++) expect(cleared).toContain(`p${String(t)}`);
+    // Oldest first: a small excess takes the oldest exchange only.
+    const second = await assembledStore(finishedRun(), 22);
+    await second.store.forceClearExcess({
+      excessTokens: 1,
+      availableReadOpId: MEMORY_READ_OPERATION_ID,
+    });
+    expect(second.store.getState().clearing?.clearedExchanges).toEqual(['p1']);
+  });
 });
 
 // ============================================================================
 // Current-run exclusion — exchanges since the latest user_input
 // ============================================================================
 
-describe('the current run is never a clearing candidate', () => {
-  it.each<ClearPath>(['pressure', 'forced'])(
-    '%s clearing takes the finished run and leaves every exchange of the current run',
-    async (path) => {
-      // A finished run at 1..7, the request at 8, a long current run 8..40, now 41.
-      const atoms = [
-        userAtom(0, 'open'),
-        ...chain('p', 1, 6),
-        userAtom(8, 'next request'),
-        ...chain('c', 8, 39),
-      ];
-      const { store } = await assembledStore(atoms, 41);
+describe('the current run is a clearing candidate only for the hard-budget pass', () => {
+  // A finished run at 1..7, the request at 8, a long current run 8..40, now 41.
+  const withCurrentRun = () => [
+    userAtom(0, 'open'),
+    ...chain('p', 1, 6),
+    userAtom(8, 'next request'),
+    ...chain('c', 8, 39),
+  ];
 
-      await clearBy(path, store);
+  it('pressure clearing takes the finished run and leaves every exchange of the current run', async () => {
+    const { store } = await assembledStore(withCurrentRun(), 41);
 
-      const cleared = store.getState().clearing?.clearedExchanges ?? [];
-      expect(cleared.length).toBeGreaterThan(0);
-      expect(cleared.every((key) => key.startsWith('p'))).toBe(true);
-      const kept = idsOf(store);
-      for (let t = 8; t <= 39; t++) {
-        expect(kept.has(`asst-c${String(t)}`)).toBe(true);
-        expect(kept.has(`res-c${String(t)}`)).toBe(true);
-      }
-    },
-  );
+    await clearBy('pressure', store);
 
-  it('treats a history without any user_input as one run and clears none of it', async () => {
+    const cleared = store.getState().clearing?.clearedExchanges ?? [];
+    expect(cleared.length).toBeGreaterThan(0);
+    expect(cleared.every((key) => key.startsWith('p'))).toBe(true);
+    const kept = idsOf(store);
+    for (let t = 8; t <= 39; t++) {
+      expect(kept.has(`asst-c${String(t)}`)).toBe(true);
+      expect(kept.has(`res-c${String(t)}`)).toBe(true);
+    }
+  });
+
+  it('the hard-budget pass clears the current run and its floor, and keeps the pinned atoms', async () => {
+    const { store } = await assembledStore(withCurrentRun(), 41);
+
+    const result = await clearBy('forced', store);
+
+    expect(result?.clearedExchangeCount).toBeGreaterThan(0);
+    const cleared = store.getState().clearing?.clearedExchanges ?? [];
+    // Every exchange of the current run outside the current turn, inside the floor included.
+    for (let t = 8; t <= 38; t++) expect(cleared).toContain(`c${String(t)}`);
+    // Exchange c39's result is an atom of the current turn (40), so it is pinned.
+    expect(cleared).not.toContain('c39');
+    const kept = idsOf(store);
+    expect(kept.has('asst-c39')).toBe(true);
+    expect(kept.has('res-c39')).toBe(true);
+    expect(kept.has('user-0')).toBe(true);
+    expect(kept.has('user-8')).toBe(true);
+  });
+
+  it('reads a history without any user_input as no current run, not as nothing clearable', async () => {
     const { store } = await assembledStore(chain('c', 1, 30), 32);
-    expect(await clearBy('pressure', store)).toBeUndefined();
-    expect(await clearBy('forced', store)).toBeUndefined();
+
+    const result = await clearBy('pressure', store);
+
+    expect(result?.clearedExchangeCount).toBeGreaterThan(0);
+    const cleared = store.getState().clearing?.clearedExchanges ?? [];
+    expect(cleared).toContain('c1');
+    // The floor still binds Tier-2.
+    const newestClearable = 32 - RECENT_TURNS_FLOOR - 2;
+    for (let t = newestClearable + 1; t <= 30; t++) {
+      expect(cleared).not.toContain(`c${String(t)}`);
+    }
   });
 });
 
@@ -307,7 +354,8 @@ describe('only a large result clears to a re-readable ref', () => {
     ];
   }
 
-  it.each<ClearPath>(['pressure', 'forced'])(
+  // The hard-budget pass ignores the threshold (§4.7), so only Tier-2 is held here.
+  it.each<ClearPath>(['pressure'])(
     '%s clearing never stubs an ~800-byte result and still clears a large one to its ref',
     async (path) => {
       const { store, mem } = await assembledStore(mixedRun(), 20);
@@ -522,7 +570,7 @@ function makeCtx(writes: Array<{ kind: string; data: unknown }>): ExecutorContex
   } as unknown as ExecutorContext;
 }
 
-function agentClient(promptTokens: number): AIClient {
+function agentClient(promptTokens: number, summary = '## What Was Read\n- compressed'): AIClient {
   return {
     contextWindowFor: () => undefined,
     getModel: (m: string) => ({
@@ -538,7 +586,7 @@ function agentClient(promptTokens: number): AIClient {
       usage: { promptTokens, completionTokens: 5, totalTokens: promptTokens + 5 },
     }),
     generateText: vi.fn().mockResolvedValue({
-      content: '## What Was Read\n- compressed',
+      content: summary,
       usage: { promptTokens: 50, completionTokens: 20, totalTokens: 70 },
       model: 'flash-lite',
       provider: 'google',
@@ -556,7 +604,12 @@ const memoryReadTool = {
   inputSchema: {},
 } as AgentToolSpec;
 
-async function runTurn(atoms: AiMessageAtomV1[], turnNumber: number, promptTokens: number) {
+async function runTurn(
+  atoms: AiMessageAtomV1[],
+  turnNumber: number,
+  promptTokens: number,
+  summary?: string,
+) {
   const mem = createMemoryPayloadStore();
   const ordered = sortedByTurn(atoms);
   const ref = await seed(mem, ordered);
@@ -570,7 +623,7 @@ async function runTurn(atoms: AiMessageAtomV1[], turnNumber: number, promptToken
   });
   const writes: Array<{ kind: string; data: unknown }> = [];
   const ctx = makeCtx(writes);
-  const client = agentClient(promptTokens);
+  const client = agentClient(promptTokens, summary);
   vi.mocked(getAIClientForContext).mockResolvedValue(client);
   const deps: HandlerDeps = {
     payloadStore: mem,
@@ -605,11 +658,13 @@ async function runTurn(atoms: AiMessageAtomV1[], turnNumber: number, promptToken
       forced.mock.results.map((r) => r.value as Promise<unknown>),
     );
     return {
+      mem,
       output,
       finalState,
       client,
       ctx,
       forcedCalls: forced.mock.calls.length,
+      forcedOrder: [...forced.mock.invocationCallOrder],
       forcedResults,
     };
   } finally {
@@ -618,35 +673,139 @@ async function runTurn(atoms: AiMessageAtomV1[], turnNumber: number, promptToken
 }
 
 describe('inside the current run, compaction comes before any clearing', () => {
-  it.each([
-    ['above the compaction bar', 160_000],
-    ['over the hard budget', 400_000],
-  ])(
-    '%s, the run is compacted from raw results and no exchange becomes a stub',
-    async (_label, promptTokens) => {
-      const atoms = [userAtom(0, 'open'), userAtom(1, 'the request'), ...chain('c', 1, 40)];
-      const { output, finalState, client, forcedResults } = await runTurn(atoms, 42, promptTokens);
+  const currentRun = () => [userAtom(0, 'open'), userAtom(1, 'the request'), ...chain('c', 1, 40)];
 
-      expect(output.contextEngineering?.compaction).toBeDefined();
-      expect(output.contextEngineering?.clearing).toBeUndefined();
-      expect(finalState.history.atoms.some((a) => a.sourceKind === 'cleared_summary')).toBe(false);
-      expect(finalState.clearing?.clearedExchanges ?? []).toEqual([]);
-      // Whatever the forced pass was asked for, it found nothing it may take.
-      for (const value of forcedResults) expect(value).toBeUndefined();
+  it('above the compaction bar, the run is compacted from raw results and no exchange becomes a stub', async () => {
+    const { output, finalState, client, forcedCalls, ctx } = await runTurn(
+      currentRun(),
+      42,
+      160_000,
+    );
 
-      // The summarizer read the results themselves, not stubs of them.
-      const prompt = vi.mocked(client.generateText).mock.calls[0]![0].messages[0]!
-        .content as string;
-      expect(prompt).toContain('FACT-c2:');
-      expect(prompt).not.toContain('[CLEARED RESULT STUB]');
+    expect(output.contextEngineering?.compaction).toBeDefined();
+    expect(output.contextEngineering?.clearing).toBeUndefined();
+    expect(finalState.history.atoms.some((a) => a.sourceKind === 'cleared_summary')).toBe(false);
+    expect(finalState.clearing?.clearedExchanges ?? []).toEqual([]);
+    expect(forcedCalls).toBe(0);
+    expect(ctx.log.info).toHaveBeenCalledWith(
+      'agent_turn_compaction',
+      expect.objectContaining({ trigger: 'pressure' }),
+    );
 
-      // The turns inside the floor are verbatim.
-      const kept = new Set(finalState.history.atoms.map((a) => a.atomId));
-      for (let t = 42 - RECENT_TURNS_FLOOR; t <= 40; t++) {
-        expect(kept.has(`asst-c${String(t)}`)).toBe(true);
-      }
-    },
-  );
+    // The summarizer read the results themselves, not stubs of them.
+    const prompt = vi.mocked(client.generateText).mock.calls[0]![0].messages[0]!.content as string;
+    expect(prompt).toContain('FACT-c2:');
+    expect(prompt).not.toContain('[CLEARED RESULT STUB]');
+
+    // The turns inside the floor are verbatim.
+    const kept = new Set(finalState.history.atoms.map((a) => a.atomId));
+    for (let t = 42 - RECENT_TURNS_FLOOR; t <= 40; t++) {
+      expect(kept.has(`asst-c${String(t)}`)).toBe(true);
+    }
+  });
+
+  it('over the hard budget after compaction, the hard-budget pass clears the floor and the current run, never the current turn', async () => {
+    const { output, finalState, client, ctx, forcedOrder } = await runTurn(
+      currentRun(),
+      42,
+      400_000,
+    );
+
+    // Compaction ran first, named for the hard budget, and read raw results.
+    expect(ctx.log.info).toHaveBeenCalledWith(
+      'agent_turn_compaction',
+      expect.objectContaining({ trigger: 'hard_budget' }),
+    );
+    const summarizerCall = vi.mocked(client.generateText).mock.invocationCallOrder[0]!;
+    expect(forcedOrder).toHaveLength(1);
+    expect(summarizerCall).toBeLessThan(forcedOrder[0]!);
+    const prompt = vi.mocked(client.generateText).mock.calls[0]![0].messages[0]!.content as string;
+    expect(prompt).toContain('FACT-c2:');
+    expect(prompt).not.toContain('[CLEARED RESULT STUB]');
+
+    // Then the hard-budget pass took exchanges inside the floor, all of the current run.
+    expect(output.contextEngineering?.compaction).toBeDefined();
+    expect(output.contextEngineering?.clearing?.clearedExchanges).toBeGreaterThan(0);
+    const cleared = finalState.clearing?.clearedExchanges ?? [];
+    for (let t = 42 - RECENT_TURNS_FLOOR; t <= 40; t++) {
+      expect(cleared).toContain(`c${String(t)}`);
+    }
+
+    // The current turn's atoms and the pinned inputs stay.
+    const kept = finalState.history.atoms;
+    expect(kept.some((a) => a.turnNumber === 42 && a.sourceKind === 'assistant_turn')).toBe(true);
+    const keptIds = new Set(kept.map((a) => a.atomId));
+    expect(keptIds.has('user-0')).toBe(true);
+    expect(keptIds.has('user-1')).toBe(true);
+  });
+});
+
+describe('a run of tool calls compacts to a summary that keeps what was read, decided and left pending', () => {
+  it('sends the next turn a restore with the summary and every compacted read path', async () => {
+    const atoms = [
+      userAtom(0, 'open'),
+      userAtom(1, 'Prepare the release notes for 4.2'),
+      callAtom(1, 'rd1', 'memory.store.get', 'Reading the changelog first.'),
+      resultAtom(2, 'rd1', LARGE),
+      callAtom(2, 'rd2', 'memory.store.get', 'Decided: group the notes by package, not by date.'),
+      resultAtom(3, 'rd2', LARGE),
+      callAtom(
+        3,
+        'rd3',
+        'memory.store.get',
+        'Pending: ask the operator whether 4.2 ships on Friday.',
+      ),
+      resultAtom(4, 'rd3', LARGE),
+      ...chain('c', 4, 30),
+    ];
+    const summary =
+      '## What Was Read\n- changelog at /run/outputs/rd1_0/data\n' +
+      '## What Was Decided\n- group by package\n' +
+      '## Left Pending\n- ship date (turn 3)';
+
+    const { mem, output, finalState, client } = await runTurn(atoms, 32, 160_000, summary);
+
+    expect(output.contextEngineering?.compaction).toBeDefined();
+    expect(output.contextEngineering?.clearing).toBeUndefined();
+
+    // The summarizer was given what was read, decided and left pending.
+    const prompt = vi.mocked(client.generateText).mock.calls[0]![0].messages[0]!.content as string;
+    for (const heading of ['What Was Read', 'What Was Decided', 'Left Pending']) {
+      expect(prompt).toContain(`### ${heading}`);
+    }
+    expect(prompt).toContain('FACT-rd1:');
+    expect(prompt).toContain('Decided: group the notes by package, not by date.');
+    expect(prompt).toContain('Pending: ask the operator whether 4.2 ships on Friday.');
+
+    // The next turn's request carries the restore in place of the compacted run.
+    const next = new ConversationStateStore(
+      {
+        payloadStore: mem,
+        tenantId: TENANT,
+        runId: RUN,
+        stepId: 'agent-1',
+        stepExecutionId: 'exec-next',
+        attempt: 1,
+      },
+      finalState,
+    );
+    next.setTurnNumber(finalState.turnNumber);
+    const request = await next.assembleRequest('sys', []);
+    const sent = request.messages
+      .flatMap((m) => m.parts.map((p) => (p.kind === 'text' ? p.text : '')))
+      .join('\n');
+    expect(sent).toContain(summary);
+    for (const base of ['rd1', 'rd2', 'rd3', 'c4']) {
+      expect(sent).toContain(
+        `${MEMORY_READ_OPERATION_ID} { path: '/run/outputs/${base}_0/data', view: 'outline' }`,
+      );
+    }
+    // The compacted results themselves are no longer sent, and none became a stub.
+    for (const base of ['rd1', 'rd2', 'rd3']) {
+      expect(request.messages.some((m) => m.toolCallId === `${base}_0`)).toBe(false);
+    }
+    expect(sent).not.toContain('cleared to save space');
+  });
 });
 
 describe('the structural cap triggers compaction, never clearing', () => {
@@ -669,5 +828,33 @@ describe('the structural cap triggers compaction, never clearing', () => {
     expect(finalState.history.atoms.length).toBeLessThanOrEqual(
       RETENTION_POLICY.maxAtomsStructural,
     );
+  });
+
+  it('honours the recency floor and the current run, and never runs the hard-budget pass', async () => {
+    // A finished run, then a long current run, together over the cap.
+    const atoms = [
+      userAtom(0, 'open'),
+      ...chain('p', 1, 60),
+      userAtom(62, 'next request'),
+      ...chain('c', 62, 115),
+    ];
+    expect(atoms.length).toBeGreaterThan(RETENTION_POLICY.maxAtomsStructural);
+
+    const { output, finalState, ctx, forcedCalls } = await runTurn(atoms, 117, 5);
+
+    expect(forcedCalls).toBe(0);
+    expect(output.contextEngineering?.clearing).toBeUndefined();
+    expect(finalState.clearing?.clearedExchanges ?? []).toEqual([]);
+    expect(ctx.log.info).toHaveBeenCalledWith(
+      'agent_turn_compaction',
+      expect.objectContaining({ trigger: 'structural_cap' }),
+    );
+    // Every exchange of the current run inside the floor stays verbatim.
+    const kept = new Set(finalState.history.atoms.map((a) => a.atomId));
+    for (let t = 117 - RECENT_TURNS_FLOOR; t <= 115; t++) {
+      expect(kept.has(`asst-c${String(t)}`)).toBe(true);
+      expect(kept.has(`res-c${String(t)}`)).toBe(true);
+    }
+    expect(kept.has('user-62')).toBe(true);
   });
 });

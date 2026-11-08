@@ -676,18 +676,20 @@ async function finishAgentTurn(
 
     let remainingPressureTokens = Math.max(0, pressureTokens - estimatedTokensFreed);
 
-    // Tier-3 (§4.8) runs before any forced clearing. Clearing never takes the
-    // current run or a small result, so compaction is what relieves them. It
-    // is also the only remedy at the structural cap (§4.7): no turn clears an
-    // exchange because of the atom count.
+    // Tier-3 (§4.8) runs before the hard-budget pass. Pressure clearing never
+    // takes the current run or a small result, so compaction is what relieves
+    // them. It is also the only remedy at the structural cap (§4.7): no turn
+    // clears an exchange because of the atom count. The hard budget is tested
+    // first because the working budget never exceeds it, so a prompt over it
+    // is always over the pressure bar too.
     const compactionTrigger =
-      workingBudget > 0 &&
-      remainingPressureTokens / workingBudget > RETENTION_POLICY.compactHighWater
-        ? 'pressure'
-        : store.structuralAtomExcess() > 0
-          ? 'structural_cap'
-          : remainingPressureTokens > hardBudget
-            ? 'hard_budget'
+      remainingPressureTokens > hardBudget
+        ? 'hard_budget'
+        : workingBudget > 0 &&
+            remainingPressureTokens / workingBudget > RETENTION_POLICY.compactHighWater
+          ? 'pressure'
+          : store.structuralAtomExcess() > 0
+            ? 'structural_cap'
             : undefined;
     if (compactionTrigger !== undefined) {
       try {
@@ -721,8 +723,9 @@ async function finishAgentTurn(
       }
     }
 
-    // Tier-4 token bound (§4.7): only a prompt over the hard budget forces
-    // clearing, and it takes only what Tier-2 may take.
+    // The hard-budget pass (§4.7): only a prompt still over the hard budget
+    // after compaction forces clearing. It may breach the recency floor and
+    // the current run, and it keeps only pinned atoms.
     const tokenExcess = remainingPressureTokens - hardBudget;
     if (tokenExcess > 0) {
       try {

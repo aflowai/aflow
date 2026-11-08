@@ -121,12 +121,12 @@ export function exchangeProtectionClass(
 }
 
 /**
- * The exchanges either clearing path may take (§4.3). An exchange qualifies
- * only when all of these hold:
+ * The exchanges pressure clearing may take (§4.3). An exchange qualifies only
+ * when all of these hold:
  * - it carries a tool result and has not been cleared before
  * - none of its atoms is pinned (§4.1)
  * - every turn it spans is older than the recency floor (Tier-1)
- * - it was created before the current run started (§4.10)
+ * - it was created before the current run started, when there is one (§4.10)
  * - every one of its results, as sent, reaches the size threshold (§4.4)
  */
 export function clearableExchanges(
@@ -149,16 +149,36 @@ export function clearableExchanges(
       estimateMessageTokens(sent.message) >= RETENTION_POLICY.largeResultMinTokens
     );
   };
-  return [...exchanges].filter((ex) => {
-    if (!ex.hasToolResult || ctx.alreadyCleared.has(ex.key)) return false;
-    if (ex.atomRefs.some((a) => ctx.pinned.has(a.atomId))) return false;
-    const turns = [...ex.turns];
-    if (turns.some((tn) => ctx.currentTurn - tn <= RETENTION_POLICY.keepRecentTurns)) return false;
+  const beforeCurrentRun = (ex: Exchange): boolean => {
+    if (runStart === -1) return true;
     const firstPosition = Math.min(
       ...ex.atomRefs.map((a) => positionById.get(a.atomId) ?? Number.POSITIVE_INFINITY),
     );
-    return firstPosition <= runStart && ex.atomRefs.every(isLarge);
+    return firstPosition <= runStart;
+  };
+  return hardBudgetClearableExchanges(exchanges, ctx).filter((ex) => {
+    const turns = [...ex.turns];
+    if (turns.some((tn) => ctx.currentTurn - tn <= RETENTION_POLICY.keepRecentTurns)) return false;
+    return beforeCurrentRun(ex) && ex.atomRefs.every(isLarge);
   });
+}
+
+/**
+ * The exchanges the hard-budget pass may take (§4.7): any uncleared exchange
+ * with a tool result and no pinned atom. The recency floor, the current run
+ * and the size threshold do not bind here, because the request must fit the
+ * provider's window. It is the only path that breaches the floor.
+ */
+export function hardBudgetClearableExchanges(
+  exchanges: Iterable<Exchange>,
+  ctx: { pinned: ReadonlySet<string>; alreadyCleared: ReadonlySet<string> },
+): Exchange[] {
+  return [...exchanges].filter(
+    (ex) =>
+      ex.hasToolResult &&
+      !ctx.alreadyCleared.has(ex.key) &&
+      !ex.atomRefs.some((a) => ctx.pinned.has(a.atomId)),
+  );
 }
 
 export function earliestCreatedAtMs(ex: Exchange): number {

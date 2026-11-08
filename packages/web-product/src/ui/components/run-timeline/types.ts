@@ -144,4 +144,10 @@ export interface RunTimelineProps {
    * the EVENTS are cut, and the summary describes the run as a whole.
    */
   historyEdge?: ReactNode | undefined;
+  /**
+   * Folds each agent turn's tool rows under the turn, behind one line that
+   * counts them. The chat's Timeline tab sets it, and the session page
+   * keeps the flat list.
+   */
+  foldTurnTools?: boolean | undefined;
 }

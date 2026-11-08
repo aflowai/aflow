@@ -1,6 +1,7 @@
 import type { IconName } from '@aflow/design-system';
 
 import { executorWaitLabel } from '../../lib/op-labels.js';
+import type { TurnToolsSummary } from './buildTimelineEntries';
 import type { StepGroup, SubflowEntry } from './types';
 
 /** Build a concise label for a delegate event, preferring step/operation context. */
@@ -287,4 +288,17 @@ export function formatCostUsd(usd: number): string {
   if (usd < 0.01) return `$${usd.toFixed(3)}`;
   if (usd < 1) return `$${usd.toFixed(3)}`;
   return `$${usd.toFixed(2)}`;
+}
+
+/**
+ * A turn fold's label: "12 tool calls · 48.2k tok · $0.031". Tokens and cost
+ * are left out where no step reported them, and a turn that ran on this
+ * computer reads "local" for its cost, as a step card does.
+ */
+export function turnToolsLabel(summary: TurnToolsSummary): string {
+  const parts = [`${String(summary.toolCalls)} tool ${summary.toolCalls === 1 ? 'call' : 'calls'}`];
+  if (summary.totalTokens > 0) parts.push(`${formatNumber(summary.totalTokens)} tok`);
+  if (summary.totalCostUsd > 0) parts.push(formatCostUsd(summary.totalCostUsd));
+  else if (summary.ranLocally && summary.totalTokens > 0) parts.push('local');
+  return parts.join(' · ');
 }

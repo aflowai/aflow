@@ -311,20 +311,21 @@ describe('Tier-4 safety bound (§4.7)', () => {
     return atoms;
   }
 
-  it('never evicts pinned atoms or the recent turns under maximal forced pressure', async () => {
+  it('never evicts pinned atoms under maximal hard-budget pressure, and breaches the recency floor', async () => {
     const atoms = finishedRunAtoms(149);
     const { store, storeFn } = await makeStoreAndAssemble(atoms, 151);
     const beforeIds = new Set(store.getState().history.atoms.map((a) => a.atomId));
 
-    // Demand more than is clearable — every clearable exchange must go.
+    // Demand more than is clearable — every unpinned exchange must go.
     const result = await store.forceClearExcess({
       excessTokens: 100_000_000,
       availableReadOpId: MEMORY_READ_OPERATION_ID,
     });
     expect(result).toBeDefined();
-    // Exchanges 1..142 are older than the recency floor; 143..149 are not.
-    const floor = RETENTION_POLICY.keepRecentTurns;
-    const clearable = 151 - floor - 1;
+    // The hard-budget pass is the one path the recency floor does not bind
+    // (§4.7), so exchanges 143..149 inside it go too.
+    const clearable = 149;
+    expect(151 - RETENTION_POLICY.keepRecentTurns - 1).toBeLessThan(clearable);
     expect(result!.clearedExchangeCount).toBe(clearable);
     expect(result!.atomsSummarized).toBe(clearable * 2);
 
@@ -335,10 +336,6 @@ describe('Tier-4 safety bound (§4.7)', () => {
     expect(afterIds.has('user-0')).toBe(true);
     expect(afterIds.has('restore-1')).toBe(true);
     expect(afterIds.has('user-150')).toBe(true);
-    // The recency floor binds the forced pass as it binds Tier-2.
-    for (let t = clearable + 1; t <= 149; t++) {
-      expect(afterIds.has(`asst-ex${String(t).padStart(3, '0')}`)).toBe(true);
-    }
     // One in-position note per cleared exchange.
     expect(after.filter((a) => a.sourceKind === 'cleared_summary')).toHaveLength(clearable);
 

@@ -161,10 +161,11 @@ export function computePinnedAtomIds(
 
 /**
  * Where the current run starts (§4.10): the position of the latest user_input
- * atom in the committed list, or -1 when there is none and the whole history
- * is one run. An exchange whose first atom sits after this position was
- * created by the current run. Clearing never takes it, on any path, because
- * the run is still acting on what it read. Compaction relieves the run instead.
+ * atom in the committed list, or -1 when there is none and so no current run.
+ * An exchange whose first atom sits after this position was created by the
+ * current run. Pressure clearing never takes it, because the run is still
+ * acting on what it read. Compaction relieves the run instead. Only the
+ * hard-budget pass may clear it (§4.7).
  */
 export function currentRunStartIndex(atoms: readonly PinnableAtom[]): number {
   for (let i = atoms.length - 1; i >= 0; i--) {

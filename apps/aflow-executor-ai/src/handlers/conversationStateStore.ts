@@ -71,6 +71,7 @@ import {
   type ResurrectionDetection,
   PROTECTION_CLASS,
   clearableExchanges,
+  hardBudgetClearableExchanges,
   exchangeKeyForAtom,
   exchangeProtectionClass,
   earliestCreatedAtMs,
@@ -896,11 +897,10 @@ export class ConversationStateStore {
   }
 
   /**
-   * Tier-4 token bound (§4.7): clears the oldest clearable exchanges until the
-   * estimated saving covers the token excess over the hard budget. It takes
-   * only what Tier-2 may take — the recency floor, the current run and the size
-   * threshold bind here too — so the remedy for the rest is compaction. The
-   * atom count never drives it: an over-cap history is compacted, not cleared.
+   * The hard-budget pass (§4.7): once compaction leaves the prompt over the
+   * hard budget, it clears any unpinned exchange oldest first until the saving
+   * covers the excess. The floor, the current run and the size threshold do
+   * not bind it, because the request must fit. The atom count never drives it.
    */
   async forceClearExcess(target: {
     excessTokens: number;
@@ -914,15 +914,15 @@ export class ConversationStateStore {
     const sentById = this.sentAtomsById();
     const exchanges = this.groupExchanges(hydratedById);
 
-    const candidates = this.clearableExchanges(exchanges, sentById)
+    const candidates = hardBudgetClearableExchanges(exchanges.values(), {
+      pinned: this.pinnedAtomIds(),
+      alreadyCleared: new Set(this.state.clearing?.clearedExchanges ?? []),
+    })
       .map((ex) => ({
         ex,
         estimate: estimateExchangeClearingTokens(ex, hydratedById, sentById, noteOptions),
       }))
-      .filter(
-        ({ estimate }) =>
-          estimate.netSavings > RETENTION_POLICY.minClearNetSavings(estimate.noteTokens),
-      )
+      .filter(({ estimate }) => estimate.netSavings > 0)
       .sort((a, b) => {
         const newestA = Math.max(...a.ex.turns);
         const newestB = Math.max(...b.ex.turns);
@@ -976,7 +976,7 @@ export class ConversationStateStore {
     return this.currentTurnNumber ?? Math.max(this.state.turnNumber - 1, 0);
   }
 
-  /** The exchanges either clearing path may take (§4.3), in history order. */
+  /** The exchanges pressure clearing may take (§4.3), in history order. */
   private clearableExchanges(
     exchanges: Map<string, Exchange>,
     sentById: Map<string, AiMessageAtomV1>,

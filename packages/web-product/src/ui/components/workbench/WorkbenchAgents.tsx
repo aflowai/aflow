@@ -11,6 +11,7 @@ import {
   WorkbenchEmptyRow,
   WorkbenchSection,
   WorkbenchSectionPending,
+  useWorkbenchSectionHeld,
 } from './WorkbenchSection.js';
 
 /**
@@ -65,6 +66,7 @@ export function WorkbenchAgents({
   const agents = useMemo(() => flows.filter((flow) => !flow.systemRole && !flow.system), [flows]);
 
   const empty = agents.length === 0;
+  useWorkbenchSectionHeld(!empty);
   if (empty && isLoading) return <WorkbenchSectionPending title="Agents" icon="robot" />;
 
   return (

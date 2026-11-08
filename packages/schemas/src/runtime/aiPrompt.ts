@@ -388,8 +388,6 @@ export const AiConversationStateV1Schema = z.object({
       artifactRef: z.string().optional(),
       /** Number of compaction cycles performed so far. */
       count: z.number().int().nonnegative().default(0),
-      /** Highest turn number that has been compacted (watermark for idempotency). */
-      lastCompactedTurn: z.number().int().nonnegative().optional(),
     })
     .optional(),
 

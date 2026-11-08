@@ -595,7 +595,6 @@ export async function triggerCompaction(
   state.compaction = {
     artifactRef,
     count: compactionNumber,
-    lastCompactedTurn: range.toTurn,
   };
 
   // 10. Persist updated state

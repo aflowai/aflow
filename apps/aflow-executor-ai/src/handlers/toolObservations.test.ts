@@ -935,8 +935,8 @@ describe('ConversationStateStore.assembleRequest — observations', () => {
         outline.length / 4,
     );
 
-    // Sent as a receipt, a1 is under the size threshold, so it is never
-    // stubbed: the forced pass takes a2, the full outline, instead.
+    // Sent as a receipt, a1 is under the size threshold, so pressure clearing
+    // never stubs it: it takes a2, the full outline, instead.
     expect(estimate.removedTokens).toBeLessThan(RETENTION_POLICY.largeResultMinTokens);
     const a2 = {
       key: 'a2',
@@ -946,12 +946,13 @@ describe('ConversationStateStore.assembleRequest — observations', () => {
       assistantAtom: hydratedById.get('atom-2-0')!,
     };
     const a2Estimate = estimateExchangeClearingTokens(a2, hydratedById, sentById, noteOptions);
-    const forced = await store.forceClearExcess({
-      excessTokens: 1,
+    const cleared = await store.clearUnderPressure({
+      pressureTokens: 10_000_000,
+      workingBudget: 10_000,
       availableReadOpId: MEMORY_READ_OPERATION_ID,
     });
     expect(store.getState().clearing?.clearedExchanges).toEqual(['a2']);
-    expect(forced?.estimatedTokensFreed).toBe(Math.max(0, a2Estimate.netSavings));
+    expect(cleared?.estimatedTokensFreed).toBe(a2Estimate.netSavings);
   });
 });
 
