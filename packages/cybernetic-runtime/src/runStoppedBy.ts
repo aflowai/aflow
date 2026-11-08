@@ -5,7 +5,8 @@
  * succeeded with an outcome its successors' `when` conditions skip on, such
  * as a commit that conflicted. `result.stoppedBy` names that task, or the
  * run's own cancel or failure where no task row holds the cause, so a caller
- * reads one result rather than every task row.
+ * reads one result rather than every task row. An approval gate the operator
+ * rejected is named too, with the rejection as its detail.
  */
 import type { PayloadStore } from '@aflow/payload-store';
 import {
@@ -16,6 +17,7 @@ import {
 } from '@aflow/schemas';
 import { decodeTaskOutput } from './humanTaskHydration.js';
 import { extractRunFailureReason } from './evalJudgeEvidence.js';
+import { resolvePromotedRunMetrics, type PromotionTaskResult } from './promotion.js';
 import type { WorkflowRunDetail, WorkflowTaskRow } from './ledger/types.js';
 
 /** A storage ceiling for the detail, sized for an error or a git account. */
@@ -74,13 +76,15 @@ function namedByRunFailure(failureJson: unknown): Set<string> {
  * run's failure names, because a `cancel_siblings` failure off the path
  * blocks the tasks on it. Where a required task on the path was skipped, the
  * latest task that succeeded toward the producer is the one whose outcome
- * skipped it, even when a failure off the path failed the run. A failed run
- * with none of these stopped on its own account.
+ * skipped it, even when a failure off the path failed the run. A rejected
+ * approval gate on the way counts as that outcome. A failed run with none of
+ * these stopped on its own account.
  */
 export function findStopper(
   workflow: StoppingWorkflow,
   run: StoppingRun,
   primary: string,
+  rejectedGates: ReadonlySet<string> = new Set(),
 ): RunStopper | undefined {
   if (run.status === 'cancelled') return { kind: 'run', status: 'cancelled' };
   const rowByTaskId = new Map(run.tasks.map((r) => [r.taskId, r]));
@@ -105,7 +109,7 @@ export function findStopper(
   if (run.status === 'failed' && !rowWith(onPath, 'skipped')) {
     return { kind: 'run', status: 'failed' };
   }
-  const latest = latestSucceededTowardProducer(workflow, rowByTaskId, primary);
+  const latest = latestSucceededTowardProducer(workflow, rowByTaskId, primary, rejectedGates);
   if (latest) return { kind: 'task', row: latest };
   return run.status === 'failed' ? { kind: 'run', status: 'failed' } : undefined;
 }
@@ -114,13 +118,16 @@ export function findStopper(
  * The latest task that succeeded on the way to a producer of the primary
  * output — the producer itself where it succeeded and promoted nothing, or
  * else the last ancestor that succeeded before every task between it and the
- * producer was skipped. It passes over every other row, so an optional task
- * that failed counts as satisfied, as readiness counts it.
+ * producer was skipped. An approval gate the operator rejected is skipped
+ * too, but its rejection skipped the tasks after it, so the walk ends there
+ * as it ends at a task that succeeded. It passes over every other row, so an
+ * optional task that failed counts as satisfied, as readiness counts it.
  */
 function latestSucceededTowardProducer(
   workflow: StoppingWorkflow,
   rowByTaskId: ReadonlyMap<string, WorkflowTaskRow>,
   primary: string,
+  rejectedGates: ReadonlySet<string>,
 ): WorkflowTaskRow | undefined {
   const taskById = new Map(workflow.tasks.map((t) => [t.taskId, t]));
   const order = new Map(workflow.tasks.map((t, i) => [t.taskId, i]));
@@ -131,7 +138,7 @@ function latestSucceededTowardProducer(
     if (visited.has(taskId)) continue;
     visited.add(taskId);
     const row = rowByTaskId.get(taskId);
-    if (row?.status === 'succeeded') {
+    if (row?.status === 'succeeded' || (row?.status === 'skipped' && rejectedGates.has(taskId))) {
       candidates.push(row);
       continue;
     }
@@ -157,6 +164,28 @@ function text(value: unknown): string | undefined {
 }
 
 /**
+ * The approval gates on the way to the primary output that the operator
+ * rejected, with the decision each recorded. A `reject` resume lands the gate
+ * `skipped` with a `{ decision: 'rejected' }` output. A row its own `when`
+ * skipped holds no output, so it is never one.
+ */
+async function rejectedGatesOnPath(
+  payloadStore: PayloadStore,
+  workflow: StoppingWorkflow,
+  run: StoppingRun,
+  primary: string,
+): Promise<Map<string, Record<string, unknown>>> {
+  const onPath = producerAncestry(workflow, primary);
+  const gates = new Map<string, Record<string, unknown>>();
+  for (const row of run.tasks) {
+    if (row.status !== 'skipped' || !row.outputRef || !onPath.has(row.taskId)) continue;
+    const output = await decodeTaskOutput(row.outputRef, payloadStore).catch(() => null);
+    if (output?.['decision'] === 'rejected') gates.set(row.taskId, output);
+  }
+  return gates;
+}
+
+/**
  * Which of a task's own accounts fill a sensitive variable: its whole output,
  * named output paths, or its summary. Those stay out of the detail, as the
  * variables they fill stay out of `output`.
@@ -172,17 +201,28 @@ function sensitiveSources(task: WorkflowTask | undefined, sensitiveIds: Readonly
 }
 
 /**
- * What the task said about how it ended: a failure's reason, or, for a task
- * that succeeded, the `state` and `detail` its output reports.
+ * What the task said about how it ended: a failure's reason, the decision a
+ * rejected gate recorded, or, for a task that succeeded, the `state` and
+ * `detail` its output reports.
  */
 async function describeTaskEnding(
   payloadStore: PayloadStore,
   row: WorkflowTaskRow,
   task: WorkflowTask | undefined,
   sensitiveIds: ReadonlySet<string>,
+  rejection: Readonly<Record<string, unknown>> | undefined,
 ): Promise<string | undefined> {
   const hidden = sensitiveSources(task, sensitiveIds);
   const recorded = text(row.failureReason) ?? (hidden.summary ? undefined : text(row.summary));
+  if (rejection !== undefined) {
+    if (hidden.output) return recorded;
+    const said = (key: string): string | undefined =>
+      hidden.field(key) ? undefined : text(rejection[key]);
+    const by = said('decidedBy');
+    const comment = said('comment');
+    const head = by === undefined ? 'rejected' : `rejected by ${by}`;
+    return comment === undefined ? head : `${head}: ${comment}`;
+  }
   if (row.status !== 'succeeded' || hidden.output) return recorded;
   const output = await decodeTaskOutput(row.outputRef, payloadStore).catch(() => null);
   const field = (key: string): string | undefined =>
@@ -203,16 +243,26 @@ function describeRunEnding(run: StoppingRun): string | undefined {
   return reason === undefined ? `cancelled by ${actor}` : `cancelled by ${actor}: ${reason}`;
 }
 
-/**
- * Below this length a spelling such as `1`, `0` or `true` also spells
- * unrelated text, so it is matched only as a whole value, never inside free text.
- */
+/** Below this length a common spelling also spells unrelated text. */
 const MIN_FREE_TEXT_CHARS = 6;
+
+/**
+ * A spelling such as `1`, `0`, `true` or a lone character also spells
+ * unrelated text: an exit code, a count, a flag. It is matched only as a
+ * whole value, never inside free text. A short spelling that is not common,
+ * such as `k7Qz`, is still matched anywhere, as a secret quoted in a reason.
+ */
+function isCommonShortSpelling(spelled: string): boolean {
+  if (spelled.length >= MIN_FREE_TEXT_CHARS) return false;
+  return (
+    spelled.length < 2 || /^(?:true|false)$/i.test(spelled) || /^[-+]?\d+(?:\.\d+)?$/.test(spelled)
+  );
+}
 
 interface SensitiveSpellings {
   /** The JSON text of every sensitive value and of every node inside one. */
   nodes: Set<string>;
-  /** Spellings long enough to match anywhere in free text. */
+  /** Spellings that match anywhere in free text. */
   free: string[];
 }
 
@@ -233,13 +283,13 @@ function collectSpellings(value: unknown, into: SensitiveSpellings): void {
   if (typeof value === 'string') {
     if (text(value) === undefined) return;
     into.nodes.add(JSON.stringify(value));
-    if (value.length >= MIN_FREE_TEXT_CHARS) into.free.push(value);
+    if (!isCommonShortSpelling(value)) into.free.push(value);
     return;
   }
   if (typeof value === 'number' || typeof value === 'bigint') {
     const spelled = String(value);
     if (typeof value === 'number' && Number.isFinite(value)) into.nodes.add(spelled);
-    if (spelled.length >= MIN_FREE_TEXT_CHARS) into.free.push(spelled);
+    if (!isCommonShortSpelling(spelled)) into.free.push(spelled);
     return;
   }
   if (typeof value === 'boolean') {
@@ -341,20 +391,80 @@ export interface BuildStoppedByArgs {
   workflow: StoppingWorkflow;
   run: StoppingRun;
   primary: string;
-  /** The raw promoted bag. Its sensitive values are redacted from the detail. */
-  bag: Readonly<Record<string, unknown>>;
+  /** The succeeded rows that promote outputs, which the result decoded. */
+  promotingRows: readonly WorkflowTaskRow[];
+  /** What decoding those rows returned. A row missing here, or without output, did not decode. */
+  taskResults: readonly PromotionTaskResult[];
 }
 
+/**
+ * Decodes again each promoting row whose output the result could not read,
+ * through the loader that also reads inline and serialised outputs. A row
+ * still unread is returned as undecoded.
+ */
+async function rereadOutputs(
+  payloadStore: PayloadStore,
+  rows: readonly WorkflowTaskRow[],
+  taskResults: readonly PromotionTaskResult[],
+): Promise<{ results: PromotionTaskResult[]; undecoded: Set<string> }> {
+  const byTaskId = new Map(taskResults.map((r) => [r.taskId, r]));
+  const results = [...taskResults];
+  const undecoded = new Set<string>();
+  for (const row of rows) {
+    const held = byTaskId.get(row.taskId);
+    if (!row.outputRef || held?.output !== undefined) continue;
+    const output = await decodeTaskOutput(row.outputRef, payloadStore).catch(() => null);
+    if (output === null) {
+      undecoded.add(row.taskId);
+      continue;
+    }
+    const reread: PromotionTaskResult = held
+      ? { ...held, output }
+      : {
+          taskId: row.taskId,
+          status: row.status,
+          output,
+          ...(row.summary ? { summary: row.summary } : {}),
+          ...(row.metricsJson ? { metrics: row.metricsJson as Record<string, unknown> } : {}),
+        };
+    if (held) results[results.indexOf(held)] = reread;
+    else results.push(reread);
+  }
+  return { results, undecoded };
+}
+
+/**
+ * What stopped the run short of its primary output, or nothing where the run
+ * produced it. The sanitiser may remove a primary that was produced, so the
+ * raw bag decides that. Where the output of a producer of the primary could
+ * not be decoded, the primary may have been produced, so no stop is reported.
+ * Where an undecoded output fills a sensitive variable, its values cannot be
+ * redacted, so the stop is reported without its detail.
+ */
 export async function buildStoppedBy(
   payloadStore: PayloadStore,
   args: BuildStoppedByArgs,
 ): Promise<WorkflowRunResultStoppedBy | undefined> {
-  const { workflow, run, primary, bag } = args;
-  const stopper = findStopper(workflow, run, primary);
+  const { workflow, run, primary } = args;
+  const { results, undecoded } = await rereadOutputs(
+    payloadStore,
+    args.promotingRows,
+    args.taskResults,
+  );
+  if (producersOf(workflow, primary).some((taskId) => undecoded.has(taskId))) return undefined;
+  const bag = resolvePromotedRunMetrics(workflow.tasks, results, workflow.stateVariables);
+  if (bag[primary] !== undefined) return undefined;
+
+  const rejectedGates = await rejectedGatesOnPath(payloadStore, workflow, run, primary);
+  const stopper = findStopper(workflow, run, primary, new Set(rejectedGates.keys()));
   if (!stopper) return undefined;
 
   const sensitiveIds = new Set(
     workflow.stateVariables.filter((v) => v.sensitive).map((v) => v.variableId),
+  );
+  const redactable = !workflow.tasks.some(
+    (t) =>
+      undecoded.has(t.taskId) && (t.promoteOutputs ?? []).some((p) => sensitiveIds.has(p.toState)),
   );
   const spellings: SensitiveSpellings = { nodes: new Set(), free: [] };
   for (const [key, value] of Object.entries(bag)) {
@@ -371,7 +481,15 @@ export async function buildStoppedBy(
     if (!status.success) return undefined;
     head = { taskId: stopper.row.taskId, status: status.data };
     const task = workflow.tasks.find((t) => t.taskId === stopper.row.taskId);
-    detail = await describeTaskEnding(payloadStore, stopper.row, task, sensitiveIds);
+    detail = await describeTaskEnding(
+      payloadStore,
+      stopper.row,
+      task,
+      sensitiveIds,
+      rejectedGates.get(stopper.row.taskId),
+    );
   }
-  return detail === undefined ? head : { ...head, detail: bounded(redact(detail, spellings)) };
+  return detail === undefined || !redactable
+    ? head
+    : { ...head, detail: bounded(redact(detail, spellings)) };
 }

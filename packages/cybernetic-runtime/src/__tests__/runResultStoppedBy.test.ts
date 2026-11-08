@@ -50,7 +50,10 @@ const OUTPUTS: Record<string, unknown> = {
   'ref:open-pr': { prUrl: 'https://github.com/o/r/pull/7' },
 };
 const PAYLOAD_STORE = {
-  retrieve: vi.fn((ref: string) => Promise.resolve(OUTPUTS[ref])),
+  retrieve: vi.fn((ref: string) => {
+    const stored = OUTPUTS[ref];
+    return stored instanceof Error ? Promise.reject(stored) : Promise.resolve(stored);
+  }),
 } as unknown as PayloadStore;
 
 function row(
@@ -128,6 +131,25 @@ async function resultOf(
     { db: DB, payloadStore: PAYLOAD_STORE },
     { tenantId: TENANT, run: detail, workflow, scope },
   );
+}
+
+/** WORKFLOW where `commit` also fills the sensitive variables named, from its output paths. */
+function withCommitSecrets(names: readonly string[]): Workflow {
+  return {
+    ...WORKFLOW,
+    tasks: WORKFLOW.tasks.map((t) =>
+      t.taskId === 'commit'
+        ? {
+            ...t,
+            promoteOutputs: names.map((n) => ({ kind: 'output_path', path: n, toState: n })),
+          }
+        : t,
+    ),
+    stateVariables: [
+      ...WORKFLOW.stateVariables,
+      ...names.map((n) => ({ variableId: n, sensitive: true })),
+    ],
+  } as Workflow;
 }
 
 /** WORKFLOW with `docs` ahead of it in workflow order, off the path to `open-pr`. */
@@ -495,5 +517,137 @@ describe('buildWorkflowRunResult — tasks that did not stop the run', () => {
       status: 'succeeded',
       detail: 'state: conflict — Conflict in [redacted]',
     });
+  });
+
+  it('redacts a short secret that is not a common spelling inside free text', async () => {
+    OUTPUTS['ref:commit:otp'] = { state: 'applied', otp: 'k7Qz', retries: 0, admin: true };
+    const result = await resultOf(
+      run('failed', [
+        row('commit', 'succeeded', 1, { outputRef: 'ref:commit:otp' }),
+        row('check', 'failed', 2, {
+          failureReason: 'code k7Qz expired after 0 retries (strict: true), exit 1',
+        }),
+        row('push', 'blocked', 2),
+        row('open-pr', 'blocked', 2),
+      ]),
+      'full',
+      withCommitSecrets(['otp', 'retries', 'admin']),
+    );
+    expect(result?.stoppedBy).toEqual({
+      taskId: 'check',
+      status: 'failed',
+      detail: 'code [redacted] expired after 0 retries (strict: true), exit 1',
+    });
+  });
+});
+
+describe('buildWorkflowRunResult — a rejected approval gate', () => {
+  /** commit → check → approve → push → open-pr, with `approve` an approval gate. */
+  const GATED = {
+    ...WORKFLOW,
+    tasks: [
+      WORKFLOW.tasks[0],
+      WORKFLOW.tasks[1],
+      { taskId: 'approve', dependsOn: ['check'], type: 'human', intent: 'approve' },
+      { taskId: 'push', dependsOn: ['approve'] },
+      WORKFLOW.tasks[3],
+    ],
+  } as Workflow;
+
+  it('names the gate the operator rejected, with the rejection, not the task before it', async () => {
+    OUTPUTS['ref:approve:rejected'] = {
+      decision: 'rejected',
+      decidedAt: '2026-11-07T00:05:00.000Z',
+      decidedBy: 'operator-7',
+      comment: 'Wrong base branch',
+    };
+    const result = await resultOf(
+      run('completed', [
+        row('commit', 'succeeded', 1, { outputRef: 'ref:commit:applied' }),
+        row('check', 'succeeded', 2, { summary: 'All tests passed' }),
+        row('approve', 'skipped', 5, {
+          outputRef: 'ref:approve:rejected',
+          summary: 'Rejected via workflow.run.resume reject (gated branch skipped).',
+        }),
+        row('push', 'skipped', 5, { summary: 'Skipped — upstream approval rejected.' }),
+        row('open-pr', 'skipped', 5, { summary: 'Skipped — upstream approval rejected.' }),
+      ]),
+      'full',
+      GATED,
+    );
+    expect(result?.stoppedBy).toEqual({
+      taskId: 'approve',
+      status: 'skipped',
+      detail: 'rejected by operator-7: Wrong base branch',
+    });
+  });
+
+  it('passes over a gate its own condition skipped, which holds no decision', async () => {
+    const result = await resultOf(
+      run('completed', [
+        row('commit', 'succeeded', 1, { outputRef: 'ref:commit:conflict' }),
+        row('check', 'skipped', 2),
+        row('approve', 'skipped', 2),
+        row('push', 'skipped', 2),
+        row('open-pr', 'skipped', 2),
+      ]),
+      'full',
+      GATED,
+    );
+    expect(result?.stoppedBy).toEqual({
+      taskId: 'commit',
+      status: 'succeeded',
+      detail: 'state: conflict — src/a.ts: patch does not apply',
+    });
+  });
+});
+
+describe('buildWorkflowRunResult — outputs that did not decode', () => {
+  it('reports no stop where the output of the producer could not be decoded', async () => {
+    OUTPUTS['ref:open-pr:unreadable'] = new Error('payload store unreachable');
+    const result = await resultOf(
+      run('completed', [
+        row('commit', 'succeeded', 1, { outputRef: 'ref:commit:applied' }),
+        row('check', 'succeeded', 2),
+        row('push', 'succeeded', 3),
+        row('open-pr', 'succeeded', 4, { outputRef: 'ref:open-pr:unreadable' }),
+      ]),
+    );
+    expect(result?.primaryOutput).toBeUndefined();
+    expect(result?.stoppedBy).toBeUndefined();
+  });
+
+  it('redacts a sensitive value read again from an output the first decode missed', async () => {
+    OUTPUTS['ref:commit:serialised'] = JSON.stringify({ state: 'applied', token: 'tok-93a1' });
+    const result = await resultOf(
+      run('failed', [
+        row('commit', 'succeeded', 1, { outputRef: 'ref:commit:serialised' }),
+        row('check', 'failed', 2, { failureReason: 'token tok-93a1 refused' }),
+        row('push', 'blocked', 2),
+        row('open-pr', 'blocked', 2),
+      ]),
+      'full',
+      withCommitSecrets(['token']),
+    );
+    expect(result?.stoppedBy).toEqual({
+      taskId: 'check',
+      status: 'failed',
+      detail: 'token [redacted] refused',
+    });
+  });
+
+  it('withholds the detail where an output filling a sensitive variable could not be decoded', async () => {
+    OUTPUTS['ref:commit:unreadable'] = new Error('payload store unreachable');
+    const result = await resultOf(
+      run('failed', [
+        row('commit', 'succeeded', 1, { outputRef: 'ref:commit:unreadable' }),
+        row('check', 'failed', 2, { failureReason: 'token tok-93a1 refused' }),
+        row('push', 'blocked', 2),
+        row('open-pr', 'blocked', 2),
+      ]),
+      'full',
+      withCommitSecrets(['token']),
+    );
+    expect(result?.stoppedBy).toEqual({ taskId: 'check', status: 'failed' });
   });
 });

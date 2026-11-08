@@ -172,8 +172,10 @@ export type WorkflowRunResultArtifact = z.infer<typeof WorkflowRunResultArtifact
  * What stopped a terminal run short of its declared primary output. Present
  * only where `workflow.output.primary` is declared and no task produced it. A
  * primary that was produced and then withheld as sensitive is not a stop. A
- * run that ended green carries it too, where a task succeeded with an outcome
- * that its successors skip on.
+ * primary whose producer's output could not be decoded may have been
+ * produced, so that is not reported as a stop either. A run that ended green
+ * carries it too, where a task succeeded with an outcome that its successors
+ * skip on, or where the operator rejected an approval gate on the way.
  */
 export const WorkflowRunResultStoppedBySchema = z.object({
   taskId: z
@@ -184,17 +186,18 @@ export const WorkflowRunResultStoppedBySchema = z.object({
         'run was cancelled, or failed on its own account with no task row holding the cause.',
     ),
   status: WorkflowRunTaskStatusSchema.describe(
-    'The task row status: failed, blocked or cancelled for a task that stopped, or succeeded ' +
-      'for a task whose outcome skipped its successors. With a null taskId it is the run ' +
-      'status: failed or cancelled.',
+    'The task row status: failed, blocked or cancelled for a task that stopped, succeeded ' +
+      'for a task whose outcome skipped its successors, or skipped for an approval gate the ' +
+      'operator rejected. With a null taskId it is the run status: failed or cancelled.',
   ),
   detail: z
     .string()
     .optional()
     .describe(
-      'Its own account: the failure reason, the `state` and `detail` of a succeeded output, or ' +
-        "the run's failure message, or who cancelled the run and why. Sensitive values are " +
-        'redacted.',
+      'Its own account: the failure reason, the `state` and `detail` of a succeeded output, ' +
+        "who rejected a gate and why, the run's failure message, or who cancelled the run " +
+        'and why. Sensitive values are redacted. It is absent where a sensitive value could ' +
+        'not be read to redact it.',
     ),
 });
 export type WorkflowRunResultStoppedBy = z.infer<typeof WorkflowRunResultStoppedBySchema>;
