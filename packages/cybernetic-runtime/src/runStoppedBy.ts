@@ -8,6 +8,7 @@
  * reads one result rather than every task row. An approval gate the operator
  * rejected is named too, with the rejection as its detail.
  */
+import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { PayloadStore } from '@aflow/payload-store';
 import {
   WorkflowRunTaskStatusSchema,
@@ -19,6 +20,7 @@ import { decodeTaskOutput } from './humanTaskHydration.js';
 import { extractRunFailureReason } from './evalJudgeEvidence.js';
 import { resolvePromotedRunMetrics, type PromotionTaskResult } from './promotion.js';
 import type { WorkflowRunDetail, WorkflowTaskRow } from './ledger/types.js';
+import { resolveUserLabels } from './userLabels.js';
 
 /** A storage ceiling for the detail, sized for an error or a git account. */
 const MAX_DETAIL_CHARS = 8_000;
@@ -200,13 +202,32 @@ function sensitiveSources(task: WorkflowTask | undefined, sensitiveIds: Readonly
   };
 }
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The display name of the user who decided a gate, or nothing. A gate
+ * records the user's id, which a caller must never read. An email is not a
+ * display name either, as the detail reaches agent context.
+ */
+async function deciderLabel(
+  db: PostgresJsDatabase,
+  decidedBy: string | undefined,
+): Promise<string | undefined> {
+  if (decidedBy === undefined || !UUID.test(decidedBy)) return undefined;
+  const label = await resolveUserLabels(db, [decidedBy])
+    .then((labels) => labels.get(decidedBy))
+    .catch(() => undefined);
+  return label === undefined || label === decidedBy || label.includes('@') ? undefined : label;
+}
+
 /**
  * What the task said about how it ended: a failure's reason, the decision a
  * rejected gate recorded, or, for a task that succeeded, the `state` and
- * `detail` its output reports.
+ * `detail` its output reports. A gate names who decided it by display name,
+ * or as an operator decision where no display name resolves.
  */
 async function describeTaskEnding(
-  payloadStore: PayloadStore,
+  deps: StoppedByDeps,
   row: WorkflowTaskRow,
   task: WorkflowTask | undefined,
   sensitiveIds: ReadonlySet<string>,
@@ -218,13 +239,13 @@ async function describeTaskEnding(
     if (hidden.output) return recorded;
     const said = (key: string): string | undefined =>
       hidden.field(key) ? undefined : text(rejection[key]);
-    const by = said('decidedBy');
+    const by = await deciderLabel(deps.db, said('decidedBy'));
     const comment = said('comment');
-    const head = by === undefined ? 'rejected' : `rejected by ${by}`;
+    const head = `rejected by ${by ?? 'an operator decision'}`;
     return comment === undefined ? head : `${head}: ${comment}`;
   }
   if (row.status !== 'succeeded' || hidden.output) return recorded;
-  const output = await decodeTaskOutput(row.outputRef, payloadStore).catch(() => null);
+  const output = await decodeTaskOutput(row.outputRef, deps.payloadStore).catch(() => null);
   const field = (key: string): string | undefined =>
     hidden.field(key) ? undefined : text(output?.[key]);
   const state = field('state');
@@ -243,27 +264,19 @@ function describeRunEnding(run: StoppingRun): string | undefined {
   return reason === undefined ? `cancelled by ${actor}` : `cancelled by ${actor}: ${reason}`;
 }
 
-/** Below this length a common spelling also spells unrelated text. */
-const MIN_FREE_TEXT_CHARS = 6;
-
 /**
- * A spelling such as `1`, `0`, `true` or a lone character also spells
- * unrelated text: an exit code, a count, a flag. It is matched only as a
- * whole value, never inside free text. A short spelling that is not common,
- * such as `k7Qz`, is still matched anywhere, as a secret quoted in a reason.
+ * Below this length a spelling also spells parts of unrelated text, such as
+ * `dev` in `development` or `42` in `142`. It is matched only as a whole token.
  */
-function isCommonShortSpelling(spelled: string): boolean {
-  if (spelled.length >= MIN_FREE_TEXT_CHARS) return false;
-  return (
-    spelled.length < 2 || /^(?:true|false)$/i.test(spelled) || /^[-+]?\d+(?:\.\d+)?$/.test(spelled)
-  );
-}
+const MIN_FREE_TEXT_CHARS = 6;
 
 interface SensitiveSpellings {
   /** The JSON text of every sensitive value and of every node inside one. */
   nodes: Set<string>;
-  /** Spellings that match anywhere in free text. */
+  /** Spellings that match anywhere in text. */
   free: string[];
+  /** Short spellings that match in text only where they stand alone. */
+  tokens: string[];
 }
 
 function jsonText(value: unknown): string | undefined {
@@ -272,6 +285,11 @@ function jsonText(value: unknown): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function addTextSpelling(spelled: string, into: SensitiveSpellings): void {
+  if (spelled.length >= MIN_FREE_TEXT_CHARS) into.free.push(spelled);
+  else into.tokens.push(spelled);
 }
 
 /**
@@ -283,17 +301,13 @@ function collectSpellings(value: unknown, into: SensitiveSpellings): void {
   if (typeof value === 'string') {
     if (text(value) === undefined) return;
     into.nodes.add(JSON.stringify(value));
-    if (!isCommonShortSpelling(value)) into.free.push(value);
+    addTextSpelling(value, into);
     return;
   }
-  if (typeof value === 'number' || typeof value === 'bigint') {
+  if (typeof value === 'number' || typeof value === 'bigint' || typeof value === 'boolean') {
     const spelled = String(value);
-    if (typeof value === 'number' && Number.isFinite(value)) into.nodes.add(spelled);
-    if (!isCommonShortSpelling(spelled)) into.free.push(spelled);
-    return;
-  }
-  if (typeof value === 'boolean') {
-    into.nodes.add(String(value));
+    if (typeof value !== 'number' || Number.isFinite(value)) into.nodes.add(spelled);
+    addTextSpelling(spelled, into);
     return;
   }
   if (value === null || typeof value !== 'object') return;
@@ -302,18 +316,73 @@ function collectSpellings(value: unknown, into: SensitiveSpellings): void {
   const serialised = jsonText(value);
   if (serialised !== undefined) {
     into.nodes.add(serialised);
-    if (serialised.length >= MIN_FREE_TEXT_CHARS) into.free.push(serialised);
+    addTextSpelling(serialised, into);
   }
   for (const child of children) collectSpellings(child, into);
 }
 
-function redactNode(node: unknown, nodes: ReadonlySet<string>): unknown {
+const WORD_CHAR = /[\p{L}\p{N}_]/u;
+const DIGIT = /\d/;
+
+/**
+ * Whether the spelling at `start` stands alone: no letter, digit or
+ * underscore touches either edge, and a number is not the whole or the
+ * fraction part of a longer decimal such as `1.05`.
+ */
+function standsAlone(textValue: string, start: number, spelled: string): boolean {
+  const end = start + spelled.length;
+  const before = textValue.charAt(start - 1);
+  const after = textValue.charAt(end);
+  const first = spelled.charAt(0);
+  const last = spelled.charAt(spelled.length - 1);
+  if (WORD_CHAR.test(first) && before !== '' && WORD_CHAR.test(before)) return false;
+  if (WORD_CHAR.test(last) && after !== '' && WORD_CHAR.test(after)) return false;
+  if (DIGIT.test(first) && before === '.' && DIGIT.test(textValue.charAt(start - 2))) return false;
+  if (DIGIT.test(last) && after === '.' && DIGIT.test(textValue.charAt(end + 1))) return false;
+  return true;
+}
+
+function replaceTokens(textValue: string, spelled: string): string {
+  let out = '';
+  let from = 0;
+  for (let at = textValue.indexOf(spelled); at !== -1; at = textValue.indexOf(spelled, at + 1)) {
+    if (at < from || !standsAlone(textValue, at, spelled)) continue;
+    out += textValue.slice(from, at) + REDACTED;
+    from = at + spelled.length;
+  }
+  return out + textValue.slice(from);
+}
+
+/** Longest first, so an object's JSON text is replaced whole before its leaves. */
+function longestFirst(spellings: readonly string[]): string[] {
+  return [...new Set(spellings)].sort((a, b) => b.length - a.length);
+}
+
+function redactAnywhere(textValue: string, spellings: SensitiveSpellings): string {
+  let out = textValue;
+  for (const spelled of longestFirst(spellings.free)) out = out.split(spelled).join(REDACTED);
+  return out;
+}
+
+/** Replaces a long spelling anywhere in the text, and a short one where it stands alone. */
+function redactText(textValue: string, spellings: SensitiveSpellings): string {
+  let out = redactAnywhere(textValue, spellings);
+  for (const spelled of longestFirst(spellings.tokens)) out = replaceTokens(out, spelled);
+  return out;
+}
+
+/**
+ * Replaces a node whose JSON text is a sensitive value. A string leaf is
+ * text as well, so the text rule applies inside it.
+ */
+function redactNode(node: unknown, spellings: SensitiveSpellings): unknown {
   const spelled = jsonText(node);
-  if (spelled !== undefined && nodes.has(spelled)) return REDACTED;
-  if (Array.isArray(node)) return node.map((child) => redactNode(child, nodes));
+  if (spelled !== undefined && spellings.nodes.has(spelled)) return REDACTED;
+  if (typeof node === 'string') return redactText(node, spellings);
+  if (Array.isArray(node)) return node.map((child) => redactNode(child, spellings));
   if (node === null || typeof node !== 'object') return node;
   return Object.fromEntries(
-    Object.entries(node).map(([key, child]) => [key, redactNode(child, nodes)]),
+    Object.entries(node).map(([key, child]) => [key, redactNode(child, spellings)]),
   );
 }
 
@@ -347,13 +416,16 @@ function decodeJson(slice: string): { value: unknown } | undefined {
 }
 
 /**
- * Replaces sensitive values where the detail quotes them as whole values: the
- * whole detail, or a leaf or node of a JSON object or array inside it.
+ * Replaces the sensitive values a detail quotes. The whole detail and each
+ * JSON object or array inside it match by node. The text between them
+ * matches by the text rule. A last pass replaces a long spelling that runs
+ * from text into JSON.
  */
-function redactWholeValues(detail: string, nodes: ReadonlySet<string>): string {
+function redact(detail: string, spellings: SensitiveSpellings): string {
   const whole = detail.trim();
-  if (nodes.has(whole) || nodes.has(JSON.stringify(whole))) return REDACTED;
+  if (spellings.nodes.has(whole) || spellings.nodes.has(JSON.stringify(whole))) return REDACTED;
   let out = '';
+  let between = '';
   let i = 0;
   while (i < detail.length) {
     const c = detail.charAt(i);
@@ -361,30 +433,29 @@ function redactWholeValues(detail: string, nodes: ReadonlySet<string>): string {
     const slice = end === -1 ? undefined : detail.slice(i, end + 1);
     const decoded = slice === undefined ? undefined : decodeJson(slice);
     if (slice === undefined || decoded === undefined) {
-      out += c;
+      between += c;
       i++;
       continue;
     }
-    const redacted = redactNode(decoded.value, nodes);
+    out += redactText(between, spellings);
+    between = '';
+    const redacted = redactNode(decoded.value, spellings);
     const changed = jsonText(redacted) !== jsonText(decoded.value);
     out += redacted === REDACTED ? REDACTED : changed ? (jsonText(redacted) ?? slice) : slice;
     i = end + 1;
   }
-  return out;
-}
-
-function redact(detail: string, spellings: SensitiveSpellings): string {
-  let out = redactWholeValues(detail, spellings.nodes);
-  // Longest first, so an object's JSON text is replaced whole before its leaves.
-  const free = [...new Set(spellings.free)].sort((a, b) => b.length - a.length);
-  for (const value of free) out = out.split(value).join(REDACTED);
-  return out;
+  return redactAnywhere(out + redactText(between, spellings), spellings);
 }
 
 function bounded(detail: string): string {
   return detail.length > MAX_DETAIL_CHARS
     ? `${detail.slice(0, MAX_DETAIL_CHARS)}… [truncated]`
     : detail;
+}
+
+export interface StoppedByDeps {
+  db: PostgresJsDatabase;
+  payloadStore: PayloadStore;
 }
 
 export interface BuildStoppedByArgs {
@@ -442,9 +513,10 @@ async function rereadOutputs(
  * redacted, so the stop is reported without its detail.
  */
 export async function buildStoppedBy(
-  payloadStore: PayloadStore,
+  deps: StoppedByDeps,
   args: BuildStoppedByArgs,
 ): Promise<WorkflowRunResultStoppedBy | undefined> {
+  const { payloadStore } = deps;
   const { workflow, run, primary } = args;
   const { results, undecoded } = await rereadOutputs(
     payloadStore,
@@ -466,7 +538,7 @@ export async function buildStoppedBy(
     (t) =>
       undecoded.has(t.taskId) && (t.promoteOutputs ?? []).some((p) => sensitiveIds.has(p.toState)),
   );
-  const spellings: SensitiveSpellings = { nodes: new Set(), free: [] };
+  const spellings: SensitiveSpellings = { nodes: new Set(), free: [], tokens: [] };
   for (const [key, value] of Object.entries(bag)) {
     if (sensitiveIds.has(key)) collectSpellings(value, spellings);
   }
@@ -482,7 +554,7 @@ export async function buildStoppedBy(
     head = { taskId: stopper.row.taskId, status: status.data };
     const task = workflow.tasks.find((t) => t.taskId === stopper.row.taskId);
     detail = await describeTaskEnding(
-      payloadStore,
+      deps,
       stopper.row,
       task,
       sensitiveIds,

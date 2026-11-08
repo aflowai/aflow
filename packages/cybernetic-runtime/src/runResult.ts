@@ -357,13 +357,16 @@ export async function buildWorkflowRunResult(
     if (outcomes) result.outcomes = outcomes;
     if (learnings) result.learnings = learnings;
     if (declaration?.primary) {
-      const stoppedBy = await buildStoppedBy(payloadStore, {
-        workflow,
-        run,
-        primary: declaration.primary,
-        promotingRows: rowsToDecode,
-        taskResults,
-      });
+      const stoppedBy = await buildStoppedBy(
+        { db, payloadStore },
+        {
+          workflow,
+          run,
+          primary: declaration.primary,
+          promotingRows: rowsToDecode,
+          taskResults,
+        },
+      );
       if (stoppedBy) result.stoppedBy = stoppedBy;
     }
   }

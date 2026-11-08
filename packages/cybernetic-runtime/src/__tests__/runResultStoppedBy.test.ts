@@ -7,6 +7,12 @@ import type { WorkflowRunDetail, WorkflowTaskRow } from '../ledger/types.js';
 
 const mocks = vi.hoisted(() => ({
   selectActiveLearningSet: vi.fn(),
+  resolveUserLabels: vi.fn(),
+}));
+
+vi.mock('../userLabels.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../userLabels.js')>()),
+  resolveUserLabels: mocks.resolveUserLabels,
 }));
 
 vi.mock('../ledger/queries.js', () => ({ getRunCampaignId: vi.fn().mockResolvedValue(null) }));
@@ -167,6 +173,7 @@ beforeEach(() => {
     omittedDueToBudget: 0,
     consolidationDue: false,
   });
+  mocks.resolveUserLabels.mockResolvedValue(new Map());
 });
 
 describe('buildWorkflowRunResult — the task that stopped the run', () => {
@@ -344,7 +351,7 @@ describe('buildWorkflowRunResult — tasks that did not stop the run', () => {
     });
   });
 
-  it('leaves unrelated text alone when a sensitive value is 1, 0 or true', async () => {
+  it('leaves 1, 0 and true alone inside longer words and numbers', async () => {
     const workflow = {
       ...WORKFLOW,
       tasks: WORKFLOW.tasks.map((t) =>
@@ -368,7 +375,7 @@ describe('buildWorkflowRunResult — tasks that did not stop the run', () => {
     } as Workflow;
     OUTPUTS['ref:commit:short-secrets'] = { state: 'applied', pin: 1, retries: 0, admin: true };
     const reason =
-      'yarn test exited 1 after 0 retries in 10.4s (strict: true), see true-north/1.0 {"pin":1}';
+      'yarn test exited 10 after 100 retries in 10.4s (strict: trueish), see untrue/1.05 {"pin":1}';
     const result = await resultOf(
       run('failed', [
         row('commit', 'succeeded', 1, { outputRef: 'ref:commit:short-secrets' }),
@@ -383,7 +390,7 @@ describe('buildWorkflowRunResult — tasks that did not stop the run', () => {
       taskId: 'check',
       status: 'failed',
       detail:
-        'yarn test exited 1 after 0 retries in 10.4s (strict: true), see true-north/1.0 {"pin":"[redacted]"}',
+        'yarn test exited 10 after 100 retries in 10.4s (strict: trueish), see untrue/1.05 {"pin":"[redacted]"}',
     });
   });
 
@@ -519,7 +526,7 @@ describe('buildWorkflowRunResult — tasks that did not stop the run', () => {
     });
   });
 
-  it('redacts a short secret that is not a common spelling inside free text', async () => {
+  it('redacts a short secret, a short number and a boolean where each stands alone', async () => {
     OUTPUTS['ref:commit:otp'] = { state: 'applied', otp: 'k7Qz', retries: 0, admin: true };
     const result = await resultOf(
       run('failed', [
@@ -536,8 +543,51 @@ describe('buildWorkflowRunResult — tasks that did not stop the run', () => {
     expect(result?.stoppedBy).toEqual({
       taskId: 'check',
       status: 'failed',
-      detail: 'code [redacted] expired after 0 retries (strict: true), exit 1',
+      detail: 'code [redacted] expired after [redacted] retries (strict: [redacted]), exit 1',
     });
+  });
+
+  /** A failed `check` whose reason quotes the values `commit` filled. */
+  async function failedCheckDetail(
+    values: Record<string, unknown>,
+    reason: string,
+  ): Promise<string | undefined> {
+    const ref = `ref:commit:${Object.keys(values).join('-')}`;
+    OUTPUTS[ref] = { state: 'applied', ...values };
+    const result = await resultOf(
+      run('failed', [
+        row('commit', 'succeeded', 1, { outputRef: ref }),
+        row('check', 'failed', 2, { failureReason: reason }),
+        row('push', 'blocked', 2),
+        row('open-pr', 'blocked', 2),
+      ]),
+      'full',
+      withCommitSecrets(Object.keys(values)),
+    );
+    return result?.stoppedBy?.detail;
+  }
+
+  it('redacts a short numeric secret quoted inside free text', async () => {
+    expect(await failedCheckDetail({ pin: 4821 }, 'pin 4821 refused, retry in 14821 ms')).toBe(
+      'pin [redacted] refused, retry in 14821 ms',
+    );
+  });
+
+  it('redacts dev where it stands alone but leaves development whole', async () => {
+    expect(
+      await failedCheckDetail({ env: 'dev' }, 'deploy to development failed (env: dev, dev-1)'),
+    ).toBe('deploy to development failed (env: [redacted], [redacted]-1)');
+  });
+
+  it('redacts 42 where it stands alone but leaves 142 whole, in text and in JSON', async () => {
+    expect(
+      await failedCheckDetail(
+        { port: 42 },
+        'port 42 refused after 142 tries {"msg":"port 42 closed","code":142,"port":42}',
+      ),
+    ).toBe(
+      'port [redacted] refused after 142 tries {"msg":"port [redacted] closed","code":142,"port":"[redacted]"}',
+    );
   });
 });
 
@@ -554,14 +604,16 @@ describe('buildWorkflowRunResult — a rejected approval gate', () => {
     ],
   } as Workflow;
 
-  it('names the gate the operator rejected, with the rejection, not the task before it', async () => {
+  const DECIDER = '3f2c9a10-5b7e-4d21-9c3a-8e1f0b2d4c6a';
+
+  async function rejectedGate(decidedBy: string) {
     OUTPUTS['ref:approve:rejected'] = {
       decision: 'rejected',
       decidedAt: '2026-11-07T00:05:00.000Z',
-      decidedBy: 'operator-7',
+      decidedBy,
       comment: 'Wrong base branch',
     };
-    const result = await resultOf(
+    return resultOf(
       run('completed', [
         row('commit', 'succeeded', 1, { outputRef: 'ref:commit:applied' }),
         row('check', 'succeeded', 2, { summary: 'All tests passed' }),
@@ -575,11 +627,37 @@ describe('buildWorkflowRunResult — a rejected approval gate', () => {
       'full',
       GATED,
     );
+  }
+
+  it('names the gate the operator rejected, with the rejection, not the task before it', async () => {
+    mocks.resolveUserLabels.mockResolvedValue(new Map([[DECIDER, 'Dana Ruiz']]));
+    const result = await rejectedGate(DECIDER);
+    expect(mocks.resolveUserLabels).toHaveBeenCalledWith(DB, [DECIDER]);
     expect(result?.stoppedBy).toEqual({
       taskId: 'approve',
       status: 'skipped',
-      detail: 'rejected by operator-7: Wrong base branch',
+      detail: 'rejected by Dana Ruiz: Wrong base branch',
     });
+  });
+
+  it.each([
+    ['resolves to no user', new Map<string, string>()],
+    ['resolves only to an email', new Map([[DECIDER, 'dana@example.com']])],
+  ])('names no actor id where the decider %s', async (_case, labels) => {
+    mocks.resolveUserLabels.mockResolvedValue(labels);
+    const result = await rejectedGate(DECIDER);
+    expect(result?.stoppedBy).toEqual({
+      taskId: 'approve',
+      status: 'skipped',
+      detail: 'rejected by an operator decision: Wrong base branch',
+    });
+  });
+
+  it('names no actor id where the label lookup fails', async () => {
+    mocks.resolveUserLabels.mockRejectedValue(new Error('database unreachable'));
+    const result = await rejectedGate(DECIDER);
+    expect(result?.stoppedBy?.detail).toBe('rejected by an operator decision: Wrong base branch');
+    expect(result?.stoppedBy?.detail).not.toContain(DECIDER.slice(0, 8));
   });
 
   it('passes over a gate its own condition skipped, which holds no decision', async () => {

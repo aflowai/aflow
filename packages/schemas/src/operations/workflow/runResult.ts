@@ -195,9 +195,10 @@ export const WorkflowRunResultStoppedBySchema = z.object({
     .optional()
     .describe(
       'Its own account: the failure reason, the `state` and `detail` of a succeeded output, ' +
-        "who rejected a gate and why, the run's failure message, or who cancelled the run " +
-        'and why. Sensitive values are redacted. It is absent where a sensitive value could ' +
-        'not be read to redact it.',
+        "the rejection of a gate with the decider's display name and comment, the run's " +
+        'failure message, or who cancelled the run and why. A decider with no display name ' +
+        'reads as an operator decision, never as a user id. Sensitive values are redacted. ' +
+        'It is absent where a sensitive value could not be read to redact it.',
     ),
 });
 export type WorkflowRunResultStoppedBy = z.infer<typeof WorkflowRunResultStoppedBySchema>;
