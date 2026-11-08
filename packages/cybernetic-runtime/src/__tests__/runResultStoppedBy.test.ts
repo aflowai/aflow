@@ -296,6 +296,75 @@ describe('buildWorkflowRunResult — tasks that did not stop the run', () => {
     });
   });
 
+  it('names the outcome that skipped the producer when a failure off the path failed the run', async () => {
+    const result = await resultOf(
+      {
+        ...run('failed', [
+          row('docs', 'failed', 1, { failureReason: 'docs build exited 1' }),
+          row('commit', 'succeeded', 2, { outputRef: 'ref:commit:conflict' }),
+          row('check', 'skipped', 3),
+          row('push', 'skipped', 3),
+          row('open-pr', 'skipped', 3),
+        ]),
+        failureJson: {
+          reason: 'task_failed',
+          message: 'The run ended on task docs.',
+          taskIds: ['docs'],
+        },
+      },
+      'full',
+      withSideTask({}),
+    );
+    expect(result?.stoppedBy).toEqual({
+      taskId: 'commit',
+      status: 'succeeded',
+      detail: 'state: conflict — src/a.ts: patch does not apply',
+    });
+  });
+
+  it('leaves unrelated text alone when a sensitive value is 1, 0 or true', async () => {
+    const workflow = {
+      ...WORKFLOW,
+      tasks: WORKFLOW.tasks.map((t) =>
+        t.taskId === 'commit'
+          ? {
+              ...t,
+              promoteOutputs: [
+                { kind: 'output_path', path: 'pin', toState: 'pin' },
+                { kind: 'output_path', path: 'retries', toState: 'retries' },
+                { kind: 'output_path', path: 'admin', toState: 'admin' },
+              ],
+            }
+          : t,
+      ),
+      stateVariables: [
+        ...WORKFLOW.stateVariables,
+        { variableId: 'pin', sensitive: true },
+        { variableId: 'retries', sensitive: true },
+        { variableId: 'admin', sensitive: true },
+      ],
+    } as Workflow;
+    OUTPUTS['ref:commit:short-secrets'] = { state: 'applied', pin: 1, retries: 0, admin: true };
+    const reason =
+      'yarn test exited 1 after 0 retries in 10.4s (strict: true), see true-north/1.0 {"pin":1}';
+    const result = await resultOf(
+      run('failed', [
+        row('commit', 'succeeded', 1, { outputRef: 'ref:commit:short-secrets' }),
+        row('check', 'failed', 2, { failureReason: reason }),
+        row('push', 'blocked', 2),
+        row('open-pr', 'blocked', 2),
+      ]),
+      'full',
+      workflow,
+    );
+    expect(result?.stoppedBy).toEqual({
+      taskId: 'check',
+      status: 'failed',
+      detail:
+        'yarn test exited 1 after 0 retries in 10.4s (strict: true), see true-north/1.0 {"pin":"[redacted]"}',
+    });
+  });
+
   it("carries the run's own failure where no task row holds the cause", async () => {
     const result = await resultOf({
       ...run('failed', [

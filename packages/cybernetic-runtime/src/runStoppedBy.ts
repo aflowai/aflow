@@ -72,9 +72,10 @@ function namedByRunFailure(failureJson: unknown): Set<string> {
  * dependency, and a task off that path withholds nothing from it. A failed
  * one comes first. A blocked or cancelled one comes next, behind any task the
  * run's failure names, because a `cancel_siblings` failure off the path
- * blocks the tasks on it. A failed run with none of these stopped on its own
- * account. A run that completed names the latest task that succeeded toward
- * the producer.
+ * blocks the tasks on it. Where a required task on the path was skipped, the
+ * latest task that succeeded toward the producer is the one whose outcome
+ * skipped it, even when a failure off the path failed the run. A failed run
+ * with none of these stopped on its own account.
  */
 export function findStopper(
   workflow: StoppingWorkflow,
@@ -101,9 +102,12 @@ export function findStopper(
     const named = rowWith(inOrder(workflow, namedByRunFailure(run.failureJson)), 'failed');
     return { kind: 'task', row: named ?? halted };
   }
-  if (run.status === 'failed') return { kind: 'run', status: 'failed' };
+  if (run.status === 'failed' && !rowWith(onPath, 'skipped')) {
+    return { kind: 'run', status: 'failed' };
+  }
   const latest = latestSucceededTowardProducer(workflow, rowByTaskId, primary);
-  return latest ? { kind: 'task', row: latest } : undefined;
+  if (latest) return { kind: 'task', row: latest };
+  return run.status === 'failed' ? { kind: 'run', status: 'failed' } : undefined;
 }
 
 /**
@@ -200,31 +204,130 @@ function describeRunEnding(run: StoppingRun): string | undefined {
 }
 
 /**
+ * Below this length a spelling such as `1`, `0` or `true` also spells
+ * unrelated text, so it is matched only as a whole value, never inside free text.
+ */
+const MIN_FREE_TEXT_CHARS = 6;
+
+interface SensitiveSpellings {
+  /** The JSON text of every sensitive value and of every node inside one. */
+  nodes: Set<string>;
+  /** Spellings long enough to match anywhere in free text. */
+  free: string[];
+}
+
+function jsonText(value: unknown): string | undefined {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * The spellings a sensitive value takes when a reason quotes it: a string as
  * itself, and a number, boolean or object as its JSON text. An object's
  * leaves are spelled too, as a message usually quotes one field of it.
  */
-function sensitiveSpellings(value: unknown): string[] {
-  if (typeof value === 'string') return text(value) === undefined ? [] : [value];
-  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
-    return [String(value)];
+function collectSpellings(value: unknown, into: SensitiveSpellings): void {
+  if (typeof value === 'string') {
+    if (text(value) === undefined) return;
+    into.nodes.add(JSON.stringify(value));
+    if (value.length >= MIN_FREE_TEXT_CHARS) into.free.push(value);
+    return;
   }
-  if (value === null || typeof value !== 'object') return [];
-  const leaves = Object.values(value).flatMap(sensitiveSpellings);
-  let serialised: string | undefined;
-  try {
-    serialised = JSON.stringify(value);
-  } catch {
-    serialised = undefined;
+  if (typeof value === 'number' || typeof value === 'bigint') {
+    const spelled = String(value);
+    if (typeof value === 'number' && Number.isFinite(value)) into.nodes.add(spelled);
+    if (spelled.length >= MIN_FREE_TEXT_CHARS) into.free.push(spelled);
+    return;
   }
-  return serialised === undefined ? leaves : [serialised, ...leaves];
+  if (typeof value === 'boolean') {
+    into.nodes.add(String(value));
+    return;
+  }
+  if (value === null || typeof value !== 'object') return;
+  const children = Object.values(value);
+  if (children.length === 0) return;
+  const serialised = jsonText(value);
+  if (serialised !== undefined) {
+    into.nodes.add(serialised);
+    if (serialised.length >= MIN_FREE_TEXT_CHARS) into.free.push(serialised);
+  }
+  for (const child of children) collectSpellings(child, into);
 }
 
-function redact(detail: string, sensitiveValues: readonly string[]): string {
+function redactNode(node: unknown, nodes: ReadonlySet<string>): unknown {
+  const spelled = jsonText(node);
+  if (spelled !== undefined && nodes.has(spelled)) return REDACTED;
+  if (Array.isArray(node)) return node.map((child) => redactNode(child, nodes));
+  if (node === null || typeof node !== 'object') return node;
+  return Object.fromEntries(
+    Object.entries(node).map(([key, child]) => [key, redactNode(child, nodes)]),
+  );
+}
+
+/** Where the JSON object or array opening at `start` closes, or -1. */
+function closingIndex(detail: string, start: number): number {
+  let depth = 0;
+  let inString = false;
+  for (let i = start; i < detail.length; i++) {
+    const c = detail.charAt(i);
+    if (inString) {
+      if (c === '\\') i++;
+      else if (c === '"') inString = false;
+    } else if (c === '"') {
+      inString = true;
+    } else if (c === '{' || c === '[') {
+      depth++;
+    } else if (c === '}' || c === ']') {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+function decodeJson(slice: string): { value: unknown } | undefined {
+  try {
+    return { value: JSON.parse(slice) as unknown };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Replaces sensitive values where the detail quotes them as whole values: the
+ * whole detail, or a leaf or node of a JSON object or array inside it.
+ */
+function redactWholeValues(detail: string, nodes: ReadonlySet<string>): string {
+  const whole = detail.trim();
+  if (nodes.has(whole) || nodes.has(JSON.stringify(whole))) return REDACTED;
+  let out = '';
+  let i = 0;
+  while (i < detail.length) {
+    const c = detail.charAt(i);
+    const end = c === '{' || c === '[' ? closingIndex(detail, i) : -1;
+    const slice = end === -1 ? undefined : detail.slice(i, end + 1);
+    const decoded = slice === undefined ? undefined : decodeJson(slice);
+    if (slice === undefined || decoded === undefined) {
+      out += c;
+      i++;
+      continue;
+    }
+    const redacted = redactNode(decoded.value, nodes);
+    const changed = jsonText(redacted) !== jsonText(decoded.value);
+    out += redacted === REDACTED ? REDACTED : changed ? (jsonText(redacted) ?? slice) : slice;
+    i = end + 1;
+  }
+  return out;
+}
+
+function redact(detail: string, spellings: SensitiveSpellings): string {
+  let out = redactWholeValues(detail, spellings.nodes);
   // Longest first, so an object's JSON text is replaced whole before its leaves.
-  const spellings = [...new Set(sensitiveValues)].sort((a, b) => b.length - a.length);
-  let out = detail;
-  for (const value of spellings) out = out.split(value).join(REDACTED);
+  const free = [...new Set(spellings.free)].sort((a, b) => b.length - a.length);
+  for (const value of free) out = out.split(value).join(REDACTED);
   return out;
 }
 
@@ -253,9 +356,10 @@ export async function buildStoppedBy(
   const sensitiveIds = new Set(
     workflow.stateVariables.filter((v) => v.sensitive).map((v) => v.variableId),
   );
-  const sensitiveValues = Object.entries(bag)
-    .filter(([key]) => sensitiveIds.has(key))
-    .flatMap(([, value]) => sensitiveSpellings(value));
+  const spellings: SensitiveSpellings = { nodes: new Set(), free: [] };
+  for (const [key, value] of Object.entries(bag)) {
+    if (sensitiveIds.has(key)) collectSpellings(value, spellings);
+  }
 
   let head: Pick<WorkflowRunResultStoppedBy, 'taskId' | 'status'>;
   let detail: string | undefined;
@@ -269,7 +373,5 @@ export async function buildStoppedBy(
     const task = workflow.tasks.find((t) => t.taskId === stopper.row.taskId);
     detail = await describeTaskEnding(payloadStore, stopper.row, task, sensitiveIds);
   }
-  return detail === undefined
-    ? head
-    : { ...head, detail: bounded(redact(detail, sensitiveValues)) };
+  return detail === undefined ? head : { ...head, detail: bounded(redact(detail, spellings)) };
 }
