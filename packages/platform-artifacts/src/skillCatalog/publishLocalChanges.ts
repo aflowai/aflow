@@ -15,6 +15,7 @@ import {
   SETTLE_AFTER_REVIEW_TASK,
 } from './publishLocalChangesAfterReview.js';
 import { FIX_ROUND_TASKS, READ_REVIEW_TASK } from './publishLocalChangesFixRound.js';
+import { COMMIT_STOP_TASKS } from './publishLocalChangesCommitStops.js';
 import { decidePushTask } from './publishLocalChangesGate.js';
 import {
   COMMISSION_RUN_ID_SCHEMA,
@@ -316,7 +317,7 @@ const ENTRY_INPUT_CONTRACT = {
 
 const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'publish-local-changes',
-  version: 53,
+  version: 56,
   name: 'Publish Local Changes',
   tagline:
     'Commit a patch onto a branch of a connected repository, then push it and open the pull request — asking the operator first unless the folder says otherwise.',
@@ -529,6 +530,8 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             },
           },
         },
+
+        ...COMMIT_STOP_TASKS,
 
         {
           taskId: 'check-commit',
