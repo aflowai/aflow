@@ -30,6 +30,7 @@ import {
   NOT_THE_KEY_OWNER,
   STILL_ANSWERING,
   WAITS_AT_AFLOW,
+  WATCH_IDLE,
   WATCH_READ_FAILURE_LIMIT,
   WATCH_STOPPED,
   WORK_RUNNING,
@@ -726,6 +727,61 @@ describe('a turn the thread follows to its end', () => {
     expect(texts()).toEqual(['First note.', 'Second note.', 'The Helmsman answers: status?']);
   });
 
+  it('stops after an hour on one pause that needs Aflow, and leaves the thread to a reply', async () => {
+    const status = directMessage(OPERATOR, 'status?', NOW);
+    aflow.holdAnswers = true;
+    let clock = NOW.getTime();
+    const app = following(
+      (polls) => {
+        clock += 10 * MINUTE;
+        if (polls === 1) aflow.pauseAtAflow(sessionId());
+      },
+      () => new Date(clock),
+    );
+
+    expect(await watchStart(app, status)).toBe('idle');
+
+    expect(clock - NOW.getTime()).toBe(70 * MINUTE);
+    expect(texts()).toEqual([WAITS_AT_AFLOW, WATCH_IDLE]);
+    expect(store.threadAt(status.channel, status.ts)?.status).toBe('idle');
+
+    // A restart does not watch it again.
+    store = ChannelStore.open(storePath, NOW);
+    expect(newConversations().resumeWatching()).toEqual([]);
+
+    // The operator answers at Aflow, and a reply watches the thread again rather than send.
+    aflow.resumeAtAflow(sessionId());
+    aflow.answerHeld();
+    const reply = await answerInbound(
+      directMessage(OPERATOR, 'done?', NOW, { threadTs: status.ts }),
+      { ...deps(), conversations: newConversations() },
+    );
+    expect(reply.outcome).toBe('busy');
+    if ('watching' in reply) expect(await reply.watching).toBe('answered');
+    expect(texts().slice(2)).toEqual([
+      LOOKING_AGAIN,
+      'The Helmsman answers: a reply sent at Aflow',
+    ]);
+  });
+
+  it('leaves an idle thread to pruning', async () => {
+    const status = directMessage(OPERATOR, 'status?', NOW);
+    aflow.holdAnswers = true;
+    let clock = NOW.getTime();
+    const app = following(
+      (polls) => {
+        clock += 30 * MINUTE;
+        if (polls === 1) aflow.pauseAtAflow(sessionId());
+      },
+      () => new Date(clock),
+    );
+    expect(await watchStart(app, status)).toBe('idle');
+
+    store = ChannelStore.open(storePath, new Date(clock + 31 * 24 * 60 * MINUTE));
+
+    expect(store.threadAt(status.channel, status.ts)).toBeUndefined();
+  });
+
   it('ends the thread when its session is no longer at Aflow', async () => {
     const status = directMessage(OPERATOR, 'status?', NOW);
     aflow.holdAnswers = true;
@@ -822,6 +878,42 @@ describe('a watch whose reads keep failing', () => {
     expect(watched).toBe('answered');
     expect(texts()).toEqual(['The Helmsman answers: status?']);
     expect(waits).toContain(2_000);
+  });
+
+  it('watches again from a reply that comes while the stop notice posts', async () => {
+    const status = directMessage(OPERATOR, 'status?', NOW);
+    aflow.holdAnswers = true;
+    let down = true;
+    let noticeHeld: (() => void) | undefined;
+    const post = slack.postMessage;
+    slack.postMessage = (channel, text, options) =>
+      text === WATCH_STOPPED
+        ? new Promise((done) => {
+            noticeHeld = () => {
+              done(post(channel, text, options));
+            };
+          })
+        : post(channel, text, options);
+    const app = flaky(() => down);
+    const started = await answerInbound(status, { ...deps(), conversations: app });
+    for (let turns = 0; turns < 100 && noticeHeld === undefined; turns += 1) {
+      await new Promise<void>((done) => setImmediate(done));
+    }
+    expect(store.threadAt(status.channel, status.ts)?.status).toBe('unread');
+
+    down = false;
+    aflow.answerHeld();
+    const reply = await answerInbound(
+      directMessage(OPERATOR, 'are you there?', NOW, { threadTs: status.ts }),
+      { ...deps(), conversations: app },
+    );
+    noticeHeld?.();
+    if ('watching' in started) expect(await started.watching).toBe('stopped');
+
+    expect(reply.outcome).toBe('busy');
+    if ('watching' in reply) expect(await reply.watching).toBe('answered');
+    expect(store.threadAt(status.channel, status.ts)?.status).toBe('waiting');
+    expect(texts()).toContain('The Helmsman answers: status?');
   });
 
   it('is watched again after a restart', async () => {

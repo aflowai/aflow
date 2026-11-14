@@ -143,9 +143,11 @@ export const ThreadRecordSchema = z.object({
    * `answering` while the app waits for the Helmsman's reply, `waiting` once it
    * paused for the operator, `ended` once the session finished. `unread` once
    * the watch stopped on reads that kept failing, until a reply or a restart
-   * watches the thread again.
+   * watches the thread again. `idle` once the watch stopped on a pause that
+   * needs the operator at Aflow, until a reply watches the thread again. A
+   * restart leaves it, so pruning drops it in time.
    */
-  status: z.enum(['answering', 'waiting', 'unread', 'ended']),
+  status: z.enum(['answering', 'waiting', 'unread', 'idle', 'ended']),
   /**
    * The paused step the last `SessionPaused` named, which a reply resumes.
    * Null while the Helmsman answers, or when the app does not know the pause.
