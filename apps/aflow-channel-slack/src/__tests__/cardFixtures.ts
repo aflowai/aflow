@@ -78,12 +78,16 @@ export interface Post {
 export interface RecordingSlack extends SlackClient {
   posts: Post[];
   updates: Array<{ channel: string; ts: string; text: string; blocks: readonly SlackBlock[] }>;
+  reactions: Array<{ channel: string; ts: string; name: string }>;
+  /** Refuses every reaction with this, after recording the attempt. */
+  failReactions?: Error;
 }
 
 export function recordingSlack(): RecordingSlack {
   const slack: RecordingSlack = {
     posts: [],
     updates: [],
+    reactions: [],
     openDirectMessage: (userId) => Promise.resolve(`D-${userId}`),
     postMessage: (channel: string, text: string, options: PostOptions = {}) => {
       slack.posts.push({
@@ -97,6 +101,12 @@ export function recordingSlack(): RecordingSlack {
     updateMessage: (channel, ts, text, blocks) => {
       slack.updates.push({ channel, ts, text, blocks });
       return Promise.resolve();
+    },
+    addReaction: (channel, ts, name) => {
+      slack.reactions.push({ channel, ts, name });
+      return slack.failReactions === undefined
+        ? Promise.resolve()
+        : Promise.reject(slack.failReactions);
     },
     openSocketModeUrl: () => Promise.resolve('wss://example.invalid'),
   };

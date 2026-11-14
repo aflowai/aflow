@@ -104,7 +104,14 @@ async function main(): Promise<void> {
     slack,
     log,
     onDirectMessage: async (message) => {
-      const result = await answerInbound(message, { store, slack, api, config, conversations });
+      const result = await answerInbound(message, {
+        store,
+        slack,
+        api,
+        config,
+        conversations,
+        log,
+      });
       if (result.outcome === 'linked') log.info('Linked the Slack user who sent the setup code');
       if ('watching' in result) watched(result.watching);
     },

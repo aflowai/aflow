@@ -60,6 +60,7 @@ function fakeSlack(): FakeSlack {
       return Promise.resolve({ channel, ts: `17000000${String(slack.posts.length)}.000100` });
     },
     updateMessage: () => Promise.resolve(),
+    addReaction: () => Promise.resolve(),
     openSocketModeUrl: () => Promise.resolve('wss://example.invalid'),
   };
   return slack;
