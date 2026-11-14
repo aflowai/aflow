@@ -19,6 +19,7 @@ import type {
 } from '@aflow/schemas';
 
 import type { SlackBlock } from './slack.js';
+import { mrkdwnUnits, slackMrkdwnOf } from './slackMrkdwn.js';
 
 export type CardRow = 'choices' | 'text_reply' | 'approval' | 'write_approval' | 'at_aflow';
 
@@ -170,18 +171,16 @@ export function escapeMrkdwn(text: string): string {
 const MAX_TEXT_SECTIONS = 40;
 
 /**
- * Escapes `text` one character at a time into at most `count` pieces of at
- * most `room` characters each, and ends a cut text with an ellipsis. A piece
- * holds whole escapes, because one that ends inside `&amp;` shows the broken
- * entity.
+ * Joins `units` into at most `count` pieces of at most `room` characters each,
+ * and ends a cut text with an ellipsis. A piece holds whole units, because one
+ * that ends inside `&amp;` or a `<url|text>` link shows it broken.
  */
-function escapedPieces(text: string, count: number, room: number): string[] {
+function piecesOf(units: Iterable<string>, count: number, room: number): string[] {
   const pieces: string[] = [];
   let current = '';
   // How much of `current` fits with room left for the ellipsis of a cut text.
   let fitsWithEllipsis = 0;
-  for (const char of text) {
-    const escaped = escapeMrkdwn(char);
+  for (const escaped of units) {
     if (current.length + escaped.length > room) {
       if (pieces.length === count - 1) {
         pieces.push(`${current.slice(0, fitsWithEllipsis)}…`);
@@ -200,11 +199,13 @@ function escapedPieces(text: string, count: number, room: number): string[] {
 
 /** `text` escaped and cut to `room` characters on a whole escape. */
 function escapedWithin(text: string, room: number): string {
-  return escapedPieces(text, 1, room)[0] ?? '';
+  return piecesOf(Array.from(text, escapeMrkdwn), 1, room)[0] ?? '';
 }
 
+/** The agent's markdown as mrkdwn sections. */
 function sections(text: string): SlackBlock[] {
-  return escapedPieces(text, MAX_TEXT_SECTIONS, MAX_SECTION_TEXT).map((section) => ({
+  const units = mrkdwnUnits(slackMrkdwnOf(text));
+  return piecesOf(units, MAX_TEXT_SECTIONS, MAX_SECTION_TEXT).map((section) => ({
     type: 'section',
     text: { type: 'mrkdwn', text: section },
   }));

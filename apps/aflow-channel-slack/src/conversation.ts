@@ -32,6 +32,7 @@ import type { CardTap } from './cardActions.js';
 import { escapeMrkdwn } from './cards.js';
 import { SlackApiError, type SlackBlock, type SlackClient } from './slack.js';
 import type { DirectMessage } from './socketMode.js';
+import { mrkdwnUnits, slackMrkdwnOf } from './slackMrkdwn.js';
 import { typedTextOf } from './slackText.js';
 import type { ChannelStore, InboundOutcome, InboundRecord, ThreadRecord } from './store.js';
 
@@ -138,14 +139,13 @@ export function lateText(text: string, record: InboundRecord, ranAt: Date): stri
   );
 }
 
-/** The answer escaped, and cut to Slack's limit between whole characters and whole escapes. */
+/** The answer as mrkdwn, cut to Slack's limit between whole characters, escapes and links. */
 export function relayed(answer: string): string {
-  const whole = escapeMrkdwn(answer);
+  const whole = slackMrkdwnOf(answer);
   if (whole.length <= SLACK_TEXT_LIMIT) return whole;
   const room = SLACK_TEXT_LIMIT - CUT_NOTE.length;
   let cut = '';
-  for (const char of answer) {
-    const piece = escapeMrkdwn(char);
+  for (const piece of mrkdwnUnits(whole)) {
     if (cut.length + piece.length > room) break;
     cut += piece;
   }

@@ -154,6 +154,14 @@ describe('channel.message.send', () => {
     ]);
   });
 
+  it('posts the agent’s markdown as Slack mrkdwn', async () => {
+    await send({ text: '## Deploy\n- **staging** is [live](https://example.com/run)' });
+
+    expect(slack.posts).toEqual([
+      { channel: 'D-U-OPERATOR', text: '*Deploy*\n• *staging* is <https://example.com/run|live>' },
+    ]);
+  });
+
   it('returns the first messageRef to a retried step and posts nothing', async () => {
     const first = await send({ text: 'Approve the push.' });
     const retried = await send({ text: 'Approve the push.' });

@@ -208,6 +208,17 @@ describe('the card’s text across sections', () => {
     expect(agentText.join('')).toBe(`${'a'.repeat(2_998)}&amp;&lt;&gt;${'b'.repeat(10)}`);
   });
 
+  it('shows the agent’s markdown as mrkdwn, and keeps a link whole across sections', () => {
+    const text = `## Plan\n**${'a'.repeat(2_980)}** [the run](https://example.com/run/1)`;
+    const agentText = sectionTexts(cardHead(text, makeItem())).slice(0, -1);
+
+    expect(agentText.every((section) => section.length <= 3_000)).toBe(true);
+    expect(agentText[1]).toBe('<https://example.com/run/1|the run>');
+    expect(agentText.join('')).toBe(
+      `*Plan*\n*${'a'.repeat(2_980)}* <https://example.com/run/1|the run>`,
+    );
+  });
+
   it('cuts a text past the last section on a whole entity, and ends it with an ellipsis', () => {
     const agentText = sectionTexts(cardHead('&'.repeat(30_000), makeItem())).slice(0, -1);
 

@@ -78,6 +78,7 @@ export const CardRecordSchema = z.object({
   controls: z.array(CardControlSchema),
   /** The card's blocks above its controls, which an edit keeps. */
   head: z.array(z.record(z.unknown())),
+  /** The message's text as posted, in mrkdwn, which an edit keeps. */
   text: z.string(),
   postedAt: z.string().min(1),
   /** What the card says once it is decided, or once a tap learned it was. */

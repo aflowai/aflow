@@ -49,6 +49,7 @@ import {
 import type { AflowApi, ObservedOrigin } from './aflowApi.js';
 import { cardHead, openFoot, planCard, type CardPlan } from './cards.js';
 import { SlackApiError, type PostedMessage, type SlackClient } from './slack.js';
+import { slackMrkdwnOf } from './slackMrkdwn.js';
 import type { ChannelStore, SentRecord } from './store.js';
 
 export const CHANNEL_RECIPIENT_NOT_LINKED_CODE = 'CHANNEL_RECIPIENT_NOT_LINKED';
@@ -170,12 +171,13 @@ export class ChannelMessageSendHandler implements StepHandler {
     if (!claim.claimed) return this.refuse(ctx, claim.prior);
 
     const head = card === undefined ? undefined : cardHead(text, card.item);
+    const mrkdwn = slackMrkdwnOf(text);
     let message: PostedMessage;
     let posting = false;
     try {
       const channel = await this.deps.slack.openDirectMessage(link.slackUserId, ctx.signal);
       posting = true;
-      message = await this.deps.slack.postMessage(channel, text, {
+      message = await this.deps.slack.postMessage(channel, mrkdwn, {
         signal: ctx.signal,
         ...(card === undefined || head === undefined
           ? {}
@@ -219,7 +221,7 @@ export class ChannelMessageSendHandler implements StepHandler {
         row: card.plan.row,
         controls: card.plan.controls,
         head,
-        text,
+        text: mrkdwn,
         postedAt: now.toISOString(),
         outcome: null,
       });
