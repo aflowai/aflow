@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { WorkflowRunTaskStatusSchema } from './enums.js';
 import { WorkflowLearningSchema } from './learning.js';
 
 // ============================================================================
@@ -168,6 +169,41 @@ export const WorkflowRunResultArtifactSchema = z.object({
 export type WorkflowRunResultArtifact = z.infer<typeof WorkflowRunResultArtifactSchema>;
 
 /**
+ * What stopped a terminal run short of its declared primary output. Present
+ * only where `workflow.output.primary` is declared and no task produced it. A
+ * primary that was produced and then withheld as sensitive is not a stop. A
+ * primary whose producer's output could not be decoded may have been
+ * produced, so that is not reported as a stop either. A run that ended green
+ * carries it too, where a task succeeded with an outcome that its successors
+ * skip on, or where the operator rejected an approval gate on the way.
+ */
+export const WorkflowRunResultStoppedBySchema = z.object({
+  taskId: z
+    .string()
+    .nullable()
+    .describe(
+      'The required task on the way to the primary output that stopped the run. Null when the ' +
+        'run was cancelled, or failed on its own account with no task row holding the cause.',
+    ),
+  status: WorkflowRunTaskStatusSchema.describe(
+    'The task row status: failed, blocked or cancelled for a task that stopped, succeeded ' +
+      'for a task whose outcome skipped its successors, or skipped for an approval gate the ' +
+      'operator rejected. With a null taskId it is the run status: failed or cancelled.',
+  ),
+  detail: z
+    .string()
+    .optional()
+    .describe(
+      'Its own account: the failure reason, the `state` and `detail` of a succeeded output, ' +
+        "the rejection of a gate with the decider's display name and comment, the run's " +
+        'failure message, or who cancelled the run and why. A decider with no display name ' +
+        'reads as an operator decision, never as a user id. Sensitive values are redacted. ' +
+        'It is absent where a sensitive value could not be read to redact it.',
+    ),
+});
+export type WorkflowRunResultStoppedBy = z.infer<typeof WorkflowRunResultStoppedBySchema>;
+
+/**
  * Structured "what did this run produce" summary, built once at run-terminal
  * time by `buildWorkflowRunResult` (`@aflow/cybernetic-runtime`) and
  * carried on three surfaces so they can never disagree:
@@ -199,5 +235,7 @@ export const WorkflowRunResultSchema = z.object({
   /** Non-mutating recommendation to the calling agent (e.g. "fix the skill, don't change the API"). */
   advisory: WorkflowRunResultAdvisorySchema.optional(),
   learnings: WorkflowRunResultLearningsSchema.optional(),
+  /** The task, or the run itself, that stopped the run short of `workflow.output.primary`. */
+  stoppedBy: WorkflowRunResultStoppedBySchema.optional(),
 });
 export type WorkflowRunResult = z.infer<typeof WorkflowRunResultSchema>;

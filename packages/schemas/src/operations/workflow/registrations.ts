@@ -380,8 +380,9 @@ export function createWorkflowOperationRegistrations(
         'block — promoted output values (`result.output`, headline key in ' +
         '`result.primaryOutput`), the goal-metric score with target check ' +
         '(`result.score`), deterministic outcome checks, the closing task summary, a ' +
-        'pointer to any rendered UI artifact, and the skill\u2019s `result.guidance` for ' +
-        'what to do next — so a follow-up workflow.run.detail is usually unnecessary. ' +
+        'pointer to any rendered UI artifact, the skill\u2019s `result.guidance` for ' +
+        'what to do next, and `result.stoppedBy` naming the task that stopped a run short of ' +
+        'its headline — so a follow-up workflow.run.detail is usually unnecessary. ' +
         'The workflow must be "approved".',
       tags: ['workflow', 'run', 'execute'],
       outputSemanticType: 'workflow_run_status',
@@ -614,6 +615,9 @@ export function createWorkflowOperationRegistrations(
         whenNotToUse: ['Listing runs across a workflow — use a workflow.list-style op'],
         pitfalls: [
           'pauseVersion in the contract is freshly injected; always call detail before resume.',
+          'A terminal run that ended without its primary output names the task that stopped it in ' +
+            '`result.stoppedBy`, with its status and detail. A null `taskId` there means the run ' +
+            'failed or was cancelled on its own account. Read that before any task row.',
           'Only pass `present: true` when you intend to show the user; bare observation calls should omit it to avoid card spam.',
         ],
         minimalExampleInput: { runId: '00000000-0000-0000-0000-000000000000' },
