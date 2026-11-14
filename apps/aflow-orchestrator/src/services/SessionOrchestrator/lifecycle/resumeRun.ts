@@ -565,17 +565,20 @@ export function createResumeRun(bindings: SessionOrchestratorBindings) {
         const signaturesVarKey = `ai.agent.recentCallSignatures.${targetStepId}`;
         const readTargetsVarKey = `ai.agent.recentReadTargets.${targetStepId}`;
         const loopWarningVarKey = `ai.agent.loopWarning.${targetStepId}`;
+        const sameTargetWarningVarKey = `ai.agent.sameTargetWarning.${targetStepId}`;
         const hadCounters =
           runtimeState.variables[failuresVarKey] !== undefined ||
           runtimeState.variables[signaturesVarKey] !== undefined ||
           runtimeState.variables[readTargetsVarKey] !== undefined ||
-          runtimeState.variables[loopWarningVarKey] !== undefined;
+          runtimeState.variables[loopWarningVarKey] !== undefined ||
+          runtimeState.variables[sameTargetWarningVarKey] !== undefined;
         if (hadCounters) {
           const newVars = { ...runtimeState.variables };
           delete newVars[failuresVarKey];
           delete newVars[signaturesVarKey];
           delete newVars[readTargetsVarKey];
           delete newVars[loopWarningVarKey];
+          delete newVars[sameTargetWarningVarKey];
           runtimeState = {
             ...runtimeState,
             variables: newVars,

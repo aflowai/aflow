@@ -18,9 +18,8 @@ export const SIGNATURE_WINDOW = 8;
 
 /**
  * The same-target read rule counts reads of one stored target over the last
- * SAME_TARGET_WINDOW turns, whatever their jsonPath, view or window. Paging
- * one large document by window counts too, so the thresholds sit well above
- * a normal paging.
+ * SAME_TARGET_WINDOW turns, whatever their jsonPath, view or version. A read
+ * carrying a window argument pages the target and is not counted.
  */
 export const SOFT_WARNING_SAME_TARGET_READS = 8;
 export const HARD_PAUSE_SAME_TARGET_READS = 12;
@@ -58,6 +57,11 @@ function declaredReadTargetArgs(
   return operationId === undefined ? undefined : getOperation(operationId)?.readTargetArgs;
 }
 
+function readsOneWindow(operationId: string, record: Record<string, unknown>): boolean {
+  const windowArgs = getOperation(operationId)?.readWindowArgs ?? [];
+  return windowArgs.some((arg) => readDottedPath(record, arg) !== undefined);
+}
+
 /** The arguments that identify one call: every argument except replay keys. */
 export function signatureArgs(args: unknown): Record<string, unknown> {
   const record = asRecord(args) ?? {};
@@ -75,12 +79,14 @@ export function buildCallSignature(calls: readonly SignatureCall[]): string {
 /**
  * The stored target one call reads, as its operation declares it in
  * `readTargetArgs`, keyed by operation. Undefined for a call that reads no
- * declared target, or names none of the declared parts.
+ * declared target, names none of the declared parts, or reads one window of
+ * the target through an argument in `readWindowArgs`.
  */
 export function readTargetKey(operationId: string | undefined, args: unknown): string | undefined {
   const declared = declaredReadTargetArgs(operationId);
   if (operationId === undefined || !declared) return undefined;
   const record = asRecord(args) ?? {};
+  if (readsOneWindow(operationId, record)) return undefined;
   const target: Record<string, unknown> = {};
   for (const [part, paths] of Object.entries(declared)) {
     for (const path of paths) {
@@ -224,30 +230,71 @@ export function sameTargetReadWarning(readCount: number): string {
   );
 }
 
-/** The loop warning the next agent turn reads when the same-target rule warns. */
-export interface SameTargetLoopWarning {
+/** The rule that wrote a loop warning or failed the run. */
+export type LoopRule = 'identical_call' | 'same_target';
+
+/** One loop warning the next agent turn reads. Each rule writes its own. */
+export interface LoopWarning {
+  rule: LoopRule;
   repeatedActionCount: number;
   repeatedActionSignature: string;
-  severity: RepeatVerdict;
+  severity: 'warning' | 'final_warning';
   message: string;
   instruction: string;
 }
 
-/** The warning to surface for this count, or undefined when the rule does not warn. */
-export function sameTargetLoopWarning(count: SameTargetCount): SameTargetLoopWarning | undefined {
-  if (count.verdict !== 'warning' && count.verdict !== 'final_warning') return undefined;
-  if (count.target === undefined) return undefined;
+function warningSeverity(verdict: RepeatVerdict): LoopWarning['severity'] | undefined {
+  return verdict === 'warning' || verdict === 'final_warning' ? verdict : undefined;
+}
+
+/** The identical-call warning for this count, or undefined when the rule does not warn. */
+export function identicalCallLoopWarning(
+  count: RepeatCount,
+  callSignature: string,
+  readsTarget: boolean,
+): LoopWarning | undefined {
+  const severity = warningSeverity(count.verdict);
+  if (severity === undefined) return undefined;
+  const remainingBeforePause = HARD_PAUSE_IDENTICAL_CONSECUTIVE - count.consecutiveCount;
+  return {
+    rule: 'identical_call',
+    repeatedActionCount: count.consecutiveCount,
+    repeatedActionSignature: callSignature,
+    severity,
+    message: readsTarget
+      ? repeatedReadWarning(count.consecutiveCount)
+      : `You have invoked the exact same tool call ${String(count.consecutiveCount)} times in a row. ` +
+        'Do not repeat it again unless the input has materially changed.',
+    instruction:
+      remainingBeforePause > 1
+        ? `Choose a meaningfully different next action. ${String(remainingBeforePause)} more identical repeats will pause the run for user input.`
+        : 'Choose a meaningfully different next action now. The next identical repeat will pause the run for user input.',
+  };
+}
+
+/** The same-target warning for this count, or undefined when the rule does not warn. */
+export function sameTargetLoopWarning(count: SameTargetCount): LoopWarning | undefined {
+  const severity = warningSeverity(count.verdict);
+  if (severity === undefined || count.target === undefined) return undefined;
   const remainingBeforePause = HARD_PAUSE_SAME_TARGET_READS - count.readCount;
   return {
+    rule: 'same_target',
     repeatedActionCount: count.readCount,
     repeatedActionSignature: count.target,
-    severity: count.verdict,
+    severity,
     message: sameTargetReadWarning(count.readCount),
     instruction:
       remainingBeforePause > 1
         ? `${String(remainingBeforePause)} more reads of this target within ${String(SAME_TARGET_WINDOW)} turns will pause the run for user input.`
         : `The next read of this target within ${String(SAME_TARGET_WINDOW)} turns will pause the run for user input.`,
   };
+}
+
+function identicalCallLogDetail(count: RepeatCount, callSignature: string): string {
+  const repeats = `agent invoked "${callSignature}" ${String(count.consecutiveCount)} times consecutively. `;
+  return count.verdict === 'pause'
+    ? `${repeats}Failing run — harness blocked the agent.`
+    : `${repeats}Giving model a chance to recover before pause at ${String(HARD_PAUSE_IDENTICAL_CONSECUTIVE)} repeats.`;
 }
 
 /** The log line for a same-target warning or pause, after the run id. */
@@ -267,4 +314,94 @@ export function sameTargetPauseMessage(readCount: number): string {
     `${String(SAME_TARGET_WINDOW)} turns without reading it whole or by window. ` +
     'The run has been failed — start a new run with different instructions or fix the underlying issue.'
   );
+}
+
+/** What the two loop rules remember between turns of one agent step. */
+export interface LoopTurnState {
+  recentSignatures: string[];
+  recentReadTargets: string[][];
+}
+
+/** A warning a rule wrote this turn, with the line to log for it. */
+export interface LoggedLoopWarning {
+  warning: LoopWarning;
+  logDetail: string;
+}
+
+/** What the loop rules decide about one agent turn's tool calls. */
+export interface LoopTurnVerdict {
+  /** The windows after this turn, to persist for the next one. */
+  state: LoopTurnState;
+  identicalCall?: LoggedLoopWarning;
+  sameTarget?: LoggedLoopWarning;
+  /** Set when a rule pauses. The run fails and no warning is surfaced. */
+  failure?: { rule: LoopRule; message: string; logDetail: string };
+}
+
+/**
+ * Runs both loop rules over one turn's tool calls. Each rule writes its own
+ * warning, so a turn that trips both carries two. A pause from either rule
+ * fails the run.
+ */
+export function evaluateLoopTurn(
+  previous: LoopTurnState,
+  calls: readonly SignatureCall[],
+  resolveOperation: ResolveCallOperation = toolIdIsOperation,
+): LoopTurnVerdict {
+  const callSignature = buildCallSignature(calls);
+  const identical = countRepeatedCall(previous.recentSignatures, callSignature);
+  const sameTarget = countSameTargetReads(
+    previous.recentReadTargets,
+    readTargetKeys(calls, resolveOperation),
+  );
+  const state: LoopTurnState = {
+    recentSignatures: identical.recentSignatures,
+    recentReadTargets: sameTarget.recentReadTargets,
+  };
+
+  if (identical.verdict === 'pause') {
+    return {
+      state,
+      failure: {
+        rule: 'identical_call',
+        message:
+          `The assistant attempted the same action ${String(identical.consecutiveCount)} times in a row without progress. ` +
+          'The run has been failed — start a new run with different instructions or fix the underlying issue.',
+        logDetail: identicalCallLogDetail(identical, callSignature),
+      },
+    };
+  }
+  if (sameTarget.verdict === 'pause') {
+    return {
+      state,
+      failure: {
+        rule: 'same_target',
+        message: sameTargetPauseMessage(sameTarget.readCount),
+        logDetail: sameTargetLogDetail(sameTarget),
+      },
+    };
+  }
+
+  const identicalWarning = identicalCallLoopWarning(
+    identical,
+    callSignature,
+    readsStoredTarget(calls, resolveOperation),
+  );
+  const sameTargetWarning = sameTargetLoopWarning(sameTarget);
+  return {
+    state,
+    ...(identicalWarning !== undefined
+      ? {
+          identicalCall: {
+            warning: identicalWarning,
+            logDetail: identicalCallLogDetail(identical, callSignature),
+          },
+        }
+      : {}),
+    ...(sameTargetWarning !== undefined
+      ? {
+          sameTarget: { warning: sameTargetWarning, logDetail: sameTargetLogDetail(sameTarget) },
+        }
+      : {}),
+  };
 }

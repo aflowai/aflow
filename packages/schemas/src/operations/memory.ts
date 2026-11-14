@@ -456,10 +456,21 @@ const memoryReadOptionsShape = {
 const PIN_FIELDS = ['version', 'expectedContentHash'] as const;
 
 /**
+ * The window arguments of `memoryReadOptionsShape`. A read carrying one pages
+ * the target, so the same-target read detector does not count it.
+ */
+const MEMORY_READ_WINDOW_ARGS = [
+  'byteRange',
+  'lineRange',
+  'itemRange',
+  'maxBytes',
+] as const satisfies ReadonlyArray<keyof typeof memoryReadOptionsShape>;
+
+/**
  * The document a memory.store.get call reads, spelled nested or flat as the
- * input preprocess accepts it. The version, `jsonPath`, `view` and window
- * arguments stay out, so every read of one document counts toward the
- * same-target read detector.
+ * input preprocess accepts it. The version, `jsonPath` and `view` stay out, so
+ * every unwindowed read of one document counts toward the same-target read
+ * detector.
  */
 const STORE_GET_READ_TARGET_ARGS = {
   path: ['target.path', 'path'],
@@ -1115,6 +1126,7 @@ export const MemoryOperationRegistrations: OperationRegistration[] = [
       itemRange: 'JSON array window. { start: number, count: number (max 200) }.',
     },
     readTargetArgs: STORE_GET_READ_TARGET_ARGS,
+    readWindowArgs: MEMORY_READ_WINDOW_ARGS,
     idempotency: 'idempotent',
     mutates: false,
     usage: {
@@ -1162,6 +1174,7 @@ export const MemoryOperationRegistrations: OperationRegistration[] = [
       "or byteRange. Reads this run's outputs only — general memory documents need memory.store.get.",
     tags: ['memory', 'read'],
     readTargetArgs: RUN_OUTPUT_GET_READ_TARGET_ARGS,
+    readWindowArgs: MEMORY_READ_WINDOW_ARGS,
     idempotency: 'idempotent',
     mutates: false,
     usage: {

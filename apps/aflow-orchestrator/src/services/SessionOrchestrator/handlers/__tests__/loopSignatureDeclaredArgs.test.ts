@@ -154,15 +154,11 @@ describe('same-target rule on reads of one stored target', () => {
     expect(loop.every((c) => c.verdict === 'none')).toBe(true);
   });
 
-  it('counts reads that differ in view, version or window as reads of one target', () => {
+  it('counts reads that differ in view, jsonPath or version as reads of one target', () => {
     const shapes: Record<string, unknown>[] = [
       { view: 'outline' },
       { view: 'links' },
       { jsonPath: 'tasks' },
-      { byteRange: { start: 0, end: 10 } },
-      { lineRange: { startLine: 0, endLine: 5 } },
-      { itemRange: { start: 3, count: 1 } },
-      { maxBytes: 4096 },
     ];
     const keys = shapes.map((shape) =>
       readTargetKey(MEMORY_READ_OPERATION_ID, { target: { path: RUN_DETAIL_PATH }, ...shape }),
@@ -171,6 +167,24 @@ describe('same-target rule on reads of one stored target', () => {
       readTargetKey(MEMORY_READ_OPERATION_ID, { target: { path: RUN_DETAIL_PATH, version: 2 } }),
     );
     expect(new Set(keys).size).toBe(1);
+    expect(keys[0]).toBeDefined();
+  });
+
+  it('reads no target for a call carrying a window argument', () => {
+    const windows: Record<string, unknown>[] = [
+      { byteRange: { start: 0, end: 10 } },
+      { lineRange: { startLine: 0, endLine: 5 } },
+      { jsonPath: 'tasks', itemRange: { start: 3, count: 1 } },
+      { maxBytes: 4096 },
+    ];
+    for (const window of windows) {
+      expect(
+        readTargetKey(MEMORY_READ_OPERATION_ID, { target: { path: RUN_DETAIL_PATH }, ...window }),
+      ).toBeUndefined();
+      expect(
+        readTargetKey(RUN_OUTPUT_READ_OPERATION_ID, { path: RUN_DETAIL_PATH, ...window }),
+      ).toBeUndefined();
+    }
   });
 
   it('counts a flat and a nested spelling of one target together', () => {
@@ -244,7 +258,7 @@ describe('windowed reads of one stored target', () => {
 
   for (const [windowArg, windowAt] of Object.entries(storeWindows)) {
     it(`runs a paging of one document by ${windowArg} to completion`, () => {
-      const turns = Array.from({ length: SIGNATURE_WINDOW + 4 }, (_, i) => [
+      const turns = Array.from({ length: SAME_TARGET_WINDOW + 4 }, (_, i) => [
         {
           toolId: MEMORY_READ_OPERATION_ID,
           args: { target: { path: RUN_DETAIL_PATH }, view: 'content', ...windowAt(i) },
@@ -253,30 +267,10 @@ describe('windowed reads of one stored target', () => {
       const counts = runTurns(turns);
       expect(counts.map((c) => c.verdict).every((v) => v === 'none')).toBe(true);
       expect(counts.map((c) => c.consecutiveCount).every((n) => n === 1)).toBe(true);
-      expect(
-        counts
-          .slice(0, SOFT_WARNING_SAME_TARGET_READS - 1)
-          .every((c) => c.sameTargetVerdict === 'none'),
-      ).toBe(true);
+      expect(counts.every((c) => c.sameTargetVerdict === 'none')).toBe(true);
+      expect(counts.every((c) => c.readCount === 0)).toBe(true);
     });
   }
-
-  it('counts a long paging of one target toward the same-target rule', () => {
-    const counts = runTurns(
-      repeat(SOFT_WARNING_SAME_TARGET_READS, (i) => [
-        {
-          toolId: MEMORY_READ_OPERATION_ID,
-          args: {
-            target: { path: RUN_DETAIL_PATH },
-            byteRange: { start: i * WINDOW, end: (i + 1) * WINDOW },
-          },
-        },
-      ]),
-    );
-    expect(counts.at(-1)?.readCount).toBe(SOFT_WARNING_SAME_TARGET_READS);
-    expect(counts.at(-1)?.sameTargetVerdict).toBe('warning');
-    expect(counts.every((c) => c.verdict === 'none')).toBe(true);
-  });
 
   it('runs a paging of one truncated run output to completion', () => {
     const turns = Array.from({ length: SIGNATURE_WINDOW + 4 }, (_, i) => [
@@ -301,20 +295,22 @@ describe('windowed reads of one stored target', () => {
     expect(loop.at(-1)?.verdict).toBe('pause');
   });
 
-  it('pauses a jsonPath loop inside one window through the same-target rule', () => {
+  it('counts only the unwindowed reads of a turn that mixes both', () => {
     const loop = runTurns(
       repeat(HARD_PAUSE_SAME_TARGET_READS, (i) => [
+        readTask(i),
         {
           toolId: MEMORY_READ_OPERATION_ID,
           args: {
             target: { path: RUN_DETAIL_PATH },
-            maxBytes: 4096,
-            jsonPath: `tasks[${String(i)}]`,
+            byteRange: { start: i * WINDOW, end: (i + 1) * WINDOW },
           },
         },
       ]),
     );
-    expect(loop.every((c) => c.verdict === 'none')).toBe(true);
+    expect(loop.map((c) => c.readCount)).toEqual(
+      repeat(HARD_PAUSE_SAME_TARGET_READS, (i) => i + 1),
+    );
     expect(loop.at(-1)?.sameTargetVerdict).toBe('pause');
   });
 

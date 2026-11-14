@@ -49,19 +49,7 @@ import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { routeRunnerTerminalToHarness } from '../../cybernetic/WorkflowRunHarness.js';
 import { wakeForRunWakeupsAtSettle } from './settleRunWakeups.js';
 import { pauseForGuardrailEscalation } from './guardrailEscalationPause.js';
-import {
-  buildCallSignature,
-  countRepeatedCall,
-  countSameTargetReads,
-  HARD_PAUSE_IDENTICAL_CONSECUTIVE,
-  readsStoredTarget,
-  readTargetKeys,
-  repeatedReadWarning,
-  sameTargetLogDetail,
-  sameTargetLoopWarning,
-  sameTargetPauseMessage,
-  type ResolveCallOperation,
-} from './callSignature.js';
+import { evaluateLoopTurn, type ResolveCallOperation } from './callSignature.js';
 import { clearStaleCredentialBlock } from './credentialBlockScope.js';
 import { buildStepCompletedRecoveryEvents } from '../helpers/recoveryEmitter.js';
 import type { ScheduleStepParams } from '../types.js';
@@ -1064,17 +1052,16 @@ export async function applyAgentDecision(params: ApplyAgentDecisionParams): Prom
     }
 
     // ── Loop detection ──────────────────────────────────────────────────────
-    // Track recent tool call signatures. If the same pattern repeats
-    // consecutively, warn the model first so it can self-correct. Only force
-    // a pause after the same action repeats 5 times in a row. This keeps
-    // legitimate retries working while still protecting against stale-input or
-    // history-sync bugs that make the agent see the same turn repeatedly.
-    // A second rule beside it counts reads of one stored target over a wider
-    // window, whatever their jsonPath, view or window, so a section-by-section
-    // read of one document is caught though no two of its calls are identical.
+    // Two rules, each with its own warning (evaluateLoopTurn). The identical-
+    // call rule warns the model first so it can self-correct, and pauses after
+    // the same call repeats 5 times in a row. The same-target rule counts
+    // unwindowed reads of one stored target over a wider window, so a
+    // section-by-section read of one document is caught though no two of its
+    // calls are identical.
     const loopVarKey = `ai.agent.recentCallSignatures.${result.stepId}`;
     const readTargetsVarKey = `ai.agent.recentReadTargets.${result.stepId}`;
     const loopWarningVarKey = `ai.agent.loopWarning.${result.stepId}`;
+    const sameTargetWarningVarKey = `ai.agent.sameTargetWarning.${result.stepId}`;
 
     const sigCalls =
       decision.action === 'invoke_step'
@@ -1082,68 +1069,43 @@ export async function applyAgentDecision(params: ApplyAgentDecisionParams): Prom
         : decision.calls.map((c) => ({ toolId: c.toolId, args: c.args }));
     const resolveCallOperation: ResolveCallOperation = (toolId) =>
       agentDef.steps.find((s) => s.stepId === toolId)?.operation ?? toolId;
-    const callSignature = buildCallSignature(sigCalls);
-    const repeatsReadOfStoredTarget = readsStoredTarget(sigCalls, resolveCallOperation);
-
-    const { recentSignatures, consecutiveCount, verdict } = countRepeatedCall(
-      readInlineVar(currentRuntimeState, loopVarKey, [] as string[]),
-      callSignature,
-    );
-    const sameTarget = countSameTargetReads(
-      readInlineVar(currentRuntimeState, readTargetsVarKey, [] as string[][]),
-      readTargetKeys(sigCalls, resolveCallOperation),
+    const loopTurn = evaluateLoopTurn(
+      {
+        recentSignatures: readInlineVar(currentRuntimeState, loopVarKey, [] as string[]),
+        recentReadTargets: readInlineVar(currentRuntimeState, readTargetsVarKey, [] as string[][]),
+      },
+      sigCalls,
+      resolveCallOperation,
     );
 
-    // Persist updated signatures and refresh any pending loop warning that
-    // should be surfaced to the next agent turn.
+    // Persist updated windows and refresh each rule's pending warning for the
+    // next agent turn.
     const newVarsWithSig = { ...currentRuntimeState.variables };
-    writeInlineVar(newVarsWithSig, loopVarKey, recentSignatures, {
+    writeInlineVar(newVarsWithSig, loopVarKey, loopTurn.state.recentSignatures, {
       ...varMeta,
-      version: recentSignatures.length,
+      version: loopTurn.state.recentSignatures.length,
     });
-    writeInlineVar(newVarsWithSig, readTargetsVarKey, sameTarget.recentReadTargets, {
+    writeInlineVar(newVarsWithSig, readTargetsVarKey, loopTurn.state.recentReadTargets, {
       ...varMeta,
-      version: sameTarget.recentReadTargets.length,
+      version: loopTurn.state.recentReadTargets.length,
     });
-    delete newVarsWithSig[loopWarningVarKey];
-    const warnsIdentical = verdict === 'warning' || verdict === 'final_warning';
-    const sameTargetWarning = sameTargetLoopWarning(sameTarget);
-    if (warnsIdentical) {
-      const remainingBeforePause = HARD_PAUSE_IDENTICAL_CONSECUTIVE - consecutiveCount;
-      writeInlineVar(
-        newVarsWithSig,
-        loopWarningVarKey,
-        {
-          repeatedActionCount: consecutiveCount,
-          repeatedActionSignature: callSignature,
-          severity: verdict,
-          message: repeatsReadOfStoredTarget
-            ? repeatedReadWarning(consecutiveCount)
-            : `You have invoked the exact same tool call ${String(consecutiveCount)} times in a row. ` +
-              'Do not repeat it again unless the input has materially changed.',
-          instruction:
-            remainingBeforePause > 1
-              ? `Choose a meaningfully different next action. ${String(remainingBeforePause)} more identical repeats will pause the run for user input.`
-              : 'Choose a meaningfully different next action now. The next identical repeat will pause the run for user input.',
-        },
-        {
-          ...varMeta,
-          version: getVariableVersion(currentRuntimeState.variables[loopWarningVarKey]) + 1,
-        },
-      );
-      console.warn(
-        `[SessionOrchestrator] Loop warning for run ${result.sessionId}: ` +
-          `agent invoked "${callSignature}" ${String(consecutiveCount)} times consecutively. ` +
-          `Giving model a chance to recover before pause at ${String(HARD_PAUSE_IDENTICAL_CONSECUTIVE)} repeats.`,
-      );
-    } else if (sameTargetWarning !== undefined) {
-      writeInlineVar(newVarsWithSig, loopWarningVarKey, sameTargetWarning, {
+    const ruleWarnings = [
+      { varKey: loopWarningVarKey, logLabel: 'Loop warning', logged: loopTurn.identicalCall },
+      {
+        varKey: sameTargetWarningVarKey,
+        logLabel: 'Same-target read warning',
+        logged: loopTurn.sameTarget,
+      },
+    ];
+    for (const { varKey, logLabel, logged } of ruleWarnings) {
+      delete newVarsWithSig[varKey];
+      if (logged === undefined) continue;
+      writeInlineVar(newVarsWithSig, varKey, logged.warning, {
         ...varMeta,
-        version: getVariableVersion(currentRuntimeState.variables[loopWarningVarKey]) + 1,
+        version: getVariableVersion(currentRuntimeState.variables[varKey]) + 1,
       });
       console.warn(
-        `[SessionOrchestrator] Same-target read warning for run ${result.sessionId}: ` +
-          sameTargetLogDetail(sameTarget),
+        `[SessionOrchestrator] ${logLabel} for run ${result.sessionId}: ${logged.logDetail}`,
       );
     }
     currentRuntimeState = {
@@ -1151,22 +1113,11 @@ export async function applyAgentDecision(params: ApplyAgentDecisionParams): Prom
       variables: newVarsWithSig,
     };
 
-    const loopFailureMessage =
-      verdict === 'pause'
-        ? `The assistant attempted the same action ${String(consecutiveCount)} times in a row without progress. ` +
-          'The run has been failed — start a new run with different instructions or fix the underlying issue.'
-        : sameTarget.verdict === 'pause'
-          ? sameTargetPauseMessage(sameTarget.readCount)
-          : undefined;
-
-    if (loopFailureMessage !== undefined) {
+    if (loopTurn.failure !== undefined) {
+      const loopFailureMessage = loopTurn.failure.message;
       console.warn(
-        verdict === 'pause'
-          ? `[SessionOrchestrator] Loop detected for run ${result.sessionId}: ` +
-              `agent invoked "${callSignature}" ${String(consecutiveCount)} times consecutively. ` +
-              `Failing run — harness blocked the agent.`
-          : `[SessionOrchestrator] Same-target read loop detected for run ${result.sessionId}: ` +
-              sameTargetLogDetail(sameTarget),
+        `[SessionOrchestrator] ${loopTurn.failure.rule === 'identical_call' ? 'Loop' : 'Same-target read loop'} ` +
+          `detected for run ${result.sessionId}: ${loopTurn.failure.logDetail}`,
       );
 
       const loopErrorRef = `inline:${Buffer.from(

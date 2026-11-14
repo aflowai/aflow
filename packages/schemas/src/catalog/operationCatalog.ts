@@ -119,11 +119,18 @@ export interface OperationRegistration {
    * match wins, so a flat and a nested spelling of one target agree.
    *
    * Every other argument says how the target is read: a `jsonPath`, a `view`
-   * or a window. Reads of one target count together whatever those say. The
+   * or a version. Reads of one target count together whatever those say. The
    * identical-call detector compares every argument, so it cannot see them.
    * Absent means the operation reads no stored target.
    */
   readTargetArgs?: Readonly<Record<string, readonly string[]>>;
+  /**
+   * The arguments that read one window of the target, such as a byte range.
+   * A call carrying any of them pages the target, so the same-target read
+   * detector does not count it. A repeat of one window is still an identical
+   * call.
+   */
+  readWindowArgs?: readonly string[];
 
   /** Idempotency classification for retry/agent reasoning */
   idempotency: IdempotencyKind;
@@ -283,6 +290,8 @@ export interface OperationDescriptor {
   agentCollapsedFields?: Record<string, string | Record<string, unknown>>;
   /** See `OperationRegistration.readTargetArgs`. */
   readTargetArgs?: Readonly<Record<string, readonly string[]>>;
+  /** See `OperationRegistration.readWindowArgs`. */
+  readWindowArgs?: readonly string[];
   /** Idempotency classification */
   idempotency: IdempotencyKind;
   /** Usage hints */
