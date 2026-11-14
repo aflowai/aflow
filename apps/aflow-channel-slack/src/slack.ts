@@ -76,6 +76,13 @@ export interface SlackClient {
 
 type Fetch = typeof fetch;
 
+/**
+ * Slack's limit on a message's text, past which it truncates. A text is
+ * measured once `&`, `<` and `>` are escaped, because an escape is up to five
+ * characters long.
+ */
+export const SLACK_TEXT_LIMIT = 40_000;
+
 /** The longest one Slack call may take, inside whatever the caller's signal allows. */
 export const SLACK_CALL_TIMEOUT_MS = 15_000;
 

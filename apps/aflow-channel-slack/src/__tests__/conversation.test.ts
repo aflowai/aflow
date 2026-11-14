@@ -764,6 +764,37 @@ describe('a relayed answer', () => {
     expect(relayed('&'.repeat(8_000))).toBe('&amp;'.repeat(8_000));
   });
 
+  it('is posted as Slack mrkdwn, with no markdown left in sight', () => {
+    expect(relayed('# Done\n**All** checks passed, see [the run](https://example.com/r).')).toBe(
+      '*Done*\n*All* checks passed, see <https://example.com/r|the run>.',
+    );
+  });
+
+  it('is cut between whole links, never inside one', () => {
+    const text = relayed(
+      `${'a'.repeat(39_940)} [the run](https://example.com/a-long-path) ${'z'.repeat(100)}`,
+    );
+
+    expect(text.length).toBeLessThanOrEqual(40_000);
+    expect(text).toBe(`${'a'.repeat(39_940)} ${NOTE}`);
+  });
+
+  it('closes a code block the cut ends inside, so the note reads outside it', () => {
+    const text = relayed(`Logs:\n\`\`\`\n${'log line\n'.repeat(5_000)}\`\`\`\nDone.`);
+
+    expect(text.length).toBeLessThanOrEqual(40_000);
+    expect(text.startsWith('Logs:\n```\nlog line\n')).toBe(true);
+    expect(text.endsWith(`\n\`\`\`\n${NOTE}`)).toBe(true);
+    expect(text.match(/^```$/gm)).toHaveLength(2);
+  });
+
+  it('is cut between whole bold spans, never inside one', () => {
+    const text = relayed(`${'a'.repeat(39_900)} **${'b '.repeat(100)}end** more`);
+
+    expect(text.length).toBeLessThanOrEqual(40_000);
+    expect(text).toBe(`${'a'.repeat(39_900)} ${NOTE}`);
+  });
+
   it('is cut to fit once escaped, between whole escapes, even when dense in `&`', () => {
     const text = relayed('&'.repeat(30_000));
 
