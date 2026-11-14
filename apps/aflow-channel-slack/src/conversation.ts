@@ -30,8 +30,9 @@
 import type { AflowApi, ConversationEvent, RouteRefusal } from './aflowApi.js';
 import type { CardTap } from './cardActions.js';
 import { escapeMrkdwn } from './cards.js';
-import { SlackApiError, type SlackBlock, type SlackClient } from './slack.js';
+import { SLACK_TEXT_LIMIT, SlackApiError, type SlackBlock, type SlackClient } from './slack.js';
 import type { DirectMessage } from './socketMode.js';
+import { slackMrkdwnWithin } from './slackMrkdwn.js';
 import { typedTextOf } from './slackText.js';
 import type { ChannelStore, InboundOutcome, InboundRecord, ThreadRecord } from './store.js';
 
@@ -85,11 +86,6 @@ export const ENDED_NOTES: Readonly<Record<string, string>> = {
     'The conversation was cancelled at Aflow. Send a new direct message to start another.',
 };
 
-/**
- * Slack's limit on a message's text. The answer is measured once `&`, `<` and
- * `>` are escaped, because an escape is up to five characters long.
- */
-const SLACK_TEXT_LIMIT = 40_000;
 const CUT_NOTE = '… The full answer is in the conversation at Aflow.';
 const WATCH_POLL_MS = 2_000;
 /** How long one turn may take before the thread stops watching it. */
@@ -138,18 +134,12 @@ export function lateText(text: string, record: InboundRecord, ranAt: Date): stri
   );
 }
 
-/** The answer escaped, and cut to Slack's limit between whole characters and whole escapes. */
+/**
+ * The answer as mrkdwn, cut to Slack's limit. The cut leaves no span open and
+ * closes a code block it ends inside, so the cut note reads as plain text.
+ */
 export function relayed(answer: string): string {
-  const whole = escapeMrkdwn(answer);
-  if (whole.length <= SLACK_TEXT_LIMIT) return whole;
-  const room = SLACK_TEXT_LIMIT - CUT_NOTE.length;
-  let cut = '';
-  for (const char of answer) {
-    const piece = escapeMrkdwn(char);
-    if (cut.length + piece.length > room) break;
-    cut += piece;
-  }
-  return `${cut}${CUT_NOTE}`;
+  return slackMrkdwnWithin(answer, SLACK_TEXT_LIMIT, CUT_NOTE);
 }
 
 function lateBlocks(record: InboundRecord): SlackBlock[] {

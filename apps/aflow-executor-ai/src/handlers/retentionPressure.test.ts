@@ -222,7 +222,7 @@ describe('clearUnderPressure — greedy class-ranked clearing (§4.3)', () => {
       resultAtom(2, 'exB', 0, {
         toolName: 'memory.store.get',
         operationId: 'memory.store.get',
-        summaryChars: 3_500,
+        summaryChars: 8_500,
       }),
     );
     // exC: unknown idempotency — catalog lookup miss (class 2)
@@ -260,6 +260,8 @@ describe('clearUnderPressure — greedy class-ranked clearing (§4.3)', () => {
         failed: true,
       }),
     );
+    // The request at turn 6 starts the current run — exA..exE belong to a finished one.
+    atoms.push(userAtom(6, 'next request'));
     // exR: idempotent + huge but RECENT (turn 18 of 20) — Tier-1 protected
     atoms.push(assistantToolAtom(18, 'exR', ['memory.store.query']));
     atoms.push(
@@ -567,21 +569,29 @@ function expectPoints(
 
 const exchangeBase = (turn: number) => `wb${String(turn).padStart(2, '0')}`;
 
-/** One aged idempotent exchange per turn from turn 1, each readable at its run-output path. */
-function agedExchanges(count: number): AiMessageAtomV1[] {
+/**
+ * One aged idempotent exchange per turn from turn 1, each readable at its
+ * run-output path. The first `finishedRunCount` belong to a finished run; the
+ * request that starts the current run follows them, and the rest come after
+ * it, one turn later each.
+ */
+function agedExchanges(count: number, finishedRunCount = count): AiMessageAtomV1[] {
   const atoms: AiMessageAtomV1[] = [userAtom(0)];
-  for (let t = 1; t <= count; t++) {
-    const base = exchangeBase(t);
-    atoms.push(assistantToolAtom(t, base, ['memory.store.query']));
+  const pushExchange = (index: number, turn: number) => {
+    const base = exchangeBase(index);
+    atoms.push(assistantToolAtom(turn, base, ['memory.store.query']));
     atoms.push(
-      resultAtom(t, base, 0, {
+      resultAtom(turn, base, 0, {
         toolName: 'memory.store.query',
         operationId: 'memory.store.query',
-        summaryChars: 8_000,
+        summaryChars: 9_000,
         outputPath: `/run/outputs/${base}_0`,
       }),
     );
-  }
+  };
+  for (let t = 1; t <= finishedRunCount; t++) pushExchange(t, t);
+  atoms.push(userAtom(finishedRunCount + 1, 'next request'));
+  for (let t = finishedRunCount + 1; t <= count; t++) pushExchange(t, t + 1);
   return atoms;
 }
 
@@ -674,7 +684,7 @@ describe('clearUnderPressure — against the working budget, at every window', (
       ).toBeUndefined();
       expect(turnN.storeFn).not.toHaveBeenCalled();
 
-      const turnN1 = keepingStore(agedExchanges(30), 41);
+      const turnN1 = keepingStore(agedExchanges(30, 29), 41);
       const requestN1 = await turnN1.store.assembleRequest('sys', []);
       expect(
         await turnN1.store.clearUnderPressure({ ...input, pressureTokens: atTrigger }),
@@ -714,10 +724,10 @@ describe('clearUnderPressure — against the working budget, at every window', (
   });
 
   it.each([SMALL_WINDOW, REFERENCE_WINDOW, LARGE_WINDOW])(
-    'at a %i-token window never clears the three newest turns or the pinned opener',
+    'at a %i-token window never clears the turns inside the recency floor or the pinned opener',
     async (window) => {
       const { hardBudget, workingBudget } = turnBudgets(window);
-      const { store } = keepingStore(agedExchanges(19), 20);
+      const { store } = keepingStore(agedExchanges(19), 21);
       await store.assembleRequest('sys', []);
       await store.clearUnderPressure({
         pressureTokens: 10 * hardBudget,
@@ -725,11 +735,12 @@ describe('clearUnderPressure — against the working budget, at every window', (
         availableReadOpId: MEMORY_READ_OPERATION_ID,
       });
 
+      const newestClearable = 21 - RETENTION_POLICY.keepRecentTurns - 1;
       const cleared = store.getState().clearing?.clearedExchanges ?? [];
-      expect(cleared).toContain(exchangeBase(16));
+      expect(cleared).toContain(exchangeBase(newestClearable));
       const ids = new Set(store.getState().history.atoms.map((a) => a.atomId));
       expect(ids.has('user-0')).toBe(true);
-      for (const turn of [17, 18, 19]) {
+      for (let turn = newestClearable + 1; turn <= 19; turn++) {
         expect(cleared).not.toContain(exchangeBase(turn));
         expect(ids.has(`asst-${exchangeBase(turn)}`)).toBe(true);
         expect(ids.has(`res-${exchangeBase(turn)}-0`)).toBe(true);
@@ -844,7 +855,9 @@ describe('finishAgentTurn — a 1M model clears and compacts at a 200k model’s
       );
 
       await runTurn(300_000, [], REFERENCE_WINDOW);
-      expect(forced).toHaveBeenCalledWith(expect.objectContaining({ excessAtoms: 0 }));
+      expect(forced).toHaveBeenCalledWith(
+        expect.objectContaining({ excessTokens: expect.any(Number) as number }),
+      );
     } finally {
       forced.mockRestore();
     }

@@ -208,6 +208,17 @@ describe('the card’s text across sections', () => {
     expect(agentText.join('')).toBe(`${'a'.repeat(2_998)}&amp;&lt;&gt;${'b'.repeat(10)}`);
   });
 
+  it('shows the agent’s markdown as mrkdwn, and keeps a link whole across sections', () => {
+    const text = `## Plan\n**${'a'.repeat(2_980)}** [the run](https://example.com/run/1)`;
+    const agentText = sectionTexts(cardHead(text, makeItem())).slice(0, -1);
+
+    expect(agentText.every((section) => section.length <= 3_000)).toBe(true);
+    expect(agentText[1]).toBe('<https://example.com/run/1|the run>');
+    expect(agentText.join('')).toBe(
+      `*Plan*\n*${'a'.repeat(2_980)}* <https://example.com/run/1|the run>`,
+    );
+  });
+
   it('cuts a text past the last section on a whole entity, and ends it with an ellipsis', () => {
     const agentText = sectionTexts(cardHead('&'.repeat(30_000), makeItem())).slice(0, -1);
 
@@ -215,6 +226,33 @@ describe('the card’s text across sections', () => {
     expect(agentText.every((section) => section.length <= 3_000)).toBe(true);
     expect(agentText.at(-1)?.endsWith('&amp;…')).toBe(true);
     expect(agentText.some((section) => endsInsideEntity(section.replace(/…$/, '')))).toBe(false);
+  });
+
+  it('never ends a section inside a bold span', () => {
+    const text = `${'a'.repeat(2_990)} **bold words** after`;
+    const agentText = sectionTexts(cardHead(text, makeItem())).slice(0, -1);
+
+    expect(agentText).toEqual([`${'a'.repeat(2_990)} `, '*bold words* after']);
+  });
+
+  it('closes a code block where a section ends and opens it again in the next', () => {
+    const text = `Logs:\n\`\`\`\n${'log line\n'.repeat(500)}\`\`\``;
+    const agentText = sectionTexts(cardHead(text, makeItem())).slice(0, -1);
+
+    expect(agentText).toHaveLength(2);
+    expect(agentText.every((section) => section.length <= 3_000)).toBe(true);
+    expect(agentText[0]?.startsWith('Logs:\n```\nlog line')).toBe(true);
+    expect(agentText[0]?.endsWith('\n```')).toBe(true);
+    expect(agentText[1]?.startsWith('```\n')).toBe(true);
+    expect(agentText[1]?.endsWith('log line\n```')).toBe(true);
+  });
+
+  it('cuts the last section between whole spans, and puts the ellipsis after them', () => {
+    const text = `${'a'.repeat(39 * 3_000)}${'b'.repeat(2_990)} **cut here** more`;
+    const agentText = sectionTexts(cardHead(text, makeItem())).slice(0, -1);
+
+    expect(agentText).toHaveLength(40);
+    expect(agentText.at(-1)).toBe(`${'b'.repeat(2_990)} …`);
   });
 
   it('cuts a summary that escapes past one section on a whole entity', () => {

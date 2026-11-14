@@ -420,10 +420,10 @@ describe('triggerCompaction — range snaps to exchange boundaries', () => {
   it('never strands a tool_use at the range start nor orphans results at the range end', async () => {
     const mem = createMemoryPayloadStore();
 
-    // Exchange sx straddles the range START: assistant in the pinned turn-0
-    // group, its result lands in turn 1 (which is otherwise compactable).
-    // Exchange ex straddles the range END: assistant at turn 16 (compactable),
-    // its result at turn 17 (recency-protected with currentTurn 20).
+    // Exchange sx shares turn 0 with the pinned opener: its assistant is not
+    // pinned, so the whole exchange compacts and the opener stays.
+    // Exchange ex straddles the range END: assistant at turn 11 (compactable),
+    // its result at turn 12 (recency-protected with currentTurn 20).
     const atoms: AiMessageAtomV1[] = [
       userAtom(0),
       assistantToolAtom(0, 'sx', 'memory.store.query'),
@@ -436,9 +436,9 @@ describe('triggerCompaction — range snaps to exchange boundaries', () => {
     for (let t = 2; t <= 8; t++) {
       atoms.push(t % 2 === 0 ? userAtom(t, `note ${String(t)}`) : assistantTextAtom(t));
     }
-    atoms.push(assistantToolAtom(16, 'ex', 'memory.store.query'));
+    atoms.push(assistantToolAtom(11, 'ex', 'memory.store.query'));
     atoms.push(
-      resultAtom(17, 'ex', {
+      resultAtom(12, 'ex', {
         toolName: 'memory.store.query',
         operationId: 'memory.store.query',
         summaryChars: 200,
@@ -478,10 +478,10 @@ describe('triggerCompaction — range snaps to exchange boundaries', () => {
     expect(compact).toBeDefined();
 
     const ids = new Set(state.history.atoms.map((a) => a.atomId));
-    // Both straddling exchanges survive WHOLE — no stranded tool_use, no
-    // orphaned result.
-    expect(ids.has('asst-sx')).toBe(true);
-    expect(ids.has('res-sx')).toBe(true);
+    // Each exchange moves whole — no stranded tool_use, no orphaned result.
+    expect(ids.has('user-0')).toBe(true);
+    expect(ids.has('asst-sx')).toBe(false);
+    expect(ids.has('res-sx')).toBe(false);
     expect(ids.has('asst-ex')).toBe(true);
     expect(ids.has('res-ex')).toBe(true);
     // The narrative middle was compacted into the restore.

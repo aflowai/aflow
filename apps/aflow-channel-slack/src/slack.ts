@@ -1,9 +1,9 @@
 /**
- * The four Slack Web API methods the app calls, over `fetch`.
+ * The five Slack Web API methods the app calls, over `fetch`.
  *
- * Four methods do not earn an SDK: the bot opens a direct message, posts into
- * it and edits a card it posted, and the app-level token opens a Socket Mode
- * connection.
+ * Five methods do not earn an SDK: the bot opens a direct message, posts into
+ * it, edits a card it posted and reacts to a message, and the app-level token
+ * opens a Socket Mode connection.
  *
  * The default transport is the checked `safeFetchImpl`, as for every injected
  * transport. It validates the Slack host before it dials and refuses a redirect.
@@ -70,11 +70,20 @@ export interface SlackClient {
     text: string,
     blocks: readonly SlackBlock[],
   ): Promise<void>;
+  /** Adds the emoji `name`, written without colons, as the bot's reaction to a message. */
+  addReaction(channel: string, ts: string, name: string): Promise<void>;
   /** A fresh Socket Mode WebSocket URL, good for one connection. */
   openSocketModeUrl(): Promise<string>;
 }
 
 type Fetch = typeof fetch;
+
+/**
+ * Slack's limit on a message's text, past which it truncates. A text is
+ * measured once `&`, `<` and `>` are escaped, because an escape is up to five
+ * characters long.
+ */
+export const SLACK_TEXT_LIMIT = 40_000;
 
 /** The longest one Slack call may take, inside whatever the caller's signal allows. */
 export const SLACK_CALL_TIMEOUT_MS = 15_000;
@@ -187,6 +196,9 @@ export function createSlackClient(options: {
     },
     async updateMessage(channel, ts, text, blocks) {
       await call(fetchImpl, options.botToken, 'chat.update', { channel, ts, text, blocks });
+    },
+    async addReaction(channel, ts, name) {
+      await call(fetchImpl, options.botToken, 'reactions.add', { channel, timestamp: ts, name });
     },
     async openSocketModeUrl() {
       const payload = await call(fetchImpl, options.appToken, 'apps.connections.open', {});

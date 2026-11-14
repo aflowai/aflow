@@ -32,7 +32,7 @@ import {
   type ConversationResult,
   type WatchOutcome,
 } from '../conversation.js';
-import { answerInbound, answerTap, type InboundResult } from '../inbound.js';
+import { RECEIVED_REACTION, answerInbound, answerTap, type InboundResult } from '../inbound.js';
 import { CODE_ALREADY_USED_REPLY, STRANGER_REPLY } from '../linking.js';
 import { SlackApiError } from '../slack.js';
 import { ChannelStore } from '../store.js';
@@ -65,6 +65,7 @@ let slack: RecordingSlack;
 let aflow: FakeAflow;
 let conversations: Conversations;
 let linkMessage: ReturnType<typeof directMessage>;
+let warnings: Array<{ message: string; data?: Record<string, unknown> }>;
 
 function deps() {
   const api = createAflowApi({
@@ -72,7 +73,12 @@ function deps() {
     apiKey: config.AFLOW_API_KEY,
     fetchImpl: aflow.fetch,
   });
-  return { store, slack, api, config, conversations, now: () => NOW };
+  const log = {
+    warn: (message: string, data?: Record<string, unknown>) => {
+      warnings.push({ message, ...(data === undefined ? {} : { data }) });
+    },
+  };
+  return { store, slack, api, config, conversations, log, now: () => NOW };
 }
 
 function newConversations(): Conversations {
@@ -97,11 +103,82 @@ beforeEach(async () => {
   storePath = join(dir, 'store.json');
   store = ChannelStore.open(storePath, NOW);
   slack = recordingSlack();
+  warnings = [];
   aflow = fakeAflow();
   conversations = newConversations();
   linkMessage = directMessage(OPERATOR, CODE, NOW, { eventId: 'Ev-link' });
   await answerInbound(linkMessage, deps());
   slack.posts.length = 0;
+});
+
+describe('the received reaction', () => {
+  it('reacts 👀 to the operator’s message before the Helmsman starts on it', async () => {
+    const status = directMessage(OPERATOR, 'status?', NOW);
+    const started = answerInbound(status, deps());
+
+    expect(slack.reactions).toEqual([
+      { channel: status.channel, ts: status.ts, name: RECEIVED_REACTION },
+    ]);
+    expect(aflow.starts).toHaveLength(0);
+    const result = await started;
+    if ('watching' in result) await result.watching;
+    expect(RECEIVED_REACTION).toBe('eyes');
+    expect(aflow.starts).toHaveLength(1);
+  });
+
+  it('reacts to a reply in a conversation’s thread', async () => {
+    const status = directMessage(OPERATOR, 'status?', NOW);
+    await send(status);
+    const reply = directMessage(OPERATOR, 'and now?', NOW, { threadTs: status.ts });
+    await send(reply);
+
+    expect(slack.reactions.map((reaction) => reaction.ts)).toEqual([status.ts, reply.ts]);
+  });
+
+  it('still answers the message when Slack refuses the reaction, and logs the refusal', async () => {
+    slack.failReactions = new SlackApiError('reactions.add', 'missing_scope', false);
+    const status = directMessage(OPERATOR, 'status?', NOW);
+
+    expect((await send(status)).outcome).toBe('started');
+
+    expect(aflow.starts).toHaveLength(1);
+    expect(slack.posts).toEqual([
+      { channel: status.channel, text: 'The Helmsman answers: status?', threadTs: status.ts },
+    ]);
+    expect(warnings).toEqual([
+      {
+        message: 'Slack would not add the received reaction to a message',
+        data: { error: 'Slack refused reactions.add: missing_scope' },
+      },
+    ]);
+  });
+
+  it('still answers the message when the reaction throws before it returns', async () => {
+    slack.addReaction = () => {
+      throw new Error('no socket');
+    };
+    const status = directMessage(OPERATOR, 'status?', NOW);
+
+    expect((await send(status)).outcome).toBe('started');
+    expect(aflow.starts).toHaveLength(1);
+    await Promise.resolve();
+    expect(warnings.map((warning) => warning.data)).toEqual([{ error: 'no socket' }]);
+  });
+
+  it('adds no reaction for a redelivered event', async () => {
+    const status = directMessage(OPERATOR, 'status?', NOW);
+    await send(status);
+
+    expect((await send(status)).outcome).toBe('duplicate');
+    expect(slack.reactions).toHaveLength(1);
+  });
+
+  it('adds no reaction to a stranger’s message or to the link code', async () => {
+    expect(slack.reactions).toEqual([]);
+    await send(directMessage('U-STRANGER', 'hello', NOW));
+
+    expect(slack.reactions).toEqual([]);
+  });
 });
 
 afterEach(() => {
@@ -762,6 +839,37 @@ describe('a relayed answer', () => {
   it('is posted whole when it fits Slack’s 40,000 characters once escaped', () => {
     expect(relayed('a < b & c')).toBe('a &lt; b &amp; c');
     expect(relayed('&'.repeat(8_000))).toBe('&amp;'.repeat(8_000));
+  });
+
+  it('is posted as Slack mrkdwn, with no markdown left in sight', () => {
+    expect(relayed('# Done\n**All** checks passed, see [the run](https://example.com/r).')).toBe(
+      '*Done*\n*All* checks passed, see <https://example.com/r|the run>.',
+    );
+  });
+
+  it('is cut between whole links, never inside one', () => {
+    const text = relayed(
+      `${'a'.repeat(39_940)} [the run](https://example.com/a-long-path) ${'z'.repeat(100)}`,
+    );
+
+    expect(text.length).toBeLessThanOrEqual(40_000);
+    expect(text).toBe(`${'a'.repeat(39_940)} ${NOTE}`);
+  });
+
+  it('closes a code block the cut ends inside, so the note reads outside it', () => {
+    const text = relayed(`Logs:\n\`\`\`\n${'log line\n'.repeat(5_000)}\`\`\`\nDone.`);
+
+    expect(text.length).toBeLessThanOrEqual(40_000);
+    expect(text.startsWith('Logs:\n```\nlog line\n')).toBe(true);
+    expect(text.endsWith(`\n\`\`\`\n${NOTE}`)).toBe(true);
+    expect(text.match(/^```$/gm)).toHaveLength(2);
+  });
+
+  it('is cut between whole bold spans, never inside one', () => {
+    const text = relayed(`${'a'.repeat(39_900)} **${'b '.repeat(100)}end** more`);
+
+    expect(text.length).toBeLessThanOrEqual(40_000);
+    expect(text).toBe(`${'a'.repeat(39_900)} ${NOTE}`);
   });
 
   it('is cut to fit once escaped, between whole escapes, even when dense in `&`', () => {

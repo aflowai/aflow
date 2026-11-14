@@ -53,6 +53,7 @@ const slack: SlackClient = {
     return Promise.resolve({ channel, ts: '1.0' });
   },
   updateMessage: () => Promise.resolve(),
+  addReaction: () => Promise.resolve(),
   openSocketModeUrl: () => Promise.resolve('wss://example.invalid'),
 };
 

@@ -14,6 +14,9 @@
  * 4. Otherwise it is the conversation's: a late message asks first, a new one
  *    starts a Helmsman conversation, and a reply in its thread continues it.
  *
+ * A message that reaches 3 or 4 gets a 👀 reaction first, so the operator sees
+ * it has arrived. A redelivered event stops at 1 and gets none.
+ *
  * A tap is a late message's **Run it now** or **Discard**, or a card's button.
  */
 import { answerCardReply, answerCardTap, type CardOutcome, type CardTap } from './cardActions.js';
@@ -22,7 +25,7 @@ import type { ConversationResult, Conversations } from './conversation.js';
 import type { AflowApi } from './aflowApi.js';
 import { LINK_REPLIES, linkOnMessage } from './linking.js';
 import type { SlackClient } from './slack.js';
-import type { DirectMessage } from './socketMode.js';
+import type { DirectMessage, SocketModeLog } from './socketMode.js';
 import type { ChannelStore } from './store.js';
 
 export interface InboundDeps {
@@ -31,8 +34,12 @@ export interface InboundDeps {
   api: AflowApi;
   config: ChannelSlackConfig;
   conversations: Conversations;
+  log: Pick<SocketModeLog, 'warn'>;
   now?: () => Date;
 }
+
+/** The reaction the operator's message gets once the app has taken it. */
+export const RECEIVED_REACTION = 'eyes';
 
 export type InboundResult =
   | { outcome: 'linked' | 'code_used' | 'stranger' | 'duplicate' }
@@ -65,6 +72,7 @@ export async function answerInbound(
     return { outcome: verdict };
   }
 
+  acknowledge(message, deps);
   if (message.threadTs !== undefined) {
     const reply = await answerCardReply(
       {
@@ -81,6 +89,21 @@ export async function answerInbound(
     }
   }
   return deps.conversations.answer(record, message.text);
+}
+
+/**
+ * Reacts to the operator's message so they see it has arrived. The reaction is
+ * not awaited: a slow or refused reaction must not hold back the message.
+ */
+function acknowledge(message: DirectMessage, deps: Pick<InboundDeps, 'slack' | 'log'>): void {
+  const react = async (): Promise<void> => {
+    await deps.slack.addReaction(message.channel, message.ts, RECEIVED_REACTION);
+  };
+  react().catch((error: unknown) => {
+    deps.log.warn('Slack would not add the received reaction to a message', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
 }
 
 export async function answerTap(
