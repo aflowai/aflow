@@ -78,6 +78,9 @@ export const WATCH_IDLE =
 export const WATCH_STOPPED =
   'Aflow could not be read for several minutes, so this thread stopped waiting for the answer. Reply here to look again, or open the conversation at Aflow.';
 
+export const NOTES_SKIPPED =
+  'The Helmsman wrote more notes than this thread could read, so some are not here. Read them in the conversation at Aflow.';
+
 export const LOOKING_AGAIN =
   'This was not sent. The thread looks at the conversation at Aflow again, and the answer comes here when it is ready. Send this again after it.';
 
@@ -119,6 +122,8 @@ export const WATCH_READ_FAILURE_LIMIT = 10;
  * pause may never be resolved, and each watch reads Aflow every two seconds.
  */
 export const WATCH_IDLE_LIMIT_MS = 60 * 60 * 1000;
+/** Pages of events one read holds at most when it pages back to what the thread has read. */
+export const WATCH_PAGE_LIMIT = 20;
 
 export type WatchOutcome = 'answered' | 'ended' | 'stopped' | 'idle' | 'already_watching';
 
@@ -240,6 +245,36 @@ function waitsOnChildRun(event: ConversationEvent): boolean {
   if (asksTheOperator(event)) return false;
   if (event.pauseType === 'external_dependency') return event.blockedOn === 'workflow_run';
   return event.pauseType === 'subflow_waiting' && event.subflowWaiting;
+}
+
+/** True when the session resumed after `pause`, so the turn runs again. */
+function resumedSince(events: readonly ConversationEvent[], pause: ConversationEvent): boolean {
+  const pausedAt = timeOf(pause.timestamp);
+  return events.some(
+    (event) => event.eventType === 'SessionResumed' && timeOf(event.timestamp) > pausedAt,
+  );
+}
+
+/** The pause the thread resumed, when the events hold it. */
+function resumedPause(
+  thread: ThreadRecord,
+  events: readonly ConversationEvent[],
+): ConversationEvent | undefined {
+  if (thread.resumedStepExecutionId === null) return undefined;
+  return events.find(
+    (event) =>
+      event.eventType === 'SessionPaused' &&
+      event.stepExecutionId === thread.resumedStepExecutionId,
+  );
+}
+
+/** True when the events reach back to what the thread has read, so no note between is missed. */
+function reachesRead(thread: ThreadRecord, events: readonly ConversationEvent[]): boolean {
+  const read = timeOf(thread.notesAfter);
+  return (
+    resumedPause(thread, events) !== undefined ||
+    events.some((event) => timeOf(event.timestamp) <= read)
+  );
 }
 
 /** Milliseconds since the epoch, or minus infinity when there is no time to read. */
@@ -385,7 +420,8 @@ export class Conversations {
       try {
         store.updateThread(thread, { status: 'answering' }, this.now());
         const watching = this.watch(thread);
-        await say(LOOKING_AGAIN);
+        // Only a notice: the watch goes on, and the reply is settled, when the post fails.
+        await say(LOOKING_AGAIN).catch(() => undefined);
         return { outcome: 'busy', watching };
       } finally {
         store.releaseThread(record.channel, record.threadTs);
@@ -582,17 +618,17 @@ export class Conversations {
    * records it as one a reply watches again, so that reply's watch can start.
    */
   private async poll(thread: ThreadRecord, release: () => void): Promise<WatchOutcome> {
-    const { store, api } = this.deps;
+    const { store } = this.deps;
     const sleep =
       this.deps.sleep ?? ((ms: number) => new Promise<void>((done) => setTimeout(done, ms)));
     const say = (line: string) => this.say(thread.channel, thread.threadTs, line);
     let toldWorking = false;
     let toldAboutAflow = false;
     let failedReads = 0;
-    let idle: { step: string; since: number } | undefined;
+    let idle: { step: string; pausedAt: string; since: number } | undefined;
     const pollMs = this.deps.pollMs ?? WATCH_POLL_MS;
     for (;;) {
-      const page = await api.latestEvents(thread.spaceId, thread.sessionId);
+      const page = await this.readTurn(thread);
       if (!page.ok && page.status === 404) {
         store.updateThread(thread, { status: 'ended', pausedStepExecutionId: null }, this.now());
         await say(CONVERSATION_GONE);
@@ -618,7 +654,7 @@ export class Conversations {
         last?.stepExecutionId !== undefined &&
         last.stepExecutionId !== thread.relayedStepExecutionId;
       const answer = open && asksTheOperator(last) ? last : undefined;
-      await this.relayNotes(thread, events, ended !== undefined ? last : answer);
+      await this.relayNotes(thread, events, ended !== undefined ? last : answer, page.gap);
       if (ended !== undefined) {
         store.updateThread(thread, { status: 'ended', pausedStepExecutionId: null }, this.now());
         await say(ended);
@@ -654,11 +690,16 @@ export class Conversations {
         toldAboutAflow = true;
         await say(WAITS_AT_AFLOW).catch(() => undefined);
       }
+      // The events name the pause until the next one, so a resume ends the wait on it.
+      const waiting =
+        open && atAflow !== undefined && !resumedSince(events, last)
+          ? { step: atAflow, pausedAt: last.timestamp }
+          : undefined;
       const at = this.now().getTime();
-      if (atAflow === undefined) {
+      if (waiting === undefined) {
         idle = undefined;
-      } else if (idle?.step !== atAflow) {
-        idle = { step: atAflow, since: at };
+      } else if (idle?.step !== waiting.step || idle.pausedAt !== waiting.pausedAt) {
+        idle = { ...waiting, since: at };
       } else if (at - idle.since >= WATCH_IDLE_LIMIT_MS) {
         release();
         store.updateThread(thread, { status: 'idle', pausedStepExecutionId: null }, this.now());
@@ -671,25 +712,46 @@ export class Conversations {
   }
 
   /**
+   * The session's newest events, paged back until they reach what the thread
+   * has read: its `notesAfter`, or the pause it resumed. `gap` is true when
+   * they do not reach it within `WATCH_PAGE_LIMIT` pages, or an older page
+   * cannot be read, so notes between the two may be missing.
+   */
+  private async readTurn(
+    thread: ThreadRecord,
+  ): Promise<{ ok: true; events: ConversationEvent[]; gap: boolean } | RouteRefusal> {
+    const { api } = this.deps;
+    const newest = await api.latestEvents(thread.spaceId, thread.sessionId);
+    if (!newest.ok) return newest;
+    let events = newest.events;
+    let older = newest.olderCursor;
+    for (let pages = 1; older !== undefined && !reachesRead(thread, events); pages += 1) {
+      if (pages >= WATCH_PAGE_LIMIT) return { ok: true, events, gap: true };
+      const page = await api.latestEvents(thread.spaceId, thread.sessionId, older);
+      if (!page.ok) return { ok: true, events, gap: true };
+      events = [...page.events, ...events];
+      older = page.olderCursor;
+    }
+    return { ok: true, events, gap: false };
+  }
+
+  /**
    * Posts each note the Helmsman wrote in this turn that the thread has not
    * heard, oldest first, one message per note. A note belongs to the turn when
    * it is later than the pause the thread resumed and no later than `closing`,
    * the event that ends the turn, when one has come. Each is recorded before it
-   * is posted, so a restart never posts one note twice.
+   * is posted, so a restart never posts one note twice. A `gap` is said first,
+   * and the thread's `notesAfter` then moves to the newest event read, so the
+   * next read starts from there.
    */
   private async relayNotes(
     thread: ThreadRecord,
     events: readonly ConversationEvent[],
     closing: ConversationEvent | undefined,
+    gap: boolean,
   ): Promise<void> {
-    const resumed =
-      thread.resumedStepExecutionId === null
-        ? undefined
-        : events.find(
-            (event) =>
-              event.eventType === 'SessionPaused' &&
-              event.stepExecutionId === thread.resumedStepExecutionId,
-          );
+    const say = (line: string) => this.say(thread.channel, thread.threadTs, line);
+    const resumed = resumedPause(thread, events);
     const after = Math.max(timeOf(thread.notesAfter), timeOf(resumed?.timestamp));
     const until = closing === undefined ? Number.POSITIVE_INFINITY : timeOf(closing.timestamp);
     const notes = events
@@ -698,12 +760,24 @@ export class Conversations {
         return event.note !== undefined && at > after && at <= until;
       })
       .sort((a, b) => timeOf(a.timestamp) - timeOf(b.timestamp));
+    // Only a notice: the notes and the answer still come when its post fails.
+    if (gap) await say(NOTES_SKIPPED).catch(() => undefined);
     for (const event of notes) {
       this.deps.store.updateThread(thread, { notesAfter: event.timestamp }, this.now());
       // Only a note: the answer still comes when its post fails.
-      await this.say(thread.channel, thread.threadTs, relayed(event.note ?? '')).catch(
-        () => undefined,
+      await say(relayed(event.note ?? '')).catch(() => undefined);
+    }
+    const read = events
+      .filter((event) => timeOf(event.timestamp) <= until)
+      .reduce<string | undefined>(
+        (newest, event) =>
+          newest === undefined || timeOf(event.timestamp) > timeOf(newest)
+            ? event.timestamp
+            : newest,
+        undefined,
       );
+    if (read !== undefined && timeOf(read) > Math.max(after, timeOf(thread.notesAfter))) {
+      this.deps.store.updateThread(thread, { notesAfter: read }, this.now());
     }
   }
 

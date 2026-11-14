@@ -49,6 +49,8 @@ export interface FakeAflow {
   pauseOnChildRun(sessionId: string, kind?: 'workflow_run' | 'delegation'): void;
   /** Records a note the Helmsman wrote beside a tool call, as `applyAgentDecision` does. */
   writeNote(sessionId: string, text: string): void;
+  /** Records `count` tool steps the Helmsman ran, each one event with no note. */
+  runSteps(sessionId: string, count: number): void;
   /** Resumes the session's pause from the web app, as the operator would at Aflow. */
   resumeAtAflow(sessionId: string): void;
   /** Ends the session at Aflow with this event. */
@@ -79,6 +81,15 @@ export function fakeAflow(): FakeAflow {
     });
   };
   const take = (session: FakeSession, text: string): void => {
+    if (session.pausedStep !== null) {
+      session.events.push({
+        eventId: randomUUID(),
+        eventType: 'SessionResumed',
+        sessionId: session.id,
+        stepExecutionId: session.pausedStep,
+        timestamp: tick(),
+      });
+    }
     session.pausedStep = null;
     session.events.push({
       eventId: randomUUID(),
@@ -160,6 +171,19 @@ export function fakeAflow(): FakeAflow {
         timestamp: tick(),
         metadata: { agentAction: 'invoke_step', agentMessage: text },
       });
+    },
+    runSteps(sessionId, count) {
+      const session = aflow.sessions.get(sessionId);
+      if (session === undefined) return;
+      for (let steps = 0; steps < count; steps += 1) {
+        session.events.push({
+          eventId: randomUUID(),
+          eventType: 'StepStarted',
+          sessionId: session.id,
+          stepExecutionId: randomUUID(),
+          timestamp: tick(),
+        });
+      }
     },
     resumeAtAflow(sessionId) {
       const session = aflow.sessions.get(sessionId);
@@ -248,8 +272,17 @@ export function fakeAflow(): FakeAflow {
       if (method === 'GET' && events?.[1] !== undefined) {
         const session = aflow.sessions.get(events[1]);
         if (session === undefined) return refuse(404, 'no session');
+        // The route's backward page: the newest page, or the page before `before`.
         const limit = Number(url.searchParams.get('limit'));
-        return json(200, { events: session.events.slice(-limit), hasMore: false });
+        const before = url.searchParams.get('before');
+        const end = before === null ? session.events.length : Number(before);
+        const start = Math.max(0, end - limit);
+        return json(200, {
+          events: session.events.slice(start, end),
+          hasMore: false,
+          hasOlder: start > 0,
+          ...(start > 0 ? { olderCursor: String(start) } : {}),
+        });
       }
       return refuse(404, `${method} ${path}`);
     },

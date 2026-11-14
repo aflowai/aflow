@@ -91,6 +91,8 @@ export interface ConversationEvent {
 export interface SessionEvents {
   ok: true;
   events: ConversationEvent[];
+  /** The cursor of the page before this one, absent when nothing older exists. */
+  olderCursor?: string;
 }
 
 export interface AflowApi {
@@ -117,8 +119,12 @@ export interface AflowApi {
     text: string,
     idempotencyKey: string,
   ): Promise<Accepted | RouteRefusal>;
-  /** The newest page of a session's events. */
-  latestEvents(spaceId: string, sessionId: string): Promise<SessionEvents | RouteRefusal>;
+  /** The newest page of a session's events, or the page before the `before` cursor. */
+  latestEvents(
+    spaceId: string,
+    sessionId: string,
+    before?: string,
+  ): Promise<SessionEvents | RouteRefusal>;
 }
 
 /** The Helmsman, as the web app's conversation targets it (Plan 327 D4). */
@@ -320,16 +326,23 @@ export function createAflowApi(options: {
       return { ok: true };
     },
 
-    async latestEvents(spaceId, sessionId) {
+    async latestEvents(spaceId, sessionId, before) {
+      const cursor = before === undefined ? '' : `&before=${encodeURIComponent(before)}`;
       const answer = await request(
-        `/v1/sessions/${encodeURIComponent(sessionId)}/events?limit=${String(EVENT_PAGE_LIMIT)}&spaceId=${encodeURIComponent(spaceId)}`,
+        `/v1/sessions/${encodeURIComponent(sessionId)}/events?limit=${String(EVENT_PAGE_LIMIT)}${cursor}&spaceId=${encodeURIComponent(spaceId)}`,
         undefined,
         undefined,
       );
       if ('ok' in answer) return answer;
       if (answer.status !== 200) return refusalOf(answer.status, answer.json);
-      const events = (answer.json as { events?: unknown } | undefined)?.events;
-      return { ok: true, events: Array.isArray(events) ? events.flatMap(conversationEventOf) : [] };
+      const page = answer.json as
+        { events?: unknown; olderCursor?: unknown; hasOlder?: unknown } | undefined;
+      const older = page?.hasOlder === true ? page.olderCursor : undefined;
+      return {
+        ok: true,
+        events: Array.isArray(page?.events) ? page.events.flatMap(conversationEventOf) : [],
+        ...(typeof older === 'string' && older !== '' ? { olderCursor: older } : {}),
+      };
     },
   };
 }
