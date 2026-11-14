@@ -1,6 +1,6 @@
 import type { AiMessageV1, PinnedState, SummaryTemplate } from '@aflow/schemas';
 import { DEFAULT_SUMMARY_SECTIONS } from '@aflow/schemas';
-import { splitActiveRefOwners, type ActiveRef } from './activeRefOwnership.js';
+import { splitRestoreRefs, type ActiveRef } from './activeRefOwnership.js';
 
 // ============================================================================
 // Template rendering
@@ -29,10 +29,12 @@ function renderRef(ref: ActiveRef): string {
 
 /**
  * Render what the restore carries beside the summary: a "do not duplicate"
- * block. Its refs are the restore's own list, so the block is bounded by the
- * same newest-N rule and the two never disagree.
+ * block. Its refs are the restore's own list, every active ref, so the
+ * summary never has to hold a path and can stay a digest under its cap.
  */
-function renderPinnedStateForSummarizer(pinned: PinnedState, listed: readonly ActiveRef[]): string {
+function renderPinnedStateForSummarizer(pinned: PinnedState): string {
+  const { described, pathOnly } = splitRestoreRefs(pinned.activeRefs);
+  const listed = [...pathOnly, ...described];
   const parts: string[] = [];
   if (pinned.objective) {
     parts.push(`- Objective: ${pinned.objective}`);
@@ -46,29 +48,10 @@ function renderPinnedStateForSummarizer(pinned: PinnedState, listed: readonly Ac
     }
   }
   if (listed.length > 0) {
-    parts.push('- The restore list (paths the summary leaves out):');
+    parts.push('- The restore list (every compacted read path, so the summary leaves them out):');
     for (const ref of listed) parts.push(`  ${renderRef(ref)}`);
   }
   return parts.length > 0 ? parts.join('\n') : '(none)';
-}
-
-/**
- * The paths the summary must carry because the restore list does not (§4.8).
- * A merge leaves out a path the existing summary already holds, because the
- * merge keeps it there. The block then holds only paths that have just left
- * the restore list, so it does not grow across compactions.
- */
-function renderSummaryCarriedRefs(
-  carried: readonly ActiveRef[],
-  previousSummary: string | undefined,
-): string {
-  const handed = carried.filter((ref) => !previousSummary?.includes(ref.ref));
-  if (handed.length === 0) return '';
-  return `
-- **Carry these paths**: the restore list no longer names them, so the summary is the only place the agent finds them. Copy each into What Was Read verbatim, with what was read there.
-
-${handed.map(renderRef).join('\n')}
-`;
 }
 
 // ============================================================================
@@ -223,8 +206,7 @@ export function buildSummarizationPrompt(
 ): string {
   const transcript = serializeTranscript(entries);
   const sectionInstructions = renderSectionInstructions(template);
-  const owners = splitActiveRefOwners(pinnedState.activeRefs);
-  const pinnedBlock = renderPinnedStateForSummarizer(pinnedState, owners.restoreListed);
+  const pinnedBlock = renderPinnedStateForSummarizer(pinnedState);
 
   return `You are a conversation summarizer for an AI agent workflow system.
 
@@ -233,7 +215,7 @@ Summarize the following conversation transcript (turns ${String(compressedTurnRa
 
 ## Critical rules
 ${sharedRules(template.maxTokens)}
-${renderSummaryCarriedRefs(owners.summaryCarried, undefined)}- **Do NOT duplicate pinned state**: the restore sends these facts and paths beside the summary. Do not repeat them:
+- **Do NOT duplicate pinned state**: the restore sends these facts and paths beside the summary. Do not repeat them:
 
 ${pinnedBlock}
 
@@ -260,8 +242,7 @@ export function buildMergePrompt(
 ): string {
   const transcript = serializeTranscript(newEntries);
   const sectionInstructions = renderSectionInstructions(template);
-  const owners = splitActiveRefOwners(pinnedState.activeRefs);
-  const pinnedBlock = renderPinnedStateForSummarizer(pinnedState, owners.restoreListed);
+  const pinnedBlock = renderPinnedStateForSummarizer(pinnedState);
 
   return `You are a conversation summarizer for an AI agent workflow system.
 
@@ -271,8 +252,8 @@ Update an existing conversation summary with new turns (${String(newTurnRange[0]
 ## Critical rules
 - **Merge, don't re-summarize**: add what the new turns read, decided and did to the matching sections. Remove a pending item the new turns resolved, and record how it was resolved. Keep every pending item they did not resolve.
 ${sharedRules(template.maxTokens)}
-- **Do not grow without bound**: if a result supersedes an earlier one, update the entry rather than appending. Never remove a re-read path or $ref the existing summary holds.
-${renderSummaryCarriedRefs(owners.summaryCarried, previousSummary)}- **Do NOT duplicate pinned state**: the restore sends these facts and paths beside the summary. Do not repeat them:
+- **Do not grow without bound**: if a result supersedes an earlier one, update the entry rather than appending. Keep every re-read path or $ref the existing summary holds, unless the restore list below names it.
+- **Do NOT duplicate pinned state**: the restore sends these facts and paths beside the summary. Do not repeat them:
 
 ${pinnedBlock}
 

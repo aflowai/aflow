@@ -29,7 +29,7 @@ import {
   computePinnedAtomIds,
   currentRunStartIndex,
 } from './retentionPolicy.js';
-import { RESTORE_ACTIVE_REFS_MAX } from './activeRefOwnership.js';
+import { RESTORE_DESCRIBED_REFS_MAX } from './activeRefOwnership.js';
 import { buildMergePrompt } from './compaction-prompts.js';
 import { appendRunWakeups } from './runWakeupsInTurn.js';
 import type { HandlerDeps } from './ai/handlers/types.js';
@@ -233,7 +233,7 @@ describe('retention constants', () => {
     expect(RETENTION_POLICY.minClearNetSavings(1_000)).toBe(2_000);
   });
 
-  it('starts the current run at the latest user_input, and returns -1 for a history without one', () => {
+  it('starts the current run at the latest direct request, a user_input without an inputOrigin, and returns -1 for a history without one', () => {
     const atoms = sortedByTurn([userAtom(0, 'open'), ...chain('p', 1, 3), userAtom(5, 'next')]);
     expect(currentRunStartIndex(atoms)).toBe(atoms.findIndex((a) => a.atomId === 'user-5'));
     expect(currentRunStartIndex(chain('p', 1, 3))).toBe(-1);
@@ -981,13 +981,22 @@ function promptBlock(prompt: string, from: string, to: string): string {
 const pathsIn = (text: string): string[] =>
   [...text.matchAll(/\/run\/outputs\/\w+\/data/g)].map((m) => m[0]);
 
-const CARRY = '**Carry these paths**';
-const LISTED = 'The restore list (paths the summary leaves out):';
+const LISTED = 'The restore list (every compacted read path, so the summary leaves them out):';
 
-describe('each compacted read path has one owner: the restore list or the summary', () => {
-  it('lists the newest refs in the restore, and tells the summarizer to carry every other', async () => {
+/** The restore atom's text, read from the archive batch the state points at. */
+async function restoreText(mem: PayloadStore, state: AiConversationStateV1): Promise<string> {
+  const restoreRef = state.history.atoms.find((a) => a.sourceKind === 'compaction_restore')!;
+  const batch = (await mem.retrieve(restoreRef.ref as never)) as AiMessageAtomV1[];
+  return batch
+    .find((a) => a.atomId === restoreRef.atomId)!
+    .message.parts.map((p) => (p.kind === 'text' ? p.text : ''))
+    .join('\n');
+}
+
+describe('the restore list holds every compacted read path, and the summary is a digest', () => {
+  it('lists every ref in the restore, the newest described, and the summarizer prompt names the same paths', async () => {
     const mem = createMemoryPayloadStore();
-    // 60 compacted results, more than the restore lists.
+    // 60 compacted results, more than the restore describes.
     const atoms = sortedByTurn([userAtom(0, 'open'), ...chain('c', 1, 70)]);
     const state = stateOf(atoms, 80, await seed(mem, atoms));
     const client = summarizer();
@@ -995,48 +1004,74 @@ describe('each compacted read path has one owner: the restore list or the summar
     expect(await compactOnce(mem, state, client)).toBeDefined();
 
     const prompt = vi.mocked(client.generateText).mock.calls[0]![0].messages[0]!.content as string;
-    const carried = pathsIn(promptBlock(prompt, CARRY, '**Do NOT duplicate pinned state**'));
     const listedInPrompt = pathsIn(promptBlock(prompt, LISTED, '## Output format'));
     const artifact = (await mem.retrieve(
       state.compaction!.artifactRef as never,
     )) as CompactionArtifact;
     const every = artifact.pinnedState.activeRefs!.map((r) => r.ref);
-    expect(every.length).toBeGreaterThan(RESTORE_ACTIVE_REFS_MAX);
+    expect(every.length).toBeGreaterThan(RESTORE_DESCRIBED_REFS_MAX);
 
-    // The pinned block is bounded by the restore's own rule.
-    expect(listedInPrompt).toHaveLength(RESTORE_ACTIVE_REFS_MAX);
+    // The summary is never asked to carry a path.
+    expect(prompt).not.toContain('Carry these paths');
+    expect([...listedInPrompt].sort()).toEqual([...every].sort());
 
-    // The restore lists exactly the refs the prompt said it lists.
-    const restoreRef = state.history.atoms.find((a) => a.sourceKind === 'compaction_restore')!;
-    const batch = (await mem.retrieve(restoreRef.ref as never)) as AiMessageAtomV1[];
-    const restore = batch
-      .find((a) => a.atomId === restoreRef.atomId)!
-      .message.parts.map((p) => (p.kind === 'text' ? p.text : ''))
-      .join('\n');
-    const listedInRestore = pathsIn(restore);
-    expect(listedInRestore.sort()).toEqual([...listedInPrompt].sort());
+    const restore = await restoreText(mem, state);
+    expect([...new Set(pathsIn(restore))].sort()).toEqual([...every].sort());
     expect(restore).toContain(
-      `(${String(every.length - RESTORE_ACTIVE_REFS_MAX)} older refs not listed — the summary carries their paths)`,
+      `Older refs, path only (${String(every.length - RESTORE_DESCRIBED_REFS_MAX)})`,
     );
-
-    // Every path has exactly one owner: never both, never neither.
-    for (const path of every) {
-      const owners = Number(listedInPrompt.includes(path)) + Number(carried.includes(path));
-      expect(owners, path).toBe(1);
-    }
+    const described = restore.split('\n').filter((l) => l.includes(`view: 'outline' } →`));
+    expect(described).toHaveLength(RESTORE_DESCRIBED_REFS_MAX);
   });
 
-  it('a merge hands over only the paths that left the restore list, so its block does not grow', () => {
-    const refs = Array.from({ length: RESTORE_ACTIVE_REFS_MAX + 10 }, (_, i) => ({
+  it('keeps every path in the restore across merges, whatever the summary drops', async () => {
+    const mem = createMemoryPayloadStore();
+    const atoms = sortedByTurn([userAtom(0, 'open'), ...chain('c', 1, 70)]);
+    const state = stateOf(atoms, 80, await seed(mem, atoms));
+    // A summary capped at its maxTokens holds no path at all.
+    const client = summarizer('## What Was Read\n(digest, no paths)');
+    expect(await compactOnce(mem, state, client)).toBeDefined();
+    const first = (await mem.retrieve(
+      state.compaction!.artifactRef as never,
+    )) as CompactionArtifact;
+    const firstPaths = first.pinnedState.activeRefs!.map((r) => r.ref);
+
+    const more = sortedByTurn(chain('d', 81, 100));
+    const moreRef = await mem.store({
+      tenantId: TENANT,
+      runId: RUN,
+      stepExecutionId: 'seed-more' as StepExecutionId,
+      attempt: 1,
+      kind: 'history',
+      data: more,
+    });
+    const added = stateOf(more, 110, moreRef).history.atoms;
+    const next: AiConversationStateV1 = {
+      ...state,
+      turnNumber: 110,
+      history: { ...state.history, atoms: [...state.history.atoms, ...added] },
+    };
+    expect(await compactOnce(mem, next, client)).toBeDefined();
+    const mergePrompt = vi.mocked(client.generateText).mock.calls[1]![0].messages[0]!
+      .content as string;
+    expect(mergePrompt).toContain('## Existing summary (to be updated)');
+
+    const second = (await mem.retrieve(
+      next.compaction!.artifactRef as never,
+    )) as CompactionArtifact;
+    const every = second.pinnedState.activeRefs!.map((r) => r.ref);
+    expect(every.length).toBeGreaterThan(firstPaths.length);
+    const restore = await restoreText(mem, next);
+    for (const path of [...firstPaths, ...every]) expect(restore, path).toContain(path);
+  });
+
+  it('a merge names every ref as listed, so the summary carries none of them', () => {
+    const refs = Array.from({ length: RESTORE_DESCRIBED_REFS_MAX + 10 }, (_, i) => ({
       ref: `/run/outputs/r${String(i)}_0/data`,
       description: `read ${String(i)}`,
       fromTurn: i,
     }));
-    // The existing summary already carries the five oldest.
-    const previousSummary = `## What Was Read\n${refs
-      .slice(0, 5)
-      .map((r) => `- ${r.ref}`)
-      .join('\n')}`;
+    const previousSummary = '## What Was Read\n- read 0: three rows';
 
     const prompt = buildMergePrompt(
       [],
@@ -1046,9 +1081,8 @@ describe('each compacted read path has one owner: the restore list or the summar
       [1, 2],
     );
 
-    const carried = pathsIn(promptBlock(prompt, CARRY, '**Do NOT duplicate pinned state**'));
-    expect(carried).toEqual(refs.slice(5, 10).map((r) => r.ref));
+    expect(prompt).not.toContain('Carry these paths');
     const listed = pathsIn(promptBlock(prompt, LISTED, '## Section structure'));
-    expect(listed).toEqual(refs.slice(10).map((r) => r.ref));
+    expect(listed).toEqual(refs.map((r) => r.ref));
   });
 });

@@ -25,7 +25,7 @@ import {
 import { estimateStringTokens } from './tokenEstimate.js';
 import { RETENTION_POLICY, computePinnedAtomIds } from './retentionPolicy.js';
 import { atomsAsSent } from './toolObservations.js';
-import { splitActiveRefOwners, type ActiveRef } from './activeRefOwnership.js';
+import { splitRestoreRefs, type ActiveRef } from './activeRefOwnership.js';
 
 // ============================================================================
 // Types
@@ -317,15 +317,25 @@ function createCompactionRestoreAtom(
   if (pinnedState.activeRefs && pinnedState.activeRefs.length > 0) {
     parts.push('- Active refs:');
     // The restore is sent every turn and the refs carry forward through each
-    // compaction, so it lists the newest. The summarizer was told to carry the
-    // rest, and the artifact keeps them all.
-    const { restoreListed: shown, summaryCarried } = splitActiveRefOwners(pinnedState.activeRefs);
-    if (summaryCarried.length > 0) {
-      parts.push(
-        `  - (${String(summaryCarried.length)} older refs not listed — the summary carries their paths)`,
-      );
+    // compaction, so only the newest keep a description. Every older path
+    // stays listed bare: the summary is capped and cannot be relied on to
+    // hold them (D7).
+    const { described, pathOnly } = splitRestoreRefs(pinnedState.activeRefs);
+    if (pathOnly.length > 0) {
+      const readHint =
+        availableReadOpId !== undefined && pathOnly.some((r) => r.ref.startsWith('/run/outputs/'))
+          ? ` — read a /run/outputs path with ${availableReadOpId} { path, view: 'outline' }`
+          : '';
+      parts.push(`  - Older refs, path only (${String(pathOnly.length)})${readHint}:`);
+      for (const ref of pathOnly) {
+        parts.push(
+          ref.ref.startsWith('/run/outputs/') && availableReadOpId !== undefined
+            ? `    - ${ref.ref}`
+            : `    - {"$ref": "${ref.ref}"}`,
+        );
+      }
     }
-    for (const ref of shown) {
+    for (const ref of described) {
       // §4.8/§4.9: a /run/outputs ref keeps the read affordance ONLY when the
       // agent actually holds a callable read op — teaching a specific op name
       // the turn can't call would be a dishonest (and now ceiling-rejected)

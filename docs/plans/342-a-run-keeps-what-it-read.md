@@ -78,7 +78,7 @@ When the conversation was condensed into a summary, the summary was written from
 
 **D6 — the summary is a session summary.** The default sections are Objective, What Was Read, What Was Decided, What Was Done, Left Pending and Mistakes & Lessons Learned. The transcript is labelled by turn and names each result's tool, status and re-read path. Rejected: a larger summarizer model. Nothing measured shows flash-lite losing facts from a raw transcript.
 
-**D7 — each read path has one owner.** The restore lists the newest 40 active refs, and the summary carries every other path. `splitActiveRefOwners` makes that split for both the restore and the summarizer prompt, so they never disagree. Rejected: telling the summarizer to leave out every active ref. The restore lists only 40, so an older path then reached the agent nowhere.
+**D7 — the restore list holds every read path.** The restore lists every active ref, so it is the completeness guarantee. The newest 40 keep their description, and every older ref is listed as its bare path. The summarizer prompt names the same list, so the summary leaves those paths out and stays a digest. `splitRestoreRefs` makes that split for both. Rejected: the summary carrying every path past the newest 40. Its output is capped at the template's `maxTokens`, so on a long run those paths and the later sections were truncated or dropped. The cost is about 15 tokens per older path on every turn.
 
 ## 3. What it affects
 
@@ -142,7 +142,7 @@ The hard-budget pass runs only if pressure still exceeds the hard budget after c
 
 Compaction selects every unpinned atom older than `RECENT_TURNS_FLOOR`, the current run's included. An exchange with any atom outside that set leaves the range whole. It needs `minCompactableTurns` (3) content turns. The range's atoms are archived and replaced by one restore atom, placed in the last compacted atom's slot.
 
-The restore holds verified state and the summary. Verified state is the objective, the latest sub-goal, written variables and active refs. Active refs include each compacted result's read path and each swept note's pointer. The restore lists the newest 40 refs, and the summary carries the rest (D7). The summarizer prompt names the restore's 40 as paths the summary leaves out. It names every other path as one the summary must copy verbatim. A merge leaves out a path its existing summary already holds, so that list holds only paths that have just left the restore. The summarizer is `compactionSummaryModel` (flash-lite). Its transcript is labelled by turn, and it shows each result's tool, status, re-read path and summary. It shows each decision's text and calls, and marks notes as stubs.
+The restore holds verified state and the summary. Verified state is the objective, the latest sub-goal, written variables and active refs. Active refs include each compacted result's read path and each swept note's pointer. The restore lists every ref, the newest 40 with their descriptions and the rest as bare paths (D7). The summarizer prompt names that whole list as paths the summary leaves out. The summary copies only a path the list does not name. The summarizer is `compactionSummaryModel` (flash-lite). Its transcript is labelled by turn, and it shows each result's tool, status, re-read path and summary. It shows each decision's text and calls, and marks notes as stubs.
 
 ### §4.9 Honest degrade
 
@@ -171,6 +171,6 @@ One phase, built. Its exit is the Done-when list above, each item held by a test
 - A run of tool calls compacted by the turn sends the next request a restore with that summary and every compacted read path, with no stub.
 - An unbroken chain of tool calls compacts up to the floor, and keeps the straddling exchange whole.
 - A run wakeup and a room message mid-request leave the current run starting at the request. Pressure clearing takes none of its turns, and compaction keeps the request.
-- Every compacted read path has one owner, the restore list or the summary. A merge hands over only the paths that have left the restore list.
+- The restore lists every compacted read path, past the newest 40 and across merges, whatever the summary holds. The summarizer prompt names the same paths, and never asks the summary to carry one.
 
 `retentionSafetyBound.test.ts` holds the pins under maximal hard-budget pressure, the archive trace and the fail-closed forced write. `retentionPressure.test.ts` and `compactionAlignment.test.ts` hold the class order and the compaction alignment.
