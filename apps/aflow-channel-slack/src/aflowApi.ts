@@ -66,7 +66,10 @@ export interface Accepted {
   ok: true;
 }
 
-/** What the app reads of a session event: its type, its step and the agent's reply. */
+/**
+ * What the app reads of a session event: its type, its step, the agent's reply,
+ * a note the agent wrote during the turn, and what a pause waits on.
+ */
 export interface ConversationEvent {
   eventType: string;
   timestamp: string;
@@ -75,6 +78,14 @@ export interface ConversationEvent {
   agentResponse?: string;
   /** True on a pause that waits for the person's next message. */
   asksForReply: boolean;
+  /** A pause's `pauseType`, such as `external_dependency` or `subflow_waiting`. */
+  pauseType?: string;
+  /** The kind of a pause's `blockedOn`, such as `workflow_run`. */
+  blockedOn?: string;
+  /** True on a pause that waits while a delegated child session runs. */
+  subflowWaiting: boolean;
+  /** What an agent turn wrote beside its tool calls, which rides a `StepSucceeded`. */
+  note?: string;
 }
 
 export interface SessionEvents {
@@ -342,6 +353,9 @@ function conversationEventOf(raw: unknown): ConversationEvent[] {
   if (typeof eventType !== 'string' || typeof timestamp !== 'string') return [];
   const metadata = record['metadata'] as Record<string, unknown> | undefined;
   const reply = metadata?.['agentResponse'];
+  const note = eventType === 'StepSucceeded' ? metadata?.['agentMessage'] : undefined;
+  const pauseType = metadata?.['pauseType'];
+  const blockedOn = (metadata?.['blockedOn'] as { kind?: unknown } | null | undefined)?.kind;
   const missing = metadata?.['missingVariables'];
   // An agent turn that waits for the person names its chat input among the missing variables.
   const asksForReply =
@@ -355,8 +369,12 @@ function conversationEventOf(raw: unknown): ConversationEvent[] {
       eventType,
       timestamp,
       asksForReply,
+      subflowWaiting: metadata?.['subflowWaiting'] === true,
       ...(typeof stepExecutionId === 'string' ? { stepExecutionId } : {}),
       ...(typeof reply === 'string' && reply.trim() !== '' ? { agentResponse: reply } : {}),
+      ...(typeof note === 'string' && note.trim() !== '' ? { note } : {}),
+      ...(typeof pauseType === 'string' ? { pauseType } : {}),
+      ...(typeof blockedOn === 'string' ? { blockedOn } : {}),
     },
   ];
 }

@@ -7,6 +7,11 @@
  * started, and posts the Helmsman's answer into the thread once the session
  * pauses with it.
  *
+ * - **The watch follows the turn.** It has no time limit. It posts each note
+ *   the Helmsman writes during the turn as one message, and the answer when the
+ *   turn ends, however long the turn takes. A pause on a child run is work in
+ *   progress, so the thread hears once that the work runs. Only a pause that
+ *   neither asks for a reply nor waits on a child run is said to need Aflow.
  * - **The operator's own posture.** The calls carry the owner's key, and the
  *   link must name the key's user. A start uses mode `api`, which the session
  *   route admits from a key, and a resume names the paused step the last
@@ -56,8 +61,11 @@ export const CONVERSATION_ENDED =
 export const WAITS_AT_AFLOW =
   'The Helmsman waits on something that needs you at Aflow before it answers. Open the conversation there.';
 
-export const ANSWER_TAKES_LONG =
-  'The answer is taking longer than this thread waits for it. It will be in the conversation at Aflow, and a reply here continues it.';
+export const WORK_RUNNING =
+  'The Helmsman has started work that runs at Aflow. Its answer comes into this thread when it is ready.';
+
+export const CONVERSATION_GONE =
+  'This conversation is no longer at Aflow. Send a new direct message to start another.';
 
 export const NOT_SENT = 'This did not reach Aflow, so the Helmsman did not get it:';
 
@@ -88,10 +96,8 @@ export const ENDED_NOTES: Readonly<Record<string, string>> = {
 
 const CUT_NOTE = '… The full answer is in the conversation at Aflow.';
 const WATCH_POLL_MS = 2_000;
-/** How long one turn may take before the thread stops watching it. */
-const WATCH_LIMIT_MS = 30 * 60 * 1000;
 
-export type WatchOutcome = 'answered' | 'ended' | 'gave_up' | 'already_watching';
+export type WatchOutcome = 'answered' | 'ended' | 'already_watching';
 
 export interface ConversationResult {
   outcome: InboundOutcome | 'duplicate' | 'ignored' | 'busy_tap' | 'already_decided';
@@ -112,7 +118,6 @@ export interface ConversationDeps {
   now?: () => Date;
   sleep?: (ms: number) => Promise<void>;
   pollMs?: number;
-  watchLimitMs?: number;
 }
 
 /** A Slack timestamp, `seconds.micros`, in milliseconds. */
@@ -201,6 +206,23 @@ function lastTurnEvent(events: readonly ConversationEvent[]): ConversationEvent 
 
 function asksTheOperator(event: ConversationEvent): boolean {
   return event.agentResponse !== undefined || event.asksForReply;
+}
+
+/**
+ * A pause on a child run the Helmsman started: a workflow run it waits on, or
+ * a delegated session still running. The turn goes on, and nothing waits on
+ * the operator.
+ */
+function waitsOnChildRun(event: ConversationEvent): boolean {
+  if (asksTheOperator(event)) return false;
+  if (event.pauseType === 'external_dependency') return event.blockedOn === 'workflow_run';
+  return event.pauseType === 'subflow_waiting' && event.subflowWaiting;
+}
+
+/** Milliseconds since the epoch, or minus infinity when there is no time to read. */
+function timeOf(timestamp: string | null | undefined): number {
+  const ms = timestamp == null ? Number.NaN : Date.parse(timestamp);
+  return Number.isNaN(ms) ? Number.NEGATIVE_INFINITY : ms;
 }
 
 /** True when Slack answered a refusal, so the post provably put nothing in the thread. */
@@ -436,6 +458,7 @@ export class Conversations {
       pausedStepExecutionId: null,
       relayedStepExecutionId: null,
       resumedStepExecutionId: null,
+      notesAfter: null,
       startedAt: at,
       updatedAt: at,
     };
@@ -482,7 +505,8 @@ export class Conversations {
 
   /**
    * Watches the thread's session until it pauses with the Helmsman's answer or
-   * ends, and posts what it finds into the thread. One watch per thread.
+   * ends, however long that takes, and posts what it finds into the thread.
+   * One watch per thread.
    */
   watch(thread: ThreadRecord): Promise<WatchOutcome> {
     const key = `${thread.channel}:${thread.threadTs}`;
@@ -507,50 +531,98 @@ export class Conversations {
     const { store, api } = this.deps;
     const sleep =
       this.deps.sleep ?? ((ms: number) => new Promise<void>((done) => setTimeout(done, ms)));
-    const deadline = this.now().getTime() + (this.deps.watchLimitMs ?? WATCH_LIMIT_MS);
     const say = (line: string) => this.say(thread.channel, thread.threadTs, line);
+    let toldWorking = false;
     let toldAboutAflow = false;
     for (;;) {
       const page = await api.latestEvents(thread.spaceId, thread.sessionId);
-      const last = page.ok ? lastTurnEvent(page.events) : undefined;
+      if (!page.ok && page.status === 404) {
+        store.updateThread(thread, { status: 'ended', pausedStepExecutionId: null }, this.now());
+        await say(CONVERSATION_GONE);
+        return 'ended';
+      }
+      const events = page.ok ? page.events : [];
+      const last = lastTurnEvent(events);
       const ended = last === undefined ? undefined : ENDED_NOTES[last.eventType];
+      const open =
+        last?.stepExecutionId !== undefined &&
+        last.stepExecutionId !== thread.relayedStepExecutionId;
+      const answer = open && asksTheOperator(last) ? last : undefined;
+      await this.relayNotes(thread, events, ended !== undefined ? last : answer);
       if (ended !== undefined) {
         store.updateThread(thread, { status: 'ended', pausedStepExecutionId: null }, this.now());
         await say(ended);
         return 'ended';
       }
-      if (
-        last?.stepExecutionId !== undefined &&
-        last.stepExecutionId !== thread.relayedStepExecutionId
-      ) {
-        const step = last.stepExecutionId;
-        if (asksTheOperator(last)) {
-          // Recorded before it is posted, so a restart never posts one answer twice.
-          store.updateThread(
-            thread,
-            { status: 'waiting', pausedStepExecutionId: step, relayedStepExecutionId: step },
-            this.now(),
-          );
-          const answer = last.agentResponse;
-          await this.relay(
-            thread,
-            answer === undefined ? 'The Helmsman waits for your reply.' : relayed(answer),
-            sleep,
-          );
-          return 'answered';
-        }
-        if (!toldAboutAflow) {
-          toldAboutAflow = true;
-          // Only a notice: the watch goes on to relay the answer when the post fails.
-          await say(WAITS_AT_AFLOW).catch(() => undefined);
-        }
+      if (answer?.stepExecutionId !== undefined) {
+        const step = answer.stepExecutionId;
+        // Recorded before it is posted, so a restart never posts one answer twice.
+        store.updateThread(
+          thread,
+          {
+            status: 'waiting',
+            pausedStepExecutionId: step,
+            relayedStepExecutionId: step,
+            notesAfter: answer.timestamp,
+          },
+          this.now(),
+        );
+        const reply = answer.agentResponse;
+        await this.relay(
+          thread,
+          reply === undefined ? 'The Helmsman waits for your reply.' : relayed(reply),
+          sleep,
+        );
+        return 'answered';
       }
-      if (this.now().getTime() >= deadline) {
-        store.updateThread(thread, { status: 'waiting', pausedStepExecutionId: null }, this.now());
-        await say(ANSWER_TAKES_LONG);
-        return 'gave_up';
+      // Each notice is only a notice: the watch goes on to relay the answer when its post fails.
+      if (open && waitsOnChildRun(last)) {
+        if (!toldWorking) {
+          toldWorking = true;
+          await say(WORK_RUNNING).catch(() => undefined);
+        }
+      } else if (open && !toldAboutAflow) {
+        toldAboutAflow = true;
+        await say(WAITS_AT_AFLOW).catch(() => undefined);
       }
       await sleep(this.deps.pollMs ?? WATCH_POLL_MS);
+    }
+  }
+
+  /**
+   * Posts each note the Helmsman wrote in this turn that the thread has not
+   * heard, oldest first, one message per note. A note belongs to the turn when
+   * it is later than the pause the thread resumed and no later than `closing`,
+   * the event that ends the turn, when one has come. Each is recorded before it
+   * is posted, so a restart never posts one note twice.
+   */
+  private async relayNotes(
+    thread: ThreadRecord,
+    events: readonly ConversationEvent[],
+    closing: ConversationEvent | undefined,
+  ): Promise<void> {
+    const resumed =
+      thread.resumedStepExecutionId === null
+        ? undefined
+        : events.find(
+            (event) =>
+              event.eventType === 'SessionPaused' &&
+              event.stepExecutionId === thread.resumedStepExecutionId,
+          );
+    const after = Math.max(timeOf(thread.notesAfter), timeOf(resumed?.timestamp));
+    const until = closing === undefined ? Number.POSITIVE_INFINITY : timeOf(closing.timestamp);
+    const notes = events
+      .filter((event) => {
+        const at = timeOf(event.timestamp);
+        return event.note !== undefined && at > after && at <= until;
+      })
+      .sort((a, b) => timeOf(a.timestamp) - timeOf(b.timestamp));
+    for (const event of notes) {
+      this.deps.store.updateThread(thread, { notesAfter: event.timestamp }, this.now());
+      // Only a note: the answer still comes when its post fails.
+      await this.say(thread.channel, thread.threadTs, relayed(event.note ?? '')).catch(
+        () => undefined,
+      );
     }
   }
 

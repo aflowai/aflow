@@ -163,7 +163,12 @@ describe('the store', () => {
   it('lives at mode 0600 and records its migrations', () => {
     expect(statSync(storePath).mode & 0o777).toBe(0o600);
     const data = JSON.parse(readFileSync(storePath, 'utf8')) as { migrations: string[] };
-    expect(data.migrations).toEqual(['0001-link-and-sent', '0002-cards', '0003-conversations']);
+    expect(data.migrations).toEqual([
+      '0001-link-and-sent',
+      '0002-cards',
+      '0003-conversations',
+      '0004-thread-notes',
+    ]);
   });
 
   it('reopens what it wrote', () => {

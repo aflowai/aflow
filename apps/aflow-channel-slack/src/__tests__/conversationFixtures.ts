@@ -42,6 +42,13 @@ export interface FakeAflow {
   movePause(sessionId: string): void;
   /** Pauses the session on something only Aflow can answer, such as an approval. */
   pauseAtAflow(sessionId: string): void;
+  /**
+   * Pauses the session on a child run, as `StepService.waitForInput` writes the
+   * pause: a workflow run the Helmsman started, or a delegated session.
+   */
+  pauseOnChildRun(sessionId: string, kind?: 'workflow_run' | 'delegation'): void;
+  /** Records a note the Helmsman wrote beside a tool call, as `applyAgentDecision` does. */
+  writeNote(sessionId: string, text: string): void;
   /** Resumes the session's pause from the web app, as the operator would at Aflow. */
   resumeAtAflow(sessionId: string): void;
   /** Ends the session at Aflow with this event. */
@@ -115,6 +122,43 @@ export function fakeAflow(): FakeAflow {
         stepExecutionId: step,
         timestamp: tick(),
         metadata: { missingVariables: [{ variableId: 'approval' }] },
+      });
+    },
+    pauseOnChildRun(sessionId, kind = 'workflow_run') {
+      const session = aflow.sessions.get(sessionId);
+      if (session === undefined) return;
+      const runId = randomUUID();
+      session.events.push({
+        eventId: randomUUID(),
+        eventType: 'SessionPaused',
+        sessionId: session.id,
+        stepExecutionId: randomUUID(),
+        timestamp: tick(),
+        metadata:
+          kind === 'workflow_run'
+            ? {
+                operationId: 'workflow.run.start',
+                pauseReason: 'input_required',
+                pauseType: 'external_dependency',
+                blockedOn: { kind: 'workflow_run', runId },
+              }
+            : {
+                operationId: 'agent.control.delegate',
+                pauseType: 'subflow_waiting',
+                subflowWaiting: true,
+              },
+      });
+    },
+    writeNote(sessionId, text) {
+      const session = aflow.sessions.get(sessionId);
+      if (session === undefined) return;
+      session.events.push({
+        eventId: randomUUID(),
+        eventType: 'StepSucceeded',
+        sessionId: session.id,
+        stepExecutionId: randomUUID(),
+        timestamp: tick(),
+        metadata: { agentAction: 'invoke_step', agentMessage: text },
       });
     },
     resumeAtAflow(sessionId) {

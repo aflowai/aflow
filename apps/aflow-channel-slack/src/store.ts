@@ -162,6 +162,12 @@ export const ThreadRecordSchema = z.object({
    * than resume it a second time.
    */
   resumedStepExecutionId: z.string().min(1).nullable(),
+  /**
+   * The timestamp of the last event whose words the thread holds: the newest
+   * note posted, or the pause whose answer was posted. A note counts as new
+   * only when it is later, so a restarted watch never posts one note twice.
+   */
+  notesAfter: z.string().min(1).nullable(),
   startedAt: z.string().min(1),
   updatedAt: z.string().min(1),
 });
@@ -197,6 +203,16 @@ const MIGRATIONS: readonly Migration[] = [
   {
     id: '0003-conversations',
     apply: (data) => ({ ...data, inbound: [], threads: [] }),
+  },
+  {
+    id: '0004-thread-notes',
+    apply: (data) => ({
+      ...data,
+      threads: (Array.isArray(data['threads']) ? data['threads'] : []).map((thread: unknown) => ({
+        ...(thread as Record<string, unknown>),
+        notesAfter: null,
+      })),
+    }),
   },
 ];
 
@@ -454,7 +470,11 @@ export class ChannelStore {
     patch: Partial<
       Pick<
         ThreadRecord,
-        'status' | 'pausedStepExecutionId' | 'relayedStepExecutionId' | 'resumedStepExecutionId'
+        | 'status'
+        | 'pausedStepExecutionId'
+        | 'relayedStepExecutionId'
+        | 'resumedStepExecutionId'
+        | 'notesAfter'
       >
     >,
     at: Date,
