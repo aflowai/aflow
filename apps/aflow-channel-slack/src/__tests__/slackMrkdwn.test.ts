@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { mrkdwnUnits, slackMrkdwnOf } from '../slackMrkdwn.js';
+import { mrkdwnUnits, slackMrkdwnOf, slackMrkdwnWithin } from '../slackMrkdwn.js';
 
 describe('slackMrkdwnOf', () => {
   it('turns every heading level into a bold line', () => {
@@ -14,10 +14,35 @@ describe('slackMrkdwnOf', () => {
     expect(slackMrkdwnOf('#hashtag stays')).toBe('#hashtag stays');
   });
 
-  it('turns **bold** and __bold__ into *bold*', () => {
+  it('turns **bold** and __bold words__ into *bold*', () => {
     expect(slackMrkdwnOf('a **strong** word')).toBe('a *strong* word');
-    expect(slackMrkdwnOf('a __strong__ word')).toBe('a *strong* word');
+    expect(slackMrkdwnOf('a __strong words__ here')).toBe('a *strong words* here');
     expect(slackMrkdwnOf('**one** and **two**')).toBe('*one* and *two*');
+  });
+
+  it('leaves a Python dunder name outside backticks as it is', () => {
+    expect(slackMrkdwnOf('define __init__ and check __name__ == "__main__"')).toBe(
+      'define __init__ and check __name__ == "__main__"',
+    );
+    expect(slackMrkdwnOf('read obj.__dict__ in __init__.py')).toBe(
+      'read obj.__dict__ in __init__.py',
+    );
+    expect(slackMrkdwnOf('# The __init__ method')).toBe('*The __init__ method*');
+    expect(slackMrkdwnOf('[__init__](https://docs.python.org)')).toBe(
+      '<https://docs.python.org|__init__>',
+    );
+    expect(slackMrkdwnOf('__init__ runs __before anything__')).toBe(
+      '__init__ runs *before anything*',
+    );
+  });
+
+  it('turns ***bold italic*** into bold around italic, and never misnests the two', () => {
+    expect(slackMrkdwnOf('a ***loud*** word')).toBe('a *_loud_* word');
+    expect(slackMrkdwnOf('***all of it*** and **more**')).toBe('*_all of it_* and *more*');
+    expect(slackMrkdwnOf('# ***Loud*** heading')).toBe('*_Loud_ heading*');
+    expect(slackMrkdwnOf('**a *b***')).toBe('**a *b***');
+    expect(slackMrkdwnOf('***a** b*')).toBe('***a** b*');
+    expect(slackMrkdwnOf('__a **b__ c**')).toBe('__a *b__ c*');
   });
 
   it('keeps italics as Slack italics', () => {
@@ -134,6 +159,37 @@ describe('slackMrkdwnOf', () => {
         'Ask <@U024BE7LH> if anything looks wrong.',
       ].join('\n'),
     );
+  });
+});
+
+describe('slackMrkdwnWithin', () => {
+  it('is the whole conversion when it fits', () => {
+    const markdown = '# Done\n**All** checks passed.\n```\ncode\n```';
+    expect(slackMrkdwnWithin(markdown, 1_000)).toBe(slackMrkdwnOf(markdown));
+  });
+
+  it('cuts between whole spans, so no bold, italic, struck or code span stays open', () => {
+    expect(slackMrkdwnWithin('one **two three** four', 12)).toBe('one ');
+    expect(slackMrkdwnWithin('one *two three* four', 12)).toBe('one ');
+    expect(slackMrkdwnWithin('one ~~two three~~ four', 12)).toBe('one ');
+    expect(slackMrkdwnWithin('one `two three` four', 12)).toBe('one ');
+    expect(slackMrkdwnWithin('one ***two three*** four', 14)).toBe('one ');
+    expect(slackMrkdwnWithin('# A heading\nmore', 8)).toBe('');
+    expect(slackMrkdwnWithin('one **two** three', 12)).toBe('one *two* th');
+  });
+
+  it('closes a code block the cut ends inside', () => {
+    const markdown = 'Before\n```\nline one\nline two\n```\nAfter';
+    expect(slackMrkdwnWithin(markdown, 23)).toBe('Before\n```\nline one\n```');
+    expect(slackMrkdwnWithin(markdown, 11)).toBe('Before\n');
+  });
+
+  it('keeps entities and Slack references whole', () => {
+    expect(slackMrkdwnWithin('a & <https://x.io|x> b', 8)).toBe('a &amp; ');
+  });
+
+  it('reads the private-use characters it marks with as nothing in the input', () => {
+    expect(slackMrkdwnOf('abc')).toBe('abc');
   });
 });
 

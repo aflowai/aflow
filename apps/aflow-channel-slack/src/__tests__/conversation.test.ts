@@ -779,6 +779,22 @@ describe('a relayed answer', () => {
     expect(text).toBe(`${'a'.repeat(39_940)} ${NOTE}`);
   });
 
+  it('closes a code block the cut ends inside, so the note reads outside it', () => {
+    const text = relayed(`Logs:\n\`\`\`\n${'log line\n'.repeat(5_000)}\`\`\`\nDone.`);
+
+    expect(text.length).toBeLessThanOrEqual(40_000);
+    expect(text.startsWith('Logs:\n```\nlog line\n')).toBe(true);
+    expect(text.endsWith(`\n\`\`\`\n${NOTE}`)).toBe(true);
+    expect(text.match(/^```$/gm)).toHaveLength(2);
+  });
+
+  it('is cut between whole bold spans, never inside one', () => {
+    const text = relayed(`${'a'.repeat(39_900)} **${'b '.repeat(100)}end** more`);
+
+    expect(text.length).toBeLessThanOrEqual(40_000);
+    expect(text).toBe(`${'a'.repeat(39_900)} ${NOTE}`);
+  });
+
   it('is cut to fit once escaped, between whole escapes, even when dense in `&`', () => {
     const text = relayed('&'.repeat(30_000));
 

@@ -32,7 +32,7 @@ import type { CardTap } from './cardActions.js';
 import { escapeMrkdwn } from './cards.js';
 import { SlackApiError, type SlackBlock, type SlackClient } from './slack.js';
 import type { DirectMessage } from './socketMode.js';
-import { mrkdwnUnits, slackMrkdwnOf } from './slackMrkdwn.js';
+import { slackMrkdwnOf, slackMrkdwnWithin } from './slackMrkdwn.js';
 import { typedTextOf } from './slackText.js';
 import type { ChannelStore, InboundOutcome, InboundRecord, ThreadRecord } from './store.js';
 
@@ -139,17 +139,16 @@ export function lateText(text: string, record: InboundRecord, ranAt: Date): stri
   );
 }
 
-/** The answer as mrkdwn, cut to Slack's limit between whole characters, escapes and links. */
+/**
+ * The answer as mrkdwn, cut to Slack's limit. The cut leaves no span open and
+ * closes a code block it ends inside, so the cut note reads as plain text.
+ */
 export function relayed(answer: string): string {
   const whole = slackMrkdwnOf(answer);
   if (whole.length <= SLACK_TEXT_LIMIT) return whole;
-  const room = SLACK_TEXT_LIMIT - CUT_NOTE.length;
-  let cut = '';
-  for (const piece of mrkdwnUnits(whole)) {
-    if (cut.length + piece.length > room) break;
-    cut += piece;
-  }
-  return `${cut}${CUT_NOTE}`;
+  // One character more for the line break after a closed code block.
+  const cut = slackMrkdwnWithin(answer, SLACK_TEXT_LIMIT - CUT_NOTE.length - 1);
+  return cut.endsWith('```') ? `${cut}\n${CUT_NOTE}` : `${cut}${CUT_NOTE}`;
 }
 
 function lateBlocks(record: InboundRecord): SlackBlock[] {
