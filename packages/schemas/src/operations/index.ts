@@ -27,6 +27,7 @@ export * from './host.js';
 export * from './hostFolderPreview.js';
 export * from './hostHarnessRunEnd.js';
 export * from './hostPushMerge.js';
+export * from './hostFilePatchOutput.js';
 export * from './hostCommitCheck.js';
 export * from './hostCommitScan.js';
 export * from './hostCommitDescribe.js';

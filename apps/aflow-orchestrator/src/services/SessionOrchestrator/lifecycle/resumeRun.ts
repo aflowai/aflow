@@ -563,15 +563,18 @@ export function createResumeRun(bindings: SessionOrchestratorBindings) {
       if (targetStepDef?.operation === 'ai.agent.turn') {
         const failuresVarKey = `ai.agent.toolFailures.${targetStepId}`;
         const signaturesVarKey = `ai.agent.recentCallSignatures.${targetStepId}`;
+        const readTargetsVarKey = `ai.agent.recentReadTargets.${targetStepId}`;
         const loopWarningVarKey = `ai.agent.loopWarning.${targetStepId}`;
         const hadCounters =
           runtimeState.variables[failuresVarKey] !== undefined ||
           runtimeState.variables[signaturesVarKey] !== undefined ||
+          runtimeState.variables[readTargetsVarKey] !== undefined ||
           runtimeState.variables[loopWarningVarKey] !== undefined;
         if (hadCounters) {
           const newVars = { ...runtimeState.variables };
           delete newVars[failuresVarKey];
           delete newVars[signaturesVarKey];
+          delete newVars[readTargetsVarKey];
           delete newVars[loopWarningVarKey];
           runtimeState = {
             ...runtimeState,

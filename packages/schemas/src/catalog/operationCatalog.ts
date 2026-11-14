@@ -113,14 +113,17 @@ export interface OperationRegistration {
    */
   agentCollapsedFields?: Record<string, string | Record<string, unknown>>;
   /**
-   * Dotted argument paths that identify one call of this operation to the
-   * repeated-call detector. Arguments not listed are the shape of the call,
-   * not its identity: two reads of one document through different `jsonPath`
-   * windows are the same decision repeated.
+   * The stored target one call of this read operation reads, for the
+   * same-target read detector. Each key names one part of the target. Its
+   * value lists the dotted argument paths that may carry that part, first
+   * match wins, so a flat and a nested spelling of one target agree.
    *
-   * Absent means every argument except replay keys identifies the call.
+   * Every other argument says how the target is read: a `jsonPath`, a `view`
+   * or a window. Reads of one target count together whatever those say. The
+   * identical-call detector compares every argument, so it cannot see them.
+   * Absent means the operation reads no stored target.
    */
-  decisionSignatureArgs?: readonly string[];
+  readTargetArgs?: Readonly<Record<string, readonly string[]>>;
 
   /** Idempotency classification for retry/agent reasoning */
   idempotency: IdempotencyKind;
@@ -278,8 +281,8 @@ export interface OperationDescriptor {
   internalFields?: { input?: string[]; output?: string[] };
   /** See `OperationDescriptor.agentCollapsedFields`. */
   agentCollapsedFields?: Record<string, string | Record<string, unknown>>;
-  /** See `OperationRegistration.decisionSignatureArgs`. */
-  decisionSignatureArgs?: readonly string[];
+  /** See `OperationRegistration.readTargetArgs`. */
+  readTargetArgs?: Readonly<Record<string, readonly string[]>>;
   /** Idempotency classification */
   idempotency: IdempotencyKind;
   /** Usage hints */

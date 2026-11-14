@@ -13,7 +13,6 @@ import {
   HostFileListInputSchema,
   HostFileListOutputSchema,
   HostFilePatchInputSchema,
-  HostFilePatchOutputSchema,
   HostFilePutInputSchema,
   HostFilePutOutputSchema,
   HostHarnessRunInputSchema,
@@ -31,6 +30,7 @@ import {
   HostProcessStopInputSchema,
   HostProcessStopOutputSchema,
 } from './host.js';
+import { HostFilePatchOutputSchema } from './hostFilePatchOutput.js';
 import { HostCommitCheckInputSchema, HostCommitCheckOutputSchema } from './hostCommitCheck.js';
 import { HostCommitScanInputSchema, HostCommitScanOutputSchema } from './hostCommitScan.js';
 import {

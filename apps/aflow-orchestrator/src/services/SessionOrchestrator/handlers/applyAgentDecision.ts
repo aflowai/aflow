@@ -52,9 +52,14 @@ import { pauseForGuardrailEscalation } from './guardrailEscalationPause.js';
 import {
   buildCallSignature,
   countRepeatedCall,
-  hasDeclaredSignature,
+  countSameTargetReads,
   HARD_PAUSE_IDENTICAL_CONSECUTIVE,
+  HARD_PAUSE_SAME_TARGET_READS,
+  readsStoredTarget,
+  readTargetKeys,
   repeatedReadWarning,
+  SAME_TARGET_WINDOW,
+  sameTargetReadWarning,
   type ResolveCallOperation,
 } from './callSignature.js';
 import { clearStaleCredentialBlock } from './credentialBlockScope.js';
@@ -1064,7 +1069,11 @@ export async function applyAgentDecision(params: ApplyAgentDecisionParams): Prom
     // a pause after the same action repeats 5 times in a row. This keeps
     // legitimate retries working while still protecting against stale-input or
     // history-sync bugs that make the agent see the same turn repeatedly.
+    // A second rule beside it counts reads of one stored target over a wider
+    // window, whatever their jsonPath, view or window, so a section-by-section
+    // read of one document is caught though no two of its calls are identical.
     const loopVarKey = `ai.agent.recentCallSignatures.${result.stepId}`;
+    const readTargetsVarKey = `ai.agent.recentReadTargets.${result.stepId}`;
     const loopWarningVarKey = `ai.agent.loopWarning.${result.stepId}`;
 
     const sigCalls =
@@ -1073,12 +1082,16 @@ export async function applyAgentDecision(params: ApplyAgentDecisionParams): Prom
         : decision.calls.map((c) => ({ toolId: c.toolId, args: c.args }));
     const resolveCallOperation: ResolveCallOperation = (toolId) =>
       agentDef.steps.find((s) => s.stepId === toolId)?.operation ?? toolId;
-    const callSignature = buildCallSignature(sigCalls, resolveCallOperation);
-    const repeatsReadsOfOneTarget = hasDeclaredSignature(sigCalls, resolveCallOperation);
+    const callSignature = buildCallSignature(sigCalls);
+    const repeatsReadOfStoredTarget = readsStoredTarget(sigCalls, resolveCallOperation);
 
     const { recentSignatures, consecutiveCount, verdict } = countRepeatedCall(
       readInlineVar(currentRuntimeState, loopVarKey, [] as string[]),
       callSignature,
+    );
+    const sameTarget = countSameTargetReads(
+      readInlineVar(currentRuntimeState, readTargetsVarKey, [] as string[][]),
+      readTargetKeys(sigCalls, resolveCallOperation),
     );
 
     // Persist updated signatures and refresh any pending loop warning that
@@ -1088,8 +1101,15 @@ export async function applyAgentDecision(params: ApplyAgentDecisionParams): Prom
       ...varMeta,
       version: recentSignatures.length,
     });
+    writeInlineVar(newVarsWithSig, readTargetsVarKey, sameTarget.recentReadTargets, {
+      ...varMeta,
+      version: sameTarget.recentReadTargets.length,
+    });
     delete newVarsWithSig[loopWarningVarKey];
-    if (verdict === 'warning' || verdict === 'final_warning') {
+    const warnsIdentical = verdict === 'warning' || verdict === 'final_warning';
+    const warnsSameTarget =
+      sameTarget.verdict === 'warning' || sameTarget.verdict === 'final_warning';
+    if (warnsIdentical) {
       const remainingBeforePause = HARD_PAUSE_IDENTICAL_CONSECUTIVE - consecutiveCount;
       writeInlineVar(
         newVarsWithSig,
@@ -1098,7 +1118,7 @@ export async function applyAgentDecision(params: ApplyAgentDecisionParams): Prom
           repeatedActionCount: consecutiveCount,
           repeatedActionSignature: callSignature,
           severity: verdict,
-          message: repeatsReadsOfOneTarget
+          message: repeatsReadOfStoredTarget
             ? repeatedReadWarning(consecutiveCount)
             : `You have invoked the exact same tool call ${String(consecutiveCount)} times in a row. ` +
               'Do not repeat it again unless the input has materially changed.',
@@ -1117,25 +1137,63 @@ export async function applyAgentDecision(params: ApplyAgentDecisionParams): Prom
           `agent invoked "${callSignature}" ${String(consecutiveCount)} times consecutively. ` +
           `Giving model a chance to recover before pause at ${String(HARD_PAUSE_IDENTICAL_CONSECUTIVE)} repeats.`,
       );
+    } else if (warnsSameTarget && sameTarget.target !== undefined) {
+      const remainingBeforePause = HARD_PAUSE_SAME_TARGET_READS - sameTarget.readCount;
+      writeInlineVar(
+        newVarsWithSig,
+        loopWarningVarKey,
+        {
+          repeatedActionCount: sameTarget.readCount,
+          repeatedActionSignature: sameTarget.target,
+          severity: sameTarget.verdict,
+          message: sameTargetReadWarning(sameTarget.readCount),
+          instruction:
+            remainingBeforePause > 1
+              ? `${String(remainingBeforePause)} more reads of this target within ${String(SAME_TARGET_WINDOW)} turns will pause the run for user input.`
+              : `The next read of this target within ${String(SAME_TARGET_WINDOW)} turns will pause the run for user input.`,
+        },
+        {
+          ...varMeta,
+          version: getVariableVersion(currentRuntimeState.variables[loopWarningVarKey]) + 1,
+        },
+      );
+      console.warn(
+        `[SessionOrchestrator] Same-target read warning for run ${result.sessionId}: ` +
+          `agent read "${sameTarget.target}" ${String(sameTarget.readCount)} times in ` +
+          `${String(SAME_TARGET_WINDOW)} turns. ` +
+          `Giving model a chance to recover before pause at ${String(HARD_PAUSE_SAME_TARGET_READS)} reads.`,
+      );
     }
     currentRuntimeState = {
       ...currentRuntimeState,
       variables: newVarsWithSig,
     };
 
-    if (verdict === 'pause') {
+    const loopFailureMessage =
+      verdict === 'pause'
+        ? `The assistant attempted the same action ${String(consecutiveCount)} times in a row without progress. ` +
+          'The run has been failed — start a new run with different instructions or fix the underlying issue.'
+        : sameTarget.verdict === 'pause'
+          ? `The assistant read one stored target ${String(sameTarget.readCount)} times in ` +
+            `${String(SAME_TARGET_WINDOW)} turns without reading it whole or by window. ` +
+            'The run has been failed — start a new run with different instructions or fix the underlying issue.'
+          : undefined;
+
+    if (loopFailureMessage !== undefined) {
       console.warn(
-        `[SessionOrchestrator] Loop detected for run ${result.sessionId}: ` +
-          `agent invoked "${callSignature}" ${String(consecutiveCount)} times consecutively. ` +
-          `Failing run — harness blocked the agent.`,
+        verdict === 'pause'
+          ? `[SessionOrchestrator] Loop detected for run ${result.sessionId}: ` +
+              `agent invoked "${callSignature}" ${String(consecutiveCount)} times consecutively. ` +
+              `Failing run — harness blocked the agent.`
+          : `[SessionOrchestrator] Same-target read loop detected for run ${result.sessionId}: ` +
+              `agent read "${sameTarget.target ?? ''}" ${String(sameTarget.readCount)} times in ` +
+              `${String(SAME_TARGET_WINDOW)} turns. Failing run — harness blocked the agent.`,
       );
 
       const loopErrorRef = `inline:${Buffer.from(
         JSON.stringify({
           code: 'AGENT_LOOP_DETECTED',
-          message:
-            `The assistant attempted the same action ${String(consecutiveCount)} times in a row without progress. ` +
-            'The run has been failed — start a new run with different instructions or fix the underlying issue.',
+          message: loopFailureMessage,
           classification: 'loop',
           retryable: false,
           timestamp: new Date().toISOString(),
@@ -1156,9 +1214,7 @@ export async function applyAgentDecision(params: ApplyAgentDecisionParams): Prom
         },
         {
           code: 'AGENT_LOOP_DETECTED',
-          message:
-            `The assistant attempted the same action ${String(consecutiveCount)} times in a row without progress. ` +
-            'The run has been failed — start a new run with different instructions or fix the underlying issue.',
+          message: loopFailureMessage,
         },
         {
           errorRef: loopErrorRef,
