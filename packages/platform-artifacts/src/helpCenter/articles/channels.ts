@@ -43,7 +43,7 @@ The Helmsman acts as you, with what your own account may do, and nothing more is
 At api.slack.com/apps, create an app in your Slack workspace, then:
 
 1. Under **Socket Mode**, turn it on and create an app-level token with the \`connections:write\` scope. It starts with \`xapp-\`.
-2. Under **OAuth & Permissions**, add the bot scopes \`chat:write\`, \`im:write\` and \`im:history\`.
+2. Under **OAuth & Permissions**, add the bot scopes \`chat:write\`, \`im:write\`, \`im:history\` and \`reactions:write\`.
 3. Under **Event Subscriptions**, turn events on and subscribe the bot to \`message.im\`.
 4. Under **App Home**, allow users to send messages from the messages tab.
 5. Under **Interactivity & Shortcuts**, turn interactivity on, so a card's buttons reach the app. With Socket Mode on, it needs no request URL.
