@@ -42,6 +42,8 @@ import {
   HostCommitDescribeOutputSchema,
   HostFilePatchInputSchema,
   HostFilePatchOutputSchema,
+  HostPatchConflictRemedySchema,
+  type HostPatchConflictRemedy,
   HostPushAreasSchema,
   HOST_BINARY_FILE_LINES,
   isEvalPlaneOperation,
@@ -83,7 +85,12 @@ import {
   STANDARD_REASON,
   UNMEASURED_REASON,
 } from './publishLocalChangesReview.js';
-import { PUBLISH_AS_IT_STANDS } from './publishLocalChangesProse.js';
+import {
+  COMMIT_CONFLICT,
+  COMMIT_EMPTY,
+  CONFLICT_REMEDIES,
+} from './publishLocalChangesCommitStops.js';
+import { PUBLISH_AS_IT_STANDS, publishAsItStands } from './publishLocalChangesProse.js';
 import { FIX_ROUND_BRIEF_FINDINGS } from './publishLocalChangesFixRound.js';
 import { REPOSITORY_UNKNOWN_FAILURE } from './publishLocalChangesRepository.js';
 import {
@@ -225,7 +232,7 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     expect(validity.status).toBe('valid');
   });
 
-  it("is thirty-eight tasks — where the commit message comes from, the commission found, a named one checked against it and the stop on one that differs, its summary read, the folder read, the repository settled and the stop where none is, commit, check, the stop on a failed check, scan, what decides the approval, the review's depth, the review and its one retry, its findings graded, looked up in the rounds rule, asked of the decision model only where no row covers them and recorded, the check of an override and the stop on its refusal, the pull request composed, the push gate, the fix round handed its branch, approve, push, the pull request found, rewritten or opened, and the review read back", () => {
+  it("is forty tasks — where the commit message comes from, the commission found, a named one checked against it and the stop on one that differs, its summary read, the folder read, the repository settled and the stop where none is, commit, the stops on a patch that does not apply and on one that touches no file, check, the stop on a failed check, scan, what decides the approval, the review's depth, the review and its one retry, its findings graded, looked up in the rounds rule, asked of the decision model only where no row covers them and recorded, the check of an override and the stop on its refusal, the pull request composed, the push gate, the fix round handed its branch, approve, push, the pull request found, rewritten or opened, and the review read back", () => {
     expect(wf.tasks.map((t) => t.taskId)).toEqual([
       'message-from',
       'find-commission',
@@ -236,6 +243,8 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       'resolve-repository',
       'repository-unknown',
       'commit',
+      'commit-conflict',
+      'commit-empty',
       'check-commit',
       'checks-failed',
       'recheck-commit',
@@ -290,6 +299,8 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
         'resolve-repository',
         'repository-unknown',
       ],
+      'commit-conflict': ['commit'],
+      'commit-empty': ['commit'],
       'check-commit': ['commit'],
       'checks-failed': ['check-commit'],
       'recheck-commit': ['commit', 'check-commit'],
@@ -381,6 +392,8 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       'resolve-repository': 'workflow.run.decide',
       'repository-unknown': 'workflow.run.fail',
       commit: 'host.file.patch',
+      'commit-conflict': 'workflow.run.fail',
+      'commit-empty': 'workflow.run.fail',
       'check-commit': 'host.commit.check',
       'checks-failed': 'workflow.run.fail',
       'recheck-commit': 'host.commit.check',
@@ -1245,6 +1258,8 @@ interface Scenario {
   existingPrInto?: string;
   /** The commit as `host.file.patch` reports it, where not `COMMIT`. */
   commit?: Record<string, unknown>;
+  /** What `host.file.patch` returns, whole, where the patch made no commit: a `conflict` or `empty` ending. */
+  commitEnding?: Record<string, unknown>;
   /** Run inputs beside the ones every publication is started with. */
   inputs?: Record<string, unknown>;
   /** The composed text holds what looks like a secret, so the composition is refused. */
@@ -1419,6 +1434,7 @@ function rawOutput(
 ): Record<string, unknown> {
   switch (taskId) {
     case 'commit':
+      if (scenario.commitEnding !== undefined) return scenario.commitEnding;
       if (scenario.asItStands === true) {
         return HostFilePatchOutputSchema.parse({
           state: 'applied',
@@ -2006,7 +2022,7 @@ describe('Publish Local Changes — the folder decides whether the push asks', (
     expect(outcome).toMatchObject({
       asked: false,
       pushed: false,
-      ran: ['message-from', 'read-folder', 'resolve-repository', 'commit'],
+      ran: ['message-from', 'read-folder', 'resolve-repository', 'commit', 'commit-conflict'],
       state: {},
     });
   });
@@ -2761,6 +2777,226 @@ describe('Publish Local Changes — a branch is published as it stands', () => {
     });
     expect(asked.success).toBe(false);
     expect(asked.error?.issues[0]?.message).toContain('a branch as it stands');
+  });
+});
+
+describe('Publish Local Changes — a commit that makes nothing fails the run, never completes it', () => {
+  /** git's account where the branch's head already holds the patch, as the executor joins it. */
+  const ALREADY_APPLIED =
+    'error: src/a.ts: already exists in working directory; error: src/b.ts: patch does not apply';
+  /** git's account where a hunk does not fit the commit the run named. */
+  const HUNK_MISFIT = 'error: patch failed: src/b.ts:12; error: src/b.ts: patch does not apply';
+  /** git's account where the patch edits a file the commit the run named lacks. */
+  const FILE_MISSING = 'error: src/c.ts: No such file or directory';
+  /** The executor's own account where git gave none. */
+  const NO_GIT_ACCOUNT = 'The patch does not apply to the folder as it stands.';
+
+  /** A `clean` apply with no `mergeFrom` marks no file, so it names no conflicts. */
+  function conflict(
+    detail?: string,
+    remedy: HostPatchConflictRemedy = { kind: 'fit_branch_head', at: HEAD, branchExisted: true },
+  ): Record<string, unknown> {
+    return HostFilePatchOutputSchema.parse({
+      state: 'conflict',
+      filesChanged: 0,
+      files: ['src/a.ts', 'src/b.ts'],
+      conflicts: [],
+      ...(detail === undefined ? {} : { detail }),
+      remedy,
+    });
+  }
+
+  const EMPTY = HostFilePatchOutputSchema.parse({
+    state: 'empty',
+    filesChanged: 0,
+    files: [],
+    conflicts: [],
+  });
+
+  /** A run completes only where every task that failed is optional. */
+  function completed(outcome: Outcome): boolean {
+    return [...outcome.statuses].every(
+      ([taskId, status]) => status !== 'failed' || taskOrThrow(taskId).optional === true,
+    );
+  }
+
+  function endingIn(commitEnding: Record<string, unknown>, extra: Partial<Scenario> = {}) {
+    return publish({
+      pushApproval: 'never',
+      review: 'approve',
+      decision: 'approved',
+      commitEnding,
+      ...extra,
+    });
+  }
+
+  it('routes every state of the commit task to a task, and each that makes no commit to a stop', () => {
+    const gatedOn = (state: string) =>
+      wf.tasks
+        .filter((t) => {
+          const when = t.when as { expression?: string } | undefined;
+          return when?.expression === `tasks.commit.output.state == '${state}'`;
+        })
+        .map((t) => t.taskId);
+    const states = HostFilePatchOutputSchema.shape.state.options;
+    expect(states).toEqual(['applied', 'conflict', 'empty']);
+    expect(gatedOn('applied')).toEqual(['check-commit']);
+    expect(gatedOn('conflict')).toEqual(['commit-conflict']);
+    expect(gatedOn('empty')).toEqual(['commit-empty']);
+    for (const taskId of ['commit-conflict', 'commit-empty']) {
+      const stop = taskOrThrow(taskId);
+      expect(stop.operation, taskId).toBe('workflow.run.fail');
+      expect(stop.optional, taskId).not.toBe(true);
+      expect(stop.dependsOn, taskId).toEqual(['commit']);
+      expect((stop.failureInstruction ?? '').length, taskId).toBeGreaterThan(0);
+      expect((stop.failureInstruction ?? '').length, taskId).toBeLessThanOrEqual(4000);
+    }
+  });
+
+  const endings: [string, Record<string, unknown>, string][] = [
+    ['a conflict git gave no account of', conflict(), 'commit-conflict'],
+    ['a patch the branch already holds', conflict(ALREADY_APPLIED), 'commit-conflict'],
+    ['a hunk that does not fit the commit named', conflict(HUNK_MISFIT), 'commit-conflict'],
+    ['a file the commit named lacks', conflict(FILE_MISSING), 'commit-conflict'],
+    ["the executor's own account", conflict(NO_GIT_ACCOUNT), 'commit-conflict'],
+    ['a change that touches no file', EMPTY, 'commit-empty'],
+  ];
+  for (const posture of ['always', 'never', 'unless-unreviewed'] as const) {
+    for (const [what, ending, stop] of endings) {
+      it(`${posture}, ${what}: fails the run at \`${stop}\`, and nothing after the commit runs`, () => {
+        const outcome = endingIn(ending, { pushApproval: posture });
+        expect(completed(outcome)).toBe(false);
+        expect(outcome.statuses.get(stop)).toBe('failed');
+        expect(outcome.ran).toEqual([
+          'message-from',
+          'read-folder',
+          'resolve-repository',
+          'commit',
+          stop,
+        ]);
+        expect(outcome.asked).toBe(false);
+        expect(outcome.pushed).toBe(false);
+        expect(outcome.state).toEqual({});
+      });
+    }
+  }
+
+  const REMEDY_KINDS = HostPatchConflictRemedySchema.shape.kind.options;
+  const remedyFor = (kind: HostPatchConflictRemedy['kind']): HostPatchConflictRemedy => ({
+    kind,
+    at: STRANDED,
+    branchExisted: kind === 'publish_as_it_stands' || kind === 'fit_branch_head',
+  });
+
+  it("carries git's account and the executor's remedy into the reason", () => {
+    expect(endingIn(conflict(ALREADY_APPLIED)).inputs.get('commit-conflict')).toEqual({
+      reason: `The patch did not apply on \`aflow/x\`, and nothing was committed. git said: ${ALREADY_APPLIED} The remedy is \`fit_branch_head\`, at \`${HEAD}\`.`,
+    });
+    for (const kind of REMEDY_KINDS) {
+      expect(endingIn(conflict(undefined, remedyFor(kind))).inputs.get('commit-conflict')).toEqual({
+        reason: `The patch did not apply on \`aflow/x\`, and nothing was committed. git named nothing it could not place. The remedy is \`${kind}\`, at \`${STRANDED}\`.`,
+      });
+    }
+    expect(endingIn(EMPTY).inputs.get('commit-empty')).toEqual({
+      reason: 'The change touched no file, so nothing was committed on `aflow/x`.',
+    });
+  });
+
+  for (const posture of ['always', 'never', 'unless-unreviewed'] as const) {
+    for (const kind of REMEDY_KINDS) {
+      it(`${posture}, remedy \`${kind}\`: fails the run at \`commit-conflict\``, () => {
+        const outcome = endingIn(conflict(undefined, remedyFor(kind)), { pushApproval: posture });
+        expect(completed(outcome)).toBe(false);
+        expect(outcome.statuses.get('commit-conflict')).toBe('failed');
+        expect(outcome.pushed).toBe(false);
+      });
+    }
+  }
+
+  it('answers every remedy kind the executor computes, and only those', () => {
+    expect(Object.keys(CONFLICT_REMEDIES)).toEqual([...REMEDY_KINDS]);
+    const failure = taskOrThrow('commit-conflict').failureInstruction ?? '';
+    expect(failure).toBe(COMMIT_CONFLICT);
+    expect(failure).toContain('nothing was committed and no branch was created or moved');
+    for (const kind of REMEDY_KINDS) {
+      expect(failure).toContain(`\`${kind}\`: ${CONFLICT_REMEDIES[kind]}`);
+    }
+    // Readings of git's text that the executor does not make are gone: the
+    // remedy is the executor's, so the instruction reads no detail itself.
+    expect(failure).not.toContain('already exists in the working directory');
+    expect(failure).not.toContain('Re-decide from the detail');
+    expect(failure).not.toContain("the commission's values");
+  });
+
+  it('publishes a branch whose head holds the change as it stands at that head, which the executor accepts', () => {
+    const entry = CONFLICT_REMEDIES.publish_as_it_stands;
+    expect(entry).toContain(publishAsItStands("`at`, the branch's head the reason names"));
+    expect(entry).toContain('Never send the patch again');
+    // A conflict reports no commit, so the remedy cannot name one.
+    expect(conflict(ALREADY_APPLIED)['commit']).toBeUndefined();
+    expect(entry).not.toContain('`commit.sha`');
+
+    const resent = endingIn(conflict(ALREADY_APPLIED, remedyFor('publish_as_it_stands')), {
+      inputs: { baseSha: STRANDED },
+    });
+    expect(completed(resent)).toBe(false);
+    const again = publish({
+      pushApproval: 'never',
+      review: 'approve',
+      decision: 'approved',
+      asItStands: true,
+      inputs: { branch: 'aflow/x', baseSha: STRANDED },
+    });
+    expect((again.inputs.get('commit') ?? {})['commit']).toEqual({
+      branch: 'aflow/x',
+      baseSha: STRANDED,
+      pushBase: 'main',
+      pushAreas: REVIEW_DEPTH_AREAS,
+    });
+    expect(completed(again)).toBe(true);
+    expect(again.pushed).toBe(true);
+  });
+
+  it('never sends a run on an existing branch to another `baseSha`, which the executor refuses as `stale_base`', () => {
+    const entry = CONFLICT_REMEDIES.fit_branch_head;
+    expect(entry).toContain(
+      'A new run on this branch naming a `baseSha` other than `at` is refused as `stale_base` before any apply.',
+    );
+    expect(entry).toContain('commission the change again from this branch');
+    expect(entry).not.toContain('publish the same `patchRef` again with it');
+    expect(entry).not.toContain('To publish this branch as it stands');
+  });
+
+  it('never offers a run that was making a new branch a publication as it stands, which the executor refuses', () => {
+    for (const kind of ['nothing_to_commit', 'fit_another_base'] as const) {
+      const entry = CONFLICT_REMEDIES[kind];
+      expect(entry, kind).toContain('This run was making a new branch');
+      expect(entry, kind).not.toContain('To publish this branch as it stands');
+      // `mergeFrom` merges only into a branch that exists.
+      expect(entry, kind).not.toContain('`mergeFrom`');
+    }
+    expect(CONFLICT_REMEDIES.nothing_to_commit).toContain(
+      'No branch exists, so a publication of it as it stands is refused.',
+    );
+    expect(CONFLICT_REMEDIES.fit_another_base).toContain(
+      'A new branch starts at any `baseSha` named',
+    );
+    for (const id of ['patchRef', 'baseSha']) expect(runInputOrThrow(id).id).toBe(id);
+  });
+
+  it('names, for a change that touches no file, the commission to read and the branch as it stands', () => {
+    const failure = taskOrThrow('commit-empty').failureInstruction ?? '';
+    expect(failure).toContain('nothing was committed and no branch was created or moved');
+    expect(failure).toContain("Read the commission's result for why");
+    expect(failure).toContain('commission it again');
+    expect(failure).toContain('never send the patch again');
+    expect(failure).toContain('no `patchRef`, `patch`, `mergeFrom` or `commitMessage`');
+  });
+
+  it('writes both stops to the house rules: no semicolon', () => {
+    for (const text of [COMMIT_CONFLICT, COMMIT_EMPTY]) {
+      expect(text.replace(/`[^`]*`/g, '')).not.toContain(';');
+    }
   });
 });
 

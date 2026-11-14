@@ -66,9 +66,9 @@ When the conversation was condensed into a summary, the summary was written from
 
 **D2 — pressure clearing never takes the current run.** The current run starts at the latest direct request (§4.10). An exchange whose first atom sits after it is never a Tier-2 candidate. Compaction relieves the run instead. Rejected: clearing the run's large results after compaction at any pressure. Compaction already takes them with their turns, and their read paths survive as active refs.
 
-**D2b — a report never starts a run.** A run wakeup or a room message is a `user_input` atom stamped with its `inputOrigin`. A `user_input` atom without one is a direct request, and only a direct request moves the current run's start and its pin. Rejected: reading the origin from the source id's prefix. The history refs retention reads carry no source id, and a prefix match ties retention to how two writers spell their ids.
-
 **D2a — two forced passes with two candidate sets.** The structural-cap pass honours the floor and the current run. Its remedy is compaction of the older range, and it clears nothing. The hard-budget pass runs after pressure clearing and compaction, when the prompt is still over the hard budget. It may clear any exchange without a pinned atom, oldest first, the floor and the current run included. Rejected: one candidate set for both. A single run whose last 8 turns exceed the hard budget would then shrink by nothing, and the provider would refuse the request.
+
+**D2b — a report never starts a run.** A run wakeup or a room message is a `user_input` atom stamped with its `inputOrigin`. A `user_input` atom without one is a direct request, and only a direct request moves the current run's start and its pin. Rejected: reading the origin from the source id's prefix. The history refs retention reads carry no source id, and a prefix match ties retention to how two writers spell their ids.
 
 **D3 — only large results clear to a ref.** `LARGE_RESULT_MIN_TOKENS` is 2,000 tokens, about 7 KB. Every result of a cleared exchange must reach it. `MIN_CLEAR_NET_SAVINGS_TOKENS` is 1,500, the absolute floor under the old twice-the-note rule. Rejected: a per-exchange total. It would stub a small result that shares an exchange with a large one.
 
@@ -161,8 +161,8 @@ One phase, built. Its exit is the Done-when list above, each item held by a test
 `currentRunRetention.test.ts` holds the cases that fail if the change is wrong:
 
 - The recency floor holds on the pressure path. The hard-budget pass clears inside it, oldest first.
-- Pressure clearing takes no exchange created since the latest `user_input`. The hard-budget pass takes them, and keeps the current turn's pinned atoms.
-- A history without any `user_input` has no current run. Pressure clearing still takes its exchanges older than the floor.
+- Pressure clearing takes no exchange created since the latest direct request, a `user_input` atom without an `inputOrigin`. The hard-budget pass takes them, and keeps the current turn's pinned atoms.
+- A history without a direct request has no current run. Pressure clearing still takes its exchanges older than the floor.
 - Above the compaction bar, the turn compacts the current run from raw results and creates no stub.
 - Over the hard budget, the turn compacts first, names the trigger `hard_budget`, and then clears inside the floor and the current run.
 - An 800-byte result is never stubbed by pressure clearing, and a large one still clears to a note with its read pointer.

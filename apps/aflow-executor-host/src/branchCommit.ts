@@ -9,6 +9,8 @@
 import { rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import type { HostPatchConflictRemedy } from '@aflow/schemas';
+
 import {
   mergeIntoCheckout,
   reachMergeSource,
@@ -133,6 +135,62 @@ export interface PatchCommitOutcome {
   readonly apply: ApplyOutcome;
   /** Absent when the patch conflicted, which leaves no commit and no branch moved. */
   readonly commit?: PatchCommit;
+  /** Present exactly when the patch conflicted. */
+  readonly remedy?: HostPatchConflictRemedy;
+}
+
+/**
+ * Whether `at` already holds the change: the patch taken in reverse fits it.
+ * Read in an index of its own, so neither a merge nor a three-way apply
+ * already written to the checkout is a party to the answer.
+ */
+async function commitHoldsPatch(
+  checkout: Checkout,
+  at: string,
+  patch: string,
+  scratch: string,
+): Promise<boolean> {
+  const patchPath = join(scratch, 'held.patch');
+  const env = { GIT_INDEX_FILE: join(scratch, 'held-index') };
+  await writeFile(patchPath, patch, 'utf8');
+  try {
+    await git(checkout, ['read-tree', at], APPLY_OUTPUT_CAP_BYTES, env);
+    await git(
+      checkout,
+      ['apply', '--cached', '--check', '--reverse', patchPath],
+      APPLY_OUTPUT_CAP_BYTES,
+      env,
+    );
+    return true;
+  } catch {
+    return false;
+  } finally {
+    await rm(patchPath, { force: true });
+    await rm(env.GIT_INDEX_FILE, { force: true });
+  }
+}
+
+/**
+ * The kinds follow `commitTarget` and `branchAsItStands`: an existing branch
+ * takes a patch only at its head, a new branch starts at any base, and only an
+ * existing branch is published as it stands.
+ */
+async function conflictRemedy(
+  checkout: Checkout,
+  at: string,
+  branchExisted: boolean,
+  patch: string,
+  scratch: string,
+): Promise<HostPatchConflictRemedy> {
+  const held = await commitHoldsPatch(checkout, at, patch, scratch);
+  const kind: HostPatchConflictRemedy['kind'] = branchExisted
+    ? held
+      ? 'publish_as_it_stands'
+      : 'fit_branch_head'
+    : held
+      ? 'nothing_to_commit'
+      : 'fit_another_base';
+  return { kind, at, branchExisted };
 }
 
 /** The commit a sha names, or a refusal naming the sha. */
@@ -339,8 +397,12 @@ export async function commitPatchOnBranch(
       merge !== undefined && patch.trim() === ''
         ? { state: 'applied', conflicts: [] }
         : await applyPatch(worktree, patch, mode);
-    if (apply.state === 'conflict')
-      return { apply: merge === undefined ? apply : filesNamedIn(apply) };
+    if (apply.state === 'conflict') {
+      return {
+        apply: merge === undefined ? apply : filesNamedIn(apply),
+        remedy: await conflictRemedy(worktree, worktree.baseSha, target.appended, patch, scratch),
+      };
+    }
 
     await git(worktree, ['add', '-A', '--', '.'], APPLY_OUTPUT_CAP_BYTES);
     const staged = (await git(worktree, ['diff', '--cached', '--name-only', '-z']))
