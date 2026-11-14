@@ -144,7 +144,8 @@ export const ThreadRecordSchema = z.object({
    * paused for the operator, `ended` once the session finished. `unread` once
    * the watch stopped on reads that kept failing, until a reply or a restart
    * watches the thread again. `idle` once the watch stopped on a pause that
-   * needs the operator at Aflow, until a reply watches the thread again. A
+   * needs the operator at Aflow, or on a session that wrote no new event for
+   * hours, until a reply watches the thread again. A
    * restart leaves it, so pruning drops it in time.
    */
   status: z.enum(['answering', 'waiting', 'unread', 'idle', 'ended']),

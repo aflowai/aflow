@@ -12,7 +12,8 @@
  *   turn ends, however long the turn takes. A pause on a child run is work in
  *   progress, so the thread hears once that the work runs. Only a pause that
  *   neither asks for a reply nor waits on a child run is said to need Aflow.
- *   A watch that sits on one such pause for an hour stops and says so. The
+ *   A watch that sits on one such pause for an hour stops and says so, as
+ *   does a watch whose session writes no new event for six hours. The
  *   thread is then `idle`, which pruning drops and a reply watches again.
  *   A read that keeps failing backs off, and after a run of failures the
  *   watch stops and says so. The thread is then `unread`, and a reply or a
@@ -78,6 +79,9 @@ export const WATCH_IDLE =
 export const WATCH_STOPPED =
   'Aflow could not be read for several minutes, so this thread stopped waiting for the answer. Reply here to look again, or open the conversation at Aflow.';
 
+export const WATCH_QUIET =
+  'Nothing new has happened in the conversation at Aflow for six hours, so this thread stopped waiting for the answer. Reply here to look again, or open the conversation at Aflow.';
+
 export const NOTES_SKIPPED =
   'The Helmsman wrote more notes than this thread could read, so some are not here. Read them in the conversation at Aflow.';
 
@@ -122,6 +126,11 @@ export const WATCH_READ_FAILURE_LIMIT = 10;
  * pause may never be resolved, and each watch reads Aflow every two seconds.
  */
 export const WATCH_IDLE_LIMIT_MS = 60 * 60 * 1000;
+/**
+ * How long a watch stays on a session that writes no new event. A turn that
+ * runs writes its steps, and one that has stalled may never pause or end.
+ */
+export const WATCH_QUIET_LIMIT_MS = 6 * 60 * 60 * 1000;
 /** Pages of events one read holds at most when it pages back to what the thread has read. */
 export const WATCH_PAGE_LIMIT = 20;
 
@@ -274,6 +283,14 @@ function reachesRead(thread: ThreadRecord, events: readonly ConversationEvent[])
   return (
     resumedPause(thread, events) !== undefined ||
     events.some((event) => timeOf(event.timestamp) <= read)
+  );
+}
+
+/** The time of the newest of `events`, or minus infinity when none has one. */
+function newestTime(events: readonly ConversationEvent[]): number {
+  return events.reduce(
+    (newest, event) => Math.max(newest, timeOf(event.timestamp)),
+    Number.NEGATIVE_INFINITY,
   );
 }
 
@@ -586,9 +603,10 @@ export class Conversations {
   /**
    * Watches the thread's session until it pauses with the Helmsman's answer or
    * ends, and posts what it finds into the thread. It stops early when
-   * `WATCH_READ_FAILURE_LIMIT` reads of the session's events fail in a row, or
-   * when one pause that needs the operator at Aflow lasts `WATCH_IDLE_LIMIT_MS`.
-   * One watch per thread.
+   * `WATCH_READ_FAILURE_LIMIT` reads of the session's events fail in a row,
+   * when one pause that needs the operator at Aflow lasts `WATCH_IDLE_LIMIT_MS`,
+   * or when the session writes no new event for `WATCH_QUIET_LIMIT_MS`. One
+   * watch per thread.
    */
   watch(thread: ThreadRecord): Promise<WatchOutcome> {
     const key = `${thread.channel}:${thread.threadTs}`;
@@ -626,10 +644,11 @@ export class Conversations {
     let toldAboutAflow = false;
     let failedReads = 0;
     let idle: { step: string; pausedAt: string; since: number } | undefined;
+    let quiet: { newest: number; since: number } | undefined;
     const pollMs = this.deps.pollMs ?? WATCH_POLL_MS;
     for (;;) {
       const page = await this.readTurn(thread);
-      if (!page.ok && page.status === 404) {
+      if (!page.ok && page.gone) {
         store.updateThread(thread, { status: 'ended', pausedStepExecutionId: null }, this.now());
         await say(CONVERSATION_GONE);
         return 'ended';
@@ -696,15 +715,25 @@ export class Conversations {
           ? { step: atAflow, pausedAt: last.timestamp }
           : undefined;
       const at = this.now().getTime();
+      const newest = newestTime(events);
+      let stop: string | undefined;
       if (waiting === undefined) {
         idle = undefined;
       } else if (idle?.step !== waiting.step || idle.pausedAt !== waiting.pausedAt) {
         idle = { ...waiting, since: at };
       } else if (at - idle.since >= WATCH_IDLE_LIMIT_MS) {
+        stop = WATCH_IDLE;
+      }
+      if (quiet === undefined || newest > quiet.newest) {
+        quiet = { newest, since: at };
+      } else if (stop === undefined && at - quiet.since >= WATCH_QUIET_LIMIT_MS) {
+        stop = WATCH_QUIET;
+      }
+      if (stop !== undefined) {
         release();
         store.updateThread(thread, { status: 'idle', pausedStepExecutionId: null }, this.now());
         // Only a notice: a reply watches the thread again whether or not it posts.
-        await say(WATCH_IDLE).catch(() => undefined);
+        await say(stop).catch(() => undefined);
         return 'idle';
       }
       await sleep(pollMs);
@@ -714,21 +743,26 @@ export class Conversations {
   /**
    * The session's newest events, paged back until they reach what the thread
    * has read: its `notesAfter`, or the pause it resumed. `gap` is true when
-   * they do not reach it within `WATCH_PAGE_LIMIT` pages, or an older page
-   * cannot be read, so notes between the two may be missing.
+   * they do not reach it within `WATCH_PAGE_LIMIT` pages, so notes between the
+   * two may be missing. An older page that cannot be read fails the whole
+   * read, so the next read pages back over the same notes. `gone` is true when
+   * the newest page answers `404`.
    */
   private async readTurn(
     thread: ThreadRecord,
-  ): Promise<{ ok: true; events: ConversationEvent[]; gap: boolean } | RouteRefusal> {
+  ): Promise<
+    { ok: true; events: ConversationEvent[]; gap: boolean } | { ok: false; gone: boolean }
+  > {
     const { api } = this.deps;
     const newest = await api.latestEvents(thread.spaceId, thread.sessionId);
-    if (!newest.ok) return newest;
+    if (!newest.ok) return { ok: false, gone: newest.status === 404 };
     let events = newest.events;
     let older = newest.olderCursor;
     for (let pages = 1; older !== undefined && !reachesRead(thread, events); pages += 1) {
       if (pages >= WATCH_PAGE_LIMIT) return { ok: true, events, gap: true };
       const page = await api.latestEvents(thread.spaceId, thread.sessionId, older);
-      if (!page.ok) return { ok: true, events, gap: true };
+      // The newest page answered, so the next read of it says whether the session is gone.
+      if (!page.ok) return { ok: false, gone: false };
       events = [...page.events, ...events];
       older = page.olderCursor;
     }

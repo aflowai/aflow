@@ -33,6 +33,7 @@ import {
   WAITS_AT_AFLOW,
   WATCH_IDLE,
   WATCH_PAGE_LIMIT,
+  WATCH_QUIET,
   WATCH_READ_FAILURE_LIMIT,
   WATCH_STOPPED,
   WORK_RUNNING,
@@ -632,6 +633,7 @@ describe('a turn the thread follows to its end', () => {
     const app = following(
       (polls) => {
         clock += 60 * MINUTE;
+        aflow.runSteps(sessionId(), 1);
         if (polls === 30) aflow.answerHeld();
       },
       () => new Date(clock),
@@ -852,6 +854,82 @@ describe('a turn the thread follows to its end', () => {
     expect(await watchStart(app, status)).toBe('answered');
 
     expect(texts()).toEqual([NOTES_SKIPPED, 'Near the end.', 'The Helmsman answers: status?']);
+  });
+
+  it('stops when the session writes no new event for six hours, and leaves the thread to a reply', async () => {
+    const status = directMessage(OPERATOR, 'status?', NOW);
+    aflow.holdAnswers = true;
+    let clock = NOW.getTime();
+    const app = following(
+      (polls) => {
+        clock += 60 * MINUTE;
+        if (polls === 1) aflow.pauseOnChildRun(sessionId());
+      },
+      () => new Date(clock),
+    );
+
+    expect(await watchStart(app, status)).toBe('idle');
+
+    expect(clock - NOW.getTime()).toBe(7 * 60 * MINUTE);
+    expect(texts()).toEqual([WORK_RUNNING, WATCH_QUIET]);
+    expect(store.threadAt(status.channel, status.ts)?.status).toBe('idle');
+    store = ChannelStore.open(storePath, NOW);
+    expect(newConversations().resumeWatching()).toEqual([]);
+
+    aflow.resumeAtAflow(sessionId());
+    aflow.answerHeld();
+    const reply = await answerInbound(
+      directMessage(OPERATOR, 'done?', NOW, { threadTs: status.ts }),
+      { ...deps(), conversations: newConversations() },
+    );
+    expect(reply.outcome).toBe('busy');
+    if ('watching' in reply) expect(await reply.watching).toBe('answered');
+    expect(texts().slice(2)).toEqual([
+      LOOKING_AGAIN,
+      'The Helmsman answers: a reply sent at Aflow',
+    ]);
+  });
+
+  it('reads again the notes behind an older page that failed, and says no notes are missing', async () => {
+    const status = directMessage(OPERATOR, 'status?', NOW);
+    aflow.holdAnswers = true;
+    const api = deps().api;
+    let failOlder = 0;
+    let polls = 0;
+    const app = new Conversations({
+      store,
+      slack,
+      api: {
+        ...api,
+        latestEvents: (spaceId, session, before) =>
+          before !== undefined && (failOlder -= 1) >= 0
+            ? Promise.resolve({
+                ok: false as const,
+                status: 0,
+                error: 'UNREACHABLE',
+                message: 'Aflow did not answer: connect ECONNREFUSED.',
+                retryable: true,
+                outcomeUnknown: false,
+              })
+            : api.latestEvents(spaceId, session, before),
+      },
+      aflowUserId: OWNER,
+      now: () => NOW,
+      pollMs: 0,
+      sleep: () => {
+        if ((polls += 1) !== 1) return Promise.resolve();
+        aflow.writeNote(sessionId(), 'Reading the run.');
+        aflow.runSteps(sessionId(), 120);
+        aflow.writeNote(sessionId(), 'Near the end.');
+        aflow.answerHeld();
+        failOlder = 2;
+        return Promise.resolve();
+      },
+    });
+
+    expect(await watchStart(app, status)).toBe('answered');
+
+    expect(texts()).toEqual(['Reading the run.', 'Near the end.', 'The Helmsman answers: status?']);
   });
 
   it('leaves an idle thread to pruning', async () => {
