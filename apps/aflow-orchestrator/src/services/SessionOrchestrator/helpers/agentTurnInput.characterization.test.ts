@@ -876,6 +876,63 @@ describe('buildAgentTurnInput — turn continuity', () => {
   });
 });
 
+describe('buildAgentTurnInput — loop warnings', () => {
+  const identicalWarning = {
+    rule: 'identical_call',
+    repeatedActionCount: 3,
+    repeatedActionSignature: 'memory.store.query:{}',
+    severity: 'warning',
+    message: 'identical-call message',
+    instruction: 'identical-call instruction',
+  };
+  const sameTargetWarning = {
+    rule: 'same_target',
+    repeatedActionCount: 11,
+    repeatedActionSignature: 'memory.store.get:{"path":"/run/outputs/x"}',
+    severity: 'final_warning',
+    message: 'same-target message',
+    instruction: 'same-target instruction',
+  };
+  const { rule: _identicalRule, ...identicalContent } = identicalWarning;
+  const { rule: _sameTargetRule, ...sameTargetContent } = sameTargetWarning;
+
+  it('carries the same-target warning as its own block, with its rule', async () => {
+    const turn = await renderTurn({
+      variables: { 'ai.agent.sameTargetWarning.agent': inline(sameTargetWarning) },
+    });
+    const keys = turn.contextBlocks.map((b) => b['key']);
+    expect(keys).toContain('SameTargetReadWarning');
+    expect(keys).not.toContain('LoopWarning');
+    expect(turn.contextBlocks.find((b) => b['key'] === 'SameTargetReadWarning')).toEqual({
+      key: 'SameTargetReadWarning',
+      cacheHint: 'volatile',
+      content: { rule: 'same_target', ...sameTargetContent },
+    });
+  });
+
+  it('carries both warnings, each in its own block, right after the first block', async () => {
+    const turn = await renderTurn({
+      variables: {
+        'ai.agent.loopWarning.agent': inline(identicalWarning),
+        'ai.agent.sameTargetWarning.agent': inline(sameTargetWarning),
+        'ai.agent.wasInterrupted.agent': inline(true),
+      },
+    });
+    const keys = turn.contextBlocks.map((b) => b['key']);
+    expect(keys.slice(1, 4)).toEqual(['LoopWarning', 'SameTargetReadWarning', 'InterruptNotice']);
+    expect(turn.contextBlocks[1]?.['content']).toEqual({
+      rule: 'identical_call',
+      ...identicalContent,
+    });
+  });
+
+  it('carries no warning block when no rule left one', async () => {
+    const keys = (await renderTurn()).contextBlocks.map((b) => b['key']);
+    expect(keys).not.toContain('LoopWarning');
+    expect(keys).not.toContain('SameTargetReadWarning');
+  });
+});
+
 describe('buildAgentTurnInput — run context', () => {
   it('projects flow context details into the run context block', async () => {
     const turn = await renderTurn({

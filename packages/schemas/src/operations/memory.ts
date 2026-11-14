@@ -455,6 +455,31 @@ const memoryReadOptionsShape = {
 
 const PIN_FIELDS = ['version', 'expectedContentHash'] as const;
 
+/**
+ * The window arguments of `memoryReadOptionsShape`. A read carrying one pages
+ * the target, so the same-target read detector counts the pages of one
+ * selection once. `maxBytes` is not one: it caps how much one read returns
+ * and pages nothing, so a section read with it still counts.
+ */
+const MEMORY_READ_WINDOW_ARGS = [
+  'byteRange',
+  'lineRange',
+  'itemRange',
+] as const satisfies ReadonlyArray<keyof typeof memoryReadOptionsShape>;
+
+/**
+ * The document a memory.store.get call reads, spelled nested or flat as the
+ * input preprocess accepts it. The version, `jsonPath` and `view` stay out, so
+ * every read of one document counts toward the same-target read detector.
+ */
+const STORE_GET_READ_TARGET_ARGS = {
+  path: ['target.path', 'path'],
+  id: ['target.id', 'id'],
+} as const;
+
+/** memory.run_output.get: the output path, as for memory.store.get. */
+const RUN_OUTPUT_GET_READ_TARGET_ARGS = { path: ['path'] } as const;
+
 export const MemoryGetInputSchema = z.preprocess(
   (val, ctx) => {
     if (!val || typeof val !== 'object') return val;
@@ -1100,6 +1125,8 @@ export const MemoryOperationRegistrations: OperationRegistration[] = [
         'Character window — UTF-16 code units, NOT bytes, despite the field name (kept for compatibility). { start: number, end: number }.',
       itemRange: 'JSON array window. { start: number, count: number (max 200) }.',
     },
+    readTargetArgs: STORE_GET_READ_TARGET_ARGS,
+    readWindowArgs: MEMORY_READ_WINDOW_ARGS,
     idempotency: 'idempotent',
     mutates: false,
     usage: {
@@ -1146,6 +1173,8 @@ export const MemoryOperationRegistrations: OperationRegistration[] = [
       'with jsonPath and window arrays with itemRange { start, count }; for text, use lineRange ' +
       "or byteRange. Reads this run's outputs only — general memory documents need memory.store.get.",
     tags: ['memory', 'read'],
+    readTargetArgs: RUN_OUTPUT_GET_READ_TARGET_ARGS,
+    readWindowArgs: MEMORY_READ_WINDOW_ARGS,
     idempotency: 'idempotent',
     mutates: false,
     usage: {

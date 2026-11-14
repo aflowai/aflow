@@ -49,6 +49,8 @@ import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { routeRunnerTerminalToHarness } from '../../cybernetic/WorkflowRunHarness.js';
 import { wakeForRunWakeupsAtSettle } from './settleRunWakeups.js';
 import { pauseForGuardrailEscalation } from './guardrailEscalationPause.js';
+import type { ResolveCallOperation } from './callSignature.js';
+import { applyLoopTurn } from './loopTurnState.js';
 import { clearStaleCredentialBlock } from './credentialBlockScope.js';
 import { buildStepCompletedRecoveryEvents } from '../helpers/recoveryEmitter.js';
 import type { ScheduleStepParams } from '../types.js';
@@ -145,33 +147,6 @@ function makeStepSucceededEvent(
       ...extraMeta,
     },
   };
-}
-
-/**
- * Arguments a tool requires to DIFFER on every call, so that a replay can be
- * told from a fresh attempt. They are the opposite of identity: including them
- * in the loop signature makes every repeat look novel.
- *
- * A Runner sent the identical draft_patch 130 times, each with a fresh
- * `mutationId`, and the repeat detector counted one consecutive call every
- * time. Extend this set when a new op adds a replay key.
- */
-const REPLAY_KEY_ARG_NAMES: ReadonlySet<string> = new Set(['mutationId']);
-
-function withoutReplayKeys(args: unknown): Record<string, unknown> {
-  const record = (args as Record<string, unknown> | undefined) ?? {};
-  const entries = Object.entries(record).filter(([k]) => !REPLAY_KEY_ARG_NAMES.has(k));
-  return Object.fromEntries(entries);
-}
-
-/** What the loop detector compares one turn's tool calls against the last. */
-export function buildCallSignature(
-  calls: ReadonlyArray<{ toolId: string; args?: unknown }>,
-): string {
-  return calls
-    .map((c) => `${c.toolId}:${JSON.stringify(withoutReplayKeys(c.args))}`)
-    .sort()
-    .join('|');
 }
 
 function fallbackStepDef(result: ApplyAgentDecisionParams['result']): StepDefinition {
@@ -1078,99 +1053,44 @@ export async function applyAgentDecision(params: ApplyAgentDecisionParams): Prom
     }
 
     // ── Loop detection ──────────────────────────────────────────────────────
-    // Track recent tool call signatures. If the same pattern repeats
-    // consecutively, warn the model first so it can self-correct. Only force
-    // a pause after the exact same action repeats 5 times in a row. This keeps
-    // legitimate retries working while still protecting against stale-input or
-    // history-sync bugs that make the agent see the same turn repeatedly.
-    const SOFT_WARNING_IDENTICAL_CONSECUTIVE = 3;
-    const HARD_PAUSE_IDENTICAL_CONSECUTIVE = 5;
-    const SIGNATURE_WINDOW = 8;
-    const loopVarKey = `ai.agent.recentCallSignatures.${result.stepId}`;
-    const loopWarningVarKey = `ai.agent.loopWarning.${result.stepId}`;
-
+    // Two rules, each with its own warning (evaluateLoopTurn). The identical-
+    // call rule warns the model first so it can self-correct, and pauses after
+    // the same call repeats 5 times in a row. The same-target rule counts
+    // reads of one stored target over a wider window, so a section-by-section
+    // read of one document is caught though no two of its calls are identical.
     const sigCalls =
       decision.action === 'invoke_step'
         ? [{ toolId: decision.toolId, args: decision.args }]
         : decision.calls.map((c) => ({ toolId: c.toolId, args: c.args }));
-    const callSignature = buildCallSignature(sigCalls);
-
-    const recentSignatures: string[] = readInlineVar(
-      currentRuntimeState,
-      loopVarKey,
-      [] as string[],
-    );
-
-    recentSignatures.push(callSignature);
-    if (recentSignatures.length > SIGNATURE_WINDOW) {
-      recentSignatures.splice(0, recentSignatures.length - SIGNATURE_WINDOW);
-    }
-
-    // Count how many of the most recent entries match the current signature
-    let consecutiveCount = 0;
-    for (let i = recentSignatures.length - 1; i >= 0; i--) {
-      if (recentSignatures[i] === callSignature) consecutiveCount++;
-      else break;
-    }
-
-    // Persist updated signatures and refresh any pending loop warning that
-    // should be surfaced to the next agent turn.
-    const newVarsWithSig = { ...currentRuntimeState.variables };
-    writeInlineVar(newVarsWithSig, loopVarKey, recentSignatures, {
-      ...varMeta,
-      version: recentSignatures.length,
+    const resolveCallOperation: ResolveCallOperation = (toolId) =>
+      agentDef.steps.find((s) => s.stepId === toolId)?.operation ?? toolId;
+    const {
+      verdict: loopTurn,
+      variables: newVarsWithSig,
+      warningLogs,
+    } = applyLoopTurn(currentRuntimeState, result.stepId, sigCalls, resolveCallOperation, {
+      nowMs: varMeta.nowMs,
+      stepExecutionId: varMeta.stepExecutionId,
     });
-    delete newVarsWithSig[loopWarningVarKey];
-    if (
-      consecutiveCount >= SOFT_WARNING_IDENTICAL_CONSECUTIVE &&
-      consecutiveCount < HARD_PAUSE_IDENTICAL_CONSECUTIVE
-    ) {
-      const remainingBeforePause = HARD_PAUSE_IDENTICAL_CONSECUTIVE - consecutiveCount;
-      const isFinalWarning = remainingBeforePause === 1;
-      writeInlineVar(
-        newVarsWithSig,
-        loopWarningVarKey,
-        {
-          repeatedActionCount: consecutiveCount,
-          repeatedActionSignature: callSignature,
-          severity: isFinalWarning ? 'final_warning' : 'warning',
-          message:
-            `You have invoked the exact same tool call ${String(consecutiveCount)} times in a row. ` +
-            'Do not repeat it again unless the input has materially changed.',
-          instruction:
-            remainingBeforePause > 1
-              ? `Choose a meaningfully different next action. ${String(remainingBeforePause)} more identical repeats will pause the run for user input.`
-              : 'Choose a meaningfully different next action now. The next identical repeat will pause the run for user input.',
-        },
-        {
-          ...varMeta,
-          version: getVariableVersion(currentRuntimeState.variables[loopWarningVarKey]) + 1,
-        },
-      );
-      console.warn(
-        `[SessionOrchestrator] Loop warning for run ${result.sessionId}: ` +
-          `agent invoked "${callSignature}" ${String(consecutiveCount)} times consecutively. ` +
-          `Giving model a chance to recover before pause at ${String(HARD_PAUSE_IDENTICAL_CONSECUTIVE)} repeats.`,
-      );
+    for (const { label, detail } of warningLogs) {
+      console.warn(`[SessionOrchestrator] ${label} for run ${result.sessionId}: ${detail}`);
     }
     currentRuntimeState = {
       ...currentRuntimeState,
       variables: newVarsWithSig,
     };
 
-    if (consecutiveCount >= HARD_PAUSE_IDENTICAL_CONSECUTIVE) {
+    if (loopTurn.failure !== undefined) {
+      const loopFailureMessage = loopTurn.failure.message;
       console.warn(
-        `[SessionOrchestrator] Loop detected for run ${result.sessionId}: ` +
-          `agent invoked "${callSignature}" ${String(consecutiveCount)} times consecutively. ` +
-          `Failing run — harness blocked the agent.`,
+        `[SessionOrchestrator] ${loopTurn.failure.rule === 'identical_call' ? 'Loop' : 'Same-target read loop'} ` +
+          `detected for run ${result.sessionId}: ${loopTurn.failure.logDetail}`,
       );
 
       const loopErrorRef = `inline:${Buffer.from(
         JSON.stringify({
           code: 'AGENT_LOOP_DETECTED',
-          message:
-            `The assistant attempted the same action ${String(consecutiveCount)} times in a row without progress. ` +
-            'The run has been failed — start a new run with different instructions or fix the underlying issue.',
+          message: loopFailureMessage,
           classification: 'loop',
           retryable: false,
           timestamp: new Date().toISOString(),
@@ -1191,9 +1111,7 @@ export async function applyAgentDecision(params: ApplyAgentDecisionParams): Prom
         },
         {
           code: 'AGENT_LOOP_DETECTED',
-          message:
-            `The assistant attempted the same action ${String(consecutiveCount)} times in a row without progress. ` +
-            'The run has been failed — start a new run with different instructions or fix the underlying issue.',
+          message: loopFailureMessage,
         },
         {
           errorRef: loopErrorRef,
