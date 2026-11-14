@@ -141,9 +141,14 @@ export const ThreadRecordSchema = z.object({
   spaceId: z.string().min(1),
   /**
    * `answering` while the app waits for the Helmsman's reply, `waiting` once it
-   * paused for the operator, `ended` once the session finished.
+   * paused for the operator, `ended` once the session finished. `unread` once
+   * the watch stopped on reads that kept failing, until a reply or a restart
+   * watches the thread again. `idle` once the watch stopped on a pause that
+   * needs the operator at Aflow, or on a session that wrote no new event for
+   * hours, until a reply watches the thread again. A
+   * restart leaves it, so pruning drops it in time.
    */
-  status: z.enum(['answering', 'waiting', 'ended']),
+  status: z.enum(['answering', 'waiting', 'unread', 'idle', 'ended']),
   /**
    * The paused step the last `SessionPaused` named, which a reply resumes.
    * Null while the Helmsman answers, or when the app does not know the pause.
@@ -162,6 +167,12 @@ export const ThreadRecordSchema = z.object({
    * than resume it a second time.
    */
   resumedStepExecutionId: z.string().min(1).nullable(),
+  /**
+   * The timestamp of the last event whose words the thread holds: the newest
+   * note posted, or the pause whose answer was posted. A note counts as new
+   * only when it is later, so a restarted watch never posts one note twice.
+   */
+  notesAfter: z.string().min(1).nullable(),
   startedAt: z.string().min(1),
   updatedAt: z.string().min(1),
 });
@@ -197,6 +208,16 @@ const MIGRATIONS: readonly Migration[] = [
   {
     id: '0003-conversations',
     apply: (data) => ({ ...data, inbound: [], threads: [] }),
+  },
+  {
+    id: '0004-thread-notes',
+    apply: (data) => ({
+      ...data,
+      threads: (Array.isArray(data['threads']) ? data['threads'] : []).map((thread: unknown) => ({
+        ...(thread as Record<string, unknown>),
+        notesAfter: null,
+      })),
+    }),
   },
 ];
 
@@ -454,7 +475,11 @@ export class ChannelStore {
     patch: Partial<
       Pick<
         ThreadRecord,
-        'status' | 'pausedStepExecutionId' | 'relayedStepExecutionId' | 'resumedStepExecutionId'
+        | 'status'
+        | 'pausedStepExecutionId'
+        | 'relayedStepExecutionId'
+        | 'resumedStepExecutionId'
+        | 'notesAfter'
       >
     >,
     at: Date,
@@ -463,9 +488,11 @@ export class ChannelStore {
     this.persist();
   }
 
-  /** Threads whose answer the app was waiting on, so a restart watches them again. */
-  threadsAnswering(): ThreadRecord[] {
-    return this.data.threads.filter((thread) => thread.status === 'answering');
+  /** Threads whose answer the app was waiting on or could not read, so a restart watches them again. */
+  threadsToWatch(): ThreadRecord[] {
+    return this.data.threads.filter(
+      (thread) => thread.status === 'answering' || thread.status === 'unread',
+    );
   }
 
   private prune(now: Date): void {

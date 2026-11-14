@@ -66,7 +66,10 @@ export interface Accepted {
   ok: true;
 }
 
-/** What the app reads of a session event: its type, its step and the agent's reply. */
+/**
+ * What the app reads of a session event: its type, its step, the agent's reply,
+ * a note the agent wrote during the turn, and what a pause waits on.
+ */
 export interface ConversationEvent {
   eventType: string;
   timestamp: string;
@@ -75,11 +78,21 @@ export interface ConversationEvent {
   agentResponse?: string;
   /** True on a pause that waits for the person's next message. */
   asksForReply: boolean;
+  /** A pause's `pauseType`, such as `external_dependency` or `subflow_waiting`. */
+  pauseType?: string;
+  /** The kind of a pause's `blockedOn`, such as `workflow_run`. */
+  blockedOn?: string;
+  /** True on a pause that waits while a delegated child session runs. */
+  subflowWaiting: boolean;
+  /** What an agent turn wrote beside its tool calls, which rides a `StepSucceeded`. */
+  note?: string;
 }
 
 export interface SessionEvents {
   ok: true;
   events: ConversationEvent[];
+  /** The cursor of the page before this one, absent when nothing older exists. */
+  olderCursor?: string;
 }
 
 export interface AflowApi {
@@ -106,8 +119,12 @@ export interface AflowApi {
     text: string,
     idempotencyKey: string,
   ): Promise<Accepted | RouteRefusal>;
-  /** The newest page of a session's events. */
-  latestEvents(spaceId: string, sessionId: string): Promise<SessionEvents | RouteRefusal>;
+  /** The newest page of a session's events, or the page before the `before` cursor. */
+  latestEvents(
+    spaceId: string,
+    sessionId: string,
+    before?: string,
+  ): Promise<SessionEvents | RouteRefusal>;
 }
 
 /** The Helmsman, as the web app's conversation targets it (Plan 327 D4). */
@@ -309,16 +326,23 @@ export function createAflowApi(options: {
       return { ok: true };
     },
 
-    async latestEvents(spaceId, sessionId) {
+    async latestEvents(spaceId, sessionId, before) {
+      const cursor = before === undefined ? '' : `&before=${encodeURIComponent(before)}`;
       const answer = await request(
-        `/v1/sessions/${encodeURIComponent(sessionId)}/events?limit=${String(EVENT_PAGE_LIMIT)}&spaceId=${encodeURIComponent(spaceId)}`,
+        `/v1/sessions/${encodeURIComponent(sessionId)}/events?limit=${String(EVENT_PAGE_LIMIT)}${cursor}&spaceId=${encodeURIComponent(spaceId)}`,
         undefined,
         undefined,
       );
       if ('ok' in answer) return answer;
       if (answer.status !== 200) return refusalOf(answer.status, answer.json);
-      const events = (answer.json as { events?: unknown } | undefined)?.events;
-      return { ok: true, events: Array.isArray(events) ? events.flatMap(conversationEventOf) : [] };
+      const page = answer.json as
+        { events?: unknown; olderCursor?: unknown; hasOlder?: unknown } | undefined;
+      const older = page?.hasOlder === true ? page.olderCursor : undefined;
+      return {
+        ok: true,
+        events: Array.isArray(page?.events) ? page.events.flatMap(conversationEventOf) : [],
+        ...(typeof older === 'string' && older !== '' ? { olderCursor: older } : {}),
+      };
     },
   };
 }
@@ -342,6 +366,9 @@ function conversationEventOf(raw: unknown): ConversationEvent[] {
   if (typeof eventType !== 'string' || typeof timestamp !== 'string') return [];
   const metadata = record['metadata'] as Record<string, unknown> | undefined;
   const reply = metadata?.['agentResponse'];
+  const note = eventType === 'StepSucceeded' ? metadata?.['agentMessage'] : undefined;
+  const pauseType = metadata?.['pauseType'];
+  const blockedOn = (metadata?.['blockedOn'] as { kind?: unknown } | null | undefined)?.kind;
   const missing = metadata?.['missingVariables'];
   // An agent turn that waits for the person names its chat input among the missing variables.
   const asksForReply =
@@ -355,8 +382,12 @@ function conversationEventOf(raw: unknown): ConversationEvent[] {
       eventType,
       timestamp,
       asksForReply,
+      subflowWaiting: metadata?.['subflowWaiting'] === true,
       ...(typeof stepExecutionId === 'string' ? { stepExecutionId } : {}),
       ...(typeof reply === 'string' && reply.trim() !== '' ? { agentResponse: reply } : {}),
+      ...(typeof note === 'string' && note.trim() !== '' ? { note } : {}),
+      ...(typeof pauseType === 'string' ? { pauseType } : {}),
+      ...(typeof blockedOn === 'string' ? { blockedOn } : {}),
     },
   ];
 }

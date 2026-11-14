@@ -7,6 +7,17 @@
  * started, and posts the Helmsman's answer into the thread once the session
  * pauses with it.
  *
+ * - **The watch follows the turn.** It has no time limit. It posts each note
+ *   the Helmsman writes during the turn as one message, and the answer when the
+ *   turn ends, however long the turn takes. A pause on a child run is work in
+ *   progress, so the thread hears once that the work runs. Only a pause that
+ *   neither asks for a reply nor waits on a child run is said to need Aflow.
+ *   A watch that sits on one such pause for an hour stops and says so, as
+ *   does a watch whose session writes no new event for six hours. The
+ *   thread is then `idle`, which pruning drops and a reply watches again.
+ *   A read that keeps failing backs off, and after a run of failures the
+ *   watch stops and says so. The thread is then `unread`, and a reply or a
+ *   restart watches it again.
  * - **The operator's own posture.** The calls carry the owner's key, and the
  *   link must name the key's user. A start uses mode `api`, which the session
  *   route admits from a key, and a resume names the paused step the last
@@ -56,8 +67,26 @@ export const CONVERSATION_ENDED =
 export const WAITS_AT_AFLOW =
   'The Helmsman waits on something that needs you at Aflow before it answers. Open the conversation there.';
 
-export const ANSWER_TAKES_LONG =
-  'The answer is taking longer than this thread waits for it. It will be in the conversation at Aflow, and a reply here continues it.';
+export const WORK_RUNNING =
+  'The Helmsman has started work that runs at Aflow. Its answer comes into this thread when it is ready.';
+
+export const CONVERSATION_GONE =
+  'This conversation is no longer at Aflow. Send a new direct message to start another.';
+
+export const WATCH_IDLE =
+  'The Helmsman has waited an hour on something that needs you at Aflow, so this thread stopped waiting for the answer. Reply here to look again, or open the conversation at Aflow.';
+
+export const WATCH_STOPPED =
+  'Aflow could not be read for several minutes, so this thread stopped waiting for the answer. Reply here to look again, or open the conversation at Aflow.';
+
+export const WATCH_QUIET =
+  'Nothing new has happened in the conversation at Aflow for six hours, so this thread stopped waiting for the answer. Reply here to look again, or open the conversation at Aflow.';
+
+export const NOTES_SKIPPED =
+  'The Helmsman wrote more notes than this thread could read, so some are not here. Read them in the conversation at Aflow.';
+
+export const LOOKING_AGAIN =
+  'This was not sent. The thread looks at the conversation at Aflow again, and the answer comes here when it is ready. Send this again after it.';
 
 export const NOT_SENT = 'This did not reach Aflow, so the Helmsman did not get it:';
 
@@ -88,10 +117,24 @@ export const ENDED_NOTES: Readonly<Record<string, string>> = {
 
 const CUT_NOTE = '… The full answer is in the conversation at Aflow.';
 const WATCH_POLL_MS = 2_000;
-/** How long one turn may take before the thread stops watching it. */
-const WATCH_LIMIT_MS = 30 * 60 * 1000;
+/** The longest wait between two reads that failed. */
+const WATCH_BACKOFF_LIMIT_MS = 60_000;
+/** Failed reads in a row, about six minutes at the default poll, before the watch stops. */
+export const WATCH_READ_FAILURE_LIMIT = 10;
+/**
+ * How long a watch stays on one pause that needs the operator at Aflow. Such a
+ * pause may never be resolved, and each watch reads Aflow every two seconds.
+ */
+export const WATCH_IDLE_LIMIT_MS = 60 * 60 * 1000;
+/**
+ * How long a watch stays on a session that writes no new event. A turn that
+ * runs writes its steps, and one that has stalled may never pause or end.
+ */
+export const WATCH_QUIET_LIMIT_MS = 6 * 60 * 60 * 1000;
+/** Pages of events one read holds at most when it pages back to what the thread has read. */
+export const WATCH_PAGE_LIMIT = 20;
 
-export type WatchOutcome = 'answered' | 'ended' | 'gave_up' | 'already_watching';
+export type WatchOutcome = 'answered' | 'ended' | 'stopped' | 'idle' | 'already_watching';
 
 export interface ConversationResult {
   outcome: InboundOutcome | 'duplicate' | 'ignored' | 'busy_tap' | 'already_decided';
@@ -112,7 +155,6 @@ export interface ConversationDeps {
   now?: () => Date;
   sleep?: (ms: number) => Promise<void>;
   pollMs?: number;
-  watchLimitMs?: number;
 }
 
 /** A Slack timestamp, `seconds.micros`, in milliseconds. */
@@ -203,6 +245,61 @@ function asksTheOperator(event: ConversationEvent): boolean {
   return event.agentResponse !== undefined || event.asksForReply;
 }
 
+/**
+ * A pause on a child run the Helmsman started: a workflow run it waits on, or
+ * a delegated session still running. The turn goes on, and nothing waits on
+ * the operator.
+ */
+function waitsOnChildRun(event: ConversationEvent): boolean {
+  if (asksTheOperator(event)) return false;
+  if (event.pauseType === 'external_dependency') return event.blockedOn === 'workflow_run';
+  return event.pauseType === 'subflow_waiting' && event.subflowWaiting;
+}
+
+/** True when the session resumed after `pause`, so the turn runs again. */
+function resumedSince(events: readonly ConversationEvent[], pause: ConversationEvent): boolean {
+  const pausedAt = timeOf(pause.timestamp);
+  return events.some(
+    (event) => event.eventType === 'SessionResumed' && timeOf(event.timestamp) > pausedAt,
+  );
+}
+
+/** The pause the thread resumed, when the events hold it. */
+function resumedPause(
+  thread: ThreadRecord,
+  events: readonly ConversationEvent[],
+): ConversationEvent | undefined {
+  if (thread.resumedStepExecutionId === null) return undefined;
+  return events.find(
+    (event) =>
+      event.eventType === 'SessionPaused' &&
+      event.stepExecutionId === thread.resumedStepExecutionId,
+  );
+}
+
+/** True when the events reach back to what the thread has read, so no note between is missed. */
+function reachesRead(thread: ThreadRecord, events: readonly ConversationEvent[]): boolean {
+  const read = timeOf(thread.notesAfter);
+  return (
+    resumedPause(thread, events) !== undefined ||
+    events.some((event) => timeOf(event.timestamp) <= read)
+  );
+}
+
+/** The time of the newest of `events`, or minus infinity when none has one. */
+function newestTime(events: readonly ConversationEvent[]): number {
+  return events.reduce(
+    (newest, event) => Math.max(newest, timeOf(event.timestamp)),
+    Number.NEGATIVE_INFINITY,
+  );
+}
+
+/** Milliseconds since the epoch, or minus infinity when there is no time to read. */
+function timeOf(timestamp: string | null | undefined): number {
+  const ms = timestamp == null ? Number.NaN : Date.parse(timestamp);
+  return Number.isNaN(ms) ? Number.NEGATIVE_INFINITY : ms;
+}
+
 /** True when Slack answered a refusal, so the post provably put nothing in the thread. */
 function postedNothing(error: unknown): error is SlackApiError {
   return error instanceof SlackApiError && !error.outcomeUnknown;
@@ -212,7 +309,8 @@ function postedNothing(error: unknown): error is SlackApiError {
 type OpenTurn = { kind: 'pause'; step: string } | { kind: 'ended' } | { kind: 'none' };
 
 export class Conversations {
-  private readonly watching = new Set<string>();
+  /** The running watch of each thread, so only that watch gives the thread up. */
+  private readonly watching = new Map<string, symbol>();
 
   constructor(private readonly deps: ConversationDeps) {}
 
@@ -333,6 +431,19 @@ export class Conversations {
       await say(CONVERSATION_ENDED);
       return { outcome: 'ended' };
     }
+    const stopped = thread?.status === 'unread' || thread?.status === 'idle';
+    if (thread !== undefined && stopped && store.claimThread(record.channel, record.threadTs)) {
+      // The reply is not sent, because the answer to the last message may be waiting unread.
+      try {
+        store.updateThread(thread, { status: 'answering' }, this.now());
+        const watching = this.watch(thread);
+        // Only a notice: the watch goes on, and the reply is settled, when the post fails.
+        await say(LOOKING_AGAIN).catch(() => undefined);
+        return { outcome: 'busy', watching };
+      } finally {
+        store.releaseThread(record.channel, record.threadTs);
+      }
+    }
     // One message at a time per thread, so two replies never resume one pause.
     if (thread?.status === 'answering' || !store.claimThread(record.channel, record.threadTs)) {
       await say(STILL_ANSWERING);
@@ -436,6 +547,7 @@ export class Conversations {
       pausedStepExecutionId: null,
       relayedStepExecutionId: null,
       resumedStepExecutionId: null,
+      notesAfter: null,
       startedAt: at,
       updatedAt: at,
     };
@@ -475,20 +587,36 @@ export class Conversations {
     return { outcome: 'ended' };
   }
 
-  /** Watches every thread that was waiting on an answer when the app stopped. */
+  /**
+   * Watches every thread that was waiting on an answer when the app stopped,
+   * and every thread whose watch stopped on reads that kept failing.
+   */
   resumeWatching(): Array<Promise<WatchOutcome>> {
-    return this.deps.store.threadsAnswering().map((thread) => this.watch(thread));
+    return this.deps.store.threadsToWatch().map((thread) => {
+      if (thread.status === 'unread') {
+        this.deps.store.updateThread(thread, { status: 'answering' }, this.now());
+      }
+      return this.watch(thread);
+    });
   }
 
   /**
    * Watches the thread's session until it pauses with the Helmsman's answer or
-   * ends, and posts what it finds into the thread. One watch per thread.
+   * ends, and posts what it finds into the thread. It stops early when
+   * `WATCH_READ_FAILURE_LIMIT` reads of the session's events fail in a row,
+   * when one pause that needs the operator at Aflow lasts `WATCH_IDLE_LIMIT_MS`,
+   * or when the session writes no new event for `WATCH_QUIET_LIMIT_MS`. One
+   * watch per thread.
    */
   watch(thread: ThreadRecord): Promise<WatchOutcome> {
     const key = `${thread.channel}:${thread.threadTs}`;
     if (this.watching.has(key)) return Promise.resolve('already_watching');
-    this.watching.add(key);
-    return this.poll(thread)
+    const own = Symbol(key);
+    this.watching.set(key, own);
+    const release = () => {
+      if (this.watching.get(key) === own) this.watching.delete(key);
+    };
+    return this.poll(thread, release)
       .catch((error: unknown) => {
         // A thread left answering refuses every reply until a restart watches it again.
         if (thread.status === 'answering') {
@@ -500,57 +628,190 @@ export class Conversations {
         }
         throw error;
       })
-      .finally(() => this.watching.delete(key));
+      .finally(release);
   }
 
-  private async poll(thread: ThreadRecord): Promise<WatchOutcome> {
-    const { store, api } = this.deps;
+  /**
+   * Follows the thread's session. `release` gives the thread up before a stop
+   * records it as one a reply watches again, so that reply's watch can start.
+   */
+  private async poll(thread: ThreadRecord, release: () => void): Promise<WatchOutcome> {
+    const { store } = this.deps;
     const sleep =
       this.deps.sleep ?? ((ms: number) => new Promise<void>((done) => setTimeout(done, ms)));
-    const deadline = this.now().getTime() + (this.deps.watchLimitMs ?? WATCH_LIMIT_MS);
     const say = (line: string) => this.say(thread.channel, thread.threadTs, line);
+    let toldWorking = false;
     let toldAboutAflow = false;
+    let failedReads = 0;
+    let idle: { step: string; pausedAt: string; since: number } | undefined;
+    let quiet: { newest: number; since: number } | undefined;
+    const pollMs = this.deps.pollMs ?? WATCH_POLL_MS;
     for (;;) {
-      const page = await api.latestEvents(thread.spaceId, thread.sessionId);
-      const last = page.ok ? lastTurnEvent(page.events) : undefined;
+      const page = await this.readTurn(thread);
+      if (!page.ok && page.gone) {
+        store.updateThread(thread, { status: 'ended', pausedStepExecutionId: null }, this.now());
+        await say(CONVERSATION_GONE);
+        return 'ended';
+      }
+      if (!page.ok) {
+        failedReads += 1;
+        if (failedReads >= WATCH_READ_FAILURE_LIMIT) {
+          release();
+          store.updateThread(thread, { status: 'unread', pausedStepExecutionId: null }, this.now());
+          // Only a notice: a reply or a restart watches the thread again whether or not it posts.
+          await say(WATCH_STOPPED).catch(() => undefined);
+          return 'stopped';
+        }
+        await sleep(Math.min(pollMs * 2 ** failedReads, WATCH_BACKOFF_LIMIT_MS));
+        continue;
+      }
+      failedReads = 0;
+      const events = page.events;
+      const last = lastTurnEvent(events);
       const ended = last === undefined ? undefined : ENDED_NOTES[last.eventType];
+      const open =
+        last?.stepExecutionId !== undefined &&
+        last.stepExecutionId !== thread.relayedStepExecutionId;
+      const answer = open && asksTheOperator(last) ? last : undefined;
+      await this.relayNotes(thread, events, ended !== undefined ? last : answer, page.gap);
       if (ended !== undefined) {
         store.updateThread(thread, { status: 'ended', pausedStepExecutionId: null }, this.now());
         await say(ended);
         return 'ended';
       }
-      if (
-        last?.stepExecutionId !== undefined &&
-        last.stepExecutionId !== thread.relayedStepExecutionId
-      ) {
-        const step = last.stepExecutionId;
-        if (asksTheOperator(last)) {
-          // Recorded before it is posted, so a restart never posts one answer twice.
-          store.updateThread(
-            thread,
-            { status: 'waiting', pausedStepExecutionId: step, relayedStepExecutionId: step },
-            this.now(),
-          );
-          const answer = last.agentResponse;
-          await this.relay(
-            thread,
-            answer === undefined ? 'The Helmsman waits for your reply.' : relayed(answer),
-            sleep,
-          );
-          return 'answered';
-        }
-        if (!toldAboutAflow) {
-          toldAboutAflow = true;
-          // Only a notice: the watch goes on to relay the answer when the post fails.
-          await say(WAITS_AT_AFLOW).catch(() => undefined);
-        }
+      if (answer?.stepExecutionId !== undefined) {
+        const step = answer.stepExecutionId;
+        // Recorded before it is posted, so a restart never posts one answer twice.
+        store.updateThread(
+          thread,
+          {
+            status: 'waiting',
+            pausedStepExecutionId: step,
+            relayedStepExecutionId: step,
+            notesAfter: answer.timestamp,
+          },
+          this.now(),
+        );
+        const reply = answer.agentResponse;
+        await this.relay(
+          thread,
+          reply === undefined ? 'The Helmsman waits for your reply.' : relayed(reply),
+          sleep,
+        );
+        return 'answered';
       }
-      if (this.now().getTime() >= deadline) {
-        store.updateThread(thread, { status: 'waiting', pausedStepExecutionId: null }, this.now());
-        await say(ANSWER_TAKES_LONG);
-        return 'gave_up';
+      // Each notice is only a notice: the watch goes on to relay the answer when its post fails.
+      const atAflow = open && !waitsOnChildRun(last) ? last.stepExecutionId : undefined;
+      if (open && atAflow === undefined && !toldWorking) {
+        toldWorking = true;
+        await say(WORK_RUNNING).catch(() => undefined);
+      } else if (atAflow !== undefined && !toldAboutAflow) {
+        toldAboutAflow = true;
+        await say(WAITS_AT_AFLOW).catch(() => undefined);
       }
-      await sleep(this.deps.pollMs ?? WATCH_POLL_MS);
+      // The events name the pause until the next one, so a resume ends the wait on it.
+      const waiting =
+        open && atAflow !== undefined && !resumedSince(events, last)
+          ? { step: atAflow, pausedAt: last.timestamp }
+          : undefined;
+      const at = this.now().getTime();
+      const newest = newestTime(events);
+      let stop: string | undefined;
+      if (waiting === undefined) {
+        idle = undefined;
+      } else if (idle?.step !== waiting.step || idle.pausedAt !== waiting.pausedAt) {
+        idle = { ...waiting, since: at };
+      } else if (at - idle.since >= WATCH_IDLE_LIMIT_MS) {
+        stop = WATCH_IDLE;
+      }
+      if (quiet === undefined || newest > quiet.newest) {
+        quiet = { newest, since: at };
+      } else if (stop === undefined && at - quiet.since >= WATCH_QUIET_LIMIT_MS) {
+        stop = WATCH_QUIET;
+      }
+      if (stop !== undefined) {
+        release();
+        store.updateThread(thread, { status: 'idle', pausedStepExecutionId: null }, this.now());
+        // Only a notice: a reply watches the thread again whether or not it posts.
+        await say(stop).catch(() => undefined);
+        return 'idle';
+      }
+      await sleep(pollMs);
+    }
+  }
+
+  /**
+   * The session's newest events, paged back until they reach what the thread
+   * has read: its `notesAfter`, or the pause it resumed. `gap` is true when
+   * they do not reach it within `WATCH_PAGE_LIMIT` pages, so notes between the
+   * two may be missing. An older page that cannot be read fails the whole
+   * read, so the next read pages back over the same notes. `gone` is true when
+   * the newest page answers `404`.
+   */
+  private async readTurn(
+    thread: ThreadRecord,
+  ): Promise<
+    { ok: true; events: ConversationEvent[]; gap: boolean } | { ok: false; gone: boolean }
+  > {
+    const { api } = this.deps;
+    const newest = await api.latestEvents(thread.spaceId, thread.sessionId);
+    if (!newest.ok) return { ok: false, gone: newest.status === 404 };
+    let events = newest.events;
+    let older = newest.olderCursor;
+    for (let pages = 1; older !== undefined && !reachesRead(thread, events); pages += 1) {
+      if (pages >= WATCH_PAGE_LIMIT) return { ok: true, events, gap: true };
+      const page = await api.latestEvents(thread.spaceId, thread.sessionId, older);
+      // The newest page answered, so the next read of it says whether the session is gone.
+      if (!page.ok) return { ok: false, gone: false };
+      events = [...page.events, ...events];
+      older = page.olderCursor;
+    }
+    return { ok: true, events, gap: false };
+  }
+
+  /**
+   * Posts each note the Helmsman wrote in this turn that the thread has not
+   * heard, oldest first, one message per note. A note belongs to the turn when
+   * it is later than the pause the thread resumed and no later than `closing`,
+   * the event that ends the turn, when one has come. Each is recorded before it
+   * is posted, so a restart never posts one note twice. A `gap` is said first,
+   * and the thread's `notesAfter` then moves to the newest event read, so the
+   * next read starts from there.
+   */
+  private async relayNotes(
+    thread: ThreadRecord,
+    events: readonly ConversationEvent[],
+    closing: ConversationEvent | undefined,
+    gap: boolean,
+  ): Promise<void> {
+    const say = (line: string) => this.say(thread.channel, thread.threadTs, line);
+    const resumed = resumedPause(thread, events);
+    const after = Math.max(timeOf(thread.notesAfter), timeOf(resumed?.timestamp));
+    const until = closing === undefined ? Number.POSITIVE_INFINITY : timeOf(closing.timestamp);
+    const notes = events
+      .filter((event) => {
+        const at = timeOf(event.timestamp);
+        return event.note !== undefined && at > after && at <= until;
+      })
+      .sort((a, b) => timeOf(a.timestamp) - timeOf(b.timestamp));
+    // Only a notice: the notes and the answer still come when its post fails.
+    if (gap) await say(NOTES_SKIPPED).catch(() => undefined);
+    for (const event of notes) {
+      this.deps.store.updateThread(thread, { notesAfter: event.timestamp }, this.now());
+      // Only a note: the answer still comes when its post fails.
+      await say(relayed(event.note ?? '')).catch(() => undefined);
+    }
+    const read = events
+      .filter((event) => timeOf(event.timestamp) <= until)
+      .reduce<string | undefined>(
+        (newest, event) =>
+          newest === undefined || timeOf(event.timestamp) > timeOf(newest)
+            ? event.timestamp
+            : newest,
+        undefined,
+      );
+    if (read !== undefined && timeOf(read) > Math.max(after, timeOf(thread.notesAfter))) {
+      this.deps.store.updateThread(thread, { notesAfter: read }, this.now());
     }
   }
 
