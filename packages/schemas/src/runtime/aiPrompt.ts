@@ -233,6 +233,16 @@ export type AiMessageV1 = z.infer<typeof AiMessageV1Schema>;
 // ============================================================================
 
 /**
+ * Where a `user_input` atom came from when nobody asked the agent for it
+ * directly: a run the session started reporting back, or what someone said in
+ * the room. A `user_input` atom without an origin is a direct request. Only a
+ * direct request starts a run, so a report that arrives mid-request leaves
+ * that request's run and its pin where they are.
+ */
+export const AiUserInputOriginSchema = z.enum(['run_wakeup', 'room_message']);
+export type AiUserInputOrigin = z.infer<typeof AiUserInputOriginSchema>;
+
+/**
  * An atomic message unit stored in the conversation state.
  * Each atom has a stable sourceId for idempotent append.
  */
@@ -252,6 +262,8 @@ export const AiMessageAtomV1Schema = z.object({
     'cleared_summary',
     'compaction_restore',
   ]),
+  /** Set only on a `user_input` atom that is not a direct request. */
+  inputOrigin: AiUserInputOriginSchema.optional(),
   /** The actual message content */
   message: AiMessageV1Schema,
   /** Creation timestamp (epoch ms) */
@@ -367,6 +379,8 @@ export const AiConversationStateV1Schema = z.object({
                 'compaction_restore',
               ])
               .optional(),
+            /** Denormalized from the atom, so retention finds the current run from refs alone. */
+            inputOrigin: AiUserInputOriginSchema.optional(),
             /** Content hash for dedup/diffing */
             hash: z.string(),
             /** Creation timestamp */
@@ -388,8 +402,6 @@ export const AiConversationStateV1Schema = z.object({
       artifactRef: z.string().optional(),
       /** Number of compaction cycles performed so far. */
       count: z.number().int().nonnegative().default(0),
-      /** Highest turn number that has been compacted (watermark for idempotency). */
-      lastCompactedTurn: z.number().int().nonnegative().optional(),
     })
     .optional(),
 
@@ -446,37 +458,50 @@ export const SummaryTemplateSectionSchema = z.object({
   required: z.boolean().default(true),
 });
 
+/**
+ * The default summary is a session summary: the agent resumes from it, so it
+ * carries what was read, what was decided and what is left pending, each as
+ * its own section the merge prompt can update in place.
+ */
 export const DEFAULT_SUMMARY_SECTIONS: Array<{
   heading: string;
   prompt: string;
   required: boolean;
 }> = [
   {
-    heading: 'What Was Accomplished',
+    heading: 'Objective',
     prompt:
-      'List concrete outcomes with specific values/metrics. Include operation names and data sizes.',
+      'What the person asked for in these turns, in their terms, and what done looks like. Include any constraint they set.',
     required: true,
   },
   {
-    heading: 'Current Focus',
-    prompt: 'What is the agent actively working on right now? What was the last action taken?',
+    heading: 'What Was Read',
+    prompt:
+      'Each source the agent read: the tool and its path or query, the facts taken from it with exact values, and its re-read path or $ref verbatim unless the restore list carries it.',
     required: true,
   },
   {
-    heading: 'Final Objective',
-    prompt: 'What is the end goal? What does success look like?',
+    heading: 'What Was Decided',
+    prompt:
+      'Each decision made by the agent or a person, with its reason and the values it fixed. Mark a decision a later turn reversed.',
+    required: true,
+  },
+  {
+    heading: 'What Was Done',
+    prompt:
+      'Concrete outcomes with specific values: what was written, created, sent or changed, by which operation, and where it is.',
+    required: true,
+  },
+  {
+    heading: 'Left Pending',
+    prompt:
+      'Every open item: unanswered questions, promised next steps, calls whose result had not arrived, and work started but not finished. Name the turn that raised each.',
     required: true,
   },
   {
     heading: 'Mistakes & Lessons Learned',
     prompt:
-      'What failed and why? What workarounds were discovered? Be specific — include error messages and parameter values that caused issues.',
-    required: true,
-  },
-  {
-    heading: 'Perplexing / Unresolved',
-    prompt:
-      'Anything confusing, contradictory, or unexplained that the agent should investigate further.',
+      'What failed and why, and what worked instead. Include the exact error messages and parameter values that caused each failure.',
     required: false,
   },
 ];

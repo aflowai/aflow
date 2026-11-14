@@ -105,7 +105,7 @@ function resultAtom(turnNumber: number, base: string): AiMessageAtomV1 {
     operationId: 'memory.store.query',
     status: 'SUCCEEDED',
     outputPath: `/run/outputs/${base}_0`,
-    summary: 'r'.repeat(2000),
+    summary: 'r'.repeat(9000),
   };
   return {
     schemaVersion: 1,
@@ -182,8 +182,8 @@ describe('conversation state is stored without a TTL', () => {
       { ...config, payloadStore: store },
       await seededState(
         store,
-        [userAtom(0), assistantToolAtom(1, EXCHANGE), resultAtom(2, EXCHANGE)],
-        7,
+        [userAtom(0), assistantToolAtom(1, EXCHANGE), resultAtom(2, EXCHANGE), userAtom(3)],
+        12,
       ),
     );
     await clearing.assembleRequest('sys', []);

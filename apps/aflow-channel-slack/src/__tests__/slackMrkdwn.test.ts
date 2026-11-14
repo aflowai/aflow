@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { mrkdwnUnits, slackMrkdwnOf, slackMrkdwnWithin } from '../slackMrkdwn.js';
+import { slackMrkdwnOf, slackMrkdwnPieces, slackMrkdwnWithin } from '../slackMrkdwn.js';
 
 describe('slackMrkdwnOf', () => {
   it('turns every heading level into a bold line', () => {
@@ -174,8 +174,20 @@ describe('slackMrkdwnWithin', () => {
     expect(slackMrkdwnWithin('one ~~two three~~ four', 12)).toBe('one ');
     expect(slackMrkdwnWithin('one `two three` four', 12)).toBe('one ');
     expect(slackMrkdwnWithin('one ***two three*** four', 14)).toBe('one ');
-    expect(slackMrkdwnWithin('# A heading\nmore', 8)).toBe('');
     expect(slackMrkdwnWithin('one **two** three', 12)).toBe('one *two* th');
+  });
+
+  it('splits a span longer than the whole room on its inner units, without its markup', () => {
+    expect(slackMrkdwnWithin('# A heading\nmore', 8)).toBe('A headin');
+    expect(slackMrkdwnWithin('**one *two* three**', 10)).toBe('one _two_ ');
+  });
+
+  it('ends a cut text with the tail, after a closed code block on a line of its own', () => {
+    expect(slackMrkdwnWithin('one **two three** four', 12, '…')).toBe('one …');
+    expect(slackMrkdwnWithin('one two', 100, '…')).toBe('one two');
+    expect(slackMrkdwnWithin('```\nline one\nline two\n```', 18, '…')).toBe(
+      '```\nline one\n```\n…',
+    );
   });
 
   it('closes a code block the cut ends inside', () => {
@@ -193,8 +205,30 @@ describe('slackMrkdwnWithin', () => {
   });
 });
 
-describe('mrkdwnUnits', () => {
-  it('keeps entities and Slack references whole, and splits the rest by character', () => {
-    expect(mrkdwnUnits('a&amp;<https://x.io|x>é')).toEqual(['a', '&amp;', '<https://x.io|x>', 'é']);
+describe('slackMrkdwnPieces', () => {
+  it('is the whole conversion in one piece when it fits', () => {
+    const markdown = '# Done\n**All** checks passed.';
+    expect(slackMrkdwnPieces(markdown, 3, 1_000)).toEqual([slackMrkdwnOf(markdown)]);
+    expect(slackMrkdwnPieces('', 3, 1_000)).toEqual([]);
+  });
+
+  it('ends each piece between whole spans, so the pieces join to the whole conversion', () => {
+    const pieces = slackMrkdwnPieces('one **two three** four *five six*', 5, 14);
+
+    expect(pieces).toEqual(['one ', '*two three* fo', 'ur _five six_']);
+    expect(pieces.join('')).toBe(slackMrkdwnOf('one **two three** four *five six*'));
+  });
+
+  it('closes a code block where a piece ends and opens it again in the next', () => {
+    const pieces = slackMrkdwnPieces('```\nline one\nline two\n```', 3, 18);
+
+    expect(pieces).toEqual(['```\nline one\nl\n```', '```\nine two\n```']);
+    expect(pieces.every((piece) => piece.length <= 18)).toBe(true);
+  });
+
+  it('cuts the last piece when the text runs past it, and ends it with the tail', () => {
+    const pieces = slackMrkdwnPieces('aaaa **bb** cccc **dd** eeee', 2, 8, '…');
+
+    expect(pieces).toEqual(['aaaa ', '*bb* cc…']);
   });
 });

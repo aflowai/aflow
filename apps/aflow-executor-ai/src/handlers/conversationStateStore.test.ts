@@ -294,8 +294,8 @@ describe('ConversationStateStore.clearUnderPressure (Plan 189 §5 / Plan 196 §4
       toolName,
       status: 'SUCCEEDED',
       outputRef: `output.${base}_${String(i)}/content`,
-      // Large enough that clearing nets more than the §4.3 minClearNetSavings bar.
-      summary: `rows for ${toolName}#${String(i)} ` + 'x'.repeat(2000),
+      // Over the §4.4 size threshold, so clearing may take it at all.
+      summary: `rows for ${toolName}#${String(i)} ` + 'x'.repeat(9000),
     };
     return {
       schemaVersion: 1,
@@ -362,18 +362,20 @@ describe('ConversationStateStore.clearUnderPressure (Plan 189 §5 / Plan 196 §4
   };
 
   // Parallel exchange: assistant fires two calls (turn 1); its two results land
-  // in turns 2 and 3 — the exchange spans turns 1..3.
+  // in turns 2 and 3 — the exchange spans turns 1..3. The user input at turn 4
+  // starts the current run, so the exchange belongs to a finished one (§4.10).
   function parallelExchangeAtoms(): AiMessageAtomV1[] {
     return [
       userAtom(0),
       assistantAtom(1, S1, ['memory.store.query', 'memory.store.query']),
       toolResultAtom(2, S1, 0, 'memory.store.query'),
       toolResultAtom(3, S1, 1, 'memory.store.query'),
+      userAtom(4),
     ];
   }
 
   it('does NOT clear an exchange while any of its turns is still recent', async () => {
-    // currentTurn=4: result at turn 3 is within keepRecentTurns(3) → retain whole exchange.
+    // currentTurn=4: result at turn 3 is within keepRecentTurns → retain whole exchange.
     const { store } = await makeStoreAndAssemble(parallelExchangeAtoms(), 4);
     const result = await store.clearUnderPressure(overPressure);
     expect(result).toBeUndefined();
@@ -384,8 +386,8 @@ describe('ConversationStateStore.clearUnderPressure (Plan 189 §5 / Plan 196 §4
   });
 
   it('clears the assistant + all results together once the whole exchange is past recency', async () => {
-    // currentTurn=7: every turn (1..3) is past the recency guard → clear the exchange.
-    const { store, storeFn } = await makeStoreAndAssemble(parallelExchangeAtoms(), 7);
+    // currentTurn=12: every turn (1..3) is past the recency guard → clear the exchange.
+    const { store, storeFn } = await makeStoreAndAssemble(parallelExchangeAtoms(), 12);
     const result = await store.clearUnderPressure(overPressure);
 
     expect(result).toMatchObject({ clearedExchangeCount: 1, atomsSummarized: 3 });
@@ -396,7 +398,7 @@ describe('ConversationStateStore.clearUnderPressure (Plan 189 §5 / Plan 196 §4
     expect(atoms.filter((a) => a.sourceKind === 'assistant_turn')).toHaveLength(0);
     expect(atoms.filter((a) => a.sourceKind === 'tool_result')).toHaveLength(0);
     expect(atoms.filter((a) => a.sourceKind === 'cleared_summary')).toHaveLength(1);
-    expect(atoms.filter((a) => a.sourceKind === 'user_input')).toHaveLength(1);
+    expect(atoms.filter((a) => a.sourceKind === 'user_input')).toHaveLength(2);
 
     // No atom list ever carries a tool_use base without its results (or vice
     // versa): after clearing, neither survives — they left as one unit.
@@ -417,7 +419,7 @@ describe('ConversationStateStore.clearUnderPressure (Plan 189 §5 / Plan 196 §4
   });
 
   it('summary captures each call intent — tool, compact id/index, args digest, status (§5.3)', async () => {
-    const { store, storeFn } = await makeStoreAndAssemble(parallelExchangeAtoms(), 7);
+    const { store, storeFn } = await makeStoreAndAssemble(parallelExchangeAtoms(), 12);
     await store.clearUnderPressure(overPressure);
 
     const clearCall = storeFn.mock.calls.find(
@@ -445,8 +447,9 @@ describe('ConversationStateStore.clearUnderPressure (Plan 189 §5 / Plan 196 §4
       userAtom(0),
       assistantAtom(1, S1, ['compute.run']),
       toolResultAtom(2, S1, 0, 'compute.run'),
+      userAtom(3),
     ];
-    const { store, storeFn } = await makeStoreAndAssemble(atoms, 7);
+    const { store, storeFn } = await makeStoreAndAssemble(atoms, 12);
     const result = await store.clearUnderPressure(overPressure);
     expect(result).toMatchObject({ clearedExchangeCount: 1, atomsSummarized: 2 });
 
@@ -461,7 +464,7 @@ describe('ConversationStateStore.clearUnderPressure (Plan 189 §5 / Plan 196 §4
   });
 
   it('does not re-clear an exchange already in clearedExchanges (idempotency)', async () => {
-    const { store } = await makeStoreAndAssemble(parallelExchangeAtoms(), 7);
+    const { store } = await makeStoreAndAssemble(parallelExchangeAtoms(), 12);
     // Pretend this exchange was already cleared in a prior cycle.
     store.getState().clearing = {
       ranges: [],
@@ -475,7 +478,7 @@ describe('ConversationStateStore.clearUnderPressure (Plan 189 §5 / Plan 196 §4
 
   it('never fires below clearHighWater, regardless of exchange age', async () => {
     // Same fully-aged history as the clearing cases — but pressure is low.
-    const { store } = await makeStoreAndAssemble(parallelExchangeAtoms(), 7);
+    const { store } = await makeStoreAndAssemble(parallelExchangeAtoms(), 12);
     const result = await store.clearUnderPressure({
       pressureTokens: 5_000,
       workingBudget: 10_000,

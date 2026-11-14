@@ -16,11 +16,11 @@
  * as markdown italic, because the text is a model's markdown.
  *
  * Every other `&`, `<` and `>` is escaped, so a `<` in the result always opens
- * a Slack reference and an `&` always opens an entity. `mrkdwnUnits` relies on
- * that to cut the result without breaking either.
+ * a Slack reference and an `&` always opens an entity. A cut relies on that to
+ * keep both whole.
  *
  * The conversion first writes a marked form. A private-use character brackets
- * every span it emits and every code block it opens. `slackMrkdwnWithin` cuts
+ * every span it emits and every code block it opens. `slackMrkdwnPieces` cuts
  * that form, so a cut never leaves a span open.
  */
 
@@ -58,7 +58,6 @@ const BLOCK_END = '\n```';
 const DUNDER_BODY = /^\w+$/;
 const UNDERSCORE_BOLD = /(^|\W)__(?=\S)([^\n]*?\S)__(?!\w)/g;
 
-const UNIT = /&(?:amp|lt|gt);|<[^<>]*>|[\s\S]/gu;
 const MARKED_UNIT = /&(?:amp|lt|gt);|<[^<>]*>|[\s\S]/uy;
 
 function escapeText(text: string): string {
@@ -256,14 +255,6 @@ export function slackMrkdwnOf(markdown: string): string {
   return rendered(markedMrkdwnOf(markdown));
 }
 
-/**
- * Mrkdwn in the pieces a cut must not split: an entity, a Slack reference, or
- * one character.
- */
-export function mrkdwnUnits(mrkdwn: string): string[] {
-  return mrkdwn.match(UNIT) ?? [];
-}
-
 /** The marked form in pieces: a whole span, an entity, a Slack reference, or one character. */
 function markedUnits(marked: string): string[] {
   const units: string[] = [];
@@ -289,20 +280,91 @@ function markedUnits(marked: string): string[] {
 }
 
 /**
- * `markdown` as Slack mrkdwn of at most `room` characters. A cut falls between
- * whole spans, entities and references, so it leaves no bold, italic, struck
- * or code span open. A code block the cut ends inside is closed.
+ * A unit too long for a whole piece, in smaller units. A span gives up its own
+ * delimiters, so no piece holds one of them unmatched. A reference splits by
+ * character. A mark or a single character gives nothing, and is dropped.
  */
-export function slackMrkdwnWithin(markdown: string, room: number): string {
-  let out = '';
-  let inBlock = false;
-  for (const unit of markedUnits(markedMrkdwnOf(markdown))) {
-    const open: boolean = unit === BLOCK_OPEN || (inBlock && unit !== BLOCK_CLOSE);
-    const text = rendered(unit);
-    if (out.length + text.length + (open ? BLOCK_END.length : 0) > room) break;
-    out += text;
-    inBlock = open;
+function smallerUnits(unit: string): string[] {
+  if (unit.startsWith(SPAN_OPEN)) {
+    const inner = unit.slice(1, -1);
+    const delimiter = inner.charAt(0);
+    const bare =
+      inner.length >= 2 && '*_~`'.includes(delimiter) && inner.endsWith(delimiter)
+        ? inner.slice(1, -1)
+        : inner;
+    return markedUnits(bare);
   }
+  const characters = Array.from(unit);
+  return characters.length > 1 ? characters : [];
+}
+
+/** A piece that ends inside a code block, with the block closed. */
+function closed(out: string, inBlock: boolean): string {
   if (!inBlock) return out;
   return out.endsWith(BLOCK_START) ? out.slice(0, -BLOCK_START.length) : `${out}${BLOCK_END}`;
+}
+
+/** A cut piece with `tail` after it, on a line of its own after a code block. */
+function withTail(piece: string, tail: string): string {
+  if (tail === '') return piece;
+  return piece.endsWith(BLOCK_END) ? `${piece}\n${tail}` : `${piece}${tail}`;
+}
+
+/**
+ * `markdown` as Slack mrkdwn in at most `count` pieces of at most `room`
+ * characters each. A piece ends between whole spans, entities and references,
+ * so it leaves no bold, italic, struck or code span open. A code block a piece
+ * ends inside is closed there and opened again at the start of the next. When
+ * the text runs past the last piece, that piece is cut and ends with `tail`.
+ *
+ * A span longer than a whole piece cannot be kept whole anywhere. It loses its
+ * own markup and splits on the units inside it.
+ */
+export function slackMrkdwnPieces(
+  markdown: string,
+  count: number,
+  room: number,
+  tail = '',
+): string[] {
+  const pieces: string[] = [];
+  const pending = markedUnits(markedMrkdwnOf(markdown)).reverse();
+  let out = '';
+  let inBlock = false;
+  let fresh = true;
+  // The longest start of this piece that fits with the tail after it.
+  let kept = { out, inBlock };
+  for (let unit = pending.pop(); unit !== undefined; unit = pending.pop()) {
+    const open: boolean = unit === BLOCK_OPEN || (inBlock && unit !== BLOCK_CLOSE);
+    const text = rendered(unit);
+    if (out.length + text.length + (open ? BLOCK_END.length : 0) <= room) {
+      out += text;
+      inBlock = open;
+      fresh = false;
+      if (withTail(closed(out, inBlock), tail).length <= room) kept = { out, inBlock };
+      continue;
+    }
+    if (fresh) {
+      pending.push(...smallerUnits(unit).reverse());
+      continue;
+    }
+    if (pieces.length >= count - 1) {
+      pieces.push(withTail(closed(kept.out, kept.inBlock), tail));
+      return pieces;
+    }
+    pieces.push(closed(out, inBlock));
+    out = inBlock ? BLOCK_START : '';
+    fresh = true;
+    kept = { out, inBlock };
+    pending.push(unit);
+  }
+  if (!fresh) pieces.push(closed(out, inBlock));
+  return pieces;
+}
+
+/**
+ * `markdown` as Slack mrkdwn of at most `room` characters, cut as the one piece
+ * of `slackMrkdwnPieces` is. A cut text ends with `tail`.
+ */
+export function slackMrkdwnWithin(markdown: string, room: number, tail = ''): string {
+  return slackMrkdwnPieces(markdown, 1, room, tail)[0] ?? '';
 }

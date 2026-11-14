@@ -246,8 +246,13 @@ describe('clearUnderPressure — re-execution of a cleared call (§4.6)', () => 
         operationId: 'compute.sandbox.exec',
         failed: true,
       }),
+      // Starts the current run, so every exchange above belongs to a finished one.
+      userAtom(10),
     ];
   }
+
+  // Enough pressure to clear two exchanges before the low watermark.
+  const rankingPressure = { ...overPressure, pressureTokens: 7_500 };
 
   function rankingClearing(): AiClearingStateV1 {
     return {
@@ -263,26 +268,28 @@ describe('clearUnderPressure — re-execution of a cleared call (§4.6)', () => 
   it('increments the counter, marks the new exchange, and ranks it last-to-clear (class 5)', async () => {
     const { store } = await makeStoreAndAssemble(rankingAtoms(), 20, rankingClearing());
 
-    const result = await store.clearUnderPressure(overPressure);
+    const result = await store.clearUnderPressure(rankingPressure);
 
     expect(result).toMatchObject({ reexecutions: 1, refetches: 0 });
     const state = store.getState();
     expect(state.clearing?.resurrectedExchanges).toEqual([RES]);
 
-    // Greedy clears idempotent → unknown → failed, then stops at the low
-    // watermark — the resurrected exchange (class 5) outlives even the failed
-    // one (class 4), though its natural class would be 3.
-    expect(state.clearing?.clearedExchanges).toEqual(['oldex', IDEM, UNK, FAIL]);
+    // Greedy clears idempotent → unknown, then stops at the low watermark —
+    // the resurrected exchange (class 5) outlives them, though its natural
+    // class would be 3. The failed exchange holds a small result, so it is
+    // never a candidate (§4.4).
+    expect(state.clearing?.clearedExchanges).toEqual(['oldex', IDEM, UNK]);
     const ids = new Set(state.history.atoms.map((a) => a.atomId));
     expect(ids.has(`asst-${RES}`)).toBe(true);
     expect(ids.has(`res-${RES}-0`)).toBe(true);
+    expect(ids.has(`asst-${FAIL}`)).toBe(true);
   });
 
   it('never re-counts a marked exchange on later passes; clearing it records its calls', async () => {
     const { store } = await makeStoreAndAssemble(rankingAtoms(), 20, rankingClearing());
-    await store.clearUnderPressure(overPressure);
+    await store.clearUnderPressure(rankingPressure);
 
-    const second = await store.clearUnderPressure(overPressure);
+    const second = await store.clearUnderPressure(rankingPressure);
 
     expect(second).toMatchObject({ clearedExchangeCount: 1, reexecutions: 0, refetches: 0 });
     const clearing = store.getState().clearing;
@@ -297,7 +304,7 @@ describe('clearUnderPressure — re-execution of a cleared call (§4.6)', () => 
     ];
     const { store } = await makeStoreAndAssemble(rankingAtoms(), 20, clearing);
 
-    const result = await store.clearUnderPressure(overPressure);
+    const result = await store.clearUnderPressure(rankingPressure);
 
     expect(result).toMatchObject({ reexecutions: 0, refetches: 0 });
     expect(store.getState().clearing?.resurrectedExchanges).toEqual([]);
@@ -489,6 +496,7 @@ describe('finishAgentTurn — §4.6 counters in agent_turn_history_cleared', () 
         operationId: 'memory.store.query',
         summaryChars: 7_000,
       }),
+      userAtom(5),
     ];
     const clearing: AiClearingStateV1 = {
       ranges: [],

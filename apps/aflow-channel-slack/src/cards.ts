@@ -19,7 +19,7 @@ import type {
 } from '@aflow/schemas';
 
 import type { SlackBlock } from './slack.js';
-import { mrkdwnUnits, slackMrkdwnOf } from './slackMrkdwn.js';
+import { slackMrkdwnPieces } from './slackMrkdwn.js';
 
 export type CardRow = 'choices' | 'text_reply' | 'approval' | 'write_approval' | 'at_aflow';
 
@@ -202,10 +202,12 @@ function escapedWithin(text: string, room: number): string {
   return piecesOf(Array.from(text, escapeMrkdwn), 1, room)[0] ?? '';
 }
 
-/** The agent's markdown as mrkdwn sections. */
+/**
+ * The agent's markdown as mrkdwn sections. Each ends between whole spans, and
+ * a code block across two sections is closed in one and opened again in the next.
+ */
 function sections(text: string): SlackBlock[] {
-  const units = mrkdwnUnits(slackMrkdwnOf(text));
-  return piecesOf(units, MAX_TEXT_SECTIONS, MAX_SECTION_TEXT).map((section) => ({
+  return slackMrkdwnPieces(text, MAX_TEXT_SECTIONS, MAX_SECTION_TEXT, '…').map((section) => ({
     type: 'section',
     text: { type: 'mrkdwn', text: section },
   }));

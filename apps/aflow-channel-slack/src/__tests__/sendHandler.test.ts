@@ -18,8 +18,9 @@ import {
   CHANNEL_PROVIDER_ERROR_CODE,
   CHANNEL_RECIPIENT_NOT_LINKED_CODE,
   ChannelMessageSendHandler,
+  SEND_CUT_NOTE,
 } from '../sendHandler.js';
-import { SlackApiError, createSlackClient, type SlackClient } from '../slack.js';
+import { SLACK_TEXT_LIMIT, SlackApiError, createSlackClient, type SlackClient } from '../slack.js';
 import { ChannelStore } from '../store.js';
 
 const TENANT = 'tenant-1';
@@ -160,6 +161,22 @@ describe('channel.message.send', () => {
     expect(slack.posts).toEqual([
       { channel: 'D-U-OPERATOR', text: '*Deploy*\n• *staging* is <https://example.com/run|live>' },
     ]);
+  });
+
+  it('cuts a text that escapes past Slack’s limit between whole spans, and says so', async () => {
+    const text = `${'&'.repeat(7_990)} **${'b '.repeat(20)}end** more`;
+    const { result } = await send({ text });
+
+    expect(result.status).toBe('SUCCEEDED');
+    const posted = slack.posts[0]?.text ?? '';
+    expect(posted.length).toBeLessThanOrEqual(SLACK_TEXT_LIMIT);
+    expect(posted).toBe(`${'&amp;'.repeat(7_990)} ${SEND_CUT_NOTE}`);
+  });
+
+  it('posts a text that fits once escaped whole, with no note', async () => {
+    await send({ text: '&'.repeat(8_000) });
+
+    expect(slack.posts[0]?.text).toBe('&amp;'.repeat(8_000));
   });
 
   it('returns the first messageRef to a retried step and posts nothing', async () => {

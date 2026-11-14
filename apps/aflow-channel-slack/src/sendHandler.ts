@@ -25,6 +25,9 @@
  * - An `itemId` is read through the API in the run's own space and sent as a
  *   card with the controls the D3 table allows (`cards.ts`). A missing or
  *   decided item fails before anything is claimed or posted.
+ * - The text is posted as mrkdwn of at most Slack's 40,000 characters.
+ *   Escaping can lengthen a text the schema admits, so a longer one is cut
+ *   between whole spans and ends with a note that the run holds all of it.
  * - Every call out, to Aflow and to Slack, ends when the step's signal does.
  *   The step's timeout then answers as this handler's own result: a post the
  *   timeout cut short fails as an unknown delivery, not retryable, instead of
@@ -48,8 +51,8 @@ import {
 
 import type { AflowApi, ObservedOrigin } from './aflowApi.js';
 import { cardHead, openFoot, planCard, type CardPlan } from './cards.js';
-import { SlackApiError, type PostedMessage, type SlackClient } from './slack.js';
-import { slackMrkdwnOf } from './slackMrkdwn.js';
+import { SLACK_TEXT_LIMIT, SlackApiError, type PostedMessage, type SlackClient } from './slack.js';
+import { slackMrkdwnWithin } from './slackMrkdwn.js';
 import type { ChannelStore, SentRecord } from './store.js';
 
 export const CHANNEL_RECIPIENT_NOT_LINKED_CODE = 'CHANNEL_RECIPIENT_NOT_LINKED';
@@ -79,6 +82,9 @@ export const REPEATED_MESSAGE =
 export const IN_FLIGHT_MESSAGE =
   'This run is sending the operator exactly this text at this moment, so it was not sent a second ' +
   'time. Do not send it again: the first send stands.';
+
+/** Ends a text cut to Slack's limit once it is mrkdwn. */
+export const SEND_CUT_NOTE = '… The whole message is in the run at Aflow.';
 
 export const DELIVERY_UNKNOWN_MESSAGE =
   'The message was sent to Slack, but no answer came back, so Slack may have posted it. It was ' +
@@ -171,7 +177,7 @@ export class ChannelMessageSendHandler implements StepHandler {
     if (!claim.claimed) return this.refuse(ctx, claim.prior);
 
     const head = card === undefined ? undefined : cardHead(text, card.item);
-    const mrkdwn = slackMrkdwnOf(text);
+    const mrkdwn = slackMrkdwnWithin(text, SLACK_TEXT_LIMIT, SEND_CUT_NOTE);
     let message: PostedMessage;
     let posting = false;
     try {
