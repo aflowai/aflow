@@ -54,12 +54,12 @@ import {
   countRepeatedCall,
   countSameTargetReads,
   HARD_PAUSE_IDENTICAL_CONSECUTIVE,
-  HARD_PAUSE_SAME_TARGET_READS,
   readsStoredTarget,
   readTargetKeys,
   repeatedReadWarning,
-  SAME_TARGET_WINDOW,
-  sameTargetReadWarning,
+  sameTargetLogDetail,
+  sameTargetLoopWarning,
+  sameTargetPauseMessage,
   type ResolveCallOperation,
 } from './callSignature.js';
 import { clearStaleCredentialBlock } from './credentialBlockScope.js';
@@ -1107,8 +1107,7 @@ export async function applyAgentDecision(params: ApplyAgentDecisionParams): Prom
     });
     delete newVarsWithSig[loopWarningVarKey];
     const warnsIdentical = verdict === 'warning' || verdict === 'final_warning';
-    const warnsSameTarget =
-      sameTarget.verdict === 'warning' || sameTarget.verdict === 'final_warning';
+    const sameTargetWarning = sameTargetLoopWarning(sameTarget);
     if (warnsIdentical) {
       const remainingBeforePause = HARD_PAUSE_IDENTICAL_CONSECUTIVE - consecutiveCount;
       writeInlineVar(
@@ -1137,31 +1136,14 @@ export async function applyAgentDecision(params: ApplyAgentDecisionParams): Prom
           `agent invoked "${callSignature}" ${String(consecutiveCount)} times consecutively. ` +
           `Giving model a chance to recover before pause at ${String(HARD_PAUSE_IDENTICAL_CONSECUTIVE)} repeats.`,
       );
-    } else if (warnsSameTarget && sameTarget.target !== undefined) {
-      const remainingBeforePause = HARD_PAUSE_SAME_TARGET_READS - sameTarget.readCount;
-      writeInlineVar(
-        newVarsWithSig,
-        loopWarningVarKey,
-        {
-          repeatedActionCount: sameTarget.readCount,
-          repeatedActionSignature: sameTarget.target,
-          severity: sameTarget.verdict,
-          message: sameTargetReadWarning(sameTarget.readCount),
-          instruction:
-            remainingBeforePause > 1
-              ? `${String(remainingBeforePause)} more reads of this target within ${String(SAME_TARGET_WINDOW)} turns will pause the run for user input.`
-              : `The next read of this target within ${String(SAME_TARGET_WINDOW)} turns will pause the run for user input.`,
-        },
-        {
-          ...varMeta,
-          version: getVariableVersion(currentRuntimeState.variables[loopWarningVarKey]) + 1,
-        },
-      );
+    } else if (sameTargetWarning !== undefined) {
+      writeInlineVar(newVarsWithSig, loopWarningVarKey, sameTargetWarning, {
+        ...varMeta,
+        version: getVariableVersion(currentRuntimeState.variables[loopWarningVarKey]) + 1,
+      });
       console.warn(
         `[SessionOrchestrator] Same-target read warning for run ${result.sessionId}: ` +
-          `agent read "${sameTarget.target}" ${String(sameTarget.readCount)} times in ` +
-          `${String(SAME_TARGET_WINDOW)} turns. ` +
-          `Giving model a chance to recover before pause at ${String(HARD_PAUSE_SAME_TARGET_READS)} reads.`,
+          sameTargetLogDetail(sameTarget),
       );
     }
     currentRuntimeState = {
@@ -1174,9 +1156,7 @@ export async function applyAgentDecision(params: ApplyAgentDecisionParams): Prom
         ? `The assistant attempted the same action ${String(consecutiveCount)} times in a row without progress. ` +
           'The run has been failed — start a new run with different instructions or fix the underlying issue.'
         : sameTarget.verdict === 'pause'
-          ? `The assistant read one stored target ${String(sameTarget.readCount)} times in ` +
-            `${String(SAME_TARGET_WINDOW)} turns without reading it whole or by window. ` +
-            'The run has been failed — start a new run with different instructions or fix the underlying issue.'
+          ? sameTargetPauseMessage(sameTarget.readCount)
           : undefined;
 
     if (loopFailureMessage !== undefined) {
@@ -1186,8 +1166,7 @@ export async function applyAgentDecision(params: ApplyAgentDecisionParams): Prom
               `agent invoked "${callSignature}" ${String(consecutiveCount)} times consecutively. ` +
               `Failing run — harness blocked the agent.`
           : `[SessionOrchestrator] Same-target read loop detected for run ${result.sessionId}: ` +
-              `agent read "${sameTarget.target ?? ''}" ${String(sameTarget.readCount)} times in ` +
-              `${String(SAME_TARGET_WINDOW)} turns. Failing run — harness blocked the agent.`,
+              sameTargetLogDetail(sameTarget),
       );
 
       const loopErrorRef = `inline:${Buffer.from(

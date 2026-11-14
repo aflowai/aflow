@@ -223,3 +223,48 @@ export function sameTargetReadWarning(readCount: number): string {
     readBudgetAdvice()
   );
 }
+
+/** The loop warning the next agent turn reads when the same-target rule warns. */
+export interface SameTargetLoopWarning {
+  repeatedActionCount: number;
+  repeatedActionSignature: string;
+  severity: RepeatVerdict;
+  message: string;
+  instruction: string;
+}
+
+/** The warning to surface for this count, or undefined when the rule does not warn. */
+export function sameTargetLoopWarning(count: SameTargetCount): SameTargetLoopWarning | undefined {
+  if (count.verdict !== 'warning' && count.verdict !== 'final_warning') return undefined;
+  if (count.target === undefined) return undefined;
+  const remainingBeforePause = HARD_PAUSE_SAME_TARGET_READS - count.readCount;
+  return {
+    repeatedActionCount: count.readCount,
+    repeatedActionSignature: count.target,
+    severity: count.verdict,
+    message: sameTargetReadWarning(count.readCount),
+    instruction:
+      remainingBeforePause > 1
+        ? `${String(remainingBeforePause)} more reads of this target within ${String(SAME_TARGET_WINDOW)} turns will pause the run for user input.`
+        : `The next read of this target within ${String(SAME_TARGET_WINDOW)} turns will pause the run for user input.`,
+  };
+}
+
+/** The log line for a same-target warning or pause, after the run id. */
+export function sameTargetLogDetail(count: SameTargetCount): string {
+  const reads =
+    `agent read "${count.target ?? ''}" ${String(count.readCount)} times in ` +
+    `${String(SAME_TARGET_WINDOW)} turns. `;
+  return count.verdict === 'pause'
+    ? `${reads}Failing run — harness blocked the agent.`
+    : `${reads}Giving model a chance to recover before pause at ${String(HARD_PAUSE_SAME_TARGET_READS)} reads.`;
+}
+
+/** The run failure message when the same-target rule pauses. */
+export function sameTargetPauseMessage(readCount: number): string {
+  return (
+    `The assistant read one stored target ${String(readCount)} times in ` +
+    `${String(SAME_TARGET_WINDOW)} turns without reading it whole or by window. ` +
+    'The run has been failed — start a new run with different instructions or fix the underlying issue.'
+  );
+}
