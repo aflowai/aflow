@@ -127,8 +127,9 @@ export interface OperationRegistration {
   /**
    * The arguments that read one window of the target, such as a byte range.
    * A call carrying any of them pages the target, so the same-target read
-   * detector does not count it. A repeat of one window is still an identical
-   * call.
+   * detector counts the pages of one selection once, and each new selection
+   * again. Name only arguments that page: one that caps a read's size pages
+   * nothing. A repeat of one window is still an identical call.
    */
   readWindowArgs?: readonly string[];
 

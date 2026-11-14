@@ -36,6 +36,7 @@ import type { SessionOrchestratorBindings } from '../lifecycle/context.js';
 import type { SessionStatus, SessionOrchestrator } from '../types.js';
 import { generateEventId } from '../helpers/ids.js';
 import { fetchAgentDef } from '../helpers/fetchAgentDef.js';
+import { loopVarKeys } from '../handlers/callSignature.js';
 import {
   extractUserMessageFromInput,
   agentChatInputVarId,
@@ -562,23 +563,12 @@ export function createResumeRun(bindings: SessionOrchestratorBindings) {
       const targetStepDef = agentDef.steps.find((s) => s.stepId === targetStepId);
       if (targetStepDef?.operation === 'ai.agent.turn') {
         const failuresVarKey = `ai.agent.toolFailures.${targetStepId}`;
-        const signaturesVarKey = `ai.agent.recentCallSignatures.${targetStepId}`;
-        const readTargetsVarKey = `ai.agent.recentReadTargets.${targetStepId}`;
-        const loopWarningVarKey = `ai.agent.loopWarning.${targetStepId}`;
-        const sameTargetWarningVarKey = `ai.agent.sameTargetWarning.${targetStepId}`;
-        const hadCounters =
-          runtimeState.variables[failuresVarKey] !== undefined ||
-          runtimeState.variables[signaturesVarKey] !== undefined ||
-          runtimeState.variables[readTargetsVarKey] !== undefined ||
-          runtimeState.variables[loopWarningVarKey] !== undefined ||
-          runtimeState.variables[sameTargetWarningVarKey] !== undefined;
+        const counterVarKeys = [failuresVarKey, ...Object.values(loopVarKeys(targetStepId))];
+        const variablesBefore = runtimeState.variables;
+        const hadCounters = counterVarKeys.some((key) => variablesBefore[key] !== undefined);
         if (hadCounters) {
           const newVars = { ...runtimeState.variables };
-          delete newVars[failuresVarKey];
-          delete newVars[signaturesVarKey];
-          delete newVars[readTargetsVarKey];
-          delete newVars[loopWarningVarKey];
-          delete newVars[sameTargetWarningVarKey];
+          for (const key of counterVarKeys) delete newVars[key];
           runtimeState = {
             ...runtimeState,
             variables: newVars,

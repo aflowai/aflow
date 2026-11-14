@@ -5,7 +5,7 @@ import {
   countRepeatedCall,
   countSameTargetReads,
   evaluateLoopTurn,
-  readTargetKeys,
+  readTargetEntries,
   repeatedReadWarning,
   sameTargetLoopWarning,
   type LoopTurnState,
@@ -29,7 +29,7 @@ function runTurns(turns: ReadonlyArray<ReadonlyArray<SignatureCall>>): Turn[] {
   let readTargets: string[][] = [];
   return turns.map((calls) => {
     const identical = countRepeatedCall(signatures, buildCallSignature(calls));
-    const same = countSameTargetReads(readTargets, readTargetKeys(calls));
+    const same = countSameTargetReads(readTargets, readTargetEntries(calls));
     signatures = identical.recentSignatures;
     readTargets = same.recentReadTargets;
     return {

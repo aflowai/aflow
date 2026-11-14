@@ -18,8 +18,16 @@ export const SIGNATURE_WINDOW = 8;
 
 /**
  * The same-target read rule counts reads of one stored target over the last
- * SAME_TARGET_WINDOW turns, whatever their jsonPath, view or version. A read
- * carrying a window argument pages the target and is not counted.
+ * SAME_TARGET_WINDOW turns, whatever their jsonPath, view, version or
+ * maxBytes. A read carrying a window argument (`readWindowArgs`) pages the
+ * target, so the pages of one selection count once together and a long
+ * paging runs to completion. Each new selection paged counts again, so
+ * paging one section after another is still section-by-section reading.
+ *
+ * Mapping one document takes a model about 8 sections, so the rule warns
+ * there. At 12 the reads have outrun any plausible map, and the rule fails
+ * the run. The window of 16 turns spans the reads an agent clears from
+ * context and then repeats.
  */
 export const SOFT_WARNING_SAME_TARGET_READS = 8;
 export const HARD_PAUSE_SAME_TARGET_READS = 12;
@@ -57,9 +65,64 @@ function declaredReadTargetArgs(
   return operationId === undefined ? undefined : getOperation(operationId)?.readTargetArgs;
 }
 
-function readsOneWindow(operationId: string, record: Record<string, unknown>): boolean {
-  const windowArgs = getOperation(operationId)?.readWindowArgs ?? [];
-  return windowArgs.some((arg) => readDottedPath(record, arg) !== undefined);
+function declaredReadWindowArgs(operationId: string): readonly string[] {
+  return getOperation(operationId)?.readWindowArgs ?? [];
+}
+
+/** A copy of the record without the value at one dotted path. */
+function withoutDottedPath(
+  record: Record<string, unknown>,
+  dottedPath: string,
+): Record<string, unknown> {
+  const [head, ...rest] = dottedPath.split('.');
+  if (head === undefined || !(head in record)) return record;
+  const { [head]: value, ...others } = record;
+  if (rest.length === 0) return others;
+  const level = asRecord(value);
+  if (!level) return record;
+  const inner = withoutDottedPath(level, rest.join('.'));
+  return Object.keys(inner).length === 0 ? others : { ...others, [head]: inner };
+}
+
+/**
+ * What a windowed read selects inside its target: every argument except the
+ * target, the window and replay keys. The pages of one selection agree on
+ * it, and paging a new section changes it.
+ */
+function windowedSelection(
+  record: Record<string, unknown>,
+  targetPaths: readonly string[],
+  windowArgs: readonly string[],
+): string {
+  let selection = signatureArgs(record);
+  for (const path of [...targetPaths, ...windowArgs]) {
+    selection = withoutDottedPath(selection, path);
+  }
+  return canonicalJson(selection);
+}
+
+/** JSON with object keys sorted, so two spellings of one selection agree. */
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  const record = asRecord(value);
+  if (!record) return value === undefined ? 'null' : JSON.stringify(value);
+  const entries = Object.keys(record)
+    .filter((k) => record[k] !== undefined)
+    .sort()
+    .map((k) => `${JSON.stringify(k)}:${canonicalJson(record[k])}`);
+  return `{${entries.join(',')}}`;
+}
+
+/**
+ * Separates a windowed entry's target from its selection. JSON never holds a
+ * raw newline, so no target key contains it.
+ */
+const WINDOWED_ENTRY_SEPARATOR = '\n';
+
+/** The target a same-target window entry reads. */
+export function entryTarget(entry: string): string {
+  const cut = entry.indexOf(WINDOWED_ENTRY_SEPARATOR);
+  return cut === -1 ? entry : entry.slice(0, cut);
 }
 
 /** The arguments that identify one call: every argument except replay keys. */
@@ -79,14 +142,12 @@ export function buildCallSignature(calls: readonly SignatureCall[]): string {
 /**
  * The stored target one call reads, as its operation declares it in
  * `readTargetArgs`, keyed by operation. Undefined for a call that reads no
- * declared target, names none of the declared parts, or reads one window of
- * the target through an argument in `readWindowArgs`.
+ * declared target or names none of the declared parts.
  */
 export function readTargetKey(operationId: string | undefined, args: unknown): string | undefined {
   const declared = declaredReadTargetArgs(operationId);
   if (operationId === undefined || !declared) return undefined;
   const record = asRecord(args) ?? {};
-  if (readsOneWindow(operationId, record)) return undefined;
   const target: Record<string, unknown> = {};
   for (const [part, paths] of Object.entries(declared)) {
     for (const path of paths) {
@@ -101,14 +162,33 @@ export function readTargetKey(operationId: string | undefined, args: unknown): s
   return `${operationId}:${JSON.stringify(target)}`;
 }
 
-/** The stored targets one turn's calls read, one entry per read. */
-export function readTargetKeys(
+/**
+ * What the same-target window records for one read. An unwindowed read is
+ * its target key, and every one counts. A read carrying a window argument is
+ * its target key with its selection, and the pages of one selection count
+ * once together.
+ */
+export function readTargetEntry(
+  operationId: string | undefined,
+  args: unknown,
+): string | undefined {
+  const target = readTargetKey(operationId, args);
+  if (operationId === undefined || target === undefined) return undefined;
+  const record = asRecord(args) ?? {};
+  const windowArgs = declaredReadWindowArgs(operationId);
+  if (!windowArgs.some((arg) => readDottedPath(record, arg) !== undefined)) return target;
+  const targetPaths = Object.values(declaredReadTargetArgs(operationId) ?? {}).flat();
+  return `${target}${WINDOWED_ENTRY_SEPARATOR}${windowedSelection(record, targetPaths, windowArgs)}`;
+}
+
+/** The same-target entries one turn's calls record, one per read. */
+export function readTargetEntries(
   calls: readonly SignatureCall[],
   resolveOperation: ResolveCallOperation = toolIdIsOperation,
 ): string[] {
   return calls.flatMap((c) => {
-    const key = readTargetKey(resolveOperation(c.toolId), c.args);
-    return key === undefined ? [] : [key];
+    const entry = readTargetEntry(resolveOperation(c.toolId), c.args);
+    return entry === undefined ? [] : [entry];
   });
 }
 
@@ -122,9 +202,21 @@ export function readsStoredTarget(
 
 export type RepeatVerdict = 'none' | 'warning' | 'final_warning' | 'pause';
 
-function verdictFor(count: number, softWarning: number, hardPause: number): RepeatVerdict {
-  if (count >= hardPause) return 'pause';
-  if (count >= softWarning) return count === hardPause - 1 ? 'final_warning' : 'warning';
+/**
+ * A rule pauses only once it has given its final warning, which it gives
+ * when the count reaches hardPause - 1 or more. The same-target count rises
+ * by every parallel read in a turn, so it can pass hardPause - 1 in one
+ * turn. That turn gets the final warning, and the next read pauses.
+ */
+function verdictFor(
+  count: number,
+  previousCount: number,
+  softWarning: number,
+  hardPause: number,
+): RepeatVerdict {
+  if (count >= hardPause && previousCount >= hardPause - 1) return 'pause';
+  if (count >= hardPause - 1) return 'final_warning';
+  if (count >= softWarning) return 'warning';
   return 'none';
 }
 
@@ -149,6 +241,7 @@ export function countRepeatedCall(
   }
   const verdict = verdictFor(
     consecutiveCount,
+    consecutiveCount - 1,
     SOFT_WARNING_IDENTICAL_CONSECUTIVE,
     HARD_PAUSE_IDENTICAL_CONSECUTIVE,
   );
@@ -156,7 +249,7 @@ export function countRepeatedCall(
 }
 
 export interface SameTargetCount {
-  /** The window after this turn's reads are appended, one entry per turn, oldest first. */
+  /** The window after this turn's read entries are appended, one list per turn, oldest first. */
   recentReadTargets: string[][];
   /** The target this turn read most often across the window, when it read any. */
   target?: string;
@@ -166,39 +259,58 @@ export interface SameTargetCount {
 }
 
 /**
- * Appends one turn's read targets to the window and says what the same-target
- * rule does about it. A turn that reads nothing still takes a slot, so the
- * window spans turns, not reads.
+ * How many reads of one target the entries hold: its unwindowed reads plus
+ * the distinct selections it was paged by.
+ */
+function countReadsOf(entries: readonly string[], target: string): number {
+  const unwindowed = entries.filter((e) => e === target).length;
+  const pagedSelections = new Set(entries.filter((e) => e !== target && entryTarget(e) === target))
+    .size;
+  return unwindowed + pagedSelections;
+}
+
+/**
+ * Appends one turn's read entries to the window and says what the
+ * same-target rule does about it. A turn that reads nothing still takes a
+ * slot, so the window spans turns, not reads.
  */
 export function countSameTargetReads(
   previousTurns: ReadonlyArray<readonly string[]>,
-  turnTargets: readonly string[],
+  turnEntries: readonly string[],
 ): SameTargetCount {
-  const recentReadTargets = [...previousTurns.map((t) => [...t]), [...turnTargets]].slice(
+  const previousWindow = previousTurns.slice(-SAME_TARGET_WINDOW);
+  const recentReadTargets = [...previousWindow.map((t) => [...t]), [...turnEntries]].slice(
     -SAME_TARGET_WINDOW,
   );
+  const windowEntries = recentReadTargets.flat();
   let target: string | undefined;
   let readCount = 0;
-  for (const candidate of new Set(turnTargets)) {
-    const count = recentReadTargets.reduce(
-      (sum, turn) => sum + turn.filter((t) => t === candidate).length,
-      0,
-    );
+  for (const candidate of new Set(turnEntries.map(entryTarget))) {
+    const count = countReadsOf(windowEntries, candidate);
     if (count > readCount) {
       target = candidate;
       readCount = count;
     }
   }
+  const previousCount = target === undefined ? 0 : countReadsOf(previousWindow.flat(), target);
   const verdict = verdictFor(
     readCount,
+    previousCount,
     SOFT_WARNING_SAME_TARGET_READS,
     HARD_PAUSE_SAME_TARGET_READS,
   );
   return { recentReadTargets, ...(target !== undefined ? { target } : {}), readCount, verdict };
 }
 
-function readBudgetAdvice(): string {
+/**
+ * The identical-call warning for a read of a stored target. It says how to
+ * read more in one call, because a read without maxBytes returns a bounded
+ * window and repeating it is the loop. A read that follows it with maxBytes
+ * still counts toward the same-target rule.
+ */
+export function repeatedReadWarning(consecutiveCount: number): string {
   return (
+    `You have sent the same read of one target ${String(consecutiveCount)} times in a row. ` +
     `A read without maxBytes returns at most ${MEMORY_READ_BUDGET_CHARS.toLocaleString('en-US')} characters. ` +
     'To read a section whole, pass an explicit maxBytes large enough to hold it. ' +
     'To page a larger target, read it window by window with byteRange, lineRange or itemRange.'
@@ -206,27 +318,21 @@ function readBudgetAdvice(): string {
 }
 
 /**
- * The identical-call warning for a read of a stored target. It says how to
- * read more in one call, because a read without maxBytes returns a bounded
- * window and repeating it is the loop.
- */
-export function repeatedReadWarning(consecutiveCount: number): string {
-  return (
-    `You have sent the same read of one target ${String(consecutiveCount)} times in a row. ` +
-    readBudgetAdvice()
-  );
-}
-
-/**
  * The same-target warning. It names the remedy, because reading one target
- * section by section is the loop this rule exists to stop.
+ * section by section is the loop this rule exists to stop. Each remedy it
+ * names either stays counted or pages the target, so a model that follows
+ * it stays inside the rule.
  */
 export function sameTargetReadWarning(readCount: number): string {
   return (
     `You have read one stored target ${String(readCount)} times in the last ` +
     `${String(SAME_TARGET_WINDOW)} turns. ` +
     'Read the target whole or by window, not section by section. ' +
-    readBudgetAdvice()
+    `A read without maxBytes returns at most ${MEMORY_READ_BUDGET_CHARS.toLocaleString('en-US')} characters. ` +
+    'To read the target whole, send one read with a maxBytes large enough to hold it. ' +
+    'Every read with maxBytes still counts toward this limit. ' +
+    'To page a larger target, read it window by window with byteRange, lineRange or itemRange. ' +
+    'The pages of one jsonPath count once, and each new jsonPath counts again.'
   );
 }
 
@@ -316,6 +422,21 @@ export function sameTargetPauseMessage(readCount: number): string {
   );
 }
 
+/** The runtime-state variables the loop rules keep for one agent step. */
+export function loopVarKeys(stepId: string): {
+  recentSignatures: string;
+  recentReadTargets: string;
+  identicalCallWarning: string;
+  sameTargetWarning: string;
+} {
+  return {
+    recentSignatures: `ai.agent.recentCallSignatures.${stepId}`,
+    recentReadTargets: `ai.agent.recentReadTargets.${stepId}`,
+    identicalCallWarning: `ai.agent.loopWarning.${stepId}`,
+    sameTargetWarning: `ai.agent.sameTargetWarning.${stepId}`,
+  };
+}
+
 /** What the two loop rules remember between turns of one agent step. */
 export interface LoopTurnState {
   recentSignatures: string[];
@@ -352,7 +473,7 @@ export function evaluateLoopTurn(
   const identical = countRepeatedCall(previous.recentSignatures, callSignature);
   const sameTarget = countSameTargetReads(
     previous.recentReadTargets,
-    readTargetKeys(calls, resolveOperation),
+    readTargetEntries(calls, resolveOperation),
   );
   const state: LoopTurnState = {
     recentSignatures: identical.recentSignatures,

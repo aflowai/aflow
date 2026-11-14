@@ -457,20 +457,20 @@ const PIN_FIELDS = ['version', 'expectedContentHash'] as const;
 
 /**
  * The window arguments of `memoryReadOptionsShape`. A read carrying one pages
- * the target, so the same-target read detector does not count it.
+ * the target, so the same-target read detector counts the pages of one
+ * selection once. `maxBytes` is not one: it caps how much one read returns
+ * and pages nothing, so a section read with it still counts.
  */
 const MEMORY_READ_WINDOW_ARGS = [
   'byteRange',
   'lineRange',
   'itemRange',
-  'maxBytes',
 ] as const satisfies ReadonlyArray<keyof typeof memoryReadOptionsShape>;
 
 /**
  * The document a memory.store.get call reads, spelled nested or flat as the
  * input preprocess accepts it. The version, `jsonPath` and `view` stay out, so
- * every unwindowed read of one document counts toward the same-target read
- * detector.
+ * every read of one document counts toward the same-target read detector.
  */
 const STORE_GET_READ_TARGET_ARGS = {
   path: ['target.path', 'path'],

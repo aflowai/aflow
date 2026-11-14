@@ -49,7 +49,8 @@ import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { routeRunnerTerminalToHarness } from '../../cybernetic/WorkflowRunHarness.js';
 import { wakeForRunWakeupsAtSettle } from './settleRunWakeups.js';
 import { pauseForGuardrailEscalation } from './guardrailEscalationPause.js';
-import { evaluateLoopTurn, type ResolveCallOperation } from './callSignature.js';
+import type { ResolveCallOperation } from './callSignature.js';
+import { applyLoopTurn } from './loopTurnState.js';
 import { clearStaleCredentialBlock } from './credentialBlockScope.js';
 import { buildStepCompletedRecoveryEvents } from '../helpers/recoveryEmitter.js';
 import type { ScheduleStepParams } from '../types.js';
@@ -1055,58 +1056,24 @@ export async function applyAgentDecision(params: ApplyAgentDecisionParams): Prom
     // Two rules, each with its own warning (evaluateLoopTurn). The identical-
     // call rule warns the model first so it can self-correct, and pauses after
     // the same call repeats 5 times in a row. The same-target rule counts
-    // unwindowed reads of one stored target over a wider window, so a
-    // section-by-section read of one document is caught though no two of its
-    // calls are identical.
-    const loopVarKey = `ai.agent.recentCallSignatures.${result.stepId}`;
-    const readTargetsVarKey = `ai.agent.recentReadTargets.${result.stepId}`;
-    const loopWarningVarKey = `ai.agent.loopWarning.${result.stepId}`;
-    const sameTargetWarningVarKey = `ai.agent.sameTargetWarning.${result.stepId}`;
-
+    // reads of one stored target over a wider window, so a section-by-section
+    // read of one document is caught though no two of its calls are identical.
     const sigCalls =
       decision.action === 'invoke_step'
         ? [{ toolId: decision.toolId, args: decision.args }]
         : decision.calls.map((c) => ({ toolId: c.toolId, args: c.args }));
     const resolveCallOperation: ResolveCallOperation = (toolId) =>
       agentDef.steps.find((s) => s.stepId === toolId)?.operation ?? toolId;
-    const loopTurn = evaluateLoopTurn(
-      {
-        recentSignatures: readInlineVar(currentRuntimeState, loopVarKey, [] as string[]),
-        recentReadTargets: readInlineVar(currentRuntimeState, readTargetsVarKey, [] as string[][]),
-      },
-      sigCalls,
-      resolveCallOperation,
-    );
-
-    // Persist updated windows and refresh each rule's pending warning for the
-    // next agent turn.
-    const newVarsWithSig = { ...currentRuntimeState.variables };
-    writeInlineVar(newVarsWithSig, loopVarKey, loopTurn.state.recentSignatures, {
-      ...varMeta,
-      version: loopTurn.state.recentSignatures.length,
+    const {
+      verdict: loopTurn,
+      variables: newVarsWithSig,
+      warningLogs,
+    } = applyLoopTurn(currentRuntimeState, result.stepId, sigCalls, resolveCallOperation, {
+      nowMs: varMeta.nowMs,
+      stepExecutionId: varMeta.stepExecutionId,
     });
-    writeInlineVar(newVarsWithSig, readTargetsVarKey, loopTurn.state.recentReadTargets, {
-      ...varMeta,
-      version: loopTurn.state.recentReadTargets.length,
-    });
-    const ruleWarnings = [
-      { varKey: loopWarningVarKey, logLabel: 'Loop warning', logged: loopTurn.identicalCall },
-      {
-        varKey: sameTargetWarningVarKey,
-        logLabel: 'Same-target read warning',
-        logged: loopTurn.sameTarget,
-      },
-    ];
-    for (const { varKey, logLabel, logged } of ruleWarnings) {
-      delete newVarsWithSig[varKey];
-      if (logged === undefined) continue;
-      writeInlineVar(newVarsWithSig, varKey, logged.warning, {
-        ...varMeta,
-        version: getVariableVersion(currentRuntimeState.variables[varKey]) + 1,
-      });
-      console.warn(
-        `[SessionOrchestrator] ${logLabel} for run ${result.sessionId}: ${logged.logDetail}`,
-      );
+    for (const { label, detail } of warningLogs) {
+      console.warn(`[SessionOrchestrator] ${label} for run ${result.sessionId}: ${detail}`);
     }
     currentRuntimeState = {
       ...currentRuntimeState,

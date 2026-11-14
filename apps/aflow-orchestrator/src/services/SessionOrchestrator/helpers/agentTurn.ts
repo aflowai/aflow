@@ -68,6 +68,7 @@ import type { SpaceContext, EntityDirectives, DirectiveCapabilityDiscovery } fro
 import type { ToolResultSummary } from '../types.js';
 import { resolveConfigRecursive } from './configResolution.js';
 import { readInlineVar } from './runtimeState.js';
+import { loopVarKeys } from '../handlers/callSignature.js';
 import { type ParsedApiGrant, type ParsedMcpGrant } from './capabilityGrantsToCatalog.js';
 import { getOrchestratorLogger, logOrchestratorError } from '../../../lib/orchestratorLogger.js';
 import { encodeTaskInput } from '../../../lib/encodeTaskInput.js';
@@ -1170,9 +1171,10 @@ export async function buildAgentTurnInput(
   });
 
   // Each loop rule writes its own warning, so both can reach one turn.
+  const loopKeys = loopVarKeys(stepDef.stepId);
   const loopWarningBlocks = [
-    { key: 'LoopWarning', varKey: `ai.agent.loopWarning.${stepDef.stepId}` },
-    { key: 'SameTargetReadWarning', varKey: `ai.agent.sameTargetWarning.${stepDef.stepId}` },
+    { key: 'LoopWarning', varKey: loopKeys.identicalCallWarning },
+    { key: 'SameTargetReadWarning', varKey: loopKeys.sameTargetWarning },
   ].flatMap(({ key, varKey }) => {
     const loopWarning = readInlineVar(
       runtimeState,
