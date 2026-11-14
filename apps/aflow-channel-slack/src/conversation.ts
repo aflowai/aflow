@@ -12,6 +12,9 @@
  *   turn ends, however long the turn takes. A pause on a child run is work in
  *   progress, so the thread hears once that the work runs. Only a pause that
  *   neither asks for a reply nor waits on a child run is said to need Aflow.
+ *   A read that keeps failing backs off, and after a run of failures the
+ *   watch stops and says so. The thread is then `unread`, and a reply or a
+ *   restart watches it again.
  * - **The operator's own posture.** The calls carry the owner's key, and the
  *   link must name the key's user. A start uses mode `api`, which the session
  *   route admits from a key, and a resume names the paused step the last
@@ -67,6 +70,12 @@ export const WORK_RUNNING =
 export const CONVERSATION_GONE =
   'This conversation is no longer at Aflow. Send a new direct message to start another.';
 
+export const WATCH_STOPPED =
+  'Aflow could not be read for several minutes, so this thread stopped waiting for the answer. Reply here to look again, or open the conversation at Aflow.';
+
+export const LOOKING_AGAIN =
+  'This was not sent. The thread looks at the conversation at Aflow again, and the answer comes here when it is ready. Send this again after it.';
+
 export const NOT_SENT = 'This did not reach Aflow, so the Helmsman did not get it:';
 
 export const MAYBE_SENT = 'This may or may not have reached the Helmsman:';
@@ -96,8 +105,12 @@ export const ENDED_NOTES: Readonly<Record<string, string>> = {
 
 const CUT_NOTE = '… The full answer is in the conversation at Aflow.';
 const WATCH_POLL_MS = 2_000;
+/** The longest wait between two reads that failed. */
+const WATCH_BACKOFF_LIMIT_MS = 60_000;
+/** Failed reads in a row, about five minutes at the default poll, before the watch stops. */
+export const WATCH_READ_FAILURE_LIMIT = 10;
 
-export type WatchOutcome = 'answered' | 'ended' | 'already_watching';
+export type WatchOutcome = 'answered' | 'ended' | 'stopped' | 'already_watching';
 
 export interface ConversationResult {
   outcome: InboundOutcome | 'duplicate' | 'ignored' | 'busy_tap' | 'already_decided';
@@ -355,6 +368,17 @@ export class Conversations {
       await say(CONVERSATION_ENDED);
       return { outcome: 'ended' };
     }
+    if (thread?.status === 'unread' && store.claimThread(record.channel, record.threadTs)) {
+      // The reply is not sent, because the answer to the last message may be waiting unread.
+      try {
+        store.updateThread(thread, { status: 'answering' }, this.now());
+        const watching = this.watch(thread);
+        await say(LOOKING_AGAIN);
+        return { outcome: 'busy', watching };
+      } finally {
+        store.releaseThread(record.channel, record.threadTs);
+      }
+    }
     // One message at a time per thread, so two replies never resume one pause.
     if (thread?.status === 'answering' || !store.claimThread(record.channel, record.threadTs)) {
       await say(STILL_ANSWERING);
@@ -498,15 +522,24 @@ export class Conversations {
     return { outcome: 'ended' };
   }
 
-  /** Watches every thread that was waiting on an answer when the app stopped. */
+  /**
+   * Watches every thread that was waiting on an answer when the app stopped,
+   * and every thread whose watch stopped on reads that kept failing.
+   */
   resumeWatching(): Array<Promise<WatchOutcome>> {
-    return this.deps.store.threadsAnswering().map((thread) => this.watch(thread));
+    return this.deps.store.threadsToWatch().map((thread) => {
+      if (thread.status === 'unread') {
+        this.deps.store.updateThread(thread, { status: 'answering' }, this.now());
+      }
+      return this.watch(thread);
+    });
   }
 
   /**
    * Watches the thread's session until it pauses with the Helmsman's answer or
    * ends, however long that takes, and posts what it finds into the thread.
-   * One watch per thread.
+   * It stops early only when `WATCH_READ_FAILURE_LIMIT` reads of the session's
+   * events fail in a row. One watch per thread.
    */
   watch(thread: ThreadRecord): Promise<WatchOutcome> {
     const key = `${thread.channel}:${thread.threadTs}`;
@@ -534,6 +567,8 @@ export class Conversations {
     const say = (line: string) => this.say(thread.channel, thread.threadTs, line);
     let toldWorking = false;
     let toldAboutAflow = false;
+    let failedReads = 0;
+    const pollMs = this.deps.pollMs ?? WATCH_POLL_MS;
     for (;;) {
       const page = await api.latestEvents(thread.spaceId, thread.sessionId);
       if (!page.ok && page.status === 404) {
@@ -541,7 +576,19 @@ export class Conversations {
         await say(CONVERSATION_GONE);
         return 'ended';
       }
-      const events = page.ok ? page.events : [];
+      if (!page.ok) {
+        failedReads += 1;
+        if (failedReads >= WATCH_READ_FAILURE_LIMIT) {
+          store.updateThread(thread, { status: 'unread', pausedStepExecutionId: null }, this.now());
+          // Only a notice: a reply or a restart watches the thread again whether or not it posts.
+          await say(WATCH_STOPPED).catch(() => undefined);
+          return 'stopped';
+        }
+        await sleep(Math.min(pollMs * 2 ** failedReads, WATCH_BACKOFF_LIMIT_MS));
+        continue;
+      }
+      failedReads = 0;
+      const events = page.events;
       const last = lastTurnEvent(events);
       const ended = last === undefined ? undefined : ENDED_NOTES[last.eventType];
       const open =
@@ -585,7 +632,7 @@ export class Conversations {
         toldAboutAflow = true;
         await say(WAITS_AT_AFLOW).catch(() => undefined);
       }
-      await sleep(this.deps.pollMs ?? WATCH_POLL_MS);
+      await sleep(pollMs);
     }
   }
 

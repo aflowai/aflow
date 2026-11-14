@@ -34,7 +34,7 @@ The Helmsman acts as you, with what your own account may do, and nothing more is
 - **A message that arrives late is not sent at once.** When Slack delivers a message more than ten minutes after you sent it, the app asks "This arrived late. Run it now?" with **Run it now** and **Discard**. A message you run tells the Helmsman when you sent it.
 - **Each message is sent once.** If Slack delivers a message twice, the second copy does nothing.
 - **Send one message at a time in a thread.** A reply sent while the Helmsman is still answering is not sent, and the app says so.
-- **The answer arrives whenever it is ready.** The thread waits for it with no time limit, and you do not need to reply to get it.
+- **The answer arrives whenever it is ready.** The thread waits for it with no time limit, and you do not need to reply to get it. When the app cannot read Aflow for several minutes, the thread stops waiting and says so. A reply in the thread then looks again, and the answer comes there.
 - **The thread follows the Helmsman as it works.** Each note the Helmsman writes while it works arrives as a message of its own. When it starts work that runs at Aflow, such as a workflow run, the thread says so once.
 - **When Aflow could not be reached,** the app says the Helmsman did not get your message, and you can send it again. When the app cannot tell whether it arrived, it says so. Check the conversation at Aflow before you send it again.
 - **Messages sent while the app is not running are not recovered.**

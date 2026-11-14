@@ -24,11 +24,14 @@ import {
   LATE_DISCARD_ACTION,
   LATE_QUESTION,
   LATE_RUN_ACTION,
+  LOOKING_AGAIN,
   MAYBE_SENT,
   MOVED_ON,
   NOT_THE_KEY_OWNER,
   STILL_ANSWERING,
   WAITS_AT_AFLOW,
+  WATCH_READ_FAILURE_LIMIT,
+  WATCH_STOPPED,
   WORK_RUNNING,
   relayed,
   type ConversationResult,
@@ -736,6 +739,104 @@ describe('a turn the thread follows to its end', () => {
     expect(store.threadAt(status.channel, status.ts)?.status).toBe('ended');
     const reply = await send(directMessage(OPERATOR, 'hello?', NOW, { threadTs: status.ts }));
     expect(reply.outcome).toBe('ended');
+  });
+});
+
+describe('a watch whose reads keep failing', () => {
+  const texts = () => slack.posts.map((post) => post.text);
+  const unreachable = {
+    ok: false as const,
+    status: 0,
+    error: 'UNREACHABLE',
+    message: 'Aflow did not answer: connect ECONNREFUSED.',
+    retryable: true,
+    outcomeUnknown: false,
+  };
+
+  /** An app whose reads fail while `down()` is true, and that records each wait. */
+  function flaky(down: () => boolean, waits: number[] = []): Conversations {
+    const api = deps().api;
+    return new Conversations({
+      store,
+      slack,
+      api: {
+        ...api,
+        latestEvents: (spaceId, sessionId) =>
+          down() ? Promise.resolve(unreachable) : api.latestEvents(spaceId, sessionId),
+      },
+      aflowUserId: OWNER,
+      now: () => NOW,
+      pollMs: 2_000,
+      sleep: (ms) => {
+        waits.push(ms);
+        return Promise.resolve();
+      },
+    });
+  }
+
+  it('backs off, then stops, says so, and leaves the thread open to a reply', async () => {
+    const status = directMessage(OPERATOR, 'status?', NOW);
+    aflow.holdAnswers = true;
+    const waits: number[] = [];
+    const app = flaky(() => true, waits);
+
+    const started = await answerInbound(status, { ...deps(), conversations: app });
+    const watched = 'watching' in started ? await started.watching : undefined;
+
+    expect(watched).toBe('stopped');
+    expect(waits).toEqual([4_000, 8_000, 16_000, 32_000, 60_000, 60_000, 60_000, 60_000, 60_000]);
+    expect(texts()).toEqual([WATCH_STOPPED]);
+    expect(store.threadAt(status.channel, status.ts)?.status).toBe('unread');
+
+    // Aflow answers again, and a reply watches the thread again rather than send.
+    aflow.answerHeld();
+    const reply = await answerInbound(
+      directMessage(OPERATOR, 'are you there?', NOW, { threadTs: status.ts }),
+      deps(),
+    );
+    expect(reply.outcome).toBe('busy');
+    if ('watching' in reply) expect(await reply.watching).toBe('answered');
+
+    expect(texts()).toEqual([WATCH_STOPPED, LOOKING_AGAIN, 'The Helmsman answers: status?']);
+    expect(aflow.resumes).toEqual([]);
+    aflow.holdAnswers = false;
+    expect(
+      (await send(directMessage(OPERATOR, 'go on', NOW, { threadTs: status.ts }))).outcome,
+    ).toBe('continued');
+  });
+
+  it('counts only failed reads in a row', async () => {
+    const status = directMessage(OPERATOR, 'status?', NOW);
+    aflow.holdAnswers = true;
+    let reads = 0;
+    const waits: number[] = [];
+    // Every tenth read succeeds, so no run of failures reaches the limit.
+    const app = flaky(() => {
+      reads += 1;
+      if (reads === 3 * WATCH_READ_FAILURE_LIMIT - 1) aflow.answerHeld();
+      return reads % WATCH_READ_FAILURE_LIMIT !== 0;
+    }, waits);
+    const started = await answerInbound(status, { ...deps(), conversations: app });
+    const watched = 'watching' in started ? await started.watching : undefined;
+
+    expect(watched).toBe('answered');
+    expect(texts()).toEqual(['The Helmsman answers: status?']);
+    expect(waits).toContain(2_000);
+  });
+
+  it('is watched again after a restart', async () => {
+    const status = directMessage(OPERATOR, 'status?', NOW);
+    aflow.holdAnswers = true;
+    const started = await answerInbound(status, { ...deps(), conversations: flaky(() => true) });
+    if ('watching' in started) expect(await started.watching).toBe('stopped');
+    aflow.answerHeld();
+
+    store = ChannelStore.open(storePath, NOW);
+    const restarted = newConversations();
+    expect(await Promise.all(restarted.resumeWatching())).toEqual(['answered']);
+
+    expect(texts()).toEqual([WATCH_STOPPED, 'The Helmsman answers: status?']);
+    expect(store.threadAt(status.channel, status.ts)?.status).toBe('waiting');
   });
 });
 

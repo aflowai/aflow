@@ -141,9 +141,11 @@ export const ThreadRecordSchema = z.object({
   spaceId: z.string().min(1),
   /**
    * `answering` while the app waits for the Helmsman's reply, `waiting` once it
-   * paused for the operator, `ended` once the session finished.
+   * paused for the operator, `ended` once the session finished. `unread` once
+   * the watch stopped on reads that kept failing, until a reply or a restart
+   * watches the thread again.
    */
-  status: z.enum(['answering', 'waiting', 'ended']),
+  status: z.enum(['answering', 'waiting', 'unread', 'ended']),
   /**
    * The paused step the last `SessionPaused` named, which a reply resumes.
    * Null while the Helmsman answers, or when the app does not know the pause.
@@ -483,9 +485,11 @@ export class ChannelStore {
     this.persist();
   }
 
-  /** Threads whose answer the app was waiting on, so a restart watches them again. */
-  threadsAnswering(): ThreadRecord[] {
-    return this.data.threads.filter((thread) => thread.status === 'answering');
+  /** Threads whose answer the app was waiting on or could not read, so a restart watches them again. */
+  threadsToWatch(): ThreadRecord[] {
+    return this.data.threads.filter(
+      (thread) => thread.status === 'answering' || thread.status === 'unread',
+    );
   }
 
   private prune(now: Date): void {
