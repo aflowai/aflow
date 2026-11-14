@@ -806,6 +806,12 @@ async function assemble(
 
 const opener = { turn: 0, messages: [textMessage('user', 'Merge the open pull request')] };
 
+/** The request that starts the current run, so the exchanges before it belong to a finished one. */
+const nextRequest = (turn: number) => ({
+  turn,
+  messages: [textMessage('user', 'Now close the stale ones')],
+});
+
 describe('ConversationStateStore.assembleRequest — observations', () => {
   it('sends turn N+1 the same bytes as turn N for every message before the newly reduced one', async () => {
     const turnN = [
@@ -877,6 +883,7 @@ describe('ConversationStateStore.assembleRequest — observations', () => {
     }
     const outline = outlineOf(BROWSER_OUTLINE_DEFAULT_CHARS);
     turns.push({ turn: 8, messages: call('ob08', ACT, actOutput('pg_2', 8, { outline })) });
+    turns.push(nextRequest(9));
     turns.sort((a, b) => a.turn - b.turn);
     const { store } = await assemble(turns, 20);
     const result = await store.clearUnderPressure({
@@ -899,9 +906,10 @@ describe('ConversationStateStore.assembleRequest — observations', () => {
       opener,
       { turn: 1, messages: call('a1', ACT, actOutput('pg_1', 1, { outline })) },
       { turn: 2, messages: call('a2', ACT, actOutput('pg_1', 2, { outline })) },
+      nextRequest(3),
     ];
     const atoms = atomsOf(turns);
-    const { store } = await assemble(turns, 9);
+    const { store } = await assemble(turns, 12);
     const byId = (list: AiMessageAtomV1[]) => new Map(list.map((a) => [a.atomId, a]));
     const hydratedById = byId(atoms);
     const sentById = byId(atomsAsSent(atoms));
@@ -927,13 +935,24 @@ describe('ConversationStateStore.assembleRequest — observations', () => {
         outline.length / 4,
     );
 
-    const forced = await store.forceClearExcess({
-      excessAtoms: 0,
-      excessTokens: 1,
+    // Sent as a receipt, a1 is under the size threshold, so pressure clearing
+    // never stubs it: it takes a2, the full outline, instead.
+    expect(estimate.removedTokens).toBeLessThan(RETENTION_POLICY.largeResultMinTokens);
+    const a2 = {
+      key: 'a2',
+      atomRefs: store.getState().history.atoms.filter((a) => a.turnNumber === 2),
+      turns: new Set([2]),
+      hasToolResult: true,
+      assistantAtom: hydratedById.get('atom-2-0')!,
+    };
+    const a2Estimate = estimateExchangeClearingTokens(a2, hydratedById, sentById, noteOptions);
+    const cleared = await store.clearUnderPressure({
+      pressureTokens: 10_000_000,
+      workingBudget: 10_000,
       availableReadOpId: MEMORY_READ_OPERATION_ID,
     });
-    expect(store.getState().clearing?.clearedExchanges).toEqual(['a1']);
-    expect(forced?.estimatedTokensFreed).toBe(Math.max(0, estimate.netSavings));
+    expect(store.getState().clearing?.clearedExchanges).toEqual(['a2']);
+    expect(cleared?.estimatedTokensFreed).toBe(a2Estimate.netSavings);
   });
 });
 
@@ -979,6 +998,7 @@ describe('ConversationStateStore.clearUnderPressure — a cleared look still rep
     { turn: 1, messages: call('a1', ACT, actOutput('pg_1', 1, { outline })) },
     { turn: 2, messages: call('a2', ACT, actOutput('pg_1', 2, { outline })) },
     { turn: 3, messages: call('a3', ...newest) },
+    nextRequest(4),
   ];
   const sentAs = (messages: AiMessageV1[], toolCallId: string) =>
     JSON.stringify(messages.find((m) => m.toolCallId === toolCallId));
@@ -990,7 +1010,7 @@ describe('ConversationStateStore.clearUnderPressure — a cleared look still rep
     );
 
   async function clearNewest(newest: [string, Output]) {
-    const store = storeKeeping(atomsOf(looks(newest)), 8);
+    const store = storeKeeping(atomsOf(looks(newest)), 13);
     const before = await store.assembleRequest('sys', []);
     const cleared = await store.clearUnderPressure({
       pressureTokens: 5_600,
@@ -1074,8 +1094,9 @@ describe('ConversationStateStore.clearUnderPressure — a working-budget clearin
         { turn: 2, messages: call('a2', ACT, actOutput('pg_1', 2, { outline })) },
         { turn: 3, messages: call('a3', ACT, actOutput('pg_2', 3, { outline })) },
         { turn: 6, messages: call('a6', ACT, actOutput('pg_1', 6, { outline })) },
+        nextRequest(7),
       ]),
-      8,
+      14,
     );
     const sentAs = (messages: AiMessageV1[], toolCallId: string) =>
       JSON.stringify(messages.find((m) => m.toolCallId === toolCallId));

@@ -17,6 +17,7 @@ import type {
   StepExecutionId,
   RoomExchangeEntry,
   RoomSpeaker,
+  AiUserInputOrigin,
 } from '@aflow/schemas';
 import {
   type AiClearingStateV1,
@@ -70,11 +71,12 @@ import {
   type Exchange,
   type ResurrectionDetection,
   PROTECTION_CLASS,
+  clearableExchanges,
+  hardBudgetClearableExchanges,
   exchangeKeyForAtom,
   exchangeProtectionClass,
   earliestCreatedAtMs,
   estimateExchangeClearingTokens,
-  estimateExchangeNetTokenSavings,
   clearedExchangeNoteMessage,
   clearedCallEntries,
   detectResurrections,
@@ -111,6 +113,8 @@ export interface NewUserInput {
   createdAtMs: number;
   /** Who said it, when a person did. */
   author?: RoomSpeaker | undefined;
+  /** Absent for a direct request, the only input that starts a run (§4.10). */
+  origin?: AiUserInputOrigin | undefined;
 }
 
 /**
@@ -386,7 +390,7 @@ export class ConversationStateStore {
     if (this.state.seenSourceIds[sourceId]) return; // Already seen
 
     const message = textMessage('user', attributeToSpeaker(input.text, input.author));
-    const atom = this.createAtom('user_input', sourceId, message);
+    const atom = this.createAtom('user_input', sourceId, message, input.origin);
     this.pendingAtoms.push(atom);
     this.state.seenSourceIds[sourceId] = true;
   }
@@ -406,7 +410,7 @@ export class ConversationStateStore {
       if (this.state.seenSourceIds[sourceId]) continue;
 
       const message = textMessage('user', attributeToSpeaker(entry.body, entry));
-      const atom = this.createAtom('user_input', sourceId, message);
+      const atom = this.createAtom('user_input', sourceId, message, 'room_message');
       this.pendingAtoms.push(atom);
       this.state.seenSourceIds[sourceId] = true;
     }
@@ -755,6 +759,7 @@ export class ConversationStateStore {
           ref: batchRef,
           role: atom.role,
           sourceKind: atom.sourceKind,
+          ...(atom.inputOrigin !== undefined ? { inputOrigin: atom.inputOrigin } : {}),
           hash: contentHash(serialized),
           createdAtMs: atom.createdAtMs,
           ...(atom.turnNumber !== undefined ? { turnNumber: atom.turnNumber } : {}),
@@ -799,7 +804,6 @@ export class ConversationStateStore {
     if (pressureTokens / workingBudget <= RETENTION_POLICY.clearHighWater) return undefined;
 
     const noteOptions: ClearNoteOptions = { availableReadOpId };
-    const currentTurn = this.state.turnNumber; // already incremented by storeTurn()
     const hydratedById = this.hydratedAtomsById();
     const sentById = this.sentAtomsById();
     const exchanges = this.groupExchanges(hydratedById);
@@ -816,10 +820,6 @@ export class ConversationStateStore {
     }
     const resurrectedKeys = new Set(this.state.clearing?.resurrectedExchanges ?? []);
 
-    // Idempotency guard — never re-archive an already-cleared exchange.
-    const alreadyClearedExchanges = new Set<string>(this.state.clearing?.clearedExchanges ?? []);
-    const pinned = this.pinnedAtomIds();
-
     // §4.9: a note without a working re-read pointer protects its exchange one
     // class harder — clearing is more expensive when re-access is not teachable.
     const degradeBoost = availableReadOpId !== undefined ? 0 : 1;
@@ -830,15 +830,14 @@ export class ConversationStateStore {
       netSavings: number;
       newestTurn: number;
     }> = [];
-    for (const ex of exchanges.values()) {
-      if (!ex.hasToolResult) continue;
-      if (alreadyClearedExchanges.has(ex.key)) continue;
-      if (ex.atomRefs.some((a) => pinned.has(a.atomId))) continue;
-
-      // Tier-1 verbatim recency: retain the whole exchange if any part is recent.
-      const turns = [...ex.turns];
-      if (turns.some((tn) => currentTurn - tn <= RETENTION_POLICY.keepRecentTurns)) continue;
-
+    const clearable = clearableExchanges(exchanges.values(), {
+      atoms: this.state.history.atoms,
+      currentTurn: this.state.turnNumber, // already incremented by storeTurn()
+      pinned: this.pinnedAtomIds(),
+      alreadyCleared: new Set(this.state.clearing?.clearedExchanges ?? []),
+      sentById,
+    });
+    for (const ex of clearable) {
       const { noteTokens, netSavings } = estimateExchangeClearingTokens(
         ex,
         hydratedById,
@@ -856,7 +855,7 @@ export class ConversationStateStore {
               PROTECTION_CLASS.resurrected,
             ),
         netSavings,
-        newestTurn: Math.max(...turns),
+        newestTurn: Math.max(...ex.turns),
       });
     }
     if (candidates.length === 0) return await this.persistDetectionOnly(detection);
@@ -908,46 +907,47 @@ export class ConversationStateStore {
     };
   }
 
+  /**
+   * The hard-budget pass (§4.7): once compaction leaves the prompt over the
+   * hard budget, it clears any unpinned exchange oldest first until the saving
+   * covers the excess. The floor, the current run and the size threshold do
+   * not bind it, because the request must fit. The atom count never drives it.
+   */
   async forceClearExcess(target: {
-    excessAtoms: number;
     excessTokens: number;
     /** §4.9 honest degrade — the read op on this turn's tool surface, if any. */
     availableReadOpId: string | undefined;
   }): Promise<(ClearExchangesResult & { estimatedTokensFreed: number }) | undefined> {
-    if (target.excessAtoms <= 0 && target.excessTokens <= 0) return undefined;
+    if (target.excessTokens <= 0) return undefined;
 
     const noteOptions: ClearNoteOptions = { availableReadOpId: target.availableReadOpId };
     const hydratedById = this.hydratedAtomsById();
     const sentById = this.sentAtomsById();
     const exchanges = this.groupExchanges(hydratedById);
-    const alreadyClearedExchanges = new Set<string>(this.state.clearing?.clearedExchanges ?? []);
-    const pinned = this.pinnedAtomIds();
 
-    const candidates = [...exchanges.values()]
-      .filter(
-        (ex) =>
-          ex.hasToolResult &&
-          !alreadyClearedExchanges.has(ex.key) &&
-          !ex.atomRefs.some((a) => pinned.has(a.atomId)),
-      )
+    const candidates = hardBudgetClearableExchanges(exchanges.values(), {
+      pinned: this.pinnedAtomIds(),
+      alreadyCleared: new Set(this.state.clearing?.clearedExchanges ?? []),
+    })
+      .map((ex) => ({
+        ex,
+        estimate: estimateExchangeClearingTokens(ex, hydratedById, sentById, noteOptions),
+      }))
+      .filter(({ estimate }) => estimate.netSavings > 0)
       .sort((a, b) => {
-        const newestA = Math.max(...a.turns);
-        const newestB = Math.max(...b.turns);
+        const newestA = Math.max(...a.ex.turns);
+        const newestB = Math.max(...b.ex.turns);
         if (newestA !== newestB) return newestA - newestB;
-        return earliestCreatedAtMs(a) - earliestCreatedAtMs(b);
+        return earliestCreatedAtMs(a.ex) - earliestCreatedAtMs(b.ex);
       });
 
     // §4.3: the bound is re-evaluated after each forced exchange.
     const selected: Exchange[] = [];
-    let atomsFreed = 0;
     let tokensFreed = 0;
-    for (const ex of candidates) {
-      const atomsDone = target.excessAtoms <= 0 || atomsFreed >= target.excessAtoms;
-      const tokensDone = target.excessTokens <= 0 || tokensFreed >= target.excessTokens;
-      if (atomsDone && tokensDone) break;
+    for (const { ex, estimate } of candidates) {
+      if (tokensFreed >= target.excessTokens) break;
       selected.push(ex);
-      atomsFreed += ex.atomRefs.length - 1; // one note replaces the whole exchange
-      tokensFreed += estimateExchangeNetTokenSavings(ex, hydratedById, sentById, noteOptions);
+      tokensFreed += estimate.netSavings;
     }
 
     if (selected.length === 0) return undefined;
@@ -1175,6 +1175,7 @@ export class ConversationStateStore {
       'user_input' | 'assistant_turn' | 'tool_result' | 'cleared_summary' | 'compaction_restore',
     sourceId: string,
     message: AiMessageV1,
+    inputOrigin?: AiUserInputOrigin,
   ): AiMessageAtomV1 {
     return {
       schemaVersion: 1,
@@ -1182,6 +1183,7 @@ export class ConversationStateStore {
       role: message.role,
       sourceId,
       sourceKind,
+      ...(inputOrigin !== undefined ? { inputOrigin } : {}),
       message,
       createdAtMs: Date.now(),
       ...(this.currentTurnNumber !== undefined ? { turnNumber: this.currentTurnNumber } : {}),
