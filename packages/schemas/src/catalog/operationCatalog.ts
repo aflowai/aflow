@@ -112,6 +112,26 @@ export interface OperationRegistration {
    * only shape information the model has for that argument.
    */
   agentCollapsedFields?: Record<string, string | Record<string, unknown>>;
+  /**
+   * The stored target one call of this read operation reads, for the
+   * same-target read detector. Each key names one part of the target. Its
+   * value lists the dotted argument paths that may carry that part, first
+   * match wins, so a flat and a nested spelling of one target agree.
+   *
+   * Every other argument says how the target is read: a `jsonPath`, a `view`
+   * or a version. Reads of one target count together whatever those say. The
+   * identical-call detector compares every argument, so it cannot see them.
+   * Absent means the operation reads no stored target.
+   */
+  readTargetArgs?: Readonly<Record<string, readonly string[]>>;
+  /**
+   * The arguments that read one window of the target, such as a byte range.
+   * A call carrying any of them pages the target, so the same-target read
+   * detector counts the pages of one selection once, and each new selection
+   * again. Name only arguments that page: one that caps a read's size pages
+   * nothing. A repeat of one window is still an identical call.
+   */
+  readWindowArgs?: readonly string[];
 
   /** Idempotency classification for retry/agent reasoning */
   idempotency: IdempotencyKind;
@@ -269,6 +289,10 @@ export interface OperationDescriptor {
   internalFields?: { input?: string[]; output?: string[] };
   /** See `OperationDescriptor.agentCollapsedFields`. */
   agentCollapsedFields?: Record<string, string | Record<string, unknown>>;
+  /** See `OperationRegistration.readTargetArgs`. */
+  readTargetArgs?: Readonly<Record<string, readonly string[]>>;
+  /** See `OperationRegistration.readWindowArgs`. */
+  readWindowArgs?: readonly string[];
   /** Idempotency classification */
   idempotency: IdempotencyKind;
   /** Usage hints */

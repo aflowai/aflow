@@ -332,6 +332,39 @@ describe('resumeRun refuses an input that maps to nothing', () => {
     }
   });
 
+  it("clears both loop rules' windows and warnings, and the failure counters, on resume", async () => {
+    pausedAt(chatContract);
+    const loopVars = [
+      `ai.agent.toolFailures.${AGENT_STEP}`,
+      `ai.agent.recentCallSignatures.${AGENT_STEP}`,
+      `ai.agent.recentReadTargets.${AGENT_STEP}`,
+      `ai.agent.loopWarning.${AGENT_STEP}`,
+      `ai.agent.sameTargetWarning.${AGENT_STEP}`,
+    ];
+    const kept = 'topic';
+    const variables = Object.fromEntries(
+      [...loopVars, kept].map((key) => [key, { ref: { kind: 'inline', value: ['x'] } }]),
+    );
+    mockGetSessionStateSafe.mockResolvedValue({
+      ok: true,
+      state: {
+        status: 'PAUSED',
+        currentStepExecutionId: STEP,
+        pauseType: 'user_input',
+        requestedInputRef: PAUSE_REF,
+        runtimeState: { variables, version: 1, updatedAtMs: 0 },
+      },
+    });
+
+    await expect(resume({})).resolves.toEqual({ status: 'RUNNING' });
+    const updates = mockAtomicCompleteStep.mock.calls[0]?.[3] as {
+      runtimeState?: { variables: Record<string, unknown> };
+    };
+    const after = Object.keys(updates.runtimeState?.variables ?? {});
+    for (const key of loopVars) expect(after).not.toContain(key);
+    expect(after).toContain(kept);
+  });
+
   it("proceeds where the input is the paused step's answer itself, which no variable maps", async () => {
     pausedAt(undefined, 'ask-1');
     await expect(resume({ decision: 'approved' })).resolves.toEqual({ status: 'RUNNING' });

@@ -589,6 +589,15 @@ describe('buildWorkflowRunResult — tasks that did not stop the run', () => {
       'port [redacted] refused after 142 tries {"msg":"port [redacted] closed","code":142,"port":"[redacted]"}',
     );
   });
+
+  it('redacts a short secret that keys a JSON object but leaves longer keys whole', async () => {
+    expect(
+      await failedCheckDetail({ env: 'dev' }, 'refused {"dev":{"development":1},"dev-1":true}'),
+    ).toBe('refused {"[redacted]":{"development":1},"[redacted]-1":true}');
+    expect(await failedCheckDetail({ port: 42 }, 'refused {"42":"open","142":"shut"}')).toBe(
+      'refused {"142":"shut","[redacted]":"open"}',
+    );
+  });
 });
 
 describe('buildWorkflowRunResult — a rejected approval gate', () => {
@@ -694,6 +703,27 @@ describe('buildWorkflowRunResult — outputs that did not decode', () => {
     expect(result?.primaryOutput).toBeUndefined();
     expect(result?.stoppedBy).toBeUndefined();
   });
+
+  it.each(['partial', 'full'] as const)(
+    'carries in the %s result a primary output read again after the first decode missed it',
+    async (scope) => {
+      OUTPUTS['ref:open-pr:serialised'] = JSON.stringify({
+        prUrl: 'https://github.com/o/r/pull/8',
+      });
+      const result = await resultOf(
+        run('completed', [
+          row('commit', 'succeeded', 1, { outputRef: 'ref:commit:applied' }),
+          row('check', 'succeeded', 2),
+          row('push', 'succeeded', 3),
+          row('open-pr', 'succeeded', 4, { outputRef: 'ref:open-pr:serialised' }),
+        ]),
+        scope,
+      );
+      expect(result?.output).toEqual({ prUrl: 'https://github.com/o/r/pull/8' });
+      expect(result?.primaryOutput).toBe('prUrl');
+      expect(result?.stoppedBy).toBeUndefined();
+    },
+  );
 
   it('redacts a sensitive value read again from an output the first decode missed', async () => {
     OUTPUTS['ref:commit:serialised'] = JSON.stringify({ state: 'applied', token: 'tok-93a1' });

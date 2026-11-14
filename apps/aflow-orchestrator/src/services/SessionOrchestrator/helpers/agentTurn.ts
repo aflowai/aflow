@@ -68,6 +68,7 @@ import type { SpaceContext, EntityDirectives, DirectiveCapabilityDiscovery } fro
 import type { ToolResultSummary } from '../types.js';
 import { resolveConfigRecursive } from './configResolution.js';
 import { readInlineVar } from './runtimeState.js';
+import { loopVarKeys } from '../handlers/callSignature.js';
 import { type ParsedApiGrant, type ParsedMcpGrant } from './capabilityGrantsToCatalog.js';
 import { getOrchestratorLogger, logOrchestratorError } from '../../../lib/orchestratorLogger.js';
 import { encodeTaskInput } from '../../../lib/encodeTaskInput.js';
@@ -1169,32 +1170,44 @@ export async function buildAgentTurnInput(
     content: agentRunContext,
   });
 
-  const loopWarning = readInlineVar(
-    runtimeState,
-    `ai.agent.loopWarning.${stepDef.stepId}`,
-    null as {
-      repeatedActionCount?: number;
-      repeatedActionSignature?: string;
-      severity?: 'warning' | 'final_warning';
-      message?: string;
-      instruction?: string;
-    } | null,
-  );
-  if (loopWarning) {
-    finalContextBlocks.splice(1, 0, {
-      key: 'LoopWarning',
-      cacheHint: 'volatile' as const,
-      content: {
-        severity: loopWarning.severity ?? 'warning',
-        repeatedActionCount: loopWarning.repeatedActionCount ?? 0,
-        ...(loopWarning.message ? { message: loopWarning.message } : {}),
-        ...(loopWarning.instruction ? { instruction: loopWarning.instruction } : {}),
-        ...(loopWarning.repeatedActionSignature
-          ? { repeatedActionSignature: loopWarning.repeatedActionSignature }
-          : {}),
+  // Each loop rule writes its own warning, so both can reach one turn.
+  const loopKeys = loopVarKeys(stepDef.stepId);
+  const loopWarningBlocks = [
+    { key: 'LoopWarning', varKey: loopKeys.identicalCallWarning },
+    { key: 'SameTargetReadWarning', varKey: loopKeys.sameTargetWarning },
+  ].flatMap(({ key, varKey }) => {
+    const loopWarning = readInlineVar(
+      runtimeState,
+      varKey,
+      null as {
+        rule?: string;
+        repeatedActionCount?: number;
+        repeatedActionSignature?: string;
+        severity?: 'warning' | 'final_warning';
+        message?: string;
+        instruction?: string;
+      } | null,
+    );
+    if (!loopWarning) return [];
+    return [
+      {
+        key,
+        cacheHint: 'volatile' as const,
+        content: {
+          ...(loopWarning.rule ? { rule: loopWarning.rule } : {}),
+          severity: loopWarning.severity ?? 'warning',
+          repeatedActionCount: loopWarning.repeatedActionCount ?? 0,
+          ...(loopWarning.message ? { message: loopWarning.message } : {}),
+          ...(loopWarning.instruction ? { instruction: loopWarning.instruction } : {}),
+          ...(loopWarning.repeatedActionSignature
+            ? { repeatedActionSignature: loopWarning.repeatedActionSignature }
+            : {}),
+        },
       },
-    });
-  }
+    ];
+  });
+  finalContextBlocks.splice(1, 0, ...loopWarningBlocks);
+  const afterLoopWarnings = 1 + loopWarningBlocks.length;
 
   const wasInterrupted = readInlineVar(
     runtimeState,
@@ -1202,7 +1215,7 @@ export async function buildAgentTurnInput(
     false,
   );
   if (wasInterrupted) {
-    finalContextBlocks.splice(loopWarning ? 2 : 1, 0, {
+    finalContextBlocks.splice(afterLoopWarnings, 0, {
       key: 'InterruptNotice',
       cacheHint: 'volatile' as const,
       content:
@@ -1492,7 +1505,7 @@ export async function buildAgentTurnInput(
     // no governance at all, so stripping it here would leave the turn with no
     // statement of the space's mandate anywhere.
     const governanceIsInThePrompt = role !== 'helmsman' || cyberneticOverrides !== undefined;
-    finalContextBlocks.splice(loopWarning ? 2 : 1, 0, {
+    finalContextBlocks.splice(afterLoopWarnings, 0, {
       key: 'SpaceContext',
       // The cached object keeps `space.directives` — the orchestrator reads it
       // for Helmsman detection, the discovery override and model resolution.

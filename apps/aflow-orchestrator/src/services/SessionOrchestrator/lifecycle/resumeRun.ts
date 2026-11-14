@@ -36,6 +36,7 @@ import type { SessionOrchestratorBindings } from '../lifecycle/context.js';
 import type { SessionStatus, SessionOrchestrator } from '../types.js';
 import { generateEventId } from '../helpers/ids.js';
 import { fetchAgentDef } from '../helpers/fetchAgentDef.js';
+import { loopVarKeys } from '../handlers/callSignature.js';
 import {
   extractUserMessageFromInput,
   agentChatInputVarId,
@@ -562,17 +563,12 @@ export function createResumeRun(bindings: SessionOrchestratorBindings) {
       const targetStepDef = agentDef.steps.find((s) => s.stepId === targetStepId);
       if (targetStepDef?.operation === 'ai.agent.turn') {
         const failuresVarKey = `ai.agent.toolFailures.${targetStepId}`;
-        const signaturesVarKey = `ai.agent.recentCallSignatures.${targetStepId}`;
-        const loopWarningVarKey = `ai.agent.loopWarning.${targetStepId}`;
-        const hadCounters =
-          runtimeState.variables[failuresVarKey] !== undefined ||
-          runtimeState.variables[signaturesVarKey] !== undefined ||
-          runtimeState.variables[loopWarningVarKey] !== undefined;
+        const counterVarKeys = [failuresVarKey, ...Object.values(loopVarKeys(targetStepId))];
+        const variablesBefore = runtimeState.variables;
+        const hadCounters = counterVarKeys.some((key) => variablesBefore[key] !== undefined);
         if (hadCounters) {
           const newVars = { ...runtimeState.variables };
-          delete newVars[failuresVarKey];
-          delete newVars[signaturesVarKey];
-          delete newVars[loopWarningVarKey];
+          for (const key of counterVarKeys) delete newVars[key];
           runtimeState = {
             ...runtimeState,
             variables: newVars,

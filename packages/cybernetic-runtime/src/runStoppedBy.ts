@@ -373,7 +373,8 @@ function redactText(textValue: string, spellings: SensitiveSpellings): string {
 
 /**
  * Replaces a node whose JSON text is a sensitive value. A string leaf is
- * text as well, so the text rule applies inside it.
+ * text as well, so the text rule applies inside it. An object key is text
+ * too, as a detail can key a map by a sensitive value.
  */
 function redactNode(node: unknown, spellings: SensitiveSpellings): unknown {
   const spelled = jsonText(node);
@@ -382,7 +383,10 @@ function redactNode(node: unknown, spellings: SensitiveSpellings): unknown {
   if (Array.isArray(node)) return node.map((child) => redactNode(child, spellings));
   if (node === null || typeof node !== 'object') return node;
   return Object.fromEntries(
-    Object.entries(node).map(([key, child]) => [key, redactNode(child, spellings)]),
+    Object.entries(node).map(([key, child]) => [
+      redactText(key, spellings),
+      redactNode(child, spellings),
+    ]),
   );
 }
 
@@ -462,18 +466,19 @@ export interface BuildStoppedByArgs {
   workflow: StoppingWorkflow;
   run: StoppingRun;
   primary: string;
-  /** The succeeded rows that promote outputs, which the result decoded. */
-  promotingRows: readonly WorkflowTaskRow[];
-  /** What decoding those rows returned. A row missing here, or without output, did not decode. */
+  /** What `rereadOutputs` returned for the succeeded rows that promote outputs. */
   taskResults: readonly PromotionTaskResult[];
+  /** The promoting rows whose output neither decode could read. */
+  undecoded: ReadonlySet<string>;
 }
 
 /**
- * Decodes again each promoting row whose output the result could not read,
- * through the loader that also reads inline and serialised outputs. A row
- * still unread is returned as undecoded.
+ * Decodes again each promoting row whose output the first decode could not
+ * read, through the loader that also reads inline and serialised outputs. A
+ * row still unread is returned as undecoded. The result's output and its
+ * stop both read what this returns, so a run cannot end with neither.
  */
-async function rereadOutputs(
+export async function rereadOutputs(
   payloadStore: PayloadStore,
   rows: readonly WorkflowTaskRow[],
   taskResults: readonly PromotionTaskResult[],
@@ -517,12 +522,7 @@ export async function buildStoppedBy(
   args: BuildStoppedByArgs,
 ): Promise<WorkflowRunResultStoppedBy | undefined> {
   const { payloadStore } = deps;
-  const { workflow, run, primary } = args;
-  const { results, undecoded } = await rereadOutputs(
-    payloadStore,
-    args.promotingRows,
-    args.taskResults,
-  );
+  const { workflow, run, primary, taskResults: results, undecoded } = args;
   if (producersOf(workflow, primary).some((taskId) => undecoded.has(taskId))) return undefined;
   const bag = resolvePromotedRunMetrics(workflow.tasks, results, workflow.stateVariables);
   if (bag[primary] !== undefined) return undefined;

@@ -174,7 +174,7 @@ async function applyHostPatch(ctx: ExecutorContext, policyPath: string): Promise
         input.commit.pushBase === undefined
           ? undefined
           : await resolvePushBase(binding.root, input.commit.pushBase);
-      const { apply, commit } = await commitPatchOnBranch(
+      const { apply, commit, remedy } = await commitPatchOnBranch(
         binding.root,
         diff,
         input.mode,
@@ -196,6 +196,7 @@ async function applyHostPatch(ctx: ExecutorContext, policyPath: string): Promise
         conflicts: apply.conflicts,
         ...(apply.detail !== undefined ? { detail: apply.detail } : {}),
         ...(commit !== undefined ? { commit } : {}),
+        ...(remedy !== undefined ? { remedy } : {}),
       });
     }
 

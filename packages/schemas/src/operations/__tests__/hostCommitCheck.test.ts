@@ -7,9 +7,9 @@ import {
   HOST_CHECKS_TIMEOUT_MAX_MS,
   HOST_CHECKS_TIMEOUT_MIN_MS,
   HostBindingBranchPolicySchema,
-  HostFilePatchOutputSchema,
   resolveBranchPolicy,
 } from '../host.js';
+import { HostFilePatchOutputSchema } from '../hostFilePatchOutput.js';
 import {
   HOST_CHECK_OUTPUT_TAIL_BYTES,
   HOST_CHECK_TAIL_BYTES,

@@ -763,6 +763,130 @@ describe('appending a patch to the branch it was made on', () => {
   }, 30_000);
 });
 
+describe('a conflict reports the remedy the refusal rules leave', () => {
+  /** With no patch, the call publishes the branch as it stands. */
+  async function patchCall(commit: Record<string, string>, patch?: string) {
+    const captured: Captured = {};
+    const result = await createHostPatchHandler(policyPath).execute(
+      contextFor({ bindingId: 'hb', ...(patch === undefined ? {} : { patch }), commit }, captured),
+    );
+    return { result, output: captured.output };
+  }
+
+  /** A branch off main whose one commit sets `a.txt`'s middle line. */
+  async function branchSetting(line: string): Promise<string> {
+    await git(root, 'checkout', '-q', '-b', 'feat/fix');
+    await writeFile(join(root, 'a.txt'), `one\n${line}\nthree\n`);
+    await git(root, 'commit', '-qam', 'on the branch');
+    await git(root, 'checkout', '-q', 'main');
+    return (await git(root, 'rev-parse', 'feat/fix')).trim();
+  }
+
+  it('reports `publish_as_it_stands` where the existing head holds the change, and that publication is taken', async () => {
+    const patch = await diffFor(async (d) => {
+      await writeFile(join(d, 'a.txt'), 'one\nFIXED\nthree\n');
+    });
+    const head = await branchSetting('FIXED');
+
+    const { result, output } = await patchCall(
+      { branch: 'feat/fix', baseSha: head, message: 'the fix' },
+      patch,
+    );
+    expect(result.status).toBe('SUCCEEDED');
+    expect(output?.['state']).toBe('conflict');
+    expect(output?.['remedy']).toEqual({
+      kind: 'publish_as_it_stands',
+      at: head,
+      branchExisted: true,
+    });
+    expect((await git(root, 'rev-parse', 'feat/fix')).trim()).toBe(head);
+
+    const again = await patchCall({ branch: 'feat/fix', baseSha: head });
+    expect(again.result.status).toBe('SUCCEEDED');
+    const commit = again.output?.['commit'] as Record<string, unknown>;
+    expect(commit['asItStands']).toBe(true);
+    expect(commit['sha']).toBe(head);
+  }, 30_000);
+
+  it('reports `fit_branch_head` where the existing head lacks the change, and another `baseSha` is refused as a stale base', async () => {
+    const madeAt = (await git(root, 'rev-parse', 'main')).trim();
+    const patch = await diffFor(async (d) => {
+      await writeFile(join(d, 'a.txt'), 'one\nFROM PATCH\nthree\n');
+    });
+    const head = await branchSetting('ON THE BRANCH');
+
+    const { output } = await patchCall(
+      { branch: 'feat/fix', baseSha: head, message: 'the fix' },
+      patch,
+    );
+    expect(output?.['state']).toBe('conflict');
+    expect(output?.['remedy']).toEqual({ kind: 'fit_branch_head', at: head, branchExisted: true });
+
+    // The commission's own base, not the branch's head: refused before any apply.
+    const elsewhere = await patchCall(
+      { branch: 'feat/fix', baseSha: madeAt, message: 'the fix' },
+      patch,
+    );
+    expect(elsewhere.result.status).toBe('FAILED');
+    expect(elsewhere.result.error?.message ?? '').toContain(`\`feat/fix\` is at \`${head}\``);
+    expect(elsewhere.result.error?.message ?? '').toContain('never merged onto a branch');
+    expect((await git(root, 'rev-parse', 'feat/fix')).trim()).toBe(head);
+  }, 30_000);
+
+  it('reports `nothing_to_commit` where a new branch would start at a commit holding the change, and no branch is there to publish as it stands', async () => {
+    const patch = await diffFor(async (d) => {
+      await writeFile(join(d, 'a.txt'), 'one\nEDITED\nthree\n');
+    });
+    await writeFile(join(root, 'a.txt'), 'one\nEDITED\nthree\n');
+    await git(root, 'commit', '-qam', 'the same edit');
+    const head = (await git(root, 'rev-parse', 'HEAD')).trim();
+
+    const { output } = await patchCall({ branch: 'aflow/new', message: 'the change' }, patch);
+    expect(output?.['state']).toBe('conflict');
+    expect(output?.['remedy']).toEqual({
+      kind: 'nothing_to_commit',
+      at: head,
+      branchExisted: false,
+    });
+    await expect(git(root, 'rev-parse', 'aflow/new')).rejects.toThrow();
+
+    const asItStands = await patchCall({ branch: 'aflow/new', baseSha: head });
+    expect(asItStands.result.status).toBe('FAILED');
+    expect(asItStands.result.error?.message ?? '').toContain('has no branch `aflow/new`');
+  }, 30_000);
+
+  it('reports `fit_another_base` where a new branch lacks the change, and a new branch at another `baseSha` is taken', async () => {
+    const madeAt = (await git(root, 'rev-parse', 'HEAD')).trim();
+    const patch = await diffFor(async (d) => {
+      await writeFile(join(d, 'a.txt'), 'one\nFROM PATCH\nthree\n');
+    });
+    await writeFile(join(root, 'a.txt'), 'one\nMOVED ON\nthree\n');
+    await git(root, 'commit', '-qam', 'operator edit');
+    const head = (await git(root, 'rev-parse', 'HEAD')).trim();
+
+    const { output } = await patchCall({ branch: 'aflow/new', message: 'the change' }, patch);
+    expect(output?.['state']).toBe('conflict');
+    expect(output?.['remedy']).toEqual({
+      kind: 'fit_another_base',
+      at: head,
+      branchExisted: false,
+    });
+
+    const asItStands = await patchCall({ branch: 'aflow/new', baseSha: head });
+    expect(asItStands.result.status).toBe('FAILED');
+    expect(asItStands.result.error?.message ?? '').toContain('has no branch `aflow/new`');
+
+    const atBase = await patchCall(
+      { branch: 'aflow/new', baseSha: madeAt, message: 'the change' },
+      patch,
+    );
+    expect(atBase.result.status).toBe('SUCCEEDED');
+    expect(atBase.output?.['state']).toBe('applied');
+    expect(atBase.output?.['remedy']).toBeUndefined();
+    expect((await git(root, 'rev-parse', 'aflow/new^')).trim()).toBe(madeAt);
+  }, 30_000);
+});
+
 describe('measuring what a push of the commit would add', () => {
   let origin: string;
 

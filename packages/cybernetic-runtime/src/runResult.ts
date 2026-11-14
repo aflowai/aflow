@@ -55,7 +55,7 @@ import { selectActiveLearningSet, resolveActiveSetBudget } from './activeLearnin
 import { loadSpaceDirectives } from './modelResolution.js';
 import { resolveSkillForWorkflow } from './skill.js';
 import { getCyberneticLogger } from './logger.js';
-import { buildStoppedBy } from './runStoppedBy.js';
+import { buildStoppedBy, rereadOutputs } from './runStoppedBy.js';
 import type { WorkflowRunDetail, WorkflowTaskRow } from './ledger/types.js';
 
 /**
@@ -296,6 +296,8 @@ export async function buildWorkflowRunResult(
       );
     }
   }
+  const reread = await rereadOutputs(payloadStore, rowsToDecode, taskResults);
+  taskResults = reread.results;
   const bag = resolvePromotedRunMetrics(workflow.tasks, taskResults, workflow.stateVariables);
   // Sensitive variables must not leave the server through ANY caller-facing
   // section — not just `output`. Score (`value`/`targetMet`) and outcome
@@ -363,8 +365,8 @@ export async function buildWorkflowRunResult(
           workflow,
           run,
           primary: declaration.primary,
-          promotingRows: rowsToDecode,
           taskResults,
+          undecoded: reread.undecoded,
         },
       );
       if (stoppedBy) result.stoppedBy = stoppedBy;
