@@ -117,7 +117,7 @@
     "eslint": "^9.39.2",
     "eslint-config-prettier": "^10.1.8",
     "lint-staged": "^16.4.0",
-    "prettier": "^3.9.10",
+    "prettier": "^3.10.1",
     "simple-git-hooks": "^2.14.0",
     "tsup": "^8.5.1",
     "tsx": "^4.23.15",
