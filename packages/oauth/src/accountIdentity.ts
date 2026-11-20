@@ -13,6 +13,10 @@ import type { AsMetadata } from './asMetadata.js';
  * `email` the provider's OIDC userinfo endpoint returns. A provider that
  * reports neither yields `null`, and the page then says "Connected" with no
  * account. Nothing is inferred from scopes, client ids or binding names.
+ *
+ * Both sources need the `openid` and `email` scopes. `startConsent` adds them
+ * through the issuer's `identityScopes`, so a connector that names only its API
+ * scopes, as Gmail does, still gets an account here.
  */
 export interface ReadAccountIdentityParams {
   /** The raw token endpoint response. */

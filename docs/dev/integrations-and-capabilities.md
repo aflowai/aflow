@@ -339,7 +339,11 @@ connector composes with Plan 218's `baseUrlTemplate` / `variableValues`.
   because the browser cannot resolve `API_BASE_URL`.
 - **Connected account.** `completeConsent` reads the account inside the
   exchange: the id token's `email` claim (its `aud` must name the client), then
-  the AS metadata's `userinfo_endpoint`. It writes `oauth_tokens.account_identity`
+  the AS metadata's `userinfo_endpoint`. Both need `openid` and `email`, so
+  `startConsent` adds the curated issuer's `identityScopes` to whatever the
+  binding requests (Google and Microsoft carry them, GitHub and Slack none).
+  The Gmail connector names only its Gmail scopes and gets them this way.
+  It writes `oauth_tokens.account_identity`
   (NULL when the provider reports none) and `connected_at`, which a refresh
   leaves alone. The API bindings list carries each OAuth-code binding's own
   token as `oauthConnection`, resolved through the binding's `ownerScope`, so the

@@ -254,6 +254,16 @@ export interface StartConsentResult {
 const DEFAULT_STATE_TTL_MS = 10 * 60 * 1000;
 
 /**
+ * The requested scopes plus the issuer's identity scopes, in that order, each
+ * once. Consent completion reads the account from what these make the provider
+ * report, so a binding naming only API scopes still records its account.
+ */
+export function withIdentityScopes(scopes: readonly string[], issuerKey: string): string[] {
+  const identity = getOAuthIssuer(issuerKey)?.identityScopes ?? [];
+  return [...new Set([...scopes, ...identity])];
+}
+
+/**
  * Start an OAuth 2.1 PKCE consent flow. Returns the authorization URL the
  * operator UI redirects the user to. Stores state in `oauth_state` keyed to
  * the pinned `(integration_kind, resource_key, owner_scope, owner_id)`.
@@ -289,7 +299,10 @@ export async function startConsent(params: StartConsentParams): Promise<StartCon
   const resource =
     params.resource ??
     (params.discovery ? extractUrlOrigin(params.discovery.serverUrl) : undefined);
-  const scopes = params.scopes ?? client.defaultScopes ?? prm?.prm.scopes_supported ?? [];
+  const scopes = withIdentityScopes(
+    params.scopes ?? client.defaultScopes ?? prm?.prm.scopes_supported ?? [],
+    target.issuerKey,
+  );
 
   // Persist state row BEFORE returning the URL — if the row write fails, the
   // user never gets a URL they could redeem.

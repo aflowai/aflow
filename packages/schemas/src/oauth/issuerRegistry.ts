@@ -20,6 +20,7 @@ export const OAUTH_ISSUER_REGISTRY: readonly OAuthIssuerDefinition[] = [
       endpointHosts: ['accounts.google.com', 'oauth2.googleapis.com'],
     },
     defaultScopes: ['openid', 'email', 'profile'],
+    identityScopes: ['openid', 'email'],
     incrementalAuth: true,
   },
   {
@@ -33,6 +34,8 @@ export const OAUTH_ISSUER_REGISTRY: readonly OAuthIssuerDefinition[] = [
       tokenEndpoint: 'https://github.com/login/oauth/access_token',
     },
     defaultScopes: ['read:user'],
+    // GitHub has no OIDC id token or userinfo endpoint, so consent adds nothing.
+    identityScopes: [],
     incrementalAuth: false,
   },
   {
@@ -47,6 +50,7 @@ export const OAUTH_ISSUER_REGISTRY: readonly OAuthIssuerDefinition[] = [
       endpointHosts: ['login.microsoftonline.com'],
     },
     defaultScopes: ['openid', 'email', 'profile', 'offline_access'],
+    identityScopes: ['openid', 'email'],
     incrementalAuth: true,
   },
   {
@@ -60,6 +64,9 @@ export const OAUTH_ISSUER_REGISTRY: readonly OAuthIssuerDefinition[] = [
       tokenEndpoint: 'https://slack.com/api/oauth.v2.access',
     },
     defaultScopes: [],
+    // Slack serves OIDC on a separate Sign in with Slack endpoint, not on the
+    // v2 authorize endpoint above, so consent adds nothing.
+    identityScopes: [],
     incrementalAuth: false,
   },
 ] as const;

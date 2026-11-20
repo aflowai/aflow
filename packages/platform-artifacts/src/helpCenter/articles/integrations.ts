@@ -257,7 +257,7 @@ An integration that signs in with an account is set up one of two ways:
 
 A missing or expired sign-in appears as a **Connect** card in the Workbench.
 
-The connection's card on **Integrations** reads **Not connected** before sign-in. Afterwards it reads **Connected as** the account, with the sign-in time and the number of scopes granted. A service that does not report the account shows **Connected** with the time.
+The connection's card on **Integrations** reads **Not connected** before sign-in. Afterwards it reads **Connected as** the account, with the sign-in time and the number of scopes granted. A service that does not report the account shows **Connected** with the time. A Google or Microsoft sign-in also asks to see your email address, so the card can name the account.
 
 ## Your own OAuth app
 

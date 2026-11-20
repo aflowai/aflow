@@ -28,6 +28,7 @@ const STATE_ROW = {
 };
 
 const executed: SQL[] = [];
+const insertedStates: Array<Record<string, unknown>> = [];
 
 vi.mock('@aflow/database', () => ({
   createTenantContext: (tenantId: string) => ({ tenantId }),
@@ -41,6 +42,12 @@ vi.mock('@aflow/database', () => ({
         return Promise.resolve([]);
       },
       delete: () => ({ where: () => Promise.resolve() }),
+      insert: () => ({
+        values: (row: Record<string, unknown>) => {
+          insertedStates.push(row);
+          return Promise.resolve();
+        },
+      }),
     }),
   oauthState: { state: 'state' },
   oauthTokens: {},
@@ -71,7 +78,14 @@ vi.mock('./asMetadata.js', () => ({
   discoverAsMetadata: () => Promise.resolve(GOOGLE_METADATA),
 }));
 
-const { completeConsent, generateStateToken } = await import('./tokenManager.js');
+const { completeConsent, generateStateToken, startConsent } = await import('./tokenManager.js');
+
+/** The scopes the curated Gmail connector names, and nothing else. */
+const GMAIL_CONNECTOR_SCOPES = [
+  'https://www.googleapis.com/auth/gmail.readonly',
+  'https://www.googleapis.com/auth/gmail.send',
+  'https://www.googleapis.com/auth/gmail.modify',
+];
 
 function idToken(claims: Record<string, unknown>): string {
   const part = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
@@ -118,6 +132,71 @@ async function complete(issuerKey: string, fetchImpl: typeof fetch) {
 
 afterEach(() => {
   executed.length = 0;
+  insertedStates.length = 0;
+});
+
+async function start(issuerKey: string, scopes: string[]) {
+  return startConsent({
+    tenantId: TENANT_ID,
+    spaceId: STATE_ROW.spaceId,
+    target: {
+      integrationKind: 'api',
+      resourceKey: 'gmail',
+      bindingId: 'gmail-default',
+      ownerScope: 'space',
+      ownerId: STATE_ROW.ownerId,
+      clientScope: 'tenant',
+      issuerKey,
+    },
+    scopes,
+    redirectUri: STATE_ROW.redirectUri,
+    db: {},
+  });
+}
+
+describe('startConsent requests the scopes the identity read needs', () => {
+  it("adds Google's openid and email to the Gmail connector's own scopes", async () => {
+    const result = await start('google', GMAIL_CONNECTOR_SCOPES);
+
+    const requested = new URL(result.authorizationUrl).searchParams.get('scope')?.split(' ');
+    expect(requested).toEqual([...GMAIL_CONNECTOR_SCOPES, 'openid', 'email']);
+    expect(insertedStates[0]?.['scopesJson']).toEqual(requested);
+  });
+
+  it('asks for each scope once when the binding already names it', async () => {
+    const result = await start('google', ['openid', 'email', 'profile']);
+
+    expect(new URL(result.authorizationUrl).searchParams.get('scope')).toBe('openid email profile');
+  });
+
+  it('adds nothing for an issuer without identity scopes', async () => {
+    const result = await start('github', ['read:user']);
+
+    expect(new URL(result.authorizationUrl).searchParams.get('scope')).toBe('read:user');
+  });
+});
+
+describe('the Gmail connector records its account', () => {
+  it('stores the email Google reports for a consent the connector started', async () => {
+    await start('google', GMAIL_CONNECTOR_SCOPES);
+    const requested = insertedStates[0]?.['scopesJson'] as string[];
+    // Google grants what consent asked for, and the openid scope adds an id token.
+    const fetchImpl = vi.fn(() =>
+      Promise.resolve(
+        jsonResponse({
+          access_token: 'access',
+          expires_in: 3600,
+          scope: requested.join(' '),
+          id_token: idToken({ aud: CLIENT_ID, email: 'operator@example.com' }),
+        }),
+      ),
+    );
+
+    const result = await complete('google', fetchImpl as unknown as typeof fetch);
+
+    expect(result.accountIdentity).toBe('operator@example.com');
+    expect(storedRow()['account_identity']).toBe('operator@example.com');
+  });
 });
 
 describe('completeConsent stores the account identity', () => {
