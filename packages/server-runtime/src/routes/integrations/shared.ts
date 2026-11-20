@@ -7,7 +7,7 @@ import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { FastifyInstance } from 'fastify';
 import { IntegrationHostPolicyError } from '@aflow/cybernetic-runtime';
 import { curatedIntegrationIcon } from '@aflow/platform-artifacts';
-import { BindingFulfillmentSchema } from '@aflow/schemas';
+import { BindingFulfillmentSchema, OAuthBindingConnectionSchema } from '@aflow/schemas';
 import { IconRefSchema, type IconRef } from '@aflow/schemas';
 
 export { collectCredentialKeys, findUnreferencedCredentialKeys } from '@aflow/cybernetic-runtime';
@@ -67,6 +67,12 @@ export const ApiBindingResponseSchema = z.object({
    * anything downstream of it.
    */
   fulfillment: BindingFulfillmentSchema,
+  /**
+   * The token an `oauth2_authorization_code` binding resolves for the caller,
+   * or null before consent. The list read carries it. Other auth types and
+   * other reads omit it.
+   */
+  oauthConnection: OAuthBindingConnectionSchema.nullable().optional(),
   enabled: z.boolean(),
   createdAt: z.string(),
   updatedAt: z.string(),

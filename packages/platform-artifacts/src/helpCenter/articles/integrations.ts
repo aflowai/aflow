@@ -35,6 +35,8 @@ Ask the Helmsman to connect a service. It drafts the API integration and propose
 - **Needs secret**: a secret has not been entered.
 - **Not connected**: no connection yet, or an account sign-in has not happened.
 
+A connection that signs in with an account shows its sign-in instead of a status. After sign-in it reads **Connected as** the account, the time of the sign-in and the number of scopes granted. A service that does not report the account shows **Connected** with the time.
+
 A write the agent makes through an API integration can wait for your approval first, depending on the space's **Write Policy**.`,
     editions: ['enterprise', 'community-local'],
     anchors: {
@@ -135,7 +137,7 @@ Every set, change and clear writes a security entry to the tenant's audit log. T
 
 ### 2. Allow the redirect URI on the corporate authorization server
 
-Sign-in returns to a callback address that ends in \`/v1/oauth/callback\`. Its origin depends on the edition.
+Sign-in returns to a callback address that ends in \`/v1/oauth/callback\`. **OAuth Apps** shows this deployment's address as **Redirect URI**, with a **Copy** button, on the page and in **Register app**. Its origin depends on the edition.
 
 On a local install:
 
@@ -255,9 +257,11 @@ An integration that signs in with an account is set up one of two ways:
 
 A missing or expired sign-in appears as a **Connect** card in the Workbench.
 
+The connection's card on **Integrations** reads **Not connected** before sign-in. Afterwards it reads **Connected as** the account, with the sign-in time and the number of scopes granted. A service that does not report the account shows **Connected** with the time.
+
 ## Your own OAuth app
 
-Sign-in uses the built-in OAuth app unless you register your own under **Tenant Admin → OAuth Apps** and choose it on the integration.`,
+Sign-in uses the built-in OAuth app unless you register your own under **Tenant Admin → OAuth Apps** and choose it on the integration. The provider's console must list the **Redirect URI** that **OAuth Apps** shows as an authorized redirect URI.`,
     editions: ['enterprise', 'community-local'],
     anchors: {
       routes: [

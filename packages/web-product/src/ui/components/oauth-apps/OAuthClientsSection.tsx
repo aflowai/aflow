@@ -20,6 +20,7 @@ import {
 import { getAllOAuthIssuers, getOAuthIssuer, type OAuthClientMeta } from '@aflow/schemas';
 import type { ApiError } from '../../lib/query-client.js';
 import type { TenantOAuthClientCreateInput } from '../../hooks/use-tenant-oauth-clients.js';
+import { RedirectUriNotice } from './RedirectUriNotice.js';
 
 // ---------------------------------------------------------------------------
 // OAuth Apps registration + list (Plan 185 §11)
@@ -62,6 +63,8 @@ export interface OAuthClientsSectionProps {
   title: string;
   description: string;
   clients: OAuthClientMeta[];
+  /** The server's OAuth callback URL; null until the list read returns it. */
+  redirectUri: string | null;
   /** Register a new client. Throws `ApiError` on failure. */
   onRegister: (input: TenantOAuthClientCreateInput) => Promise<unknown>;
   /** Rotate the stored secret for a client. */
@@ -74,6 +77,7 @@ export function OAuthClientsSection({
   title,
   description,
   clients,
+  redirectUri,
   onRegister,
   onRotateSecret,
   onDelete,
@@ -225,6 +229,8 @@ export function OAuthClientsSection({
           </Button>
         </Row>
 
+        {redirectUri && <RedirectUriNotice redirectUri={redirectUri} />}
+
         {sortedClients.length === 0 ? (
           <Card>
             <CardBody>
@@ -331,6 +337,8 @@ export function OAuthClientsSection({
         }
       >
         <Column gap="md">
+          {redirectUri && <RedirectUriNotice redirectUri={redirectUri} />}
+
           <Field>
             <Label required>Issuer</Label>
             <Select

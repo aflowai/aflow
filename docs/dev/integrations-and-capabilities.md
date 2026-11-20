@@ -334,7 +334,16 @@ connector composes with Plan 218's `baseUrlTemplate` / `variableValues`.
 - **Callback endpoint** is the single `GET /v1/oauth/callback` (handler
   dispatches by `oauth_state.integration_kind`); the redirect URI stays the one
   platform constant even for tenant/space apps (open-redirect guard — the
-  tenant/space registers _our_ callback in _their_ app).
+  tenant/space registers _our_ callback in _their_ app). Both OAuth Apps pages
+  show it: their list reads carry `redirectUri` from `resolveOAuthCallbackUrl()`,
+  because the browser cannot resolve `API_BASE_URL`.
+- **Connected account.** `completeConsent` reads the account inside the
+  exchange: the id token's `email` claim (its `aud` must name the client), then
+  the AS metadata's `userinfo_endpoint`. It writes `oauth_tokens.account_identity`
+  (NULL when the provider reports none) and `connected_at`, which a refresh
+  leaves alone. The API bindings list carries each OAuth-code binding's own
+  token as `oauthConnection`, resolved through the binding's `ownerScope`, so the
+  card states a space-owned token as well as a user-owned one.
 
 Spec: Plan 185.
 

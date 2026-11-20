@@ -24,6 +24,7 @@ import { TenantOAuthPolicyEditor } from '../components/oauth-apps/TenantOAuthPol
 export function TenantOAuthAppsPage() {
   const {
     clients,
+    redirectUri,
     policy,
     isLoading,
     error,
@@ -73,6 +74,7 @@ export function TenantOAuthAppsPage() {
           title="Tenant OAuth apps"
           description="Register your organization's own OAuth applications. New OAuth bindings set to a tenant app will use these client credentials."
           clients={clients}
+          redirectUri={redirectUri}
           onRegister={(input) => createClient.mutateAsync(input)}
           onRotateSecret={(input) =>
             rotateSecret.mutateAsync({ id: input.id, body: { clientSecret: input.clientSecret } })

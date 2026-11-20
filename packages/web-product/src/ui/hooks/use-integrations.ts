@@ -2,7 +2,7 @@
 
 import { useCallback, useMemo } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import type { BindingFulfillment, IconRef } from '@aflow/schemas';
+import type { BindingFulfillment, IconRef, OAuthBindingConnection } from '@aflow/schemas';
 import { useApi } from '../components/providers.js';
 import { useApiQuery } from './useApiQuery.js';
 import { apiErrorFromResponse } from '../lib/query-client.js';
@@ -43,6 +43,8 @@ export interface ApiBindingSummary {
   egressPolicy: Record<string, unknown>;
   variableValues?: Record<string, string>;
   fulfillment: BindingFulfillment;
+  /** The binding's own OAuth token — null before consent, absent for other auth types. */
+  oauthConnection?: OAuthBindingConnection | null;
   enabled: boolean;
   createdAt: string;
   updatedAt: string;

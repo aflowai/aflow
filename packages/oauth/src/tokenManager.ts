@@ -17,6 +17,7 @@ import {
 } from '@aflow/network-safety';
 import { discoverPRM, type PrmDiscoveryResult } from './prmDiscovery.js';
 import { discoverAsMetadata, type AsMetadata } from './asMetadata.js';
+import { readAccountIdentity } from './accountIdentity.js';
 import { resolveOAuthClient, type OAuthClientScope } from './clientResolution.js';
 import type { OAuthOwnerScope } from './resolver.js';
 
@@ -383,6 +384,8 @@ export interface CompleteConsentResult {
   ownerId: string;
   expiresAt: Date;
   scopes: string[];
+  /** The account the provider reported, or null when it reported none. */
+  accountIdentity: string | null;
 }
 
 interface TokenResponse {
@@ -391,6 +394,8 @@ interface TokenResponse {
   expires_in?: number;
   refresh_token?: string;
   scope?: string;
+  /** OIDC id token, present when `openid` was granted. */
+  id_token?: string;
 }
 
 export interface PostToTokenEndpointParams {
@@ -522,6 +527,14 @@ export async function completeConsent(
     ? token.scope.split(/\s+/).filter(Boolean)
     : stateRow.scopesJson;
 
+  const accountIdentity = await readAccountIdentity({
+    token,
+    asMetadata,
+    clientId: client.clientId,
+    ...(ctx.discovery ? { privateNetwork: ctx.discovery.privateNetwork } : {}),
+    ...(params.fetchImpl ? { fetchImpl: params.fetchImpl } : {}),
+  });
+
   const accessTokenEnc = await encryptCredentialEnvelope(token.access_token);
   const refreshTokenEnc = token.refresh_token
     ? await encryptCredentialEnvelope(token.refresh_token)
@@ -537,7 +550,8 @@ export async function completeConsent(
         INSERT INTO oauth_tokens (
           integration_kind, resource_key, owner_scope, owner_id,
           access_token_enc, refresh_token_enc, token_type,
-          scopes_json, audience, client_id_used, expires_at, obtained_at, updated_at
+          scopes_json, audience, client_id_used, account_identity,
+          expires_at, obtained_at, connected_at, updated_at
         )
         VALUES (
           ${stateRow.integrationKind},
@@ -550,7 +564,9 @@ export async function completeConsent(
           ${JSON.stringify(grantedScopes)}::jsonb,
           ${stateRow.resource ?? null},
           ${client.clientId},
+          ${accountIdentity},
           ${expiresAt.toISOString()}::timestamptz,
+          NOW(),
           NOW(),
           NOW()
         )
@@ -561,8 +577,10 @@ export async function completeConsent(
           scopes_json = EXCLUDED.scopes_json,
           audience = EXCLUDED.audience,
           client_id_used = EXCLUDED.client_id_used,
+          account_identity = EXCLUDED.account_identity,
           expires_at = EXCLUDED.expires_at,
           obtained_at = EXCLUDED.obtained_at,
+          connected_at = EXCLUDED.connected_at,
           updated_at = NOW()
       `);
       // Single-use: delete the state row.
@@ -579,6 +597,7 @@ export async function completeConsent(
     ownerId: stateRow.ownerId,
     expiresAt,
     scopes: grantedScopes,
+    accountIdentity,
   };
 }
 

@@ -1,7 +1,6 @@
 'use client';
 
 import { useCallback, useState, type ReactNode } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
 import {
   Badge,
   Button,
@@ -17,17 +16,14 @@ import {
   Text,
   Tooltip,
 } from '@aflow/design-system';
-import { getOAuthIssuer, type OAuthConnection } from '@aflow/schemas';
 import type {
   ApiBindingSummary,
   ApiDefinitionDetail,
   ApiDefinitionSummary,
   IntegrationCredentialMeta,
 } from '../../hooks/use-integrations.js';
-import { useApiMutation } from '../../hooks/useApiQuery.js';
-import { OAUTH_CONNECTIONS_KEY, useOAuthConnections } from '../../hooks/use-oauth-connections.js';
-import { useOAuthConsentPopup } from '../../lib/oauthConsentPopup.js';
 import { isAuthHalfBuilt } from '../integrations/authSlots.js';
+import { OAuthConnectRow } from './OAuthConnectRow.js';
 import { BindingDetailsView, DefinitionDetailsView, EndpointsSection } from './ApiDetailsViews.js';
 import { DetailsSection, formatJson, getApiStatus, StatusBadge } from './helpers.js';
 
@@ -86,14 +82,6 @@ export function ApiCard({
   /** Viewer-role rendering: status only, no mutation affordances (the server rejects those writes anyway). */
   readOnly?: boolean;
 }) {
-  const { connections } = useOAuthConnections();
-  // A connection's connect-once identity is its API definition id (the same value
-  // the executor passes as `resourceKey`) — identical for every binding here, so
-  // resolve once and hand the match to each sub-card.
-  const oauthConnection = connections.find(
-    (c) => c.integrationKind === 'api' && c.resourceKey === definition.apiId,
-  );
-
   // The provider-card header URL is definition-level (the raw template with its
   // {var} slots); each connection shows its OWN resolved URL.
   const definitionBaseUrl = definition.baseUrlTemplate ?? definition.baseUrl;
@@ -222,7 +210,6 @@ export function ApiCard({
               binding={single}
               definition={definition}
               credentialsByKey={credentialsByKey}
-              oauthConnection={oauthConnection}
               onEditConnection={onEditConnection}
               onDeleteConnection={onDeleteConnection}
               onAddSecret={onAddSecret}
@@ -246,7 +233,6 @@ export function ApiCard({
                   binding={b}
                   definition={definition}
                   credentialsByKey={credentialsByKey}
-                  oauthConnection={oauthConnection}
                   onEditConnection={onEditConnection}
                   onDeleteConnection={onDeleteConnection}
                   onAddSecret={onAddSecret}
@@ -287,7 +273,6 @@ function ApiConnectionCard({
   binding,
   definition,
   credentialsByKey,
-  oauthConnection,
   onEditConnection,
   onDeleteConnection,
   onAddSecret,
@@ -299,7 +284,6 @@ function ApiConnectionCard({
   binding: ApiBindingSummary;
   definition: ApiDefinitionSummary;
   credentialsByKey: Map<string, IntegrationCredentialMeta>;
-  oauthConnection: OAuthConnection | undefined;
   onEditConnection: (binding: ApiBindingSummary) => void;
   onDeleteConnection: (binding: ApiBindingSummary) => void;
   onAddSecret: (key: string) => void;
@@ -312,7 +296,10 @@ function ApiConnectionCard({
     .filter((v) => v.required)
     .map((v) => v.name);
   const isOAuthCodeBinding = binding.authType === 'oauth2_authorization_code';
-  const isOAuthConnected = oauthConnection?.status === 'connected';
+  const isOAuthConnected = binding.oauthConnection?.status === 'connected';
+  // A live OAuth-code binding's row says whether a token exists and for which
+  // account, so the generic badge would only repeat it.
+  const oauthRowStatesStatus = isOAuthCodeBinding && binding.fulfillment.mode !== 'simulated';
   const status = getApiStatus(binding, credentialsByKey, requiredVariables, isOAuthConnected);
   const displayBaseUrl = resolveBindingBaseUrl(definition, binding);
   const halfBuilt = isAuthHalfBuilt(binding);
@@ -334,7 +321,7 @@ function ApiConnectionCard({
       )}
 
       <Row gap="2" align="center" wrap>
-        <StatusBadge status={status} />
+        {!oauthRowStatesStatus && <StatusBadge status={status} />}
         {binding.fulfillment.mode === 'simulated' ? (
           <Tooltip
             content={`Answered by simulation "${binding.fulfillment.simulationId}". Calls through this connection reach no external host.`}
@@ -443,13 +430,7 @@ function ApiConnectionCard({
           Edit the connection to finish configuring authentication.
         </Text>
       )}
-      {isOAuthCodeBinding && (!readOnly || isOAuthConnected) && (
-        <OAuthConnectRow
-          binding={binding}
-          connected={isOAuthConnected}
-          displayName={oauthConnection?.displayName}
-        />
-      )}
+      {isOAuthCodeBinding && <OAuthConnectRow binding={binding} readOnly={readOnly} />}
 
       {simulation && (
         <>
@@ -475,87 +456,5 @@ function ApiConnectionCard({
     <Card style={{ backgroundColor: 'var(--color-surface-3)' }}>
       <CardBody>{inner}</CardBody>
     </Card>
-  );
-}
-
-/**
- * Connect / Connected affordance for an `oauth2_authorization_code` API binding.
- * Consent runs in a popup so the app tab never navigates away: open the popup
- * synchronously on click, POST the binding's consent-start route, then point the
- * popup at the returned authorization URL (mirrors `OAuthConsentCard`). When the
- * popup closes we invalidate the connections query so the card flips to
- * "Connected" without a manual refresh. The server derives the owner from the
- * binding's ownerScope + the signed-in user; the UI just launches it. Disconnect
- * lives on the /account page.
- */
-function OAuthConnectRow({
-  binding,
-  connected,
-  displayName,
-}: {
-  binding: ApiBindingSummary;
-  connected: boolean;
-  displayName?: string | undefined;
-}): ReactNode {
-  const rawIssuerKey = binding.auth['issuerKey'];
-  const issuerKey = typeof rawIssuerKey === 'string' ? rawIssuerKey : '';
-  const issuerLabel = getOAuthIssuer(issuerKey)?.displayName ?? displayName ?? 'Sign in';
-
-  const queryClient = useQueryClient();
-  const { launch } = useOAuthConsentPopup();
-  const [launchError, setLaunchError] = useState<string | null>(null);
-
-  const startConsent = useApiMutation<undefined, { authorizationUrl?: string }>({
-    path: `/integrations/api/bindings/${binding.bindingId}/consent`,
-    method: 'POST',
-  });
-
-  const handleConnect = useCallback(() => {
-    setLaunchError(null);
-    launch({
-      start: () => startConsent.mutateAsync(undefined),
-      onClosed: () => {
-        void queryClient.invalidateQueries({ queryKey: [...OAUTH_CONNECTIONS_KEY] });
-      },
-      onError: (message) => {
-        setLaunchError(message);
-      },
-    });
-  }, [launch, queryClient, startConsent]);
-
-  if (connected) {
-    return (
-      <Row gap="1" align="center">
-        <Badge variant="success">
-          <Icon name="check-circle" size="xs" /> Connected
-        </Badge>
-      </Row>
-    );
-  }
-
-  const error = launchError ?? (startConsent.error ? startConsent.error.message : null);
-
-  return (
-    <Column gap="1">
-      <Row>
-        <Button
-          variant="primary"
-          leftIcon={<Icon name="plugs-connected" size="sm" />}
-          onClick={handleConnect}
-          disabled={startConsent.isPending}
-        >
-          {startConsent.isPending
-            ? 'Connecting…'
-            : getOAuthIssuer(issuerKey)
-              ? `Connect ${issuerLabel}`
-              : 'Sign in'}
-        </Button>
-      </Row>
-      {error && (
-        <Text size="xs" tone="danger">
-          {error}
-        </Text>
-      )}
-    </Column>
   );
 }

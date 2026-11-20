@@ -10,7 +10,7 @@
  * Tokens are NEVER returned — only presence, granted scopes, expiry, and a
  * connected/expired status.
  */
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import {
   createTenantContext,
@@ -21,11 +21,14 @@ import {
   type OauthTokenRow,
 } from '@aflow/database';
 import {
+  OAuthConsentOwnerScopeSchema,
   getOAuthIssuer,
+  type OAuthBindingConnection,
   type OAuthConnection,
   type OAuthConsentIntegrationKind,
   type TenantId,
 } from '@aflow/schemas';
+import { resolveOAuthOwner, type OAuthOwnerContext } from '@aflow/oauth';
 
 type ConnectionTokenRow = Pick<
   OauthTokenRow,
@@ -44,12 +47,110 @@ export function toOAuthConnection(
     displayName,
     scopes: row.scopesJson,
     expiresAt: row.expiresAt.toISOString(),
-    // An access token living an hour is the provider's design, not a broken
-    // connection: with a refresh token the next call renews it silently, so
-    // the connection is healthy. 'expired' means truly dead — no refresh
-    // token and the access token past its end.
-    status:
-      row.hasRefreshToken || row.expiresAt.getTime() > now.getTime() ? 'connected' : 'expired',
+    status: connectionStatus(row, now),
+  };
+}
+
+/**
+ * An access token living an hour is the provider's design, not a broken
+ * connection: with a refresh token the next call renews it silently, so the
+ * connection is healthy. 'expired' means truly dead — no refresh token and the
+ * access token past its end.
+ */
+function connectionStatus(
+  row: { hasRefreshToken: boolean; expiresAt: Date },
+  now: Date,
+): OAuthConnection['status'] {
+  return row.hasRefreshToken || row.expiresAt.getTime() > now.getTime() ? 'connected' : 'expired';
+}
+
+/** An API binding as the list route reads it — only what names its token. */
+export interface BindingTokenTarget {
+  bindingId: string;
+  apiId: string;
+  authJson: Record<string, unknown> | null;
+}
+
+/**
+ * The OAuth token each `oauth2_authorization_code` binding resolves, keyed by
+ * binding id: null where no token exists yet. The owner is resolved exactly as
+ * consent and the executor resolve it, so a space-owned token shows on every
+ * member's card and a user-owned one only on its owner's. Bindings of other
+ * auth types are absent from the map.
+ */
+export async function listBindingOAuthConnections(
+  db: PostgresJsDatabase,
+  tenantId: TenantId,
+  bindings: readonly BindingTokenTarget[],
+  owner: OAuthOwnerContext,
+  now: Date = new Date(),
+): Promise<Map<string, OAuthBindingConnection | null>> {
+  const result = new Map<string, OAuthBindingConnection | null>();
+  const wanted: Array<{ bindingId: string; apiId: string; ownerScope: string; ownerId: string }> =
+    [];
+  for (const binding of bindings) {
+    if (binding.authJson?.['type'] !== 'oauth2_authorization_code') continue;
+    result.set(binding.bindingId, null);
+    const ownerScope = OAuthConsentOwnerScopeSchema.safeParse(binding.authJson['ownerScope']);
+    if (!ownerScope.success) continue;
+    const resolved = resolveOAuthOwner(ownerScope.data, owner);
+    if (!('ownerId' in resolved)) continue;
+    wanted.push({
+      bindingId: binding.bindingId,
+      apiId: binding.apiId,
+      ownerScope: ownerScope.data,
+      ownerId: resolved.ownerId,
+    });
+  }
+  if (wanted.length === 0) return result;
+
+  const rows = (await withTenantSchema(db, createTenantContext(tenantId), async (tx) =>
+    tx
+      .select({
+        resourceKey: oauthTokens.resourceKey,
+        ownerScope: oauthTokens.ownerScope,
+        ownerId: oauthTokens.ownerId,
+        scopesJson: oauthTokens.scopesJson,
+        accountIdentity: oauthTokens.accountIdentity,
+        connectedAt: oauthTokens.connectedAt,
+        expiresAt: oauthTokens.expiresAt,
+        hasRefreshToken: sql<boolean>`(${oauthTokens.refreshTokenEnc} IS NOT NULL)`,
+      })
+      .from(oauthTokens)
+      .where(
+        and(
+          eq(oauthTokens.integrationKind, 'api'),
+          inArray(oauthTokens.resourceKey, [...new Set(wanted.map((w) => w.apiId))]),
+        ),
+      ),
+  )) as BindingTokenRow[];
+
+  for (const w of wanted) {
+    const row = rows.find(
+      (r) => r.resourceKey === w.apiId && r.ownerScope === w.ownerScope && r.ownerId === w.ownerId,
+    );
+    if (row) result.set(w.bindingId, toBindingConnection(row, now));
+  }
+  return result;
+}
+
+type BindingTokenRow = Pick<
+  OauthTokenRow,
+  | 'resourceKey'
+  | 'ownerScope'
+  | 'ownerId'
+  | 'scopesJson'
+  | 'accountIdentity'
+  | 'connectedAt'
+  | 'expiresAt'
+> & { hasRefreshToken: boolean };
+
+export function toBindingConnection(row: BindingTokenRow, now: Date): OAuthBindingConnection {
+  return {
+    account: row.accountIdentity ?? null,
+    connectedAt: row.connectedAt ? row.connectedAt.toISOString() : null,
+    scopes: row.scopesJson,
+    status: connectionStatus(row, now),
   };
 }
 
