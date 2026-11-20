@@ -29,6 +29,7 @@ import {
   TenantOAuthPolicyUpdateInputSchema,
   TenantQuotasSchema,
   getOAuthIssuer,
+  oauthDefaultClientScopeChoices,
   parseTenantQuotas,
   type TenantOAuthPolicy,
 } from '@aflow/schemas';
@@ -590,13 +591,31 @@ export const tenantSettingsRoutes: FastifyPluginAsync = async (fastify) => {
         tags: ['Tenant'],
         summary: 'Update the tenant OAuth default policy (admin only)',
         body: TenantOAuthPolicyUpdateInputSchema,
-        response: { 200: TenantOAuthPolicyResponseSchema, 403: ErrorSchema, 404: ErrorSchema },
+        response: {
+          200: TenantOAuthPolicyResponseSchema,
+          400: ErrorSchema,
+          403: ErrorSchema,
+          404: ErrorSchema,
+        },
       },
     },
     async (request, reply) => {
       const tenant = await request.requireTenant();
       if (!tenant.isAdmin) {
         return reply.status(403).send({ error: 'Forbidden', message: 'Admin access required' });
+      }
+      const requestedClientScope = request.body.defaultClientScope;
+      const clientScopeChoices = oauthDefaultClientScopeChoices(fastify.edition.edition);
+      if (
+        requestedClientScope !== undefined &&
+        !clientScopeChoices.includes(requestedClientScope)
+      ) {
+        return reply.status(400).send({
+          error: 'BadRequest',
+          message:
+            `Default OAuth app cannot be "${requestedClientScope}" in this edition. ` +
+            `Choose ${clientScopeChoices.map((scope) => `"${scope}"`).join(' or ')}.`,
+        });
       }
       const db = fastify.appContext.db as PostgresJsDatabase;
 

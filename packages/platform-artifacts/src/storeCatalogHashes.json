@@ -76,16 +76,16 @@
     "contentHash": "acc3c324dc9dbb7efdec12c83539212f399f0bd626534136157241e267815cf0"
   },
   "gmail": {
-    "version": 1,
-    "contentHash": "9754fc7f1776e41472c5c634b7d3c02e0e6363a3ba307164e9876c5cc1133ef4"
+    "version": 2,
+    "contentHash": "902009a1e56749477878f0263f9a59eece62401b00b1a980cf9ee2c84eb658d1"
   },
   "google-calendar": {
-    "version": 1,
-    "contentHash": "d2d86a13d28c02b9b09d9defc515ad0655afbc791547ea0dea73320b55fa328c"
+    "version": 2,
+    "contentHash": "405cb1e0510fd0ad8e0cce2983ab8b0a0677f90c826ad07bff08bbc8a30a97ff"
   },
   "google-sheets": {
-    "version": 1,
-    "contentHash": "51458677bb0a298187581816944253878aa132e2aebc7ee9342824ca8f29fb1a"
+    "version": 2,
+    "contentHash": "fe012d0294dbdca831b6f9ea04cd45cf9f83c98a5b9f57ccb4683dc3e1f0d5df"
   },
   "jira-cloud": {
     "version": 2,
@@ -164,8 +164,8 @@
     "contentHash": "8d29b5ec66f4d1d17d0c69153b8ef929fcaa37bc3eb64a2b0052e9ccddf1552a"
   },
   "slack": {
-    "version": 2,
-    "contentHash": "565180599e54f0a5fd3466f1bc1afa15015e9f927c6fc5e03ef85ba1034ac81e"
+    "version": 3,
+    "contentHash": "0bd79d878a67449d1c777165975ebde605d1d474c61b0630b2b9ad615972bdec"
   },
   "stripe": {
     "version": 2,

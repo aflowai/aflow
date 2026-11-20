@@ -421,10 +421,14 @@ export function registerBindingRoutes(fastify: FastifyInstance): void {
       // registered oauth_clients row — otherwise consent has no client_id (§10).
       if (auth.type === 'oauth2_authorization_code' && auth.clientScope !== 'platform') {
         const guardError = await withTenantSchema(db, tenantContext, async (tx) =>
-          checkOAuthClientRegistered(tx, auth.clientScope, auth.issuerKey, {
-            tenantId: tenant.tenantId,
-            spaceId: space.spaceId,
-          }),
+          checkOAuthClientRegistered(
+            tx,
+            auth.clientScope,
+            auth.issuerKey,
+            { tenantId: tenant.tenantId, spaceId: space.spaceId },
+            fastify.edition.edition,
+            'binding',
+          ),
         );
         if (guardError) {
           reply.code(400).send({ error: guardError });

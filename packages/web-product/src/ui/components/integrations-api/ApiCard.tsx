@@ -296,11 +296,10 @@ function ApiConnectionCard({
     .filter((v) => v.required)
     .map((v) => v.name);
   const isOAuthCodeBinding = binding.authType === 'oauth2_authorization_code';
-  const isOAuthConnected = binding.oauthConnection?.status === 'connected';
   // A live OAuth-code binding's row says whether a token exists and for which
   // account, so the generic badge would only repeat it.
   const oauthRowStatesStatus = isOAuthCodeBinding && binding.fulfillment.mode !== 'simulated';
-  const status = getApiStatus(binding, credentialsByKey, requiredVariables, isOAuthConnected);
+  const status = getApiStatus(binding, credentialsByKey, requiredVariables);
   const displayBaseUrl = resolveBindingBaseUrl(definition, binding);
   const halfBuilt = isAuthHalfBuilt(binding);
 

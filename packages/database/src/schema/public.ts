@@ -62,7 +62,11 @@ export const tenants = pgTable('tenants', {
   /** Default identity ownership scope for new OAuth bindings (Plan 185 §4.5). */
   oauthDefaultOwnerScope: text('oauth_default_owner_scope').notNull().default('space'),
 
-  /** Default client (app) ownership scope for new OAuth bindings. */
+  /**
+   * Default client (app) ownership scope for new OAuth bindings. The column
+   * default serves the hosted edition. Local bootstrap writes `tenant`, the one
+   * scope that edition registers apps at (`oauthDefaultClientScopeForEdition`).
+   */
   oauthDefaultClientScope: text('oauth_default_client_scope').notNull().default('space'),
 
   /** Whether end-users may self-connect their own OAuth accounts. */
