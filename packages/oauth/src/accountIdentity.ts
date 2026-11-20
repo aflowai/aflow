@@ -1,5 +1,6 @@
 import {
   DEFAULT_PRIVATE_NETWORK_POLICY,
+  safeFetchFor,
   validateCredentialedUrl,
   type PrivateNetworkPolicy,
 } from '@aflow/network-safety';
@@ -74,11 +75,9 @@ async function emailFromUserinfo(
   endpoint: string,
   params: ReadAccountIdentityParams,
 ): Promise<string | null> {
-  const validated = await validateCredentialedUrl(
-    endpoint,
-    params.privateNetwork ?? DEFAULT_PRIVATE_NETWORK_POLICY,
-  );
-  const fetchImpl = params.fetchImpl ?? fetch;
+  const privateNetwork = params.privateNetwork ?? DEFAULT_PRIVATE_NETWORK_POLICY;
+  const validated = await validateCredentialedUrl(endpoint, privateNetwork);
+  const fetchImpl = params.fetchImpl ?? safeFetchFor(privateNetwork);
   const response = await fetchImpl(validated.url.toString(), {
     method: 'GET',
     headers: {
