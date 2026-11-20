@@ -29,7 +29,7 @@ const limitParam = {
 
 export const SLACK_CONNECTOR: ConnectorCatalogEntry = {
   catalogId: 'slack',
-  version: 2,
+  version: 3,
   name: 'Slack',
   tagline: 'Read channels and message history, look up users, and post messages.',
   description:
@@ -57,8 +57,10 @@ export const SLACK_CONNECTOR: ConnectorCatalogEntry = {
   ],
   setupNote:
     'Register a Slack app at api.slack.com/apps, and under OAuth & Permissions add this platform’s ' +
-    'callback as an OAuth redirect URL. Copy the app’s Client ID and Client Secret into this ' +
-    'space’s Settings → OAuth Apps, then click Connect and approve the requested scopes in Slack. ' +
+    'callback as an OAuth redirect URL. Copy the app’s Client ID and Client Secret into ' +
+    'Settings → OAuth Apps (open Tenant Admin in the sidebar). In the hosted edition, use this ' +
+    'space’s Settings → OAuth Apps instead. Then click Connect and approve the requested ' +
+    'scopes in Slack. ' +
     'The token is stored for you — nothing to paste here.',
   definition: {
     apiId: 'slack',

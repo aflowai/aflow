@@ -14,7 +14,11 @@
  */
 import type postgres from 'postgres';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { DEFAULT_SPACE_COMPUTE_POLICY, defaultsToSafeProfile } from '@aflow/schemas';
+import {
+  DEFAULT_SPACE_COMPUTE_POLICY,
+  defaultsToSafeProfile,
+  oauthDefaultClientScopeForEdition,
+} from '@aflow/schemas';
 import { and, eq, isNull } from 'drizzle-orm';
 import {
   createTenantContext,
@@ -122,6 +126,31 @@ export async function createLocalProfileWorkspace(
   return created.id;
 }
 
+/**
+ * Moves a tenant's default OAuth app onto one this edition can satisfy, and
+ * reports whether it moved.
+ *
+ * The local edition registers OAuth apps only at instance Settings → OAuth
+ * Apps, which writes tenant clients. A tenant holding `space` or `platform`
+ * would refuse every OAuth connector install on a client the operator has no
+ * page to register. The edition's policy editor and API offer only `tenant`
+ * there, so this undoes no operator choice.
+ */
+export async function ensureOAuthDefaultClientScope(
+  sql: postgres.Sql,
+  edition: Pick<EditionDescriptor, 'edition'>,
+  tenantId: string,
+): Promise<boolean> {
+  const clientScope = oauthDefaultClientScopeForEdition(edition.edition);
+  const moved = await sql`
+    UPDATE public.tenants
+      SET oauth_default_client_scope = ${clientScope}, updated_at = now()
+      WHERE tenant_id = ${tenantId} AND oauth_default_client_scope <> ${clientScope}
+    RETURNING tenant_id
+  `;
+  return moved.length > 0;
+}
+
 export type StepOutcome = 'created' | 'present';
 
 export interface BootstrapStep {
@@ -168,13 +197,19 @@ export async function bootstrapLocalEdition({
 
   // ---- Tenant row --------------------------------------------------------
   const schemaName = tenantIdToSchemaName(tenantId);
+  const clientScope = oauthDefaultClientScopeForEdition(edition.edition);
   const insertedTenant = await sql`
-    INSERT INTO public.tenants (tenant_id, schema_name, name, status, plan)
-    VALUES (${tenantId}, ${schemaName}, 'Local', 'active', 'free')
+    INSERT INTO public.tenants
+      (tenant_id, schema_name, name, status, plan, oauth_default_client_scope)
+    VALUES (${tenantId}, ${schemaName}, 'Local', 'active', 'free', ${clientScope})
     ON CONFLICT (tenant_id) DO NOTHING
     RETURNING tenant_id
   `;
   record('tenant', insertedTenant.length > 0 ? 'created' : 'present', schemaName);
+
+  // ---- Default OAuth app -------------------------------------------------
+  const movedClientScope = await ensureOAuthDefaultClientScope(sql, edition, tenantId);
+  record('default OAuth app', movedClientScope ? 'created' : 'present', clientScope);
 
   // ---- Tenant schema and migrations --------------------------------------
   if (await tenantSchemaExists(sql, tenantId)) {

@@ -42,10 +42,19 @@ const CLIENT_SCOPE_OPTIONS: Array<{
 
 export interface TenantOAuthPolicyEditorProps {
   policy: TenantOAuthPolicy;
+  /**
+   * The default OAuth apps this edition can satisfy. The local edition
+   * registers tenant apps only, so it offers Tenant alone.
+   */
+  clientScopeChoices: ReadonlyArray<TenantOAuthPolicy['defaultClientScope']>;
   onSave: (input: TenantOAuthPolicyUpdateInput) => Promise<unknown>;
 }
 
-export function TenantOAuthPolicyEditor({ policy, onSave }: TenantOAuthPolicyEditorProps) {
+export function TenantOAuthPolicyEditor({
+  policy,
+  clientScopeChoices,
+  onSave,
+}: TenantOAuthPolicyEditorProps) {
   const [draft, setDraft] = useState<TenantOAuthPolicy>(policy);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -117,11 +126,13 @@ export function TenantOAuthPolicyEditor({ policy, onSave }: TenantOAuthPolicyEdi
                   }));
                 }}
               >
-                {CLIENT_SCOPE_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
+                {CLIENT_SCOPE_OPTIONS.filter((opt) => clientScopeChoices.includes(opt.value)).map(
+                  (opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ),
+                )}
               </Select>
             </Field>
 

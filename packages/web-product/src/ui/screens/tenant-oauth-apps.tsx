@@ -10,7 +10,9 @@ import {
   Icon,
   Button,
 } from '@aflow/design-system';
+import { oauthDefaultClientScopeChoices } from '@aflow/schemas';
 import { useTenantOAuthClients } from '../hooks/use-tenant-oauth-clients.js';
+import { useEdition } from '../hooks/useEdition.js';
 import { OAuthClientsSection } from '../components/oauth-apps/OAuthClientsSection.js';
 import { TenantOAuthPolicyEditor } from '../components/oauth-apps/TenantOAuthPolicyEditor.js';
 
@@ -33,6 +35,7 @@ export function TenantOAuthAppsPage() {
     deleteClient,
     updatePolicy,
   } = useTenantOAuthClients();
+  const edition = useEdition();
 
   if (isLoading) {
     return (
@@ -80,9 +83,10 @@ export function TenantOAuthAppsPage() {
           onDelete={(id) => deleteClient.mutateAsync({ id })}
         />
 
-        {policy && (
+        {policy && edition.id !== null && (
           <TenantOAuthPolicyEditor
             policy={policy}
+            clientScopeChoices={oauthDefaultClientScopeChoices(edition.id)}
             onSave={(input) => updatePolicy.mutateAsync(input)}
           />
         )}

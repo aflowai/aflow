@@ -125,6 +125,35 @@ describeDb('bootstrapLocalEdition', () => {
     expect(tenantRow?.defaultSpaceId).toBe(first.spaceIds[0]);
   }, 120_000);
 
+  it('starts a new local tenant on the Tenant default OAuth app', async () => {
+    // The one page this edition registers OAuth apps on writes tenant clients.
+    const [tenantRow] = await db
+      .select({ clientScope: tenants.oauthDefaultClientScope })
+      .from(tenants)
+      .where(eq(tenants.tenantId, TENANT_ID));
+    expect(tenantRow?.clientScope).toBe('tenant');
+  });
+
+  it('moves an existing local tenant off the space default OAuth app', async () => {
+    await db
+      .update(tenants)
+      .set({ oauthDefaultClientScope: 'space' })
+      .where(eq(tenants.tenantId, TENANT_ID));
+
+    const report = await bootstrapLocalEdition({ edition: EDITION, sql, db, ownerId: OWNER_ID });
+
+    expect(report.steps).toContainEqual({
+      name: 'default OAuth app',
+      outcome: 'created',
+      detail: 'tenant',
+    });
+    const [tenantRow] = await db
+      .select({ clientScope: tenants.oauthDefaultClientScope })
+      .from(tenants)
+      .where(eq(tenants.tenantId, TENANT_ID));
+    expect(tenantRow?.clientScope).toBe('tenant');
+  }, 120_000);
+
   it('assigns the first workspace the profile every other space on the edition gets', async () => {
     const report = await bootstrapLocalEdition({ edition: EDITION, sql, db, ownerId: OWNER_ID });
 

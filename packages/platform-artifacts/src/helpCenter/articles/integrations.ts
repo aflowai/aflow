@@ -18,6 +18,17 @@ export const INTEGRATIONS_ARTICLES: readonly HelpArticleInput[] = [
 3. Choose **Install**.
 4. Back on **Integrations**, the new connection shows **Needs setup** or **Needs secret** until it has what it needs. Choose a missing-secret pill, or **Edit**, to paste a secret; fill in the **Site URL** where the connector has one.
 
+## A connector that signs in with an account
+
+Gmail, Google Calendar, Google Sheets and Slack sign in through an OAuth app you register with the provider. Install refuses until that app is registered here.
+
+1. Create the app with the provider, as the connector's setup note says.
+2. Open **Tenant Admin → OAuth Apps** and choose **Register app**. Enter the client secret on that page, never in chat.
+3. Set **Default OAuth app** to **Tenant** on the same page. The local edition starts on **Tenant** and offers nothing else.
+4. Install the connector again, then choose **Connect**.
+
+In the hosted edition, a tenant starts on **Space**. A space admin can register the app under the space's **Settings → OAuth Apps** and keep that default.
+
 ## By hand
 
 **Add integration → API** opens **Add API**: a name, the base URL and the endpoints. Then **Connect** it, choosing an **Authentication Type**: bearer token, API key, basic auth, OAuth client credentials, OAuth sign-in with an account, or none.
