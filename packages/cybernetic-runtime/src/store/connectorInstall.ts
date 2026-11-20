@@ -22,6 +22,7 @@ import {
   McpConnectorCatalogEntrySchema,
   deriveHostFromBaseUrlTemplate,
   getOAuthIssuer,
+  processEditionDescriptor,
   SimulationSchema,
   type ApiDefinition,
   type ConnectorCredentialPrompt,
@@ -169,7 +170,8 @@ export async function readTenantOAuthDefaults(
   // Coerce legacy stored values: 'tenant' is no longer an owner scope, and
   // the 'platform' client is CIMD (MCP-only) — an API issuer has no platform
   // client, so a connector binding defaulted to it dead-ends at consent with
-  // the provider's invalid_client. Space-BYO is the working default.
+  // the provider's invalid_client. The stored value is edition-aware already:
+  // local bootstrap writes `tenant`, and a hosted tenant starts on `space`.
   const rawOwner = policyRows[0]?.ownerScope;
   const rawClient = policyRows[0]?.clientScope;
   return {
@@ -245,10 +247,14 @@ export async function buildApiConnectorPlaceholderAuth(opts: {
   // /integrations/bindings route enforces (bindings.ts).
   if (opts.enforceOAuthClientRegistered && clientScope !== 'platform') {
     const guardError = await withTenantSchema(db, createTenantContext(tenantId), async (tx) =>
-      checkOAuthClientRegistered(tx, clientScope, issuerKey, {
-        tenantId: tenantId,
-        spaceId: spaceId,
-      }),
+      checkOAuthClientRegistered(
+        tx,
+        clientScope,
+        issuerKey,
+        { tenantId: tenantId, spaceId: spaceId },
+        processEditionDescriptor().edition,
+        'tenant_default',
+      ),
     );
     if (guardError) {
       return { ok: false, outcome: 'oauth_client_unregistered', error: guardError };

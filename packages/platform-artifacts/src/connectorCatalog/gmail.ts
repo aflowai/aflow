@@ -10,7 +10,7 @@ const messageIdParam = {
 
 export const GMAIL_CONNECTOR: ConnectorCatalogEntry = {
   catalogId: 'gmail',
-  version: 1,
+  version: 2,
   name: 'Gmail',
   tagline: 'Read and search mail, send messages, draft, label, and trash.',
   description:
@@ -36,8 +36,9 @@ export const GMAIL_CONNECTOR: ConnectorCatalogEntry = {
   setupNote:
     'Register an OAuth app in the Google Cloud Console, enable the Gmail API, and add this ' +
     'platform’s callback as an authorized redirect URI. Copy the app’s Client ID and Client ' +
-    'Secret into this space’s Settings → OAuth Apps, then click Connect and approve the ' +
-    'requested scopes in Google. The token is stored for you — nothing to paste here. NOTE: ' +
+    'Secret into Settings → OAuth Apps (open Tenant Admin in the sidebar). In the hosted ' +
+    'edition, use this space’s Settings → OAuth Apps instead. Then click Connect and approve ' +
+    'the requested scopes in Google. The token is stored for you — nothing to paste here. NOTE: ' +
     'Gmail scopes are RESTRICTED — Google will not grant them to an unverified app for a ' +
     'general user. Either complete Google’s app verification (a review), or keep the app in ' +
     'testing mode and add the Google account you connect with as a test user; a testing-mode ' +

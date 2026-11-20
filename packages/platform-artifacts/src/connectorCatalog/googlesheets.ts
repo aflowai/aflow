@@ -55,7 +55,7 @@ const valueRangeBodySchema = {
 
 export const GOOGLE_SHEETS_CONNECTOR: ConnectorCatalogEntry = {
   catalogId: 'google-sheets',
-  version: 1,
+  version: 2,
   name: 'Google Sheets',
   tagline: 'Read and write spreadsheet values, edit structure, and create new spreadsheets.',
   description:
@@ -76,8 +76,9 @@ export const GOOGLE_SHEETS_CONNECTOR: ConnectorCatalogEntry = {
     'Register an OAuth app in the Google Cloud Console (APIs & Services → Credentials → Create ' +
     'Credentials → OAuth client ID → Web application), enable the Google Sheets API for the ' +
     'project, and add this platform’s callback as an authorized redirect URI. Copy the Client ID ' +
-    'and Client Secret into this space’s Settings → OAuth Apps, then click Connect and approve ' +
-    'access in Google — nothing to paste here. The Sheets scope is a sensitive scope, so the ' +
+    'and Client Secret into Settings → OAuth Apps (open Tenant Admin in the sidebar). In the ' +
+    'hosted edition, use this space’s Settings → OAuth Apps instead. Then click Connect and ' +
+    'approve access in Google — nothing to paste here. The Sheets scope is a sensitive scope, so the ' +
     'Google app must be verified (or kept in testing mode with the connecting account added as a ' +
     'test user).',
   definition: {

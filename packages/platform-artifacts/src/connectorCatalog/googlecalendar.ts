@@ -87,7 +87,7 @@ const eventBodySchema = {
 
 export const GOOGLE_CALENDAR_CONNECTOR: ConnectorCatalogEntry = {
   catalogId: 'google-calendar',
-  version: 1,
+  version: 2,
   name: 'Google Calendar',
   tagline: 'List calendars, read and search events, and create, update, or delete events.',
   description:
@@ -107,8 +107,9 @@ export const GOOGLE_CALENDAR_CONNECTOR: ConnectorCatalogEntry = {
   setupNote:
     'Register an OAuth app in the Google Cloud Console, enable the Google Calendar API, and add ' +
     'this platform’s callback as an authorized redirect URI. Copy the app’s Client ID and Client ' +
-    'Secret into this space’s Settings → OAuth Apps, then click Connect and approve access in ' +
-    'Google. Your Google app must have the Calendar scope configured on its OAuth consent screen ' +
+    'Secret into Settings → OAuth Apps (open Tenant Admin in the sidebar). In the hosted ' +
+    'edition, use this space’s Settings → OAuth Apps instead. Then click Connect and approve ' +
+    'access in Google. Your Google app must have the Calendar scope configured on its OAuth consent screen ' +
     '— it is a sensitive scope, so the app needs to be verified or in testing mode with your ' +
     'account added as a test user. The token is stored for you — nothing to paste here.',
   definition: {
