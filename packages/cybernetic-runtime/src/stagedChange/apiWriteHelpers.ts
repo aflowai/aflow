@@ -506,35 +506,55 @@ export function overlayPlaneOnlyEndpointFields(
 }
 
 /**
+ * Where a binding's client scope came from. A connector install takes the
+ * tenant's Default OAuth app, so changing that default is a remedy. A binding
+ * declares its own scope, so only editing the binding changes it.
+ */
+export type OAuthClientScopeSource = 'tenant_default' | 'binding';
+
+/**
  * The message an unregistered OAuth app answers with. The Helmsman relays it to
  * the operator, so it is written as the operator's next steps on the page this
- * edition shows. It never offers `clientScope="platform"`: that is the CIMD
- * client, and no API issuer accepts it. The client secret is entered on the
- * page and never passes through the Helmsman.
+ * edition shows. Every remedy it names clears the guard on retry, and it asks
+ * for no step already done. It never offers `clientScope="platform"`: that is
+ * the CIMD client, and no API issuer accepts it. The client secret is entered
+ * on the page and never passes through the Helmsman.
  */
 export function oauthClientUnregisteredMessage(opts: {
   edition: EditionId;
   clientScope: 'tenant' | 'space';
+  scopeSource: OAuthClientScopeSource;
   issuerKey: string;
 }): string {
-  const { edition, clientScope, issuerKey } = opts;
+  const { edition, clientScope, scopeSource, issuerKey } = opts;
   const app = `${getOAuthIssuer(issuerKey)?.displayName ?? issuerKey} OAuth app`;
   const secret = 'Enter its client secret on that page, never in chat with the Helmsman.';
-  const tenantPage = oauthAppsPageForScope(edition, 'tenant');
+  const tenantPage = oauthAppsPageForScope(edition, 'tenant') ?? 'the tenant OAuth Apps';
   const spacePage = oauthAppsPageForScope(edition, 'space');
   const owner = clientScope === 'tenant' ? 'this tenant' : 'this space';
-  if (clientScope === 'space' && spacePage !== null) {
-    return (
-      `No ${app} is registered for ${owner} (issuer "${issuerKey}"). ` +
-      `Open ${spacePage}, register a ${app} there and try again. ${secret} ` +
-      `A tenant admin may instead register it under ${tenantPage ?? 'the tenant OAuth Apps'} ` +
-      'and set Default OAuth app to Tenant on that page.'
-    );
+  const missing = `No ${app} is registered for ${owner} (issuer "${issuerKey}").`;
+  const registerTenantApp = `Open ${tenantPage} and register a ${app} there.`;
+  const useTenantApp =
+    scopeSource === 'binding'
+      ? 'Then edit this integration, set "Which OAuth app drives sign-in?" to ' +
+        '"A tenant-registered OAuth app" and try again.'
+      : 'Then set Default OAuth app to Tenant on the same page and try again.';
+
+  if (clientScope === 'tenant') {
+    return `${missing} ${registerTenantApp} ${secret} Then try again.`;
   }
+  if (spacePage === null) {
+    return `${missing} ${registerTenantApp} ${secret} ${useTenantApp}`;
+  }
+  const tenantAlternative =
+    scopeSource === 'binding'
+      ? `Or register it under ${tenantPage}, then edit this integration to use ` +
+        '"A tenant-registered OAuth app".'
+      : `A tenant admin may instead register it under ${tenantPage} ` +
+        'and set Default OAuth app to Tenant on that page.';
   return (
-    `No ${app} is registered for ${owner} (issuer "${issuerKey}"). ` +
-    `Open ${tenantPage ?? 'the tenant OAuth Apps'} and register a ${app} there. ` +
-    `Then set Default OAuth app to Tenant on the same page and try again. ${secret}`
+    `${missing} Open ${spacePage}, register a ${app} there and try again. ${secret} ` +
+    tenantAlternative
   );
 }
 
@@ -551,6 +571,7 @@ export async function checkOAuthClientRegistered(
   issuerKey: string,
   scopeId: { tenantId: string; spaceId: string },
   edition: EditionId,
+  scopeSource: OAuthClientScopeSource,
 ): Promise<string | null> {
   if (clientScope === 'platform') return null;
   const ownerId = clientScope === 'tenant' ? scopeId.tenantId : scopeId.spaceId;
@@ -566,5 +587,5 @@ export async function checkOAuthClientRegistered(
     )
     .limit(1);
   if (rows.length > 0) return null;
-  return oauthClientUnregisteredMessage({ edition, clientScope, issuerKey });
+  return oauthClientUnregisteredMessage({ edition, clientScope, scopeSource, issuerKey });
 }

@@ -408,6 +408,7 @@ export function registerBindingRoutes(fastify: FastifyInstance): void {
             auth.issuerKey,
             { tenantId: tenant.tenantId, spaceId: space.spaceId },
             fastify.edition.edition,
+            'binding',
           ),
         );
         if (guardError) {

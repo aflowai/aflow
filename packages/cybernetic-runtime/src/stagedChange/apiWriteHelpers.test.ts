@@ -208,53 +208,91 @@ describe('buildDefinitionJsonForDraft — long summary stays model-valid', () =>
 describe('oauthClientUnregisteredMessage', () => {
   const editions = ['community-local', 'enterprise'] as const;
   const scopes = ['tenant', 'space'] as const;
+  const sources = ['tenant_default', 'binding'] as const;
+
+  function everyMessage(issuerKey: string): string[] {
+    return editions.flatMap((edition) =>
+      scopes.flatMap((clientScope) =>
+        sources.map((scopeSource) =>
+          oauthClientUnregisteredMessage({ edition, clientScope, scopeSource, issuerKey }),
+        ),
+      ),
+    );
+  }
 
   it('never offers the platform client for an API issuer', () => {
-    for (const edition of editions) {
-      for (const clientScope of scopes) {
-        const message = oauthClientUnregisteredMessage({
-          edition,
-          clientScope,
-          issuerKey: 'google',
-        });
-        expect(message).not.toMatch(/platform/i);
-      }
+    for (const message of everyMessage('google')) expect(message).not.toMatch(/platform/i);
+  });
+
+  it('keeps the client secret out of the Helmsman conversation', () => {
+    for (const message of everyMessage('slack')) {
+      expect(message).toContain('never in chat with the Helmsman');
     }
   });
 
   it('sends the local operator to instance Settings, then to the Tenant default', () => {
-    // The space scope is the founding case: a local tenant still defaulted to
-    // space, and the edition shows no space OAuth Apps page.
-    for (const clientScope of scopes) {
-      const message = oauthClientUnregisteredMessage({
-        edition: 'community-local',
-        clientScope,
-        issuerKey: 'google',
-      });
-      expect(message).toContain('Open Settings → OAuth Apps');
-      expect(message).toContain('register a Google OAuth app there');
-      expect(message).toContain('set Default OAuth app to Tenant');
-      expect(message).not.toContain('space’s Settings');
+    const message = oauthClientUnregisteredMessage({
+      edition: 'community-local',
+      clientScope: 'space',
+      scopeSource: 'tenant_default',
+      issuerKey: 'google',
+    });
+    expect(message).toContain('Open Settings → OAuth Apps');
+    expect(message).toContain('register a Google OAuth app there');
+    expect(message).toContain('set Default OAuth app to Tenant');
+    expect(message).not.toContain('space’s Settings');
+  });
+
+  it('points a local space-scoped binding at its own client choice, not the default', () => {
+    // The guard reads the binding's own scope, so the Tenant default cannot
+    // clear it. Only switching the binding to the tenant app does.
+    const message = oauthClientUnregisteredMessage({
+      edition: 'community-local',
+      clientScope: 'space',
+      scopeSource: 'binding',
+      issuerKey: 'google',
+    });
+    expect(message).toContain('Open Settings → OAuth Apps');
+    expect(message).toContain('edit this integration');
+    expect(message).toContain('"A tenant-registered OAuth app"');
+    expect(message).not.toContain('Default OAuth app');
+    expect(message).not.toContain('space’s Settings');
+  });
+
+  it('asks for no default change when the scope is already tenant', () => {
+    for (const edition of editions) {
+      for (const scopeSource of sources) {
+        const message = oauthClientUnregisteredMessage({
+          edition,
+          clientScope: 'tenant',
+          scopeSource,
+          issuerKey: 'google',
+        });
+        expect(message).toContain('register a Google OAuth app there');
+        expect(message).not.toContain('Default OAuth app');
+        expect(message).not.toContain('edit this integration');
+      }
     }
   });
 
   it('names the space page in the hosted edition when the space scope asked', () => {
-    const message = oauthClientUnregisteredMessage({
+    const fromDefault = oauthClientUnregisteredMessage({
       edition: 'enterprise',
       clientScope: 'space',
+      scopeSource: 'tenant_default',
       issuerKey: 'google',
     });
-    expect(message).toContain('Open the space’s Settings → OAuth Apps');
-    expect(message).toContain('Tenant Admin → OAuth Apps');
-  });
+    expect(fromDefault).toContain('Open the space’s Settings → OAuth Apps');
+    expect(fromDefault).toContain('set Default OAuth app to Tenant');
 
-  it('keeps the client secret out of the Helmsman conversation', () => {
-    for (const edition of editions) {
-      for (const clientScope of scopes) {
-        expect(
-          oauthClientUnregisteredMessage({ edition, clientScope, issuerKey: 'slack' }),
-        ).toContain('never in chat with the Helmsman');
-      }
-    }
+    const fromBinding = oauthClientUnregisteredMessage({
+      edition: 'enterprise',
+      clientScope: 'space',
+      scopeSource: 'binding',
+      issuerKey: 'google',
+    });
+    expect(fromBinding).toContain('Open the space’s Settings → OAuth Apps');
+    expect(fromBinding).toContain('"A tenant-registered OAuth app"');
+    expect(fromBinding).not.toContain('Default OAuth app');
   });
 });

@@ -14,8 +14,9 @@ import {
   Select,
   Checkbox,
 } from '@aflow/design-system';
-import type { TenantOAuthPolicy, TenantOAuthPolicyUpdateInput } from '@aflow/schemas';
+import type { EditionId, TenantOAuthPolicy, TenantOAuthPolicyUpdateInput } from '@aflow/schemas';
 import type { ApiError } from '../../lib/query-client.js';
+import { defaultClientScopeOptions } from './defaultClientScopeOptions.js';
 
 // ---------------------------------------------------------------------------
 // Per-tenant OAuth default policy editor (Plan 185 §4.5, §11)
@@ -31,30 +32,14 @@ const OWNER_SCOPE_OPTIONS: Array<{ value: TenantOAuthPolicy['defaultOwnerScope']
     { value: 'space', label: 'Space — one shared connection per space' },
   ];
 
-const CLIENT_SCOPE_OPTIONS: Array<{
-  value: TenantOAuthPolicy['defaultClientScope'];
-  label: string;
-}> = [
-  { value: 'platform', label: 'Platform — use the built-in OAuth app' },
-  { value: 'tenant', label: 'Tenant — use a tenant-registered OAuth app' },
-  { value: 'space', label: 'Space — use a space-registered OAuth app' },
-];
-
 export interface TenantOAuthPolicyEditorProps {
   policy: TenantOAuthPolicy;
-  /**
-   * The default OAuth apps this edition can satisfy. The local edition
-   * registers tenant apps only, so it offers Tenant alone.
-   */
-  clientScopeChoices: ReadonlyArray<TenantOAuthPolicy['defaultClientScope']>;
+  /** The edition serving the editor, which decides the Default OAuth app choices. */
+  edition: EditionId;
   onSave: (input: TenantOAuthPolicyUpdateInput) => Promise<unknown>;
 }
 
-export function TenantOAuthPolicyEditor({
-  policy,
-  clientScopeChoices,
-  onSave,
-}: TenantOAuthPolicyEditorProps) {
+export function TenantOAuthPolicyEditor({ policy, edition, onSave }: TenantOAuthPolicyEditorProps) {
   const [draft, setDraft] = useState<TenantOAuthPolicy>(policy);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -126,13 +111,11 @@ export function TenantOAuthPolicyEditor({
                   }));
                 }}
               >
-                {CLIENT_SCOPE_OPTIONS.filter((opt) => clientScopeChoices.includes(opt.value)).map(
-                  (opt) => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </option>
-                  ),
-                )}
+                {defaultClientScopeOptions(edition).map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
               </Select>
             </Field>
 

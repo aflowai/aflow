@@ -253,6 +253,7 @@ export async function buildApiConnectorPlaceholderAuth(opts: {
         issuerKey,
         { tenantId: tenantId, spaceId: spaceId },
         processEditionDescriptor().edition,
+        'tenant_default',
       ),
     );
     if (guardError) {

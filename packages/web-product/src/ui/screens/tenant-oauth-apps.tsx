@@ -10,7 +10,6 @@ import {
   Icon,
   Button,
 } from '@aflow/design-system';
-import { oauthDefaultClientScopeChoices } from '@aflow/schemas';
 import { useTenantOAuthClients } from '../hooks/use-tenant-oauth-clients.js';
 import { useEdition } from '../hooks/useEdition.js';
 import { OAuthClientsSection } from '../components/oauth-apps/OAuthClientsSection.js';
@@ -86,7 +85,7 @@ export function TenantOAuthAppsPage() {
         {policy && edition.id !== null && (
           <TenantOAuthPolicyEditor
             policy={policy}
-            clientScopeChoices={oauthDefaultClientScopeChoices(edition.id)}
+            edition={edition.id}
             onSave={(input) => updatePolicy.mutateAsync(input)}
           />
         )}
