@@ -10,6 +10,15 @@ export type CycleSlot = (typeof CYCLE_SLOTS)[number];
 
 export const MAX_INTRADAY_SLOT_INDEX = 24;
 
+/**
+ * How an intraday cycle with no `slotIndex` numbers itself. The hours count
+ * from the 09:30 open, not from the clock hour, so every time in the session
+ * has an index of 1 or more. A schedule that passes `slotIndex` counts the
+ * same way.
+ */
+export const INTRADAY_INDEX_RULE =
+  'its hour of the session from the 09:30 exchange-local open: 09:30–10:29 is 1, 10:30–11:29 is 2';
+
 export const RESOLUTION_OUTCOMES = [
   'confirmed',
   'falsified',
@@ -50,8 +59,7 @@ export const CYCLE_RUN_INPUTS = [
   {
     id: 'slotIndex',
     required: false,
-    description:
-      'Which intraday firing of the trading day this is, from 1. It keeps several intraday cycles on one day apart. Absent on an intraday run, the cycle derives it from the clock hour.',
+    description: `Which intraday firing of the trading day this is: ${INTRADAY_INDEX_RULE}. It keeps several intraday cycles on one day apart. Absent on an intraday run, the cycle derives it the same way from the clock.`,
     schema: SLOT_INDEX_INPUT_SCHEMA,
   },
 ];

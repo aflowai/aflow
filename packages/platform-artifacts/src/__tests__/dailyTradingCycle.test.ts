@@ -9,12 +9,14 @@ import {
 import {
   SkillComposeBundleSchema,
   getOperation,
+  getValidator,
   mergeDerivedPatches,
   toJsonSchemaSync,
   type WorkflowTask,
 } from '@aflow/schemas';
 import AjvModule from 'ajv';
 import { getSkillBundleEntry } from '../skillBundleCatalog.js';
+import { INTRADAY_INDEX_RULE } from '../skillCatalog/dailyTradingCycleSlots.js';
 
 const CYCLE_SLUG = 'daily-trading-cycle';
 const PROCEED_GATE = 'tasks.resolve-theses.output.proceed == true';
@@ -32,6 +34,7 @@ type CatalogTask = {
       binding: string;
       target: string;
     }>;
+    validatorRefs?: readonly string[];
   };
 };
 
@@ -57,6 +60,7 @@ function resolveOutput(slot: CycleSlot, overrides: Record<string, unknown> = {})
     pendingIntentions: [],
     repairCloses: [],
     orphanFlattens: [],
+    maxThesesPerDay: 3,
     thesesOpenedToday: [],
     remainingThesesToday: slot === 'after_close' ? 0 : 3,
     coverageNote: 'No slot missed since the last cycle.',
@@ -125,6 +129,20 @@ function effectiveOutputSchema(
 
 function refuses(schema: Record<string, unknown>, output: unknown): boolean {
   return !ajv.compile(schema)(output);
+}
+
+/** The whole output contract: the effective schema, then every validatorRef. */
+function contractRefuses(
+  t: CatalogTask,
+  sources: Record<string, Record<string, unknown>>,
+  output: unknown,
+): boolean {
+  if (refuses(effectiveOutputSchema(t, sources), output)) return true;
+  return (t.outputContract?.validatorRefs ?? []).some((ref) => {
+    const validator = getValidator(ref);
+    if (!validator) throw new Error(`validatorRef ${ref} is not registered`);
+    return !validator.safeParse(output).success;
+  });
 }
 
 describe('DAILY_TRADING_CYCLE', () => {
@@ -655,6 +673,18 @@ describe('DAILY_TRADING_CYCLE', () => {
     });
   });
 
+  it('an explicit slotIndex and a derived one count by the same rule, from 1 at the open', () => {
+    const resolveSchema = task('resolve-theses')?.outputContract?.schema as {
+      properties: { slotIndex: { description: string } };
+    };
+    expect(INTRADAY_INDEX_RULE).toContain('09:30–10:29 is 1');
+    expect(wf.runInputs?.find((r) => r.id === 'slotIndex')?.description).toContain(
+      INTRADAY_INDEX_RULE,
+    );
+    expect(task('resolve-theses')?.goal).toContain(INTRADAY_INDEX_RULE);
+    expect(resolveSchema.properties.slotIndex.description).toContain(INTRADAY_INDEX_RULE);
+  });
+
   it('declares the campaign contract with regimeName as identity and every field frozen', () => {
     const campaign = entry.bundle.manifest.campaign;
     expect(campaign).toBeDefined();
@@ -776,13 +806,38 @@ describe('DAILY_TRADING_CYCLE', () => {
 describe('daily-trading-cycle per-slot contracts', () => {
   const wf = getSkillCatalogEntry(CYCLE_SLUG)!.bundle.workflow;
   const task = (id: string) => wf.tasks.find((t) => t.taskId === id)! as CatalogTask;
-  const resolveSchema = () =>
-    effectiveOutputSchema(task('resolve-theses'), { $campaign: CAMPAIGN });
+  const resolveRefuses = (output: unknown) =>
+    contractRefuses(task('resolve-theses'), { $campaign: CAMPAIGN }, output);
 
   it('resolve-theses accepts a plain cycle for every slot', () => {
     for (const slot of ['pre_market', 'open', 'intraday', 'after_close'] as const) {
-      expect(refuses(resolveSchema(), resolveOutput(slot)), slot).toBe(false);
+      expect(resolveRefuses(resolveOutput(slot)), slot).toBe(false);
     }
+  });
+
+  it('resolve-theses: a remaining cap that ignores the theses opened today is refused', () => {
+    const opened = { thesesOpenedToday: ['aapl-1', 'msft-1'] };
+    expect(resolveRefuses(resolveOutput('open', { ...opened, remainingThesesToday: 1 }))).toBe(
+      false,
+    );
+    expect(resolveRefuses(resolveOutput('open', { ...opened, remainingThesesToday: 3 }))).toBe(
+      true,
+    );
+    // The cap the remainder derives from is the campaign's, not one the agent picks.
+    expect(
+      resolveRefuses(
+        resolveOutput('open', { ...opened, maxThesesPerDay: 5, remainingThesesToday: 3 }),
+      ),
+    ).toBe(true);
+    // A day past its cap floors at 0.
+    expect(
+      resolveRefuses(
+        resolveOutput('intraday', {
+          thesesOpenedToday: ['a-1', 'b-1', 'c-1', 'd-1'],
+          remainingThesesToday: 0,
+        }),
+      ),
+    ).toBe(false);
   });
 
   it('pre_market: a cycle that submits an order is refused', () => {
@@ -822,7 +877,7 @@ describe('daily-trading-cycle per-slot contracts', () => {
         thesesOpenedToday: ['aapl-1', 'msft-1'],
         remainingThesesToday: 1,
       });
-      expect(refuses(resolveSchema(), resolved)).toBe(false);
+      expect(resolveRefuses(resolved)).toBe(false);
       const schema = effectiveOutputSchema(task('decide'), {
         $campaign: CAMPAIGN,
         'resolve-theses': resolved,

@@ -250,6 +250,7 @@ export * from './scheduling/taskGraphSelfConsistentValidator.js';
 export * from './scheduling/composeTaskGraphDraftValidator.js';
 export * from './scheduling/evalCaseDraftValidator.js';
 export * from './scheduling/apiDefinitionDraftValidator.js';
+export * from './scheduling/tradingThesesBudgetValidator.js';
 export * from './scheduling/runOutputValidators.js';
 // Provenance gates removed 2026-05-06 — see assembleWorkflow.ts top-of-file
 // note. The two validators (`provenance-required` +

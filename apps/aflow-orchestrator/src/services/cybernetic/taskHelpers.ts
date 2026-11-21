@@ -38,9 +38,16 @@ import type { WorkflowRunDetail } from '@aflow/cybernetic-runtime';
 import { resolveTaskInputs } from '../SessionOrchestrator/handlers/inlineOps/resolveTaskInputs.js';
 import { getOrchestratorLogger } from '../../lib/orchestratorLogger.js';
 
+/**
+ * The part of a workflow its run inputs resolve against. A stored workflow doc
+ * is read by a cast, not a parse, so an older doc may carry no `runInputs`
+ * even though the schema defaults it.
+ */
+type RunInputWorkflow = Pick<Workflow, 'tasks'> & { runInputs?: Workflow['runInputs'] };
+
 export async function resolveOperationTaskInputs(
   task: WorkflowTask,
-  workflow: Pick<Workflow, 'tasks' | 'runInputs'>,
+  workflow: RunInputWorkflow,
   tenantId: string,
   spaceId: string,
   runId: string,
@@ -65,9 +72,8 @@ export async function resolveOperationTaskInputs(
   // too — resolve them against the run-level input pool, the same way the
   // runner path does. Without this, any operation task past the first one
   // fails input resolution with "no run_input is available".
-  const parentTaskInputs = extractParentTaskInputs(run.metadata);
   const runInputSnapshot = bindings
-    ? runInputPool(bindings, parentTaskInputs, workflow)
+    ? runInputPool(bindings, readStoredRunInputs(run.metadata), workflow)
     : undefined;
   // The run's pinned GitHub connection (set at run start for coding runs).
   // Threaded symmetrically with campaignConfig; `connection_binding` bindings
@@ -294,7 +300,8 @@ export async function buildDelegateTaskInput(
     spaceId,
   });
 
-  const parentTaskInputs = extractParentTaskInputs(runMetadata);
+  const storedRunInputs = readStoredRunInputs(runMetadata);
+  const parentTaskInputs = storedRunInputs.state === 'stored' ? storedRunInputs.inputs : null;
   const parentInputsForThisTask =
     parentTaskInputs?.taskId === task.taskId ? parentTaskInputs.inputs : null;
   // Run inputs are a run-level pool every task's `run_input` bindings resolve
@@ -312,7 +319,7 @@ export async function buildDelegateTaskInput(
         `[taskHelpers] typed-inputs pre-resolution: run ${runId} not found for task=${task.taskId}`,
       );
     }
-    const runInputSnapshot = runInputPool(bindings, parentTaskInputs, workflow);
+    const runInputSnapshot = runInputPool(bindings, storedRunInputs, workflow);
     const campaignConfig = await loadCampaignConfigForTask(db, tenantId, fullRun, task);
     typedTaskInputs = await resolveTaskInputs(task, {
       run: fullRun,
@@ -637,7 +644,7 @@ export function extractParentInstructions(runMetadata: unknown): StoredParentIns
 export function buildRunInputSnapshotFromParent(
   inputBindings: NonNullable<WorkflowTask['inputBindings']>,
   parentTaskInputs: StoredParentTaskInputs,
-  workflow: Pick<Workflow, 'tasks' | 'runInputs'>,
+  workflow: RunInputWorkflow,
 ): Record<string, unknown> {
   const runInput = runInputFromParentTaskInputs(parentTaskInputs, workflow);
   const snapshot: Record<string, unknown> = {};
@@ -653,19 +660,27 @@ export function buildRunInputSnapshotFromParent(
 /**
  * The run-level input pool a task's `run_input` bindings read. A run started
  * with no inputs stores none, and start has already refused it if the workflow
- * declares a required one. A workflow with a declared run-input contract
- * therefore gets an empty pool, where each optional input reads as absent.
- * Without a contract there is no pool, and a `run_input` binding stays an error.
+ * declares a required one. Such a run gets an empty pool when every run input
+ * the task binds is declared optional, so each reads as absent. Stored inputs
+ * that failed validation give no pool, and neither does a binding to a
+ * required or undeclared input, so the binding stays an error.
  */
 function runInputPool(
   inputBindings: NonNullable<WorkflowTask['inputBindings']>,
-  parentTaskInputs: StoredParentTaskInputs | null,
-  workflow: Pick<Workflow, 'tasks' | 'runInputs'>,
+  stored: StoredRunInputs,
+  workflow: RunInputWorkflow,
 ): Record<string, unknown> | undefined {
-  if (parentTaskInputs) {
-    return buildRunInputSnapshotFromParent(inputBindings, parentTaskInputs, workflow);
+  if (stored.state === 'stored') {
+    return buildRunInputSnapshotFromParent(inputBindings, stored.inputs, workflow);
   }
-  return (workflow.runInputs ?? []).length > 0 ? {} : undefined;
+  if (stored.state === 'invalid') return undefined;
+  const optional = new Set((workflow.runInputs ?? []).filter((r) => !r.required).map((r) => r.id));
+  for (const binding of Object.values(inputBindings)) {
+    if (binding.kind !== 'run_input') continue;
+    const root = runInputPathRoot(binding.path);
+    if (root === undefined || !optional.has(root)) return undefined;
+  }
+  return {};
 }
 
 /**
@@ -677,7 +692,7 @@ function runInputPool(
  */
 function runInputFromParentTaskInputs(
   { taskId, inputs }: StoredParentTaskInputs,
-  workflow: Pick<Workflow, 'tasks' | 'runInputs'>,
+  workflow: RunInputWorkflow,
 ): Record<string, unknown> {
   const entryTask = workflow.tasks.find((t) => t.taskId === taskId);
   if (!entryTask) {
@@ -752,21 +767,29 @@ function setAtPath(obj: Record<string, unknown>, path: string, value: unknown): 
   }
 }
 
-export function extractParentTaskInputs(runMetadata: unknown): StoredParentTaskInputs | null {
+/**
+ * What a run stored as its validated inputs. `absent` is a run started with
+ * none. `invalid` is a stored record that failed validation, and it must never
+ * read as a run with no inputs.
+ */
+type StoredRunInputs =
+  { state: 'stored'; inputs: StoredParentTaskInputs } | { state: 'absent' } | { state: 'invalid' };
+
+function readStoredRunInputs(runMetadata: unknown): StoredRunInputs {
   if (runMetadata === null || runMetadata === undefined || typeof runMetadata !== 'object') {
-    return null;
+    return { state: 'absent' };
   }
   const raw = (runMetadata as Record<string, unknown>)['parentTaskInputs'];
-  if (raw === undefined) return null;
+  if (raw === undefined) return { state: 'absent' };
   const parsed = StoredParentTaskInputsSchema.safeParse(raw);
   if (!parsed.success) {
     getOrchestratorLogger().warn(
       `[taskHelpers] workflow_runs.metadata.parentTaskInputs failed validation; ignoring. ` +
         `issues=${parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')}`,
     );
-    return null;
+    return { state: 'invalid' };
   }
-  return parsed.data;
+  return { state: 'stored', inputs: parsed.data };
 }
 
 export function formatPriorFailuresBlock(priorFailures: unknown): string | null {

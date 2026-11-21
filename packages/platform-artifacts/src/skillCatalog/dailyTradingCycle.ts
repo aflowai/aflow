@@ -11,6 +11,7 @@ import {
   CYCLE_RUN_INPUTS,
   DECIDE_SLOT_RULES,
   EXECUTE_SLOT_RULES,
+  INTRADAY_INDEX_RULE,
   RESOLUTION_OUTCOMES,
   RESOLVE_SLOT_RULES,
   SLOT_INDEX_INPUT_SCHEMA,
@@ -294,6 +295,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                 'pendingIntentions',
                 'repairCloses',
                 'orphanFlattens',
+                'maxThesesPerDay',
                 'thesesOpenedToday',
                 'remainingThesesToday',
                 'coverageNote',
@@ -309,11 +311,17 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                 },
                 slotIndex: {
                   ...SLOT_INDEX_SCHEMA,
+                  description: `The intraday firing number: \`requestedSlotIndex\` when given, otherwise ${INTRADAY_INDEX_RULE}. An integer on an intraday slot, null on every other slot.`,
+                },
+                maxThesesPerDay: {
+                  type: 'integer',
+                  minimum: 0,
                   description:
-                    'The intraday firing number: `requestedSlotIndex` when given, otherwise the clock hour less 9. An integer on an intraday slot, null on every other slot.',
+                    'The campaign’s `maxThesesPerDay`, copied from your input. It is pinned to the campaign.',
                 },
                 thesesOpenedToday: {
                   type: 'array',
+                  uniqueItems: true,
                   items: { type: 'string' },
                   description:
                     'Every thesisId the cycle docs of this trading day list as opened, in any earlier slot.',
@@ -322,7 +330,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                   type: 'integer',
                   minimum: 0,
                   description:
-                    'maxThesesPerDay less the length of thesesOpenedToday, floored at 0. It bounds how many theses decide may form this cycle. 0 on after_close, which opens nothing.',
+                    'maxThesesPerDay less the length of thesesOpenedToday, floored at 0, and 0 on after_close, which opens nothing. The contract refuses any other value. It bounds how many theses decide may form this cycle.',
                 },
                 proceed: {
                   type: 'boolean',
@@ -454,12 +462,16 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
             },
             derivedFrom: [
               {
-                bindingId: 'remaining-theses-ceiling',
+                bindingId: 'theses-per-day-pin',
                 from: '$campaign',
                 binding: 'value:$.maxThesesPerDay',
-                target: '$.remainingThesesToday.maximum',
+                target: '$.maxThesesPerDay.const',
               },
             ],
+            // The pin above makes maxThesesPerDay the campaign's. This ref ties
+            // remainingThesesToday to it and to thesesOpenedToday, which the
+            // decide contract then binds as its theses ceiling.
+            validatorRefs: ['trading.theses-day-budget'],
           },
           promoteOutputs: [
             { kind: 'output_path' as const, path: 'tradingDay', toState: 'tradingDay' },
