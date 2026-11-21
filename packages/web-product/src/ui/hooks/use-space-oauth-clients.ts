@@ -68,6 +68,7 @@ export function useSpaceOAuthClients(spaceId: string) {
 
   return {
     clients,
+    redirectUri: clientsQuery.data?.redirectUri ?? null,
     isLoading: clientsQuery.isLoading,
     error: clientsQuery.error ?? null,
     refetch: () => {

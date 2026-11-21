@@ -334,7 +334,23 @@ connector composes with Plan 218's `baseUrlTemplate` / `variableValues`.
 - **Callback endpoint** is the single `GET /v1/oauth/callback` (handler
   dispatches by `oauth_state.integration_kind`); the redirect URI stays the one
   platform constant even for tenant/space apps (open-redirect guard — the
-  tenant/space registers _our_ callback in _their_ app).
+  tenant/space registers _our_ callback in _their_ app). Both OAuth Apps pages
+  show it: their list reads carry `redirectUri` from `resolveOAuthCallbackUrl()`,
+  because the browser cannot resolve `API_BASE_URL`.
+- **Connected account.** `completeConsent` reads the account inside the
+  exchange: the id token's `email` claim (its `aud` must name the client), then
+  the AS metadata's `userinfo_endpoint`. Both need `openid` and `email`, so
+  `startConsent` adds the curated issuer's `identityScopes` to whatever the
+  binding requests (Google and Microsoft carry them, GitHub and Slack none).
+  The Gmail connector names only its Gmail scopes and gets them this way.
+  It writes `oauth_tokens.account_identity` (NULL when the provider reports
+  none or the read fails) and `connected_at`, which a refresh leaves alone. A
+  re-consent replaces the token, so it replaces `account_identity` with its own
+  read too, NULL included: the row never names an account its token does not
+  belong to, and after a failed read the card says a bare "Connected" until the
+  operator consents again. The API bindings list carries each OAuth-code binding's own
+  token as `oauthConnection`, resolved through the binding's `ownerScope`, so the
+  card states a space-owned token as well as a user-owned one.
 
 Spec: Plan 185.
 

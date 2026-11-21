@@ -17,6 +17,7 @@ import {
 } from '@aflow/network-safety';
 import { discoverPRM, type PrmDiscoveryResult } from './prmDiscovery.js';
 import { discoverAsMetadata, type AsMetadata } from './asMetadata.js';
+import { readAccountIdentity } from './accountIdentity.js';
 import { resolveOAuthClient, type OAuthClientScope } from './clientResolution.js';
 import type { OAuthOwnerScope } from './resolver.js';
 
@@ -253,6 +254,16 @@ export interface StartConsentResult {
 const DEFAULT_STATE_TTL_MS = 10 * 60 * 1000;
 
 /**
+ * The requested scopes plus the issuer's identity scopes, in that order, each
+ * once. Consent completion reads the account from what these make the provider
+ * report, so a binding naming only API scopes still records its account.
+ */
+export function withIdentityScopes(scopes: readonly string[], issuerKey: string): string[] {
+  const identity = getOAuthIssuer(issuerKey)?.identityScopes ?? [];
+  return [...new Set([...scopes, ...identity])];
+}
+
+/**
  * Start an OAuth 2.1 PKCE consent flow. Returns the authorization URL the
  * operator UI redirects the user to. Stores state in `oauth_state` keyed to
  * the pinned `(integration_kind, resource_key, owner_scope, owner_id)`.
@@ -288,7 +299,10 @@ export async function startConsent(params: StartConsentParams): Promise<StartCon
   const resource =
     params.resource ??
     (params.discovery ? extractUrlOrigin(params.discovery.serverUrl) : undefined);
-  const scopes = params.scopes ?? client.defaultScopes ?? prm?.prm.scopes_supported ?? [];
+  const scopes = withIdentityScopes(
+    params.scopes ?? client.defaultScopes ?? prm?.prm.scopes_supported ?? [],
+    target.issuerKey,
+  );
 
   // Persist state row BEFORE returning the URL — if the row write fails, the
   // user never gets a URL they could redeem.
@@ -383,6 +397,8 @@ export interface CompleteConsentResult {
   ownerId: string;
   expiresAt: Date;
   scopes: string[];
+  /** The account the provider reported, or null when it reported none. */
+  accountIdentity: string | null;
 }
 
 interface TokenResponse {
@@ -391,6 +407,8 @@ interface TokenResponse {
   expires_in?: number;
   refresh_token?: string;
   scope?: string;
+  /** OIDC id token, present when `openid` was granted. */
+  id_token?: string;
 }
 
 export interface PostToTokenEndpointParams {
@@ -522,6 +540,14 @@ export async function completeConsent(
     ? token.scope.split(/\s+/).filter(Boolean)
     : stateRow.scopesJson;
 
+  const accountIdentity = await readAccountIdentity({
+    token,
+    asMetadata,
+    clientId: client.clientId,
+    ...(ctx.discovery ? { privateNetwork: ctx.discovery.privateNetwork } : {}),
+    ...(params.fetchImpl ? { fetchImpl: params.fetchImpl } : {}),
+  });
+
   const accessTokenEnc = await encryptCredentialEnvelope(token.access_token);
   const refreshTokenEnc = token.refresh_token
     ? await encryptCredentialEnvelope(token.refresh_token)
@@ -537,7 +563,8 @@ export async function completeConsent(
         INSERT INTO oauth_tokens (
           integration_kind, resource_key, owner_scope, owner_id,
           access_token_enc, refresh_token_enc, token_type,
-          scopes_json, audience, client_id_used, expires_at, obtained_at, updated_at
+          scopes_json, audience, client_id_used, account_identity,
+          expires_at, obtained_at, connected_at, updated_at
         )
         VALUES (
           ${stateRow.integrationKind},
@@ -550,7 +577,9 @@ export async function completeConsent(
           ${JSON.stringify(grantedScopes)}::jsonb,
           ${stateRow.resource ?? null},
           ${client.clientId},
+          ${accountIdentity},
           ${expiresAt.toISOString()}::timestamptz,
+          NOW(),
           NOW(),
           NOW()
         )
@@ -561,8 +590,10 @@ export async function completeConsent(
           scopes_json = EXCLUDED.scopes_json,
           audience = EXCLUDED.audience,
           client_id_used = EXCLUDED.client_id_used,
+          account_identity = EXCLUDED.account_identity,
           expires_at = EXCLUDED.expires_at,
           obtained_at = EXCLUDED.obtained_at,
+          connected_at = EXCLUDED.connected_at,
           updated_at = NOW()
       `);
       // Single-use: delete the state row.
@@ -579,6 +610,7 @@ export async function completeConsent(
     ownerId: stateRow.ownerId,
     expiresAt,
     scopes: grantedScopes,
+    accountIdentity,
   };
 }
 

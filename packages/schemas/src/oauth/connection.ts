@@ -27,6 +27,23 @@ export const OAuthConnectionSchema = z.object({
 });
 export type OAuthConnection = z.infer<typeof OAuthConnectionSchema>;
 
+/**
+ * One binding's OAuth token, as the Integrations card states it. It names the
+ * token the binding itself resolves: owner scope `user` reads the signed-in
+ * user's token, and owner scope `space` reads the space's. A space-owned token
+ * therefore shows to every member, and a user-owned one only to its owner.
+ * `account` and `connectedAt` are null where nothing recorded them. A provider
+ * that reported no account shows "Connected" and names none.
+ */
+export const OAuthBindingConnectionSchema = z.object({
+  account: z.string().nullable(),
+  /** When consent completed (ISO 8601). A refresh does not move it. */
+  connectedAt: z.string().nullable(),
+  scopes: z.array(z.string()),
+  status: OAuthConnectionStatusSchema,
+});
+export type OAuthBindingConnection = z.infer<typeof OAuthBindingConnectionSchema>;
+
 export const OAuthConnectionListResponseSchema = z.object({
   connections: z.array(OAuthConnectionSchema),
 });

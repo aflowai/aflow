@@ -6,7 +6,6 @@ import type { IconRef } from '@aflow/schemas';
 
 import { useIntegrations, type ApiBindingSummary } from './use-integrations.js';
 import { useMcpServers } from './use-mcp-servers.js';
-import { useOAuthConnections } from './use-oauth-connections.js';
 import { useRepoBindings } from './use-repo-bindings.js';
 import { getApiStatus, type ApiStatus } from '../components/integrations-api/helpers.js';
 import { getMcpReadiness } from '../components/integrations-mcp/mcpReadiness.js';
@@ -75,7 +74,6 @@ export function useSpaceIntegrations(spaceId: string) {
   const api = useIntegrations(spaceId);
   const mcp = useMcpServers(spaceId);
   const repo = useRepoBindings(spaceId);
-  const { connections } = useOAuthConnections();
 
   const credentialsByKey = useMemo(
     () => new Map(api.credentials.map((c) => [c.credentialKey, c])),
@@ -99,17 +97,14 @@ export function useSpaceIntegrations(spaceId: string) {
 
     for (const def of api.definitions) {
       const requiredVariables = (def.variables ?? []).filter((v) => v.required).map((v) => v.name);
-      // A connection's connect-once identity is the API definition id — the same
-      // value the executor passes as the OAuth `resourceKey`.
-      const oauthConnected =
-        connections.find((c) => c.integrationKind === 'api' && c.resourceKey === def.apiId)
-          ?.status === 'connected';
       const bindings = bindingsByApiId.get(def.apiId) ?? [];
+      // Each binding's OAuth readiness is its own token, resolved by its owner
+      // scope and carried on the binding, exactly as the card reads it.
       const status = bindings.length
         ? bindings
-            .map((b) => getApiStatus(b, credentialsByKey, requiredVariables, oauthConnected))
+            .map((b) => getApiStatus(b, credentialsByKey, requiredVariables))
             .reduce((best, next) => (API_STATUS_RANK[next] > API_STATUS_RANK[best] ? next : best))
-        : getApiStatus(undefined, credentialsByKey, requiredVariables, oauthConnected);
+        : getApiStatus(undefined, credentialsByKey, requiredVariables);
       items.push({
         key: `api:${def.apiId}`,
         kind: 'api',
@@ -200,7 +195,6 @@ export function useSpaceIntegrations(spaceId: string) {
     mcp.servers,
     mcp.bindings,
     repo.repoBindings,
-    connections,
     credentialsByKey,
   ]);
 

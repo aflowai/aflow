@@ -20,6 +20,7 @@ import {
   getOAuthIssuer,
   type OAuthClientMeta,
 } from '@aflow/schemas';
+import { resolveOAuthCallbackUrl } from '@aflow/oauth';
 import { classifyDbError } from '../../lib/databaseErrors.js';
 import { getDb } from './shared.js';
 
@@ -72,7 +73,7 @@ export function registerOAuthClientRoutes(fastify: FastifyInstance): void {
       const space = await request.requireSpace();
       const db = getDb(fastify);
       if (!db) {
-        reply.send({ clients: [] });
+        reply.send({ clients: [], redirectUri: resolveOAuthCallbackUrl() });
         return;
       }
 
@@ -84,7 +85,7 @@ export function registerOAuthClientRoutes(fastify: FastifyInstance): void {
           .where(and(eq(oauthClients.scope, 'space'), eq(oauthClients.scopeId, space.spaceId)));
       })) as OauthClientRow[];
 
-      reply.send({ clients: rows.map(mapOAuthClientRow) });
+      reply.send({ clients: rows.map(mapOAuthClientRow), redirectUri: resolveOAuthCallbackUrl() });
     },
   );
 

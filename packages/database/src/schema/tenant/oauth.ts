@@ -99,6 +99,13 @@ export const oauthTokens = pgTable(
      *  detect client rotation and force re-consent; no reader compares it yet. */
     clientIdUsed: text('client_id_used'),
 
+    /** The account the provider reported at consent (Google: the id token's
+     *  email). NULL when the provider reported none. */
+    accountIdentity: text('account_identity'),
+
+    /** When consent completed. A refresh moves `obtainedAt`, never this. */
+    connectedAt: timestamp('connected_at', { withTimezone: true }),
+
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
 
     obtainedAt: timestamp('obtained_at', { withTimezone: true }).notNull().defaultNow(),

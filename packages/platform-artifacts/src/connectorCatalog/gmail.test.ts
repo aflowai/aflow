@@ -24,6 +24,15 @@ describe('Gmail connector catalog entry', () => {
     expect(getOAuthIssuer('google')).toBeDefined();
   });
 
+  it('names no identity scope, so its issuer must add the ones the account read needs', () => {
+    // Consent completion reads the account from the id token's email claim or
+    // from userinfo. Both need openid and email, which the listing leaves out,
+    // so the google issuer adds them to every consent.
+    expect(GMAIL_CONNECTOR.oauthScopes).not.toContain('openid');
+    expect(GMAIL_CONNECTOR.oauthScopes).not.toContain('email');
+    expect(getOAuthIssuer('google')?.identityScopes).toEqual(['openid', 'email']);
+  });
+
   it('declares the Gmail endpoint scopes the token needs', () => {
     // Gmail scopes are restricted and not part of the google issuer defaults
     // (openid/email/profile), so the listing MUST declare its own or the

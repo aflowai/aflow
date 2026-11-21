@@ -28,8 +28,9 @@ interface ConsentStartResponse {
  * synchronously) or the consent-start endpoint's response. Resume of the parked
  * session is callback-driven (the OAuth callback), not a resolve-route action —
  * so this card has no submit/approve affordance. When the popup closes we
- * invalidate the connections + Action Center queries so the consent item
- * refreshes/clears after the run resumes.
+ * invalidate the connections, the space's API bindings and the Action Center
+ * queries. The bindings carry each binding's OAuth connection, which the
+ * Workbench reads its readiness from, so it flips to connected at once.
  */
 export function OAuthConsentCard({ item, extension }: OAuthConsentCardProps): ReactElement {
   const [launchError, setLaunchError] = useState<string | null>(null);
@@ -55,6 +56,9 @@ export function OAuthConsentCard({ item, extension }: OAuthConsentCardProps): Re
     setLaunchError(null);
     const onClosed = (): void => {
       void queryClient.invalidateQueries({ queryKey: [...OAUTH_CONNECTIONS_KEY] });
+      void queryClient.invalidateQueries({
+        queryKey: ['space', item.spaceId, 'integrations', 'bindings'],
+      });
       void queryClient.invalidateQueries({ queryKey: ['space', item.spaceId, 'action-center'] });
     };
     // Prefer a fully-resolved authorization URL when the executor already

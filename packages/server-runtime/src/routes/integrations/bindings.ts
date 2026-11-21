@@ -42,6 +42,7 @@ import {
   integrationPolicyDenialPayload,
   mapBindingRow,
 } from './shared.js';
+import { listBindingOAuthConnections } from '../oauthConnections.js';
 import {
   RequestBindingScopeSchema,
   composeStoredBindingScope,
@@ -90,10 +91,28 @@ export function registerBindingRoutes(fastify: FastifyInstance): void {
         return tx.select().from(apiBindings).where(eq(apiBindings.spaceId, space.spaceId));
       })) as ApiBindingRow[];
 
+      const connections = await listBindingOAuthConnections(
+        db,
+        tenant.tenantId,
+        rows.map((row) => ({
+          bindingId: row.bindingId,
+          apiId: row.apiId,
+          authJson: (row.authJson ?? null) as Record<string, unknown> | null,
+        })),
+        {
+          ...(request.authUser?.userId ? { userId: request.authUser.userId } : {}),
+          spaceId: space.spaceId,
+          tenantId: tenant.tenantId,
+        },
+      );
+
       const bindings = rows.map((row) => {
         const authJson = (row.authJson ?? {}) as Record<string, unknown>;
         const credentialKeys = extractCredentialKeys(authJson);
-        return mapBindingRow(row as Parameters<typeof mapBindingRow>[0], credentialKeys);
+        const mapped = mapBindingRow(row as Parameters<typeof mapBindingRow>[0], credentialKeys);
+        return connections.has(row.bindingId)
+          ? { ...mapped, oauthConnection: connections.get(row.bindingId) ?? null }
+          : mapped;
       });
 
       reply.send({ bindings });
