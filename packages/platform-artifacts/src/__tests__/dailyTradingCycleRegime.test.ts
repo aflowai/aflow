@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import AjvModule from 'ajv';
 import {
+  decideByRules,
   deriveRequiredCapabilities,
   projectTaskOutput,
   validateCampaignConfig,
@@ -11,6 +12,8 @@ import {
   lookupValidator,
   mergeDerivedPatches,
   substituteTemplateBinds,
+  WorkflowRunDecideInputSchema,
+  type WorkflowTask,
   type WorkflowTaskOutputProjection,
 } from '@aflow/schemas';
 import { getSkillCatalogEntry } from '../skillCatalog.js';
@@ -19,10 +22,13 @@ import {
   PRE_MARKET_EVIDENCE_MAX_CHARS,
   PRE_MARKET_NOTE_PATH_TEMPLATE,
   REGIME_CAPS_VALIDATOR_REF,
+  REGIME_UNAVAILABLE,
   computeMarketRegime,
   regimeCapIssues,
+  regimeCapsApply,
   type RegimeEvidence,
 } from '../skillCatalog/dailyTradingCycleRegime.js';
+import { runSkillTasks, type TaskAnswer } from './runSkillTasks.js';
 
 const AjvCtor = (AjvModule as unknown as { default: typeof AjvModule }).default ?? AjvModule;
 const ajv = new AjvCtor({ allErrors: true, strict: false });
@@ -201,6 +207,31 @@ describe('daily-trading-cycle market regime', () => {
     expect(state({ SPY: choppy50, QQQ: rising50, IWM: rising50 }, rising)).toBe('stressed');
   });
 
+  it('an index is above its average by the average it reports', () => {
+    // The unrounded means sit just under the close (100.00601 and 100.006004),
+    // and both round up past it to 100.01.
+    const flat = [...series(49, () => 100.006), 100.0062];
+    const evidence = { ...SEEDED, indexCloses: { ...SEEDED.indexCloses, IWM: flat } };
+    const iwm = computeMarketRegime(evidence).indexes.IWM;
+    expect(iwm).toMatchObject({ close: 100.0062, sma20: 100.01, sma50: 100.01 });
+    // What an agent gets by comparing the close with the averages it reported.
+    expect(iwm.aboveSma20).toBe(iwm.close > iwm.sma20);
+    expect(iwm.aboveSma50).toBe(iwm.close > iwm.sma50);
+    expect(iwm.aboveSma20).toBe(false);
+
+    const rule = getValidator(MARKET_REGIME_VALIDATOR_REF)!;
+    const sound = gathered(evidence);
+    expect(rule.safeParse(sound).success).toBe(true);
+    const unrounded = {
+      ...sound,
+      marketRegime: {
+        ...sound.marketRegime,
+        indexes: { ...sound.marketRegime.indexes, IWM: { ...iwm, aboveSma20: true } },
+      },
+    };
+    expect(rule.safeParse(unrounded).success).toBe(false);
+  });
+
   it('the gather contract accepts the computed regime and refuses any other number', () => {
     const t = task('gather-regime');
     expect(t.type).toBe('agent');
@@ -293,12 +324,13 @@ describe('daily-trading-cycle per-regime caps', () => {
     effectiveSchema(decide, {
       $campaign: CAMPAIGN,
       'resolve-theses': resolveOutput('open'),
-      'gather-regime': { marketRegime: { state } },
+      'regime-state': { decision: state },
     });
 
   it('decide takes the regime, its caps, the calendar and the pre-market evidence as inputs', () => {
-    expect(decide.dependsOn).toEqual(['gather-regime', 'read-pre-market']);
+    expect(decide.dependsOn).toEqual(['regime-state', 'read-pre-market']);
     expect(decide.inputBindings).toMatchObject({
+      marketState: { kind: 'task_output', taskId: 'regime-state', path: 'decision' },
       marketRegime: { kind: 'task_output', taskId: 'gather-regime', path: 'marketRegime' },
       regimeCaps: { kind: 'campaign_input', path: 'regimeCaps' },
       calendar: { kind: 'task_output', taskId: 'ingest-calendar', path: 'calendar' },
@@ -367,6 +399,43 @@ describe('daily-trading-cycle per-regime caps', () => {
     expect(regimeCapIssues(decision('stressed', [thesis('long')], 'long'), undefined)).toEqual([
       expect.objectContaining({ path: ['marketState'] }),
     ]);
+  });
+
+  it('regime-state names the gathered state, or unavailable when gather-regime failed', () => {
+    const step = task('regime-state');
+    expect(task('gather-regime').optional).toBe(true);
+    expect(step.optional).toBeUndefined();
+    expect(step.operation).toBe('workflow.run.decide');
+    const decided = (outputs: Record<string, unknown>) =>
+      decideByRules(WorkflowRunDecideInputSchema.parse(opInput(step, outputs))).decision;
+    for (const state of ['risk_on', 'mixed', 'risk_off', 'stressed']) {
+      expect(decided({ 'gather-regime': { marketRegime: { state } } })).toBe(state);
+    }
+    expect(decided({})).toBe(REGIME_UNAVAILABLE);
+  });
+
+  it('without a regime, decide is pinned to unavailable and held to the campaign-wide caps alone', () => {
+    const schema = decideSchema(REGIME_UNAVAILABLE);
+    const long = decision(REGIME_UNAVAILABLE, [thesis('long')], 'long', 55);
+    expect(schemaRefuses(schema, long)).toBe(false);
+    expect(schemaRefuses(decideSchema('risk_off'), long)).toBe(true);
+    expect(schemaRefuses(schema, decision('risk_off', [thesis('short')], 'short'))).toBe(true);
+    // No state to cap against: no per-regime cap applies, even with none on the campaign.
+    expect(regimeCapIssues(long, CAMPAIGN.regimeCaps)).toEqual([]);
+    expect(regimeCapIssues(long, undefined)).toEqual([]);
+    expect(regimeCapsApply(long)).toBe(false);
+    // The campaign-wide caps still bind.
+    expect(schemaRefuses(schema, decision(REGIME_UNAVAILABLE, [thesis('long')], 'long', 61))).toBe(
+      true,
+    );
+    expect(
+      schemaRefuses(
+        schema,
+        decision(REGIME_UNAVAILABLE, [{ ...thesis('long'), sizePct: 9 }], 'long'),
+      ),
+    ).toBe(true);
+    // A gathered regime is still held to its caps.
+    expect(regimeCapsApply(decision('risk_off', [thesis('long')], 'long'))).toBe(true);
   });
 
   it('the caps are a frozen campaign field, and none may exceed the campaign-wide cap', () => {
@@ -502,9 +571,15 @@ describe('daily-trading-cycle calendar and recorded regime', () => {
   };
   const upstream = {
     'gather-regime': regime,
+    'regime-state': { decision: regime.marketRegime.state },
     decide: { bias: null },
     record,
   };
+  const recorded = (calendar: unknown = null) => ({
+    marketState: regime.marketRegime.state,
+    marketRegime: regime.marketRegime,
+    calendar,
+  });
   const written = (taskId: string, outputs: Record<string, unknown>) =>
     (opInput(task(taskId), outputs)['content'] as { inlineJson: Record<string, unknown> })
       .inlineJson;
@@ -528,10 +603,7 @@ describe('daily-trading-cycle calendar and recorded regime', () => {
   it('the calendar appears when a calendar source is bound', () => {
     const bound = { ...upstream, 'ingest-calendar': { calendar: CALENDAR } };
     for (const id of ['write-cycle-doc', 'write-snapshot']) {
-      expect(written(id, bound)['marketRegime'], id).toEqual({
-        ...regime.marketRegime,
-        calendar: CALENDAR,
-      });
+      expect(written(id, bound), id).toMatchObject(recorded(CALENDAR));
     }
     expect(resolveInputs(task('decide'), bound)['calendar']).toEqual(CALENDAR);
   });
@@ -539,29 +611,102 @@ describe('daily-trading-cycle calendar and recorded regime', () => {
   it('the calendar is absent without one', () => {
     // No source bound: the optional calendar task failed and binds nothing.
     for (const id of ['write-cycle-doc', 'write-snapshot']) {
-      expect(written(id, upstream)['marketRegime'], id).toEqual({
-        ...regime.marketRegime,
-        calendar: null,
-      });
+      expect(written(id, upstream), id).toMatchObject(recorded(null));
     }
     expect(resolveInputs(task('decide'), upstream)).not.toHaveProperty('calendar');
   });
 
   it('the cycle doc and the snapshot carry the regime the decision was made under', () => {
     const cycleDoc = written('write-cycle-doc', upstream);
-    expect(cycleDoc).toEqual({
-      ...record.cycleDoc,
-      bias: null,
-      marketRegime: { ...regime.marketRegime, calendar: null },
-    });
-    expect(written('write-snapshot', upstream)).toEqual({
-      ...record.snapshotDoc,
-      marketRegime: { ...regime.marketRegime, calendar: null },
-    });
+    expect(cycleDoc).toEqual({ ...record.cycleDoc, bias: null, ...recorded() });
+    expect(written('write-snapshot', upstream)).toEqual({ ...record.snapshotDoc, ...recorded() });
     // The record writes neither: the snapshot it produces holds its contract's fields only.
     const recordSchema = task('record').outputContract!.schema as {
       properties: { snapshotDoc: { additionalProperties: boolean } };
     };
     expect(recordSchema.properties.snapshotDoc.additionalProperties).toBe(false);
+  });
+
+  it('the cycle doc and the snapshot record a regime that could not be gathered', () => {
+    const { 'gather-regime': _failed, ...withoutRegime } = upstream;
+    const unavailable = { ...withoutRegime, 'regime-state': { decision: REGIME_UNAVAILABLE } };
+    const absent = { marketState: REGIME_UNAVAILABLE, marketRegime: null, calendar: null };
+    expect(written('write-cycle-doc', unavailable)).toEqual({
+      ...record.cycleDoc,
+      bias: null,
+      ...absent,
+    });
+    expect(written('write-snapshot', unavailable)).toEqual({ ...record.snapshotDoc, ...absent });
+  });
+
+  describe('a cycle whose regime cannot be gathered', () => {
+    /** Each task's answer on a cycle where every regime read fails. */
+    function answer(slot: string) {
+      return (taskId: string, input: Record<string, unknown>): TaskAnswer => {
+        switch (taskId) {
+          case 'ingest-clock':
+            return {
+              data: {
+                timestamp: '2026-07-14T20:30:00Z',
+                is_open: false,
+                next_open: '2026-07-15T13:30:00Z',
+                next_close: '2026-07-15T20:00:00Z',
+              },
+            };
+          case 'ingest-account':
+            return {
+              data: { equity: '100000', cash: '100000', buying_power: '200000', status: 'ACTIVE' },
+            };
+          case 'ingest-positions':
+          case 'ingest-orders':
+            return { data: [] };
+          case 'resolve-theses':
+            return { proceed: true, ...resolveOutput(slot), resolutions: [] };
+          case 'ingest-calendar':
+          case 'gather-regime':
+            return 'fail';
+          case 'read-pre-market':
+            return {};
+          case 'decide':
+            return { ...decision(String(input['marketState']), [], null, 0), slot };
+          case 'execute-orders':
+            return { orderResults: [], submittedCount: 0, deferredCount: 0, failedCount: 0 };
+          case 'record':
+            return { ...record, cycleDoc: { ...record.cycleDoc, slot } };
+          default:
+            return {};
+        }
+      };
+    }
+
+    for (const slot of ['open', 'after_close']) {
+      it(`still decides, closes, records and completes on ${slot}`, () => {
+        const run = runSkillTasks(wf.tasks as unknown as WorkflowTask[], { slot }, answer(slot));
+        expect(run.statuses.get('gather-regime')).toBe('failed');
+        for (const id of [
+          'regime-state',
+          'decide',
+          'execute-orders',
+          'record',
+          'write-snapshot',
+          'record-learnings',
+          'write-cycle-doc',
+        ]) {
+          expect(run.statuses.get(id), id).toBe('succeeded');
+        }
+        const decideInput = run.inputs.get('decide')!;
+        expect(decideInput['marketState']).toBe(REGIME_UNAVAILABLE);
+        expect(decideInput).not.toHaveProperty('marketRegime');
+        const cycleDoc = (
+          run.inputs.get('write-cycle-doc')!['content'] as { inlineJson: Record<string, unknown> }
+        ).inlineJson;
+        expect(cycleDoc).toMatchObject({
+          slot,
+          marketState: REGIME_UNAVAILABLE,
+          marketRegime: null,
+          calendar: null,
+        });
+      });
+    }
   });
 });

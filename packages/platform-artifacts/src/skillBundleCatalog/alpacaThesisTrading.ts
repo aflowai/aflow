@@ -149,6 +149,10 @@ recomputes every number from the reported closes and refuses any other value.
 A pre_market, open or intraday cycle reads completed sessions only, so its
 closes end before the trading day.
 
+The regime is optional to the cycle. When it cannot be gathered, decide names
+the state \`unavailable\`, no per-regime cap applies, and the campaign-wide caps
+still do. The closes, the record and the cycle doc run on every slot.
+
 ## Per-regime caps — the campaign's \`regimeCaps\`
 
 The campaign may cap each regime state, declared at campaign start and frozen
@@ -179,9 +183,9 @@ and answers:
 \`\`\`
 
 With one bound, the cycle reads the trading day's calendar and decide receives
-it. The cycle doc and the snapshot carry it as \`marketRegime.calendar\`. Without
-one, the optional calendar task fails, decide receives no calendar, and
-\`marketRegime.calendar\` is null. This bundle ships no calendar source.
+it. The cycle doc and the snapshot carry it as \`calendar\`. Without one, the
+optional calendar task fails, decide receives no calendar, and \`calendar\` is
+null. This bundle ships no calendar source.
 
 ## Pre-market note — \`${PRE_MARKET_NOTE_PATH_TEMPLATE}\`
 
@@ -313,22 +317,27 @@ it is written LAST — a crashed cycle re-runs, it is never half-recorded.
   "projectedGrossExposurePct": 42.5,
   "decisionRationale": "<why these theses (or why none)>",
   "bias": "long | short | neutral | null — the direction of the theses opened, null when none",
-  "marketRegime": { "asOf": "<YYYY-MM-DD>", "state": "risk_on | mixed | risk_off | stressed", "indexes": { "SPY": { ... }, "QQQ": { ... }, "IWM": { ... } }, "realizedVolPct": 14.2, "breadth": { ... }, "calendar": null }
+  "marketState": "risk_on | mixed | risk_off | stressed | unavailable",
+  "marketRegime": { "asOf": "<YYYY-MM-DD>", "state": "...", "indexes": { "SPY": { ... }, "QQQ": { ... }, "IWM": { ... } }, "realizedVolPct": 14.2, "breadth": { ... } },
+  "calendar": null
 }
 \`\`\`
 
-The write step adds \`bias\` from decide and \`marketRegime\` from the
-gather-regime and calendar tasks. The record task never copies them, so the
-doc shows the regime the decision was made under.
+The write step adds \`bias\` from decide, \`marketState\` from the regime-state
+step, \`marketRegime\` from gather-regime and \`calendar\` from the calendar task.
+The record task never copies them, so the doc shows the regime the decision
+was made under. \`marketState\` is \`unavailable\` and \`marketRegime\` is null when
+the regime could not be gathered.
 
 ## Snapshot — \`/portfolio/snapshots/{tradingDay}-{slotKey}.json\`
 
 \`\`\`json
-{ "equity": 100000, "cash": 60000, "positions": [ ... ], "brokerGrossExposurePct": 41, "grossExposurePct": 40, "orphanFlattens": [{ "symbol": "...", "qty": "...", "side": "long | short", "evidence": "..." }], "armTable": null, "marketRegime": { ... } }
+{ "equity": 100000, "cash": 60000, "positions": [ ... ], "brokerGrossExposurePct": 41, "grossExposurePct": 40, "orphanFlattens": [{ "symbol": "...", "qty": "...", "side": "long | short", "evidence": "..." }], "armTable": null, "marketState": "...", "marketRegime": { ... }, "calendar": null }
 \`\`\`
 
-\`marketRegime\` is the cycle's regime, the same object the cycle doc holds. The
-after_close snapshot shows the regime at the close of the day.
+\`marketState\`, \`marketRegime\` and \`calendar\` are the cycle's, the same values
+the cycle doc holds. The after_close snapshot shows the regime at the close of
+the day.
 
 \`grossExposurePct\` is campaign-attributed (broker gross minus the
 orphanFlattens' notionals) — the number scored against the campaign cap.
@@ -431,7 +440,7 @@ export const ALPACA_THESIS_TRADING: AuthoredSkillBundle = {
 
 **Several hypotheses per campaign**: a campaign tests named hypotheses side by side, one arm each, and every thesis cites its arm by id. Each arm has its own daily thesis budget. The after_close cycle reports a per-arm table of theses opened, open and resolved by outcome, counted from the ledger.
 
-**Market regime and per-regime caps**: every cycle gathers the market regime from the market-data binding. It reads SPY, QQQ and IWM against their 20-day and 50-day averages, SPY's realized volatility, and the share of universe members above their 20-day average. The contract recomputes each number from the closes the cycle reports, and the numbers give one state: risk_on, mixed, risk_off or stressed. The campaign's \`regimeCaps\` may cap each state's gross exposure and the biases (long, short, neutral) its decisions may take. The decide contract refuses a decision that opens theses past them. A calendar source the space binds adds the day's calendar: half days, holidays and known macro releases. The day's pre-market note at \`/research/{tradingDay}/pre-market.md\` reaches decide as evidence, cut at a fixed size and marked truncated. The cycle doc and the snapshot carry the regime each decision was made under.
+**Market regime and per-regime caps**: every cycle gathers the market regime from the market-data binding. It reads SPY, QQQ and IWM against their 20-day and 50-day averages, SPY's realized volatility, and the share of universe members above their 20-day average. The contract recomputes each number from the closes the cycle reports, and the numbers give one state: risk_on, mixed, risk_off or stressed. The campaign's \`regimeCaps\` may cap each state's gross exposure and the biases (long, short, neutral) its decisions may take. The decide contract refuses a decision that opens theses past them. When the regime cannot be gathered, the cycle still runs on every slot, after_close included. decide then names the state \`unavailable\`, no per-regime cap applies, and the campaign-wide caps still do. A calendar source the space binds adds the day's calendar: half days, holidays and known macro releases. The day's pre-market note at \`/research/{tradingDay}/pre-market.md\` reaches decide as evidence, cut at a fixed size and marked truncated. The cycle doc and the snapshot carry the state each decision was made under, with the regime, or null where it was unavailable.
 
 **No human gate**: paper trading carries zero financial risk; the safety layer is the structural risk-gate — campaign caps (universe, hypothesis arms and their daily budgets, theses/day, per-position %, gross exposure, horizon bounds) are bound into the decide task's output contract and violations are rejected by schema validation.
 
@@ -561,7 +570,7 @@ export const ALPACA_THESIS_TRADING: AuthoredSkillBundle = {
     'Set up the cron schedules in America/New_York on weekdays, staggered off round boundaries: pre-market (e.g. 47 8 * * 1-5), open (37 9 * * 1-5), hourly intraday (7 10-15 * * 1-5) and after-close (23 16 * * 1-5). Each schedule input asks for workflow.run.start({ slug, inputs: { slot } }) with its slot: pre_market, open, intraday or after_close. An intraday slotIndex counts session hours from the 09:30 open, so 10:07 is intraday-1, derived or passed.',
     'Each slot does only what its contracts allow. pre_market forms the day’s theses as deferred intentions with entry conditions and submits nothing. open and intraday submit due intentions, resolve on current prices and may form theses under the day’s remaining cap. after_close resolves on the close and opens nothing. Runs are idempotent per (tradingDay, slot) and self-heal missed slots, so an overdue firing on stack startup is safe. A run with no slot derives it from the clock.',
     'A cycle opens theses only from the approved set at /research/{tradingDay}/approved-theses.json, and nothing in this bundle writes it until the Strategy Desk skill ships in a later revision of this bundle. If no thesis opens, tell the operator to write the day’s set in Memory, shaped as /portfolio/theses/SCHEMA.md says. Never write it yourself: a set a conversation writes is refused, and opens nothing. Resolution runs either way.',
-    'Each cycle gathers the market regime (risk_on, mixed, risk_off or stressed) from SPY, QQQ, IWM and universe closes, and its contract recomputes every number. The campaign field regimeCaps maps a state to { maxGrossExposurePct, biases }, and {} caps no state. No state cap may exceed maxGrossExposurePct. A campaign from before per-regime caps has no regimeCaps, so its decide task cannot run: end it and start a new one.',
+    'Each cycle gathers the market regime (risk_on, mixed, risk_off or stressed) from index and universe closes. regimeCaps maps a state to { maxGrossExposurePct, biases }, none over maxGrossExposurePct, and {} caps no state. A cycle without a regime decides under unavailable, held to the campaign-wide caps alone. A campaign from before per-regime caps has no regimeCaps, so its decide task cannot run: end it and start a new one.',
     'There is no human approval gate on orders: paper trading carries zero financial risk and the campaign caps are enforced structurally in the decide contract. Do not add ad-hoc confirmation asks into the loop.',
     'Layer-2 outcome metrics (vs SPY buy-and-hold, Sharpe, drawdown) are read only at the weekly checkpoint and campaign end from the ledger snapshots — never report daily P&L as a signal.',
   ],

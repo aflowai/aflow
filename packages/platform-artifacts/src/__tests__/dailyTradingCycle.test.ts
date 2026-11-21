@@ -90,8 +90,8 @@ const CAMPAIGN = {
   },
 };
 
-/** The gather-regime output every decide contract in this suite pins its marketState to. */
-const GATHERED = { marketRegime: { state: 'risk_on' } };
+/** The regime-state output every decide contract in this suite pins its marketState to. */
+const REGIME_STATE = { decision: 'risk_on' };
 
 /** A valid resolve-theses output for one slot, with nothing resolved. */
 function resolveOutput(slot: CycleSlot, overrides: Record<string, unknown> = {}) {
@@ -215,7 +215,7 @@ function effectiveOutputSchema(
 ): Record<string, unknown> {
   const patches = (t.outputContract?.derivedFrom ?? []).map((b) => {
     const m = /^(enum|value|count):(.+)$/.exec(b.binding);
-    const source = sources[b.from] ?? (b.from === 'gather-regime' ? GATHERED : undefined);
+    const source = sources[b.from] ?? (b.from === 'regime-state' ? REGIME_STATE : undefined);
     if (!m || !source) throw new Error(`no test source for binding ${b.bindingId}`);
     const path = compileRestrictedPath(m[2]!);
     const kind = m[1] as 'enum' | 'value' | 'count';
@@ -276,7 +276,7 @@ describe('DAILY_TRADING_CYCLE', () => {
     expect(errors).toEqual([]);
   });
 
-  it('has the expected 14-task graph', () => {
+  it('has the expected 15-task graph', () => {
     expect(new Set(wf.tasks.map((t) => t.taskId))).toEqual(
       new Set([
         'ingest-clock',
@@ -286,6 +286,7 @@ describe('DAILY_TRADING_CYCLE', () => {
         'resolve-theses',
         'ingest-calendar',
         'gather-regime',
+        'regime-state',
         'read-pre-market',
         'decide',
         'execute-orders',
@@ -422,7 +423,7 @@ describe('DAILY_TRADING_CYCLE', () => {
       'resolve-theses:value:$.slot>$.slot.const',
       'resolve-theses:value:$.tradingDay>$.tradingDay.const',
       'resolve-theses:value:$.slotIndex>$.slotIndex.const',
-      'gather-regime:value:$.marketRegime.state>$.marketState.const',
+      'regime-state:value:$.decision>$.marketState.const',
     ]);
     const byTarget = Object.fromEntries(fromCampaign.map((b) => [b.target, b.binding]));
     expect(byTarget).toEqual({

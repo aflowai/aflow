@@ -2,20 +2,24 @@
  * The context a Daily Trading Cycle gathers after resolution and decides on:
  * the day's calendar from a calendar source the space may bind, the market
  * regime from the market-data binding, and the day's pre-market research
- * note. The persistence steps write the regime, with the calendar, onto the
- * cycle doc and the snapshot from the tasks that produced it, so no agent
- * copies it into the record.
+ * note. Each is optional to the cycle: a cycle whose regime cannot be
+ * gathered decides under the state `unavailable` and still closes, records
+ * and completes. The persistence steps write the state, the regime or null,
+ * and the calendar or null onto the cycle doc and the snapshot from the tasks
+ * that produced them, so no agent copies them into the record.
  */
 import { DAILY_CYCLE_GATHER_REGIME_PROMPT } from './dailyTradingCycleProse.js';
 import {
   CALENDAR_SOURCE_API_ID,
   CALENDAR_SOURCE_ENDPOINT_ID,
+  DECIDE_MARKET_STATES,
   GATHER_REGIME_OUTPUT_SCHEMA,
   GATHER_REGIME_PINS,
-  MARKET_REGIME_FIELDS,
   MARKET_REGIME_VALIDATOR_REF,
   PRE_MARKET_EVIDENCE_MAX_CHARS,
   PRE_MARKET_NOTE_PATH_TEMPLATE,
+  REGIME_STATES,
+  REGIME_UNAVAILABLE,
 } from './dailyTradingCycleRegime.js';
 
 export const CYCLE_PROCEED_GATE = {
@@ -101,6 +105,9 @@ export const GATHER_REGIME_TASK = {
   type: 'agent' as const,
   dependsOn: ['ingest-calendar'],
   when: CYCLE_PROCEED_GATE,
+  // A regime that cannot be gathered must not stop the cycle's closes, its
+  // record or its completion marker. regime-state names it unavailable.
+  optional: true,
   inputBindings: {
     tradingDay: RESOLVED_TRADING_DAY,
     slot: { kind: 'task_output' as const, taskId: 'resolve-theses', path: 'slot' },
@@ -133,6 +140,51 @@ export const GATHER_REGIME_TASK = {
     schema: GATHER_REGIME_OUTPUT_SCHEMA,
     derivedFrom: GATHER_REGIME_PINS,
     validatorRefs: [MARKET_REGIME_VALIDATOR_REF],
+  },
+};
+
+/**
+ * The state decide is pinned to: the gathered regime's, or `unavailable`
+ * where gather-regime failed. A rule step always succeeds, so decide's pin
+ * has a producer on every cycle.
+ */
+export const REGIME_STATE_TASK = {
+  taskId: 'regime-state',
+  name: 'Name the regime state',
+  goal: `Name the market-regime state this cycle decides under: the gathered regime's state, or ${REGIME_UNAVAILABLE} when gather-regime produced no regime.`,
+  type: 'operation' as const,
+  operation: 'workflow.run.decide',
+  dependsOn: ['gather-regime'],
+  when: CYCLE_PROCEED_GATE,
+  retryability: 'safe' as const,
+  maxAttempts: 1,
+  inputBindings: {
+    regimeState: {
+      kind: 'task_output' as const,
+      taskId: 'gather-regime',
+      path: 'marketRegime.state',
+    },
+  },
+  inputTemplate: {
+    state: { regimeState: bind('regimeState') },
+    rules: REGIME_STATES.map((state) => ({
+      when: { expression: `state.regimeState == '${state}'` },
+      decision: state,
+      reason: `The gathered regime is ${state}. Its regimeCaps entry holds the decision.`,
+    })),
+    otherwise: {
+      decision: REGIME_UNAVAILABLE,
+      reason:
+        'gather-regime produced no regime, so no regimeCaps entry applies. The campaign-wide caps still hold the decision.',
+    },
+  },
+  outputContract: {
+    schema: {
+      type: 'object',
+      required: ['decision'],
+      additionalProperties: true,
+      properties: { decision: { enum: [...DECIDE_MARKET_STATES] } },
+    },
   },
 };
 
@@ -198,8 +250,6 @@ export const READ_PRE_MARKET_TASK = {
 
 // ── Persistence: the record's docs with the regime they were decided under ──
 
-const REGIME_BIND_PREFIX = 'regime_';
-
 interface TaskOutputBinding {
   kind: 'task_output';
   taskId: string;
@@ -213,20 +263,18 @@ const output = (taskId: string, path: string): TaskOutputBinding => ({
 });
 
 const MARKET_REGIME_BINDINGS: Record<string, TaskOutputBinding> = {
-  ...Object.fromEntries(
-    MARKET_REGIME_FIELDS.map((field) => [
-      `${REGIME_BIND_PREFIX}${field}`,
-      output('gather-regime', `marketRegime.${field}`),
-    ]),
-  ),
+  marketState: output('regime-state', 'decision'),
+  marketRegime: output('gather-regime', 'marketRegime'),
   calendar: output('ingest-calendar', 'calendar'),
 };
 
-/** The regime as the docs hold it: the gathered fields, and the calendar or null. */
+/**
+ * The regime as the docs hold it: the state decide was held to, the gathered
+ * regime or null where it was unavailable, and the calendar or null.
+ */
 const MARKET_REGIME_TEMPLATE = {
-  ...Object.fromEntries(
-    MARKET_REGIME_FIELDS.map((field) => [field, bind(`${REGIME_BIND_PREFIX}${field}`)]),
-  ),
+  marketState: bind('marketState'),
+  marketRegime: { $firstOf: [bind('marketRegime'), null] },
   calendar: { $firstOf: [bind('calendar'), null] },
 };
 
@@ -250,7 +298,7 @@ function docWithRegime(
     content: {
       ...Object.fromEntries(fields.map((field) => [field, bind(field)])),
       ...Object.fromEntries(Object.keys(extra).map((field) => [field, bind(field)])),
-      marketRegime: MARKET_REGIME_TEMPLATE,
+      ...MARKET_REGIME_TEMPLATE,
     },
   };
 }
@@ -280,7 +328,7 @@ export function writeSnapshotTask(snapshotFields: readonly string[]) {
   return {
     taskId: 'write-snapshot',
     name: 'Write snapshot',
-    goal: 'Persist the validated snapshot at its contract path, with the market regime and calendar the cycle gathered.',
+    goal: 'Persist the validated snapshot at its contract path, with the regime state, the market regime and the calendar the cycle gathered. A regime or calendar the cycle could not gather is written as null.',
     dependsOn: ['record'],
     ...writeDoc('snapshotDocPath', docWithRegime('snapshotDoc', snapshotFields)),
   };
@@ -290,7 +338,7 @@ export function writeCycleDocTask(cycleDocFields: readonly string[]) {
   return {
     taskId: 'write-cycle-doc',
     name: 'Write cycle doc',
-    goal: 'Persist the validated cycle doc at its contract path, with decide’s bias and the market regime and calendar it decided under. Its existence marks the cycle complete, so it is written last, after every other persistence step.',
+    goal: 'Persist the validated cycle doc at its contract path, with decide’s bias and the regime state, market regime and calendar it decided under. A regime or calendar the cycle could not gather is written as null. Its existence marks the cycle complete, so it is written last, after every other persistence step.',
     dependsOn: ['write-snapshot', 'record-learnings'],
     ...writeDoc(
       'cycleDocPath',

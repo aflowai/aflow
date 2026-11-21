@@ -10,6 +10,7 @@ import {
   campaignRegimeCapIssues,
   marketRegimeIssues,
   regimeCapIssues,
+  regimeCapsApply,
 } from '@aflow/platform-artifacts';
 import { listCampaigns } from '../campaigns.js';
 import { activeCampaignNamed, loadWorkflowRunSlug } from './tradingCampaignArms.js';
@@ -52,21 +53,25 @@ registerValidator(
   issuesOf((data) => campaignRegimeCapIssues(data)),
 );
 
-const DecideCampaignSchema = z
-  .object({ regimeName: z.string(), theses: z.array(z.unknown()) })
-  .passthrough();
+const DecideCampaignSchema = z.object({ regimeName: z.string() }).passthrough();
 
 function refusal(message: string): RuntimeValidatorIssue[] {
   return [{ code: 'custom', path: ['regimeName'], message }];
 }
 
+/**
+ * A decision held to a regime cap reads it from the running skill's active
+ * campaign of its regimeName, and is refused when there is none: a cap that
+ * cannot be read admits no thesis. A decision that opens nothing, or one made
+ * with the regime unavailable, reads no campaign and passes.
+ */
 async function regimeCapsValidator(
   data: unknown,
   ctx: RuntimeValidatorContext,
 ): Promise<RuntimeValidatorIssue[]> {
+  if (!regimeCapsApply(data)) return [];
   const parsed = DecideCampaignSchema.safeParse(data);
-  // A decision that opens nothing is never held to a regime cap.
-  if (!parsed.success || parsed.data.theses.length === 0) return [];
+  if (!parsed.success) return [];
   const db = ctx.db as PostgresJsDatabase;
   const workflowSlug = ctx.workflowRunId
     ? await loadWorkflowRunSlug(db, ctx.tenantId, ctx.workflowRunId)

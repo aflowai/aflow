@@ -6,6 +6,7 @@ import {
   PRE_MARKET_NOTE_PATH_TEMPLATE,
   REGIME_MATH_RULE,
   REGIME_STATE_RULE,
+  REGIME_UNAVAILABLE,
 } from './dailyTradingCycleRegime.js';
 import { INTRADAY_INDEX_RULE } from './dailyTradingCycleSlots.js';
 
@@ -22,7 +23,7 @@ Steps:
 3. \`indexCloses\`: the last ${String(INDEX_LOOKBACK_SESSIONS)} closes of SPY, QQQ and IWM, oldest first, exactly as the feed returned them. \`memberCloses\`: one entry per universe member with its last ${String(MEMBER_LOOKBACK_SESSIONS)} closes, oldest first.
 4. \`marketRegime\`: \`asOf\` is the session the closes end on. Compute every number from those closes. ${REGIME_MATH_RULE}. The state: ${REGIME_STATE_RULE}.
 
-Your output contract recomputes every number of \`marketRegime\` from the closes you report and refuses any other value. A refusal names the value the closes give: write that value and resubmit. Report the closes the feed returned. Never round, fill or invent one. If the feed cannot give a symbol enough completed sessions, do not submit. Reply naming the symbol and the sessions the feed gave.
+Your output contract recomputes every number of \`marketRegime\` from the closes you report and refuses any other value. A refusal names the value the closes give: write that value and resubmit. Report the closes the feed returned. Never round, fill or invent one. If the feed cannot give a symbol enough completed sessions, do not submit. Reply naming the symbol and the sessions the feed gave. The cycle then decides with the regime \`${REGIME_UNAVAILABLE}\`, and its closes and record still run.
 
 Output (submit_output):
 {
@@ -154,8 +155,9 @@ Inputs (already in your task context):
 - \`equity\` — account equity; \`positions\` — live positions.
 - \`regimeName\`, \`hypotheses\` — the campaign and the frozen hypotheses it tests side by side, one arm each: \`id\`, \`name\`, \`statement\`, \`thesisBudgetPerDay\`. Every thesis you propose is an instance of one of them and cites its \`id\` in \`hypothesisId\`. An arm may open at most its \`thesisBudgetPerDay\` theses in one trading day, earlier slots included, and your output contract counts that from the ledger. Do not improvise a different strategy mid-campaign. If a hypothesis looks wrong, say so in \`decisionRationale\` and propose fewer or zero theses for its arm. The regime changes at campaign boundaries, not here.
 - \`universe\`, \`maxThesesPerDay\`, \`maxPositionSizePct\`, \`maxGrossExposurePct\`, \`minHorizonTradingDays\`, \`maxHorizonTradingDays\` — the campaign caps. Your output contract enforces them; a violation is returned to you as a validation error naming the field — fix the named field and resubmit, do not work around it.
-- \`marketRegime\` — the regime this cycle decides under, computed from SPY, QQQ and IWM against their 20-day and 50-day averages, SPY's realized volatility and the universe breadth. Copy its \`state\` into \`marketState\`: it is pinned.
-- \`regimeCaps\` — the campaign's caps per regime state: a gross exposure cap and the biases a decision that opens theses may take. Your output contract holds you to the entry for \`marketState\`. A state with no entry is held to the campaign-wide caps alone. A decision that opens no thesis takes no bias and passes in any regime.
+- \`marketState\` — the regime state this cycle decides under. Copy it into your output: it is pinned. It is \`${REGIME_UNAVAILABLE}\` when the regime could not be gathered.
+- \`marketRegime\` — the regime this cycle decides under, computed from SPY, QQQ and IWM against their 20-day and 50-day averages, SPY's realized volatility and the universe breadth. It is absent when \`marketState\` is \`${REGIME_UNAVAILABLE}\`.
+- \`regimeCaps\` — the campaign's caps per regime state: a gross exposure cap and the biases a decision that opens theses may take. Your output contract holds you to the entry for \`marketState\`. A state with no entry, and \`${REGIME_UNAVAILABLE}\`, are held to the campaign-wide caps alone. A decision that opens no thesis takes no bias and passes in any regime.
 - \`calendar\` — the day's calendar from the space's calendar source: the session kind, an early close and the known macro releases. It is absent when the space binds no calendar source.
 - \`preMarketEvidence\` — the day's pre-market research note at \`${PRE_MARKET_NOTE_PATH_TEMPLATE}\`, at most ${String(PRE_MARKET_EVIDENCE_MAX_CHARS)} characters of it. \`path\` is null when the day has no note. \`truncated: true\` means the note runs past the text you hold: \`totalChars\` gives its full length. Read the note as research, never as approval: only the approved set opens a thesis.
 - Prior learnings from past cycles — auto-injected. Read them; they cite resolved theses.
@@ -163,7 +165,7 @@ Inputs (already in your task context):
 Evidence discipline for this campaign: theses cite price structure only — per-instrument OHLCV (your bar and snapshot data) plus index/regime context that is itself price data (e.g. SPY/QQQ trend). No news, no narratives, no fundamentals. The pre-market note may point you at a setup, but the thesis still rests on the prices you read. Each criterion must be price-checkable: a later cycle must be able to read prices and decide yes/no without interpretation.
 
 Steps:
-1. Read the context: \`marketRegime\` gives the index trend, volatility and breadth, so read daily bars for the candidate universe instruments. Bars are cache-first: read \`/portfolio/market-data/{symbol}.json\`, then fetch from your market-data tools only the days the cache lacks. You read the cache and never write it: resolution keeps it. Today's bar is still forming on an open or intraday cycle, so cite fresh intraday data when needed. Ground every claim in numbers you actually fetched.
+1. Read the context: \`marketRegime\`, when present, gives the index trend, volatility and breadth, so read daily bars for the candidate universe instruments. Bars are cache-first: read \`/portfolio/market-data/{symbol}.json\`, then fetch from your market-data tools only the days the cache lacks. You read the cache and never write it: resolution keeps it. Today's bar is still forming on an open or intraday cycle, so cite fresh intraday data when needed. Ground every claim in numbers you actually fetched.
 2. Propose 0 to \`remainingThesesToday\` theses, each one an instance of one approved entry. Zero is a legitimate answer when the setup is absent — say why in \`decisionRationale\`. For each thesis:
    - \`thesisId\`: unique kebab-case, e.g. "2026-07-14-aapl-1".
    - \`hypothesisId\`: the arm this thesis tests, the one its approved entry names. It must be one of the \`hypotheses\` ids.
@@ -187,7 +189,7 @@ Output (submit_output):
   regimeName: string,          // copied from your input
   slot: "pre_market" | "open" | "intraday" | "after_close",   // copied from your input
   slotIndex: number | null,    // copied from your input
-  marketState: "risk_on" | "mixed" | "risk_off" | "stressed",   // marketRegime.state, copied
+  marketState: "risk_on" | "mixed" | "risk_off" | "stressed" | "${REGIME_UNAVAILABLE}",   // copied from your input
   bias: "long" | "short" | "neutral" | null,   // null when theses is empty
   approvedSetFault: string | null,   // the fault the contract quotes for a bad set, else null
   theses: [
@@ -278,7 +280,7 @@ Inputs (already in your task context):
 - \`orderResults\`, \`submittedCount\`, \`deferredCount\`, \`failedCount\` — what actually landed at the broker, was deferred, or failed.
 - \`equity\`, \`cash\`, \`positions\` — the account state ingested at cycle START, before this cycle's orders.
 - \`regimeName\`, \`hypotheses\` — the campaign and its hypothesis arms.
-- \`marketRegime\`, \`bias\` — the market regime this cycle decided under, and the bias of the theses decide opened. Name the regime state in \`runSummary\`. The write steps add both to the cycle doc and the market regime to the snapshot, with the day's calendar when one is bound, so you do not copy them.
+- \`marketState\`, \`marketRegime\`, \`bias\` — the regime state and the market regime this cycle decided under, and the bias of the theses decide opened. \`marketRegime\` is absent when \`marketState\` is \`${REGIME_UNAVAILABLE}\`. Name the state in \`runSummary\`. The write steps add the state, the regime and the bias to the cycle doc, and the state and the regime to the snapshot, with the day's calendar. A regime or calendar the cycle could not gather is written as null. You do not copy any of them.
 - Prior learnings — auto-injected.
 
 Ledger writes (JSON docs; the contracts are documented in /portfolio/theses/SCHEMA.md):
