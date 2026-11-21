@@ -203,13 +203,15 @@ function escapedWithin(text: string, room: number): string {
 }
 
 /**
- * The agent's markdown as mrkdwn sections. Each ends between whole spans, and
- * a code block across two sections is closed in one and opened again in the next.
+ * The agent's markdown as mrkdwn sections, the first opened by `prefix`. Each
+ * ends between whole spans, and a code block across two sections is closed in
+ * one and opened again in the next.
  */
-function sections(text: string): SlackBlock[] {
-  return slackMrkdwnPieces(text, MAX_TEXT_SECTIONS, MAX_SECTION_TEXT, '…').map((section) => ({
+function sections(text: string, prefix: string): SlackBlock[] {
+  const room = MAX_SECTION_TEXT - prefix.length;
+  return slackMrkdwnPieces(text, MAX_TEXT_SECTIONS, room, '…').map((section, index) => ({
     type: 'section',
-    text: { type: 'mrkdwn', text: section },
+    text: { type: 'mrkdwn', text: index === 0 ? `${prefix}${section}` : section },
   }));
 }
 
@@ -244,15 +246,16 @@ function previewBlocks(item: ActionCenterItem): SlackBlock[] {
 }
 
 /**
- * The card without its controls: the agent's text, then what waits. Kept with
- * the card, so an edit after the decision shows the same message.
+ * The card without its controls: the space's `prefix` and the agent's text,
+ * then what waits. Kept with the card, so an edit after the decision shows the
+ * same message.
  */
-export function cardHead(text: string, item: ActionCenterItem): SlackBlock[] {
+export function cardHead(text: string, item: ActionCenterItem, prefix = ''): SlackBlock[] {
   // A title holds 256 characters, so escaped it leaves the summary most of the section.
   const title = `*${escapeMrkdwn(item.title)}*\n`;
   const what = `${title}${escapedWithin(item.summary, MAX_SECTION_TEXT - title.length)}`;
   return [
-    ...sections(text),
+    ...sections(text, prefix),
     { type: 'divider' },
     { type: 'section', text: { type: 'mrkdwn', text: what } },
     ...previewBlocks(item),

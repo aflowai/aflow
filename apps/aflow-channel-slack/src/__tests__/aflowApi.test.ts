@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { createAflowApi, neverConnected } from '../aflowApi.js';
+import { createAflowApi, isHelmsmanRoot, neverConnected } from '../aflowApi.js';
 
 function connectError(code: string): Error {
   return Object.assign(new Error(`connect ${code} 127.0.0.1:3000`), { code });
@@ -74,5 +74,50 @@ describe('a resolve that fails', () => {
       retryable: false,
       outcomeUnknown: false,
     });
+  });
+});
+
+describe('the reads a send makes', () => {
+  const helmsman = { kind: 'platform-role', systemRole: 'cybernetic-helmsman' };
+
+  it('reads the session in its space, and calls only a Helmsman no session delegated a root', async () => {
+    const urls: string[] = [];
+    const api = createAflowApi({
+      apiUrl: 'http://127.0.0.1:3000',
+      apiKey: 'key',
+      fetchImpl: (url) => {
+        urls.push(String(url));
+        return Promise.resolve(Response.json({ sessionId: 'session-1', target: helmsman }));
+      },
+    });
+
+    expect(await api.readSession('space-1', 'session-1')).toEqual({ ok: true, helmsmanRoot: true });
+    expect(urls).toEqual(['http://127.0.0.1:3000/v1/sessions/session-1?spaceId=space-1']);
+  });
+
+  it.each([
+    ['a Helmsman conversation', { target: helmsman }, true],
+    ['a Helmsman another session delegated', { target: helmsman, parentSessionId: 's-0' }, false],
+    ['a custom agent', { target: { kind: 'custom-agent', agentId: 'a-1' } }, false],
+    ['another platform role', { target: { kind: 'platform-role', systemRole: 'runner' } }, false],
+    ['a session with no target', {}, false],
+  ])('tells whether %s is a Helmsman root session', (_case, details, root) => {
+    expect(isHelmsmanRoot(details)).toBe(root);
+  });
+
+  it('reads the space’s name, and refuses a space with none', async () => {
+    const named = createAflowApi({
+      apiUrl: 'http://127.0.0.1:3000',
+      apiKey: 'key',
+      fetchImpl: answering(200, { id: 'space-1', name: ' Trading Joe ' }),
+    });
+    const nameless = createAflowApi({
+      apiUrl: 'http://127.0.0.1:3000',
+      apiKey: 'key',
+      fetchImpl: answering(200, { id: 'space-1' }),
+    });
+
+    expect(await named.spaceName('space-1')).toEqual({ ok: true, name: 'Trading Joe' });
+    expect(await nameless.spaceName('space-1')).toMatchObject({ ok: false, retryable: false });
   });
 });

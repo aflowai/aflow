@@ -22,12 +22,19 @@
  * - A run that already delivered the same text with the same item fails,
  *   because the loop guards count failures and a model repeating itself must
  *   meet one.
+ * - A channel speaks for a space, so a run that carries none sends nothing.
+ *   Every message opens with the space's name in brackets (`spaceNames.ts`).
  * - An `itemId` is read through the API in the run's own space and sent as a
  *   card with the controls the D3 table allows (`cards.ts`). A missing or
  *   decided item fails before anything is claimed or posted.
  * - The text is posted as mrkdwn of at most Slack's 40,000 characters.
  *   Escaping can lengthen a text the schema admits, so a longer one is cut
  *   between whole spans and ends with a note that the run holds all of it.
+ * - A posted message opens a thread in the store, in the run's space. When a
+ *   Helmsman conversation sent it, the thread names that session, so a reply
+ *   under the message can continue it (`conversation.ts`). A session that
+ *   cannot be read names none, and a reply then starts a conversation in the
+ *   space with the message as context.
  * - Every call out, to Aflow and to Slack, ends when the step's signal does.
  *   The step's timeout then answers as this handler's own result: a post the
  *   timeout cut short fails as an unknown delivery, not retryable, instead of
@@ -53,6 +60,7 @@ import type { AflowApi, ObservedOrigin } from './aflowApi.js';
 import { cardHead, openFoot, planCard, type CardPlan } from './cards.js';
 import { SLACK_TEXT_LIMIT, SlackApiError, type PostedMessage, type SlackClient } from './slack.js';
 import { slackMrkdwnWithin } from './slackMrkdwn.js';
+import { SpaceNames } from './spaceNames.js';
 import type { ChannelStore, SentRecord } from './store.js';
 
 export const CHANNEL_RECIPIENT_NOT_LINKED_CODE = 'CHANNEL_RECIPIENT_NOT_LINKED';
@@ -62,6 +70,11 @@ export const CHANNEL_DELIVERY_UNKNOWN_CODE = 'CHANNEL_DELIVERY_UNKNOWN';
 export const CHANNEL_ITEM_NOT_FOUND_CODE = 'CHANNEL_ITEM_NOT_FOUND';
 export const CHANNEL_ITEM_NOT_OPEN_CODE = 'CHANNEL_ITEM_NOT_OPEN';
 export const CHANNEL_ITEM_UNREADABLE_CODE = 'CHANNEL_ITEM_UNREADABLE';
+export const CHANNEL_NO_SPACE_CODE = 'CHANNEL_NO_SPACE';
+
+export const NO_SPACE_MESSAGE =
+  'This run carries no space, so nothing was sent. A message to the operator speaks for a space ' +
+  'and names it. Do not retry this send.';
 
 interface ReadCard {
   item: ActionCenterItem;
@@ -102,15 +115,20 @@ function aflowError(
 
 export class ChannelMessageSendHandler implements StepHandler {
   readonly stepType = 'channel';
+  private readonly spaceNames: SpaceNames;
 
   constructor(
     private readonly deps: {
       store: ChannelStore;
       slack: SlackClient;
       api: AflowApi;
+      /** Shared with the conversations, so one name read serves both. */
+      spaceNames?: SpaceNames;
       now?: () => Date;
     },
-  ) {}
+  ) {
+    this.spaceNames = deps.spaceNames ?? new SpaceNames(deps.api);
+  }
 
   async execute(ctx: ExecutorContext): Promise<StepResult> {
     if (ctx.job.operationId !== CHANNEL_MESSAGE_SEND_OPERATION_ID) {
@@ -156,12 +174,22 @@ export class ChannelMessageSendHandler implements StepHandler {
       );
     }
 
+    const spaceId = ctx.spaceId;
+    if (spaceId === undefined) {
+      return failureWithError(
+        ctx,
+        aflowError(CHANNEL_NO_SPACE_CODE, NO_SPACE_MESSAGE, 'validation', false),
+      );
+    }
+
     let card: ReadCard | undefined;
     if (itemId !== undefined) {
-      const read = await this.readCard(ctx, itemId);
+      const read = await this.readCard(ctx, spaceId, itemId);
       if ('failure' in read) return read.failure;
       card = read;
     }
+    const prefix = await this.spaceNames.prefix(spaceId, ctx.signal);
+    const sessionId = await this.helmsmanSession(ctx, spaceId);
 
     const now = this.deps.now?.() ?? new Date();
     const claim = this.deps.store.claimSend(
@@ -176,8 +204,8 @@ export class ChannelMessageSendHandler implements StepHandler {
     );
     if (!claim.claimed) return this.refuse(ctx, claim.prior);
 
-    const head = card === undefined ? undefined : cardHead(text, card.item);
-    const mrkdwn = slackMrkdwnWithin(text, SLACK_TEXT_LIMIT, SEND_CUT_NOTE);
+    const head = card === undefined ? undefined : cardHead(text, card.item, prefix);
+    const mrkdwn = `${prefix}${slackMrkdwnWithin(text, SLACK_TEXT_LIMIT - prefix.length, SEND_CUT_NOTE)}`;
     let message: PostedMessage;
     let posting = false;
     try {
@@ -232,7 +260,39 @@ export class ChannelMessageSendHandler implements StepHandler {
         outcome: null,
       });
     }
+    this.deps.store.addThread({
+      channel: message.channel,
+      threadTs: message.ts,
+      sessionId: sessionId ?? null,
+      spaceId,
+      runId: ctx.runId,
+      postedText: text,
+      status: 'posted',
+      pausedStepExecutionId: null,
+      relayedStepExecutionId: null,
+      resumedStepExecutionId: null,
+      notesAfter: null,
+      startedAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+    });
     return this.delivered(ctx, messageRef);
+  }
+
+  /**
+   * The step's session when it is a Helmsman conversation that no other session
+   * delegated. A workflow task's step has no session, and a session that cannot
+   * be read counts as none.
+   */
+  private async helmsmanSession(
+    ctx: ExecutorContext,
+    spaceId: string,
+  ): Promise<string | undefined> {
+    const sessionId = ctx.job.sessionId;
+    if (sessionId === undefined) return undefined;
+    const read = await this.deps.api
+      .readSession(spaceId, sessionId, ctx.signal)
+      .catch(() => undefined);
+    return read?.ok === true && read.helmsmanRoot ? sessionId : undefined;
   }
 
   /**
@@ -242,6 +302,7 @@ export class ChannelMessageSendHandler implements StepHandler {
    */
   private async readCard(
     ctx: ExecutorContext,
+    spaceId: string,
     itemId: string,
   ): Promise<ReadCard | { failure: Promise<StepResult> }> {
     const fail = (
@@ -251,15 +312,7 @@ export class ChannelMessageSendHandler implements StepHandler {
       retryable: boolean,
     ) => ({ failure: failureWithError(ctx, aflowError(code, message, classification, retryable)) });
 
-    if (ctx.spaceId === undefined) {
-      return fail(
-        CHANNEL_ITEM_UNREADABLE_CODE,
-        'This run carries no space, so no Action Center item can be sent from it. Send the text alone.',
-        'validation',
-        false,
-      );
-    }
-    const read = await this.deps.api.readItem(ctx.spaceId, itemId, ctx.signal);
+    const read = await this.deps.api.readItem(spaceId, itemId, ctx.signal);
     if (!read.ok) {
       if (read.status === 404) {
         return fail(

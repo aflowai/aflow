@@ -7,6 +7,15 @@
  * started, and posts the Helmsman's answer into the thread once the session
  * pauses with it.
  *
+ * - **A run's message owns its thread.** A reply under a message that
+ *   `channel.message.send` posted stays in that run's space. It resumes the
+ *   Helmsman conversation that sent the message when that session is paused
+ *   on the operator. Otherwise it starts a Helmsman conversation in that space,
+ *   whose first input carries the reply, the run's id and the message.
+ * - **Every message names its space.** Each post into a thread that speaks for
+ *   a space opens with the space's name in brackets, answers and notes
+ *   included. A message with no thread yet has no space to name.
+ *
  * - **The watch follows the turn.** It has no time limit. It posts each note
  *   the Helmsman writes during the turn as one message, and the answer when the
  *   turn ends, however long the turn takes. A pause on a child run is work in
@@ -45,7 +54,15 @@ import { SLACK_TEXT_LIMIT, SlackApiError, type SlackBlock, type SlackClient } fr
 import type { DirectMessage } from './socketMode.js';
 import { slackMrkdwnWithin } from './slackMrkdwn.js';
 import { typedTextOf } from './slackText.js';
+import { SpaceNames, prefixedBlocks } from './spaceNames.js';
 import type { ChannelStore, InboundOutcome, InboundRecord, ThreadRecord } from './store.js';
+
+/** A thread that continues a Helmsman session, which a watch, a resume and a read need. */
+type ConversationThread = ThreadRecord & { sessionId: string };
+
+function hasSession(thread: ThreadRecord): thread is ConversationThread {
+  return thread.sessionId !== null;
+}
 
 /** Plan 327 §8: ten minutes for P2, measured from the `inbound` record. */
 export const LATE_THRESHOLD_MS = 10 * 60 * 1000;
@@ -106,6 +123,8 @@ export const NOT_THE_KEY_OWNER =
 
 export const NO_TEXT = 'This message holds no text, so nothing was sent to the Helmsman.';
 
+export const WAITS_FOR_REPLY = 'The Helmsman waits for your reply.';
+
 export const ENDED_NOTES: Readonly<Record<string, string>> = {
   SessionCompleted:
     'The conversation has ended. Open it at Aflow to read it, or send a new direct message to start another.',
@@ -152,6 +171,8 @@ export interface ConversationDeps {
   api: AflowApi;
   /** The key's user. A conversation runs only when the link names the same one. */
   aflowUserId: string;
+  /** Shared with the send handler, so one name read serves both. */
+  spaceNames?: SpaceNames;
   now?: () => Date;
   sleep?: (ms: number) => Promise<void>;
   pollMs?: number;
@@ -177,11 +198,25 @@ export function lateText(text: string, record: InboundRecord, ranAt: Date): stri
 }
 
 /**
- * The answer as mrkdwn, cut to Slack's limit. The cut leaves no span open and
- * closes a code block it ends inside, so the cut note reads as plain text.
+ * What a reply under a run's message carries when it starts a conversation, so
+ * the Helmsman reads which run spoke and what it said.
  */
-export function relayed(answer: string): string {
-  return slackMrkdwnWithin(answer, SLACK_TEXT_LIMIT, CUT_NOTE);
+export function postedReplyText(reply: string, thread: ThreadRecord): string {
+  const run = thread.runId === null ? 'a run' : `run ${thread.runId}`;
+  const message = thread.postedText === null ? '' : ` That message read:\n\n${thread.postedText}`;
+  return (
+    `${reply}\n\n(The operator wrote this in Slack, as a reply to a message ${run} sent them.` +
+    `${message})`
+  );
+}
+
+/**
+ * The answer as mrkdwn after `prefix`, cut to Slack's limit. The cut leaves no
+ * span open and closes a code block it ends inside, so the cut note reads as
+ * plain text.
+ */
+export function relayed(answer: string, prefix = ''): string {
+  return `${prefix}${slackMrkdwnWithin(answer, SLACK_TEXT_LIMIT - prefix.length, CUT_NOTE)}`;
 }
 
 function lateBlocks(record: InboundRecord): SlackBlock[] {
@@ -311,18 +346,39 @@ type OpenTurn = { kind: 'pause'; step: string } | { kind: 'ended' } | { kind: 'n
 export class Conversations {
   /** The running watch of each thread, so only that watch gives the thread up. */
   private readonly watching = new Map<string, symbol>();
+  private readonly spaceNames: SpaceNames;
 
-  constructor(private readonly deps: ConversationDeps) {}
+  constructor(private readonly deps: ConversationDeps) {
+    this.spaceNames = deps.spaceNames ?? new SpaceNames(deps.api);
+  }
 
   private now(): Date {
     return this.deps.now?.() ?? new Date();
   }
 
-  private say(channel: string, threadTs: string, text: string, blocks?: SlackBlock[]) {
+  /** `[name] ` for the space the thread speaks for, or nothing for a thread the store has not met. */
+  private async prefixAt(channel: string, threadTs: string): Promise<string> {
+    const thread = this.deps.store.threadAt(channel, threadTs);
+    return thread === undefined ? '' : this.spaceNames.prefix(thread.spaceId);
+  }
+
+  /** Posts `text` into the thread as it is, for a text that already holds its prefix. */
+  private post(channel: string, threadTs: string, text: string, blocks?: SlackBlock[]) {
     return this.deps.slack.postMessage(channel, text, {
       threadTs,
       ...(blocks === undefined ? {} : { blocks }),
     });
+  }
+
+  /** Posts a notice into the thread, opened by the name of the space the thread speaks for. */
+  private async say(channel: string, threadTs: string, text: string, blocks?: SlackBlock[]) {
+    const prefix = await this.prefixAt(channel, threadTs);
+    return this.post(
+      channel,
+      threadTs,
+      `${prefix}${text}`,
+      blocks === undefined ? undefined : prefixedBlocks(prefix, blocks),
+    );
   }
 
   /**
@@ -407,8 +463,12 @@ export class Conversations {
       const note = run
         ? `Run at the request of <@${tap.slackUserId}>.`
         : `Discarded by <@${tap.slackUserId}>. Nothing was sent to the Helmsman.`;
-      await slack.updateMessage(record.channel, tap.messageTs, note, [
-        { type: 'context', elements: [{ type: 'mrkdwn', text: `${LATE_QUESTION} ${note}` }] },
+      const prefix = await this.prefixAt(record.channel, record.threadTs);
+      await slack.updateMessage(record.channel, tap.messageTs, `${prefix}${note}`, [
+        {
+          type: 'context',
+          elements: [{ type: 'mrkdwn', text: `${prefix}${LATE_QUESTION} ${note}` }],
+        },
       ]);
       if (!run) return { outcome: 'discarded' };
       const result = await this.converse(record, lateText(text, record, at));
@@ -432,7 +492,12 @@ export class Conversations {
       return { outcome: 'ended' };
     }
     const stopped = thread?.status === 'unread' || thread?.status === 'idle';
-    if (thread !== undefined && stopped && store.claimThread(record.channel, record.threadTs)) {
+    if (
+      thread !== undefined &&
+      hasSession(thread) &&
+      stopped &&
+      store.claimThread(record.channel, record.threadTs)
+    ) {
       // The reply is not sent, because the answer to the last message may be waiting unread.
       try {
         store.updateThread(thread, { status: 'answering' }, this.now());
@@ -451,22 +516,76 @@ export class Conversations {
     }
     const key = `slack-event:${record.eventId}`;
     try {
-      return thread === undefined
-        ? await this.start(record, text, key)
-        : await this.resume(thread, text, key, say);
+      if (thread === undefined) return await this.start(record, text, key);
+      if (thread.status === 'posted' || !hasSession(thread)) {
+        return await this.continuePosted(thread, text, key, say);
+      }
+      return await this.resume(thread, text, key, say);
     } finally {
       store.releaseThread(record.channel, record.threadTs);
     }
   }
 
-  /** Continues a waiting thread's conversation, for a reply that holds the thread's claim. */
-  private async resume(
+  /**
+   * The first reply under a run's message, for a reply that holds the thread's
+   * claim. It resumes the Helmsman conversation that sent the message when
+   * that session is paused on the operator now. A pause the session has since
+   * resumed is not one: a message sent during a resumed turn follows it in the
+   * events. Otherwise the reply starts a conversation in the thread's space,
+   * which the thread then continues.
+   */
+  private async continuePosted(
     thread: ThreadRecord,
     text: string,
     key: string,
     say: (line: string) => Promise<unknown>,
   ): Promise<ConverseResult> {
-    const { store, api } = this.deps;
+    if (hasSession(thread)) {
+      const turn = await this.openTurn(thread);
+      if (turn.kind === 'pause') return this.resumeAt(thread, turn.step, text, key, say);
+    }
+    return this.startPosted(thread, text, key, say);
+  }
+
+  /** Starts a conversation in a posted thread's space, which the thread then continues. */
+  private async startPosted(
+    thread: ThreadRecord,
+    text: string,
+    key: string,
+    say: (line: string) => Promise<unknown>,
+  ): Promise<ConverseResult> {
+    const started = await this.deps.api.startConversation(
+      thread.spaceId,
+      postedReplyText(text, thread),
+      key,
+    );
+    if (!started.ok) {
+      await say(refusalText(started));
+      return { outcome: refusalOutcome(started) };
+    }
+    // The stored record itself, so the watch's updates land in the store.
+    const conversation = Object.assign(thread, { sessionId: started.sessionId });
+    this.deps.store.updateThread(
+      conversation,
+      {
+        status: 'answering',
+        pausedStepExecutionId: null,
+        relayedStepExecutionId: null,
+        resumedStepExecutionId: null,
+        notesAfter: null,
+      },
+      this.now(),
+    );
+    return { outcome: 'started', watching: this.watch(conversation) };
+  }
+
+  /** Continues a waiting thread's conversation, for a reply that holds the thread's claim. */
+  private async resume(
+    thread: ConversationThread,
+    text: string,
+    key: string,
+    say: (line: string) => Promise<unknown>,
+  ): Promise<ConverseResult> {
     let step = thread.pausedStepExecutionId ?? undefined;
     if (step === undefined) {
       const turn = await this.openTurn(thread);
@@ -477,6 +596,18 @@ export class Conversations {
       await say(STILL_ANSWERING);
       return { outcome: 'busy' };
     }
+    return this.resumeAt(thread, step, text, key, say);
+  }
+
+  /** Resumes the thread's session at the paused `step` with the operator's reply. */
+  private async resumeAt(
+    thread: ConversationThread,
+    step: string,
+    text: string,
+    key: string,
+    say: (line: string) => Promise<unknown>,
+  ): Promise<ConverseResult> {
+    const { store, api } = this.deps;
     const resumed = await api.resumeConversation(thread.spaceId, thread.sessionId, step, text, key);
     if (!resumed.ok && resumed.outcomeUnknown) {
       // The resume may have landed, so the thread watches for its answer as
@@ -499,7 +630,15 @@ export class Conversations {
         },
         this.now(),
       );
-      if (!resumed.retryable && (await this.openTurn(thread)).kind === 'ended') {
+      const posted = thread.status === 'posted';
+      // The pause moved on between the read and the resume, so the reply starts a
+      // conversation in the space rather than be dropped.
+      // Its own key, because the refused resume already carried the event's.
+      if (posted && resumed.status === 409) {
+        return this.startPosted(thread, text, `${key}:start`, say);
+      }
+      // A run's message keeps its thread open, so the next reply starts a conversation there.
+      if (!posted && !resumed.retryable && (await this.openTurn(thread)).kind === 'ended') {
         return this.ended(thread, say);
       }
       await say(resumed.status === 409 ? MOVED_ON : refusalText(resumed));
@@ -538,11 +677,13 @@ export class Conversations {
       return { outcome: refusalOutcome(started) };
     }
     const at = this.now().toISOString();
-    const fresh: ThreadRecord = {
+    const fresh: ConversationThread = {
       channel: record.channel,
       threadTs: record.threadTs,
       sessionId: started.sessionId,
       spaceId: home.spaceId,
+      runId: null,
+      postedText: null,
       status: 'answering',
       pausedStepExecutionId: null,
       relayedStepExecutionId: null,
@@ -560,7 +701,7 @@ export class Conversations {
    * pause the thread already resumed is not open: the Helmsman is still
    * answering it.
    */
-  private async openTurn(thread: ThreadRecord): Promise<OpenTurn> {
+  private async openTurn(thread: ConversationThread): Promise<OpenTurn> {
     const page = await this.deps.api.latestEvents(thread.spaceId, thread.sessionId);
     if (!page.ok) return { kind: 'none' };
     const last = lastTurnEvent(page.events);
@@ -570,6 +711,8 @@ export class Conversations {
     if (!asksTheOperator(last) || step === undefined || step === thread.resumedStepExecutionId) {
       return { kind: 'none' };
     }
+    // The events name a pause until the next one, so a pause resumed at Aflow is not open.
+    if (resumedSince(page.events, last)) return { kind: 'none' };
     return { kind: 'pause', step };
   }
 
@@ -592,12 +735,15 @@ export class Conversations {
    * and every thread whose watch stopped on reads that kept failing.
    */
   resumeWatching(): Array<Promise<WatchOutcome>> {
-    return this.deps.store.threadsToWatch().map((thread) => {
-      if (thread.status === 'unread') {
-        this.deps.store.updateThread(thread, { status: 'answering' }, this.now());
-      }
-      return this.watch(thread);
-    });
+    return this.deps.store
+      .threadsToWatch()
+      .filter(hasSession)
+      .map((thread) => {
+        if (thread.status === 'unread') {
+          this.deps.store.updateThread(thread, { status: 'answering' }, this.now());
+        }
+        return this.watch(thread);
+      });
   }
 
   /**
@@ -608,7 +754,7 @@ export class Conversations {
    * or when the session writes no new event for `WATCH_QUIET_LIMIT_MS`. One
    * watch per thread.
    */
-  watch(thread: ThreadRecord): Promise<WatchOutcome> {
+  watch(thread: ConversationThread): Promise<WatchOutcome> {
     const key = `${thread.channel}:${thread.threadTs}`;
     if (this.watching.has(key)) return Promise.resolve('already_watching');
     const own = Symbol(key);
@@ -635,7 +781,7 @@ export class Conversations {
    * Follows the thread's session. `release` gives the thread up before a stop
    * records it as one a reply watches again, so that reply's watch can start.
    */
-  private async poll(thread: ThreadRecord, release: () => void): Promise<WatchOutcome> {
+  private async poll(thread: ConversationThread, release: () => void): Promise<WatchOutcome> {
     const { store } = this.deps;
     const sleep =
       this.deps.sleep ?? ((ms: number) => new Promise<void>((done) => setTimeout(done, ms)));
@@ -693,9 +839,10 @@ export class Conversations {
           this.now(),
         );
         const reply = answer.agentResponse;
+        const prefix = await this.spaceNames.prefix(thread.spaceId);
         await this.relay(
           thread,
-          reply === undefined ? 'The Helmsman waits for your reply.' : relayed(reply),
+          reply === undefined ? `${prefix}${WAITS_FOR_REPLY}` : relayed(reply, prefix),
           sleep,
         );
         return 'answered';
@@ -749,7 +896,7 @@ export class Conversations {
    * the newest page answers `404`.
    */
   private async readTurn(
-    thread: ThreadRecord,
+    thread: ConversationThread,
   ): Promise<
     { ok: true; events: ConversationEvent[]; gap: boolean } | { ok: false; gone: boolean }
   > {
@@ -779,12 +926,13 @@ export class Conversations {
    * next read starts from there.
    */
   private async relayNotes(
-    thread: ThreadRecord,
+    thread: ConversationThread,
     events: readonly ConversationEvent[],
     closing: ConversationEvent | undefined,
     gap: boolean,
   ): Promise<void> {
     const say = (line: string) => this.say(thread.channel, thread.threadTs, line);
+    const prefix = await this.spaceNames.prefix(thread.spaceId);
     const resumed = resumedPause(thread, events);
     const after = Math.max(timeOf(thread.notesAfter), timeOf(resumed?.timestamp));
     const until = closing === undefined ? Number.POSITIVE_INFINITY : timeOf(closing.timestamp);
@@ -799,7 +947,9 @@ export class Conversations {
     for (const event of notes) {
       this.deps.store.updateThread(thread, { notesAfter: event.timestamp }, this.now());
       // Only a note: the answer still comes when its post fails.
-      await say(relayed(event.note ?? '')).catch(() => undefined);
+      await this.post(thread.channel, thread.threadTs, relayed(event.note ?? '', prefix)).catch(
+        () => undefined,
+      );
     }
     const read = events
       .filter((event) => timeOf(event.timestamp) <= until)
@@ -816,19 +966,19 @@ export class Conversations {
   }
 
   /**
-   * Posts the answer into the thread. A post Slack refused put nothing there,
-   * so the answer is posted once more when Slack named the refusal retryable,
-   * and the thread is told it was not posted when that fails too. A post that
-   * may have landed is never repeated.
+   * Posts the answer, which already holds its prefix, into the thread. A post
+   * Slack refused put nothing there, so the answer is posted once more when
+   * Slack named the refusal retryable, and the thread is told it was not posted
+   * when that fails too. A post that may have landed is never repeated.
    */
   private async relay(
-    thread: ThreadRecord,
+    thread: ConversationThread,
     text: string,
     sleep: (ms: number) => Promise<void>,
   ): Promise<void> {
     const say = (line: string) => this.say(thread.channel, thread.threadTs, line);
     try {
-      await say(text);
+      await this.post(thread.channel, thread.threadTs, text);
       return;
     } catch (error) {
       if (!postedNothing(error)) throw error;
@@ -839,7 +989,7 @@ export class Conversations {
     }
     await sleep(this.deps.pollMs ?? WATCH_POLL_MS);
     try {
-      await say(text);
+      await this.post(thread.channel, thread.threadTs, text);
     } catch (error) {
       if (!postedNothing(error)) throw error;
       await say(ANSWER_NOT_POSTED);

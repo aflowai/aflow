@@ -168,6 +168,7 @@ describe('the store', () => {
       '0002-cards',
       '0003-conversations',
       '0004-thread-notes',
+      '0005-posted-threads',
     ]);
   });
 

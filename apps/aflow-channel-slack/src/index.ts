@@ -39,6 +39,7 @@ import { keyExpiryNotice } from './keyExpiry.js';
 import { ChannelMessageSendHandler } from './sendHandler.js';
 import { createSlackClient } from './slack.js';
 import { startSocketMode } from './socketMode.js';
+import { SpaceNames } from './spaceNames.js';
 import { ChannelStore } from './store.js';
 
 const log = createServiceLogger('channel-slack');
@@ -87,10 +88,17 @@ async function main(): Promise<void> {
     apiKey: config.AFLOW_API_KEY,
     fetchImpl: fetch,
   });
-  runtime.registerHandler(new ChannelMessageSendHandler({ store, slack, api }));
+  const spaceNames = new SpaceNames(api);
+  runtime.registerHandler(new ChannelMessageSendHandler({ store, slack, api, spaceNames }));
   await runtime.start();
 
-  const conversations = new Conversations({ store, slack, api, aflowUserId: config.AFLOW_USER_ID });
+  const conversations = new Conversations({
+    store,
+    slack,
+    api,
+    spaceNames,
+    aflowUserId: config.AFLOW_USER_ID,
+  });
   const watched = (watching: Promise<WatchOutcome> | undefined): void => {
     watching?.catch((error: unknown) => {
       log.warn('Stopped watching a conversation for its answer', {

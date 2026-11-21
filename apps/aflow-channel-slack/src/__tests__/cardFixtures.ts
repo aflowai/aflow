@@ -18,6 +18,9 @@ export const TENANT = 'tenant-1';
 export const OWNER = 'owner-1';
 export const OPERATOR = 'U-OPERATOR';
 export const SPACE = '7b0c3c52-3f4e-4a43-9a43-0d5e8d7c1a01';
+export const SPACE_NAME = 'Trading Joe';
+/** What every message the app posts for `SPACE` opens with. */
+export const PREFIX = `[${SPACE_NAME}] `;
 export const WORKFLOW_RUN = 'c5d5bb0f-77a4-4c1b-a0f6-6a9a7d0f4b22';
 
 export const STEP_ORIGIN = {
@@ -185,7 +188,21 @@ export function fakeApi(...items: ActionCenterItem[]): FakeApi {
       const answered: ResolvedItem = { ok: true, item: resolved };
       return Promise.resolve(answered);
     },
+    spaceName: (spaceId) =>
+      Promise.resolve(
+        spaceId === SPACE
+          ? { ok: true, name: SPACE_NAME }
+          : {
+              ok: false,
+              status: 404,
+              error: 'NotFound',
+              message: 'Space not found',
+              retryable: false,
+              outcomeUnknown: false,
+            },
+      ),
     // A card test holds no conversation; `conversationFixtures.ts` serves those routes.
+    readSession: () => Promise.reject(new Error('no conversation in a card test')),
     homeSpace: () => Promise.reject(new Error('no conversation in a card test')),
     startConversation: () => Promise.reject(new Error('no conversation in a card test')),
     resumeConversation: () => Promise.reject(new Error('no conversation in a card test')),
@@ -203,17 +220,27 @@ export function linkOperator(store: ChannelStore): void {
   });
 }
 
-/** One `channel.message.send` step in the operator's run, in the space. */
+/**
+ * One `channel.message.send` step in the operator's run, in the space. A
+ * `sessionId` makes it a step of that session, as an agent's tool call is.
+ * Without one it is a workflow task's step.
+ */
 export async function sendStep(
   handler: ChannelMessageSendHandler,
   input: unknown,
-  scope: { executionId?: string; spaceId?: string | null; signal?: AbortSignal } = {},
+  scope: {
+    executionId?: string;
+    runId?: string;
+    sessionId?: string;
+    spaceId?: string | null;
+    signal?: AbortSignal;
+  } = {},
 ): Promise<{ result: StepResult; written: unknown }> {
   let written: unknown;
   const ctx = {
     tenantId: TENANT,
     ...(scope.spaceId === null ? {} : { spaceId: scope.spaceId ?? SPACE }),
-    runId: 'run-1',
+    runId: scope.runId ?? scope.sessionId ?? 'run-1',
     stepExecutionId: 'step-attempt',
     logicalExecutionId: scope.executionId ?? 'exec-1',
     attempt: 1,
@@ -222,6 +249,7 @@ export async function sendStep(
       operationId: 'channel.message.send',
       inputRef: 'inline:input',
       credentialOwnerId: OWNER,
+      ...(scope.sessionId === undefined ? {} : { sessionId: scope.sessionId }),
     },
     readPayload: () => Promise.resolve(input),
     writePayload: (_kind: string, data: unknown) => {

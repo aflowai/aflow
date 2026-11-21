@@ -6,9 +6,18 @@
  */
 import { randomUUID } from 'node:crypto';
 
-import { SPACE } from './cardFixtures.js';
+import { SPACE, SPACE_NAME } from './cardFixtures.js';
 
 export const HELMSMAN = 'cybernetic-helmsman';
+
+/** A second space the operator belongs to, which is not the tenant's home space. */
+export const NIGHT_DESK = '3d9e2f41-6c5b-4a7e-8f10-2b4c6d8e0a12';
+export const NIGHT_DESK_NAME = 'Night Desk';
+
+const SPACE_NAMES: ReadonlyMap<string, string> = new Map([
+  [SPACE, SPACE_NAME],
+  [NIGHT_DESK, NIGHT_DESK_NAME],
+]);
 
 export interface Start {
   spaceId: string | null;
@@ -25,6 +34,17 @@ interface FakeSession {
   id: string;
   pausedStep: string | null;
   events: Array<Record<string, unknown>>;
+  target: { kind: string; systemRole?: string; agentId?: string };
+  parentSessionId?: string;
+}
+
+export interface OpenedSession {
+  /** Who the session talks to. The Helmsman unless said otherwise. */
+  target?: FakeSession['target'];
+  /** The session that delegated this one. */
+  parentSessionId?: string;
+  /** True when the session is paused on the operator's next message. */
+  pausedOnInput?: boolean;
 }
 
 export interface FakeAflow {
@@ -55,6 +75,8 @@ export interface FakeAflow {
   resumeAtAflow(sessionId: string): void;
   /** Ends the session at Aflow with this event. */
   endSession(sessionId: string, eventType: string): void;
+  /** A session the operator opened at Aflow, which then runs a send of its own. */
+  openSession(options?: OpenedSession): string;
 }
 
 const MESSAGE_KEY = 'ai.agent.chatInput.helmsman';
@@ -200,6 +222,26 @@ export function fakeAflow(): FakeAflow {
         timestamp: tick(),
       });
     },
+    openSession(options = {}) {
+      const session: FakeSession = {
+        id: randomUUID(),
+        pausedStep: null,
+        events: [],
+        target: options.target ?? { kind: 'platform-role', systemRole: HELMSMAN },
+        ...(options.parentSessionId === undefined
+          ? {}
+          : { parentSessionId: options.parentSessionId }),
+      };
+      aflow.sessions.set(session.id, session);
+      session.events.push({
+        eventId: randomUUID(),
+        eventType: 'SessionStarted',
+        sessionId: session.id,
+        timestamp: tick(),
+      });
+      if (options.pausedOnInput === true) pause(session, 'a message sent at Aflow');
+      return session.id;
+    },
     fetch: (input, init) => {
       const url = new URL(String(input));
       const method = init?.method ?? 'GET';
@@ -217,7 +259,28 @@ export function fakeAflow(): FakeAflow {
           spaces: [
             { id: '00000000-0000-4000-8000-000000000000', myRole: null },
             { id: SPACE, myRole: 'admin' },
+            { id: NIGHT_DESK, myRole: 'admin' },
           ],
+        });
+      }
+      const space = /^\/v1\/spaces\/([^/]+)$/.exec(path);
+      if (method === 'GET' && space?.[1] !== undefined) {
+        const name = SPACE_NAMES.get(space[1]);
+        return name === undefined
+          ? refuse(404, 'no space')
+          : json(200, { id: space[1], name, status: 'active' });
+      }
+      const read = /^\/v1\/sessions\/([^/]+)$/.exec(path);
+      if (method === 'GET' && read?.[1] !== undefined) {
+        const session = aflow.sessions.get(read[1]);
+        if (session === undefined) return refuse(404, 'no session');
+        return json(200, {
+          sessionId: session.id,
+          target: session.target,
+          status: session.pausedStep === null ? 'RUNNING' : 'PAUSED',
+          ...(session.parentSessionId === undefined
+            ? {}
+            : { parentSessionId: session.parentSessionId }),
         });
       }
 
@@ -238,7 +301,12 @@ export function fakeAflow(): FakeAflow {
         const key = headers.get('idempotency-key');
         const existing = key === null ? undefined : byKey.get(key);
         if (existing !== undefined) return json(201, { sessionId: existing, status: 'PAUSED' });
-        const session: FakeSession = { id: randomUUID(), pausedStep: null, events: [] };
+        const session: FakeSession = {
+          id: randomUUID(),
+          pausedStep: null,
+          events: [],
+          target: { kind: 'platform-role', systemRole: HELMSMAN },
+        };
         aflow.sessions.set(session.id, session);
         if (key !== null) byKey.set(key, session.id);
         session.events.push({
