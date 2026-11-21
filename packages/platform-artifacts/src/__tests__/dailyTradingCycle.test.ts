@@ -9,14 +9,141 @@ import {
 import {
   SkillComposeBundleSchema,
   getOperation,
+  getValidator,
   mergeDerivedPatches,
   toJsonSchemaSync,
   type WorkflowTask,
 } from '@aflow/schemas';
+import AjvModule from 'ajv';
 import { getSkillBundleEntry } from '../skillBundleCatalog.js';
+import { INTRADAY_INDEX_RULE } from '../skillCatalog/dailyTradingCycleSlots.js';
 
 const CYCLE_SLUG = 'daily-trading-cycle';
 const PROCEED_GATE = 'tasks.resolve-theses.output.proceed == true';
+
+const AjvCtor = (AjvModule as unknown as { default: typeof AjvModule }).default ?? AjvModule;
+const ajv = new AjvCtor({ allErrors: true, strict: false });
+
+type CycleSlot = 'pre_market' | 'open' | 'intraday' | 'after_close';
+type CatalogTask = {
+  outputContract?: {
+    schema?: unknown;
+    derivedFrom?: ReadonlyArray<{
+      bindingId: string;
+      from: string;
+      binding: string;
+      target: string;
+    }>;
+    validatorRefs?: readonly string[];
+  };
+};
+
+const CAMPAIGN = {
+  universe: ['AAPL', 'MSFT', 'SPY'],
+  maxThesesPerDay: 3,
+  maxPositionSizePct: 8,
+  maxGrossExposurePct: 60,
+  minHorizonTradingDays: 1,
+  maxHorizonTradingDays: 5,
+};
+
+/** A valid resolve-theses output for one slot, with nothing resolved. */
+function resolveOutput(slot: CycleSlot, overrides: Record<string, unknown> = {}) {
+  return {
+    tradingDay: '2026-07-14',
+    slot,
+    slotIndex: slot === 'intraday' ? 3 : null,
+    proceed: true,
+    noopReason: null,
+    resolutions: [],
+    openThesesAfter: [],
+    pendingIntentions: [],
+    repairCloses: [],
+    orphanFlattens: [],
+    maxThesesPerDay: 3,
+    thesesOpenedToday: [],
+    remainingThesesToday: slot === 'after_close' ? 0 : 3,
+    coverageNote: 'No slot missed since the last cycle.',
+    ...overrides,
+  };
+}
+
+function thesis(thesisId: string, entryCondition: string | null) {
+  return {
+    thesisId,
+    instrument: 'AAPL',
+    direction: 'long',
+    rationale: 'Closed above the 20-day high of 187.40 on 1.8x average volume.',
+    entryCondition,
+    falsificationCriterion: 'A daily close below 184.00.',
+    confirmationCriterion: 'A daily close above 195.00.',
+    deadlineTradingDays: 3,
+    sizePct: 5,
+    confidence: 'medium',
+  };
+}
+
+function orderResult(overrides: Record<string, unknown>) {
+  return {
+    clientOrderId: '2026-07-14-pre_market-aapl-1-open',
+    thesisId: 'aapl-1',
+    intent: 'open',
+    symbol: 'AAPL',
+    side: 'buy',
+    qty: null,
+    notional: '5000.00',
+    entryCondition: 'Trades above 187.40 after the open.',
+    disposition: 'deferred',
+    statusCode: null,
+    orderId: null,
+    orderStatus: null,
+    fillState: null,
+    error: null,
+    ...overrides,
+  };
+}
+
+/**
+ * The schema a task's output is validated against at delegation: its static
+ * schema with every derivedFrom binding evaluated against the named sources.
+ */
+function effectiveOutputSchema(
+  t: CatalogTask,
+  sources: Record<string, Record<string, unknown>>,
+): Record<string, unknown> {
+  const patches = (t.outputContract?.derivedFrom ?? []).map((b) => {
+    const m = /^(enum|value|count):\$\.([A-Za-z]+)(\[\*\])?$/.exec(b.binding);
+    const source = sources[b.from];
+    if (!m || !source) throw new Error(`no test source for binding ${b.bindingId}`);
+    const raw = source[m[2]!];
+    return {
+      bindingId: b.bindingId,
+      target: b.target,
+      kind: (m[1] === 'value' ? 'const' : m[1]) as 'enum' | 'const' | 'count',
+      value: (m[1] === 'count' ? (raw as unknown[]).length : raw) as never,
+    };
+  });
+  return mergeDerivedPatches(t.outputContract!.schema as Record<string, unknown>, patches)
+    .effectiveSchema;
+}
+
+function refuses(schema: Record<string, unknown>, output: unknown): boolean {
+  return !ajv.compile(schema)(output);
+}
+
+/** The whole output contract: the effective schema, then every validatorRef. */
+function contractRefuses(
+  t: CatalogTask,
+  sources: Record<string, Record<string, unknown>>,
+  output: unknown,
+): boolean {
+  if (refuses(effectiveOutputSchema(t, sources), output)) return true;
+  return (t.outputContract?.validatorRefs ?? []).some((ref) => {
+    const validator = getValidator(ref);
+    if (!validator) throw new Error(`validatorRef ${ref} is not registered`);
+    return !validator.safeParse(output).success;
+  });
+}
 
 describe('DAILY_TRADING_CYCLE', () => {
   const entry = getSkillCatalogEntry(CYCLE_SLUG);
@@ -172,8 +299,17 @@ describe('DAILY_TRADING_CYCLE', () => {
 
   it('the risk-gate binds every campaign cap into the decide contract from $campaign', () => {
     const derived = task('decide')?.outputContract?.derivedFrom ?? [];
-    expect(derived.every((b) => b.from === '$campaign')).toBe(true);
-    const byTarget = Object.fromEntries(derived.map((b) => [b.target, b.binding]));
+    const fromCampaign = derived.filter((b) => b.from === '$campaign');
+    // The rest come from resolve-theses: the day's remaining cap and the slot pin.
+    expect(
+      derived
+        .filter((b) => b.from !== '$campaign')
+        .map((b) => `${b.from}:${b.binding}>${b.target}`),
+    ).toEqual([
+      'resolve-theses:value:$.remainingThesesToday>$.theses.maxItems',
+      'resolve-theses:value:$.slot>$.slot.const',
+    ]);
+    const byTarget = Object.fromEntries(fromCampaign.map((b) => [b.target, b.binding]));
     expect(byTarget).toEqual({
       '$.theses.items.instrument.enum': 'enum:$.universe[*]',
       '$.theses.maxItems': 'value:$.maxThesesPerDay',
@@ -185,29 +321,10 @@ describe('DAILY_TRADING_CYCLE', () => {
   });
 
   it('a sample campaign config merges into an enforceable decide schema', () => {
-    const config = {
-      universe: ['AAPL', 'MSFT', 'SPY'],
-      maxThesesPerDay: 3,
-      maxPositionSizePct: 8,
-      maxGrossExposurePct: 60,
-      minHorizonTradingDays: 1,
-      maxHorizonTradingDays: 5,
-    };
-    const decide = task('decide')!;
-    const patches = (decide.outputContract?.derivedFrom ?? []).map((b) => {
-      const m = /^(enum|value|count):\$\.(.+?)(\[\*\])?$/.exec(b.binding)!;
-      const field = m[2] as keyof typeof config;
-      return {
-        bindingId: b.bindingId,
-        target: b.target,
-        kind: (m[1] === 'value' ? 'const' : m[1]) as 'enum' | 'const' | 'count',
-        value: config[field] as never,
-      };
+    const effectiveSchema = effectiveOutputSchema(task('decide')!, {
+      $campaign: CAMPAIGN,
+      'resolve-theses': resolveOutput('open'),
     });
-    const { effectiveSchema } = mergeDerivedPatches(
-      decide.outputContract!.schema as Record<string, unknown>,
-      patches,
-    );
     const theses = (effectiveSchema as any).properties.theses;
     expect(theses.maxItems).toBe(3);
     expect(theses.items.properties.instrument.enum).toEqual(['AAPL', 'MSFT', 'SPY']);
@@ -227,6 +344,7 @@ describe('DAILY_TRADING_CYCLE', () => {
         'confirmationCriterion',
         'deadlineTradingDays',
         'direction',
+        'entryCondition',
         'falsificationCriterion',
         'instrument',
         'rationale',
@@ -337,6 +455,7 @@ describe('DAILY_TRADING_CYCLE', () => {
       'falsified',
       'expired',
       'entry_failed',
+      'tactical_exit',
     ]);
     // Every resolution must assert its entry's fill truth explicitly — the
     // cross-checkable link between outcome and broker data.
@@ -535,14 +654,35 @@ describe('DAILY_TRADING_CYCLE', () => {
     }
   });
 
-  it('runs need no per-run inputs — cycle identity is derived, config is the campaign', () => {
+  it('the only run inputs are the optional slot and slotIndex, read by resolve-theses alone', () => {
+    expect(wf.runInputs?.map((r) => [r.id, r.required])).toEqual([
+      ['slot', false],
+      ['slotIndex', false],
+    ]);
+    const entryContract = task('ingest-clock')?.inputContract?.bindings ?? {};
+    expect(Object.keys(entryContract).sort()).toEqual(['slot', 'slotIndex']);
     for (const t of wf.tasks) {
-      const bindings = Object.values(t.inputBindings ?? {});
-      expect(
-        bindings.every((b) => (b as { kind: string }).kind !== 'run_input'),
-        t.taskId,
-      ).toBe(true);
+      const runInputs = Object.entries(t.inputBindings ?? {}).filter(
+        ([, b]) => (b as { kind: string }).kind === 'run_input',
+      );
+      expect(runInputs.length > 0, t.taskId).toBe(t.taskId === 'resolve-theses');
     }
+    expect(task('resolve-theses')?.inputBindings).toMatchObject({
+      requestedSlot: { kind: 'run_input', path: 'slot' },
+      requestedSlotIndex: { kind: 'run_input', path: 'slotIndex' },
+    });
+  });
+
+  it('an explicit slotIndex and a derived one count by the same rule, from 1 at the open', () => {
+    const resolveSchema = task('resolve-theses')?.outputContract?.schema as {
+      properties: { slotIndex: { description: string } };
+    };
+    expect(INTRADAY_INDEX_RULE).toContain('09:30–10:29 is 1');
+    expect(wf.runInputs?.find((r) => r.id === 'slotIndex')?.description).toContain(
+      INTRADAY_INDEX_RULE,
+    );
+    expect(task('resolve-theses')?.goal).toContain(INTRADAY_INDEX_RULE);
+    expect(resolveSchema.properties.slotIndex.description).toContain(INTRADAY_INDEX_RULE);
   });
 
   it('declares the campaign contract with regimeName as identity and every field frozen', () => {
@@ -587,23 +727,45 @@ describe('DAILY_TRADING_CYCLE', () => {
     expect(goal).toContain('missed slot');
     expect(goal.toLowerCase()).toContain('duplicate');
     // Idempotency key = the cycle doc for (tradingDay, slot).
-    expect(goal).toContain('/portfolio/theses/cycles/{tradingDay}-{slot}.json');
+    expect(goal).toContain('/portfolio/theses/cycles/{tradingDay}-{slotKey}.json');
   });
 
-  it('the slot taxonomy matches the scheduled cadence exactly (morning, after_close)', () => {
-    const schema = task('resolve-theses')?.outputContract?.schema as {
-      properties: { slot: { enum: string[] } };
+  it('one slot taxonomy runs through every task, the cycle doc and the ledger paths', () => {
+    const slots = ['pre_market', 'open', 'intraday', 'after_close'];
+    for (const id of ['resolve-theses', 'decide', 'execute-orders']) {
+      const schema = task(id)?.outputContract?.schema as {
+        required: string[];
+        properties: { slot: { enum: string[] } };
+      };
+      expect(schema.properties.slot.enum, id).toEqual(slots);
+      expect(schema.required, id).toContain('slot');
+    }
+    const record = task('record')?.outputContract?.schema as {
+      properties: {
+        cycleDoc: { required: string[]; properties: { slot: { enum: string[] } } };
+        cycleDocPath: { pattern: string };
+        snapshotDocPath: { pattern: string };
+      };
     };
-    expect(schema.properties.slot.enum).toEqual(['morning', 'after_close']);
+    expect(record.properties.cycleDoc.properties.slot.enum).toEqual(slots);
+    expect(record.properties.cycleDoc.required).toEqual(
+      expect.arrayContaining(['slot', 'slotIndex']),
+    );
+    const cyclePath = new RegExp(record.properties.cycleDocPath.pattern);
+    for (const key of ['pre_market', 'open', 'intraday-3', 'after_close']) {
+      expect(cyclePath.test(`/portfolio/theses/cycles/2026-07-14-${key}.json`), key).toBe(true);
+    }
+    // An intraday cycle without its index would collide with the day's other firings.
+    expect(cyclePath.test('/portfolio/theses/cycles/2026-07-14-intraday.json')).toBe(false);
+    expect(cyclePath.test('/portfolio/theses/cycles/2026-07-14-morning.json')).toBe(false);
+    expect(
+      new RegExp(record.properties.snapshotDocPath.pattern).test(
+        '/portfolio/snapshots/2026-07-14-intraday-3.json',
+      ),
+    ).toBe(true);
     const goal = task('resolve-theses')?.goal ?? '';
-    // A slot the schedule never fires (the old pre_open) would make every
-    // cycle's coverageNote report a permanently-missed slot — pure noise.
-    expect(goal).not.toContain('pre_open');
-    expect(goal).not.toContain('intraday');
-    expect(goal).toContain('slot: "morning"');
-    expect(goal).toContain('slot: "after_close"');
     // Coverage compares against the SCHEDULED slot set, not all conceivable slots.
-    expect(goal).toContain('two SCHEDULED slots per trading day');
+    expect(goal).toContain('The expected grid is the SCHEDULED slots of each trading day');
   });
 
   it('record prose scopes learnings to resolutions and writes the cycle doc last', () => {
@@ -638,6 +800,114 @@ describe('DAILY_TRADING_CYCLE', () => {
       'resolution-rate',
       'thesis-discipline',
     ]);
+  });
+});
+
+describe('daily-trading-cycle per-slot contracts', () => {
+  const wf = getSkillCatalogEntry(CYCLE_SLUG)!.bundle.workflow;
+  const task = (id: string) => wf.tasks.find((t) => t.taskId === id)! as CatalogTask;
+  const resolveRefuses = (output: unknown) =>
+    contractRefuses(task('resolve-theses'), { $campaign: CAMPAIGN }, output);
+
+  it('resolve-theses accepts a plain cycle for every slot', () => {
+    for (const slot of ['pre_market', 'open', 'intraday', 'after_close'] as const) {
+      expect(resolveRefuses(resolveOutput(slot)), slot).toBe(false);
+    }
+  });
+
+  it('resolve-theses: a remaining cap that ignores the theses opened today is refused', () => {
+    const opened = { thesesOpenedToday: ['aapl-1', 'msft-1'] };
+    expect(resolveRefuses(resolveOutput('open', { ...opened, remainingThesesToday: 1 }))).toBe(
+      false,
+    );
+    expect(resolveRefuses(resolveOutput('open', { ...opened, remainingThesesToday: 3 }))).toBe(
+      true,
+    );
+    // The cap the remainder derives from is the campaign's, not one the agent picks.
+    expect(
+      resolveRefuses(
+        resolveOutput('open', { ...opened, maxThesesPerDay: 5, remainingThesesToday: 3 }),
+      ),
+    ).toBe(true);
+    // A day past its cap floors at 0.
+    expect(
+      resolveRefuses(
+        resolveOutput('intraday', {
+          thesesOpenedToday: ['a-1', 'b-1', 'c-1', 'd-1'],
+          remainingThesesToday: 0,
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it('pre_market: a cycle that submits an order is refused', () => {
+    const schema = effectiveOutputSchema(task('execute-orders'), {
+      'resolve-theses': resolveOutput('pre_market'),
+    });
+    const deferred = {
+      slot: 'pre_market',
+      orderResults: [orderResult({})],
+      submittedCount: 0,
+      deferredCount: 1,
+      failedCount: 0,
+    };
+    expect(refuses(schema, deferred)).toBe(false);
+    const submitted = {
+      ...deferred,
+      orderResults: [
+        orderResult({
+          disposition: 'submitted',
+          statusCode: 200,
+          orderId: 'b0b6dd9d',
+          orderStatus: 'accepted',
+          fillState: 'pending',
+        }),
+      ],
+      submittedCount: 1,
+      deferredCount: 0,
+    };
+    expect(refuses(schema, submitted)).toBe(true);
+  });
+
+  it.each(['open', 'intraday'] as const)(
+    '%s: a cycle that forms an entry past the day’s remaining cap is refused',
+    (slot) => {
+      // Two of the day's three theses were opened by earlier slots.
+      const resolved = resolveOutput(slot, {
+        thesesOpenedToday: ['aapl-1', 'msft-1'],
+        remainingThesesToday: 1,
+      });
+      expect(resolveRefuses(resolved)).toBe(false);
+      const schema = effectiveOutputSchema(task('decide'), {
+        $campaign: CAMPAIGN,
+        'resolve-theses': resolved,
+      });
+      const decision = (theses: unknown[]) => ({
+        slot,
+        theses,
+        projectedGrossExposurePct: 10,
+        decisionRationale: 'Breakout setup on AAPL.',
+      });
+      expect(refuses(schema, decision([thesis('aapl-2', null)]))).toBe(false);
+      expect(refuses(schema, decision([thesis('aapl-2', null), thesis('aapl-3', null)]))).toBe(
+        true,
+      );
+    },
+  );
+
+  it('after_close: a cycle that forms a new entry is refused', () => {
+    const schema = effectiveOutputSchema(task('decide'), {
+      $campaign: CAMPAIGN,
+      'resolve-theses': resolveOutput('after_close'),
+    });
+    const decision = (theses: unknown[]) => ({
+      slot: 'after_close',
+      theses,
+      projectedGrossExposurePct: 10,
+      decisionRationale: 'Recorded the close.',
+    });
+    expect(refuses(schema, decision([]))).toBe(false);
+    expect(refuses(schema, decision([thesis('aapl-2', null)]))).toBe(true);
   });
 });
 
@@ -710,8 +980,8 @@ describe('alpaca-thesis-trading bundle', () => {
     expect(doc).toContain('/portfolio/theses/open/{thesisId}.json');
     expect(doc).toContain('/portfolio/theses/resolved/{thesisId}.json');
     expect(doc).toContain('/portfolio/intentions/{clientOrderId}.json');
-    expect(doc).toContain('/portfolio/theses/cycles/{tradingDay}-{slot}.json');
-    expect(doc).toContain('/portfolio/snapshots/{tradingDay}-{slot}.json');
+    expect(doc).toContain('/portfolio/theses/cycles/{tradingDay}-{slotKey}.json');
+    expect(doc).toContain('/portfolio/snapshots/{tradingDay}-{slotKey}.json');
     expect(doc).toContain('/portfolio/market-data/{symbol}.json');
     expect(doc).toContain('Only COMPLETED sessions enter the cache');
     // Order truth is part of the ledger contract.
@@ -725,9 +995,28 @@ describe('alpaca-thesis-trading bundle', () => {
     expect(doc).toContain('Layer 1');
     expect(doc).toContain('Layer 2');
     expect(doc).toContain('Raw daily P&L is not a signal anywhere');
-    // The ledger carries the same two-slot taxonomy as the skill contract.
-    expect(doc).toContain('morning | after_close');
-    expect(doc).not.toContain('pre_open');
-    expect(doc).not.toContain('intraday');
+    // The ledger carries the same slot taxonomy as the skill contract, name and index.
+    expect(doc).toContain('pre_market | open | intraday | after_close');
+    expect(doc).not.toContain('morning');
+    for (const field of [
+      'openedSlotIndex',
+      'proposedSlotIndex',
+      'resolvedSlotIndex',
+      'slotIndex',
+    ]) {
+      expect(doc, field).toContain(`"${field}"`);
+    }
+    expect(doc).toContain('"entryCondition"');
+  });
+
+  it('setup notes and hints describe the four firings, staggered off round boundaries', () => {
+    const text = [bundle.description, ...bundle.helmsmanHints].join('\n');
+    for (const slot of ['pre_market', 'open', 'intraday', 'after_close']) {
+      expect(text, slot).toContain(`slot: "${slot}"`);
+    }
+    for (const cron of ['47 8 * * 1-5', '37 9 * * 1-5', '7 10-15 * * 1-5', '23 16 * * 1-5']) {
+      expect(text, cron).toContain(cron);
+    }
+    expect(text).toContain('staggered off round boundaries');
   });
 });
