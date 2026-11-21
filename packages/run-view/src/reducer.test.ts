@@ -1824,6 +1824,26 @@ describe('Plan 156 §5.6.1 — inline HITL message lifecycle', () => {
     expect(payload['uiHints']).toEqual({ mode: 'choices', submitLabel: 'Use this' });
   });
 
+  it('carries the whole prompt of an input ask as the message content', () => {
+    const prompt =
+      'Which of the three billing datasets should the nightly export read from? '.repeat(6) +
+      'The archived one stays readable after the cutover.';
+    let s: RunViewState = initialRunViewState;
+    s = runViewReducer(s, { type: 'SSE_EVENT', event: inlineInputPause(prompt) });
+
+    expect(prompt.length).toBeGreaterThan(400);
+    expect(s.messages.find((m) => m.semanticType === 'inline_hitl')?.content).toBe(prompt);
+  });
+
+  it('keeps the title as the message content of an approval', () => {
+    let s: RunViewState = initialRunViewState;
+    s = runViewReducer(s, { type: 'SSE_EVENT', event: inlineApprovalPause() });
+
+    expect(s.messages.find((m) => m.semanticType === 'inline_hitl')?.content).toBe(
+      'Deploy to production?',
+    );
+  });
+
   it('flips an open inline HITL to resolved on a matching StepSucceeded (approval kind)', () => {
     let s: RunViewState = initialRunViewState;
     s = runViewReducer(s, { type: 'SSE_EVENT', event: inlineApprovalPause() });
