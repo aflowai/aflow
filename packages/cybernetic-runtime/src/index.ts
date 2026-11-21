@@ -251,6 +251,7 @@ export * from './scheduling/composeTaskGraphDraftValidator.js';
 export * from './scheduling/evalCaseDraftValidator.js';
 export * from './scheduling/apiDefinitionDraftValidator.js';
 export * from './scheduling/tradingThesesBudgetValidator.js';
+export * from './scheduling/tradingApprovedThesesValidator.js';
 export * from './scheduling/tradingArmTable.js';
 export * from './scheduling/tradingCampaignArms.js';
 export * from './scheduling/tradingLedgerMigration.js';
