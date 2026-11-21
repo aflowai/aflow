@@ -6,6 +6,19 @@ import {
   DAILY_CYCLE_EXECUTE_ORDERS_PROMPT,
   DAILY_CYCLE_RECORD_PROMPT,
 } from './dailyTradingCycleProse.js';
+import {
+  CYCLE_DOC_PATH_PATTERN,
+  CYCLE_RUN_INPUTS,
+  DECIDE_SLOT_RULES,
+  EXECUTE_SLOT_RULES,
+  INTRADAY_INDEX_RULE,
+  RESOLUTION_OUTCOMES,
+  RESOLVE_SLOT_RULES,
+  SLOT_INDEX_INPUT_SCHEMA,
+  SLOT_INDEX_SCHEMA,
+  SLOT_SCHEMA,
+  SNAPSHOT_DOC_PATH_PATTERN,
+} from './dailyTradingCycleSlots.js';
 
 const CYCLE_PROCEED_GATE = {
   expression: 'tasks.resolve-theses.output.proceed == true',
@@ -14,21 +27,21 @@ const CYCLE_PROCEED_GATE = {
 
 const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
   catalogId: 'daily-trading-cycle',
-  version: 1,
+  version: 2,
   name: 'Daily Trading Cycle',
   tagline:
     'Thesis-driven paper-trading cycle: resolve open theses, decide new ones, execute, record.',
-  description: `One run = one trading-cycle slot on an Alpaca paper account. The unit of decision, measurement, and learning is the **thesis** — instrument + direction + rationale + falsification criterion + confirmation criterion + deadline + size, written and validated BEFORE any order exists. Each cycle resolves every open thesis against fill truth first, then its written criteria (confirmed / falsified / expired for filled entries; entry_failed otherwise), proposes new theses under the campaign's frozen regime hypothesis, executes the resulting orders (submitting only while the market is open — closed-market proposals defer as intentions), and appends everything to the thesis ledger under \`/portfolio/theses/\`.
+  description: `One run = one trading-cycle slot on an Alpaca paper account. A trading day has four kinds of slot: \`pre_market\` forms the day's theses as deferred intentions with entry conditions, \`open\` and \`intraday\` submit due intentions and resolve open theses on current prices, and \`after_close\` resolves on the close and records. What each slot may do is part of its task contracts. The unit of decision, measurement, and learning is the **thesis** — instrument + direction + rationale + falsification criterion + confirmation criterion + deadline + size, written and validated BEFORE any order exists. Each cycle resolves every open thesis against fill truth first, then its written criteria (confirmed / falsified / expired for filled entries; entry_failed otherwise), proposes new theses under the campaign's frozen regime hypothesis, executes the resulting orders (submitting only while the market is open — closed-market proposals defer as intentions), and appends everything to the thesis ledger under \`/portfolio/theses/\`.
 
 **Campaign-driven**: the strategy regime lives in the campaign contract — regime name, ONE prose hypothesis, universe, theses/day cap, per-position and gross-exposure caps, horizon bounds, and the pre-registered evaluation window. The regime is frozen mid-campaign; strategy evolves at campaign boundaries via campaign-end synthesis and vetted learnings.
 
 **Structural risk-gate, no human gate**: the campaign caps are bound into the decide task's output contract — a thesis outside the universe, over the size cap, past the horizon bounds, or breaching gross exposure (pending deferred intentions included) is rejected by schema validation and returned to the agent as a teaching error. Paper trading carries zero financial risk; the structural gate is the safety layer.
 
-**Self-healing cadence**: runs are idempotent per (tradingDay, slot) via the ledger's cycle docs, and resolution always processes everything pending since the last completed cycle — a missed slot loses nothing and is recorded honestly in the cycle-reliability record.
+**Self-healing cadence**: the schedule names the slot in the run input (\`slot\`, plus \`slotIndex\` for intraday firings). Absent, the slot derives from the exchange clock. Runs are idempotent per (tradingDay, slot) via the ledger's cycle docs, and resolution always processes everything pending since the last completed cycle — a missed slot loses nothing and is recorded honestly in the cycle-reliability record.
 
 **Two-layer measurement**: Layer-1 process metrics (cycle reliability, thesis discipline, resolution rate, calibration, loop health) derive from the ledger and are the primary signal. Layer-2 outcome metrics (benchmark-relative return, Sharpe, drawdown) are read only at pre-registered boundaries — raw daily P&L is not a signal anywhere.
 
-**Prerequisites**: Alpaca paper API credentials configured once after bundle install; two schedules (shortly after the open, after the close) created by the operator.`,
+**Prerequisites**: Alpaca paper API credentials configured once after bundle install. The operator creates the schedules: one pre-market, one shortly after the open, hourly intraday firings and one after the close, each naming its slot.`,
   tags: ['alpaca', 'trading', 'paper', 'theses', 'campaigns'],
   bundle: {
     workflow: {
@@ -50,14 +63,34 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
           },
         },
       ],
+      runInputs: CYCLE_RUN_INPUTS,
       tasks: [
         {
           taskId: 'ingest-clock',
           name: 'Ingest market clock',
-          goal: 'Read the exchange clock — the timestamp anchors the trading day, the open/close boundaries decide the slot.',
+          goal: 'Read the exchange clock — the timestamp anchors the trading day, the open/close boundaries decide the slot when the run input names none.',
           type: 'operation' as const,
           operation: 'api.http.call',
           retryability: 'safe' as const,
+          // The entry task's contract is the skill's input surface: a run
+          // input missing from it is refused at start. resolve-theses reads
+          // both.
+          inputContract: {
+            bindings: {
+              slot: {
+                kind: 'run_input' as const,
+                bindAs: 'slot',
+                path: 'slot',
+                schema: SLOT_SCHEMA,
+              },
+              slotIndex: {
+                kind: 'run_input' as const,
+                bindAs: 'slotIndex',
+                path: 'slotIndex',
+                schema: SLOT_INDEX_INPUT_SCHEMA,
+              },
+            },
+          },
           inputTemplate: {
             apiId: 'alpaca-account-read',
             endpointId: 'get_clock',
@@ -193,6 +226,9 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
           type: 'agent' as const,
           dependsOn: ['ingest-orders'],
           inputBindings: {
+            requestedSlot: { kind: 'run_input' as const, path: 'slot' },
+            requestedSlotIndex: { kind: 'run_input' as const, path: 'slotIndex' },
+            maxThesesPerDay: { kind: 'campaign_input' as const, path: 'maxThesesPerDay' },
             clockTimestamp: {
               kind: 'task_output' as const,
               taskId: 'ingest-clock',
@@ -251,6 +287,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
               required: [
                 'tradingDay',
                 'slot',
+                'slotIndex',
                 'proceed',
                 'noopReason',
                 'resolutions',
@@ -258,12 +295,43 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                 'pendingIntentions',
                 'repairCloses',
                 'orphanFlattens',
+                'maxThesesPerDay',
+                'thesesOpenedToday',
+                'remainingThesesToday',
                 'coverageNote',
               ],
               additionalProperties: false,
+              allOf: RESOLVE_SLOT_RULES,
               properties: {
                 tradingDay: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
-                slot: { enum: ['morning', 'after_close'] },
+                slot: {
+                  ...SLOT_SCHEMA,
+                  description:
+                    'The slot `requestedSlot` names, when given. Otherwise derived from the clock. Every later task pins this value and holds the actions its slot allows.',
+                },
+                slotIndex: {
+                  ...SLOT_INDEX_SCHEMA,
+                  description: `The intraday firing number: \`requestedSlotIndex\` when given, otherwise ${INTRADAY_INDEX_RULE}. An integer on an intraday slot, null on every other slot.`,
+                },
+                maxThesesPerDay: {
+                  type: 'integer',
+                  minimum: 0,
+                  description:
+                    'The campaign’s `maxThesesPerDay`, copied from your input. It is pinned to the campaign.',
+                },
+                thesesOpenedToday: {
+                  type: 'array',
+                  uniqueItems: true,
+                  items: { type: 'string' },
+                  description:
+                    'Every thesisId the cycle docs of this trading day list as opened, in any earlier slot.',
+                },
+                remainingThesesToday: {
+                  type: 'integer',
+                  minimum: 0,
+                  description:
+                    'maxThesesPerDay less the length of thesesOpenedToday, floored at 0, and 0 on after_close, which opens nothing. The contract refuses any other value. It bounds how many theses decide may form this cycle.',
+                },
                 proceed: {
                   type: 'boolean',
                   description:
@@ -291,14 +359,14 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                       instrument: { type: 'string' },
                       direction: { enum: ['long', 'short'] },
                       outcome: {
-                        enum: ['confirmed', 'falsified', 'expired', 'entry_failed'],
+                        enum: [...RESOLUTION_OUTCOMES],
                         description:
-                          'Fill truth first: only a thesis whose entry order FILLED may resolve confirmed / falsified / expired. An entry that is unfilled, expired, cancelled, or rejected — or a deferred entry intention past the thesis deadline — resolves entry_failed: no position ever existed.',
+                          'Fill truth first: only a thesis whose entry order FILLED may resolve confirmed / falsified / expired / tactical_exit. An entry that is unfilled, expired, cancelled, or rejected — or a deferred entry intention past the thesis deadline — resolves entry_failed: no position ever existed. tactical_exit closes a live thesis on an open or intraday slot before either criterion triggers, on a current-price reason stated in evidence. A pre_market cycle sees no price of the coming session and resolves entry_failed only.',
                       },
                       entryFillState: {
                         enum: ['filled', 'partial', 'none'],
                         description:
-                          'The entry’s fill truth as read from the broker. confirmed / falsified / expired are valid only with filled or partial; entry_failed only with none — the explicit assertion evals cross-check against broker data.',
+                          'The entry’s fill truth as read from the broker. confirmed / falsified / expired / tactical_exit are valid only with filled or partial. entry_failed is valid only with none — the explicit assertion evals cross-check against broker data.',
                       },
                       evidence: {
                         type: 'string',
@@ -392,6 +460,18 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                 },
               },
             },
+            derivedFrom: [
+              {
+                bindingId: 'theses-per-day-pin',
+                from: '$campaign',
+                binding: 'value:$.maxThesesPerDay',
+                target: '$.maxThesesPerDay.const',
+              },
+            ],
+            // The pin above makes maxThesesPerDay the campaign's. This ref ties
+            // remainingThesesToday to it and to thesesOpenedToday, which the
+            // decide contract then binds as its theses ceiling.
+            validatorRefs: ['trading.theses-day-budget'],
           },
           promoteOutputs: [
             { kind: 'output_path' as const, path: 'tradingDay', toState: 'tradingDay' },
@@ -413,6 +493,21 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
               path: 'tradingDay',
             },
             slot: { kind: 'task_output' as const, taskId: 'resolve-theses', path: 'slot' },
+            slotIndex: {
+              kind: 'task_output' as const,
+              taskId: 'resolve-theses',
+              path: 'slotIndex',
+            },
+            thesesOpenedToday: {
+              kind: 'task_output' as const,
+              taskId: 'resolve-theses',
+              path: 'thesesOpenedToday',
+            },
+            remainingThesesToday: {
+              kind: 'task_output' as const,
+              taskId: 'resolve-theses',
+              path: 'remainingThesesToday',
+            },
             resolutions: {
               kind: 'task_output' as const,
               taskId: 'resolve-theses',
@@ -489,9 +584,15 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
           outputContract: {
             schema: {
               type: 'object',
-              required: ['theses', 'projectedGrossExposurePct', 'decisionRationale'],
+              required: ['slot', 'theses', 'projectedGrossExposurePct', 'decisionRationale'],
               additionalProperties: false,
+              allOf: DECIDE_SLOT_RULES,
               properties: {
+                slot: {
+                  ...SLOT_SCHEMA,
+                  description:
+                    'This cycle’s slot, copied from your input. It is pinned, and it decides what this output may hold: no theses on after_close, an entry condition on every pre_market thesis.',
+                },
                 theses: {
                   type: 'array',
                   items: {
@@ -501,6 +602,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                       'instrument',
                       'direction',
                       'rationale',
+                      'entryCondition',
                       'falsificationCriterion',
                       'confirmationCriterion',
                       'deadlineTradingDays',
@@ -513,6 +615,13 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                       instrument: { type: 'string' },
                       direction: { enum: ['long', 'short'] },
                       rationale: { type: 'string', minLength: 1, maxLength: 1500 },
+                      entryCondition: {
+                        type: ['string', 'null'],
+                        minLength: 1,
+                        maxLength: 500,
+                        description:
+                          'Price-checkable condition that makes the entry due (e.g. "trades above 187.40 after the open"). The entry waits as a deferred intention until an open-market cycle reads it as met. null enters at the next open-market submission. Required on pre_market, which sees no price of the session.',
+                      },
                       falsificationCriterion: {
                         type: 'string',
                         minLength: 1,
@@ -578,6 +687,20 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                 binding: 'value:$.maxHorizonTradingDays',
                 target: '$.theses.items.deadlineTradingDays.maximum',
               },
+              // The day's remaining cap: theses opened by earlier slots of the
+              // trading day count against maxThesesPerDay.
+              {
+                bindingId: 'theses-remaining-today',
+                from: 'resolve-theses',
+                binding: 'value:$.remainingThesesToday',
+                target: '$.theses.maxItems',
+              },
+              {
+                bindingId: 'decide-slot-pin',
+                from: 'resolve-theses',
+                binding: 'value:$.slot',
+                target: '$.slot.const',
+              },
             ],
           },
         },
@@ -596,6 +719,11 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
               path: 'tradingDay',
             },
             slot: { kind: 'task_output' as const, taskId: 'resolve-theses', path: 'slot' },
+            slotIndex: {
+              kind: 'task_output' as const,
+              taskId: 'resolve-theses',
+              path: 'slotIndex',
+            },
             marketIsOpen: { kind: 'task_output' as const, taskId: 'ingest-clock', path: 'isOpen' },
             resolutions: {
               kind: 'task_output' as const,
@@ -667,9 +795,15 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
           outputContract: {
             schema: {
               type: 'object',
-              required: ['orderResults', 'submittedCount', 'deferredCount', 'failedCount'],
+              required: ['slot', 'orderResults', 'submittedCount', 'deferredCount', 'failedCount'],
               additionalProperties: false,
+              allOf: EXECUTE_SLOT_RULES,
               properties: {
+                slot: {
+                  ...SLOT_SCHEMA,
+                  description:
+                    'This cycle’s slot, copied from your input. It is pinned, and it decides what this output may hold: pre_market submits nothing and defers entries only, after_close settles closes only.',
+                },
                 orderResults: {
                   type: 'array',
                   items: {
@@ -682,6 +816,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                       'side',
                       'qty',
                       'notional',
+                      'entryCondition',
                       'disposition',
                       'statusCode',
                       'orderId',
@@ -706,10 +841,15 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                         description:
                           'Dollar sizing — long entries; for a short entry, the target the whole-share qty was derived from.',
                       },
+                      entryCondition: {
+                        type: ['string', 'null'],
+                        description:
+                          'The entry condition of the thesis behind an entry, copied verbatim and stored on its intention doc. null for a close and for an entry with none.',
+                      },
                       disposition: {
                         enum: ['submitted', 'duplicate', 'deferred', 'expired', 'failed'],
                         description:
-                          'submitted = the broker acknowledged the order (2xx + order id). duplicate = the client order id already exists at the broker — found in the pre-submission orders list, or rejected as already used on submit; either way the prior submission stands, counted in neither submittedCount nor failedCount. deferred = market closed, recorded as an intention. expired = a pending entry intention dropped unsubmitted (thesis deadline passed, or no open-thesis doc behind it). failed = the broker rejected it (any other non-2xx), or the order could not be sized at all (a short entry whose share price exceeds its target — no broker call).',
+                          'submitted = the broker acknowledged the order (2xx + order id). duplicate = the client order id already exists at the broker — found in the pre-submission orders list, or rejected as already used on submit; either way the prior submission stands, counted in neither submittedCount nor failedCount. deferred = recorded as an intention: the market is closed, the slot is pre_market, or the entry condition is not met yet. expired = a pending entry intention dropped unsubmitted (thesis deadline passed, or no open-thesis doc behind it). failed = the broker rejected it (any other non-2xx), or the order could not be sized at all (a short entry whose share price exceeds its target — no broker call).',
                       },
                       statusCode: {
                         type: ['integer', 'null'],
@@ -732,6 +872,14 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                 failedCount: { type: 'integer', minimum: 0 },
               },
             },
+            derivedFrom: [
+              {
+                bindingId: 'execute-slot-pin',
+                from: 'resolve-theses',
+                binding: 'value:$.slot',
+                target: '$.slot.const',
+              },
+            ],
           },
         },
 
@@ -749,6 +897,11 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
               path: 'tradingDay',
             },
             slot: { kind: 'task_output' as const, taskId: 'resolve-theses', path: 'slot' },
+            slotIndex: {
+              kind: 'task_output' as const,
+              taskId: 'resolve-theses',
+              path: 'slotIndex',
+            },
             coverageNote: {
               kind: 'task_output' as const,
               taskId: 'resolve-theses',
@@ -858,6 +1011,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                   required: [
                     'tradingDay',
                     'slot',
+                    'slotIndex',
                     'coverageNote',
                     'thesesOpened',
                     'thesesResolved',
@@ -870,7 +1024,8 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                   additionalProperties: false,
                   properties: {
                     tradingDay: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
-                    slot: { enum: ['morning', 'after_close'] },
+                    slot: SLOT_SCHEMA,
+                    slotIndex: SLOT_INDEX_SCHEMA,
                     coverageNote: { type: 'string', minLength: 1, maxLength: 1000 },
                     thesesOpened: { type: 'array', items: { type: 'string' } },
                     thesesResolved: {
@@ -881,9 +1036,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                         additionalProperties: true,
                         properties: {
                           thesisId: { type: 'string' },
-                          outcome: {
-                            enum: ['confirmed', 'falsified', 'expired', 'entry_failed'],
-                          },
+                          outcome: { enum: [...RESOLUTION_OUTCOMES] },
                         },
                       },
                     },
@@ -920,8 +1073,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                   type: 'string',
                   minLength: 1,
                   maxLength: 120,
-                  pattern:
-                    '^/portfolio/theses/cycles/[0-9]{4}-[0-9]{2}-[0-9]{2}-(morning|after_close)\\.json$',
+                  pattern: CYCLE_DOC_PATH_PATTERN,
                   description:
                     'The ledger-contract cycle-doc path for this (tradingDay, slot) — the shape is validated, a drifted path cannot pass.',
                 },
@@ -929,8 +1081,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                   type: 'string',
                   minLength: 1,
                   maxLength: 120,
-                  pattern:
-                    '^/portfolio/snapshots/[0-9]{4}-[0-9]{2}-[0-9]{2}-(morning|after_close)\\.json$',
+                  pattern: SNAPSHOT_DOC_PATH_PATTERN,
                 },
                 resolvedDocPaths: {
                   type: 'array',
@@ -971,6 +1122,12 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                 from: 'resolve-theses',
                 binding: 'value:$.slot',
                 target: '$.cycleDoc.slot.const',
+              },
+              {
+                bindingId: 'cycle-doc-slot-index-pin',
+                from: 'resolve-theses',
+                binding: 'value:$.slotIndex',
+                target: '$.cycleDoc.slotIndex.const',
               },
               {
                 bindingId: 'cycle-doc-submitted-pin',
@@ -1100,7 +1257,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
           variableId: 'slot',
           name: 'Cycle slot',
           description:
-            'Which scheduled slot of the trading day this cycle covered (morning / after_close).',
+            'Which slot of the trading day this cycle covered (pre_market / open / intraday / after_close).',
           required: false,
           sensitive: false,
           immutable: false,
@@ -1125,7 +1282,8 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
         {
           variableId: 'thesesResolved',
           name: 'Theses resolved',
-          description: 'Theses resolved (confirmed / falsified / expired) this cycle.',
+          description:
+            'Theses resolved (confirmed / falsified / expired / entry_failed / tactical_exit) this cycle.',
           required: false,
           sensitive: false,
           immutable: false,
@@ -1155,7 +1313,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
           {
             id: 'cycle-reliability',
             description:
-              'Every trading day in the campaign window completes one decision cycle per scheduled slot; a missed slot is recorded in the next cycle doc, never papered over.',
+              'Every trading day in the campaign window completes one decision cycle per scheduled slot (pre_market, open, each intraday firing, after_close); a missed slot is recorded in the next cycle doc, never papered over.',
           },
           {
             id: 'thesis-discipline',
@@ -1165,12 +1323,12 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
           {
             id: 'resolution-rate',
             description:
-              'Every open thesis resolves confirmed, falsified, expired, or entry_failed by its deadline; an unresolved-past-deadline thesis is a process defect. Fill truth first: only a filled entry may resolve on its price criteria.',
+              'Every open thesis resolves confirmed, falsified, expired, entry_failed, or tactical_exit by its deadline; an unresolved-past-deadline thesis is a process defect. Fill truth first: only a filled entry may resolve on its price criteria.',
           },
           {
             id: 'calibration',
             description:
-              'Stated thesis confidence tracks resolution outcomes of FILLED trades over the campaign window, by thesis category; an entry_failed resolution carries no market evidence and is excluded.',
+              'Stated thesis confidence tracks resolution outcomes of FILLED trades over the campaign window, by thesis category; an entry_failed resolution carries no market evidence and is excluded. A tactical_exit tested neither criterion and is excluded too.',
           },
           {
             id: 'loop-health',
@@ -1228,9 +1386,9 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
           maxThesesPerDay: {
             schema: { type: 'integer', minimum: 0, maximum: 10 },
             mutable: false,
-            label: 'Theses per cycle cap',
+            label: 'Theses per trading day cap',
             description:
-              'Maximum new theses per decision cycle. The aggressiveness knob: more theses = more resolutions = faster loop cycles.',
+              'Maximum new theses per trading day, across all its slots. Theses opened by an earlier slot count against it. The aggressiveness knob: more theses = more resolutions = faster loop cycles.',
           },
           maxPositionSizePct: {
             schema: { type: 'number', exclusiveMinimum: 0, maximum: 100 },
@@ -1311,12 +1469,12 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
         'resolve theses',
       ],
       activationHint:
-        'One run = one trading-cycle slot on the Alpaca paper account. Requires an active campaign (regime name, hypothesis, universe, caps, horizon bounds, window). Runs normally fire from the post-open and after-close schedules and self-heal missed slots — a manual run is the fallback of last resort and is idempotent per (tradingDay, slot). Orders submit only while the market is open; closed-market cycles defer them as intentions.',
+        'One run = one trading-cycle slot on the Alpaca paper account. Requires an active campaign. Runs fire from the pre-market, open, intraday and after-close schedules, each passing inputs { slot }, and self-heal missed slots. A manual run is the last resort: without a slot it derives one from the clock. Runs are idempotent per (tradingDay, slot). Orders submit only while the market is open and never on pre_market. Closed-market cycles defer them as intentions.',
       prerequisites: [],
       priority: 50,
     },
     rationale:
-      'The thesis — not the trade — is the unit of decision, measurement, and learning: every order derives from a validated thesis with written falsification/confirmation criteria and a deadline, so each resolution is a clean truth event independent of portfolio noise. The strategy regime lives entirely in the campaign contract (structured caps + one prose hypothesis, frozen mid-window); the skill is strategy-agnostic machinery. Campaign caps are bound into the decide contract at delegation time (structural risk-gate, no human gate on paper), order authority is isolated to one task, and cycles are idempotent per (tradingDay, slot) via the ledger so the semi-daily cadence self-heals missed slots.',
+      'The thesis — not the trade — is the unit of decision, measurement, and learning: every order derives from a validated thesis with written falsification/confirmation criteria and a deadline, so each resolution is a clean truth event independent of portfolio noise. The strategy regime lives entirely in the campaign contract (structured caps + one prose hypothesis, frozen mid-window); the skill is strategy-agnostic machinery. Campaign caps are bound into the decide contract at delegation time (structural risk-gate, no human gate on paper), order authority is isolated to one task, and cycles are idempotent per (tradingDay, slot) via the ledger so the intraday cadence self-heals missed slots. What each slot may do — pre_market defers, open and intraday act on current prices, after_close records — is a schema conditional keyed on the pinned slot.',
   },
 };
 

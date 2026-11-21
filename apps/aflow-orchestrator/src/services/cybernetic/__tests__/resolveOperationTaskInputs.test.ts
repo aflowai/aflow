@@ -292,6 +292,97 @@ describe('resolveOperationTaskInputs', () => {
     expect(result['issue']).toBe('7');
   });
 
+  it('reads an optional run input as absent on a run started with no inputs', async () => {
+    mockLoadRunById.mockResolvedValueOnce({ runId: RUN, tasks: [], metadata: {} });
+    const { resolveOperationTaskInputs } = await import('../taskHelpers.js');
+    const result = await resolveOperationTaskInputs(
+      {
+        taskId: 'read-slot',
+        type: 'operation',
+        operation: 'whatever.do.it',
+        inputBindings: { slot: { kind: 'run_input', path: 'slot' } },
+      } as never,
+      {
+        tasks: [{ taskId: 'entry', inputBindings: {} }],
+        runInputs: [{ id: 'slot', required: false }],
+      } as never,
+      TENANT,
+      SPACE,
+      RUN,
+    );
+    expect(result['slot']).toBeUndefined();
+  });
+
+  it('still refuses a run_input binding on a workflow that declares no run inputs', async () => {
+    mockLoadRunById.mockResolvedValueOnce({ runId: RUN, tasks: [], metadata: {} });
+    const { resolveOperationTaskInputs } = await import('../taskHelpers.js');
+    await expect(
+      resolveOperationTaskInputs(
+        {
+          taskId: 'read-slot',
+          type: 'operation',
+          operation: 'whatever.do.it',
+          inputBindings: { slot: { kind: 'run_input', path: 'slot' } },
+        } as never,
+        WORKFLOW,
+        TENANT,
+        SPACE,
+        RUN,
+      ),
+    ).rejects.toThrow(/no run_input is available/);
+  });
+
+  it.each([
+    ['a required run input', true],
+    ['an optional run input', false],
+  ])('refuses %s whose stored inputs failed validation', async (_label, required) => {
+    mockLoadRunById.mockResolvedValueOnce({
+      runId: RUN,
+      tasks: [],
+      metadata: { parentTaskInputs: { taskId: 'entry', inputs: 'not-a-record' } },
+    });
+    const { resolveOperationTaskInputs } = await import('../taskHelpers.js');
+    await expect(
+      resolveOperationTaskInputs(
+        {
+          taskId: 'read-slot',
+          type: 'operation',
+          operation: 'whatever.do.it',
+          inputBindings: { slot: { kind: 'run_input', path: 'slot' } },
+        } as never,
+        {
+          tasks: [{ taskId: 'entry', inputBindings: {} }],
+          runInputs: [{ id: 'slot', required }],
+        } as never,
+        TENANT,
+        SPACE,
+        RUN,
+      ),
+    ).rejects.toThrow(/no run_input is available/);
+  });
+
+  it('refuses a required run input on a run started with no inputs', async () => {
+    mockLoadRunById.mockResolvedValueOnce({ runId: RUN, tasks: [], metadata: {} });
+    const { resolveOperationTaskInputs } = await import('../taskHelpers.js');
+    await expect(
+      resolveOperationTaskInputs(
+        {
+          taskId: 'read-slot',
+          type: 'operation',
+          operation: 'whatever.do.it',
+          inputBindings: { slot: { kind: 'run_input', path: 'slot' } },
+        } as never,
+        {
+          tasks: [{ taskId: 'entry', inputBindings: {} }],
+          runInputs: [{ id: 'slot', required: true }],
+        } as never,
+        TENANT,
+        SPACE,
+        RUN,
+      ),
+    ).rejects.toThrow(/no run_input is available/);
+  });
+
   it('threads run.metadata.connectionBindingId into a connection_binding template (Plan 222 P3)', async () => {
     mockLoadRunById.mockResolvedValueOnce({
       runId: RUN,
