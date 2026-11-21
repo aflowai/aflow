@@ -7,14 +7,19 @@ import {
   DAILY_CYCLE_RECORD_PROMPT,
 } from './dailyTradingCycleProse.js';
 import {
+  APPROVED_SET_SOUND_CRITERION,
   APPROVED_THESES_PATH_TEMPLATE,
   APPROVED_THESES_VALIDATOR_REF,
+  CYCLE_DOC_SET_FAULT_PROPERTY,
   DECIDE_IDENTITY_PINS,
   DECIDE_IDENTITY_PROPERTIES,
+  DECIDE_SET_FAULT_PROPERTY,
   OPENED_APPROVALS_PINS,
   OPENED_APPROVALS_SCHEMA,
   ORDER_APPROVAL_PROPERTY,
   ORDER_APPROVAL_RULES,
+  RECORD_SET_FAULT_METRIC,
+  RECORD_SET_FAULT_RULES,
   THESIS_APPROVAL_PROPERTIES,
 } from './dailyTradingCycleApproved.js';
 import {
@@ -579,12 +584,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
               // could replace the approved set this task is gated on. decide
               // writes nothing it needs — its theses and rationale are its
               // output, and resolve-theses keeps the market-data cache.
-              // signal_blocked ends a cycle whose set cannot be read.
-              operations: [
-                'agent.control.signal_blocked',
-                'memory.store.get',
-                'memory.store.query',
-              ],
+              operations: ['memory.store.get', 'memory.store.query'],
               integrations: [
                 {
                   capabilityId: 'alpaca-market-data-default',
@@ -611,6 +611,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                 'tradingDay',
                 'slot',
                 'slotIndex',
+                'approvedSetFault',
                 'theses',
                 'projectedGrossExposurePct',
                 'decisionRationale',
@@ -619,6 +620,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
               allOf: DECIDE_SLOT_RULES,
               properties: {
                 ...DECIDE_IDENTITY_PROPERTIES,
+                ...DECIDE_SET_FAULT_PROPERTY,
                 slot: {
                   ...SLOT_SCHEMA,
                   description:
@@ -956,6 +958,11 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
               taskId: 'decide',
               path: 'decisionRationale',
             },
+            approvedSetFault: {
+              kind: 'task_output' as const,
+              taskId: 'decide',
+              path: 'approvedSetFault',
+            },
             projectedGrossExposurePct: {
               kind: 'task_output' as const,
               taskId: 'decide',
@@ -1023,11 +1030,14 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                 'resolvedDocPaths',
                 'openedDocPaths',
                 'deletedOpenDocPaths',
+                'approvedSetFaults',
               ],
               additionalProperties: false,
+              allOf: RECORD_SET_FAULT_RULES,
               properties: {
                 runSummary: { type: 'string', minLength: 1, maxLength: 1500 },
                 cycleCompleted: { type: 'integer', const: 1 },
+                ...RECORD_SET_FAULT_METRIC,
                 thesesOpened: { type: 'integer', minimum: 0 },
                 thesesResolved: { type: 'integer', minimum: 0 },
                 grossExposurePct: {
@@ -1053,6 +1063,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                     'coverageNote',
                     'thesesOpened',
                     'openedApprovals',
+                    'approvedSetFault',
                     'thesesResolved',
                     'submittedCount',
                     'deferredCount',
@@ -1068,6 +1079,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                     coverageNote: { type: 'string', minLength: 1, maxLength: 1000 },
                     thesesOpened: { type: 'array', items: { type: 'string' } },
                     ...OPENED_APPROVALS_SCHEMA,
+                    ...CYCLE_DOC_SET_FAULT_PROPERTY,
                     thesesResolved: {
                       type: 'array',
                       items: {
@@ -1440,6 +1452,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
             operator: 'lte' as const,
             target: { $campaign: 'maxGrossExposurePct' },
           },
+          APPROVED_SET_SOUND_CRITERION,
         ],
       },
       trajectoryCriteria: [],

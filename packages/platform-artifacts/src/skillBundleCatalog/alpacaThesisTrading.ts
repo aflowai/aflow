@@ -56,10 +56,12 @@ recorded the doc's current version:
 
 A set written by any Daily Trading Cycle run, by an agent conversation, or by a
 run still in progress is refused. A conversation that started or drove a run is
-not that run's writer, so its set is refused too. So is a set that cannot be read or does not
-parse. A refused set stops the cycle at decide with the reason, and the next
-cycle resolves as usual once the set is repaired. Asking the Helmsman to write
-the set therefore does not work: write it in Memory yourself.
+not that run's writer, so its set is refused too. So is a set that cannot be
+read or does not parse. A refused set opens nothing, and it stops nothing else:
+the cycle still resolves open theses, closes positions and records. Its cycle
+doc names the fault in \`approvedSetFault\`, and the cycle's approved-set-sound
+eval fails, on every cycle until the set is repaired. Asking the Helmsman to write the set
+therefore does not work: write it in Memory yourself.
 
 \`\`\`json
 {
@@ -200,6 +202,7 @@ it is written LAST — a crashed cycle re-runs, it is never half-recorded.
   "coverageNote": "<missed slots since the last cycle, named honestly>",
   "thesesOpened": ["<thesisId>"],
   "openedApprovals": [{ "thesisId": "...", "approvedId": "...", "reviewRunId": "..." }],
+  "approvedSetFault": "<why the approved set approved nothing — unreadable, unparsable or a refused writer — or null>",
   "thesesResolved": [{ "thesisId": "...", "outcome": "...", "statedConfidence": "..." }],
   "submittedCount": 2,
   "deferredCount": 0,
@@ -231,9 +234,14 @@ auditable. There is no operator-owned position in this account to leave alone.
 { "symbol": "SPY", "bars": [ { "t": "<YYYY-MM-DD>", "o": 0, "h": 0, "l": 0, "c": 0, "v": 0 } ] }
 \`\`\`
 
-The local price-history layer: every cycle reads this doc BEFORE calling the
-market-data feed, fetches only the days it lacks, and upserts it keeping the
-most recent 30 daily bars (oldest dropped, newest last).
+The local price-history layer. The resolve step keeps it: it reads this doc
+BEFORE calling the market-data feed, fetches only the days it lacks, and
+upserts it keeping the most recent 30 daily bars (oldest dropped, newest last).
+So the cache holds the instruments resolution reads: open theses, pending
+intentions and held positions. The decide step reads it and never writes it.
+Bars it needs that the cache lacks, such as index ETFs and candidate
+instruments, it fetches fresh from the market-data feed on each cycle, and
+they stay uncached.
 Only COMPLETED sessions enter the cache — the clock date's bar is still
 forming while the market is open, and caching it would freeze a partial bar
 as that day's permanent record, corrupting every resolution that later reads
@@ -408,7 +416,7 @@ export const ALPACA_THESIS_TRADING: AuthoredSkillBundle = {
     'The campaign regime is FROZEN mid-window — pre-registration is what makes the windowed evaluation honest. To change strategy, end the campaign and start the next one; vetted learnings carry across.',
     'Set up the cron schedules in America/New_York on weekdays, staggered off round boundaries: pre-market (e.g. 47 8 * * 1-5), open (37 9 * * 1-5), hourly intraday (7 10-15 * * 1-5) and after-close (23 16 * * 1-5). Each schedule input asks for workflow.run.start({ slug, inputs: { slot } }) with its slot: pre_market, open, intraday or after_close. An intraday slotIndex counts session hours from the 09:30 open, so 10:07 is intraday-1, derived or passed.',
     'Each slot does only what its contracts allow. pre_market forms the day’s theses as deferred intentions with entry conditions and submits nothing. open and intraday submit due intentions, resolve on current prices and may form theses under the day’s remaining cap. after_close resolves on the close and opens nothing. Runs are idempotent per (tradingDay, slot) and self-heal missed slots, so an overdue firing on stack startup is safe. A run with no slot derives it from the clock.',
-    'A cycle opens theses only from the approved set at /research/{tradingDay}/approved-theses.json, and nothing in this bundle writes it until the Strategy Desk skill ships in a later revision of this bundle. When the operator asks why no thesis opens, tell them to write the day’s set in Memory themselves, in the shape /portfolio/theses/SCHEMA.md gives. Do not write it for them: a set an agent conversation writes is refused, and it stops the cycle.',
+    'A cycle opens theses only from the approved set at /research/{tradingDay}/approved-theses.json, and nothing in this bundle writes it until the Strategy Desk skill ships in a later revision of this bundle. If no thesis opens, tell the operator to write the day’s set in Memory, shaped as /portfolio/theses/SCHEMA.md says. Never write it yourself: a set a conversation writes is refused, and opens nothing. Resolution runs either way.',
     'There is no human approval gate on orders: paper trading carries zero financial risk and the campaign caps are enforced structurally in the decide contract. Do not add ad-hoc confirmation asks into the loop.',
     'Layer-2 outcome metrics (vs SPY buy-and-hold, Sharpe, drawdown) are read only at the weekly checkpoint and campaign end from the ledger snapshots — never report daily P&L as a signal.',
   ],

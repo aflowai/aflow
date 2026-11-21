@@ -99,7 +99,8 @@ The approved set — \`${APPROVED_THESES_PATH_TEMPLATE}\`, read it first:
 - No document, or no approved entry for this slotKey, makes this a resolve-only cycle. Submit \`theses: []\` and say so in \`decisionRationale\`.
 - Your output contract reads the set at submission. It refuses a thesis whose \`approvedId\` the set does not approve, and one that departs from its entry.
 - Only the operator, or a completed review run outside this cycle, may write the set. You hold no memory write, so you cannot change it.
-- When the contract reports the set cannot be read, does not parse, or comes from a refused writer, no output passes. Exit via your blocked-signal and quote its message.
+- When the contract reports the set cannot be read, does not parse, or comes from a refused writer, the set approves nothing. Submit \`theses: []\` and copy the fault sentence it quotes into \`approvedSetFault\`. The cycle still resolves, closes and records, and the cycle doc shows the fault to the operator.
+- Otherwise \`approvedSetFault\` is null.
 
 Inputs (already in your task context):
 - \`tradingDay\`, \`slot\`, \`slotIndex\` — this cycle's identity. Copy all three into your output: they are pinned. The slot decides what you may form:
@@ -141,6 +142,7 @@ Output (submit_output):
   tradingDay: string,          // copied from your input
   slot: "pre_market" | "open" | "intraday" | "after_close",   // copied from your input
   slotIndex: number | null,    // copied from your input
+  approvedSetFault: string | null,   // the fault the contract quotes for a bad set, else null
   theses: [
     {
       thesisId: string,
@@ -224,6 +226,7 @@ Inputs (already in your task context):
 - \`resolutions\` — this cycle's resolved theses.
 - \`orphanFlattens\` — orphan positions this cycle flattened (the account is single-owner; nothing is left unmanaged).
 - \`theses\`, \`decisionRationale\`, \`projectedGrossExposurePct\` — this cycle's decisions.
+- \`approvedSetFault\` — the approved-set fault decide named, or null. A fault opened nothing this cycle: name it in \`runSummary\` and set \`approvedSetFaults\` to 1, else 0.
 - \`orderResults\`, \`submittedCount\`, \`deferredCount\`, \`failedCount\` — what actually landed at the broker, was deferred, or failed.
 - \`equity\`, \`cash\`, \`positions\` — the account state ingested at cycle START, before this cycle's orders.
 - Prior learnings — auto-injected.
@@ -233,7 +236,7 @@ Ledger writes (JSON docs; the contracts are documented in /portfolio/theses/SCHE
 2. For each of this cycle's theses: write \`/portfolio/theses/open/{thesisId}.json\` carrying every thesis field verbatim — \`approvedId\` and \`reviewRunId\` included — plus \`openedTradingDay\`, \`openedSlot\`, \`openedSlotIndex\`, \`statedConfidence\`, and its entry order result. Status follows the entry's disposition: submitted → \`"open"\` (with its fillState), duplicate → \`"open"\` (the prior run's submission stands), deferred → \`"entry_pending"\`, failed → \`"entry_failed"\` with the broker error on it — a failed entry is evidence, not something to hide.
 3. For each order result whose thesisId is NOT among this cycle's theses (a settled intention or a remediation on a prior thesis): an ENTRY submission (or duplicate) replaces the open doc's \`status: "entry_pending"\` with \`"open"\` and records the result; a FAILED or expired entry intention sets \`status: "entry_failed"\` with the error on it; a settled CLOSE belongs to a thesis already resolved — patch its \`closeOrder\` on \`/portfolio/theses/resolved/{thesisId}.json\` with the settled result, so the close truth lands on the resolved doc instead of nowhere.
 4. Produce the snapshot as the \`snapshotDoc\` OUTPUT FIELD — you do not write it to memory yourself; a dedicated operation step persists it at \`snapshotDocPath\`. It carries: equity, cash, positions, \`orphanFlattens\` verbatim (the orphans reconciled this cycle), and BOTH gross numbers — \`brokerGrossExposurePct\` (sum of ALL absolute position notionals at cycle start ÷ equity × 100) and \`grossExposurePct\` (campaign-attributed: subtract the orphanFlattens' absolute notionals before dividing — they are being cleared, not held as strategy). \`grossExposurePct\` is the cap-scored number. Positions in \`repairCloses\` are thesis-attributed AND being closed this cycle — count them in the gross like any other thesis position.
-5. Produce the cycle doc as the \`cycleDoc\` OUTPUT FIELD — tradingDay, slot, slotIndex, coverageNote, opened/resolved thesisIds with outcomes, \`openedApprovals\` (one { thesisId, approvedId, reviewRunId } per thesis opened, empty on a resolve-only cycle), order counts (submitted / deferred / failed), projectedGrossExposurePct, decisionRationale. A dedicated operation step persists it at \`cycleDocPath\` LAST — its existence marks the cycle complete, so a crashed cycle re-runs, never half-records. \`cycleDocPath\` and \`snapshotDocPath\` are validated against the ledger contract — only \`/portfolio/theses/cycles/{tradingDay}-{slotKey}.json\` and \`/portfolio/snapshots/{tradingDay}-{slotKey}.json\` pass.
+5. Produce the cycle doc as the \`cycleDoc\` OUTPUT FIELD — tradingDay, slot, slotIndex, coverageNote, opened/resolved thesisIds with outcomes, \`openedApprovals\` (one { thesisId, approvedId, reviewRunId } per thesis opened, empty on a resolve-only cycle), \`approvedSetFault\` (copied from your input: the approved-set fault decide named, or null), order counts (submitted / deferred / failed), projectedGrossExposurePct, decisionRationale. A dedicated operation step persists it at \`cycleDocPath\` LAST — its existence marks the cycle complete, so a crashed cycle re-runs, never half-records. \`cycleDocPath\` and \`snapshotDocPath\` are validated against the ledger contract — only \`/portfolio/theses/cycles/{tradingDay}-{slotKey}.json\` and \`/portfolio/snapshots/{tradingDay}-{slotKey}.json\` pass.
 6. Echo every thesis-doc write in your output — \`resolvedDocPaths\`, \`openedDocPaths\`, \`deletedOpenDocPaths\` — exactly the docs you wrote or deleted in steps 1–3. The echoes are validated against the contract path shapes: a write outside \`/portfolio/theses/resolved/\` or \`/portfolio/theses/open/\` cannot be reported, so do not make one.
 
 Learnings — from RESOLUTIONS ONLY:
@@ -259,5 +262,6 @@ Output (submit_output):
   resolvedDocPaths: string[],      // echo of resolved-thesis docs written
   openedDocPaths: string[],        // echo of open-thesis docs written
   deletedOpenDocPaths: string[],   // echo of open-thesis docs deleted
+  approvedSetFaults: 0 | 1,        // 1 when approvedSetFault is not null
   learnings: [ ... ]           // the platform validates this shape; a downstream step persists it
 }`;

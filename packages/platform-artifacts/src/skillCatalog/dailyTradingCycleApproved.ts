@@ -195,7 +195,65 @@ export const OPENED_APPROVALS_PINS = [
     binding: 'count:$.theses',
     target: '$.cycleDoc.openedApprovals.maxItems',
   },
+  // A set fault the decision named lands on the cycle doc unchanged.
+  {
+    bindingId: 'cycle-doc-set-fault-pin',
+    from: 'decide',
+    binding: 'value:$.approvedSetFault',
+    target: '$.cycleDoc.approvedSetFault.const',
+  },
 ];
+
+const SET_FAULT_SCHEMA = { type: ['string', 'null'], maxLength: 4000 };
+
+/**
+ * A bad set opens nothing but stops nothing either. decide names the fault,
+ * the cycle doc records it, and record scores it, so the operator sees it on
+ * every cycle until the set is repaired.
+ */
+export const DECIDE_SET_FAULT_PROPERTY = {
+  approvedSetFault: {
+    ...SET_FAULT_SCHEMA,
+    description:
+      'null when the approved set reads cleanly or does not exist. When the contract reports the set cannot be read, does not parse or comes from a refused writer, the fault sentence it quotes, verbatim.',
+  },
+};
+
+export const CYCLE_DOC_SET_FAULT_PROPERTY = {
+  approvedSetFault: {
+    ...SET_FAULT_SCHEMA,
+    description: 'The approved-set fault decide named, or null.',
+  },
+};
+
+/** 1 when this cycle's approved set was faulted, else 0. The eval criterion below scores it. */
+export const RECORD_SET_FAULT_METRIC = {
+  approvedSetFaults: { type: 'integer', minimum: 0, maximum: 1 },
+};
+
+export const RECORD_SET_FAULT_RULES = [
+  {
+    if: {
+      required: ['cycleDoc'],
+      properties: {
+        cycleDoc: {
+          required: ['approvedSetFault'],
+          properties: { approvedSetFault: { type: 'string' } },
+        },
+      },
+    },
+    then: { properties: { approvedSetFaults: { const: 1 } } },
+    else: { properties: { approvedSetFaults: { const: 0 } } },
+  },
+];
+
+export const APPROVED_SET_SOUND_CRITERION = {
+  name: 'approved-set-sound',
+  type: 'threshold' as const,
+  metric: 'approvedSetFaults',
+  operator: 'lte' as const,
+  target: 0,
+};
 
 // ── The rule ───────────────────────────────────────────────────────────────
 
@@ -289,6 +347,7 @@ const DecideApprovalViewSchema = z
     tradingDay: z.string(),
     slot: z.enum(CYCLE_SLOTS),
     slotIndex: z.number().int().nullable(),
+    approvedSetFault: z.string().nullable(),
     theses: z.array(
       z
         .object({
@@ -317,16 +376,32 @@ function resolveOnly(where: string, why: string): ApprovedThesesIssue[] {
 
 /**
  * A set that cannot be read, does not parse or comes from a refused writer
- * refuses every output, empty theses included. A silent empty set would drop
- * the slot's approved entries with nobody told.
+ * approves nothing, and the output must say so in `approvedSetFault`. The
+ * fault gates new theses only: decide still submits, so this cycle's closes
+ * and its record run. Pausing instead would hold the cycle's one run slot,
+ * and every later cycle would stop resolving too.
  */
-function blocked(path: string, why: string): ApprovedThesesIssue[] {
-  return [
-    {
-      path: [],
-      message: `The approved set at ${path} ${why}. This is a fault in the set, not in your output, and no output passes until it is repaired. Exit via your blocked-signal and quote this message.`,
-    },
-  ];
+function faulted(
+  path: string,
+  why: string,
+  theses: readonly unknown[],
+  declared: string | null,
+): ApprovedThesesIssue[] {
+  const fault = `The approved set at ${path} ${why}`;
+  const issues: ApprovedThesesIssue[] = [];
+  if (theses.length > 0) {
+    issues.push({
+      path: ['theses'],
+      message: `${fault}. It approves nothing, so no thesis opens this cycle. Submit theses: [] and copy this fault into approvedSetFault. Resolution and closes run as usual.`,
+    });
+  }
+  if (declared === null || declared.trim() === '') {
+    issues.push({
+      path: ['approvedSetFault'],
+      message: `${fault}. Set approvedSetFault to that sentence, so the cycle doc records the fault for the operator.`,
+    });
+  }
+  return issues;
 }
 
 function entryMismatches(
@@ -374,7 +449,8 @@ export interface ApprovedSetSource {
  * Every thesis decide opens must instantiate an approved entry of the set for
  * its (tradingDay, slot). No set, or none approved for the slot, is a
  * resolve-only cycle. A set that fails to read, parse or come from an
- * accepted writer refuses every output, so the cycle stops visibly.
+ * accepted writer opens nothing, and the output must name the fault. Only
+ * new theses are gated: the rest of the decision passes.
  */
 export async function approvedThesesIssues(
   output: unknown,
@@ -384,31 +460,40 @@ export async function approvedThesesIssues(
   if (!view.success) {
     return [{ path: [], message: 'The output does not carry the cycle identity and theses.' }];
   }
-  const { tradingDay, slot, slotIndex, theses } = view.data;
+  const { tradingDay, slot, slotIndex, theses, approvedSetFault } = view.data;
   const path = approvedThesesPath(tradingDay);
   const slotKey = slotKeyOf(slot, slotIndex);
   const where = `(${tradingDay}, ${slotKey})`;
+  const fault = (why: string) => faulted(path, why, theses, approvedSetFault);
 
   const doc = await source.read(path);
-  if (doc.status === 'unreadable') return blocked(path, `cannot be read (${doc.reason})`);
+  if (doc.status === 'unreadable') return fault(`cannot be read (${doc.reason})`);
   let entries: ApprovedThesis[] = [];
   if (doc.status === 'found') {
     const set = ApprovedThesisSetSchema.safeParse(doc.content);
     if (!set.success) {
       const first = set.error.issues[0];
       const detail = first ? `${first.path.join('.') || '(root)'}: ${first.message}` : 'invalid';
-      return blocked(path, `does not parse (${detail})`);
+      return fault(`does not parse (${detail})`);
     }
     if (set.data.tradingDay !== tradingDay) {
-      return blocked(path, `names tradingDay ${set.data.tradingDay}, not ${tradingDay}`);
+      return fault(`names tradingDay ${set.data.tradingDay}, not ${tradingDay}`);
     }
     const refusal = approvedSetWriterRefusal(
       doc.writer,
       Object.values(set.data.slots).flat(),
       source.spaceId,
     );
-    if (refusal) return blocked(path, refusal);
+    if (refusal) return fault(refusal);
     entries = set.data.slots[slotKey] ?? [];
+  }
+  if (approvedSetFault !== null) {
+    return [
+      {
+        path: ['approvedSetFault'],
+        message: `The approved set at ${path} has no fault this cycle. Set approvedSetFault to null.`,
+      },
+    ];
   }
 
   if (theses.length === 0) return [];

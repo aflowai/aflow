@@ -94,11 +94,12 @@ const THESIS = {
   deadlineTradingDays: 3,
 };
 
-function decision(theses: unknown[]) {
+function decision(theses: unknown[], approvedSetFault: string | null = null) {
   return {
     tradingDay: '2026-07-14',
     slot: 'open',
     slotIndex: null,
+    approvedSetFault,
     theses,
     projectedGrossExposurePct: 0,
     decisionRationale: 'Breakout setup on AAPL.',
@@ -183,8 +184,9 @@ describe('trading.approved-theses runtime validator', () => {
       ],
     ];
     const issues = await runtimeValidator()(decision([THESIS]), ctx);
-    expect(issues).toHaveLength(1);
-    expect(issues[0]).toMatchObject({ code: 'custom', path: [] });
+    // The theses are refused and the fault must be named. Nothing else is gated.
+    expect(issues.map((i) => i.path)).toEqual([['theses'], ['approvedSetFault']]);
+    expect(issues[0]).toMatchObject({ code: 'custom' });
     expect(issues[0]!.message).toContain('A cycle cannot approve its own theses');
     // A run's writer is the worker a task executed as, and nothing else.
     const executed = tenancy.queries[1]!;
@@ -245,7 +247,7 @@ describe('trading.approved-theses runtime validator', () => {
       [{ runId: 'run-review-0714' }],
     ];
     const issues = await runtimeValidator()(decision([THESIS]), ctx);
-    expect(issues).toHaveLength(1);
+    expect(issues).toHaveLength(2);
     expect(issues[0]!.message).toContain(
       'the conversation that drives run run-review-0714. A conversation is never a run',
     );
@@ -286,7 +288,7 @@ describe('trading.approved-theses runtime validator', () => {
       run('run-review-0715'),
     ]);
     expect(first).toEqual(second);
-    expect(first).toHaveLength(1);
+    expect(first).toHaveLength(2);
     expect(first[0]!.message).toContain('tied to 2 runs (run-review-0714, run-review-0715)');
   });
 
@@ -323,14 +325,19 @@ describe('trading.approved-theses runtime validator', () => {
       'records no writer',
     ],
   ])(
-    'fails the submission visibly when %s, even with no theses',
+    'opens nothing and names the fault when %s, never passing as an empty set',
     async (_label, arrange, reason) => {
       arrange();
       const issues = await runtimeValidator()(decision([]), ctx);
       expect(issues).toHaveLength(1);
+      expect(issues[0]!.path).toEqual(['approvedSetFault']);
       expect(issues[0]!.message).toContain('cannot be read');
       expect(issues[0]!.message).toContain(reason);
-      expect(issues[0]!.message).toContain('blocked-signal');
+      // Naming the fault lets the decision pass, so the cycle still closes and records.
+      tenancy.queries = [];
+      arrange();
+      const fault = issues[0]!.message.split('. Set approvedSetFault')[0]!;
+      expect(await runtimeValidator()(decision([], fault), ctx)).toEqual([]);
     },
   );
 });
