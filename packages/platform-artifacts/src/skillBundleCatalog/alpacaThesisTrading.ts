@@ -35,11 +35,47 @@ Every ledger doc carries the slot name and its index (null outside intraday).
 The campaign's \`maxThesesPerDay\` caps new theses across all slots of one
 trading day.
 
+## Approved set — \`/research/{tradingDay}/approved-theses.json\`
+
+A review writes it before the cycles of a trading day run. A cycle opens a
+thesis only as an instance of an entry under its own \`{slotKey}\` whose verdict
+is \`approved\`. The decide contract reads this doc and refuses any other thesis.
+A slot with no doc, or no approved entry, is a resolve-only cycle: it resolves
+and records and opens nothing. Resolution of open theses never reads it.
+
+\`\`\`json
+{
+  "tradingDay": "<YYYY-MM-DD>",
+  "slots": {
+    "<slotKey>": [
+      {
+        "approvedId": "<kebab-case, unique within the slot>",
+        "instrument": "<ticker>",
+        "direction": "long | short",
+        "hypothesisId": "<optional — the campaign hypothesis it tests>",
+        "entryLevel": 187.4,
+        "invalidationLevel": 184.0,
+        "confirmationLevel": 195.0,
+        "maxSizePct": 5,
+        "horizonTradingDays": 3,
+        "reviewerVerdict": "approved | revise | rejected",
+        "reviewRunId": "<the run that reviewed it>"
+      }
+    ]
+  }
+}
+\`\`\`
+
+The thesis copies \`approvedId\` and \`reviewRunId\`, keeps the entry's
+instrument and direction, and stays at or under its size and horizon.
+
 ## Open thesis — \`/portfolio/theses/open/{thesisId}.json\`
 
 \`\`\`json
 {
   "thesisId": "<kebab-case, unique>",
+  "approvedId": "<the approved-set entry it instantiates>",
+  "reviewRunId": "<the review run id on that entry>",
   "openedTradingDay": "<YYYY-MM-DD>",
   "openedSlot": "pre_market | open | intraday | after_close",
   "openedSlotIndex": "<intraday firing number, or null>",
@@ -77,6 +113,7 @@ null or reads as met on a fresh price. Until then it stays in the ledger.
 {
   "clientOrderId": "<{tradingDay}-{slotKey}-{thesisId}-open|close, from the proposing cycle>",
   "thesisId": "<thesisId>",
+  "approvedId": "<the thesis's approvedId; null for close intentions>",
   "intent": "open | close",
   "symbol": "<ticker>",
   "side": "buy | sell",
@@ -96,7 +133,8 @@ whole-share \`qty\` from a fresh price — the broker rejects fractional short
 sales. An entry intention whose thesis deadline has passed is expired, never
 submitted — its thesis resolves \`entry_failed\`. An entry intention is submittable only when
 its open-thesis doc exists; one with no thesis doc behind it (a crashed cycle
-that re-decided) is deleted unsubmitted. Close intentions never expire: a held
+that re-decided) is deleted unsubmitted. An entry intention with no
+\`approvedId\` is deleted unsubmitted too. Close intentions never expire: a held
 position must still be closed, and the settled close is patched onto its
 resolved thesis doc.
 
@@ -143,6 +181,7 @@ it is written LAST — a crashed cycle re-runs, it is never half-recorded.
   "slotIndex": "<intraday firing number, or null>",
   "coverageNote": "<missed slots since the last cycle, named honestly>",
   "thesesOpened": ["<thesisId>"],
+  "openedApprovals": [{ "thesisId": "...", "approvedId": "...", "reviewRunId": "..." }],
   "thesesResolved": [{ "thesisId": "...", "outcome": "...", "statedConfidence": "..." }],
   "submittedCount": 2,
   "deferredCount": 0,
@@ -190,7 +229,9 @@ or a fresh fetch — never from prose in earlier ledger docs.
   pre_market, open and after_close every trading day, plus the intraday
   indices below the highest one recorded that day. Gaps are named in the next
   cycle's \`coverageNote\`, and no slot outside the schedule counts as missed.
-- Thesis discipline: every order in every cycle doc carries a \`thesisId\`.
+- Thesis discipline: every order in every cycle doc carries a \`thesisId\`, and
+  every opened thesis carries the \`approvedId\` and \`reviewRunId\` it was
+  approved under.
 - Resolution rate: resolved docs vs deadlines; an unresolved-past-deadline
   thesis is a process defect.
 - Fill discipline: entry orders resolve to a fill state the same cycle they
@@ -214,7 +255,7 @@ same window. Raw daily P&L is not a signal anywhere.
 
 export const ALPACA_THESIS_TRADING: AuthoredSkillBundle = {
   bundleId: 'alpaca-thesis-trading',
-  revision: 3,
+  revision: 4,
   name: 'Alpaca Thesis Trading',
   tagline:
     'Thesis-driven intraday paper trading: chained campaigns, structural risk caps, a falsification ledger.',
@@ -226,6 +267,8 @@ export const ALPACA_THESIS_TRADING: AuthoredSkillBundle = {
 - The thesis-ledger schema doc — the contract every process metric derives from.
 
 **No human gate**: paper trading carries zero financial risk; the safety layer is the structural risk-gate — campaign caps (universe, theses/day, per-position %, gross exposure, horizon bounds) are bound into the decide task's output contract and violations are rejected by schema validation.
+
+**Approved theses only**: a cycle opens a thesis only from the reviewed approved set at \`/research/{tradingDay}/approved-theses.json\` for its slot. A slot with no approved set resolves and records and opens nothing.
 
 **After install**:
 1. Add your Alpaca paper API key id + secret in Integrations (one credential pair, reused by all three bindings).
