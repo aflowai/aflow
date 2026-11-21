@@ -52,7 +52,9 @@ import {
 /**
  * The Strategy Desk (Plan 343 Part B): a strategist and a reviewer, each a
  * harness run on the space's folder, produce the approved set a Daily
- * Trading Cycle slot opens theses from, and the desk then starts that slot.
+ * Trading Cycle slot opens theses from. The desk then starts that slot early.
+ * The slot's own schedule still fires its cycle whatever the desk ends in,
+ * so the desk decides what a cycle opens, never whether it runs.
  *
  * A desk is two runs of this skill. The desk run starts one review run and
  * waits for it to end. The review run reads, proposes, reviews in rounds and
@@ -87,7 +89,7 @@ const RUN_INPUTS = [
     id: 'slot',
     required: true,
     description:
-      'The cycle slot the desk prepares and then starts: pre_market, open or intraday. after_close opens no thesis, so its cycle needs no desk.',
+      'The cycle slot the desk prepares: pre_market, open or intraday. after_close opens no thesis, so its cycle needs no desk.',
     schema: { enum: ['pre_market', 'open', 'intraday'] },
   },
   {
@@ -267,8 +269,10 @@ const REVIEW_RUN_TASK = {
     reviewDecision: { path: 'result.output.deskOutcome', onMissing: 'null' as const },
     stoppedAt: { path: 'result.output.stoppedAt', onMissing: 'null' as const },
     approvedSetPath: { path: 'result.output.approvedSetPath', onMissing: 'null' as const },
+    reviewFrameReason: { path: 'result.output.frameReason', onMissing: 'null' as const },
   },
   promoteOutputs: [
+    { kind: 'output_path' as const, path: 'reviewFrameReason', toState: 'reviewFrameReason' },
     { kind: 'output_path' as const, path: 'reviewRunId', toState: 'reviewRunId' },
     { kind: 'output_path' as const, path: 'stoppedAt', toState: 'stoppedAt' },
     { kind: 'output_path' as const, path: 'approvedSetPath', toState: 'approvedSetPath' },
@@ -303,13 +307,19 @@ const HAND_OFF_TASK = {
     campaignId: out(READ_CAMPAIGN_TASK_ID, 'campaignId'),
     slot: runInput('slot'),
     slotIndex: runInput('slotIndex'),
+    tradingDay: runInput('tradingDay'),
   },
   context: ctx('workflow.run.start'),
   inputTemplate: {
     slug: CYCLE_WORKFLOW_SLUG,
     catalogId: CYCLE_WORKFLOW_SLUG,
     campaignId: bind('campaignId'),
-    inputs: { slot: bind('slot'), slotIndex: bind('slotIndex') },
+    // The day the set was written for, so the cycle reads that day's set or runs no slot.
+    inputs: {
+      slot: bind('slot'),
+      slotIndex: bind('slotIndex'),
+      tradingDay: bind('tradingDay'),
+    },
     wait: 'until_complete',
   },
   outputProjection: {
@@ -364,7 +374,7 @@ const SETTLE_DESK_TASK = {
 const WRITE_DESK_RUN_TASK = {
   taskId: WRITE_DESK_RUN_TASK_ID,
   name: 'Record the desk run',
-  goal: 'Write the record of this desk run to memory: how it ended and why, with the review run, the set and the cycle run where there are any. A desk that starts no cycle says why here.',
+  goal: 'Write the record of this desk run to memory: how it ended and why, with the review run, the set and the cycle run where there are any. A desk that writes no set says why here.',
   type: 'operation' as const,
   operation: 'memory.store.put',
   dependsOn: [SETTLE_DESK_TASK_ID],
@@ -379,6 +389,7 @@ const WRITE_DESK_RUN_TASK = {
     reviewRunId: out(REVIEW_RUN_TASK_ID, 'reviewRunId'),
     reviewOutcome: out(REVIEW_RUN_TASK_ID, 'outcome'),
     stoppedAt: out(REVIEW_RUN_TASK_ID, 'stoppedAt'),
+    reviewFrameReason: out(REVIEW_RUN_TASK_ID, 'reviewFrameReason'),
     approvedSetPath: out(REVIEW_RUN_TASK_ID, 'approvedSetPath'),
     cycleRunId: out(HAND_OFF_TASK_ID, 'cycleRunId'),
     cycleOutcome: out(HAND_OFF_TASK_ID, 'cycleOutcome'),
@@ -400,6 +411,7 @@ const WRITE_DESK_RUN_TASK = {
         reviewRunId: bind('reviewRunId'),
         reviewOutcome: bind('reviewOutcome'),
         stoppedAt: bind('stoppedAt'),
+        reviewFrameReason: bind('reviewFrameReason'),
         approvedSetPath: bind('approvedSetPath'),
         cycleRunId: bind('cycleRunId'),
         cycleOutcome: bind('cycleOutcome'),
@@ -718,7 +730,7 @@ function roundTask(round: number) {
   return {
     taskId: roundTaskId(round),
     name: `Count review round ${String(round)}`,
-    goal: `Decide by rule what review ${String(round)} leads to: a revise round while revise rounds remain, the set where a candidate is approved, or no cycle. No model is asked.${round === DESK_REVIEWS_MAX ? ' Both revise rounds are spent here, so a revise verdict trades nothing.' : ''}`,
+    goal: `Decide by rule what review ${String(round)} leads to: a revise round while revise rounds remain, the set where a candidate is approved, or no set. No model is asked.${round === DESK_REVIEWS_MAX ? ' Both revise rounds are spent here, so a revise verdict trades nothing.' : ''}`,
     type: 'operation' as const,
     operation: 'workflow.run.decide',
     dependsOn: [strategist, review],
@@ -771,7 +783,7 @@ const SETTLE_BINDINGS = {
 const SETTLE_TASK = {
   taskId: SETTLE_TASK_ID,
   name: 'Settle the desk',
-  goal: 'Decide by rule whether the cycle starts: a review approved a candidate, or why not — every candidate rejected, both revise rounds spent, or a ledger read, strategist or review with no result. No model is asked.',
+  goal: 'Decide by rule whether the set is written: a review approved a candidate, or why not — every candidate rejected, both revise rounds spent, or a ledger read, strategist or review with no result. No model is asked.',
   type: 'operation' as const,
   operation: 'workflow.run.decide',
   dependsOn: [READ_LEDGER_TASK_ID, ...ROUND_TASKS.map((task) => task.taskId)],
@@ -898,7 +910,7 @@ const RECORD_ROUND_BINDINGS = Object.fromEntries(
 const WRITE_RECORD_TASK = {
   taskId: WRITE_RECORD_TASK_ID,
   name: 'Record the desk',
-  goal: 'Write the desk record for this slot to memory: whether the cycle starts and why, and what every round reviewed and decided. A desk that starts no cycle says why here.',
+  goal: 'Write the desk record for this slot to memory: whether the set is written and why, and what every round reviewed and decided. A desk that writes no set says why here.',
   type: 'operation' as const,
   operation: 'memory.store.put',
   dependsOn: [SETTLE_TASK_ID, WRITE_SET_TASK_ID, ...ROUND_TASKS.map((task) => task.taskId)],
@@ -985,9 +997,10 @@ const stateVariable = (
 
 const DESK_PITFALLS: string[] = [
   'What it needs: the connected folder holding the journals and strategy records, the trading day, and the slot. An intraday desk also needs slotIndex, so give each hourly schedule its own index. A schedule passes tradingDay as { "$now": "date" }.',
-  'A desk is two runs. The desk run starts a review run of this skill, waits for it, then starts the Daily Trading Cycle for the slot. The review run writes the approved set, and every entry names it. Read the outcome from deskOutcome and deskReason on the desk run. Each desk run also writes its record at /research/{tradingDay}/desk-runs/{slotKey}-{runId}.json.',
+  'A desk is two runs. The desk run starts a review run of this skill, waits for it, and on a written set starts the Daily Trading Cycle for the slot with its tradingDay. That start is extra: the schedule of the slot fires its cycle too, whatever the desk ends in. The review run writes the approved set, and every entry names it. Read the outcome from deskOutcome and deskReason on the desk run. Each desk run also writes its record at /research/{tradingDay}/desk-runs/{slotKey}-{runId}.json.',
   'A desk holds two active runs, its own and its review run, and the skill allows two. A desk that fires while another is in flight cannot start its review run, so it ends review_refused, with its record. A firing past that is refused at its start.',
-  `No cycle starts when the review rejects every candidate, or when ${String(DESK_REVIEWS_MAX - 1)} revise rounds are spent without an approved one. stoppedAt says which, and the desk record at /research/{tradingDay}/desk-{slotKey}.json keeps every round. The next cycle that runs resolves what this slot did not.`,
+  `The desk writes no set when the review rejects every candidate, or when ${String(DESK_REVIEWS_MAX - 1)} revise rounds are spent without an approved one. stoppedAt says which, and the desk record at /research/{tradingDay}/desk-{slotKey}.json keeps every round. The scheduled cycle of the slot still runs, resolves open theses and opens nothing new.`,
+  'Fire the desk well before the scheduled cycle of its slot, about 45 minutes. A scheduled cycle that runs before the set is written runs resolve-only. A desk-started cycle after it then finds the slot recorded and opens nothing.',
   'Never write the approved set yourself, and never form theses for the desk. A set a conversation writes is refused, and opens nothing. To change what trades, change the campaign at its boundary or the notes the desk reads.',
   'reviewHarness and reviewModel name a second opinion. Name a coding agent or a model other than the strategist’s where the machine has one.',
 ];
@@ -997,20 +1010,20 @@ const STRATEGY_DESK: SkillCatalogEntry = {
   version: 1,
   name: 'Strategy Desk',
   tagline:
-    'A strategist and a reviewer on the harness produce the approved theses, then start the cycle slot.',
+    'A strategist and a reviewer on the harness produce the approved theses before the cycle slot runs.',
   description: `Fits the step before each Daily Trading Cycle slot that may open a thesis. A **strategist** on the machine’s coding agent reads the journals and strategy records in the connected folder and the campaign ledger, reads the regime, sets a bias and a working gross cap under the frozen campaign caps, and proposes candidate theses with a research memo. A **reviewer**, on a second coding agent or model where one is named, reviews each candidate through the fundamentals, macro, technical, prior-learnings, prior-decisions and risk lenses, and approves, revises or rejects it. A revise goes back to the strategist for at most two rounds.
 
-The approved candidates become the approved set at \`/research/{tradingDay}/approved-theses.json\`, the only theses a cycle may open. Once the set is written, the desk starts the cycle for its slot. When nothing is approved, no cycle starts, and the desk record says why. The frame, the round counter, the writes and the hand-off are decided by rule: only the strategist and the reviewer run on the harness.`,
+The approved candidates become the approved set at \`/research/{tradingDay}/approved-theses.json\`, the only theses a cycle may open. Once the set is written, the desk starts the cycle for its slot early. The slot's own schedule fires its cycle as well, so the desk decides what a cycle opens, never whether it runs. When nothing is approved, the desk record says why, and the scheduled cycle runs resolve-only. The frame, the round counter, the writes and the hand-off are decided by rule: only the strategist and the reviewer run on the harness.`,
   tags: ['alpaca', 'trading', 'paper', 'theses', 'research', 'review'],
   bundle: {
     workflow: {
       slug: STRATEGY_DESK_SLUG,
       name: 'Strategy Desk',
       description:
-        'Before a Daily Trading Cycle slot: a strategist harness run proposes candidate theses under the campaign caps, a reviewer harness run approves, revises or rejects each through six lenses, at most two revise rounds, and the approved set is written for the slot. Then the desk starts the cycle. No approved candidate means no cycle, with the reason recorded.',
+        'Before a Daily Trading Cycle slot: a strategist harness run proposes candidate theses under the campaign caps, a reviewer harness run approves, revises or rejects each through six lenses, at most two revise rounds, and the approved set is written for the slot. Then the desk starts the cycle early. No approved candidate means no set, with the reason recorded, and the scheduled cycle of the slot runs resolve-only.',
       usage: {
         whenToUse: [
-          'Preparing a Daily Trading Cycle slot that may open theses — pre_market, open or an intraday firing: the desk writes the approved set the cycle opens theses from, then starts the cycle',
+          'Preparing a Daily Trading Cycle slot that may open theses — pre_market, open or an intraday firing: the desk writes the approved set the cycle opens theses from, and may start that cycle early',
           'The scheduled pass before each such slot, with { tradingDay: { "$now": "date" }, slot } and slotIndex on intraday',
         ],
         whenNotToUse: [
@@ -1021,12 +1034,12 @@ The approved candidates become the approved set at \`/research/{tradingDay}/appr
         next: [
           {
             skill: CYCLE_WORKFLOW_SLUG,
-            when: 'The desk starts it itself once the set is written. Start a cycle by hand only for after_close, or when deskOutcome is hand_off_failed: the set is written and the cycle start failed.',
+            when: 'The schedule of each slot fires it whatever the desk ends in, and the desk starts it early once the set is written. Start a cycle by hand only when deskOutcome is hand_off_failed and no scheduled firing of the slot remains.',
           },
         ],
         pitfalls: DESK_PITFALLS,
       },
-      goal: 'Return, for one (tradingDay, slot), either an approved set every entry of which names its review run, with the cycle for the slot started, or the reason no cycle starts.',
+      goal: 'Return, for one (tradingDay, slot), either an approved set every entry of which names its review run, or the reason no set was written.',
       mode: 'process' as const,
       outcomes: [
         {
@@ -1035,7 +1048,7 @@ The approved candidates become the approved set at \`/research/{tradingDay}/appr
           evaluator: {
             type: 'manual' as const,
             instruction:
-              'The desk reviewed the candidates and either wrote an approved set naming its review run and started the cycle slot, or recorded why no cycle starts.',
+              'The desk reviewed the candidates and either wrote an approved set naming its review run, or recorded why it wrote none.',
           },
         },
       ],
@@ -1045,7 +1058,7 @@ The approved candidates become the approved set at \`/research/{tradingDay}/appr
         stateVariable(
           'deskOutcome',
           'Desk outcome',
-          'On a desk run: hand_off when the approved set is written and the cycle slot has started. Otherwise hand_off_failed, no_cycle, review_refused, review_failed or unframed, and deskReason says why. On a review run: set_written or no_cycle, and stoppedAt says why.',
+          'On a desk run: hand_off when the approved set is written and the desk has started the cycle slot. Otherwise hand_off_failed, no_cycle, review_refused, review_failed, review_unframed or unframed, and deskReason says why. The scheduled cycle of the slot runs in every case. On a review run: set_written or no_cycle, and stoppedAt says why.',
           'alternatives',
         ),
         stateVariable(
@@ -1086,6 +1099,11 @@ The approved candidates become the approved set at \`/research/{tradingDay}/appr
           'The desk record: the outcome, the reason and every round.',
         ),
         stateVariable(
+          'reviewFrameReason',
+          'Review frame',
+          'Why the review run could not frame, where the desk ended review_unframed: the campaign ended or its frame was gone after the desk framed.',
+        ),
+        stateVariable(
           'frameReason',
           'Frame',
           'Which stage this run is, or why it could not run: no active campaign, or a slotIndex missing on intraday or given on another slot.',
@@ -1100,7 +1118,7 @@ The approved candidates become the approved set at \`/research/{tradingDay}/appr
       output: {
         primary: 'deskOutcome',
         guidance:
-          'Report deskOutcome and deskReason. On hand_off, report the approved set path and the cycle run. On hand_off_failed, report that the set is written and the cycle did not start. On no_cycle, report stoppedAt.reason, and that the next cycle resolves what this slot did not. Never write the set or form theses yourself.',
+          'Report deskOutcome and deskReason. On hand_off, report the approved set path and the cycle run. On hand_off_failed, report that the set is written and the scheduled cycle opens from it. On any other outcome, report deskReason, and that the scheduled cycle of the slot runs resolve-only. Never write the set or form theses yourself.',
       },
       iteration: { auto: false, maxConsecutiveRuns: 1, stopOnOutcomesMet: true, cooldownMs: 0 },
     },
@@ -1118,7 +1136,7 @@ The approved candidates become the approved set at \`/research/{tradingDay}/appr
           {
             id: 'reason-recorded',
             description:
-              'A slot that starts no cycle has a desk record that says why: every candidate rejected, both revise rounds spent, or a step with no result.',
+              'A desk that writes no set has a desk record that says why: every candidate rejected, both revise rounds spent, or a step with no result.',
           },
         ],
       },
@@ -1141,12 +1159,12 @@ The approved candidates become the approved set at \`/research/{tradingDay}/appr
         'prepare the trading slot',
       ],
       activationHint:
-        'Runs before each Daily Trading Cycle slot that may open a thesis, from its schedule with inputs { bindingId, tradingDay, slot } and slotIndex on intraday. It writes the approved set and starts the cycle. Its usage says what it needs.',
+        'Runs before each Daily Trading Cycle slot that may open a thesis, from its schedule with inputs { bindingId, tradingDay, slot } and slotIndex on intraday. It writes the approved set and may start the cycle early, while the schedule of the slot fires its cycle too. Its usage says what it needs.',
       prerequisites: [],
       priority: 50,
     },
     rationale:
-      "Critical and strategic decisions go to the harness, input-to-output decisions do not. The strategist and the reviewer are host.harness.run operation tasks whose outputSchemas are templates: the campaign caps, the slot key and the review run id land in them as values, so the harness answers inside the caps and every approved entry carries this run's id. The frame, the revise-round counter, the settlement and the hand-off are workflow.run.decide rules, unrolled to two revise rounds. The ledger read is a Runner, because no operation reads a directory of memory documents whole. A desk is two runs of this skill, because a workflow task waits for the run it starts to end and the cycle accepts a set only from a completed run: the review run writes the set with its own memory.store.put task and ends, and only then does the desk run start the cycle.",
+      "Critical and strategic decisions go to the harness, input-to-output decisions do not. The strategist and the reviewer are host.harness.run operation tasks whose outputSchemas are templates: the campaign caps, the slot key and the review run id land in them as values, so the harness answers inside the caps and every approved entry carries this run's id. The frame, the revise-round counter, the settlement and the hand-off are workflow.run.decide rules, unrolled to two revise rounds. The ledger read is a Runner, because no operation reads a directory of memory documents whole. A desk is two runs of this skill, because a workflow task waits for the run it starts to end and the cycle accepts a set only from a completed run: the review run writes the set with its own memory.store.put task and ends, and only then does the desk run start the cycle, with its tradingDay. That start is extra: each slot keeps its own scheduled cycle, so resolution never waits on the desk.",
   },
 };
 

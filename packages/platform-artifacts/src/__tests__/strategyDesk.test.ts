@@ -22,6 +22,7 @@ import {
   type ApprovedSetSource,
   type ApprovedSetWriter,
 } from '../skillCatalog/dailyTradingCycleApproved.js';
+import { DAILY_TRADING_CYCLE } from '../skillCatalog/dailyTradingCycle.js';
 import { STRATEGY_DESK } from '../skillCatalog/strategyDesk.js';
 import { DESK_REVIEW_LENSES } from '../skillCatalog/strategyDeskProse.js';
 import {
@@ -574,7 +575,7 @@ describe('Strategy Desk — the hand-off', () => {
         slug: CYCLE_WORKFLOW_SLUG,
         catalogId: CYCLE_WORKFLOW_SLUG,
         campaignId: CAMPAIGN_ID,
-        inputs: { slot: 'open' },
+        inputs: { slot: 'open', tradingDay: TRADING_DAY },
         wait: 'until_complete',
       }),
     );
@@ -600,14 +601,17 @@ describe('Strategy Desk — the hand-off', () => {
     expect(WorkflowRunStartInputSchema.parse(run.inputs.get(HAND_OFF_TASK_ID)).inputs).toEqual({
       slot: 'intraday',
       slotIndex: 3,
+      tradingDay: TRADING_DAY,
     });
     expect(deskRecord(run, 'intraday-3')).toMatchObject({ outcome: 'hand_off', slotIndex: 3 });
   });
 
   it('a second desk in the window of a first ends review_refused, with its record, never silently', () => {
-    // The first desk holds two active runs, its own and its review run, which
-    // waits on the cycle. The second desk starts, and its review run start is
-    // the third active run: the start is refused, and the task fails.
+    // The first desk holds two active runs while its review run runs: its own
+    // and the review run. After the review run completes, the desk run alone
+    // waits on the cycle it started. A second desk that fires while the first
+    // review run is active starts, and its review run start is the third
+    // active run: the start is refused, and the task fails.
     expect(STRATEGY_DESK.bundle.manifest.concurrency?.maxConcurrentRuns).toBe(2);
     expect(task(REVIEW_RUN_TASK_ID).optional).toBe(true);
     const second = desk('fail');
@@ -714,6 +718,7 @@ describe('Strategy Desk — the hand-off', () => {
         'no_cycle',
         'review_failed',
         'review_refused',
+        'review_unframed',
         'unframed',
       ].sort(),
     );
@@ -723,5 +728,180 @@ describe('Strategy Desk — the hand-off', () => {
       ),
     );
     expect([...outcomes].sort()).toEqual(['hand_off', 'review_failed', 'review_refused']);
+  });
+
+  it('a review run whose campaign is gone ends the desk review_unframed, never review_failed', () => {
+    // The campaign ended between the desk's frame and the review's: the review
+    // run frames unframed, settles as a desk would and completes.
+    const review = runSkillTasks(
+      tasks,
+      REVIEW_INPUTS,
+      (taskId, input) => (taskId === 'read-campaign' ? { campaigns: [] } : { path: input['path'] }),
+      wf.stateVariables,
+      { runId: REVIEW_RUN },
+    );
+    expect(review.ran).not.toContain(strategistTaskId(1));
+    expect(review.state['deskOutcome']).toBe('unframed');
+    const frameReason = review.state['frameReason'];
+    expect(String(frameReason)).toContain('No Daily Trading Cycle campaign');
+
+    const run = desk({
+      runId: REVIEW_RUN,
+      outcome: 'completed',
+      result: { output: { deskOutcome: review.state['deskOutcome'], frameReason } },
+    });
+    expect(run.ran).not.toContain(HAND_OFF_TASK_ID);
+    expect(run.state['deskOutcome']).toBe('review_unframed');
+    expect(run.state['deskReason']).toBe(DESK_OUTCOMES.review_unframed);
+    expect(DESK_OUTCOMES.review_unframed).not.toMatch(/failed|cancelled|paused/);
+    expect(run.state['reviewFrameReason']).toBe(frameReason);
+    expect(deskRecord(run)).toMatchObject({
+      outcome: 'review_unframed',
+      reviewFrameReason: frameReason,
+    });
+  });
+});
+
+describe('Strategy Desk — the desk gates what a cycle opens, never whether it runs', () => {
+  const cycle = DAILY_TRADING_CYCLE.bundle.workflow;
+  const cycleTasks = cycle.tasks as unknown as WorkflowTask[];
+  const bundle = ALPACA_THESIS_TRADING;
+
+  /** A scheduled cycle with one open thesis to falsify and no approved set to open from. */
+  function scheduledCycle(inputs: Record<string, unknown>) {
+    const resolution = {
+      thesisId: 'aapl-breakout-1-t',
+      instrument: 'AAPL',
+      direction: 'long',
+      outcome: 'falsified',
+      entryFillState: 'filled',
+      evidence: 'close 183.90 < invalidation 184.00 stated in the falsification criterion',
+      statedConfidence: 'medium',
+      closePosition: true,
+      closeQty: '10',
+    };
+    return runSkillTasks(cycleTasks, inputs, (taskId, input) => {
+      switch (taskId) {
+        case 'ingest-clock':
+          return {
+            data: {
+              timestamp: `${TRADING_DAY}T11:07:00-04:00`,
+              is_open: true,
+              next_open: '2026-07-15T09:30:00-04:00',
+              next_close: `${TRADING_DAY}T16:00:00-04:00`,
+            },
+          };
+        case 'ingest-account':
+          return {
+            data: { equity: '100000', cash: '60000', buying_power: '120000', status: 'ACTIVE' },
+          };
+        case 'ingest-positions':
+          return { data: [{ symbol: 'AAPL', qty: '10' }] };
+        case 'ingest-orders':
+          return { data: [] };
+        case 'resolve-theses':
+          return {
+            tradingDay: TRADING_DAY,
+            slot: 'intraday',
+            slotIndex: 2,
+            proceed: true,
+            noopReason: null,
+            resolutions: [resolution],
+          };
+        case 'decide':
+          return { tradingDay: TRADING_DAY, slot: 'intraday', slotIndex: 2, theses: [] };
+        case 'execute-orders':
+          return { orderResults: [{ thesisId: resolution.thesisId, intent: 'close' }] };
+        case 'record':
+          return { cycleCompleted: 1, learnings: [], cycleDoc: {}, cycleDocPath: 'p' };
+        default:
+          return { path: input['path'] ?? null };
+      }
+    });
+  }
+
+  it('a slot whose desk did not hand off still runs its cycle on schedule and resolves open theses', async () => {
+    // The desk of this slot could not start its review run, so it wrote no set.
+    const desk = runSkillTasks(
+      tasks,
+      { ...INPUTS, slot: 'intraday', slotIndex: 2 },
+      (taskId, input) =>
+        taskId === 'read-campaign'
+          ? { campaigns: [{ campaign: { campaignId: CAMPAIGN_ID, config: CAMPAIGN } }] }
+          : taskId === REVIEW_RUN_TASK_ID
+            ? 'fail'
+            : { path: input['path'] },
+      wf.stateVariables,
+      { runId: DESK_RUN },
+    );
+    expect(desk.state['deskOutcome']).toBe('review_refused');
+    expect(desk.ran).not.toContain(HAND_OFF_TASK_ID);
+    expect(DESK_OUTCOMES.review_refused).toContain('still runs on its own schedule');
+
+    // The slot's own schedule fires its cycle, which reads nothing the desk holds.
+    const reads = cycleTasks.flatMap((t) =>
+      Object.values(t.inputBindings ?? {}).flatMap((b) =>
+        b.kind === 'task_output' ? [b.taskId] : [],
+      ),
+    );
+    expect(reads.every((taskId) => cycleTasks.some((t) => t.taskId === taskId))).toBe(true);
+    const run = scheduledCycle({ slot: 'intraday', slotIndex: 2 });
+    for (const taskId of [
+      'resolve-theses',
+      'decide',
+      'execute-orders',
+      'record',
+      'write-cycle-doc',
+    ]) {
+      expect(run.ran, taskId).toContain(taskId);
+    }
+    // The falsified thesis reaches execution, so its position is closed.
+    expect(run.inputs.get('execute-orders')?.['resolutions']).toEqual([
+      expect.objectContaining({ outcome: 'falsified', closePosition: true }),
+    ]);
+    // With no set for the slot, decide opens nothing and the gate passes it.
+    const none: ApprovedSetSource = {
+      spaceId: SPACE,
+      read: () => Promise.resolve({ status: 'missing' }),
+    };
+    expect(
+      await approvedThesesIssues(
+        { ...openDecision('aapl-breakout-1'), slot: 'intraday', slotIndex: 2, theses: [] },
+        none,
+      ),
+    ).toEqual([]);
+  });
+
+  it('the setup keeps a cycle schedule for every slot, and adds the desk ahead of the opening slots', () => {
+    const text = [bundle.description, ...bundle.helmsmanHints].join('\n');
+    for (const cron of ['47 8 * * 1-5', '37 9 * * 1-5', '7 10-15 * * 1-5', '23 16 * * 1-5']) {
+      expect(text, cron).toContain(cron);
+    }
+    expect(text).toContain('53 7 * * 1-5');
+    expect(text).toMatch(/never replaces the cycle schedules/);
+    expect(text).not.toMatch(/starts no cycle/);
+  });
+
+  it('the started cycle receives the desk’s tradingDay, and the cycle takes it as an input', () => {
+    const ids = (cycle.runInputs ?? []).map((input) => input.id);
+    expect(ids).toEqual(['slot', 'slotIndex', 'tradingDay']);
+    // The entry task's contract is the start's input surface: an input missing from it is refused.
+    const entry = cycleTasks.find((t) => t.taskId === 'ingest-clock')!;
+    expect(Object.keys(entry.inputContract?.bindings ?? {})).toContain('tradingDay');
+    const resolve = cycleTasks.find((t) => t.taskId === 'resolve-theses')!;
+    expect(resolve.inputBindings?.['requestedTradingDay']).toEqual({
+      kind: 'run_input',
+      path: 'tradingDay',
+    });
+    // The rule rides the output field resolve-theses fills, not its prompt.
+    const tradingDay = (
+      resolve.outputContract?.schema as { properties: Record<string, { description?: string }> }
+    ).properties['tradingDay'];
+    expect(tradingDay?.description).toContain(
+      'Where `requestedTradingDay` is given and names another day, this cycle runs no slot',
+    );
+    const start = (task(HAND_OFF_TASK_ID).inputTemplate as { inputs: Record<string, unknown> })
+      .inputs;
+    expect(start['tradingDay']).toEqual({ $bind: 'tradingDay' });
   });
 });

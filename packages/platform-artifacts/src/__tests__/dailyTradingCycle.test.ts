@@ -686,13 +686,14 @@ describe('DAILY_TRADING_CYCLE', () => {
     }
   });
 
-  it('the only run inputs are the optional slot and slotIndex, read by resolve-theses alone', () => {
+  it('the only run inputs are the optional slot, slotIndex and tradingDay, read by resolve-theses alone', () => {
     expect(wf.runInputs?.map((r) => [r.id, r.required])).toEqual([
       ['slot', false],
       ['slotIndex', false],
+      ['tradingDay', false],
     ]);
     const entryContract = task('ingest-clock')?.inputContract?.bindings ?? {};
-    expect(Object.keys(entryContract).sort()).toEqual(['slot', 'slotIndex']);
+    expect(Object.keys(entryContract).sort()).toEqual(['slot', 'slotIndex', 'tradingDay']);
     for (const t of wf.tasks) {
       const runInputs = Object.entries(t.inputBindings ?? {}).filter(
         ([, b]) => (b as { kind: string }).kind === 'run_input',
@@ -702,6 +703,7 @@ describe('DAILY_TRADING_CYCLE', () => {
     expect(task('resolve-theses')?.inputBindings).toMatchObject({
       requestedSlot: { kind: 'run_input', path: 'slot' },
       requestedSlotIndex: { kind: 'run_input', path: 'slotIndex' },
+      requestedTradingDay: { kind: 'run_input', path: 'tradingDay' },
     });
   });
 
@@ -1599,17 +1601,19 @@ describe('alpaca-thesis-trading bundle', () => {
     expect(bundle.memorySeed[0]!.seedPolicy).toBe('overwrite');
   });
 
-  it('setup notes and hints fire the desk before each opening slot, staggered off round boundaries', () => {
+  it('setup notes and hints describe the four cycle firings, and the desk ahead of the opening slots', () => {
     const text = [bundle.description, ...bundle.helmsmanHints].join('\n');
     for (const slot of ['pre_market', 'open', 'intraday', 'after_close']) {
       expect(text, slot).toContain(`slot: "${slot}"`);
     }
-    for (const cron of ['31 8 * * 1-5', '37 9 * * 1-5', '7 10 * * 1-5', '23 16 * * 1-5']) {
+    for (const cron of ['47 8 * * 1-5', '37 9 * * 1-5', '7 10-15 * * 1-5', '23 16 * * 1-5']) {
       expect(text, cron).toContain(cron);
     }
     expect(text).toContain('staggered off round boundaries');
     expect(text).toContain('tradingDay: { "$now": "date" }');
-    // after_close opens nothing, so it fires the cycle itself.
-    expect(text).toMatch(/after-close firing[^\n]*daily-trading-cycle itself/i);
+    // The desk fires ahead of pre_market and open, and adds to the cycle schedules.
+    expect(text).toContain('53 7 * * 1-5');
+    expect(text).toContain('53 8 * * 1-5');
+    expect(text).toMatch(/never replaces the cycle schedules/);
   });
 });

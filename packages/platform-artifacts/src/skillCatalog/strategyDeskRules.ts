@@ -421,7 +421,7 @@ export function roundOtherwise(round: number) {
   };
 }
 
-// ── The settlement: whether the cycle starts, and why ─────────────────────
+// ── The settlement: whether the set is written, and why ────────────────────
 
 /** What a review run decides when it has written the set: the desk run may hand it off. */
 export const REVIEW_SET_WRITTEN = 'set_written';
@@ -429,13 +429,15 @@ export const REVIEW_SET_WRITTEN = 'set_written';
 /** Why a desk ended where it did, the label `stoppedAt.why` carries. */
 export const DESK_STOP_REASONS = {
   approved:
-    'The review approved at least one candidate, so the desk writes the set and starts the cycle.',
-  rejected_all: 'The review rejected every candidate, so no cycle starts for this slot.',
+    'The review approved at least one candidate, so the desk writes the set and starts the cycle early.',
+  rejected_all: 'The review rejected every candidate, so the desk writes no set for this slot.',
   rounds_spent:
-    'Both revise rounds are spent without an approved candidate, so no cycle starts for this slot.',
-  review_failed: 'A review returned no result, so no cycle starts for this slot.',
-  strategist_failed: 'A strategist run returned no result, so no cycle starts for this slot.',
-  ledger_unread: 'The ledger read failed, so the strategist did not run and no cycle starts.',
+    'Both revise rounds are spent without an approved candidate, so the desk writes no set for this slot.',
+  review_failed: 'A review returned no result, so the desk writes no set for this slot.',
+  strategist_failed:
+    'A strategist run returned no result, so the desk writes no set for this slot.',
+  ledger_unread:
+    'The ledger read failed, so the strategist did not run and the desk writes no set.',
 } as const;
 export type DeskStopReason = keyof typeof DESK_STOP_REASONS;
 
@@ -486,21 +488,24 @@ export const SETTLE_OTHERWISE = {
 // ── The desk run's own outcome ────────────────────────────────────────────
 
 /**
- * How a desk run ends, the value `deskOutcome` carries on it. Only
- * `hand_off` starts a cycle. Every other outcome names why none started, and
- * the desk run records it in its own record.
+ * How a desk run ends, the value `deskOutcome` carries on it. The desk
+ * decides what the slot's cycle may open, never whether it runs: the slot's
+ * own schedule fires its cycle whatever the desk ended in. Only `hand_off`
+ * started an extra cycle, and every outcome is recorded.
  */
+const SCHEDULED_CYCLE =
+  "The slot's cycle still runs on its own schedule, resolves open theses and opens nothing new.";
+
 export const DESK_OUTCOMES = {
-  hand_off: 'The approved set is written, and the cycle for this slot has started.',
+  hand_off:
+    'The approved set is written, and the desk has started the cycle for this slot. When the scheduled cycle of the slot fires, it finds the slot recorded or in flight.',
   hand_off_failed:
-    'The approved set is written, but the cycle did not start. The cycle allows one active run, so a cycle in flight refuses it. The hand-off task holds the error. Start the cycle for this slot by hand.',
-  no_cycle: 'The review approved no candidate, so no cycle starts. stoppedAt says why.',
-  review_refused:
-    'The review run could not start, so no set is written and no cycle starts. A desk holds two active runs, its own and its review run, so a desk in flight refuses it. Fire the desk again once that desk ends.',
-  review_failed:
-    'The review run did not complete with a decision: it failed, was cancelled or paused. Its run says why. No cycle starts.',
-  unframed:
-    'The desk could not run, so no set is written and no cycle starts. frameReason says why.',
+    "The approved set is written, but the desk could not start the cycle. The cycle allows one active run, so a cycle in flight refuses it. The hand-off task holds the error. The slot's scheduled cycle opens from the set when it fires.",
+  no_cycle: `The review approved no candidate, so the desk wrote no set. stoppedAt says why. ${SCHEDULED_CYCLE}`,
+  review_refused: `The review run could not start, so the desk wrote no set. A desk holds two active runs, its own and its review run, so a desk in flight refuses it. ${SCHEDULED_CYCLE}`,
+  review_failed: `The review run did not complete with a decision: it failed, was cancelled or paused. Its run says why. ${SCHEDULED_CYCLE}`,
+  review_unframed: `The review run found nothing to review: the campaign ended, or its frame was gone, after this desk framed. reviewFrameReason says which. ${SCHEDULED_CYCLE}`,
+  unframed: `The desk could not run, so it wrote no set. frameReason says why. ${SCHEDULED_CYCLE}`,
 } as const;
 export type DeskOutcome = keyof typeof DESK_OUTCOMES;
 
@@ -521,6 +526,7 @@ export const DESK_OUTCOME_RULES: readonly WorkflowRunDecideRule[] = [
   outcomeRule('unframed', ["state.framed == 'unframed'"]),
   outcomeRule('review_refused', ['state.reviewOutcome == null']),
   outcomeRule('review_failed', ["state.reviewOutcome != 'completed'"]),
+  outcomeRule('review_unframed', ["state.reviewDecision == 'unframed'"]),
   outcomeRule('no_cycle', ["state.reviewDecision == 'no_cycle'"]),
   outcomeRule('hand_off', [
     `state.reviewDecision == '${REVIEW_SET_WRITTEN}'`,
