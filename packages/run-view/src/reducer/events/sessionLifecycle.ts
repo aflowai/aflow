@@ -395,7 +395,9 @@ export function applySessionLifecycleEvents(
         const hitlMsg: Message = {
           id: `inline-hitl-${stepExecutionId}`,
           role: 'assistant',
-          content: title ?? body.slice(0, 200),
+          // An ask is the operator's only copy of the question in the chat, so
+          // its message body is the whole prompt, never a preview of it.
+          content: hitlKind === 'human_input' ? body : (title ?? body.slice(0, 200)),
           richContent: payload,
           semanticType: 'inline_hitl',
           timestamp: toISOTimestamp(event.timestamp),
