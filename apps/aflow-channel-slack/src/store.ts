@@ -7,7 +7,7 @@
  * tenant schema. One operator and a few small record sets need no shared
  * database, and removing the app and this file leaves nothing in the platform.
  *
- * It keeps five record sets. `link` is the one Slack user this app serves.
+ * It keeps six record sets. `link` is the one Slack user this app serves.
  * `sent` holds each send's `messageRef`, text and item, which make a retried
  * step post once and a repeated message fail. A send is keyed on its run and
  * its step, because a workflow task's step carries the same name in every run
@@ -16,8 +16,11 @@
  * the operator sent, so a redelivered one does nothing, with when it was sent,
  * when it arrived and what came of it. `thread` holds each Slack thread, the
  * space it speaks for and the Helmsman session it continues. A message a run
- * sent opens a thread too, so a reply under it stays in that run's space. A
- * code that linked once is kept so it cannot link a second time.
+ * sent opens a thread too, so a reply under it stays in that run's space.
+ * `currentSpace` holds each direct message channel's current space: the space
+ * a message last named there, or the last one whose answer came there. A new
+ * message that names no space goes to it. A code that linked once is kept so
+ * it cannot link a second time.
  *
  * Every write replaces the whole file through a rename, and every write is
  * synchronous, so one process never interleaves two of them.
@@ -124,6 +127,9 @@ export const InboundRecordSchema = z.object({
     'not_sent',
     'outcome_unknown',
     'refused',
+    'spaces_listed',
+    'space_set',
+    'space_unknown',
   ]),
   /** The "Run it now?" question a late message got. */
   promptTs: z.string().min(1).optional(),
@@ -189,6 +195,14 @@ export const ThreadRecordSchema = z.object({
 });
 export type ThreadRecord = z.infer<typeof ThreadRecordSchema>;
 
+/** The space a new direct message in `channel` goes to when it names none. */
+export const CurrentSpaceRecordSchema = z.object({
+  channel: z.string().min(1),
+  spaceId: z.string().min(1),
+  updatedAt: z.string().min(1),
+});
+export type CurrentSpaceRecord = z.infer<typeof CurrentSpaceRecordSchema>;
+
 const StoreDataSchema = z.object({
   /** The ledger: every migration id applied, in order. */
   migrations: z.array(z.string()),
@@ -198,6 +212,7 @@ const StoreDataSchema = z.object({
   cards: z.array(CardRecordSchema),
   inbound: z.array(InboundRecordSchema),
   threads: z.array(ThreadRecordSchema),
+  currentSpaces: z.array(CurrentSpaceRecordSchema),
 });
 type StoreData = z.infer<typeof StoreDataSchema>;
 
@@ -240,6 +255,10 @@ const MIGRATIONS: readonly Migration[] = [
         postedText: null,
       })),
     }),
+  },
+  {
+    id: '0006-current-spaces',
+    apply: (data) => ({ ...data, currentSpaces: [] }),
   },
 ];
 
@@ -508,6 +527,20 @@ export class ChannelStore {
     at: Date,
   ): void {
     Object.assign(thread, patch, { updatedAt: at.toISOString() });
+    this.persist();
+  }
+
+  /** The direct message channel's current space, when a message named one or an answer came. */
+  currentSpace(channel: string): string | undefined {
+    return this.data.currentSpaces.find((record) => record.channel === channel)?.spaceId;
+  }
+
+  /** Makes `spaceId` the channel's current space. */
+  setCurrentSpace(channel: string, spaceId: string, at: Date): void {
+    const updatedAt = at.toISOString();
+    const record = this.data.currentSpaces.find((entry) => entry.channel === channel);
+    if (record === undefined) this.data.currentSpaces.push({ channel, spaceId, updatedAt });
+    else Object.assign(record, { spaceId, updatedAt });
     this.persist();
   }
 

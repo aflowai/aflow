@@ -169,6 +169,7 @@ describe('the store', () => {
       '0003-conversations',
       '0004-thread-notes',
       '0005-posted-threads',
+      '0006-current-spaces',
     ]);
   });
 

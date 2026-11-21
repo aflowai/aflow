@@ -78,7 +78,7 @@ const sessionReads: string[] = [];
 const noApi: AflowApi = {
   readItem: refuse('read an item'),
   resolveItem: refuse('resolved an item'),
-  homeSpace: refuse('read the home space'),
+  spaces: refuse('read the spaces'),
   spaceName: (spaceId) =>
     spaceId === SPACE
       ? Promise.resolve({ ok: true, name: SPACE_NAME })

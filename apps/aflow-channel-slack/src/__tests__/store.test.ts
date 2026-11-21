@@ -108,4 +108,33 @@ describe('the channel store', () => {
       status: 'waiting',
     });
   });
+
+  it('opens a store written before current spaces with none, and keeps the one set', () => {
+    writeFileSync(
+      path,
+      JSON.stringify({
+        migrations: [
+          '0001-link-and-sent',
+          '0002-cards',
+          '0003-conversations',
+          '0004-thread-notes',
+          '0005-posted-threads',
+        ],
+        link: null,
+        usedLinkCodes: [],
+        sent: [],
+        cards: [],
+        inbound: [],
+        threads: [],
+      }),
+    );
+    const store = ChannelStore.open(path);
+    expect(store.currentSpace('D-1')).toBeUndefined();
+
+    store.setCurrentSpace('D-1', 'space-1', new Date());
+    store.setCurrentSpace('D-1', 'space-2', new Date());
+
+    expect(ChannelStore.open(path).currentSpace('D-1')).toBe('space-2');
+    expect(ChannelStore.open(path).currentSpace('D-2')).toBeUndefined();
+  });
 });

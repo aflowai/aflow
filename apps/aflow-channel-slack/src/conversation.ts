@@ -1,12 +1,18 @@
 /**
  * A conversation with the Helmsman from Slack (Plan 327 D4).
  *
- * A direct message from the linked operator starts a Helmsman session in
- * their home space. A reply in that message's thread resumes the same session,
- * so the thread stays one conversation. The app watches only the sessions it
- * started, and posts the Helmsman's answer into the thread once the session
- * pauses with it.
+ * A direct message from the linked operator starts a Helmsman session. A reply
+ * in that message's thread resumes the same session, so the thread stays one
+ * conversation. The app watches only the sessions it started, and posts the
+ * Helmsman's answer into the thread once the session pauses with it.
  *
+ * - **A new message picks its space.** A message outside a thread that opens
+ *   with `#slug`, `@slug` or a space's name and a colon goes to that space
+ *   (`spaceAddress.ts`). One that names none goes to the channel's current
+ *   space: the space a message last named there, or the last space whose
+ *   answer came there. The home space serves only a channel with neither.
+ *   `spaces` alone lists the spaces the operator reaches. A reply in a thread
+ *   names no space, because the thread already speaks for one.
  * - **A run's message owns its thread.** A reply under a message that
  *   `channel.message.send` posted stays in that run's space. It resumes the
  *   Helmsman conversation that sent the message when that session is paused
@@ -54,7 +60,15 @@ import { SLACK_TEXT_LIMIT, SlackApiError, type SlackBlock, type SlackClient } fr
 import type { DirectMessage } from './socketMode.js';
 import { slackMrkdwnWithin } from './slackMrkdwn.js';
 import { typedTextOf } from './slackText.js';
-import { SpaceNames, prefixedBlocks } from './spaceNames.js';
+import {
+  currentSpaceOf,
+  isSpacesCommand,
+  parseSpaceAddress,
+  spaceSetText,
+  spacesListText,
+  unknownSpaceText,
+} from './spaceAddress.js';
+import { SpaceNames, prefixedBlocks, spacePrefix } from './spaceNames.js';
 import type { ChannelStore, InboundOutcome, InboundRecord, ThreadRecord } from './store.js';
 
 /** A thread that continues a Helmsman session, which a watch, a resume and a read need. */
@@ -62,6 +76,11 @@ type ConversationThread = ThreadRecord & { sessionId: string };
 
 function hasSession(thread: ThreadRecord): thread is ConversationThread {
   return thread.sessionId !== null;
+}
+
+/** True for a message sent outside any thread, which opens a thread of its own. */
+function opensThread(record: InboundRecord): boolean {
+  return record.threadTs === record.ts;
 }
 
 /** Plan 327 §8: ten minutes for P2, measured from the `inbound` record. */
@@ -409,7 +428,9 @@ export class Conversations {
       this.deps.store.settleInbound(record, { outcome: 'refused' });
       return { outcome: 'refused' };
     }
-    if (record.ageMs > LATE_THRESHOLD_MS) {
+    // A list runs nothing, so it is answered however late it comes.
+    const listing = opensThread(record) && isSpacesCommand(text);
+    if (record.ageMs > LATE_THRESHOLD_MS && !listing) {
       const question = await this.say(
         record.channel,
         record.threadTs,
@@ -471,21 +492,33 @@ export class Conversations {
         },
       ]);
       if (!run) return { outcome: 'discarded' };
-      const result = await this.converse(record, lateText(text, record, at));
+      const result = await this.converse(record, text, at);
       return { ...result, outcome: 'ran_late' };
     } finally {
       store.releaseLate(record);
     }
   }
 
-  /** Starts the conversation for the record's thread, or continues it. */
-  private async converse(record: InboundRecord, text: string): Promise<ConverseResult> {
+  /**
+   * Starts the conversation for the record's thread, or continues it.
+   * `ranLateAt` is when the operator chose to run a late message, which the
+   * text then carries after any space it names.
+   */
+  private async converse(
+    record: InboundRecord,
+    typed: string,
+    ranLateAt?: Date,
+  ): Promise<ConverseResult> {
     const { store } = this.deps;
     const say = (line: string) => this.say(record.channel, record.threadTs, line);
     if (store.link()?.aflowUserId !== this.deps.aflowUserId) {
       await say(NOT_THE_KEY_OWNER);
       return { outcome: 'refused' };
     }
+    const sent = (line: string) =>
+      ranLateAt === undefined ? line : lateText(line, record, ranLateAt);
+    if (opensThread(record) && isSpacesCommand(typed)) return this.listSpaces(record);
+    const text = sent(typed);
     const thread = store.threadAt(record.channel, record.threadTs);
     if (thread?.status === 'ended') {
       await say(CONVERSATION_ENDED);
@@ -516,7 +549,7 @@ export class Conversations {
     }
     const key = `slack-event:${record.eventId}`;
     try {
-      if (thread === undefined) return await this.start(record, text, key);
+      if (thread === undefined) return await this.start(record, typed, sent, key);
       if (thread.status === 'posted' || !hasSession(thread)) {
         return await this.continuePosted(thread, text, key, say);
       }
@@ -662,16 +695,67 @@ export class Conversations {
     );
   }
 
-  /** Starts the conversation for a thread this message holds the claim on. */
-  private async start(record: InboundRecord, text: string, key: string): Promise<ConverseResult> {
+  /** The reply to `spaces`: each space the operator reaches, the current one marked. */
+  private async listSpaces(record: InboundRecord): Promise<ConverseResult> {
+    const say = (line: string) => this.say(record.channel, record.threadTs, line);
+    const listed = await this.deps.api.spaces();
+    if (!listed.ok) {
+      await say(refusalText(listed));
+      return { outcome: refusalOutcome(listed) };
+    }
+    const current = currentSpaceOf(
+      this.deps.store.currentSpace(record.channel),
+      listed.spaces,
+      listed.homeSpaceId,
+    );
+    await say(spacesListText(listed.spaces, current));
+    return { outcome: 'spaces_listed' };
+  }
+
+  /**
+   * Starts the conversation for a thread this message holds the claim on, in
+   * the space the message names or else the channel's current space. Only a
+   * message outside a thread may name one. `sent` gives the text the Helmsman
+   * reads from what follows the space's name.
+   */
+  private async start(
+    record: InboundRecord,
+    typed: string,
+    sent: (text: string) => string,
+    key: string,
+  ): Promise<ConverseResult> {
     const { store, api } = this.deps;
     const say = (line: string) => this.say(record.channel, record.threadTs, line);
-    const home = await api.homeSpace();
-    if (!home.ok) {
-      await say(refusalText(home));
-      return { outcome: refusalOutcome(home) };
+    const listed = await api.spaces();
+    if (!listed.ok) {
+      await say(refusalText(listed));
+      return { outcome: refusalOutcome(listed) };
     }
-    const started = await api.startConversation(home.spaceId, text, key);
+    const current = currentSpaceOf(
+      store.currentSpace(record.channel),
+      listed.spaces,
+      listed.homeSpaceId,
+    );
+    const address = opensThread(record)
+      ? parseSpaceAddress(typed, listed.spaces)
+      : { kind: 'none' as const };
+    if (address.kind === 'unknown') {
+      await say(unknownSpaceText(listed.spaces, current));
+      return { outcome: 'space_unknown' };
+    }
+    let spaceId = current;
+    let text = typed;
+    if (address.kind === 'space') {
+      spaceId = address.space.id;
+      text = address.rest;
+      store.setCurrentSpace(record.channel, spaceId, this.now());
+      if (text === '') {
+        const line = `${spacePrefix(address.space.name)}${spaceSetText(address.space)}`;
+        await this.post(record.channel, record.threadTs, line);
+        return { outcome: 'space_set' };
+      }
+    }
+    const started = await api.startConversation(spaceId, sent(text), key);
     if (!started.ok) {
       await say(refusalText(started));
       return { outcome: refusalOutcome(started) };
@@ -681,7 +765,7 @@ export class Conversations {
       channel: record.channel,
       threadTs: record.threadTs,
       sessionId: started.sessionId,
-      spaceId: home.spaceId,
+      spaceId,
       runId: null,
       postedText: null,
       status: 'answering',
@@ -838,6 +922,7 @@ export class Conversations {
           },
           this.now(),
         );
+        store.setCurrentSpace(thread.channel, thread.spaceId, this.now());
         const reply = answer.agentResponse;
         const prefix = await this.spaceNames.prefix(thread.spaceId);
         await this.relay(
