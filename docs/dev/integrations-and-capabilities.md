@@ -343,9 +343,12 @@ connector composes with Plan 218's `baseUrlTemplate` / `variableValues`.
   `startConsent` adds the curated issuer's `identityScopes` to whatever the
   binding requests (Google and Microsoft carry them, GitHub and Slack none).
   The Gmail connector names only its Gmail scopes and gets them this way.
-  It writes `oauth_tokens.account_identity`
-  (NULL when the provider reports none) and `connected_at`, which a refresh
-  leaves alone. The API bindings list carries each OAuth-code binding's own
+  It writes `oauth_tokens.account_identity` (NULL when the provider reports
+  none or the read fails) and `connected_at`, which a refresh leaves alone. A
+  re-consent replaces the token, so it replaces `account_identity` with its own
+  read too, NULL included: the row never names an account its token does not
+  belong to, and after a failed read the card says a bare "Connected" until the
+  operator consents again. The API bindings list carries each OAuth-code binding's own
   token as `oauthConnection`, resolved through the binding's `ownerScope`, so the
   card states a space-owned token as well as a user-owned one.
 

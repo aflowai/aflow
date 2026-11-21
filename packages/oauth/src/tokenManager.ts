@@ -590,7 +590,7 @@ export async function completeConsent(
           scopes_json = EXCLUDED.scopes_json,
           audience = EXCLUDED.audience,
           client_id_used = EXCLUDED.client_id_used,
-          account_identity = COALESCE(EXCLUDED.account_identity, oauth_tokens.account_identity),
+          account_identity = EXCLUDED.account_identity,
           expires_at = EXCLUDED.expires_at,
           obtained_at = EXCLUDED.obtained_at,
           connected_at = EXCLUDED.connected_at,

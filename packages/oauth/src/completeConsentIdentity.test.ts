@@ -2,7 +2,9 @@
  * Consent completion stores which account it connected, read inside the same
  * call that exchanges the code. Google reports it as the id token's email
  * claim, or from its userinfo endpoint. A provider that reports nothing stores
- * NULL, so the page says "Connected" and names no account.
+ * NULL, so the page says "Connected" and names no account. A re-consent
+ * replaces the account with its own read, so the row never names an account
+ * its token does not belong to.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SQL } from 'drizzle-orm';
@@ -296,9 +298,17 @@ describe('completeConsent stores the account identity', () => {
   });
 });
 
-describe('a re-consent keeps the account the row has recorded', () => {
-  /** The SET clause the upsert applies to the row it conflicts with. */
-  function onConflictSet(): string {
+describe('a re-consent records the account of its own token', () => {
+  /** The row an earlier consent left, naming the account its token belonged to. */
+  const RECORDED_ROW: Record<string, unknown> = {
+    access_token_enc: 'enc:old-access',
+    scopes_json: '["openid","email"]',
+    account_identity: 'old@example.com',
+    connected_at: '2026-11-01T08:00:00.000Z',
+  };
+
+  /** The ON CONFLICT assignments, split at the commas between them. */
+  function onConflictAssignments(): Array<[string, string]> {
     const query = executed.find((q) =>
       new PgDialect().sqlToQuery(q).sql.includes('INSERT INTO oauth_tokens'),
     );
@@ -306,10 +316,70 @@ describe('a re-consent keeps the account the row has recorded', () => {
     const { sql } = new PgDialect().sqlToQuery(query);
     const set = /DO UPDATE SET([\s\S]*)$/.exec(sql)?.[1];
     if (!set) throw new Error(`unexpected upsert: ${sql}`);
-    return set.replace(/\s+/g, ' ');
+    const parts: string[] = [];
+    let depth = 0;
+    let current = '';
+    for (const ch of set) {
+      if (ch === '(') depth += 1;
+      if (ch === ')') depth -= 1;
+      if (ch === ',' && depth === 0) {
+        parts.push(current);
+        current = '';
+      } else {
+        current += ch;
+      }
+    }
+    parts.push(current);
+    return parts.map((part) => {
+      const [column, ...expr] = part.split('=');
+      return [column?.trim() ?? '', expr.join('=').replace(/\s+/g, ' ').trim()];
+    });
   }
 
-  it('writes NULL as the new account and keeps the recorded one on conflict', async () => {
+  /**
+   * The row as Postgres leaves it when the upsert meets RECORDED_ROW. Only
+   * plain replacement is understood, so an expression that reads the old row
+   * fails here instead of passing unseen.
+   */
+  function rowAfterReconsent(): Record<string, unknown> {
+    const incoming = storedRow();
+    const row = { ...RECORDED_ROW };
+    for (const [column, expr] of onConflictAssignments()) {
+      if (expr === `EXCLUDED.${column}`) row[column] = incoming[column];
+      else if (expr === 'NOW()') row[column] = 'NOW()';
+      else throw new Error(`unexpected assignment: ${column} = ${expr}`);
+    }
+    return row;
+  }
+
+  it('names the new account when the re-consent reports one', async () => {
+    const fetchImpl = vi.fn(() =>
+      Promise.resolve(
+        jsonResponse({
+          access_token: 'access',
+          id_token: idToken({ aud: CLIENT_ID, email: 'new@example.com' }),
+        }),
+      ),
+    );
+
+    const result = await complete('google', fetchImpl as unknown as typeof fetch);
+
+    expect(result.accountIdentity).toBe('new@example.com');
+    expect(rowAfterReconsent()['account_identity']).toBe('new@example.com');
+  });
+
+  it('clears the account when the re-consent reports none', async () => {
+    const fetchImpl = vi.fn(() =>
+      Promise.resolve(jsonResponse({ access_token: 'access', scope: 'read:user' })),
+    );
+
+    const result = await complete('github', fetchImpl as unknown as typeof fetch);
+
+    expect(result.accountIdentity).toBeNull();
+    expect(rowAfterReconsent()['account_identity']).toBeNull();
+  });
+
+  it('clears the account when the identity read fails', async () => {
     const fetchImpl = vi.fn((url: string) =>
       Promise.resolve(
         url === GOOGLE_METADATA.userinfo_endpoint
@@ -319,23 +389,21 @@ describe('a re-consent keeps the account the row has recorded', () => {
     );
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
-    await complete('google', fetchImpl as unknown as typeof fetch);
+    const result = await complete('google', fetchImpl as unknown as typeof fetch);
 
-    expect(storedRow()['account_identity']).toBeNull();
-    expect(onConflictSet()).toContain(
-      'account_identity = COALESCE(EXCLUDED.account_identity, oauth_tokens.account_identity)',
-    );
+    expect(result.accountIdentity).toBeNull();
+    expect(rowAfterReconsent()['account_identity']).toBeNull();
     warn.mockRestore();
   });
 
-  it('replaces the other token fields on every re-consent', async () => {
+  it('replaces the token and the account together', async () => {
     const fetchImpl = vi.fn(() => Promise.resolve(jsonResponse({ access_token: 'access' })));
 
     await complete('github', fetchImpl as unknown as typeof fetch);
 
-    const set = onConflictSet();
-    for (const column of ['access_token_enc', 'scopes_json', 'connected_at']) {
-      expect(set).toContain(`${column} = EXCLUDED.${column}`);
-    }
+    const row = rowAfterReconsent();
+    expect(row['access_token_enc']).toBe('enc:access');
+    expect(row['connected_at']).toBe('NOW()');
+    expect(row['account_identity']).toBeNull();
   });
 });

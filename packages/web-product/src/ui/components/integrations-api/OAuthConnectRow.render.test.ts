@@ -133,6 +133,40 @@ describe('OAuth-code binding card', () => {
   });
 });
 
+describe('the card after a re-consent', () => {
+  // The token row's account is the re-consent's own read: the new account, or
+  // NULL where the provider reported none or the read failed.
+  const reconsented = (account: string | null): OAuthBindingConnection => ({
+    account,
+    connectedAt: CONNECTED_AT,
+    scopes: ['openid', 'email'],
+    status: 'connected',
+  });
+
+  beforeEach(() => {
+    render(gmailBinding(reconsented('old@example.com')));
+    expect(statusLine()).toContain('Connected as old@example.com');
+  });
+
+  it('names the new account when the re-consent reports one', () => {
+    render(gmailBinding(reconsented('new@example.com')));
+    expect(statusLine()).toMatch(/^Connected as new@example\.com, since .+, scopes 2$/);
+  });
+
+  it('says a bare "Connected" when the re-consent reports no account', () => {
+    render(gmailBinding(reconsented(null)));
+    expect(statusLine()).toMatch(/^Connected, since .+, scopes 2$/);
+    expect(statusLine()).not.toContain('old@example.com');
+  });
+
+  it('says a bare "Connected" when the identity read failed', () => {
+    // A failed read stores NULL as well, so the card cannot name the old account.
+    render(gmailBinding(reconsented(null)));
+    expect(statusLine()).toMatch(/^Connected, since .+, scopes 2$/);
+    expect(statusLine()).not.toContain('old@example.com');
+  });
+});
+
 describe('describeOAuthConnection', () => {
   const at = () => 'T';
 
