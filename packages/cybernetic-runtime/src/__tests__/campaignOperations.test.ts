@@ -2,10 +2,13 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { z } from 'zod';
 import {
   SkillCampaignContractSchema,
+  registerCampaignStartMigration,
   registerRuntimeValidator,
   registerValidator,
   type Campaign,
+  type CampaignStartMigrationContext,
 } from '@aflow/schemas';
+import { buildCampaignRequiredErrorDetails } from '../campaignConfig.js';
 
 const mockGetCampaignInSpace = vi.fn();
 const mockEndCampaign = vi.fn();
@@ -184,6 +187,7 @@ describe('createContractedCampaign — objective (process) goal', () => {
       goal: OBJECTIVE_GOAL,
       contract: CONTRACT,
       config: { repoBindingId: 'repo-binding-123' },
+      startedBy: 'campaign_start',
     });
 
     expect(r.ok).toBe(true);
@@ -223,6 +227,7 @@ describe('createContractedCampaign — objective (process) goal', () => {
         goal: OBJECTIVE_GOAL,
         contract: CONTRACT,
         config: { repoBindingId },
+        startedBy: 'campaign_start',
       });
     }
 
@@ -249,6 +254,7 @@ describe('createContractedCampaign — objective (process) goal', () => {
       goal: OBJECTIVE_GOAL,
       contract: CONTRACT,
       config: { repoBindingId: 'repo-binding-123' },
+      startedBy: 'campaign_start',
     });
 
     expect(r).toMatchObject({ ok: true, created: false });
@@ -262,6 +268,7 @@ describe('createContractedCampaign — objective (process) goal', () => {
       goal: OBJECTIVE_GOAL,
       contract: CONTRACT,
       config: {},
+      startedBy: 'campaign_start',
     });
     expect(r).toMatchObject({ ok: false, code: 'CAMPAIGN_CONFIG_INVALID' });
   });
@@ -325,6 +332,7 @@ describe('campaign contract rules', () => {
       goal: NUMERIC_GOAL,
       contract: { fields: BOUNDED_FIELDS, validatorRefs: ['test.not-registered'] },
       config: { floor: 1, ceiling: 5 },
+      startedBy: 'campaign_start',
     });
     expect(started).toMatchObject({
       ok: false,
@@ -354,6 +362,111 @@ describe('campaign contract rules', () => {
       if (!result.success) {
         expect(result.error.issues.map((i) => i.path)).toEqual([['validatorRefs', 1]]);
       }
+    }
+  });
+});
+
+const MOVING_MIGRATION = 'test.archive-earlier-docs';
+const REFUSING_MIGRATION = 'test.refuse-start';
+const movingMigration = vi.fn((_ctx: CampaignStartMigrationContext) =>
+  Promise.resolve({
+    ok: true as const,
+    moved: [{ fromPath: '/live/a.json', toPath: '/archive/a.json' }],
+  }),
+);
+registerCampaignStartMigration(MOVING_MIGRATION, (ctx) => movingMigration(ctx));
+registerCampaignStartMigration(REFUSING_MIGRATION, () =>
+  Promise.resolve({ ok: false, message: 'another campaign still holds the ledger.' }),
+);
+
+describe('campaign start migrations', () => {
+  const NUMERIC_GOAL = {
+    type: 'numeric' as const,
+    metricKey: 'accuracy',
+    direction: 'maximize' as const,
+  };
+  const create = (startMigrations: string[], startedBy: 'campaign_start' | 'run_start') =>
+    createContractedCampaign(DB, TENANT, {
+      spaceId: SPACE,
+      slug: 'my-skill',
+      goal: NUMERIC_GOAL,
+      contract: { fields: BOUNDED_FIELDS, startMigrations },
+      config: { floor: 1, ceiling: 5 },
+      startedBy,
+    });
+
+  it('runs before the campaign is created and reports every doc it moved', async () => {
+    mockGetActiveCampaign.mockResolvedValue(null);
+    const created = campaign({ config: { floor: 1, ceiling: 5 } });
+    mockEnsureActiveCampaign.mockImplementation(() => {
+      expect(movingMigration).toHaveBeenCalledTimes(1);
+      return Promise.resolve(created);
+    });
+    const r = await create([MOVING_MIGRATION], 'campaign_start');
+    expect(r).toEqual({
+      ok: true,
+      campaign: created,
+      created: true,
+      migrations: [
+        {
+          migrationRef: MOVING_MIGRATION,
+          movedCount: 1,
+          moved: [{ fromPath: '/live/a.json', toPath: '/archive/a.json' }],
+        },
+      ],
+    });
+    expect(movingMigration.mock.calls[0]![0]).toMatchObject({
+      tenantId: TENANT,
+      spaceId: SPACE,
+      workflowSlug: 'my-skill',
+      config: { floor: 1, ceiling: 5 },
+    });
+  });
+
+  it('runs no migration when the campaign already exists', async () => {
+    mockGetActiveCampaign.mockResolvedValue(campaign({ config: { floor: 1, ceiling: 5 } }));
+    const r = await create([MOVING_MIGRATION], 'campaign_start');
+    expect(r).toMatchObject({ ok: true, created: false, migrations: [] });
+    expect(movingMigration).not.toHaveBeenCalled();
+  });
+
+  it('a refused or unregistered migration creates no campaign', async () => {
+    mockGetActiveCampaign.mockResolvedValue(null);
+    for (const ref of [REFUSING_MIGRATION, 'test.not-registered-migration']) {
+      const r = await create([MOVING_MIGRATION, ref], 'campaign_start');
+      expect(r, ref).toMatchObject({
+        ok: false,
+        code: 'CAMPAIGN_START_MIGRATION_REFUSED',
+        details: { migrationRef: ref },
+      });
+    }
+    expect(mockEnsureActiveCampaign).not.toHaveBeenCalled();
+  });
+
+  it('workflow.run.start cannot create a campaign whose start migrates the space', async () => {
+    mockGetActiveCampaign.mockResolvedValue(null);
+    const r = await create([MOVING_MIGRATION], 'run_start');
+    expect(r).toMatchObject({ ok: false, code: 'CAMPAIGN_START_REQUIRED' });
+    if (r.ok) throw new Error('expected a refusal');
+    expect(r.message).toContain('workflow.campaign.start');
+    expect(movingMigration).not.toHaveBeenCalled();
+    expect(mockEnsureActiveCampaign).not.toHaveBeenCalled();
+    expect(
+      buildCampaignRequiredErrorDetails('my-skill', {
+        fields: BOUNDED_FIELDS,
+        startMigrations: [MOVING_MIGRATION],
+      }).suggestedAction,
+    ).toMatchObject({ op: 'workflow.campaign.start', args: { slug: 'my-skill' } });
+  });
+
+  it('skill validation refuses an unregistered migration', () => {
+    const parse = (startMigrations: string[]) =>
+      SkillCampaignContractSchema.safeParse({ fields: BOUNDED_FIELDS, startMigrations });
+    expect(parse([MOVING_MIGRATION]).success).toBe(true);
+    const result = parse([MOVING_MIGRATION, 'test.not-registered-migration']);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.map((i) => i.path)).toEqual([['startMigrations', 1]]);
     }
   });
 });

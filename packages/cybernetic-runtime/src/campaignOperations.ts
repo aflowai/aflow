@@ -9,6 +9,7 @@
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type {
   Campaign,
+  CampaignStartMigrationReport,
   CampaignConfigChange,
   CampaignEndedReason,
   MaterializedSkillGoal,
@@ -19,6 +20,7 @@ import {
   resolveCampaignGoal,
   deriveGoalRef,
   extractCampaignIdentityValues,
+  getCampaignStartMigration,
   hashCampaignContract,
   PROCESS_CAMPAIGN_SCORE_METRIC,
 } from '@aflow/schemas';
@@ -133,7 +135,57 @@ export function materializeNumericCampaignGoal(
 }
 
 export type CreateContractedCampaignResult =
-  { ok: true; campaign: Campaign; created: boolean } | CampaignOpError;
+  | {
+      ok: true;
+      campaign: Campaign;
+      created: boolean;
+      migrations: CampaignStartMigrationReport[];
+    }
+  | CampaignOpError;
+
+/**
+ * Run the contract's start migrations in order, before the campaign exists.
+ * The first refusal stops the pass and creates no campaign. A ref that is not
+ * registered refuses too: a migration the contract declares and nothing runs
+ * would leave the space unmigrated under a new campaign.
+ */
+async function runCampaignStartMigrations(
+  db: PostgresJsDatabase,
+  tenantId: string,
+  params: {
+    spaceId: string;
+    slug: string;
+    contract: SkillCampaignContract;
+    config: Record<string, unknown>;
+  },
+): Promise<{ ok: true; reports: CampaignStartMigrationReport[] } | CampaignOpError> {
+  const reports: CampaignStartMigrationReport[] = [];
+  for (const ref of params.contract.startMigrations ?? []) {
+    const migration = getCampaignStartMigration(ref);
+    const result = migration
+      ? await migration({
+          tenantId,
+          spaceId: params.spaceId,
+          workflowSlug: params.slug,
+          config: params.config,
+          db,
+        })
+      : {
+          ok: false as const,
+          message: `The campaign start migration "${ref}" is not registered, so the space cannot be migrated.`,
+        };
+    if (!result.ok) {
+      return {
+        ok: false,
+        code: 'CAMPAIGN_START_MIGRATION_REFUSED',
+        message: `Skill "${params.slug}" cannot start this campaign: ${result.message} No campaign was created.`,
+        details: { migrationRef: ref, migrationsCompleted: reports },
+      };
+    }
+    reports.push({ migrationRef: ref, movedCount: result.moved.length, moved: result.moved });
+  }
+  return { ok: true, reports };
+}
 
 /**
  * Validate `config` against the manifest contract → materialize the goal →
@@ -156,6 +208,8 @@ export async function createContractedCampaign(
     goal: Exclude<SkillGoal, { type: 'subjective' }>;
     contract: SkillCampaignContract;
     config: Record<string, unknown>;
+    /** The operation creating the campaign. Start migrations run under `campaign_start` only. */
+    startedBy: 'campaign_start' | 'run_start';
   },
 ): Promise<CreateContractedCampaignResult> {
   const { spaceId, slug, goal, contract, config } = params;
@@ -210,8 +264,28 @@ export async function createContractedCampaign(
         details: { campaignId: existing.campaignId, changedKeys },
       };
     }
-    return { ok: true, campaign: existing, created: false };
+    return { ok: true, campaign: existing, created: false, migrations: [] };
   }
+
+  // A run started on the campaign it creates would carry no migration report
+  // back to its caller, so only workflow.campaign.start runs the migrations.
+  if ((contract.startMigrations ?? []).length > 0 && params.startedBy === 'run_start') {
+    return {
+      ok: false,
+      code: 'CAMPAIGN_START_REQUIRED',
+      message:
+        `Skill "${slug}" migrates the space when a new campaign of it starts, and reports what it ` +
+        `moved. Start the campaign with workflow.campaign.start({ slug: "${slug}", config }) using ` +
+        `these campaignConfig values, then call workflow.run.start({ slug: "${slug}" }) without campaignConfig.`,
+    };
+  }
+  const migrated = await runCampaignStartMigrations(db, tenantId, {
+    spaceId,
+    slug,
+    contract,
+    config: validation.validatedConfig,
+  });
+  if (!migrated.ok) return migrated;
 
   const campaign = await ensureActiveCampaign(db, tenantId, {
     spaceId,
@@ -232,18 +306,21 @@ export async function createContractedCampaign(
       message:
         `A concurrent campaign creation won with different config for: [${raceDiffs.join(', ')}] ` +
         `(campaignId: "${campaign.campaignId}"). Change mutable fields with workflow.campaign.update.`,
-      details: { campaignId: campaign.campaignId, changedKeys: raceDiffs },
+      details: {
+        campaignId: campaign.campaignId,
+        changedKeys: raceDiffs,
+        migrations: migrated.reports,
+      },
     };
   }
-  return { ok: true, campaign, created: true };
+  return { ok: true, campaign, created: true, migrations: migrated.reports };
 }
 
 // ---------------------------------------------------------------------------
 // Operations: start / update / end
 // ---------------------------------------------------------------------------
 
-export type StartCampaignResult =
-  { ok: true; campaign: Campaign; created: boolean } | CampaignOpError;
+export type StartCampaignResult = CreateContractedCampaignResult;
 
 /**
  * Start (or idempotently return) a campaign for a skill. Config-less skills
@@ -292,10 +369,17 @@ export async function startCampaign(
         scoreMetricKey: concreteGoal.metricKey,
         direction: concreteGoal.direction,
       }));
-    return { ok: true, campaign, created: existing === null };
+    return { ok: true, campaign, created: existing === null, migrations: [] };
   }
 
-  return createContractedCampaign(db, tenantId, { spaceId, slug, goal, contract, config });
+  return createContractedCampaign(db, tenantId, {
+    spaceId,
+    slug,
+    goal,
+    contract,
+    config,
+    startedBy: 'campaign_start',
+  });
 }
 
 export type UpdateCampaignResult =

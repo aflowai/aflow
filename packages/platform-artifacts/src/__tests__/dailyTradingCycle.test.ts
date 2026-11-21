@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { getSkillCatalogEntry } from '../skillCatalog.js';
 import {
+  archiveThesisLedger,
   armBudgetIssues,
   armTableIssues,
   campaignArmBudgets,
@@ -11,7 +12,9 @@ import {
   validateCampaignConfig,
   validateWhenExpression,
   validateWorkflowGraph,
+  type ThesisLedgerArchiveStore,
   type ThesisLedgerDoc,
+  type ThesisLedgerHolder,
 } from '@aflow/cybernetic-runtime';
 import { compileRestrictedPath, evaluateCount, evaluateEnum, evaluateValue } from '@aflow/lib';
 import {
@@ -1132,7 +1135,7 @@ describe('daily-trading-cycle hypothesis arms', () => {
         resolved: { confirmed: 0, falsified: 1, tactical_exit: 0, expired: 0, entry_failed: 1 },
       },
     ];
-    const table = { regimeName: CAMPAIGN.regimeName, legacyDocsExcluded: 0, arms: expected };
+    const table = { regimeName: CAMPAIGN.regimeName, arms: expected };
 
     it('is computed from a seeded ledger', () => {
       expect(
@@ -1146,7 +1149,7 @@ describe('daily-trading-cycle hypothesis arms', () => {
     it('a doc that names its campaign but no hypothesisId is refused on every slot, never skipped', () => {
       const output = (armTable: unknown) => ({ armTable, snapshotDoc: { armTable } });
       expect(readLedgerTheses([...ledger, bareDoc]).refused).toEqual([
-        { path: bareDoc.path, reason: 'it has no hypothesisId', writtenThisCycle: false },
+        { path: bareDoc.path, reason: 'it has no hypothesisId', origin: 'earlier' },
       ]);
       // The arm of a doc this cycle did not open is unknown to the agent, so
       // no remedy asks it to write one.
@@ -1249,82 +1252,197 @@ describe('daily-trading-cycle hypothesis arms', () => {
       };
     };
 
-    describe('after a campaign written before hypothesis arms', () => {
-      // Docs the old skill version wrote: no regimeName, no hypothesisId.
+    describe('the campaign start migration', () => {
+      // Docs the skill wrote before hypothesis arms: no regimeName, no hypothesisId.
       const legacyOpen: ThesisLedgerDoc = {
         path: '/portfolio/theses/open/legacy-1.json',
-        content: JSON.stringify({ thesisId: 'legacy-1', openedTradingDay: '2026-07-14' }),
+        content: JSON.stringify({ thesisId: 'legacy-1', openedTradingDay: '2026-07-08' }),
       };
-      const legacyResolved = (thesisId: string): ThesisLedgerDoc => ({
-        path: `/portfolio/theses/resolved/${thesisId}.json`,
-        content: JSON.stringify({ thesisId, openedTradingDay: '2026-07-08', outcome: 'expired' }),
-      });
-      const withLegacy = [...ledger, legacyOpen, legacyResolved('legacy-0')];
+      const legacyResolved: ThesisLedgerDoc = {
+        path: '/portfolio/theses/resolved/legacy-0.json',
+        content: JSON.stringify({ thesisId: 'legacy-0', openedTradingDay: '2026-07-07' }),
+      };
+      // Docs of the campaign before, under an arm id this campaign lacks.
+      const priorOpen = openDoc('aapl-9', 'mean-reversion', '2026-07-10', 'momentum-0');
+      const priorResolved: ThesisLedgerDoc = {
+        path: '/portfolio/theses/resolved/msft-9.json',
+        content: JSON.stringify({
+          thesisId: 'msft-9',
+          hypothesisId: 'mean-reversion',
+          regimeName: 'momentum-0',
+          openedTradingDay: '2026-07-09',
+          outcome: 'falsified',
+        }),
+      };
+      const priorCycle: ThesisLedgerDoc = {
+        path: '/portfolio/theses/cycles/2026-07-10-after_close.json',
+        content: '{}',
+      };
+      const earlier = [legacyOpen, legacyResolved, priorOpen, priorResolved];
+      const startedAt = new Date('2026-07-13T21:05:09.123Z');
+      const folder = `/portfolio/archive/theses/20260713T210509Z-${CAMPAIGN.regimeName}/`;
+      const isLive = (path: string) =>
+        path.startsWith('/portfolio/theses/open/') ||
+        path.startsWith('/portfolio/theses/resolved/');
 
-      it('excludes the legacy docs from every arm and reports how many', () => {
-        const reading = readLedgerTheses(withLegacy);
-        expect(reading.refused).toEqual([]);
-        expect(reading.legacy.map((doc) => doc.path)).toEqual([
-          legacyOpen.path,
-          '/portfolio/theses/resolved/legacy-0.json',
-        ]);
-        const output = (armTable: unknown) => ({ armTable, snapshotDoc: { armTable } });
-        expect(armTableIssues(output({ ...table, legacyDocsExcluded: 2 }), withLegacy)).toEqual([]);
-        expect(armTableIssues(output(table), withLegacy)).toEqual([
-          expect.objectContaining({ path: ['armTable', 'legacyDocsExcluded'] }),
-        ]);
-        expect(armTableIssues(output(null), withLegacy)).toEqual([]);
+      /** A space's memory docs, moved the way the database store moves them. */
+      function spaceStore(docs: readonly ThesisLedgerDoc[], holders: ThesisLedgerHolder[] = []) {
+        const space = new Map(docs.map((doc) => [doc.path, doc.content]));
+        const store: ThesisLedgerArchiveStore = {
+          ledgerHolders: () => Promise.resolve(holders),
+          moveLiveDocs: (plan) => {
+            const moves = plan([...space.keys()].filter(isLive));
+            for (const move of moves) {
+              space.set(move.toPath, space.get(move.fromPath) ?? null);
+              space.delete(move.fromPath);
+            }
+            return Promise.resolve(moves);
+          },
+        };
+        const docsNow = (): ThesisLedgerDoc[] =>
+          [...space].map(([path, content]) => ({ path, content }));
+        return { store, docsNow };
+      }
+      const migrate = (store: ThesisLedgerArchiveStore) =>
+        archiveThesisLedger(store, { regimeName: CAMPAIGN.regimeName, startedAt });
+
+      it('moves the legacy and earlier-campaign docs in one pass and reports each move', async () => {
+        const { store, docsNow } = spaceStore([...earlier, priorCycle]);
+        expect(await migrate(store)).toEqual({
+          ok: true,
+          moved: [
+            { fromPath: priorOpen.path, toPath: `${folder}open/aapl-9.json` },
+            { fromPath: legacyOpen.path, toPath: `${folder}open/legacy-1.json` },
+            { fromPath: legacyResolved.path, toPath: `${folder}resolved/legacy-0.json` },
+            { fromPath: priorResolved.path, toPath: `${folder}resolved/msft-9.json` },
+          ],
+        });
+        const after = new Map(docsNow().map((doc) => [doc.path, doc.content]));
+        expect([...after.keys()].filter(isLive)).toEqual([]);
+        for (const doc of earlier) {
+          const name = doc.path.replace('/portfolio/theses/', '');
+          expect(after.get(`${folder}${name}`), doc.path).toBe(doc.content);
+        }
+        expect(after.get(priorCycle.path)).toBe(priorCycle.content);
+        expect(await migrate(store)).toEqual({ ok: true, moved: [] });
       });
 
-      it('runs the cycle end to end on the new campaign with the legacy docs in the ledger', () => {
-        const scope = { hypotheses: CAMPAIGN.hypotheses, docs: withLegacy };
+      it('refuses while another campaign keeps its theses in the ledger, and moves nothing', async () => {
+        const holder = { campaignId: 'c-1', workflowSlug: CYCLE_SLUG, regimeName: 'momentum-0' };
+        const { store, docsNow } = spaceStore(earlier, [holder]);
+        const result = await migrate(store);
+        expect(result).toMatchObject({ ok: false });
+        if (result.ok) throw new Error('expected a refusal');
+        expect(result.message).toContain('End that campaign with workflow.campaign.end');
+        expect(docsNow()).toEqual(earlier);
+      });
+
+      it('without the migration the runtime refuses a legacy doc, with a remedy its reader can carry out', () => {
+        const docs = [...ledger, legacyOpen, legacyResolved];
+        const recordIssues = armTableIssues(recordOutput('open', null), docs);
+        expect(recordIssues.map((issue) => issue.message)).toEqual([
+          expect.stringMatching(
+            new RegExp(`^The thesis ledger doc ${legacyOpen.path}.*Stop and report its path\\.$`),
+          ),
+          expect.stringMatching(
+            new RegExp(
+              `^The thesis ledger doc ${legacyResolved.path}.*Stop and report its path\\.$`,
+            ),
+          ),
+        ]);
+        const scope = { hypotheses: CAMPAIGN.hypotheses, docs };
+        const decideIssues = armBudgetIssues(decision('open', [thesis('aapl-2', null)]), scope);
+        expect(decideIssues).toHaveLength(2);
+        for (const issue of decideIssues) {
+          expect(issue.message).toContain('Submit no theses and name the doc in decisionRationale');
+        }
+      });
+
+      it('runs the upgrade cycle end to end, record and decide passing, with the archive in the space', async () => {
+        const { store, docsNow } = spaceStore([...earlier, priorCycle]);
+        await migrate(store);
+        const space = docsNow();
+        const scope = { hypotheses: CAMPAIGN.hypotheses, docs: space };
         expect(armBudgetIssues(decision('open', [thesis('aapl-2', null)]), scope)).toEqual([]);
 
-        // The open cycle opens a thesis of the new campaign and resolves the
-        // legacy one, whose resolved doc copies a doc that names no arm.
-        const afterOpen = [
-          ...ledger,
-          openDoc('aapl-2', 'breakout', '2026-07-14'),
-          legacyResolved('legacy-1'),
-          legacyResolved('legacy-0'),
-        ];
-        const openSchema = schemaFor('open', {
-          theses: [thesis('aapl-2', null)],
-          resolutions: [{ thesisId: 'legacy-1' }],
-        });
-        const writes = {
-          opened: ['aapl-2'],
-          resolved: [{ thesisId: 'legacy-1', outcome: 'expired' }],
-        };
-        const openRecord = recordOutput('open', null, writes);
-        expect(refuses(openSchema, openRecord)).toBe(false);
+        const afterOpen = [...space, openDoc('aapl-2', 'breakout', '2026-07-14')];
+        const openRecord = recordOutput('open', null, { opened: ['aapl-2'] });
+        expect(refuses(schemaFor('open', { theses: [thesis('aapl-2', null)] }), openRecord)).toBe(
+          false,
+        );
         expect(armTableIssues(openRecord, afterOpen)).toEqual([]);
-        const invented = recordOutput('open', null, {
-          ...writes,
-          resolved: [{ thesisId: 'legacy-1', hypothesisId: 'breakout', outcome: 'expired' }],
-        });
-        expect(armTableIssues(invented, afterOpen)).toEqual([
-          expect.objectContaining({ path: ['cycleDoc', 'thesesResolved', 0, 'hypothesisId'] }),
-        ]);
 
-        const [breakout, gapFade] = expected;
+        const afterClose = [...space, resolvedDoc('aapl-2', 'breakout', 'falsified')];
+        const noResolutions = { confirmed: 0, falsified: 0, tactical_exit: 0, expired: 0 };
         const closeTable = {
-          ...table,
-          legacyDocsExcluded: 2,
-          arms: [{ ...breakout!, opened: 5, open: 2 }, gapFade],
+          regimeName: CAMPAIGN.regimeName,
+          arms: [
+            {
+              hypothesisId: 'breakout',
+              opened: 1,
+              open: 0,
+              resolved: { ...noResolutions, falsified: 1, entry_failed: 0 },
+            },
+            {
+              hypothesisId: 'gap-fade',
+              opened: 0,
+              open: 0,
+              resolved: { ...noResolutions, entry_failed: 0 },
+            },
+          ],
         };
-        const closeRecord = recordOutput('after_close', closeTable);
-        expect(refuses(schemaFor('after_close'), closeRecord)).toBe(false);
-        expect(armTableIssues(closeRecord, afterOpen)).toEqual([]);
+        const closeRecord = recordOutput('after_close', closeTable, {
+          resolved: [{ thesisId: 'aapl-2', hypothesisId: 'breakout', outcome: 'falsified' }],
+        });
+        const closeSchema = schemaFor('after_close', { resolutions: [{ thesisId: 'aapl-2' }] });
+        expect(refuses(closeSchema, closeRecord)).toBe(false);
+        expect(armTableIssues(closeRecord, afterClose)).toEqual([]);
       });
 
-      it('refuses a doc this cycle opened without the arm fields, naming the remedy it can carry out', () => {
+      it('refuses a resolved doc this cycle wrote without the arm fields, naming the rewrite', () => {
+        const bareResolved: ThesisLedgerDoc = {
+          path: '/portfolio/theses/resolved/aapl-1.json',
+          content: JSON.stringify({
+            thesisId: 'aapl-1',
+            openedTradingDay: '2026-07-10',
+            outcome: 'falsified',
+          }),
+        };
+        const docs = [
+          ...ledger.filter((doc) => doc.path !== '/portfolio/theses/open/aapl-1.json'),
+          bareResolved,
+        ];
+        const resolved = [{ thesisId: 'aapl-1', hypothesisId: 'breakout', outcome: 'falsified' }];
+        // The table the ledger would give with the bare doc left out.
+        const [breakout, gapFade] = expected;
+        const without = {
+          ...table,
+          arms: [{ ...breakout!, opened: 3, open: 0 }, gapFade],
+        };
+        for (const [slot, armTable] of [
+          ['open', null],
+          ['after_close', without],
+        ] as const) {
+          expect(armTableIssues(recordOutput(slot, armTable, { resolved }), docs), slot).toEqual([
+            expect.objectContaining({
+              message: expect.stringContaining(
+                `${bareResolved.path} cannot be counted: it has no regimeName, hypothesisId`,
+              ) as string,
+            }),
+          ]);
+          expect(
+            armTableIssues(recordOutput(slot, armTable, { resolved }), docs)[0]!.message,
+          ).toContain('This cycle resolved it. Rewrite it as the full open doc of its thesis');
+        }
+      });
+
+      it('refuses a doc this cycle opened without the arm fields, naming the rewrite', () => {
         const bare = {
           path: '/portfolio/theses/open/aapl-2.json',
           content: JSON.stringify({ thesisId: 'aapl-2', openedTradingDay: '2026-07-14' }),
         };
         const record = recordOutput('open', null, { opened: ['aapl-2'] });
-        expect(armTableIssues(record, [...withLegacy, bare])).toEqual([
+        expect(armTableIssues(record, [...ledger, bare])).toEqual([
           expect.objectContaining({
             message: expect.stringContaining('This cycle opened it') as string,
           }),

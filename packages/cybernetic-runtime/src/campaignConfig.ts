@@ -253,6 +253,20 @@ export function buildCampaignRequiredErrorDetails(
   slug: string,
   contract: SkillCampaignContract,
 ): CampaignRequiredErrorDetails {
+  if ((contract.startMigrations ?? []).length > 0) {
+    return {
+      campaignContract: deriveCampaignContractJsonSchema(contract),
+      suggestedAction: {
+        op: 'workflow.campaign.start',
+        args: { slug, config: {} },
+        preconditions:
+          'Collect every field in details.campaignContract from the operator in ONE structured round. ' +
+          'If you ask via human.chat.ask, set its inputSchema to details.campaignContract verbatim. ' +
+          'Then call workflow.campaign.start with the collected values as `config`. Its start migrates ' +
+          'the space and reports what moved. Then re-issue workflow.run.start({ slug }).',
+      },
+    };
+  }
   return {
     campaignContract: deriveCampaignContractJsonSchema(contract),
     suggestedAction: {

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { WorkflowModeSchema } from '../operations/workflow.js';
 import { stableHash } from '../utils/stableHash.js';
 import { listRegisteredValidatorNames, lookupValidator } from '../runtime/validatorRegistry.js';
+import { listCampaignStartMigrationNames } from '../runtime/campaignStartMigrations.js';
 import { CAMPAIGN_FIELD_KEY_RE, CAMPAIGN_GOAL_DIRECTIONS, campaignParam } from './campaignRef.js';
 
 // ============================================================================
@@ -295,6 +296,14 @@ export const SkillCampaignContractSchema = z
      * Schema cannot express, such as one field bounded by another.
      */
     validatorRefs: z.array(z.string().min(1).max(120)).max(10).optional(),
+    /**
+     * Registered campaign start migrations (`campaignStartMigrations`), run in
+     * order by `workflow.campaign.start` before it creates a new campaign.
+     * Each is a one-pass structural step over the space, such as moving docs
+     * of earlier campaigns out of the paths the runs read. The start output
+     * reports what each one moved.
+     */
+    startMigrations: z.array(z.string().min(1).max(120)).max(10).optional(),
   })
   .strict()
   .superRefine((contract, ctx) => {
@@ -347,6 +356,21 @@ export const SkillCampaignContractSchema = z
             kind === 'runtime'
               ? `campaign validatorRefs[${i}] "${ref}" is a runtime validator. A campaign rule reads the config alone, so it must be a pure validator. Known pure validators: [${pure.join(', ')}].`
               : `campaign validatorRefs[${i}] "${ref}" is not a registered validator. Known pure validators: [${pure.join(', ')}].`,
+        });
+      }
+    }
+
+    // Like the refs above, the migration registry is empty in schema-only
+    // contexts, so the rule skips there.
+    const migrations = contract.startMigrations ?? [];
+    const knownMigrations = listCampaignStartMigrationNames();
+    if (migrations.length > 0 && knownMigrations.length > 0) {
+      for (const [i, ref] of migrations.entries()) {
+        if (knownMigrations.includes(ref)) continue;
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['startMigrations', i],
+          message: `campaign startMigrations[${i}] "${ref}" is not a registered campaign start migration. Known migrations: [${knownMigrations.join(', ')}].`,
         });
       }
     }

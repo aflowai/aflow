@@ -109,7 +109,6 @@ export function armBudgetIssues(
   // ledger the gate cannot count.
   if (!parsed.success || parsed.data.theses.length === 0) return [];
   const { tradingDay, regimeName, theses } = parsed.data;
-  // A legacy doc names no campaign, so it holds no earlier thesis of any arm.
   const ledger = readLedgerTheses(scope.docs);
   // A ledger doc that cannot be counted could hide an arm's earlier theses.
   if (ledger.refused.length > 0) return refusedLedgerDocIssues(ledger.refused, 'decide');

@@ -787,6 +787,7 @@ export function createWorkflowOperationRegistrations(
         pitfalls: [
           'config must cover every declared contract field (all are required); values are JSON-Schema validated per field',
           'Identity fields are immutable — to work on a different instance, start another campaign',
+          'A skill whose contract names startMigrations runs them when this call creates the campaign, and `migrations` reports every doc each one moved. Tell the operator what moved.',
         ],
         minimalExampleInput: {
           slug: 'kaggle-competition-optimizer',
