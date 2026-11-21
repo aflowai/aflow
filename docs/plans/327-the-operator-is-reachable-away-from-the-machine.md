@@ -49,7 +49,7 @@
 - The operator accepts or amends D1 to D7 from this card and the decisions under it.
 - Each phase meets its exit in §5, and the proofs in §6 pass.
 
-**Status:** Built, exits unproven. The design was reviewed against the code on main at `b4426a4a`. The code for P0, P1 and P2 is written, and their as-built notes are in §5. No exit of P0, P1 or P2 is proven yet, because each needs a live Slack workspace and a phone. P3 is not built.
+**Status:** Built, exits unproven. The design was reviewed against the code on main at `b4426a4a`. The code for P0, P1, P2 and P2b is written, and their as-built notes are in §5. No exit of P0, P1, P2 or P2b is proven yet, because each needs a live Slack workspace and a phone. P3 is not built.
 
 **Builds on:** Plan 331 (the resident Helmsman, which watches the space and decides when the operator must act), Plan 324 (how the Helmsman finds an operation without carrying it), Plan 253 (the write approval card and its grant), the host lane (an executor that ships outside the image and is composed only where it is configured), and `yarn mcp:setup` (a local client of the API that holds its own key).
 
@@ -156,11 +156,13 @@ _Rejected — a new session for every direct message, with no thread:_ each mess
 
 _Rejected — a push from the platform when a session pauses:_ that is a hook that fires when a run stops, which §2 forbids. It would also need code in the engine for one channel. Watching the events of a session it started needs neither.
 
-**Decision — a run's message owns its thread.** A channel speaks for a space, and the operator must always know which space is talking. Each `channel.message.send` that posts records a thread in the run's space, with the run's id and the text it sent. When the step's session is a Helmsman root session, the thread names that session too. The app reads it with `GET /v1/sessions/:sessionId`, which now carries `parentSessionId`. A session it cannot read names none. A reply under that message stays in the thread's space. It resumes the recorded session when that session is paused on the operator. Otherwise it starts a Helmsman conversation in that space. Its first input carries the reply, the run's id and the message. The thread then continues that conversation. A run with no space sends nothing (`CHANNEL_NO_SPACE`). The reply must still come from the linked operator, and late messages, claims and idempotency are unchanged.
+**Decision — a run's message owns its thread (P2b).** A channel speaks for a space, and the operator must always know which space is talking. Each `channel.message.send` that posts records a thread in the run's space, with the run's id and the text it sent. When the step's session is a Helmsman root session, the thread names that session too. The app reads it with `GET /v1/sessions/:sessionId`, which now carries `parentSessionId`. A session it cannot read names none. A reply under that message stays in the thread's space. It resumes the recorded session when that session is paused on the operator. A pause the session has since resumed is not one, so a message sent during a resumed turn is never answered at the earlier pause. A resume refused with `409` because the pause moved on as it landed starts a conversation with the reply, and drops nothing. Otherwise it starts a Helmsman conversation in that space. Its first input carries the reply, the run's id and the message. The thread then continues that conversation. A run with no space sends nothing (`CHANNEL_NO_SPACE`). The reply must still come from the linked operator, and late messages, claims and idempotency are unchanged.
 
-**Decision — every message names its space.** Each send, and each post into a thread whose space the app knows, opens with the space's name in brackets: `[Trading Joe] …`. That holds the Helmsman's answers and notes and the app's own notices in the thread. The name comes from `GET /v1/spaces/:spaceId` and is kept five minutes. A read that fails keeps the last name read, and a space never read shows its id. A card's notices under the card, and a message with no thread yet, name no space.
+**Decision — every message names its space (P2b).** Each send, and each post into a thread whose space the app knows, opens with the space's name in brackets: `[Trading Joe] …`. That holds the Helmsman's answers and notes and the app's own notices in the thread. The name comes from `GET /v1/spaces/:spaceId` and is kept five minutes. A read that fails keeps the last name read, and a space never read shows its id. A card's notices under the card, and a message with no thread yet, name no space.
 
 _Rejected — the home space for every reply:_ a reply under a message from another space then opened a conversation in the wrong space. The operator could not tell which space answered.
+
+_Rejected — the name on the first message of a thread only:_ Slack shows each message alone in a notification and on the lock screen. An answer late in a thread would then reach the phone with no space named. A prefix on each message costs one cached read per space.
 
 **Decision — the watch has no time limit.** It follows the turn until the reply comes or the session ends, however long the turn takes. A read that keeps failing is one early exit. Ten failed reads in a row stop the watch. The first wait is four seconds, and each wait doubles up to a minute, so the stop comes after about six minutes. The thread is told, and it is `unread` until a reply or a restart watches it again. A session the event route no longer finds (`404`) ends the thread.
 
@@ -288,6 +290,10 @@ _Exit:_ an API task in a skill run parks on a medium-tier write approval. `workf
 
 _Exit:_ "status?" sent from the phone gets the Helmsman's answer in its thread. A reply in that thread continues the same session. A redelivered event is handled once. A message held back past ten minutes asks before it runs.
 
+**P2b — Space.** D4's two decisions that a run's message owns its thread and that every message names its space.
+
+_Exit:_ a workflow run in a space other than the home space sends the operator a message. The phone receives it with that space's name in brackets. A reply under it starts a Helmsman conversation in that space, not the home space, and the answer arrives in the thread under the same name. A Helmsman conversation paused on the operator sends a message, and a reply under it continues that conversation. A message the Helmsman sends during a turn that resumed an earlier pause gets a reply that is never refused as moved on.
+
 **P3 — Later, each its own decision:** the server-side trust level (D5), history catch-up after the laptop sleeps, several profiles on one install (Plan 335), the hosted edition's Slack app, and other providers.
 
 _Exit:_ each of those five items has one of two records. It is either a plan of its own in `docs/plans/` with its own exit, or a refusal with its reason in §8 of this plan. A reader confirms the exit by finding one record for each item.
@@ -297,6 +303,7 @@ _Exit:_ each of those five items has one of two records. It is either a plan of 
 - **P0 — re-cut.** Line 127 left out the Redis identity, the dispatch refusal and the import guard. Line 129's exit asks for D7's proofs, which need all three, so they move into P0. The exit now names the credential, not the file (D1). It also proves D2's repeat rule.
 - **P1 — confirmed, with one exit added.** A skill run's write approval is a `write_approval` item of origin `workflow_task`, built by `buildWriteApprovalCard` (`packages/server-runtime/src/services/actionCenter/sources/workflowWriteApprovalSource.ts`). Its resolve reads only the resolver's user id, so it accepts the app's key. An approval runs the paused task again, so the exit says that rather than "the run resumes". The added exit proves the plan-item row of the D3 table.
 - **P2 — confirmed.** The exit stands. D4's amendment changes the calls, not what is proven.
+- **P2b — added.** The two space decisions came after P2 was built. P2's exit checks a direct message only, so no exit checked that a reply under a run's message stays in that space. P2b's exit does.
 - **P3 — confirmed.** The trust level matters more than line 139 implies. Without it, nothing the resident asks through the plan board can be decided from the phone (D3 review). It should be the first P3 item decided.
 
 **P0 as built.**
@@ -342,6 +349,14 @@ _Exit:_ each of those five items has one of two records. It is either a plan of 
 - **PR #279's three findings.** A `409` is "already decided" only when the item is no longer open. The app takes the item the route sent back, or reads it again when none came. An open item gets a card that says it changed at Aflow, is still open and needs the operator there, and a later tap is answered "out of date". An item it cannot read again leaves the card open and asks the operator to check at Aflow. A tap on a message with no card record is answered in its thread: the app holds no record, nothing was decided, and the Action Center decides it. A tap on a button a card does not offer is answered too. The pitfall on `channel.message.send` now says the repeat rule matches the text and the `itemId` together.
 - **Not proven here.** P2's exit needs a Slack workspace, a phone and a running Helmsman, and none ran in this build. `conversation.test.ts` holds §6's P2 proofs through the app's own API client, against a fake Aflow that keeps the session routes' rules. A start in mode `chat` or a resume without the paused step is refused there, and none is.
 
+**P2b as built.**
+
+- **The thread on send.** `channel.message.send` records a `posted` thread after it posts, in the run's space, with the run's id and its text. The step's session is named when `GET /v1/sessions/:sessionId` shows a Helmsman target and no `parentSessionId`. A run with no space fails with `CHANNEL_NO_SPACE` before anything is claimed.
+- **The reply.** A reply under a `posted` thread reads the session's newest events. A pause that asks the operator and that no later `SessionResumed` follows is resumed with the reply as typed. Any other turn starts a conversation in the thread's space, whose first input carries the reply, the run's id and the message (`postedReplyText`). A resume refused with `409` starts that conversation under its own idempotency key.
+- **The name.** `spaceNames.ts` reads the name and keeps it five minutes. Each send, card head and thread post opens with it, and the cut to Slack's limit leaves room for it.
+- **The store.** Migration `0005-posted-threads` adds `runId` and `postedText` to each thread, and a thread's `sessionId` may be null.
+- **Not proven here.** P2b's exit needs a Slack workspace and a phone. `postedThread.test.ts` holds its proofs through the app's own API client, against the fake Aflow.
+
 ## 6. How it is proven
 
 - **Nothing without a call.** With the app running, a run that never calls `channel.message.send` sends nothing and writes no record in the app's store.
@@ -356,7 +371,7 @@ _Exit:_ each of those five items has one of two records. It is either a plan of 
 - **A stranger gets nothing.** A message from an unlinked Slack user runs no turn and stores no text.
 - **The phone reaches the Helmsman.** A message from the linked operator starts a Helmsman conversation, and the answer arrives in its thread. A reply in that thread continues the same session.
 - **The session routes' rules hold.** The start uses mode `api` from the owner's key, and each resume names the paused step.
-- **A run's message owns its thread.** A reply under a message a paused Helmsman conversation sent resumes that session. A reply under any other run's message starts a conversation in that run's space, not the home space, with the reply, the run's id and the message as its first input (`postedThread.test.ts`).
+- **A run's message owns its thread.** A reply under a message a paused Helmsman conversation sent resumes that session. A reply under any other run's message starts a conversation in that run's space, not the home space, with the reply, the run's id and the message as its first input. A reply under a message sent during a resumed turn is never resumed at the earlier pause (`postedThread.test.ts`).
 - **Every message names its space.** Sends, cards, answers, notes and thread notices open with `[space name]`.
 - **Once.** A redelivered event starts no second conversation and posts no second answer.
 - **Late asks first.** A message older than ten minutes runs only on **Run it now**, and the Helmsman reads when it was sent.

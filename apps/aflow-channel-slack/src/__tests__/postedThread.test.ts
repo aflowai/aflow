@@ -14,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createAflowApi, type AflowApi } from '../aflowApi.js';
 import type { ChannelSlackConfig } from '../config.js';
-import { Conversations, LATE_QUESTION, postedReplyText } from '../conversation.js';
+import { Conversations, LATE_QUESTION, MOVED_ON, postedReplyText } from '../conversation.js';
 import { answerInbound } from '../inbound.js';
 import { STRANGER_REPLY } from '../linking.js';
 import { ChannelMessageSendHandler } from '../sendHandler.js';
@@ -154,6 +154,88 @@ describe('a reply under a message a Helmsman conversation sent', () => {
     const started = store.threadAt(message.channel, message.ts);
     expect(started?.sessionId).not.toBe(sessionId);
     expect(started?.status).toBe('waiting');
+  });
+
+  describe('sent during a turn that resumed an earlier pause', () => {
+    /** A Helmsman session paused on the operator, resumed at Aflow, that sends while its turn runs. */
+    async function sentDuringResumedTurn() {
+      const sessionId = aflow.openSession({ pausedOnInput: true });
+      const stale = aflow.sessions.get(sessionId)?.pausedStep;
+      aflow.holdAnswers = true;
+      aflow.resumeAtAflow(sessionId);
+      const message = await post('Deploying the fix now.', { sessionId });
+      return { sessionId, stale, message };
+    }
+
+    const texts = () => slack.posts.map((posted) => posted.text);
+
+    it('starts a conversation in the space while the turn runs, and resumes no stale pause', async () => {
+      const { message } = await sentDuringResumedTurn();
+      aflow.holdAnswers = false;
+
+      const answered = await reply(message, 'tell me when it is live');
+
+      expect(answered).toEqual({ outcome: 'started', watched: 'answered' });
+      expect(aflow.resumes).toEqual([]);
+      expect(aflow.refusals).toEqual([]);
+      expect(aflow.starts.map((start) => start.spaceId)).toEqual([SPACE]);
+      const input = (aflow.starts[0]?.body['input'] as { input: string }).input;
+      expect(input.startsWith('tell me when it is live')).toBe(true);
+      expect(input).toContain('Deploying the fix now.');
+      expect(texts()).not.toContain(`${PREFIX}${MOVED_ON}`);
+    });
+
+    it('resumes the session where it paused on the operator again', async () => {
+      const { sessionId, stale, message } = await sentDuringResumedTurn();
+      aflow.answerHeld();
+      aflow.holdAnswers = false;
+      const current = aflow.sessions.get(sessionId)?.pausedStep;
+      expect(current).not.toBe(stale);
+
+      const answered = await reply(message, 'good, roll it out');
+
+      expect(answered).toEqual({ outcome: 'continued', watched: 'answered' });
+      expect(aflow.starts).toEqual([]);
+      expect(aflow.refusals).toEqual([]);
+      expect(aflow.resumes).toEqual([
+        {
+          sessionId,
+          body: { stepExecutionId: current, input: { input: 'good, roll it out' } },
+        },
+      ]);
+      expect(slack.posts.at(-1)?.text).toBe(`${PREFIX}The Helmsman answers: good, roll it out`);
+    });
+
+    it('starts a conversation with the reply when the pause moves on as the resume lands', async () => {
+      const sessionId = aflow.openSession({ pausedOnInput: true });
+      const message = await post('Two deploys failed overnight.', { sessionId });
+      const racing: AflowApi = {
+        ...api,
+        resumeConversation: (...args) => {
+          aflow.movePause(sessionId);
+          return api.resumeConversation(...args);
+        },
+      };
+      conversations = new Conversations({
+        store,
+        slack,
+        api: racing,
+        aflowUserId: OWNER,
+        now: () => NOW,
+        sleep: () => new Promise<void>((done) => setImmediate(done)),
+        pollMs: 0,
+      });
+
+      const answered = await reply(message, 'retry the first one');
+
+      expect(answered).toEqual({ outcome: 'started', watched: 'answered' });
+      expect(aflow.refusals).toEqual(['not paused at that step']);
+      expect(aflow.starts).toHaveLength(1);
+      const input = (aflow.starts[0]?.body['input'] as { input: string }).input;
+      expect(input.startsWith('retry the first one')).toBe(true);
+      expect(texts()).not.toContain(`${PREFIX}${MOVED_ON}`);
+      expect(store.threadAt(message.channel, message.ts)?.sessionId).not.toBe(sessionId);
+    });
   });
 });
 

@@ -529,8 +529,10 @@ export class Conversations {
   /**
    * The first reply under a run's message, for a reply that holds the thread's
    * claim. It resumes the Helmsman conversation that sent the message when
-   * that session is paused on the operator. Otherwise it starts one in the
-   * thread's space, which the thread then continues.
+   * that session is paused on the operator now. A pause the session has since
+   * resumed is not one: a message sent during a resumed turn follows it in the
+   * events. Otherwise the reply starts a conversation in the thread's space,
+   * which the thread then continues.
    */
   private async continuePosted(
     thread: ThreadRecord,
@@ -542,6 +544,16 @@ export class Conversations {
       const turn = await this.openTurn(thread);
       if (turn.kind === 'pause') return this.resumeAt(thread, turn.step, text, key, say);
     }
+    return this.startPosted(thread, text, key, say);
+  }
+
+  /** Starts a conversation in a posted thread's space, which the thread then continues. */
+  private async startPosted(
+    thread: ThreadRecord,
+    text: string,
+    key: string,
+    say: (line: string) => Promise<unknown>,
+  ): Promise<ConverseResult> {
     const started = await this.deps.api.startConversation(
       thread.spaceId,
       postedReplyText(text, thread),
@@ -618,8 +630,14 @@ export class Conversations {
         },
         this.now(),
       );
-      // A run's message keeps its thread open, so the next reply starts a conversation there.
       const posted = thread.status === 'posted';
+      // The pause moved on between the read and the resume, so the reply starts a
+      // conversation in the space rather than be dropped.
+      // Its own key, because the refused resume already carried the event's.
+      if (posted && resumed.status === 409) {
+        return this.startPosted(thread, text, `${key}:start`, say);
+      }
+      // A run's message keeps its thread open, so the next reply starts a conversation there.
       if (!posted && !resumed.retryable && (await this.openTurn(thread)).kind === 'ended') {
         return this.ended(thread, say);
       }
@@ -693,6 +711,8 @@ export class Conversations {
     if (!asksTheOperator(last) || step === undefined || step === thread.resumedStepExecutionId) {
       return { kind: 'none' };
     }
+    // The events name a pause until the next one, so a pause resumed at Aflow is not open.
+    if (resumedSince(page.events, last)) return { kind: 'none' };
     return { kind: 'pause', step };
   }
 
