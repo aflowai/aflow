@@ -45,6 +45,7 @@ vi.mock('./use-repo-bindings.js', () => ({
 }));
 vi.mock('./use-oauth-connections.js', () => ({
   OAUTH_CONNECTIONS_KEY: ['users', 'me', 'oauth-connections'],
+  isSpaceBindingsQuery: () => false,
   useOAuthConnections: () => ({ connections: userConnections, isLoading: false }),
 }));
 vi.mock('./useApiQuery.js', () => ({

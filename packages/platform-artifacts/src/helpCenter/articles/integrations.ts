@@ -46,7 +46,7 @@ Ask the Helmsman to connect a service. It drafts the API integration and propose
 - **Needs secret**: a secret has not been entered.
 - **Not connected**: no connection yet, or an account sign-in has not happened.
 
-A connection that signs in with an account shows its sign-in instead of a status. After sign-in it reads **Connected as** the account, the time of the sign-in and the number of scopes granted. A service that does not report the account shows **Connected** with the time.
+A connection that signs in with an account shows its sign-in instead of a status. After sign-in it reads **Connected as** the account, the time of the sign-in and the number of scopes the connection asks for. A service that does not report the account shows **Connected** with the time.
 
 A write the agent makes through an API integration can wait for your approval first, depending on the space's **Write Policy**.`,
     editions: ['enterprise', 'community-local'],
@@ -268,7 +268,7 @@ An integration that signs in with an account is set up one of two ways:
 
 A missing or expired sign-in appears as a **Connect** card in the Workbench.
 
-The connection's card on **Integrations** reads **Not connected** before sign-in. Afterwards it reads **Connected as** the account, with the sign-in time and the number of scopes granted. A service that does not report the account shows **Connected** with the time. A Google or Microsoft sign-in also asks to see your email address, so the card can name the account. Each new sign-in replaces the account the card names. If the account could not be read, the card shows **Connected** until you sign in again.
+The connection's card on **Integrations** reads **Not connected** before sign-in. Afterwards it reads **Connected as** the account, with the sign-in time and the number of scopes the connection asks for. A service that does not report the account shows **Connected** with the time. A Google or Microsoft sign-in also asks to see your email address, so the card can name the account. The scope count leaves out those email-address scopes. Each new sign-in replaces the account the card names. If the account could not be read, the card shows **Connected** until you sign in again.
 
 ## Your own OAuth app
 

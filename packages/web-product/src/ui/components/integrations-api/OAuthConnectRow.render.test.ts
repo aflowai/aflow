@@ -5,8 +5,8 @@
  * An OAuth-code binding's card says whether a token exists and for which
  * account. Before consent it says "Not connected" and offers the provider's
  * Connect button. After consent it names the account, the consent time and
- * the granted scope count. A provider that reported no account gets
- * "Connected" with the time and names nobody.
+ * the count of scopes the binding asked for. A provider that reported no
+ * account gets "Connected" with the time and names nobody.
  */
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -115,8 +115,47 @@ describe('OAuth-code binding card', () => {
       dateStyle: 'medium',
       timeStyle: 'short',
     });
-    expect(statusLine()).toBe(`Connected as operator@example.com, since ${since}, scopes 3`);
+    expect(statusLine()).toBe(`Connected as operator@example.com, since ${since}, scopes 1`);
     expect(buttons()).toEqual([]);
+  });
+
+  it('leaves out of the count the identity scopes consent added on its own', () => {
+    const granted: OAuthBindingConnection = {
+      account: 'operator@example.com',
+      connectedAt: CONNECTED_AT,
+      scopes: [
+        'https://www.googleapis.com/auth/gmail.readonly',
+        'https://www.googleapis.com/auth/gmail.send',
+        'openid',
+        'email',
+      ],
+      status: 'connected',
+    };
+    const binding = gmailBinding(granted);
+    binding.auth = {
+      ...binding.auth,
+      scopes: [
+        'https://www.googleapis.com/auth/gmail.readonly',
+        'https://www.googleapis.com/auth/gmail.send',
+      ],
+    };
+    render(binding);
+    expect(statusLine()).toMatch(/, scopes 2$/);
+  });
+
+  it('counts an identity scope the binding itself asks for', () => {
+    const binding = gmailBinding({
+      account: 'operator@example.com',
+      connectedAt: CONNECTED_AT,
+      scopes: ['https://www.googleapis.com/auth/gmail.readonly', 'openid', 'email'],
+      status: 'connected',
+    });
+    binding.auth = {
+      ...binding.auth,
+      scopes: ['https://www.googleapis.com/auth/gmail.readonly', 'email'],
+    };
+    render(binding);
+    expect(statusLine()).toMatch(/, scopes 2$/);
   });
 
   it('says "Connected" with the time when the provider reported no account', () => {
@@ -139,7 +178,7 @@ describe('the card after a re-consent', () => {
   const reconsented = (account: string | null): OAuthBindingConnection => ({
     account,
     connectedAt: CONNECTED_AT,
-    scopes: ['openid', 'email'],
+    scopes: ['https://www.googleapis.com/auth/gmail.readonly', 'openid', 'email'],
     status: 'connected',
   });
 
@@ -150,19 +189,19 @@ describe('the card after a re-consent', () => {
 
   it('names the new account when the re-consent reports one', () => {
     render(gmailBinding(reconsented('new@example.com')));
-    expect(statusLine()).toMatch(/^Connected as new@example\.com, since .+, scopes 2$/);
+    expect(statusLine()).toMatch(/^Connected as new@example\.com, since .+, scopes 1$/);
   });
 
   it('says a bare "Connected" when the re-consent reports no account', () => {
     render(gmailBinding(reconsented(null)));
-    expect(statusLine()).toMatch(/^Connected, since .+, scopes 2$/);
+    expect(statusLine()).toMatch(/^Connected, since .+, scopes 1$/);
     expect(statusLine()).not.toContain('old@example.com');
   });
 
   it('says a bare "Connected" when the identity read failed', () => {
     // A failed read stores NULL as well, so the card cannot name the old account.
     render(gmailBinding(reconsented(null)));
-    expect(statusLine()).toMatch(/^Connected, since .+, scopes 2$/);
+    expect(statusLine()).toMatch(/^Connected, since .+, scopes 1$/);
     expect(statusLine()).not.toContain('old@example.com');
   });
 });
