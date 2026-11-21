@@ -13,6 +13,12 @@ export const HELMSMAN = 'cybernetic-helmsman';
 /** A second space the operator belongs to, which is not the tenant's home space. */
 export const NIGHT_DESK = '3d9e2f41-6c5b-4a7e-8f10-2b4c6d8e0a12';
 export const NIGHT_DESK_NAME = 'Night Desk';
+export const NIGHT_DESK_SLUG = 'night-desk';
+export const SPACE_SLUG = 'trading-joe';
+
+/** A space the tenant's list shows an admin, which the operator is no member of. */
+export const BACK_OFFICE = '00000000-0000-4000-8000-000000000000';
+export const BACK_OFFICE_NAME = 'Back Office';
 
 const SPACE_NAMES: ReadonlyMap<string, string> = new Map([
   [SPACE, SPACE_NAME],
@@ -257,9 +263,9 @@ export function fakeAflow(): FakeAflow {
       if (method === 'GET' && path === '/v1/spaces') {
         return json(200, {
           spaces: [
-            { id: '00000000-0000-4000-8000-000000000000', myRole: null },
-            { id: SPACE, myRole: 'admin' },
-            { id: NIGHT_DESK, myRole: 'admin' },
+            { id: BACK_OFFICE, name: BACK_OFFICE_NAME, slug: 'back-office', myRole: null },
+            { id: SPACE, name: SPACE_NAME, slug: SPACE_SLUG, myRole: 'admin' },
+            { id: NIGHT_DESK, name: NIGHT_DESK_NAME, slug: NIGHT_DESK_SLUG, myRole: 'admin' },
           ],
         });
       }

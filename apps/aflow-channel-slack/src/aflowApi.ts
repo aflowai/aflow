@@ -6,8 +6,8 @@
  * resolve boundary, its compare-and-set on the origin and its audit.
  *
  * The rest carry a conversation (D4): the tenant and its spaces, to find the
- * home space, and the session start, resume and event routes an API client
- * uses. A start uses mode `api` and a resume names the paused step, as those
+ * home space and the spaces a direct message may name, and the session start,
+ * resume and event routes an API client uses. A start uses mode `api` and a resume names the paused step, as those
  * routes require of a key. A space's own read gives the name every message
  * carries, and a session's own read says whether a send came from a Helmsman
  * conversation.
@@ -53,10 +53,23 @@ export interface ResolvedItem {
   item?: ActionCenterItem;
 }
 
-/** The space a conversation from Slack runs in, chosen as the web app chooses its first. */
-export interface HomeSpace {
+/** A space the tenant's list shows the account, with the names a direct message may use. */
+export interface ListedSpace {
+  id: string;
+  name: string;
+  slug: string;
+  /** True when the account is a member, so a conversation may run there. */
+  reachable: boolean;
+}
+
+/**
+ * The spaces the account sees, and the home space: the one the web app opens
+ * first, where a conversation from Slack runs when nothing names another.
+ */
+export interface TenantSpaces {
   ok: true;
-  spaceId: string;
+  spaces: ListedSpace[];
+  homeSpaceId: string;
 }
 
 export interface SpaceName {
@@ -117,7 +130,8 @@ export interface AflowApi {
     resolution: ActionCenterResolution,
     signal?: AbortSignal,
   ): Promise<ResolvedItem | RouteRefusal>;
-  homeSpace(): Promise<HomeSpace | RouteRefusal>;
+  /** `GET /v1/tenant` and `GET /v1/spaces`: the spaces the account sees, and its home space. */
+  spaces(): Promise<TenantSpaces | RouteRefusal>;
   /** `GET /v1/spaces/:id`: the name the space's messages carry. */
   spaceName(spaceId: string, signal?: AbortSignal): Promise<SpaceName | RouteRefusal>;
   /** `GET /v1/sessions/:id`: whether the session is a Helmsman root session. */
@@ -294,15 +308,15 @@ export function createAflowApi(options: {
       return item.success ? { ok: true, item: item.data } : { ok: true };
     },
 
-    async homeSpace() {
+    async spaces() {
       const tenant = await request('/v1/tenant', undefined, undefined);
       if ('ok' in tenant) return tenant;
       if (tenant.status !== 200) return refusalOf(tenant.status, tenant.json);
       const listed = await request('/v1/spaces', undefined, undefined);
       if ('ok' in listed) return listed;
       if (listed.status !== 200) return refusalOf(listed.status, listed.json);
-      const spaceId = homeSpaceOf(tenant.json, listed.json);
-      if (spaceId === undefined) {
+      const homeSpaceId = homeSpaceOf(tenant.json, listed.json);
+      if (homeSpaceId === undefined) {
         return {
           ok: false,
           status: 200,
@@ -312,7 +326,7 @@ export function createAflowApi(options: {
           outcomeUnknown: false,
         };
       }
-      return { ok: true, spaceId };
+      return { ok: true, spaces: listedSpacesOf(listed.json), homeSpaceId };
     },
 
     async spaceName(spaceId, signal) {
@@ -407,6 +421,22 @@ export function homeSpaceOf(tenant: unknown, listed: unknown): string | undefine
   );
   const named = (tenant as { defaultSpaceId?: unknown } | undefined)?.defaultSpaceId;
   return (reachable.find((space) => space.id === named) ?? reachable[0])?.id;
+}
+
+/** Every space in the list that carries an id, a name and a slug. */
+export function listedSpacesOf(listed: unknown): ListedSpace[] {
+  const spaces = (listed as { spaces?: unknown } | undefined)?.spaces;
+  return (Array.isArray(spaces) ? spaces : []).flatMap((raw: unknown) => {
+    const space = (raw ?? {}) as { id?: unknown; name?: unknown; slug?: unknown; myRole?: unknown };
+    if (
+      typeof space.id !== 'string' ||
+      typeof space.name !== 'string' ||
+      typeof space.slug !== 'string'
+    ) {
+      return [];
+    }
+    return [{ id: space.id, name: space.name, slug: space.slug, reachable: space.myRole != null }];
+  });
 }
 
 /** True for a session that targets the Helmsman and names no parent session. */

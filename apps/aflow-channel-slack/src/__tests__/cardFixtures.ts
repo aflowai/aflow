@@ -203,7 +203,7 @@ export function fakeApi(...items: ActionCenterItem[]): FakeApi {
       ),
     // A card test holds no conversation; `conversationFixtures.ts` serves those routes.
     readSession: () => Promise.reject(new Error('no conversation in a card test')),
-    homeSpace: () => Promise.reject(new Error('no conversation in a card test')),
+    spaces: () => Promise.reject(new Error('no conversation in a card test')),
     startConversation: () => Promise.reject(new Error('no conversation in a card test')),
     resumeConversation: () => Promise.reject(new Error('no conversation in a card test')),
     latestEvents: () => Promise.reject(new Error('no conversation in a card test')),
